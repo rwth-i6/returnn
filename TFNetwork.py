@@ -1992,10 +1992,10 @@ class LayerNotFound(Exception):
   """
 
 
-# noinspection PyUnusedLocal
-def help_on_tf_exception(exception, feed_dict, meta_step_info, extern_data, file=sys.stdout):
+def help_on_tf_exception(exception, fetches, feed_dict, meta_step_info, extern_data, file=sys.stdout):
   """
   :param tf.errors.OpError|BaseException exception:
+  :param tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor]|None fetches:
   :param dict[tf.Tensor,numpy.ndarray] feed_dict:
   :param dict[str] meta_step_info:
   :param ExternData extern_data:
@@ -2003,7 +2003,22 @@ def help_on_tf_exception(exception, feed_dict, meta_step_info, extern_data, file
   """
   from pprint import pprint
   import numpy
-  from TFUtil import get_base_name
+  import traceback
+  from TFUtil import get_base_name, find_ops_with_tensor_input, find_ops_path_output_to_input
+  from tensorflow.python.util import nest
+  if fetches is not None:
+    fetches = nest.flatten(fetches)
+  if isinstance(exception, tf.errors.OpError):
+    print("Failing op:", repr(exception.op), file=file)
+    if exception.op and exception.op.type == "Placeholder":
+      using_ops = find_ops_with_tensor_input(exception.op.outputs[0], fetches=fetches)
+      print("Used by:", repr(using_ops), file=file)
+      for op in using_ops:
+        print("".join(traceback.format_list(op.traceback)), file=file)
+      if fetches:
+        input_to_output_ops = find_ops_path_output_to_input(exception.op.outputs[0], fetches=fetches)
+        print("Input to output:", file=file)
+        pprint(input_to_output_ops, stream=file)
   print("Step meta information:", file=file)
   pprint(meta_step_info, stream=file)
   print("Feed dict:", file=file)

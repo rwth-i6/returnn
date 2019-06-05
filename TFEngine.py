@@ -614,7 +614,7 @@ class Runner(object):
       print("Exception %r in step %r." % (exc, step), file=log.v1)
       if not isinstance(exc, CancelTrainingException):
         help_on_tf_exception(
-          exception=exc, feed_dict=feed_dict, meta_step_info=meta_step_info,
+          exception=exc, fetches=fetches_dict, feed_dict=feed_dict, meta_step_info=meta_step_info,
           extern_data=self.data_provider.extern_data, file=log.v2)
         sys.excepthook(*sys.exc_info())
       self.device_crash_batch = step

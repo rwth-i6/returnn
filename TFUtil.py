@@ -7470,6 +7470,57 @@ def find_ops_with_tensor_input(tensors, fetches=None, graph=None):
   return ops
 
 
+def find_ops_path_output_to_input(tensors, fetches):
+  """
+  Searches backwards like in :func:`tensorflow.contrib.graph_editor.get_backward_walk_ops`
+  and then returns a found traceback, if there is one.
+
+  :param tf.Tensor|tf.Variable|list[tf.Tensor] tensors: input
+  :param tf.Operation|tf.Tensor|list[tf.Operation|tf.Tensor] fetches: output
+  :return: list of ops, input to output
+  :rtype: list[tf.Operation]|None
+  """
+  if isinstance(tensors, tf.Variable):
+    # noinspection PyProtectedMember
+    tensors = [tensors._ref(), tensors.value()]
+  if isinstance(tensors, tf.Tensor):
+    tensors = [tensors]
+  assert isinstance(tensors, (list, tuple, set))
+  tensors = set(tensors)
+  assert all([isinstance(x, tf.Tensor) for x in tensors])
+  assert len(tensors) > 0
+  if isinstance(fetches, (tf.Operation, tf.Tensor)):
+    fetches = [fetches]
+  fetches = [x.op if isinstance(x, tf.Tensor) else x for x in fetches]
+  fetches = set(fetches)
+  assert all([isinstance(x, tf.Operation) for x in fetches])
+
+  back_pointers = {}  # type: typing.Dict[tf.Operation,tf.Operation]
+  cur_wave = fetches  # type: typing.Set[tf.Operation]
+  visited = set()  # type: typing.Set[tf.Operation]
+
+  while cur_wave:
+    next_wave = set()  # type: typing.Set[tf.Operation]
+    for op in cur_wave:
+      visited.add(op)
+      for x in op.inputs:
+        if x in tensors:  # found a path
+          result = [op]
+          while op not in fetches:
+            op = back_pointers[op]
+            result.append(op)
+          return result
+      for next_op in [x.op for x in op.inputs] + list(op.control_inputs):
+        assert isinstance(next_op, tf.Operation)
+        if next_op in visited or next_op in next_wave:
+          continue
+        next_wave.add(next_op)
+        back_pointers[next_op] = op
+    cur_wave = next_wave
+
+  return None
+
+
 def get_var_update_ops(var, fetches=None):
   """
   :param tf.Variable var:
