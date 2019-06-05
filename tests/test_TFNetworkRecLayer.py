@@ -2735,7 +2735,7 @@ def test_reclayer_move_out_input_train_and_search():
     assert isinstance(cell, _SubnetworkRecCell)
     assert_equal(cell.input_layers_moved_out, [])
     assert_equal(
-      cell.output_layers_moved_out, ["output_prob", "encoder_reduced", "encoder_int", "target_embed_raw", "output"])
+      cell.output_layers_moved_out, ['output_prob', 'target_embed_raw', 'output', 'encoder_reduced', 'encoder_int'])
 
   print("Constructing search network.")
   with make_scope():

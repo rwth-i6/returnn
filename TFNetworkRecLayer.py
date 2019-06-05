@@ -890,6 +890,7 @@ class _SubnetworkRecCell(object):
           beam_size=parent_rec_layer.output.beam_size)
     self.layer_data_templates = {}  # type: typing.Dict[str,_TemplateLayer]
     self.prev_layers_needed = set()  # type: typing.Set[str]
+    self.prev_layer_templates = {}  # type: typing.Dict[str,_TemplateLayer]
     self._construct_template()
     self._initial_outputs = None  # type: typing.Optional[typing.Dict[str,tf.Tensor]]
     self._initial_extra_outputs = None  # type: typing.Optional[typing.Dict[str,typing.Dict[str,typing.Union[tf.Tensor,typing.Tuple[tf.Tensor,...]]]]]  # nopep8
@@ -983,32 +984,35 @@ class _SubnetworkRecCell(object):
         :rtype: LayerBase|None
         """
         _name = name
+        is_prev = False
         if name.startswith("prev:"):
           name = name[len("prev:"):]
+          is_prev = True
           self.prev_layers_needed.add(name)
         if name in self.layer_data_templates:
           layer_ = self.layer_data_templates[name]
           if ConstructCtx.layers:
-            ConstructCtx.layers[-1].dependencies.add(layer_)
+            ConstructCtx.layers[-1].add_dependency(layer_, is_prev_time_frame=is_prev)
           if lself.allow_uninitialized_template:
             return layer_
           if not lself.reconstruct and layer_.is_initialized:
             return layer_
         if name.startswith("base:"):
+          assert not is_prev
           layer_ = self.parent_net.get_layer(name[len("base:"):])
           if ConstructCtx.layers:
-            ConstructCtx.layers[-1].dependencies.add(layer_)
+            ConstructCtx.layers[-1].add_dependency(layer_, is_prev_time_frame=False)
           return layer_
         if '/' in name:
           # this is probably a path to a sub-layer
           root_name = name.split('/')[0]
-          root_layer = lself.__call__(root_name)  # get the root-layer (first part of the path)
+          root_layer = lself.__call__(("prev:%s" % root_name) if is_prev else root_name)  # get the root-layer
           sub_layer = root_layer.get_sub_layer('/'.join(name.split('/')[1:]))  # get the sub-layer from the root-layer
           if sub_layer:  # get_sub_layer returns None by default (if sub-layer not found)
             # add to templates so we will collect output in self.get_output if this is an output layer
             if isinstance(sub_layer, _TemplateLayer):
               self.layer_data_templates[name] = sub_layer
-              sub_layer.dependencies.add(root_layer)
+              sub_layer.add_dependency(root_layer, is_prev_time_frame=False)
             return sub_layer
         # Need to create layer instance here now to not run into recursive loops.
         # We will extend it later in add_templated_layer().
@@ -1016,10 +1020,11 @@ class _SubnetworkRecCell(object):
           layer_ = self.layer_data_templates[name]
         else:
           layer_ = _TemplateLayer(
-            name=name, network=self.net, construct_stack=ConstructCtx.layers[-1] if ConstructCtx.layers else None)
+            name=name, network=self.net, cell=self,
+            construct_stack=ConstructCtx.layers[-1] if ConstructCtx.layers else None)
           self.layer_data_templates[name] = layer_
         if ConstructCtx.layers:
-          ConstructCtx.layers[-1].dependencies.add(layer_)
+          ConstructCtx.layers[-1].add_dependency(layer_, is_prev_time_frame=is_prev)
         lself.count += 1
         if lself.once and lself.count > 1:
           lself.returned_none_count += 1
@@ -1249,6 +1254,21 @@ class _SubnetworkRecCell(object):
       get_layer(layer_name)
       if '/' not in layer_name:  # sub-layers are not in self.net
         assert layer_name in self.net.layers
+
+  def get_prev_template_layer(self, layer_name):
+    """
+    :param str layer_name: without "prev:"
+    :return: prev template layers. makes sure that we don't recreate them
+    :rtype: _TemplateLayer
+    """
+    if ("prev:%s" % layer_name) in self.net.layers:  # this is even better
+      return self.net.layers["prev:%s" % layer_name]
+    if layer_name in self.prev_layer_templates:
+      return self.prev_layer_templates[layer_name]
+    template_layer = self.layer_data_templates[layer_name]
+    layer = template_layer.copy_as_prev_time_frame()
+    self.prev_layer_templates[layer_name] = layer
+    return layer
 
   def get_layer_from_outside(self, layer_name):
     """
@@ -2178,7 +2198,7 @@ class _SubnetworkRecCell(object):
         assert self.layer_data_templates[l.name] is l
         if l not in layers_in_loop:
           layers_in_loop.append(l)
-          visit(sorted(l.dependencies, key=lambda l_: l_.name))
+          visit(l.dependencies)
     visit([self.layer_data_templates[name] for name in needed_outputs])
 
     self.input_layers_moved_out = []  # type: typing.List[str]
@@ -2487,11 +2507,12 @@ class _TemplateLayer(LayerBase):
   All "prev:" layers also stay instances of _TemplateLayer in the real computation graph.
   """
 
-  def __init__(self, network, name, construct_stack=None):
+  def __init__(self, network, name, construct_stack=None, cell=None):
     """
     :param TFNetwork.TFNetwork network:
     :param str name:
     :param LayerBase|None construct_stack: just for debugging repr
+    :param _SubnetworkRecCell|None cell:
     """
     # Init with some dummy.
     super(_TemplateLayer, self).__init__(
@@ -2506,9 +2527,12 @@ class _TemplateLayer(LayerBase):
     self.is_initialized = False
     self.layer_class_type = None  # type: typing.Optional[typing.Type[LayerBase]]
     self.kwargs = None  # type: typing.Optional[typing.Dict[str]]
-    self.dependencies = set()  # type: typing.Set[LayerBase]
+    self.dependencies = []  # type: typing.List[LayerBase]
+    self.cur_frame_dependencies = []  # type: typing.List[LayerBase]
+    self.prev_frame_dependencies = []  # type: typing.List[_TemplateLayer]
     self.construct_stack = construct_stack
     self._template_base = None  # type: typing.Optional[_TemplateLayer]
+    self._cell = cell
 
   def __repr__(self):
     if self.is_initialized:
@@ -2575,7 +2599,7 @@ class _TemplateLayer(LayerBase):
     :return: new _TemplateLayer
     :rtype: _TemplateLayer
     """
-    layer = _TemplateLayer(network=self.network, name="prev:%s" % self.name)
+    layer = _TemplateLayer(network=self.network, cell=self._cell, name="prev:%s" % self.name)
     layer._template_base = self
     layer.dependencies = self.dependencies
     layer.init(layer_class=self.layer_class_type, template_type="prev", **self.kwargs)
@@ -2588,9 +2612,22 @@ class _TemplateLayer(LayerBase):
       layer.rec_vars_outputs = rec_vars_prev_outputs
     if self.search_choices:
       layer.search_choices = SearchChoices(owner=layer, beam_size=self.search_choices.beam_size)
-      layer.search_choices.set_beam_scores_from_own_rec()
+      if rec_vars_prev_outputs:
+        layer.search_choices.set_beam_scores_from_own_rec()
       layer.output.beam_size = self.search_choices.beam_size
     return layer
+
+  def _get_cell(self):
+    """
+    :rtype: _SubnetworkRecCell
+    """
+    if self._cell:
+      return self._cell
+    rec_layer = self.network.parent_layer
+    assert isinstance(rec_layer, RecLayer)
+    cell = self.network.parent_layer
+    assert isinstance(cell, _SubnetworkRecCell)
+    return cell
 
   def get_dep_layers(self):
     """
@@ -2605,34 +2642,42 @@ class _TemplateLayer(LayerBase):
         return real_layer.get_dep_layers()
       # All refs to this subnet are other _TemplateLayer, no matter if prev-frame or not.
       # Otherwise, refs to the base network are given as-is.
-      return sorted(self.dependencies, key=lambda l: l.name)
+      dependencies = list(self.cur_frame_dependencies)
+      if self.prev_frame_dependencies:
+        cell = self._get_cell()
+        for layer in self.prev_frame_dependencies:
+          dependencies.append(cell.get_prev_template_layer(layer.name))
+      return dependencies
     assert self.is_prev_time_frame
-    # In the current frame, the deps would be self.dependencies.
-    # (It's ok that this would not contain prev-frames.)
-    # We want to return the logical dependencies here, i.e. all such layers from previous frames.
-    # Not all of them might exist, but then, we want to get their dependencies.
-    cur_deps = sorted(self.dependencies, key=lambda l: l.name)
-    deps = []
-    for layer in cur_deps:
+    cell = self._get_cell()
+    # In the current frame, the deps would be self.dependencies,
+    # which are the logical dependencies, i.e. all such layers no matter if current or previous frame.
+    # In the previous frame, just return all those dependencies, but all from previous frame.
+    dependencies = []
+    for layer in self.dependencies:
       if layer.network is not self.network:
-        if layer not in deps:
-          deps.append(layer)
+        if layer not in dependencies:
+          dependencies.append(layer)
         continue
       assert isinstance(layer, _TemplateLayer)
       assert layer.is_data_template
-      # Find the related prev-frame layer.
-      prev_layer = self.network.layers.get("prev:%s" % layer.name, None)
-      if prev_layer:
-        if prev_layer not in deps:
-          deps.append(prev_layer)
-        continue
-      # Not yet constructed or not needed to construct.
-      # In that case, add its dependencies instead.
-      layer_deps = sorted(layer.dependencies, key=lambda l: l.name)
-      for dep in layer_deps:
-        if dep not in cur_deps:
-          cur_deps.append(dep)  # the current iterable will also visit this
-    return deps
+      dependencies.append(cell.get_prev_template_layer(layer.name))
+    return dependencies
+
+  def add_dependency(self, layer, is_prev_time_frame):
+    """
+    :param LayerBase layer:
+    :param bool is_prev_time_frame:
+    """
+    if layer not in self.dependencies:
+      self.dependencies.append(layer)
+    if is_prev_time_frame:
+      assert isinstance(layer, _TemplateLayer)
+      if layer not in self.prev_frame_dependencies:
+        self.prev_frame_dependencies.append(layer)
+    else:
+      if layer not in self.cur_frame_dependencies:
+        self.cur_frame_dependencies.append(layer)
 
   def _has_search_choices(self):
     """
