@@ -601,13 +601,14 @@ class Layer(Container):
 
   def add_param(self, param, name="", constraints=True,
                 custom_update=None, custom_update_normalized=False, custom_update_exp_average=0,
-                custom_update_condition=None, custom_update_accumulate_batches=None):
+                custom_update_condition=None, custom_update_accumulate_batches=None, live_update=None):
     """
     :type param: theano.SharedVariable
     :type name: str
     :rtype: theano.SharedVariable
     """
     param = super(Layer, self).add_param(param, name)
+    param.live_update = live_update
     if custom_update:
       # Handled in Device and Updater.
       param.custom_update = custom_update

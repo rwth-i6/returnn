@@ -662,6 +662,7 @@ class Device(object):
           source.append(self.testnet.x.reshape((self.testnet.i.shape[0], self.testnet.i.shape[1], self.testnet.x.shape[2])) * T.cast(self.testnet.i.dimshuffle(0,1,'x').repeat(self.testnet.x.shape[2],axis=2),'float32'))
         else:
           assert False, "invalid extraction: " + extract
+      live_updates = [(p, p.live_update) for p in self.testnet.train_params_vars if p.live_update is not None]
       if config.has('load_graph') or config.has('save_graph'):
         self.use_inputs = True
         if config.has('load_graph') and os.path.exists(config.value('load_graph', '')):
@@ -675,14 +676,16 @@ class Device(object):
           self.extractor = theano.function(inputs=inp,
                                            outputs=source if len(source) == 1 else [T.concatenate(source, axis=-1)],
                                            givens=[],
+                                           updates=live_updates,
                                            on_unused_input=config.value('theano_on_unused_input', 'ignore'),
                                            name="extractor")
       else:
-        self.extractor = theano.function(inputs = [],
-                                         outputs = source if len(source) == 1 else [T.concatenate(source, axis=-1)],
-                                         givens = givens,
+        self.extractor = theano.function(inputs=[],
+                                         outputs=source if len(source) == 1 else [T.concatenate(source, axis=-1)],
+                                         givens=givens,
+                                         updates=live_updates,
                                          on_unused_input=config.value('theano_on_unused_input', 'ignore'),
-                                         name = "extractor")
+                                         name="extractor")
       self.save_graph = config.has('save_graph')
 
     elif self.network_task == 'classify':

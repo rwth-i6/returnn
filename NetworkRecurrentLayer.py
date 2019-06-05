@@ -532,6 +532,7 @@ class RecurrentUnitLayer(Layer):
                copy_weights_from_base=False,
                segment_input=False,
                join_states=False,
+               state_memory=False,
                sample_segment=None,
                **kwargs):
     """
@@ -816,6 +817,7 @@ class RecurrentUnitLayer(Layer):
     assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
     unit.recurrent_transform = recurrent_transform_inst
     self.recurrent_transform = recurrent_transform_inst
+    state_memory = state_memory and not self.train_flag
     # scan over sequence
     for s in range(self.attrs['sampling']):
       index = self.index[s::self.attrs['sampling']]
@@ -848,6 +850,9 @@ class RecurrentUnitLayer(Layer):
 
       sequences = z
       sources = self.sources
+      self.init_state = [
+        self.add_param(self.shared(numpy.zeros((1, unit.n_units), dtype='float32'), name='init_%d_%s' % (a, self.name)))
+        for a in range(unit.n_act)]  # has to be initialized for train and test
       if encoder:
         if recurrent_transform == "attention_segment":
           if hasattr(encoder[0],'act'):
@@ -860,6 +865,8 @@ class RecurrentUnitLayer(Layer):
         else:
           outputs_info = [ T.concatenate([e[i] for e in encoder], axis=1) for i in range(unit.n_act) ]
         sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + (self.zc if self.attrs['recurrent_transform'] == 'input' else numpy.float32(0))
+      elif state_memory:
+        outputs_info = self.init_state
       else:
         outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_units) for a in range(unit.n_act) ]
 
@@ -922,6 +929,9 @@ class RecurrentUnitLayer(Layer):
         self.act = outputs[:unit.n_act]
         if len(outputs) > unit.n_act:
           self.aux = outputs[unit.n_act:]
+        if state_memory:
+          for i in range(len(self.act)):
+            self.init_state[i].live_update = self.act[i][-1]
     if self.attrs['attention_store']:
       self.attention = [ self.aux[i].dimshuffle(0,2,1) for i,v in enumerate(sorted(unit.recurrent_transform.state_vars.keys())) if v.startswith('att_') ] # NBT
       for i in range(len(self.attention)):
