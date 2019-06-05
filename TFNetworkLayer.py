@@ -7721,24 +7721,38 @@ class SamplingBasedLoss(Loss):
                sampler="log_uniform",
                nce_loss=False,
                use_full_softmax=False,
+               remove_accidental_hits=None,
+               sampler_args=None,
                **kwargs):
     """
     :param int num_sampled: Number of classes to be sampled. For sampled softmax, this is the number of classes to be
       used to estimate the sampled softmax. For noise contrastive estimation, this is the number of noise samples.
     :param int num_splits: Number of different samples (each with 'num_sampled' classes) to be used per batch.
-    :param str sampler: Specify sampling distribution ("uniform", "log_uniform", or "learned_unigram").
+    :param str sampler: Specify sampling distribution ("uniform", "log_uniform", "learned_unigram" or "fixed_unigram").
     :param bool nce_loss: If True, use noise contrastive estimation loss. Else (default), use the sampled softmax.
     :param bool use_full_softmax: If True, compute the full softmax instead of sampling (can be used for evaluation).
+    :param bool|None remove_accidental_hits: If True, remove sampled classes that equal one of the target classes.
+      If not specified (None), the value is determined based on the choosen objective.
+      For sampled softmax this should be set to True; for NCE the default is False. Set this to True in case of NCE training
+      and the objective is equal to sampled logistic loss.
+    :param dict[str] sampler_args: additional arguments for the candidate sampler. This is most relevant to the fixed_unigram sampler.
+      See https://www.tensorflow.org/api_docs/python/tf/random/fixed_unigram_candidate_sampler for details.
     """
     super(SamplingBasedLoss, self).__init__(**kwargs)
     assert num_sampled >= 1
-    assert sampler in ["uniform", "log_uniform", "learned_unigram"], (
-      "Sampler must be one of 'uniform', 'log_uniform', or 'learned_unigram'.")
+    assert sampler in ["uniform", "log_uniform", "learned_unigram", "fixed_unigram"], (
+      "Sampler must be one of 'uniform', 'log_uniform', 'learned_unigram' or 'fixed_unigram'.")
     self.num_sampled = num_sampled
     self.num_splits = num_splits
     self.sampler = sampler
     self.use_full_softmax = use_full_softmax
     self.nce_loss = nce_loss
+    self.remove_accidental_hits = remove_accidental_hits
+    if self.remove_accidental_hits is None:
+      self.remove_accidental_hits = not self.nce_loss
+    self.sampler_args = sampler_args
+    if self.sampler_args is None:
+      self.sampler_args = {}
 
   def get_value(self):
     """
@@ -7774,7 +7788,8 @@ class SamplingBasedLoss(Loss):
         # Dictionary of available samplers in TensorFlow.
         sampler_dict = {"log_uniform": candidate_sampling_ops.log_uniform_candidate_sampler,
                         "uniform": candidate_sampling_ops.uniform_candidate_sampler,
-                        "learned_unigram": candidate_sampling_ops.learned_unigram_candidate_sampler}
+                        "learned_unigram": candidate_sampling_ops.learned_unigram_candidate_sampler,
+                        "fixed_unigram": candidate_sampling_ops.fixed_unigram_candidate_sampler}
         sampler = sampler_dict[self.sampler]
 
         splits = []
@@ -7798,7 +7813,8 @@ class SamplingBasedLoss(Loss):
                                    num_true=1,
                                    num_sampled=self.num_sampled,
                                    unique=True,  # Sampling without replacement.
-                                   range_max=self.target.dim)
+                                   range_max=self.target.dim,
+                                   **self.sampler_args)
           if self.nce_loss:
             loss_fn = tf.nn.nce_loss
           else:
@@ -7813,7 +7829,7 @@ class SamplingBasedLoss(Loss):
                         num_classes=self.target.dim,
                         num_true=1,
                         sampled_values=sampled_values,
-                        remove_accidental_hits=True,
+                        remove_accidental_hits=self.remove_accidental_hits,
                         partition_strategy="div",
                         name="sampling_based_loss")  # (B'').
           splits.append(out)
