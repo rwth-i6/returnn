@@ -2197,7 +2197,7 @@ class _SubnetworkRecCell(object):
         return False  # need to perform the search inside the loop currently
       # layer.output is used by other layers?
       for other_layer in layers_in_loop:
-        if layer in other_layer.get_dep_layers():
+        if layer in other_layer.dependencies:
           return False
         if other_layer in layer.collocate_with:
           return False
@@ -2228,7 +2228,7 @@ class _SubnetworkRecCell(object):
       assert isinstance(layer, _TemplateLayer)
       if self.parent_net.search_flag and layer.search_choices:
         return False  # need to perform the search inside the loop currently
-      layer_deps = layer.get_dep_layers()
+      layer_deps = layer.dependencies
       # We depend on other layers from this sub-network?
       for other_layer in layers_in_loop:
         if other_layer in layer_deps:
