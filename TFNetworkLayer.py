@@ -1604,6 +1604,8 @@ class SearchChoices(object):
   @staticmethod
   def compare(self, other):
     """
+    Also see :func:`TFNetwork.get_search_choices.compare_layer`, which is basically the same.
+
     :param SearchChoices|None self:
     :param SearchChoices|None other:
     :return: 0 if equal, -1 if we are smaller, else 1
@@ -1615,6 +1617,11 @@ class SearchChoices(object):
       return -1
     if other is None:
       return 1
+    self_norm_layer = self.owner.get_normalized_layer()
+    other_norm_layer = other.owner.get_normalized_layer()
+    if self_norm_layer != self.owner and other_norm_layer != other.owner:
+      assert self_norm_layer.search_choices and other_norm_layer.search_choices
+      return SearchChoices.compare(self=self_norm_layer.search_choices, other=other_norm_layer.search_choices)
     self_src_choices = self.get_src_choices_seq()
     other_src_choices = other.get_src_choices_seq()
     assert len(self_src_choices) != len(other_src_choices)
