@@ -3747,7 +3747,8 @@ class ChoiceLayer(LayerBase):
     super(ChoiceLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, target, network, beam_size, search=NotSpecified, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, target, network,
+                             beam_size, search=NotSpecified, scheduled_sampling=False, cheating=False, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
@@ -3755,6 +3756,8 @@ class ChoiceLayer(LayerBase):
     :param TFNetwork.TFNetwork network:
     :param int beam_size:
     :param NotSpecified|bool search:
+    :param dict|bool scheduled_sampling:
+    :param bool cheating:
     :rtype: Data
     """
     search = NotSpecified.resolve(search, network.search_flag)
@@ -3772,6 +3775,8 @@ class ChoiceLayer(LayerBase):
       out_data = Data(name="%s_output" % name, shape=shape, sparse=True, dim=out_data.dim)
     if search:
       out_data.beam_size = beam_size
+    if cheating or scheduled_sampling:
+      cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=True)  # mark as used
     return out_data
 
   def get_sub_layer(self, layer_name):
