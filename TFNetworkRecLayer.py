@@ -1826,6 +1826,11 @@ class _SubnetworkRecCell(object):
           This will be available in the next loop frame as the "prev:..." layer.
           If the current search choices are already from the prev frame, select beams such that we end up
           in the current frame.
+          E.g. let's say the layer "s" has the choices from "prev:output".
+          Then "prev:s" (current "s" in the next frame)
+          will also have the choices from "prev:output" (current "prev:output" in the next frame).
+          This is because there is no "prev:prev:output".
+
           :param LayerBase layer:
           :rtype: LayerBase
           """
@@ -1844,6 +1849,7 @@ class _SubnetworkRecCell(object):
           assert transformed_layer != layer
           transformed_cache[layer] = transformed_layer
           return transformed_layer
+
         outputs_flat = [
           maybe_transform(self.net.layers[k]).output.copy_compatible_to(
             self.layer_data_templates[k].output).placeholder
@@ -3888,6 +3894,7 @@ class ChoiceLayer(LayerBase):
     batch_dim = network.get_data_batch_dim()
     # Note: Use beam_size 1 for the initial as there are no competing hypotheses yet.
     initial_scores = tf.zeros([batch_dim, 1])  # (batch, beam)
+    # Note: Our rec vars are handled via SearchChoices.set_beam_scores.
     return {"choice_scores": initial_scores}
 
   @classmethod

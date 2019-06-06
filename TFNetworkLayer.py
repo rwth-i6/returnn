@@ -1563,7 +1563,7 @@ class SearchChoices(object):
 
   def set_beam_scores_from_rec(self, rev_vars_outputs):
     """
-    :param dict[str,tf.Tensor] rev_vars_outputs:
+    :param dict[str,tf.Tensor] rev_vars_outputs: e.g. via :class:`ChoiceLayer`
     """
     assert rev_vars_outputs.get("choice_scores", None) is not None
     self.beam_scores = rev_vars_outputs["choice_scores"]  # (batch, beam)
