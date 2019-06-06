@@ -2679,6 +2679,17 @@ class _TemplateLayer(LayerBase):
       if layer not in self.cur_frame_dependencies:
         self.cur_frame_dependencies.append(layer)
 
+  def get_normalized_layer(self):
+    """
+    :return: if prev layer in :class:`RecLayer`, return current layer
+    :rtype: LayerBase
+    """
+    if self.is_prev_time_frame:
+      return self._template_base.get_normalized_layer()
+    if self._cell and self.name in self._cell.net.layers:
+      return self._cell.net.layers[self.name].get_normalized_layer()
+    return self
+
   def _has_search_choices(self):
     """
     :return: whether an instance of this class has search_choices set

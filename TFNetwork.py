@@ -1363,6 +1363,10 @@ class TFNetwork(object):
       """
       assert isinstance(l1, LayerBase) and isinstance(l1.search_choices, SearchChoices)
       assert isinstance(l2, LayerBase) and isinstance(l2.search_choices, SearchChoices)
+      l1n = l1.get_normalized_layer()
+      l2n = l2.get_normalized_layer()
+      if l1 != l1n and l2 != l2n:  # only in the case that we get normalized variants for both
+        l1, l2 = l1n, l2n
       if l1 is l2:
         return 0
       l1trace_ = full_trace_for_layer(l1)
@@ -1380,7 +1384,8 @@ class TFNetwork(object):
         ("Search choices cannot be compared.\n"
          "layer 1 %r\n  choice trace %r\n"
          "layer 2 %r\n  choice trace %r\n"
-         "Full dependency map:\n%s") % (l1, l1trace_, l2, l2trace_, pformat(relevant_map)))
+         "Full dependency map:\n%s\n"
+         "Relevant layers:\n%s") % (l1, l1trace_, l2, l2trace_, pformat(relevant_map), pformat(layers)))
 
     layers = sorted(layers, key=cmp_to_key(compare_layer))
     return layers[-1]

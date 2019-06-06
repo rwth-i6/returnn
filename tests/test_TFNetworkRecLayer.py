@@ -2018,6 +2018,7 @@ def test_rec_layer_search_select_src():
   assert_equal(loop_net.layers["accum_att_weights"].get_search_choices(), prev_out_choice)
   assert_equal(loop_net.layers["prev:accum_att_weights"].get_search_choices(), prev_out_choice)  # will be transformed
   assert_equal(loop_net.layers["weight_feedback"].get_search_choices(), prev_out_choice)
+  loop_net.debug_search_choices(loop_net.layers["s"])
   assert_equal(loop_net.layers["s"].get_search_choices(), cur_out_choice)
   assert_equal(loop_net.layers["prev:s"].get_search_choices(), prev_out_choice)
   assert_equal(loop_net.layers["prev_s_state"].get_search_choices(), prev_out_choice)

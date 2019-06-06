@@ -618,6 +618,13 @@ class LayerBase(object):
         return choices.beam_size
     return None
 
+  def get_normalized_layer(self):
+    """
+    :return: e.g. if prev layer in :class:`RecLayer`, return current layer
+    :rtype: LayerBase
+    """
+    return self
+
   def get_batch_dim(self):
     """
     The batch dim by this layer, not taken from our output but calculated.
@@ -2025,6 +2032,11 @@ class SelectSearchSourcesLayer(InternalLayer):
           return v  # leave scalars as-is
         for base_src_choices in reversed(search_choices_seq):
           assert isinstance(base_src_choices, SearchChoices)
+          assert base_src_choices.src_beams is not None, (
+            ("Cannot transform %r,\n"
+             "search choices %r,\n"
+             "to search choices %r.\n"
+             "Missing beam idxs.") % (src, src_search_choices, search_choices_seq))
           v = select_src_beams(v, src_beams=base_src_choices.src_beams)
           self.used_search_choices_beams = True
         return v
