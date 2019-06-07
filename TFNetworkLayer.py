@@ -2340,11 +2340,16 @@ class GatherNdLayer(_ConcatInputLayer):
     """
     input_data = get_concat_sources_data_template(sources).copy_as_batch_major()
     position_data = position.output.copy_template().copy_as_batch_major()
-    shape = list(position_data.shape) + list(input_data.shape)  # (B, ...) (w/o batch)
-    out_type = input_data.get_kwargs()
+    shape = list(position_data.shape) + list(input_data.shape[1:])  # (B, ...) (w/o batch)
+    out_type = position_data.get_kwargs()
     out_type["name"] = "%s_output" % name
     out_type["shape"] = shape
-    out_type["batch_dim_axis"] = 0
+    out_type.pop("time_dim_axis", None)
+    out_type["dim"] = input_data.dim
+    out_type["sparse"] = input_data.sparse
+    out_type["dtype"] = input_data.dtype
+    if position_data.beam_size or input_data.beam_size:
+      out_type["beam_size"] = position_data.beam_size or input_data.beam_size
     return Data(**out_type)
 
   @classmethod
