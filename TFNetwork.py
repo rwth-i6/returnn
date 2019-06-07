@@ -1385,11 +1385,15 @@ class TFNetwork(object):
       if l2 in l1trace_ and l1 not in l2trace_:
         return 1
       raise Exception(
-        ("Search choices cannot be compared.\n"
-         "layer 1 %r\n  choice trace %r\n"
-         "layer 2 %r\n  choice trace %r\n"
+        ("get_search_choices src=%r base_search_choice=%r sources=%r.\n"
+         "Search choices cannot be compared.\n"
+         "Layer 1\n  %r\nchoice trace\n%s\n"
+         "vs layer 2\n  %r\nchoice trace\n%s.\n"
          "Full dependency map:\n%s\n"
-         "Relevant layers:\n%s") % (l1, l1trace_, l2, l2trace_, pformat(get_debug_dep_map()), pformat(layers)))
+         "Relevant layers:\n%s\nNetwork:\n%s") % (
+          src, base_search_choice, sources,
+          l1, pformat(l1trace_), l2, pformat(l2trace_), pformat(get_debug_dep_map()), pformat(layers),
+          pformat(self.layers)))
 
     if debug_stream:
       print("Relevant layers:\n%s" % pformat(layers), file=debug_stream)
