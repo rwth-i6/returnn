@@ -6271,6 +6271,8 @@ class HDFDumpLayer(LayerBase):
     :param bool dump_whole_batches: dumps the whole batch as a single sequence into the HDF
     """
     super(HDFDumpLayer, self).__init__(**kwargs)
+    assert len(self.sources) == 1
+    assert self.sources[0].output.have_time_axis()
     self.output = self.sources[0].output.copy("%s_output" % self.name)
     data = self.output.copy_as_batch_major()  # need batch-major for SimpleHDFWriter
 
@@ -6285,6 +6287,7 @@ class HDFDumpLayer(LayerBase):
     if dump_whole_batches:
       ndim = data.ndim - len(data.size_placeholder) + 1
     data_dim = None if data.sparse else data.dim
+    ndim_without_features = ndim - (1 if data_dim else 0)
     self.hdf_writer = SimpleHDFWriter(filename=filename, dim=data_dim, ndim=ndim)
     atexit.register(self._at_exit)
 
@@ -6300,6 +6303,12 @@ class HDFDumpLayer(LayerBase):
         n_batch = data_np.shape[0]
         assert len(sizes) == len(data.size_placeholder)
         seq_lens = {i: size for (i, size) in zip(sorted(data.size_placeholder.keys()), sizes)}
+        # There may be axes with a fixed length other than the batch and feature axes.
+        # These have the indices 0, ..., (ndim-1), as the batch dimension is skipped.
+        for dim in range(ndim - 1):
+          if dim not in seq_lens:
+            seq_lens[dim] = numpy.array([data_np.shape[dim + 1]] * n_batch, dtype="int32")
+        assert len(seq_lens) == ndim_without_features
         extra = {}
         if self.dump_whole_batches:
           # The batch dim itself becomes another axis to dump.

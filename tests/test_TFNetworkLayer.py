@@ -2004,6 +2004,80 @@ def test_split_info_input():
     # for param init handling, output dim split do matter.
 
 
+def test_dump_seq():
+  with make_scope() as session:
+    n_in, n_out = 4, 1
+    config = Config()
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "lstm": { "class": "rec", "unit": "LSTMBlock", "from": ["data"], "n_out": n_out, },
+        "dump": { "class": "hdf_dump", "filename": "dump.hdf", "from": ["lstm"]},
+        "output": {"class": "copy", "from": ["dump"]},
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+
+
+    session.run(tf.global_variables_initializer())
+    out = network.layers["output"].output.placeholder
+    n_batch = 1
+    seq_len = 4
+    input_data = numpy.array([[
+      [1, -0.2, 0.3, -4],
+      [2, -0.6, 0.7, -1.8],
+      [1, 0.3, -0.1, -0.8],
+      [0.1, -0.2, 0.2, .8]]],
+      dtype="float32")
+    input_tags = numpy.array([b"seq-0"], dtype="S5")
+    seq_lens = numpy.array([4], dtype="int32")
+    assert input_data.shape == (1, seq_lens[0], n_in)
+    feed = {network.extern_data.data["data"].placeholder: input_data,
+            network.extern_data.data["data"].size_placeholder[0]: seq_lens,
+            network.extern_data.data["seq_tag"].placeholder: input_tags}
+    assert_equal(feed[network.extern_data.get_default_input_data().placeholder].shape, (n_batch, seq_len, n_in))
+    session.run([out, network.get_post_control_dependencies()], feed_dict=feed)
+
+
+def test_dump_seq_fixed_length():
+  with make_scope() as session:
+    n_in, n_out = 4, 1
+    config = Config()
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "lstm": { "class": "rec", "unit": "LSTMBlock", "from": ["data"], "n_out": n_out, },
+        "last_state": { "class": "get_last_hidden_state", "from": ["lstm"], "key": "h", "n_out": n_out, },
+        "last_state_expanded": { "class": "expand_dims", "from": ["lstm"], "axis": "T" },
+        "dump": { "class": "hdf_dump", "filename": "dump2.hdf", "from": ["last_state_expanded"]},
+        "output": {"class": "copy", "from": ["dump"]},
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+
+
+    session.run(tf.global_variables_initializer())
+    out = network.layers["output"].output.placeholder
+    n_batch = 1
+    seq_len = 4
+    input_data = numpy.array([[
+      [1, -0.2, 0.3, -4],
+      [2, -0.6, 0.7, -1.8],
+      [1, 0.3, -0.1, -0.8],
+      [0.1, -0.2, 0.2, .8]]],
+      dtype="float32")
+    input_tags = numpy.array([b"seq-0"], dtype="S5")
+    seq_lens = numpy.array([4], dtype="int32")
+    assert input_data.shape == (1, seq_lens[0], n_in)
+    feed = {network.extern_data.data["data"].placeholder: input_data,
+            network.extern_data.data["data"].size_placeholder[0]: seq_lens,
+            network.extern_data.data["seq_tag"].placeholder: input_tags}
+    assert_equal(feed[network.extern_data.get_default_input_data().placeholder].shape, (n_batch, seq_len, n_in))
+    session.run([out, network.get_post_control_dependencies()], feed_dict=feed)
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
