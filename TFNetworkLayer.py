@@ -2005,6 +2005,7 @@ class SelectSearchSourcesLayer(InternalLayer):
       kwargs = kwargs.copy()
       kwargs["output"] = kwargs["sources"][0].output  # will be reset later
     from TFUtil import select_src_beams
+    from pprint import pformat
     super(SelectSearchSourcesLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1
     src = self.sources[0]
@@ -2022,7 +2023,14 @@ class SelectSearchSourcesLayer(InternalLayer):
     else:
       assert search_choices and search_choices != src_search_choices
       search_choices_seq = search_choices.get_src_choices_seq()
-      assert src_search_choices in search_choices_seq, "no common search base"
+      assert src_search_choices in search_choices_seq, (
+        ("%s: No common search base:\n"
+         "from layer %s\n"
+         "search choices %s,\n"
+         "to layer %s\n"
+         "search choices\n%s.\nDebug %s.") % (
+         self, src, src_search_choices, self.search_choices_layer, pformat(search_choices_seq),
+         self.network.debug_search_choices(self.search_choices_layer)))
       search_choices_seq = search_choices_seq[:search_choices_seq.index(src_search_choices)]
       assert src_search_choices not in search_choices_seq
 
