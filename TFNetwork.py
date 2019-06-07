@@ -1328,6 +1328,8 @@ class TFNetwork(object):
       _visited = {}  # type: typing.Dict[LayerBase,typing.List[LayerBase]]
     layers = self._get_all_search_choices(
       sources=sources, src=src, base_search_choice=base_search_choice, _visited=_visited)
+    while base_search_choice in layers:
+      layers.remove(base_search_choice)
     if not layers:
       return None
 
