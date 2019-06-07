@@ -3880,15 +3880,13 @@ class ChoiceLayer(LayerBase):
 
   # noinspection PyMethodOverriding
   @classmethod
-  def get_rec_initial_extra_outputs(cls, network, beam_size, search=NotSpecified, **kwargs):
+  def get_rec_initial_extra_outputs(cls, network, beam_size, **kwargs):
     """
     :param TFNetwork.TFNetwork network:
     :param int beam_size:
-    :param NotSpecified|bool search:
     :rtype: dict[str,tf.Tensor]
     """
-    search = NotSpecified.resolve(search, network.search_flag)
-    if not search:
+    if not network.search_flag:  # independent from option search, because we still need the search_choices
       return {}
     batch_dim = network.get_data_batch_dim()
     # Note: Use beam_size 1 for the initial as there are no competing hypotheses yet.
