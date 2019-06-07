@@ -2023,14 +2023,13 @@ class SelectSearchSourcesLayer(InternalLayer):
     else:
       assert search_choices and search_choices != src_search_choices
       search_choices_seq = search_choices.get_src_choices_seq()
-      assert src_search_choices in search_choices_seq, (
+      assert src_search_choices in search_choices_seq, self.network.debug_search_choices(self.search_choices_layer) or (
         ("%s: No common search base:\n"
          "from layer %s\n"
          "search choices %s,\n"
          "to layer %s\n"
-         "search choices\n%s.\nDebug %s.") % (
-         self, src, src_search_choices, self.search_choices_layer, pformat(search_choices_seq),
-         self.network.debug_search_choices(self.search_choices_layer)))
+         "search choices\n%s.") % (
+          self, src, src_search_choices, self.search_choices_layer, pformat(search_choices_seq)))
       search_choices_seq = search_choices_seq[:search_choices_seq.index(src_search_choices)]
       assert src_search_choices not in search_choices_seq
 
@@ -2048,10 +2047,11 @@ class SelectSearchSourcesLayer(InternalLayer):
         for base_src_choices in reversed(search_choices_seq):
           assert isinstance(base_src_choices, SearchChoices)
           assert base_src_choices.src_beams is not None, (
-            ("Cannot transform %r,\n"
-             "search choices %r,\n"
-             "to search choices %r.\n"
-             "Missing beam idxs.") % (src, src_search_choices, search_choices_seq))
+            self.network.debug_search_choices(self.search_choices_layer) or (
+              ("Cannot transform %r,\n"
+               "search choices %r,\n"
+               "to search choices %r.\n"
+               "Missing beam idxs.") % (src, src_search_choices, search_choices_seq)))
           v = select_src_beams(v, src_beams=base_src_choices.src_beams)
           self.used_search_choices_beams = True
         return v

@@ -3491,8 +3491,7 @@ class ChoiceLayer(LayerBase):
             scores_in_dim = tf.shape(self.sources[0].output.placeholder)[self.sources[0].output.feature_dim_axis]
           pruned_labels = None
 
-        assert self.search_choices.src_layer, (
-          self.network.debug_search_choices(base_search_choice=self),
+        assert self.search_choices.src_layer, self.network.debug_search_choices(base_search_choice=self) or (
           "Not implemented yet. In rec-layer, we would always have our prev-frame as one previous search choice. "
           "Our deps: %r" % self.get_dep_layers())
         base_search_choices = self.search_choices.src_layer.search_choices

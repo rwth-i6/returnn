@@ -1307,7 +1307,7 @@ class TFNetwork(object):
     from TFUtil import cond
     return cond(self.train_flag, fn_train, fn_eval)
 
-  def get_search_choices(self, sources=None, src=None, base_search_choice=None, _visited=None):
+  def get_search_choices(self, sources=None, src=None, base_search_choice=None, _visited=None, debug_stream=None):
     """
     Recursively searches through all sources,
     and if there is a :class:`ChoiceLayer` / any layer with search_choices, returns it.
@@ -1319,19 +1319,17 @@ class TFNetwork(object):
     :param LayerBase|None base_search_choice:
     :param list[LayerBase]|None sources:
     :param dict[LayerBase]|None _visited: keep track about visited layers in case there are circular deps
+    :param typing.TextIO|None debug_stream: if given, will print additional debug info into it
     :return: (direct or indirect) source LayerBase which has search_choices, or None
     :rtype: LayerBase|None
     """
     from TFNetworkLayer import SearchChoices
     from functools import cmp_to_key
+    from pprint import pformat
     if _visited is None:
       _visited = {}  # type: typing.Dict[LayerBase,typing.List[LayerBase]]
     layers = self._get_all_search_choices(
       sources=sources, src=src, base_search_choice=base_search_choice, _visited=_visited)
-    while base_search_choice in layers:
-      layers.remove(base_search_choice)
-    if not layers:
-      return None
 
     def full_trace_for_layer(layer, _layer_trace=None):
       """
@@ -1352,6 +1350,15 @@ class TFNetwork(object):
       for dep in _visited[layer]:
         full_trace_for_layer(dep, _layer_trace=_layer_trace)
       return _layer_trace
+
+    def get_debug_dep_map():
+      """
+      :rtype: dict[str,list[str]]
+      """
+      relevant_map = {}
+      for key, values in _visited.items():
+        relevant_map[key.get_absolute_name()] = [value.get_absolute_name() for value in values]
+      return relevant_map
 
     def compare_layer(l1, l2):
       """
@@ -1378,17 +1385,20 @@ class TFNetwork(object):
         return -1
       if l2trace.issubset(l1trace) and not l1trace.issubset(l2trace):
         return 1
-      from pprint import pformat
-      relevant_map = {}
-      for key, values in _visited.items():
-        relevant_map[key.get_absolute_name()] = [value.get_absolute_name() for value in values]
       raise Exception(
         ("Search choices cannot be compared.\n"
          "layer 1 %r\n  choice trace %r\n"
          "layer 2 %r\n  choice trace %r\n"
          "Full dependency map:\n%s\n"
-         "Relevant layers:\n%s") % (l1, l1trace_, l2, l2trace_, pformat(relevant_map), pformat(layers)))
+         "Relevant layers:\n%s") % (l1, l1trace_, l2, l2trace_, pformat(get_debug_dep_map()), pformat(layers)))
 
+    if debug_stream:
+      print("Relevant layers:\n%s" % pformat(layers), file=debug_stream)
+      print("Full dependency map:\n%s" % pformat(get_debug_dep_map()), file=debug_stream)
+    while base_search_choice in layers:
+      layers.remove(base_search_choice)
+    if not layers:
+      return None
     layers = sorted(layers, key=cmp_to_key(compare_layer))
     return layers[-1]
 
@@ -1443,6 +1453,7 @@ class TFNetwork(object):
   def debug_search_choices(self, base_search_choice):
     """
     :param LayerBase base_search_choice:
+    :return: nothing, by intention, such that constructs like `assert ..., debug_search_choices(...) or (...)` work
     """
     print("debug search choices:")
     print("  base:", base_search_choice)
@@ -1459,14 +1470,15 @@ class TFNetwork(object):
         :param LayerBase key:
         :param value:
         """
-        print("  visit: %r" % (key,))
+        print("  visit: %r, search choices %r" % (key, key.search_choices))
         print("    sources: %s" % ", ".join([
           "%r search choices %r" % (dep.get_absolute_name(), dep.search_choices)
           for dep in key.get_dep_layers()] or ["None"]))
         super(Visitor, self).__setitem__(key, value)
 
-    search_choices = self.get_search_choices(base_search_choice=base_search_choice, _visited=Visitor())
-    print("  search choices:", search_choices)
+    search_choices = self.get_search_choices(
+      base_search_choice=base_search_choice, _visited=Visitor(), debug_stream=sys.stdout)
+    print("-> search choices:", search_choices)
 
   def get_data_batch_dim(self):
     """
