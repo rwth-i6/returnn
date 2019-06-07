@@ -1632,17 +1632,13 @@ class SearchChoices(object):
       return SearchChoices.compare(self=self_norm_layer.search_choices, other=other_norm_layer.search_choices)
     self_src_choices = self.get_src_choices_seq()
     other_src_choices = other.get_src_choices_seq()
-    assert len(self_src_choices) != len(other_src_choices)
-    if len(self_src_choices) < len(other_src_choices):
-      res = -1
-    else:
-      res = 1
-      self_src_choices, other_src_choices = other_src_choices, self_src_choices
-    assert len(self_src_choices) < len(other_src_choices)
-    for i in range(len(self_src_choices)):
-      assert self_src_choices[-1 - i] == other_src_choices[-1 - i], (
-        "cannot compare, they don't share the same search-tree")
-    return res
+    if self in other_src_choices and other not in self_src_choices:
+      return -1
+    if other in self_src_choices and self not in other_src_choices:
+      return 1
+    from pprint import pformat
+    raise Exception("Cannot compare search choices %r and %r which have traces:%s\n%s" % (
+      self, other, pformat(self_src_choices), pformat(other_src_choices)))
 
   def __cmp__(self, other):
     return self.compare(self, other)

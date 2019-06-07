@@ -1380,10 +1380,9 @@ class TFNetwork(object):
         return 0
       l1trace_ = full_trace_for_layer(l1)
       l2trace_ = full_trace_for_layer(l2)
-      l1trace, l2trace = set(l1trace_), set(l2trace_)
-      if l1trace.issubset(l2trace) and not l2trace.issubset(l1trace):
+      if l1 in l2trace_ and l2 not in l1trace_:
         return -1
-      if l2trace.issubset(l1trace) and not l1trace.issubset(l2trace):
+      if l2 in l1trace_ and l1 not in l2trace_:
         return 1
       raise Exception(
         ("Search choices cannot be compared.\n"
