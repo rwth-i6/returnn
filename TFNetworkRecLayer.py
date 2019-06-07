@@ -2133,7 +2133,7 @@ class _SubnetworkRecCell(object):
       final_choice_rec_vars = self.get_layer_rec_var_from_loop_vars(
         loop_vars=final_net_vars,
         layer_name=output_choice_base.name)
-      search_choices.set_beam_scores_from_rec(final_choice_rec_vars)
+      search_choices.set_beam_from_rec(final_choice_rec_vars)
 
     with tf.name_scope("output"):
       output_layer = None
@@ -2619,7 +2619,7 @@ class _TemplateLayer(LayerBase):
     if self.search_choices:
       layer.search_choices = SearchChoices(owner=layer, beam_size=self.search_choices.beam_size)
       if rec_vars_prev_outputs:
-        layer.search_choices.set_beam_scores_from_own_rec()
+        layer.search_choices.set_beam_from_own_rec()
       layer.output.beam_size = self.search_choices.beam_size
     return layer
 
@@ -3466,7 +3466,7 @@ class ChoiceLayer(LayerBase):
         assert self.search_choices.beam_size == 1
         assert not cheating
         self.output = self.sources[0].output.copy_compatible_to(self.output)
-        self.search_choices.src_beams = tf.zeros((net_batch_dim, 1), dtype=tf.int32)
+        self.search_choices.set_src_beams(tf.zeros((net_batch_dim, 1), dtype=tf.int32))
         self.search_choices.set_beam_scores(self.search_choices.src_layer.search_choices.beam_scores)
       else:
         assert len(self.sources) <= 2, "Combining more than two sources not implemented yet."
@@ -3577,7 +3577,7 @@ class ChoiceLayer(LayerBase):
             scores_comb[:, gold_beam_in_idx], indices=nd_indices(gold_targets))  # (batch,)
           gold_scores_bc = tf.expand_dims(gold_scores, axis=1)  # (batch,1)
           scores = tf.concat([scores[:, :beam_size - 1], gold_scores_bc], axis=1)  # (batch,beam)
-        self.search_choices.src_beams = labels // scores_in_dim  # (batch, beam) -> beam_in idx
+        self.search_choices.set_src_beams(labels // scores_in_dim)  # (batch, beam) -> beam_in idx
         labels = labels % scores_in_dim  # (batch, beam) -> dim idx
         labels = tf.reshape(labels, [net_batch_dim * beam_size])  # (batch * beam)
         labels = tf.cast(labels, self.output.dtype)
@@ -3693,8 +3693,8 @@ class ChoiceLayer(LayerBase):
       assert len(self.sources) == 1
       scores_in_ = batch_gather(scores_in, self.output.placeholder)  # (batch*beam_in,)
       scores_in_ = tf.reshape(scores_in_, (net_batch_dim, base_search_choices.beam_size))  # (batch,beam_in)
-      self.search_choices.src_beams = expand_dims_unbroadcast(
-        tf.range(base_search_choices.beam_size), axis=0, dim=net_batch_dim)
+      self.search_choices.set_src_beams(expand_dims_unbroadcast(
+        tf.range(base_search_choices.beam_size), axis=0, dim=net_batch_dim))
       self.search_choices.set_beam_scores(scores_base + scores_in_)
 
   def _get_scores(self, source):
@@ -3893,8 +3893,9 @@ class ChoiceLayer(LayerBase):
     batch_dim = network.get_data_batch_dim()
     # Note: Use beam_size 1 for the initial as there are no competing hypotheses yet.
     initial_scores = tf.zeros([batch_dim, 1])  # (batch, beam)
+    initial_src_beams = tf.zeros([batch_dim, 1], dtype=tf.int32)  # (batch, beam)
     # Note: Our rec vars are handled via SearchChoices.set_beam_scores.
-    return {"choice_scores": initial_scores}
+    return {"choice_scores": initial_scores, "choice_src_beams": initial_src_beams}
 
   @classmethod
   def get_rec_initial_extra_outputs_shape_invariants(cls, **kwargs):
@@ -3902,7 +3903,10 @@ class ChoiceLayer(LayerBase):
     :rtype: dict[str,tf.TensorShape]
     """
     # Initial beam size is 1 and then later the given one, so it changes.
-    return {"choice_scores": tf.TensorShape((None, None))}  # (batch, beam)
+    return {
+      "choice_scores": tf.TensorShape((None, None)),  # (batch, beam)
+      "choice_src_beams": tf.TensorShape((None, None)),  # (batch, beam)
+    }
 
   def get_dep_layers(self):
     """

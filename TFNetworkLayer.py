@@ -1507,17 +1507,16 @@ class SearchChoices(object):
   This is what we keep track here.
   """
 
-  def __init__(self, owner, src_beams=None, beam_size=None, is_decided=False):
+  def __init__(self, owner, beam_size=None, is_decided=False):
     """
     :param LayerBase owner:
-    :param tf.Tensor|None src_beams: (batch, beam) -> src beam index
     :param int|None beam_size:
     :param bool is_decided: by decide layer
     """
     self.owner = owner
     self._done_src_layer = False
     self._src_layer = None  # type: typing.Optional[LayerBase]
-    self.src_beams = src_beams  # (batch, beam)
+    self.src_beams = None  # src beam index, (batch, beam)
     self.beam_size = beam_size
     self.beam_scores = None  # type: typing.Optional[tf.Tensor]  # (batch, beam)
     self.is_decided = is_decided
@@ -1555,20 +1554,29 @@ class SearchChoices(object):
       self._done_src_layer = True
     return self._src_layer
 
-  def set_beam_scores_from_own_rec(self):
+  def set_beam_from_own_rec(self):
     """
     Assumes we have set self.owner, and uses those rec vars to set the beam scores.
     """
-    self.set_beam_scores_from_rec(self.owner.rec_vars_outputs)
+    self.set_beam_from_rec(self.owner.rec_vars_outputs)
 
-  def set_beam_scores_from_rec(self, rev_vars_outputs):
+  def set_beam_from_rec(self, rev_vars_outputs):
     """
     :param dict[str,tf.Tensor] rev_vars_outputs: e.g. via :class:`ChoiceLayer`
     """
-    assert rev_vars_outputs.get("choice_scores", None) is not None
+    assert (
+      rev_vars_outputs.get("choice_scores", None) is not None and
+      rev_vars_outputs.get("choice_src_beams", None) is not None)
     self.beam_scores = rev_vars_outputs["choice_scores"]  # (batch, beam)
-    if self.src_beams is not None:
-      self.beam_scores.set_shape(self.src_beams.get_shape())
+    self.src_beams = rev_vars_outputs["choice_src_beams"]  # (batch, beam)
+    self.beam_scores.set_shape(self.src_beams.get_shape())
+
+  def set_src_beams(self, src_beam_idxs):
+    """
+    :param tf.Tensor src_beam_idxs: source beam index, (batch, beam)
+    """
+    self.src_beams = src_beam_idxs
+    self.owner.rec_vars_outputs["choice_src_beams"] = src_beam_idxs
 
   def set_beam_scores(self, scores):
     """
