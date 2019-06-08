@@ -1575,6 +1575,8 @@ class SearchChoices(object):
     """
     :param tf.Tensor src_beam_idxs: source beam index, (batch, beam)
     """
+    if isinstance(self.beam_size, int):
+      src_beam_idxs.set_shape((None, self.beam_size))
     self.src_beams = src_beam_idxs
     self.owner.rec_vars_outputs["choice_src_beams"] = src_beam_idxs
 
@@ -1582,6 +1584,8 @@ class SearchChoices(object):
     """
     :param tf.Tensor scores: (batch, beam) -> log score
      """
+    if isinstance(self.beam_size, int):
+      scores.set_shape((None, self.beam_size))
     self.beam_scores = scores
     self.owner.rec_vars_outputs["choice_scores"] = scores
 
