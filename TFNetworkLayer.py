@@ -7821,6 +7821,47 @@ class AsIsLoss(Loss):
     return None
 
 
+class SearchScoreLoss(Loss):
+  """
+  Use the scores from :class:`SearchChoices`.
+  """
+  class_name = "search_score"
+
+  def reduce_to_batch(self, loss, normalize):
+    """
+    :param tf.Tensor loss: (batch,)
+    :param bool normalize: reduce mean instead of reduce sum
+    :return: (batch,)
+    :rtype: tf.Tensor
+    """
+    return loss
+
+  def get_value(self):
+    """
+    :rtype: tf.Tensor
+    """
+    assert self.layer
+    search_choices = self.layer.get_search_choices()
+    assert self.layer.network.search_flag and search_choices, "no search?"
+    # Negative score, because we minimize the loss, i.e. maximize the score.
+    return self.reduce_func(-search_choices.beam_scores)
+
+  def get_error(self):
+    """
+    :rtype: None
+    """
+    return None  # not defined
+
+  @classmethod
+  def get_default_target(cls, extern_data):
+    """
+    :param TFNetwork.ExternData extern_data:
+    :rtype: None
+    """
+    # We do not need any target.
+    return None
+
+
 class SamplingBasedLoss(Loss):
   """
   Implement two sampling based losses, sampled softmax (default) and noise contrastive estimation.
