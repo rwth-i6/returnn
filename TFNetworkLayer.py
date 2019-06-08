@@ -2267,15 +2267,21 @@ class SliceNdLayer(_ConcatInputLayer):
     super(SliceNdLayer, self).__init__(**kwargs)
     from TFUtil import slice_nd, dimshuffle
     x = self.input_data.copy_as_batch_major()
+    self.start = start
     start = start.output.get_placeholder_as_batch_major()
     start = dimshuffle(start, [0, 'x'])  # (B, T, ...)
     axis = x.time_dim_axis
     assert axis == 1, "currently only time-axis==1 supported"
     slices = slice_nd(x.placeholder, tf.cast(start, tf.int32), size)  # (B,size, ...)
-
     self.output.size_placeholder = x.size_placeholder.copy()
     self.output.size_placeholder.pop(0, None)  # static time axis
     self.output.placeholder = slices
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    return super(SliceNdLayer, self).get_dep_layers() + [self.start]
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources=(), start=None, size=None, **kwargs):
@@ -2561,6 +2567,8 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     """
     from TFUtil import where_bc
     super(SoftmaxOverSpatialLayer, self).__init__(**kwargs)
+    self.start = start
+    self.window_start = window_start
     energy_data = self.input_data
     assert energy_data.dtype.startswith("float")
     axis = self._get_axis_to_reduce(input_data=energy_data, axis=axis, exception_prefix=self)
@@ -2615,6 +2623,17 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     weights = tf.nn.softmax(energy)  # (...,T)
     self.output.placeholder = weights
 
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    deps = super(SoftmaxOverSpatialLayer, self).get_dep_layers()
+    if self.start:
+      deps.append(self.start)
+    if self.window_start:
+      deps.append(self.window_start)
+    return deps
+
   @classmethod
   def _get_axis_to_reduce(cls, input_data, axis, exception_prefix):
     """
@@ -2668,6 +2687,7 @@ class SeqLenMaskLayer(_ConcatInputLayer):
     :param float mask_value:
     """
     super(SeqLenMaskLayer, self).__init__(**kwargs)
+    self.seq_len_source = seq_len_source
     x = self.input_data.copy_as_batch_major()  # e.g. (B,T',T)
     axis = x.get_axis_from_description(axis)
     if not seq_len_source:
@@ -2684,6 +2704,15 @@ class SeqLenMaskLayer(_ConcatInputLayer):
     self.output.size_placeholder = x.size_placeholder.copy()
     if mask_value in [float("-inf"), float("inf")]:
       self.allow_inf_in_output = True
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    deps = super(SeqLenMaskLayer, self).get_dep_layers()
+    if self.seq_len_source:
+      deps.append(self.seq_len_source)
+    return deps
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -3345,6 +3374,7 @@ class SplitBatchTimeLayer(_ConcatInputLayer):
     :param LayerBase base: used to recover the seq-lens
     """
     super(SplitBatchTimeLayer, self).__init__(**kwargs)
+    self.base = base
     assert base.output.time_dim_axis is not None
     base_shape = tf.shape(base.output.placeholder)
     batch_dim = base_shape[base.output.batch_dim_axis]
@@ -3356,6 +3386,12 @@ class SplitBatchTimeLayer(_ConcatInputLayer):
     self.output.placeholder = tf.reshape(self.input_data.placeholder, shape=[batch_dim, time_dim] + input_shape[1:])
     self.output.size_placeholder = {i + 1: v for (i, v) in self.input_data.size_placeholder.items()}
     self.output.size_placeholder[0] = seq_lens
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    return super(SplitBatchTimeLayer, self).get_dep_layers() + [self.base]
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -3401,9 +3437,11 @@ class UnflattenNdLayer(_ConcatInputLayer):
     """
     :param LayerBase sizes:
     :param int num_axes:
-    :param dict[int,LayerBase] declare_same_sizes_as:
+    :param dict[int,LayerBase]|None declare_same_sizes_as:
     """
     super(UnflattenNdLayer, self).__init__(**kwargs)
+    self.sizes = sizes
+    self.declare_same_sizes_as = declare_same_sizes_as
     input_data = self.input_data.copy_as_batch_major()
     sizes_data = sizes.output.copy_as_batch_major()
     assert sizes_data.batch_ndim == 2
@@ -3415,6 +3453,18 @@ class UnflattenNdLayer(_ConcatInputLayer):
         assert 0 <= i < num_axes
         other_dim_tag = other.output.get_size_dim_tag(0)
         other_dim_tag.set_tag_on_size_tensor(self.output.size_placeholder[i])
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    deps = super(UnflattenNdLayer, self).get_dep_layers()
+    if self.sizes:
+      deps.append(self.sizes)
+    if self.declare_same_sizes_as:
+      for i, other in sorted(self.declare_same_sizes_as.items()):
+        deps.append(other)
+    return deps
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -3612,7 +3662,17 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param bool enforce_time_major:
     """
     super(ReinterpretDataLayer, self).__init__(**kwargs)
+    self.size_base = size_base
     # All is done already in get_out_data_from_opts().
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    deps = super(ReinterpretDataLayer, self).get_dep_layers()
+    if self.size_base:
+      deps.append(self.size_base)
+    return deps
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -4567,6 +4627,7 @@ class TimeUnChunkingLayer(_ConcatInputLayer):
     """
     super(TimeUnChunkingLayer, self).__init__(**kwargs)
     assert isinstance(chunking_layer, TimeChunkingLayer)
+    self.chunking_layer = chunking_layer
     chunk_size = chunking_layer.chunk_size
     chunk_step = chunking_layer.chunk_step
     orig_shape = tf.shape(chunking_layer.input_data.placeholder)
@@ -4579,6 +4640,12 @@ class TimeUnChunkingLayer(_ConcatInputLayer):
       x.placeholder, index=index, chunk_step=chunk_step, chunk_size=chunk_size, n_time=n_time, n_batch=n_batch)
     self.output.placeholder = out
     self.output.size_placeholder = {0: chunking_layer.input_data.get_sequence_lengths()}
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    return super(TimeUnChunkingLayer, self).get_dep_layers() + [self.chunking_layer]
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -5375,9 +5442,7 @@ class SwitchLayer(LayerBase):
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     d.setdefault("from", [])
-
     super(SwitchLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
-
     d["condition"] = get_layer(d["condition"])
     d["true_from"] = get_layer(d["true_from"])
     d["false_from"] = get_layer(d["false_from"])
