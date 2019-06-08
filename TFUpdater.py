@@ -172,7 +172,7 @@ class Updater(object):
 
     :return: nothing, will just set self.optim_op
     """
-    assert self.loss is not None
+    assert isinstance(self.loss, tf.Tensor), "no loss defined?"
     assert self.trainable_vars, "no variables to update/optimize"
     from TFUtil import MetaLosses
 
