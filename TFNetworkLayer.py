@@ -2016,6 +2016,7 @@ class SelectSearchSourcesLayer(InternalLayer):
     self.search_choices_layer = search_choices
     self.used_search_choices_beams = False
     search_choices = search_choices.get_search_choices()
+    self.search_choices_from_layer = search_choices
     self.output = src.output.copy_as_batch_major()
     if search_choices:
       self.output = self.output.copy_extend_with_beam(search_choices.beam_size)
@@ -2067,6 +2068,11 @@ class SelectSearchSourcesLayer(InternalLayer):
       if src.output.placeholder is not None:
         self.output.placeholder = transform(src.output.get_placeholder_as_batch_major())
       self.rec_vars_outputs = {k: transform(v) for (k, v) in src.rec_vars_outputs.items()}  # assumes batch-major
+
+  def __repr__(self):
+    return "<%s %r %r out_type=%s>" % (
+      self.__class__.__name__, self.name, self.search_choices_from_layer,
+      self.output.get_description(with_name=False) if self.output else None)
 
   def get_dep_layers(self):
     """
