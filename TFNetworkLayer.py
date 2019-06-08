@@ -2319,12 +2319,19 @@ class GatherNdLayer(_ConcatInputLayer):
     :param LayerBase position:
     """
     super(GatherNdLayer, self).__init__(**kwargs)
+    self.position = position
     from TFUtil import batch_gather
     x = self.input_data.copy_as_batch_major()
     position = position.output.get_placeholder_as_batch_major()
     self.output.size_placeholder = x.size_placeholder.copy()
     self.output.size_placeholder.pop(0, None)  # static time axis
     self.output.placeholder = batch_gather(x.placeholder, position)  # (B,...)
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    return super(GatherNdLayer, self).get_dep_layers() + [self.position]
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, position, **kwargs):
