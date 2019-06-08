@@ -3836,7 +3836,7 @@ class ChoiceLayer(LayerBase):
       out_data = Data(name="%s_output" % name, shape=shape, sparse=True, dim=out_data.dim)
     if search:
       out_data.beam_size = beam_size
-    if cheating or scheduled_sampling:
+    if cheating or scheduled_sampling or not search:
       cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=True)  # mark as used
     return out_data
 
