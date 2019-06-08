@@ -3790,6 +3790,9 @@ class ChoiceLayer(LayerBase):
     :param TFNetwork.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
+    assert d.get("from", NotSpecified) is not NotSpecified, "specify 'from' explicitly for choice layer"
+    if not isinstance(d["from"], (tuple, list)):
+      d["from"] = [d["from"]]
     if d.get("target", NotSpecified) is not None:
       assert "target" in d, "%s: specify 'target' explicitly" % (cls.__name__,)
       if isinstance(d["target"], str):
@@ -3938,18 +3941,19 @@ class DecideLayer(LayerBase):
     if self.network.search_flag:
       assert len(self.sources) == 1
       src = self.sources[0]
-      self.decide(src=src, output=self.output, length_normalization=length_normalization)
-      self.search_choices = SearchChoices(owner=self, is_decided=True)
+      self.output, self.search_choices = self.decide(
+        src=src, owner=self, output=self.output, length_normalization=length_normalization)
 
   @classmethod
-  def decide(cls, src, output=None, name=None, length_normalization=False):
+  def decide(cls, src, output=None, owner=None, name=None, length_normalization=False):
     """
     :param LayerBase src: with search_choices set. e.g. input of shape (batch * beam, time, dim)
     :param Data|None output:
+    :param LayerBase|None owner:
     :param str|None name:
     :param bool length_normalization: performed on the beam scores
     :return: best beam selected from input, e.g. shape (batch, time, dim)
-    :rtype: Data
+    :rtype: (Data, SearchChoices)
     """
     search_choices = src.get_search_choices()
     assert search_choices
@@ -3979,7 +3983,11 @@ class DecideLayer(LayerBase):
     for i, size in src_data.size_placeholder.items():
       size = tf.reshape(size, [batch_dim, beam_size])  # (batch, beam)
       output.size_placeholder[i] = tf.gather_nd(size, indices=beam_idxs_ext)  # (batch,)
-    return output
+    final_search_choices = SearchChoices(owner=owner, is_decided=True, beam_size=1)
+    if owner:
+      final_search_choices.set_src_beams(tf.expand_dims(beam_idxs, axis=1))
+      final_search_choices.set_beam_scores(tf.expand_dims(tf.gather_nd(beam_scores, indices=beam_idxs_ext), axis=1))
+    return output, final_search_choices
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, network, **kwargs):
