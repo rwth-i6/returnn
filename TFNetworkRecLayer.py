@@ -3688,6 +3688,7 @@ class ChoiceLayer(LayerBase):
       self.search_choices = SearchChoices(
         owner=self,
         beam_size=base_search_choices.beam_size)
+      assert self.search_choices.beam_size == self.output.beam_size
       scores_base = base_search_choices.beam_scores  # (batch, beam_in|1)
       scores_in = self._get_scores(self.sources[0])  # +log scores, (batch*beam_in, dim)
       assert len(self.sources) == 1
@@ -3839,6 +3840,8 @@ class ChoiceLayer(LayerBase):
       out_data = Data(name="%s_output" % name, shape=shape, sparse=True, dim=out_data.dim)
     if search:
       out_data.beam_size = beam_size
+    elif sources:
+      out_data.beam_size = sources[0].output.beam_size
     if cheating or scheduled_sampling or not search:
       cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=True)  # mark as used
     return out_data
