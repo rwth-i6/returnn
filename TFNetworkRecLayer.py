@@ -3897,7 +3897,9 @@ class ChoiceLayer(LayerBase):
     batch_dim = network.get_data_batch_dim()
     # Note: Use beam_size 1 for the initial as there are no competing hypotheses yet.
     initial_scores = tf.zeros([batch_dim, 1])  # (batch, beam)
-    initial_src_beams = tf.zeros([batch_dim, 1], dtype=tf.int32)  # (batch, beam)
+    # However! Our initial output is *with* the beam size, and SelectSearchSourcesLayer should keep the beam size.
+    from TFUtil import expand_dims_unbroadcast
+    initial_src_beams = expand_dims_unbroadcast(tf.range(beam_size), axis=0, dim=batch_dim)  # (batch, beam)
     # Note: Our rec vars are handled via SearchChoices.set_beam_scores.
     return {"choice_scores": initial_scores, "choice_src_beams": initial_src_beams}
 
