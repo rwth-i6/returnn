@@ -1668,6 +1668,8 @@ class SearchChoices(object):
     if isinstance(d, LayerBase):
       if d.get_search_choices() == self:
         return d
+      if d.output.batch_dim_axis is None:  # e.g. VariableLayer, ConstantLayer, or so
+        return d
       return SelectSearchSourcesLayer(sources=(d,), search_choices=self.owner, name=d.name, network=d.network)
     return d
 
