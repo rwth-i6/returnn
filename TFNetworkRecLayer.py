@@ -966,11 +966,9 @@ class _SubnetworkRecCell(object):
         layer_desc["name"] = name
         layer_desc["network"] = self.net
         layer_.kwargs = layer_desc  # set it now already for better debugging
-        if layer_ not in ConstructCtx.partially_finished:
-          ConstructCtx.partially_finished.append(layer_)
         output = layer_class.get_out_data_from_opts(**layer_desc)
         layer_.init(layer_class=layer_class, output=output, **layer_desc)
-        if lself.returned_none_count == 0:
+        if lself.returned_none_count == 0 and layer_ in ConstructCtx.partially_finished:
           ConstructCtx.partially_finished.remove(layer_)
         return layer_
 
@@ -1025,6 +1023,11 @@ class _SubnetworkRecCell(object):
           self.layer_data_templates[name] = layer_
         if ConstructCtx.layers:
           ConstructCtx.layers[-1].add_dependency(layer_, is_prev_time_frame=is_prev)
+        if layer_ not in ConstructCtx.partially_finished:
+          # Add it early. We want to catch all possible source of exceptions/errors, via:
+          # * layer_class.transform_config_dict (via construct_layer)
+          # * layer_class.get_out_data_from_opts (via add_templated_layer)
+          ConstructCtx.partially_finished.append(layer_)
         lself.count += 1
         if lself.once and lself.count > 1:
           lself.returned_none_count += 1
