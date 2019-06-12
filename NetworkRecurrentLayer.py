@@ -817,7 +817,7 @@ class RecurrentUnitLayer(Layer):
     assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
     unit.recurrent_transform = recurrent_transform_inst
     self.recurrent_transform = recurrent_transform_inst
-    state_memory = state_memory and not self.train_flag
+    state_memory *= self.train_flag
     # scan over sequence
     for s in range(self.attrs['sampling']):
       index = self.index[s::self.attrs['sampling']]
@@ -840,19 +840,21 @@ class RecurrentUnitLayer(Layer):
         i = index[::direction or 1]
         out, _ = theano.map(context_window, sequences = [T.arange(z.shape[0])], non_sequences = [T.concatenate([T.zeros((context - 1,z.shape[1],z.shape[2]),dtype='float32'),z],axis=0), i])
         z = out[0][::direction or 1]
-        i = out[1][::direction or 1] # T(BC)
+        i = out[1][::direction or 1]  # T(BC)
         direction = 1
-        z = z.reshape((time * batch, context * dim)) # (TB)(CD)
-        z = z.reshape((time * batch, context, dim)).dimshuffle(1,0,2) # C(TB)D
-        i = i.reshape((time, context, batch)).dimshuffle(1,0,2).reshape((context, time * batch))
+        z = z.reshape((time * batch, context * dim))  # (TB)(CD)
+        z = z.reshape((time * batch, context, dim)).dimshuffle(1,0,2)  # C(TB)D
+        i = i.reshape((time * batch, context)).dimshuffle(1,0)  # C(TB)
+
         index = i
         num_batches = time * batch
 
       sequences = z
       sources = self.sources
-      self.init_state = [
-        self.add_param(self.shared(numpy.zeros((1, unit.n_units), dtype='float32'), name='init_%d_%s' % (a, self.name)))
-        for a in range(unit.n_act)]  # has to be initialized for train and test
+      if state_memory:
+        self.init_state = [
+          self.add_param(self.shared(numpy.zeros((state_memory or 1, unit.n_units), dtype='float32'), name='init_%d_%s' % (a, self.name)))
+          for a in range(unit.n_act)]  # has to be initialized for train and test
       if encoder:
         if recurrent_transform == "attention_segment":
           if hasattr(encoder[0],'act'):
@@ -1041,6 +1043,8 @@ class RecurrentUnitLayer(Layer):
     self.rec_transform_enc = att_rep
     self.rec_transform_index = ind
 
+  def get_params_vars(self):
+    return [ p for p in super(RecurrentUnitLayer, self).get_params_vars() if p.live_update is None ]
 
 class RecurrentUpsampleLayer(RecurrentUnitLayer):
   layer_class = 'recurrent_upsample'
