@@ -1403,18 +1403,30 @@ class _SubnetworkRecCell(object):
     :rtype: list[LayerBase]
     """
     ls = []
+
+    def maybe_add(layer_):
+      """
+      :param LayerBase layer_:
+      """
+      # Usually dep.network is self.cell.net but it could reference to our own net,
+      # e.g. if this is an attention layer like
+      # {"class": "dot_attention", "base": "base:encoder", ...}.
+      if layer_.network is self.parent_net:
+        if layer_ not in ls:
+          ls.append(layer_)
+
     layers = self.net.layers
     if not layers:  # happens only during initialization
       layers = self.layer_data_templates
     for _, layer in sorted(layers.items()):
       assert isinstance(layer, LayerBase)
-      for dep in layer.get_dep_layers():
-        # Usually dep.network is self.cell.net but it could reference to our own net,
-        # e.g. if this is an attention layer like
-        # {"class": "dot_attention", "base": "base:encoder", ...}.
-        if dep.network is self.parent_net:
-          if dep not in ls:
-            ls += [dep]
+      maybe_add(layer)
+      if isinstance(layer, _TemplateLayer):
+        for dep in layer.dependencies:  # if it is uninitialized, need to use this
+          maybe_add(dep)
+      else:
+        for dep in layer.get_dep_layers():
+          maybe_add(dep)
     return ls
 
   def get_output(self, rec_layer):
