@@ -8150,6 +8150,10 @@ def get_non_deterministic_ops_from_graph():
   for op in tf.get_default_graph().get_operations():
     if op.type == "Mean" and tf_version <= (1, 5, 0) and "GPU" in device_types:
       non_det_ops.append(op)
+    elif op.type == "BiasAddGrad" and "GPU" in device_types:
+      non_det_ops.append(op)
+    if op.type == "UnsortedSegmentSum" and "GPU" in device_types:
+      non_det_ops.append(op)
     # elif ... more non det ops to be added
 
   return non_det_ops
