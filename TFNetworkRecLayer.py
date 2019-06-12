@@ -3711,7 +3711,11 @@ class ChoiceLayer(LayerBase):
       scores_in_ = tf.reshape(scores_in_, (net_batch_dim, base_search_choices.beam_size))  # (batch,beam_in)
       self.search_choices.set_src_beams(expand_dims_unbroadcast(
         tf.range(base_search_choices.beam_size), axis=0, dim=net_batch_dim))
-      self.search_choices.set_beam_scores(scores_base + scores_in_)
+      assert not random_sample_scale
+      scores_comb = optional_add(
+        optional_mul(scores_in_, prob_scale),
+        optional_mul(scores_base, base_beam_score_scale))  # (batch, beam_in, dim)
+      self.search_choices.set_beam_scores(scores_comb)
 
   def _get_scores(self, source):
     """
