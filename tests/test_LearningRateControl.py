@@ -184,6 +184,47 @@ def test_newbob_multi_epoch():
   assert_equal(lrc.get_learning_rate_for_epoch(2), lr)  # epoch 2 cannot be a different lr yet
 
 
+def test_later_default_lr():
+  import tempfile
+  tmp_file = tempfile.mktemp()
+
+  lr = 0.0005
+  learning_rates = list(numpy.linspace(0.0003, lr, num=10))  # warmup
+  config = Config()
+  config.update({
+    "learning_rate_file": tmp_file,
+    "learning_rate_control": "newbob_multi_epoch",
+    "learning_rate_control_relative_error_relative_lr": True,
+    "learning_rate_control_min_num_epochs_per_new_lr": 3,
+    "newbob_multi_num_epochs": 6,
+    "newbob_multi_update_interval": 1,
+    "learning_rate": lr,
+    "learning_rates": learning_rates,
+    "min_learning_rate": lr / 50.})
+  lrc = load_learning_rate_control_from_config(config)
+  assert isinstance(lrc, NewbobMultiEpoch)
+
+  num_epochs = 250
+  for epoch in range(1, num_epochs + 1):
+    lrc.get_learning_rate_for_epoch(epoch)
+    lrc.set_epoch_error(epoch, {"train_score": 0.5, "train_error": 0.5})
+    lrc.set_epoch_error(epoch, {"dev_score": 0.5, "dev_error": 0.5})
+  print("Learning rates:")
+  print(lrc)
+  lrc.save()
+  print("Saved to:", lrc.filename)
+
+  learning_rates = {i + 1: v for (i, v) in enumerate(learning_rates)}
+  later_epoch = num_epochs + 1
+  learning_rates[later_epoch] = lr * 0.5  # reset
+  config.update({"learning_rates": learning_rates})
+
+  lrc = load_learning_rate_control_from_config(config)
+  assert later_epoch in lrc.epoch_data
+  lr251 = lrc.get_learning_rate_for_epoch(later_epoch)
+  numpy.testing.assert_almost_equal(lr251, learning_rates[later_epoch])
+
+
 if __name__ == "__main__":
   better_exchook.install()
   if len(sys.argv) <= 1:
