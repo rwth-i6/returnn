@@ -902,23 +902,10 @@ class CopyTaskDataset(GeneratingDataset):
     return DatasetSeq(seq_idx=seq_idx, features=seq_np, targets={"classes": seq_np})
 
 
-# noinspection PyAbstractClass
-class _TFKerasDataset(CachedDataset2):
-  """
-  Wraps around any dataset from tf.contrib.keras.datasets.
-  See: https://www.tensorflow.org/api_docs/python/tf/keras/datasets
-  TODO: Should maybe be moved to a separate file. (Only here because of tf.contrib.keras.datasets.reuters).
-  """
-  # TODO...
-
-
-# noinspection PyAbstractClass
-class _NltkCorpusReaderDataset(CachedDataset2):
-  """
-  Wraps around any dataset from nltk.corpus.
-  TODO: Should maybe be moved to a separate file, e.g. CorpusReaderDataset.py or so?
-  """
-  # TODO ...
+# Multiple external sources where we could write automatic wrappers:
+# * https://github.com/tensorflow/datasets
+# * tf.contrib.keras.datasets, https://www.tensorflow.org/api_docs/python/tf/keras/datasets
+# * nltk.corpus
 
 
 class ExtractAudioFeatures:
