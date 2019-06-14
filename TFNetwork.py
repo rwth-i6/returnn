@@ -294,6 +294,8 @@ class TFNetwork(object):
     if rnd_seed is None:
       if parent_net:
         rnd_seed = parent_net.random.randint(2 ** 31)
+      elif extra_parent_net:
+        rnd_seed = extra_parent_net.random.randint(2 ** 31)
       else:
         rnd_seed = 42
     self.rnd_seed = rnd_seed
@@ -320,9 +322,14 @@ class TFNetwork(object):
     self.total_objective = None  # type: typing.Optional[tf.Tensor]
     if parent_net:
       self.global_train_step = parent_net.global_train_step
+    elif extra_parent_net:
+      self.global_train_step = extra_parent_net.global_train_step
     else:
-      self.global_train_step = tf.Variable(
-        name="global_step", initial_value=0, dtype="int64", collections=[tf.GraphKeys.GLOBAL_STEP], trainable=False)
+      # Reuse mostly because some of the test cases currently work that way.
+      with tf.variable_scope(tf.get_variable_scope(), reuse=getattr(tf, "AUTO_REUSE", None)):
+        self.global_train_step = tf.get_variable(
+          name="global_step", shape=(), dtype=tf.int64, initializer=tf.zeros_initializer(tf.int64),
+          collections=[tf.GraphKeys.GLOBAL_STEP], trainable=False)
     self.epoch_step = None
     self.saver = None  # type: typing.Optional[tf.train.Saver]
     self.extra_vars_to_save = []  # type: typing.List[tf.Variable]
