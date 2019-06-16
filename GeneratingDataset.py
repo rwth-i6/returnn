@@ -1625,7 +1625,7 @@ class Vocabulary(object):
   def create_vocab(cls, **opts):
     """
     :param opts: kwargs for class
-    :rtype: Vocabulary|BytePairEncoding
+    :rtype: Vocabulary|BytePairEncoding|CharacterTargets
     """
     opts = opts.copy()
     clz = cls
@@ -2421,6 +2421,213 @@ class LibriSpeechCorpus(CachedDataset2):
     return DatasetSeq(
       features=features,
       targets={"classes": targets, "raw": raw},
+      seq_idx=seq_idx,
+      seq_tag=self.get_tag(seq_idx))
+
+
+class OggZipDataset(CachedDataset2):
+  """
+  Generic dataset which reads a Zip file containing Ogg files for each sequence.
+  """
+
+  def __init__(self, path, audio, targets,
+               use_cache_manager=False,
+               fixed_random_seed=None, fixed_random_subset=None,
+               epoch_wise_filter=None,
+               **kwargs):
+    """
+    :param str path: filename to zip
+    :param dict[str] audio: options for :class:`ExtractAudioFeatures`
+    :param dict[str] targets: options for :func:`Vocabulary.create_vocab` (e.g. :class:`BytePairEncoding`)
+    :param bool use_cache_manager: uses :func:`Util.cf`
+    :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'. otherwise epoch will be used
+    :param float|int|None fixed_random_subset:
+      Value in [0,1] to specify the fraction, or integer >=1 which specifies number of seqs.
+      If given, will use this random subset. This will be applied initially at loading time,
+      i.e. not dependent on the epoch. It will use an internally hardcoded fixed random seed, i.e. it's deterministic.
+    :param dict|None epoch_wise_filter: see init_seq_order
+    """
+    import os
+    import zipfile
+    import Util
+    from MetaDataset import EpochWiseFilter
+    name, ext = os.path.splitext(os.path.basename(path))
+    kwargs.setdefault("name", name)
+    assert ext == ".zip"
+    super(OggZipDataset, self).__init__(**kwargs)
+    if use_cache_manager:
+      path = Util.cf(path)
+    self.path = path
+    self._name = name
+    self._zip_file = zipfile.ZipFile(path)
+    self.targets = Vocabulary.create_vocab(**targets)
+    self.labels = {"classes": self.targets.labels}
+    self._fixed_random_seed = fixed_random_seed
+    self._audio_random = numpy.random.RandomState(1)
+    self.feature_extractor = (
+      ExtractAudioFeatures(random_state=self._audio_random, **audio) if audio is not None else None)
+    self.num_inputs = self.feature_extractor.get_feature_dimension() if self.feature_extractor else 0
+    self.num_outputs = {
+      "classes": [self.targets.num_labels, 1], "raw": {"dtype": "string", "shape": ()}}
+    if self.feature_extractor:
+      self.num_outputs["data"] = [self.num_inputs, 2]
+    self._data = self._collect_data()
+    if fixed_random_subset:
+      self._filter_fixed_random_subset(fixed_random_subset)
+    self.epoch_wise_filter = EpochWiseFilter(epoch_wise_filter) if epoch_wise_filter else None
+    self._seq_order = None  # type: typing.Optional[typing.List[int]]
+    self.init_seq_order()
+
+  def _collect_data(self):
+    """
+    :return: entries
+    :rtype: list[dict[str]]
+    """
+    data = eval(self._zip_file.open("%s.txt" % self._name).read())  # type: typing.List[typing.Dict[str]]
+    assert data and isinstance(data, list)
+    first_entry = data[0]
+    assert isinstance(first_entry, dict)
+    assert isinstance(first_entry["text"], str)
+    assert isinstance(first_entry["duration"], float)
+    assert isinstance(first_entry["file"], str)
+    return data
+
+  def _filter_fixed_random_subset(self, fixed_random_subset):
+    """
+    :param int fixed_random_subset:
+    """
+    if 0 < fixed_random_subset < 1:
+      fixed_random_subset = int(len(self._data) * fixed_random_subset)
+    assert isinstance(fixed_random_subset, int) and fixed_random_subset > 0
+    rnd = numpy.random.RandomState(42)
+    seqs = self._data
+    rnd.shuffle(seqs)
+    seqs = seqs[:fixed_random_subset]
+    self._data = seqs
+
+  def init_seq_order(self, epoch=None, seq_list=None):
+    """
+    If random_shuffle_epoch1, for epoch 1 with "random" ordering, we leave the given order as is.
+    Otherwise, this is mostly the default behavior.
+
+    :param int|None epoch:
+    :param list[str]|None seq_list: In case we want to set a predefined order.
+    :rtype: bool
+    :returns whether the order changed (True is always safe to return)
+    """
+    super(OggZipDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    if not epoch:
+      epoch = 1
+    self._audio_random.seed(self._fixed_random_seed or epoch or 1)
+
+    def get_seq_len(i):
+      """
+      :param int i:
+      :rtype: int
+      """
+      return int(self._data[i]["duration"] * 100)
+
+    if seq_list is not None:
+      seqs = {seq["file"]: i for i, seq in enumerate(self._data) if seq["file"] in seq_list}
+      for seq_tag in seq_list:
+        assert seq_tag in seqs, "did not found all requested seqs. we have eg: %s" % (self._data[0]["file"],)
+      self._seq_order = [seqs[seq_tag] for seq_tag in seq_list]
+      self._num_seqs = len(self._seq_order)
+    else:
+      num_seqs = len(self._data)
+      self._seq_order = self.get_seq_order_for_epoch(
+        epoch=epoch, num_seqs=num_seqs, get_seq_len=get_seq_len)
+      if self.epoch_wise_filter:
+        self.epoch_wise_filter.debug_msg_prefix = str(self)
+        self._seq_order = self.epoch_wise_filter.filter(epoch=epoch, seq_order=self._seq_order, get_seq_len=get_seq_len)
+      self._num_seqs = len(self._seq_order)
+
+    return True
+
+  def get_current_seq_order(self):
+    """
+    :rtype: list[int]
+    """
+    assert self._seq_order is not None
+    return self._seq_order
+
+  def _get_ref_seq_idx(self, seq_idx):
+    """
+    :param int seq_idx:
+    :return: idx in self._reference_seq_order
+    :rtype: int
+    """
+    return self._seq_order[seq_idx]
+
+  def have_corpus_seq_idx(self):
+    """
+    :rtype: bool
+    """
+    return True
+
+  def get_corpus_seq_idx(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: int
+    """
+    return self._get_ref_seq_idx(seq_idx)
+
+  def get_tag(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: str
+    """
+    return self._data[self._get_ref_seq_idx(seq_idx)]["file"]
+
+  def get_all_tags(self):
+    """
+    :rtype: list[str]
+    """
+    return [seq["file"] for seq in self._data]
+
+  def get_total_num_seqs(self):
+    """
+    :rtype: int
+    """
+    return len(self._data)
+
+  def _get_transcription(self, seq_idx):
+    """
+    :param int seq_idx:
+    :return: (targets (e.g. bpe), txt)
+    :rtype: (list[int], str)
+    """
+    seq = self._data[self._get_ref_seq_idx(seq_idx)]
+    targets_txt = seq["text"]
+    return self.targets.get_seq(targets_txt), targets_txt
+
+  def _open_audio_file(self, seq_idx):
+    """
+    :param int seq_idx:
+    :return: io.FileIO
+    """
+    import io
+    seq = self._data[self._get_ref_seq_idx(seq_idx)]
+    audio_fn = "%s/%s" % (self._name, seq["file"])
+    raw_bytes = self._zip_file.read(audio_fn)
+    return io.BytesIO(raw_bytes)
+
+  def _collect_single_seq(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: DatasetSeq
+    """
+    if self.feature_extractor:
+      with self._open_audio_file(seq_idx) as audio_file:
+        features = self.feature_extractor.get_audio_features_from_raw_bytes(audio_file)
+    else:
+      features = numpy.zeros(())  # currently the API requires some dummy values...
+    targets, txt = self._get_transcription(seq_idx)
+    targets = numpy.array(targets, dtype="int32")
+    txt = numpy.array(txt, dtype="object")
+    return DatasetSeq(
+      features=features,
+      targets={"classes": targets, "raw": txt},
       seq_idx=seq_idx,
       seq_tag=self.get_tag(seq_idx))
 
