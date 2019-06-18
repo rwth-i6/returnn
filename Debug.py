@@ -155,9 +155,9 @@ def init_better_exchook():
         # We are the main thread and we got an exit-exception. This is likely fatal.
         # This usually means an exit. (We ignore non-daemon threads and procs here.)
         # Print the stack of all other threads.
-        dump_all_thread_tracebacks({main_thread_id})
+        dump_all_thread_tracebacks(exclude_thread_ids={main_thread_id})
 
-    better_exchook.better_exchook(exc_type, exc_obj, exc_tb)
+    better_exchook.better_exchook(exc_type, exc_obj, exc_tb, file=sys.stdout)
 
   sys.excepthook = excepthook
 
