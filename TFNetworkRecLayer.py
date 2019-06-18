@@ -973,7 +973,10 @@ class _SubnetworkRecCell(object):
         layer_.kwargs = layer_desc  # set it now already for better debugging
         output = layer_class.get_out_data_from_opts(**layer_desc)
         layer_.init(layer_class=layer_class, output=output, **layer_desc)
-        if lself.returned_none_count == 0 and layer_ in ConstructCtx.partially_finished:
+        if (
+              lself.returned_none_count == 0 and
+              not lself.allow_uninitialized_template and
+              layer_ in ConstructCtx.partially_finished):
           ConstructCtx.partially_finished.remove(layer_)
         return layer_
 
