@@ -891,6 +891,7 @@ class _SubnetworkRecCell(object):
     self.layer_data_templates = {}  # type: typing.Dict[str,_TemplateLayer]
     self.prev_layers_needed = set()  # type: typing.Set[str]
     self.prev_layer_templates = {}  # type: typing.Dict[str,_TemplateLayer]
+    self._template_construction_exceptions = None  # type: typing.Optional[typing.List[str]]
     self._construct_template()
     self._initial_outputs = None  # type: typing.Optional[typing.Dict[str,tf.Tensor]]
     self._initial_extra_outputs = None  # type: typing.Optional[typing.Dict[str,typing.Dict[str,typing.Union[tf.Tensor,typing.Tuple[tf.Tensor,...]]]]]  # nopep8
@@ -912,7 +913,10 @@ class _SubnetworkRecCell(object):
     Need it for shape/meta information as well as dependency graph in advance.
     It will init self.layer_data_templates and self.prev_layers_needed.
     """
-    from TFNetwork import NetworkConstructionDependencyLoopException
+    import sys
+    import better_exchook
+    from collections import OrderedDict
+    from Util import StringIO
 
     class ConstructCtx:
       """
@@ -922,6 +926,7 @@ class _SubnetworkRecCell(object):
       layers = []  # type: typing.List[_TemplateLayer]
       most_recent = None
       partially_finished = []  # type: typing.List[_TemplateLayer]
+      collected_exceptions = OrderedDict()  # type: OrderedDict[str,str]
 
     class GetLayer:
       """
@@ -1062,15 +1067,18 @@ class _SubnetworkRecCell(object):
                 net_dict=self.net_dict, name=name,
                 get_layer=get_layer, add_layer=get_layer.add_templated_layer)
               break  # we did it, so get out of the loop
-            except NetworkConstructionDependencyLoopException:
-              # go on with the next get_layer
-              pass
             except Exception:
               # Pretty generic exception handling but anything could happen.
-              # If your network construction behaves strange, you might want to look here what happens.
-              # However, we don't do any output by default, as this could be very spammy.
-              # go on with the next get_layer
-              pass
+              # We don't do any output by default, as this could be very spammy,
+              # but we collect the traceback, in case we get some other error later.
+              # Then go on with the next get_layer.
+              etype, value, tb = sys.exc_info()
+              exc_last_frame = list(better_exchook.iter_traceback(tb))[-1]
+              exc_key = (exc_last_frame.f_code.co_filename, exc_last_frame.f_lineno, exc_last_frame.f_code.co_name)
+              if exc_key not in ConstructCtx.collected_exceptions:
+                out = StringIO()
+                better_exchook.better_exchook(etype, value, tb, file=out)
+                ConstructCtx.collected_exceptions[exc_key] = out.getvalue()
           # Now, do again, but with full recursive layer construction, to determine the dependencies.
           ConstructCtx.most_recent = list(ConstructCtx.layers)
           try:
@@ -1110,6 +1118,8 @@ class _SubnetworkRecCell(object):
       while ConstructCtx.partially_finished:
         direct_get_layer(ConstructCtx.partially_finished.pop(0).name)
 
+      self._template_construction_exceptions = list(ConstructCtx.collected_exceptions.values())
+
     except Exception:
       print("%r: exception constructing template network (for deps and data shapes)" % self)
       from pprint import pprint
@@ -1123,7 +1133,24 @@ class _SubnetworkRecCell(object):
         print(ConstructCtx.most_recent)
       print("Template network so far:")
       pprint(self.layer_data_templates)
+      print("Collected (unique) exceptions during construction:")
+      for s in ConstructCtx.collected_exceptions.values():
+        print(s)
       raise
+
+  def _handle_construct_exception(self):
+    if not self._template_construction_exceptions:
+      return
+    from pprint import pprint
+    print("Exception occurred during construction.")
+    print("Template network:")
+    pprint(self.layer_data_templates)
+    print("Collected (unique) exceptions during template construction:")
+    print("(Note that many of these can be ignored.)")
+    for s in self._template_construction_exceptions:
+      print(s)
+    # Don't print twice.
+    self._template_construction_exceptions = None
 
   def _construct(self, prev_outputs, prev_extra, i, data=None,
                  inputs_moved_out_tas=None, needed_outputs=("output",)):
@@ -1247,7 +1274,12 @@ class _SubnetworkRecCell(object):
         # This should not be used recursively, because we checked that nothing depends on it,
         # thus it should not be a problem to return None.
         return None
-      return self.net.construct_layer(net_dict, name=name, get_layer=get_layer)
+      # noinspection PyBroadException
+      try:
+        return self.net.construct_layer(net_dict, name=name, get_layer=get_layer)
+      except Exception:
+        self._handle_construct_exception()
+        raise
 
     # Go through needed_outputs, e.g. "output".
     # And prev_layers_needed because they might not be resolved otherwise.
@@ -2398,7 +2430,12 @@ class _SubnetworkRecCell(object):
         return get_prev_layer(name[len("prev:"):])
       if name.startswith("base:"):
         return self.parent_net.layers[name[len("base:"):]]
-      return self.input_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
+      # noinspection PyBroadException
+      try:
+        return self.input_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
+      except Exception:
+        self._handle_construct_exception()
+        raise
 
     # Same scope as the main subnet, so that it stays compatible.
     # noinspection PyProtectedMember
@@ -2508,7 +2545,12 @@ class _SubnetworkRecCell(object):
       if name in self.input_layers_moved_out:
         return self.input_layers_net.get_layer(name)
       if name in self.output_layers_moved_out or name.startswith("data:"):
-        return self.output_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
+        # noinspection PyBroadException
+        try:
+          return self.output_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
+        except Exception:
+          self._handle_construct_exception()
+          raise
       # It means that the layer is inside the loop.
       return get_loop_acc_layer(name)
 
