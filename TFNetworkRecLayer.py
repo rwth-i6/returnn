@@ -3429,8 +3429,9 @@ class ChoiceLayer(LayerBase):
                input_type="prob",
                prob_scale=1.0, base_beam_score_scale=1.0, random_sample_scale=0.0,
                length_normalization=True,
+               custom_score_combine=None,
                source_beam_sizes=None, scheduled_sampling=False, cheating=False,
-               explicit_search_source=None,
+               explicit_search_sources=None,
                **kwargs):
     """
     :param int beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
@@ -3447,7 +3448,9 @@ class ChoiceLayer(LayerBase):
        before combination. If None, 'beam_size' is used for all sources. Has to have same length as number of sources.
     :param dict|None scheduled_sampling:
     :param bool cheating: if True, will always add the true target in the beam
-    :param LayerBase|None explicit_search_source: will mark it as an additional dependency
+    :param list[LayerBase]|None explicit_search_sources: will mark it as an additional dependency.
+      You might use these also in custom_score_combine.
+    :param callable|None custom_score_combine:
     """
     super(ChoiceLayer, self).__init__(**kwargs)
     from Util import CollectionReadCheckCovered
@@ -3458,7 +3461,7 @@ class ChoiceLayer(LayerBase):
       assert self.network.search_flag, "%s: cannot use search if network.search_flag disabled" % self
     self.search_flag = search
     self.input_type = input_type
-    self.explicit_search_source = explicit_search_source
+    self.explicit_search_sources = explicit_search_sources
     self.scheduled_sampling = CollectionReadCheckCovered.from_bool_or_dict(scheduled_sampling)
     # We assume log-softmax here, inside the rec layer.
 
@@ -3562,15 +3565,31 @@ class ChoiceLayer(LayerBase):
           # See the comment above. It could be that scores_in has a wider beam
           # than what should be used here now.
           scores_in = scores_in[:, :base_beam_in]  # (batch, beam_in, dim)
-        scores_random_sample = None
-        if random_sample_scale:
-          # https://github.com/tensorflow/tensorflow/issues/9260
-          # https://timvieira.github.io/blog/post/2014/08/01/gumbel-max-trick-and-weighted-reservoir-sampling/
-          scores_random_sample = -tf.log(-tf.log(tf.random_uniform(tf.shape(scores_in), 0, 1)))
-        scores_comb = optional_add(
-          optional_mul(scores_in, prob_scale),
-          optional_mul(scores_base, base_beam_score_scale),
-          optional_mul(scores_random_sample, random_sample_scale))  # (batch, beam_in, dim)
+        if custom_score_combine:
+          with tf.name_scope("custom_score_combine"):
+            if self.network.have_rec_step_info():
+              t = self.network.get_rec_step_index()  # scalar
+              end_flags_flat = self.network.get_rec_step_info().get_end_flag(
+                target_search_choices=base_search_choices)  # (batch * beam_in,)
+              end_flags = tf.reshape(end_flags_flat, [net_batch_dim, beam_size])  # (batch, beam_in)
+              end_flags = end_flags[:, :base_beam_in]  # see scores_in
+            else:
+              t, end_flags = None, None
+            scores_comb = custom_score_combine(
+              layer=self, scores_in=scores_in, scores_base=scores_base, t=t, end_flags=end_flags,
+              batch_dim=net_batch_dim, scores_beam_in=scores_beam_in, base_beam_in=base_beam_in)
+            assert isinstance(scores_comb, tf.Tensor)
+            scores_comb.set_shape((None, None, scores_in_dim))  # (batch, beam_in, dim)
+        else:
+          scores_random_sample = None
+          if random_sample_scale:
+            # https://github.com/tensorflow/tensorflow/issues/9260
+            # https://timvieira.github.io/blog/post/2014/08/01/gumbel-max-trick-and-weighted-reservoir-sampling/
+            scores_random_sample = -tf.log(-tf.log(tf.random_uniform(tf.shape(scores_in), 0, 1)))
+          scores_comb = optional_add(
+            optional_mul(scores_in, prob_scale),
+            optional_mul(scores_base, base_beam_score_scale),
+            optional_mul(scores_random_sample, random_sample_scale))  # (batch, beam_in, dim)
         scores_comb_flat = tf.reshape(
           scores_comb, [net_batch_dim, base_beam_in * scores_in_dim])  # (batch, beam_in * dim)
         # `tf.nn.top_k` is the core function performing our search.
@@ -3827,7 +3846,12 @@ class ChoiceLayer(LayerBase):
       # if there are other choice layers, we still need to add the scores to the beam.
       d["from"] = []
     if d.get("explicit_search_source"):
-      d["explicit_search_source"] = get_layer(d["explicit_search_source"]) if network.search_flag else None
+      assert "explicit_search_sources" not in d
+      d["explicit_search_sources"] = [get_layer(d.pop("explicit_search_source"))] if network.search_flag else []
+    elif d.get("explicit_search_sources"):
+      assert isinstance(d["explicit_search_sources"], (list, tuple))
+      d["explicit_search_sources"] = (
+        [get_layer(name) for name in d["explicit_search_sources"]] if network.search_flag else [])
     super(ChoiceLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
@@ -3939,8 +3963,8 @@ class ChoiceLayer(LayerBase):
     """
     # See also self.transform_config_dict where we might strip away the sources.
     ls = super(ChoiceLayer, self).get_dep_layers()
-    if self.explicit_search_source:
-      ls.append(self.explicit_search_source)
+    if self.explicit_search_sources:
+      ls.extend(self.explicit_search_sources)
     return ls
 
 
