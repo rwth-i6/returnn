@@ -40,7 +40,8 @@ install:
 # TF tests first, because more relevant (for me), then ordered by alphabet
 env:
   global:
-    - TF_PACKAGE=tensorflow
+    # TODO: TF 1.14 needs multiple fixes...
+    - TF_PACKAGE=tensorflow==1.13.1
   matrix:
     - TEST=TFEngine
     - TEST=TFNativeOp
