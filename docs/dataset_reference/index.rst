@@ -8,7 +8,7 @@ Dataset Reference
     :maxdepth: 1
     :titlesonly:
 
-    generict_datasets.rst
+    generic_datasets.rst
     text_datasets.rst
     audio_datasets.rst
     combination.rst

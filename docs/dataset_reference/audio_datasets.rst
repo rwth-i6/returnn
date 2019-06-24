@@ -4,3 +4,7 @@
 Audio Datasets
 ==============
 
+Extern Sprint Dataset
+---------------------
+
+.. automodule:: SprintDataset.ExternSprintDataset

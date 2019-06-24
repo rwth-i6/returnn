@@ -4,3 +4,7 @@
 Text Datasets
 =============
 
+HDF Dataset
+-----------
+
+.. automodule:: LmDataset.TranslationDataset
