@@ -702,6 +702,41 @@ def test_ReduceLayer_reduce4d():
   print("layer:", layer)
 
 
+def test_SoftmaxOverSpatialLayer_start():
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData())
+    rnd = numpy.random.RandomState(42)
+    n_batch = 3
+    n_time = 4
+    n_dim = 7
+    start_idxs = numpy.array([[3], [0], [1]]).astype("int32")  # (B, 1)
+    input_np = rnd.normal(size=(n_batch, n_time, n_dim)).astype("float32")  # (B, T, D)
+    src = InternalLayer(name="src", network=net, out_type={"shape": (n_time, n_dim), "time_dim_axis": 1})
+    start = InternalLayer(name="start", network=net, out_type={"shape": (1,)})
+    start.output.placeholder = tf.constant(start_idxs)
+    start.output.size_placeholder = {}
+    print("input:", src.output)
+    src.output.placeholder = tf.constant(input_np, dtype=tf.float32)
+    src.output.size_placeholder = {0: tf.constant([n_time] * n_batch)}  # not sure if enough...
+    opts = {"network": net, "name": "softmax_over_spatial_test", "sources": [src],
+            "start": start, "use_time_mask": True}
+    out_data = SoftmaxOverSpatialLayer.get_out_data_from_opts(**opts)
+    print("output:", out_data)
+    out_data.sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
+    assert_equal(out_data.shape, (n_dim, n_time))  # layer moves time-dim to back
+    layer = SoftmaxOverSpatialLayer(output=out_data, **opts)
+    assert_equal(layer.output.shape, (n_dim, n_time))
+    out_np = session.run(layer.output.placeholder)
+    assert_equal(out_np.shape, (n_batch, n_dim, n_time))
+    # check if masking worked
+    range_idxs = numpy.ones_like(start_idxs) * numpy.expand_dims(numpy.arange(n_time), axis=0)
+    cond = range_idxs < numpy.broadcast_to(start_idxs, [n_batch, n_time])  # (B, T)
+    cond = numpy.expand_dims(cond, axis=1)
+    cond = numpy.broadcast_to(cond, [n_batch, n_dim, n_time])  # (B, D, T)
+    assert_equal(cond.sum(), n_dim*start_idxs.sum())  # check num of conds
+    numpy.testing.assert_array_equal(out_np[cond], 0)
+
+
 def test_SplitDimsLayer_resolve_dims():
   assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, -1)), (3, 5))
   assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, 5)), (3, 5))

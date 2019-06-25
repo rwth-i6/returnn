@@ -2605,7 +2605,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
         idxs = tf.reshape(tf.range(energy_shape[axis]), idxs_shape)
         start_data = start.output.copy_compatible_to(
           energy_data, check_sparse=False, check_dtype=False)  # adds dummy time-dim
-        energy_mask = tf.logical_and(energy_mask, tf.greater_equal(start_data.placeholder, idxs))
+        energy_mask = tf.logical_and(energy_mask, tf.greater_equal(idxs, start_data.placeholder))
       if window_start:
         assert window_size, "set window_size explicitly"
         from TFUtil import nd_indices, expand_dims_unbroadcast
