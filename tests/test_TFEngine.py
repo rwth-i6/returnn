@@ -564,6 +564,78 @@ def test_engine_rec_subnet_count():
   engine.finalize()
 
 
+def test_engine_end_layer(extra_rec_kwargs=None):
+  """
+  :param dict[str] extra_rec_kwargs:
+  """
+  from Util import dict_joined
+  from GeneratingDataset import DummyDataset
+  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+  seq_len = 5
+  n_data_dim = 1
+  n_classes_dim = 5
+  dataset = DummyDataset(input_dim=n_data_dim,
+                         output_dim=n_classes_dim,
+                         num_seqs=2,
+                         seq_len=seq_len)
+
+  dataset.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "batch_size": 5000,
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "output": dict_joined({
+        "class": "rec", "from": [], "max_seq_len": 10, "target": "classes",
+        "unit": {
+          "output": {"class": "linear", "activation": "tanh", "n_out": n_classes_dim, "from": ["prev:output"]},
+          'stop_token': {'class': 'linear', 'activation': None, 'n_out': 1, 'loss': 'bin_ce', 'loss_scale': 1.0, 'target': 'data', 'from': ['output']},
+          'stop_token_sigmoid': {'class': 'activation', 'activation': 'sigmoid', 'from': ['stop_token']},
+          'end_compare': {'class': 'compare', 'kind': 'greater', 'from': ['stop_token_sigmoid'], 'value': 0.5},
+          'end': {'class': 'squeeze', 'from': ['end_compare'], 'axis': 'F'},
+        }
+      }, extra_rec_kwargs or {}),
+    }
+  })
+  engine = Engine(config=config)
+  # Normally init_network can be used. We only do init_train here to randomly initialize the network.
+  engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
+  print("network:")
+  pprint(engine.network.layers)
+  assert "output" in engine.network.layers
+
+  rec_layer = engine.network.layers["output"]
+  assert isinstance(rec_layer, RecLayer)
+  assert isinstance(rec_layer.cell, _SubnetworkRecCell)
+  assert_equal(set(rec_layer.cell.input_layers_moved_out), set())
+  assert_equal(set(rec_layer.cell.output_layers_moved_out), {"stop_token"})
+  assert_equal(set(rec_layer.cell.layers_in_loop), {"output"})
+
+  # Now reinit for search.
+  assert not engine.use_search_flag
+  engine.use_search_flag = True
+  engine.use_dynamic_train_flag = False
+  print("Reinit network with search flag.")
+  engine.init_network_from_config(config=config)
+
+  engine.search(dataset=dataset)
+  print("error keys:")
+  pprint(engine.network.losses_dict)
+  assert engine.network.total_objective is not None
+
+  engine.use_search_flag = False
+  print("Reinit network without search flag.")
+  engine.init_network_from_config(config=config)
+  hdf_fn = _get_tmp_file(suffix=".hdf")
+  os.remove(hdf_fn)  # forward_to_hdf expects that the file does not exist
+  engine.forward_to_hdf(data=dataset, output_file=hdf_fn)
+
+  engine.finalize()
+
+
 def check_engine_search(extra_rec_kwargs=None):
   """
   :param dict[str] extra_rec_kwargs:
