@@ -4493,9 +4493,9 @@ class SelfAttentionLayer(_ConcatInputLayer):
       q_t = tf.transpose(q, [2, 0, 1, 3])  # [num_queries|1,batch,heads,key_dim]
       q_t_r = tf.reshape(
         q_t, [tf.shape(q_t)[0], batch_dim * num_heads, total_key_dim // num_heads])  # [num_queries|1,batch*heads,k-dim]
-      with tf.control_dependencies(tf.assert_equal(
+      with tf.control_dependencies([tf.assert_equal(
             message="check_shape_of_key_shift:",
-            x=tf.shape(k_), y=[tf.shape(q_t)[0], tf.shape(energy)[-1], total_key_dim // num_heads])):
+            x=tf.shape(k_), y=[tf.shape(q_t)[0], tf.shape(energy)[-1], total_key_dim // num_heads])]):
         energy_ = tf.matmul(q_t_r, k_, transpose_b=True)  # [num_queries|1,batch*heads,num_keys]
       energy_ = tf.reshape(
         energy_, [tf.shape(q_t)[0], batch_dim, num_heads, tf.shape(energy)[-1]])  # [num_queries|1,batch,heads,num_keys]
@@ -6116,3 +6116,70 @@ class ZoneoutLSTMCell(BaseRNNCell):
     new_state = tf.nn.rnn_cell.LSTMStateTuple(c, h)
 
     return output, new_state
+
+
+class RelativePositionalEncodingLayer(_ConcatInputLayer):
+  """
+  Relative positioning term as introduced by Shaw et al., 2018
+
+  Usually added to Self-Attention using key_shift.
+  Parts of the code are adapted from Tensor2Tensor (https://github.com/tensorflow/tensor2tensor).
+  """
+  layer_class = "relative_positional_encoding"
+  recurrent = True
+
+  def __init__(self, n_out, forward_weights_init="glorot_uniform", clipping=16, fixed=False, **kwargs):
+    """
+    :param int n_out: Feature dimension of encoding.
+    :param int clipping: After which distance to fallback to the last encoding
+    :param bool fixed: Uses sinusoid positional encoding instead of learned parameters
+    :param str forward_weights_init: see :func:`TFUtil.get_initializer`
+    """
+    super(RelativePositionalEncodingLayer, self).__init__(**kwargs)
+    from TFUtil import get_initializer
+
+    if not self.input_data.have_time_axis():
+      offset = self.network.get_rec_step_index()
+      length = self.network.get_rec_step_index() + 1
+    else:
+      offset = 0
+      length = tf.shape(self.input_data.placeholder)[self.input_data.time_dim_axis]
+
+    if fixed:
+      from TFUtil import get_positional_encoding
+      encoding_matrix = get_positional_encoding(length=tf.constant(2 * clipping + 1),
+                                          num_channels=n_out)
+    else:
+      fwd_weights_initializer = get_initializer(
+        forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
+      with self.var_creation_scope():
+        encoding_matrix = self.add_param(tf.get_variable(
+          name="encoding_matrix", shape=(2 * clipping + 1, n_out), initializer=fwd_weights_initializer
+        ))
+
+    range_vec = tf.range(length) - offset
+
+    if self.input_data.have_time_axis():
+      range_mat = tf.reshape(tf.tile(range_vec, [length]), [length, length])
+      distance_mat = range_mat - tf.transpose(range_mat)
+    else:
+      distance_mat = tf.reshape(range_vec, [1, length])
+    distance_mat_clipped = tf.clip_by_value(distance_mat, -clipping, clipping)
+    # Shift values to be >= 0. Each integer still uniquely identifies a relative
+    # position difference.
+    position_info_indices = distance_mat_clipped + clipping
+
+    encoding = tf.gather(encoding_matrix, position_info_indices)
+
+    self.output.placeholder = encoding
+
+  @classmethod
+  def get_out_data_from_opts(cls, n_out, **kwargs):
+    """
+    :param int n_out:
+    :rtype: Data
+    """
+    data = super().get_out_data_from_opts(n_out=n_out, **kwargs)
+    data.batch_dim_axis = None
+    data.shape = (None, None, n_out)
+    return data
