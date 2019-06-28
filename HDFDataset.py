@@ -893,7 +893,7 @@ class SimpleHDFWriter:
       # Note: Currently, our HDFDataset does not support to have multiple axes with dynamic length.
       # Thus, we flatten all together, and calculate the flattened seq len.
       # (Ignore this if there is only a single time dimension.)
-      flat_seq_len = numpy.prod([seq_len[axis][i] for axis in range(ndim_with_seq_len)])
+      flat_seq_len = int(numpy.prod([seq_len[axis][i] for axis in range(ndim_with_seq_len)]))
       assert flat_seq_len > 0
       flat_shape = [flat_seq_len]
       if self.dim:
