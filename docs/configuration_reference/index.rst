@@ -14,7 +14,7 @@ Configuration Reference
 
     general_settings.rst
     training.rst
-    gradient_computation.rst
+    optimizer_settings.rst
     pretraining.rst
     model_loading.rst
     generation_search.rst

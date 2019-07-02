@@ -1,8 +1,8 @@
-.. _gradient_computation:
+.. _optimizer_settings:
 
-====================
-Gradient Computation
-====================
+==================
+Optimizer Settings
+==================
 
 .. note::
     To define the update algorithm, there are two different methods. One is to set the desired algorithm explicitely,
