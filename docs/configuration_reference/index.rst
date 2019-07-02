@@ -17,5 +17,6 @@ Configuration Reference
     gradient_computation.rst
     pretraining.rst
     model_loading.rst
+    generation_search.rst
     debugging.rst
 
