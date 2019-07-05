@@ -61,7 +61,10 @@ optimizer_epsilon
 
 user_learning_rate_control_always
 
-
+meta_losses
+    A list of (name, formula) tuples that define arbitrary meta losses.
+    Every meta loss may combine any number of other losses. The formula is a string, which will be eval'ed.
+    This can be used in combination with learning_rate_control_error_measure to make the LR scheduling dependant on multiple losses.
 
 
 

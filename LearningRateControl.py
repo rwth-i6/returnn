@@ -236,6 +236,8 @@ class LearningRateControl(object):
       relative_error = (new_error - old_error) / abs(old_error)
     else:
       relative_error = (new_error - old_error) / abs(new_error)
+    import math
+    assert not math.isnan(relative_error)
     if self.relative_error_also_relative_to_learning_rate:
       learning_rate = self.get_most_recent_learning_rate(new_epoch, exclude_current=False)
       # If the learning rate is lower than the initial learning rate,

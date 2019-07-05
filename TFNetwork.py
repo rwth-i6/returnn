@@ -730,6 +730,11 @@ class TFNetwork(object):
             else:
               total_constraints += constraints
 
+    if self._config and self._config.has('meta_losses'):
+      for name, formula in self._config.typed_value('meta_losses', []):
+        assert name not in losses_dict
+        losses_dict[name] = MetaLossHolder(losses_dict, formula)
+
     return losses_dict, total_loss, total_constraints
 
   def _construct_objective(self):
@@ -1965,6 +1970,57 @@ class LossHolder:
       loss=self.loss, reduce_func=reduce_func,
       loss_value=loss_value, error_value=error_value,
       norm_factor=self._norm_factor, only_on_eval=self._only_on_eval)
+
+
+class MetaLossHolder:
+  """
+  Combines multiple losses in a customizable way.
+  It can be eg. used to compute the average over multiple losses which may then control the learning rate.
+  Depending on the way the losses are combined, the result may not be normalized.
+  This class supports only a subset of the functions in LossHolder. It is not supposed to be used eg. to compute
+  the objective function.
+  """
+  def __init__(self, losses_dict, eval_string):
+    """
+    :param dict[str,TFNetworkLayer.Loss] losses_dict: Mapping from loss names to losses.
+    :param string eval_string: Formula to combine the relevant losses. Will be eval'ed.
+    """
+    self.eval_string = eval_string
+
+    import re
+    term_pattern = re.compile('([a-zA-Z0-9_-]+)')
+    terms = re.findall(term_pattern, self.eval_string)
+    self.used_losses = {k.replace("/", "_"): v for k,v in losses_dict.items() if k.replace("/", "_") in terms}
+
+  def get_only_on_eval(self):
+    """
+    :return: only_on_eval flag. assumes that it is set for all combined losses
+    :rtype: bool
+    """
+    return any([used_loss.get_only_on_eval() for used_loss in self.used_losses.values()])
+
+  def get_loss_value_for_fetch(self):
+    """
+    :return: loss value for fetch. scalar.
+    :rtype: tf.Tensor|None
+    """
+    d = {key: loss.get_loss_value_for_fetch() * loss.get_norm_factor() for key, loss in self.used_losses.items()}
+    return eval(self.eval_string, d)
+
+  def get_error_value(self):
+    """
+    :return: error value for fetch. scalar
+    :rtype: tf.Tensor|None
+    """
+    d = {key: loss.get_error_value() * loss.get_norm_factor() for key, loss in self.used_losses.items()}
+    return eval(self.eval_string, d)
+
+  def get_norm_factor(self):
+    """
+    :return: always 1, because we cannot normalize arbitrary combined losses. scalar
+    :rtype: tf.Tensor
+    """
+    return tf.constant(1, dtype=tf.float32)
 
 
 class NetworkConstructionDependencyLoopException(Exception):
