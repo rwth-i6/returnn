@@ -34,6 +34,10 @@ learning_rate
 
 learning_rate_control
 
+learning_rate_control_error_measure
+
+    A str to define which score or error is used to control the learning rate reduction. Per default, Returnn will use dev_score_output. A typical choice would be dev_score_LAYERNAME or dev_error_LAYERNAME. Can be set to None to disable learning rate control.
+
 learning_rate_control_min_num_epochs_per_new_lr
 
 learning_rate_control_relative_error_relative_lr
