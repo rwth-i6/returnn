@@ -38,6 +38,7 @@ class CachedDataset(Dataset):
     self.alloc_intervals = None  # type: list
     self._seq_start = []  # [numpy.array([0,0])]  # uses sorted seq idx, see set_batching()
     self._seq_index = []; """ :type: list[int] """  # Via init_seq_order(). seq_index idx -> hdf seq idx
+    self._seq_index_inv = {}; """ :type: dict[int,int] """  # Via init_seq_order(). hdf seq idx -> seq_index idx
     self._index_map = range(len(self._seq_index))  # sorted seq idx -> seq_index idx
     self._seq_lengths = numpy.zeros((0, 0))  # real seq idx -> tuple of len of data and all targets
     self._tags = []; """ :type: list[str|bytes] """  # uses real seq idx. access via _get_tag_by_real_idx
@@ -86,12 +87,14 @@ class CachedDataset(Dataset):
 
     if self.num_seqs_cached_at_start != len(seq_index) or not self.start_cache_initialized:
       self._seq_index = seq_index
-      self._seq_index_inv = dict(zip(seq_index, range(len(seq_index))))  # hdf seq idx -> seq_index idx
+      self._seq_index_inv = {}  # reset, create later if needed
       self._init_seq_starts()
       self._init_alloc_intervals()
       self._init_start_cache()
       self.start_cache_initialized = True
     else:
+      if not self._seq_index_inv:
+        self._seq_index_inv = dict(zip(self._seq_index, range(len(self._seq_index))))  # hdf seq idx -> seq_index idx
       self._index_map = [self._seq_index_inv[i] for i in seq_index]  # sorted seq idx -> seq_index idx
       if self._index_map == old_index_map:
         return False
