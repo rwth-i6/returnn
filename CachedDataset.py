@@ -41,7 +41,6 @@ class CachedDataset(Dataset):
     self._seq_index_inv = {}; """ :type: dict[int,int] """  # Via init_seq_order(). hdf seq idx -> seq_index idx
     self._index_map = range(len(self._seq_index))  # sorted seq idx -> seq_index idx
     self._seq_lengths = numpy.zeros((0, 0))  # real seq idx -> tuple of len of data and all targets
-    self._tags = []; """ :type: list[str|bytes] """  # uses real seq idx. access via _get_tag_by_real_idx
     self._tag_idx = {}; ":type: dict[str,int] "  # map of tag -> real-seq-idx. call _update_tag_idx
     self.targets = {}
     self.target_keys = []
@@ -103,7 +102,7 @@ class CachedDataset(Dataset):
     return True
 
   def _get_tag_by_real_idx(self, real_idx):
-    return self._tags[real_idx]
+    raise NotImplementedError
 
   def _update_tag_idx(self):
     if self._tag_idx:
