@@ -85,7 +85,9 @@ class CachedDataset(Dataset):
       # Give some hint to the user in case he is wondering why the cache is reloading.
       print("Reinitialize dataset seq order for epoch %i." % epoch, file=log.v4)
 
-    if self.num_seqs_cached_at_start != len(seq_index) or not self.start_cache_initialized:
+    if (self.cache_byte_size_limit_at_start == 0
+        or self.num_seqs_cached_at_start != len(seq_index)
+        or not self.start_cache_initialized):
       self._seq_index = seq_index
       self._seq_index_inv = {}  # reset, create later if needed
       self._init_seq_starts()
