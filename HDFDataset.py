@@ -99,7 +99,6 @@ class HDFDataset(CachedDataset):
       self._seq_start = [numpy.zeros((seq_lengths.shape[1],), 'int64')]
     seq_start = numpy.zeros((seq_lengths.shape[0] + 1, seq_lengths.shape[1]), dtype="int64")
     numpy.cumsum(seq_lengths, axis=0, dtype="int64", out=seq_start[1:])
-    self._tags += fin["seqTags"][...].tolist()
     self.file_seq_start.append(seq_start)
     nseqs = len(seq_start) - 1
     self._num_seqs += nseqs
@@ -244,8 +243,11 @@ class HDFDataset(CachedDataset):
       return super(HDFDataset, self).get_targets(target, sorted_seq_idx)
     return self.get_data(sorted_seq_idx, target)
 
-  def _get_tag_by_real_idx(self, real_idx):
-    s = self._tags[real_idx]
+  def _get_tag_by_real_idx(self, real_seq_idx):
+    file_idx = self._get_file_index(real_seq_idx)
+    real_file_seq_idx = real_seq_idx - self.file_start[file_idx]
+
+    s = self.h5_files[file_idx]["seqTags"][real_file_seq_idx]
     s = self._decode(s)
     return s
 
@@ -254,10 +256,14 @@ class HDFDataset(CachedDataset):
     return self._get_tag_by_real_idx(ids)
 
   def get_all_tags(self):
-    return list(map(self._decode, self._tags))
+    tags = []
+    for h5_file in self.h5_files:
+      tags += h5_file["seqTags"][...].tolist()
+
+    return list(map(self._decode, tags))
 
   def get_total_num_seqs(self):
-    return len(self._tags)
+    return self._num_seqs
 
   def is_data_sparse(self, key):
     if self.get_data_dtype(key).startswith("int"):
