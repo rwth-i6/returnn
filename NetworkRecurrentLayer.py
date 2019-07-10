@@ -522,6 +522,7 @@ class RecurrentUnitLayer(Layer):
                attention_method="epoch",
                attention_scale=10,
                context=-1,
+               context_span=1,
                base = None,
                aligner = None,
                lm = False,
@@ -823,31 +824,41 @@ class RecurrentUnitLayer(Layer):
       index = self.index[s::self.attrs['sampling']]
 
       if context > 0:
-        from TheanoUtil import context_batched
-        n_batches = z.shape[1]
         time, batch, dim = z.shape[0], z.shape[1], z.shape[2]
-        #z = context_batched(z[::direction or 1], window=context)[::direction or 1] # TB(CD)
 
         from theano.ifelse import ifelse
         def context_window(idx, x_in, i_in):
           x_out = x_in[idx:idx + context]
-          x_out = x_out.dimshuffle('x',1,0,2).reshape((1, batch, dim * context))
-          i_out = i_in[idx:idx+1].repeat(context, axis=0)
-          i_out = ifelse(T.lt(idx,context),T.set_subtensor(i_out[:context - idx],numpy.int8(0)),i_out).reshape((1, batch * context))
+          x_out = x_out.dimshuffle(1,0,2).reshape((batch, dim * context))
+          i_out = i_in[idx:idx + 1].repeat(context, axis=0).dimshuffle(1,0)
           return x_out, i_out
 
+        assert context % context_span == 0
+        assert context_span <= context
+        if context_span > 1:
+          pad = context_span - (time % context_span)
+          z = ifelse(T.eq(time % context_span, 0), z,
+                     T.concatenate([z, T.zeros((pad, batch, dim), dtype='float32')], axis=0))
+          index = ifelse(T.eq(time % context_span, 0), index,
+                         T.concatenate([index, T.ones((pad, batch), dtype='int8')], axis=0))
+          time = index.shape[0]
         z = z[::direction or 1]
-        i = index[::direction or 1]
-        out, _ = theano.map(context_window, sequences = [T.arange(z.shape[0])], non_sequences = [T.concatenate([T.zeros((context - 1,z.shape[1],z.shape[2]),dtype='float32'),z],axis=0), i])
-        z = out[0][::direction or 1]
-        i = out[1][::direction or 1]  # T(BC)
+        index = index[::direction or 1]
+        if context_span < context:
+          z = T.concatenate([T.zeros((context - context_span, z.shape[1], z.shape[2]), dtype='float32'), z])
+        if context_span > 1:
+          z = T.concatenate([z, T.zeros((context_span - 1, z.shape[1], z.shape[2]), dtype='float32')])
+        out, _ = theano.map(context_window, sequences=[T.arange(time)[::context_span]], non_sequences=[z, index])
+        z = out[0][::direction or 1]  # (T/S)B(DC)
+        index = out[1][::direction or 1]  # (T/S)BC
+        original_direction = direction
         direction = 1
-        z = z.reshape((time * batch, context * dim))  # (TB)(CD)
-        z = z.reshape((time * batch, context, dim)).dimshuffle(1,0,2)  # C(TB)D
-        i = i.reshape((time * batch, context)).dimshuffle(1,0)  # C(TB)
 
-        index = i
-        num_batches = time * batch
+        z = z.reshape((time * batch // context_span, context * dim))  # ((T/S)B)(CD)
+        z = z.reshape((time * batch // context_span, context, dim)).dimshuffle(1,0,2)  # C((T/S)B)D
+        index = index.reshape((time * batch // context_span, context)).dimshuffle(1,0)  # C((T/S)B)
+
+        num_batches = time * batch // context_span
 
       sequences = z
       sources = self.sources
@@ -860,7 +871,6 @@ class RecurrentUnitLayer(Layer):
           if hasattr(encoder[0],'act'):
             outputs_info = [T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in range(unit.n_act)]
           else:
-           # outputs_info = [ T.concatenate([e[i] for e in encoder], axis=1) for i in range(unit.n_act) ]
             outputs_info[0] = self.aligner.output[-1]
         elif hasattr(encoder[0],'act'):
           outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in range(unit.n_act) ]
@@ -870,7 +880,7 @@ class RecurrentUnitLayer(Layer):
       elif state_memory:
         outputs_info = self.init_state
       else:
-        outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_units) for a in range(unit.n_act) ]
+        outputs_info = [T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_units) for a in range(unit.n_act)]
 
       if self.attrs['lm'] and self.attrs['droplm'] == 0.0 and (self.train_flag or force_lm):
         if self.network.y[self.attrs['target']].ndim == 3:
@@ -918,7 +928,12 @@ class RecurrentUnitLayer(Layer):
         outputs[0].name = "%s.act[0]" % self.name
         if context > 0:
           for i in range(len(outputs)):
-            outputs[i] = outputs[i][-1].reshape((outputs[i].shape[1]//n_batches,n_batches,outputs[i].shape[2]))
+            # outputs[i] is C((T/S)B)D
+            outputs[i] = outputs[i][-context_span:][::original_direction or 1]  # S((T/S)B)D
+            #outputs[i] = outputs[i][-context_span:]  # S((T/S)B)D
+            outputs[i] = outputs[i].dimshuffle(1,0,2).reshape((time, batch, outputs[i].shape[2]))
+            outputs[i] = outputs[i][:self.index.shape[0]]
+          self.index = index[-context_span:][::original_direction or 1].dimshuffle(1,0).reshape((time,batch))[:self.index.shape[0]]
 
       if unit.recurrent_transform:
         unit.recurrent_transform_state_var_seqs = outputs[-len(unit.recurrent_transform.state_vars):]
