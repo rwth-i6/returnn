@@ -156,7 +156,7 @@ class LayerNetworkDescription:
     data = {}
     for key, data_type in data_dims.items():
       if isinstance(data_type, dict):
-        data[key] = data_type
+        data[key] = data_type.copy()
         continue
       assert isinstance(data_type, (list, tuple))
       dim, ndim = data_type

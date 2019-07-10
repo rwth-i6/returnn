@@ -891,6 +891,7 @@ class _SubnetworkRecCell(object):
     self.layer_data_templates = {}  # type: typing.Dict[str,_TemplateLayer]
     self.prev_layers_needed = set()  # type: typing.Set[str]
     self.prev_layer_templates = {}  # type: typing.Dict[str,_TemplateLayer]
+    self._template_construction_exceptions = None  # type: typing.Optional[typing.List[str]]
     self._construct_template()
     self._initial_outputs = None  # type: typing.Optional[typing.Dict[str,tf.Tensor]]
     self._initial_extra_outputs = None  # type: typing.Optional[typing.Dict[str,typing.Dict[str,typing.Union[tf.Tensor,typing.Tuple[tf.Tensor,...]]]]]  # nopep8
@@ -912,7 +913,10 @@ class _SubnetworkRecCell(object):
     Need it for shape/meta information as well as dependency graph in advance.
     It will init self.layer_data_templates and self.prev_layers_needed.
     """
-    from TFNetwork import NetworkConstructionDependencyLoopException
+    import sys
+    import better_exchook
+    from collections import OrderedDict
+    from Util import StringIO
 
     class ConstructCtx:
       """
@@ -922,6 +926,7 @@ class _SubnetworkRecCell(object):
       layers = []  # type: typing.List[_TemplateLayer]
       most_recent = None
       partially_finished = []  # type: typing.List[_TemplateLayer]
+      collected_exceptions = OrderedDict()  # type: OrderedDict[str,str]
 
     class GetLayer:
       """
@@ -966,11 +971,12 @@ class _SubnetworkRecCell(object):
         layer_desc["name"] = name
         layer_desc["network"] = self.net
         layer_.kwargs = layer_desc  # set it now already for better debugging
-        if layer_ not in ConstructCtx.partially_finished:
-          ConstructCtx.partially_finished.append(layer_)
         output = layer_class.get_out_data_from_opts(**layer_desc)
         layer_.init(layer_class=layer_class, output=output, **layer_desc)
-        if lself.returned_none_count == 0:
+        if (
+              lself.returned_none_count == 0 and
+              not lself.allow_uninitialized_template and
+              layer_ in ConstructCtx.partially_finished):
           ConstructCtx.partially_finished.remove(layer_)
         return layer_
 
@@ -1025,6 +1031,11 @@ class _SubnetworkRecCell(object):
           self.layer_data_templates[name] = layer_
         if ConstructCtx.layers:
           ConstructCtx.layers[-1].add_dependency(layer_, is_prev_time_frame=is_prev)
+        if layer_ not in ConstructCtx.partially_finished:
+          # Add it early. We want to catch all possible source of exceptions/errors, via:
+          # * layer_class.transform_config_dict (via construct_layer)
+          # * layer_class.get_out_data_from_opts (via add_templated_layer)
+          ConstructCtx.partially_finished.append(layer_)
         lself.count += 1
         if lself.once and lself.count > 1:
           lself.returned_none_count += 1
@@ -1059,15 +1070,18 @@ class _SubnetworkRecCell(object):
                 net_dict=self.net_dict, name=name,
                 get_layer=get_layer, add_layer=get_layer.add_templated_layer)
               break  # we did it, so get out of the loop
-            except NetworkConstructionDependencyLoopException:
-              # go on with the next get_layer
-              pass
             except Exception:
               # Pretty generic exception handling but anything could happen.
-              # If your network construction behaves strange, you might want to look here what happens.
-              # However, we don't do any output by default, as this could be very spammy.
-              # go on with the next get_layer
-              pass
+              # We don't do any output by default, as this could be very spammy,
+              # but we collect the traceback, in case we get some other error later.
+              # Then go on with the next get_layer.
+              etype, value, tb = sys.exc_info()
+              exc_last_frame = list(better_exchook.iter_traceback(tb))[-1]
+              exc_key = (exc_last_frame.f_code.co_filename, exc_last_frame.f_lineno, exc_last_frame.f_code.co_name)
+              if exc_key not in ConstructCtx.collected_exceptions:
+                out = StringIO()
+                better_exchook.better_exchook(etype, value, tb, file=out)
+                ConstructCtx.collected_exceptions[exc_key] = out.getvalue()
           # Now, do again, but with full recursive layer construction, to determine the dependencies.
           ConstructCtx.most_recent = list(ConstructCtx.layers)
           try:
@@ -1107,6 +1121,8 @@ class _SubnetworkRecCell(object):
       while ConstructCtx.partially_finished:
         direct_get_layer(ConstructCtx.partially_finished.pop(0).name)
 
+      self._template_construction_exceptions = list(ConstructCtx.collected_exceptions.values())
+
     except Exception:
       print("%r: exception constructing template network (for deps and data shapes)" % self)
       from pprint import pprint
@@ -1120,7 +1136,24 @@ class _SubnetworkRecCell(object):
         print(ConstructCtx.most_recent)
       print("Template network so far:")
       pprint(self.layer_data_templates)
+      print("Collected (unique) exceptions during construction:")
+      for s in ConstructCtx.collected_exceptions.values():
+        print(s)
       raise
+
+  def _handle_construct_exception(self):
+    if not self._template_construction_exceptions:
+      return
+    from pprint import pprint
+    print("Exception occurred during construction.")
+    print("Template network:")
+    pprint(self.layer_data_templates)
+    print("Collected (unique) exceptions during template construction:")
+    print("(Note that many of these can be ignored.)")
+    for s in self._template_construction_exceptions:
+      print(s)
+    # Don't print twice.
+    self._template_construction_exceptions = None
 
   def _construct(self, prev_outputs, prev_extra, i, data=None,
                  inputs_moved_out_tas=None, needed_outputs=("output",)):
@@ -1244,7 +1277,12 @@ class _SubnetworkRecCell(object):
         # This should not be used recursively, because we checked that nothing depends on it,
         # thus it should not be a problem to return None.
         return None
-      return self.net.construct_layer(net_dict, name=name, get_layer=get_layer)
+      # noinspection PyBroadException
+      try:
+        return self.net.construct_layer(net_dict, name=name, get_layer=get_layer)
+      except Exception:
+        self._handle_construct_exception()
+        raise
 
     # Go through needed_outputs, e.g. "output".
     # And prev_layers_needed because they might not be resolved otherwise.
@@ -1403,18 +1441,30 @@ class _SubnetworkRecCell(object):
     :rtype: list[LayerBase]
     """
     ls = []
+
+    def maybe_add(layer_):
+      """
+      :param LayerBase layer_:
+      """
+      # Usually dep.network is self.cell.net but it could reference to our own net,
+      # e.g. if this is an attention layer like
+      # {"class": "dot_attention", "base": "base:encoder", ...}.
+      if layer_.network is self.parent_net:
+        if layer_ not in ls:
+          ls.append(layer_)
+
     layers = self.net.layers
     if not layers:  # happens only during initialization
       layers = self.layer_data_templates
     for _, layer in sorted(layers.items()):
       assert isinstance(layer, LayerBase)
-      for dep in layer.get_dep_layers():
-        # Usually dep.network is self.cell.net but it could reference to our own net,
-        # e.g. if this is an attention layer like
-        # {"class": "dot_attention", "base": "base:encoder", ...}.
-        if dep.network is self.parent_net:
-          if dep not in ls:
-            ls += [dep]
+      maybe_add(layer)
+      if isinstance(layer, _TemplateLayer):
+        for dep in layer.dependencies:  # if it is uninitialized, need to use this
+          maybe_add(dep)
+      else:
+        for dep in layer.get_dep_layers():
+          maybe_add(dep)
     return ls
 
   def get_output(self, rec_layer):
@@ -2383,7 +2433,12 @@ class _SubnetworkRecCell(object):
         return get_prev_layer(name[len("prev:"):])
       if name.startswith("base:"):
         return self.parent_net.layers[name[len("base:"):]]
-      return self.input_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
+      # noinspection PyBroadException
+      try:
+        return self.input_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
+      except Exception:
+        self._handle_construct_exception()
+        raise
 
     # Same scope as the main subnet, so that it stays compatible.
     # noinspection PyProtectedMember
@@ -2493,7 +2548,12 @@ class _SubnetworkRecCell(object):
       if name in self.input_layers_moved_out:
         return self.input_layers_net.get_layer(name)
       if name in self.output_layers_moved_out or name.startswith("data:"):
-        return self.output_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
+        # noinspection PyBroadException
+        try:
+          return self.output_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
+        except Exception:
+          self._handle_construct_exception()
+          raise
       # It means that the layer is inside the loop.
       return get_loop_acc_layer(name)
 
@@ -3414,8 +3474,9 @@ class ChoiceLayer(LayerBase):
                input_type="prob",
                prob_scale=1.0, base_beam_score_scale=1.0, random_sample_scale=0.0,
                length_normalization=True,
+               custom_score_combine=None,
                source_beam_sizes=None, scheduled_sampling=False, cheating=False,
-               explicit_search_source=None,
+               explicit_search_sources=None,
                **kwargs):
     """
     :param int beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
@@ -3432,7 +3493,9 @@ class ChoiceLayer(LayerBase):
        before combination. If None, 'beam_size' is used for all sources. Has to have same length as number of sources.
     :param dict|None scheduled_sampling:
     :param bool cheating: if True, will always add the true target in the beam
-    :param LayerBase|None explicit_search_source: will mark it as an additional dependency
+    :param list[LayerBase]|None explicit_search_sources: will mark it as an additional dependency.
+      You might use these also in custom_score_combine.
+    :param callable|None custom_score_combine:
     """
     super(ChoiceLayer, self).__init__(**kwargs)
     from Util import CollectionReadCheckCovered
@@ -3443,7 +3506,7 @@ class ChoiceLayer(LayerBase):
       assert self.network.search_flag, "%s: cannot use search if network.search_flag disabled" % self
     self.search_flag = search
     self.input_type = input_type
-    self.explicit_search_source = explicit_search_source
+    self.explicit_search_sources = explicit_search_sources
     self.scheduled_sampling = CollectionReadCheckCovered.from_bool_or_dict(scheduled_sampling)
     # We assume log-softmax here, inside the rec layer.
 
@@ -3547,15 +3610,31 @@ class ChoiceLayer(LayerBase):
           # See the comment above. It could be that scores_in has a wider beam
           # than what should be used here now.
           scores_in = scores_in[:, :base_beam_in]  # (batch, beam_in, dim)
-        scores_random_sample = None
-        if random_sample_scale:
-          # https://github.com/tensorflow/tensorflow/issues/9260
-          # https://timvieira.github.io/blog/post/2014/08/01/gumbel-max-trick-and-weighted-reservoir-sampling/
-          scores_random_sample = -tf.log(-tf.log(tf.random_uniform(tf.shape(scores_in), 0, 1)))
-        scores_comb = optional_add(
-          optional_mul(scores_in, prob_scale),
-          optional_mul(scores_base, base_beam_score_scale),
-          optional_mul(scores_random_sample, random_sample_scale))  # (batch, beam_in, dim)
+        if custom_score_combine:
+          with tf.name_scope("custom_score_combine"):
+            if self.network.have_rec_step_info():
+              t = self.network.get_rec_step_index()  # scalar
+              end_flags_flat = self.network.get_rec_step_info().get_end_flag(
+                target_search_choices=base_search_choices)  # (batch * beam_in,)
+              end_flags = tf.reshape(end_flags_flat, [net_batch_dim, beam_size])  # (batch, beam_in)
+              end_flags = end_flags[:, :base_beam_in]  # see scores_in
+            else:
+              t, end_flags = None, None
+            scores_comb = custom_score_combine(
+              layer=self, scores_in=scores_in, scores_base=scores_base, t=t, end_flags=end_flags,
+              batch_dim=net_batch_dim, scores_beam_in=scores_beam_in, base_beam_in=base_beam_in)
+            assert isinstance(scores_comb, tf.Tensor)
+            scores_comb.set_shape((None, None, scores_in_dim))  # (batch, beam_in, dim)
+        else:
+          scores_random_sample = None
+          if random_sample_scale:
+            # https://github.com/tensorflow/tensorflow/issues/9260
+            # https://timvieira.github.io/blog/post/2014/08/01/gumbel-max-trick-and-weighted-reservoir-sampling/
+            scores_random_sample = -tf.log(-tf.log(tf.random_uniform(tf.shape(scores_in), 0, 1)))
+          scores_comb = optional_add(
+            optional_mul(scores_in, prob_scale),
+            optional_mul(scores_base, base_beam_score_scale),
+            optional_mul(scores_random_sample, random_sample_scale))  # (batch, beam_in, dim)
         scores_comb_flat = tf.reshape(
           scores_comb, [net_batch_dim, base_beam_in * scores_in_dim])  # (batch, beam_in * dim)
         # `tf.nn.top_k` is the core function performing our search.
@@ -3696,7 +3775,11 @@ class ChoiceLayer(LayerBase):
       scores_in_ = tf.reshape(scores_in_, (net_batch_dim, base_search_choices.beam_size))  # (batch,beam_in)
       self.search_choices.set_src_beams(expand_dims_unbroadcast(
         tf.range(base_search_choices.beam_size), axis=0, dim=net_batch_dim))
-      self.search_choices.set_beam_scores(scores_base + scores_in_)
+      assert not random_sample_scale
+      scores_comb = optional_add(
+        optional_mul(scores_in_, prob_scale),
+        optional_mul(scores_base, base_beam_score_scale))  # (batch, beam_in, dim)
+      self.search_choices.set_beam_scores(scores_comb)
 
   def _get_scores(self, source):
     """
@@ -3808,7 +3891,12 @@ class ChoiceLayer(LayerBase):
       # if there are other choice layers, we still need to add the scores to the beam.
       d["from"] = []
     if d.get("explicit_search_source"):
-      d["explicit_search_source"] = get_layer(d["explicit_search_source"]) if network.search_flag else None
+      assert "explicit_search_sources" not in d
+      d["explicit_search_sources"] = [get_layer(d.pop("explicit_search_source"))] if network.search_flag else []
+    elif d.get("explicit_search_sources"):
+      assert isinstance(d["explicit_search_sources"], (list, tuple))
+      d["explicit_search_sources"] = (
+        [get_layer(name) for name in d["explicit_search_sources"]] if network.search_flag else [])
     super(ChoiceLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
@@ -3920,8 +4008,8 @@ class ChoiceLayer(LayerBase):
     """
     # See also self.transform_config_dict where we might strip away the sources.
     ls = super(ChoiceLayer, self).get_dep_layers()
-    if self.explicit_search_source:
-      ls.append(self.explicit_search_source)
+    if self.explicit_search_sources:
+      ls.extend(self.explicit_search_sources)
     return ls
 
 
@@ -5791,7 +5879,10 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
         assert 4 * self._num_units == out_dim
         bias_init[2*self._num_units:3*self._num_units] = [self.forget_bias] * self._num_units
       bias = tf.get_variable("bias_" + name, shape=[out_dim], initializer=tf.constant_initializer(bias_init))
-      out = tf.nn.bias_add(out, bias)
+      if self.config.is_true('deterministic_train') and tf.test.is_gpu_available:
+        out = tf.math.add(out, bias)
+      else:
+        out = tf.nn.bias_add(out, bias)  # faster than math.add but not deterministic on GPU
     return out
 
   def _get_dropout_mask(self, dropout):

@@ -1668,6 +1668,8 @@ class SearchChoices(object):
     if isinstance(d, LayerBase):
       if d.get_search_choices() == self:
         return d
+      if d.output.batch_dim_axis is None:  # e.g. VariableLayer, ConstantLayer, or so
+        return d
       return SelectSearchSourcesLayer(sources=(d,), search_choices=self.owner, name=d.name, network=d.network)
     return d
 
@@ -2603,7 +2605,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
         idxs = tf.reshape(tf.range(energy_shape[axis]), idxs_shape)
         start_data = start.output.copy_compatible_to(
           energy_data, check_sparse=False, check_dtype=False)  # adds dummy time-dim
-        energy_mask = tf.logical_and(energy_mask, tf.greater_equal(start_data.placeholder, idxs))
+        energy_mask = tf.logical_and(energy_mask, tf.greater_equal(idxs, start_data.placeholder))
       if window_start:
         assert window_size, "set window_size explicitly"
         from TFUtil import nd_indices, expand_dims_unbroadcast
@@ -2754,10 +2756,11 @@ class RangeInAxisLayer(LayerBase):
   layer_class = "range_in_axis"
   recurrent = True  # if axis=="T", the time-dim order matters
 
-  def __init__(self, axis, dtype="int32", **kwargs):
+  def __init__(self, axis, dtype="int32", unbroadcast=False, **kwargs):
     """
     :param str axis:
     :param str dtype:
+    :param bool unbroadcast:
     """
     super(RangeInAxisLayer, self).__init__(**kwargs)
     axis = self.output.get_axis_from_description(axis)
@@ -2767,6 +2770,8 @@ class RangeInAxisLayer(LayerBase):
     out = tf.range(0, dim)
     out_shape = [dim if (i == axis) else 1 for i in range(self.output.batch_ndim)]
     out = tf.reshape(out, out_shape)  # add missing axes (keep_dims)
+    if unbroadcast:
+      out = out + tf.zeros(source_shape, dtype=out.dtype)
     out = tf.cast(out, dtype)
     self.output.placeholder = out
     axis_wo_b = source.get_batch_axis_excluding_batch(axis)
@@ -5217,8 +5222,8 @@ class CombineLayer(LayerBase):
     :rtype: Data
     """
     out_type_ = {}
-    if sources:
-      out_type_.update(Data.get_common_data([s.output for s in sources]).get_kwargs())
+    if sources and any(sources):
+      out_type_.update(Data.get_common_data([s.output for s in sources if s]).get_kwargs())
     if n_out is not NotSpecified:
       out_type_["dim"] = n_out
     out_type_["name"] = "%s_output" % kwargs["name"]

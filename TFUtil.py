@@ -5568,7 +5568,7 @@ def check_base_op_type_and_replace(x, op_type, new_op_type):
   assert isinstance(x, tf.Tensor)
   assert x.op.outputs[0] is x
   # Handle cases like f(tf.nn.softmax(z)) for f in tf.identity, tf.reshape, etc.
-  safe_post_op_types = ["Identity", "Reshape", "Transpose"]
+  safe_post_op_types = ["Identity", "Reshape", "Transpose", "GatherNd"]
   if op_type not in safe_post_op_types and x.op.type in safe_post_op_types:
     inner = check_base_op_type_and_replace(x.op.inputs[0], op_type=op_type, new_op_type=new_op_type)
     if inner is None:
@@ -8149,6 +8149,10 @@ def get_non_deterministic_ops_from_graph():
   tf_version = tf_version_tuple()
   for op in tf.get_default_graph().get_operations():
     if op.type == "Mean" and tf_version <= (1, 5, 0) and "GPU" in device_types:
+      non_det_ops.append(op)
+    elif op.type == "BiasAddGrad" and "GPU" in device_types:
+      non_det_ops.append(op)
+    if op.type == "UnsortedSegmentSum" and "GPU" in device_types:
       non_det_ops.append(op)
     # elif ... more non det ops to be added
 

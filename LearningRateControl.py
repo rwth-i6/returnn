@@ -91,6 +91,16 @@ class LearningRateControl(object):
     :param str filename: load from and save to file
     """
     self.epoch_data = {}  # type: typing.Dict[int,LearningRateControl.EpochData]
+    self.filename = filename
+    if filename:
+      if os.path.exists(filename):
+        print("Learning-rate-control: loading file %s" % filename, file=log.v4)
+        # Load now, such that default_learning_rates is correctly handled.
+        self.load()
+      else:
+        print("Learning-rate-control: file %s does not exist yet" % filename, file=log.v4)
+    else:
+      print("Learning-rate-control: no file specified, not saving history (no proper restart possible)", file=log.v4)
     self.default_learning_rate = default_learning_rate
     self.min_learning_rate = min_learning_rate
     if default_learning_rates:
@@ -106,15 +116,6 @@ class LearningRateControl(object):
     self.relative_error_also_relative_to_learning_rate = relative_error_also_relative_to_learning_rate
     self.min_num_epochs_per_new_learning_rate = min_num_epochs_per_new_learning_rate
     self.relative_error_div_by_old = relative_error_div_by_old
-    self.filename = filename
-    if filename:
-      if os.path.exists(filename):
-        print("Learning-rate-control: loading file %s" % filename, file=log.v4)
-        self.load()
-      else:
-        print("Learning-rate-control: file %s does not exist yet" % filename, file=log.v4)
-    else:
-      print("Learning-rate-control: no file specified, not saving history (no proper restart possible)", file=log.v4)
 
   __repr__ = simple_obj_repr
 
