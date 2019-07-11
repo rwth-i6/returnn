@@ -437,8 +437,9 @@ class Engine(EngineBase):
 
     forwarder = ClassificationTaskThread(self.network, self.devices, dataset, batches)
     forwarder.join()
-    assert forwarder.output.shape[1] == 1
-    return forwarder.output[:, 0]
+    output = list(forwarder.result.values())[0][0]
+    assert output.shape[1] == 1
+    return output[:, 0]
 
   def forward_to_hdf(self, data, output_file, combine_labels='', batch_size=0):
     """
