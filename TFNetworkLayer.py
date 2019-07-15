@@ -1888,7 +1888,7 @@ class _ConcatInputLayer(LayerBase):
     """
     :param float dropout: 0.0 means to apply no dropout. dropout will only be applied during training
     :param dict[str|tuple,int|None] dropout_noise_shape: see :func:`TFUtil.get_bc_shape`
-    :param bool dropout_on_foward: apply dropout during inference
+    :param bool dropout_on_forward: apply dropout during inference
     :param str|None mask: "dropout" or "unity" or None. this is obsolete and only here for historical reasons
     """
     super(_ConcatInputLayer, self).__init__(**kwargs)
