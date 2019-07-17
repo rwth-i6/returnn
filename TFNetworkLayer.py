@@ -5181,7 +5181,7 @@ class CombineLayer(LayerBase):
     :param list[LayerBase] sources:
     :param str|None activation: if provided, activation function to apply, e.g. "tanh" or "relu"
     :param bool with_bias: if given, will add a bias
-    :param str eval: for kind="eval", will eval this string. see :func:`_op_kind_eval`
+    :param str|callable eval: for kind="eval", will eval this string. or function. see :func:`_op_kind_eval`
     :param dict[str]|None eval_locals: locals for eval
     :param bool eval_for_output_loss: will do the same eval on layer.output_loss
     """
@@ -5294,7 +5294,7 @@ class CombineLayer(LayerBase):
   def _op_kind_eval(self, sources, eval_str, eval_locals=None):
     """
     :param list[LayerBase]|list[tf.Tensor] sources:
-    :param str eval_str:
+    :param str|callable eval_str:
     :param dict[str]|None eval_locals:
     :rtype: tf.Tensor
     """
@@ -5324,18 +5324,25 @@ class CombineLayer(LayerBase):
       assert not as_data
       return sources[i]
 
-    vs = vars(TFUtil).copy()
-    vs.update({"tf": tf, "source": source, "self": self})
+    vs = {}  # type: typing.Dict[str,object]
+    if not callable(eval_str):
+      vs.update(vars(TFUtil))
+      vs.update({"tf": tf})
+    vs.update({"source": source, "self": self})
     vs.update(eval_locals or {})
-    x = eval(eval_str, vs)
+    if callable(eval_str):
+      x = eval_str(**vs)
+    else:
+      x = eval(eval_str, vs)
     assert sorted(used_sources) == list(range(len(sources))), (
       "not used sources: %r" % set(range(len(sources))).difference(used_sources))
+    assert isinstance(x, tf.Tensor), "%r: eval %r did not return a tensor" % (self, eval_str)
     return x
 
   def _get_op(self, kind, eval_str=None, eval_locals=None):
     """
     :param str kind:
-    :param str eval_str:
+    :param str|callable eval_str:
     :param dict[str]|None eval_locals:
     :rtype: (list[LayerBase]) -> tf.Tensor
     """
