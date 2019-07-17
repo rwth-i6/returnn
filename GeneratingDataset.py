@@ -2437,7 +2437,7 @@ class OggZipDataset(CachedDataset2):
                **kwargs):
     """
     :param str path: filename to zip
-    :param dict[str] audio: options for :class:`ExtractAudioFeatures`
+    :param dict[str]|None audio: options for :class:`ExtractAudioFeatures`. use {} for default. None means to disable.
     :param dict[str] targets: options for :func:`Vocabulary.create_vocab` (e.g. :class:`BytePairEncoding`)
     :param bool use_cache_manager: uses :func:`Util.cf`
     :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'. otherwise epoch will be used
@@ -2452,14 +2452,20 @@ class OggZipDataset(CachedDataset2):
     import Util
     from MetaDataset import EpochWiseFilter
     name, ext = os.path.splitext(os.path.basename(path))
+    if ext != ".zip" and os.path.isdir(path) and os.path.isfile(path + ".txt"):
+      # Special case (mostly for debugging) to directly access the filesystem, not via zip-file.
+      path, name = os.path.dirname(path), os.path.basename(path)
+      self._zip_file = None
+    else:
+      assert ext == ".zip"
+      self._zip_file = zipfile.ZipFile(path)
     kwargs.setdefault("name", name)
-    assert ext == ".zip"
     super(OggZipDataset, self).__init__(**kwargs)
     if use_cache_manager:
+      assert self._zip_file is not None, "cache manager only for zip file"
       path = Util.cf(path)
     self.path = path
     self._name = name
-    self._zip_file = zipfile.ZipFile(path)
     self.targets = Vocabulary.create_vocab(**targets)
     self.labels = {"classes": self.targets.labels}
     self._fixed_random_seed = fixed_random_seed
@@ -2478,12 +2484,21 @@ class OggZipDataset(CachedDataset2):
     self._seq_order = None  # type: typing.Optional[typing.List[int]]
     self.init_seq_order()
 
+  def _read(self, filename):
+    """
+    :param str filename: in zip-file
+    :rtype: bytes
+    """
+    if self._zip_file is not None:
+      return self._zip_file.read(filename)
+    return open("%s/%s" % (self.path, filename), "rb").read()
+
   def _collect_data(self):
     """
     :return: entries
     :rtype: list[dict[str]]
     """
-    data = eval(self._zip_file.open("%s.txt" % self._name).read())  # type: typing.List[typing.Dict[str]]
+    data = eval(self._read("%s.txt" % self._name))  # type: typing.List[typing.Dict[str]]
     assert data and isinstance(data, list)
     first_entry = data[0]
     assert isinstance(first_entry, dict)
@@ -2609,7 +2624,7 @@ class OggZipDataset(CachedDataset2):
     import io
     seq = self._data[self._get_ref_seq_idx(seq_idx)]
     audio_fn = "%s/%s" % (self._name, seq["file"])
-    raw_bytes = self._zip_file.read(audio_fn)
+    raw_bytes = self._read(audio_fn)
     return io.BytesIO(raw_bytes)
 
   def _collect_single_seq(self, seq_idx):
