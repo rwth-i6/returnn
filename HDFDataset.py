@@ -36,7 +36,6 @@ class HDFDataset(CachedDataset):
     self.h5_files = []  # type: list[h5py.File]
     self.file_start = [0]
     self.file_seq_start = []; """ :type: list[numpy.ndarray] """
-    self.file_index = []; """ :type: list[int] """
     self.data_dtype = {}; ":type: dict[str,str]"
     self.data_sparse = {}; ":type: dict[str,bool]"
     if files:
@@ -58,7 +57,6 @@ class HDFDataset(CachedDataset):
     """
     Setups data:
       self.seq_lengths
-      self.file_index
       self.file_start
       self.file_seq_start
     Use load_seqs() to load the actual data.
@@ -105,7 +103,6 @@ class HDFDataset(CachedDataset):
     self.file_seq_start.append(seq_start)
     nseqs = len(seq_start) - 1
     self._num_seqs += nseqs
-    self.file_index.extend([len(self.files) - 1] * nseqs)
     self.file_start.append(self.file_start[-1] + nseqs)
     self._num_timesteps += numpy.sum(seq_lengths[:, 0])
     if self._num_codesteps is None:
@@ -185,7 +182,7 @@ class HDFDataset(CachedDataset):
     for idc in selection:
       if self.sample(idc):
         ids = self._seq_index[idc]
-        file_info[self.file_index[ids]].append((idc,ids))
+        file_info[self._get_file_index(ids)].append((idc,ids))
       else:
         self.preload_set.add(idc)
     for i in range(len(self.files)):
@@ -220,7 +217,7 @@ class HDFDataset(CachedDataset):
 
     # Otherwise, directly read it from file now.
     real_seq_idx = self._seq_index[seq_idx]
-    file_idx = self.file_index[real_seq_idx]
+    file_idx = self._get_file_index(real_seq_idx)
     fin = self.h5_files[file_idx]
 
     real_file_seq_idx = real_seq_idx - self.file_start[file_idx]
@@ -276,6 +273,11 @@ class HDFDataset(CachedDataset):
                       "sequences: %i" % self.num_seqs,
                       "frames: %i" % self.get_num_timesteps()])
 
+  def _get_file_index(self, real_seq_idx):
+    file_index = 0
+    while file_index < len(self.file_start) - 1 and real_seq_idx >= self.file_start[file_index + 1]:
+      file_index += 1
+    return file_index
 
 # ------------------------------------------------------------------------------
 
