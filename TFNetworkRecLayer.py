@@ -878,7 +878,7 @@ class _SubnetworkRecCell(object):
       self.net.extern_data.data["source"] = (
         source_data.copy_template_excluding_time_dim())
     for key, data in parent_net.extern_data.data.items():
-      if key in self.net.extern_data.data:
+      if key in self.net.extern_data.data or data.time_dim_axis is None:
         continue  # Don't overwrite existing, e.g. "source".
       # These are just templates. You can use them as possible targets for dimension information,
       # but not as actual sources or targets.
