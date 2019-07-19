@@ -463,6 +463,7 @@ class TFNetwork(object):
         train_flag=self.train_flag, eval_flag=self.eval_flag,
         search_flag=search_flag if search_flag is not None else self.search_flag,
         extra_parent_net=self)
+    self.extra_net.layers_desc.update(net_dict)
 
     for layer_name in layer_list:
       # Always (re)create the specified layer in the layer_list.
