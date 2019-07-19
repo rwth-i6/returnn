@@ -56,7 +56,6 @@ class HDFDataset(CachedDataset):
   def add_file(self, filename):
     """
     Setups data:
-      self.seq_lengths
       self.file_start
       self.file_seq_start
     Use load_seqs() to load the actual data.
@@ -82,32 +81,35 @@ class HDFDataset(CachedDataset):
         self.timestamps = fin[attr_times][...]
       else:
         self.timestamps = numpy.concatenate([self.timestamps, fin[attr_times][...]], axis=0)
-    seq_lengths = fin[attr_seqLengths][...]
     if 'targets' in fin:
       self.target_keys = sorted(fin['targets/labels'].keys())
     else:
       self.target_keys = ['classes']
 
+    seq_lengths = fin[attr_seqLengths][...]
     if len(seq_lengths.shape) == 1:
       seq_lengths = numpy.array(zip(*[seq_lengths.tolist() for i in range(len(self.target_keys)+1)]))
 
-    if len(self._seq_lengths) == 0:
-      self._seq_lengths = numpy.array(seq_lengths)
-    else:
-      self._seq_lengths = numpy.concatenate((self._seq_lengths, seq_lengths), axis=0)
-    if not self._seq_start:
-      self._seq_start = [numpy.zeros((seq_lengths.shape[1],), 'int64')]
     seq_start = numpy.zeros((seq_lengths.shape[0] + 1, seq_lengths.shape[1]), dtype="int64")
     numpy.cumsum(seq_lengths, axis=0, dtype="int64", out=seq_start[1:])
-    self.file_seq_start.append(seq_start)
-    nseqs = len(seq_start) - 1
-    self._num_seqs += nseqs
-    self.file_start.append(self.file_start[-1] + nseqs)
+
     self._num_timesteps += numpy.sum(seq_lengths[:, 0])
     if self._num_codesteps is None:
       self._num_codesteps = [0 for i in range(1, len(seq_lengths[0]))]
     for i in range(1, len(seq_lengths[0])):
       self._num_codesteps[i - 1] += numpy.sum(seq_lengths[:, i])
+
+    if not self._seq_start:
+      self._seq_start = [numpy.zeros((seq_lengths.shape[1],), 'int64')]
+
+    # May be large, so better delete them early, we don't need them anymore.
+    del seq_lengths
+
+    self.file_seq_start.append(seq_start)
+    nseqs = len(seq_start) - 1
+    self._num_seqs += nseqs
+    self.file_start.append(self.file_start[-1] + nseqs)
+
     if 'maxCTCIndexTranscriptionLength' in fin.attrs:
       self.max_ctc_length = max(self.max_ctc_length, fin.attrs['maxCTCIndexTranscriptionLength'])
     if len(fin['inputs'].shape) == 1:  # sparse
@@ -153,7 +155,7 @@ class HDFDataset(CachedDataset):
           dim = 1 if ndim == 1 else fin['targets/data'][name].shape[-1]
           self.num_outputs[str(name)] = (dim, ndim)
     self.data_dtype["data"] = str(fin['inputs'].dtype)
-    assert len(self.target_keys) == len(self._seq_lengths[0]) - 1
+    assert len(self.target_keys) == len(self.file_seq_start[0][0]) - 1
     if self.cache_byte_size_total_limit > 0:
       fin.close()  # we always reopen them
 
@@ -197,15 +199,15 @@ class HDFDataset(CachedDataset):
       for idc, ids in file_info[i]:
         s = ids - self.file_start[i]
         p = self.file_seq_start[i][s]
-        l = self._seq_lengths[ids]
+        q = self.file_seq_start[i][s + 1]
         if 'targets' in fin:
           for k in fin['targets/data']:
             if self.targets[k] is None:
               self.targets[k] = numpy.zeros(
                 (self._num_codesteps[self.target_keys.index(k)],) + targets[k].shape[1:], dtype=self.data_dtype[k]) - 1
             ldx = self.target_keys.index(k) + 1
-            self.targets[k][self.get_seq_start(idc)[ldx]:self.get_seq_start(idc)[ldx] + l[ldx]] = targets[k][p[ldx] : p[ldx] + l[ldx]]
-        self._set_alloc_intervals_data(idc, data=inputs[p[0] : p[0] + l[0]])
+            self.targets[k][self.get_seq_start(idc)[ldx]:self.get_seq_start(idc)[ldx] + q[ldx] - p[ldx]] = targets[k][p[ldx] : q[ldx]]
+        self._set_alloc_intervals_data(idc, data=inputs[p[0] : q[0]])
         self.preload_set.add(idc)
       fin.close()
     gc.collect()
@@ -220,17 +222,17 @@ class HDFDataset(CachedDataset):
     fin = self.h5_files[file_idx]
 
     real_file_seq_idx = real_seq_idx - self.file_start[file_idx]
-    pos = self.file_seq_start[file_idx][real_file_seq_idx]
-    seq_len = self._seq_lengths[real_seq_idx]
+    start_pos = self.file_seq_start[file_idx][real_file_seq_idx]
+    end_pos = self.file_seq_start[file_idx][real_file_seq_idx + 1]
 
     if key == "data":
       inputs = fin['inputs']
-      data = inputs[pos[0]:pos[0] + seq_len[0]]
+      data = inputs[start_pos[0]:end_pos[0]]
     else:
       assert 'targets' in fin
       targets = fin['targets/data/' + key]
       ldx = self.target_keys.index(key) + 1
-      data = targets[pos[ldx]:pos[ldx] + seq_len[ldx]]
+      data = targets[start_pos[ldx]:end_pos[ldx]]
     return data
 
   def get_input_data(self, sorted_seq_idx):
@@ -242,6 +244,20 @@ class HDFDataset(CachedDataset):
     if self.cache_byte_size_total_limit > 0:  # Use the cache?
       return super(HDFDataset, self).get_targets(target, sorted_seq_idx)
     return self.get_data(sorted_seq_idx, target)
+
+  def _get_seq_length_by_real_idx(self, real_seq_idx):
+    """
+    :param int real_seq_idx:
+    :returns length of the sequence with index 'real_seq_idx'
+    :rtype: int
+    """
+    file_idx = self._get_file_index(real_seq_idx)
+    real_file_seq_idx = real_seq_idx - self.file_start[file_idx]
+
+    start_pos = self.file_seq_start[file_idx][real_file_seq_idx]
+    end_pos = self.file_seq_start[file_idx][real_file_seq_idx + 1]
+
+    return end_pos - start_pos
 
   def _get_tag_by_real_idx(self, real_seq_idx):
     file_idx = self._get_file_index(real_seq_idx)
