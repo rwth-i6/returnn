@@ -917,18 +917,23 @@ class ExtractAudioFeatures:
   def __init__(self,
                window_len=0.025, step_len=0.010,
                num_feature_filters=None, with_delta=False, norm_mean=None, norm_std_dev=None,
-               features="mfcc", random_permute=None, random_state=None, raw_ogg_opts=None):
+               features="mfcc", feature_options=None, random_permute=None, random_state=None, raw_ogg_opts=None,
+               peak_normalization=True, preemphasis=None, join_frames=None):
     """
     :param float window_len: in seconds
     :param float step_len: in seconds
     :param int num_feature_filters:
     :param bool|int with_delta:
-    :param numpy.ndarray|str|None norm_mean: if str, will interpret as filename
-    :param numpy.ndarray|str|None norm_std_dev: if str, will interpret as filename
+    :param numpy.ndarray|str|int|float|None norm_mean: if str, will interpret as filename
+    :param numpy.ndarray|str|int|float|None norm_std_dev: if str, will interpret as filename
     :param str features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank", "raw", "raw_ogg"
+    :param dict[str]|None feature_options: provide additional paramters for the feature function
     :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
     :param numpy.random.RandomState|None random_state:
     :param dict[str]|None raw_ogg_opts:
+    :param bool peak_normalization: set to False to disable the peak normalization for audio files
+    :param float|None preemphasis: set a preemphasis filter coefficient
+    :param int|None join_frames: concatenate multiple frames together to a superframe
     :return: (audio_len // int(step_len * sample_rate), (with_delta + 1) * num_feature_filters), float32
     :rtype: numpy.ndarray
     """
@@ -942,14 +947,19 @@ class ExtractAudioFeatures:
       else:
         num_feature_filters = 40  # was the old default
     self.num_feature_filters = num_feature_filters
+    self.preemphasis = preemphasis
     if isinstance(with_delta, bool):
       with_delta = 1 if with_delta else 0
     assert isinstance(with_delta, int) and with_delta >= 0
     self.with_delta = with_delta
+    # join frames needs to be set before norm loading
+    self.join_frames = join_frames
     if norm_mean is not None:
-      norm_mean = self._load_feature_vec(norm_mean)
+      if not isinstance(norm_mean, (int, float)):
+        norm_mean = self._load_feature_vec(norm_mean)
     if norm_std_dev is not None:
-      norm_std_dev = self._load_feature_vec(norm_std_dev)
+      if not isinstance(norm_std_dev, (int, float)):
+        norm_std_dev = self._load_feature_vec(norm_std_dev)
     self.norm_mean = norm_mean
     self.norm_std_dev = norm_std_dev
     if random_permute and not isinstance(random_permute, CollectionReadCheckCovered):
@@ -957,7 +967,9 @@ class ExtractAudioFeatures:
     self.random_permute_opts = random_permute
     self.random_state = random_state
     self.features = features
+    self.feature_options = feature_options
     self.raw_ogg_opts = raw_ogg_opts
+    self.peak_normalization = peak_normalization
 
   def _load_feature_vec(self, value):
     """
@@ -999,6 +1011,7 @@ class ExtractAudioFeatures:
     # https://github.com/librosa/librosa/issues/681
     # noinspection PyPackageRequirements
     import soundfile  # pip install pysoundfile
+    # integer audio formats are automatically transformed in the range [-1,1]
     audio, sample_rate = soundfile.read(raw_bytes)
     return self.get_audio_features(audio=audio, sample_rate=sample_rate)
 
@@ -1008,8 +1021,14 @@ class ExtractAudioFeatures:
     :param int sample_rate: e.g. 22050
     :rtype: numpy.ndarray
     """
-    peak = numpy.max(numpy.abs(audio))
-    audio /= peak
+
+    if self.preemphasis:
+      from scipy import signal
+      audio = signal.lfilter([1, -self.preemphasis], [1], audio)
+
+    if self.peak_normalization:
+      peak = numpy.max(numpy.abs(audio))
+      audio /= peak
 
     if self.random_permute_opts and self.random_permute_opts.truth_value:
       audio = _get_random_permuted_audio(
@@ -1030,12 +1049,20 @@ class ExtractAudioFeatures:
         "num_feature_filters": self.num_feature_filters,
         "audio": audio}
 
+      if self.feature_options is not None:
+        assert isinstance(self.feature_options, dict)
+        kwargs.update(self.feature_options)
+
       if self.features == "mfcc":
         feature_data = _get_audio_features_mfcc(**kwargs)
       elif self.features == "log_mel_filterbank":
         feature_data = _get_audio_log_mel_filterbank(**kwargs)
       elif self.features == "log_log_mel_filterbank":
         feature_data = _get_audio_log_log_mel_filterbank(**kwargs)
+      elif self.features == "db_mel_filterbank":
+        feature_data = _get_audio_db_mel_filterbank(**kwargs)
+      elif self.features == "linear_spectrogram":
+        feature_data = _get_audio_linear_spectrogram(**kwargs)
       else:
         raise Exception("non-supported feature type %r" % (self.features,))
 
@@ -1051,16 +1078,63 @@ class ExtractAudioFeatures:
       assert feature_data.shape[1] == self.get_feature_dimension()
 
     if self.norm_mean is not None:
-      feature_data -= self.norm_mean[None, :]
+      if isinstance(self.norm_mean, (int, float)):
+        feature_data -= self.norm_mean
+      else:
+        feature_data -= self.norm_mean[None, :]
+
     if self.norm_std_dev is not None:
-      feature_data /= self.norm_std_dev[None, :]
+      if isinstance(self.norm_std_dev, (int, float)):
+        feature_data /= self.norm_std_dev
+      else:
+        feature_data /= self.norm_std_dev[None, :]
+
+    if self.join_frames is not None:
+      pad_len = self.join_frames - (feature_data.shape[0] % self.join_frames)
+      pad_len = pad_len % self.join_frames
+      new_len = feature_data.shape[0] + pad_len
+      feature_data = numpy.pad(feature_data, pad_width=((0, pad_len), (0, 0)), mode="edge")
+      feature_data = numpy.reshape(feature_data,
+                                   newshape=(new_len // self.join_frames, feature_data.shape[1] * self.join_frames),
+                                   order='C')
+
     return feature_data
 
   def get_feature_dimension(self):
     """
     :rtype: int
     """
-    return (self.with_delta + 1) * self.num_feature_filters
+    return (self.with_delta + 1) * self.num_feature_filters * (self.join_frames or 1)
+
+
+def _get_audio_linear_spectrogram(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=512):
+  """
+  Computes linear spectrogram features from an audio signal.
+  Drops the DC component.
+
+  :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
+  :param int sample_rate: e.g. 22050
+  :param float window_len: in seconds
+  :param float step_len: in seconds
+  :return: (audio_len // int(step_len * sample_rate), num_feature_filters), float32
+  :rtype: numpy.ndarray
+  """
+  # noinspection PyPackageRequirements
+  import librosa
+
+  min_n_fft = int(window_len * sample_rate)
+  assert num_feature_filters*2 >= min_n_fft
+  assert num_feature_filters % 2 == 0
+
+  spectrogram = numpy.abs(librosa.core.stft(
+    audio, hop_length=int(step_len * sample_rate), win_length=int(window_len * sample_rate), n_fft=num_feature_filters*2))
+
+  # remove the DC part
+  spectrogram = spectrogram[1:]
+
+  assert spectrogram.shape[0] == num_feature_filters
+  spectrogram = spectrogram.transpose().astype("float32")  # (time, dim)
+  return spectrogram
 
 
 def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=40):
@@ -1112,6 +1186,41 @@ def _get_audio_log_mel_filterbank(audio, sample_rate, window_len=0.025, step_len
     hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
   log_noise_floor = 1e-3  # prevent numeric overflow in log
   log_mel_filterbank = numpy.log(numpy.maximum(log_noise_floor, mel_filterbank))
+  assert log_mel_filterbank.shape[0] == num_feature_filters
+  log_mel_filterbank = log_mel_filterbank.transpose().astype("float32")  # (time, dim)
+  return log_mel_filterbank
+
+
+def _get_audio_db_mel_filterbank(audio, sample_rate,
+                                 window_len=0.025, step_len=0.010, num_feature_filters=80, fmin=0, min_amp=1e-10):
+  """
+  Computes log Mel-filterbank features in dezibel values from an audio signal.
+  Provides adjustable minimum frequency and minimual amplitude clipping
+
+  :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
+  :param int sample_rate: e.g. 22050
+  :param float window_len: in seconds
+  :param float step_len: in seconds
+  :param int num_feature_filters: number of mel-filterbanks
+  :param int fmin: minimum frequency covered by mel filters
+  :param int min_amp: silence clipping for small amplitudes
+  :return: (audio_len // int(step_len * sample_rate), num_feature_filters), float32
+  :rtype: numpy.ndarray
+  """
+  # noinspection PyPackageRequirements
+  assert fmin >= 0
+  assert min_amp > 0
+
+  import librosa
+  mel_filterbank = librosa.feature.melspectrogram(
+    audio, sr=sample_rate,
+    n_mels=num_feature_filters,
+    hop_length=int(step_len * sample_rate),
+    n_fft=int(window_len * sample_rate),
+    fmin=fmin
+   )
+
+  log_mel_filterbank = 20 * numpy.log10(numpy.maximum(min_amp, mel_filterbank))
   assert log_mel_filterbank.shape[0] == num_feature_filters
   log_mel_filterbank = log_mel_filterbank.transpose().astype("float32")  # (time, dim)
   return log_mel_filterbank
