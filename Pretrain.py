@@ -426,9 +426,9 @@ class Pretrain:
   # -------------- Public interface
 
   def __str__(self):
-    return ("Default layerwise construction+pretraining, starting with input+hidden+output. " +
-            "Number of pretrain epochs: %i (repetitions: %r)") % (
-            self.get_train_num_epochs(), self.repetitions)
+    return ("Pretrain construction algo %r, "
+            "number of pretrain epochs: %i (repetitions: %r)") % (
+            self._construction_algo, self.get_train_num_epochs(), self.repetitions)
 
   def get_train_num_epochs(self):
     """
