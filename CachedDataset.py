@@ -40,7 +40,6 @@ class CachedDataset(Dataset):
     self._seq_index = []; """ :type: list[int] """  # Via init_seq_order(). seq_index idx -> hdf seq idx
     self._seq_index_inv = {}; """ :type: dict[int,int] """  # Via init_seq_order(). hdf seq idx -> seq_index idx
     self._index_map = range(len(self._seq_index))  # sorted seq idx -> seq_index idx
-    self._seq_lengths = numpy.zeros((0, 0))  # real seq idx -> tuple of len of data and all targets
     self._tag_idx = {}; ":type: dict[str,int] "  # map of tag -> real-seq-idx. call _update_tag_idx
     self.targets = {}
     self.target_keys = []
@@ -72,7 +71,7 @@ class CachedDataset(Dataset):
       self._update_tag_idx()
       seq_index = [self._tag_idx[tag] for tag in seq_list]
     else:
-      seq_index = self.get_seq_order_for_epoch(epoch, self._num_seqs, lambda s: self._seq_lengths[s][0])
+      seq_index = self.get_seq_order_for_epoch(epoch, self._num_seqs, lambda s: self._get_seq_length_by_real_idx(s)[0])
 
     old_index_map = self._index_map[:]
     self._index_map = range(len(seq_index))  # sorted seq idx -> seq_index idx
@@ -133,7 +132,7 @@ class CachedDataset(Dataset):
     self._seq_start = [self._seq_start[0] * 0]  # idx like in seq_index, *not* real idx
     for i in range(self.num_seqs):
       ids = self._seq_index[i]
-      self._seq_start.append(self._seq_start[-1] + self._seq_lengths[ids])
+      self._seq_start.append(self._seq_start[-1] + self._get_seq_length_by_real_idx(ids))
 
   def _init_start_cache(self):
     if self.cache_byte_size_limit_at_start == 0:
@@ -420,7 +419,7 @@ class CachedDataset(Dataset):
       if ai[1] > self.num_seqs_cached_at_start and ai[0] < ai[1]:
         removed = self.remove_alloc_interval(max(ai[0],self.num_seqs_cached_at_start), ai[1])
         self.preload_set -= set(removed)
-        deleted += sum([self._seq_lengths[self._seq_index[i]][0] for i in removed])
+        deleted += sum([self._get_seq_length_by_real_idx(self._seq_index[i])[0] for i in removed])
       else:
         i += 1
     return deleted
@@ -450,13 +449,21 @@ class CachedDataset(Dataset):
       return True
     return set(range(start,end)) <= self.preload_set
 
+  def _get_seq_length_by_real_idx(self, real_seq_idx):
+    """
+    :param int real_seq_idx:
+    :returns length of the sequence with index 'real_seq_idx'
+    :rtype: int
+    """
+    raise NotImplementedError
+
   def get_seq_length_2d(self, sorted_seq_idx):
     """
     :type sorted_seq_idx: int
     :rtype: (int,int)
     """
     real_seq_idx = self._seq_index[self._index_map[sorted_seq_idx]]
-    return self._seq_lengths[real_seq_idx]
+    return self._get_seq_length_by_real_idx(real_seq_idx)
 
   def get_seq_length(self, seq_idx):
     """
