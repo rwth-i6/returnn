@@ -22,6 +22,12 @@ chunking
 
 cleanup_old_models
     If set to ``True``, checkpoints are removed based on their score on the dev set.
+    Per default, 2 recent, 4 best, and the checkpoints 20,40,80,160,240 are kept.
+    Can be set as a dictionary to specify additional options.
+
+        - ``keep_last_n``: integer defining how many recent checkpoints to keep
+        - ``keep_best_n``: integer defining how many best checkpoints to keep
+        - ``keep``: list or set of integers defining which checkpoints to keep
 
 max_seq_length
 

@@ -17,3 +17,9 @@ forward_override_hdf_output
 search_output_layer
     TODO...
 
+search_output_file
+    Defines where the search output is written to.
+
+search_output_file_format
+    The supported file formats are `txt` and `py`.
+

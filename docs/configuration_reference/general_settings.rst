@@ -67,6 +67,11 @@ task
 tf_log_memory_usage
     If set to ``True``, will display the current GPU memory usage when using the tensorflow backend.
 
+tf_log_dir
+    Defines the folder where the tensorflow/tensorboard logs are writting. Per default, the logs are written next to the models.
+    .. note::
+        has to be set specifically when loading a model from a folder without write permission
+
 train
     A dictionary specifying the training dataset. For details on datasets, see :ref:`dataset_reference`
 
