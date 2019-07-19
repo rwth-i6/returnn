@@ -425,6 +425,7 @@ class TFNetwork(object):
     """
     :param dict[str,dict[str]] net_dict:
     """
+    self.layers_desc.update(net_dict)
     for name, layer_desc in sorted(net_dict.items()):
       assert isinstance(name, str)
       if name in self._LayerNamesToIgnore:
@@ -541,7 +542,6 @@ class TFNetwork(object):
       layer_desc = net_dict[name]
     if not add_layer:
       add_layer = self.add_layer
-    self.layers_desc[name] = layer_desc
     layer_desc = layer_desc.copy()
     class_name = layer_desc.pop("class")
     layer_class = get_layer_class(class_name)

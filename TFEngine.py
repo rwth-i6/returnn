@@ -1073,7 +1073,6 @@ class Engine(EngineBase):
       net_params = network.get_params_list()
       for extra_param in network.extra_net.get_params_list():
         assert extra_param in net_params
-    network.layers_desc = net_dict
     updater = None
     if train_flag is not False:
       # Need to create new Updater because it has the learning_rate var which must be in the current graph.
