@@ -1005,7 +1005,7 @@ class _SubnetworkRecCell(object):
             return layer_
         if name.startswith("base:"):
           assert not is_prev
-          layer_ = self.parent_net.get_layer(name[len("base:"):])
+          layer_ = self._get_parent_layer(name[len("base:"):])
           if ConstructCtx.layers:
             ConstructCtx.layers[-1].add_dependency(layer_, is_prev_time_frame=False)
           return layer_
@@ -1155,6 +1155,13 @@ class _SubnetworkRecCell(object):
     # Don't print twice.
     self._template_construction_exceptions = None
 
+  def _get_parent_layer(self, layer_name):
+    """
+    :param str layer_name: without "base:" prefix
+    :rtype: LayerBase
+    """
+    return self.parent_net.get_layer(layer_name)
+
   def _construct(self, prev_outputs, prev_extra, i, data=None,
                  inputs_moved_out_tas=None, needed_outputs=("output",)):
     """
@@ -1257,7 +1264,7 @@ class _SubnetworkRecCell(object):
       if name.startswith("base:"):
         if name in extended_layers:
           return extended_layers[name]
-        layer = self.parent_net.get_layer(name[len("base:"):])
+        layer = self._get_parent_layer(name[len("base:"):])
         if self.parent_net.search_flag:
           if needed_beam_size:
             assert not layer.output.beam_size
@@ -1466,6 +1473,21 @@ class _SubnetworkRecCell(object):
         for dep in layer.get_dep_layers():
           maybe_add(dep)
     return ls
+
+  def _while_loop(self, cond, body, loop_vars, shape_invariants):
+    """
+    :param function cond:
+    :param function body:
+    :param T loop_vars:
+    :param S shape_invariants:
+    :rtype: T
+    """
+    return tf.while_loop(
+      cond=cond,
+      body=body,
+      loop_vars=loop_vars,
+      shape_invariants=shape_invariants,
+      back_prop=self.net.train_flag is not False)
 
   def get_output(self, rec_layer):
     """
@@ -2009,12 +2031,11 @@ class _SubnetworkRecCell(object):
       init_loop_vars += (init_seq_len_info,)
       shape_invariants += ((tf.TensorShape([None]), tf.TensorShape([None])),)
     if self.layers_in_loop:
-      final_loop_vars = tf.while_loop(
+      final_loop_vars = self._while_loop(
         cond=cond,
         body=body,
         loop_vars=init_loop_vars,
-        shape_invariants=shape_invariants,
-        back_prop=self.net.train_flag is not False)
+        shape_invariants=shape_invariants)
       if have_known_seq_len:
         _, final_net_vars, final_acc_tas = final_loop_vars
         assert fixed_seq_len is not None
@@ -2444,7 +2465,7 @@ class _SubnetworkRecCell(object):
       if name.startswith("prev:"):
         return get_prev_layer(name[len("prev:"):])
       if name.startswith("base:"):
-        return self.parent_net.layers[name[len("base:"):]]
+        return self._get_parent_layer(name[len("base:"):])
       # noinspection PyBroadException
       try:
         return self.input_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
@@ -2556,7 +2577,7 @@ class _SubnetworkRecCell(object):
       if name.startswith("prev:"):
         return get_prev_layer(name[len("prev:"):])
       if name.startswith("base:"):
-        return self.parent_net.get_layer(name[len("base:"):])
+        return self._get_parent_layer(name[len("base:"):])
       if name in self.input_layers_moved_out:
         return self.input_layers_net.get_layer(name)
       if name in self.output_layers_moved_out or name.startswith("data:"):
