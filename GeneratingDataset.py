@@ -2649,7 +2649,10 @@ class OggZipDataset(CachedDataset2):
       :param int i:
       :rtype: int
       """
-      return int(self._data[i]["duration"] * 100)
+      if self.feature_extractor:
+        return int(self._data[i]["duration"] / self.feature_extractor.step_len)
+      else:
+        return int(self._data[i]["duration"])
 
     if seq_list is not None:
       seqs = {seq["file"]: i for i, seq in enumerate(self._data) if seq["file"] in seq_list}
