@@ -58,7 +58,7 @@ class SprintDatasetBase(Dataset):
     :param dict[str,str|dict] target_maps: e.g. {"speaker": "speaker_map.txt"}
     :param bool str_add_final_zero: adds e.g. "orth0" with '\0'-ending
     :param float input_stddev: if != 1, will divide the input "data" by that
-    :param str|list[str]|None orth_post_process: :func:`get_post_processor_function`, applied on orth
+    :param str|list[str]|((str)->str)|None orth_post_process: :func:`get_post_processor_function`, applied on orth
     :param None|dict[str] bpe: if given, will be opts for :class:`BytePairEncoding`
     :param None|dict[str] orth_vocab: if given, orth_vocab is applied to orth and orth_classes is an available target`
     :param bool suppress_load_seqs_print: less verbose
@@ -77,10 +77,13 @@ class SprintDatasetBase(Dataset):
     self.str_add_final_zero = str_add_final_zero
     self.input_stddev = input_stddev
     self.labels["orth"] = [chr(i) for i in range(255)]
-    self.orth_post_process = None
+    self.orth_post_process = None  # type: typing.Optional[typing.Callable[[str],str]]
     if orth_post_process:
-      from LmDataset import get_post_processor_function
-      self.orth_post_process = get_post_processor_function(orth_post_process)
+      if callable(orth_post_process):
+        self.orth_post_process = orth_post_process
+      else:
+        from LmDataset import get_post_processor_function
+        self.orth_post_process = get_post_processor_function(orth_post_process)
     self.bpe = None
     if bpe:
       from GeneratingDataset import BytePairEncoding
