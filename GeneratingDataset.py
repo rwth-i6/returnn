@@ -2540,6 +2540,7 @@ class OggZipDataset(CachedDataset2):
   """
 
   def __init__(self, path, audio, targets,
+               targets_post_process=None,
                use_cache_manager=False,
                fixed_random_seed=None, fixed_random_subset=None,
                epoch_wise_filter=None,
@@ -2548,6 +2549,7 @@ class OggZipDataset(CachedDataset2):
     :param str path: filename to zip
     :param dict[str]|None audio: options for :class:`ExtractAudioFeatures`. use {} for default. None means to disable.
     :param dict[str] targets: options for :func:`Vocabulary.create_vocab` (e.g. :class:`BytePairEncoding`)
+    :param str|list[str]|((str)->str)|None targets_post_process: :func:`get_post_processor_function`, applied on orth
     :param bool use_cache_manager: uses :func:`Util.cf`
     :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'. otherwise epoch will be used
     :param float|int|None fixed_random_subset:
@@ -2577,6 +2579,13 @@ class OggZipDataset(CachedDataset2):
     self._name = name
     self.targets = Vocabulary.create_vocab(**targets)
     self.labels = {"classes": self.targets.labels}
+    self.targets_post_process = None  # type: typing.Optional[typing.Callable[[str],str]]
+    if targets_post_process:
+      if callable(targets_post_process):
+        self.targets_post_process = targets_post_process
+      else:
+        from LmDataset import get_post_processor_function
+        self.targets_post_process = get_post_processor_function(targets_post_process)
     self._fixed_random_seed = fixed_random_seed
     self._audio_random = numpy.random.RandomState(1)
     self.feature_extractor = (
@@ -2725,8 +2734,11 @@ class OggZipDataset(CachedDataset2):
     :rtype: (list[int], str)
     """
     seq = self._data[self._get_ref_seq_idx(seq_idx)]
-    targets_txt = seq["text"]
-    return self.targets.get_seq(targets_txt), targets_txt
+    raw_targets_txt = seq["text"]
+    targets_txt = raw_targets_txt
+    if self.targets_post_process:
+      targets_txt = self.targets_post_process(targets_txt)
+    return self.targets.get_seq(targets_txt), raw_targets_txt
 
   def _open_audio_file(self, seq_idx):
     """
