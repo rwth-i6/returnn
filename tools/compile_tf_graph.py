@@ -206,7 +206,7 @@ class RecStepByStepLayer(RecLayer):
       # This is not what we want. Also, it has a cycle check which is extremely inefficient and basically just hangs.
       # Instead, we need an initializer which has the right undefined dimensions.
       zero_initializer = tf.zeros(
-        [d if (d is not None) else tf.constant(1) * tf.constant(1) for d in self.var_data_shape.batch_shape],
+        [d if (d is not None) else tf.square(tf.constant(1)) for d in self.var_data_shape.batch_shape],
         dtype=self.var_data_shape.dtype)
       zero_initializer.set_shape(self.var_data_shape.batch_shape)
       assert zero_initializer.shape.as_list() == list(self.var_data_shape.batch_shape)
