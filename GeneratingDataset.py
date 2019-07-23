@@ -2646,13 +2646,13 @@ class OggZipDataset(CachedDataset2):
 
     def get_seq_len(i):
       """
+      Returns the length based on the duration entry of the dataset,
+      multiplied by 100 to avoid similar rounded durations.
+      It is also used when using the dataset in text-only-mode (`audio` is None).
       :param int i:
       :rtype: int
       """
-      if self.feature_extractor:
-        return int(self._data[i]["duration"] / self.feature_extractor.step_len)
-      else:
-        return int(self._data[i]["duration"])
+      return int(self._data[i]["duration"] * 100)
 
     if seq_list is not None:
       seqs = {seq["file"]: i for i, seq in enumerate(self._data) if seq["file"] in seq_list}
