@@ -76,6 +76,11 @@ class SprintDatasetBase(Dataset):
     self.target_maps = target_maps
     self.str_add_final_zero = str_add_final_zero
     self.input_stddev = input_stddev
+    # Note: "orth" is actually the raw bytes of the utf8 string,
+    # so it does not make quite sense to associate a single str to each byte.
+    # However, some other code might expect that the labels are all strings, not bytes,
+    # and the API requires the labels to be strings.
+    # The code in Dataset.serialize_data tries to decode this case as utf8 (if possible).
     self.labels["orth"] = [chr(i) for i in range(255)]
     self.orth_post_process = None  # type: typing.Optional[typing.Callable[[str],str]]
     if orth_post_process:

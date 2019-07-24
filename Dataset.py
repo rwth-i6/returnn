@@ -736,8 +736,19 @@ class Dataset(object):
     """
     :param str key: e.g. "classes". self.labels[key] should be set
     :param numpy.ndarray data: 1D
+    :rtype: str
     """
-    return " ".join(map(self.labels[key].__getitem__, data))
+    labels = self.labels[key]
+    if len(labels) < 1000 and all([len(l) == 1 for l in labels]):
+      # are these actually raw bytes? -> assume utf8
+      if all([ord(l) <= 255 for l in labels]):
+        try:
+          return bytes(ord(labels[c]) for c in data).decode("utf8")
+        except UnicodeDecodeError:
+          pass  # pass on to default case
+      return "".join(map(labels.__getitem__, data))
+    else:
+      return " ".join(map(labels.__getitem__, data))
 
   def calculate_priori(self, target="classes"):
     """

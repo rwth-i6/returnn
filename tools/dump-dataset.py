@@ -136,12 +136,8 @@ def dump_dataset(dataset, options):
         elif options.type == "stdout":
           extra = ""
           if target in dataset.labels and len(dataset.labels[target]) > 1:
-            labels = dataset.labels[target]
-            if len(labels) < 1000 and all([len(l) == 1 for l in labels]):
-              join_str = ""
-            else:
-              join_str = " "
-            extra += " (%r)" % join_str.join(map(dataset.labels[target].__getitem__, targets))
+            assert dataset.can_serialize_data(target)
+            extra += " (%r)" % dataset.serialize_data(key=target, data=targets)
           print("seq %i target %r: %s%s" % (seq_idx, target, pretty_print(targets), extra))
         elif options.type == "print_shape":
           print("seq %i target %r shape:" % (seq_idx, target), targets.shape)
