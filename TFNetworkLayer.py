@@ -317,16 +317,20 @@ class LayerBase(object):
     # If you want to have it different in your layer, just overwrite it.
     common_source = Data.get_common_data([s.output for s in sources if s])
     if not output.size_placeholder:
-      if common_source and common_source.matches_var_dim_pattern(output):
+      if network.eval_flag and size_target:
+        output.size_placeholder = cls._static_get_target_value(
+          target=size_target,
+          _target_layers=_target_layers,
+          network=network, mark_data_key_as_used=network.eval_flag).size_placeholder.copy()
+      elif common_source and common_source.matches_var_dim_pattern(output):
         output.size_placeholder = common_source.size_placeholder.copy()
-      elif target or size_target:
-        if network.train_flag is not False:
-          # TODO: In training, this is ok. Maybe as well as for eval but not clear.
-          # In forward, mark_data_key_as_used=False should be used and anyway that target value is not available.
-          output.size_placeholder = cls._static_get_target_value(
-            target=(target[0] if (target and isinstance(target, list)) else target) or size_target,
-            _target_layers=_target_layers,
-            network=network, mark_data_key_as_used=network.train_flag is not False).size_placeholder.copy()
+      elif network.train_flag is not False and target:
+        # TODO: In training, this is ok. Maybe as well as for eval but not clear.
+        # In forward, mark_data_key_as_used=False should be used and anyway that target value is not available.
+        output.size_placeholder = cls._static_get_target_value(
+          target=(target[0] if (target and isinstance(target, list)) else target),
+          _target_layers=_target_layers,
+          network=network, mark_data_key_as_used=network.train_flag is not False).size_placeholder.copy()
     if any([(src and not src.output.available_for_inference) for src in sources if src]):
       output.available_for_inference = False
 
