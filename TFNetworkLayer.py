@@ -234,7 +234,7 @@ class LayerBase(object):
         network=network, name=name, n_out=n_out, target=target, size_target=size_target, sources=sources, loss=loss,
         **kwargs)
     if out_type is None:
-      out_type = {}
+      out_type = {}  # type: typing.Dict[str]
     else:
       out_type = out_type.copy()
     out_type.setdefault("name", "%s_output" % name)
@@ -1208,7 +1208,8 @@ class LayerBase(object):
         src_output = src.output.copy()
         if src_output.placeholder is not None:
           zeroed_src_shape = tf.shape(src_output.placeholder)
-          zeroed_src_shape = [zeroed_src_shape[i] for i in range(src_output.batch_ndim)]
+          zeroed_src_shape = [
+            zeroed_src_shape[i] for i in range(src_output.batch_ndim)]  # type: typing.List[typing.Union[tf.Tensor,int]]
         else:
           zeroed_src_shape = [(d if (d is not None) else 1) for d in src_output.batch_shape]
         if src_output.batch_dim_axis is not None:
@@ -3788,6 +3789,7 @@ class ConvLayer(_ConcatInputLayer):
     :param str padding: "same" or "valid"
     :param int|tuple[int] strides: strides for the spatial dims,
       i.e. length of this tuple should be the same as filter_size, or a single int.
+    :param int|tuple[int] dilation_rate: dilation for the spatial dims
     :param int input_expand_dims: number of dynamic dims to add to the input
     :param bool input_add_feature_dim: will add a dim at the end and use input-feature-dim == 1,
       and use the original input feature-dim as a spatial dim.
