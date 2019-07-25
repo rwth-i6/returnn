@@ -7,7 +7,7 @@ from __future__ import print_function
 
 from Dataset import Dataset, DatasetSeq, convert_data_dims
 from CachedDataset2 import CachedDataset2
-from Util import class_idx_seq_to_1_of_k, CollectionReadCheckCovered
+from Util import class_idx_seq_to_1_of_k, CollectionReadCheckCovered, PY3
 from Log import log
 import numpy
 import re
@@ -1778,6 +1778,11 @@ class Vocabulary(object):
         d = pickle.load(open(filename, "rb"))
       else:
         d = eval(open(filename, "r").read())
+        if not PY3:
+          # Any utf8 string will not be a unicode string automatically, so enforce this.
+          assert isinstance(d, dict)
+          from Util import py2_utf8_str_to_unicode
+          d = {py2_utf8_str_to_unicode(s): i for (s, i) in d.items()}
       assert isinstance(d, dict)
       assert self.unknown_label is None or self.unknown_label in d
       labels = {idx: label for (label, idx) in sorted(d.items())}
@@ -1879,7 +1884,7 @@ class BytePairEncoding(Vocabulary):
         [int(x) for x in re.sub(r'(\.0+)*$', '', bpe_file_first_line.split()[-1]).split(".")])
     else:
       self._bpe_file_version = (0, 1)
-    self._bpe_codes = [tuple(item.split()) for item in open(bpe_file, "r").read().splitlines()]
+    self._bpe_codes = [tuple(item.split()) for item in open(bpe_file, "rb").read().decode("utf8").splitlines()]
     # some hacking to deal with duplicates (only consider first instance)
     self._bpe_codes = dict([(code, i) for (i, code) in reversed(list(enumerate(self._bpe_codes)))])
     self._bpe_codes_reverse = dict([(pair[0] + pair[1], pair) for pair, i in self._bpe_codes.items()])

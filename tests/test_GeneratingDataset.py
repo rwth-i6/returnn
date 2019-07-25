@@ -113,6 +113,37 @@ def test_StaticDataset_utf8():
   assert_equal(s, s_serialized)
 
 
+def test_BytePairEncoding_unicode():
+  bpe = BytePairEncoding(
+    bpe_file="%s/bpe-unicode-demo.codes" % my_dir,
+    vocab_file="%s/bpe-unicode-demo.vocab" % my_dir,
+    unknown_label="<unk>")
+  assert_equal(bpe.num_labels, 189)
+  assert_equal(bpe.labels[5], "z")
+  assert_equal(bpe.vocab["z"], 5)
+  assert_equal(bpe._bpe_codes[("n", "d</w>")], 1)
+  assert_equal(bpe.labels[6], u"å")
+  assert_equal(bpe.vocab[u"å"], 6)
+  assert_equal(bpe._bpe_codes[(u"à", u"nd</w>")], 2)
+
+  def get_bpe_seq(text):
+    """
+    :param str text:
+    :rtype: str
+    """
+    bpe_label_seq = bpe.get_seq(text)
+    res = " ".join(bpe.labels[i] for i in bpe_label_seq)
+    print("%r -> %r" % (text, res))
+    return res
+
+  assert_equal(get_bpe_seq("kod"), "k@@ o@@ d")  # str
+  assert_equal(get_bpe_seq(u"kod"), u"k@@ o@@ d")  # unicode
+  assert_equal(get_bpe_seq(u"råt"), u"råt")
+  assert_equal(
+    get_bpe_seq(u"råt råt iz ďër iz ďër ám àn iz ďër ë låk ë kod áv dres wër yù wêk dù ďë àsk"),
+    u"råt råt iz ďër iz ďër ám à@@ n iz ďër ë låk ë k@@ o@@ d áv d@@ r@@ e@@ s w@@ ër yù w@@ ê@@ k dù ďë à@@ s@@ k")
+
+
 if __name__ == "__main__":
   better_exchook.install()
   if len(sys.argv) <= 1:

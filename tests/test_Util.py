@@ -1,6 +1,10 @@
+# -*- coding: utf8 -*-
 
 import sys
-sys.path += ["."]  # Python 3 hack
+import os
+
+my_dir = os.path.dirname(os.path.realpath(__file__))
+sys.path += [my_dir + "/.."]  # Python 3 hack
 
 from nose.tools import assert_equal, assert_not_equal, assert_raises, assert_true, assert_is
 from numpy.testing.utils import assert_almost_equal
@@ -259,6 +263,14 @@ def test_simple_obj_repr():
   x_repr = repr(x)
 
   assert_equal(x_repr, "X(a=42, b=13)")
+
+
+@unittest.skipIf(PY3, "only for Python 2")
+def test_py2_utf8_str_to_unicode():
+  assert_equal(py2_utf8_str_to_unicode("a"), "a")
+  assert_is(type(py2_utf8_str_to_unicode("a")), str)
+  assert_equal(py2_utf8_str_to_unicode("äöü"), u"äöü")
+  assert_is(type(py2_utf8_str_to_unicode("äöü")), unicode)
 
 
 if __name__ == "__main__":

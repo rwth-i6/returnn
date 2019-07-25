@@ -1,3 +1,4 @@
+# -*- coding: utf8 -*-
 
 """
 Various generic utilities, which are shared across different backend engines.
@@ -2114,6 +2115,27 @@ def as_str(s):
     # noinspection PyUnresolvedReferences
     return s.decode("utf8")
   assert False, "unknown type %s" % type(s)
+
+
+def py2_utf8_str_to_unicode(s):
+  """
+  :param str s: e.g. the string literal "äöü" in Python 3 is correct, but in Python 2 it should have been u"äöü",
+    but just using "äöü" will actually be the raw utf8 byte sequence.
+    This can happen when you eval() some string.
+    We assume that you are using Python 2, and got the string (not unicode object) "äöü", or maybe "abc".
+  :return: if it is indeed unicode, it will return the unicode object, otherwise it keeps the string
+  :rtype: str|unicode
+  """
+  assert not PY3
+  assert isinstance(s, str)
+  try:
+    # noinspection PyUnresolvedReferences
+    s.decode("ascii")
+    return s
+  except UnicodeDecodeError:
+    pass
+  # noinspection PyUnresolvedReferences
+  return s.decode("utf8")
 
 
 def deepcopy(x):
