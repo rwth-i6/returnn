@@ -15,11 +15,6 @@ import shutil
 from subprocess import check_call
 
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
-
-
 class BlissItem:
   def __init__(self, segment_name, recording_filename, start_time, end_time, orth, speaker_name=None):
     """
