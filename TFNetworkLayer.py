@@ -4601,6 +4601,42 @@ class PrefixInTimeLayer(CopyLayer):
     self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] += repeat
 
 
+class PostfixInTimeLayer(CopyLayer):
+  """
+  Adds some postfix in time dimension.
+  """
+  layer_class = "postfix_in_time"
+  recurrent = True
+
+  def __init__(self, postfix=0.0, repeat=1, **kwargs):
+    """
+    :param float|int postfix: constant
+    :param int repeat: how often to repeat the postfix
+    """
+    super(PostfixInTimeLayer, self).__init__(**kwargs)
+    assert self.output.time_dim_axis is not None
+    assert isinstance(postfix, (float, int)), "other layer src not yet supported"
+    c = tf.constant(postfix, dtype=self.output.dtype)
+    added_shape = [
+      ((self.output.batch_shape[i] or tf.shape(self.output.placeholder)[i])
+       if (i != self.output.time_dim_axis)
+       else repeat)
+      for i in range(self.output.batch_ndim)]
+    x = tf.concat(
+      [self.output.placeholder, tf.zeros(added_shape, dtype=self.output.dtype)],
+      axis=self.output.time_dim_axis)  # make enough space
+    seq_len = self.output.size_placeholder[self.output.time_dim_axis_excluding_batch]  # (B,)
+    seq_len_bc = tf.reshape(
+      seq_len, [1 if (i != self.output.batch_dim_axis) else -1 for i in range(self.output.batch_ndim)])  # (1,..B..,1)
+    time_idxs = tf.range(tf.shape(x)[self.output.time_dim_axis])
+    time_idxs_bc = tf.reshape(
+      time_idxs, [1 if (i != self.output.time_dim_axis) else -1 for i in range(self.output.batch_ndim)])  # (1,..T..,1)
+    mask = tf.less(time_idxs_bc, seq_len_bc)
+    from TFUtil import where_bc
+    self.output.placeholder = where_bc(mask, x, c)
+    self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] = seq_len + repeat
+
+
 class TimeChunkingLayer(_ConcatInputLayer):
   """
   Performs chunking in time. See :func:`TFNativeOp.chunk`.
