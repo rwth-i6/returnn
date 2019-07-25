@@ -99,6 +99,7 @@ class RecStepByStepLayer(RecLayer):
       - Set the stochastic state var `"stochastic_var_choice_%s" % name` to the selected values (label indices).
       - If the beam has multiple items, i.e. the batch dimension changed, you must make sure
         that all further used state variables will also have the same batch dim.
+      - You can use "select_src_beams" to select the new states given the choices.
     * Do a single session run for the next values of these state vars:
       "i", "end_flag" (if existing), "dyn_seq_len" (if existing), "state_*" (multiple vars).
       These are also the state vars which will get updated in every further recurrent step.
@@ -137,6 +138,8 @@ class RecStepByStepLayer(RecLayer):
     init_ops = []
     tile_batch_repetitions = tf.placeholder(name="tile_batch_repetitions", shape=(), dtype=tf.int32)
     tile_batch_ops = []
+    src_beams = tf.placeholder(name="src_beams", shape=(None, None), dtype=tf.int32)  # (batch,beam)
+    select_src_beams_ops = []
     next_step_ops = []
     print("State vars:")
     for name, var in sorted(rec_layer.state_vars.items()):
@@ -150,6 +153,7 @@ class RecStepByStepLayer(RecLayer):
       if not name.startswith("stochastic_var_"):
         init_ops.append(var.init_op())
         tile_batch_ops.append(var.tile_batch_op(tile_batch_repetitions))
+        select_src_beams_ops.append(var.select_src_beams_op(src_beams=src_beams))
       if not name.startswith("stochastic_var_") and not name.startswith("base_"):
         next_step_ops.append(var.final_op())
     info["init_op"] = tf.group(*init_ops, name="rec_step_by_step_init_op").name
@@ -157,6 +161,9 @@ class RecStepByStepLayer(RecLayer):
     info["tile_batch"] = {
       "op": tf.group(*tile_batch_ops, name="rec_step_by_step_tile_batch_op").name,
       "repetitions_placeholder": tile_batch_repetitions.op.name}
+    info["select_src_beams"] = {
+      "op": tf.group(*select_src_beams_ops, name="rec_step_by_step_select_src_beams_op").name,
+      "src_beams_placeholder": src_beams.op.name}
     print("Stochastic vars, and their order:")
     for name in rec_layer.stochastic_var_order:
       print(" %s" % name)
@@ -275,6 +282,18 @@ class RecStepByStepLayer(RecLayer):
       tiled_value = tile_transposed(
         self.var.read_value(), axis=self.var_data_shape.batch_dim_axis, multiples=repetitions)
       return tf.assign(self.var, tiled_value, name="tile_batch_state_var_%s" % self.name).op
+
+    def select_src_beams_op(self, src_beams):
+      """
+      :param tf.Tensor src_beams: (batch, beam) -> src-beam-idx
+      :return: op which select the beams in the state var
+      :rtype: tf.Operation
+      """
+      if self.var_data_shape.batch_dim_axis is None:
+        return tf.no_op(name="select_src_beams_state_var_no_op_%s" % self.name)
+      from TFUtil import select_src_beams
+      v = select_src_beams(self.var.read_value(), src_beams=src_beams)
+      return tf.assign(self.var, v, name="select_src_beams_state_var_%s" % self.name).op
 
   def __init__(self, **kwargs):
     kwargs = kwargs.copy()
