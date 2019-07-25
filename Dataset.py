@@ -24,7 +24,7 @@ import typing
 
 from Log import log
 from EngineBatch import Batch, BatchSetGenerator
-from Util import try_run, NumbersDict, unicode, OptionalNotImplementedError
+from Util import PY3, try_run, NumbersDict, unicode, OptionalNotImplementedError
 
 
 class Dataset(object):
@@ -743,7 +743,10 @@ class Dataset(object):
       # are these actually raw bytes? -> assume utf8
       if all([ord(l) <= 255 for l in labels]):
         try:
-          return bytes(ord(labels[c]) for c in data).decode("utf8")
+          if PY3:
+            return bytes([ord(labels[c]) for c in data]).decode("utf8")
+          else:
+            return b"".join([bytes(labels[c]) for c in data]).decode("utf8")
         except UnicodeDecodeError:
           pass  # pass on to default case
       return "".join(map(labels.__getitem__, data))

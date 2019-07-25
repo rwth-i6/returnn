@@ -1,12 +1,17 @@
+# -*- coding: utf8 -*-
 
+from __future__ import print_function
+import os
 import sys
-sys.path += ["."]  # Python 3 hack
+
+my_dir = os.path.dirname(os.path.realpath(__file__))
+sys.path += [my_dir + "/.."]  # Python 3 hack
 
 import unittest
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 from GeneratingDataset import *
 from Dataset import DatasetSeq
-import numpy as np
+from Util import PY3, unicode
 import os
 import unittest
 
@@ -79,6 +84,33 @@ def test_StaticDataset_custom_keys_with_dims():
   dataset.load_seqs(0, 1)
   assert_equal(list(dataset.get_data(0, "source")), [1, 2, 3])
   assert_equal(list(dataset.get_data(0, "target")), [3, 4, 5, 6, 7])
+
+
+def test_StaticDataset_utf8():
+  s = u"wër"
+  print("some unicode str:", s, "repr:", repr(s), "type:", type(s), "len:", len(s))
+  assert len(s) == 3
+  if PY3:
+    assert isinstance(s, str)
+    s_byte_list = list(s.encode("utf8"))
+  else:
+    assert isinstance(s, unicode)
+    s_byte_list = list(map(ord, s.encode("utf8")))
+  print("utf8 byte list:", s_byte_list)
+  assert len(s_byte_list) == 4 > 3
+  raw = numpy.array(s_byte_list, dtype="uint8")
+  assert_equal(raw.tolist(), [119, 195, 171, 114])
+  data = StaticDataset([{"data": raw}], output_dim={"data": (255, 1)})
+  if "data" not in data.labels:
+    data.labels["data"] = [chr(i) for i in range(255)]  # like in SprintDataset
+  data.init_seq_order(epoch=1)
+  data.load_seqs(0, 1)
+  raw_ = data.get_data(seq_idx=0, key="data")
+  assert_equal(raw.tolist(), raw_.tolist())
+  assert data.can_serialize_data(key="data")
+  s_serialized = data.serialize_data(key="data", data=raw)
+  print("serialized:", s_serialized, "repr:", repr(s_serialized), "type:", type(s_serialized))
+  assert_equal(s, s_serialized)
 
 
 if __name__ == "__main__":
