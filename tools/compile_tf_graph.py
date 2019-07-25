@@ -204,12 +204,11 @@ class RecStepByStepLayer(RecLayer):
       # it uses _try_guard_against_uninitialized_dependencies internally,
       # which replace references to variables in `initial_value` with references to the variable's initialized values.
       # This is not what we want. Also, it has a cycle check which is extremely inefficient and basically just hangs.
-      # Instead, we need an initializer which has the right undefined dimensions.
+      # Instead, some dummy initializer. The shape should not matter.
       zero_initializer = tf.zeros(
-        [d if (d is not None) else tf.square(tf.constant(1)) for d in self.var_data_shape.batch_shape],
+        [d if (d is not None) else 1 for d in self.var_data_shape.batch_shape],
         dtype=self.var_data_shape.dtype)
       zero_initializer.set_shape(self.var_data_shape.batch_shape)
-      assert zero_initializer.shape.as_list() == list(self.var_data_shape.batch_shape)
       self.var = tf.get_variable(name=name, initializer=zero_initializer, validate_shape=False)  # type: tf.Variable
       self.var.set_shape(self.var_data_shape.batch_shape)
       assert self.var.shape.as_list() == list(self.var_data_shape.batch_shape)
