@@ -6899,7 +6899,8 @@ class CrossEntropyLoss(Loss):
             out = py_print(out, [tf.exp(tf.negative(out))], summarize=10000, message='target prob ')
         else:
           assert not self.label_smoothing, "not implemented"
-          print("Warning: using numerical unstable sparse Cross-Entropy loss calculation", file=log.v3)
+          print("Warning: using numerical unstable sparse Cross-Entropy loss calculation (%s to %s)" % (
+            self.output, self.target), file=log.v3)
           out = -safe_log(self.get_output_target_scores(), **self.safe_log_opts)
         if self.focal_loss_factor:
           out *= (1.0 - self.get_output_target_scores()) ** self.focal_loss_factor
