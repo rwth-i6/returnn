@@ -73,8 +73,7 @@ class HDFDataset(CachedDataset):
       self.labels = {'classes': labels}
       assert len(self.labels['classes']) == len(labels), "expected " + str(len(self.labels['classes'])) + " got " + str(len(labels))
     self.files.append(filename)
-    if self.cache_byte_size_total_limit == 0:
-      self.h5_files.append(fin)
+    self.h5_files.append(fin)
     print("parsing file", filename, file=log.v5)
     if 'times' in fin:
       if self.timestamps is None:
@@ -156,8 +155,6 @@ class HDFDataset(CachedDataset):
           self.num_outputs[str(name)] = (dim, ndim)
     self.data_dtype["data"] = str(fin['inputs'].dtype)
     assert len(self.target_keys) == len(self.file_seq_start[0][0]) - 1
-    if self.cache_byte_size_total_limit > 0:
-      fin.close()  # we always reopen them
 
   def _load_seqs(self, start, end):
     """
@@ -191,7 +188,7 @@ class HDFDataset(CachedDataset):
         continue
       if start == 0 or self.cache_byte_size_total_limit > 0:  # suppress with disabled cache
         print("loading file %d/%d (seq range %i-%i)" % (i+1, len(self.files), start, end), self.files[i], file=log.v4)
-      fin = h5py.File(self.files[i], 'r')
+      fin = self.h5_files[i]
       inputs = fin['inputs']
       targets = None
       if 'targets' in fin:
@@ -209,7 +206,6 @@ class HDFDataset(CachedDataset):
             self.targets[k][self.get_seq_start(idc)[ldx]:self.get_seq_start(idc)[ldx] + q[ldx] - p[ldx]] = targets[k][p[ldx] : q[ldx]]
         self._set_alloc_intervals_data(idc, data=inputs[p[0] : q[0]])
         self.preload_set.add(idc)
-      fin.close()
     gc.collect()
 
   def get_data(self, seq_idx, key):
