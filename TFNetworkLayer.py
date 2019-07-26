@@ -2637,8 +2637,8 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
       energy = where_bc(energy_mask, energy, float("-inf"), name="energy_masked")
     if energy_factor:
       energy = tf.multiply(energy, energy_factor, name="energy_scaled")
-    weights = tf.nn.softmax(energy)  # (...,T)
-    self.output.placeholder = weights
+    self.output_before_activation = OutputWithActivation(energy, act_func=tf.nn.softmax)  # (...,T)
+    self.output.placeholder = self.output_before_activation.y
 
   def get_dep_layers(self):
     """
