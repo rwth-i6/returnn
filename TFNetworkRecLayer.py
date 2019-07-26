@@ -2532,7 +2532,11 @@ class _SubnetworkRecCell(object):
           loop_accumulated["output_%s" % name], stop=max_len)  # e.g. (time,batch,dim)
         output.size_placeholder = {0: seq_len}
         if output.beam_size:
-          output.size_placeholder[0] = tile_transposed(seq_len, axis=0, multiples=output.beam_size)
+          if self.parent_rec_layer.output.beam_size:
+            # seq_len should have already a beam, same as rec_layer.output
+            assert output.beam_size == self.parent_rec_layer.output.beam_size
+          else:
+            output.size_placeholder[0] = tile_transposed(seq_len, axis=0, multiples=output.beam_size)
         if inner_layer.output.size_placeholder:
           for i, size in inner_layer.output.size_placeholder.items():
             if not has_control_flow_context(size):  # copy if this size comes from outside the loop
