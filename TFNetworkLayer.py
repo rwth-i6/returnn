@@ -3683,7 +3683,11 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     """
     super(ReinterpretDataLayer, self).__init__(**kwargs)
     self.size_base = size_base
-    # All is done already in get_out_data_from_opts().
+    self.output.placeholder = self.input_data.placeholder
+    if len(self.sources) == 1:
+      self.output_loss = self.sources[0].output_loss
+      if not self.dropout:
+        self.output_before_activation = self.sources[0].output_before_activation
 
   def get_dep_layers(self):
     """
