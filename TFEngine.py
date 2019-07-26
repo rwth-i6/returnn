@@ -1276,7 +1276,10 @@ class Engine(EngineBase):
       self.learning_rate_control.save()
 
     print(
-      self.get_epoch_str(), "score:", self.format_score(trainer.score), "elapsed:", hms(trainer.elapsed), file=log.v1)
+      self.get_epoch_str(),
+      "score:", self.format_score(trainer.score),
+      "error:", self.format_score(trainer.error),
+      "elapsed:", hms(trainer.elapsed), file=log.v1)
     self.eval_model()
 
     if self.config.bool_or_other("cleanup_old_models", None):
