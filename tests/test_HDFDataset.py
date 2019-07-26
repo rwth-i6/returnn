@@ -355,6 +355,7 @@ def dummy_iter_dataset(dataset):
     dataset.load_seqs(seq_idx, seq_idx + 1)
     for key in data_keys:
       dataset.get_data(seq_idx=seq_idx, key=key)
+      dataset.get_tag(seq_idx)
     seq_idx += 1
   print("Iterated through %r, num seqs %i" % (dataset, seq_idx))
 
