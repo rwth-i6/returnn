@@ -6009,10 +6009,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
         assert 4 * self._num_units == out_dim
         bias_init[2*self._num_units:3*self._num_units] = [self.forget_bias] * self._num_units
       bias = tf.get_variable("bias_" + name, shape=[out_dim], initializer=tf.constant_initializer(bias_init))
-      if self.config.is_true('deterministic_train') and tf.test.is_gpu_available:
-        out = tf.math.add(out, bias)
-      else:
-        out = tf.nn.bias_add(out, bias)  # faster than math.add but not deterministic on GPU
+      out += bias
     return out
 
   def _get_dropout_mask(self, dropout):
