@@ -983,7 +983,7 @@ class TFNetwork(object):
 
   def _get_all_layers(self):
     """
-    :return: all layers, including extra net
+    :return: all layers, including extra net (but excluding layers which already exist in self)
     :rtype: list[LayerBase]
     """
     layers = []
@@ -1134,9 +1134,8 @@ class TFNetwork(object):
     Note that this excludes auxiliary params.
     """
     layers = {}  # type: typing.Dict[str,typing.Dict[str,numpy.ndarray]]
-    for layer_name, layer in self.layers.items():
-      assert isinstance(layer, LayerBase)
-      layers[layer_name] = layer.get_param_values_dict(session)
+    for layer in self._get_all_layers():
+      layers[layer.name] = layer.get_param_values_dict(session)
     return layers
 
   def set_param_values_by_dict(self, values_dict, ignore_non_existing=False, **kwargs):
@@ -1147,12 +1146,13 @@ class TFNetwork(object):
 
     Note that this excludes auxiliary params.
     """
+    layers = {layer.name: layer for layer in self._get_all_layers()}  # type: typing.Dict[str,LayerBase]
     for layer_name, layer_values_dict in values_dict.items():
       if layer_values_dict:
-        if ignore_non_existing and layer_name not in self.layers:
+        if ignore_non_existing and layer_name not in layers:
           print("Will not set layer %r because it does not exist." % (layer_name,), file=log.v3)
           continue
-        self.layers[layer_name].set_param_values_by_dict(values_dict=layer_values_dict, **kwargs)
+        layers[layer_name].set_param_values_by_dict(values_dict=layer_values_dict, **kwargs)
 
   def get_auxiliary_params(self):
     """
