@@ -4118,7 +4118,6 @@ class ReduceLayer(_ConcatInputLayer):
     from TFUtil import expand_multiple_dims
     super(ReduceLayer, self).__init__(**kwargs)
     if axis is not None:
-      print("reduce layer %r: option 'axis' is deprecated, use 'axes' instead" % kwargs["name"], file=log.v4)
       assert axes is None, "don't provide both 'axes' and 'axis', layer %r" % kwargs["name"]
       axes = axis
     if enforce_batch_dim_axis is None and self.need_enforce_batch_dim_axis(axes):
@@ -4236,11 +4235,13 @@ class ReduceLayer(_ConcatInputLayer):
     return axis
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, axes=None, axis=None, keep_dims=False, enforce_batch_dim_axis=None,
+  def get_out_data_from_opts(cls, name, sources, mode="", axes=None, axis=None, keep_dims=False,
+                             enforce_batch_dim_axis=None,
                              **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
+    :param str mode: (default here "" because other code uses this function)
     :param str|list[str]|None axes:
     :param str|None axis:
     :param bool keep_dims:
@@ -4280,14 +4281,16 @@ class ReduceLayer(_ConcatInputLayer):
           out_time_dim_axis -= 1
         if out_feature_dim_axis and out_feature_dim_axis is not NotSpecified and i < out_feature_dim_axis:
           out_feature_dim_axis -= 1
+    sparse_out = mode.lower().startswith("arg")
     return Data(
       name="%s_output" % name,
       shape=y_shape,
       batch_dim_axis=out_batch_dim_axis,
       time_dim_axis=out_time_dim_axis,
       feature_dim_axis=out_feature_dim_axis,
-      dtype=x.dtype,
-      sparse=False,
+      dtype="int32" if sparse_out else x.dtype,
+      sparse=sparse_out,
+      dim=x.batch_shape[axes[0]] if sparse_out else NotSpecified,
       beam_size=x.beam_size)
 
 
