@@ -3457,6 +3457,10 @@ class SplitBatchTimeLayer(_ConcatInputLayer):
     assert data.batch_dim_axis == 0
     data.time_dim_axis = 1
     data.shape = (None,) + data.shape
+    if data.feature_dim_axis_or_unspecified is not NotSpecified:
+      data.feature_dim_axis += 1
+      data.dim = data.batch_shape[data.feature_dim_axis]
+    data.sanity_check()
     return data
 
 
