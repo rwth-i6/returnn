@@ -2544,18 +2544,19 @@ class OggZipDataset(CachedDataset2):
   Generic dataset which reads a Zip file containing Ogg files for each sequence.
   """
 
-  def __init__(self, path, audio, targets,
+  def __init__(self, path, audio, targets=None,
                targets_post_process=None,
-               use_cache_manager=False,
+               use_cache_manager=False, segment_file=None,
                fixed_random_seed=None, fixed_random_subset=None,
                epoch_wise_filter=None,
                **kwargs):
     """
     :param str path: filename to zip
     :param dict[str]|None audio: options for :class:`ExtractAudioFeatures`. use {} for default. None means to disable.
-    :param dict[str] targets: options for :func:`Vocabulary.create_vocab` (e.g. :class:`BytePairEncoding`)
+    :param dict[str]|None targets: options for :func:`Vocabulary.create_vocab` (e.g. :class:`BytePairEncoding`)
     :param str|list[str]|((str)->str)|None targets_post_process: :func:`get_post_processor_function`, applied on orth
     :param bool use_cache_manager: uses :func:`Util.cf`
+    :param str|None segment_file: an uncompressed segment whitelisting file containing lines corresponding to seq_name
     :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'. otherwise epoch will be used
     :param float|int|None fixed_random_subset:
       Value in [0,1] to specify the fraction, or integer >=1 which specifies number of seqs.
@@ -2576,28 +2577,37 @@ class OggZipDataset(CachedDataset2):
       assert ext == ".zip"
       self._zip_file = zipfile.ZipFile(path)
     kwargs.setdefault("name", name)
+    self.segment_file = segment_file
     super(OggZipDataset, self).__init__(**kwargs)
     if use_cache_manager:
       assert self._zip_file is not None, "cache manager only for zip file"
       path = Util.cf(path)
     self.path = path
     self._name = name
-    self.targets = Vocabulary.create_vocab(**targets)
-    self.labels = {"classes": self.targets.labels}
-    self.targets_post_process = None  # type: typing.Optional[typing.Callable[[str],str]]
-    if targets_post_process:
-      if callable(targets_post_process):
-        self.targets_post_process = targets_post_process
-      else:
-        from LmDataset import get_post_processor_function
-        self.targets_post_process = get_post_processor_function(targets_post_process)
+    if targets:
+      self.targets = Vocabulary.create_vocab(**targets)
+      self.labels = {"classes": self.targets.labels}
+      self.targets_post_process = None  # type: typing.Optional[typing.Callable[[str],str]]
+      if targets_post_process:
+        if callable(targets_post_process):
+          self.targets_post_process = targets_post_process
+        else:
+          from LmDataset import get_post_processor_function
+          self.targets_post_process = get_post_processor_function(targets_post_process)
+    else:
+      self.targets = None
+      self.labels = {}
+
     self._fixed_random_seed = fixed_random_seed
     self._audio_random = numpy.random.RandomState(1)
     self.feature_extractor = (
       ExtractAudioFeatures(random_state=self._audio_random, **audio) if audio is not None else None)
     self.num_inputs = self.feature_extractor.get_feature_dimension() if self.feature_extractor else 0
-    self.num_outputs = {
-      "classes": [self.targets.num_labels, 1], "raw": {"dtype": "string", "shape": ()}}
+    if targets:
+      self.num_outputs = {
+        "classes": [self.targets.num_labels, 1], "raw": {"dtype": "string", "shape": ()}}
+    else:
+      self.num_outputs = {}
     if self.feature_extractor:
       self.num_outputs["data"] = [self.num_inputs, 2]
     self._data = self._collect_data()
@@ -2621,13 +2631,33 @@ class OggZipDataset(CachedDataset2):
     :return: entries
     :rtype: list[dict[str]]
     """
-    data = eval(self._read("%s.txt" % self._name))  # type: typing.List[typing.Dict[str]]
-    assert data and isinstance(data, list)
-    first_entry = data[0]
+    data_input = eval(self._read("%s.txt" % self._name))  # type: typing.List[typing.Dict[str]]
+    assert data_input and isinstance(data_input, list)
+    first_entry = data_input[0]
     assert isinstance(first_entry, dict)
     assert isinstance(first_entry["text"], str)
     assert isinstance(first_entry["duration"], float)
-    assert isinstance(first_entry["file"], str)
+
+    if "seq_name" in first_entry.keys():
+      assert isinstance(first_entry["seq_name"], str)
+    else:
+      assert isinstance(first_entry["file"], str)
+
+    segments = None
+    if self.segment_file:
+      segments = [s.strip() for s in open(self.segment_file)]
+
+    data = []
+    for entry in data_input:
+      if "seq_name" not in entry:
+        # use the filename as seq_name if it is not provided
+        entry['seq_name'] = entry['file']
+      if segments:
+        if entry['seq_name'] in segments:
+          data.append(entry)
+      else:
+        data.append(entry)
+
     return data
 
   def _filter_fixed_random_subset(self, fixed_random_subset):
@@ -2718,13 +2748,13 @@ class OggZipDataset(CachedDataset2):
     :param int seq_idx:
     :rtype: str
     """
-    return self._data[self._get_ref_seq_idx(seq_idx)]["file"]
+    return self._data[self._get_ref_seq_idx(seq_idx)]["seq_name"]
 
   def get_all_tags(self):
     """
     :rtype: list[str]
     """
-    return [seq["file"] for seq in self._data]
+    return [seq["seq_name"] for seq in self._data]
 
   def get_total_num_seqs(self):
     """
@@ -2766,12 +2796,18 @@ class OggZipDataset(CachedDataset2):
         features = self.feature_extractor.get_audio_features_from_raw_bytes(audio_file)
     else:
       features = numpy.zeros(())  # currently the API requires some dummy values...
-    targets, txt = self._get_transcription(seq_idx)
-    targets = numpy.array(targets, dtype="int32")
-    txt = numpy.array(txt, dtype="object")
+
+    if self.targets:
+      classes, txt = self._get_transcription(seq_idx)
+      classes = numpy.array(classes, dtype="int32")
+      txt = numpy.array(txt, dtype="object")
+      targets = {"classes": classes, "raw": txt}
+    else:
+      targets = {}
+
     return DatasetSeq(
       features=features,
-      targets={"classes": targets, "raw": txt},
+      targets=targets,
       seq_idx=seq_idx,
       seq_tag=self.get_tag(seq_idx))
 
