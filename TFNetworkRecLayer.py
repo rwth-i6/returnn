@@ -3777,6 +3777,7 @@ class ChoiceLayer(LayerBase):
           gold_targets = self._get_target_value().get_placeholder_as_batch_major()  # (batch*beam,), int32
           # gold_targets will get automatically expanded for the beam. Undo that.
           gold_targets = tf.reshape(gold_targets, [net_batch_dim, beam_size])[:, 0]
+          gold_targets = tf.clip_by_value(gold_targets, 0, scores_in_dim - 1)  # safety, for invalid values...
           gold_beam_in_idx = base_beam_in - 1  # also assume last index
           gold_labels = gold_beam_in_idx * scores_in_dim + gold_targets  # (batch,)
           gold_labels_bc = tf.expand_dims(gold_labels, axis=1)  # (batch,1)
