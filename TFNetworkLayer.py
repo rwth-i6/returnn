@@ -2709,7 +2709,7 @@ class GetSeqLenLayer(LayerBase):
     :param list[LayerBase] sources:
     :rtype: Data
     """
-    return Data(name="%s_output" % name, batch_dim_axis=0, shape=(), dtype="int32")
+    return Data(name="%s_output" % name, batch_dim_axis=0, shape=(), dtype="int32", sparse=True, dim=None)
 
 
 class SeqLenMaskLayer(_ConcatInputLayer):
