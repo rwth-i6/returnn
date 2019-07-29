@@ -2691,6 +2691,27 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
       d["window_start"] = get_layer(d["window_start"])
 
 
+class GetSeqLenLayer(LayerBase):
+  """
+  Extracts the seq len from a layer.
+  """
+  layer_class = "get_seq_len"
+
+  def __init__(self, **kwargs):
+    super(GetSeqLenLayer, self).__init__(**kwargs)
+    assert len(self.sources) == 1, "%s: exactly one source required" % self
+    self.output.placeholder = self.sources[0].output.get_sequence_lengths()
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    return Data(name="%s_output" % name, batch_dim_axis=0, shape=(), dtype="int32")
+
+
 class SeqLenMaskLayer(_ConcatInputLayer):
   """
   Masks some values away given the seq_len_source with mask_value.
