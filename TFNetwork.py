@@ -1883,11 +1883,13 @@ class LossHolder:
     if self._loss_value is not None:
       # a loss value is typically a scalar but there are cases of sequence or position wise loss values (e.g. if
       #   the eval_output_file_per_seq option is used)
-      tf.summary.tensor_summary("loss_%s" % name, self._loss_value * self._norm_factor)
-      if self._network.get_config().bool("calculate_exp_loss", False):
-        tf.summary.tensor_summary("exp_loss_%s" % name, tf.exp(self._loss_value * self._norm_factor))
+      if self._loss_value.get_shape().ndims == 0:
+        tf.summary.scalar("loss_%s" % name, self._loss_value * self._norm_factor)
+        if self._network.get_config().bool("calculate_exp_loss", False):
+          tf.summary.scalar("exp_loss_%s" % name, tf.exp(self._loss_value * self._norm_factor))
     if self._error_value is not None:
-      tf.summary.tensor_summary("error_%s" % name, self._error_value * self._norm_factor)
+      if self._error_value.get_shape().ndims == 0:
+        tf.summary.scalar("error_%s" % name, self._error_value * self._norm_factor)
 
   def _prepare(self):
     """
