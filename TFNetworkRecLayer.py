@@ -527,7 +527,7 @@ class RecLayer(_ConcatInputLayer):
     """
     :param str|dict[str] unit:
     :param None|dict[str] unit_opts:
-    :rtype: _SubnetworkRecCell|tensorflow.contrib.rnn.RNNCell|tensorflow.contrib.rnn.FusedRNNCell|TFNativeOp.RecSeqCellOp
+    :rtype: _SubnetworkRecCell|tensorflow.contrib.rnn.RNNCell|tensorflow.contrib.rnn.FusedRNNCell|TFNativeOp.RecSeqCellOp  # nopep8
     """
     from TFUtil import is_gpu_available
     from tensorflow.contrib import rnn as rnn_contrib
@@ -1489,6 +1489,48 @@ class _SubnetworkRecCell(object):
       shape_invariants=shape_invariants,
       back_prop=self.net.train_flag is not False)
 
+  class OutputToAccumulate:
+    # noinspection PyShadowingNames
+    def __init__(self, name, dtype, element_shape, get):
+      """
+      :param str name:
+      :param tf.DType|str dtype:
+      :param tuple[int|None] element_shape:
+      :param ()->(tf.Tensor|None) get:
+      """
+      self.name = name
+      self.dtype = dtype
+      self.element_shape = element_shape
+      self.get = get
+      self.get_returned_none = None  # type: typing.Optional[bool]
+
+    def write_to_tensor_array(self, ta, index):
+      """
+      :param tf.TensorArray ta:
+      :param tf.Tensor index:
+      :return: new ta
+      :rtype: tf.TensorArray
+      """
+      assert self.get_returned_none is None
+      value = self.get()
+      if value is None:
+        self.get_returned_none = True
+        return ta
+      else:
+        self.get_returned_none = False
+        return ta.write(index=index, value=value, name="%s_acc_ta_write" % self.name)
+
+    def get_final_tensor_array(self, ta):
+      """
+      :param tf.TensorArray ta:
+      :return: ta if we wrote to it, otherwise None
+      :rtype: tf.TensorArray|None
+      """
+      assert self.get_returned_none is not None
+      if self.get_returned_none:
+        return None
+      return ta
+
   def get_output(self, rec_layer):
     """
     :param RecLayer rec_layer:
@@ -1611,9 +1653,7 @@ class _SubnetworkRecCell(object):
       else:
         min_loop_len = 0
 
-      from collections import namedtuple
-      OutputToAccumulate = namedtuple("OutputToAccumulate", ["name", "dtype", "element_shape", "get"])
-      outputs_to_accumulate = []  # type: typing.List[OutputToAccumulate]
+      outputs_to_accumulate = []  # type: typing.List[_SubnetworkRecCell.OutputToAccumulate]
       needed_outputs = {"output"}  # names. these are needed somewhere
       extra_output_layers = set()  # names. will create accumulated output layer in any case for these
 
@@ -1625,7 +1665,7 @@ class _SubnetworkRecCell(object):
         name_ = "output_%s" % layer_name
         if any([(out.name == name_) for out in outputs_to_accumulate]):
           return
-        outputs_to_accumulate.append(OutputToAccumulate(
+        outputs_to_accumulate.append(_SubnetworkRecCell.OutputToAccumulate(
           name=name_,
           dtype=self.layer_data_templates[layer_name].output.dtype,
           element_shape=self.layer_data_templates[layer_name].output.batch_shape,
@@ -1685,12 +1725,12 @@ class _SubnetworkRecCell(object):
                 return layer.search_choices.src_beams
               return get_choice_source_batches
 
-            outputs_to_accumulate += [
-              OutputToAccumulate(
+            outputs_to_accumulate.append(
+              _SubnetworkRecCell.OutputToAccumulate(
                 name="choice_%s" % layer.name,
                 dtype=tf.int32,
                 element_shape=(None, layer.search_choices.beam_size),  # (batch, beam)
-                get=get_derived(layer.name))]
+                get=get_derived(layer.name)))
 
         if collected_choices:
           output_beam_size = self.layer_data_templates["output"].get_search_beam_size()
@@ -1729,7 +1769,7 @@ class _SubnetworkRecCell(object):
 
           def get_loop_loss():
             """
-            :rtype: tf.Tensor
+            :rtype: tf.Tensor|None
             """
             layer = self.net.layers[layer_name]
             loss.init(layer)
@@ -1740,8 +1780,7 @@ class _SubnetworkRecCell(object):
             else:
               assert False, "return_error or return_loss"
             if return_error and value is None:
-              # This is not correctly handled currently...
-              value = tf.zeros_like(loss.get_loss_value())
+              return None
             assert isinstance(value, tf.Tensor), "layer %r loss %r %s invalid" % (
               layer, loss, "loss_value" if return_loss else "error_value")
             assert value.get_shape().ndims >= 1
@@ -1766,12 +1805,12 @@ class _SubnetworkRecCell(object):
           for loss in layer.layer_class_type.get_losses(reduce_func=identity, **layer.kwargs):
             assert loss.name not in accumulated_loop_losses, "layer %r loss name %r not unique" % (layer, loss.name)
             accumulated_loop_losses[loss.name] = loss
-            outputs_to_accumulate.append(OutputToAccumulate(
+            outputs_to_accumulate.append(_SubnetworkRecCell.OutputToAccumulate(
               name="loss_%s" % loss.name,
               dtype=tf.float32,
               element_shape=(None,),  # (batch,)
               get=make_get_loss_in_loop_frame(loss=loss, layer_name=layer_name, return_loss=True)))
-            outputs_to_accumulate.append(OutputToAccumulate(
+            outputs_to_accumulate.append(_SubnetworkRecCell.OutputToAccumulate(
               name="error_%s" % loss.name,
               dtype=tf.float32,
               element_shape=(None,),  # (batch,)
@@ -1965,7 +2004,7 @@ class _SubnetworkRecCell(object):
 
         assert len(acc_tas) == len(outputs_to_accumulate)
         acc_tas = [
-          acc_ta.write(i, out.get(), name="%s_acc_ta_write" % out.name)
+          out.write_to_tensor_array(acc_ta, index=i)
           for (acc_ta, out) in zip(acc_tas, outputs_to_accumulate)]
         next_i = tf.add(i, 1, name="next_i")
         res = (next_i, net_vars, acc_tas)
@@ -2055,8 +2094,8 @@ class _SubnetworkRecCell(object):
         assert isinstance(final_acc_tas[0], tf.TensorArray)
       assert len(final_acc_tas) == len(outputs_to_accumulate)
       self.final_acc_tas_dict = {
-        out.name: final_acc_ta
-        for (final_acc_ta, out) in zip(final_acc_tas, outputs_to_accumulate)}  # type: typing.Dict[str,tf.TensorArray]
+        out.name: out.get_final_tensor_array(final_acc_ta)
+        for (final_acc_ta, out) in zip(final_acc_tas, outputs_to_accumulate)}  # type: typing.Dict[str,typing.Optional[tf.TensorArray]]  # nopep8
     else:  # no layers inside loop, all optimized out
       seq_len = None
       final_net_vars = None
@@ -2092,10 +2131,14 @@ class _SubnetworkRecCell(object):
             assert loss.name not in self.accumulated_losses, "loss name not unique"
             loss_value = tensor_array_stack(
               self.final_acc_tas_dict["loss_%s" % loss.name], stop=max_seq_len, name="loss_%s_stack" % loss.name)
-            error_value = tensor_array_stack(
-              self.final_acc_tas_dict["error_%s" % loss.name], stop=max_seq_len, name="error_%s_stack" % loss.name)
+            if self.final_acc_tas_dict["error_%s" % loss.name] is not None:
+              error_value = tensor_array_stack(
+                self.final_acc_tas_dict["error_%s" % loss.name], stop=max_seq_len, name="error_%s_stack" % loss.name)
+            else:
+              error_value = None
             loss_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
-            error_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
+            if error_value is not None:
+              error_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
             loss_wrapped = _SubnetworkRecWrappedLoss(
               base_loss=loss.loss,
               loss_value=loss_value, error_value=error_value,
@@ -2935,7 +2978,7 @@ class _SubnetworkRecWrappedLoss(Loss):
     """
     :param Loss base_loss: the loss from the layer inside the loop
     :param tf.Tensor loss_value: shape (time,batch)
-    :param tf.Tensor error_value: shape (time,batch)
+    :param tf.Tensor|None error_value: shape (time,batch)
     :param tf.Tensor norm_factor: scalar for the whole batch
     :param tf.Tensor seq_lens: (batch,)
     """
@@ -2948,7 +2991,10 @@ class _SubnetworkRecWrappedLoss(Loss):
     self.layer = base_loss.layer  # avoid that init() gets executed again
     # Get either (time_flat,) or (time*batch,) for loss_value and error_value.
     self.loss_value = self._flatten_or_merge(loss_value, seq_lens=seq_lens, time_major=True)
-    self.error_value = self._flatten_or_merge(error_value, seq_lens=seq_lens, time_major=True)
+    if error_value is not None:
+      self.error_value = self._flatten_or_merge(error_value, seq_lens=seq_lens, time_major=True)
+    else:
+      self.error_value = None  # type: typing.Optional[tf.Tensor]
     self.loss_norm_factor = norm_factor
 
   def init(self, output, output_with_activation=None, target=None, layer=None):
@@ -2970,9 +3016,12 @@ class _SubnetworkRecWrappedLoss(Loss):
 
   def get_error(self):
     """
-    :rtype: tf.Tensor
+    :rtype: tf.Tensor|None
     """
-    return self.reduce_func(self.error_value)
+    if self.error_value is not None:
+      return self.reduce_func(self.error_value)
+    else:
+      return None
 
 
 class RecStepInfoLayer(LayerBase):
