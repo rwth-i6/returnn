@@ -67,7 +67,7 @@ class Runner(object):
     """
     from TFDataPipeline import DataProviderBase
     engine.network.extern_data.check_matched_dataset(
-      dataset=dataset, used_data_keys=engine.network.used_data_keys)
+      dataset=dataset, used_data_keys=engine.network.get_used_data_keys())
     self.engine = engine
     # noinspection PyProtectedMember
     self.data_provider = self.engine._get_new_data_provider(dataset=dataset, batches=batches)
@@ -1241,13 +1241,14 @@ class Engine(EngineBase):
       self.save_model(epoch0_model_filename)
 
     if 'train' not in self.dataset_batches or not self.train_data.batch_set_generator_cache_whole_epoch():
-      self.dataset_batches['train'] = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
-                                                                       batch_size=self.batch_size,
-                                                                       max_seqs=self.max_seqs,
-                                                                       max_seq_length=self.max_seq_length,
-                                                                       seq_drop=self.seq_drop,
-                                                                       shuffle_batches=self.shuffle_batches,
-                                                                       used_data_keys=self.network.used_data_keys)
+      self.dataset_batches['train'] = self.train_data.generate_batches(
+        recurrent_net=self.network.recurrent,
+        batch_size=self.batch_size,
+        max_seqs=self.max_seqs,
+        max_seq_length=self.max_seq_length,
+        seq_drop=self.seq_drop,
+        shuffle_batches=self.shuffle_batches,
+        used_data_keys=self.network.get_used_data_keys())
     else:
       print("reusing previous dataset batch order for 'train' dataset", file=log.v4)
       self.dataset_batches['train'].reset()
@@ -1457,7 +1458,7 @@ class Engine(EngineBase):
           batch_size=self.batch_size,
           max_seqs=self.max_seqs,
           max_seq_length=(self.max_seq_length if dataset_name == 'dev' else sys.maxsize),
-          used_data_keys=self.network.used_data_keys)
+          used_data_keys=self.network.get_used_data_keys())
       else:
         print("reusing previous dataset batch order for %r dataset" % dataset_name, file=log.v4)
         self.dataset_batches[dataset_name].reset()
@@ -1663,7 +1664,7 @@ class Engine(EngineBase):
     from TFDataPipeline import FeedDictDataProvider
     data_provider = FeedDictDataProvider(
       tf_session=self.tf_session, extern_data=self.network.extern_data,
-      data_keys=self.network.used_data_keys,
+      data_keys=self.network.get_used_data_keys(),
       dataset=dataset, batches=batches,
       batch_slice=batch_slice,
       enforce_min_len1=self.config.is_true("enforce_min_len1", False))
@@ -1800,7 +1801,7 @@ class Engine(EngineBase):
       recurrent_net=self.network.recurrent,
       batch_size=batch_size,
       max_seqs=self.max_seqs,
-      used_data_keys=self.network.used_data_keys)
+      used_data_keys=self.network.get_used_data_keys())
     forwarder = Runner(
       engine=self, dataset=data, batches=batches,
       train=False, eval=False,
@@ -1845,7 +1846,7 @@ class Engine(EngineBase):
       batch_size=batch_size,
       max_seqs=max_seqs,
       max_seq_length=max_seq_length,
-      used_data_keys=self.network.used_data_keys)
+      used_data_keys=self.network.get_used_data_keys())
     analyzer = Runner(engine=self, dataset=data, batches=batches, train=False)
     analyzer.run(report_prefix=self.get_epoch_str() + " analyze")
 
@@ -1905,7 +1906,7 @@ class Engine(EngineBase):
       batch_size=self.config.int('batch_size', 1),
       max_seqs=self.config.int('max_seqs', -1),
       max_seq_length=max_seq_length,
-      used_data_keys=self.network.used_data_keys)
+      used_data_keys=self.network.get_used_data_keys())
 
     output_is_dict = isinstance(output_layer_names, list)
     if not output_is_dict:
@@ -2212,7 +2213,7 @@ class Engine(EngineBase):
       batch_size=batch_size,
       max_seq_length=max_seq_length,
       max_seqs=max_seqs,
-      used_data_keys=self.network.used_data_keys)
+      used_data_keys=self.network.get_used_data_keys())
     forwarder = Runner(
       engine=self, dataset=dataset, batches=batches,
       train=False, eval=False,

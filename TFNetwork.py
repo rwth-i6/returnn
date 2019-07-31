@@ -668,6 +668,16 @@ class TFNetwork(object):
         name="seq_tag", shape=(), dtype="string", auto_create_placeholders=True)
     return self.extern_data.get_data(key)
 
+  def get_used_data_keys(self, exclude_extra_added=True):
+    """
+    :param bool exclude_extra_added:
+    :rtype: set[str]
+    """
+    used_data_keys = self.used_data_keys
+    if exclude_extra_added:
+      used_data_keys = used_data_keys.difference(self.extern_data.extra_added_keys)
+    return used_data_keys
+
   def get_seq_tags(self, mark_data_key_as_used=True):
     """
     :param bool mark_data_key_as_used: for extern_data
