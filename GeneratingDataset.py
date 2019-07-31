@@ -918,6 +918,7 @@ class ExtractAudioFeatures:
                window_len=0.025, step_len=0.010,
                num_feature_filters=None, with_delta=False, norm_mean=None, norm_std_dev=None,
                features="mfcc", feature_options=None, random_permute=None, random_state=None, raw_ogg_opts=None,
+               sample_rate=None,
                peak_normalization=True, preemphasis=None, join_frames=None):
     """
     :param float window_len: in seconds
@@ -931,6 +932,7 @@ class ExtractAudioFeatures:
     :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
     :param numpy.random.RandomState|None random_state:
     :param dict[str]|None raw_ogg_opts:
+    :param int|None sample_rate:
     :param bool peak_normalization: set to False to disable the peak normalization for audio files
     :param float|None preemphasis: set a preemphasis filter coefficient
     :param int|None join_frames: concatenate multiple frames together to a superframe
@@ -968,6 +970,7 @@ class ExtractAudioFeatures:
     self.random_state = random_state
     self.features = features
     self.feature_options = feature_options
+    self.sample_rate = sample_rate
     self.raw_ogg_opts = raw_ogg_opts
     self.peak_normalization = peak_normalization
 
@@ -1021,6 +1024,8 @@ class ExtractAudioFeatures:
     :param int sample_rate: e.g. 22050
     :rtype: numpy.ndarray
     """
+    if self.sample_rate is not None:
+      assert sample_rate == self.sample_rate, "currently no conversion implemented..."
 
     if self.preemphasis:
       from scipy import signal
