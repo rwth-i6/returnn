@@ -2894,7 +2894,7 @@ class GatingLayer(_ConcatInputLayer):
       a = self.sources[0].output.copy_compatible_to(self.output).placeholder
       b = self.sources[1].output.copy_compatible_to(self.output).placeholder
     else:
-      a, b = tf.split(self.input_data.placeholder, 2, axis=self.input_data.batch_ndim - 1)
+      a, b = tf.split(self.input_data.placeholder, 2, axis=self.input_data.feature_dim_axis)
     self.output.placeholder = act_func(a) * gate_act_func(b)
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
 
@@ -2915,10 +2915,13 @@ class GatingLayer(_ConcatInputLayer):
     return Data(
       name="%s_output" % name,
       dtype=input_data.dtype,
-      shape=input_data.shape[:-1] + (dim,),
+      shape=[dim if i == input_data.feature_dim_axis else d
+             for (i, d) in enumerate(input_data.batch_shape)
+             if i != input_data.batch_dim_axis],
       sparse=False,
       batch_dim_axis=input_data.batch_dim_axis,
       time_dim_axis=input_data.time_dim_axis,
+      feature_dim_axis=input_data.feature_dim_axis_or_unspecified,
       beam_size=input_data.beam_size)
 
 
