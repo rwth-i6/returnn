@@ -2889,7 +2889,12 @@ class GatingLayer(_ConcatInputLayer):
     from TFUtil import get_activation_function
     act_func = get_activation_function(activation)
     gate_act_func = get_activation_function(gate_activation)
-    a, b = tf.split(self.input_data.placeholder, 2, axis=self.input_data.batch_ndim - 1)
+    if len(self.sources) == 2 and self.sources[0].output.dim == self.sources[1].output.dim == self.output.dim:
+      # Don't need to concat and then split; we can use the sources directly.
+      a = self.sources[0].output.copy_compatible_to(self.output).placeholder
+      b = self.sources[1].output.copy_compatible_to(self.output).placeholder
+    else:
+      a, b = tf.split(self.input_data.placeholder, 2, axis=self.input_data.batch_ndim - 1)
     self.output.placeholder = act_func(a) * gate_act_func(b)
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
 
