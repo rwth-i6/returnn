@@ -273,6 +273,17 @@ def test_py2_utf8_str_to_unicode():
   assert_is(type(py2_utf8_str_to_unicode("äöü")), unicode)
 
 
+def test_CollectionReadCheckCovered():
+  x = CollectionReadCheckCovered.from_bool_or_dict(True)
+  assert x and x.truth_value
+  x = CollectionReadCheckCovered.from_bool_or_dict(False)
+  assert not x or not x.truth_value
+  x = CollectionReadCheckCovered.from_bool_or_dict({})
+  assert not x or not x.truth_value
+  x = CollectionReadCheckCovered.from_bool_or_dict({"a": "b"})
+  assert x and x.truth_value
+
+
 if __name__ == "__main__":
   better_exchook.install()
   if len(sys.argv) <= 1:

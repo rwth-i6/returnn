@@ -2237,6 +2237,11 @@ class CollectionReadCheckCovered:
     except KeyError:
       return default
 
+  def __bool__(self):  # Python 3
+    return self.truth_value
+
+  __nonzero__ = __bool__  # Python 2
+
   def __len__(self):
     return len(self.collection)
 
