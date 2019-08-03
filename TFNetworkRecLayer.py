@@ -3818,7 +3818,14 @@ class ChoiceLayer(LayerBase):
           scores_comb, [net_batch_dim, base_beam_in * scores_in_dim])  # (batch, beam_in * dim)
         # `tf.nn.top_k` is the core function performing our search.
         # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
-        scores, labels = tf.nn.top_k(scores_comb_flat, k=beam_size)
+        top_k_size = beam_size
+        if isinstance(scores_in_dim, tf.Tensor) or scores_in_dim < beam_size:
+          top_k_size = tf.minimum(base_beam_in * scores_in_dim, top_k_size)
+        scores, labels = tf.nn.top_k(scores_comb_flat, k=top_k_size)
+        if top_k_size is not beam_size:
+          extra_shape = (net_batch_dim, beam_size - top_k_size)
+          labels = tf.concat([labels, tf.zeros(extra_shape, dtype=labels.dtype)], axis=-1)
+          scores = tf.concat([scores, tf.fill(extra_shape, float("-inf"))], axis=-1)
         if cheating:
           assert len(self.sources) == 1, "Cheating not yet implemented for multiple sources."
           # It assumes that sorted=True in top_k, and the last entries in scores/labels are the worst.
