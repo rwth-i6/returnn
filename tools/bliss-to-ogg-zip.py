@@ -212,8 +212,8 @@ def main():
       cmd = ["ffmpeg", "-i", rec_filename, "-ss", str(seq.start_time), "-t", str(duration), dest_filename]
       print("$ %s" % " ".join(cmd))
       check_call(cmd)
-    dest_meta_file.write("{'text': %r, 'speaker_name': %r, 'file': %r, 'duration': %s},\n" % (
-      seq.orth, seq.speaker_name, dest_filename[len(dest_dirname) + 1:], duration))
+    dest_meta_file.write("{'text': %r, 'speaker_name': %r, 'file': %r, 'seq_name': %r, 'duration': %s},\n" % (
+      seq.orth, seq.speaker_name, dest_filename[len(dest_dirname) + 1:], seq.segment_name, duration))
     total_num_chars += len(seq.orth)
   dest_meta_file.write("]\n")
   dest_meta_file.close()
