@@ -2726,18 +2726,26 @@ class OggZipDataset(CachedDataset2):
     """
     return self._get_ref_seq_idx(seq_idx)
 
+  @staticmethod
+  def _get_tag_from_info_dict(info):
+    """
+    :param dict[str] info:
+    :rtype: str
+    """
+    return info.get("seq_name", info["file"])
+
   def get_tag(self, seq_idx):
     """
     :param int seq_idx:
     :rtype: str
     """
-    return self._data[self._get_ref_seq_idx(seq_idx)]["file"]
+    return self._get_tag_from_info_dict(self._data[self._get_ref_seq_idx(seq_idx)])
 
   def get_all_tags(self):
     """
     :rtype: list[str]
     """
-    return [seq["file"] for seq in self._data]
+    return [self._get_tag_from_info_dict(seq) for seq in self._data]
 
   def get_total_num_seqs(self):
     """
