@@ -2235,9 +2235,9 @@ class LibriSpeechCorpus(CachedDataset2):
     :param str prefix: "train", "dev", "test", "dev-clean", "dev-other", ...
     :param str|list[str]|None orth_post_process: :func:`get_post_processor_function`, applied on orth
     :param str|None targets: "bpe" or "chars" currently, if `None`, then "bpe"
-    :param dict[str] audio: options for :class:`ExtractAudioFeatures`
-    :param dict[str] bpe: options for :class:`BytePairEncoding`
-    :param dict[str] chars: options for :class:`CharacterTargets`
+    :param dict[str]|None audio: options for :class:`ExtractAudioFeatures`
+    :param dict[str]|None bpe: options for :class:`BytePairEncoding`
+    :param dict[str]|None chars: options for :class:`CharacterTargets`
     :param bool use_zip: whether to use the ZIP files instead (better for NFS)
     :param bool use_ogg: add .ogg postfix to all files
     :param bool use_cache_manager: uses :func:`Util.cf`
@@ -2290,10 +2290,13 @@ class LibriSpeechCorpus(CachedDataset2):
       raise Exception("invalid targets %r. provide bpe or chars" % targets)
     self._fixed_random_seed = fixed_random_seed
     self._audio_random = numpy.random.RandomState(1)
-    self.feature_extractor = ExtractAudioFeatures(random_state=self._audio_random, **audio)
-    self.num_inputs = self.feature_extractor.get_feature_dimension()
+    self.feature_extractor = (
+      ExtractAudioFeatures(random_state=self._audio_random, **audio) if audio is not None else None)
+    self.num_inputs = self.feature_extractor.get_feature_dimension() if self.feature_extractor else 0
     self.num_outputs = {
-      "data": [self.num_inputs, 2], "classes": [self.targets.num_labels, 1], "raw": {"dtype": "string", "shape": ()}}
+      "classes": [self.targets.num_labels, 1], "raw": {"dtype": "string", "shape": ()}}
+    if self.feature_extractor:
+      self.num_outputs["data"] = [self.num_inputs, 2]
     self.transs = self._collect_trans()
     self._reference_seq_order = sorted(self.transs.keys())
     if fixed_random_subset:
@@ -2532,8 +2535,11 @@ class LibriSpeechCorpus(CachedDataset2):
     :param int seq_idx:
     :rtype: DatasetSeq
     """
-    with self._open_audio_file(seq_idx) as audio_file:
-      features = self.feature_extractor.get_audio_features_from_raw_bytes(audio_file)
+    if self.feature_extractor:
+      with self._open_audio_file(seq_idx) as audio_file:
+        features = self.feature_extractor.get_audio_features_from_raw_bytes(audio_file)
+    else:
+      features = numpy.zeros(())  # currently the API requires some dummy values...
     bpe, txt = self._get_transcription(seq_idx)
     targets = numpy.array(bpe, dtype="int32")
     raw = numpy.array(txt, dtype="object")
