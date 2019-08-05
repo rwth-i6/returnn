@@ -2564,7 +2564,7 @@ class OggZipDataset(CachedDataset2):
     """
     :param str path: filename to zip
     :param dict[str]|None audio: options for :class:`ExtractAudioFeatures`. use {} for default. None means to disable.
-    :param dict[str] targets: options for :func:`Vocabulary.create_vocab` (e.g. :class:`BytePairEncoding`)
+    :param dict[str]|None targets: options for :func:`Vocabulary.create_vocab` (e.g. :class:`BytePairEncoding`)
     :param str|list[str]|((str)->str)|None targets_post_process: :func:`get_post_processor_function`, applied on orth
     :param bool use_cache_manager: uses :func:`Util.cf`
     :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'. otherwise epoch will be used
@@ -2593,8 +2593,9 @@ class OggZipDataset(CachedDataset2):
       path = Util.cf(path)
     self.path = path
     self._name = name
-    self.targets = Vocabulary.create_vocab(**targets)
-    self.labels = {"classes": self.targets.labels}
+    self.targets = Vocabulary.create_vocab(**targets) if targets is not None else None
+    if self.targets:
+      self.labels["classes"] = self.targets.labels
     self.targets_post_process = None  # type: typing.Optional[typing.Callable[[str],str]]
     if targets_post_process:
       if callable(targets_post_process):
@@ -2607,8 +2608,9 @@ class OggZipDataset(CachedDataset2):
     self.feature_extractor = (
       ExtractAudioFeatures(random_state=self._audio_random, **audio) if audio is not None else None)
     self.num_inputs = self.feature_extractor.get_feature_dimension() if self.feature_extractor else 0
-    self.num_outputs = {
-      "classes": [self.targets.num_labels, 1], "raw": {"dtype": "string", "shape": ()}}
+    self.num_outputs = {"raw": {"dtype": "string", "shape": ()}}
+    if self.targets:
+      self.num_outputs["classes"] = [self.targets.num_labels, 1]
     if self.feature_extractor:
       self.num_outputs["data"] = [self.num_inputs, 2]
     self._data = self._collect_data()
@@ -2752,9 +2754,13 @@ class OggZipDataset(CachedDataset2):
     seq = self._data[self._get_ref_seq_idx(seq_idx)]
     raw_targets_txt = seq["text"]
     targets_txt = raw_targets_txt
-    if self.targets_post_process:
-      targets_txt = self.targets_post_process(targets_txt)
-    return self.targets.get_seq(targets_txt), raw_targets_txt
+    if self.targets:
+      if self.targets_post_process:
+        targets_txt = self.targets_post_process(targets_txt)
+      targets_seq = self.targets.get_seq(targets_txt)
+    else:
+      targets_seq = []
+    return targets_seq, raw_targets_txt
 
   def _open_audio_file(self, seq_idx):
     """
