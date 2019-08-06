@@ -918,6 +918,7 @@ class ExtractAudioFeatures:
                window_len=0.025, step_len=0.010,
                num_feature_filters=None, with_delta=False, norm_mean=None, norm_std_dev=None,
                features="mfcc", feature_options=None, random_permute=None, random_state=None, raw_ogg_opts=None,
+               post_process=None,
                sample_rate=None,
                peak_normalization=True, preemphasis=None, join_frames=None):
     """
@@ -932,6 +933,7 @@ class ExtractAudioFeatures:
     :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
     :param numpy.random.RandomState|None random_state:
     :param dict[str]|None raw_ogg_opts:
+    :param function post_process:
     :param int|None sample_rate:
     :param bool peak_normalization: set to False to disable the peak normalization for audio files
     :param float|None preemphasis: set a preemphasis filter coefficient
@@ -970,6 +972,7 @@ class ExtractAudioFeatures:
     self.random_state = random_state
     self.features = features
     self.feature_options = feature_options
+    self.post_process = post_process
     self.sample_rate = sample_rate
     self.raw_ogg_opts = raw_ogg_opts
     self.peak_normalization = peak_normalization
@@ -988,9 +991,10 @@ class ExtractAudioFeatures:
     assert value.shape == (self.get_feature_dimension(),)
     return value.astype("float32")
 
-  def get_audio_features_from_raw_bytes(self, raw_bytes):
+  def get_audio_features_from_raw_bytes(self, raw_bytes, seq_name=None):
     """
     :param io.BytesIO raw_bytes:
+    :param str|None seq_name:
     :return: shape (time,feature_dim)
     :rtype: numpy.ndarray
     """
@@ -1016,12 +1020,13 @@ class ExtractAudioFeatures:
     import soundfile  # pip install pysoundfile
     # integer audio formats are automatically transformed in the range [-1,1]
     audio, sample_rate = soundfile.read(raw_bytes)
-    return self.get_audio_features(audio=audio, sample_rate=sample_rate)
+    return self.get_audio_features(audio=audio, sample_rate=sample_rate, seq_name=seq_name)
 
-  def get_audio_features(self, audio, sample_rate):
+  def get_audio_features(self, audio, sample_rate, seq_name=None):
     """
     :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
     :param int sample_rate: e.g. 22050
+    :param str|None seq_name:
     :return: array (time,dim), dim == self.get_feature_dimension()
     :rtype: numpy.ndarray
     """
@@ -1105,6 +1110,10 @@ class ExtractAudioFeatures:
                                    order='C')
 
     assert feature_data.shape[1] == self.get_feature_dimension()
+    if self.post_process:
+      feature_data = self.post_process(feature_data, seq_name=seq_name)
+      assert isinstance(feature_data, numpy.ndarray) and len(feature_data.shape) == 2
+      assert feature_data.shape[1] == self.get_feature_dimension()
     return feature_data
 
   def get_feature_dimension(self):
@@ -1666,7 +1675,7 @@ class TimitDataset(CachedDataset2):
       norm_mean=self._norm_mean, norm_std_dev=self._norm_std_dev,
       random_permute=self._random_permute_audio, random_state=self._random)
     mfccs = audio_feature_extractor.get_audio_features(
-      audio=audio, sample_rate=sample_rate, )
+      audio=audio, sample_rate=sample_rate, seq_name=seq_tag)
     return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=mfccs, targets=phone_id_seq)
 
 
@@ -2537,9 +2546,10 @@ class LibriSpeechCorpus(CachedDataset2):
     :param int seq_idx:
     :rtype: DatasetSeq
     """
+    seq_tag = self.get_tag(seq_idx)
     if self.feature_extractor:
       with self._open_audio_file(seq_idx) as audio_file:
-        features = self.feature_extractor.get_audio_features_from_raw_bytes(audio_file)
+        features = self.feature_extractor.get_audio_features_from_raw_bytes(audio_file, seq_name=seq_tag)
     else:
       features = numpy.zeros(())  # currently the API requires some dummy values...
     bpe, txt = self._get_transcription(seq_idx)
@@ -2549,7 +2559,7 @@ class LibriSpeechCorpus(CachedDataset2):
       features=features,
       targets={"classes": targets, "raw": raw},
       seq_idx=seq_idx,
-      seq_tag=self.get_tag(seq_idx))
+      seq_tag=seq_tag)
 
 
 class OggZipDataset(CachedDataset2):
@@ -2788,9 +2798,10 @@ class OggZipDataset(CachedDataset2):
     :param int seq_idx:
     :rtype: DatasetSeq
     """
+    seq_tag = self.get_tag(seq_idx)
     if self.feature_extractor:
       with self._open_audio_file(seq_idx) as audio_file:
-        features = self.feature_extractor.get_audio_features_from_raw_bytes(audio_file)
+        features = self.feature_extractor.get_audio_features_from_raw_bytes(audio_file, seq_name=seq_tag)
     else:
       features = numpy.zeros(())  # currently the API requires some dummy values...
     targets, txt = self._get_transcription(seq_idx)
@@ -2800,7 +2811,7 @@ class OggZipDataset(CachedDataset2):
       features=features,
       targets={"classes": targets, "raw": txt},
       seq_idx=seq_idx,
-      seq_tag=self.get_tag(seq_idx))
+      seq_tag=seq_tag)
 
 
 class Enwik8Corpus(CachedDataset2):
