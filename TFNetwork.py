@@ -974,8 +974,6 @@ class TFNetwork(object):
       if not self.extra_net:
         raise LayerNotFound("cannot get layer %r, no extra net for %r" % (layer_name, self))
       return self.extra_net.get_layer(layer_name[layer_name.find(":") + 1:])
-    if self.extra_parent_net:
-      return self.extra_parent_net.get_layer(layer_name)
     if layer_name.startswith("base:"):
       if not self.parent_net:
         raise LayerNotFound("cannot get layer %r, no parent net for %r" % (layer_name, self))
@@ -989,6 +987,8 @@ class TFNetwork(object):
       sub_layer = root_layer.get_sub_layer('/'.join(layer_name.split('/')[1:]))  # get the sub-layer from the root-layer
       if sub_layer:  # get_sub_layer returns None by default (if sub-layer not found)
         return sub_layer
+    if self.extra_parent_net:
+      return self.extra_parent_net.get_layer(layer_name)
     if layer_name not in self.layers:
       raise LayerNotFound("layer %r not found in %r" % (layer_name, self))
     return self.layers[layer_name]
