@@ -928,7 +928,7 @@ class ExtractAudioFeatures:
     :param numpy.ndarray|str|int|float|None norm_mean: if str, will interpret as filename
     :param numpy.ndarray|str|int|float|None norm_std_dev: if str, will interpret as filename
     :param str features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank", "raw", "raw_ogg"
-    :param dict[str]|None feature_options: provide additional paramters for the feature function
+    :param dict[str]|None feature_options: provide additional parameters for the feature function
     :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
     :param numpy.random.RandomState|None random_state:
     :param dict[str]|None raw_ogg_opts:
@@ -1022,6 +1022,7 @@ class ExtractAudioFeatures:
     """
     :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
     :param int sample_rate: e.g. 22050
+    :return: array (time,dim), dim == self.get_feature_dimension()
     :rtype: numpy.ndarray
     """
     if self.sample_rate is not None:
@@ -1080,7 +1081,7 @@ class ExtractAudioFeatures:
       deltas = [librosa.feature.delta(feature_data, order=i, axis=0).astype("float32")
                 for i in range(1, self.with_delta + 1)]
       feature_data = numpy.concatenate([feature_data] + deltas, axis=1)
-      assert feature_data.shape[1] == self.get_feature_dimension()
+      assert feature_data.shape[1] == (self.with_delta + 1) * self.num_feature_filters
 
     if self.norm_mean is not None:
       if isinstance(self.norm_mean, (int, float)):
@@ -1103,6 +1104,7 @@ class ExtractAudioFeatures:
                                    newshape=(new_len // self.join_frames, feature_data.shape[1] * self.join_frames),
                                    order='C')
 
+    assert feature_data.shape[1] == self.get_feature_dimension()
     return feature_data
 
   def get_feature_dimension(self):
