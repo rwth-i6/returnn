@@ -496,21 +496,45 @@ class FileArchiveBundle:
   File archive bundle.
   """
 
-  def __init__(self, filename):
+  def __init__(self, filename=None):
     """
-    :param str filename: .bundle file
+    :param str|None filename: .bundle file
     """
     # filename -> FileArchive
     self.archives = {}  # type: typing.Dict[str,FileArchive]
     # archive content file -> FileArchive
     self.files = {}  # type: typing.Dict[str,FileArchive]
     self._short_seg_names = {}
+    if filename is not None:
+      self.add_bundle(filename=filename)
+
+  def add_bundle(self, filename):
+    """
+    :param str filename: bundle
+    """
     for line in open(filename).read().splitlines():
-      self.archives[line] = a = FileArchive(line, must_exists=True)
-      for f in a.ft.keys():
-        self.files[f] = a
-      # noinspection PyProtectedMember
-      self._short_seg_names.update(a._short_seg_names)
+      self.add_archive(filename=line)
+
+  def add_archive(self, filename):
+    """
+    :param str filename: single archive
+    """
+    if filename in self.archives:
+      return
+    self.archives[filename] = a = FileArchive(filename, must_exists=True)
+    for f in a.ft.keys():
+      self.files[f] = a
+    # noinspection PyProtectedMember
+    self._short_seg_names.update(a._short_seg_names)
+
+  def add_bundle_or_archive(self, filename):
+    """
+    :param str filename:
+    """
+    if filename.endswith(".bundle"):
+      self.add_bundle(filename)
+    else:
+      self.add_archive(filename)
 
   def file_list(self):
     """
