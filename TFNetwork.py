@@ -446,7 +446,7 @@ class TFNetwork(object):
         self.construct_layer(net_dict, name)
     assert not self._construction_stack.layers
 
-  def construct_extra_net(self, net_dict, layer_list, search_flag=None):
+  def construct_extra_net(self, net_dict, layer_list, search_flag=None, name=None):
     """
     The purpose is to create another net like `self` but with different flags,
     e.g. with `search_flag = True`.
@@ -456,10 +456,12 @@ class TFNetwork(object):
     :param dict[str,dict[str]] net_dict:
     :param list[str] layer_list:
     :param bool|None search_flag:
+    :param str|None name:
     """
     if not self.extra_net:
       self.extra_net = TFNetwork(
-        config=self._config, extern_data=self.extern_data, rnd_seed=self.random.randint(2 ** 31),
+        config=self._config, extern_data=self.extern_data, name=name,
+        rnd_seed=self.random.randint(2 ** 31),
         train_flag=self.train_flag, eval_flag=self.eval_flag,
         search_flag=search_flag if search_flag is not None else self.search_flag,
         extra_parent_net=self)
@@ -1302,11 +1304,19 @@ class TFNetwork(object):
     print("%s layer topology:" % name, file=log.v2)
     print("  extern data:", self.extern_data.get_data_description(), file=log.v2)
     print("  used data keys: %s" % list(sorted(self.used_data_keys)), file=log.v2)
+    print("  layers:", file=log.v2)
     for layer_name, layer in sorted(self.layers.items()):
       layer_dim = 'unknown' if layer.output.dim is None else '%i' % layer.output.dim
-      print("  layer %s %r #: %s" % (layer.layer_class, layer_name, layer_dim), file=log.v2)
+      print("    layer %s %r #: %s" % (layer.layer_class, layer_name, layer_dim), file=log.v2)
     if not self.layers:
-      print("  (no layers)", file=log.v2)
+      print("    (no layers)", file=log.v2)
+    if self.extra_net:
+      print("  extra net %r layers:" % self.extra_net.name, file=log.v2)
+      for layer_name, layer in sorted(self.extra_net.layers.items()):
+        layer_dim = 'unknown' if layer.output.dim is None else '%i' % layer.output.dim
+        print("    layer %s %r #: %s" % (layer.layer_class, layer_name, layer_dim), file=log.v2)
+      if not self.extra_net.layers:
+        print("    (no layers)", file=log.v2)
     print("net params #:", self.get_num_params(), file=log.v2)
     print("net trainable params:", self.get_trainable_params(), file=log.v2)
 

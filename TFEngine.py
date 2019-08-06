@@ -1063,16 +1063,8 @@ class Engine(EngineBase):
     network.construct_from_dict(net_dict)
     if train_flag is not False and config.list("search_train_network_layers"):
       network.construct_extra_net(
-        net_dict, layer_list=config.list("search_train_network_layers"), search_flag=True)
-      print("search train network layers:")
-      for layer_name, layer in sorted(network.extra_net.layers.items()):
-        print("  layer %s %r #: %s" % (layer.layer_class, layer_name, layer.output.dim), file=log.v2)
-      if not network.extra_net.layers:
-        print("  (no layers)", file=log.v2)
-      # We don't expect any new params (for now). Check that.
-      net_params = network.get_params_list()
-      for extra_param in network.extra_net.get_params_list():
-        assert extra_param in net_params
+        net_dict, layer_list=config.list("search_train_network_layers"), search_flag=True,
+        name="search train extra net")
     updater = None
     if train_flag is not False:
       # Need to create new Updater because it has the learning_rate var which must be in the current graph.
