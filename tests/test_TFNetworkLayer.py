@@ -2040,28 +2040,29 @@ def test_extra_search():
     network.construct_from_dict(net_dict)
 
     assert not network.search_flag
-    assert network.extra_net
-    assert network.extra_net.search_flag
+    assert "extra.search" in network.extra_nets
+    extra_net = network.extra_nets["extra.search"]
+    assert extra_net.search_flag
     assert "input" in network.layers
-    assert "extra.search:input" in network.extra_net.layers
+    assert "input" in extra_net.layers
     assert "output" in network.layers
-    assert "output" in network.extra_net.layers
+    assert "output" in extra_net.layers
     layer_input = network.layers["input"]
     assert isinstance(layer_input, EvalLayer)
     assert layer_input in Callbacks.history
     assert layer_input.network is network
-    layer_extra_input = network.extra_net.layers["extra.search:input"]
+    layer_extra_input = extra_net.layers["input"]
     assert isinstance(layer_extra_input, EvalLayer)
     assert layer_extra_input in Callbacks.history
-    assert layer_extra_input.network is network.extra_net
+    assert layer_extra_input.network is extra_net
     layer_output = network.layers["output"]
     assert isinstance(layer_output, SubnetworkLayer)
     assert layer_output.network is network
     layer_output_output = layer_output.subnetwork.layers["output"]
     assert layer_output_output in Callbacks.history
-    layer_extra_output = network.extra_net.layers["output"]
+    layer_extra_output = extra_net.layers["output"]
     assert isinstance(layer_extra_output, SubnetworkLayer)
-    assert layer_extra_output.network is network.extra_net
+    assert layer_extra_output.network is extra_net
     layer_extra_output_output = layer_extra_output.subnetwork.layers["output"]
     assert layer_extra_output_output in Callbacks.history
 

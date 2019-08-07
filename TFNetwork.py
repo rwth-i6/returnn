@@ -312,7 +312,7 @@ class TFNetwork(object):
     self.parent_net = parent_net
     self._is_inside_rec_layer = is_inside_rec_layer
     self.extra_parent_net = extra_parent_net
-    self.extra_net = None  # type: typing.Optional[TFNetwork]
+    self.extra_nets = {}  # type: typing.Dict[str,TFNetwork]
     self._selected_train_layers = None
     self._construction_stack = _NetworkConstructionStack()
     self.layers_desc = {}  # type: typing.Dict[str,typing.Dict[str]]
@@ -346,8 +346,8 @@ class TFNetwork(object):
       s += " parent_layer=%r" % self.parent_layer
     elif self.parent_net:
       s += " parent_net=%r" % self.parent_net
-    if self.extra_net:
-      s += " extra_net=%r" % self.extra_net
+    if self.extra_nets:
+      s += " extra_nets=%r" % self.extra_nets
     if self.train_flag is True:
       s += " train"
     elif self.train_flag is not None:
@@ -441,15 +441,15 @@ class TFNetwork(object):
         continue
       if layer_desc.get("only_on_eval") and not self.eval_flag:
         continue
-      if (name == "output"
+      if (name == "output" or name.endswith(":output")
               or layer_desc.get("loss", None)
               or layer_desc.get("is_output_layer", False)):
         self.construct_layer(net_dict, name)
     assert not self._construction_stack.layers
 
-  # Currently this pattern is quite restricted.
-  # This will likely be extended, when we want to support multiple extra nets.
-  _extra_layer_name_prefix_pattern = re.compile("^(extra(\\.search))?:")
+  # Currently this pattern is very simple.
+  # This pattern might be extended, when we want to make it more flexible.
+  _extra_layer_name_prefix_pattern = re.compile("^(extra(\\.[A-Za-z0-9_.]+))?:")
 
   def _get_extra_net(self, search_flag=None, net_name=None, prefix_name=None, auto_create=True):
     """
@@ -460,29 +460,28 @@ class TFNetwork(object):
     :return: (net, prefix_name)
     :rtype: (TFNetwork|None,str)
     """
-    # Currently only a single extra net supported. But this can be extended later,
-    # to support multiple, for different prefix names.
     if search_flag is None and prefix_name:
-      search_flag = ".search" in prefix_name
+      search_flag = ".search" in prefix_name  # currently very simple...
     if not prefix_name:
-      prefix_name = "extra"
+      assert search_flag is not None
+      prefix_name = "extra.search" if search_flag else "extra"
     if prefix_name and not net_name:
       net_name = prefix_name
     if self.extra_parent_net:  # Also, only the root can have other extra nets.
       assert not auto_create
       return None, prefix_name
-    if not self.extra_net:
+    if prefix_name not in self.extra_nets:
       if not auto_create:
         return None, prefix_name
-      self.extra_net = TFNetwork(
+      self.extra_nets[prefix_name] = TFNetwork(
         config=self._config, extern_data=self.extern_data, name=net_name,
         rnd_seed=self.random.randint(2 ** 31),
         train_flag=self.train_flag, eval_flag=self.eval_flag,
         search_flag=search_flag if search_flag is not None else self.search_flag,
         extra_parent_net=self)
     if search_flag is not None:
-      assert self.extra_net.search_flag == search_flag
-    return self.extra_net, prefix_name
+      assert self.extra_nets[prefix_name].search_flag == search_flag
+    return self.extra_nets[prefix_name], prefix_name
 
   def construct_extra_net(self, net_dict, layer_list,
                           search_flag=None, dep_layers_in_extra=False,
@@ -586,18 +585,6 @@ class TFNetwork(object):
         return self._construction_stack.flat_construct(delayed_exc)
       if self._construction_stack.layers:
         raise delayed_exc
-    if self._extra_layer_name_prefix_pattern.match(name):
-      prefix, name_ = name.split(":", 1)
-      if self.extra_parent_net:
-        extra_net, _ = self.extra_parent_net._get_extra_net(prefix_name=prefix, auto_create=False)
-        assert extra_net is self  # Currently just not implemented otherwise...
-        if name in net_dict:
-          pass  # We explicitly allow this, and want to construct it here in this extra net.
-        else:
-          name = name_
-      else:
-        return self.construct_extra_net(
-          net_dict=net_dict, layer_list=[name], dep_layers_in_extra=False, prefix_name=prefix)[0]
     if not get_layer:
       def get_layer(src_name):
         """
@@ -605,23 +592,39 @@ class TFNetwork(object):
         :rtype: LayerBase
         """
         return self.construct_layer(net_dict=net_dict, name=src_name)  # set get_layer to wrap construct_layer
-    if name not in net_dict:
-      layer_desc = None
-      if name == "data":
-        layer_desc = {"class": "source", "from": []}
-      elif name.startswith("data:"):
-        layer_desc = {"class": "source", "data_key": name[len("data:"):], "from": []}
-      elif '/' in name:
-        # it may be a hierarchical path to a sub-layer, which should have been found by get_layer()
-        # but maybe it's not constructed yet, so try constructing the root layer
-        root_layer = get_layer(name.split('/')[0])
-        sub_layer = root_layer.get_sub_layer('/'.join(name.split('/')[1:]))  # get the sub-layer from the root-layer
-        if sub_layer:
-          return sub_layer
-      if not layer_desc:
-        raise LayerNotFound("layer %r not found in %r" % (name, self))
-    else:
-      layer_desc = net_dict[name]
+    if '/' in name:
+      # It may be a hierarchical path to a sub-layer, which should have been found by get_layer()
+      # but maybe it's not constructed yet, so try constructing the root layer.
+      root_layer = get_layer(name.split('/')[0])
+      sub_layer = root_layer.get_sub_layer('/'.join(name.split('/')[1:]))  # get the sub-layer from the root-layer
+      if sub_layer:
+        return sub_layer
+      # Pass on here. Maybe we find the layer. Otherwise it will fail below.
+    layer_desc = None
+    if self._extra_layer_name_prefix_pattern.match(name):
+      prefix, name_ = name.split(":", 1)
+      if self.extra_parent_net:
+        extra_net, _ = self.extra_parent_net._get_extra_net(prefix_name=prefix, auto_create=False)
+        if extra_net is not self:
+          return self.extra_parent_net.construct_extra_net(net_dict=net_dict, layer_list=[name], prefix_name=prefix)[0]
+        if name in net_dict:
+          # We explicitly allow this, and want to construct it here in this extra net, from this layer desc.
+          layer_desc = net_dict[name]
+        # In any case, this layer should have the name without that prefix,
+        # such that param-sharing etc works as expected.
+        name = name_
+      else:
+        return self.construct_extra_net(net_dict=net_dict, layer_list=[name], prefix_name=prefix)[0]
+    if not layer_desc:
+      if name not in net_dict:
+        if name == "data":
+          layer_desc = {"class": "source", "from": []}
+        elif name.startswith("data:"):
+          layer_desc = {"class": "source", "data_key": name[len("data:"):], "from": []}
+      else:
+        layer_desc = net_dict[name]
+    if not layer_desc:
+      raise LayerNotFound("layer %r not found in %r" % (name, self))
     if not add_layer:
       add_layer = self.add_layer
     layer_desc = layer_desc.copy()
@@ -785,13 +788,12 @@ class TFNetwork(object):
       total_constraints = None
     losses_dict = {}
     layer_items = sorted(self.layers.items())
-    if self.extra_net:
-      extra_name_prefix = "extra"
-      if self.extra_net.search_flag and not self.search_flag:
-        extra_name_prefix += "_search"
-      layer_items += [
-        ("%s/%s" % (extra_name_prefix, name), layer)
-        for (name, layer) in sorted(self.extra_net.layers.items())]
+    if self.extra_nets:
+      for extra_name_prefix, extra_net in sorted(self.extra_nets.items()):
+        assert isinstance(extra_net, TFNetwork)
+        layer_items += [
+          ("%s/%s" % (extra_name_prefix, name), layer)
+          for (name, layer) in sorted(extra_net.layers.items())]
     for name, layer in layer_items:
       assert isinstance(name, str)
       assert isinstance(layer, LayerBase)
@@ -1085,10 +1087,12 @@ class TFNetwork(object):
     for (_, layer) in sorted(self.layers.items()):
       if layer not in layers:
         layers.append(layer)
-    if self.extra_net:
-      for layer in self.extra_net._get_all_layers():
-        if layer not in layers:
-          layers.append(layer)
+    if self.extra_nets:
+      for _, extra_net in sorted(self.extra_nets.items()):
+        assert isinstance(extra_net, TFNetwork)
+        for layer in extra_net._get_all_layers():
+          if layer not in layers:
+            layers.append(layer)
     return layers
 
   def get_params_list(self):
@@ -1151,10 +1155,12 @@ class TFNetwork(object):
         if param in trainable_vars_col:
           ls.append(param)
           trainable_vars_col.remove(param)
-    if self.extra_net:
-      for param in self.extra_net.get_trainable_params():
-        if param not in ls:
-          ls.append(param)
+    if self.extra_nets:
+      for _, extra_net in sorted(self.extra_nets.items()):
+        assert isinstance(extra_net, TFNetwork)
+        for param in extra_net.get_trainable_params():
+          if param not in ls:
+            ls.append(param)
     return ls
 
   def declare_train_params(self, hidden_layer_selection=None, with_output=None):
@@ -1172,8 +1178,9 @@ class TFNetwork(object):
       hidden_layer_selection += [name for (name, layer) in self.layers.items() if layer.is_output_layer()]
     hidden_layer_selection = set(hidden_layer_selection)
     self._selected_train_layers = sorted(hidden_layer_selection)
-    if self.extra_net:
-      self.extra_net.declare_train_params()  # select all, currently...
+    if self.extra_nets:
+      for _, extra_net in self.extra_nets.items():
+        extra_net.declare_train_params()  # select all, currently...
 
   def get_num_params(self):
     """
@@ -1393,13 +1400,15 @@ class TFNetwork(object):
       print("    layer %s %r #: %s" % (layer.layer_class, layer_name, layer_dim), file=log.v2)
     if not self.layers:
       print("    (no layers)", file=log.v2)
-    if self.extra_net:
-      print("  extra net %r layers:" % self.extra_net.name, file=log.v2)
-      for layer_name, layer in sorted(self.extra_net.layers.items()):
-        layer_dim = 'unknown' if layer.output.dim is None else '%i' % layer.output.dim
-        print("    layer %s %r #: %s" % (layer.layer_class, layer_name, layer_dim), file=log.v2)
-      if not self.extra_net.layers:
-        print("    (no layers)", file=log.v2)
+    if self.extra_nets:
+      for _, extra_net in sorted(self.extra_nets.items()):
+        assert isinstance(extra_net, TFNetwork)
+        print("  %r layers:" % extra_net.name, file=log.v2)
+        for layer_name, layer in sorted(extra_net.layers.items()):
+          layer_dim = 'unknown' if layer.output.dim is None else '%i' % layer.output.dim
+          print("    layer %s %r #: %s" % (layer.layer_class, layer_name, layer_dim), file=log.v2)
+        if not extra_net.layers:
+          print("    (no layers)", file=log.v2)
     print("net params #:", self.get_num_params(), file=log.v2)
     print("net trainable params:", self.get_trainable_params(), file=log.v2)
 
