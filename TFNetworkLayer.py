@@ -5509,33 +5509,37 @@ class CompareLayer(LayerBase):
 
 class SwitchLayer(LayerBase):
   """
-  Wrapper around tf.where().
-  Uses three inputs: condition, true_from and false_from.
-  The output of this layer contains elements of true_from
-  where condition is True, otherwise elements of false_from.
-  condition has to be of dtype bool.
-  true_from and false_from must have the same shape.
+  Wrapper around ``tf.where()`` (or more generically :func:`TFUtil.where_bc`),
+  or statically choose a single source if the condition is a callable (...)->bool.
+  (``tf.cond`` is not useful here, as the sources would have been already constructed and computed.)
   """
-
   layer_class = "switch"
 
   def __init__(self, condition, true_from, false_from, **kwargs):
     """
-    :param LayerBase condition:
-    :param LayerBase true_from:
-    :param LayerBase false_from:
+    :param LayerBase|bool condition: if callable, expected to be (...)->bool, and called in transform_config_dict
+    :param LayerBase|None true_from:
+    :param LayerBase|None false_from:
     """
+    from TFUtil import where_bc
     super(SwitchLayer, self).__init__(**kwargs)
-
+    assert not self.sources, "%s: you should use the explicit args" % self
     self.condition = condition
     self.true_from = true_from
     self.false_from = false_from
-
-    assert condition.output.dtype == "bool"
-    assert true_from.output.shape == false_from.output.shape
-
-    self.output.placeholder = tf.where(
-      condition=condition.output.placeholder, x=true_from.output.placeholder, y=false_from.output.placeholder)
+    if isinstance(condition, bool):
+      if condition:
+        self.output = true_from.output.copy("%s_output" % self.name)
+      else:
+        self.output = false_from.output.copy("%s_output" % self.name)
+    else:
+      assert isinstance(condition, LayerBase)
+      assert condition.output.dtype == "bool"
+      common_data = Data.get_common_data([true_from.output, false_from.output, condition.output])
+      self.output.placeholder = where_bc(
+        condition=condition.output.copy_compatible_to(common_data).placeholder,
+        x=true_from.output.copy_compatible_to(common_data).placeholder,
+        y=false_from.output.copy_compatible_to(common_data).placeholder)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -5546,24 +5550,47 @@ class SwitchLayer(LayerBase):
     """
     d.setdefault("from", [])
     super(SwitchLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
-    d["condition"] = get_layer(d["condition"])
-    d["true_from"] = get_layer(d["true_from"])
-    d["false_from"] = get_layer(d["false_from"])
+    if callable(d["condition"]):
+      kwargs = d.copy()
+      kwargs.update(dict(network=network, get_layer=get_layer))
+      condition = d["condition"](**kwargs)
+      assert isinstance(condition, bool)
+      if condition:
+        d.update(dict(condition=True, true_from=get_layer(d["true_from"]), false_from=None))
+      else:
+        d.update(dict(condition=False, true_from=None, false_from=get_layer(d["false_from"])))
+    else:
+      d["condition"] = get_layer(d["condition"])
+      d["true_from"] = get_layer(d["true_from"])
+      d["false_from"] = get_layer(d["false_from"])
 
   @classmethod
-  def get_out_data_from_opts(cls, true_from, name, **kwargs):
+  def get_out_data_from_opts(cls, name, condition, true_from, false_from, **kwargs):
     """
-    :param LayerBase true_from:
     :param str name:
+    :param LayerBase|bool condition:
+    :param LayerBase|None true_from:
+    :param LayerBase|None false_from:
     :rtype: Data
     """
-    return true_from.output.copy(name="%s_output" % name)
+    if isinstance(condition, bool):
+      if condition:
+        return true_from.output.copy("%s_output" % name)
+      else:
+        return false_from.output.copy("%s_output" % name)
+    return Data.get_common_data([true_from.output, false_from.output, condition.output])
 
   def get_dep_layers(self):
     """
     :rtype: list[LayerBase]
     """
-    return [self.condition, self.true_from, self.false_from]
+    if isinstance(self.condition, LayerBase):
+      return [self.condition, self.true_from, self.false_from]
+    assert isinstance(self.condition, bool)
+    if self.condition:
+      return [self.true_from]
+    else:
+      return [self.false_from]
 
 
 class SubnetworkLayer(LayerBase):
