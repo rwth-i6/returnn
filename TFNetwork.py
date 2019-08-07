@@ -7,6 +7,7 @@ from __future__ import print_function
 
 import tensorflow as tf
 import sys
+import re
 import numpy
 import contextlib
 import typing
@@ -446,35 +447,103 @@ class TFNetwork(object):
         self.construct_layer(net_dict, name)
     assert not self._construction_stack.layers
 
-  def construct_extra_net(self, net_dict, layer_list, search_flag=None, name=None):
-    """
-    The purpose is to create another net like `self` but with different flags,
-    e.g. with `search_flag = True`.
-    That `extra_net` can have different losses, which will be added.
-    It will not recreate any already existing layers.
+  # Currently this pattern is quite restricted.
+  # This will likely be extended, when we want to support multiple extra nets.
+  _extra_layer_name_prefix_pattern = re.compile("^(extra(\\.search))?:")
 
-    :param dict[str,dict[str]] net_dict:
-    :param list[str] layer_list:
-    :param bool|None search_flag:
-    :param str|None name:
+  def _get_extra_net(self, search_flag=None, net_name=None, prefix_name=None, auto_create=True):
     """
+    :param bool|None search_flag:
+    :param str|None net_name:
+    :param str|None prefix_name:
+    :param bool auto_create:
+    :return: (net, prefix_name)
+    :rtype: (TFNetwork|None,str)
+    """
+    # Currently only a single extra net supported. But this can be extended later,
+    # to support multiple, for different prefix names.
+    if search_flag is None and prefix_name:
+      search_flag = ".search" in prefix_name
+    if not prefix_name:
+      prefix_name = "extra"
+    if prefix_name and not net_name:
+      net_name = prefix_name
+    if self.extra_parent_net:  # Also, only the root can have other extra nets.
+      assert not auto_create
+      return None, prefix_name
     if not self.extra_net:
+      if not auto_create:
+        return None, prefix_name
       self.extra_net = TFNetwork(
-        config=self._config, extern_data=self.extern_data, name=name,
+        config=self._config, extern_data=self.extern_data, name=net_name,
         rnd_seed=self.random.randint(2 ** 31),
         train_flag=self.train_flag, eval_flag=self.eval_flag,
         search_flag=search_flag if search_flag is not None else self.search_flag,
         extra_parent_net=self)
-    self.extra_net.layers_desc.update(net_dict)
+    if search_flag is not None:
+      assert self.extra_net.search_flag == search_flag
+    return self.extra_net, prefix_name
 
+  def construct_extra_net(self, net_dict, layer_list,
+                          search_flag=None, dep_layers_in_extra=False,
+                          net_name=None, prefix_name=None):
+    """
+    The purpose is to create another net like `self` but with different flags,
+    e.g. with `search_flag = True`.
+    That `extra_net` can have different losses, which will be added.
+    Layers in ``layer_list`` will be explicitly re-created in the extra net.
+    Other layers are taken from ``self``.
+
+    The creation of the extra net and layers in the extra net can be triggered explicitly
+    by referring to another layer as e.g. ``"extra.search:layer"``.
+    When done this way, all the dependencies of it are created in self again;
+    unless you explicitly have called another layer like ``"extra.search:dep"``.
+    See :func:`test_extra_search` for an example.
+
+    :param dict[str,dict[str]] net_dict:
+    :param list[str] layer_list:
+    :param bool|None search_flag:
+    :param bool dep_layers_in_extra: layers not in layer_list, but which are not yet created,
+      will be part of the extra net, not self.
+    :param str|None net_name:
+    :param str|None prefix_name: e.g. "extra.search", such that layers would be called like "extra.search:layer"
+    :return: the layers created via layer_list (all in extra net)
+    :rtype: list[LayerBase]
+    """
+    extra_net, prefix_name = self._get_extra_net(
+      search_flag=search_flag, net_name=net_name, prefix_name=prefix_name)
+    extra_net.layers_desc.update(net_dict)
+
+    def get_layer(src_name):
+      """
+      :param str src_name:
+      :rtype: LayerBase
+      """
+      explicit_extra_layer_name = "%s:%s" % (prefix_name, src_name)
+      if explicit_extra_layer_name in net_dict:
+        # This is a special marked layer, which is named like this to specify that it should explicitly
+        # be used in this case.
+        return extra_net.construct_layer(net_dict=net_dict, name=explicit_extra_layer_name, get_layer=get_layer)
+      if dep_layers_in_extra:
+        return extra_net.construct_layer(net_dict=net_dict, name=src_name, get_layer=get_layer)
+      try:
+        return extra_net.get_layer(src_name)
+      except LayerNotFound:
+        pass  # ok, we will try to construct it then
+      # Create it in self, not in the extra net.
+      return self.construct_layer(net_dict=net_dict, name=src_name, get_layer=get_layer)
+
+    created_layers = []
     for layer_name in layer_list:
-      # Always (re)create the specified layer in the layer_list.
+      # Always (re)create the specified layer in the layer_list (or return it if it already in the extra net).
       # However, any dependencies might resolve to the main net.
-      self.extra_net.construct_layer(net_dict=net_dict, name=layer_name, check_existing=False)
+      created_layers.append(extra_net.construct_layer(
+        net_dict=net_dict, name=layer_name, check_existing=False, get_layer=get_layer))
 
-    if self.extra_net.recurrent:
+    if extra_net.recurrent:
       self.recurrent = True
-    self.used_data_keys.update(self.extra_net.used_data_keys)
+    self.used_data_keys.update(extra_net.used_data_keys)
+    return created_layers
 
   def _flat_construction_enabled(self):
     """
@@ -517,6 +586,18 @@ class TFNetwork(object):
         return self._construction_stack.flat_construct(delayed_exc)
       if self._construction_stack.layers:
         raise delayed_exc
+    if self._extra_layer_name_prefix_pattern.match(name):
+      prefix, name_ = name.split(":", 1)
+      if self.extra_parent_net:
+        extra_net, _ = self.extra_parent_net._get_extra_net(prefix_name=prefix, auto_create=False)
+        assert extra_net is self  # Currently just not implemented otherwise...
+        if name in net_dict:
+          pass  # We explicitly allow this, and want to construct it here in this extra net.
+        else:
+          name = name_
+      else:
+        return self.construct_extra_net(
+          net_dict=net_dict, layer_list=[name], dep_layers_in_extra=False, prefix_name=prefix)[0]
     if not get_layer:
       def get_layer(src_name):
         """
@@ -970,10 +1051,12 @@ class TFNetwork(object):
     """
     if layer_name in self.layers:
       return self.layers[layer_name]
-    if layer_name.startswith("extra:") or layer_name.startswith("extra_search:"):
-      if not self.extra_net:
+    if self._extra_layer_name_prefix_pattern.match(layer_name):
+      prefix, layer_name = layer_name.split(":", 1)
+      extra_net, _ = self._get_extra_net(prefix_name=prefix, auto_create=False)
+      if not extra_net:
         raise LayerNotFound("cannot get layer %r, no extra net for %r" % (layer_name, self))
-      return self.extra_net.get_layer(layer_name[layer_name.find(":") + 1:])
+      return extra_net.get_layer(layer_name)
     if layer_name.startswith("base:"):
       if not self.parent_net:
         raise LayerNotFound("cannot get layer %r, no parent net for %r" % (layer_name, self))

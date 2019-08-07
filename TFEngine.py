@@ -1064,7 +1064,8 @@ class Engine(EngineBase):
     if train_flag is not False and config.list("search_train_network_layers"):
       network.construct_extra_net(
         net_dict, layer_list=config.list("search_train_network_layers"), search_flag=True,
-        name="search train extra net")
+        dep_layers_in_extra=True,
+        net_name="search train extra net")
     updater = None
     if train_flag is not False:
       # Need to create new Updater because it has the learning_rate var which must be in the current graph.

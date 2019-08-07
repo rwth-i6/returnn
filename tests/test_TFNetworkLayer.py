@@ -2004,6 +2004,81 @@ def test_split_info_input():
     # for param init handling, output dim split do matter.
 
 
+def test_extra_search():
+  class Callbacks:
+    history = []
+    @classmethod
+    def callback(cls, self, source, **kwargs):
+      """
+      :param LayerBase self:
+      :param (int)->tf.Tensor source:
+      :rtype: tf.Tensor
+      """
+      print("test_extra_search, callback: %r, %r; search flag %r" % (
+        self.network.name, self, self.network.search_flag))
+      cls.history.append(self)
+      return source(0)
+
+  n_batch, n_time, n_in, n_out = 2, 3, 7, 11
+  rnd = numpy.random.RandomState(42)
+  config = Config({
+    "debug_print_layer_output_template": True,
+    "extern_data": {"data": {"dim": n_in}}
+  })
+  net_dict = {
+    "input": {"class": "eval", "eval": Callbacks.callback, "from": "search_post_output"},
+    "extra.search:input": {"class": "eval", "eval": Callbacks.callback, "from": "data"},
+    # Note: This 'output' layer is created twice: Once in main net, once in extra-net.
+    "output": {"class": "subnetwork", "from": "input", "subnetwork": {
+      "inner": {"class": "linear", "from": "data", "activation": "relu", "n_out": n_out},
+      "output": {"class": "eval", "from": "inner", "eval": Callbacks.callback}
+    }},
+    "search_post_output": {"class": "linear", "from": "extra.search:output", "activation": "relu", "n_out": n_in}
+  }
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+
+    assert not network.search_flag
+    assert network.extra_net
+    assert network.extra_net.search_flag
+    assert "input" in network.layers
+    assert "extra.search:input" in network.extra_net.layers
+    assert "output" in network.layers
+    assert "output" in network.extra_net.layers
+    layer_input = network.layers["input"]
+    assert isinstance(layer_input, EvalLayer)
+    assert layer_input in Callbacks.history
+    assert layer_input.network is network
+    layer_extra_input = network.extra_net.layers["extra.search:input"]
+    assert isinstance(layer_extra_input, EvalLayer)
+    assert layer_extra_input in Callbacks.history
+    assert layer_extra_input.network is network.extra_net
+    layer_output = network.layers["output"]
+    assert isinstance(layer_output, SubnetworkLayer)
+    assert layer_output.network is network
+    layer_output_output = layer_output.subnetwork.layers["output"]
+    assert layer_output_output in Callbacks.history
+    layer_extra_output = network.extra_net.layers["output"]
+    assert isinstance(layer_extra_output, SubnetworkLayer)
+    assert layer_extra_output.network is network.extra_net
+    layer_extra_output_output = layer_extra_output.subnetwork.layers["output"]
+    assert layer_extra_output_output in Callbacks.history
+
+    fetches = network.get_fetches_dict()
+    data_input = network.extern_data.data["data"]
+
+    session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+    info, out = session.run(
+      (fetches, layer_output.output.placeholder),
+      feed_dict={
+        data_input.placeholder: rnd.normal(size=(n_batch, n_time, n_in)).astype("float32"),
+        data_input.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),
+      })
+    print(info)
+    print(out)  # random...
+
+
 def test_dump_seq():
   with make_scope() as session:
     n_in, n_out = 4, 1
