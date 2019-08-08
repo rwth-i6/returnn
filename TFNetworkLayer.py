@@ -2572,7 +2572,7 @@ class LengthLayer(LayerBase):
       batch_dim_axis=0,
       time_dim_axis=time_dim_axis,
       dtype=dtype,
-      sparse=sparse)
+      sparse=sparse, dim=None if sparse else NotSpecified)
 
 
 class SoftmaxOverSpatialLayer(_ConcatInputLayer):
