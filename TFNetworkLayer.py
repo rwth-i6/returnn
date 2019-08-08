@@ -2537,7 +2537,12 @@ class LengthLayer(LayerBase):
   """
   layer_class = "length"
 
-  def __init__(self, add_time_axis=False, dtype="int32", **kwargs):
+  def __init__(self, add_time_axis=False, dtype="int32", sparse=False, **kwargs):
+    """
+    :param bool add_time_axis:
+    :param str dtype:
+    :param bool sparse:
+    """
     super(LengthLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1, "%s: expects one source" % self
     out = tf.cast(self.sources[0].output.get_sequence_lengths(), dtype)
@@ -2546,12 +2551,13 @@ class LengthLayer(LayerBase):
     self.output.placeholder = out
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, add_time_axis=False, dtype="int32", **kwargs):
+  def get_out_data_from_opts(cls, name, sources, add_time_axis=False, dtype="int32", sparse=False, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param bool add_time_axis:
     :param str dtype:
+    :param bool sparse:
     :rtype: Data
     """
     if add_time_axis:
@@ -2566,7 +2572,7 @@ class LengthLayer(LayerBase):
       batch_dim_axis=0,
       time_dim_axis=time_dim_axis,
       dtype=dtype,
-      sparse=False)
+      sparse=sparse)
 
 
 class SoftmaxOverSpatialLayer(_ConcatInputLayer):
@@ -2698,27 +2704,6 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
       d["start"] = get_layer(d["start"])
     if d.get("window_start", None):
       d["window_start"] = get_layer(d["window_start"])
-
-
-class GetSeqLenLayer(LayerBase):
-  """
-  Extracts the seq len from a layer.
-  """
-  layer_class = "get_seq_len"
-
-  def __init__(self, **kwargs):
-    super(GetSeqLenLayer, self).__init__(**kwargs)
-    assert len(self.sources) == 1, "%s: exactly one source required" % self
-    self.output.placeholder = self.sources[0].output.get_sequence_lengths()
-
-  @classmethod
-  def get_out_data_from_opts(cls, name, sources, **kwargs):
-    """
-    :param str name:
-    :param list[LayerBase] sources:
-    :rtype: Data
-    """
-    return Data(name="%s_output" % name, batch_dim_axis=0, shape=(), dtype="int32", sparse=True, dim=None)
 
 
 class SeqLenMaskLayer(_ConcatInputLayer):
