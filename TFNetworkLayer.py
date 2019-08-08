@@ -2378,7 +2378,7 @@ class GatherNdLayer(_ConcatInputLayer):
     out_type["name"] = "%s_output" % name
     out_type["shape"] = shape
     if position_data.time_dim_axis is None:
-      if input_data.time_dim_axis is not None and input_data.time_dim_axis >= 1:
+      if input_data.time_dim_axis is not None and input_data.time_dim_axis_excluding_batch >= 1:
         out_type["time_dim_axis"] = len(shape) + input_data.time_dim_axis_excluding_batch - 1
     out_type["dim"] = input_data.dim
     out_type["sparse"] = input_data.sparse
