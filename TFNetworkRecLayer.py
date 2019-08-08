@@ -85,7 +85,7 @@ class RecLayer(_ConcatInputLayer):
                forward_weights_init=None, recurrent_weights_init=None, bias_init=None,
                optimize_move_layers_out=None,
                cheating=False,
-               unroll=False,
+               unroll=False, back_prop=None,
                use_global_rec_step_offset=False,
                **kwargs):
     """
@@ -103,6 +103,7 @@ class RecLayer(_ConcatInputLayer):
     :param bool|None optimize_move_layers_out: will automatically move layers out of the loop when possible
     :param bool cheating: make targets available, and determine length by them
     :param bool unroll: if possible, unroll the loop (implementation detail)
+    :param bool|None back_prop: for tf.while_loop. the default will use self.network.train_flag
     :param bool use_global_rec_step_offset:
     """
     super(RecLayer, self).__init__(**kwargs)
@@ -129,6 +130,9 @@ class RecLayer(_ConcatInputLayer):
       print("%s: cheating enabled, i.e. we know the ground truth seq length" % self, file=log.v2)
     self._cheating = cheating
     self._unroll = unroll
+    if back_prop is None:
+      back_prop = self.network.train_flag is not False
+    self.back_prop = back_prop
     self._use_global_rec_step_offset = use_global_rec_step_offset
     # On the random initialization:
     # For many cells, e.g. NativeLSTM: there will be a single recurrent weight matrix, (output.dim, output.dim * 4),
@@ -1489,7 +1493,7 @@ class _SubnetworkRecCell(object):
       body=body,
       loop_vars=loop_vars,
       shape_invariants=shape_invariants,
-      back_prop=self.net.train_flag is not False)
+      back_prop=self.parent_rec_layer.back_prop)
 
   class OutputToAccumulate:
     # noinspection PyShadowingNames
@@ -2371,7 +2375,7 @@ class _SubnetworkRecCell(object):
       cond=search_resolve_cond,
       body=search_resolve_body,
       loop_vars=(initial_i, initial_beam_choices, new_acc_output_ta),
-      back_prop=self.net.train_flag is not False)
+      back_prop=self.parent_rec_layer.back_prop)
 
     if is_prev_choice:
       # Final missing first frame.
