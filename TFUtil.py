@@ -4778,16 +4778,22 @@ def identity_op_nested(x, name="identity"):
   return tf.identity(x, name=name)
 
 
-def nd_indices(indices, batch_axis=0):
+def nd_indices(indices, batch_axis=0, indices_batch_major=None):
   """
-  :param tf.Tensor indices: e.g. (batch, ...) -> index
-  :param int batch_axis:
+  :param tf.Tensor indices: e.g. (batch, ...) -> index (or (..., batch, ...) -> index)
+  :param int batch_axis: of the indices tensor itself
+  :param bool|None indices_batch_major: of the resulting 2-tuple,
+    whether it represents (batch_idx, index) or (index, batch_idx). default is like batch_axis
   :return: extended indices with batch-idx which can be used for tf.gather_nd,
-    i.e. in the example of shape (batch, ..., 2) where the 2-tuple represents (batch_idx, index).
+    i.e. in the example of shape (batch, ..., 2) where the 2-tuple represents (batch_idx, index) or (index, batch_idx).
+    the shape[:-1] is exactly the same as the indices shape.
   :rtype: tf.Tensor
   """
   assert indices.get_shape().ndims >= 1
   assert batch_axis < indices.get_shape().ndims
+  if indices_batch_major is None:
+    assert batch_axis in [0, 1]
+    indices_batch_major = batch_axis == 0
   with tf.name_scope("nd_indices"):
     batches_idxs = tf.range(tf.shape(indices)[batch_axis], name="batches_idxs")  # (batch,)
     batches_idxs = tf.cast(batches_idxs, dtype=indices.dtype)
@@ -4797,8 +4803,12 @@ def nd_indices(indices, batch_axis=0):
       batches_idxs = expand_dims_unbroadcast(batches_idxs, axis=axis, dim=tf.shape(indices)[axis],
                                              name="batches_idxs_bc")  # (batch, ...)
     batches_idxs.set_shape(indices.get_shape())
-    idxs_exp = tf.stack([batches_idxs, indices], axis=-1,
-                        name="idxs_exp")  # (batch,...,2), where the 2 stands for (batch_idx, index)
+    if indices_batch_major:
+      idxs_exp = tf.stack([batches_idxs, indices], axis=-1,
+                          name="idxs_exp")  # (batch,...,2), where the 2 stands for (batch_idx, index)
+    else:
+      idxs_exp = tf.stack([indices, batches_idxs], axis=-1,
+                          name="idxs_exp")  # (...,2), where the 2 stands for (index, batch_idx)
     return idxs_exp
 
 
