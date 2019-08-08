@@ -2343,16 +2343,19 @@ class GatherNdLayer(_ConcatInputLayer):
 
   def __init__(self, position, **kwargs):
     """
-    :param LayerBase position:
+    :param LayerBase position: indices into first axis (excluding batch) of the input
     """
     super(GatherNdLayer, self).__init__(**kwargs)
     self.position = position
     from TFUtil import batch_gather
     x = self.input_data.copy_as_batch_major()
-    position = position.output.get_placeholder_as_batch_major()
-    self.output.size_placeholder = x.size_placeholder.copy()
-    self.output.size_placeholder.pop(0, None)  # static time axis
-    self.output.placeholder = batch_gather(x.placeholder, position)  # (B,...)
+    position = position.output.copy_as_batch_major()
+    self.output.size_placeholder = position.size_placeholder.copy()
+    for i in range(position.ndim, self.output.ndim):
+      j = i - position.ndim + 1
+      if j in x.size_placeholder:
+        self.output.size_placeholder[i] = x.size_placeholder[j]
+    self.output.placeholder = batch_gather(x.placeholder, position.placeholder)  # (B,...)
 
   def get_dep_layers(self):
     """
@@ -2374,7 +2377,9 @@ class GatherNdLayer(_ConcatInputLayer):
     out_type = position_data.get_kwargs()
     out_type["name"] = "%s_output" % name
     out_type["shape"] = shape
-    out_type.pop("time_dim_axis", None)
+    if position_data.time_dim_axis is None:
+      if input_data.time_dim_axis is not None and input_data.time_dim_axis >= 1:
+        out_type["time_dim_axis"] = len(shape) + input_data.time_dim_axis_excluding_batch - 1
     out_type["dim"] = input_data.dim
     out_type["sparse"] = input_data.sparse
     out_type["dtype"] = input_data.dtype
