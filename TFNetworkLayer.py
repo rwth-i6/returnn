@@ -4064,7 +4064,7 @@ class PoolLayer(_ConcatInputLayer):
         filter_size=pool_size[i - index_shift], stride=strides[i - index_shift],
         dilation_rate=dilation_rate[i - index_shift], padding=padding)
       tag = DimensionTag(
-        description="spatial:%i:%s" % (i, self.get_base_absolute_name_scope_prefix()[:-1]),
+        description="spatial:%i:%s" % (i, self.get_absolute_name()),
         kind=DimensionTag.Types.Spatial)
       tag.set_tag_on_size_tensor(self.output.size_placeholder[i])
 
@@ -4627,6 +4627,7 @@ class PrefixInTimeLayer(CopyLayer):
     :param float|str prefix: either some constant or another layer
     :param int repeat: how often to repeat the prefix
     """
+    from TFUtil import DimensionTag
     super(PrefixInTimeLayer, self).__init__(**kwargs)
     assert self.output.time_dim_axis is not None
     assert isinstance(prefix, (float, int)), "other layer src not yet supported"
@@ -4638,6 +4639,10 @@ class PrefixInTimeLayer(CopyLayer):
     x = tf.ones(shape, dtype=self.output.dtype)
     self.output.placeholder = tf.concat([x * c, self.output.placeholder], axis=self.output.time_dim_axis)
     self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] += repeat
+    tag = DimensionTag(
+      description="time-with-prefix:%s" % self.get_absolute_name(),
+      kind=DimensionTag.Types.Spatial)
+    tag.set_tag_on_size_tensor(self.output.size_placeholder[self.output.time_dim_axis_excluding_batch])
 
 
 class PostfixInTimeLayer(CopyLayer):
@@ -4652,6 +4657,7 @@ class PostfixInTimeLayer(CopyLayer):
     :param float|int postfix: constant
     :param int repeat: how often to repeat the postfix
     """
+    from TFUtil import DimensionTag
     super(PostfixInTimeLayer, self).__init__(**kwargs)
     assert self.output.time_dim_axis is not None
     assert isinstance(postfix, (float, int)), "other layer src not yet supported"
@@ -4674,6 +4680,10 @@ class PostfixInTimeLayer(CopyLayer):
     from TFUtil import where_bc
     self.output.placeholder = where_bc(mask, x, c)
     self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] = seq_len + repeat
+    tag = DimensionTag(
+      description="time-with-postfix:%s" % self.get_absolute_name(),
+      kind=DimensionTag.Types.Spatial)
+    tag.set_tag_on_size_tensor(self.output.size_placeholder[self.output.time_dim_axis_excluding_batch])
 
 
 class TimeChunkingLayer(_ConcatInputLayer):

@@ -120,7 +120,7 @@ class DimensionTag(object):
   @classmethod
   def get_tag_from_size_tensor(cls, x):
     """
-    :param tf.Tensor x:
+    :param tf.Tensor x: size tensor. has been set before via :func:`set_tag_on_size_tensor`
     :rtype: DimensionTag|None
     """
     return getattr(x, "_is_size_of_dim_tag", None)
@@ -1767,10 +1767,21 @@ class Data(object):
         return tag
     spatial_axes = self.get_spatial_batch_axes()
     assert axis in spatial_axes
+    description = "time" if axis == self.time_dim_axis else "spatial:%i" % spatial_axes.index(axis)
+    if dyn_size is not None:
+      description += ":%r" % dyn_size.name
+    description += ":%s" % name
     tag = DimensionTag(
-      kind=DimensionTag.Types.Spatial, description="spatial:%i:%s" % (spatial_axes.index(axis), name),
+      kind=DimensionTag.Types.Spatial, description=description,
       dimension=self.batch_shape[axis], dyn_size=dyn_size)
     return tag
+
+  def get_time_dim_tag(self):
+    """
+    :rtype: DimensionTag
+    """
+    assert self.time_dim_axis is not None
+    return self.get_dim_tag(self.time_dim_axis)
 
   def get_size_dim_tag(self, number):
     """

@@ -1234,7 +1234,9 @@ class _SubnetworkRecCell(object):
       layer = self.input_layers_net.layers[layer_name]
       assert isinstance(layer, LayerBase)
       if not self.parent_rec_layer.output.is_same_time_dim(layer.output):
-        assert not prev, "Time dim does not match: RecLayer %s vs sub layer %s." % (self.parent_rec_layer, layer)
+        assert not prev, "Time dim does not match: RecLayer %s (%r) vs sub layer %s (%r)." % (
+          self.parent_rec_layer, self.parent_rec_layer.output.get_time_dim_tag(),
+          layer, layer.output.get_time_dim_tag())
         return layer
       output = layer.output.copy_template_excluding_time_dim()
       with tf.name_scope("%s_moved_input" % name.replace(":", "_")):
@@ -1537,7 +1539,7 @@ class _SubnetworkRecCell(object):
     :return: output of shape (time, batch, dim), search choices
     :rtype: (tf.Tensor, SearchChoices)
     """
-    from TFUtil import check_input_dim, tensor_array_stack
+    from TFUtil import check_input_dim, tensor_array_stack, DimensionTag
 
     # The template network is already constructed at this point, but nothing else.
     self._check_output_template_shape()
@@ -1551,6 +1553,7 @@ class _SubnetworkRecCell(object):
     # the input ('source') and the target, but maybe also other additional extern data that is used inside the subnet.
     data_tensor_arrays = {}  # dict[str,tf.TensorArray]
 
+    time_dim_tag = None
     with tf.name_scope("subnet_base"):
       batch_dim = rec_layer.network.get_data_batch_dim()
       input_beam_size = None  # type: typing.Optional[int]
@@ -1587,8 +1590,11 @@ class _SubnetworkRecCell(object):
         assert input_seq_len is not None, "length is not defined. provide an 'end' layer"
         fixed_seq_len = input_seq_len
       if fixed_seq_len is not None:
+        time_dim_tag = DimensionTag.get_tag_from_size_tensor(fixed_seq_len)
         with tf.name_scope("check_seq_len_batch_size"):
           fixed_seq_len = check_input_dim(fixed_seq_len, axis=0, dim=batch_dim * (input_beam_size or 1))
+          if time_dim_tag:
+            time_dim_tag.set_tag_on_size_tensor(fixed_seq_len)
         max_seq_len = tf.reduce_max(fixed_seq_len, name="max_seq_len")
         have_known_seq_len = True
       else:
@@ -2084,8 +2090,13 @@ class _SubnetworkRecCell(object):
           assert input_beam_size in (1, None)
           from TFUtil import tile_transposed
           seq_len = tile_transposed(seq_len, axis=0, multiples=output_beam_size)  # (batch * beam,)
+          if time_dim_tag:
+            time_dim_tag.set_tag_on_size_tensor(seq_len)
       else:
         _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
+        time_dim_tag = DimensionTag(
+          description="rec-time:%s" % rec_layer.get_absolute_name(), kind=DimensionTag.Types.Time)
+        time_dim_tag.set_tag_on_size_tensor(seq_len)
         max_seq_len = tf.reduce_max(seq_len, name="dyn_max_seq_len")
       self.get_final_rec_vars = lambda layer_name_: self.get_layer_rec_var_from_loop_vars(
         loop_vars=final_net_vars, layer_name=layer_name_, final_frame=True, seq_len=seq_len)
@@ -2625,11 +2636,17 @@ class _SubnetworkRecCell(object):
     """
     if not self.output_layers_moved_out and not extra_output_layers:
       return
-
-    max_len = tf.reduce_max(seq_len) if seq_len is not None else None
     from TFUtil import tensor_array_stack, has_control_flow_context, concat_with_opt_broadcast, tile_transposed
+    from TFUtil import DimensionTag
     from TFNetwork import TFNetwork, ExternData
     from TFNetworkLayer import InternalLayer
+
+    if seq_len is not None:
+      max_len = tf.reduce_max(seq_len)
+      time_dim_tag = DimensionTag.get_tag_from_size_tensor(seq_len)
+    else:
+      max_len = None
+      time_dim_tag = None
     self.output_layers_net = TFNetwork(
       name="%s/%s:rec-subnet-output" % (
         self.parent_net.name, self.parent_rec_layer.name if self.parent_rec_layer else "?"),
@@ -2672,6 +2689,8 @@ class _SubnetworkRecCell(object):
             assert output.beam_size == self.parent_rec_layer.output.beam_size
           else:
             output.size_placeholder[0] = tile_transposed(seq_len, axis=0, multiples=output.beam_size)
+            if time_dim_tag:
+              time_dim_tag.set_tag_on_size_tensor(output.size_placeholder[0])
         if inner_layer.output.size_placeholder:
           for i, size in inner_layer.output.size_placeholder.items():
             if not has_control_flow_context(size):  # copy if this size comes from outside the loop
@@ -4252,7 +4271,7 @@ class DecideLayer(LayerBase):
     if length_normalization:
       beam_scores /= tf.to_float(tf.reshape(src.output.get_sequence_lengths(), [batch_dim, beam_size]))
     beam_idxs = tf.argmax(beam_scores, axis=1)  # (batch,)
-    from TFUtil import assert_min_tf_version, nd_indices
+    from TFUtil import assert_min_tf_version, nd_indices, DimensionTag
     assert_min_tf_version((1, 1), "gather_nd")
     beam_idxs_ext = nd_indices(beam_idxs)
     output.placeholder = tf.cond(
@@ -4261,8 +4280,12 @@ class DecideLayer(LayerBase):
       lambda: src_output[:, 0], name="cond_not_empty")  # (batch, [time], [dim])
     output.size_placeholder = {}
     for i, size in src_data.size_placeholder.items():
+      tag = DimensionTag.get_tag_from_size_tensor(size)
       size = tf.reshape(size, [batch_dim, beam_size])  # (batch, beam)
-      output.size_placeholder[i] = tf.gather_nd(size, indices=beam_idxs_ext)  # (batch,)
+      size = tf.gather_nd(size, indices=beam_idxs_ext)  # (batch,)
+      if tag:
+        tag.set_tag_on_size_tensor(size)
+      output.size_placeholder[i] = size
     final_search_choices = SearchChoices(owner=owner, is_decided=True, beam_size=1)
     if owner:
       final_search_choices.set_src_beams(tf.expand_dims(beam_idxs, axis=1))
