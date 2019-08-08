@@ -1580,6 +1580,10 @@ class _SubnetworkRecCell(object):
         # See LayerBase._post_init_output(). could be set via target or size_target...
         # This should only be the case in training.
         fixed_seq_len = rec_layer.output.size_placeholder[0]
+      elif rec_layer.size_target:  # if this is set, always use it
+        # noinspection PyProtectedMember
+        fixed_seq_len = rec_layer._get_target_value(
+          target=rec_layer.size_target, mark_data_key_as_used=True).get_sequence_lengths()
       else:
         fixed_seq_len = None
       if fixed_seq_len is None and "end" not in self.layer_data_templates:
@@ -1601,8 +1605,6 @@ class _SubnetworkRecCell(object):
         assert "end" in self.layer_data_templates, "length not defined, provide 'end' layer"
         max_seq_len = None
         have_known_seq_len = False
-      if not rec_layer.input_data and output_template_search_choices:
-        assert not have_known_seq_len  # at least for the moment
 
       common_data_len = None  # used to check whether all extern data have same length
       used_keys = self.net.used_data_keys.copy()

@@ -125,6 +125,7 @@ class LayerBase(object):
         self.targets = [target]
         self.target = target
     self._target_layers = _target_layers
+    self.size_target = size_target
     self.loss = loss
     if self.loss and self.loss.recurrent:
       self.recurrent = True
@@ -891,13 +892,16 @@ class LayerBase(object):
     assert network.extern_data.has_data(target), "target %r unknown" % target
     return network.get_extern_data(target, mark_data_key_as_used=mark_data_key_as_used)
 
-  def _get_target_value(self, mark_data_key_as_used=True):
+  def _get_target_value(self, target=None, mark_data_key_as_used=True):
     """
+    :param str|None target:
     :param bool mark_data_key_as_used: forwarded self.network.get_extern_data()
     :rtype: Data | None
     """
+    if target is None:
+      target = self.target
     return self._static_get_target_value(
-      target=self.target, _target_layers=self._target_layers,
+      target=target, _target_layers=self._target_layers,
       network=self.network, mark_data_key_as_used=mark_data_key_as_used)
 
   def _cond_only_on_eval_opt(self, on_eval_func, default_value):
