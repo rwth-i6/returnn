@@ -206,7 +206,7 @@ class ExternData(object):
     """
     tags, _ = DimensionTag.get_all_dimension_tags(
       [data for _, data in self.get_sorted_data_items()],
-      allow_same_feature_dim=allow_same_feature_dim)
+      dict(allow_same_feature_dim=allow_same_feature_dim))
     return tags
 
 

@@ -83,7 +83,7 @@ class DimensionTag(object):
   def __init__(self, kind=Types.Unspecified, description=None, dimension=None, dyn_size=None):
     """
     :param str|None kind:
-    :param str|None description:
+    :param str|None description: the description should be unique
     :param int|None dimension:
     :param tf.Tensor|None dyn_size: e.g. seq_len, (batch,)
     """
@@ -93,6 +93,12 @@ class DimensionTag(object):
     self.dimension = dimension
     self.dyn_size = dyn_size
     self.same_as = None  # type: typing.Optional[DimensionTag]
+    if dyn_size is not None:
+      other = DimensionTag.get_tag_from_size_tensor(dyn_size)
+      if other:
+        self.declare_same_as(other)
+      else:
+        self.set_tag_on_size_tensor(dyn_size)
 
   def __repr__(self):
     attribs = ["kind"]
@@ -108,7 +114,7 @@ class DimensionTag(object):
     """
     :param tf.Tensor x:
     """
-    assert self.dimension is None
+    # It's unusual if self.dimension is not None, but let's accept that.
     if hasattr(x, "_is_size_of_dim_tag"):
       # noinspection PyProtectedMember
       assert x._is_size_of_dim_tag in (None, self)
@@ -125,15 +131,36 @@ class DimensionTag(object):
     """
     return getattr(x, "_is_size_of_dim_tag", None)
 
-  def is_equal(self, other, allow_same_feature_dim=False):
+  def can_compare(self):
     """
-    :param DimensionTag other:
-    :param bool allow_same_feature_dim:
+    :return: whether we can clearly identify this axis. for axes with dynamic size, we require the dyn_size.
     :rtype: bool
     """
+    if self.kind in [self.Types.Batch, self.Types.Feature]:
+      return True
+    assert self.kind == self.Types.Spatial
+    if self.dimension is not None:
+      return True
+    if self.dyn_size is None:
+      return False
+    assert self.get_tag_from_size_tensor(self.dyn_size) is self
+    return True
+
+  def is_equal(self, other, ignore_feature_dim=False, allow_same_feature_dim=False, allow_same_spatial_dim=None):
+    """
+    :param DimensionTag other:
+    :param bool ignore_feature_dim:
+    :param bool allow_same_feature_dim:
+    :param bool|None allow_same_spatial_dim:
+    :rtype: bool
+    """
+    if allow_same_spatial_dim is None:
+      allow_same_spatial_dim = allow_same_feature_dim
     self_base = self.get_same_base()
     other_base = other.get_same_base()
     if self_base is other_base:
+      return True
+    if self.kind == other.kind == self.Types.Feature and ignore_feature_dim:
       return True
     if self.dimension != other.dimension:
       return False
@@ -149,7 +176,7 @@ class DimensionTag(object):
       if allow_same_feature_dim:
         return True
     if self.kind == other.kind == self.Types.Spatial:
-      if self.dimension is not None and allow_same_feature_dim:
+      if self.dimension is not None and allow_same_spatial_dim:
         return True
     if self.description == other.description:
       return True
@@ -192,31 +219,35 @@ class DimensionTag(object):
     self.same_as = other.get_same_base()
 
   @classmethod
-  def get_all_dimension_tags(cls, data_list, allow_same_feature_dim):
+  def get_existing_tag_from_collection(cls, other, tags, is_equal_opts=None):
+    """
+    :param DimensionTag other:
+    :param list[DimensionTag]|tuple[DimensionTag]|set[DimensionTag] tags:
+    :param dict[str]|None is_equal_opts: passed to DimensionTag.is_equal
+    :rtype: DimensionTag|None
+    """
+    if is_equal_opts is None:
+      is_equal_opts = {}
+    for _tag in tags:
+      if _tag.is_equal(other, **is_equal_opts):
+        return _tag
+    return None
+
+  @classmethod
+  def get_all_dimension_tags(cls, data_list, is_equal_opts=None):
     """
     :param list[Data] data_list:
-    :param bool allow_same_feature_dim:
+    :param dict[str]|None is_equal_opts: passed to DimensionTag.is_equal
     :return: list of dimension tags, dict for data -> list of dimension tags (for each axis)
     :rtype: (list[DimensionTag], dict[Data, list[DimensionTag]])
     """
     tags = []
-
-    def get_existing_tag(other):
-      """
-      :param DimensionTag other:
-      :rtype: DimensionTag|None
-      """
-      for _tag in tags:
-        if _tag.is_equal(other, allow_same_feature_dim=allow_same_feature_dim):
-          return _tag
-      return None
-
     data_axes_dict = {}
     for data in data_list:
       data_axes_dict[data] = []
       for axis in range(data.batch_ndim):
         tag = data.get_dim_tag(axis)
-        existing_tag = get_existing_tag(tag)
+        existing_tag = cls.get_existing_tag_from_collection(tag, tags=tags, is_equal_opts=is_equal_opts)
         if not existing_tag:
           tags.append(tag)
         data_axes_dict[data].append(existing_tag or tag)
@@ -437,8 +468,9 @@ class Data(object):
     return dict(name="%s_dim%i_size" % (self.name, axis), dtype=self.size_dtype,
                 shape=(None,) if with_batch else ())
 
-  def get_kwargs(self):
+  def get_kwargs(self, with_size_placeholder=False):
     """
+    :param bool with_size_placeholder:
     :return: relevant attrib items for copying
     :rtype: dict[str]
     """
@@ -451,6 +483,8 @@ class Data(object):
       keys += ["beam_size"]
     if self.vocab:
       keys += ["vocab"]
+    if with_size_placeholder and self.size_placeholder is not None:
+      keys += ["size_placeholder"]
     return {key: getattr(self, key) for key in keys}
 
   def get_description(self, with_name=True, with_placeholder=False):
@@ -692,7 +726,7 @@ class Data(object):
       else:
         spatial_dim_axis = self.batch_ndim  # add it at the end
     if data.placeholder is not None:
-      assert dim == 1
+      assert dim == 1  # not implemented otherwise
       data.placeholder = tf.expand_dims(data.placeholder, spatial_dim_axis, name="%s_add_spatial_dim" % self.name)
     axis_wo_batch = spatial_dim_axis if (spatial_dim_axis <= (self.batch_dim_axis or 0)) else (spatial_dim_axis - 1)
     data.shape = data.shape[:axis_wo_batch] + (dim,) + data.shape[axis_wo_batch:]
@@ -733,6 +767,48 @@ class Data(object):
       v.placeholder = tf.expand_dims(v.placeholder, new_feature_dim_axis, name="copy_add_feature_dim")
     v.sanity_check()
     return v
+
+  def copy_add_dim_by_tag(self, dim_tag, unbroadcast=False):
+    """
+    :param DimensionTag dim_tag:
+    :param bool unbroadcast:
+    :rtype: Data
+    """
+    if dim_tag.kind == DimensionTag.Types.Batch:
+      res = self.copy_add_batch_dim(batch_dim_axis=0)
+      if unbroadcast:
+        assert res.placeholder is None  # not implemented yet...
+      return res
+    if dim_tag.kind == DimensionTag.Types.Feature:
+      res = self.copy_add_feature_dim()
+      if unbroadcast:
+        assert res.placeholder is None  # not implemented yet...
+        res.dim = dim_tag.dimension
+        shape = list(res.shape)
+        shape[res.get_batch_axis_excluding_batch(res.feature_dim_axis)] = dim_tag.dimension
+        res.shape = tuple(shape)
+        res.sanity_check()
+      return res
+    assert dim_tag.kind == DimensionTag.Types.Spatial
+    if self.time_dim_axis is not None:
+      spatial_dim_axis = self.time_dim_axis + 1  # after the existing spatial dim
+    elif self.feature_dim_axis is not None:
+      spatial_dim_axis = self.feature_dim_axis  # add it before the feature dim
+    else:
+      spatial_dim_axis = self.batch_ndim  # add it at the end
+    res = self.copy_add_spatial_dim(spatial_dim_axis=spatial_dim_axis, dim=1)
+    assert res.batch_shape[spatial_dim_axis] == 1
+    if unbroadcast:
+      assert res.placeholder is None  # not implemented yet...
+      shape = list(res.shape)
+      shape[res.get_batch_axis_excluding_batch(spatial_dim_axis)] = dim_tag.dimension
+      res.shape = tuple(shape)
+      res.sanity_check()
+      if dim_tag.dimension is None and dim_tag.dyn_size is not None:
+        if res.size_placeholder is None:
+          res.size_placeholder = {}
+        res.size_placeholder[res.get_batch_axis_excluding_batch(spatial_dim_axis)] = dim_tag.dyn_size
+    return res
 
   def copy_split_feature_dim(self, new_feature_dim):
     """
@@ -782,7 +858,7 @@ class Data(object):
     """
     assert not check_sparse or self.sparse == data.sparse
     assert not check_dtype or self.dtype == data.dtype
-    _, dim_tags = DimensionTag.get_all_dimension_tags([self, data], allow_same_feature_dim=True)
+    _, dim_tags = DimensionTag.get_all_dimension_tags([self, data], dict(allow_same_feature_dim=True))
     v = self.copy()
     v.sparse = data.sparse  # we will later reset it. this is to better count the axes (feature and spatial)
     if data.batch_dim_axis is not None and v.batch_dim_axis is None:
@@ -947,10 +1023,11 @@ class Data(object):
 
   def copy_template(self, name=None):
     """
+    :param str|None name:
     :return: copy of myself, using self.get_kwargs(), without placeholder
     :rtype: Data
     """
-    kwargs = self.get_kwargs()
+    kwargs = self.get_kwargs(with_size_placeholder=True)
     if name:
       kwargs["name"] = name
     return Data(**kwargs)
@@ -1799,23 +1876,49 @@ class Data(object):
     return tuple([self.get_dim_tag(i) for i in range(self.batch_ndim)])
 
   @classmethod
-  def get_common_data(cls, sources):
+  def get_common_data(cls, sources, warnings_out=None):
     """
     :param list[Data] sources:
+    :param io.TextIOBase|None warnings_out:
     :return: some generic data where the sources should be compatible to (with copy_compatible_to)
     :rtype: Data|None
     """
     if not sources:
       return None
-    # Simple for now: Use first with biggest batch_ndim.
-    # Was even simpler before: Use first.
-    # Later, we could auto-expand all.
-    # However, note that this should also work at template construction time,
-    # where we do not have access to the size_placeholder,
-    # and thus the dimension tags are not reliable (in the current implementation).
     assert sources
     max_ndim = max([s.batch_ndim for s in sources])
-    return [s for s in sources if s.batch_ndim == max_ndim][0]
+    largest_source = [s for s in sources if s.batch_ndim == max_ndim][0]
+    is_equal_opts = dict(ignore_feature_dim=True)
+    all_dim_tags, _ = DimensionTag.get_all_dimension_tags(sources, is_equal_opts=is_equal_opts)
+    # Note: We cannot compare len(all_dims_tags) to len(shape) as e.g. shape (B,1,1,D) would have only 3 dim tags.
+    largest_dim_tags, _ = DimensionTag.get_all_dimension_tags([largest_source], is_equal_opts=is_equal_opts)
+    if len(largest_dim_tags) == len(all_dim_tags):
+      return largest_source
+    if any([not dim_tag.can_compare() for dim_tag in largest_dim_tags]):
+      if warnings_out:
+        print(
+          "get_common_data(%r), dim tags %r, largest source has incomplete dim tag info: %r" % (
+            sources, all_dim_tags, [dim_tag for dim_tag in largest_dim_tags if not dim_tag.can_compare()]),
+          file=warnings_out)
+      # The further code would be unreliable, so better have this simple fallback.
+      return largest_source
+    # Ok, there is some other axis (or multiple), or we cannot identify/compare them because of incomplete information.
+    # Try something more complex: Make all axes unique.
+    # Note that this should also work at template construction time,
+    # where we do not have access to the size_placeholder,
+    # and thus the dimension tags are not reliable (in the current implementation).
+    for dim_tag in all_dim_tags:
+      if not dim_tag.can_compare():
+        if warnings_out:
+          print("get_common_data(%r), dim tags %r, cannot compare %r, missing information" % (
+            sources, all_dim_tags, dim_tag), file=warnings_out)
+        continue
+      if not DimensionTag.get_existing_tag_from_collection(dim_tag, largest_dim_tags, is_equal_opts=is_equal_opts):
+        largest_dim_tags.append(dim_tag)
+        largest_source = largest_source.copy_template().copy_add_dim_by_tag(dim_tag, unbroadcast=True)
+    # Simple fallback: Use first with biggest batch_ndim.
+    # Was even simpler before: Use first.
+    return largest_source
 
 
 _horovod_is_initialized = False
