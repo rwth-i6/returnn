@@ -2197,7 +2197,13 @@ def help_on_tf_exception(exception, fetches, feed_dict, meta_step_info, extern_d
 class CustomCheckpointLoader:
   """
   This uses `tf.train.NewCheckpointReader`.
+
   It would do automatic conversions if needed, e.g. between different LSTM implementations.
+  However, be careful that for some LSTM implementation, there is an additional ``forget_bias``
+  option, which is an additional scalar which gets added (not to the param, but to the forget value directly).
+  When we convert the parameters, this is ignored, and you must take care about that explicitly
+  to make sure you get the same results.
+
   It tries to automatically resolve renames, similar to this:
 
     https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/rnn/python/tools/checkpoint_convert.py
@@ -2473,6 +2479,53 @@ class CustomCheckpointLoader:
 
       return load_native_lstm_bias
 
+    class MakeLoadBasicToNativeLstm:
+      def __init__(self, basic_kernel, basic_bias):
+        """
+        :param str basic_kernel:
+        :param str basic_bias:
+        """
+        self.basic_kernel = basic_kernel
+        self.basic_bias = basic_bias
+        self._w_ff = None
+        self._w_re = None
+        self._bias = None
+
+      def _calc(self):
+        if self._w_ff is not None:
+          return
+        old_w_ff_re = reader.get_tensor(self.basic_kernel)  # (n_in+n_out,n_out*4)
+        assert old_w_ff_re.ndim == 2
+        old_bias = reader.get_tensor(self.basic_bias)  # (n_out*4,)
+        assert old_bias.ndim == 1 and old_bias.shape[0] == old_w_ff_re.shape[1] and old_bias.shape[0] % 4 == 0
+        n_out = old_bias.shape[0] // 4
+        assert old_w_ff_re.shape[0] > n_out
+        n_in = old_w_ff_re.shape[0] - n_out
+        # i = input_gate, j = new_input, f = forget_gate, o = output_gate
+        # BasicLSTM: i, j, f, o; Input: [inputs, h]
+        # LstmGenericBase/NativeLstm: j, i, f, o
+        # NativeLstm2: j, i, f, o
+        old_w_ff_re_i, old_w_ff_re_j, old_w_ff_re_f, old_w_ff_re_o = numpy.split(old_w_ff_re, 4, axis=1)
+        old_bias_i, old_bias_j, old_bias_f, old_bias_o = numpy.split(old_bias, 4, axis=0)
+        new_w_ff_re = numpy.concatenate([old_w_ff_re_j, old_w_ff_re_i, old_w_ff_re_f, old_w_ff_re_o], axis=1)
+        new_w_ff, new_w_re = numpy.split(new_w_ff_re, [n_in], axis=0)
+        new_bias = numpy.concatenate([old_bias_j, old_bias_i, old_bias_f, old_bias_o], axis=0)
+        self._w_ff = new_w_ff
+        self._w_re = new_w_re
+        self._bias = new_bias
+
+      def get_w_re(self):
+        self._calc()
+        return self._w_re
+
+      def get_w(self):
+        self._calc()
+        return self._w_ff
+
+      def get_b(self):
+        self._calc()
+        return self._bias
+
     class MakeLoadCudnnRnn:
       """
       Helper to load the CuDNN params.
@@ -2515,6 +2568,7 @@ class CustomCheckpointLoader:
 
     # Here we try to make matches of missing vars and vars which seem to be obsolete.
     for v in missing_var_names:
+      # Check NativeLSTM -> BasicLSTM.
       if v.endswith("/lstm_cell/kernel"):
         old_name1 = v[:-len("/lstm_cell/kernel")] + "/W_re"
         old_name2 = v[:-len("/lstm_cell/kernel")] + "/W"
@@ -2524,6 +2578,22 @@ class CustomCheckpointLoader:
         old_name = v[:-len("/lstm_cell/bias")] + "/b"
         if old_name in obsolete_var_names:
           var_name_map[v] = make_load_bias_nativelstm_to_basic(v)
+      # Check BasicLSTM -> NativeLSTM.
+      if v.endswith("/rec/W_re"):
+        prefix = v[:-len("/rec/W_re")]
+        cur_name_W = "%s/rec/W" % prefix
+        cur_name_b = "%s/rec/b" % prefix
+        old_name_kernel = "%s/rec/lstm_cell/kernel" % prefix
+        old_name_bias = "%s/rec/lstm_cell/bias" % prefix
+        if (
+              old_name_kernel in obsolete_var_names and
+              old_name_bias in obsolete_var_names and
+              cur_name_W in missing_var_names and
+              cur_name_b in missing_var_names):
+          loader = MakeLoadBasicToNativeLstm(basic_kernel=old_name_kernel, basic_bias=old_name_bias)
+          var_name_map[v] = loader.get_w_re
+          var_name_map[cur_name_W] = loader.get_w
+          var_name_map[cur_name_b] = loader.get_b
     for v in obsolete_var_names:
       for k_old, k_new in map_list.items():
         if v.endswith("/%s" % k_old):
