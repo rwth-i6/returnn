@@ -965,8 +965,7 @@ def test_nd_indices_scatter_nd_time_major():
     indices = tf.expand_dims(tf.range(ts_dim), axis=x.batch_dim_axis)  # (1,Ts) or (Ts,1)
     indices = indices + tf.expand_dims(t, axis=1 - x.batch_dim_axis)  # (B,Ts) or (Ts,B)
     max_t = tf.maximum(tf.reduce_max(indices) + 1, time_dim + 1)
-    indices = nd_indices(
-      indices, batch_axis=x.batch_dim_axis, indices_batch_major=True)  # (B,Ts,2) or (Ts,B,2)
+    indices = nd_indices(indices, batch_axis=x.batch_dim_axis)  # (B,Ts,2) or (Ts,B,2)
     x0 = tf.scatter_nd(
       indices=indices, updates=v.placeholder,
       shape=[batch_dim, max_t, x.dim] if x.batch_dim_axis == 0
@@ -980,7 +979,7 @@ def test_nd_indices_scatter_nd_time_major():
     return out
 
   n_batch = 3
-  t = tf.convert_to_tensor([4, 4, 2])  # (B,)
+  t = tf.convert_to_tensor([4, 3, 2])  # (B,)
   n_time = 7
   seq_len = tf.convert_to_tensor([7, 4, 5])
   n_ts = 2
