@@ -943,6 +943,64 @@ def test_scatter_nd():
   session.run(ref_grad)
 
 
+def test_nd_indices_scatter_nd_time_major():
+  def rel_embed(x, v, t):
+    """
+    :param Data x: energy_in. (B, T, K) or (T, B, K)
+    :param Data v: t_rel_var. (B, Ts, K)
+    :param tf.Tensor t: (B,), int32
+    :rtype: tf.Tensor
+    """
+    import tensorflow as tf
+    from TFUtil import nd_indices
+    v = v.copy_compatible_to(x)  # t_rel_var. (B, Ts, K)
+    assert v.dim == x.dim
+    t = t + 1  # shift by 1, because we init at -1
+    # t = tf.Print(t, ["t:", t])
+    time_dim = tf.shape(x.placeholder)[x.time_dim_axis]
+    batch_dim = tf.shape(x.placeholder)[x.batch_dim_axis]
+    assert len(v.shape) == 2 and all([isinstance(d, int) for d in v.shape])
+    ts_dim = v.shape[0]
+    assert x.batch_dim_axis in [0, 1]
+    indices = tf.expand_dims(tf.range(ts_dim), axis=x.batch_dim_axis)  # (1,Ts) or (Ts,1)
+    indices = indices + tf.expand_dims(t, axis=1 - x.batch_dim_axis)  # (B,Ts) or (Ts,B)
+    max_t = tf.maximum(tf.reduce_max(indices) + 1, time_dim + 1)
+    indices = nd_indices(
+      indices, batch_axis=x.batch_dim_axis, indices_batch_major=True)  # (B,Ts,2) or (Ts,B,2)
+    x0 = tf.scatter_nd(
+      indices=indices, updates=v.placeholder,
+      shape=[batch_dim, max_t, x.dim] if x.batch_dim_axis == 0
+      else [max_t, batch_dim, x.dim])  # (B,T,K) or (T,B,K)
+    if x.batch_dim_axis == 0:
+      x0 = x0[:, 1:time_dim + 1]  # correct the shift from above
+    else:
+      x0 = x0[1:time_dim + 1]  # correct the shift from above
+    out = x.placeholder + x0
+    # out = tf.Print(out, ["i:", network.get_rec_step_index(), "t:", t], summarize=5)
+    return out
+
+  n_batch = 3
+  t = tf.convert_to_tensor([4, 4, 2])  # (B,)
+  n_time = 7
+  seq_len = tf.convert_to_tensor([7, 4, 5])
+  n_ts = 2
+  n_k = 5
+  v = tf.random_normal((n_ts, n_k))
+  v = expand_dims_unbroadcast(v, axis=0, dim=n_batch)  # (B,Ts,K)
+  v = Data(name="v", shape=(n_ts, n_k), placeholder=v)
+  x = tf.random_normal((n_batch, n_time, n_k))
+  x = Data(name="x", shape=(None, n_k), placeholder=x, size_placeholder={0: seq_len})
+  print(x)
+  print(v)
+  print(t)
+  res1 = rel_embed(x, v, t)
+  print("res1 (batch major):", res1)
+  res2 = rel_embed(x.copy_as_time_major(), v, t)
+  print("res2 (time major):", res2)
+  session.run(res1)
+  session.run(res2)
+
+
 def test_dimshuffle():
   x = tf.zeros((2, 3, 5))
   assert_equal(list(session.run(tf.shape(x))), [2, 3, 5])
