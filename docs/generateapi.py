@@ -24,6 +24,9 @@ def generate():
   if not os.path.exists("crnn"):
     os.symlink("..", "crnn")
 
+  if not os.path.exists("api"):
+    os.mkdir("api")
+
   def makeapi(modname):
     fn = "api/%s.rst" % modname
     if os.path.exists(fn):

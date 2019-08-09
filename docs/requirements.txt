@@ -3,7 +3,8 @@ scipy
 h5py
 theano==0.9
 nose
-tensorflow
+tensorflow==1.13.1
 numpydoc
 tornado
 futures
+better_exchook

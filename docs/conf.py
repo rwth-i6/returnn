@@ -16,6 +16,9 @@ sys.path += [".", "crnn"]
 import faulthandler
 faulthandler.enable()
 
+import better_exchook
+better_exchook.install()
+
 import logging
 logging.getLogger('tensorflow').disabled = True
 
