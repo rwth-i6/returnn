@@ -1151,6 +1151,8 @@ class HDFDatasetWriter:
     print("Data keys:", data_keys, file=log.v3)
     if "orth" in data_keys:  # special workaround for now, not handled
       data_keys.remove("orth")
+    if "raw" in data_keys:
+      data_keys.remove("raw")
     data_target_keys = [key for key in dataset.get_target_list() if key in data_keys]
     data_input_keys = [key for key in data_keys if key not in data_target_keys]
     assert len(data_input_keys) > 0 and len(data_target_keys) > 0
