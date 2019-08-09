@@ -59,6 +59,7 @@ User guide
     tf_lstm_benchmark
     multi_gpu
     deterministic_training
+    debugging
     profiling
     configuration_reference/index.rst
     dataset_reference/index.rst

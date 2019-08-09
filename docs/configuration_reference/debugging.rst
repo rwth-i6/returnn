@@ -12,3 +12,5 @@ debug_print_layer_output_template
 
 debug_print_layer_output_shape
     If set to ``True``, print the layer shape information while the graph is executed.
+
+Also see :ref:`debugging`.
