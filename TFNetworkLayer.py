@@ -5384,7 +5384,6 @@ class CombineLayer(LayerBase):
     :rtype: tf.Tensor
     """
     used_sources = set()  # type: typing.Set[int]
-    common_data = Data.get_common_data([s.output for s in sources])
 
     def source(i, auto_convert=True, enforce_batch_major=False, as_data=False):
       """
@@ -5400,7 +5399,7 @@ class CombineLayer(LayerBase):
       if isinstance(sources[i], LayerBase):
         output = sources[i].output
         if auto_convert:
-          output = output.copy_compatible_to(common_data)
+          output = output.copy_compatible_to(self.output, check_dtype=False)
         if enforce_batch_major:
           output = output.copy_as_batch_major()
         if as_data:
