@@ -2767,11 +2767,58 @@ class SeqLenMaskLayer(_ConcatInputLayer):
     return get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
 
 
+class RangeLayer(LayerBase):
+  """
+  Generic wrapper around ``tf.range``.
+  See also :class:`RangeInAxisLayer`.
+  """
+  layer_class = "range"
+
+  def __init__(self, limit, start=0, delta=1, dtype=None, **kwargs):
+    """
+    :param int|float limit:
+    :param int|float start:
+    :param int|float delta:
+    :param str|None dtype:
+    """
+    super(RangeLayer, self).__init__(**kwargs)
+    self.output.placeholder = tf.range(start=start, limit=limit, delta=delta, dtype=self.output.dtype)
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param TFNetwork.TFNetwork network:
+    :param (str)->LayerBase get_layer:
+    """
+    d.setdefault("from", [])
+    super(RangeLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, limit, start=0, delta=1, dtype=None, **kwargs):
+    """
+    :param str name:
+    :param int|float limit:
+    :param int|float start:
+    :param int|float delta:
+    :param str|None dtype:
+    :rtype: Data
+    """
+    if dtype is None:
+      if any([float(arg) != int(arg) for arg in [start, limit, delta]]):
+        dtype = "float32"
+      else:
+        dtype = "int32"
+    dim = len(range(start, limit, delta))
+    return Data(name="%s_output" % name, shape=(dim,), dim=dim, dtype=dtype, batch_dim_axis=None)
+
+
 class RangeInAxisLayer(LayerBase):
   """
   Assume that the input is e.g. (B,T,D), and you specify axis="T", you will get (B=1,T,D=1),
   where the specified axis is filled with ``tf.range``.
   (Currently always keep_dims.)
+  See also :class:`RangeLayer`.
   """
   layer_class = "range_in_axis"
   recurrent = True  # if axis=="T", the time-dim order matters
