@@ -192,6 +192,8 @@ class DimensionTag(object):
     :param DimensionTag other:
     :rtype: bool
     """
+    if not isinstance(other, DimensionTag):
+      return False
     return self.is_equal(other)
 
   def __ne__(self, other):
