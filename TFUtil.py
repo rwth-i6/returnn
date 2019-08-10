@@ -148,6 +148,11 @@ class DimensionTag(object):
 
   def is_equal(self, other, ignore_feature_dim=False, allow_same_feature_dim=False, allow_same_spatial_dim=None):
     """
+    Compares self to other for equality.
+    Note that the default behavior is very restrictive.
+    Use functions such as :func:`get_all_dimension_tags` or :func:`get_existing_tag_from_collection`
+    to explicitly specify the behavior for the comparison.
+
     :param DimensionTag other:
     :param bool ignore_feature_dim:
     :param bool allow_same_feature_dim:
@@ -1125,6 +1130,36 @@ class Data(object):
     if name:
       kwargs["name"] = name
     return Data(**kwargs)
+
+  def copy_template_replace_dim(self, axis, new_dim, new_size=None):
+    """
+    :param int axis:
+    :param int|None new_dim:
+    :param tf.Tensor|None new_size:
+    :rtype: Data
+    """
+    out = self.copy_template()
+    if axis < 0:
+      assert axis + out.batch_ndim >= 0
+      axis += out.batch_ndim
+    assert 0 <= axis < out.batch_ndim
+    if axis == out.batch_dim_axis:
+      assert new_dim is None
+      return out  # nothing to do
+    axis_wo_b = out.get_batch_axis_excluding_batch(axis)
+    new_shape = list(out.shape)
+    new_shape[axis_wo_b] = new_dim
+    out.shape = tuple(new_shape)
+    if axis == out.feature_dim_axis:
+      out.dim = new_dim
+    if out.size_placeholder and axis_wo_b in out.size_placeholder:
+      del out.size_placeholder[axis_wo_b]
+    if new_size is not None:
+      if out.size_placeholder is None:
+        out.size_placeholder = {}
+      out.size_placeholder[axis_wo_b] = new_size
+    out.sanity_check()
+    return out
 
   def _get_variable_dim_pattern(self):
     """
