@@ -713,8 +713,10 @@ class Data(object):
     :rtype: Data
     """
     assert self.batch_dim_axis is None
-    if self.feature_dim_axis is not None:
-      assert batch_dim_axis <= self.feature_dim_axis, "does not work yet otherwise, feature-dim-axis must be last"
+    if batch_dim_axis < 0:
+      assert batch_dim_axis + self.batch_ndim + 1 >= 0
+      batch_dim_axis += self.batch_ndim + 1
+    assert 0 <= batch_dim_axis <= self.batch_ndim
     data = self.copy()
     if data.placeholder is not None:
       data.placeholder = tf.expand_dims(data.placeholder, batch_dim_axis, name="%s_add_batch_dim" % self.name)
@@ -740,6 +742,11 @@ class Data(object):
         spatial_dim_axis = self.feature_dim_axis  # add it before the feature dim
       else:
         spatial_dim_axis = self.batch_ndim  # add it at the end
+    else:
+      if spatial_dim_axis < 0:
+        assert spatial_dim_axis + self.batch_ndim + 1 >= 0
+        spatial_dim_axis += self.batch_ndim + 1
+      assert 0 <= spatial_dim_axis <= self.batch_ndim
     if data.placeholder is not None:
       assert dim == 1  # not implemented otherwise
       data.placeholder = tf.expand_dims(data.placeholder, spatial_dim_axis, name="%s_add_spatial_dim" % self.name)
@@ -757,18 +764,26 @@ class Data(object):
     data.sanity_check()
     return data
 
-  def copy_add_feature_dim(self):
+  def copy_add_feature_dim(self, axis=None):
     """
+    :param int|None axis:
     :return: self with a new feature dim axis with dim 1.
       If there is an existing feature dim, the new feature dim will be added right after.
     :rtype: Data
     """
     v = self.copy()
     assert not v.sparse
-    if v.feature_dim_axis is not None:
-      new_feature_dim_axis = v.feature_dim_axis + 1
+    if axis is None:
+      if v.feature_dim_axis is not None:
+        new_feature_dim_axis = v.feature_dim_axis + 1
+      else:
+        new_feature_dim_axis = v.batch_ndim
     else:
-      new_feature_dim_axis = v.batch_ndim
+      if axis < 0:
+        assert axis + v.batch_ndim + 1 >= 0
+        axis += v.batch_ndim + 1
+      assert 0 <= axis <= v.batch_ndim
+      new_feature_dim_axis = axis
     other_special_axes = self.get_special_axes_dict(
       counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
     other_special_axes.pop("feature_dim_axis", None)
@@ -783,19 +798,20 @@ class Data(object):
     v.sanity_check()
     return v
 
-  def copy_add_dim_by_tag(self, dim_tag, unbroadcast=False):
+  def copy_add_dim_by_tag(self, dim_tag, unbroadcast=False, axis=None):
     """
     :param DimensionTag dim_tag:
     :param bool unbroadcast:
+    :param int|None axis:
     :rtype: Data
     """
     if dim_tag.kind == DimensionTag.Types.Batch:
-      res = self.copy_add_batch_dim(batch_dim_axis=0)
+      res = self.copy_add_batch_dim(batch_dim_axis=0 if axis is None else axis)
       if unbroadcast:
         assert res.placeholder is None  # not implemented yet...
       return res
     if dim_tag.kind == DimensionTag.Types.Feature:
-      res = self.copy_add_feature_dim()
+      res = self.copy_add_feature_dim(axis=axis)
       if unbroadcast:
         assert res.placeholder is None  # not implemented yet...
         res.dim = dim_tag.dimension
@@ -805,12 +821,15 @@ class Data(object):
         res.sanity_check()
       return res
     assert dim_tag.kind == DimensionTag.Types.Spatial
-    if self.time_dim_axis is not None:
-      spatial_dim_axis = self.time_dim_axis + 1  # after the existing spatial dim
-    elif self.feature_dim_axis is not None:
-      spatial_dim_axis = self.feature_dim_axis  # add it before the feature dim
+    if axis is None:
+      if self.time_dim_axis is not None:
+        spatial_dim_axis = self.time_dim_axis + 1  # after the existing spatial dim
+      elif self.feature_dim_axis is not None:
+        spatial_dim_axis = self.feature_dim_axis  # add it before the feature dim
+      else:
+        spatial_dim_axis = self.batch_ndim  # add it at the end
     else:
-      spatial_dim_axis = self.batch_ndim  # add it at the end
+      spatial_dim_axis = axis
     res = self.copy_add_spatial_dim(spatial_dim_axis=spatial_dim_axis, dim=1)
     assert res.batch_shape[spatial_dim_axis] == 1
     if unbroadcast:
@@ -1356,6 +1375,8 @@ class Data(object):
     :rtype: tf.Tensor
     """
     assert self.time_dim_axis is not None
+    if self.batch_shape[self.time_dim_axis] is not None:
+      return self.batch_shape[self.time_dim_axis]
     with reuse_name_scope_of_tensor(self.placeholder):
       with tf.name_scope("time_dim"):
         return tf.shape(self.placeholder)[self.time_dim_axis]
@@ -1577,6 +1598,12 @@ class Data(object):
     :return: axis counted without batch-dim
     :rtype: int
     """
+    if axis < 0:
+      assert axis + self.batch_ndim >= 0
+      axis += self.batch_ndim
+      # Do this check only in this case;
+      # we call this function early in construction where batch_ndim might be invalid.
+      assert 0 <= axis < self.batch_ndim
     if self.batch_dim_axis is None:
       return axis
     if axis == self.batch_dim_axis:

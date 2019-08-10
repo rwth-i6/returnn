@@ -2337,7 +2337,9 @@ class GatherNdLayer(_ConcatInputLayer):
   """
   This takes out a position from some axis, e.g. ``x[pos]``.
   This layers allows a different position for each batch.
+  It's basically a wrapper around ``tf.gather_nd``.
   See also :class:`SliceNdLayer`.
+  See also :class:`ScatterNdLayer`, which is the inverse operation.
   """
   layer_class = "gather_nd"
 
@@ -2396,6 +2398,152 @@ class GatherNdLayer(_ConcatInputLayer):
     """
     super(GatherNdLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     d["position"] = get_layer(d["position"])
+
+
+class ScatterNdLayer(_ConcatInputLayer):
+  """
+  The inverse of :class:`GatherNdLayer`.
+  Mostly a wrapper for ``tf.scatter_nd``.
+
+  The input to the layer are the ``updates``, the ``indices`` are via the ``position`` argument.
+  The indices are into the newly constructed output dimension.
+  The output shape is constructed via the common shape of the input, the position,
+  and the the unique common axis (if not unique, we would need to introduce an option to specify it)
+  is replaced by the given output dimension (currently via ``output_dim_via_time_from``).
+
+  Examples::
+
+    position (indices): (B,eTs)
+    input (updates): (eTs,D) or (B,eTs,D) -> expanded to (B,eTs,D)
+    output shape: (B,eT,D)
+
+    position (indices): (B,dT,eTs)
+    input (updates): (eTs,D) -> expanded to (B,dT,eTs,D)
+    output shape: (B,dT,eT,D)
+
+    position (indices): (dT,eTs)
+    input (updates): (eTs,D) -> expanded to (dT,eTs,D)
+    output shape: (dT,eTs,D)
+
+    position (indices): (dT,eTs)
+    input (updates): (B,eTs,D) -> expanded to (dT,eTs,B,D)
+    output shape: (dT,eT,B,D)
+
+  In all these examples, output_dim_via_time_from is (B,eT,F), and eTs gets replaced by eT.
+  """
+  layer_class = "scatter_nd"
+
+  def __init__(self, position, position_axis, output_dim_via_time_from, filter_invalid_indices=False, **kwargs):
+    """
+    :param LayerBase position: indices into first axis (excluding batch) of the output
+    :param str|int position_axis: axis in `position` to replace by the output-dim
+    :param LayerBase output_dim_via_time_from: use the time-dim from this layer as the output-dim
+    :param bool filter_invalid_indices: allow for indices <0 or >= output_dim, which will be discarded in the output
+    """
+    super(ScatterNdLayer, self).__init__(**kwargs)
+    self.position = position
+    common, output, replace_common_axis, input_extra_axes = self._get_axes(
+      input_data=self.input_data, position=position.output, position_axis=position_axis,
+      output_dim_via_time_from=output_dim_via_time_from.output)
+    pos_v = position.output.placeholder
+    pos_ndim = position.output.batch_ndim
+    assert 0 <= replace_common_axis < pos_ndim
+    pos_shape = [position.output.get_dim(i) for i in range(pos_ndim)]
+    output_dim = output_dim_via_time_from.output.time_dimension()
+    input_shape = pos_shape + [self.input_data.get_dim(i) for i in input_extra_axes]
+    input_expanded = self.input_data.copy_compatible_to(common, unbroadcast=True, data_dyn_shape=input_shape)
+    input_v = input_expanded.placeholder
+    if filter_invalid_indices:
+      mask = tf.logical_or(tf.less(pos_v, 0), tf.greater_equal(pos_v, output_dim))
+      input_v = TFUtil.where_bc(
+        TFUtil.expand_multiple_dims(mask, [-1] * (common.batch_ndim - position.output.batch_ndim)),
+        0.0, input_v)
+      # It does not matter what dummy indices we use, as we have 0.0 updates, but it must be valid (0 is valid).
+      pos_v = tf.where(mask, tf.zeros_like(pos_v), pos_v)
+    # Now we need to implement a similar logic as `TFUtil.nd_indices`, but more generic.
+    idxs = [
+      (tf.reshape(tf.range(pos_shape[i], dtype=pos_v.dtype), [1] * i + [pos_shape[i]] + [1] * (pos_ndim - i - 1))
+       + tf.zeros_like(pos_v))
+      if i != replace_common_axis else
+      pos_v
+      for i in range(pos_ndim)]
+    nd_idxs = tf.stack(idxs, axis=-1)
+    # updates.shape == indices.shape[:-1] + output_shape[indices.shape[-1]:]
+    assert pos_ndim <= input_expanded.batch_ndim == self.output.batch_ndim
+    output_shape = [
+      input_shape[i] if i != replace_common_axis else output_dim
+      for i in range(input_expanded.batch_ndim)]
+    self.output.placeholder = tf.scatter_nd(
+      indices=nd_idxs, updates=input_v, shape=output_shape)
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    return super(ScatterNdLayer, self).get_dep_layers() + [self.position]
+
+  @classmethod
+  def _get_axes(cls, input_data, position, position_axis, output_dim_via_time_from):
+    """
+    :param Data input_data: updates
+    :param Data position: indices
+    :param str|int position_axis: axis in `position` to replace by the output-dim
+    :param Data output_dim_via_time_from:
+    :rtype: (Data, Data, int, list[int])
+    :return: common, output, axis, input_extra_axes
+    """
+    from TFUtil import DimensionTag
+    # Construct `common` manually, not via Data.get_common_data, such that we can control the axis order.
+    # We want the same axis from `position`, and all further axes should be added behind that.
+    common = position.copy_template()
+    common.dtype = input_data.dtype
+    common.vocab = input_data.vocab
+    common.sparse = input_data.sparse
+    if common.sparse:
+      common.dim = input_data.dim
+    dim_tags, tags_dict = DimensionTag.get_all_dimension_tags([common, input_data], dict(allow_same_feature_dim=True))
+    common_dim_tags = tags_dict[common]
+    input_extra_dim_tags = list(tags_dict[input_data])
+    input_extra_axes = []
+    for tag in dim_tags:
+      if tag not in common_dim_tags:
+        common = common.copy_add_dim_by_tag(tag, unbroadcast=True, axis=-1)
+        input_extra_axes.append(input_extra_dim_tags.index(tag))
+        input_extra_dim_tags[input_extra_axes[-1]] = None
+        common_dim_tags.append(tag)
+    position_axis = position.get_axis_from_description(position_axis)
+    output_dim = output_dim_via_time_from.batch_shape[output_dim_via_time_from.time_dim_axis]
+    output_size = output_dim_via_time_from.size_placeholder.get(
+      output_dim_via_time_from.time_dim_axis_excluding_batch, None)
+    output = common.copy_template_replace_dim(axis=position_axis, new_dim=output_dim, new_size=output_size)
+    return common, output, position_axis, input_extra_axes
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, position, position_axis, output_dim_via_time_from, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param LayerBase position:
+    :param str|int position_axis: axis in `position` to replace by the output-dim
+    :param LayerBase output_dim_via_time_from:
+    :rtype: Data
+    """
+    input_data = get_concat_sources_data_template(sources)
+    common, output, replace_common_axis, input_extra_axes = cls._get_axes(
+      input_data=input_data, position=position.output, position_axis=position_axis,
+      output_dim_via_time_from=output_dim_via_time_from.output)
+    return output
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param TFNetwork.TFNetwork network:
+    :param (str)->LayerBase get_layer:
+    """
+    super(ScatterNdLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["position"] = get_layer(d["position"])
+    d["output_dim_via_time_from"] = get_layer(d["output_dim_via_time_from"])
 
 
 class LinearLayer(_ConcatInputLayer):
