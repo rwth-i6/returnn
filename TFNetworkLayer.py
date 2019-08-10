@@ -5381,24 +5381,17 @@ class CombineLayer(LayerBase):
         raise TypeError("unexpected type of out_type %r" % (out_type,))
     return super(CombineLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type_, sources=sources, **kwargs)
 
-  def _check_same_dense_dim(self, sources):
-    """
-    :param list[LayerBase] sources:
-    """
-    assert not self.output.sparse
-    for source in sources:
-      assert not source.output.sparse
-      assert (source.output.dim == self.output.dim
-              or source.output.dim == 1)  # constant layer broadcasting
-
-  # Requires the same input shape and yield the same output shape.
-  def _op_dense_fn(self, sources, fn):
+  @staticmethod
+  def _op_dense_fn(sources, fn):
     """
     :param list[LayerBase] sources:
     :param ((x1,x2) -> y) fn: function to perform on x1 and x2
     :rtype: tf.Tensor
     """
-    self._check_same_dense_dim(sources)
+    # Earlier we checked for the same dense dim.
+    # Now, we completely rely on Data.get_common_data and Data.copy_compatible_to.
+    # That should fail if they are not compatible. Otherwise it would add any needed broadcast dimensions.
+    # All the dense element-wise functions should be able to deal with broadcasting.
     common_data = Data.get_common_data([s.output for s in sources])
     x = sources[0].output.copy_compatible_to(common_data).placeholder
     for source in sources[1:]:
