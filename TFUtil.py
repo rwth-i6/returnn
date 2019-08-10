@@ -234,10 +234,11 @@ class DimensionTag(object):
     return None
 
   @classmethod
-  def get_all_dimension_tags(cls, data_list, is_equal_opts=None):
+  def get_all_dimension_tags(cls, data_list, is_equal_opts=None, unique_separate_axes=True):
     """
     :param list[Data] data_list:
     :param dict[str]|None is_equal_opts: passed to DimensionTag.is_equal
+    :param bool unique_separate_axes: e.g. data_list=[Data with shape (B,5,5,10)] results in 4 dim tags, not 3.
     :return: list of dimension tags, dict for data -> list of dimension tags (for each axis)
     :rtype: (list[DimensionTag], dict[Data, list[DimensionTag]])
     """
@@ -245,12 +246,19 @@ class DimensionTag(object):
     data_axes_dict = {}
     for data in data_list:
       data_axes_dict[data] = []
+      tags_for_data = []
       for axis in range(data.batch_ndim):
         tag = data.get_dim_tag(axis)
         existing_tag = cls.get_existing_tag_from_collection(tag, tags=tags, is_equal_opts=is_equal_opts)
         if not existing_tag:
-          tags.append(tag)
+          if unique_separate_axes:
+            # Don't append it to `tags` directly now, such that e.g. for data with shape (B,5,5,10),
+            # we end up with two separate dim tags for the two spatial dims.
+            tags_for_data.append(tag)
+          else:
+            tags.append(tag)
         data_axes_dict[data].append(existing_tag or tag)
+      tags.extend(tags_for_data)
     return tags, data_axes_dict
 
 
@@ -1880,7 +1888,8 @@ class Data(object):
     """
     :param list[Data] sources:
     :param io.TextIOBase|None warnings_out:
-    :return: some generic data where the sources should be compatible to (with copy_compatible_to)
+    :return: some generic data where the sources should be compatible to (with copy_compatible_to),
+      i.e. it contains the union of all axes from all sources (least common multiple).
     :rtype: Data|None
     """
     if not sources:
