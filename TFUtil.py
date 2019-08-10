@@ -1360,6 +1360,16 @@ class Data(object):
       with tf.name_scope("time_dim"):
         return tf.shape(self.placeholder)[self.time_dim_axis]
 
+  def get_dim(self, axis):
+    """
+    :param int axis: counted with batch-dim
+    :return: shape[axis]
+    :rtype: tf.Tensor|int
+    """
+    if self.batch_shape[axis] is not None:
+      return self.batch_shape[axis]
+    return tf.shape(self.placeholder)[axis]
+
   def get_placeholder_as_time_major(self):
     """
     :rtype: tf.Tensor
