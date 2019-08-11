@@ -608,6 +608,14 @@ def test_Data_copy_add_dim_by_tag_unbroadcast_spatial():
   assert d2.shape == (None, 6)
 
 
+def test_Data_copy_add_dim_by_tag_sparse_unbroadcast_feature():
+  d = Data(name='t', shape=(), dtype='int32', sparse=True, dim=None, time_dim_axis=None)
+  tag = DimensionTag(kind='feature', description='feature:t', dimension=6)
+  d2 = d.copy_add_dim_by_tag(tag, unbroadcast=True)
+  # The feature axis should become a spatial axis in this case.
+  assert d2.shape == (6,) and d2.sparse and d2.dim is None and d2.feature_dim_axis is None
+
+
 def test_Data_copy_move_axis_time_to_end():
   d1 = Data(name="att_weights", shape=(None, None, 4))
   d2 = d1.copy_move_axis(d1.time_dim_axis, -1)

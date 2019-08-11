@@ -769,8 +769,12 @@ class Data(object):
     :param int|None axis:
     :return: self with a new feature dim axis with dim 1.
       If there is an existing feature dim, the new feature dim will be added right after.
+      If we are sparse, we don't add a feature dim, but it becomes a spatial dim instead.
     :rtype: Data
     """
+    if self.sparse:
+      # By definition, we don't have a feature dim. We allow this though. We just make it a spatial axis.
+      return self.copy_add_spatial_dim(spatial_dim_axis=axis)
     v = self.copy()
     assert not v.sparse
     if axis is None:
@@ -810,7 +814,8 @@ class Data(object):
       if unbroadcast:
         assert res.placeholder is None  # not implemented yet...
       return res
-    if dim_tag.kind == DimensionTag.Types.Feature:
+    # Note: if dim_tag is feature, but we are sparse, we just treat is as spatial, handled below.
+    if dim_tag.kind == DimensionTag.Types.Feature and not self.sparse:
       res = self.copy_add_feature_dim(axis=axis)
       if unbroadcast:
         assert res.placeholder is None  # not implemented yet...
@@ -820,7 +825,7 @@ class Data(object):
         res.shape = tuple(shape)
         res.sanity_check()
       return res
-    assert dim_tag.kind == DimensionTag.Types.Spatial
+    assert dim_tag.kind == DimensionTag.Types.Spatial or (dim_tag.kind == DimensionTag.Types.Feature and self.sparse)
     if axis is None:
       if self.time_dim_axis is not None:
         spatial_dim_axis = self.time_dim_axis + 1  # after the existing spatial dim
