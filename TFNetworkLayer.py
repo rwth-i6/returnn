@@ -234,8 +234,11 @@ class LayerBase(object):
       return out_type(
         network=network, name=name, n_out=n_out, target=target, size_target=size_target, sources=sources, loss=loss,
         **kwargs)
-    if sources and (not sources[0] or sources[0].output.undefined):
-      raise ValueError("%r: cannot handle undefined sources %r" % (name, sources))
+    if sources and [src for src in sources if src and not src.output.undefined]:
+      # Ok if we have some undefined but also some defined; filter out just the defined.
+      sources = [src for src in sources if src and not src.output.undefined]
+    if sources and (not sources[0] or sources[0].output.undefined) and not out_type:
+      raise ValueError("%r: cannot handle undefined sources %r without defined out_type" % (name, sources))
     if out_type is None:
       out_type = {}  # type: typing.Dict[str]
     else:
@@ -2537,7 +2540,7 @@ class ScatterNdLayer(_ConcatInputLayer):
     :rtype: Data
     """
     input_data = get_concat_sources_data_template(sources)
-    assert not position.output.undefined and not input_data.output.undefined
+    assert not position.output.undefined and not input_data.undefined
     common, output, replace_common_axis, input_extra_axes = cls._get_axes(
       input_data=input_data, position=position.output, position_axis=position_axis,
       output_dim_via_time_from=output_dim_via_time_from.output)

@@ -938,11 +938,11 @@ class _SubnetworkRecCell(object):
       """
       # noinspection PyMethodParameters
       def __init__(lself,
-                   safe=False, once=False, allow_uninitialized_template=False,
+                   safe=False, allow_construct_in_call_nrs=None, allow_uninitialized_template=False,
                    iterative_testing=True, reconstruct=False,
                    parent=None):
         lself.safe = safe
-        lself.once = once
+        lself.allow_construct_in_call_nrs = allow_construct_in_call_nrs  # type: typing.Optional[typing.Set[int]]
         lself.allow_uninitialized_template = allow_uninitialized_template
         lself.parent = parent
         lself.iterative_testing = iterative_testing
@@ -954,8 +954,9 @@ class _SubnetworkRecCell(object):
       def __repr__(lself):
         return (
           "<RecLayer construct template GetLayer>("
-          "safe %r, once %r, allow_uninitialized_template %r, count %r, parent %r)") % (
-            lself.safe, lself.once, lself.allow_uninitialized_template, lself.count, lself.parent)
+          "safe %r, allow_construct_in_call_nrs %r, allow_uninitialized_template %r, count %r, parent %r)") % (
+                 lself.safe, lself.allow_construct_in_call_nrs, lself.allow_uninitialized_template, lself.count,
+                 lself.parent)
 
       # noinspection PyMethodParameters
       def add_templated_layer(lself, name, layer_class, **layer_desc):
@@ -1041,9 +1042,10 @@ class _SubnetworkRecCell(object):
           # * layer_class.get_out_data_from_opts (via add_templated_layer)
           ConstructCtx.partially_finished.append(layer_)
         lself.count += 1
-        if lself.once and lself.count > 1:
-          lself.returned_none_count += 1
-          return None
+        if lself.allow_construct_in_call_nrs is not None:
+          if (lself.count - 1) not in lself.allow_construct_in_call_nrs:
+            lself.returned_none_count += 1
+            return None
         if lself.safe:
           lself.returned_none_count += 1
           return None
@@ -1063,9 +1065,10 @@ class _SubnetworkRecCell(object):
           if lself.iterative_testing and name not in self.net._construction_stack.layers:
             get_layer_candidates = [
               default_get_layer,
-              GetLayer(once=True, allow_uninitialized_template=False, parent=_name),
+              GetLayer(allow_construct_in_call_nrs={0}, allow_uninitialized_template=False, parent=_name),
+              GetLayer(allow_construct_in_call_nrs={1}, allow_uninitialized_template=False, parent=_name),
               GetLayer(safe=True, allow_uninitialized_template=False, parent=_name),
-              GetLayer(once=True, allow_uninitialized_template=True, parent=_name),
+              GetLayer(allow_construct_in_call_nrs={0}, allow_uninitialized_template=True, parent=_name),
               GetLayer(safe=True, allow_uninitialized_template=True, parent=_name)]
           for get_layer in get_layer_candidates:
             # noinspection PyBroadException

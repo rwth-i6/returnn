@@ -591,7 +591,7 @@ def test_engine_end_layer(extra_rec_kwargs=None):
       "output": dict_joined({
         "class": "rec", "from": [], "max_seq_len": 10, "target": "classes",
         "unit": {
-          "output": {"class": "linear", "activation": "tanh", "n_out": n_classes_dim, "from": ["prev:output"]},
+          "output": {"class": "linear", "activation": "tanh", "out_type": {"dim": n_classes_dim}, "from": ["prev:output"]},
           'stop_token': {'class': 'linear', 'activation': None, 'n_out': 1, 'loss': 'bin_ce', 'loss_scale': 1.0, 'target': 'data', 'from': ['output']},
           'stop_token_sigmoid': {'class': 'activation', 'activation': 'sigmoid', 'from': ['stop_token']},
           'end_compare': {'class': 'compare', 'kind': 'greater', 'from': ['stop_token_sigmoid'], 'value': 0.5},
