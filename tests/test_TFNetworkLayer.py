@@ -855,7 +855,7 @@ def test_MergeDimsLayer_SplitBatchTimeLayer_time_major():
     numpy.testing.assert_almost_equal(input_data, output_data)
 
 
-def test_ScatterNdLayer_RangeLayer_RangeInAxisLayer():
+def test_ScatterNdLayer_RangeLayer():
   n_batch, n_time, n_ts, n_in, n_out = 2, 3, 6, 7, 11
   rnd = numpy.random.RandomState(42)
   config = Config({
@@ -863,8 +863,9 @@ def test_ScatterNdLayer_RangeLayer_RangeInAxisLayer():
     "extern_data": {"data": {"dim": n_in}}
   })
   net_dict = {
-    "t": {"class": "range_in_axis", "axis": "t", "keepdims": False, "from": "data"},  # (T,)
-    "range": {"class": "range", "limit": n_ts},  # (Ts,)
+    "t": {"class": "eval", "from": [], "eval": "tf.convert_to_tensor([1, 2])",
+          "out_type": {"shape": (), "dtype": "int32", "sparse": True, "dim": None}},  # (B,)
+    "range": {"class": "range", "limit": n_ts, "sparse": True},  # (Ts,)
     "add_t": {"class": "combine", "kind": "add", "from": ["t", "range"]},  # (T,Ts)
     "t_rel_var": {"class": "variable", "shape": (n_ts, n_out), "init": "glorot_uniform"},  # (B,Ts,D)
     "output": {"class": "scatter_nd", "from": "t_rel_var", "position": "add_t", "position_axis": -1,
@@ -876,10 +877,53 @@ def test_ScatterNdLayer_RangeLayer_RangeInAxisLayer():
 
     fetches = network.get_fetches_dict()
     data_input = network.extern_data.data["data"]
+    out_layer = network.get_default_output_layer()
+    assert isinstance(out_layer, ScatterNdLayer)
+    assert out_layer.output.shape == (None, 11)
+    assert out_layer.output.feature_dim_axis_or_unspecified is NotSpecified and out_layer.output.feature_dim_axis == 2
+    assert out_layer.output.time_dim_axis == 1
 
     session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
     info, out = session.run(
-      (fetches, network.get_default_output_layer().output.placeholder),
+      (fetches, out_layer.output.placeholder),
+      feed_dict={
+        data_input.placeholder: rnd.normal(size=(n_batch, n_time, n_in)).astype("float32"),
+        data_input.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),
+      })
+    print(info)
+    print(out)  # random...
+
+
+def test_ScatterNdLayer_RangeLayer_RangeInAxisLayer():
+  n_batch, n_time, n_ts, n_in, n_out = 2, 3, 6, 7, 11
+  rnd = numpy.random.RandomState(42)
+  config = Config({
+    "debug_print_layer_output_template": True,
+    "extern_data": {"data": {"dim": n_in}}
+  })
+  net_dict = {
+    "t": {"class": "range_in_axis", "axis": "t", "keepdims": False, "from": "data", "sparse": True},  # (T,)
+    "range": {"class": "range", "limit": n_ts, "sparse": True},  # (Ts,)
+    "add_t": {"class": "combine", "kind": "add", "from": ["t", "range"]},  # (T,Ts)
+    "t_rel_var": {"class": "variable", "shape": (n_ts, n_out), "init": "glorot_uniform"},  # (B,Ts,D)
+    "output": {"class": "scatter_nd", "from": "t_rel_var", "position": "add_t", "position_axis": -1,
+               "output_dim_via_time_from": "data", "filter_invalid_indices": True}
+  }
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+
+    fetches = network.get_fetches_dict()
+    data_input = network.extern_data.data["data"]
+    out_layer = network.get_default_output_layer()
+    assert isinstance(out_layer, ScatterNdLayer)
+    assert out_layer.output.shape == (None, None, 11)
+    assert out_layer.output.feature_dim_axis_or_unspecified is NotSpecified and out_layer.output.feature_dim_axis == 3
+    assert out_layer.output.time_dim_axis == 0
+
+    session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+    info, out = session.run(
+      (fetches, out_layer.output.placeholder),
       feed_dict={
         data_input.placeholder: rnd.normal(size=(n_batch, n_time, n_in)).astype("float32"),
         data_input.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),

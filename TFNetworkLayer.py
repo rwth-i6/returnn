@@ -2501,7 +2501,13 @@ class ScatterNdLayer(_ConcatInputLayer):
     common.sparse = input_data.sparse
     if common.sparse:
       common.dim = input_data.dim
-    dim_tags, tags_dict = DimensionTag.get_all_dimension_tags([common, input_data], dict(allow_same_feature_dim=True))
+    elif common.feature_dim_axis is not None:
+      common.dim = common.batch_shape[common.feature_dim_axis]
+    else:
+      common.dim = None
+    common.sanity_check()
+    dim_tags, tags_dict = DimensionTag.get_all_dimension_tags(
+      [common, input_data], dict(allow_same_feature_dim=True, treat_feature_as_spatial=True))
     common_dim_tags = tags_dict[common]
     input_extra_dim_tags = list(tags_dict[input_data])
     input_extra_axes = []
@@ -2532,7 +2538,7 @@ class ScatterNdLayer(_ConcatInputLayer):
     common, output, replace_common_axis, input_extra_axes = cls._get_axes(
       input_data=input_data, position=position.output, position_axis=position_axis,
       output_dim_via_time_from=output_dim_via_time_from.output)
-    return output
+    return output.copy_template(name="%s_output" % name)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
