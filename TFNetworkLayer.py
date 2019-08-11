@@ -5483,7 +5483,6 @@ class CombineLayer(LayerBase):
     :param dict[str]|None eval_locals: locals for eval
     :param bool eval_for_output_loss: will do the same eval on layer.output_loss
     """
-    assert sources
     super(CombineLayer, self).__init__(sources=sources, **kwargs)
     assert kind in ["average", "add", "sub", "mul", "eval"], (
       "%s: Invalid `kind` %r for this layer." % (self, kind))
