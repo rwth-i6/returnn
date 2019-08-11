@@ -543,6 +543,8 @@ class Data(object):
       keys.append("placeholder")
     if not self.available_for_inference:
       keys.append("available_for_inference")
+    if self.undefined:
+      keys.append("undefined")
     if self.beam_size is not None:
       keys.append("beam_size")
     return "Data(%s)" % ", ".join(["%s=%r" % (key, getattr(self, key)) for key in keys])

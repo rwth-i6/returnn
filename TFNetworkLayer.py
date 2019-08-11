@@ -234,6 +234,8 @@ class LayerBase(object):
       return out_type(
         network=network, name=name, n_out=n_out, target=target, size_target=size_target, sources=sources, loss=loss,
         **kwargs)
+    if sources and (not sources[0] or sources[0].output.undefined):
+      raise ValueError("%r: cannot handle undefined sources %r" % (name, sources))
     if out_type is None:
       out_type = {}  # type: typing.Dict[str]
     else:
@@ -2535,6 +2537,7 @@ class ScatterNdLayer(_ConcatInputLayer):
     :rtype: Data
     """
     input_data = get_concat_sources_data_template(sources)
+    assert not position.output.undefined and not input_data.output.undefined
     common, output, replace_common_axis, input_extra_axes = cls._get_axes(
       input_data=input_data, position=position.output, position_axis=position_axis,
       output_dim_via_time_from=output_dim_via_time_from.output)
@@ -5525,8 +5528,13 @@ class CombineLayer(LayerBase):
     :rtype: Data
     """
     out_type_ = {}
-    if sources and any(sources):
-      out_type_.update(Data.get_common_data([s.output for s in sources if s], warnings_out=log.v4).get_kwargs())
+    sources_ = [s for s in sources if s and not s.output.undefined]
+    if sources and not sources_:
+      if n_out is NotSpecified and not out_type:
+        raise ValueError("%r: cannot handle uninizialized sources %r" % (kwargs["name"], sources))
+    sources = sources_
+    if sources:
+      out_type_.update(Data.get_common_data([s.output for s in sources], warnings_out=log.v4).get_kwargs())
     if n_out is not NotSpecified:
       out_type_["dim"] = n_out
     out_type_["name"] = "%s_output" % kwargs["name"]
@@ -5789,8 +5797,10 @@ class SwitchLayer(LayerBase):
     """
     if isinstance(condition, bool):
       if condition:
+        assert not true_from.output.undefined
         return true_from.output.copy("%s_output" % name)
       else:
+        assert not false_from.output.undefined
         return false_from.output.copy("%s_output" % name)
     return Data.get_common_data([true_from.output, false_from.output, condition.output])
 
