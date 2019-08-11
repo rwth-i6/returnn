@@ -456,6 +456,29 @@ def test_Data_copy_compatible_to_get_common_data_auto_feature_non_sparse():
   assert d2a.feature_dim_axis_or_unspecified is NotSpecified
 
 
+def test_Data_copy_compatible_to_get_common_data_no_feature_sparse():
+  d1 = Data(name="t", shape=(), dtype='int32', sparse=True, dim=None, time_dim_axis=None)
+  d2 = Data(name="r", shape=(6,), dtype='int32', sparse=True, dim=6, batch_dim_axis=None, time_dim_axis=None)
+  common = Data.get_common_data([d1, d2], warnings_out=sys.stdout)
+  print("common:", common)
+  d1a = d1.copy_compatible_to(common)
+  print("d1':", d1a)
+  d2a = d2.copy_compatible_to(common)
+  print("d2':", d2a)
+  assert common.sparse and d1a.sparse and d2a.sparse
+  assert common.feature_dim_axis_or_unspecified is NotSpecified
+  assert d1a.feature_dim_axis_or_unspecified is NotSpecified
+  assert d2a.feature_dim_axis_or_unspecified is NotSpecified
+  assert common.feature_dim_axis is None
+  assert d1a.feature_dim_axis is None
+  assert d2a.feature_dim_axis is None
+
+
+def test_Data_no_feature_dim():
+  d = Data(name="x", shape=(6,), dtype='int32', sparse=True, dim=6, batch_dim_axis=None, time_dim_axis=None)
+  assert d.feature_dim_axis is None
+
+
 def test_Data_feature_dim_axis_btd():
   d1 = Data(name="d1", shape=(None, 11), feature_dim_axis=-1)
   d2 = Data(name="d2", shape=(None, 11), feature_dim_axis=2)
