@@ -601,6 +601,13 @@ def test_Data_copy_add_spatial_dim_most_right():
   assert_equal(d2.get_spatial_batch_axes(), [1])
 
 
+def test_Data_copy_add_dim_by_tag_unbroadcast_spatial():
+  d = Data(name='ts', shape=(None,), time_dim_axis=None)
+  tag = DimensionTag(kind='spatial', description='spatial:0:ts', dimension=6)
+  d2 = d.copy_add_dim_by_tag(tag, unbroadcast=True, axis=-1)
+  assert d2.shape == (None, 6)
+
+
 def test_Data_copy_move_axis_time_to_end():
   d1 = Data(name="att_weights", shape=(None, None, 4))
   d2 = d1.copy_move_axis(d1.time_dim_axis, -1)

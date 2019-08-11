@@ -837,6 +837,9 @@ class Data(object):
       shape = list(res.shape)
       shape[res.get_batch_axis_excluding_batch(spatial_dim_axis)] = dim_tag.dimension
       res.shape = tuple(shape)
+      if res.feature_dim_axis is not None:
+        # feature dim axis might have changed if unspecified, so just update dim
+        res.dim = res.batch_shape[res.feature_dim_axis]
       res.sanity_check()
       if dim_tag.dimension is None and dim_tag.dyn_size is not None:
         if res.size_placeholder is None:
