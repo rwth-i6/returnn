@@ -2922,12 +2922,13 @@ class RangeLayer(LayerBase):
   """
   layer_class = "range"
 
-  def __init__(self, limit, start=0, delta=1, dtype=None, **kwargs):
+  def __init__(self, limit, start=0, delta=1, dtype=None, sparse=False, **kwargs):
     """
     :param int|float limit:
     :param int|float start:
     :param int|float delta:
     :param str|None dtype:
+    :param bool sparse:
     """
     super(RangeLayer, self).__init__(**kwargs)
     self.output.placeholder = tf.range(start=start, limit=limit, delta=delta, dtype=self.output.dtype)
@@ -2943,13 +2944,14 @@ class RangeLayer(LayerBase):
     super(RangeLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, limit, start=0, delta=1, dtype=None, **kwargs):
+  def get_out_data_from_opts(cls, name, limit, start=0, delta=1, dtype=None, sparse=False, **kwargs):
     """
     :param str name:
     :param int|float limit:
     :param int|float start:
     :param int|float delta:
     :param str|None dtype:
+    :param bool sparse:
     :rtype: Data
     """
     if dtype is None:
@@ -2958,7 +2960,7 @@ class RangeLayer(LayerBase):
       else:
         dtype = "int32"
     dim = len(range(start, limit, delta))
-    return Data(name="%s_output" % name, shape=(dim,), dim=dim, dtype=dtype, batch_dim_axis=None)
+    return Data(name="%s_output" % name, shape=(dim,), dim=dim, dtype=dtype, sparse=sparse, batch_dim_axis=None)
 
 
 class RangeInAxisLayer(LayerBase):
@@ -2970,12 +2972,13 @@ class RangeInAxisLayer(LayerBase):
   layer_class = "range_in_axis"
   recurrent = True  # if axis=="T", the time-dim order matters
 
-  def __init__(self, axis, dtype="int32", unbroadcast=False, keepdims=True, **kwargs):
+  def __init__(self, axis, dtype="int32", unbroadcast=False, keepdims=True, sparse=False, **kwargs):
     """
     :param str axis:
     :param str dtype:
     :param bool unbroadcast:
     :param bool keepdims:
+    :param bool sparse:
     """
     super(RangeInAxisLayer, self).__init__(**kwargs)
     source = self.sources[0].output
@@ -2996,13 +2999,14 @@ class RangeInAxisLayer(LayerBase):
       self.output.size_placeholder = {0: size for (i, size) in source.size_placeholder.items() if i == axis_wo_b}
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, axis, dtype="int32", keepdims=True, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, axis, dtype="int32", keepdims=True, sparse=False, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param str axis:
     :param str dtype:
     :param bool keepdims:
+    :param bool sparse:
     """
     assert len(sources) == 1, "%s layer %r requires single source" % (cls, name)
     source = sources[0].output
@@ -3019,6 +3023,7 @@ class RangeInAxisLayer(LayerBase):
         out.time_dim_axis = 0
       if axis != source.feature_dim_axis:
         out.feature_dim_axis = None
+    out.sparse = sparse
     return out
 
 
