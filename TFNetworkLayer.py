@@ -2523,6 +2523,8 @@ class ScatterNdLayer(_ConcatInputLayer):
         input_extra_dim_tags[input_extra_axes[-1]] = None
         common_dim_tags.append(tag)
     position_axis = position.get_axis_from_description(position_axis)
+    if common.time_dim_axis is None:
+      common.time_dim_axis = position_axis
     output_dim = output_dim_via_time_from.batch_shape[output_dim_via_time_from.time_dim_axis]
     output_size = output_dim_via_time_from.size_placeholder.get(
       output_dim_via_time_from.time_dim_axis_excluding_batch, None)
