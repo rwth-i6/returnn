@@ -441,6 +441,21 @@ def test_Data_copy_compatible_to_batch_axis1_time_axis_at_end():
   assert data2.dim == common_data.dim == 1
 
 
+def test_Data_copy_compatible_to_get_common_data_auto_feature_non_sparse():
+  d1 = Data(name='t', shape=(None,), dtype='int32', batch_dim_axis=None, feature_dim_axis=None,
+            auto_create_placeholders=True)  # placeholder for specific spatial dim-tag
+  d2 = Data(name='r', shape=(6,), dtype='int32', batch_dim_axis=None, time_dim_axis=None)
+  common = Data.get_common_data([d1, d2], warnings_out=sys.stdout)
+  print("common:", common)
+  d1a = d1.copy_compatible_to(common)
+  print("d1':", d1a)
+  d2a = d2.copy_compatible_to(common)
+  print("d2':", d2a)
+  assert common.feature_dim_axis_or_unspecified is NotSpecified
+  assert d1a.feature_dim_axis_or_unspecified is NotSpecified
+  assert d2a.feature_dim_axis_or_unspecified is NotSpecified
+
+
 def test_Data_feature_dim_axis_btd():
   d1 = Data(name="d1", shape=(None, 11), feature_dim_axis=-1)
   d2 = Data(name="d2", shape=(None, 11), feature_dim_axis=2)
@@ -599,6 +614,42 @@ def test_Data_copy_add_spatial_dim_most_right():
   d2 = d1.copy_add_spatial_dim(1)
   print(d2, "spatial axes:", d2.get_spatial_batch_axes())
   assert_equal(d2.get_spatial_batch_axes(), [1])
+
+
+def test_Data_copy_add_spatial_dim_no_batch_end():
+  d = Data(name='t', shape=(None,), dtype='int32', sparse=True, dim=None,
+           batch_dim_axis=None, time_dim_axis=None, feature_dim_axis=None)
+  assert d.batch_shape == (None,)
+  d2 = d.copy_add_spatial_dim(spatial_dim_axis=1, dim=1)
+  assert d2.batch_shape == (None, 1)
+
+
+def test_Data_copy_add_spatial_dim_default_after_last_spatial():
+  d1 = Data(name="x", shape=(2, 1337), batch_dim_axis=0, time_dim_axis=1)
+  assert d1.batch_shape == (None, 2, 1337)
+  d2 = d1.copy_add_spatial_dim(dim=3)
+  assert d2.batch_shape == (None, 2, 3, 1337)
+  d3 = d2.copy_add_spatial_dim(dim=4)
+  assert d3.batch_shape == (None, 2, 3, 4, 1337)
+
+
+def test_Data_copy_add_dim_by_tag_unbroadcast_feature_non_specific_feature_dim():
+  d = Data(name='t', shape=(None,), dtype='int32', batch_dim_axis=None, time_dim_axis=None, feature_dim_axis=None)
+  tag = DimensionTag(kind='feature', description='feature:r', dimension=6)
+  d2 = d.copy_add_dim_by_tag(tag, unbroadcast=True)
+  print("d2:", d2)
+  assert d2.batch_shape == (None, 6)
+  assert d2.feature_dim_axis_or_unspecified is NotSpecified and d2.feature_dim_axis == 1
+
+
+def test_Data_copy_add_dim_by_tag_unbroadcast_spatial_sparse():
+  d = Data(name='t', shape=(None,), dtype='int32', sparse=True, dim=None, batch_dim_axis=None, feature_dim_axis=None)
+  tag = DimensionTag(kind='spatial', description='spatial:0:range', dimension=6)
+  d2 = d.copy_add_dim_by_tag(tag, unbroadcast=True)
+  print("d2:", d2)
+  assert d2.batch_shape == (None, 6)
+  assert d2.sparse
+  assert d2.feature_dim_axis_or_unspecified is d.feature_dim_axis_or_unspecified
 
 
 def test_Data_copy_add_dim_by_tag_unbroadcast_spatial():

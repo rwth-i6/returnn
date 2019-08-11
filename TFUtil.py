@@ -146,7 +146,8 @@ class DimensionTag(object):
     assert self.get_tag_from_size_tensor(self.dyn_size) is self
     return True
 
-  def is_equal(self, other, ignore_feature_dim=False, allow_same_feature_dim=False, allow_same_spatial_dim=None):
+  def is_equal(self, other, ignore_feature_dim=False, allow_same_feature_dim=False, allow_same_spatial_dim=None,
+               treat_feature_as_spatial=False):
     """
     Compares self to other for equality.
     Note that the default behavior is very restrictive.
@@ -157,6 +158,7 @@ class DimensionTag(object):
     :param bool ignore_feature_dim:
     :param bool allow_same_feature_dim:
     :param bool|None allow_same_spatial_dim:
+    :param bool treat_feature_as_spatial:
     :rtype: bool
     """
     if allow_same_spatial_dim is None:
@@ -165,22 +167,29 @@ class DimensionTag(object):
     other_base = other.get_same_base()
     if self_base is other_base:
       return True
-    if self.kind == other.kind == self.Types.Feature and ignore_feature_dim:
+    self_kind = self.kind
+    other_kind = other.kind
+    if self_kind == other_kind == self.Types.Feature and ignore_feature_dim:
       return True
+    if treat_feature_as_spatial:
+      if self_kind == self.Types.Feature:
+        self_kind = self.Types.Spatial
+      if other_kind == self.Types.Feature:
+        other_kind = self.Types.Spatial
     if self.dimension != other.dimension:
       return False
-    if self.kind != other.kind:
+    if self_kind != other_kind:
       return False
-    if self.kind == other.kind == self.Types.Batch:
+    if self_kind == other_kind == self.Types.Batch:
       # Note: This might be incorrect in some cases,
       # e.g. for beam search when we have the beam hidden in the batch dim,
       # or when we used MergeDimsLayer on the batch axis, or so.
       # We might need to extend the logic here later.
       return True
-    if self.kind == other.kind == self.Types.Feature:
+    if self_kind == other_kind == self.Types.Feature:
       if allow_same_feature_dim:
         return True
-    if self.kind == other.kind == self.Types.Spatial:
+    if self_kind == other_kind == self.Types.Spatial:
       if self.dimension is not None and allow_same_spatial_dim:
         return True
     if self.description == other.description:
@@ -736,8 +745,8 @@ class Data(object):
     """
     data = self.copy()
     if spatial_dim_axis is None:
-      if self.time_dim_axis is not None:
-        spatial_dim_axis = self.time_dim_axis + 1  # after the existing spatial dim
+      if self.get_spatial_batch_axes():
+        spatial_dim_axis = self.get_spatial_batch_axes()[-1] + 1  # after the existing spatial dim
       elif self.feature_dim_axis is not None:
         spatial_dim_axis = self.feature_dim_axis  # add it before the feature dim
       else:
@@ -750,7 +759,10 @@ class Data(object):
     if data.placeholder is not None:
       assert dim == 1  # not implemented otherwise
       data.placeholder = tf.expand_dims(data.placeholder, spatial_dim_axis, name="%s_add_spatial_dim" % self.name)
-    axis_wo_batch = spatial_dim_axis if (spatial_dim_axis <= (self.batch_dim_axis or 0)) else (spatial_dim_axis - 1)
+    if self.batch_dim_axis is None:
+      axis_wo_batch = spatial_dim_axis
+    else:
+      axis_wo_batch = spatial_dim_axis if (spatial_dim_axis <= self.batch_dim_axis) else (spatial_dim_axis - 1)
     data.shape = data.shape[:axis_wo_batch] + (dim,) + data.shape[axis_wo_batch:]
     if data.time_dim_axis is None:
       data.time_dim_axis = spatial_dim_axis
@@ -796,7 +808,10 @@ class Data(object):
     v.dim = 1
     for k, a in other_special_axes.items():
       setattr(v, k, a if (a < new_feature_dim_axis) else (a + 1))
-    v.feature_dim_axis = new_feature_dim_axis
+    if v.feature_dim_axis_or_unspecified is not NotSpecified:
+      v.feature_dim_axis = NotSpecified
+    if v.feature_dim_axis != new_feature_dim_axis:
+      v.feature_dim_axis = new_feature_dim_axis
     if v.placeholder is not None:
       v.placeholder = tf.expand_dims(v.placeholder, new_feature_dim_axis, name="copy_add_feature_dim")
     v.sanity_check()
@@ -827,8 +842,8 @@ class Data(object):
       return res
     assert dim_tag.kind == DimensionTag.Types.Spatial or (dim_tag.kind == DimensionTag.Types.Feature and self.sparse)
     if axis is None:
-      if self.time_dim_axis is not None:
-        spatial_dim_axis = self.time_dim_axis + 1  # after the existing spatial dim
+      if self.get_spatial_batch_axes():
+        spatial_dim_axis = self.get_spatial_batch_axes()[-1] + 1  # after the existing spatial dim
       elif self.feature_dim_axis is not None:
         spatial_dim_axis = self.feature_dim_axis  # add it before the feature dim
       else:
@@ -908,6 +923,13 @@ class Data(object):
     # Add feature dim, if needed.
     if data.feature_dim_axis_or_unspecified is NotSpecified:
       v.feature_dim_axis = NotSpecified
+    if len(data.get_spatial_batch_axes()) > len(v.get_spatial_batch_axes()):
+      for axis in data.get_spatial_batch_axes():
+        if dim_tags[data][axis] in dim_tags[self]:
+          if dim_tags[self].index(dim_tags[data][axis]) == v.feature_dim_axis:
+            # Special case: It exists already, but is marked as feature axis, not spatial.
+            # Reset that. And maybe add new feature dim below.
+            v.feature_dim_axis = None
     if data.feature_dim_axis is not None and v.feature_dim_axis is None:
       v = v.copy_add_feature_dim()
     # Add spatial dims, in case we miss any.
