@@ -553,7 +553,36 @@ class Data(object):
       keys.append("undefined")
     if self.beam_size is not None:
       keys.append("beam_size")
-    return "Data(%s)" % ", ".join(["%s=%r" % (key, getattr(self, key)) for key in keys])
+    args = ["%s=%r" % (key, getattr(self, key)) for key in keys]
+    args += ["batch_shape_meta=[%s]" % ",".join(self.get_batch_axes_short_description())]
+    return "Data(%s)" % ", ".join(args)
+
+  def get_batch_axes_short_description(self):
+    """
+    :rtype: list[str]
+    """
+    res = []
+    for axis, dim_tag in enumerate(self.get_batch_shape_dim_tags()):
+      descriptions = []
+      if axis == self.batch_dim_axis:
+        descriptions.append("B")
+      if axis == self.time_dim_axis:
+        descriptions.append("T")
+      if axis == self.feature_dim_axis:
+        descriptions.append("F")
+      if self.batch_shape[axis] is None:
+        if axis == self.batch_dim_axis:
+          pass  # expected
+        elif self.size_placeholder and self.get_batch_axis_excluding_batch(axis) in self.size_placeholder:
+          descriptions.append(repr(dim_tag.description))
+        else:
+          descriptions.append("?")
+      else:
+        descriptions.append(str(self.batch_shape[axis]))
+        if dim_tag.kind == DimensionTag.Types.Spatial and dim_tag.dyn_size is not None:
+          descriptions.append(repr(dim_tag.description))
+      res.append("|".join(descriptions))
+    return res
 
   def __repr__(self):
     return self.get_description()
