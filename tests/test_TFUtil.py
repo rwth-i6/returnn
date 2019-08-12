@@ -474,6 +474,27 @@ def test_Data_copy_compatible_to_get_common_data_no_feature_sparse():
   assert d2a.feature_dim_axis is None
 
 
+def test_Data_copy_compatible_to_add_dummy_time_also_feature_dim():
+  start = Data(
+    name="start", shape=(), dtype='int32', sparse=True, dim=None,
+    batch_dim_axis=0, time_dim_axis=None, feature_dim_axis=None)
+  print("start:", start)
+  assert start.batch_ndim == 1
+  energy = Data(
+    name='energy', shape=(None,), dtype='float32', sparse=False, dim=None,
+    batch_dim_axis=0, time_dim_axis=1, feature_dim_axis=1)
+  print("energy:", energy)
+  assert energy.batch_ndim == 2
+  assert energy.time_dim_axis == energy.feature_dim_axis
+  x = start.copy_compatible_to(energy, check_sparse=False, check_dtype=False)
+  print("start copy_compatible_to energy result:", x)
+  assert x.sparse
+  assert x.batch_ndim == energy.batch_ndim
+  assert x.batch_dim_axis == energy.batch_dim_axis
+  assert x.feature_dim_axis is None  # it's sparse, thus by definition it does not have a feature axis
+  assert x.time_dim_axis == energy.time_dim_axis
+
+
 def test_Data_no_feature_dim():
   d = Data(name="x", shape=(6,), dtype='int32', sparse=True, dim=6, batch_dim_axis=None, time_dim_axis=None)
   assert d.feature_dim_axis is None

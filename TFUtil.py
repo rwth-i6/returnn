@@ -976,6 +976,10 @@ class Data(object):
             v.feature_dim_axis = None
     if data.feature_dim_axis is not None and v.feature_dim_axis is None:
       v = v.copy_add_feature_dim()
+      # Note: If the feature axis is also a spatial axis, mark it so.
+      if data.feature_dim_axis in data.get_spatial_batch_axes():
+        assert data.feature_dim_axis == data.time_dim_axis
+        v.time_dim_axis = v.feature_dim_axis
     # Add spatial dims, in case we miss any.
     for axis in data.get_spatial_batch_axes():
       if len(data.get_spatial_batch_axes()) > len(v.get_spatial_batch_axes()):
