@@ -1884,11 +1884,13 @@ class Data(object):
   def get_spatial_batch_axes(self):
     """
     :rtype: list[int]
-    :return: list of axes which are not feature and batch axes, counted with batch-dim.
+    :return: list of axes which are not batch axes and not feature or which are time axis, counted with batch-dim.
     """
-    return [axis
-            for axis in range(self.batch_ndim)
-            if (axis not in [self.batch_dim_axis, self.feature_dim_axis])]
+    return [
+      axis
+      for axis in range(self.batch_ndim)
+      if axis != self.batch_dim_axis and
+         (axis != self.feature_dim_axis or axis == self.time_dim_axis)]
 
   def get_spatial_axes(self):
     """
