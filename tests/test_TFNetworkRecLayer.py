@@ -3689,6 +3689,239 @@ def test_OptimalCompletionsLayer():
     assert out[0, 3] == 0 and all(out[0, :3] == 1) and all(out[0, 4:] == 1)
 
 
+def test_extra_scatter_nd_search_train():
+  from TFNetworkRecLayer import _SubnetworkRecCell
+  rnd = numpy.random.RandomState(42)
+  n_batch, n_enc_time, n_in, n_dec_time, n_out = 2, 11, 5, 7, 6
+  target = "classes"
+  LstmDim = 13
+  EncValueTotalDim = LstmDim
+  EncKeyTotalDim = LstmDim
+  AttNumHeads = 1
+  beam_size = 3
+
+  def t_linear(source, **kwargs):
+    import tensorflow as tf
+    from TFUtil import where_bc
+    enc = source(1, as_data=True, auto_convert=False)
+    dec = source(0, as_data=True, auto_convert=False)
+    enc_lens = enc.get_sequence_lengths()
+    dec_lens = dec.get_sequence_lengths()
+    dec_shape = tf.shape(dec.placeholder)
+    dec_time_dim = dec_shape[dec.time_dim_axis]
+    dec_times = tf.expand_dims(tf.range(dec_time_dim), axis=0)  # (1,dec-T)
+    x = tf.cast(dec_times + 1, tf.float32)  # (1,dec-T)
+    # We want: x[dec_len - 1] == enc_time - 1.
+    factors = (
+      tf.maximum(tf.cast(enc_lens - 1, tf.float32), 0.0) /
+      tf.maximum(tf.cast(dec_lens, tf.float32), 1.0))  # (B,)
+    factors = tf.expand_dims(factors, axis=1)  # (B,1)
+    x = x * factors  # (B,dec-T)
+    x = tf.cast(tf.round(x), tf.int32)
+    x = tf.minimum(x, tf.expand_dims(enc_lens - 1, axis=1))
+    # fix cheating gold targets with end flag filter. must be 0
+    x = where_bc(tf.less(dec_times, tf.expand_dims(dec_lens, axis=1)), x, 0)
+    return x
+
+  net_dict = {
+    "lstm0_fw": {"class": "rec", "unit": "nativelstm2", "n_out": LstmDim, "direction": 1, "from": "data"},
+    "lstm0_bw": {"class": "rec", "unit": "nativelstm2", "n_out": LstmDim, "direction": -1, "from": "data"},
+    "lstm0_pool": {"class": "pool", "mode": "max", "padding": "same", "pool_size": (3,),
+                   "from": ["lstm0_fw", "lstm0_bw"]},
+
+    "encoder0": {"class": "linear", "from": "data", "activation": "relu", "n_out": EncValueTotalDim},
+    "encoder": {"class": "postfix_in_time", "postfix": 0.0, "from": "encoder0"},
+
+    "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": "encoder", "n_out": EncKeyTotalDim},
+    "enc_value": {"class": "copy", "from": "encoder"},  # (B, enc-T, D)
+    "enc0_seq_len": {"class": "length", "from": "encoder0", "sparse": True},
+
+    "decision": {"class": "decide", "from": "extra.search_label:output"},  # for search task
+
+    "extra.search1:t_search": {"class": "decide", "from": "extra.search1:output/t"},
+    "extra.search2:t_search": {"class": "decide", "from": "extra.search2:output/t"},
+
+    "0_data_target0": {
+      "class": "postfix_in_time", "postfix": 0, "from": "data:%s" % target, "register_as_extern_data": "target0"},
+
+    "1_data_t_linear": {
+      "class": "eval", "from": ["data:target0", "encoder"], "eval": t_linear,
+      "out_type": {"batch_dim_axis": 0, "time_dim_axis": 1, "shape": (None,), "sparse": True, "dtype": "int32",
+                   "dim": None},
+      "size_target": "target0",
+      "register_as_extern_data": "t_linear"  # if task == "train" else None
+    },
+
+    "2_data_t_search_target1": {
+      "class": "copy", "from": "extra.search1:t_search",
+      "register_as_extern_data": "t_search_target1"  # if task == "train" else None
+    },
+    "2_data_t_search_target2": {
+      "class": "copy", "from": "extra.search2:t_search",
+      "register_as_extern_data": "t_search_target2"  # if task == "train" else None
+    },
+  }
+
+  def get_output_dict(train, t_search, label_search, backprop, t_target, use_soft_att):
+    """
+    :param bool train:
+    :param bool t_search:
+    :param bool label_search:
+    :param bool backprop:
+    :param str|None t_target:
+    :param bool use_soft_att:
+    :rtype: dict[str]
+    """
+    if label_search:
+      assert not t_target
+    if t_target:
+      assert not label_search
+
+    def combine_soft_hard_att(self, source, **kwargs):
+      # source(0) is hard att, source(1) is soft att
+      print("combine_soft_hard_att, use soft att: %r" % use_soft_att)
+      if use_soft_att:
+        frac = 0.5
+        return source(0) * frac + source(1) * (1. - frac)
+      else:
+        source(1)  # call, but ignore
+        return source(0)  # only hard att
+
+    return {
+      "class": "rec", "from": [], "back_prop": backprop,
+      "unit": {
+        "s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["s"],
+                          "n_out": EncKeyTotalDim},
+        "t_rel_var": {"class": "variable", "shape": (6, EncKeyTotalDim)},
+        "t_rel_idxs_": {"class": "range", "limit": 6, "sparse": True},
+        "t_rel_idxs": {"class": "combine", "kind": "add", "from": ["prev:t", "t_rel_idxs_"]},
+        "energy_in": {"class": "combine", "kind": "add",
+                      "from": ["base:enc_ctx", "s_transformed", "energy_in_t_rel_var"], "n_out": EncKeyTotalDim},
+        "energy_in_t_rel_var": {
+          "class": "scatter_nd", "from": "t_rel_var", "position": "t_rel_idxs", "position_axis": "except_batch:-1",
+          "output_dim_via_time_from": "base:enc_ctx", "filter_invalid_indices": True},
+        "energy_tanh": {"class": "activation", "activation": "tanh", "from": "energy_in"},
+
+        "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"],
+                   "n_out": AttNumHeads},  # (B, enc-T, H)
+        "energy1": {"class": "squeeze", "axis": "f", "from": "energy"},  # (B, enc-T)
+        "energy2": {"class": "reinterpret_data", "from": "energy1", "set_axes": {"t": "stag:enc"}},
+        "att_weights": {"class": "softmax_over_spatial", "from": "energy2", "start": "t_start"},  # (B, enc-T)
+        # ChoiceLayer works on the feature axis.
+        "att_weights1": {
+          "class": "reinterpret_data", "from": "att_weights", "set_axes": {"f": "stag:enc"},
+          "target": t_target if train else None, "loss": "ce" if (train and t_target) else None},
+
+        "t0": {
+          "class": "choice", "from": "att_weights1",
+          # "target": None,
+          "target": t_target, "cheating": bool(t_target),  # add this in training
+          "beam_size": beam_size,
+          "length_normalization": False, "initial_output": -1},  # (B,)
+        # Note: If beam-size > enc_seq_len, we end up with invalid t in the beam. Fix that.
+        "t1": {"class": "eval", "from": ["t0", "base:enc0_seq_len"], "eval": "tf.minimum(source(0), source(1))"},
+        "t": {
+          # "class": "print",
+          "class": "copy",
+          "from": "t1", "initial_output": -1, "is_output_layer": bool(t_search)},
+        # Only for debugging.
+        "t_err": {"class": "eval", "from": ["t", "data:%s" % t_target], "collocate_with": "t",
+                  "eval": "tf.cast(tf.abs(source(0) - source(1)), tf.float32)",
+                  "loss": "as_is" if (t_target and t_search) else None, "out_type": {"dtype": "float32"},
+                  "only_on_search": True},
+
+        "t_start": {
+          # Need right start for masking to avoid infs.
+          "class": "eval", "from": ["prev:t", "data:%s" % t_target],
+          "eval": "tf.minimum(source(0), source(1))"}
+        if t_target else
+        {"class": "copy", "from": "prev:t"},
+
+        "att0": {"class": "gather_nd", "position": "t", "from": "base:enc_value"},  # (B, V)
+        "att1": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, V)
+        "att1_": {"class": "switch", "condition": lambda **kw: use_soft_att, "true_from": "att1", "false_from": "att0"},
+        "att": {"class": "eval", "from": ["att0", "att1_"], "eval": combine_soft_hard_att},
+
+        "s": {"class": "rec", "unit": "nativelstm2", "from": ["prev:target_embed", "prev:att"], "n_out": 8},
+        "readout_in": {"class": "linear", "from": ["s", "prev:target_embed", "att"], "activation": None,
+                       "n_out": 10},
+        "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+        "output_prob": {"class": "softmax", "from": ["readout"], "target": "target0", "loss": "ce" if train else None},
+
+        'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'],
+                         "n_out": 6, "initial_output": "var"},
+        'output': {
+          'class': 'choice', 'target': "target0", 'beam_size': beam_size, 'from': ["output_prob"],
+          "initial_output": 0,
+          'search': label_search, "length_normalization": label_search},
+        "end": {"class": "compare", "from": "output", "value": 0},
+      },
+      "target": ["target0", t_target] if t_target else ["target0"],
+      "size_target": t_target,
+      "max_seq_len": "max_len_from('base:encoder0')"}
+
+  # Train task:
+  net_dict["extra.search1:output"] = get_output_dict(
+    train=False, t_search=True, label_search=False, backprop=False, t_target="t_linear", use_soft_att=True)
+  net_dict["extra.search2:output"] = get_output_dict(
+    train=False, t_search=True, label_search=False, backprop=False, t_target="t_linear", use_soft_att=False)
+  net_dict["extra.1:output"] = get_output_dict(
+    train=True, t_search=False, label_search=False, backprop=True, t_target="t_linear", use_soft_att=True)
+  # extra.2 is basically like extra.1, only different t_target, and that should not make any difference for the
+  # construction. But anyway, put it in as another variation.
+  net_dict["extra.2:output"] = get_output_dict(
+    train=True, t_search=False, label_search=False, backprop=True, t_target="t_search_target1", use_soft_att=True)
+  # extra.3 does not use soft-attention anymore. That enables a couple of new optimizations in the rec loop,
+  # esp now we should be able to move *everything* out.
+  net_dict["extra.3:output"] = get_output_dict(
+    train=True, t_search=False, label_search=False, backprop=True, t_target="t_search_target2", use_soft_att=False)
+  # Search task:
+  # net_dict["extra.search_label:output"] = get_output_dict(
+  #   train=True, t_search=True, label_search=True, backprop=False, t_target=None, use_soft_att=False)
+
+  config = Config()
+  config.update({
+    "extern_data": {"data": {"dim": n_in}, target: {"dim": n_out, "sparse": True}},
+    "debug_print_layer_output_template": True})
+
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    pprint(network.extern_data.data)
+    network.construct_from_dict(net_dict)
+
+    fetches = network.get_fetches_dict()
+    data_input = network.extern_data.data["data"]
+    data_target = network.extern_data.data[target]
+    assert data_input.batch_shape == (None, None, n_in) and data_target.batch_shape == (None, None)
+
+    train1_search_out = network.get_layer("extra.search1:output").output
+    train1_out = network.get_layer("extra.1:output").output
+    train2_search_out = network.get_layer("extra.search2:output").output
+    train2_out = network.get_layer("extra.2:output").output
+    train3_out_layer = network.get_layer("extra.3:output")
+    train3_out = train3_out_layer.output
+    # search_out = network.get_layer("extra.search_label:output").output
+
+    assert isinstance(train3_out_layer, RecLayer)
+    train3_out_layer_cell = train3_out_layer.cell
+    assert isinstance(train3_out_layer_cell, _SubnetworkRecCell)
+    assert not train3_out_layer_cell.layers_in_loop, "all should be moved out"
+
+    session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+    outputs = [train1_search_out.placeholder, train1_out.placeholder,
+               train2_search_out.placeholder, train2_out.placeholder, train3_out.placeholder]
+    info, out = session.run(
+      (fetches, outputs),
+      feed_dict={
+        data_input.placeholder: rnd.normal(size=(n_batch, n_enc_time, n_in)).astype("float32"),
+        data_input.size_placeholder[0]: numpy.array([n_enc_time] * n_batch, dtype="int32"),
+        data_target.placeholder: rnd.randint(0, n_out, size=(n_batch, n_dec_time,), dtype="int32"),
+        data_target.size_placeholder[0]: numpy.array([n_dec_time] * n_batch, dtype="int32"),
+      })
+    print(info)
+    print(out)  # random...
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
