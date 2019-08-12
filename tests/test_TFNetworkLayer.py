@@ -34,6 +34,40 @@ def make_scope():
       yield session
 
 
+def make_feed_dict(data_list):
+  """
+  :param list[TFUtil.Data] data_list:
+  :rtype: dict[tf.Tensor,numpy.ndarray]
+  """
+  n_batch = 3
+  n_time = 7
+  rnd = numpy.random.RandomState(42)
+  existing_sizes = {}  # type: typing.Dict[tf.Tensor,int]
+  d = {}
+  for data in data_list:
+    shape = list(data.batch_shape)
+    if data.batch_dim_axis is not None:
+      shape[data.batch_dim_axis] = n_batch
+    for axis, dim in enumerate(shape):
+      if dim is None:
+        axis_wo_b = data.get_batch_axis_excluding_batch(axis)
+        assert axis_wo_b in data.size_placeholder
+        dyn_size = data.size_placeholder[axis_wo_b]
+        if dyn_size in existing_sizes:
+          shape[axis] = existing_sizes[dyn_size]
+          continue
+        existing_sizes[dyn_size] = n_time
+        shape[axis] = n_time
+        d[dyn_size] = numpy.array([n_time, n_time - 2, n_time - 3])
+        n_time += 1
+    print("%r %r: shape %r" % (data, data.placeholder, shape))
+    if data.sparse:
+      d[data.placeholder] = rnd.randint(0, data.dim or 13, size=shape, dtype=data.dtype)
+    else:
+      d[data.placeholder] = rnd.normal(size=shape).astype(data.dtype)
+  return d
+
+
 def test_concat_sources():
   with make_scope() as session:
     network = TFNetwork(train_flag=True, extern_data=ExternData())
@@ -930,6 +964,39 @@ def test_ScatterNdLayer_RangeLayer_RangeInAxisLayer():
       })
     print(info)
     print(out)  # random...
+
+
+def test_ScatterNdLayer_pos_batch_last_dim():
+  config = Config({
+    "debug_print_layer_output_template": True,
+    "extern_data": {"data": {"dim": 13}}
+  })
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    data = network.construct_layer({}, "data")
+    pos = InternalLayer(
+      name="pos", network=network,
+      output=Data(
+        name='pos', shape=(None, 6), dtype='int32', sparse=True, dim=None, batch_dim_axis=2,
+        auto_create_placeholders=True))
+    val = InternalLayer(
+      name="val", network=network,
+      output=Data(
+        name='var', shape=(6, 11), time_dim_axis=None,
+        auto_create_placeholders=True))
+    scatter_opts = dict(
+      name="scatter", network=network,
+      sources=[val], position=pos, position_axis="except_batch:-1",
+      output_dim_via_time_from=data, filter_invalid_indices=True)
+    scatter_out_template = ScatterNdLayer.get_out_data_from_opts(**scatter_opts)
+    print("scatter out:", scatter_out_template)
+    assert scatter_out_template.shape == (None, None, 11) and scatter_out_template.batch_ndim == 4
+    scatter = ScatterNdLayer(output=scatter_out_template, **scatter_opts)
+    print("scatter out dim tags:")
+    pprint(scatter.output.get_batch_shape_dim_tags())
+    assert_equal(scatter.output.get_size_dim_tag(0), pos.output.get_time_dim_tag())
+    assert_equal(scatter.output.get_size_dim_tag(1), data.output.get_time_dim_tag())
+    session.run(scatter.output.placeholder, feed_dict=make_feed_dict([data.output, pos.output, val.output]))
 
 
 def test_ConvLayer_get_valid_out_dim():
