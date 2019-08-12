@@ -1590,6 +1590,15 @@ class Data(object):
       elif axes == "except_batch":
         axes = list(range(self.batch_ndim))
         axes.remove(self.batch_dim_axis)
+      elif re.match("(except_batch):-?\\d+$", axes):
+        s = int(axes.split(":")[1])
+        non_batch_axes = list(range(self.batch_ndim))
+        if self.batch_dim_axis is not None:
+          non_batch_axes.remove(self.batch_dim_axis)
+        if s < 0:
+          s += len(non_batch_axes)
+        assert 0 <= s < len(non_batch_axes), "%s get_axes_from_description: %r invalid" % (self, axes)
+        axes = non_batch_axes[s]
       elif axes == "*":
         axes = list(range(self.batch_ndim))
       elif axes == "static":
