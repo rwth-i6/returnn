@@ -521,6 +521,16 @@ def test_Data_copy_add_spatial_dim_added_time_at_end():
   assert d2.feature_dim_axis_or_unspecified is NotSpecified
 
 
+def test_Data_get_common_data_tbf_and_bf():
+  sources = [
+    Data(name='target', shape=(None, 13), batch_dim_axis=1, time_dim_axis=0),
+    Data(name='encoder', shape=(11,), time_dim_axis=None, batch_dim_axis=0)]
+  pprint(sources)
+  common = Data.get_common_data(sources=sources, warnings_out=sys.stdout)
+  print("common:", common)
+  assert common.batch_ndim == 3
+
+
 def test_Data_no_feature_dim():
   d = Data(name="x", shape=(6,), dtype='int32', sparse=True, dim=6, batch_dim_axis=None, time_dim_axis=None)
   assert d.feature_dim_axis is None
