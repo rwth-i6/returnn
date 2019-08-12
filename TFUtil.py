@@ -1614,6 +1614,8 @@ class Data(object):
         axes = self.get_feature_batch_axes()
       elif all([a in "btf" for a in axes]):
         return self.get_axes_from_description(list(axes))
+      elif axes.startswith("stag:"):  # spatial tag
+        axes = self.get_axis_by_tag_name(axes[len("stag:"):], spatial_only=True)
       else:
         raise Exception("invalid axis mode %r" % axes)
     if isinstance(axes, int):
@@ -1643,6 +1645,19 @@ class Data(object):
     axes = self.get_axes_from_description(axis, allow_int=allow_int)
     assert len(axes) == 1, "%r: %r is not a unique axis but %r" % (self, axis, axes)
     return axes[0]
+
+  def get_axis_by_tag_name(self, name, spatial_only=False):
+    """
+    :param str name: the tag name, or part of it (must be unique, and must exist)
+    :param bool spatial_only:
+    :rtype: int
+    """
+    dim_tags = self.get_batch_shape_dim_tags()
+    matching_dim_tags = [(axis, tag) for axis, tag in enumerate(dim_tags) if name in tag.description]
+    if spatial_only:
+      matching_dim_tags = [(axis, tag) for axis, tag in matching_dim_tags if tag.kind == DimensionTag.Types.Spatial]
+    assert len(matching_dim_tags) == 1, "%r: tag name %r is not unique in dim tags %r" % (self, name, dim_tags)
+    return matching_dim_tags[0][0]
 
   def get_batch_axis_excluding_batch(self, axis):
     """
