@@ -1635,7 +1635,7 @@ class Data(object):
     """
     :param int axis: counted with batch-dim
     :return: axis counted without batch-dim
-    :rtype: int
+    :rtype: int|None
     """
     if axis < 0:
       assert axis + self.batch_ndim >= 0
