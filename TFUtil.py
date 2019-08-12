@@ -1405,8 +1405,10 @@ class Data(object):
       return None
     if not self.shape:
       return None
-    # Allow same as time-dim-axis...
-    axes = [i for i in range(self.batch_ndim) if i != self.batch_dim_axis]
+    axes = [i for i in range(self.batch_ndim) if i not in [self.batch_dim_axis, self.time_dim_axis]]
+    if not axes:
+      # Allow same as time-dim-axis...
+      axes = [i for i in range(self.batch_ndim) if i != self.batch_dim_axis]
     assert axes
     static_axes = [i for i in axes if self.batch_shape[i] is not None]
     # Prefer last static, if available.

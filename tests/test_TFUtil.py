@@ -495,6 +495,32 @@ def test_Data_copy_compatible_to_add_dummy_time_also_feature_dim():
   assert x.time_dim_axis == energy.time_dim_axis
 
 
+def test_Data_copy_compatible_to_keep_feature_new_time():
+  start = Data(name='start', shape=(1,), time_dim_axis=None)
+  print("start:", start)
+  assert start.batch_ndim == 2 and start.feature_dim_axis == 1
+  energy = Data(name='energy', shape=(7, 4), time_dim_axis=2, feature_dim_axis=1)
+  print("energy:", energy)
+  assert energy.batch_ndim == 3
+  x = start.copy_compatible_to(energy, check_sparse=False, check_dtype=False)
+  print("start copy_compatible_to energy result:", x)
+  assert x.batch_ndim == energy.batch_ndim
+  assert x.batch_dim_axis == energy.batch_dim_axis
+  assert x.feature_dim_axis == 1
+  assert x.time_dim_axis == energy.time_dim_axis
+
+
+def test_Data_copy_add_spatial_dim_added_time_at_end():
+  d = Data(name='start', shape=(1,), time_dim_axis=None)
+  print("d:", d)
+  assert d.batch_shape == (None, 1) and d.feature_dim_axis == 1 and d.time_dim_axis is None
+  assert d.feature_dim_axis_or_unspecified is NotSpecified
+  d2 = d.copy_add_spatial_dim(2)
+  print("d2:", d2)
+  assert d2.batch_shape == (None, 1, 1) and d2.feature_dim_axis == 1 and d2.time_dim_axis == 2
+  assert d2.feature_dim_axis_or_unspecified is NotSpecified
+
+
 def test_Data_no_feature_dim():
   d = Data(name="x", shape=(6,), dtype='int32', sparse=True, dim=6, batch_dim_axis=None, time_dim_axis=None)
   assert d.feature_dim_axis is None
