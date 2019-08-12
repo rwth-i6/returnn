@@ -2523,6 +2523,7 @@ class ScatterNdLayer(_ConcatInputLayer):
         input_extra_dim_tags[input_extra_axes[-1]] = None
         common_dim_tags.append(tag)
     position_axis = position.get_axis_from_description(position_axis)
+    assert position_axis != position.batch_dim_axis
     if common.time_dim_axis is None:
       common.time_dim_axis = position_axis
     output_dim = output_dim_via_time_from.batch_shape[output_dim_via_time_from.time_dim_axis]
@@ -4639,7 +4640,7 @@ class SqueezeLayer(_ConcatInputLayer):
   @classmethod
   def get_out_data_from_opts(cls, axis, enforce_batch_dim_axis=None, allow_no_op=False, sources=(), **kwargs):
     """
-    :param axis:
+    :param int|list[int]|str axis:
     :param int|None enforce_batch_dim_axis:
     :param bool allow_no_op:
     :param list[LayerBase] sources:
