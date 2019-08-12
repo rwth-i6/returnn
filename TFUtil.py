@@ -2020,10 +2020,11 @@ class Data(object):
     name = self.get_full_name()
     if axis == self.batch_dim_axis:
       return DimensionTag(kind=DimensionTag.Types.Batch, description="batch:%s" % name)
-    if axis == self.feature_dim_axis:
-      return DimensionTag(kind=DimensionTag.Types.Feature, dimension=self.dim, description="feature:%s" % name)
     axis_wo_b = self.get_batch_axis_excluding_batch(axis)
     dyn_size = self.size_placeholder.get(axis_wo_b) if self.size_placeholder else None
+    # Note: Prefer interpretation as spatial axis if there is a dynamic size or this is marked as time axis.
+    if axis == self.feature_dim_axis and dyn_size is None and axis != self.time_dim_axis:
+      return DimensionTag(kind=DimensionTag.Types.Feature, dimension=self.dim, description="feature:%s" % name)
     if dyn_size is not None:
       tag = DimensionTag.get_tag_from_size_tensor(dyn_size)
       if tag:
