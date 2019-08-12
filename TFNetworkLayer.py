@@ -2831,6 +2831,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
   @classmethod
   def _get_axis_to_reduce(cls, input_data, axis, exception_prefix):
     """
+    :param Data input_data:
     :param str|None axis:
     :param str|object exception_prefix:
     :rtype: int
@@ -7025,7 +7026,8 @@ class Loss(object):
       if self.output.have_time_axis():
         self.output_seq_lens = output.get_sequence_lengths()
         time_and_batch_dims = (self.output.time_dim_axis, self.output.batch_dim_axis)
-        assert time_and_batch_dims in [(0, 1), (1, 0)], "output time-batch-dim unexpected: %s" % self.output
+        assert time_and_batch_dims in [(0, 1), (1, 0)], (
+          "output time-batch-dim unexpected: %r (target %r)" % (self.output, self.target))
         if output_with_activation and output_with_activation.act_func is tf.nn.softmax:
           self.output_before_softmax_flat = flatten_or_merge(
             output_with_activation.x, self.output_seq_lens, time_major=output.is_time_major)
