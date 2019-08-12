@@ -786,25 +786,26 @@ class TFNetwork(object):
     else:
       total_loss = None
       total_constraints = None
-    losses_dict = {}
-    layer_items = sorted(self.layers.items())
+    losses_multi_dict = {}  # type: typing.Dict[str,typing.List[typing.Tuple[typing.Optional[str],LossHolder]]]
+    layer_items = [(None, layer) for name, layer in sorted(self.layers.items())]
     if self.extra_nets:
       for extra_name_prefix, extra_net in sorted(self.extra_nets.items()):
         assert isinstance(extra_net, TFNetwork)
-        layer_items += [
-          ("%s/%s" % (extra_name_prefix, name), layer)
-          for (name, layer) in sorted(extra_net.layers.items())]
-    for name, layer in layer_items:
-      assert isinstance(name, str)
+        layer_items += [(extra_name_prefix, layer) for (name, layer) in sorted(extra_net.layers.items())]
+    for extra_name_prefix, layer in layer_items:
       assert isinstance(layer, LayerBase)
+      assert not extra_name_prefix or isinstance(extra_name_prefix, str)
+      if not extra_name_prefix:
+        name = layer.name
+      else:
+        name = "%s/%s" % (extra_name_prefix, layer.name)
       tf_scope_name = layer.cls_get_tf_scope_name(name=name)
       assert isinstance(layer, LayerBase)
       with reuse_name_scope("loss"):
         with reuse_name_scope(tf_scope_name):
           losses = layer.get_losses_initialized(reduce_func=reduce_func)
           for loss_obj in losses:
-            assert loss_obj.name not in losses_dict, "layer %r loss name %r not unique" % (layer, loss_obj.name)
-            losses_dict[loss_obj.name] = loss_obj
+            losses_multi_dict.setdefault(loss_obj.name, []).append((extra_name_prefix, loss_obj))
         if with_total:
           # Accumulate losses (outside of layer scope name).
           for loss_obj in losses:
@@ -823,6 +824,21 @@ class TFNetwork(object):
               total_constraints = constraints
             else:
               total_constraints += constraints
+
+    losses_dict = {}  # type: typing.Dict[str,LossHolder]
+    for loss_name, loss_holders in losses_multi_dict.items():
+      assert len(loss_holders) >= 1
+      if len(loss_holders) == 1:  # unique name
+        assert loss_name not in losses_dict
+        losses_dict[loss_name] = loss_holders[0][1]
+      else:
+        for extra_name_prefix, loss_holder in loss_holders:
+          if not extra_name_prefix:
+            name = loss_holder.name
+          else:
+            name = "%s:%s" % (extra_name_prefix, loss_holder.name)
+          assert name not in losses_dict
+          losses_dict[name] = loss_holder
 
     return losses_dict, total_loss, total_constraints
 
