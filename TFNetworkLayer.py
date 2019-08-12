@@ -4449,19 +4449,7 @@ class ReduceLayer(_ConcatInputLayer):
         y = expand_multiple_dims(y, axes=axes)
     else:
       y = f(x_, axis=axes, keep_dims=keep_dims)
-    y_dyn_sizes = x.size_placeholder.copy()
-    if keep_dims:
-      for i in axes:
-        if i in y_dyn_sizes:
-          del y_dyn_sizes[i]
-    else:
-      for i in reversed(sorted(axes)):
-        if i in y_dyn_sizes:
-          del y_dyn_sizes[i]
-        y_dyn_sizes = {(j if (j < i) else (j - 1)): s
-                       for (j, s) in list(y_dyn_sizes.items())}
     self.output.placeholder = y
-    self.output.size_placeholder = y_dyn_sizes
 
   @classmethod
   def need_enforce_batch_dim_axis(cls, axes):
@@ -4516,10 +4504,12 @@ class ReduceLayer(_ConcatInputLayer):
     out_batch_dim_axis = x.batch_dim_axis
     out_feature_dim_axis = x.feature_dim_axis_or_unspecified
     out_time_dim_axis = x.time_dim_axis
+    out_size = x.size_placeholder.copy() if x.size_placeholder else {}
     if keep_dims:
       for i in axes:
         y_shape[i] = 1
       del y_shape[x.batch_dim_axis]
+      out_size = {i: size for (i, size) in out_size.items() if x.get_batch_axis(i) not in axes}
     else:
       if out_batch_dim_axis in axes:
         out_batch_dim_axis = None
@@ -4527,8 +4517,10 @@ class ReduceLayer(_ConcatInputLayer):
         out_time_dim_axis = NotSpecified
       if out_feature_dim_axis in axes:
         out_feature_dim_axis = NotSpecified
-      for i in reversed(sorted(set(axes + [x.batch_dim_axis] if x.batch_dim_axis is not None else []))):
+      for i in reversed(sorted(set(axes + ([x.batch_dim_axis] if x.batch_dim_axis is not None else [])))):
         del y_shape[i]
+      out_size = {x.get_batch_axis(i): size for (i, size) in out_size.items()}  # by batch-axis
+      out_size = {i: size for (i, size) in out_size.items() if i not in axes}
       for i in reversed(sorted(set(axes))):
         if out_batch_dim_axis and i < out_batch_dim_axis:
           out_batch_dim_axis -= 1
@@ -4536,6 +4528,10 @@ class ReduceLayer(_ConcatInputLayer):
           out_time_dim_axis -= 1
         if out_feature_dim_axis and out_feature_dim_axis is not NotSpecified and i < out_feature_dim_axis:
           out_feature_dim_axis -= 1
+        out_size = {(j - 1) if i < j else j: size for (j, size) in out_size.items()}
+      out_size = {
+        i if out_batch_dim_axis is None or out_batch_dim_axis >= i else i - 1: size
+        for (i, size) in out_size.items()}  # by axis without batch-dim
     sparse_out = mode.lower().startswith("arg")
     return Data(
       name="%s_output" % name,
@@ -4546,6 +4542,7 @@ class ReduceLayer(_ConcatInputLayer):
       dtype="int32" if sparse_out else x.dtype,
       sparse=sparse_out,
       dim=x.batch_shape[axes[0]] if sparse_out else NotSpecified,
+      size_placeholder=out_size,
       beam_size=x.beam_size)
 
 
