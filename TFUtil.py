@@ -319,7 +319,7 @@ class Data(object):
     :param int|None time_dim_axis: where we have the time dim axis, after we added the batch-dim.
       this is often 1. however, can be None if there is no time-dim.
     :param int|None|NotSpecified feature_dim_axis: feature dim axis. by default it's the last one
-    :param dict[int,tf.Tensor] tf.Tensor size_placeholder: for every None in shape, this will describe the size.
+    :param dict[int,tf.Tensor]|None size_placeholder: for every None in shape, this will describe the size.
       The size is always a tensor of shape (batch,), i.e. the size can be different for each sequence in a batch.
     :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
     :param str|dict[str]|GeneratingDataset.Vocabulary|None vocab:
@@ -409,6 +409,8 @@ class Data(object):
         placeholder = tf.placeholder(**self.get_placeholder_kwargs(with_batch=True))
     self.placeholder = placeholder  # type: tf.Tensor  # this will hold the data value itself
     # The size_placeholder is for each variable length dimension in shape, i.e. excluding the batch-dim.
+    if size_placeholder is not None:
+      size_placeholder = size_placeholder.copy()
     if size_placeholder is None and auto_create_placeholders:
       size_placeholder = {}  # type: typing.Dict[int,tf.Tensor]
       with tf.name_scope("extern_data/placeholders/%s/" % name):
