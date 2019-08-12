@@ -535,7 +535,11 @@ class Data(object):
         keys.append("dtype")
     if self.batch_dim_axis != 0:
       keys.append("batch_dim_axis")
-    if self.time_dim_axis is None or self.time_dim_axis >= 2:
+    if (
+          self.time_dim_axis is None or
+          self.time_dim_axis >= 2 or
+          self.batch_dim_axis is None or
+          self.batch_dim_axis >= 2):
       keys.append("time_dim_axis")
     if self._feature_dim_axis is not NotSpecified:
       keys.append("feature_dim_axis")
