@@ -441,6 +441,34 @@ def test_Data_copy_compatible_to_batch_axis1_time_axis_at_end():
   assert data2.dim == common_data.dim == 1
 
 
+def test_Data_copy_compatible_to_batch_feature_is_dynamic():
+  # Enc/dec for proper time dim tags.
+  enc = Data(name="enc", shape=(None, 1), auto_create_placeholders=True)
+  dec = Data(name="dec", shape=(None, 1), auto_create_placeholders=True)
+  print("enc:", enc)
+  print("dec:", dec)
+  # start: batch_shape_meta=[T|'time-with-postfix:0_data_target0',B]
+  start = Data(name='t_start_output', shape=(None,), dtype='int32', sparse=True, dim=None, batch_dim_axis=1)
+  start.size_placeholder = {0: dec.size_placeholder[0]}
+  print("start:", start)
+  assert_equal(start.get_time_dim_tag(), dec.get_time_dim_tag())
+  # energy: batch_shape_meta=[F|'time-with-postfix:0_data_target0',B,T|'time-with-postfix:encoder']
+  energy = Data(name='energy2_output', shape=(None, None), batch_dim_axis=1, time_dim_axis=2, feature_dim_axis=0)
+  energy.size_placeholder = {0: dec.size_placeholder[0], 1: enc.size_placeholder[0]}
+  print("energy:", energy)
+  assert_equal(energy.get_size_dim_tag(0), dec.get_time_dim_tag())
+  assert_equal(energy.get_size_dim_tag(1), enc.get_time_dim_tag())
+  assert_equal(energy.get_time_dim_tag(), enc.get_time_dim_tag())
+  t = start.copy_compatible_to(energy, check_sparse=False, check_dtype=False)
+  print("t:", t)
+  assert t.shape == (None, 1) and t.time_dim_axis == energy.time_dim_axis
+  assert t.batch_dim_axis == energy.batch_dim_axis
+  assert t.sparse and t.feature_dim_axis is None  # because it is sparse
+  assert set(t.size_placeholder.keys()) == {0}
+  assert t.size_placeholder[0] is dec.size_placeholder[0]
+  assert_equal(t.get_size_dim_tag(0), dec.get_time_dim_tag())
+
+
 def test_Data_copy_compatible_to_get_common_data_auto_feature_non_sparse():
   d1 = Data(name='t', shape=(None,), dtype='int32', batch_dim_axis=None, feature_dim_axis=None,
             auto_create_placeholders=True)  # placeholder for specific spatial dim-tag

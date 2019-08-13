@@ -780,10 +780,11 @@ class Data(object):
     data.sanity_check()
     return data
 
-  def copy_add_spatial_dim(self, spatial_dim_axis=None, dim=1):
+  def copy_add_spatial_dim(self, spatial_dim_axis=None, dim=1, auto_time_dim_axis=True):
     """
     :param int|None spatial_dim_axis: counted with batch-dim. if there is no time-dim, this will be it.
     :param int|None dim:
+    :param bool auto_time_dim_axis:
     :return: copy of myself with added spatial-dim
     :rtype: Data
     """
@@ -808,7 +809,7 @@ class Data(object):
     else:
       axis_wo_batch = spatial_dim_axis if (spatial_dim_axis <= self.batch_dim_axis) else (spatial_dim_axis - 1)
     data.shape = data.shape[:axis_wo_batch] + (dim,) + data.shape[axis_wo_batch:]
-    if data.time_dim_axis is None:
+    if auto_time_dim_axis and data.time_dim_axis is None:
       data.time_dim_axis = spatial_dim_axis
     other_special_axes = self.get_special_axes_dict(
       counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
@@ -964,32 +965,44 @@ class Data(object):
     v.sparse = data.sparse  # we will later reset it. this is to better count the axes (feature and spatial)
     if data.batch_dim_axis is not None and v.batch_dim_axis is None:
       v = v.copy_add_batch_dim(0)  # later we might move the axis
-    # Add feature dim, if needed.
-    if data.feature_dim_axis_or_unspecified is NotSpecified:
-      v.feature_dim_axis = NotSpecified
-    if len(data.get_spatial_batch_axes()) > len(v.get_spatial_batch_axes()):
-      for axis in data.get_spatial_batch_axes():
-        if dim_tags[data][axis] in dim_tags[self]:
-          if dim_tags[self].index(dim_tags[data][axis]) == v.feature_dim_axis:
-            # Special case: It exists already, but is marked as feature axis, not spatial.
-            # Reset that. And maybe add new feature dim below.
-            v.feature_dim_axis = None
-    if data.feature_dim_axis is not None and v.feature_dim_axis is None:
-      v = v.copy_add_feature_dim()
-      # Note: If the feature axis is also a spatial axis, mark it so.
-      if data.feature_dim_axis in data.get_spatial_batch_axes():
-        assert data.feature_dim_axis == data.time_dim_axis
-        v.time_dim_axis = v.feature_dim_axis
-    # Add spatial dims, in case we miss any.
-    for axis in data.get_spatial_batch_axes():
-      if len(data.get_spatial_batch_axes()) > len(v.get_spatial_batch_axes()):
+    if v.batch_dim_axis is not None and data.batch_dim_axis is None:
+      raise ValueError("copy_compatible_to: self %r has batch-dim, but target data %r has not" % (self, data))
+    if data.batch_ndim < v.batch_ndim:
+      raise ValueError("copy_compatible_to: self %r already has more dims than target data %r" % (self, data))
+    # This sets it explicitly. We will later make it NotSpecified if needed.
+    # This avoids unexpected behavior after copy_add_spatial_dim and simplifies the logic.
+    v.feature_dim_axis = v.feature_dim_axis
+    # Add dims, in case we miss any.
+    for axis in range(data.batch_ndim):
+      if axis == data.batch_dim_axis:
+        continue
+      if data.batch_ndim > v.batch_ndim:
         if dim_tags[data][axis] in dim_tags[self]:
           continue  # This one seems to exist already, add the next one.
+        if axis == data.feature_dim_axis and v.feature_dim_axis is not None:
+          if v.batch_shape[v.feature_dim_axis] == data.batch_shape[axis]:
+            if v.batch_shape[v.feature_dim_axis] is not None:
+              continue  # Exists already. There might be cases that the dim_tags did not match.
+          if v.batch_shape[v.feature_dim_axis] == 1:
+            continue  # Interpret the existing as broadcast dim.
+        if axis == data.time_dim_axis and v.time_dim_axis is not None:
+          if v.batch_shape[v.time_dim_axis] == data.batch_shape[axis]:
+            if v.batch_shape[v.time_dim_axis] is not None:
+              continue  # Exists already. There might be cases that the dim_tags did not match.
+          if v.batch_shape[v.time_dim_axis] == 1:
+            continue  # Interpret the existing as broadcast dim.
         axis_wo_batch = data.get_batch_axis_excluding_batch(axis)
-        v = v.copy_add_spatial_dim(v.get_batch_axis(axis_wo_batch))
+        v_axis = v.get_batch_axis(axis_wo_batch)
+        if axis == data.feature_dim_axis:
+          v = v.copy_add_feature_dim(v_axis)
+        else:
+          v = v.copy_add_spatial_dim(v_axis, auto_time_dim_axis=False)  # time-dim would be set later
+        if axis == data.time_dim_axis and v.time_dim_axis != v_axis:
+          v.time_dim_axis = v_axis
+        if axis == data.feature_dim_axis and v.feature_dim_axis != v_axis:
+          v.feature_dim_axis = v_axis
     # Now we assume that we have all missing axes added,
     # but they might still be in a wrong order.
-    assert len(data.get_spatial_batch_axes()) == len(v.get_spatial_batch_axes())
     assert v.batch_ndim == data.batch_ndim
     # Now maybe move batch/feature axis.
     # We might do multiple iterations here, depending on which axis comes first.
@@ -1013,10 +1026,12 @@ class Data(object):
         continue
       # Now we have both equal.
       break
-    assert data.get_spatial_batch_axes() == v.get_spatial_batch_axes()
-    if self.sparse and v.feature_dim_axis is not None:  # we probably added it now
+    if data.feature_dim_axis_or_unspecified is NotSpecified and v.feature_dim_axis_or_unspecified is not NotSpecified:
+      if v._default_feature_dim_axis() == v.feature_dim_axis:
+        v.feature_dim_axis = NotSpecified
+    if self.sparse:
       v.feature_dim_axis = NotSpecified
-    v.sparse = self.sparse  # reset
+      v.sparse = True  # reset
     if unbroadcast and any([d1 != 1 and d2 == 1 for (d1, d2) in zip(data.batch_shape, v.batch_shape)]):
       v.size_placeholder.update(data.size_placeholder or {})
       if v.placeholder is not None:
