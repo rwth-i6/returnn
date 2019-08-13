@@ -1195,8 +1195,10 @@ class Data(object):
     del new_shape[self.time_dim_axis_excluding_batch]
     kwargs = self.get_kwargs()
     if self.size_placeholder is not None:
-      size = self.size_placeholder.copy()
-      size.pop(self.time_dim_axis_excluding_batch, None)
+      size = {
+        i if i < self.time_dim_axis_excluding_batch else i - 1: s
+        for (i, s) in self.size_placeholder.items()
+        if i != self.time_dim_axis_excluding_batch}
       kwargs["size_placeholder"] = size
     other_special_axes = self.get_special_axes_dict(
       counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)

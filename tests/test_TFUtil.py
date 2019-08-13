@@ -665,6 +665,28 @@ def test_Data_copy_template_excluding_time_dim_explicit_feature():
   assert d2.batch_shape == (None, 12) and d2.time_dim_axis is None and d2.feature_dim_axis == 1
 
 
+def test_Data_copy_template_excluding_time_dim_multiple_time():
+  d = Data(
+    name='energy_in_t_rel_var_output', shape=(None, None, 13), batch_dim_axis=2, time_dim_axis=0,
+    auto_create_placeholders=True)  # placeholders to have proper dim tags
+  print("d:", d)
+  print("sizes:", d.size_placeholder)
+  assert set(d.size_placeholder.keys()) == {0, 1}
+  assert d.feature_dim_axis == 3
+  size1tag = d.get_size_dim_tag(0)
+  size2tag = d.get_size_dim_tag(1)
+  print("size tags:", size1tag, size2tag)
+  assert size1tag.dyn_size is not None and size2tag.dyn_size is not None
+  d2 = d.copy_template_excluding_time_dim()
+  print("excluding time:", d2)
+  assert d2.shape == (None, 13) and (d2.time_dim_axis, d2.batch_dim_axis, d2.feature_dim_axis) == (0, 1, 2)
+  print("sizes:", d2.size_placeholder)
+  assert set(d2.size_placeholder.keys()) == {0}
+  assert d2.size_placeholder[0] is d.size_placeholder[1]
+  new_size_tag = d2.get_time_dim_tag()
+  assert new_size_tag is size2tag
+
+
 def test_Data_copy_add_spatial_dim_no_batch():
   d1 = Data(name='d1', shape=(3,), batch_dim_axis=None, time_dim_axis=None)
   assert d1.batch_dim_axis is None and d1.time_dim_axis is None and d1.feature_dim_axis == 0
