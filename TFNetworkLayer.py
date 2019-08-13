@@ -8243,6 +8243,7 @@ class SamplingBasedLoss(Loss):
                use_full_softmax=False,
                remove_accidental_hits=None,
                sampler_args=None,
+               nce_log_norm_term=0.0,
                **kwargs):
     """
     :param int num_sampled: Number of classes to be sampled. For sampled softmax, this is the number of classes to be
@@ -8257,6 +8258,7 @@ class SamplingBasedLoss(Loss):
       and the objective is equal to sampled logistic loss.
     :param dict[str] sampler_args: additional arguments for the candidate sampler. This is most relevant to the fixed_unigram sampler.
       See https://www.tensorflow.org/api_docs/python/tf/random/fixed_unigram_candidate_sampler for details.
+    :param float nce_log_norm_term: The logarithm of the constant normalization term for NCE.
     """
     super(SamplingBasedLoss, self).__init__(**kwargs)
     assert num_sampled >= 1
@@ -8273,6 +8275,69 @@ class SamplingBasedLoss(Loss):
     self.sampler_args = sampler_args
     if self.sampler_args is None:
       self.sampler_args = {}
+    self.nce_log_norm_term = nce_log_norm_term
+
+  def _nce_loss(self,
+                weights,
+                biases,
+                labels,
+                inputs,
+                num_sampled,
+                num_classes,
+                num_true=1,
+                sampled_values=None,
+                remove_accidental_hits=False,
+                partition_strategy="div",
+                name=None,
+                seed=None):
+    """
+    Returns the example-wise NCE losses for the batch.
+
+    This is mostly a copy of
+      https://github.com/tensorflow/tensorflow/blob/e19c354920c3b246dda6598229210a582caaa1a9/tensorflow/python/ops/nn_impl.py#L1729-L1837
+    with an extension which introduces the subtraction by a constant normalization term.
+
+    :param tf.Tensor weights: NCE parameters of shape [num_classes, dim].
+    :param tf.Tensor biases: biases with shape [num_classes]
+    :param tf.Tensor labels: The target classes of shape [batch_size, num_true]
+    :param tf.Tensor inputs: The forward activations of the network of shape [batch_size, dim]
+    :param int num_sampled: Number of sampled classes
+    :param int num_classes: Number of possible classes
+    :param int num_true: Number of target classes per training example
+    :param (tf.Tensor, tf.Tensor, tf.Tensor)|None sampled_values: a tuple of
+      (`sampled_candidates`, `true_expected_count`, `sampled_expected_count`)
+      returned by a `*_candidate_sampler` function (if None, we default to `log_uniform_candidate_sampler`).
+      sampled_candidates is of dtype int64.
+    :param bool remove_accidental_hits: Remove sampled classes that equal on of the target classes
+    :param str partition_strategy: A string specifying the partitioning strategy, relevant
+      if `len(weights) > 1`. Currently `"div"` and `"mod"` are supported.
+      Default is `"mod"`. See `tf.nn.embedding_lookup` for more details.
+    :param str|None name: Name for the operation
+    :param int|None seed: Seed for sampling if no sampled_values are given
+    :return: A [batch_size] tensor of example-wise NCE losses
+    :rtype: tf.Tensor
+    """
+
+    from TFUtil import compute_sampled_logits
+
+    logits, labels = compute_sampled_logits(weights=weights,
+                                            biases=biases,
+                                            labels=labels,
+                                            inputs=inputs,
+                                            num_sampled=num_sampled,
+                                            num_classes=num_classes,
+                                            num_true=num_true,
+                                            sampled_values=sampled_values,
+                                            subtract_log_q=True,
+                                            remove_accidental_hits=remove_accidental_hits,
+                                            partition_strategy=partition_strategy,
+                                            name=name,
+                                            seed=seed)
+    logits -= self.nce_log_norm_term
+    sampled_losses = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels,
+                                                             logits=logits,
+                                                             name="sampled_losses")
+    return tf.reduce_sum(sampled_losses, axis=1)
 
   def get_value(self):
     """
@@ -8336,7 +8401,7 @@ class SamplingBasedLoss(Loss):
                                    range_max=self.target.dim,
                                    **self.sampler_args)
           if self.nce_loss:
-            loss_fn = tf.nn.nce_loss
+            loss_fn = self._nce_loss
           else:
             loss_fn = tf.nn.sampled_softmax_loss
 
