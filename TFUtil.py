@@ -417,7 +417,9 @@ class Data(object):
         for axis in self.get_axes_with_size():
           size_placeholder[axis] = tf.placeholder(**self.get_size_placeholder_kwargs(axis))
           tag = DimensionTag(
-            description="spatial:%i:extern_data/placeholders/%s" % (axis, self.name), kind=DimensionTag.Types.Spatial)
+            description="%s:var:extern_data:%s" % (
+              "time" if self.get_batch_axis(axis) == self.time_dim_axis else "spatial%i" % axis, self.name),
+            kind=DimensionTag.Types.Spatial)
           tag.set_tag_on_size_tensor(size_placeholder[axis])
     if not size_placeholder and (self.ndim_dense <= 1 or all([d is not None for d in shape])):
       size_placeholder = {}
@@ -2026,9 +2028,15 @@ class Data(object):
         return tag
     spatial_axes = self.get_spatial_batch_axes()
     assert axis in spatial_axes
-    description = "time" if axis == self.time_dim_axis else "spatial:%i" % spatial_axes.index(axis)
+    description = "time" if axis == self.time_dim_axis else "spatial%i" % spatial_axes.index(axis)
     if dyn_size is not None:
-      description += ":%r" % dyn_size.name
+      # Note: This case is uncommon/unexpected (we should have a dim-tag on the dyn_size above), so be verbose,
+      # and fix such cases if possible (i.e. for all newly created dynamic size tensors, set the dim-tag).
+      description += ":var:%r" % dyn_size.name
+    elif self.batch_shape[axis] is None:
+      description += ":var-unk"
+    else:
+      description += ":static%i" % self.batch_shape[axis]
     description += ":%s" % name
     tag = DimensionTag(
       kind=DimensionTag.Types.Spatial, description=description,
