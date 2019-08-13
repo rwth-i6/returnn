@@ -2774,6 +2774,14 @@ class _SubnetworkRecCell(object):
       for layer_name in extra_output_layers:
         self.output_layers_net.layers[layer_name] = get_layer(layer_name)
 
+    # Now, after constructing all, maybe reset the time-dim-axis.
+    # It is valid during the construction that layers set any time-dim-axis they want,
+    # and this can be even mandatory, such that layers like SoftmaxOverSpatialLayer act as requested.
+    # However, after construction, when accessing any of these layers,
+    # we would expect that their time-dim-axis matches the same as from the rec loop.
+    for layer in self.output_layers_net.layers.values():
+      layer.output.mark_same_time(self.parent_rec_layer.output)
+
 
 class _TemplateLayer(LayerBase):
   """
