@@ -1630,6 +1630,14 @@ class _SubnetworkRecCell(object):
                      " The length of the sources (", tf.reduce_max(input_seq_len),
                      ") differ from the length of the target ", key, "(", data_len, ")."])]):
                 data_len = tf.identity(data_len)
+            if fixed_seq_len is not None:
+              with tf.control_dependencies(
+                  [tf.assert_equal(
+                    tf.reduce_max(fixed_seq_len), data_len,
+                    ["RecLayer %r:" % (rec_layer.get_absolute_name(),),
+                     " The predefined length (", tf.reduce_max(fixed_seq_len),
+                     ") differs from the length of the target ", key, "(", data_len, ")."])]):
+                data_len = tf.identity(data_len)
             common_data_len = data_len
           else:
             # Check from second key on if data length is equal for all external data
