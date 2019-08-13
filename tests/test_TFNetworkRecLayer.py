@@ -3922,6 +3922,159 @@ def test_extra_scatter_nd_search_train():
     print(out)  # random...
 
 
+def test_trafo_search_lm():
+  rnd = numpy.random.RandomState(42)
+  beam_size = 5
+  ff_dim = 7
+  num_heads = 2
+  emb_dim = 5
+  qk_dim = 6
+  v_dim = qk_dim
+  trans_out_dim = qk_dim
+
+  net_dict = {
+    "input": {"class": "slice", "axis": "T", "slice_end": -1, "from": "data"},
+    "input_with_new_len": {"class": "reinterpret_data", "from": "input", "size_base": "data"},
+    "target": {"class": "slice", "axis": "T", "slice_start": 1, "from": "data"},
+    "target_with_new_len": {"class": "reinterpret_data", "from": "target", "size_base": "data",
+                            "register_as_extern_data": "targets"},
+    "decision": {
+      "class": "decide", "from": ["output"], "loss": "edit_distance", "target": "targets",
+      "is_output_layer": True},
+
+    'output': {
+      'class': 'rec',
+      "from": [],
+      'target': 'data',
+      "max_seq_len": "max_len_from('data') * 3",
+      'unit': {
+        'prefix': {
+          'class': 'eval', 'out_type': {'time_dim_axis': None, 'shape': ()},
+          "collocate_with": "output_choice",
+          'from': ['base:data'],
+          'eval': 'source(0, auto_convert=False)[:, tf.minimum(self.network.get_rec_step_index(), source(0, auto_convert=False, as_data=True).time_dimension() - 1)]'
+        },  # Shape (None,).
+        'in_prefix': {
+          'class': 'eval', 'from': 'base:data',
+          "collocate_with": "output_choice",
+          'out_type': {'time_dim_axis': None, 'shape': (), "dtype": "bool", "dim": 2},
+          # True if still in SRC.
+          'eval': 'tf.less(self.network.get_rec_step_index(), source(0, as_data=True, auto_convert=False).get_sequence_lengths())'
+        },  # Shape (None,).
+        'output': {
+          'class': 'switch', "condition": "in_prefix", 'true_from': 'prefix', "false_from": 'output_choice',
+          "initial_output": 0},
+        "end": {
+          "class": "eval", "from": 'base:data', "collocate_with": "output_choice",
+          "out_type": {'time_dim_axis': None, 'shape': (), "dtype": "bool", "dim": 2},
+          # Arbitrary. We can check that, though.
+          'eval': 'tf.greater_equal(self.network.get_rec_step_index(), source(0, as_data=True, auto_convert=False).get_sequence_lengths() * 3 // 2)'
+          },
+
+        'output_choice': {
+          'class': 'choice', 'target': 'targets', 'beam_size': beam_size,
+          'from': ["prob_output"], "initial_output": 0},
+
+        "prob_output": {
+          'class': 'softmax',
+          'from': ['decoder'],
+          'loss': 'ce',
+          'target': 'targets',
+          'with_bias': True},
+        "decoder": {'class': 'layer_norm', 'from': ['dec_0']},
+        'dec_0': {'class': 'copy', 'from': ['dec_0_ff_out']},
+
+        'target_embed_raw': {'activation': None,
+                             'class': 'linear',
+                             'from': ['prev:output'],  # Note: Here was the bug.
+                             'n_out': emb_dim,
+                             'with_bias': False},
+        'target_embed': {'class': 'dropout', 'dropout': 0, 'from': ['target_embed_raw']},
+        'target_embed_lin': {'activation': None,
+                             'class': 'linear',
+                             'from': ['target_embed'],
+                             'n_out': trans_out_dim,
+                             'with_bias': False},
+        'dec_0_self_att_laynorm': {'class': 'layer_norm', 'from': ['target_embed_lin']},
+        'dec_0_self_att_att': {'attention_left_only': True,
+                               'class': 'self_attention',
+                               'from': ['dec_0_self_att_laynorm'],
+                               'n_out': v_dim,
+                               'num_heads': num_heads,
+                               'total_key_dim': qk_dim},
+        'dec_0_self_att_lin': {'activation': None,
+                               'class': 'linear',
+                               'from': ['dec_0_self_att_att'],
+                               'n_out': trans_out_dim,
+                               'with_bias': False},
+        'dec_0_self_att_drop': {'class': 'dropout', 'dropout': 0, 'from': ['dec_0_self_att_lin']},
+        'dec_0_att_out': {'class': 'combine',
+                          'from': ['target_embed_lin', 'dec_0_self_att_drop'],
+                          'kind': 'add',
+                          'n_out': trans_out_dim,
+                          'trainable': True},
+        'dec_0_ff_laynorm': {'class': 'layer_norm', 'from': ['dec_0_att_out']},
+        'dec_0_ff_conv1': {'activation': "relu",
+                           'class': 'linear',
+                           'from': ['dec_0_ff_laynorm'],
+                           'n_out': ff_dim,
+                           'with_bias': True},
+        'dec_0_ff_conv2': {'activation': None,
+                           'class': 'linear',
+                           'from': ['dec_0_ff_conv1'],
+                           'n_out': trans_out_dim,
+                           'with_bias': True},
+        'dec_0_ff_drop': {'class': 'dropout', 'dropout': 0, 'from': ['dec_0_ff_conv2']},
+        'dec_0_ff_out': {'class': 'combine', 'from': ['dec_0_att_out', 'dec_0_ff_drop'], 'kind': 'add', 'n_out': trans_out_dim},
+      }}
+  }
+
+  n_batch, n_in, n_time = 3, 19, 9
+  n_out = n_in
+
+  config = Config()
+  config.update({
+    "extern_data": {"data": {"dim": n_out, "sparse": True}},
+    "search_output_layer": "decision",
+    "debug_print_layer_output_template": True})
+
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=False, search_flag=True)
+    pprint(network.extern_data.data)
+    network.construct_from_dict(net_dict)
+
+    fetches = network.get_fetches_dict()
+    data_input = network.extern_data.data["data"]
+    assert data_input.batch_shape == (None, None)
+    output_out = network.get_layer("decision").output
+    assert output_out.is_batch_major and output_out.sparse and output_out.dim == n_out and output_out.shape == (None,)
+
+    input_seq_lens = numpy.array([n_time, n_time - 5, n_time - 4], dtype="int32")
+    assert input_seq_lens.shape == (n_batch,) and all(input_seq_lens > 0)
+    input_seqs = rnd.randint(1, n_out, size=(n_batch, n_time,), dtype="int32")
+    print("input:")
+    print(input_seqs)
+    print("lens:", input_seq_lens)
+
+    session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+    info, out_seqs, out_seq_lens = session.run(
+      (fetches, output_out.placeholder, output_out.get_sequence_lengths()),
+      feed_dict={
+        data_input.placeholder: input_seqs,
+        data_input.size_placeholder[0]: input_seq_lens})
+    print(info)
+    print("output:")
+    print(out_seqs)  # random...
+    print("lens:", out_seq_lens)
+    assert isinstance(out_seqs, numpy.ndarray) and isinstance(out_seq_lens, numpy.ndarray)
+    assert len(out_seqs.shape) == 2 and out_seqs.shape[0] == n_batch
+    assert out_seq_lens.shape == (n_batch,)
+
+    for i in range(n_batch):
+      assert out_seq_lens[i] == input_seq_lens[i] * 3 // 2  # we constructed the 'end' layer that way
+      assert all(out_seqs[i, :input_seq_lens[i]] == input_seqs[i, :input_seq_lens[i]])
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
