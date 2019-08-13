@@ -8558,3 +8558,156 @@ def get_non_deterministic_ops_from_graph():
     # elif ... more non det ops to be added
 
   return non_det_ops
+
+
+def compute_sampled_logits(weights,
+                           biases,
+                           labels,
+                           inputs,
+                           num_sampled,
+                           num_classes,
+                           num_true=1,
+                           sampled_values=None,
+                           subtract_log_q=True,
+                           remove_accidental_hits=False,
+                           partition_strategy="mod",
+                           name=None,
+                           seed=None):
+  """Helper function for nce_loss and sampled_softmax_loss functions.
+  Computes sampled output training logits and labels suitable for implementing
+  e.g. noise-contrastive estimation (see nce_loss) or sampled softmax (see
+  sampled_softmax_loss).
+  Note: In the case where num_true > 1, we assign to each target class
+  the target probability 1 / num_true so that the target probabilities
+  sum to 1 per-example.
+
+  This is a copy of
+    https://github.com/tensorflow/tensorflow/blob/e19c354920c3b246dda6598229210a582caaa1a9/tensorflow/python/ops/nn_impl.py#L1440
+
+  :param tf.Tensor|list[tf.Tensor]|tuple[tf.Tensor] weights: A `Tensor` of shape `[num_classes, dim]`,
+    or a list of `Tensor` objects whose concatenation along dimension 0 has shape `[num_classes, dim]`.
+    The class embeddings.
+  :param tf.Tensor biases: A `Tensor` of shape `[num_classes]`.  The class biases.
+  :param tf.Tensor labels: A `Tensor` of type `int64` and shape `[batch_size, num_true]`.
+    The target classes.  Note that this format differs from
+    the `labels` argument of `tf.nn.softmax_cross_entropy_with_logits`.
+  :param tf.Tensor inputs: A `Tensor` of shape `[batch_size, dim]`.  The forward
+        activations of the input network.
+  :param int num_sampled: The number of classes to randomly sample per batch.
+  :param int num_classes: The number of possible classes.
+  :param int num_true: The number of target classes per training example.
+  :param (tf.Tensor, tf.Tensor, tf.Tensor)|None sampled_values: a tuple of
+    (`sampled_candidates`, `true_expected_count`, `sampled_expected_count`)
+    returned by a `*_candidate_sampler` function.
+    (if None, we default to `log_uniform_candidate_sampler`)
+  :param bool subtract_log_q: whether to subtract the log expected count of
+    the labels in the sample to get the logits of the true labels.
+    Default is True.  Turn off for Negative Sampling.
+  :param bool remove_accidental_hits: Whether to remove "accidental hits"
+    where a sampled class equals one of the target classes.
+  :param str partition_strategy: A string specifying the partitioning strategy, relevant
+    if `len(weights) > 1`. Currently `"div"` and `"mod"` are supported.
+    Default is `"mod"`. See `tf.nn.embedding_lookup` for more details.
+  :param str|None name: A name for the operation.
+  :param int|None seed: random seed for candidate sampling. Default to None, which doesn't set
+    the op-level random seed for candidate sampling.
+  :return:
+    out_logits: `Tensor` object with shape
+        `[batch_size, num_true + num_sampled]`, for passing to either
+        `nn.sigmoid_cross_entropy_with_logits` (NCE) or
+        `nn.softmax_cross_entropy_with_logits` (sampled softmax).
+    out_targets: A Tensor object with the same shape and dtype as `out_logits`.
+      These are the targets. If num_true > 1 the per-example labels are divided by num_true so they sum to 1.0.
+  :rtype: (tf.Tensor, tf.Tensor)
+  """
+
+  if not isinstance(weights, (list, tuple)):
+    weights = [weights]
+
+  with tf.name_scope(name, "compute_sampled_logits",
+                     weights + [biases, inputs, labels]):
+    if labels.dtype != tf.int64:
+      labels = tf.cast(labels, tf.int64)
+    labels_flat = tf.reshape(labels, [-1])
+
+    if sampled_values is None:
+      sampled_values = tf.random.log_uniform_candidate_sampler(
+          true_classes=labels,
+          num_true=num_true,
+          num_sampled=num_sampled,
+          unique=True,
+          range_max=num_classes,
+          seed=seed)
+
+    sampled, true_expected_count, sampled_expected_count = (
+        tf.stop_gradient(s) for s in sampled_values)
+    sampled = tf.cast(sampled, tf.int64)
+
+    all_ids = tf.concat([labels_flat, sampled], 0)
+
+    all_w = tf.nn.embedding_lookup(
+        weights, all_ids, partition_strategy=partition_strategy)
+    if all_w.dtype != inputs.dtype:
+      all_w = tf.cast(all_w, inputs.dtype)
+
+    true_w = tf.slice(all_w,
+                      [0, 0],
+                      [tf.shape(labels_flat)[0], -1])
+
+    sampled_w = tf.slice(
+        all_w, [tf.shape(labels_flat)[0], 0], [-1, -1])
+    sampled_logits = tf.matmul(inputs, sampled_w, transpose_b=True)
+
+    all_b = tf.nn.embedding_lookup(
+        biases, all_ids, partition_strategy=partition_strategy)
+    if all_b.dtype != inputs.dtype:
+      all_b = tf.cast(all_b, inputs.dtype)
+    true_b = tf.slice(all_b, [0], tf.shape(labels_flat))
+    sampled_b = tf.slice(all_b, tf.shape(labels_flat), [-1])
+
+    dim = tf.shape(true_w)[1:2]
+    new_true_w_shape = tf.concat([[-1, num_true], dim], 0)
+    row_wise_dots = tf.multiply(
+        tf.expand_dims(inputs, 1),
+        tf.reshape(true_w, new_true_w_shape))
+    dots_as_matrix = tf.reshape(row_wise_dots,
+                                tf.concat([[-1], dim], 0))
+    true_logits = tf.reshape(tf.reduce_sum(dots_as_matrix, axis=1),
+                             [-1, num_true])
+    true_b = tf.reshape(true_b, [-1, num_true])
+    true_logits += true_b
+    sampled_logits += sampled_b
+
+    if remove_accidental_hits:
+      acc_hits = tf.nn.compute_accidental_hits(
+          labels, sampled, num_true=num_true)
+      acc_indices, acc_ids, acc_weights = acc_hits
+
+      acc_indices_2d = tf.reshape(acc_indices, [-1, 1])
+      acc_ids_2d_int32 = tf.reshape(tf.cast(acc_ids, tf.int32), [-1, 1])
+      sparse_indices = tf.concat([acc_indices_2d, acc_ids_2d_int32], 1,
+                                 "sparse_indices")
+      sampled_logits_shape = tf.concat(
+          [tf.shape(labels)[:1],
+           tf.expand_dims(num_sampled, 0)], 0)
+      if sampled_logits.dtype != acc_weights.dtype:
+        acc_weights = tf.cast(acc_weights, sampled_logits.dtype)
+      sampled_logits += tf.sparse_to_dense(
+          sparse_indices,
+          sampled_logits_shape,
+          acc_weights,
+          default_value=0.0,
+          validate_indices=False)
+
+    if subtract_log_q:
+      true_logits -= tf.log(true_expected_count)
+      sampled_logits -= tf.log(sampled_expected_count)
+
+    out_logits = tf.concat([true_logits, sampled_logits], 1)
+
+    out_targets = tf.concat([
+        tf.ones_like(true_logits) / num_true,
+        tf.zeros_like(sampled_logits)
+    ], 1)
+
+    return out_logits, out_targets
