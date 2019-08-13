@@ -1861,7 +1861,7 @@ class _SubnetworkRecCell(object):
             layer = self.input_layers_net.get_layer(layer_name)
             assert isinstance(layer, LayerBase)
             # Only unroll if that is the same time dim.
-            if not rec_layer.output.is_same_time_dim(layer.output):
+            if not layer.output.mark_same_time(rec_layer.output):
               continue
             assert fixed_seq_len is not None
             inp_ta = tf.TensorArray(
