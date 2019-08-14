@@ -559,6 +559,19 @@ def test_Data_get_common_data_tbf_and_bf():
   assert common.batch_ndim == 3
 
 
+def test_Data_get_common_data_beam_size():
+  condition = Data(name="cond", shape=(), dtype='bool', sparse=True, dim=2, time_dim_axis=None)
+  true_from = Data(name="true", shape=(), dtype='int32', sparse=True, dim=19, time_dim_axis=None)
+  false_from = Data(name="false", shape=(), dtype='int32', sparse=True, dim=19, time_dim_axis=None, beam_size=3)
+  print("cond:", condition)
+  print("true:", true_from)
+  print("false:", false_from)
+  common = Data.get_common_data([true_from, false_from, condition])
+  print("common:", common)
+  assert common.shape == () and common.sparse
+  assert common.beam_size == 3
+
+
 def test_Data_no_feature_dim():
   d = Data(name="x", shape=(6,), dtype='int32', sparse=True, dim=6, batch_dim_axis=None, time_dim_axis=None)
   assert d.feature_dim_axis is None

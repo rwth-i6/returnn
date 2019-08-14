@@ -2122,14 +2122,21 @@ class Data(object):
     if not sources:
       return None
     assert sources
+    if len(sources) == 1:
+      return sources[0]
     max_ndim = max([s.batch_ndim for s in sources])
-    largest_source = [s for s in sources if s.batch_ndim == max_ndim][0]
+    # Try with the (first) largest.
+    common = [s for s in sources if s.batch_ndim == max_ndim][0]
+    if not common.beam_size and any([s.beam_size for s in sources]):
+      common = common.copy_template()
+      # Note: we don't use copy_extend_with_beam because we don't want to create any ops in the TF graph at this point.
+      common.beam_size = max([s.beam_size or 0 for s in sources])
     is_equal_opts = dict(ignore_feature_dim=True)
     all_dim_tags, _ = DimensionTag.get_all_dimension_tags(sources, is_equal_opts=is_equal_opts)
     # Note: We cannot compare len(all_dims_tags) to len(shape) as e.g. shape (B,1,1,D) would have only 3 dim tags.
-    largest_dim_tags, _ = DimensionTag.get_all_dimension_tags([largest_source], is_equal_opts=is_equal_opts)
+    largest_dim_tags, _ = DimensionTag.get_all_dimension_tags([common], is_equal_opts=is_equal_opts)
     if len(largest_dim_tags) == len(all_dim_tags):
-      return largest_source
+      return common
     if any([not dim_tag.can_compare() for dim_tag in largest_dim_tags]):
       if warnings_out:
         print(
@@ -2137,7 +2144,7 @@ class Data(object):
             sources, all_dim_tags, [dim_tag for dim_tag in largest_dim_tags if not dim_tag.can_compare()]),
           file=warnings_out)
       # The further code would be unreliable, so better have this simple fallback.
-      return largest_source
+      return common
     # Ok, there is some other axis (or multiple), or we cannot identify/compare them because of incomplete information.
     # Try something more complex: Make all axes unique.
     # Note that this should also work at template construction time,
@@ -2151,10 +2158,10 @@ class Data(object):
         continue
       if not DimensionTag.get_existing_tag_from_collection(dim_tag, largest_dim_tags, is_equal_opts=is_equal_opts):
         largest_dim_tags.append(dim_tag)
-        largest_source = largest_source.copy_template().copy_add_dim_by_tag(dim_tag, unbroadcast=True)
+        common = common.copy_template().copy_add_dim_by_tag(dim_tag, unbroadcast=True)
     # Simple fallback: Use first with biggest batch_ndim.
     # Was even simpler before: Use first.
-    return largest_source
+    return common
 
 
 _horovod_is_initialized = False
