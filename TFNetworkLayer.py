@@ -1773,18 +1773,13 @@ def concat_sources(src_layers):
   if cache_key in network.concat_sources_dropout_cache:
     return network.concat_sources_dropout_cache[cache_key].copy()
   data = get_concat_sources_data_template(src_layers)
-  common_source = Data.get_common_data([s.output for s in src_layers])
   # Currently we assume that get_concat_sources_data_template will match Data.get_common_data (besides the dim).
+  data_dyn_shape = []
+  common_source = Data.get_common_data(
+    [s.output for s in src_layers], warnings_out=log.v4, out_shape=data_dyn_shape)
   data.size_placeholder = common_source.size_placeholder.copy()  # to get right dimension tags
   layers_data = []
   with _name_scope_for_concat_src_layers(src_layers, "concat_sources"):
-    data_dyn_shape = list(data.batch_shape)
-    if any([d is None for d in data_dyn_shape]):
-      # Currently we assume that get_concat_sources_data_template will match Data.get_common_data (besides the dim).
-      assert common_source.batch_ndim == data.batch_ndim
-      for axis in range(data.batch_ndim):
-        if data_dyn_shape[axis] is None:
-          data_dyn_shape[axis] = tf.shape(common_source.placeholder)[axis]
     for layer in src_layers:
       assert not layer.output.sparse, "sparse concat not supported"
       assert layer.output.dtype == data.dtype, "incompatible dtype with layer %r" % layer

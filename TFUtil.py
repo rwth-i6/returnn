@@ -862,6 +862,27 @@ class Data(object):
     v.sanity_check()
     return v
 
+  def get_default_new_axis_for_dim_tag(self, dim_tag):
+    """
+    :param DimensionTag dim_tag:
+    :rtype: int
+    """
+    if dim_tag.kind == DimensionTag.Types.Batch:
+      return 0
+    # Note: if dim_tag is feature, but we are sparse, we just treat is as spatial, handled below.
+    if dim_tag.kind == DimensionTag.Types.Feature and not self.sparse:
+      if self.feature_dim_axis is not None:
+        return self.feature_dim_axis + 1  # after existing feature-dim
+      else:
+        return self.batch_ndim  # at the end
+    assert dim_tag.kind == DimensionTag.Types.Spatial or (dim_tag.kind == DimensionTag.Types.Feature and self.sparse)
+    if self.get_spatial_batch_axes():
+      return self.get_spatial_batch_axes()[-1] + 1  # after the existing spatial dim
+    elif self.feature_dim_axis is not None:
+      return self.feature_dim_axis  # add it before the feature dim
+    else:
+      return self.batch_ndim  # add it at the end
+
   def copy_add_dim_by_tag(self, dim_tag, unbroadcast=False, axis=None):
     """
     :param DimensionTag dim_tag:
@@ -869,8 +890,10 @@ class Data(object):
     :param int|None axis:
     :rtype: Data
     """
+    if axis is None:
+      axis = self.get_default_new_axis_for_dim_tag(dim_tag=dim_tag)
     if dim_tag.kind == DimensionTag.Types.Batch:
-      res = self.copy_add_batch_dim(batch_dim_axis=0 if axis is None else axis)
+      res = self.copy_add_batch_dim(batch_dim_axis=axis)
       if unbroadcast:
         assert res.placeholder is None  # not implemented yet...
       return res
@@ -886,21 +909,12 @@ class Data(object):
         res.sanity_check()
       return res
     assert dim_tag.kind == DimensionTag.Types.Spatial or (dim_tag.kind == DimensionTag.Types.Feature and self.sparse)
-    if axis is None:
-      if self.get_spatial_batch_axes():
-        spatial_dim_axis = self.get_spatial_batch_axes()[-1] + 1  # after the existing spatial dim
-      elif self.feature_dim_axis is not None:
-        spatial_dim_axis = self.feature_dim_axis  # add it before the feature dim
-      else:
-        spatial_dim_axis = self.batch_ndim  # add it at the end
-    else:
-      spatial_dim_axis = axis
-    res = self.copy_add_spatial_dim(spatial_dim_axis=spatial_dim_axis, dim=1)
-    assert res.batch_shape[spatial_dim_axis] == 1
+    res = self.copy_add_spatial_dim(spatial_dim_axis=axis, dim=1)
+    assert res.batch_shape[axis] == 1
     if unbroadcast:
       assert res.placeholder is None  # not implemented yet...
       shape = list(res.shape)
-      shape[res.get_batch_axis_excluding_batch(spatial_dim_axis)] = dim_tag.dimension
+      shape[res.get_batch_axis_excluding_batch(axis)] = dim_tag.dimension
       res.shape = tuple(shape)
       if res.feature_dim_axis is not None:
         # feature dim axis might have changed if unspecified, so just update dim
@@ -909,7 +923,7 @@ class Data(object):
       if dim_tag.dimension is None and dim_tag.dyn_size is not None:
         if res.size_placeholder is None:
           res.size_placeholder = {}
-        res.size_placeholder[res.get_batch_axis_excluding_batch(spatial_dim_axis)] = dim_tag.dyn_size
+        res.size_placeholder[res.get_batch_axis_excluding_batch(axis)] = dim_tag.dyn_size
     return res
 
   def copy_split_feature_dim(self, new_feature_dim):
@@ -1321,6 +1335,12 @@ class Data(object):
     if self.batch_dim_axis is not None:
       return self.shape[:self.batch_dim_axis] + (batch_dim,) + self.shape[self.batch_dim_axis:]
     return self.shape
+
+  def get_dynamic_batch_shape(self):
+    """
+    :rtype: list[int|tf.Tensor]
+    """
+    return [self.get_dim(axis) for axis in range(self.batch_ndim)]
 
   @property
   def shape_dense(self):
@@ -2111,28 +2131,34 @@ class Data(object):
     return tuple([self.get_dim_tag(i) for i in range(self.batch_ndim)])
 
   @classmethod
-  def get_common_data(cls, sources, warnings_out=None):
+  def get_common_data(cls, sources, warnings_out=None, out_shape=None):
     """
     :param list[Data] sources:
     :param io.TextIOBase|None warnings_out:
+    :param list[int|tf.Tensor]|None out_shape: will insert the shape dynamically
     :return: some generic data where the sources should be compatible to (with copy_compatible_to),
       i.e. it contains the union of all axes from all sources (least common multiple).
     :rtype: Data|None
     """
+    assert not out_shape
     if not sources:
       return None
     assert sources
     if len(sources) == 1:
+      if out_shape is not None:
+        out_shape.extend(sources[0].get_dynamic_batch_shape())
       return sources[0]
     max_ndim = max([s.batch_ndim for s in sources])
     # Try with the (first) largest.
     common = [s for s in sources if s.batch_ndim == max_ndim][0]
+    if out_shape is not None:
+      out_shape.extend(common.get_dynamic_batch_shape())
     if not common.beam_size and any([s.beam_size for s in sources]):
-      common = common.copy_template()
+      common = common.copy()
       # Note: we don't use copy_extend_with_beam because we don't want to create any ops in the TF graph at this point.
       common.beam_size = max([s.beam_size or 0 for s in sources])
     is_equal_opts = dict(ignore_feature_dim=True)
-    all_dim_tags, _ = DimensionTag.get_all_dimension_tags(sources, is_equal_opts=is_equal_opts)
+    all_dim_tags, tags_dict = DimensionTag.get_all_dimension_tags(sources, is_equal_opts=is_equal_opts)
     # Note: We cannot compare len(all_dims_tags) to len(shape) as e.g. shape (B,1,1,D) would have only 3 dim tags.
     largest_dim_tags, _ = DimensionTag.get_all_dimension_tags([common], is_equal_opts=is_equal_opts)
     if len(largest_dim_tags) == len(all_dim_tags):
@@ -2150,6 +2176,9 @@ class Data(object):
     # Note that this should also work at template construction time,
     # where we do not have access to the size_placeholder,
     # and thus the dimension tags are not reliable (in the current implementation).
+    tags_dict_ext = {
+      id(tag): [(data, tags_dict[data].index(tag)) for data in sources if tag in tags_dict[data]]
+      for tag in all_dim_tags}
     for dim_tag in all_dim_tags:
       if not dim_tag.can_compare():
         if warnings_out:
@@ -2158,7 +2187,12 @@ class Data(object):
         continue
       if not DimensionTag.get_existing_tag_from_collection(dim_tag, largest_dim_tags, is_equal_opts=is_equal_opts):
         largest_dim_tags.append(dim_tag)
-        common = common.copy_template().copy_add_dim_by_tag(dim_tag, unbroadcast=True)
+        axis = common.get_default_new_axis_for_dim_tag(dim_tag)
+        common = common.copy_template().copy_add_dim_by_tag(dim_tag, unbroadcast=True, axis=axis)
+        if out_shape is not None:
+          tag_data, tag_data_axis = tags_dict_ext[id(dim_tag)][0]
+          assert isinstance(tag_data, Data)
+          out_shape.insert(axis, tag_data.get_dim(tag_data_axis))
     # Simple fallback: Use first with biggest batch_ndim.
     # Was even simpler before: Use first.
     return common
