@@ -2210,9 +2210,9 @@ class SliceLayer(_ConcatInputLayer):
     """
     :param int|str axis:
     :param str|None axis_kind: "T" for time, "B" for batch, "F" for feature
-    :param int|None slice_start:
-    :param int|None slice_end:
-    :param int|None slice_step:
+    :param int|None slice_start: Start index. Currently, only non-negative values are supported
+    :param int|None slice_end: End index. May be negative or positive
+    :param int|None slice_step: Step size. Currently, only positive values are supported
     """
     super(SliceLayer, self).__init__(**kwargs)
     axis = self.input_data.get_axis_from_description(axis)
@@ -2226,13 +2226,14 @@ class SliceLayer(_ConcatInputLayer):
         self.output.size_placeholder[axis_wo_batch] = (
           tf.maximum(0, self.output.size_placeholder[axis_wo_batch] - slice_start))
       if slice_end is not None:
-        if slice_end < 0:
-          slice_end = tf.shape(self.input_data.placeholder)[axis] + slice_end
-        self.output.size_placeholder[axis_wo_batch] = (
-          tf.minimum(
-            tf.shape(self.input_data.placeholder)[axis] - slice_end,
-            self.output.size_placeholder[axis_wo_batch]))
+        if slice_end >= 0:
+          self.output.size_placeholder[axis_wo_batch] = (
+            tf.minimum(self.output.size_placeholder[axis_wo_batch], slice_end))
+        else:
+          self.output.size_placeholder[axis_wo_batch] = (
+            tf.maximum(0, self.output.size_placeholder[axis_wo_batch] + slice_end))
       if slice_step:
+        assert slice_step > 0
         self.output.size_placeholder[axis_wo_batch] = (
           tf.ceil(tf.divide(self.output.size_placeholder[axis_wo_batch], slice_step)))
     self.output.placeholder = self.input_data.placeholder[slices]
