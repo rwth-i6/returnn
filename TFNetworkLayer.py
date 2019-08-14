@@ -2235,15 +2235,21 @@ class SliceLayer(_ConcatInputLayer):
         self.output.size_placeholder[axis_wo_batch] = (
           tf.maximum(0, self.output.size_placeholder[axis_wo_batch] - slice_start))
       if slice_end is not None:
-        if slice_end < 0:
-          slice_end = tf.shape(self.input_data.placeholder)[axis] + slice_end
-        self.output.size_placeholder[axis_wo_batch] = (
-          tf.minimum(
-            tf.shape(self.input_data.placeholder)[axis] - slice_end,
-            self.output.size_placeholder[axis_wo_batch]))
+        if slice_end >= 0:
+          self.output.size_placeholder[axis_wo_batch] = (
+            tf.minimum(slice_end, self.output.size_placeholder[axis_wo_batch]))
+        else:  # slice_end < 0
+          self.output.size_placeholder[axis_wo_batch] = (
+            tf.maximum(0, self.output.size_placeholder[axis_wo_batch] + slice_end))
       if slice_step:
         self.output.size_placeholder[axis_wo_batch] = (
           tf.ceil(tf.divide(self.output.size_placeholder[axis_wo_batch], slice_step)))
+      from TFUtil import DimensionTag
+      if not DimensionTag.get_tag_from_size_tensor(self.output.size_placeholder[axis_wo_batch]):
+        tag = DimensionTag(
+          description="slice%i:%s" % (axis_wo_batch, self.get_absolute_name()),
+          kind=DimensionTag.Types.Spatial)
+        tag.set_tag_on_size_tensor(self.output.size_placeholder[axis_wo_batch])
     self.output.placeholder = self.input_data.placeholder[slices]
 
   @classmethod
