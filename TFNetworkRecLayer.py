@@ -977,6 +977,7 @@ class _SubnetworkRecCell(object):
         layer_desc["network"] = self.net
         layer_.kwargs = layer_desc  # set it now already for better debugging
         output = layer_class.get_out_data_from_opts(**layer_desc)
+        assert not output.undefined
         layer_.init(layer_class=layer_class, output=output, **layer_desc)
         if (
               lself.returned_none_count == 0 and
