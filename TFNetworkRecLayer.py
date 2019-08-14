@@ -3787,6 +3787,8 @@ class ChoiceLayer(LayerBase):
         base_beam_in = tf.shape(scores_base)[1]  # 1 in first frame, then beam_in (beam_size)
         scores_beam_in = tf.shape(scores_in)[0] // net_batch_dim
         beam_size = self.sources[0].output.beam_size
+        assert beam_size == base_search_choices.beam_size, "%r: source %r beam-size unexpected from base choice %r" % (
+          self, self.sources[0], base_search_choices)
         # About incoming beam size:
         #   base_beam_in  - 1 in first frame, then beam_in
         #   scores_beam_in  - beam_size or 1
