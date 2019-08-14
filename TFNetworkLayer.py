@@ -5762,11 +5762,10 @@ class SwitchLayer(LayerBase):
     else:
       assert isinstance(condition, LayerBase)
       assert condition.output.dtype == "bool"
-      common_data = Data.get_common_data([true_from.output, false_from.output, condition.output])
       self.output.placeholder = where_bc(
-        condition=condition.output.copy_compatible_to(common_data).placeholder,
-        x=true_from.output.copy_compatible_to(common_data).placeholder,
-        y=false_from.output.copy_compatible_to(common_data).placeholder)
+        condition=condition.output.copy_compatible_to(self.output, check_dtype=False, check_sparse=False).placeholder,
+        x=true_from.output.copy_compatible_to(self.output).placeholder,
+        y=false_from.output.copy_compatible_to(self.output).placeholder)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -5807,7 +5806,12 @@ class SwitchLayer(LayerBase):
       else:
         assert not false_from.output.undefined
         return false_from.output.copy("%s_output" % name)
-    return Data.get_common_data([true_from.output, false_from.output, condition.output])
+    out = Data.get_common_data([true_from.output, false_from.output, condition.output])
+    out = out.copy(name="%s_output" % name)
+    out.dtype = true_from.output.dtype
+    out.sparse = true_from.output.sparse
+    out.vocab = true_from.output.vocab
+    return out
 
   def get_dep_layers(self):
     """
