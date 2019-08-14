@@ -12,6 +12,7 @@ from OpBLSTM import BLSTMOpInstance
 import RecurrentTransform
 import json
 from TheanoUtil import print_to_file
+from theano.ifelse import ifelse
 
 class Unit(Container):
   """
@@ -477,14 +478,14 @@ class SRU(Unit):
     h_c = CI(z_t[:,2*self.slice:3*self.slice] + r_t * z_p[:,2*self.slice:3*self.slice])
     return  u_t * h_p + (1 - u_t) * h_c
 
-
 class RecurrentUnitLayer(Layer):
   """
   Layer class to execute recurrent units
   """
   recurrent = True
   layer_class = "rec"
-
+  last_segment_flag = 0
+ 
   def __init__(self,
                n_out = None,
                n_units = None,
@@ -534,6 +535,7 @@ class RecurrentUnitLayer(Layer):
                segment_input=False,
                join_states=False,
                state_memory=False,
+               state_memory_pos=-1,
                sample_segment=None,
                **kwargs):
     """
@@ -729,6 +731,9 @@ class RecurrentUnitLayer(Layer):
     # make input
     z = self.b
     for x_t, m, W in zip(self.sources, self.masks, self.W_in):
+      if x_t.layer_class == 'source':
+        RecurrentUnitLayer.last_segment_flag = T.all(T.eq(x_t.output[-1],T.ones_like(x_t.output[0])))
+        self.index = T.switch(last_segment_flag, self.index, T.set_subtensor(self.index[-1],T.zeros_like(self.index[-1])))
       if x_t.attrs['sparse']:
         if x_t.output.ndim == 3: out_dim = x_t.output.shape[2]
         elif x_t.output.ndim == 2: out_dim = 1
@@ -743,8 +748,6 @@ class RecurrentUnitLayer(Layer):
         z += T.dot(x_t.output, W)
       else:
         z += self.dot(self.mass * m * x_t.output, W)
-    #if self.attrs['batch_norm']:
-    #  z = self.batch_norm(z, unit.n_in)
     num_batches = self.index.shape[1]
     self.num_batches = num_batches
     non_sequences = []
@@ -818,7 +821,6 @@ class RecurrentUnitLayer(Layer):
     assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
     unit.recurrent_transform = recurrent_transform_inst
     self.recurrent_transform = recurrent_transform_inst
-    state_memory *= self.train_flag
     # scan over sequence
     for s in range(self.attrs['sampling']):
       index = self.index[s::self.attrs['sampling']]
@@ -826,7 +828,6 @@ class RecurrentUnitLayer(Layer):
       if context > 0:
         time, batch, dim = z.shape[0], z.shape[1], z.shape[2]
 
-        from theano.ifelse import ifelse
         def context_window(idx, x_in, i_in):
           x_out = x_in[idx:idx + context]
           x_out = x_out.dimshuffle(1,0,2).reshape((batch, dim * context))
@@ -848,7 +849,7 @@ class RecurrentUnitLayer(Layer):
           z = T.concatenate([T.zeros((context - context_span, z.shape[1], z.shape[2]), dtype='float32'), z])
         if context_span > 1:
           z = T.concatenate([z, T.zeros((context_span - 1, z.shape[1], z.shape[2]), dtype='float32')])
-        out, _ = theano.map(context_window, sequences=[T.arange(time)[::context_span]], non_sequences=[z, index])
+        out, _ = theano.map(context_window, sequences=[T.arange(0,time,context_span)], non_sequences=[z, index])
         z = out[0][::direction or 1]  # (T/S)B(DC)
         index = out[1][::direction or 1]  # (T/S)BC
         original_direction = direction
@@ -863,25 +864,22 @@ class RecurrentUnitLayer(Layer):
       sequences = z
       sources = self.sources
       if state_memory:
-        self.init_state = [
+        outputs_info = [
           self.add_param(self.shared(numpy.zeros((state_memory or 1, unit.n_units), dtype='float32'), name='init_%d_%s' % (a, self.name)))
           for a in range(unit.n_act)]  # has to be initialized for train and test
-      if encoder:
+      elif encoder:
         if recurrent_transform == "attention_segment":
           if hasattr(encoder[0],'act'):
             outputs_info = [T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in range(unit.n_act)]
           else:
             outputs_info[0] = self.aligner.output[-1]
         elif hasattr(encoder[0],'act'):
-          outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in range(unit.n_act) ]
+          outputs_info = [T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in range(unit.n_act)]
         else:
-          outputs_info = [ T.concatenate([e[i] for e in encoder], axis=1) for i in range(unit.n_act) ]
+          outputs_info = [T.concatenate([e[i] for e in encoder], axis=1) for i in range(unit.n_act)]
         sequences += T.alloc(numpy.cast[theano.config.floatX](0), n_dec, num_batches, unit.n_in) + (self.zc if self.attrs['recurrent_transform'] == 'input' else numpy.float32(0))
-      elif state_memory:
-        outputs_info = self.init_state
       else:
         outputs_info = [T.alloc(numpy.cast[theano.config.floatX](0), num_batches, unit.n_units) for a in range(unit.n_act)]
-
       if self.attrs['lm'] and self.attrs['droplm'] == 0.0 and (self.train_flag or force_lm):
         if self.network.y[self.attrs['target']].ndim == 3:
           sequences += T.dot(self.network.y[self.attrs['target']],self.W_lm_out)
@@ -901,7 +899,7 @@ class RecurrentUnitLayer(Layer):
       if segment_input:
         outputs = unit.scan_seg(x=sources,
                                 z=sequences[s::self.attrs['sampling']],
-                                att = inv_att,
+                                att=inv_att,
                                 non_sequences=non_sequences,
                                 i=index_f,
                                 outputs_info=outputs_info,
@@ -930,27 +928,30 @@ class RecurrentUnitLayer(Layer):
           for i in range(len(outputs)):
             # outputs[i] is C((T/S)B)D
             outputs[i] = outputs[i][-context_span:][::original_direction or 1]  # S((T/S)B)D
-            #outputs[i] = outputs[i][-context_span:]  # S((T/S)B)D
-            outputs[i] = outputs[i].dimshuffle(1,0,2).reshape((time, batch, outputs[i].shape[2]))
-            outputs[i] = outputs[i][:self.index.shape[0]]
-          self.index = index[-context_span:][::original_direction or 1].dimshuffle(1,0).reshape((time,batch))[:self.index.shape[0]]
+            outputs[i] = outputs[i].dimshuffle(1, 0, 2).reshape(
+              (outputs[i].shape[0] * outputs[i].shape[1] // batch, batch, outputs[i].shape[2]))[:self.index.shape[0]]
+          index = index[-context_span:][::original_direction or 1]
+          self.index = index.dimshuffle(1, 0).reshape(
+            (index.shape[0] * index.shape[1] // batch, batch))[:self.index.shape[0]]
 
       if unit.recurrent_transform:
         unit.recurrent_transform_state_var_seqs = outputs[-len(unit.recurrent_transform.state_vars):]
 
       if self.attrs['sampling'] > 1:
         if s == 0:
-          self.act = [ T.alloc(numpy.cast['float32'](0), self.index.shape[0], self.index.shape[1], n_out) for act in outputs ]
-        self.act = [ T.set_subtensor(tot[s::self.attrs['sampling']], act) for tot,act in zip(self.act, outputs) ]
+          self.act = [T.alloc(numpy.cast['float32'](0), self.index.shape[0], self.index.shape[1], n_out) for act in outputs]
+        self.act = [T.set_subtensor(tot[s::self.attrs['sampling']], act) for tot,act in zip(self.act, outputs)]
       else:
         self.act = outputs[:unit.n_act]
         if len(outputs) > unit.n_act:
           self.aux = outputs[unit.n_act:]
         if state_memory:
           for i in range(len(self.act)):
-            self.init_state[i].live_update = self.act[i][-1]
+            self.params["init_%d_%s" % (i, self.name)].live_update = ifelse(
+              RecurrentUnitLayer.last_segment_flag,
+              T.zeros_like(self.act[i][0]), self.act[i][state_memory_pos])
     if self.attrs['attention_store']:
-      self.attention = [ self.aux[i].dimshuffle(0,2,1) for i,v in enumerate(sorted(unit.recurrent_transform.state_vars.keys())) if v.startswith('att_') ] # NBT
+      self.attention = [self.aux[i].dimshuffle(0,2,1) for i,v in enumerate(sorted(unit.recurrent_transform.state_vars.keys())) if v.startswith('att_')] # NBT
       for i in range(len(self.attention)):
         vec = T.eye(self.attention[i].shape[2], 1, -direction * (self.attention[i].shape[2] - 1))
         last = vec.dimshuffle(1, 'x', 0).repeat(self.index.shape[1], axis=1)
@@ -985,37 +986,6 @@ class RecurrentUnitLayer(Layer):
       recog = T.argmax(z[idx], axis=1)
       real = y_out[idy]
       self.errors = lambda: T.sum(T.neq(recog, real))
-
-      return
-
-      back += T.arange(self.index.shape[1], dtype='float32') * T.cast(self.base[0].index.shape[0], 'float32')
-      idx = (self.index[:-1].flatten() > 0).nonzero()
-      idx = T.cast(back[::-1].flatten()[idx],'int32')
-      x_out = base[0].output
-      #x_out = x_out.dimshuffle(1,0,2).reshape((x_out.shape[0] * x_out.shape[1], x_out.shape[2]))[idx]
-      #x_out = x_out.reshape((self.index.shape[1], self.index.shape[0] - 1, x_out.shape[1])).dimshuffle(1,0,2)
-      x_out = x_out.reshape((x_out.shape[0] * x_out.shape[1], x_out.shape[2]))[idx]
-      x_out = x_out.reshape((self.index.shape[0] - 1, self.index.shape[1], x_out.shape[1]))
-      self.output = T.concatenate([x_out, base[0].output[1:]],axis=0)
-      self.attrs['n_out'] = base[0].attrs['n_out']
-      self.params.update(unit.params)
-      return
-
-
-      skips = T.dot(T.nnet.softmax(z), T.arange(z.shape[1], dtype='float32')).reshape(self.index[1:].shape)
-      shift = T.arange(self.index.shape[1], dtype='float32') * T.cast(self.base[0].index.shape[0], 'float32')
-      skips = T.concatenate([T.zeros_like(self.y_t[:1]),self.y_t[:-1]],axis=0)
-      idx = shift + T.cumsum(skips, axis=0)
-      idx = T.cast(idx[:-1].flatten(),'int32')
-      #idx = (idx.flatten() > 0).nonzero()
-      #idx = base[0].attention.flatten()
-      x_out = base[0].output[::-1]
-      x_out = x_out.reshape((x_out.shape[0] * x_out.shape[1], x_out.shape[2]))[idx]
-      x_out = x_out.reshape((self.index.shape[0], self.index.shape[1], x_out.shape[1]))
-      self.output = T.concatenate([base[0].output[-1:], x_out], axis=0)[::-1]
-      self.attrs['n_out'] = base[0].attrs['n_out']
-      self.params.update(unit.params)
-      return
 
     if recurrent_transform == 'batch_norm':
       self.params['sample_mean_batch_norm'].custom_update = T.dot(T.mean(self.act[0],axis=[0,1]),self.W_re)
@@ -1058,8 +1028,7 @@ class RecurrentUnitLayer(Layer):
     self.rec_transform_enc = att_rep
     self.rec_transform_index = ind
 
-  def get_params_vars(self):
-    return [ p for p in super(RecurrentUnitLayer, self).get_params_vars() if p.live_update is None ]
+
 
 class RecurrentUpsampleLayer(RecurrentUnitLayer):
   layer_class = 'recurrent_upsample'
