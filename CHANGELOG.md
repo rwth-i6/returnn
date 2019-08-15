@@ -6,6 +6,28 @@ or any changes which could potentially break or change the behavior of existing 
 This is intentionally kept short. For a full change log, just see the Git log.
 
 
+## 2019-08-13: `Data` `batch_shape_meta` extra debug repr output
+
+This will show the same information as before, but much more compact,
+and also in addition the dimension tags (`DimensionTag`),
+which also got improved in many further cases.
+
+## 2019-08-07: overlay nets (`extra_nets`)
+
+You can have e.g. multiple additional networks which redefine
+existing layers (they would automatically share params),
+which can use different flags (e.g. enable the search flag).
+
+## 2019-07: multiple stochastic (latent) variables
+
+It was designed to support this from the very beginning,
+but the implementation was never fully finished for this.
+Now examples like hard attention work.
+
+## 2019-05: better support for RETURNN as a framework
+
+`pip install returnn`, and then `import returnn`.
+
 ## 2019-03-29: remove hard Theano dependency
 
 ## 2019-03-24 and ongoing: automatic linter checks
