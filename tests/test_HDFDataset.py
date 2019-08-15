@@ -344,6 +344,49 @@ def test_SimpleHDFWriter_ndim1_var_len():
       reader.data["sizes"][i],)
 
 
+@unittest.skip("unfinished...")
+def test_SimpleHDFWriter_swmr():
+  fn = _get_tmp_file(suffix=".hdf")
+  rnd = numpy.random.RandomState(42)
+  n_dim = 13
+  writer = SimpleHDFWriter(filename=fn, dim=n_dim, labels=None, swmr=True)
+
+  # TODO
+  # As we directly want to read it, we must know all the seqs (and seq tags) in advance.
+  # Not only that; we also would need all seq lens in advance, to have the offsets in the HDF.
+  # (Or do we? We could extend MetaDataset to ignore missing.
+  #  But then we would need to enforce a reload at the next epoch. Which we can do.)
+  # In any case though, this would not support overwriting existing seqs,
+  # but we need that...
+  # How to solve this? Different HDF format? But not really possible even in principle in a nice way, or is it?
+  # Or write to new HDF file for each epoch?
+  # Once finished through whole dataset (all sub epochs), delete old and replace?
+  # Then we also don't really need swmr.
+
+  reader = HDFDataset(files=[fn])  # TODO use swmr?
+  reader.init_seq_order(epoch=1)
+
+  seq_lens = [11, 7, 5, 10, 13, 3, 2]
+  # Construct seq tags in a way that the lengths vary.
+  seq_tags = [
+    ("seq-%i-" % i) + "".join(["abcdefghijk"[rnd.randint(0, 10)] for _ in range(rnd.randint(1, 50))])
+    for i in range(len(seq_lens))]
+  seqs = numpy.random.normal(size=(len(seq_lens), max(seq_lens), n_dim)).astype("float32")
+  for (s, e) in [(0, 3), (3, len(seq_lens))]:
+    writer.insert_batch(
+      inputs=seqs[s:e, :max(seq_lens[s:e])],
+      seq_len=seq_lens[s:e],
+      seq_tag=seq_tags[s:e])
+    writer.flush()  # TODO when do we want it?
+
+    # Now read.
+    for seq_idx in range(s, e):
+      reader.load_seqs(seq_idx, seq_idx + 1)
+      # TODO read and check whether it is correct
+
+  writer.close()  # Should not matter.
+
+
 def dummy_iter_dataset(dataset):
   """
   :param Dataset dataset:

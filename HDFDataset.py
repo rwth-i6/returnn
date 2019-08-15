@@ -775,12 +775,13 @@ class SiameseHDFDataset(CachedDataset2):
 
 
 class SimpleHDFWriter:
-  def __init__(self, filename, dim, labels=None, ndim=None):
+  def __init__(self, filename, dim, labels=None, ndim=None, swmr=False):
     """
     :param str filename:
     :param int|None dim:
     :param int ndim: counted without batch
     :param list[str]|None labels:
+    :param bool swmr: see http://docs.h5py.org/en/stable/swmr.html
     """
     if ndim is None:
       if dim is None:
@@ -793,7 +794,7 @@ class SimpleHDFWriter:
     self.labels = labels
     if labels:
       assert len(labels) == dim
-    self._file = h5py.File(filename, "w")
+    self._file = h5py.File(filename, "w", libver='latest' if swmr else None)
 
     self._file.attrs['numTimesteps'] = 0  # we will increment this on-the-fly
     self._other_num_time_steps = 0
@@ -809,6 +810,12 @@ class SimpleHDFWriter:
     self._datasets = {}  # type: dict[str, h5py.Dataset]
     self._tags = []  # type: list[str]
     self._seq_lengths = self._file.create_dataset("seqLengths", (0, 2), dtype='i', maxshape=(None, 2))
+
+    if swmr:
+      assert not self._file.swmr_mode  # this also checks whether the attribute exists (right version)
+      self._file.swmr_mode = True
+      # See comments in test_SimpleHDFWriter_swmr...
+      raise NotImplementedError("SimpleHDFWriter SWMR is not really finished...")
 
   def _insert_h5_inputs(self, raw_data):
     """
