@@ -32,9 +32,18 @@ from Debug import init_ipython_kernel, init_better_exchook, init_faulthandler, i
 from Util import init_thread_join_hack, describe_returnn_version, describe_theano_version, \
   describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple
 
+if typing.TYPE_CHECKING:
+  try:
+    import TFEngine
+  except ImportError:
+    pass
+  try:
+    import Engine
+  except ImportError:
+    pass
 
 config = None  # type: typing.Optional[Config]
-engine = None  # type: typing.Optional[typing.Union['TFEngine.Engine','Engine.Engine']]
+engine = None  # type: typing.Optional[typing.Union[TFEngine.Engine,Engine.Engine]]
 train_data = None  # type: typing.Optional[Dataset]
 dev_data = None  # type: typing.Optional[Dataset]
 eval_data = None  # type: typing.Optional[Dataset]
