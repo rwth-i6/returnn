@@ -1004,7 +1004,6 @@ class Engine(EngineBase):
       epoch = self.epoch
     self._close_tf_session()
     self._reset_graph()
-    self._maybe_update_config(net_desc=net_desc, epoch=epoch)
     # The new session will by default use the newly created default graph.
     self._make_tf_session()
     tf_random_seed = 42
@@ -1173,6 +1172,9 @@ class Engine(EngineBase):
       # Note: For pretrain epochs, we ensure that the last pretrain epoch will have exactly the same
       # network as we use after pretraining.
       new_network_desc = self.pretrain.get_network_json_for_epoch(self.epoch)
+      # Always update config, if needed, even if nothing changed.
+      # This might trigger enforcing some learning rate, or so.
+      self._maybe_update_config(net_desc=new_network_desc, epoch=self.epoch)
       self.maybe_init_new_network(new_network_desc)
       self.network.declare_train_params(**self.pretrain.get_train_param_args_for_epoch(self.epoch))
     if self.config.is_true("use_learning_rate_control_always"):
