@@ -1112,11 +1112,13 @@ class Data(object):
         return data
       assert data.beam_size is None, "incompatible beam sizes (%r vs %r)" % (data.beam_size, beam_size)
       if data.placeholder is not None:
-        data.placeholder = tile_transposed(data.placeholder, axis=data.batch_dim_axis, multiples=dyn_beam_size)
+        with same_control_flow_ctx(data.placeholder):
+          data.placeholder = tile_transposed(data.placeholder, axis=data.batch_dim_axis, multiples=dyn_beam_size)
       if data.size_placeholder is not None:
         for i, v in sorted(data.size_placeholder.items()):
           tag = DimensionTag.get_tag_from_size_tensor(v)
-          data.size_placeholder[i] = tile_transposed(v, axis=0, multiples=dyn_beam_size)
+          with same_control_flow_ctx(v):
+            data.size_placeholder[i] = tile_transposed(v, axis=0, multiples=dyn_beam_size)
           if tag is not None:
             tag.set_tag_on_size_tensor(data.size_placeholder[i])
       data.beam_size = beam_size * (data.beam_size or 1)
