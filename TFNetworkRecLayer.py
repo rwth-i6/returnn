@@ -3928,6 +3928,7 @@ class ChoiceLayer(LayerBase):
           gold_labels_bc = tf.expand_dims(gold_labels, axis=1)  # (batch,1)
           labels = tf.concat([labels[:, :beam_size - 1], gold_labels_bc], axis=1)  # (batch,beam)
           from TFUtil import nd_indices
+          # Note: In case the seq ended, we assume that the gold_targets are all 0, such that we get the right score.
           gold_scores = tf.gather_nd(
             scores_comb[:, gold_beam_in_idx], indices=nd_indices(gold_targets))  # (batch,)
           gold_scores_bc = tf.expand_dims(gold_scores, axis=1)  # (batch,1)
@@ -4045,13 +4046,25 @@ class ChoiceLayer(LayerBase):
         beam_size=base_search_choices.beam_size)
       assert self.search_choices.beam_size == self.output.beam_size
       scores_base = base_search_choices.beam_scores  # (batch, beam_in|1)
-      scores_in = self._get_scores(self.sources[0])  # +log scores, (batch*beam_in, dim)
       assert len(self.sources) == 1
+      scores_in = self._get_scores(self.sources[0])  # +log scores, (batch*beam_in, dim)
+      from TFUtil import filter_ended_scores
+      if self.network.have_rec_step_info():
+        scores_in_dim = self.sources[0].output.dim
+        if scores_in_dim is None:  # can happen if variable length
+          scores_in_dim = tf.shape(self.sources[0].output.placeholder)[self.sources[0].output.feature_dim_axis]
+        scores_in = filter_ended_scores(
+          scores_in,
+          end_flags=self.network.get_rec_step_info().get_end_flag(target_search_choices=base_search_choices),
+          dim=scores_in_dim, batch_dim=tf.shape(scores_in)[0])  # (batch * beam_in, dim)
+        # We also assume that the ground truth output are 0 when the seq ended.
       scores_in_ = batch_gather(scores_in, self.output.placeholder)  # (batch*beam_in,)
       scores_in_ = tf.reshape(scores_in_, (net_batch_dim, base_search_choices.beam_size))  # (batch,beam_in)
       self.search_choices.set_src_beams(expand_dims_unbroadcast(
         tf.range(base_search_choices.beam_size), axis=0, dim=net_batch_dim))
       assert not random_sample_scale
+      assert not length_normalization
+      assert not custom_score_combine
       scores_comb = optional_add(
         optional_mul(scores_in_, prob_scale),
         optional_mul(scores_base, base_beam_score_scale))  # (batch, beam_in, dim)
