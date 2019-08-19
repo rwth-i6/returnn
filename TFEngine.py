@@ -1389,9 +1389,9 @@ class Engine(EngineBase):
       if "error" in output_per_seq_format:
         extra_fetches["error"] = loss_holder.get_normalized_error_value_per_seq()
       if "pos_score" in output_per_seq_format:
-        extra_fetches["pos_score"] = loss_holder.get_normalized_loss_value_per_seq(per_pos=True)
+        extra_fetches["pos_score"] = loss_holder.get_loss_value_per_pos()
       if "pos_error" in output_per_seq_format:
-        extra_fetches["pos_error"] = loss_holder.get_normalized_error_value_per_seq(per_pos=True)
+        extra_fetches["pos_error"] = loss_holder.get_error_value_per_pos()
 
     seq_idx_to_tag = {}  # type: typing.Dict[int,str]  # we need this in order to write the results in the correct order later  # nopep8
     results_per_seq = {}  # type: typing.Dict[str,typing.Dict[str,typing.Union[float,str,int]]]  # seq_tag -> dict. Results of fetches will be written in this dict  # nopep8

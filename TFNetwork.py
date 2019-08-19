@@ -1959,45 +1959,65 @@ class LossHolder:
     self._prepare()
     return self._norm_factor
 
-  def _normalized_value_per_seq(self, value, per_pos=False):
+  def _normalized_value_per_seq(self, value):
     """
     :param tf.Tensor|None value: (batch*time,) or (time*batch,)
-    :param bool per_pos: one value per time position
-    :return: if per_pos return (batch,time) else (batch,) or None if loss is None
+    :return: (batch,) or None if value is None
+    :rtype: tf.Tensor|None
+    """
+    if value is None:
+      return None
+    return self.loss.reduce_to_batch(value, normalize=True)
+
+  def get_normalized_loss_value_per_seq(self):
+    """
+    :return: (batch,) or None if loss is None
+    :rtype: tf.Tensor|None
+    """
+    self._prepare()
+    return self._normalized_value_per_seq(self._loss_value)
+
+  def get_normalized_error_value_per_seq(self):
+    """
+    :return: (batch,) or None if error is None
+    :rtype: tf.Tensor|None
+    """
+    self._prepare()
+    return self._normalized_value_per_seq(self._error_value)
+
+  def _value_per_pos(self, value):
+    """
+    :param tf.Tensor|None value: (batch*time,) or (time*batch,)
+    :return: (batch,time) or None if value is None
     :rtype: tf.Tensor|None
     """
     if value is None:
       return None
 
-    if per_pos:
-      value = tf.reshape(value, tf.shape(self.loss.output.placeholder)[:2])  # (batch,time) or (time,batch)
+    value = tf.reshape(value, tf.shape(self.loss.output.placeholder)[:2])  # (batch,time) or (time,batch)
 
-      # We want output of the form (B,T)
-      if self.loss.output.time_dim_axis == 0:
-        from TFUtil import swapaxes
-        value = swapaxes(value, 0, 1)  # resulting in (B,T,...)
+    # We want output of the form (B,T)
+    if self.loss.output.time_dim_axis == 0:
+      from TFUtil import swapaxes
+      value = swapaxes(value, 0, 1)  # resulting in (B,T,...)
 
-      return value
-    else:
-      return self.loss.reduce_to_batch(value, normalize=True)
+    return value
 
-  def get_normalized_loss_value_per_seq(self, per_pos=False):
+  def get_loss_value_per_pos(self):
     """
-    :param bool per_pos: one value per time position
-    :return: if per_pos return (batch,time) else (batch,) or None if loss is None
+    :return: (batch,time) or None if loss is None
     :rtype: tf.Tensor|None
     """
     self._prepare()
-    return self._normalized_value_per_seq(self._loss_value, per_pos=per_pos)
+    return self._value_per_pos(self._loss_value)
 
-  def get_normalized_error_value_per_seq(self, per_pos=False):
+  def get_error_value_per_pos(self):
     """
-    :param bool per_pos: one value per time position
-    :return: if per_pos return (batch,time) else (batch,) or None if error is None
+    :return: (batch,time) or None if error is None
     :rtype: tf.Tensor|None
     """
     self._prepare()
-    return self._normalized_value_per_seq(self._error_value, per_pos=per_pos)
+    return self._value_per_pos(self._error_value)
 
   def _tf_summary(self):
     """
