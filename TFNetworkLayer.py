@@ -1835,7 +1835,7 @@ def get_concat_sources_data_template(src_layers, name=None):
     beam_size = beam_size or layer.output.beam_size
   shape = list(common_source.shape)
   shape[common_source.get_batch_axis_excluding_batch(common_source.feature_dim_axis)] = dim
-  kwargs = common_source.get_kwargs()
+  kwargs = common_source.get_kwargs(with_size_placeholder=True)
   kwargs.update(dict(
     name=name or ("concat_" + "_".join([l.name for l in src_layers])),
     shape=shape,
