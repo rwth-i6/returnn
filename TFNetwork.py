@@ -682,11 +682,20 @@ class TFNetwork(object):
           layer_desc["output"] = layer_class.get_out_data_from_opts(**layer_desc)
         if debug_print_layer_output_template:
           print("layer %s/%r output: %r" % (self.name, name, layer_desc["output"]))
-        assert isinstance(layer_desc["output"], Data)
-        layer_desc["output"].sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
+        output_template = layer_desc["output"]
+        assert isinstance(output_template, Data), "%s %r layer_desc %r ['output'] is not a Data instance" % (
+          layer_class.__name__, name, layer_desc)
+        output_template.sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
+        output_template_special_axes = output_template.get_special_axes_dict()
         layer = layer_class(**layer_desc)
         layer.post_init(layer_desc)
         layer.output.sanity_check()
+        # The axes should not have moved now.
+        output_special_axes = layer.output.get_special_axes_dict()
+        assert output_template_special_axes == output_special_axes, "%s %r: not equal: %r == %r, from data %r -> %r" % (
+          layer_class.__name__, name,
+          output_template_special_axes, output_special_axes,
+          output_template, layer.output)
       except TypeError:
         help_on_type_error_wrong_args(cls=layer_class, kwargs=list(layer_desc.keys()))
         print("TypeError creating layer %s/%r of class %s with opts:" % (self.name, name, layer_class.__name__))
