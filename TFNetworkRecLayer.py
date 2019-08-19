@@ -87,6 +87,7 @@ class RecLayer(_ConcatInputLayer):
                cheating=False,
                unroll=False, back_prop=None,
                use_global_rec_step_offset=False,
+               debug=None,
                **kwargs):
     """
     :param str|dict[str,dict[str]] unit: the RNNCell/etc name, e.g. "nativelstm". see comment below.
@@ -105,6 +106,7 @@ class RecLayer(_ConcatInputLayer):
     :param bool unroll: if possible, unroll the loop (implementation detail)
     :param bool|None back_prop: for tf.while_loop. the default will use self.network.train_flag
     :param bool use_global_rec_step_offset:
+    :param bool|None debug:
     """
     super(RecLayer, self).__init__(**kwargs)
     import re
@@ -134,6 +136,9 @@ class RecLayer(_ConcatInputLayer):
       back_prop = self.network.train_flag is not False
     self.back_prop = back_prop
     self._use_global_rec_step_offset = use_global_rec_step_offset
+    if debug is None:
+      debug = self.network.get_config().bool("debug_rec_layer", False)
+    self.debug = debug
     # On the random initialization:
     # For many cells, e.g. NativeLSTM: there will be a single recurrent weight matrix, (output.dim, output.dim * 4),
     # and a single input weight matrix (input_data.dim, output.dim * 4), and a single bias (output.dim * 4,).
@@ -1736,7 +1741,7 @@ class _SubnetworkRecCell(object):
             collected_choices += [layer.name]
 
             # noinspection PyShadowingNames
-            def get_derived(name):
+            def get_choices_getter(name):
               """
               :param str name:
               :rtype: ()->tf.Tensor|None
@@ -1754,7 +1759,36 @@ class _SubnetworkRecCell(object):
                 name="choice_%s" % layer.name,
                 dtype=tf.int32,
                 element_shape=(None, layer.search_choices.beam_size),  # (batch, beam)
-                get=get_derived(layer.name)))
+                get=get_choices_getter(layer.name)))
+
+            if rec_layer.debug:
+              # noinspection PyShadowingNames
+              def get_choices_scores_getter(name):
+                """
+                :param str name:
+                :rtype: ()->tf.Tensor|None
+                """
+                def get_beam_scores():
+                  """
+                  :rtype: tf.Tensor|None
+                  """
+                  layer = self.net.layers[name]
+                  return layer.search_choices.beam_scores
+
+                return get_beam_scores
+
+              outputs_to_accumulate.append(
+                _SubnetworkRecCell.OutputToAccumulate(
+                  name="debug_search_scores_%s" % layer.name,
+                  dtype=tf.float32,
+                  element_shape=(None, layer.search_choices.beam_size),  # (batch, beam)
+                  get=get_choices_scores_getter(layer.name)))
+              outputs_to_accumulate.append(
+                _SubnetworkRecCell.OutputToAccumulate(
+                  name="debug_search_choices_%s" % layer.name,
+                  dtype=tf.float32,
+                  element_shape=(None, layer.search_choices.beam_size),  # (batch, beam)
+                  get=get_choices_getter(layer.name)))
 
         if collected_choices:
           output_beam_size = self.layer_data_templates["output"].get_search_beam_size()
@@ -1847,6 +1881,14 @@ class _SubnetworkRecCell(object):
       for name in extra_output_layers:
         if name in self.layers_in_loop:
           add_output_to_acc(name)
+
+      if rec_layer.debug:
+        if layer_name in self.layers_in_loop:
+          outputs_to_accumulate.append(_SubnetworkRecCell.OutputToAccumulate(
+            name="debug_output_%s" % layer_name,
+            dtype=self.layer_data_templates[layer_name].output.dtype,
+            element_shape=self.layer_data_templates[layer_name].output.batch_shape,
+            get=lambda name_=layer_name: self.net.get_layer(name_).output.placeholder))
 
       # Maybe some of the moved-out output-layers depend on data inside the loop,
       # so we should accumulate it to have access to it.
