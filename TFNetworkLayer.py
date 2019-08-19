@@ -4163,6 +4163,8 @@ class ConvLayer(_ConcatInputLayer):
       :param int|tf.Tensor|T b:
       :rtype: T
       """
+      if isinstance(b, int) and b == 1:
+        return a
       return -(-a // b)
 
     padding = padding.upper()
