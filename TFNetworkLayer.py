@@ -5635,7 +5635,7 @@ class CombineLayer(LayerBase):
       if isinstance(sources[i], LayerBase):
         output = sources[i].output
         if auto_convert:
-          output = output.copy_compatible_to(self.output, check_dtype=False)
+          output = output.copy_compatible_to(self.output, check_dtype=False, check_sparse=False)
         if enforce_batch_major:
           output = output.copy_as_batch_major()
         if as_data:
