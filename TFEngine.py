@@ -949,6 +949,8 @@ class Engine(EngineBase):
     :param dict[str,dict[str]] net_desc:
     :param int epoch:
     """
+    updated_datasets = {}  # type: typing.Dict[str,Dataset]
+
     # noinspection PyShadowingNames
     def set_value(key, value):
       """
@@ -969,16 +971,25 @@ class Engine(EngineBase):
         # To be sure, never keep the batch order.
         self.dataset_batches.clear()
         setattr(self, key, value)
+      if key in ["train", "dev", "eval"]:
+        self.dataset_batches.pop(key, None)
+        from Dataset import init_dataset
+        dataset_kwargs = {"name": key}
+        if key != "train":
+          dataset_kwargs.update(Dataset.get_default_kwargs_eval(config=self.config))
+        Dataset.kwargs_update_from_config(config=self.config, kwargs=dataset_kwargs)
+        dataset = init_dataset(value, default_kwargs=dataset_kwargs)
+        assert hasattr(self, "%s_data" % key)
+        setattr(self, "%s_data" % key, dataset)
+        updated_datasets[key] = dataset
 
     if self.orig_config:
       # We have updated the config before. Now, first, recover all entries.
       for key, value in self.orig_config.items():
         set_value(key, value)
       self.orig_config.clear()
-    if "#config" not in net_desc:
-      return
 
-    config_overwrites = net_desc["#config"]
+    config_overwrites = net_desc.get("#config", {})
     for key, value in config_overwrites.items():
       if key == "learning_rate":
         if not self.learning_rate_control:
@@ -995,6 +1006,9 @@ class Engine(EngineBase):
       print("Update config key %r for epoch %i: %r -> %r" % (key, epoch, orig_value, value), file=log.v3)
       self.orig_config[key] = orig_value
       set_value(key, value)
+
+    for dataset in updated_datasets.values():
+      dataset.init_seq_order(epoch=self.epoch)
 
   def _init_network(self, net_desc, epoch=None):
     """

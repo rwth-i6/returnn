@@ -55,6 +55,22 @@ class Dataset(object):
     set_or_remove("shuffle_frames_of_nseqs", config.int('shuffle_frames_of_nseqs', 0) or None)
     set_or_remove("min_chunk_size", config.int('min_chunk_size', 0) or None)
 
+  @staticmethod
+  def get_default_kwargs_eval(config):
+    """
+    :param Config.Config config:
+    :rtype: dict[str]
+    """
+    # For dev/eval, by default, we should not do chunking (i.e. chunking = "0").
+    chunking = "0"
+    if config.value("on_size_limit", "ignore") == "chunk":
+      chunking = config.value("batch_size", "0")
+    elif config.value('chunking', "0") == "1":  # MLP mode
+      chunking = "1"
+    elif config.bool('chunk_eval', False):
+      chunking = config.value('chunking', "0")
+    return dict(chunking=chunking, seq_ordering="sorted", shuffle_frames_of_nseqs=0)
+
   @classmethod
   def from_config(cls, config, **kwargs):
     """

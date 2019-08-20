@@ -238,18 +238,11 @@ def init_data():
   Initializes the globals train,dev,eval of type Dataset.
   """
   cache_byte_sizes = get_cache_byte_sizes()
-  chunking = "0"
-  if config.value("on_size_limit", "ignore") == "chunk":
-    chunking = config.value("batch_size", "0")
-  elif config.value('chunking', "0") == "1":  # MLP mode
-    chunking = "1"
-  elif config.bool('chunk_eval', False):
-    chunking = config.value('chunking', "0")
   global train_data, dev_data, eval_data
   dev_data, extra_cache_bytes_dev = load_data(
-    config, cache_byte_sizes[1], 'dev', chunking=chunking, seq_ordering="sorted", shuffle_frames_of_nseqs=0)
+    config, cache_byte_sizes[1], 'dev', **Dataset.get_default_kwargs_eval(config=config))
   eval_data, extra_cache_bytes_eval = load_data(
-    config, cache_byte_sizes[2], 'eval', chunking=chunking, seq_ordering="sorted", shuffle_frames_of_nseqs=0)
+    config, cache_byte_sizes[2], 'eval', **Dataset.get_default_kwargs_eval(config=config))
   train_cache_bytes = cache_byte_sizes[0]
   if train_cache_bytes >= 0:
     # Maybe we have left over cache from dev/eval if dev/eval have cached everything.
