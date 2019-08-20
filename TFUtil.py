@@ -472,6 +472,7 @@ class Data(object):
         "%s: inconsistent dim. feature axis or unspecified: %r." % (self, self.feature_dim_axis_or_unspecified))
     if not ignore_placeholder and self.placeholder is not None:
       self.placeholder.set_shape(self.batch_shape)
+      assert self.placeholder.dtype.base_dtype.name == self.dtype
 
   def get_placeholder_kwargs(self, with_batch=True):
     """
