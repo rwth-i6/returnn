@@ -811,18 +811,24 @@ class SimpleHDFWriter:
     :param list[str]|None labels:
     :param bool swmr: see http://docs.h5py.org/en/stable/swmr.html
     """
+    from Util import hdf5_strings, unicode
+    import tempfile
+    import os
     if ndim is None:
       if dim is None:
         ndim = 1
       else:
         ndim = 2
-    from Util import hdf5_strings, unicode
     self.dim = dim
     self.ndim = ndim
     self.labels = labels
     if labels:
       assert len(labels) == dim
-    self._file = h5py.File(filename, "w", libver='latest' if swmr else None)
+    self.filename = filename
+    tempfile.mkstemp()
+    tmp_fd, self.tmp_filename = tempfile.mkstemp(suffix=".hdf")
+    os.close(tmp_fd)
+    self._file = h5py.File(self.tmp_filename, "w", libver='latest' if swmr else None)
 
     self._file.attrs['numTimesteps'] = 0  # we will increment this on-the-fly
     self._other_num_time_steps = 0
@@ -979,7 +985,13 @@ class SimpleHDFWriter:
     """
     Closes the file.
     """
+    import os
+    import shutil
     self._file.close()
+    if self.tmp_filename:
+      shutil.copyfile(self.tmp_filename, self.filename)
+      os.remove(self.tmp_filename)
+      self.tmp_filename = None
 
 
 class HDFDatasetWriter:
