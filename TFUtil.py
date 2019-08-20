@@ -1165,15 +1165,18 @@ class Data(object):
     data.sanity_check()
     return data
 
-  def copy_template(self, name=None):
+  def copy_template(self, name=None, dtype=None):
     """
     :param str|None name:
+    :param str|None dtype:
     :return: copy of myself, using self.get_kwargs(), without placeholder
     :rtype: Data
     """
     kwargs = self.get_kwargs(with_size_placeholder=True)
     if name:
       kwargs["name"] = name
+    if dtype:
+      kwargs["dtype"] = dtype
     return Data(**kwargs)
 
   def copy_template_excluding_spatial_dim(self, spatial_axis_num, name=None):
