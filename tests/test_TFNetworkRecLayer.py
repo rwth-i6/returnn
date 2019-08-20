@@ -4075,6 +4075,54 @@ def test_trafo_search_lm():
       assert all(out_seqs[i, :input_seq_lens[i]] == input_seqs[i, :input_seq_lens[i]])
 
 
+def test_flat_construct_rec_layer():
+  rnd = numpy.random.RandomState(42)
+
+  n_batch, n_in, n_time, size = 3, 5, 7, 2
+  n_out = n_in
+
+  net_dict = {
+    "output": {
+      "class": "rec",
+      "from": "data",
+      'target': "data",
+      'unit': {
+        "input": {"class": "linear", "activation": None, "from": "data:source", "n_out": size},
+        "rnn_h": {"class": "linear", "activation": "tanh", "from": ["prev:rnn_h", "input"], "n_out": size},
+        "output": {"class": "softmax", "from": ["rnn_h"], "loss": "ce", "target": "data"},
+      }
+    }
+  }
+
+  config = Config()
+  config.update({
+    "extern_data": {"data": {"dim": n_out, "sparse": True}},
+    "flat_net_construction": True,
+    "debug_print_layer_output_template": True})
+
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    pprint(network.extern_data.data)
+    network.construct_from_dict(net_dict)
+
+    fetches = network.get_fetches_dict()
+    data_input = network.extern_data.data["data"]
+    assert data_input.batch_shape == (None, None)
+
+    train_out = network.get_layer("output").output
+
+    session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+    outputs = [train_out.placeholder]
+    info, out = session.run(
+      (fetches, outputs),
+      feed_dict={
+        data_input.placeholder: rnd.randint(0, n_out, size=(n_batch, n_time,), dtype="int32"),
+        data_input.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),
+      })
+    print(info)
+    print(out)  # random...
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
