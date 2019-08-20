@@ -3091,19 +3091,35 @@ class ConstantLayer(LayerBase):
   """
   layer_class = "constant"
 
-  def __init__(self, sources, value=0, dtype=None, **kwargs):
+  # noinspection PyUnusedLocal
+  def __init__(self, sources, value=0., dtype=None, **kwargs):
+    """
+    :param list[LayerBase] sources:
+    :param int|float|bool value:
+    :param str|None dtype:
+    """
     assert not sources, "constant layer cannot have sources"
     super(ConstantLayer, self).__init__(**kwargs)
     # Add batch-dim to the constant.
-    self.output.placeholder = tf.expand_dims(tf.constant(value, dtype=dtype), axis=0)
+    self.output.placeholder = tf.expand_dims(tf.constant(value, dtype=self.output.dtype), axis=0)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, dtype="float32", **kwargs):
+  def get_out_data_from_opts(cls, name, value=0., dtype=None, **kwargs):
     """
     :param str name:
-    :param str dtype:
+    :param int|float|bool value:
+    :param str|None dtype:
     :rtype: Data
     """
+    if dtype is None:
+      if isinstance(value, int):
+        dtype = "int32"
+      elif isinstance(value, float):
+        dtype = "float32"
+      elif isinstance(value, bool):
+        dtype = "bool"
+      else:
+        raise TypeError("cannot handle value %r of type %r" % (value, type(value)))
     return Data(
       name="%s_const" % name, shape=(), batch_dim_axis=0, time_dim_axis=None, dtype=dtype)
 
