@@ -6638,8 +6638,8 @@ class HDFDumpLayer(LayerBase):
     self.output = self.sources[0].output.copy("%s_output" % self.name)
     data = self.output.copy_as_batch_major()  # need batch-major for SimpleHDFWriter
 
+    from TFUtil import register_graph_reset_callback
     from HDFDataset import SimpleHDFWriter
-    import atexit
     import numpy
     import sys
     self.filename = filename
@@ -6651,7 +6651,7 @@ class HDFDumpLayer(LayerBase):
     data_dim = None if data.sparse else data.dim
     ndim_without_features = ndim - (1 if data_dim else 0)
     self.hdf_writer = SimpleHDFWriter(filename=filename, dim=data_dim, ndim=ndim)
-    atexit.register(self._at_exit)
+    register_graph_reset_callback(self._at_graph_reset)
 
     def py_write(data_np, tags, *sizes):
       """
@@ -6702,7 +6702,7 @@ class HDFDumpLayer(LayerBase):
 
     self.network.register_post_control_dependencies([tf_write])
 
-  def _at_exit(self):
+  def _at_graph_reset(self):
     print("HDFDumpLayer, wrote %i seqs to file %r." % (self.num_seqs_written, self.filename))
     self.hdf_writer.close()
 
@@ -6713,8 +6713,8 @@ class HDFDumpLayer(LayerBase):
     :param list[LayerBase] sources:
     :rtype: Data
     """
-    assert len(sources) == 1, "PrintLayer %r: expects exactly one source, but got: %r" % (name, sources)
-    return sources[0].output.copy("%s_output" % name)
+    assert len(sources) == 1, "%s %r: expects exactly one source, but got: %r" % (cls.__name__, name, sources)
+    return sources[0].output.copy(name="%s_output" % name)
 
 
 class ImageSummaryLayer(LayerBase):

@@ -678,10 +678,7 @@ class Engine(EngineBase):
     Finalizes the TF session, network, graph.
     """
     self._close_tf_session()
-    tf.reset_default_graph()
-    self.network = None
-    self.updater = None
-    self._merge_all_summaries = None
+    self._reset_graph()
 
   def get_const_tensor(self, key, value):
     """
@@ -756,10 +753,14 @@ class Engine(EngineBase):
     Resets the default graph (of the current thread),
     and clears up any cached tensors created in it.
     """
+    from TFUtil import call_graph_reset_callbacks
+    call_graph_reset_callbacks()
     tf.reset_default_graph()
     self._checked_uninitialized_vars = False
     self._merge_all_summaries = None
     self._const_cache.clear()
+    self.network = None
+    self.updater = None
 
   def get_eval_datasets(self):
     """

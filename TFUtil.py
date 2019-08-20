@@ -24,6 +24,7 @@ class CollectionKeys:
   RETURNN_LAYERS = "_RETURNN_layers"  # LayerBase instances
   RETURNN_NET_STACK = "_RETURNN_network_stack"  # TFNetwork instance stack
   STATE_VARS = "_RETURNN_state_vars"  # tf.Variable, like e.g. tf.GraphKeys.LOCAL_VARIABLES
+  GRAPH_RESET_CALLBACKS = "_RETURNN_graph_reset_callbacks"
 
 
 def tf_version_tuple():
@@ -8713,3 +8714,21 @@ def compute_sampled_logits(weights,
     ], 1)
 
     return out_logits, out_targets
+
+
+def register_graph_reset_callback(cb):
+  """
+  Note: These callbacks are not called automatically.
+  You explicitly have to call :func:`call_graph_reset_callbacks`.
+
+  :param function cb:
+  """
+  tf.get_collection_ref(CollectionKeys.GRAPH_RESET_CALLBACKS).append(cb)
+
+
+def call_graph_reset_callbacks():
+  """
+  Calls any callbacks registered via :func:`register_graph_reset_callback`.
+  """
+  for cb in tf.get_collection(CollectionKeys.GRAPH_RESET_CALLBACKS):
+    cb()
