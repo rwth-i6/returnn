@@ -46,10 +46,14 @@ class HDFDataset(CachedDataset):
   @staticmethod
   def _decode(s):
     """
-    :param str|bytes s:
+    :param str|bytes|unicode s:
     :rtype: str
     """
-    if not isinstance(s, str):
+    from Util import unicode, PY3
+    if not PY3 and isinstance(s, unicode):
+      s = s.encode("utf8")
+      assert isinstance(s, str)  # Python 2
+    if not isinstance(s, str):  # bytes (Python 3)
       s = s.decode("utf-8")
     s = s.split('\0')[0]
     return s
@@ -971,10 +975,13 @@ class SimpleHDFWriter:
     Writes final data to file, and closes the file.
     """
     # Note about strings in HDF: http://docs.h5py.org/en/stable/strings.html
-    max_tag_len = max([len(d) for d in self._tags]) if self._tags else 0
-    self._file.create_dataset('seqTags', shape=(len(self._tags),), dtype="S%i" % (max_tag_len + 1))
+    # Earlier we used S%i, i.e. fixed-sized strings, with the calculated max string length.
+    from Util import unicode
+    # noinspection PyUnresolvedReferences
+    dt = h5py.special_dtype(vlen=unicode)
+    self._file.create_dataset('seqTags', shape=(len(self._tags),), dtype=dt)
     for i, tag in enumerate(self._tags):
-      self._file['seqTags'][i] = numpy.array(tag, dtype="S%i" % (max_tag_len + 1))
+      self._file['seqTags'][i] = numpy.array(tag, dtype=dt)
     self._file.close()
 
 
