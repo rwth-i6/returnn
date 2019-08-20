@@ -746,7 +746,7 @@ def test_SoftmaxOverSpatialLayer_start():
     start_idxs = numpy.array([[3], [0], [1]]).astype("int32")  # (B, 1)
     input_np = rnd.normal(size=(n_batch, n_time, n_dim)).astype("float32")  # (B, T, D)
     src = InternalLayer(name="src", network=net, out_type={"shape": (n_time, n_dim), "time_dim_axis": 1})
-    start = InternalLayer(name="start", network=net, out_type={"shape": (1,)})
+    start = InternalLayer(name="start", network=net, out_type={"shape": (1,), "dtype": "int32"})
     start.output.placeholder = tf.constant(start_idxs)
     start.output.size_placeholder = {}
     print("input:", src.output)
