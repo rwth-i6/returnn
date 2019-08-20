@@ -816,7 +816,7 @@ class SimpleHDFWriter:
         ndim = 1
       else:
         ndim = 2
-    from Util import hdf5_strings
+    from Util import hdf5_strings, unicode
     self.dim = dim
     self.ndim = ndim
     self.labels = labels
@@ -836,8 +836,12 @@ class SimpleHDFWriter:
       self._file.create_dataset('labels', (0,), dtype="S5")  # dtype string length does not matter
 
     self._datasets = {}  # type: typing.Dict[str, h5py.Dataset]
-    self._tags = []  # type: typing.List[str]
     self._seq_lengths = self._file.create_dataset("seqLengths", (0, 2), dtype='i', maxshape=(None, 2))
+    # Note about strings in HDF: http://docs.h5py.org/en/stable/strings.html
+    # Earlier we used S%i, i.e. fixed-sized strings, with the calculated max string length.
+    # noinspection PyUnresolvedReferences
+    dt = h5py.special_dtype(vlen=unicode)
+    self._seq_tags = self._file.create_dataset('seqTags', (0,), dtype=dt, maxshape=(None,))
 
     if swmr:
       assert not self._file.swmr_mode  # this also checks whether the attribute exists (right version)
@@ -942,9 +946,10 @@ class SimpleHDFWriter:
 
     seqlen_offset = self._seq_lengths.shape[0]
     self._seq_lengths.resize(seqlen_offset + n_batch, axis=0)
+    self._seq_tags.resize(seqlen_offset + n_batch, axis=0)
 
     for i in range(n_batch):
-      self._tags.append(seq_tag[i])
+      self._seq_tags[seqlen_offset + i] = numpy.array(seq_tag[i], dtype=self._seq_tags.dtype)
       # Note: Currently, our HDFDataset does not support to have multiple axes with dynamic length.
       # Thus, we flatten all together, and calculate the flattened seq len.
       # (Ignore this if there is only a single time dimension.)
@@ -972,16 +977,8 @@ class SimpleHDFWriter:
 
   def close(self):
     """
-    Writes final data to file, and closes the file.
+    Closes the file.
     """
-    # Note about strings in HDF: http://docs.h5py.org/en/stable/strings.html
-    # Earlier we used S%i, i.e. fixed-sized strings, with the calculated max string length.
-    from Util import unicode
-    # noinspection PyUnresolvedReferences
-    dt = h5py.special_dtype(vlen=unicode)
-    self._file.create_dataset('seqTags', shape=(len(self._tags),), dtype=dt)
-    for i, tag in enumerate(self._tags):
-      self._file['seqTags'][i] = numpy.array(tag, dtype=dt)
     self._file.close()
 
 
