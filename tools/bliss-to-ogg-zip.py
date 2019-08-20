@@ -330,10 +330,11 @@ def main():
       soundfile.write(wav_tmp_filename, audio_synced, args.raw_sample_rate)
       source_filename = wav_tmp_filename
       start_time = 0
-      duration = None
+      limit_duration = False
     else:
       source_filename = rec_filename
       start_time = seq.start_time
+      limit_duration = True
     dest_filename = "%s/%s/%s_%s.ogg" % (dest_dirname, rec_name, seq.start_time, seq.end_time)
     os.makedirs(os.path.dirname(dest_filename), exist_ok=True)
     if args.no_ogg:
@@ -345,7 +346,7 @@ def main():
       cmd = ["ffmpeg", "-i", source_filename]
       if start_time:
         cmd += ["-ss", str(start_time)]
-      if duration is not None:
+      if limit_duration:
         cmd += ["-t", str(duration)]
       cmd += [dest_filename, "-loglevel", args.ffmpeg_loglevel]
       print("$ %s" % " ".join(cmd))
