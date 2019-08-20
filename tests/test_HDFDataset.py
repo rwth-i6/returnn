@@ -1,4 +1,6 @@
 
+from __future__ import print_function
+
 import os
 import sys
 my_dir = os.path.dirname(os.path.abspath(__file__))
@@ -229,6 +231,9 @@ def test_SimpleHDFWriter():
   assert len(seq_lens) == reader.num_seqs
   for i, seq_len in enumerate(seq_lens):
     assert reader.seq_lens[i]["data"] == seq_len
+  print("tags:", reader.seq_tags)
+  assert_equal(reader.seq_tags, ["seq-%i" % i for i in range(reader.num_seqs)])
+  assert isinstance(reader.seq_tags[0], str)
 
 
 def test_SimpleHDFWriter_small():
@@ -294,13 +299,15 @@ def test_read_simple_hdf():
   dataset = HDFDataset(files=[fn])
   reader = _DatasetReader(dataset=dataset)
   reader.read_all()
+  print("tags:", reader.seq_tags)
+  assert len(seq_lens) == reader.num_seqs
+  assert_equal(reader.seq_tags, ["seq-0", "seq-1"])
+  for i, seq_len in enumerate(seq_lens):
+    assert reader.seq_lens[i]["data"] == seq_len
   assert "data" in reader.data_keys  # "classes" might be in there as well, although not really correct/existing
   assert reader.data_sparse["data"] is False
   assert list(reader.data_shape["data"]) == [n_dim]
   assert reader.data_dtype["data"] == "float32"
-  assert len(seq_lens) == reader.num_seqs
-  for i, seq_len in enumerate(seq_lens):
-    assert reader.seq_lens[i]["data"] == seq_len
 
 
 def test_SimpleHDFWriter_ndim1_var_len():
