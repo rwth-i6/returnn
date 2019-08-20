@@ -842,6 +842,9 @@ class SimpleHDFWriter:
       self._file.create_dataset('labels', (0,), dtype="S5")  # dtype string length does not matter
 
     self._datasets = {}  # type: typing.Dict[str, h5py.Dataset]
+    # Note: The shape of seqLengths is actually not quite correct in general.
+    # The tuple (2) is for data and target lengths, but if there are more extra data keys,
+    # they currently share all the _seq_lengths[:,1] entry.
     self._seq_lengths = self._file.create_dataset("seqLengths", (0, 2), dtype='i', maxshape=(None, 2))
     # Note about strings in HDF: http://docs.h5py.org/en/stable/strings.html
     # Earlier we used S%i, i.e. fixed-sized strings, with the calculated max string length.
@@ -879,15 +882,15 @@ class SimpleHDFWriter:
     """
     :param str data_key:
     :param numpy.ndarray|int|float|list[int] raw_data: shape=(time,data) or shape=(time,) or shape=()...
-    :param str dtype:
+    :param str|None dtype:
     :param bool add_time_dim:
     :param int|None dim:
     """
-    if isinstance(raw_data, (int, float, list)):
+    if isinstance(raw_data, (int, float, list, numpy.float32)):
       raw_data = numpy.array(raw_data)
-    assert isinstance(raw_data, numpy.ndarray)
-    if add_time_dim:
-      raw_data = raw_data[None, :]
+    assert isinstance(raw_data, numpy.ndarray), "raw_data is %r of type %r" % (raw_data, type(raw_data))
+    if add_time_dim or raw_data.ndim == 0:
+      raw_data = numpy.expand_dims(raw_data, 0)
     assert raw_data.ndim > 0 and raw_data.shape[0] > 0
     if dtype:
       raw_data = raw_data.astype(dtype)
@@ -917,7 +920,8 @@ class SimpleHDFWriter:
     assert self._file.attrs['numSeqs'] > 0 and self._seq_lengths.shape[0] > 0  # assume _insert_h5_inputs called before
 
     if self._seq_lengths[self._file.attrs['numSeqs'] - 1, 1]:
-      assert self._seq_lengths[self._file.attrs['numSeqs'] - 1, 1] == raw_data.shape[0]
+      assert self._seq_lengths[self._file.attrs['numSeqs'] - 1, 1] == raw_data.shape[0], "%r vs %r" % (
+        self._seq_lengths[self._file.attrs['numSeqs'] - 1], raw_data.shape)
     else:
       self._seq_lengths[self._file.attrs['numSeqs'] - 1, 1] = raw_data.shape[0]
       self._other_num_time_steps += raw_data.shape[0]
@@ -931,7 +935,10 @@ class SimpleHDFWriter:
     :param numpy.ndarray inputs: shape=(n_batch,time,data) (or (n_batch,time), or (n_batch,time1,time2), ...)
     :param list[int]|dict[int,list[int]|numpy.ndarray] seq_len: sequence lengths (per axis, excluding batch axis)
     :param list[str|bytes] seq_tag: sequence tags of length n_batch
-    :param dict[str,numpy.ndarray]|None extra:
+    :param dict[str,numpy.ndarray]|None extra: one or multiple possible targets data. key can be "classes" or anything.
+      The dtype and dim is inferred automatically from the Numpy array.
+      If there are multiple items, the seq length must be the same currently.
+      Must be batch-major, and following the time, then the feature.
     """
     n_batch = len(seq_tag)
     assert n_batch == inputs.shape[0]
@@ -978,8 +985,16 @@ class SimpleHDFWriter:
           "sizes", [seq_len[axis][i] for axis in range(ndim_with_seq_len)], add_time_dim=False, dtype="int32")
       if extra:
         assert len(seq_len) == 1  # otherwise you likely will get trouble with seq len mismatch
-        for key, value in extra.items():
-          self._insert_h5_other(key, value[i])
+        try:
+          for key, value in extra.items():
+            assert value.shape[0] == n_batch
+            self._insert_h5_other(key, value[i])
+        except Exception:
+          print("%s: insert extra exception. input shape %r, seq len %r, extra shapes: %r" % (
+            self, inputs.shape, seq_len,
+            {key: value.shape if isinstance(value, numpy.ndarray) else repr(value) for (key, value) in extra.items()}),
+            file=log.v3)
+          raise
 
   def close(self):
     """

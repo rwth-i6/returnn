@@ -6643,42 +6643,48 @@ class HDFDumpLayer(LayerBase):
   """
   layer_class = "hdf_dump"
 
-  def __init__(self, filename, dump_whole_batches=False, **kwargs):
+  def __init__(self, filename, extra=None, dump_whole_batches=False, **kwargs):
     """
     :param str filename:
+    :param None|dict[str,LayerBase] extra:
     :param bool dump_whole_batches: dumps the whole batch as a single sequence into the HDF
     """
     super(HDFDumpLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1
     assert self.sources[0].output.have_time_axis()
     self.output = self.sources[0].output.copy("%s_output" % self.name)
-    data = self.output.copy_as_batch_major()  # need batch-major for SimpleHDFWriter
+    data = self.output.copy_as_batch_spatial_major()  # need batch-major for SimpleHDFWriter
 
     from TFUtil import register_graph_reset_callback
     from HDFDataset import SimpleHDFWriter
     import numpy
     import sys
     self.filename = filename
+    if extra is None:
+      extra = {}
+    extra = {key: layer.output.copy_as_batch_spatial_major() for (key, layer) in extra.items()}
+    self.extra = extra  # type: typing.Dict[str,Data]
     self.dump_whole_batches = dump_whole_batches
     self.num_seqs_written = 0
     ndim = data.ndim
     if dump_whole_batches:
       ndim = data.ndim - len(data.size_placeholder) + 1
-    data_dim = None if data.sparse else data.dim
-    ndim_without_features = ndim - (1 if data_dim else 0)
-    self.hdf_writer = SimpleHDFWriter(filename=filename, dim=data_dim, ndim=ndim)
+    ndim_without_features = ndim - (0 if data.sparse else 1)
+    self.hdf_writer = SimpleHDFWriter(filename=filename, dim=data.dim, ndim=ndim)
     register_graph_reset_callback(self._at_graph_reset)
 
-    def py_write(data_np, tags, *sizes):
+    def py_write(data_np, tags, sizes, *extras):
       """
       :param numpy.ndarray data_np: (B,...), this is data.placeholder
       :param list[bytes] tags:
-      :param sizes:
+      :param numpy.ndarray sizes: shape [num_sizes,size_placeholder[i]]
+      :param numpy.ndarray extras:
       :return: unused
       """
       # noinspection PyBroadException
       try:
         n_batch = data_np.shape[0]
+        assert sizes.shape == (len(data.size_placeholder), n_batch)
         assert len(sizes) == len(data.size_placeholder)
         seq_lens = {i: size for (i, size) in zip(sorted(data.size_placeholder.keys()), sizes)}
         # There may be axes with a fixed length other than the batch and feature axes.
@@ -6687,7 +6693,8 @@ class HDFDumpLayer(LayerBase):
           if dim not in seq_lens:
             seq_lens[dim] = numpy.array([data_np.shape[dim + 1]] * n_batch, dtype="int32")
         assert len(seq_lens) == ndim_without_features
-        extra = {}
+        assert len(extras) == len(self.extra)
+        extra = {key: value for (key, value) in zip(sorted(self.extra.keys()), extras)}
         if self.dump_whole_batches:
           # The batch dim itself becomes another axis to dump.
           # We also want to store the individual seq lens.
@@ -6701,6 +6708,7 @@ class HDFDumpLayer(LayerBase):
           seq_lens = {0: numpy.array([flat_len], dtype="int32")}
           tags = [b"<->".join(tags)]
           n_batch = 1
+
         assert n_batch == data_np.shape[0] == len(tags)
         self.num_seqs_written += n_batch
         self.hdf_writer.insert_batch(inputs=data_np, seq_tag=tags, seq_len=seq_lens, extra=extra)
@@ -6712,8 +6720,10 @@ class HDFDumpLayer(LayerBase):
 
     tf_write = tf.py_func(
       py_write,
-      [data.placeholder, self.network.get_seq_tags()] + [size for (i, size) in sorted(data.size_placeholder.items())],
-      tf.int64,
+      [data.placeholder, self.network.get_seq_tags(),
+       tf.convert_to_tensor([size for (i, size) in sorted(data.size_placeholder.items())])] +
+      [value.placeholder for (key, value) in sorted(extra.items())],
+      tf.int64,  # return value is ignored
       stateful=True)
 
     self.network.register_post_control_dependencies([tf_write])
@@ -6731,6 +6741,19 @@ class HDFDumpLayer(LayerBase):
     """
     assert len(sources) == 1, "%s %r: expects exactly one source, but got: %r" % (cls.__name__, name, sources)
     return sources[0].output.copy(name="%s_output" % name)
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    super(HDFDumpLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if d.get("extra", None):
+      extra = d["extra"]
+      assert isinstance(extra, dict), "invalid in %r" % d
+      d["extra"] = {key: get_layer(value) for (key, value) in extra.items()}
 
 
 class ImageSummaryLayer(LayerBase):
