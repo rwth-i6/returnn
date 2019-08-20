@@ -27,7 +27,6 @@ ignore_count_for_files = {
   'External.py',
   'Fsa.py',
   'FunctionLoader.py',
-  'HDFDataset.py',
   'Inv.py',
   'MultiBatchBeam.py',
   'Network.py',

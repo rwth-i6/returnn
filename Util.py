@@ -461,7 +461,7 @@ def hdf5_strings(handle, name, data):
   """
   :param h5py.File handle:
   :param str name:
-  :param numpy.ndarray data:
+  :param numpy.ndarray|list[str] data:
   """
   # noinspection PyBroadException
   try:
