@@ -6900,11 +6900,14 @@ class Loss(object):
   class_name = None  # type: str  # used by get_loss_class()
   recurrent = False  # if this is a frame-wise criteria, this will be False
 
-  def __init__(self, base_network, use_flatten_frames=True, use_normalized_loss=False, scale=1.0):
+  def __init__(self, base_network, use_flatten_frames=True,
+               use_normalized_loss=False, custom_norm_factor=None,
+               scale=1.0):
     """
     :param TFNetwork.TFNetwork base_network:
     :param bool use_flatten_frames: will use :func:`TFUtil.flatten_with_seq_len_mask`
     :param bool use_normalized_loss: the loss used in optimization will be normalized
+    :param float|function|None custom_norm_factor:
     :param float scale: additional scale factor for the loss
     """
     self.base_network = base_network
@@ -6922,6 +6925,7 @@ class Loss(object):
     # Maybe make configurable. For now, same as in our Theano behavior.
     self.loss_norm_factor = None  # type: typing.Optional[tf.Tensor]
     self.use_normalized_loss = use_normalized_loss
+    self.custom_norm_factor = custom_norm_factor
     self.scale = scale
 
   def _reduce_batch_time(self):
@@ -7108,6 +7112,12 @@ class Loss(object):
         if target:
           assert not self.target.have_time_axis()
           self.target_flat = target.placeholder
+      if self.custom_norm_factor is not None:
+        if callable(self.custom_norm_factor):
+          self.loss_norm_factor = self.custom_norm_factor(self=self, output=output, layer=layer)
+        else:
+          assert isinstance(self.custom_norm_factor, float)
+          self.loss_norm_factor = self.custom_norm_factor
       self._check_init()
 
   def _check_init(self):
