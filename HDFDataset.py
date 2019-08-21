@@ -803,12 +803,13 @@ class SiameseHDFDataset(CachedDataset2):
 
 
 class SimpleHDFWriter:
-  def __init__(self, filename, dim, labels=None, ndim=None, swmr=False):
+  def __init__(self, filename, dim, labels=None, ndim=None, extra_type=None, swmr=False):
     """
     :param str filename: Create file, truncate if exists
     :param int|None dim:
     :param int ndim: counted without batch
     :param list[str]|None labels:
+    :param dict[str,(int,int,str)]|None extra_type: key -> (dim,ndim,dtype)
     :param bool swmr: see http://docs.h5py.org/en/stable/swmr.html
     """
     from Util import hdf5_strings, unicode
@@ -831,7 +832,6 @@ class SimpleHDFWriter:
     self._file = h5py.File(self.tmp_filename, "w", libver='latest' if swmr else None)
 
     self._file.attrs['numTimesteps'] = 0  # we will increment this on-the-fly
-    self._other_num_time_steps = 0
     self._file.attrs['inputPattSize'] = dim or 1
     self._file.attrs['numDims'] = 1  # ignored?
     self._file.attrs['numLabels'] = dim or 1
@@ -841,22 +841,61 @@ class SimpleHDFWriter:
     else:
       self._file.create_dataset('labels', (0,), dtype="S5")  # dtype string length does not matter
 
-    self._datasets = {}  # type: typing.Dict[str, h5py.Dataset]
-    # Note: The shape of seqLengths is actually not quite correct in general.
-    # The tuple (2) is for data and target lengths, but if there are more extra data keys,
-    # they currently share all the _seq_lengths[:,1] entry.
-    self._seq_lengths = self._file.create_dataset("seqLengths", (0, 2), dtype='i', maxshape=(None, 2))
+    self._datasets = {}  # type: typing.Dict[str, h5py.Dataset]  # key -> data
+    # seq_length idx represents (seq_idx,data_key_idx),
+    # where data_key_idx == 0 is for the main input data,
+    # and otherwise data_key_idx == 1 + sorted(self._prepared_extra).index(data_key).
+    # data_key_idx must allow for 2 entries by default, as HDFDataset assumes 'classes' by default.
+    self._seq_lengths = self._file.create_dataset("seqLengths", (0, 2), dtype='i', maxshape=(None, None))
     # Note about strings in HDF: http://docs.h5py.org/en/stable/strings.html
     # Earlier we used S%i, i.e. fixed-sized strings, with the calculated max string length.
     # noinspection PyUnresolvedReferences
     dt = h5py.special_dtype(vlen=unicode)
     self._seq_tags = self._file.create_dataset('seqTags', (0,), dtype=dt, maxshape=(None,))
 
+    self._extra_num_time_steps = {}  # type: typing.Dict[str,int]  # key -> num-steps
+    self._prepared_extra = set()
+    if extra_type:
+      self._prepare_extra(extra_type)
+
     if swmr:
       assert not self._file.swmr_mode  # this also checks whether the attribute exists (right version)
       self._file.swmr_mode = True
       # See comments in test_SimpleHDFWriter_swmr...
       raise NotImplementedError("SimpleHDFWriter SWMR is not really finished...")
+
+  def _prepare_extra(self, extra_type):
+    """
+    :param dict[str,(int,int,str)] extra_type: key -> (dim,ndim,dtype)
+    :return: whether we added a new entry
+    :rtype: bool
+    """
+    added_count = 0
+    for data_key, (dim, ndim, dtype) in extra_type.items():
+      assert data_key != "inputs"
+      if data_key in self._prepared_extra:
+        return
+      if not self._prepared_extra:
+        # For the first time, need to create the groups.
+        self._file.create_group('targets/data')
+        self._file.create_group('targets/size')
+        self._file.create_group("targets/labels")
+      Util.hdf5_strings(self._file, "targets/labels/%s" % data_key, ["dummy-label"])
+      if ndim == 0:
+        ndim = 1  # we will automatically add a dummy-dim
+      shape = [None] * ndim  # type: typing.List[typing.Optional[int]]
+      if ndim >= 2:
+        shape[-1] = dim
+      self._datasets[data_key] = self._file['targets/data'].create_dataset(
+        data_key, shape=[d if d else 0 for d in shape], dtype=dtype, maxshape=shape)
+      self._file['targets/size'].attrs[data_key] = [dim or 1, ndim]
+      self._extra_num_time_steps[data_key] = 0
+      self._prepared_extra.add(data_key)
+      added_count += 1
+    if added_count:
+      assert self._prepared_extra
+      self._seq_lengths.resize(1 + len(self._prepared_extra), axis=1)
+    return bool(added_count)
 
   def _insert_h5_inputs(self, raw_data):
     """
@@ -872,7 +911,7 @@ class SimpleHDFWriter:
         name, raw_data.shape, raw_data.dtype, maxshape=tuple(None for _ in raw_data.shape))
     else:
       old_shape = self._datasets[name].shape
-      self._datasets[name].resize((old_shape[0] + raw_data.shape[0],) + old_shape[1:])
+      self._datasets[name].resize(old_shape[0] + raw_data.shape[0], axis=0)
     # append raw data to dataset
     self._datasets[name][self._file.attrs['numTimesteps']:] = raw_data
     self._file.attrs['numTimesteps'] += raw_data.shape[0]
@@ -899,35 +938,27 @@ class SimpleHDFWriter:
         dim = raw_data.shape[-1]
       else:
         dim = 1  # dummy
-    assert data_key != "inputs"
-    name = data_key
-    # Keep consistent with _insert_h5_inputs.
-    if name not in self._datasets:
-      if 'targets/data' not in self._file:
-        self._file.create_group('targets/data')
-      if 'targets/size' not in self._file:
-        self._file.create_group('targets/size')
-      if "targets/labels" not in self._file:
-        self._file.create_group("targets/labels")
-      Util.hdf5_strings(self._file, "targets/labels/%s" % data_key, ["dummy-label"])
-      self._datasets[name] = self._file['targets/data'].create_dataset(
-        data_key, raw_data.shape, raw_data.dtype, maxshape=tuple(None for _ in raw_data.shape))
-      self._file['targets/size'].attrs[data_key] = [dim, raw_data.ndim]  # (dim, ndim)
-    else:
-      old_shape = self._datasets[name].shape
-      self._datasets[name].resize((old_shape[0] + raw_data.shape[0],) + old_shape[1:])
 
-    assert self._file.attrs['numSeqs'] > 0 and self._seq_lengths.shape[0] > 0  # assume _insert_h5_inputs called before
+    # We assume that _insert_h5_inputs was called before.
+    assert self._file.attrs['numSeqs'] > 0 and self._seq_lengths.shape[0] > 0
+    seq_idx = self._file.attrs['numSeqs'] - 1
 
-    if self._seq_lengths[self._file.attrs['numSeqs'] - 1, 1]:
-      assert self._seq_lengths[self._file.attrs['numSeqs'] - 1, 1] == raw_data.shape[0], "%r vs %r" % (
-        self._seq_lengths[self._file.attrs['numSeqs'] - 1], raw_data.shape)
-    else:
-      self._seq_lengths[self._file.attrs['numSeqs'] - 1, 1] = raw_data.shape[0]
-      self._other_num_time_steps += raw_data.shape[0]
+    if self._prepare_extra({data_key: (dim, raw_data.ndim, raw_data.dtype)}):
+      # We added it now. Maybe other extra data keys were added before. The data_key_idx is different now.
+      # Thus, make sure that for all other already existing extra data keys, the offsets are the same.
+      assert seq_idx == 0 and all([
+        num == raw_data.shape[0]
+        for (key, num) in self._extra_num_time_steps.items()
+        if key != data_key])
 
-    offset = self._other_num_time_steps - raw_data.shape[0]
-    hdf_data = self._datasets[name]
+    self._extra_num_time_steps[data_key] += raw_data.shape[0]
+    self._datasets[data_key].resize(self._extra_num_time_steps[data_key], axis=0)
+
+    data_key_idx = sorted(self._prepared_extra).index(data_key) + 1
+    self._seq_lengths[seq_idx, data_key_idx] = raw_data.shape[0]
+
+    offset = self._extra_num_time_steps[data_key] - raw_data.shape[0]
+    hdf_data = self._datasets[data_key]
     hdf_data[offset:] = raw_data
 
   def insert_batch(self, inputs, seq_len, seq_tag, extra=None):
