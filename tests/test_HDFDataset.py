@@ -114,9 +114,9 @@ def generate_dummy_hdf(num_datasets=1):
   return ['./dummy.%i.hdf5' % idx for idx in range(1, num_datasets + 1)]
 
 
-def _get_tmp_file(suffix):
+def get_test_tmp_file(suffix):
   """
-  :param str suffix:
+  :param str suffix: e.g. ".hdf"
   :return: filename
   :rtype: str
   """
@@ -143,7 +143,7 @@ def generate_hdf_from_other(opts):
   cache_key = make_hashable(opts)
   if cache_key in _hdf_cache:
     return _hdf_cache[cache_key]
-  fn = _get_tmp_file(suffix=".hdf")
+  fn = get_test_tmp_file(suffix=".hdf")
   from Dataset import init_dataset
   dataset = init_dataset(opts)
   hdf_dataset = HDFDatasetWriter(fn)
@@ -166,7 +166,7 @@ def test_hdf_dump():
   generate_hdf_from_dummy()
 
 
-class _DatasetReader:
+class DatasetTestReader:
   def __init__(self, dataset):
     """
     :param Dataset dataset:
@@ -176,8 +176,8 @@ class _DatasetReader:
     self.data_shape = {}  # key -> shape
     self.data_sparse = {}  # key -> bool
     self.data_dtype = {}  # key -> str
-    self.data = {}  # key -> list
-    self.seq_lens = []  # type: list[Util.NumbersDict]
+    self.data = {}  # type: typing.Dict[str,typing.List[numpy.ndarray]]  # key -> list
+    self.seq_lens = []  # type: typing.List[Util.NumbersDict]
     self.seq_tags = []
     self.num_seqs = None
 
@@ -205,7 +205,7 @@ class _DatasetReader:
 
 
 def test_SimpleHDFWriter():
-  fn = _get_tmp_file(suffix=".hdf")
+  fn = get_test_tmp_file(suffix=".hdf")
   n_dim = 13
   writer = SimpleHDFWriter(filename=fn, dim=n_dim, labels=None)
   seq_lens1 = [11, 7, 5]
@@ -222,7 +222,7 @@ def test_SimpleHDFWriter():
   seq_lens = seq_lens1 + seq_lens2
 
   dataset = HDFDataset(files=[fn])
-  reader = _DatasetReader(dataset=dataset)
+  reader = DatasetTestReader(dataset=dataset)
   reader.read_all()
   assert "data" in reader.data_keys  # "classes" might be in there as well, although not really correct/existing
   assert reader.data_sparse["data"] is False
@@ -237,7 +237,7 @@ def test_SimpleHDFWriter():
 
 
 def test_SimpleHDFWriter_small():
-  fn = _get_tmp_file(suffix=".hdf")
+  fn = get_test_tmp_file(suffix=".hdf")
   n_dim = 3
   writer = SimpleHDFWriter(filename=fn, dim=n_dim, labels=None)
   seq_lens = [2, 3]
@@ -248,7 +248,7 @@ def test_SimpleHDFWriter_small():
   writer.close()
 
   dataset = HDFDataset(files=[fn])
-  reader = _DatasetReader(dataset=dataset)
+  reader = DatasetTestReader(dataset=dataset)
   reader.read_all()
   assert "data" in reader.data_keys  # "classes" might be in there as well, although not really correct/existing
   assert reader.data_sparse["data"] is False
@@ -292,12 +292,12 @@ def test_read_simple_hdf():
     b'}\xf0\xc7\xbe7\xf5m\xe6\xf2\xe7\xa7\xf6^\xee\xc9\xd6\xefG\xb3\x9d\x87\xcf\x9c\xed_\x1f&\xbf\xbe\xd4\xcet\xae'
     b'\xaf\xbf\x99\xc9~\xda\xdd\xaa/\xbf\xb7\xef.\xeen\xbf^2"\xff\x82\xfd\x07\xf7a\x8c\xa2\xd4>\x00\x00')
   import gzip
-  fn = _get_tmp_file(suffix=".hdf")
+  fn = get_test_tmp_file(suffix=".hdf")
   with open(fn, "wb") as f:
     f.write(gzip.decompress(raw_gzipped))
 
   dataset = HDFDataset(files=[fn])
-  reader = _DatasetReader(dataset=dataset)
+  reader = DatasetTestReader(dataset=dataset)
   reader.read_all()
   print("tags:", reader.seq_tags)
   assert len(seq_lens) == reader.num_seqs
@@ -312,7 +312,7 @@ def test_read_simple_hdf():
 
 def test_SimpleHDFWriter_ndim1_var_len():
   # E.g. attention weights, shape (dec-time,enc-time) per seq.
-  fn = _get_tmp_file(suffix=".hdf")
+  fn = get_test_tmp_file(suffix=".hdf")
   writer = SimpleHDFWriter(filename=fn, dim=None, ndim=2, labels=None)
   dec_seq_lens1 = [11, 7, 5]
   enc_seq_lens1 = [13, 6, 8]
@@ -333,7 +333,7 @@ def test_SimpleHDFWriter_ndim1_var_len():
   enc_seq_lens = enc_seq_lens1 + enc_seq_lens2
 
   dataset = HDFDataset(files=[fn])
-  reader = _DatasetReader(dataset=dataset)
+  reader = DatasetTestReader(dataset=dataset)
   reader.read_all()
   assert "data" in reader.data_keys  # "classes" might be in there as well, although not really correct/existing
   assert reader.data_sparse["data"] is False
@@ -353,7 +353,7 @@ def test_SimpleHDFWriter_ndim1_var_len():
 
 @unittest.skip("unfinished...")
 def test_SimpleHDFWriter_swmr():
-  fn = _get_tmp_file(suffix=".hdf")
+  fn = get_test_tmp_file(suffix=".hdf")
   rnd = numpy.random.RandomState(42)
   n_dim = 13
   writer = SimpleHDFWriter(filename=fn, dim=n_dim, labels=None, swmr=True)
@@ -482,7 +482,7 @@ def test_hdf_data_short_int_dtype():
   orig_classes_dtype = dataset.get_data_dtype("classes")
   assert orig_data_dtype == "uint8" and orig_classes_dtype == "int16"
 
-  hdf_fn = _get_tmp_file(suffix=".hdf")
+  hdf_fn = get_test_tmp_file(suffix=".hdf")
   hdf_writer = HDFDatasetWriter(filename=hdf_fn)
   hdf_writer.dump_from_dataset(dataset, use_progress_bar=False)
   hdf_writer.close()
@@ -519,7 +519,7 @@ def test_hdf_data_target_int32():
   assert orig_classes_seq.shape == (3,) and orig_classes_seq[0] == 2147483647
   assert orig_classes_seq.dtype == orig_classes_dtype == "int32"
 
-  hdf_fn = _get_tmp_file(suffix=".hdf")
+  hdf_fn = get_test_tmp_file(suffix=".hdf")
   hdf_writer = HDFDatasetWriter(filename=hdf_fn)
   hdf_writer.dump_from_dataset(dataset, use_progress_bar=False)
   hdf_writer.close()
@@ -546,7 +546,7 @@ def test_hdf_target_float_dtype():
   orig_classes_dtype = dataset.get_data_dtype("classes")
   assert orig_data_dtype == "float32" and orig_classes_dtype == "float32"
 
-  hdf_fn = _get_tmp_file(suffix=".hdf")
+  hdf_fn = get_test_tmp_file(suffix=".hdf")
   hdf_writer = HDFDatasetWriter(filename=hdf_fn)
   hdf_writer.dump_from_dataset(dataset, use_progress_bar=False)
   hdf_writer.close()
@@ -581,7 +581,7 @@ def test_hdf_target_float_dense():
   orig_classes_shape = dataset.get_data_shape("classes")
   assert orig_data_shape == [3] and orig_classes_shape == [2]
 
-  hdf_fn = _get_tmp_file(suffix=".hdf")
+  hdf_fn = get_test_tmp_file(suffix=".hdf")
   hdf_writer = HDFDatasetWriter(filename=hdf_fn)
   hdf_writer.dump_from_dataset(dataset, use_progress_bar=False)
   hdf_writer.close()

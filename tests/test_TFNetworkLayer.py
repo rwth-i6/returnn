@@ -2224,21 +2224,24 @@ def test_extra_search():
     print(out)  # random...
 
 
-def test_dump_seq():
+def test_HDFDumpLayer():
+  import os
+  from test_HDFDataset import get_test_tmp_file, DatasetTestReader, HDFDataset
+  hdf_filename = get_test_tmp_file(".hdf")
+
   with make_scope() as session:
-    n_in, n_out = 4, 1
+    n_in, n_out = 4, 3
     config = Config()
     config.update({
       "num_outputs": n_out,
       "num_inputs": n_in,
       "network": {
-        "lstm": { "class": "rec", "unit": "LSTMBlock", "from": ["data"], "n_out": n_out, },
-        "dump": { "class": "hdf_dump", "filename": "dump.hdf", "from": ["lstm"]},
+        "lstm": {"class": "rec", "unit": "LSTMBlock", "from": ["data"], "n_out": n_out},
+        "dump": {"class": "hdf_dump", "filename": hdf_filename, "from": ["lstm"]},
         "output": {"class": "copy", "from": ["dump"]},
       }})
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_value("network"))
-
 
     session.run(tf.global_variables_initializer())
     out = network.layers["output"].output.placeholder
@@ -2251,32 +2254,45 @@ def test_dump_seq():
       [0.1, -0.2, 0.2, .8]]],
       dtype="float32")
     input_tags = numpy.array([b"seq-0"], dtype="S5")
-    seq_lens = numpy.array([4], dtype="int32")
-    assert input_data.shape == (1, seq_lens[0], n_in)
+    seq_lens = numpy.array([seq_len], dtype="int32")
+    assert input_data.shape == (n_batch, seq_lens[0], n_in)
     feed = {network.extern_data.data["data"].placeholder: input_data,
             network.extern_data.data["data"].size_placeholder[0]: seq_lens,
             network.extern_data.data["seq_tag"].placeholder: input_tags}
     assert_equal(feed[network.extern_data.get_default_input_data().placeholder].shape, (n_batch, seq_len, n_in))
     session.run([out, network.get_post_control_dependencies()], feed_dict=feed)
 
+    network.call_graph_reset_callbacks()
 
-def test_dump_seq_fixed_length():
+  assert os.path.exists(hdf_filename)
+  reader = DatasetTestReader(HDFDataset([hdf_filename]))
+  reader.read_all()
+  assert reader.num_seqs == 1
+  assert reader.seq_tags == ["seq-0"]
+  assert_equal(reader.seq_lens[0]["data"], seq_lens[0])
+  assert_equal(reader.data["data"][0].shape, (seq_lens[0], n_out))
+
+
+def test_HDFDumpLayer_fixed_length():
+  import os
+  from test_HDFDataset import get_test_tmp_file, DatasetTestReader, HDFDataset
+  hdf_filename = get_test_tmp_file(".hdf")
+
   with make_scope() as session:
-    n_in, n_out = 4, 1
+    n_in, n_out = 4, 3
     config = Config()
     config.update({
       "num_outputs": n_out,
       "num_inputs": n_in,
       "network": {
-        "lstm": { "class": "rec", "unit": "LSTMBlock", "from": ["data"], "n_out": n_out, },
-        "last_state": { "class": "get_last_hidden_state", "from": ["lstm"], "key": "h", "n_out": n_out, },
-        "last_state_expanded": { "class": "expand_dims", "from": ["lstm"], "axis": "T" },
-        "dump": { "class": "hdf_dump", "filename": "dump2.hdf", "from": ["last_state_expanded"]},
+        "lstm": {"class": "rec", "unit": "LSTMBlock", "from": ["data"], "n_out": n_out},
+        "last_state": {"class": "get_last_hidden_state", "from": ["lstm"], "key": "h", "n_out": n_out},
+        "last_state_expanded": {"class": "expand_dims", "from": ["last_state"], "axis": "T"},
+        "dump": {"class": "hdf_dump", "filename": hdf_filename, "from": ["last_state_expanded"]},
         "output": {"class": "copy", "from": ["dump"]},
       }})
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_value("network"))
-
 
     session.run(tf.global_variables_initializer())
     out = network.layers["output"].output.placeholder
@@ -2289,13 +2305,93 @@ def test_dump_seq_fixed_length():
       [0.1, -0.2, 0.2, .8]]],
       dtype="float32")
     input_tags = numpy.array([b"seq-0"], dtype="S5")
-    seq_lens = numpy.array([4], dtype="int32")
-    assert input_data.shape == (1, seq_lens[0], n_in)
+    seq_lens = numpy.array([seq_len], dtype="int32")
+    assert input_data.shape == (n_batch, seq_lens[0], n_in)
     feed = {network.extern_data.data["data"].placeholder: input_data,
             network.extern_data.data["data"].size_placeholder[0]: seq_lens,
             network.extern_data.data["seq_tag"].placeholder: input_tags}
     assert_equal(feed[network.extern_data.get_default_input_data().placeholder].shape, (n_batch, seq_len, n_in))
     session.run([out, network.get_post_control_dependencies()], feed_dict=feed)
+
+    network.call_graph_reset_callbacks()
+
+  assert os.path.exists(hdf_filename)
+  reader = DatasetTestReader(HDFDataset([hdf_filename]))
+  reader.read_all()
+  assert reader.num_seqs == 1
+  assert reader.seq_tags == ["seq-0"]
+  assert_equal(reader.seq_lens[0]["data"], 1)
+  assert_equal(reader.data["data"][0].shape, (1, n_out))
+
+
+def test_HDFDumpLayer_extra():
+  import os
+  from test_HDFDataset import get_test_tmp_file, DatasetTestReader, HDFDataset
+  hdf_filename = get_test_tmp_file(".hdf")
+
+  with make_scope() as session:
+    n_in = 5
+    n_out1 = 7
+    config = Config()
+    config.update({
+      "extern_data": {
+        "data": {"dim": n_in},
+        "classes1": {"dim": n_out1, "sparse": True},
+        "classes2": {"dim": None, "dtype": "float32", "shape": ()},
+      },
+      "network": {
+        "dump": {
+          "class": "hdf_dump", "filename": hdf_filename,
+          "from": "data",
+          "extra": {"classes1": "data:classes1", "classes2": "data:classes2"},
+          "is_output_layer": True
+        },
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+    network.print_network_info()
+
+    session.run(tf.global_variables_initializer())
+    n_batch = 1
+    input_data = numpy.array([[
+      [1, -0.2, 0.3, -4, 5],
+      [2, -0.6, 0.7, -1.8, 2.9],
+      [1, 0.3, -0.1, -0.8, 0.5],
+      [0.1, -0.2, 0.2, .8, -0.3]]],
+      dtype="float32")
+    input_seq_lens = [input_data.shape[1]]
+    assert input_data.shape == (n_batch, input_seq_lens[0], n_in)
+    classes1_data = numpy.array([[2, 5, 6]], dtype="int32")
+    classes1_seq_lens = [classes1_data.shape[1]]
+    assert classes1_data.shape == (n_batch, classes1_seq_lens[0])
+    classes2_data = numpy.array([-7.89], dtype="float32")
+    assert classes2_data.shape == (n_batch,)
+    seq_tags = numpy.array([b"seq-0"], dtype="S5")
+    feed = {
+      network.extern_data.data["data"].placeholder: input_data,
+      network.extern_data.data["data"].size_placeholder[0]: input_seq_lens,
+      network.extern_data.data["classes1"].placeholder: classes1_data,
+      network.extern_data.data["classes1"].size_placeholder[0]: classes1_seq_lens,
+      network.extern_data.data["classes2"].placeholder: classes2_data,
+      network.extern_data.data["seq_tag"].placeholder: seq_tags}
+    fetches = network.get_fetches_dict()
+    result = session.run(fetches, feed_dict=feed)
+    pprint(result)
+
+    network.call_graph_reset_callbacks()
+
+  assert os.path.exists(hdf_filename)
+  reader = DatasetTestReader(HDFDataset([hdf_filename]))
+  reader.read_all()
+  assert reader.num_seqs == 1
+  assert reader.seq_tags == ["seq-0"]
+  assert_equal(reader.seq_lens[0]["data"], input_seq_lens[0])
+  assert_equal(reader.data["data"][0].shape, (input_seq_lens[0], n_in))
+  assert_equal(reader.data["classes1"][0].shape, (classes1_seq_lens[0],))
+  assert_equal(reader.data["classes2"][0].shape, (1,))
+  numpy.testing.assert_almost_equal(reader.data["data"][0], input_data[0])
+  numpy.testing.assert_equal(reader.data["classes1"][0], classes1_data[0])
+  numpy.testing.assert_equal(reader.data["classes2"][0], [classes2_data[0]])
 
 
 if __name__ == "__main__":
