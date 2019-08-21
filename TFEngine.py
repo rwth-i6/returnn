@@ -753,8 +753,8 @@ class Engine(EngineBase):
     Resets the default graph (of the current thread),
     and clears up any cached tensors created in it.
     """
-    from TFUtil import call_graph_reset_callbacks
-    call_graph_reset_callbacks()
+    if self.network:
+      self.network.call_graph_reset_callbacks()
     tf.reset_default_graph()
     self._checked_uninitialized_vars = False
     self._merge_all_summaries = None

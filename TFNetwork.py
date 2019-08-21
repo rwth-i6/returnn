@@ -339,6 +339,7 @@ class TFNetwork(object):
     self.concat_sources_dropout_cache = {}  # type: typing.Dict[typing.Tuple[typing.Tuple[LayerBase,...],float,typing.Optional[typing.Tuple[typing.Optional[int],...]]],Data]  # nopep8
     self._batch_dim = None  # see get_batch_dim
     self._merge_all_summaries = None  # type: typing.Optional[tf.Tensor]
+    self._graph_reset_callbacks = []  # type: typing.List[typing.Callable]
 
   def __repr__(self):
     s = "TFNetwork %r" % self.name
@@ -362,6 +363,8 @@ class TFNetwork(object):
     """
     if self.parent_net:
       return self.parent_net.get_root_network()
+    if self.extra_parent_net:
+      return self.extra_parent_net.get_root_network()
     return self
 
   def get_absolute_name_scope_prefix(self):
@@ -1776,6 +1779,25 @@ class TFNetwork(object):
     :rtype: list[tf.Operation]
     """
     return tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+
+  def register_graph_reset_callback(self, cb):
+    """
+    Note: These callbacks are not called automatically.
+    You explicitly have to call :func:`call_graph_reset_callbacks`.
+    Note: We don't store this in the graph itself (e.g. via tf.get_collection),
+    as we don't want to serialize this
+    (which would also lead to an error, because it cannot be serialized).
+
+    :param function cb:
+    """
+    self.get_root_network()._graph_reset_callbacks.append(cb)
+
+  def call_graph_reset_callbacks(self):
+    """
+    Calls any callbacks registered via :func:`register_graph_reset_callback`.
+    """
+    for cb in self._graph_reset_callbacks:
+      cb()
 
   @classmethod
   def get_network_stack(cls):
