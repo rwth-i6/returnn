@@ -114,7 +114,8 @@ def generate_dummy_hdf(num_datasets=1):
   return ['./dummy.%i.hdf5' % idx for idx in range(1, num_datasets + 1)]
 
 
-def get_test_tmp_file(suffix):
+# Note that nosetests might even call this function, as it has "test" in its name... Does not matter, though.
+def get_test_tmp_file(suffix=".hdf"):
   """
   :param str suffix: e.g. ".hdf"
   :return: filename
