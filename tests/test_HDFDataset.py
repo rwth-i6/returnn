@@ -207,6 +207,7 @@ class DatasetTestReader:
 
 def test_SimpleHDFWriter():
   fn = get_test_tmp_file(suffix=".hdf")
+  os.remove(fn)  # SimpleHDFWriter expects that the file does not exist
   n_dim = 13
   writer = SimpleHDFWriter(filename=fn, dim=n_dim, labels=None)
   seq_lens1 = [11, 7, 5]
@@ -239,6 +240,7 @@ def test_SimpleHDFWriter():
 
 def test_SimpleHDFWriter_small():
   fn = get_test_tmp_file(suffix=".hdf")
+  os.remove(fn)  # SimpleHDFWriter expects that the file does not exist
   n_dim = 3
   writer = SimpleHDFWriter(filename=fn, dim=n_dim, labels=None)
   seq_lens = [2, 3]
@@ -314,6 +316,7 @@ def test_read_simple_hdf():
 def test_SimpleHDFWriter_ndim1_var_len():
   # E.g. attention weights, shape (dec-time,enc-time) per seq.
   fn = get_test_tmp_file(suffix=".hdf")
+  os.remove(fn)  # SimpleHDFWriter expects that the file does not exist
   writer = SimpleHDFWriter(filename=fn, dim=None, ndim=2, labels=None)
   dec_seq_lens1 = [11, 7, 5]
   enc_seq_lens1 = [13, 6, 8]
@@ -355,6 +358,7 @@ def test_SimpleHDFWriter_ndim1_var_len():
 @unittest.skip("unfinished...")
 def test_SimpleHDFWriter_swmr():
   fn = get_test_tmp_file(suffix=".hdf")
+  os.remove(fn)  # SimpleHDFWriter expects that the file does not exist
   rnd = numpy.random.RandomState(42)
   n_dim = 13
   writer = SimpleHDFWriter(filename=fn, dim=n_dim, labels=None, swmr=True)
