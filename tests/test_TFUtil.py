@@ -55,6 +55,12 @@ def test_Data_dim():
   assert_equal(data.sparse, False)
 
 
+def test_Data_default_time_no_time():
+  # This is new behavior.
+  data = Data(name='merge_dims_test_output', shape=(3, 5))
+  assert data.time_dim_axis is None and data.feature_dim_axis == 2
+
+
 def test_Data_copy_time_major():
   data = Data(name="my_data", dim=13)
   assert_equal(data.batch_dim_axis, 0)
@@ -79,6 +85,16 @@ def test_Data_copy_batch_major():
   assert_equal(data2.time_dim_axis, 1)
   assert_equal(data2.feature_dim_axis, 2)
   assert_equal(data2.batch_ndim, 3)
+
+
+def test_Data_copy_as_batch_major_no_extra_feat():
+  data = Data(name='att_weights_output', shape=(None,), batch_dim_axis=1)
+  print("data", data, "feat axis:", data.feature_dim_axis_or_unspecified, data.feature_dim_axis)
+  assert_equal(data.time_dim_axis, 0)
+  data2 = data.copy_as_batch_major()
+  assert_equal(data2.batch_dim_axis, 0)
+  assert_equal(data2.time_dim_axis, 1)
+  # No check for feature_dim_axis, as this behavior does not matter here.
 
 
 def test_Data_spatial_batch_axes():
@@ -132,6 +148,26 @@ def test_Data_copy_template_adding_time_dim_no_feature():
   # assert d2.feature_dim_axis is None  # not sure what we would want here...
 
 
+def test_Data_get_axes_from_description_except_time_ext():
+  data = Data(name='merge_dims_test_output', shape=(3, None, 5), time_dim_axis=2)
+  axes = data.get_axes_from_description("except_time")
+  assert axes == [1, 3], "data %r 'except_time' axes %r unexpected" % (data, axes)
+
+
+def test_Data_get_axes_from_description_except_time_no_time():
+  data = Data(name='merge_dims_test_output', shape=(3, 5))
+  assert data.time_dim_axis is None
+  axes = data.get_axes_from_description("except_time")
+  assert axes == [1, 2], "data %r 'except_time' axes %r unexpected" % (data, axes)
+
+
+def test_Data_copy_template_excluding_time_dim_two_time_dims():
+  data = Data(name='ref_att_weights_output', shape=(None, None, 1), auto_create_placeholders=True)
+  assert set(data.size_placeholder.keys()) == {0, 1}
+  data_wo_time = data.copy_template_excluding_time_dim()
+  assert data_wo_time.shape == (None, 1) and data_wo_time.have_time_axis()
+
+
 def test_Data_time_no_feature():
   d1 = Data(name="d1", shape=(None,), batch_dim_axis=0, time_dim_axis=1, dim=None)
   assert d1.time_dim_axis == 1
@@ -141,6 +177,13 @@ def test_Data_unknown_feature_no_time():
   d1 = Data(name="d1", shape=(None,), batch_dim_axis=0, time_dim_axis=None, dim=None)
   assert d1.batch_dim_axis == 0 and d1.time_dim_axis is None and d1.feature_dim_axis == 1
   assert d1.batch_shape == (None, None)
+
+
+def test_Data_time_end():
+  data = Data(name='att_weights_output', shape=(1, None), time_dim_axis=2)
+  print("data:", data, "feature axis:", data.feature_dim_axis)
+  assert data.shape == (1, None) and data.batch_dim_axis == 0 and data.time_dim_axis == 2
+  # No test for feature axis, as it does not really matter.
 
 
 def test_Data_copy_with_feature_dim_axis_case_1():
@@ -243,6 +286,62 @@ def test_Data_copy_compatible_to_time_major():
   assert d2a.feature_dim_axis == d1.feature_dim_axis
 
 
+def test_Data_sparse_int32_with_dim_kwargs_init():
+  data = Data(name="classes_with_dim", shape=(None,), dim=10, sparse=True, dtype="int32")
+  assert data.sparse and data.have_time_axis() and data.shape == (None,) and data.dim == 10
+
+
+def test_Data_int32_no_dim_kwargs_init():
+  data = Data(name="classes_with_no_dim", shape=(None,), dtype="int32")
+  assert data.have_time_axis() and data.shape == (None,)
+
+
+def test_Data_copy_template_excluding_spatial_dim():
+  att_weights = Data(name="att_weights", shape=(None, None, 1), batch_dim_axis=2)
+  rem_enc_time = att_weights.copy_template_excluding_spatial_dim(-1)
+  assert rem_enc_time.shape == (None, 1) and rem_enc_time.batch_dim_axis == 1
+
+
+def test_Data_copy_squeeze_axes():
+  weights = Data(name='att_weights_output', shape=(1, None), time_dim_axis=2, auto_create_placeholders=True)
+  squeezed = weights.copy_squeeze_axes([1])
+  print("orig:", weights, "squeezed:", squeezed)
+  assert squeezed.shape == (None,) and squeezed.time_dim_axis == 1
+  assert weights.size_placeholder[1] is squeezed.size_placeholder[0]
+
+
+def test_Data_copy_squeeze_axes_feature_axis():
+  weights = Data(name='att_weights_output', shape=(None, 1), auto_create_placeholders=True)
+  squeezed = weights.copy_squeeze_axes([2])
+  print("orig:", weights, "squeezed:", squeezed)
+  assert squeezed.shape == (None,) and squeezed.time_dim_axis == 1
+  assert weights.size_placeholder[0] is squeezed.size_placeholder[0]
+
+
+def test_ExternData_via_config():
+  # Like ExternData.init_from_config.
+  from Config import Config
+  config = Config({
+    "extern_data": {
+      "data": (40, 2),
+      "classes": (10025, 1),
+      "att_weights": {"shape": (None, None, 1)},
+      "att_weights_sizes": {"shape": (None,), "dtype": "int32"}
+    }})
+  from NetworkDescription import LayerNetworkDescription
+  data_dims = LayerNetworkDescription.tf_extern_data_types_from_config(config)
+  data = {}
+  for key, init_args in data_dims.items():
+    data[key] = Data(name=key, auto_create_placeholders=True, **init_args)
+  pprint(data)
+  data_data = data["data"]
+  assert isinstance(data_data, Data)
+  assert data_data.have_time_axis() and not data_data.sparse and data_data.shape == (None, 40)
+  att_weights_sizes = data["att_weights_sizes"]
+  assert isinstance(att_weights_sizes, Data)
+  assert att_weights_sizes.have_time_axis()
+
+
 def test_4D_Data_get_placeholder_flattened():
   import numpy as np
   size_placeholder = tf.constant(np.full((7,), 9), dtype=tf.int32)
@@ -311,6 +410,171 @@ def test_Data_copy_compatible_to_src_no_batch():
   d2.placeholder = tf.zeros([d if (d is not None) else 1 for d in d2.batch_shape])
   d3 = d2.copy_compatible_to(d1)
   assert d3.batch_shape == (None, 1, 1)
+
+
+def test_Data_copy_compatible_to_add_batch_dim():
+  common_data = Data(name='accum_att_weights_output', shape=(None, 1))
+  d1 = Data(name='att_weights_avg_output', shape=(1,), batch_dim_axis=None)
+  d2 = d1.copy_compatible_to(common_data)
+  assert d2.batch_dim_axis is not None and d2.batch_shape == (None, 1, 1)
+
+
+def test_Data_copy_compatible_to_time_axis_at_end():
+  data = Data(name='att_weights_output', shape=(1, None), time_dim_axis=2, feature_dim_axis=1)
+  common_data = Data(name='accum_att_weights_output', shape=(None, 1))
+  data2 = data.copy_compatible_to(common_data)
+  assert data2.batch_dim_axis == common_data.batch_dim_axis == 0
+  assert data2.time_dim_axis == common_data.time_dim_axis == 1
+  assert data2.feature_dim_axis == common_data.feature_dim_axis == 2
+  assert data2.shape == common_data.shape == (None, 1)
+  assert data2.dim == common_data.dim == 1
+
+
+def test_Data_copy_compatible_to_batch_axis1_time_axis_at_end():
+  data = Data(name='att_weights_output', shape=(1, None), time_dim_axis=2, feature_dim_axis=1, beam_size=12)
+  common_data = Data(name='accum_att_weights_output', shape=(None, 1), batch_dim_axis=1)
+  data2 = data.copy_compatible_to(common_data)
+  assert data2.time_dim_axis == common_data.time_dim_axis == 0
+  assert data2.batch_dim_axis == common_data.batch_dim_axis == 1
+  assert data2.feature_dim_axis == common_data.feature_dim_axis == 2
+  assert data2.shape == common_data.shape == (None, 1)
+  assert data2.dim == common_data.dim == 1
+
+
+def test_Data_copy_compatible_to_batch_feature_is_dynamic():
+  # Enc/dec for proper time dim tags.
+  enc = Data(name="enc", shape=(None, 1), auto_create_placeholders=True)
+  dec = Data(name="dec", shape=(None, 1), auto_create_placeholders=True)
+  print("enc:", enc)
+  print("dec:", dec)
+  # start: batch_shape_meta=[T|'time-with-postfix:0_data_target0',B]
+  start = Data(name='t_start_output', shape=(None,), dtype='int32', sparse=True, dim=None, batch_dim_axis=1)
+  start.size_placeholder = {0: dec.size_placeholder[0]}
+  print("start:", start)
+  assert_equal(start.get_time_dim_tag(), dec.get_time_dim_tag())
+  # energy: batch_shape_meta=[F|'time-with-postfix:0_data_target0',B,T|'time-with-postfix:encoder']
+  energy = Data(name='energy2_output', shape=(None, None), batch_dim_axis=1, time_dim_axis=2, feature_dim_axis=0)
+  energy.size_placeholder = {0: dec.size_placeholder[0], 1: enc.size_placeholder[0]}
+  print("energy:", energy)
+  assert_equal(energy.get_size_dim_tag(0), dec.get_time_dim_tag())
+  assert_equal(energy.get_size_dim_tag(1), enc.get_time_dim_tag())
+  assert_equal(energy.get_time_dim_tag(), enc.get_time_dim_tag())
+  t = start.copy_compatible_to(energy, check_sparse=False, check_dtype=False)
+  print("t:", t)
+  assert t.shape == (None, 1) and t.time_dim_axis == energy.time_dim_axis
+  assert t.batch_dim_axis == energy.batch_dim_axis
+  assert t.sparse and t.feature_dim_axis is None  # because it is sparse
+  assert set(t.size_placeholder.keys()) == {0}
+  assert t.size_placeholder[0] is dec.size_placeholder[0]
+  assert_equal(t.get_size_dim_tag(0), dec.get_time_dim_tag())
+
+
+def test_Data_copy_compatible_to_get_common_data_auto_feature_non_sparse():
+  d1 = Data(name='t', shape=(None,), dtype='int32', batch_dim_axis=None, feature_dim_axis=None,
+            auto_create_placeholders=True)  # placeholder for specific spatial dim-tag
+  d2 = Data(name='r', shape=(6,), dtype='int32', batch_dim_axis=None, time_dim_axis=None)
+  common = Data.get_common_data([d1, d2], warnings_out=sys.stdout)
+  print("common:", common)
+  d1a = d1.copy_compatible_to(common)
+  print("d1':", d1a)
+  d2a = d2.copy_compatible_to(common)
+  print("d2':", d2a)
+  assert common.feature_dim_axis_or_unspecified is NotSpecified
+  assert d1a.feature_dim_axis_or_unspecified is NotSpecified
+  assert d2a.feature_dim_axis_or_unspecified is NotSpecified
+
+
+def test_Data_copy_compatible_to_get_common_data_no_feature_sparse():
+  d1 = Data(name="t", shape=(), dtype='int32', sparse=True, dim=None, time_dim_axis=None)
+  d2 = Data(name="r", shape=(6,), dtype='int32', sparse=True, dim=6, batch_dim_axis=None, time_dim_axis=None)
+  common = Data.get_common_data([d1, d2], warnings_out=sys.stdout)
+  print("common:", common)
+  d1a = d1.copy_compatible_to(common)
+  print("d1':", d1a)
+  d2a = d2.copy_compatible_to(common)
+  print("d2':", d2a)
+  assert common.sparse and d1a.sparse and d2a.sparse
+  assert common.feature_dim_axis_or_unspecified is NotSpecified
+  assert d1a.feature_dim_axis_or_unspecified is NotSpecified
+  assert d2a.feature_dim_axis_or_unspecified is NotSpecified
+  assert common.feature_dim_axis is None
+  assert d1a.feature_dim_axis is None
+  assert d2a.feature_dim_axis is None
+
+
+def test_Data_copy_compatible_to_add_dummy_time_also_feature_dim():
+  start = Data(
+    name="start", shape=(), dtype='int32', sparse=True, dim=None,
+    batch_dim_axis=0, time_dim_axis=None, feature_dim_axis=None)
+  print("start:", start)
+  assert start.batch_ndim == 1
+  energy = Data(
+    name='energy', shape=(None,), dtype='float32', sparse=False, dim=None,
+    batch_dim_axis=0, time_dim_axis=1, feature_dim_axis=1)
+  print("energy:", energy)
+  assert energy.batch_ndim == 2
+  assert energy.time_dim_axis == energy.feature_dim_axis
+  x = start.copy_compatible_to(energy, check_sparse=False, check_dtype=False)
+  print("start copy_compatible_to energy result:", x)
+  assert x.sparse
+  assert x.batch_ndim == energy.batch_ndim
+  assert x.batch_dim_axis == energy.batch_dim_axis
+  assert x.feature_dim_axis is None  # it's sparse, thus by definition it does not have a feature axis
+  assert x.time_dim_axis == energy.time_dim_axis
+
+
+def test_Data_copy_compatible_to_keep_feature_new_time():
+  start = Data(name='start', shape=(1,), time_dim_axis=None)
+  print("start:", start)
+  assert start.batch_ndim == 2 and start.feature_dim_axis == 1
+  energy = Data(name='energy', shape=(7, 4), time_dim_axis=2, feature_dim_axis=1)
+  print("energy:", energy)
+  assert energy.batch_ndim == 3
+  x = start.copy_compatible_to(energy, check_sparse=False, check_dtype=False)
+  print("start copy_compatible_to energy result:", x)
+  assert x.batch_ndim == energy.batch_ndim
+  assert x.batch_dim_axis == energy.batch_dim_axis
+  assert x.feature_dim_axis == 1
+  assert x.time_dim_axis == energy.time_dim_axis
+
+
+def test_Data_copy_add_spatial_dim_added_time_at_end():
+  d = Data(name='start', shape=(1,), time_dim_axis=None)
+  print("d:", d)
+  assert d.batch_shape == (None, 1) and d.feature_dim_axis == 1 and d.time_dim_axis is None
+  assert d.feature_dim_axis_or_unspecified is NotSpecified
+  d2 = d.copy_add_spatial_dim(2)
+  print("d2:", d2)
+  assert d2.batch_shape == (None, 1, 1) and d2.feature_dim_axis == 1 and d2.time_dim_axis == 2
+  assert d2.feature_dim_axis_or_unspecified is NotSpecified
+
+
+def test_Data_get_common_data_tbf_and_bf():
+  sources = [
+    Data(name='target', shape=(None, 13), batch_dim_axis=1, time_dim_axis=0),
+    Data(name='encoder', shape=(11,), time_dim_axis=None, batch_dim_axis=0)]
+  pprint(sources)
+  common = Data.get_common_data(sources=sources, warnings_out=sys.stdout)
+  print("common:", common)
+  assert common.batch_ndim == 3
+
+
+def test_Data_get_common_data_beam_size():
+  condition = Data(name="cond", shape=(), dtype='bool', sparse=True, dim=2, time_dim_axis=None)
+  true_from = Data(name="true", shape=(), dtype='int32', sparse=True, dim=19, time_dim_axis=None)
+  false_from = Data(name="false", shape=(), dtype='int32', sparse=True, dim=19, time_dim_axis=None, beam_size=3)
+  print("cond:", condition)
+  print("true:", true_from)
+  print("false:", false_from)
+  common = Data.get_common_data([true_from, false_from, condition])
+  print("common:", common)
+  assert common.shape == () and common.sparse
+  assert common.beam_size == 3
+
+
+def test_Data_no_feature_dim():
+  d = Data(name="x", shape=(6,), dtype='int32', sparse=True, dim=6, batch_dim_axis=None, time_dim_axis=None)
+  assert d.feature_dim_axis is None
 
 
 def test_Data_feature_dim_axis_btd():
@@ -442,6 +706,28 @@ def test_Data_copy_template_excluding_time_dim_explicit_feature():
   assert d2.batch_shape == (None, 12) and d2.time_dim_axis is None and d2.feature_dim_axis == 1
 
 
+def test_Data_copy_template_excluding_time_dim_multiple_time():
+  d = Data(
+    name='energy_in_t_rel_var_output', shape=(None, None, 13), batch_dim_axis=2, time_dim_axis=0,
+    auto_create_placeholders=True)  # placeholders to have proper dim tags
+  print("d:", d)
+  print("sizes:", d.size_placeholder)
+  assert set(d.size_placeholder.keys()) == {0, 1}
+  assert d.feature_dim_axis == 3
+  size1tag = d.get_size_dim_tag(0)
+  size2tag = d.get_size_dim_tag(1)
+  print("size tags:", size1tag, size2tag)
+  assert size1tag.dyn_size is not None and size2tag.dyn_size is not None
+  d2 = d.copy_template_excluding_time_dim()
+  print("excluding time:", d2)
+  assert d2.shape == (None, 13) and (d2.time_dim_axis, d2.batch_dim_axis, d2.feature_dim_axis) == (0, 1, 2)
+  print("sizes:", d2.size_placeholder)
+  assert set(d2.size_placeholder.keys()) == {0}
+  assert d2.size_placeholder[0] is d.size_placeholder[1]
+  new_size_tag = d2.get_time_dim_tag()
+  assert new_size_tag is size2tag
+
+
 def test_Data_copy_add_spatial_dim_no_batch():
   d1 = Data(name='d1', shape=(3,), batch_dim_axis=None, time_dim_axis=None)
   assert d1.batch_dim_axis is None and d1.time_dim_axis is None and d1.feature_dim_axis == 0
@@ -458,6 +744,76 @@ def test_Data_copy_add_spatial_dim_no_batch_explicit_feature():
   d2 = d1.copy_add_spatial_dim(0)
   assert d2.batch_dim_axis is None and d2.time_dim_axis == 0 and d2.feature_dim_axis == 1
   assert d2.batch_shape == (1, 3) and d2.dim == 3
+
+
+def test_Data_copy_add_spatial_dim_becomes_new_feature():
+  d1 = Data(name='att_weights_avg_output', shape=(None,), batch_dim_axis=None, time_dim_axis=None)
+  d2 = d1.copy_add_spatial_dim(0)
+
+
+def test_Data_copy_add_spatial_dim_most_right():
+  d1 = Data(name='att_weights_avg_output', shape=(1,))
+  print(d1, "spatial axes:", d1.get_spatial_batch_axes())
+  d2 = d1.copy_add_spatial_dim(1)
+  print(d2, "spatial axes:", d2.get_spatial_batch_axes())
+  assert_equal(d2.get_spatial_batch_axes(), [1])
+
+
+def test_Data_copy_add_spatial_dim_no_batch_end():
+  d = Data(name='t', shape=(None,), dtype='int32', sparse=True, dim=None,
+           batch_dim_axis=None, time_dim_axis=None, feature_dim_axis=None)
+  assert d.batch_shape == (None,)
+  d2 = d.copy_add_spatial_dim(spatial_dim_axis=1, dim=1)
+  assert d2.batch_shape == (None, 1)
+
+
+def test_Data_copy_add_spatial_dim_default_after_last_spatial():
+  d1 = Data(name="x", shape=(2, 1337), batch_dim_axis=0, time_dim_axis=1)
+  assert d1.batch_shape == (None, 2, 1337)
+  d2 = d1.copy_add_spatial_dim(dim=3)
+  assert d2.batch_shape == (None, 2, 3, 1337)
+  d3 = d2.copy_add_spatial_dim(dim=4)
+  assert d3.batch_shape == (None, 2, 3, 4, 1337)
+
+
+def test_Data_copy_add_dim_by_tag_unbroadcast_feature_non_specific_feature_dim():
+  d = Data(name='t', shape=(None,), dtype='int32', batch_dim_axis=None, time_dim_axis=None, feature_dim_axis=None)
+  tag = DimensionTag(kind='feature', description='feature:r', dimension=6)
+  d2 = d.copy_add_dim_by_tag(tag, unbroadcast=True)
+  print("d2:", d2)
+  assert d2.batch_shape == (None, 6)
+  assert d2.feature_dim_axis_or_unspecified is NotSpecified and d2.feature_dim_axis == 1
+
+
+def test_Data_copy_add_dim_by_tag_unbroadcast_spatial_sparse():
+  d = Data(name='t', shape=(None,), dtype='int32', sparse=True, dim=None, batch_dim_axis=None, feature_dim_axis=None)
+  tag = DimensionTag(kind='spatial', description='spatial:0:range', dimension=6)
+  d2 = d.copy_add_dim_by_tag(tag, unbroadcast=True)
+  print("d2:", d2)
+  assert d2.batch_shape == (None, 6)
+  assert d2.sparse
+  assert d2.feature_dim_axis_or_unspecified is d.feature_dim_axis_or_unspecified
+
+
+def test_Data_copy_add_dim_by_tag_unbroadcast_spatial():
+  d = Data(name='ts', shape=(None,), time_dim_axis=None)
+  tag = DimensionTag(kind='spatial', description='spatial:0:ts', dimension=6)
+  d2 = d.copy_add_dim_by_tag(tag, unbroadcast=True, axis=-1)
+  assert d2.shape == (None, 6)
+
+
+def test_Data_copy_add_dim_by_tag_sparse_unbroadcast_feature():
+  d = Data(name='t', shape=(), dtype='int32', sparse=True, dim=None, time_dim_axis=None)
+  tag = DimensionTag(kind='feature', description='feature:t', dimension=6)
+  d2 = d.copy_add_dim_by_tag(tag, unbroadcast=True)
+  # The feature axis should become a spatial axis in this case.
+  assert d2.shape == (6,) and d2.sparse and d2.dim is None and d2.feature_dim_axis is None
+
+
+def test_Data_copy_move_axis_time_to_end():
+  d1 = Data(name="att_weights", shape=(None, None, 4))
+  d2 = d1.copy_move_axis(d1.time_dim_axis, -1)
+  assert d2.shape == (None, 4, None) and d2.feature_dim_axis == 2 and d2.time_dim_axis == 3
 
 
 def test_get_initializer_zero():
@@ -746,12 +1102,16 @@ def test_loop_var_creation():
     # w = tf.Variable(tf.constant(1))
     # w = tf.Variable(tf.constant_initializer(value=1, dtype=tf.int32)(shape=()))
     # However, resetting the control dependencies will also reset the frame.
-    with var_creation_scope():
-      w = tf.Variable(tf.constant(1))
-    return [i + w]
+    with default_control_flow_ctx():
+      # Note: tf.Variable directly will have this problem, as tf.constant() is in the current ctx.
+      w1 = tf.Variable(name="w1", initial_value=tf.constant(1))
+    # However, tf.get_variable should not have this problem.
+    w2 = tf.get_variable("w2", shape=(), dtype=tf.int32, initializer=tf.constant_initializer(2, dtype=tf.int32))
+    return [i + w1 + w2]
 
   loop = tf.while_loop(lambda i: tf.less(i, 5), body, [i])
   session.run(tf.global_variables_initializer())
+  session.run(loop)
 
 
 def test_gather_nd_grad():
@@ -790,6 +1150,63 @@ def test_scatter_nd():
     updates=tf.ones((n_beam, n_batch, n_in)),
     shape=(n_base_time, n_batch, n_in))
   session.run(ref_grad)
+
+
+def test_nd_indices_scatter_nd_time_major():
+  def rel_embed(x, v, t):
+    """
+    :param Data x: energy_in. (B, T, K) or (T, B, K)
+    :param Data v: t_rel_var. (B, Ts, K)
+    :param tf.Tensor t: (B,), int32
+    :rtype: tf.Tensor
+    """
+    import tensorflow as tf
+    from TFUtil import nd_indices
+    v = v.copy_compatible_to(x)  # t_rel_var. (B, Ts, K)
+    assert v.dim == x.dim
+    t = t + 1  # shift by 1, because we init at -1
+    # t = tf.Print(t, ["t:", t])
+    time_dim = tf.shape(x.placeholder)[x.time_dim_axis]
+    batch_dim = tf.shape(x.placeholder)[x.batch_dim_axis]
+    assert len(v.shape) == 2 and all([isinstance(d, int) for d in v.shape])
+    ts_dim = v.shape[0]
+    assert x.batch_dim_axis in [0, 1]
+    indices = tf.expand_dims(tf.range(ts_dim), axis=x.batch_dim_axis)  # (1,Ts) or (Ts,1)
+    indices = indices + tf.expand_dims(t, axis=1 - x.batch_dim_axis)  # (B,Ts) or (Ts,B)
+    max_t = tf.maximum(tf.reduce_max(indices) + 1, time_dim + 1)
+    indices = nd_indices(indices, batch_axis=x.batch_dim_axis)  # (B,Ts,2) or (Ts,B,2)
+    x0 = tf.scatter_nd(
+      indices=indices, updates=v.placeholder,
+      shape=[batch_dim, max_t, x.dim] if x.batch_dim_axis == 0
+      else [max_t, batch_dim, x.dim])  # (B,T,K) or (T,B,K)
+    if x.batch_dim_axis == 0:
+      x0 = x0[:, 1:time_dim + 1]  # correct the shift from above
+    else:
+      x0 = x0[1:time_dim + 1]  # correct the shift from above
+    out = x.placeholder + x0
+    # out = tf.Print(out, ["i:", network.get_rec_step_index(), "t:", t], summarize=5)
+    return out
+
+  n_batch = 3
+  t = tf.convert_to_tensor([4, 3, 2])  # (B,)
+  n_time = 7
+  seq_len = tf.convert_to_tensor([7, 4, 5])
+  n_ts = 2
+  n_k = 5
+  v = tf.random_normal((n_ts, n_k))
+  v = expand_dims_unbroadcast(v, axis=0, dim=n_batch)  # (B,Ts,K)
+  v = Data(name="v", shape=(n_ts, n_k), placeholder=v)
+  x = tf.random_normal((n_batch, n_time, n_k))
+  x = Data(name="x", shape=(None, n_k), placeholder=x, size_placeholder={0: seq_len})
+  print(x)
+  print(v)
+  print(t)
+  res1 = rel_embed(x, v, t)
+  print("res1 (batch major):", res1)
+  res2 = rel_embed(x.copy_as_time_major(), v, t)
+  print("res2 (time major):", res2)
+  session.run(res1)
+  session.run(res2)
 
 
 def test_dimshuffle():
@@ -1273,6 +1690,19 @@ def test_expand_dims_unbroadcast_instead_of_tf_tile():
     assert_equal(list(r[:, beam]), [1, 2, 3])
 
 
+def test_expand_dims_unbroadcast_negative_axis():
+  batch_size = 3
+  n_time = 5
+  n_dim = 2
+  expand_dim = 6
+  v = tf.ones((batch_size, n_time, n_dim))  # (batch, time, dim)
+  v2 = expand_dims_unbroadcast(v, axis=-2, dim=expand_dim)  # (batch, time, 6, dim)
+  r = v2.eval()
+  print(r)
+  assert isinstance(r, numpy.ndarray)
+  assert_equal(r.shape, (batch_size, n_time, expand_dim, n_dim))  # (batch, time, dim)
+
+
 def test_where_nan():
   # via: https://stackoverflow.com/a/42497444/133374
   # @ops.RegisterGradient("Select")
@@ -1392,6 +1822,38 @@ def test_remove_labels():
   assert_equal(y_eval.indices.tolist(), [[0, 0], [0, 1], [1, 0]])
   assert_equal(y_eval.values.tolist(), [0, 2, 3])
   assert_equal(y_eval.dense_shape.tolist(), [3, 2])
+
+
+def test_ctc_greedy_decode():
+  logits = tf.constant([
+    [[1., 2., 3.], [2., 3., 1.], [2., 3., 1.], [3., 0., 0.]],
+    [[-1., 1., 0.], [0., 0., 1.], [0., 1., 0.], [2., 1., 1.]],
+    [[2., 3., 4.], [3., 2., 1.], [3., 2., 1.], [3., 3., 3.]]], name="logits")
+  seq_lens = tf.constant([4, 4, 2], name="seq_lens")
+  expected_labels = [[1, 0], [1, 1, 0], [0]]
+  y1 = ctc_greedy_decode(logits=logits, seq_lens=seq_lens, time_major=False)
+  (y2,), _ = tf.nn.ctc_greedy_decoder(inputs=tf.transpose(logits, [1, 0, 2]), sequence_length=seq_lens)
+  assert isinstance(y1, tf.SparseTensor)
+  assert isinstance(y2, tf.SparseTensor)
+  z = tf.sparse_to_dense(
+    sparse_indices=y1.indices, sparse_values=y1.values, output_shape=y1.dense_shape, default_value=-1)
+  z_eval = session.run(z)
+  assert isinstance(z_eval, numpy.ndarray)
+  assert z_eval.shape == (3, 3)
+  for i in range(3):
+    assert list(z_eval[i, :len(expected_labels[i])]) == expected_labels[i]
+    assert all([x == -1 for x in z_eval[i, len(expected_labels[i]):]])
+  y1_eval = session.run(y1)
+  y2_eval = session.run(y2)
+  assert isinstance(y1_eval, tf.SparseTensorValue)
+  assert isinstance(y1_eval.indices, numpy.ndarray)
+  assert isinstance(y1_eval.values, numpy.ndarray)
+  assert isinstance(y1_eval.dense_shape, numpy.ndarray)
+  print("y indices:", y1_eval.indices.tolist())
+  print("y values:", y1_eval.values.tolist())
+  assert_equal(y2_eval.indices.tolist(), y1_eval.indices.tolist())
+  assert_equal(y2_eval.values.tolist(), y1_eval.values.tolist())
+  assert_equal(y2_eval.dense_shape.tolist(), y1_eval.dense_shape.tolist())
 
 
 def test_supported_devices_for_op():
@@ -1650,6 +2112,13 @@ def test_check_base_op_type_and_replace_sigmoid():
     assert_almost_equal(vy1, vy2)
 
 
+def test_move_axis_auto_optimize_multiple():
+  x0 = tf.constant(numpy.random.normal(size=(3, 4, 2, 5)).astype("float32"))
+  x1 = move_axis(x0, 2, 0)
+  x2 = move_axis(x1, 1, 3)
+  pass  # TODO check that there is only a single transpose....
+
+
 def test_string_merge():
   strings = [
     ["sub@@", "word", "test"],
@@ -1671,6 +2140,22 @@ def test_string_merge():
   res = [s.decode("utf8") for s in res]
   print(res)
   assert_equal(res, ["sub@@ word test", "hel@@ lo wo@@ r@@ ld", "foo"])
+
+
+def test_vocab_string_merge():
+  vocab = tf.convert_to_tensor(["</s>", "sub@@", "word", "test", "hel@@", "lo", "wo@@", "r@@", "ld", "foo", "bar"])
+  labels = tf.convert_to_tensor([[1, 2, 3, 0, 0, 0], [4, 5, 6, 7, 8, 0], [9, 0, 0, 0, 0, 0]])
+  seq_lens = tf.convert_to_tensor([4, 6, 2])
+  strings = vocab_idx_to_vocab_string(labels, vocab=vocab)
+  tf_res = string_merge(strings, seq_lens=seq_lens)
+  res = session.run(tf_res)
+  print(res)
+  assert isinstance(res, numpy.ndarray)
+  res = res.tolist()
+  print(res)
+  res = [s.decode("utf8") for s in res]
+  print(res)
+  assert_equal(res, ["sub@@ word test </s>", "hel@@ lo wo@@ r@@ ld </s>", "foo </s>"])
 
 
 def test_string_replace():
@@ -1869,15 +2354,6 @@ def test_get_op_attrib_keys__is_variable_initialized():
     print("attrib keys:", get_op_attrib_keys(check.op))
 
 
-def test_get_op_attrib_keys__string_strip():
-  x = tf.string_strip("  foo  ")
-  print("x:", x)
-  assert isinstance(x, tf.Tensor)
-  print("op:", x.op)
-  assert_equal(x.op.type, "StringStrip")
-  print("attrib keys:", get_op_attrib_keys(x.op))
-
-
 def test_print_graph_output():
   x = tf.matmul(a=tf.zeros((3, 4, 5)), b=tf.zeros((3, 5, 7)))
   x.set_shape((3, 4, 7))
@@ -1945,11 +2421,11 @@ def test_get_var_update_ops__get_variable_value_copy_before_update_ops():
       # This should be the value after the update, and the grad is -2, lr 1, thus should be 2.
       v_read_val = tf.identity(v.read_value())
       res = [
-        tf.Print(0, ["loss:", loss]), tf.Assert(tf.equal(loss, 1.0), ["loss ", loss, " == 1"]),
-        tf.Print(0, ["v:", v]),
-        tf.Print(0, ["v.value:", v_val]),
+        py_print(0, ["loss:", loss]), tf.Assert(tf.equal(loss, 1.0), ["loss ", loss, " == 1"]),
+        py_print(0, ["v:", v]),
+        py_print(0, ["v.value:", v_val]),
         tf.Assert(tf.equal(v_val, 0.0), ["v.value ", v_val, " == 0"]),  # last snapshot
-        tf.Print(0, ["v.read_value:", v_read_val]),
+        py_print(0, ["v.read_value:", v_read_val]),
         tf.Assert(tf.equal(v_read_val, 2.0), ["v.read_value ", v_read_val, " == 2"])  # after update
       ]
     session.run(v.initializer)
@@ -2096,7 +2572,7 @@ def test_same_context_loop():
     v1 = outer_loop_val + 1
     print("v1 control flow:", v1.op._control_flow_context)
     assert has_control_flow_context(v1)  # because +1 is done here in the loop
-    with same_context(outer_loop_val):
+    with same_control_flow_ctx(outer_loop_val):
       v2 = outer_loop_val + 2
     print("v2 control flow:", v2.op._control_flow_context)
     assert not has_control_flow_context(v2)  # should be done outside now, because `same_context` usage
@@ -2107,6 +2583,270 @@ def test_same_context_loop():
     body=body,
     loop_vars=(0, 0))
   print("magic (totally arbitrary) res:", session.run(x))
+
+
+def test_softmax_cross_entropy_over_size_batch1():
+  energy_np = numpy.array([
+    [0.00060279], [0.00106305], [0.00139351], [0.0016565], [0.00179641], [0.00188511], [0.00197855],
+    [0.00212687], [0.00229054], [0.00253187], [0.0028633], [0.00317292], [0.00333956], [0.00321618],
+    [0.00301804], [0.00286921], [0.00269102], [0.00233986], [0.00198704], [0.00179809], [0.00180432],
+    [0.00180019], [0.00168032], [0.00148445], [-0.00021808], [0.00024213], [0.00057256], [0.00083552],
+    [0.00097541], [0.00106409], [0.00115748], [0.00130573], [0.00146933], [0.00171059], [0.00204194],
+    [0.0023515], [0.00251812], [0.00239481], [0.00219674], [0.00204793], [0.00186977], [0.00151865],
+    [0.00116586], [0.00097693], [0.00098313], [0.000979], [0.00085914], [0.00066328]], dtype="float32")
+  energy_sizes = [2, 24]
+  ref_att_weights_np = numpy.array([
+    [8.85698071e-04], [3.03550856e-03], [4.28047322e-04], [2.12707062e-04], [1.69979918e-04], [1.69104227e-04],
+    [1.76708025e-04], [2.30993493e-04], [1.30674185e-03], [1.69335492e-02], [5.89773171e-02], [1.02726415e-01],
+    [1.38920724e-01], [3.36773008e-01], [3.02626193e-01], [3.60515639e-02], [1.24421655e-04], [1.09412758e-06],
+    [7.09717142e-07], [7.12369911e-07], [1.48852378e-05], [1.92153064e-04], [1.94299287e-06], [3.98656666e-05],
+    [1.83324970e-03], [9.68748587e-04], [7.93990912e-05], [3.37559104e-05], [2.54511542e-05], [2.01851981e-05],
+    [1.46051125e-05], [8.32758542e-06], [1.90258543e-05], [1.61443924e-04], [7.95573505e-05], [6.75756164e-05],
+    [1.12831636e-04], [4.37621129e-05], [5.69019585e-06], [5.78170584e-04], [2.09521659e-05], [1.89785933e-05],
+    [1.07380874e-04], [1.02525763e-03], [4.51886881e-04], [1.37639674e-03], [9.68037128e-01], [2.49103159e-02]],
+    dtype="float32")
+  n_batch = 1
+  n_extra_dim = 1  # number of att heads
+  assert energy_np.shape == ref_att_weights_np.shape == (numpy.prod(energy_sizes), n_extra_dim)
+  sizes_tf = {
+    i: tf.constant(numpy.array(energy_sizes[i], dtype="int32").reshape((n_batch,))) for i in range(len(energy_sizes))}
+  energy_tf = tf.constant(energy_np.reshape([n_batch] + energy_sizes + [n_extra_dim]))
+  ref_att_weights_tf = tf.constant(ref_att_weights_np.reshape([n_batch] + energy_sizes + [n_extra_dim]))
+  energy_data = Data(
+    name="energy", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+    placeholder=energy_tf, size_placeholder=sizes_tf)
+  ref_att_weights_data = Data(
+    name="ref_att_weights", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+    placeholder=ref_att_weights_tf, size_placeholder=sizes_tf)
+  res_tf = softmax_cross_entropy_over_size(logits=energy_data, labels=ref_att_weights_data)
+  res_tf.set_shape((n_batch, energy_sizes[0], n_extra_dim))
+  res_np = session.run(res_tf)
+  print("res:", res_np)
+  assert numpy.alltrue(numpy.isfinite(res_np))
+
+
+def test_softmax_cross_entropy_over_size_n_batch():
+  energy_np = numpy.array([
+    [0.00060279], [0.00106305], [0.00139351], [0.0016565], [0.00179641], [0.00188511], [0.00197855],
+    [0.00212687], [0.00229054], [0.00253187], [0.0028633], [0.00317292], [0.00333956], [0.00321618],
+    [0.00301804], [0.00286921], [0.00269102], [0.00233986], [0.00198704], [0.00179809], [0.00180432],
+    [0.00180019], [0.00168032], [0.00148445], [-0.00021808], [0.00024213], [0.00057256], [0.00083552],
+    [0.00097541], [0.00106409], [0.00115748], [0.00130573], [0.00146933], [0.00171059], [0.00204194],
+    [0.0023515], [0.00251812], [0.00239481], [0.00219674], [0.00204793], [0.00186977], [0.00151865],
+    [0.00116586], [0.00097693], [0.00098313], [0.000979], [0.00085914], [0.00066328]], dtype="float32")
+  energy_sizes = [2, 24]
+  ref_att_weights_np = numpy.array([
+    [8.85698071e-04], [3.03550856e-03], [4.28047322e-04], [2.12707062e-04], [1.69979918e-04], [1.69104227e-04],
+    [1.76708025e-04], [2.30993493e-04], [1.30674185e-03], [1.69335492e-02], [5.89773171e-02], [1.02726415e-01],
+    [1.38920724e-01], [3.36773008e-01], [3.02626193e-01], [3.60515639e-02], [1.24421655e-04], [1.09412758e-06],
+    [7.09717142e-07], [7.12369911e-07], [1.48852378e-05], [1.92153064e-04], [1.94299287e-06], [3.98656666e-05],
+    [1.83324970e-03], [9.68748587e-04], [7.93990912e-05], [3.37559104e-05], [2.54511542e-05], [2.01851981e-05],
+    [1.46051125e-05], [8.32758542e-06], [1.90258543e-05], [1.61443924e-04], [7.95573505e-05], [6.75756164e-05],
+    [1.12831636e-04], [4.37621129e-05], [5.69019585e-06], [5.78170584e-04], [2.09521659e-05], [1.89785933e-05],
+    [1.07380874e-04], [1.02525763e-03], [4.51886881e-04], [1.37639674e-03], [9.68037128e-01], [2.49103159e-02]],
+    dtype="float32")
+  n_extra_dim = 1  # number of att heads
+  assert energy_np.shape == ref_att_weights_np.shape == (numpy.prod(energy_sizes), n_extra_dim)
+  n_batch = 5
+  energy_np = energy_np.reshape([1] + energy_sizes + [n_extra_dim]).repeat(n_batch, axis=0)
+  ref_att_weights_np = ref_att_weights_np.reshape([1] + energy_sizes + [n_extra_dim]).repeat(n_batch, axis=0)
+  sizes_tf = {
+    i: tf.constant([energy_sizes[i]] * n_batch, dtype="int32") for i in range(len(energy_sizes))}
+  energy_tf = tf.constant(energy_np)
+  ref_att_weights_tf = tf.constant(ref_att_weights_np)
+  energy_data = Data(
+    name="energy", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+    placeholder=energy_tf, size_placeholder=sizes_tf)
+  ref_att_weights_data = Data(
+    name="ref_att_weights", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+    placeholder=ref_att_weights_tf, size_placeholder=sizes_tf)
+  res_tf = softmax_cross_entropy_over_size(logits=energy_data, labels=ref_att_weights_data)
+  res_tf.set_shape((n_batch, energy_sizes[0], n_extra_dim))
+  res_np = session.run(res_tf)
+  print("res:", res_np)
+  assert numpy.alltrue(numpy.isfinite(res_np))
+
+
+def test_softmax_cross_entropy_over_size_n_batch_real():
+  if sys.version_info[0] <= 2:  # gzip.decompress is >=PY3
+    raise unittest.SkipTest
+  import gzip
+  import base64
+  # Via HDFDumpLayer of "output/energy", and dump_whole_batches=True.
+  # ./returnn/tools/dump-dataset.py data-train/att-kl/energy.hdf --stdout_limit inf --stdout_as_bytes --endseq 0
+  energy_np = numpy.frombuffer(gzip.decompress(base64.decodebytes(
+    b'H4sIAK3yb1wC/33SeVSU5xUG8GEyLKIwIChrgOhAIwZEsfh994IiGQwFgqgDoS6AiCBbBKpxsNYE'
+    b'WWSRfdMwEQRDAJXFAeR7X1JIDShbwqIISJESIQlERFEMICaenNNzUlv7nPP77/5xz3Oe9HtGEGWT'
+    b'BJum6qA7vQ9EDT9Boew5MLMC3OcuxCeGBjg6bY56Q/ZYZuKJ+Z1+mNG4B0UFLviwcjPW+WzA/CJD'
+    b'zGYEGMyOQmPVLVA63Q3NiTegZLIWeK9ko9SXc606yioPrIRDhp4wzUTDed0M0Ao8D6v05MCragM3'
+    b'jwmQai9FvpcJVgkssOiZKab2r0B2QgXHN86BRkMneP8ogzL/MLiycydYvXCB3W8wsNCiDV0KRuT3'
+    b'Mu82k3W6yUSlxZY4LFngHvsWcbx2R86kua7enslm3vGNYSue8uBQnhf0dOWCfE0V5GsWAdMXDWmz'
+    b'22EXZwR12Wns3uvf1O9M6uAefaBAPrqiTOJLDUjH/c2kZvvQfxgo/hJKl2lg7UoHvP6nMCxXSMD4'
+    b'q7mYda0IB0KvYMYXtahjx6HNz3Js4RfhNkkcHh+RYPc1G2xIscDlhtY4ZmqD2bNWuHaLId6aWvyv'
+    b'Dn+f2Qp9zBl3wZAHf8P7qdlYNvE5Nn9ag5KCJnSQtGN/ai8eE93BDSPduDjZiFpbivH9vQl4Jz0S'
+    b'kwKC8KuZD7HieQRu7wzFdTpeuKcb8OB7Z+F1yrWTufupL9jp8mIwVZqHrHpjdNWxw1BjDyxJCMas'
+    b'xeOYoh2NPReO4Q90Fzoe1Mfd4lY4O3sGBh2OQi4XBzWtyTAcHA1RfCv4pD2EDXArIK+TlNHACgoZ'
+    b'yOzPgdRng2Btr4XWnzFoAR74h6wAVLMPwQ56EIMTX/5+wxad/DXxwvF2mOJHgp+ujB2y+JCTfa5F'
+    b'NlcaEC/XJs5m3+36/9dntFEGCfj+PRJZV8YtBnmwmftdAcaqIEF/AhL9lTBMYylmJitiV/U08Ndx'
+    b'sHdADCbWVxlJsToJdjpHUoXDJHCZIuWrK9NQr2kyKuskhtUFr6U46ETnxRuoScwKeubhGHGK+JS0'
+    b'xRoT99SNnEbOV4y7dC1btbWEaVLncaVKQtKx9Ty5Gf+UFC6spmVPXOmox2G66/Ip2nI5hjpKpdTH'
+    b'IJDmD255LYF3EPvOsJzt6LnDVqyfZkcfz7BY/x27+61/sn3hS8Dh0Q6oHi2Fk72jcOqCIjpsUMCF'
+    b'jDYQTSRCfOEm0DSdY/u+bmHl286xbd0se15wihEP1zAOp7JZ7qIiJCmZQHyoAFwcL7Djd99lW814'
+    b'qKamgv3Jy7AlT4jPhRpIVNSx6o9qqPRAC9uXmuGdF46476kfRq49hkdoJAb1eOKTkzYoijRGWcXL'
+    b'ez9VvC4XYO/OeeDZTkJ/yBRUGguw5ufluCNDD8WXlqOIU0Rz2QIkThPCrL5ELE2LyEo1GYkwzCcV'
+    b'5gVkqquQZB/IIk47vMm03pec7vpy5plVB1t0uZTl+Q/Wp581JHfbpcTpwTnCiyshJ/5VTaQzTcRe'
+    b'uYvA7Q4yzpMTuVsO2fpmAkn/IYe4dlSSnqJGMvcwF7y166Ct5VsYnRmDsKYFaFlQRZMYHXR/aoz8'
+    b'J0ZY+WcD7HPTw4rkJegubQe3YYAjUWs4+1vbyHBwCrlrKyN2B4pJiXkx2fJy82pj58jIVBT5X/vs'
+    b'/36SGU26xkrMhbA3FuEXg0DIvJ4Cf+kqARv5NaiorIWOqAoI8iuHhKEksIpRghreJU7s+RlxS54k'
+    b'oV+r0jcsllNx0wr6wcWXm6vTot58TTp+hk+DOyXkVTMvbLibjrEMb+g0O5M2wvoOG8An29zB1TIa'
+    b'QoSZMK+aDv29CdBAYiEz2BksZ0JZ/XoTMvfjP0jWGRXamvgmnX8kok5xb9O2oLdp+Akz+vebq2mJ'
+    b'ZAUNOOpPXpWvbM0Jj8VwXieOcP73tDn7WYtN4lof9sgXD9hszhZWmyVAhBaB8Ns/QZCZEJ0j9bH/'
+    b'sBAPLf0WVHycoTAwddOwqgohkxvJlIsCqZqT1H/n08deZS0h/IAeyHzy2LKUaubffYrWxdFvOk/T'
+    b'RfY05dnFUquTJ+ma9RFUXbqf2v2yncYZIBWZraKNLSpUSX+EDMa2kv2J90j3ZR06kedKXTROUtO8'
+    b'dGppnUvljWn0ra3RNMXfn35cvIs+7veizeJQmlQcRdMEkb+Z3uNJXc7uobbhuynzkYSWHHemapZ2'
+    b'NOmoBY1YNKB1+srU5f0hcjWjjCwThxNfo3eJptlhMuV9g+Tm6dLNas40YU0Ytd8vpYZ/DaG9H7tR'
+    b'B38rWnrRmK4aFFG+I0PNih2pyYDVb34Fpl0tleAHAAA='
+    )), dtype='float32').reshape((504, 1))
+  # ./returnn/tools/dump-dataset.py .../ref_att_weights.hdf --stdout_limit inf --stdout_as_bytes --endseq 0
+  ref_att_weights_np = numpy.frombuffer(gzip.decompress(base64.decodebytes(
+    b'H4sIAG/zb1wC/73Qe1SMeRzH8VZrmEpSKUmxOhuRMjXP8/t9f7/neWYT2dCN3CW1RKEoU0MuaVal'
+    b'TVKnXeNaI9lKKSnlkpVLRbJKTg0yOOySbnJbuez2h3P2OPjTH69/P+9zPhKHZSSww40mLteCtZ4/'
+    b'HOCcINVHAsVTAJrYcOhxyyOkLJFzTl3Nk8B6nnMxFJQrDwv1XbuEulwT3jGqD3Q2pzKLlQJTCDJm'
+    b'z8m16Oh6d/Bb3IcNY0ZhyX/7/3fIvZPs695AjJTZeGT6ANy5qREFzshB0f3lqKRUH5Wq9iM3dzvo'
+    b'15SNA49vw6KMJ5jdhnBwewXrn2JOwiqPICzdj/Ikd3FnQByhrU+AXXaM/HgtSlZmVMt93PvaShoM'
+    b'Se7qcML7m4HCsRk7D87CjiOz8bAFybg16BK+WXmIts0VCTMeuQpcj0J409UsZJzPIs+NRiDbOAW7'
+    b'JGcD+8OMG6gr1hhQnhXij/ni3s3PKRPr0jmzY4npXVN8Ex1B72pXoKfVwWjPQ4KMJhigoq4OrNFR'
+    b'gXZGLLTPiSde6jVYv+QGja2PJBbzvSmt8iAdWyPhZb6S+KWGy3bqDOS/1PvansUryf4OSzq74A/w'
+    b'PeEC7UcNgIm0A9sKHfgTm4A2Po1rrQRh9hVD2c6YcMH0lpoojrx0rtbZ7lwl3uz09x2FdJqjAasd'
+    b'5QVo/EFmd9U5tnfzc8QF/30iMSATuMmIv1jHVizeziaHxLEeZt8xoltDpG5RBFXUavHCyJ2s3blV'
+    b'KB9i0IrccGnx6YdMgPoJ+7xcTDJTxsBG+RUSOUkuMwkx5r/U+9o2txcSJ6Pd9PzEqaQj+VsywfMJ'
+    b'rJSLCdennChfNdKlmWq+QrtdyJPXCHvEwwXDvi7885I7nOM6e5y5Si31dl0gLdbPZm6PT2Jq5m1k'
+    b'F/uaMzFB4KT6ZaDT3pt5Es/kECfSqIv/UjU4xYvKmZSadZxNwgm6ticONsSMhhvMAAg7awnWEUq4'
+    b'Pf4gcLMcoOJBOboaqIOaZl2DlX7Poe4BS/kj1Zx98BrByjZdcLC148dW9RXE1jbC1PepPJt9g5b7'
+    b'1ZISfjMUSRfCqHIzepExoHvc/Ki/YScnjnDh3p0wJdY5J8Fbo4Lu9TmwKOEdXBpTCD7Xq7F77FJE'
+    b'rxSwWY7X4MUFFtqaPcm0CxroH13F2g/imfL6VgjJdQVPF4zvJQiQnD+Q/CbaQWbuAhKRn0be6mmo'
+    b'fuZS2ab31ryoIIyUK9zpaDmQKf2vw87S3+He3FDIeWwNPx2PpV5OW4UlxvsF77sBQrOOq9B8Wgs/'
+    b'6wUyl05ZsFu2qFiTyWekipbXzhpPrdSYfc2mtBVgsxYlk/DSB/Vuf+x2vAe/1uIUPzhMyr2/k0FT'
+    b'WuRU98x8mhHnS80ri6l7LaE2ZkfJ7mArKqlcTg/EZPJhxinCq0MThVtvB/D1tuOEgKZC7uzCKXSL'
+    b'xwO6zD6R03usptpxDfRTPQt+ECe230qzBhmD+pkaN7okY8MVb1CDpS17PFQXKR3uIY1ePDYNvwwb'
+    b'jcpgq2t/bOcvZ3pqpyNlrYjUZafCGsU6yqwPgmn5pmRwURtpLYqQ7brfzH2ql/tqGa1KiuaMyvrR'
+    b'sVoVqY6RkwPdm8jUy/uI7Gk0rV6EhBPVNcLbx+ZCtvkGYWFfHRLY5gZWoZfBrWUHDPvGE1bXOiDD'
+    b'ufPwpAnZ6NcsK+Rol8CU+uaji0O74WLGaBaFTse9nV4OBts45GPKtdYkQxJxhvQkS3izYhyYWIRC'
+    b'4iIR6VprQtJ7LLB0hIhGlqwkh69oeNc5GUK3JEdwUDfwhz2S+PhjiVzUXg/u+wUCiZsuI+461tB4'
+    b'K4IUFnTS9qIAGLO0hX7oeT2M4JKCztKZ9YMg4aoKi4qC8H3TYBxdmIDbJBOxJq2E/SfKixk+dDRK'
+    b'a9/LOtY1srq3B0rrEpucQ/Y+YidbalBeTTvabjAPol/4oZSRDchmaAioFDZ0zJB79OmkMJlVuz7/'
+    b'ofcvjNYYm+AHAAA='
+    )), dtype='float32').reshape((504, 1))
+  seq_sizes_np = numpy.frombuffer(gzip.decompress(base64.decodebytes(
+    b'H4sIAK3yb1wC/2NiYGCQAGImIBZFopmBWAZKi0NpKSAGAN0FJ6owAAAA')), dtype='int32').reshape((6, 2))
+  assert isinstance(seq_sizes_np, numpy.ndarray)
+  max_seq_sizes_np = numpy.max(seq_sizes_np, axis=0)
+  assert max_seq_sizes_np.shape == (seq_sizes_np.shape[1],)
+  print("seq_sizes_np:")
+  print(seq_sizes_np)
+  n_batch = seq_sizes_np.shape[0]  # 6
+  print("total n_batch:", n_batch)
+  n_extra_dim = energy_np.shape[-1]
+  energy_np = energy_np.reshape([n_batch] + list(max_seq_sizes_np) + [n_extra_dim])
+  ref_att_weights_np = ref_att_weights_np.reshape([n_batch] + list(max_seq_sizes_np) + [n_extra_dim])
+  for new_n_batch in range(1, n_batch + 1):
+    for n_batch_start in range(0, n_batch - new_n_batch + 1):
+      # Cut n_batch.
+      n_batch_end = n_batch_start + new_n_batch
+      print("Try with n_batch %i (from %i to %i)." % (new_n_batch, n_batch_start, n_batch_end))
+      _seq_sizes_np = seq_sizes_np[n_batch_start:n_batch_end]
+      _max_seq_sizes_np = numpy.max(_seq_sizes_np, axis=0)
+      _energy_np = energy_np[n_batch_start:n_batch_end, :_max_seq_sizes_np[0], :_max_seq_sizes_np[1]]
+      _ref_att_weights_np = ref_att_weights_np[n_batch_start:n_batch_end, :_max_seq_sizes_np[0], :_max_seq_sizes_np[1]]
+      seq_sizes_tf = {i: tf.constant(_seq_sizes_np[:, i]) for i in range(_seq_sizes_np.shape[1])}
+      energy_tf = tf.constant(_energy_np)
+      ref_att_weights_tf = tf.constant(_ref_att_weights_np)
+      energy_data = Data(
+        name="energy", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+        placeholder=energy_tf, size_placeholder=seq_sizes_tf)
+      ref_att_weights_data = Data(
+        name="ref_att_weights", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+        placeholder=ref_att_weights_tf, size_placeholder=seq_sizes_tf)
+      res_tf = softmax_cross_entropy_over_size(logits=energy_data, labels=ref_att_weights_data)
+      res_tf.set_shape((new_n_batch, _max_seq_sizes_np[0], n_extra_dim))
+      res_np = session.run(res_tf)
+      print("res:", res_np)
+      assert numpy.alltrue(numpy.isfinite(res_np))
+
+
+def test_softmax_cross_entropy_over_size_small_batch_2():
+  import Util
+  rnd = numpy.random.RandomState(42)
+  n_batch = 2
+  n_extra_dim = 1
+  dec_seq_lens = [2, 2]
+  enc_seq_lens = [4, 3]
+  energy_np = rnd.normal(size=(n_batch, max(dec_seq_lens), max(enc_seq_lens), n_extra_dim)).astype("float32")
+  ref_att_weights_np = rnd.normal(size=(n_batch, max(dec_seq_lens), max(enc_seq_lens), n_extra_dim)).astype("float32")
+  for i in range(n_batch):
+    ref_att_weights_np[i, :dec_seq_lens[i], :enc_seq_lens[i]] = Util.softmax(
+      ref_att_weights_np[i, :dec_seq_lens[i], :enc_seq_lens[i]], axis=1)
+    ref_att_weights_np[i, dec_seq_lens[i]:] = 0
+    ref_att_weights_np[i, :dec_seq_lens[i], enc_seq_lens[i]:] = 0
+  sizes_tf = {0: tf.constant(dec_seq_lens), 1: tf.constant(enc_seq_lens)}
+  energy_tf = tf.constant(energy_np)
+  ref_att_weights_tf = tf.constant(ref_att_weights_np)
+  energy_data = Data(
+    name="energy", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+    placeholder=energy_tf, size_placeholder=sizes_tf)
+  ref_att_weights_data = Data(
+    name="ref_att_weights", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+    placeholder=ref_att_weights_tf, size_placeholder=sizes_tf)
+  res_tf = softmax_cross_entropy_over_size(logits=energy_data, labels=ref_att_weights_data)
+  res_tf.set_shape((n_batch, max(dec_seq_lens), n_extra_dim))
+  res_np = session.run(res_tf)
+  print("res:", res_np)
+  assert numpy.alltrue(numpy.isfinite(res_np))
+
+
+def test_softmax_cross_entropy_over_size_gradient():
+  n_batch = 2
+  n_dec_time = n_enc_time = 10
+  n_extra_dim = 1
+  tf.set_random_seed(42)
+  energy_tf = tf.get_variable(
+    "test_softmax_cross_entropy_over_size_gradient_var",
+    shape=(n_batch, n_dec_time, n_enc_time, n_extra_dim),
+    initializer=tf.random_normal_initializer(seed=23))
+  ref_att_weights_tf = tf.reshape(
+    tf.one_hot(tf.range(n_dec_time, dtype=tf.int32), n_enc_time, dtype=tf.float32),
+    (1, n_dec_time, n_enc_time, n_extra_dim))
+  ref_att_weights_tf = tf.tile(ref_att_weights_tf, [n_batch, 1, 1, 1])
+  ref_att_weights_tf.set_shape((n_batch, n_dec_time, n_enc_time, n_extra_dim))
+  sizes = {0: [n_dec_time, n_dec_time - 1], 1: [n_enc_time, n_enc_time - 1]}
+  sizes_tf = {i: tf.constant(size) for (i, size) in sizes.items()}
+  energy_data = Data(
+    name="energy", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+    placeholder=energy_tf, size_placeholder=sizes_tf)
+  ref_att_weights_data = Data(
+    name="ref_att_weights", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+    placeholder=ref_att_weights_tf, size_placeholder=sizes_tf)
+  for stable_gradient in [False, True]:
+    res_tf = softmax_cross_entropy_over_size(
+      logits=energy_data, labels=ref_att_weights_data, stable_gradient=stable_gradient)
+    res_tf.set_shape((n_batch, n_dec_time, n_extra_dim))
+    res_flat_tf = flatten_with_seq_len_mask(res_tf, sizes_tf[0], batch_dim_axis=0, time_dim_axis=1)
+    res_flat_tf.set_shape((sum(sizes[0]), n_extra_dim))
+    loss_tf = tf.reduce_mean(res_tf)
+    optimizer = tf.train.GradientDescentOptimizer(learning_rate=1e2)
+    optim_op = optimizer.minimize(loss=loss_tf, var_list=[energy_tf])
+    session.run(energy_tf.initializer)  # Note: the second time this is called, it will get a different init
+    last_loss = float("inf")
+    for i in range(10):
+      loss, _ = session.run([loss_tf, optim_op])
+      print("step %i, loss %f" % (i, loss))
+      if numpy.isnan(loss):
+        print("WARNING: got nan")
+        print("lr:", session.run(optimizer._learning_rate_tensor))
+        print("var:", session.run(energy_tf))
+        raise Exception("got nan")
+      assert loss < last_loss or 0.0 == loss == last_loss  # this must always improve
+      last_loss = loss
 
 
 if __name__ == "__main__":

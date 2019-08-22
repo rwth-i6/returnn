@@ -9,23 +9,24 @@ Most of the other Sprint interfaces will be used automatically,
 e.g. via ExternSprintDataset, when it spawns its Sprint subprocess.
 """
 
-# We expect that Theano works in the current Python env.
-
 from __future__ import print_function
 
 import os
 import sys
 import time
 from threading import Event, Thread
-
+import typing
 import numpy
-import theano
-import theano.tensor as T
 
 from SprintDataset import SprintDatasetBase
+from EngineBase import EngineBase
 from Log import log
-from Device import get_gpu_names
+from EngineUtil import assign_dev_data_single_seq
+import Debug
+from Util import get_gpu_names, interrupt_main, to_bool, BackendEngine
+import TaskSystem
 import rnn
+
 _rnn_file = rnn.__file__
 _main_file = getattr(sys.modules["__main__"], "__file__", "")
 if _rnn_file.endswith(".pyc"):
@@ -34,27 +35,23 @@ if _main_file.endswith(".pyc"):
   _main_file = _main_file[:-1]
 if os.path.realpath(_rnn_file) == os.path.realpath(_main_file):
   rnn = sys.modules["__main__"]
-from Engine import Engine
-from EngineUtil import assign_dev_data_single_seq
-import Debug
-from Util import interrupt_main, to_bool, BackendEngine
-import TaskSystem
 
 DefaultSprintCrnnConfig = "config/crnn.config"
 
-startTime = None
+startTime = None  # type: typing.Optional[float]
 isInitialized = False
 isTrainThreadStarted = False
 isExited = False
-InputDim = None  # type: int
-OutputDim = None  # type: int
+InputDim = None  # type: typing.Optional[int]
+OutputDim = None  # type: typing.Optional[int]
 MaxSegmentLength = 1
-TargetMode = None
+TargetMode = None  # type: typing.Optional[str]
 Task = "train"
 
-config = None; """ :type: rnn.Config """
-sprintDataset = None; """ :type: SprintDatasetBase """
-engine = None; """ :type: TFEngine.Engine|Engine """
+Engine = None  # type: typing.Optional[typing.Union[typing.Type["TFEngine.Engine"],typing.Type["Engine.Engine"]]]
+config = None  # type: typing.Optional[rnn.Config]
+sprintDataset = None  # type: typing.Optional[SprintDatasetBase]
+engine = None  # type: Engine
 
 
 # <editor-fold desc="generic init">
@@ -95,6 +92,7 @@ def init(name=None, sprint_unit=None, **kwargs):
 # <editor-fold desc="PythonFeatureScorer">
 # Start Sprint PythonFeatureScorer interface. {
 
+# noinspection PyShadowingNames
 def init_python_feature_scorer(config, **kwargs):
   """
   :param str config:
@@ -111,7 +109,7 @@ def init_python_feature_scorer(config, **kwargs):
   configfile = sprint_opts.get("configfile", None)
   assert sprint_opts.get("action", None) in (None, "forward"), "invalid action: %r" % sprint_opts["action"]
 
-  initBase(targetMode="forward", configfile=configfile, epoch=epoch)
+  _init_base(target_mode="forward", configfile=configfile, epoch=epoch, sprint_opts=sprint_opts)
 
   cls = PythonFeatureScorer
   if rnn.config.has("SprintInterfacePythonFeatureScorer"):
@@ -120,6 +118,10 @@ def init_python_feature_scorer(config, **kwargs):
 
 
 class PythonFeatureScorer(object):
+  """
+  Sprint API.
+  """
+
   def __init__(self, callback, version_number, sprint_opts, **kwargs):
     """
     :param (str,)->object callback:
@@ -132,10 +134,10 @@ class PythonFeatureScorer(object):
     self.output_dim = None
     self.callback = callback
     self.sprint_opts = sprint_opts
-    self.priors = None  # type: None|numpy.ndarray
+    self.priors = None  # type: typing.Optional[numpy.ndarray]
     self.segment_count = 0
-    self.features = []  # type: list[numpy.ndarray]
-    self.scores = None  # type: None|numpy.ndarray
+    self.features = []  # type: typing.List[numpy.ndarray]
+    self.scores = None  # type: typing.Optional[numpy.ndarray]
 
   def init(self, input_dim, output_dim):
     """
@@ -151,10 +153,10 @@ class PythonFeatureScorer(object):
     global InputDim, OutputDim
     InputDim = input_dim
     OutputDim = output_dim
-    sprintDataset.setDimensions(self.input_dim, self.output_dim)
+    sprintDataset.set_dimensions(self.input_dim, self.output_dim)
     sprintDataset.initialize()
 
-    prepareForwarding()
+    _prepare_forwarding()
     self._load_priors()
 
     global startTime
@@ -179,9 +181,14 @@ class PythonFeatureScorer(object):
     self.priors = -numpy.array(prior, dtype="float32") * numpy.float32(scale)  # -log space
     assert self.priors.shape == (self.output_dim,), "dim mismatch: %r != %i" % (self.priors.shape, self.output_dim)
 
+  # noinspection PyMethodMayBeStatic
   def exit(self):
+    """
+    Called by Sprint at exit.
+    """
     print("SprintInterface: PythonFeatureScorer: exit()")
 
+  # noinspection PyMethodMayBeStatic
   def get_feature_buffer_size(self):
     """
     Called by Sprint.
@@ -190,6 +197,7 @@ class PythonFeatureScorer(object):
     """
     return -1
 
+  # noinspection PyShadowingNames
   def add_feature(self, feature, time):
     """
     Called by Sprint.
@@ -215,6 +223,9 @@ class PythonFeatureScorer(object):
     self.scores = None
 
   def get_segment_name(self):
+    """
+    :rtype: str
+    """
     return "unknown-seq-name-%i" % self.segment_count
 
   def get_features(self, num_frames=None):
@@ -236,8 +247,8 @@ class PythonFeatureScorer(object):
     if num_frames is None:
       num_frames = len(self.features)
     assert 0 < num_frames == len(self.features)
-    posteriors = forward(
-      segmentName=self.get_segment_name(),
+    posteriors = _forward(
+      segment_name=self.get_segment_name(),
       features=self.get_features(num_frames=num_frames))
     assert posteriors.shape == (self.output_dim, num_frames)
     return posteriors
@@ -282,6 +293,7 @@ class PythonFeatureScorer(object):
     # We must return in -log space.
     self.scores = scores
 
+  # noinspection PyShadowingNames
   def get_scores(self, time):
     """
     Called by Sprint.
@@ -300,6 +312,8 @@ class PythonFeatureScorer(object):
 # <editor-fold desc="PythonSegmentOrder">
 # Start Sprint PythonSegmentOrder interface. {
 
+# Names need to stay that way for compatibility.
+# noinspection PyPep8Naming
 def getSegmentList(corpusName, segmentList, **kwargs):
   """
   Called by Sprint PythonSegmentOrder.
@@ -315,8 +329,6 @@ def getSegmentList(corpusName, segmentList, **kwargs):
 
   :type corpusName: str
   :type segmentList: list[str]
-  :type segmentsInfo: dict[str,dict[str]]
-  :type config: str
   :rtype: list[str]
   :returns segment list. Can also be an iterator.
   """
@@ -327,10 +339,10 @@ def getSegmentList(corpusName, segmentList, **kwargs):
   # Init what we need. These can be called multiple times.
   # If we use both the PythonSegmentOrder and the PythonTrainer, this will be called first.
   # The PythonTrainer will be called lazily once it gets the first data.
-  initBase(configfile=kwargs.get('config', None))
-  sprintDataset.useMultipleEpochs()
+  _init_base(configfile=kwargs.get('config', None))
+  sprintDataset.use_multiple_epochs()
 
-  finalEpoch = getFinalEpoch()
+  finalEpoch = get_final_epoch()
   startEpoch, startSegmentIdx = Engine.get_train_start_epoch_batch(config)
   print("Sprint: Starting with epoch %i, segment-idx %s." % (startEpoch, startSegmentIdx))
   print("Final epoch is: %i" % finalEpoch)
@@ -339,8 +351,8 @@ def getSegmentList(corpusName, segmentList, **kwargs):
   for curEpoch in range(startEpoch, finalEpoch + 1):
     if isTrainThreadStarted:
       # So that the CRNN train thread always has the SprintDatasetBase in a sane state before we reset it.
-      sprintDataset.waitForCrnnEpoch(curEpoch)
-    sprintDataset.initSprintEpoch(curEpoch)
+      sprintDataset.wait_for_returnn_epoch(curEpoch)
+    sprintDataset.init_sprint_epoch(curEpoch)
 
     index_list = sprintDataset.get_seq_order_for_epoch(curEpoch, len(segmentList))
     orderedSegmentList = [segmentList[i] for i in index_list]
@@ -348,21 +360,22 @@ def getSegmentList(corpusName, segmentList, **kwargs):
 
     print("Sprint epoch: %i" % curEpoch)
     startSegmentIdx = 0
-    if curEpoch == startEpoch: startSegmentIdx = startSegmentIdx
+    if curEpoch == startEpoch:
+      startSegmentIdx = startSegmentIdx
     for curSegmentIdx in range(startSegmentIdx, len(orderedSegmentList)):
       sprintDataset.set_complete_frac(float(curSegmentIdx - startSegmentIdx + 1) /
                                       (len(orderedSegmentList) - startSegmentIdx))
       yield orderedSegmentList[curSegmentIdx]
 
     print("Sprint finished epoch %i" % curEpoch)
-    sprintDataset.finishSprintEpoch()
+    sprintDataset.finish_sprint_epoch()
 
     if isTrainThreadStarted:
       assert sprintDataset.get_num_timesteps() > 0, \
         "We did not received any seqs. You are probably using a buffered feature extractor and the buffer is " + \
         "bigger than the total number of time frames in the corpus."
 
-  sprintDataset.finalizeSprint()
+  sprintDataset.finalize_sprint()
 
 # End Sprint PythonSegmentOrder interface. }
 # </editor-fold>
@@ -371,6 +384,7 @@ def getSegmentList(corpusName, segmentList, **kwargs):
 # <editor-fold desc="PythonTrainer">
 # Start Sprint PythonTrainer interface. {
 
+# noinspection PyPep8Naming,PyShadowingNames
 def init_python_trainer(inputDim, outputDim, config, targetMode, **kwargs):
   """
   Called by Sprint when it initializes the PythonTrainer.
@@ -419,23 +433,29 @@ def init_python_trainer(inputDim, outputDim, config, targetMode, **kwargs):
   elif action == "forward":
     assert targetMode in ["criterion-by-sprint", "forward-only"]
     targetMode = "forward"
+  elif action == "nop":
+    targetMode = None
   else:
     assert False, "unknown action: %r" % action
 
-  initBase(targetMode=targetMode, configfile=configfile, epoch=epoch)
-  sprintDataset.setDimensions(inputDim, outputDim)
+  _init_base(target_mode=targetMode, configfile=configfile, epoch=epoch, sprint_opts=config)
+  sprintDataset.set_dimensions(inputDim, outputDim)
   sprintDataset.initialize()
 
   if Task == "train":
-    startTrainThread(epoch)
+    _start_train_thread(epoch)
   elif Task == "forward":
-    prepareForwarding()
+    _prepare_forwarding()
 
   global startTime
   startTime = time.time()
 
 
+# noinspection PyShadowingBuiltins
 def exit():
+  """
+  Called by Sprint at exit.
+  """
   print("SprintInterface[pid %i] exit()" % (os.getpid(),))
   assert isInitialized
   global isExited
@@ -445,8 +465,8 @@ def exit():
   isExited = True
   if isTrainThreadStarted:
     engine.stop_train_after_epoch_request = True
-    sprintDataset.finishSprintEpoch()  # In case this was not called yet. (No PythonSegmentOrdering.)
-    sprintDataset.finalizeSprint()  # In case this was not called yet. (No PythonSegmentOrdering.)
+    sprintDataset.finish_sprint_epoch()  # In case this was not called yet. (No PythonSegmentOrdering.)
+    sprintDataset.finalize_sprint()  # In case this was not called yet. (No PythonSegmentOrdering.)
     trainThread.join()
   rnn.finalize()
   if startTime:
@@ -455,32 +475,54 @@ def exit():
     print("SprintInterface[pid %i]: finished (unknown start time)" % os.getpid(), file=log.v3)
 
 
+# Keep name for compatibility.
+# noinspection PyPep8Naming,PyUnusedLocal
 def feedInput(features, weights=None, segmentName=None):
-  #print "feedInput", segmentName
+  """
+  :param numpy.ndarray features:
+  :param numpy.array|None weights:
+  :param str|None segmentName:
+  :return: posteriors
+  :rtype: numpy.ndarray
+  """
   assert features.shape[0] == InputDim
   if Task == "train":
-    posteriors = train(segmentName, features)
+    posteriors = _train(segmentName, features)
   elif Task == "forward":
-    posteriors = forward(segmentName, features)
+    posteriors = _forward(segmentName, features)
   else:
     assert False, "invalid task: %r" % Task
   assert posteriors.shape == (OutputDim * MaxSegmentLength, features.shape[1])
   return posteriors
 
 
+# Keep name for compatibility.
+# noinspection PyPep8Naming
 def finishDiscard():
+  """
+  Discard some segment.
+  """
   print("finishDiscard()")
   raise NotImplementedError  # TODO ...
 
 
+# Keep name for compatibility.
+# noinspection PyPep8Naming
 def finishError(error, errorSignal, naturalPairingType=None):
+  """
+  :param float|numpy.ndarray error:
+  :param numpy.ndarray errorSignal:
+  :param str|None naturalPairingType: must be "softmax"
+  :return: nothing
+  """
+  make_criterion_class()
   assert naturalPairingType == "softmax"
   assert Task == "train"
   # reformat. see train()
-  error = numpy.array([error], dtype=theano.config.floatX)
+  error = numpy.array([error], dtype="float32")
   errorSignal = errorSignal.transpose()
   errorSignal = errorSignal[:, numpy.newaxis, :]
-  errorSignal = numpy.array(errorSignal, dtype=theano.config.floatX)
+  errorSignal = numpy.array(errorSignal, dtype="float32")
   assert errorSignal.shape == Criterion.posteriors.shape
 
   Criterion.error = error
@@ -488,37 +530,83 @@ def finishError(error, errorSignal, naturalPairingType=None):
   Criterion.gotErrorSignal.set()
 
 
+# Keep name for compatibility.
+# noinspection PyPep8Naming,PyUnusedLocal
 def feedInputAndTarget(features, weights=None, segmentName=None,
                        orthography=None, alignment=None,
                        speaker_name=None, speaker_gender=None,
                        **kwargs):
+  """
+  :param numpy.ndarray features:
+  :param numpy.ndarray|None weights:
+  :param str|None segmentName:
+  :param str|None orthography:
+  :param numpy.ndarray|None alignment:
+  :param str|None speaker_name:
+  :param str|None speaker_gender:
+  :return: nothing
+  """
   assert features.shape[0] == InputDim
   targets = {}
   if alignment is not None:
     targets["classes"] = alignment
   if orthography is not None:
     targets["orth"] = orthography
-  train(segmentName, features, targets)
+  _train(segmentName, features, targets)
 
 
+# Keep name for compatibility.
+# noinspection PyPep8Naming,PyUnusedLocal
 def feedInputAndTargetAlignment(features, targetAlignment, weights=None, segmentName=None):
-  #print "feedInputAndTargetAlignment", segmentName
+  """
+  :param numpy.ndarray features:
+  :param numpy.ndarray targetAlignment:
+  :param numpy.ndarray|None weights:
+  :param str|None segmentName:
+  :return: nothing
+  """
   assert features.shape[0] == InputDim
   assert Task == "train"
-  train(segmentName, features, targetAlignment)
+  _train(segmentName, features, targetAlignment)
 
 
+# Keep name for compatibility.
+# noinspection PyPep8Naming,PyUnusedLocal
 def feedInputAndTargetSegmentOrth(features, targetSegmentOrth, weights=None, segmentName=None):
+  """
+  :param numpy.ndarray features:
+  :param str targetSegmentOrth:
+  :param numpy.ndarray|None weights:
+  :param segmentName:
+  :return:
+  """
   assert features.shape[0] == InputDim
   assert Task == "train"
-  train(segmentName, features, {"orth": targetSegmentOrth})
+  _train(segmentName, features, {"orth": targetSegmentOrth})
 
 
+# Keep name for compatibility.
+# noinspection PyPep8Naming,PyUnusedLocal
 def feedInputUnsupervised(features, weights=None, segmentName=None):
+  """
+  :param numpy.ndarray features:
+  :param numpy.ndarray|None weights:
+  :param str|None segmentName:
+  :return: nothing
+  """
   assert features.shape[0] == InputDim
-  train(segmentName, features)
+  _train(segmentName, features)
 
+
+# Keep name for compatibility.
+# noinspection PyPep8Naming
 def feedInputForwarding(features, weights=None, segmentName=None):
+  """
+  :param numpy.ndarray features:
+  :param numpy.ndarray|None weights:
+  :param str|None segmentName:
+  :rtype: numpy.ndarray
+  """
   assert Task == "forward"
   return feedInput(features, weights=weights, segmentName=segmentName)
 
@@ -526,21 +614,26 @@ def feedInputForwarding(features, weights=None, segmentName=None):
 # </editor-fold>
 
 
-def dumpFlags():
+def dump_flags():
+  """
+  Dump some relevant env flags.
+  """
   print("CUDA_VISIBLE_DEVICES:", os.environ.get("CUDA_VISIBLE_DEVICES"))
   print("CUDA_LAUNCH_BLOCKING:", os.environ.get("CUDA_LAUNCH_BLOCKING"))
 
   if BackendEngine.is_theano_selected():
     print("available GPUs:", get_gpu_names())
 
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
     from theano.sandbox import cuda as theano_cuda
     print("CUDA via", theano_cuda.__file__)
     print("CUDA available:", theano_cuda.cuda_available)
 
-    print("THEANO_FLAGS:", rnn.TheanoFlags)
+    from Util import TheanoFlags
+    print("THEANO_FLAGS:", TheanoFlags)
 
 
-def setTargetMode(mode):
+def set_target_mode(mode):
   """
   :param str mode: target mode
   """
@@ -552,7 +645,7 @@ def setTargetMode(mode):
   if TargetMode == "criterion-by-sprint":
     assert loss == "sprint", "TargetMode is %s but loss is %s" % (TargetMode, loss)
   elif TargetMode == "target-alignment":
-    # CRNN always expects an alignment, so this is good just as-is.
+    # RETURNN always expects an alignment, so this is good just as-is.
     # This means that we will not calculate the criterion in Sprint.
     assert loss != "sprint", "invalid loss %s for target mode %s" % (loss, TargetMode)
   elif TargetMode == "forward":
@@ -577,14 +670,15 @@ def _at_exit_handler():
     exit()
     print("All threads:")
     import Debug
-    Debug.dumpAllThreadTracebacks(exclude_self=True)
+    Debug.dump_all_thread_tracebacks(exclude_self=True)
 
 
-def initBase(configfile=None, targetMode=None, epoch=None):
+def _init_base(configfile=None, target_mode=None, epoch=None, sprint_opts=None):
   """
   :param str|None configfile: filename, via init(), this is set
-  :param str|None targetMode: "forward" or so. via init(), this is set
+  :param str|None target_mode: "forward" or so. via init(), this is set
   :param int epoch: via init(), this is set
+  :param dict[str,str]|None sprint_opts: optional parameters to override values in configfile
   """
 
   global isInitialized
@@ -599,38 +693,42 @@ def initBase(configfile=None, targetMode=None, epoch=None):
   if not config:
     # Some subset of what we do in rnn.init().
 
-    rnn.initBetterExchook()
-    rnn.initThreadJoinHack()
+    rnn.init_better_exchook()
+    rnn.init_thread_join_hack()
 
     if configfile is None:
       configfile = DefaultSprintCrnnConfig
     assert os.path.exists(configfile)
-    rnn.initConfig(configFilename=configfile)
+    rnn.init_config(config_filename=configfile, extra_updates={"task": target_mode})
+    assert rnn.config
     config = rnn.config
+    if sprint_opts is not None:
+      config.update(sprint_opts)
 
-    rnn.initLog()
-    rnn.returnnGreeting(configFilename=configfile)
-    rnn.initBackendEngine()
-    rnn.initFaulthandler(sigusr1_chain=True)
-    rnn.initConfigJsonNetwork()
+    rnn.init_log()
+    rnn.returnn_greeting(config_filename=configfile)
+    rnn.init_backend_engine()
+    rnn.init_faulthandler(sigusr1_chain=True)
+    rnn.init_config_json_network()
 
+    global Engine
     if BackendEngine.is_tensorflow_selected():
       # Use TFEngine.Engine class instead of Engine.Engine.
-      import TFEngine
-      global Engine
-      Engine = TFEngine.Engine
+      from TFEngine import Engine
+    elif BackendEngine.is_theano_selected():
+      from Engine import Engine
 
     import atexit
     atexit.register(_at_exit_handler)
 
-  if targetMode:
-    setTargetMode(targetMode)
+  if target_mode:
+    set_target_mode(target_mode)
 
-  initDataset()
+  _init_dataset()
 
-  if targetMode and targetMode == "forward" and epoch:
+  if target_mode and target_mode == "forward" and epoch:
     model_filename = config.value('model', '')
-    fns = [Engine.epoch_model_filename(model_filename, epoch, is_pretrain) for is_pretrain in [False, True]]
+    fns = [EngineBase.epoch_model_filename(model_filename, epoch, is_pretrain) for is_pretrain in [False, True]]
     fn_postfix = ""
     if BackendEngine.is_tensorflow_selected():
       fn_postfix += ".meta"
@@ -638,26 +736,30 @@ def initBase(configfile=None, targetMode=None, epoch=None):
     assert len(fns_existing) == 1, "%s not found" % fns
     model_epoch_filename = fns_existing[0]
     config.set('load', model_epoch_filename)
-    assert Engine.get_epoch_model(config)[1] == model_epoch_filename, \
-      "%r != %r" % (Engine.get_epoch_model(config), model_epoch_filename)
+    assert EngineBase.get_epoch_model(config)[1] == model_epoch_filename, (
+      "%r != %r" % (EngineBase.get_epoch_model(config), model_epoch_filename))
 
   global engine
   if not engine:
-    devices = rnn.initTheanoDevices()
-    rnn.printTaskProperties(devices)
-    rnn.initEngine(devices)
+    devices = rnn.init_theano_devices()
+    rnn.print_task_properties(devices)
+    rnn.init_engine(devices)
     engine = rnn.engine
     assert isinstance(engine, Engine)
 
 
-def startTrainThread(epoch=None):
+def _start_train_thread(epoch=None):
   global config, engine, isInitialized, isTrainThreadStarted
   assert isInitialized, "need to call init() first"
   assert not isTrainThreadStarted
   assert sprintDataset, "need to call initDataset() first"
   assert Task == "train"
 
-  def trainThreadFunc():
+  def train_thread_func():
+    """
+    Train thread.
+    """
+    # noinspection PyBroadException
     try:
       assert TargetMode
       if TargetMode == "target-alignment":
@@ -689,14 +791,14 @@ def startTrainThread(epoch=None):
         interrupt_main()
 
   global trainThread
-  trainThread = Thread(target=trainThreadFunc, name="Sprint CRNN train thread")
+  trainThread = Thread(target=train_thread_func, name="Sprint CRNN train thread")
   trainThread.daemon = True  # However, at clean exit(), will will join this thread.
   trainThread.start()
 
   isTrainThreadStarted = True
 
 
-def prepareForwarding():
+def _prepare_forwarding():
   assert engine
   assert config
   # Should already be set via setTargetMode().
@@ -711,7 +813,7 @@ def prepareForwarding():
     engine.devices[0].prepare(engine.network)
 
 
-def initDataset():
+def _init_dataset():
   global sprintDataset
   if sprintDataset:
     return
@@ -721,7 +823,10 @@ def initDataset():
   sprintDataset = SprintDatasetBase.from_config(config, **extra_opts)
 
 
-def getFinalEpoch():
+def get_final_epoch():
+  """
+  :rtype: int
+  """
   global config, engine
   assert engine
   assert config
@@ -731,24 +836,25 @@ def getFinalEpoch():
   return config_num_epochs
 
 
-def train(segmentName, features, targets=None):
+def _train(segment_name, features, targets=None):
   """
-  :param str|None segmentName: full name
+  :param str|None segment_name: full name
   :param numpy.ndarray features: 2d array
-  :param numpy.ndarray|dict[str,numpy.ndarray]|None targets: 2d or 1d array
+  :param numpy.ndarray|dict[str,numpy.ndarray|str]|None targets: 2d or 1d array
   """
   assert engine is not None, "not initialized. call initBase()"
   assert sprintDataset
 
   if sprintDataset.sprintFinalized:
     return
-  sprintDataset.addNewData(features, targets, segmentName=segmentName)
+  sprintDataset.add_new_data(features, targets, segment_name=segment_name)
 
   # The CRNN train thread started via start() will do the actual training.
 
   if TargetMode == "criterion-by-sprint":
 
     # TODO...
+    make_criterion_class()
 
     Criterion.gotPosteriors.clear()
 
@@ -757,15 +863,15 @@ def train(segmentName, features, targets=None):
     assert posteriors is not None
 
     # posteriors is in format (time,batch,emission)
-    assert posteriors.shape[0] == T
+    # assert posteriors.shape[0] == T
     assert posteriors.shape[1] == 1
     assert OutputDim * MaxSegmentLength == posteriors.shape[2]
     assert len(posteriors.shape) == 3
     # reformat to Sprint expected format (emission,time)
-    posteriors = posteriors[:,0,:]
+    posteriors = posteriors[:, 0, :]
     posteriors = posteriors.transpose()
     assert posteriors.shape[0] == OutputDim * MaxSegmentLength
-    assert posteriors.shape[1] == T
+    # assert posteriors.shape[1] == T
     assert len(posteriors.shape) == 2
 
     return posteriors
@@ -781,37 +887,41 @@ def features_to_dataset(features, segment_name):
   assert sprintDataset
 
   # Features are in Sprint format (feature,time).
-  T = features.shape[1]
-  assert features.shape == (InputDim, T)
+  num_time = features.shape[1]
+  assert features.shape == (InputDim, num_time)
 
   # Fill the data for the current segment.
   sprintDataset.shuffle_frames_of_nseqs = 0  # We must not shuffle.
-  sprintDataset.initSprintEpoch(None)  # Reset cache. We don't need old seqs anymore.
+  sprintDataset.init_sprint_epoch(None)  # Reset cache. We don't need old seqs anymore.
   sprintDataset.init_seq_order()
-  seq = sprintDataset.addNewData(features, segmentName=segment_name)
+  seq = sprintDataset.add_new_data(features, segment_name=segment_name)
   return sprintDataset, seq
 
 
-def forward(segmentName, features):
+def _forward(segment_name, features):
   """
   :param numpy.ndarray features: format (input-feature,time) (via Sprint)
-  :return numpy.ndarray, format (output-dim,time)
+  :return: format (output-dim,time)
+  :rtype: numpy.ndarray
   """
-  print("Sprint forward", segmentName, features.shape)
+  print("Sprint forward", segment_name, features.shape)
   start_time = time.time()
   assert engine is not None, "not initialized"
   assert sprintDataset
 
   # Features are in Sprint format (feature,time).
-  T = features.shape[1]
-  assert features.shape == (InputDim, T)
-  dataset, seq_idx = features_to_dataset(features=features, segment_name=segmentName)
+  num_time = features.shape[1]
+  assert features.shape == (InputDim, num_time)
+  time_a = time.time()
+  dataset, seq_idx = features_to_dataset(features=features, segment_name=segment_name)
+  time_b = time.time()
 
   if BackendEngine.is_theano_selected():
     # Prepare data for device.
     device = engine.devices[0]
     success = assign_dev_data_single_seq(device, dataset=dataset, seq=seq_idx)
-    assert success, "failed to allocate & assign data for seq %i, %s" % (seq_idx, segmentName)
+    assert success, "failed to allocate & assign data for seq %i, %s" % (seq_idx, segment_name)
+    time_c = time.time()
 
     # Do the actual forwarding and collect result.
     device.run("extract")
@@ -825,18 +935,19 @@ def forward(segmentName, features):
 
   else:
     raise NotImplementedError("unknown backend engine")
-
+  time_d = time.time()
   # If we have a sequence training criterion, posteriors might be in format (time,seq|batch,emission).
   if posteriors.ndim == 3:
-    assert posteriors.shape == (T, 1, OutputDim * MaxSegmentLength)
+    assert posteriors.shape == (num_time, 1, OutputDim * MaxSegmentLength)
     posteriors = posteriors[:, 0]
   # Posteriors are in format (time,emission).
-  assert posteriors.shape == (T, OutputDim * MaxSegmentLength)
+  assert posteriors.shape == (num_time, OutputDim * MaxSegmentLength)
   # Reformat to Sprint expected format (emission,time).
   posteriors = posteriors.transpose()
-  assert posteriors.shape == (OutputDim * MaxSegmentLength, T)
+  assert posteriors.shape == (OutputDim * MaxSegmentLength, num_time)
   stats = (numpy.min(posteriors), numpy.max(posteriors), numpy.mean(posteriors), numpy.std(posteriors))
-  print("posteriors min/max/mean/std:", stats, "time:", time.time() - start_time)
+  print("posteriors min/max/mean/std:", stats, "time:", time.time() - start_time, time.time() - time_a,
+        time.time() - time_b, time.time() - time_c, time.time() - time_d)
   if numpy.isinf(posteriors).any() or numpy.isnan(posteriors).any():
     print("posteriors:", posteriors)
     debug_feat_fn = "/tmp/crnn.pid%i.sprintinterface.debug.features.txt" % os.getpid()
@@ -849,57 +960,93 @@ def forward(segmentName, features):
   return posteriors
 
 
-class Criterion(theano.Op):
-  gotPosteriors = Event()
-  gotErrorSignal = Event()
-  posteriors = None
-  error = None
-  errorSignal = None
+Criterion = None
 
-  def __eq__(self, other):
-    return type(self) == type(other)
 
-  def __hash__(self):
-    return hash(type(self))
+def make_criterion_class():
+  """
+  Make Criterion Theano class.
+  """
+  global Criterion
+  if Criterion:
+    return
 
-  def __str__(self):
-    return self.__class__.__name__
+  # noinspection PyUnresolvedReferences,PyPackageRequirements
+  import theano
+  # noinspection PyUnresolvedReferences,PyPackageRequirements,PyPep8Naming
+  import theano.tensor as T
 
-  def make_node(self, posteriors, seq_lengths):
-    # We get the posteriors here from the Network output function,
-    # which should be softmax.
-    posteriors = theano.tensor.as_tensor_variable(posteriors)
-    seq_lengths = theano.tensor.as_tensor_variable(seq_lengths)
-    assert seq_lengths.ndim == 1  # vector of seqs lengths
-    return theano.Apply(op=self, inputs=[posteriors, seq_lengths], outputs=[T.fvector(), posteriors.type()])
+  # noinspection PyAbstractClass
+  class Criterion(theano.Op):
+    """
+    Criterion Theano Op.
+    """
+    gotPosteriors = Event()
+    gotErrorSignal = Event()
+    posteriors = None
+    error = None
+    errorSignal = None
 
-  def perform(self, node, inputs, output_storage, params=None):
-    posteriors, seq_lengths = inputs
-    nTimeFrames = posteriors.shape[0]
-    seq_lengths = numpy.array([nTimeFrames])  # TODO: fix or so?
+    def __eq__(self, other):
+      return type(self) == type(other)
 
-    self.__class__.posteriors = posteriors
-    self.gotPosteriors.set()
+    def __hash__(self):
+      return hash(type(self))
 
-    if numpy.isnan(posteriors).any():
-      print('posteriors contain NaN!', file=log.v1)
-    if numpy.isinf(posteriors).any():
-      print('posteriors contain Inf!', file=log.v1)
-      numpy.set_printoptions(threshold=numpy.nan)
-      print('posteriors:', posteriors, file=log.v1)
+    def __str__(self):
+      return self.__class__.__name__
 
-    self.gotErrorSignal.wait()
-    loss, errsig = self.error, self.errorSignal
-    assert errsig.shape[0] == nTimeFrames
+    def make_node(self, posteriors, seq_lengths):
+      """
+      :param numpy.ndarray posteriors:
+      :param numpy.ndarray seq_lengths:
+      :return:
+      """
+      # We get the posteriors here from the Network output function,
+      # which should be softmax.
+      posteriors = theano.tensor.as_tensor_variable(posteriors)
+      seq_lengths = theano.tensor.as_tensor_variable(seq_lengths)
+      assert seq_lengths.ndim == 1  # vector of seqs lengths
+      return theano.Apply(op=self, inputs=[posteriors, seq_lengths], outputs=[T.fvector(), posteriors.type()])
 
-    output_storage[0][0] = loss
-    output_storage[1][0] = errsig
+    # noinspection PyUnusedLocal
+    def perform(self, node, inputs, output_storage, params=None):
+      """
+      :param node:
+      :param inputs:
+      :param output_storage:
+      :param params:
+      :return:
+      """
+      posteriors, seq_lengths = inputs
+      num_time_frames = posteriors.shape[0]
+      seq_lengths = numpy.array([num_time_frames])  # TODO: fix or so?
 
-    print('avg frame loss for segments:', loss.sum() / seq_lengths.sum(), end=" ", file=log.v5)
-    print('time-frames:', seq_lengths.sum(), file=log.v5)
+      self.__class__.posteriors = posteriors
+      self.gotPosteriors.set()
+
+      if numpy.isnan(posteriors).any():
+        print('posteriors contain NaN!', file=log.v1)
+      if numpy.isinf(posteriors).any():
+        print('posteriors contain Inf!', file=log.v1)
+        numpy.set_printoptions(threshold=numpy.nan)
+        print('posteriors:', posteriors, file=log.v1)
+
+      self.gotErrorSignal.wait()
+      loss, errsig = self.error, self.errorSignal
+      assert errsig.shape[0] == num_time_frames
+
+      output_storage[0][0] = loss
+      output_storage[1][0] = errsig
+
+      print('avg frame loss for segments:', loss.sum() / seq_lengths.sum(), end=" ", file=log.v5)
+      print('time-frames:', seq_lengths.sum(), file=log.v5)
 
 
 def demo():
+  """
+  Demo for SprintInterface.
+  """
   print("Note: Load this module via Sprint python-trainer to really use it.")
   print("We are running a demo now.")
   init(inputDim=493, outputDim=4501, config="",  # hardcoded, just a demo...
@@ -915,11 +1062,10 @@ def demo():
   assert numpy.array_equal(posteriors, old_posteriors)
   error = numpy.load("output-error.npy")  # dumped via dump.py
   error = float(error)
-  errorSignal = numpy.load("output-error-signal.npy")  # dumped via dump.py
-  finishError(error=error, errorSignal=errorSignal, naturalPairingType="softmax")
+  error_signal = numpy.load("output-error-signal.npy")  # dumped via dump.py
+  finishError(error=error, errorSignal=error_signal, naturalPairingType="softmax")
   exit()
 
 
 if __name__ == "__main__":
   Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
-

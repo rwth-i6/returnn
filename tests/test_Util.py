@@ -1,6 +1,10 @@
+# -*- coding: utf8 -*-
 
 import sys
-sys.path += ["."]  # Python 3 hack
+import os
+
+my_dir = os.path.dirname(os.path.realpath(__file__))
+sys.path += [my_dir + "/.."]  # Python 3 hack
 
 from nose.tools import assert_equal, assert_not_equal, assert_raises, assert_true, assert_is
 from numpy.testing.utils import assert_almost_equal
@@ -245,6 +249,39 @@ def test_get_func_kwargs():
     pass
 
   assert_equal(list(getargspec(dummy_func).args), ["net", "var", "update_ops"])
+
+
+def test_simple_obj_repr():
+  class X:
+    def __init__(self, a, b=13):
+      self.a = a
+      self.b = b
+
+    __repr__ = simple_obj_repr
+
+  x = X(a=42)
+  x_repr = repr(x)
+
+  assert_equal(x_repr, "X(a=42, b=13)")
+
+
+@unittest.skipIf(PY3, "only for Python 2")
+def test_py2_utf8_str_to_unicode():
+  assert_equal(py2_utf8_str_to_unicode("a"), "a")
+  assert_is(type(py2_utf8_str_to_unicode("a")), str)
+  assert_equal(py2_utf8_str_to_unicode("äöü"), u"äöü")
+  assert_is(type(py2_utf8_str_to_unicode("äöü")), unicode)
+
+
+def test_CollectionReadCheckCovered():
+  x = CollectionReadCheckCovered.from_bool_or_dict(True)
+  assert x and x.truth_value
+  x = CollectionReadCheckCovered.from_bool_or_dict(False)
+  assert not x or not x.truth_value
+  x = CollectionReadCheckCovered.from_bool_or_dict({})
+  assert not x or not x.truth_value
+  x = CollectionReadCheckCovered.from_bool_or_dict({"a": "b"})
+  assert x and x.truth_value
 
 
 if __name__ == "__main__":

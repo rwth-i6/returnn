@@ -187,7 +187,7 @@ class InvFullAlignOp(theano.Op):
     return hmm.astype('int32').flatten()
 
   def _baumwelch(self, start, end, scores, transcription):
-    from scipy.misc import logsumexp
+    from scipy.special import logsumexp
 
     """Fully aligns sequence from start to end but in inverse manner"""
     inf = 1e30

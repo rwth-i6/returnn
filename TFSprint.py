@@ -4,7 +4,6 @@ Like SprintErrorSignals.py but for TensorFlow.
 """
 
 from SprintErrorSignals import SprintInstancePool
-from Log import log
 import tensorflow as tf
 
 
@@ -37,6 +36,11 @@ def get_sprint_automata_for_batch_op(sprint_opts, tags):
   """
 
   def py_wrap_get_sprint_automata_for_batch(py_tags):
+    """
+    :param list[str] py_tags: len batch
+    :return: (edges, weights, start_end_states)
+    :rtype: (numpy.ndarray, numpy.ndarray, numpy.ndarray)
+    """
     try:
       return py_get_sprint_automata_for_batch(sprint_opts=sprint_opts, tags=py_tags)
     except Exception:
@@ -87,6 +91,13 @@ def get_sprint_loss_and_error_signal(sprint_opts, log_posteriors, seq_lengths, s
   """
 
   def py_wrap_get_sprint_loss_and_error_signal(py_log_posteriors, py_seq_lengths, py_seq_tags):
+    """
+    :param numpy.ndarray py_log_posteriors: 3d (time,batch,label)
+    :param numpy.ndarray py_seq_lengths: 1d (batch)
+    :param list[str] py_seq_tags:
+    :return: (loss, error_signal), error_signal has the same shape as posteriors. loss is a 1d-array (batch).
+    :rtype: (numpy.ndarray, numpy.ndarray)
+    """
     try:
       return py_get_sprint_loss_and_error_signal(
         sprint_opts=sprint_opts, log_posteriors=py_log_posteriors, seq_lengths=py_seq_lengths, seq_tags=py_seq_tags)

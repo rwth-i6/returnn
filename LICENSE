@@ -1,6 +1,6 @@
 The RWTH Extensible Training framework for Universal Recurrent Neural Networks (RETURNN) License
 
-Copyright (c) 2010--2016, RWTH.
+Copyright (c) 2010--2019, RWTH.
 All rights reserved.
 
 Contains third party code from other projects. See below.
@@ -139,5 +139,11 @@ Contains code from keithito-tacotron:
  - MIT License (MIT)
  - Copyright (c) 2017 Keith Ito
  - Some code in LmDataset.py.
+
+Contains code from Tacotron-2
+ - Website: https://github.com/Rayhane-mamah/Tacotron-2
+ - MIT License (MIT)
+ - Copyright (c) 2018 Rayhane Mama
+ - ZoneoutLSTMCell in TFNetworkRecLayer.py
 
 Various code snippets from StackOverflow, which are under Creative Commons / Public Domain.

@@ -24,6 +24,11 @@ Features include:
 
 See :ref:`basic_usage` and :ref:`tech_overview`.
 
+`Here is the video recording of a RETURNN overview talk <https://www-i6.informatik.rwth-aachen.de/web/Software/returnn/downloads/workshop-2019-01-29/01.recording.cut.mp4>`_
+(`slides <https://www-i6.informatik.rwth-aachen.de/web/Software/returnn/downloads/workshop-2019-01-29/01.returnn-overview.session1.handout.v1.pdf>`__,
+`exercise sheet <https://www-i6.informatik.rwth-aachen.de/web/Software/returnn/downloads/workshop-2019-01-29/01.exercise_sheet.pdf>`__;
+hosted by eBay).
+
 There are `many example demos <https://github.com/rwth-i6/returnn/blob/master/demos/>`_
 which work on artificially generated data,
 i.e. they should work as-is.
@@ -41,6 +46,8 @@ There is also `a wiki <https://github.com/rwth-i6/returnn/wiki>`_.
 Questions can also be asked on
 `StackOverflow using the RETURNN tag <https://stackoverflow.com/questions/tagged/returnn>`_.
 
+Some recent development changelog can be seen `here <https://github.com/rwth-i6/returnn/blob/master/CHANGELOG.md>`__.
+
 
 User guide
 ----------
@@ -52,7 +59,13 @@ User guide
     basic_usage
     tech_overview
     tf_lstm_benchmark
+    multi_gpu
     deterministic_training
+    debugging
+    profiling
+    configuration_reference/index.rst
+    dataset_reference/index.rst
+    layer_reference/index.rst
 
 
 API Reference

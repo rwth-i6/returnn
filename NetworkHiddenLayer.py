@@ -429,8 +429,9 @@ class RepetitionLayer(_NoOpLayer):
     inp, n_out = _concat_sources(self.sources, masks=self.masks, mass=self.mass)
     self.set_attr('n_out', n_out)
     time, batch, dim = inp.shape[0], inp.shape[1], inp.shape[2]
-    self.index = self.index.flatten().dimshuffle('x',0).repeat(factor,axis=0).reshape((time*factor,batch))
-    self.output = inp.reshape((time*batch,dim)).dimshuffle('x',0,1).repeat(factor,axis=0).reshape((time*factor,batch,dim))
+
+    self.index = self.index.dimshuffle(0,'x',1).repeat(factor,axis=1).reshape((time * factor, batch))
+    self.output = inp.dimshuffle(0,'x',1,2).repeat(factor,axis=1).reshape((time * factor,batch,dim))
 
 
 class FrameConcatZeroLayer(_NoOpLayer): # TODO: This is not correct for max_seqs > 1
@@ -473,16 +474,15 @@ class FrameCutoffLayer(_NoOpLayer): # TODO: This is not correct for max_seqs > 1
     super(FrameCutoffLayer, self).__init__(**kwargs)
     self.set_attr("num_frames", num_frames)
     self.set_attr("left", left)
-    assert len(self.sources) == 1
-    s = self.sources[0]
-    for attr in ["n_out", "sparse"]:
-      self.set_attr(attr, s.attrs[attr])
+    x_in, n_in = _concat_sources(self.sources, masks=self.masks, mass=self.mass)
+    i_in = self.sources[0].index
+    self.set_attr("n_out", n_in)
     if left:
-      self.output = s.output[num_frames:]
-      self.index = s.index[num_frames:]
+      self.output = x_in[num_frames:]
+      self.index = i_in[num_frames:]
     else:
-      self.output = s.output[:-num_frames]
-      self.index = s.index[:-num_frames]
+      self.output = x_in[:-num_frames]
+      self.index = i_in[:-num_frames]
 
 
 class ReverseLayer(_NoOpLayer):
@@ -573,11 +573,11 @@ class SubnetworkLayer(_NoOpLayer):
     """
     super(SubnetworkLayer, self).__init__(**kwargs)
     self.set_attr("n_out", n_out)
-    if isinstance(subnetwork, (str, unicode)):
+    if isinstance(subnetwork, str):
       subnetwork = json.loads(subnetwork)
     self.set_attr("subnetwork", subnetwork)
     self.set_attr("load", load)
-    if isinstance(data_map, (str, unicode)):
+    if isinstance(data_map, str):
       data_map = json.loads(data_map)
     if data_map:
       self.set_attr("data_map", data_map)
@@ -620,7 +620,7 @@ class SubnetworkLayer(_NoOpLayer):
       config = get_global_config()  # this is a bit hacky but works fine in all my cases...
       model_filename = load % {"self": self,
                                "global_config_load": config.value("load", None),
-                               "global_config_epoch": config.int("epoch", 0)}
+                               "global_config_epoch": config.value("epoch", 0)}
       print("loading subnetwork weights from", model_filename, file=log.v2)
       import h5py
       model_hdf = h5py.File(model_filename, "r")
@@ -663,11 +663,11 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
     """
     super(ClusterDependentSubnetworkLayer, self).__init__(**kwargs)
     self.set_attr("n_out", n_out)
-    if isinstance(subnetwork, (str, unicode)):
+    if isinstance(subnetwork, str):
       subnetwork = json.loads(subnetwork)
     self.set_attr("subnetwork", subnetwork)
     self.set_attr("load", load)
-    if isinstance(data_map, (str, unicode)):
+    if isinstance(data_map, str):
       data_map = json.loads(data_map)
     if data_map:
       self.set_attr("data_map", data_map)
@@ -837,7 +837,7 @@ class ChunkingSublayer(_NoOpLayer):
     self.set_attr('n_out', n_out)
     self.set_attr('chunk_size', chunk_size)
     self.set_attr('chunk_step', chunk_step)
-    if isinstance(sublayer, (str, unicode)):
+    if isinstance(sublayer, str):
       sublayer = json.loads(sublayer)
     self.set_attr('sublayer', sublayer.copy())
     self.set_attr('chunk_distribution', chunk_distribution)

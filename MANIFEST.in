@@ -1,0 +1,11 @@
+include *.py
+include *.rst
+include *.md
+include *.txt
+include *.cpp
+include LICENSE
+include CODEOWNERS
+include MANIFEST.in
+graft tools
+graft demos
+global-exclude *.pyc

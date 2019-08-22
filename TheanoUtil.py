@@ -8,6 +8,33 @@ from theano.compile import optdb
 import numpy
 
 
+def monkey_patches():
+  """
+  Applies a number of monkey patches,
+  to make Theano work.
+  """
+  monkey_patch_numpy_get_ndarray_c_version()
+
+
+def monkey_patch_numpy_get_ndarray_c_version():
+  """
+  Error:
+
+    AttributeError: module 'numpy.core.multiarray' has no attribute '_get_ndarray_c_version'
+
+  In Theano, when np.core.multiarray._get_ndarray_c_version() is called.
+
+  Link:
+    https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=918090
+  """
+  import numpy.core.multiarray as ma
+  if not hasattr(ma, "_get_ndarray_c_version"):  # later than 1.16.0
+    print("Monkey patch Numpy _get_ndarray_c_version.")
+    # Instead of patching Theano, we patch Numpy, which is simpler.
+    import numpy.core._multiarray_umath as mau
+    ma._get_ndarray_c_version = mau._get_ndarray_c_version
+
+
 def time_batch_make_flat(val):
   """
   :rtype val: theano.Variable
@@ -94,7 +121,7 @@ def delta_batch(source, window):
   :param theano.TensorVariable source: 3d tensor of shape (n_time, n_batch, n_dim)
   :param int|theano.Variable window: window size
   :return: tensor of shape (n_time, n_batch, window * n_dim)
-  Similar as numpy.diff. Also called delta.
+  Similar to numpy.diff. Also called delta.
   TODO with conv op
   """
   assert source.ndim == 3  # (time,batch,dim). not sure how to handle other cases

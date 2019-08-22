@@ -53,17 +53,17 @@ def iterateEpochs():
 
 
 def init(configFilename, commandLineOptions):
-  rnn.initBetterExchook()
-  rnn.initThreadJoinHack()
-  rnn.initConfig(configFilename, commandLineOptions)
+  rnn.init_better_exchook()
+  rnn.init_thread_join_hack()
+  rnn.init_config(configFilename, commandLineOptions)
   global config
   config = rnn.config
-  rnn.initLog()
+  rnn.init_log()
   print("CRNN demo-dataset starting up", file=log.v3)
-  rnn.initFaulthandler()
-  rnn.initConfigJsonNetwork()
-  rnn.initData()
-  rnn.printTaskProperties()
+  rnn.init_faulthandler()
+  rnn.init_config_json_network()
+  rnn.init_data()
+  rnn.print_task_properties()
 
 
 def main(argv):

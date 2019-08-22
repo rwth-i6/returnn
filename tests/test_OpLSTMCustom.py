@@ -8,7 +8,7 @@ import unittest
 import theano
 import theano.tensor as T
 import numpy
-from Device import have_gpu
+from Util import have_gpu
 import RecurrentTransform
 import theano.sandbox.cuda as cuda
 from Log import log

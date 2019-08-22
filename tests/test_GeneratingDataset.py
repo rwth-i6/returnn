@@ -1,11 +1,17 @@
+# -*- coding: utf8 -*-
 
+from __future__ import print_function
+import os
 import sys
-sys.path += ["."]  # Python 3 hack
 
+my_dir = os.path.dirname(os.path.realpath(__file__))
+sys.path += [my_dir + "/.."]  # Python 3 hack
+
+import unittest
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 from GeneratingDataset import *
 from Dataset import DatasetSeq
-import numpy as np
+from Util import PY3, unicode
 import os
 import unittest
 
@@ -19,7 +25,7 @@ log.initialize(verbosity=[5])
 def test_init():
   dataset = DummyDataset(input_dim=2, output_dim=3, num_seqs=4)
   assert_equal(dataset.num_inputs, 2)
-  assert_equal(dataset.num_outputs, {"classes": [3, 1], "data": [2, 2]})
+  assert_equal(dataset.num_outputs, {"classes": (3, 1), "data": (2, 2)})
   assert_equal(dataset.num_seqs, 4)
 
 
@@ -78,3 +84,84 @@ def test_StaticDataset_custom_keys_with_dims():
   dataset.load_seqs(0, 1)
   assert_equal(list(dataset.get_data(0, "source")), [1, 2, 3])
   assert_equal(list(dataset.get_data(0, "target")), [3, 4, 5, 6, 7])
+
+
+def test_StaticDataset_utf8():
+  s = u"wër"
+  print("some unicode str:", s, "repr:", repr(s), "type:", type(s), "len:", len(s))
+  assert len(s) == 3
+  if PY3:
+    assert isinstance(s, str)
+    s_byte_list = list(s.encode("utf8"))
+  else:
+    assert isinstance(s, unicode)
+    s_byte_list = list(map(ord, s.encode("utf8")))
+  print("utf8 byte list:", s_byte_list)
+  assert len(s_byte_list) == 4 > 3
+  raw = numpy.array(s_byte_list, dtype="uint8")
+  assert_equal(raw.tolist(), [119, 195, 171, 114])
+  data = StaticDataset([{"data": raw}], output_dim={"data": (255, 1)})
+  if "data" not in data.labels:
+    data.labels["data"] = [chr(i) for i in range(255)]  # like in SprintDataset
+  data.init_seq_order(epoch=1)
+  data.load_seqs(0, 1)
+  raw_ = data.get_data(seq_idx=0, key="data")
+  assert_equal(raw.tolist(), raw_.tolist())
+  assert data.can_serialize_data(key="data")
+  s_serialized = data.serialize_data(key="data", data=raw)
+  print("serialized:", s_serialized, "repr:", repr(s_serialized), "type:", type(s_serialized))
+  assert_equal(s, s_serialized)
+
+
+def test_BytePairEncoding_unicode():
+  bpe = BytePairEncoding(
+    bpe_file="%s/bpe-unicode-demo.codes" % my_dir,
+    vocab_file="%s/bpe-unicode-demo.vocab" % my_dir,
+    unknown_label="<unk>")
+  assert_equal(bpe.num_labels, 189)
+  assert_equal(bpe.labels[5], "z")
+  assert_equal(bpe.vocab["z"], 5)
+  assert_equal(bpe._bpe_codes[("n", "d</w>")], 1)
+  assert_equal(bpe.labels[6], u"å")
+  assert_equal(bpe.vocab[u"å"], 6)
+  assert_equal(bpe._bpe_codes[(u"à", u"nd</w>")], 2)
+
+  def get_bpe_seq(text):
+    """
+    :param str text:
+    :rtype: str
+    """
+    bpe_label_seq = bpe.get_seq(text)
+    res = " ".join(bpe.labels[i] for i in bpe_label_seq)
+    print("%r -> %r" % (text, res))
+    return res
+
+  assert_equal(get_bpe_seq("kod"), "k@@ o@@ d")  # str
+  assert_equal(get_bpe_seq(u"kod"), u"k@@ o@@ d")  # unicode
+  assert_equal(get_bpe_seq(u"råt"), u"råt")
+  assert_equal(
+    get_bpe_seq(u"råt råt iz ďër iz ďër ám àn iz ďër ë låk ë kod áv dres wër yù wêk dù ďë àsk"),
+    u"råt råt iz ďër iz ďër ám à@@ n iz ďër ë låk ë k@@ o@@ d áv d@@ r@@ e@@ s w@@ ër yù w@@ ê@@ k dù ďë à@@ s@@ k")
+
+
+if __name__ == "__main__":
+  better_exchook.install()
+  if len(sys.argv) <= 1:
+    for k, v in sorted(globals().items()):
+      if k.startswith("test_"):
+        print("-" * 40)
+        print("Executing: %s" % k)
+        try:
+          v()
+        except unittest.SkipTest as exc:
+          print("SkipTest:", exc)
+        print("-" * 40)
+    print("Finished all tests.")
+  else:
+    assert len(sys.argv) >= 2
+    for arg in sys.argv[1:]:
+      print("Executing: %s" % arg)
+      if arg in globals():
+        globals()[arg]()  # assume function and execute
+      else:
+        eval(arg)  # assume Python code and execute

@@ -1,5 +1,10 @@
 # -*- coding: utf8 -*-
 
+"""
+Provides :class:`LmDataset`, :class:`TranslationDataset`,
+and some related helpers.
+"""
+
 from __future__ import print_function
 
 import os
@@ -7,16 +12,21 @@ import sys
 from Dataset import DatasetSeq
 from CachedDataset2 import CachedDataset2
 import gzip
-import xml.etree.ElementTree as etree
+import xml.etree.ElementTree as ElementTree
 from Util import parse_orthography, parse_orthography_into_symbols, load_json, BackendEngine, unicode
 from Log import log
 import numpy
 import time
 import re
+import typing
 from random import Random
 
 
 class LmDataset(CachedDataset2):
+  """
+  Dataset useful for language modeling.
+  Reads simple txt files.
+  """
 
   def __init__(self,
                corpus_file,
@@ -24,6 +34,7 @@ class LmDataset(CachedDataset2):
                orth_symbols_map_file=None,
                orth_replace_map_file=None,
                word_based=False,
+               word_end_symbol=None,
                seq_end_symbol="[END]",
                unknown_symbol="[UNKNOWN]",
                parse_orth_opts=None,
@@ -41,24 +52,27 @@ class LmDataset(CachedDataset2):
     The vocabulary is given by self.orth_symbols and self.orth_symbols_map gives the corresponding
     mapping from symbol to integer index.
 
-    :param str|()->str corpus_file: Bliss XML or line-based txt. optionally can be gzip.
-    :param dict|None phone_info: if you want to get phone seqs, dict with lexicon_file etc. see PhoneSeqGenerator
-    :param str|()->str|None orth_symbols_file: list of orthography symbols, if you want to get orth symbol seqs
-    :param str|()->str|None orth_symbols_map_file: list of orth symbols, each line: "symbol index"
-    :param str|()->str|None orth_replace_map_file: JSON file with replacement dict for orth symbols
-    :param bool word_based: whether to parse single words, or otherwise will be char-based
+    :param str|()->str|list[str]|()->list[str] corpus_file: Bliss XML or line-based txt. optionally can be gzip.
+    :param dict|None phone_info: if you want to get phone seqs, dict with lexicon_file etc. see PhoneSeqGenerator.
+    :param str|()->str|None orth_symbols_file: list of orthography symbols, if you want to get orth symbol seqs.
+    :param str|()->str|None orth_symbols_map_file: list of orth symbols, each line: "symbol index".
+    :param str|()->str|None orth_replace_map_file: JSON file with replacement dict for orth symbols.
+    :param bool word_based: whether to parse single words, or otherwise will be character based.
+    :param str|None word_end_symbol: If provided and if word_based is False (character based modeling), token to be used
+      to represent word ends.
     :param str|None seq_end_symbol: what to add at the end, if given.
       will be set as postfix=[seq_end_symbol] or postfix=[] for parse_orth_opts.
-    :param dict[str]|None parse_orth_opts: kwargs for parse_orthography()
-    :param int add_random_phone_seqs: will add random seqs with the same len as the real seq as additional data
+    :param str|None unknown_symbol: token to represent unknown words.
+    :param dict[str]|None parse_orth_opts: kwargs for parse_orthography().
+    :param int add_random_phone_seqs: will add random seqs with the same len as the real seq as additional data.
     :param bool|int log_auto_replace_unknown_symbols: write about auto-replacements with unknown symbol.
       if this is an int, it will only log the first N replacements, and then keep quiet.
     :param bool|int log_skipped_seqs: write about skipped seqs to logging, due to missing lexicon entry or so.
       if this is an int, it will only log the first N entries, and then keep quiet.
-    :param bool error_on_invalid_seq: if there is a seq we would have to skip, error
-    :param bool add_delayed_seq_data: will add another data-key "delayed" which will have the sequence
-      delayed_seq_data_start_symbol + original_sequence[:-1]
-    :param str delayed_seq_data_start_symbol: used for add_delayed_seq_data
+    :param bool error_on_invalid_seq: if there is a seq we would have to skip, error.
+    :param bool add_delayed_seq_data: will add another data-key "delayed" which will have the sequence.
+      delayed_seq_data_start_symbol + original_sequence[:-1].
+    :param str delayed_seq_data_start_symbol: used for add_delayed_seq_data.
     """
     super(LmDataset, self).__init__(**kwargs)
 
@@ -74,11 +88,17 @@ class LmDataset(CachedDataset2):
     print("LmDataset, loading file", corpus_file, file=log.v4)
 
     self.word_based = word_based
+    self.word_end_symbol = word_end_symbol
     self.seq_end_symbol = seq_end_symbol
     self.unknown_symbol = unknown_symbol
     self.parse_orth_opts = parse_orth_opts or {}
     self.parse_orth_opts.setdefault("word_based", self.word_based)
-    self.parse_orth_opts.setdefault("postfix", [self.seq_end_symbol] if self.seq_end_symbol is not None else [])
+    if self.word_end_symbol and not self.word_based:  # Character-based modeling and word_end_symbol is specified.
+      # In this case, sentences end with self.word_end_symbol followed by the self.seq_end_symbol.
+      self.parse_orth_opts.setdefault("postfix", [self.word_end_symbol, self.seq_end_symbol]
+                                      if self.seq_end_symbol is not None else [self.word_end_symbol])
+    else:
+      self.parse_orth_opts.setdefault("postfix", [self.seq_end_symbol] if self.seq_end_symbol is not None else [])
 
     if orth_symbols_file:
       assert not phone_info
@@ -93,7 +113,7 @@ class LmDataset(CachedDataset2):
       with open(orth_symbols_map_file, 'rb') as f:
         self.orth_symbols_map = pickle.load(f)
       self.orth_symbols = self.orth_symbols_map.keys()
-      self.labels["data"] = self.orth_symbols
+      self.labels["data"] = list(self.orth_symbols)
       self.seq_gen = None
     elif orth_symbols_map_file:
       assert not phone_info
@@ -126,6 +146,9 @@ class LmDataset(CachedDataset2):
     else:
       self.orth_replace_map = {}
 
+    if word_end_symbol and not word_based:  # Character-based modeling and word_end_symbol is specified.
+      self.orth_replace_map[" "] = [word_end_symbol]  # Replace all spaces by word_end_symbol.
+
     num_labels = len(self.labels["data"])
     use_uint_types = False
     if BackendEngine.is_tensorflow_selected():
@@ -147,7 +170,7 @@ class LmDataset(CachedDataset2):
     self.num_outputs = {"data": [len(self.labels["data"]), 1]}
     self.num_inputs = self.num_outputs["data"][0]
     self.seq_order = None
-    self._tag_prefix = "line-"  # sequence tag is "line-n", where n is the line number (to be compatible with translation)
+    self._tag_prefix = "line-"  # sequence tag is "line-n", where n is the line number (to be compatible with translation)  # nopep8
     self.auto_replace_unknown_symbol = auto_replace_unknown_symbol
     self.log_auto_replace_unknown_symbols = log_auto_replace_unknown_symbols
     self.log_skipped_seqs = log_skipped_seqs
@@ -159,16 +182,44 @@ class LmDataset(CachedDataset2):
     self.delayed_seq_data_start_symbol = delayed_seq_data_start_symbol
     if add_delayed_seq_data:
       self.num_outputs["delayed"] = self.num_outputs["data"]
+      self.labels["delayed"] = self.labels["data"]
 
-    self.orths = read_corpus(corpus_file)
+    if isinstance(corpus_file, list):  # If a list of files is provided, concatenate all.
+      self.orths = []
+      for file_name in corpus_file:
+        self.orths += read_corpus(file_name)
+    else:
+      self.orths = read_corpus(corpus_file)
     # It's only estimated because we might filter some out or so.
     self._estimated_num_seqs = len(self.orths) // self.partition_epoch
     print("  done, loaded %i sequences" % len(self.orths), file=log.v4)
 
+    self.next_orth_idx = 0
+    self.next_seq_idx = 0
+    self.num_skipped = 0
+    self.num_unknown = 0
+
+  def get_data_keys(self):
+    """
+    :rtype: list[str]
+    """
+    return sorted(self.num_outputs.keys())
+
   def get_target_list(self):
-    return sorted([k for k in self.num_outputs.keys() if k != "data"])
+    """
+    Unfortunately, the logic is swapped around for this dataset.
+    "data" is the original data, which is usually the target,
+    and you would use "delayed" as inputs.
+
+    :rtype: list[str]
+    """
+    return ["data"]
 
   def get_data_dtype(self, key):
+    """
+    :param str key:
+    :rtype: str
+    """
     return self.dtype
 
   def init_seq_order(self, epoch=None, seq_list=None):
@@ -238,7 +289,8 @@ class LmDataset(CachedDataset2):
       orth = self.orths[true_idx]  # get sequence for the next index given by seq_order
       seq_tag = (self._tag_prefix + str(true_idx))
       self.next_orth_idx += 1
-      if orth == "</s>": continue  # special sentence end symbol. empty seq, ignore.
+      if orth == "</s>":
+        continue  # special sentence end symbol. empty seq, ignore.
 
       if self.seq_gen:
         try:
@@ -258,9 +310,11 @@ class LmDataset(CachedDataset2):
         while True:
           orth_syms = sum([self.orth_replace_map.get(s, [s]) for s in orth_syms], [])
           i = 0
+          # For the character-based case, spaces have been replaced by word_end_symbol.
+          space_symbol = self.word_end_symbol if self.word_end_symbol and not self.word_based else " "
           while i < len(orth_syms) - 1:
-            if orth_syms[i:i+2] == [" ", " "]:
-              orth_syms[i:i+2] = [" "]  # collapse two spaces
+            if orth_syms[i:i+2] == [space_symbol, space_symbol]:
+              orth_syms[i:i+2] = [space_symbol]  # collapse two spaces
             else:
               i += 1
           if self.auto_replace_unknown_symbol:
@@ -270,9 +324,11 @@ class LmDataset(CachedDataset2):
               if sys.version_info >= (3, 0):
                 orth_sym = e.args[0]
               else:
+                # noinspection PyUnresolvedReferences
                 orth_sym = e.message
               if self.log_auto_replace_unknown_symbols:
-                print("LmDataset: unknown orth symbol %r, adding to orth_replace_map as %r" % (orth_sym, self.unknown_symbol), file=log.v3)
+                print("LmDataset: unknown orth symbol %r, adding to orth_replace_map as %r" % (
+                  orth_sym, self.unknown_symbol), file=log.v3)
                 self._reduce_log_auto_replace_unknown_symbols()
               self.orth_replace_map[orth_sym] = [self.unknown_symbol] if self.unknown_symbol is not None else []
               continue  # try this seq again with updated orth_replace_map
@@ -286,7 +342,8 @@ class LmDataset(CachedDataset2):
           data = numpy.array(list(map(self.orth_symbols_map.__getitem__, orth_syms)), dtype=self.dtype)
         except KeyError as e:
           if self.log_skipped_seqs:
-            print("LmDataset: skipping sequence %s because of missing orth symbol: %s" % (orth_debug_str, e), file=log.v4)
+            print("LmDataset: skipping sequence %s because of missing orth symbol: %s" % (orth_debug_str, e),
+                  file=log.v4)
             self._reduce_log_skipped_seqs()
           if self.error_on_invalid_seq:
             raise Exception("LmDataset: invalid seq %s, missing orth symbol %s" % (orth_debug_str, e))
@@ -318,34 +375,43 @@ def _is_bliss(filename):
     corpus_file = open(filename, 'rb')
     if filename.endswith(".gz"):
       corpus_file = gzip.GzipFile(fileobj=corpus_file)
-    context = iter(etree.iterparse(corpus_file, events=('start', 'end')))
+    context = iter(ElementTree.iterparse(corpus_file, events=('start', 'end')))
     _, root = next(context)  # get root element
-    return True
+    assert isinstance(root, ElementTree.Element)
+    return root.tag == "corpus"
   except IOError:  # 'Not a gzipped file' or so
     pass
-  except etree.ParseError:  # 'syntax error' or so
+  except ElementTree.ParseError:  # 'syntax error' or so
     pass
   return False
 
 
 def _iter_bliss(filename, callback):
+  """
+  :param str filename:
+  :param (str)->None callback:
+  """
   corpus_file = open(filename, 'rb')
   if filename.endswith(".gz"):
     corpus_file = gzip.GzipFile(fileobj=corpus_file)
 
   def getelements(tag):
-    """Yield *tag* elements from *filename_or_file* xml incrementally."""
-    context = iter(etree.iterparse(corpus_file, events=('start', 'end')))
-    _, root = next(context) # get root element
-    tree = [root]
-    for event, elem in context:
+    """
+    Yield *tag* elements from *filename_or_file* xml incrementally.
+
+    :param str tag:
+    """
+    context = iter(ElementTree.iterparse(corpus_file, events=('start', 'end')))
+    _, root = next(context)  # get root element
+    tree_ = [root]
+    for event, elem_ in context:
       if event == "start":
-        tree += [elem]
+        tree_ += [elem_]
       elif event == "end":
-        assert tree[-1] is elem
-        tree = tree[:-1]
-      if event == 'end' and elem.tag == tag:
-        yield tree, elem
+        assert tree_[-1] is elem_
+        tree_ = tree_[:-1]
+      if event == 'end' and elem_.tag == tag:
+        yield tree_, elem_
         root.clear()  # free memory
 
   for tree, elem in getelements("segment"):
@@ -358,18 +424,23 @@ def _iter_bliss(filename, callback):
 
 
 def _iter_txt(filename, callback):
+  """
+  :param str filename:
+  :param (str)->None callback:
+  """
   f = open(filename, 'rb')
   if filename.endswith(".gz"):
     f = gzip.GzipFile(fileobj=f)
 
-  for l in f:
+  for line in f:
     try:
-      l = l.decode("utf8")
+      line = line.decode("utf8")
     except UnicodeDecodeError:
-      l = l.decode("latin_1")  # or iso8859_15?
-    l = l.strip()
-    if not l: continue
-    callback(l)
+      line = line.decode("latin_1")  # or iso8859_15?
+    line = line.strip()
+    if not line:
+      continue
+    callback(line)
 
 
 def iter_corpus(filename, callback):
@@ -396,7 +467,11 @@ def read_corpus(filename):
 
 
 class AllophoneState:
-  # In Sprint, see AllophoneStateAlphabet::index().
+  """
+  Represents one allophone (phone with context) state (number, boundary).
+  In Sprint, see AllophoneStateAlphabet::index().
+  """
+
   id = None  # u16 in Sprint. here just str
   context_history = ()  # list[u16] of phone id. here just list[str]
   context_future = ()  # list[u16] of phone id. here just list[str]
@@ -404,6 +479,7 @@ class AllophoneState:
   state = None  # s16, e.g. 0,1,2
   _attrs = ["id", "context_history", "context_future", "boundary", "state"]
 
+  # noinspection PyShadowingBuiltins
   def __init__(self, id=None, state=None):
     """
     :param str id: phone
@@ -413,6 +489,9 @@ class AllophoneState:
     self.state = state
 
   def format(self):
+    """
+    :rtype: str
+    """
     s = "%s{%s+%s}" % (
       self.id,
       "-".join(self.context_history) or "#",
@@ -429,6 +508,9 @@ class AllophoneState:
     return self.format()
 
   def copy(self):
+    """
+    :rtype: AllophoneState
+    """
     a = AllophoneState(id=self.id, state=self.state)
     for attr in self._attrs:
       if getattr(self, attr):
@@ -436,9 +518,15 @@ class AllophoneState:
     return a
 
   def mark_initial(self):
+    """
+    Add flag to self.boundary.
+    """
     self.boundary = self.boundary | 1
 
   def mark_final(self):
+    """
+    Add flag to self.boundary.
+    """
     self.boundary = self.boundary | 2
 
   def phoneme(self, ctx_offset, out_of_context_id=None):
@@ -634,17 +722,23 @@ class AllophoneState:
 
 
 class Lexicon:
+  """
+  Lexicon. Map of words to phoneme sequences (can have multiple pronunciations).
+  """
 
   def __init__(self, filename):
+    """
+    :param str filename:
+    """
     print("Loading lexicon", filename, file=log.v4)
     lex_file = open(filename, 'rb')
     if filename.endswith(".gz"):
       lex_file = gzip.GzipFile(fileobj=lex_file)
-    self.phoneme_list = []  # type: list[str]
-    self.phonemes = {}  # type: dict[str,dict[str]]  # phone -> {index, symbol, variation}
-    self.lemmas = {}  # type: dict[str,dict[str]]  # orth -> {orth, phons}
+    self.phoneme_list = []  # type: typing.List[str]
+    self.phonemes = {}  # type: typing.Dict[str,typing.Dict[str]]  # phone -> {index, symbol, variation}
+    self.lemmas = {}  # type: typing.Dict[str,typing.Dict[str]]  # orth -> {orth, phons}
 
-    context = iter(etree.iterparse(lex_file, events=('start', 'end')))
+    context = iter(ElementTree.iterparse(lex_file, events=('start', 'end')))
     _, root = next(context)  # get root element
     tree = [root]
     for event, elem in context:
@@ -679,7 +773,14 @@ class Lexicon:
 
 
 class StateTying:
+  """
+  Clustering of (allophone) states into classes.
+  """
+
   def __init__(self, state_tying_file):
+    """
+    :param str state_tying_file:
+    """
     self.allo_map = {}  # allophone-state-str -> class-idx
     self.class_map = {}  # class-idx -> set(allophone-state-str)
     ls = open(state_tying_file).read().splitlines()
@@ -697,6 +798,10 @@ class StateTying:
 
 
 class PhoneSeqGenerator:
+  """
+  Generates phone sequences.
+  """
+
   def __init__(self, lexicon_file,
                allo_num_states=3, allo_context_len=1,
                state_tying_file=None,
@@ -731,9 +836,15 @@ class PhoneSeqGenerator:
       self.state_tying = None
 
   def random_seed(self, seed):
+    """
+    :param int seed:
+    """
     self.rnd.seed(seed)
 
   def get_class_labels(self):
+    """
+    :rtype: list[str]
+    """
     if self.state_tying:
       # State tying labels. Represented by some allophone state str.
       return ["|".join(sorted(self.state_tying.class_map[i])) for i in range(self.state_tying.num_classes)]
@@ -748,7 +859,8 @@ class PhoneSeqGenerator:
     :rtype: numpy.ndarray
     :returns 1D numpy array with the indices
     """
-    if dtype is None: dtype = "int32"
+    if dtype is None:
+      dtype = "int32"
     if self.state_tying:
       # State tying indices.
       return numpy.array([self.state_tying.allo_map[a.format()] for a in phones], dtype=dtype)
@@ -758,6 +870,10 @@ class PhoneSeqGenerator:
       return numpy.array([self.lexicon.phonemes[p.id]["index"] for p in phones], dtype=dtype)
 
   def _iter_orth(self, orth):
+    """
+    :param str orth:
+    :rtype: typing.Iterator[typing.Dict[str]]
+    """
     if self.rnd.random() < self.add_silence_beginning:
       yield self.si_lemma
     symbols = list(orth.split())
@@ -783,12 +899,17 @@ class PhoneSeqGenerator:
       yield self.si_lemma
 
   def orth_to_phones(self, orth):
+    """
+    :param str orth:
+    :rtype: str
+    """
     phones = []
     for lemma in self._iter_orth(orth):
       phon = self.rnd.choice(lemma["phons"])
       phones += [phon["phon"]]
     return " ".join(phones)
 
+  # noinspection PyMethodMayBeStatic
   def _phones_to_allos(self, phones):
     for p in phones:
       a = AllophoneState()
@@ -796,7 +917,8 @@ class PhoneSeqGenerator:
       yield a
 
   def _random_allo_silence(self, phone=None):
-    if phone is None: phone = self.si_phone
+    if phone is None:
+      phone = self.si_phone
     while True:
       a = AllophoneState()
       a.id = phone
@@ -826,7 +948,11 @@ class PhoneSeqGenerator:
               break
 
   def _allos_set_context(self, allos):
-    if self.allo_context_len == 0: return
+    """
+    :param list[AllophoneState] allos:
+    """
+    if self.allo_context_len == 0:
+      return
     ctx = []
     for a in allos:
       if self.lexicon.phonemes[a.id]["variation"] == "context":
@@ -850,7 +976,7 @@ class PhoneSeqGenerator:
     :rtype: list[AllophoneState]
     :returns allophone state list. those will have repetitions etc
     """
-    allos = []
+    allos = []  # type: typing.List[AllophoneState]
     for lemma in self._iter_orth(orth):
       phon = self.rnd.choice(lemma["phons"])
       l_allos = list(self._phones_to_allos(phon["phon"].split()))
@@ -955,8 +1081,9 @@ class TranslationDataset(CachedDataset2):
       self.MapToDataKeys = self.__class__.MapToDataKeys.copy()
       del self.MapToDataKeys["target"]
     self._data_files = {data_key: self._get_data_file(prefix) for (prefix, data_key) in self.MapToDataKeys.items()}
-    self._data = {data_key: [] for data_key in self._data_files.keys()}  # type: dict[str,list[numpy.ndarray]]
-    self._data_len = None  # type: int|None
+    self._data = {
+      data_key: [] for data_key in self._data_files.keys()}  # type: typing.Dict[str,typing.List[numpy.ndarray]]
+    self._data_len = None  # type: typing.Optional[int]
     self._vocabs = {data_key: self._get_vocab(prefix) for (prefix, data_key) in self.MapToDataKeys.items()}
     self.num_outputs = {k: [max(self._vocabs[k].values()) + 1, 1] for k in self._vocabs.keys()}  # all sparse
     assert all([v1 <= 2 ** 31 for (k, (v1, v2)) in self.num_outputs.items()])  # we use int32
@@ -964,7 +1091,7 @@ class TranslationDataset(CachedDataset2):
     self._reversed_vocabs = {k: self._reverse_vocab(k) for k in self._vocabs.keys()}
     self.labels = {k: self._get_label_list(k) for k in self._vocabs.keys()}
     self._unknown_label = unknown_label
-    self._seq_order = None  # type: None|list[int]  # seq_idx -> line_nr
+    self._seq_order = None  # type: typing.Optional[typing.List[int]]  # seq_idx -> line_nr
     self._tag_prefix = "line-"  # sequence tag is "line-n", where n is the line number
     self._thread = Thread(name="%r reader" % self, target=self._thread_main)
     self._thread.daemon = True
@@ -980,6 +1107,7 @@ class TranslationDataset(CachedDataset2):
 
   def _thread_main(self):
     from Util import interrupt_main
+    # noinspection PyBroadException
     try:
       import better_exchook
       better_exchook.install()
@@ -1090,7 +1218,8 @@ class TranslationDataset(CachedDataset2):
       try:
         words_idxs = list(map(vocab.__getitem__, words))
       except KeyError as e:
-        raise Exception("Can not handle unknown token without unknown_label: %s (%s)" % (str(e), bytes(str(e), 'utf-8')))
+        raise Exception(
+          "Can not handle unknown token without unknown_label: %s (%s)" % (str(e), bytes(str(e), 'utf-8')))
     else:
       unknown_label_id = vocab[self._unknown_label]
       words_idxs = [vocab.get(w, unknown_label_id) for w in words]
@@ -1136,17 +1265,32 @@ class TranslationDataset(CachedDataset2):
       t += 1
 
   def have_corpus_seq_idx(self):
+    """
+    :rtype: bool
+    """
     return True
 
   def get_corpus_seq_idx(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: int
+    """
     if self._seq_order is None:
       return None
     return self._seq_order[seq_idx]
 
   def is_data_sparse(self, key):
+    """
+    :param str key:
+    :rtype: bool
+    """
     return True  # all is sparse
 
   def get_data_dtype(self, key):
+    """
+    :param str key:
+    :rtype: str
+    """
     return "int32"  # sparse -> label idx
 
   def init_seq_order(self, epoch=None, seq_list=None):
@@ -1220,7 +1364,7 @@ class ConfusionNetworkDataset(TranslationDataset):
       You might want to add some sentence-end symbol.
     :param bool source_only: if targets are not available
     :param str|None unknown_label: "UNK" or so. if not given, then will not replace unknowns but throw an error
-    :param int|12 max_density: the density of the confusion network: max number of arcs per slot
+    :param int max_density: the density of the confusion network: max number of arcs per slot
     """
     self._main_data_key = "sparse_inputs"
     self._keys_to_read = ["sparse_inputs", "classes"]
@@ -1230,19 +1374,34 @@ class ConfusionNetworkDataset(TranslationDataset):
       self._data["sparse_weights"] = []
 
   def get_data_keys(self):
+    """
+    :rtype: list[str]
+    """
     return ["sparse_inputs", "sparse_weights", "classes"]
 
   def is_data_sparse(self, key):
-      if key == "sparse_weights":
-        return False
-      return True  # everything else is sparse
+    """
+    :param str key:
+    :rtype: bool
+    """
+    if key == "sparse_weights":
+      return False
+    return True  # everything else is sparse
 
   def get_data_dtype(self, key):
+    """
+    :param str key:
+    :rtype: str
+    """
     if key == "sparse_weights":
       return "float32"
     return "int32"  # sparse -> label idx
 
   def get_data_shape(self, key):
+    """
+    :param str key:
+    :rtype: list[int]
+    """
     if key in ["sparse_inputs", "sparse_weights"]:
       return [self.density]
     return []
@@ -1256,6 +1415,7 @@ class ConfusionNetworkDataset(TranslationDataset):
     """
     unknown_label_id = vocab[self._unknown_label]
     offset = 0
+    postfix_index = None
     if postfix is not None:
       postfix_index = vocab.get(postfix, unknown_label_id)
       if postfix_index != unknown_label_id:
@@ -1295,20 +1455,21 @@ class ConfusionNetworkDataset(TranslationDataset):
   def _extend_data(self, key, data_strs):
     """
     :param str key: the key ("sparse_inputs", or "classes")
-    :param list[str] data_strs: array of input for the key
+    :param list[str|bytes] data_strs: array of input for the key
     """
     vocab = self._vocabs[key]
     if key == self._main_data_key:  # the sparse inputs and weights
       idx_data = []
       conf_data = []
       for s in data_strs:
-        (words_idxs, words_confs) = self._data_str_to_sparse_inputs(vocab, s.decode("utf8").strip(), self._add_postfix[key])
+        (words_idxs, words_confs) = self._data_str_to_sparse_inputs(
+          vocab, s.decode("utf8").strip(), self._add_postfix[key])
         idx_data.append(words_idxs)
         conf_data.append(words_confs)
       with self._lock:
         self._data[key].extend(idx_data)
         self._data["sparse_weights"].extend(conf_data)
-    else: # the classes
+    else:  # the classes
       data = [
         self._data_str_to_numpy(vocab, s.decode("utf8").strip() + self._add_postfix[key])
         for s in data_strs]
@@ -1379,33 +1540,60 @@ _abbreviations = [(re.compile('\\b%s\\.' % x[0], re.IGNORECASE), x[1]) for x in 
 
 
 def expand_abbreviations(text):
+  """
+  :param str text:
+  :rtype: str
+  """
   for regex, replacement in _abbreviations:
     text = re.sub(regex, replacement, text)
   return text
 
 
 def lowercase(text):
+  """
+  :param str text:
+  :rtype: str
+  """
   return text.lower()
 
 
 def collapse_whitespace(text):
+  """
+  :param str text:
+  :rtype: str
+  """
   return re.sub(_whitespace_re, ' ', text)
 
 
 def convert_to_ascii(text):
+  """
+  :param str text:
+  :rtype: str
+  """
+  # noinspection PyUnresolvedReferences,PyPackageRequirements
   from unidecode import unidecode
   return unidecode(text)
 
 
 def basic_cleaners(text):
-  """Basic pipeline that lowercases and collapses whitespace without transliteration."""
+  """
+  Basic pipeline that lowercases and collapses whitespace without transliteration.
+
+  :param str text:
+  :rtype: str
+  """
   text = lowercase(text)
   text = collapse_whitespace(text)
   return text
 
 
 def transliteration_cleaners(text):
-  """Pipeline for non-English text that transliterates to ASCII."""
+  """
+  Pipeline for non-English text that transliterates to ASCII.
+
+  :param str text:
+  :rtype: str
+  """
   text = convert_to_ascii(text)
   text = lowercase(text)
   text = collapse_whitespace(text)
@@ -1450,28 +1638,41 @@ def _get_inflect():
   global _inflect
   if _inflect:
     return _inflect
+  # noinspection PyUnresolvedReferences,PyPackageRequirements
   import inflect
   _inflect = inflect.engine()
   return _inflect
 
 
-_comma_number_re = re.compile(r'([0-9][0-9\,]+[0-9])')
+_comma_number_re = re.compile(r'([0-9][0-9,]+[0-9])')
 _decimal_number_re = re.compile(r'([0-9]+\.[0-9]+)')
-_pounds_re = re.compile(r'£([0-9\,]*[0-9]+)')
-_dollars_re = re.compile(r'\$([0-9\.\,]*[0-9]+)')
+_pounds_re = re.compile(r'£([0-9,]*[0-9]+)')
+_dollars_re = re.compile(r'\$([0-9.,]*[0-9]+)')
 _ordinal_re = re.compile(r'[0-9]+(st|nd|rd|th)')
 _number_re = re.compile(r'[0-9]+')
 
 
 def _remove_commas(m):
+  """
+  :param typing.Match m:
+  :rtype: str
+  """
   return m.group(1).replace(',', '')
 
 
 def _expand_decimal_point(m):
+  """
+  :param typing.Match m:
+  :rtype: str
+  """
   return m.group(1).replace('.', ' point ')
 
 
 def _expand_dollars(m):
+  """
+  :param typing.Match m:
+  :rtype: str
+  """
   match = m.group(1)
   parts = match.split('.')
   if len(parts) > 2:
@@ -1493,10 +1694,18 @@ def _expand_dollars(m):
 
 
 def _expand_ordinal(m):
+  """
+  :param typing.Match m:
+  :rtype: str
+  """
   return _get_inflect().number_to_words(m.group(0))
 
 
 def _expand_number(m):
+  """
+  :param typing.Match m:
+  :rtype: str
+  """
   num = int(m.group(0))
   if 1000 < num < 3000:
     if num == 2000:
@@ -1512,6 +1721,10 @@ def _expand_number(m):
 
 
 def normalize_numbers(text):
+  """
+  :param str text:
+  :rtype: str
+  """
   text = re.sub(_comma_number_re, _remove_commas, text)
   text = re.sub(_pounds_re, r'\1 pounds', text)
   text = re.sub(_dollars_re, _expand_dollars, text)
@@ -1522,6 +1735,10 @@ def normalize_numbers(text):
 
 
 def _dummy_identity_pp(text):
+  """
+  :param str text:
+  :rtype: str
+  """
   return text
 
 
@@ -1552,6 +1769,10 @@ def get_post_processor_function(opts):
   pps = [get_post_processor_function(pp) for pp in opts]
 
   def chained_post_processors(text):
+    """
+    :param str text:
+    :rtype: str
+    """
     for pp in pps:
       text = pp(text)
     return text
@@ -1573,7 +1794,13 @@ def _main():
     callback = print
     if args.post_processor:
       pp = get_post_processor_function(args.post_processor)
-      callback = lambda text: print(pp(text))
+
+      def callback(text):
+        """
+        :param str text:
+        """
+        print(pp(text))
+
     iter_corpus(args.lm_dataset, callback)
     sys.exit(0)
 
@@ -1596,6 +1823,7 @@ def _main():
 
     if time.time() - last_log_time > 2.0:
       last_log_time = time.time()
+      # noinspection PyProtectedMember
       print("Loading %s progress, %i/%i (%.0f%%) seqs loaded (%.0f%% skipped), (%.0f%% unknown) total syms %i ..." % (
             dataset.__class__.__name__, dataset.next_orth_idx, dataset.estimated_num_seqs,
             100.0 * dataset.next_orth_idx / dataset.estimated_num_seqs,

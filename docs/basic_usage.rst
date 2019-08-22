@@ -40,18 +40,25 @@ train / dev
     Or it can be a dict with an entry ``class`` where you can choose a from a variety
     of other dataset implementations, including many synthetic generated data.
 
-num_inputs / num_outputs
+extern_data (former num_outputs)
     Defines the source/target dimensions of the data. Both can be integers.
-    num_outputs can also be a dict if your dataset has other data streams.
+    extern_data can also be a dict if your dataset has other data streams.
     The standard source data is called "``data``" by default,
     and the standard target data is called "``classes``" by default.
     You can also specify whether your data is dense or sparse (i.e. it is just the index),
     which is specified by the number of dimensions, i.e. 2 (time-dim + feature-dim) or 1 (just time-dim).
+    When using no explicit definition, it is assumed that the data contains a time axis.
 
-    Example: :code:`num_outputs = {"data": [100, 2], "classes": [5000, 1]}`.
+    Example: :code:`extern_data = {"data": [100, 2], "classes": [5000, 1]}`.
     This defines an input dimension of 100, and the input is dense (2),
     and an output dimension of 5000, and the output provided by the dataset is sparse (1).
-    If "``classes``" is provided by ``num_outputs``, then you can omit ``num_inputs``.
+
+    For a more explicit definition of the shapes, you can provide a dict instead of a list or tuple. This dict may
+    contain information to create "Data" objects. For extern_data, only ``dim`` and ``shape`` are required.
+    Example: :code:`'speaker_classes': {'dim': 1172, 'shape': (), 'sparse': True}`
+    This defines a sparse input for e.g. speaker classes that do not have a time axis.
+
+    In general, all input parameters to :class:`TFUtil.Data` can be provided.
 
 batching
     The sorting variant when the mini-batches are created. E.g. ``random``.
@@ -133,3 +140,63 @@ All config params can also be passed as command line params.
 See the code for some usage. The generic form is ``++param value``.
 
 See :ref:`tech_overview` for more details and an overview how it all works.
+
+
+====================
+Usage as a framework
+====================
+
+Install RETURNN via ``pip`` (`PyPI entry <https://pypi.org/project/returnn/>`__).
+Then :code:`import returnn` should work.
+See `demo-returnn-as-framework.py <https://github.com/rwth-i6/returnn/blob/master/demos/demo-returnn-as-framework.py>`__ as a full example.
+
+Basically you can write very high level code like this::
+
+    from returnn.TFEngine import Engine
+    from returnn.Dataset import init_dataset
+    from returnn.Config import get_global_config
+
+    config = get_global_config(auto_create=True)
+    config.update(dict(
+        # ...
+    ))
+
+    engine = Engine(config)
+
+    train_data = init_dataset({"class": "Task12AXDataset", "num_seqs": 1000, "name": "train"})
+    dev_data = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "dev", "fixed_random_seed": 1})
+
+    engine.init_train_from_config(train_data=train_data, dev_data=dev_data)
+
+Or you go lower level and construct the computation graph yourself::
+
+    from returnn.TFNetwork import TFNetwork
+
+    config = get_global_config(auto_create=True)
+
+    net = TFNetwork(train_flag=True)
+    net.construct_from_dict({
+        # ...
+    })
+    fetches = net.get_fetches_dict()
+
+    with tf.Session() as session:
+        results = session.run(fetches, feed_dict={
+            # ...
+            # you could use FeedDictDataProvider
+        })
+
+Or even lower level and just use parts from ``TFUtil``, ``TFNativeOp``, etc.::
+
+    from returnn.TFNativeOp import ctc_loss
+    from returnn.TFNativeOp import edit_distance
+    from returnn.TFNativeOp import NativeLstm2
+
+    from returnn.TFUtil import ctc_greedy_decode
+    from returnn.TFUtil import get_available_gpu_min_compute_capability
+    from returnn.TFUtil import safe_log
+    from returnn.TFUtil import reuse_name_scope
+    from returnn.TFUtil import dimshuffle
+
+    # ...
+

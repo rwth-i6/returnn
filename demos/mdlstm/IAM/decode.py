@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+from __future__ import print_function
 import h5py
 import numpy
 
@@ -22,5 +23,5 @@ with h5py.File("mdlstm_real_valid.h5", "r") as f:
         last_char = c
     y = [" " if c == "|" else c for c in y if c != "_blank"]
     output = "".join(y).strip()
-    print tag, output
+    print(tag, output)
     start += len_

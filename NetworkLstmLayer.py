@@ -6,6 +6,7 @@ import theano
 from NetworkHiddenLayer import HiddenLayer, _NoOpLayer
 from ActivationFunctions import strtoact
 
+
 class RecurrentLayer(HiddenLayer):
   recurrent = True
   layer_class = "recurrent"

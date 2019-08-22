@@ -3,7 +3,7 @@ from __future__ import print_function
 
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 import unittest
-from Device import have_gpu
+from Util import have_gpu
 
 
 def test_have_gpu():
@@ -12,6 +12,10 @@ def test_have_gpu():
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_cuda():
+  try:
+    import theano
+  except ImportError as exc:
+    raise unittest.SkipTest(str(exc))
   import theano.sandbox.cuda as theano_cuda
   assert_true(theano_cuda.cuda_available, "Theano CUDA support not available. Check that nvcc is in $PATH.")
   if theano_cuda.cuda_enabled: # already enabled when $THEANO_FLAGS=device=gpu

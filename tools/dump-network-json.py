@@ -13,19 +13,19 @@ import argparse
 import rnn
 import json
 from Log import log
-from Pretrain import pretrainFromConfig
+from Pretrain import pretrain_from_config
 from Network import LayerNetwork
 
 
 def init(configFilename, commandLineOptions):
-  rnn.initBetterExchook()
-  rnn.initConfig(configFilename, commandLineOptions)
+  rnn.init_better_exchook()
+  rnn.init_config(configFilename, commandLineOptions)
   global config
   config = rnn.config
   config.set("log", [])
-  rnn.initLog()
+  rnn.init_log()
   print("CRNN dump-dataset starting up.", file=log.v3)
-  rnn.initConfigJsonNetwork()
+  rnn.init_config_json_network()
 
 
 def main(argv):
@@ -36,7 +36,7 @@ def main(argv):
   args = argparser.parse_args(argv[1:])
   init(configFilename=args.crnn_config_file, commandLineOptions=[])
 
-  pretrain = pretrainFromConfig(config)
+  pretrain = pretrain_from_config(config)
   if pretrain:
     network = pretrain.get_network_for_epoch(args.epoch)
   else:

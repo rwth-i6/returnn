@@ -45,7 +45,7 @@ def dump(dataset, options):
 
 def init(configFilename, commandLineOptions):
   rnn.init(
-    configFilename=configFilename, commandLineOptions=commandLineOptions,
+    config_filename=configFilename, command_line_options=commandLineOptions,
     config_updates={"log": None},
     extra_greeting="CRNN dump-forward starting up.")
   rnn.engine.init_train_from_config(config=rnn.config, train_data=rnn.train_data)

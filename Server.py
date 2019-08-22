@@ -34,20 +34,22 @@ import tornado.web
 
 from Log import log
 from GeneratingDataset import StaticDataset
-from Device import Device, get_num_devices, TheanoFlags, getDevicesInitArgs
+from Device import Device
+from Util import TheanoFlags
+from Config import get_devices_init_args
 from EngineTask import ForwardTaskThread
-from Dataset import Dataset, init_dataset, init_dataset_via_str
-from HDFDataset import HDFDataset
 import Engine
 import Config
 
 # TODO: Look into making these non-global.
 _max_amount_engines = 4
 
+
 class ClassificationRequest:
   def __init__(self, data):
     self.data = data
     self.future = Future()
+
 
 class Model:
   def __init__(self, config_file):
@@ -96,7 +98,7 @@ class Model:
       # This is important because Theano likely already has initialized that device.
       config.set("device", TheanoFlags["device"])
       print("Devices: Use %s via THEANO_FLAGS instead of %s." % (TheanoFlags["device"], oldDeviceConfig), file=log.v4)
-    devArgs = getDevicesInitArgs(self.config)
+    devArgs = get_devices_init_args(self.config)
     assert len(devArgs) > 0
     devices = [Device(**kwargs) for kwargs in devArgs]
     for device in devices:
@@ -149,7 +151,7 @@ class Model:
     yield self.classification_queue.put(request)
     yield request.future
 
-    return request.future.result()
+    # return request.future.result()
 
 
 class Server:

@@ -1,17 +1,21 @@
-#!/usr/bin/env python2.7
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Utility functions to generate FSAs (or FSTs).
+"""
 
 from __future__ import print_function
 from __future__ import division
 
 import numpy
-import theano
 import pickle
-from theano import tensor as T
+import itertools
+import typing
 from copy import deepcopy
+from os.path import isfile
 from Log import log
 from LmDataset import Lexicon, StateTying
-from os.path import isfile
-import itertools
 
 
 class Edge:
@@ -77,6 +81,10 @@ class Edge:
                     str(self.weight)))
 
   def as_tuple(self):
+    """
+    :return: source state idx, target state idx, label, weight
+    :rtype: (int,int,int|str|None,float)
+    """
     return self.source_state_idx, self.target_state_idx, self.label, self.weight
 
   def __eq__(self, other):
@@ -162,6 +170,9 @@ class Graph:
     return prettygraph
 
   def is_empty(self):
+    """
+    :rtype: bool
+    """
     return True if self.num_states <= 0 and len(self.edges) <= 0 else False
 
   @staticmethod
@@ -732,14 +743,18 @@ class AllPossibleWordsFsa:
   def __init__(self, fsa):
     """
     takes a lexicon file and constructs a fsa over all words
+
     :param Graph fsa: the graph which holds the constructed fsa
     """
     self.fsa = fsa
     self.lexicon = None
 
   def run(self):
+    """
+    Run
+    """
     print("Starting All Possible Words FSA Creation")
-    for key, value in self.lexicon.lemmas.iteritems():  # for python 3: .items()
+    for key, value in self.lexicon.lemmas.items():
       edge = Edge(0, 0, key, 0)
       self.fsa.edges_word.append(edge)
     self.fsa.num_states_word = 1
@@ -753,10 +768,11 @@ class Ngram:
   def __init__(self, n):
     """
     constructs a fsa over a lexicon with n-grams
+
     :param int n: size of the gram (1, 2, 3)
     """
     self.n = n
-    self.lexicon = None  # type: Lexicon
+    self.lexicon = None  # type: typing.Optional[Lexicon]
     # lexicon consists of 3 entries: phoneme_list, phonemes and lemmas
     # phoneme_list: list of string phonemes in the lexicon
     # phonemes: dict of dict of str {phone: {index: , symbol: , variation:}}
@@ -797,19 +813,21 @@ class Ngram:
       self.num_states += 1
 
   def run(self):
+    """
+    Run
+    """
     print("Starting {}-gram FSA Creation".format(self.n))
 
     if not self.lemma_list:
       self._create_lemma_list()
 
-    node_expand = []
-    node_expand.append(0)
+    node_expand = [0]
     ngram_counter = 1
 
     while node_expand:
       cur_start = node_expand.pop()
       for idx, lemma in enumerate(self.lemma_list):
-        cur_end = self.num_states + 1 # cur_start + idx + 1
+        cur_end = self.num_states + 1  # cur_start + idx + 1
         edge = Edge(cur_start, cur_end, lemma, 0.)
         self.edges.append(edge)
         self.num_states += 1
@@ -837,7 +855,8 @@ def load_lexicon(lexicon_name='recog.150k.final.lex.gz', pickleflag=False):
   :rtype: Lexicon
   """
   log.initialize(verbosity=[5])
-  lexicon_dumpname = lexicon_name.rstrip('\.gz') + '.pickle'
+  import os
+  lexicon_dumpname = os.path.splitext(lexicon_name)[0] + '.pickle'
 
   if pickleflag:
     # loads from pickled lexicon file
@@ -972,76 +991,6 @@ class Store:
       graph.edge(*e[0], **e[1])
 
 
-class BuildSimpleFsaOp(theano.Op):
-  itypes = (T.imatrix,)
-  # the first and last output are actually uint32
-  otypes = (T.fmatrix, T.fvector, T.fmatrix)
-
-  def __init__(self, state_models=None):
-    if state_models is None:
-        state_models = {}
-
-    self.state_models = state_models
-
-  def perform(self, node, inputs, output_storage, params=None):
-    labels = inputs[0]
-
-    from_states      = []
-    to_states        = []
-    emission_idxs    = []
-    seq_idxs         = []
-    weights          = []
-    start_end_states = []
-
-    cur_state = 0
-    edges            = []
-    weights          = []
-    start_end_states = []
-    for b in range(labels.shape[1]):
-      seq_start_state = cur_state
-      for l in range(labels.shape[0]):
-        label = labels[l, b]
-        if label < 0:
-          continue
-        state_model = self.state_models.get(labels[l, b], ('default', 0, 0.0))
-        params = state_model[1:]
-        state_model = state_model[0]
-        if state_model == 'default':
-          # default state model where we transition to the next label
-          length_model, edge_weight = params
-          edges.append((cur_state, cur_state + 1, label, length_model, b))
-          weights.append(edge_weight)
-          cur_state += 1
-        elif state_model == 'loop':
-          # allow looping in the current state before proceeding to the next one
-          length_model, fwd_score, loop_score = params
-          edges.append((cur_state, cur_state,     label, length_model, b))
-          weights.append(loop_score)
-          edges.append((cur_state, cur_state + 1, label, length_model, b))
-          weights.append(fwd_score)
-          cur_state += 1
-        elif state_model == 'double':
-          # choose between emitting the label once or twice
-          lm_once, lm_twice_1, lm_twice_2, once_score, twice_score = params
-          edges.append((cur_state,     cur_state + 2, label, lm_once, b))
-          weights.append(once_score)
-          edges.append((cur_state    , cur_state + 1, label, lm_twice_1, b))
-          weights.append(0.5 * twice_score)
-          edges.append((cur_state + 1, cur_state + 2, label, lm_twice_2, b))
-          weights.append(0.5 * twice_score)
-          cur_state += 2
-
-      start_end_states.append([seq_start_state, cur_state])
-
-      cur_state += 1
-
-    edges = sorted(edges, key=lambda e: e[1] - e[0])
-
-    output_storage[0][0] = numpy.asarray(edges, dtype='uint32').T.copy().view(dtype='float32')
-    output_storage[1][0] = numpy.array(weights, dtype='float32')
-    output_storage[2][0] = numpy.asarray(start_end_states, dtype='uint32').T.copy().view(dtype='float32')
-
-
 class FastBaumWelchBatchFsa:
   """
   FSA(s) in representation format for :class:`FastBaumWelchOp`.
@@ -1069,11 +1018,12 @@ class FastBwFsaShared:
   """
   One FSA shared for all the seqs in one batch (i.e. across batch-dim).
   This is a simplistic class which provides the necessary functions to
+  add edges, and simple conversion to :class:`FastBaumWelchBatchFsa`.
   """
 
   def __init__(self):
     self.num_states = 1
-    self.edges = []  # type: list[Edge]
+    self.edges = []  # type: typing.List[Edge]
 
   def add_edge(self, source_state_idx, target_state_idx, emission_idx, weight=0.0):
     """
@@ -1157,12 +1107,85 @@ class FastBwFsaShared:
       start_end_states=self.get_start_end_states(n_batch))
 
 
+def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx):
+  """
+  :param numpy.ndarray targets: shape (batch,time)
+  :param numpy.ndarray seq_lens: shape (batch)
+  :param int blank_idx:
+  :rtype: FastBaumWelchBatchFsa
+  """
+  n_batch, n_time = targets.shape
+  assert seq_lens.shape == (n_batch,)
+  edges = []  # type: typing.List[typing.Tuple[int,int,int,int]]  # list of (from,to,emission_idx,sequence_idx)
+  start_end_states = []  # type: typing.List[typing.Tuple[int,int]]  # list of (start,end), same len as batch
+  state_idx = 0
+  # Note: We don't use weights on the edges, i.e. they are all set to zero.
+  # I.e. we want that all strings for some given length T have the same probability.
+  # In a probabilistic interpretation, this means that for some given length T,
+  # the probability mass of all strings Σ^T is > 1. This does not matter too much,
+  # because it cancels out for most usages (e.g. when calculating Baum-Welch).
+  # But important is that any string in Σ^T has exactly one unique path through the FSA.
+  # Otherwise, if there are strings which have more paths than others,
+  # the probability mass would not be evenly distributed.
+  # The FSA for CTC is kind of straight-forward, up to the final label.
+  # For the final label, to have this property of a unique path for every string,
+  # we need to add some extra handling (see below).
+  # It would be a bit simpler if we would have multiple final states,
+  # but the current interface does not allow this.
+  for batch_idx in range(n_batch):
+    initial_state_idx = state_idx
+    edges.append((state_idx, state_idx, blank_idx, batch_idx))  # initial blank loop
+    assert seq_lens[batch_idx] <= n_time
+    for i in range(seq_lens[batch_idx]):
+      label_idx = targets[batch_idx, i]
+      is_final_label = i == seq_lens[batch_idx] - 1
+      next_is_final_label = i == seq_lens[batch_idx] - 2
+      next_label_idx = None if is_final_label else targets[batch_idx, i + 1]
+      edges.append((state_idx, state_idx + 1, label_idx, batch_idx))  # label
+      if is_final_label:
+        # Case 1a: no blank at the end, exactly 1 label.
+        # Skip directly to final state (state_idx + 3).
+        edges.append((state_idx, state_idx + 3, label_idx, batch_idx))  # label
+      state_idx += 1
+      edges.append((state_idx, state_idx, label_idx, batch_idx))  # label loop
+      edges.append((state_idx, state_idx + 1, blank_idx, batch_idx))  # blank
+      if not is_final_label and label_idx != next_label_idx:
+        # Skip over blank is allowed in this case.
+        edges.append((state_idx, state_idx + 2, next_label_idx, batch_idx))  # next label
+        if next_is_final_label:
+          # We miss now the case of having: exactly one label, no blank.
+          # Skip directly to the final state (state_idx + 4).
+          edges.append((state_idx, state_idx + 4, next_label_idx, batch_idx))  # next label
+      if is_final_label:
+        # Case 1b: no blank at the end, 2 or more labels.
+        # Skip directly to final state (state_idx + 2).
+        edges.append((state_idx, state_idx + 2, label_idx, batch_idx))  # label
+        # Case 2: exactly one blank at the end, 1 or more labels.
+        # Skip directly to final state (state_idx + 2).
+        edges.append((state_idx, state_idx + 2, blank_idx, batch_idx))  # blank
+      state_idx += 1
+      edges.append((state_idx, state_idx, blank_idx, batch_idx))  # blank loop
+      if is_final_label:
+        # Case 3: 2 or more blank at the end, 1 or more labels.
+        # Go to final state (state_idx + 1).
+        edges.append((state_idx, state_idx + 1, blank_idx, batch_idx))  # blank
+        state_idx += 1  # this is the final state now
+    final_state_idx = state_idx
+    start_end_states.append((initial_state_idx, final_state_idx))
+    state_idx += 1
+  edges_np = numpy.array(edges).transpose()  # (4,n_edges)
+  start_end_states_np = numpy.array(start_end_states).transpose()  # (2,batch)
+  return FastBaumWelchBatchFsa(
+    edges=edges_np, weights=numpy.zeros((len(edges),), dtype="float32"),
+    start_end_states=start_end_states_np)
+
+
 def fast_bw_fsa_staircase(seq_lens, with_loop=False, max_skip=None, start_max_skip=None, end_max_skip=None):
   """
   Builds up a staircase FSA, returns a FastBaumWelchBatchFsa.
   The emissions are indices [0, ..., seq_len - 1].
 
-  :param list[int] seq_lens:
+  :param list[int]|numpy.ndarray seq_lens:
   :param bool with_loop:
   :param int|list[int] max_skip: per batch if a list
   :param int|list[int] start_max_skip: per batch if a list
@@ -1233,101 +1256,10 @@ def fast_bw_fsa_staircase(seq_lens, with_loop=False, max_skip=None, start_max_sk
     start_end_states=numpy.array(start_end_states).transpose())
 
 
-class LoadWfstOp(theano.Op):
-  """
-  Op: maps segment names (tags) to fsa automata (load from disk) that can be used to compute a BW-alignment
-  """
-
-  __props__ = ("filename",)
-
-  def __init__(self, filename):
-    super(LoadWfstOp, self).__init__()
-    from Util import make_hashable
-    self.filename = make_hashable(filename)
-    self.single_wfst = None  # type: dict
-
-  def make_node(self, tags):
-    # the edges/start_end_state output has to be a float matrix because that is the only dtype supported
-    # by CudaNdarray. We need unsigned ints. Thus we return a view on the unsigned int matrix
-    return theano.Apply(self, [tags], [T.fmatrix(), T.fvector(), T.fvector(), T.fmatrix(), T.fvector(), T.fmatrix()])
-
-  def perform(self, node, inputs, output_storage, params=None):
-    tags = inputs[0]
-    try:
-      _ = iter(tags)
-    except TypeError:
-      tags = [tags]
-
-    if self.single_wfst is None:
-      print("LoadWfstOp: Loading WFST from %r" % self.filename, file=log.v3)
-      import xml.etree.ElementTree as ET
-
-      tree = ET.parse(self.filename)
-      root = tree.getroot()
-      single_wfst = dict()
-      single_wfst['edges'] = []
-      single_wfst['weights'] = []
-      single_wfst['start_states'] = numpy.array([root.attrib['initial']],dtype=numpy.uint32)
-      single_wfst['end_states'] = []
-      single_wfst['end_state_weigths'] = []
-      self.single_wfst = dict()
-      self.single_wfst['num_states'] = len(root)
-
-      for state in root:
-        if state.tag != 'state':
-          continue # not interested in input-alphabet
-        state_id = numpy.uint32(state.attrib['id'])
-        if state[0].tag == 'final':
-            single_wfst['end_states'].append([numpy.uint32(0),state_id])
-            if state[1].tag == 'weight':
-              single_wfst['end_state_weigths'].append(numpy.float32(state[1].text))
-            else:
-              single_wfst['end_state_weigths'].append(numpy.float32(0.))
-        for arc in state:
-          if arc.tag != 'arc':
-            continue # alredy handeled 'final' and 'weight'
-          target = numpy.uint32(arc.attrib['target'])
-          emission_id = numpy.uint32(arc[0].text)
-          if len(arc) > 1 :
-            weight = numpy.float32(arc[1].text)
-          else:
-            weight = numpy.float32(0.)
-          single_wfst['edges'].append([state_id,target,emission_id,numpy.uint32(0)])
-          single_wfst['weights'].append(weight)
-      for key,val in single_wfst.items():
-        self.single_wfst[key] = numpy.array(val)
-
-    assert isinstance(self.single_wfst, dict)  # PyCharm confused otherwise
-
-    offset = 0
-    all_edges = []
-    all_weights = []
-    all_start_states = []
-    all_end_states = []
-    all_end_state_weigths = []
-    for tag in tags:
-      edges = numpy.transpose(numpy.copy(self.single_wfst['edges']))
-      edges[0:2,:] += offset
-      edges[3,:]    = tag
-      all_edges.append(edges)
-      all_weights.append(self.single_wfst['weights'])
-      all_start_states.append(self.single_wfst['start_states']+offset)
-      end_states = numpy.copy(self.single_wfst['end_states'])
-      end_states[:,1] += offset
-      end_states[:,0]    = tag
-      all_end_states.append(end_states)
-      all_end_state_weigths.append(self.single_wfst['end_state_weigths'])
-      offset += self.single_wfst['num_states']
-
-    output_storage[0][0] = numpy.hstack(all_edges).view(dtype='float32')
-    output_storage[1][0] = numpy.hstack(all_weights)
-    output_storage[2][0] = numpy.hstack(all_start_states).view(dtype='float32')
-    output_storage[3][0] = numpy.hstack(all_end_states).view(dtype='float32')
-    output_storage[4][0] = numpy.hstack(all_end_state_weigths)
-    output_storage[5][0] = numpy.empty((2, self.single_wfst['num_states']*len(tags)), dtype='float32')
-
-
 def main():
+  """
+  Demo
+  """
   import time
   from argparse import ArgumentParser
 

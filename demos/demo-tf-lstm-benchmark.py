@@ -47,6 +47,7 @@ GeForce GTX 680:
     CPU:BasicLSTM: 0:03:58.1545
 """
 
+from __future__ import print_function
 import sys
 import os
 import time
@@ -58,7 +59,7 @@ sys.path += [os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]
 import better_exchook
 from Log import log
 from Config import Config
-from Util import hms_fraction, describe_crnn_version, describe_tensorflow_version
+from Util import hms_fraction, describe_returnn_version, describe_tensorflow_version
 from TFEngine import Engine
 from TFUtil import setup_tf_thread_pools, is_gpu_available, print_available_devices
 from Dataset import init_dataset, Dataset
@@ -173,7 +174,7 @@ def main():
   pprint(base_settings)
 
   log.initialize(verbosity=[4])
-  print("Returnn:", describe_crnn_version(), file=log.v3)
+  print("Returnn:", describe_returnn_version(), file=log.v3)
   print("TensorFlow:", describe_tensorflow_version(), file=log.v3)
   print("Python:", sys.version.replace("\n", ""), sys.platform)
   if not args.no_setup_tf_thread_pools:

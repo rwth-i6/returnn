@@ -14,8 +14,7 @@ import rnn
 from Log import log
 import argparse
 import numpy
-from better_exchook import pretty_print
-from Util import Stats, hms
+from Util import Stats, hms, pretty_print
 import Util
 
 
@@ -66,10 +65,22 @@ def dump_dataset(dataset, options):
     print("Done.")
     return
 
+  dump_file = None
   if options.type == "numpy":
     print("Dump files: %r*%r" % (options.dump_prefix, options.dump_postfix), file=log.v3)
   elif options.type == "stdout":
     print("Dump to stdout", file=log.v3)
+    if options.stdout_limit is not None:
+      Util.set_pretty_print_default_limit(options.stdout_limit)
+      numpy.set_printoptions(
+        threshold=sys.maxsize if options.stdout_limit == float("inf") else int(options.stdout_limit))
+    if options.stdout_as_bytes:
+      Util.set_pretty_print_as_bytes(options.stdout_as_bytes)
+  elif options.type == "print_tag":
+    print("Dump seq tag to stdout", file=log.v3)
+  elif options.type == "dump_tag":
+    dump_file = open("%sseq-tags.txt" % options.dump_prefix, "w")
+    print("Dump seq tag to file: %s" % (dump_file.name,), file=log.v3)
   elif options.type == "print_shape":
     print("Dump shape to stdout", file=log.v3)
   elif options.type == "plot":
@@ -102,32 +113,34 @@ def dump_dataset(dataset, options):
       total_time_estimated = start_elapsed / complete_frac
       remaining_estimated = total_time_estimated - start_elapsed
       progress += " (%s)" % hms(remaining_estimated)
-    data = dataset.get_data(seq_idx, options.key)
-    if options.type == "numpy":
-      numpy.savetxt("%s%i.data%s" % (options.dump_prefix, seq_idx, options.dump_postfix), data)
-    elif options.type == "stdout":
-      print("seq %s tag:" % progress, dataset.get_tag(seq_idx))
-      print("seq %s data:" % progress, pretty_print(data))
-    elif options.type == "print_shape":
-      print("seq %s data shape:" % progress, data.shape)
-    elif options.type == "plot":
-      plot(data)
-    for target in dataset.get_target_list():
-      targets = dataset.get_targets(target, seq_idx)
+    if options.type == "print_tag":
+      print("seq %s tag:" % (progress if log.verbose[2] else progress_prefix), dataset.get_tag(seq_idx))
+    elif options.type == "dump_tag":
+      print("seq %s tag:" % (progress if log.verbose[2] else progress_prefix), dataset.get_tag(seq_idx))
+      dump_file.write("%s\n" % dataset.get_tag(seq_idx))
+    else:
+      data = dataset.get_data(seq_idx, options.key)
       if options.type == "numpy":
-        numpy.savetxt("%s%i.targets.%s%s" % (options.dump_prefix, seq_idx, target, options.dump_postfix), targets, fmt='%i')
+        numpy.savetxt("%s%i.data%s" % (options.dump_prefix, seq_idx, options.dump_postfix), data)
       elif options.type == "stdout":
-        extra = ""
-        if target in dataset.labels:
-          labels = dataset.labels[target]
-          if len(labels) < 1000 and all([len(l) == 1 for l in labels]):
-            join_str = ""
-          else:
-            join_str = " "
-          extra += " (%r)" % join_str.join(map(dataset.labels[target].__getitem__, targets))
-        print("seq %i target %r: %s%s" % (seq_idx, target, pretty_print(targets), extra))
+        print("seq %s tag:" % progress, dataset.get_tag(seq_idx))
+        print("seq %s data:" % progress, pretty_print(data))
       elif options.type == "print_shape":
-        print("seq %i target %r shape:" % (seq_idx, target), targets.shape)
+        print("seq %s data shape:" % progress, data.shape)
+      elif options.type == "plot":
+        plot(data)
+      for target in dataset.get_target_list():
+        targets = dataset.get_targets(target, seq_idx)
+        if options.type == "numpy":
+          numpy.savetxt("%s%i.targets.%s%s" % (options.dump_prefix, seq_idx, target, options.dump_postfix), targets, fmt='%i')
+        elif options.type == "stdout":
+          extra = ""
+          if target in dataset.labels and len(dataset.labels[target]) > 1:
+            assert dataset.can_serialize_data(target)
+            extra += " (%r)" % dataset.serialize_data(key=target, data=targets)
+          print("seq %i target %r: %s%s" % (seq_idx, target, pretty_print(targets), extra))
+        elif options.type == "print_shape":
+          print("seq %i target %r shape:" % (seq_idx, target), targets.shape)
     seq_len = dataset.get_seq_length(seq_idx)
     for key in dataset.get_data_keys():
       seq_len_stats[key].collect([seq_len[key]])
@@ -139,59 +152,77 @@ def dump_dataset(dataset, options):
     seq_idx += 1
 
   print("Done. Total time %s. More seqs which we did not dumped: %s" % (
-    hms(time.time() - start_time), dataset.is_less_than_num_seqs(seq_idx)), file=log.v1)
+    hms(time.time() - start_time), dataset.is_less_than_num_seqs(seq_idx)), file=log.v2)
   for key in dataset.get_data_keys():
     seq_len_stats[key].dump(stream_prefix="Seq-length %r " % key, stream=log.v2)
   if stats:
-    stats.dump(output_file_prefix=options.dump_stats, stream_prefix="Data %r " % options.key, stream=log.v2)
+    stats.dump(output_file_prefix=options.dump_stats, stream_prefix="Data %r " % options.key, stream=log.v1)
+  if dump_file:
+    print("Dumped to file:", dump_file.name, file=log.v2)
+    dump_file.close()
 
 
-def init(config_str):
+def init(config_str, config_dataset, verbosity):
   """
   :param str config_str: either filename to config-file, or dict for dataset
+  :param str|None config_dataset:
+  :param int verbosity:
   """
-  rnn.initBetterExchook()
-  rnn.initThreadJoinHack()
+  rnn.init_better_exchook()
+  rnn.init_thread_join_hack()
+  dataset_dict = None
+  config_filename = None
   if config_str.strip().startswith("{"):
     print("Using dataset %s." % config_str)
-    datasetDict = eval(config_str.strip())
-    configFilename = None
+    dataset_dict = eval(config_str.strip())
+  elif config_str.endswith(".hdf"):
+    dataset_dict = {"class": "HDFDataset", "files": [config_str]}
+    print("Using dataset %r." % dataset_dict)
+    assert os.path.exists(config_str)
   else:
-    datasetDict = None
-    configFilename = config_str
-    print("Using config file %r." % configFilename)
-    assert os.path.exists(configFilename)
-  rnn.initConfig(configFilename=configFilename, commandLineOptions=[])
+    config_filename = config_str
+    print("Using config file %r." % config_filename)
+    assert os.path.exists(config_filename)
+  rnn.init_config(config_filename=config_filename, default_config={"cache_size": "0"})
   global config
   config = rnn.config
   config.set("log", None)
-  config.set("log_verbosity", 4)
-  if datasetDict:
-    config.set("train", datasetDict)
-  rnn.initLog()
-  print("Returnn dump-dataset starting up.", file=log.v1)
-  rnn.returnnGreeting()
-  rnn.initFaulthandler()
-  rnn.initConfigJsonNetwork()
-  rnn.initData()
-  rnn.printTaskProperties()
+  config.set("log_verbosity", verbosity)
+  if dataset_dict:
+    assert not config_dataset
+    config.set("train", dataset_dict)
+  elif config_dataset:
+    config.set("train", "config:%s" % config_dataset)
+  else:
+    assert config.value("train", None)
+  rnn.init_log()
+  print("Returnn dump-dataset starting up.", file=log.v2)
+  rnn.returnn_greeting()
+  rnn.init_faulthandler()
+  rnn.init_config_json_network()
+  rnn.init_data()
+  rnn.print_task_properties()
 
 
-def main(argv):
+def main():
   argparser = argparse.ArgumentParser(description='Dump something from dataset.')
   argparser.add_argument('crnn_config', help="either filename to config-file, or dict for dataset")
+  argparser.add_argument("--dataset", help="if given the config, specifies the dataset. e.g. 'dev'")
   argparser.add_argument('--epoch', type=int, default=1)
   argparser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
   argparser.add_argument('--endseq', type=int, default=10, help='end seq idx (inclusive) or -1 (default: 10)')
   argparser.add_argument('--get_num_seqs', action="store_true")
   argparser.add_argument('--type', default='stdout', help="'numpy', 'stdout', 'plot', 'null' (default 'stdout')")
+  argparser.add_argument("--stdout_limit", type=float, default=None, help="e.g. inf to disable")
+  argparser.add_argument("--stdout_as_bytes", action="store_true")
+  argparser.add_argument("--verbosity", type=int, default=4, help="overwrites log_verbosity (default: 4)")
   argparser.add_argument('--dump_prefix', default='/tmp/crnn.dump-dataset.')
   argparser.add_argument('--dump_postfix', default='.txt.gz')
   argparser.add_argument("--key", default="data", help="data-key, e.g. 'data' or 'classes'. (default: 'data')")
   argparser.add_argument('--stats', action="store_true", help="calculate mean/stddev stats")
   argparser.add_argument('--dump_stats', help="file-prefix to dump stats to")
-  args = argparser.parse_args(argv[1:])
-  init(config_str=args.crnn_config)
+  args = argparser.parse_args()
+  init(config_str=args.crnn_config, config_dataset=args.dataset, verbosity=args.verbosity)
   try:
     dump_dataset(rnn.train_data, args)
   except KeyboardInterrupt:
@@ -202,4 +233,4 @@ def main(argv):
 
 
 if __name__ == '__main__':
-  main(sys.argv)
+  main()

@@ -424,6 +424,9 @@ class Updater:
           )
         continue
 
+      if param.live_update is not None:
+        continue
+
       if param.layer.device != self.device and param.layer.device is not None:
         grads[param] = grads[param].transfer(self.device)
       gradient_scale = param.layer.gradient_scale

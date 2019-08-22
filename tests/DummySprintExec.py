@@ -70,7 +70,7 @@ def main(argv):
     dataset = eval(args.get("crnn-dataset"), {}, ObjAsDict(GeneratingDataset))
     assert isinstance(dataset, Dataset)
     assert dataset.num_inputs == inputDim
-    assert dataset.num_outputs == {"classes": [outputDim, 1], "data": [inputDim, 2]}
+    assert dataset.num_outputs == {"classes": (outputDim, 1), "data": (inputDim, 2)}
     dataset.init_seq_order(epoch=1)
 
     seq_idx = 0

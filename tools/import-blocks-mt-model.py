@@ -125,7 +125,7 @@ def get_in_hierarchy(name, hierarchy):
 
 def main():
   rnn.init(
-    commandLineOptions=sys.argv[1:],
+    command_line_options=sys.argv[1:],
     config_updates={
       "task": "nop", "log": None, "device": "cpu",
       "allow_random_model_init": True,

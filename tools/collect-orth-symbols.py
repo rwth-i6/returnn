@@ -199,19 +199,19 @@ def collect_stats(options, iter_corpus):
 
 
 def init(configFilename=None):
-  rnn.initBetterExchook()
-  rnn.initThreadJoinHack()
+  rnn.init_better_exchook()
+  rnn.init_thread_join_hack()
   if configFilename:
-    rnn.initConfig(configFilename, commandLineOptions=[])
-    rnn.initLog()
+    rnn.init_config(configFilename, command_line_options=[])
+    rnn.init_log()
   else:
     log.initialize()
   print("CRNN collect-orth-symbols starting up.", file=log.v3)
-  rnn.initFaulthandler()
+  rnn.init_faulthandler()
   if configFilename:
-    rnn.initConfigJsonNetwork()
-    rnn.initData()
-    rnn.printTaskProperties()
+    rnn.init_config_json_network()
+    rnn.init_data()
+    rnn.print_task_properties()
 
 
 def is_bliss(filename):

@@ -24,10 +24,10 @@ from TFNetwork import *
 from TFNetworkRecLayer import *
 from TFUtil import is_gpu_available
 import TFUtil
-TFUtil.debugRegisterBetterRepr()
+TFUtil.debug_register_better_repr()
 
 import Debug
-Debug.installLibSigSegfault()
+Debug.install_lib_sig_segfault()
 
 try:
   import faulthandler
@@ -171,7 +171,7 @@ def test_rhn_nan():
         tgt_placeholder: random.uniform(-limit, limit, (1, seq_len, num_outputs)),
       }
 
-    from TFUtil import xavier_initializer, var_creation_scope
+    from TFUtil import xavier_initializer
     default_var_initializer = xavier_initializer(seed=13)
     with tf.variable_scope(tf.get_variable_scope(), initializer=default_var_initializer) as scope:
       assert loop_variant in loop_variants
@@ -768,7 +768,7 @@ def test_RecLayer_NativeLstm_Nan():
     updater.set_learning_rate(0.1, session=session)
     updater.init_optimizer_vars(session=session)
     optim_op = updater.get_optim_op()
-    assert isinstance(updater.optimizer, tf.train.AdamOptimizer)
+    assert isinstance(updater.optimizer.get_default_optimizer(), tf.train.AdamOptimizer)
     adam_weights_m_t = updater.optimizer.get_slot(var=weights_t, name="m")
     adam_weights_v_t = updater.optimizer.get_slot(var=weights_t, name="v")
     assert isinstance(adam_weights_m_t, tf.Variable)
@@ -1537,6 +1537,387 @@ def test_rec_layer_move_out_of_loop_keep_constraints():
   assert_not_equal(train_net.get_total_constraints(), 0)
 
 
+def test_rec_layer_move_out_of_loop_ref_att_generic_att():
+  """
+  This will move out :class:`GenericAttentionLayer` (and basically everything)
+  because we provide some reference att weights.
+  """
+  from TFNetworkRecLayer import _SubnetworkRecCell
+  from TFUtil import get_global_train_flag_placeholder
+  n_src_dim = 5
+  n_tgt_dim = 7
+  beam_size = 12
+  EncKeyTotalDim = 8
+  AttNumHeads = 1
+  EncValueTotalDim = 8
+  EncValuePerHeadDim = EncValueTotalDim // AttNumHeads
+  config = Config()
+  config.update({"debug_print_layer_output_template": True})
+  net_dict = {
+    "ref_att_weights": {
+      "class": "unflatten_nd",
+      "from": "data:att_weights", "sizes": "data:att_weights_sizes", "num_axes": 2,
+      "declare_same_sizes_as": {0: "data:classes", 1: "data"}},
+    "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6, "from": "data"},
+    "encoder": {"class": "linear", "from": "source_embed", "activation": "tanh", "n_out": EncValueTotalDim},
+    "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": "encoder", "n_out": EncKeyTotalDim},
+    "enc_value": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim),
+                  "from": "encoder"},  # (B, enc-T, H, D'/H)
+    "inv_fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": "encoder", "n_out": AttNumHeads},
+
+    "output": {"class": "rec", "from": ["ref_att_weights"], "unit": {
+      'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"],
+                 "initial_output": 0},
+      "end": {"class": "compare", "from": ["output"], "value": 0},
+      'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6,
+                       "initial_output": 0},
+      "weight_feedback": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev:accum_att_weights"],
+                          "n_out": EncKeyTotalDim},
+      "prev_s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev:s"],
+                             "n_out": EncKeyTotalDim},
+      "energy_in": {"class": "combine", "kind": "add",
+                    "from": ["base:enc_ctx", "weight_feedback", "prev_s_transformed"], "n_out": EncKeyTotalDim},
+      "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+      "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"], "n_out": AttNumHeads, "is_output_layer": True},
+      "att_weights": {"class": "copy", "from": "data:source"},
+      # "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, H)
+      "att_weights_with_fertility": {"class": "eval", "from": ["att_weights", "base:inv_fertility"],
+                                     "eval": "source(0) * source(1) * 0.5"},
+      "accum_att_weights": {"class": "cumsum", "from": "att_weights_with_fertility"},
+      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
+      "att": {"class": "merge_dims", "axes": "except_time", "from": ["att0"]},  # (B, H*V)
+      "s": {"class": "rnn_cell", "unit": "standardlstm",
+            "from": ["target_embed", "att"], "n_out": 10},
+      "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
+                     "n_out": 10},
+      "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+      "output_prob": {"class": "softmax", "from": ["readout"], "target": "classes", "loss": "ce"}
+    }, "target": "classes", "max_seq_len": 20},
+
+    "att_distill_loss": {
+      "class": "eval", "from": ["output/energy", "ref_att_weights"],
+      "out_type": (lambda sources, **kwargs: sources[0].output.copy_template_excluding_spatial_dim(-1)),
+      "eval": "softmax_cross_entropy_over_size(" +
+              "logits=source(0, as_data=True, auto_convert=False)," +
+              "labels=source(1, as_data=True, auto_convert=False))",
+      "loss": "as_is"},
+  }
+
+  def train(net, session):
+    """
+    :param TFNetwork net:
+    :param tf.Session session:
+    """
+    from GeneratingDataset import StaticDataset
+    from TFDataPipeline import FeedDictDataProvider
+    from EngineBatch import Batch, BatchSetGenerator
+    from Util import dict_joined, softmax
+    rnd = numpy.random.RandomState(42)
+
+    def create_rnd_flat_att_weights(dec_t, enc_t):
+      w = rnd.normal(size=(dec_t, enc_t, AttNumHeads)).astype("float32")
+      w = softmax(w, axis=1)
+      w = w.reshape((dec_t * enc_t, AttNumHeads))
+      return w
+
+    dataset = StaticDataset(
+      data=[
+        {
+          "data": numpy.array([2, 4, 1, 0]),
+          "classes": numpy.array([3, 6, 0]),
+          "att_weights": create_rnd_flat_att_weights(3, 4),
+          "att_weights_sizes": numpy.array([3, 4])
+        },
+        {
+          "data": numpy.array([2, 4, 1, 3, 0]),
+          "classes": numpy.array([3, 6, 2, 1, 4, 5, 0]),
+          "att_weights": create_rnd_flat_att_weights(7, 5),
+          "att_weights_sizes": numpy.array([7, 5])
+        }],
+      output_dim={
+        "data": [n_src_dim, 1],
+        "classes": [n_tgt_dim, 1],
+        "att_weights": [AttNumHeads, 2],
+        "att_weights_sizes": [1, 1]})
+    dataset.init_seq_order(epoch=1)
+    batch = Batch()
+    batch.add_sequence_as_slice(seq_idx=0, seq_start_frame=0, length=dataset.get_seq_length(0))
+    batch.add_sequence_as_slice(seq_idx=1, seq_start_frame=0, length=dataset.get_seq_length(1))
+    print("batch:", batch, "num frames:", batch.get_total_num_frames())
+    print("batch dims:", batch.max_num_frames_per_slice * batch.num_slices)
+    batch_generator = iter([batch])
+    batches = BatchSetGenerator(dataset, generator=batch_generator)
+    out_layer = net.layers["output"]
+    assert isinstance(out_layer, RecLayer)
+    assert isinstance(out_layer.cell, _SubnetworkRecCell)
+
+    net.initialize_params(session)
+    data_provider = FeedDictDataProvider(
+      tf_session=session, extern_data=extern_data,
+      data_keys=["data", "classes", "att_weights", "att_weights_sizes"],
+      dataset=dataset, batches=batches)
+    feed_dict, meta_step_info = data_provider.get_feed_dict(single_threaded=True)
+    if isinstance(net.train_flag, tf.Tensor):
+      feed_dict[net.train_flag] = True
+    try:
+      print("session run for seq lens output:")
+      out = session.run(
+        dict_joined(
+          {"data:%s:seq_len" % k: v.get_sequence_lengths() for (k, v) in net.extern_data.data.items()},
+          {"layer:%s:out_seq_len" % k: l.output.get_sequence_lengths() for (k, l) in net.layers.items()},
+          {"rec_layer_in:%s:out_seq_len" % k: l.output.get_sequence_lengths()
+           for (k, l) in out_layer.cell.input_layers_net.layers.items()} if out_layer.cell.input_layers_net else {},
+          {"rec_layer_out:%s:out_seq_len" % k: l.output.get_sequence_lengths()
+           for (k, l) in out_layer.cell.output_layers_net.layers.items()} if out_layer.cell.output_layers_net else {},
+        ),
+        feed_dict=feed_dict)
+      pprint(out)
+      print("session run for objective output:")
+      losses, total_loss, total_constraints = net.get_losses_initialized(with_total=True)
+      # TODO: strange ref att weights?
+      out = session.run(
+        {"total_loss": total_loss, "total_constraints": tf.convert_to_tensor(total_constraints),
+         "losses": {name: loss.get_loss_value() for name, loss in losses.items()},
+         "att_distill_loss_in": [s.output.placeholder for s in net.layers["att_distill_loss"].sources],
+         "att_distill_loss_out": net.layers["att_distill_loss"].output.placeholder},
+        feed_dict=feed_dict)
+      pprint(out)
+    except Exception as exc:
+      print("Exception happened:", str(exc).splitlines()[0])
+      print("Writing TF log file.")
+      writer = tf.summary.FileWriter(".", filename_suffix="test_rec_layer_move_out_of_loop")
+      writer.add_graph(session.graph)
+      writer.close()
+      raise
+
+  print("Constructing train network.")
+  with make_scope() as session:
+    extern_data = ExternData({
+      "data": {"dim": n_src_dim, "sparse": True},
+      "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False},
+      "att_weights": {"shape": (None, AttNumHeads), "available_for_inference": False},
+      "att_weights_sizes": {"shape": (None,), "dtype": "int32", "available_for_inference": False}})
+    train_net = TFNetwork(
+      extern_data=extern_data, search_flag=False, train_flag=get_global_train_flag_placeholder(), config=config)
+    assert train_net.eval_flag is True
+    train_net.construct_from_dict(net_dict)
+    train_out_layer = train_net.layers["output"]
+    assert isinstance(train_out_layer, RecLayer)
+    assert isinstance(train_out_layer.cell, _SubnetworkRecCell)
+    assert_equal(train_out_layer.cell.layers_in_loop, [])  # all moved out :)
+    rec_subnet = train_out_layer.cell.output_layers_net
+    assert isinstance(rec_subnet, TFNetwork)
+    att_layer = rec_subnet.layers["att"]
+    assert att_layer.output.shape == (None, EncValueTotalDim) and att_layer.output.time_dim_axis is not None
+    energy_in_layer = rec_subnet.layers["energy_in"]
+    assert energy_in_layer.output.shape == (None, None, EncKeyTotalDim)
+    train(train_net, session)
+
+
+def test_same_spatial_dim_after_rec_layers():
+  with make_scope() as session:
+    config = Config({"debug_print_layer_output_template": True})
+    extern_data = ExternData({
+      "data": {"dim": 13, "sparse": True},
+      "classes": {"dim": 17, "sparse": True, "available_for_inference": False}})
+    net = TFNetwork(extern_data=extern_data, train_flag=True, config=config)
+    net.construct_from_dict({
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+      "lstm0_fw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": 1, "from": ["source_embed"]},
+      "lstm0_bw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": -1, "from": ["source_embed"]},
+      "lstm1_fw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"]},
+      "lstm1_bw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": -1, "from": ["lstm0_fw", "lstm0_bw"]},
+      "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
+      "enc_value": {"class": "split_dims", "axis": "F", "dims": (4, 5), "from": ["encoder"]},
+      "output": {"class": "copy", "from": ["enc_value"]},
+    })
+    size = extern_data.data["data"].get_size_dim_tag(0)
+    print("data size:", size)
+    for name in ["source_embed", "lstm0_fw", "lstm1_fw", "encoder", "enc_value", "output"]:
+      layer = net.layers[name]
+      layer_size = layer.output.get_size_dim_tag(0)
+      print("layer:", layer, "size:", layer_size)
+      assert size == layer_size, "no match for layer %r" % layer
+    print("All good.")
+
+
+def test_rec_layer_rnn_train_and_search():
+  from TFNetworkRecLayer import _SubnetworkRecCell
+  n_src_dim = 5
+  n_tgt_dim = 7
+  beam_size = 3
+  config = Config()
+  config.update({
+    "debug_print_layer_output_template": True,
+    "debug_print_layer_output_shape": True})
+  EncKeyTotalDim = 14
+  AttNumHeads = 1
+  EncValueTotalDim = 14
+  EncValuePerHeadDim = EncValueTotalDim // AttNumHeads
+  LstmDim = EncValueTotalDim // 2
+  target = "classes"
+
+  net_dict = {
+    "lstm0_fw": {"class": "rec", "unit": "nativelstm2", "n_out": LstmDim, "direction": 1, "from": ["data"]},
+    "lstm0_bw": {"class": "rec", "unit": "nativelstm2", "n_out": LstmDim, "direction": -1, "from": ["data"]},
+    "lstm0_pool": {"class": "pool", "mode": "max", "padding": "same", "pool_size": (3,),
+                   "from": ["lstm0_fw", "lstm0_bw"], "trainable": False},
+    "lstm1_fw": {"class": "rec", "unit": "nativelstm2", "n_out": LstmDim, "direction": 1, "from": ["lstm0_pool"]},
+    "lstm1_bw": {"class": "rec", "unit": "nativelstm2", "n_out": LstmDim, "direction": -1, "from": ["lstm0_pool"]},
+    "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},  # dim: EncValueTotalDim
+    "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"],
+                "n_out": EncKeyTotalDim},
+    "inv_fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"],
+                      "n_out": AttNumHeads},
+    "enc_value": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim),
+                  "from": ["encoder"]},  # (B, enc-T, H, D'/H)
+    "output": {"class": "rec", "from": [], 'cheating': config.bool("cheating", False), "unit": {
+      'output': {'class': 'choice', 'target': target, 'beam_size': beam_size,
+                 'cheating': config.bool("cheating", False), 'from': ["output_prob"], "initial_output": 0},
+      "end": {"class": "compare", "from": ["output"], "value": 0},
+      'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 10,
+                       "initial_output": 0},  # feedback_input
+      "weight_feedback": {"class": "linear", "activation": None, "with_bias": False,
+                          "from": ["prev:accum_att_weights"], "n_out": EncKeyTotalDim},
+      "s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["s"],
+                        "n_out": EncKeyTotalDim},
+      "energy_in": {"class": "combine", "kind": "add", "from": ["base:enc_ctx", "weight_feedback", "s_transformed"],
+                    "n_out": EncKeyTotalDim},
+      "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+      "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"],
+                 "n_out": AttNumHeads},  # (B, enc-T, H)
+      "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, H)
+      "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:inv_fertility"],
+                            "eval": "source(0) + source(1) * source(2) * 0.5",
+                            "out_type": {"dim": AttNumHeads, "shape": (None, AttNumHeads)}},
+      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
+      "att": {"class": "merge_dims", "axes": "except_batch", "from": ["att0"]},  # (B, H*V)
+      "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:target_embed", "prev:att"], "n_out": 10},
+      "readout_in": {"class": "linear", "from": ["s", "prev:target_embed", "att"], "activation": None, "n_out": 10},
+      "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+      "output_prob": {
+        "class": "softmax", "from": ["readout"], "dropout": 0.3,
+        "target": target, "loss": "ce", "loss_opts": {"label_smoothing": 0.1}}
+    }, "target": target, "max_seq_len": "max_len_from('base:encoder')"},
+    "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance", "target": target}
+  }
+
+  def run(train_flag=False, search_flag=False):
+    """
+    :param bool train_flag:
+    :param bool search_flag:
+    """
+    print("Create network with train_flag=%r, search_flag=%r." % (train_flag, search_flag))
+
+    from GeneratingDataset import StaticDataset
+    from TFDataPipeline import FeedDictDataProvider
+    from EngineBatch import Batch, BatchSetGenerator
+    from Util import dict_joined
+    dataset = StaticDataset(
+      data=[
+        {"data": numpy.random.normal(size=(11, n_src_dim)).astype("float32"),
+         "classes": numpy.array([3, 6, 0])},
+        {"data": numpy.random.normal(size=(13, n_src_dim)).astype("float32"),
+         "classes": numpy.array([3, 6, 2, 1, 4, 5, 0])}],
+      output_dim={"data": [n_src_dim, 2], "classes": [n_tgt_dim, 1]})
+    dataset.init_seq_order(epoch=1)
+    batch = Batch()
+    batch.add_sequence_as_slice(seq_idx=0, seq_start_frame=0, length=dataset.get_seq_length(0))
+    batch.add_sequence_as_slice(seq_idx=1, seq_start_frame=0, length=dataset.get_seq_length(1))
+    print("batch:", batch, "num frames:", batch.get_total_num_frames())
+    print("batch dims:", batch.max_num_frames_per_slice * batch.num_slices)
+    batch_generator = iter([batch])
+    batches = BatchSetGenerator(dataset, generator=batch_generator)
+
+    with make_scope() as session:
+      extern_data = ExternData({
+        "data": {"dim": n_src_dim},
+        "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
+
+      net = TFNetwork(
+        extern_data=extern_data, search_flag=search_flag, train_flag=train_flag, config=config)
+      net.construct_from_dict(net_dict)
+
+      out_layer = net.layers["output"]
+      assert isinstance(out_layer, RecLayer)
+      assert isinstance(out_layer.cell, _SubnetworkRecCell)
+      net.initialize_params(session)
+      data_provider = FeedDictDataProvider(
+        tf_session=session, extern_data=extern_data,
+        data_keys=["data", "classes"] if train_flag else ["data"],
+        dataset=dataset, batches=batches)
+      feed_dict, meta_step_info = data_provider.get_feed_dict(single_threaded=True)
+      if isinstance(net.train_flag, tf.Tensor):
+        feed_dict[net.train_flag] = train_flag
+      try:
+        print("Output:")
+        out = session.run(
+          dict_joined(
+            {"data:%s:seq_len" % k: v.get_sequence_lengths() for (k, v) in net.extern_data.data.items()},
+            {"layer:%s:out_seq_len" % k: l.output.get_sequence_lengths() for (k, l) in net.layers.items()},
+            {"rec_layer_in:%s:out_seq_len" % k: l.output.get_sequence_lengths()
+             for (k, l) in out_layer.cell.input_layers_net.layers.items()} if out_layer.cell.input_layers_net else {},
+            {"rec_layer_out:%s:out_seq_len" % k: l.output.get_sequence_lengths()
+             for (k, l) in out_layer.cell.output_layers_net.layers.items()} if out_layer.cell.output_layers_net else {},
+            {"output": out_layer.output.placeholder},
+            {"objective": tf.convert_to_tensor(net.get_objective())} if train_flag else {}
+          ) if train_flag else {"output": out_layer.output.placeholder},
+          feed_dict=feed_dict)
+        pprint(out)
+      except Exception as exc:
+        print("Exception happened:", str(exc).splitlines()[0])
+        help_on_tf_exception(
+          exception=exc, fetches=out_layer.output.placeholder, feed_dict=feed_dict, meta_step_info=meta_step_info,
+          extern_data=data_provider.extern_data)
+        raise
+
+  run(train_flag=True)
+  run(search_flag=True)
+
+
+def test_same_spatial_dim_after_rec_layers_with_pool():
+  with make_scope() as session:
+    config = Config({"debug_print_layer_output_template": True})
+    extern_data = ExternData({
+      "data": {"dim": 13, "sparse": True},
+      "classes": {"dim": 17, "sparse": True, "available_for_inference": False},
+      "att_weights": {"shape": (None, 1), "available_for_inference": False},
+      "att_weights_sizes": {"shape": (None,), "dtype": "int32", "available_for_inference": False}})
+    net = TFNetwork(extern_data=extern_data, train_flag=True, config=config)
+    net.construct_from_dict({
+      "ref_att_weights": {
+        "class": "unflatten_nd",
+        "from": "data:att_weights", "sizes": "data:att_weights_sizes", "num_axes": 2,
+        "declare_same_sizes_as": {0: "data:classes", 1: "encoder"},
+        "is_output_layer": True},
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+      "lstm0_fw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": 1, "from": ["source_embed"]},
+      "lstm0_bw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": -1, "from": ["source_embed"]},
+      "lstm0_pool": {"class": "pool", "mode": "max", "padding": "same", "pool_size": (2,), "from": ["lstm0_fw", "lstm0_bw"]},
+      "lstm1_fw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": 1, "from": ["lstm0_pool"]},
+      "lstm1_bw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": -1, "from": ["lstm0_pool"]},
+      "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
+      "enc_value": {"class": "split_dims", "axis": "F", "dims": (4, 5), "from": ["encoder"]},
+      "output": {"class": "copy", "from": ["enc_value"]},
+    })
+    size_enc0 = extern_data.data["data"].get_size_dim_tag(0)
+    print("data size:", size_enc0)
+    size_enc1 = net.layers["encoder"].output.get_size_dim_tag(0)
+    print("encoder size:", size_enc1)
+    assert size_enc0 != size_enc1
+    for name in ["source_embed", "lstm0_fw"]:
+      layer = net.layers[name]
+      layer_size = layer.output.get_size_dim_tag(0)
+      print("layer:", layer, "size:", layer_size)
+      assert size_enc0 == layer_size != size_enc1, "no match for layer %r" % layer
+    for name in ["lstm0_pool", "lstm1_fw", "encoder", "enc_value", "output", "ref_att_weights"]:
+      layer = net.layers[name]
+      layer_size = layer.output.get_size_dim_tag(-1)
+      print("layer:", layer, "size:", layer_size)
+      assert size_enc0 != layer_size == size_enc1, "no match for layer %r" % layer
+    print("All good.")
+
+
 def test_rec_layer_search_select_src():
   from TFNetworkRecLayer import _SubnetworkRecCell
   n_src_dim = 5
@@ -1622,7 +2003,7 @@ def test_rec_layer_search_select_src():
   loop_out_layer = loop_net.layers["output"]
   assert isinstance(loop_out_layer, ChoiceLayer)
   assert isinstance(loop_out_layer.search_choices, SearchChoices)
-  all_src_choices = loop_out_layer.search_choices.get_all_src_choices()
+  all_src_choices = loop_out_layer.search_choices.get_src_choices_seq()
   assert len(all_src_choices) == 2
   cur_out_choice, prev_out_choice = all_src_choices
   assert isinstance(cur_out_choice, SearchChoices)
@@ -1637,6 +2018,7 @@ def test_rec_layer_search_select_src():
   assert_equal(loop_net.layers["accum_att_weights"].get_search_choices(), prev_out_choice)
   assert_equal(loop_net.layers["prev:accum_att_weights"].get_search_choices(), prev_out_choice)  # will be transformed
   assert_equal(loop_net.layers["weight_feedback"].get_search_choices(), prev_out_choice)
+  loop_net.debug_search_choices(loop_net.layers["s"])
   assert_equal(loop_net.layers["s"].get_search_choices(), cur_out_choice)
   assert_equal(loop_net.layers["prev:s"].get_search_choices(), prev_out_choice)
   assert_equal(loop_net.layers["prev_s_state"].get_search_choices(), prev_out_choice)
@@ -1650,7 +2032,7 @@ def test_RnnCellLayer_with_time():
   from GeneratingDataset import DummyDataset
   from TFNetworkLayer import InternalLayer, SourceLayer, ReduceLayer
   train_data = DummyDataset(input_dim=2, output_dim=3, num_seqs=10, seq_len=5)
-  with tf.variable_scope("test_RnnCellLayer_with_time"):
+  with make_scope() as session:
     extern_data = ExternData()
     extern_data.init_from_dataset(train_data)
     net = TFNetwork(extern_data=extern_data)
@@ -1910,6 +2292,10 @@ def test_reclayer_optimize_out_rnncell():
   check_reclayer_optimize_out({"class": "rnn_cell", "unit": "BasicLSTM"})
 
 
+def test_reclayer_optimize_out_rec_nativelstm2():
+  check_reclayer_optimize_out({"class": "rec", "unit": "NativeLstm2"})
+
+
 def test_reclayer_optimize_out_selfatt_left():
   check_reclayer_optimize_out({
     "class": "self_attention", "attention_left_only": True, "num_heads": 2, "total_key_dim": 6, "n_out": 18})
@@ -1932,6 +2318,8 @@ def test_reclayer_optimize_out_dot():
       # Here is the main test, the dot-layer:
       "energy": {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": "T?",  # Note the "T?".
                  "from": ["base:enc_ctx", "att_query"]},
+      # energy inside the loop will be (B, H, enc-T, 1).
+      # energy outside the loop will be (B, H, enc-T, dec-T). I.e. enc-T is still the first time axis.
       "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, H, 1)
       "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
       "att": {"class": "merge_dims", "axes": "static", "from": ["att0"]},  # (B, H*V); Use "static" here.
@@ -1948,6 +2336,349 @@ def test_reclayer_optimize_out_dot():
                     "from": ["enc_value0"], "is_output_layer": True},  # (B, enc-T, H, D/H)
     },
     rtol=1e-3)
+
+
+def test_reclayer_optimize_out_softmax_over_spatial():
+  # Used for multi-head dot-attention.
+  AttNumHeads = 4
+  EncKeyPerHeadDim = 5
+  EncValuePerHeadDim = 7
+  EncKeyTotalDim = AttNumHeads * EncKeyPerHeadDim
+  EncValueTotalDim = AttNumHeads * EncValuePerHeadDim
+  check_reclayer_optimize_out(
+    {"class": "linear", "activation": None, "from": ["squeeze"]},
+    other_subnet_layers={
+      "s": {"class": "linear", "activation": None, "with_bias": False, "from": ["data:source"],
+            "n_out": EncKeyTotalDim},  # (B, D)  -- Q (query). D should be same as enc_ctx
+      "att_query": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
+                    "from": ["s"]},  # (B, H, D/H)
+      "energy": {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": "T?",  # Note the "T?".
+                 "from": ["base:enc_ctx", "att_query"]},
+      # energy inside the loop will be (B, H, enc-T, 1).
+      # energy outside the loop will be (B, H, enc-T, dec-T). I.e. enc-T is still the first time axis.
+      "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, H, enc-T, 1)
+      "slice": {"class": "slice", "from": "att_weights", "axis": "t", "slice_end": 1},  # (B, H, 1, 1)
+      "squeeze0": {"class": "squeeze", "from": "slice", "axis": "t"},  # (B, H, 1)
+      "squeeze": {"class": "squeeze", "from": "squeeze0", "axis": "auto", "allow_no_op": True},  # (B, H)
+      },
+    shared_base_net={
+      "encoder": {"class": "copy", "from": ["data"]},
+      "enc_ctx0": {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder"],
+                   "n_out": EncKeyTotalDim},  # (B, enc-T, D)
+      "enc_ctx": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
+                  "from": ["enc_ctx0"], "is_output_layer": True},  # (B, enc-T, H, D/H)
+      "enc_value0": {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder"],
+                     "n_out": EncValueTotalDim},
+      "enc_value": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim),
+                    "from": ["enc_value0"], "is_output_layer": True},  # (B, enc-T, H, D/H)
+    },
+    rtol=1e-3)
+
+
+def test_reclayer_optimize_out_softmax_over_spatial_rev_dot():
+  # Used for multi-head dot-attention.
+  AttNumHeads = 4
+  EncKeyPerHeadDim = 5
+  EncValuePerHeadDim = 7
+  EncKeyTotalDim = AttNumHeads * EncKeyPerHeadDim
+  EncValueTotalDim = AttNumHeads * EncValuePerHeadDim
+  check_reclayer_optimize_out(
+    {"class": "linear", "activation": None, "from": ["squeeze"]},
+    other_subnet_layers={
+      "s": {"class": "linear", "activation": None, "with_bias": False, "from": ["data:source"],
+            "n_out": EncKeyTotalDim},  # (B, D)  -- Q (query). D should be same as enc_ctx
+      "att_query": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
+                    "from": ["s"]},  # (B, H, D/H)
+      "energy": {"class": "dot", "red1": -1, "red2": -1, "var1": "T?", "var2": "T",  # Note the "T?".
+                 "from": ["att_query", "base:enc_ctx"]},
+      # energy inside the loop will be (B, H, 1, enc-T).
+      # energy outside the loop will be (B, H, dec-T, enc-T). I.e. dec-T is the first time axis.
+      "att_weights": {"class": "softmax_over_spatial", "axis": "d:-1", "from": ["energy"]},  # (B, enc-T, H, 1)
+      "slice": {"class": "slice", "from": "att_weights", "axis": "d:-1", "slice_end": 1},  # (B, 1, H, 1)
+      "squeeze0": {"class": "squeeze", "from": "slice", "axis": "d:-1"},  # (B, H, 1)
+      "squeeze": {"class": "squeeze", "from": "squeeze0", "axis": "auto", "allow_no_op": True},  # (B, H)
+      },
+    shared_base_net={
+      "encoder": {"class": "copy", "from": ["data"]},
+      "enc_ctx0": {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder"],
+                   "n_out": EncKeyTotalDim},  # (B, enc-T, D)
+      "enc_ctx": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
+                  "from": ["enc_ctx0"], "is_output_layer": True},  # (B, enc-T, H, D/H)
+      "enc_value0": {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder"],
+                     "n_out": EncValueTotalDim},
+      "enc_value": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim),
+                    "from": ["enc_value0"], "is_output_layer": True},  # (B, enc-T, H, D/H)
+    },
+    rtol=1e-3)
+
+
+class TransformerNetwork:
+
+  def __init__(self):
+    self.encN = 3
+    self.decN = 3
+    self.FFDim = 13
+    self.EncKeyTotalDim = 7 * 4
+    self.AttNumHeads = 4
+    self.EncKeyPerHeadDim = self.EncKeyTotalDim // self.AttNumHeads
+    self.EncValueTotalDim = self.EncKeyTotalDim
+    self.EncValuePerHeadDim = self.EncValueTotalDim // self.AttNumHeads
+    self.embed_weight = self.EncValueTotalDim ** 0.5
+
+    self.embed_dropout = 0.0
+    self.postprocess_dropout = 0.0  # 0.1
+    self.act_dropout = 0.0  # 0.1
+    self.attention_dropout = 0.0  # 0.1
+    self.label_smoothing = 0.0  # 0.1
+
+    self.ff_init = "variance_scaling_initializer(mode='fan_in', distribution='uniform', scale=0.78)"
+
+  def add_trafo_enc_layer(self, d, inp, output):
+    """
+    :param dict[str,dict[str]] d:
+    :param str inp:
+    :param str output:
+    """
+    d[output + '_self_att_laynorm'] = {"class": "layer_norm", "from": [inp]}
+    d[output + '_self_att_att'] = {"class": "self_attention", "num_heads": self.AttNumHeads,
+                                   "total_key_dim": self.EncKeyTotalDim,
+                                   "n_out": self.EncValueTotalDim, "from": [output + '_self_att_laynorm'],
+                                   "attention_left_only": False, "attention_dropout": self.attention_dropout,
+                                   "forward_weights_init": self.ff_init}
+    d[output + '_self_att_lin'] = {"class": "linear", "activation": None, "with_bias": False,
+                                   "from": [output + '_self_att_att'], "n_out": self.EncValueTotalDim,
+                                   "forward_weights_init": self.ff_init}
+    d[output + '_self_att_drop'] = {"class": "dropout", "from": [output + '_self_att_lin'],
+                                    "dropout": self.postprocess_dropout}
+    d[output + '_self_att_out'] = {"class": "combine", "kind": "add", "from": [inp, output + '_self_att_drop'],
+                                   "n_out": self.EncValueTotalDim}
+    #####
+    d[output + '_ff_laynorm'] = {"class": "layer_norm", "from": [output + '_self_att_out']}
+    d[output + '_ff_conv1'] = {"class": "linear", "activation": "relu", "with_bias": True,
+                               "from": [output + '_ff_laynorm'],
+                               "n_out": self.FFDim, "forward_weights_init": self.ff_init}
+    d[output + '_ff_conv2'] = {"class": "linear", "activation": None, "with_bias": True,
+                               "from": [output + '_ff_conv1'], "dropout": self.act_dropout,
+                               "n_out": self.EncValueTotalDim, "forward_weights_init": self.ff_init}
+    d[output + '_ff_drop'] = {"class": "dropout", "from": [output + '_ff_conv2'], "dropout": self.postprocess_dropout}
+    d[output + '_ff_out'] = {"class": "combine", "kind": "add",
+                             "from": [output + '_self_att_out', output + '_ff_drop'],
+                             "n_out": self.EncValueTotalDim}
+    d[output] = {"class": "copy", "from": [output + '_ff_out']}
+
+  def add_trafo_dec_layer(self, db, d, inp, output):
+    """
+    :param dict[str,dict[str]] db:
+    :param dict[str,dict[str]] d:
+    :param str inp:
+    :param str output:
+    """
+    pre_inp = [inp]
+    d[output + '_self_att_laynorm'] = {"class": "layer_norm", "from": pre_inp}
+    d[output + '_self_att_att'] = {
+      "class": "self_attention",
+      "num_heads": self.AttNumHeads,
+      "total_key_dim": self.EncKeyTotalDim,
+      "n_out": self.EncValueTotalDim,
+      "from": [output + '_self_att_laynorm'],
+      "attention_left_only": True,
+      "attention_dropout": self.attention_dropout,
+      "forward_weights_init": self.ff_init}
+    d[output + '_self_att_lin'] = {"class": "linear", "activation": None, "with_bias": False,
+                                   "from": [output + '_self_att_att'], "n_out": self.EncValueTotalDim,
+                                   "forward_weights_init": self.ff_init}
+    d[output + '_self_att_drop'] = {"class": "dropout", "from": [output + '_self_att_lin'],
+                                    "dropout": self.postprocess_dropout}
+    d[output + '_self_att_out'] = {"class": "combine", "kind": "add", "from": [inp, output + '_self_att_drop'],
+                                   "n_out": self.EncValueTotalDim}
+    #####
+    d[output + '_att_laynorm'] = {"class": "layer_norm", "from": [output + '_self_att_out']}
+    d[output + '_att_query0'] = {"class": "linear", "activation": None, "with_bias": False,
+                                 "from": [output + '_att_laynorm'],
+                                 "n_out": self.EncValueTotalDim, "forward_weights_init": self.ff_init}
+    d[output + '_att_query'] = {"class": "split_dims", "axis": "F", "dims": (self.AttNumHeads, self.EncKeyPerHeadDim),
+                                "from": [output + '_att_query0']}  # (B, H, D/H)
+    db[output + '_att_key0'] = {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder"],
+                                "n_out": self.EncKeyTotalDim, "forward_weights_init": self.ff_init}  # (B, enc-T, D)
+    db[output + '_att_value0'] = {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder"],
+                                  "n_out": self.EncValueTotalDim, "forward_weights_init": self.ff_init}
+    db[output + '_att_key'] = {"class": "split_dims", "axis": "F", "dims": (self.AttNumHeads, self.EncKeyPerHeadDim),
+                               "from": [output + '_att_key0']}  # (B, enc-T, H, D/H)
+    db[output + '_att_value'] = {"class": "split_dims", "axis": "F",
+                                 "dims": (self.AttNumHeads, self.EncValuePerHeadDim),
+                                 "from": [output + '_att_value0']}  # (B, enc-T, H, D'/H)
+    d[output + '_att_energy'] = {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": "T?",
+                                 "from": ['base:' + output + '_att_key', output + '_att_query']}  # (B, H, enc-T, 1)
+    d[output + '_att_weights'] = {"class": "softmax_over_spatial", "from": [output + '_att_energy'],
+                                  "energy_factor": self.EncKeyPerHeadDim ** -0.5}  # (B, enc-T, H, 1)
+
+    d[output + '_att_weights_drop'] = {"class": "dropout", "dropout_noise_shape": {"*": None},
+                                       "from": [output + '_att_weights'], "dropout": self.attention_dropout}
+
+    d[output + '_att0'] = {"class": "generic_attention", "weights": output + '_att_weights_drop',
+                           "base": 'base:' + output + '_att_value'}  # (B, H, V)
+    d[output + '_att_att'] = {"class": "merge_dims", "axes": "static",
+                              "from": [output + '_att0']}  # (B, H*V) except_batch
+    d[output + '_att_lin'] = {"class": "linear", "activation": None, "with_bias": False,
+                              "from": [output + '_att_att'],
+                              "n_out": self.EncValueTotalDim, "forward_weights_init": self.ff_init}
+    d[output + '_att_drop'] = {"class": "dropout", "from": [output + '_att_lin'], "dropout": self.postprocess_dropout}
+    d[output + '_att_out'] = {"class": "combine", "kind": "add",
+                              "from": [output + '_self_att_out', output + '_att_drop'],
+                              "n_out": self.EncValueTotalDim}
+    #####
+    d[output + '_ff_laynorm'] = {"class": "layer_norm", "from": [output + '_att_out']}
+    d[output + '_ff_conv1'] = {"class": "linear", "activation": "relu", "with_bias": True,
+                               "from": [output + '_ff_laynorm'],
+                               "n_out": self.FFDim, "forward_weights_init": self.ff_init}
+    d[output + '_ff_conv2'] = {"class": "linear", "activation": None, "with_bias": True,
+                               "from": [output + '_ff_conv1'], "dropout": self.act_dropout,
+                               "n_out": self.EncValueTotalDim, "forward_weights_init": self.ff_init}
+    d[output + '_ff_drop'] = {"class": "dropout", "from": [output + '_ff_conv2'], "dropout": self.postprocess_dropout}
+    d[output + '_ff_out'] = {"class": "combine", "kind": "add", "from": [output + '_att_out', output + '_ff_drop'],
+                             "n_out": self.EncValueTotalDim}
+    d[output] = {"class": "copy", "from": [output + '_ff_out']}
+
+  def build(self):
+    network = {
+      "source_embed_raw": {"class": "linear", "activation": None, "with_bias": False, "n_out": self.EncValueTotalDim,
+                           "forward_weights_init": self.ff_init},
+      "source_embed_weighted": {"class": "eval", "from": ["source_embed_raw"],
+                                "eval": "source(0) * %f" % self.embed_weight},
+      "source_embed_with_pos": {"class": "positional_encoding", "add_to_input": True,
+                                "from": ["source_embed_weighted"]},
+      "source_embed": {"class": "dropout", "from": ["source_embed_with_pos"], "dropout": self.embed_dropout},
+
+      # encoder stack is added by separate function
+      "encoder": {"class": "layer_norm", "from": ["enc_%02d" % self.encN]},
+
+      "output": {"class": "rec", "from": [], "unit": {
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 12, 'from': ["output_prob"],
+                   "initial_output": 0},  # this is a vocab_id, make this flexible
+        "end": {"class": "compare", "from": ["output"], "value": 0},
+        'target_embed_raw': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['prev:output'],
+                             "n_out": self.EncValueTotalDim, "forward_weights_init": self.ff_init},
+        # there seems to be no <s> in t2t, they seem to use just the zero vector
+        "target_embed_weighted": {"class": "eval", "from": ["target_embed_raw"],
+                                  "eval": "source(0) * %f" % self.embed_weight},
+        "target_embed_with_pos": {"class": "positional_encoding", "add_to_input": True,
+                                  "from": ["target_embed_weighted"]},
+        "target_embed": {"class": "dropout", "from": ["target_embed_with_pos"], "dropout": self.embed_dropout},
+
+        # decoder stack is added by separate function
+        "decoder": {"class": "layer_norm", "from": ["dec_%02d" % self.decN]},
+
+        "output_prob": {
+          "class": "softmax", "from": ["decoder"], "dropout": 0.0,
+          "target": "classes", "loss": "ce", "loss_opts": {"label_smoothing": self.label_smoothing},
+          "with_bias": False, "forward_weights_init": self.ff_init,
+          "is_output_layer": True
+        }
+
+      }, "target": "classes", "max_seq_len": "max_len_from('base:encoder') * 3"},
+
+      "decision": {
+        "class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes",
+        "loss_opts": {
+          # "debug_print": True
+        }
+      }
+
+    }
+
+    self.add_trafo_enc_layer(network, "source_embed", "enc_01")
+    for n in range(1, self.encN):
+      self.add_trafo_enc_layer(network, "enc_%02d" % n, "enc_%02d" % (n + 1))
+
+    self.add_trafo_dec_layer(network, network["output"]["unit"], "target_embed", "dec_01")
+    for n in range(1, self.decN):
+      self.add_trafo_dec_layer(network, network["output"]["unit"], "dec_%02d" % n, "dec_%02d" % (n + 1))
+
+    return network
+
+
+def test_reclayer_optimize_out_transformer():
+  from TFNetworkRecLayer import _SubnetworkRecCell
+  n_src_dim = 5
+  n_tgt_dim = 7
+
+  def get_config(optimize_out):
+    """
+    :param bool optimize_out:
+    :rtype: Config
+    """
+    return Config({
+      "debug_print_layer_output_template": True,
+      "debug_print_layer_output_shape": True,  # only for debugging
+      "extern_data": {
+        "data": {"dim": n_src_dim, "sparse": True},
+        "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}},
+      "network": TransformerNetwork().build(),
+      "optimize_move_layers_out": optimize_out
+    })
+
+  def get_feed_dict(extern_data):
+    """
+    :param ExternData extern_data:
+    :rtype: dict[tf.Tensor,numpy.ndarray]
+    """
+    rnd = numpy.random.RandomState(42)
+    n_batch = 3
+    n_dec_times = numpy.array([11, 8, 9], dtype=Data.size_dtype)
+    n_dec_time = max(n_dec_times)
+    n_enc_times = numpy.array([7, 13, 5], dtype=Data.size_dtype)
+    n_enc_time = max(n_enc_times)
+    data_np = rnd.randint(0, n_src_dim, size=(n_batch, n_enc_time), dtype=extern_data.data["data"].dtype)
+    classes_np = rnd.randint(0, n_tgt_dim, size=(n_batch, n_dec_time), dtype=extern_data.data["classes"].dtype)
+    return {
+      extern_data.data["data"].placeholder: data_np,
+      extern_data.data["data"].size_placeholder[0]: n_enc_times,
+      extern_data.data["classes"].placeholder: classes_np,
+      extern_data.data["classes"].size_placeholder[0]: n_dec_times}
+
+  def get_params():
+    print("create initial net, get params...")
+    config = get_config(optimize_out=True)
+    with make_scope() as session:
+      net = TFNetwork(train_flag=True, config=config)
+      net.construct_from_dict(config.typed_value("network"))
+      net.initialize_params(session=session)
+      params = net.get_params_serialized(session=session)
+      return params
+
+  net_params = get_params()
+
+  def get_out(optimize_out):
+    """
+    :param bool optimize_out:
+    :rtype: numpy.ndarray
+    """
+    print("optimize out:", optimize_out)
+    config = get_config(optimize_out=optimize_out)
+
+    with make_scope() as session:
+      net = TFNetwork(train_flag=True, config=config)
+      net.construct_from_dict(config.typed_value("network"))
+      net.initialize_params(session=session)
+      net.set_params_by_serialized(net_params, session=session)
+      rec_layer = net.get_layer("output")
+      assert isinstance(rec_layer, RecLayer)
+      cell = rec_layer.cell
+      assert isinstance(cell, _SubnetworkRecCell)
+      assert_equal(cell.input_layers_moved_out, [])
+      if optimize_out:
+        assert_equal(cell.layers_in_loop, [])  # all moved out
+      out = net.get_layer("output/output_prob").output.copy_as_batch_major()
+      assert out.batch_ndim == 3 and out.shape == (None, n_tgt_dim)
+      out_np = session.run(out.placeholder, feed_dict=get_feed_dict(extern_data=net.extern_data))
+      return out_np
+
+  out_opt_np = get_out(optimize_out=True)
+  out_nopt_np = get_out(optimize_out=False)
+  print("output:")
+  print(out_opt_np)
+  numpy.testing.assert_almost_equal(out_opt_np, out_nopt_np, decimal=5)
+  print("Both are equal!")
 
 
 def test_reclayer_move_out_input_train_and_search():
@@ -2005,7 +2736,7 @@ def test_reclayer_move_out_input_train_and_search():
     assert isinstance(cell, _SubnetworkRecCell)
     assert_equal(cell.input_layers_moved_out, [])
     assert_equal(
-      cell.output_layers_moved_out, ["output_prob", "encoder_reduced", "encoder_int", "target_embed_raw", "output"])
+      cell.output_layers_moved_out, ['output_prob', 'target_embed_raw', 'output', 'encoder_reduced', 'encoder_int'])
 
   print("Constructing search network.")
   with make_scope():
@@ -2323,7 +3054,7 @@ def test_BlocksparseLSTM_load_params_from_native_lstm():
       seq_len_placeholder: [seq_len] * batch_dim
     }
 
-    from TFUtil import xavier_initializer, var_creation_scope
+    from TFUtil import xavier_initializer
     default_var_initializer = xavier_initializer(seed=13)
     with tf.variable_scope(tf.get_variable_scope(), initializer=default_var_initializer) as scope:
       net = TFNetwork(config=Config(), extern_data=ExternData(), train_flag=False)
@@ -2334,11 +3065,13 @@ def test_BlocksparseLSTM_load_params_from_native_lstm():
         print("source layer:", src_layer)
         with tf.name_scope("nativelstm"):
           layer1 = RecLayer(
-            name='nativelstm', network=net, output=Data("out", shape=(None, num_outputs)), sources=[src_layer],
+            name='nativelstm', network=net,
+            output=Data("out", shape=(None, num_outputs), time_dim_axis=0, batch_dim_axis=1), sources=[src_layer],
             unit='NativeLSTM2')
         with tf.name_scope("blocksparselstm"):
           layer2 = RecLayer(
-            name='blocksparselstm', network=net, output=Data("out", shape=(None, num_outputs_sparse)),
+            name='blocksparselstm', network=net,
+            output=Data("out", shape=(None, num_outputs_sparse), time_dim_axis=0, batch_dim_axis=1),
             sources=[src_layer],
             unit='BlocksparseLSTM',
             unit_opts={'seed': 5, 'connectivity': 1, 'connectivity_dense': 2, 'layer_norm': False})
@@ -2450,7 +3183,7 @@ def test_rec_layer_search_select_src_reuse_layer():
     loop_out_layer = loop_net.layers["output"]
     assert isinstance(loop_out_layer, ChoiceLayer)
     assert isinstance(loop_out_layer.search_choices, SearchChoices)
-    all_src_choices = loop_out_layer.search_choices.get_all_src_choices()
+    all_src_choices = loop_out_layer.search_choices.get_src_choices_seq()
     assert len(all_src_choices) == 2
     cur_out_choice, prev_out_choice = all_src_choices
     assert isinstance(cur_out_choice, SearchChoices)
@@ -2472,6 +3205,874 @@ def test_rec_layer_search_select_src_reuse_layer():
     assert_equal(loop_net.layers["att_weights"].get_search_choices(), prev_out_choice)
     assert_equal(loop_net.layers["att"].get_search_choices(), prev_out_choice)
     assert_equal(loop_net.layers["output_prob"].get_search_choices(), prev_out_choice)
+
+
+def test_onlineblstm():
+  network = {}
+  lstm_dim = 13
+  lstm_window = 5
+
+  def add_lstm(i, direction, src):
+    name = "lstm%i_%s" % (i, {1: "fw", -1: "bw"}[direction])
+    if direction > 0:
+      network[name] = {"class": "rec", "unit": "lstmp", "n_out": lstm_dim, "dropout": 0.1, "L2": 0.01, "direction": 1,
+                       "from": src}
+      return name
+    network["%s_win" % name] = {"class": "window", "window_size": lstm_window, "window_right": lstm_window - 1,
+                                "from": src}  # (B,T,W,D)
+    network["%s_mdims" % name] = {"class": "merge_dims", "axes": "BT", "from": ["%s_win" % name]}  # (B*T,W,D)
+    network["%s_rdims" % name] = {"class": "reinterpret_data", "enforce_batch_major": True, "set_axes": {"T": 1},
+                                  "from": ["%s_mdims" % name]}  # (B*T,W,D)
+    network["%s_rec" % name] = {
+      "class": "rec", "unit": "lstmp", "n_out": lstm_dim, "dropout": 0.1, "L2": 0.01, "direction": -1,
+      "from": ["%s_rdims" % name]}  # (B*T,W,D')
+    network["%s_cur" % name] = {"class": "slice", "axis": "T", "slice_end": 1, "from": ["%s_rec" % name]}  # (B*T,1,D')
+    network["%s_cursq" % name] = {"class": "squeeze", "axis": "T", "from": ["%s_cur" % name]}  # (B*T,D')
+    network["%s_res" % name] = {"class": "split_batch_time", "base": src[0], "from": ["%s_cursq" % name]}  # (B,T,D')
+    return "%s_res" % name
+
+  num_layers = 6
+  src = ["data"]
+  for i in range(num_layers):
+    fwd = add_lstm(i, 1, src)
+    bwd = add_lstm(i, -1, src)
+    src = [fwd, bwd]
+  # Focal Loss, https://arxiv.org/abs/1708.02002
+  network["output"] = {"class": "softmax", "loss": "ce", "loss_opts": {"focal_loss_factor": 2.0}, "from": src}
+  config = Config({
+    "num_inputs": 3,
+    "num_outputs": 7
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict(network)
+
+
+def test_GenericAttentionLayer_basic0():
+  from TFNetworkLayer import InternalLayer
+  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  kwargs = dict(
+    name="att", network=net,
+    weights=InternalLayer(
+      name="att_weights", network=net,
+      output=Data(
+        name='att_weights_output', shape=(None, 1), auto_create_placeholders=True)),
+    base=InternalLayer(
+      name="enc_value", network=net,
+      output=Data(name='enc_value_output', shape=(None, 20), auto_create_placeholders=True)))
+  print("GenericAttentionLayer kwargs:")
+  pprint(kwargs)
+  kwargs["output"] = GenericAttentionLayer.get_out_data_from_opts(**kwargs)
+  layer = GenericAttentionLayer(**kwargs)
+  layer.output.sanity_check()
+  assert layer.output.shape == (20,) and not layer.output.have_time_axis()
+
+
+def test_GenericAttentionLayer_basic():
+  from TFNetworkLayer import InternalLayer
+  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  # This is a common situation when the GenericAttentionLayer is inside a recurrent loop,
+  # and it gets the encoder values from outside ("base:enc_value" or so),
+  # and the attention weights from inside the loop, and they have the same time dim axis as the encoder values.
+  kwargs = dict(
+    name="att", network=net,
+    weights=InternalLayer(
+      name="att_weights", network=net,
+      output=Data(name='att_weights_output', shape=(None, 1), batch_dim_axis=1, auto_create_placeholders=True)),
+    base=InternalLayer(
+      name="enc_value", network=net,
+      output=Data(name='enc_value_output', shape=(None, 1, 2048), batch_dim_axis=1, auto_create_placeholders=True)))
+  kwargs["output"] = GenericAttentionLayer.get_out_data_from_opts(**kwargs)
+  layer = GenericAttentionLayer(**kwargs)
+  layer.output.sanity_check()
+  assert layer.output.shape == (1, 2048) and not layer.output.have_time_axis()
+
+
+def test_GenericAttentionLayer_basic_multi_head():
+  from TFNetworkLayer import InternalLayer
+  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  num_heads = 8
+  kwargs = dict(
+    name="att", network=net,
+    weights=InternalLayer(
+      name="att_weights", network=net,
+      output=Data(
+        name='att_weights_output', shape=(None, num_heads), batch_dim_axis=1, auto_create_placeholders=True)),
+    base=InternalLayer(
+      name="enc_value", network=net,
+      output=Data(
+        name='enc_value_output', shape=(None, num_heads, 2048), batch_dim_axis=1, auto_create_placeholders=True)))
+  kwargs["output"] = GenericAttentionLayer.get_out_data_from_opts(**kwargs)
+  layer = GenericAttentionLayer(**kwargs)
+  layer.output.sanity_check()
+  assert layer.output.shape == (num_heads, 2048) and not layer.output.have_time_axis()
+
+
+def test_GenericAttentionLayer_weights_auto_squeeze_time_end():
+  # Example: weights (B,1,T), base (B,T,V)
+  from TFNetworkLayer import InternalLayer
+  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  kwargs = dict(
+    name="att", network=net,
+    weights=InternalLayer(
+      name="att_weights", network=net,
+      output=Data(
+        name='att_weights_output', shape=(1, None), time_dim_axis=2, auto_create_placeholders=True)),
+    base=InternalLayer(
+      name="enc_value", network=net,
+      output=Data(name='enc_value_output', shape=(None, 2048), auto_create_placeholders=True)))
+  print("GenericAttentionLayer kwargs:")
+  pprint(kwargs)
+  kwargs["output"] = GenericAttentionLayer.get_out_data_from_opts(**kwargs)
+  layer = GenericAttentionLayer(**kwargs)
+  layer.output.sanity_check()
+  assert layer.output.shape == (2048,) and not layer.output.have_time_axis()
+
+
+def test_GenericAttentionLayer_weights_static_time_axis():
+  # Example: weights (B,1,W), base (B,W,V), where W: window_size (static)
+  window_size = 10
+  from TFNetworkLayer import InternalLayer
+  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  kwargs = dict(
+    name="att", network=net,
+    weights=InternalLayer(
+      name="att_weights", network=net,
+      output=Data(
+        name='att_weights_output', shape=(1, 10), time_dim_axis=2, auto_create_placeholders=True)),
+    base=InternalLayer(
+      name="enc_value", network=net,
+      output=Data(name='enc_value_output', shape=(10, 2048), time_dim_axis=1, auto_create_placeholders=True)))
+  print("GenericAttentionLayer kwargs:")
+  pprint(kwargs)
+  kwargs["output"] = GenericAttentionLayer.get_out_data_from_opts(**kwargs)
+  layer = GenericAttentionLayer(**kwargs)
+  layer.output.sanity_check()
+  assert layer.output.shape == (2048,) and not layer.output.have_time_axis()
+
+
+def test_GenericAttentionLayer_weights_heads_time_end():
+  # Example: weights (B,H,T), base (B,T,H,V)
+  from TFNetworkLayer import InternalLayer
+  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  num_heads = 8
+  kwargs = dict(
+    name="att", network=net,
+    weights=InternalLayer(
+      name="att_weights", network=net,
+      output=Data(
+        name='att_weights_output', shape=(num_heads, None), time_dim_axis=2, auto_create_placeholders=True)),
+    base=InternalLayer(
+      name="enc_value", network=net,
+      output=Data(name='enc_value_output', shape=(None, num_heads, 2048), auto_create_placeholders=True)))
+  print("GenericAttentionLayer kwargs:")
+  pprint(kwargs)
+  kwargs["output"] = GenericAttentionLayer.get_out_data_from_opts(**kwargs)
+  layer = GenericAttentionLayer(**kwargs)
+  layer.output.sanity_check()
+  assert layer.output.shape == (num_heads, 2048) and not layer.output.have_time_axis()
+
+
+def test_GenericAttentionLayer_weights_heads_auto_squeeze_time_end():
+  # Example: weights (B,H,1,T), base (B,T,H,V)
+  from TFNetworkLayer import InternalLayer
+  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  num_heads = 8
+  kwargs = dict(
+    name="att", network=net,
+    weights=InternalLayer(
+      name="att_weights", network=net,
+      output=Data(
+        name='att_weights_output', shape=(num_heads, 1, None), time_dim_axis=3,
+        auto_create_placeholders=True)),
+    base=InternalLayer(
+      name="enc_value", network=net,
+      output=Data(name='enc_value_output', shape=(None, num_heads, 2048), auto_create_placeholders=True)))
+  print("GenericAttentionLayer kwargs:")
+  pprint(kwargs)
+  kwargs["output"] = GenericAttentionLayer.get_out_data_from_opts(**kwargs)
+  layer = GenericAttentionLayer(**kwargs)
+  layer.output.sanity_check()
+  assert layer.output.shape == (num_heads, 2048) and not layer.output.have_time_axis()
+
+
+def test_GenericAttentionLayer_extra_spatial():
+  from TFNetworkLayer import InternalLayer
+  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  # This is the situation when the GenericAttentionLayer is outside the recurrent loop,
+  # and it gets some encoder values (with different time axis),
+  # and the attention weights, which has two spatial axis, one of the decoder, and one of the encoder.
+  dec_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="dec time")
+  enc_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="enc time")
+  kwargs = dict(
+    name="att", network=net,
+    weights=InternalLayer(
+      name="att_weights", network=net,
+      output=Data(
+        name='att_weights_output', shape=(None, None, 1), auto_create_placeholders=True,
+        same_dim_tags_as={"dyn:0": dec_time, "dyn:1": enc_time})),
+    base=InternalLayer(
+      name="enc_value", network=net,
+      output=Data(
+        name='enc_value_output', shape=(None, 1, 2048), batch_dim_axis=1, auto_create_placeholders=True,
+        same_dim_tags_as={"t": enc_time})))
+  print("GenericAttentionLayer kwargs:")
+  pprint(kwargs)
+  kwargs["output"] = GenericAttentionLayer.get_out_data_from_opts(**kwargs)
+  layer = GenericAttentionLayer(**kwargs)
+  layer.output.sanity_check()
+  assert layer.output.shape == (1, None, 2048) and layer.output.have_time_axis()
+  assert len(layer.output.size_placeholder) == 1
+  assert list(layer.output.size_placeholder.values())[0] is layer.weights.output.size_placeholder[0]
+
+
+def test_GenericAttentionLayer_extra_spatial_multi_head():
+  from TFNetworkLayer import InternalLayer
+  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  dec_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="dec time")
+  enc_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="enc time")
+  num_heads = 8
+  kwargs = dict(
+    name="att", network=net,
+    weights=InternalLayer(
+      name="att_weights", network=net,
+      output=Data(
+        name='att_weights_output', shape=(None, None, num_heads), auto_create_placeholders=True,
+        same_dim_tags_as={"dyn:0": dec_time, "dyn:1": enc_time})),
+    base=InternalLayer(
+      name="enc_value", network=net,
+      output=Data(
+        name='enc_value_output', shape=(None, num_heads, 2048), batch_dim_axis=1, auto_create_placeholders=True,
+        same_dim_tags_as={"t": enc_time})))
+  print("GenericAttentionLayer kwargs:")
+  pprint(kwargs)
+  kwargs["output"] = GenericAttentionLayer.get_out_data_from_opts(**kwargs)
+  layer = GenericAttentionLayer(**kwargs)
+  layer.output.sanity_check()
+  assert layer.output.shape == (num_heads, None, 2048) and layer.output.have_time_axis()
+  assert len(layer.output.size_placeholder) == 1
+  assert list(layer.output.size_placeholder.values())[0] is layer.weights.output.size_placeholder[0]
+
+
+def test_untrainable_sublayers():
+  with make_scope() as session:
+    config = Config()
+    n_in, n_out = 2, 3
+    net_dict = {
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+
+      "lstm0_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["source_embed"]},
+      "lstm0_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["source_embed"]},
+
+      "lstm1_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"]},
+      "lstm1_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["lstm0_fw", "lstm0_bw"]},
+
+      "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
+      "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 10},
+      "fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"], "n_out": 1},
+      "output": {"class": "rec", "from": [], "unit": {
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 12, 'from': ["output_prob"],
+                   "initial_output": 0},
+        "end": {"class": "compare", "from": ["output"], "value": 0},
+        'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6,
+                         "initial_output": "apply(0)", "trainable": False},
+        "weight_feedback": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev:accum_att_weights"],
+                            "n_out": 10},
+        "prev_s_state": {"class": "get_last_hidden_state", "from": ["prev:s"], "n_out": 20},
+        "prev_s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev_s_state"],
+                               "n_out": 10, "trainable": False},
+        "energy_in": {"class": "combine", "kind": "add",
+                      "from": ["base:enc_ctx", "weight_feedback", "prev_s_transformed"], "n_out": 10},
+        "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+        "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"], "n_out": 1},
+        "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, 1)
+        "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
+                              "eval": "source(0) + source(1) / (2.0 * source(2))",
+                              "out_type": {"dim": 1, "shape": (None, 1)}},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+              "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
+        "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
+                       "n_out": 10, "trainable": False},
+        "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+        "output_prob": {"class": "softmax", "from": ["readout"], "target": "classes", "loss": "ce"}
+      }, "target": "classes", "max_seq_len": 20},
+
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes"}
+    }
+    config.update({"num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": net_dict})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    weight_input_layer_moved_out = network.layers["output"].params["target_embed/W"]
+    assert(weight_input_layer_moved_out not in set(network.get_trainable_params()))
+
+    weight_output_layer_moved_out = network.layers["output"].params["readout_in/W"]
+    assert(weight_output_layer_moved_out not in set(network.get_trainable_params()))
+
+    weight_internal = network.layers["output"].params["prev_s_transformed/W"]
+    assert(weight_internal not in set(network.get_trainable_params()))
+
+
+def test_untrainable_reclayer():
+  with make_scope() as session:
+    config = Config()
+    n_in, n_out = 2, 3
+    net_dict = {
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+
+      "lstm0_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["source_embed"]},
+      "lstm0_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["source_embed"]},
+
+      "lstm1_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"]},
+      "lstm1_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["lstm0_fw", "lstm0_bw"]},
+
+      "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
+      "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 10},
+      "fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"], "n_out": 1},
+      "output": {"class": "rec", "from": [], "trainable": False, "unit": {
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 12, 'from': ["output_prob"],
+                   "initial_output": 0},
+        "end": {"class": "compare", "from": ["output"], "value": 0},
+        'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6,
+                         "initial_output": "apply(0)", "trainable": True},
+        "weight_feedback": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev:accum_att_weights"],
+                            "n_out": 10},
+        "prev_s_state": {"class": "get_last_hidden_state", "from": ["prev:s"], "n_out": 20},
+        "prev_s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev_s_state"],
+                               "n_out": 10, "trainable": True},
+        "energy_in": {"class": "combine", "kind": "add",
+                      "from": ["base:enc_ctx", "weight_feedback", "prev_s_transformed"], "n_out": 10},
+        "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+        "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"], "n_out": 1},
+        "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, 1)
+        "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
+                              "eval": "source(0) + source(1) / (2.0 * source(2))",
+                              "out_type": {"dim": 1, "shape": (None, 1)}},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+              "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
+        "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
+                       "n_out": 10, "trainable": True},
+        "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+        "output_prob": {"class": "softmax", "from": ["readout"], "target": "classes", "loss": "ce"}
+      }, "target": "classes", "max_seq_len": 20},
+
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes"}
+    }
+    config.update({"num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": net_dict})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    weight_input_layer_moved_out = network.layers["output"].params["target_embed/W"]
+    assert(weight_input_layer_moved_out not in set(network.get_trainable_params()))
+
+    weight_output_layer_moved_out = network.layers["output"].params["readout_in/W"]
+    assert(weight_output_layer_moved_out not in set(network.get_trainable_params()))
+
+    weight_internal = network.layers["output"].params["prev_s_transformed/W"]
+    assert(weight_internal not in set(network.get_trainable_params()))
+
+
+def test_trainable_sublayers():
+  with make_scope() as session:
+    config = Config()
+    n_in, n_out = 2, 3
+    net_dict = {
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+
+      "lstm0_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["source_embed"]},
+      "lstm0_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["source_embed"]},
+
+      "lstm1_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"]},
+      "lstm1_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["lstm0_fw", "lstm0_bw"]},
+
+      "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
+      "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 10},
+      "fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"], "n_out": 1},
+      "output": {"class": "rec", "from": [], "unit": {
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 12, 'from': ["output_prob"],
+                   "initial_output": 0},
+        "end": {"class": "compare", "from": ["output"], "value": 0},
+        'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6,
+                         "initial_output": "apply(0)"},
+        "weight_feedback": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev:accum_att_weights"],
+                            "n_out": 10},
+        "prev_s_state": {"class": "get_last_hidden_state", "from": ["prev:s"], "n_out": 20},
+        "prev_s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev_s_state"],
+                               "n_out": 10},
+        "energy_in": {"class": "combine", "kind": "add",
+                      "from": ["base:enc_ctx", "weight_feedback", "prev_s_transformed"], "n_out": 10},
+        "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+        "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"], "n_out": 1},
+        "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, 1)
+        "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
+                              "eval": "source(0) + source(1) / (2.0 * source(2))",
+                              "out_type": {"dim": 1, "shape": (None, 1)}},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+              "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
+        "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
+                       "n_out": 10},
+        "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+        "output_prob": {"class": "softmax", "from": ["readout"], "target": "classes", "loss": "ce"}
+      }, "target": "classes", "max_seq_len": 20},
+
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes"}
+    }
+    config.update({"num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": net_dict})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    weight_input_layer_moved_out = network.layers["output"].params["target_embed/W"]
+    assert(weight_input_layer_moved_out in set(network.get_trainable_params()))
+
+    weight_output_layer_moved_out = network.layers["output"].params["readout_in/W"]
+    assert(weight_output_layer_moved_out in set(network.get_trainable_params()))
+
+    weight_internal = network.layers["output"].params["prev_s_transformed/W"]
+    assert(weight_internal in set(network.get_trainable_params()))
+
+
+def test_OptimalCompletionsLayer():
+  with make_scope() as session:
+    from TFNetworkLayer import InternalLayer
+    from TFUtil import expand_dims_unbroadcast
+    net = TFNetwork(
+      extern_data=ExternData({"target": {"dim": 20, "sparse": True}}),
+      config=Config({"debug_print_layer_output_template": True}))
+    target = net.extern_data.data["target"]
+    target_shape = tf.shape(target.placeholder)
+    n_batch = target_shape[0]
+    n_max_seq_len = target_shape[1]
+    # Fake that we are inside a rec layer.
+    net.set_rec_step_info(
+      i=tf.convert_to_tensor(0, name="i"),
+      end_flag=expand_dims_unbroadcast(tf.convert_to_tensor(False), 0, n_batch),
+      seq_lens=target.get_sequence_lengths())
+    kwargs = dict(
+      name="opt_completions", network=net, debug=True, target="target",
+      sources=[
+        InternalLayer(
+          name="last_row", network=net,
+          output=Data(
+            name="last_row", shape=(None,), dtype="int32",
+            placeholder=expand_dims_unbroadcast(tf.range(n_max_seq_len + 1), 0, n_batch)))]
+      )
+    print("OptimalCompletionsLayer kwargs:")
+    pprint(kwargs)
+    kwargs["output"] = OptimalCompletionsLayer.get_out_data_from_opts(**kwargs)
+    layer = OptimalCompletionsLayer(**kwargs)
+    layer.output.sanity_check()
+    out = session.run(
+      layer.output.placeholder, feed_dict={
+        target.placeholder: numpy.array([[3, 7, 8, 9, 13, 13, 0]]),
+        target.size_placeholder[0]: numpy.array([7])})
+    print(out)
+    assert isinstance(out, numpy.ndarray)
+    assert out.shape == (1, 20)
+    assert out[0, 3] == 0 and all(out[0, :3] == 1) and all(out[0, 4:] == 1)
+
+
+def test_extra_scatter_nd_search_train():
+  from TFNetworkRecLayer import _SubnetworkRecCell
+  rnd = numpy.random.RandomState(42)
+  n_batch, n_enc_time, n_in, n_dec_time, n_out = 2, 11, 5, 7, 6
+  target = "classes"
+  LstmDim = 13
+  EncValueTotalDim = LstmDim
+  EncKeyTotalDim = LstmDim
+  AttNumHeads = 1
+  beam_size = 3
+
+  def t_linear(source, **kwargs):
+    import tensorflow as tf
+    from TFUtil import where_bc
+    enc = source(1, as_data=True, auto_convert=False)
+    dec = source(0, as_data=True, auto_convert=False)
+    enc_lens = enc.get_sequence_lengths()
+    dec_lens = dec.get_sequence_lengths()
+    dec_shape = tf.shape(dec.placeholder)
+    dec_time_dim = dec_shape[dec.time_dim_axis]
+    dec_times = tf.expand_dims(tf.range(dec_time_dim), axis=0)  # (1,dec-T)
+    x = tf.cast(dec_times + 1, tf.float32)  # (1,dec-T)
+    # We want: x[dec_len - 1] == enc_time - 1.
+    factors = (
+      tf.maximum(tf.cast(enc_lens - 1, tf.float32), 0.0) /
+      tf.maximum(tf.cast(dec_lens, tf.float32), 1.0))  # (B,)
+    factors = tf.expand_dims(factors, axis=1)  # (B,1)
+    x = x * factors  # (B,dec-T)
+    x = tf.cast(tf.round(x), tf.int32)
+    x = tf.minimum(x, tf.expand_dims(enc_lens - 1, axis=1))
+    # fix cheating gold targets with end flag filter. must be 0
+    x = where_bc(tf.less(dec_times, tf.expand_dims(dec_lens, axis=1)), x, 0)
+    return x
+
+  net_dict = {
+    "lstm0_fw": {"class": "rec", "unit": "nativelstm2", "n_out": LstmDim, "direction": 1, "from": "data"},
+    "lstm0_bw": {"class": "rec", "unit": "nativelstm2", "n_out": LstmDim, "direction": -1, "from": "data"},
+    "lstm0_pool": {"class": "pool", "mode": "max", "padding": "same", "pool_size": (3,),
+                   "from": ["lstm0_fw", "lstm0_bw"]},
+
+    "encoder0": {"class": "linear", "from": "data", "activation": "relu", "n_out": EncValueTotalDim},
+    "encoder": {"class": "postfix_in_time", "postfix": 0.0, "from": "encoder0"},
+
+    "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": "encoder", "n_out": EncKeyTotalDim},
+    "enc_value": {"class": "copy", "from": "encoder"},  # (B, enc-T, D)
+    "enc0_seq_len": {"class": "length", "from": "encoder0", "sparse": True},
+
+    "decision": {"class": "decide", "from": "extra.search_label:output"},  # for search task
+
+    "extra.search1:t_search": {"class": "decide", "from": "extra.search1:output/t"},
+    "extra.search2:t_search": {"class": "decide", "from": "extra.search2:output/t"},
+
+    "0_data_target0": {
+      "class": "postfix_in_time", "postfix": 0, "from": "data:%s" % target, "register_as_extern_data": "target0"},
+
+    "1_data_t_linear": {
+      "class": "eval", "from": ["data:target0", "encoder"], "eval": t_linear,
+      "out_type": {"batch_dim_axis": 0, "time_dim_axis": 1, "shape": (None,), "sparse": True, "dtype": "int32",
+                   "dim": None},
+      "size_target": "target0",
+      "register_as_extern_data": "t_linear"  # if task == "train" else None
+    },
+
+    "2_data_t_search_target1": {
+      "class": "copy", "from": "extra.search1:t_search",
+      "register_as_extern_data": "t_search_target1"  # if task == "train" else None
+    },
+    "2_data_t_search_target2": {
+      "class": "copy", "from": "extra.search2:t_search",
+      "register_as_extern_data": "t_search_target2"  # if task == "train" else None
+    },
+  }
+
+  def get_output_dict(train, t_search, label_search, backprop, t_target, use_soft_att):
+    """
+    :param bool train:
+    :param bool t_search:
+    :param bool label_search:
+    :param bool backprop:
+    :param str|None t_target:
+    :param bool use_soft_att:
+    :rtype: dict[str]
+    """
+    if label_search:
+      assert not t_target
+    if t_target:
+      assert not label_search
+
+    def combine_soft_hard_att(self, source, **kwargs):
+      # source(0) is hard att, source(1) is soft att
+      print("combine_soft_hard_att, use soft att: %r" % use_soft_att)
+      if use_soft_att:
+        frac = 0.5
+        return source(0) * frac + source(1) * (1. - frac)
+      else:
+        source(1)  # call, but ignore
+        return source(0)  # only hard att
+
+    return {
+      "class": "rec", "from": [], "back_prop": backprop,
+      "unit": {
+        "s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["s"],
+                          "n_out": EncKeyTotalDim},
+        "t_rel_var": {"class": "variable", "shape": (6, EncKeyTotalDim)},
+        "t_rel_idxs_": {"class": "range", "limit": 6, "sparse": True},
+        "t_rel_idxs": {"class": "combine", "kind": "add", "from": ["prev:t", "t_rel_idxs_"]},
+        "energy_in": {"class": "combine", "kind": "add",
+                      "from": ["base:enc_ctx", "s_transformed", "energy_in_t_rel_var"], "n_out": EncKeyTotalDim},
+        "energy_in_t_rel_var": {
+          "class": "scatter_nd", "from": "t_rel_var", "position": "t_rel_idxs", "position_axis": "except_batch:-1",
+          "output_dim_via_time_from": "base:enc_ctx", "filter_invalid_indices": True},
+        "energy_tanh": {"class": "activation", "activation": "tanh", "from": "energy_in"},
+
+        "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"],
+                   "n_out": AttNumHeads},  # (B, enc-T, H)
+        "energy1": {"class": "squeeze", "axis": "f", "from": "energy"},  # (B, enc-T)
+        "energy2": {"class": "reinterpret_data", "from": "energy1", "set_axes": {"t": "stag:enc"}},
+        "att_weights": {"class": "softmax_over_spatial", "from": "energy2", "start": "t_start"},  # (B, enc-T)
+        # ChoiceLayer works on the feature axis.
+        "att_weights1": {
+          "class": "reinterpret_data", "from": "att_weights", "set_axes": {"f": "stag:enc"},
+          "target": t_target if train else None, "loss": "ce" if (train and t_target) else None},
+
+        "t0": {
+          "class": "choice", "from": "att_weights1",
+          # "target": None,
+          "target": t_target, "cheating": bool(t_target),  # add this in training
+          "beam_size": beam_size,
+          "length_normalization": False, "initial_output": -1},  # (B,)
+        # Note: If beam-size > enc_seq_len, we end up with invalid t in the beam. Fix that.
+        "t1": {"class": "eval", "from": ["t0", "base:enc0_seq_len"], "eval": "tf.minimum(source(0), source(1))"},
+        "t": {
+          # "class": "print",
+          "class": "copy",
+          "from": "t1", "initial_output": -1, "is_output_layer": bool(t_search)},
+        # Only for debugging.
+        "t_err": {"class": "eval", "from": ["t", "data:%s" % t_target], "collocate_with": "t",
+                  "eval": "tf.cast(tf.abs(source(0) - source(1)), tf.float32)",
+                  "loss": "as_is" if (t_target and t_search) else None, "out_type": {"dtype": "float32"},
+                  "only_on_search": True},
+
+        "t_start": {
+          # Need right start for masking to avoid infs.
+          "class": "eval", "from": ["prev:t", "data:%s" % t_target],
+          "eval": "tf.minimum(source(0), source(1))"}
+        if t_target else
+        {"class": "copy", "from": "prev:t"},
+
+        "att0": {"class": "gather_nd", "position": "t", "from": "base:enc_value"},  # (B, V)
+        "att1": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, V)
+        "att1_": {"class": "switch", "condition": lambda **kw: use_soft_att, "true_from": "att1", "false_from": "att0"},
+        "att": {"class": "eval", "from": ["att0", "att1_"], "eval": combine_soft_hard_att},
+
+        "s": {"class": "rec", "unit": "nativelstm2", "from": ["prev:target_embed", "prev:att"], "n_out": 8},
+        "readout_in": {"class": "linear", "from": ["s", "prev:target_embed", "att"], "activation": None,
+                       "n_out": 10},
+        "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+        "output_prob": {"class": "softmax", "from": ["readout"], "target": "target0", "loss": "ce" if train else None},
+
+        'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'],
+                         "n_out": 6, "initial_output": "var"},
+        'output': {
+          'class': 'choice', 'target': "target0", 'beam_size': beam_size, 'from': ["output_prob"],
+          "initial_output": 0,
+          'search': label_search, "length_normalization": label_search},
+        "end": {"class": "compare", "from": "output", "value": 0},
+      },
+      "target": ["target0", t_target] if t_target else ["target0"],
+      "size_target": t_target,
+      "max_seq_len": "max_len_from('base:encoder0')"}
+
+  # Train task:
+  net_dict["extra.search1:output"] = get_output_dict(
+    train=False, t_search=True, label_search=False, backprop=False, t_target="t_linear", use_soft_att=True)
+  net_dict["extra.search2:output"] = get_output_dict(
+    train=False, t_search=True, label_search=False, backprop=False, t_target="t_linear", use_soft_att=False)
+  net_dict["extra.1:output"] = get_output_dict(
+    train=True, t_search=False, label_search=False, backprop=True, t_target="t_linear", use_soft_att=True)
+  # extra.2 is basically like extra.1, only different t_target, and that should not make any difference for the
+  # construction. But anyway, put it in as another variation.
+  net_dict["extra.2:output"] = get_output_dict(
+    train=True, t_search=False, label_search=False, backprop=True, t_target="t_search_target1", use_soft_att=True)
+  # extra.3 does not use soft-attention anymore. That enables a couple of new optimizations in the rec loop,
+  # esp now we should be able to move *everything* out.
+  net_dict["extra.3:output"] = get_output_dict(
+    train=True, t_search=False, label_search=False, backprop=True, t_target="t_search_target2", use_soft_att=False)
+  # Search task:
+  # net_dict["extra.search_label:output"] = get_output_dict(
+  #   train=True, t_search=True, label_search=True, backprop=False, t_target=None, use_soft_att=False)
+
+  config = Config()
+  config.update({
+    "extern_data": {"data": {"dim": n_in}, target: {"dim": n_out, "sparse": True}},
+    "debug_print_layer_output_template": True})
+
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    pprint(network.extern_data.data)
+    network.construct_from_dict(net_dict)
+
+    fetches = network.get_fetches_dict()
+    data_input = network.extern_data.data["data"]
+    data_target = network.extern_data.data[target]
+    assert data_input.batch_shape == (None, None, n_in) and data_target.batch_shape == (None, None)
+
+    train1_search_out = network.get_layer("extra.search1:output").output
+    train1_out = network.get_layer("extra.1:output").output
+    train2_search_out = network.get_layer("extra.search2:output").output
+    train2_out = network.get_layer("extra.2:output").output
+    train3_out_layer = network.get_layer("extra.3:output")
+    train3_out = train3_out_layer.output
+    # search_out = network.get_layer("extra.search_label:output").output
+
+    assert isinstance(train3_out_layer, RecLayer)
+    train3_out_layer_cell = train3_out_layer.cell
+    assert isinstance(train3_out_layer_cell, _SubnetworkRecCell)
+    assert not train3_out_layer_cell.layers_in_loop, "all should be moved out"
+
+    session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+    outputs = [train1_search_out.placeholder, train1_out.placeholder,
+               train2_search_out.placeholder, train2_out.placeholder, train3_out.placeholder]
+    info, out = session.run(
+      (fetches, outputs),
+      feed_dict={
+        data_input.placeholder: rnd.normal(size=(n_batch, n_enc_time, n_in)).astype("float32"),
+        data_input.size_placeholder[0]: numpy.array([n_enc_time] * n_batch, dtype="int32"),
+        data_target.placeholder: rnd.randint(0, n_out, size=(n_batch, n_dec_time,), dtype="int32"),
+        data_target.size_placeholder[0]: numpy.array([n_dec_time] * n_batch, dtype="int32"),
+      })
+    print(info)
+    print(out)  # random...
+
+
+def test_trafo_search_lm():
+  rnd = numpy.random.RandomState(42)
+  beam_size = 5
+  ff_dim = 7
+  num_heads = 2
+  emb_dim = 5
+  qk_dim = 6
+  v_dim = qk_dim
+  trans_out_dim = qk_dim
+
+  net_dict = {
+    "input": {"class": "slice", "axis": "T", "slice_end": -1, "from": "data"},
+    "input_with_new_len": {"class": "reinterpret_data", "from": "input", "size_base": "data"},
+    "target": {"class": "slice", "axis": "T", "slice_start": 1, "from": "data"},
+    "target_with_new_len": {"class": "reinterpret_data", "from": "target", "size_base": "data",
+                            "register_as_extern_data": "targets"},
+    "decision": {
+      "class": "decide", "from": ["output"], "loss": "edit_distance", "target": "targets",
+      "is_output_layer": True},
+
+    'output': {
+      'class': 'rec',
+      "from": [],
+      'target': 'data',
+      "max_seq_len": "max_len_from('data') * 3",
+      'unit': {
+        'prefix': {
+          'class': 'eval', 'out_type': {'time_dim_axis': None, 'shape': ()},
+          "collocate_with": "output_choice",
+          'from': ['base:data'],
+          'eval': 'source(0, auto_convert=False)[:, tf.minimum(self.network.get_rec_step_index(), source(0, auto_convert=False, as_data=True).time_dimension() - 1)]'
+        },  # Shape (None,).
+        'in_prefix': {
+          'class': 'eval', 'from': 'base:data',
+          "collocate_with": "output_choice",
+          'out_type': {'time_dim_axis': None, 'shape': (), "dtype": "bool", "dim": 2},
+          # True if still in SRC.
+          'eval': 'tf.less(self.network.get_rec_step_index(), source(0, as_data=True, auto_convert=False).get_sequence_lengths())'
+        },  # Shape (None,).
+        'output': {
+          'class': 'switch', "condition": "in_prefix", 'true_from': 'prefix', "false_from": 'output_choice',
+          "initial_output": 0},
+        "end": {
+          "class": "eval", "from": 'base:data', "collocate_with": "output_choice",
+          "out_type": {'time_dim_axis': None, 'shape': (), "dtype": "bool", "dim": 2},
+          # Arbitrary. We can check that, though.
+          'eval': 'tf.greater_equal(self.network.get_rec_step_index(), source(0, as_data=True, auto_convert=False).get_sequence_lengths() * 3 // 2)'
+          },
+
+        'output_choice': {
+          'class': 'choice', 'target': 'targets', 'beam_size': beam_size,
+          'from': ["prob_output"], "initial_output": 0},
+
+        "prob_output": {
+          'class': 'softmax',
+          'from': ['decoder'],
+          'loss': 'ce',
+          'target': 'targets',
+          'with_bias': True},
+        "decoder": {'class': 'layer_norm', 'from': ['dec_0']},
+        'dec_0': {'class': 'copy', 'from': ['dec_0_ff_out']},
+
+        'target_embed_raw': {'activation': None,
+                             'class': 'linear',
+                             'from': ['prev:output'],  # Note: Here was the bug.
+                             'n_out': emb_dim,
+                             'with_bias': False},
+        'target_embed': {'class': 'dropout', 'dropout': 0, 'from': ['target_embed_raw']},
+        'target_embed_lin': {'activation': None,
+                             'class': 'linear',
+                             'from': ['target_embed'],
+                             'n_out': trans_out_dim,
+                             'with_bias': False},
+        'dec_0_self_att_laynorm': {'class': 'layer_norm', 'from': ['target_embed_lin']},
+        'dec_0_self_att_att': {'attention_left_only': True,
+                               'class': 'self_attention',
+                               'from': ['dec_0_self_att_laynorm'],
+                               'n_out': v_dim,
+                               'num_heads': num_heads,
+                               'total_key_dim': qk_dim},
+        'dec_0_self_att_lin': {'activation': None,
+                               'class': 'linear',
+                               'from': ['dec_0_self_att_att'],
+                               'n_out': trans_out_dim,
+                               'with_bias': False},
+        'dec_0_self_att_drop': {'class': 'dropout', 'dropout': 0, 'from': ['dec_0_self_att_lin']},
+        'dec_0_att_out': {'class': 'combine',
+                          'from': ['target_embed_lin', 'dec_0_self_att_drop'],
+                          'kind': 'add',
+                          'n_out': trans_out_dim,
+                          'trainable': True},
+        'dec_0_ff_laynorm': {'class': 'layer_norm', 'from': ['dec_0_att_out']},
+        'dec_0_ff_conv1': {'activation': "relu",
+                           'class': 'linear',
+                           'from': ['dec_0_ff_laynorm'],
+                           'n_out': ff_dim,
+                           'with_bias': True},
+        'dec_0_ff_conv2': {'activation': None,
+                           'class': 'linear',
+                           'from': ['dec_0_ff_conv1'],
+                           'n_out': trans_out_dim,
+                           'with_bias': True},
+        'dec_0_ff_drop': {'class': 'dropout', 'dropout': 0, 'from': ['dec_0_ff_conv2']},
+        'dec_0_ff_out': {'class': 'combine', 'from': ['dec_0_att_out', 'dec_0_ff_drop'], 'kind': 'add', 'n_out': trans_out_dim},
+      }}
+  }
+
+  n_batch, n_in, n_time = 3, 19, 9
+  n_out = n_in
+
+  config = Config()
+  config.update({
+    "extern_data": {"data": {"dim": n_out, "sparse": True}},
+    "search_output_layer": "decision",
+    "debug_print_layer_output_template": True})
+
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=False, search_flag=True)
+    pprint(network.extern_data.data)
+    network.construct_from_dict(net_dict)
+
+    fetches = network.get_fetches_dict()
+    data_input = network.extern_data.data["data"]
+    assert data_input.batch_shape == (None, None)
+    output_out = network.get_layer("decision").output
+    assert output_out.is_batch_major and output_out.sparse and output_out.dim == n_out and output_out.shape == (None,)
+
+    input_seq_lens = numpy.array([n_time, n_time - 5, n_time - 4], dtype="int32")
+    assert input_seq_lens.shape == (n_batch,) and all(input_seq_lens > 0)
+    input_seqs = rnd.randint(1, n_out, size=(n_batch, n_time,), dtype="int32")
+    print("input:")
+    print(input_seqs)
+    print("lens:", input_seq_lens)
+
+    session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+    info, out_seqs, out_seq_lens = session.run(
+      (fetches, output_out.placeholder, output_out.get_sequence_lengths()),
+      feed_dict={
+        data_input.placeholder: input_seqs,
+        data_input.size_placeholder[0]: input_seq_lens})
+    print(info)
+    print("output:")
+    print(out_seqs)  # random...
+    print("lens:", out_seq_lens)
+    assert isinstance(out_seqs, numpy.ndarray) and isinstance(out_seq_lens, numpy.ndarray)
+    assert len(out_seqs.shape) == 2 and out_seqs.shape[0] == n_batch
+    assert out_seq_lens.shape == (n_batch,)
+
+    for i in range(n_batch):
+      assert out_seq_lens[i] == input_seq_lens[i] * 3 // 2  # we constructed the 'end' layer that way
+      assert all(out_seqs[i, :input_seq_lens[i]] == input_seqs[i, :input_seq_lens[i]])
 
 
 if __name__ == "__main__":

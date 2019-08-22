@@ -9,18 +9,17 @@ It uses the SprintControl Sprint interface for the communication.
 
 from __future__ import print_function
 
-import theano
-import theano.tensor as T
 import numpy
 import sys
 import os
 import time
 import atexit
 import signal
-from threading import RLock
+import typing
+from threading import RLock, Thread
 import TaskSystem
 from TaskSystem import Pickler, Unpickler, numpy_set_unused
-from Util import eval_shell_str, make_hashable
+from Util import eval_shell_str, make_hashable, BackendEngine
 from Log import log
 
 
@@ -149,6 +148,10 @@ class SprintSubprocessInstance:
 
   def _pipe_open(self):
     readend, writeend = os.pipe()
+    if hasattr(os, "set_inheritable"):
+      # https://www.python.org/dev/peps/pep-0446/
+      os.set_inheritable(readend, True)
+      os.set_inheritable(writeend, True)
     readend = os.fdopen(readend, "rb", 0)
     writeend = os.fdopen(writeend, "wb", 0)
     return readend, writeend
@@ -264,6 +267,38 @@ class SprintSubprocessInstance:
     self._exit_child()
     self._start_child()
 
+class ReaderThread(Thread):
+      def __init__(self, instance, instance_idx, batch_idxs, tags, seq_lengths, log_posteriors, batch_loss, batch_error_signal):
+        """
+        :param int instance_idx:
+        """
+        super(ReaderThread, self).__init__(
+          name="SprintErrorSignals reader thread for Sprint instance %i" % instance_idx)
+        self.deamon = True
+        self.instance_idx = instance_idx
+        self.instance = instance
+        self.batch_idxs = batch_idxs
+        self.tags = tags
+        self.seq_lengths = seq_lengths
+        self.log_posteriors = log_posteriors
+        self.batch_loss = batch_loss
+        self.batch_error_signal = batch_error_signal
+        self.exception = None
+        self.start()
+
+      def run(self):
+        try:
+          for b in self.batch_idxs:
+            self.instance.get_loss_and_error_signal__send(
+              seg_name=self.tags[b], seg_len=self.seq_lengths[b], log_posteriors=self.log_posteriors[:self.seq_lengths[b], b])
+            seg_name, loss, error_signal = self.instance.get_loss_and_error_signal__read()
+            assert seg_name == self.tags[b]
+            self.batch_loss[b] = loss
+            self.batch_error_signal[:self.seq_lengths[b], b] = error_signal
+            numpy_set_unused(error_signal)
+        except Exception as exc:
+          self.exception = exc
+
 
 class SprintInstancePool:
   """
@@ -341,29 +376,46 @@ class SprintInstancePool:
       assert Device.is_device_host_proc()
       tags = Device.get_current_seq_tags()
     assert len(tags) == n_batch
-
+    
     batch_loss = numpy.zeros((n_batch,), dtype="float32")
     batch_error_signal = numpy.zeros_like(log_posteriors, dtype="float32")
-    # Very simple parallelism. We must avoid any form of multi-threading
-    # because this can be problematic with Theano.
-    # See: https://groups.google.com/forum/#!msg/theano-users/Pu4YKlZKwm4/eNcAegzaNeYJ
-    # We also try to keep it simple here.
-    for bb in range(0, n_batch, self.max_num_instances):
-      for i in range(self.max_num_instances):
-        b = bb + i
-        if b >= n_batch: break
-        instance = self._get_instance(i)
-        instance.get_loss_and_error_signal__send(
-          seg_name=tags[b], seg_len=seq_lengths[b], log_posteriors=log_posteriors[:seq_lengths[b], b])
-      for i in range(self.max_num_instances):
-        b = bb + i
-        if b >= n_batch: break
-        instance = self._get_instance(i)
-        seg_name, loss, error_signal = instance.get_loss_and_error_signal__read()
-        assert seg_name == tags[b]
-        batch_loss[b] = loss
-        batch_error_signal[:seq_lengths[b], b] = error_signal
-        numpy_set_unused(error_signal)
+    
+    # greedy solution to the scheduling problem
+    sorted_length = sorted(enumerate(seq_lengths),key=lambda x:x[1],reverse=True)
+    jobs = [ [] for i in range(self.max_num_instances) ]
+    joblen = [0]*self.max_num_instances
+    for i,l in sorted_length:
+      j = min(enumerate(joblen),key=lambda x:x[1])[0]
+      jobs[j].append(i)
+      joblen[j]+=l
+
+    if not BackendEngine.is_theano_selected() and self.max_num_instances > 1:
+      threads = [ReaderThread(self._get_instance(i), i, jobs[i], tags, seq_lengths, log_posteriors, batch_loss, batch_error_signal) for i in range(self.max_num_instances)]
+      for i,thread in enumerate(threads):
+        thread.join()
+        if thread.exception:
+          raise thread.exception
+    else:
+      # Very simple parallelism. We must avoid any form of multi-threading
+      # because this can be problematic with Theano.
+      # See: https://groups.google.com/forum/#!msg/theano-users/Pu4YKlZKwm4/eNcAegzaNeYJ
+      # We also try to keep it simple here.
+      for bb in range(0, n_batch, self.max_num_instances):
+        for i in range(self.max_num_instances):
+          b = bb + i
+          if b >= n_batch: break
+          instance = self._get_instance(i)
+          instance.get_loss_and_error_signal__send(
+            seg_name=tags[b], seg_len=seq_lengths[b], log_posteriors=log_posteriors[:seq_lengths[b], b])
+        for i in range(self.max_num_instances):
+          b = bb + i
+          if b >= n_batch: break
+          instance = self._get_instance(i)
+          seg_name, loss, error_signal = instance.get_loss_and_error_signal__read()
+          assert seg_name == tags[b]
+          batch_loss[b] = loss
+          batch_error_signal[:seq_lengths[b], b] = error_signal
+          numpy_set_unused(error_signal)
     return batch_loss, batch_error_signal
 
   def get_automata_for_batch(self, tags):
@@ -461,6 +513,8 @@ class SeqTrainParallelControlDevHost:
       return "<LossData{seq_idx=%i, seq_tag=%r}>" % (self.seq_idx, self.seq_tag)
 
   def __init__(self, output_layer, output_target, sprint_opts, forward_seq_delay=5):
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
+    import theano
     import NetworkOutputLayer
     assert isinstance(output_layer, NetworkOutputLayer.SequenceOutputLayer)
     self.output_layer = output_layer
@@ -675,121 +729,127 @@ class SeqTrainParallelControlDevHost:
     return have_first and have_last
 
 
-class SprintErrorSigOp(theano.Op):
-  """
-  Op: log_posteriors, seq_lengths -> loss, error_signal (grad w.r.t. z, i.e. before softmax is applied)
-  """
-
-  __props__ = ("sprint_opts",)
-
-  def __init__(self, sprint_opts):
-    super(SprintErrorSigOp, self).__init__()
-    self.sprint_opts = make_hashable(sprint_opts)
-    self.sprint_instance_pool = None  # type: SprintInstancePool
-    self.debug_perform_time = None
-
-  def make_node(self, log_posteriors, seq_lengths):
-    log_posteriors = theano.tensor.as_tensor_variable(log_posteriors)
-    seq_lengths = theano.tensor.as_tensor_variable(seq_lengths)
-    assert seq_lengths.ndim == 1  # vector of seqs lengths
-    return theano.Apply(self, [log_posteriors, seq_lengths], [T.fvector(), log_posteriors.type()])
-
-  def perform(self, node, inputs, output_storage, params=None):
-    start_time = time.time()
-    log_posteriors, seq_lengths = inputs
-
-    if numpy.isnan(log_posteriors).any():
-      print('SprintErrorSigOp: log_posteriors contain NaN!', file=log.v1)
-    if numpy.isinf(log_posteriors).any():
-      print('SprintErrorSigOp: log_posteriors contain Inf!', file=log.v1)
-      #numpy.set_printoptions(threshold=numpy.nan)
-      print('SprintErrorSigOp: log_posteriors:', log_posteriors, file=log.v1)
-
-    if self.sprint_instance_pool is None:
-      print("SprintErrorSigOp: Starting Sprint %r" % self.sprint_opts, file=log.v3)
-      self.sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts=self.sprint_opts)
-
-    assert isinstance(self.sprint_instance_pool, SprintInstancePool)  # PyCharm confused otherwise
-    loss, errsig = self.sprint_instance_pool.get_batch_loss_and_error_signal(log_posteriors, seq_lengths)
-    #print >> log.v4, 'loss:', loss, 'errsig:', errsig
-    output_storage[0][0] = loss
-    output_storage[1][0] = errsig
-
-    print('SprintErrorSigOp: avg frame loss for segments:', loss.sum() / seq_lengths.sum(), file=log.v5)
-    end_time = time.time()
-    if self.debug_perform_time is None:
-      from Config import get_global_config
-      config = get_global_config()
-      self.debug_perform_time = config.bool("debug_SprintErrorSigOp_perform_time", False)
-    if self.debug_perform_time:
-      print("SprintErrorSigOp perform time:", end_time - start_time, file=log.v1)
-      from Device import deviceInstance
-      assert deviceInstance.is_device_proc()
-      forward_time = start_time - deviceInstance.compute_start_time
-      print("SprintErrorSigOp forward time:", forward_time, file=log.v1)
+if BackendEngine.is_theano_selected():
+  # noinspection PyPackageRequirements,PyUnresolvedReferences
+  import theano
+  # noinspection PyPackageRequirements,PyUnresolvedReferences
+  import theano.tensor as T
 
 
-class SprintAlignmentAutomataOp(theano.Op):
-  """
-  Op: maps segment names (tags) to fsa automata (using sprint) that can be used to compute a BW-alignment
-  """
+  class SprintErrorSigOp(theano.Op):
+    """
+    Op: log_posteriors, seq_lengths -> loss, error_signal (grad w.r.t. z, i.e. before softmax is applied)
+    """
 
-  __props__ = ("sprint_opts",)
+    __props__ = ("sprint_opts",)
 
-  def __init__(self, sprint_opts):
-    super(SprintAlignmentAutomataOp, self).__init__()
-    self.sprint_opts = make_hashable(sprint_opts)
-    self.sprint_instance_pool = None  # type: SprintInstancePool
+    def __init__(self, sprint_opts):
+      super(SprintErrorSigOp, self).__init__()
+      self.sprint_opts = make_hashable(sprint_opts)
+      self.sprint_instance_pool = None  # type: typing.Optional[SprintInstancePool]
+      self.debug_perform_time = None
 
-  def make_node(self, tags):
-    # the edges/start_end_state output has to be a float matrix because that is the only dtype supported
-    # by CudaNdarray. We need unsigned ints. Thus we return a view on the unsigned int matrix
-    return theano.Apply(self, [tags], [T.fmatrix(), T.fvector(), T.fmatrix(), T.fmatrix()])
+    def make_node(self, log_posteriors, seq_lengths):
+      log_posteriors = theano.tensor.as_tensor_variable(log_posteriors)
+      seq_lengths = theano.tensor.as_tensor_variable(seq_lengths)
+      assert seq_lengths.ndim == 1  # vector of seqs lengths
+      return theano.Apply(self, [log_posteriors, seq_lengths], [T.fvector(), log_posteriors.type()])
 
-  def perform(self, node, inputs, output_storage, params=None):
-    tags = inputs[0]
+    def perform(self, node, inputs, output_storage, params=None):
+      start_time = time.time()
+      log_posteriors, seq_lengths = inputs
 
-    if self.sprint_instance_pool is None:
-      print("SprintAlignmentAutomataOp: Starting Sprint %r" % self.sprint_opts, file=log.v3)
-      self.sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts=self.sprint_opts)
+      if numpy.isnan(log_posteriors).any():
+        print('SprintErrorSigOp: log_posteriors contain NaN!', file=log.v1)
+      if numpy.isinf(log_posteriors).any():
+        print('SprintErrorSigOp: log_posteriors contain Inf!', file=log.v1)
+        print('SprintErrorSigOp: log_posteriors:', log_posteriors, file=log.v1)
 
-    assert isinstance(self.sprint_instance_pool, SprintInstancePool)  # PyCharm confused otherwise
-    edges, weights, start_end_states = self.sprint_instance_pool.get_automata_for_batch(tags)
+      if self.sprint_instance_pool is None:
+        print("SprintErrorSigOp: Starting Sprint %r" % self.sprint_opts, file=log.v3)
+        self.sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts=self.sprint_opts)
 
-    output_storage[0][0] = edges.view(dtype='float32')
-    output_storage[1][0] = weights
-    output_storage[2][0] = start_end_states.view(dtype='float32')
-    output_storage[3][0] = numpy.empty((2, start_end_states[1,-1] + 1), dtype='float32')
+      assert isinstance(self.sprint_instance_pool, SprintInstancePool)  # PyCharm confused otherwise
+      loss, errsig = self.sprint_instance_pool.get_batch_loss_and_error_signal(log_posteriors, seq_lengths)
+      output_storage[0][0] = loss
+      output_storage[1][0] = errsig
+
+      print('SprintErrorSigOp: avg frame loss for segments:', loss.sum() / seq_lengths.sum(), file=log.v5)
+      end_time = time.time()
+      if self.debug_perform_time is None:
+        from Config import get_global_config
+        config = get_global_config()
+        self.debug_perform_time = config.bool("debug_SprintErrorSigOp_perform_time", False)
+      if self.debug_perform_time:
+        print("SprintErrorSigOp perform time:", end_time - start_time, file=log.v1)
+        from Device import deviceInstance
+        assert deviceInstance.is_device_proc()
+        forward_time = start_time - deviceInstance.compute_start_time
+        print("SprintErrorSigOp forward time:", forward_time, file=log.v1)
 
 
-def sprint_loss_and_error_signal(output_layer, target, sprint_opts, log_posteriors, seq_lengths):
-  """
-  :param NetworkOutputLayer.SequenceOutputLayer output_layer: output layer
-  :param str target: e.g. "classes"
-  :param dict[str] sprint_opts: for SprintInstancePool
-  :param log_posteriors: 3d ndarray (time,batch,dim)
-  :param seq_lengths: 1d ndarray (batch,) -> seq len
-  :return: loss, error_signal.
-    loss is a 2d ndarray (batch,) -> loss.
-    error_signal has the same shape as log_posteriors.
-    error_signal is the grad w.r.t. z, i.e. before softmax is applied.
-  """
-  if output_layer and output_layer.train_flag:
-    import Device
-    if Device.is_device_host_proc():
-      if Device.deviceInstance.config.is_typed("seq_train_parallel"):
-        print("sprint_loss_and_error_signal: seq_train_parallel for output_layer %r" % output_layer.name, file=log.v3)
-        assert not Device.deviceInstance.seq_train_parallel_control, "Only one supported so far."
-        control = \
-          SeqTrainParallelControlDevHost(
-            output_layer=output_layer, output_target=target, sprint_opts=sprint_opts,
-            **Device.deviceInstance.config.typed_value("seq_train_parallel"))
-        Device.deviceInstance.seq_train_parallel_control = control
-        loss = control.output_var_loss
-        hat_y = control.output_var_hat_y  # hat_y = posteriors - error_signal
-        error_signal = T.exp(log_posteriors) - hat_y
-        index_mask = T.cast(output_layer.network.j["data"], "float32").dimshuffle(0, 1, 'x')
-        error_signal *= index_mask
-        return loss, error_signal
-  op = SprintErrorSigOp(sprint_opts)
-  return op(log_posteriors, seq_lengths)
+  class SprintAlignmentAutomataOp(theano.Op):
+    """
+    Op: maps segment names (tags) to fsa automata (using sprint) that can be used to compute a BW-alignment
+    """
+
+    __props__ = ("sprint_opts",)
+
+    def __init__(self, sprint_opts):
+      super(SprintAlignmentAutomataOp, self).__init__()
+      self.sprint_opts = make_hashable(sprint_opts)
+      self.sprint_instance_pool = None  # type: typing.Optional[SprintInstancePool]
+
+    def make_node(self, tags):
+      # the edges/start_end_state output has to be a float matrix because that is the only dtype supported
+      # by CudaNdarray. We need unsigned ints. Thus we return a view on the unsigned int matrix
+      return theano.Apply(self, [tags], [T.fmatrix(), T.fvector(), T.fmatrix(), T.fmatrix()])
+
+    def perform(self, node, inputs, output_storage, params=None):
+      tags = inputs[0]
+
+      if self.sprint_instance_pool is None:
+        print("SprintAlignmentAutomataOp: Starting Sprint %r" % self.sprint_opts, file=log.v3)
+        self.sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts=self.sprint_opts)
+
+      assert isinstance(self.sprint_instance_pool, SprintInstancePool)  # PyCharm confused otherwise
+      edges, weights, start_end_states = self.sprint_instance_pool.get_automata_for_batch(tags)
+
+      output_storage[0][0] = edges.view(dtype='float32')
+      output_storage[1][0] = weights
+      output_storage[2][0] = start_end_states.view(dtype='float32')
+      output_storage[3][0] = numpy.empty((2, start_end_states[1,-1] + 1), dtype='float32')
+
+
+  def sprint_loss_and_error_signal(output_layer, target, sprint_opts, log_posteriors, seq_lengths):
+    """
+    :param NetworkOutputLayer.SequenceOutputLayer output_layer: output layer
+    :param str target: e.g. "classes"
+    :param dict[str] sprint_opts: for SprintInstancePool
+    :param log_posteriors: 3d ndarray (time,batch,dim)
+    :param seq_lengths: 1d ndarray (batch,) -> seq len
+    :return: loss, error_signal.
+      loss is a 2d ndarray (batch,) -> loss.
+      error_signal has the same shape as log_posteriors.
+      error_signal is the grad w.r.t. z, i.e. before softmax is applied.
+    """
+    if output_layer and output_layer.train_flag:
+      import Device
+      if Device.is_device_host_proc():
+        if Device.deviceInstance.config.is_typed("seq_train_parallel"):
+          print("sprint_loss_and_error_signal: seq_train_parallel for output_layer %r" % output_layer.name, file=log.v3)
+          assert not Device.deviceInstance.seq_train_parallel_control, "Only one supported so far."
+          control = \
+            SeqTrainParallelControlDevHost(
+              output_layer=output_layer, output_target=target, sprint_opts=sprint_opts,
+              **Device.deviceInstance.config.typed_value("seq_train_parallel"))
+          Device.deviceInstance.seq_train_parallel_control = control
+          loss = control.output_var_loss
+          hat_y = control.output_var_hat_y  # hat_y = posteriors - error_signal
+          error_signal = T.exp(log_posteriors) - hat_y
+          index_mask = T.cast(output_layer.network.j["data"], "float32").dimshuffle(0, 1, 'x')
+          error_signal *= index_mask
+          return loss, error_signal
+    op = SprintErrorSigOp(sprint_opts)
+    # noinspection PyCallingNonCallable
+    return op(log_posteriors, seq_lengths)

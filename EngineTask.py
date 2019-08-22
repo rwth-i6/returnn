@@ -123,8 +123,8 @@ class TaskThread(threading.Thread):
       # We might also get gparams or ctc_priors or so. We will filter them out below when not needed.
       results = [Device.make_result_dict(res, result_format) for res in results]
       if 'weights' in results[0]:
-        for batch, result in zip(batchess,results):
-          self.batches.dataset.update_weights(batch[0].seqs,result['weights'])
+        for batch, result in zip(batchess, results):
+          self.batches.dataset.update_weights(batch[0].seqs, result['weights'])
           del result['weights']
 
       batch_norm_fact = 1 if not self.share_batches else 1.0 / len(self.devices)

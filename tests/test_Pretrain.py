@@ -3,7 +3,7 @@ import sys
 sys.path += ["."]  # Python 3 hack
 
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
-from Pretrain import Pretrain, pretrainFromConfig
+from Pretrain import Pretrain, pretrain_from_config
 from Config import Config
 
 
@@ -53,14 +53,14 @@ config3_json = """
 def test_init_config1():
   config = Config()
   config.update(config1_dict)
-  pretrain = pretrainFromConfig(config)
+  pretrain = pretrain_from_config(config)
   assert_true(pretrain)
 
 
 def test_config1():
   config = Config()
   config.update(config1_dict)
-  pretrain = pretrainFromConfig(config)
+  pretrain = pretrain_from_config(config)
   assert_equal(pretrain.get_train_num_epochs(), 2)
   net1_json = pretrain.get_network_json_for_epoch(1)
   net2_json = pretrain.get_network_json_for_epoch(2)
@@ -75,7 +75,7 @@ def test_config1():
 def test_config2():
   config = Config()
   config.update(config2_dict)
-  pretrain = pretrainFromConfig(config)
+  pretrain = pretrain_from_config(config)
   assert_equal(pretrain.get_train_num_epochs(), 3)
 
 
@@ -83,5 +83,5 @@ def test_config3():
   config = Config()
   config.update(config3_dict)
   config.network_topology_json = config3_json
-  pretrain = pretrainFromConfig(config)
+  pretrain = pretrain_from_config(config)
   assert_equal(pretrain.get_train_num_epochs(), 3)

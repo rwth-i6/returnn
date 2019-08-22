@@ -1,6 +1,11 @@
+
+"""
+Provides :class:`LayerNetworkDescription`.
+"""
+
 from __future__ import print_function
 
-from Util import simpleObjRepr, hdf5_dimension, hdf5_group, hdf5_shape
+from Util import simple_obj_repr, hdf5_dimension, hdf5_group, hdf5_shape
 from Log import log
 
 
@@ -49,7 +54,7 @@ class LayerNetworkDescription:
     import inspect
     return {arg: getattr(self, arg) for arg in inspect.getargspec(self.__init__).args[1:]}
 
-  __repr__ = simpleObjRepr
+  __repr__ = simple_obj_repr
 
   def copy(self):
     args = self.init_args()
@@ -151,7 +156,7 @@ class LayerNetworkDescription:
     data = {}
     for key, data_type in data_dims.items():
       if isinstance(data_type, dict):
-        data[key] = data_type
+        data[key] = data_type.copy()
         continue
       assert isinstance(data_type, (list, tuple))
       dim, ndim = data_type
@@ -189,6 +194,7 @@ class LayerNetworkDescription:
          i.e. ndim=1 means usually sparse data and ndim=2 means dense data.
     :rtype: (int,dict[str,(int,int)])
     """
+    from Util import BackendEngine
     num_inputs = config.int('num_inputs', 0)
     target = config.value('target', 'classes')
     if config.is_typed('num_outputs'):
@@ -197,7 +203,6 @@ class LayerNetworkDescription:
         num_outputs = {target: num_outputs}
       num_outputs = num_outputs.copy()
       from Dataset import convert_data_dims
-      from Util import BackendEngine
       num_outputs = convert_data_dims(num_outputs, leave_dict_as_is=BackendEngine.is_tensorflow_selected())
       if "data" in num_outputs:
         num_inputs = num_outputs["data"]
@@ -218,24 +223,29 @@ class LayerNetworkDescription:
     if config.list('train') and ":" not in config.value('train', ''):
       dataset = config.list('train')[0]
     if not config.is_typed('num_outputs') and dataset:
+      # noinspection PyBroadException
       try:
         _num_inputs = hdf5_dimension(dataset, 'inputCodeSize') * config.int('window', 1)
       except Exception:
         _num_inputs = hdf5_dimension(dataset, 'inputPattSize') * config.int('window', 1)
+      # noinspection PyBroadException
       try:
         _num_outputs = {target: [hdf5_dimension(dataset, 'numLabels'), 1]}
       except Exception:
         _num_outputs = hdf5_group(dataset, 'targets/size')
         for k in _num_outputs:
           _num_outputs[k] = [_num_outputs[k], len(hdf5_shape(dataset, 'targets/data/' + k))]
-      if num_inputs: assert num_inputs == _num_inputs
-      if num_outputs: assert num_outputs == _num_outputs
+      if num_inputs:
+        assert num_inputs == _num_inputs
+      if num_outputs:
+        assert num_outputs == _num_outputs
       num_inputs = _num_inputs
       num_outputs = _num_outputs
-    if not num_inputs and not num_outputs and config.has("load"):
+    if not num_inputs and not num_outputs and config.has("load") and BackendEngine.is_theano_selected():
       from Network import LayerNetwork
       import h5py
       model = h5py.File(config.value("load", ""), "r")
+      # noinspection PyProtectedMember
       num_inputs, num_outputs = LayerNetwork._n_in_out_from_hdf_model(model)
     assert num_inputs and num_outputs, "provide num_inputs/num_outputs directly or via train"
     return num_inputs, num_outputs
@@ -267,8 +277,13 @@ class LayerNetworkDescription:
     :param bool reverse: reverse or not
     :rtype: dict[str]
     """
-    import inspect
-    from NetworkLayer import get_layer_class
+    import Util
+    if Util.BackendEngine.is_theano_selected():
+      from NetworkLayer import get_layer_class
+    elif Util.BackendEngine.is_tensorflow_selected():
+      from TFNetworkLayer import get_layer_class
+    else:
+      raise NotImplementedError
     params = dict(self.default_layer_info)
     params.update(info)
     params["from"] = sources
@@ -283,7 +298,7 @@ class LayerNetworkDescription:
         else:
           params['name'] += "_bw"
           params['reverse'] = True
-      if 'sharpgates' in inspect.getargspec(layer_class.__init__).args[1:]:
+      if 'sharpgates' in Util.getargspec(layer_class.__init__).args[1:]:
         params['sharpgates'] = self.sharpgates
     return params
 

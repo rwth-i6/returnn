@@ -8,3 +8,20 @@ ipython-kernel-*.json
 *~
 *.so
 /.vscode
+
+# QtCreator/cmake creates this:
+/extern/build-*
+
+# When we run tests here, these can be created.
+/events.out.tfevents.*
+
+# When we run tests/pycharm-inspect.py, this will be created.
+/tests/PyCharm.idea/workspace.xml
+
+# via setuptools (setup.py)
+/MANIFEST
+/build
+/dist
+
+# via test cases run directly in this directory
+/dataset_id*

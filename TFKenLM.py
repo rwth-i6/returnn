@@ -11,7 +11,7 @@ import tensorflow as tf
 returnn_dir = os.path.dirname(os.path.abspath(__file__))
 kenlm_dir = returnn_dir + "/extern/kenlm"
 
-# https://www.tensorflow.org/extend/adding_an_op
+# https://www.tensorflow.org/guide/extend/op
 # Also see TFUitl.TFArrayContainer for TF resources.
 # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/tensor.h
 # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/tensor_shape.h
@@ -335,6 +335,10 @@ _tf_mod = None
 
 
 def get_tf_mod(verbose=False):
+  """
+  :param bool verbose:
+  :return: module
+  """
   global _tf_mod
   if _tf_mod:
     return _tf_mod
@@ -367,6 +371,8 @@ def get_tf_mod(verbose=False):
     for word in ["kConverter"]:
       f_code = f_code.replace(word, "%s_%s" % (fn_short, word))
     src_code += "\n// ------------ %s : BEGIN { ------------\n" % os.path.basename(fn)
+    # https://gcc.gnu.org/onlinedocs/cpp/Line-Control.html#Line-Control
+    src_code += "#line 1 \"%s\"\n" % os.path.basename(fn)
     src_code += f_code
     src_code += "\n// ------------ %s : END } --------------\n\n" % os.path.basename(fn)
   src_code += "\n\n// ------------ our code now: ------------\n\n"
@@ -445,4 +451,3 @@ if __name__ == "__main__":
     output_scores = session.run(output_scores_tf, feed_dict={input_strings_tf: input_strings})
     print("input strings:", input_strings, "(sys.argv[1:])")
     print("output scores:", output_scores)
-

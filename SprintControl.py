@@ -5,36 +5,50 @@ concretely for Sprint PythonControl, Sprint PythonSegmentOrder and Sprint Sprint
 For reference, in Sprint code, see:
  * src/Nn/PythonControl.cc
  * src/Tools/NnTrainer/python_control_demo.py
-This interface will behave similar as SprintExternInterface.
+This interface will behave similar to SprintExternInterface.
 See SprintErrorSignals for the other end.
 It can also be used as a PythonSegmentOrdering interface.
 It also supports SprintNnPythonLayer.
 """
 
 from __future__ import print_function
-import rnn
-import Debug
+
 import os
 import numpy
-import TaskSystem
-from TaskSystem import Pickler, Unpickler, numpy_set_unused
-from Util import to_bool
+import typing
 from threading import Condition
+
+import rnn
+import TaskSystem
+import Debug
+from TaskSystem import Pickler, Unpickler, numpy_set_unused
+from Util import to_bool, long
 
 InitTypes = set()
 Verbose = False  # disables all per-segment log messages
-Quiet = False # disables all but error messages
+Quiet = False  # disables all but error messages
 
 _orig_print = print
+
+
+# noinspection PyShadowingBuiltins
 def print(*args, **kwargs):
+  """
+  ``print`` replacement.
+
+  :param args:
+  :param kwargs:
+  """
   if not Quiet:
     _orig_print(*args, **kwargs)
 
+
 print("CRNN SprintControl[pid %i] Python module load" % os.getpid())
 
-rnn.initBetterExchook()
-Debug.initFaulthandler(sigusr1_chain=True)  # Sprint also handles SIGUSR1.
-rnn.initThreadJoinHack()
+rnn.init_better_exchook()
+Debug.init_faulthandler(sigusr1_chain=True)  # Sprint also handles SIGUSR1.
+rnn.init_thread_join_hack()
+
 
 # Start Sprint PythonControl interface. {
 
@@ -42,6 +56,9 @@ def init(name, reference, config, sprint_unit=None, version_number=None, callbac
   """
   This will be called by Sprint PythonControl.
   But we also call it ourselves e.g. in getSegmentList() and SprintNnPythonLayer.
+  In this specific module, we expect that there is "c2p_fd" and "p2c_fd" in the config string
+  to communicate with the parent process, which is usually handled by SprintErrorSignals.
+
   :param str name: this specifies the caller. e.g. "Sprint.PythonControl"
   :param reference: this is any object to identify the specific instance of the caller, if there are multiple.
   :param str config: this will be passed over from Sprint. you can configure that via --*.pymod-config.
@@ -56,8 +73,6 @@ def init(name, reference, config, sprint_unit=None, version_number=None, callbac
     It's supposed to be called like callback(action, **other_args), where action is a string.
     See Sprint PythonControl code about the possible actions and arguments.
   :param kwargs: all remaining args are specific for each caller.
-  In this specific module, we expect that there is "c2p_fd" and "p2c_fd" in the config string
-  to communicate with the parent process, which is usually handled by SprintErrorSignals.
   """
 
   config = config.split(",")
@@ -67,7 +82,8 @@ def init(name, reference, config, sprint_unit=None, version_number=None, callbac
   if to_bool(config.get("quiet", False)):
     Quiet = True
 
-  print("CRNN SprintControl[pid %i] init: name=%r, sprint_unit=%r, version_number=%r, callback=%r, ref=%r, config=%r, kwargs=%r" % (
+  print(("CRNN SprintControl[pid %i] init: "
+         "name=%r, sprint_unit=%r, version_number=%r, callback=%r, ref=%r, config=%r, kwargs=%r") % (
     os.getpid(), name, sprint_unit, version_number, callback, reference, config, kwargs))
   InitTypes.add(name)
 
@@ -90,8 +106,11 @@ def init(name, reference, config, sprint_unit=None, version_number=None, callbac
 
 # End Sprint PythonControl interface. }
 
+
 # Start Sprint PythonSegmentOrder interface. {
 
+# Keep names for compatibility.
+# noinspection PyPep8Naming,PyUnusedLocal
 def getSegmentList(corpusName, segmentList, config, **kwargs):
   """
   Sprint will directly call this function.
@@ -103,9 +122,13 @@ def getSegmentList(corpusName, segmentList, config, **kwargs):
   init(name="CRNN.PythonSegmentOrder", reference=corpusName, config=config)
   PythonControl.instance.check_control_loop_running()
   for segment_name in PythonControl.instance.segment_list_iterator():
-    yield segment_name
+    if isinstance(segment_name, bytes):
+      yield segment_name.decode('utf-8')
+    else:
+      yield segment_name
 
 # End Sprint PythonSegmentOrder interface. }
+
 
 # Start SprintNnPythonLayer. {
 
@@ -123,44 +146,81 @@ class SprintNnPythonLayer:
     self.input_size = None
     self.output_size = None
 
+  # noinspection PyMethodMayBeStatic
   def finalize(self):
+    """
+    Called by Sprint at exit.
+    """
     print("CRNN SprintControl[pid %i] SprintNnPythonLayer.finalize" % (os.getpid(),))
 
+  # noinspection PyPep8Naming
   def setInputDimension(self, stream, size):
-    print("CRNN SprintControl[pid %i] SprintNnPythonLayer.setInputDimension: stream=%r, size=%r" % (os.getpid(), stream, size))
+    """
+    :param int stream:
+    :param int size:
+    """
+    print("CRNN SprintControl[pid %i] SprintNnPythonLayer.setInputDimension: stream=%r, size=%r" % (
+      os.getpid(), stream, size))
     assert stream == 0, "we only support a single input stream (for now)"
     self.input_size = size
 
+  # noinspection PyPep8Naming
   def setOutputDimension(self, size):
+    """
+    :param int size:
+    """
     print("CRNN SprintControl[pid %i] SprintNnPythonLayer.setOutputDimension: %r" % (os.getpid(), size))
     self.output_size = size
 
+  # noinspection PyPep8Naming,PyMethodMayBeStatic
   def initializeNetworkParameters(self):
+    """
+    Called by Sprint for param init.
+    """
     print("CRNN SprintControl[pid %i] SprintNnPythonLayer.initializeNetworkParameters" % (os.getpid(),))
     # Just ignore.
 
+  # noinspection PyPep8Naming,PyMethodMayBeStatic
   def loadNetworkParameters(self, filename):
+    """
+    :param str filename:
+    """
     print("CRNN SprintControl[pid %i] SprintNnPythonLayer.loadNetworkParameters: %r" % (os.getpid(), filename))
     # Just ignore.
 
+  # noinspection PyPep8Naming,PyMethodMayBeStatic
   def saveNetworkParameters(self, filename):
+    """
+    :param str filename:
+    """
     print("CRNN SprintControl[pid %i] SprintNnPythonLayer.saveNetworkParameters: %r" % (os.getpid(), filename))
     # Just ignore.
 
+  # noinspection PyPep8Naming,PyMethodMayBeStatic
   def isTrainable(self):
+    """
+    :rtype: bool
+    """
     # Always trainable.
     return True
 
+  # noinspection PyPep8Naming,PyMethodMayBeStatic
   def getNumberOfFreeParameters(self):
+    """
+    :rtype: int
+    """
     # For now, just ignore. Not important.
     return 0
 
+  # noinspection PyShadowingBuiltins
   def forward(self, input):
     """
     :param input: tuple of input matrices of format (input_size,time). we ignore them.
     :return: single output matrix of format (output_size,time)
     """
-    if Verbose: print("CRNN SprintControl[pid %i] SprintNnPythonLayer.forward: %s" % (os.getpid(), input[0].shape if input else repr(input)[:10]))
+    if Verbose:
+      print("CRNN SprintControl[pid %i] SprintNnPythonLayer.forward: %s" % (
+        os.getpid(), input[0].shape if input else repr(input)[:10]))
     assert len(input) == 1
     assert input[0].ndim == 2
     assert input[0].shape[0] == self.input_size
@@ -171,25 +231,28 @@ class SprintNnPythonLayer:
     assert posteriors.shape == (seg_len, self.output_size)
     return posteriors.T
 
+  # noinspection PyPep8Naming
   def backpropagate(self, errorSignalIn):
     """
-    :param errorSignalIn: matrix of format (output_size,time)
+    :param numpy.ndarray errorSignalIn: matrix of format (output_size,time)
     :return: tuple of matrices of format (input_size,time)
+    :rtype: numpy.ndarray
     """
-    if Verbose: print("CRNN SprintControl[pid %i] SprintNnPythonLayer.backpropagate: %r" % (os.getpid(), errorSignalIn.shape))
+    if Verbose:
+      print("CRNN SprintControl[pid %i] SprintNnPythonLayer.backpropagate: %r" % (os.getpid(), errorSignalIn.shape))
     assert errorSignalIn.ndim == 2
     assert errorSignalIn.shape[0] == self.output_size
     seg_len = errorSignalIn.shape[1]
     PythonControl.instance.set_current_seg_error_signal(seg_len=seg_len, error_signal=errorSignalIn.T)
     # must return a 1-tuple
-    return (numpy.zeros((self.input_size, seg_len), dtype="float32"),)
+    return numpy.zeros((self.input_size, seg_len), dtype="float32"),
 
 # End SprintNnPythonLayer. }
 
 
 class PythonControl:
   """
-  This will send data to CRNN over a pipe.
+  This will send data to RETURNN over a pipe.
   We expect that we are child process and the parent process has spawned us,
 
   An instance of this class is also the interface for multiple Sprint interfaces, i.e.:
@@ -199,14 +262,18 @@ class PythonControl:
   """
 
   Version = 1  # increase when some protocol changes
-  instance = None; ":type: PythonControl"
+  instance = None  # type: typing.Optional[PythonControl]
 
   @classmethod
   def create(cls, **kwargs):
+    """
+    :param kwargs: passed to :class:`PythonControl`
+    :rtype: PythonControl
+    """
     if cls.instance:
       cls.instance._additional_init(**kwargs)
       return cls.instance
-    print("CRNN SprintControl[pid %i] PythonControl create %r" %(os.getpid(), kwargs))
+    print("CRNN SprintControl[pid %i] PythonControl create %r" % (os.getpid(), kwargs))
     return PythonControl(**kwargs)
 
   def __init__(self, c2p_fd, p2c_fd, **kwargs):
@@ -246,9 +313,10 @@ class PythonControl:
     self._init(**kwargs)
 
   def _additional_init(self, **kwargs):
-    print("CRNN SprintControl[pid %i] PythonControl additional_init %r" %(os.getpid(), kwargs))
+    print("CRNN SprintControl[pid %i] PythonControl additional_init %r" % (os.getpid(), kwargs))
     self._init(**kwargs)
 
+  # noinspection PyUnusedLocal
   def _init(self, name, sprint_unit=None, callback=None, version_number=None, min_version_number=None, **kwargs):
     if name == "Sprint.PythonControl":
       print("CRNN SprintControl[pid %i] init for Sprint.PythonControl %r" % (os.getpid(), kwargs))
@@ -258,6 +326,7 @@ class PythonControl:
       if callback:
         self.sprint_callback = callback
 
+  # noinspection PyUnusedLocal
   def init_processing(self, input_dim=None, output_dim=None, **kwargs):
     """
     This is called via Sprint when we use PythonControl to iterate the corpus,
@@ -265,27 +334,39 @@ class PythonControl:
     We expect that we use the Sprint callback to calculate loss and error signal.
     This is called on the first segment.
     input_dim/output_dim are set iff we extract features/alignments.
+
+    :param int|None input_dim:
+    :param int|None output_dim:
     """
-    print("CRNN SprintControl[pid %i] init_processing input_dim=%r, output_dim=%r" % (os.getpid(), input_dim, output_dim))
+    print("CRNN SprintControl[pid %i] init_processing input_dim=%r, output_dim=%r" % (
+      os.getpid(), input_dim, output_dim))
     print("CRNN SprintControl[pid %i] loss_and_error_signal_via_sprint_callback enabled" % (os.getpid(),))
     self.loss_and_error_signal_via_sprint_callback = True
     assert self.sprint_callback
 
+  # noinspection PyUnusedLocal
   def process_segment(self, name, orthography, features=None, alignment=None, soft_alignment=None, **kwargs):
     """
     This is called via Sprint when we use PythonControl to iterate the corpus.
+
     :param str name: segment name
     :param str orthography: segment orth
+    :param numpy.ndarray|None features:
+    :param numpy.ndarray|None alignment:
+    :param numpy.ndarray|None soft_alignment:
     """
-    if Verbose: print("CRNN SprintControl[pid %i] process_segment name=%r orth=%r" % (os.getpid(), name, orthography[:10] + "..."))
+    if Verbose:
+      print("CRNN SprintControl[pid %i] process_segment name=%r orth=%r" % (
+        os.getpid(), name, orthography[:10] + "..."))
     assert self.loss_and_error_signal_via_sprint_callback
     assert self.seg_name == name  # via self.handle_cmd_get_loss_and_error_signal()
     assert self.posteriors.ndim == 2  # (time,dim)
     assert features is None, "in Sprint, set --*.extract-features=false"
     assert alignment is None, "in Sprint, set --*.extract-alignment=false"
     assert soft_alignment is None, "in Sprint, set --*.extract-alignment=false"
-    loss, error_signal = \
-      self._get_loss_and_error_signal_via_sprint_callback(seg_name=name, orthography=orthography, posteriors=self.posteriors)
+    loss, error_signal = (
+      self._get_loss_and_error_signal_via_sprint_callback(
+        seg_name=name, orthography=orthography, posteriors=self.posteriors))
     assert loss is not None
     assert error_signal is not None
     with self.cond:
@@ -294,6 +375,13 @@ class PythonControl:
       self.cond.notifyAll()
 
   def _get_loss_and_error_signal_via_sprint_callback(self, seg_name, orthography, posteriors):
+    """
+    :param str seg_name:
+    :param str orthography:
+    :param numpy.ndarray posteriors:
+    :return: (loss, error_signal)
+    :rtype: (float, numpy.ndarray)
+    """
     if self.posteriors_in_log_space:
       if self.sprint_knows_about_log_space_probs:  # --*.input-in-log-space=true for CTC in Sprint
         # We assume that Sprint will return gradient for activation before softmax, e.g. y - \hat{y} for CE/CTC.
@@ -322,18 +410,22 @@ class PythonControl:
     return Unpickler(self.pipe_p2c).load()
 
   def close(self):
+    """
+    Close pipe.
+    """
     self.pipe_c2p.close()
     self.pipe_p2c.close()
 
-  def handle_cmd_exit(self):
+  def _handle_cmd_exit(self):
     self.close()
     raise SystemExit
 
-  def handle_cmd_init(self, name, version):
+  # noinspection PyUnusedLocal
+  def _handle_cmd_init(self, name, version):
     assert version == self.Version
     return "SprintControl", self.Version
 
-  def handle_cmd_get_loss_and_error_signal(self, seg_name, seg_len, posteriors):
+  def _handle_cmd_get_loss_and_error_signal(self, seg_name, seg_len, posteriors):
     """
     :param str seg_name: seg name
     :param int seg_len: the segment length in frames
@@ -345,11 +437,16 @@ class PythonControl:
     assert seg_len > 0
     assert posteriors.ndim == 2
     assert posteriors.shape[0] == seg_len
-    if Verbose: print("CRNN SprintControl[pid %i] PythonControl handle_cmd_get_loss_and_error_signal: name=%r, len=%r" % (os.getpid(), seg_name, seg_len))
+    if Verbose:
+      print("CRNN SprintControl[pid %i] PythonControl handle_cmd_get_loss_and_error_signal: name=%r, len=%r" % (
+        os.getpid(), seg_name, seg_len))
     with self.cond:
       self.control_thread__have_new_seg = True
       self.control_thread__have_new_error_signal = False
-      self.seg_name = seg_name
+      if isinstance(seg_name, bytes):
+        self.seg_name = seg_name.decode('utf-8')
+      else:
+        self.seg_name = seg_name
       self.seg_len = seg_len
       self.posteriors = posteriors
       self.error_signal = None
@@ -367,11 +464,17 @@ class PythonControl:
     error_signal = error_signal.astype('float32', copy=False)
     return loss, error_signal
 
-  def handle_cmd_export_allophone_state_fsa_by_segment_name(self, segment_name):
+  def _handle_cmd_export_allophone_state_fsa_by_segment_name(self, segment_name):
     return self.callback("export_allophone_state_fsa_by_segment_name", segment_name)
 
-  def handle_cmd(self, cmd, *args):
-    func = getattr(self, "handle_cmd_%s" % cmd)
+  def _handle_cmd(self, cmd, *args):
+    """
+    :param str cmd:
+    :param args:
+    :return: some tuple, whatever the func returns
+    :rtype: tuple
+    """
+    func = getattr(self, "_handle_cmd_%s" % cmd)
     return func(*args)
 
   def handle_next(self):
@@ -382,9 +485,11 @@ class PythonControl:
     import sys
     args = self._read()
     try:
-      if not isinstance(args, tuple): raise TypeError("expected tuple but got %r" % args)
-      if len(args) < 1: raise Exception("need multiple args (cmd, ...)")
-      res = self.handle_cmd(*args)
+      if not isinstance(args, tuple):
+        raise TypeError("expected tuple but got %r" % args)
+      if len(args) < 1:
+        raise Exception("need multiple args (cmd, ...)")
+      res = self._handle_cmd(*args)
     except Exception as e:
       print("CRNN SprintControl[pid %i] PythonControl handle_next exception" % (os.getpid(),))
       sys.excepthook(*sys.exc_info())
@@ -413,6 +518,7 @@ class PythonControl:
         self.control_loop_exited = True
         self.cond.notifyAll()
 
+  # noinspection PyMethodMayBeStatic
   def exit(self, **kwargs):
     """
     Called by Sprint.
@@ -420,23 +526,35 @@ class PythonControl:
     print("CRNN SprintControl[pid %i] PythonControl exit: %r" % (os.getpid(), kwargs))
 
   def check_control_loop_running(self):
+    """
+    Called by Sprint.
+    """
     if self.control_loop_started:
       print("CRNN SprintControl[pid %i] PythonControl check_control_loop_running: already running" % (os.getpid(),))
       return
     self.run_threaded_control_loop()
 
   def run_threaded_control_loop(self):
+    """
+    Called by Sprint.
+    """
     print("CRNN SprintControl[pid %i] PythonControl run_threaded_control_loop" % (os.getpid(),))
     from threading import Thread
+
     def control_loop():
-      rnn.initBetterExchook()
+      """
+      Control loop.
+      """
+      rnn.init_better_exchook()
       self.run_control_loop(self.own_threaded_callback)
+
     t = Thread(target=control_loop, name="SprintControl.PythonControl.threaded_control_loop")
     t.daemon = True
     t.start()
     while True:
       with self.cond:
-        if self.control_loop_started: return
+        if self.control_loop_started:
+          return
         assert t.isAlive()
         self.cond.wait(timeout=1)
 
@@ -447,10 +565,22 @@ class PythonControl:
     func = getattr(self, "own_tcb_%s" % cmd)
     return func(*args)
 
+  # noinspection PyMethodMayBeStatic
   def own_tcb_version(self):
+    """
+    :return: version string
+    :rtype: str
+    """
     return "<version>CRNN.own_threaded_callback</version>"
 
+  # noinspection PyUnusedLocal
   def own_tcb_get_loss_and_error_signal(self, seg_name, seg_len, posteriors):
+    """
+    :param seg_name:
+    :param seg_len:
+    :param posteriors:
+    :return:
+    """
     # Wait until we get the loss and error signal.
     while True:
       with self.cond:
@@ -462,7 +592,8 @@ class PythonControl:
     """
     Called by Sprint PythonControl in FeedForwardTrainer/SegmentwiseNnTrainer.
     """
-    if Verbose: print("CRNN SprintControl[pid %i] init_segment %s" % (os.getpid(), segment_name))
+    if Verbose:
+      print("CRNN SprintControl[pid %i] init_segment %s" % (os.getpid(), segment_name))
     with self.cond:
       assert self.seg_name == segment_name
       self.notified_for_segment = True
@@ -472,7 +603,8 @@ class PythonControl:
     """
     Called by Sprint PythonControl in FeedForwardTrainer/SegmentwiseNnTrainer.
     """
-    if Verbose: print("CRNN SprintControl[pid %i] notify_segment_loss %s %s" % (os.getpid(), segment_name, loss))
+    if Verbose:
+      print("CRNN SprintControl[pid %i] notify_segment_loss %s %s" % (os.getpid(), segment_name, loss))
     self.set_current_seg_loss(seg_name=segment_name, loss=loss)
 
   def get_current_seg_posteriors(self, seg_len):
@@ -510,10 +642,19 @@ class PythonControl:
       self.loss = loss
       self.cond.notifyAll()
 
+  # noinspection PyMethodMayBeStatic
   def _default_skipped_loss(self):
+    """
+    :rtype: float
+    """
     return float("inf")
 
+  # noinspection PyMethodMayBeStatic
   def _default_skipped_error_signal(self, posteriors):
+    """
+    :param numpy.ndarray posteriors:
+    :rtype: numpy.ndarray
+    """
     return numpy.zeros_like(posteriors)
 
   def _skip_segment_loss_and_error(self):
@@ -534,16 +675,21 @@ class PythonControl:
           break
         if self.loss is None or self.error_signal is None:
           break
-        if Verbose: print("CRNN SprintControl[pid %i] getSegmentList: wait for control loop to handle error signal" % (os.getpid(),))
+        if Verbose:
+          print("CRNN SprintControl[pid %i] getSegmentList: wait for control loop to handle error signal" % (
+            os.getpid(),))
         self.cond.wait(timeout=1)
 
   def segment_list_iterator(self):
+    """
+    :return: yields segment names
+    :rtype: typing.Iterator[str]
+    """
     with self.cond:
       assert self.control_loop_started
 
     while True:  # outer loop
       # wait until we get new segment
-      seg_name = None
       while True:
         with self.cond:
           if self.control_thread__have_new_seg:
@@ -556,11 +702,13 @@ class PythonControl:
           self.cond.wait(timeout=1)
 
       # We got a new segment name from the parent CRNN process (via self.handle_cmd_get_loss_and_error_signal()).
-      # We wait in this segment because we wait to get the error signal from Sprint (via SprintNnPythonLayer.backpropagate()).
+      # We wait in this segment because we wait to get the error signal from Sprint
+      # (via SprintNnPythonLayer.backpropagate()).
       # Sprint waits currently for us to get the new segment (in the PythonSegmentOrder code).
       # Once it gets it, it will call SprintNnPythonLayer.forward(), then calculate the loss and error signal
       # and then call SprintNnPythonLayer.backpropagate().
-      if Verbose: print("CRNN SprintControl[pid %i] getSegmentList, yield %r" % (os.getpid(), seg_name))
+      if Verbose:
+        print("CRNN SprintControl[pid %i] getSegmentList, yield %r" % (os.getpid(), seg_name))
       yield seg_name
 
       # We might need to wait for the control loop thread.
@@ -574,14 +722,17 @@ class PythonControl:
         # Maybe the PythonLayer was not used?
         # Or Sprint could not calculate the criterion for this segment (bad lattice or so).
         if not (self.control_thread__have_new_error_signal or self.control_thread__have_new_seg):
-          print("CRNN SprintControl[pid %i] getSegmentList, no error signal, skip segment: %s" % (os.getpid(), seg_name))
+          print("CRNN SprintControl[pid %i] getSegmentList, no error signal, skip segment: %s" % (
+            os.getpid(), seg_name))
           if Verbose:
             # Print Sprint stacktrace.
             import signal
             os.kill(os.getpid(), signal.SIGUSR1)
           if not self.notified_for_segment:
-            print("CRNN SprintControl[pid %i] getSegmentList: Do you use PythonControl in the Sprint trainer? Got no segment notification." % (os.getpid(),))
+            print(("CRNN SprintControl[pid %i] getSegmentList: "
+                   "Do you use PythonControl in the Sprint trainer? Got no segment notification.") % (os.getpid(),))
           if not self.asked_for_posteriors:
-            print("CRNN SprintControl[pid %i] getSegmentList: Do you use PythonLayer in Sprint? Did not get asked for posteriors." % (os.getpid(),))
+            print(("CRNN SprintControl[pid %i] getSegmentList: "
+                   "Do you use PythonLayer in Sprint? Did not get asked for posteriors.") % (os.getpid(),))
           self._skip_segment_loss_and_error()
           self._wait_for_control_loop_error_signal()

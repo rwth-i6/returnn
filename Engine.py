@@ -1,4 +1,8 @@
 
+"""
+Provides :class:`Engine`, the backend engine for Theano.
+"""
+
 from __future__ import print_function
 
 import numpy
@@ -13,8 +17,8 @@ import SprintCache
 from Log import log
 from Updater import Updater
 import Device
-from LearningRateControl import loadLearningRateControlFromConfig
-from Pretrain import pretrainFromConfig
+from LearningRateControl import load_learning_rate_control_from_config
+from Pretrain import pretrain_from_config
 import EngineUtil
 from Util import hms, hdf5_dimension, BackendEngine, model_epoch_from_filename, get_model_filename_postfix
 import errno
@@ -31,16 +35,19 @@ import json
 import cgi
 from GeneratingDataset import StaticDataset
 import hashlib
+from EngineBase import EngineBase
 
 
-class Engine:
-
-  _epoch_model = None; """ :type: (int|None,str|None) """  # See get_epoch_model().
+class Engine(EngineBase):
+  """
+  Theano backend engine.
+  """
 
   def __init__(self, devices):
     """
     :type devices: list[Device.Device]
     """
+    super(Engine, self).__init__()
     self.devices = devices
     self.train_data = None; " :type: Dataset.Dataset "
     self.is_training = False
@@ -48,151 +55,7 @@ class Engine:
     self.training_finished = False
     self.stop_train_after_epoch_request = False
     self.dataset_batches = {}
-    self.pretrain = None; " :type: Pretrain.Pretrain "
     self.init_train_epoch_posthook = None
-
-  @classmethod
-  def config_get_final_epoch(cls, config):
-    """
-    :param Config.Config config:
-    :rtype: int
-    """
-    num_epochs = config.int('num_epochs', 5)
-    if config.has("load_epoch"):
-      num_epochs = max(num_epochs, config.int("load_epoch", 0))
-    return num_epochs
-
-  @classmethod
-  def get_existing_models(cls, config):
-    """
-    :param Config.Config config:
-    :return: dict epoch -> model filename
-    :rtype: dict[int,str]
-    """
-    model_filename = config.value('model', '')
-    if not model_filename:
-      return []
-    # Automatically search the filesystem for existing models.
-    file_list = {}
-    for epoch in range(1, cls.config_get_final_epoch(config) + 1):
-      for is_pretrain in [False, True]:
-        fn = cls.epoch_model_filename(model_filename, epoch, is_pretrain)
-        if os.path.exists(fn):
-          file_list[epoch] = fn
-          break
-        if BackendEngine.is_tensorflow_selected():
-          if os.path.exists(fn + ".index"):
-            file_list[epoch] = fn
-            break
-    return file_list
-
-  @classmethod
-  def get_epoch_model(cls, config):
-    """
-    :type config: Config.Config
-    :returns (epoch, modelFilename)
-    :rtype: (int|None, str|None)
-    """
-    # XXX: We cache it, although this is wrong if we have changed the config.
-    if cls._epoch_model:
-      return cls._epoch_model
-
-    start_epoch_mode = config.value('start_epoch', 'auto')
-    if start_epoch_mode == 'auto':
-      start_epoch = None
-    else:
-      start_epoch = int(start_epoch_mode)
-      assert start_epoch >= 1
-
-    load_model_epoch_filename = config.value('load', '')
-    if load_model_epoch_filename:
-      assert os.path.exists(load_model_epoch_filename + get_model_filename_postfix())
-
-    import_model_train_epoch1 = config.value('import_model_train_epoch1', '')
-    if import_model_train_epoch1:
-      assert os.path.exists(import_model_train_epoch1 + get_model_filename_postfix())
-
-    existing_models = cls.get_existing_models(config)
-    if not load_model_epoch_filename:
-      if config.has("load_epoch"):
-        load_epoch = config.int("load_epoch", 0)
-        assert load_epoch in existing_models
-        load_model_epoch_filename = existing_models[load_epoch]
-        assert model_epoch_from_filename(load_model_epoch_filename) == load_epoch
-
-    # Only use this when we don't train.
-    # For training, we first consider existing models before we take the 'load' into account when in auto epoch mode.
-    # In all other cases, we use the model specified by 'load'.
-    if load_model_epoch_filename and (config.value('task', 'train') != 'train' or start_epoch is not None):
-      epoch = model_epoch_from_filename(load_model_epoch_filename)
-      if config.value('task', 'train') == 'train' and start_epoch is not None:
-        # Ignore the epoch. To keep it consistent with the case below.
-        epoch = None
-      epoch_model = (epoch, load_model_epoch_filename)
-
-    # In case of training, always first consider existing models.
-    # This is because we reran CRNN training, we usually don't want to train from scratch
-    # but resume where we stopped last time.
-    elif existing_models:
-      epoch_model = sorted(existing_models.items())[-1]
-      if load_model_epoch_filename:
-        print("note: there is a 'load' which we ignore because of existing model", file=log.v4)
-
-    elif config.value('task', 'train') == 'train' and import_model_train_epoch1 and start_epoch in [None, 1]:
-      epoch_model = (0, import_model_train_epoch1)
-
-    # Now, consider this also in the case when we train, as an initial model import.
-    elif load_model_epoch_filename:
-      # Don't use the model epoch as the start epoch in training.
-      # We use this as an import for training.
-      epoch_model = (model_epoch_from_filename(load_model_epoch_filename), load_model_epoch_filename)
-
-    else:
-      epoch_model = (None, None)
-
-    if start_epoch == 1:
-      if epoch_model[0]:  # existing model
-        print("warning: there is an existing model: %s" % (epoch_model,), file=log.v4)
-        epoch_model = (None, None)
-    elif (start_epoch or 0) > 1:
-      if epoch_model[0]:
-        if epoch_model[0] != start_epoch - 1:
-          print("warning: start_epoch %i but there is %s" % (start_epoch, epoch_model), file=log.v4)
-        epoch_model = start_epoch - 1, existing_models[start_epoch - 1]
-
-    cls._epoch_model = epoch_model
-    return epoch_model
-
-  @classmethod
-  def get_train_start_epoch_batch(cls, config):
-    """
-    We will always automatically determine the best start (epoch,batch) tuple
-    based on existing model files.
-    This ensures that the files are present and enforces that there are
-    no old outdated files which should be ignored.
-    Note that epochs start at idx 1 and batches at idx 0.
-    :type config: Config.Config
-    :returns (epoch,batch)
-    :rtype (int,int)
-    """
-    start_batch_mode = config.value('start_batch', 'auto')
-    if start_batch_mode == 'auto':
-      start_batch_config = None
-    else:
-      start_batch_config = int(start_batch_mode)
-    last_epoch, _ = cls.get_epoch_model(config)
-    if last_epoch is None:
-      start_epoch = 1
-      start_batch = start_batch_config or 0
-    elif start_batch_config is not None:
-      # We specified a start batch. Stay in the same epoch, use that start batch.
-      start_epoch = last_epoch
-      start_batch = start_batch_config
-    else:
-      # Start with next epoch.
-      start_epoch = last_epoch + 1
-      start_batch = 0
-    return start_epoch, start_batch
 
   def init_train_from_config(self, config, train_data, dev_data=None, eval_data=None):
     """
@@ -207,13 +70,13 @@ class Engine:
     self.start_epoch, self.start_batch = self.get_train_start_epoch_batch(config)
     self.batch_size = config.int('batch_size', 1)
     self.shuffle_batches = config.bool('shuffle_batches', False)
-    self.update_batch_size = config.int('update_batch_size', 0)
+    self.update_batch_size = config.float('update_batch_size', 0)
     self.batch_size_eval = config.int('batch_size_eval', self.update_batch_size)
     self.model_filename = config.value('model', None)
     self.save_model_epoch_interval = config.int('save_interval', 1)
     self.save_epoch1_initial_model = config.bool('save_epoch1_initial_model', False)
-    self.learning_rate_control = loadLearningRateControlFromConfig(config)
-    self.learning_rate = self.learning_rate_control.defaultLearningRate
+    self.learning_rate_control = load_learning_rate_control_from_config(config)
+    self.learning_rate = self.learning_rate_control.default_learning_rate
     self.initial_learning_rate = self.learning_rate
     self.pretrain_learning_rate = config.float('pretrain_learning_rate', self.learning_rate)
     self.final_epoch = self.config_get_final_epoch(config)  # Inclusive.
@@ -242,7 +105,7 @@ class Engine:
     self.init_network_from_config(config)
 
   def init_network_from_config(self, config):
-    self.pretrain = pretrainFromConfig(config)
+    self.pretrain = pretrain_from_config(config)
     self.max_seqs = config.int('max_seqs', -1)
     self.max_seq_length_eval = config.int('max_seq_length_eval', 2e31)
     self.compression = config.bool('compression', False)
@@ -332,7 +195,7 @@ class Engine:
     self.epoch = self.start_epoch - 1
     if self.learning_rate_control.need_error_info:
       if self.dev_data:
-        if "dev_score" not in self.learning_rate_control.getEpochErrorDict(self.epoch):
+        if "dev_score" not in self.learning_rate_control.get_epoch_error_dict(self.epoch):
           # This can happen when we have a previous model but did not test it yet.
           print("Last epoch model not yet evaluated on dev. Doing that now.", file=log.v4)
           self.eval_model()
@@ -414,31 +277,6 @@ class Engine:
       eval_datasets[name] = dataset
     return eval_datasets
 
-  @classmethod
-  def epoch_model_filename(cls, model_filename, epoch, is_pretrain):
-    """
-    :type model_filename: str
-    :type epoch: int
-    :type is_pretrain: bool
-    :rtype: str
-    """
-    if sys.platform == "win32" and model_filename.startswith("/tmp/"):
-      import tempfile
-      model_filename = tempfile.gettempdir() + model_filename[len("/tmp"):]
-    return model_filename + (".pretrain" if is_pretrain else "") + ".%03d" % epoch
-
-  def get_epoch_model_filename(self):
-    return self.epoch_model_filename(self.model_filename, self.epoch, self.is_pretrain_epoch())
-
-  def get_epoch_str(self):
-    return ("pretrain " if self.is_pretrain_epoch() else "") + "epoch %s" % self.epoch
-
-  def is_pretrain_epoch(self):
-    return self.pretrain and self.epoch <= self.pretrain.get_train_num_epochs()
-
-  def is_first_epoch_after_pretrain(self):
-    return self.pretrain and self.epoch == self.pretrain.get_train_num_epochs() + 1
-
   def init_train_epoch(self):
     if self.is_pretrain_epoch():
       new_network = self.pretrain.get_network_for_epoch(self.epoch)
@@ -453,13 +291,13 @@ class Engine:
       self.network.declare_train_params(**self.pretrain.get_train_param_args_for_epoch(self.epoch))
       # Use constant learning rate.
       self.learning_rate = self.pretrain_learning_rate
-      self.learning_rate_control.setDefaultLearningRateForEpoch(self.epoch, self.learning_rate)
+      self.learning_rate_control.set_default_learning_rate_for_epoch(self.epoch, self.learning_rate)
     elif self.is_first_epoch_after_pretrain():
       # Use constant learning rate.
       self.learning_rate = self.initial_learning_rate
-      self.learning_rate_control.setDefaultLearningRateForEpoch(self.epoch, self.learning_rate)
+      self.learning_rate_control.set_default_learning_rate_for_epoch(self.epoch, self.learning_rate)
     else:
-      self.learning_rate = self.learning_rate_control.getLearningRateForEpoch(self.epoch)
+      self.learning_rate = self.learning_rate_control.get_learning_rate_for_epoch(self.epoch)
 
     if not self.is_pretrain_epoch():
       # Train the whole network.
@@ -514,7 +352,7 @@ class Engine:
 
     if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):
       self.save_model(self.get_epoch_model_filename(), self.epoch)
-    self.learning_rate_control.setEpochError(self.epoch, {"train_score": trainer.score})
+    self.learning_rate_control.set_epoch_error(self.epoch, {"train_score": trainer.score})
     self.learning_rate_control.save()
     if self.ctc_prior_file is not None:
       trainer.save_ctc_priors(self.ctc_prior_file, self.get_epoch_str())
@@ -535,7 +373,8 @@ class Engine:
       return " ".join(["%s %s" % (key.split(':')[-1], str(score[key]))
                        for key in sorted(score.keys())])
 
-  def eval_model(self, output_file=None, output_per_seq_file=None):
+  def eval_model(self, output_file=None, output_per_seq_file=None, loss_name=None,
+                 output_per_seq_format=None, output_per_seq_file_format="txt"):
     assert not output_file and not output_per_seq_file, "not implemented"
     eval_dump_str = []
     for dataset_name, dataset in self.get_eval_datasets().items():
@@ -552,11 +391,11 @@ class Engine:
       eval_dump_str += [" %s: score %s error %s" % (
                         dataset_name, self.format_score(tester.score), self.format_score(tester.error))]
       if dataset_name == "dev":
-        self.learning_rate_control.setEpochError(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
+        self.learning_rate_control.set_epoch_error(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
         self.learning_rate_control.save()
     print(" ".join(eval_dump_str).strip(), file=log.v1)
 
-  def save_model(self, filename, epoch):
+  def save_model(self, filename, epoch=0):
     """
     :param str filename: full filename for model
     :param int epoch: save epoch idx
@@ -590,7 +429,7 @@ class Engine:
     :return: numpy array, output in time major format (time,dim)
     :rtype: numpy.ndarray
     """
-
+    from EngineBatch import Batch, BatchSetGenerator
     batch = Batch()
     batch.init_with_one_full_sequence(seq_idx=seq_idx, dataset=dataset)
     batch_generator = iter([batch])
@@ -598,8 +437,9 @@ class Engine:
 
     forwarder = ClassificationTaskThread(self.network, self.devices, dataset, batches)
     forwarder.join()
-    assert forwarder.output.shape[1] == 1
-    return forwarder.output[:, 0]
+    output = list(forwarder.result.values())[0][0]
+    assert output.shape[1] == 1
+    return output[:, 0]
 
   def forward_to_hdf(self, data, output_file, combine_labels='', batch_size=0):
     """

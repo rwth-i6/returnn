@@ -3,15 +3,33 @@
 
 from __future__ import print_function
 
-import logging
-logging.getLogger('tensorflow').disabled = True
-import tensorflow as tf
 import os
 import sys
+import typing
 print("__file__:", __file__)
 base_path = os.path.realpath(os.path.dirname(os.path.abspath(__file__)) + "/..")
 print("base path:", base_path)
 sys.path.insert(0, base_path)
+
+# Do this here such that we always see this log in Travis.
+orig_stdout = sys.stdout
+try:
+  sys.stdout = sys.__stdout__  # Nosetests has overwritten sys.stdout
+
+  # Do this very early, before we import numpy/TF, such that it can have an effect.
+  for env_var in ["OPENBLAS_NUM_THREADS", "GOTO_NUM_THREADS", "OMP_NUM_THREADS"]:
+    print("Env %s = %s" % (env_var, os.environ.get(env_var, None)))
+    # Overwrite with 1. This should make the test probably more deterministic. Not sure...
+    os.environ[env_var] = "1"
+
+finally:
+  sys.stdout = orig_stdout
+
+
+import logging
+logging.getLogger('tensorflow').disabled = True
+import tensorflow as tf
+
 from TFNativeOp import *
 from TFUtil import is_gpu_available, get_available_gpu_min_compute_capability, CudaEnv
 import Util
@@ -27,7 +45,7 @@ import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 import Debug
-Debug.installLibSigSegfault()
+Debug.install_lib_sig_segfault()
 
 try:
   import faulthandler
@@ -42,11 +60,12 @@ print("TF version:", tf.__version__)
 
 CudaEnv.verbose_find_cuda = True
 session = tf.InteractiveSession()
+tf.set_random_seed(42)
 
 
 def sys_exec(*args, **kwargs):
   print("$ %s" % " ".join(args))
-  out = Util.sysexecOut(*args, **kwargs)
+  out = Util.sysexec_out(*args, **kwargs)
   print(out)
 
 
@@ -119,7 +138,7 @@ def dump_info():
   print("Numpy path: %r" % numpy_path)
   print("Numpy config:")
   numpy.show_config()
-  so_files = Util.sysexecOut("find %s | grep \"\.so\"" % numpy_path, shell=True)
+  so_files = Util.sysexec_out("find %s | grep \"\.so\"" % numpy_path, shell=True)
   print("Numpy so files:\n---\n%s\n---\n" % so_files)
   so_files = [f for f in so_files.splitlines() if f]
   for f in so_files:
@@ -1104,7 +1123,359 @@ def test_tensorarray_grad_simple():
   assert_allclose(vdy, vdx)
 
 
-@unittest.skipIf(not is_gpu_available(), "no gpu on this system")
+def pure_tf_chunk(x, index, chunk_size, chunk_step):
+  """
+  :param tf.Tensor x: (time,batch,dim)
+  :param tf.Tensor index:
+  :param int|tf.Tensor chunk_size:
+  :param int|tf.Tensor chunk_step:
+  :return: out, oindex.
+    out is of shape (chunk_size, n_batch * n_chunks, n_dim), oindex of shape (chunk_size, n_batch * n_chunks).
+  :rtype: (tf.Tensor,tf.Tensor)
+  """
+  from TFUtil import windowed_nd, get_shape_dim
+  assert x.get_shape().ndims == 3
+  n_time = get_shape_dim(x, 0)
+  n_batch = get_shape_dim(x, 1)
+  n_dim = get_shape_dim(x, 2)
+  if all([isinstance(obj, int) for obj in [n_time, chunk_size, chunk_step]]):
+    max_func = max
+  else:
+    max_func = tf.maximum
+  n_chunks = max_func(n_time - chunk_size + chunk_step - 1, 0) // chunk_step + 1
+
+  x_win = windowed_nd(
+    x, window_size=chunk_size, window_left=0, time_axis=0, new_window_axis=0)  # (chunk_size,time,batch,dim)
+  out = x_win[:, ::chunk_step]  # (chunk_size,n_chunks+...,batch,dim)
+  out = out[:, :n_chunks]  # (chunk_size,n_chunks,batch,dim)
+  out = tf.transpose(out, [0, 2, 1, 3])
+  out = tf.reshape(out, [chunk_size, n_chunks * n_batch, n_dim])
+
+  i_win = windowed_nd(
+    index, window_size=chunk_size, window_left=0, time_axis=0, new_window_axis=0)  # (chunk_size,time,batch)
+  oindex = i_win[:, ::chunk_step]  # (chunk_size,n_chunks+...,batch)
+  oindex = oindex[:, :n_chunks]  # (chunk_size,n_chunks,batch)
+  oindex = tf.transpose(oindex, [0, 2, 1])
+  oindex = tf.reshape(oindex, [chunk_size, n_chunks * n_batch])
+
+  return out, oindex
+
+
+def check_chunk(x, index, chunk_size, chunk_step):
+  """
+  :param tf.Tensor x: (time,batch,dim)
+  :param tf.Tensor index:
+  :param int|tf.Tensor chunk_size:
+  :param int|tf.Tensor chunk_step:
+
+  Expected return from op:
+    out, oindex.
+    out is of shape (chunk_size, n_batch * n_chunks, n_dim), oindex of shape (chunk_size, n_batch * n_chunks).
+  """
+  x = tf.convert_to_tensor(x)
+  out1, oindex1 = pure_tf_chunk(x, index=index, chunk_size=chunk_size, chunk_step=chunk_step)
+  dout = tf.random_normal(tf.shape(out1))
+  dx1, = tf.gradients(ys=[out1], xs=[x], grad_ys=[dout])
+  out2, oindex2 = chunk(x, index=index, chunk_size=chunk_size, chunk_step=chunk_step)
+  dx2, = tf.gradients(ys=[out2], xs=[x], grad_ys=[dout])
+  index, out1, oindex1, dx1, out2, oindex2, dx2 = session.run((index, out1, oindex1, dx1, out2, oindex2, dx2))
+  time_, batch_, dim = out1.shape
+  assert out1.shape == out2.shape == (time_, batch_, dim)
+  assert oindex1.shape == oindex2.shape == (time_, batch_)
+  for t in range(time_):
+    for b in range(batch_):
+      assert_almost_equal(oindex1[t, b], oindex2[t, b])
+      if oindex1[t, b] < 0.5:
+        continue
+      assert_almost_equal(out1[t, b], out2[t, b], decimal=5)
+  time, batch, _ = dx1.shape
+  assert dx1.shape == dx2.shape == (time, batch, dim)
+  assert index.shape == (time, batch)
+  for t in range(time):
+    for b in range(batch):
+      if index[t, b] < 0.5:
+        continue
+      assert_almost_equal(dx1[t, b], dx2[t, b], decimal=5)
+
+
+def test_chunk_simple():
+  n_batch = 1
+  n_time = 17
+  n_dim = 3
+  x = tf.random_normal((n_time, n_batch, n_dim))
+  index = [[1.] * n_time] * n_batch
+  index = tf.convert_to_tensor(index)
+  index = tf.transpose(index)
+  check_chunk(x=x, index=index, chunk_size=2, chunk_step=1)
+  check_chunk(x=x, index=index, chunk_size=2, chunk_step=2)
+  check_chunk(x=x, index=index, chunk_size=4, chunk_step=2)
+  check_chunk(x=x, index=index, chunk_size=4, chunk_step=3)
+  check_chunk(x=x, index=index, chunk_size=4, chunk_step=4)
+  check_chunk(x=x, index=index, chunk_size=10, chunk_step=4)
+  check_chunk(x=x, index=index, chunk_size=20, chunk_step=4)
+
+
+def test_chunk():
+  n_batch = 3
+  n_time = 17
+  n_dim = 5
+  x = tf.random_normal((n_time, n_batch, n_dim))
+  index = [[1.] * n_time] * n_batch
+  index[-1][-1] = 0.
+  index[-1][-2] = 0.
+  index[-2][-1] = 0.
+  index = tf.convert_to_tensor(index)
+  index = tf.transpose(index)
+  check_chunk(x=x, index=index, chunk_size=4, chunk_step=2)
+  check_chunk(x=x, index=index, chunk_size=4, chunk_step=3)
+  check_chunk(x=x, index=index, chunk_size=4, chunk_step=4)
+  check_chunk(x=x, index=index, chunk_size=10, chunk_step=4)
+  check_chunk(x=x, index=index, chunk_size=20, chunk_step=4)
+
+
+def pure_tf_unchunk(x, index, chunk_size, chunk_step, n_time, n_batch):
+  """
+  :param tf.Tensor x: output e.g. from :func:`chunk`
+  :param tf.Tensor index:
+  :param int|tf.Tensor chunk_size:
+  :param int|tf.Tensor chunk_step:
+  :param tf.Tensor n_time:
+  :param tf.Tensor n_batch:
+  :return: out, oindex, ofactors
+  :rtype: (tf.Tensor,tf.Tensor,tf.Tensor)
+  """
+  from TFUtil import where_bc
+  assert x.get_shape().ndims == 3
+  n_dim = tf.shape(x)[2]
+  # Hack via tf.gradients.
+  chunk_x_n = tf.cast(tf.reshape(tf.range(n_time * n_batch), [n_time, n_batch, 1]), dtype=x.dtype)
+  chunk_idx0 = tf.ones((n_time, n_batch))
+  chunk_y0_n, _ = pure_tf_chunk(chunk_x_n, index=chunk_idx0, chunk_size=chunk_size, chunk_step=chunk_step)
+  dx0n, = tf.gradients(ys=[chunk_y0_n], xs=[chunk_x_n], grad_ys=[tf.expand_dims(index, axis=2)])
+  chunk_idx = where_bc(tf.greater_equal(tf.squeeze(dx0n, axis=2), 1.0), 1.0, 0.0)
+  chunk_y_n, _ = pure_tf_chunk(chunk_x_n, index=chunk_idx, chunk_size=chunk_size, chunk_step=chunk_step)
+  dxn, = tf.gradients(ys=[chunk_y_n], xs=[chunk_x_n], grad_ys=[tf.ones_like(chunk_y_n)])
+  factors = where_bc(tf.equal(chunk_idx, 1.), 1. / tf.squeeze(dxn, axis=2), 0.)
+  chunk_x = tf.zeros((n_time, n_batch, n_dim))
+  chunk_y, _ = pure_tf_chunk(chunk_x, index=chunk_idx, chunk_size=chunk_size, chunk_step=chunk_step)
+  dx, = tf.gradients(ys=[chunk_y], xs=[chunk_x], grad_ys=[x])
+  return dx * tf.expand_dims(factors, axis=2), chunk_idx, factors
+
+
+def check_unchunk(x, index, chunk_size, chunk_step):
+  """
+  :param tf.Tensor x: (time,batch,dim)
+  :param tf.Tensor index:
+  :param int|tf.Tensor chunk_size:
+  :param int|tf.Tensor chunk_step:
+
+  Expected return from op:
+    out, oindex.
+    out is of shape (chunk_size, n_batch * n_chunks, n_dim), oindex of shape (chunk_size, n_batch * n_chunks).
+  """
+  n_time, n_batch = tf.shape(x)[0], tf.shape(x)[1]
+  x, index = chunk(x, index, chunk_size=chunk_size, chunk_step=chunk_step)
+  x = tf.random_normal(tf.shape(x))
+  out1, oindex1, ofactors1 = pure_tf_unchunk(
+    x, index=index, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
+  dout = tf.random_normal(tf.shape(out1))
+  dx1, = tf.gradients(ys=[out1], xs=[x], grad_ys=[dout])
+  out2, oindex2, ofactors2 = unchunk(
+    x, index=index, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
+  dx2, = tf.gradients(ys=[out2], xs=[x], grad_ys=[dout])
+  index, out1, oindex1, ofactors1, dx1, out2, oindex2, ofactors2, dx2 = session.run(
+    (index, out1, oindex1, ofactors1, dx1, out2, oindex2, ofactors2, dx2))
+  time_, batch_, dim = out1.shape
+  assert out1.shape == out2.shape == (time_, batch_, dim)
+  assert oindex1.shape == ofactors1.shape == oindex2.shape == ofactors2.shape == (time_, batch_)
+  for t in range(time_):
+    for b in range(batch_):
+      assert_almost_equal(oindex1[t, b], oindex2[t, b])
+      if oindex1[t, b] < 0.5:
+        continue
+      assert_almost_equal(ofactors1[t, b], ofactors2[t, b])
+      assert_almost_equal(out1[t, b], out2[t, b], decimal=5)
+  time, batch, _ = dx1.shape
+  assert dx1.shape == dx2.shape == (time, batch, dim)
+  assert index.shape == (time, batch)
+  for t in range(time):
+    for b in range(batch):
+      if index[t, b] < 0.5:
+        continue
+      assert_almost_equal(dx1[t, b], dx2[t, b], decimal=5)
+
+
+def test_unchunk():
+  n_batch = 3
+  n_time = 17
+  n_dim = 5
+  x = tf.random_normal((n_time, n_batch, n_dim))
+  index = [[1.] * n_time] * n_batch
+  index[-1][-1] = 0.
+  index[-1][-2] = 0.
+  index[-2][-1] = 0.
+  index = tf.convert_to_tensor(index)
+  index = tf.transpose(index)
+  check_unchunk(x=x, index=index, chunk_size=4, chunk_step=2)
+  check_unchunk(x=x, index=index, chunk_size=4, chunk_step=3)
+  check_unchunk(x=x, index=index, chunk_size=4, chunk_step=4)
+  check_unchunk(x=x, index=index, chunk_size=10, chunk_step=4)
+  check_unchunk(x=x, index=index, chunk_size=20, chunk_step=4)
+
+
+def _py_baum_welch(am_scores, float_idx, edges, weights, start_end_states):
+  """
+  Pure Python Forward-backward (Baum Welch) algorithm.
+  The parameters are in the same format as our native fast_baum_welch op.
+
+  :param numpy.ndarray am_scores: (time, batch, dim), in -log space
+  :param numpy.ndarray float_idx: (time, batch) -> 0 or 1 (index mask, via seq lens)
+  :param numpy.ndarray edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
+  :param numpy.ndarray weights: (num_edges,), weights of the edges
+  :param numpy.ndarray start_end_states: (2, batch), (start,end) state idx in FSA. there is only one single FSA.
+  :return: (fwdbwd, obs_scores), fwdbwd is (time, batch, dim), obs_scores is (time, batch), in -log space
+  :rtype: (numpy.ndarray, numpy.ndarray)
+  """
+  # We get it in -log space, but we calculate in +log space.
+  am_scores = -am_scores
+  weights = -weights
+  n_time, n_batch, dim = am_scores.shape
+  assert float_idx.shape == (n_time, n_batch)
+  assert edges.ndim == 2 and weights.ndim == 1
+  n_edges, = weights.shape
+  assert edges.shape == (4, n_edges)
+  assert start_end_states.shape == (2, n_batch)
+  from collections import defaultdict
+  from scipy.special import logsumexp
+  zero_score = float("-inf")
+  fwdbwd = numpy.zeros((n_time, n_batch, dim), dtype=am_scores.dtype) + zero_score
+  obs_scores = numpy.zeros((n_time, n_batch), dtype=am_scores.dtype) + zero_score
+
+  def collect_scores(forward):
+    """
+    :param bool forward:
+    :rtype: list[dict[int,float]]
+    """
+    start_idx, end_idx = start_end_states[:, sequence_idx]
+    states = defaultdict(lambda: zero_score)  # type: typing.Dict[int,float]  # state-idx -> score.
+    states[start_idx if forward else end_idx] = 0.0
+    scores_over_t = [None] * (n_time + 1)  # type: typing.List[typing.Optional[typing.Dict[int,float]]]
+    scores_over_t[0 if forward else -1] = dict(states)
+    for t in (range(n_time) if forward else reversed(range(n_time))):
+      if float_idx[t, sequence_idx] == 1:
+        scores = defaultdict(list)  # type: typing.Dict[int,typing.List[float]]  # state-idx -> list[score]
+        for edge_idx in range(n_edges):
+          from_idx, to_idx, emission_idx, sequence_idx_ = edges[:, edge_idx]
+          if not forward:
+            from_idx, to_idx = to_idx, from_idx
+          if sequence_idx_ != sequence_idx:
+            continue
+          if from_idx not in states or states[from_idx] == zero_score:
+            continue
+          assert 0 <= emission_idx < dim
+          score = states[from_idx] + weights[edge_idx] + am_scores[t, sequence_idx, emission_idx]
+          scores[to_idx].append(score)
+        states.clear()
+        for state_idx in scores.keys():
+          states[state_idx] = float(logsumexp(scores[state_idx]))
+      scores_over_t[(t + 1) if forward else t] = dict(states)
+    return scores_over_t
+
+  def gamma():
+    """
+    :return: nothing, fill fwdbwd and obs_scores
+    """
+    for t in range(n_time):
+      if float_idx[t, sequence_idx] == 1:
+        scores = defaultdict(list)  # type: typing.Dict[int,typing.List[float]]  # emission-idx -> list[score]
+        all_scores = []  # type: typing.List[float]
+        for edge_idx in range(n_edges):
+          from_idx, to_idx, emission_idx, sequence_idx_ = edges[:, edge_idx]
+          if sequence_idx_ != sequence_idx:
+            continue
+          assert 0 <= emission_idx < dim
+          if from_idx not in fwd_scores[t]:
+            continue
+          if to_idx not in bwd_scores[t + 1]:
+            continue
+          score = (
+            fwd_scores[t][from_idx] +
+            weights[edge_idx] + am_scores[t, sequence_idx, emission_idx] +
+            bwd_scores[t + 1][to_idx])
+          scores[emission_idx].append(score)
+          all_scores.append(score)
+        obs_scores[t, sequence_idx] = logsumexp(all_scores) if all_scores else zero_score
+        for emission_idx, values in scores.items():
+          if not values:
+            fwdbwd[t, sequence_idx, emission_idx] = zero_score
+          else:
+            fwdbwd[t, sequence_idx, emission_idx] = float(logsumexp(values)) - obs_scores[t, sequence_idx]
+
+  for sequence_idx in range(n_batch):
+    fwd_scores = collect_scores(forward=True)
+    bwd_scores = collect_scores(forward=False)
+    gamma()
+
+  # -log space
+  return -fwdbwd, -obs_scores
+
+
+def test_py_baum_welch():
+  n_batch = 3
+  seq_len = 7
+  n_classes = 5
+  from Fsa import FastBwFsaShared
+  fsa = FastBwFsaShared()
+  for i in range(n_classes):
+    fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
+    fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
+  assert n_classes <= seq_len
+  fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+  edges = fast_bw_fsa.edges
+  weights = fast_bw_fsa.weights
+  start_end_states = fast_bw_fsa.start_end_states
+  am_scores = numpy.ones((seq_len, n_batch, n_classes), dtype="float32") * numpy.float32(1.0 / n_classes)
+  am_scores = -numpy.log(am_scores)  # in -log space
+  float_idx = numpy.ones((seq_len, n_batch), dtype="float32")
+  print("Construct call...")
+  fwdbwd, obs_scores = _py_baum_welch(
+    am_scores=am_scores, float_idx=float_idx,
+    edges=edges, weights=weights, start_end_states=start_end_states)
+  print("Done.")
+  print("score:")
+  print(repr(obs_scores))
+  assert_equal(obs_scores.shape, (seq_len, n_batch))
+  bw = numpy.exp(-fwdbwd)
+  print("Baum-Welch soft alignment:")
+  print(repr(bw))
+  assert_equal(bw.shape, (seq_len, n_batch, n_classes))
+  from numpy import array, float32
+  if seq_len == n_classes:
+    print("Extra check identity...")
+    for i in range(n_batch):
+      assert_almost_equal(numpy.identity(n_classes), bw[:, i])
+  if seq_len == 7 and n_classes == 5:
+    print("Extra check ref_align (7,5)...")
+    assert_allclose(obs_scores, 8.55801582, rtol=1e-5)  # should be the same everywhere
+    ref_align = \
+      array([[[1., 0., 0., 0., 0.]],
+             [[0.33333316, 0.66666663, 0., 0., 0.]],
+             [[0.06666669, 0.53333354, 0.40000018, 0., 0.]],
+             [[0., 0.20000014, 0.60000014, 0.19999999, 0.]],
+             [[0., 0., 0.39999962, 0.53333312, 0.06666663]],
+             [[0., 0., 0., 0.66666633, 0.33333316]],
+             [[0., 0., 0., 0., 0.99999982]]], dtype=float32)
+    assert_equal(ref_align.shape, (seq_len, 1, n_classes))
+    ref_align = numpy.tile(ref_align, (1, n_batch, 1))
+    assert_equal(ref_align.shape, bw.shape)
+    # print("Reference alignment:")
+    # print(repr(ref_align))
+    print("mean square diff:", numpy.mean(numpy.square(ref_align - bw)))
+    print("max square diff:", numpy.max(numpy.square(ref_align - bw)))
+    assert_allclose(ref_align, bw, rtol=1e-5)
+  print("Done.")
+
+
 def test_FastBaumWelch():
   print("Make op...")
   op = make_fast_baum_welch_op(compiler_opts=dict(verbose=True))  # will be cached, used inside :func:`fast_baum_welch`
@@ -1119,7 +1490,9 @@ def test_FastBaumWelch():
   edges = tf.constant(fast_bw_fsa.edges, dtype=tf.int32)
   weights = tf.constant(fast_bw_fsa.weights, dtype=tf.float32)
   start_end_states = tf.constant(fast_bw_fsa.start_end_states, dtype=tf.int32)
-  am_scores = tf.constant(numpy.random.normal(size=(seq_len, n_batch, n_classes)), dtype=tf.float32)  # in -log space
+  am_scores_np = numpy.random.RandomState(42).normal(size=(seq_len, n_batch, n_classes)).astype("float32")
+  am_scores = tf.constant(am_scores_np, dtype=tf.float32)  # in -log space
+  float_idx_np = numpy.ones((seq_len, n_batch), dtype="float32")
   float_idx = tf.ones((seq_len, n_batch), dtype=tf.float32)
   print("Construct call...")
   fwdbwd, obs_scores = fast_baum_welch(
@@ -1127,11 +1500,20 @@ def test_FastBaumWelch():
     edges=edges, weights=weights, start_end_states=start_end_states)
   print("Done.")
   print("Eval:")
-  _, score = session.run([fwdbwd, obs_scores])
+  fwdbwd_np, score = session.run([fwdbwd, obs_scores])
   print("score:", score)
+  print("Baum-Welch soft alignment:")
+  print(repr(fwdbwd_np))
+  fwdbwd_np2, score2 = _py_baum_welch(
+    am_scores=am_scores_np, float_idx=float_idx_np,
+    edges=fast_bw_fsa.edges, weights=fast_bw_fsa.weights, start_end_states=fast_bw_fsa.start_end_states)
+  print("ref score:", score2)
+  print("ref Baum-Welch soft alignment:")
+  print(repr(fwdbwd_np2))
+  numpy.testing.assert_allclose(score, score2, rtol=1e-5)
+  numpy.testing.assert_allclose(fwdbwd_np, fwdbwd_np2, rtol=1e-5)
 
 
-@unittest.skipIf(not is_gpu_available(), "no gpu on this system")
 def test_fast_bw_uniform():
   print("Make op...")
   op = make_fast_baum_welch_op(compiler_opts=dict(verbose=True))  # will be cached, used inside :func:`fast_baum_welch`
@@ -1195,6 +1577,1236 @@ def test_fast_bw_uniform():
     print("max square diff:", numpy.max(numpy.square(ref_align - bw)))
     assert_allclose(ref_align, bw, rtol=1e-5)
   print("Done.")
+
+
+def get_ctc_fsa_fast_bw_via_python(targets, seq_lens, blank_idx):
+  """
+  :param tf.Tensor targets: shape (batch,time)
+  :param tf.Tensor seq_lens: shape (batch,)
+  :param int blank_idx:
+  :return: edges, weights, start_end_states
+  :rtype: (tf.Tensor, tf.Tensor, tf.Tensor)
+  """
+  from Fsa import get_ctc_fsa_fast_bw
+
+  def py_fast_bw_fsa_ctc_wrapper(targets_, seq_lens_):
+    """
+    :param numpy.ndarray targets_:
+    :param numpy.ndarray seq_lens_:
+    :rtype: (numpy.ndarray,numpy.ndarray,numpy.ndarray)
+    """
+    fsa = get_ctc_fsa_fast_bw(targets=targets_, seq_lens=seq_lens_, blank_idx=blank_idx)
+    assert fsa.start_end_states.shape == (2, len(seq_lens_)), "shape mismatch %r, n_batch %r, seq lens %r" % (
+      fsa.start_end_states.shape, len(seq_lens_), seq_lens_)
+    return fsa.edges.astype("int32"), fsa.weights.astype("float32"), fsa.start_end_states.astype("int32")
+
+  edges, weights, start_end_states = tf.py_func(
+    py_fast_bw_fsa_ctc_wrapper,
+    [targets, seq_lens],
+    [tf.int32, tf.float32, tf.int32],
+    stateful=False)
+  # edges: (4, num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
+  # weights: (num_edges,), weights of the edges
+  # start_end_states: (2, batch), (start,end) state idx in automaton.
+  edges.set_shape((4, None))
+  weights.set_shape((None,))
+  start_end_states.set_shape((2, None))
+  return edges, weights, start_end_states
+
+
+def ctc_loss_via_python_fsa(logits, logits_seq_lens, time_major, targets, targets_seq_lens):
+  """
+  Similar to :func:`tf.nn.ctc_loss`.
+  We use our :func:`fast_baum_welch`.
+  Also see :class:`FastBaumWelchLoss`.
+
+  :param tf.Tensor logits: (time,batch,dim) or (batch,time,dim). unnormalized (before softmax)
+  :param tf.Tensor logits_seq_lens: shape (batch,) of int32|int64
+  :param bool time_major:
+  :param tf.Tensor targets: batch-major, [batch,time]
+  :param tf.Tensor targets_seq_lens: (batch,)
+  :return: loss, shape (batch,)
+  :rtype: tf.Tensor
+  """
+  assert logits.get_shape().ndims == 3 and logits.get_shape().dims[-1].value
+  dim = logits.get_shape().dims[-1].value
+  if not time_major:
+    logits = tf.transpose(logits, [1, 0, 2])  # (time,batch,dim)
+  log_sm = tf.nn.log_softmax(logits)  # (time,batch,dim)
+  from TFUtil import sequence_mask_time_major
+  seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch)
+
+  edges, weights, start_end_states = get_ctc_fsa_fast_bw_via_python(
+    targets=targets, seq_lens=targets_seq_lens, blank_idx=dim - 1)
+  fwdbwd, obs_scores = fast_baum_welch(
+    am_scores=-log_sm, float_idx=seq_mask,
+    edges=edges, weights=weights, start_end_states=start_end_states)
+  loss = obs_scores[0]  # (batch,)
+  bw = tf.exp(-fwdbwd)  # (time,batch,dim)
+  grad_x = (tf.exp(log_sm) - bw) * tf.expand_dims(seq_mask, 2)  # (time,batch,dim)
+  from TFUtil import custom_gradient
+  loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=logits, grad_x=grad_x)
+  return loss
+
+
+def _log_softmax(x, axis=-1):
+  assert isinstance(x, numpy.ndarray)
+  xdev = x - x.max(axis=axis, keepdims=True)
+  lsm = xdev - numpy.log(numpy.sum(numpy.exp(xdev), axis=axis, keepdims=True))
+  return lsm
+
+
+def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False):
+  """
+  :param numpy.ndarray targets:
+  :param numpy.ndarray target_seq_lens:
+  :param int n_classes:
+  :param bool with_native_fsa:
+  :return: nothing, just checks
+  """
+  n_batch, n_target_time = targets.shape
+  assert n_batch == len(target_seq_lens) and n_target_time == max(target_seq_lens)
+  n_time = n_target_time * 3
+  # am_scores are logits, unnormalized, i.e. the values before softmax.
+  am_scores = numpy.random.RandomState(42).normal(size=(n_time, n_batch, n_classes)).astype("float32")
+  # am_scores = numpy.zeros((n_time, n_batch, n_classes), dtype="float32")
+  int_idx = numpy.zeros((n_time, n_batch), dtype="int32")
+  seq_lens = numpy.array([
+    n_time,
+    max(n_time - 4, (target_seq_lens[1] if (len(target_seq_lens) >= 2) else 0) + 1, 1),
+    max(n_time - 5, 1), max(n_time - 5, 1)],
+    dtype="int32")[:n_batch]
+  for t in range(n_time):
+    int_idx[t] = t < seq_lens
+  float_idx = int_idx.astype("float32")
+  blank_idx = n_classes - 1
+
+  import Fsa
+  fsa = Fsa.get_ctc_fsa_fast_bw(targets=targets, seq_lens=target_seq_lens, blank_idx=blank_idx)
+  assert fsa.start_end_states.shape == (2, len(target_seq_lens))
+  edges = fsa.edges.astype("int32")
+  weights = fsa.weights.astype("float32")
+  start_end_states = fsa.start_end_states.astype("int32")
+  if with_native_fsa:
+    print("python edges:")
+    print(edges)
+    print("python start_end_states:")
+    print(start_end_states)
+
+  fwdbwd, obs_scores = _py_baum_welch(
+    am_scores=-_log_softmax(am_scores), float_idx=float_idx,
+    edges=edges, weights=weights, start_end_states=start_end_states)
+  fwdbwd = numpy.exp(-fwdbwd)  # -log space -> prob space
+  print(fwdbwd)
+  print(obs_scores)
+
+  targets_tf = tf.constant(targets)
+  targets_seq_lens_tf = tf.constant(target_seq_lens)
+
+  if with_native_fsa:
+    import TFNativeOp
+    native_edges_tf, native_weights_tf, native_start_end_states_tf = TFNativeOp.get_ctc_fsa_fast_bw(
+      targets=targets_tf, seq_lens=targets_seq_lens_tf, blank_idx=blank_idx)
+    native_edges, native_weights, native_start_end_states = session.run(
+      (native_edges_tf, native_weights_tf, native_start_end_states_tf))
+    # Note: The native FSA vs the Python FSA are not exactly identical
+    # (they just should be equivalent; although almost identical).
+    # We introduce a dummy state (last before end state), and some dummy edges.
+    print("native edges:")
+    print(native_edges)
+    print("native_start_end_states:")
+    print(native_start_end_states)
+
+    native_fwdbwd, native_obs_scores = _py_baum_welch(
+      am_scores=-_log_softmax(am_scores), float_idx=float_idx,
+      edges=native_edges, weights=native_weights, start_end_states=native_start_end_states)
+    native_fwdbwd = numpy.exp(-native_fwdbwd)  # -log space -> prob space
+    print(native_fwdbwd)
+    print(native_obs_scores)
+    for b in range(n_batch):
+      for t in range(seq_lens[b]):
+        numpy.testing.assert_almost_equal(fwdbwd[t, b], native_fwdbwd[t, b], decimal=5)
+    for b in range(n_batch):
+      numpy.testing.assert_almost_equal(obs_scores[b], native_obs_scores[b], decimal=5)
+    fwdbwd = native_fwdbwd
+    obs_scores = native_obs_scores
+
+  from TFUtil import sparse_labels
+  targets_sparse_tf = sparse_labels(targets_tf, targets_seq_lens_tf)
+  am_scores_tf = tf.constant(am_scores)
+  seq_lens_tf = tf.constant(seq_lens)
+  # inputs are unnormalized. tf.nn.ctc_loss does softmax internally.
+  ref_ctc_loss_tf = tf.nn.ctc_loss(
+    labels=targets_sparse_tf,
+    inputs=am_scores_tf, sequence_length=seq_lens_tf, time_major=True)
+  # See grad definition of CTCLoss.
+  # The op will calculate the gradient w.r.t. the logits (log softmax).
+  # I.e. with y = softmax(z), this is \partial loss / \partial z = y - soft_align.
+  # Also see CtcLoss.get_soft_alignment.
+  ref_ctc_loss_grad_tf = ref_ctc_loss_tf.op.outputs[1]  # time major, i.e. (time, batch, dim)
+  y_tf = tf.nn.softmax(am_scores)  # (time, batch, dim)
+  soft_align_tf = y_tf - ref_ctc_loss_grad_tf
+  soft_align_tf.set_shape(tf.TensorShape((None, None, n_classes)))
+  ref_fwdbwd, ref_obs_score = session.run((soft_align_tf, ref_ctc_loss_tf))
+  print(ref_fwdbwd)
+  print(ref_obs_score)
+
+  for b in range(n_batch):
+    for t in range(seq_lens[b]):
+      numpy.testing.assert_almost_equal(fwdbwd[t, b], ref_fwdbwd[t, b], decimal=5)
+  for b in range(n_batch):
+    numpy.testing.assert_almost_equal(obs_scores[0, b], ref_obs_score[b], decimal=5)
+
+
+def test_ctc_fsa_batch3_len6_c8():
+  """
+  This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+  """
+  targets = numpy.array([
+    [1, 3, 4, 2, 1, 0],
+    [2, 6, 3, 4, 0, 0],
+    [0, 3, 2, 0, 0, 0]], dtype="int32")
+  target_seq_lens = numpy.array([6, 4, 3], dtype="int32")
+  n_classes = 8  # +1 because of blank
+  check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes)
+
+
+def test_ctc_fsa_batch1_len2():
+  """
+  This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+  """
+  targets = numpy.array([
+    [0, 1]], dtype="int32")
+  target_seq_lens = numpy.array([2], dtype="int32")
+  n_classes = 3  # +1 because of blank
+  check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes)
+
+
+def test_ctc_fsa_batch1_len1():
+  """
+  This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+  """
+  targets = numpy.array([
+    [0]], dtype="int32")
+  target_seq_lens = numpy.array([1], dtype="int32")
+  n_classes = 2  # +1 because of blank
+
+  check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes)
+
+
+def test_ctc_fsa_batch3_len6_c8_native():
+  """
+  This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+  """
+  targets = numpy.array([
+    [1, 3, 4, 2, 1, 0],
+    [2, 6, 3, 4, 0, 0],
+    [0, 3, 2, 0, 0, 0]], dtype="int32")
+  target_seq_lens = numpy.array([6, 4, 3], dtype="int32")
+  n_classes = 8  # +1 because of blank
+  check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch4_len6_c8_native():
+  """
+  This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+  """
+  targets = numpy.array([
+    [1, 2, 4, 4, 1, 0],
+    [2, 6, 3, 4, 0, 0],
+    [3, 3, 0, 0, 0, 0],
+    [5, 0, 0, 0, 0, 0]], dtype="int32")
+  target_seq_lens = numpy.array([6, 4, 2, 1], dtype="int32")
+  n_classes = 8  # +1 because of blank
+  check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch2_len2a():
+  """
+  This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+  """
+  targets = numpy.array([
+    [0, 1],
+    [1, 0]], dtype="int32")
+  target_seq_lens = numpy.array([2, 1], dtype="int32")
+  n_classes = 3  # +1 because of blank
+  check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch2_len2():
+  """
+  This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+  """
+  targets = numpy.array([
+    [0, 1],
+    [0, 0]], dtype="int32")
+  target_seq_lens = numpy.array([2, 2], dtype="int32")
+  n_classes = 3  # +1 because of blank
+  check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch2_len1():
+  """
+  This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+  """
+  targets = numpy.array([
+    [0],
+    [1]], dtype="int32")
+  target_seq_lens = numpy.array([1, 1], dtype="int32")
+  n_classes = 3  # +1 because of blank
+  check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch1_len2rep_native():
+  """
+  This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+  """
+  targets = numpy.array([
+    [0, 0]], dtype="int32")
+  target_seq_lens = numpy.array([2], dtype="int32")
+  n_classes = 2  # +1 because of blank
+  check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch1_len2_native():
+  """
+  This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+  """
+  targets = numpy.array([
+    [0, 1]], dtype="int32")
+  target_seq_lens = numpy.array([2], dtype="int32")
+  n_classes = 3  # +1 because of blank
+  check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch1_len1_native():
+  """
+  This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+  """
+  targets = numpy.array([
+    [0]], dtype="int32")
+  target_seq_lens = numpy.array([1], dtype="int32")
+  n_classes = 2  # +1 because of blank
+
+  check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def _py_viterbi(am_scores, am_seq_len, edges, weights, start_end_states):
+  """
+  Pure Python Viterbi algorithm, to find the best path/alignment.
+  The parameters are in the same format as our native fast_baum_welch op.
+
+  :param numpy.ndarray am_scores: (time, batch, dim), in +log space
+  :param numpy.ndarray am_seq_len: (batch,) -> int32
+  :param numpy.ndarray edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
+  :param numpy.ndarray weights: (num_edges,), weights of the edges
+  :param numpy.ndarray start_end_states: (2, batch), (start,end) state idx in FSA. there is only one single FSA.
+  :return: (alignment, obs_scores), alignment is (time, batch), obs_scores is (batch,), in +log space
+  :rtype: (numpy.ndarray, numpy.ndarray)
+  """
+  n_time, n_batch, dim = am_scores.shape
+  assert am_seq_len.shape == (n_batch,)
+  assert edges.ndim == 2 and weights.ndim == 1
+  n_edges, = weights.shape
+  assert edges.shape == (4, n_edges)
+  assert start_end_states.shape == (2, n_batch)
+  from collections import defaultdict
+  zero_score = float("-inf")
+  alignment = numpy.zeros((n_time, n_batch), dtype="int32")
+  obs_scores = numpy.zeros((n_batch,), dtype=am_scores.dtype) + zero_score
+
+  def search():
+    """
+    :rtype: list[dict[int,(float,int)]]
+    """
+    start_idx, _ = start_end_states[:, sequence_idx]
+    states = defaultdict(lambda: (zero_score, -1))  # type: typing.Dict[int,typing.Tuple[float,int]]  # state-idx -> score/edge  # nopep8
+    states[start_idx] = (0.0, -1)
+    res = []  # type: typing.List[typing.Dict[int,typing.Tuple[float,int]]]
+    for t in range(n_time):
+      if t >= am_seq_len[sequence_idx]:
+        break
+      scores = defaultdict(list)  # type: typing.Dict[int,typing.List[typing.Tuple[float,int]]]  # state-idx -> list[score/edge]  # nopep8
+      for edge_idx in range(n_edges):
+        from_idx, to_idx, emission_idx, sequence_idx_ = edges[:, edge_idx]
+        if sequence_idx_ != sequence_idx:
+          continue
+        if from_idx not in states or states[from_idx] == zero_score:
+          continue
+        assert 0 <= emission_idx < dim
+        score = states[from_idx][0] + weights[edge_idx] + am_scores[t, sequence_idx, emission_idx]
+        scores[to_idx].append((score, edge_idx))
+      states.clear()
+      for state_idx in scores.keys():
+        states[state_idx] = max(scores[state_idx], key=lambda _item: (_item[0], -_item[1]))
+      res.append(dict(states))
+    assert len(res) == am_seq_len[sequence_idx]
+    return res
+
+  def select_best():
+    """
+    :return: nothing, fill alignment and obs_scores
+    """
+    _, end_idx = start_end_states[:, sequence_idx]
+    state_idx = end_idx
+    for t in reversed(range(am_seq_len[sequence_idx])):
+      if state_idx not in fwd_search_res[t]:  # no path?
+        alignment[t, sequence_idx] = 0
+        continue
+      score, edge_idx = fwd_search_res[t][state_idx]
+      if t == am_seq_len[sequence_idx] - 1:
+        obs_scores[sequence_idx] = score
+      from_idx, to_idx, emission_idx, sequence_idx_ = edges[:, edge_idx]
+      assert sequence_idx_ == sequence_idx
+      alignment[t, sequence_idx] = emission_idx
+      state_idx = from_idx
+
+  for sequence_idx in range(n_batch):
+    fwd_search_res = search()
+    select_best()
+
+  return alignment, obs_scores
+
+
+def test_py_viterbi():
+  n_batch = 3
+  seq_len = 7
+  n_classes = 5
+  from Fsa import FastBwFsaShared
+  fsa = FastBwFsaShared()
+  for i in range(n_classes):
+    fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
+    fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
+  assert n_classes <= seq_len
+  fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+  edges = fast_bw_fsa.edges
+  weights = fast_bw_fsa.weights
+  start_end_states = fast_bw_fsa.start_end_states
+  am_scores = numpy.eye(n_classes, n_classes, dtype="float32")  # (dim,dim)
+  import scipy.ndimage
+  am_scores = scipy.ndimage.zoom(am_scores, zoom=(float(seq_len) / n_classes, 1), order=1, prefilter=False)
+  assert am_scores.shape == (seq_len, n_classes)
+  am_scores = am_scores[:, None]
+  am_scores = am_scores + numpy.zeros((seq_len, n_batch, n_classes), dtype="float32")
+  print(am_scores[:, 0])
+  # am_scores = numpy.ones((seq_len, n_batch, n_classes), dtype="float32") * numpy.float32(1.0 / n_classes)
+  am_scores = numpy.log(am_scores)  # in +log space
+  print("Construct call...")
+  alignment, obs_scores = _py_viterbi(
+    am_scores=am_scores, am_seq_len=numpy.array([seq_len] * n_batch),
+    edges=edges, weights=weights, start_end_states=start_end_states)
+  print("Done.")
+  print("score:")
+  print(repr(obs_scores))
+  assert_equal(obs_scores.shape, (n_batch,))
+  print("Hard alignment:")
+  print(repr(alignment))
+  assert_equal(alignment.shape, (seq_len, n_batch))
+  if seq_len == n_classes:
+    print("Extra check identity...")
+    for i in range(n_batch):
+      for t in range(seq_len):
+        assert alignment[t, i] == t
+  if seq_len == 7 and n_classes == 5:
+    print("Extra check ref_align (7,5)...")
+    assert_allclose(obs_scores, -1.6218603, rtol=1e-5)  # should be the same everywhere
+    for i in range(n_batch):
+      assert_equal(alignment[:, i].tolist(), [0, 1, 1, 2, 3, 3, 4])
+  print("Done.")
+
+
+def test_fast_viterbi():
+  n_batch = 3
+  seq_len = 7
+  n_classes = 5
+  from Fsa import FastBwFsaShared
+  fsa = FastBwFsaShared()
+  for i in range(n_classes):
+    fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
+    fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
+  assert n_classes <= seq_len
+  fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+  edges = fast_bw_fsa.edges
+  weights = fast_bw_fsa.weights
+  start_end_states = fast_bw_fsa.start_end_states
+  am_scores = numpy.eye(n_classes, n_classes, dtype="float32")  # (dim,dim)
+  import scipy.ndimage
+  am_scores = scipy.ndimage.zoom(am_scores, zoom=(float(seq_len) / n_classes, 1), order=1, prefilter=False)
+  assert am_scores.shape == (seq_len, n_classes)
+  am_scores = am_scores[:, None]
+  am_scores = am_scores + numpy.zeros((seq_len, n_batch, n_classes), dtype="float32")
+  print(am_scores[:, 0])
+  # am_scores = numpy.ones((seq_len, n_batch, n_classes), dtype="float32") * numpy.float32(1.0 / n_classes)
+  am_scores = numpy.log(am_scores)  # in +log space
+  print("Construct call...")
+  alignment, obs_scores = fast_viterbi(
+    am_scores=tf.constant(am_scores), am_seq_len=tf.constant(numpy.array([seq_len] * n_batch, dtype="int32")),
+    edges=tf.constant(edges), weights=tf.constant(weights), start_end_states=tf.constant(start_end_states))
+  alignment, obs_scores = session.run((alignment, obs_scores))
+  print("Done.")
+  print("score:")
+  print(repr(obs_scores))
+  assert_equal(obs_scores.shape, (n_batch,))
+  print("Hard alignment:")
+  print(repr(alignment))
+  assert_equal(alignment.shape, (seq_len, n_batch))
+  if seq_len == n_classes:
+    print("Extra check identity...")
+    for i in range(n_batch):
+      for t in range(seq_len):
+        assert alignment[t, i] == t
+  if seq_len == 7 and n_classes == 5:
+    print("Extra check ref_align (7,5)...")
+    assert_allclose(obs_scores, -1.6218603, rtol=1e-5)  # should be the same everywhere
+    for i in range(n_batch):
+      assert_equal(alignment[:, i].tolist(), [0, 1, 1, 2, 3, 3, 4])
+  print("Done.")
+
+
+def test_fast_viterbi_rnd():
+  n_batch = 4
+  seq_len = 23
+  n_classes = 5
+  from Fsa import FastBwFsaShared
+  fsa = FastBwFsaShared()
+  for i in range(n_classes):
+    fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
+    fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
+  assert n_classes <= seq_len
+  fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+  edges = fast_bw_fsa.edges
+  weights = fast_bw_fsa.weights
+  start_end_states = fast_bw_fsa.start_end_states
+  am_scores = numpy.random.RandomState(42).normal(size=(seq_len, n_batch, n_classes)).astype("float32")
+  am_seq_len = numpy.array([seq_len] * n_batch, dtype="int32")
+  am_seq_len[1] -= 1
+  am_seq_len[-1] -= 2
+  am_seq_len[-2] = max(n_classes - 1, 1)  # no path possible
+  ref_alignment, ref_scores = _py_viterbi(
+    am_scores=am_scores, am_seq_len=am_seq_len,
+    edges=edges, weights=weights, start_end_states=start_end_states)
+  print("ref score:")
+  print(repr(ref_scores))
+  assert_equal(ref_scores.shape, (n_batch,))
+  print("ref hard alignment:")
+  print(repr(ref_alignment))
+  assert_equal(ref_alignment.shape, (seq_len, n_batch))
+  print("Construct fast_viterbi call...")
+  alignment, scores = fast_viterbi(
+    am_scores=tf.constant(am_scores), am_seq_len=tf.constant(am_seq_len),
+    edges=tf.constant(edges), weights=tf.constant(weights), start_end_states=tf.constant(start_end_states))
+  alignment, scores = session.run((alignment, scores))
+  print("Done.")
+  print("score:")
+  print(repr(scores))
+  assert_equal(scores.shape, (n_batch,))
+  print("Hard alignment:")
+  print(repr(alignment))
+  assert_equal(alignment.shape, (seq_len, n_batch))
+  assert_allclose(scores, ref_scores, rtol=1e-5)
+  assert_allclose(alignment, ref_alignment, rtol=1e-5)
+  print("Done.")
+
+
+def test_ctc_viterbi_loss():
+  n_batch = 3
+  seq_len = 13
+  n_input_dim = 6
+  n_classes = 5
+
+  x = tf.constant(numpy.random.RandomState(42).normal(size=(seq_len, n_batch, n_input_dim)).astype("float32"))
+  x_seq_len = tf.constant([seq_len, seq_len - 1, seq_len - 2])
+  weights = tf.get_variable(
+    "ctc_viterbi_weights", shape=(n_input_dim, n_classes), initializer=tf.random_normal_initializer())
+  bias = tf.get_variable("ctc_viterbi_bias", shape=(n_classes,))
+  var_list = [weights, bias]
+  session.run(tf.initialize_variables(var_list))
+  from TFUtil import dot
+  logits = dot(x, weights) + bias
+  targets = tf.constant([[0, 1, 2, 0, 0], [3, 2, 4, 1, 1], [2, 0, 1, 2, 0]])
+  targets.set_shape((n_batch, None))
+  targets_seq_len = tf.constant([3, 5, 4])
+  targets_seq_len.set_shape((n_batch,))
+  loss = ctc_loss_viterbi(
+    logits=logits, logits_seq_lens=x_seq_len, logits_time_major=True,
+    targets=targets, targets_seq_lens=targets_seq_len)
+  loss.set_shape((n_batch,))
+  loss = tf.reduce_mean(loss)
+  opt = tf.train.GradientDescentOptimizer(learning_rate=0.1)
+  minimize = opt.minimize(loss, var_list=var_list)
+  loss_vals = []
+  for step in range(10):
+    loss_val, _ = session.run((loss, minimize))
+    print("step %i, loss %f" % (step, loss_val))
+    loss_vals.append(loss_val)
+  assert loss_vals[-1] < loss_vals[0]
+
+
+def test_edit_distance():
+  rnd = numpy.random.RandomState(42)
+  n_batch = 15
+  n_a_max_len = 13
+  n_b_max_len = 11
+  num_classes = 10
+  a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+  b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+  a_len_np = rnd.randint(1, n_a_max_len + 1, size=(n_batch,), dtype="int32")
+  b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+  # Likely some high error. So make some explicit examples.
+  expected_results = [None] * n_batch
+  i = 0
+  # One insertion/deletion.
+  a_np[i, :1] = [1]
+  a_len_np[i] = 1
+  b_len_np[i] = 0
+  expected_results[i] = 1
+  i += 1
+  # One deletion.
+  a_np[i, :2] = [1, 2]
+  b_np[i, :1] = [1]
+  a_len_np[i] = 2
+  b_len_np[i] = 1
+  expected_results[i] = 1
+  i += 1
+  # One substitution + deletion.
+  a_np[i, :2] = [1, 2]
+  b_np[i, :1] = [3]
+  a_len_np[i] = 2
+  b_len_np[i] = 1
+  expected_results[i] = 2
+  i += 1
+  # One substitution error.
+  a_np[i, :4] = [1, 2, 3, 4]
+  b_np[i, :4] = [1, 2, 4, 4]
+  a_len_np[i] = 4
+  b_len_np[i] = 4
+  expected_results[i] = 1
+  i += 1
+  # One deletion error.
+  a_np[i, :6] = [1, 2, 3, 3, 4, 5]
+  b_np[i, :5] = [1, 2, 3, 4, 5]
+  a_len_np[i] = 6
+  b_len_np[i] = 5
+  expected_results[i] = 1
+  i += 1
+  # One insertion error.
+  a_np[i, :6] = [1, 2, 3, 4, 5, 6]
+  b_np[i, :7] = [1, 2, 3, 4, 4, 5, 6]
+  a_len_np[i] = 6
+  b_len_np[i] = 7
+  expected_results[i] = 1
+  i += 1
+  # Same.
+  a_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+  b_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+  a_len_np[i] = 11
+  b_len_np[i] = 11
+  expected_results[i] = 0
+  i += 1
+  # Both full length. Error should be 2.
+  a_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0, 0, 0]
+  b_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0]
+  a_len_np[i] = n_a_max_len
+  b_len_np[i] = n_b_max_len
+  expected_results[i] = 2
+  i += 1
+  assert n_batch - i >= 5  # still some random left
+  a = tf.constant(a_np)
+  b = tf.constant(b_np)
+  a_len = tf.constant(a_len_np)
+  b_len = tf.constant(b_len_np)
+  from TFUtil import sparse_labels
+  for i in range(n_batch):
+    print("testing batch", i, "/", n_batch)
+    _a = a[i:i + 1, :a_len_np[i]]
+    _a_len = a_len[i:i + 1]
+    _b = b[i:i + 1, :b_len_np[i]]
+    _b_len = b_len[i:i + 1]
+    print("seq a:", a_np[i, :a_len_np[i]])
+    print("seq b:", b_np[i, :b_len_np[i]])
+    _a_sparse = sparse_labels(_a, _a_len)
+    _b_sparse = sparse_labels(_b, _b_len)
+    _tf_edit_dist = tf.edit_distance(_a_sparse, _b_sparse, normalize=False)
+    _native_edit_dist = edit_distance(_a, _a_len, _b, _b_len)
+    tf_edit_dist_np, native_edit_dist_np = session.run((_tf_edit_dist, _native_edit_dist))
+    assert isinstance(tf_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("TF edit dist:", tf_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results[i])
+    assert tf_edit_dist_np.shape == native_edit_dist_np.shape == (1,)
+    if expected_results[i] is not None:
+      assert expected_results[i] == tf_edit_dist_np[0] == native_edit_dist_np[0]
+    else:
+      assert tf_edit_dist_np[0] == native_edit_dist_np[0]
+    print("swapped:")
+    _tf_edit_dist = tf.edit_distance(_b_sparse, _a_sparse, normalize=False)
+    _native_edit_dist = edit_distance(_b, _b_len, _a, _a_len)
+    tf_edit_dist_np, native_edit_dist_np = session.run((_tf_edit_dist, _native_edit_dist))
+    assert isinstance(tf_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("TF edit dist:", tf_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results[i])
+    assert tf_edit_dist_np.shape == native_edit_dist_np.shape == (1,)
+    if expected_results[i] is not None:
+      assert expected_results[i] == tf_edit_dist_np[0] == native_edit_dist_np[0]
+    else:
+      assert tf_edit_dist_np[0] == native_edit_dist_np[0]
+    print()
+  print("Now the whole batch.")
+  a_sparse = sparse_labels(a, a_len)
+  b_sparse = sparse_labels(b, b_len)
+  tf_edit_dist = tf.edit_distance(a_sparse, b_sparse, normalize=False)
+  native_edit_dist = edit_distance(a, a_len, b, b_len)
+  tf_edit_dist_np, native_edit_dist_np = session.run((tf_edit_dist, native_edit_dist))
+  assert isinstance(tf_edit_dist_np, numpy.ndarray)
+  assert isinstance(native_edit_dist_np, numpy.ndarray)
+  print("TF edit dist:", tf_edit_dist_np)
+  print("Native edit dist:", native_edit_dist_np)
+  print("Expected edit dist:", expected_results)
+  assert tf_edit_dist_np.shape == native_edit_dist_np.shape == (n_batch,)
+  for i in range(n_batch):
+    if expected_results[i] is not None:
+      assert expected_results[i] == tf_edit_dist_np[i] == native_edit_dist_np[i]
+    else:
+      assert tf_edit_dist_np[i] == native_edit_dist_np[i]
+  print()
+  print("Now the whole batch, flipped.")
+  tf_edit_dist = tf.edit_distance(b_sparse, a_sparse, normalize=False)
+  native_edit_dist = edit_distance(b, b_len, a, a_len)
+  tf_edit_dist_np, native_edit_dist_np = session.run((tf_edit_dist, native_edit_dist))
+  assert isinstance(tf_edit_dist_np, numpy.ndarray)
+  assert isinstance(native_edit_dist_np, numpy.ndarray)
+  print("TF edit dist:", tf_edit_dist_np)
+  print("Native edit dist:", native_edit_dist_np)
+  print("Expected edit dist:", expected_results)
+  assert tf_edit_dist_np.shape == native_edit_dist_np.shape == (n_batch,)
+  for i in range(n_batch):
+    if expected_results[i] is not None:
+      assert expected_results[i] == tf_edit_dist_np[i] == native_edit_dist_np[i]
+    else:
+      assert tf_edit_dist_np[i] == native_edit_dist_np[i]
+
+
+_wrap_tf_edit_distance_global_placeholders = None
+
+
+def _wrap_tf_edit_distance(a, b):
+  """
+  :param list[int] a:
+  :param list[int] b:
+  :rtype: int
+  """
+  global _wrap_tf_edit_distance_global_placeholders
+  if not _wrap_tf_edit_distance_global_placeholders:
+    with tf.name_scope("wrap_tf_edit_distance"):
+      a_tf = tf.placeholder(tf.int32, shape=(None,), name="a")
+      b_tf = tf.placeholder(tf.int32, shape=(None,), name="b")
+      _wrap_tf_edit_distance_global_placeholders = [a_tf, b_tf]
+      a_len_tf = tf.convert_to_tensor([tf.shape(a_tf)[0]])
+      b_len_tf = tf.convert_to_tensor([tf.shape(b_tf)[0]])
+      from TFUtil import sparse_labels
+      a_tf = tf.expand_dims(a_tf, axis=0)
+      b_tf = tf.expand_dims(b_tf, axis=0)
+      a_tf = sparse_labels(a_tf, a_len_tf)
+      b_tf = sparse_labels(b_tf, b_len_tf)
+      res_tf = tf.edit_distance(a_tf, b_tf, normalize=False)
+      res_tf = tf.squeeze(res_tf, axis=0)
+      _wrap_tf_edit_distance_global_placeholders.append(res_tf)
+  a_tf, b_tf, res_tf = _wrap_tf_edit_distance_global_placeholders
+  res = session.run(res_tf, feed_dict={a_tf: a, b_tf: b})
+  return int(res)
+
+
+def test_wrap_tf_edit_distance():
+  assert_equal(_wrap_tf_edit_distance([1], []), 1)
+  assert_equal(_wrap_tf_edit_distance([1, 2], [1]), 1)
+  assert_equal(_wrap_tf_edit_distance([2, 2], [1]), 2)
+  assert_equal(_wrap_tf_edit_distance([2, 1], [1]), 1)
+  assert_equal(_wrap_tf_edit_distance([2, 1], [1, 1]), 1)
+  assert_equal(_wrap_tf_edit_distance([2, 1], [1, 1, 1]), 2)
+  assert_equal(_wrap_tf_edit_distance([2, 1], [2, 1, 1]), 1)
+
+
+def _naive_optimal_completion_edit_distance(a, b):
+  """
+  :param list[int] a: prefix
+  :param list[int] b:
+  :rtype: int
+  """
+  distances = [_wrap_tf_edit_distance(a, b[:n]) for n in range(len(b) + 1)]
+  return min(distances)
+
+
+def test_optimal_completion_edit_distance():
+  rnd = numpy.random.RandomState(42)
+  n_batch = 15
+  n_a_max_len = 11
+  n_b_max_len = 13
+  num_classes = 10
+  a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+  b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+  a_len_np = rnd.randint(1, n_a_max_len + 1, size=(n_batch,), dtype="int32")
+  b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+  # Likely some high error. So make some explicit examples.
+  expected_results = [None] * n_batch
+  i = 0
+  # One deletion.
+  a_np[i, :1] = [1]
+  a_len_np[i] = 1
+  b_len_np[i] = 0
+  expected_results[i] = 1
+  i += 1
+  # One optional insertion.
+  a_np[i, :1] = [1]
+  b_np[i, :2] = [1, 2]
+  a_len_np[i] = 1
+  b_len_np[i] = 2
+  expected_results[i] = 0
+  i += 1
+  # One substitution or deletion.
+  a_np[i, :1] = [1]
+  b_np[i, :2] = [3, 1]
+  a_len_np[i] = 1
+  b_len_np[i] = 2
+  expected_results[i] = 1
+  i += 1
+  # One substitution error.
+  a_np[i, :4] = [1, 2, 3, 4]
+  b_np[i, :4] = [1, 2, 4, 4]
+  a_len_np[i] = 4
+  b_len_np[i] = 4
+  expected_results[i] = 1
+  i += 1
+  # One insertion error.
+  a_np[i, :5] = [1, 2, 3, 4, 5]
+  b_np[i, :6] = [1, 2, 3, 3, 4, 5]
+  a_len_np[i] = 5
+  b_len_np[i] = 6
+  expected_results[i] = 1
+  i += 1
+  # Same.
+  a_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+  b_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+  a_len_np[i] = 11
+  b_len_np[i] = 11
+  expected_results[i] = 0
+  i += 1
+  # Both full length.
+  a_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0]
+  b_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0, 0, 0]
+  a_len_np[i] = n_a_max_len
+  b_len_np[i] = n_b_max_len
+  expected_results[i] = 0
+  i += 1
+  assert n_batch - i >= 5  # still some random left
+  a = tf.constant(a_np)
+  b = tf.constant(b_np)
+  a_len = tf.constant(a_len_np)
+  b_len = tf.constant(b_len_np)
+  for i in range(n_batch):
+    print("testing batch", i, "/", n_batch)
+    _a = a[i:i + 1, :a_len_np[i]]
+    _a_len = a_len[i:i + 1]
+    _b = b[i:i + 1, :b_len_np[i]]
+    _b_len = b_len[i:i + 1]
+    print("seq a:", a_np[i, :a_len_np[i]])
+    print("seq b:", b_np[i, :b_len_np[i]])
+    _native_edit_dist = optimal_completion_edit_distance(_a, _a_len, _b, _b_len)
+    native_edit_dist_np = session.run(_native_edit_dist)
+    tf_edit_dist_np = numpy.array([
+      _naive_optimal_completion_edit_distance(a_np[i, :a_len_np[i]], b_np[i, :b_len_np[i]])])
+    assert isinstance(tf_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("TF edit dist:", tf_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results[i])
+    assert tf_edit_dist_np.shape == native_edit_dist_np.shape == (1,)
+    if expected_results[i] is not None:
+      assert expected_results[i] == tf_edit_dist_np[0] == native_edit_dist_np[0]
+    else:
+      assert tf_edit_dist_np[0] == native_edit_dist_np[0]
+    print()
+  print("Now the whole batch.")
+  native_edit_dist = optimal_completion_edit_distance(a, a_len, b, b_len)
+  native_edit_dist_np = session.run(native_edit_dist)
+  tf_edit_dist_np = numpy.array([
+    _naive_optimal_completion_edit_distance(a_np[i, :a_len_np[i]], b_np[i, :b_len_np[i]])
+    for i in range(n_batch)])
+  assert isinstance(tf_edit_dist_np, numpy.ndarray)
+  assert isinstance(native_edit_dist_np, numpy.ndarray)
+  print("TF edit dist:", tf_edit_dist_np)
+  print("Native edit dist:", native_edit_dist_np)
+  print("Expected edit dist:", expected_results)
+  assert tf_edit_dist_np.shape == native_edit_dist_np.shape == (n_batch,)
+  for i in range(n_batch):
+    if expected_results[i] is not None:
+      assert expected_results[i] == tf_edit_dist_np[i] == native_edit_dist_np[i]
+    else:
+      assert tf_edit_dist_np[i] == native_edit_dist_np[i]
+  print()
+
+
+def test_optimal_completion_edit_distance_per_successor():
+  rnd = numpy.random.RandomState(42)
+  n_batch = 15
+  n_a_max_len = 11
+  n_b_max_len = 13
+  num_classes = 10
+  a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+  b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+  a_len_np = rnd.randint(1, n_a_max_len + 1, size=(n_batch,), dtype="int32")
+  b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+  # Likely some high error. So make some explicit examples.
+  expected_results = [None] * n_batch
+  i = 0
+  # One deletion.
+  a_np[i, :1] = [1]
+  a_len_np[i] = 1
+  b_len_np[i] = 0
+  expected_results[i] = 1
+  i += 1
+  # One optional insertion.
+  a_np[i, :1] = [1]
+  b_np[i, :2] = [1, 2]
+  a_len_np[i] = 1
+  b_len_np[i] = 2
+  expected_results[i] = 0
+  i += 1
+  # One substitution or deletion.
+  a_np[i, :1] = [1]
+  b_np[i, :2] = [3, 1]
+  a_len_np[i] = 1
+  b_len_np[i] = 2
+  expected_results[i] = 1
+  i += 1
+  # One substitution error.
+  a_np[i, :4] = [1, 2, 3, 4]
+  b_np[i, :4] = [1, 2, 4, 4]
+  a_len_np[i] = 4
+  b_len_np[i] = 4
+  expected_results[i] = 1
+  i += 1
+  # One insertion error.
+  a_np[i, :5] = [1, 2, 3, 4, 5]
+  b_np[i, :6] = [1, 2, 3, 3, 4, 5]
+  a_len_np[i] = 5
+  b_len_np[i] = 6
+  expected_results[i] = 1
+  i += 1
+  # Same.
+  a_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 1, 3]
+  b_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 1, 3]
+  a_len_np[i] = 11
+  b_len_np[i] = 11
+  expected_results[i] = 0
+  i += 1
+  # Both full length.
+  a_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0]
+  b_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0, 0, 0]
+  a_len_np[i] = n_a_max_len
+  b_len_np[i] = n_b_max_len
+  expected_results[i] = 0
+  i += 1
+  assert n_batch - i >= 5  # still some random left
+  a = tf.constant(a_np)
+  b = tf.constant(b_np)
+  assert all(a_len_np > 0)
+  a_len = tf.constant(a_len_np)
+  b_len = tf.constant(b_len_np)
+  print("Now the whole batch.")
+  # a_len - 1 such that we can do the check below.
+  native_edit_dist = optimal_completion_edit_distance_per_successor(a, a_len - 1, b, b_len, num_classes)
+  native_edit_dist_np = session.run(native_edit_dist)
+  tf_edit_dist_np = numpy.array([
+    _naive_optimal_completion_edit_distance(a_np[i, :a_len_np[i]], b_np[i, :b_len_np[i]])
+    for i in range(n_batch)])
+  assert isinstance(tf_edit_dist_np, numpy.ndarray)
+  assert isinstance(native_edit_dist_np, numpy.ndarray)
+  print("TF edit dist:", tf_edit_dist_np)
+  print("Native edit dist:", native_edit_dist_np)
+  print("Expected edit dist:", expected_results)
+  assert tf_edit_dist_np.shape == (n_batch,)
+  assert native_edit_dist_np.shape == (n_batch, num_classes)
+  for i in range(n_batch):
+    a_last = a_np[i, a_len_np[i] - 1]
+    assert 0 <= a_last < num_classes
+    native_res = native_edit_dist_np[i, a_last]
+    if expected_results[i] is not None:
+      assert expected_results[i] == tf_edit_dist_np[i] == native_res
+    else:
+      assert tf_edit_dist_np[i] == native_res
+    for j in range(num_classes):
+      tf_res = _naive_optimal_completion_edit_distance(list(a_np[i, :a_len_np[i] - 1]) + [j], b_np[i, :b_len_np[i]])
+      native_res = native_edit_dist_np[i, j]
+      assert tf_res == native_res
+  print()
+
+
+def test_next_edit_distance_row():
+  rnd = numpy.random.RandomState(42)
+  n_batch = 15
+  n_a_max_len = 13
+  n_b_max_len = 11
+  num_classes = 10
+  a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+  b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+  a_len_np = rnd.randint(1, n_a_max_len + 1, size=(n_batch,), dtype="int32")
+  b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+  # Likely some high error. So make some explicit examples.
+  expected_results = [None] * n_batch
+  i = 0
+  # One insertion/deletion.
+  a_np[i, :1] = [1]
+  a_len_np[i] = 1
+  b_len_np[i] = 0
+  expected_results[i] = 1
+  i += 1
+  # One deletion.
+  a_np[i, :2] = [1, 2]
+  b_np[i, :1] = [1]
+  a_len_np[i] = 2
+  b_len_np[i] = 1
+  expected_results[i] = 1
+  i += 1
+  # One substitution + deletion.
+  a_np[i, :2] = [1, 2]
+  b_np[i, :1] = [3]
+  a_len_np[i] = 2
+  b_len_np[i] = 1
+  expected_results[i] = 2
+  i += 1
+  # One substitution error.
+  a_np[i, :4] = [1, 2, 3, 4]
+  b_np[i, :4] = [1, 2, 4, 4]
+  a_len_np[i] = 4
+  b_len_np[i] = 4
+  expected_results[i] = 1
+  i += 1
+  # One deletion error.
+  a_np[i, :6] = [1, 2, 3, 3, 4, 5]
+  b_np[i, :5] = [1, 2, 3, 4, 5]
+  a_len_np[i] = 6
+  b_len_np[i] = 5
+  expected_results[i] = 1
+  i += 1
+  # One insertion error.
+  a_np[i, :6] = [1, 2, 3, 4, 5, 6]
+  b_np[i, :7] = [1, 2, 3, 4, 4, 5, 6]
+  a_len_np[i] = 6
+  b_len_np[i] = 7
+  expected_results[i] = 1
+  i += 1
+  # Same.
+  a_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+  b_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+  a_len_np[i] = 11
+  b_len_np[i] = 11
+  expected_results[i] = 0
+  i += 1
+  # Both full length. Error should be 2.
+  a_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0, 0, 0]
+  b_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0]
+  a_len_np[i] = n_a_max_len
+  b_len_np[i] = n_b_max_len
+  expected_results[i] = 2
+  i += 1
+  assert n_batch - i >= 5  # still some random left
+  a = tf.constant(a_np)
+  b = tf.constant(b_np)
+  a_len = tf.constant(a_len_np)
+  b_len = tf.constant(b_len_np)
+  from TFUtil import sparse_labels
+  for i in range(n_batch):
+    print("testing batch", i, "/", n_batch)
+    _a = a[i:i + 1, :a_len_np[i]]
+    _a_len = a_len[i:i + 1]
+    _b = b[i:i + 1, :b_len_np[i]]
+    _b_len = b_len[i:i + 1]
+    print("seq a:", a_np[i, :a_len_np[i]])
+    print("seq b:", b_np[i, :b_len_np[i]])
+    _a_sparse = sparse_labels(_a, _a_len)
+    _b_sparse = sparse_labels(_b, _b_len)
+    _tf_edit_dist = tf.edit_distance(_a_sparse, _b_sparse, normalize=False)
+    _native_edit_dist = edit_distance_via_next_edit_distance_row(_a, _a_len, _b, _b_len)
+    tf_edit_dist_np, native_edit_dist_np = session.run((_tf_edit_dist, _native_edit_dist))
+    assert isinstance(tf_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("TF edit dist:", tf_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results[i])
+    assert tf_edit_dist_np.shape == native_edit_dist_np.shape == (1,)
+    if expected_results[i] is not None:
+      assert expected_results[i] == tf_edit_dist_np[0] == native_edit_dist_np[0]
+    else:
+      assert tf_edit_dist_np[0] == native_edit_dist_np[0]
+    print("swapped:")
+    _tf_edit_dist = tf.edit_distance(_b_sparse, _a_sparse, normalize=False)
+    _native_edit_dist = edit_distance_via_next_edit_distance_row(_b, _b_len, _a, _a_len)
+    tf_edit_dist_np, native_edit_dist_np = session.run((_tf_edit_dist, _native_edit_dist))
+    assert isinstance(tf_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("TF edit dist:", tf_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results[i])
+    assert tf_edit_dist_np.shape == native_edit_dist_np.shape == (1,)
+    if expected_results[i] is not None:
+      assert expected_results[i] == tf_edit_dist_np[0] == native_edit_dist_np[0]
+    else:
+      assert tf_edit_dist_np[0] == native_edit_dist_np[0]
+    print()
+  print("Now the whole batch.")
+  a_sparse = sparse_labels(a, a_len)
+  b_sparse = sparse_labels(b, b_len)
+  tf_edit_dist = tf.edit_distance(a_sparse, b_sparse, normalize=False)
+  native_edit_dist = edit_distance_via_next_edit_distance_row(a, a_len, b, b_len)
+  tf_edit_dist_np, native_edit_dist_np = session.run((tf_edit_dist, native_edit_dist))
+  assert isinstance(tf_edit_dist_np, numpy.ndarray)
+  assert isinstance(native_edit_dist_np, numpy.ndarray)
+  print("TF edit dist:", tf_edit_dist_np)
+  print("Native edit dist:", native_edit_dist_np)
+  print("Expected edit dist:", expected_results)
+  assert tf_edit_dist_np.shape == native_edit_dist_np.shape == (n_batch,)
+  for i in range(n_batch):
+    if expected_results[i] is not None:
+      assert expected_results[i] == tf_edit_dist_np[i] == native_edit_dist_np[i]
+    else:
+      assert tf_edit_dist_np[i] == native_edit_dist_np[i]
+  print()
+  print("Now the whole batch, flipped.")
+  tf_edit_dist = tf.edit_distance(b_sparse, a_sparse, normalize=False)
+  native_edit_dist = edit_distance_via_next_edit_distance_row(b, b_len, a, a_len)
+  tf_edit_dist_np, native_edit_dist_np = session.run((tf_edit_dist, native_edit_dist))
+  assert isinstance(tf_edit_dist_np, numpy.ndarray)
+  assert isinstance(native_edit_dist_np, numpy.ndarray)
+  print("TF edit dist:", tf_edit_dist_np)
+  print("Native edit dist:", native_edit_dist_np)
+  print("Expected edit dist:", expected_results)
+  assert tf_edit_dist_np.shape == native_edit_dist_np.shape == (n_batch,)
+  for i in range(n_batch):
+    if expected_results[i] is not None:
+      assert expected_results[i] == tf_edit_dist_np[i] == native_edit_dist_np[i]
+    else:
+      assert tf_edit_dist_np[i] == native_edit_dist_np[i]
+
+
+def test_next_edit_distance_row_optimal_completion():
+  rnd = numpy.random.RandomState(42)
+  n_batch = 15
+  n_a_max_len = 11
+  n_b_max_len = 13
+  num_classes = 10
+  a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+  b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+  a_len_np = rnd.randint(1, n_a_max_len + 1, size=(n_batch,), dtype="int32")
+  b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+  # Likely some high error. So make some explicit examples.
+  expected_results = [None] * n_batch
+  i = 0
+  # One deletion.
+  a_np[i, :1] = [1]
+  a_len_np[i] = 1
+  b_len_np[i] = 0
+  expected_results[i] = 1
+  i += 1
+  # One optional insertion.
+  a_np[i, :1] = [1]
+  b_np[i, :2] = [1, 2]
+  a_len_np[i] = 1
+  b_len_np[i] = 2
+  expected_results[i] = 0
+  i += 1
+  # One substitution or deletion.
+  a_np[i, :1] = [1]
+  b_np[i, :2] = [3, 1]
+  a_len_np[i] = 1
+  b_len_np[i] = 2
+  expected_results[i] = 1
+  i += 1
+  # One substitution error.
+  a_np[i, :4] = [1, 2, 3, 4]
+  b_np[i, :4] = [1, 2, 4, 4]
+  a_len_np[i] = 4
+  b_len_np[i] = 4
+  expected_results[i] = 1
+  i += 1
+  # One insertion error.
+  a_np[i, :5] = [1, 2, 3, 4, 5]
+  b_np[i, :6] = [1, 2, 3, 3, 4, 5]
+  a_len_np[i] = 5
+  b_len_np[i] = 6
+  expected_results[i] = 1
+  i += 1
+  # Same.
+  a_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+  b_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+  a_len_np[i] = 11
+  b_len_np[i] = 11
+  expected_results[i] = 0
+  i += 1
+  # Both full length.
+  a_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0]
+  b_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0, 0, 0]
+  a_len_np[i] = n_a_max_len
+  b_len_np[i] = n_b_max_len
+  expected_results[i] = 0
+  i += 1
+  assert n_batch - i >= 5  # still some random left
+  a = tf.constant(a_np)
+  b = tf.constant(b_np)
+  a_len = tf.constant(a_len_np)
+  b_len = tf.constant(b_len_np)
+  print("Now the whole batch.")
+  native_edit_dist = edit_distance_via_next_edit_distance_row(a, a_len, b, b_len, optimal_completion=True)
+  native_edit_dist_np = session.run(native_edit_dist)
+  tf_edit_dist_np = numpy.array([
+    _naive_optimal_completion_edit_distance(a_np[i, :a_len_np[i]], b_np[i, :b_len_np[i]])
+    for i in range(n_batch)])
+  assert isinstance(tf_edit_dist_np, numpy.ndarray)
+  assert isinstance(native_edit_dist_np, numpy.ndarray)
+  print("TF edit dist:", tf_edit_dist_np)
+  print("Native edit dist:", native_edit_dist_np)
+  print("Expected edit dist:", expected_results)
+  assert tf_edit_dist_np.shape == native_edit_dist_np.shape == (n_batch,)
+  for i in range(n_batch):
+    if expected_results[i] is not None:
+      assert expected_results[i] == tf_edit_dist_np[i] == native_edit_dist_np[i]
+    else:
+      assert tf_edit_dist_np[i] == native_edit_dist_np[i]
+  print()
+
+
+def test_next_edit_distance_reduce_optimal_completion():
+  rnd = numpy.random.RandomState(42)
+  n_batch = 15
+  n_a_max_len = 7
+  n_b_max_len = 13
+  num_classes = 10
+  a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+  b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+  # Test only for full length seqs in a.
+  a_len_np = numpy.array([n_a_max_len] * n_batch, dtype="int32")
+  b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+  a = tf.constant(a_np)
+  b = tf.constant(b_np)
+  assert all(a_len_np > 0)
+  a_len = tf.constant(a_len_np)
+  b_len = tf.constant(b_len_np)
+  print("Now the whole batch.")
+  # a_len - 1 such that we can do the check below.
+  native_edit_dist = optimal_completion_edit_distance_per_successor_via_next_edit_distance(
+    a, a_len, b, b_len, num_classes)
+  native_edit_dist_np = session.run(native_edit_dist)
+  assert isinstance(native_edit_dist_np, numpy.ndarray)
+  print("Native edit dist:", native_edit_dist_np)
+  assert native_edit_dist_np.shape == (n_batch, num_classes)
+  for i in range(n_batch):
+    for j in range(num_classes):
+      tf_res = _naive_optimal_completion_edit_distance(list(a_np[i, :a_len_np[i]]) + [j], b_np[i, :b_len_np[i]])
+      native_res = native_edit_dist_np[i, j]
+      assert tf_res == native_res
+  print()
 
 
 @unittest.skipIf(not is_gpu_available(), "no gpu on this system")
@@ -1349,7 +2961,6 @@ if __name__ == "__main__":
   finally:
     session.close()
     del session
-    tf.reset_default_graph()
     import threading
     if len(list(threading.enumerate())) > 1:
       print("Warning, more than one thread at exit:")
