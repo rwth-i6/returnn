@@ -2097,6 +2097,7 @@ def test_unflatten_2d():
   from Dataset import set_config_num_inputs_outputs_from_dataset
   # E.g. attention weights, shape (dec-time,enc-time) per seq.
   fn = _get_tmp_file(suffix=".hdf")
+  os.remove(fn)  # SimpleHDFWriter expects that the file does not exist
   writer = SimpleHDFWriter(filename=fn, dim=None, ndim=2, labels=None)
   dec_seq_lens = [11, 7, 5]
   enc_seq_lens = [13, 6, 8]

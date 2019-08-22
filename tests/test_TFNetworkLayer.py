@@ -2228,6 +2228,7 @@ def test_HDFDumpLayer():
   import os
   from test_HDFDataset import get_test_tmp_file, DatasetTestReader, HDFDataset
   hdf_filename = get_test_tmp_file(".hdf")
+  os.remove(hdf_filename)  # HDFDumpLayer expects that the file does not exist
 
   with make_scope() as session:
     n_in, n_out = 4, 3
@@ -2277,6 +2278,7 @@ def test_HDFDumpLayer_fixed_length():
   import os
   from test_HDFDataset import get_test_tmp_file, DatasetTestReader, HDFDataset
   hdf_filename = get_test_tmp_file(".hdf")
+  os.remove(hdf_filename)  # HDFDumpLayer expects that the file does not exist
 
   with make_scope() as session:
     n_in, n_out = 4, 3
@@ -2328,6 +2330,7 @@ def test_HDFDumpLayer_extra():
   import os
   from test_HDFDataset import get_test_tmp_file, DatasetTestReader, HDFDataset
   hdf_filename = get_test_tmp_file(".hdf")
+  os.remove(hdf_filename)  # HDFDumpLayer expects that the file does not exist
 
   with make_scope() as session:
     n_in = 5
