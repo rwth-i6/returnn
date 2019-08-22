@@ -1780,9 +1780,13 @@ class Engine(EngineBase):
         labels = None
 
     assert output_file
-    if not self.config.is_true("forward_override_hdf_output"):
-      assert not os.path.exists(output_file)
     print("Forwarding to HDF file: %s" % output_file, file=log.v2)
+    if self.config.is_true("forward_override_hdf_output"):
+      if os.path.exists(output_file):
+        print("HDF file exists, delete now (forward_override_hdf_output).", file=log.v2)
+        os.remove(output_file)
+    else:
+      assert not os.path.exists(output_file)
     print("Forward output:", output, file=log.v3)
     writer = SimpleHDFWriter(filename=output_file, dim=output.dim, ndim=output.ndim, labels=labels)
 

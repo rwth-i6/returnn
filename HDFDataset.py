@@ -826,7 +826,9 @@ class SimpleHDFWriter:
     if labels:
       assert len(labels) == dim
     self.filename = filename
-    tempfile.mkstemp()
+    # By default, we should not override existing data.
+    # If we want that at some later point, we can introduce an option for it.
+    assert not os.path.exists(self.filename)
     tmp_fd, self.tmp_filename = tempfile.mkstemp(suffix=".hdf")
     os.close(tmp_fd)
     self._file = h5py.File(self.tmp_filename, "w", libver='latest' if swmr else None)
@@ -1035,6 +1037,7 @@ class SimpleHDFWriter:
     import shutil
     self._file.close()
     if self.tmp_filename:
+      assert not os.path.exists(self.filename)
       shutil.copyfile(self.tmp_filename, self.filename)
       os.remove(self.tmp_filename)
       self.tmp_filename = None
