@@ -6,6 +6,8 @@ or any changes which could potentially break or change the behavior of existing 
 This is intentionally kept short. For a full change log, just see the Git log.
 
 
+## 2019-08-20: Pretrain `#config` can overwrite datasets (`train`, `dev`, `eval`)
+
 ## 2019-08-13: `Data` `batch_shape_meta` extra debug repr output
 
 This will show the same information as before, but much more compact,
