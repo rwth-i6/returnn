@@ -196,13 +196,11 @@ class Dataset(object):
     assert start < end
     return False
 
-  def get_seq_length_2d(self, sorted_seq_idx):
+  def get_seq_length_nd(self, sorted_seq_idx):
     """
     :type sorted_seq_idx: int
-    :rtype: numpy.array[int,int]
-    :returns the len of the input features and the len of the target sequence.
-    For multiple target seqs, it is expected that they all have the same len.
-    We support different input/target len for seq2seq/ctc and other models.
+    :rtype: numpy.ndarray
+    :returns the len of the input features and the len of each target sequence.
     Note: This is deprecated, better use get_seq_length().
     Attention: Either this method or get_seq_length() needs to be redefined
     in any subclass of Dataset! However, in new code, just override get_seq_length().
@@ -210,7 +208,7 @@ class Dataset(object):
     ls = self.get_seq_length(sorted_seq_idx)
     targets = self.get_target_list()
     if targets:
-      return numpy.array([ls["data"], ls[targets[0]]])
+      return numpy.array([ls[key] for key in (["data"] + targets)])
     else:
       return numpy.array([ls["data"], 0])
 
@@ -220,8 +218,8 @@ class Dataset(object):
     :rtype: NumbersDict
     :returns the len of the input features and the len of the target sequence.
     """
-    assert self.__class__.get_seq_length_2d is not Dataset.get_seq_length_2d, "Override get_seq_length."
-    input_len, output_len = self.get_seq_length_2d(seq_idx)
+    assert self.__class__.get_seq_length_nd is not Dataset.get_seq_length_nd, "Override get_seq_length."
+    input_len, output_len = self.get_seq_length_nd(seq_idx)
     d = {"data": input_len}
     d.update({k: output_len for k in self.get_target_list()})
     return NumbersDict(d)

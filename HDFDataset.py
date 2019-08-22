@@ -252,8 +252,8 @@ class HDFDataset(CachedDataset):
   def _get_seq_length_by_real_idx(self, real_seq_idx):
     """
     :param int real_seq_idx:
-    :returns length of the sequence with index 'real_seq_idx'
-    :rtype: int
+    :returns length of the sequence with index 'real_seq_idx'. see get_seq_length_nd
+    :rtype: numpy.ndarray
     """
     file_idx = self._get_file_index(real_seq_idx)
     real_file_seq_idx = real_seq_idx - self.file_start[file_idx]
