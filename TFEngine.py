@@ -1189,6 +1189,9 @@ class Engine(EngineBase):
       new_network_desc = self.pretrain.get_network_json_for_epoch(self.epoch)
       # Always update config, if needed, even if nothing changed.
       # This might trigger enforcing some learning rate, or so.
+      if self.network.layers_desc != new_network_desc:
+        # Early call of reset callbacks, which might trigger some HDF dump or other things.
+        self.network.call_graph_reset_callbacks()
       self._maybe_update_config(net_desc=new_network_desc, epoch=self.epoch)
       self.maybe_init_new_network(new_network_desc)
       self.network.declare_train_params(**self.pretrain.get_train_param_args_for_epoch(self.epoch))
