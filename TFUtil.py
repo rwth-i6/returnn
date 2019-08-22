@@ -466,6 +466,9 @@ class Data(object):
           self, axis_name, axis, self.batch_dim_axis)
     if self.sparse:
       assert self.feature_dim_axis is None, "%s: If sparse, there cannot be a feature dim axis." % self
+    else:
+      if self.feature_dim_axis is None:  # e.g. scalars, or [B]
+        assert self.dim is None, "%s: not sparse but no feature-dim-axis, so dim should be None" % self
     if self.feature_dim_axis is not None:
       assert self.dim == self.batch_shape[self.feature_dim_axis], (
         "%s: inconsistent dim. feature axis or unspecified: %r." % (self, self.feature_dim_axis_or_unspecified))
