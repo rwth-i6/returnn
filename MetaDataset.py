@@ -441,6 +441,14 @@ class MetaDataset(CachedDataset2):
       assert super(MetaDataset, self).get_data_dtype(key) == dtype
     return dtype
 
+  def is_data_sparse(self, key):
+    """
+    :param str key:
+    :rtype: bool
+    """
+    dataset_key, dataset_data_key = self.data_map[key]
+    return self.datasets[dataset_key].is_data_sparse(dataset_data_key)
+
 
 class ClusteringDataset(CachedDataset2):
   """
