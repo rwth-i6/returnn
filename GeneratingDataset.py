@@ -651,6 +651,8 @@ class TaskNumberBaseConvertDataset(GeneratingDataset):
     while number:
       output_seq.insert(0, number % self.output_base)
       number //= self.output_base
+    if not output_seq:
+      output_seq = [0]
     return output_seq
 
   def generate_seq(self, seq_idx):
