@@ -904,6 +904,7 @@ class Engine(EngineBase):
     if net_dict_post_proc:
       net_dict = net_dict_post_proc(net_dict)
 
+    self._maybe_update_config(net_desc=net_dict, epoch=self.epoch)
     self._init_network(net_desc=net_dict, epoch=self.epoch)
 
     if self.preload_from_files:
