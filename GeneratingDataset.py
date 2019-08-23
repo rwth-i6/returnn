@@ -147,16 +147,16 @@ class GeneratingDataset(Dataset):
     """
     return self._num_seqs
 
-  def get_seq_length(self, sorted_seq_idx):
+  def get_seq_length(self, seq_idx):
     """
-    :param int sorted_seq_idx:
+    :param int seq_idx:
     :rtype: Util.NumbersDict
     """
     # get_seq_length() can be called before the seq is loaded via load_seqs().
     # Thus, we just call load_seqs() ourselves here.
-    assert sorted_seq_idx >= self.expected_load_seq_start
-    self.load_seqs(self.expected_load_seq_start, sorted_seq_idx + 1)
-    return self._get_seq(sorted_seq_idx).num_frames
+    assert seq_idx >= self.expected_load_seq_start
+    self.load_seqs(self.expected_load_seq_start, seq_idx + 1)
+    return self._get_seq(seq_idx).num_frames
 
   def get_data(self, seq_idx, key):
     """
@@ -189,13 +189,13 @@ class GeneratingDataset(Dataset):
     self._check_loaded_seq_idx(sorted_seq_idx)
     assert self._get_seq(sorted_seq_idx).ctc_targets
 
-  def get_tag(self, sorted_seq_idx):
+  def get_tag(self, seq_idx):
     """
-    :param int sorted_seq_idx:
+    :param int seq_idx:
     :rtype: str
     """
-    self._check_loaded_seq_idx(sorted_seq_idx)
-    return self._get_seq(sorted_seq_idx).seq_tag
+    self._check_loaded_seq_idx(seq_idx)
+    return self._get_seq(seq_idx).seq_tag
 
 
 class Task12AXDataset(GeneratingDataset):

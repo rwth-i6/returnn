@@ -74,8 +74,11 @@ class TestHDFDataset(object):
 
 
 def generate_dummy_hdf(num_datasets=1):
+  filenames = []
   for idx in range(1, num_datasets + 1):
-    dataset = h5py.File('./dummy.%i.hdf5' % idx, 'w')
+    fn = get_test_tmp_file(".%i.hdf5" % idx)
+    filenames.append(fn)
+    dataset = h5py.File(fn, 'w')
     dataset.create_group('streams')
 
     dataset['streams'].create_group('features')
@@ -111,7 +114,7 @@ def generate_dummy_hdf(num_datasets=1):
       sequence_names_data[ind] = val
 
     dataset.close()
-  return ['./dummy.%i.hdf5' % idx for idx in range(1, num_datasets + 1)]
+  return filenames
 
 
 # Note that nosetests might even call this function, as it has "test" in its name... Does not matter, though.
@@ -203,6 +206,26 @@ class DatasetTestReader:
       seq_idx += 1
     print("Iterated through %r, num seqs %i" % (dataset, seq_idx))
     self.num_seqs = seq_idx
+
+
+def test_hdf_dump_not_frame_synced():
+  num_seqs = 3
+  from GeneratingDataset import TaskNumberBaseConvertDataset
+  hdf_fn = generate_hdf_from_other({"class": "TaskNumberBaseConvertDataset", "num_seqs": num_seqs})
+  hdf = HDFDataset([hdf_fn])
+  orig = TaskNumberBaseConvertDataset(num_seqs=num_seqs)
+  hdf_reader = DatasetTestReader(hdf)
+  orig_reader = DatasetTestReader(orig)
+  hdf_reader.read_all()
+  orig_reader.read_all()
+  assert hdf_reader.data_keys == orig_reader.data_keys == ["data", "classes"]
+  assert hdf_reader.num_seqs == orig_reader.num_seqs == num_seqs
+  for seq_idx in range(num_seqs):
+    # Not synced, i.e. different lengths:
+    assert_not_equal(orig_reader.seq_lens[seq_idx]["data"], orig_reader.seq_lens[seq_idx]["classes"])
+    for key in orig_reader.data_keys:
+      assert_equal(hdf_reader.seq_lens[seq_idx][key], orig_reader.seq_lens[seq_idx][key])
+      assert_equal(hdf_reader.data[key][seq_idx].tolist(), orig_reader.data[key][seq_idx].tolist())
 
 
 def test_SimpleHDFWriter():
