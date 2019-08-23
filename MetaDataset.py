@@ -182,6 +182,9 @@ class MetaDataset(CachedDataset2):
       Can be None if tag format is the same for all datasets.
         Then the sequence list will be default sequence order of default dataset (``data_map["data"][0]``),
         or seq_order_control_dataset.
+        You only need it if the tag name is not the same for all datasets.
+        It will currently not act as filter,
+        as the subdataset controls the sequence order (and thus what seqs to use).
     :param str|None seq_order_control_dataset: if set, this dataset will define the order for each epoch.
     :param str|None seq_lens_file: filename. json. dict[str,dict[str,int]], seq-tag -> data-key -> len.
       Use if getting sequence length from loading data is too costly.
@@ -264,14 +267,7 @@ class MetaDataset(CachedDataset2):
     :rtype: dict[str,list[str]]
     """
     if seq_list_file:
-      if seq_list_file.endswith(".pkl"):
-        import pickle
-        seq_list = pickle.load(open(seq_list_file, 'rb'))
-      elif seq_list_file.endswith(".gz"):
-        import gzip
-        seq_list = gzip.open(seq_list_file, "rt").read().splitlines()
-      else:
-        seq_list = open(seq_list_file).read().splitlines()
+      seq_list = Dataset._load_seq_list_file(seq_list_file, expect_list=False)
     else:
       # We create a sequence list from all the sequences of the default dataset and hope that it also applies to the
       # other datasets. This can only work if all datasets have the same tag format and the sequences in the other
