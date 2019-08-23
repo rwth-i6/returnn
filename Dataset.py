@@ -83,9 +83,10 @@ class Dataset(object):
 
   def __init__(self, name=None,
                window=1, context_window=None, chunking=None,
-               seq_ordering='default', partition_epoch=None, repeat_epoch=None, seq_list_filter_file=None,
+               seq_ordering='default', partition_epoch=None, repeat_epoch=None,
+               seq_list_filter_file=None, unique_seq_tags=False,
                shuffle_frames_of_nseqs=0, min_chunk_size=0,
-               estimated_num_seqs=None,):
+               estimated_num_seqs=None):
     """
     :param str name: e.g. "train" or "eval"
     :param int window: features will be of dimension window * feature_dim, as we add a context-window around.
@@ -99,6 +100,7 @@ class Dataset(object):
       relative to other datasets, e.g. when used in CombinedDataset. Not allowed to be used in combination with
       partition_epoch.
     :param str|None seq_list_filter_file: defines a subset of sequences (by tag) to use
+    :param bool unique_seq_tags: uniquify seqs with same seq tags in seq order
     :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
     :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
     """
@@ -112,6 +114,7 @@ class Dataset(object):
     self.partition_epoch = partition_epoch or 1
     self.repeat_epoch = repeat_epoch or 1
     self.seq_tags_filter = set(self._load_seq_list_file(seq_list_filter_file)) if seq_list_filter_file else None
+    self.unique_seq_tags = unique_seq_tags
     # There is probably no use case for combining the two, so avoid potential misconfiguration.
     assert self.partition_epoch == 1 or self.repeat_epoch == 1, (
       "Combining partition_epoch and repeat_epoch is prohibited.")
@@ -390,6 +393,13 @@ class Dataset(object):
       rnd.shuffle(seq_index)
     else:
       assert False, "invalid batching specified: " + self.seq_ordering
+    if self.unique_seq_tags:
+      # Note: This is as generic as possible, but requires that get_all_tags is implemented.
+      all_seq_tags = self.get_all_tags()
+      used_seq_tags = set()
+      seq_index = [
+        i for i in seq_index
+        if (all_seq_tags[i] not in used_seq_tags, used_seq_tags.add(all_seq_tags[i]))[0]]
     if partition_epoch > 1:
       seq_index = self._apply_partition_epoch(seq_index, partition_epoch, epoch)
     if repeat_epoch > 1:
