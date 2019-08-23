@@ -980,12 +980,17 @@ class SimpleHDFWriter:
       seq_len = {0: seq_len}
     assert isinstance(seq_len, dict)
     assert all([isinstance(key, int) and isinstance(value, (list, numpy.ndarray)) for (key, value) in seq_len.items()])
-    ndim_with_seq_len = self.ndim - (1 if self.dim else 0)
+    if seq_len:
+      ndim_with_seq_len = max(seq_len.keys()) + 1
+    else:
+      ndim_with_seq_len = 0
+    sparse = ndim_with_seq_len == self.ndim
+    assert ndim_with_seq_len <= self.ndim
     assert all([0 <= key < ndim_with_seq_len for key in seq_len.keys()])
     assert len(seq_len) == ndim_with_seq_len
     assert all([n_batch == len(value) for (key, value) in seq_len.items()])
     assert all([max(value) == inputs.shape[key + 1] for (key, value) in seq_len.items()])
-    if self.dim:
+    if self.dim and not sparse:
       assert self.dim == inputs.shape[-1]
     if extra:
       assert all([n_batch == value.shape[0] for value in extra.values()])
@@ -1002,7 +1007,7 @@ class SimpleHDFWriter:
       flat_seq_len = int(numpy.prod([seq_len[axis][i] for axis in range(ndim_with_seq_len)]))
       assert flat_seq_len > 0
       flat_shape = [flat_seq_len]
-      if self.dim:
+      if self.dim and not sparse:
         flat_shape.append(self.dim)
       self._seq_lengths[seqlen_offset + i, 0] = flat_seq_len
       data = inputs[i]
