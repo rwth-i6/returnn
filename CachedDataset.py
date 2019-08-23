@@ -100,6 +100,10 @@ class CachedDataset(Dataset):
         return False
     return True
 
+  def get_current_seq_order(self):
+    assert self.cache_byte_size_limit_at_start == 0  # not implemented otherwise, we ignore _index_map
+    return self._seq_index
+
   def _get_tag_by_real_idx(self, real_idx):
     raise NotImplementedError
 
@@ -532,6 +536,4 @@ class CachedDataset(Dataset):
     :return: the sequence index as-is in the original corpus. only defined if self.have_corpus_seq_idx()
     :rtype: int
     """
-    if self.seq_ordering == "default":
-      return seq_idx
     return self._seq_index[self._index_map[seq_idx]]
