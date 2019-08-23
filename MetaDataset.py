@@ -242,7 +242,6 @@ class MetaDataset(CachedDataset2):
     self.num_inputs = self.data_dims["data"][0]
     self.num_outputs = self.data_dims
 
-    self.data_dtypes = {data_key: _select_dtype(data_key, self.data_dims, data_dtypes) for data_key in self.data_keys}
     self.orig_seq_order_is_initialized = False
     self.seq_list_ordered = None  # type: typing.Optional[typing.Dict[str,typing.List[str]]]
 
@@ -436,10 +435,8 @@ class MetaDataset(CachedDataset2):
     :param str key:
     :rtype: str
     """
-    dtype = self.data_dtypes[key]
-    if self.added_data:
-      assert super(MetaDataset, self).get_data_dtype(key) == dtype
-    return dtype
+    dataset_key, dataset_data_key = self.data_map[key]
+    return self.datasets[dataset_key].get_data_dtype(dataset_data_key)
 
   def is_data_sparse(self, key):
     """
