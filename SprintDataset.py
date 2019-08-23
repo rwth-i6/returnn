@@ -630,6 +630,21 @@ class ExternSprintDataset(SprintDatasetBase):
     atexit.register(self._exit_handler)
     self.init_seq_order()
 
+  def finish_epoch(self):
+    """
+    Called at the end of the epoch.
+    """
+    self._exit_child(wait_thread=True)
+    super(ExternSprintDataset, self).finish_epoch()
+
+  def _exit_handler(self):
+    """
+    Called at exit.
+    """
+    assert os.getpid() == self.parent_pid
+    self.python_exit = True
+    self._exit_child(wait_thread=False)
+
   def _exit_child(self, wait_thread=True):
     """
     :param bool wait_thread:
@@ -916,14 +931,6 @@ class ExternSprintDataset(SprintDatasetBase):
         finally:
           # Exceptions are fatal. If we can recover, we should handle it in run_inner().
           interrupt_main()
-
-  def _exit_handler(self):
-    """
-    Called at exit.
-    """
-    assert os.getpid() == self.parent_pid
-    self.python_exit = True
-    self._exit_child(wait_thread=False)
 
   def init_seq_order(self, epoch=None, seq_list=None):
     """

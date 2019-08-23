@@ -360,6 +360,14 @@ class MetaDataset(CachedDataset2):
       dataset.init_seq_order(epoch=epoch, seq_list=self.seq_list_ordered[dataset_key])
     return True
 
+  def finish_epoch(self):
+    """
+    This would get called at the end of the epoch.
+    """
+    for _, dataset in self.datasets.items():
+      assert isinstance(dataset, Dataset)
+      dataset.finish_epoch()
+
   def _load_seqs(self, start, end):
     for dataset_key in self.dataset_keys:
       self.datasets[dataset_key].load_seqs(start, end)

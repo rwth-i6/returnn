@@ -210,6 +210,7 @@ class Runner(object):
       self.score.update({key + ":exp": numpy.exp(value) for (key, value) in results.items() if key.startswith("cost:")})
     self.error = {key: value for (key, value) in results.items() if key.startswith("error:")}
     self.num_steps = num_steps
+    self.data_provider.dataset.finish_epoch()
     self.finalized = True
 
   def _get_batch_dim_from_fetches(self, fetches_results):

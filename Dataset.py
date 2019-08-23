@@ -452,6 +452,14 @@ class Dataset(object):
     self.rnd_seq_drop = Random(epoch or 1)
     return False
 
+  def finish_epoch(self):
+    """
+    This would get called at the end of the epoch (currently optional only).
+    After this, further calls to :func:`get_data` or :func:`load_seqs` are invalid,
+    until a new call to :func:`init_seq_order` follows.
+    """
+    self.epoch = None
+
   def get_current_seq_order(self):
     """
     :return: many datasets use self.get_seq_order_for_epoch. this function would return the current seq order
