@@ -538,6 +538,16 @@ def test_Data_copy_compatible_to_keep_feature_new_time():
   assert x.time_dim_axis == energy.time_dim_axis
 
 
+def test_Data_copy_compatible_to_sparse_to_dense():
+  source = Data(name="start", shape=(), dtype='int32', sparse=True, dim=1, time_dim_axis=None)
+  print("source:", source)
+  target = Data(name='energy', shape=(None,))
+  print("target:", target)
+  dest = source.copy_compatible_to(target, check_sparse=False, check_dtype=False)
+  print("dest:", dest)
+  assert dest.shape == (1,) and dest.dtype == "int32" and dest.sparse and dest.dim == 1 and dest.time_dim_axis == 1
+
+
 def test_Data_copy_add_spatial_dim_added_time_at_end():
   d = Data(name='start', shape=(1,), time_dim_axis=None)
   print("d:", d)

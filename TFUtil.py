@@ -981,6 +981,12 @@ class Data(object):
     _, dim_tags = DimensionTag.get_all_dimension_tags([self, data], dict(allow_same_feature_dim=True))
     v = self.copy()
     v.sparse = data.sparse  # we will later reset it. this is to better count the axes (feature and spatial)
+    if not v.sparse:
+      # We might need to reset the dim, as it would be invalid otherwise. Reset later.
+      if v.feature_dim_axis is not None:
+        v.dim = v.batch_shape[v.feature_dim_axis]
+      else:
+        v.dim = None
     if data.batch_dim_axis is not None and v.batch_dim_axis is None:
       v = v.copy_add_batch_dim(0)  # later we might move the axis
     if v.batch_dim_axis is not None and data.batch_dim_axis is None:
@@ -1050,6 +1056,7 @@ class Data(object):
     if self.sparse:
       v.feature_dim_axis = NotSpecified
       v.sparse = True  # reset
+      v.dim = self.dim  # reset
     if unbroadcast and any([d1 != 1 and d2 == 1 for (d1, d2) in zip(data.batch_shape, v.batch_shape)]):
       v.size_placeholder.update(data.size_placeholder or {})
       if v.placeholder is not None:
