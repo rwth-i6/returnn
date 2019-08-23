@@ -3954,13 +3954,18 @@ class ReinterpretDataLayer(_ConcatInputLayer):
 
   # noinspection PyUnusedLocal
   def __init__(self, switch_axes=None, size_base=None, set_axes=None,
-               enforce_batch_major=False, enforce_time_major=False, increase_sparse_dim=None, **kwargs):
+               enforce_batch_major=False, enforce_time_major=False,
+               set_sparse=None, set_sparse_dim=NotSpecified, increase_sparse_dim=None,
+               **kwargs):
     """
     :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
     :param LayerBase|None size_base:
     :param dict[str,int|str] set_axes: the key is "B","T","F", value is via :func:`Data.get_axis_from_description`
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
+    :param bool|None set_sparse: if bool, set sparse value to this
+    :param int|None|NotSpecified set_sparse_dim: set sparse dim to this. assumes that it is sparse
+    :param int|None increase_sparse_dim: add this to the dim. assumes that it is sparse
     """
     super(ReinterpretDataLayer, self).__init__(**kwargs)
     self.size_base = size_base
@@ -3994,16 +3999,19 @@ class ReinterpretDataLayer(_ConcatInputLayer):
   def get_out_data_from_opts(cls, name, sources,
                              switch_axes=None, size_base=None, set_axes=None,
                              enforce_batch_major=False, enforce_time_major=False,
-                             increase_sparse_dim=None, **kwargs):
+                             set_sparse=None, set_sparse_dim=NotSpecified, increase_sparse_dim=None,
+                             **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
-    :param LayerBase|None size_base:
+    :param LayerBase|None size_base: similar as size_target
     :param dict[str,int] set_axes:
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
-    :param int|None increase_sparse_dim: if sparse, add this to the dim
+    :param bool|None set_sparse: if bool, set sparse value to this
+    :param int|None|NotSpecified set_sparse_dim: set sparse dim to this. assumes that it is sparse
+    :param int|None increase_sparse_dim: add this to the dim. assumes that it is sparse
     """
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
     assert not (enforce_batch_major and enforce_time_major)
@@ -4043,6 +4051,12 @@ class ReinterpretDataLayer(_ConcatInputLayer):
           out.dim = out.batch_shape[out.feature_dim_axis]
     if size_base:
       out.size_placeholder = size_base.output.size_placeholder.copy()
+    if set_sparse is not None:
+      assert isinstance(set_sparse, bool)
+      out.sparse = set_sparse
+    if set_sparse_dim is not NotSpecified:
+      assert set_sparse_dim is None or isinstance(set_sparse_dim, int)
+      out.dim = set_sparse_dim
     if increase_sparse_dim:
       assert out.sparse
       out.dim += increase_sparse_dim
