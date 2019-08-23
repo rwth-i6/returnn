@@ -6634,6 +6634,7 @@ class PrintLayer(LayerBase):
     with tf.name_scope("print_layer"):
       source = self.sources[0]
       output = py_print(source.output.placeholder, [source.output.placeholder], kwargs["name"], summarize=99)
+      self.network.register_post_control_dependencies([output])
       self.output.placeholder = output
       self.output.size_placeholder = source.output.size_placeholder.copy()
 
