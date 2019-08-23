@@ -6750,9 +6750,10 @@ class HDFDumpLayer(LayerBase):
     self.network.register_post_control_dependencies([tf_write])
 
   def _at_graph_reset(self):
-    print("HDFDumpLayer, wrote %i seqs to file %r." % (self.num_seqs_written, self.filename))
-    self.hdf_writer.close()
-    self.hdf_writer = None
+    if self.hdf_writer:
+      print("HDFDumpLayer, wrote %i seqs to file %r." % (self.num_seqs_written, self.filename))
+      self.hdf_writer.close()
+      self.hdf_writer = None
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, **kwargs):

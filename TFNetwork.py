@@ -1787,6 +1787,8 @@ class TFNetwork(object):
     Note: We don't store this in the graph itself (e.g. via tf.get_collection),
     as we don't want to serialize this
     (which would also lead to an error, because it cannot be serialized).
+    Note: Currently these callbacks might get called multiple times,
+    so make sure that this is not a problem.
 
     :param function cb:
     """
