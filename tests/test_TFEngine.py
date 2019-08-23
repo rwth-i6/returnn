@@ -2321,6 +2321,122 @@ def test_attention_forward_hdf_then_unflatten_2d():
     raise Exception("Error happened. Exit now.")
 
 
+def test_preinit_reset_train_dataset():
+  """
+  This is a complex test.
+  We have some default dataset.
+  Then we run through it, and use HDFDumpLayer to dump some info.
+  Then later we overwrite the dataset (via pretrain `#config`) to load that dumped data.
+  Also, make sure that all not-used-anymore data gets unloaded.
+  """
+  # For the default dataset, we want something which is not frame-synced (i.e. input has different length than output).
+  # TaskNumberBaseConvertDataset has this property.
+  # Also, we need a dataset which supports init_seq_order with custom seq_list,
+  # which is needed for the MetaDataset.
+  # TaskNumberBaseConvertDataset does not support this, so we convert it to HDF.
+  print("Preparing data...")
+  from test_HDFDataset import generate_hdf_from_other, get_test_tmp_file
+  from Dataset import init_dataset
+  n_in, n_out = 2, 8
+  default_train_hdf_fn = generate_hdf_from_other({
+    "class": "TaskNumberBaseConvertDataset", "num_seqs": 11,
+    "input_base": n_in, "output_base": n_out})
+  default_dev_hdf_fn = generate_hdf_from_other({
+    "class": "TaskNumberBaseConvertDataset", "num_seqs": 5, "fixed_random_seed": 42,
+    "input_base": n_in, "output_base": n_out})
+  default_train_dataset_opts = {"class": "HDFDataset", "files": [default_train_hdf_fn]}
+  default_dev_dataset_opts = {"class": "HDFDataset", "files": [default_dev_hdf_fn]}
+  default_train_dataset = init_dataset(default_train_dataset_opts)
+  default_dev_dataset = init_dataset(default_dev_dataset_opts)
+
+  def get_meta_dataset_opts(base_opts, hdf_dump_fn):
+    """
+    :param dict[str] base_opts:
+    :param str hdf_dump_fn:
+    :rtype: dict[str]
+    """
+    return {
+      "class": "MetaDataset",
+      "datasets": {"base": base_opts, "dump": {"class": "HDFDataset", "files": [hdf_dump_fn]}},
+      "data_map": {
+        "data": ("base", "data"),
+        "classes": ("base", "classes"),
+        "dump": ("dump", "data")
+      },
+      "seq_order_control_dataset": "base"
+    }
+
+  dump_hdf_filenames = [None, get_test_tmp_file(".dump1.hdf"), get_test_tmp_file(".dump2.hdf")]
+  num_epochs = len(dump_hdf_filenames)
+  for fn in dump_hdf_filenames:
+    if fn:
+      os.remove(fn)  # HDFDumpLayer expects that they don't exist
+
+  def get_net_dict(idx=None, net_dict=None):
+    """
+    :param int|None idx:
+    :param net_dict:
+    :return: dict
+    """
+    if idx is not None and idx >= num_epochs:
+      return None
+    net_dict = {
+      "#idx": idx,  # informal, and trigger reinit in all cases
+      "embed": {"class": "linear", "from": "data", "with_bias": False, "activation": None, "n_out": 10},
+      "lstm1": {"class": "rec", "unit": "BasicLSTM", "from": "embed", "n_out": 10},
+      "lstm2": {"class": "rec", "unit": "BasicLSTM", "from": "lstm1", "n_out": 10},
+      "output": {"class": "softmax", "from": "lstm2", "loss": "ctc"}
+    }
+    if idx is not None and dump_hdf_filenames[idx]:
+      net_dict["hdf_dump"] = {
+        "class": "hdf_dump",
+        "from": "data:classes",
+        "filename": dump_hdf_filenames[idx],
+        "is_output_layer": True  # trigger usage of this layer
+      }
+    if idx is not None and idx >= 1 and dump_hdf_filenames[idx - 1]:
+      net_dict["#config"] = {
+        "train": get_meta_dataset_opts(default_train_dataset_opts, dump_hdf_filenames[idx - 1]),
+        "dev": get_meta_dataset_opts(default_dev_dataset_opts, dump_hdf_filenames[idx - 1])}
+      # Some dummy usage of the extra data.
+      net_dict["print"] = {
+        "class": "print", "from": "data:dump",
+        "is_output_layer": True  # trigger usage of this layer
+      }
+    return net_dict
+
+  config = Config({
+    "train": default_train_dataset_opts,
+    "dev": default_dev_dataset_opts,
+    "extern_data": {
+      "data": {"dim": n_in, "sparse": True},
+      "classes": {"dim": n_out, "sparse": True},
+      "dump": {"dim": n_out, "sparse": True}  # we dump the classes
+    },
+    "network": get_net_dict(),
+    "pretrain": {"construction_algo": get_net_dict},
+    "num_epochs": num_epochs,
+    "debug_print_layer_output_template": True,
+    "batch_size": 50, "max_seqs": 3,
+    "tf_log_dir": None
+  })
+
+  print("Create engine.")
+  engine = Engine(config=config)
+  print("Init training.")
+  engine.init_train_from_config(train_data=default_train_dataset, dev_data=default_dev_dataset)
+  print("Train.")
+  engine.train()
+  engine.finalize()
+  print("Finished training.")
+
+  # Now some tests.
+  print("Testing.")
+  for fn in dump_hdf_filenames:
+    if fn:
+      assert os.path.exists(fn)  # should have been created now
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
