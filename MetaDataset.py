@@ -364,6 +364,7 @@ class MetaDataset(CachedDataset2):
     """
     This would get called at the end of the epoch.
     """
+    super(MetaDataset, self).finish_epoch()
     for _, dataset in self.datasets.items():
       assert isinstance(dataset, Dataset)
       dataset.finish_epoch()
