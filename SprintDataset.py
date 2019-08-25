@@ -628,7 +628,6 @@ class ExternSprintDataset(SprintDatasetBase):
     # This is our workaround. We check for it in self.run_inner().
     self.python_exit = False
     atexit.register(self._exit_handler)
-    self.init_seq_order()
 
   def finish_epoch(self):
     """
@@ -654,9 +653,9 @@ class ExternSprintDataset(SprintDatasetBase):
     :param bool wait_thread:
     """
     if self.child_pid:
-      expected_exit_status = 0 if not self.python_exit else None
+      expected_exit_status = 0 if wait_thread and not self.python_exit else None
       if self._join_child(wait=False, expected_exit_status=expected_exit_status) is False:  # Not yet terminated.
-        interrupt = not self.reached_final_seq_seen_all
+        interrupt = not self.reached_final_seq_seen_all or not wait_thread
         if interrupt:
           print("%s: interrupt child proc %s" % (self, self.child_pid), file=log.v5)
           os.kill(self.child_pid, signal.SIGKILL)
@@ -682,7 +681,7 @@ class ExternSprintDataset(SprintDatasetBase):
       except IOError:
         pass
       if self.child_pid:
-        self._join_child(wait=True, expected_exit_status=0)
+        self._join_child(wait=True, expected_exit_status=expected_exit_status)
         self.child_pid = None
 
   def _start_child(self, epoch):

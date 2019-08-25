@@ -981,7 +981,10 @@ class Engine(EngineBase):
           dataset_kwargs.update(Dataset.get_default_kwargs_eval(config=self.config))
         Dataset.kwargs_update_from_config(config=self.config, kwargs=dataset_kwargs)
         dataset = init_dataset(value, default_kwargs=dataset_kwargs)
-        assert hasattr(self, "%s_data" % key)
+        old_dataset = getattr(self, "%s_data" % key)
+        if old_dataset:
+          assert isinstance(old_dataset, Dataset)
+          old_dataset.finish_epoch()
         setattr(self, "%s_data" % key, dataset)
         updated_datasets[key] = dataset
 
