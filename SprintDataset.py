@@ -628,6 +628,9 @@ class ExternSprintDataset(SprintDatasetBase):
     # This is our workaround. We check for it in self.run_inner().
     self.python_exit = False
     atexit.register(self._exit_handler)
+    # We don't know about num_outputs yet, but we should.
+    # Thus we call Sprint and immediately exit it.
+    self._start_child(epoch=None, get_dim_only=True)
 
   def finish_epoch(self):
     """
@@ -664,7 +667,7 @@ class ExternSprintDataset(SprintDatasetBase):
           self.child_pid = None
       else:  # child process terminated
         self.child_pid = None
-      if wait_thread:
+      if wait_thread and self.reader_thread:
         # Load all remaining data so that the reader thread is not waiting in self.add_new_data().
         while self.is_less_than_num_seqs(self.expected_load_seq_start + 1):
           if self.reached_final_seq:  # this is set by the reader thread
@@ -684,10 +687,10 @@ class ExternSprintDataset(SprintDatasetBase):
         self._join_child(wait=True, expected_exit_status=expected_exit_status)
         self.child_pid = None
 
-  def _start_child(self, epoch):
+  def _start_child(self, epoch, get_dim_only=False):
     """
-    :param epoch:
-    :return:
+    :param int|None epoch:
+    :param bool get_dim_only:
     """
     assert self.child_pid is None
     assert self.reader_thread is None
@@ -737,10 +740,14 @@ class ExternSprintDataset(SprintDatasetBase):
       self._exit_child(wait_thread=False)
       raise Exception("%s Sprint init failed" % self)
 
-    self.reader_thread = Thread(target=self._reader_thread_proc, args=(pid, epoch,),
-                                name="%s reader thread" % self)
-    self.reader_thread.daemon = True
-    self.reader_thread.start()
+    if get_dim_only:
+      self._exit_child(wait_thread=False)
+
+    else:
+      self.reader_thread = Thread(target=self._reader_thread_proc, args=(pid, epoch),
+                                  name="%s reader thread" % self)
+      self.reader_thread.daemon = True
+      self.reader_thread.start()
 
   # noinspection PyMethodMayBeStatic
   def _pipe_open(self):
