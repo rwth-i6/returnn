@@ -634,6 +634,10 @@ class ExternSprintDataset(SprintDatasetBase):
     """
     Called at the end of the epoch.
     """
+    with self.lock:
+      # Reset epoch such that exiting the child will go smoothly.
+      super(ExternSprintDataset, self).init_seq_order(epoch=None, seq_list=None)
+    # Exit child, before we overwrite anything, such as new epoch or seq_list.
     self._exit_child(wait_thread=True)
     super(ExternSprintDataset, self).finish_epoch()
 
