@@ -7195,7 +7195,7 @@ class Loss(object):
     :rtype: tf.Tensor
     """
     assert self.loss_norm_factor is not None, "init not called?"
-    return self.loss_norm_factor
+    return tf.convert_to_tensor(self.loss_norm_factor)
 
   @classmethod
   def get_auto_output_layer_dim(cls, target_dim):
