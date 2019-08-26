@@ -1095,15 +1095,31 @@ class Engine(EngineBase):
     network.print_network_info()
     return network, updater
 
-  def maybe_init_new_network(self, net_desc):
+  def need_init_new_network(self, net_desc=None):
     """
-    :param dict[str,dict[str]] net_desc: layer name -> layer description dict
+    :param dict[str,dict[str]]|None net_desc: layer name -> layer description dict
+    :rtype: bool
     """
-    if self.network.layers_desc == net_desc:
-      return
-    from Util import dict_diff_str
-    print("reinit because network description differs. Diff:",
-          dict_diff_str(self.network.layers_desc, net_desc), file=log.v3)
+    if self.config.is_true("reinit_network_each_epoch"):
+      return True
+    if net_desc is None:
+      return False
+    return self.network.layers_desc != net_desc
+
+  def init_new_network(self, net_desc=None):
+    """
+    Reinitializes the network, and copies over the parameter from the current network.
+
+    :param dict[str,dict[str]]|None net_desc: layer name -> layer description dict. use existing by default
+    """
+    assert self.network
+    if net_desc is None:
+      net_desc = self.network.layers_desc
+      print("reinit network", file=log.v3)
+    else:
+      from Util import dict_diff_str
+      print("reinit because network description differs. Diff:",
+            dict_diff_str(self.network.layers_desc, net_desc), file=log.v3)
     old_network_params = self.network.get_params_serialized(self.tf_session)
     self._init_network(net_desc)
     if self.is_pretrain_epoch() and not self.pretrain.copy_output_layer:
@@ -1194,12 +1210,16 @@ class Engine(EngineBase):
       new_network_desc = self.pretrain.get_network_json_for_epoch(self.epoch)
       # Always update config, if needed, even if nothing changed.
       # This might trigger enforcing some learning rate, or so.
-      if self.network.layers_desc != new_network_desc:
+      if self.need_init_new_network(new_network_desc):
         # Early call of reset callbacks, which might trigger some HDF dump or other things.
         self.network.call_graph_reset_callbacks()
       self._maybe_update_config(net_desc=new_network_desc, epoch=self.epoch)
-      self.maybe_init_new_network(new_network_desc)
+      if self.need_init_new_network(new_network_desc):
+        self.init_new_network(new_network_desc)
       self.network.declare_train_params(**self.pretrain.get_train_param_args_for_epoch(self.epoch))
+    else:
+      if self.need_init_new_network():
+        self.init_new_network()
     if self.config.is_true("use_learning_rate_control_always"):
       self.learning_rate = self.learning_rate_control.get_learning_rate_for_epoch(self.epoch)
     elif self.is_pretrain_epoch():
