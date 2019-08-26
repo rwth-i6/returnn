@@ -49,7 +49,11 @@ class HDFDataset(CachedDataset):
 
   def __del__(self):
     for f in self.h5_files:
-      f.close()
+      # noinspection PyBroadException
+      try:
+        f.close()
+      except Exception:  # e.g. at shutdown. but does not matter
+        pass
     del self.h5_files[:]
     del self.file_seq_start[:]
 
