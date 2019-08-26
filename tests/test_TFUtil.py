@@ -469,6 +469,22 @@ def test_Data_copy_compatible_to_batch_feature_is_dynamic():
   assert_equal(t.get_size_dim_tag(0), dec.get_time_dim_tag())
 
 
+def test_Data_get_common_data_extra_static_spatial():
+  d1 = Data(name='t', shape=(None, 32, 128), dtype='float32', auto_create_placeholders=True)
+  d2 = Data(name='r', shape=(None, 32, 128), dtype='float32', auto_create_placeholders=True)
+  d2.get_size_dim_tag(0).declare_same_as(d1.get_size_dim_tag(0))
+  common = Data.get_common_data([d1, d2], warnings_out=sys.stdout)
+  assert d1.shape == common.shape
+
+
+def test_Data_get_common_data_extra2_static_spatial():
+  d1 = Data(name='t', shape=(None, 32, 32, 128), dtype='float32', auto_create_placeholders=True)
+  d2 = Data(name='r', shape=(None, 32, 32, 128), dtype='float32', auto_create_placeholders=True)
+  d2.get_size_dim_tag(0).declare_same_as(d1.get_size_dim_tag(0))
+  common = Data.get_common_data([d1, d2], warnings_out=sys.stdout)
+  assert d1.shape == common.shape
+
+
 def test_Data_copy_compatible_to_get_common_data_auto_feature_non_sparse():
   d1 = Data(name='t', shape=(None,), dtype='int32', batch_dim_axis=None, feature_dim_axis=None,
             auto_create_placeholders=True)  # placeholder for specific spatial dim-tag
