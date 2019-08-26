@@ -2173,7 +2173,7 @@ class Data(object):
       common = common.copy()
       # Note: we don't use copy_extend_with_beam because we don't want to create any ops in the TF graph at this point.
       common.beam_size = max([s.beam_size or 0 for s in sources])
-    is_equal_opts = dict(ignore_feature_dim=True)
+    is_equal_opts = dict(ignore_feature_dim=True, allow_same_spatial_dim=True)
     all_dim_tags, tags_dict = DimensionTag.get_all_dimension_tags(sources, is_equal_opts=is_equal_opts)
     # Note: We cannot compare len(all_dims_tags) to len(shape) as e.g. shape (B,1,1,D) would have only 3 dim tags.
     largest_dim_tags, _ = DimensionTag.get_all_dimension_tags([common], is_equal_opts=is_equal_opts)
