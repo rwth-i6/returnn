@@ -384,6 +384,48 @@ def test_activation_layer_net_construct_two_out():
     assert_equal(v.tolist(), [[[0, 0], [0, 0], [2, 2]]])
 
 
+def test_cnn_building_block():
+  with make_scope() as session:
+    num_inputs = 192
+    channel_num = 32
+    feature_dim = 6
+    filters = 32
+    filter_size = (3, 3)
+    config = Config()
+    config.update({
+      "num_inputs": num_inputs,
+      "num_outputs": filters,
+      "network": {
+        "split": {"class": "split_dims", "axis": "f", "dims": (channel_num, feature_dim), "from": ["data"]},
+        "swap_axes": {"class": "swap_axes", "axis1": "s:1", "axis2": "f", "from": ["split"]},
+        "c1": {"class": "conv", "n_out": filters, "filter_size": filter_size, "auto_use_channel_first": False,
+               "strides": (1, 1), "dilation_rate": (1, 1), "padding": "SAME", "activation": None, "with_bias": False,
+               "from": "swap_axes"},
+        "bn1": {"class": "batch_norm", "from": "c1"},
+        "y1": {"class": "activation", "activation": "relu", "batch_norm": False, "from": "bn1"},
+        "c2": {"class": "conv", "n_out": filters, "filter_size": filter_size, "auto_use_channel_first": False,
+               "strides": (1, 1), "dilation_rate": (1, 1), "padding": "SAME", "activation": None, "with_bias": False,
+               "from": "y1"},
+        "p": {"class": "combine", "kind": "add", "from": ["c2", "swap_axes"]},
+        "bn2": {"class": "batch_norm", "from": "p"},
+        "y2": {"class": "activation", "activation": "relu", "batch_norm": False, "from": "bn2"},
+
+        "out_pool": {"class": "reduce", "mode": "avg", "axes": "s:1", "keep_dims": False, "from": "y2"},
+        "output": {"class": "copy", "from": ["out_pool"], "is_output_layer": True}
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+    session.run(tf.global_variables_initializer())
+    out = network.layers["output"].output.placeholder
+    n_batch = 5
+    seq_len = 10
+    seq_lens = numpy.array([10, 10, 10, 10, 10], dtype=numpy.int32)
+    feed = {network.extern_data.get_default_input_data().placeholder:
+            numpy.random.rand(n_batch, seq_len, num_inputs).astype('f'),
+            network.extern_data.get_default_input_data().size_placeholder[0]: seq_lens}
+    v = session.run(out, feed_dict=feed)
+
+
 def test_combine_layer_net_construct():
   with make_scope() as session:
     net_dict = {
