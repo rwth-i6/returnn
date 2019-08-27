@@ -912,16 +912,13 @@ def _forward(segment_name, features):
   # Features are in Sprint format (feature,time).
   num_time = features.shape[1]
   assert features.shape == (InputDim, num_time)
-  time_a = time.time()
   dataset, seq_idx = features_to_dataset(features=features, segment_name=segment_name)
-  time_b = time.time()
 
   if BackendEngine.is_theano_selected():
     # Prepare data for device.
     device = engine.devices[0]
     success = assign_dev_data_single_seq(device, dataset=dataset, seq=seq_idx)
     assert success, "failed to allocate & assign data for seq %i, %s" % (seq_idx, segment_name)
-    time_c = time.time()
 
     # Do the actual forwarding and collect result.
     device.run("extract")
@@ -935,7 +932,6 @@ def _forward(segment_name, features):
 
   else:
     raise NotImplementedError("unknown backend engine")
-  time_d = time.time()
   # If we have a sequence training criterion, posteriors might be in format (time,seq|batch,emission).
   if posteriors.ndim == 3:
     assert posteriors.shape == (num_time, 1, OutputDim * MaxSegmentLength)
@@ -946,8 +942,7 @@ def _forward(segment_name, features):
   posteriors = posteriors.transpose()
   assert posteriors.shape == (OutputDim * MaxSegmentLength, num_time)
   stats = (numpy.min(posteriors), numpy.max(posteriors), numpy.mean(posteriors), numpy.std(posteriors))
-  print("posteriors min/max/mean/std:", stats, "time:", time.time() - start_time, time.time() - time_a,
-        time.time() - time_b, time.time() - time_c, time.time() - time_d)
+  print("posteriors min/max/mean/std:", stats, "time:", time.time() - start_time)
   if numpy.isinf(posteriors).any() or numpy.isnan(posteriors).any():
     print("posteriors:", posteriors)
     debug_feat_fn = "/tmp/crnn.pid%i.sprintinterface.debug.features.txt" % os.getpid()
