@@ -54,6 +54,7 @@ class Dataset(object):
     set_or_remove("seq_ordering", config.value("batching", None))
     set_or_remove("shuffle_frames_of_nseqs", config.int('shuffle_frames_of_nseqs', 0) or None)
     set_or_remove("min_chunk_size", config.int('min_chunk_size', 0) or None)
+    set_or_remove("chunking_variance", config.float("chunking_variance", 0))
 
   @staticmethod
   def get_default_kwargs_eval(config):
@@ -85,7 +86,7 @@ class Dataset(object):
                window=1, context_window=None, chunking=None,
                seq_ordering='default', partition_epoch=None, repeat_epoch=None,
                seq_list_filter_file=None, unique_seq_tags=False,
-               shuffle_frames_of_nseqs=0, min_chunk_size=0,
+               shuffle_frames_of_nseqs=0, min_chunk_size=0, chunking_variance=0,
                estimated_num_seqs=None):
     """
     :param str name: e.g. "train" or "eval"
@@ -128,6 +129,7 @@ class Dataset(object):
     self._num_seqs = 0
     self._estimated_num_seqs = estimated_num_seqs
     self.min_chunk_size = min_chunk_size
+    self.chunking_variance = chunking_variance
     if isinstance(chunking, str):
       if ":" in chunking:
         chunking = tuple(map(int, chunking.split(":")))
@@ -847,8 +849,10 @@ class Dataset(object):
       chunk_size = self.chunk_size
     if chunk_step is None:
       chunk_step = self.chunk_step
-    chunk_size = NumbersDict(chunk_size)
-    chunk_step = NumbersDict(chunk_step)
+
+    chunk_size_org = NumbersDict(chunk_size)
+    chunk_step_org = NumbersDict(chunk_step)
+
     s = 0
     while self.is_less_than_num_seqs(s):
       length = self.get_seq_length(s)
@@ -863,6 +867,14 @@ class Dataset(object):
           if chunk_step[default_key] == 0:  # allow some keys with zero chunk-step
             assert chunk_step.max_value() > 0
             default_key = [key for key in sorted(used_data_keys) if chunk_step[key] > 0][0]
+          if self.chunking_variance > 0:
+            chunking_variance = 1. - self.rnd_seq_drop.random() * self.chunking_variance
+            for k in chunk_step.keys():
+              chunk_size[k] = max(chunk_size_org[k] * chunking_variance, 1)
+              chunk_step[k] = max(chunk_step_org[k] * chunking_variance, 1)
+          else:
+            chunk_size = chunk_size_org
+            chunk_step = chunk_step_org
         assert chunk_step[default_key] > 0
         t = NumbersDict.constant_like(0, numbers_dict=length)
         # There are usually the 'data' (input) and 'classes' (targets) data-keys in `length` but there can be others.
