@@ -3441,7 +3441,7 @@ class MergeDimsLayer(_ConcatInputLayer):
         x, shape=shape[:i0] + [tf.reduce_prod(shape[i0:i1])] + shape[i1:])
     if n_out is not None and not self.output.sparse:
       from TFUtil import check_input_dim
-      x = check_input_dim(x, axis=-1, dim=n_out)
+      x = check_input_dim(x, axis=self.output.feature_dim_axis, dim=n_out)
     self.output.placeholder = x
     self.output.size_placeholder = self._get_output_sizes(merge_axes=axes)
 
