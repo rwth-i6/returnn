@@ -3,9 +3,12 @@
 
 from __future__ import print_function
 
-
+import os
+#os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
 import logging
 logging.getLogger('tensorflow').disabled = True
+#logging.getLogger("tensorflow").setLevel(logging.INFO)
+
 import tensorflow as tf
 import sys
 sys.path += ["."]  # Python 3 hack
@@ -2873,6 +2876,190 @@ def test_softmax_cross_entropy_over_size_gradient():
         raise Exception("got nan")
       assert loss < last_loss or 0.0 == loss == last_loss  # this must always improve
       last_loss = loss
+
+
+def test_FetchHelper_simple():
+  y = tf.sqrt(42.)
+  v = session.run(y)
+  numpy.testing.assert_almost_equal(v, numpy.sqrt(42.), decimal=5)
+
+  another_debug_test = tf.Print(y.op.inputs[0], ["debug print:"] + list(y.op.inputs))
+  # https://stackoverflow.com/questions/57707445/how-to-add-control-input-to-an-op-after-it-was-run-by-a-session
+  # add_control_input(y.op, another_debug_test.op)
+  # y.op._add_control_input(another_debug_test.op)
+  from tensorflow.contrib import graph_editor
+  y = graph_editor.graph_replace(target_ts=y, replacement_ts={y.op.inputs[0]: another_debug_test}, reuse_dst_scope=True)
+
+  fetch_helper = FetchHelper(y.op.inputs[0], verbose_stream=sys.stdout)
+  y = FetchHelper.copy_graph_replace_tensors(y, [fetch_helper])
+  session.run(y)
+  assert fetch_helper.callback_count == 1
+  numpy.testing.assert_almost_equal(fetch_helper.most_recent_value, 42.)
+
+
+def test_FetchHelper_loop():
+  N = 3
+  class Loop:
+    def body(self, i, x):
+      self.y = x / 2.
+      return i + 1, self.y
+    def cond(self, i, x):
+      return tf.less(i, N)
+  loop = Loop()
+  _, y = tf.while_loop(cond=loop.cond, body=loop.body, loop_vars=(0, 42.))
+  session.run(y)  # first run, to trigger https://stackoverflow.com/questions/57707445/
+
+  from tensorflow.contrib import graph_editor
+  ops = graph_editor.get_backward_walk_ops([y.op], inclusive=True, control_inputs=True)
+  _, info = graph_editor.copy(ops, reuse_dst_scope=True)
+  assert isinstance(info, graph_editor.TransformerInfo)
+  y = info.transformed(y)
+
+  fetch_helper = FetchHelper(info.transformed(loop.y.op.inputs[0]), verbose_stream=sys.stdout)
+  fetch_helper.add_to_control_inputs(info.transformed(loop.y.op))
+
+  v = session.run(y)
+  numpy.testing.assert_almost_equal(v, 42. / (2. ** N), decimal=5)
+  assert fetch_helper.callback_count == N
+  numpy.testing.assert_almost_equal(fetch_helper.most_recent_value, v * 2.)
+
+
+def test_FetchHelper_loop_invalid():
+  from TFNetwork import help_on_tf_exception  # not needed for the test, but helpful for further debug output
+  have_gpu = is_gpu_available()
+  print("Have GPU:", have_gpu)
+  graph = tf.Graph()
+  with graph.as_default():
+    session = tf.Session()
+    with session:
+      with tf.device("/gpu:0" if have_gpu else "/cpu:0"):
+        N = 3
+        class Loop:
+          def body(self, i, x):
+            target_shape = tf.convert_to_tensor([i + 1, 2])
+            with tf.device("/cpu:0"):
+              target_shape = tf.Print(target_shape, ["target shape:", target_shape])
+            self.y = tf.reshape(x / 2., target_shape)
+            with tf.device("/cpu:0"):
+              y = tf.Print(self.y, ["i:", i, "y:", self.y, "shape:", tf.shape(self.y)])
+            return i + 1, y
+          def cond(self, i, x):
+            return tf.less(i, N)
+        loop = Loop()
+        _, y = tf.while_loop(
+          cond=loop.cond, body=loop.body, loop_vars=(0, tf.convert_to_tensor([[42., 42.]])),
+          shape_invariants=(tf.TensorShape(()), tf.TensorShape((None, None))))
+        assert isinstance(y, tf.Tensor)
+
+      print("Run a first time now.")
+      try:
+        v = session.run(y)
+      except tf.errors.OpError as exc:
+        print("Got TF exception (kind of expected).")
+        print(exc)
+        help_on_tf_exception(session=session, exception=exc, fetches=y)
+        if exc.op is not loop.y.op:
+          print("Error, unexpected: %r vs %r" % (exc.op, loop.y.op))
+          raise
+      else:
+        assert False, "we should have gotten a TF exception, but we got: %r" % (v,)
+
+      y, fetch_helpers, target_op_transformed = FetchHelper.copy_graph(
+        y, target_op=loop.y.op, fetch_helper_tensors=list(loop.y.op.inputs), verbose_stream=sys.stdout)
+
+      print("Now run a second time, but now with fetch helpers added.")
+      try:
+        v = session.run(y)
+      except tf.errors.OpError as exc:
+        print("Got TF exception (kind of expected).")
+        print(exc)
+        # help_on_tf_exception(session=session, exception=exc, fetches=y)  # Broken now?
+        if exc.op is not target_op_transformed:
+          print("Error, unexpected: %r vs %r" % (exc.op, loop.y.op))
+          raise
+      else:
+        assert False, "we should have gotten a TF exception, but we got: %r" % (v,)
+
+      print("Fetches:")
+      for input_t, fetch_helper in zip(loop.y.op.inputs, fetch_helpers):
+        print("  %r: %r" % (input_t, fetch_helper.most_recent_value))
+        assert fetch_helper.callback_count >= 1
+
+
+def test_FetchHelper_loop_invalid_vars_switch():
+  step = tf.get_variable("step", shape=(), dtype=tf.int64, initializer=tf.zeros_initializer(), trainable=False)
+  v = tf.get_variable(
+    name="var_accum_grad", shape=(), dtype=tf.float32,
+    initializer=tf.zeros_initializer(), trainable=False)
+  session.run(tf.global_variables_initializer())
+
+  v = tf.cond(
+    tf.less_equal(tf.mod(step, 2), 0),
+    lambda: tf.assign(v, 2.0),
+    lambda: tf.assign_add(v, 3.0))
+  v = tf.identity(v)
+  print("v:", v, v.dtype, v.op._control_flow_context)
+
+  N = 3
+  class Loop:
+    def body(self, i, x):
+      target_shape = tf.convert_to_tensor([i + 1, 2 + tf.cast(v, tf.int32)])
+      with tf.device("/cpu:0"):
+        target_shape = tf.Print(target_shape, ["target shape:", target_shape])
+      self.y = tf.reshape(x / 2., target_shape)
+      with tf.device("/cpu:0"):
+        y = tf.Print(self.y, ["i:", i, "y:", self.y, "shape:", tf.shape(self.y)])
+      return i + 1, y
+    def cond(self, i, x):
+      return tf.less(i, N)
+  loop = Loop()
+  _, y = tf.while_loop(
+    cond=loop.cond, body=loop.body, loop_vars=(0, tf.convert_to_tensor([[42., 42.]])),
+    shape_invariants=(tf.TensorShape(()), tf.TensorShape((None, None))))
+  assert isinstance(y, tf.Tensor)
+
+  try:
+    v = session.run(y)
+  except tf.errors.OpError as exc:
+    print("Got TF exception (kind of expected).")
+    if exc.op is not loop.y.op:
+      print("Error, unexpected: %r vs %r" % (exc.op, loop.y.op))
+      raise
+  else:
+    assert False, "we should have gotten a TF exception, but we got: %r" % (v,)
+
+  op = loop.y.op
+  stop_at_ts = []
+  for op_ in op.graph.get_operations():
+    assert isinstance(op_, tf.Operation)
+    if op_._control_flow_context:
+      continue
+    for x in list(op_.inputs) + list(op_.outputs) + list(op.control_inputs):
+      assert isinstance(x, tf.Tensor)
+      # noinspection PyProtectedMember
+      if x.dtype._is_ref_dtype:
+        print("add stop:", x)
+        stop_at_ts.append(x)  # and also should not copy any variables/refs
+
+  y, fetch_helpers, target_op_transformed = FetchHelper.copy_graph(
+    y, target_op=loop.y.op, fetch_helper_tensors=list(loop.y.op.inputs), stop_at_ts=stop_at_ts,
+    verbose_stream=sys.stdout)
+
+  print("Now run a second time, but now with fetch helpers added.")
+  try:
+    v = session.run(y)
+  except tf.errors.OpError as exc:
+    print("Got TF exception (kind of expected).")
+    if exc.op is not target_op_transformed:
+      print("Error, unexpected: %r vs %r" % (exc.op, loop.y.op))
+      raise
+  else:
+    assert False, "we should have gotten a TF exception, but we got: %r" % (v,)
+
+  print("Fetches:")
+  for input_t, fetch_helper in zip(loop.y.op.inputs, fetch_helpers):
+    print("  %r: %r" % (input_t, fetch_helper.most_recent_value))
+    assert fetch_helper.callback_count >= 1
 
 
 if __name__ == "__main__":

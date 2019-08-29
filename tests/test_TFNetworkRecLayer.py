@@ -1867,6 +1867,7 @@ def test_rec_layer_rnn_train_and_search():
       except Exception as exc:
         print("Exception happened:", str(exc).splitlines()[0])
         help_on_tf_exception(
+          session=session,
           exception=exc, fetches=out_layer.output.placeholder, feed_dict=feed_dict, meta_step_info=meta_step_info,
           extern_data=data_provider.extern_data)
         raise

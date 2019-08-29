@@ -2203,52 +2203,138 @@ class LayerNotFound(Exception):
   """
 
 
-def help_on_tf_exception(exception, fetches, feed_dict, meta_step_info, extern_data, file=sys.stdout):
+def _help_data_or_array(value):
   """
+  :param numpy.ndarray|bool|object value:
+  :return: (info,(min,max))
+  :rtype: (str,(int|float,int|float))
+  """
+  import numpy
+  if isinstance(value, numpy.ndarray):
+    info = "shape %s, dtype %s" % (value.shape, value.dtype)
+    if value.size > 0:
+      v_minmax = numpy.min(value), numpy.max(value)
+      info += ", min/max %s/%s" % v_minmax
+      if value.dtype.kind == "f":
+        info += ", mean/stddev %s/%s" % (numpy.mean(value), numpy.std(value))
+      if value.ndim <= 1:
+        info += ", (%s)" % numpy.array2string(value)
+    else:
+      v_minmax = 0, 0
+      info += ", EMPTY"
+  elif isinstance(value, bool):
+    v_minmax = 0, 1
+    info = "bool(%r)" % (value,)
+  elif value is None:
+    v_minmax = -1, -1
+    info = "None"
+  else:
+    v_minmax = -1, -1
+    info = "type %r" % type(value)
+  return info, v_minmax
+
+
+def help_on_tf_exception(
+  session, exception, fetches, feed_dict=None,
+  meta_step_info=None, extern_data=None,
+  file=sys.stdout):
+  """
+  Generic debugging helper, on any TF exception (or even any other exception as well).
+  Will try to provide as much helpful context information as possible.
+  (This is not in :mod:`TFUtil` because it depends on `ExternData`, which is only defined here.)
+
+  :param tf.Session session:
   :param tf.errors.OpError|BaseException exception:
   :param tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor]|None fetches:
-  :param dict[tf.Tensor,numpy.ndarray] feed_dict:
-  :param dict[str] meta_step_info:
-  :param ExternData extern_data:
-  :param typing.IO[str] file:
+  :param dict[tf.Tensor,numpy.ndarray]|None feed_dict:
+  :param dict[str]|None meta_step_info:
+  :param ExternData|None extern_data:
+  :param typing.IO[str]|io.TextIOBase|io.StringIO file:
   """
   from pprint import pprint
-  import numpy
   import traceback
   from TFUtil import get_base_name, find_ops_with_tensor_input, find_ops_path_output_to_input
   from tensorflow.python.util import nest
   if fetches is not None:
     fetches = nest.flatten(fetches)
   if isinstance(exception, tf.errors.OpError):
-    print("Failing op:", repr(exception.op), file=file)
-    if exception.op and exception.op.type == "Placeholder":
-      using_ops = find_ops_with_tensor_input(exception.op.outputs[0], fetches=fetches)
+    op = exception.op
+    print("Failing op:", repr(op), file=file)
+    assert op is None or isinstance(op, tf.Operation)
+    if op and op.type == "Placeholder":
+      # Likely this placeholder is not feeded, but used somewhere.
+      # We assume that the usage of it is incorrect.
+      # Try to give some hints where it was (incorrectly) used.
+      using_ops = find_ops_with_tensor_input(op.outputs[0], fetches=fetches)
       print("Used by:", repr(using_ops), file=file)
-      for op in using_ops:
-        print("".join(traceback.format_list(op.traceback)), file=file)
+      for op_ in using_ops:
+        print("".join(traceback.format_list(op_.traceback)), file=file)
       if fetches:
-        input_to_output_ops = find_ops_path_output_to_input(exception.op.outputs[0], fetches=fetches)
+        input_to_output_ops = find_ops_path_output_to_input(op.outputs[0], fetches=fetches)
         print("Input to output:", file=file)
         pprint(input_to_output_ops, stream=file)
+    if op and op.inputs:
+      # The exception occurred in the op, but that means that all the inputs to the op were correctly calculated.
+      # It is probably helpful to calculate these again, and show their shape.
+      try:
+        # Note: In principle, we would just do `input_values = session.run(list(op.inputs), feed_dict=feed_dict)`.
+        # However, this will not work if the op is inside a loop.
+        # Thus, we use this workaround to fetch them nonetheless.
+        # First find some value to fetch.
+        assert fetches
+        input_to_output_ops = find_ops_path_output_to_input(op.inputs[0], fetches=fetches)
+        assert input_to_output_ops
+        debug_fetch = None
+        for x in input_to_output_ops:
+          # noinspection PyProtectedMember
+          if x._control_flow_context is None or x.type == "Exit":
+            debug_fetch = x
+            break
+        assert debug_fetch is not None, "ops: %r, fetches: %r" % (input_to_output_ops, fetches)
+        stop_at_ts = list(feed_dict.keys() if feed_dict else ())  # should not copy these
+        for op_ in op.graph.get_operations():
+          assert isinstance(op_, tf.Operation)
+          # noinspection PyProtectedMember
+          if op_._control_flow_context:
+            continue
+          for x in list(op_.inputs) + list(op_.outputs) + list(op.control_inputs):
+            assert isinstance(x, tf.Tensor)
+            # noinspection PyProtectedMember
+            if x.dtype._is_ref_dtype:
+              stop_at_ts.append(x)  # and also should not copy any variables/refs
+        from TFUtil import FetchHelper
+        debug_fetch, fetch_helpers, op_copied = FetchHelper.copy_graph(
+          debug_fetch, target_op=op, fetch_helper_tensors=list(op.inputs),
+          stop_at_ts=stop_at_ts,
+          verbose_stream=file)
+        try:
+          print("Execute again to debug the op inputs...", file=file)
+          session.run(debug_fetch, feed_dict=feed_dict)
+        except tf.errors.OpError as sub_exc:
+          # We expect to get the same exception as the original one. The same op likely still fails.
+          if sub_exc.op is op_copied:
+            pass  # As expected.
+          else:
+            print("We tried to fetch the op inputs (%r) but got another exception:" % (list(op.inputs),), file=file)
+            print(sub_exc, file=file)
+            print("Maybe we still get some values via the fetch helpers, though...", file=file)
+      except Exception as sub_exc:
+        print("We tried to fetch the op inputs (%r) but got another exception:" % (list(op.inputs),), file=file)
+        print(sub_exc, file=file)
+        import better_exchook
+        better_exchook.better_exchook(*sys.exc_info(), autodebugshell=False, file=file)
+      else:
+        print("Op inputs:", file=file)
+        for input_t, fetch_helper in zip(op.inputs, fetch_helpers):
+          info, _ = _help_data_or_array(fetch_helper.most_recent_value)
+          print("  %r: %s" % (input_t, info), file=file)
   print("Step meta information:", file=file)
   pprint(meta_step_info, stream=file)
   print("Feed dict:", file=file)
   if isinstance(feed_dict, dict):
     for key, value in sorted(feed_dict.items(), key=lambda item: item[0].name):
       assert isinstance(key, tf.Tensor)
-      if isinstance(value, numpy.ndarray):
-        info = "shape %s, dtype %s" % (value.shape, value.dtype)
-        if value.size > 0:
-          v_minmax = numpy.min(value), numpy.max(value)
-          info += ", min/max %s/%s" % v_minmax
-          if value.dtype.kind == "f":
-            info += ", mean/stddev %s/%s" % (numpy.mean(value), numpy.std(value))
-        else:
-          v_minmax = 0, 0
-          info += ", EMPTY"
-      else:
-        v_minmax = -1, -1
-        info = "type %r" % type(value)
+      info, v_minmax = _help_data_or_array(value)
       data = None
       if key.name.startswith("extern_data/"):
         data_key = get_base_name(key)
@@ -2259,7 +2345,10 @@ def help_on_tf_exception(exception, fetches, feed_dict, meta_step_info, extern_d
       if data and data.sparse:
         if v_minmax[0] < 0 or v_minmax[1] >= data.dim:
           print("  WARNING, invalid label for data", data, file=file)
+  elif feed_dict is None:
+    print("None", file=file)
   else:
+    print("(unexpected type %r)" % type(feed_dict), file=file)
     pprint(feed_dict, stream=file)
 
 

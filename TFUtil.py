@@ -8727,3 +8727,142 @@ def compute_sampled_logits(weights,
     ], 1)
 
     return out_logits, out_targets
+
+
+class FetchHelper:
+  """
+  ``session.run(tensor)`` does not work if ``tensor`` is inside a loop (``tf.while_loop``) (or ``tf.cond``).
+  You would get an error like this::
+
+    Operation '...' has been marked as not fetchable.
+
+  This class is a helper to work around that. It will add an op to the graph, which stores the most recent value.
+  To get this executed automatically, you likely want to add is as a control dependency to another op.
+  Use :func:`add_to_control_inputs` for that, or better :func:`copy_graph_replace_tensors`,
+  or better :func:`copy_graph`.
+  """
+
+  def __init__(self, tensor, verbose_stream=None):
+    """
+    :param tf.Tensor tensor:
+    :param typing.IO[str]|None verbose_stream:
+    """
+    self.tensor = tensor
+    self.verbose_stream = verbose_stream
+    self.most_recent_value = None
+    self.callback_count = 0
+
+    with same_control_flow_ctx(tensor):
+      with tf.device("/cpu:0"):
+        dummy_out, = tf.py_func(
+          self._callback,
+          [tensor],
+          [tf.int64],  # dummy return value. will not be used
+          name="FetchHelper_%s" % os.path.basename(tensor.op.name))
+        assert isinstance(dummy_out, tf.Tensor)
+        self.fetch_op = dummy_out.op
+
+      with tf.colocate_with(tensor.op):
+        with tf.control_dependencies([self.fetch_op]):
+          self.identity_with_dep = tf.identity(tensor)
+
+  def __repr__(self):
+    return "%s(%r)" % (self.__class__.__name__, self.tensor)
+
+  @classmethod
+  def copy_graph(cls, fetches, target_op, fetch_helper_tensors, stop_at_ts=(), verbose_stream=None):
+    """
+    :param tf.Tensor|list[tf.Tensor]|T fetches:
+    :param tf.Operation target_op: will add the fetch helpers as control dependencies to this op
+    :param list[tf.Tensor] fetch_helper_tensors:
+    :param typing.IO[str]|None verbose_stream:
+    :param typing.Iterable[tf.Tensor] stop_at_ts: iterable of tensors at which the graph walk stops.
+    :return: copied fetches, fetch helpers, transformed target op
+    :rtype: (tf.Tensor|list[tf.Tensor]|T, list[FetchHelper], tf.Operation)
+    """
+    from tensorflow.python.util import nest
+    fetches_flat = nest.flatten(fetches)
+    from tensorflow.contrib import graph_editor
+    ops = graph_editor.get_backward_walk_ops(
+      seed_ops=[x.op if isinstance(x, tf.Tensor) else x for x in fetches_flat],
+      stop_at_ts=stop_at_ts,
+      inclusive=True, control_inputs=True)
+    sgv = graph_editor.make_view(ops)
+    copier = graph_editor.Transformer()
+    copier.transform_external_input_handler = lambda info_, t: t
+    _, info = copier(sgv, dst_graph=sgv.graph, dst_scope="", reuse_dst_scope=True)
+    # _, info = graph_editor.copy(ops, reuse_dst_scope=True)
+    assert isinstance(info, graph_editor.TransformerInfo)
+    target_op_transformed = info.transformed(target_op)
+    fetch_helpers = []
+    for x in fetch_helper_tensors:
+      fetch_helper = FetchHelper(tensor=info.transformed(x), verbose_stream=verbose_stream)
+      fetch_helper.add_to_control_inputs(target_op_transformed)
+      fetch_helpers.append(fetch_helper)
+    fetches_flat_transformed = [info.transformed(x) for x in fetches_flat]
+    return nest.pack_sequence_as(fetches, fetches_flat_transformed), fetch_helpers, target_op_transformed
+
+  @classmethod
+  def copy_graph_replace_tensors(cls, fetches, fetch_helpers):
+    """
+    :param tf.Tensor|list[tf.Tensor] fetches:
+    :param list[FetchHelper] fetch_helpers:
+    :return: as fetches
+    :rtype: tf.Tensor|list[tf.Tensor]
+    """
+    from tensorflow.contrib import graph_editor
+    fetches_copied = graph_editor.graph_replace(
+      target_ts=fetches,
+      replacement_ts={fetch_helper.tensor: fetch_helper.identity_with_dep for fetch_helper in fetch_helpers},
+      reuse_dst_scope=True)
+    return fetches_copied
+
+  def add_to_control_inputs(self, other_op):
+    """
+    Note: This will not work if you already did a ``session.run``.
+    See `here <https://stackoverflow.com/questions/57707445/>`__.
+    Use :func:`copy_graph_replace_tensors` instead. Or better :func:`copy_graph`.
+
+    :param tf.Operation other_op:
+    """
+    add_control_input(other_op, self.fetch_op)
+
+  @classmethod
+  def _format_value(cls, value):
+    """
+    :param numpy.ndarray|object value:
+    :rtype: str
+    """
+    import numpy
+    if isinstance(value, numpy.ndarray):
+      info = "shape %s, dtype %s" % (value.shape, value.dtype)
+      if value.size > 0:
+        v_minmax = numpy.min(value), numpy.max(value)
+        info += ", min/max %s/%s" % v_minmax
+        if value.dtype.kind == "f":
+          info += ", mean/stddev %s/%s" % (numpy.mean(value), numpy.std(value))
+        if value.ndim <= 1:
+          info += ", (%s)" % numpy.array2string(value)
+      else:
+        info += ", EMPTY"
+    elif isinstance(value, (numpy.floating, numpy.integer, float, int, bool)):
+      info = "%s(%s)" % (type(value).__name__, value)
+    elif value is None:
+      info = "None"
+    else:
+      info = "type %r" % type(value)
+    return info
+
+  def _callback(self, value):
+    """
+    :param numpy.ndarray value:
+    :return: dummy value
+    :rtype: int
+    """
+    if self.verbose_stream:
+      print(
+        "FetchHelper(%i): %r = %s" % (self.callback_count, self.tensor, self._format_value(value)),
+        file=self.verbose_stream)
+    self.most_recent_value = value
+    self.callback_count += 1
+    return 0
