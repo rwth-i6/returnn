@@ -23,6 +23,8 @@ TFUtil.debug_register_better_repr()
 
 log.initialize(verbosity=[5])
 
+print("TF version:", tf.__version__)
+
 
 @contextlib.contextmanager
 def make_scope():
@@ -811,6 +813,25 @@ def test_SoftmaxOverSpatialLayer_start():
     cond = numpy.broadcast_to(cond, [n_batch, n_dim, n_time])  # (B, D, T)
     assert_equal(cond.sum(), n_dim*start_idxs.sum())  # check num of conds
     numpy.testing.assert_array_equal(out_np[cond], 0)
+
+
+def test_SplitDimsLayer_simple_feat():
+  n_batch, n_time, n_in = 7, 3, 20
+  config = Config({
+    "extern_data": {"data": {"dim": n_in}},
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {"class": "split_dims", "axis": "f", "dims": (-1, 5)}})
+    out_t = net.get_default_output_layer().output.placeholder
+    assert out_t.shape.as_list() == [None, None, 4, 5]
+    in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_time, n_in))
+    out_v = session.run(out_t, feed_dict={net.extern_data.data["data"].placeholder: in_v})
+    assert isinstance(out_v, numpy.ndarray)
+    assert out_v.shape == (n_batch, n_time, 4, 5)
+    numpy.testing.assert_almost_equal(out_v, in_v.reshape(out_v.shape))
 
 
 def test_SplitDimsLayer_resolve_dims():
