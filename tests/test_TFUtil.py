@@ -1143,6 +1143,16 @@ def test_loop_var_creation():
   session.run(loop)
 
 
+def test_dot_simple():
+  n_time, n_batch = 7, 11
+  n_in, n_out = 3, 5
+  weights = tf.random_normal((n_in, n_out))
+  x = tf.random_normal((n_time, n_batch, n_in))
+  y = dot(x, weights)
+  y.set_shape((n_time, n_batch, n_out))
+  session.run(y)
+
+
 def test_gather_nd_grad():
   # https://github.com/tensorflow/tensorflow/issues/9406
   # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/gather_nd_op.cc
