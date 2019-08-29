@@ -3890,7 +3890,7 @@ def tile_transposed(x, axis, multiples):
   with tf.name_scope("tile_transposed"):
     ndim = x.get_shape().ndims
     assert ndim is not None
-    shape = tf.shape(x)
+    shape = get_shape(x)
     x = expand_dims_unbroadcast(x, axis=axis + 1, dim=multiples)  # new axis after `axis`
     return tf.reshape(
       x,
