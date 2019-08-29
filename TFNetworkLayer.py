@@ -1225,7 +1225,8 @@ class LayerBase(object):
         assert isinstance(src, LayerBase)
         src_output = src.output.copy()
         if src_output.placeholder is not None:
-          zeroed_src_shape = tf.shape(src_output.placeholder)
+          from TFUtil import get_shape
+          zeroed_src_shape = get_shape(src_output.placeholder)
           zeroed_src_shape = [
             zeroed_src_shape[i] for i in range(src_output.batch_ndim)]  # type: typing.List[typing.Union[tf.Tensor,int]]
         else:
