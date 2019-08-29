@@ -3584,6 +3584,10 @@ class SplitDimsLayer(_ConcatInputLayer):
     old_shape = get_shape(data.placeholder)
     axis = data.get_axis_from_description(axis)
     new_shape = old_shape[:axis] + list(dims) + old_shape[axis + 1:]
+    assert len(new_shape) == len(self.output.batch_shape)
+    for i in range(len(new_shape)):
+      if new_shape[i] == -1 and self.output.batch_shape[i] is not None:
+        new_shape[i] = self.output.batch_shape[i]
     self.output.placeholder = tf.reshape(data.placeholder, shape=new_shape)
     self.output.size_placeholder = {
       (i if (data.get_batch_axis(i) < axis) else i + len(dims) - 1): v
