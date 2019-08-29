@@ -1338,7 +1338,7 @@ def test_conv_window_merge_dims():
     'flatten_conv': {'axes': 'except_time',
                      'class': 'merge_dims',
                      'from': ['conv_2'],
-                     'n_out': 12},
+                     'n_out': 48},
     'window_1': {'class': 'window',
                  'from': ['flatten_conv'],
                  'window_size': 17},
