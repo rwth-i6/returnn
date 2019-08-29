@@ -3438,8 +3438,13 @@ class MergeDimsLayer(_ConcatInputLayer):
       shape = get_shape(x)
       i0 = merge_target_axis
       i1 = i0 + len(axes)
+      if all([isinstance(d, int) for d in shape[i0:i1]]):
+        import numpy
+        res_dim = numpy.prod(shape[i0:i1])
+      else:
+        res_dim = tf.reduce_prod(shape[i0:i1])
       x = tf.reshape(
-        x, shape=shape[:i0] + [tf.reduce_prod(shape[i0:i1])] + shape[i1:])
+        x, shape=shape[:i0] + [res_dim] + shape[i1:])
     if n_out is not None and not self.output.sparse:
       from TFUtil import check_input_dim
       x = check_input_dim(x, axis=self.output.feature_dim_axis, dim=n_out)

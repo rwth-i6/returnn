@@ -952,6 +952,25 @@ def test_MergeDimsLayer_SplitBatchTimeLayer_time_major():
     numpy.testing.assert_almost_equal(input_data, output_data)
 
 
+def test_MergeDimsLayer_simple_feat():
+  n_batch, n_time, n_in1, n_in2 = 7, 3, 10, 32
+  config = Config({
+    "extern_data": {"data": {"shape": (None, n_in1, n_in2)}},
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {"class": "merge_dims", "axes": "static"}})
+    out_t = net.get_default_output_layer().output.placeholder
+    assert out_t.shape.as_list() == [None, None, n_in1 * n_in2]
+    in_v = numpy.arange(0, n_batch * n_time * n_in1 * n_in2).astype("float32").reshape((n_batch, n_time, n_in1, n_in2))
+    out_v = session.run(out_t, feed_dict={net.extern_data.data["data"].placeholder: in_v})
+    assert isinstance(out_v, numpy.ndarray)
+    assert out_v.shape == (n_batch, n_time, n_in1 * n_in2)
+    numpy.testing.assert_almost_equal(out_v, in_v.reshape(out_v.shape))
+
+
 def test_ScatterNdLayer_RangeLayer():
   n_batch, n_time, n_ts, n_in, n_out = 2, 3, 6, 7, 11
   rnd = numpy.random.RandomState(42)
