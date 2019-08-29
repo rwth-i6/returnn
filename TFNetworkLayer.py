@@ -3433,15 +3433,12 @@ class MergeDimsLayer(_ConcatInputLayer):
         perm.insert(merge_target_axis + i, a)
       x = tf.transpose(x, perm)
       # Now merge all dims with a reshape.
-      shape = tf.shape(x)
+      from TFUtil import get_shape
+      shape = get_shape(x)
       i0 = merge_target_axis
       i1 = i0 + len(axes)
       x = tf.reshape(
-        x,
-        shape=tf.concat([
-          shape[:i0],
-          tf.reduce_prod(shape[i0:i1], keep_dims=True),
-          shape[i1:]], axis=0))
+        x, shape=shape[:i0] + [tf.reduce_prod(shape[i0:i1])] + shape[i1:])
     if n_out is not None and not self.output.sparse:
       from TFUtil import check_input_dim
       x = check_input_dim(x, axis=-1, dim=n_out)
