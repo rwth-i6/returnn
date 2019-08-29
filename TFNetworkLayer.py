@@ -3580,8 +3580,8 @@ class SplitDimsLayer(_ConcatInputLayer):
     data = self.input_data
     if isinstance(axis, int):
       data = data.copy_as_batch_major()
-    old_shape = tf.shape(data.placeholder)
-    old_shape = [old_shape[i] for i in range(data.batch_ndim)]
+    from TFUtil import get_shape
+    old_shape = get_shape(data.placeholder)
     axis = data.get_axis_from_description(axis)
     new_shape = old_shape[:axis] + list(dims) + old_shape[axis + 1:]
     self.output.placeholder = tf.reshape(data.placeholder, shape=new_shape)
