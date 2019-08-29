@@ -3673,11 +3673,11 @@ class SplitBatchTimeLayer(_ConcatInputLayer):
     assert base.output.time_dim_axis is not None
     base_shape = tf.shape(base.output.placeholder)
     batch_dim = base_shape[base.output.batch_dim_axis]
-    time_dim = tf.shape(base.output.placeholder)[base.output.time_dim_axis]
+    time_dim = base_shape[base.output.time_dim_axis]
     seq_lens = base.output.get_sequence_lengths()
     assert self.input_data.batch_dim_axis == 0
-    input_shape = tf.shape(self.input_data.placeholder)
-    input_shape = [input_shape[i] for i in range(self.input_data.batch_ndim)]
+    from TFUtil import get_shape
+    input_shape = get_shape(self.input_data.placeholder)
     self.output.placeholder = tf.reshape(self.input_data.placeholder, shape=[batch_dim, time_dim] + input_shape[1:])
     self.output.size_placeholder = {i + 1: v for (i, v) in self.input_data.size_placeholder.items()}
     self.output.size_placeholder[0] = seq_lens
