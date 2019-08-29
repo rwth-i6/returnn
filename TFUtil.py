@@ -2905,8 +2905,8 @@ def get_shape(x):
   :rtype: list[int|tf.Tensor]
   """
   with tf.name_scope("get_shape"):
-    dyn_shape = tf.shape(x)
     static_shape = x.get_shape()
+    dyn_shape = None if static_shape.is_fully_defined() else tf.shape(x)
     assert static_shape.ndims is not None
     return [static_shape.dims[i].value
             if static_shape.dims[i].value is not None
