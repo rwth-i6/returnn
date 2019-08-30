@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 
+"""
+Construct/compile the computation graph, and optionally save it to some file.
+There are various options/variations for what task and what conditions you can create the graph,
+e.g. for training, forwarding, search, or also step-by-step execution over a recurrent layer.
+"""
 
 from __future__ import print_function
 
@@ -15,6 +20,7 @@ sys.path.insert(0, returnn_dir)
 
 import rnn
 from Log import log
+from Config import Config
 import argparse
 import Util
 from Util import NotSpecified
@@ -22,6 +28,9 @@ from TFUtil import Data
 from TFNetwork import TFNetwork
 from TFNetworkLayer import LayerBase, register_layer_class, WrappedInternalLayer
 from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell, ChoiceLayer
+
+
+config = None  # type: typing.Optional[Config]
 
 
 def init(config_filename, log_verbosity):
@@ -42,7 +51,7 @@ def init(config_filename, log_verbosity):
   global config
   config = rnn.config
   rnn.init_log()
-  print("Returnn compile-native-op starting up.", file=log.v1)
+  print("Returnn compile-tf-graph starting up.", file=log.v1)
   rnn.returnn_greeting()
   rnn.init_backend_engine()
   assert Util.BackendEngine.is_tensorflow_selected(), "this is only for TensorFlow"
@@ -184,6 +193,10 @@ class RecStepByStepLayer(RecLayer):
       print("Stored rec-step-by-step info JSON in file:", output_file_name)
 
   class StateVar:
+    """
+    Represents a state variable, i.e. either a state, a choice, or encoder state, etc.
+    """
+
     def __init__(self, name, initial_value, data_shape):
       """
       :param str name:
@@ -515,6 +528,10 @@ class ChoiceStateVarLayer(LayerBase):
 
 
 class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
+  """
+  Adapts :class:`_SubnetworkRecCell` such that we execute only a single step.
+  """
+
   def __init__(self, **kwargs):
     self._parent_layers = {}  # type: typing.Dict[str,WrappedInternalLayer]
     super(SubnetworkRecCellSingleStep, self).__init__(**kwargs)
@@ -616,7 +633,7 @@ def main(argv):
   argparser.add_argument("--output_file_model_params_list", help="line-based, names of model params")
   argparser.add_argument("--output_file_state_vars_list", help="line-based, name of state vars")
   args = argparser.parse_args(argv[1:])
-  assert args.train in [0, 1, 2] and args.eval in [0, 1] and args.search in [0, 1]
+  assert args.train in [0, 1, -1] and args.eval in [0, 1] and args.search in [0, 1]
   init(config_filename=args.config, log_verbosity=args.verbosity)
   assert 'network' in config.typed_dict
   net_dict = config.typed_dict["network"]
