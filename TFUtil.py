@@ -1024,7 +1024,6 @@ class Data(object):
     """
     assert not check_sparse or self.sparse == data.sparse
     assert not check_dtype or self.dtype == data.dtype
-    _, dim_tags = DimensionTag.get_all_dimension_tags([self, data], dict(allow_same_feature_dim=True))
     v = self.copy()
     v.sparse = data.sparse  # we will later reset it. this is to better count the axes (feature and spatial)
     if not v.sparse:
@@ -1039,6 +1038,10 @@ class Data(object):
       raise ValueError("copy_compatible_to: self %r has batch-dim, but target data %r has not" % (self, data))
     if data.batch_ndim < v.batch_ndim:
       raise ValueError("copy_compatible_to: self %r already has more dims than target data %r" % (self, data))
+    start = v
+    _, dim_tags = DimensionTag.get_all_dimension_tags([start, data], dict(allow_same_feature_dim=True))
+    assert len(dim_tags[start]) == start.batch_ndim
+    assert len(dim_tags[data]) == data.batch_ndim
     # This sets it explicitly. We will later make it NotSpecified if needed.
     # This avoids unexpected behavior after copy_add_spatial_dim and simplifies the logic.
     v.feature_dim_axis = v.feature_dim_axis
@@ -1046,27 +1049,38 @@ class Data(object):
     for axis in range(data.batch_ndim):
       if axis == data.batch_dim_axis:
         continue
-      if data.batch_ndim > v.batch_ndim:
-        if dim_tags[data][axis] in dim_tags[self]:
-          continue  # This one seems to exist already, add the next one.
+      axis_wo_batch = data.get_batch_axis_excluding_batch(axis)
+      v_axis = v.get_batch_axis(axis_wo_batch)
+      existing_axis = None
+      if dim_tags[data][axis] in dim_tags[start]:
+        existing_axis = dim_tags[start].index(dim_tags[data][axis])
+      if existing_axis is None:
+        # Try a bit harder to find an existing.
         if axis == data.feature_dim_axis and v.feature_dim_axis is not None:
           if v.batch_shape[v.feature_dim_axis] == data.batch_shape[axis]:
             if v.batch_shape[v.feature_dim_axis] is not None:
-              continue  # Exists already. There might be cases that the dim_tags did not match.
+              existing_axis = v.feature_dim_axis  # There might be cases that the dim_tags did not match.
           if v.batch_shape[v.feature_dim_axis] == 1:
-            continue  # Interpret the existing as broadcast dim.
+            existing_axis = v.feature_dim_axis  # Interpret the existing as broadcast dim.
         if axis == data.time_dim_axis and v.time_dim_axis is not None:
           if v.batch_shape[v.time_dim_axis] == data.batch_shape[axis]:
             if v.batch_shape[v.time_dim_axis] is not None:
-              continue  # Exists already. There might be cases that the dim_tags did not match.
+              existing_axis = v.time_dim_axis  # There might be cases that the dim_tags did not match.
           if v.batch_shape[v.time_dim_axis] == 1:
-            continue  # Interpret the existing as broadcast dim.
-        axis_wo_batch = data.get_batch_axis_excluding_batch(axis)
-        v_axis = v.get_batch_axis(axis_wo_batch)
+            existing_axis = v.time_dim_axis  # Interpret the existing as broadcast dim.
+      if existing_axis is not None:
+        # We go from left to right, so we should have moved it already.
+        # However, it could be that we confused some other axis earlier.
+        if existing_axis > v_axis:
+          v = v.copy_move_axis(old_axis=existing_axis, new_axis=v_axis)
+          dim_tags[start].insert(v_axis, dim_tags[start].pop(existing_axis))  # keep consistent
+        continue
+      if data.batch_ndim > v.batch_ndim:
         if axis == data.feature_dim_axis:
           v = v.copy_add_feature_dim(v_axis)
         else:
           v = v.copy_add_spatial_dim(v_axis, auto_time_dim_axis=False)  # time-dim would be set later
+        dim_tags[start].insert(v_axis, v.get_dim_tag(v_axis))  # keep consistent
         if axis == data.time_dim_axis and v.time_dim_axis != v_axis:
           v.time_dim_axis = v_axis
         if axis == data.feature_dim_axis and v.feature_dim_axis != v_axis:
