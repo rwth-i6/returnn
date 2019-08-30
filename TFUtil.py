@@ -80,12 +80,15 @@ class DimensionTag(object):
     Time = "spatial"  # we don't treat this as different
     Feature = "feature"
 
-  def __init__(self, kind=Types.Unspecified, description=None, dimension=None, dyn_size=None):
+  def __init__(self, kind=Types.Unspecified, description=None, dimension=None, dyn_size=None,
+               src_data=None, src_axis=None):
     """
     :param str|None kind:
     :param str|None description: the description should be unique
     :param int|None dimension:
     :param tf.Tensor|None dyn_size: e.g. seq_len, (batch,)
+    :param Data|None src_data:
+    :param int|None src_axis:
     """
     self.id = id(self)  # This is just used for __repr__ to distinguish different instances.
     self.kind = kind
@@ -93,6 +96,10 @@ class DimensionTag(object):
     self.dimension = dimension
     self.dyn_size = dyn_size
     self.same_as = None  # type: typing.Optional[DimensionTag]
+    if src_data:
+      assert isinstance(src_data, Data) and isinstance(src_axis, int)
+    self.src_data = src_data
+    self.src_axis = src_axis
     if dyn_size is not None:
       other = DimensionTag.get_tag_from_size_tensor(dyn_size)
       if other:
@@ -136,6 +143,8 @@ class DimensionTag(object):
     :return: whether we can clearly identify this axis. for axes with dynamic size, we require the dyn_size.
     :rtype: bool
     """
+    if self.same_as:
+      return self.same_as.can_compare()
     if self.kind in [self.Types.Batch, self.Types.Feature]:
       return True
     assert self.kind == self.Types.Spatial
@@ -231,8 +240,18 @@ class DimensionTag(object):
     """
     :param DimensionTag other:
     """
-    assert not self.same_as
+    assert not self.same_as or self.same_as is other.get_same_base()
     self.same_as = other.get_same_base()
+    # If we have a defined source, and this is a dynamic spatial axis, and it was undefined before,
+    # maybe we can overtake the size_placeholder now.
+    if self.same_as.dyn_size is not None and self.src_data:
+      assert isinstance(self.src_axis, int)
+      # Maybe it changed in the meanwhile, so check.
+      if self.src_data.get_dim_tag(self.src_axis).description == self.description:
+        if self.src_data.size_placeholder is None:
+          self.src_data.size_placeholder = {}
+        self.src_data.size_placeholder[
+          self.src_data.get_batch_axis_excluding_batch(self.src_axis)] = self.same_as.dyn_size
 
   @classmethod
   def get_existing_tag_from_collection(cls, other, tags, is_equal_opts=None):
@@ -276,6 +295,20 @@ class DimensionTag(object):
         data_axes_dict[data].append(existing_tag or tag)
       tags.extend(tags_for_data)
     return tags, data_axes_dict
+
+  @classmethod
+  def get_uniq_collection(cls, tags, is_equal_opts=None):
+    """
+    :param list[DimensionTag]|tuple[DimensionTag]|set[DimensionTag] tags:
+    :param dict[str]|None is_equal_opts: passed to DimensionTag.is_equal
+    :rtype: list[DimensionTag]
+    """
+    res = []
+    for tag in tags:
+      ex = cls.get_existing_tag_from_collection(tag, res, is_equal_opts=is_equal_opts)
+      if not ex:
+        res.append(tag)
+    return res
 
 
 class Data(object):
@@ -2104,12 +2137,16 @@ class Data(object):
     """
     name = self.get_full_name()
     if axis == self.batch_dim_axis:
-      return DimensionTag(kind=DimensionTag.Types.Batch, description="batch:%s" % name)
+      return DimensionTag(
+        kind=DimensionTag.Types.Batch, description="batch:%s" % name,
+        src_data=self, src_axis=axis)
     axis_wo_b = self.get_batch_axis_excluding_batch(axis)
     dyn_size = self.size_placeholder.get(axis_wo_b) if self.size_placeholder else None
     # Note: Prefer interpretation as spatial axis if there is a dynamic size or this is marked as time axis.
     if axis == self.feature_dim_axis and dyn_size is None and axis != self.time_dim_axis:
-      return DimensionTag(kind=DimensionTag.Types.Feature, dimension=self.dim, description="feature:%s" % name)
+      return DimensionTag(
+        kind=DimensionTag.Types.Feature, dimension=self.dim, description="feature:%s" % name,
+        src_data=self, src_axis=axis)
     if dyn_size is not None:
       tag = DimensionTag.get_tag_from_size_tensor(dyn_size)
       if tag:
@@ -2128,7 +2165,8 @@ class Data(object):
     description += ":%s" % name
     tag = DimensionTag(
       kind=DimensionTag.Types.Spatial, description=description,
-      dimension=self.batch_shape[axis], dyn_size=dyn_size)
+      dimension=self.batch_shape[axis], dyn_size=dyn_size,
+      src_data=self, src_axis=axis)
     return tag
 
   def get_time_dim_tag(self):
@@ -2157,7 +2195,7 @@ class Data(object):
   def get_common_data(cls, sources, warnings_out=None, out_shape=None):
     """
     :param list[Data] sources:
-    :param io.TextIOBase|None warnings_out:
+    :param io.TextIOBase|io.StringIO|None warnings_out:
     :param list[int|tf.Tensor]|None out_shape: will insert the shape dynamically
     :return: some generic data where the sources should be compatible to (with copy_compatible_to),
       i.e. it contains the union of all axes from all sources (least common multiple).
@@ -2174,23 +2212,37 @@ class Data(object):
     max_ndim = max([s.batch_ndim for s in sources])
     # Try with the (first) largest.
     common = [s for s in sources if s.batch_ndim == max_ndim][0]
+    common = common.copy()
     if out_shape is not None:
       out_shape.extend(common.get_dynamic_batch_shape())
     if not common.beam_size and any([s.beam_size for s in sources]):
-      common = common.copy()
       # Note: we don't use copy_extend_with_beam because we don't want to create any ops in the TF graph at this point.
       common.beam_size = max([s.beam_size or 0 for s in sources])
     is_equal_opts = dict(ignore_feature_dim=True, allow_same_spatial_dim=True)
     all_dim_tags, tags_dict = DimensionTag.get_all_dimension_tags(sources, is_equal_opts=is_equal_opts)
     # Note: We cannot compare len(all_dims_tags) to len(shape) as e.g. shape (B,1,1,D) would have only 3 dim tags.
-    largest_dim_tags, _ = DimensionTag.get_all_dimension_tags([common], is_equal_opts=is_equal_opts)
+    largest_dim_tags, tags_dict_ = DimensionTag.get_all_dimension_tags([common], is_equal_opts=is_equal_opts)
+    tags_dict.update(tags_dict_)
     if len(largest_dim_tags) == len(all_dim_tags):
       return common
-    if any([not dim_tag.can_compare() for dim_tag in largest_dim_tags]):
+    # Some dim-tags are maybe not comparable (e.g. undefined time-dim-tag).
+    # We fix this in some cases, i.e. by selecting unique time-dim.
+    defined_var_spatial_tags = [
+      tag for tag in all_dim_tags
+      if tag.kind == DimensionTag.Types.Spatial and tag.get_same_base().dyn_size is not None]
+    if len(defined_var_spatial_tags) == 1:
+      for data in sources + [common]:
+        non_comparable_dim_tags = [dim_tag for dim_tag in tags_dict[data] if not dim_tag.can_compare()]
+        non_comparable_dim_tags = DimensionTag.get_uniq_collection(non_comparable_dim_tags, is_equal_opts=is_equal_opts)
+        if len(non_comparable_dim_tags) == 1 and non_comparable_dim_tags[0].kind == DimensionTag.Types.Spatial:
+          non_comparable_dim_tags[0].declare_same_as(defined_var_spatial_tags[0])
+    non_comparable_dim_tags = [dim_tag for dim_tag in largest_dim_tags if not dim_tag.can_compare()]
+    if non_comparable_dim_tags:
       if warnings_out:
+        from pprint import pformat
         print(
-          "get_common_data(%r), dim tags %r, largest source has incomplete dim tag info: %r" % (
-            sources, all_dim_tags, [dim_tag for dim_tag in largest_dim_tags if not dim_tag.can_compare()]),
+          "get_common_data(\n%s),\ndim tags\n%s,\nlargest source\n(%s)\nhas incomplete dim tag info:\n%s" % (
+            pformat(sources), pformat(all_dim_tags), pformat(common), pformat(non_comparable_dim_tags)),
           file=warnings_out)
       # The further code would be unreliable, so better have this simple fallback.
       return common
@@ -2205,8 +2257,11 @@ class Data(object):
     for dim_tag in all_dim_tags:
       if not dim_tag.can_compare():
         if warnings_out:
-          print("get_common_data(%r), dim tags %r, cannot compare %r, missing information" % (
-            sources, all_dim_tags, dim_tag), file=warnings_out)
+          from pprint import pformat
+          print(
+            "get_common_data(\n%s),\ndim tags\n%s,\ncommon\n(%s),\ncannot compare\n%s" % (
+              pformat(sources), pformat(all_dim_tags), pformat(common), pformat(dim_tag)),
+            file=warnings_out)
         continue
       if not DimensionTag.get_existing_tag_from_collection(dim_tag, largest_dim_tags, is_equal_opts=is_equal_opts):
         largest_dim_tags.append(dim_tag)

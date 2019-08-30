@@ -488,6 +488,28 @@ def test_Data_get_common_data_extra2_static_spatial():
   assert d1.shape == common.shape
 
 
+def test_Data_get_common_data_one_undefined_time():
+  # Data(name='accum_output', shape=(None, 1), batch_shape_meta=[B,T|?,F|1])
+  a = Data(name="a", shape=(None, 1))  # undefined time-dim-tag
+  print("a:", a)
+  # Data(name='enc0_output', shape=(None,), batch_shape_meta=[B,T|F|'time:var:extern_data:encoder'])
+  b = Data(name="b", shape=(None,), auto_create_placeholders=True)
+  print("b:", b)
+  # Data(name='enc1_output', shape=(None, 1), batch_shape_meta=[B,T|'time:var:extern_data:encoder',F|1])
+  c = Data(name="c", shape=(None, 1))
+  c.size_placeholder = b.size_placeholder.copy()
+  print("c:", c)
+  assert_equal(b.get_time_dim_tag(), c.get_time_dim_tag())
+  from Util import StringIO
+  warnings = StringIO()
+  out = Data.get_common_data([a, b, c], warnings_out=warnings)
+  warnings = warnings.getvalue()
+  print("out:", out)
+  assert not warnings, "got warnings:\n%s" % warnings
+  assert out.shape == (None, 1) and out.batch_dim_axis == 0
+  assert_equal(out.get_time_dim_tag(), b.get_time_dim_tag())
+
+
 def test_Data_copy_compatible_to_get_common_data_auto_feature_non_sparse():
   d1 = Data(name='t', shape=(None,), dtype='int32', batch_dim_axis=None, feature_dim_axis=None,
             auto_create_placeholders=True)  # placeholder for specific spatial dim-tag

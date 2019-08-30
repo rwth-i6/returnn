@@ -2413,6 +2413,56 @@ def test_reclayer_optimize_out_softmax_over_spatial_rev_dot():
     rtol=1e-3)
 
 
+def test_reclayer_enc_time_dim_eval():
+  """
+    line: assert self.placeholder.shape[i].value == self.batch_shape[i]
+    locals:
+      self = <local> Data(name='accum_output', shape=(None, 1), batch_shape_meta=[B,T|?,F|1])
+      self.placeholder = <local> <tf.Tensor 'output/rec/accum/add:0' shape=(?, ?, ?) dtype=float32>
+      self.placeholder.shape = <local> TensorShape([Dimension(None), Dimension(None), Dimension(None)]), len = 3
+      i = <local> 2
+      value = <not found>
+      self.batch_shape = <local> (None, None, 1)
+
+  """
+  with make_scope() as session:
+    config = Config()
+    config.update({
+      "debug_print_layer_output_template": True,
+      "debug_print_layer_output_shape": True,
+      "extern_data": {
+        "encoder": {"dim": 11, "available_for_inference": True},
+        "decoder": {"dim": 13, "available_for_inference": True},
+      },
+      "network": {
+        "encoder": {"class": "copy", "from": "data:encoder"},
+        "enc1": {"class": "linear", "from": "encoder", "activation": "relu", "n_out": 1},  # (B,enc-T,1)
+        "enc0": {"class": "squeeze", "axis": "f", "from": "enc1"},  # (B,enc-T)
+        "output": {
+          "class": "rec",
+          "from": "data:decoder",  # just to define a different time-dim
+          "unit": {
+            "accum": {
+              "class": "eval", "from": ["prev:accum", "base:enc0", "base:enc1"],
+              "out_type": {"dim": 1, "shape": (None, 1)},
+              "eval": """(tf.Print(source(0), ["shape0", tf.shape(source(0))]) +
+                          tf.Print(source(1), ["shape1", tf.shape(source(1))]) *
+                          tf.Print(source(2), ["shape2", tf.shape(source(2))]))"""
+            },
+            "output": {
+              "class": "reduce", "axis": "stag:encoder", "mode": "max", "from": "accum"},
+          }},
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    session.run(tf.global_variables_initializer())
+    output_layer = network.get_default_output_layer(must_exist=True)
+    from test_TFNetworkLayer import make_feed_dict
+    feed_dict = make_feed_dict(list(network.extern_data.data.values()))
+    session.run(output_layer.output.placeholder, feed_dict=feed_dict)
+
+
 class TransformerNetwork:
 
   def __init__(self):
