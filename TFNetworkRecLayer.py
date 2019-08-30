@@ -4336,6 +4336,10 @@ class DecideLayer(LayerBase):
       src = self.sources[0]
       self.output, self.search_choices = self.decide(
         src=src, owner=self, output=self.output, length_normalization=length_normalization)
+      if not self.search_choices:
+        print("%s: Warning: decide on %r, there are no search choices" % (self, src), file=log.v3)
+        # As batch major, because we defined our output that way.
+        self.output = self.output.copy_as_batch_major()
 
   @classmethod
   def decide(cls, src, output=None, owner=None, name=None, length_normalization=False):
@@ -4346,10 +4350,11 @@ class DecideLayer(LayerBase):
     :param str|None name:
     :param bool length_normalization: performed on the beam scores
     :return: best beam selected from input, e.g. shape (batch, time, dim)
-    :rtype: (Data, SearchChoices)
+    :rtype: (Data, SearchChoices|None)
     """
     search_choices = src.get_search_choices()
-    assert search_choices
+    if not search_choices:
+      return src.output, None
     if not output:
       output = src.output.copy_template(name="%s_output" % (name or src.name)).copy_as_batch_major()
     assert output.batch_dim_axis == 0
