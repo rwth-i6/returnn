@@ -522,9 +522,7 @@ class ChoiceStateVarLayer(LayerBase):
       d["explicit_search_sources"] = [get_layer(name) for name in d["explicit_search_sources"]]
     super(ChoiceStateVarLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
-  @classmethod
-  def get_out_data_from_opts(cls, **kwargs):
-    return ChoiceLayer.get_out_data_from_opts(**kwargs)
+  get_out_data_from_opts = ChoiceLayer.get_out_data_from_opts
 
 
 class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
@@ -551,10 +549,16 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     output = layer.output.copy()
     output.placeholder = rec_layer.create_state_var(
       name="base_value_%s" % layer_name, initial_value=output.placeholder, data_shape=output)
-    output.size_placeholder = {
-      i: rec_layer.create_state_var(
-        name="base_size%i_%s" % (i, layer_name), initial_value=size)
-      for (i, size) in output.size_placeholder.items()}
+    from TFUtil import DimensionTag
+    for i, size in list(output.size_placeholder.items()):
+      dim_tag = DimensionTag.get_tag_from_size_tensor(size)
+      if not dim_tag:
+        print("Warning, no defined dim tag on %r, axis %i" % (layer, output.get_batch_axis(i)), file=log.v2)
+        dim_tag = output.get_dim_tag(output.get_batch_axis(i))
+        dim_tag.set_tag_on_size_tensor(size)
+      new_size = rec_layer.create_state_var(name="base_size%i_%s" % (i, layer_name), initial_value=size)
+      dim_tag.set_tag_on_size_tensor(new_size)
+      output.size_placeholder[i] = new_size
     layer = WrappedInternalLayer(name=layer_name, network=self.parent_net, output=output, base_layer=layer)
     self._parent_layers[layer_name] = layer
     return layer
