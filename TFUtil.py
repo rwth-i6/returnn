@@ -924,6 +924,8 @@ class Data(object):
       else:
         return self.batch_ndim  # at the end
     assert dim_tag.kind == DimensionTag.Types.Spatial or (dim_tag.kind == DimensionTag.Types.Feature and self.sparse)
+    if dim_tag.dimension is None and self.get_dynamic_axes():
+      return self.get_dynamic_axes()[-1] + 1  # after existing dynamic axis
     if self.get_spatial_batch_axes():
       return self.get_spatial_batch_axes()[-1] + 1  # after the existing spatial dim
     elif self.feature_dim_axis is not None:
