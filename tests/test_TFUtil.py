@@ -510,6 +510,76 @@ def test_Data_get_common_data_one_undefined_time():
   assert_equal(out.get_time_dim_tag(), b.get_time_dim_tag())
 
 
+def test_Data_get_common_data_copy_compatible_to_different_time_dim():
+  a = Data(name='a', shape=(None, 3, 5), auto_create_placeholders=True)
+  b = Data(name='b', shape=(None, 3, 5), auto_create_placeholders=True)
+  print("a:", a)
+  print("b:", b)
+  common_data = Data.get_common_data([a, b], warnings_out=sys.stdout)
+  print("common:", common_data)
+  assert common_data.shape == (None, None, 3, 5) and common_data.batch_dim_axis == 0
+  assert_equal(common_data.get_size_dim_tag(0), a.get_time_dim_tag())
+  assert_equal(common_data.get_size_dim_tag(1), b.get_time_dim_tag())
+  aa = a.copy_compatible_to(common_data)
+  bb = b.copy_compatible_to(common_data)
+  print("aa:", aa)
+  print("bb:", bb)
+  assert aa.batch_ndim == bb.batch_ndim
+  for i in range(aa.batch_ndim):
+    d1 = aa.batch_shape[i]
+    d2 = bb.batch_shape[i]
+    if d1 == 1 or d2 == 1:
+      continue  # it's fine, that will broadcast
+    assert d1 == d2, "mismatch in axis %i" % i
+  assert_equal(aa.get_dim_tag(axis=1), a.get_time_dim_tag())
+  assert aa.batch_shape[2] == 1
+  assert_equal(bb.get_dim_tag(axis=2), b.get_time_dim_tag())
+  assert bb.batch_shape[1] == 1
+  x = aa.placeholder + bb.placeholder
+  session.run(
+    x, feed_dict={
+      a.placeholder: numpy.zeros((2, 7, 3, 5), "float32"),
+      b.placeholder: numpy.zeros((2, 11, 3, 5), "float32")})
+
+
+def test_Data_get_common_data_copy_compatible_to_different_time_dim_different_static_order():
+  a = Data(name='a', shape=(None, 3, 5), auto_create_placeholders=True)
+  b = Data(name='b', shape=(3, None, 5), auto_create_placeholders=True)
+  print("a:", a)
+  print("b:", b)
+  assert_not_equal(a.get_time_dim_tag(), b.get_time_dim_tag())
+  common_data = Data.get_common_data([a, b], warnings_out=sys.stdout)
+  print("common:", common_data)
+  assert common_data.shape.count(None) == 2 and 3 in common_data.shape and 5 in common_data.shape
+  assert common_data.batch_ndim == 5
+  assert_equal(common_data.get_size_dim_tag(0), a.get_time_dim_tag())
+  assert_equal(common_data.get_size_dim_tag(1), b.get_time_dim_tag())
+  common_tags, _ = DimensionTag.get_all_dimension_tags([common_data])
+  print("common dim tags:")
+  pprint(common_tags)
+  assert len(common_tags) == common_data.batch_ndim  # all unique
+  assert_in(a.get_time_dim_tag(), common_tags)
+  assert_in(b.get_time_dim_tag(), common_tags)
+  aa = a.copy_compatible_to(common_data)
+  bb = b.copy_compatible_to(common_data)
+  print("aa:", aa)
+  print("bb:", bb)
+  assert aa.batch_ndim == bb.batch_ndim
+  for i in range(aa.batch_ndim):
+    d1 = aa.batch_shape[i]
+    d2 = bb.batch_shape[i]
+    if d1 == 1 or d2 == 1:
+      continue  # it's fine, that will broadcast
+    assert d1 == d2, "mismatch in axis %i" % i
+  assert_equal(aa.get_size_dim_tag(0), a.get_time_dim_tag())
+  assert_equal(bb.get_size_dim_tag(0), b.get_time_dim_tag())
+  x = aa.placeholder + bb.placeholder
+  session.run(
+    x, feed_dict={
+      a.placeholder: numpy.zeros((2, 7, 3, 5), "float32"),
+      b.placeholder: numpy.zeros((2, 3, 11, 5), "float32")})
+
+
 def test_Data_copy_compatible_to_get_common_data_auto_feature_non_sparse():
   d1 = Data(name='t', shape=(None,), dtype='int32', batch_dim_axis=None, feature_dim_axis=None,
             auto_create_placeholders=True)  # placeholder for specific spatial dim-tag
@@ -587,6 +657,19 @@ def test_Data_copy_compatible_to_sparse_to_dense():
   dest = source.copy_compatible_to(target, check_sparse=False, check_dtype=False)
   print("dest:", dest)
   assert dest.shape == (1,) and dest.dtype == "int32" and dest.sparse and dest.dim == 1 and dest.time_dim_axis == 1
+
+
+def test_Data_copy_compatible_to_move_spatial_axes():
+  common = Data(name="common", shape=(None, 3, 5), auto_create_placeholders=True)
+  print("common:", common)
+  a = Data(name="a", shape=(3, None, 5))
+  a.size_placeholder = {1: common.size_placeholder[0]}
+  print("a:", a)
+  assert_equal(common.get_time_dim_tag(), a.get_time_dim_tag())
+  b = a.copy_compatible_to(common)
+  print("b:", b)
+  assert b.shape == common.shape
+  assert_equal(b.get_time_dim_tag(), a.get_time_dim_tag())
 
 
 def test_Data_copy_add_spatial_dim_added_time_at_end():
@@ -825,6 +908,15 @@ def test_Data_copy_add_spatial_dim_default_after_last_spatial():
   assert d2.batch_shape == (None, 2, 3, 1337)
   d3 = d2.copy_add_spatial_dim(dim=4)
   assert d3.batch_shape == (None, 2, 3, 4, 1337)
+
+
+def test_Data_copy_add_spatial_dim_before_time():
+  a = Data(name='a', shape=(None, 3, 5), auto_create_placeholders=True)
+  print("a:", a)
+  b = a.copy_add_spatial_dim(spatial_dim_axis=1, auto_time_dim_axis=False)
+  print("b:", b)
+  assert b.shape == (1, None, 3, 5) and (b.batch_dim_axis, b.time_dim_axis) == (0, 2)
+  assert b.size_placeholder[1] is a.size_placeholder[0]
 
 
 def test_Data_copy_add_dim_by_tag_unbroadcast_feature_non_specific_feature_dim():
