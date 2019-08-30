@@ -852,6 +852,10 @@ class Data(object):
       axis_wo_batch = spatial_dim_axis
     else:
       axis_wo_batch = spatial_dim_axis if (spatial_dim_axis <= self.batch_dim_axis) else (spatial_dim_axis - 1)
+    if data.size_placeholder:
+      data.size_placeholder = {
+        i if (i < axis_wo_batch) else (i + 1): size
+        for (i, size) in data.size_placeholder.items()}
     data.shape = data.shape[:axis_wo_batch] + (dim,) + data.shape[axis_wo_batch:]
     if auto_time_dim_axis and data.time_dim_axis is None:
       data.time_dim_axis = spatial_dim_axis
