@@ -2302,6 +2302,10 @@ def help_on_tf_exception(
             # noinspection PyProtectedMember
             if x.dtype._is_ref_dtype:
               stop_at_ts.append(x)  # and also should not copy any variables/refs
+        # Note: Some code in graph_editor, which is used in copy_graph, results in lots of spam about
+        # tf.GraphKeys.VARIABLES deprecated usage (e.g. via get_predefined_collection_names or so).
+        # We just do this ugly patch here, to work around the spam.
+        tf.GraphKeys.VARIABLES = tf.GraphKeys.GLOBAL_VARIABLES
         from TFUtil import FetchHelper
         debug_fetch, fetch_helpers, op_copied = FetchHelper.copy_graph(
           debug_fetch, target_op=op, fetch_helper_tensors=list(op.inputs),
