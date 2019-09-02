@@ -152,6 +152,85 @@ def test_concat_sources_missing_dim():
     session.run(out.output.placeholder)
 
 
+def test_self_att_time_dim_tags():
+  with make_scope() as session:
+    n_in = 127
+    channels = 17
+    n_time = 119
+    n_batch = 11
+    context_size = 15
+    rnd = numpy.random.RandomState(42)
+    querry_dim = 31
+    querry_dim += context_size
+    key_dim = 31
+    value_dim = 43
+    num_heads = 5
+    key_scale = 1.0 / (float(key_dim) ** .5)
+
+    crop_left = (context_size - 1) // 2
+    crop_right = (context_size - 1) - crop_left
+
+    net_dict = {
+      "att_q": {"class": "linear", "activation": None, "with_bias": False, "n_out": querry_dim * num_heads, "from": "data:in0"},
+      "att_k": {"class": "linear", "activation": None, "with_bias": False, "n_out": key_dim * num_heads, "from": "data:in0"},
+      "att_v": {"class": "linear", "activation": None, "with_bias": False, "n_out": value_dim * num_heads, "from": "data:in0"},
+
+      "att_q_split": {"class": "split_dims", "axis": "f", "dims": (num_heads, querry_dim), "from": "att_q"},
+      "att_k_split": {"class": "split_dims", "axis": "f", "dims": (num_heads, key_dim), "from": "att_k"},
+      "att_v_split": {"class": "split_dims", "axis": "f", "dims": (num_heads, value_dim), "from": "att_v"},
+
+      "att_queries_crop": {"class": "slice", "axis": "t", "slice_start": crop_left, "slice_end": -crop_right, "from": "att_q_split"},
+
+      "att_queries_key_part": {"class": "slice", "axis": "f", "slice_start": 0, "slice_end": querry_dim - context_size, "from": "att_queries_crop"},
+      "att_queries_context_part": {"class": "slice", "axis": "f", "slice_start": querry_dim - context_size, "slice_end": querry_dim, "from": "att_queries_crop"},
+
+      "att_key_window": {"class": "window", "window_size": context_size, "padding": "valid", "from": "att_k_split"},
+      "att_energy_dot": {"class": "dot", "red1": "f", "red2": "f", "var1": None, "var2": "s:1", "from": ["att_queries_key_part", "att_key_window"]},
+      "att_energy_scaled": {"class": "eval", "eval": "source(0) * %f" % key_scale, "from": "att_energy_dot"},
+
+      "att_energy_biased": {"class": "combine", "kind": "add", "from": ["att_energy_scaled", "att_queries_context_part"]},
+
+      "att_scales": {"class": "activation", "activation": "softmax", "from": "att_energy_biased"},
+
+      "att_value_window": {"class": "window", "window_size": context_size, "padding": "valid", "from": "att_v_split"},
+      "att_out_dot": {"class": "dot", "red1": "f", "red2": "s:1", "var1": None, "var2": "f", "from": ["att_scales", "att_value_window"]},
+
+      "att_out_combine": {"class": "merge_dims", "axes": ["s:1", "f"], "from": "att_out_dot"},
+      "output": {"class": "copy", "from": ["att_out_combine"]}
+    }
+
+    config = Config({"debug_print_layer_output_template": True})
+    in0 = Data(
+      name="in0", shape=(None, n_in // channels, channels), batch_dim_axis=0, auto_create_placeholders=True)
+    extern_data = ExternData()
+    extern_data.register_data(in0)
+
+    network = TFNetwork(config=config, extern_data=extern_data, train_flag=True)
+    network.construct_from_dict(net_dict)
+
+    in_data = rnd.normal(size=(n_batch, n_time, n_in // channels, channels)).astype("float32")
+    in_seq_len = numpy.empty(n_batch)
+    in_seq_len.fill(n_time)
+
+    feed_dict = {
+      in0.placeholder: in_data,
+      in0.size_placeholder[0]: in_seq_len}
+    fetches = []
+
+    for _, l in network.layers.items():
+      l.output.placeholder = tf.Print(
+        l.output.placeholder, [l.name, "shape:", tf.shape(l.output.placeholder)],
+        summarize=10, name="debug_print_layer_output_shape")
+      fetches.append(l.output.placeholder)
+    output = network.get_default_output_layer().output
+
+    tf.global_variables_initializer().run()
+    out = session.run(fetches=fetches, feed_dict=feed_dict)
+    inp1, inp2 = network.layers["att_energy_dot"].sources[0].output.placeholder, network.layers["att_energy_dot"].sources[1].output.placeholder
+    res = network.layers["att_energy_dot"].output.placeholder
+    inp1, inp2, res = session.run([inp1, inp2, res], feed_dict=feed_dict)
+
+
 def test_LinearLayer_batch_feature_major():
   with make_scope() as session:
     network = TFNetwork(config=Config(), extern_data=ExternData(), train_flag=True)
