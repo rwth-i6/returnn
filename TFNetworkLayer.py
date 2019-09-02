@@ -487,9 +487,9 @@ class LayerBase(object):
       d["loss"] = cls._make_loss(
         class_name=d.pop("loss", None), opts=loss_opts, network=network, get_layer=get_layer)
     else:
-      if d.get("loss_scale", None) is None:
+      if "loss_scale" in d and d["loss_scale"] is None:
         d.pop("loss_scale")
-      if d.get("loss_opts", None) is None:
+      if "loss_opts" in d and d["loss_opts"] is None:
         d.pop("loss_opts")
       assert "loss_scale" not in d, "loss not defined, do not set loss_scale"
       assert "loss_opts" not in d, "loss not defined, do not set loss_opts"
