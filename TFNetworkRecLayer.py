@@ -2852,7 +2852,7 @@ class _TemplateLayer(LayerBase):
     self.is_prev_time_frame = False
     self.is_initialized = False
     self.layer_class_type = None  # type: typing.Optional[typing.Type[LayerBase]]
-    self.kwargs = None  # type: typing.Optional[typing.Dict[str]]
+    self.kwargs = None  # type: typing.Optional[typing.Dict[str]]  # after transform_config_dict
     self.dependencies = []  # type: typing.List[LayerBase]
     self.cur_frame_dependencies = []  # type: typing.List[LayerBase]
     self.prev_frame_dependencies = []  # type: typing.List[_TemplateLayer]
@@ -3024,7 +3024,7 @@ class _TemplateLayer(LayerBase):
     # TODO: extend if this is a subnet or whatever
     if not self.network.search_flag:
       return False
-    if issubclass(self.layer_class_type, ChoiceLayer):
+    if issubclass(self.layer_class_type, BaseChoiceLayer):
       # Always has search_choices if we do search, even if search option is False explicitly.
       return True
     return False
@@ -3032,9 +3032,12 @@ class _TemplateLayer(LayerBase):
   def _get_search_choices_beam_size(self):
     """
     Only valid if self.has_search_choices() is True.
-    :rtype: int
+
+    :rtype: int|None
     """
-    return self.kwargs["beam_size"]
+    layer_class = self.layer_class_type
+    assert issubclass(layer_class, BaseChoiceLayer)
+    return layer_class.cls_get_search_beam_size(**self.kwargs)
 
   def get_hidden_state(self):
     """
@@ -3717,7 +3720,30 @@ class GetRecAccumulatedOutputLayer(LayerBase):
     return subnet.layers[sub_layer].output
 
 
-class ChoiceLayer(LayerBase):
+class BaseChoiceLayer(LayerBase):
+  """
+  This is a base-class for any layer which defines a new search choice,
+  i.e. which defines ``self.search_choices``.
+  """
+
+  # noinspection PyUnusedLocal
+  def __init__(self, beam_size, **kwargs):
+    """
+    :param int|None beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
+    """
+    super(BaseChoiceLayer, self).__init__(**kwargs)
+
+  # noinspection PyUnusedLocal
+  @classmethod
+  def cls_get_search_beam_size(cls, beam_size, **kwargs):
+    """
+    :param int|None beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
+    :rtype: int|None
+    """
+    return beam_size
+
+
+class ChoiceLayer(BaseChoiceLayer):
   """
   This layer represents a choice to be made in search during inference,
   such as choosing the top-k outputs from a log-softmax for beam search.
@@ -3763,7 +3789,7 @@ class ChoiceLayer(LayerBase):
       You might use these also in custom_score_combine.
     :param callable|None custom_score_combine:
     """
-    super(ChoiceLayer, self).__init__(**kwargs)
+    super(ChoiceLayer, self).__init__(beam_size=beam_size, **kwargs)
     from Util import CollectionReadCheckCovered
     from TFUtil import optional_add, optional_mul, batch_gather, expand_dims_unbroadcast
     search = NotSpecified.resolve(search, default=self.network.search_flag)
@@ -4313,7 +4339,7 @@ class ChoiceLayer(LayerBase):
     return ls
 
 
-class DecideLayer(LayerBase):
+class DecideLayer(BaseChoiceLayer):
   """
   This is kind of the counter-part to the choice layer.
   This only has an effect in search mode.
@@ -4329,7 +4355,7 @@ class DecideLayer(LayerBase):
     """
     :param bool length_normalization: performed on the beam scores
     """
-    super(DecideLayer, self).__init__(**kwargs)
+    super(DecideLayer, self).__init__(beam_size=None, **kwargs)
     # If not in search, this will already be set via self.get_out_data_from_opts().
     if self.network.search_flag:
       assert len(self.sources) == 1
@@ -4340,6 +4366,13 @@ class DecideLayer(LayerBase):
         print("%s: Warning: decide on %r, there are no search choices" % (self, src), file=log.v3)
         # As batch major, because we defined our output that way.
         self.output = self.output.copy_as_batch_major()
+
+  @classmethod
+  def cls_get_search_beam_size(cls, **kwargs):
+    """
+    :rtype: int|None
+    """
+    return None
 
   @classmethod
   def decide(cls, src, output=None, owner=None, name=None, length_normalization=False):
