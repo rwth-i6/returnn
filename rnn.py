@@ -36,11 +36,11 @@ if typing.TYPE_CHECKING:
   try:
     import TFEngine
   except ImportError:
-    pass
+    TFEngine = None
   try:
     import Engine
   except ImportError:
-    pass
+    Engine = None
 
 config = None  # type: typing.Optional[Config]
 engine = None  # type: typing.Optional[typing.Union[TFEngine.Engine,Engine.Engine]]
