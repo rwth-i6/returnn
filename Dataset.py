@@ -849,13 +849,10 @@ class Dataset(object):
       chunk_size = self.chunk_size
     if chunk_step is None:
       chunk_step = self.chunk_step
-
-    if self.chunking_variance > 0:
-      chunk_size_org = NumbersDict(chunk_size.copy())
-      chunk_step_org = NumbersDict(chunk_step.copy())
-    else:
-      chunk_size = NumbersDict(chunk_size)
-      chunk_step = NumbersDict(chunk_step)
+    chunk_size = NumbersDict(chunk_size)
+    chunk_step = NumbersDict(chunk_step)
+    chunk_size_orig = chunk_size.copy()
+    chunk_step_orig = chunk_step.copy()
 
     s = 0
     while self.is_less_than_num_seqs(s):
@@ -874,8 +871,8 @@ class Dataset(object):
           if self.chunking_variance > 0:
             chunking_variance = 1. - self.rnd_seq_drop.random() * self.chunking_variance
             for k in used_data_keys:
-              chunk_size[k] = max(int(chunk_size_org[k] * chunking_variance), 1)
-              chunk_step[k] = max(int(chunk_step_org[k] * chunking_variance), 1)
+              chunk_size[k] = max(int(chunk_size_orig[k] * chunking_variance), 1)
+              chunk_step[k] = max(int(chunk_step_orig[k] * chunking_variance), 1)
         assert chunk_step[default_key] > 0
         t = NumbersDict.constant_like(0, numbers_dict=length)
         # There are usually the 'data' (input) and 'classes' (targets) data-keys in `length` but there can be others.
