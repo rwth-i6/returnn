@@ -1170,12 +1170,14 @@ def get_dataset_class(name):
 
 def init_dataset(kwargs, extra_kwargs=None, default_kwargs=None):
   """
-  :param dict[str]|str|(()->dict[str]) kwargs:
+  :param dict[str]|str|(()->dict[str])|Dataset kwargs:
   :param dict[str]|None extra_kwargs:
   :param dict[str]|None default_kwargs:
   :rtype: Dataset
   """
   assert kwargs
+  if isinstance(kwargs, Dataset):
+    return kwargs
   if callable(kwargs):
     return init_dataset(kwargs(), extra_kwargs=extra_kwargs, default_kwargs=default_kwargs)
   if isinstance(kwargs, (str, unicode)):

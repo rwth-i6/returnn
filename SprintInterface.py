@@ -18,6 +18,7 @@ from threading import Event, Thread
 import typing
 import numpy
 
+from Dataset import Dataset, init_dataset
 from SprintDataset import SprintDatasetBase
 from EngineBase import EngineBase
 from Log import log
@@ -26,6 +27,16 @@ import Debug
 from Util import get_gpu_names, interrupt_main, to_bool, BackendEngine
 import TaskSystem
 import rnn
+
+if typing.TYPE_CHECKING:
+  try:
+    import TFEngine
+  except ImportError:
+    TFEngine = None
+  try:
+    import Engine as TheanoEngine
+  except ImportError:
+    TheanoEngine = None
 
 _rnn_file = rnn.__file__
 _main_file = getattr(sys.modules["__main__"], "__file__", "")
@@ -48,10 +59,11 @@ MaxSegmentLength = 1
 TargetMode = None  # type: typing.Optional[str]
 Task = "train"
 
-Engine = None  # type: typing.Optional[typing.Union[typing.Type["TFEngine.Engine"],typing.Type["Engine.Engine"]]]
+Engine = None  # type: typing.Optional[typing.Union[typing.Type[TFEngine.Engine],typing.Type[TheanoEngine.Engine]]]
 config = None  # type: typing.Optional[rnn.Config]
 sprintDataset = None  # type: typing.Optional[SprintDatasetBase]
-engine = None  # type: Engine
+customDataset = None  # type: typing.Optional[Dataset]
+engine = None  # type: typing.Optional[typing.Union[TFEngine.Engine,TheanoEngine.Engine,Engine]]
 
 
 # <editor-fold desc="generic init">
@@ -814,13 +826,18 @@ def _prepare_forwarding():
 
 
 def _init_dataset():
-  global sprintDataset
+  global sprintDataset, customDataset
   if sprintDataset:
     return
   assert config
   extra_opts = config.typed_value("sprint_interface_dataset_opts", {})
   assert isinstance(extra_opts, dict)
   sprintDataset = SprintDatasetBase.from_config(config, **extra_opts)
+  if config.is_true("sprint_interface_custom_dataset"):
+    custom_dataset_func = config.typed_value("sprint_interface_custom_dataset")
+    assert callable(custom_dataset_func)
+    custom_dataset_opts = custom_dataset_func(sprint_dataset=sprintDataset)
+    customDataset = init_dataset(custom_dataset_opts)
 
 
 def get_final_epoch():
@@ -890,12 +907,21 @@ def features_to_dataset(features, segment_name):
   num_time = features.shape[1]
   assert features.shape == (InputDim, num_time)
 
+  if customDataset:
+    customDataset.finish_epoch()  # reset
+    customDataset.init_seq_order(epoch=1, seq_list=[segment_name])
+
   # Fill the data for the current segment.
   sprintDataset.shuffle_frames_of_nseqs = 0  # We must not shuffle.
   sprintDataset.init_sprint_epoch(None)  # Reset cache. We don't need old seqs anymore.
-  sprintDataset.init_seq_order()
+  sprintDataset.init_seq_order(epoch=1, seq_list=[segment_name])
   seq = sprintDataset.add_new_data(features, segment_name=segment_name)
-  return sprintDataset, seq
+
+  if not customDataset:
+    return sprintDataset, seq
+
+  assert seq == 0
+  return customDataset, 0
 
 
 def _forward(segment_name, features):
