@@ -297,7 +297,7 @@ class LayerBase(object):
     beam_size = None
     for src in sources:
       if src:  # might be None if template construction
-        beam_size = beam_size or src.output.beam_size
+        beam_size = Data.get_combined_beam_size(beam_size, src.output.beam_size)
     out_type.setdefault("beam_size", beam_size)
     output = Data(**out_type)
     cls._post_init_output(
@@ -1836,7 +1836,7 @@ def get_concat_sources_data_template(src_layers, name=None):
     assert not layer.output.sparse
     assert layer.output.dim is not None
     dim += layer.output.dim
-    beam_size = beam_size or layer.output.beam_size
+    beam_size = Data.get_combined_beam_size(beam_size, layer.output.beam_size)
   shape = list(common_source.shape)
   shape[common_source.get_batch_axis_excluding_batch(common_source.feature_dim_axis)] = dim
   kwargs = common_source.get_kwargs(with_size_placeholder=True)
@@ -2404,8 +2404,7 @@ class GatherNdLayer(_ConcatInputLayer):
     out_type["dim"] = input_data.dim
     out_type["sparse"] = input_data.sparse
     out_type["dtype"] = input_data.dtype
-    if position_data.beam_size or input_data.beam_size:
-      out_type["beam_size"] = position_data.beam_size or input_data.beam_size
+    out_type["beam_size"] = Data.get_combined_beam_size(position_data.beam_size, input_data.beam_size)
     return Data(**out_type)
 
   @classmethod
@@ -5230,7 +5229,7 @@ class DotLayer(LayerBase):
       batch_dim_axis=0,
       time_dim_axis=time_dim_axis,
       dtype=a_out.dtype,
-      beam_size=a_out.beam_size or b_out.beam_size)
+      beam_size=Data.get_combined_beam_size(a_out.beam_size, b_out.beam_size))
 
 
 class ShiftAxisLayer(_ConcatInputLayer):

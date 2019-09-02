@@ -362,7 +362,7 @@ class RecLayer(_ConcatInputLayer):
     out.batch_dim_axis = out_batch_dim_axis
     cls._post_init_output(output=out, sources=sources, **kwargs)
     for dep in deps:
-      out.beam_size = out.beam_size or dep.output.beam_size
+      out.beam_size = Data.get_combined_beam_size(out.beam_size, dep.output.beam_size)
     return out
 
   def get_absolute_name_scope_prefix(self):
@@ -5586,7 +5586,7 @@ class EditDistanceTableLayer(LayerBase):
     assert target_data.sparse and source_data.dim == target_data.dim
     return Data(
       name="%s_output" % name, shape=(None, None) if source_data.have_time_axis() else (None,),
-      dtype="int32", beam_size=source_data.beam_size or target_data.beam_size)
+      dtype="int32", beam_size=Data.get_combined_beam_size(source_data.beam_size, target_data.beam_size))
 
 
 class OptimalCompletionsLayer(LayerBase):
@@ -5671,7 +5671,7 @@ class OptimalCompletionsLayer(LayerBase):
     return Data(
       name="%s_output" % name,
       shape=(target_data.dim,), dim=target_data.dim, dtype="int32", sparse=False, time_dim_axis=None,
-      beam_size=source_data.beam_size or target_data.beam_size)
+      beam_size=Data.get_combined_beam_size(source_data.beam_size, target_data.beam_size))
 
 
 # noinspection PyAbstractClass

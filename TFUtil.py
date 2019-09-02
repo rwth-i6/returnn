@@ -2237,7 +2237,7 @@ class Data(object):
       out_shape.extend(common.get_dynamic_batch_shape())
     if not common.beam_size and any([s.beam_size for s in sources]):
       # Note: we don't use copy_extend_with_beam because we don't want to create any ops in the TF graph at this point.
-      common.beam_size = max([s.beam_size or 0 for s in sources])
+      common.beam_size = Data.get_combined_beam_size(*[s.beam_size for s in sources])
     is_equal_opts = dict(ignore_feature_dim=True, allow_same_spatial_dim=True)
     all_dim_tags, tags_dict = DimensionTag.get_all_dimension_tags(sources, is_equal_opts=is_equal_opts)
     # Note: We cannot compare len(all_dims_tags) to len(shape) as e.g. shape (B,1,1,D) would have only 3 dim tags.
@@ -2294,6 +2294,38 @@ class Data(object):
     # Simple fallback: Use first with biggest batch_ndim.
     # Was even simpler before: Use first.
     return common
+
+  @classmethod
+  def get_combined_beam_size(cls, beam1, beam2=None, *beams):
+    """
+    Combines beam sizes.
+    This will throw an exception if they cannot be combined.
+    Note that in beam search (see :class:`SearchChoices`),
+    the logic to combine beams from different search choices
+    happens in a generic way for all layers automatically
+    via :func:`TFNetwork._create_layer_layer_desc`,
+    so normally this should always work.
+
+    :param int|None beam1:
+    :param int|None beam2:
+    :param int|None beams:
+    :rtype: int|None
+    """
+    if beams:
+      beam12 = cls.get_combined_beam_size(beam1, beam2)
+      return cls.get_combined_beam_size(beam12, beams[0], *beams[1:])
+    if beam2 is None:
+      return beam1
+    if beam1 is None:
+      return beam2
+    # Both are not None.
+    if beam2 == 1:
+      return beam1
+    if beam1 == 1:
+      return beam2
+    # Both are not None and not 1.
+    assert beam1 == beam2
+    return beam1
 
 
 _horovod_is_initialized = False
