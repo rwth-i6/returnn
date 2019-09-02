@@ -3727,19 +3727,35 @@ class BaseChoiceLayer(LayerBase):
   """
 
   # noinspection PyUnusedLocal
-  def __init__(self, beam_size, **kwargs):
+  def __init__(self, beam_size, search=NotSpecified, **kwargs):
     """
     :param int|None beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
+    :param NotSpecified|bool search: whether to perform search, or use the ground truth (`target` option).
+      If not specified, it will depend on `network.search_flag`.
     """
     super(BaseChoiceLayer, self).__init__(**kwargs)
 
   # noinspection PyUnusedLocal
   @classmethod
-  def cls_get_search_beam_size(cls, beam_size, **kwargs):
+  def cls_get_search_beam_size(
+    cls, network, beam_size, search=NotSpecified, sources=(), _src_common_search_choices=None, **kwargs):
     """
+    :param TFNetwork.TFNetwork network:
+    :param list[LayerBase] sources:
     :param int|None beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
+    :param NotSpecified|bool search:
+    :param None|SearchChoices _src_common_search_choices: set via :func:`SearchChoices.translate_to_common_search_beam`
     :rtype: int|None
     """
+    search = NotSpecified.resolve(search, network.search_flag)
+    if not search or not network.search_flag:
+      if _src_common_search_choices:
+        return _src_common_search_choices.beam_size
+      # Note: _src_common_search_choices might not be set during template construction,
+      # but this fallback would still work then (at least for ChoiceLayer).
+      if sources:
+        return sources[0].output.beam_size
+      return None
     return beam_size
 
 
@@ -3789,7 +3805,7 @@ class ChoiceLayer(BaseChoiceLayer):
       You might use these also in custom_score_combine.
     :param callable|None custom_score_combine:
     """
-    super(ChoiceLayer, self).__init__(beam_size=beam_size, **kwargs)
+    super(ChoiceLayer, self).__init__(beam_size=beam_size, search=search, **kwargs)
     from Util import CollectionReadCheckCovered
     from TFUtil import optional_add, optional_mul, batch_gather, expand_dims_unbroadcast
     search = NotSpecified.resolve(search, default=self.network.search_flag)
@@ -4368,10 +4384,13 @@ class DecideLayer(BaseChoiceLayer):
         self.output = self.output.copy_as_batch_major()
 
   @classmethod
-  def cls_get_search_beam_size(cls, **kwargs):
+  def cls_get_search_beam_size(cls, network=None, **kwargs):
     """
+    :param TFNetwork.TFNetwork network:
     :rtype: int|None
     """
+    if network.search_flag:
+      return 1
     return None
 
   @classmethod

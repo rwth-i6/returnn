@@ -69,7 +69,8 @@ class LayerBase(object):
                collocate_with=None,
                trainable=True,
                custom_param_importer=None,
-               register_as_extern_data=None):
+               register_as_extern_data=None,
+               _src_common_search_choices=None):
     """
     Usually the arguments, when specified in the network dict,
     are going through :func:`transform_config_dict`, before they are passed to here.
@@ -109,6 +110,7 @@ class LayerBase(object):
     :param bool trainable: whether the parameters of this layer will be trained
     :param str|callable|None custom_param_importer: used by :func:`set_param_values_by_dict`
     :param str|None register_as_extern_data: registers output in network.extern_data
+    :param None|SearchChoices _src_common_search_choices: set via :func:`SearchChoices.translate_to_common_search_beam`
     """
     self.name = name
     self.network = network
@@ -149,6 +151,7 @@ class LayerBase(object):
       self.output_loss = sources[copy_output_loss_from_source_idx].output_loss
     self.rec_vars_outputs = {}  # type: typing.Dict[str,tf.Tensor]
     self.search_choices = None  # type: typing.Optional[SearchChoices]
+    self._src_common_search_choices = _src_common_search_choices
     self._initial_output = initial_output
     self._rec_previous_layer = rec_previous_layer
     self.collocate_with = collocate_with or []
@@ -622,6 +625,9 @@ class LayerBase(object):
     """
     if self.search_choices:
       return self.search_choices
+    if self._src_common_search_choices:
+      return self._src_common_search_choices
+    # Normally we should not find any other choices. But check anyway.
     layer = self.network.get_search_choices(src=self)
     if layer:
       assert layer.search_choices
@@ -1534,12 +1540,13 @@ class SearchChoices(object):
   This is what we keep track here.
   """
 
-  def __init__(self, owner, beam_size=None, is_decided=False):
+  def __init__(self, owner, beam_size, is_decided=False):
     """
     :param LayerBase owner:
-    :param int|None beam_size:
+    :param int beam_size:
     :param bool is_decided: by decide layer
     """
+    assert beam_size is not None
     self.owner = owner
     self._done_src_layer = False
     self._src_layer = None  # type: typing.Optional[LayerBase]
@@ -1701,21 +1708,24 @@ class SearchChoices(object):
     return d
 
   @classmethod
-  def translate_to_common_search_beam(cls, sources):
+  def translate_to_common_search_beam(cls, layer_desc):
     """
-    :param list[LayerBase]|dict[str,LayerBase|object] sources:
+    :param list[LayerBase]|dict[str,LayerBase|object] layer_desc:
     :return: sources but all layers transformed when needed
     :rtype: list[LayerBase]|dict[str,LayerBase|object]
     """
+    assert "_src_common_search_choices" not in layer_desc  # do not set this manually
     from tensorflow.python.util import nest
-    layers_flat = [v for v in nest.flatten(sources) if isinstance(v, LayerBase)]
+    layers_flat = [v for v in nest.flatten(layer_desc) if isinstance(v, LayerBase)]
     if len(layers_flat) <= 1:
-      return sources
+      return layer_desc
     from functools import cmp_to_key
     common_choices = max([layer.get_search_choices() for layer in layers_flat], key=cmp_to_key(cls.compare))
     if not common_choices:
-      return sources
-    return common_choices.translate_to_this_search_beam(sources)
+      return layer_desc
+    layer_desc = layer_desc.copy()
+    layer_desc["_src_common_search_choices"] = common_choices
+    return common_choices.translate_to_this_search_beam(layer_desc)
 
 
 class SourceLayer(LayerBase):
