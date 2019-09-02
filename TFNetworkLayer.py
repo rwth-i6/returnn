@@ -1398,10 +1398,9 @@ class ReuseParams:
         layer_desc_ = dep_loop_exception.net_dict[layer_name].copy()
         class_name_ = layer_desc_.pop("class")
         layer_class_ = get_layer_class(class_name_)
+        layer_class_.transform_config_dict(layer_desc_, network=self.network, get_layer=opt_get_layer)
         # noinspection PyProtectedMember
         layer_desc_ = self.network._create_layer_layer_desc(name=layer_name, layer_desc=layer_desc_)
-        layer_class_.transform_config_dict(
-          layer_desc_, network=self.network, get_layer=opt_get_layer)
         output = layer_class_.get_out_data_from_opts(**layer_desc_).copy()
         output.placeholder = tf.zeros(
           [d or 1 for d in output.batch_shape], dtype=output.dtype, name="%s_dummy" % output.name)

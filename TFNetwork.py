@@ -643,6 +643,9 @@ class TFNetwork(object):
 
   def _create_layer_layer_desc(self, name, layer_desc):
     """
+    This is called *after* :func:`LayerBase.transform_config_dict`
+    and *before* :func:`LayerBase.get_out_data_from_opts`.
+
     :param str name: layer name
     :param dict[str] layer_desc: opts
     :rtype: dict[str]
