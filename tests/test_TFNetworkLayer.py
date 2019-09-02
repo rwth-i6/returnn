@@ -261,6 +261,66 @@ def test_LinearLayer_batch_feature_major():
     session.run(layer.output.placeholder, feed_dict=feed_dict)
 
 
+def test_CombineLayer_after_WindowLayer_and_SliceLayer():
+  import numpy as np
+  from TFNetwork import TFNetwork, ExternData
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData())
+    src_data = Data(name='t', shape=(None, 32, 128), dtype='float32', auto_create_placeholders=True)
+    window_size = 5
+    slice_size = window_size - 1
+
+    rnd = np.random.RandomState(42)
+    input_data = rnd.rand(10, 11, 32, 128)
+    seq_lens = np.array([11, 11, 11, 11, 11, 11, 11, 11, 11, 11])
+
+    with tf.variable_scope("src"):
+      src = InternalLayer(name="src", network=net, out_type={"dim": 128, "shape": (None, 32, 128),
+        "batch_dim_axis": 0, "time_dim_axis": 1, "feature_dim_axis": 3, "sparse": False})
+      src.output = src_data
+      feed_dict = {src_data.placeholder: input_data,
+        src_data.size_placeholder[0]: seq_lens}
+    with tf.variable_scope("win"):
+      win = WindowLayer(
+        name="win", network=net, window_size=window_size, sources=[src], padding="valid",
+        output=WindowLayer.get_out_data_from_opts(
+          name="win", network=net, window_size=window_size,
+          padding="valid", sources=[src]))
+    with tf.variable_scope("red"):
+      red = ReduceLayer(
+        name="red", network=net, mode="AVG", axes="s:1", keep_dims=False, sources=[win],
+        output=ReduceLayer.get_out_data_from_opts(
+          name="red", network=net, mode="AVG",
+          axes="s:1", keep_dims=False, sources=[win]))
+    with tf.variable_scope("slice"):
+      sl = SliceLayer(
+        name="slice", axis="t", slice_start=slice_size // 2, slice_end=-(slice_size // 2),
+        sources=[src], network=net,
+        output=SliceLayer.get_out_data_from_opts(
+          name="slice", axis="t", slice_start=slice_size // 2,
+          slice_end=-(slice_size // 2), sources=[src], network=net))
+    with tf.variable_scope("combine"):
+      combine = CombineLayer(
+        name="combine", network=net, kind="add", sources=[sl, red],
+        output=CombineLayer.get_out_data_from_opts(
+          name="combine", network=net,
+          kind="add", sources=[sl, red]))
+    tf.global_variables_initializer().run()
+    print("sl:", sl)
+    print("win:", win)
+    print("red:", red)
+    print("combine:", combine)
+    in1, in2 = session.run([
+      combine.sources[0].output.placeholder,
+      combine.sources[1].output.placeholder],
+      feed_dict=feed_dict)
+    assert in1.shape == (10, 7, 32, 128)
+    assert in2.shape == (10, 7, 32, 128)
+
+    res = session.run(combine.output.placeholder, feed_dict=feed_dict)
+    assert res.shape == (10, 7, 32, 128)
+
+
 def test_batch_norm_vars():
   with make_scope() as session:
     n_in, n_out = 2, 3
