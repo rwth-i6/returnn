@@ -4568,6 +4568,82 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
     return sources[0].output.copy(name="%s_output" % name)
 
 
+class ChoiceGetBeamScoresLayer(LayerBase):
+  """
+  Gets beam scores from :class:`SearchChoices`.
+  This requires that the source has search choices.
+  """
+  layer_class = "choice_get_beam_scores"
+
+  def __init__(self, **kwargs):
+    super(ChoiceGetBeamScoresLayer, self).__init__(**kwargs)
+    assert len(self.sources) == 1
+    search_choices = self.sources[0].get_search_choices()
+    assert search_choices, "%s: source %s has no search choices" % (self, self.sources[0])
+    assert search_choices.beam_size == self.output.beam_size
+    net_batch_dim = self.network.get_data_batch_dim()
+    self.output.placeholder = tf.reshape(search_choices.beam_scores, [net_batch_dim * search_choices.beam_size])
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    d.setdefault("from", [])  # using "data" does not make much sense
+    d.setdefault("collocate_with", d["from"])  # should be right where the source is
+    super(ChoiceGetBeamScoresLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    assert len(sources) == 1
+    return Data(name="%s_output" % name, dtype="float32", shape=(), beam_size=sources[0].output.beam_size)
+
+
+class ChoiceGetSrcBeamsLayer(LayerBase):
+  """
+  Gets source beam indices from :class:`SearchChoices`.
+  This requires that the source has search choices.
+  """
+  layer_class = "choice_get_src_beams"
+
+  def __init__(self, **kwargs):
+    super(ChoiceGetSrcBeamsLayer, self).__init__(**kwargs)
+    assert len(self.sources) == 1
+    search_choices = self.sources[0].get_search_choices()
+    assert search_choices, "%s: source %s has no search choices" % (self, self.sources[0])
+    assert search_choices.beam_size == self.output.beam_size
+    net_batch_dim = self.network.get_data_batch_dim()
+    self.output.placeholder = tf.reshape(search_choices.src_beams, [net_batch_dim * search_choices.beam_size])
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    d.setdefault("from", [])  # using "data" does not make much sense
+    d.setdefault("collocate_with", d["from"])  # should be right where the source is
+    super(ChoiceGetSrcBeamsLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    assert len(sources) == 1
+    return Data(name="%s_output" % name, dtype="int32", shape=(), dim=None, beam_size=sources[0].output.beam_size)
+
+
 class AttentionBaseLayer(_ConcatInputLayer):
   """
   This is the base class for attention.
