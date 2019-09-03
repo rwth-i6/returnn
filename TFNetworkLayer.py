@@ -1641,7 +1641,7 @@ class SearchChoices(object):
 
   def get_src_choices_seq(self):
     """
-    :return: all SearchChoices we depend on up to the root, including self
+    :return: all SearchChoices we depend on up to the root, including and starting with self
     :rtype: list[SearchChoices]
     """
     sources = [self]
@@ -2081,7 +2081,7 @@ class SelectSearchSourcesLayer(InternalLayer):
     :param LayerBase search_choices_layer:
     :param list[LayerBase] sources:
     """
-    from TFUtil import select_src_beams
+    from TFUtil import select_src_beams, get_valid_scope_name_from_str, DimensionTag
     from pprint import pformat
     assert len(sources) == 1
     search_choices = search_choices_layer.get_search_choices()
@@ -2122,6 +2122,7 @@ class SelectSearchSourcesLayer(InternalLayer):
           self, src, src_search_choices, self.search_choices_layer, pformat(search_choices_seq)))
       search_choices_seq = search_choices_seq[:search_choices_seq.index(src_search_choices)]
       assert src_search_choices not in search_choices_seq
+      assert search_choices_seq
 
       def transform(v):
         """
@@ -2142,7 +2143,15 @@ class SelectSearchSourcesLayer(InternalLayer):
                "search choices %r,\n"
                "to search choices %r.\n"
                "Missing beam idxs.") % (src, src_search_choices, search_choices_seq)))
-          v = select_src_beams(v, src_beams=base_src_choices.src_beams)
+          tag = DimensionTag.get_tag_from_size_tensor(v)
+          v = select_src_beams(
+            v, src_beams=base_src_choices.src_beams,
+            name="%s_select_src_beams_%s_%s" % (
+              get_valid_scope_name_from_str(self.name),
+              get_valid_scope_name_from_str(base_src_choices.owner.name),
+              get_valid_scope_name_from_str(search_choices.owner.name)))
+          if tag:
+            tag.set_tag_on_size_tensor(v)
           self.used_search_choices_beams = True
         return v
 
@@ -2150,8 +2159,11 @@ class SelectSearchSourcesLayer(InternalLayer):
       self.transform_func = transform
       # It's possible that src.output.placeholder is not set, e.g. in a prev-layer where the
       # prev output is not needed, only the prev state. See _TemplateLayer.copy_as_prev_time_frame.
-      if src.output.placeholder is not None:
-        self.output.placeholder = transform(src.output.get_placeholder_as_batch_major())
+      src_output = src.output.copy_as_batch_major()
+      if src_output.placeholder is not None:
+        self.output.placeholder = transform(src_output.placeholder)
+      if src_output.size_placeholder:
+        self.output.size_placeholder = {i: transform(size) for (i, size) in src_output.size_placeholder.items()}
       self.rec_vars_outputs = {k: transform(v) for (k, v) in src.rec_vars_outputs.items()}  # assumes batch-major
 
   def __repr__(self):

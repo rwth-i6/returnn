@@ -7882,10 +7882,11 @@ def _tensor_array_select_src_beams(ta, src_beams):
   return ta_new
 
 
-def select_src_beams(x, src_beams):
+def select_src_beams(x, src_beams, name="select_src_beams"):
   """
   :param tf.Tensor|tf.TensorArray|T x: (batch * src-beam, ...)
   :param tf.Tensor src_beams: (batch, beam) -> src-beam-idx
+  :param str name:
   :return: (batch * beam, ...)
   :rtype: tf.Tensor|T
   """
@@ -7893,7 +7894,7 @@ def select_src_beams(x, src_beams):
     return _tensor_array_select_src_beams(x, src_beams=src_beams)
   assert isinstance(x, tf.Tensor)
   assert isinstance(src_beams, tf.Tensor)
-  with tf.name_scope("select_src_beams"):
+  with tf.name_scope(name):
     x_tshape = x.get_shape()
     src_beams.set_shape(tf.TensorShape([None, None]))
     src_beams_shape = tf.shape(src_beams)
