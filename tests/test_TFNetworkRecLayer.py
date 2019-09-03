@@ -1300,6 +1300,157 @@ def test_search_no_rec_explicit_dyn_len():
   print("Seems fine.")
 
 
+def test_search_multi_choice():
+  from TFNetwork import help_on_tf_exception
+  rnd = numpy.random.RandomState(42)
+  n_batch = 2
+  n_time = 3
+  beam_size1, beam_size2 = 3, 5
+  dim1, dim2 = 7, 7
+  net_dict = {
+    "encoder": {"class": "copy", "from": "data"},
+    "output": {
+      "class": "rec",
+      "from": [], "target": ["target1", "target2"],
+      "max_seq_len": n_time * 3,
+      "unit": {
+        "lin1": {"class": "linear", "from": "prev:choice2", "activation": "relu", "n_out": 2},
+        "lin1a": {"class": "combine", "kind": "add", "from": ["lin1", "prev:lin2"]},
+        "prob1": {"class": "linear", "activation": "log_softmax", "from": "lin1a", "n_out": dim1},
+        "choice1": {"class": "choice", "from": "prob1", "input_type": "log_prob",
+                    "beam_size": beam_size1, "target": "target1",
+                    "initial_output": 0},
+        "lin2": {"class": "linear", "from": "choice1", "activation": "relu", "n_out": 2},
+        "lin2a": {"class": "combine", "kind": "add", "from": ["lin2", "lin1"]},
+        "prob2": {"class": "linear", "activation": "log_softmax", "from": "lin2a", "n_out": dim2},
+        "choice2": {"class": "choice", "from": "prob2", "input_type": "log_prob",
+                    "beam_size": beam_size2, "target": "target2",
+                    "initial_output": "base:encoder",  # just to enforce that we have a difference in both beams
+                    },
+
+        "output": {"class": "copy", "from": "choice2"},  # define some output
+        "end": {"class": "compare", "from": ":i", "kind": "equal", "value": n_time},  # does not matter
+      }
+    }
+  }
+  # Mark all as output layers, and also add raw copies (to get the original beams).
+  subnet_dict = net_dict["output"]["unit"]
+  assert isinstance(subnet_dict, dict)
+  for name in ["choice1", "choice2"]:
+    subnet_dict["_%s_src_beams" % name] = {"class": "choice_get_src_beams", "from": name}
+    subnet_dict["_%s_beam_scores" % name] = {"class": "choice_get_beam_scores", "from": name}
+  relevant_layer_names = []
+  for name, layer_desc in list(subnet_dict.items()):
+    if name in ["end", "output"]:
+      continue
+    assert isinstance(layer_desc, dict)
+    relevant_layer_names.append(name)
+    layer_desc["is_output_layer"] = True
+    subnet_dict["%s_raw" % name] = {"class": "decide_keep_beam", "from": name, "is_output_layer": True}
+  config = Config({
+    "debug_print_layer_output_template": True,
+    "extern_data": {
+      "data": {"shape": (), "sparse": True, "dim": dim2},
+      "target1": {"sparse": True, "dim": dim1},
+      "target2": {"sparse": True, "dim": dim2},
+    }
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config, search_flag=True)
+    net.construct_from_dict(net_dict)
+    net.print_network_info()
+    params = net.get_params_list()
+    # Note: Make param initialization explicit here, and make sure this stays the same in the future.
+    # The test will depend on exactly these params.
+    for param in sorted(params, key=lambda p: p.name):
+      param.load(rnd.normal(size=param.shape.as_list()).astype("float32"), session=session)
+    input_data = net.extern_data.data["data"]
+    input_values = [1, 2]
+    assert len(input_values) == n_batch
+    feed_dict = {input_data.placeholder: numpy.array(input_values)}
+    output_data = net.get_default_output_layer().output
+    assert output_data.time_dim_axis == 0 and output_data.batch_dim_axis == 1 and output_data.shape == (None,)
+    loop_vars = {
+      name: (net.get_layer("output/%s" % name), net.get_layer("output/%s_raw" % name))
+      for name in relevant_layer_names}  # type: typing.Dict[str,typing.Tuple[LayerBase,LayerBase]]
+    fetches = (
+      output_data.placeholder,
+      {name: (l1.output.placeholder, l2.output.placeholder)
+       for (name, (l1, l2)) in loop_vars.items()})
+
+    print("TF execution...")
+    try:
+      output_value, loop_var_values = session.run(fetches, feed_dict=feed_dict)
+    except Exception as exc:
+      print(exc)
+      help_on_tf_exception(session=session, exception=exc, fetches=fetches, feed_dict=feed_dict)
+      raise
+    print("output:")
+    print(output_value)
+    for name, (l1, l2) in loop_vars.items():
+      l1_value, l2_value = loop_var_values[name]
+      print(l1, "shape:", l1_value.shape)
+      print(l2, "shape:", l2_value.shape)  # all the "raw" variants
+      assert l1_value.shape[:2] == (n_time, n_batch * beam_size2)  # it's after the (final) second choice
+      if name.startswith("_"):
+        continue
+      if (name.endswith("1") and name != "choice1") or name.endswith("1a") or name == "choice2":
+        # All these are after the second choice.
+        assert l2_value.shape[:2] == (n_time, n_batch * beam_size2)
+      else:
+        # After the first choice.
+        assert l2_value.shape[:2] == (n_time, n_batch * beam_size1)
+
+    # Now we go through each time step, and check whether all choices (and the whole search) were performed correctly.
+    print("Check search...")
+    cur_beam_size = 1
+    scores_base = numpy.zeros((n_batch, 1))  # initial beam scores
+    for t in range(n_time):
+      print("t:", t)
+      for choice_idx in [0, 1]:
+        dim = dim1 if choice_idx == 0 else dim2
+        beam_size = beam_size1 if choice_idx == 0 else beam_size2
+        choice_name = "choice%i" % (choice_idx + 1)
+        print("choice:", choice_name, "dim:", dim, "beam size:", beam_size, "incoming beam size:", cur_beam_size)
+        raw_choices = loop_var_values[choice_name][1][t]
+        raw_src_beams = loop_var_values["_%s_src_beams" % choice_name][1][t]
+        raw_beam_scores = loop_var_values["_%s_beam_scores" % choice_name][1][t]
+        assert raw_choices.shape == raw_src_beams.shape == raw_beam_scores.shape == (n_batch * beam_size,)
+        raw_choices = raw_choices.reshape((n_batch, beam_size))
+        raw_src_beams = raw_src_beams.reshape((n_batch, beam_size))
+        raw_beam_scores = raw_beam_scores.reshape((n_batch, beam_size))
+        scores_in_name = "prob%i" % (choice_idx + 1)
+        scores_in = loop_var_values[scores_in_name][1][t]
+        assert isinstance(scores_in, numpy.ndarray)
+        assert scores_in.shape[0] % n_batch == 0 and scores_in.ndim == 2 and scores_in.shape[1] == dim
+        scores_beam_in = scores_in.shape[0] // n_batch
+        scores_in = scores_in.reshape((n_batch, scores_beam_in) + scores_in.shape[1:])
+        if t == 0 and choice_idx == 0 and cur_beam_size == 1 and scores_beam_in > cur_beam_size:
+          # In the very beginning, the beam size can be larger than what we really have (size 1).
+          # See comments in ChoiceLayer.
+          # We silently ignore and allow this. This is an implementation detail, which also might change later.
+          # Just take the first.
+          scores_in = scores_in[:, :1]
+        assert scores_in.shape == (n_batch, cur_beam_size, dim)
+        # In log space, and log prob distribution.
+        assert numpy.all(scores_in < 0) and numpy.all(numpy.isclose(numpy.sum(numpy.exp(scores_in), axis=-1), 1.0))
+        scores_combined = scores_base[:, :, None] + scores_in
+        assert scores_combined.shape == (n_batch, cur_beam_size, dim)
+        # Now doing top-k, very explicitly.
+        for b in range(n_batch):
+          s = [(-scores_combined[b, i, j], (i, j)) for i in range(cur_beam_size) for j in range(dim)]
+          s.sort()
+          for i in range(beam_size):
+            print(" batch %i, new beam %i: src beam %i, label %i, score %f" % (
+              b, i, s[i][1][0], s[i][1][1], -s[i][0]))
+            numpy.testing.assert_allclose(-s[i][0], raw_beam_scores[b, i])
+            assert_equal(s[i][1][0], raw_src_beams[b, i])
+            assert_equal(s[i][1][1], raw_choices[b, i])
+        # Ok. Update the beam.
+        scores_base = raw_beam_scores
+        cur_beam_size = beam_size
+
+
 def test_rec_layer_move_out_of_loop():
   from TFNetworkRecLayer import _SubnetworkRecCell
   from TFUtil import get_global_train_flag_placeholder
