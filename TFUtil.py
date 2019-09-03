@@ -3837,6 +3837,47 @@ def move_axis(x, old_axis, new_axis, name="move_axis"):
     return tf.transpose(x, perm)
 
 
+class TensorCachedComputation:
+  """
+  Helper to cache some computation inside a ``tf.Tensor`` object.
+  """
+
+  def __init__(self, x, key):
+    """
+    :param tf.Tensor x:
+    :param str|tuple[str|int|tf.Tensor] key:
+    """
+    self.x = x
+    self.key = key
+
+  def _get_cache_dict(self):
+    """
+    :rtype: dict
+    """
+    if not hasattr(self.x, "_RETURNN_cache"):
+      self.x._RETURNN_cache = {}
+    return self.x._RETURNN_cache
+
+  def has_cache(self):
+    """
+    :return: whether we have stored the value already. if True, you can use :func:`get_cache`
+    :rtype: bool
+    """
+    return self.key in self._get_cache_dict()
+
+  def get_cache(self):
+    """
+    :rtype: tf.Tensor
+    """
+    return self._get_cache_dict()[self.key]
+
+  def set_cache(self, value):
+    """
+    :param tf.Tensor value:
+    """
+    self._get_cache_dict()[self.key] = value
+
+
 def sequence_mask(lengths, name=None, **kwargs):
   """
   Wraps around tf.sequence_mask().
@@ -3852,12 +3893,12 @@ def sequence_mask(lengths, name=None, **kwargs):
     # Do not cache in this case, as it might be different depending on kwargs.
     return tf.sequence_mask(lengths, name=name, **kwargs)
   # Cache value if there are no other kwargs.
-  if hasattr(lengths, "_sequence_mask"):
-    # noinspection PyProtectedMember
-    return lengths._sequence_mask
+  cache = TensorCachedComputation(lengths, key="sequence_mask")
+  if cache.has_cache():
+    return cache.get_cache()
   with same_control_flow_ctx(lengths), reuse_name_scope_of_tensor(lengths):
     mask = tf.sequence_mask(lengths, name=name)
-  lengths._sequence_mask = mask
+  cache.set_cache(mask)
   return mask
 
 
@@ -3871,13 +3912,16 @@ def sequence_mask_time_major(lengths, **kwargs):
   :return: mask of shape (maxlen/time,batch)
   :rtype: tf.Tensor
   """
-  if hasattr(lengths, "_sequence_mask_time_major"):
-    # noinspection PyProtectedMember
-    return lengths._sequence_mask_time_major
+  cache = None
+  if not kwargs:
+    cache = TensorCachedComputation(lengths, key="sequence_mask_time_major")
+    if cache.has_cache():
+      return cache.get_cache()
   mask = sequence_mask(lengths=lengths, **kwargs)  # shape (time,batch)
   with same_control_flow_ctx(mask), reuse_name_scope_of_tensor(lengths), tf.name_scope("sequence_mask_time_major"):
     mask = tf.transpose(mask, (1, 0))  # shape (batch,time)
-  lengths._sequence_mask_time_major = mask
+  if cache:
+    cache.set_cache(mask)
   return mask
 
 
@@ -3906,13 +3950,13 @@ def reversed(x):
   :param tf.Tensor x:
   :rtype: tf.Tensor
   """
-  if hasattr(x, "_reversed_dim0"):
-    # noinspection PyProtectedMember
-    return x._reversed_dim0
+  cache_x = TensorCachedComputation(x, key="reversed_dim0")
+  if cache_x.has_cache():
+    return cache_x.get_cache()
   with reuse_name_scope_of_tensor(x), tf.name_scope("reversed"):
     y = x[::-1]
-  x._reversed_dim0 = y
-  y._reversed_dim0 = x
+  cache_x.set_cache(y)
+  TensorCachedComputation(y, key="reversed_dim0").set_cache(x)
   return y
 
 
@@ -4004,13 +4048,19 @@ def tile_transposed(x, axis, multiples):
   with tf.name_scope("tile_transposed"):
     ndim = x.get_shape().ndims
     assert ndim is not None
+    assert 0 <= axis < ndim
+    cache = TensorCachedComputation(x, key=("tile_transposed", axis, multiples))
+    if cache.has_cache():
+      return cache.get_cache()
     shape = get_shape(x)
     x = expand_dims_unbroadcast(x, axis=axis + 1, dim=multiples)  # new axis after `axis`
-    return tf.reshape(
+    y = tf.reshape(
       x,
       [shape[i] for i in range(axis)] +
       [shape[axis] * multiples] +
       [shape[i] for i in range(axis + 1, ndim)])
+    cache.set_cache(y)
+    return y
 
 
 def constant_with_shape(x, shape, dtype=None, name="constant_with_shape"):
