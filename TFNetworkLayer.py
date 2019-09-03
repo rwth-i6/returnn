@@ -3117,6 +3117,16 @@ class ConstantLayer(LayerBase):
     self.output.placeholder = tf.expand_dims(tf.constant(value, dtype=self.output.dtype), axis=0)
 
   @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    d.setdefault("from", [])
+    super(ConstantLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
+  @classmethod
   def get_out_data_from_opts(cls, name, value=0., dtype=None, **kwargs):
     """
     :param str name:
