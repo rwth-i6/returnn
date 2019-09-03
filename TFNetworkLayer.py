@@ -2140,7 +2140,7 @@ class SelectSearchSourcesLayer(InternalLayer):
         assert isinstance(v, (tf.Tensor, tf.TensorArray))
         if isinstance(v, tf.Tensor) and v.get_shape().ndims == 0:
           return v  # leave scalars as-is
-        for base_src_choices in reversed(search_choices_seq):
+        for i, base_src_choices in enumerate(reversed(search_choices_seq)):
           assert isinstance(base_src_choices, SearchChoices)
           assert base_src_choices.src_beams is not None, (
             self.network.debug_search_choices(self.search_choices_layer) or (
@@ -2151,10 +2151,10 @@ class SelectSearchSourcesLayer(InternalLayer):
           tag = DimensionTag.get_tag_from_size_tensor(v)
           v = select_src_beams(
             v, src_beams=base_src_choices.src_beams,
-            name="%s_select_src_beams_%s_%s" % (
+            name="%s_select_src_beams_%i_%s_%i_%s" % (
               get_valid_scope_name_from_str(self.name),
-              get_valid_scope_name_from_str(base_src_choices.owner.name),
-              get_valid_scope_name_from_str(search_choices.owner.name)))
+              i, get_valid_scope_name_from_str(base_src_choices.owner.name),
+              len(search_choices_seq), get_valid_scope_name_from_str(search_choices.owner.name)))
           if tag:
             tag.set_tag_on_size_tensor(v)
           self.used_search_choices_beams = True
