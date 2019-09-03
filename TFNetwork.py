@@ -452,7 +452,7 @@ class TFNetwork(object):
 
   # Currently this pattern is very simple.
   # This pattern might be extended, when we want to make it more flexible.
-  _extra_layer_name_prefix_pattern = re.compile("^(extra(\\.[A-Za-z0-9_.]+))?:")
+  _extra_layer_name_prefix_pattern = re.compile("^(extra(\\.[A-Za-z0-9_.]+)?):")
 
   def _get_extra_net(self, search_flag=None, net_name=None, prefix_name=None, auto_create=True):
     """
