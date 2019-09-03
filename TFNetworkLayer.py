@@ -1222,7 +1222,10 @@ class LayerBase(object):
         from TFUtil import constant_with_shape
         return tf.cast(constant_with_shape(v, shape=shape), dtype=data.dtype)
     if isinstance(v, LayerBase):
-      return v.output.placeholder
+      v = v.output.copy_compatible_to(output)
+      if output.beam_size:
+        v = v.copy_extend_with_beam(output.beam_size)
+      return v.placeholder
     assert isinstance(v, str)
     if v == "zeros":
       return tf.zeros(shape, dtype=data.dtype, name="init_%s_zeros" % name)
