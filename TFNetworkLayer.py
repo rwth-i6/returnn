@@ -300,7 +300,12 @@ class LayerBase(object):
     beam_size = None
     for src in sources:
       if src:  # might be None if template construction
-        beam_size = Data.get_combined_beam_size(beam_size, src.output.beam_size)
+        if src.output.beam_size:
+          # Note: No combination (Data.get_combined_beam_size) / check to other beam sizes here.
+          # At template construction, the beam sizes might differ, if coming from different choices.
+          # Only later, this will be resolved.
+          beam_size = src.output.beam_size
+          break
     out_type.setdefault("beam_size", beam_size)
     output = Data(**out_type)
     cls._post_init_output(
