@@ -8911,6 +8911,7 @@ class FetchHelper:
     :param tf.Tensor tensor:
     :param typing.IO[str]|None verbose_stream:
     """
+    assert isinstance(tensor, tf.Tensor)
     self.tensor = tensor
     self.verbose_stream = verbose_stream
     self.most_recent_value = None
@@ -8944,6 +8945,7 @@ class FetchHelper:
     :return: copied fetches, fetch helpers, transformed target op
     :rtype: (tf.Tensor|list[tf.Tensor]|T, list[FetchHelper], tf.Operation)
     """
+    from pprint import pformat
     from tensorflow.python.util import nest
     fetches_flat = nest.flatten(fetches)
     from tensorflow.contrib import graph_editor
@@ -8951,13 +8953,21 @@ class FetchHelper:
       seed_ops=[x.op if isinstance(x, tf.Tensor) else x for x in fetches_flat],
       stop_at_ts=stop_at_ts,
       inclusive=True, control_inputs=True)
+    if target_op.name in [x.name for x in ops] and target_op not in ops:
+      # What? Very strange. Replace by other instance.
+      target_op = [x for x in ops if x.name == target_op.name][0]
+    assert target_op in ops, "target_op %r,\nops\n%s" % (target_op, pformat(ops))
+    for x in fetch_helper_tensors:
+      assert x.op in ops
     sgv = graph_editor.make_view(ops)
     copier = graph_editor.Transformer()
     copier.transform_external_input_handler = lambda info_, t: t
     _, info = copier(sgv, dst_graph=sgv.graph, dst_scope="", reuse_dst_scope=True)
-    # _, info = graph_editor.copy(ops, reuse_dst_scope=True)
     assert isinstance(info, graph_editor.TransformerInfo)
     target_op_transformed = info.transformed(target_op)
+    assert isinstance(target_op_transformed, tf.Operation), (
+      "\ntarget_op\n%r,\nfetches\n%r,\nstop_at_ts\n%s,\nops\n%s" % (
+        target_op, fetches, pformat(stop_at_ts), pformat(ops)))
     fetch_helpers = []
     for x in fetch_helper_tensors:
       fetch_helper = FetchHelper(tensor=info.transformed(x), verbose_stream=verbose_stream)
@@ -9009,7 +9019,7 @@ class FetchHelper:
           info += ", (%s)" % numpy.array2string(value)
       else:
         info += ", EMPTY"
-    elif isinstance(value, (numpy.floating, numpy.integer, float, int, bool)):
+    elif isinstance(value, (numpy.floating, numpy.integer, numpy.bool_, float, int, bool, str, bytes)):
       info = "%s(%s)" % (type(value).__name__, value)
     elif value is None:
       info = "None"

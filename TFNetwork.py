@@ -2236,9 +2236,9 @@ def _help_data_or_array(value):
     else:
       v_minmax = 0, 0
       info += ", EMPTY"
-  elif isinstance(value, bool):
+  elif isinstance(value, (numpy.floating, numpy.integer, numpy.bool_, float, int, bool, str, bytes)):
     v_minmax = 0, 1
-    info = "bool(%r)" % (value,)
+    info = "%s(%s)" % (type(value).__name__, value)
   elif value is None:
     v_minmax = -1, -1
     info = "None"
@@ -2314,7 +2314,7 @@ def help_on_tf_exception(
           for x in list(op_.inputs) + list(op_.outputs) + list(op.control_inputs):
             assert isinstance(x, tf.Tensor)
             # noinspection PyProtectedMember
-            if x.dtype._is_ref_dtype:
+            if x.dtype._is_ref_dtype and x not in stop_at_ts:
               stop_at_ts.append(x)  # and also should not copy any variables/refs
         # Note: Some code in graph_editor, which is used in copy_graph, results in lots of spam about
         # tf.GraphKeys.VARIABLES deprecated usage (e.g. via get_predefined_collection_names or so).
@@ -2356,7 +2356,7 @@ def help_on_tf_exception(
       data = None
       if key.name.startswith("extern_data/"):
         data_key = get_base_name(key)
-        if data_key in extern_data.data:
+        if extern_data and data_key in extern_data.data:
           data = extern_data.data[data_key]
           info += ", %s" % data
       print("  %r: %s" % (key, info), file=file)
