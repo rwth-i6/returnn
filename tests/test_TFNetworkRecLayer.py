@@ -1038,6 +1038,41 @@ def test_GradOfLstmGenericBase_simple_nan():
     print("All ok!")
 
 
+def test_rec_RecStepInfoLayer():
+  n_batch = 1
+  n_time = 3
+  net_dict = {
+    "output": {
+      "class": "rec",
+      "from": "data",
+      "unit": {
+        "output": {"class": "copy", "from": ":i"},
+      }
+    }
+  }
+  config = Config({
+    "debug_print_layer_output_template": True,
+    "extern_data": {
+      "data": {"sparse": True, "dim": 3},
+    }
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    inp = net.extern_data.data["data"]
+    out = net.get_default_output_layer().output
+    assert out.time_dim_axis == 0 and out.batch_dim_axis == 1 and out.shape == (None,) and out.dtype == "int32"
+    out_v = session.run(
+      out.placeholder,
+      feed_dict={
+        inp.placeholder: [[0] * n_time],
+        inp.size_placeholder[0]: [n_time]
+      })
+    assert isinstance(out_v, numpy.ndarray)
+    assert out_v.shape == (n_time, n_batch)
+    assert_equal(out_v[:, 0].tolist(), [0, 1, 2])
+
+
 def test_search_no_rec_explicit():
   from TFNetworkRecLayer import _SubnetworkRecCell
   beam_size = 3

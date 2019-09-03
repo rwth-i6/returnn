@@ -2538,6 +2538,8 @@ class _SubnetworkRecCell(object):
       :rtype: bool
       """
       assert isinstance(layer, _TemplateLayer)
+      if layer.name in [":i", "end"]:  # currently not fully implemented
+        return False
       if self.parent_net.search_flag and layer.search_choices:
         return False  # need to perform the search inside the loop currently
       layer_deps = layer.dependencies
@@ -2596,7 +2598,7 @@ class _SubnetworkRecCell(object):
       print("  %s: (#: %i)" % (s, len(l)), file=log_stream)
       for layer_name in l:
         print("    %s" % layer_name, file=log_stream)
-        if '/' not in layer_name:  # sub-layers are not in the net_dict
+        if layer_name in remaining_layers:  # sub-layers are not in the net_dict, or auto-constructed like ":i"
           remaining_layers.remove(layer_name)
       if not l:
         print("    None", file=log_stream)
@@ -3123,20 +3125,32 @@ class RecStepInfoLayer(LayerBase):
 
   layer_class = ":i"
 
-  def __init__(self, i, end_flag=None, end_flag_source=None, seq_lens=None, **kwargs):
+  def __init__(self, i=None, end_flag=None, end_flag_source=None, seq_lens=None, **kwargs):
     """
-    :param tf.Tensor i: scalar, int32, current step (time)
+    :param tf.Tensor|None i: scalar, int32, current step (time)
     :param tf.Tensor|None end_flag: (batch,), bool, says that the current sequence has ended.
       Can be with beam. In that case, end_flag_source should be "prev:end", and define the search choices.
     :param LayerBase|None end_flag_source:
     :param tf.Tensor|None seq_lens: (batch,) int32, seq lens
     """
-    super(RecStepInfoLayer, self).__init__(
-      output=Data(name="i", shape=(), dtype="int32", sparse=False, placeholder=tf.expand_dims(i, axis=0)),
-      **kwargs)
-    self.step = i
-    self._end_flag = end_flag
-    self.end_flag_source = end_flag_source
+    if "output" not in kwargs:
+      kwargs = kwargs.copy()
+      kwargs["output"] = self.get_out_data_from_opts(network=kwargs["network"])
+    super(RecStepInfoLayer, self).__init__(**kwargs)
+    self.step = None
+    self._end_flag = None
+    self.end_flag_source = None
+    if not self.output.have_time_axis():  # the normal case
+      assert i is not None and i.get_shape().ndims == 0
+      self.output.placeholder = tf.expand_dims(i, axis=0)
+      self.step = i
+      self._end_flag = end_flag
+      self.end_flag_source = end_flag_source
+    else:
+      # This only is valid if we are moved out from a RecLayer.
+      assert self.output.size_placeholder and 0 in self.output.size_placeholder
+      seq_lens = self.output.size_placeholder[0]
+      self.output.placeholder = tf.expand_dims(tf.range(tf.reduce_max(seq_lens)), axis=1)
     self._seq_lens = seq_lens
     if seq_lens is None:
       assert end_flag_source
@@ -3169,6 +3183,36 @@ class RecStepInfoLayer(LayerBase):
     else:
       assert not self.end_flag_source or not source_search_choices
     return end_flag
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    d.setdefault("from", [])  # source does not make sense
+    super(RecStepInfoLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
+  @classmethod
+  def get_out_data_from_opts(cls, network, **kwargs):
+    """
+    :param TFNetwork.TFNetwork network:
+    :rtype: Data
+    """
+    # Check for the normal case first. If we don't have a parent rec layer, also fallback to this (e.g. debugging).
+    if network.is_inside_rec_layer() or not isinstance(network.parent_layer, RecLayer):
+      return Data(name="i", shape=(), dtype="int32", sparse=False)
+    # This only is valid if we are moved out from a RecLayer.
+    assert isinstance(network.parent_layer, RecLayer)
+    # We need to get the time-dim and seq lens.
+    # Maybe this is not the best way.
+    # But we could extend _SubnetworkRecCell later to get this more directly if needed.
+    assert 0 in network.parent_layer.output.size_placeholder
+    seq_lens = network.parent_layer.output.size_placeholder[0]
+    return Data(
+      name="i_unrolled", shape=(None,), time_dim_axis=0, batch_dim_axis=1, dtype="int32", sparse=False,
+      size_placeholder={0: seq_lens})
 
 
 class RnnCellLayer(_ConcatInputLayer):

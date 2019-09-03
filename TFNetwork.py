@@ -624,6 +624,9 @@ class TFNetwork(object):
           layer_desc = {"class": "source"}
         elif name.startswith("data:"):
           layer_desc = {"class": "source", "data_key": name[len("data:"):]}
+        elif name == ":i":  # via set_rec_step_info / RecStepInfoLayer
+          # Note: This will fail at normal construction, but works for template construction.
+          layer_desc = {"class": ":i"}
       else:
         layer_desc = net_dict[name]
     if not layer_desc:
@@ -1682,25 +1685,32 @@ class TFNetwork(object):
     self.layers[":i"] = RecStepInfoLayer(
       name=":i", network=self, i=i, end_flag=end_flag, end_flag_source=end_flag_source, seq_lens=seq_lens)
 
-  def is_inside_rec_layer(self):
+  def is_inside_rec_layer(self, inside_loop=True):
     """
+    :param bool inside_loop: only True if the network is constructed within the loop (not moved out)
     :return: whether we are inside a :class:`RecLayer`. see :func:`get_rec_parent_layer`
     :rtype: bool
     """
     if self._is_inside_rec_layer is not None:
       return self._is_inside_rec_layer
-    return self.get_rec_parent_layer() is not None
+    return self.get_rec_parent_layer(inside_loop=inside_loop) is not None
 
-  def get_rec_parent_layer(self):
+  def get_rec_parent_layer(self, inside_loop=True):
     """
+    :param bool inside_loop: only return if the network is constructed within the loop (not moved out)
     :return: if we are a subnet of a :class:`RecLayer`, will return the RecLayer instance
     :rtype: TFNetworkRecLayer.RecLayer|None
     """
     from TFNetworkRecLayer import RecLayer
     if isinstance(self.parent_layer, RecLayer):
+      if inside_loop:
+        from TFNetworkRecLayer import _SubnetworkRecCell
+        assert isinstance(self.parent_layer.cell, _SubnetworkRecCell)
+        if self is not self.parent_layer.cell.net:
+          return None
       return self.parent_layer
     if self.parent_net:
-      return self.parent_net.get_rec_parent_layer()
+      return self.parent_net.get_rec_parent_layer(inside_loop=inside_loop)
     return None
 
   def have_rec_step_info(self):
@@ -1719,7 +1729,8 @@ class TFNetwork(object):
     if ":i" in self.layers and isinstance(self.layers[":i"], RecStepInfoLayer):
       return self.layers[":i"]
     rec_layer = self.get_rec_parent_layer()
-    # the second condition is true if all layers have been optimized out of the rec layer
+    # The second condition is true if all layers have been optimized out of the rec layer.
+    # (We could handle this case though. It's just not implemented.)
     if not rec_layer or len(rec_layer.cell.layers_in_loop) == 0:
       assert not must_exist, "%s: We expect to be the subnet of a RecLayer, but we are not." % self
       return None
