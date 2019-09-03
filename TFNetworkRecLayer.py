@@ -1187,8 +1187,7 @@ class _SubnetworkRecCell(object):
     :param set[str] needed_outputs: layers where we need outputs
     """
     from TFNetwork import TFNetwork
-    from TFNetworkLayer import InternalLayer, ExtendWithBeamLayer
-    from TFUtil import tile_transposed
+    from TFNetworkLayer import InternalLayer
     for key in data:
       self.net.extern_data.data[key].placeholder = data[key]
     for data_key, data in self.net.extern_data.data.items():
@@ -3779,6 +3778,37 @@ class BaseChoiceLayer(LayerBase):
       return None
     return beam_size
 
+  # noinspection PyMethodOverriding
+  @classmethod
+  def get_rec_initial_extra_outputs(cls, network, beam_size, **kwargs):
+    """
+    :param TFNetwork.TFNetwork network:
+    :param int beam_size:
+    :rtype: dict[str,tf.Tensor]
+    """
+    if not network.search_flag:  # independent from option search, because we still need the search_choices
+      return {}
+    batch_dim = network.get_data_batch_dim()
+    # Note: Use beam_size 1 for the initial as there are no competing hypotheses yet.
+    initial_scores = tf.zeros([batch_dim, 1])  # (batch, beam)
+    # However! Our initial output is *with* the beam size, and SelectSearchSourcesLayer should keep the beam size.
+    # We just use 0s, as we don't really know the incoming beam size at this point,
+    # and it should not matter anyway.
+    initial_src_beams = tf.zeros([batch_dim, beam_size], dtype=tf.int32)
+    # Note: Our rec vars are handled via SearchChoices.set_beam_scores.
+    return {"choice_scores": initial_scores, "choice_src_beams": initial_src_beams}
+
+  @classmethod
+  def get_rec_initial_extra_outputs_shape_invariants(cls, **kwargs):
+    """
+    :rtype: dict[str,tf.TensorShape]
+    """
+    # Initial beam size is 1 and then later the given one, so it changes.
+    return {
+      "choice_scores": tf.TensorShape((None, None)),  # (batch, beam)
+      "choice_src_beams": tf.TensorShape((None, None)),  # (batch, beam)
+    }
+
 
 class ChoiceLayer(BaseChoiceLayer):
   """
@@ -4335,36 +4365,6 @@ class ChoiceLayer(BaseChoiceLayer):
                                                     beam_size=parent_layer_kwargs["beam_size"])
     from TFNetworkLayer import InternalLayer
     return sub_layer_out_data, parent_layer_kwargs["network"], InternalLayer
-
-  # noinspection PyMethodOverriding
-  @classmethod
-  def get_rec_initial_extra_outputs(cls, network, beam_size, **kwargs):
-    """
-    :param TFNetwork.TFNetwork network:
-    :param int beam_size:
-    :rtype: dict[str,tf.Tensor]
-    """
-    if not network.search_flag:  # independent from option search, because we still need the search_choices
-      return {}
-    batch_dim = network.get_data_batch_dim()
-    # Note: Use beam_size 1 for the initial as there are no competing hypotheses yet.
-    initial_scores = tf.zeros([batch_dim, 1])  # (batch, beam)
-    # However! Our initial output is *with* the beam size, and SelectSearchSourcesLayer should keep the beam size.
-    from TFUtil import expand_dims_unbroadcast
-    initial_src_beams = expand_dims_unbroadcast(tf.range(beam_size), axis=0, dim=batch_dim)  # (batch, beam)
-    # Note: Our rec vars are handled via SearchChoices.set_beam_scores.
-    return {"choice_scores": initial_scores, "choice_src_beams": initial_src_beams}
-
-  @classmethod
-  def get_rec_initial_extra_outputs_shape_invariants(cls, **kwargs):
-    """
-    :rtype: dict[str,tf.TensorShape]
-    """
-    # Initial beam size is 1 and then later the given one, so it changes.
-    return {
-      "choice_scores": tf.TensorShape((None, None)),  # (batch, beam)
-      "choice_src_beams": tf.TensorShape((None, None)),  # (batch, beam)
-    }
 
   def get_dep_layers(self):
     """
