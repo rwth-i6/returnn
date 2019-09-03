@@ -14,6 +14,10 @@ forward_override_hdf_output
     Per default, Returnn will give an error when trying to overwrite an existing output. If this flag is set to true,
     the check is disabled.
 
+output_file
+    When the task is "forward", specifies the output path for the resulting hdf. If not specified,
+    the name will be "dump-fwd-epoch-%i.hdf" % epoch.
+
 search_output_layer
     TODO...
 
