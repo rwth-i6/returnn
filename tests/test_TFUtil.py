@@ -3186,6 +3186,30 @@ def test_FetchHelper_loop_invalid_vars_switch():
     assert fetch_helper.callback_count >= 1
 
 
+def test_get_positional_encoding_batch_position():
+  # Test `get_positional_encoding` with `position` with a batch dimension.
+  num_channels = 8
+  position0 = tf.range(5)
+  position1 = tf.range(5, 10)
+  position2 = tf.range(5)
+  position = tf.stack([position0, position1, position2])  # (3, 5).
+  signal = get_positional_encoding(num_channels=num_channels, position=position)  # (3, 5, 8).
+  signal1 = get_positional_encoding(num_channels=num_channels, position=position1)  # (5, 8).
+  signal_np, signal1_np = session.run([signal, signal1])
+  assert signal_np.shape == (3, 5, 8)
+  numpy.array_equal(signal1_np, signal_np[1])
+
+
+def test_get_position_encoding():
+  y = get_positional_encoding(num_channels=4, position=tf.range(3))
+  values = session.run(y)
+  numpy.testing.assert_almost_equal(
+    values,
+    [[0.0, 0.0, 1.0, 1.0],
+     [0.8414709568023682, 9.99999901978299e-05, 0.5403022766113281, 1.0],
+     [0.9092974066734314, 0.0001999999803956598, -0.416146844625473, 1.0]])
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
