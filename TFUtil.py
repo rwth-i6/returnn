@@ -2737,13 +2737,16 @@ def get_base_name(x):
 
 
 @contextlib.contextmanager
-def reuse_name_scope_of_tensor(x, prefix="", postfix=""):
+def reuse_name_scope_of_tensor(x, prefix="", postfix="", add_tensor_name=False):
   """
   :param tf.Tensor|tf.Variable x: has name e.g. "layer0/rec/W:0"
   :param str prefix:
   :param str postfix:
+  :param bool add_tensor_name:
   :return: reuse the name scope of x, e.g. "layer0/rec", yields scope
   """
+  if add_tensor_name:
+    postfix = os.path.basename(x.name).split(":")[0] + postfix
   with reuse_name_scope(prefix + get_name_scope_of_tensor(x) + postfix, absolute=True) as scope:
     yield scope
 
@@ -7897,15 +7900,17 @@ def select_src_beams(x, src_beams, name="select_src_beams"):
   with tf.name_scope(name):
     x_tshape = x.get_shape()
     src_beams.set_shape(tf.TensorShape([None, None]))
-    src_beams_shape = tf.shape(src_beams)
+    src_beams_shape = get_shape(src_beams)
     batch_dim, beam_dim = src_beams_shape[0], src_beams_shape[1]
     x_ndim = x.get_shape().ndims
     assert x_ndim is not None
-    x_shape = tf.shape(x)
+    x_shape = get_shape(x)
     x_shape_rem = [x_shape[i] for i in range(1, x_ndim)]
     src_beam_dim = x_shape[0] // batch_dim
-    x = tf.reshape(x, [batch_dim, src_beam_dim] + x_shape_rem)  # (batch, src-beam, ...)
-    indices = nd_indices(src_beams)  # (batch, beam, 2)
+    with reuse_name_scope_of_tensor(x, add_tensor_name=True, postfix="_reshape_split_beam"):
+      x = tf.reshape(x, [batch_dim, src_beam_dim] + x_shape_rem)  # (batch, src-beam, ...)
+    with reuse_name_scope_of_tensor(src_beams, add_tensor_name=True, postfix="_nd_indices"):
+      indices = nd_indices(src_beams)  # (batch, beam, 2)
     x = tf.gather_nd(x, indices=indices)  # K=2, (batch, beam, ...)
     x = tf.reshape(x, [batch_dim * beam_dim] + x_shape_rem)
     x.set_shape(tf.TensorShape([None] + x_tshape.as_list()[1:]))
