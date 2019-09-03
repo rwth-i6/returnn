@@ -310,13 +310,16 @@ class LayerBase(object):
 
   # noinspection PyUnusedLocal
   @classmethod
-  def _post_init_output(cls, output, network, target=None, size_target=None, _target_layers=None, sources=(), **kwargs):
+  def _post_init_output(cls, output, network, target=None, size_target=None, _target_layers=None, sources=(),
+                        _src_common_search_choices=None,
+                        **kwargs):
     """
     :param Data output:
     :param TFNetwork.TFNetwork network:
     :param str|list[str]|None target:
     :param str|None size_target:
     :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
+    :param None|SearchChoices _src_common_search_choices: set via :func:`SearchChoices.translate_to_common_search_beam`
     :param list[LayerBase] sources:
     """
     # You are supposed to set self.output.placeholder to the value which you want to return by the layer.
@@ -330,6 +333,7 @@ class LayerBase(object):
         output.size_placeholder = cls._static_get_target_value(
           target=size_target,
           _target_layers=_target_layers,
+          search_choices=_src_common_search_choices,
           network=network, mark_data_key_as_used=network.eval_flag).size_placeholder.copy()
       elif common_source and common_source.matches_var_dim_pattern(output):
         output.size_placeholder = common_source.size_placeholder.copy()
@@ -339,6 +343,7 @@ class LayerBase(object):
         output.size_placeholder = cls._static_get_target_value(
           target=(target[0] if (target and isinstance(target, list)) else target),
           _target_layers=_target_layers,
+          search_choices=_src_common_search_choices,
           network=network, mark_data_key_as_used=network.train_flag is not False).size_placeholder.copy()
     if any([(src and not src.output.available_for_inference) for src in sources if src]):
       output.available_for_inference = False
@@ -893,25 +898,35 @@ class LayerBase(object):
     return d
 
   @staticmethod
-  def _static_get_target_value(target, network, mark_data_key_as_used=True, _target_layers=None, get_layer=None):
+  def _static_get_target_value(
+    target, network, mark_data_key_as_used=True,
+    _target_layers=None, get_layer=None,
+    search_choices=None
+  ):
     """
     :param str target:
     :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
     :param TFNetwork.TFNetwork network:
     :param bool mark_data_key_as_used: forwarded self.network.get_extern_data()
     :param None|((str) -> LayerBase) get_layer: function to get or construct another layer
+    :param SearchChoices|None search_choices:
     :rtype: Data | None
     """
     if not target or target == "none":
       return None
     if _target_layers and target in _target_layers:
-      return _target_layers[target].output
+      return SelectSearchSourcesLayer.select_if_needed(
+        _target_layers[target], search_choices=search_choices).output
     if target.startswith("layer:"):
       if not get_layer:
         get_layer = network.get_layer
-      return get_layer(target[len("layer:"):]).output
+      return SelectSearchSourcesLayer.select_if_needed(
+        get_layer(target[len("layer:"):]), search_choices=search_choices).output
     assert network.extern_data.has_data(target), "target %r unknown" % target
-    return network.get_extern_data(target, mark_data_key_as_used=mark_data_key_as_used)
+    data = network.get_extern_data(target, mark_data_key_as_used=mark_data_key_as_used)
+    if search_choices:
+      data = data.copy_extend_with_beam(search_choices.beam_size)
+    return data
 
   def _get_target_value(self, target=None, mark_data_key_as_used=True):
     """
@@ -922,7 +937,7 @@ class LayerBase(object):
     if target is None:
       target = self.target
     return self._static_get_target_value(
-      target=target, _target_layers=self._target_layers,
+      target=target, _target_layers=self._target_layers, search_choices=self._src_common_search_choices,
       network=self.network, mark_data_key_as_used=mark_data_key_as_used)
 
   def _cond_only_on_eval_opt(self, on_eval_func, default_value):
@@ -1698,11 +1713,7 @@ class SearchChoices(object):
       from Util import make_seq_of_type
       return make_seq_of_type(type(d), [self.translate_to_this_search_beam(v) for v in d])
     if isinstance(d, LayerBase):
-      if d.get_search_choices() == self:
-        return d
-      if d.output.batch_dim_axis is None:  # e.g. VariableLayer, ConstantLayer, or so
-        return d
-      return SelectSearchSourcesLayer(sources=(d,), search_choices=self.owner, name=d.name, network=d.network)
+      return SelectSearchSourcesLayer.select_if_needed(d, search_choices=self)
     return d
 
   @classmethod
@@ -2047,30 +2058,55 @@ class SelectSearchSourcesLayer(InternalLayer):
   Like :class:`InternalLayer`, only for internal purpose at the moment.
   """
 
-  def __init__(self, search_choices, **kwargs):
+  @classmethod
+  def select_if_needed(cls, layer, search_choices):
     """
-    :param LayerBase search_choices:
+    :param LayerBase layer:
+    :param SearchChoices|None search_choices:
+    :rtype: LayerBase
     """
-    if "output" not in kwargs:
-      kwargs = kwargs.copy()
-      kwargs["output"] = kwargs["sources"][0].output  # will be reset later
+    if not search_choices:
+      return layer
+    if layer.get_search_choices() == search_choices:
+      return layer
+    if layer.output.batch_dim_axis is None:  # e.g. VariableLayer, ConstantLayer, or so
+      return layer
+    return SelectSearchSourcesLayer(sources=[layer], search_choices_layer=search_choices.owner)
+
+  def __init__(self, search_choices_layer, sources, **kwargs):
+    """
+    :param LayerBase search_choices_layer:
+    :param list[LayerBase] sources:
+    """
     from TFUtil import select_src_beams
     from pprint import pformat
+    assert len(sources) == 1
+    search_choices = search_choices_layer.get_search_choices()
+    src = sources[0]
+    kwargs = kwargs.copy()
+    kwargs["sources"] = sources
+    if "output" not in kwargs:
+      kwargs["output"] = src.output  # will be reset later
+    if "network" not in kwargs:
+      kwargs["network"] = src.network
+    if "name" not in kwargs:
+      kwargs["name"] = src.name
+    if "_src_common_search_choices" not in kwargs:
+      kwargs["_src_common_search_choices"] = search_choices
     super(SelectSearchSourcesLayer, self).__init__(**kwargs)
-    assert len(self.sources) == 1
-    src = self.sources[0]
-    self.search_choices_layer = search_choices
+    self.search_choices_layer = search_choices_layer
     self.used_search_choices_beams = False
-    search_choices = search_choices.get_search_choices()
     self.search_choices_from_layer = search_choices
     self.output = src.output.copy_as_batch_major()
-    if search_choices:
-      self.output = self.output.copy_extend_with_beam(search_choices.beam_size)
     src_search_choices = src.get_search_choices()
     self.transform_func = None  # type: typing.Optional[typing.Callable[[tf.Tensor],tf.Tensor]]
     self.search_choices_seq = None  # type: typing.Optional[typing.List[SearchChoices]]
-    if not search_choices or search_choices == src_search_choices or not src_search_choices:
+    if not search_choices:
+      assert not src_search_choices
+    elif search_choices == src_search_choices:
       pass
+    elif not src_search_choices:
+      self.output = self.output.copy_extend_with_beam(search_choices.beam_size)
     else:
       assert search_choices and search_choices != src_search_choices
       search_choices_seq = search_choices.get_src_choices_seq()

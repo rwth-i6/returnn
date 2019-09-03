@@ -893,10 +893,6 @@ class _SubnetworkRecCell(object):
       # but not as actual sources or targets.
       # Note: We maybe should check data.is_same_time_dim()...
       self.net.extern_data.data[key] = data.copy_template_excluding_time_dim()
-    if parent_net.search_flag and parent_rec_layer and parent_rec_layer.output.beam_size:
-      for key, data in list(self.net.extern_data.data.items()):
-        self.net.extern_data.data[key] = data.copy_extend_with_beam(
-          beam_size=parent_rec_layer.output.beam_size)
     self.layer_data_templates = {}  # type: typing.Dict[str,_TemplateLayer]
     self.prev_layers_needed = set()  # type: typing.Set[str]
     self.prev_layer_templates = {}  # type: typing.Dict[str,_TemplateLayer]
@@ -1193,15 +1189,7 @@ class _SubnetworkRecCell(object):
     from TFNetwork import TFNetwork
     from TFNetworkLayer import InternalLayer, ExtendWithBeamLayer
     from TFUtil import tile_transposed
-    needed_beam_size = self.layer_data_templates["output"].output.beam_size
     for key in data:
-      if needed_beam_size:
-        if key == "source":
-          assert not self.parent_rec_layer.input_data.beam_size
-        data[key] = tile_transposed(
-          data[key],
-          axis=self.net.extern_data.data[key].batch_dim_axis,
-          multiples=needed_beam_size)
       self.net.extern_data.data[key].placeholder = data[key]
     for data_key, data in self.net.extern_data.data.items():
       if data_key not in self.net.used_data_keys:
@@ -1280,17 +1268,6 @@ class _SubnetworkRecCell(object):
         if name in extended_layers:
           return extended_layers[name]
         layer = self._get_parent_layer(name[len("base:"):])
-        if self.parent_net.search_flag:
-          if needed_beam_size:
-            assert not layer.output.beam_size
-            if layer.output.beam_size != needed_beam_size:
-              layer = self.net.add_layer(
-                name="%s_copy_extend_with_beam_%i" % (name, needed_beam_size),
-                base_layer=layer,
-                beam_size=needed_beam_size,
-                layer_class=ExtendWithBeamLayer)
-              extended_layers[name] = layer
-          assert layer.output.beam_size == needed_beam_size
         return layer
       if name in self.input_layers_moved_out:
         return get_input_moved_out(name)
@@ -4115,7 +4092,8 @@ class ChoiceLayer(BaseChoiceLayer):
       self.output_list = []
       for target in self.targets:
         target_out_data = self._static_get_target_value(
-          target=target, network=self.network, mark_data_key_as_used=True).copy()
+          target=target, network=self.network, mark_data_key_as_used=True,
+          search_choices=self._src_common_search_choices).copy()
         target_out_data.available_for_inference = True  # in inference, we should do search
         assert target_out_data.placeholder is not None
         self.output_list.append(target_out_data)
