@@ -4399,7 +4399,7 @@ class DecideLayer(BaseChoiceLayer):
     """
     :param bool length_normalization: performed on the beam scores
     """
-    super(DecideLayer, self).__init__(beam_size=None, **kwargs)
+    super(DecideLayer, self).__init__(beam_size=1, **kwargs)
     # If not in search, this will already be set via self.get_out_data_from_opts().
     if self.network.search_flag:
       assert len(self.sources) == 1
@@ -4486,6 +4486,86 @@ class DecideLayer(BaseChoiceLayer):
       return data
     else:
       return sources[0].output
+
+
+class DecideKeepBeamLayer(BaseChoiceLayer):
+  """
+  This just marks the search choices as decided, but does not change them (in contrast to :class:`DecideLayer`).
+  You can use this to get out some values as-is, without having them resolved to the final choices.
+  """
+  layer_class = "decide_keep_beam"
+
+  def __init__(self, sources, **kwargs):
+    """
+    :param list[LayerBase] sources:
+    """
+    assert len(sources) == 1
+    src = sources[0]
+    super(DecideKeepBeamLayer, self).__init__(beam_size=src.output.beam_size, sources=sources, **kwargs)
+    # If not in search, this will already be set via self.get_out_data_from_opts().
+    if self.network.search_flag:
+      base_search_choices = src.get_search_choices()
+      if base_search_choices:
+        self.search_choices = SearchChoices(owner=self, beam_size=self.output.beam_size, is_decided=True)
+        assert base_search_choices.beam_size == self.output.beam_size == self.search_choices.beam_size
+        net_batch_dim = self.network.get_data_batch_dim()
+        from TFUtil import expand_dims_unbroadcast
+        self.search_choices.set_src_beams(expand_dims_unbroadcast(
+          tf.range(base_search_choices.beam_size), axis=0, dim=net_batch_dim))
+        self.search_choices.set_beam_scores(base_search_choices.beam_scores)
+      else:
+        print("%s: Warning: decide-keep-beam on %r, there are no search choices" % (self, src), file=log.v3)
+
+  @classmethod
+  def cls_get_search_beam_size(cls, sources, network, **kwargs):
+    """
+    :param list[LayerBase] sources:
+    :param TFNetwork.TFNetwork network:
+    :rtype: int|None
+    """
+    assert len(sources) == 1
+    return sources[0].output.beam_size
+
+  @classmethod
+  def get_rec_initial_extra_outputs(cls, sources, **kwargs):
+    """
+    :param list[LayerBase] sources:
+    :rtype: dict[str,tf.Tensor]
+    """
+    assert len(sources) == 1
+    return super(DecideKeepBeamLayer, cls).get_rec_initial_extra_outputs(
+      beam_size=sources[0].output.beam_size, sources=sources, **kwargs)
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    d.setdefault("from", [])  # using "data" does not make much sense
+    d.setdefault("collocate_with", d["from"])  # should be right where the source is
+    if "rec_previous_layer" in d:
+      prev_layer = d["rec_previous_layer"]
+      assert isinstance(prev_layer, _TemplateLayer)
+      assert prev_layer.is_prev_time_frame
+      # Note: In SearchChoices.translate_to_common_search_beam, we would get this prev_layer.
+      # And we likely cannot compare it to other search choices,
+      # as it is not in the search choices sequence.
+      # But we actually do not care at all about it, and do not use it. So just reset.
+      prev_layer.search_choices = None
+    super(DecideKeepBeamLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, network, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param TFNetwork.TFNetwork network:
+    :rtype: Data
+    """
+    assert len(sources) == 1
+    return sources[0].output.copy(name="%s_output" % name)
 
 
 class AttentionBaseLayer(_ConcatInputLayer):
