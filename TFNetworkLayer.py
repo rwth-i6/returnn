@@ -459,12 +459,11 @@ class LayerBase(object):
             # Also, if we are inside a rec layer, and doing search, we also cannot do that.
             if not network.is_inside_rec_layer() or not network.search_flag:
               network.used_data_keys.add(target)
-    # support that the initial_output of any layer inside a recurrent unit can be a layer from base
-    if d.get("initial_output", None):
+    if d.get("initial_output", None):  # see get_rec_initial_output
       initial_output = d["initial_output"]
       if isinstance(initial_output, str):
         if initial_output not in ["zeros", "ones", "var", "keep_over_epoch", "keep_over_epoch_no_init", "apply(0)"]:
-          # if initial_output is not a reserverd keyword, assume it is a layer
+          # if initial_output is not a reserved keyword, assume it is a layer
           d['initial_output'] = get_layer(initial_output)
     if "n_out" not in d and targets and network.eval_flag:
       # Must be done here now because loss might be set to None later.
@@ -1177,7 +1176,6 @@ class LayerBase(object):
     batch_dim is added because it might be special because of beam search.
 
     Note: This could maybe share code with :func:`RnnCellLayer.get_rec_initial_state`.
-    We could also add support to make the initial output be the output of another layer.
 
     :param tf.Tensor batch_dim: including beam size in beam search
     :param str name: layer name
