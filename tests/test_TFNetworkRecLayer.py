@@ -4161,6 +4161,121 @@ def test_trafo_search_lm():
       assert all(out_seqs[i, :input_seq_lens[i]] == input_seqs[i, :input_seq_lens[i]])
 
 
+def test_PositionalEncodingLayer_offset_no_rec():
+  # Test `offset` option when `PositionalEncodingLayer` is out of loop.
+  rnd = numpy.random.RandomState(42)
+  n_batch, n_in, n_time, size = 3, 5, 7, 8
+  n_out = n_in
+
+  net_dict = {
+    "input": {"class": "linear", "activation": None, "n_out": size,},
+    "offset": {"class": "constant", "from": [], "value": 1},
+    "raw_pos_enc": {"class": "positional_encoding", "add_to_input": False, "from": ["input"], "n_out": size},
+    "const_pos_enc": {"class": "positional_encoding", "add_to_input": False, "constant": 42,
+                      "from": ["input"], "n_out": size},
+    "pos_enc": {"class": "positional_encoding", "add_to_input": True, "from": ["input"], "offset": "offset"},
+    "output": {"class": "softmax", "target": "data", "from": ["pos_enc", "raw_pos_enc", "const_pos_enc"], "loss": "ce"},
+  }
+
+  config = Config()
+  config.update({
+    "extern_data": {"data": {"dim": n_out, "sparse": True}},
+    "debug_print_layer_output_template": True})
+
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    pprint(network.extern_data.data)
+    network.construct_from_dict(net_dict)
+
+    fetches = network.get_fetches_dict()
+    data_input = network.extern_data.data["data"]
+    assert data_input.batch_shape == (None, None)
+
+    train_out = network.get_layer("output").output
+    session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+    rand_data = rnd.randint(0, n_out, size=(n_batch, n_time,), dtype="int32")
+    outputs = [train_out.placeholder]
+    info, out = session.run(
+      (fetches, outputs),
+      feed_dict={
+        data_input.placeholder: rand_data,
+        data_input.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),
+      })
+    print(info)
+    print(out)  # random...
+
+
+def test_PositionalEncodingLayer_offset_in_rec():
+  # Test `offset` option when `PositionalEncodingLayer` is in loop.
+  rnd = numpy.random.RandomState(42)
+  n_batch, n_in, n_time, size = 3, 5, 7, 8
+  n_out = n_in
+
+  net_dict = {
+    "output": {
+      "class": "rec",
+      "from": "data",
+      'target': "data",
+      'unit': {
+        "input": {"class": "linear", "activation": None, "from": "data:source", "n_out": size},
+        "in_prefix": {  # Just a dummy switch which turns off once it sees an input with the ID 0.
+          "class": "eval", "from": ["data:source", "prev:in_prefix"], "initial_output": True,
+          "out_type": {'time_dim_axis': None, "dtype": "bool", "dim": 2},
+          "eval": "tf.logical_and(tf.not_equal(source(0, "
+              "auto_convert=False, as_data=True).copy_as_batch_major().placeholder, 0), source(1))"},
+        # Increment by one as long as `in_prefix` is on.
+        "counter": {
+          "class": "eval", "from": ["in_prefix", "prev:counter"], "initial_output": 0,
+          "out_type": {'time_dim_axis': None, "shape": (), "dtype": "int32", "dim": None, "sparse": False},
+          "eval": "where_bc(source(0, auto_convert=False, as_data=True).copy_as_batch_major().placeholder,"
+                  "source(1, auto_convert=False, as_data=True).copy_as_batch_major().placeholder + "
+                  "tf.ones(tf.shape(source(0, auto_convert=False, as_data=True).copy_as_batch_major().placeholder),"
+                           "dtype=tf.int32),"
+                  "source(1, auto_convert=False, as_data=True).copy_as_batch_major().placeholder)"},
+        # 0 when `in_prefix` is on. Minus `counter` otherwise.
+        "offset": {
+          "class": "eval", "from": ["in_prefix", "counter"],
+          "out_type": {'time_dim_axis': None, "shape": (), "dtype": "int32", "sparse": False, "dim": None},
+          "eval": "where_bc(source(0, auto_convert=False, as_data=True).copy_as_batch_major().placeholder,"
+                  "tf.zeros(tf.shape(source(1, auto_convert=False, as_data=True).copy_as_batch_major().placeholder),"
+                            "dtype=tf.int32),"
+                  "-source(1, auto_convert=False, as_data=True).copy_as_batch_major().placeholder)"},
+        "pos_enc": {"class": "positional_encoding", "add_to_input": True, "from": ["input"], "offset": "offset"},
+        "rnn_h": {"class": "linear", "activation": "tanh", "from": ["prev:rnn_h", "pos_enc"],
+                  "n_out": size, "initial_output": 0},
+        "output": {"class": "softmax", "from": ["rnn_h"], "loss": "ce", "target": "data"},
+      }
+    }
+  }
+
+  config = Config()
+  config.update({
+    "extern_data": {"data": {"dim": n_out, "sparse": True}},
+    "debug_print_layer_output_template": True})
+
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    pprint(network.extern_data.data)
+    network.construct_from_dict(net_dict)
+
+    fetches = network.get_fetches_dict()
+    data_input = network.extern_data.data["data"]
+    assert data_input.batch_shape == (None, None)
+
+    train_out = network.get_layer("output").output
+    session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+    rand_data = rnd.randint(0, n_out, size=(n_batch, n_time,), dtype="int32")
+    outputs = [train_out.placeholder]
+    info, out = session.run(
+      (fetches, outputs),
+      feed_dict={
+        data_input.placeholder: rand_data,
+        data_input.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),
+      })
+    print(info)
+    print(out)  # random...
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
