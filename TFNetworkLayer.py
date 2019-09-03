@@ -1752,6 +1752,16 @@ class SourceLayer(LayerBase):
     self.output = data
 
   @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    d.setdefault("from", [])  # source does not make sense
+    super(SourceLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
+  @classmethod
   def get_out_data_from_opts(cls, network, data_key=None, **kwargs):
     """
     :param TFNetwork.TFNetwork network:

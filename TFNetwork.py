@@ -621,9 +621,9 @@ class TFNetwork(object):
     if not layer_desc:
       if name not in net_dict:
         if name == "data":
-          layer_desc = {"class": "source", "from": []}
+          layer_desc = {"class": "source"}
         elif name.startswith("data:"):
-          layer_desc = {"class": "source", "data_key": name[len("data:"):], "from": []}
+          layer_desc = {"class": "source", "data_key": name[len("data:"):]}
       else:
         layer_desc = net_dict[name]
     if not layer_desc:
