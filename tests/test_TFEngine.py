@@ -2,6 +2,7 @@
 # start test like this:  nosetests-2.7  tests/test_TFEngine.py
 # or directly:  python3 test_TFEngine.py test_engine_rec_subnet_count
 
+from __future__ import print_function
 
 import logging
 logging.getLogger('tensorflow').disabled = True
@@ -39,6 +40,9 @@ try:
   faulthandler.enable()
 except ImportError:
   print("no faulthandler")
+
+
+print("TF version:", tf.VERSION)
 
 
 @contextlib.contextmanager

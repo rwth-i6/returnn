@@ -2746,7 +2746,8 @@ def reuse_name_scope_of_tensor(x, prefix="", postfix="", add_tensor_name=False):
   :return: reuse the name scope of x, e.g. "layer0/rec", yields scope
   """
   if add_tensor_name:
-    postfix = os.path.basename(x.name).split(":")[0] + postfix
+    from Util import unicode_to_str
+    postfix = "/%s%s" % (unicode_to_str(os.path.basename(x.name).split(":")[0]), postfix)
   with reuse_name_scope(prefix + get_name_scope_of_tensor(x) + postfix, absolute=True) as scope:
     yield scope
 
