@@ -2082,6 +2082,10 @@ class LossHolder:
         tf.summary.scalar("loss_%s" % name, self._loss_value * self._norm_factor)
         if self._network.get_config().bool("calculate_exp_loss", False):
           tf.summary.scalar("exp_loss_%s" % name, tf.exp(self._loss_value * self._norm_factor))
+        if self._network.get_config().bool("debug_unnormalized_loss_summaries", False):
+          tf.summary.scalar("unnormalized_loss_%s" % name, self._loss_value)
+        if self._network.get_config().bool("debug_objective_loss_summaries", False):
+          tf.summary.scalar("objective_loss_%s" % name, self._loss_value_for_objective)
     if self._error_value is not None:
       if self._error_value.get_shape().ndims == 0:
         tf.summary.scalar("error_%s" % name, self._error_value * self._norm_factor)
@@ -2113,7 +2117,6 @@ class LossHolder:
         "layer %r loss %r return None for loss and error" % (self._layer, self.loss))
     if self._norm_factor is None:
       self._norm_factor = self.loss.get_normalization_factor()
-    self._tf_summary()
     loss_value = self._loss_value
     if loss_value is not None:
       if self._network.get_config().bool("debug_add_check_numerics_on_output", False):
@@ -2131,6 +2134,7 @@ class LossHolder:
     if self.loss.use_normalized_loss and loss_value is not None:
       loss_value *= self._norm_factor
     self._loss_value_for_objective = loss_value
+    self._tf_summary()
     self._is_prepared = True
 
   def copy_new_base(self, name=None, layer=None, network=None, reduce_func=None):
