@@ -143,7 +143,10 @@ class RecStepByStepLayer(RecLayer):
     assert rec_layer_name in network.layers
     rec_layer = network.layers[rec_layer_name]
     assert isinstance(rec_layer, RecStepByStepLayer)
+    cell = rec_layer.cell
+    assert isinstance(cell, SubnetworkRecCellSingleStep)
     info = {"state_vars": {}, "stochastic_var_order": [], "stochastic_vars": {}}
+    init_base_ops = []
     init_ops = []
     tile_batch_repetitions = tf.placeholder(name="tile_batch_repetitions", shape=(), dtype=tf.int32)
     tile_batch_ops = []
@@ -159,14 +162,19 @@ class RecStepByStepLayer(RecLayer):
         "var_op": var.var.op.name,
         "shape": [int(d) if d is not None else None for d in var.var_data_shape.batch_shape],
         "dtype": var.var.dtype.base_dtype.name}
-      if not name.startswith("stochastic_var_"):
+      if name.startswith("base_"):
+        init_base_ops.append(var.init_op())
+      if not name.startswith("stochastic_var_") and not name.startswith("base_"):
         init_ops.append(var.init_op())
         tile_batch_ops.append(var.tile_batch_op(tile_batch_repetitions))
         select_src_beams_ops.append(var.select_src_beams_op(src_beams=src_beams))
       if not name.startswith("stochastic_var_") and not name.startswith("base_"):
         next_step_ops.append(var.final_op())
+    init_base_ops.append(cell.parent_tile_multiples_t.initializer)
+    info["init_base_op"] = tf.group(*init_base_ops, name="rec_step_by_step_init_base_op").name
     info["init_op"] = tf.group(*init_ops, name="rec_step_by_step_init_op").name
-    info["next_step_op"] = tf.group(*next_step_ops, name="rec_step_by_step_update_op").name
+    with tf.control_dependencies([cell.get_tile_multiple_update_op()]):
+      info["next_step_op"] = tf.group(*next_step_ops, name="rec_step_by_step_update_op").name
     info["tile_batch"] = {
       "op": tf.group(*tile_batch_ops, name="rec_step_by_step_tile_batch_op").name,
       "repetitions_placeholder": tile_batch_repetitions.op.name}
@@ -532,7 +540,15 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
 
   def __init__(self, **kwargs):
     self._parent_layers = {}  # type: typing.Dict[str,WrappedInternalLayer]
+    self.parent_tile_multiples_t = tf.get_variable(
+      name="parent_tile_multiples", shape=(), dtype=tf.int32, initializer=tf.ones_initializer())  # type: tf.Variable
     super(SubnetworkRecCellSingleStep, self).__init__(**kwargs)
+
+  def get_tile_multiple_update_op(self, ):
+    """
+    :rtype: tf.Operation
+    """
+    return tf.assign(self.parent_tile_multiples_t, )
 
   def _get_parent_layer(self, layer_name):
     """
@@ -546,9 +562,13 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     if rec_layer is None:  # at template construction
       return layer
     assert isinstance(rec_layer, RecStepByStepLayer)
+    from TFUtil import tile_transposed
     output = layer.output.copy()
-    output.placeholder = rec_layer.create_state_var(
-      name="base_value_%s" % layer_name, initial_value=output.placeholder, data_shape=output)
+    output.placeholder = tile_transposed(
+      rec_layer.create_state_var(
+        name="base_value_%s" % layer_name, initial_value=output.placeholder, data_shape=output),
+      axis=output.batch_dim_axis,
+      multiples=self.parent_tile_multiples_t)
     from TFUtil import DimensionTag
     for i, size in list(output.size_placeholder.items()):
       dim_tag = DimensionTag.get_tag_from_size_tensor(size)
@@ -557,6 +577,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
         dim_tag = output.get_dim_tag(output.get_batch_axis(i))
         dim_tag.set_tag_on_size_tensor(size)
       new_size = rec_layer.create_state_var(name="base_size%i_%s" % (i, layer_name), initial_value=size)
+      new_size = tile_transposed(new_size, axis=0, multiples=self.parent_tile_multiples_t)
       dim_tag.set_tag_on_size_tensor(new_size)
       output.size_placeholder[i] = new_size
     layer = WrappedInternalLayer(name=layer_name, network=self.parent_net, output=output, base_layer=layer)
