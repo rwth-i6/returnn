@@ -1696,7 +1696,7 @@ class SearchChoices(object):
     if other in self_src_choices and self not in other_src_choices:
       return 1
     from pprint import pformat
-    raise Exception("Cannot compare search choices %r and %r which have traces:%s\n%s" % (
+    raise Exception("Cannot compare search choices\n %r,\n %r\nwhich have traces:\n%s,\n%s" % (
       self, other, pformat(self_src_choices), pformat(other_src_choices)))
 
   def __cmp__(self, other):
