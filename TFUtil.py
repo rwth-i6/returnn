@@ -1253,7 +1253,7 @@ class Data(object):
     """
     :param int exclude_axis: axis to be removed.
     :param str|None name: if set, this will be the new name.
-    :return: copy of myself excluding remove_axis_num axis, without placeholder.
+    :return: copy of myself excluding exclude_axis axis, without placeholder.
     :rtype: Data
     """
     kwargs = self.get_kwargs()

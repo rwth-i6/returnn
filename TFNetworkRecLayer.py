@@ -5277,14 +5277,13 @@ class SelfAttentionLayer(_ConcatInputLayer):
 
 class PositionalEncodingLayer(_ConcatInputLayer):
   """
-  Provides positional encoding in the form of (batch, time, n_out) or (time, batch, n_out) same as the source
+  Provides positional encoding in the form of (batch, time, n_out) or (time, batch, n_out)
   where n_out is the number of channels, if it is run outside a :class:`RecLayer`,
-  and (batch, n_out) or (n_out, batch) same as the source
+  and (batch, n_out) or (n_out, batch)
   if run inside a :class:`RecLayer`, where it will depend on the current time frame.
 
   Assumes one source input with a time dimension if outside a :class:`RecLayer`.
-  With `add_to_input`, it will calculate `x + input`.
-  The output shape is the same as the input in all cases.
+  With `add_to_input`, it will calculate `x + input`, and the output shape is the same as the input
 
   The positional encoding is the same as in Tensor2Tensor.
   See :func:`TFUtil.get_positional_encoding`.
