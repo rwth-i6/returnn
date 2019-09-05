@@ -1249,6 +1249,51 @@ class Data(object):
       kwargs["dtype"] = dtype
     return Data(**kwargs)
 
+  def copy_template_excluding_axis(self, exclude_axis, name=None):
+    """
+    :param int exclude_axis: axis to be removed.
+    :param str|None name: if set, this will be the new name.
+    :return: copy of myself excluding remove_axis_num axis, without placeholder.
+    :rtype: Data
+    """
+    kwargs = self.get_kwargs()
+    if exclude_axis < 0:
+      exclude_axis += self.batch_ndim
+      assert exclude_axis >= 0
+    assert 0 <= exclude_axis < self.batch_ndim
+    axis_to_exclude_wo_b = self.get_batch_axis_excluding_batch(exclude_axis)  # None if exclude_axis == batch_dim_axis
+    if exclude_axis == self.feature_dim_axis:
+      del kwargs["dim"]
+
+    other_special_axes = self.get_special_axes_dict(
+      counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
+    for axis_name, axis in other_special_axes.items():
+      assert axis_name in kwargs
+      if axis == exclude_axis:
+        del kwargs[axis_name]
+      else:
+        kwargs[axis_name] = axis if (axis < exclude_axis) else (axis - 1)
+    if exclude_axis == self.batch_dim_axis:
+      kwargs["batch_dim_axis"] = None
+
+    new_shape = list(self.shape)
+    if axis_to_exclude_wo_b is not None:
+      del new_shape[axis_to_exclude_wo_b]
+    kwargs["shape"] = new_shape
+
+    if self.size_placeholder is not None:
+      size_placeholder = {}
+      for i, size in self.size_placeholder.items():
+        if i == axis_to_exclude_wo_b:
+          continue
+        if axis_to_exclude_wo_b is not None and i > axis_to_exclude_wo_b:
+          i -= 1
+        size_placeholder[i] = size
+      kwargs["size_placeholder"] = size_placeholder
+    if name:
+      kwargs["name"] = name
+    return Data(**kwargs)
+
   def copy_template_excluding_spatial_dim(self, spatial_axis_num, name=None):
     """
     :param int spatial_axis_num: index in self.get_spatial_batch_axes()
