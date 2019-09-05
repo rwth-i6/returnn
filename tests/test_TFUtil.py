@@ -305,6 +305,16 @@ def test_Data_copy_template_excluding_spatial_dim():
   assert rem_enc_time.shape == (None, 1) and rem_enc_time.batch_dim_axis == 1
 
 
+def test_Data_copy_template_excluding_axis():
+  data = Data(name="data", shape=(None, 8), batch_dim_axis=0, time_dim_axis=1, feature_dim_axis=2)
+  data_wo_batch = data.copy_template_excluding_axis(data.batch_dim_axis)
+  assert data_wo_batch.shape == (None, 8) and data_wo_batch.feature_dim_axis == 1 and data_wo_batch.time_dim_axis == 0
+  data_wo_time = data.copy_template_excluding_axis(data.time_dim_axis)
+  assert data_wo_time.shape == (8,) and data_wo_time.feature_dim_axis == 1 and data_wo_time.batch_dim_axis == 0
+  data_wo_feature = data.copy_template_excluding_axis(data.feature_dim_axis)
+  assert data_wo_feature.shape == (None,) and data_wo_feature.time_dim_axis == 1 and data_wo_feature.batch_dim_axis == 0
+
+
 def test_Data_copy_squeeze_axes():
   weights = Data(name='att_weights_output', shape=(1, None), time_dim_axis=2, auto_create_placeholders=True)
   squeezed = weights.copy_squeeze_axes([1])
