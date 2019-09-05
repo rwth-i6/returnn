@@ -2263,13 +2263,13 @@ def help_on_tf_exception(
 
   :param tf.Session session:
   :param tf.errors.OpError|BaseException exception:
-  :param tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor]|None fetches:
+  :param tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor]|object|None fetches:
   :param dict[tf.Tensor,numpy.ndarray]|None feed_dict:
   :param dict[str]|None meta_step_info:
   :param ExternData|None extern_data:
   :param typing.IO[str]|io.TextIOBase|io.StringIO file:
   """
-  from pprint import pprint
+  from pprint import pprint, pformat
   import traceback
   from TFUtil import get_base_name, find_ops_with_tensor_input, find_ops_path_output_to_input
   from tensorflow.python.util import nest
@@ -2301,7 +2301,7 @@ def help_on_tf_exception(
         # First find some value to fetch.
         assert fetches
         input_to_output_ops = find_ops_path_output_to_input(op.inputs[0], fetches=fetches)
-        assert input_to_output_ops
+        assert input_to_output_ops, "op.inputs[0] %r not in fetches\n%s" % (op.inputs[0], pformat(fetches))
         debug_fetch = None
         for x in input_to_output_ops:
           # noinspection PyProtectedMember
