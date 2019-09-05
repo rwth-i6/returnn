@@ -2258,7 +2258,8 @@ class _SubnetworkRecCell(object):
     :rtype: (tf.TensorArray,SearchChoices|None)
     """
     import os
-    from TFUtil import nd_indices, assert_min_tf_version, expand_dims_unbroadcast
+    from TFUtil import nd_indices, assert_min_tf_version, expand_dims_unbroadcast, get_valid_scope_name_from_str
+    from TFUtil import get_shape_dim
     rec_layer = self.parent_rec_layer
     if layer_name not in self.net.layers:  # inside loop
       return acc_ta, None
@@ -2295,45 +2296,49 @@ class _SubnetworkRecCell(object):
           return choice_seq, choice
         choice_seq.append(choice)
 
+    # Get the very latest choice in the rec layer.
     latest_layer_choice = layer_choice
     _, latest_layer_choice = get_choice_seq(latest_layer_choice)
     assert latest_layer_choice.name.startswith("prev:")
     latest_layer_choice = self.net.layers[latest_layer_choice.name[len("prev:"):]]
     assert latest_layer_choice.search_choices
 
+    # The seq_len might actually be one more, as it includes the EOS, but that does not matter;
+    # we just want to create a new acc_ta with the same length.
+    # (Cutting off the EOS is handled elsewhere.)
     seq_len = acc_ta.size()
     initial_i = tf.identity(seq_len - 1, name="search_resolve_initial_i")  # we go backwards
     latest_beam_size = latest_layer_choice.output.beam_size
     batch_dim = rec_layer.network.get_data_batch_dim()
-    assert latest_beam_size == layer_choice.search_choices.beam_size  # would need fixing...
 
     initial_beam_choices = tf.range(0, latest_beam_size)  # (beam_out,)
     initial_beam_choices = expand_dims_unbroadcast(
       initial_beam_choices, axis=0, dim=batch_dim)  # (batch, beam_out)
 
+    # Get the whole choice sequence, starting from the latest to the first.
     choice_seq_in_frame, prev_frame_choice = get_choice_seq(latest_layer_choice)
     assert prev_frame_choice.name == "prev:%s" % latest_layer_choice.name
     assert layer_choice in choice_seq_in_frame
 
     new_acc_output_ta = tf.TensorArray(
       name="search_resolved_%s" % os.path.basename(acc_ta.handle.op.name),
-      dtype=self.layer_data_templates[layer_name].output.dtype,
-      element_shape=tf.TensorShape(self.layer_data_templates[layer_name].output.batch_shape),
+      dtype=self.net.layers[layer_name].output.dtype,
+      element_shape=tf.TensorShape(self.net.layers[layer_name].output.batch_shape),
       size=seq_len,
       infer_shape=True)
 
     def transform(i, idxs_exp, new_acc_output_ta_):
       """
       :param int|tf.Tensor i: scalar, int32
-      :param tf.Tensor idxs_exp:
+      :param tf.Tensor idxs_exp: (batch, beam_out, 2) -> (batch idx, beam idx)
       :param tf.TensorArray new_acc_output_ta_:
       :return: new_acc_output_ta_
       :rtype: tf.TensorArray
       """
-      with tf.name_scope("output"):
+      with tf.name_scope("transform_output_%s" % get_valid_scope_name_from_str(layer_name)):
         output_ = acc_ta.read(i)  # (batch * beam, [n_out])
-        assert self.layer_data_templates[layer_name].output.batch_dim_axis == 0
-        out_shape = list(self.layer_data_templates[layer_name].output.batch_shape)
+        assert self.net.layers[layer_name].output.batch_dim_axis == 0
+        out_shape = list(self.net.layers[layer_name].output.batch_shape)
         output_.set_shape(tf.TensorShape(out_shape))
         for i_, d in list(enumerate(out_shape)):
           if i_ == 0:
@@ -2341,12 +2346,13 @@ class _SubnetworkRecCell(object):
           if d is None:
             out_shape[i_] = tf.shape(output_)[i_]
         output_ = tf.reshape(
-          output_,
-          [batch_dim, latest_beam_size] + out_shape[1:])  # (batch, beam, [n_out])
+          output_, [batch_dim, layer_choice.output.beam_size] + out_shape[1:],
+          name="split_batch_beam")  # (batch, beam, [n_out])
         output_ = tf.gather_nd(output_, idxs_exp)  # (batch, beam_par, [n_out])
+        beam_par = get_shape_dim(idxs_exp, 1)
         output_ = tf.reshape(
-          output_,
-          [batch_dim * latest_beam_size] + out_shape[1:])  # (batch * beam_par, [n_out])
+          output_, [batch_dim * beam_par] + out_shape[1:],
+          name="merge_batch_beam")  # (batch * beam_par, [n_out])
         return new_acc_output_ta_.write(i, output_)
 
     def search_resolve_body(i, choice_beams, new_acc_output_ta_):
@@ -2362,14 +2368,14 @@ class _SubnetworkRecCell(object):
       :rtype: (tf.Tensor, tf.Tensor, tf.TensorArray|None)
       """
       # noinspection PyProtectedMember
-      with reuse_name_scope(rec_layer._rec_scope.name + "/while_loop_search_body", absolute=True):
+      with reuse_name_scope(rec_layer._rec_scope.name + "/while_loop_search_resolve_body", absolute=True):
         # We start at the output layer choice base, and search for its source, i.e. for the previous time frame.
         for choice_ in choice_seq_in_frame:
-          with tf.name_scope("choice_beams"):
+          with tf.name_scope("choice_beams_%s" % get_valid_scope_name_from_str(choice_.name)):
             assert_min_tf_version((1, 1), "gather_nd")
             idxs_exp = nd_indices(choice_beams)  # (batch, beam_out, 2) -> (batch idx, beam idx)
-            src_choice_beams = (
-              self.final_acc_tas_dict["choice_%s" % choice_.name].read(i))  # (batch, beam) -> beam_in idx
+            src_choice_beams = self.final_acc_tas_dict["choice_%s" % choice_.name].read(
+              i, name="ta_read_choice")  # (batch, beam) -> beam_in idx
             assert src_choice_beams.get_shape().ndims == 2
             src_choice_beams = tf.gather_nd(src_choice_beams, idxs_exp)  # (batch, beam_out)
 
@@ -2717,7 +2723,7 @@ class _SubnetworkRecCell(object):
         acc_ta, search_choices = self._opt_search_resolve(
           layer_name=name, acc_ta=acc_ta, final_net_vars=final_net_vars)
         output = self.layer_data_templates[name].output.copy_template_adding_time_dim(time_dim_axis=0)
-        output.beam_size = inner_layer.output.beam_size
+        output.beam_size = search_choices.beam_size if search_choices else None
         # We should have accumulated it.
         output.placeholder = tensor_array_stack(acc_ta, stop=max_len)  # e.g. (time,batch,dim)
         output.size_placeholder = {0: seq_len}
@@ -2734,11 +2740,11 @@ class _SubnetworkRecCell(object):
             if not has_control_flow_context(size):  # copy if this size comes from outside the loop
               output.size_placeholder[i + 1] = size
         assert isinstance(self.output_layers_net, TFNetwork)
-        layer = self.output_layers_net.add_layer(
+        layer_ = self.output_layers_net.add_layer(
           name=name, output=output, layer_class=InternalLayer, sources=[inner_layer])
-        layer.search_choices = search_choices
-        loop_acc_layers[name] = layer
-        return layer
+        layer_.search_choices = search_choices
+        loop_acc_layers[name] = layer_
+        return layer_
 
     def get_prev_layer(name):
       """
