@@ -2035,30 +2035,6 @@ class WrappedInternalLayer(InternalLayer):
     return self.base_layer.get_absolute_name_scope_prefix()
 
 
-class ExtendWithBeamLayer(WrappedInternalLayer):
-  """
-  This is not supposed to be used by the user. Like :class:`InternalLayer`, only intended for internal usage.
-  This layer is supposed to logically wrap another layer, and extend the output with a specific beam size.
-  """
-
-  def __init__(self, base_layer, beam_size, **kwargs):
-    """
-    :param LayerBase base_layer: the layer which we are wrapping
-    :param int beam_size:
-    """
-    super(ExtendWithBeamLayer, self).__init__(base_layer=base_layer, **kwargs)
-    self.output = base_layer.output.copy_extend_with_beam(beam_size)
-
-  @classmethod
-  def get_out_data_from_opts(cls, name, base_layer, beam_size, **kwargs):
-    """
-    :param str name:
-    :param LayerBase base_layer:
-    :param int beam_size:
-    """
-    return base_layer.output.copy_template(name="%s_output" % name).copy_extend_with_beam(beam_size)
-
-
 class SelectSearchSourcesLayer(InternalLayer):
   """
   Selects the corresponding search beams from the source, given current search choices
