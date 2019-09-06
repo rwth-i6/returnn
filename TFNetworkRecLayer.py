@@ -356,6 +356,7 @@ class RecLayer(_ConcatInputLayer):
         assert sub_out.dim == out.dim
         assert sub_out.shape == out.shape
       out = sub_out
+      out_batch_dim_axis = out.batch_dim_axis  # maybe the subnet does not have a batch-axis (rare but valid)
       deps += subnet.get_parent_deps()
     assert out
     out.time_dim_axis = out_time_dim_axis

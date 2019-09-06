@@ -1061,7 +1061,7 @@ def test_rec_RecStepInfoLayer():
     net.construct_from_dict(net_dict)
     inp = net.extern_data.data["data"]
     out = net.get_default_output_layer().output
-    assert out.time_dim_axis == 0 and out.batch_dim_axis == 1 and out.shape == (None,) and out.dtype == "int32"
+    assert out.time_dim_axis == 0 and out.batch_dim_axis is None and out.shape == (None,) and out.dtype == "int32"
     out_v = session.run(
       out.placeholder,
       feed_dict={
@@ -1069,8 +1069,8 @@ def test_rec_RecStepInfoLayer():
         inp.size_placeholder[0]: [n_time]
       })
     assert isinstance(out_v, numpy.ndarray)
-    assert out_v.shape == (n_time, n_batch)
-    assert_equal(out_v[:, 0].tolist(), [0, 1, 2])
+    assert out_v.shape == (n_time,)
+    assert_equal(out_v.tolist(), [0, 1, 2])
 
 
 def test_search_no_rec_explicit():
