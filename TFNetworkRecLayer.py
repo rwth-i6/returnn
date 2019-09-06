@@ -3125,7 +3125,7 @@ class RecStepInfoLayer(LayerBase):
     self.end_flag_source = None
     if not self.output.have_time_axis():  # the normal case
       assert i is not None and i.get_shape().ndims == 0
-      self.output.placeholder = tf.expand_dims(i, axis=0)
+      self.output.placeholder = i
       self.step = i
       self._end_flag = end_flag
       self.end_flag_source = end_flag_source
@@ -3133,7 +3133,7 @@ class RecStepInfoLayer(LayerBase):
       # This only is valid if we are moved out from a RecLayer.
       assert self.output.size_placeholder and 0 in self.output.size_placeholder
       seq_lens = self.output.size_placeholder[0]
-      self.output.placeholder = tf.expand_dims(tf.range(tf.reduce_max(seq_lens)), axis=1)
+      self.output.placeholder = tf.range(tf.reduce_max(seq_lens))
     self._seq_lens = seq_lens
     if seq_lens is None:
       assert end_flag_source
@@ -3185,7 +3185,7 @@ class RecStepInfoLayer(LayerBase):
     """
     # Check for the normal case first. If we don't have a parent rec layer, also fallback to this (e.g. debugging).
     if network.is_inside_rec_layer() or not isinstance(network.parent_layer, RecLayer):
-      return Data(name="i", shape=(), dtype="int32", sparse=False)
+      return Data(name="i", shape=(), batch_dim_axis=None, dtype="int32", sparse=False)
     # This only is valid if we are moved out from a RecLayer.
     assert isinstance(network.parent_layer, RecLayer)
     # We need to get the time-dim and seq lens.
@@ -3194,7 +3194,7 @@ class RecStepInfoLayer(LayerBase):
     assert 0 in network.parent_layer.output.size_placeholder
     seq_lens = network.parent_layer.output.size_placeholder[0]
     return Data(
-      name="i_unrolled", shape=(None,), time_dim_axis=0, batch_dim_axis=1, dtype="int32", sparse=False,
+      name="i_unrolled", shape=(None,), time_dim_axis=0, batch_dim_axis=None, dtype="int32", sparse=False,
       size_placeholder={0: seq_lens})
 
 
