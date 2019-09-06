@@ -105,7 +105,8 @@ class LayerBase(object):
     :param int|None copy_output_loss_from_source_idx: if set, will copy output_loss from this source
     :param bool|dict batch_norm: see self.batch_norm()
     :param str|float initial_output: used for recurrent layer, see self.get_rec_initial_output()
-    :param LayerBase|None rec_previous_layer: via the recurrent layer, layer (template) which represents the past of us
+    :param LayerBase|None rec_previous_layer: via the recurrent layer, layer (template) which represents the past of us.
+      You would not explicitly set this in a config. This is automatically, internally, via :class:`RecLayer`.
     :param list[LayerBase]|None collocate_with: in the rec layer, collocate with the specified other layers
     :param bool trainable: whether the parameters of this layer will be trained
     :param str|callable|None custom_param_importer: used by :func:`set_param_values_by_dict`

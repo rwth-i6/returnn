@@ -87,6 +87,7 @@ class RecLayer(_ConcatInputLayer):
                cheating=False,
                unroll=False, back_prop=None,
                use_global_rec_step_offset=False,
+               include_eos=False,
                debug=None,
                **kwargs):
     """
@@ -106,6 +107,7 @@ class RecLayer(_ConcatInputLayer):
     :param bool unroll: if possible, unroll the loop (implementation detail)
     :param bool|None back_prop: for tf.while_loop. the default will use self.network.train_flag
     :param bool use_global_rec_step_offset:
+    :param bool include_eos: for search, whether we should include the frame where "end" is True
     :param bool|None debug:
     """
     super(RecLayer, self).__init__(**kwargs)
@@ -125,6 +127,7 @@ class RecLayer(_ConcatInputLayer):
     self._initial_state_deps = [l for l in nest.flatten(initial_state) if isinstance(l, LayerBase)]
     self._input_projection = input_projection
     self._max_seq_len = max_seq_len
+    self.include_eos = include_eos
     if optimize_move_layers_out is None:
       optimize_move_layers_out = self.network.get_config().bool("optimize_move_layers_out", True)
     self._optimize_move_layers_out = optimize_move_layers_out
@@ -1482,6 +1485,11 @@ class _SubnetworkRecCell(object):
       back_prop=self.parent_rec_layer.back_prop)
 
   class OutputToAccumulate:
+    """
+    Helper class to hold information about some tensor which we are going to accumulate in a TensorArray
+    from inside of the recurrent loop.
+    """
+
     # noinspection PyShadowingNames
     def __init__(self, name, dtype, element_shape, get):
       """
@@ -2031,7 +2039,7 @@ class _SubnetworkRecCell(object):
             with tf.name_scope("dyn_seq_len"):
               dyn_seq_len = cur_end_layer.transform_func(dyn_seq_len)
               dyn_seq_len += tf.where(
-                end_flag,
+                cur_end_layer.output.placeholder if rec_layer.include_eos else end_flag,
                 constant_with_shape(0, shape=tf.shape(end_flag)),
                 constant_with_shape(1, shape=tf.shape(end_flag)))  # (batch * beam,)
               seq_len_info = (end_flag, dyn_seq_len)
