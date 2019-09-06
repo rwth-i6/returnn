@@ -7930,6 +7930,51 @@ def _tensor_array_select_src_beams(ta, src_beams):
   return ta_new
 
 
+def beam_search(scores, beam_size, cheating_gold_targets=None):
+  """
+  This is mostly a higher-level wrapper around :func:`tf.nn.top_k`.
+
+  :param tf.Tensor scores: (batch,beam_in,dim). combined scores (i.e. base beam scores + new scores),
+    dense over the dims, such that we have labels in [0,...,dim-1].
+  :param int beam_size:
+  :param tf.Tensor|None cheating_gold_targets: (batch,), int32
+  :rtype: (tf.Tensor,tf.Tensor,tf.Tensor)
+  :return: src_beams, labels, beam_scores.
+    src_beams: (batch, beam) -> beam_in idx (int32),
+    labels: (batch, beam) -> dim idx (int32),
+    beam_scores: (batch, beam) -> beam score (float32).
+  """
+  batch_dim, beam_in, in_dim = get_shape(scores)
+  scores_flat = tf.reshape(scores, [batch_dim, beam_in * in_dim])  # (batch, beam_in * dim)
+  # `tf.nn.top_k` is the core function performing our search.
+  # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
+  top_k_size = beam_size
+  if isinstance(in_dim, tf.Tensor) or in_dim < beam_size:
+    top_k_size = tf.minimum(beam_in * in_dim, top_k_size)
+  beam_scores, labels = tf.nn.top_k(scores_flat, k=top_k_size)
+  if top_k_size is not beam_size:
+    extra_shape = (batch_dim, beam_size - top_k_size)
+    labels = tf.concat([labels, tf.zeros(extra_shape, dtype=labels.dtype)], axis=-1)
+    beam_scores = tf.concat([beam_scores, tf.fill(extra_shape, float("-inf"))], axis=-1)
+  if cheating_gold_targets is not None:
+    # It assumes that sorted=True in top_k, and the last entries in scores/labels are the worst.
+    # We replace them by the true labels.
+    cheating_gold_targets = tf.clip_by_value(
+      cheating_gold_targets, 0, in_dim - 1)  # safety, for invalid values...
+    gold_beam_in_idx = beam_in - 1  # also assume last index
+    gold_labels = gold_beam_in_idx * in_dim + cheating_gold_targets  # (batch,)
+    gold_labels_bc = tf.expand_dims(gold_labels, axis=1)  # (batch,1)
+    labels = tf.concat([labels[:, :beam_size - 1], gold_labels_bc], axis=1)  # (batch,beam)
+    # Note: In case the seq ended, we assume that the gold_targets are all 0, such that we get the right score.
+    gold_scores = tf.gather_nd(
+      scores[:, gold_beam_in_idx], indices=nd_indices(cheating_gold_targets))  # (batch,)
+    gold_scores_bc = tf.expand_dims(gold_scores, axis=1)  # (batch,1)
+    beam_scores = tf.concat([beam_scores[:, :beam_size - 1], gold_scores_bc], axis=1)  # (batch,beam)
+  src_beams = labels // in_dim  # (batch, beam) -> beam_in idx
+  labels = labels % in_dim  # (batch, beam) -> dim idx
+  return src_beams, labels, beam_scores
+
+
 def select_src_beams(x, src_beams, name="select_src_beams"):
   """
   :param tf.Tensor|tf.TensorArray|T x: (batch * src-beam, ...)
