@@ -151,6 +151,14 @@ def test_Data_copy_template_adding_time_dim_no_feature():
   # assert d2.feature_dim_axis is None  # not sure what we would want here...
 
 
+def test_Data_copy_template_adding_time_dim_no_batch():
+  d1 = Data(name="d1", shape=(), dtype='int32', batch_dim_axis=None, time_dim_axis=None)
+  assert d1.batch_dim_axis is None and d1.batch_shape == ()
+  assert d1.feature_dim_axis is None
+  d2 = d1.copy_template_adding_time_dim()
+  assert d2.batch_dim_axis is None and d2.time_dim_axis == 0 and d2.batch_shape == (None,)
+
+
 def test_Data_get_axes_from_description_except_time_ext():
   data = Data(name='merge_dims_test_output', shape=(3, None, 5), time_dim_axis=2)
   axes = data.get_axes_from_description("except_time")

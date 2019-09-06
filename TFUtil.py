@@ -1371,7 +1371,6 @@ class Data(object):
     :return: copy of myself adding the time-dimension without placeholder
     :rtype: Data
     """
-    assert self.batch_dim_axis is not None
     kwargs = self.get_kwargs()
     new_shape = list(self.shape)
     new_shape.insert(time_dim_axis, None)
