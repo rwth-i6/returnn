@@ -8352,9 +8352,10 @@ def find_ops_path_output_to_input(tensors, fetches):
   assert len(tensors) > 0
   if isinstance(fetches, (tf.Operation, tf.Tensor)):
     fetches = [fetches]
-  fetches = [x.op if isinstance(x, tf.Tensor) else x for x in fetches]
+  fetches = [x.op if isinstance(x, (tf.Tensor, tf.Variable)) else x for x in fetches]
   fetches = set(fetches)
-  assert all([isinstance(x, tf.Operation) for x in fetches])
+  for x in fetches:
+    assert isinstance(x, tf.Operation)
 
   back_pointers = {}  # type: typing.Dict[tf.Operation,tf.Operation]
   cur_wave = fetches  # type: typing.Set[tf.Operation]
@@ -9003,7 +9004,7 @@ class FetchHelper:
     fetches_flat = nest.flatten(fetches)
     from tensorflow.contrib import graph_editor
     ops = graph_editor.get_backward_walk_ops(
-      seed_ops=[x.op if isinstance(x, tf.Tensor) else x for x in fetches_flat],
+      seed_ops=[x.op if isinstance(x, (tf.Tensor, tf.Variable)) else x for x in fetches_flat],
       stop_at_ts=stop_at_ts,
       inclusive=True, control_inputs=True)
     if target_op.name in [x.name for x in ops] and target_op not in ops:
