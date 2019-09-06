@@ -11,7 +11,7 @@ import contextlib
 import typing
 import TFUtil
 from Util import unicode, NotSpecified, CollectionReadCheckCovered
-from TFUtil import Data, OutputWithActivation, CustomUpdate, dimshuffle, swapaxes
+from TFUtil import Data, OutputWithActivation, CustomUpdate, CustomUpdateExpAverage, dimshuffle, swapaxes
 from Log import log
 
 
@@ -1081,13 +1081,16 @@ class LayerBase(object):
     return c
 
   def batch_norm(self, data,
+                 axes='f',
                  use_shift=True, use_std=True, use_sample=0.0, force_sample=False,
                  momentum=0.99, epsilon=1e-3,
                  sample_mean=None, sample_variance=None,
                  gamma=None, beta=None,
+                 fused=False,
                  masked_time=True):
     """
     :param Data data:
+    :param int|str|list[int|str] axes: axis/axes to normalize
     :param bool use_shift:
     :param bool use_std:
     :param float use_sample: defaults to 0.0 which is used in training
@@ -1098,6 +1101,7 @@ class LayerBase(object):
     :param tf.Tensor sample_variance:
     :param tf.Tensor gamma:
     :param tf.Tensor beta:
+    :param bool fused: use fused version of batch normalisation
     :param bool masked_time: flatten and mask input tensor
     :rtype: tf.Tensor
 
@@ -1107,51 +1111,102 @@ class LayerBase(object):
       tf.nn.batch_normalization()
       https://github.com/deepmind/sonnet/blob/master/sonnet/python/modules/batch_norm.py
     """
+    from operator import mul
+    from functools import reduce
+
     with tf.variable_scope("batch_norm"):
-      if masked_time:
-        x = data.get_placeholder_flattened(keep_dims=True)
-        mean, variance = tf.nn.moments(x, axes=[0], keep_dims=True)
-      else:
-        x = data.placeholder
-        mean, variance = tf.nn.moments(x, axes=data.get_axes(exclude_feature=True), keep_dims=True)
+      # Creating variables
+      fused = fused and not force_sample
+      # Perform batch_norm operations in NHWC format in order to
+      # keep consistency when saving/loading the variables.
+      # Not relevant when fused or masked_time.
+      input_data = data.copy() if fused or masked_time else data.copy_as_batch_spatial_major()
+      ax = input_data.get_axes_from_description(axes)
+      opts = dict(zip(ax, [-1] * len(ax)))
+      variables_shape = input_data.get_bc_shape(opts)
+      variables_shape_flat = [reduce(mul, variables_shape, 1)]
+      # fused bn possible => create flat variables
+      shape = variables_shape_flat if fused else variables_shape
+
       if sample_mean is None:
         with self.var_creation_scope():
           sample_mean = self.add_param(tf.Variable(
-            initial_value=tf.zeros(data.get_bc_spatial_batch_shape()),
+            initial_value=tf.zeros(shape),
             name="%s_%s_mean" % (self.name, data.name),
             trainable=False))
-        # Use exponential moving average of batch mean.
-        # Note: We could also use cumulative moving average. Our Theano implementation does that for inference.
-        sample_mean = tf.assign_add(sample_mean, (mean - sample_mean) * momentum)
+      else:
+        sample_mean = tf.reshape(sample_mean, shape)
       if sample_variance is None:
-        # Note: Our Theano implementation does not use a moving average for this.
         with self.var_creation_scope():
           sample_variance = self.add_param(tf.Variable(
-            initial_value=tf.ones(data.get_bc_spatial_batch_shape()),
+            initial_value=tf.ones(shape),
             name="%s_%s_variance" % (self.name, data.name),
             trainable=False))
+      else:
+        sample_variance = tf.reshape(sample_variance, shape)
+      if use_std:
+        if gamma is None:
+          with self.var_creation_scope():
+            gamma = self.add_param(tf.Variable(
+              initial_value=tf.ones(shape),
+              name="%s_%s_gamma" % (self.name, data.name),
+              trainable=True))
+        else:
+          gamma = tf.reshape(gamma, shape)
+      if use_shift:
+        if beta is None:
+          with self.var_creation_scope():
+            beta = self.add_param(tf.Variable(
+              initial_value=tf.zeros(shape),
+              name="%s_%s_beta" % (self.name, data.name),
+              trainable=True))
+        else:
+          beta = tf.reshape(beta, shape)
+
+      if fused:
+        # It's possible to use fused bn operation
+        return self._fused_batch_norm(
+          data=data, axes=axes,
+          use_shift=use_shift, use_std=use_std,
+          momentum=momentum, epsilon=epsilon,
+          sample_mean=sample_mean, sample_variance=sample_variance,
+          gamma=gamma, beta=beta,
+          masked_time=masked_time)
+      if masked_time:
+        # Default case
+        x = input_data.get_placeholder_flattened(keep_dims=True)
+        mean, variance = tf.nn.moments(x, axes=[0], keep_dims=True)
+        mean = tf.reshape(mean, shape=variables_shape)
+        variance = tf.reshape(variance, shape=variables_shape)
+      else:
+        axes = input_data.get_axes_from_description(axes)
+        assert input_data.feature_dim_axis in axes
+        assert input_data.batch_dim_axis not in axes  # Not supported
+        assert input_data.time_dim_axis not in axes  # Not supported
+        x = input_data.placeholder
+        axes_norm = axes
+        axes_stat = list(set(input_data.get_axes()) - set(axes_norm))
+        mean, variance = tf.nn.moments(x, axes=axes_stat, keep_dims=True)
+      # Use exponential moving average of batch mean.
+      # Note: We could also use cumulative moving average. Our Theano implementation does that for inference.
+      if isinstance(sample_mean, tf.Variable):
+        sample_mean = tf.assign_add(sample_mean, (mean - sample_mean) * momentum)
+      if isinstance(sample_variance, tf.Variable):
         sample_variance = tf.assign_add(sample_variance, (variance - sample_variance) * momentum)
       # If train or if force_sample, use default use_sample=0.0, otherwise use_sample=1.0.
       use_sample = 1.0 + tf.cast(tf.logical_or(self.network.train_flag, force_sample), tf.float32) * (use_sample - 1.0)
       mean = (1. - use_sample) * mean + use_sample * sample_mean
       variance = (1. - use_sample) * variance + use_sample * sample_variance
-      bn = (data.placeholder - mean) * tf.rsqrt(variance + epsilon)
+      bn = (input_data.placeholder - mean) * tf.rsqrt(variance + epsilon)
       if use_std:
-        if gamma is None:
-          with self.var_creation_scope():
-            gamma = self.add_param(tf.Variable(
-              initial_value=tf.ones(data.get_bc_spatial_batch_shape()),
-              name="%s_%s_gamma" % (self.name, data.name),
-              trainable=True))
         bn *= gamma
       if use_shift:
-        if beta is None:
-          with self.var_creation_scope():
-            beta = self.add_param(tf.Variable(
-              initial_value=tf.zeros(data.get_bc_spatial_batch_shape()),
-              name="%s_%s_beta" % (self.name, data.name),
-              trainable=True))
         bn += beta
+      if data.is_batch_feature_major and not masked_time:
+        # Transpose back to NCHW
+        perm = data.get_axes()
+        perm = perm[:1] + perm[-1:] + perm[1:-1]
+        bn = tf.transpose(bn, perm=perm)
       return bn
 
   def get_hidden_state(self):
