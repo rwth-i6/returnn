@@ -3843,7 +3843,7 @@ class ChoiceLayer(BaseChoiceLayer):
 
   _debug_out = None  # type: typing.Optional[list]
 
-  def __init__(self, beam_size,
+  def __init__(self, beam_size, keep_beams=False,
                search=NotSpecified,
                input_type="prob",
                prob_scale=1.0, base_beam_score_scale=1.0, random_sample_scale=0.0,
@@ -3854,6 +3854,8 @@ class ChoiceLayer(BaseChoiceLayer):
                **kwargs):
     """
     :param int beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
+    :param bool keep_beams: specifies that we keep the beam_in entries,
+      i.e. we just expand, i.e. we just search on the dim. beam_size must be a multiple of beam_in.
     :param NotSpecified|bool search: whether to perform search, or use the ground truth (`target` option).
       If not specified, it will depend on `network.search_flag`.
     :param str input_type: "prob" or "log_prob", whether the input is in probability space, log-space, etc.
@@ -4000,7 +4002,6 @@ class ChoiceLayer(BaseChoiceLayer):
               layer=self, scores_in=scores_in, scores_base=scores_base, t=t, end_flags=end_flags,
               batch_dim=net_batch_dim, scores_beam_in=scores_beam_in, base_beam_in=base_beam_in)
             assert isinstance(scores_comb, tf.Tensor)
-            scores_comb.set_shape((None, None, scores_in_dim))  # (batch, beam_in, dim)
         else:
           scores_random_sample = None
           if random_sample_scale:
@@ -4011,6 +4012,8 @@ class ChoiceLayer(BaseChoiceLayer):
             optional_mul(scores_in, prob_scale),
             optional_mul(scores_base, base_beam_score_scale),
             optional_mul(scores_random_sample, random_sample_scale))  # (batch, beam_in, dim)
+        scores_comb.set_shape(
+          (None, None, None if isinstance(scores_in_dim, tf.Tensor) else scores_in_dim))  # (batch, beam_in, dim)
         cheating_gold_targets = None
         if cheating:
           assert len(self.sources) == 1, "Cheating not yet implemented for multiple sources."
@@ -4021,7 +4024,8 @@ class ChoiceLayer(BaseChoiceLayer):
         # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
         from TFUtil import beam_search
         src_beams, labels, scores = beam_search(
-          scores=scores_comb, beam_size=beam_size, cheating_gold_targets=cheating_gold_targets)
+          scores=scores_comb, beam_size=beam_size, keep_beams=keep_beams,
+          cheating_gold_targets=cheating_gold_targets)
         self.search_choices.set_src_beams(src_beams)  # (batch, beam) -> beam_in idx
         labels = tf.reshape(labels, [net_batch_dim * beam_size])  # (batch * beam)
         labels = tf.cast(labels, self.output.dtype)

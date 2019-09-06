@@ -7930,13 +7930,15 @@ def _tensor_array_select_src_beams(ta, src_beams):
   return ta_new
 
 
-def beam_search(scores, beam_size, cheating_gold_targets=None):
+def beam_search(scores, beam_size, keep_beams=False, cheating_gold_targets=None):
   """
   This is mostly a higher-level wrapper around :func:`tf.nn.top_k`.
 
   :param tf.Tensor scores: (batch,beam_in,dim). combined scores (i.e. base beam scores + new scores),
     dense over the dims, such that we have labels in [0,...,dim-1].
-  :param int beam_size:
+  :param int|tf.Tensor beam_size:
+  :param bool keep_beams: specifies that we keep the beam_in entries,
+    i.e. we just expand, i.e. we just search on the dim. beam_size must be a multiple of beam_in.
   :param tf.Tensor|None cheating_gold_targets: (batch,), int32
   :rtype: (tf.Tensor,tf.Tensor,tf.Tensor)
   :return: src_beams, labels, beam_scores.
@@ -7945,11 +7947,24 @@ def beam_search(scores, beam_size, cheating_gold_targets=None):
     beam_scores: (batch, beam) -> beam score (float32).
   """
   batch_dim, beam_in, in_dim = get_shape(scores)
+  if keep_beams:
+    # It assumes that sorted=True in top_k, and the first entries in scores/labels are the best.
+    scores = tf.reshape(scores, [batch_dim * beam_in, 1, in_dim])
+    if cheating_gold_targets is not None:
+      cheating_gold_targets = tile_transposed(cheating_gold_targets, axis=0, multiples=beam_in)
+    _, labels, beam_scores = beam_search(
+      scores=scores, beam_size=beam_size // beam_in, cheating_gold_targets=cheating_gold_targets)
+    src_beams = tf.zeros([batch_dim, beam_in, beam_size // beam_in], dtype=tf.int32)
+    src_beams += tf.range(beam_in)[None, :, None]
+    src_beams = tf.reshape(src_beams, [batch_dim, beam_size])
+    labels = tf.reshape(labels, [batch_dim, beam_size])
+    beam_scores = tf.reshape(beam_scores, [batch_dim, beam_size])
+    return src_beams, labels, beam_scores
   scores_flat = tf.reshape(scores, [batch_dim, beam_in * in_dim])  # (batch, beam_in * dim)
   # `tf.nn.top_k` is the core function performing our search.
   # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
   top_k_size = beam_size
-  if isinstance(in_dim, tf.Tensor) or in_dim < beam_size:
+  if isinstance(in_dim, tf.Tensor) or isinstance(beam_size, tf.Tensor) or in_dim < beam_size:
     top_k_size = tf.minimum(beam_in * in_dim, top_k_size)
   beam_scores, labels = tf.nn.top_k(scores_flat, k=top_k_size)
   if top_k_size is not beam_size:
