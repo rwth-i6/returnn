@@ -11,6 +11,7 @@ from __future__ import print_function
 import typing
 import os
 import sys
+import contextlib
 import tensorflow as tf
 from tensorflow.python.framework import graph_io
 
@@ -79,6 +80,16 @@ def create_graph(train_flag, eval_flag, search_flag, net_dict):
   return network
 
 
+@contextlib.contextmanager
+def helper_variable_scope():
+  """
+  :rtype: tf.VariableScope
+  """
+  from TFUtil import reuse_name_scope
+  with reuse_name_scope("IO", absolute=True) as scope:
+    yield scope
+
+
 class RecStepByStepLayer(RecLayer):
   """
   Represents a single step of :class:`RecLayer`.
@@ -118,6 +129,22 @@ class RecStepByStepLayer(RecLayer):
   """
   layer_class = "rec_step_by_step"
 
+  def __init__(self, **kwargs):
+    kwargs = kwargs.copy()
+    kwargs["optimize_move_layers_out"] = False
+    sub_net_dict = kwargs["unit"]
+    assert isinstance(sub_net_dict, dict)
+    for key, layer_dict in list(sub_net_dict.items()):
+      assert isinstance(layer_dict, dict)
+      if layer_dict["class"] == "choice":
+        layer_dict = layer_dict.copy()
+        layer_dict["class"] = ChoiceStateVarLayer.layer_class
+        sub_net_dict[key] = layer_dict
+    kwargs["unit"] = sub_net_dict
+    self.state_vars = {}  # type: typing.Dict[str,RecStepByStepLayer.StateVar]
+    self.stochastic_var_order = []  # type: typing.List[str]
+    super(RecStepByStepLayer, self).__init__(**kwargs)
+
   @classmethod
   def prepare_compile(cls, rec_layer_name, net_dict):
     """
@@ -154,6 +181,7 @@ class RecStepByStepLayer(RecLayer):
     select_src_beams_ops = []
     next_step_ops = []
     print("State vars:")
+    base_vars = []
     for name, var in sorted(rec_layer.state_vars.items()):
       assert isinstance(name, str)
       assert isinstance(var, RecStepByStepLayer.StateVar)
@@ -164,22 +192,29 @@ class RecStepByStepLayer(RecLayer):
         "dtype": var.var.dtype.base_dtype.name}
       if name.startswith("base_"):
         init_base_ops.append(var.init_op())
+        base_vars.append(var)
+    init_base_ops.append(cell.parent_tile_multiples_var.initializer)
     init_base_op = tf.group(*init_base_ops, name="rec_step_by_step_init_base_op")
+    loop_vars = []
     for name, var in sorted(rec_layer.state_vars.items()):
       assert isinstance(name, str)
       assert isinstance(var, RecStepByStepLayer.StateVar)
-      if not name.startswith("stochastic_var_") and not name.startswith("base_"):
-        with tf.control_dependencies([init_base_op]):
-          init_ops.append(var.init_op())
-        tile_batch_ops.append(var.tile_batch_op(tile_batch_repetitions))
-        select_src_beams_ops.append(var.select_src_beams_op(src_beams=src_beams))
-      if not name.startswith("stochastic_var_") and not name.startswith("base_"):
+      if name.startswith("stochastic_var_") or name.startswith("base_"):
+        continue
+      loop_vars.append(var)
+      with tf.control_dependencies([init_base_op]):
+        init_ops.append(var.init_op())
+      tile_batch_ops.append(var.tile_batch_op(tile_batch_repetitions))
+      select_src_beams_ops.append(var.select_src_beams_op(src_beams=src_beams))
+    assert loop_vars  # nothing in the loop?
+    assert base_vars  # not implemented otherwise
+    tile_multiple_update_op = cell.get_tile_multiple_update_op(
+      loop_vars[0].read_batch_dim() // base_vars[0].read_batch_dim())
+    for var in loop_vars:
+      with tf.control_dependencies([tile_multiple_update_op]):
         next_step_ops.append(var.final_op())
-    init_base_ops.append(cell.parent_tile_multiples_var.initializer)
-    with tf.control_dependencies(init_base_ops):
-      info["init_op"] = tf.group(*init_ops, name="rec_step_by_step_init_op").name
-    with tf.control_dependencies([cell.get_tile_multiple_update_op()]):
-      info["next_step_op"] = tf.group(*next_step_ops, name="rec_step_by_step_update_op").name
+    info["init_op"] = tf.group(*init_ops, name="rec_step_by_step_init_op").name
+    info["next_step_op"] = tf.group(*next_step_ops, name="rec_step_by_step_update_op").name
     info["tile_batch"] = {
       "op": tf.group(*tile_batch_ops, name="rec_step_by_step_tile_batch_op").name,
       "repetitions_placeholder": tile_batch_repetitions.op.name}
@@ -242,7 +277,8 @@ class RecStepByStepLayer(RecLayer):
         [d if (d is not None) else 1 for d in self.var_data_shape.batch_shape],
         dtype=self.var_data_shape.dtype)
       zero_initializer.set_shape(self.var_data_shape.batch_shape)
-      self.var = tf.get_variable(name=name, initializer=zero_initializer, validate_shape=False)  # type: tf.Variable
+      with helper_variable_scope():
+        self.var = tf.get_variable(name=name, initializer=zero_initializer, validate_shape=False)  # type: tf.Variable
       self.var.set_shape(self.var_data_shape.batch_shape)
       assert self.var.shape.as_list() == list(self.var_data_shape.batch_shape)
       print("New state var %r: %s, shape %s" % (name, self.var, self.var_data_shape))
@@ -272,6 +308,15 @@ class RecStepByStepLayer(RecLayer):
       x.placeholder = value
       x = x.copy_compatible_to(self.orig_data_shape)
       return x.placeholder
+
+    def read_batch_dim(self):
+      """
+      :return: scalar, int32, the batch dim (including any beam)
+      :rtype: tf.Tensor
+      """
+      value = self.var.read_value()
+      assert self.var_data_shape.batch_dim_axis is not None
+      return tf.shape(value)[self.var_data_shape.batch_dim_axis]
 
     def init_op(self):
       """
@@ -320,22 +365,6 @@ class RecStepByStepLayer(RecLayer):
       from TFUtil import select_src_beams
       v = select_src_beams(self.var.read_value(), src_beams=src_beams)
       return tf.assign(self.var, v, name="select_src_beams_state_var_%s" % self.name).op
-
-  def __init__(self, **kwargs):
-    kwargs = kwargs.copy()
-    kwargs["optimize_move_layers_out"] = False
-    sub_net_dict = kwargs["unit"]
-    assert isinstance(sub_net_dict, dict)
-    for key, layer_dict in list(sub_net_dict.items()):
-      assert isinstance(layer_dict, dict)
-      if layer_dict["class"] == "choice":
-        layer_dict = layer_dict.copy()
-        layer_dict["class"] = ChoiceStateVarLayer.layer_class
-        sub_net_dict[key] = layer_dict
-    kwargs["unit"] = sub_net_dict
-    self.state_vars = {}  # type: typing.Dict[str,RecStepByStepLayer.StateVar]
-    self.stochastic_var_order = []  # type: typing.List[str]
-    super(RecStepByStepLayer, self).__init__(**kwargs)
 
   def create_state_var(self, name, initial_value=None, data_shape=None):
     """
@@ -543,17 +572,22 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
   Adapts :class:`_SubnetworkRecCell` such that we execute only a single step.
   """
 
-  def __init__(self, **kwargs):
-    self._parent_layers = {}  # type: typing.Dict[str,WrappedInternalLayer]
-    self.parent_tile_multiples_var = tf.get_variable(
-      name="parent_tile_multiples", shape=(), dtype=tf.int32, initializer=tf.ones_initializer())  # type: tf.Variable
-    super(SubnetworkRecCellSingleStep, self).__init__(**kwargs)
-
-  def get_tile_multiple_update_op(self, ):
+  def __init__(self, parent_rec_layer, **kwargs):
     """
+    :param RecStepByStepLayer parent_rec_layer:
+    """
+    self._parent_layers = {}  # type: typing.Dict[str,WrappedInternalLayer]
+    with helper_variable_scope():
+      self.parent_tile_multiples_var = tf.get_variable(
+        name="parent_tile_multiples", shape=(), dtype=tf.int32, initializer=tf.ones_initializer())  # type: tf.Variable
+    super(SubnetworkRecCellSingleStep, self).__init__(parent_rec_layer=parent_rec_layer, **kwargs)
+
+  def get_tile_multiple_update_op(self, multiplier):
+    """
+    :param tf.Tensor multiplier:
     :rtype: tf.Operation
     """
-    return tf.assign(self.parent_tile_multiples_var, )
+    return tf.assign(self.parent_tile_multiples_var, multiplier)
 
   def _get_parent_layer(self, layer_name):
     """
