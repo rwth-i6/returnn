@@ -66,7 +66,7 @@ def create_graph(train_flag, eval_flag, search_flag, net_dict):
   :param bool search_flag:
   :param dict[str,dict[str]] net_dict:
   :return: adds to the current graph, and then returns the network
-  :rtype: TFNetwork.TFNetwork
+  :rtype: TFNetwork
   """
   print("Loading network, train flag %s, eval flag %s, search flag %s" % (train_flag, eval_flag, search_flag))
   from TFEngine import Engine
@@ -164,15 +164,20 @@ class RecStepByStepLayer(RecLayer):
         "dtype": var.var.dtype.base_dtype.name}
       if name.startswith("base_"):
         init_base_ops.append(var.init_op())
+    init_base_op = tf.group(*init_base_ops, name="rec_step_by_step_init_base_op")
+    for name, var in sorted(rec_layer.state_vars.items()):
+      assert isinstance(name, str)
+      assert isinstance(var, RecStepByStepLayer.StateVar)
       if not name.startswith("stochastic_var_") and not name.startswith("base_"):
-        init_ops.append(var.init_op())
+        with tf.control_dependencies([init_base_op]):
+          init_ops.append(var.init_op())
         tile_batch_ops.append(var.tile_batch_op(tile_batch_repetitions))
         select_src_beams_ops.append(var.select_src_beams_op(src_beams=src_beams))
       if not name.startswith("stochastic_var_") and not name.startswith("base_"):
         next_step_ops.append(var.final_op())
-    init_base_ops.append(cell.parent_tile_multiples_t.initializer)
-    info["init_base_op"] = tf.group(*init_base_ops, name="rec_step_by_step_init_base_op").name
-    info["init_op"] = tf.group(*init_ops, name="rec_step_by_step_init_op").name
+    init_base_ops.append(cell.parent_tile_multiples_var.initializer)
+    with tf.control_dependencies(init_base_ops):
+      info["init_op"] = tf.group(*init_ops, name="rec_step_by_step_init_op").name
     with tf.control_dependencies([cell.get_tile_multiple_update_op()]):
       info["next_step_op"] = tf.group(*next_step_ops, name="rec_step_by_step_update_op").name
     info["tile_batch"] = {
@@ -540,7 +545,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
 
   def __init__(self, **kwargs):
     self._parent_layers = {}  # type: typing.Dict[str,WrappedInternalLayer]
-    self.parent_tile_multiples_t = tf.get_variable(
+    self.parent_tile_multiples_var = tf.get_variable(
       name="parent_tile_multiples", shape=(), dtype=tf.int32, initializer=tf.ones_initializer())  # type: tf.Variable
     super(SubnetworkRecCellSingleStep, self).__init__(**kwargs)
 
@@ -548,7 +553,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     """
     :rtype: tf.Operation
     """
-    return tf.assign(self.parent_tile_multiples_t, )
+    return tf.assign(self.parent_tile_multiples_var, )
 
   def _get_parent_layer(self, layer_name):
     """
@@ -568,7 +573,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       rec_layer.create_state_var(
         name="base_value_%s" % layer_name, initial_value=output.placeholder, data_shape=output),
       axis=output.batch_dim_axis,
-      multiples=self.parent_tile_multiples_t)
+      multiples=self.parent_tile_multiples_var.read_value())
     from TFUtil import DimensionTag
     for i, size in list(output.size_placeholder.items()):
       dim_tag = DimensionTag.get_tag_from_size_tensor(size)
@@ -577,7 +582,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
         dim_tag = output.get_dim_tag(output.get_batch_axis(i))
         dim_tag.set_tag_on_size_tensor(size)
       new_size = rec_layer.create_state_var(name="base_size%i_%s" % (i, layer_name), initial_value=size)
-      new_size = tile_transposed(new_size, axis=0, multiples=self.parent_tile_multiples_t)
+      new_size = tile_transposed(new_size, axis=0, multiples=self.parent_tile_multiples_var.read_value())
       dim_tag.set_tag_on_size_tensor(new_size)
       output.size_placeholder[i] = new_size
     layer = WrappedInternalLayer(name=layer_name, network=self.parent_net, output=output, base_layer=layer)
@@ -682,7 +687,6 @@ def main(argv):
       RecStepByStepLayer.post_compile(
         rec_layer_name=args.rec_step_by_step, network=network, output_file_name=args.rec_step_by_step_output_file)
 
-    from TFNetworkLayer import LayerBase
     for layer in network.layers.values():
       assert isinstance(layer, LayerBase)
       if layer.output.time_dim_axis is None:
