@@ -2783,6 +2783,34 @@ def test_same_context_loop():
   print("magic (totally arbitrary) res:", session.run(x))
 
 
+def test_flatten_with_seq_len_mask():
+  import numpy as np
+  import numpy.testing as npt
+  batch_dim_axis = 0
+  time_dim_axis = 2
+  x = tf.constant(np.random.rand(10, 16, 11, 16))
+  seq_lens = tf.constant([11, 11, 11, 11, 11, 11, 11, 11, 11, 11])
+
+  x_flat = flatten_with_seq_len_mask(x, seq_lens, batch_dim_axis, time_dim_axis)
+
+  x, x_flat = session.run([x, x_flat])
+  npt.assert_array_almost_equal(x[0, :, 1, :], x_flat[1])
+
+
+def test_flatten_with_unequal_seq_len_mask():
+  import numpy as np
+  import numpy.testing as npt
+  batch_dim_axis = 0
+  time_dim_axis = 2
+  x = tf.constant(np.random.rand(10, 16, 11, 16))
+  seq_lens = tf.constant([11, 11, 5, 11, 11, 11, 11, 11, 11, 11])
+
+  x_flat = flatten_with_seq_len_mask(x, seq_lens, batch_dim_axis, time_dim_axis)
+
+  x, x_flat = session.run([x, x_flat])
+  npt.assert_array_almost_equal(x[4, :, 1, :], x_flat[11 + 11 + 11 + 5 + 1])
+
+
 def test_softmax_cross_entropy_over_size_batch1():
   energy_np = numpy.array([
     [0.00060279], [0.00106305], [0.00139351], [0.0016565], [0.00179641], [0.00188511], [0.00197855],
