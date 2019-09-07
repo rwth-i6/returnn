@@ -1669,6 +1669,47 @@ class Data(object):
     return flatten_with_seq_len_mask(self.placeholder, seq_lens, batch_dim_axis=self.batch_dim_axis,
                                      time_dim_axis=self.time_dim_axis)
 
+  def get_placeholder_merge_axes(self, axes, keep_dims=False):
+    """
+    :param list[int|str] axes: axes to merge
+    :param bool keep_dims: if set, it will add broadcast dimensions after the flattening behind the first axis
+    :rtype: tf.Tensor
+    :return: placeholder where all axes specified in 'axes' are flattened into a single axis.
+      The position of the resulting axis will be axes[-1].
+    """
+    assert self.placeholder is not None
+    x = self.placeholder
+    axes_merge = self.get_axes_from_description(axes)
+    assert self.time_dim_axis not in axes_merge and self.batch_dim_axis not in axes_merge  # Not supported
+
+    shape = tf.shape(x)
+    new_shape = [(1 if i in axes_merge else shape[i])
+                 for i in self.get_axes()]
+    new_shape[axes_merge[-1]] = tf.reduce_prod([shape[i] for i in axes_merge])
+    # To be consistent transpose the placeholder s.t. axes to merge are together before the merge
+    perm = self.get_axes()
+    major_axis = axes_merge[-1]
+    for i in axes_merge:
+      if i == major_axis:
+        continue
+      perm.remove(i)
+      perm.insert(perm.index(major_axis), i)
+    new_shape = [new_shape[i] for i in perm]
+    x = tf.transpose(x, perm=perm)
+    x = tf.reshape(x, shape=list(new_shape))
+    # Squeeze only axes from axes_merge except major_axis:
+    squeeze_axes = [perm.index(i) for i in axes_merge if i != major_axis]
+    x = tf.squeeze(x, axis=squeeze_axes)
+
+    if keep_dims:
+      axes_merge.sort()
+      for i in axes_merge:
+        if i == major_axis:
+          continue
+        x = tf.expand_dims(x, axis=i)
+    x.set_shape([None] * self.batch_ndim)
+    return x
+
   def get_placeholder_flattened(self, keep_dims=False):
     """
     :param bool keep_dims: if set, it will add broadcast dimensions after the flattening behind the first axis
