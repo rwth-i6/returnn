@@ -1150,7 +1150,9 @@ class _SubnetworkRecCell(object):
       # we might have some layers still uninitialized, or should reinit with correct sources.
       direct_get_layer = GetLayer(iterative_testing=False, reconstruct=True)
       while ConstructCtx.partially_finished:
-        direct_get_layer(ConstructCtx.partially_finished.pop(0).name)
+        layer = ConstructCtx.partially_finished[0]
+        direct_get_layer(layer.name)
+        assert layer not in ConstructCtx.partially_finished
 
       self._template_construction_exceptions = list(ConstructCtx.collected_exceptions.values())
 
