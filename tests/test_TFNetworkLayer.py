@@ -815,6 +815,58 @@ def test_SoftmaxOverSpatialLayer_start():
     numpy.testing.assert_array_equal(out_np[cond], 0)
 
 
+def test_SoftmaxOverSpatialLayer_window():
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData())
+    rnd = numpy.random.RandomState(42)
+    n_batch = 4
+    n_time = 9
+    n_dim = 1
+    window_size = 5
+    window_start_idxs = numpy.array([3, 0, 1, 7]).astype("int32")  # (B,)
+    seqlens = numpy.array([5, 7, 3, 9])
+    input_np = rnd.normal(size=(n_batch, n_time, n_dim)).astype("float32")  # (B, T, D)
+    src = InternalLayer(name="src", network=net, out_type={"shape": (n_time, n_dim), "time_dim_axis": 1})
+    window_start = InternalLayer(name="window_start", network=net, out_type={"shape": ()})
+    window_start.output.placeholder = tf.constant(window_start_idxs)  # (B,)
+    window_start.output.size_placeholder = {}
+    print("input:", src.output)
+    src.output.placeholder = tf.constant(input_np, dtype=tf.float32)
+    src.output.size_placeholder = {0: tf.constant(seqlens)}
+    opts = {"network": net, "name": "softmax_over_spatial_test", "sources": [src],
+            "window_start": window_start, "window_size": window_size}
+    out_data = SoftmaxOverSpatialLayer.get_out_data_from_opts(**opts)
+    print("output:", out_data)
+    out_data.sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
+    assert_equal(out_data.shape, (n_dim, n_time))  # layer moves time-dim to back
+    layer = SoftmaxOverSpatialLayer(output=out_data, **opts)
+    layer.output.sanity_check()
+    assert_equal(layer.output.shape, (n_dim, n_time))
+    out_np = session.run(layer.output.placeholder)
+    assert_equal(out_np.shape, (n_batch, n_dim, n_time))
+    # check if window masking worked:
+    # handle edge cases correctly: (start is 0-based)
+    # 1. if the energy time-dim is less than `window_size`, we adjust the window size.
+    # 2. for each seq, we adjust the window so that no elements after the seq-len are indexed.
+    # seq[0]: start=3, seqlen=5 -> [1, 1, 1, 1, 1, 0, 0, 0, 0]
+    # seq[1]: start=0, seqlen=7 -> [1, 1, 1, 1, 1, 0, 0, 0, 0]
+    # seq[2]: start=1, seqlen=3 -> [1, 1, 1, 0, 0, 0, 0, 0, 0]
+    # seq[3]: start=7, seqlen=9 -> [0, 0, 0, 0, 1, 1, 1, 1, 1]
+    mask = numpy.array([
+      [0, 0, 0, 1, 1, 0, 0, 0, 0],
+      [1, 1, 1, 1, 1, 0, 0, 0, 0],
+      [0, 1, 1, 0, 0, 0, 0, 0, 0],
+      [0, 0, 0, 0, 1, 1, 1, 1, 1]
+    ], dtype=numpy.bool)  # (B, T)
+    print("mask", mask)
+    mask = numpy.expand_dims(mask, axis=1)
+    mask = numpy.broadcast_to(mask, [n_batch, n_dim, n_time])  # (B, D, T)
+    # check if layer output sums to one for each seq:
+    out_sum = numpy.sum(out_np, axis=(1, 2))
+    numpy.testing.assert_allclose(out_sum, [1]*n_batch)
+    numpy.testing.assert_allclose(out_np[~mask], 0)  # check if masking worked
+
+
 def test_SplitDimsLayer_simple_feat():
   n_batch, n_time, n_in = 7, 3, 20
   config = Config({
