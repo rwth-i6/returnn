@@ -926,6 +926,11 @@ class _SubnetworkRecCell(object):
     import better_exchook
     from collections import OrderedDict
     from Util import StringIO
+    from TFNetwork import CannotHandleUndefinedSourcesException, NetworkConstructionDependencyLoopException
+    # The stack trace is not so interesting for these exceptions.
+    skip_stack_trace_exception_types = (
+      CannotHandleUndefinedSourcesException,
+      NetworkConstructionDependencyLoopException)
 
     class ConstructCtx:
       """
@@ -935,7 +940,7 @@ class _SubnetworkRecCell(object):
       layers = []  # type: typing.List[_TemplateLayer]
       most_recent = None
       partially_finished = []  # type: typing.List[_TemplateLayer]
-      collected_exceptions = OrderedDict()  # type: OrderedDict[str,str]
+      collected_exceptions = OrderedDict()  # type: OrderedDict[object,str]  # exc_key -> formatted exception/stack str
 
     class GetLayer:
       """
@@ -972,7 +977,7 @@ class _SubnetworkRecCell(object):
 
         :param str name:
         :param type[LayerBase]|LayerBase layer_class:
-        :param dict[str] layer_desc:
+        :param layer_desc:
         :rtype: LayerBase
         """
         # _TemplateLayer already created in get_templated_layer.
@@ -982,7 +987,8 @@ class _SubnetworkRecCell(object):
         layer_desc["network"] = self.net
         layer_.kwargs = layer_desc  # set it now already for better debugging
         output = layer_class.get_out_data_from_opts(**layer_desc)
-        assert not output.undefined
+        if output.undefined:
+          raise CannotHandleUndefinedSourcesException(layer_name=name, layer_desc=layer_desc)
         layer_.init(layer_class=layer_class, output=output, **layer_desc)
         if (
               lself.returned_none_count == 0 and
@@ -1092,9 +1098,16 @@ class _SubnetworkRecCell(object):
               exc_last_frame = list(better_exchook.iter_traceback(tb))[-1]
               exc_key = (exc_last_frame.f_code.co_filename, exc_last_frame.f_lineno, exc_last_frame.f_code.co_name)
               if exc_key not in ConstructCtx.collected_exceptions:
-                out = StringIO()
-                better_exchook.better_exchook(etype, value, tb, file=out)
-                ConstructCtx.collected_exceptions[exc_key] = out.getvalue()
+                if isinstance(value, skip_stack_trace_exception_types):
+                  color = better_exchook.Color()
+                  ConstructCtx.collected_exceptions[exc_key] = "%s\n%s: %s\n" % (
+                    color("EXCEPTION", color.fg_colors[1], bold=True),
+                    color(etype.__name__, color.fg_colors[1]),
+                    str(value))
+                else:
+                  out = StringIO()
+                  better_exchook.better_exchook(etype, value, tb, file=out)
+                  ConstructCtx.collected_exceptions[exc_key] = out.getvalue()
           # Now, do again, but with full recursive layer construction, to determine the dependencies.
           ConstructCtx.most_recent = list(ConstructCtx.layers)
           try:
@@ -1149,7 +1162,8 @@ class _SubnetworkRecCell(object):
         print(ConstructCtx.most_recent)
       print("Template network so far:")
       pprint(self.layer_data_templates)
-      print("Collected (unique) exceptions during construction:")
+      print("Collected (unique) exceptions during template construction:")
+      print("(Note that many of these can be ignored, or are expected.)")
       for s in ConstructCtx.collected_exceptions.values():
         print(s)
       raise
@@ -1162,7 +1176,7 @@ class _SubnetworkRecCell(object):
     print("Template network:")
     pprint(self.layer_data_templates)
     print("Collected (unique) exceptions during template construction:")
-    print("(Note that many of these can be ignored.)")
+    print("(Note that many of these can be ignored, or are expected.)")
     for s in self._template_construction_exceptions:
       print(s)
     # Don't print twice.

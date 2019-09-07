@@ -242,7 +242,12 @@ class LayerBase(object):
       # Ok if we have some undefined but also some defined; filter out just the defined.
       sources = [src for src in sources if src and not src.output.undefined]
     if sources and (not sources[0] or sources[0].output.undefined) and not out_type:
-      raise ValueError("%r: cannot handle undefined sources %r without defined out_type" % (name, sources))
+      from TFNetwork import CannotHandleUndefinedSourcesException
+      raise CannotHandleUndefinedSourcesException(
+        layer_name=name,
+        layer_desc=dict(
+          network=network, n_out=n_out, target=target, size_target=size_target, sources=sources, loss=loss,
+          **kwargs))
     if out_type is None:
       out_type = {}  # type: typing.Dict[str]
     else:
@@ -2607,7 +2612,13 @@ class ScatterNdLayer(_ConcatInputLayer):
     :rtype: Data
     """
     input_data = get_concat_sources_data_template(sources)
-    assert not position.output.undefined and not input_data.undefined
+    if position.output.undefined or input_data.undefined:
+      from TFNetwork import CannotHandleUndefinedSourcesException
+      raise CannotHandleUndefinedSourcesException(
+        layer_name=name,
+        layer_desc=dict(
+          sources=sources, position=position, position_axis=position_axis,
+          output_dim_via_time_from=output_dim_via_time_from, **kwargs))
     common, output, replace_common_axis, input_extra_axes = cls._get_axes(
       input_data=input_data, position=position.output, position_axis=position_axis,
       output_dim_via_time_from=output_dim_via_time_from.output)
@@ -5657,7 +5668,10 @@ class CombineLayer(LayerBase):
     sources_ = [s for s in sources if s and not s.output.undefined]
     if sources and not sources_:
       if n_out is NotSpecified and not out_type:
-        raise ValueError("%r: cannot handle uninizialized sources %r" % (kwargs["name"], sources))
+        from TFNetwork import CannotHandleUndefinedSourcesException
+        raise CannotHandleUndefinedSourcesException(
+          layer_name=kwargs["name"], layer_desc=dict(
+            n_out=n_out, out_type=out_type, sources=sources, **kwargs))
     sources = sources_
     if sources:
       out_type_.update(Data.get_common_data([s.output for s in sources], warnings_out=log.v4).get_kwargs())
@@ -5920,13 +5934,21 @@ class SwitchLayer(LayerBase):
     :param LayerBase|None false_from:
     :rtype: Data
     """
+    from TFNetwork import CannotHandleUndefinedSourcesException
     if isinstance(condition, bool):
       if condition:
-        assert not true_from.output.undefined
+        if true_from.output.undefined:
+          raise CannotHandleUndefinedSourcesException(
+            layer_name=name, layer_desc=dict(condition=condition, true_from=true_from, false_from=false_from, **kwargs))
         return true_from.output.copy("%s_output" % name)
       else:
-        assert not false_from.output.undefined
+        if false_from.output.undefined:
+          raise CannotHandleUndefinedSourcesException(
+            layer_name=name, layer_desc=dict(condition=condition, true_from=true_from, false_from=false_from, **kwargs))
         return false_from.output.copy("%s_output" % name)
+    if true_from.output.undefined or false_from.output.undefined or condition.output.undefined:
+      raise CannotHandleUndefinedSourcesException(
+        layer_name=name, layer_desc=dict(condition=condition, true_from=true_from, false_from=false_from, **kwargs))
     out = Data.get_common_data([true_from.output, false_from.output, condition.output])
     out = out.copy(name="%s_output" % name)
     out.dtype = true_from.output.dtype
