@@ -1209,6 +1209,120 @@ class LayerBase(object):
         bn = tf.transpose(bn, perm=perm)
       return bn
 
+  def _fused_batch_norm(self, data,
+                        axes,
+                        use_shift, use_std,
+                        momentum, epsilon,
+                        sample_mean, sample_variance,
+                        gamma, beta,
+                        masked_time):
+    """
+    :param Data data:
+    :param int|str|list[int|str] axes: axis/axes to normalize
+    :param bool use_shift:
+    :param bool use_std:
+    :param float momentum: for the running average of sample_mean and sample_std
+    :param float epsilon:
+    :param tf.Variable sample_mean:
+    :param tf.Variable sample_variance:
+    :param tf.Variable gamma:
+    :param tf.Variable beta:
+    :param bool masked_time: flatten and mask input tensor
+    :rtype: tf.Tensor
+
+    See tf.nn.fused_batch_norm()
+    """
+    assert sample_mean is not None
+    assert sample_variance is not None
+    assert not use_std or gamma is not None
+    assert not use_shift or beta is not None
+
+    # with tf.variable_scope("fused_batch_norm"):
+    axes = data.get_axes_from_description(axes)
+    assert data.feature_dim_axis in axes
+    assert data.batch_dim_axis not in axes  # Not supported
+    assert data.time_dim_axis not in axes  # Not supported
+    if masked_time:
+      assert len(axes) == 1 and axes[0] == data.feature_dim_axis
+      x = data.get_placeholder_flattened(keep_dims=True)
+    else:
+      # Put feature_dim_axis at the end s.t. the merged axis is a feature.
+      axes.remove(data.feature_dim_axis)
+      axes.append(data.feature_dim_axis)
+      x = data.get_placeholder_merge_axes(axes=axes, keep_dims=True)
+    data_format = "NCHW" if data.is_batch_feature_major else "NHWC"
+
+    def _fused_batch_norm_training():
+      return tf.nn.fused_batch_norm(
+        x,
+        gamma,
+        beta,
+        epsilon=epsilon,
+        data_format=data_format)
+
+    def _fused_batch_norm_inference():
+      return tf.nn.fused_batch_norm(
+        x,
+        gamma,
+        beta,
+        mean=sample_mean,
+        variance=sample_variance,
+        epsilon=epsilon,
+        is_training=False,
+        data_format=data_format)
+
+    output, mean, variance = tf.cond(
+      tf.cast(self.network.train_flag, tf.bool),
+      true_fn=_fused_batch_norm_training,
+      false_fn=_fused_batch_norm_inference)
+    # Remove Bessel's correction to be consistent with non-fused batch norm.
+    sample_size = tf.cast(
+      tf.size(x) / tf.size(variance), variance.dtype)
+    factor = (sample_size - tf.cast(1.0, variance.dtype)) / sample_size
+    variance *= factor
+
+    # Controlling updates in training and inference modes via momentum
+    mean_momentum = tf.cast(self.network.train_flag, tf.float32) * momentum
+    variance_momentum = tf.cast(self.network.train_flag, tf.float32) * momentum
+    # Add custom updates for moving_mean and moving_variance
+    mean_update = CustomUpdateExpAverage(average=mean, alpha=mean_momentum)
+    variance_update = CustomUpdateExpAverage(average=variance, alpha=variance_momentum)
+    if isinstance(sample_mean, tf.Variable):
+      mean_update.set_on_var(sample_mean)
+    if isinstance(sample_variance, tf.Variable):
+      variance_update.set_on_var(sample_variance)
+
+    if len(axes) > 1:
+      # Output has a different shape => reshape.
+      old_shape = tf.shape(data.placeholder)
+      out_shape = tf.shape(output)
+      expand_axes = axes
+      new_shape = []
+      major_axis = expand_axes[-1]
+      for i in data.get_axes():
+        if i == major_axis:
+          for j in expand_axes:
+            new_shape.append(old_shape[j])
+          continue
+        if i not in expand_axes:
+          new_shape.append(out_shape[i])
+      output = tf.reshape(output, shape=new_shape)
+      # Transform the axes to the original position
+      perm = data.get_axes()
+      for i in axes:
+        perm.remove(i)
+      perm = perm[:axes[-1]] + axes + perm[axes[-1]:]
+      perm = dict(zip(perm, range(len(perm))))
+      perm = [perm[i] for i in data.get_axes()]
+      output = tf.transpose(output, perm=perm)
+    elif masked_time:
+      # Output has a different shape => reshape.
+      # Much simpler reshape than in the previous case.
+      new_shape = tf.shape(data.placeholder)
+      output = tf.reshape(output, shape=new_shape)
+    output.set_shape(data.placeholder.shape)
+    return output
+
   def get_hidden_state(self):
     """
     If this is a recurrent layer, this would return the hidden state.
