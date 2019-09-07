@@ -2855,7 +2855,8 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
         energy_mask = tf.logical_and(energy_mask, tf.greater_equal(idxs, start_data.placeholder))
       if window_start:
         assert window_size, "set window_size explicitly"
-        from TFUtil import nd_indices, expand_dims_unbroadcast
+        assert window_start.output.batch_ndim == 1
+        from TFUtil import nd_indices, expand_dims_unbroadcast, move_axis
         # handle edge cases correctly:
         # 1. if the energy time-dim is less than `window_size`, we adjust the window size.
         # 2. for each seq, we adjust the window so that no elements after the seq-len are indexed.
@@ -2867,14 +2868,22 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
           tf.ones_like(window_start) * (energy_shape[axis] - window_len),
           window_start)  # case 2.
         n_batch = energy_shape[energy_data.batch_dim_axis]
-        indices = expand_dims_unbroadcast(tf.range(window_len), energy_data.batch_dim_axis, n_batch)
-        # time-major: (W,B) + (1,B), batch-major: (B, W) + (1,B)
-        indices += tf.expand_dims(tf.to_int32(window_start), axis=axis)
-        idxs = nd_indices(indices)
-        mask_shape = energy_shape[:2]  # (T, B)
-        mask_shape[axis] = window_len
-        energy_mask_window = tf.scatter_nd(idxs, tf.ones(shape=mask_shape), energy_shape[:2])
+        indices = expand_dims_unbroadcast(tf.range(window_len), 0, n_batch)  # (B, W)
+        # (B, W) + (B, 1)
+        indices += tf.expand_dims(tf.to_int32(window_start), axis=1)  # + (B, 1)
+        indices.set_shape((None, None))  # required for older TF versions
+        idxs = nd_indices(indices)  # (B, W, 2)
+        rem_axes = list(energy_shape)
+        rem_axes.pop(energy_data.batch_dim_axis)  # (B, ..., T) -> (..., T)
+        rem_axes.pop()  # (..., T) -> (...)
+        updates_shape = [n_batch, window_len] + rem_axes  # (B,W) + (...remaining axes...)
+        rem_energy_data = energy_data.copy_with_time_dim_axis(time_dim_axis=1)  # (B, T, ...)
+        rem_energy_shape = TFUtil.get_shape(rem_energy_data.placeholder)
+        energy_mask_window = tf.scatter_nd(idxs, tf.ones(shape=updates_shape), rem_energy_shape)  # (B, T, ...)
         energy_mask_window = tf.cast(energy_mask_window, tf.bool)
+        #  to be compatible with the other stuff, we move the time-axis to the back:
+        #  (B, T, ...) -> (B, ..., T)
+        energy_mask_window = move_axis(energy_mask_window, 1, axis)
         energy_mask = tf.logical_and(energy_mask, energy_mask_window)
       energy = where_bc(energy_mask, energy, float("-inf"), name="energy_masked")
     if energy_factor:
