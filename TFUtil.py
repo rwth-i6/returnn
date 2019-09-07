@@ -1736,8 +1736,12 @@ class Data(object):
       dyn_axes = [(i if (i < removed_axis) else (i - 1))
                   for i in dyn_axes]
       ndim -= 1
+    shape = tf.shape(x)
+    dyn_axes.sort()
+    # Transpose remaining dyn_axes, s.t. they are together before merge
+    perm = dyn_axes + [i for i in range(self.ndim) if i not in dyn_axes]
+    x = tf.transpose(x, perm=perm)
     if len(dyn_axes) > 1:
-      shape = tf.shape(x)
       x = tf.reshape(
         x,
         [tf.reduce_prod([shape[i] for i in dyn_axes])] +
