@@ -1128,8 +1128,8 @@ def test_search_no_rec_explicit():
   assert_equal(subnet.layers_in_loop, ["output"])
   sub_layer = subnet.net.layers["output"]
   assert isinstance(sub_layer, ChoiceLayer)
-  assert_equal(sub_layer.output.beam_size, beam_size)
-  assert_equal(rec_layer.output.beam_size, beam_size)
+  assert_equal(sub_layer.output.beam.beam_size, beam_size)
+  assert_equal(rec_layer.output.beam.beam_size, beam_size)
   input_search_choices = net.get_search_choices(sources=rec_layer.sources)
   assert not input_search_choices
   assert rec_layer.output.is_time_major
@@ -1243,8 +1243,8 @@ def test_search_no_rec_explicit_dyn_len():
   assert_equal(set(subnet.layers_in_loop), {"output", "end"})
   sub_layer = subnet.net.layers["output"]
   assert isinstance(sub_layer, ChoiceLayer)
-  assert_equal(sub_layer.output.beam_size, beam_size)
-  assert_equal(rec_layer.output.beam_size, beam_size)
+  assert_equal(sub_layer.output.beam.beam_size, beam_size)
+  assert_equal(rec_layer.output.beam.beam_size, beam_size)
   input_search_choices = net.get_search_choices(sources=rec_layer.sources)
   assert not input_search_choices
   assert rec_layer.output.is_time_major

@@ -452,7 +452,8 @@ def test_Data_copy_compatible_to_time_axis_at_end():
 
 
 def test_Data_copy_compatible_to_batch_axis1_time_axis_at_end():
-  data = Data(name='att_weights_output', shape=(1, None), time_dim_axis=2, feature_dim_axis=1, beam_size=12)
+  beam = SearchBeam(beam_size=12)
+  data = Data(name='att_weights_output', shape=(1, None), time_dim_axis=2, feature_dim_axis=1, beam=beam)
   common_data = Data(name='accum_att_weights_output', shape=(None, 1), batch_dim_axis=1)
   data2 = data.copy_compatible_to(common_data)
   assert data2.time_dim_axis == common_data.time_dim_axis == 0
@@ -714,14 +715,15 @@ def test_Data_get_common_data_tbf_and_bf():
 def test_Data_get_common_data_beam_size():
   condition = Data(name="cond", shape=(), dtype='bool', sparse=True, dim=2, time_dim_axis=None)
   true_from = Data(name="true", shape=(), dtype='int32', sparse=True, dim=19, time_dim_axis=None)
-  false_from = Data(name="false", shape=(), dtype='int32', sparse=True, dim=19, time_dim_axis=None, beam_size=3)
+  beam = SearchBeam(beam_size=3)
+  false_from = Data(name="false", shape=(), dtype='int32', sparse=True, dim=19, time_dim_axis=None, beam=beam)
   print("cond:", condition)
   print("true:", true_from)
   print("false:", false_from)
   common = Data.get_common_data([true_from, false_from, condition])
   print("common:", common)
   assert common.shape == () and common.sparse
-  assert common.beam_size == 3
+  assert common.beam == beam
 
 
 def test_Data_no_feature_dim():

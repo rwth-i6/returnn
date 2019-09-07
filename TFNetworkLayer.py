@@ -11,7 +11,7 @@ import contextlib
 import typing
 import TFUtil
 from Util import unicode, NotSpecified, CollectionReadCheckCovered
-from TFUtil import Data, OutputWithActivation, CustomUpdate, dimshuffle, swapaxes
+from TFUtil import Data, SearchBeam, OutputWithActivation, CustomUpdate, dimshuffle, swapaxes
 from Log import log
 
 
@@ -303,16 +303,11 @@ class LayerBase(object):
         else:
           out_type.setdefault("shape", (out_type.get("dim", None),))
     # Note: No special handling for feature_dim_axis here for now...
-    beam_size = None
+    beam = None
     for src in sources:
       if src:  # might be None if template construction
-        if src.output.beam_size:
-          # Note: No combination (Data.get_combined_beam_size) / check to other beam sizes here.
-          # At template construction, the beam sizes might differ, if coming from different choices.
-          # Only later, this will be resolved.
-          beam_size = src.output.beam_size
-          break
-    out_type.setdefault("beam_size", beam_size)
+        beam = SearchBeam.get_combined_beam(beam, src.output.beam)
+    out_type.setdefault("beam", beam)
     output = Data(**out_type)
     cls._post_init_output(
       output=output, network=network, target=target, size_target=size_target, _target_layers=_target_layers,
@@ -936,7 +931,7 @@ class LayerBase(object):
     assert network.extern_data.has_data(target), "target %r unknown" % target
     data = network.get_extern_data(target, mark_data_key_as_used=mark_data_key_as_used)
     if search_choices:
-      data = data.copy_extend_with_beam(search_choices.beam_size)
+      data = data.copy_extend_with_beam(search_choices.get_beam_info())
     return data
 
   def _get_target_value(self, target=None, mark_data_key_as_used=True):
@@ -1234,8 +1229,8 @@ class LayerBase(object):
         return tf.cast(constant_with_shape(v, shape=shape), dtype=data.dtype)
     if isinstance(v, LayerBase):
       v = v.output.copy_compatible_to(output)
-      if output.beam_size:
-        v = v.copy_extend_with_beam(output.beam_size)
+      if output.beam:
+        v = v.copy_extend_with_beam(output.beam)
       return v.placeholder
     assert isinstance(v, str)
     if v == "zeros":
@@ -1436,6 +1431,7 @@ class ReuseParams:
         # noinspection PyProtectedMember
         layer_desc_ = self.network._create_layer_layer_desc(name=layer_name, layer_desc=layer_desc_)
         output = layer_class_.get_out_data_from_opts(**layer_desc_).copy()
+        output.beam = None
         output.placeholder = tf.zeros(
           [d or 1 for d in output.batch_shape], dtype=output.dtype, name="%s_dummy" % output.name)
         output.sanity_check()
@@ -1669,6 +1665,13 @@ class SearchChoices(object):
       sources.append(choice)
     return sources
 
+  def get_beam_info(self):
+    """
+    :rtype: TFUtil.SearchBeam
+    """
+    assert self.owner.output.beam.beam_size == self.beam_size
+    return self.owner.output.beam
+
   def __eq__(self, other):
     return self is other
 
@@ -1871,7 +1874,7 @@ def get_concat_sources_data_template(src_layers, name=None):
   if len(src_layers) == 1:
     return src_layers[0].output.copy(name=name)
   dim = 0
-  beam_size = None
+  beam = None
   common_source = Data.get_common_data([s.output for s in src_layers])
   for layer in src_layers:
     # Note: We do not perform much compatibility checks at this point,
@@ -1880,7 +1883,7 @@ def get_concat_sources_data_template(src_layers, name=None):
     assert not layer.output.sparse
     assert layer.output.dim is not None
     dim += layer.output.dim
-    beam_size = Data.get_combined_beam_size(beam_size, layer.output.beam_size)
+    beam = SearchBeam.get_combined_beam(beam, layer.output.beam)
   shape = list(common_source.shape)
   shape[common_source.get_batch_axis_excluding_batch(common_source.feature_dim_axis)] = dim
   kwargs = common_source.get_kwargs(with_size_placeholder=True)
@@ -1889,7 +1892,7 @@ def get_concat_sources_data_template(src_layers, name=None):
     shape=shape,
     dim=dim,
     sparse=False,
-    beam_size=beam_size))
+    beam=beam))
   data = Data(**kwargs)
   return data
 
@@ -2097,7 +2100,8 @@ class SelectSearchSourcesLayer(InternalLayer):
     elif search_choices == src_search_choices:
       pass
     elif not src_search_choices:
-      self.output = self.output.copy_extend_with_beam(search_choices.beam_size)
+      assert not self.output.beam, "no src %r search choices but beam?" % src
+      self.output = self.output.copy_extend_with_beam(search_choices.get_beam_info())
     else:
       assert search_choices and search_choices != src_search_choices
       search_choices_seq = search_choices.get_src_choices_seq()
@@ -2189,11 +2193,11 @@ class SelectSearchSourcesLayer(InternalLayer):
     assert len(sources) == 1
     search_choices = search_choices.get_search_choices()
     data = sources[0].output.copy_as_batch_major()
-    if data.beam_size:
+    if data.beam:
       assert search_choices
-      data = data.copy_extend_with_beam(search_choices.beam_size)
+      data = data.copy_extend_with_beam(search_choices.get_beam_info())
     elif search_choices:
-      data = data.copy_extend_with_beam(search_choices.beam_size)
+      data = data.copy_extend_with_beam(search_choices.get_beam_info())
     return data
 
 
@@ -2461,7 +2465,7 @@ class GatherNdLayer(_ConcatInputLayer):
     out_type["dim"] = input_data.dim
     out_type["sparse"] = input_data.sparse
     out_type["dtype"] = input_data.dtype
-    out_type["beam_size"] = Data.get_combined_beam_size(position_data.beam_size, input_data.beam_size)
+    out_type["beam"] = SearchBeam.get_combined_beam(position_data.beam, input_data.beam)
     return Data(**out_type)
 
   @classmethod
@@ -3256,7 +3260,7 @@ class GatingLayer(_ConcatInputLayer):
       batch_dim_axis=input_data.batch_dim_axis,
       time_dim_axis=input_data.time_dim_axis,
       feature_dim_axis=input_data.feature_dim_axis_or_unspecified,
-      beam_size=input_data.beam_size)
+      beam=input_data.beam)
 
 
 class WindowLayer(_ConcatInputLayer):
@@ -4477,7 +4481,7 @@ class PoolLayer(_ConcatInputLayer):
       sparse=False,
       batch_dim_axis=0,
       feature_dim_axis=feature_dim_axis,
-      beam_size=data.beam_size)
+      beam=data.beam)
 
 
 class ReduceLayer(_ConcatInputLayer):
@@ -4677,7 +4681,7 @@ class ReduceLayer(_ConcatInputLayer):
       sparse=sparse_out,
       dim=x.batch_shape[axes[0]] if sparse_out else NotSpecified,
       size_placeholder=out_size,
-      beam_size=x.beam_size)
+      beam=x.beam)
 
 
 class ReduceOutLayer(_ConcatInputLayer):
@@ -5278,7 +5282,7 @@ class DotLayer(LayerBase):
     # See __init__.
     a_out = sources[0].output.copy_as_batch_major()
     b_out = sources[1].output.copy_as_batch_major()
-    assert not a_out.beam_size or not b_out.beam_size or a_out.beam_size == b_out.beam_size
+    assert not a_out.beam or not b_out.beam or a_out.beam == b_out.beam
     a_reduce_axes = a_out.get_axes_from_description(red1)
     b_reduce_axes = b_out.get_axes_from_description(red2)
     assert a_reduce_axes and b_reduce_axes
@@ -5311,7 +5315,7 @@ class DotLayer(LayerBase):
       batch_dim_axis=0,
       time_dim_axis=time_dim_axis,
       dtype=a_out.dtype,
-      beam_size=Data.get_combined_beam_size(a_out.beam_size, b_out.beam_size))
+      beam=SearchBeam.get_combined_beam(a_out.beam, b_out.beam))
 
 
 class ShiftAxisLayer(_ConcatInputLayer):
@@ -7185,11 +7189,11 @@ class Loss(object):
     with tf.name_scope("loss_init"):
       self.layer = layer
       if target:
-        if output.beam_size:
-          if target.beam_size != output.beam_size:
-            target = target.copy_extend_with_beam(output.beam_size)
+        if output.beam:
+          if target.beam != output.beam:
+            target = target.copy_extend_with_beam(output.beam)
         else:
-          assert not target.beam_size
+          assert not target.beam
       if output.feature_dim_axis is not None and output.feature_dim_axis != output.batch_ndim - 1:
         if output_with_activation:
           from TFUtil import move_axis

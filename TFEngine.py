@@ -1917,6 +1917,7 @@ class Engine(EngineBase):
     :param str output_file:
     :param str output_file_format: "txt" or "py"
     """
+    from TFNetworkLayer import LayerBase
     print("Search with network on %r." % dataset, file=log.v1)
     if not self.use_search_flag or not self.network or self.use_dynamic_train_flag:
       self.use_search_flag = True
@@ -1965,14 +1966,14 @@ class Engine(EngineBase):
     for output_layer_name in output_layer_names:
       output_layer = self.network.layers[output_layer_name]
       output_layers.append(output_layer)
-      out_beam_size = output_layer.output.beam_size
-      if out_beam_size is None:
+      out_beam = output_layer.output.beam
+      if out_beam is None:
         print("Given output %r is after decision (no beam)." % output_layer, file=log.v1)
         output_layer_beam_scores.append(None)
       else:
-        print("Given output %r has beam size %i." % (output_layer, out_beam_size), file=log.v1)
+        print("Given output %r has beam %s." % (output_layer, out_beam), file=log.v1)
         output_layer_beam_scores.append(output_layer.get_search_choices().beam_scores)
-      out_beam_sizes.append(out_beam_size)
+      out_beam_sizes.append(out_beam.beam_size if out_beam else None)
       target_keys.append(output_layer.target or self.network.extern_data.default_target)
 
     out_cache = None
@@ -2134,7 +2135,7 @@ class Engine(EngineBase):
     output_layer = self.network.layers[output_layer_name]
     output_t = output_layer.output.get_placeholder_as_batch_major()
     output_seq_lens_t = output_layer.output.get_sequence_lengths()
-    out_beam_size = output_layer.output.beam_size
+    out_beam_size = output_layer.output.beam.beam_size
     output_layer_beam_scores_t = None
     if out_beam_size is None:
       print("Given output %r is after decision (no beam)." % output_layer, file=log.v4)
@@ -2331,7 +2332,7 @@ class Engine(EngineBase):
     output_layer = self.network.layers[output_layer_name]
     output_t = output_layer.output.get_placeholder_as_batch_major()
     output_seq_lens_t = output_layer.output.get_sequence_lengths()
-    out_beam_size = output_layer.output.beam_size
+    out_beam_size = output_layer.output.beam.beam_size
     output_layer_beam_scores_t = None
     if out_beam_size is None:
       print("Given output %r is after decision (no beam)." % output_layer, file=log.v1)

@@ -261,7 +261,7 @@ class TFNetwork(object):
                train_flag=False, eval_flag=False, search_flag=False,
                parent_layer=None, parent_net=None, extra_parent_net=None,
                is_inside_rec_layer=None,
-               name=None):
+               absolute_name_prefix=None, name=None):
     """
     :param Config.Config config: only needed to init extern_data if not specified explicitly
     :param ExternData|None extern_data:
@@ -273,12 +273,16 @@ class TFNetwork(object):
     :param TFNetwork|None parent_net:
     :param TFNetwork|None extra_parent_net:
     :param bool is_inside_rec_layer: at template construction, use this
+    :param str|None absolute_name_prefix:
     :param str name: only for debugging
     """
     if not name:
       from Util import try_get_caller_name
       name = "<network via %s>" % try_get_caller_name(fallback="<unknown>")
     self.name = name
+    if absolute_name_prefix:
+      assert absolute_name_prefix.endswith("/")
+    self._absolute_name_prefix = absolute_name_prefix
     if not parent_net and parent_layer:
       parent_net = parent_layer.network
     if not config and parent_net:
@@ -385,6 +389,8 @@ class TFNetwork(object):
     :return: name, always with "/" at the end, or ""
     :rtype: str
     """
+    if self._absolute_name_prefix is not None:
+      return self._absolute_name_prefix
     if self.parent_layer:
       return self.parent_layer.get_absolute_name() + "/"
     if self.parent_net:

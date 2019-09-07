@@ -9,7 +9,7 @@ import tensorflow as tf
 import typing
 from tensorflow.python.ops.nn import rnn_cell
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template, Loss
-from TFUtil import Data, reuse_name_scope, get_random_seed, select_src_beams
+from TFUtil import Data, SearchBeam, reuse_name_scope, get_random_seed, select_src_beams
 from Util import NotSpecified
 from Log import log
 
@@ -352,7 +352,8 @@ class RecLayer(_ConcatInputLayer):
     else:
       out = None
     if isinstance(unit, dict):  # subnetwork
-      subnet = _SubnetworkRecCell(parent_net=kwargs["network"], net_dict=unit, source_data=source_data)
+      subnet = _SubnetworkRecCell(
+        parent_net=kwargs["network"], net_dict=unit, source_data=source_data, rec_layer_name=kwargs["name"])
       sub_out = subnet.layer_data_templates["output"].output.copy_template_adding_time_dim(
         name="%s_output" % kwargs["name"], time_dim_axis=0)
       if out:
@@ -366,7 +367,7 @@ class RecLayer(_ConcatInputLayer):
     out.batch_dim_axis = out_batch_dim_axis
     cls._post_init_output(output=out, sources=sources, **kwargs)
     for dep in deps:
-      out.beam_size = Data.get_combined_beam_size(out.beam_size, dep.output.beam_size)
+      out.beam = SearchBeam.get_combined_beam(out.beam, dep.output.beam)
     return out
 
   def get_absolute_name_scope_prefix(self):
@@ -505,7 +506,7 @@ class RecLayer(_ConcatInputLayer):
       else:
         sources = kwargs["sources"]
         source_data = get_concat_sources_data_template(sources) if sources else None
-        subnet = _SubnetworkRecCell(parent_net=network, net_dict=unit, source_data=source_data)
+        subnet = _SubnetworkRecCell(parent_net=network, net_dict=unit, source_data=source_data, rec_layer_name=name)
       for layer_name, template_layer in sorted(subnet.layer_data_templates.items()):
         assert isinstance(template_layer, _TemplateLayer)
         assert issubclass(template_layer.layer_class_type, LayerBase)
@@ -863,29 +864,34 @@ class _SubnetworkRecCell(object):
 
   _debug_out = None  # set to list to enable
 
-  def __init__(self, net_dict, parent_rec_layer=None, parent_net=None, source_data=None):
+  def __init__(self, net_dict, parent_rec_layer=None, parent_net=None, source_data=None, rec_layer_name=None):
     """
     :param dict[str,dict[str]] net_dict: dict for the subnetwork, layer name -> layer dict
     :param RecLayer parent_rec_layer:
     :param TFNetwork.TFNetwork parent_net:
     :param Data|None source_data: usually concatenated input from the rec-layer
+    :param str|None rec_layer_name:
     """
     from copy import deepcopy
     if parent_net is None and parent_rec_layer:
       parent_net = parent_rec_layer.network
     if source_data is None and parent_rec_layer:
       source_data = parent_rec_layer.input_data
+    if rec_layer_name is None:
+      assert parent_rec_layer
+      rec_layer_name = parent_rec_layer.name
     self.parent_rec_layer = parent_rec_layer
     self.parent_net = parent_net
     self.net_dict = deepcopy(net_dict)
     from TFNetwork import TFNetwork, ExternData, LossHolder
     self.net = TFNetwork(
-      name="%s/%s:rec-subnet" % (parent_net.name, parent_rec_layer.name if parent_rec_layer else "?"),
+      name="%s/%s:rec-subnet" % (parent_net.name, rec_layer_name),
       extern_data=ExternData(),
       train_flag=parent_net.train_flag,
       search_flag=parent_net.search_flag,
       parent_layer=parent_rec_layer,
       is_inside_rec_layer=True,
+      absolute_name_prefix="%s%s/" % (parent_net.get_absolute_name_prefix(), rec_layer_name),
       parent_net=parent_net)
     if source_data:
       self.net.extern_data.data["source"] = (
@@ -1016,6 +1022,10 @@ class _SubnetworkRecCell(object):
             assert isinstance(layer_, _TemplateLayer)
             if layer_ not in ConstructCtx.partially_finished:  # it might not be final
               layer_ = self.get_prev_template_layer(name)
+            elif layer_.is_initialized:
+              layer_ = layer_.copy_as_prev_time_frame()
+            else:
+              return None
           return layer_
         if name in self.layer_data_templates:
           layer_ = self.layer_data_templates[name]
@@ -1034,7 +1044,8 @@ class _SubnetworkRecCell(object):
         if '/' in name:
           # this is probably a path to a sub-layer
           root_name = name.split('/')[0]
-          root_layer = lself.__call__(root_name, is_prev_time_frame=is_prev_time_frame)  # get the root-layer
+          root_layer = lself.__call__(
+            ("prev:%s" % root_name) if is_prev_time_frame else root_name)  # get the root-layer
           sub_layer = root_layer.get_sub_layer('/'.join(name.split('/')[1:]))  # get the sub-layer from the root-layer
           if sub_layer:  # get_sub_layer returns None by default (if sub-layer not found)
             # add to templates so we will collect output in self.get_output if this is an output layer
@@ -2342,7 +2353,7 @@ class _SubnetworkRecCell(object):
     # (Cutting off the EOS is handled elsewhere.)
     seq_len = acc_ta.size()
     initial_i = tf.identity(seq_len - 1, name="search_resolve_initial_i")  # we go backwards
-    latest_beam_size = latest_layer_choice.output.beam_size
+    latest_beam_size = latest_layer_choice.output.beam.beam_size
     batch_dim = rec_layer.network.get_data_batch_dim()
 
     initial_beam_choices = tf.range(0, latest_beam_size)  # (beam_out,)
@@ -2380,7 +2391,7 @@ class _SubnetworkRecCell(object):
           if d is None:
             out_shape[i_] = tf.shape(output_)[i_]
         output_ = tf.reshape(
-          output_, [batch_dim, layer_choice.output.beam_size] + out_shape[1:],
+          output_, [batch_dim, layer_choice.output.beam.beam_size] + out_shape[1:],
           name="split_batch_beam")  # (batch, beam, [n_out])
         output_ = tf.gather_nd(output_, idxs_exp)  # (batch, beam_par, [n_out])
         beam_par = get_shape_dim(idxs_exp, 1)
@@ -2757,16 +2768,16 @@ class _SubnetworkRecCell(object):
         acc_ta, search_choices = self._opt_search_resolve(
           layer_name=name, acc_ta=acc_ta, final_net_vars=final_net_vars)
         output = self.layer_data_templates[name].output.copy_template_adding_time_dim(time_dim_axis=0)
-        output.beam_size = search_choices.beam_size if search_choices else None
+        output.beam = search_choices.get_beam_info() if search_choices else None
         # We should have accumulated it.
         output.placeholder = tensor_array_stack(acc_ta, stop=max_len)  # e.g. (time,batch,dim)
         output.size_placeholder = {0: seq_len}
-        if output.beam_size:
-          if self.parent_rec_layer.output.beam_size:
+        if output.beam:
+          if self.parent_rec_layer.output.beam:
             # seq_len should have already a beam, same as rec_layer.output
-            assert output.beam_size == self.parent_rec_layer.output.beam_size
+            assert output.beam == self.parent_rec_layer.output.beam
           else:
-            output.size_placeholder[0] = tile_transposed(seq_len, axis=0, multiples=output.beam_size)
+            output.size_placeholder[0] = tile_transposed(seq_len, axis=0, multiples=output.beam.beam_size)
             if time_dim_tag:
               time_dim_tag.set_tag_on_size_tensor(output.size_placeholder[0])
         if inner_layer.output.size_placeholder:
@@ -2895,8 +2906,7 @@ class _TemplateLayer(LayerBase):
     :param str template_type:
     :param kwargs: via network.construct_layer, i.e. transform_config_dict was called already
     """
-    # Overwrite self.__class__ so that checks like isinstance(layer, ChoiceLayer) work.
-    # Not sure if this is the nicest way -- probably not, so I guess this will go away later.
+    output = output.copy()  # we are going to modify it here
     self.is_initialized = True
     self.is_prev_time_frame = (template_type == "prev")
     self.is_data_template = (template_type == "template")
@@ -2958,7 +2968,9 @@ class _TemplateLayer(LayerBase):
       layer.search_choices = SearchChoices(owner=layer, beam_size=self.search_choices.beam_size)
       if rec_vars_prev_outputs:
         layer.search_choices.set_beam_from_own_rec()
-      layer.output.beam_size = self.search_choices.beam_size
+      assert layer.output.beam and layer.output.beam.beam_size == self.search_choices.beam_size
+    if layer.output.beam:
+      layer.output.beam = layer.output.beam.copy_as_prev_frame()
     return layer
 
   def _get_cell(self):
@@ -3342,9 +3354,9 @@ class RnnCellLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :rtype: Data
     """
-    beam_size = None
+    beam = None
     for dep in sources:
-      beam_size = beam_size or dep.output.beam_size
+      beam = SearchBeam.get_combined_beam(beam, dep.output.beam)
     shape = (n_out,)  # type: typing.Tuple[typing.Union[int,None],...]
     batch_dim_axis = 0
     time_dim_axis = None
@@ -3358,7 +3370,7 @@ class RnnCellLayer(_ConcatInputLayer):
       batch_dim_axis=batch_dim_axis,
       time_dim_axis=time_dim_axis,
       size_placeholder={} if not sources else sources[0].output.size_placeholder.copy(),
-      beam_size=beam_size)
+      beam=beam)
 
   def get_absolute_name_scope_prefix(self):
     """
@@ -3814,7 +3826,7 @@ class BaseChoiceLayer(LayerBase):
       # Note: _src_common_search_choices might not be set during template construction,
       # but this fallback would still work then (at least for ChoiceLayer).
       if sources:
-        return sources[0].output.beam_size
+        return sources[0].output.beam.beam_size
       return None
     return beam_size
 
@@ -3963,7 +3975,7 @@ class ChoiceLayer(BaseChoiceLayer):
         assert scores_base.get_shape().ndims == 2, "%r invalid" % base_search_choices
         base_beam_in = tf.shape(scores_base)[1]  # 1 in first frame, then beam_in
         scores_beam_in = tf.shape(scores_in)[0] // net_batch_dim
-        beam_in = self.sources[0].output.beam_size
+        beam_in = self.sources[0].output.beam.beam_size
         assert beam_in == base_search_choices.beam_size, "%r: source %r beam-size unexpected from base choice %r" % (
           self, self.sources[0], base_search_choices)
         # About incoming beam size:
@@ -4092,7 +4104,7 @@ class ChoiceLayer(BaseChoiceLayer):
             dtype=self.output.dtype,
             placeholder=labels_,
             available_for_inference=True,
-            beam_size=beam_size))
+            beam=self.output.beam))
 
         # We use the labels of the first target as "normal" output.
         self.output = self.output_list[0]
@@ -4162,7 +4174,7 @@ class ChoiceLayer(BaseChoiceLayer):
       self.search_choices = SearchChoices(
         owner=self,
         beam_size=base_search_choices.beam_size)
-      assert self.search_choices.beam_size == self.output.beam_size
+      assert self.search_choices.beam_size == self.output.beam.beam_size
       scores_base = base_search_choices.beam_scores  # (batch, beam_in|1)
       assert len(self.sources) == 1
       scores_in = self._get_scores(self.sources[0])  # +log scores, (batch*beam_in, dim)
@@ -4333,7 +4345,8 @@ class ChoiceLayer(BaseChoiceLayer):
     search = NotSpecified.resolve(search, network.search_flag)
     target = target[0] if isinstance(target, list) else target  # only the first matters here
     if target:
-      out_data = cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=False).copy()
+      out_data = cls._static_get_target_value(
+        target=target, network=network, mark_data_key_as_used=False).copy_template(name="%s_output" % name)
       out_data.available_for_inference = True  # in inference, we would do search
     else:  # no target. i.e. we must do search
       assert search, "%s %r: no target given, must do search" % (cls.__name__, name)
@@ -4344,9 +4357,15 @@ class ChoiceLayer(BaseChoiceLayer):
       del shape[out_data.batch_dim_axis]
       out_data = Data(name="%s_output" % name, shape=shape, sparse=True, dim=out_data.dim)
     if search:
-      out_data.beam_size = beam_size
+      from TFUtil import SearchBeam
+      search_dep = NotSpecified
+      if sources and sources[0] and not sources[0].output.undefined:
+        search_dep = sources[0].output.beam
+      out_data.beam = SearchBeam(
+        beam_size=beam_size, dependency=search_dep,
+        name="%s%s" % (network.get_absolute_name_prefix(), name))
     elif sources and sources[0]:
-      out_data.beam_size = sources[0].output.beam_size
+      out_data.beam = sources[0].output.beam
     if cheating or scheduled_sampling or not search:
       cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=True)  # mark as used
     return out_data
@@ -4499,7 +4518,7 @@ class DecideLayer(BaseChoiceLayer):
     assert len(sources) == 1
     if network.search_flag:
       data = sources[0].output.copy_template(name="%s_output" % name).copy_as_batch_major()
-      data.beam_size = None
+      data.beam = None
       return data
     else:
       return sources[0].output
@@ -4518,13 +4537,13 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
     """
     assert len(sources) == 1
     src = sources[0]
-    super(DecideKeepBeamLayer, self).__init__(beam_size=src.output.beam_size, sources=sources, **kwargs)
+    super(DecideKeepBeamLayer, self).__init__(beam_size=src.output.beam.beam_size, sources=sources, **kwargs)
     # If not in search, this will already be set via self.get_out_data_from_opts().
     if self.network.search_flag:
       base_search_choices = src.get_search_choices()
       if base_search_choices:
-        self.search_choices = SearchChoices(owner=self, beam_size=self.output.beam_size, is_decided=True)
-        assert base_search_choices.beam_size == self.output.beam_size == self.search_choices.beam_size
+        self.search_choices = SearchChoices(owner=self, beam_size=self.output.beam.beam_size, is_decided=True)
+        assert base_search_choices.beam_size == self.output.beam.beam_size == self.search_choices.beam_size
         net_batch_dim = self.network.get_data_batch_dim()
         from TFUtil import expand_dims_unbroadcast
         self.search_choices.set_src_beams(expand_dims_unbroadcast(
@@ -4541,7 +4560,7 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
     :rtype: int|None
     """
     assert len(sources) == 1
-    return sources[0].output.beam_size
+    return sources[0].output.beam.beam_size
 
   @classmethod
   def get_rec_initial_extra_outputs(cls, sources, **kwargs):
@@ -4551,7 +4570,7 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
     """
     assert len(sources) == 1
     return super(DecideKeepBeamLayer, cls).get_rec_initial_extra_outputs(
-      beam_size=sources[0].output.beam_size, sources=sources, **kwargs)
+      beam_size=sources[0].output.beam.beam_size, sources=sources, **kwargs)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -4597,7 +4616,7 @@ class ChoiceGetBeamScoresLayer(LayerBase):
     assert len(self.sources) == 1
     search_choices = self.sources[0].get_search_choices()
     assert search_choices, "%s: source %s has no search choices" % (self, self.sources[0])
-    assert search_choices.beam_size == self.output.beam_size
+    assert search_choices.beam_size == self.output.beam.beam_size
     net_batch_dim = self.network.get_data_batch_dim()
     self.output.placeholder = tf.reshape(search_choices.beam_scores, [net_batch_dim * search_choices.beam_size])
 
@@ -4620,7 +4639,7 @@ class ChoiceGetBeamScoresLayer(LayerBase):
     :rtype: Data
     """
     assert len(sources) == 1
-    return Data(name="%s_output" % name, dtype="float32", shape=(), beam_size=sources[0].output.beam_size)
+    return Data(name="%s_output" % name, dtype="float32", shape=(), beam=sources[0].output.beam)
 
 
 class ChoiceGetSrcBeamsLayer(LayerBase):
@@ -4635,7 +4654,7 @@ class ChoiceGetSrcBeamsLayer(LayerBase):
     assert len(self.sources) == 1
     search_choices = self.sources[0].get_search_choices()
     assert search_choices, "%s: source %s has no search choices" % (self, self.sources[0])
-    assert search_choices.beam_size == self.output.beam_size
+    assert search_choices.beam_size == self.output.beam.beam_size
     net_batch_dim = self.network.get_data_batch_dim()
     self.output.placeholder = tf.reshape(search_choices.src_beams, [net_batch_dim * search_choices.beam_size])
 
@@ -4658,7 +4677,7 @@ class ChoiceGetSrcBeamsLayer(LayerBase):
     :rtype: Data
     """
     assert len(sources) == 1
-    return Data(name="%s_output" % name, dtype="int32", shape=(), dim=None, beam_size=sources[0].output.beam_size)
+    return Data(name="%s_output" % name, dtype="int32", shape=(), dim=None, beam=sources[0].output.beam)
 
 
 class AttentionBaseLayer(_ConcatInputLayer):
@@ -5827,7 +5846,7 @@ class EditDistanceTableLayer(LayerBase):
     assert target_data.sparse and source_data.dim == target_data.dim
     return Data(
       name="%s_output" % name, shape=(None, None) if source_data.have_time_axis() else (None,),
-      dtype="int32", beam_size=Data.get_combined_beam_size(source_data.beam_size, target_data.beam_size))
+      dtype="int32", beam=SearchBeam.get_combined_beam(source_data.beam, target_data.beam))
 
 
 class OptimalCompletionsLayer(LayerBase):
@@ -5912,7 +5931,7 @@ class OptimalCompletionsLayer(LayerBase):
     return Data(
       name="%s_output" % name,
       shape=(target_data.dim,), dim=target_data.dim, dtype="int32", sparse=False, time_dim_axis=None,
-      beam_size=Data.get_combined_beam_size(source_data.beam_size, target_data.beam_size))
+      beam=SearchBeam.get_combined_beam(source_data.beam, target_data.beam))
 
 
 # noinspection PyAbstractClass
@@ -6686,7 +6705,7 @@ class TwoDLSTMLayer(LayerBase):
     time_dim_axis = sources[1].output.time_dim_axis
     shape = sources[1].output.shape[:-1] + (n_out,)
     size_placeholder = sources[1].output.size_placeholder.copy()
-    beam_size = sources[0].output.beam_size
+    beam = sources[0].output.beam
     dtype = "float32"
     available_for_inference = all([src.output.available_for_inference for src in sources])
 
@@ -6698,7 +6717,7 @@ class TwoDLSTMLayer(LayerBase):
       size_placeholder=size_placeholder,
       available_for_inference=available_for_inference,
       dtype=dtype,
-      beam_size=beam_size,
+      beam=beam,
       sparse=False)
 
   def _add_params(self, scope_name_prefix, params):

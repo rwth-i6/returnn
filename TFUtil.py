@@ -311,6 +311,131 @@ class DimensionTag(object):
     return res
 
 
+class SearchBeam:
+  """
+  Represents info about the beam from some beam search (e.g. via :func:`beam_search`),
+  e.g. such as the beam size, but also the dependencies.
+  This is somewhat parallel to :class:`SearchChoices`, but simpler,
+  and independent from the layers/network (:class:`LayerBase`).
+  """
+
+  def __init__(self, beam_size, dependency=NotSpecified, name=None, _next_frame=None):
+    """
+    :param int beam_size:
+    :param SearchBeam|NotSpecified|None dependency:
+    :param str|None name:
+    :param SearchBeam|None _next_frame:
+    """
+    if isinstance(dependency, SearchBeam):
+      assert name and dependency.name and name != dependency.name
+    if name and os.path.basename(name).startswith("prev:"):
+      assert _next_frame
+    self.beam_size = beam_size
+    self.dependency = dependency
+    self.name = name
+    self._next_frame = _next_frame
+
+  def copy_as_prev_frame(self):
+    """
+    :rtype: SearchBeam
+    """
+    if self._next_frame:  # already prev frame -> return self. see logic in RecLayer maybe_transform
+      return self
+    assert self.name
+    name = "%s/prev:%s" % (os.path.dirname(self.name), os.path.basename(self.name))
+    return SearchBeam(beam_size=self.beam_size, name=name, _next_frame=self)
+
+  def __repr__(self):
+    keys = ["name", "beam_size"]
+    if self.dependency is not NotSpecified:
+      keys.append("dependency")
+    return "%s(%s)" % (
+      self.__class__.__name__, ", ".join(["%s=%r" % (key, getattr(self, key)) for key in keys]))
+
+  def __eq__(self, other):
+    """
+    :param SearchBeam|object|None other:
+    :rtype: bool
+    """
+    if self is other:
+      return True
+    if self is None or other is None:
+      return False
+    if not isinstance(self, SearchBeam) or not isinstance(other, SearchBeam):
+      return False
+    if self.name is None or other.name is None:
+      return False  # cannot identify
+    return self.name == other.name
+
+  def __ne__(self, other):
+    """
+    :param SearchBeam|object|None other:
+    :rtype: bool
+    """
+    return not (self == other)
+
+  def __hash__(self):
+    return hash(self.name)
+
+  def _get_dependency_list(self):
+    """
+    :return: list as far as it is defined
+    :rtype: list[SearchBeam]
+    """
+    ls = [self]
+    while isinstance(ls[-1].dependency, SearchBeam):
+      ls.append(ls[-1].dependency)
+    return ls
+
+  @classmethod
+  def get_combined_beam(cls, beam1, beam2=None, *beams):
+    """
+    Combines beams.
+    This will throw an exception if they cannot be combined.
+    Note that in beam search (see :class:`SearchChoices`),
+    the logic to combine beams from different search choices
+    happens in a generic way for all layers automatically
+    via :func:`TFNetwork._create_layer_layer_desc`,
+    so normally we already have the same beam.
+    Unless we are at template construction.
+
+    :param SearchBeam|None beam1:
+    :param SearchBeam|None beam2:
+    :param SearchBeam|None beams:
+    :rtype: SearchBeam|None
+    """
+    if beams:
+      beam12 = cls.get_combined_beam(beam1, beam2)
+      return cls.get_combined_beam(beam12, beams[0], *beams[1:])
+    if beam2 is None:
+      return beam1
+    if beam1 is None:
+      return beam2
+    if beam1 == beam2:
+      if beam2.dependency is NotSpecified:
+        return beam1
+      if beam1.dependency is NotSpecified:
+        return beam2
+      return beam1
+    assert beam1.name and beam2.name
+    if beam2._next_frame and not beam1._next_frame:
+      return beam1
+    if beam1._next_frame and not beam2._next_frame:
+      return beam2
+    b1 = beam1
+    b2 = beam2
+    if b1._next_frame and b2._next_frame:
+      b1 = b1._next_frame
+      b2 = b2._next_frame
+    l1 = b1._get_dependency_list()
+    l2 = b2._get_dependency_list()
+    if b2 in l1:
+      return beam1
+    if b1 in l2:
+      return beam2
+    raise Exception("Cannot combine beams:\n 1: %s\n 2: %s" % (beam1, beam2))
+
+
 class Data(object):
   """
   This class is to describe a tensor,
@@ -336,7 +461,7 @@ class Data(object):
                vocab=None,
                same_dim_tags_as=None,
                undefined=False,
-               beam_size=None):
+               beam=None):
     """
     :param str name:
     :param tuple[int|None]|list[int|None] shape: including time-dim (can be None). excluding batch-dim.
@@ -358,7 +483,7 @@ class Data(object):
     :param str|dict[str]|GeneratingDataset.Vocabulary|None vocab:
     :param dict[int|str,DimensionTag]|None same_dim_tags_as: will mark our dimension tags to be the same
     :param bool undefined:
-    :param int|None beam_size: the batch-dim could be extended by a beam-size,
+    :param SearchBeam|None beam: the batch-dim could be extended by a beam-size,
       such that it represents the merged dims [batch, beam_size].
     """
     assert isinstance(name, str)
@@ -458,7 +583,7 @@ class Data(object):
       size_placeholder = {}
     self.size_placeholder = size_placeholder  # type: typing.Dict[int,tf.Tensor]  # axis w.o. batch -> size (batch,)
     self.available_for_inference = available_for_inference
-    self.beam_size = beam_size
+    self.beam = beam
     if vocab is not None:
       from GeneratingDataset import Vocabulary
       if isinstance(vocab, str):
@@ -556,8 +681,8 @@ class Data(object):
       keys += ["available_for_inference"]
     if self.undefined:
       keys += ["undefined"]
-    if self.beam_size is not None:
-      keys += ["beam_size"]
+    if self.beam is not None:
+      keys += ["beam"]
     if self.vocab:
       keys += ["vocab"]
     if with_size_placeholder and self.size_placeholder is not None:
@@ -597,8 +722,8 @@ class Data(object):
       keys.append("available_for_inference")
     if self.undefined:
       keys.append("undefined")
-    if self.beam_size is not None:
-      keys.append("beam_size")
+    if self.beam is not None:
+      keys.append("beam")
     args = ["%s=%r" % (key, getattr(self, key)) for key in keys]
     args += ["batch_shape_meta=[%s]" % ",".join(self.get_batch_axes_short_description())]
     return "Data(%s)" % ", ".join(args)
@@ -1168,31 +1293,28 @@ class Data(object):
     data.sanity_check()
     return data
 
-  def copy_extend_with_beam(self, beam_size, dyn_beam_size=None):
+  def copy_extend_with_beam(self, beam):
     """
-    :param int beam_size:
-    :param tf.Tensor|None dyn_beam_size: if the beam size is dynamic
+    :param SearchBeam beam:
     :return: copy of myself where the batch-dim is extended/multiplied by beam_size, using tile_transposed
     :rtype: Data
     """
-    if dyn_beam_size is None:
-      dyn_beam_size = beam_size
     with tf.name_scope("data_extend_with_beam"):
       data = self.copy()
-      if data.beam_size and data.beam_size == beam_size:
+      if data.beam and data.beam == beam:
         return data
-      assert data.beam_size is None, "incompatible beam sizes (%r vs %r)" % (data.beam_size, beam_size)
+      assert data.beam is None, "incompatible beam (%r vs %r)" % (data.beam, beam)
       if data.placeholder is not None:
         with same_control_flow_ctx(data.placeholder):
-          data.placeholder = tile_transposed(data.placeholder, axis=data.batch_dim_axis, multiples=dyn_beam_size)
+          data.placeholder = tile_transposed(data.placeholder, axis=data.batch_dim_axis, multiples=beam.beam_size)
       if data.size_placeholder is not None:
         for i, v in sorted(data.size_placeholder.items()):
           tag = DimensionTag.get_tag_from_size_tensor(v)
           with same_control_flow_ctx(v):
-            data.size_placeholder[i] = tile_transposed(v, axis=0, multiples=dyn_beam_size)
+            data.size_placeholder[i] = tile_transposed(v, axis=0, multiples=beam.beam_size)
           if tag is not None:
             tag.set_tag_on_size_tensor(data.size_placeholder[i])
-      data.beam_size = beam_size * (data.beam_size or 1)
+      data.beam = beam
       return data
 
   def copy_squeeze_axes(self, axes):
@@ -2279,9 +2401,9 @@ class Data(object):
     common = common.copy()
     if out_shape is not None:
       out_shape.extend(common.get_dynamic_batch_shape())
-    if not common.beam_size and any([s.beam_size for s in sources]):
+    if any([s.beam for s in sources]):
       # Note: we don't use copy_extend_with_beam because we don't want to create any ops in the TF graph at this point.
-      common.beam_size = Data.get_combined_beam_size(*[s.beam_size for s in sources])
+      common.beam = SearchBeam.get_combined_beam(*[s.beam for s in sources])
     is_equal_opts = dict(ignore_feature_dim=True, allow_same_spatial_dim=True)
     all_dim_tags, tags_dict = DimensionTag.get_all_dimension_tags(sources, is_equal_opts=is_equal_opts)
     # Note: We cannot compare len(all_dims_tags) to len(shape) as e.g. shape (B,1,1,D) would have only 3 dim tags.
@@ -2338,38 +2460,6 @@ class Data(object):
     # Simple fallback: Use first with biggest batch_ndim.
     # Was even simpler before: Use first.
     return common
-
-  @classmethod
-  def get_combined_beam_size(cls, beam1, beam2=None, *beams):
-    """
-    Combines beam sizes.
-    This will throw an exception if they cannot be combined.
-    Note that in beam search (see :class:`SearchChoices`),
-    the logic to combine beams from different search choices
-    happens in a generic way for all layers automatically
-    via :func:`TFNetwork._create_layer_layer_desc`,
-    so normally this should always work.
-
-    :param int|None beam1:
-    :param int|None beam2:
-    :param int|None beams:
-    :rtype: int|None
-    """
-    if beams:
-      beam12 = cls.get_combined_beam_size(beam1, beam2)
-      return cls.get_combined_beam_size(beam12, beams[0], *beams[1:])
-    if beam2 is None:
-      return beam1
-    if beam1 is None:
-      return beam2
-    # Both are not None.
-    if beam2 == 1:
-      return beam1
-    if beam1 == 1:
-      return beam2
-    # Both are not None and not 1.
-    assert beam1 == beam2
-    return beam1
 
 
 _horovod_is_initialized = False
