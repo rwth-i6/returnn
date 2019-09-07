@@ -998,30 +998,35 @@ class _SubnetworkRecCell(object):
         return layer_
 
       # noinspection PyMethodParameters
-      def __call__(lself, name):
+      def __call__(lself, name, is_prev_time_frame=False):
         """
         This is the get_layer function implementation.
 
         :param str name: layer name
+        :param bool is_prev_time_frame: layer of prev frame ("prev:...")
         :return: layer, or None
         :rtype: LayerBase|None
         """
         _name = name
-        is_prev = False
         if name.startswith("prev:"):
           name = name[len("prev:"):]
-          is_prev = True
           self.prev_layers_needed.add(name)
+          layer_ = lself.__call__(name, is_prev_time_frame=True)
+          if layer_ and name in self.layer_data_templates:
+            assert isinstance(layer_, _TemplateLayer)
+            if layer_ not in ConstructCtx.partially_finished:  # it might not be final
+              layer_ = self.get_prev_template_layer(name)
+          return layer_
         if name in self.layer_data_templates:
           layer_ = self.layer_data_templates[name]
           if ConstructCtx.layers:
-            ConstructCtx.layers[-1].add_dependency(layer_, is_prev_time_frame=is_prev)
+            ConstructCtx.layers[-1].add_dependency(layer_, is_prev_time_frame=is_prev_time_frame)
           if lself.allow_uninitialized_template:
             return layer_
           if not lself.reconstruct and layer_.is_initialized:
             return layer_
         if name.startswith("base:"):
-          assert not is_prev
+          assert not is_prev_time_frame
           layer_ = self._get_parent_layer(name[len("base:"):])
           if ConstructCtx.layers:
             ConstructCtx.layers[-1].add_dependency(layer_, is_prev_time_frame=False)
@@ -1029,7 +1034,7 @@ class _SubnetworkRecCell(object):
         if '/' in name:
           # this is probably a path to a sub-layer
           root_name = name.split('/')[0]
-          root_layer = lself.__call__(("prev:%s" % root_name) if is_prev else root_name)  # get the root-layer
+          root_layer = lself.__call__(root_name, is_prev_time_frame=is_prev_time_frame)  # get the root-layer
           sub_layer = root_layer.get_sub_layer('/'.join(name.split('/')[1:]))  # get the sub-layer from the root-layer
           if sub_layer:  # get_sub_layer returns None by default (if sub-layer not found)
             # add to templates so we will collect output in self.get_output if this is an output layer
@@ -1047,7 +1052,7 @@ class _SubnetworkRecCell(object):
             construct_stack=ConstructCtx.layers[-1] if ConstructCtx.layers else None)
           self.layer_data_templates[name] = layer_
         if ConstructCtx.layers:
-          ConstructCtx.layers[-1].add_dependency(layer_, is_prev_time_frame=is_prev)
+          ConstructCtx.layers[-1].add_dependency(layer_, is_prev_time_frame=is_prev_time_frame)
         if layer_ not in ConstructCtx.partially_finished:
           # Add it early. We want to catch all possible source of exceptions/errors, via:
           # * layer_class.transform_config_dict (via construct_layer)
