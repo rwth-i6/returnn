@@ -1570,6 +1570,246 @@ def test_search_multi_choice():
   assert numpy.any(output_value[:, 0] != output_value[:, 1])
 
 
+def test_search_multi_choice_simple_keep_beams():
+  """
+  Mostly like :func:`test_search_multi_choice`, but a bit simplified / stripped down,
+  so it is a good base to copy and extend for other cases.
+  Also, we extend here by keep_beams.
+  """
+  from TFNetwork import help_on_tf_exception
+  rnd = numpy.random.RandomState(42)
+  num_choices = 2
+  n_batch = 2
+  n_time = 3
+  n_hidden = 11
+  beam_size1, beam_size2 = 3 * 5, 5  # use different beam sizes
+  dim1, dim2 = 17, 7
+  net_dict = {
+    "encoder": {"class": "copy", "from": "data"},
+    "output": {
+      "class": "rec",
+      "from": [], "target": ["target1", "target2"],
+      "max_seq_len": n_time * 3,
+      "include_eos": True,
+      "unit": {
+        "lin1": {"class": "linear", "from": "prev:choice2", "activation": "relu", "n_out": n_hidden},
+        "lin1a": {"class": "eval", "from": "prev:lin2", "eval": "source(0) * -0.5"},
+        "lin1b": {"class": "combine", "kind": "add", "from": ["lin1a", "lin1"]},  # order is diff, by intention
+        "prob1": {"class": "linear", "activation": "log_softmax", "from": "lin1b", "n_out": dim1},
+        "choice1": {"class": "choice", "from": "prob1", "input_type": "log_prob",
+                    "beam_size": beam_size1, "keep_beams": True, "target": "target1",
+                    "initial_output": 0},
+        "lin2": {"class": "linear", "from": "choice1", "activation": "relu", "n_out": n_hidden},
+        "lin2a": {"class": "eval", "from": "lin1", "eval": "source(0) * -0.5"},
+        "lin2b": {"class": "combine", "kind": "add", "from": ["lin2a", "lin2"]},  # order is diff, by intention
+        "prob2": {"class": "linear", "activation": "log_softmax", "from": "lin2b", "n_out": dim2},
+        "choice2": {"class": "choice", "from": "prob2", "input_type": "log_prob",
+                    "beam_size": beam_size2, "target": "target2",
+                    "initial_output": "base:encoder",  # just to enforce that we have a difference in both beams
+                    },
+
+        "output": {"class": "copy", "from": "choice2"},  # define some output
+        "end": {"class": "eval", "from": [":i", "choice2"], "out_type": {"dtype": "bool"},
+                "eval": lambda source, **kwargs: (
+                  source(1),  # just mark as used, but do not actually use
+                  # Note: We use include_eos, thus the ending frame will be included.
+                  tf.greater_equal(source(0), n_time - 1))[-1]},
+      }
+    }
+  }
+  # Mark all as output layers, and also add raw copies (to get the original beams).
+  subnet_dict = net_dict["output"]["unit"]
+  assert isinstance(subnet_dict, dict)
+  for name in ["choice1", "choice2"]:
+    subnet_dict["_%s_src_beams" % name] = {"class": "choice_get_src_beams", "from": name}
+    subnet_dict["_%s_beam_scores" % name] = {"class": "choice_get_beam_scores", "from": name}
+  relevant_layer_names = []
+  for name, layer_desc in list(subnet_dict.items()):
+    if name in ["end", "output"]:
+      continue
+    assert isinstance(layer_desc, dict)
+    relevant_layer_names.append(name)
+    layer_desc["is_output_layer"] = True
+    subnet_dict["%s_raw" % name] = {"class": "decide_keep_beam", "from": name, "is_output_layer": True}
+  config = Config({
+    "debug_print_layer_output_template": True,
+    "extern_data": {
+      "data": {"shape": (), "sparse": True, "dim": dim2},
+      "target1": {"sparse": True, "dim": dim1},
+      "target2": {"sparse": True, "dim": dim2},
+    }
+  })
+
+  with make_scope() as session:
+    net = TFNetwork(config=config, search_flag=True)
+    net.construct_from_dict(net_dict)
+    net.print_network_info()
+    params = net.get_params_list()
+    # Note: Make param initialization explicit here, and make sure this stays the same in the future.
+    # The test will depend on exactly these params.
+    for param in sorted(params, key=lambda p: p.name):
+      param.load(rnd.normal(size=param.shape.as_list()).astype("float32"), session=session)
+    input_data = net.extern_data.data["data"]
+    input_values = [1, 2]
+    assert len(input_values) == n_batch
+    feed_dict = {input_data.placeholder: numpy.array(input_values)}
+    output_data = net.get_default_output_layer().output
+    assert output_data.time_dim_axis == 0 and output_data.batch_dim_axis == 1 and output_data.shape == (None,)
+    loop_vars = {
+      name: (net.get_layer("output/%s" % name), net.get_layer("output/%s_raw" % name))
+      for name in relevant_layer_names}  # type: typing.Dict[str,typing.Tuple[LayerBase,LayerBase]]
+    fetches = (
+      output_data.placeholder,
+      {name: (l1.output.placeholder, l2.output.placeholder)
+       for (name, (l1, l2)) in loop_vars.items()},
+      {param.op.name[len("output/rec/"):]: param
+       for param in net.get_params_list()
+       if param.op.name.startswith("output/rec/lin")})
+
+    print("TF execution...")
+    try:
+      output_value, loop_var_values, lin_params = session.run(fetches, feed_dict=feed_dict)
+    except Exception as exc:
+      print(exc)
+      help_on_tf_exception(session=session, exception=exc, fetches=fetches, feed_dict=feed_dict)
+      raise
+    # Now we don't need the TF session anymore. We fetched everything we need.
+
+  assert output_value.shape == (n_time, n_batch * beam_size2)
+  output_value = output_value.reshape(n_time, n_batch, beam_size2)
+  print("output:")
+  print(output_value)
+
+  # Now we go through each time step, and check whether all choices (and the whole search) were performed correctly.
+  print("Check search...")
+  # Needed vars for the beam search.
+  cur_beam_size = 1
+  scores_base = numpy.zeros((n_batch, 1))  # initial beam scores
+  # Keep track of the existing values.
+  prev_choice_val = numpy.array(input_values).reshape((n_batch, cur_beam_size))
+  prev_lin_val = numpy.zeros((n_batch, cur_beam_size, n_hidden))
+  lin_values = numpy.zeros((n_batch, cur_beam_size, num_choices, n_time, n_hidden))
+  choices_values = numpy.zeros((n_batch, cur_beam_size, num_choices, n_time), dtype="int32")
+  # Loop through the choices.
+  for t in range(n_time):
+    print("t:", t)
+    for choice_idx in range(num_choices):
+      dim = [dim1, dim2][choice_idx]
+      prev_dim = [dim2, dim1][choice_idx]
+      beam_size = [beam_size1, beam_size2][choice_idx]
+      prev_beam_size = [beam_size2, beam_size1][choice_idx]  # always like cur_beam_size, except of in the beginning
+      choice_name = "choice%i" % (choice_idx + 1)
+      print("choice:", choice_name, "dim:", dim, "beam size:", beam_size, "incoming beam size:", cur_beam_size)
+
+      assert prev_choice_val.shape == (n_batch, cur_beam_size)
+      weights = lin_params["lin%i/W" % (choice_idx + 1)]
+      assert weights.shape == (prev_dim, n_hidden)
+      assert numpy.all(0 <= prev_choice_val) and numpy.all(prev_choice_val < prev_dim)
+      x = weights[prev_choice_val].copy()
+      assert x.shape == (n_batch, cur_beam_size, n_hidden)
+      x = x + lin_params["lin%i/b" % (choice_idx + 1)]
+      x = numpy.maximum(0.0, x)  # relu
+
+      raw_lin_values = loop_var_values["lin%i" % (choice_idx + 1)][1][t]
+      assert raw_lin_values.shape == (n_batch * prev_beam_size, n_hidden)
+      raw_lin_values = raw_lin_values.reshape((n_batch, prev_beam_size, n_hidden))
+      if t == 0 and choice_idx == 0 and cur_beam_size == 1 and prev_beam_size > cur_beam_size:
+        # In the very beginning, the beam size can be larger than what we really have (size 1).
+        # See comments in ChoiceLayer.
+        # We silently ignore and allow this. This is an implementation detail, which also might change later.
+        # Just take the first.
+        raw_lin_values = raw_lin_values[:, :1]
+      assert raw_lin_values.shape == x.shape == (n_batch, cur_beam_size, n_hidden)
+      numpy.testing.assert_allclose(raw_lin_values, x, rtol=1e-5)
+      for b in range(n_batch):
+        for i in range(cur_beam_size):
+          # Note: This is not strictly guaranteed, but very likely. As we guarantee the same random seed,
+          # this will stay valid.
+          # Also, given this property, we can later do some more clever checks.
+          assert numpy.sum(raw_lin_values[b, i]) > 0.0
+      lin_values[:, :, choice_idx, t] = x
+
+      raw_lin_b_values = loop_var_values["lin%ib" % (choice_idx + 1)][1][t]
+      assert raw_lin_b_values.shape == (n_batch * prev_beam_size, n_hidden)
+      raw_lin_b_values = raw_lin_b_values.reshape((n_batch, prev_beam_size, n_hidden))
+      if t == 0 and choice_idx == 0 and cur_beam_size == 1 and prev_beam_size > cur_beam_size:
+        raw_lin_b_values = raw_lin_b_values[:, :1]
+      assert raw_lin_b_values.shape == x.shape == prev_lin_val.shape == (n_batch, cur_beam_size, n_hidden)
+      for b in range(n_batch):
+        for i in range(cur_beam_size):
+          if t > 0 or choice_idx > 0:
+            assert numpy.sum(prev_lin_val[b, i]) > 0.0  # see above
+          numpy.testing.assert_allclose(raw_lin_b_values[b, i], (x - prev_lin_val * 0.5)[b, i], rtol=1e-5)
+
+      scores_in = loop_var_values["prob%i" % (choice_idx + 1)][1][t]
+      assert isinstance(scores_in, numpy.ndarray)
+      assert scores_in.shape == (n_batch * prev_beam_size, dim)
+      scores_in = scores_in.reshape((n_batch, prev_beam_size, dim))
+      if t == 0 and choice_idx == 0 and cur_beam_size == 1 and prev_beam_size > cur_beam_size:
+        scores_in = scores_in[:, :1]
+      assert scores_in.shape == (n_batch, cur_beam_size, dim)
+      # In log space, and log prob distribution.
+      assert numpy.all(scores_in < 0) and numpy.all(numpy.isclose(numpy.sum(numpy.exp(scores_in), axis=-1), 1.0))
+
+      raw_choices = loop_var_values[choice_name][1][t]
+      raw_src_beams = loop_var_values["_%s_src_beams" % choice_name][1][t]
+      raw_beam_scores = loop_var_values["_%s_beam_scores" % choice_name][1][t]
+      assert raw_choices.shape == raw_src_beams.shape == raw_beam_scores.shape == (n_batch * beam_size,)
+      raw_choices = raw_choices.reshape((n_batch, beam_size))
+      raw_src_beams = raw_src_beams.reshape((n_batch, beam_size))
+      raw_beam_scores = raw_beam_scores.reshape((n_batch, beam_size))
+
+      scores_combined = scores_base[:, :, None] + scores_in
+      assert scores_combined.shape == (n_batch, cur_beam_size, dim)
+
+      # Now doing top-k, very explicitly.
+      for b in range(n_batch):
+        if choice_idx > 0:
+          s = [(-scores_combined[b, i, j], (i, j)) for i in range(cur_beam_size) for j in range(dim)]
+          s.sort()
+        else:  # for choice_idx == 0, we used keep_beams=True
+          assert beam_size % cur_beam_size == 0
+          s = []
+          for i in range(cur_beam_size):
+            s_ = [(-scores_combined[b, i, j], (i, j)) for j in range(dim)]
+            s_.sort()
+            s.extend(s_[:beam_size // cur_beam_size])
+          assert len(s) == beam_size
+        for i in range(beam_size):
+          print(" batch %i, new beam %i: src beam %i, label %i, score %f" % (
+            b, i, s[i][1][0], s[i][1][1], -s[i][0]))
+          numpy.testing.assert_allclose(-s[i][0], raw_beam_scores[b, i], rtol=1e-5)
+          assert_equal(s[i][1][0], raw_src_beams[b, i])
+          assert_equal(s[i][1][1], raw_choices[b, i])
+
+      # Select src beams.
+      assert lin_values.shape == (n_batch, cur_beam_size, num_choices, n_time, n_hidden)
+      lin_values = numpy.array([lin_values[b, raw_src_beams[b]] for b in range(n_batch)])
+      assert lin_values.shape == (n_batch, beam_size, num_choices, n_time, n_hidden)
+      assert choices_values.shape == (n_batch, cur_beam_size, num_choices, n_time)
+      choices_values = numpy.array([choices_values[b, raw_src_beams[b]] for b in range(n_batch)])
+      assert choices_values.shape == (n_batch, beam_size, num_choices, n_time)
+
+      # Ok. Update the beam.
+      scores_base = raw_beam_scores
+      cur_beam_size = beam_size
+      choices_values[:, :, choice_idx, t] = raw_choices.copy()
+      prev_choice_val = raw_choices.copy()
+      prev_lin_val = lin_values[:, :, choice_idx, t].copy()
+
+  print("Our output:")
+  print(choices_values[:, :, 1].transpose([2, 0, 1]))
+
+  # Now check if the final selected output and choices are correct.
+  assert cur_beam_size == beam_size2
+  assert output_value.shape == (n_time, n_batch, cur_beam_size)
+  for t in range(n_time):
+    numpy.testing.assert_equal(output_value[t], choices_values[:, :, -1, t])
+
+  # We also don't strictly enforce this, but this should be likely, i.e. that batch0 is different from batch1.
+  assert numpy.any(output_value[:, 0] != output_value[:, 1])
+
+
 def test_rec_layer_move_out_of_loop():
   from TFNetworkRecLayer import _SubnetworkRecCell
   from TFUtil import get_global_train_flag_placeholder
