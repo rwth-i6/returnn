@@ -385,6 +385,33 @@ def test_4D_Data_get_placeholder_flattened():
   assert res.shape[0] == 7 * 9 * 13
   assert len(res.shape) == 2
 
+
+def test_4D_nhwc_Data_get_placeholder_flattened():
+  import numpy as np
+  import numpy.testing as npt
+  size_placeholder = tf.constant(np.full((7,), 9), dtype=tf.int32)
+  d = Data(name='test_data', shape=(13, None, 17), dtype='float32',
+           size_placeholder={1: size_placeholder}, batch_dim_axis=0,
+           time_dim_axis=2, feature_dim_axis=1)
+  placeholder = tf.placeholder(shape=(None, 13, None, 17), dtype=tf.float32)
+  d.placeholder = placeholder
+  feed_data = np.random.rand(7, 13, 9, 17)
+  res = session.run(d.placeholder, feed_dict={placeholder: feed_data})
+  print(res.shape)
+  flat_placeholder = d.get_placeholder_flattened(keep_dims=True)
+  res = session.run(flat_placeholder, feed_dict={placeholder: feed_data})
+  print(res.shape)
+  assert res.shape[0] == 7 * 9 * 17
+  assert len(res.shape) == 4
+  npt.assert_array_almost_equal(res[0, :, 0, 0], feed_data[0, :, 0, 0])
+  flat_placeholder = d.get_placeholder_flattened(keep_dims=False)
+  res = session.run(flat_placeholder, feed_dict={placeholder: feed_data})
+  print(res.shape)
+  assert res.shape[0] == 7 * 9 * 17
+  assert len(res.shape) == 2
+  npt.assert_array_almost_equal(res[0, :], feed_data[0, :, 0, 0])
+
+
 def test_2D_Data_get_placeholder_flattened():
   import numpy as np
   d = Data(name='test_data', shape=(17,), dtype='float32',
