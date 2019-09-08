@@ -1175,12 +1175,16 @@ class _SubnetworkRecCell(object):
         print(s)
       raise
 
-  def _handle_construct_exception(self):
+  def _handle_construct_exception(self, layer_name):
+    """
+    :param str layer_name:
+    """
     if not self._template_construction_exceptions:
       return
     from pprint import pprint
-    print("Exception occurred during construction.")
-    print("Template network:")
+    print("Exception occurred during construction of layer %r." % layer_name)
+    print("We had previous exceptions at template construction, which got resolved, but maybe sth is wrong.")
+    print("Template network (check out types / shapes):")
     pprint(self.layer_data_templates)
     print("Collected (unique) exceptions during template construction:")
     print("(Note that many of these can be ignored, or are expected.)")
@@ -1304,7 +1308,7 @@ class _SubnetworkRecCell(object):
       try:
         return self.net.construct_layer(net_dict, name=name, get_layer=get_layer)
       except Exception:
-        self._handle_construct_exception()
+        self._handle_construct_exception(layer_name=name)
         raise
 
     # Go through needed_outputs, e.g. "output".
@@ -2687,7 +2691,7 @@ class _SubnetworkRecCell(object):
       try:
         return self.input_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
       except Exception:
-        self._handle_construct_exception()
+        self._handle_construct_exception(layer_name=name)
         raise
 
     # Same scope as the main subnet, so that it stays compatible.
@@ -2818,7 +2822,7 @@ class _SubnetworkRecCell(object):
         try:
           return self.output_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
         except Exception:
-          self._handle_construct_exception()
+          self._handle_construct_exception(layer_name=name)
           raise
       # It means that the layer is inside the loop.
       return get_loop_acc_layer(name)
