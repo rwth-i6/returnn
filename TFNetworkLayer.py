@@ -1270,8 +1270,9 @@ class LayerBase(object):
           zeroed_src_shape = [(d if (d is not None) else 1) for d in src_output.batch_shape]
         if src_output.batch_dim_axis is not None:
           zeroed_src_shape[src_output.batch_dim_axis] = batch_dim
+        from TFUtil import get_valid_scope_name_from_str
         src_output.placeholder = tf.zeros(
-          zeroed_src_shape, dtype=src_output.dtype, name="init_%s_zeros" % src.name)
+          zeroed_src_shape, dtype=src_output.dtype, name="init_%s_zeros" % get_valid_scope_name_from_str(src.name))
         src_output.sanity_check()
         zeroed_src = InternalLayer(name="%s_zeroed" % src.name, output=src_output, network=src.network)
         zeroed_sources.append(zeroed_src)
