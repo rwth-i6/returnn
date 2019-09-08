@@ -1261,7 +1261,7 @@ def test_reuse_params_map_custom_dep_loop():
       "inv_fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"],
                         "n_out": 1},
       "output": {"class": "rec", "from": [], "unit": {
-        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 1, 'from': ["output_prob"],
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 5, 'from': ["output_prob"],
                    "initial_output": 0},
         "end": {"class": "compare", "from": ["output"], "value": 0},
         'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6,
@@ -1298,6 +1298,7 @@ def test_reuse_params_map_custom_dep_loop():
     }
   })
   with make_scope() as session:
+    print("Construct for training")
     from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
     train_net = TFNetwork(config=config, train_flag=True)
     train_net.construct_from_dict(config.typed_dict["network"])
@@ -1309,6 +1310,7 @@ def test_reuse_params_map_custom_dep_loop():
     assert isinstance(train_rec_layer.cell.output_layers_net, TFNetwork)
     assert_equal(set(train_rec_layer.cell.output_layers_net.layers["output_prob"].params.keys()), {"b"})
   with make_scope() as session:
+    print("Construct for search")
     search_net = TFNetwork(config=config, train_flag=False, eval_flag=True, search_flag=True)
     search_net.construct_from_dict(config.typed_dict["network"])
 
