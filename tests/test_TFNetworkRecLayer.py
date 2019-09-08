@@ -2750,9 +2750,9 @@ def test_reclayer_enc_time_dim_eval():
             "accum": {
               "class": "eval", "from": ["prev:accum", "base:enc0", "base:enc1"],
               "out_type": {"dim": 1, "shape": (None, 1)},
-              "eval": """(tf.Print(source(0), ["shape0", tf.shape(source(0))]) +
-                          tf.Print(source(1), ["shape1", tf.shape(source(1))]) *
-                          tf.Print(source(2), ["shape2", tf.shape(source(2))]))"""
+              "eval": """(py_print(source(0), ["shape0", tf.shape(source(0))]) +
+                          py_print(source(1), ["shape1", tf.shape(source(1))]) *
+                          py_print(source(2), ["shape2", tf.shape(source(2))]))"""
             },
             "output": {
               "class": "reduce", "axis": "stag:encoder", "mode": "max", "from": "accum"},
