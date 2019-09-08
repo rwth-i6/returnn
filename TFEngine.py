@@ -1957,10 +1957,10 @@ class Engine(EngineBase):
     num_targets = len(output_layer_names)
 
     # Create lists with information about the output layers. All of length num_targets.
-    output_layers = []  # list[LayerBase]
-    out_beam_sizes = []  # list[int|None]
-    output_layer_beam_scores = []  # list[tf.Tensor|None]
-    target_keys = []  # list[str]
+    output_layers = []  # type: typing.List[LayerBase]
+    out_beam_sizes = []  # type: typing.List[typing.Optional[int]]
+    output_layer_beam_scores = []  # type: typing.List[typing.Optional[tf.Tensor]]
+    target_keys = []  # type: typing.List[str]
 
     for output_layer_name in output_layer_names:
       output_layer = self.network.layers[output_layer_name]
