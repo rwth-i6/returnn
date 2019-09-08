@@ -3354,6 +3354,10 @@ class RnnCellLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :rtype: Data
     """
+    if sources and any([not src or src.output.undefined for src in sources]):
+      from TFNetwork import CannotHandleUndefinedSourcesException
+      raise CannotHandleUndefinedSourcesException(
+        layer_name=name, layer_desc=dict(n_out=n_out, sources=sources, **kwargs))
     beam = None
     for dep in sources:
       beam = SearchBeam.get_combined_beam(beam, dep.output.beam)
