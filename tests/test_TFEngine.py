@@ -2463,10 +2463,13 @@ if __name__ == "__main__":
         else:
           eval(arg)  # assume Python code and execute
   finally:
-    session.close()
-    del session
-    tf.reset_default_graph()
+    try:
+      session.close()
+      tf.reset_default_graph()
+    except Exception as exc:
+      print("test finally handler, exception:", type(exc).__name__, ":", exc)
     import threading
     if len(list(threading.enumerate())) > 1:
       print("Warning, more than one thread at exit:")
       better_exchook.dump_all_thread_tracebacks()
+    del session
