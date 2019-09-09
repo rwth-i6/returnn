@@ -1295,7 +1295,7 @@ class Data(object):
 
   def copy_extend_with_beam(self, beam):
     """
-    :param SearchBeam beam:
+    :param SearchBeam|None beam:
     :return: copy of myself where the batch-dim is extended/multiplied by beam_size, using tile_transposed
     :rtype: Data
     """
@@ -1304,6 +1304,8 @@ class Data(object):
       if data.beam and data.beam == beam:
         return data
       assert data.beam is None, "incompatible beam (%r vs %r)" % (data.beam, beam)
+      if beam is None:
+        return data
       if data.placeholder is not None:
         with same_control_flow_ctx(data.placeholder):
           data.placeholder = tile_transposed(data.placeholder, axis=data.batch_dim_axis, multiples=beam.beam_size)

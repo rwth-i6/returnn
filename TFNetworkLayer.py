@@ -1667,8 +1667,11 @@ class SearchChoices(object):
 
   def get_beam_info(self):
     """
-    :rtype: TFUtil.SearchBeam
+    :rtype: TFUtil.SearchBeam|None
     """
+    if self.owner.output.beam is None:
+      assert self.beam_size == 1
+      return None
     assert self.owner.output.beam.beam_size == self.beam_size
     return self.owner.output.beam
 
