@@ -25,7 +25,7 @@ from Config import Config
 import argparse
 import Util
 from Util import NotSpecified
-from TFUtil import Data
+from TFUtil import Data, CollectionKeys
 from TFNetwork import TFNetwork
 from TFNetworkLayer import LayerBase, register_layer_class, WrappedInternalLayer
 from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell, ChoiceLayer
@@ -245,12 +245,13 @@ class RecStepByStepLayer(RecLayer):
     Represents a state variable, i.e. either a state, a choice, or encoder state, etc.
     """
 
-    def __init__(self, name, initial_value, data_shape):
+    def __init__(self, name, initial_value, data_shape, is_loop_var=False):
       """
       :param str name:
       :param tf.Tensor|None initial_value:
         initial_value might have dim 1 in variable dimensions (which are not the batch-dim-axis),
         see get_rec_initial_output, which should be fine for broadcasting.
+      :param bool is_loop_var:
       :param Data data_shape:
         Describes the shape of initial_value, and also what we store as self.orig_data_shape,
         and what we return by self.read().
@@ -260,6 +261,7 @@ class RecStepByStepLayer(RecLayer):
       self.orig_data_shape = data_shape
       self.var_data_shape = data_shape.copy_as_batch_major() if data_shape.batch_dim_axis is not None else data_shape
       del data_shape
+      self.is_loop_var = is_loop_var
       self.orig_initial_value = initial_value
       if initial_value is not None and self.orig_data_shape.batch_dim_axis not in (0, None):
         x = self.orig_data_shape.copy()
@@ -277,8 +279,14 @@ class RecStepByStepLayer(RecLayer):
         [d if (d is not None) else 1 for d in self.var_data_shape.batch_shape],
         dtype=self.var_data_shape.dtype)
       zero_initializer.set_shape(self.var_data_shape.batch_shape)
+
+      var_collections = [tf.GraphKeys.GLOBAL_VARIABLES]
+      if is_loop_var:
+        var_collections.append(CollectionKeys.STATE_VARS)  # STATE_VARS corresponds to what we call loop-var here
       with helper_variable_scope():
-        self.var = tf.get_variable(name=name, initializer=zero_initializer, validate_shape=False)  # type: tf.Variable
+        self.var = tf.get_variable(
+          name=name, initializer=zero_initializer, validate_shape=False,
+          collections=var_collections)  # type: tf.Variable
       self.var.set_shape(self.var_data_shape.batch_shape)
       assert self.var.shape.as_list() == list(self.var_data_shape.batch_shape)
       print("New state var %r: %s, shape %s" % (name, self.var, self.var_data_shape))
@@ -366,12 +374,13 @@ class RecStepByStepLayer(RecLayer):
       v = select_src_beams(self.var.read_value(), src_beams=src_beams)
       return tf.assign(self.var, v, name="select_src_beams_state_var_%s" % self.name).op
 
-  def create_state_var(self, name, initial_value=None, data_shape=None):
+  def create_state_var(self, name, is_loop_var, initial_value=None, data_shape=None):
     """
     A state var is a variable where the initial value is given by the encoder, or a constant,
     and the final value is determined by one step of this rec layer (usually called the decoder).
 
     :param str name:
+    :param bool is_loop_var:
     :param tf.Tensor|None initial_value: assumes batch-major, if data_shape is not given
     :param Data|None data_shape:
     :rtype: tf.Tensor
@@ -390,7 +399,7 @@ class RecStepByStepLayer(RecLayer):
       # initial_value might have dim 1 in variable dimensions (which are not the batch-dim-axis),
       # see get_rec_initial_output, which should be fine for broadcasting.
       initial_value.set_shape(data_shape.batch_shape)
-    var = self.StateVar(name=name, initial_value=initial_value, data_shape=data_shape)
+    var = self.StateVar(name=name, initial_value=initial_value, data_shape=data_shape, is_loop_var=is_loop_var)
     self.state_vars[name] = var
     return var.read()
 
@@ -401,7 +410,7 @@ class RecStepByStepLayer(RecLayer):
     """
     self.state_vars[name].set_final_value(final_value)
 
-  def create_state_vars_recursive(self, name_prefix, initial_values, data_shape=None):
+  def create_state_loop_vars_recursive(self, name_prefix, initial_values, data_shape=None):
     """
     :param str|list[str] name_prefix:
     :param T initial_values:
@@ -417,27 +426,28 @@ class RecStepByStepLayer(RecLayer):
         assert isinstance(data_shape, (tuple, list)) and len(data_shape) == len(initial_values)
       return make_seq_of_type(
         type(initial_values),
-        [self.create_state_vars_recursive(
+        [self.create_state_loop_vars_recursive(
           name_prefix=name_prefix[i], initial_values=v, data_shape=data_shape[i] if data_shape else None)
          for i, v in enumerate(initial_values)])
     if initial_values is None:
       assert data_shape is None
       return None
     if isinstance(initial_values, tf.Tensor):
-      return self.create_state_var(name=name_prefix, initial_value=initial_values, data_shape=data_shape)
+      return self.create_state_var(
+        name=name_prefix, initial_value=initial_values, data_shape=data_shape, is_loop_var=True)
     if isinstance(initial_values, (tuple, list)):
       if data_shape is not None:
         assert isinstance(data_shape, (tuple, list)) and len(data_shape) == len(initial_values)
       return make_seq_of_type(
         type(initial_values),
-        [self.create_state_vars_recursive(
+        [self.create_state_loop_vars_recursive(
           name_prefix="%s_%i" % (name_prefix, i), initial_values=v, data_shape=data_shape[i] if data_shape else None)
          for i, v in enumerate(initial_values)])
     if isinstance(initial_values, dict):
       if data_shape is not None:
         assert isinstance(data_shape, dict) and set(data_shape.keys()) == set(initial_values.keys())
       return {
-        k: self.create_state_vars_recursive(
+        k: self.create_state_loop_vars_recursive(
           name_prefix="%s_%s" % (name_prefix, k), initial_values=v, data_shape=data_shape[k] if data_shape else None)
         for k, v in initial_values.items()}
     raise TypeError("unhandled type %r" % (initial_values,))
@@ -533,11 +543,11 @@ class ChoiceStateVarLayer(LayerBase):
     else:
       raise ValueError("Not handled input_type %r" % (input_type,))
     rec_layer.create_state_var(
-      name="stochastic_var_scores_%s" % self.name, data_shape=source.output)
+      name="stochastic_var_scores_%s" % self.name, data_shape=source.output, is_loop_var=False)
     rec_layer.set_state_var_final_value(
       name="stochastic_var_scores_%s" % self.name, final_value=scores_in)
     self.output.placeholder = rec_layer.create_state_var(
-      name="stochastic_var_choice_%s" % self.name, data_shape=self.output)
+      name="stochastic_var_choice_%s" % self.name, data_shape=self.output, is_loop_var=False)
     rec_layer.add_stochastic_var(self.name)
 
   @classmethod
@@ -605,7 +615,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     output = layer.output.copy()
     output.placeholder = tile_transposed(
       rec_layer.create_state_var(
-        name="base_value_%s" % layer_name, initial_value=output.placeholder, data_shape=output),
+        name="base_value_%s" % layer_name, initial_value=output.placeholder, data_shape=output, is_loop_var=False),
       axis=output.batch_dim_axis,
       multiples=self.parent_tile_multiples_var.read_value())
     from TFUtil import DimensionTag
@@ -615,7 +625,8 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
         print("Warning, no defined dim tag on %r, axis %i" % (layer, output.get_batch_axis(i)), file=log.v2)
         dim_tag = output.get_dim_tag(output.get_batch_axis(i))
         dim_tag.set_tag_on_size_tensor(size)
-      new_size = rec_layer.create_state_var(name="base_size%i_%s" % (i, layer_name), initial_value=size)
+      new_size = rec_layer.create_state_var(
+        name="base_size%i_%s" % (i, layer_name), initial_value=size, is_loop_var=False)
       new_size = tile_transposed(new_size, axis=0, multiples=self.parent_tile_multiples_var.read_value())
       dim_tag.set_tag_on_size_tensor(new_size)
       output.size_placeholder[i] = new_size
@@ -651,20 +662,20 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       seq_len_info = None
     else:
       i, net_vars, acc_tas, seq_len_info = loop_vars
-      seq_len_info = rec_layer.create_state_vars_recursive(["end_flag", "dyn_seq_len"], seq_len_info)
-    i = rec_layer.create_state_var("i", i)
+      seq_len_info = rec_layer.create_state_loop_vars_recursive(["end_flag", "dyn_seq_len"], seq_len_info)
+    i = rec_layer.create_state_var("i", i, is_loop_var=True)
     with tf.name_scope("state"):
       # See _SubnetworkRecCell.GetOutput.body.
       # net_vars is (prev_outputs_flat, prev_extra_flat), and prev_outputs_flat corresponds to self._initial_outputs,
       # where the keys are the layer names.
       # prev_extra is always expected to be batch-major.
       prev_outputs_data = [self.layer_data_templates[k].output for k in sorted(self._initial_outputs.keys())]
-      net_vars = rec_layer.create_state_vars_recursive(
+      net_vars = rec_layer.create_state_loop_vars_recursive(
         name_prefix="state", initial_values=net_vars, data_shape=(prev_outputs_data, None))
     # We are ignoring acc_tas (the tensor arrays).
 
     with tf.name_scope("cond"):
-      rec_layer.create_state_var("cond", tf.constant(True))
+      rec_layer.create_state_var("cond", tf.constant(True), is_loop_var=True)
       res = cond(i, net_vars, acc_tas, seq_len_info)
       rec_layer.set_state_var_final_value("cond", res)
 
