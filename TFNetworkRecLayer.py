@@ -1188,14 +1188,10 @@ class _SubnetworkRecCell(object):
         print(s)
       raise
 
-  def _handle_construct_exception(self, layer_name):
-    """
-    :param str layer_name:
-    """
+  def _handle_construct_exception(self):
     if not self._template_construction_exceptions:
       return
     from pprint import pprint
-    print("Exception occurred during construction of layer %r." % layer_name)
     print("We had previous exceptions at template construction, which got resolved, but maybe sth is wrong.")
     print("Template network (check out types / shapes):")
     pprint(self.layer_data_templates)
@@ -1321,7 +1317,8 @@ class _SubnetworkRecCell(object):
       try:
         return self.net.construct_layer(net_dict, name=name, get_layer=get_layer)
       except Exception:
-        self._handle_construct_exception(layer_name=name)
+        print("Exception occurred during in-loop construction of layer %r." % name)
+        self._handle_construct_exception()
         raise
 
     # Go through needed_outputs, e.g. "output".
@@ -1372,16 +1369,22 @@ class _SubnetworkRecCell(object):
     template_layer = self.layer_data_templates[name]
     cl = template_layer.layer_class_type
     assert issubclass(cl, LayerBase)
-    batch_dim = template_layer.get_batch_dim()
-    if name == "end" and template_layer.kwargs.get("initial_output", None) is None:
-      # Special case for the 'end' layer.
-      from TFUtil import constant_with_shape
-      return constant_with_shape(False, shape=[batch_dim], name="initial_end")
     # noinspection PyProtectedMember
     with reuse_name_scope(self.parent_rec_layer._rec_scope):
       with cl.cls_layer_scope(name):
-        return cl.get_rec_initial_output(
-          batch_dim=batch_dim, rec_layer=self.parent_rec_layer, **self.layer_data_templates[name].kwargs)
+        # noinspection PyBroadException
+        try:
+          batch_dim = template_layer.get_batch_dim()
+          if name == "end" and template_layer.kwargs.get("initial_output", None) is None:
+            # Special case for the 'end' layer.
+            from TFUtil import constant_with_shape
+            return constant_with_shape(False, shape=[batch_dim], name="initial_end")
+          return cl.get_rec_initial_output(
+            batch_dim=batch_dim, rec_layer=self.parent_rec_layer, **self.layer_data_templates[name].kwargs)
+        except Exception:
+          print("Exception occurred during initial-output construction of layer %r." % name)
+          self._handle_construct_exception()
+          raise
 
   def _get_init_extra_outputs(self, name):
     """
@@ -1394,9 +1397,15 @@ class _SubnetworkRecCell(object):
     # noinspection PyProtectedMember
     with reuse_name_scope(self.parent_rec_layer._rec_scope):
       with cl.cls_layer_scope(name):
-        batch_dim = template_layer.get_batch_dim()
-        d = cl.get_rec_initial_extra_outputs(
-          batch_dim=batch_dim, rec_layer=self.parent_rec_layer, **self.layer_data_templates[name].kwargs)
+        # noinspection PyBroadException
+        try:
+          batch_dim = template_layer.get_batch_dim()
+          d = cl.get_rec_initial_extra_outputs(
+            batch_dim=batch_dim, rec_layer=self.parent_rec_layer, **self.layer_data_templates[name].kwargs)
+        except Exception:
+          print("Exception occurred during initial-extra-output construction of layer %r." % name)
+          self._handle_construct_exception()
+          raise
     return d
 
   def _check_output_template_shape(self):
@@ -2704,7 +2713,8 @@ class _SubnetworkRecCell(object):
       try:
         return self.input_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
       except Exception:
-        self._handle_construct_exception(layer_name=name)
+        print("Exception occurred during input-net construction of layer %r." % name)
+        self._handle_construct_exception()
         raise
 
     # Same scope as the main subnet, so that it stays compatible.
@@ -2835,7 +2845,8 @@ class _SubnetworkRecCell(object):
         try:
           return self.output_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
         except Exception:
-          self._handle_construct_exception(layer_name=name)
+          print("Exception occurred during output-net construction of layer %r." % name)
+          self._handle_construct_exception()
           raise
       # It means that the layer is inside the loop.
       return get_loop_acc_layer(name)
