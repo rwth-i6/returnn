@@ -332,6 +332,8 @@ class RecLayer(_ConcatInputLayer):
     """
     from tensorflow.python.util import nest
     source_data = get_concat_sources_data_template(sources) if sources else None
+    if sources and source_data.undefined:
+      return source_data
     if source_data and not source_data.have_time_axis():
       # We expect to be inside another RecLayer, and should do a single step (like RnnCellLayer).
       out_time_dim_axis = None

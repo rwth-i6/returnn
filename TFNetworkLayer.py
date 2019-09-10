@@ -1874,6 +1874,8 @@ def get_concat_sources_data_template(src_layers, name=None):
   :rtype: Data
   """
   assert src_layers, "need source layers"
+  if any([not s or s.output.undefined for s in src_layers]):
+    return Data(name="%s_undefined" % (name or "unknown"), shape=(), dim=None, undefined=True)
   if len(src_layers) == 1:
     return src_layers[0].output.copy(name=name)
   dim = 0
@@ -4312,6 +4314,8 @@ class ConvLayer(_ConcatInputLayer):
                               auto_use_channel_first=False,
                               **kwargs):
     data = get_concat_sources_data_template(sources)
+    if data.undefined:
+      return data
     shape = [None] * len(filter_size) + [n_out]
     if isinstance(strides, int):
       strides = [strides] * len(filter_size)
@@ -5548,6 +5552,8 @@ class CombineDimsLayer(_ConcatInputLayer):
     :rtype: Data
     """
     out = get_concat_sources_data_template(sources)
+    if out.undefined:
+      return out
     axes = out.get_axes_from_description(axes)
     assert len(axes) >= 2
     axes = sorted(axes)
