@@ -863,8 +863,8 @@ def test_SoftmaxOverSpatialLayer_window():
     mask = numpy.broadcast_to(mask, [n_batch, n_dim, n_time])  # (B, D, T)
     # check if layer output sums to one for each seq:
     out_sum = numpy.sum(out_np, axis=(1, 2))
-    numpy.testing.assert_allclose(out_sum, [1]*n_batch)
-    numpy.testing.assert_allclose(out_np[~mask], 0)  # check if masking worked
+    numpy.testing.assert_allclose(out_sum, [1]*n_batch, rtol=1e-5)
+    numpy.testing.assert_allclose(out_np[~mask], 0, rtol=1e-5)  # check if masking worked
 
 
 def test_SplitDimsLayer_simple_feat():
