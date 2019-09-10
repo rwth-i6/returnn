@@ -2842,8 +2842,8 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     :param float|None energy_factor: the energy will be scaled by this factor.
       This is like a temperature for the softmax.
       In Attention-is-all-you-need, this is set to 1/sqrt(base_ctx.dim).
-    :param LayerBase|None start: Tensor of shape (B,dim) indicating the start frame
-    :param LayerBase|None window_start: Tensor of shape (B,dim) indicating the window start
+    :param LayerBase|None start: Tensor of shape (B,) indicating the start frame
+    :param LayerBase|None window_start: Tensor of shape (B,) indicating the window start
     :param LayerBase|int|None window_size:
     :param bool use_time_mask: if True, assumes dyn seq len, and use it for masking.
       By default, if dyn seq len exists, it uses it.
@@ -2880,9 +2880,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
         energy_mask = tf.logical_and(energy_mask, tf.greater_equal(idxs, start_data.placeholder))
       if window_start:
         assert window_size, "set window_size explicitly"
-        assert window_start.output.batch_ndim == 1
         if isinstance(window_size, LayerBase):
-          assert window_size.output.ndim == 0  # might have batch-dim, or not
           window_size_data = window_size.output
         else:
           assert isinstance(window_size, int)
@@ -2935,16 +2933,28 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     return axis
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, axis=None, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, axis=None, start=None, window_start=None, window_size=None, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param str|None axis:
+    :param LayerBase|None start:
+    :param LayerBase|None window_start:
+    :param LayerBase|int|None window_size:
     :rtype: Data
     """
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    if out.undefined:
+      return out
     axis = cls._get_axis_to_reduce(out, axis=axis, exception_prefix="%s %r" % (cls.__name__, name))
-    return out.copy_move_axis(axis, -1)
+    out = out.copy_move_axis(axis, -1)
+    if isinstance(start, LayerBase):
+      out.beam = SearchBeam.get_combined_beam(out.beam, start.output.beam)
+    if isinstance(window_start, LayerBase):
+      out.beam = SearchBeam.get_combined_beam(out.beam, window_start.output.beam)
+    if isinstance(window_size, LayerBase):
+      out.beam = SearchBeam.get_combined_beam(out.beam, window_size.output.beam)
+    return out
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
