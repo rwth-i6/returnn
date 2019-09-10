@@ -1385,7 +1385,16 @@ class _SubnetworkRecCell(object):
         return None
       # noinspection PyBroadException
       try:
-        return self.net.construct_layer(net_dict, name=name, get_layer=get_layer)
+        layer = self.net.construct_layer(net_dict, name=name, get_layer=get_layer)
+        if self.net.search_flag:
+          # Some layers are buggy to determine the right beam size at template construction time.
+          # If that is the case, this will likely crash at some later point with mismatching shape.
+          # Do an explicit check here now, to easier localize such problems.
+          layer_template = self.layer_data_templates[name]
+          layer_choices = layer.get_search_choices()
+          if not layer.search_choices and layer_choices:
+            assert layer_choices.beam_size == layer.output.beam.beam_size == layer_template.output.beam.beam_size
+        return layer
       except Exception:
         print("Exception occurred during in-loop construction of layer %r." % name)
         self._handle_construct_exception()
