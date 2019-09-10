@@ -3950,6 +3950,24 @@ class BaseChoiceLayer(LayerBase):
       "choice_src_beams": tf.TensorShape((None, None)),  # (batch, beam)
     }
 
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    if "rec_previous_layer" in d:
+      prev_layer = d["rec_previous_layer"]
+      assert isinstance(prev_layer, _TemplateLayer)
+      assert prev_layer.is_prev_time_frame
+      # Note: In SearchChoices.translate_to_common_search_beam, we would get this prev_layer.
+      # And we might not be able to compare it to other search choices,
+      # as it might not be in the search choices sequence.
+      # But we actually do not care at all about it, and do not use it. So just reset.
+      d["rec_previous_layer"] = None
+    super(BaseChoiceLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
 
 class ChoiceLayer(BaseChoiceLayer):
   """
@@ -4670,15 +4688,6 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
     """
     d.setdefault("from", [])  # using "data" does not make much sense
     d.setdefault("collocate_with", d["from"])  # should be right where the source is
-    if "rec_previous_layer" in d:
-      prev_layer = d["rec_previous_layer"]
-      assert isinstance(prev_layer, _TemplateLayer)
-      assert prev_layer.is_prev_time_frame
-      # Note: In SearchChoices.translate_to_common_search_beam, we would get this prev_layer.
-      # And we likely cannot compare it to other search choices,
-      # as it is not in the search choices sequence.
-      # But we actually do not care at all about it, and do not use it. So just reset.
-      prev_layer.search_choices = None
     super(DecideKeepBeamLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
