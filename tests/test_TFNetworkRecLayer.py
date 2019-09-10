@@ -4567,10 +4567,13 @@ def test_trafo_search_lm():
           'class': 'switch', "condition": "in_prefix", 'true_from': 'prefix', "false_from": 'output_choice',
           "initial_output": 0},
         "end": {
-          "class": "eval", "from": 'base:data', "collocate_with": "output_choice",
+          "class": "eval", "from": ['base:data', 'output'], "collocate_with": "output_choice",
           "out_type": {'time_dim_axis': None, 'shape': (), "dtype": "bool", "dim": 2},
           # Arbitrary. We can check that, though.
-          'eval': 'tf.greater_equal(self.network.get_rec_step_index(), source(0, as_data=True, auto_convert=False).get_sequence_lengths() * 3 // 2)'
+          'eval': '(source(1, auto_convert=False),'  # just mark as used
+                  ' tf.greater_equal('
+                  '   self.network.get_rec_step_index(),'
+                  '   source(0, as_data=True, auto_convert=False).get_sequence_lengths() * 3 // 2))[-1]'
           },
 
         'output_choice': {
@@ -4638,6 +4641,7 @@ def test_trafo_search_lm():
   config.update({
     "extern_data": {"data": {"dim": n_out, "sparse": True}},
     "search_output_layer": "decision",
+    "debug_print_layer_output_shape": True,
     "debug_print_layer_output_template": True})
 
   with make_scope() as session:
@@ -4659,11 +4663,16 @@ def test_trafo_search_lm():
     print("lens:", input_seq_lens)
 
     session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
-    info, out_seqs, out_seq_lens = session.run(
-      (fetches, output_out.placeholder, output_out.get_sequence_lengths()),
-      feed_dict={
-        data_input.placeholder: input_seqs,
-        data_input.size_placeholder[0]: input_seq_lens})
+    fetches = (fetches, output_out.placeholder, output_out.get_sequence_lengths())
+    feed_dict = {
+      data_input.placeholder: input_seqs,
+      data_input.size_placeholder[0]: input_seq_lens}
+    try:
+      info, out_seqs, out_seq_lens = session.run(fetches, feed_dict=feed_dict)
+    except Exception as exc:
+      print("EXCEPTION:", type(exc), exc)
+      help_on_tf_exception(session=session, exception=exc, fetches=fetches, feed_dict=feed_dict)
+      raise
     print(info)
     print("output:")
     print(out_seqs)  # random...
