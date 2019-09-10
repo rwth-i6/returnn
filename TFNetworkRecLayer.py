@@ -3832,7 +3832,7 @@ class BaseChoiceLayer(LayerBase):
       # Note: _src_common_search_choices might not be set during template construction,
       # but this fallback would still work then (at least for ChoiceLayer).
       if sources:
-        return sources[0].output.beam.beam_size
+        return sources[0].output.beam.beam_size if sources[0].output.beam else None
       return None
     return beam_size
 
