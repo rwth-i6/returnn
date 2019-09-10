@@ -1241,7 +1241,6 @@ class _SubnetworkRecCell(object):
       self.net.layers["prev:%s" % name] = prev_layers[name] = self.layer_data_templates[name].copy_as_prev_time_frame(
         prev_output=prev_outputs.get(name, None),
         rec_vars_prev_outputs=prev_extra.get(name, None))
-    extended_layers = {}
 
     from copy import deepcopy
     net_dict = deepcopy(self.net_dict)
@@ -1302,8 +1301,6 @@ class _SubnetworkRecCell(object):
           return get_input_moved_out(name)
         return prev_layers[sub_name]
       if name.startswith("base:"):
-        if name in extended_layers:
-          return extended_layers[name]
         layer = self._get_parent_layer(name[len("base:"):])
         return layer
       if name in self.input_layers_moved_out:
