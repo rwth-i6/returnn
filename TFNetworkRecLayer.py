@@ -5860,6 +5860,10 @@ class EditDistanceTableLayer(LayerBase):
     :rtype: Data
     """
     assert len(sources) == 1, "%s %r: expects exactly a single source" % (cls.__name__, name)
+    if not sources[0] or sources[0].output.undefined:
+      from TFNetwork import CannotHandleUndefinedSourcesException
+      raise CannotHandleUndefinedSourcesException(
+        layer_name=name, layer_desc=dict(sources=sources, target=target, network=network, **kwargs))
     source_data = sources[0].output
     assert source_data.dtype == "int32" and source_data.batch_ndim <= 2 and source_data.sparse
     assert target, "%s %r: 'target' must be set" % (cls.__name__, name)
@@ -5944,6 +5948,10 @@ class OptimalCompletionsLayer(LayerBase):
     :rtype: Data
     """
     assert len(sources) == 1, "%s %r: expects exactly a single source" % (cls.__name__, name)
+    if not sources[0] or sources[0].output.undefined:
+      from TFNetwork import CannotHandleUndefinedSourcesException
+      raise CannotHandleUndefinedSourcesException(
+        layer_name=name, layer_desc=dict(sources=sources, target=target, network=network, **kwargs))
     source_data = sources[0].output
     assert source_data.dtype == "int32" and source_data.batch_ndim == 2
     assert target, "%s %r: 'target' must be set" % (cls.__name__, name)
