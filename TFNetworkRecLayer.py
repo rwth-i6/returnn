@@ -2967,6 +2967,7 @@ class _TemplateLayer(LayerBase):
     layer._template_base = self
     layer.dependencies = self.dependencies
     layer.init(layer_class=self.layer_class_type, template_type="prev", **self.kwargs)
+    layer.output.name = "prev:%s" % layer.output.name
     if prev_output is not None:
       layer.output.placeholder = prev_output
       layer.output.placeholder.set_shape(tf.TensorShape(layer.output.batch_shape))
