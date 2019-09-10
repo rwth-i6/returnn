@@ -654,10 +654,8 @@ class LayerBase(object):
     :return: beam size if there was a choice layer and we do search
     :rtype: int|None
     """
-    if self.network.search_flag:
-      choices = self.get_search_choices()
-      if choices:
-        return choices.beam_size
+    if self.output.beam:
+      return self.output.beam.beam_size
     return None
 
   def get_normalized_layer(self):
