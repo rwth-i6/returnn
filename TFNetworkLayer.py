@@ -2844,7 +2844,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
       In Attention-is-all-you-need, this is set to 1/sqrt(base_ctx.dim).
     :param LayerBase|None start: Tensor of shape (B,dim) indicating the start frame
     :param LayerBase|None window_start: Tensor of shape (B,dim) indicating the window start
-    :param int|None window_size:
+    :param LayerBase|int|None window_size:
     :param bool use_time_mask: if True, assumes dyn seq len, and use it for masking.
       By default, if dyn seq len exists, it uses it.
     """
@@ -2852,6 +2852,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     super(SoftmaxOverSpatialLayer, self).__init__(**kwargs)
     self.start = start
     self.window_start = window_start
+    self.window_size = window_size
     energy_data = self.input_data
     assert energy_data.dtype.startswith("float")
     axis = self._get_axis_to_reduce(input_data=energy_data, axis=axis, exception_prefix=self)
@@ -2880,35 +2881,25 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
       if window_start:
         assert window_size, "set window_size explicitly"
         assert window_start.output.batch_ndim == 1
-        from TFUtil import nd_indices, expand_dims_unbroadcast, move_axis
-        # handle edge cases correctly:
-        # 1. if the energy time-dim is less than `window_size`, we adjust the window size.
-        # 2. for each seq, we adjust the window so that no elements after the seq-len are indexed.
-        window_len = tf.minimum(window_size, energy_shape[axis])  # case 1.
-        window_start = tf.squeeze(window_start.output.placeholder, axis=window_start.output.feature_dim_axis)  # (B,)
-        window_start = tf.to_int32(window_start)
-        window_start = tf.where(
-          tf.greater(window_start + window_len, energy_shape[axis]),
-          tf.ones_like(window_start) * (energy_shape[axis] - window_len),
-          window_start)  # case 2.
-        n_batch = energy_shape[energy_data.batch_dim_axis]
-        indices = expand_dims_unbroadcast(tf.range(window_len), 0, n_batch)  # (B, W)
-        # (B, W) + (B, 1)
-        indices += tf.expand_dims(tf.to_int32(window_start), axis=1)  # + (B, 1)
-        indices.set_shape((None, None))  # required for older TF versions
-        idxs = nd_indices(indices)  # (B, W, 2)
-        rem_axes = list(energy_shape)
-        rem_axes.pop(energy_data.batch_dim_axis)  # (B, ..., T) -> (..., T)
-        rem_axes.pop()  # (..., T) -> (...)
-        updates_shape = [n_batch, window_len] + rem_axes  # (B,W) + (...remaining axes...)
-        rem_energy_data = energy_data.copy_with_time_dim_axis(time_dim_axis=1)  # (B, T, ...)
-        rem_energy_shape = TFUtil.get_shape(rem_energy_data.placeholder)
-        energy_mask_window = tf.scatter_nd(idxs, tf.ones(shape=updates_shape), rem_energy_shape)  # (B, T, ...)
-        energy_mask_window = tf.cast(energy_mask_window, tf.bool)
-        #  to be compatible with the other stuff, we move the time-axis to the back:
-        #  (B, T, ...) -> (B, ..., T)
-        energy_mask_window = move_axis(energy_mask_window, 1, axis)
-        energy_mask = tf.logical_and(energy_mask, energy_mask_window)
+        if isinstance(window_size, LayerBase):
+          assert window_size.output.ndim == 0  # might have batch-dim, or not
+          window_size_data = window_size.output
+        else:
+          assert isinstance(window_size, int)
+          window_size_data = Data.from_tensor(tf.constant(window_size))
+        window_start_data = window_start.output.copy_compatible_to(
+          energy_data, check_sparse=False, check_dtype=False)  # adds dummy time-dim
+        window_size_data = window_size_data.copy_compatible_to(
+          energy_data, check_sparse=False, check_dtype=False)  # adds dummy time-dim
+        idxs_shape = [1] * energy_data.batch_ndim  # type: typing.List[typing.Union[int,tf.Tensor]]
+        idxs_shape[axis] = energy_shape[axis]
+        idxs = tf.reshape(tf.range(energy_shape[axis]), idxs_shape)
+        energy_mask = tf.logical_and(
+          energy_mask,
+          tf.logical_and(
+            tf.greater_equal(idxs, window_start_data.placeholder),
+            tf.less(idxs, window_start_data.placeholder + window_size_data.placeholder)
+          ))
       energy = where_bc(energy_mask, energy, float("-inf"), name="energy_masked")
     if energy_factor:
       energy = tf.multiply(energy, energy_factor, name="energy_scaled")
@@ -2924,6 +2915,8 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
       deps.append(self.start)
     if self.window_start:
       deps.append(self.window_start)
+    if isinstance(self.window_size, LayerBase):
+      deps.append(self.window_size)
     return deps
 
   @classmethod
@@ -2965,6 +2958,9 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
       d["start"] = get_layer(d["start"])
     if d.get("window_start", None):
       d["window_start"] = get_layer(d["window_start"])
+    if d.get("window_size", None):
+      if isinstance(d["window_size"], str):
+        d["window_size"] = get_layer(d["window_size"])
 
 
 class SeqLenMaskLayer(_ConcatInputLayer):
