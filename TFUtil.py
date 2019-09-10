@@ -1325,13 +1325,13 @@ class Data(object):
     :return: copy of myself where the batch-dim is extended/multiplied by beam_size, using tile_transposed
     :rtype: Data
     """
-    with tf.name_scope("data_extend_with_beam"):
-      data = self.copy()
-      if data.beam and data.beam == beam:
-        return data
-      assert data.beam is None, "incompatible beam (%r vs %r)" % (data.beam, beam)
-      if beam is None:
-        return data
+    data = self.copy()
+    if data.beam and data.beam == beam:
+      return data
+    assert data.beam is None, "incompatible beam (%r vs %r)" % (data.beam, beam)
+    if beam is None:
+      return data
+    with tf.name_scope("%s_data_extend_with_beam" % get_valid_scope_name_from_str(self.name)):
       if data.placeholder is not None:
         with same_control_flow_ctx(data.placeholder):
           data.placeholder = tile_transposed(data.placeholder, axis=data.batch_dim_axis, multiples=beam.beam_size)
