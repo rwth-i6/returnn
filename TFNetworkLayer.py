@@ -107,7 +107,7 @@ class LayerBase(object):
     :param str|float initial_output: used for recurrent layer, see self.get_rec_initial_output()
     :param LayerBase|None rec_previous_layer: via the recurrent layer, layer (template) which represents the past of us.
       You would not explicitly set this in a config. This is automatically, internally, via :class:`RecLayer`.
-    :param list[LayerBase]|None collocate_with: in the rec layer, collocate with the specified other layers
+    :param list[str]|None collocate_with: in the rec layer, collocate with the specified other layers
     :param bool trainable: whether the parameters of this layer will be trained
     :param str|callable|None custom_param_importer: used by :func:`set_param_values_by_dict`
     :param str|None register_as_extern_data: registers output in network.extern_data
@@ -438,7 +438,7 @@ class LayerBase(object):
       collocate_with = d["collocate_with"]
       if not isinstance(collocate_with, (list, tuple)):
         collocate_with = [collocate_with]
-      d["collocate_with"] = [get_layer(src_name) for src_name in collocate_with]
+      d["collocate_with"] = collocate_with  # not get_layer: we don't really want this dependency
     if "reuse_params" in d:
       d["reuse_params"] = ReuseParams.from_config_dict(d["reuse_params"], network=network, get_layer=get_layer)
     if d.get("loss", None) and "target" not in d:
@@ -600,7 +600,7 @@ class LayerBase(object):
       normally this is just self.sources but e.g. the attention layer in addition has a base, etc.
     :rtype: list[LayerBase]
     """
-    layers = list(self.sources) + list(self.collocate_with)
+    layers = list(self.sources)
     if self._target_layers:
       layers += [layer for _, layer in sorted(self._target_layers.items())]
     return layers

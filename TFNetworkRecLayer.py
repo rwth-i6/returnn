@@ -2149,7 +2149,9 @@ class _SubnetworkRecCell(object):
             cur_end_layer = choices.translate_to_this_search_beam(prev_end_layer)
             assert isinstance(cur_end_layer, SelectSearchSourcesLayer), (
               "unexpected search choices: cur end %r, prev end %r" % (choices, prev_end_layer.get_search_choices()))
-            assert len(cur_end_layer.search_choices_seq) >= 1
+            assert cur_end_layer.search_choices_seq, (
+              "unexpected search choices: cur end %r (via %r), prev end %r (via %r)" % (
+                choices, self.net.layers["end"], prev_end_layer.get_search_choices(), prev_end_layer))
             with tf.name_scope("end_flag"):
               end_flag = cur_end_layer.output.placeholder
               end_flag = tf.logical_or(end_flag, self.net.layers["end"].output.placeholder)  # (batch * beam,)
@@ -2619,7 +2621,7 @@ class _SubnetworkRecCell(object):
       for other_layer in layers_in_loop:
         if layer in other_layer.dependencies:
           return False
-        if other_layer in layer.collocate_with:
+        if other_layer.name in layer.collocate_with:
           return False
       return True
 
@@ -2654,6 +2656,8 @@ class _SubnetworkRecCell(object):
       # We depend on other layers from this sub-network?
       for other_layer in layers_in_loop:
         if other_layer in layer_deps:
+          return False
+        if other_layer.name in layer.collocate_with:
           return False
       return True
 
@@ -3024,7 +3028,7 @@ class _TemplateLayer(LayerBase):
 
     sub_layer_template = _TemplateLayer(self.network, full_layer_name)
     is_output_layer = self.is_output_layer()  # make sub-layers output layers too
-    collocate_with = [self]  # we cannot move a sub-layer out of the loop, if parent is inside
+    collocate_with = [self.name]  # we cannot move a sub-layer out of the loop, if parent is inside
     sub_layer_template.init(output, sub_layer_class, is_output_layer=is_output_layer, collocate_with=collocate_with,
                             name=full_layer_name, network=network)
     return sub_layer_template
