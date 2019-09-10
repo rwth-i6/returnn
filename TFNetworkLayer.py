@@ -4731,6 +4731,9 @@ class ReduceOutLayer(_ConcatInputLayer):
     :rtype: Data
     """
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    if out.undefined:
+      from TFNetwork import CannotHandleUndefinedSourcesException
+      raise CannotHandleUndefinedSourcesException(layer_name=name, layer_desc=dict(sources=sources, **kwargs))
     assert not out.sparse
     assert out.dim % num_pieces == 0
     out.dim //= num_pieces
