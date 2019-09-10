@@ -3058,7 +3058,8 @@ class _TemplateLayer(LayerBase):
       return False
     if issubclass(self.layer_class_type, BaseChoiceLayer):
       # Always has search_choices if we do search, even if search option is False explicitly.
-      return True
+      beam_size = self._get_search_choices_beam_size()
+      return beam_size is not None
     return False
 
   def _get_search_choices_beam_size(self):
