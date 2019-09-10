@@ -2410,7 +2410,13 @@ def test_rec_layer_rnn_train_and_search():
           feed_dict=feed_dict)
         pprint(out)
       except Exception as exc:
+        print()
+        print("EXCEPTION " + "-" * 60)
         print("Exception happened:", str(exc).splitlines()[0])
+        print()
+        out_layer.cell._handle_construct_exception()
+        print()
+        print("TF debug info:")
         help_on_tf_exception(
           session=session,
           exception=exc, fetches=out_layer.output.placeholder, feed_dict=feed_dict, meta_step_info=meta_step_info,
