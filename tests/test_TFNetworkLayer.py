@@ -827,7 +827,7 @@ def test_SoftmaxOverSpatialLayer_window():
     seqlens = numpy.array([5, 7, 3, 9])
     input_np = rnd.normal(size=(n_batch, n_time, n_dim)).astype("float32")  # (B, T, D)
     src = InternalLayer(name="src", network=net, out_type={"shape": (n_time, n_dim), "time_dim_axis": 1})
-    window_start = InternalLayer(name="window_start", network=net, out_type={"shape": ()})
+    window_start = InternalLayer(name="window_start", network=net, out_type={"shape": (), "dtype": "int32"})
     window_start.output.placeholder = tf.constant(window_start_idxs)  # (B,)
     window_start.output.size_placeholder = {}
     print("input:", src.output)
