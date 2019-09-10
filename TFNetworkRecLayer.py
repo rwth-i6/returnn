@@ -932,6 +932,7 @@ class _SubnetworkRecCell(object):
     """
     import sys
     import better_exchook
+    from pprint import pformat
     from collections import OrderedDict
     from Util import StringIO
     from TFNetwork import CannotHandleUndefinedSourcesException, NetworkConstructionDependencyLoopException
@@ -944,9 +945,8 @@ class _SubnetworkRecCell(object):
       """
       Closure.
       """
-      # Stack of layers:
-      layers = []  # type: typing.List[_TemplateLayer]
-      most_recent = None
+      layers = []  # type: typing.List[_TemplateLayer]  # stack of layers
+      most_recent = None  # type: typing.Optional[typing.List[_TemplateLayer]]  # most recent stack
       partially_finished = []  # type: typing.List[_TemplateLayer]
       collected_exceptions = OrderedDict()  # type: OrderedDict[object,str]  # exc_key -> formatted exception/stack str
 
@@ -958,23 +958,57 @@ class _SubnetworkRecCell(object):
       def __init__(lself,
                    safe=False, allow_construct_in_call_nrs=None, allow_uninitialized_template=False,
                    iterative_testing=True, reconstruct=False,
-                   parent=None):
+                   parent=None, parent_name=None):
+        """
+        :param bool safe:
+        :param typing.Optional[typing.Set[int]] allow_construct_in_call_nrs:
+        :param bool allow_uninitialized_template:
+        :param bool iterative_testing:
+        :param bool reconstruct:
+        :param GetLayer|None parent:
+        :param str|None parent_name:
+        """
         lself.safe = safe
-        lself.allow_construct_in_call_nrs = allow_construct_in_call_nrs  # type: typing.Optional[typing.Set[int]]
+        lself.allow_construct_in_call_nrs = allow_construct_in_call_nrs
         lself.allow_uninitialized_template = allow_uninitialized_template
+        if parent:
+          assert isinstance(parent, GetLayer)
         lself.parent = parent
+        lself.parent_name = parent_name
         lself.iterative_testing = iterative_testing
         lself.reconstruct = reconstruct
         lself.count = 0
-        lself.returned_none_count = 0
+        lself.got_uninitialized_deps_count = 0
 
       # noinspection PyMethodParameters
       def __repr__(lself):
         return (
           "<RecLayer construct template GetLayer>("
-          "safe %r, allow_construct_in_call_nrs %r, allow_uninitialized_template %r, count %r, parent %r)") % (
+          "safe %r, allow_construct_in_call_nrs %r, allow_uninitialized_template %r, "
+          "count %r, parent %r, parent name %r)") % (
                  lself.safe, lself.allow_construct_in_call_nrs, lself.allow_uninitialized_template, lself.count,
-                 lself.parent)
+                 lself.parent, lself.parent_name)
+
+      def _add_uninitialized_count(self):
+        getter = self
+        while getter:
+          assert isinstance(getter, GetLayer)
+          getter.got_uninitialized_deps_count += 1
+          getter = getter.parent
+
+      def reset(self):
+        self.count = 0
+        self.got_uninitialized_deps_count = 0
+
+      def construct(self, layer_name_):
+        """
+        Note: Different from just __call__: We reset first.
+
+        :param str layer_name_:
+        """
+        assert not self.parent
+        self.reset()
+        self.__call__(layer_name_)
 
       # noinspection PyMethodParameters
       def add_templated_layer(lself, name, layer_class, **layer_desc):
@@ -998,11 +1032,12 @@ class _SubnetworkRecCell(object):
         if output.undefined:
           raise CannotHandleUndefinedSourcesException(layer_name=name, layer_desc=layer_desc)
         layer_.init(layer_class=layer_class, output=output, **layer_desc)
-        if (
-              lself.returned_none_count == 0 and
-              not lself.allow_uninitialized_template and
-              layer_ in ConstructCtx.partially_finished):
-          ConstructCtx.partially_finished.remove(layer_)
+        if layer_ in ConstructCtx.partially_finished:
+          if (
+            lself.got_uninitialized_deps_count == 0 or  # in this case, we safely know that it is finished
+            issubclass(layer_class, BaseChoiceLayer)  # for this specific class, we know it is ok
+          ):
+            ConstructCtx.partially_finished.remove(layer_)
         return layer_
 
       # noinspection PyMethodParameters
@@ -1025,8 +1060,10 @@ class _SubnetworkRecCell(object):
             if layer_ not in ConstructCtx.partially_finished:  # it might not be final
               layer_ = self.get_prev_template_layer(name)
             elif layer_.is_initialized:
+              lself._add_uninitialized_count()
               layer_ = layer_.copy_as_prev_time_frame()
             else:
+              lself._add_uninitialized_count()
               return None
           return layer_
         if name in self.layer_data_templates:
@@ -1034,8 +1071,12 @@ class _SubnetworkRecCell(object):
           if ConstructCtx.layers:
             ConstructCtx.layers[-1].add_dependency(layer_, is_prev_time_frame=is_prev_time_frame)
           if lself.allow_uninitialized_template:
+            if not layer_.is_initialized or layer_ in ConstructCtx.partially_finished:
+              lself._add_uninitialized_count()
             return layer_
           if not lself.reconstruct and layer_.is_initialized:
+            if layer_ in ConstructCtx.partially_finished:
+              lself._add_uninitialized_count()
             return layer_
         if name.startswith("base:"):
           assert not is_prev_time_frame
@@ -1074,14 +1115,14 @@ class _SubnetworkRecCell(object):
         lself.count += 1
         if lself.allow_construct_in_call_nrs is not None:
           if (lself.count - 1) not in lself.allow_construct_in_call_nrs:
-            lself.returned_none_count += 1
+            lself._add_uninitialized_count()
             return None
         if lself.safe:
-          lself.returned_none_count += 1
+          lself._add_uninitialized_count()
           return None
         ConstructCtx.layers.append(layer_)
         try:
-          default_get_layer = GetLayer(parent=_name)
+          default_get_layer = GetLayer(parent=lself, parent_name=_name)
           # See how far we can get without recursive layer construction.
           # We only want to get the data template for now.
           # If that fails in some way,
@@ -1095,11 +1136,16 @@ class _SubnetworkRecCell(object):
           if lself.iterative_testing and name not in self.net._construction_stack.layers:
             get_layer_candidates = [
               default_get_layer,
-              GetLayer(allow_construct_in_call_nrs={0}, allow_uninitialized_template=False, parent=_name),
-              GetLayer(allow_construct_in_call_nrs={1}, allow_uninitialized_template=False, parent=_name),
-              GetLayer(safe=True, allow_uninitialized_template=False, parent=_name),
-              GetLayer(allow_construct_in_call_nrs={0}, allow_uninitialized_template=True, parent=_name),
-              GetLayer(safe=True, allow_uninitialized_template=True, parent=_name)]
+              GetLayer(
+                allow_construct_in_call_nrs={0}, allow_uninitialized_template=False, parent=lself, parent_name=_name),
+              GetLayer(
+                allow_construct_in_call_nrs={1}, allow_uninitialized_template=False, parent=lself, parent_name=_name),
+              GetLayer(
+                safe=True, allow_uninitialized_template=False, parent=lself, parent_name=_name),
+              GetLayer(
+                allow_construct_in_call_nrs={0}, allow_uninitialized_template=True, parent=lself, parent_name=_name),
+              GetLayer(
+                safe=True, allow_uninitialized_template=True, parent=lself, parent_name=_name)]
           for get_layer in get_layer_candidates:
             # noinspection PyBroadException
             try:
@@ -1129,6 +1175,7 @@ class _SubnetworkRecCell(object):
           # Now, do again, but with full recursive layer construction, to determine the dependencies.
           ConstructCtx.most_recent = list(ConstructCtx.layers)
           try:
+            default_get_layer.reset()
             self.net.construct_layer(
               net_dict=self.net_dict, name=name,
               get_layer=default_get_layer, add_layer=default_get_layer.add_templated_layer)
@@ -1145,27 +1192,53 @@ class _SubnetworkRecCell(object):
 
     try:
       assert not self.layer_data_templates, "do not call this multiple times"
-      get_templated_layer("output")
+      get_templated_layer.construct("output")
       assert "output" in self.layer_data_templates
       assert not ConstructCtx.layers
 
       if "end" in self.net_dict:  # used to specify ending of a sequence
-        get_templated_layer("end")
+        get_templated_layer.construct("end")
 
       for layer_name, layer in self.net_dict.items():
         if self.parent_net.eval_flag and layer.get("loss"):  # only collect losses if we need them
-          get_templated_layer(layer_name)
+          get_templated_layer.construct(layer_name)
       for layer_name, layer in self.net_dict.items():
         if layer.get("is_output_layer"):
-          get_templated_layer(layer_name)
+          get_templated_layer.construct(layer_name)
 
       # Because of the logic to lazily init deps, or some of the kwargs sources partially None,
       # we might have some layers still uninitialized, or should reinit with correct sources.
+      # Note that it is hard to get the order right how we do this, as there are circular dependencies.
+      # Thus, we might need several loops.
+      # Note that it is still not guaranteed that this will finish. We stop if there was no change anymore.
+      # We also put an additional limit, which might be hit due to other bugs.
+      loop_limit = len(ConstructCtx.partially_finished)
       direct_get_layer = GetLayer(iterative_testing=False, reconstruct=True)
       while ConstructCtx.partially_finished:
-        layer = ConstructCtx.partially_finished[0]
-        direct_get_layer(layer.name)
-        assert layer not in ConstructCtx.partially_finished
+        old_len = len(ConstructCtx.partially_finished)
+        recent_changes = []
+        for layer in ConstructCtx.partially_finished:
+          old_output = layer.output
+          direct_get_layer.construct(layer.name)
+          if layer.output.get_compare_key() != old_output.get_compare_key():
+            recent_changes.append((old_output, layer.output))
+        if len(ConstructCtx.partially_finished) < old_len:
+          # Ok, this is some real progress.
+          continue
+        if len(ConstructCtx.partially_finished) >= old_len and not recent_changes:
+          # No changes anymore. There is no real point in continuing. Just break.
+          break
+        loop_limit -= 1
+        assert loop_limit >= 0, (
+          ("We keep iterating over the network template construction.\n"
+           "We have these partially finished layers:\n%s\n"
+           "And these finished layers:\n%s\n"
+           "And these recent changes in the last loop iteration:\n%s") % (
+            pformat(ConstructCtx.partially_finished),
+            pformat([
+              layer for _, layer in sorted(self.layer_data_templates.items())
+              if layer not in ConstructCtx.partially_finished]),
+            pformat(recent_changes)))
 
       self._template_construction_exceptions = list(ConstructCtx.collected_exceptions.values())
 
