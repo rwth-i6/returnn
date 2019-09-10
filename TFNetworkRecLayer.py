@@ -4764,11 +4764,12 @@ class AttentionBaseLayer(_ConcatInputLayer):
     d["base"] = get_layer(d["base"])
 
   @classmethod
-  def get_out_data_from_opts(cls, name, base, n_out=NotSpecified, **kwargs):
+  def get_out_data_from_opts(cls, name, base, n_out=NotSpecified, sources=(), **kwargs):
     """
     :param str name:
     :param int|None|NotSpecified n_out:
     :param LayerBase base:
+    :param list[LayerBase] sources:
     :rtype: Data
     """
     out = base.output.copy_template_excluding_time_dim().copy(name="%s_output" % name)
@@ -4777,6 +4778,7 @@ class AttentionBaseLayer(_ConcatInputLayer):
       assert out.dim == n_out, (
         "The default attention selects some frame-weighted input of shape [batch, frame, dim=%i]," % out.dim +
         " thus resulting in [batch, dim=%i] but you specified n_out=%i." % (out.dim, n_out))
+    out.beam = SearchBeam.get_combined_beam(out.beam, *[src.output.beam for src in sources if src])
     return out
 
 
