@@ -5409,8 +5409,13 @@ class SelfAttentionLayer(_ConcatInputLayer):
     :rtype: Data
     """
     assert sources
+    defined_sources = [src for src in sources if src and not src.output.undefined]
+    if not defined_sources:
+      from TFNetwork import CannotHandleUndefinedSourcesException
+      raise CannotHandleUndefinedSourcesException(
+        layer_name=name, layer_desc=dict(n_out=n_out, sources=sources, **kwargs))
     import numpy
-    out = sources[0].output.copy_as_batch_major().copy(name="%s_output" % name)
+    out = defined_sources[0].output.copy_as_batch_major().copy(name="%s_output" % name)
     if out.sparse:
       out.dtype = "float32"
       out.sparse = False
