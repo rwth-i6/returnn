@@ -972,7 +972,8 @@ class Data(object):
       assert 0 <= spatial_dim_axis <= self.batch_ndim
     if data.placeholder is not None:
       assert dim == 1  # not implemented otherwise
-      data.placeholder = tf.expand_dims(data.placeholder, spatial_dim_axis, name="%s_add_spatial_dim" % self.name)
+      data.placeholder = tf.expand_dims(
+        data.placeholder, spatial_dim_axis, name="%s_add_spatial_dim" % get_valid_scope_name_from_str(self.name))
     if self.batch_dim_axis is None:
       axis_wo_batch = spatial_dim_axis
     else:
