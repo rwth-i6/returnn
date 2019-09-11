@@ -1989,19 +1989,34 @@ class CopyLayer(_ConcatInputLayer):
 
   layer_class = "copy"
 
-  def __init__(self, **kwargs):
+  def __init__(self, extra_deps=(), **kwargs):
+    """
+    :param list[LayerBase] extra_deps: Just add as an additional dependency, without really using it.
+      This can have an effect though on the search beam, via :class:`SelectSearchSourcesLayer`.
+      We only have this here for the :class:`CopyLayer` because the :func:`get_out_data_from_opts`
+      must know about it and define the right beam.
+      Also see the option ``collocate_with``, which is different in that it does *not* add a dependency.
+    """
     super(CopyLayer, self).__init__(**kwargs)
+    self.extra_deps = extra_deps
     self.output = self.input_data.copy(name="%s_output" % self.name)
     if len(self.sources) == 1:
       self.output_loss = self.sources[0].output_loss
       if not self.dropout:
         self.output_before_activation = self.sources[0].output_before_activation
 
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    return super(CopyLayer, self).get_dep_layers() + list(self.extra_deps)
+
   @classmethod
-  def get_out_data_from_opts(cls, name, sources=(), out_type=None, n_out=NotSpecified, **kwargs):
+  def get_out_data_from_opts(cls, name, sources=(), extra_deps=(), out_type=None, n_out=NotSpecified, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
+    :param list[LayerBase] extra_deps:
     :param dict[str]|None out_type:
     :param int|None|NotSpecified n_out:
     :rtype: Data
@@ -2009,7 +2024,23 @@ class CopyLayer(_ConcatInputLayer):
     if out_type or n_out is not NotSpecified:
       return super(CopyLayer, cls).get_out_data_from_opts(
         name=name, out_type=out_type, n_out=n_out, sources=sources, **kwargs)
-    return get_concat_sources_data_template(sources, name="%s_output" % name)
+    out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    out.beam = SearchBeam.get_combined_beam(out.beam, *[dep.output.beam for dep in extra_deps if dep])
+    return out
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    super(CopyLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if "extra_deps" in d:
+      extra_deps = d["extra_deps"]
+      if not isinstance(extra_deps, (list, tuple)):
+        extra_deps = [extra_deps]
+      d["extra_deps"] = [get_layer(src_name) for src_name in extra_deps]
 
 
 class DropoutLayer(CopyLayer):
