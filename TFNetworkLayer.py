@@ -1875,7 +1875,7 @@ def get_concat_sources_data_template(src_layers, name=None):
   """
   assert src_layers, "need source layers"
   if any([not s or s.output.undefined for s in src_layers]):
-    return Data(name="%s_undefined" % (name or "unknown"), shape=(), dim=None, undefined=True)
+    return Data.create_undefined(name=name)
   if len(src_layers) == 1:
     return src_layers[0].output.copy(name=name)
   dim = 0
