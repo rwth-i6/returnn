@@ -5248,19 +5248,6 @@ class DotLayer(LayerBase):
       b_var_axes.append(None)
     res = tf.reshape(res, a_rem_dims + a_var_dims + b_var_dims)
     self.output.placeholder = res
-    # Collect dynamic size info.
-    self.output.size_placeholder = {}
-    for axis1_wo_b in sorted(a_out.size_placeholder.keys()):
-      axis_out_wb = self._axis1_to_output(axis1_wo_b + 1, a_rem_axes=a_rem_axes, a_var_axes=a_var_axes)
-      if axis_out_wb is None:
-        continue
-      self.output.size_placeholder[axis_out_wb - 1] = a_out.size_placeholder[axis1_wo_b]
-    for axis2_wo_b in sorted(b_out.size_placeholder.keys()):
-      axis_out_wb = self._axis2_to_output(
-        axis2_wo_b + 1, b_rem_axes=b_rem_axes, a_var_axes=a_var_axes, b_var_axes=b_var_axes)
-      if axis_out_wb is None or axis_out_wb in self.output.size_placeholder:
-        continue
-      self.output.size_placeholder[axis_out_wb - 1] = b_out.size_placeholder[axis2_wo_b]
 
   @staticmethod
   def _axis1_to_output(axis, a_rem_axes, a_var_axes):
@@ -5321,12 +5308,26 @@ class DotLayer(LayerBase):
       time_dim_axis = NotSpecified
     if not b_var_dims and add_var2_if_empty:
       b_var_dims.append(1)
+    # Collect dynamic size info.
+    size_placeholder = {}
+    for axis1_wo_b in sorted(a_out.size_placeholder.keys()):
+      axis_out_wb = cls._axis1_to_output(axis1_wo_b + 1, a_rem_axes=a_rem_axes, a_var_axes=a_var_axes)
+      if axis_out_wb is None:
+        continue
+      size_placeholder[axis_out_wb - 1] = a_out.size_placeholder[axis1_wo_b]
+    for axis2_wo_b in sorted(b_out.size_placeholder.keys()):
+      axis_out_wb = cls._axis2_to_output(
+        axis2_wo_b + 1, b_rem_axes=b_rem_axes, a_var_axes=a_var_axes, b_var_axes=b_var_axes)
+      if axis_out_wb is None or axis_out_wb in size_placeholder:
+        continue
+      size_placeholder[axis_out_wb - 1] = b_out.size_placeholder[axis2_wo_b]
     return Data(
       name="%s_output" % name,
       shape=tuple(a_rem_dims[1:] + a_var_dims + b_var_dims),
       batch_dim_axis=0,
       time_dim_axis=time_dim_axis,
       dtype=a_out.dtype,
+      size_placeholder=size_placeholder,
       beam=SearchBeam.get_combined_beam(a_out.beam, b_out.beam))
 
 
