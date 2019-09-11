@@ -4247,7 +4247,7 @@ class ChoiceLayer(BaseChoiceLayer):
       for target in self.targets:
         target_out_data = self._static_get_target_value(
           target=target, network=self.network, mark_data_key_as_used=True,
-          search_choices=self._src_common_search_choices).copy()
+          search_choices=self.get_search_choices()).copy()
         target_out_data.available_for_inference = True  # in inference, we should do search
         assert target_out_data.placeholder is not None
         self.output_list.append(target_out_data)

@@ -948,7 +948,7 @@ class LayerBase(object):
     if target is None:
       target = self.target
     return self._static_get_target_value(
-      target=target, _target_layers=self._target_layers, search_choices=self._src_common_search_choices,
+      target=target, _target_layers=self._target_layers, search_choices=self.get_search_choices(),
       network=self.network, mark_data_key_as_used=mark_data_key_as_used)
 
   def _cond_only_on_eval_opt(self, on_eval_func, default_value):
