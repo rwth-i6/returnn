@@ -4641,6 +4641,8 @@ class ReduceLayer(_ConcatInputLayer):
     if enforce_batch_dim_axis is None and cls.need_enforce_batch_dim_axis(axes):
       enforce_batch_dim_axis = 0
     x = get_concat_sources_data_template(sources)
+    if x.undefined:
+      return Data.create_undefined(name=name)
     assert not x.sparse
     if enforce_batch_dim_axis is not None and x.batch_dim_axis != enforce_batch_dim_axis:
       x = x.copy_with_batch_dim_axis(enforce_batch_dim_axis)
