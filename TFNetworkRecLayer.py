@@ -1872,35 +1872,6 @@ class _SubnetworkRecCell(object):
                 element_shape=(None, layer.search_choices.beam_size),  # (batch, beam)
                 get=get_choices_getter(layer.name)))
 
-            if rec_layer.debug:
-              # noinspection PyShadowingNames
-              def get_choices_scores_getter(name):
-                """
-                :param str name:
-                :rtype: ()->tf.Tensor|None
-                """
-                def get_beam_scores():
-                  """
-                  :rtype: tf.Tensor|None
-                  """
-                  layer = self.net.layers[name]
-                  return layer.search_choices.beam_scores
-
-                return get_beam_scores
-
-              outputs_to_accumulate.append(
-                _SubnetworkRecCell.OutputToAccumulate(
-                  name="debug_search_scores_%s" % layer.name,
-                  dtype=tf.float32,
-                  element_shape=(None, layer.search_choices.beam_size),  # (batch, beam)
-                  get=get_choices_scores_getter(layer.name)))
-              outputs_to_accumulate.append(
-                _SubnetworkRecCell.OutputToAccumulate(
-                  name="debug_search_choices_%s" % layer.name,
-                  dtype=tf.float32,
-                  element_shape=(None, layer.search_choices.beam_size),  # (batch, beam)
-                  get=get_choices_getter(layer.name)))
-
         if collected_choices:
           output_beam_size = self.layer_data_templates["output"].get_search_beam_size()
           # Note: output_beam_size can be None, if output itself does not depend on any choice,
