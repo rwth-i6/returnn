@@ -637,7 +637,12 @@ class LayerBase(object):
       return self.search_choices
     if self._src_common_search_choices:
       return self._src_common_search_choices
-    # Normally we should not find any other choices. But check anyway.
+    if not self.output.beam:  # small optimization
+      # Note that the logic to determine self.output.beam (via get_out_data_from_opts) is currently
+      # independently implemented from the search choices (via get_search_choices),
+      # and due to bugs, it could happen that self.output.beam is not set but actually we have search choices.
+      # This will likely be caught at some later check.
+      return None
     layer = self.network.get_search_choices(src=self)
     if layer:
       assert layer.search_choices
