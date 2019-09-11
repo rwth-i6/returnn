@@ -755,6 +755,22 @@ class Data(object):
       res.append("|".join(descriptions))
     return res
 
+  def get_compare_key(self):
+    """
+    :return: some key which can be used for compare functions, i.e. such that
+      cmp(get_compare_key(self), get_compare_key(other)) == cmp(self, other),
+      i.e. we define some order by that.
+      Note that this order is not totally fixed, and might change.
+    :rtype: object
+    """
+    return (
+      self.name, self.dtype,
+      self.shape,
+      self.batch_dim_axis, self.feature_dim_axis, self.time_dim_axis,
+      sorted(self.size_placeholder.keys()),
+      [self.get_size_dim_tag(i) for i in range(len(self.size_placeholder))],
+      self.beam)
+
   def __repr__(self):
     return self.get_description()
 
