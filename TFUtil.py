@@ -610,6 +610,15 @@ class Data(object):
     assert x.get_shape().ndims == 0, "currently only scalars supported"
     return Data(name=str(x.op.name), shape=(), batch_dim_axis=None, dtype=x.dtype.name, placeholder=x)
 
+  @classmethod
+  def create_undefined(cls, name=None):
+    """
+    :param str name:
+    :return: Data with undefined=True. the shape/dtype does not really matter
+    :rtype: Data
+    """
+    return Data(name="%s_undefined" % (name or "unknown"), shape=(), dim=None, undefined=True)
+
   def sanity_check(self, ignore_placeholder=False):
     """
     Performs some sanity checks on self, and raises exceptions if something is not sane.
