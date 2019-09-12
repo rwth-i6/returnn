@@ -4041,6 +4041,9 @@ class ChoiceLayer(BaseChoiceLayer):
     self.input_type = input_type
     self.explicit_search_sources = explicit_search_sources
     self.scheduled_sampling = CollectionReadCheckCovered.from_bool_or_dict(scheduled_sampling)
+    self.search_scores_in = None
+    self.search_scores_base = None
+    self.search_scores_combined = None
     # We assume log-softmax here, inside the rec layer.
 
     if self.search_flag:
@@ -4171,6 +4174,9 @@ class ChoiceLayer(BaseChoiceLayer):
             optional_mul(scores_random_sample, random_sample_scale))  # (batch, beam_in, dim)
         scores_comb.set_shape(
           (None, None, None if isinstance(scores_in_dim, tf.Tensor) else scores_in_dim))  # (batch, beam_in, dim)
+        self.search_scores_in = scores_in
+        self.search_scores_base = scores_base
+        self.search_scores_combined = scores_comb
         cheating_gold_targets = None
         if cheating:
           assert len(self.sources) == 1, "Cheating not yet implemented for multiple sources."
@@ -4317,7 +4323,10 @@ class ChoiceLayer(BaseChoiceLayer):
       assert not custom_score_combine
       scores_comb = optional_add(
         optional_mul(scores_in_, prob_scale),
-        optional_mul(scores_base, base_beam_score_scale))  # (batch, beam_in, dim)
+        optional_mul(scores_base, base_beam_score_scale))  # (batch, beam_in)
+      self.search_scores_in = scores_in_
+      self.search_scores_base = scores_base
+      self.search_scores_combined = scores_comb
       self.search_choices.set_beam_scores(scores_comb)
 
   def _get_scores(self, source):
