@@ -2094,6 +2094,62 @@ def test_TikhonovRegularizationLayer():
   engine.finalize()
 
 
+def test_grad_summaries():
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  engine = Engine(config=Config({
+    "network": {
+      "output": {"class": "linear", "activation": "tanh", "from": "data", "n_out": 3, "loss": "mse"}
+    },
+    "model": "/tmp/model",
+    "batch_size": 100,
+    "max_seqs": 2,
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "num_epochs": 1,
+    "learning_rate": 0.01,
+    "adam": True,
+    "debug_print_layer_output_template": True,
+    "debug_grad_summaries": True,
+  }))
+  print("extern data:", engine.config.typed_value("extern_data"))
+
+  engine.init_train_from_config()
+
+  def extra_fetches_cb(summary_proto):
+    """
+    :param bytes summary_proto: protobuf for summaries
+    """
+    from tensorboard.compat.proto import summary_pb2
+    summaries = summary_pb2.Summary.FromString(summary_proto)
+    summary_list = [val.tag for val in summaries.value]
+    assert any([v.startswith("grads/") for v in summary_list])
+    assert any(["global_grad_norm" in v for v in summary_list])
+    assert any([v.startswith("vars/") for v in summary_list])
+    for val in summaries.value:
+      print("%s: %r" % (val.tag, val.simple_value))
+
+  batches = train_data.generate_batches(
+    recurrent_net=engine.network.recurrent,
+    batch_size=200,
+    max_seqs=100,
+    used_data_keys=engine.network.used_data_keys)
+  forwarder = Runner(
+    engine=engine, dataset=train_data, batches=batches,
+    train=True, eval=False,
+    extra_fetches={
+      "summary_proto": lambda: engine.network._get_all_merged_summaries(),
+    },
+    extra_fetches_callback=extra_fetches_cb)
+  forwarder.run(report_prefix="test_grad_summaries")
+  if not forwarder.finalized:
+    raise Exception("Error happened. Exit now.")
+
+
 def test_unflatten_2d():
   # See also test_SimpleHDFWriter_ndim1_var_len.
   # And unflatten_nd, and UnflattenNdLayer.
