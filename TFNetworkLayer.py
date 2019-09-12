@@ -70,6 +70,7 @@ class LayerBase(object):
                trainable=True,
                custom_param_importer=None,
                register_as_extern_data=None,
+               control_dependencies_on_output=None,
                _src_common_search_choices=None):
     """
     Usually the arguments, when specified in the network dict,
@@ -111,6 +112,7 @@ class LayerBase(object):
     :param bool trainable: whether the parameters of this layer will be trained
     :param str|callable|None custom_param_importer: used by :func:`set_param_values_by_dict`
     :param str|None register_as_extern_data: registers output in network.extern_data
+    :param None|((LayerBase)->list[tf.Operation]) control_dependencies_on_output:
     :param None|SearchChoices _src_common_search_choices: set via :func:`SearchChoices.translate_to_common_search_beam`
     """
     self.name = name
@@ -173,6 +175,7 @@ class LayerBase(object):
     self.use_batch_norm = batch_norm
     self.trainable = trainable
     self.custom_param_importer = custom_param_importer
+    self.control_dependencies_on_output = control_dependencies_on_output
     self.register_as_extern_data = register_as_extern_data
     # Stats will be collected by the engine.
     self.stats = {}  # type: typing.Dict[str,tf.Tensor]
@@ -189,6 +192,15 @@ class LayerBase(object):
       if isinstance(self.use_batch_norm, dict):
         opts = self.use_batch_norm
       self.output.placeholder = self.batch_norm(self.output, **opts)
+    if self.control_dependencies_on_output:
+      control_deps = self.control_dependencies_on_output(self)
+      if not isinstance(control_deps, (list, tuple)):
+        assert isinstance(control_deps, (tf.Operation, tf.Tensor))
+        control_deps = [control_deps]
+      assert all([isinstance(dep, (tf.Operation, tf.Tensor)) for dep in control_deps])
+      if control_deps:
+        with tf.control_dependencies(control_deps):
+          self.output.placeholder = tf.identity(self.output.placeholder)
     if self.register_as_extern_data:
       self.network.extern_data.extra_added_keys.add(self.register_as_extern_data)
       self.network.extern_data.data[self.register_as_extern_data] = self.output
