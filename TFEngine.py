@@ -581,6 +581,14 @@ class Runner(object):
         elapsed_time_tf += self._horovod_sync_params(local_step=step)
         duration = time.time() - start_time
         self._print_process(report_prefix=report_prefix, step=step, step_duration=duration, eval_info=eval_info)
+
+        if self.engine.config.bool("stop_on_nonfinite_train_score", True):
+          score_values = self._results_accumulated.values()
+          if any(numpy.isinf(score_values)) or any(numpy.isnan(score_values)):
+            print("Model seems broken, got inf or nan score.", file=log.v1)
+            print("Accumulated scores:", self._results_accumulated, file=log.v1)
+            raise Exception("Inf/nan score in step %i." % step)
+
         step += 1
         if self.cancel_flag:
           raise CancelTrainingException("cancel_flag is set")
