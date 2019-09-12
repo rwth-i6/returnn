@@ -59,7 +59,8 @@ class Runner(object):
     :param bool train: whether to do updates on the model
     :param bool|None train_flag: normally just as train. but e.g. maybe you want to have the train_flag but not train
     :param bool eval: whether to evaluate (i.e. calculate loss/error)
-    :param dict[str,tf.Tensor|TFUtil.Data|TFNetworkLayer.LayerBase]|None extra_fetches: additional fetches per step.
+    :param dict[str,tf.Tensor|TFUtil.Data|TFNetworkLayer.LayerBase|()->tf.Tensor)]|None extra_fetches:
+      additional fetches per step.
       `extra_fetches_callback` will be called with these. In case of Data/LayerBase, it will return a list,
       where each item corresponds to the batch-seq.
       It might also be useful to add `network.get_extern_data("seq_idx")` and `network.get_extern_data("seq_tag")`.
@@ -141,6 +142,11 @@ class Runner(object):
           continue
         if isinstance(v, LayerBase):
           v = v.output
+        if callable(v):
+          v = v()
+          assert isinstance(v, tf.Tensor)
+          d["extra:%s" % k] = v
+          continue
         assert isinstance(v, Data)
         d["extra:%s" % k] = v.placeholder  # see _maybe_handle_extra_fetches, it will transform to batch-major there
         for i, s in v.size_placeholder.items():
@@ -345,6 +351,9 @@ class Runner(object):
         continue
       if isinstance(v, LayerBase):
         v = v.output
+      if callable(v):
+        d[k] = fetches_results["extra:%s" % k]
+        continue
       assert isinstance(v, Data)
       if v.batch_dim_axis != 0:
         r = numpy.moveaxis(r, v.batch_dim_axis, 0)
