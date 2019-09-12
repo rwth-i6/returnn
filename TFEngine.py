@@ -109,13 +109,8 @@ class Runner(object):
     :return: values and actions which should be calculated and executed in self.run() by the TF session for each step
     :rtype: dict[str,tf.Tensor|tf.Operation]
     """
-    # Note that it is important that we do not recreate graph nodes for every call to this function.
-    # Thus everything which we access here should be cached.
-    d = self.engine.network.get_fetches_dict(
-      config=self.engine.config,
-      should_train=self._should_train, should_eval=self._should_eval,
-      with_summary=True, with_size=True)
-
+    d = {}
+    optim_op = None
     if self._should_train:
       assert self.engine.updater
 
@@ -126,8 +121,19 @@ class Runner(object):
         # Force a new check.
         self.engine._checked_uninitialized_vars = False
         self.engine.updater.init_optimizer_vars(session=self.engine.tf_session)
+      # This function has to be called before `get_fetches_dict(..., with_summary=True)`,
+      # because it may introduce new summaries to the graph which are later collected.
+      optim_op = self.engine.updater.get_optim_op(callback_on_new=callback_on_new)
 
-      d["optim_op"] = self.engine.updater.get_optim_op(callback_on_new=callback_on_new)
+    # Note that it is important that we do not recreate graph nodes for every call to this function.
+    # Thus everything which we access here should be cached.
+    d_fetches = self.engine.network.get_fetches_dict(
+      config=self.engine.config,
+      should_train=self._should_train, should_eval=self._should_eval,
+      with_summary=True, with_size=True)
+    d.update(d_fetches)
+    if optim_op is not None:
+      d["optim_op"] = optim_op
       if self.engine.updater.optim_meta_losses_dict:
         d.update(self.engine.updater.optim_meta_losses_dict)
 
