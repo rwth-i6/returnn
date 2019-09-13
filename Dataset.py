@@ -92,7 +92,7 @@ class Dataset(object):
     :param str name: e.g. "train" or "eval"
     :param int window: features will be of dimension window * feature_dim, as we add a context-window around.
       not all datasets support this option.
-    :param None|int|dict|NumbersDict context_window: will add this context for each chunk
+    :param None|int|dict|NumbersDict|(dict,dict) context_window: will add this context for each chunk
     :param None|str|int|(int,int)|dict|(dict,dict) chunking: "chunk_size:chunk_step"
     :param str seq_ordering: "batching"-option in config. e.g. "default", "sorted" or "random".
       See self.get_seq_order_for_epoch() for more details.
@@ -152,14 +152,31 @@ class Dataset(object):
       assert sorted(chunk_step.keys()) == sorted(chunk_size.keys())
       assert chunk_step.max_value() > 0, "chunking step must be positive (for some key)"
     self.chunk_step = chunk_step
-    if context_window is None:
-      context_window = NumbersDict(0)
-    elif isinstance(context_window, int):
-      context_window = NumbersDict(broadcast_value=0, numbers_dict={"data": context_window})
-    elif isinstance(context_window, dict):
-      context_window = NumbersDict(broadcast_value=0, numbers_dict=context_window)
-    assert isinstance(context_window, NumbersDict)
-    self.context_window = context_window
+    if isinstance(context_window, (tuple, list)):
+      assert len(context_window) == 2
+      for elem in context_window:
+        assert isinstance(elem, dict)
+      # assume that first element of tuple|list is for left context and second element for right context
+      self.ctx_left = NumbersDict(numbers_dict=context_window[0])
+      self.ctx_right = NumbersDict(numbers_dict=context_window[1])
+    else:
+      if context_window is None:
+        context_window = NumbersDict()
+      elif isinstance(context_window, int):
+        context_window = NumbersDict(numbers_dict={"data": context_window})
+      elif isinstance(context_window, dict):
+        context_window = NumbersDict(numbers_dict=context_window)
+      assert isinstance(context_window, NumbersDict)
+      # ctx_total is how much frames we add additionally.
+      # One less because the original frame also counts, and context_window=1 means that we just have that single frame.
+      ctx_total = NumbersDict.max([context_window, 1]) - 1
+      # In case ctx_total is odd / context_window is even, we have to decide where to put one more frame.
+      # To keep it consistent with e.g. 1D convolution with a kernel of even size, we add one more to the right.
+      # See test_tfconv1d_evensize().
+      self.ctx_left = ctx_total // 2
+      self.ctx_right = ctx_total - self.ctx_left
+    assert isinstance(self.ctx_left, NumbersDict)
+    assert isinstance(self.ctx_right, NumbersDict)
     self.shuffle_frames_of_nseqs = shuffle_frames_of_nseqs
     self.epoch = None
 
@@ -909,24 +926,6 @@ class Dataset(object):
             break
       s += 1
 
-  def _get_context_window_left_right(self):
-    """
-    :return: (ctx_left, ctx_right)
-    :rtype: None|(NumbersDict,NumbersDict)
-    """
-    if self.context_window:
-      # One less because the original frame also counts, and context_window=1 means that we just have that single frame.
-      # ctx_total is how much frames we add additionally.
-      ctx_total = NumbersDict.max([self.context_window, 1]) - 1
-      # In case ctx_total is odd / context_window is even, we have to decide where to put one more frame.
-      # To keep it consistent with e.g. 1D convolution with a kernel of even size, we add one more to the right.
-      # See test_tfconv1d_evensize().
-      ctx_left = ctx_total // 2
-      ctx_right = ctx_total - ctx_left
-      return ctx_left, ctx_right
-    else:
-      return None
-
   def get_start_end_frames_full_seq(self, seq_idx):
     """
     :param int seq_idx:
@@ -935,10 +934,8 @@ class Dataset(object):
     """
     end = self.get_seq_length(seq_idx)
     start = NumbersDict.constant_like(0, numbers_dict=end)
-    ctx_lr = self._get_context_window_left_right()
-    if ctx_lr:
-      start -= ctx_lr[0]
-      end += ctx_lr[1]
+    start -= self.ctx_left
+    end += self.ctx_right
     return start, end
 
   def sample(self, seq_idx):
@@ -996,7 +993,6 @@ class Dataset(object):
         print("Non-recurrent network, chunk size %s:%s ignored" % (chunk_size, chunk_step), file=log.v4)
         chunk_size = 0
     batch = Batch()
-    ctx_lr = self._get_context_window_left_right()
     total_num_seqs = 0
     last_seq_idx = -1
     avg_weight = sum([v[0] for v in self.weights.values()]) / (len(self.weights.keys()) or 1)
@@ -1009,9 +1005,8 @@ class Dataset(object):
         continue
       if total_num_seqs > max_total_num_seqs:
         break
-      if ctx_lr:
-        t_start -= ctx_lr[0]
-        t_end += ctx_lr[1]
+      t_start -= self.ctx_left
+      t_end += self.ctx_right
       if recurrent_net:
         length = t_end - t_start
         if length.any_compare(max_seq_length, (lambda a, b: a > b)):
