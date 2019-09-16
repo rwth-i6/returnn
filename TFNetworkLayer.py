@@ -2875,6 +2875,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
   E.g. when the input is of shape (B,T,dim), the output will be (B,T,dim).
   It automatically masks the frames outside the seq defined by the seq-len.
   In contrast to :class:`SoftmaxLayer`, this will not do a linear transformation.
+  See :class:`SeqLenMaskLayer` if you just want to apply a masking.
   """
   layer_class = "softmax_over_spatial"
 
@@ -2901,46 +2902,15 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     axis = self._get_axis_to_reduce(input_data=energy_data, axis=axis, exception_prefix=self)
     # tf.nn.softmax operates on the last axis.
     energy_data = energy_data.copy_move_axis(axis, -1)
-    axis = energy_data.batch_ndim - 1
     energy = energy_data.placeholder
-    energy_shape = tf.shape(energy, name="energy_shape")
-    energy_shape = [energy_shape[i] for i in range(energy_data.batch_ndim)]
-    assert energy_data.have_time_axis()
-    # if the time-axis is static, we can skip the masking
-    if use_time_mask is None:
-      use_time_mask = energy_data.is_axis_dynamic(axis)
-    if start or window_start or window_size is not None:
-      assert use_time_mask
+    axis = energy_data.batch_ndim - 1
     if use_time_mask:
-      assert energy_data.is_axis_dynamic(axis), "%s: use_time_mask True, dyn time axis expected" % self
-      energy_mask = energy_data.get_sequence_mask_broadcast(axis=axis)
-      if start:
-        idxs_shape = [1] * energy_data.batch_ndim  # type: typing.List[typing.Union[int,tf.Tensor]]
-        idxs_shape[axis] = energy_shape[axis]
-        idxs = tf.reshape(tf.range(energy_shape[axis]), idxs_shape)
-        start_data = start.output.copy_compatible_to(
-          energy_data, check_sparse=False, check_dtype=False)  # adds dummy time-dim
-        energy_mask = tf.logical_and(energy_mask, tf.greater_equal(idxs, start_data.placeholder))
-      if window_start:
-        assert window_size, "set window_size explicitly"
-        if isinstance(window_size, LayerBase):
-          window_size_data = window_size.output
-        else:
-          assert isinstance(window_size, int)
-          window_size_data = Data.from_tensor(tf.constant(window_size))
-        window_start_data = window_start.output.copy_compatible_to(
-          energy_data, check_sparse=False, check_dtype=False)  # adds dummy time-dim
-        window_size_data = window_size_data.copy_compatible_to(
-          energy_data, check_sparse=False, check_dtype=False)  # adds dummy time-dim
-        idxs_shape = [1] * energy_data.batch_ndim  # type: typing.List[typing.Union[int,tf.Tensor]]
-        idxs_shape[axis] = energy_shape[axis]
-        idxs = tf.reshape(tf.range(energy_shape[axis]), idxs_shape)
-        energy_mask = tf.logical_and(
-          energy_mask,
-          tf.logical_and(
-            tf.greater_equal(idxs, window_start_data.placeholder),
-            tf.less(idxs, window_start_data.placeholder + window_size_data.placeholder)
-          ))
+      energy_mask = SeqLenMaskLayer.build_mask(
+        energy_data,
+        axis=axis,
+        start=start.output if start else None,
+        window_start=window_start.output if window_start else None,
+        window_size=window_size.output if isinstance(window_size, LayerBase) else window_size)
       energy = where_bc(energy_mask, energy, float("-inf"), name="energy_masked")
     if energy_factor:
       energy = tf.multiply(energy, energy_factor, name="energy_scaled")
@@ -3019,33 +2989,86 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
 class SeqLenMaskLayer(_ConcatInputLayer):
   """
   Masks some values away given the seq_len_source with mask_value.
+  Also see :class:`SoftmaxOverSpatialLayer`.
   """
   layer_class = "seq_len_mask"
 
-  def __init__(self, mask_value, axis="T", seq_len_source=None, **kwargs):
+  def __init__(self, mask_value, axis="T", seq_len_source=None,
+               start=None, window_start=None, window_size=None, **kwargs):
     """
     :param LayerBase|None seq_len_source: if not given, uses source
     :param str|int axis:
     :param float mask_value:
+    :param LayerBase|None start: Tensor of shape (B,) indicating the start frame
+    :param LayerBase|None window_start: Tensor of shape (B,) indicating the window start
+    :param LayerBase|int|None window_size:
     """
     super(SeqLenMaskLayer, self).__init__(**kwargs)
     self.seq_len_source = seq_len_source
-    x = self.input_data.copy_as_batch_major()  # e.g. (B,T',T)
-    axis = x.get_axis_from_description(axis)
-    if not seq_len_source:
-      seq_len_source = self.input_data
-    else:
-      seq_len_source = seq_len_source.output
-    energy_mask = seq_len_source.copy_as_batch_major().get_sequence_mask()  # e.g. (B,T)
-    from TFUtil import expand_multiple_dims
-    energy_mask = expand_multiple_dims(
-      energy_mask, [i for i in range(x.batch_ndim) if i not in [x.batch_dim_axis, axis]])  # e.g. (B,1,T) with axis=-1
-    energy_mask = tf.logical_and(energy_mask, tf.ones_like(x.placeholder, dtype=energy_mask.dtype))
-    x_ = tf.where(energy_mask, x.placeholder, mask_value * tf.ones_like(x.placeholder), "energy_masked")
+    self.start = start
+    self.window_start = window_start
+    self.window_size = window_size
+    assert isinstance(axis, str), "%s: use symbolic axis (e.g. 'T')" % self
+    mask = self.build_mask(
+      self.input_data,
+      axis=axis,
+      seq_len_source=seq_len_source.output if seq_len_source else None,
+      start=start.output if start else None,
+      window_start=window_start.output if window_start else None,
+      window_size=window_size.output if isinstance(window_size, LayerBase) else window_size)
+    from TFUtil import where_bc
+    x_ = where_bc(mask, self.input_data.placeholder, mask_value)
     self.output.placeholder = x_
-    self.output.size_placeholder = x.size_placeholder.copy()
     if mask_value in [float("-inf"), float("inf")]:
       self.allow_inf_in_output = True
+
+  @classmethod
+  def build_mask(cls, x, axis="T", seq_len_source=None, start=None, window_start=None, window_size=None):
+    """
+    :param Data x:
+    :param str|int axis:
+    :param Data|None seq_len_source:
+    :param Data|None start:
+    :param Data|None window_start:
+    :param Data|int|None window_size:
+    :return: mask which is broadcastable to energy_data, thus you can e.g. use :func:`TFUtil.where_bc`
+    :rtype: tf.Tensor
+    """
+    from TFUtil import get_shape
+    energy = x.placeholder
+    energy_shape = get_shape(energy)
+    axis = x.get_axis_from_description(axis)
+    assert x.is_axis_dynamic(axis), "%s: use_time_mask True, dyn time axis expected" % x
+    if seq_len_source:
+      energy_mask = seq_len_source.copy_compatible_to(x).get_sequence_mask_broadcast(axis=axis)
+    else:
+      energy_mask = x.get_sequence_mask_broadcast(axis=axis)
+    if start:
+      idxs_shape = [1] * x.batch_ndim  # type: typing.List[typing.Union[int,tf.Tensor]]
+      idxs_shape[axis] = energy_shape[axis]
+      idxs = tf.reshape(tf.range(energy_shape[axis]), idxs_shape)
+      start_data = start.copy_compatible_to(
+        x, check_sparse=False, check_dtype=False)  # adds dummy time-dim
+      energy_mask = tf.logical_and(energy_mask, tf.greater_equal(idxs, start_data.placeholder))
+    if window_start:
+      assert window_size, "set window_size explicitly"
+      if not isinstance(window_size, Data):
+        assert isinstance(window_size, int)
+        window_size = Data.from_tensor(tf.constant(window_size))
+      window_start = window_start.copy_compatible_to(
+        x, check_sparse=False, check_dtype=False)  # adds dummy time-dim
+      window_size = window_size.copy_compatible_to(
+        x, check_sparse=False, check_dtype=False)  # adds dummy time-dim
+      idxs_shape = [1] * x.batch_ndim  # type: typing.List[typing.Union[int,tf.Tensor]]
+      idxs_shape[axis] = energy_shape[axis]
+      idxs = tf.reshape(tf.range(energy_shape[axis]), idxs_shape)
+      energy_mask = tf.logical_and(
+        energy_mask,
+        tf.logical_and(
+          tf.greater_equal(idxs, window_start.placeholder),
+          tf.less(idxs, window_start.placeholder + window_size.placeholder)
+        ))
+    return energy_mask
 
   def get_dep_layers(self):
     """
@@ -3054,6 +3077,12 @@ class SeqLenMaskLayer(_ConcatInputLayer):
     deps = super(SeqLenMaskLayer, self).get_dep_layers()
     if self.seq_len_source:
       deps.append(self.seq_len_source)
+    if self.start:
+      deps.append(self.start)
+    if self.window_start:
+      deps.append(self.window_start)
+    if isinstance(self.window_size, LayerBase):
+      deps.append(self.window_size)
     return deps
 
   @classmethod
@@ -3064,17 +3093,36 @@ class SeqLenMaskLayer(_ConcatInputLayer):
     :param get_layer:
     """
     super(SeqLenMaskLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
-    if "seq_len_source" in d:
+    if d.get("seq_len_source", None):
       d["seq_len_source"] = get_layer(d["seq_len_source"])
+    if d.get("start", None):
+      d["start"] = get_layer(d["start"])
+    if d.get("window_start", None):
+      d["window_start"] = get_layer(d["window_start"])
+    if d.get("window_size", None):
+      if isinstance(d["window_size"], str):
+        d["window_size"] = get_layer(d["window_size"])
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, start=None, window_start=None, window_size=None, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
+    :param LayerBase|None start:
+    :param LayerBase|None window_start:
+    :param LayerBase|int|None window_size:
     :rtype: Data
     """
-    return get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
+    out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    if out.undefined:
+      return out
+    if isinstance(start, LayerBase):
+      out.beam = SearchBeam.get_combined_beam(out.beam, start.output.beam)
+    if isinstance(window_start, LayerBase):
+      out.beam = SearchBeam.get_combined_beam(out.beam, window_start.output.beam)
+    if isinstance(window_size, LayerBase):
+      out.beam = SearchBeam.get_combined_beam(out.beam, window_size.output.beam)
+    return out
 
 
 class RangeLayer(LayerBase):
