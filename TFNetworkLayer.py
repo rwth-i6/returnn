@@ -2904,6 +2904,12 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     energy_data = energy_data.copy_move_axis(axis, -1)
     energy = energy_data.placeholder
     axis = energy_data.batch_ndim - 1
+    assert energy_data.have_time_axis()
+    # if the time-axis is static, we can skip the masking
+    if use_time_mask is None:
+      use_time_mask = energy_data.is_axis_dynamic(axis)
+    if start or window_start or window_size is not None:
+      assert use_time_mask
     if use_time_mask:
       energy_mask = SeqLenMaskLayer.build_mask(
         energy_data,
