@@ -2016,6 +2016,9 @@ class CopyLayer(_ConcatInputLayer):
       self.output_loss = self.sources[0].output_loss
       if not self.dropout:
         self.output_before_activation = self.sources[0].output_before_activation
+    for src in self.sources:
+      if src.allow_inf_in_output:
+        self.allow_inf_in_output = True
 
   def get_dep_layers(self):
     """
@@ -2208,6 +2211,10 @@ class SelectSearchSourcesLayer(InternalLayer):
       if src_output.size_placeholder:
         self.output.size_placeholder = {i: transform(size) for (i, size) in src_output.size_placeholder.items()}
       self.rec_vars_outputs = {k: transform(v) for (k, v) in src.rec_vars_outputs.items()}  # assumes batch-major
+
+    for src in self.sources:
+      if src.allow_inf_in_output:
+        self.allow_inf_in_output = True
 
   def __repr__(self):
     return "<%s %r %r out_type=%s>" % (
@@ -4180,6 +4187,9 @@ class ReinterpretDataLayer(_ConcatInputLayer):
       self.output_loss = self.sources[0].output_loss
       if not self.dropout:
         self.output_before_activation = self.sources[0].output_before_activation
+    for src in self.sources:
+      if src.allow_inf_in_output:
+        self.allow_inf_in_output = True
 
   def get_dep_layers(self):
     """
