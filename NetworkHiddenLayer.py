@@ -22,7 +22,6 @@ from ActivationFunctions import strtoact, strtoact_single_joined, elu
 import TheanoUtil
 from TheanoUtil import class_idx_seq_to_1_of_k
 from Log import log
-from cuda_implementation.FractionalMaxPoolingOp import fmp
 from math import ceil
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 from TheanoUtil import print_to_file, DumpOp
