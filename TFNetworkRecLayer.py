@@ -2353,8 +2353,8 @@ class _SubnetworkRecCell(object):
   def _opt_search_resolve(self, layer_name, acc_ta, final_net_vars):
     """
     This assumes that we have frame-wise accumulated outputs of the specific layer (acc_ta).
-    If that layer depends on frame-wise search choices, i.e. it the batch dim includes a search beam,
-    and each frame will has different beams,
+    If that layer depends on frame-wise search choices, i.e. if the batch dim includes a search beam,
+    and each frame has different beams,
     then we will resolve that to the common final best search choices,
     which is determined by the latest search choice given by the layer.
     This assumes that we also have `self.final_acc_tas_dict["choice_%s" % choice_base.name]` available.
@@ -2369,9 +2369,11 @@ class _SubnetworkRecCell(object):
     from TFUtil import nd_indices, assert_min_tf_version, expand_dims_unbroadcast, get_valid_scope_name_from_str
     from TFUtil import get_shape_dim
     rec_layer = self.parent_rec_layer
-    if layer_name not in self.net.layers:  # inside loop
+    try:
+      layer = self.net.get_layer(layer_name)
+    except LayerNotFound:  # layer is not inside loop
       return acc_ta, None
-    layer_choice = self.net.get_search_choices(src=self.net.layers[layer_name])
+    layer_choice = self.net.get_search_choices(src=layer)
     if not layer_choice:
       return acc_ta, None
     is_prev_choice = False
@@ -2430,8 +2432,8 @@ class _SubnetworkRecCell(object):
 
     new_acc_output_ta = tf.TensorArray(
       name="search_resolved_%s" % os.path.basename(acc_ta.handle.op.name),
-      dtype=self.net.layers[layer_name].output.dtype,
-      element_shape=tf.TensorShape(self.net.layers[layer_name].output.batch_shape),
+      dtype=layer.output.dtype,
+      element_shape=tf.TensorShape(layer.output.batch_shape),
       size=seq_len,
       infer_shape=True)
 
@@ -2445,8 +2447,8 @@ class _SubnetworkRecCell(object):
       """
       with tf.name_scope("transform_output_%s" % get_valid_scope_name_from_str(layer_name)):
         output_ = acc_ta.read(i)  # (batch * beam, [n_out])
-        assert self.net.layers[layer_name].output.batch_dim_axis == 0
-        out_shape = list(self.net.layers[layer_name].output.batch_shape)
+        assert layer.output.batch_dim_axis == 0
+        out_shape = list(layer.output.batch_shape)
         output_.set_shape(tf.TensorShape(out_shape))
         for i_, d in list(enumerate(out_shape)):
           if i_ == 0:
@@ -2829,7 +2831,7 @@ class _SubnetworkRecCell(object):
       if name in loop_acc_layers:
         return loop_acc_layers[name]
       with tf.name_scope(self.layer_data_templates[name].layer_class_type.cls_get_tf_scope_name(name)):
-        inner_layer = self.net.layers[name]
+        inner_layer = self.net.get_layer(name)
         acc_ta = loop_accumulated["output_%s" % name]
         acc_ta, search_choices = self._opt_search_resolve(
           layer_name=name, acc_ta=acc_ta, final_net_vars=final_net_vars)
@@ -3049,7 +3051,7 @@ class _TemplateLayer(LayerBase):
       return self._cell
     rec_layer = self.network.parent_layer
     assert isinstance(rec_layer, RecLayer)
-    cell = self.network.parent_layer
+    cell = self.network.parent_layer.cell
     assert isinstance(cell, _SubnetworkRecCell)
     return cell
 
@@ -4451,6 +4453,23 @@ class ChoiceLayer(BaseChoiceLayer):
     super(ChoiceLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
+  def _create_search_beam(cls, name, beam_size, sources, network):
+    """
+    :param str name:
+    :param int beam_size:
+    :param list[LayerBase] sources:
+    :param TFNetwork.TFNetwork network:
+    :rtype: TFUtil.SearchBeam
+    """
+    from TFUtil import SearchBeam
+    search_dep = NotSpecified
+    if sources and sources[0] and not sources[0].output.undefined:
+      search_dep = sources[0].output.beam
+    return SearchBeam(
+      beam_size=beam_size, dependency=search_dep,
+      name="%s%s" % (network.get_absolute_name_prefix(), name))
+
+  @classmethod
   def get_out_data_from_opts(cls, name, sources, target, network,
                              beam_size, search=NotSpecified, scheduled_sampling=False, cheating=False, **kwargs):
     """
@@ -4479,13 +4498,7 @@ class ChoiceLayer(BaseChoiceLayer):
       del shape[out_data.batch_dim_axis]
       out_data = Data(name="%s_output" % name, shape=shape, sparse=True, dim=out_data.dim)
     if search:
-      from TFUtil import SearchBeam
-      search_dep = NotSpecified
-      if sources and sources[0] and not sources[0].output.undefined:
-        search_dep = sources[0].output.beam
-      out_data.beam = SearchBeam(
-        beam_size=beam_size, dependency=search_dep,
-        name="%s%s" % (network.get_absolute_name_prefix(), name))
+      out_data.beam = cls._create_search_beam(name=name, beam_size=beam_size, sources=sources, network=network)
     elif sources and sources[0]:
       out_data.beam = sources[0].output.beam
     if cheating or scheduled_sampling or not search:
@@ -4513,7 +4526,7 @@ class ChoiceLayer(BaseChoiceLayer):
   def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
     """
     :param str layer_name: name of the sub_layer (e.g. 'out_0'), see self.get_sub_layer()
-    :param dict[str] parent_layer_kwargs: kwargs for the parent layer, here we only need 'network' and 'beam_size'
+    :param dict[str] parent_layer_kwargs: kwargs for the parent layer
     :return: Data template, network and the class type of the sub-layer
     :rtype: (Data, TFNetwork, type)|None
     """
@@ -4523,12 +4536,23 @@ class ChoiceLayer(BaseChoiceLayer):
     targets = parent_layer_kwargs["target"]
     assert isinstance(targets, list), "Sub-layers for ChoiceLayer should only exist in case of multiple targets."
 
+    parent_layer_name = parent_layer_kwargs["name"]
+    sources = parent_layer_kwargs["sources"]
+    network = parent_layer_kwargs["network"]
+    beam_size = parent_layer_kwargs["beam_size"]
+
     # The sub-layer with index n will output the n-th target. The out_data is taken directly
     # from the target as it is done in self.get_out_data_from_opts().
-    sub_layer_out_data = cls.get_out_data_from_opts(target=targets[index], network=parent_layer_kwargs["network"],
-                                                    beam_size=parent_layer_kwargs["beam_size"])
+    sub_layer_out_data = cls.get_out_data_from_opts(name=parent_layer_name + "/" + layer_name,
+      sources=sources, target=targets[index], network=network, beam_size=beam_size)
+
+    if network.search_flag:
+      # Create same beam as in parent layer (they have to compare equal)
+      sub_layer_out_data.beam = cls._create_search_beam(name=parent_layer_name, beam_size=beam_size,
+        sources=sources, network=network)
+
     from TFNetworkLayer import InternalLayer
-    return sub_layer_out_data, parent_layer_kwargs["network"], InternalLayer
+    return sub_layer_out_data, network, InternalLayer
 
   def get_dep_layers(self):
     """
