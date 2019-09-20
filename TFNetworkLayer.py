@@ -4921,6 +4921,50 @@ class SqueezeLayer(_ConcatInputLayer):
       axis=axis, keep_dims=False, enforce_batch_dim_axis=enforce_batch_dim_axis, sources=sources, **kwargs)
 
 
+class StackLayer(LayerBase):
+  """
+  Stacks multiple inputs together using :func:`tf.stack`.
+  """
+  layer_class = "stack"
+
+  def __init__(self, **kwargs):
+    super(StackLayer, self).__init__(**kwargs)
+    data_dyn_shape = []
+    axis, common_source = self._get_axis_and_common(self.sources, data_dyn_shape=data_dyn_shape)
+    assert self.output.batch_shape[axis] == len(self.sources)
+    sources_ = [
+      src.output.copy_compatible_to(common_source, unbroadcast=True, data_dyn_shape=data_dyn_shape)
+      for src in self.sources]
+    self.output.placeholder = tf.stack([src.placeholder for src in sources_], axis=axis)
+
+  @classmethod
+  def _get_axis_and_common(cls, sources, data_dyn_shape=None):
+    """
+    :param list[LayerBase] sources:
+    :param list[int]|None data_dyn_shape:
+    :rtype: (int,Data)
+    """
+    from TFUtil import DimensionTag
+    common_source = Data.get_common_data([src.output for src in sources], out_shape=data_dyn_shape).copy_template()
+    tag = DimensionTag(kind=DimensionTag.Types.Spatial, dimension=1)
+    return common_source.get_default_new_axis_for_dim_tag(tag), common_source
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    if any([not src or src.output.undefined for src in sources]):
+      return Data.create_undefined(name)
+    axis, common_source = cls._get_axis_and_common(sources)
+    return (
+      common_source
+      .copy_add_spatial_dim(spatial_dim_axis=axis, dim=len(sources))
+      .copy_template(name="%s_output" % name))
+
+
 class WeightedSumLayer(_ConcatInputLayer):
   """
   Calculates a weighted sum, either over a complete axis of fixed dimension, or over some window.
