@@ -3891,11 +3891,11 @@ class SplitBatchTimeLayer(_ConcatInputLayer):
     batch_dim = base_shape[base.output.batch_dim_axis]
     time_dim = base_shape[base.output.time_dim_axis]
     seq_lens = base.output.get_sequence_lengths()
-    assert self.input_data.batch_dim_axis == 0
+    input_data = self.input_data.copy_as_batch_major()
     from TFUtil import get_shape
-    input_shape = get_shape(self.input_data.placeholder)
-    self.output.placeholder = tf.reshape(self.input_data.placeholder, shape=[batch_dim, time_dim] + input_shape[1:])
-    self.output.size_placeholder = {i + 1: v for (i, v) in self.input_data.size_placeholder.items()}
+    input_shape = get_shape(input_data.placeholder)
+    self.output.placeholder = tf.reshape(input_data.placeholder, shape=[batch_dim, time_dim] + input_shape[1:])
+    self.output.size_placeholder = {i + 1: v for (i, v) in input_data.size_placeholder.items()}
     self.output.size_placeholder[0] = seq_lens
 
   def get_dep_layers(self):
@@ -3922,7 +3922,7 @@ class SplitBatchTimeLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :rtype: Data
     """
-    data = get_concat_sources_data_template(sources)
+    data = get_concat_sources_data_template(sources).copy_as_batch_major()
     data.name = "%s_output" % name
     assert data.batch_dim_axis == 0
     data.time_dim_axis = 1
