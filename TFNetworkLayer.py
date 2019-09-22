@@ -6054,6 +6054,7 @@ class SwitchLayer(LayerBase):
   Wrapper around ``tf.where()`` (or more generically :func:`TFUtil.where_bc`),
   or statically choose a single source if the condition is a callable (...)->bool.
   (``tf.cond`` is not useful here, as the sources would have been already constructed and computed.)
+  See also :class:`CondLayer`.
   """
   layer_class = "switch"
 
@@ -6147,6 +6148,155 @@ class SwitchLayer(LayerBase):
       return [self.true_from]
     else:
       return [self.false_from]
+
+
+class CondLayer(LayerBase):
+  """
+  See also :class:`SwitchLayer`, which uses :func:`tf.where`.
+  Here, we use `tf.cond` instead. I.e. the condition has to be a scalar bool,
+  and only the corresponding true/false branch is computed.
+  """
+  layer_class = "cond"
+  recurrent = True  # unclear
+
+  def __init__(self, condition, true_layer, false_layer, **kwargs):
+    """
+    :param LayerBase|dict[str] condition:
+    :param LayerBase|dict[str] true_layer:
+    :param LayerBase|dict[str] false_layer:
+    """
+    super(CondLayer, self).__init__(**kwargs)
+    import os
+    self._parent_scope = os.path.dirname(tf.get_variable_scope().name)
+    self.condition_desc = condition
+    self.condition_layer = self._make_layer(self.condition_desc)
+    self.true_layer_desc = true_layer
+    self.true_layer_layer = None  # type: typing.Optional[LayerBase]
+    self.false_layer_desc = false_layer
+    self.false_layer_layer = None  # type: typing.Optional[LayerBase]
+    assert self.condition_layer.output.batch_ndim == 0 and self.condition_layer.output.dtype == "bool"
+    x, sizes = tf.cond(
+      pred=self.condition_layer.output.placeholder,
+      true_fn=self._true_fn,
+      false_fn=self._false_fn)
+    assert isinstance(x, tf.Tensor)
+    self.output.placeholder = x
+    assert len(sizes) == len(self.output.size_placeholder)
+    for i, size in zip(sorted(self.output.size_placeholder.keys()), sizes):
+      assert isinstance(size, tf.Tensor)
+      assert size.shape.ndims == 1
+      # Note: Not quite clear what dimension-tag to set...
+      self.output.size_placeholder[i] = size
+
+  def _cond_layer_return(self, layer):
+    """
+    :param LayerBase layer:
+    :return: for tf.cond
+    """
+    out = layer.output
+    out_template = self.output.copy_template()
+    assert len(out.size_placeholder) == len(out_template.size_placeholder) <= 1  # not implemented yet...
+    if len(out.size_placeholder) == len(out_template.size_placeholder) == 1:
+      # Make sure that it is the same dynamic size, so that copy_compatible_to accepts it.
+      out_template.size_placeholder[list(out_template.size_placeholder.keys())[0]] = (
+        list(out.size_placeholder.values())[0])
+    out = out.copy_compatible_to(out_template)
+    return out.placeholder, [out.size_placeholder[i] for i in sorted(out_template.size_placeholder.keys())]
+
+  def _true_fn(self):
+    self.true_layer_layer = self._make_layer(self.true_layer_desc)
+    return self._cond_layer_return(self.true_layer_layer)
+
+  def _false_fn(self):
+    self.false_layer_layer = self._make_layer(self.false_layer_desc)
+    return self._cond_layer_return(self.false_layer_layer)
+
+  def _make_layer(self, layer_desc):
+    """
+    :param LayerBase|dict[str] layer_desc:
+    :rtype: LayerBase
+    """
+    if isinstance(layer_desc, LayerBase):
+      return layer_desc
+    layer_desc = layer_desc.copy()
+    layer_class = layer_desc.pop("class")
+    assert issubclass(layer_class, LayerBase)
+    from TFUtil import reuse_name_scope
+    with reuse_name_scope(self._parent_scope):
+      # noinspection PyProtectedMember
+      layer = self.network._create_layer(
+        name=self.name,  # use our name, such that we get the same name space
+        layer_class=layer_class,
+        **layer_desc)
+    return layer
+
+  @classmethod
+  def _transform_layer(cls, d, key, network, get_layer):
+    """
+    :param dict[str] d:
+    :param str key: e.g. "true_layer"
+    :param TFNetwork.TFNetwork network:
+    :param (str)->LayerBase get_layer:
+    :return: nothing, will replace inplace in ``d``
+    """
+    layer_desc = d[key]
+    if isinstance(layer_desc, str):
+      d[key] = get_layer(layer_desc)
+      return
+    assert isinstance(layer_desc, dict)
+    layer_desc = layer_desc.copy()
+    class_name = layer_desc.pop("class")
+    layer_class = get_layer_class(class_name)
+    layer_class.transform_config_dict(layer_desc, network=network, get_layer=get_layer)
+    layer_desc["class"] = layer_class  # will later pop again
+    d[key] = layer_desc
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param TFNetwork.TFNetwork network:
+    :param (str)->LayerBase get_layer:
+    """
+    super(CondLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    cls._transform_layer(d, "condition", network=network, get_layer=get_layer)
+    cls._transform_layer(d, "true_layer", network=network, get_layer=get_layer)
+    cls._transform_layer(d, "false_layer", network=network, get_layer=get_layer)
+
+  @classmethod
+  def _get_out_data_from_layer(cls, layer, name, network):
+    """
+    :param LayerBase|dict[str] layer:
+    :param str name:
+    :param TFNetwork.TFNetwork network:
+    :rtype: Data
+    """
+    if layer is None:
+      return Data.create_undefined(name=name)
+    if isinstance(layer, LayerBase):
+      return layer.output
+    assert isinstance(layer, dict)
+    layer_desc = layer.copy()
+    layer_class = layer_desc.pop("class")
+    assert issubclass(layer_class, LayerBase)
+    # noinspection PyProtectedMember
+    layer_desc = network._create_layer_layer_desc(name=name, layer_desc=layer_desc)
+    return layer_class.get_out_data_from_opts(**layer_desc)
+
+  @classmethod
+  def get_out_data_from_opts(cls, true_layer, false_layer, name, network, **kwargs):
+    """
+    :param LayerBase|dict[str] true_layer:
+    :param LayerBase|dict[str] false_layer:
+    :param str name:
+    :param TFNetwork.TFNetwork network:
+    :rtype: Data
+    """
+    # Only take one single out.
+    # We allow that we get different size placeholders for each case.
+    # So Data.get_common_data would not work.
+    true_out = cls._get_out_data_from_layer(true_layer, name="%s/true" % name, network=network)
+    return true_out
 
 
 class SubnetworkLayer(LayerBase):
