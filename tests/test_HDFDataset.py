@@ -136,9 +136,10 @@ def get_test_tmp_file(suffix=".hdf"):
 _hdf_cache = {}  # opts -> hdf fn
 
 
-def generate_hdf_from_other(opts):
+def generate_hdf_from_other(opts, suffix=".hdf"):
   """
   :param dict[str] opts:
+  :param str suffix:
   :return: hdf filename
   :rtype: str
   """
@@ -147,7 +148,7 @@ def generate_hdf_from_other(opts):
   cache_key = make_hashable(opts)
   if cache_key in _hdf_cache:
     return _hdf_cache[cache_key]
-  fn = get_test_tmp_file(suffix=".hdf")
+  fn = get_test_tmp_file(suffix=suffix)
   from Dataset import init_dataset
   dataset = init_dataset(opts)
   hdf_dataset = HDFDatasetWriter(fn)
