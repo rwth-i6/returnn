@@ -1481,6 +1481,10 @@ class TFNetwork(object):
     :return: (direct or indirect) source LayerBase which has search_choices, or None
     :rtype: LayerBase|None
     """
+    if src:
+      # Note: Make sure we query from the current frame. Otherwise this would get ugly.
+      # (Only for src; accept for base_search_choice, it should not matter.)
+      assert src.get_normalized_layer() == src
     from TFNetworkLayer import SearchChoices
     from functools import cmp_to_key
     from pprint import pformat
