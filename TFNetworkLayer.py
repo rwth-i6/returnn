@@ -2116,10 +2116,17 @@ class SelectSearchSourcesLayer(InternalLayer):
     if not search_choices:
       return layer
     if layer.get_search_choices() == search_choices:
+      assert layer.output.beam == search_choices.get_beam_info(), "%r != %r. %s" % (
+        layer.output.beam, search_choices.get_beam_info(),
+        layer.network.debug_search_choices(layer) or "debug search dumped")
       return layer
     if layer.output.batch_dim_axis is None:  # e.g. VariableLayer, ConstantLayer, or so
       return layer
-    return SelectSearchSourcesLayer(sources=[layer], search_choices_layer=search_choices.owner)
+    layer = SelectSearchSourcesLayer(sources=[layer], search_choices_layer=search_choices.owner)
+    assert layer.output.beam == search_choices.get_beam_info(), "%r != %r. %s" % (
+      layer.output.beam, search_choices.get_beam_info(),
+      layer.network.debug_search_choices(layer) or "debug search dumped")
+    return layer
 
   def __init__(self, search_choices_layer, sources, **kwargs):
     """
@@ -2151,6 +2158,7 @@ class SelectSearchSourcesLayer(InternalLayer):
     self.search_choices_seq = None  # type: typing.Optional[typing.List[SearchChoices]]
     if not search_choices:
       assert not src_search_choices
+      assert not self.output.beam
     elif search_choices == src_search_choices:
       pass
     elif not src_search_choices:
@@ -2206,6 +2214,7 @@ class SelectSearchSourcesLayer(InternalLayer):
       # It's possible that src.output.placeholder is not set, e.g. in a prev-layer where the
       # prev output is not needed, only the prev state. See _TemplateLayer.copy_as_prev_time_frame.
       src_output = src.output.copy_as_batch_major()
+      self.output.beam = search_choices.get_beam_info()
       if src_output.placeholder is not None:
         self.output.placeholder = transform(src_output.placeholder)
       if src_output.size_placeholder:
