@@ -3114,6 +3114,28 @@ class _TemplateLayer(LayerBase):
       return self._cell.net.layers[self.name].get_normalized_layer()
     return self
 
+  def get_search_choices(self):
+    """
+    :rtype: SearchChoices|None
+    """
+    if self.search_choices:
+      return self.search_choices
+    if self.is_prev_time_frame:
+      # Figure out search choices on current frame,
+      # as dependencies can be slightly wrong.
+      layer = self.get_normalized_layer()
+      assert layer != self
+      search_choices = layer.get_search_choices()
+      if not search_choices:
+        return None
+      # Normalize again. See maybe_transform.
+      layer = search_choices.owner.get_normalized_layer()
+      prev_layer = self._cell.net.layers["prev:%s" % layer.name]
+      assert isinstance(prev_layer, _TemplateLayer) and prev_layer.is_prev_time_frame
+      assert prev_layer.search_choices
+      return prev_layer.search_choices
+    return super(_TemplateLayer, self).get_search_choices()
+
   def _has_search_choices(self):
     """
     :return: whether an instance of this class has search_choices set
