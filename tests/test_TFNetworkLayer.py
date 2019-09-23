@@ -685,7 +685,7 @@ def test_compare_layer():
   with make_scope() as session:
     config = Config()
     config.update({
-      "model": "/tmp/model",
+      "model": "/tmp/test-compare-layer-model",
       "num_outputs": 3,
       "num_inputs": 2,
       "network": {

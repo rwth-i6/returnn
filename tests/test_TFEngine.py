@@ -70,6 +70,20 @@ def _get_tmp_file(suffix):
   return fn
 
 
+def _get_tmp_dir():
+  """
+  :return: dirname
+  :rtype: str
+  """
+  import tempfile
+  import shutil
+  import atexit
+  name = tempfile.mkdtemp()
+  assert name and os.path.isdir(name) and not os.listdir(name)
+  atexit.register(lambda: shutil.rmtree(name))
+  return name
+
+
 def _cleanup_old_models(config):
   """
   :param Config config:
@@ -157,7 +171,7 @@ def test_engine_train():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {"output": {"class": "softmax", "loss": "ce"}},
@@ -197,7 +211,7 @@ def test_engine_train_uneven_batches():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
@@ -231,7 +245,7 @@ def test_engine_train_subnet_loss():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
@@ -263,7 +277,7 @@ def test_engine_train_rec_subnet_loss_optimized():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
@@ -296,7 +310,7 @@ def test_engine_train_rec_subnet_loss_non_optimized():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
@@ -330,7 +344,7 @@ def test_engine_train_accum_grad_multiple_step():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {"output": {"class": "softmax", "loss": "ce"}},
@@ -357,7 +371,7 @@ def test_engine_train_accum_grad_multiple_step_sparse():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {"output": {"class": "softmax", "loss": "ce", "from": ["data:classes"]}},
@@ -398,7 +412,7 @@ def test_engine_train_grad_noise_sparse():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
@@ -440,7 +454,7 @@ def test_engine_analyze():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {"output": {"class": "softmax", "loss": "ce"}},
@@ -467,7 +481,7 @@ def test_engine_forward_single():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {"output": {"class": "softmax", "loss": "ce"}}
@@ -495,7 +509,7 @@ def test_engine_forward_to_hdf():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {"output": {"class": "softmax", "loss": "ce"}},
@@ -542,7 +556,7 @@ def test_engine_rec_subnet_count():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
@@ -587,7 +601,7 @@ def test_engine_end_layer(extra_rec_kwargs=None):
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "batch_size": 5000,
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
@@ -655,7 +669,7 @@ def check_engine_search(extra_rec_kwargs=None):
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "batch_size": 5000,
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
@@ -730,7 +744,7 @@ def check_engine_search_attention(extra_rec_kwargs=None):
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "batch_size": 5000,
     "max_seqs": 2,
     "num_outputs": n_classes_dim,
@@ -831,7 +845,7 @@ def check_engine_train_simple_attention(lstm_unit):
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "batch_size": 100,
     "max_seqs": 2,
     "num_outputs": n_classes_dim,
@@ -883,7 +897,7 @@ def test_attention_train_then_search():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "batch_size": 5000,
     "max_seqs": 2,
     "num_outputs": n_classes_dim,
@@ -975,7 +989,7 @@ def test_attention_search_in_train_then_search():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "batch_size": 5000,
     "max_seqs": 2,
     "num_outputs": n_classes_dim,
@@ -1017,7 +1031,7 @@ def test_rec_optim_all_out():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "batch_size": 5000,
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
@@ -1121,7 +1135,7 @@ def test_rec_subnet_train_t3b():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": network,
@@ -1177,7 +1191,7 @@ def test_rec_subnet_train_t3d():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": network,
@@ -1222,7 +1236,7 @@ def test_rec_subnet_train_t3d_simple():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": network,
@@ -1251,7 +1265,7 @@ def deterministic_train_check(layer_opts):
   n_classes_dim = 3
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": network,
@@ -1381,7 +1395,7 @@ def test_rec_subnet_auto_optimize():
     }
     config = Config()
     config.update({
-      "model": "/tmp/model",
+      "model": "%s/model" % _get_tmp_dir(),
       "num_outputs": n_classes_dim,
       "num_inputs": n_data_dim,
       "network": network,
@@ -1712,7 +1726,7 @@ def test_rec_subnet_eval_init_out_apply0():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": network,
@@ -2071,7 +2085,7 @@ def test_TikhonovRegularizationLayer():
   dev_data.init_seq_order(epoch=1)
 
   config = Config({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "batch_size": 100,
     "max_seqs": 2,
     "num_outputs": n_classes_dim,
@@ -2105,7 +2119,7 @@ def test_grad_summaries():
     "network": {
       "output": {"class": "linear", "activation": "tanh", "from": "data", "n_out": 3, "loss": "mse"}
     },
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "batch_size": 100,
     "max_seqs": 2,
     "num_outputs": n_classes_dim,
