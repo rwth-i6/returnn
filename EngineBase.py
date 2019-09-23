@@ -18,8 +18,6 @@ class EngineBase(object):
   Base class for a backend engine, such as :class:`TFEngine.Engine`.
   """
 
-  _epoch_model = None  # type: typing.Optional[typing.Tuple[typing.Optional[int],typing.Optional[str]]]  # get_epoch_model()  # nopep8
-
   def __init__(self):
     self.epoch = 0
     self.pretrain = None  # type: typing.Optional[Pretrain]
@@ -67,10 +65,6 @@ class EngineBase(object):
     :returns (epoch, modelFilename)
     :rtype: (int|None, str|None)
     """
-    # XXX: We cache it, although this is wrong if we have changed the config.
-    if cls._epoch_model:
-      return cls._epoch_model
-
     start_epoch_mode = config.value('start_epoch', 'auto')
     if start_epoch_mode == 'auto':
       start_epoch = None
@@ -134,7 +128,6 @@ class EngineBase(object):
           print("warning: start_epoch %i but there is %s" % (start_epoch, epoch_model), file=log.v4)
         epoch_model = start_epoch - 1, existing_models[start_epoch - 1]
 
-    cls._epoch_model = epoch_model
     return epoch_model
 
   @classmethod
