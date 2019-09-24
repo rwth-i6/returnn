@@ -2975,6 +2975,23 @@ def get_utc_start_time_filename_part():
   return time.strftime("%Y-%m-%d-%H-%M-%S", time.gmtime(start_time))
 
 
+def maybe_make_dirs(dirname):
+  """
+  Creates the directory if it does not yet exist.
+
+  :param str dirname: The path of the directory
+  """
+  import os
+  if not os.path.exists(dirname):
+    try:
+      os.makedirs(dirname)
+    except Exception as exc:
+      print("maybe_create_folder: exception creating dir:", exc)
+      # Maybe a concurrent process, e.g. tf.summary.FileWriter created it in the mean-while,
+      # so then it would be ok now if it exists, but fail if it does not exist.
+      assert os.path.exists(dirname)
+
+
 def log_runtime_info_to_dir(path, config):
   """
   This will write multiple logging information into the path.
@@ -3000,14 +3017,7 @@ def log_runtime_info_to_dir(path, config):
       "TensorFlow: %s" % (describe_tensorflow_version(),),
       "Config files: %s" % (config.files,),
     ]
-    if not os.path.exists(path):
-      try:
-        os.makedirs(path)
-      except Exception as exc:
-        print("log_runtime_info_to_dir: exception creating dir:", exc)
-        # Maybe a concurrent process, e.g. tf.summary.FileWriter created it in the mean-while,
-        # so then it would be ok now if it exists, but fail if it does not exist.
-        assert os.path.exists(path)
+    maybe_make_dirs(path)
     log_fn = "%s/returnn.%s.%s.%i.log" % (path, get_utc_start_time_filename_part(), hostname, os.getpid())
     if not os.path.exists(log_fn):
       with open(log_fn, "w") as f:

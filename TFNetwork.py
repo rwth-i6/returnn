@@ -1371,6 +1371,8 @@ class TFNetwork(object):
     """
     import os
     filename = os.path.abspath(filename)  # TF needs absolute path
+    from Util import maybe_make_dirs
+    maybe_make_dirs(os.path.dirname(filename))
     if not self.saver:
       self._create_saver()
     # We add some extra logic to try again for DiskQuota and other errors.
