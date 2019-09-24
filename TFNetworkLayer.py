@@ -2036,10 +2036,15 @@ class CopyLayer(_ConcatInputLayer):
     :param int|None|NotSpecified n_out:
     :rtype: Data
     """
-    if out_type or n_out is not NotSpecified:
-      return super(CopyLayer, cls).get_out_data_from_opts(
-        name=name, out_type=out_type, n_out=n_out, sources=sources, **kwargs)
+    # If all sources are defined, use them to get the exact out_type.
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    if out.undefined:
+      # Otherwise use given out_type information and resort to generic base method.
+      if out_type or n_out is not NotSpecified:
+        out = super(CopyLayer, cls).get_out_data_from_opts(
+          name=name, out_type=out_type, n_out=n_out, sources=sources, **kwargs)
+    elif n_out is not NotSpecified:
+      assert out.dim == n_out, "Given n_out conflicts with source dimensions."
     out.beam = SearchBeam.get_combined_beam(out.beam, *[dep.output.beam for dep in extra_deps if dep])
     return out
 
