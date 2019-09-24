@@ -8,6 +8,7 @@ from __future__ import print_function
 import tensorflow as tf
 import typing
 from tensorflow.python.ops.nn import rnn_cell
+from TFNetwork import LayerNotFound
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template, Loss
 from TFUtil import Data, SearchBeam, reuse_name_scope, get_random_seed, select_src_beams
 from Util import NotSpecified
@@ -293,7 +294,6 @@ class RecLayer(_ConcatInputLayer):
           # We only need this to resolve any other layer dependencies in the main network.
           cl.transform_config_dict(sub.copy(), network=subnet, get_layer=sub_get_layer)
     if isinstance(d.get("max_seq_len"), str):
-      from TFNetwork import LayerNotFound
 
       def max_len_from(src):
         """
@@ -2216,10 +2216,10 @@ class _SubnetworkRecCell(object):
       [tf.TensorShape(None) for _ in init_acc_tas])
     if not have_known_seq_len:
       # See body().
-      out_batch_dim = self.layer_data_templates["end"].get_batch_dim()
+      end_layer_batch_dim = self.layer_data_templates["end"].get_batch_dim()
       init_seq_len_info = (
-        constant_with_shape(False, shape=[out_batch_dim], name="initial_end_flag"),
-        constant_with_shape(0, shape=[out_batch_dim], name="initial_seq_len"))
+        constant_with_shape(False, shape=[end_layer_batch_dim], name="initial_end_flag"),
+        constant_with_shape(0, shape=[end_layer_batch_dim], name="initial_seq_len"))
       init_loop_vars += (init_seq_len_info,)
       shape_invariants += ((tf.TensorShape([None]), tf.TensorShape([None])),)
     if self.layers_in_loop:
@@ -2352,7 +2352,7 @@ class _SubnetworkRecCell(object):
 
     return output, output_search_choices
 
-  def _opt_search_resolve(self, layer_name, acc_ta, final_net_vars):
+  def _opt_search_resolve(self, layer_name, acc_ta, final_net_vars, seq_len):
     """
     This assumes that we have frame-wise accumulated outputs of the specific layer (acc_ta).
     If that layer depends on frame-wise search choices, i.e. if the batch dim includes a search beam,
@@ -2360,27 +2360,30 @@ class _SubnetworkRecCell(object):
     then we will resolve that to the common final best search choices,
     which is determined by the latest search choice given by the layer.
     This assumes that we also have `self.final_acc_tas_dict["choice_%s" % choice_base.name]` available.
+    In addition, we resolve the sequence lengths (whose beams correspond to the end layer) to the final search choices.
 
     :param str layer_name:
     :param tf.TensorArray acc_ta: accumulated outputs of that layer
     :param final_net_vars:
-    :return: (new acc_ta, final search choices)
-    :rtype: (tf.TensorArray,SearchChoices|None)
+    :param tf.Tensor seq_len: shape (batch * beam,), has beam of the "end" layer in case of dynamic sequence lengths,
+      otherwise beam of rec_layer.output
+    :return: (new acc_ta, final search choices, resolved seq_len)
+    :rtype: (tf.TensorArray,SearchChoices|None,tf.Tensor)
     """
     import os
     from TFUtil import nd_indices, assert_min_tf_version, expand_dims_unbroadcast, get_valid_scope_name_from_str
     from TFUtil import get_shape_dim
-    from TFNetwork import LayerNotFound
     rec_layer = self.parent_rec_layer
     try:
       layer = self.net.get_layer(layer_name)
     except LayerNotFound:  # layer is not inside loop
-      return acc_ta, None
-    layer_choice = self.net.get_search_choices(src=layer)
-    if not layer_choice:
-      return acc_ta, None
-    if layer_choice.search_choices.keep_raw:
-      return acc_ta, layer_choice.search_choices
+      return acc_ta, None, seq_len
+    search_choices = layer.get_search_choices()
+    if not search_choices:
+      return acc_ta, None, seq_len
+    if search_choices.keep_raw:
+      return acc_ta, search_choices, seq_len
+    layer_choice = search_choices.owner
     is_prev_choice = False
     if isinstance(layer_choice, _TemplateLayer):
       assert layer_choice.is_prev_time_frame
@@ -2418,11 +2421,11 @@ class _SubnetworkRecCell(object):
     latest_layer_choice = self.net.layers[latest_layer_choice.name[len("prev:"):]]
     assert latest_layer_choice.search_choices
 
-    # The seq_len might actually be one more, as it includes the EOS, but that does not matter;
+    # The max_seq_len might actually be one more, as it includes the EOS, but that does not matter;
     # we just want to create a new acc_ta with the same length.
     # (Cutting off the EOS is handled elsewhere.)
-    seq_len = acc_ta.size()
-    initial_i = tf.identity(seq_len - 1, name="search_resolve_initial_i")  # we go backwards
+    max_seq_len = acc_ta.size()
+    initial_i = tf.identity(max_seq_len - 1, name="search_resolve_initial_i")  # we go backwards
     latest_beam_size = latest_layer_choice.output.beam.beam_size
     batch_dim = rec_layer.network.get_data_batch_dim()
 
@@ -2435,11 +2438,45 @@ class _SubnetworkRecCell(object):
     assert prev_frame_choice.name == "prev:%s" % latest_layer_choice.name
     assert layer_choice in choice_seq_in_frame
 
+    # Translate the beams of seq_lens to correspond to the latest choice
+    try:
+      end_layer = self.net.get_layer("end")
+    except LayerNotFound:
+      # This means have_known_seq_len=True.
+      end_layer = None
+
+    if end_layer:
+      end_layer_choice = self.net.get_search_choices(src=end_layer)
+      assert end_layer_choice in choice_seq_in_frame, (
+        "End layer must not have a beam independent from output layer '{}'.".format(layer_name))
+
+      end_layer_choice_index = choice_seq_in_frame.index(end_layer_choice)
+      choices_seq_until_end_layer = choice_seq_in_frame[:end_layer_choice_index]
+
+      for choice_ in reversed(choices_seq_until_end_layer):
+        src_choice_beams = self.final_acc_tas_dict["choice_%s" % choice_.name].read(
+          max_seq_len - 1, name="ta_read_choice")  # (batch, beam) -> beam_in idx
+        seq_len = select_src_beams(seq_len, src_choice_beams)
+    else:
+      # Here we don't need to resolve anything, as the sequence length is the same for all hyps in the beam.
+      # However, beam size for the current output may be different from the "output" layer.
+      # Therefore take the first len in the beam and tile it to the desired beam size.
+
+      # Separate batch and beam dims
+      seq_len_beam_size = rec_layer.output.beam.beam_size
+      seq_len = tf.reshape(seq_len, [batch_dim, seq_len_beam_size], name="split_batch_beam")
+
+      seq_len = seq_len[:, 0:1]
+      seq_len = tf.tile(seq_len, [1, latest_beam_size], name="resize_seq_len_beam")
+
+      # Recombine batch and beam dims
+      seq_len = tf.reshape(seq_len, [batch_dim * latest_beam_size], name="merge_batch_beam")
+
     new_acc_output_ta = tf.TensorArray(
       name="search_resolved_%s" % os.path.basename(acc_ta.handle.op.name),
       dtype=layer.output.dtype,
       element_shape=tf.TensorShape(layer.output.batch_shape),
-      size=seq_len,
+      size=max_seq_len,
       infer_shape=True)
 
     def transform(i, idxs_exp, new_acc_output_ta_):
@@ -2475,7 +2512,7 @@ class _SubnetworkRecCell(object):
       This loops goes backwards through time.
       Similar to tf.contrib.seq2seq.GatherTree.
 
-      :param tf.Tensor i: starts at seq_len - 1
+      :param tf.Tensor i: starts at max_seq_len - 1
       :param tf.Tensor choice_beams: from the previous step, shape (batch, beam_out) -> beam idx,
         just before prev_frame_choice
       :param tf.TensorArray|None new_acc_output_ta_: shape (batch * beam, n_out) per frame
@@ -2533,7 +2570,7 @@ class _SubnetworkRecCell(object):
       beam_choices = tf.zeros_like(final_beam_choices)
       with tf.name_scope("search_resolve_first_frame"):
         new_acc_output_ta = tf.cond(
-          tf.less(0, seq_len),
+          tf.less(0, max_seq_len),
           lambda: transform(0, nd_indices(beam_choices), new_acc_output_ta),
           lambda: new_acc_output_ta)
 
@@ -2545,7 +2582,7 @@ class _SubnetworkRecCell(object):
       layer_name=latest_layer_choice.name)
     acc_search_choices.set_beam_from_rec(final_choice_rec_vars)
 
-    return new_acc_output_ta, acc_search_choices
+    return new_acc_output_ta, acc_search_choices, seq_len
 
   def _input_layer_used_inside_loop(self, layer_name):
     """
@@ -2804,10 +2841,8 @@ class _SubnetworkRecCell(object):
     from TFNetworkLayer import InternalLayer
 
     if seq_len is not None:
-      max_len = tf.reduce_max(seq_len)
       time_dim_tag = DimensionTag.get_tag_from_size_tensor(seq_len)
     else:
-      max_len = None
       time_dim_tag = None
     self.output_layers_net = TFNetwork(
       name="%s/%s:rec-subnet-output" % (
@@ -2838,16 +2873,14 @@ class _SubnetworkRecCell(object):
       with tf.name_scope(self.layer_data_templates[name].layer_class_type.cls_get_tf_scope_name(name)):
         inner_layer = self.net.get_layer(name)
         acc_ta = loop_accumulated["output_%s" % name]
-        if inner_layer.get_search_choices() is None:
-          search_choices = None
-        else:
-          acc_ta, search_choices = self._opt_search_resolve(
-            layer_name=name, acc_ta=acc_ta, final_net_vars=final_net_vars)
+        acc_ta, search_choices, resolved_seq_len = self._opt_search_resolve(
+          layer_name=name, acc_ta=acc_ta, final_net_vars=final_net_vars, seq_len=seq_len)
         output = self.layer_data_templates[name].output.copy_template_adding_time_dim(time_dim_axis=0)
         output.beam = search_choices.get_beam_info() if search_choices else None
+        max_len = tf.reduce_max(resolved_seq_len)
         # We should have accumulated it.
         output.placeholder = tensor_array_stack(acc_ta, stop=max_len)  # e.g. (time,batch,dim)
-        output.size_placeholder = {0: seq_len}
+        output.size_placeholder = {0: resolved_seq_len}
         if search_choices and search_choices.keep_raw:
           if output.beam != self.parent_rec_layer.output.beam:
             # TODO this is not quite correct...
@@ -2855,16 +2888,8 @@ class _SubnetworkRecCell(object):
             if output.beam.beam_size % self.parent_rec_layer.output.beam.beam_size == 0:
               output.size_placeholder[0] = tile_transposed(
                 seq_len, axis=0, multiples=output.beam.beam_size // self.parent_rec_layer.output.beam.beam_size)
-              if time_dim_tag:
-                time_dim_tag.set_tag_on_size_tensor(output.size_placeholder[0])
-        elif output.beam:
-          if self.parent_rec_layer.output.beam:
-            # seq_len should have already a beam, same as rec_layer.output
-            assert output.beam == self.parent_rec_layer.output.beam
-          else:
-            output.size_placeholder[0] = tile_transposed(seq_len, axis=0, multiples=output.beam.beam_size)
-            if time_dim_tag:
-              time_dim_tag.set_tag_on_size_tensor(output.size_placeholder[0])
+        if time_dim_tag:
+          time_dim_tag.set_tag_on_size_tensor(output.size_placeholder[0])
         if inner_layer.output.size_placeholder:
           for i, size in inner_layer.output.size_placeholder.items():
             tag = DimensionTag.get_tag_from_size_tensor(size)
