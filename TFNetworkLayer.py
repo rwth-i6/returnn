@@ -291,7 +291,7 @@ class LayerBase(object):
           else:  # None
             if out_type.get("dim", None) is None:
               out_type.setdefault("feature_dim_axis", None)
-      elif network.is_inside_rec_layer():
+      elif network.is_inside_rec_layer() and None not in out_type.get("shape", ()):
         out_type.setdefault("time_dim_axis", None)
     if "shape" not in out_type:
       if sources_data:
