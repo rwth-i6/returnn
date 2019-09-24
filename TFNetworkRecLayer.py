@@ -2368,6 +2368,7 @@ class _SubnetworkRecCell(object):
     import os
     from TFUtil import nd_indices, assert_min_tf_version, expand_dims_unbroadcast, get_valid_scope_name_from_str
     from TFUtil import get_shape_dim
+    from TFNetwork import LayerNotFound
     rec_layer = self.parent_rec_layer
     try:
       layer = self.net.get_layer(layer_name)
