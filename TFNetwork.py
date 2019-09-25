@@ -247,6 +247,7 @@ class _NetworkConstructionStack:
             return res
           queue.pop(-1)
         except _DelayedConstructionException as delayed_exc:
+          assert delayed_exc not in queue
           queue.append(delayed_exc)
     finally:
       self.in_flat_construct_count -= 1
@@ -2235,6 +2236,21 @@ class _DelayedConstructionException(Exception):
 
   def __repr__(self):
     return "%s(layer_name=%r)" % (self.__class__.__name__, self.layer_name)
+
+  def __hash__(self):
+    return hash((self.network, self.layer_name))
+
+  def __eq__(self, other):
+    """
+    :param _DelayedConstructionException|object other:
+    :rtype: bool
+    """
+    if not isinstance(other, _DelayedConstructionException):
+      return False
+    return self.network is other.network and self.layer_name == other.layer_name
+
+  def __ne__(self, other):
+    return not self == other
 
   def delayed_construction(self):
     """
