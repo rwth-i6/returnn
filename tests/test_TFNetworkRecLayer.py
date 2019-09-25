@@ -1038,6 +1038,77 @@ def test_GradOfLstmGenericBase_simple_nan():
     print("All ok!")
 
 
+def test_rec_flat_net_construction():
+  config = Config()
+  n_in, n_out = 7, 3
+  config.update({
+    "extern_data": {
+      "data": (n_in, 2),
+      "classes": (n_out, 1),
+    },
+    #"flat_net_construction": True,  # TODO...
+    "debug_print_layer_output_template": True,
+  })
+  print("Creating network...")
+  with tf.Graph().as_default():
+    network = TFNetwork(config=config, train_flag=True, search_flag=True)
+
+    net_dict = {
+      "pre0": {"class": "linear", "activation": "tanh", "from": "data:source", "n_out": 10},
+      "pre1": {"class": "linear", "activation": "tanh", "from": "pre0", "n_out": 10},
+      "pre0_base": {"class": "linear", "activation": "tanh", "from": "base:encoder", "n_out": 10},
+      "pre1_base": {"class": "combine", "kind": "add", "from": ["pre0_base", "pre1"]},
+      "pre2_base": {"class": "reduce", "axis": "t", "mode": "max", "from": "pre1_base"},
+      "pre0_prev": {"class": "linear", "activation": "tanh", "from": "prev:output", "n_out": 10},
+      "pre2": {"class": "combine", "kind": "add", "from": ["pre1", "pre2_base", "pre0_prev"]},
+    }
+    layer_common_args = {"class": "copy"}
+
+    def layer(sources, **kwargs):
+      args = kwargs.copy()
+      for k, v in layer_common_args.items():
+        args.setdefault(k, v)
+      args.setdefault("from", sources)
+      return args
+
+    def make_network(num_layers):
+      sources = ["pre2"]
+      for i in range(num_layers):
+        net_dict["layer%i" % i] = layer(sources=sources)
+        sources = ["layer%i" % i]
+      net_dict["output_prob"] = {"class": "softmax", "from": sources, "loss": "ce", "target": "classes"}
+      net_dict["output"] = {
+        'class': 'choice', 'target': "classes",
+        'beam_size': 3, 'from': "output_prob", "initial_output": 0}
+    make_network(num_layers=10)
+    net_dict = {
+      "enc0": {"class": "linear", "activation": "tanh", "from": "data", "n_out": 10},
+      "encoder": {"class": "linear", "activation": "tanh", "from": "enc0", "n_out": 10},
+      "decoder": {"class": "rec", "from": "data", "unit": net_dict, "target": "classes"},
+      "output": {"class": "softmax", "loss": "ce", "from": "decoder"}}
+    network.construct_from_dict(net_dict)
+    data_input = network.extern_data.get_default_input_data()
+    data_target = network.extern_data.get_default_target_data()
+    optimizer = tf.train.AdamOptimizer()
+    network.maybe_construct_objective()
+    update_op = optimizer.minimize(network.get_objective())
+    n_batch = 5
+    n_time = 11
+    rnd = numpy.random.RandomState(42)
+    with tf.Session() as session:
+      session.run(tf.global_variables_initializer())
+      for step in range(5):
+        info, _ = session.run(
+          (network.get_fetches_dict(), update_op),
+          feed_dict={
+            data_input.placeholder: rnd.normal(size=(n_batch, n_time, n_in)).astype("float32"),
+            data_input.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),
+            data_target.placeholder: rnd.randint(0, n_out, size=(n_batch, n_time), dtype="int32"),
+            data_target.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),
+          })
+        print("step:", step, "info:", info)
+
+
 def test_rec_RecStepInfoLayer():
   n_batch = 1
   n_time = 3
