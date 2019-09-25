@@ -6185,9 +6185,9 @@ class CondLayer(LayerBase):
     self.condition_desc = condition
     self.condition_layer = self._make_layer(self.condition_desc)
     self.true_layer_desc = true_layer
-    self.true_layer_layer = None  # type: typing.Optional[LayerBase]
+    self.true_layer = None  # type: typing.Optional[LayerBase]
     self.false_layer_desc = false_layer
-    self.false_layer_layer = None  # type: typing.Optional[LayerBase]
+    self.false_layer = None  # type: typing.Optional[LayerBase]
     assert self.condition_layer.output.batch_ndim == 0 and self.condition_layer.output.dtype == "bool"
     x, sizes = tf.cond(
       pred=self.condition_layer.output.placeholder,
@@ -6218,12 +6218,12 @@ class CondLayer(LayerBase):
     return out.placeholder, [out.size_placeholder[i] for i in sorted(out_template.size_placeholder.keys())]
 
   def _true_fn(self):
-    self.true_layer_layer = self._make_layer(self.true_layer_desc)
-    return self._cond_layer_return(self.true_layer_layer)
+    self.true_layer = self._make_layer(self.true_layer_desc)
+    return self._cond_layer_return(self.true_layer)
 
   def _false_fn(self):
-    self.false_layer_layer = self._make_layer(self.false_layer_desc)
-    return self._cond_layer_return(self.false_layer_layer)
+    self.false_layer = self._make_layer(self.false_layer_desc)
+    return self._cond_layer_return(self.false_layer)
 
   def _make_layer(self, layer_desc):
     """
@@ -6236,12 +6236,13 @@ class CondLayer(LayerBase):
     layer_class = layer_desc.pop("class")
     assert issubclass(layer_class, LayerBase)
     from TFUtil import reuse_name_scope
-    with reuse_name_scope(self._parent_scope):
+    with reuse_name_scope(self._parent_scope, absolute=True):
       # noinspection PyProtectedMember
       layer = self.network._create_layer(
         name=self.name,  # use our name, such that we get the same name space
         layer_class=layer_class,
         **layer_desc)
+    self.params.update(layer.params)
     return layer
 
   @classmethod
