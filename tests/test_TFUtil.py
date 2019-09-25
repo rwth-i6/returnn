@@ -1250,10 +1250,18 @@ def test_reuse_name_scope_of_tensor_root():
 
 
 def test_loop_var_creation():
-  # Related TF bugs:
-  # https://github.com/tensorflow/tensorflow/issues/3114
-  # https://github.com/tensorflow/tensorflow/issues/4478
-  # https://github.com/tensorflow/tensorflow/issues/8604
+  """
+  test_loop_var_creation
+
+  TF error:
+  InvalidArgumentError: The node 'while/w/Assign' has inputs from different frames.
+  The input 'while/j' is in frame 'while/while/'. The input 'while/w' is in frame ''.
+
+  Related TF bugs:
+  https://github.com/tensorflow/tensorflow/issues/3114
+  https://github.com/tensorflow/tensorflow/issues/4478
+  https://github.com/tensorflow/tensorflow/issues/8604
+  """
 
   # tf.reset_default_graph()  # Strange, this does not work.
   i = tf.constant(0)
