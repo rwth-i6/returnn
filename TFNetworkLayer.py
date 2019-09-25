@@ -696,6 +696,11 @@ class LayerBase(object):
   def var_creation_scope(self, **kwargs):
     """
     This takes care of setting up a scope where variables can be created.
+    This handles multiple things:
+
+     * the param sharing logic, to reuse existing variables from elsewhere
+     * variational noise
+     * Note: :func:`default_control_flow_ctx` should not be needed, as tf.get_variable should always work
 
     :param kwargs: passed to variable_scope
     :return: yields the variable_scope
