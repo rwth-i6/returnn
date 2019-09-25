@@ -8838,9 +8838,9 @@ def py_print(pass_through_value, print_args, message=None, summarize=None, first
   :param tf.Tensor|int|float pass_through_value: will return tf.identity of this, but with side effect of printing
   :param list[str|tf.Tensor] print_args:
   :param str|None message: A string, prefix of the error message.
-  :param int summarize: Only print this many entries of each tensor. If None, then a
+  :param int|None summarize: Only print this many entries of each tensor. If None, then a
     maximum of 3 elements are printed per input tensor.
-  :param int first_n: Only log `first_n` number of times. Negative numbers log always; this is the default.
+  :param int|None first_n: Only log `first_n` number of times. Negative numbers log always; this is the default.
   :param str name:
   :return: tf.identity(pass_through_value) with side effect of printing
   :rtype: tf.Tensor
@@ -8851,7 +8851,7 @@ def py_print(pass_through_value, print_args, message=None, summarize=None, first
     summarize = 3
   if first_n is None:
     first_n = -1
-  np_a2s_kwargs = dict(formatter={"int": str, "object": bytes.decode}, edgeitems=summarize)
+  np_a2s_kwargs = dict(formatter={"int": str, "object": bytes.decode}, edgeitems=summarize, threshold=summarize)
   if NumpyVersion(numpy.__version__) <= NumpyVersion('1.11.3'):
     # Seems some older Numpy versions don't support this.
     del np_a2s_kwargs["edgeitems"]
