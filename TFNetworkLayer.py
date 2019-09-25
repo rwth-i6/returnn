@@ -738,13 +738,14 @@ class LayerBase(object):
       # Only apply this if we get a variable. Otherwise, maybe variational noise was already applied
       # (by some parent var scope), and we don't want to apply it twice.
       if param_variational_noise and param.dtype.is_floating and isinstance(param, tf.Variable):
-        with tf.name_scope("param_variational_noise"):
-          param = self.network.cond_on_train(
-            fn_train=lambda: param + tf.random_normal(
-              tf.shape(param), dtype=param.dtype.base_dtype,
-              stddev=param_variational_noise,
-              seed=self.network.random.randint(2 ** 31)),
-            fn_eval=lambda: param)
+        with TFUtil.default_control_flow_ctx():  # make independent from loop/cond
+          with TFUtil.reuse_name_scope_of_tensor(param, postfix="_variational_noise", add_tensor_name=True):
+            param = self.network.cond_on_train(
+              fn_train=lambda: param + tf.random_normal(
+                tf.shape(param), dtype=param.dtype.base_dtype,
+                stddev=param_variational_noise,
+                seed=self.network.random.randint(2 ** 31)),
+              fn_eval=lambda: param)
 
       return param
 
