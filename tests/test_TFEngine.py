@@ -1020,6 +1020,149 @@ def test_attention_search_in_train_then_search():
   engine.finalize()
 
 
+def check_train_and_search_two_targets(net_dict):
+  """
+  Tests training and search for network architectures having two targets ("classes_0", "classes_1")
+  and two corresponding output layers ("decision_0", "decision_1").
+  """
+  from MetaDataset import MetaDataset
+  from TFUtil import DimensionTag
+  from test_HDFDataset import generate_hdf_from_other
+
+  n_data_dim = 2
+  n_classes_dim_0 = 7
+  n_classes_dim_1 = 8
+
+  data_0 = {"class": "DummyDataset", "input_dim": n_data_dim, "output_dim": n_classes_dim_0,
+    "num_seqs": 2, "seq_len": 5}
+  data_0 = generate_hdf_from_other(data_0)
+  data_1 = {"class": "DummyDataset", "input_dim": n_data_dim, "output_dim": n_classes_dim_1,
+    "num_seqs": 2, "seq_len": 5}
+  data_1 = generate_hdf_from_other(data_1)
+
+  data = MetaDataset(datasets={"data_0": data_0, "data_1": data_1},
+    data_map={
+      "data": ("data_1", "data"),
+      "classes_0": ("data_0", "classes"),
+      "data_1": ("data_1", "data"),
+      "classes_1": ("data_1", "classes")},
+  )
+  data.init_seq_order()
+
+  dec_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="dec time")
+
+  config = Config()
+  config.update({
+    "model": "%s/model" % _get_tmp_dir(),
+    "batch_size": 5000,
+    "max_seqs": 2,
+    "extern_data": {"data": {"dim": n_data_dim, "sparse": False},
+      "classes_0": {"dim": n_classes_dim_0, "sparse": True, "same_dim_tags_as": {"t": dec_time}},
+      "classes_1": {"dim": n_classes_dim_1, "sparse": True, "same_dim_tags_as": {"t": dec_time}},
+    },
+    "num_epochs": 1,
+    "network": net_dict,
+    "debug_print_layer_output_template": True,
+  })
+  _cleanup_old_models(config)
+  engine = Engine(config=config)
+  print("Train...")
+  engine.init_train_from_config(config=config, train_data=data, dev_data=None)
+  engine.train()
+
+  print("Search...")
+  engine.use_search_flag = True
+  engine.use_dynamic_train_flag = False
+  engine.init_network_from_config(config)
+  engine.search(dataset=data, output_layer_names=["decision_0", "decision_1"])
+  assert engine.network.total_objective is not None
+  assert "decision_0" in engine.network.losses_dict
+  assert "decision_1" in engine.network.losses_dict
+
+  engine.finalize()
+
+
+def test_attention_two_targets():
+  """
+  Tests training and search when using a ChoiceLayer with two targets.
+  """
+  net_dict = {
+    "encoder": {"class": "linear", "activation": "tanh", "n_out": 5},
+    "output": {
+      "class": "rec",
+      "from": [],
+      "target": "classes_1", "max_seq_len": 10,
+      "unit": {
+        "end": {"class": "compare", "from": ["output_0"], "value": 0},
+        "orth_embed_0": {'class': 'linear', 'activation': None, 'from': ['output_0'], "n_out": 7},
+        "orth_embed_1": {'class': 'linear', 'activation': None, 'from': ['output_1'], "n_out": 7},
+        "orth_embed": {"class": "copy", "from": ["orth_embed_0", "orth_embed_1"]},
+        "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:c", "prev:orth_embed"], "n_out": 7},
+        "c_in": {"class": "linear", "activation": "tanh", "from": ["s", "prev:orth_embed"], "n_out": 5},
+        "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:encoder", "base_ctx": "base:encoder"},
+        "output_prob_0": {"class": "softmax", "from": ["prev:s", "c"], "target": "classes_0", "loss": "ce"},
+        "output_prob_1": {"class": "softmax", "from": ["prev:s", "c"], "target": "classes_1", "loss": "ce"},
+        "output": {'class': 'choice', 'target': ['classes_0', "classes_1"], 'beam_size': 4,
+          'from': ["output_prob_0", "output_prob_1"], "source_beam_sizes": [2, 6]},
+
+        "output_0": {"class": "copy", "from": ["output/out_0"], "is_output_layer": True},
+        "output_1": {"class": "copy", "from": ["output/out_1"], "is_output_layer": True},
+      },
+    },
+    "output_0": {"class": "copy", "from": ["output/output_0"], "target": "classes_0"},
+    "output_1": {"class": "copy", "from": ["output/output_1"], "target": "classes_1"},
+
+    "decision_0": {"class": "decide", "from": ["output_0"], "loss": "edit_distance", "target": "classes_0"},
+    "decision_1": {"class": "decide", "from": ["output_1"], "loss": "edit_distance", "target": "classes_1"},
+  }
+
+  check_train_and_search_two_targets(net_dict=net_dict)
+
+
+def test_attention_two_dependent_targets():
+  """
+  Tests training and search when having two ChoiceLayers in the loop that depend on each other.
+  Note, there will be different beam sizes in different parts of the recurrent unit.
+  """
+  beam_size_0 = 5
+  beam_size_1 = 3
+
+  net_dict = {
+    "encoder": {"class": "linear", "activation": "tanh", "n_out": 5},
+    "output": {
+      "class": "rec",
+      "from": [],
+      "target": "classes_1", "max_seq_len": 10,
+      "unit": {
+        "end": {"class": "compare", "from": ["output_0"], "value": 0},
+        "orth_embed_0": {'class': 'linear', 'activation': None, 'from': ['output_0'], "n_out": 7},
+        "orth_embed_1": {'class': 'linear', 'activation': None, 'from': ['output_1'], "n_out": 7},
+        "orth_embed": {"class": "copy", "from": ["orth_embed_0", "orth_embed_1"]},
+        "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:c", "prev:orth_embed"], "n_out": 7},
+        "c_in": {"class": "linear", "activation": "tanh", "from": ["s", "prev:orth_embed"], "n_out": 5},
+        "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:encoder", "base_ctx": "base:encoder"},
+        "output_prob_0": {"class": "softmax", "from": ["prev:s", "c"], "target": "classes_0", "loss": "ce"},
+        "output_prob_1": {"class": "softmax", "from": ["prev:s", "c", "orth_embed_0"],
+          "target": "classes_1", "loss": "ce"},
+        # Important for real experiments: apply length normalization only once (in last choice layer).
+        "output_0": {'class': 'choice', 'target': 'classes_0', 'beam_size': beam_size_0, 'from': "output_prob_0",
+          "is_output_layer": True, "length_normalization": False},
+        "output_1": {'class': 'choice', 'target': 'classes_1', 'beam_size': beam_size_1, 'from': "output_prob_1",
+          "is_output_layer": True},
+
+        "output": {"class": "copy", "from": "output_1"},
+      },
+    },
+    "output_0": {"class": "copy", "from": ["output/output_0"], "target": "classes_0"},
+    "output_1": {"class": "copy", "from": ["output/output_1"], "target": "classes_1"},
+
+    "decision_0": {"class": "decide", "from": ["output_0"], "loss": "edit_distance", "target": "classes_0"},
+    "decision_1": {"class": "decide", "from": ["output_1"], "loss": "edit_distance", "target": "classes_1"},
+  }
+
+  check_train_and_search_two_targets(net_dict=net_dict)
+
+
 def test_rec_optim_all_out():
   from GeneratingDataset import DummyDataset
   from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
