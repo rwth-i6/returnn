@@ -7833,6 +7833,14 @@ def nested_get_shapes(x):
   raise TypeError("invalid type %r of %r" % (type(x), x))
 
 
+def get_current_control_flow_context():
+  """
+  :rtype: tensorflow.python.ops.control_flow_ops.ControlFlowContext|None
+  """
+  # noinspection PyProtectedMember
+  return tf.get_default_graph()._get_control_flow_context()
+
+
 def _get_control_flows(v, yield_none):
   """
   :param tf.Tensor|tf.Operation|int|float|None|list[tf.Tensor|tf.Operation|int|float] v:
