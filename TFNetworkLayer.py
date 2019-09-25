@@ -7068,14 +7068,23 @@ class PrintLayer(LayerBase):
   """
   layer_class = "print"
 
-  def __init__(self, **kwargs):
+  def __init__(self, summarize=99, extra_print_args=(), **kwargs):
+    """
+    :param int|None summarize: passed to :func:`py_print`
+    :param list|tuple extra_print_args:
+    """
     super(PrintLayer, self).__init__(**kwargs)
     from TFUtil import py_print
     with tf.name_scope("print_layer"):
       source = self.sources[0]
-      output = py_print(source.output.placeholder, [source.output.placeholder], kwargs["name"], summarize=99)
-      self.network.register_post_control_dependencies([output])
-      self.output.placeholder = output
+      print_args = [self.__class__.__name__, self.name]
+      print_args.append(source.output.placeholder)
+      print_args.extend(extra_print_args)
+      output = py_print(source.output.placeholder, print_args, summarize=summarize)
+      if not TFUtil.get_current_control_flow_context():  # Only possible to globally register if not in cond/loop.
+        self.network.register_post_control_dependencies([output])
+      with tf.control_dependencies([output]):
+        self.output.placeholder = tf.identity(source.output.placeholder)
       self.output.size_placeholder = source.output.size_placeholder.copy()
 
   @classmethod
