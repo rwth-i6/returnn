@@ -5216,78 +5216,87 @@ def filter_grad(x, threshold, axis):
     return y
 
 
+def _indexed_slices_repr(x):
+  """
+  :param tf.IndexedSlices x:
+  :rtype: str
+  """
+  from tensorflow.python.framework import tensor_util
+  dense_shape = tensor_util.constant_value_as_shape(x.dense_shape)
+  return "<tf.IndexedSlices %r dense_shape=%r dtype=%r>" % (x.name, dense_shape, x.dtype)
+
+
+def _op_repr(x):
+  """
+  :param tf.Operation x:
+  :rtype: str
+  """
+  extra = ""
+  if x.type == "Const":
+    from tensorflow.python.framework import tensor_util
+    extra += " value=%s" % (tensor_util.constant_value(x.outputs[0]),)
+  return "<tf.Operation %r type=%s%s>" % (x.name, x.type, extra)
+
+
+def _var_repr(x):
+  """
+  :param tf.Variable x:
+  :rtype: str
+  """
+  return "<tf.Variable %r shape=%s initial_value=%r>" % (x.op.name, x.shape, x.initial_value)
+
+
+def _tensorarray_repr(x):
+  """
+  :param tf.TensorArray x:
+  :rtype: str
+  """
+  op = x.handle.op
+  assert isinstance(op, tf.Operation)
+  return "<tf.TensorArray %r>" % op.name
+
+
+def _variablescope_repr(x):
+  """
+  :param tf.VariableScope x:
+  :rtype: str
+  """
+  return "<tf.VariableScope %r>" % x.name
+
+
+def _saveable_repr(x):
+  """
+  :param tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject x:
+  :rtype: str
+  """
+  return "<tf..%s op=%r, specs=%r, name=%r>" % (x.__class__.__name__, x.op, x.specs, x.name)
+
+
+def _savespec_repr(x):
+  """
+  :param tensorflow.python.training.saver.BaseSaverBuilder.SaveSpec x:
+  :rtype: str
+  """
+  return "<tf..%s tensor=%r, slice_spec=%r, name=%r>" % (x.__class__.__name__, x.tensor, x.slice_spec, x.name)
+
+
 def debug_register_better_repr():
   """
   Some types don't have good __repr__ implementations by default (for the current TF version).
   For debugging, it can be helpful to give some more info.
-  This monkey-patches clazz.__repr__ of some TF classes if they are object.__repr__.
+  This monkey-patches clazz.__repr__ of some TF classes.
   """
-
-  from tensorflow.python.framework import tensor_util
   from tensorflow.python.training import saver
 
-  def indexed_slices_repr(x):
-    """
-    :param tf.IndexedSlices x:
-    :rtype: str
-    """
-    dense_shape = tensor_util.constant_value_as_shape(x.dense_shape)
-    return "<tf.IndexedSlices %r dense_shape=%r dtype=%r>" % (x.name, dense_shape, x.dtype)
-
-  def op_repr(x):
-    """
-    :param tf.Operation x:
-    :rtype: str
-    """
-    return "<tf.Operation %r type=%r inputs=%r>" % (x.name, x.type, list(x.inputs))
-
-  def var_repr(x):
-    """
-    :param tf.Variable x:
-    :rtype: str
-    """
-    return "<tf.Variable %r initial_value=%r>" % (x.name, x.initial_value)
-
-  def tensorarray_repr(x):
-    """
-    :param tf.TensorArray x:
-    :rtype: str
-    """
-    op = x.handle.op
-    assert isinstance(op, tf.Operation)
-    return "<tf.TensorArray %r>" % op.name
-
-  def variablescope_repr(x):
-    """
-    :param tf.VariableScope x:
-    :rtype: str
-    """
-    return "<tf.VariableScope %r>" % x.name
-
-  def saveable_repr(x):
-    """
-    :param tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject x:
-    :rtype: str
-    """
-    return "<tf..%s op=%r, specs=%r, name=%r>" % (x.__class__.__name__, x.op, x.specs, x.name)
-
-  def savespec_repr(x):
-    """
-    :param tensorflow.python.training.saver.BaseSaverBuilder.SaveSpec x:
-    :rtype: str
-    """
-    return "<tf..%s tensor=%r, slice_spec=%r, name=%r>" % (x.__class__.__name__, x.tensor, x.slice_spec, x.name)
-
   for cl, f in [
-        (tf.IndexedSlices, indexed_slices_repr),
-        (tf.Operation, op_repr),
-        (tf.Variable, var_repr),
-        (tf.TensorArray, tensorarray_repr),
-        (tf.VariableScope, variablescope_repr),
-        (saver.BaseSaverBuilder.SaveableObject, saveable_repr),
-        (saver.BaseSaverBuilder.SaveSpec, savespec_repr)]:
-    if getattr(cl, "__repr__") is object.__repr__:
-      setattr(cl, "__repr__", f)
+        (tf.IndexedSlices, _indexed_slices_repr),
+        (tf.Operation, _op_repr),
+        (tf.Variable, _var_repr),
+        (tf.TensorArray, _tensorarray_repr),
+        (tf.VariableScope, _variablescope_repr),
+        (saver.BaseSaverBuilder.SaveableObject, _saveable_repr),
+        (saver.BaseSaverBuilder.SaveSpec, _savespec_repr)]:
+    setattr(cl, "__repr__", f)
 
 
 def cond(pred, fn1, fn2, name=None):
