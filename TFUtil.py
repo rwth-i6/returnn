@@ -8435,9 +8435,10 @@ def get_device_attr(dev):
     return _DeviceAttrMod.get_device_attr()
 
 
-def print_graph_output(fetches):
+def print_graph_output(fetches, file=sys.stdout):
   """
   :param tf.Operation|tf.Tensor|list[tf.Tensor|tf.Operation] fetches:
+  :param typing.IO[str]|io.TextIOBase|io.StringIO file:
   """
   if not isinstance(fetches, (list, tuple)):
     fetches = [fetches]
@@ -8452,7 +8453,7 @@ def print_graph_output(fetches):
     :param str indent:
     """
     assert isinstance(op, tf.Operation)
-    print("%s%s%r" % (indent, prefix, op))
+    print("%s%s%r" % (indent, prefix, op), file=file)
     if indent:
       if op in visited:
         return

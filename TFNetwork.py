@@ -13,6 +13,7 @@ import contextlib
 import typing
 from Log import log
 from TFNetworkLayer import LayerBase, get_layer_class
+import TFUtil
 from TFUtil import Data, DimensionTag, reuse_name_scope, VariableAssigner
 
 
@@ -2377,6 +2378,39 @@ def help_on_tf_exception(
         for input_t, fetch_helper in zip(op.inputs, fetch_helpers):
           info, _ = _help_data_or_array(fetch_helper.most_recent_value)
           print("  %r: %s" % (input_t, info), file=file)
+    if op is None and isinstance(exception, tf.errors.InvalidArgumentError) and "Retval[0]" in exception.message:
+      # E.g.: InvalidArgumentError: Retval[0] does not have value
+      # Unfortunately, this TF exception does not give us any hint about the failing op.
+      # Try to find it.
+      if fetches is not None:
+        # At least find out which of the fetches leads to the exception.
+        found_fetch = None
+        for fetch in fetches:
+          try:
+            session.run(fetch, feed_dict=feed_dict)
+          except Exception as exc_:
+            print("Exception for fetch %s: %s: %s" % (fetch, type(exc_).__name__, exc_), file=file)
+            found_fetch = fetch
+            break
+        if found_fetch is not None:
+          if isinstance(found_fetch, tf.Tensor):
+            found_fetch = found_fetch.op
+          assert isinstance(found_fetch, tf.Operation)
+          # Try to go through op inputs.
+          for fetch in list(found_fetch.control_inputs) + list(found_fetch.inputs):
+            if isinstance(fetch, tf.Tensor) and fetch.op.type == "ScalarSummary":
+              # Avoid error: Operation '...' has been marked as not fetchable
+              fetch = tf.summary.merge([fetch])
+            try:
+              session.run(fetch, feed_dict=feed_dict)
+            except Exception as exc_:
+              print("Exception for fetch %s: %s: %s" % (fetch, type(exc_).__name__, exc_), file=file)
+              input_to_output_ops = find_ops_path_output_to_input(list(feed_dict.keys()), fetches=fetch)
+              print("Input to output op path:", file=file)
+              pprint(input_to_output_ops, stream=file)
+              if not input_to_output_ops:
+                TFUtil.print_graph_output(fetch, file=file)
+              break
   print("Step meta information:", file=file)
   pprint(meta_step_info, stream=file)
   print("Feed dict:", file=file)
