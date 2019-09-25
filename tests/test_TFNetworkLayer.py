@@ -24,6 +24,7 @@ TFUtil.debug_register_better_repr()
 log.initialize(verbosity=[5])
 
 print("TF version:", tf.__version__)
+print("Numpy version:", numpy.__version__)
 
 
 @contextlib.contextmanager
@@ -1021,6 +1022,89 @@ def test_MergeDimsLayer_simple_feat():
     assert isinstance(out_v, numpy.ndarray)
     assert out_v.shape == (n_batch, n_time, n_in1 * n_in2)
     numpy.testing.assert_almost_equal(out_v, in_v.reshape(out_v.shape))
+
+
+def test_CondLayer_subnetwork_train():
+  n_batch, n_time, n_in, n_out = 3, 7, 11, 13
+  config = Config({
+    "extern_data": {
+      "data": {"dim": n_in},
+      "classes": {"dim": n_out, "sparse": True},
+    },
+    "debug_print_layer_output_template": True,
+  })
+  rnd = numpy.random.RandomState(42)
+  with make_scope() as session:
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "src": {"class": "linear", "activation": "tanh", "n_out": 10, "from": "data"},
+      "cond": {
+        "class": "cond", "from": [],
+        "condition": {
+          "class": "eval", "from": [], "out_type": {"batch_dim_axis": None, "shape": (), "dtype": "bool"},
+          "eval": "tf.equal(self.network.global_train_step % 2, 0)"
+          },
+        "true_layer": {
+          "class": "subnetwork", "from": "src", "subnetwork": {
+            "lin": {"class": "linear", "activation": "tanh", "n_out": 10},
+            "res": {"class": "combine", "kind": "add", "from": ["data", "lin"]},
+            "output": {"class": "print", "from": "res", "extra_print_args": ["true_layer"], "summarize": 1}
+          }},
+        "false_layer": {"class": "copy", "from": "src"}
+        },
+      "output": {"class": "softmax", "from": "cond", "loss": "ce", "target": "classes"}})
+    net.print_network_info()
+    trainable_vars = net.get_trainable_params()
+    print("Trainable vars:")
+    pprint(trainable_vars)
+    cond_var = net.layers["cond"].params["lin/W"]
+    assert cond_var in trainable_vars
+    from TFUpdater import Updater
+    updater = Updater(config=config, network=net, initial_learning_rate=0.1)
+    updater.set_trainable_vars(trainable_vars)
+    updater.init_optimizer_vars(session)
+    updater.set_learning_rate(value=updater.initial_learning_rate, session=session)
+    net.initialize_params(session)
+    in_v = rnd.normal(size=(n_batch, n_time, n_in)).astype("float32")
+    targets_v = rnd.randint(0, n_out, size=(n_batch, n_time)).astype("int32")
+    seq_lens_v = numpy.array([n_time, n_time - 1, n_time - 2])
+    assert len(seq_lens_v) == n_batch
+    feed_dict = {
+      net.extern_data.data["data"].placeholder: in_v,
+      net.extern_data.data["data"].size_placeholder[0]: seq_lens_v,
+      net.extern_data.data["classes"].placeholder: targets_v,
+      net.extern_data.data["classes"].size_placeholder[0]: seq_lens_v,
+    }
+    fetches = net.get_fetches_dict(with_summary=True, with_size=True)
+    fetches["optim_op"] = updater.get_optim_op()
+    try:
+      loss = None
+      initial_loss = float("inf")
+      for i in range(10):
+        step = session.run(net.global_train_step)
+        print("step: %i" % step)
+        assert i == step
+        old_var_value = session.run(cond_var)
+        result = session.run(feed_dict=feed_dict, fetches=fetches)
+        loss = result["loss"]
+        print("loss:", loss)
+        if i == 0:
+          initial_loss = loss
+        new_var_value = session.run(cond_var)
+        var_changed = (old_var_value != new_var_value).any()
+        print("var changed:", var_changed)
+        if i % 2 == 0:  # See cond layer, condition. Use true_layer every second iteration, starting with 0.
+          # We used true_layer, thus the params should have been updated.
+          assert var_changed
+        else:
+          # We did not use true_layer, thus the params should not have been updated.
+          assert not var_changed
+      assert loss is not None and loss < initial_loss and numpy.isfinite(initial_loss)
+    except tf.errors.OpError as exc:
+      print("TF exception:", type(exc).__name__, ":", exc)
+      from TFNetwork import help_on_tf_exception
+      help_on_tf_exception(session=session, exception=exc, fetches=fetches, feed_dict=feed_dict)
+      raise
 
 
 def test_ScatterNdLayer_RangeLayer():
