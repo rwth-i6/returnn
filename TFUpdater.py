@@ -327,7 +327,8 @@ class Updater(object):
       self.optim_op = tf.group(self.optim_op, add_check_numerics_ops([self.optim_op]))
 
     # Do this at the very end.
-    incr_step_op = tf.assign_add(self.network.global_train_step, 1, name="global_train_step_increment")
+    with tf.control_dependencies([self.optim_op]):
+      incr_step_op = tf.assign_add(self.network.global_train_step, 1, name="global_train_step_increment")
     self.optim_op = tf.group(self.optim_op, incr_step_op, name="optim_and_step_incr")
 
     if self.config.bool("debug_save_updater_vars", False):
