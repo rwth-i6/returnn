@@ -2091,7 +2091,7 @@ def test_param_variational_noise():
       ops = find_ops_with_tensor_input(param, fetches=out)
       print("param graph:")
       print_graph_output(ops)
-      assert len(ops) == 1 and "param_variational_noise" in ops[0].name
+      assert len(ops) == 1 and "_variational_noise/" in ops[0].name
 
 
 def test_LinearLayer_simple_train():
