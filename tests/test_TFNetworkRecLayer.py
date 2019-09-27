@@ -1073,6 +1073,41 @@ def test_rec_RecStepInfoLayer():
     assert_equal(out_v.tolist(), [0, 1, 2])
 
 
+def test_rec_explicit_lstm():
+  net_dict = {
+    "lstm": {"class": "rec", "from": "data", "unit": {
+      "input": {"class": "copy", "from": ["prev:output", "data:source"]},
+      "input_gate": {"class": "linear", "from": "input", "activation": "sigmoid", "n_out": 10},
+      "forget_gate": {"class": "linear", "from": "input", "activation": "sigmoid", "n_out": 10},
+      "output_gate": {"class": "linear", "from": "input", "activation": "sigmoid", "n_out": 10},
+      "cell_in": {"class": "linear", "from": "input", "activation": "tanh", "n_out": 10},
+      "c": {"class": "eval", "from": ["input_gate", "cell_in", "forget_gate", "prev:c"],
+            "eval": "source(0) * source(1) + source(2) * source(3)"},
+      "output": {"class": "eval", "from": ["output_gate", "c"],
+                 "eval": "source(0) * source(1)",
+                 "out_type": {"shape": (10,)}},
+    }},
+    "output": {"class": "softmax", "loss": "ce", "from": "lstm"}
+  }
+  config = Config({
+    "num_inputs": 9,
+    "num_outputs": 2,
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict(net_dict)
+    loss = net.get_total_loss()
+    from test_TFNetworkLayer import make_feed_dict
+    feed_dict = make_feed_dict(list(net.extern_data.data.values()), same_time=True)
+    fetches = net.get_fetches_dict()
+    optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.01)
+    fetches["optim_op"] = optimizer.minimize(loss=loss)
+    session.run(tf.global_variables_initializer())
+    res = session.run(fetches, feed_dict=feed_dict)
+    pprint(res)
+
+
 def test_search_no_rec_explicit():
   from TFNetworkRecLayer import _SubnetworkRecCell
   beam_size = 3

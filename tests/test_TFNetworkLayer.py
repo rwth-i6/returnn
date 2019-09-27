@@ -37,9 +37,10 @@ def make_scope():
       yield session
 
 
-def make_feed_dict(data_list):
+def make_feed_dict(data_list, same_time=False):
   """
   :param list[TFUtil.Data] data_list:
+  :param bool same_time:
   :rtype: dict[tf.Tensor,numpy.ndarray]
   """
   n_batch = 3
@@ -62,7 +63,8 @@ def make_feed_dict(data_list):
         existing_sizes[dyn_size] = n_time
         shape[axis] = n_time
         d[dyn_size] = numpy.array([n_time, n_time - 2, n_time - 3])
-        n_time += 1
+        if not same_time:
+          n_time += 1
     print("%r %r: shape %r" % (data, data.placeholder, shape))
     if data.sparse:
       d[data.placeholder] = rnd.randint(0, data.dim or 13, size=shape, dtype=data.dtype)
