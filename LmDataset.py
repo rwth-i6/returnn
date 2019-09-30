@@ -1038,13 +1038,17 @@ class TranslationDataset(CachedDataset2):
       target.vocab.pkl
   """
 
-  MapToDataKeys = {"source": "data", "target": "classes"}  # just by our convention
-  _main_data_key = None
-  _main_classes_key = None
+  source_file_prefix = "source"
+  target_file_prefix = "target"
+  main_source_data_key = "data"
+  main_target_data_key = "classes"
 
   def __init__(self, path, file_postfix, source_postfix="", target_postfix="",
                source_only=False,
                unknown_label=None,
+               source_factors=None,
+               target_factors=None,
+               factor_separator='|',
                seq_list_file=None,
                use_cache_manager=False,
                **kwargs):
@@ -1052,58 +1056,98 @@ class TranslationDataset(CachedDataset2):
     :param str path: the directory containing the files
     :param str file_postfix: e.g. "train" or "dev". it will then search for "source." + postfix and "target." + postfix.
     :param bool random_shuffle_epoch1: if True, will also randomly shuffle epoch 1. see self.init_seq_order().
-    :param None|str source_postfix: will concat this at the end of the source. e.g.
-    :param None|str target_postfix: will concat this at the end of the target.
+    :param None|str source_postfix: will append this token to the source words (for all source factors).
+    :param None|str target_postfix: will append this token to the target words (for all target factors).
       You might want to add some sentence-end symbol.
     :param bool source_only: if targets are not available
-    :param str|None unknown_label: "UNK" or so. if not given, then will not replace unknowns but throw an error
+    :param str|dict[str,str]|None unknown_label: Label to replace out-of-vocabulary words with, e.g. "<UNK>".
+      If not given, will not replace unknowns but throw an error. Can also be a dict data_key -> unknown_label
+      to configure for each data key separately (default for each key is None).
+    :param list[str]|None source_factors: Names of source factors (excluding first factor, which is always
+      called 'data'). Words in source file have to have that many factors. Also, a vocabulary
+      "<factor_name>.voc.pkl" has to exist for each factor.
+    :param list[str]|None target_factors: analogous to source_factors. Excluding first factor, which is always
+      called 'classes'.
+    :param str factor_separator: string to separate factors of the words. E.g. if "|", words are expected to be
+      of format "<lemma>|<factor>|...".
     :param str seq_list_file: filename. line-separated list of line numbers defining fixed sequence order.
       multiple occurrences supported, thus allows for repeating examples while loading only once.
     :param bool use_cache_manager: uses :func:`Util.cf` for files
     """
 
     super(TranslationDataset, self).__init__(**kwargs)
+    assert os.path.isdir(path)
     self.path = path
     self.file_postfix = file_postfix
     self.seq_list = [int(n) for n in open(seq_list_file).read().splitlines()] if seq_list_file else None
-    if self._main_data_key is None:
-      self._main_data_key = "data"
-    if self._main_classes_key is None:
-      self._main_classes_key = "classes"
-    self._add_postfix = {self._main_data_key: source_postfix, self._main_classes_key: target_postfix}
-    self._keys_to_read = [self._main_data_key, self._main_classes_key]
+    self._add_postfix = {self.source_file_prefix: source_postfix.strip(),
+      self.target_file_prefix: target_postfix.strip()}
     self._use_cache_manager = use_cache_manager
     from threading import Lock, Thread
     self._lock = Lock()
-    import os
-    assert os.path.isdir(path)
+    self._factor_separator = factor_separator
+
+    if isinstance(source_factors, str):
+      source_factors = [source_factors]
+    if isinstance(target_factors, str):
+      target_factors = [target_factors]
+
+    self._source_data_keys = [self.main_source_data_key] + (source_factors or [])
+    # map from file prefix ("source" or "target") to main data key in that file
+    self._main_data_key_map = {self.source_file_prefix: self.main_source_data_key}
     if source_only:
-      self.MapToDataKeys = self.__class__.MapToDataKeys.copy()
-      del self.MapToDataKeys["target"]
-    self._data_files = {data_key: self._get_data_file(prefix) for (prefix, data_key) in self.MapToDataKeys.items()}
-    self._data = {
-      data_key: [] for data_key in self._data_files.keys()}  # type: typing.Dict[str,typing.List[numpy.ndarray]]
+      self._target_data_keys = []
+    else:
+      self._target_data_keys = [self.main_target_data_key] + (target_factors or [])
+      self._main_data_key_map[self.target_file_prefix] = self.main_target_data_key
+
+    self._data_keys = self._source_data_keys + self._target_data_keys
+
+    # Read vocs for main data
+    self._vocabs = {data_key: self._get_vocab(prefix) for (prefix, data_key) in self._main_data_key_map.items()}
+    # Read vocs for all factors
+    self._vocabs.update({data_key: self._get_vocab(data_key)
+      for data_key in self._source_data_keys[1:] + self._target_data_keys[1:]})
+
+    self._data_files = {prefix: self._get_data_file(prefix) for prefix in self._main_data_key_map}
+    self._data = {data_key: []
+      for data_key in self._data_keys}  # type: typing.Dict[str,typing.List[numpy.ndarray]]
     self._data_len = None  # type: typing.Optional[int]
-    self._vocabs = {data_key: self._get_vocab(prefix) for (prefix, data_key) in self.MapToDataKeys.items()}
     self.num_outputs = {k: [max(self._vocabs[k].values()) + 1, 1] for k in self._vocabs.keys()}  # all sparse
     assert all([v1 <= 2 ** 31 for (k, (v1, v2)) in self.num_outputs.items()])  # we use int32
-    self.num_inputs = self.num_outputs[self._main_data_key][0]
+    self.num_inputs = self.num_outputs[self.main_source_data_key][0]
     self._reversed_vocabs = {k: self._reverse_vocab(k) for k in self._vocabs.keys()}
     self.labels = {k: self._get_label_list(k) for k in self._vocabs.keys()}
+
+    if not isinstance(unknown_label, dict):
+      assert isinstance(unknown_label, str)
+      unknown_label = {data_key: unknown_label for data_key in self._data_keys}
+    for data_key in self._data_keys:
+      unknown_label.setdefault(data_key, None)
     self._unknown_label = unknown_label
+
     self._seq_order = None  # type: typing.Optional[typing.List[int]]  # seq_idx -> line_nr
     self._tag_prefix = "line-"  # sequence tag is "line-n", where n is the line number
     self._thread = Thread(name="%r reader" % self, target=self._thread_main)
     self._thread.daemon = True
     self._thread.start()
 
-  def _extend_data(self, k, data_strs):
-    vocab = self._vocabs[k]
+  def _extend_data(self, file_prefix, data_strs):
+    if file_prefix == self.source_file_prefix:
+      data_keys = self._source_data_keys
+    else:
+      assert file_prefix == self.target_file_prefix
+      data_keys = self._target_data_keys
+
     data = [
-      self._data_str_to_numpy(vocab, s.decode("utf8").strip() + self._add_postfix[k])
-      for s in data_strs]
+      self._data_str_to_numpy(data_keys, s.decode("utf8").strip(), self._add_postfix[file_prefix])
+      for s in data_strs]  # type: list[list[str]] # shape: (len(data_strs), len(data_keys))
+
+    data = zip(*data)  # type: list[list[str]] # shape: (len(data_keys), len(data_strs))
+
     with self._lock:
-      self._data[k].extend(data)
+      for i, data in enumerate(data):
+        self._data[data_keys[i]].extend(data)
 
   def _thread_main(self):
     from Util import interrupt_main
@@ -1116,30 +1160,30 @@ class TranslationDataset(CachedDataset2):
       # First iterate once over the data to get the data len as fast as possible.
       data_len = 0
       while True:
-        ls = self._data_files[self._main_data_key].readlines(10 ** 4)
+        ls = self._data_files[self.source_file_prefix].readlines(10 ** 4)
         data_len += len(ls)
         if not ls:
           break
       with self._lock:
         self._data_len = data_len
-      self._data_files[self._main_data_key].seek(0, os.SEEK_SET)  # we will read it again below
+      self._data_files[self.source_file_prefix].seek(0, os.SEEK_SET)  # we will read it again below
 
       # Now, read and use the vocab for a compact representation in memory.
-      keys_to_read = list(self._keys_to_read)
+      files_to_read = list(self._main_data_key_map.keys())
       while True:
-        for k in keys_to_read:
-          data_strs = self._data_files[k].readlines(10 ** 6)
+        for file_prefix in files_to_read:
+          data_strs = self._data_files[file_prefix].readlines(10 ** 6)
           if not data_strs:
-            assert len(self._data[k]) == self._data_len
-            keys_to_read.remove(k)
+            assert len(self._data[self._main_data_key_map[file_prefix]]) == self._data_len
+            files_to_read.remove(file_prefix)
             continue
-          assert len(self._data[k]) + len(data_strs) <= self._data_len
-          self._extend_data(k, data_strs)
-        if not keys_to_read:
+          assert len(self._data[self._main_data_key_map[file_prefix]]) + len(data_strs) <= self._data_len
+          self._extend_data(file_prefix, data_strs)
+        if not files_to_read:
           break
-      for k, f in list(self._data_files.items()):
-        f.close()
-        self._data_files[k] = None
+      for file_prefix, file_handle in list(self._data_files.items()):
+        file_handle.close()
+        self._data_files[file_prefix] = None
 
     except Exception:
       sys.excepthook(*sys.exc_info())
@@ -1207,23 +1251,42 @@ class TranslationDataset(CachedDataset2):
     num_labels = self.num_outputs[data_key][0]
     return list(map(reversed_vocab.__getitem__, range(num_labels)))
 
-  def _data_str_to_numpy(self, vocab, s):
+  def _data_str_to_numpy(self, data_keys, s, postfix):
     """
-    :param dict[str,int] vocab:
+    :param list[str] data_keys:
     :param str s:
-    :rtype: numpy.ndarray
+    :return: numpy word indices for each data key
+    :rtype: list[numpy.ndarray]
     """
     words = s.split()
-    if self._unknown_label is None:
-      try:
-        words_idxs = list(map(vocab.__getitem__, words))
-      except KeyError as e:
-        raise Exception(
-          "Can not handle unknown token without unknown_label: %s (%s)" % (str(e), bytes(str(e), 'utf-8')))
+    numpy_data = []
+
+    if len(data_keys) > 1:
+      factored_words = [word.split(self._factor_separator) for word in words]
+      assert all(len(factors) == len(data_keys) for factors in factored_words), (
+        "All words must have all factors. Expected: " + self._factor_separator.join(data_keys))
+      words_per_factor = zip(*factored_words)
+      words_per_factor = [list(w) for w in words_per_factor]
     else:
-      unknown_label_id = vocab[self._unknown_label]
-      words_idxs = [vocab.get(w, unknown_label_id) for w in words]
-    return numpy.array(words_idxs, dtype=numpy.int32)
+      words_per_factor = [words]
+
+    for i, words in enumerate(words_per_factor):
+      vocab = self._vocabs[data_keys[i]]
+      # Add postfix as last word
+      if postfix:
+        words = words + [postfix]
+      if self._unknown_label[data_keys[i]] is None:
+        try:
+          words_idxs = list(map(vocab.__getitem__, words))
+        except KeyError as e:
+          raise Exception(
+            "Cannot handle unknown token without unknown_label: %s (%s)" % (str(e), bytes(str(e), 'utf-8')))
+      else:
+        unknown_label_id = vocab[self._unknown_label[data_keys[i]]]
+        words_idxs = [vocab.get(w, unknown_label_id) for w in words]
+      numpy_data.append(numpy.array(words_idxs, dtype=numpy.int32))
+
+    return numpy_data
 
   def _get_data(self, key, line_nr):
     """
@@ -1314,7 +1377,7 @@ class TranslationDataset(CachedDataset2):
     else:
       num_seqs = self._get_data_len()
       self._seq_order = self.get_seq_order_for_epoch(
-        epoch=epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(self._get_data(key=self._main_data_key, line_nr=i)))
+        epoch=epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(self._get_data(key=self.main_source_data_key, line_nr=i)))
     self._num_seqs = len(self._seq_order)
     return True
 
@@ -1322,15 +1385,15 @@ class TranslationDataset(CachedDataset2):
     if seq_idx >= self._num_seqs:
       return None
     line_nr = self._seq_order[seq_idx]
-    features = self._get_data(key=self._main_data_key, line_nr=line_nr)
-    targets = self._get_data(key=self._main_classes_key, line_nr=line_nr)
 
-    assert features is not None and targets is not None
+    features = {data_key: self._get_data(key=data_key, line_nr=line_nr)
+      for data_key in self._source_data_keys + self._target_data_keys}
+    assert all([data is not None for data in features.values()])
+
     return DatasetSeq(
       seq_idx=seq_idx,
       seq_tag=self._tag_prefix + str(line_nr),
-      features=features,
-      targets=targets)
+      features=features)
 
 
 class ConfusionNetworkDataset(TranslationDataset):
@@ -1352,7 +1415,7 @@ class ConfusionNetworkDataset(TranslationDataset):
   can e.g. be used to repeat the confusion net part of the training data without loading it several times.
   """
 
-  MapToDataKeys = {"source": "sparse_inputs", "target": "classes"}
+  main_source_data_key = "sparse_inputs"
 
   def __init__(self, max_density=20, **kwargs):
     """
@@ -1366,12 +1429,12 @@ class ConfusionNetworkDataset(TranslationDataset):
     :param str|None unknown_label: "UNK" or so. if not given, then will not replace unknowns but throw an error
     :param int max_density: the density of the confusion network: max number of arcs per slot
     """
-    self._main_data_key = "sparse_inputs"
-    self._keys_to_read = ["sparse_inputs", "classes"]
     self.density = max_density
     super(ConfusionNetworkDataset, self).__init__(**kwargs)
     if "sparse_weights" not in self._data.keys():
       self._data["sparse_weights"] = []
+    assert len(self._source_data_keys) == len(self._target_data_keys) == 1, (
+      "Factors not yet implemented for ConfusionNetworkDataset.")
 
   def get_data_keys(self):
     """
@@ -1406,14 +1469,15 @@ class ConfusionNetworkDataset(TranslationDataset):
       return [self.density]
     return []
 
-  def _load_single_confusion_net(self, words, vocab, postfix):
+  def _load_single_confusion_net(self, words, vocab, postfix, key):
     """
     :param list[str] words:
     :param dict[str,int] vocab:
     :param str postfix:
+    :param str key:
     :rtype: (numpy.ndarray, numpy.ndarray)
     """
-    unknown_label_id = vocab[self._unknown_label]
+    unknown_label_id = vocab[self._unknown_label[key]]
     offset = 0
     postfix_index = None
     if postfix is not None:
@@ -1433,46 +1497,52 @@ class ConfusionNetworkDataset(TranslationDataset):
       words_confs[len(words)][0] = 1
     return words_idxs, words_confs
 
-  def _data_str_to_sparse_inputs(self, vocab, s, postfix=None):
+  def _data_str_to_sparse_inputs(self, key, s, postfix=None):
     """
-    :param dict[str,int] vocab:
+    :param str key:
     :param str s:
     :param str postfix:
     :rtype: (numpy.ndarray, numpy.ndarray)
     """
+    vocab = self._vocabs[key]
     words = s.split()
     if words and words[0] == "__ALT__":
         words.pop(0)
-        return self._load_single_confusion_net(words, vocab, postfix)
+        return self._load_single_confusion_net(words, vocab, postfix, key)
 
     if postfix is not None:
-      words.append(postfix)
-    unknown_label_id = vocab[self._unknown_label]
+      words.append(postfix.strip())
+    unknown_label_id = vocab[self._unknown_label[key]]
     words_idxs = numpy.array([vocab.get(w, unknown_label_id) for w in words], dtype=numpy.int32)
     words_confs = None  # creating matrices for plain text input is delayed to _collect_single_seq to save memory
     return words_idxs, words_confs
 
-  def _extend_data(self, key, data_strs):
+  def _extend_data(self, file_prefix, data_strs):
     """
-    :param str key: the key ("sparse_inputs", or "classes")
+    :param str file_prefix: "source" or "target"
     :param list[str|bytes] data_strs: array of input for the key
     """
-    vocab = self._vocabs[key]
-    if key == self._main_data_key:  # the sparse inputs and weights
+
+    if file_prefix == self.source_file_prefix:  # the sparse inputs and weights
+      key = self._source_data_keys[0]
       idx_data = []
       conf_data = []
       for s in data_strs:
         (words_idxs, words_confs) = self._data_str_to_sparse_inputs(
-          vocab, s.decode("utf8").strip(), self._add_postfix[key])
+          key, s.decode("utf8").strip(), self._add_postfix[file_prefix])
         idx_data.append(words_idxs)
         conf_data.append(words_confs)
       with self._lock:
         self._data[key].extend(idx_data)
         self._data["sparse_weights"].extend(conf_data)
     else:  # the classes
+      key = self._target_data_keys[0]
       data = [
-        self._data_str_to_numpy(vocab, s.decode("utf8").strip() + self._add_postfix[key])
+        self._data_str_to_numpy([key], s.decode("utf8").strip(), self._add_postfix[file_prefix])
         for s in data_strs]
+
+      data = [d[0] for d in data]  # factors not implemented yet, always use the first factor
+
       with self._lock:
         self._data[key].extend(data)
 
@@ -1482,11 +1552,11 @@ class ConfusionNetworkDataset(TranslationDataset):
     line_nr = self._seq_order[seq_idx]
     features = {key: self._get_data(key=key, line_nr=line_nr) for key in self.get_data_keys()}
     if features['sparse_weights'] is None:
-      seq = features[self._main_data_key]
-      features[self._main_data_key] = numpy.zeros(shape=(len(seq), self.density), dtype=numpy.int32)
+      seq = features[self.main_source_data_key]
+      features[self.main_source_data_key] = numpy.zeros(shape=(len(seq), self.density), dtype=numpy.int32)
       features['sparse_weights'] = numpy.zeros(shape=(len(seq), self.density), dtype=numpy.float32)
       for n in range(len(seq)):
-        features[self._main_data_key][n][0] = seq[n]
+        features[self.main_source_data_key][n][0] = seq[n]
         features['sparse_weights'][n][0] = 1
     return DatasetSeq(
       seq_idx=seq_idx,
