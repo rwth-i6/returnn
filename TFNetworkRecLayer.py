@@ -2379,6 +2379,8 @@ class _SubnetworkRecCell(object):
     layer_choice = self.net.get_search_choices(src=layer)
     if not layer_choice:
       return acc_ta, None
+    if layer_choice.search_choices.keep_raw:
+      return acc_ta, layer_choice.search_choices
     is_prev_choice = False
     if isinstance(layer_choice, _TemplateLayer):
       assert layer_choice.is_prev_time_frame
@@ -2836,14 +2838,26 @@ class _SubnetworkRecCell(object):
       with tf.name_scope(self.layer_data_templates[name].layer_class_type.cls_get_tf_scope_name(name)):
         inner_layer = self.net.get_layer(name)
         acc_ta = loop_accumulated["output_%s" % name]
-        acc_ta, search_choices = self._opt_search_resolve(
-          layer_name=name, acc_ta=acc_ta, final_net_vars=final_net_vars)
+        if inner_layer.get_search_choices() is None:
+          search_choices = None
+        else:
+          acc_ta, search_choices = self._opt_search_resolve(
+            layer_name=name, acc_ta=acc_ta, final_net_vars=final_net_vars)
         output = self.layer_data_templates[name].output.copy_template_adding_time_dim(time_dim_axis=0)
         output.beam = search_choices.get_beam_info() if search_choices else None
         # We should have accumulated it.
         output.placeholder = tensor_array_stack(acc_ta, stop=max_len)  # e.g. (time,batch,dim)
         output.size_placeholder = {0: seq_len}
-        if output.beam:
+        if search_choices and search_choices.keep_raw:
+          if output.beam != self.parent_rec_layer.output.beam:
+            # TODO this is not quite correct...
+            # (It is correct only if you use keep_beam or so...)
+            if output.beam.beam_size % self.parent_rec_layer.output.beam.beam_size == 0:
+              output.size_placeholder[0] = tile_transposed(
+                seq_len, axis=0, multiples=output.beam.beam_size // self.parent_rec_layer.output.beam.beam_size)
+              if time_dim_tag:
+                time_dim_tag.set_tag_on_size_tensor(output.size_placeholder[0])
+        elif output.beam:
           if self.parent_rec_layer.output.beam:
             # seq_len should have already a beam, same as rec_layer.output
             assert output.beam == self.parent_rec_layer.output.beam
@@ -4752,7 +4766,7 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
     if self.network.search_flag:
       base_search_choices = src.get_search_choices()
       if base_search_choices:
-        self.search_choices = SearchChoices(owner=self, beam_size=self.output.beam.beam_size, is_decided=True)
+        self.search_choices = SearchChoices(owner=self, beam_size=self.output.beam.beam_size, keep_raw=True)
         assert base_search_choices.beam_size == self.output.beam.beam_size == self.search_choices.beam_size
         net_batch_dim = self.network.get_data_batch_dim()
         from TFUtil import expand_dims_unbroadcast

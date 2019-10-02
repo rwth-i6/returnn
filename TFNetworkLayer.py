@@ -1588,11 +1588,12 @@ class SearchChoices(object):
   This is what we keep track here.
   """
 
-  def __init__(self, owner, beam_size, is_decided=False):
+  def __init__(self, owner, beam_size, is_decided=False, keep_raw=False):
     """
     :param LayerBase owner:
     :param int beam_size:
-    :param bool is_decided: by decide layer
+    :param bool is_decided: by :class:`DecideLayer`
+    :param bool keep_raw: by :class:`DecideKeepBeamLayer`
     """
     assert beam_size is not None
     self.owner = owner
@@ -1602,6 +1603,7 @@ class SearchChoices(object):
     self.beam_size = beam_size
     self.beam_scores = None  # type: typing.Optional[tf.Tensor]  # (batch, beam)
     self.is_decided = is_decided
+    self.keep_raw = keep_raw
 
   def __repr__(self):
     def short(v):
@@ -1623,6 +1625,8 @@ class SearchChoices(object):
     s += " beam_scores=%s" % short(self.beam_scores)
     if self.is_decided:
       s += " is_decided"
+    if self.keep_raw:
+      s += " keep_raw"
     return "<SearchChoices owner=%s%s>" % (short(self.owner), s)
 
   @property
@@ -1721,6 +1725,8 @@ class SearchChoices(object):
       return -1
     if other is None:
       return 1
+    if self.keep_raw or other.keep_raw:
+      return 0
     self_norm_layer = self.owner.get_normalized_layer()
     other_norm_layer = other.owner.get_normalized_layer()
     if self_norm_layer != self.owner and other_norm_layer != other.owner:
@@ -2129,7 +2135,10 @@ class SelectSearchSourcesLayer(InternalLayer):
     """
     if not search_choices:
       return layer
-    if layer.get_search_choices() == search_choices:
+    layer_search_choices = layer.get_search_choices()
+    if layer_search_choices and layer_search_choices.keep_raw:
+      return layer
+    if layer_search_choices == search_choices:
       assert layer.output.beam == search_choices.get_beam_info(), "%r != %r. %s" % (
         layer.output.beam, search_choices.get_beam_info(),
         layer.network.debug_search_choices(layer) or "debug search dumped")
