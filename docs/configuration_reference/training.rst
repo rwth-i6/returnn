@@ -30,6 +30,10 @@ cleanup_old_models
         - ``keep``: list or set of integers defining which checkpoints to keep
 
 max_seq_length
+    A dict with string:integer pairs. The string must be a valid data key,
+    and the integer specifies the upper bound for this data object. Batches, where the specified data object exceeds
+    the upper bound are discarded. Note that some datasets (e.g ``OggZipDataset``) load and process the data
+    to determine the length, so even for discarded sequences data processing might be performed.
 
 max_seqs
     An integer specifying the upper limit of sequences in a batch (can be used in addition to ``batch_size``).
@@ -40,6 +44,11 @@ num_epochs
 save_interval
     An integer specifying after how many epochs the model is saved.
 
+start_epoch
+    An integer or string specifying the epoch to start the training at. The default is 'auto'.
+
+stop_on_nonfinite_train_score
+    If set to ``False``, the training will not be interupted if a single update step has a loss with NaN of Inf
 
 
 
