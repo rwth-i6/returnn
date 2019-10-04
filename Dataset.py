@@ -86,6 +86,7 @@ class Dataset(object):
                window=1, context_window=None, chunking=None,
                seq_ordering='default', partition_epoch=None, repeat_epoch=None,
                seq_list_filter_file=None, unique_seq_tags=False,
+               seq_order_seq_lens_file=None,
                shuffle_frames_of_nseqs=0, min_chunk_size=0, chunking_variance=0,
                estimated_num_seqs=None):
     """
@@ -102,6 +103,7 @@ class Dataset(object):
       partition_epoch.
     :param str|None seq_list_filter_file: defines a subset of sequences (by tag) to use
     :param bool unique_seq_tags: uniquify seqs with same seq tags in seq order
+    :param str|None seq_order_seq_lens_file: for seq order, use the seq length given by this file
     :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
     :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
     """
@@ -116,6 +118,8 @@ class Dataset(object):
     self.repeat_epoch = repeat_epoch or 1
     self.seq_tags_filter = set(self._load_seq_list_file(seq_list_filter_file)) if seq_list_filter_file else None
     self.unique_seq_tags = unique_seq_tags
+    self._seq_order_seq_lens_file = seq_order_seq_lens_file
+    self._seq_order_seq_lens_by_idx = None
     # There is probably no use case for combining the two, so avoid potential misconfiguration.
     assert self.partition_epoch == 1 or self.repeat_epoch == 1, (
       "Combining partition_epoch and repeat_epoch is prohibited.")
@@ -337,6 +341,24 @@ class Dataset(object):
     """
     raise NotImplementedError
 
+  def _get_seq_order_seq_lens_by_idx(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: int
+    """
+    if not self._seq_order_seq_lens_by_idx:
+      assert self._seq_order_seq_lens_file
+      if self._seq_order_seq_lens_file.endswith(".gz"):
+        import gzip
+        raw = gzip.GzipFile(self._seq_order_seq_lens_file, "rb").read()
+      else:
+        raw = open(self._seq_order_seq_lens_file, "rb").read()
+      seq_lens = eval(raw)
+      assert isinstance(seq_lens, dict)
+      all_tags = self.get_all_tags()
+      self._seq_order_seq_lens_by_idx = [seq_lens[tag] for tag in all_tags]
+    return self._seq_order_seq_lens_by_idx[seq_idx]
+
   def get_seq_order_for_epoch(self, epoch, num_seqs, get_seq_len=None):
     """
     Returns the order of the given epoch.
@@ -358,6 +380,8 @@ class Dataset(object):
       full_epoch = (epoch - 1) // partition_epoch + 1
     assert num_seqs > 0
     seq_index = list(range(num_seqs))  # type: typing.List[int]  # the real seq idx after sorting
+    if self._seq_order_seq_lens_file:
+      get_seq_len = self._get_seq_order_seq_lens_by_idx
     if self.seq_ordering == 'default':
       pass  # Keep order as-is.
     elif self.seq_ordering.startswith("default_every_n:"):
