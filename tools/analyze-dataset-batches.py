@@ -11,6 +11,9 @@ import os
 import sys
 import time
 import typing
+import argparse
+import numpy
+from pprint import pformat
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
@@ -18,28 +21,26 @@ sys.path.append(returnn_dir)
 
 import rnn
 from Log import log
-import argparse
-import numpy
-from Util import Stats, hms, NumbersDict, terminal_size, progress_bar_with_time
-from Dataset import Batch
+import Util
+from Util import Stats, hms, NumbersDict
+from Dataset import Batch, Dataset, init_dataset
 from Config import Config
 
 
 config = None  # type: typing.Optional[Config]
+dataset = None  # type: typing.Optional[Dataset]
 
 
-def analyze_dataset(dataset, options):
+def analyze_dataset(options):
   """
-  :param Dataset.Dataset dataset:
   :param options: argparse.Namespace
   """
   print("Epoch: %i" % options.epoch, file=log.v3)
-  dataset.init_seq_order(epoch=options.epoch)
   print("Dataset keys:", dataset.get_data_keys(), file=log.v3)
   print("Dataset target keys:", dataset.get_target_list(), file=log.v3)
   assert options.key in dataset.get_data_keys()
 
-  terminal_width, _ = terminal_size()
+  terminal_width, _ = Util.terminal_size()
   show_interactive_process_bar = (log.verbose[3] and (not log.verbose[5]) and terminal_width >= 0)
 
   start_time = time.time()
@@ -104,7 +105,7 @@ def analyze_dataset(dataset, options):
           batch_max_time, batch_num_used_frames, batch_num_used_frames / batch_max_time),
         file=log.v5)
       if show_interactive_process_bar:
-        progress_bar_with_time(complete_frac, prefix=progress_prefix)
+        Util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
 
       step += 1
       batches.advance(1)
@@ -123,22 +124,24 @@ def analyze_dataset(dataset, options):
     dataset.finish_epoch()
 
 
-def init(config_str, config_dataset, verbosity):
+def init(config_str, config_dataset, use_pretrain, epoch, verbosity):
   """
   :param str config_str: either filename to config-file, or dict for dataset
   :param str|None config_dataset:
+  :param bool use_pretrain: might overwrite config options, or even the dataset
+  :param int epoch:
   :param int verbosity:
   """
   rnn.init_better_exchook()
   rnn.init_thread_join_hack()
-  dataset_dict = None
+  dataset_opts = None
   config_filename = None
   if config_str.strip().startswith("{"):
     print("Using dataset %s." % config_str)
-    dataset_dict = eval(config_str.strip())
+    dataset_opts = eval(config_str.strip())
   elif config_str.endswith(".hdf"):
-    dataset_dict = {"class": "HDFDataset", "files": [config_str]}
-    print("Using dataset %r." % dataset_dict)
+    dataset_opts = {"class": "HDFDataset", "files": [config_str]}
+    print("Using dataset %r." % dataset_opts)
     assert os.path.exists(config_str)
   else:
     config_filename = config_str
@@ -149,20 +152,51 @@ def init(config_str, config_dataset, verbosity):
   config = rnn.config
   config.set("log", None)
   config.set("log_verbosity", verbosity)
-  if dataset_dict:
-    assert not config_dataset
-    config.set("train", dataset_dict)
-  elif config_dataset:
-    config.set("train", "config:%s" % config_dataset)
-  else:
-    assert config.value("train", None)
   rnn.init_log()
   print("Returnn dump-dataset starting up.", file=log.v2)
   rnn.returnn_greeting()
   rnn.init_faulthandler()
   rnn.init_config_json_network()
-  rnn.init_data()
-  rnn.print_task_properties()
+  Util.BackendEngine.select_engine(config=config)
+  if not dataset_opts:
+    if config_dataset:
+      dataset_opts = "config:%s" % config_dataset
+    else:
+      dataset_opts = "config:train"
+  if use_pretrain:
+    from Pretrain import pretrain_from_config
+    pretrain = pretrain_from_config(config)
+    if pretrain:
+      print("Using pretrain %s, epoch %i" % (pretrain, epoch), file=log.v2)
+      net_dict = pretrain.get_network_json_for_epoch(epoch=epoch)
+      if "#config" in net_dict:
+        config_overwrites = net_dict["#config"]
+        print("Pretrain overwrites these config options:", file=log.v2)
+        assert isinstance(config_overwrites, dict)
+        for key, value in sorted(config_overwrites.items()):
+          assert isinstance(key, str)
+          orig_value = config.typed_dict.get(key, None)
+          if isinstance(orig_value, dict) and isinstance(value, dict):
+            diff_str = "\n" + Util.dict_diff_str(orig_value, value)
+          elif isinstance(value, dict):
+            diff_str = "\n%r ->\n%s" % (orig_value, pformat(value))
+          else:
+            diff_str = " %r -> %r" % (orig_value, value)
+          print("Config key %r for epoch %i:%s" % (key, epoch, diff_str), file=log.v2)
+          config.set(key, value)
+      else:
+        print("No config overwrites for this epoch.", file=log.v2)
+    else:
+      print("No pretraining used.", file=log.v2)
+  elif config.typed_dict.get("pretrain", None):
+    print("Not using pretrain.", file=log.v2)
+  dataset_default_opts = {}
+  Dataset.kwargs_update_from_config(config, dataset_default_opts)
+  print("Using dataset:", dataset_opts, file=log.v2)
+  global dataset
+  dataset = init_dataset(dataset_opts, default_kwargs=dataset_default_opts)
+  assert isinstance(dataset, Dataset)
+  dataset.init_seq_order(epoch=epoch)
 
 
 def main():
@@ -173,10 +207,13 @@ def main():
   argparser.add_argument('--endseq', type=int, default=-1, help='end seq idx (inclusive) or -1 (default: 10)')
   argparser.add_argument("--verbosity", type=int, default=5, help="overwrites log_verbosity (default: 4)")
   argparser.add_argument("--key", default="data", help="data-key, e.g. 'data' or 'classes'. (default: 'data')")
+  argparser.add_argument("--use_pretrain", action="store_true")
   args = argparser.parse_args()
-  init(config_str=args.crnn_config, config_dataset=args.dataset, verbosity=args.verbosity)
+  init(
+    config_str=args.crnn_config, config_dataset=args.dataset, epoch=args.epoch, use_pretrain=args.use_pretrain,
+    verbosity=args.verbosity)
   try:
-    analyze_dataset(rnn.train_data, args)
+    analyze_dataset(args)
   except KeyboardInterrupt:
     print("KeyboardInterrupt")
     sys.exit(1)
