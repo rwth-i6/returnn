@@ -377,6 +377,38 @@ class Dataset(object):
     elif self.seq_ordering == "sorted_reverse":
       assert get_seq_len
       seq_index.sort(key=get_seq_len, reverse=True)  # sort by length, in reverse, starting with longest
+    elif self.seq_ordering.startswith('sort_bin_shuffle'):
+      # Shuffle seqs, sort by length, and shuffle bins (then shuffle seqs within each bin if sort_bin_shuffle_x2).
+      assert get_seq_len
+      tmp = self.seq_ordering.split(':')[1:]
+      # Keep this deterministic! Use fixed seed.
+      if len(tmp) <= 1:
+        nth = 1
+      else:
+        nth = int(tmp[1])
+      rnd_seed = ((full_epoch - 1) // nth + 1) if full_epoch else 1
+      rnd = Random(rnd_seed)
+      rnd.shuffle(seq_index)  # Shuffle sequences.
+      seq_index.sort(key=get_seq_len)  # Sort by length, starting with shortest.
+      if len(tmp) == 0:
+        bins = 2
+      else:
+        if tmp[0].startswith("."):  # starting with "." -> approx chunk size (num of seqs in one bin)
+          bins = max(num_seqs // int(tmp[0][1:]), 2)
+        else:  # the number of bins
+          bins = int(tmp[0])
+      bin_ids = list(range(bins))
+      rnd.shuffle(bin_ids)  # Shuffle bins.
+      out_index = []
+      for i in bin_ids:
+        if i == bins - 1:
+          part = seq_index[i * len(seq_index) // bins:][:]
+        else:
+          part = seq_index[i * len(seq_index) // bins:(i + 1) * len(seq_index) // bins][:]
+        if self.seq_ordering.startswith('sort_bin_shuffle_x2'):
+          rnd.shuffle(part)  # Shuffle within the bin.
+        out_index += part
+      seq_index = out_index
     elif self.seq_ordering.startswith('laplace'):
       assert get_seq_len
       tmp = self.seq_ordering.split(':')[1:]
