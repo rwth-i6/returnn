@@ -5742,7 +5742,7 @@ def slice_nd(x, start, size):
     window_pos = tf.reshape(window_pos, (-1,))  # (n_batch*size,)
 
     # build mask for zero-padding
-    mask = window_pos > shape[1]-1  # (n_batch*size,) tf.bool
+    mask = tf.logical_or(window_pos > shape[1]-1, window_pos < 0)  # (n_batch*size,) tf.bool
 
     # clip indices so that gather_nd doesn't fail, will zero-pad later
     clip_time_idx = tf.clip_by_value(window_pos, 0, shape[1]-1)

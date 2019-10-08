@@ -1471,13 +1471,13 @@ def test_SliceLayer_NCHW():
 
 
 def test_SliceNdLayer():
-  n_batch = 4
+  n_batch = 5
   n_time = 7
   n_dim = 11
   rnd = numpy.random.RandomState(42)
   seqs = rnd.randint(1, 100, (n_batch, n_time, n_dim)).astype("float32")  # all != 0
-  seq_lens = numpy.array([n_time, n_time - 2, n_time - 3, n_time - 1], dtype="int32")
-  starts = numpy.array([2, 1, 3, n_time + 1], dtype="int32")
+  seq_lens = numpy.array([n_time, n_time - 2, n_time - 3, n_time - 1, n_time - 4], dtype="int32")
+  starts = numpy.array([2, 1, 3, n_time + 1, -1], dtype="int32")
   size = 5
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())
@@ -1500,7 +1500,11 @@ def test_SliceNdLayer():
     assert out.shape == (n_batch, size, n_dim)
     for b in range(n_batch):
       s = starts[b]
-      orig_seq = seqs[b, s:s + size]
+      if s < 0:
+        assert s + size > 0
+        orig_seq = numpy.pad(seqs[b, :s + size], [(-s, 0), (0, 0)], "constant")
+      else:
+        orig_seq = seqs[b, s:s + size]
       if len(orig_seq) < size:
         orig_seq = numpy.pad(orig_seq, [(0, size - len(orig_seq)), (0, 0)], "constant")
       assert orig_seq.shape == (size, n_dim)
