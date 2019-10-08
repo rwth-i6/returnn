@@ -1471,13 +1471,13 @@ def test_SliceLayer_NCHW():
 
 
 def test_SliceNdLayer():
-  n_batch = 3
+  n_batch = 4
   n_time = 7
   n_dim = 11
   rnd = numpy.random.RandomState(42)
   seqs = rnd.randint(1, 100, (n_batch, n_time, n_dim)).astype("float32")  # all != 0
-  seq_lens = numpy.array([n_time, n_time - 2, n_time - 3], dtype="int32")
-  starts = numpy.array([2, 1, 3], dtype="int32")
+  seq_lens = numpy.array([n_time, n_time - 2, n_time - 3, n_time - 1], dtype="int32")
+  starts = numpy.array([2, 1, 3, n_time + 1], dtype="int32")
   size = 5
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())
@@ -1491,6 +1491,7 @@ def test_SliceNdLayer():
     kwargs = dict(name="slice", network=net, sources=[src], start=start, size=size)
     kwargs["output"] = SliceNdLayer.get_out_data_from_opts(**kwargs)
     layer = SliceNdLayer(**kwargs)
+    print(layer)
     assert not layer.output.size_placeholder
     assert layer.output.batch_shape == (None, size, n_dim)
     out = session.run(layer.output.placeholder)
@@ -1505,6 +1506,48 @@ def test_SliceNdLayer():
       assert orig_seq.shape == (size, n_dim)
       orig_seq = numpy.where((numpy.arange(s, s + size) >= seq_lens[b])[:, None], 0.0, orig_seq)
       for t in range(size):
+        numpy.testing.assert_equal(orig_seq[t], out[b, t])
+
+
+def test_SliceNdLayer_dyn_size():
+  n_batch = 4
+  n_time = 7
+  n_dim = 11
+  rnd = numpy.random.RandomState(42)
+  seqs = rnd.randint(1, 100, (n_batch, n_time, n_dim)).astype("float32")  # all != 0
+  seq_lens = numpy.array([n_time, n_time - 2, n_time - 3, n_time - 1], dtype="int32")
+  starts = numpy.array([2, 1, 3, n_time + 1], dtype="int32")
+  size = None
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData())
+    src = InternalLayer(name="src", network=net, out_type={"dim": n_dim})
+    src.output.placeholder = tf.constant(seqs)
+    src.output.size_placeholder = {0: tf.constant(seq_lens)}
+    src.output.sanity_check()
+    start = InternalLayer(name="start", network=net, out_type={"dim": None, "sparse": True, "time_dim_axis": None})
+    start.output.placeholder = tf.constant(starts)
+    start.output.sanity_check()
+    kwargs = dict(name="slice", network=net, sources=[src], start=start, size=size)
+    kwargs["output"] = SliceNdLayer.get_out_data_from_opts(**kwargs)
+    layer = SliceNdLayer(**kwargs)
+    print(layer)
+    assert 0 in layer.output.size_placeholder
+    assert layer.output.batch_shape == (None, size, n_dim)
+    out = session.run(layer.output.placeholder)
+    print(out)
+    assert isinstance(out, numpy.ndarray)
+    max_size = max(list(seq_lens - starts) + [0])
+    assert out.shape == (n_batch, max_size, n_dim)
+    for b in range(n_batch):
+      s = starts[b]
+      orig_seq = seqs[b, s:]
+      if len(orig_seq) < max_size:
+        orig_seq = numpy.pad(orig_seq, [(0, max_size - len(orig_seq)), (0, 0)], "constant")
+      elif len(orig_seq) > max_size:
+        orig_seq = orig_seq[:max_size]
+      assert orig_seq.shape == (max_size, n_dim)
+      orig_seq = numpy.where((numpy.arange(s, s + max_size) >= seq_lens[b])[:, None], 0.0, orig_seq)
+      for t in range(max_size):
         numpy.testing.assert_equal(orig_seq[t], out[b, t])
 
 

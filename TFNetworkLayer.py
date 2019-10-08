@@ -2441,15 +2441,21 @@ class SliceNdLayer(_ConcatInputLayer):
   def __init__(self, start, size, **kwargs):
     """
     :param LayerBase start:
-    :param int size:
+    :param int|None size: if None, it uses the max possible size, and it becomes a dynamic axis
     """
     super(SliceNdLayer, self).__init__(**kwargs)
-    from TFUtil import slice_nd, dimshuffle, where_bc, expand_multiple_dims
+    from TFUtil import slice_nd, dimshuffle, where_bc, expand_multiple_dims, DimensionTag
     x = self.input_data.copy_as_batch_major()
     assert x.time_dim_axis == 1, "currently only time-axis==1 supported"
     seq_lens = x.get_sequence_lengths() if x.is_time_axis_dynamic() else None
     self.start = start
     start = start.output.get_placeholder_as_batch_major()
+    if size is None:
+      if seq_lens is None:
+        size = tf.maximum(tf.reduce_max(x.batch_shape[1] - start), 0)
+      else:
+        size = tf.maximum(tf.reduce_max(seq_lens - start), 0)
+    self.size = size
     start = dimshuffle(start, [0, 'x'])  # (B, T, ...)
     slices = slice_nd(x.placeholder, start=tf.cast(start, tf.int32), size=size)  # (B,size, ...)
     if seq_lens is not None:
@@ -2457,7 +2463,15 @@ class SliceNdLayer(_ConcatInputLayer):
       mask = expand_multiple_dims(mask, list(range(2, x.batch_ndim)))
       slices = where_bc(mask, tf.zeros_like(slices), slices)
     self.output.size_placeholder = x.size_placeholder.copy()
-    self.output.size_placeholder.pop(0, None)  # static time axis
+    if isinstance(size, tf.Tensor):
+      self.output.size_placeholder[0] = tf.maximum(seq_lens - start, 0)
+      tag = DimensionTag(
+        description="sliced-time:%s" % self.get_absolute_name(),
+        kind=DimensionTag.Types.Spatial)
+      tag.set_tag_on_size_tensor(self.output.size_placeholder[0])
+    else:
+      assert isinstance(size, int)
+      self.output.size_placeholder.pop(0, None)  # static time axis
     self.output.placeholder = slices
 
   def get_dep_layers(self):

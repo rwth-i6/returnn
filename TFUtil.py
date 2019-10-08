@@ -5725,7 +5725,7 @@ def slice_nd(x, start, size):
   """
   :param tf.Tensor x: shape (B, T, ...)
   :param tf.Tensor start: shape (B,), int32
-  :param int size:
+  :param int|tf.Tensor size: scalar
   :return: [x[start_1:size], x[start_2:size], ..., x[start_B:size]], shape (B, size, ...)
     Like :func:`slice_pad_zeros`, the size in the first axis will always be ``size``,
     and we will pad with zeros.
@@ -5738,7 +5738,7 @@ def slice_nd(x, start, size):
     batch_idxs = expand_dims_unbroadcast(tf.range(n_batch), 1, size)  # (n_batch, size)
     batch_idxs = tf.reshape(batch_idxs, (-1,))  # (n_batch*size,)
 
-    window_pos = tf.expand_dims(start, 1) + tf.range(size)  # (n_batch, size)
+    window_pos = tf.expand_dims(start, 1) + tf.range(size)[None, :]  # (n_batch, size)
     window_pos = tf.reshape(window_pos, (-1,))  # (n_batch*size,)
 
     # build mask for zero-padding
