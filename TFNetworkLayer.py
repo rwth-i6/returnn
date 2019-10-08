@@ -2444,14 +2444,18 @@ class SliceNdLayer(_ConcatInputLayer):
     :param int size:
     """
     super(SliceNdLayer, self).__init__(**kwargs)
-    from TFUtil import slice_nd, dimshuffle
+    from TFUtil import slice_nd, dimshuffle, where_bc, expand_multiple_dims
     x = self.input_data.copy_as_batch_major()
+    assert x.time_dim_axis == 1, "currently only time-axis==1 supported"
+    seq_lens = x.get_sequence_lengths() if x.is_time_axis_dynamic() else None
     self.start = start
     start = start.output.get_placeholder_as_batch_major()
     start = dimshuffle(start, [0, 'x'])  # (B, T, ...)
-    axis = x.time_dim_axis
-    assert axis == 1, "currently only time-axis==1 supported"
-    slices = slice_nd(x.placeholder, tf.cast(start, tf.int32), size)  # (B,size, ...)
+    slices = slice_nd(x.placeholder, start=tf.cast(start, tf.int32), size=size)  # (B,size, ...)
+    if seq_lens is not None:
+      mask = tf.range(size)[None, :] + start >= seq_lens[:, None]  # (B,T)
+      mask = expand_multiple_dims(mask, list(range(2, x.batch_ndim)))
+      slices = where_bc(mask, tf.zeros_like(slices), slices)
     self.output.size_placeholder = x.size_placeholder.copy()
     self.output.size_placeholder.pop(0, None)  # static time axis
     self.output.placeholder = slices
