@@ -3070,6 +3070,8 @@ class _TemplateLayer(LayerBase):
       # All refs to this subnet are other _TemplateLayer, no matter if prev-frame or not.
       # Otherwise, refs to the base network are given as-is.
       dependencies = list(self.cur_frame_dependencies)
+      # If real layer already constructed, use it.
+      dependencies = [d.get_normalized_layer() for d in dependencies]
       if self.prev_frame_dependencies:
         cell = self._get_cell()
         for layer in self.prev_frame_dependencies:
