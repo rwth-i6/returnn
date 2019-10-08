@@ -2469,7 +2469,7 @@ class SliceNdLayer(_ConcatInputLayer):
       slices = where_bc(mask, tf.zeros_like(slices), slices)
     self.output.size_placeholder = x.size_placeholder.copy()
     if isinstance(size, tf.Tensor):
-      self.output.size_placeholder[0] = tf.maximum(seq_lens - start, 0)
+      self.output.size_placeholder[0] = tf.maximum(seq_lens - tf.reshape(start, tf.shape(seq_lens)), 0)
       tag = DimensionTag(
         description="sliced-time:%s" % self.get_absolute_name(),
         kind=DimensionTag.Types.Spatial)
