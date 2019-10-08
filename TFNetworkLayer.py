@@ -2440,10 +2440,11 @@ class SliceNdLayer(_ConcatInputLayer):
   layer_class = "slice_nd"
   recurrent = True
 
-  def __init__(self, start, size, **kwargs):
+  def __init__(self, start, size, min_size=None, **kwargs):
     """
     :param LayerBase start:
     :param int|None size: if None, it uses the max possible size, and it becomes a dynamic axis
+    :param int|None min_size: if size is None, but we want to have a min-size, set this
     """
     super(SliceNdLayer, self).__init__(**kwargs)
     from TFUtil import slice_nd, dimshuffle, where_bc, expand_multiple_dims, DimensionTag
@@ -2457,6 +2458,8 @@ class SliceNdLayer(_ConcatInputLayer):
         size = tf.maximum(tf.reduce_max(x.batch_shape[1] - start), 0)
       else:
         size = tf.maximum(tf.reduce_max(seq_lens - start), 0)
+      if min_size is not None:
+        size = tf.maximum(size, min_size)
     self.size = size
     start = dimshuffle(start, [0, 'x'])  # (B, T, ...)
     slices = slice_nd(x.placeholder, start=tf.cast(start, tf.int32), size=size)  # (B,size, ...)
