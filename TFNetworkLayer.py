@@ -2435,8 +2435,10 @@ class SliceNdLayer(_ConcatInputLayer):
   This layers allows a different start slice point for each batch,
   in contrast to :class:`SliceLayer`, and the start is variable.
   See also :class:`GatherNdLayer`.
+  :class:`PrefixInTimeLayer` can recover the original shape (by zero-padding).
   """
   layer_class = "slice_nd"
+  recurrent = True
 
   def __init__(self, start, size, **kwargs):
     """
@@ -5183,37 +5185,103 @@ class ElemwiseProdLayer(_ConcatInputLayer):
     return get_concat_sources_data_template(sources, name="%s_output" % name)
 
 
-class PrefixInTimeLayer(CopyLayer):
+class PrefixInTimeLayer(_ConcatInputLayer):
   """
   Adds some prefix in time dimension.
+  This is kind of the reverse of :class:`SliceNdLayer` does.
   """
   layer_class = "prefix_in_time"
   recurrent = True
 
-  def __init__(self, prefix=0.0, repeat=1, **kwargs):
+  def __init__(self, prefix=0.0, repeat=1, size_base=None, **kwargs):
     """
     :param float|str prefix: either some constant or another layer
-    :param int repeat: how often to repeat the prefix
+    :param int|LayerBase repeat: how often to repeat the postfix
+    :param LayerBase|None size_base: copy seq-lens from here
     """
     from TFUtil import DimensionTag
     super(PrefixInTimeLayer, self).__init__(**kwargs)
+    self.output = self.input_data.copy(name="%s_output" % self.name)
     assert self.output.time_dim_axis is not None
     assert isinstance(prefix, (float, int)), "other layer src not yet supported"
+    self.repeat_layer = None
+    if isinstance(repeat, LayerBase):
+      self.repeat_layer = repeat
+      assert repeat.output.ndim == 0 and repeat.output.have_batch_axis() == self.input_data.have_batch_axis()
+      repeat = repeat.output.placeholder
+      self.output = self.output.copy_as_batch_spatial_major()
+    else:
+      assert isinstance(repeat, int)
+      assert repeat >= 0
+    self.repeat = repeat
     c = tf.constant(prefix, dtype=self.output.dtype)
+    seq_len = self.output.get_sequence_lengths()
+    if size_base:
+      new_seq_len = size_base.output.get_sequence_lengths()
+    else:
+      new_seq_len = seq_len + repeat
+    self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] = new_seq_len
+    if not DimensionTag.get_tag_from_size_tensor(new_seq_len):
+      tag = DimensionTag(
+        description="time-with-prefix:%s" % self.get_absolute_name(),
+        kind=DimensionTag.Types.Spatial)
+      tag.set_tag_on_size_tensor(new_seq_len)
+    max_repeat = repeat if isinstance(repeat, int) else tf.maximum(tf.reduce_max(repeat), 0)
     shape = [((self.output.batch_shape[i] or tf.shape(self.output.placeholder)[i])
               if (i != self.output.time_dim_axis)
-              else repeat)
+              else max_repeat)
              for i in range(self.output.batch_ndim)]
-    x = tf.ones(shape, dtype=self.output.dtype)
-    self.output.placeholder = tf.concat([x * c, self.output.placeholder], axis=self.output.time_dim_axis)
-    self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] += repeat
-    tag = DimensionTag(
-      description="time-with-prefix:%s" % self.get_absolute_name(),
-      kind=DimensionTag.Types.Spatial)
-    tag.set_tag_on_size_tensor(self.output.size_placeholder[self.output.time_dim_axis_excluding_batch])
+    prefix_t = tf.ones(shape, dtype=self.output.dtype) * c
+    x = tf.concat([prefix_t, self.output.placeholder], axis=self.output.time_dim_axis)
+    if not isinstance(repeat, int):
+      assert isinstance(repeat, tf.Tensor) and repeat.shape.ndims == 1  # (B,)
+      max_new_seq_len = tf.reduce_max(new_seq_len)
+      from TFUtil import slice_nd
+      assert (self.output.batch_dim_axis, self.output.time_dim_axis) == (0, 1)
+      x = slice_nd(x, start=max_repeat - repeat, size=max_new_seq_len)
+    self.output.placeholder = x
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    deps = super(PrefixInTimeLayer, self).get_dep_layers()
+    if self.repeat_layer:
+      deps.append(self.repeat_layer)
+    return deps
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    super(PrefixInTimeLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if isinstance(d.get("repeat", None), str):
+      d["repeat"] = get_layer(d["repeat"])
+    if d.get("size_base", None):
+      d["size_base"] = get_layer(d["size_base"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, size_base=None, repeat=None, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param LayerBase|None size_base:
+    :param LayerBase|int|None repeat:
+    :rtype: Data
+    """
+    # Note: Time seq len is not correct...
+    x = get_concat_sources_data_template(sources, name="%s_output" % name)
+    if size_base and not x.undefined:
+      x.size_placeholder[x.time_dim_axis_excluding_batch] = size_base.output.get_sequence_lengths()
+    if isinstance(repeat, LayerBase):
+      x = x.copy_as_batch_spatial_major()
+    return x
 
 
-class PostfixInTimeLayer(CopyLayer):
+class PostfixInTimeLayer(_ConcatInputLayer):
   """
   Adds some postfix in time dimension.
   """
@@ -5227,6 +5295,7 @@ class PostfixInTimeLayer(CopyLayer):
     """
     from TFUtil import DimensionTag
     super(PostfixInTimeLayer, self).__init__(**kwargs)
+    self.output = self.input_data.copy(name="%s_output" % self.name)
     assert self.output.time_dim_axis is not None
     assert isinstance(postfix, (float, int)), "other layer src not yet supported"
     c = tf.constant(postfix, dtype=self.output.dtype)
@@ -5252,6 +5321,16 @@ class PostfixInTimeLayer(CopyLayer):
       description="time-with-postfix:%s" % self.get_absolute_name(),
       kind=DimensionTag.Types.Spatial)
     tag.set_tag_on_size_tensor(self.output.size_placeholder[self.output.time_dim_axis_excluding_batch])
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    # Note: Time seq len is not correct...
+    return get_concat_sources_data_template(sources, name="%s_output" % name)
 
 
 class TimeChunkingLayer(_ConcatInputLayer):
