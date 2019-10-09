@@ -789,13 +789,17 @@ class TFNetwork(object):
       used_data_keys = used_data_keys.difference(self.extern_data.extra_added_keys)
     return used_data_keys
 
-  def get_seq_tags(self, mark_data_key_as_used=True):
+  def get_seq_tags(self, mark_data_key_as_used=True, beam=None):
     """
     :param bool mark_data_key_as_used: for extern_data
+    :param TFUtil.SearchBeam|None beam:
     :return: tensor of shape (batch,) of dtype string, via extern_data
     :rtype: tf.Tensor
     """
-    return self.get_extern_data(key="seq_tag", mark_data_key_as_used=mark_data_key_as_used).placeholder
+    data = self.get_extern_data(key="seq_tag", mark_data_key_as_used=mark_data_key_as_used)
+    if beam:
+      data = data.copy_extend_with_beam(beam)
+    return data.placeholder
 
   def get_losses_initialized(self, reduce_func=None, with_total=False):
     """

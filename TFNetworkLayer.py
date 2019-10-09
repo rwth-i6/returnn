@@ -7303,7 +7303,8 @@ class HDFDumpLayer(LayerBase):
 
     tf_write = tf.py_func(
       py_write,
-      [data.placeholder, self.network.get_seq_tags(),
+      [data.placeholder,
+       self.network.get_seq_tags(beam=data.beam),
        tf.convert_to_tensor([size for (i, size) in sorted(data.size_placeholder.items())])] +
       [value.placeholder for (key, value) in sorted(extra.items())],
       tf.int64,  # return value is ignored
