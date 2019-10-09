@@ -346,6 +346,8 @@ class MetaDataset(CachedDataset2):
           :rtype: int
           """
           return self._seq_lens[self.seq_list_original[self.default_dataset_key][s]]["data"]
+      elif self._seq_order_seq_lens_file:
+        get_seq_len = self._get_seq_order_seq_lens_by_idx
       else:
         self.orig_seq_order_is_initialized = False
         get_seq_len = self._get_dataset_seq_length
