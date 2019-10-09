@@ -362,6 +362,13 @@ class MetaDataset(CachedDataset2):
       dataset.init_seq_order(epoch=epoch, seq_list=self.seq_list_ordered[dataset_key])
     return True
 
+  def get_all_tags(self):
+    """
+    :return: list of all seq tags, of the whole dataset, without partition epoch
+    :rtype: list[str]
+    """
+    return self.seq_list_original[self.default_dataset_key]
+
   def finish_epoch(self):
     """
     This would get called at the end of the epoch.
