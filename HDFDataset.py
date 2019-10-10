@@ -950,6 +950,9 @@ class SimpleHDFWriter:
       shape = [None] * ndim  # type: typing.List[typing.Optional[int]]
       if ndim >= 2:
         shape[-1] = dim
+      if dtype == "string":
+        # noinspection PyUnresolvedReferences
+        dtype = h5py.special_dtype(vlen=str)
       self._datasets[data_key] = self._file['targets/data'].create_dataset(
         data_key, shape=[d if d else 0 for d in shape], dtype=dtype, maxshape=shape)
       self._file['targets/size'].attrs[data_key] = [dim or 1, ndim]
@@ -1007,13 +1010,18 @@ class SimpleHDFWriter:
     assert self._file.attrs['numSeqs'] > 0 and self._seq_lengths.shape[0] > 0
     seq_idx = self._file.attrs['numSeqs'] - 1
 
-    if self._prepare_extra({data_key: (dim, raw_data.ndim, raw_data.dtype)}):
+    if raw_data.dtype == numpy.object:
+      # Is this a string?
+      assert isinstance(raw_data.flat[0], (str, bytes))
+      dtype = "string"
+    else:
+      dtype = raw_data.dtype.name
+    if self._prepare_extra({data_key: (dim, raw_data.ndim, dtype)}):
       # We added it now. Maybe other extra data keys were added before. The data_key_idx is different now.
-      # Thus, make sure that for all other already existing extra data keys, the offsets are the same.
-      assert seq_idx == 0 and all([
-        num == raw_data.shape[0]
-        for (key, num) in self._extra_num_time_steps.items()
-        if key != data_key])
+      # Thus, seq_lengths might have become invalid. Reinit them.
+      assert seq_idx == 0  # We can only do that in the beginning.
+      for data_key_idx_0, data_key_ in enumerate(sorted(self._prepared_extra)):
+        self._seq_lengths[seq_idx, data_key_idx_0 + 1] = self._extra_num_time_steps[data_key_]
 
     self._extra_num_time_steps[data_key] += raw_data.shape[0]
     self._datasets[data_key].resize(self._extra_num_time_steps[data_key], axis=0)
