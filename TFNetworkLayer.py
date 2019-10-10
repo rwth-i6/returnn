@@ -6667,7 +6667,7 @@ class SubnetworkLayer(LayerBase):
     else:
       subnet = cls._construct_template_subnet(
         name=name, network=network, subnetwork=kwargs["subnetwork"],
-        sources=kwargs["sources"], concat_sources=kwargs["concat_sources"])
+        sources=kwargs["sources"], concat_sources=kwargs.get("concat_sources", True))
     for layer_name, sub_layer in sorted(subnet.layers.items()):
       if layer:
         assert isinstance(layer, SubnetworkLayer)
