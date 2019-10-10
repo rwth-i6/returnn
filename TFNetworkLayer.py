@@ -2164,6 +2164,7 @@ class SelectSearchSourcesLayer(InternalLayer):
     self.used_search_choices_beams = False
     self.search_choices_from_layer = search_choices
     self.output = src.output.copy_as_batch_major()
+    self.rec_vars_outputs = src.rec_vars_outputs.copy()
     src_search_choices = src.get_search_choices()
     self.transform_func = None  # type: typing.Optional[typing.Callable[[tf.Tensor],tf.Tensor]]
     self.search_choices_seq = None  # type: typing.Optional[typing.List[SearchChoices]]
