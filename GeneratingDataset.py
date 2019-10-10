@@ -2566,7 +2566,24 @@ class LibriSpeechCorpus(CachedDataset2):
 
 class OggZipDataset(CachedDataset2):
   """
-  Generic dataset which reads a Zip file containing Ogg files for each sequence.
+  Generic dataset which reads a Zip file containing Ogg files for each sequence and a text document.
+  The feature extraction settings are determined by the ``audio`` option, which is passed to :class:`ExtractAudioFeatures`.
+  Does also support Wav files, and might even support other file formats readable by the 'soundfile'
+  library (not tested). By setting ``audio`` or ``targets`` to ``None``, the dataset can be used in
+  text only or audio only mode. The content of the zip file is:
+
+    - a .txt file with the same name as the zipfile, containing a python list of dictionaries
+    - a subfolder with the same name as the zipfile, containing the audio files
+
+  The dictionaries in the .txt file must have the following structure:
+
+  .. code::
+
+    [{'seq_name': 'arbitrary_sequence_name', 'text': 'some utterance text', 'duration': 2.3, 'file': 'sequence0.wav'}, ...]
+
+  If ``seq_name`` is not included, the seq_tag will be the name of the file. ``duration`` is mandatory, as this information
+  is needed for the sequence sorting.
+
   """
 
   def __init__(self, path, audio, targets,
@@ -2654,7 +2671,12 @@ class OggZipDataset(CachedDataset2):
     assert isinstance(first_entry, dict)
     assert isinstance(first_entry["text"], str)
     assert isinstance(first_entry["duration"], float)
-    assert isinstance(first_entry["file"], str)
+    # when 'audio' is None and sequence names are given, this dataset can be used in text-only mode
+    if "file" in first_entry:
+      assert isinstance(first_entry["file"], str)
+    else:
+      assert self.feature_extractor, "feature extraction is enabled, but no audio files are specified"
+      assert isinstance(first_entry["seq_name"], str)
     return data
 
   def _filter_fixed_random_subset(self, fixed_random_subset):
