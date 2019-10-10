@@ -7263,7 +7263,13 @@ class HDFDumpLayer(LayerBase):
         if not self.hdf_writer:
           self.hdf_writer = SimpleHDFWriter(
             filename=filename, dim=data.dim, ndim=ndim,
-            extra_type={key: (value.dim, value.ndim, value.dtype) for (key, value) in self.extra.items()})
+            extra_type={
+              key: (
+                value.dim,
+                min(value.ndim - len(value.size_placeholder) + 1, 2),
+                value.dtype)
+              for (key, value) in self.extra.items()
+            })
           self.network.register_graph_reset_callback(self._at_graph_reset)
 
         n_batch = data_np.shape[0]
@@ -7272,23 +7278,61 @@ class HDFDumpLayer(LayerBase):
         seq_lens = {i: size for (i, size) in zip(sorted(data.size_placeholder.keys()), sizes)}
         # There may be axes with a fixed length other than the batch and feature axes.
         # These have the indices 0, ..., (ndim-1), as the batch dimension is skipped.
-        for dim in range(ndim - 1):
+        for dim in range(ndim_without_features):
           if dim not in seq_lens:
             seq_lens[dim] = numpy.array([data_np.shape[dim + 1]] * n_batch, dtype="int32")
         assert len(seq_lens) == ndim_without_features
-        assert len(extras) == len(self.extra)
-        extra = {key: value for (key, value) in zip(sorted(self.extra.keys()), extras)}
+        assert len(extras) == len(self.extra) * 2  # value + sizes
+        extra = {}
+        for i, (key, extra_data) in enumerate(sorted(self.extra.items())):
+          assert isinstance(key, str)
+          assert isinstance(extra_data, Data)
+          assert key not in extra
+          assert "%s_seq_lens" % key not in extra
+          value, value_sizes = extras[i], extras[len(self.extra) + i]
+          assert isinstance(value, numpy.ndarray)
+          assert extra_data.batch_dim_axis == 0 and value.ndim == extra_data.ndim + 1  # including batch-dim
+          value_batch = value.shape[0]  # we allow a different beam size / different batch size
+          value_seq_lens = {i: size for (i, size) in zip(sorted(extra_data.size_placeholder.keys()), value_sizes)}
+          for dim in range(extra_data.ndim):
+            if dim not in value_seq_lens:
+              assert dim > max(list(value_seq_lens.keys()) + [-1])  # assume all dynamic axes came first
+              value_seq_lens[dim] = numpy.array([value.shape[dim + 1]] * value_batch, dtype="int32")
+          if value_seq_lens:
+            batch_value_seq_sizes = numpy.zeros((value_batch, len(value_seq_lens)), dtype="int32")
+            for i_, (axis, size) in enumerate(sorted(value_seq_lens.items())):
+              assert isinstance(size, numpy.ndarray) and size.shape == (value_batch,)
+              batch_value_seq_sizes[:, i_] = size
+            extra["%s_seq_lens" % key] = batch_value_seq_sizes
+          elif self.dump_whole_batches:
+            # Have sth in there, such that we know explicitly the batch-dim.
+            extra["%s_seq_lens" % key] = numpy.zeros((value_batch, 1), dtype="int32")
+          if self.dump_whole_batches:
+            value = numpy.reshape(value, (-1,))  # flatten all
+          elif extra_data.ndim - 1 in extra_data.size_placeholder:  # last axis dynamic?
+            value = numpy.reshape(value, (value_batch, -1))  # flatten all
+          elif value.ndim > 2:
+            value = numpy.reshape(value, (value_batch, -1, value.shape[-1]))  # flatten all except last
+          extra[key] = value
+        if seq_lens:
+          batch_seq_sizes = numpy.zeros((n_batch, len(seq_lens)), dtype="int32")
+          for i, (axis, size) in enumerate(sorted(seq_lens.items())):
+            batch_seq_sizes[:, i] = size
+          extra["seq_sizes"] = batch_seq_sizes
+        elif self.dump_whole_batches:
+          # Have sth in there, such that we know explicitly the batch-dim.
+          extra["seq_sizes"] = numpy.zeros((n_batch, 1), dtype="int32")
         if self.dump_whole_batches:
           # The batch dim itself becomes another axis to dump.
           # We also want to store the individual seq lens.
-          batch_seq_sizes = numpy.zeros((1, n_batch, len(seq_lens)), dtype="int32")
-          for i, (axis, size) in enumerate(sorted(seq_lens.items())):
-            batch_seq_sizes[0, :, i] = seq_lens[axis]
-          extra["seq_sizes"] = batch_seq_sizes
           assert sorted(seq_lens.keys()) == list(range(len(seq_lens)))
           flat_len = numpy.prod(data_np.shape[:len(seq_lens) + 1])
           data_np = data_np.reshape((1, flat_len) + data_np.shape[len(seq_lens) + 1:])
           seq_lens = {0: numpy.array([flat_len], dtype="int32")}
+          extra["seq_tags"] = numpy.array(tags)
+          for key, value in list(extra.items()):
+            value = numpy.expand_dims(value, 0)  # add outer dim
+            extra[key] = value
           tags = [b"<->".join(tags)]
           n_batch = 1
 
@@ -7306,7 +7350,9 @@ class HDFDumpLayer(LayerBase):
       [data.placeholder,
        self.network.get_seq_tags(beam=data.beam),
        tf.convert_to_tensor([size for (i, size) in sorted(data.size_placeholder.items())])] +
-      [value.placeholder for (key, value) in sorted(extra.items())],
+      [value.placeholder for (key, value) in sorted(extra.items())] +
+      [tf.convert_to_tensor([size for (i, size) in sorted(value.size_placeholder.items())])
+       for (key, value) in sorted(extra.items())],
       tf.int64,  # return value is ignored
       stateful=True)
 
