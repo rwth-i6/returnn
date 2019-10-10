@@ -4178,9 +4178,8 @@ class ChoiceLayer(BaseChoiceLayer):
         cheating_gold_targets = None
         if cheating:
           assert len(self.sources) == 1, "Cheating not yet implemented for multiple sources."
-          cheating_gold_targets = self._get_target_value().get_placeholder_as_batch_major()  # (batch*beam,), int32
-          # gold_targets will get automatically expanded for the beam. Undo that.
-          cheating_gold_targets = tf.reshape(cheating_gold_targets, [net_batch_dim, scores_beam_in])[:, 0]
+          cheating_gold_targets = self._get_target_value(
+            search_choices=None).get_placeholder_as_batch_major()  # (batch,), int32
         # `tf.nn.top_k` is the core function performing our search. That is wrapped in `TFUtil.beam_search`.
         # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
         from TFUtil import beam_search

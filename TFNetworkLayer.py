@@ -955,16 +955,19 @@ class LayerBase(object):
       data = data.copy_extend_with_beam(search_choices.get_beam_info())
     return data
 
-  def _get_target_value(self, target=None, mark_data_key_as_used=True):
+  def _get_target_value(self, target=None, mark_data_key_as_used=True, search_choices=NotSpecified):
     """
     :param str|None target:
     :param bool mark_data_key_as_used: forwarded self.network.get_extern_data()
+    :param SearchChoices|NotSpecified|None search_choices:
     :rtype: Data | None
     """
     if target is None:
       target = self.target
+    if search_choices is NotSpecified:
+      search_choices = self.get_search_choices()
     return self._static_get_target_value(
-      target=target, _target_layers=self._target_layers, search_choices=self.get_search_choices(),
+      target=target, _target_layers=self._target_layers, search_choices=search_choices,
       network=self.network, mark_data_key_as_used=mark_data_key_as_used)
 
   def _cond_only_on_eval_opt(self, on_eval_func, default_value):
