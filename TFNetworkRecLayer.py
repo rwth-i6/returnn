@@ -4761,13 +4761,15 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
     """
     assert len(sources) == 1
     src = sources[0]
-    super(DecideKeepBeamLayer, self).__init__(beam_size=src.output.beam.beam_size, sources=sources, **kwargs)
+    # We also allow a source after a DecideLayer.
+    beam_size = src.output.beam.beam_size if src.output.beam else 1
+    super(DecideKeepBeamLayer, self).__init__(beam_size=beam_size, sources=sources, **kwargs)
     # If not in search, this will already be set via self.get_out_data_from_opts().
     if self.network.search_flag:
       base_search_choices = src.get_search_choices()
       if base_search_choices:
-        self.search_choices = SearchChoices(owner=self, beam_size=self.output.beam.beam_size, keep_raw=True)
-        assert base_search_choices.beam_size == self.output.beam.beam_size == self.search_choices.beam_size
+        self.search_choices = SearchChoices(owner=self, beam_size=beam_size, keep_raw=True)
+        assert base_search_choices.beam_size == beam_size == self.search_choices.beam_size
         net_batch_dim = self.network.get_data_batch_dim()
         from TFUtil import expand_dims_unbroadcast
         self.search_choices.set_src_beams(expand_dims_unbroadcast(
@@ -4784,7 +4786,7 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
     :rtype: int|None
     """
     assert len(sources) == 1
-    return sources[0].output.beam.beam_size
+    return sources[0].output.beam.beam_size if sources[0].output.beam else 1
 
   @classmethod
   def get_rec_initial_extra_outputs(cls, sources, **kwargs):
