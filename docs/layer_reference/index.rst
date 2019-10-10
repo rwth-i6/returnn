@@ -48,6 +48,8 @@ but another layer in the network, add 'layer:' as prefix.
 
 **spatial_smoothing** [:class:`float`] if specified, add spatial-smoothing loss of the layer output with the given factor to the total constraints.
 
+**register_as_extern_data** [:class:`str`] register the output of the layer as an accessable entry of extern_data.
+
 .. _connecting:
 
 Connecting Layers
