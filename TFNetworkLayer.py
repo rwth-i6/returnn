@@ -7223,17 +7223,23 @@ class HDFDumpLayer(LayerBase):
   """
   layer_class = "hdf_dump"
 
-  def __init__(self, filename, extra=None, dump_whole_batches=False, **kwargs):
+  def __init__(self, filename, extra=None, dump_whole_batches=False, labels=None, **kwargs):
     """
     :param str filename:
     :param None|dict[str,LayerBase] extra:
     :param bool dump_whole_batches: dumps the whole batch as a single sequence into the HDF
+    :param list[str]|None labels:
     """
     super(HDFDumpLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1
     assert self.sources[0].output.have_time_axis()
     self.output = self.sources[0].output.copy("%s_output" % self.name)
     data = self.output.copy_as_batch_spatial_major()  # need batch-major for SimpleHDFWriter
+
+    if labels is not None:
+      assert len(labels) == data.dim
+    elif data.vocab:
+      labels = data.vocab.labels
 
     from HDFDataset import SimpleHDFWriter
     import numpy
@@ -7267,6 +7273,7 @@ class HDFDumpLayer(LayerBase):
         if not self.hdf_writer:
           self.hdf_writer = SimpleHDFWriter(
             filename=filename, dim=data.dim, ndim=ndim,
+            labels=labels,
             extra_type={
               key: (
                 value.dim,
