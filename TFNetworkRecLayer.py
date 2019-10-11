@@ -4049,6 +4049,7 @@ class ChoiceLayer(BaseChoiceLayer):
     self.input_type = input_type
     self.explicit_search_sources = explicit_search_sources
     self.scheduled_sampling = CollectionReadCheckCovered.from_bool_or_dict(scheduled_sampling)
+    self.cheating = cheating
     self.search_scores_in = None
     self.search_scores_base = None
     self.search_scores_combined = None
@@ -4185,17 +4186,15 @@ class ChoiceLayer(BaseChoiceLayer):
         self.search_scores_in = scores_in
         self.search_scores_base = scores_base
         self.search_scores_combined = scores_comb
-        cheating_gold_targets = None
+        cheating_gold_targets, cheating_src_beam_idx = None, None
         if cheating:
-          assert len(self.sources) == 1, "Cheating not yet implemented for multiple sources."
-          cheating_gold_targets = self._get_target_value(
-            search_choices=None).get_placeholder_as_batch_major()  # (batch,), int32
+          cheating_gold_targets, cheating_src_beam_idx = self._get_cheating_targets_and_src_beam_idxs(scores_comb)
         # `tf.nn.top_k` is the core function performing our search. That is wrapped in `TFUtil.beam_search`.
         # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
         from TFUtil import beam_search
         src_beams, labels, scores = beam_search(
           scores=scores_comb, beam_size=beam_size, keep_beams=keep_beams,
-          cheating_gold_targets=cheating_gold_targets)
+          cheating_gold_targets=cheating_gold_targets, cheating_src_beam_idx=cheating_src_beam_idx)
         self.search_choices.set_src_beams(src_beams)  # (batch, beam) -> beam_in idx
         labels = tf.reshape(labels, [net_batch_dim * beam_size])  # (batch * beam)
         labels = tf.cast(labels, self.output.dtype)
@@ -4431,6 +4430,59 @@ class ChoiceLayer(BaseChoiceLayer):
       labels_1 = tf.squeeze(tf.batch_gather(pruned_labels_src_beam_selected[1], tf.expand_dims(ids_1, axis=-1)), axis=-1)
 
       return [labels_0, labels_1]
+
+  def _get_cheating_targets_and_src_beam_idxs(self, scores):
+    """
+    :param tf.Tensor scores: (batch,beam_in,dim). combined scores (i.e. base beam scores + new scores),
+      dense over the dims, such that we have labels in [0,...,dim-1].
+    :return: cheating_gold_targets, cheating_src_beam_idx
+    :rtype: (tf.Tensor,tf.Tensor|None)
+    """
+    assert self.cheating
+    assert len(self.sources) == 1, "Cheating not yet implemented for multiple sources."
+    cheating_gold_targets = self._get_target_value(
+      search_choices=None).get_placeholder_as_batch_major()  # (batch,), int32
+    base_search_choices = self.search_choices.src_layer.search_choices
+    assert isinstance(base_search_choices, SearchChoices)
+    other_choice_layer = base_search_choices.owner.get_normalized_layer()
+    if other_choice_layer is self:  # self from prev frame
+      return cheating_gold_targets, None  # default case for TFUtil.beam_search
+    # Different choice.
+    if not isinstance(other_choice_layer, ChoiceLayer):
+      # Warning: This is wrong in general. (It might be correct depending on your config.)
+      # However, this is the old behavior.
+      return cheating_gold_targets, None  # default case for TFUtil.beam_search
+    assert isinstance(other_choice_layer, ChoiceLayer)  # else not implemented
+    if other_choice_layer.cheating:  # also cheating?
+      return cheating_gold_targets, None  # default case for TFUtil.beam_search
+    # We must know valid cheating_src_beam_idx which are from cheating traces.
+    other_choice_src_layer = other_choice_layer.search_choices.src_layer
+    # Note: We cannot used get_normalized_layer because `self` is not registered yet.
+    assert other_choice_src_layer.network is self.network and other_choice_src_layer.name == "prev:%s" % self.name, (
+      other_choice_layer, other_choice_layer.search_choices, other_choice_src_layer,
+      "Expected that this is self from prev frame.")
+    # Figure out the beam index of ourselves from the previous frame.
+    # Normally this is beam_in - 1. beam_in is the incoming beam_size, which is 1 in the first frame.
+    # Also be careful about end-of-sequence.
+    # A somewhat simple way to determine it for all these cases:
+    prev_beam_idx = tf.reduce_max(base_search_choices.src_beams)
+    # Now find the best possible beam index.
+    # Note that we could do this even in the general case.
+    # It also would make sense later to not add the cheating label twice (see TFUtil.beam_search logic);
+    # in that case, we always must use this logic here.
+    from TFUtil import get_shape, where_bc, beam_search
+    n_batch, beam_in, dim = get_shape(scores)
+    scores = where_bc(
+      tf.expand_dims(tf.equal(base_search_choices.src_beams, prev_beam_idx), axis=-1),
+      scores,
+      float("-inf"))  # (batch,beam_in,dim)
+    scores = where_bc(
+      tf.equal(cheating_gold_targets[:, None, None], tf.range(dim)[None, None, :]),
+      scores,
+      float("-inf"))  # (batch,beam_in,dim)
+    src_beams, _, _ = beam_search(scores, beam_size=1)
+    src_beams = src_beams[:, 0]  # (batch,)
+    return cheating_gold_targets, src_beams
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):

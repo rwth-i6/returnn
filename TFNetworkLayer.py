@@ -1598,7 +1598,7 @@ class SearchChoices(object):
     self.owner = owner
     self._done_src_layer = False
     self._src_layer = None  # type: typing.Optional[LayerBase]
-    self.src_beams = None  # src beam index, (batch, beam)
+    self.src_beams = None  # type: typing.Optional[tf.Tensor]  # src beam index, (batch, beam)
     self.beam_size = beam_size
     self.beam_scores = None  # type: typing.Optional[tf.Tensor]  # (batch, beam)
     self.is_decided = is_decided

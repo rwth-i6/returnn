@@ -8067,7 +8067,7 @@ def _tensor_array_select_src_beams(ta, src_beams):
   return ta_new
 
 
-def beam_search(scores, beam_size, keep_beams=False, cheating_gold_targets=None):
+def beam_search(scores, beam_size, keep_beams=False, cheating_gold_targets=None, cheating_src_beam_idx=None):
   """
   This is mostly a higher-level wrapper around :func:`tf.nn.top_k`.
 
@@ -8077,6 +8077,7 @@ def beam_search(scores, beam_size, keep_beams=False, cheating_gold_targets=None)
   :param bool keep_beams: specifies that we keep the beam_in entries,
     i.e. we just expand, i.e. we just search on the dim. beam_size must be a multiple of beam_in.
   :param tf.Tensor|None cheating_gold_targets: (batch,), int32
+  :param tf.Tensor|None cheating_src_beam_idx: (batch,), int32. If not given, assumes beam_in - 1. See code below.
   :rtype: (tf.Tensor,tf.Tensor,tf.Tensor)
   :return: src_beams, labels, beam_scores.
     src_beams: (batch, beam) -> beam_in idx (int32),
@@ -8089,8 +8090,11 @@ def beam_search(scores, beam_size, keep_beams=False, cheating_gold_targets=None)
     scores = tf.reshape(scores, [batch_dim * beam_in, 1, in_dim])
     if cheating_gold_targets is not None:
       cheating_gold_targets = tile_transposed(cheating_gold_targets, axis=0, multiples=beam_in)
+      if cheating_src_beam_idx is not None and cheating_src_beam_idx.shape.ndims > 0:
+        cheating_src_beam_idx = tile_transposed(cheating_src_beam_idx, axis=0, multiples=beam_in)
     _, labels, beam_scores = beam_search(
-      scores=scores, beam_size=beam_size // beam_in, cheating_gold_targets=cheating_gold_targets)
+      scores=scores, beam_size=beam_size // beam_in,
+      cheating_gold_targets=cheating_gold_targets, cheating_src_beam_idx=cheating_src_beam_idx)
     src_beams = tf.zeros([batch_dim, beam_in, beam_size // beam_in], dtype=tf.int32)
     src_beams += tf.range(beam_in)[None, :, None]
     src_beams = tf.reshape(src_beams, [batch_dim, beam_size])
@@ -8113,13 +8117,21 @@ def beam_search(scores, beam_size, keep_beams=False, cheating_gold_targets=None)
     # We replace them by the true labels.
     cheating_gold_targets = tf.clip_by_value(
       cheating_gold_targets, 0, in_dim - 1)  # safety, for invalid values...
-    gold_beam_in_idx = beam_in - 1  # also assume last index
-    gold_labels = gold_beam_in_idx * in_dim + cheating_gold_targets  # (batch,)
+    if cheating_src_beam_idx is None:
+      # We also assume that the last choice also has the cheating target in the last beam index.
+      cheating_src_beam_idx = beam_in - 1
+    else:
+      cheating_src_beam_idx = tf.clip_by_value(cheating_src_beam_idx, 0, beam_in - 1)  # safety
+    gold_labels = cheating_src_beam_idx * in_dim + cheating_gold_targets  # (batch,)
     gold_labels_bc = tf.expand_dims(gold_labels, axis=1)  # (batch,1)
     labels = tf.concat([labels[:, :beam_size - 1], gold_labels_bc], axis=1)  # (batch,beam)
+    if cheating_src_beam_idx.shape.ndims == 0:
+      gold_scores = scores[:, cheating_src_beam_idx]  # (batch,in_dim)
+    else:
+      assert cheating_src_beam_idx.shape.ndims == 1
+      gold_scores = tf.gather_nd(scores, indices=nd_indices(cheating_src_beam_idx))  # (batch,in_dim)
     # Note: In case the seq ended, we assume that the gold_targets are all 0, such that we get the right score.
-    gold_scores = tf.gather_nd(
-      scores[:, gold_beam_in_idx], indices=nd_indices(cheating_gold_targets))  # (batch,)
+    gold_scores = tf.gather_nd(gold_scores, indices=nd_indices(cheating_gold_targets))  # (batch,)
     gold_scores_bc = tf.expand_dims(gold_scores, axis=1)  # (batch,1)
     beam_scores = tf.concat([beam_scores[:, :beam_size - 1], gold_scores_bc], axis=1)  # (batch,beam)
   src_beams = labels // in_dim  # (batch, beam) -> beam_in idx
