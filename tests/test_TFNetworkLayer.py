@@ -2748,6 +2748,140 @@ def test_HDFDumpLayer_extra():
   numpy.testing.assert_equal(reader.data["classes2"][0], [classes2_data[0]])
 
 
+def test_HDFDumpLayer_dump_whole_batch_extra_sm():
+  import os
+  from test_HDFDataset import get_test_tmp_file, DatasetTestReader, HDFDataset
+  hdf_filename = get_test_tmp_file(".hdf")
+  os.remove(hdf_filename)  # HDFDumpLayer expects that the file does not exist
+  rnd = numpy.random.RandomState(42)
+
+  with make_scope() as session:
+    n_in = 5
+    config = Config()
+    config.update({
+      "extern_data": {
+        "data": {"dim": n_in},
+        "sm": dict(shape=(None, None)),
+      },
+      "network": {
+        "dump": {
+          "class": "hdf_dump", "filename": hdf_filename,
+          "from": "data",
+          "extra": {"sm": "data:sm"},
+          "is_output_layer": True,
+          "dump_whole_batches": True,
+        },
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+    network.print_network_info()
+
+    session.run(tf.global_variables_initializer())
+    n_batch = 1
+    input_data = numpy.array([[
+      [1, -0.2, 0.3, -4, 5],
+      [2, -0.6, 0.7, -1.8, 2.9],
+      [1, 0.3, -0.1, -0.8, 0.5],
+      [0.1, -0.2, 0.2, .8, -0.3]]],
+      dtype="float32")
+    input_seq_lens = [input_data.shape[1]]
+    assert input_data.shape == (n_batch, input_seq_lens[0], n_in)
+    sm_seq_lens1 = [13]
+    sm_seq_lens2 = [17]
+    sm_data = rnd.normal(size=(n_batch, sm_seq_lens1[0], sm_seq_lens2[0])).astype(dtype="float32")
+    seq_tags = numpy.array([b"seq-0"], dtype="S5")
+    feed = {
+      network.extern_data.data["data"].placeholder: input_data,
+      network.extern_data.data["data"].size_placeholder[0]: input_seq_lens,
+      network.extern_data.data["sm"].placeholder: sm_data,
+      network.extern_data.data["sm"].size_placeholder[0]: sm_seq_lens1,
+      network.extern_data.data["sm"].size_placeholder[1]: sm_seq_lens2,
+      network.extern_data.data["seq_tag"].placeholder: seq_tags}
+    fetches = network.get_fetches_dict()
+    result = session.run(fetches, feed_dict=feed)
+    pprint(result)
+
+    network.call_graph_reset_callbacks()
+
+  assert os.path.exists(hdf_filename)
+  reader = DatasetTestReader(HDFDataset([hdf_filename]))
+  reader.read_all()
+  assert reader.num_seqs == 1
+  assert reader.seq_tags == ["seq-0"]
+  assert_equal(reader.seq_lens[0]["data"], input_seq_lens[0])
+  assert_equal(reader.data["data"][0].shape, (input_seq_lens[0], n_in))
+  numpy.testing.assert_almost_equal(reader.data["data"][0], input_data[0])
+  assert_equal(reader.data["sm"][0].shape, (sm_seq_lens1[0] * sm_seq_lens2[0],))
+  numpy.testing.assert_equal(numpy.reshape(reader.data["sm"][0], sm_data[0].shape), sm_data[0])
+
+
+def test_HDFDumpLayer_dump_whole_batch_extra_sm1():
+  import os
+  from test_HDFDataset import get_test_tmp_file, DatasetTestReader, HDFDataset
+  hdf_filename = get_test_tmp_file(".hdf")
+  os.remove(hdf_filename)  # HDFDumpLayer expects that the file does not exist
+  rnd = numpy.random.RandomState(42)
+
+  with make_scope() as session:
+    n_in = 5
+    config = Config()
+    config.update({
+      "extern_data": {
+        "data": {"dim": n_in},
+        "sm": dict(shape=(None, 1, None), batch_dim_axis=1, feature_dim_axis=2),
+      },
+      "network": {
+        "dump": {
+          "class": "hdf_dump", "filename": hdf_filename,
+          "from": "data",
+          "extra": {"sm": "data:sm"},
+          "is_output_layer": True,
+          "dump_whole_batches": True,
+        },
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+    network.print_network_info()
+
+    session.run(tf.global_variables_initializer())
+    n_batch = 1
+    input_data = numpy.array([[
+      [1, -0.2, 0.3, -4, 5],
+      [2, -0.6, 0.7, -1.8, 2.9],
+      [1, 0.3, -0.1, -0.8, 0.5],
+      [0.1, -0.2, 0.2, .8, -0.3]]],
+      dtype="float32")
+    input_seq_lens = [input_data.shape[1]]
+    assert input_data.shape == (n_batch, input_seq_lens[0], n_in)
+    sm_seq_lens1 = [13]
+    sm_seq_lens2 = [17]
+    sm_data = rnd.normal(size=(sm_seq_lens1[0], n_batch, 1, sm_seq_lens2[0])).astype(dtype="float32")
+    seq_tags = numpy.array([b"seq-0"], dtype="S5")
+    feed = {
+      network.extern_data.data["data"].placeholder: input_data,
+      network.extern_data.data["data"].size_placeholder[0]: input_seq_lens,
+      network.extern_data.data["sm"].placeholder: sm_data,
+      network.extern_data.data["sm"].size_placeholder[0]: sm_seq_lens1,
+      network.extern_data.data["sm"].size_placeholder[2]: sm_seq_lens2,
+      network.extern_data.data["seq_tag"].placeholder: seq_tags}
+    fetches = network.get_fetches_dict()
+    result = session.run(fetches, feed_dict=feed)
+    pprint(result)
+
+    network.call_graph_reset_callbacks()
+
+  assert os.path.exists(hdf_filename)
+  reader = DatasetTestReader(HDFDataset([hdf_filename]))
+  reader.read_all()
+  assert reader.num_seqs == 1
+  assert reader.seq_tags == ["seq-0"]
+  assert_equal(reader.data["data"][0].shape, (input_seq_lens[0], n_in))
+  numpy.testing.assert_almost_equal(reader.data["data"][0], input_data[0])
+  assert_equal(reader.data["sm"][0].shape, (sm_seq_lens1[0] * sm_seq_lens2[0],))
+  sm_data_ = numpy.transpose(sm_data, (1, 0, 3, 2))
+  numpy.testing.assert_equal(numpy.reshape(reader.data["sm"][0], sm_data_[0].shape), sm_data_[0])
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()

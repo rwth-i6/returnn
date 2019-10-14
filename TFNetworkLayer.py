@@ -7277,7 +7277,7 @@ class HDFDumpLayer(LayerBase):
             extra_type={
               key: (
                 value.dim,
-                min(value.ndim - len(value.size_placeholder) + 1, 2),
+                1 if self.dump_whole_batches else min(value.ndim - len(value.size_placeholder) + 1, 2),
                 value.dtype)
               for (key, value) in self.extra.items()
             })
