@@ -705,7 +705,7 @@ class TFNetwork(object):
         output_template_special_axes = output_template.get_special_axes_dict()
         layer = layer_class(**layer_desc)
         layer.post_init(layer_desc)
-        layer.output.sanity_check()
+        layer.output.sanity_check(final=True)
         # The axes should not have moved now.
         output_special_axes = layer.output.get_special_axes_dict()
         assert output_template_special_axes == output_special_axes, "%s %r: not equal: %r == %r, from data %r -> %r" % (

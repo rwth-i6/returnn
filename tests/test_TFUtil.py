@@ -973,6 +973,18 @@ def test_Data_copy_add_dim_by_tag_sparse_unbroadcast_feature():
   assert d2.shape == (6,) and d2.sparse and d2.dim is None and d2.feature_dim_axis is None
 
 
+def test_Data_copy_add_dim_by_tag_dyn_time_seq_len():
+  # placeholders to have proper dim tags and seq lens
+  t = Data(name='t', shape=(None,), sparse=True, dim=13, auto_create_placeholders=True)
+  i = Data(name='i', shape=(None,), sparse=True, dim=17, auto_create_placeholders=True)
+  i_dim_tag = i.get_size_dim_tag(0)
+  print(i_dim_tag)
+  d = t.copy_template().copy_add_dim_by_tag(i_dim_tag, unbroadcast=True)
+  assert d.shape == (None, None)
+  assert set(d.size_placeholder.keys()) == {0, 1}
+  d.sanity_check()
+
+
 def test_Data_copy_move_axis_time_to_end():
   d1 = Data(name="att_weights", shape=(None, None, 4))
   d2 = d1.copy_move_axis(d1.time_dim_axis, -1)

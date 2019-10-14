@@ -619,11 +619,12 @@ class Data(object):
     """
     return Data(name="%s_undefined" % (name or "unknown"), shape=(), dim=None, undefined=True)
 
-  def sanity_check(self, ignore_placeholder=False):
+  def sanity_check(self, ignore_placeholder=False, final=False):
     """
     Performs some sanity checks on self, and raises exceptions if something is not sane.
 
     :param bool ignore_placeholder:
+    :param bool final: if this should be fully defined now
     """
     for axis_name, axis in self.get_special_axes_dict(include_batch_dim_axis=True).items():
       assert axis is None or 0 <= axis < self.batch_ndim, "%s: axis %s (%i) invalid" % (self, axis_name, axis)
@@ -649,6 +650,8 @@ class Data(object):
         assert self.placeholder.shape[i].value == self.batch_shape[i]
       self.placeholder.set_shape(self.batch_shape)
       assert self.placeholder.dtype.base_dtype.name == self.dtype
+    if final:
+      assert sorted((self.size_placeholder or {}).keys()) == [i for (i, d) in enumerate(self.shape) if d is None]
 
   def get_placeholder_kwargs(self, with_batch=True):
     """
