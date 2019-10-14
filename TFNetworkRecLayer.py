@@ -2853,7 +2853,15 @@ class _SubnetworkRecCell(object):
               time_dim_tag.set_tag_on_size_tensor(output.size_placeholder[0])
         if inner_layer.output.size_placeholder:
           for i, size in inner_layer.output.size_placeholder.items():
+            tag = DimensionTag.get_tag_from_size_tensor(size)
+            if tag and tag.dyn_size is not None:
+              size = tag.dyn_size  # this is more likely out of the loop
             if not has_control_flow_context(size):  # copy if this size comes from outside the loop
+              if inner_layer.output.beam:
+                # Might need tiling...
+                size = tile_transposed(
+                  size, axis=0,
+                  multiples=tf.shape(output.size_placeholder[0])[0] // tf.shape(size)[0])
               output.size_placeholder[i + 1] = size
         assert isinstance(self.output_layers_net, TFNetwork)
         layer_ = self.output_layers_net.add_layer(
