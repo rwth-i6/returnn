@@ -1393,7 +1393,9 @@ class _SubnetworkRecCell(object):
           layer_template = self.layer_data_templates[name]
           layer_choices = layer.get_search_choices()
           if not layer.search_choices and layer_choices:
-            assert layer_choices.beam_size == layer.output.beam.beam_size == layer_template.output.beam.beam_size
+            assert layer_choices.beam_size == layer.output.beam.beam_size == layer_template.output.beam.beam_size, (
+              "Layer %r has buggy search choices resolution." % layer,
+              self.net.debug_search_choices(layer))
         return layer
       except Exception:
         print("Exception occurred during in-loop construction of layer %r." % name)

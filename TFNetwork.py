@@ -1473,7 +1473,8 @@ class TFNetwork(object):
     from TFUtil import cond
     return cond(self.train_flag, fn_train, fn_eval)
 
-  def get_search_choices(self, sources=None, src=None, base_search_choice=None, _visited=None, debug_stream=None):
+  def get_search_choices(self, sources=None, src=None, base_search_choice=None, _layer_to_search_choices=None,
+                         debug_stream=None):
     """
     Recursively searches through all sources,
     and if there is a :class:`ChoiceLayer` / any layer with search_choices, returns it.
@@ -1484,7 +1485,7 @@ class TFNetwork(object):
     :param LayerBase|None src:
     :param LayerBase|None base_search_choice:
     :param list[LayerBase]|None sources:
-    :param dict[LayerBase]|None _visited: keep track about visited layers in case there are circular deps
+    :param dict[LayerBase]|None _layer_to_search_choices: keep track about visited layers in case there are circular deps
     :param typing.TextIO|None debug_stream: if given, will print additional debug info into it
     :return: (direct or indirect) source LayerBase which has search_choices, or None
     :rtype: LayerBase|None
@@ -1496,10 +1497,12 @@ class TFNetwork(object):
     from TFNetworkLayer import SearchChoices
     from functools import cmp_to_key
     from pprint import pformat
-    if _visited is None:
-      _visited = {}  # type: typing.Dict[LayerBase,typing.List[LayerBase]]
+    if _layer_to_search_choices is None:
+      _layer_to_search_choices = {}  # type: typing.Dict[LayerBase,typing.List[LayerBase]]
+    normalized_to_layer = {}  # type: typing.Dict[LayerBase,LayerBase]
     layers = self._get_all_search_choices(
-      sources=sources, src=src, base_search_choice=base_search_choice, _visited=_visited)
+      sources=sources, src=src, base_search_choice=base_search_choice,
+      _layer_to_search_choices=_layer_to_search_choices, _normalized_to_layer=normalized_to_layer)
 
     def full_trace_for_layer(layer, _layer_trace=None):
       """
@@ -1515,9 +1518,11 @@ class TFNetwork(object):
         _layer_trace.append(layer)
       else:
         return _layer_trace
-      if layer not in _visited:
-        self._get_all_search_choices(base_search_choice=layer, _visited=_visited)
-      for dep in _visited[layer]:
+      if layer not in _layer_to_search_choices:  # happens if layer is a choice
+        self._get_all_search_choices(
+          base_search_choice=layer,
+          _layer_to_search_choices=_layer_to_search_choices, _normalized_to_layer=normalized_to_layer)
+      for dep in _layer_to_search_choices[layer]:
         full_trace_for_layer(dep, _layer_trace=_layer_trace)
       return _layer_trace
 
@@ -1526,7 +1531,7 @@ class TFNetwork(object):
       :rtype: dict[str,list[str]]
       """
       relevant_map = {}
-      for key, values in _visited.items():
+      for key, values in _layer_to_search_choices.items():
         relevant_map[key.get_absolute_name()] = [value.get_absolute_name() for value in values]
       return relevant_map
 
@@ -1575,7 +1580,8 @@ class TFNetwork(object):
     layers = sorted(layers, key=cmp_to_key(compare_layer))
     return layers[-1]
 
-  def _get_all_search_choices(self, sources=None, src=None, base_search_choice=None, _visited=None):
+  def _get_all_search_choices(self, sources=None, src=None, base_search_choice=None,
+                              _layer_to_search_choices=None, _normalized_to_layer=None):
     """
     Recursively searches through all sources,
     and if there is a :class:`ChoiceLayer` / any layer with search_choices, returns it.
@@ -1586,14 +1592,21 @@ class TFNetwork(object):
     :param LayerBase|None src:
     :param LayerBase|None base_search_choice:
     :param list[LayerBase]|None sources:
-    :param dict[LayerBase,list[LayerBase]]|None _visited: tracks visited layers in case there are circular deps
-    :return: (direct or indirect) source LayerBase which has search_choices, or None
+    :param dict[LayerBase,list[LayerBase]]|None _layer_to_search_choices:
+      tracks visited layers in case there are circular deps
+    :param dict[LayerBase,LayerBase]|None _normalized_to_layer:
+    :return: (direct or indirect) sources LayerBase which has search_choices
     :rtype: list[LayerBase]
     """
-    if _visited is None:
-      _visited = {}  # type: typing.Dict[LayerBase,typing.List[LayerBase]]
+    if _layer_to_search_choices is None:
+      _layer_to_search_choices = {}  # type: typing.Dict[LayerBase,typing.List[LayerBase]]
+    if _normalized_to_layer is None:
+      _normalized_to_layer = {}  # type: typing.Dict[LayerBase,LayerBase]
     if src is not None:
       assert isinstance(src, LayerBase)
+      normalized_src = src.get_normalized_layer()
+      if normalized_src != src:
+        assert _normalized_to_layer.setdefault(normalized_src, src) == src  # Currently expecting that this is unique.
       if src.search_choices:
         if src.search_choices.is_decided:
           return []
@@ -1601,19 +1614,24 @@ class TFNetwork(object):
       assert base_search_choice is None
       base_search_choice = src
     if base_search_choice is not None:
-      if base_search_choice in _visited:
-        return _visited[base_search_choice]
+      if base_search_choice in _layer_to_search_choices:
+        return _layer_to_search_choices[base_search_choice]
       else:
-        _visited[base_search_choice] = []  # we visit it now
+        _layer_to_search_choices[base_search_choice] = []  # we visit it now
+      normalized_base = base_search_choice.get_normalized_layer()
+      if normalized_base != base_search_choice:
+        # Currently expecting that this is unique.
+        assert _normalized_to_layer.setdefault(normalized_base, base_search_choice) == base_search_choice
       assert sources is None
       sources = base_search_choice.get_dep_layers()
     assert sources is not None
     layers = []  # type: typing.List[LayerBase]
     for src_ in sources:
-      src_choice_layers = self._get_all_search_choices(src=src_, _visited=_visited)
+      src_choice_layers = self._get_all_search_choices(
+        src=src_, _layer_to_search_choices=_layer_to_search_choices, _normalized_to_layer=_normalized_to_layer)
       for layer in src_choice_layers:
-        if base_search_choice and layer not in _visited[base_search_choice]:
-          _visited[base_search_choice].append(layer)
+        if base_search_choice and layer not in _layer_to_search_choices[base_search_choice]:
+          _layer_to_search_choices[base_search_choice].append(layer)
         if layer not in layers:
           layers.append(layer)
     if not layers:
@@ -1621,6 +1639,25 @@ class TFNetwork(object):
         # noinspection PyProtectedMember
         return self.parent_layer.network._get_all_search_choices(sources=self.parent_layer.get_dep_layers())
       return []
+    if base_search_choice is not None:
+      normalized_base = base_search_choice.get_normalized_layer()
+      if normalized_base != base_search_choice:
+        # Just make sure we visit these as well.
+        normalized_choices = self._get_all_search_choices(
+          base_search_choice=normalized_base,
+          _layer_to_search_choices=_layer_to_search_choices, _normalized_to_layer=_normalized_to_layer)
+        if any([l.get_normalized_layer() == l for l in normalized_choices]):
+          # Filter any "prev:..." layers away. This should always be correct.
+          # Also, this is important to have the correct choice resolution for the prev layer (base_search_choice).
+          normalized_choices = [l for l in normalized_choices if l.get_normalized_layer() == l]
+          # Get corresponding "prev:..." layers.
+          from pprint import pformat
+          assert all([l in _normalized_to_layer for l in normalized_choices]), "\n".join([
+            "No cur -> prev mapping for some layers.", "Base: %s" % base_search_choice,
+            "Prev choices:", pformat(layers),
+            "Cur choices:", pformat(normalized_choices), "Mapping:", pformat(_normalized_to_layer)])
+          layers = [_normalized_to_layer[l] for l in normalized_choices]
+          _layer_to_search_choices[base_search_choice] = layers
     return layers
 
   def debug_search_choices(self, base_search_choice):
@@ -1650,7 +1687,7 @@ class TFNetwork(object):
         super(Visitor, self).__setitem__(key, value)
 
     search_choices = self.get_search_choices(
-      base_search_choice=base_search_choice, _visited=Visitor(), debug_stream=sys.stdout)
+      base_search_choice=base_search_choice, _layer_to_search_choices=Visitor(), debug_stream=sys.stdout)
     print("-> search choices:", search_choices)
 
   def get_data_batch_dim(self):
