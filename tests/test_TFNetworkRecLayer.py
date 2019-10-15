@@ -1845,6 +1845,164 @@ def test_search_multi_choice_simple_keep_beams():
   assert numpy.any(output_value[:, 0] != output_value[:, 1])
 
 
+def test_rec_layer_multi_choice_search_resolve():
+  AttNumHeads = 1
+  EncKeyTotalDim = 10
+  beam_size = 3
+  target = "classes"
+
+  net_dict = {
+    "lstm0_pool": {"class": "pool", "mode": "max", "padding": "same", "pool_size": (3,), "from": "data"},
+    "encoder0": {"class": "copy", "from": "lstm0_pool"},
+    "encoder": {"class": "copy", "from": "encoder0"},
+
+    "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": EncKeyTotalDim},
+    "enc_value": {"class": "copy", "from": "encoder"},  # (B, enc-T, D)
+    "inv_fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"],
+                      "n_out": AttNumHeads},
+    "enc_seq_len": {"class": "length", "from": "encoder", "sparse": True},
+
+    "output": {"class": "rec", "from": [], "back_prop": False, "unit": {
+      "weight_feedback": {"class": "linear", "activation": None, "with_bias": False,
+                          "from": ["prev:accum_att_weights"], "n_out": EncKeyTotalDim},
+      "s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["s"],
+                        "n_out": EncKeyTotalDim},
+      "energy_in": {"class": "combine", "kind": "add",
+                    "from": ["base:enc_ctx", "s_transformed", "weight_feedback"], "n_out": EncKeyTotalDim},
+      "energy_tanh": {"class": "activation", "activation": "tanh", "from": "energy_in"},
+
+      "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"],
+                 "n_out": AttNumHeads},  # (B, enc-T, H)
+      "energy1": {"class": "squeeze", "axis": "f", "from": "energy"},  # (B, enc-T)
+      "energy2": {"class": "reinterpret_data", "from": "energy1", "set_axes": {"t": "stag:lstm"}},
+
+      # Segment boundaries:
+      # - t0/t1/t is the right side (inclusive)
+      # - prev:t is the left side (exclusive)
+      # - t_start/prev_t_plus1 is the left side (inclusive)
+
+      "prev_t_plus1": {"class": "eval", "from": "prev:t", "eval": "source(0) + 1"},
+      "t_start": {
+        "class": "eval", "from": ["prev_t_plus1", "base:enc_seq_len"],
+        "eval": "tf.minimum(source(0), source(1) - 1)"},  # to avoid nans
+
+      "t_weights": {
+        "class": "softmax_over_spatial", "from": "energy2", "axis": "stag:lstm",
+        "start": "t_start"},
+      "t_weights1": {
+        # ChoiceLayer works on the feature axis.
+        "class": "reinterpret_data", "from": "t_weights", "set_axes": {"f": "stag:lstm"},
+      },
+
+      "t0": {
+        "class": "choice", "from": "t_weights1", "target": None,
+        "beam_size": beam_size * 4,
+        "keep_beams": True,
+        "length_normalization": False, "initial_output": -1},  # (B,)
+      # Note: If beam-size > enc_seq_len, we end up with invalid t in the beam. Fix that.
+      "t1": {
+        "class": "eval", "from": ["t0", "t_start", "base:enc_seq_len"],
+        "eval": "tf.clip_by_value(source(0), source(1), source(2) - 1)"},
+      "t": {
+        "class": "copy",
+        "from": "t1", "initial_output": -1, "is_output_layer": True},
+      "window_start": {"class": "eval", "from": "t", "eval": "source(0) - 5"},
+
+      "att_weights": {
+        "class": "softmax_over_spatial", "from": "energy2", "axis": "stag:lstm",
+        "window_start": "window_start",
+        "window_size": 10},  # (B, enc-T)
+      "att_soft": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, V)
+      "att": {"class": "copy", "from": "att_soft"},
+
+      "accum_att_weights": {"class": "eval",
+                            "from": ["prev:accum_att_weights", "att_weights", "base:inv_fertility"],
+                            "eval": "source(0) + source(1) * source(2) * 0.5",
+                            "out_type": {"dim": AttNumHeads, "shape": (None, AttNumHeads)}},
+
+      "s": {"class": "rec", "unit": "nativelstm2", "from": ["prev:target_embed", "prev:att"], "n_out": 1000,
+            "dropout": 0.2},
+      "readout_in": {"class": "linear", "from": ["s", "prev:target_embed", "att"], "activation": None,
+                     "n_out": 1000, "dropout": 0.3},
+      "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+      "output_prob": {"class": "softmax", "from": ["readout"], "dropout": 0.3, "target": target, "loss": None},
+
+      'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'],
+                       "n_out": 621, "initial_output": "var"},
+      'output': {
+        'class': 'choice', 'target': target, 'beam_size': beam_size, 'from': ["output_prob"], "initial_output": 0,
+        'search': True, "length_normalization": True},
+
+      # "end": {"class": "compare", "from": ["t", "base:enc_seq_len"], "kind": "greater"},
+      "end": {"class": "compare", "from": "output", "value": 0},
+
+    },
+    "target": [target],
+    "max_seq_len": "max_len_from('base:encoder0')"}
+   }
+
+  config = Config({
+    "debug_print_layer_output_template": True,
+  })
+
+  print("Create network")
+  n_src_dim = 7
+  n_tgt_dim = 11
+
+  from GeneratingDataset import StaticDataset
+  from TFDataPipeline import FeedDictDataProvider
+  from EngineBatch import Batch, BatchSetGenerator
+  dataset = StaticDataset(
+    data=[
+      {"data": numpy.random.normal(size=(11, n_src_dim)).astype("float32"),
+       target: numpy.array([3, 6, 0])},
+      {"data": numpy.random.normal(size=(13, n_src_dim)).astype("float32"),
+       target: numpy.array([3, 6, 2, 1, 4, 5, 0])}],
+    output_dim={"data": [n_src_dim, 2], "classes": [n_tgt_dim, 1]})
+  dataset.init_seq_order(epoch=1)
+  batch = Batch()
+  batch.add_sequence_as_slice(seq_idx=0, seq_start_frame=0, length=dataset.get_seq_length(0))
+  batch.add_sequence_as_slice(seq_idx=1, seq_start_frame=0, length=dataset.get_seq_length(1))
+  print("batch:", batch, "num frames:", batch.get_total_num_frames())
+  print("batch dims:", batch.max_num_frames_per_slice * batch.num_slices)
+  batch_generator = iter([batch])
+  batches = BatchSetGenerator(dataset, generator=batch_generator)
+
+  with make_scope() as session:
+    extern_data = ExternData({
+      "data": {"dim": n_src_dim},
+      target: {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
+
+    net = TFNetwork(extern_data=extern_data, search_flag=True, train_flag=False, config=config)
+    net.construct_from_dict(net_dict)
+
+    out_layer = net.layers["output"]
+    assert isinstance(out_layer, RecLayer)
+    net.initialize_params(session)
+    data_provider = FeedDictDataProvider(
+      tf_session=session, extern_data=extern_data,
+      data_keys=["data"],
+      dataset=dataset, batches=batches)
+    feed_dict, meta_step_info = data_provider.get_feed_dict(single_threaded=True)
+    try:
+      print("Output:")
+      out = session.run(out_layer.output.placeholder, feed_dict=feed_dict)
+      pprint(out)
+    except Exception as exc:
+      print()
+      print("EXCEPTION " + "-" * 60)
+      print("Exception happened:", str(exc).splitlines()[0])
+      print()
+      out_layer.cell._handle_construct_exception()
+      print()
+      print("TF debug info:")
+      help_on_tf_exception(
+        session=session,
+        exception=exc, fetches=out_layer.output.placeholder, feed_dict=feed_dict, meta_step_info=meta_step_info,
+        extern_data=data_provider.extern_data)
+      raise
+
+
 def test_rec_layer_move_out_of_loop():
   from TFNetworkRecLayer import _SubnetworkRecCell
   from TFUtil import get_global_train_flag_placeholder
