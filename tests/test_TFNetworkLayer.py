@@ -37,14 +37,15 @@ def make_scope():
       yield session
 
 
-def make_feed_dict(data_list, same_time=False):
+def make_feed_dict(data_list, same_time=False, n_batch=3, n_time=7):
   """
   :param list[TFUtil.Data] data_list:
   :param bool same_time:
+  :param int n_batch:
+  :param int n_time:
   :rtype: dict[tf.Tensor,numpy.ndarray]
   """
-  n_batch = 3
-  n_time = 7
+  assert n_time > 0 and n_batch > 0
   rnd = numpy.random.RandomState(42)
   existing_sizes = {}  # type: typing.Dict[tf.Tensor,int]
   d = {}
@@ -62,7 +63,13 @@ def make_feed_dict(data_list, same_time=False):
           continue
         existing_sizes[dyn_size] = n_time
         shape[axis] = n_time
-        d[dyn_size] = numpy.array([n_time, n_time - 2, n_time - 3])
+        dyn_size_v = numpy.array([n_time, max(n_time - 2, 1), max(n_time - 3, 1)])
+        if dyn_size_v.shape[0] > n_batch:
+          dyn_size_v = dyn_size_v[:n_batch]
+        elif dyn_size_v.shape[0] < n_batch:
+          dyn_size_v = numpy.concatenate(
+            [dyn_size_v, rnd.randint(1, n_time + 1, size=(n_batch - dyn_size_v.shape[0],))], axis=0)
+        d[dyn_size] = dyn_size_v
         if not same_time:
           n_time += 1
     print("%r %r: shape %r" % (data, data.placeholder, shape))
@@ -2880,6 +2887,182 @@ def test_HDFDumpLayer_dump_whole_batch_extra_sm1():
   assert_equal(reader.data["sm"][0].shape, (sm_seq_lens1[0] * sm_seq_lens2[0],))
   sm_data_ = numpy.transpose(sm_data, (1, 0, 3, 2))
   numpy.testing.assert_equal(numpy.reshape(reader.data["sm"][0], sm_data_[0].shape), sm_data_[0])
+
+
+def test_CrossEntropyLoss():
+  with make_scope() as session:
+    n_out = 13
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out},
+        "classes": {"dim": n_out, "sparse": True},
+      }})
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "var": {"class": "variable", "shape": (n_out,)},
+      "add": {"class": "combine", "kind": "add", "from": ["data", "var"]},
+      "output": {
+        "class": "activation", "from": "add", "activation": "softmax",
+        "loss": "ce"},
+    })
+    losses_dict, total_loss, total_constraints = net.get_losses_initialized()
+    print("Losses:")
+    pprint(losses_dict)
+    assert set(losses_dict.keys()) == {"output"}
+    loss_holder = losses_dict["output"]
+    assert isinstance(loss_holder, LossHolder)
+    assert isinstance(loss_holder.loss, CrossEntropyLoss)
+    session.run(tf.global_variables_initializer())
+    print("Get loss:")
+    feed_dict = make_feed_dict(net.extern_data.data.values(), same_time=True)
+    print("random classes:", feed_dict[net.extern_data.data["classes"].placeholder])
+    loss_t = loss_holder.get_loss_value()
+    opt = tf.train.GradientDescentOptimizer(learning_rate=0.1)
+    minimize_op = opt.minimize(loss_t)
+    last_loss_v = float("inf")
+    for step in range(3):
+      loss_v, _ = session.run((loss_t, minimize_op), feed_dict=feed_dict)
+      print("step %i, loss %f" % (step, loss_v))
+      assert numpy.isfinite(loss_v) and numpy.isscalar(loss_v)
+      assert loss_v < last_loss_v  # it's convex and we cannot overshoot
+      last_loss_v = loss_v
+
+
+def test_CrossEntropyLoss_masked_inf():
+  with make_scope() as session:
+    n_out = 13
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out},
+        "classes": {"dim": n_out, "sparse": True},
+      }})
+    mask_t = tf.placeholder(tf.bool, (n_out,), name="mask")
+
+    def mask_func(source, **kwargs):
+      x = source(0)
+      assert x.shape.ndims == 3  # (B,T,n_out)
+      from TFUtil import where_bc
+      mask_bc = mask_t[None, None, :]  # (1,1,n_out)
+      return where_bc(mask_bc, x, float("-inf"))
+
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "var": {"class": "variable", "shape": (n_out,)},  # such that we can check that there are no nan/inf grads
+      "add": {"class": "combine", "kind": "add", "from": ["data", "var"]},
+      "mask": {"class": "eval", "from": "add", "eval": mask_func},
+      "output": {
+        "class": "activation", "from": "mask", "activation": "softmax",
+        "loss": "ce"},
+    })
+    losses_dict, total_loss, total_constraints = net.get_losses_initialized()
+    print("Losses:")
+    pprint(losses_dict)
+    assert set(losses_dict.keys()) == {"output"}
+    loss_holder = losses_dict["output"]
+    assert isinstance(loss_holder, LossHolder)
+    assert isinstance(loss_holder.loss, CrossEntropyLoss)
+    session.run(tf.global_variables_initializer())
+    print("Get loss:")
+    feed_dict = make_feed_dict(net.extern_data.data.values(), same_time=True)
+    mask_v = numpy.array([True] * n_out)
+    feed_dict[mask_t] = mask_v
+    loss_t = loss_holder.get_loss_value()
+    opt = tf.train.GradientDescentOptimizer(learning_rate=0.1)
+    minimize_op = opt.minimize(loss_t)
+    last_loss_v = float("inf")
+    for step in range(3):
+      loss_v, _ = session.run((loss_t, minimize_op), feed_dict=feed_dict)
+      print("step %i, loss %f" % (step, loss_v))
+      assert numpy.isfinite(loss_v) and numpy.isscalar(loss_v)
+      assert loss_v < last_loss_v  # it's convex and we cannot overshoot
+      last_loss_v = loss_v
+    print("Now mask.")
+    feed_dict = make_feed_dict(net.extern_data.data.values(), same_time=True, n_batch=1, n_time=1)
+    feed_dict[mask_t] = mask_v
+    rnd_classes = feed_dict[net.extern_data.data["classes"].placeholder]
+    print("random classes:", rnd_classes)
+    mask_v[rnd_classes[0, 0]] = False
+    var_t, = tf.trainable_variables()
+    last_var_v = session.run(var_t)
+    for step in range(3, 6):
+      loss_v, _ = session.run((loss_t, minimize_op), feed_dict=feed_dict)
+      print("step %i, loss %f" % (step, loss_v))
+      assert numpy.isinf(loss_v) and numpy.isscalar(loss_v)
+      var_v = session.run(var_t)
+      assert numpy.isfinite(var_v).all()  # while the loss is inf, the gradients should be finite!
+      assert not (var_v == last_var_v).all()  # and there also was some non-zero gradient!
+      last_var_v = var_v
+
+
+def test_CrossEntropyLoss_masked_inf_fake_upper_bound():
+  # Almost the same as test_CrossEntropyLoss_masked_inf, but we use fake_upper_bound.
+  with make_scope() as session:
+    n_out = 13
+    fake_upper_bound = 10.
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out},
+        "classes": {"dim": n_out, "sparse": True},
+      }})
+    mask_t = tf.placeholder(tf.bool, (n_out,), name="mask")
+
+    def mask_func(source, **kwargs):
+      x = source(0)
+      assert x.shape.ndims == 3  # (B,T,n_out)
+      from TFUtil import where_bc
+      mask_bc = mask_t[None, None, :]  # (1,1,n_out)
+      return where_bc(mask_bc, x, float("-inf"))
+
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "var": {"class": "variable", "shape": (n_out,)},  # such that we can check that there are no nan/inf grads
+      "add": {"class": "combine", "kind": "add", "from": ["data", "var"]},
+      "mask": {"class": "eval", "from": "add", "eval": mask_func},
+      "output": {
+        "class": "activation", "from": "mask", "activation": "softmax",
+        "loss": "ce", "loss_opts": {"fake_upper_bound": fake_upper_bound}},
+    })
+    losses_dict, total_loss, total_constraints = net.get_losses_initialized()
+    print("Losses:")
+    pprint(losses_dict)
+    assert set(losses_dict.keys()) == {"output"}
+    loss_holder = losses_dict["output"]
+    assert isinstance(loss_holder, LossHolder)
+    assert isinstance(loss_holder.loss, CrossEntropyLoss)
+    session.run(tf.global_variables_initializer())
+    print("Get loss:")
+    feed_dict = make_feed_dict(net.extern_data.data.values(), same_time=True)
+    mask_v = numpy.array([True] * n_out)
+    feed_dict[mask_t] = mask_v
+    loss_t = loss_holder.get_loss_value()
+    opt = tf.train.GradientDescentOptimizer(learning_rate=0.1)
+    minimize_op = opt.minimize(loss_t)
+    last_loss_v = float("inf")
+    for step in range(3):
+      loss_v, _ = session.run((loss_t, minimize_op), feed_dict=feed_dict)
+      print("step %i, loss %f" % (step, loss_v))
+      assert numpy.isfinite(loss_v) and numpy.isscalar(loss_v)
+      assert loss_v < last_loss_v  # it's convex and we cannot overshoot
+      last_loss_v = loss_v
+    print("Now mask.")
+    feed_dict = make_feed_dict(net.extern_data.data.values(), same_time=True, n_batch=1, n_time=1)
+    feed_dict[mask_t] = mask_v
+    rnd_classes = feed_dict[net.extern_data.data["classes"].placeholder]
+    print("random classes:", rnd_classes)
+    mask_v[rnd_classes[0, 0]] = False
+    var_t, = tf.trainable_variables()
+    last_var_v = session.run(var_t)
+    for step in range(3, 6):
+      loss_v, _ = session.run((loss_t, minimize_op), feed_dict=feed_dict)
+      print("step %i, loss %f" % (step, loss_v))
+      assert loss_v == fake_upper_bound and numpy.isscalar(loss_v)
+      var_v = session.run(var_t)
+      assert numpy.isfinite(var_v).all()  # while the loss is bounded, the gradients should be finite!
+      assert not (var_v == last_var_v).all()  # and there also was some non-zero gradient!
+      last_var_v = var_v
 
 
 if __name__ == "__main__":

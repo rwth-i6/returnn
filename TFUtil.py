@@ -6190,7 +6190,7 @@ def minimum_with_identity_grad(x, y):
   """
   :param tf.Tensor x:
   :param tf.Tensor y:
-  :return: tf.maximum(x, y) where each will receive the gradient
+  :return: tf.minimum(x, y) where each will receive the gradient
   :rtype: tf.Tensor
   """
   with tf.name_scope("minimum_with_identity_grad"):

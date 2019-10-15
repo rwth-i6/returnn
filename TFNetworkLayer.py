@@ -7856,6 +7856,7 @@ class CrossEntropyLoss(Loss):
                debug_dump=False,
                safe_log_opts=None,
                use_fused=True,
+               fake_upper_bound=None,
                **kwargs):
     """
     :param float focal_loss_factor: see https://arxiv.org/abs/1708.02002. 0 means disabled
@@ -7864,6 +7865,8 @@ class CrossEntropyLoss(Loss):
     :param bool debug_dump:
     :param dict[str] safe_log_opts: passed to :func:`safe_log`
     :param bool use_fused: if possible, use fused opts
+    :param float|None fake_upper_bound: uses :func:`TFUtil.minimum_with_identity_grad`.
+      I.e. you will see a finite loss, but we use the original gradient (which should be safe).
     """
     super(CrossEntropyLoss, self).__init__(**kwargs)
     self.focal_loss_factor = focal_loss_factor
@@ -7872,6 +7875,7 @@ class CrossEntropyLoss(Loss):
     self.debug_dump = debug_dump
     self.safe_log_opts = safe_log_opts or {}
     self.use_fused = use_fused
+    self.fake_upper_bound = fake_upper_bound
 
   def get_output_target_scores(self):
     """
@@ -7891,7 +7895,7 @@ class CrossEntropyLoss(Loss):
     """
     :rtype: tf.Tensor
     """
-    from TFUtil import to_int32_64, smoothing_cross_entropy, safe_log, py_print
+    from TFUtil import to_int32_64, smoothing_cross_entropy, safe_log, py_print, minimum_with_identity_grad
     with tf.name_scope("loss_ce"):
       assert self.target.ndim_dense == self.output.ndim_dense
       if self.target.sparse:
@@ -7917,6 +7921,8 @@ class CrossEntropyLoss(Loss):
           out = -safe_log(self.get_output_target_scores(), **self.safe_log_opts)
         if self.focal_loss_factor:
           out *= (1.0 - self.get_output_target_scores()) ** self.focal_loss_factor
+        if self.fake_upper_bound is not None:
+          out = minimum_with_identity_grad(out, self.fake_upper_bound)
         return self.reduce_func(out)
       else:  # not sparse
         assert not self.focal_loss_factor, "not implemented"
@@ -7924,10 +7930,14 @@ class CrossEntropyLoss(Loss):
         assert not self.debug_dump, "not implemented"
         if self.use_fused and self.output_before_softmax_flat is not None:
           out = tf.nn.softmax_cross_entropy_with_logits(logits=self.output_before_softmax_flat, labels=self.target_flat)
+          if self.fake_upper_bound is not None:
+            out = minimum_with_identity_grad(out, self.fake_upper_bound)
           return self.reduce_func(out)
         else:
           print("Warning: using numerical unstable dense Cross-Entropy loss calculation", file=log.v3)
           out = self.target_flat * safe_log(self.output_flat, **self.safe_log_opts)
+          if self.fake_upper_bound is not None:
+            out = minimum_with_identity_grad(out, self.fake_upper_bound)
           return -self.reduce_func(out)
 
 
