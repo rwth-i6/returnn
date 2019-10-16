@@ -1033,7 +1033,7 @@ class ConcatSeqsDataset(CachedDataset2):
   def __init__(self, dataset, seq_list_file, seq_len_file, seq_tag_delim=";", remove_in_between_postfix=None,
                use_cache_manager=False, epoch_wise_filter=None, **kwargs):
     """
-    :param dict[str] dataset: kwargs for init_dataset
+    :param dict[str]|str|Dataset dataset: kwargs for init_dataset
     :param str seq_list_file: filename. line-separated. seq_tag_delim.join(seq_tags) for concatenated seqs
     :param str seq_len_file: file with Python dict, (single) seg_name -> len, which is used for sorting
     :param str seq_tag_delim:
@@ -1045,8 +1045,9 @@ class ConcatSeqsDataset(CachedDataset2):
     self.seq_tag_delim = seq_tag_delim
     self.remove_in_between_postfix = remove_in_between_postfix or {}
     self.epoch_wise_filter = EpochWiseFilter(epoch_wise_filter) if epoch_wise_filter else None
-    dataset = dataset.copy()
-    dataset.setdefault("name", "%s_subdataset" % self.name)
+    if isinstance(dataset, dict):
+      dataset = dataset.copy()
+      dataset.setdefault("name", "%s_subdataset" % self.name)
     self.sub_dataset = init_dataset(dataset)
     self.num_outputs = self.sub_dataset.num_outputs
     self.num_inputs = self.sub_dataset.num_inputs
