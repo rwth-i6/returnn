@@ -28,6 +28,11 @@ You can run RETURNN via::
   ipython --pdb rnn.py your-config.py
 
 That will give you the IPython debugger shell once you hit an unhandled exception.
+You can summon the interactive shell by explicitly calling the following from the 
+source code or from the config::
+
+  import Debug
+  Debug.debug_shell(user_ns=locals(), user_global_ns=globals(), exit_afterwards=False)
 
 
 Shapes and :class:`Data`
