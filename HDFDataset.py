@@ -100,14 +100,33 @@ class HDFDataset(CachedDataset):
         self.timestamps = fin[attr_times][...]
       else:
         self.timestamps = numpy.concatenate([self.timestamps, fin[attr_times][...]], axis=0)
+    prev_target_keys = None
+    if len(self.files) >= 2:
+      prev_target_keys = self.target_keys
     if 'targets' in fin:
-      self.target_keys = sorted(fin['targets/labels'].keys())
+      self.target_keys = sorted(
+        set(fin['targets/labels'].keys()) |
+        set(fin['targets/data'].keys()) |
+        set(fin['targets/size'].attrs.keys()))
     else:
       self.target_keys = ['classes']
 
-    seq_lengths = fin[attr_seqLengths][...]
+    seq_lengths = fin[attr_seqLengths][...]  # shape (num_seqs,num_target_keys + 1)
     if len(seq_lengths.shape) == 1:
       seq_lengths = numpy.array(zip(*[seq_lengths.tolist() for _ in range(len(self.target_keys)+1)]))
+    assert seq_lengths.ndim == 2 and seq_lengths.shape[1] == len(self.target_keys) + 1
+
+    if prev_target_keys is not None and prev_target_keys != self.target_keys:
+      print("Warning: %s: loaded prev files %s, which defined target keys %s. Now loaded %s and got target keys %s." % (
+        self, self.files[:-1], prev_target_keys, filename, self.target_keys), file=log.v2)
+      # This can happen for multiple reasons. E.g. just different files. Or saved with different RETURNN versions.
+      # We currently support this by removing all the new additional targets, which only works if the prev targets
+      # were a subset (so the order in which you load the files matters).
+      assert all([key in self.target_keys for key in prev_target_keys])  # check if subset
+      # Filter out the relevant seq lengths
+      seq_lengths = seq_lengths[:, [0] + [self.target_keys.index(key) + 1 for key in prev_target_keys]]
+      assert seq_lengths.shape[1] == len(prev_target_keys) + 1
+      self.target_keys = prev_target_keys
 
     seq_start = numpy.zeros((seq_lengths.shape[0] + 1, seq_lengths.shape[1]), dtype="int64")
     numpy.cumsum(seq_lengths, axis=0, dtype="int64", out=seq_start[1:])
@@ -141,7 +160,7 @@ class HDFDataset(CachedDataset):
                                              filename, self.num_inputs, num_inputs[0])
     if 'targets/size' in fin:
       num_outputs = {}
-      for k in fin['targets/size'].attrs:
+      for k in self.target_keys:
         if numpy.isscalar(fin['targets/size'].attrs[k]):
           num_outputs[k] = (int(fin['targets/size'].attrs[k]), len(fin['targets/data'][k].shape))
         else:  # hdf_dump will give directly as tuple
@@ -166,7 +185,7 @@ class HDFDataset(CachedDataset):
         self.ctc_targets = numpy.concatenate((self.ctc_targets, tmp))
       self.num_running_chars = numpy.sum(self.ctc_targets != -1)
     if 'targets' in fin:
-      for name in fin['targets/data']:
+      for name in self.target_keys:
         self.data_dtype[str(name)] = str(fin['targets/data'][name].dtype)
         self.targets[str(name)] = None
         if str(name) not in self.num_outputs:
