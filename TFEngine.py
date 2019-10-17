@@ -1966,7 +1966,7 @@ class Engine(EngineBase):
 
   def search(self, dataset, do_eval=True, output_layer_names="output", output_file=None, output_file_format="txt"):
     """
-    :param Dataset.Dataset dataset:
+    :param Dataset dataset:
     :param bool do_eval: calculate errors. can only be done if we have the reference target
     :param str|list[str] output_layer_names:
     :param str output_file:
