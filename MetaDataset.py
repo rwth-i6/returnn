@@ -1056,6 +1056,7 @@ class ConcatSeqsDataset(CachedDataset2):
       import Util
       seq_list_file = Util.cf(seq_list_file)
       seq_len_file = Util.cf(seq_len_file)
+    self._seq_order = None
     self.full_seq_list = open(seq_list_file).read().splitlines()
     self.seq_lens = eval(open(seq_len_file).read())
     assert isinstance(self.seq_lens, dict)
@@ -1082,7 +1083,7 @@ class ConcatSeqsDataset(CachedDataset2):
     :rtype: bool
     """
     super(ConcatSeqsDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
-    assert not seq_list
+    assert not seq_list  # not implemented
     if not seq_list:
       def get_seq_len(i):
         """
@@ -1095,6 +1096,7 @@ class ConcatSeqsDataset(CachedDataset2):
       if self.epoch_wise_filter:
         self.epoch_wise_filter.debug_msg_prefix = str(self)
         seq_order = self.epoch_wise_filter.filter(epoch=epoch, seq_order=seq_order, get_seq_len=get_seq_len)
+      self._seq_order = seq_order
       seq_list = [self.full_seq_list[i] for i in seq_order]  # tag list
     self.cur_seq_list = seq_list
     self._num_seqs = len(seq_list)
@@ -1109,6 +1111,21 @@ class ConcatSeqsDataset(CachedDataset2):
     assert sub_seq_idx == len(sub_seq_list) and len(seq_list) == len(sub_seq_idxs)
     self.cur_sub_seq_idxs = sub_seq_idxs
     return self.sub_dataset.init_seq_order(seq_list=sub_seq_list)
+
+  def have_corpus_seq_idx(self):
+    """
+    :rtype: bool
+    """
+    return True
+
+  def get_corpus_seq_idx(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: int
+    """
+    if self._seq_order is None:
+      return None
+    return self._seq_order[seq_idx]
 
   def _collect_single_seq(self, seq_idx):
     """
