@@ -184,11 +184,14 @@ class DatasetTestReader:
     self.data = {}  # type: typing.Dict[str,typing.List[numpy.ndarray]]  # key -> list
     self.seq_lens = []  # type: typing.List[Util.NumbersDict]
     self.seq_tags = []
-    self.num_seqs = None
+    self.num_seqs = 0
 
-  def read_all(self):
+  def read_all(self, epoch=1):
+    """
+    :param int epoch:
+    """
     dataset = self.dataset
-    dataset.init_seq_order(epoch=1)
+    dataset.init_seq_order(epoch=epoch)
     data_keys = dataset.get_data_keys()
     self.data_keys = data_keys
     self.data_shape = {key: dataset.get_data_shape(key) for key in data_keys}
@@ -206,7 +209,7 @@ class DatasetTestReader:
       self.seq_tags.append(seq_tag)
       seq_idx += 1
     print("Iterated through %r, num seqs %i" % (dataset, seq_idx))
-    self.num_seqs = seq_idx
+    self.num_seqs += seq_idx
 
 
 def test_hdf_dump_not_frame_synced():
@@ -219,6 +222,28 @@ def test_hdf_dump_not_frame_synced():
   orig_reader = DatasetTestReader(orig)
   hdf_reader.read_all()
   orig_reader.read_all()
+  assert hdf_reader.data_keys == orig_reader.data_keys == ["data", "classes"]
+  assert hdf_reader.num_seqs == orig_reader.num_seqs == num_seqs
+  for seq_idx in range(num_seqs):
+    # Not synced, i.e. different lengths:
+    assert_not_equal(orig_reader.seq_lens[seq_idx]["data"], orig_reader.seq_lens[seq_idx]["classes"])
+    for key in orig_reader.data_keys:
+      assert_equal(hdf_reader.seq_lens[seq_idx][key], orig_reader.seq_lens[seq_idx][key])
+      assert_equal(hdf_reader.data[key][seq_idx].tolist(), orig_reader.data[key][seq_idx].tolist())
+
+
+def test_HDFDataset_partition_epoch():
+  partition_epoch = 3
+  num_seqs = 11
+  from GeneratingDataset import TaskNumberBaseConvertDataset
+  hdf_fn = generate_hdf_from_other({"class": "TaskNumberBaseConvertDataset", "num_seqs": num_seqs})
+  hdf = HDFDataset([hdf_fn], partition_epoch=partition_epoch)
+  orig = TaskNumberBaseConvertDataset(num_seqs=num_seqs)
+  hdf_reader = DatasetTestReader(hdf)
+  orig_reader = DatasetTestReader(orig)
+  for epoch in range(1, partition_epoch + 1):
+    hdf_reader.read_all(epoch=epoch)
+  orig_reader.read_all()  # single epoch
   assert hdf_reader.data_keys == orig_reader.data_keys == ["data", "classes"]
   assert hdf_reader.num_seqs == orig_reader.num_seqs == num_seqs
   for seq_idx in range(num_seqs):
