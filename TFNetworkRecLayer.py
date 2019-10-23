@@ -3031,7 +3031,6 @@ class _TemplateLayer(LayerBase):
     :param kwargs: via network.construct_layer, i.e. transform_config_dict was called already
     """
     output = output.copy()  # we are going to modify it here
-    self.is_initialized = True
     self.is_prev_time_frame = (template_type == "prev")
     self.is_data_template = (template_type == "template")
     assert self.is_prev_time_frame or self.is_data_template
@@ -3046,6 +3045,7 @@ class _TemplateLayer(LayerBase):
     if self._has_search_choices():
       self.search_choices = SearchChoices(owner=self, beam_size=self._get_search_choices_beam_size())
     self.collocate_with = kwargs.get("collocate_with", None) or []
+    self.is_initialized = True  # set last, in case there are exceptions
 
   def get_sub_layer(self, layer_name):
     """
