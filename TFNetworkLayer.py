@@ -2465,6 +2465,7 @@ class SliceNdLayer(_ConcatInputLayer):
     assert x.time_dim_axis == 1, "currently only time-axis==1 supported"
     seq_lens = x.get_sequence_lengths() if x.is_time_axis_dynamic() else None
     self.start = start
+    assert start.output.have_batch_axis() and start.output.batch_shape == (None,)
     start = start.output.get_placeholder_as_batch_major()
     if size is None:
       if seq_lens is None:
@@ -2474,7 +2475,7 @@ class SliceNdLayer(_ConcatInputLayer):
       if min_size is not None:
         size = tf.maximum(size, min_size)
     self.size = size
-    start = dimshuffle(start, [0, 'x'])  # (B, T, ...)
+    start = tf.expand_dims(start, axis=1)  # (B, T)
     slices = slice_nd(x.placeholder, start=tf.cast(start, tf.int32), size=size)  # (B,size, ...)
     if seq_lens is not None:
       mask = tf.range(size)[None, :] + start >= seq_lens[:, None]  # (B,T)
