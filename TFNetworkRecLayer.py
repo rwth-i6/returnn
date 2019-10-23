@@ -3982,6 +3982,10 @@ class BaseChoiceLayer(LayerBase):
       # Note: _src_common_search_choices might not be set during template construction,
       # but this fallback would still work then (at least for ChoiceLayer).
       if sources:
+        if not sources[0] or sources[0].output.undefined:
+          from TFNetwork import CannotHandleUndefinedSourcesException
+          raise CannotHandleUndefinedSourcesException(
+            layer_name=kwargs["name"], layer_desc=dict(sources=sources, beam_size=beam_size, network=network, **kwargs))
         return sources[0].output.beam.beam_size if sources[0].output.beam else None
       return None
     return beam_size
