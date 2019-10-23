@@ -272,7 +272,8 @@ class TFNetwork(object):
     :param bool search_flag: whether we perform a beam-search. see usage
     :param TFNetworkLayer.LayerBase|None parent_layer:
     :param TFNetwork|None parent_net:
-    :param TFNetwork|None extra_parent_net:
+    :param TFNetwork|None extra_parent_net: we are on the same level (not really a child),
+      but an "extra" net of extra_parent_net
     :param bool is_inside_rec_layer: at template construction, use this
     :param str|None absolute_name_prefix:
     :param str name: only for debugging
@@ -397,7 +398,9 @@ class TFNetwork(object):
     if self.parent_net:
       return self.parent_net.get_absolute_name_prefix()
     if self.extra_parent_net:
-      return self.extra_parent_net.get_absolute_name_prefix()
+      prefixes = {net: prefix for (prefix, net) in self.extra_parent_net.extra_nets.items()}
+      my_prefix = ("%s:" % prefixes[self]) if self in prefixes else ""
+      return self.extra_parent_net.get_absolute_name_prefix() + my_prefix
     return ""
 
   def construct_from(self, list_or_dict):
