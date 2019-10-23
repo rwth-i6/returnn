@@ -1033,10 +1033,7 @@ class _SubnetworkRecCell(object):
           raise CannotHandleUndefinedSourcesException(layer_name=name, layer_desc=layer_desc)
         layer_.init(layer_class=layer_class, output=output, **layer_desc)
         if layer_ in ConstructCtx.partially_finished:
-          if (
-            lself.got_uninitialized_deps_count == 0 or  # in this case, we safely know that it is finished
-            issubclass(layer_class, BaseChoiceLayer)  # for this specific class, we know it is ok
-          ):
+          if lself.got_uninitialized_deps_count == 0:  # in this case, we safely know that it is finished
             ConstructCtx.partially_finished.remove(layer_)
         return layer_
 
