@@ -1610,6 +1610,9 @@ class TFNetwork(object):
       normalized_src = src.get_normalized_layer()
       if normalized_src != src:
         assert _normalized_to_layer.setdefault(normalized_src, src) == src  # Currently expecting that this is unique.
+        if src.search_choices:
+          assert normalized_src.search_choices, "normalized %s vs %s (choices %s)" % (
+            normalized_src, src, src.search_choices)
       if src.search_choices:
         if src.search_choices.is_decided:
           return []
@@ -1644,7 +1647,7 @@ class TFNetwork(object):
       return []
     if base_search_choice is not None:
       normalized_base = base_search_choice.get_normalized_layer()
-      if normalized_base != base_search_choice:
+      if normalized_base != base_search_choice:  # from prev frame or so
         # Just make sure we visit these as well.
         normalized_choices = self._get_all_search_choices(
           base_search_choice=normalized_base,

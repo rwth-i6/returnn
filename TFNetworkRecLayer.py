@@ -1388,14 +1388,16 @@ class _SubnetworkRecCell(object):
         layer = self.net.construct_layer(net_dict, name=name, get_layer=get_layer)
         if self.net.search_flag:
           # Some layers are buggy to determine the right beam size at template construction time.
+          # Usually this is because they ignore some of the dependencies in get_out_data_from_opts.
           # If that is the case, this will likely crash at some later point with mismatching shape.
           # Do an explicit check here now, to easier localize such problems.
           layer_template = self.layer_data_templates[name]
           layer_choices = layer.get_search_choices()
           if not layer.search_choices and layer_choices:
-            assert layer_choices.beam_size == layer.output.beam.beam_size == layer_template.output.beam.beam_size, (
+            assert (layer.output.beam == layer_template.output.beam and
+                    layer_choices.beam_size == layer.output.beam.beam_size == layer_template.output.beam.beam_size), (
               "Layer %r has buggy search choices resolution." % layer,
-              self.net.debug_search_choices(layer))
+              self.net.debug_search_choices(layer) or "see search choices debug output")
         return layer
       except Exception:
         print("Exception occurred during in-loop construction of layer %r." % name)
@@ -3213,6 +3215,8 @@ class _TemplateLayer(LayerBase):
 
     :rtype: int|None
     """
+    # This is usually called right after tempalte construction, but before real construction.
+    # So it does not make sense to even try to get constructed real layer.
     layer_class = self.layer_class_type
     assert issubclass(layer_class, BaseChoiceLayer)
     return layer_class.cls_get_search_beam_size(**self.kwargs)
