@@ -3193,6 +3193,11 @@ class _TemplateLayer(LayerBase):
       assert isinstance(prev_layer, _TemplateLayer) and prev_layer.is_prev_time_frame
       assert prev_layer.search_choices
       return prev_layer.search_choices
+    # This is from the template construction, a layer in _SubnetworkRecCell.layer_data_templates.
+    # Maybe we already have the layer constructed.
+    real_layer = self.network.layers.get(self.name)
+    if real_layer:
+      return real_layer.get_search_choices()
     return super(_TemplateLayer, self).get_search_choices()
 
   def _has_search_choices(self):
