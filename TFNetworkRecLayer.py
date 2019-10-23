@@ -2723,7 +2723,10 @@ class _SubnetworkRecCell(object):
     self.layers_in_loop = [layer.name for layer in layers_in_loop]
 
     log_stream = log.v3
-    print("Rec layer sub net:", file=log_stream)
+    print("Rec layer %r (search %s, train %s) sub net:" % (
+        self.parent_rec_layer.get_absolute_name(), self.net.search_flag,
+        repr(self.net.train_flag.name) if isinstance(self.net.train_flag, tf.Tensor) else self.net.train_flag),
+      file=log_stream)
     remaining_layers = set(self.net_dict.keys())
 
     def dump_info(s, l):
