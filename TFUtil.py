@@ -5752,7 +5752,7 @@ def slice_nd(x, start, size):
     slices = tf.gather_nd(x, indices)  # (n_batch*size, ...)
 
     # (B, size, ...), we assume time-axis is/was 1
-    new_shape = tf.concat([[shape[0], size], shape[2:]], axis=0)
+    new_shape = [shape[0], size] + shape[2:]
 
     # zero-pad
     slices = tf.where(mask, tf.zeros_like(slices), slices)
