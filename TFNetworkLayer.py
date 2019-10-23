@@ -2460,7 +2460,7 @@ class SliceNdLayer(_ConcatInputLayer):
     :param int|None min_size: if size is None, but we want to have a min-size, set this
     """
     super(SliceNdLayer, self).__init__(**kwargs)
-    from TFUtil import slice_nd, dimshuffle, where_bc, expand_multiple_dims, DimensionTag
+    from TFUtil import slice_nd, where_bc, expand_multiple_dims, DimensionTag
     x = self.input_data.copy_as_batch_major()
     assert x.time_dim_axis == 1, "currently only time-axis==1 supported"
     seq_lens = x.get_sequence_lengths() if x.is_time_axis_dynamic() else None
@@ -3256,6 +3256,7 @@ class RangeInAxisLayer(LayerBase):
   layer_class = "range_in_axis"
   recurrent = True  # if axis=="T", the time-dim order matters
 
+  # noinspection PyUnusedLocal
   def __init__(self, axis, dtype="int32", unbroadcast=False, keepdims=True, sparse=False, **kwargs):
     """
     :param str axis:
@@ -8989,9 +8990,10 @@ class SamplingBasedLoss(Loss):
     :param bool use_full_softmax: If True, compute the full softmax instead of sampling (can be used for evaluation).
     :param bool|None remove_accidental_hits: If True, remove sampled classes that equal one of the target classes.
       If not specified (None), the value is determined based on the choosen objective.
-      For sampled softmax this should be set to True; for NCE the default is False. Set this to True in case of NCE training
-      and the objective is equal to sampled logistic loss.
-    :param dict[str] sampler_args: additional arguments for the candidate sampler. This is most relevant to the fixed_unigram sampler.
+      For sampled softmax this should be set to True; for NCE the default is False.
+      Set this to True in case of NCE training and the objective is equal to sampled logistic loss.
+    :param dict[str] sampler_args: additional arguments for the candidate sampler.
+      This is most relevant to the fixed_unigram sampler.
       See https://www.tensorflow.org/api_docs/python/tf/random/fixed_unigram_candidate_sampler for details.
     :param float nce_log_norm_term: The logarithm of the constant normalization term for NCE.
     """
@@ -9409,4 +9411,3 @@ def get_layer_class_name_list():
   if not _LayerClassDictInitialized:
     _init_layer_class_dict()
   return sorted(_LayerClassDict.keys())
-
