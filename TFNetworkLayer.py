@@ -4290,6 +4290,8 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param int|None increase_sparse_dim: add this to the dim. assumes that it is sparse
     """
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    if out.undefined:
+      return out
     assert not (enforce_batch_major and enforce_time_major)
     if enforce_batch_major:
       out = out.copy_as_batch_major()
