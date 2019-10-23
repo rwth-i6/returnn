@@ -2508,6 +2508,8 @@ class SliceNdLayer(_ConcatInputLayer):
     :rtype: Data
     """
     input_data = get_concat_sources_data_template(sources).copy_as_batch_major()
+    if start:
+      input_data.beam = SearchBeam.get_combined_beam(input_data.beam, start.output.beam)
     in_shape = list(input_data.shape)
     shape = [size] + in_shape[1:]  # (B, size, ...) (w/o batch)
     out_type = input_data.get_kwargs()
