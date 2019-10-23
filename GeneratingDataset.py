@@ -2609,21 +2609,22 @@ class OggZipDataset(CachedDataset2):
     import zipfile
     import Util
     from MetaDataset import EpochWiseFilter
-    name, ext = os.path.splitext(os.path.basename(path))
-    if ext != ".zip" and os.path.isdir(path) and os.path.isfile(path + ".txt"):
+    if not isinstance(path, list) and os.path.splitext(path)[1] != ".zip" and os.path.isdir(path) and os.path.isfile(path + ".txt"):
       # Special case (mostly for debugging) to directly access the filesystem, not via zip-file.
-      path, name = os.path.dirname(path), os.path.basename(path)
-      self._zip_file = None
+      self.paths = [os.path.dirname(path)]
+      self._names = [os.path.basename(path)]
+      self._zip_files = None
+      assert not use_cache_manager, "cache manager only for zip file"
     else:
-      assert ext == ".zip"
-      self._zip_file = zipfile.ZipFile(path)
-    kwargs.setdefault("name", name)
+      self.paths = path if isinstance(path, list) else [path]
+      for path in self.paths:
+        assert os.path.splitext(path)[1] == ".zip"
+      self._names = [os.path.splitext(os.path.basename(path))[0] for path in self.paths]
+      if use_cache_manager:
+        self.paths = [Util.cf(path) for path in self.paths]
+      self._zip_files = [zipfile.ZipFile(path) for path in self.paths]
+    kwargs.setdefault("name", self._names[0])
     super(OggZipDataset, self).__init__(**kwargs)
-    if use_cache_manager:
-      assert self._zip_file is not None, "cache manager only for zip file"
-      path = Util.cf(path)
-    self.path = path
-    self._name = name
     self.targets = Vocabulary.create_vocab(**targets) if targets is not None else None
     if self.targets:
       self.labels["classes"] = self.targets.labels
@@ -2651,21 +2652,24 @@ class OggZipDataset(CachedDataset2):
     self._seq_order = None  # type: typing.Optional[typing.List[int]]
     self.init_seq_order()
 
-  def _read(self, filename):
+  def _read(self, filename, zip_index):
     """
     :param str filename: in zip-file
+    :param int zip_index: index of the zip file to load, unused when loading without zip
     :rtype: bytes
     """
-    if self._zip_file is not None:
-      return self._zip_file.read(filename)
-    return open("%s/%s" % (self.path, filename), "rb").read()
+    if self._zip_files is not None:
+      return self._zip_files[zip_index].read(filename)
+    return open("%s/%s" % (self.paths[0], filename), "rb").read()
 
-  def _collect_data(self):
+  def _collect_data_part(self, zip_index):
     """
-    :return: entries
+    collect all the entries of a single zip-file or txt file
+    :param int zip_index: index of the zip-file in self._zip_files, unused when loading without zip
+    :return: data entries
     :rtype: list[dict[str]]
     """
-    data = eval(self._read("%s.txt" % self._name))  # type: typing.List[typing.Dict[str]]
+    data = eval(self._read("%s.txt" % self._names[zip_index], zip_index))  # type: typing.List[typing.Dict[str]]
     assert data and isinstance(data, list)
     first_entry = data[0]
     assert isinstance(first_entry, dict)
@@ -2677,6 +2681,24 @@ class OggZipDataset(CachedDataset2):
     else:
       assert self.feature_extractor, "feature extraction is enabled, but no audio files are specified"
       assert isinstance(first_entry["seq_name"], str)
+    # add index to data list
+    for entry in data:
+      entry['_zip_file_index'] = zip_index
+    return data
+
+  def _collect_data(self):
+    """
+    :return: entries
+    :rtype: list[dict[str]]
+    """
+    data = []
+    if self._zip_files:
+      for zip_index in range(len(self._zip_files)):
+        zip_data = self._collect_data_part(zip_index)
+        data += zip_data
+    else:
+      # collect data from a txt file
+      data = self._collect_data_part(0)
     return data
 
   def _filter_fixed_random_subset(self, fixed_random_subset):
@@ -2813,8 +2835,8 @@ class OggZipDataset(CachedDataset2):
     """
     import io
     seq = self._data[self._get_ref_seq_idx(seq_idx)]
-    audio_fn = "%s/%s" % (self._name, seq["file"])
-    raw_bytes = self._read(audio_fn)
+    audio_fn = "%s/%s" % (self._names[seq['_zip_file_index']], seq["file"])
+    raw_bytes = self._read(audio_fn, seq['_zip_file_index'])
     return io.BytesIO(raw_bytes)
 
   def _collect_single_seq(self, seq_idx):
