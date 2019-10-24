@@ -13,6 +13,7 @@ import contextlib
 import typing
 from Log import log
 from TFNetworkLayer import LayerBase, get_layer_class
+import TFUtil
 from TFUtil import Data, DimensionTag, reuse_name_scope, VariableAssigner
 
 
@@ -261,7 +262,7 @@ class TFNetwork(object):
                train_flag=False, eval_flag=False, search_flag=False,
                parent_layer=None, parent_net=None, extra_parent_net=None,
                is_inside_rec_layer=None,
-               name=None):
+               absolute_name_prefix=None, name=None):
     """
     :param Config.Config config: only needed to init extern_data if not specified explicitly
     :param ExternData|None extern_data:
@@ -271,14 +272,19 @@ class TFNetwork(object):
     :param bool search_flag: whether we perform a beam-search. see usage
     :param TFNetworkLayer.LayerBase|None parent_layer:
     :param TFNetwork|None parent_net:
-    :param TFNetwork|None extra_parent_net:
+    :param TFNetwork|None extra_parent_net: we are on the same level (not really a child),
+      but an "extra" net of extra_parent_net
     :param bool is_inside_rec_layer: at template construction, use this
+    :param str|None absolute_name_prefix:
     :param str name: only for debugging
     """
     if not name:
       from Util import try_get_caller_name
       name = "<network via %s>" % try_get_caller_name(fallback="<unknown>")
     self.name = name
+    if absolute_name_prefix:
+      assert absolute_name_prefix.endswith("/")
+    self._absolute_name_prefix = absolute_name_prefix
     if not parent_net and parent_layer:
       parent_net = parent_layer.network
     if not config and parent_net:
@@ -385,12 +391,16 @@ class TFNetwork(object):
     :return: name, always with "/" at the end, or ""
     :rtype: str
     """
+    if self._absolute_name_prefix is not None:
+      return self._absolute_name_prefix
     if self.parent_layer:
       return self.parent_layer.get_absolute_name() + "/"
     if self.parent_net:
       return self.parent_net.get_absolute_name_prefix()
     if self.extra_parent_net:
-      return self.extra_parent_net.get_absolute_name_prefix()
+      prefixes = {net: prefix for (prefix, net) in self.extra_parent_net.extra_nets.items()}
+      my_prefix = ("%s:" % prefixes[self]) if self in prefixes else ""
+      return self.extra_parent_net.get_absolute_name_prefix() + my_prefix
     return ""
 
   def construct_from(self, list_or_dict):
@@ -452,7 +462,7 @@ class TFNetwork(object):
 
   # Currently this pattern is very simple.
   # This pattern might be extended, when we want to make it more flexible.
-  _extra_layer_name_prefix_pattern = re.compile("^(extra(\\.[A-Za-z0-9_.]+))?:")
+  _extra_layer_name_prefix_pattern = re.compile("^(extra(\\.[A-Za-z0-9_.]+)?):")
 
   def _get_extra_net(self, search_flag=None, net_name=None, prefix_name=None, auto_create=True):
     """
@@ -621,9 +631,12 @@ class TFNetwork(object):
     if not layer_desc:
       if name not in net_dict:
         if name == "data":
-          layer_desc = {"class": "source", "from": []}
+          layer_desc = {"class": "source"}
         elif name.startswith("data:"):
-          layer_desc = {"class": "source", "data_key": name[len("data:"):], "from": []}
+          layer_desc = {"class": "source", "data_key": name[len("data:"):]}
+        elif name == ":i":  # via set_rec_step_info / RecStepInfoLayer
+          # Note: This will fail at normal construction, but works for template construction.
+          layer_desc = {"class": ":i"}
       else:
         layer_desc = net_dict[name]
     if not layer_desc:
@@ -643,6 +656,9 @@ class TFNetwork(object):
 
   def _create_layer_layer_desc(self, name, layer_desc):
     """
+    This is called *after* :func:`LayerBase.transform_config_dict`
+    and *before* :func:`LayerBase.get_out_data_from_opts`.
+
     :param str name: layer name
     :param dict[str] layer_desc: opts
     :rtype: dict[str]
@@ -776,13 +792,17 @@ class TFNetwork(object):
       used_data_keys = used_data_keys.difference(self.extern_data.extra_added_keys)
     return used_data_keys
 
-  def get_seq_tags(self, mark_data_key_as_used=True):
+  def get_seq_tags(self, mark_data_key_as_used=True, beam=None):
     """
     :param bool mark_data_key_as_used: for extern_data
+    :param TFUtil.SearchBeam|None beam:
     :return: tensor of shape (batch,) of dtype string, via extern_data
     :rtype: tf.Tensor
     """
-    return self.get_extern_data(key="seq_tag", mark_data_key_as_used=mark_data_key_as_used).placeholder
+    data = self.get_extern_data(key="seq_tag", mark_data_key_as_used=mark_data_key_as_used)
+    if beam:
+      data = data.copy_extend_with_beam(beam)
+    return data.placeholder
 
   def get_losses_initialized(self, reduce_func=None, with_total=False):
     """
@@ -862,9 +882,10 @@ class TFNetwork(object):
       self.total_loss = total_loss
       self.total_constraints = total_constraints
       self.total_objective = total_loss + total_constraints
-      tf.summary.scalar("loss", self.total_loss)
-      tf.summary.scalar("constraints", self.total_constraints)
-      tf.summary.scalar("objective", self.total_objective)
+      if not TFUtil.get_current_control_flow_context():  # summaries cannot be used when in loop or cond
+        tf.summary.scalar("loss", self.total_loss)
+        tf.summary.scalar("constraints", self.total_constraints)
+        tf.summary.scalar("objective", self.total_objective)
 
   def maybe_construct_objective(self):
     """
@@ -1359,6 +1380,8 @@ class TFNetwork(object):
     """
     import os
     filename = os.path.abspath(filename)  # TF needs absolute path
+    from Util import maybe_make_dirs
+    maybe_make_dirs(os.path.dirname(filename))
     if not self.saver:
       self._create_saver()
     # We add some extra logic to try again for DiskQuota and other errors.
@@ -1453,7 +1476,8 @@ class TFNetwork(object):
     from TFUtil import cond
     return cond(self.train_flag, fn_train, fn_eval)
 
-  def get_search_choices(self, sources=None, src=None, base_search_choice=None, _visited=None, debug_stream=None):
+  def get_search_choices(self, sources=None, src=None, base_search_choice=None, _layer_to_search_choices=None,
+                         debug_stream=None):
     """
     Recursively searches through all sources,
     and if there is a :class:`ChoiceLayer` / any layer with search_choices, returns it.
@@ -1464,18 +1488,24 @@ class TFNetwork(object):
     :param LayerBase|None src:
     :param LayerBase|None base_search_choice:
     :param list[LayerBase]|None sources:
-    :param dict[LayerBase]|None _visited: keep track about visited layers in case there are circular deps
+    :param dict[LayerBase]|None _layer_to_search_choices: keep track about visited layers in case there are circular deps
     :param typing.TextIO|None debug_stream: if given, will print additional debug info into it
     :return: (direct or indirect) source LayerBase which has search_choices, or None
     :rtype: LayerBase|None
     """
+    if src:
+      # Note: Make sure we query from the current frame. Otherwise this would get ugly.
+      # (Only for src; accept for base_search_choice, it should not matter.)
+      assert src.get_normalized_layer() == src
     from TFNetworkLayer import SearchChoices
     from functools import cmp_to_key
     from pprint import pformat
-    if _visited is None:
-      _visited = {}  # type: typing.Dict[LayerBase,typing.List[LayerBase]]
+    if _layer_to_search_choices is None:
+      _layer_to_search_choices = {}  # type: typing.Dict[LayerBase,typing.List[LayerBase]]
+    normalized_to_layer = {}  # type: typing.Dict[LayerBase,LayerBase]
     layers = self._get_all_search_choices(
-      sources=sources, src=src, base_search_choice=base_search_choice, _visited=_visited)
+      sources=sources, src=src, base_search_choice=base_search_choice,
+      _layer_to_search_choices=_layer_to_search_choices, _normalized_to_layer=normalized_to_layer)
 
     def full_trace_for_layer(layer, _layer_trace=None):
       """
@@ -1491,9 +1521,11 @@ class TFNetwork(object):
         _layer_trace.append(layer)
       else:
         return _layer_trace
-      if layer not in _visited:
-        self._get_all_search_choices(base_search_choice=layer, _visited=_visited)
-      for dep in _visited[layer]:
+      if layer not in _layer_to_search_choices:  # happens if layer is a choice
+        self._get_all_search_choices(
+          base_search_choice=layer,
+          _layer_to_search_choices=_layer_to_search_choices, _normalized_to_layer=normalized_to_layer)
+      for dep in _layer_to_search_choices[layer]:
         full_trace_for_layer(dep, _layer_trace=_layer_trace)
       return _layer_trace
 
@@ -1502,7 +1534,7 @@ class TFNetwork(object):
       :rtype: dict[str,list[str]]
       """
       relevant_map = {}
-      for key, values in _visited.items():
+      for key, values in _layer_to_search_choices.items():
         relevant_map[key.get_absolute_name()] = [value.get_absolute_name() for value in values]
       return relevant_map
 
@@ -1551,7 +1583,8 @@ class TFNetwork(object):
     layers = sorted(layers, key=cmp_to_key(compare_layer))
     return layers[-1]
 
-  def _get_all_search_choices(self, sources=None, src=None, base_search_choice=None, _visited=None):
+  def _get_all_search_choices(self, sources=None, src=None, base_search_choice=None,
+                              _layer_to_search_choices=None, _normalized_to_layer=None):
     """
     Recursively searches through all sources,
     and if there is a :class:`ChoiceLayer` / any layer with search_choices, returns it.
@@ -1562,14 +1595,24 @@ class TFNetwork(object):
     :param LayerBase|None src:
     :param LayerBase|None base_search_choice:
     :param list[LayerBase]|None sources:
-    :param dict[LayerBase,list[LayerBase]]|None _visited: tracks visited layers in case there are circular deps
-    :return: (direct or indirect) source LayerBase which has search_choices, or None
+    :param dict[LayerBase,list[LayerBase]]|None _layer_to_search_choices:
+      tracks visited layers in case there are circular deps
+    :param dict[LayerBase,LayerBase]|None _normalized_to_layer:
+    :return: (direct or indirect) sources LayerBase which has search_choices
     :rtype: list[LayerBase]
     """
-    if _visited is None:
-      _visited = {}  # type: typing.Dict[LayerBase,typing.List[LayerBase]]
+    if _layer_to_search_choices is None:
+      _layer_to_search_choices = {}  # type: typing.Dict[LayerBase,typing.List[LayerBase]]
+    if _normalized_to_layer is None:
+      _normalized_to_layer = {}  # type: typing.Dict[LayerBase,LayerBase]
     if src is not None:
       assert isinstance(src, LayerBase)
+      normalized_src = src.get_normalized_layer()
+      if normalized_src != src:
+        assert _normalized_to_layer.setdefault(normalized_src, src) == src  # Currently expecting that this is unique.
+        if src.search_choices:
+          assert normalized_src.search_choices, "normalized %s vs %s (choices %s)" % (
+            normalized_src, src, src.search_choices)
       if src.search_choices:
         if src.search_choices.is_decided:
           return []
@@ -1577,19 +1620,24 @@ class TFNetwork(object):
       assert base_search_choice is None
       base_search_choice = src
     if base_search_choice is not None:
-      if base_search_choice in _visited:
-        return _visited[base_search_choice]
+      if base_search_choice in _layer_to_search_choices:
+        return _layer_to_search_choices[base_search_choice]
       else:
-        _visited[base_search_choice] = []  # we visit it now
+        _layer_to_search_choices[base_search_choice] = []  # we visit it now
+      normalized_base = base_search_choice.get_normalized_layer()
+      if normalized_base != base_search_choice:
+        # Currently expecting that this is unique.
+        assert _normalized_to_layer.setdefault(normalized_base, base_search_choice) == base_search_choice
       assert sources is None
       sources = base_search_choice.get_dep_layers()
     assert sources is not None
     layers = []  # type: typing.List[LayerBase]
     for src_ in sources:
-      src_choice_layers = self._get_all_search_choices(src=src_, _visited=_visited)
+      src_choice_layers = self._get_all_search_choices(
+        src=src_, _layer_to_search_choices=_layer_to_search_choices, _normalized_to_layer=_normalized_to_layer)
       for layer in src_choice_layers:
-        if base_search_choice and layer not in _visited[base_search_choice]:
-          _visited[base_search_choice].append(layer)
+        if base_search_choice and layer not in _layer_to_search_choices[base_search_choice]:
+          _layer_to_search_choices[base_search_choice].append(layer)
         if layer not in layers:
           layers.append(layer)
     if not layers:
@@ -1597,6 +1645,25 @@ class TFNetwork(object):
         # noinspection PyProtectedMember
         return self.parent_layer.network._get_all_search_choices(sources=self.parent_layer.get_dep_layers())
       return []
+    if base_search_choice is not None:
+      normalized_base = base_search_choice.get_normalized_layer()
+      if normalized_base != base_search_choice:  # from prev frame or so
+        # Just make sure we visit these as well.
+        normalized_choices = self._get_all_search_choices(
+          base_search_choice=normalized_base,
+          _layer_to_search_choices=_layer_to_search_choices, _normalized_to_layer=_normalized_to_layer)
+        if any([l.get_normalized_layer() == l for l in normalized_choices]):
+          # Filter any "prev:..." layers away. This should always be correct.
+          # Also, this is important to have the correct choice resolution for the prev layer (base_search_choice).
+          normalized_choices = [l for l in normalized_choices if l.get_normalized_layer() == l]
+          # Get corresponding "prev:..." layers.
+          from pprint import pformat
+          assert all([l in _normalized_to_layer for l in normalized_choices]), "\n".join([
+            "No cur -> prev mapping for some layers.", "Base: %s" % base_search_choice,
+            "Prev choices:", pformat(layers),
+            "Cur choices:", pformat(normalized_choices), "Mapping:", pformat(_normalized_to_layer)])
+          layers = [_normalized_to_layer[l] for l in normalized_choices]
+          _layer_to_search_choices[base_search_choice] = layers
     return layers
 
   def debug_search_choices(self, base_search_choice):
@@ -1626,7 +1693,7 @@ class TFNetwork(object):
         super(Visitor, self).__setitem__(key, value)
 
     search_choices = self.get_search_choices(
-      base_search_choice=base_search_choice, _visited=Visitor(), debug_stream=sys.stdout)
+      base_search_choice=base_search_choice, _layer_to_search_choices=Visitor(), debug_stream=sys.stdout)
     print("-> search choices:", search_choices)
 
   def get_data_batch_dim(self):
@@ -1679,25 +1746,32 @@ class TFNetwork(object):
     self.layers[":i"] = RecStepInfoLayer(
       name=":i", network=self, i=i, end_flag=end_flag, end_flag_source=end_flag_source, seq_lens=seq_lens)
 
-  def is_inside_rec_layer(self):
+  def is_inside_rec_layer(self, inside_loop=True):
     """
+    :param bool inside_loop: only True if the network is constructed within the loop (not moved out)
     :return: whether we are inside a :class:`RecLayer`. see :func:`get_rec_parent_layer`
     :rtype: bool
     """
     if self._is_inside_rec_layer is not None:
       return self._is_inside_rec_layer
-    return self.get_rec_parent_layer() is not None
+    return self.get_rec_parent_layer(inside_loop=inside_loop) is not None
 
-  def get_rec_parent_layer(self):
+  def get_rec_parent_layer(self, inside_loop=True):
     """
+    :param bool inside_loop: only return if the network is constructed within the loop (not moved out)
     :return: if we are a subnet of a :class:`RecLayer`, will return the RecLayer instance
     :rtype: TFNetworkRecLayer.RecLayer|None
     """
     from TFNetworkRecLayer import RecLayer
     if isinstance(self.parent_layer, RecLayer):
+      if inside_loop:
+        from TFNetworkRecLayer import _SubnetworkRecCell
+        assert isinstance(self.parent_layer.cell, _SubnetworkRecCell)
+        if self is not self.parent_layer.cell.net:
+          return None
       return self.parent_layer
     if self.parent_net:
-      return self.parent_net.get_rec_parent_layer()
+      return self.parent_net.get_rec_parent_layer(inside_loop=inside_loop)
     return None
 
   def have_rec_step_info(self):
@@ -1716,7 +1790,8 @@ class TFNetwork(object):
     if ":i" in self.layers and isinstance(self.layers[":i"], RecStepInfoLayer):
       return self.layers[":i"]
     rec_layer = self.get_rec_parent_layer()
-    # the second condition is true if all layers have been optimized out of the rec layer
+    # The second condition is true if all layers have been optimized out of the rec layer.
+    # (We could handle this case though. It's just not implemented.)
     if not rec_layer or len(rec_layer.cell.layers_in_loop) == 0:
       assert not must_exist, "%s: We expect to be the subnet of a RecLayer, but we are not." % self
       return None
@@ -1787,6 +1862,8 @@ class TFNetwork(object):
     Note: We don't store this in the graph itself (e.g. via tf.get_collection),
     as we don't want to serialize this
     (which would also lead to an error, because it cannot be serialized).
+    Note: Currently these callbacks might get called multiple times,
+    so make sure that this is not a problem.
 
     :param function cb:
     """
@@ -2058,14 +2135,20 @@ class LossHolder:
     """
     if self._network.parent_net:
       return  # skip summaries. the root net should also do this
+    if TFUtil.get_current_control_flow_context():  # summaries cannot be used when in loop or cond
+      return
     name = self.get_tf_name()
     if self._loss_value is not None:
-      # a loss value is typically a scalar but there are cases of sequence or position wise loss values (e.g. if
-      #   the eval_output_file_per_seq option is used)
+      # A loss value is typically a scalar but there are cases of sequence or position wise loss values
+      # (e.g. if the eval_output_file_per_seq option is used).
       if self._loss_value.get_shape().ndims == 0:
         tf.summary.scalar("loss_%s" % name, self._loss_value * self._norm_factor)
         if self._network.get_config().bool("calculate_exp_loss", False):
           tf.summary.scalar("exp_loss_%s" % name, tf.exp(self._loss_value * self._norm_factor))
+        if self._network.get_config().bool("debug_unnormalized_loss_summaries", False):
+          tf.summary.scalar("unnormalized_loss_%s" % name, self._loss_value)
+        if self._network.get_config().bool("debug_objective_loss_summaries", False):
+          tf.summary.scalar("objective_loss_%s" % name, self._loss_value_for_objective)
     if self._error_value is not None:
       if self._error_value.get_shape().ndims == 0:
         tf.summary.scalar("error_%s" % name, self._error_value * self._norm_factor)
@@ -2097,7 +2180,6 @@ class LossHolder:
         "layer %r loss %r return None for loss and error" % (self._layer, self.loss))
     if self._norm_factor is None:
       self._norm_factor = self.loss.get_normalization_factor()
-    self._tf_summary()
     loss_value = self._loss_value
     if loss_value is not None:
       if self._network.get_config().bool("debug_add_check_numerics_on_output", False):
@@ -2115,6 +2197,7 @@ class LossHolder:
     if self.loss.use_normalized_loss and loss_value is not None:
       loss_value *= self._norm_factor
     self._loss_value_for_objective = loss_value
+    self._tf_summary()
     self._is_prepared = True
 
   def copy_new_base(self, name=None, layer=None, network=None, reduce_func=None):
@@ -2168,6 +2251,23 @@ class NetworkConstructionDependencyLoopException(Exception):
     self.net_dict = net_dict
 
 
+class CannotHandleUndefinedSourcesException(Exception):
+  """
+  Raised when some layer gets None (undefined) source(s) (because e.g. in RecLayer template construction),
+  and cannot handle it (e.g. cannot infer the out_type in that case).
+  """
+  def __init__(self, layer_name, layer_desc):
+    """
+    :param str layer_name:
+    :param dict[str] layer_desc:
+    """
+    from pprint import pformat
+    super(CannotHandleUndefinedSourcesException, self).__init__(
+      "%r: cannot handle undefined sources without defined out_type.\n%s" % (layer_name, pformat(layer_desc)))
+    self.layer_name = layer_name
+    self.layer_desc = layer_desc
+
+
 class _DelayedConstructionException(Exception):
   """
   When we want to do a flat construction.
@@ -2201,63 +2301,189 @@ class LayerNotFound(Exception):
   """
 
 
-def help_on_tf_exception(exception, fetches, feed_dict, meta_step_info, extern_data, file=sys.stdout):
+def _help_data_or_array(value):
   """
-  :param tf.errors.OpError|BaseException exception:
-  :param tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor]|None fetches:
-  :param dict[tf.Tensor,numpy.ndarray] feed_dict:
-  :param dict[str] meta_step_info:
-  :param ExternData extern_data:
-  :param typing.IO[str] file:
+  :param numpy.ndarray|bool|object value:
+  :return: (info,(min,max))
+  :rtype: (str,(int|float,int|float))
   """
-  from pprint import pprint
   import numpy
+  if isinstance(value, numpy.ndarray):
+    info = "shape %s, dtype %s" % (value.shape, value.dtype)
+    if value.size > 0:
+      v_minmax = numpy.min(value), numpy.max(value)
+      info += ", min/max %s/%s" % v_minmax
+      if value.dtype.kind == "f":
+        info += ", mean/stddev %s/%s" % (numpy.mean(value), numpy.std(value))
+      if value.ndim <= 1:
+        info += ", (%s)" % numpy.array2string(value)
+    else:
+      v_minmax = 0, 0
+      info += ", EMPTY"
+  elif isinstance(value, (numpy.floating, numpy.integer, numpy.bool_, float, int, bool, str, bytes)):
+    v_minmax = 0, 1
+    info = "%s(%s)" % (type(value).__name__, value)
+  elif value is None:
+    v_minmax = -1, -1
+    info = "None"
+  else:
+    v_minmax = -1, -1
+    info = "type %r" % type(value)
+  return info, v_minmax
+
+
+def help_on_tf_exception(
+  session, exception, fetches, feed_dict=None,
+  meta_step_info=None, extern_data=None,
+  file=sys.stdout):
+  """
+  Generic debugging helper, on any TF exception (or even any other exception as well).
+  Will try to provide as much helpful context information as possible.
+  (This is not in :mod:`TFUtil` because it depends on `ExternData`, which is only defined here.)
+
+  :param tf.Session session:
+  :param tf.errors.OpError|BaseException exception:
+  :param tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor]|object|None fetches:
+  :param dict[tf.Tensor,numpy.ndarray]|None feed_dict:
+  :param dict[str]|None meta_step_info:
+  :param ExternData|None extern_data:
+  :param typing.IO[str]|io.TextIOBase|io.StringIO file:
+  """
+  from pprint import pprint, pformat
   import traceback
   from TFUtil import get_base_name, find_ops_with_tensor_input, find_ops_path_output_to_input
   from tensorflow.python.util import nest
   if fetches is not None:
     fetches = nest.flatten(fetches)
   if isinstance(exception, tf.errors.OpError):
-    print("Failing op:", repr(exception.op), file=file)
-    if exception.op and exception.op.type == "Placeholder":
-      using_ops = find_ops_with_tensor_input(exception.op.outputs[0], fetches=fetches)
+    op = exception.op
+    print("Failing op:", repr(op), file=file)
+    assert op is None or isinstance(op, tf.Operation)
+    if op and op.type == "Placeholder":
+      # Likely this placeholder is not feeded, but used somewhere.
+      # We assume that the usage of it is incorrect.
+      # Try to give some hints where it was (incorrectly) used.
+      using_ops = find_ops_with_tensor_input(op.outputs[0], fetches=fetches)
       print("Used by:", repr(using_ops), file=file)
-      for op in using_ops:
-        print("".join(traceback.format_list(op.traceback)), file=file)
+      for op_ in using_ops:
+        print("".join(traceback.format_list(op_.traceback)), file=file)
       if fetches:
-        input_to_output_ops = find_ops_path_output_to_input(exception.op.outputs[0], fetches=fetches)
+        input_to_output_ops = find_ops_path_output_to_input(op.outputs[0], fetches=fetches)
         print("Input to output:", file=file)
         pprint(input_to_output_ops, stream=file)
+    if op and op.inputs and not isinstance(exception, tf.errors.ResourceExhaustedError):
+      # The exception occurred in the op, but that means that all the inputs to the op were correctly calculated.
+      # It is probably helpful to calculate these again, and show their shape.
+      try:
+        # Note: In principle, we would just do `input_values = session.run(list(op.inputs), feed_dict=feed_dict)`.
+        # However, this will not work if the op is inside a loop.
+        # Thus, we use this workaround to fetch them nonetheless.
+        # First find some value to fetch.
+        assert fetches
+        input_to_output_ops = find_ops_path_output_to_input(op.inputs[0], fetches=fetches)
+        assert input_to_output_ops, "op.inputs[0] %r not in fetches\n%s" % (op.inputs[0], pformat(fetches))
+        debug_fetch = None
+        for x in input_to_output_ops:
+          # noinspection PyProtectedMember
+          if x._control_flow_context is None or x.type == "Exit":
+            debug_fetch = x
+            break
+        assert debug_fetch is not None, "ops: %r, fetches: %r" % (input_to_output_ops, fetches)
+        stop_at_ts = list(feed_dict.keys() if feed_dict else ())  # should not copy these
+        for op_ in op.graph.get_operations():
+          assert isinstance(op_, tf.Operation)
+          # noinspection PyProtectedMember
+          if op_._control_flow_context:
+            continue
+          for x in list(op_.inputs) + list(op_.outputs) + list(op.control_inputs):
+            assert isinstance(x, tf.Tensor)
+            # noinspection PyProtectedMember
+            if x.dtype._is_ref_dtype and x not in stop_at_ts:
+              stop_at_ts.append(x)  # and also should not copy any variables/refs
+        # Note: Some code in graph_editor, which is used in copy_graph, results in lots of spam about
+        # tf.GraphKeys.VARIABLES deprecated usage (e.g. via get_predefined_collection_names or so).
+        # We just do this ugly patch here, to work around the spam.
+        tf.GraphKeys.VARIABLES = tf.GraphKeys.GLOBAL_VARIABLES
+        from TFUtil import FetchHelper
+        debug_fetch, fetch_helpers, op_copied = FetchHelper.copy_graph(
+          debug_fetch, target_op=op, fetch_helper_tensors=list(op.inputs),
+          stop_at_ts=stop_at_ts,
+          verbose_stream=file)
+        try:
+          print("Execute again to debug the op inputs...", file=file)
+          session.run(debug_fetch, feed_dict=feed_dict)
+        except tf.errors.OpError as sub_exc:
+          # We expect to get the same exception as the original one. The same op likely still fails.
+          if sub_exc.op is op_copied:
+            pass  # As expected.
+          else:
+            print("We tried to fetch the op inputs (%r) but got another exception:" % (list(op.inputs),), file=file)
+            print(sub_exc, file=file)
+            print("Maybe we still get some values via the fetch helpers, though...", file=file)
+      except Exception as sub_exc:
+        print("We tried to fetch the op inputs (%r) but got another exception:" % (list(op.inputs),), file=file)
+        print(sub_exc, file=file)
+        import better_exchook
+        better_exchook.better_exchook(*sys.exc_info(), autodebugshell=False, file=file)
+      else:
+        print("Op inputs:", file=file)
+        for input_t, fetch_helper in zip(op.inputs, fetch_helpers):
+          info, _ = _help_data_or_array(fetch_helper.most_recent_value)
+          print("  %r: %s" % (input_t, info), file=file)
+    if op is None and isinstance(exception, tf.errors.InvalidArgumentError) and "Retval[0]" in exception.message:
+      # E.g.: InvalidArgumentError: Retval[0] does not have value
+      # Unfortunately, this TF exception does not give us any hint about the failing op.
+      # Try to find it.
+      if fetches is not None:
+        # At least find out which of the fetches leads to the exception.
+        found_fetch = None
+        for fetch in fetches:
+          try:
+            session.run(fetch, feed_dict=feed_dict)
+          except Exception as exc_:
+            print("Exception for fetch %s: %s: %s" % (fetch, type(exc_).__name__, exc_), file=file)
+            found_fetch = fetch
+            break
+        if found_fetch is not None:
+          if isinstance(found_fetch, tf.Tensor):
+            found_fetch = found_fetch.op
+          assert isinstance(found_fetch, tf.Operation)
+          # Try to go through op inputs.
+          for fetch in list(found_fetch.control_inputs) + list(found_fetch.inputs):
+            if isinstance(fetch, tf.Tensor) and fetch.op.type == "ScalarSummary":
+              # Avoid error: Operation '...' has been marked as not fetchable
+              fetch = tf.summary.merge([fetch])
+            try:
+              session.run(fetch, feed_dict=feed_dict)
+            except Exception as exc_:
+              print("Exception for fetch %s: %s: %s" % (fetch, type(exc_).__name__, exc_), file=file)
+              input_to_output_ops = find_ops_path_output_to_input(list(feed_dict.keys()), fetches=fetch)
+              print("Input to output op path:", file=file)
+              pprint(input_to_output_ops, stream=file)
+              if not input_to_output_ops:
+                TFUtil.print_graph_output(fetch, file=file)
+              break
   print("Step meta information:", file=file)
   pprint(meta_step_info, stream=file)
   print("Feed dict:", file=file)
   if isinstance(feed_dict, dict):
     for key, value in sorted(feed_dict.items(), key=lambda item: item[0].name):
       assert isinstance(key, tf.Tensor)
-      if isinstance(value, numpy.ndarray):
-        info = "shape %s, dtype %s" % (value.shape, value.dtype)
-        if value.size > 0:
-          v_minmax = numpy.min(value), numpy.max(value)
-          info += ", min/max %s/%s" % v_minmax
-          if value.dtype.kind == "f":
-            info += ", mean/stddev %s/%s" % (numpy.mean(value), numpy.std(value))
-        else:
-          v_minmax = 0, 0
-          info += ", EMPTY"
-      else:
-        v_minmax = -1, -1
-        info = "type %r" % type(value)
+      info, v_minmax = _help_data_or_array(value)
       data = None
       if key.name.startswith("extern_data/"):
         data_key = get_base_name(key)
-        if data_key in extern_data.data:
+        if extern_data and data_key in extern_data.data:
           data = extern_data.data[data_key]
           info += ", %s" % data
       print("  %r: %s" % (key, info), file=file)
       if data and data.sparse:
         if v_minmax[0] < 0 or v_minmax[1] >= data.dim:
           print("  WARNING, invalid label for data", data, file=file)
+  elif feed_dict is None:
+    print("None", file=file)
   else:
+    print("(unexpected type %r)" % type(feed_dict), file=file)
     pprint(feed_dict, stream=file)
 
 

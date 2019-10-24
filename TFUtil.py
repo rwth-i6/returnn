@@ -80,12 +80,15 @@ class DimensionTag(object):
     Time = "spatial"  # we don't treat this as different
     Feature = "feature"
 
-  def __init__(self, kind=Types.Unspecified, description=None, dimension=None, dyn_size=None):
+  def __init__(self, kind=Types.Unspecified, description=None, dimension=None, dyn_size=None,
+               src_data=None, src_axis=None):
     """
     :param str|None kind:
     :param str|None description: the description should be unique
     :param int|None dimension:
     :param tf.Tensor|None dyn_size: e.g. seq_len, (batch,)
+    :param Data|None src_data:
+    :param int|None src_axis:
     """
     self.id = id(self)  # This is just used for __repr__ to distinguish different instances.
     self.kind = kind
@@ -93,6 +96,10 @@ class DimensionTag(object):
     self.dimension = dimension
     self.dyn_size = dyn_size
     self.same_as = None  # type: typing.Optional[DimensionTag]
+    if src_data:
+      assert isinstance(src_data, Data) and isinstance(src_axis, int)
+    self.src_data = src_data
+    self.src_axis = src_axis
     if dyn_size is not None:
       other = DimensionTag.get_tag_from_size_tensor(dyn_size)
       if other:
@@ -136,6 +143,8 @@ class DimensionTag(object):
     :return: whether we can clearly identify this axis. for axes with dynamic size, we require the dyn_size.
     :rtype: bool
     """
+    if self.same_as:
+      return self.same_as.can_compare()
     if self.kind in [self.Types.Batch, self.Types.Feature]:
       return True
     assert self.kind == self.Types.Spatial
@@ -231,8 +240,18 @@ class DimensionTag(object):
     """
     :param DimensionTag other:
     """
-    assert not self.same_as
+    assert not self.same_as or self.same_as is other.get_same_base()
     self.same_as = other.get_same_base()
+    # If we have a defined source, and this is a dynamic spatial axis, and it was undefined before,
+    # maybe we can overtake the size_placeholder now.
+    if self.same_as.dyn_size is not None and self.src_data:
+      assert isinstance(self.src_axis, int)
+      # Maybe it changed in the meanwhile, so check.
+      if self.src_data.get_dim_tag(self.src_axis).description == self.description:
+        if self.src_data.size_placeholder is None:
+          self.src_data.size_placeholder = {}
+        self.src_data.size_placeholder[
+          self.src_data.get_batch_axis_excluding_batch(self.src_axis)] = self.same_as.dyn_size
 
   @classmethod
   def get_existing_tag_from_collection(cls, other, tags, is_equal_opts=None):
@@ -277,6 +296,145 @@ class DimensionTag(object):
       tags.extend(tags_for_data)
     return tags, data_axes_dict
 
+  @classmethod
+  def get_uniq_collection(cls, tags, is_equal_opts=None):
+    """
+    :param list[DimensionTag]|tuple[DimensionTag]|set[DimensionTag] tags:
+    :param dict[str]|None is_equal_opts: passed to DimensionTag.is_equal
+    :rtype: list[DimensionTag]
+    """
+    res = []
+    for tag in tags:
+      ex = cls.get_existing_tag_from_collection(tag, res, is_equal_opts=is_equal_opts)
+      if not ex:
+        res.append(tag)
+    return res
+
+
+class SearchBeam:
+  """
+  Represents info about the beam from some beam search (e.g. via :func:`beam_search`),
+  e.g. such as the beam size, but also the dependencies.
+  This is somewhat parallel to :class:`SearchChoices`, but simpler,
+  and independent from the layers/network (:class:`LayerBase`).
+  """
+
+  def __init__(self, beam_size, dependency=NotSpecified, name=None, _next_frame=None):
+    """
+    :param int beam_size:
+    :param SearchBeam|NotSpecified|None dependency:
+    :param str|None name:
+    :param SearchBeam|None _next_frame:
+    """
+    if isinstance(dependency, SearchBeam):
+      assert name and dependency.name and name != dependency.name
+    if name and os.path.basename(name).startswith("prev:"):
+      assert _next_frame
+    self.beam_size = beam_size
+    self.dependency = dependency
+    self.name = name
+    self._next_frame = _next_frame
+
+  def copy_as_prev_frame(self):
+    """
+    :rtype: SearchBeam
+    """
+    if self._next_frame:  # already prev frame -> return self. see logic in RecLayer maybe_transform
+      return self
+    assert self.name
+    name = "%s/prev:%s" % (os.path.dirname(self.name), os.path.basename(self.name))
+    return SearchBeam(beam_size=self.beam_size, name=name, _next_frame=self)
+
+  def __repr__(self):
+    keys = ["name", "beam_size"]
+    if self.dependency is not NotSpecified:
+      keys.append("dependency")
+    return "%s(%s)" % (
+      self.__class__.__name__, ", ".join(["%s=%r" % (key, getattr(self, key)) for key in keys]))
+
+  def __eq__(self, other):
+    """
+    :param SearchBeam|object|None other:
+    :rtype: bool
+    """
+    if self is other:
+      return True
+    if self is None or other is None:
+      return False
+    if not isinstance(self, SearchBeam) or not isinstance(other, SearchBeam):
+      return False
+    if self.name is None or other.name is None:
+      return False  # cannot identify
+    return self.name == other.name
+
+  def __ne__(self, other):
+    """
+    :param SearchBeam|object|None other:
+    :rtype: bool
+    """
+    return not (self == other)
+
+  def __hash__(self):
+    return hash(self.name)
+
+  def _get_dependency_list(self):
+    """
+    :return: list as far as it is defined
+    :rtype: list[SearchBeam]
+    """
+    ls = [self]
+    while isinstance(ls[-1].dependency, SearchBeam):
+      ls.append(ls[-1].dependency)
+    return ls
+
+  @classmethod
+  def get_combined_beam(cls, beam1, beam2=None, *beams):
+    """
+    Combines beams.
+    This will throw an exception if they cannot be combined.
+    Note that in beam search (see :class:`SearchChoices`),
+    the logic to combine beams from different search choices
+    happens in a generic way for all layers automatically
+    via :func:`TFNetwork._create_layer_layer_desc`,
+    so normally we already have the same beam.
+    Unless we are at template construction.
+
+    :param SearchBeam|None beam1:
+    :param SearchBeam|None beam2:
+    :param SearchBeam|None beams:
+    :rtype: SearchBeam|None
+    """
+    if beams:
+      beam12 = cls.get_combined_beam(beam1, beam2)
+      return cls.get_combined_beam(beam12, beams[0], *beams[1:])
+    if beam2 is None:
+      return beam1
+    if beam1 is None:
+      return beam2
+    if beam1 == beam2:
+      if beam2.dependency is NotSpecified:
+        return beam1
+      if beam1.dependency is NotSpecified:
+        return beam2
+      return beam1
+    assert beam1.name and beam2.name
+    if beam2._next_frame and not beam1._next_frame:
+      return beam1
+    if beam1._next_frame and not beam2._next_frame:
+      return beam2
+    b1 = beam1
+    b2 = beam2
+    if b1._next_frame and b2._next_frame:
+      b1 = b1._next_frame
+      b2 = b2._next_frame
+    l1 = b1._get_dependency_list()
+    l2 = b2._get_dependency_list()
+    if b2 in l1:
+      return beam1
+    if b1 in l2:
+      return beam2
+    raise Exception("Cannot combine beams:\n 1: %s\n 2: %s" % (beam1, beam2))
+
 
 class Data(object):
   """
@@ -303,7 +461,7 @@ class Data(object):
                vocab=None,
                same_dim_tags_as=None,
                undefined=False,
-               beam_size=None):
+               beam=None):
     """
     :param str name:
     :param tuple[int|None]|list[int|None] shape: including time-dim (can be None). excluding batch-dim.
@@ -325,7 +483,7 @@ class Data(object):
     :param str|dict[str]|GeneratingDataset.Vocabulary|None vocab:
     :param dict[int|str,DimensionTag]|None same_dim_tags_as: will mark our dimension tags to be the same
     :param bool undefined:
-    :param int|None beam_size: the batch-dim could be extended by a beam-size,
+    :param SearchBeam|None beam: the batch-dim could be extended by a beam-size,
       such that it represents the merged dims [batch, beam_size].
     """
     assert isinstance(name, str)
@@ -425,7 +583,7 @@ class Data(object):
       size_placeholder = {}
     self.size_placeholder = size_placeholder  # type: typing.Dict[int,tf.Tensor]  # axis w.o. batch -> size (batch,)
     self.available_for_inference = available_for_inference
-    self.beam_size = beam_size
+    self.beam = beam
     if vocab is not None:
       from GeneratingDataset import Vocabulary
       if isinstance(vocab, str):
@@ -452,6 +610,15 @@ class Data(object):
     assert x.get_shape().ndims == 0, "currently only scalars supported"
     return Data(name=str(x.op.name), shape=(), batch_dim_axis=None, dtype=x.dtype.name, placeholder=x)
 
+  @classmethod
+  def create_undefined(cls, name=None):
+    """
+    :param str name:
+    :return: Data with undefined=True. the shape/dtype does not really matter
+    :rtype: Data
+    """
+    return Data(name="%s_undefined" % (name or "unknown"), shape=(), dim=None, undefined=True)
+
   def sanity_check(self, ignore_placeholder=False):
     """
     Performs some sanity checks on self, and raises exceptions if something is not sane.
@@ -466,10 +633,20 @@ class Data(object):
           self, axis_name, axis, self.batch_dim_axis)
     if self.sparse:
       assert self.feature_dim_axis is None, "%s: If sparse, there cannot be a feature dim axis." % self
+    else:
+      if self.feature_dim_axis is None:  # e.g. scalars, or [B]
+        assert self.dim is None, "%s: not sparse but no feature-dim-axis, so dim should be None" % self
     if self.feature_dim_axis is not None:
       assert self.dim == self.batch_shape[self.feature_dim_axis], (
         "%s: inconsistent dim. feature axis or unspecified: %r." % (self, self.feature_dim_axis_or_unspecified))
     if not ignore_placeholder and self.placeholder is not None:
+      # Note: We could just call self.placeholder.set_shape.
+      # However, we are more explicit. We assume that the placeholder has already a known shape, and error otherwise.
+      assert self.placeholder.shape.ndims == self.batch_ndim
+      for i in range(self.batch_ndim):
+        if self.batch_shape[i] is None:
+          continue  # we allow anything in the placeholder
+        assert self.placeholder.shape[i].value == self.batch_shape[i]
       self.placeholder.set_shape(self.batch_shape)
       assert self.placeholder.dtype.base_dtype.name == self.dtype
 
@@ -513,8 +690,8 @@ class Data(object):
       keys += ["available_for_inference"]
     if self.undefined:
       keys += ["undefined"]
-    if self.beam_size is not None:
-      keys += ["beam_size"]
+    if self.beam is not None:
+      keys += ["beam"]
     if self.vocab:
       keys += ["vocab"]
     if with_size_placeholder and self.size_placeholder is not None:
@@ -554,8 +731,8 @@ class Data(object):
       keys.append("available_for_inference")
     if self.undefined:
       keys.append("undefined")
-    if self.beam_size is not None:
-      keys.append("beam_size")
+    if self.beam is not None:
+      keys.append("beam")
     args = ["%s=%r" % (key, getattr(self, key)) for key in keys]
     args += ["batch_shape_meta=[%s]" % ",".join(self.get_batch_axes_short_description())]
     return "Data(%s)" % ", ".join(args)
@@ -586,6 +763,22 @@ class Data(object):
           descriptions.append(repr(dim_tag.description))
       res.append("|".join(descriptions))
     return res
+
+  def get_compare_key(self):
+    """
+    :return: some key which can be used for compare functions, i.e. such that
+      cmp(get_compare_key(self), get_compare_key(other)) == cmp(self, other),
+      i.e. we define some order by that.
+      Note that this order is not totally fixed, and might change.
+    :rtype: object
+    """
+    return (
+      self.name, self.dtype,
+      self.shape,
+      self.batch_dim_axis, self.feature_dim_axis, self.time_dim_axis,
+      sorted(self.size_placeholder.keys()),
+      [self.get_size_dim_tag(i) for i in range(len(self.size_placeholder))],
+      self.beam)
 
   def __repr__(self):
     return self.get_description()
@@ -804,11 +997,16 @@ class Data(object):
       assert 0 <= spatial_dim_axis <= self.batch_ndim
     if data.placeholder is not None:
       assert dim == 1  # not implemented otherwise
-      data.placeholder = tf.expand_dims(data.placeholder, spatial_dim_axis, name="%s_add_spatial_dim" % self.name)
+      data.placeholder = tf.expand_dims(
+        data.placeholder, spatial_dim_axis, name="%s_add_spatial_dim" % get_valid_scope_name_from_str(self.name))
     if self.batch_dim_axis is None:
       axis_wo_batch = spatial_dim_axis
     else:
       axis_wo_batch = spatial_dim_axis if (spatial_dim_axis <= self.batch_dim_axis) else (spatial_dim_axis - 1)
+    if data.size_placeholder:
+      data.size_placeholder = {
+        i if (i < axis_wo_batch) else (i + 1): size
+        for (i, size) in data.size_placeholder.items()}
     data.shape = data.shape[:axis_wo_batch] + (dim,) + data.shape[axis_wo_batch:]
     if auto_time_dim_axis and data.time_dim_axis is None:
       data.time_dim_axis = spatial_dim_axis
@@ -877,6 +1075,8 @@ class Data(object):
       else:
         return self.batch_ndim  # at the end
     assert dim_tag.kind == DimensionTag.Types.Spatial or (dim_tag.kind == DimensionTag.Types.Feature and self.sparse)
+    if dim_tag.dimension is None and self.get_dynamic_axes():
+      return self.get_dynamic_axes()[-1] + 1  # after existing dynamic axis
     if self.get_spatial_batch_axes():
       return self.get_spatial_batch_axes()[-1] + 1  # after the existing spatial dim
     elif self.feature_dim_axis is not None:
@@ -975,15 +1175,24 @@ class Data(object):
     """
     assert not check_sparse or self.sparse == data.sparse
     assert not check_dtype or self.dtype == data.dtype
-    _, dim_tags = DimensionTag.get_all_dimension_tags([self, data], dict(allow_same_feature_dim=True))
     v = self.copy()
     v.sparse = data.sparse  # we will later reset it. this is to better count the axes (feature and spatial)
+    if not v.sparse:
+      # We might need to reset the dim, as it would be invalid otherwise. Reset later.
+      if v.feature_dim_axis is not None:
+        v.dim = v.batch_shape[v.feature_dim_axis]
+      else:
+        v.dim = None
     if data.batch_dim_axis is not None and v.batch_dim_axis is None:
       v = v.copy_add_batch_dim(0)  # later we might move the axis
     if v.batch_dim_axis is not None and data.batch_dim_axis is None:
       raise ValueError("copy_compatible_to: self %r has batch-dim, but target data %r has not" % (self, data))
     if data.batch_ndim < v.batch_ndim:
       raise ValueError("copy_compatible_to: self %r already has more dims than target data %r" % (self, data))
+    start = v
+    _, dim_tags = DimensionTag.get_all_dimension_tags([start, data], dict(allow_same_feature_dim=True))
+    assert len(dim_tags[start]) == start.batch_ndim
+    assert len(dim_tags[data]) == data.batch_ndim
     # This sets it explicitly. We will later make it NotSpecified if needed.
     # This avoids unexpected behavior after copy_add_spatial_dim and simplifies the logic.
     v.feature_dim_axis = v.feature_dim_axis
@@ -991,27 +1200,38 @@ class Data(object):
     for axis in range(data.batch_ndim):
       if axis == data.batch_dim_axis:
         continue
-      if data.batch_ndim > v.batch_ndim:
-        if dim_tags[data][axis] in dim_tags[self]:
-          continue  # This one seems to exist already, add the next one.
+      axis_wo_batch = data.get_batch_axis_excluding_batch(axis)
+      v_axis = v.get_batch_axis(axis_wo_batch)
+      existing_axis = None
+      if dim_tags[data][axis] in dim_tags[start]:
+        existing_axis = dim_tags[start].index(dim_tags[data][axis])
+      if existing_axis is None:
+        # Try a bit harder to find an existing.
         if axis == data.feature_dim_axis and v.feature_dim_axis is not None:
           if v.batch_shape[v.feature_dim_axis] == data.batch_shape[axis]:
             if v.batch_shape[v.feature_dim_axis] is not None:
-              continue  # Exists already. There might be cases that the dim_tags did not match.
+              existing_axis = v.feature_dim_axis  # There might be cases that the dim_tags did not match.
           if v.batch_shape[v.feature_dim_axis] == 1:
-            continue  # Interpret the existing as broadcast dim.
+            existing_axis = v.feature_dim_axis  # Interpret the existing as broadcast dim.
         if axis == data.time_dim_axis and v.time_dim_axis is not None:
           if v.batch_shape[v.time_dim_axis] == data.batch_shape[axis]:
             if v.batch_shape[v.time_dim_axis] is not None:
-              continue  # Exists already. There might be cases that the dim_tags did not match.
+              existing_axis = v.time_dim_axis  # There might be cases that the dim_tags did not match.
           if v.batch_shape[v.time_dim_axis] == 1:
-            continue  # Interpret the existing as broadcast dim.
-        axis_wo_batch = data.get_batch_axis_excluding_batch(axis)
-        v_axis = v.get_batch_axis(axis_wo_batch)
+            existing_axis = v.time_dim_axis  # Interpret the existing as broadcast dim.
+      if existing_axis is not None:
+        # We go from left to right, so we should have moved it already.
+        # However, it could be that we confused some other axis earlier.
+        if existing_axis > v_axis:
+          v = v.copy_move_axis(old_axis=existing_axis, new_axis=v_axis)
+          dim_tags[start].insert(v_axis, dim_tags[start].pop(existing_axis))  # keep consistent
+        continue
+      if data.batch_ndim > v.batch_ndim:
         if axis == data.feature_dim_axis:
           v = v.copy_add_feature_dim(v_axis)
         else:
           v = v.copy_add_spatial_dim(v_axis, auto_time_dim_axis=False)  # time-dim would be set later
+        dim_tags[start].insert(v_axis, v.get_dim_tag(v_axis))  # keep consistent
         if axis == data.time_dim_axis and v.time_dim_axis != v_axis:
           v.time_dim_axis = v_axis
         if axis == data.feature_dim_axis and v.feature_dim_axis != v_axis:
@@ -1047,6 +1267,7 @@ class Data(object):
     if self.sparse:
       v.feature_dim_axis = NotSpecified
       v.sparse = True  # reset
+      v.dim = self.dim  # reset
     if unbroadcast and any([d1 != 1 and d2 == 1 for (d1, d2) in zip(data.batch_shape, v.batch_shape)]):
       v.size_placeholder.update(data.size_placeholder or {})
       if v.placeholder is not None:
@@ -1098,31 +1319,30 @@ class Data(object):
     data.sanity_check()
     return data
 
-  def copy_extend_with_beam(self, beam_size, dyn_beam_size=None):
+  def copy_extend_with_beam(self, beam):
     """
-    :param int beam_size:
-    :param tf.Tensor|None dyn_beam_size: if the beam size is dynamic
+    :param SearchBeam|None beam:
     :return: copy of myself where the batch-dim is extended/multiplied by beam_size, using tile_transposed
     :rtype: Data
     """
-    if dyn_beam_size is None:
-      dyn_beam_size = beam_size
-    with tf.name_scope("data_extend_with_beam"):
-      data = self.copy()
-      if data.beam_size and data.beam_size == beam_size:
-        return data
-      assert data.beam_size is None, "incompatible beam sizes (%r vs %r)" % (data.beam_size, beam_size)
+    data = self.copy()
+    if data.beam and data.beam == beam:
+      return data
+    assert data.beam is None, "incompatible beam (%r vs %r)" % (data.beam, beam)
+    if beam is None:
+      return data
+    with tf.name_scope("%s_data_extend_with_beam" % get_valid_scope_name_from_str(self.name)):
       if data.placeholder is not None:
         with same_control_flow_ctx(data.placeholder):
-          data.placeholder = tile_transposed(data.placeholder, axis=data.batch_dim_axis, multiples=dyn_beam_size)
+          data.placeholder = tile_transposed(data.placeholder, axis=data.batch_dim_axis, multiples=beam.beam_size)
       if data.size_placeholder is not None:
         for i, v in sorted(data.size_placeholder.items()):
           tag = DimensionTag.get_tag_from_size_tensor(v)
           with same_control_flow_ctx(v):
-            data.size_placeholder[i] = tile_transposed(v, axis=0, multiples=dyn_beam_size)
+            data.size_placeholder[i] = tile_transposed(v, axis=0, multiples=beam.beam_size)
           if tag is not None:
             tag.set_tag_on_size_tensor(data.size_placeholder[i])
-      data.beam_size = beam_size * (data.beam_size or 1)
+      data.beam = beam
       return data
 
   def copy_squeeze_axes(self, axes):
@@ -1177,6 +1397,51 @@ class Data(object):
       kwargs["name"] = name
     if dtype:
       kwargs["dtype"] = dtype
+    return Data(**kwargs)
+
+  def copy_template_excluding_axis(self, exclude_axis, name=None):
+    """
+    :param int exclude_axis: axis to be removed.
+    :param str|None name: if set, this will be the new name.
+    :return: copy of myself excluding exclude_axis axis, without placeholder.
+    :rtype: Data
+    """
+    kwargs = self.get_kwargs()
+    if exclude_axis < 0:
+      exclude_axis += self.batch_ndim
+      assert exclude_axis >= 0
+    assert 0 <= exclude_axis < self.batch_ndim
+    axis_to_exclude_wo_b = self.get_batch_axis_excluding_batch(exclude_axis)  # None if exclude_axis == batch_dim_axis
+    if exclude_axis == self.feature_dim_axis:
+      del kwargs["dim"]
+
+    other_special_axes = self.get_special_axes_dict(
+      counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
+    for axis_name, axis in other_special_axes.items():
+      assert axis_name in kwargs
+      if axis == exclude_axis:
+        del kwargs[axis_name]
+      else:
+        kwargs[axis_name] = axis if (axis < exclude_axis) else (axis - 1)
+    if exclude_axis == self.batch_dim_axis:
+      kwargs["batch_dim_axis"] = None
+
+    new_shape = list(self.shape)
+    if axis_to_exclude_wo_b is not None:
+      del new_shape[axis_to_exclude_wo_b]
+    kwargs["shape"] = new_shape
+
+    if self.size_placeholder is not None:
+      size_placeholder = {}
+      for i, size in self.size_placeholder.items():
+        if i == axis_to_exclude_wo_b:
+          continue
+        if axis_to_exclude_wo_b is not None and i > axis_to_exclude_wo_b:
+          i -= 1
+        size_placeholder[i] = size
+      kwargs["size_placeholder"] = size_placeholder
+    if name:
+      kwargs["name"] = name
     return Data(**kwargs)
 
   def copy_template_excluding_spatial_dim(self, spatial_axis_num, name=None):
@@ -1256,7 +1521,6 @@ class Data(object):
     :return: copy of myself adding the time-dimension without placeholder
     :rtype: Data
     """
-    assert self.batch_dim_axis is not None
     kwargs = self.get_kwargs()
     new_shape = list(self.shape)
     new_shape.insert(time_dim_axis, None)
@@ -2087,12 +2351,16 @@ class Data(object):
     """
     name = self.get_full_name()
     if axis == self.batch_dim_axis:
-      return DimensionTag(kind=DimensionTag.Types.Batch, description="batch:%s" % name)
+      return DimensionTag(
+        kind=DimensionTag.Types.Batch, description="batch:%s" % name,
+        src_data=self, src_axis=axis)
     axis_wo_b = self.get_batch_axis_excluding_batch(axis)
     dyn_size = self.size_placeholder.get(axis_wo_b) if self.size_placeholder else None
     # Note: Prefer interpretation as spatial axis if there is a dynamic size or this is marked as time axis.
     if axis == self.feature_dim_axis and dyn_size is None and axis != self.time_dim_axis:
-      return DimensionTag(kind=DimensionTag.Types.Feature, dimension=self.dim, description="feature:%s" % name)
+      return DimensionTag(
+        kind=DimensionTag.Types.Feature, dimension=self.dim, description="feature:%s" % name,
+        src_data=self, src_axis=axis)
     if dyn_size is not None:
       tag = DimensionTag.get_tag_from_size_tensor(dyn_size)
       if tag:
@@ -2111,7 +2379,8 @@ class Data(object):
     description += ":%s" % name
     tag = DimensionTag(
       kind=DimensionTag.Types.Spatial, description=description,
-      dimension=self.batch_shape[axis], dyn_size=dyn_size)
+      dimension=self.batch_shape[axis], dyn_size=dyn_size,
+      src_data=self, src_axis=axis)
     return tag
 
   def get_time_dim_tag(self):
@@ -2140,7 +2409,7 @@ class Data(object):
   def get_common_data(cls, sources, warnings_out=None, out_shape=None):
     """
     :param list[Data] sources:
-    :param io.TextIOBase|None warnings_out:
+    :param io.TextIOBase|io.StringIO|None warnings_out:
     :param list[int|tf.Tensor]|None out_shape: will insert the shape dynamically
     :return: some generic data where the sources should be compatible to (with copy_compatible_to),
       i.e. it contains the union of all axes from all sources (least common multiple).
@@ -2157,23 +2426,37 @@ class Data(object):
     max_ndim = max([s.batch_ndim for s in sources])
     # Try with the (first) largest.
     common = [s for s in sources if s.batch_ndim == max_ndim][0]
+    common = common.copy()
     if out_shape is not None:
       out_shape.extend(common.get_dynamic_batch_shape())
-    if not common.beam_size and any([s.beam_size for s in sources]):
-      common = common.copy()
+    if any([s.beam for s in sources]):
       # Note: we don't use copy_extend_with_beam because we don't want to create any ops in the TF graph at this point.
-      common.beam_size = max([s.beam_size or 0 for s in sources])
-    is_equal_opts = dict(ignore_feature_dim=True)
+      common.beam = SearchBeam.get_combined_beam(*[s.beam for s in sources])
+    is_equal_opts = dict(ignore_feature_dim=True, allow_same_spatial_dim=True)
     all_dim_tags, tags_dict = DimensionTag.get_all_dimension_tags(sources, is_equal_opts=is_equal_opts)
     # Note: We cannot compare len(all_dims_tags) to len(shape) as e.g. shape (B,1,1,D) would have only 3 dim tags.
-    largest_dim_tags, _ = DimensionTag.get_all_dimension_tags([common], is_equal_opts=is_equal_opts)
+    largest_dim_tags, tags_dict_ = DimensionTag.get_all_dimension_tags([common], is_equal_opts=is_equal_opts)
+    tags_dict.update(tags_dict_)
     if len(largest_dim_tags) == len(all_dim_tags):
       return common
-    if any([not dim_tag.can_compare() for dim_tag in largest_dim_tags]):
+    # Some dim-tags are maybe not comparable (e.g. undefined time-dim-tag).
+    # We fix this in some cases, i.e. by selecting unique time-dim.
+    defined_var_spatial_tags = [
+      tag for tag in all_dim_tags
+      if tag.kind == DimensionTag.Types.Spatial and tag.get_same_base().dyn_size is not None]
+    if len(defined_var_spatial_tags) == 1:
+      for data in sources + [common]:
+        non_comparable_dim_tags = [dim_tag for dim_tag in tags_dict[data] if not dim_tag.can_compare()]
+        non_comparable_dim_tags = DimensionTag.get_uniq_collection(non_comparable_dim_tags, is_equal_opts=is_equal_opts)
+        if len(non_comparable_dim_tags) == 1 and non_comparable_dim_tags[0].kind == DimensionTag.Types.Spatial:
+          non_comparable_dim_tags[0].declare_same_as(defined_var_spatial_tags[0])
+    non_comparable_dim_tags = [dim_tag for dim_tag in largest_dim_tags if not dim_tag.can_compare()]
+    if non_comparable_dim_tags:
       if warnings_out:
+        from pprint import pformat
         print(
-          "get_common_data(%r), dim tags %r, largest source has incomplete dim tag info: %r" % (
-            sources, all_dim_tags, [dim_tag for dim_tag in largest_dim_tags if not dim_tag.can_compare()]),
+          "get_common_data(\n%s),\ndim tags\n%s,\nlargest source\n(%s)\nhas incomplete dim tag info:\n%s" % (
+            pformat(sources), pformat(all_dim_tags), pformat(common), pformat(non_comparable_dim_tags)),
           file=warnings_out)
       # The further code would be unreliable, so better have this simple fallback.
       return common
@@ -2188,8 +2471,11 @@ class Data(object):
     for dim_tag in all_dim_tags:
       if not dim_tag.can_compare():
         if warnings_out:
-          print("get_common_data(%r), dim tags %r, cannot compare %r, missing information" % (
-            sources, all_dim_tags, dim_tag), file=warnings_out)
+          from pprint import pformat
+          print(
+            "get_common_data(\n%s),\ndim tags\n%s,\ncommon\n(%s),\ncannot compare\n%s" % (
+              pformat(sources), pformat(all_dim_tags), pformat(common), pformat(dim_tag)),
+            file=warnings_out)
         continue
       if not DimensionTag.get_existing_tag_from_collection(dim_tag, largest_dim_tags, is_equal_opts=is_equal_opts):
         largest_dim_tags.append(dim_tag)
@@ -2481,6 +2767,8 @@ def get_valid_scope_name_from_str(s):
   # NOTE: Be careful changing this logic. Try to never change the behavior for existing cases,
   # because this name is used e.g. for layers, and you might introduce incompatibility by changes here.
   s = s.replace(":", "__")
+  s = s.replace("(", "__")
+  s = s.replace(")", "__")
   if s[:1] in "_-\\/":  # invalid first chars
     s = (".%i." % ord(s[0])) + s[1:]
   return s
@@ -2613,13 +2901,17 @@ def get_base_name(x):
 
 
 @contextlib.contextmanager
-def reuse_name_scope_of_tensor(x, prefix="", postfix=""):
+def reuse_name_scope_of_tensor(x, prefix="", postfix="", add_tensor_name=False):
   """
   :param tf.Tensor|tf.Variable x: has name e.g. "layer0/rec/W:0"
   :param str prefix:
   :param str postfix:
+  :param bool add_tensor_name:
   :return: reuse the name scope of x, e.g. "layer0/rec", yields scope
   """
+  if add_tensor_name:
+    from Util import unicode_to_str
+    postfix = "/%s%s" % (unicode_to_str(os.path.basename(x.name).split(":")[0]), postfix)
   with reuse_name_scope(prefix + get_name_scope_of_tensor(x) + postfix, absolute=True) as scope:
     yield scope
 
@@ -2895,8 +3187,8 @@ def get_shape(x):
   :rtype: list[int|tf.Tensor]
   """
   with tf.name_scope("get_shape"):
-    dyn_shape = tf.shape(x)
     static_shape = x.get_shape()
+    dyn_shape = None if static_shape.is_fully_defined() else tf.shape(x)
     assert static_shape.ndims is not None
     return [static_shape.dims[i].value
             if static_shape.dims[i].value is not None
@@ -3713,6 +4005,47 @@ def move_axis(x, old_axis, new_axis, name="move_axis"):
     return tf.transpose(x, perm)
 
 
+class TensorCachedComputation:
+  """
+  Helper to cache some computation inside a ``tf.Tensor`` object.
+  """
+
+  def __init__(self, x, key):
+    """
+    :param tf.Tensor x:
+    :param str|tuple[str|int|tf.Tensor] key:
+    """
+    self.x = x
+    self.key = key
+
+  def _get_cache_dict(self):
+    """
+    :rtype: dict
+    """
+    if not hasattr(self.x, "_RETURNN_cache"):
+      self.x._RETURNN_cache = {}
+    return self.x._RETURNN_cache
+
+  def has_cache(self):
+    """
+    :return: whether we have stored the value already. if True, you can use :func:`get_cache`
+    :rtype: bool
+    """
+    return self.key in self._get_cache_dict()
+
+  def get_cache(self):
+    """
+    :rtype: tf.Tensor
+    """
+    return self._get_cache_dict()[self.key]
+
+  def set_cache(self, value):
+    """
+    :param tf.Tensor value:
+    """
+    self._get_cache_dict()[self.key] = value
+
+
 def sequence_mask(lengths, name=None, **kwargs):
   """
   Wraps around tf.sequence_mask().
@@ -3728,12 +4061,12 @@ def sequence_mask(lengths, name=None, **kwargs):
     # Do not cache in this case, as it might be different depending on kwargs.
     return tf.sequence_mask(lengths, name=name, **kwargs)
   # Cache value if there are no other kwargs.
-  if hasattr(lengths, "_sequence_mask"):
-    # noinspection PyProtectedMember
-    return lengths._sequence_mask
+  cache = TensorCachedComputation(lengths, key="sequence_mask")
+  if cache.has_cache():
+    return cache.get_cache()
   with same_control_flow_ctx(lengths), reuse_name_scope_of_tensor(lengths):
     mask = tf.sequence_mask(lengths, name=name)
-  lengths._sequence_mask = mask
+  cache.set_cache(mask)
   return mask
 
 
@@ -3747,13 +4080,16 @@ def sequence_mask_time_major(lengths, **kwargs):
   :return: mask of shape (maxlen/time,batch)
   :rtype: tf.Tensor
   """
-  if hasattr(lengths, "_sequence_mask_time_major"):
-    # noinspection PyProtectedMember
-    return lengths._sequence_mask_time_major
+  cache = None
+  if not kwargs:
+    cache = TensorCachedComputation(lengths, key="sequence_mask_time_major")
+    if cache.has_cache():
+      return cache.get_cache()
   mask = sequence_mask(lengths=lengths, **kwargs)  # shape (time,batch)
   with same_control_flow_ctx(mask), reuse_name_scope_of_tensor(lengths), tf.name_scope("sequence_mask_time_major"):
     mask = tf.transpose(mask, (1, 0))  # shape (batch,time)
-  lengths._sequence_mask_time_major = mask
+  if cache:
+    cache.set_cache(mask)
   return mask
 
 
@@ -3782,13 +4118,13 @@ def reversed(x):
   :param tf.Tensor x:
   :rtype: tf.Tensor
   """
-  if hasattr(x, "_reversed_dim0"):
-    # noinspection PyProtectedMember
-    return x._reversed_dim0
+  cache_x = TensorCachedComputation(x, key="reversed_dim0")
+  if cache_x.has_cache():
+    return cache_x.get_cache()
   with reuse_name_scope_of_tensor(x), tf.name_scope("reversed"):
     y = x[::-1]
-  x._reversed_dim0 = y
-  y._reversed_dim0 = x
+  cache_x.set_cache(y)
+  TensorCachedComputation(y, key="reversed_dim0").set_cache(x)
   return y
 
 
@@ -3880,13 +4216,19 @@ def tile_transposed(x, axis, multiples):
   with tf.name_scope("tile_transposed"):
     ndim = x.get_shape().ndims
     assert ndim is not None
-    shape = tf.shape(x)
+    assert 0 <= axis < ndim
+    cache = TensorCachedComputation(x, key=("tile_transposed", axis, multiples))
+    if cache.has_cache():
+      return cache.get_cache()
+    shape = get_shape(x)
     x = expand_dims_unbroadcast(x, axis=axis + 1, dim=multiples)  # new axis after `axis`
-    return tf.reshape(
+    y = tf.reshape(
       x,
       [shape[i] for i in range(axis)] +
       [shape[axis] * multiples] +
       [shape[i] for i in range(axis + 1, ndim)])
+    cache.set_cache(y)
+    return y
 
 
 def constant_with_shape(x, shape, dtype=None, name="constant_with_shape"):
@@ -4876,78 +5218,87 @@ def filter_grad(x, threshold, axis):
     return y
 
 
+def _indexed_slices_repr(x):
+  """
+  :param tf.IndexedSlices x:
+  :rtype: str
+  """
+  from tensorflow.python.framework import tensor_util
+  dense_shape = tensor_util.constant_value_as_shape(x.dense_shape)
+  return "<tf.IndexedSlices %r dense_shape=%r dtype=%r>" % (x.name, dense_shape, x.dtype)
+
+
+def _op_repr(x):
+  """
+  :param tf.Operation x:
+  :rtype: str
+  """
+  extra = ""
+  if x.type == "Const":
+    from tensorflow.python.framework import tensor_util
+    extra += " value=%s" % (tensor_util.constant_value(x.outputs[0]),)
+  return "<tf.Operation %r type=%s%s>" % (x.name, x.type, extra)
+
+
+def _var_repr(x):
+  """
+  :param tf.Variable x:
+  :rtype: str
+  """
+  return "<tf.Variable %r shape=%s initial_value=%r>" % (x.op.name, x.shape, x.initial_value)
+
+
+def _tensorarray_repr(x):
+  """
+  :param tf.TensorArray x:
+  :rtype: str
+  """
+  op = x.handle.op
+  assert isinstance(op, tf.Operation)
+  return "<tf.TensorArray %r>" % op.name
+
+
+def _variablescope_repr(x):
+  """
+  :param tf.VariableScope x:
+  :rtype: str
+  """
+  return "<tf.VariableScope %r>" % x.name
+
+
+def _saveable_repr(x):
+  """
+  :param tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject x:
+  :rtype: str
+  """
+  return "<tf..%s op=%r, specs=%r, name=%r>" % (x.__class__.__name__, x.op, x.specs, x.name)
+
+
+def _savespec_repr(x):
+  """
+  :param tensorflow.python.training.saver.BaseSaverBuilder.SaveSpec x:
+  :rtype: str
+  """
+  return "<tf..%s tensor=%r, slice_spec=%r, name=%r>" % (x.__class__.__name__, x.tensor, x.slice_spec, x.name)
+
+
 def debug_register_better_repr():
   """
   Some types don't have good __repr__ implementations by default (for the current TF version).
   For debugging, it can be helpful to give some more info.
-  This monkey-patches clazz.__repr__ of some TF classes if they are object.__repr__.
+  This monkey-patches clazz.__repr__ of some TF classes.
   """
-
-  from tensorflow.python.framework import tensor_util
   from tensorflow.python.training import saver
 
-  def indexed_slices_repr(x):
-    """
-    :param tf.IndexedSlices x:
-    :rtype: str
-    """
-    dense_shape = tensor_util.constant_value_as_shape(x.dense_shape)
-    return "<tf.IndexedSlices %r dense_shape=%r dtype=%r>" % (x.name, dense_shape, x.dtype)
-
-  def op_repr(x):
-    """
-    :param tf.Operation x:
-    :rtype: str
-    """
-    return "<tf.Operation %r type=%r inputs=%r>" % (x.name, x.type, list(x.inputs))
-
-  def var_repr(x):
-    """
-    :param tf.Variable x:
-    :rtype: str
-    """
-    return "<tf.Variable %r initial_value=%r>" % (x.name, x.initial_value)
-
-  def tensorarray_repr(x):
-    """
-    :param tf.TensorArray x:
-    :rtype: str
-    """
-    op = x.handle.op
-    assert isinstance(op, tf.Operation)
-    return "<tf.TensorArray %r>" % op.name
-
-  def variablescope_repr(x):
-    """
-    :param tf.VariableScope x:
-    :rtype: str
-    """
-    return "<tf.VariableScope %r>" % x.name
-
-  def saveable_repr(x):
-    """
-    :param tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject x:
-    :rtype: str
-    """
-    return "<tf..%s op=%r, specs=%r, name=%r>" % (x.__class__.__name__, x.op, x.specs, x.name)
-
-  def savespec_repr(x):
-    """
-    :param tensorflow.python.training.saver.BaseSaverBuilder.SaveSpec x:
-    :rtype: str
-    """
-    return "<tf..%s tensor=%r, slice_spec=%r, name=%r>" % (x.__class__.__name__, x.tensor, x.slice_spec, x.name)
-
   for cl, f in [
-        (tf.IndexedSlices, indexed_slices_repr),
-        (tf.Operation, op_repr),
-        (tf.Variable, var_repr),
-        (tf.TensorArray, tensorarray_repr),
-        (tf.VariableScope, variablescope_repr),
-        (saver.BaseSaverBuilder.SaveableObject, saveable_repr),
-        (saver.BaseSaverBuilder.SaveSpec, savespec_repr)]:
-    if getattr(cl, "__repr__") is object.__repr__:
-      setattr(cl, "__repr__", f)
+        (tf.IndexedSlices, _indexed_slices_repr),
+        (tf.Operation, _op_repr),
+        (tf.Variable, _var_repr),
+        (tf.TensorArray, _tensorarray_repr),
+        (tf.VariableScope, _variablescope_repr),
+        (saver.BaseSaverBuilder.SaveableObject, _saveable_repr),
+        (saver.BaseSaverBuilder.SaveSpec, _savespec_repr)]:
+    setattr(cl, "__repr__", f)
 
 
 def cond(pred, fn1, fn2, name=None):
@@ -5198,20 +5549,41 @@ def nd_indices(indices, batch_axis=0, indices_batch_major=None):
     return idxs_exp
 
 
+def stop_all_event_writer_threads():
+  """
+  Iterates through all running threads, and stops those which are TF event logger threads.
+  See :func:`stop_event_writer_thread`.
+  """
+  import threading
+  # noinspection PyProtectedMember
+  from tensorflow.python.summary.writer.event_file_writer import _EventLoggerThread
+
+  for thread in threading.enumerate():
+    if isinstance(thread, _EventLoggerThread):
+      stop_event_writer_thread(thread)
+
+
 def stop_event_writer_thread(event_writer):
   """
   There is a bug in TensorFlow (at least 1.1.0) (https://github.com/tensorflow/tensorflow/issues/4820)
   that the event writer thread is never stopped.
   This will try to stop it. Only do it if you don't use the event writer anymore.
 
-  :param tensorflow.python.summary.writer.event_file_writer.EventFileWriter event_writer:
+  :param tf.summary.FileWriter|tensorflow.python.summary.writer.event_file_writer.EventFileWriter|tensorflow.python.summary.writer.event_file_writer._EventLoggerThread event_writer:  # nopep8
   """
   # noinspection PyProtectedMember
   from tensorflow.python.summary.writer.event_file_writer import EventFileWriter, _EventLoggerThread
-  assert isinstance(event_writer, EventFileWriter)
-  # noinspection PyProtectedMember
-  if not event_writer._worker:  # maybe fixed already?
-    return
+  if isinstance(event_writer, tf.summary.FileWriter):
+    event_writer = event_writer.event_writer
+  if isinstance(event_writer, _EventLoggerThread):
+    worker = event_writer
+  else:
+    assert isinstance(event_writer, EventFileWriter)
+    # noinspection PyProtectedMember
+    worker = event_writer._worker
+    if not worker:  # maybe fixed already?
+      return
+  del event_writer
 
   # This solution is very ugly and dependent on TF internal code.
   class DummyStopThread:
@@ -5232,9 +5604,7 @@ def stop_event_writer_thread(event_writer):
       raise SystemExit  # stop the thread
 
   # noinspection PyProtectedMember
-  assert isinstance(event_writer._worker, _EventLoggerThread)
-  # noinspection PyProtectedMember
-  worker = event_writer._worker
+  assert isinstance(worker, _EventLoggerThread)
   worker._ev_writer = DummyStopThread
   # noinspection PyProtectedMember
   worker._queue.put(None)
@@ -5374,7 +5744,7 @@ def slice_nd(x, start, size):
   """
   :param tf.Tensor x: shape (B, T, ...)
   :param tf.Tensor start: shape (B,), int32
-  :param int size:
+  :param int|tf.Tensor size: scalar
   :return: [x[start_1:size], x[start_2:size], ..., x[start_B:size]], shape (B, size, ...)
     Like :func:`slice_pad_zeros`, the size in the first axis will always be ``size``,
     and we will pad with zeros.
@@ -5387,11 +5757,11 @@ def slice_nd(x, start, size):
     batch_idxs = expand_dims_unbroadcast(tf.range(n_batch), 1, size)  # (n_batch, size)
     batch_idxs = tf.reshape(batch_idxs, (-1,))  # (n_batch*size,)
 
-    window_pos = tf.expand_dims(start, 1) + tf.range(size)  # (n_batch, size)
+    window_pos = tf.expand_dims(start, 1) + tf.range(size)[None, :]  # (n_batch, size)
     window_pos = tf.reshape(window_pos, (-1,))  # (n_batch*size,)
 
     # build mask for zero-padding
-    mask = window_pos > shape[1]-1  # (n_batch*size,) tf.bool
+    mask = tf.logical_or(window_pos > shape[1]-1, window_pos < 0)  # (n_batch*size,) tf.bool
 
     # clip indices so that gather_nd doesn't fail, will zero-pad later
     clip_time_idx = tf.clip_by_value(window_pos, 0, shape[1]-1)
@@ -5401,7 +5771,7 @@ def slice_nd(x, start, size):
     slices = tf.gather_nd(x, indices)  # (n_batch*size, ...)
 
     # (B, size, ...), we assume time-axis is/was 1
-    new_shape = tf.concat([[shape[0], size], shape[2:]], axis=0)
+    new_shape = [shape[0], size] + shape[2:]
 
     # zero-pad
     slices = tf.where(mask, tf.zeros_like(slices), slices)
@@ -5839,7 +6209,7 @@ def minimum_with_identity_grad(x, y):
   """
   :param tf.Tensor x:
   :param tf.Tensor y:
-  :return: tf.maximum(x, y) where each will receive the gradient
+  :return: tf.minimum(x, y) where each will receive the gradient
   :rtype: tf.Tensor
   """
   with tf.name_scope("minimum_with_identity_grad"):
@@ -7493,6 +7863,14 @@ def nested_get_shapes(x):
   raise TypeError("invalid type %r of %r" % (type(x), x))
 
 
+def get_current_control_flow_context():
+  """
+  :rtype: tensorflow.python.ops.control_flow_ops.ControlFlowContext|None
+  """
+  # noinspection PyProtectedMember
+  return tf.get_default_graph()._get_control_flow_context()
+
+
 def _get_control_flows(v, yield_none):
   """
   :param tf.Tensor|tf.Operation|int|float|None|list[tf.Tensor|tf.Operation|int|float] v:
@@ -7708,10 +8086,83 @@ def _tensor_array_select_src_beams(ta, src_beams):
   return ta_new
 
 
-def select_src_beams(x, src_beams):
+def beam_search(scores, beam_size, keep_beams=False, cheating_gold_targets=None, cheating_src_beam_idx=None):
+  """
+  This is mostly a higher-level wrapper around :func:`tf.nn.top_k`.
+
+  :param tf.Tensor scores: (batch,beam_in,dim). combined scores (i.e. base beam scores + new scores),
+    dense over the dims, such that we have labels in [0,...,dim-1].
+  :param int|tf.Tensor beam_size:
+  :param bool keep_beams: specifies that we keep the beam_in entries,
+    i.e. we just expand, i.e. we just search on the dim. beam_size must be a multiple of beam_in.
+  :param tf.Tensor|None cheating_gold_targets: (batch,), int32
+  :param tf.Tensor|None cheating_src_beam_idx: (batch,), int32. If not given, assumes beam_in - 1. See code below.
+  :rtype: (tf.Tensor,tf.Tensor,tf.Tensor)
+  :return: src_beams, labels, beam_scores.
+    src_beams: (batch, beam) -> beam_in idx (int32),
+    labels: (batch, beam) -> dim idx (int32),
+    beam_scores: (batch, beam) -> beam score (float32).
+  """
+  batch_dim, beam_in, in_dim = get_shape(scores)
+  if keep_beams:
+    # It assumes that sorted=True in top_k, and the first entries in scores/labels are the best.
+    scores = tf.reshape(scores, [batch_dim * beam_in, 1, in_dim])
+    if cheating_gold_targets is not None:
+      cheating_gold_targets = tile_transposed(cheating_gold_targets, axis=0, multiples=beam_in)
+      if cheating_src_beam_idx is not None and cheating_src_beam_idx.shape.ndims > 0:
+        cheating_src_beam_idx = tile_transposed(cheating_src_beam_idx, axis=0, multiples=beam_in)
+    _, labels, beam_scores = beam_search(
+      scores=scores, beam_size=beam_size // beam_in,
+      cheating_gold_targets=cheating_gold_targets, cheating_src_beam_idx=cheating_src_beam_idx)
+    src_beams = tf.zeros([batch_dim, beam_in, beam_size // beam_in], dtype=tf.int32)
+    src_beams += tf.range(beam_in)[None, :, None]
+    src_beams = tf.reshape(src_beams, [batch_dim, beam_size])
+    labels = tf.reshape(labels, [batch_dim, beam_size])
+    beam_scores = tf.reshape(beam_scores, [batch_dim, beam_size])
+    return src_beams, labels, beam_scores
+  scores_flat = tf.reshape(scores, [batch_dim, beam_in * in_dim])  # (batch, beam_in * dim)
+  # `tf.nn.top_k` is the core function performing our search.
+  # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
+  top_k_size = beam_size
+  if isinstance(in_dim, tf.Tensor) or isinstance(beam_size, tf.Tensor) or in_dim < beam_size:
+    top_k_size = tf.minimum(beam_in * in_dim, top_k_size)
+  beam_scores, labels = tf.nn.top_k(scores_flat, k=top_k_size)
+  if top_k_size is not beam_size:
+    extra_shape = (batch_dim, beam_size - top_k_size)
+    labels = tf.concat([labels, tf.zeros(extra_shape, dtype=labels.dtype)], axis=-1)
+    beam_scores = tf.concat([beam_scores, tf.fill(extra_shape, float("-inf"))], axis=-1)
+  if cheating_gold_targets is not None:
+    # It assumes that sorted=True in top_k, and the last entries in scores/labels are the worst.
+    # We replace them by the true labels.
+    cheating_gold_targets = tf.clip_by_value(
+      cheating_gold_targets, 0, in_dim - 1)  # safety, for invalid values...
+    if cheating_src_beam_idx is None:
+      # We also assume that the last choice also has the cheating target in the last beam index.
+      cheating_src_beam_idx = beam_in - 1
+    else:
+      cheating_src_beam_idx = tf.clip_by_value(cheating_src_beam_idx, 0, beam_in - 1)  # safety
+    gold_labels = cheating_src_beam_idx * in_dim + cheating_gold_targets  # (batch,)
+    gold_labels_bc = tf.expand_dims(gold_labels, axis=1)  # (batch,1)
+    labels = tf.concat([labels[:, :beam_size - 1], gold_labels_bc], axis=1)  # (batch,beam)
+    if cheating_src_beam_idx.shape.ndims == 0:
+      gold_scores = scores[:, cheating_src_beam_idx]  # (batch,in_dim)
+    else:
+      assert cheating_src_beam_idx.shape.ndims == 1
+      gold_scores = tf.gather_nd(scores, indices=nd_indices(cheating_src_beam_idx))  # (batch,in_dim)
+    # Note: In case the seq ended, we assume that the gold_targets are all 0, such that we get the right score.
+    gold_scores = tf.gather_nd(gold_scores, indices=nd_indices(cheating_gold_targets))  # (batch,)
+    gold_scores_bc = tf.expand_dims(gold_scores, axis=1)  # (batch,1)
+    beam_scores = tf.concat([beam_scores[:, :beam_size - 1], gold_scores_bc], axis=1)  # (batch,beam)
+  src_beams = labels // in_dim  # (batch, beam) -> beam_in idx
+  labels = labels % in_dim  # (batch, beam) -> dim idx
+  return src_beams, labels, beam_scores
+
+
+def select_src_beams(x, src_beams, name="select_src_beams"):
   """
   :param tf.Tensor|tf.TensorArray|T x: (batch * src-beam, ...)
   :param tf.Tensor src_beams: (batch, beam) -> src-beam-idx
+  :param str name:
   :return: (batch * beam, ...)
   :rtype: tf.Tensor|T
   """
@@ -7719,18 +8170,20 @@ def select_src_beams(x, src_beams):
     return _tensor_array_select_src_beams(x, src_beams=src_beams)
   assert isinstance(x, tf.Tensor)
   assert isinstance(src_beams, tf.Tensor)
-  with tf.name_scope("select_src_beams"):
+  with tf.name_scope(name):
     x_tshape = x.get_shape()
     src_beams.set_shape(tf.TensorShape([None, None]))
-    src_beams_shape = tf.shape(src_beams)
+    src_beams_shape = get_shape(src_beams)
     batch_dim, beam_dim = src_beams_shape[0], src_beams_shape[1]
     x_ndim = x.get_shape().ndims
     assert x_ndim is not None
-    x_shape = tf.shape(x)
+    x_shape = get_shape(x)
     x_shape_rem = [x_shape[i] for i in range(1, x_ndim)]
     src_beam_dim = x_shape[0] // batch_dim
-    x = tf.reshape(x, [batch_dim, src_beam_dim] + x_shape_rem)  # (batch, src-beam, ...)
-    indices = nd_indices(src_beams)  # (batch, beam, 2)
+    with reuse_name_scope_of_tensor(x, add_tensor_name=True, postfix="_reshape_split_beam"):
+      x = tf.reshape(x, [batch_dim, src_beam_dim] + x_shape_rem)  # (batch, src-beam, ...)
+    with reuse_name_scope_of_tensor(src_beams, add_tensor_name=True, postfix="_nd_indices"):
+      indices = nd_indices(src_beams)  # (batch, beam, 2)
     x = tf.gather_nd(x, indices=indices)  # K=2, (batch, beam, ...)
     x = tf.reshape(x, [batch_dim * beam_dim] + x_shape_rem)
     x.set_shape(tf.TensorShape([None] + x_tshape.as_list()[1:]))
@@ -8032,9 +8485,10 @@ def get_device_attr(dev):
     return _DeviceAttrMod.get_device_attr()
 
 
-def print_graph_output(fetches):
+def print_graph_output(fetches, file=sys.stdout):
   """
   :param tf.Operation|tf.Tensor|list[tf.Tensor|tf.Operation] fetches:
+  :param typing.IO[str]|io.TextIOBase|io.StringIO file:
   """
   if not isinstance(fetches, (list, tuple)):
     fetches = [fetches]
@@ -8049,7 +8503,7 @@ def print_graph_output(fetches):
     :param str indent:
     """
     assert isinstance(op, tf.Operation)
-    print("%s%s%r" % (indent, prefix, op))
+    print("%s%s%r" % (indent, prefix, op), file=file)
     if indent:
       if op in visited:
         return
@@ -8126,9 +8580,10 @@ def find_ops_path_output_to_input(tensors, fetches):
   assert len(tensors) > 0
   if isinstance(fetches, (tf.Operation, tf.Tensor)):
     fetches = [fetches]
-  fetches = [x.op if isinstance(x, tf.Tensor) else x for x in fetches]
+  fetches = [x.op if isinstance(x, (tf.Tensor, tf.Variable)) else x for x in fetches]
   fetches = set(fetches)
-  assert all([isinstance(x, tf.Operation) for x in fetches])
+  for x in fetches:
+    assert isinstance(x, tf.Operation)
 
   back_pointers = {}  # type: typing.Dict[tf.Operation,tf.Operation]
   cur_wave = fetches  # type: typing.Set[tf.Operation]
@@ -8425,9 +8880,9 @@ def py_print(pass_through_value, print_args, message=None, summarize=None, first
   :param tf.Tensor|int|float pass_through_value: will return tf.identity of this, but with side effect of printing
   :param list[str|tf.Tensor] print_args:
   :param str|None message: A string, prefix of the error message.
-  :param int summarize: Only print this many entries of each tensor. If None, then a
+  :param int|None summarize: Only print this many entries of each tensor. If None, then a
     maximum of 3 elements are printed per input tensor.
-  :param int first_n: Only log `first_n` number of times. Negative numbers log always; this is the default.
+  :param int|None first_n: Only log `first_n` number of times. Negative numbers log always; this is the default.
   :param str name:
   :return: tf.identity(pass_through_value) with side effect of printing
   :rtype: tf.Tensor
@@ -8438,7 +8893,7 @@ def py_print(pass_through_value, print_args, message=None, summarize=None, first
     summarize = 3
   if first_n is None:
     first_n = -1
-  np_a2s_kwargs = dict(formatter={"int": str, "object": bytes.decode}, edgeitems=summarize)
+  np_a2s_kwargs = dict(formatter={"int": str, "object": bytes.decode}, edgeitems=summarize, threshold=summarize)
   if NumpyVersion(numpy.__version__) <= NumpyVersion('1.11.3'):
     # Seems some older Numpy versions don't support this.
     del np_a2s_kwargs["edgeitems"]
@@ -8501,7 +8956,7 @@ def get_positional_encoding(num_channels, length=None, position=None, min_timesc
   memory inputs to attention.
 
   The use of relative position is possible because sin(x+y) and cos(x+y) can be
-  experessed in terms of y, sin(x) and cos(x).
+  expressed in terms of y, sin(x) and cos(x).
 
   In particular, we use a geometric sequence of timescales starting with
   min_timescale and ending with max_timescale.  The number of different
@@ -8514,11 +8969,11 @@ def get_positional_encoding(num_channels, length=None, position=None, min_timesc
 
   :param int num_channels: scalar, size of timing embeddings to create. The number of
     different timescales is equal to channels / 2.
-  :param tf.Tensor|None length: scalar, length of timing signal sequence. if not given, is shape(position)[0]
-  :param tf.Tensor|None position: could be provided directly. int32, shape (length,)
-  :param float min_timescale: a float
-  :param float max_timescale: a float
-  :return: a Tensor of timing signals (length, channels)
+  :param tf.Tensor|None length: scalar, length of timing signal sequence.
+  :param tf.Tensor|None position: could be provided directly. int32. Can have any shape.
+  :param float min_timescale: a float.
+  :param float max_timescale: a float.
+  :return: a Tensor of timing signals of shape (length, channels) or (batch, length, channels).
   :rtype: tf.Tensor
   """
   import math
@@ -8527,16 +8982,17 @@ def get_positional_encoding(num_channels, length=None, position=None, min_timesc
     position = tf.range(length)
   else:
     assert length is None
-    position.set_shape((None,))
   position = tf.to_float(position)
   num_timescales = num_channels // 2
   log_timescale_increment = (
     math.log(float(max_timescale) / float(min_timescale)) / (float(num_timescales - 1)))
   inv_timescales = min_timescale * tf.exp(
     tf.to_float(tf.range(num_timescales)) * -log_timescale_increment)
-  scaled_time = tf.expand_dims(position, 1) * tf.expand_dims(inv_timescales, 0)
-  signal = tf.concat([tf.sin(scaled_time), tf.cos(scaled_time)], axis=1)
-  signal = tf.pad(signal, [[0, 0], [0, num_channels % 2]])  # (length, channels)
+  scale = tf.reshape(inv_timescales, [1] * len(position.shape) + [num_timescales])  # Usually (1, D//2) or (1, 1, D//2).
+  scaled_time = tf.expand_dims(position, -1) * scale
+  signal = tf.concat([tf.sin(scaled_time), tf.cos(scaled_time)], axis=-1)
+  # (length, channels) or (batch, length, channels).
+  signal = tf.pad(signal, [[0, 0]] * len(position.shape) + [[0, num_channels % 2]])
   return signal
 
 
@@ -8717,3 +9173,152 @@ def compute_sampled_logits(weights,
     ], 1)
 
     return out_logits, out_targets
+
+
+class FetchHelper:
+  """
+  ``session.run(tensor)`` does not work if ``tensor`` is inside a loop (``tf.while_loop``) (or ``tf.cond``).
+  You would get an error like this::
+
+    Operation '...' has been marked as not fetchable.
+
+  This class is a helper to work around that. It will add an op to the graph, which stores the most recent value.
+  To get this executed automatically, you likely want to add is as a control dependency to another op.
+  Use :func:`add_to_control_inputs` for that, or better :func:`copy_graph_replace_tensors`,
+  or better :func:`copy_graph`.
+  """
+
+  def __init__(self, tensor, verbose_stream=None):
+    """
+    :param tf.Tensor tensor:
+    :param typing.IO[str]|None verbose_stream:
+    """
+    assert isinstance(tensor, tf.Tensor)
+    self.tensor = tensor
+    self.verbose_stream = verbose_stream
+    self.most_recent_value = None
+    self.callback_count = 0
+
+    with same_control_flow_ctx(tensor):
+      with tf.device("/cpu:0"):
+        dummy_out, = tf.py_func(
+          self._callback,
+          [tensor],
+          [tf.int64],  # dummy return value. will not be used
+          name="FetchHelper_%s" % os.path.basename(tensor.op.name))
+        assert isinstance(dummy_out, tf.Tensor)
+        self.fetch_op = dummy_out.op
+
+      with tf.colocate_with(tensor.op):
+        with tf.control_dependencies([self.fetch_op]):
+          self.identity_with_dep = tf.identity(tensor)
+
+  def __repr__(self):
+    return "%s(%r)" % (self.__class__.__name__, self.tensor)
+
+  @classmethod
+  def copy_graph(cls, fetches, target_op, fetch_helper_tensors, stop_at_ts=(), verbose_stream=None):
+    """
+    :param tf.Tensor|list[tf.Tensor]|T fetches:
+    :param tf.Operation target_op: will add the fetch helpers as control dependencies to this op
+    :param list[tf.Tensor] fetch_helper_tensors:
+    :param typing.IO[str]|None verbose_stream:
+    :param typing.Iterable[tf.Tensor] stop_at_ts: iterable of tensors at which the graph walk stops.
+    :return: copied fetches, fetch helpers, transformed target op
+    :rtype: (tf.Tensor|list[tf.Tensor]|T, list[FetchHelper], tf.Operation)
+    """
+    from pprint import pformat
+    from tensorflow.python.util import nest
+    fetches_flat = nest.flatten(fetches)
+    from tensorflow.contrib import graph_editor
+    ops = graph_editor.get_backward_walk_ops(
+      seed_ops=[x.op if isinstance(x, (tf.Tensor, tf.Variable)) else x for x in fetches_flat],
+      stop_at_ts=stop_at_ts,
+      inclusive=True, control_inputs=True)
+    if target_op.name in [x.name for x in ops] and target_op not in ops:
+      # What? Very strange. Replace by other instance.
+      target_op = [x for x in ops if x.name == target_op.name][0]
+    assert target_op in ops, "target_op %r,\nops\n%s" % (target_op, pformat(ops))
+    for x in fetch_helper_tensors:
+      assert x.op in ops
+    sgv = graph_editor.make_view(ops)
+    copier = graph_editor.Transformer()
+    copier.transform_external_input_handler = lambda info_, t: t
+    _, info = copier(sgv, dst_graph=sgv.graph, dst_scope="", reuse_dst_scope=True)
+    assert isinstance(info, graph_editor.TransformerInfo)
+    target_op_transformed = info.transformed(target_op)
+    assert isinstance(target_op_transformed, tf.Operation), (
+      "\ntarget_op\n%r,\nfetches\n%r,\nstop_at_ts\n%s,\nops\n%s" % (
+        target_op, fetches, pformat(stop_at_ts), pformat(ops)))
+    fetch_helpers = []
+    for x in fetch_helper_tensors:
+      fetch_helper = FetchHelper(tensor=info.transformed(x), verbose_stream=verbose_stream)
+      fetch_helper.add_to_control_inputs(target_op_transformed)
+      fetch_helpers.append(fetch_helper)
+    fetches_flat_transformed = [info.transformed(x) for x in fetches_flat]
+    return nest.pack_sequence_as(fetches, fetches_flat_transformed), fetch_helpers, target_op_transformed
+
+  @classmethod
+  def copy_graph_replace_tensors(cls, fetches, fetch_helpers):
+    """
+    :param tf.Tensor|list[tf.Tensor] fetches:
+    :param list[FetchHelper] fetch_helpers:
+    :return: as fetches
+    :rtype: tf.Tensor|list[tf.Tensor]
+    """
+    from tensorflow.contrib import graph_editor
+    fetches_copied = graph_editor.graph_replace(
+      target_ts=fetches,
+      replacement_ts={fetch_helper.tensor: fetch_helper.identity_with_dep for fetch_helper in fetch_helpers},
+      reuse_dst_scope=True)
+    return fetches_copied
+
+  def add_to_control_inputs(self, other_op):
+    """
+    Note: This will not work if you already did a ``session.run``.
+    See `here <https://stackoverflow.com/questions/57707445/>`__.
+    Use :func:`copy_graph_replace_tensors` instead. Or better :func:`copy_graph`.
+
+    :param tf.Operation other_op:
+    """
+    add_control_input(other_op, self.fetch_op)
+
+  @classmethod
+  def _format_value(cls, value):
+    """
+    :param numpy.ndarray|object value:
+    :rtype: str
+    """
+    import numpy
+    if isinstance(value, numpy.ndarray):
+      info = "shape %s, dtype %s" % (value.shape, value.dtype)
+      if value.size > 0:
+        v_minmax = numpy.min(value), numpy.max(value)
+        info += ", min/max %s/%s" % v_minmax
+        if value.dtype.kind == "f":
+          info += ", mean/stddev %s/%s" % (numpy.mean(value), numpy.std(value))
+        if value.ndim <= 1:
+          info += ", (%s)" % numpy.array2string(value)
+      else:
+        info += ", EMPTY"
+    elif isinstance(value, (numpy.floating, numpy.integer, numpy.bool_, float, int, bool, str, bytes)):
+      info = "%s(%s)" % (type(value).__name__, value)
+    elif value is None:
+      info = "None"
+    else:
+      info = "type %r" % type(value)
+    return info
+
+  def _callback(self, value):
+    """
+    :param numpy.ndarray value:
+    :return: dummy value
+    :rtype: int
+    """
+    if self.verbose_stream:
+      print(
+        "FetchHelper(%i): %r = %s" % (self.callback_count, self.tensor, self._format_value(value)),
+        file=self.verbose_stream)
+    self.most_recent_value = value
+    self.callback_count += 1
+    return 0

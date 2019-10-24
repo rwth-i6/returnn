@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 
+"""
+Construct/compile the computation graph, and optionally save it to some file.
+There are various options/variations for what task and what conditions you can create the graph,
+e.g. for training, forwarding, search, or also step-by-step execution over a recurrent layer.
+"""
 
 from __future__ import print_function
 
@@ -15,6 +20,7 @@ sys.path.insert(0, returnn_dir)
 
 import rnn
 from Log import log
+from Config import Config
 import argparse
 import Util
 from Util import NotSpecified
@@ -22,6 +28,9 @@ from TFUtil import Data
 from TFNetwork import TFNetwork
 from TFNetworkLayer import LayerBase, register_layer_class, WrappedInternalLayer
 from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell, ChoiceLayer
+
+
+config = None  # type: typing.Optional[Config]
 
 
 def init(config_filename, log_verbosity):
@@ -42,7 +51,7 @@ def init(config_filename, log_verbosity):
   global config
   config = rnn.config
   rnn.init_log()
-  print("Returnn compile-native-op starting up.", file=log.v1)
+  print("Returnn compile-tf-graph starting up.", file=log.v1)
   rnn.returnn_greeting()
   rnn.init_backend_engine()
   assert Util.BackendEngine.is_tensorflow_selected(), "this is only for TensorFlow"
@@ -184,6 +193,10 @@ class RecStepByStepLayer(RecLayer):
       print("Stored rec-step-by-step info JSON in file:", output_file_name)
 
   class StateVar:
+    """
+    Represents a state variable, i.e. either a state, a choice, or encoder state, etc.
+    """
+
     def __init__(self, name, initial_value, data_shape):
       """
       :param str name:
@@ -509,12 +522,14 @@ class ChoiceStateVarLayer(LayerBase):
       d["explicit_search_sources"] = [get_layer(name) for name in d["explicit_search_sources"]]
     super(ChoiceStateVarLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
-  @classmethod
-  def get_out_data_from_opts(cls, **kwargs):
-    return ChoiceLayer.get_out_data_from_opts(**kwargs)
+  get_out_data_from_opts = ChoiceLayer.get_out_data_from_opts
 
 
 class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
+  """
+  Adapts :class:`_SubnetworkRecCell` such that we execute only a single step.
+  """
+
   def __init__(self, **kwargs):
     self._parent_layers = {}  # type: typing.Dict[str,WrappedInternalLayer]
     super(SubnetworkRecCellSingleStep, self).__init__(**kwargs)
@@ -534,10 +549,16 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     output = layer.output.copy()
     output.placeholder = rec_layer.create_state_var(
       name="base_value_%s" % layer_name, initial_value=output.placeholder, data_shape=output)
-    output.size_placeholder = {
-      i: rec_layer.create_state_var(
-        name="base_size%i_%s" % (i, layer_name), initial_value=size)
-      for (i, size) in output.size_placeholder.items()}
+    from TFUtil import DimensionTag
+    for i, size in list(output.size_placeholder.items()):
+      dim_tag = DimensionTag.get_tag_from_size_tensor(size)
+      if not dim_tag:
+        print("Warning, no defined dim tag on %r, axis %i" % (layer, output.get_batch_axis(i)), file=log.v2)
+        dim_tag = output.get_dim_tag(output.get_batch_axis(i))
+        dim_tag.set_tag_on_size_tensor(size)
+      new_size = rec_layer.create_state_var(name="base_size%i_%s" % (i, layer_name), initial_value=size)
+      dim_tag.set_tag_on_size_tensor(new_size)
+      output.size_placeholder[i] = new_size
     layer = WrappedInternalLayer(name=layer_name, network=self.parent_net, output=output, base_layer=layer)
     self._parent_layers[layer_name] = layer
     return layer
@@ -616,7 +637,7 @@ def main(argv):
   argparser.add_argument("--output_file_model_params_list", help="line-based, names of model params")
   argparser.add_argument("--output_file_state_vars_list", help="line-based, name of state vars")
   args = argparser.parse_args(argv[1:])
-  assert args.train in [0, 1, 2] and args.eval in [0, 1] and args.search in [0, 1]
+  assert args.train in [0, 1, -1] and args.eval in [0, 1] and args.search in [0, 1]
   init(config_filename=args.config, log_verbosity=args.verbosity)
   assert 'network' in config.typed_dict
   net_dict = config.typed_dict["network"]

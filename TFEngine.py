@@ -59,7 +59,8 @@ class Runner(object):
     :param bool train: whether to do updates on the model
     :param bool|None train_flag: normally just as train. but e.g. maybe you want to have the train_flag but not train
     :param bool eval: whether to evaluate (i.e. calculate loss/error)
-    :param dict[str,tf.Tensor|TFUtil.Data|TFNetworkLayer.LayerBase]|None extra_fetches: additional fetches per step.
+    :param dict[str,tf.Tensor|TFUtil.Data|TFNetworkLayer.LayerBase|()->tf.Tensor)]|None extra_fetches:
+      additional fetches per step.
       `extra_fetches_callback` will be called with these. In case of Data/LayerBase, it will return a list,
       where each item corresponds to the batch-seq.
       It might also be useful to add `network.get_extern_data("seq_idx")` and `network.get_extern_data("seq_tag")`.
@@ -108,13 +109,8 @@ class Runner(object):
     :return: values and actions which should be calculated and executed in self.run() by the TF session for each step
     :rtype: dict[str,tf.Tensor|tf.Operation]
     """
-    # Note that it is important that we do not recreate graph nodes for every call to this function.
-    # Thus everything which we access here should be cached.
-    d = self.engine.network.get_fetches_dict(
-      config=self.engine.config,
-      should_train=self._should_train, should_eval=self._should_eval,
-      with_summary=True, with_size=True)
-
+    d = {}
+    optim_op = None
     if self._should_train:
       assert self.engine.updater
 
@@ -125,8 +121,19 @@ class Runner(object):
         # Force a new check.
         self.engine._checked_uninitialized_vars = False
         self.engine.updater.init_optimizer_vars(session=self.engine.tf_session)
+      # This function has to be called before `get_fetches_dict(..., with_summary=True)`,
+      # because it may introduce new summaries to the graph which are later collected.
+      optim_op = self.engine.updater.get_optim_op(callback_on_new=callback_on_new)
 
-      d["optim_op"] = self.engine.updater.get_optim_op(callback_on_new=callback_on_new)
+    # Note that it is important that we do not recreate graph nodes for every call to this function.
+    # Thus everything which we access here should be cached.
+    d_fetches = self.engine.network.get_fetches_dict(
+      config=self.engine.config,
+      should_train=self._should_train, should_eval=self._should_eval,
+      with_summary=True, with_size=True)
+    d.update(d_fetches)
+    if optim_op is not None:
+      d["optim_op"] = optim_op
       if self.engine.updater.optim_meta_losses_dict:
         d.update(self.engine.updater.optim_meta_losses_dict)
 
@@ -141,6 +148,11 @@ class Runner(object):
           continue
         if isinstance(v, LayerBase):
           v = v.output
+        if callable(v):
+          v = v()
+          assert isinstance(v, tf.Tensor)
+          d["extra:%s" % k] = v
+          continue
         assert isinstance(v, Data)
         d["extra:%s" % k] = v.placeholder  # see _maybe_handle_extra_fetches, it will transform to batch-major there
         for i, s in v.size_placeholder.items():
@@ -210,6 +222,7 @@ class Runner(object):
       self.score.update({key + ":exp": numpy.exp(value) for (key, value) in results.items() if key.startswith("cost:")})
     self.error = {key: value for (key, value) in results.items() if key.startswith("error:")}
     self.num_steps = num_steps
+    self.data_provider.dataset.finish_epoch()
     self.finalized = True
 
   def _get_batch_dim_from_fetches(self, fetches_results):
@@ -344,6 +357,9 @@ class Runner(object):
         continue
       if isinstance(v, LayerBase):
         v = v.output
+      if callable(v):
+        d[k] = fetches_results["extra:%s" % k]
+        continue
       assert isinstance(v, Data)
       if v.batch_dim_axis != 0:
         r = numpy.moveaxis(r, v.batch_dim_axis, 0)
@@ -580,6 +596,14 @@ class Runner(object):
         elapsed_time_tf += self._horovod_sync_params(local_step=step)
         duration = time.time() - start_time
         self._print_process(report_prefix=report_prefix, step=step, step_duration=duration, eval_info=eval_info)
+
+        if self.engine.config.bool("stop_on_nonfinite_train_score", True):
+          score_values = self._results_accumulated.values()
+          if any(numpy.isinf(score_values)) or any(numpy.isnan(score_values)):
+            print("Model seems broken, got inf or nan score.", file=log.v1)
+            print("Accumulated scores:", self._results_accumulated, file=log.v1)
+            raise Exception("Inf/nan score in step %i." % step)
+
         step += 1
         if self.cancel_flag:
           raise CancelTrainingException("cancel_flag is set")
@@ -614,6 +638,7 @@ class Runner(object):
       print("Exception %r in step %r." % (exc, step), file=log.v1)
       if not isinstance(exc, CancelTrainingException):
         help_on_tf_exception(
+          session=sess,
           exception=exc, fetches=fetches_dict, feed_dict=feed_dict, meta_step_info=meta_step_info,
           extern_data=self.data_provider.extern_data, file=log.v2)
         sys.excepthook(*sys.exc_info())
@@ -904,6 +929,7 @@ class Engine(EngineBase):
     if net_dict_post_proc:
       net_dict = net_dict_post_proc(net_dict)
 
+    self._maybe_update_config(net_desc=net_dict, epoch=self.epoch)
     self._init_network(net_desc=net_dict, epoch=self.epoch)
 
     if self.preload_from_files:
@@ -979,7 +1005,10 @@ class Engine(EngineBase):
           dataset_kwargs.update(Dataset.get_default_kwargs_eval(config=self.config))
         Dataset.kwargs_update_from_config(config=self.config, kwargs=dataset_kwargs)
         dataset = init_dataset(value, default_kwargs=dataset_kwargs)
-        assert hasattr(self, "%s_data" % key)
+        old_dataset = getattr(self, "%s_data" % key)
+        if old_dataset:
+          assert isinstance(old_dataset, Dataset)
+          old_dataset.finish_epoch()
         setattr(self, "%s_data" % key, dataset)
         updated_datasets[key] = dataset
 
@@ -1090,15 +1119,31 @@ class Engine(EngineBase):
     network.print_network_info()
     return network, updater
 
-  def maybe_init_new_network(self, net_desc):
+  def need_init_new_network(self, net_desc=None):
     """
-    :param dict[str,dict[str]] net_desc: layer name -> layer description dict
+    :param dict[str,dict[str]]|None net_desc: layer name -> layer description dict
+    :rtype: bool
     """
-    if self.network.layers_desc == net_desc:
-      return
-    from Util import dict_diff_str
-    print("reinit because network description differs. Diff:",
-          dict_diff_str(self.network.layers_desc, net_desc), file=log.v3)
+    if self.config.is_true("reinit_network_each_epoch"):
+      return True
+    if net_desc is None:
+      return False
+    return self.network.layers_desc != net_desc
+
+  def init_new_network(self, net_desc=None):
+    """
+    Reinitializes the network, and copies over the parameter from the current network.
+
+    :param dict[str,dict[str]]|None net_desc: layer name -> layer description dict. use existing by default
+    """
+    assert self.network
+    if net_desc is None:
+      net_desc = self.network.layers_desc
+      print("reinit network", file=log.v3)
+    else:
+      from Util import dict_diff_str
+      print("reinit because network description differs. Diff:",
+            dict_diff_str(self.network.layers_desc, net_desc), file=log.v3)
     old_network_params = self.network.get_params_serialized(self.tf_session)
     self._init_network(net_desc)
     if self.is_pretrain_epoch() and not self.pretrain.copy_output_layer:
@@ -1189,9 +1234,16 @@ class Engine(EngineBase):
       new_network_desc = self.pretrain.get_network_json_for_epoch(self.epoch)
       # Always update config, if needed, even if nothing changed.
       # This might trigger enforcing some learning rate, or so.
+      if self.need_init_new_network(new_network_desc):
+        # Early call of reset callbacks, which might trigger some HDF dump or other things.
+        self.network.call_graph_reset_callbacks()
       self._maybe_update_config(net_desc=new_network_desc, epoch=self.epoch)
-      self.maybe_init_new_network(new_network_desc)
+      if self.need_init_new_network(new_network_desc):
+        self.init_new_network(new_network_desc)
       self.network.declare_train_params(**self.pretrain.get_train_param_args_for_epoch(self.epoch))
+    else:
+      if self.need_init_new_network():
+        self.init_new_network()
     if self.config.is_true("use_learning_rate_control_always"):
       self.learning_rate = self.learning_rate_control.get_learning_rate_for_epoch(self.epoch)
     elif self.is_pretrain_epoch():
@@ -1888,6 +1940,7 @@ class Engine(EngineBase):
     :param str output_file:
     :param str output_file_format: "txt" or "py"
     """
+    from TFNetworkLayer import LayerBase
     print("Search with network on %r." % dataset, file=log.v1)
     if not self.use_search_flag or not self.network or self.use_dynamic_train_flag:
       self.use_search_flag = True
@@ -1928,22 +1981,22 @@ class Engine(EngineBase):
     num_targets = len(output_layer_names)
 
     # Create lists with information about the output layers. All of length num_targets.
-    output_layers = []  # list[LayerBase]
-    out_beam_sizes = []  # list[int|None]
-    output_layer_beam_scores = []  # list[tf.Tensor|None]
-    target_keys = []  # list[str]
+    output_layers = []  # type: typing.List[LayerBase]
+    out_beam_sizes = []  # type: typing.List[typing.Optional[int]]
+    output_layer_beam_scores = []  # type: typing.List[typing.Optional[tf.Tensor]]
+    target_keys = []  # type: typing.List[str]
 
     for output_layer_name in output_layer_names:
       output_layer = self.network.layers[output_layer_name]
       output_layers.append(output_layer)
-      out_beam_size = output_layer.output.beam_size
-      if out_beam_size is None:
+      out_beam = output_layer.output.beam
+      if out_beam is None:
         print("Given output %r is after decision (no beam)." % output_layer, file=log.v1)
         output_layer_beam_scores.append(None)
       else:
-        print("Given output %r has beam size %i." % (output_layer, out_beam_size), file=log.v1)
+        print("Given output %r has beam %s." % (output_layer, out_beam), file=log.v1)
         output_layer_beam_scores.append(output_layer.get_search_choices().beam_scores)
-      out_beam_sizes.append(out_beam_size)
+      out_beam_sizes.append(out_beam.beam_size if out_beam else None)
       target_keys.append(output_layer.target or self.network.extern_data.default_target)
 
     out_cache = None
@@ -2105,7 +2158,7 @@ class Engine(EngineBase):
     output_layer = self.network.layers[output_layer_name]
     output_t = output_layer.output.get_placeholder_as_batch_major()
     output_seq_lens_t = output_layer.output.get_sequence_lengths()
-    out_beam_size = output_layer.output.beam_size
+    out_beam_size = output_layer.output.beam.beam_size
     output_layer_beam_scores_t = None
     if out_beam_size is None:
       print("Given output %r is after decision (no beam)." % output_layer, file=log.v4)
@@ -2302,7 +2355,7 @@ class Engine(EngineBase):
     output_layer = self.network.layers[output_layer_name]
     output_t = output_layer.output.get_placeholder_as_batch_major()
     output_seq_lens_t = output_layer.output.get_sequence_lengths()
-    out_beam_size = output_layer.output.beam_size
+    out_beam_size = output_layer.output.beam.beam_size
     output_layer_beam_scores_t = None
     if out_beam_size is None:
       print("Given output %r is after decision (no beam)." % output_layer, file=log.v1)

@@ -849,6 +849,9 @@ def test_RecLayer_NativeLstm_Nan():
   import shutil
   shutil.rmtree(tmp_tf_logdir)
 
+  from TFUtil import stop_event_writer_thread
+  stop_event_writer_thread(writer)
+
 
 def find_op_by_type(session, type_name):
   """
@@ -1038,6 +1041,76 @@ def test_GradOfLstmGenericBase_simple_nan():
     print("All ok!")
 
 
+def test_rec_RecStepInfoLayer():
+  n_batch = 1
+  n_time = 3
+  net_dict = {
+    "output": {
+      "class": "rec",
+      "from": "data",
+      "unit": {
+        "output": {"class": "copy", "from": ":i"},
+      }
+    }
+  }
+  config = Config({
+    "debug_print_layer_output_template": True,
+    "extern_data": {
+      "data": {"sparse": True, "dim": 3},
+    }
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    inp = net.extern_data.data["data"]
+    out = net.get_default_output_layer().output
+    assert out.time_dim_axis == 0 and out.batch_dim_axis is None and out.shape == (None,) and out.dtype == "int32"
+    out_v = session.run(
+      out.placeholder,
+      feed_dict={
+        inp.placeholder: [[0] * n_time],
+        inp.size_placeholder[0]: [n_time]
+      })
+    assert isinstance(out_v, numpy.ndarray)
+    assert out_v.shape == (n_time,)
+    assert_equal(out_v.tolist(), [0, 1, 2])
+
+
+def test_rec_explicit_lstm():
+  net_dict = {
+    "lstm": {"class": "rec", "from": "data", "unit": {
+      "input": {"class": "copy", "from": ["prev:output", "data:source"]},
+      "input_gate": {"class": "linear", "from": "input", "activation": "sigmoid", "n_out": 10},
+      "forget_gate": {"class": "linear", "from": "input", "activation": "sigmoid", "n_out": 10},
+      "output_gate": {"class": "linear", "from": "input", "activation": "sigmoid", "n_out": 10},
+      "cell_in": {"class": "linear", "from": "input", "activation": "tanh", "n_out": 10},
+      "c": {"class": "eval", "from": ["input_gate", "cell_in", "forget_gate", "prev:c"],
+            "eval": "source(0) * source(1) + source(2) * source(3)"},
+      "output": {"class": "eval", "from": ["output_gate", "c"],
+                 "eval": "source(0) * source(1)",
+                 "out_type": {"shape": (10,)}},
+    }},
+    "output": {"class": "softmax", "loss": "ce", "from": "lstm"}
+  }
+  config = Config({
+    "num_inputs": 9,
+    "num_outputs": 2,
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict(net_dict)
+    loss = net.get_total_loss()
+    from test_TFNetworkLayer import make_feed_dict
+    feed_dict = make_feed_dict(list(net.extern_data.data.values()), same_time=True)
+    fetches = net.get_fetches_dict()
+    optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.01)
+    fetches["optim_op"] = optimizer.minimize(loss=loss)
+    session.run(tf.global_variables_initializer())
+    res = session.run(fetches, feed_dict=feed_dict)
+    pprint(res)
+
+
 def test_search_no_rec_explicit():
   from TFNetworkRecLayer import _SubnetworkRecCell
   beam_size = 3
@@ -1093,8 +1166,8 @@ def test_search_no_rec_explicit():
   assert_equal(subnet.layers_in_loop, ["output"])
   sub_layer = subnet.net.layers["output"]
   assert isinstance(sub_layer, ChoiceLayer)
-  assert_equal(sub_layer.output.beam_size, beam_size)
-  assert_equal(rec_layer.output.beam_size, beam_size)
+  assert_equal(sub_layer.output.beam.beam_size, beam_size)
+  assert_equal(rec_layer.output.beam.beam_size, beam_size)
   input_search_choices = net.get_search_choices(sources=rec_layer.sources)
   assert not input_search_choices
   assert rec_layer.output.is_time_major
@@ -1208,8 +1281,8 @@ def test_search_no_rec_explicit_dyn_len():
   assert_equal(set(subnet.layers_in_loop), {"output", "end"})
   sub_layer = subnet.net.layers["output"]
   assert isinstance(sub_layer, ChoiceLayer)
-  assert_equal(sub_layer.output.beam_size, beam_size)
-  assert_equal(rec_layer.output.beam_size, beam_size)
+  assert_equal(sub_layer.output.beam.beam_size, beam_size)
+  assert_equal(rec_layer.output.beam.beam_size, beam_size)
   input_search_choices = net.get_search_choices(sources=rec_layer.sources)
   assert not input_search_choices
   assert rec_layer.output.is_time_major
@@ -1265,9 +1338,677 @@ def test_search_no_rec_explicit_dyn_len():
   print("Seems fine.")
 
 
+def test_search_multi_choice():
+  """
+  This is a complex test, which defines a rec layer with multiple search choices (:class:`ChoiceLayer`),
+  which have different beam sizes.
+  Then we perform search, and get all the results, including beam scores, beam source indices, etc.
+  Then we go through the results, and reproduce every single search step.
+  """
+  from TFNetwork import help_on_tf_exception
+  rnd = numpy.random.RandomState(42)
+  num_choices = 2
+  n_batch = 2
+  n_time = 3
+  n_hidden = 11
+  beam_size1, beam_size2 = 3, 5  # use different beam sizes
+  dim1, dim2 = 7, 7
+  net_dict = {
+    "encoder": {"class": "copy", "from": "data"},
+    "output": {
+      "class": "rec",
+      "from": [], "target": ["target1", "target2"],
+      "max_seq_len": n_time * 3,
+      "include_eos": True,
+      "unit": {
+        "lin1": {"class": "linear", "from": "prev:choice2", "activation": "relu", "n_out": n_hidden},
+        "lin1a": {"class": "eval", "from": "prev:lin2", "eval": "source(0) * -0.5"},
+        "lin1b": {"class": "combine", "kind": "add", "from": ["lin1", "lin1a"]},
+        "prob1": {"class": "linear", "activation": "log_softmax", "from": "lin1b", "n_out": dim1},
+        "choice1": {"class": "choice", "from": "prob1", "input_type": "log_prob",
+                    "beam_size": beam_size1, "target": "target1",
+                    "initial_output": 0},
+        "lin2": {"class": "linear", "from": "choice1", "activation": "relu", "n_out": n_hidden},
+        "lin2a": {"class": "eval", "from": "lin1", "eval": "source(0) * -0.5"},
+        "lin2b": {"class": "combine", "kind": "add", "from": ["lin2", "lin2a"]},
+        "prob2": {"class": "linear", "activation": "log_softmax", "from": "lin2b", "n_out": dim2},
+        "choice2": {"class": "choice", "from": "prob2", "input_type": "log_prob",
+                    "beam_size": beam_size2, "target": "target2",
+                    "initial_output": "base:encoder",  # just to enforce that we have a difference in both beams
+                    },
+
+        "output": {"class": "copy", "from": "choice2"},  # define some output
+        "end": {"class": "eval", "from": [":i", "choice2"], "out_type": {"dtype": "bool"},
+                "eval": lambda source, **kwargs: (
+                  source(1),  # just mark as used, but do not actually use
+                  # Note: We use include_eos, thus the ending frame will be included.
+                  tf.greater_equal(source(0), n_time - 1))[-1]},
+      }
+    }
+  }
+  # Mark all as output layers, and also add raw copies (to get the original beams).
+  subnet_dict = net_dict["output"]["unit"]
+  assert isinstance(subnet_dict, dict)
+  for name in ["choice1", "choice2"]:
+    subnet_dict["_%s_src_beams" % name] = {"class": "choice_get_src_beams", "from": name}
+    subnet_dict["_%s_beam_scores" % name] = {"class": "choice_get_beam_scores", "from": name}
+  relevant_layer_names = []
+  for name, layer_desc in list(subnet_dict.items()):
+    if name in ["end", "output"]:
+      continue
+    assert isinstance(layer_desc, dict)
+    relevant_layer_names.append(name)
+    layer_desc["is_output_layer"] = True
+    subnet_dict["%s_raw" % name] = {"class": "decide_keep_beam", "from": name, "is_output_layer": True}
+  config = Config({
+    "debug_print_layer_output_template": True,
+    "extern_data": {
+      "data": {"shape": (), "sparse": True, "dim": dim2},
+      "target1": {"sparse": True, "dim": dim1},
+      "target2": {"sparse": True, "dim": dim2},
+    }
+  })
+
+  with make_scope() as session:
+    net = TFNetwork(config=config, search_flag=True)
+    net.construct_from_dict(net_dict)
+    net.print_network_info()
+    params = net.get_params_list()
+    # Note: Make param initialization explicit here, and make sure this stays the same in the future.
+    # The test will depend on exactly these params.
+    for param in sorted(params, key=lambda p: p.name):
+      param.load(rnd.normal(size=param.shape.as_list()).astype("float32"), session=session)
+    input_data = net.extern_data.data["data"]
+    input_values = [1, 2]
+    assert len(input_values) == n_batch
+    feed_dict = {input_data.placeholder: numpy.array(input_values)}
+    output_data = net.get_default_output_layer().output
+    assert output_data.time_dim_axis == 0 and output_data.batch_dim_axis == 1 and output_data.shape == (None,)
+    loop_vars = {
+      name: (net.get_layer("output/%s" % name), net.get_layer("output/%s_raw" % name))
+      for name in relevant_layer_names}  # type: typing.Dict[str,typing.Tuple[LayerBase,LayerBase]]
+    fetches = (
+      output_data.placeholder,
+      {name: (l1.output.placeholder, l2.output.placeholder)
+       for (name, (l1, l2)) in loop_vars.items()},
+      {param.op.name[len("output/rec/"):]: param
+       for param in net.get_params_list()
+       if param.op.name.startswith("output/rec/lin")})
+
+    print("TF execution...")
+    try:
+      output_value, loop_var_values, lin_params = session.run(fetches, feed_dict=feed_dict)
+    except Exception as exc:
+      print(exc)
+      help_on_tf_exception(session=session, exception=exc, fetches=fetches, feed_dict=feed_dict)
+      raise
+    # Now we don't need the TF session anymore. We fetched everything we need.
+
+  assert output_value.shape == (n_time, n_batch * beam_size2)
+  output_value = output_value.reshape(n_time, n_batch, beam_size2)
+  print("output:")
+  print(output_value)
+  for name, (l1, l2) in loop_vars.items():
+    l1_value, l2_value = loop_var_values[name]
+    print(l1, "shape:", l1_value.shape)
+    print(l2, "shape:", l2_value.shape)  # all the "raw" variants
+    assert l1_value.shape[:2] == (n_time, n_batch * beam_size2)  # it's after the (final) second choice
+    if name.startswith("_"):
+      continue
+    if (name.endswith("1") and name != "choice1") or name.endswith("1b") or name in ["choice2", "lin2a"]:
+      # All these are after the second choice.
+      assert l2_value.shape[:2] == (n_time, n_batch * beam_size2)
+    else:
+      # After the first choice.
+      assert l2_value.shape[:2] == (n_time, n_batch * beam_size1)
+
+  # Now we go through each time step, and check whether all choices (and the whole search) were performed correctly.
+  print("Check search...")
+  # Needed vars for the beam search.
+  cur_beam_size = 1
+  scores_base = numpy.zeros((n_batch, 1))  # initial beam scores
+  # Keep track of the existing values.
+  prev_choice_val = numpy.array(input_values).reshape((n_batch, cur_beam_size))
+  prev_lin_val = numpy.zeros((n_batch, cur_beam_size, n_hidden))
+  lin_values = numpy.zeros((n_batch, cur_beam_size, num_choices, n_time, n_hidden))
+  prob_values = [numpy.zeros((n_batch, cur_beam_size, n_time, dim)) for dim in [dim1, dim2]]
+  choices_values = numpy.zeros((n_batch, cur_beam_size, num_choices, n_time), dtype="int32")
+  # Loop through the choices.
+  for t in range(n_time):
+    print("t:", t)
+    for choice_idx in range(num_choices):
+      dim = [dim1, dim2][choice_idx]
+      prev_dim = [dim2, dim1][choice_idx]
+      beam_size = [beam_size1, beam_size2][choice_idx]
+      prev_beam_size = [beam_size2, beam_size1][choice_idx]  # always like cur_beam_size, except of in the beginning
+      choice_name = "choice%i" % (choice_idx + 1)
+      print("choice:", choice_name, "dim:", dim, "beam size:", beam_size, "incoming beam size:", cur_beam_size)
+
+      assert prev_choice_val.shape == (n_batch, cur_beam_size)
+      weights = lin_params["lin%i/W" % (choice_idx + 1)]
+      assert weights.shape == (prev_dim, n_hidden)
+      assert numpy.all(0 <= prev_choice_val) and numpy.all(prev_choice_val < prev_dim)
+      x = weights[prev_choice_val].copy()
+      assert x.shape == (n_batch, cur_beam_size, n_hidden)
+      x = x + lin_params["lin%i/b" % (choice_idx + 1)]
+      x = numpy.maximum(0.0, x)  # relu
+
+      if t < n_time:
+        raw_lin_values = loop_var_values["lin%i" % (choice_idx + 1)][1][t]
+        assert raw_lin_values.shape == (n_batch * prev_beam_size, n_hidden)
+        raw_lin_values = raw_lin_values.reshape((n_batch, prev_beam_size, n_hidden))
+        if t == 0 and choice_idx == 0 and cur_beam_size == 1 and prev_beam_size > cur_beam_size:
+          # In the very beginning, the beam size can be larger than what we really have (size 1).
+          # See comments in ChoiceLayer.
+          # We silently ignore and allow this. This is an implementation detail, which also might change later.
+          # Just take the first.
+          raw_lin_values = raw_lin_values[:, :1]
+        assert raw_lin_values.shape == x.shape == (n_batch, cur_beam_size, n_hidden)
+        numpy.testing.assert_allclose(raw_lin_values, x, rtol=1e-5)
+        for b in range(n_batch):
+          for i in range(cur_beam_size):
+            # Note: This is not strictly guaranteed, but very likely. As we guarantee the same random seed,
+            # this will stay valid.
+            # Also, given this property, we can later do some more clever checks.
+            assert numpy.sum(raw_lin_values[b, i]) > 0.0
+      lin_values[:, :, choice_idx, t] = x
+
+      if t < n_time:
+        raw_lin_b_values = loop_var_values["lin%ib" % (choice_idx + 1)][1][t]
+        assert raw_lin_b_values.shape == (n_batch * prev_beam_size, n_hidden)
+        raw_lin_b_values = raw_lin_b_values.reshape((n_batch, prev_beam_size, n_hidden))
+        if t == 0 and choice_idx == 0 and cur_beam_size == 1 and prev_beam_size > cur_beam_size:
+          raw_lin_b_values = raw_lin_b_values[:, :1]
+        assert raw_lin_b_values.shape == x.shape == prev_lin_val.shape == (n_batch, cur_beam_size, n_hidden)
+        for b in range(n_batch):
+          for i in range(cur_beam_size):
+            if t > 0 or choice_idx > 0:
+              assert numpy.sum(prev_lin_val[b, i]) > 0.0  # see above
+            numpy.testing.assert_allclose(raw_lin_b_values[b, i], (x - prev_lin_val * 0.5)[b, i], rtol=1e-5)
+
+      scores_in = loop_var_values["prob%i" % (choice_idx + 1)][1][t]
+      assert isinstance(scores_in, numpy.ndarray)
+      assert scores_in.shape == (n_batch * prev_beam_size, dim)
+      scores_in = scores_in.reshape((n_batch, prev_beam_size, dim))
+      if t == 0 and choice_idx == 0 and cur_beam_size == 1 and prev_beam_size > cur_beam_size:
+        scores_in = scores_in[:, :1]
+      assert scores_in.shape == (n_batch, cur_beam_size, dim)
+      # In log space, and log prob distribution.
+      assert numpy.all(scores_in < 0) and numpy.all(numpy.isclose(numpy.sum(numpy.exp(scores_in), axis=-1), 1.0))
+      prob_values[choice_idx][:, :, t] = scores_in
+
+      raw_choices = loop_var_values[choice_name][1][t]
+      raw_src_beams = loop_var_values["_%s_src_beams" % choice_name][1][t]
+      raw_beam_scores = loop_var_values["_%s_beam_scores" % choice_name][1][t]
+      assert raw_choices.shape == raw_src_beams.shape == raw_beam_scores.shape == (n_batch * beam_size,)
+      raw_choices = raw_choices.reshape((n_batch, beam_size))
+      raw_src_beams = raw_src_beams.reshape((n_batch, beam_size))
+      raw_beam_scores = raw_beam_scores.reshape((n_batch, beam_size))
+
+      scores_combined = scores_base[:, :, None] + scores_in
+      assert scores_combined.shape == (n_batch, cur_beam_size, dim)
+
+      # Now doing top-k, very explicitly.
+      for b in range(n_batch):
+        s = [(-scores_combined[b, i, j], (i, j)) for i in range(cur_beam_size) for j in range(dim)]
+        s.sort()
+        for i in range(beam_size):
+          print(" batch %i, new beam %i: src beam %i, label %i, score %f" % (
+            b, i, s[i][1][0], s[i][1][1], -s[i][0]))
+          numpy.testing.assert_allclose(-s[i][0], raw_beam_scores[b, i], rtol=1e-5)
+          assert_equal(s[i][1][0], raw_src_beams[b, i])
+          assert_equal(s[i][1][1], raw_choices[b, i])
+
+      # Select src beams.
+      assert lin_values.shape == (n_batch, cur_beam_size, num_choices, n_time, n_hidden)
+      lin_values = numpy.array([lin_values[b, raw_src_beams[b]] for b in range(n_batch)])
+      assert lin_values.shape == (n_batch, beam_size, num_choices, n_time, n_hidden)
+      assert choices_values.shape == (n_batch, cur_beam_size, num_choices, n_time)
+      choices_values = numpy.array([choices_values[b, raw_src_beams[b]] for b in range(n_batch)])
+      assert choices_values.shape == (n_batch, beam_size, num_choices, n_time)
+      for c in range(num_choices):
+        assert_equal(prob_values[c].shape, (n_batch, cur_beam_size, n_time, [dim1, dim2][c]))
+      prob_values = [
+        numpy.array([prob_values[c][b, raw_src_beams[b]] for b in range(n_batch)])
+        for c in range(num_choices)]
+      for c in range(num_choices):
+        assert_equal(prob_values[c].shape, (n_batch, beam_size, n_time, [dim1, dim2][c]))
+
+      # Ok. Update the beam.
+      scores_base = raw_beam_scores
+      cur_beam_size = beam_size
+      choices_values[:, :, choice_idx, t] = raw_choices.copy()
+      prev_choice_val = raw_choices.copy()
+      prev_lin_val = lin_values[:, :, choice_idx, t].copy()
+
+  print("Our output:")
+  print(choices_values[:, :, 1].transpose([2, 0, 1]))
+
+  # Now check if the final selected output and choices are correct.
+  assert cur_beam_size == beam_size2
+  assert output_value.shape == (n_time, n_batch, cur_beam_size)
+  for c in range(num_choices):
+    for t in range(n_time):
+      selected_choices = loop_var_values["choice%i" % (c + 1)][0][t]
+      assert selected_choices.shape == (n_batch * cur_beam_size,)
+      selected_choices = selected_choices.reshape(n_batch, cur_beam_size)
+      numpy.testing.assert_equal(selected_choices, choices_values[:, :, c, t])
+      if c == 1:
+        numpy.testing.assert_equal(output_value[t], choices_values[:, :, c, t])
+      selected_prob = loop_var_values["prob%i" % (c + 1)][0][t]
+      assert selected_prob.shape == (n_batch * cur_beam_size, [dim1, dim2][c])
+      selected_prob = selected_prob.reshape(n_batch, cur_beam_size, [dim1, dim2][c])
+      numpy.testing.assert_allclose(selected_prob, prob_values[c][:, :, t], rtol=1e-5)
+      selected_lin = loop_var_values["lin%i" % (c + 1)][0][t]
+      assert selected_lin.shape == (n_batch * cur_beam_size, n_hidden)
+      selected_lin = selected_lin.reshape(n_batch, cur_beam_size, n_hidden)
+      numpy.testing.assert_allclose(selected_lin, lin_values[:, :, c, t], rtol=1e-5)
+
+  # We also don't strictly enforce this, but this should be likely, i.e. that batch0 is different from batch1.
+  assert numpy.any(output_value[:, 0] != output_value[:, 1])
+
+
+def test_search_multi_choice_simple_keep_beams():
+  """
+  Mostly like :func:`test_search_multi_choice`, but a bit simplified / stripped down,
+  so it is a good base to copy and extend for other cases.
+  Also, we extend here by keep_beams.
+  """
+  from TFNetwork import help_on_tf_exception
+  rnd = numpy.random.RandomState(42)
+  num_choices = 2
+  n_batch = 2
+  n_time = 3
+  n_hidden = 11
+  beam_size1, beam_size2 = 3 * 5, 5  # use different beam sizes
+  dim1, dim2 = 17, 7
+  net_dict = {
+    "encoder": {"class": "copy", "from": "data"},
+    "output": {
+      "class": "rec",
+      "from": [], "target": ["target1", "target2"],
+      "max_seq_len": n_time * 3,
+      "include_eos": True,
+      "unit": {
+        "lin1": {"class": "linear", "from": "prev:choice2", "activation": "relu", "n_out": n_hidden},
+        "lin1a": {"class": "eval", "from": "prev:lin2", "eval": "source(0) * -0.5"},
+        "lin1b": {"class": "combine", "kind": "add", "from": ["lin1a", "lin1"]},  # order is diff, by intention
+        "prob1": {"class": "linear", "activation": "log_softmax", "from": "lin1b", "n_out": dim1},
+        "choice1": {"class": "choice", "from": "prob1", "input_type": "log_prob",
+                    "beam_size": beam_size1, "keep_beams": True, "target": "target1",
+                    "initial_output": 0},
+        "lin2": {"class": "linear", "from": "choice1", "activation": "relu", "n_out": n_hidden},
+        "lin2a": {"class": "eval", "from": "lin1", "eval": "source(0) * -0.5"},
+        "lin2b": {"class": "combine", "kind": "add", "from": ["lin2a", "lin2"]},  # order is diff, by intention
+        "prob2": {"class": "linear", "activation": "log_softmax", "from": "lin2b", "n_out": dim2},
+        "choice2": {"class": "choice", "from": "prob2", "input_type": "log_prob",
+                    "beam_size": beam_size2, "target": "target2",
+                    "initial_output": "base:encoder",  # just to enforce that we have a difference in both beams
+                    },
+
+        "output": {"class": "copy", "from": "choice2"},  # define some output
+        "end": {"class": "eval", "from": [":i", "choice2"], "out_type": {"dtype": "bool"},
+                "eval": lambda source, **kwargs: (
+                  source(1),  # just mark as used, but do not actually use
+                  # Note: We use include_eos, thus the ending frame will be included.
+                  tf.greater_equal(source(0), n_time - 1))[-1]},
+      }
+    }
+  }
+  # Mark all as output layers, and also add raw copies (to get the original beams).
+  subnet_dict = net_dict["output"]["unit"]
+  assert isinstance(subnet_dict, dict)
+  for name in ["choice1", "choice2"]:
+    subnet_dict["_%s_src_beams" % name] = {"class": "choice_get_src_beams", "from": name}
+    subnet_dict["_%s_beam_scores" % name] = {"class": "choice_get_beam_scores", "from": name}
+  relevant_layer_names = []
+  for name, layer_desc in list(subnet_dict.items()):
+    if name in ["end", "output"]:
+      continue
+    assert isinstance(layer_desc, dict)
+    relevant_layer_names.append(name)
+    layer_desc["is_output_layer"] = True
+    subnet_dict["%s_raw" % name] = {"class": "decide_keep_beam", "from": name, "is_output_layer": True}
+  config = Config({
+    "debug_print_layer_output_template": True,
+    "extern_data": {
+      "data": {"shape": (), "sparse": True, "dim": dim2},
+      "target1": {"sparse": True, "dim": dim1},
+      "target2": {"sparse": True, "dim": dim2},
+    }
+  })
+
+  with make_scope() as session:
+    net = TFNetwork(config=config, search_flag=True)
+    net.construct_from_dict(net_dict)
+    net.print_network_info()
+    params = net.get_params_list()
+    # Note: Make param initialization explicit here, and make sure this stays the same in the future.
+    # The test will depend on exactly these params.
+    for param in sorted(params, key=lambda p: p.name):
+      param.load(rnd.normal(size=param.shape.as_list()).astype("float32"), session=session)
+    input_data = net.extern_data.data["data"]
+    input_values = [1, 2]
+    assert len(input_values) == n_batch
+    feed_dict = {input_data.placeholder: numpy.array(input_values)}
+    output_data = net.get_default_output_layer().output
+    assert output_data.time_dim_axis == 0 and output_data.batch_dim_axis == 1 and output_data.shape == (None,)
+    loop_vars = {
+      name: (net.get_layer("output/%s" % name), net.get_layer("output/%s_raw" % name))
+      for name in relevant_layer_names}  # type: typing.Dict[str,typing.Tuple[LayerBase,LayerBase]]
+    fetches = (
+      output_data.placeholder,
+      {name: (l1.output.placeholder, l2.output.placeholder)
+       for (name, (l1, l2)) in loop_vars.items()},
+      {param.op.name[len("output/rec/"):]: param
+       for param in net.get_params_list()
+       if param.op.name.startswith("output/rec/lin")})
+
+    print("TF execution...")
+    try:
+      output_value, loop_var_values, lin_params = session.run(fetches, feed_dict=feed_dict)
+    except Exception as exc:
+      print(exc)
+      help_on_tf_exception(session=session, exception=exc, fetches=fetches, feed_dict=feed_dict)
+      raise
+    # Now we don't need the TF session anymore. We fetched everything we need.
+
+  assert output_value.shape == (n_time, n_batch * beam_size2)
+  output_value = output_value.reshape(n_time, n_batch, beam_size2)
+  print("output:")
+  print(output_value)
+
+  # Now we go through each time step, and check whether all choices (and the whole search) were performed correctly.
+  print("Check search...")
+  # Needed vars for the beam search.
+  cur_beam_size = 1
+  scores_base = numpy.zeros((n_batch, 1))  # initial beam scores
+  # Keep track of the existing values.
+  prev_choice_val = numpy.array(input_values).reshape((n_batch, cur_beam_size))
+  prev_lin_val = numpy.zeros((n_batch, cur_beam_size, n_hidden))
+  lin_values = numpy.zeros((n_batch, cur_beam_size, num_choices, n_time, n_hidden))
+  choices_values = numpy.zeros((n_batch, cur_beam_size, num_choices, n_time), dtype="int32")
+  # Loop through the choices.
+  for t in range(n_time):
+    print("t:", t)
+    for choice_idx in range(num_choices):
+      dim = [dim1, dim2][choice_idx]
+      prev_dim = [dim2, dim1][choice_idx]
+      beam_size = [beam_size1, beam_size2][choice_idx]
+      prev_beam_size = [beam_size2, beam_size1][choice_idx]  # always like cur_beam_size, except of in the beginning
+      choice_name = "choice%i" % (choice_idx + 1)
+      print("choice:", choice_name, "dim:", dim, "beam size:", beam_size, "incoming beam size:", cur_beam_size)
+
+      assert prev_choice_val.shape == (n_batch, cur_beam_size)
+      weights = lin_params["lin%i/W" % (choice_idx + 1)]
+      assert weights.shape == (prev_dim, n_hidden)
+      assert numpy.all(0 <= prev_choice_val) and numpy.all(prev_choice_val < prev_dim)
+      x = weights[prev_choice_val].copy()
+      assert x.shape == (n_batch, cur_beam_size, n_hidden)
+      x = x + lin_params["lin%i/b" % (choice_idx + 1)]
+      x = numpy.maximum(0.0, x)  # relu
+
+      raw_lin_values = loop_var_values["lin%i" % (choice_idx + 1)][1][t]
+      assert raw_lin_values.shape == (n_batch * prev_beam_size, n_hidden)
+      raw_lin_values = raw_lin_values.reshape((n_batch, prev_beam_size, n_hidden))
+      if t == 0 and choice_idx == 0 and cur_beam_size == 1 and prev_beam_size > cur_beam_size:
+        # In the very beginning, the beam size can be larger than what we really have (size 1).
+        # See comments in ChoiceLayer.
+        # We silently ignore and allow this. This is an implementation detail, which also might change later.
+        # Just take the first.
+        raw_lin_values = raw_lin_values[:, :1]
+      assert raw_lin_values.shape == x.shape == (n_batch, cur_beam_size, n_hidden)
+      numpy.testing.assert_allclose(raw_lin_values, x, rtol=1e-5)
+      for b in range(n_batch):
+        for i in range(cur_beam_size):
+          # Note: This is not strictly guaranteed, but very likely. As we guarantee the same random seed,
+          # this will stay valid.
+          # Also, given this property, we can later do some more clever checks.
+          assert numpy.sum(raw_lin_values[b, i]) > 0.0
+      lin_values[:, :, choice_idx, t] = x
+
+      raw_lin_b_values = loop_var_values["lin%ib" % (choice_idx + 1)][1][t]
+      assert raw_lin_b_values.shape == (n_batch * prev_beam_size, n_hidden)
+      raw_lin_b_values = raw_lin_b_values.reshape((n_batch, prev_beam_size, n_hidden))
+      if t == 0 and choice_idx == 0 and cur_beam_size == 1 and prev_beam_size > cur_beam_size:
+        raw_lin_b_values = raw_lin_b_values[:, :1]
+      assert raw_lin_b_values.shape == x.shape == prev_lin_val.shape == (n_batch, cur_beam_size, n_hidden)
+      for b in range(n_batch):
+        for i in range(cur_beam_size):
+          if t > 0 or choice_idx > 0:
+            assert numpy.sum(prev_lin_val[b, i]) > 0.0  # see above
+          numpy.testing.assert_allclose(raw_lin_b_values[b, i], (x - prev_lin_val * 0.5)[b, i], rtol=1e-5)
+
+      scores_in = loop_var_values["prob%i" % (choice_idx + 1)][1][t]
+      assert isinstance(scores_in, numpy.ndarray)
+      assert scores_in.shape == (n_batch * prev_beam_size, dim)
+      scores_in = scores_in.reshape((n_batch, prev_beam_size, dim))
+      if t == 0 and choice_idx == 0 and cur_beam_size == 1 and prev_beam_size > cur_beam_size:
+        scores_in = scores_in[:, :1]
+      assert scores_in.shape == (n_batch, cur_beam_size, dim)
+      # In log space, and log prob distribution.
+      assert numpy.all(scores_in < 0) and numpy.all(numpy.isclose(numpy.sum(numpy.exp(scores_in), axis=-1), 1.0))
+
+      raw_choices = loop_var_values[choice_name][1][t]
+      raw_src_beams = loop_var_values["_%s_src_beams" % choice_name][1][t]
+      raw_beam_scores = loop_var_values["_%s_beam_scores" % choice_name][1][t]
+      assert raw_choices.shape == raw_src_beams.shape == raw_beam_scores.shape == (n_batch * beam_size,)
+      raw_choices = raw_choices.reshape((n_batch, beam_size))
+      raw_src_beams = raw_src_beams.reshape((n_batch, beam_size))
+      raw_beam_scores = raw_beam_scores.reshape((n_batch, beam_size))
+
+      scores_combined = scores_base[:, :, None] + scores_in
+      assert scores_combined.shape == (n_batch, cur_beam_size, dim)
+
+      # Now doing top-k, very explicitly.
+      for b in range(n_batch):
+        if choice_idx > 0:
+          s = [(-scores_combined[b, i, j], (i, j)) for i in range(cur_beam_size) for j in range(dim)]
+          s.sort()
+        else:  # for choice_idx == 0, we used keep_beams=True
+          assert beam_size % cur_beam_size == 0
+          s = []
+          for i in range(cur_beam_size):
+            s_ = [(-scores_combined[b, i, j], (i, j)) for j in range(dim)]
+            s_.sort()
+            s.extend(s_[:beam_size // cur_beam_size])
+          assert len(s) == beam_size
+        for i in range(beam_size):
+          print(" batch %i, new beam %i: src beam %i, label %i, score %f" % (
+            b, i, s[i][1][0], s[i][1][1], -s[i][0]))
+          numpy.testing.assert_allclose(-s[i][0], raw_beam_scores[b, i], rtol=1e-5)
+          assert_equal(s[i][1][0], raw_src_beams[b, i])
+          assert_equal(s[i][1][1], raw_choices[b, i])
+
+      # Select src beams.
+      assert lin_values.shape == (n_batch, cur_beam_size, num_choices, n_time, n_hidden)
+      lin_values = numpy.array([lin_values[b, raw_src_beams[b]] for b in range(n_batch)])
+      assert lin_values.shape == (n_batch, beam_size, num_choices, n_time, n_hidden)
+      assert choices_values.shape == (n_batch, cur_beam_size, num_choices, n_time)
+      choices_values = numpy.array([choices_values[b, raw_src_beams[b]] for b in range(n_batch)])
+      assert choices_values.shape == (n_batch, beam_size, num_choices, n_time)
+
+      # Ok. Update the beam.
+      scores_base = raw_beam_scores
+      cur_beam_size = beam_size
+      choices_values[:, :, choice_idx, t] = raw_choices.copy()
+      prev_choice_val = raw_choices.copy()
+      prev_lin_val = lin_values[:, :, choice_idx, t].copy()
+
+  print("Our output:")
+  print(choices_values[:, :, 1].transpose([2, 0, 1]))
+
+  # Now check if the final selected output and choices are correct.
+  assert cur_beam_size == beam_size2
+  assert output_value.shape == (n_time, n_batch, cur_beam_size)
+  for t in range(n_time):
+    numpy.testing.assert_equal(output_value[t], choices_values[:, :, -1, t])
+
+  # We also don't strictly enforce this, but this should be likely, i.e. that batch0 is different from batch1.
+  assert numpy.any(output_value[:, 0] != output_value[:, 1])
+
+
+def test_rec_layer_multi_choice_search_resolve():
+  AttNumHeads = 1
+  EncKeyTotalDim = 10
+  beam_size = 3
+  target = "classes"
+
+  net_dict = {
+    "lstm0_pool": {"class": "pool", "mode": "max", "padding": "same", "pool_size": (3,), "from": "data"},
+    "encoder0": {"class": "copy", "from": "lstm0_pool"},
+    "encoder": {"class": "copy", "from": "encoder0"},
+
+    "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": EncKeyTotalDim},
+    "enc_value": {"class": "copy", "from": "encoder"},  # (B, enc-T, D)
+    "inv_fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"],
+                      "n_out": AttNumHeads},
+    "enc_seq_len": {"class": "length", "from": "encoder", "sparse": True},
+
+    "output": {"class": "rec", "from": [], "back_prop": False, "unit": {
+      "weight_feedback": {"class": "linear", "activation": None, "with_bias": False,
+                          "from": ["prev:accum_att_weights"], "n_out": EncKeyTotalDim},
+      "s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["s"],
+                        "n_out": EncKeyTotalDim},
+      "energy_in": {"class": "combine", "kind": "add",
+                    "from": ["base:enc_ctx", "s_transformed", "weight_feedback"], "n_out": EncKeyTotalDim},
+      "energy_tanh": {"class": "activation", "activation": "tanh", "from": "energy_in"},
+
+      "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"],
+                 "n_out": AttNumHeads},  # (B, enc-T, H)
+      "energy1": {"class": "squeeze", "axis": "f", "from": "energy"},  # (B, enc-T)
+      "energy2": {"class": "reinterpret_data", "from": "energy1", "set_axes": {"t": "stag:lstm"}},
+
+      # Segment boundaries:
+      # - t0/t1/t is the right side (inclusive)
+      # - prev:t is the left side (exclusive)
+      # - t_start/prev_t_plus1 is the left side (inclusive)
+
+      "prev_t_plus1": {"class": "eval", "from": "prev:t", "eval": "source(0) + 1"},
+      "t_start": {
+        "class": "eval", "from": ["prev_t_plus1", "base:enc_seq_len"],
+        "eval": "tf.minimum(source(0), source(1) - 1)"},  # to avoid nans
+
+      "t_weights": {
+        "class": "softmax_over_spatial", "from": "energy2", "axis": "stag:lstm",
+        "start": "t_start"},
+      "t_weights1": {
+        # ChoiceLayer works on the feature axis.
+        "class": "reinterpret_data", "from": "t_weights", "set_axes": {"f": "stag:lstm"},
+      },
+
+      "t0": {
+        "class": "choice", "from": "t_weights1", "target": None,
+        "beam_size": beam_size * 4,
+        "keep_beams": True,
+        "length_normalization": False, "initial_output": -1},  # (B,)
+      # Note: If beam-size > enc_seq_len, we end up with invalid t in the beam. Fix that.
+      "t1": {
+        "class": "eval", "from": ["t0", "t_start", "base:enc_seq_len"],
+        "eval": "tf.clip_by_value(source(0), source(1), source(2) - 1)"},
+      "t": {
+        "class": "copy",
+        "from": "t1", "initial_output": -1, "is_output_layer": True},
+      "window_start": {"class": "eval", "from": "t", "eval": "source(0) - 5"},
+
+      "att_weights": {
+        "class": "softmax_over_spatial", "from": "energy2", "axis": "stag:lstm",
+        "window_start": "window_start",
+        "window_size": 10},  # (B, enc-T)
+      "att_soft": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, V)
+      "att": {"class": "copy", "from": "att_soft"},
+
+      "accum_att_weights": {"class": "eval",
+                            "from": ["prev:accum_att_weights", "att_weights", "base:inv_fertility"],
+                            "eval": "source(0) + source(1) * source(2) * 0.5",
+                            "out_type": {"dim": AttNumHeads, "shape": (None, AttNumHeads)}},
+
+      "s": {"class": "rec", "unit": "nativelstm2", "from": ["prev:target_embed", "prev:att"], "n_out": 1000,
+            "dropout": 0.2},
+      "readout_in": {"class": "linear", "from": ["s", "prev:target_embed", "att"], "activation": None,
+                     "n_out": 1000, "dropout": 0.3},
+      "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+      "output_prob": {"class": "softmax", "from": ["readout"], "dropout": 0.3, "target": target, "loss": None},
+
+      'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'],
+                       "n_out": 621, "initial_output": "var"},
+      'output': {
+        'class': 'choice', 'target': target, 'beam_size': beam_size, 'from': ["output_prob"], "initial_output": 0,
+        'search': True, "length_normalization": True},
+
+      # "end": {"class": "compare", "from": ["t", "base:enc_seq_len"], "kind": "greater"},
+      "end": {"class": "compare", "from": "output", "value": 0},
+
+    },
+    "target": [target],
+    "max_seq_len": "max_len_from('base:encoder0')"}
+   }
+
+  config = Config({
+    "debug_print_layer_output_template": True,
+  })
+
+  print("Create network")
+  n_src_dim = 7
+  n_tgt_dim = 11
+
+  from GeneratingDataset import StaticDataset
+  from TFDataPipeline import FeedDictDataProvider
+  from EngineBatch import Batch, BatchSetGenerator
+  dataset = StaticDataset(
+    data=[
+      {"data": numpy.random.normal(size=(11, n_src_dim)).astype("float32"),
+       target: numpy.array([3, 6, 0])},
+      {"data": numpy.random.normal(size=(13, n_src_dim)).astype("float32"),
+       target: numpy.array([3, 6, 2, 1, 4, 5, 0])}],
+    output_dim={"data": [n_src_dim, 2], "classes": [n_tgt_dim, 1]})
+  dataset.init_seq_order(epoch=1)
+  batch = Batch()
+  batch.add_sequence_as_slice(seq_idx=0, seq_start_frame=0, length=dataset.get_seq_length(0))
+  batch.add_sequence_as_slice(seq_idx=1, seq_start_frame=0, length=dataset.get_seq_length(1))
+  print("batch:", batch, "num frames:", batch.get_total_num_frames())
+  print("batch dims:", batch.max_num_frames_per_slice * batch.num_slices)
+  batch_generator = iter([batch])
+  batches = BatchSetGenerator(dataset, generator=batch_generator)
+
+  with make_scope() as session:
+    extern_data = ExternData({
+      "data": {"dim": n_src_dim},
+      target: {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
+
+    net = TFNetwork(extern_data=extern_data, search_flag=True, train_flag=False, config=config)
+    net.construct_from_dict(net_dict)
+
+    out_layer = net.layers["output"]
+    assert isinstance(out_layer, RecLayer)
+    net.initialize_params(session)
+    data_provider = FeedDictDataProvider(
+      tf_session=session, extern_data=extern_data,
+      data_keys=["data"],
+      dataset=dataset, batches=batches)
+    feed_dict, meta_step_info = data_provider.get_feed_dict(single_threaded=True)
+    try:
+      print("Output:")
+      out = session.run(out_layer.output.placeholder, feed_dict=feed_dict)
+      pprint(out)
+    except Exception as exc:
+      print()
+      print("EXCEPTION " + "-" * 60)
+      print("Exception happened:", str(exc).splitlines()[0])
+      print()
+      out_layer.cell._handle_construct_exception()
+      print()
+      print("TF debug info:")
+      help_on_tf_exception(
+        session=session,
+        exception=exc, fetches=out_layer.output.placeholder, feed_dict=feed_dict, meta_step_info=meta_step_info,
+        extern_data=data_provider.extern_data)
+      raise
+
+
 def test_rec_layer_move_out_of_loop():
   from TFNetworkRecLayer import _SubnetworkRecCell
-  from TFUtil import get_global_train_flag_placeholder
+  from TFUtil import get_global_train_flag_placeholder, stop_event_writer_thread
   n_src_dim = 5
   n_tgt_dim = 7
   beam_size = 12
@@ -1393,6 +2134,7 @@ def test_rec_layer_move_out_of_loop():
         writer = tf.summary.FileWriter(".", filename_suffix="test_rec_layer_move_out_of_loop")
         writer.add_graph(session.graph)
         writer.close()
+        stop_event_writer_thread(writer)
         raise
 
   print("Constructing train network.")
@@ -1543,7 +2285,7 @@ def test_rec_layer_move_out_of_loop_ref_att_generic_att():
   because we provide some reference att weights.
   """
   from TFNetworkRecLayer import _SubnetworkRecCell
-  from TFUtil import get_global_train_flag_placeholder
+  from TFUtil import get_global_train_flag_placeholder, stop_event_writer_thread
   n_src_dim = 5
   n_tgt_dim = 7
   beam_size = 12
@@ -1688,6 +2430,7 @@ def test_rec_layer_move_out_of_loop_ref_att_generic_att():
       writer = tf.summary.FileWriter(".", filename_suffix="test_rec_layer_move_out_of_loop")
       writer.add_graph(session.graph)
       writer.close()
+      stop_event_writer_thread(writer)
       raise
 
   print("Constructing train network.")
@@ -1865,8 +2608,15 @@ def test_rec_layer_rnn_train_and_search():
           feed_dict=feed_dict)
         pprint(out)
       except Exception as exc:
+        print()
+        print("EXCEPTION " + "-" * 60)
         print("Exception happened:", str(exc).splitlines()[0])
+        print()
+        out_layer.cell._handle_construct_exception()
+        print()
+        print("TF debug info:")
         help_on_tf_exception(
+          session=session,
           exception=exc, fetches=out_layer.output.placeholder, feed_dict=feed_dict, meta_step_info=meta_step_info,
           extern_data=data_provider.extern_data)
         raise
@@ -2410,6 +3160,56 @@ def test_reclayer_optimize_out_softmax_over_spatial_rev_dot():
                     "from": ["enc_value0"], "is_output_layer": True},  # (B, enc-T, H, D/H)
     },
     rtol=1e-3)
+
+
+def test_reclayer_enc_time_dim_eval():
+  """
+    line: assert self.placeholder.shape[i].value == self.batch_shape[i]
+    locals:
+      self = <local> Data(name='accum_output', shape=(None, 1), batch_shape_meta=[B,T|?,F|1])
+      self.placeholder = <local> <tf.Tensor 'output/rec/accum/add:0' shape=(?, ?, ?) dtype=float32>
+      self.placeholder.shape = <local> TensorShape([Dimension(None), Dimension(None), Dimension(None)]), len = 3
+      i = <local> 2
+      value = <not found>
+      self.batch_shape = <local> (None, None, 1)
+
+  """
+  with make_scope() as session:
+    config = Config()
+    config.update({
+      "debug_print_layer_output_template": True,
+      "debug_print_layer_output_shape": True,
+      "extern_data": {
+        "encoder": {"dim": 11, "available_for_inference": True},
+        "decoder": {"dim": 13, "available_for_inference": True},
+      },
+      "network": {
+        "encoder": {"class": "copy", "from": "data:encoder"},
+        "enc1": {"class": "linear", "from": "encoder", "activation": "relu", "n_out": 1},  # (B,enc-T,1)
+        "enc0": {"class": "squeeze", "axis": "f", "from": "enc1"},  # (B,enc-T)
+        "output": {
+          "class": "rec",
+          "from": "data:decoder",  # just to define a different time-dim
+          "unit": {
+            "accum": {
+              "class": "eval", "from": ["prev:accum", "base:enc0", "base:enc1"],
+              "out_type": {"dim": 1, "shape": (None, 1)},
+              "eval": """(py_print(source(0), ["shape0", tf.shape(source(0))]) +
+                          py_print(source(1), ["shape1", tf.shape(source(1))]) *
+                          py_print(source(2), ["shape2", tf.shape(source(2))]))"""
+            },
+            "output": {
+              "class": "reduce", "axis": "stag:encoder", "mode": "max", "from": "accum"},
+          }},
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    session.run(tf.global_variables_initializer())
+    output_layer = network.get_default_output_layer(must_exist=True)
+    from test_TFNetworkLayer import make_feed_dict
+    feed_dict = make_feed_dict(list(network.extern_data.data.values()))
+    session.run(output_layer.output.placeholder, feed_dict=feed_dict)
 
 
 class TransformerNetwork:
@@ -3965,10 +4765,13 @@ def test_trafo_search_lm():
           'class': 'switch', "condition": "in_prefix", 'true_from': 'prefix', "false_from": 'output_choice',
           "initial_output": 0},
         "end": {
-          "class": "eval", "from": 'base:data', "collocate_with": "output_choice",
+          "class": "eval", "from": ['base:data', 'output'], "collocate_with": "output_choice",
           "out_type": {'time_dim_axis': None, 'shape': (), "dtype": "bool", "dim": 2},
           # Arbitrary. We can check that, though.
-          'eval': 'tf.greater_equal(self.network.get_rec_step_index(), source(0, as_data=True, auto_convert=False).get_sequence_lengths() * 3 // 2)'
+          'eval': '(source(1, auto_convert=False),'  # just mark as used
+                  ' tf.greater_equal('
+                  '   self.network.get_rec_step_index(),'
+                  '   source(0, as_data=True, auto_convert=False).get_sequence_lengths() * 3 // 2))[-1]'
           },
 
         'output_choice': {
@@ -4036,6 +4839,7 @@ def test_trafo_search_lm():
   config.update({
     "extern_data": {"data": {"dim": n_out, "sparse": True}},
     "search_output_layer": "decision",
+    "debug_print_layer_output_shape": True,
     "debug_print_layer_output_template": True})
 
   with make_scope() as session:
@@ -4057,11 +4861,16 @@ def test_trafo_search_lm():
     print("lens:", input_seq_lens)
 
     session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
-    info, out_seqs, out_seq_lens = session.run(
-      (fetches, output_out.placeholder, output_out.get_sequence_lengths()),
-      feed_dict={
-        data_input.placeholder: input_seqs,
-        data_input.size_placeholder[0]: input_seq_lens})
+    fetches = (fetches, output_out.placeholder, output_out.get_sequence_lengths())
+    feed_dict = {
+      data_input.placeholder: input_seqs,
+      data_input.size_placeholder[0]: input_seq_lens}
+    try:
+      info, out_seqs, out_seq_lens = session.run(fetches, feed_dict=feed_dict)
+    except Exception as exc:
+      print("EXCEPTION:", type(exc), exc)
+      help_on_tf_exception(session=session, exception=exc, fetches=fetches, feed_dict=feed_dict)
+      raise
     print(info)
     print("output:")
     print(out_seqs)  # random...
@@ -4073,6 +4882,121 @@ def test_trafo_search_lm():
     for i in range(n_batch):
       assert out_seq_lens[i] == input_seq_lens[i] * 3 // 2  # we constructed the 'end' layer that way
       assert all(out_seqs[i, :input_seq_lens[i]] == input_seqs[i, :input_seq_lens[i]])
+
+
+def test_PositionalEncodingLayer_offset_no_rec():
+  # Test `offset` option when `PositionalEncodingLayer` is out of loop.
+  rnd = numpy.random.RandomState(42)
+  n_batch, n_in, n_time, size = 3, 5, 7, 8
+  n_out = n_in
+
+  net_dict = {
+    "input": {"class": "linear", "activation": None, "n_out": size,},
+    "offset": {"class": "constant", "from": [], "value": 1},
+    "raw_pos_enc": {"class": "positional_encoding", "add_to_input": False, "from": ["input"], "n_out": size},
+    "const_pos_enc": {"class": "positional_encoding", "add_to_input": False, "constant": 42,
+                      "from": ["input"], "n_out": size},
+    "pos_enc": {"class": "positional_encoding", "add_to_input": True, "from": ["input"], "offset": "offset"},
+    "output": {"class": "softmax", "target": "data", "from": ["pos_enc", "raw_pos_enc", "const_pos_enc"], "loss": "ce"},
+  }
+
+  config = Config()
+  config.update({
+    "extern_data": {"data": {"dim": n_out, "sparse": True}},
+    "debug_print_layer_output_template": True})
+
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    pprint(network.extern_data.data)
+    network.construct_from_dict(net_dict)
+
+    fetches = network.get_fetches_dict()
+    data_input = network.extern_data.data["data"]
+    assert data_input.batch_shape == (None, None)
+
+    train_out = network.get_layer("output").output
+    session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+    rand_data = rnd.randint(0, n_out, size=(n_batch, n_time,), dtype="int32")
+    outputs = [train_out.placeholder]
+    info, out = session.run(
+      (fetches, outputs),
+      feed_dict={
+        data_input.placeholder: rand_data,
+        data_input.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),
+      })
+    print(info)
+    print(out)  # random...
+
+
+def test_PositionalEncodingLayer_offset_in_rec():
+  # Test `offset` option when `PositionalEncodingLayer` is in loop.
+  rnd = numpy.random.RandomState(42)
+  n_batch, n_in, n_time, size = 3, 5, 7, 8
+  n_out = n_in
+
+  net_dict = {
+    "output": {
+      "class": "rec",
+      "from": "data",
+      'target': "data",
+      'unit': {
+        "input": {"class": "linear", "activation": None, "from": "data:source", "n_out": size},
+        "in_prefix": {  # Just a dummy switch which turns off once it sees an input with the ID 0.
+          "class": "eval", "from": ["data:source", "prev:in_prefix"], "initial_output": True,
+          "out_type": {'time_dim_axis': None, "dtype": "bool", "dim": 2},
+          "eval": "tf.logical_and(tf.not_equal(source(0, "
+              "auto_convert=False, as_data=True).copy_as_batch_major().placeholder, 0), source(1))"},
+        # Increment by one as long as `in_prefix` is on.
+        "counter": {
+          "class": "eval", "from": ["in_prefix", "prev:counter"], "initial_output": 0,
+          "out_type": {'time_dim_axis': None, "shape": (), "dtype": "int32", "dim": None, "sparse": False},
+          "eval": "where_bc(source(0, auto_convert=False, as_data=True).copy_as_batch_major().placeholder,"
+                  "source(1, auto_convert=False, as_data=True).copy_as_batch_major().placeholder + "
+                  "tf.ones(tf.shape(source(0, auto_convert=False, as_data=True).copy_as_batch_major().placeholder),"
+                           "dtype=tf.int32),"
+                  "source(1, auto_convert=False, as_data=True).copy_as_batch_major().placeholder)"},
+        # 0 when `in_prefix` is on. Minus `counter` otherwise.
+        "offset": {
+          "class": "eval", "from": ["in_prefix", "counter"],
+          "out_type": {'time_dim_axis': None, "shape": (), "dtype": "int32", "sparse": False, "dim": None},
+          "eval": "where_bc(source(0, auto_convert=False, as_data=True).copy_as_batch_major().placeholder,"
+                  "tf.zeros(tf.shape(source(1, auto_convert=False, as_data=True).copy_as_batch_major().placeholder),"
+                            "dtype=tf.int32),"
+                  "-source(1, auto_convert=False, as_data=True).copy_as_batch_major().placeholder)"},
+        "pos_enc": {"class": "positional_encoding", "add_to_input": True, "from": ["input"], "offset": "offset"},
+        "rnn_h": {"class": "linear", "activation": "tanh", "from": ["prev:rnn_h", "pos_enc"],
+                  "n_out": size, "initial_output": 0},
+        "output": {"class": "softmax", "from": ["rnn_h"], "loss": "ce", "target": "data"},
+      }
+    }
+  }
+
+  config = Config()
+  config.update({
+    "extern_data": {"data": {"dim": n_out, "sparse": True}},
+    "debug_print_layer_output_template": True})
+
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    pprint(network.extern_data.data)
+    network.construct_from_dict(net_dict)
+
+    fetches = network.get_fetches_dict()
+    data_input = network.extern_data.data["data"]
+    assert data_input.batch_shape == (None, None)
+
+    train_out = network.get_layer("output").output
+    session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+    rand_data = rnd.randint(0, n_out, size=(n_batch, n_time,), dtype="int32")
+    outputs = [train_out.placeholder]
+    info, out = session.run(
+      (fetches, outputs),
+      feed_dict={
+        data_input.placeholder: rand_data,
+        data_input.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),
+      })
+    print(info)
+    print(out)  # random...
 
 
 if __name__ == "__main__":

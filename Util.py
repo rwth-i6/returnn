@@ -1505,16 +1505,18 @@ def json_remove_comments(string, strip_space=True):
 def _py2_unicode_to_str_recursive(s):
   """
   This is supposed to be run with Python 2.
+  Also see :func:`as_str` and :func:`py2_utf8_str_to_unicode`.
 
-  :param str|unicode s:
+  :param str|unicode s: or any recursive structure such as dict, list, tuple
+  :return: Python 2 str (is like Python 3 UTF-8 formatted bytes)
   :rtype: str
   """
   if isinstance(s, dict):
     return {_py2_unicode_to_str_recursive(key): _py2_unicode_to_str_recursive(value) for key, value in s.items()}
-  elif isinstance(s, list):
-    return [_py2_unicode_to_str_recursive(element) for element in s]
+  elif isinstance(s, (list, tuple)):
+    return make_seq_of_type(type(s), [_py2_unicode_to_str_recursive(element) for element in s])
   elif isinstance(s, unicode):
-    return s.encode('utf-8')
+    return s.encode('utf-8')  # Python 2 str, Python 3 bytes
   else:
     return s
 
@@ -2107,7 +2109,7 @@ def to_bool(v):
 def as_str(s):
   """
   :param str|unicode|bytes s:
-  :rtype: str
+  :rtype: str|unicode
   """
   if isinstance(s, str) or 'unicode' in str(type(s)):
     return s
@@ -2123,6 +2125,7 @@ def py2_utf8_str_to_unicode(s):
     but just using "äöü" will actually be the raw utf8 byte sequence.
     This can happen when you eval() some string.
     We assume that you are using Python 2, and got the string (not unicode object) "äöü", or maybe "abc".
+    Also see :func:`_py2_unicode_to_str_recursive` and :func:`as_str`.
   :return: if it is indeed unicode, it will return the unicode object, otherwise it keeps the string
   :rtype: str|unicode
   """
@@ -2136,6 +2139,31 @@ def py2_utf8_str_to_unicode(s):
     pass
   # noinspection PyUnresolvedReferences
   return s.decode("utf8")
+
+
+def unicode_to_str(s):
+  """
+  The behavior is different depending on Python 2 or Python 3. In all cases, the returned type is a str object.
+  Python 2:
+    We return the utf8 encoded str (which is like Python 3 bytes, or for ASCII, there is no difference).
+  Python 3:
+    We return a str object.
+  Note that this function probably does not make much sense.
+  It might be used when there is other code which expects a str object, no matter if Python 2 or Python 3.
+  In Python 2, a str object often holds UTF8 text, so the behavior of this function is fine then.
+  Also see :func:`as_str`.
+
+  :param str|unicode|bytes s:
+  :rtype: str
+  """
+  if PY3 and isinstance(s, bytes):
+    s = s.decode("utf8")
+    assert isinstance(s, str)
+  if not PY3 and isinstance(s, unicode):
+    s = s.encode("utf8")
+    assert isinstance(s, str)
+  assert isinstance(s, str)
+  return s
 
 
 def deepcopy(x):
@@ -2947,6 +2975,23 @@ def get_utc_start_time_filename_part():
   return time.strftime("%Y-%m-%d-%H-%M-%S", time.gmtime(start_time))
 
 
+def maybe_make_dirs(dirname):
+  """
+  Creates the directory if it does not yet exist.
+
+  :param str dirname: The path of the directory
+  """
+  import os
+  if not os.path.exists(dirname):
+    try:
+      os.makedirs(dirname)
+    except Exception as exc:
+      print("maybe_create_folder: exception creating dir:", exc)
+      # Maybe a concurrent process, e.g. tf.summary.FileWriter created it in the mean-while,
+      # so then it would be ok now if it exists, but fail if it does not exist.
+      assert os.path.exists(dirname)
+
+
 def log_runtime_info_to_dir(path, config):
   """
   This will write multiple logging information into the path.
@@ -2972,14 +3017,7 @@ def log_runtime_info_to_dir(path, config):
       "TensorFlow: %s" % (describe_tensorflow_version(),),
       "Config files: %s" % (config.files,),
     ]
-    if not os.path.exists(path):
-      try:
-        os.makedirs(path)
-      except Exception as exc:
-        print("log_runtime_info_to_dir: exception creating dir:", exc)
-        # Maybe a concurrent process, e.g. tf.summary.FileWriter created it in the mean-while,
-        # so then it would be ok now if it exists, but fail if it does not exist.
-        assert os.path.exists(path)
+    maybe_make_dirs(path)
     log_fn = "%s/returnn.%s.%s.%i.log" % (path, get_utc_start_time_filename_part(), hostname, os.getpid())
     if not os.path.exists(log_fn):
       with open(log_fn, "w") as f:

@@ -23,6 +23,9 @@ TFUtil.debug_register_better_repr()
 
 log.initialize(verbosity=[5])
 
+print("TF version:", tf.__version__)
+print("Numpy version:", numpy.__version__)
+
 
 @contextlib.contextmanager
 def make_scope():
@@ -34,13 +37,15 @@ def make_scope():
       yield session
 
 
-def make_feed_dict(data_list):
+def make_feed_dict(data_list, same_time=False, n_batch=3, n_time=7):
   """
   :param list[TFUtil.Data] data_list:
+  :param bool same_time:
+  :param int n_batch:
+  :param int n_time:
   :rtype: dict[tf.Tensor,numpy.ndarray]
   """
-  n_batch = 3
-  n_time = 7
+  assert n_time > 0 and n_batch > 0
   rnd = numpy.random.RandomState(42)
   existing_sizes = {}  # type: typing.Dict[tf.Tensor,int]
   d = {}
@@ -58,8 +63,15 @@ def make_feed_dict(data_list):
           continue
         existing_sizes[dyn_size] = n_time
         shape[axis] = n_time
-        d[dyn_size] = numpy.array([n_time, n_time - 2, n_time - 3])
-        n_time += 1
+        dyn_size_v = numpy.array([n_time, max(n_time - 2, 1), max(n_time - 3, 1)])
+        if dyn_size_v.shape[0] > n_batch:
+          dyn_size_v = dyn_size_v[:n_batch]
+        elif dyn_size_v.shape[0] < n_batch:
+          dyn_size_v = numpy.concatenate(
+            [dyn_size_v, rnd.randint(1, n_time + 1, size=(n_batch - dyn_size_v.shape[0],))], axis=0)
+        d[dyn_size] = dyn_size_v
+        if not same_time:
+          n_time += 1
     print("%r %r: shape %r" % (data, data.placeholder, shape))
     if data.sparse:
       d[data.placeholder] = rnd.randint(0, data.dim or 13, size=shape, dtype=data.dtype)
@@ -384,6 +396,48 @@ def test_activation_layer_net_construct_two_out():
     assert_equal(v.tolist(), [[[0, 0], [0, 0], [2, 2]]])
 
 
+def test_cnn_building_block():
+  with make_scope() as session:
+    num_inputs = 192
+    channel_num = 32
+    feature_dim = 6
+    filters = 32
+    filter_size = (3, 3)
+    config = Config()
+    config.update({
+      "num_inputs": num_inputs,
+      "num_outputs": filters,
+      "network": {
+        "split": {"class": "split_dims", "axis": "f", "dims": (channel_num, feature_dim), "from": ["data"]},
+        "swap_axes": {"class": "swap_axes", "axis1": "s:1", "axis2": "f", "from": ["split"]},
+        "c1": {"class": "conv", "n_out": filters, "filter_size": filter_size, "auto_use_channel_first": False,
+               "strides": (1, 1), "dilation_rate": (1, 1), "padding": "SAME", "activation": None, "with_bias": False,
+               "from": "swap_axes"},
+        "bn1": {"class": "batch_norm", "from": "c1"},
+        "y1": {"class": "activation", "activation": "relu", "batch_norm": False, "from": "bn1"},
+        "c2": {"class": "conv", "n_out": filters, "filter_size": filter_size, "auto_use_channel_first": False,
+               "strides": (1, 1), "dilation_rate": (1, 1), "padding": "SAME", "activation": None, "with_bias": False,
+               "from": "y1"},
+        "p": {"class": "combine", "kind": "add", "from": ["c2", "swap_axes"]},
+        "bn2": {"class": "batch_norm", "from": "p"},
+        "y2": {"class": "activation", "activation": "relu", "batch_norm": False, "from": "bn2"},
+
+        "out_pool": {"class": "reduce", "mode": "avg", "axes": "s:1", "keep_dims": False, "from": "y2"},
+        "output": {"class": "copy", "from": ["out_pool"], "is_output_layer": True}
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+    session.run(tf.global_variables_initializer())
+    out = network.layers["output"].output.placeholder
+    n_batch = 5
+    seq_len = 10
+    seq_lens = numpy.array([10, 10, 10, 10, 10], dtype=numpy.int32)
+    feed = {network.extern_data.get_default_input_data().placeholder:
+            numpy.random.rand(n_batch, seq_len, num_inputs).astype('f'),
+            network.extern_data.get_default_input_data().size_placeholder[0]: seq_lens}
+    v = session.run(out, feed_dict=feed)
+
+
 def test_combine_layer_net_construct():
   with make_scope() as session:
     net_dict = {
@@ -641,7 +695,7 @@ def test_compare_layer():
   with make_scope() as session:
     config = Config()
     config.update({
-      "model": "/tmp/model",
+      "model": "/tmp/test-compare-layer-model",
       "num_outputs": 3,
       "num_inputs": 2,
       "network": {
@@ -771,6 +825,77 @@ def test_SoftmaxOverSpatialLayer_start():
     numpy.testing.assert_array_equal(out_np[cond], 0)
 
 
+def test_SoftmaxOverSpatialLayer_window():
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData())
+    rnd = numpy.random.RandomState(42)
+    n_batch = 4
+    n_time = 9
+    n_dim = 1
+    window_size = 5
+    window_start_idxs = numpy.array([3, 0, 1, 7]).astype("int32")  # (B,)
+    seqlens = numpy.array([5, 7, 3, 9])
+    input_np = rnd.normal(size=(n_batch, n_time, n_dim)).astype("float32")  # (B, T, D)
+    src = InternalLayer(name="src", network=net, out_type={"shape": (n_time, n_dim), "time_dim_axis": 1})
+    window_start = InternalLayer(name="window_start", network=net, out_type={"shape": (), "dtype": "int32"})
+    window_start.output.placeholder = tf.constant(window_start_idxs)  # (B,)
+    window_start.output.size_placeholder = {}
+    print("input:", src.output)
+    src.output.placeholder = tf.constant(input_np, dtype=tf.float32)
+    src.output.size_placeholder = {0: tf.constant(seqlens)}
+    opts = {"network": net, "name": "softmax_over_spatial_test", "sources": [src],
+            "window_start": window_start, "window_size": window_size}
+    out_data = SoftmaxOverSpatialLayer.get_out_data_from_opts(**opts)
+    print("output:", out_data)
+    out_data.sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
+    assert_equal(out_data.shape, (n_dim, n_time))  # layer moves time-dim to back
+    layer = SoftmaxOverSpatialLayer(output=out_data, **opts)
+    layer.output.sanity_check()
+    assert_equal(layer.output.shape, (n_dim, n_time))
+    out_np = session.run(layer.output.placeholder)
+    assert_equal(out_np.shape, (n_batch, n_dim, n_time))
+    # check if window masking worked:
+    # handle edge cases correctly: (start is 0-based)
+    # 1. if the energy time-dim is less than `window_size`, we adjust the window size.
+    # 2. for each seq, we adjust the window so that no elements after the seq-len are indexed.
+    # seq[0]: start=3, seqlen=5 -> [1, 1, 1, 1, 1, 0, 0, 0, 0]
+    # seq[1]: start=0, seqlen=7 -> [1, 1, 1, 1, 1, 0, 0, 0, 0]
+    # seq[2]: start=1, seqlen=3 -> [1, 1, 1, 0, 0, 0, 0, 0, 0]
+    # seq[3]: start=7, seqlen=9 -> [0, 0, 0, 0, 1, 1, 1, 1, 1]
+    mask = numpy.array([
+      [0, 0, 0, 1, 1, 0, 0, 0, 0],
+      [1, 1, 1, 1, 1, 0, 0, 0, 0],
+      [0, 1, 1, 0, 0, 0, 0, 0, 0],
+      [0, 0, 0, 0, 1, 1, 1, 1, 1]
+    ], dtype=numpy.bool)  # (B, T)
+    print("mask", mask)
+    mask = numpy.expand_dims(mask, axis=1)
+    mask = numpy.broadcast_to(mask, [n_batch, n_dim, n_time])  # (B, D, T)
+    # check if layer output sums to one for each seq:
+    out_sum = numpy.sum(out_np, axis=(1, 2))
+    numpy.testing.assert_allclose(out_sum, [1]*n_batch, rtol=1e-5)
+    numpy.testing.assert_allclose(out_np[~mask], 0, rtol=1e-5)  # check if masking worked
+
+
+def test_SplitDimsLayer_simple_feat():
+  n_batch, n_time, n_in = 7, 3, 20
+  config = Config({
+    "extern_data": {"data": {"dim": n_in}},
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {"class": "split_dims", "axis": "f", "dims": (-1, 5)}})
+    out_t = net.get_default_output_layer().output.placeholder
+    assert out_t.shape.as_list() == [None, None, 4, 5]
+    in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_time, n_in))
+    out_v = session.run(out_t, feed_dict={net.extern_data.data["data"].placeholder: in_v})
+    assert isinstance(out_v, numpy.ndarray)
+    assert out_v.shape == (n_batch, n_time, 4, 5)
+    numpy.testing.assert_almost_equal(out_v, in_v.reshape(out_v.shape))
+
+
 def test_SplitDimsLayer_resolve_dims():
   assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, -1)), (3, 5))
   assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, 5)), (3, 5))
@@ -887,6 +1012,108 @@ def test_MergeDimsLayer_SplitBatchTimeLayer_time_major():
     assert output.is_time_major and output.shape == (None, n_input_dim)
     output_data = session.run(output.placeholder)
     numpy.testing.assert_almost_equal(input_data, output_data)
+
+
+def test_MergeDimsLayer_simple_feat():
+  n_batch, n_time, n_in1, n_in2 = 7, 3, 10, 32
+  config = Config({
+    "extern_data": {"data": {"shape": (None, n_in1, n_in2)}},
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {"class": "merge_dims", "axes": "static"}})
+    out_t = net.get_default_output_layer().output.placeholder
+    assert out_t.shape.as_list() == [None, None, n_in1 * n_in2]
+    in_v = numpy.arange(0, n_batch * n_time * n_in1 * n_in2).astype("float32").reshape((n_batch, n_time, n_in1, n_in2))
+    out_v = session.run(out_t, feed_dict={net.extern_data.data["data"].placeholder: in_v})
+    assert isinstance(out_v, numpy.ndarray)
+    assert out_v.shape == (n_batch, n_time, n_in1 * n_in2)
+    numpy.testing.assert_almost_equal(out_v, in_v.reshape(out_v.shape))
+
+
+def test_CondLayer_subnetwork_train():
+  n_batch, n_time, n_in, n_out = 3, 7, 11, 13
+  config = Config({
+    "extern_data": {
+      "data": {"dim": n_in},
+      "classes": {"dim": n_out, "sparse": True},
+    },
+    "debug_print_layer_output_template": True,
+  })
+  rnd = numpy.random.RandomState(42)
+  with make_scope() as session:
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "src": {"class": "linear", "activation": "tanh", "n_out": 10, "from": "data"},
+      "cond": {
+        "class": "cond", "from": [],
+        "condition": {
+          "class": "eval", "from": [], "out_type": {"batch_dim_axis": None, "shape": (), "dtype": "bool"},
+          "eval": "tf.equal(self.network.global_train_step % 2, 0)"
+          },
+        "true_layer": {
+          "class": "subnetwork", "from": "src", "subnetwork": {
+            "lin": {"class": "linear", "activation": "tanh", "n_out": 10},
+            "res": {"class": "combine", "kind": "add", "from": ["data", "lin"]},
+            "output": {"class": "print", "from": "res", "extra_print_args": ["true_layer"], "summarize": 1}
+          }},
+        "false_layer": {"class": "copy", "from": "src"}
+        },
+      "output": {"class": "softmax", "from": "cond", "loss": "ce", "target": "classes"}})
+    net.print_network_info()
+    trainable_vars = net.get_trainable_params()
+    print("Trainable vars:")
+    pprint(trainable_vars)
+    cond_var = net.layers["cond"].params["lin/W"]
+    assert cond_var in trainable_vars
+    from TFUpdater import Updater
+    updater = Updater(config=config, network=net, initial_learning_rate=0.1)
+    updater.set_trainable_vars(trainable_vars)
+    updater.init_optimizer_vars(session)
+    updater.set_learning_rate(value=updater.initial_learning_rate, session=session)
+    net.initialize_params(session)
+    in_v = rnd.normal(size=(n_batch, n_time, n_in)).astype("float32")
+    targets_v = rnd.randint(0, n_out, size=(n_batch, n_time)).astype("int32")
+    seq_lens_v = numpy.array([n_time, n_time - 1, n_time - 2])
+    assert len(seq_lens_v) == n_batch
+    feed_dict = {
+      net.extern_data.data["data"].placeholder: in_v,
+      net.extern_data.data["data"].size_placeholder[0]: seq_lens_v,
+      net.extern_data.data["classes"].placeholder: targets_v,
+      net.extern_data.data["classes"].size_placeholder[0]: seq_lens_v,
+    }
+    fetches = net.get_fetches_dict(with_summary=True, with_size=True)
+    fetches["optim_op"] = updater.get_optim_op()
+    try:
+      loss = None
+      initial_loss = float("inf")
+      for i in range(10):
+        step = session.run(net.global_train_step)
+        print("step: %i" % step)
+        assert i == step
+        old_var_value = session.run(cond_var)
+        result = session.run(feed_dict=feed_dict, fetches=fetches)
+        loss = result["loss"]
+        print("loss:", loss)
+        if i == 0:
+          initial_loss = loss
+        new_var_value = session.run(cond_var)
+        var_changed = (old_var_value != new_var_value).any()
+        print("var changed:", var_changed)
+        if i % 2 == 0:  # See cond layer, condition. Use true_layer every second iteration, starting with 0.
+          # We used true_layer, thus the params should have been updated.
+          assert var_changed
+        else:
+          # We did not use true_layer, thus the params should not have been updated.
+          assert not var_changed
+      assert loss is not None and loss < initial_loss and numpy.isfinite(initial_loss)
+    except tf.errors.OpError as exc:
+      print("TF exception:", type(exc).__name__, ":", exc)
+      from TFNetwork import help_on_tf_exception
+      help_on_tf_exception(session=session, exception=exc, fetches=fetches, feed_dict=feed_dict)
+      raise
 
 
 def test_ScatterNdLayer_RangeLayer():
@@ -1127,7 +1354,7 @@ def test_reuse_params_map_custom_dep_loop():
       "inv_fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"],
                         "n_out": 1},
       "output": {"class": "rec", "from": [], "unit": {
-        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 1, 'from': ["output_prob"],
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 5, 'from': ["output_prob"],
                    "initial_output": 0},
         "end": {"class": "compare", "from": ["output"], "value": 0},
         'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6,
@@ -1164,6 +1391,7 @@ def test_reuse_params_map_custom_dep_loop():
     }
   })
   with make_scope() as session:
+    print("Construct for training")
     from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
     train_net = TFNetwork(config=config, train_flag=True)
     train_net.construct_from_dict(config.typed_dict["network"])
@@ -1175,6 +1403,7 @@ def test_reuse_params_map_custom_dep_loop():
     assert isinstance(train_rec_layer.cell.output_layers_net, TFNetwork)
     assert_equal(set(train_rec_layer.cell.output_layers_net.layers["output_prob"].params.keys()), {"b"})
   with make_scope() as session:
+    print("Construct for search")
     search_net = TFNetwork(config=config, train_flag=False, eval_flag=True, search_flag=True)
     search_net.construct_from_dict(config.typed_dict["network"])
 
@@ -1248,6 +1477,91 @@ def test_SliceLayer_NCHW():
     assert slice2.output.dim == 8 and slice2.output.feature_dim_axis == 3
 
 
+def test_SliceNdLayer():
+  n_batch = 5
+  n_time = 7
+  n_dim = 11
+  rnd = numpy.random.RandomState(42)
+  seqs = rnd.randint(1, 100, (n_batch, n_time, n_dim)).astype("float32")  # all != 0
+  seq_lens = numpy.array([n_time, n_time - 2, n_time - 3, n_time - 1, n_time - 4], dtype="int32")
+  starts = numpy.array([2, 1, 3, n_time + 1, -1], dtype="int32")
+  size = 5
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData())
+    src = InternalLayer(name="src", network=net, out_type={"dim": n_dim})
+    src.output.placeholder = tf.constant(seqs)
+    src.output.size_placeholder = {0: tf.constant(seq_lens)}
+    src.output.sanity_check()
+    start = InternalLayer(name="start", network=net, out_type={"dim": None, "sparse": True, "time_dim_axis": None})
+    start.output.placeholder = tf.constant(starts)
+    start.output.sanity_check()
+    kwargs = dict(name="slice", network=net, sources=[src], start=start, size=size)
+    kwargs["output"] = SliceNdLayer.get_out_data_from_opts(**kwargs)
+    layer = SliceNdLayer(**kwargs)
+    print(layer)
+    assert not layer.output.size_placeholder
+    assert layer.output.batch_shape == (None, size, n_dim)
+    out = session.run(layer.output.placeholder)
+    print(out)
+    assert isinstance(out, numpy.ndarray)
+    assert out.shape == (n_batch, size, n_dim)
+    for b in range(n_batch):
+      s = starts[b]
+      if s < 0:
+        assert s + size > 0
+        orig_seq = numpy.pad(seqs[b, :s + size], [(-s, 0), (0, 0)], "constant")
+      else:
+        orig_seq = seqs[b, s:s + size]
+      if len(orig_seq) < size:
+        orig_seq = numpy.pad(orig_seq, [(0, size - len(orig_seq)), (0, 0)], "constant")
+      assert orig_seq.shape == (size, n_dim)
+      orig_seq = numpy.where((numpy.arange(s, s + size) >= seq_lens[b])[:, None], 0.0, orig_seq)
+      for t in range(size):
+        numpy.testing.assert_equal(orig_seq[t], out[b, t])
+
+
+def test_SliceNdLayer_dyn_size():
+  n_batch = 4
+  n_time = 7
+  n_dim = 11
+  rnd = numpy.random.RandomState(42)
+  seqs = rnd.randint(1, 100, (n_batch, n_time, n_dim)).astype("float32")  # all != 0
+  seq_lens = numpy.array([n_time, n_time - 2, n_time - 3, n_time - 1], dtype="int32")
+  starts = numpy.array([2, 1, 3, n_time + 1], dtype="int32")
+  size = None
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData())
+    src = InternalLayer(name="src", network=net, out_type={"dim": n_dim})
+    src.output.placeholder = tf.constant(seqs)
+    src.output.size_placeholder = {0: tf.constant(seq_lens)}
+    src.output.sanity_check()
+    start = InternalLayer(name="start", network=net, out_type={"dim": None, "sparse": True, "time_dim_axis": None})
+    start.output.placeholder = tf.constant(starts)
+    start.output.sanity_check()
+    kwargs = dict(name="slice", network=net, sources=[src], start=start, size=size)
+    kwargs["output"] = SliceNdLayer.get_out_data_from_opts(**kwargs)
+    layer = SliceNdLayer(**kwargs)
+    print(layer)
+    assert 0 in layer.output.size_placeholder
+    assert layer.output.batch_shape == (None, size, n_dim)
+    out = session.run(layer.output.placeholder)
+    print(out)
+    assert isinstance(out, numpy.ndarray)
+    max_size = max(list(seq_lens - starts) + [0])
+    assert out.shape == (n_batch, max_size, n_dim)
+    for b in range(n_batch):
+      s = starts[b]
+      orig_seq = seqs[b, s:]
+      if len(orig_seq) < max_size:
+        orig_seq = numpy.pad(orig_seq, [(0, max_size - len(orig_seq)), (0, 0)], "constant")
+      elif len(orig_seq) > max_size:
+        orig_seq = orig_seq[:max_size]
+      assert orig_seq.shape == (max_size, n_dim)
+      orig_seq = numpy.where((numpy.arange(s, s + max_size) >= seq_lens[b])[:, None], 0.0, orig_seq)
+      for t in range(max_size):
+        numpy.testing.assert_equal(orig_seq[t], out[b, t])
+
+
 def test_WindowLayer_output_placeholder():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())
@@ -1296,7 +1610,7 @@ def test_conv_window_merge_dims():
     'flatten_conv': {'axes': 'except_time',
                      'class': 'merge_dims',
                      'from': ['conv_2'],
-                     'n_out': 12},
+                     'n_out': 48},
     'window_1': {'class': 'window',
                  'from': ['flatten_conv'],
                  'window_size': 17},
@@ -1871,7 +2185,7 @@ def test_param_variational_noise():
       ops = find_ops_with_tensor_input(param, fetches=out)
       print("param graph:")
       print_graph_output(ops)
-      assert len(ops) == 1 and "param_variational_noise" in ops[0].name
+      assert len(ops) == 1 and "_variational_noise/" in ops[0].name
 
 
 def test_LinearLayer_simple_train():
@@ -2274,6 +2588,51 @@ def test_HDFDumpLayer():
   assert_equal(reader.data["data"][0].shape, (seq_lens[0], n_out))
 
 
+def test_HDFDumpLayer_sparse():
+  import os
+  from test_HDFDataset import get_test_tmp_file, DatasetTestReader, HDFDataset
+  hdf_filename = get_test_tmp_file(".hdf")
+  os.remove(hdf_filename)  # HDFDumpLayer expects that the file does not exist
+
+  with make_scope() as session:
+    n_in, n_out = 4, 5
+    config = Config()
+    config.update({
+      "num_inputs": n_in,
+      "num_outputs": n_out,
+      "network": {
+        "dump": {
+          "class": "hdf_dump", "filename": hdf_filename, "from": "data:classes",
+          "is_output_layer": True
+        },
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+
+    session.run(tf.global_variables_initializer())
+    n_batch = 1
+    classes_data = numpy.array([[2, 5, 6]], dtype="int32")
+    classes_seq_lens = [classes_data.shape[1]]
+    assert classes_data.shape == (n_batch, classes_seq_lens[0])
+    input_tags = numpy.array([b"seq-0"], dtype="S5")
+    feed = {network.extern_data.data["classes"].placeholder: classes_data,
+            network.extern_data.data["classes"].size_placeholder[0]: classes_seq_lens,
+            network.extern_data.data["seq_tag"].placeholder: input_tags}
+    session.run(network.get_fetches_dict(), feed_dict=feed)
+
+    network.call_graph_reset_callbacks()
+
+  assert os.path.exists(hdf_filename)
+  reader = DatasetTestReader(HDFDataset([hdf_filename]))
+  reader.read_all()
+  assert reader.num_seqs == 1
+  assert reader.seq_tags == ["seq-0"]
+  assert_equal(reader.seq_lens[0]["data"], classes_seq_lens[0])
+  assert_equal(reader.data["data"][0].shape, (classes_seq_lens[0],))
+  assert_equal(reader.data_sparse["data"], True)
+  assert_equal(reader.dataset.get_data_dim("data"), n_out)
+
+
 def test_HDFDumpLayer_fixed_length():
   import os
   from test_HDFDataset import get_test_tmp_file, DatasetTestReader, HDFDataset
@@ -2312,7 +2671,6 @@ def test_HDFDumpLayer_fixed_length():
     feed = {network.extern_data.data["data"].placeholder: input_data,
             network.extern_data.data["data"].size_placeholder[0]: seq_lens,
             network.extern_data.data["seq_tag"].placeholder: input_tags}
-    assert_equal(feed[network.extern_data.get_default_input_data().placeholder].shape, (n_batch, seq_len, n_in))
     session.run([out, network.get_post_control_dependencies()], feed_dict=feed)
 
     network.call_graph_reset_callbacks()
@@ -2395,6 +2753,316 @@ def test_HDFDumpLayer_extra():
   numpy.testing.assert_almost_equal(reader.data["data"][0], input_data[0])
   numpy.testing.assert_equal(reader.data["classes1"][0], classes1_data[0])
   numpy.testing.assert_equal(reader.data["classes2"][0], [classes2_data[0]])
+
+
+def test_HDFDumpLayer_dump_whole_batch_extra_sm():
+  import os
+  from test_HDFDataset import get_test_tmp_file, DatasetTestReader, HDFDataset
+  hdf_filename = get_test_tmp_file(".hdf")
+  os.remove(hdf_filename)  # HDFDumpLayer expects that the file does not exist
+  rnd = numpy.random.RandomState(42)
+
+  with make_scope() as session:
+    n_in = 5
+    config = Config()
+    config.update({
+      "extern_data": {
+        "data": {"dim": n_in},
+        "sm": dict(shape=(None, None)),
+      },
+      "network": {
+        "dump": {
+          "class": "hdf_dump", "filename": hdf_filename,
+          "from": "data",
+          "extra": {"sm": "data:sm"},
+          "is_output_layer": True,
+          "dump_whole_batches": True,
+        },
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+    network.print_network_info()
+
+    session.run(tf.global_variables_initializer())
+    n_batch = 1
+    input_data = numpy.array([[
+      [1, -0.2, 0.3, -4, 5],
+      [2, -0.6, 0.7, -1.8, 2.9],
+      [1, 0.3, -0.1, -0.8, 0.5],
+      [0.1, -0.2, 0.2, .8, -0.3]]],
+      dtype="float32")
+    input_seq_lens = [input_data.shape[1]]
+    assert input_data.shape == (n_batch, input_seq_lens[0], n_in)
+    sm_seq_lens1 = [13]
+    sm_seq_lens2 = [17]
+    sm_data = rnd.normal(size=(n_batch, sm_seq_lens1[0], sm_seq_lens2[0])).astype(dtype="float32")
+    seq_tags = numpy.array([b"seq-0"], dtype="S5")
+    feed = {
+      network.extern_data.data["data"].placeholder: input_data,
+      network.extern_data.data["data"].size_placeholder[0]: input_seq_lens,
+      network.extern_data.data["sm"].placeholder: sm_data,
+      network.extern_data.data["sm"].size_placeholder[0]: sm_seq_lens1,
+      network.extern_data.data["sm"].size_placeholder[1]: sm_seq_lens2,
+      network.extern_data.data["seq_tag"].placeholder: seq_tags}
+    fetches = network.get_fetches_dict()
+    result = session.run(fetches, feed_dict=feed)
+    pprint(result)
+
+    network.call_graph_reset_callbacks()
+
+  assert os.path.exists(hdf_filename)
+  reader = DatasetTestReader(HDFDataset([hdf_filename]))
+  reader.read_all()
+  assert reader.num_seqs == 1
+  assert reader.seq_tags == ["seq-0"]
+  assert_equal(reader.seq_lens[0]["data"], input_seq_lens[0])
+  assert_equal(reader.data["data"][0].shape, (input_seq_lens[0], n_in))
+  numpy.testing.assert_almost_equal(reader.data["data"][0], input_data[0])
+  assert_equal(reader.data["sm"][0].shape, (sm_seq_lens1[0] * sm_seq_lens2[0],))
+  numpy.testing.assert_equal(numpy.reshape(reader.data["sm"][0], sm_data[0].shape), sm_data[0])
+
+
+def test_HDFDumpLayer_dump_whole_batch_extra_sm1():
+  import os
+  from test_HDFDataset import get_test_tmp_file, DatasetTestReader, HDFDataset
+  hdf_filename = get_test_tmp_file(".hdf")
+  os.remove(hdf_filename)  # HDFDumpLayer expects that the file does not exist
+  rnd = numpy.random.RandomState(42)
+
+  with make_scope() as session:
+    n_in = 5
+    config = Config()
+    config.update({
+      "extern_data": {
+        "data": {"dim": n_in},
+        "sm": dict(shape=(None, 1, None), batch_dim_axis=1, feature_dim_axis=2),
+      },
+      "network": {
+        "dump": {
+          "class": "hdf_dump", "filename": hdf_filename,
+          "from": "data",
+          "extra": {"sm": "data:sm"},
+          "is_output_layer": True,
+          "dump_whole_batches": True,
+        },
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+    network.print_network_info()
+
+    session.run(tf.global_variables_initializer())
+    n_batch = 1
+    input_data = numpy.array([[
+      [1, -0.2, 0.3, -4, 5],
+      [2, -0.6, 0.7, -1.8, 2.9],
+      [1, 0.3, -0.1, -0.8, 0.5],
+      [0.1, -0.2, 0.2, .8, -0.3]]],
+      dtype="float32")
+    input_seq_lens = [input_data.shape[1]]
+    assert input_data.shape == (n_batch, input_seq_lens[0], n_in)
+    sm_seq_lens1 = [13]
+    sm_seq_lens2 = [17]
+    sm_data = rnd.normal(size=(sm_seq_lens1[0], n_batch, 1, sm_seq_lens2[0])).astype(dtype="float32")
+    seq_tags = numpy.array([b"seq-0"], dtype="S5")
+    feed = {
+      network.extern_data.data["data"].placeholder: input_data,
+      network.extern_data.data["data"].size_placeholder[0]: input_seq_lens,
+      network.extern_data.data["sm"].placeholder: sm_data,
+      network.extern_data.data["sm"].size_placeholder[0]: sm_seq_lens1,
+      network.extern_data.data["sm"].size_placeholder[2]: sm_seq_lens2,
+      network.extern_data.data["seq_tag"].placeholder: seq_tags}
+    fetches = network.get_fetches_dict()
+    result = session.run(fetches, feed_dict=feed)
+    pprint(result)
+
+    network.call_graph_reset_callbacks()
+
+  assert os.path.exists(hdf_filename)
+  reader = DatasetTestReader(HDFDataset([hdf_filename]))
+  reader.read_all()
+  assert reader.num_seqs == 1
+  assert reader.seq_tags == ["seq-0"]
+  assert_equal(reader.data["data"][0].shape, (input_seq_lens[0], n_in))
+  numpy.testing.assert_almost_equal(reader.data["data"][0], input_data[0])
+  assert_equal(reader.data["sm"][0].shape, (sm_seq_lens1[0] * sm_seq_lens2[0],))
+  sm_data_ = numpy.transpose(sm_data, (1, 0, 3, 2))
+  numpy.testing.assert_equal(numpy.reshape(reader.data["sm"][0], sm_data_[0].shape), sm_data_[0])
+
+
+def test_CrossEntropyLoss():
+  with make_scope() as session:
+    n_out = 13
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out},
+        "classes": {"dim": n_out, "sparse": True},
+      }})
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "var": {"class": "variable", "shape": (n_out,)},
+      "add": {"class": "combine", "kind": "add", "from": ["data", "var"]},
+      "output": {
+        "class": "activation", "from": "add", "activation": "softmax",
+        "loss": "ce"},
+    })
+    losses_dict, total_loss, total_constraints = net.get_losses_initialized()
+    print("Losses:")
+    pprint(losses_dict)
+    assert set(losses_dict.keys()) == {"output"}
+    loss_holder = losses_dict["output"]
+    assert isinstance(loss_holder, LossHolder)
+    assert isinstance(loss_holder.loss, CrossEntropyLoss)
+    session.run(tf.global_variables_initializer())
+    print("Get loss:")
+    feed_dict = make_feed_dict(net.extern_data.data.values(), same_time=True)
+    print("random classes:", feed_dict[net.extern_data.data["classes"].placeholder])
+    loss_t = loss_holder.get_loss_value()
+    opt = tf.train.GradientDescentOptimizer(learning_rate=0.1)
+    minimize_op = opt.minimize(loss_t)
+    last_loss_v = float("inf")
+    for step in range(3):
+      loss_v, _ = session.run((loss_t, minimize_op), feed_dict=feed_dict)
+      print("step %i, loss %f" % (step, loss_v))
+      assert numpy.isfinite(loss_v) and numpy.isscalar(loss_v)
+      assert loss_v < last_loss_v  # it's convex and we cannot overshoot
+      last_loss_v = loss_v
+
+
+def test_CrossEntropyLoss_masked_inf():
+  with make_scope() as session:
+    n_out = 13
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out},
+        "classes": {"dim": n_out, "sparse": True},
+      }})
+    mask_t = tf.placeholder(tf.bool, (n_out,), name="mask")
+
+    def mask_func(source, **kwargs):
+      x = source(0)
+      assert x.shape.ndims == 3  # (B,T,n_out)
+      from TFUtil import where_bc
+      mask_bc = mask_t[None, None, :]  # (1,1,n_out)
+      return where_bc(mask_bc, x, float("-inf"))
+
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "var": {"class": "variable", "shape": (n_out,)},  # such that we can check that there are no nan/inf grads
+      "add": {"class": "combine", "kind": "add", "from": ["data", "var"]},
+      "mask": {"class": "eval", "from": "add", "eval": mask_func},
+      "output": {
+        "class": "activation", "from": "mask", "activation": "softmax",
+        "loss": "ce"},
+    })
+    losses_dict, total_loss, total_constraints = net.get_losses_initialized()
+    print("Losses:")
+    pprint(losses_dict)
+    assert set(losses_dict.keys()) == {"output"}
+    loss_holder = losses_dict["output"]
+    assert isinstance(loss_holder, LossHolder)
+    assert isinstance(loss_holder.loss, CrossEntropyLoss)
+    session.run(tf.global_variables_initializer())
+    print("Get loss:")
+    feed_dict = make_feed_dict(net.extern_data.data.values(), same_time=True)
+    mask_v = numpy.array([True] * n_out)
+    feed_dict[mask_t] = mask_v
+    loss_t = loss_holder.get_loss_value()
+    opt = tf.train.GradientDescentOptimizer(learning_rate=0.1)
+    minimize_op = opt.minimize(loss_t)
+    last_loss_v = float("inf")
+    for step in range(3):
+      loss_v, _ = session.run((loss_t, minimize_op), feed_dict=feed_dict)
+      print("step %i, loss %f" % (step, loss_v))
+      assert numpy.isfinite(loss_v) and numpy.isscalar(loss_v)
+      assert loss_v < last_loss_v  # it's convex and we cannot overshoot
+      last_loss_v = loss_v
+    print("Now mask.")
+    feed_dict = make_feed_dict(net.extern_data.data.values(), same_time=True, n_batch=1, n_time=1)
+    feed_dict[mask_t] = mask_v
+    rnd_classes = feed_dict[net.extern_data.data["classes"].placeholder]
+    print("random classes:", rnd_classes)
+    mask_v[rnd_classes[0, 0]] = False
+    var_t, = tf.trainable_variables()
+    last_var_v = session.run(var_t)
+    for step in range(3, 6):
+      loss_v, _ = session.run((loss_t, minimize_op), feed_dict=feed_dict)
+      print("step %i, loss %f" % (step, loss_v))
+      assert numpy.isinf(loss_v) and numpy.isscalar(loss_v)
+      var_v = session.run(var_t)
+      assert numpy.isfinite(var_v).all()  # while the loss is inf, the gradients should be finite!
+      assert not (var_v == last_var_v).all()  # and there also was some non-zero gradient!
+      last_var_v = var_v
+
+
+def test_CrossEntropyLoss_masked_inf_fake_upper_bound():
+  # Almost the same as test_CrossEntropyLoss_masked_inf, but we use fake_upper_bound.
+  with make_scope() as session:
+    n_out = 13
+    fake_upper_bound = 10.
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out},
+        "classes": {"dim": n_out, "sparse": True},
+      }})
+    mask_t = tf.placeholder(tf.bool, (n_out,), name="mask")
+
+    def mask_func(source, **kwargs):
+      x = source(0)
+      assert x.shape.ndims == 3  # (B,T,n_out)
+      from TFUtil import where_bc
+      mask_bc = mask_t[None, None, :]  # (1,1,n_out)
+      return where_bc(mask_bc, x, float("-inf"))
+
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "var": {"class": "variable", "shape": (n_out,)},  # such that we can check that there are no nan/inf grads
+      "add": {"class": "combine", "kind": "add", "from": ["data", "var"]},
+      "mask": {"class": "eval", "from": "add", "eval": mask_func},
+      "output": {
+        "class": "activation", "from": "mask", "activation": "softmax",
+        "loss": "ce", "loss_opts": {"fake_upper_bound": fake_upper_bound}},
+    })
+    losses_dict, total_loss, total_constraints = net.get_losses_initialized()
+    print("Losses:")
+    pprint(losses_dict)
+    assert set(losses_dict.keys()) == {"output"}
+    loss_holder = losses_dict["output"]
+    assert isinstance(loss_holder, LossHolder)
+    assert isinstance(loss_holder.loss, CrossEntropyLoss)
+    session.run(tf.global_variables_initializer())
+    print("Get loss:")
+    feed_dict = make_feed_dict(net.extern_data.data.values(), same_time=True)
+    mask_v = numpy.array([True] * n_out)
+    feed_dict[mask_t] = mask_v
+    loss_t = loss_holder.get_loss_value()
+    opt = tf.train.GradientDescentOptimizer(learning_rate=0.1)
+    minimize_op = opt.minimize(loss_t)
+    last_loss_v = float("inf")
+    for step in range(3):
+      loss_v, _ = session.run((loss_t, minimize_op), feed_dict=feed_dict)
+      print("step %i, loss %f" % (step, loss_v))
+      assert numpy.isfinite(loss_v) and numpy.isscalar(loss_v)
+      assert loss_v < last_loss_v  # it's convex and we cannot overshoot
+      last_loss_v = loss_v
+    print("Now mask.")
+    feed_dict = make_feed_dict(net.extern_data.data.values(), same_time=True, n_batch=1, n_time=1)
+    feed_dict[mask_t] = mask_v
+    rnd_classes = feed_dict[net.extern_data.data["classes"].placeholder]
+    print("random classes:", rnd_classes)
+    mask_v[rnd_classes[0, 0]] = False
+    var_t, = tf.trainable_variables()
+    last_var_v = session.run(var_t)
+    for step in range(3, 6):
+      loss_v, _ = session.run((loss_t, minimize_op), feed_dict=feed_dict)
+      print("step %i, loss %f" % (step, loss_v))
+      assert loss_v == fake_upper_bound and numpy.isscalar(loss_v)
+      var_v = session.run(var_t)
+      assert numpy.isfinite(var_v).all()  # while the loss is bounded, the gradients should be finite!
+      assert not (var_v == last_var_v).all()  # and there also was some non-zero gradient!
+      last_var_v = var_v
 
 
 if __name__ == "__main__":

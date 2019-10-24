@@ -2,6 +2,7 @@
 # start test like this:  nosetests-2.7  tests/test_TFEngine.py
 # or directly:  python3 test_TFEngine.py test_engine_rec_subnet_count
 
+from __future__ import print_function
 
 import logging
 logging.getLogger('tensorflow').disabled = True
@@ -41,6 +42,9 @@ except ImportError:
   print("no faulthandler")
 
 
+print("TF version:", tf.VERSION)
+
+
 @contextlib.contextmanager
 def make_scope():
   """
@@ -64,6 +68,20 @@ def _get_tmp_file(suffix):
   import atexit
   atexit.register(lambda: os.remove(fn))
   return fn
+
+
+def _get_tmp_dir():
+  """
+  :return: dirname
+  :rtype: str
+  """
+  import tempfile
+  import shutil
+  import atexit
+  name = tempfile.mkdtemp()
+  assert name and os.path.isdir(name) and not os.listdir(name)
+  atexit.register(lambda: shutil.rmtree(name))
+  return name
 
 
 def _cleanup_old_models(config):
@@ -153,7 +171,7 @@ def test_engine_train():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {"output": {"class": "softmax", "loss": "ce"}},
@@ -193,7 +211,7 @@ def test_engine_train_uneven_batches():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
@@ -227,7 +245,7 @@ def test_engine_train_subnet_loss():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
@@ -259,7 +277,7 @@ def test_engine_train_rec_subnet_loss_optimized():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
@@ -292,7 +310,7 @@ def test_engine_train_rec_subnet_loss_non_optimized():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
@@ -326,7 +344,7 @@ def test_engine_train_accum_grad_multiple_step():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {"output": {"class": "softmax", "loss": "ce"}},
@@ -353,7 +371,7 @@ def test_engine_train_accum_grad_multiple_step_sparse():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {"output": {"class": "softmax", "loss": "ce", "from": ["data:classes"]}},
@@ -394,7 +412,7 @@ def test_engine_train_grad_noise_sparse():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
@@ -436,7 +454,7 @@ def test_engine_analyze():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {"output": {"class": "softmax", "loss": "ce"}},
@@ -463,7 +481,7 @@ def test_engine_forward_single():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {"output": {"class": "softmax", "loss": "ce"}}
@@ -491,7 +509,7 @@ def test_engine_forward_to_hdf():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {"output": {"class": "softmax", "loss": "ce"}},
@@ -538,7 +556,7 @@ def test_engine_rec_subnet_count():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
@@ -583,7 +601,7 @@ def test_engine_end_layer(extra_rec_kwargs=None):
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "batch_size": 5000,
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
@@ -651,7 +669,7 @@ def check_engine_search(extra_rec_kwargs=None):
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "batch_size": 5000,
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
@@ -726,7 +744,7 @@ def check_engine_search_attention(extra_rec_kwargs=None):
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "batch_size": 5000,
     "max_seqs": 2,
     "num_outputs": n_classes_dim,
@@ -827,7 +845,7 @@ def check_engine_train_simple_attention(lstm_unit):
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "batch_size": 100,
     "max_seqs": 2,
     "num_outputs": n_classes_dim,
@@ -879,7 +897,7 @@ def test_attention_train_then_search():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "batch_size": 5000,
     "max_seqs": 2,
     "num_outputs": n_classes_dim,
@@ -971,7 +989,7 @@ def test_attention_search_in_train_then_search():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "batch_size": 5000,
     "max_seqs": 2,
     "num_outputs": n_classes_dim,
@@ -1002,6 +1020,149 @@ def test_attention_search_in_train_then_search():
   engine.finalize()
 
 
+def check_train_and_search_two_targets(net_dict):
+  """
+  Tests training and search for network architectures having two targets ("classes_0", "classes_1")
+  and two corresponding output layers ("decision_0", "decision_1").
+  """
+  from MetaDataset import MetaDataset
+  from TFUtil import DimensionTag
+  from test_HDFDataset import generate_hdf_from_other
+
+  n_data_dim = 2
+  n_classes_dim_0 = 7
+  n_classes_dim_1 = 8
+
+  data_0 = {"class": "DummyDataset", "input_dim": n_data_dim, "output_dim": n_classes_dim_0,
+    "num_seqs": 2, "seq_len": 5}
+  data_0 = generate_hdf_from_other(data_0)
+  data_1 = {"class": "DummyDataset", "input_dim": n_data_dim, "output_dim": n_classes_dim_1,
+    "num_seqs": 2, "seq_len": 5}
+  data_1 = generate_hdf_from_other(data_1)
+
+  data = MetaDataset(datasets={"data_0": data_0, "data_1": data_1},
+    data_map={
+      "data": ("data_1", "data"),
+      "classes_0": ("data_0", "classes"),
+      "data_1": ("data_1", "data"),
+      "classes_1": ("data_1", "classes")},
+  )
+  data.init_seq_order()
+
+  dec_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="dec time")
+
+  config = Config()
+  config.update({
+    "model": "%s/model" % _get_tmp_dir(),
+    "batch_size": 5000,
+    "max_seqs": 2,
+    "extern_data": {"data": {"dim": n_data_dim, "sparse": False},
+      "classes_0": {"dim": n_classes_dim_0, "sparse": True, "same_dim_tags_as": {"t": dec_time}},
+      "classes_1": {"dim": n_classes_dim_1, "sparse": True, "same_dim_tags_as": {"t": dec_time}},
+    },
+    "num_epochs": 1,
+    "network": net_dict,
+    "debug_print_layer_output_template": True,
+  })
+  _cleanup_old_models(config)
+  engine = Engine(config=config)
+  print("Train...")
+  engine.init_train_from_config(config=config, train_data=data, dev_data=None)
+  engine.train()
+
+  print("Search...")
+  engine.use_search_flag = True
+  engine.use_dynamic_train_flag = False
+  engine.init_network_from_config(config)
+  engine.search(dataset=data, output_layer_names=["decision_0", "decision_1"])
+  assert engine.network.total_objective is not None
+  assert "decision_0" in engine.network.losses_dict
+  assert "decision_1" in engine.network.losses_dict
+
+  engine.finalize()
+
+
+def test_attention_two_targets():
+  """
+  Tests training and search when using a ChoiceLayer with two targets.
+  """
+  net_dict = {
+    "encoder": {"class": "linear", "activation": "tanh", "n_out": 5},
+    "output": {
+      "class": "rec",
+      "from": [],
+      "target": "classes_1", "max_seq_len": 10,
+      "unit": {
+        "end": {"class": "compare", "from": ["output_0"], "value": 0},
+        "orth_embed_0": {'class': 'linear', 'activation': None, 'from': ['output_0'], "n_out": 7},
+        "orth_embed_1": {'class': 'linear', 'activation': None, 'from': ['output_1'], "n_out": 7},
+        "orth_embed": {"class": "copy", "from": ["orth_embed_0", "orth_embed_1"]},
+        "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:c", "prev:orth_embed"], "n_out": 7},
+        "c_in": {"class": "linear", "activation": "tanh", "from": ["s", "prev:orth_embed"], "n_out": 5},
+        "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:encoder", "base_ctx": "base:encoder"},
+        "output_prob_0": {"class": "softmax", "from": ["prev:s", "c"], "target": "classes_0", "loss": "ce"},
+        "output_prob_1": {"class": "softmax", "from": ["prev:s", "c"], "target": "classes_1", "loss": "ce"},
+        "output": {'class': 'choice', 'target': ['classes_0', "classes_1"], 'beam_size': 4,
+          'from': ["output_prob_0", "output_prob_1"], "source_beam_sizes": [2, 6]},
+
+        "output_0": {"class": "copy", "from": ["output/out_0"], "is_output_layer": True},
+        "output_1": {"class": "copy", "from": ["output/out_1"], "is_output_layer": True},
+      },
+    },
+    "output_0": {"class": "copy", "from": ["output/output_0"], "target": "classes_0"},
+    "output_1": {"class": "copy", "from": ["output/output_1"], "target": "classes_1"},
+
+    "decision_0": {"class": "decide", "from": ["output_0"], "loss": "edit_distance", "target": "classes_0"},
+    "decision_1": {"class": "decide", "from": ["output_1"], "loss": "edit_distance", "target": "classes_1"},
+  }
+
+  check_train_and_search_two_targets(net_dict=net_dict)
+
+
+def test_attention_two_dependent_targets():
+  """
+  Tests training and search when having two ChoiceLayers in the loop that depend on each other.
+  Note, there will be different beam sizes in different parts of the recurrent unit.
+  """
+  beam_size_0 = 5
+  beam_size_1 = 3
+
+  net_dict = {
+    "encoder": {"class": "linear", "activation": "tanh", "n_out": 5},
+    "output": {
+      "class": "rec",
+      "from": [],
+      "target": "classes_1", "max_seq_len": 10,
+      "unit": {
+        "end": {"class": "compare", "from": ["output_0"], "value": 0},
+        "orth_embed_0": {'class': 'linear', 'activation': None, 'from': ['output_0'], "n_out": 7},
+        "orth_embed_1": {'class': 'linear', 'activation': None, 'from': ['output_1'], "n_out": 7},
+        "orth_embed": {"class": "copy", "from": ["orth_embed_0", "orth_embed_1"]},
+        "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:c", "prev:orth_embed"], "n_out": 7},
+        "c_in": {"class": "linear", "activation": "tanh", "from": ["s", "prev:orth_embed"], "n_out": 5},
+        "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:encoder", "base_ctx": "base:encoder"},
+        "output_prob_0": {"class": "softmax", "from": ["prev:s", "c"], "target": "classes_0", "loss": "ce"},
+        "output_prob_1": {"class": "softmax", "from": ["prev:s", "c", "orth_embed_0"],
+          "target": "classes_1", "loss": "ce"},
+        # Important for real experiments: apply length normalization only once (in last choice layer).
+        "output_0": {'class': 'choice', 'target': 'classes_0', 'beam_size': beam_size_0, 'from': "output_prob_0",
+          "is_output_layer": True, "length_normalization": False},
+        "output_1": {'class': 'choice', 'target': 'classes_1', 'beam_size': beam_size_1, 'from': "output_prob_1",
+          "is_output_layer": True},
+
+        "output": {"class": "copy", "from": "output_1"},
+      },
+    },
+    "output_0": {"class": "copy", "from": ["output/output_0"], "target": "classes_0"},
+    "output_1": {"class": "copy", "from": ["output/output_1"], "target": "classes_1"},
+
+    "decision_0": {"class": "decide", "from": ["output_0"], "loss": "edit_distance", "target": "classes_0"},
+    "decision_1": {"class": "decide", "from": ["output_1"], "loss": "edit_distance", "target": "classes_1"},
+  }
+
+  check_train_and_search_two_targets(net_dict=net_dict)
+
+
 def test_rec_optim_all_out():
   from GeneratingDataset import DummyDataset
   from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
@@ -1013,7 +1174,7 @@ def test_rec_optim_all_out():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "batch_size": 5000,
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
@@ -1117,7 +1278,7 @@ def test_rec_subnet_train_t3b():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": network,
@@ -1173,7 +1334,7 @@ def test_rec_subnet_train_t3d():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": network,
@@ -1218,7 +1379,7 @@ def test_rec_subnet_train_t3d_simple():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": network,
@@ -1247,7 +1408,7 @@ def deterministic_train_check(layer_opts):
   n_classes_dim = 3
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": network,
@@ -1377,7 +1538,7 @@ def test_rec_subnet_auto_optimize():
     }
     config = Config()
     config.update({
-      "model": "/tmp/model",
+      "model": "%s/model" % _get_tmp_dir(),
       "num_outputs": n_classes_dim,
       "num_inputs": n_data_dim,
       "network": network,
@@ -1708,7 +1869,7 @@ def test_rec_subnet_eval_init_out_apply0():
 
   config = Config()
   config.update({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": network,
@@ -1729,6 +1890,392 @@ def test_rec_subnet_eval_init_out_apply0():
   engine.train()
   print("Search.")
   engine.search(cv_data)
+
+
+def test_search_multi_choice_hdf_dump():
+  """
+  Checking multiple things here:
+
+  * train and search, with various configurations. The net includes multiple choices.
+  * HDFDumpLayer, and loading these files.
+  """
+  EpochSplit = 3
+
+  # Make HDF dataset such that multi-epoch works nicely with predefined seq tags.
+  n_in, n_out = 2, 8
+  from test_HDFDataset import generate_hdf_from_other
+  hdf_dataset_fns = {
+    key: generate_hdf_from_other({
+      "class": "TaskNumberBaseConvertDataset",
+      "input_base": n_in, "output_base": n_out,  # make input longer than output
+      "num_seqs": {"train": EpochSplit * 10, "dev": 13}[key],
+    }, suffix="-%s.hdf" % key)
+    for key in ["train", "dev"]}
+
+  tmp_model_dir = _get_tmp_dir()
+  num_epochs = 5
+  learning_rate = 0.001
+  StoreAlignmentUpToEpoch = num_epochs
+  AlignmentFilenamePattern = tmp_model_dir + "/alignments.%i.hdf"
+  EncKeyTotalDim = 20
+  target = "classes0"
+  beam_size = 3
+  AttNumHeads = 1
+
+  def get_most_recent_align_hdf_files(epoch0):
+    """
+    :param int epoch0: 0-based (sub) epoch
+    :return: filenames or None if there is nothing completed yet
+    :rtype: list[str]|None
+    """
+    if epoch0 < EpochSplit:
+      return None
+    if epoch0 > StoreAlignmentUpToEpoch:
+      epoch0 = StoreAlignmentUpToEpoch  # first epoch after
+    i = ((epoch0 - EpochSplit) // EpochSplit) * EpochSplit
+    return [AlignmentFilenamePattern % j for j in range(i, i + EpochSplit)]
+
+  def get_dataset_dict(key, hdf_files=None):
+    """
+    :param str key: "train" or "dev"
+    :param list[str]|None hdf_files:
+    :rtype: dict[str]
+    """
+    d = {
+      "class": "HDFDataset",
+      "files": [hdf_dataset_fns[key]]
+    }
+    if key == "train":
+      d["partition_epoch"] = EpochSplit
+    if hdf_files:
+      align_opts = {
+        "class": "HDFDataset", "files": hdf_files,
+        "unique_seq_tags": True  # dev set can exist multiple times
+        }
+      d = {
+        "class": "MetaDataset",
+        "datasets": {"main": d, "align": align_opts},
+        "data_map": {
+          "data": ("main", "data"),
+          "classes": ("main", "classes"),
+          "alignment": ("align", "data"),
+          "align_score": ("align", "scores")},
+        "seq_order_control_dataset": "main",  # it must support get_all_tags
+      }
+    return d
+
+  def t_linear(source, **kwargs):
+    import tensorflow as tf
+    from TFUtil import where_bc
+    enc = source(1, as_data=True, auto_convert=False)
+    dec = source(0, as_data=True, auto_convert=False)
+    enc_lens = enc.get_sequence_lengths()
+    dec_lens = dec.get_sequence_lengths()
+    dec_shape = tf.shape(dec.placeholder)
+    dec_time_dim = dec_shape[dec.time_dim_axis]
+    dec_times = tf.expand_dims(tf.range(dec_time_dim), axis=0)  # (1,dec-T)
+    x = tf.cast(dec_times + 1, tf.float32)  # (1,dec-T)
+    # We want: x[dec_len - 1] == enc_time - 1.
+    factors = tf.maximum(tf.cast(enc_lens - 1, tf.float32), 0.0) / tf.maximum(tf.cast(dec_lens, tf.float32), 1.0)  # [B]
+    # The definition does not allow loops, thus this is the minimum factor.
+    factors = tf.maximum(factors, 1.0)
+    factors = tf.expand_dims(factors, axis=1)  # (B,1)
+    x = x * factors  # (B,dec-T)
+    x = tf.cast(tf.round(x), tf.int32)
+    # Note: If this causes loops in the very last frame, this is ok currently.
+    x = tf.minimum(x, tf.expand_dims(enc_lens - 1, axis=1))
+    # fix cheating gold targets with end flag filter. must be 0
+    x = where_bc(tf.less(dec_times, tf.expand_dims(dec_lens, axis=1)), x, 0)
+    return x
+
+  def get_net_dict(task, pretrain_idx):
+    """
+    :param str task: "train" or "search"
+    :param int|None pretrain_idx: starts at 0. note that this has a default repetition factor of 6
+    :return: net_dict or None if pretrain should stop
+    :rtype: dict[str,dict[str]|int]|None
+    """
+    # Note: epoch0 is 0-based here! I.e. in contrast to elsewhere, where it is 1-based.
+    # Also, we never use #repetition here, such that this is correct.
+    # This is important because of sub-epochs and storing the HDF files,
+    # to know exactly which HDF files cover the dataset completely.
+    epoch0 = pretrain_idx
+    net_dict = {}  # type: typing.Dict[str,typing.Union[typing.Dict[str],int]]
+
+    have_existing_align = False  # only in training, and only in pretrain, and only after the first epoch
+    if pretrain_idx is not None:
+      net_dict["#config"] = {}
+
+      if task == "train":
+        most_recent_align_hdf_files = get_most_recent_align_hdf_files(epoch0)
+        have_existing_align = bool(most_recent_align_hdf_files)
+
+        net_dict["#config"].update({
+          "train": get_dataset_dict("train", hdf_files=most_recent_align_hdf_files),
+          "dev": get_dataset_dict("dev", hdf_files=most_recent_align_hdf_files),
+        })
+
+      # Do this in the very beginning.
+      lr_warmup = list(numpy.linspace(0.0001, learning_rate, num=4))
+      lr_warmup += [learning_rate] * 10
+      if pretrain_idx < len(lr_warmup):
+        net_dict["#config"]["learning_rate"] = lr_warmup[pretrain_idx]
+      pretrain_idx -= len(lr_warmup)
+
+    use_t_search_as_target = not have_existing_align or epoch0 < StoreAlignmentUpToEpoch
+
+    net_dict["#info"] = {
+      "epoch0": epoch0,  # Set this here such that a new construction for every pretrain idx is enforced in all cases.
+      "have_existing_align": have_existing_align,
+      "use_t_search_as_target": use_t_search_as_target,
+    }
+
+    # We use this pretrain construction during the whole training time (epoch0 > num_epochs).
+    if pretrain_idx is not None and epoch0 % EpochSplit == 0 and epoch0 > num_epochs:
+      # Stop pretraining now.
+      return None
+
+    net_dict.update({
+      "encoder": {"class": "linear", "n_out": 10, "activation": "relu", "from": "data"},
+      "enc_ctx": {"class": "linear", "activation": None, "from": ["encoder"], "n_out": EncKeyTotalDim},
+      "enc_value": {"class": "copy", "from": "encoder"},  # (B, enc-T, D)
+      "enc_seq_len": {"class": "length", "from": "encoder", "sparse": True},
+
+      # for task "search" / search_output_layer
+      "decision": {
+        "class": "decide", "from": "output", "loss": "edit_distance", "target": target,
+        'only_on_search': True},
+
+      "t_linear": {
+        "class": "eval", "from": ["data:%s" % target, "encoder"], "eval": t_linear,
+        "out_type": {
+          "batch_dim_axis": 0, "time_dim_axis": 1, "shape": (None,), "sparse": True, "dtype": "int32", "dim": None},
+        "size_target": target},
+
+      "0_t_target": {
+        "class": "postfix_in_time", "from": "data:classes", "postfix": 0,
+        "register_as_extern_data": target},
+
+      # Target for decoder ('output') with search ("extra.search") in training.
+      # The layer name must be smaller than "t_target" such that this is created first.
+      "1_t_base": {
+        "class": "copy",
+        "from": "existing_alignment" if have_existing_align else "t_linear",
+        "register_as_extern_data": "t_base"},
+
+      "2_t_target": {
+        "class": "copy",
+        "from": "extra.search:t_search_or_fallback" if use_t_search_as_target else "data:t_base",
+        "register_as_extern_data": "t_target" if task == "train" else None},
+    })
+
+    if have_existing_align:
+      net_dict.update({
+        # This should be compatible to t_linear or t_search.
+        "existing_alignment": {
+          "class": "reinterpret_data", "from": "data:alignment",
+          "set_sparse": True,  # not sure what the HDF gives us
+          "set_sparse_dim": None,
+          "size_base": "data:%s" % target,
+        },
+        # This should be compatible to search_score.
+        "existing_align_score": {
+          "class": "squeeze", "from": "data:align_score", "axis": "f",
+          "loss": "as_is", "loss_scale": 0
+        }
+      })
+
+    def get_output_dict(train, search, t_target, beam_size=beam_size):
+      """
+      :param bool train:
+      :param bool search:
+      :param str|None t_target:
+      :param int beam_size:
+      :rtype: dict[str]
+      """
+      return {
+        "class": "rec", "from": [], "back_prop": (task == "train") and train,
+        "unit": {
+          "s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["s"],
+                            "n_out": EncKeyTotalDim},
+          "energy_in": {"class": "combine", "kind": "add", "from": ["base:enc_ctx", "s_transformed"],
+                        "n_out": EncKeyTotalDim},
+          "energy_tanh": {"class": "activation", "activation": "tanh", "from": "energy_in"},
+
+          "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"],
+                     "n_out": AttNumHeads},  # (B, enc-T, H)
+          "energy1": {"class": "squeeze", "axis": "f", "from": "energy"},  # (B, enc-T)
+          "energy2": {"class": "reinterpret_data", "from": "energy1", "set_axes": {"t": "stag:extern_data:data"}},
+
+          # Segment boundaries:
+          # - t0/t1/t is the right side (inclusive)
+          # - prev:t is the left side (exclusive)
+          # - t_start/prev_t_plus1 is the left side (inclusive)
+
+          "prev_t_plus1": {"class": "eval", "from": "prev:t", "eval": "source(0) + 1"},
+          "t_start": {
+            "class": "eval", "from": ["prev_t_plus1", "base:enc_seq_len"],
+            "eval": "tf.minimum(source(0), source(1) - 1)"},  # to avoid nans
+
+          "t_weights": {
+            "class": "softmax_over_spatial", "from": "energy2", "axis": "stag:extern_data:data",
+            "start": "t_start"},
+          "t_weights1": {
+            # ChoiceLayer works on the feature axis.
+            "class": "reinterpret_data", "from": "t_weights", "set_axes": {"f": "stag:extern_data:data"},
+            # Loss for weights.
+            "target": t_target if train else None,
+            "loss": "ce" if (train and t_target) else None,
+            "loss_scale": 0.1 if (train and t_target) else None,
+          },
+          "t0": {
+            "class": "choice", "from": "t_weights1",
+            "target": t_target, "cheating": bool(t_target),  # add this in training
+            "beam_size": beam_size * 4 if task == "search" else beam_size,
+            "keep_beams": task == "search",
+            "length_normalization": False, "initial_output": -1},  # (B,)
+          # Note: If beam-size > enc_seq_len, we end up with invalid t in the beam. Fix that.
+          "t1": {
+            "class": "eval", "from": ["t0", "t_start", "base:enc_seq_len"],
+            "eval": "tf.clip_by_value(source(0), source(1), source(2) - 1)"},
+          "t": {
+            "class": "copy", "from": "t1", "initial_output": -1, "is_output_layer": bool(search)},
+          "window_start": {"class": "eval", "from": "t", "eval": "source(0) - 5"},
+
+          "att_weights": {
+            "class": "softmax_over_spatial", "from": "energy2", "axis": "stag:extern_data:data",
+            "window_start": "window_start",
+            "window_size": 10},  # (B, enc-T)
+          "att_soft": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"}, # (B, V)
+          "att": {"class": "copy", "from": "att_soft"},
+
+          "s": {"class": "rnn_cell", "unit": "standardlstm", "from": ["prev:target_embed", "prev:att"], "n_out": 10},
+          "readout_in": {"class": "linear", "from": ["s", "prev:target_embed", "att"], "activation": None,
+                         "n_out": 10},
+          "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+          "output_prob": {"class": "softmax", "from": ["readout"], "dropout": 0.3, "target": target,
+                          "loss": "ce" if train else None},
+
+          'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'],
+                           "n_out": 10, "initial_output": "var"},
+          'output': {
+            'class': 'choice', 'target': target, 'beam_size': beam_size, 'from': ["output_prob"],
+            "initial_output": 0,
+            'search': task != 'train', "length_normalization": task != "train"},
+
+          "end": {"class": "compare", "from": "output", "value": 0},
+
+        },
+        "target": [target, t_target] if t_target else [target],
+        "size_target": t_target,
+        "include_eos": True,  # make sure no empty seqs
+        "max_seq_len": "max_len_from('base:encoder')"}
+
+    if task == "train":
+      if use_t_search_as_target:
+        net_dict.update({
+          "extra.search:output":
+            get_output_dict(
+              train=False, search=True, t_target="t_base",
+              beam_size=beam_size),
+          "extra.search:t_search": {"class": "decide", "from": "extra.search:output/t"},
+          "extra.search:search_loss": {
+            "class": "decide", "from": "extra.search:output", "loss": "search_score", "loss_scale": 0},
+          "extra.search:search_score": {
+            "class": "eval", "from": "extra.search:search_loss",
+            "out_type": {
+              "dtype": "float32", "sparse": False,
+              "shape": (), "dim": None, "batch_dim_axis": 0, "time_dim_axis": None},
+            "eval": "(source(0, auto_convert=False),"
+                    "tf.squeeze(self.sources[0].search_choices.beam_scores, axis=1)"
+                    "/ tf.cast(source(0, auto_convert=False, as_data=True).get_sequence_lengths(), tf.float32))"
+                    "[-1]",
+            "loss": "as_is", "loss_scale": 0},
+          "use_t_search":
+              {"class": "compare", "kind": "less", "from": ["existing_align_score", "extra.search:search_score"]}
+              if have_existing_align else
+              {"class": "constant", "value": True},
+          "t_search_or_fallback": {
+              "class": "switch", "condition": "use_t_search",
+              "true_from": "extra.search:t_search", "false_from": "data:t_base"}
+              if have_existing_align else
+              {"class": "copy", "from": "data:t_base"},
+          "t_search_or_fallback_score":
+              {"class": "switch", "condition": "use_t_search",
+               "true_from": "extra.search:search_score", "false_from": "existing_align_score"}
+              if have_existing_align else
+              {"class": "copy", "from": "extra.search:search_score"},
+        })
+        if epoch0 is not None and epoch0 < StoreAlignmentUpToEpoch:
+            net_dict.update({
+                "extra.search:t_search_dump": {
+                    "class": "hdf_dump", "from": "t_search_or_fallback",
+                    "extra": {"scores": "t_search_or_fallback_score"},
+                    "filename": AlignmentFilenamePattern % epoch0,
+                    "is_output_layer": True},
+                })
+
+      net_dict["output"] = get_output_dict(train=True, search=False, t_target="t_target")
+    else:
+      net_dict["output"] = get_output_dict(train=True, search=True, t_target=None)
+
+    return net_dict
+
+  from Dataset import init_dataset
+
+  def run(task):
+    """
+    :param str task: "train" or "search"
+    """
+    print("-" * 80)
+    print("Task:", task)
+
+    def custom_construction_algo(idx, net_dict):
+      return get_net_dict(task=task, pretrain_idx=idx)
+
+    config = Config({
+      "task": task,
+      "train": get_dataset_dict("train"),
+      "dev": get_dataset_dict("dev"),
+      "extern_data": {
+        "data": {"dim": n_in, "sparse": True},
+        "classes": {"dim": n_out, "sparse": True},
+        "alignment": {"dim": None, "shape": (None,), "dtype": "int32", "sparse": True},
+        "align_score": {"shape": (1,), "dtype": "float32"},
+      },
+      "debug_print_layer_output_template": True,
+      "network": get_net_dict(task=task, pretrain_idx=None),
+      "pretrain": {"copy_param_mode": "subset", "construction_algo": custom_construction_algo},
+      "batch_size": 1000,
+      "max_seqs": 2,
+      "adam": True,
+      "learning_rate": learning_rate,
+      "use_learning_rate_control_always": True,
+      "learning_rate_control": "newbob_multi_epoch",
+      "learning_rate_control_error_measure": "dev_error_output/output_prob",
+      "model": "%s/model" % tmp_model_dir,
+      "cleanup_old_models": True,
+      "num_epochs": num_epochs,
+    })
+    train_data = init_dataset(config.typed_value("train"))
+    dev_data = init_dataset(config.typed_value("dev"))
+    engine = Engine(config=config)
+    if task == "train":
+      engine.init_train_from_config(config, train_data, dev_data)
+      engine.train()
+    elif task == "search":
+      engine.use_search_flag = True
+      config.set("load_epoch", num_epochs)
+      engine.init_network_from_config(config)
+      engine.search(
+        dev_data,
+        do_eval=config.bool("search_do_eval", True),
+        output_layer_names=config.typed_value("search_output_layer", "output"))
+    else:
+      raise NotImplementedError("task %r" % task)
+
+  run("train")
+  run("search")
 
 
 def test_net_safe_log_to_log_softmax():
@@ -2067,7 +2614,7 @@ def test_TikhonovRegularizationLayer():
   dev_data.init_seq_order(epoch=1)
 
   config = Config({
-    "model": "/tmp/model",
+    "model": "%s/model" % _get_tmp_dir(),
     "batch_size": 100,
     "max_seqs": 2,
     "num_outputs": n_classes_dim,
@@ -2088,6 +2635,62 @@ def test_TikhonovRegularizationLayer():
   pprint(engine.network.used_data_keys)
   engine.train()
   engine.finalize()
+
+
+def test_grad_summaries():
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  engine = Engine(config=Config({
+    "network": {
+      "output": {"class": "linear", "activation": "tanh", "from": "data", "n_out": 3, "loss": "mse"}
+    },
+    "model": "%s/model" % _get_tmp_dir(),
+    "batch_size": 100,
+    "max_seqs": 2,
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "num_epochs": 1,
+    "learning_rate": 0.01,
+    "adam": True,
+    "debug_print_layer_output_template": True,
+    "debug_grad_summaries": True,
+  }))
+  print("extern data:", engine.config.typed_value("extern_data"))
+
+  engine.init_train_from_config()
+
+  def extra_fetches_cb(summary_proto):
+    """
+    :param bytes summary_proto: protobuf for summaries
+    """
+    from tensorboard.compat.proto import summary_pb2
+    summaries = summary_pb2.Summary.FromString(summary_proto)
+    summary_list = [val.tag for val in summaries.value]
+    assert any([v.startswith("grads/") for v in summary_list])
+    assert any(["global_grad_norm" in v for v in summary_list])
+    assert any([v.startswith("vars/") for v in summary_list])
+    for val in summaries.value:
+      print("%s: %r" % (val.tag, val.simple_value))
+
+  batches = train_data.generate_batches(
+    recurrent_net=engine.network.recurrent,
+    batch_size=200,
+    max_seqs=100,
+    used_data_keys=engine.network.used_data_keys)
+  forwarder = Runner(
+    engine=engine, dataset=train_data, batches=batches,
+    train=True, eval=False,
+    extra_fetches={
+      "summary_proto": lambda: engine.network._get_all_merged_summaries(),
+    },
+    extra_fetches_callback=extra_fetches_cb)
+  forwarder.run(report_prefix="test_grad_summaries")
+  if not forwarder.finalized:
+    raise Exception("Error happened. Exit now.")
 
 
 def test_unflatten_2d():
@@ -2321,6 +2924,122 @@ def test_attention_forward_hdf_then_unflatten_2d():
     raise Exception("Error happened. Exit now.")
 
 
+def test_preinit_reset_train_dataset():
+  """
+  This is a complex test.
+  We have some default dataset.
+  Then we run through it, and use HDFDumpLayer to dump some info.
+  Then later we overwrite the dataset (via pretrain `#config`) to load that dumped data.
+  Also, make sure that all not-used-anymore data gets unloaded.
+  """
+  # For the default dataset, we want something which is not frame-synced (i.e. input has different length than output).
+  # TaskNumberBaseConvertDataset has this property.
+  # Also, we need a dataset which supports init_seq_order with custom seq_list,
+  # which is needed for the MetaDataset.
+  # TaskNumberBaseConvertDataset does not support this, so we convert it to HDF.
+  print("Preparing data...")
+  from test_HDFDataset import generate_hdf_from_other, get_test_tmp_file
+  from Dataset import init_dataset
+  n_in, n_out = 2, 8
+  default_train_hdf_fn = generate_hdf_from_other({
+    "class": "TaskNumberBaseConvertDataset", "num_seqs": 11,
+    "input_base": n_in, "output_base": n_out})
+  default_dev_hdf_fn = generate_hdf_from_other({
+    "class": "TaskNumberBaseConvertDataset", "num_seqs": 5, "fixed_random_seed": 42,
+    "input_base": n_in, "output_base": n_out})
+  default_train_dataset_opts = {"class": "HDFDataset", "files": [default_train_hdf_fn]}
+  default_dev_dataset_opts = {"class": "HDFDataset", "files": [default_dev_hdf_fn]}
+  default_train_dataset = init_dataset(default_train_dataset_opts)
+  default_dev_dataset = init_dataset(default_dev_dataset_opts)
+
+  def get_meta_dataset_opts(base_opts, hdf_dump_fn):
+    """
+    :param dict[str] base_opts:
+    :param str hdf_dump_fn:
+    :rtype: dict[str]
+    """
+    return {
+      "class": "MetaDataset",
+      "datasets": {"base": base_opts, "dump": {"class": "HDFDataset", "files": [hdf_dump_fn]}},
+      "data_map": {
+        "data": ("base", "data"),
+        "classes": ("base", "classes"),
+        "dump": ("dump", "data")
+      },
+      "seq_order_control_dataset": "base"
+    }
+
+  dump_hdf_filenames = [None, get_test_tmp_file(".dump1.hdf"), get_test_tmp_file(".dump2.hdf")]
+  num_epochs = len(dump_hdf_filenames)
+  for fn in dump_hdf_filenames:
+    if fn:
+      os.remove(fn)  # HDFDumpLayer expects that they don't exist
+
+  def get_net_dict(idx=None, net_dict=None):
+    """
+    :param int|None idx:
+    :param net_dict:
+    :return: dict
+    """
+    if idx is not None and idx >= num_epochs:
+      return None
+    net_dict = {
+      "#idx": idx,  # informal, and trigger reinit in all cases
+      "embed": {"class": "linear", "from": "data", "with_bias": False, "activation": None, "n_out": 10},
+      "lstm1": {"class": "rec", "unit": "BasicLSTM", "from": "embed", "n_out": 10},
+      "lstm2": {"class": "rec", "unit": "BasicLSTM", "from": "lstm1", "n_out": 10},
+      "output": {"class": "softmax", "from": "lstm2", "loss": "ctc"}
+    }
+    if idx is not None and dump_hdf_filenames[idx]:
+      net_dict["hdf_dump"] = {
+        "class": "hdf_dump",
+        "from": "data:classes",
+        "filename": dump_hdf_filenames[idx],
+        "is_output_layer": True  # trigger usage of this layer
+      }
+    if idx is not None and idx >= 1 and dump_hdf_filenames[idx - 1]:
+      net_dict["#config"] = {
+        "train": get_meta_dataset_opts(default_train_dataset_opts, dump_hdf_filenames[idx - 1]),
+        "dev": get_meta_dataset_opts(default_dev_dataset_opts, dump_hdf_filenames[idx - 1])}
+      # Some dummy usage of the extra data.
+      net_dict["print"] = {
+        "class": "print", "from": "data:dump",
+        "is_output_layer": True  # trigger usage of this layer
+      }
+    return net_dict
+
+  config = Config({
+    "train": default_train_dataset_opts,
+    "dev": default_dev_dataset_opts,
+    "extern_data": {
+      "data": {"dim": n_in, "sparse": True},
+      "classes": {"dim": n_out, "sparse": True},
+      "dump": {"dim": n_out, "sparse": True}  # we dump the classes
+    },
+    "network": get_net_dict(),
+    "pretrain": {"construction_algo": get_net_dict},
+    "num_epochs": num_epochs,
+    "debug_print_layer_output_template": True,
+    "batch_size": 50, "max_seqs": 3,
+    "tf_log_dir": None
+  })
+
+  print("Create engine.")
+  engine = Engine(config=config)
+  print("Init training.")
+  engine.init_train_from_config(train_data=default_train_dataset, dev_data=default_dev_dataset)
+  print("Train.")
+  engine.train()
+  engine.finalize()
+  print("Finished training.")
+
+  # Now some tests.
+  print("Testing.")
+  for fn in dump_hdf_filenames:
+    if fn:
+      assert os.path.exists(fn)  # should have been created now
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
@@ -2343,10 +3062,13 @@ if __name__ == "__main__":
         else:
           eval(arg)  # assume Python code and execute
   finally:
-    session.close()
-    del session
-    tf.reset_default_graph()
+    try:
+      session.close()
+      tf.reset_default_graph()
+    except Exception as exc:
+      print("test finally handler, exception:", type(exc).__name__, ":", exc)
     import threading
     if len(list(threading.enumerate())) > 1:
       print("Warning, more than one thread at exit:")
       better_exchook.dump_all_thread_tracebacks()
+    del session

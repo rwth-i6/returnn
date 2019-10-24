@@ -628,16 +628,37 @@ class ExternSprintDataset(SprintDatasetBase):
     # This is our workaround. We check for it in self.run_inner().
     self.python_exit = False
     atexit.register(self._exit_handler)
-    self.init_seq_order()
+    # We don't know about num_outputs yet, but we should.
+    # Thus we call Sprint and immediately exit it.
+    self._start_child(epoch=None, get_dim_only=True)
+
+  def finish_epoch(self):
+    """
+    Called at the end of the epoch.
+    """
+    with self.lock:
+      # Reset epoch such that exiting the child will go smoothly.
+      super(ExternSprintDataset, self).init_seq_order(epoch=None, seq_list=None)
+    # Exit child, before we overwrite anything, such as new epoch or seq_list.
+    self._exit_child(wait_thread=True)
+    super(ExternSprintDataset, self).finish_epoch()
+
+  def _exit_handler(self):
+    """
+    Called at exit.
+    """
+    assert os.getpid() == self.parent_pid
+    self.python_exit = True
+    self._exit_child(wait_thread=False)
 
   def _exit_child(self, wait_thread=True):
     """
     :param bool wait_thread:
     """
     if self.child_pid:
-      expected_exit_status = 0 if not self.python_exit else None
+      expected_exit_status = 0 if wait_thread and not self.python_exit else None
       if self._join_child(wait=False, expected_exit_status=expected_exit_status) is False:  # Not yet terminated.
-        interrupt = not self.reached_final_seq_seen_all
+        interrupt = not self.reached_final_seq_seen_all or not wait_thread
         if interrupt:
           print("%s: interrupt child proc %s" % (self, self.child_pid), file=log.v5)
           os.kill(self.child_pid, signal.SIGKILL)
@@ -646,7 +667,7 @@ class ExternSprintDataset(SprintDatasetBase):
           self.child_pid = None
       else:  # child process terminated
         self.child_pid = None
-      if wait_thread:
+      if wait_thread and self.reader_thread:
         # Load all remaining data so that the reader thread is not waiting in self.add_new_data().
         while self.is_less_than_num_seqs(self.expected_load_seq_start + 1):
           if self.reached_final_seq:  # this is set by the reader thread
@@ -663,13 +684,13 @@ class ExternSprintDataset(SprintDatasetBase):
       except IOError:
         pass
       if self.child_pid:
-        self._join_child(wait=True, expected_exit_status=0)
+        self._join_child(wait=True, expected_exit_status=expected_exit_status)
         self.child_pid = None
 
-  def _start_child(self, epoch):
+  def _start_child(self, epoch, get_dim_only=False):
     """
-    :param epoch:
-    :return:
+    :param int|None epoch:
+    :param bool get_dim_only:
     """
     assert self.child_pid is None
     assert self.reader_thread is None
@@ -719,10 +740,14 @@ class ExternSprintDataset(SprintDatasetBase):
       self._exit_child(wait_thread=False)
       raise Exception("%s Sprint init failed" % self)
 
-    self.reader_thread = Thread(target=self._reader_thread_proc, args=(pid, epoch,),
-                                name="%s reader thread" % self)
-    self.reader_thread.daemon = True
-    self.reader_thread.start()
+    if get_dim_only:
+      self._exit_child(wait_thread=False)
+
+    else:
+      self.reader_thread = Thread(target=self._reader_thread_proc, args=(pid, epoch),
+                                  name="%s reader thread" % self)
+      self.reader_thread.daemon = True
+      self.reader_thread.start()
 
   # noinspection PyMethodMayBeStatic
   def _pipe_open(self):
@@ -786,6 +811,16 @@ class ExternSprintDataset(SprintDatasetBase):
         "--*.corpus.segment-order-shuffle=false",
         "--*.corpus.segments.file=%s" % self.seq_list_file,
         "--*.corpus.segment-order=%s" % self.seq_list_file]
+    if self.seq_tags_filter is not None:
+      assert not self.predefined_seq_list_order
+      import tempfile
+      self.seq_list_file = tempfile.mktemp(prefix="crnn-sprint-predefined-seq-filter")
+      with open(self.seq_list_file, "w") as f:
+        for tag in self.seq_tags_filter:
+          f.write(tag)
+          f.write("\n")
+        f.close()
+      args += ["--*.corpus.segments.file=%s" % self.seq_list_file]
     return args
 
   def _read_next_raw(self):
@@ -916,14 +951,6 @@ class ExternSprintDataset(SprintDatasetBase):
         finally:
           # Exceptions are fatal. If we can recover, we should handle it in run_inner().
           interrupt_main()
-
-  def _exit_handler(self):
-    """
-    Called at exit.
-    """
-    assert os.getpid() == self.parent_pid
-    self.python_exit = True
-    self._exit_child(wait_thread=False)
 
   def init_seq_order(self, epoch=None, seq_list=None):
     """

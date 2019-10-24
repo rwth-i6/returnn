@@ -182,6 +182,9 @@ class MetaDataset(CachedDataset2):
       Can be None if tag format is the same for all datasets.
         Then the sequence list will be default sequence order of default dataset (``data_map["data"][0]``),
         or seq_order_control_dataset.
+        You only need it if the tag name is not the same for all datasets.
+        It will currently not act as filter,
+        as the subdataset controls the sequence order (and thus what seqs to use).
     :param str|None seq_order_control_dataset: if set, this dataset will define the order for each epoch.
     :param str|None seq_lens_file: filename. json. dict[str,dict[str,int]], seq-tag -> data-key -> len.
       Use if getting sequence length from loading data is too costly.
@@ -242,7 +245,6 @@ class MetaDataset(CachedDataset2):
     self.num_inputs = self.data_dims["data"][0]
     self.num_outputs = self.data_dims
 
-    self.data_dtypes = {data_key: _select_dtype(data_key, self.data_dims, data_dtypes) for data_key in self.data_keys}
     self.orig_seq_order_is_initialized = False
     self.seq_list_ordered = None  # type: typing.Optional[typing.Dict[str,typing.List[str]]]
 
@@ -265,14 +267,7 @@ class MetaDataset(CachedDataset2):
     :rtype: dict[str,list[str]]
     """
     if seq_list_file:
-      if seq_list_file.endswith(".pkl"):
-        import pickle
-        seq_list = pickle.load(open(seq_list_file, 'rb'))
-      elif seq_list_file.endswith(".gz"):
-        import gzip
-        seq_list = gzip.open(seq_list_file, "rt").read().splitlines()
-      else:
-        seq_list = open(seq_list_file).read().splitlines()
+      seq_list = Dataset._load_seq_list_file(seq_list_file, expect_list=False)
     else:
       # We create a sequence list from all the sequences of the default dataset and hope that it also applies to the
       # other datasets. This can only work if all datasets have the same tag format and the sequences in the other
@@ -284,21 +279,27 @@ class MetaDataset(CachedDataset2):
       seq_list = default_dataset.get_all_tags()
       # Catch index out of bounds errors. Whether the tags are actually valid will be checked in _check_dataset_seq().
       for key in self.dataset_keys:
-        if key != self.default_dataset_key and self.datasets[key].get_total_num_seqs() < len(seq_list):
-          print("Dataset %r has less sequences (%i) than in sequence list (%i) read from %r, this cannot work out!" % (
-            key, self.datasets[key].get_total_num_seqs(), len(seq_list), self.default_dataset_key), file=log.v1)
-          other_tags = self.datasets[key].get_all_tags()
-          for tag in seq_list:
-            if tag not in other_tags:
-              print(
-                "Seq tag %r in dataset %r but not in dataset %r." % (tag, self.default_dataset_key, key), file=log.v1)
-              break  # only print one
-          for tag in other_tags:
-            if tag not in seq_list:
-              print(
-                "Seq tag %r in dataset %r but not in dataset %r." % (tag, key, self.default_dataset_key), file=log.v1)
-              break  # only print one
-          raise Exception("Dataset %r is missing seqs." % key)
+        if key == self.default_dataset_key:
+          continue
+        try:
+          if self.datasets[key].get_total_num_seqs() >= len(seq_list):
+            continue  # ok
+        except NotImplementedError:
+          continue  # we don't know. but continue for now...
+        print("Dataset %r has less sequences (%i) than in sequence list (%i) read from %r, this cannot work out!" % (
+          key, self.datasets[key].get_total_num_seqs(), len(seq_list), self.default_dataset_key), file=log.v1)
+        other_tags = self.datasets[key].get_all_tags()
+        for tag in seq_list:
+          if tag not in other_tags:
+            print(
+              "Seq tag %r in dataset %r but not in dataset %r." % (tag, self.default_dataset_key, key), file=log.v1)
+            break  # only print one
+        for tag in other_tags:
+          if tag not in seq_list:
+            print(
+              "Seq tag %r in dataset %r but not in dataset %r." % (tag, key, self.default_dataset_key), file=log.v1)
+            break  # only print one
+        raise Exception("Dataset %r is missing seqs." % key)
 
     assert isinstance(seq_list, (list, dict))
     if isinstance(seq_list, list):
@@ -345,6 +346,8 @@ class MetaDataset(CachedDataset2):
           :rtype: int
           """
           return self._seq_lens[self.seq_list_original[self.default_dataset_key][s]]["data"]
+      elif self._seq_order_seq_lens_file:
+        get_seq_len = self._get_seq_order_seq_lens_by_idx
       else:
         self.orig_seq_order_is_initialized = False
         get_seq_len = self._get_dataset_seq_length
@@ -358,6 +361,22 @@ class MetaDataset(CachedDataset2):
         continue
       dataset.init_seq_order(epoch=epoch, seq_list=self.seq_list_ordered[dataset_key])
     return True
+
+  def get_all_tags(self):
+    """
+    :return: list of all seq tags, of the whole dataset, without partition epoch
+    :rtype: list[str]
+    """
+    return self.seq_list_original[self.default_dataset_key]
+
+  def finish_epoch(self):
+    """
+    This would get called at the end of the epoch.
+    """
+    super(MetaDataset, self).finish_epoch()
+    for _, dataset in self.datasets.items():
+      assert isinstance(dataset, Dataset)
+      dataset.finish_epoch()
 
   def _load_seqs(self, start, end):
     for dataset_key in self.dataset_keys:
@@ -430,10 +449,16 @@ class MetaDataset(CachedDataset2):
     :param str key:
     :rtype: str
     """
-    dtype = self.data_dtypes[key]
-    if self.added_data:
-      assert super(MetaDataset, self).get_data_dtype(key) == dtype
-    return dtype
+    dataset_key, dataset_data_key = self.data_map[key]
+    return self.datasets[dataset_key].get_data_dtype(dataset_data_key)
+
+  def is_data_sparse(self, key):
+    """
+    :param str key:
+    :rtype: bool
+    """
+    dataset_key, dataset_data_key = self.data_map[key]
+    return self.datasets[dataset_key].is_data_sparse(dataset_data_key)
 
 
 class ClusteringDataset(CachedDataset2):
@@ -1008,7 +1033,7 @@ class ConcatSeqsDataset(CachedDataset2):
   def __init__(self, dataset, seq_list_file, seq_len_file, seq_tag_delim=";", remove_in_between_postfix=None,
                use_cache_manager=False, epoch_wise_filter=None, **kwargs):
     """
-    :param dict[str] dataset: kwargs for init_dataset
+    :param dict[str]|str|Dataset dataset: kwargs for init_dataset
     :param str seq_list_file: filename. line-separated. seq_tag_delim.join(seq_tags) for concatenated seqs
     :param str seq_len_file: file with Python dict, (single) seg_name -> len, which is used for sorting
     :param str seq_tag_delim:
@@ -1020,8 +1045,9 @@ class ConcatSeqsDataset(CachedDataset2):
     self.seq_tag_delim = seq_tag_delim
     self.remove_in_between_postfix = remove_in_between_postfix or {}
     self.epoch_wise_filter = EpochWiseFilter(epoch_wise_filter) if epoch_wise_filter else None
-    dataset = dataset.copy()
-    dataset.setdefault("name", "%s_subdataset" % self.name)
+    if isinstance(dataset, dict):
+      dataset = dataset.copy()
+      dataset.setdefault("name", "%s_subdataset" % self.name)
     self.sub_dataset = init_dataset(dataset)
     self.num_outputs = self.sub_dataset.num_outputs
     self.num_inputs = self.sub_dataset.num_inputs

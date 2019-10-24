@@ -238,9 +238,10 @@ class LearningRateControl(object):
       relative_error = (new_error - old_error) / abs(new_error)
     if self.relative_error_also_relative_to_learning_rate:
       learning_rate = self.get_most_recent_learning_rate(new_epoch, exclude_current=False)
-      # If the learning rate is lower than the initial learning rate,
-      # the relative error is also expected to be lower, so correct for that here.
-      relative_error /= learning_rate / self.default_learning_rate
+      if learning_rate > 0:
+        # If the learning rate is lower than the initial learning rate,
+        # the relative error is also expected to be lower, so correct for that here.
+        relative_error /= learning_rate / self.default_learning_rate
     return relative_error
 
   def set_epoch_error(self, epoch, error):

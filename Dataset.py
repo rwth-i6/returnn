@@ -54,6 +54,7 @@ class Dataset(object):
     set_or_remove("seq_ordering", config.value("batching", None))
     set_or_remove("shuffle_frames_of_nseqs", config.int('shuffle_frames_of_nseqs', 0) or None)
     set_or_remove("min_chunk_size", config.int('min_chunk_size', 0) or None)
+    set_or_remove("chunking_variance", config.float("chunking_variance", 0))
 
   @staticmethod
   def get_default_kwargs_eval(config):
@@ -84,13 +85,15 @@ class Dataset(object):
   def __init__(self, name=None,
                window=1, context_window=None, chunking=None,
                seq_ordering='default', partition_epoch=None, repeat_epoch=None,
-               shuffle_frames_of_nseqs=0, min_chunk_size=0,
-               estimated_num_seqs=None,):
+               seq_list_filter_file=None, unique_seq_tags=False,
+               seq_order_seq_lens_file=None,
+               shuffle_frames_of_nseqs=0, min_chunk_size=0, chunking_variance=0,
+               estimated_num_seqs=None):
     """
     :param str name: e.g. "train" or "eval"
     :param int window: features will be of dimension window * feature_dim, as we add a context-window around.
       not all datasets support this option.
-    :param None|int|dict|NumbersDict context_window: will add this context for each chunk
+    :param None|int|dict|NumbersDict|(dict,dict) context_window: will add this context for each chunk
     :param None|str|int|(int,int)|dict|(dict,dict) chunking: "chunk_size:chunk_step"
     :param str seq_ordering: "batching"-option in config. e.g. "default", "sorted" or "random".
       See self.get_seq_order_for_epoch() for more details.
@@ -98,6 +101,9 @@ class Dataset(object):
     :param int|None repeat_epoch: Repeat the sequences in an epoch this many times. Useful to scale the dataset
       relative to other datasets, e.g. when used in CombinedDataset. Not allowed to be used in combination with
       partition_epoch.
+    :param str|None seq_list_filter_file: defines a subset of sequences (by tag) to use
+    :param bool unique_seq_tags: uniquify seqs with same seq tags in seq order
+    :param str|None seq_order_seq_lens_file: for seq order, use the seq length given by this file
     :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
     :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
     """
@@ -110,6 +116,10 @@ class Dataset(object):
     self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
     self.partition_epoch = partition_epoch or 1
     self.repeat_epoch = repeat_epoch or 1
+    self.seq_tags_filter = set(self._load_seq_list_file(seq_list_filter_file)) if seq_list_filter_file else None
+    self.unique_seq_tags = unique_seq_tags
+    self._seq_order_seq_lens_file = seq_order_seq_lens_file
+    self._seq_order_seq_lens_by_idx = None
     # There is probably no use case for combining the two, so avoid potential misconfiguration.
     assert self.partition_epoch == 1 or self.repeat_epoch == 1, (
       "Combining partition_epoch and repeat_epoch is prohibited.")
@@ -123,6 +133,7 @@ class Dataset(object):
     self._num_seqs = 0
     self._estimated_num_seqs = estimated_num_seqs
     self.min_chunk_size = min_chunk_size
+    self.chunking_variance = chunking_variance
     if isinstance(chunking, str):
       if ":" in chunking:
         chunking = tuple(map(int, chunking.split(":")))
@@ -145,14 +156,31 @@ class Dataset(object):
       assert sorted(chunk_step.keys()) == sorted(chunk_size.keys())
       assert chunk_step.max_value() > 0, "chunking step must be positive (for some key)"
     self.chunk_step = chunk_step
-    if context_window is None:
-      context_window = NumbersDict(0)
-    elif isinstance(context_window, int):
-      context_window = NumbersDict(broadcast_value=0, numbers_dict={"data": context_window})
-    elif isinstance(context_window, dict):
-      context_window = NumbersDict(broadcast_value=0, numbers_dict=context_window)
-    assert isinstance(context_window, NumbersDict)
-    self.context_window = context_window
+    if isinstance(context_window, (tuple, list)):
+      assert len(context_window) == 2
+      for elem in context_window:
+        assert isinstance(elem, dict)
+      # assume that first element of tuple|list is for left context and second element for right context
+      self.ctx_left = NumbersDict(numbers_dict=context_window[0])
+      self.ctx_right = NumbersDict(numbers_dict=context_window[1])
+    else:
+      if context_window is None:
+        context_window = NumbersDict()
+      elif isinstance(context_window, int):
+        context_window = NumbersDict(numbers_dict={"data": context_window})
+      elif isinstance(context_window, dict):
+        context_window = NumbersDict(numbers_dict=context_window)
+      assert isinstance(context_window, NumbersDict)
+      # ctx_total is how much frames we add additionally.
+      # One less because the original frame also counts, and context_window=1 means that we just have that single frame.
+      ctx_total = NumbersDict.max([context_window, 1]) - 1
+      # In case ctx_total is odd / context_window is even, we have to decide where to put one more frame.
+      # To keep it consistent with e.g. 1D convolution with a kernel of even size, we add one more to the right.
+      # See test_tfconv1d_evensize().
+      self.ctx_left = ctx_total // 2
+      self.ctx_right = ctx_total - self.ctx_left
+    assert isinstance(self.ctx_left, NumbersDict)
+    assert isinstance(self.ctx_right, NumbersDict)
     self.shuffle_frames_of_nseqs = shuffle_frames_of_nseqs
     self.epoch = None
 
@@ -161,6 +189,29 @@ class Dataset(object):
       self.__class__.__name__,
       getattr(self, "name", "<unknown>"),
       getattr(self, "epoch", "<unknown>"))
+
+  @staticmethod
+  def _load_seq_list_file(filename, use_cache_manager=False, expect_list=True):
+    """
+    :param str filename:
+    :param bool use_cache_manager:
+    :param bool expect_list:
+    :rtype: list[str]|dict[str,list[str]]
+    """
+    if use_cache_manager:
+      import Util
+      filename = Util.cf(filename)
+    if filename.endswith(".pkl"):
+      import pickle
+      seq_list = pickle.load(open(filename, 'rb'))
+      if expect_list:
+        assert isinstance(seq_list, list)
+    elif filename.endswith(".gz"):
+      import gzip
+      seq_list = gzip.open(filename, "rt").read().splitlines()
+    else:
+      seq_list = open(filename).read().splitlines()
+    return seq_list
 
   def sliding_window(self, xr):
     """
@@ -290,6 +341,24 @@ class Dataset(object):
     """
     raise NotImplementedError
 
+  def _get_seq_order_seq_lens_by_idx(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: int
+    """
+    if not self._seq_order_seq_lens_by_idx:
+      assert self._seq_order_seq_lens_file
+      if self._seq_order_seq_lens_file.endswith(".gz"):
+        import gzip
+        raw = gzip.GzipFile(self._seq_order_seq_lens_file, "rb").read()
+      else:
+        raw = open(self._seq_order_seq_lens_file, "rb").read()
+      seq_lens = eval(raw)
+      assert isinstance(seq_lens, dict)
+      all_tags = self.get_all_tags()
+      self._seq_order_seq_lens_by_idx = [seq_lens[tag] for tag in all_tags]
+    return self._seq_order_seq_lens_by_idx[seq_idx]
+
   def get_seq_order_for_epoch(self, epoch, num_seqs, get_seq_len=None):
     """
     Returns the order of the given epoch.
@@ -311,6 +380,8 @@ class Dataset(object):
       full_epoch = (epoch - 1) // partition_epoch + 1
     assert num_seqs > 0
     seq_index = list(range(num_seqs))  # type: typing.List[int]  # the real seq idx after sorting
+    if self._seq_order_seq_lens_file:
+      get_seq_len = self._get_seq_order_seq_lens_by_idx
     if self.seq_ordering == 'default':
       pass  # Keep order as-is.
     elif self.seq_ordering.startswith("default_every_n:"):
@@ -330,6 +401,38 @@ class Dataset(object):
     elif self.seq_ordering == "sorted_reverse":
       assert get_seq_len
       seq_index.sort(key=get_seq_len, reverse=True)  # sort by length, in reverse, starting with longest
+    elif self.seq_ordering.startswith('sort_bin_shuffle'):
+      # Shuffle seqs, sort by length, and shuffle bins (then shuffle seqs within each bin if sort_bin_shuffle_x2).
+      assert get_seq_len
+      tmp = self.seq_ordering.split(':')[1:]
+      # Keep this deterministic! Use fixed seed.
+      if len(tmp) <= 1:
+        nth = 1
+      else:
+        nth = int(tmp[1])
+      rnd_seed = ((full_epoch - 1) // nth + 1) if full_epoch else 1
+      rnd = Random(rnd_seed)
+      rnd.shuffle(seq_index)  # Shuffle sequences.
+      seq_index.sort(key=get_seq_len)  # Sort by length, starting with shortest.
+      if len(tmp) == 0:
+        bins = 2
+      else:
+        if tmp[0].startswith("."):  # starting with "." -> approx chunk size (num of seqs in one bin)
+          bins = max(num_seqs // int(tmp[0][1:]), 2)
+        else:  # the number of bins
+          bins = int(tmp[0])
+      bin_ids = list(range(bins))
+      rnd.shuffle(bin_ids)  # Shuffle bins.
+      out_index = []
+      for i in bin_ids:
+        if i == bins - 1:
+          part = seq_index[i * len(seq_index) // bins:][:]
+        else:
+          part = seq_index[i * len(seq_index) // bins:(i + 1) * len(seq_index) // bins][:]
+        if self.seq_ordering.startswith('sort_bin_shuffle_x2'):
+          rnd.shuffle(part)  # Shuffle within the bin.
+        out_index += part
+      seq_index = out_index
     elif self.seq_ordering.startswith('laplace'):
       assert get_seq_len
       tmp = self.seq_ordering.split(':')[1:]
@@ -365,10 +468,27 @@ class Dataset(object):
       rnd.shuffle(seq_index)
     else:
       assert False, "invalid batching specified: " + self.seq_ordering
+    if self.unique_seq_tags:
+      # Note: This is as generic as possible, but requires that get_all_tags is implemented.
+      all_seq_tags = self.get_all_tags()
+      used_seq_tags = set()
+      seq_index = [
+        i for i in seq_index
+        if (all_seq_tags[i] not in used_seq_tags, used_seq_tags.add(all_seq_tags[i]))[0]]
     if partition_epoch > 1:
       seq_index = self._apply_partition_epoch(seq_index, partition_epoch, epoch)
     if repeat_epoch > 1:
       seq_index = seq_index * repeat_epoch
+    if self.seq_tags_filter is not None:
+      # Note: This is as generic as possible, but requires that get_all_tags is implemented.
+      assert seq_index
+      all_seq_tags = self.get_all_tags()
+      assert len(all_seq_tags) == num_seqs == self.get_total_num_seqs(), "%r vs %r vs %r" % (
+        len(all_seq_tags), num_seqs, self.get_total_num_seqs())
+      old_seq_index = seq_index
+      seq_index = [i for i in seq_index if all_seq_tags[i] in self.seq_tags_filter]
+      assert seq_index, "%s: empty after applying seq_list_filter_file. Example filter tags: %r, used tags: %r" % (
+        self, sorted(self.seq_tags_filter)[:3], [all_seq_tags[i] for i in old_seq_index[:3]])
     return seq_index
 
   @classmethod
@@ -406,6 +526,14 @@ class Dataset(object):
     self.epoch = epoch
     self.rnd_seq_drop = Random(epoch or 1)
     return False
+
+  def finish_epoch(self):
+    """
+    This would get called at the end of the epoch (currently optional only).
+    After this, further calls to :func:`get_data` or :func:`load_seqs` are invalid,
+    until a new call to :func:`init_seq_order` follows.
+    """
+    self.epoch = None
 
   def get_current_seq_order(self):
     """
@@ -796,6 +924,9 @@ class Dataset(object):
       chunk_step = self.chunk_step
     chunk_size = NumbersDict(chunk_size)
     chunk_step = NumbersDict(chunk_step)
+    chunk_size_orig = chunk_size.copy()
+    chunk_step_orig = chunk_step.copy()
+
     s = 0
     while self.is_less_than_num_seqs(s):
       length = self.get_seq_length(s)
@@ -810,6 +941,11 @@ class Dataset(object):
           if chunk_step[default_key] == 0:  # allow some keys with zero chunk-step
             assert chunk_step.max_value() > 0
             default_key = [key for key in sorted(used_data_keys) if chunk_step[key] > 0][0]
+          if self.chunking_variance > 0:
+            chunking_variance = 1. - self.rnd_seq_drop.random() * self.chunking_variance
+            for k in used_data_keys:
+              chunk_size[k] = max(int(chunk_size_orig[k] * chunking_variance), 1)
+              chunk_step[k] = max(int(chunk_step_orig[k] * chunking_variance), 1)
         assert chunk_step[default_key] > 0
         t = NumbersDict.constant_like(0, numbers_dict=length)
         # There are usually the 'data' (input) and 'classes' (targets) data-keys in `length` but there can be others.
@@ -846,24 +982,6 @@ class Dataset(object):
             break
       s += 1
 
-  def _get_context_window_left_right(self):
-    """
-    :return: (ctx_left, ctx_right)
-    :rtype: None|(NumbersDict,NumbersDict)
-    """
-    if self.context_window:
-      # One less because the original frame also counts, and context_window=1 means that we just have that single frame.
-      # ctx_total is how much frames we add additionally.
-      ctx_total = NumbersDict.max([self.context_window, 1]) - 1
-      # In case ctx_total is odd / context_window is even, we have to decide where to put one more frame.
-      # To keep it consistent with e.g. 1D convolution with a kernel of even size, we add one more to the right.
-      # See test_tfconv1d_evensize().
-      ctx_left = ctx_total // 2
-      ctx_right = ctx_total - ctx_left
-      return ctx_left, ctx_right
-    else:
-      return None
-
   def get_start_end_frames_full_seq(self, seq_idx):
     """
     :param int seq_idx:
@@ -872,10 +990,8 @@ class Dataset(object):
     """
     end = self.get_seq_length(seq_idx)
     start = NumbersDict.constant_like(0, numbers_dict=end)
-    ctx_lr = self._get_context_window_left_right()
-    if ctx_lr:
-      start -= ctx_lr[0]
-      end += ctx_lr[1]
+    start -= self.ctx_left
+    end += self.ctx_right
     return start, end
 
   def sample(self, seq_idx):
@@ -933,7 +1049,6 @@ class Dataset(object):
         print("Non-recurrent network, chunk size %s:%s ignored" % (chunk_size, chunk_step), file=log.v4)
         chunk_size = 0
     batch = Batch()
-    ctx_lr = self._get_context_window_left_right()
     total_num_seqs = 0
     last_seq_idx = -1
     avg_weight = sum([v[0] for v in self.weights.values()]) / (len(self.weights.keys()) or 1)
@@ -946,9 +1061,8 @@ class Dataset(object):
         continue
       if total_num_seqs > max_total_num_seqs:
         break
-      if ctx_lr:
-        t_start -= ctx_lr[0]
-        t_end += ctx_lr[1]
+      t_start -= self.ctx_left
+      t_end += self.ctx_right
       if recurrent_net:
         length = t_end - t_start
         if length.any_compare(max_seq_length, (lambda a, b: a > b)):
@@ -1104,12 +1218,14 @@ def get_dataset_class(name):
 
 def init_dataset(kwargs, extra_kwargs=None, default_kwargs=None):
   """
-  :param dict[str]|str|(()->dict[str]) kwargs:
+  :param dict[str]|str|(()->dict[str])|Dataset kwargs:
   :param dict[str]|None extra_kwargs:
   :param dict[str]|None default_kwargs:
   :rtype: Dataset
   """
   assert kwargs
+  if isinstance(kwargs, Dataset):
+    return kwargs
   if callable(kwargs):
     return init_dataset(kwargs(), extra_kwargs=extra_kwargs, default_kwargs=default_kwargs)
   if isinstance(kwargs, (str, unicode)):

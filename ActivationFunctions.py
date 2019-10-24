@@ -53,6 +53,16 @@ def softmax(z):
     assert z_flat.ndim == 2
     return T.reshape(T.nnet.softmax(z_flat), z.shape)
 
+def log_softmax(z):
+  assert z.ndim >= 1
+  if z.ndim <= 2:
+    return T.nnet.logsoftmax(z)
+  else:
+    from TheanoUtil import time_batch_make_flat
+    z_flat = time_batch_make_flat(z)
+    assert z_flat.ndim == 2
+    return T.reshape(T.nnet.logsoftmax(z_flat), z.shape)
+
 def gauss(z):
   return T.exp(-T.sqr(z))
 
@@ -120,6 +130,7 @@ ActivationFunctions = {
   'cos': T.cos,
   'complex_bound': complex_bound,
   'softmax': softmax,
+  'log_softmax': log_softmax,
   'gauss': gauss,
   "erf": T.erf,
   "exp": T.exp,

@@ -25,6 +25,10 @@ attr_ctcIndexTranscription = 'ctcIndexTranscription'
 
 
 class HDFDataset(CachedDataset):
+  """
+  Dataset based on HDF files.
+  This was the main original dataset format of RETURNN.
+  """
 
   def __init__(self, files=None, use_cache_manager=False, **kwargs):
     """
@@ -42,6 +46,16 @@ class HDFDataset(CachedDataset):
     if files:
       for fn in files:
         self.add_file(fn)
+
+  def __del__(self):
+    for f in self.h5_files:
+      # noinspection PyBroadException
+      try:
+        f.close()
+      except Exception:  # e.g. at shutdown. but does not matter
+        pass
+    del self.h5_files[:]
+    del self.file_seq_start[:]
 
   @staticmethod
   def _decode(s):
@@ -86,14 +100,33 @@ class HDFDataset(CachedDataset):
         self.timestamps = fin[attr_times][...]
       else:
         self.timestamps = numpy.concatenate([self.timestamps, fin[attr_times][...]], axis=0)
+    prev_target_keys = None
+    if len(self.files) >= 2:
+      prev_target_keys = self.target_keys
     if 'targets' in fin:
-      self.target_keys = sorted(fin['targets/labels'].keys())
+      self.target_keys = sorted(
+        set(fin['targets/labels'].keys()) |
+        set(fin['targets/data'].keys()) |
+        set(fin['targets/size'].attrs.keys()))
     else:
       self.target_keys = ['classes']
 
-    seq_lengths = fin[attr_seqLengths][...]
+    seq_lengths = fin[attr_seqLengths][...]  # shape (num_seqs,num_target_keys + 1)
     if len(seq_lengths.shape) == 1:
       seq_lengths = numpy.array(zip(*[seq_lengths.tolist() for _ in range(len(self.target_keys)+1)]))
+    assert seq_lengths.ndim == 2 and seq_lengths.shape[1] == len(self.target_keys) + 1
+
+    if prev_target_keys is not None and prev_target_keys != self.target_keys:
+      print("Warning: %s: loaded prev files %s, which defined target keys %s. Now loaded %s and got target keys %s." % (
+        self, self.files[:-1], prev_target_keys, filename, self.target_keys), file=log.v2)
+      # This can happen for multiple reasons. E.g. just different files. Or saved with different RETURNN versions.
+      # We currently support this by removing all the new additional targets, which only works if the prev targets
+      # were a subset (so the order in which you load the files matters).
+      assert all([key in self.target_keys for key in prev_target_keys])  # check if subset
+      # Filter out the relevant seq lengths
+      seq_lengths = seq_lengths[:, [0] + [self.target_keys.index(key) + 1 for key in prev_target_keys]]
+      assert seq_lengths.shape[1] == len(prev_target_keys) + 1
+      self.target_keys = prev_target_keys
 
     seq_start = numpy.zeros((seq_lengths.shape[0] + 1, seq_lengths.shape[1]), dtype="int64")
     numpy.cumsum(seq_lengths, axis=0, dtype="int64", out=seq_start[1:])
@@ -127,7 +160,7 @@ class HDFDataset(CachedDataset):
                                              filename, self.num_inputs, num_inputs[0])
     if 'targets/size' in fin:
       num_outputs = {}
-      for k in fin['targets/size'].attrs:
+      for k in self.target_keys:
         if numpy.isscalar(fin['targets/size'].attrs[k]):
           num_outputs[k] = (int(fin['targets/size'].attrs[k]), len(fin['targets/data'][k].shape))
         else:  # hdf_dump will give directly as tuple
@@ -152,7 +185,7 @@ class HDFDataset(CachedDataset):
         self.ctc_targets = numpy.concatenate((self.ctc_targets, tmp))
       self.num_running_chars = numpy.sum(self.ctc_targets != -1)
     if 'targets' in fin:
-      for name in fin['targets/data']:
+      for name in self.target_keys:
         self.data_dtype[str(name)] = str(fin['targets/data'][name].dtype)
         self.targets[str(name)] = None
         if str(name) not in self.num_outputs:
@@ -217,6 +250,11 @@ class HDFDataset(CachedDataset):
     gc.collect()
 
   def get_data(self, seq_idx, key):
+    """
+    :param int seq_idx:
+    :param str key:
+    :rtype: numpy.ndarray
+    """
     if self.cache_byte_size_total_limit > 0:  # Use the cache?
       return super(HDFDataset, self).get_data(seq_idx, key)
 
@@ -232,6 +270,8 @@ class HDFDataset(CachedDataset):
     if key == "data":
       inputs = fin['inputs']
       data = inputs[start_pos[0]:end_pos[0]]
+      if self.window > 1:
+        data = self.sliding_window(data)
     else:
       assert 'targets' in fin
       targets = fin['targets/data/' + key]
@@ -240,11 +280,20 @@ class HDFDataset(CachedDataset):
     return data
 
   def get_input_data(self, sorted_seq_idx):
+    """
+    :param int sorted_seq_idx:
+    :rtype: numpy.ndarray
+    """
     if self.cache_byte_size_total_limit > 0:  # Use the cache?
       return super(HDFDataset, self).get_input_data(sorted_seq_idx)
     return self.get_data(sorted_seq_idx, "data")
 
   def get_targets(self, target, sorted_seq_idx):
+    """
+    :param str target:
+    :param int sorted_seq_idx:
+    :rtype: numpy.ndarray
+    """
     if self.cache_byte_size_total_limit > 0:  # Use the cache?
       return super(HDFDataset, self).get_targets(target, sorted_seq_idx)
     return self.get_data(sorted_seq_idx, target)
@@ -272,29 +321,49 @@ class HDFDataset(CachedDataset):
     return s
 
   def get_tag(self, sorted_seq_idx):
+    """
+    :param int sorted_seq_idx:
+    :rtype: str
+    """
     ids = self._seq_index[self._index_map[sorted_seq_idx]]
     return self._get_tag_by_real_idx(ids)
 
   def get_all_tags(self):
+    """
+    :rtype: list[str]
+    """
     tags = []
     for h5_file in self.h5_files:
       tags += h5_file["seqTags"][...].tolist()
-
     return list(map(self._decode, tags))
 
   def get_total_num_seqs(self):
+    """
+    :rtype: int
+    """
     return self._num_seqs
 
   def is_data_sparse(self, key):
+    """
+    :param str key:
+    :rtype: bool
+    """
     if self.get_data_dtype(key).startswith("int"):
       if key in self.num_outputs:
         return self.num_outputs[key][1] <= 1
     return False
 
   def get_data_dtype(self, key):
+    """
+    :param str key:
+    :rtype: str
+    """
     return self.data_dtype[key]
 
   def len_info(self):
+    """
+    :rtype: str
+    """
     return ", ".join(["HDF dataset",
                       "sequences: %i" % self.num_seqs,
                       "frames: %i" % self.get_num_timesteps()])
@@ -803,6 +872,13 @@ class SiameseHDFDataset(CachedDataset2):
 
 
 class SimpleHDFWriter:
+  """
+  Intended for a simple interface, to dump data on-the-fly into a HDF file,
+  which can be read later by :class:`HDFDataset`.
+
+  Note that we dump to a temp file first, and only at :func:`close` we move it over to the real destination.
+  """
+
   def __init__(self, filename, dim, labels=None, ndim=None, extra_type=None, swmr=False):
     """
     :param str filename: Create file, truncate if exists
@@ -866,6 +942,11 @@ class SimpleHDFWriter:
       # See comments in test_SimpleHDFWriter_swmr...
       raise NotImplementedError("SimpleHDFWriter SWMR is not really finished...")
 
+  def __del__(self):
+    if self._file:
+      self._file.close()
+      self._file = None
+
   def _prepare_extra(self, extra_type):
     """
     :param dict[str,(int,int,str)] extra_type: key -> (dim,ndim,dtype)
@@ -888,6 +969,9 @@ class SimpleHDFWriter:
       shape = [None] * ndim  # type: typing.List[typing.Optional[int]]
       if ndim >= 2:
         shape[-1] = dim
+      if dtype == "string":
+        # noinspection PyUnresolvedReferences
+        dtype = h5py.special_dtype(vlen=str)
       self._datasets[data_key] = self._file['targets/data'].create_dataset(
         data_key, shape=[d if d else 0 for d in shape], dtype=dtype, maxshape=shape)
       self._file['targets/size'].attrs[data_key] = [dim or 1, ndim]
@@ -945,13 +1029,18 @@ class SimpleHDFWriter:
     assert self._file.attrs['numSeqs'] > 0 and self._seq_lengths.shape[0] > 0
     seq_idx = self._file.attrs['numSeqs'] - 1
 
-    if self._prepare_extra({data_key: (dim, raw_data.ndim, raw_data.dtype)}):
+    if raw_data.dtype == numpy.object:
+      # Is this a string?
+      assert isinstance(raw_data.flat[0], (str, bytes))
+      dtype = "string"
+    else:
+      dtype = raw_data.dtype.name
+    if self._prepare_extra({data_key: (dim, raw_data.ndim, dtype)}):
       # We added it now. Maybe other extra data keys were added before. The data_key_idx is different now.
-      # Thus, make sure that for all other already existing extra data keys, the offsets are the same.
-      assert seq_idx == 0 and all([
-        num == raw_data.shape[0]
-        for (key, num) in self._extra_num_time_steps.items()
-        if key != data_key])
+      # Thus, seq_lengths might have become invalid. Reinit them.
+      assert seq_idx == 0  # We can only do that in the beginning.
+      for data_key_idx_0, data_key_ in enumerate(sorted(self._prepared_extra)):
+        self._seq_lengths[seq_idx, data_key_idx_0 + 1] = self._extra_num_time_steps[data_key_]
 
     self._extra_num_time_steps[data_key] += raw_data.shape[0]
     self._datasets[data_key].resize(self._extra_num_time_steps[data_key], axis=0)
@@ -980,12 +1069,17 @@ class SimpleHDFWriter:
       seq_len = {0: seq_len}
     assert isinstance(seq_len, dict)
     assert all([isinstance(key, int) and isinstance(value, (list, numpy.ndarray)) for (key, value) in seq_len.items()])
-    ndim_with_seq_len = self.ndim - (1 if self.dim else 0)
+    if seq_len:
+      ndim_with_seq_len = max(seq_len.keys()) + 1
+    else:
+      ndim_with_seq_len = 0
+    sparse = ndim_with_seq_len == self.ndim
+    assert ndim_with_seq_len <= self.ndim
     assert all([0 <= key < ndim_with_seq_len for key in seq_len.keys()])
     assert len(seq_len) == ndim_with_seq_len
     assert all([n_batch == len(value) for (key, value) in seq_len.items()])
     assert all([max(value) == inputs.shape[key + 1] for (key, value) in seq_len.items()])
-    if self.dim:
+    if self.dim and not sparse:
       assert self.dim == inputs.shape[-1]
     if extra:
       assert all([n_batch == value.shape[0] for value in extra.values()])
@@ -1002,7 +1096,7 @@ class SimpleHDFWriter:
       flat_seq_len = int(numpy.prod([seq_len[axis][i] for axis in range(ndim_with_seq_len)]))
       assert flat_seq_len > 0
       flat_shape = [flat_seq_len]
-      if self.dim:
+      if self.dim and not sparse:
         flat_shape.append(self.dim)
       self._seq_lengths[seqlen_offset + i, 0] = flat_seq_len
       data = inputs[i]
@@ -1035,7 +1129,9 @@ class SimpleHDFWriter:
     """
     import os
     import shutil
-    self._file.close()
+    if self._file:
+      self._file.close()
+      self._file = None
     if self.tmp_filename:
       assert not os.path.exists(self.filename)
       shutil.copyfile(self.tmp_filename, self.filename)
@@ -1044,6 +1140,12 @@ class SimpleHDFWriter:
 
 
 class HDFDatasetWriter:
+  """
+  Similar as :class:`SimpleHDFWriter`, but is mostly intended to copy an existing dataset,
+  see :func:`dump_from_dataset`.
+  The resulting HDF file can be read later by :class:`HDFDataset`.
+  """
+
   def __init__(self, filename):
     """
     :param str filename: for the HDF to write
@@ -1053,6 +1155,9 @@ class HDFDatasetWriter:
     self.file = h5py.File(filename, "w")
 
   def close(self):
+    """
+    Close the HDF file.
+    """
     self.file.close()
 
   def dump_from_dataset(self, dataset, epoch=1, start_seq=0, end_seq=float("inf"), use_progress_bar=True):
@@ -1073,6 +1178,8 @@ class HDFDatasetWriter:
     print("Data keys:", data_keys, file=log.v3)
     if "orth" in data_keys:  # special workaround for now, not handled
       data_keys.remove("orth")
+    if "raw" in data_keys:
+      data_keys.remove("raw")
     data_target_keys = [key for key in dataset.get_target_list() if key in data_keys]
     data_input_keys = [key for key in data_keys if key not in data_target_keys]
     assert len(data_input_keys) > 0 and len(data_target_keys) > 0
