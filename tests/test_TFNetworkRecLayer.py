@@ -849,6 +849,9 @@ def test_RecLayer_NativeLstm_Nan():
   import shutil
   shutil.rmtree(tmp_tf_logdir)
 
+  from TFUtil import stop_event_writer_thread
+  stop_event_writer_thread(writer)
+
 
 def find_op_by_type(session, type_name):
   """
@@ -2005,7 +2008,7 @@ def test_rec_layer_multi_choice_search_resolve():
 
 def test_rec_layer_move_out_of_loop():
   from TFNetworkRecLayer import _SubnetworkRecCell
-  from TFUtil import get_global_train_flag_placeholder
+  from TFUtil import get_global_train_flag_placeholder, stop_event_writer_thread
   n_src_dim = 5
   n_tgt_dim = 7
   beam_size = 12
@@ -2131,6 +2134,7 @@ def test_rec_layer_move_out_of_loop():
         writer = tf.summary.FileWriter(".", filename_suffix="test_rec_layer_move_out_of_loop")
         writer.add_graph(session.graph)
         writer.close()
+        stop_event_writer_thread(writer)
         raise
 
   print("Constructing train network.")
@@ -2281,7 +2285,7 @@ def test_rec_layer_move_out_of_loop_ref_att_generic_att():
   because we provide some reference att weights.
   """
   from TFNetworkRecLayer import _SubnetworkRecCell
-  from TFUtil import get_global_train_flag_placeholder
+  from TFUtil import get_global_train_flag_placeholder, stop_event_writer_thread
   n_src_dim = 5
   n_tgt_dim = 7
   beam_size = 12
@@ -2426,6 +2430,7 @@ def test_rec_layer_move_out_of_loop_ref_att_generic_att():
       writer = tf.summary.FileWriter(".", filename_suffix="test_rec_layer_move_out_of_loop")
       writer.add_graph(session.graph)
       writer.close()
+      stop_event_writer_thread(writer)
       raise
 
   print("Constructing train network.")

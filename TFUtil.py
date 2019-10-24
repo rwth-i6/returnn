@@ -5549,20 +5549,41 @@ def nd_indices(indices, batch_axis=0, indices_batch_major=None):
     return idxs_exp
 
 
+def stop_all_event_writer_threads():
+  """
+  Iterates through all running threads, and stops those which are TF event logger threads.
+  See :func:`stop_event_writer_thread`.
+  """
+  import threading
+  # noinspection PyProtectedMember
+  from tensorflow.python.summary.writer.event_file_writer import _EventLoggerThread
+
+  for thread in threading.enumerate():
+    if isinstance(thread, _EventLoggerThread):
+      stop_event_writer_thread(thread)
+
+
 def stop_event_writer_thread(event_writer):
   """
   There is a bug in TensorFlow (at least 1.1.0) (https://github.com/tensorflow/tensorflow/issues/4820)
   that the event writer thread is never stopped.
   This will try to stop it. Only do it if you don't use the event writer anymore.
 
-  :param tensorflow.python.summary.writer.event_file_writer.EventFileWriter event_writer:
+  :param tf.summary.FileWriter|tensorflow.python.summary.writer.event_file_writer.EventFileWriter|tensorflow.python.summary.writer.event_file_writer._EventLoggerThread event_writer:  # nopep8
   """
   # noinspection PyProtectedMember
   from tensorflow.python.summary.writer.event_file_writer import EventFileWriter, _EventLoggerThread
-  assert isinstance(event_writer, EventFileWriter)
-  # noinspection PyProtectedMember
-  if not event_writer._worker:  # maybe fixed already?
-    return
+  if isinstance(event_writer, tf.summary.FileWriter):
+    event_writer = event_writer.event_writer
+  if isinstance(event_writer, _EventLoggerThread):
+    worker = event_writer
+  else:
+    assert isinstance(event_writer, EventFileWriter)
+    # noinspection PyProtectedMember
+    worker = event_writer._worker
+    if not worker:  # maybe fixed already?
+      return
+  del event_writer
 
   # This solution is very ugly and dependent on TF internal code.
   class DummyStopThread:
@@ -5583,9 +5604,7 @@ def stop_event_writer_thread(event_writer):
       raise SystemExit  # stop the thread
 
   # noinspection PyProtectedMember
-  assert isinstance(event_writer._worker, _EventLoggerThread)
-  # noinspection PyProtectedMember
-  worker = event_writer._worker
+  assert isinstance(worker, _EventLoggerThread)
   worker._ev_writer = DummyStopThread
   # noinspection PyProtectedMember
   worker._queue.put(None)
