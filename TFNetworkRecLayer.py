@@ -5480,7 +5480,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
   recurrent = True
 
   def __init__(self, num_heads, total_key_dim,
-               key_shift=None,
+               key_shift=None, share_kv=False,
                forward_weights_init="glorot_uniform", attention_dropout=0.0,
                attention_left_only=False, initial_state=None, restrict_state_to_last_seq=False, **kwargs):
     """
@@ -5489,6 +5489,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
     :param LayerBase|None key_shift: additive term to the key. can be used for relative positional encoding.
       Should be of shape (num_queries,num_keys,key_dim), currently without batch-dimension.
       I.e. that should be shape (1,t,key_dim) inside rec-layer or (T,T,key_dim) outside.
+    :param bool share_kv: if True, use the same parameters for key and value. total_key_dim and n_out must match.
     :param str forward_weights_init: see :func:`TFUtil.get_initializer`
     :param float attention_dropout:
     :param bool attention_left_only: will mask out the future. see Attention is all you need.
@@ -5502,15 +5503,22 @@ class SelfAttentionLayer(_ConcatInputLayer):
     total_value_dim = self.output.dim
     assert total_key_dim % num_heads == 0, "must be divisible"
     assert total_value_dim % num_heads == 0, "must be divisible. total_value_dim = n_out"
+    kv_dim = total_key_dim + total_value_dim  # size of self-attention state per time
+    if share_kv:
+      assert total_key_dim == total_value_dim, "must be the same dimension"
+      kv_dim = total_key_dim
     from TFUtil import get_initializer, dot, get_shape, to_int32_64
     with self.var_creation_scope():
       fwd_weights_initializer = get_initializer(
         forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
       n_in = self.input_data.dim
-      mat_n_out = total_key_dim * 2 + total_value_dim  # Q, K, V
+      qkv_dims = [total_key_dim, total_key_dim, total_value_dim]  # Q, K, V
+      if share_kv:
+        del qkv_dims[0]
+      mat_n_out = sum(qkv_dims)
       mat = self.add_param(tf.get_variable(
         name="QKV", shape=(n_in, mat_n_out), dtype=tf.float32, initializer=fwd_weights_initializer),
-        axes_split_info=[[n_in], [total_key_dim, total_key_dim, total_value_dim]])
+        axes_split_info=[[n_in], qkv_dims])
       if self._rec_previous_layer:
         assert self.input_data.time_dim_axis is None
         assert attention_left_only
@@ -5523,8 +5531,8 @@ class SelfAttentionLayer(_ConcatInputLayer):
           RnnCellLayer.get_rec_initial_state_inner(
             initial_state=initial_state, name=self.name, rec_layer=self,
             state_key="kv_left",
-            initial_shape=(batch_dim, num_heads, 0, (total_key_dim + total_value_dim) // num_heads),
-            shape_invariant=(None, num_heads, None, (total_key_dim + total_value_dim) // num_heads))
+            initial_shape=(batch_dim, num_heads, 0, kv_dim // num_heads),
+            shape_invariant=(None, num_heads, None, kv_dim // num_heads))
           if initial_state is not None else None)
     x = self.input_data.placeholder
     if self.input_data.sparse:
@@ -5547,19 +5555,28 @@ class SelfAttentionLayer(_ConcatInputLayer):
     # (batch,heads,time|1,qkv-dim//heads)
     x = tf.transpose(x, [self.input_data.batch_dim_axis, 2, 1 - self.input_data.batch_dim_axis, 3])
     x.set_shape((None, num_heads, None, mat_n_out // num_heads))
-    q, k, v = tf.split(
-      x, [total_key_dim // num_heads, total_key_dim // num_heads, total_value_dim // num_heads], axis=-1, name="qkv")
+    qkv_head_dims = [total_key_dim // num_heads, total_key_dim // num_heads, total_value_dim // num_heads]
+    if share_kv:
+      del qkv_head_dims[0]
+      q, k = tf.split(x, qkv_head_dims, axis=-1, name="qkv")
+      v = k
+    else:
+      q, k, v = tf.split(x, qkv_head_dims, axis=-1, name="qkv")
     q.set_shape((None, num_heads, None, total_key_dim // num_heads))
     k.set_shape((None, num_heads, None, total_key_dim // num_heads))
     v.set_shape((None, num_heads, None, total_value_dim // num_heads))
     q *= (total_key_dim // num_heads) ** -0.5
     if prev_kv_left is not None:
-      # Memory for kv.
-      kv = tf.concat([k, v], axis=-1)  # (batch,heads,1|time,kv-dim//heads)
-      kv.set_shape((None, num_heads, None, (total_key_dim + total_value_dim) // num_heads))
-      self.rec_vars_outputs["kv_left"] = kv  # usually will be overwritten by the new kv below
-      kv = tf.concat([prev_kv_left, kv], axis=2)
-      kv.set_shape((None, num_heads, None, (total_key_dim + total_value_dim) // num_heads))
+      if share_kv:  # Memory for k.
+        self.rec_vars_outputs["kv_left"] = k  # usually will be overwritten by the new kv below
+        kv = tf.concat([prev_kv_left, k], axis=2)
+        kv.set_shape((None, num_heads, None, total_key_dim // num_heads))
+      else:  # Memory for kv.
+        kv = tf.concat([k, v], axis=-1)  # (batch,heads,1|time,kv-dim//heads)
+        kv.set_shape((None, num_heads, None, (total_key_dim + total_value_dim) // num_heads))
+        self.rec_vars_outputs["kv_left"] = kv  # usually will be overwritten by the new kv below
+        kv = tf.concat([prev_kv_left, kv], axis=2)
+        kv.set_shape((None, num_heads, None, (total_key_dim + total_value_dim) // num_heads))
       if restrict_state_to_last_seq:
         # 'Last' means the current `kv` here, before the concat with `prev_kv_left`.
         # I.e. we wont update `rec_vars_outputs` to the concatenated variant; it will exclude `prev_kv_left`.
@@ -5571,7 +5588,10 @@ class SelfAttentionLayer(_ConcatInputLayer):
           self.rec_vars_outputs["kv_left"] = kv
       else:  # this is usually the case
         self.rec_vars_outputs["kv_left"] = kv
-      k, v = tf.split(kv, [total_key_dim // num_heads, total_value_dim // num_heads], axis=-1)
+      if share_kv:
+        k, v = kv, kv
+      else:
+        k, v = tf.split(kv, [total_key_dim // num_heads, total_value_dim // num_heads], axis=-1)
     # Dot-attention. Resulting last time dimension will be used to perform the softmax over, and will the be reduced.
     energy = tf.matmul(q, k, transpose_b=True)  # (batch,heads,num_queries|1,num_keys), e.g. (batch,heads,time|1,time)
     if key_shift:
