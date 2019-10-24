@@ -46,6 +46,7 @@ env:
   matrix:
     - TEST=TFEngine
     - TEST=TFNativeOp
+    # There are no Python >=3.7 pip packages for older TF versions.
     - TEST=TFNativeOp TF_PACKAGE=tensorflow==1.8.0 PY3_VER=3.6
     - TEST=TFNativeOp TF_PACKAGE=tensorflow==1.4.0 PY3_VER=3.6
     - TEST=TFNetworkLayer
@@ -55,7 +56,8 @@ env:
     - TEST=TFUtil
     - TEST=Config
     - TEST=Dataset
-    - TEST=demos
+    # demos currently depend on Theano, and this is somewhat broken on Python 3.7
+    - TEST=demos PY3_VER=3.6
     - TEST=Device
     - TEST=EngineTask
     - TEST=EngineUtil
