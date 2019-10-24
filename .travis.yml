@@ -56,7 +56,7 @@ env:
     - TEST=TFUtil
     - TEST=Config
     - TEST=Dataset
-    # demos currently depend on Theano, and this is somewhat broken on Python 3.7
+    # Theano using NativeOp is somewhat broken on Python 3.7 in some cases, thus we use Python 3.6.
     - TEST=demos PY3_VER=3.6
     - TEST=Device
     - TEST=EngineTask
@@ -69,8 +69,8 @@ env:
     - TEST=LearningRateControl
     - TEST=Log
     - TEST=multi_target
-    - TEST=MultiBatchBeam
-    - TEST=NativeOp
+    - TEST=MultiBatchBeam PY3_VER=3.6
+    - TEST=NativeOp PY3_VER=3.6
     - TEST=NativeOp_chunk
     - TEST=NativeOp_sparse
     - TEST=NativeOp_subtensor_batched_index
