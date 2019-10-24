@@ -18,7 +18,7 @@ sudo: false  # should use the faster container based image
 # pip2 without --user (if pip is PY3) also does not work because we don't have root access.
 # pip2 with --user (if pip is PY2) does not work, because it the same as pip.
 install:
-  - { python -V 2>&1 | grep -q "Python 3."; } && test -n "$PY3_VER" && source ~/virtualenv/python$PY3_VER/bin/activate
+  - '{ python -V 2>&1 | grep -q "Python 3."; } && test -n "$PY3_VER" && source ~/virtualenv/python$PY3_VER/bin/activate'
   - pip2 install -qq --upgrade pip setuptools wheel six | cat  # Python2<->Python3
   - pip2 install --user -r requirements.txt | cat  # need for Python2<->Python3 communication tests
   - pip2 install --user typing | cat
