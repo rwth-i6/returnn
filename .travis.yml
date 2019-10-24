@@ -8,7 +8,7 @@ python:
 # https://docs.travis-ci.com/user/reference/overview/
 # https://blog.travis-ci.com/2017-04-17-precise-EOL
 # Also needed for TensorFlow for glibc 2.7.
-dist: trusty
+dist: xenial
 sudo: false  # should use the faster container based image
 
 # command to install dependencies
