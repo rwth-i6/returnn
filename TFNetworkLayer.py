@@ -2314,6 +2314,7 @@ class ActivationLayer(CopyLayer):
     else:
       self.output_before_activation = OutputWithActivation(x)
     self.output.placeholder = self.output_before_activation.y
+    self.output.dtype = self.output_before_activation.y.dtype.base_dtype.name
 
 
 class BatchNormLayer(CopyLayer):
