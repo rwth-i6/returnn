@@ -2,13 +2,13 @@
 
 language: python
 python:
-  - "3.6"
+  - "3.7"
   - "2.7"
 
 # https://docs.travis-ci.com/user/reference/overview/
 # https://blog.travis-ci.com/2017-04-17-precise-EOL
 # Also needed for TensorFlow for glibc 2.7.
-dist: trusty
+dist: xenial
 sudo: false  # should use the faster container based image
 
 # command to install dependencies
@@ -18,6 +18,7 @@ sudo: false  # should use the faster container based image
 # pip2 without --user (if pip is PY3) also does not work because we don't have root access.
 # pip2 with --user (if pip is PY2) does not work, because it the same as pip.
 install:
+  - 'if { python -V 2>&1 | grep -q "Python 3."; } && test -n "$PY3_VER"; then source ~/virtualenv/python$PY3_VER/bin/activate; python -V; fi;'
   - pip2 install -qq --upgrade pip setuptools wheel six | cat  # Python2<->Python3
   - pip2 install --user -r requirements.txt | cat  # need for Python2<->Python3 communication tests
   - pip2 install --user typing | cat
@@ -45,8 +46,9 @@ env:
   matrix:
     - TEST=TFEngine
     - TEST=TFNativeOp
-    - TEST=TFNativeOp TF_PACKAGE=tensorflow==1.8.0
-    - TEST=TFNativeOp TF_PACKAGE=tensorflow==1.4.0
+    # There are no Python >=3.7 pip packages for older TF versions.
+    - TEST=TFNativeOp TF_PACKAGE=tensorflow==1.8.0 PY3_VER=3.6
+    - TEST=TFNativeOp TF_PACKAGE=tensorflow==1.4.0 PY3_VER=3.6
     - TEST=TFNetworkLayer
     - TEST=TFNetworkRecLayer
     - TEST=TFNetworkSigProcLayer
@@ -54,7 +56,8 @@ env:
     - TEST=TFUtil
     - TEST=Config
     - TEST=Dataset
-    - TEST=demos
+    # Theano using NativeOp is somewhat broken on Python 3.7 in some cases, thus we use Python 3.6.
+    - TEST=demos PY3_VER=3.6
     - TEST=Device
     - TEST=EngineTask
     - TEST=EngineUtil
@@ -66,8 +69,8 @@ env:
     - TEST=LearningRateControl
     - TEST=Log
     - TEST=multi_target
-    - TEST=MultiBatchBeam
-    - TEST=NativeOp
+    - TEST=MultiBatchBeam PY3_VER=3.6
+    - TEST=NativeOp PY3_VER=3.6
     - TEST=NativeOp_chunk
     - TEST=NativeOp_sparse
     - TEST=NativeOp_subtensor_batched_index

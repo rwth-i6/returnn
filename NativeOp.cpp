@@ -30,6 +30,12 @@
 #define HOST_FUNC
 #endif
 
+#ifdef isinf
+#undef isinf
+#endif
+#ifdef isnan
+#undef isnan
+#endif
 
 
 #define assert_cmp(a, cmp, b) \
@@ -1023,12 +1029,4 @@ void debug_print_shape(OpKernelContext* context, tensorflow::Tensor* tensor, con
     printf("  data: %p\n", Ndarray_DEV_DATA(tensor));
 }
 
-#endif
-
-
-#ifdef isinf
-#undef isinf
-#endif
-#ifdef isnan
-#undef isnan
 #endif

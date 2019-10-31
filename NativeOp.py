@@ -3504,7 +3504,7 @@ common_fast_bw_kernels = {
       std::ofstream output(path.c_str(), std::ios::trunc | std::ios::out);
       for (size_t i1 = 0ul; i1 < n_d1; i1++) {
         T val = buffer[i1];
-        if (!std::numeric_limits<T>::has_infinity or !std::isinf(val)) {
+        if (!std::numeric_limits<T>::has_infinity or !isinf(val)) {
           output << i1 << ' ' << val << '\\n';
         }
       }
@@ -3519,7 +3519,7 @@ common_fast_bw_kernels = {
       for (size_t i1 = 0ul; i1 < n_d1; i1++) {
         for (size_t i2 = 0ul; i2 < n_d2; i2++) {
           T val = buffer[i1 * n_d2 + i2];
-          if (!std::numeric_limits<T>::has_infinity or !std::isinf(val)) {
+          if (!std::numeric_limits<T>::has_infinity or !isinf(val)) {
             output << i1 << ' ' << i2 << ' ' << val << '\\n';
           }
         }
@@ -3536,7 +3536,7 @@ common_fast_bw_kernels = {
         for (size_t i2 = 0ul; i2 < n_d2; i2++) {
           for (size_t i3 = 0ul; i3 < n_d3; i3++) {
             T val = buffer[i1 * n_d2 * n_d3 + i2 * n_d3 + i3];
-            if (!std::numeric_limits<T>::has_infinity or !std::isinf(val)) {
+            if (!std::numeric_limits<T>::has_infinity or !isinf(val)) {
               output << i1 << ' ' << i2 << ' ' << i3 << ' ' << val << '\\n';
             }
           }
@@ -3691,7 +3691,7 @@ class FastBaumWelchOp(NativeOpGenBase):
             for (unsigned s = start_states[seq]; s <= end_states[seq]; s++) {
               const float val = state_buffer[t * n_states + s];
               float diff = val - sum;
-              if (!std::isnan(diff)) {
+              if (!isnan(diff)) {
                 sum = -log1p(exp(-abs(diff))) + fminf(sum, val);
               }
             }
