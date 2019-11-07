@@ -4129,7 +4129,6 @@ class ChoiceLayer(BaseChoiceLayer):
         self.search_choices.set_src_beams(tf.zeros((net_batch_dim, 1), dtype=tf.int32))
         self.search_choices.set_beam_scores(self.search_choices.src_layer.search_choices.beam_scores)
       else:
-        assert len(self.sources) <= 2, "Combining more than two sources not implemented yet."
         net_batch_dim = self.network.get_data_batch_dim()
         if len(self.sources) > 1:
           # If no separate beam sizes for the sources are given, use the final beam size also for pruning
@@ -4436,11 +4435,25 @@ class ChoiceLayer(BaseChoiceLayer):
 
         combined_scores_dim *= beam_size
 
-      # all possible combinations of scores from source 0 and 1 via broadcasting
-      assert len(pruned_scores) == 2, "not yet implemented otherwise..."
-      scores_0 = tf.expand_dims(pruned_scores[0], -1)  # (batch, beam_sizes[0], 1)
-      scores_1 = tf.expand_dims(pruned_scores[1], -2)  # (batch, 1, beam_sizes[1])
-      combined_pruned_scores = scores_0 + scores_1  # (batch, beam_sizes[0], beam_sizes[1])
+      # We want to compute scores for all possible combination of sources. This is done by putting each source
+      # on a separate axis. This leads to broadcasting of all source-axes over all others when adding up the sources,
+      # thus giving all possible sums of scores. We reshape back afterwards.
+      num_sources = len(sources)
+      combined_pruned_scores = None
+
+      for source_index, pruned_scores_this_source in enumerate(pruned_scores):
+        expanded_pruned_scores = pruned_scores_this_source
+
+        # Put n-th source on the axis n+1 (first axis is the batch dim).
+        for axis_index in range(num_sources):
+          if axis_index != source_index:
+            expanded_pruned_scores = tf.expand_dims(expanded_pruned_scores, axis_index + 1)  # +1 because of batch dim
+
+        # Accumulatively add up to previous scores.
+        if combined_pruned_scores is None:
+          combined_pruned_scores = expanded_pruned_scores
+        else:
+          combined_pruned_scores += expanded_pruned_scores
 
       # We flatten over the beam dims of the sources, but not yet over the batch dim. This matches
       # the shape of the input scores in case of a single source.
@@ -4462,26 +4475,32 @@ class ChoiceLayer(BaseChoiceLayer):
     :return: final labels for all sources
     :rtype: list[tf.Tensor]
     """
-    assert len(pruned_labels) == 2, "not yet implemented otherwise..."
 
     with tf.name_scope("get_combined_labels"):
-      # For each outgoing label we first have to get the labels that survived source pruning from the beam index
-      # the outgoing label was generated from. So choose 'pruned_labels_' according to 'src_beams'.
+      # For each target we first have to get the labels that survived source pruning from the beam index
+      # the outgoing label was generated from. So choose 'pruned_labels' according to 'src_beams'.
       pruned_labels_src_beam_selected = []
       for index, pruned_labels_ in enumerate(pruned_labels):
         pruned_labels_src_beam_selected.append(select_src_beams(pruned_labels_, src_beams))
 
       # We can recover the ids for the unflattened shape by using integer division and modulo operations.
       # (similar to numpy.unravel_index())
-      # TODO: generalize to more than two sources
-      ids_0 = combined_ids // beam_sizes[1]
-      ids_1 = combined_ids % beam_sizes[1]
+      ids = []
+      # reversed because innermost dim, which is unflattened first, corresponds to last target
+      for beam_size in reversed(beam_sizes):
+        ids_ = combined_ids % beam_size
+        combined_ids //= beam_size
+        ids.append(ids_)
 
-      # Now get the final target labels by indexing the labels.
-      labels_0 = tf.squeeze(tf.batch_gather(pruned_labels_src_beam_selected[0], tf.expand_dims(ids_0, axis=-1)), axis=-1)
-      labels_1 = tf.squeeze(tf.batch_gather(pruned_labels_src_beam_selected[1], tf.expand_dims(ids_1, axis=-1)), axis=-1)
+      ids = reversed(ids)  # because we created it backwards
 
-      return [labels_0, labels_1]
+      # Now get the final target labels by indexing the incoming labels that survived pruning.
+      labels = []
+      for pruned_labels_src_beam_selected_, ids_ in zip(pruned_labels_src_beam_selected, ids):
+        labels_ = tf.squeeze(tf.batch_gather(pruned_labels_src_beam_selected_, tf.expand_dims(ids_, axis=-1)), axis=-1)
+        labels.append(labels_)
+
+      return labels
 
   def _get_cheating_targets_and_src_beam_idxs(self, scores):
     """
