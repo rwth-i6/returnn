@@ -121,8 +121,9 @@ struct OpenFstInstance : public ResourceBase {
   // This assumes a deterministic FST, i.e. it either has a single matching arc, or none.
   bool transition(int curState, int inputLabel, int* nextState, int* outputLabel, float* weight) {
     fst::Matcher<Fst> matcher(fst_, fst::MATCH_INPUT);
-    matcher.SetState(curState);
-    if(matcher.Find(inputLabel)) {
+    if(curState >= 0)
+      matcher.SetState(curState);
+    if(curState >= 0 && matcher.Find(inputLabel)) {
       const Arc& arc = matcher.Value();
       *nextState = arc.nextstate;
       *outputLabel = arc.olabel;
