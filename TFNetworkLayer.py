@@ -32,7 +32,7 @@ class LayerBase(object):
               " docstring, document the args! "
               super(YourOwnLayer, self).__init__(**kwargs)
               # Now we need to set self.output, which must be of type :class:`Data`.
-              # It is set at this point to whatever we got from `selfget_out_data_from_opts()`,
+              # It is set at this point to whatever we got from `self.get_out_data_from_opts()`,
               # so it is enough if we set self.output.placeholder and self.output.size_placeholder,
               # but we could also reset self.output.
               self.output.placeholder = self.input_data.placeholder + 42  # whatever you want to do
@@ -9411,3 +9411,344 @@ def get_layer_class_name_list():
   if not _LayerClassDictInitialized:
     _init_layer_class_dict()
   return sorted(_LayerClassDict.keys())
+
+
+class GatherPositionsLayer(LayerBase):
+  """
+  Gathers vectors at the specified positions on time axis.
+  """
+  layer_class = "gather_positions"
+
+  def __init__(self, **kwargs):
+    """
+    Gathers input data at given positions.
+    Output has shape (B,max(num_positions),None) and is zero-padded for each sequence.
+    Inputs: [LayerBase,LayerBase] [input_data,positions]: with
+    input_data: shape=(B,T,None)
+    positions: shape=(B,max(num_positions),) positions to gather for each sequence
+    from input_data (absolute positions within batch)
+    """
+    super(GatherPositionsLayer, self).__init__(**kwargs)
+    input_data = self.sources[0].output
+    positions = self.sources[1].output
+    batch_size = input_data.get_batch_dim()
+    seq_length = tf.shape(input_data.placeholder)[input_data.time_dim_axis]
+    feature_lengths = [tf.shape(input_data.placeholder)[ax] for ax in input_data.get_feature_batch_axes()]
+    data_flat = tf.reshape(input_data.placeholder, [batch_size * seq_length] + feature_lengths)
+
+    positions_w_offset = positions.copy_as_batch_major()
+    positions_w_offset.placeholder = tf.reshape(positions_w_offset.placeholder, [batch_size, -1])
+    offsets = tf.reshape(tf.range(0, batch_size, dtype=tf.int32), [batch_size, 1]) \
+              * seq_length * tf.ones_like(positions_w_offset.placeholder)
+    positions_w_offset.placeholder += offsets  # shift positions so they match the flattened representation
+    num_positions = positions_w_offset.get_sequence_lengths()
+    positions_flat = positions_w_offset.get_placeholder_flattened()
+    positions_flat = tf.reshape(positions_flat, shape=[-1, 1])
+    out_flat = tf.gather_nd(data_flat, positions_flat)  # gather the positions
+
+    # get data back to full shape
+    out_arr = tf.TensorArray(dtype=data_flat.dtype, size=0, dynamic_size=True, infer_shape=False)
+    i = tf.constant(0)
+    slice_start = tf.constant(0)
+
+    def while_condition(i, out_arr, slice_start):
+      return tf.less(i, batch_size)
+
+    def body(i, out_arr, slice_start):
+      # select what was gathered for each sequence:
+      out_arr = out_arr.write(i, out_flat[slice_start:slice_start + num_positions[i]])
+      return [tf.add(i, 1), out_arr, tf.add(slice_start, num_positions[i])]
+
+    _, out_arr, _ = tf.while_loop(while_condition, body, [i, out_arr, slice_start], back_prop=True)
+    self.output.placeholder = TFUtil.merge_tensor_array_with_padding(out_arr, num_positions, feature_lengths)
+    self.output.size_placeholder = {
+      0: num_positions
+    }
+
+  @classmethod
+  def get_out_data_from_opts(cls, sources, name, *args, **kwargs):
+    data = Data(
+      name=name,
+      shape=sources[0].output.shape,
+      dim=sources[0].output.dim,
+      sparse=False,
+      batch_dim_axis=sources[0].output.batch_dim_axis,
+      time_dim_axis=sources[0].output.time_dim_axis,
+      feature_dim_axis=sources[0].output.feature_dim_axis_or_unspecified,
+      dtype=sources[0].output.dtype)
+    return data
+
+
+class ProbabilisticMaskLayer(LayerBase):
+  """
+  This layer performs MLM (BERT-style) masking on the fly for a given source sequence.
+  """
+  layer_class = "probabilistic_mask"
+
+  def __init__(self,
+               vocab,
+               vocab_probs=None,
+               mask_symbol="</M>",
+               mask_prob=0.15,
+               mask_factor=1.0,
+               mask_m_prob=0.8,
+               mask_r_prob=0.1,
+               random_seed=42,
+               fixed_seq_mask=None,
+               *args,
+               **kwargs):
+    """
+
+    :param str vocab: path to vocabulary dict in form {"word": idx}
+    :param str|None vocab_probs: path to dictionary containing probabilities to mask
+    each individual token in a sequence in form {"word": prob}
+    :param str seq_end_symbol: token to end each sequence
+    :param str mask_symbol: token to mask with (will be looked up in vocab)
+    :param float mask_prob: float in range (0,1) to specify probability for each token in the sequence to be masked
+    :param float|tuple[float] mask_factor: actual mask_prob for the sequence is mask_factor * mask_prob
+    if mask_factor is a tuple, mask_factor=uniform_random(mask_factor[0],mask_factor[1]) for each seq
+    :param float mask_m_prob: probability that a selected position is replaced by mask token
+    :param float mask_r_prob: probability that a selected position is replaced by random token from vocab
+    :param int random_seed: seed for random operations
+    :param LayerBase|None fixed_seq_mask: mask in form of a tensor of seqs length
+    containing 0/1/2/-1 (mask/random/keep/no-mask) for each position
+    :param args:
+    :param kwargs:
+
+    Inputs: [LayerBase|None] [source_data]: source sequence to mask
+    Outputs:
+    masked_sequence: shape=(B,T,None)  -> sequence with masking applied
+    labels: shape=(B,mask_prob*T,None) -> true labels for each masked position (zero-padded)
+    positions: shape=(B,mask_prob*T,) -> positions where each sequence was masked
+    num_positions: shape=(B,) -> number of positions that were masked in each sequence
+    """
+    super(ProbabilisticMaskLayer, self).__init__(*args, **kwargs)
+    self.random_seed = random_seed
+    self.mask_prob = mask_prob
+    self.mask_m_prob = mask_m_prob
+    self.mask_r_prob = mask_r_prob
+    self.mask_k_prob = 1 - (mask_m_prob + mask_r_prob)
+
+    source_data = self.sources[0].output
+
+    self.vocab = self._read_dict(vocab)
+    self.mask_symbol = self.vocab[mask_symbol]
+    self.vocab_length = max(self.vocab.values()) + 1
+    self.vocab_probs = self._get_vocab_probs(vocab_probs)
+
+    seqs = source_data.get_placeholder_as_batch_major()
+    seq_lengths = source_data.get_sequence_lengths()
+    seq_mask = fixed_seq_mask.output.get_placeholder_as_batch_major() if fixed_seq_mask else None
+    if isinstance(mask_factor, tuple):
+      # if this a tuple -> factor is selected uniformly at random from range [mask_factor[0],mask_factor[1])
+      mask_prob = tf.constant(mask_prob) * tf.random_uniform([], mask_factor[0], mask_factor[1], seed=self.random_seed)
+    else:
+      #   if this is a scalar -> multiply with self.mask_prob
+      mask_prob = tf.constant(mask_prob) * tf.constant(mask_factor)
+
+    masked_sequence, labels, positions, num_positions = self._mask_seq(seqs, mask_prob, seq_lengths, seq_mask)
+    self.output_dict = {
+      "masked_sequence": masked_sequence,
+      "labels": labels,
+      "positions": positions,
+      "num_positions": num_positions
+    }
+    self.output.placeholder = masked_sequence
+    self.output.size_placeholder = source_data.size_placeholder.copy()
+    self.output.size_placeholder[0] = seq_lengths
+
+  def _mask_seq(self, seqs, mask_prob, seq_lens, fixed_mask):
+    """
+    Creates the masked version of a given batch of sequences,
+    the corresponding positions and labels for the masked LM objective.
+    :param tf.Tensor seqs: shape=(B,T,None) batch of sequences to mask
+    :param tf.constant[float] mask_prob: probability to mask a position in range [0,1)
+    :param tf.Tensor[int32] seq_lens: shape=(B,) length information for each sequence
+    :param tf.Tensor[int32]|None fixed_mask: shape=(B,T) tensor containing 0/1/2/-1 for mask/random/keep/no-mask
+    :return:
+      tf.Tensor masked_inp_tensor: shape=(B,T,None), input sequence that's masked at some positions
+      tf.TensorArray labels_tensor: B * shape=(T[i]*mask_prob,None), correct ('unmasked') labels for those positions
+      tf.TensorArray positions_tensor: B * shape=(num_positions[i],), positions where input was masked
+        (i.e. replaced by mask token/ random token/ kept the same)
+      tf.Tensor num_positions_tensor: shape=(B,), number of masked positions for each sequence
+    :rtype: (tf.Tensor,tf.TensorArray,tf.TensorArray[int32],tf.Tensor[int32])
+    """
+    masked_seqs_array = tf.TensorArray(dtype=seqs.dtype, size=tf.shape(seqs)[0], dynamic_size=False, infer_shape=True)
+    labels_array = tf.TensorArray(dtype=seqs.dtype, size=tf.shape(seqs)[0], dynamic_size=False, infer_shape=False)
+    positions_array = tf.TensorArray(dtype=tf.int32, size=tf.shape(seqs)[0], dynamic_size=False, infer_shape=False)
+    num_positions_array = tf.TensorArray(dtype=tf.int32, size=tf.shape(seqs)[0], dynamic_size=False, infer_shape=True)
+
+    i = tf.constant(0)
+
+    def while_condition(i, masked_seqs_array, labels_array, positions_array, num_positions_array):
+      return tf.less(i, tf.shape(seqs)[0])  # iterate over batches
+
+    def body(i, masked_seqs_array, labels_array, positions_array, num_positions_array):
+      """
+      we have to do this for every sequence individually,
+      since we have to consider the sequence length
+      and we don't want to predict/mask any padding positions
+      however, TF might be able to parallelize this across the batch
+      """
+      if fixed_mask is not None:
+        fixed_mask_i = fixed_mask[i][:seq_lens[i]]
+        selected_indices = tf.cast(tf.where(tf.not_equal(fixed_mask_i, tf.constant(-1)))[:, 0], dtype=tf.int32)
+        num_to_predict = tf.shape(selected_indices)[0]
+        choice = tf.gather(fixed_mask_i, selected_indices)
+      else:
+        num_to_predict = tf.maximum(tf.constant(1),
+                                    tf.cast(tf.round(tf.to_float(seq_lens[i]) * mask_prob), dtype=tf.int32))
+        if self.vocab_probs is None:
+          # select num_to_predict positions uniformly at random:
+          selected_indices = tf.range(seq_lens[i], dtype=tf.int32)
+          selected_indices = tf.random_shuffle(selected_indices, seed=self.random_seed)  # randomize positions to select
+          selected_indices = selected_indices[:num_to_predict]  # select mask_prob * seq_len many positions for a loss
+        else:
+          # select num_to_predict positions according to probability assigned to the word:
+          probs = tf.gather(self.vocab_probs, tf.reshape(tf.cast(seqs[i][:seq_lens[i]], dtype=tf.int32), [seq_lens[i]]))
+          logits = tf.log(probs / tf.reduce_sum(probs))
+          selected_indices = TFUtil.sample_without_replacement(logits, num_to_predict, seed=self.random_seed)
+
+        # now calculate what to replace the selected positions with:
+        logits = tf.log(tf.constant([[self.mask_m_prob, self.mask_r_prob, self.mask_k_prob]]))
+        # generate random choices for: 0 = mask, 1 = rnd replace, 2 = keep
+        choice = tf.multinomial(logits, num_to_predict, output_dtype=tf.int32, seed=self.random_seed)
+
+      labels_i = tf.gather(seqs[i], selected_indices)  # add a label only to selected positions
+
+      shape = [num_to_predict] + list(seqs.shape[2:])
+      choice = tf.reshape(choice, shape)
+
+      # every index with 0 in choice gets replaced by masked_symbol
+      mask_symbol_vector = tf.constant([self.mask_symbol], dtype=seqs.dtype) + tf.zeros(shape, dtype=seqs.dtype)
+      mask_values = tf.where(tf.equal(choice, tf.constant(0)), mask_symbol_vector, labels_i)
+
+      # every index with 1 in choice gets replaced by random symbol from vocabulary
+      rand_vector = tf.random_uniform(shape, minval=0, maxval=self.vocab_length,
+                                      dtype=seqs.dtype, seed=self.random_seed)  # replace with random vocab word
+      mask_values = tf.where(tf.equal(choice, tf.constant(1)), rand_vector, mask_values)
+      # every index with 2 in choice (all remaining) is kept unchanged
+
+      update = tf.scatter_nd(tf.reshape(selected_indices, [-1, 1]), mask_values, tf.shape(seqs[i]))
+      bool_mask = tf.cast(
+        tf.scatter_nd(tf.reshape(selected_indices, [-1, 1]), tf.ones_like(mask_values, dtype=tf.uint8),
+                      tf.shape(seqs[i])),
+        dtype=tf.bool)
+      masked_seqs_i = tf.where(bool_mask, update, seqs[i])  # copy mask_values to selected_indices in original sequence
+
+      labels_array = labels_array.write(i, labels_i)
+      positions_array = positions_array.write(i, selected_indices)
+      num_positions_array = num_positions_array.write(i, num_to_predict)
+      masked_seqs_array = masked_seqs_array.write(i, masked_seqs_i)
+
+      return [tf.add(i, 1), masked_seqs_array, labels_array, positions_array, num_positions_array]
+
+    _, masked_seqs_array, labels_array, positions_array, num_positions_array = tf.while_loop(while_condition, body,
+                                                                                             [i, masked_seqs_array,
+                                                                                              labels_array,
+                                                                                              positions_array,
+                                                                                              num_positions_array],
+                                                                                             back_prop=False)
+
+    # merge them back together
+    num_positions = num_positions_array.stack()
+    masked_seqs = masked_seqs_array.stack()
+    labels = TFUtil.merge_tensor_array_with_padding(labels_array, num_positions, list(seqs.shape[2:]))
+    positions = TFUtil.merge_tensor_array_with_padding(positions_array, num_positions, [])
+    positions = tf.expand_dims(positions, -1)  # to fit in non-sparse shape
+
+    return (masked_seqs,  # masked tokens presented as input
+            labels,  # correct ('unmasked') labels for those positions
+            positions,  # positions where input was masked (or random replacement/ kept the same)
+            num_positions  # number of masked positions for each sequence
+            )
+
+  @classmethod
+  def get_out_data_from_opts(cls, sources, name, output_name="", *args, **kwargs):
+    data = Data(
+      name=name,
+      shape=(None, 1) if output_name == "positions" else sources[0].output.shape,
+      dim=1 if output_name == "positions" else sources[0].output.dim,
+      sparse=False if output_name == "positions" else sources[0].output.sparse,
+      batch_dim_axis=0,
+      time_dim_axis=1,
+      feature_dim_axis=-1 if output_name == "positions" else sources[0].output.feature_dim_axis_or_unspecified,
+      dtype="int32" if output_name == "positions" else sources[0].output.dtype)
+    return data
+
+  def get_sub_layer(self, layer_name):
+    """
+    Used to set multiple outputs: labels, positions
+    For all outputs we create a sub-layer that can be referred to
+    by "self.name + '/' + output" (e.g. mask_layer/positions).
+    These sublayers can then be used as input to other layers,
+    e.g. "output_0": {"class": "copy", "from": ["mask_layer/positions"].
+
+    :param str layer_name: name of the sub_layer (e.g. 'positions')
+    :return: internal layer that sets as output the output corresponding to layer_name
+    :rtype: InternalLayer
+    """
+    assert layer_name in ("positions", "labels")
+    full_layer_name = self.name + '/' + layer_name
+
+    output = self.get_out_data_from_opts(output_name=layer_name, sources=self.sources, name=full_layer_name,
+                                         mask_prob=self.mask_prob)
+
+    from TFNetworkLayer import InternalLayer
+    sub_layer = InternalLayer(name=full_layer_name, output=output, network=self.network, sources=[self])
+    sub_layer.output.placeholder = self.output_dict[layer_name]
+    if layer_name == "labels":
+      sub_layer.output.size_placeholder = self.sources[0].output.size_placeholder.copy()
+    else:
+      sub_layer.output.size_placeholder = {}
+    # the length along the time axis in this case is given by num_positions
+    # (i.e. how many positions were masked for each sequence)
+    sub_layer.output.size_placeholder[0] = self.output_dict["num_positions"]
+    return sub_layer
+
+  @classmethod
+  def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
+    """
+    :param str layer_name: name of the sub_layer (e.g. 'positions'), see self.get_sub_layer()
+    :param dict[str] parent_layer_kwargs: kwargs for the parent layer, here we only need 'network'
+    :return: Data template, network and the class type of the sub-layer
+    :rtype: (Data, TFNetwork, type)|None
+    """
+    sub_layer_out_data = cls.get_out_data_from_opts(output_name=layer_name, **parent_layer_kwargs)
+    from TFNetworkLayer import InternalLayer
+    return sub_layer_out_data, parent_layer_kwargs["network"], InternalLayer
+
+  def _read_dict(self, fname):
+    """
+    Reads in a dictionary
+    :param str fname: path to the file to load from (must be a pickle or json file!)
+    :return: loaded dictionary
+    :rtype: dict
+    """
+    with open(fname, 'rb') as f:
+      if fname.endswith('.pkl'):
+        import pickle as pkl
+        data = pkl.load(f)
+      else:
+        import json
+        data = json.load(f)
+    return data
+
+  def _get_vocab_probs(self, fname):
+    """
+    Function to load the probabilities from the given dictionary file
+    and store them in a tensor with an entry for each vocabulary index
+    :param str fname: path to the file to load from (must be a pickle or json file!)
+    :return: tensor of shape (V,) with a probability value for each vocabulary entry
+    :rtype: tf.Tensor[tf.float32]|None
+    """
+    if not fname:
+      return None
+    vocab_probs = self._read_dict(fname)
+    import numpy as np
+    vocab_probs_tensor = np.zeros(self.vocab_length, dtype=np.float32)
+    for word, prob in vocab_probs.items():
+      vocab_probs_tensor[self.vocab[word]] = float(prob)
+    vocab_probs_tensor = tf.convert_to_tensor(vocab_probs_tensor)
+    return vocab_probs_tensor
+

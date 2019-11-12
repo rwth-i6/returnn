@@ -9322,3 +9322,48 @@ class FetchHelper:
     self.most_recent_value = value
     self.callback_count += 1
     return 0
+
+
+def merge_tensor_array_with_padding(arr, row_lengths, feature_dims):
+  """
+  Merges a tensor array of multiple tensors into a single tensor, while padding them to given length
+  :param tf.TensorArray arr: array to merge with tensor i of form (T[i],None)
+  :param tf.Tensor[int32] row_lengths: shape=(B,) length of each row
+  :param list[tf.Dimension] feature_dims: shape of the last dimension
+  :return: tensor that contains all elements of arr stacked along the first dimension and zero-padded to pad_length
+  shape=(B,pad_to_length,None)
+  :rtype: tf.Tensor
+  """
+  # add padding to labels and offset to positions:
+  pad_to_length = tf.reduce_max(row_lengths)
+  arr_pad = tf.TensorArray(dtype=arr.dtype, size=arr.size(), dynamic_size=False, infer_shape=True)
+  i = tf.constant(0)
+
+  def while_condition(i, arr_pad):
+    return tf.less(i, arr.size())  # iterate over batches
+
+  def body(i, arr_pad):
+    # copy arr[i] into first positions of a row filled with 0:
+    non_pad_pos = tf.expand_dims(tf.range(row_lengths[i]), -1)
+    arr_i_padded = tf.scatter_nd(non_pad_pos, arr.read(i), [pad_to_length] + feature_dims)
+    arr_pad = arr_pad.write(i, arr_i_padded)
+    return [tf.add(i, 1), arr_pad]
+
+  _, arr_pad = tf.while_loop(while_condition, body, [i, arr_pad], back_prop=True)
+  return arr_pad.stack()
+
+
+def sample_without_replacement(logits, k, seed=None):
+  """
+  This is equivalent to sampling `k` times without replacement from a categorial distribution with logits `logits`.
+  Discussion on Github: https://github.com/tensorflow/tensorflow/issues/9260#issuecomment-437875125
+  Details here: https://timvieira.github.io/blog/post/2014/08/01/gumbel-max-trick-and-weighted-reservoir-sampling/
+  :param tf.Tensor[tf.float32] logits: log probability for each possible sample
+  :param tf.Tensor[tf.int32] k: number of samples to draw
+  :param int|None seed: random seed
+  :return: k indices sampled from the distribution
+  :rtype: tf.Tensor[tf.int32]
+  """
+  z = -tf.log(-tf.log(tf.random_uniform(tf.shape(logits), 0, 1, seed=seed)))  # Gumbel noise
+  _, indices = tf.nn.top_k(logits + z, k)
+  return indices
