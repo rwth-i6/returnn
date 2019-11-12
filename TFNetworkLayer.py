@@ -4735,7 +4735,7 @@ class ReduceLayer(_ConcatInputLayer):
     x_ = x.placeholder
     # Check if we should ignore some frames, e.g. via masking.
     if use_time_mask:
-      if f in (tf.reduce_sum, tf.reduce_min, tf.reduce_max):
+      if f in (tf.reduce_sum, tf.reduce_min, tf.reduce_max) or (f == tf.reduce_mean and axes == [x.time_dim_axis]):
         # For sum, the fastest and simplest way is masking.
         for axis in axes:
           if axis == x.batch_dim_axis:
@@ -4750,12 +4750,19 @@ class ReduceLayer(_ConcatInputLayer):
           mask = tf.logical_and(mask, tf.ones_like(x_, dtype=mask.dtype))
 
           replacement_value = {
+            tf.reduce_mean: tf.zeros_like(x.placeholder),
             tf.reduce_sum: tf.zeros_like(x.placeholder),
             tf.reduce_min: tf.zeros_like(x.placeholder) + x.placeholder.dtype.max,
             tf.reduce_max: tf.zeros_like(x.placeholder) + x.placeholder.dtype.min
           }
 
           x_ = tf.where(mask, x_, replacement_value[f], "x_masked_axis_%i" % axis)
+          if f == tf.reduce_mean:
+            seq_len_bc = tf.reshape(
+              x.get_sequence_lengths(),
+              [1 if (i != x.batch_dim_axis) else -1 for i in range(x.batch_ndim)])  # (1,..B..,1)
+            x_ = x_ / tf.cast(seq_len_bc, tf.float32)
+            f = tf.reduce_sum
       elif f == tf.reduce_mean:
         # Flattening.
         if x.time_dim_axis in axes:
