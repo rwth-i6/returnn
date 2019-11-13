@@ -4055,6 +4055,15 @@ class ChoiceLayer(BaseChoiceLayer):
   Assume that each batch is already a choice via search.
   In search with a beam size of N, we would output
   sparse (batch=N,) and scores for each.
+
+  In case of multiple sources, this layer computes the top-k combinations of choices. The score of such a combination
+  is determined by adding up the (log-space) scores of the choices for the individual sources. In this case, the
+  'target' parameter of the layer has to be set to a list of targets corresponding to the sources respectively. Because
+  computing all possible combinations of source scores is costly, the sources are pruned beforehand using the beam
+  sizes set by the 'source_beam_sizes' parameter. The choices made for the different sources can be accessed via the
+  sublayers '<choice layer name>/out_0', '<choice layer name>/out_1' and so on.
+  Note, that the way scores are combined assumes the sources to be independent. If you want to model a dependency,
+  use separate ChoiceLayers and let the input of one depend on the output of the other.
   """
   layer_class = "choice"
 
