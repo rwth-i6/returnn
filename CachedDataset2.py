@@ -265,7 +265,7 @@ class CachedDataset2(Dataset):
     :rtype: str
     """
     self._load_something()
-    return self.added_data[0].get_data(key).dtype
+    return str(self.added_data[0].get_data(key).dtype)
 
 
 class SingleStreamPipeDataset(CachedDataset2):
