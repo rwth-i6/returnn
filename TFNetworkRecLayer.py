@@ -5482,7 +5482,8 @@ class SelfAttentionLayer(_ConcatInputLayer):
   def __init__(self, num_heads, total_key_dim,
                key_shift=None,
                forward_weights_init="glorot_uniform", attention_dropout=0.0,
-               attention_left_only=False, initial_state=None, restrict_state_to_last_seq=False, **kwargs):
+               attention_left_only=False, initial_state=None, restrict_state_to_last_seq=False,
+               state_var_lengths=None, **kwargs):
     """
     :param int num_heads:
     :param int total_key_dim: i.e. key_dim == total_key_dim // num_heads
@@ -5494,6 +5495,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
     :param bool attention_left_only: will mask out the future. see Attention is all you need.
     :param str|float|int|None initial_state: see RnnCellLayer.get_rec_initial_state_inner().
     :param bool restrict_state_to_last_seq: see code comment below
+    :param None|tf.Tensor state_var_lengths: if passed, a Tensor containing the number of keys in the state_var for each batch-entry, used for decoding in RASR
     """
     super(SelfAttentionLayer, self).__init__(**kwargs)
     self._restrict_state_to_last_seq = restrict_state_to_last_seq
@@ -5553,6 +5555,8 @@ class SelfAttentionLayer(_ConcatInputLayer):
     k.set_shape((None, num_heads, None, total_key_dim // num_heads))
     v.set_shape((None, num_heads, None, total_value_dim // num_heads))
     q *= (total_key_dim // num_heads) ** -0.5
+    orig_k = k
+    orig_q = q
     if prev_kv_left is not None:
       # Memory for kv.
       kv = tf.concat([k, v], axis=-1)  # (batch,heads,1|time,kv-dim//heads)
@@ -5573,7 +5577,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
         self.rec_vars_outputs["kv_left"] = kv
       k, v = tf.split(kv, [total_key_dim // num_heads, total_value_dim // num_heads], axis=-1)
     # Dot-attention. Resulting last time dimension will be used to perform the softmax over, and will the be reduced.
-    energy = tf.matmul(q, k, transpose_b=True)  # (batch,heads,num_queries|1,num_keys), e.g. (batch,heads,time|1,time)
+    energy = tf.matmul(q, k, transpose_b=True, name="energy")  # (batch,heads,num_queries|1,num_keys), e.g. (batch,heads,time|1,time)
     if key_shift:
       # We could add it to `k`, but instead, to avoid unbroadcasting, we do it as an additional matmul.
       # key_shift expected to be of shape (num_queries|1,num_keys,key_dim).
@@ -5597,14 +5601,24 @@ class SelfAttentionLayer(_ConcatInputLayer):
         # We also ignore the input data sequence length, because we expect that frames outside the seq length
         # are anyway ignored.
         from TFUtil import matrix_triangular
-        num_queries = tf.shape(energy)[2]
-        num_keys = tf.shape(energy)[-1]
+        num_queries = tf.shape(orig_q)[2]
+        num_keys = tf.shape(orig_k)[2]
         # (1,1,num_queries,num_keys)
         energy_mask = matrix_triangular((1, 1, num_queries, num_keys), dtype=tf.bool, lower=True)
+        if prev_kv_left is not None:
+          energy_mask_left = tf.ones((1, 1, num_queries, tf.shape(prev_kv_left)[2]), dtype=tf.bool)
+          energy_mask = tf.concat([energy_mask_left, energy_mask], axis=-1)
       else:
         energy_mask = tf.sequence_mask(
           self.input_data.get_sequence_lengths(), maxlen=tf.shape(energy)[-1])  # (batch,time)
         energy_mask = tf.reshape(energy_mask, [tf.shape(energy)[0], 1, 1, tf.shape(energy)[-1]])  # (batch,1,1,time)
+      if state_var_lengths is not None and prev_kv_left is not None:
+        state_var_lengths = state_var_lengths()
+        state_var_max_length = tf.shape(prev_kv_left)[-2]
+        total_max_length = tf.shape(energy)[-1]
+        inverted_prefix_mask = tf.sequence_mask(state_var_max_length - state_var_lengths, maxlen=total_max_length, name="inverted_prefix_mask")
+        inverted_prefix_mask = tf.reshape(inverted_prefix_mask, [tf.shape(energy)[0], 1, 1, tf.shape(energy)[-1]])  # (batch,1,1,time)
+        energy_mask = tf.math.logical_xor(energy_mask, inverted_prefix_mask)
       # Currently tf.where does not support broadcasting...
       energy_mask = tf.logical_and(energy_mask, tf.ones_like(energy, dtype=tf.bool))
       energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy), name="energy_masked")

@@ -3065,6 +3065,63 @@ def test_CrossEntropyLoss_masked_inf_fake_upper_bound():
       last_var_v = var_v
 
 
+def test_reduce_mean_in_time():
+  with make_scope() as session:
+    n_out = 5
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out},
+      }})
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "output": {"class": "reduce", "mode": "mean", "axis": "T", "from": ["data"]}
+    })
+    session.run(tf.global_variables_initializer())
+    out = net.layers["output"].output.placeholder
+    n_batch = 3
+    max_seq_len = 10
+    feed = make_feed_dict(net.extern_data.data.values(), n_batch=n_batch, n_time=max_seq_len, same_time=True)
+    v = session.run(out, feed_dict=feed)
+    input_len = feed[net.extern_data.data["data"].size_placeholder[0]]
+    input_data = feed[net.extern_data.data["data"].placeholder]
+
+    ref = numpy.zeros([n_batch, n_out])
+    for batch, seq_len in enumerate(input_len):
+      ref[batch, :] = numpy.mean(input_data[batch, :seq_len, :], axis=0)
+
+    numpy.testing.assert_allclose(ref, v, rtol=1e-5)
+
+
+def test_reduce_mean_batch_time():
+  with make_scope() as session:
+    n_out = 5
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out},
+      }})
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "output": {"class": "reduce", "mode": "mean", "axis": ["B", "T"], "from": ["data"]}
+    })
+    session.run(tf.global_variables_initializer())
+    out = net.layers["output"].output.placeholder
+    n_batch = 3
+    max_seq_len = 10
+    feed = make_feed_dict(net.extern_data.data.values(), n_batch=n_batch, n_time=max_seq_len, same_time=True)
+    v = session.run(out, feed_dict=feed)
+    input_len = feed[net.extern_data.data["data"].size_placeholder[0]]
+    input_data = feed[net.extern_data.data["data"].placeholder]
+
+    input_data_masked = numpy.copy(input_data)
+    for batch, seq_len in enumerate(input_len):
+      input_data_masked[batch, seq_len:, :] = numpy.nan
+    ref = numpy.nanmean(input_data_masked, axis=(0, 1))
+
+    numpy.testing.assert_allclose(ref, v, rtol=1e-5)
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()

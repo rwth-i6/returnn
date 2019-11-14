@@ -6,6 +6,10 @@
 	path = extern/kenlm
 	url = https://github.com/kpu/kenlm.git
 	branch = master
+[submodule "extern/openfst"]
+	path = extern/openfst
+	url = https://github.com/mjansche/openfst.git
+	branch = 1.7.3
 [submodule "extern/ParseOggVorbis"]
 	path = extern/ParseOggVorbis
 	url = https://github.com/albertz/ParseOggVorbis.git

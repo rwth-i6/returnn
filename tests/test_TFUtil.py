@@ -2435,6 +2435,72 @@ def test_kenlm_bpe():
   print("Scores are as expected.")
 
 
+def test_openfst():
+  import TFOpenFst
+  if not TFOpenFst.openfst_checked_out():
+    raise unittest.SkipTest("OpenFST not checked out")
+  TFOpenFst.get_tf_mod(verbose=True)
+
+  """
+  $ fstprint --osymbols=lexicon_opt.osyms --isymbols=lexicon_opt.isyms lexicon_opt.fst 
+  0	1	M	<epsilon>
+  0	2	m	man
+  0
+  1	3	a	<epsilon>
+  2	4	a	<epsilon>
+  3	5	r	<epsilon>
+  4	6	n	<epsilon>
+  5	6	s	Mars
+  5	7	t	Martian
+  6	0	<space>	<epsilon>
+  6	0	!	<epsilon>
+  6	0	,	<epsilon>
+  6	0	.	<epsilon>
+  6	0	?	<epsilon>
+  7	2	i	<epsilon>
+  """
+  fst_fn = TFOpenFst.returnn_dir + "/tests/lexicon_opt.fst"
+  assert os.path.exists(fst_fn)
+  output_symbols = {"man": 26, "Mars": 111, "Martian": 1530}
+
+  fst_tf = TFOpenFst.get_fst(filename=fst_fn)
+  states_tf = tf.placeholder(tf.int32, [None])
+  inputs_tf = tf.placeholder(tf.int32, [None])
+  output_tf = TFOpenFst.fst_transition(fst_handle=fst_tf, states=states_tf, inputs=inputs_tf)
+
+  def transitions(states, inputs):
+    return session.run(
+      output_tf, feed_dict={states_tf: states, inputs_tf: inputs})
+
+  def transition(state, input):
+    """
+    :param int state:
+    :param int|str input:
+    :return next_state,output_label,weight
+    """
+    if isinstance(input, str):
+      init_state = state
+      out_labels = []
+      out_weight = 0.
+      for c in input:
+        next_state, out_label, weight = transition(state, ord(c))
+        state = next_state
+        if out_label > 0:  # 0 is epsilon. -1 is invalid.
+          out_labels.append(out_label)
+        out_weight += weight
+      print("Input (%i, %r) -> output (%i, %r, weight %f)" % (init_state, input, state, out_labels, out_weight))
+      return state, out_labels, out_weight
+    assert isinstance(input, int)
+    next_states, out_labels, weights = transitions([state], [input])
+    return next_states[0], out_labels[0], weights[0]
+
+  assert_equal(transition(0, "Mars "), (0, [output_symbols["Mars"]], 0.0))
+  assert_equal(transition(0, "Martian "), (0, [output_symbols["Martian"]], 0.0))
+  assert_equal(transition(0, "Mar"), (5, [], 0.0))
+  assert_equal(transition(5, "s"), (6, [output_symbols["Mars"]], 0.0))
+  assert_equal(transition(0, "Unknown "), (-1, [], float("-inf")))
+
+
 def test_layer_norms():
   from TFNativeOp import have_blocksparse_requirements
   from tensorflow.contrib.layers import layer_norm as tf_contrib_layer_norm

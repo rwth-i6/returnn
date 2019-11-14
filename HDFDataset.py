@@ -36,6 +36,8 @@ class HDFDataset(CachedDataset):
     :param bool use_cache_manager: uses :func:`Util.cf` for files
     """
     super(HDFDataset, self).__init__(**kwargs)
+    assert self.partition_epoch == 1 or self.cache_byte_size_total_limit == 0, \
+      "To use partition_epoch in HDFDatasets, disable caching by setting cache_byte_size=0"
     self._use_cache_manager = use_cache_manager
     self.files = []  # type: typing.List[str]  # file names
     self.h5_files = []  # type: typing.List[h5py.File]
