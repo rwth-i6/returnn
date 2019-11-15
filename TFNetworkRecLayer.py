@@ -5524,7 +5524,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
     :param str|float|int|None initial_state: see RnnCellLayer.get_rec_initial_state_inner().
     :param bool restrict_state_to_last_seq: see code comment below
     :param None|tf.Tensor state_var_lengths: if passed, a Tensor containing the number of keys in the state_var for
-                                             each batch-entry, used for decoding in RASR
+      each batch-entry, used for decoding in RASR.
     """
     super(SelfAttentionLayer, self).__init__(**kwargs)
     self._restrict_state_to_last_seq = restrict_state_to_last_seq
@@ -5606,8 +5606,8 @@ class SelfAttentionLayer(_ConcatInputLayer):
         self.rec_vars_outputs["kv_left"] = kv
       k, v = tf.split(kv, [total_key_dim // num_heads, total_value_dim // num_heads], axis=-1)
     # Dot-attention. Resulting last time dimension will be used to perform the softmax over, and will the be reduced.
-    energy = tf.matmul(q, k, transpose_b=True, name="energy")  # (batch,heads,num_queries|1,num_keys),
-                                                               # e.g. (batch,heads,time|1,time)
+    # (batch,heads,num_queries|1,num_keys) e.g. (batch,heads,time|1,time)
+    energy = tf.matmul(q, k, transpose_b=True, name="energy")
     if key_shift:
       # We could add it to `k`, but instead, to avoid unbroadcasting, we do it as an additional matmul.
       # key_shift expected to be of shape (num_queries|1,num_keys,key_dim).
@@ -5646,8 +5646,8 @@ class SelfAttentionLayer(_ConcatInputLayer):
         state_var_lengths = state_var_lengths()
         state_var_max_length = tf.shape(prev_kv_left)[-2]
         total_max_length = tf.shape(energy)[-1]
-        inverted_prefix_mask = tf.sequence_mask(state_var_max_length - state_var_lengths,
-                                                maxlen=total_max_length, name="inverted_prefix_mask")
+        inverted_prefix_mask = tf.sequence_mask(
+          state_var_max_length - state_var_lengths, maxlen=total_max_length, name="inverted_prefix_mask")
         # shape: (batch,1,1,time)
         inverted_prefix_mask = tf.reshape(inverted_prefix_mask, [tf.shape(energy)[0], 1, 1, tf.shape(energy)[-1]])
         energy_mask = tf.math.logical_xor(energy_mask, inverted_prefix_mask)
