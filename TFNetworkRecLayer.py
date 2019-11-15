@@ -1441,9 +1441,10 @@ class _SubnetworkRecCell(object):
          Add 'is_output_layer':True to the layer options." % (self.parent_rec_layer, layer_name))
     return None
 
-  def _get_init_output(self, name):
+  def _get_init_output(self, name, batch_dim=None):
     """
     :param str name: layer name
+    :param tf.Tensor|None batch_dim:
     :rtype: tf.Tensor
     """
     template_layer = self.layer_data_templates[name]
@@ -1454,7 +1455,8 @@ class _SubnetworkRecCell(object):
       with cl.cls_layer_scope(name):
         # noinspection PyBroadException
         try:
-          batch_dim = template_layer.get_batch_dim()
+          if batch_dim is None:
+            batch_dim = template_layer.get_batch_dim()
           if name == "end" and template_layer.kwargs.get("initial_output", None) is None:
             # Special case for the 'end' layer.
             from TFUtil import constant_with_shape
@@ -6254,6 +6256,379 @@ class OptimalCompletionsLayer(LayerBase):
       name="%s_output" % name,
       shape=(target_data.dim,), dim=target_data.dim, dtype="int32", sparse=False, time_dim_axis=None,
       beam=SearchBeam.get_combined_beam(source_data.beam, target_data.beam))
+
+
+class MaskedComputationLayer(LayerBase):
+  """
+  Given some input [B,T,D] and some mask [B,T] (True or False), we want to perform a computation
+  only on the masked frames.
+  I.e. let T' be the max seq len of the masked seq, then the masked input would be [B,T',D].
+  (This masked input sequence could be calculated via ``tf.boolean_mask`` or ``tf.gather_nd``.)
+  The output is [B,T',D'], i.e. we do not undo the masking.
+  You are supposed to use :class:`UnmaskLayer` to undo the masking.
+
+  The computation also works within a rec layer, i.e. the input is just [B,D] and the mask is just [B].
+  In that case, if the mask is True, it will perform the computation as normal,
+  and if it is False, it will just copy the prev output, and also hidden state.
+  """
+  layer_class = "masked_computation"
+  recurrent = True
+
+  def __init__(self, mask, unit, masked_from, **kwargs):
+    """
+    :param LayerBase|None mask:
+    :param dict[str] unit:
+    :param LayerBase|None masked_from:
+    """
+    from TFNetwork import get_layer_class
+    from TFUtil import where_bc
+    super(MaskedComputationLayer, self).__init__(**kwargs)
+    self.mask = mask
+    self.masked_from = masked_from
+
+    if masked_from:
+      assert not self.network.is_inside_rec_layer()
+      source_data = masked_from.output.copy(
+        name="%s_%s_masked_input" % (masked_from.output.name, self.output.name))
+      source_data.available_for_inference = True  # we would make sure that this works at inference
+      from TFNetworkLayer import WrappedInternalLayer
+      source = WrappedInternalLayer(
+        base_layer=masked_from, network=masked_from.network, name=masked_from.name, output=source_data)
+      assert not mask and not self.sources
+    else:
+      assert len(self.sources) == 1
+      source, = self.sources
+      assert mask
+      if not self.network.is_inside_rec_layer():
+        raise NotImplementedError("%s not inside rec loop, is not implemented" % self)
+      assert mask.output.shape == () and mask.output.dtype == "bool", "%s: invalid mask %s" % (self, mask)
+
+    def sub_get_layer(sub_layer_name):
+      """
+      :param str sub_layer_name:
+      :rtype: LayerBase
+      """
+      assert sub_layer_name == "data"
+      return source
+
+    layer_desc = unit.copy()
+    class_name = layer_desc.pop("class")
+    layer_class = get_layer_class(class_name)
+    layer_class.transform_config_dict(layer_desc, network=self.network, get_layer=sub_get_layer)
+    # noinspection PyProtectedMember
+    layer_desc = self.network._create_layer_layer_desc(name=self.name, layer_desc=layer_desc)
+    layer_desc["output"] = self.output.copy_template(name="%s_output" % self.name)
+    layer_desc["rec_previous_layer"] = self._rec_previous_layer
+
+    self.sub_layer = layer_class(**layer_desc)
+    self.sub_layer.post_init(layer_desc)
+    self.output = self.sub_layer.output.copy(name="%s_output" % self.name)
+    self.rec_vars_outputs = self.sub_layer.rec_vars_outputs.copy()
+
+    if self.mask:
+      assert self._rec_previous_layer
+      assert self.mask.output.shape == () and self.mask.output.batch_shape == (None,)
+      mask_t = self.mask.output.placeholder
+      self.output.placeholder = where_bc(
+        condition=tf.reshape(mask_t, [-1] + [1] * (self.output.batch_ndim - 1)),  # add broadcast dims
+        x=self.output.placeholder,
+        y=self._rec_previous_layer.output.placeholder)
+      for key, value in sorted(self.rec_vars_outputs.items()):
+        assert isinstance(key, str)
+        assert isinstance(value, tf.Tensor)
+        self.rec_vars_outputs[key] = where_bc(
+          condition=tf.reshape(mask_t, [-1] + [1] * (value.shape.ndims - 1)),  # add broadcast dims
+          x=value,
+          y=self._rec_previous_layer.rec_vars_outputs[key])
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    deps = super(MaskedComputationLayer, self).get_dep_layers()
+    if self._rec_previous_layer:
+      deps.append(self._rec_previous_layer)
+    if self.mask:
+      deps.append(self.mask)
+    if self.masked_from:
+      deps.append(self.masked_from)
+    return deps
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    masked_from = d.pop("masked_from", None)
+    if masked_from:
+      masked_from = get_layer(masked_from)
+      d["masked_from"] = masked_from
+      # We explicitly do not want to have these as deps.
+      d["from"] = []
+      d["mask"] = None
+    else:
+      d["masked_from"] = None
+      d["mask"] = get_layer(d["mask"])
+      d["rec_previous_layer"] = get_layer("prev:%s" % d["name"])  # enforce that we have it
+    super(MaskedComputationLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
+  @classmethod
+  def _create_template(cls, name, network, sources, masked_from, unit, **kwargs):
+    """
+    :param str name:
+    :param TFNetwork.TFNetwork network:
+    :param list[LayerBase] sources:
+    :param dict[str] unit:
+    :param LayerBase masked_from:
+    :return: layer_class, layer_desc
+    """
+    from TFNetwork import get_layer_class
+    # We don't care about the right masked input here, but just about deriving the right output shape.
+    if masked_from:
+      if network.is_inside_rec_layer(inside_loop=True):
+        source_data = masked_from.output.copy_template_excluding_time_dim(
+          name="%s_%s_masked_input_frame" % (masked_from.output.name, name))
+      else:
+        source_data = masked_from.output.copy_template(
+          name="%s_%s_masked_input" % (masked_from.output.name, name))
+      source_data.available_for_inference = True  # we would make sure that this works at inference
+      from TFNetworkLayer import WrappedInternalLayer
+      source = WrappedInternalLayer(
+        base_layer=masked_from, network=masked_from.network, name=masked_from.name, output=source_data)
+    else:
+      assert len(sources) == 1
+      source, = sources
+
+    def sub_get_layer(sub_layer_name):
+      """
+      :param str sub_layer_name:
+      :rtype: LayerBase
+      """
+      assert sub_layer_name == "data"
+      return source
+
+    layer_desc = unit.copy()
+    class_name = layer_desc.pop("class")
+    layer_class = get_layer_class(class_name)
+    layer_class.transform_config_dict(layer_desc, network=network, get_layer=sub_get_layer)
+    # noinspection PyProtectedMember
+    layer_desc = network._create_layer_layer_desc(name=name, layer_desc=layer_desc)
+    return layer_class, layer_desc
+
+  @classmethod
+  def get_out_data_from_opts(cls, **kwargs):
+    """
+    :rtype: Data
+    """
+    layer_class, layer_desc = cls._create_template(**kwargs)
+    output = layer_class.get_out_data_from_opts(**layer_desc)
+    return output
+
+  def get_constraints_value(self):
+    """
+    :rtype: tf.Tensor|None
+    """
+    return self.sub_layer.get_constraints_value()
+
+  @classmethod
+  def get_losses(cls, name, network, output, loss=None, reduce_func=None, layer=None, **kwargs):
+    """
+    :param str name: layer name
+    :param TFNetwork.TFNetwork network:
+    :param Loss|None loss: argument just as for __init__
+    :param Data output: the output (template) for the layer
+    :param LayerBase|None layer:
+    :param ((tf.Tensor)->tf.Tensor)|None reduce_func:
+    :param kwargs: other layer kwargs
+    :rtype: list[TFNetwork.LossHolder]
+    """
+    from TFNetwork import LossHolder, get_layer_class
+    # See SubnetworkLayer.get_losses as another example.
+    losses = super(MaskedComputationLayer, cls).get_losses(
+      name=name, network=network, output=output, loss=loss, layer=layer, reduce_func=reduce_func, **kwargs)
+    if layer:
+      assert isinstance(layer, MaskedComputationLayer)
+      sub_layer = layer.sub_layer
+      sub_layer_kwargs = sub_layer.kwargs
+      sub_layer_class = sub_layer.__class__
+    else:
+      sub_layer = None
+      sub_layer_class, sub_layer_kwargs = cls._create_template(name=name, network=network, **kwargs)
+      sub_layer_kwargs["output"] = output
+    for loss in sub_layer_class.get_losses(reduce_func=reduce_func, layer=sub_layer, **sub_layer_kwargs):
+      assert isinstance(loss, LossHolder)
+      losses.append(loss.copy_new_base(network=network, name="%s/%s" % (name, loss.name)))
+    return losses
+
+  # noinspection PyMethodOverriding
+  @classmethod
+  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, unit, name, **kwargs):
+    """
+    :param tf.Tensor batch_dim: for this layer, might be with beam
+    :param TFNetworkRecLayer.RecLayer rec_layer:
+    :param dict[str] unit:
+    :param str name:
+    :rtype: dict[str,tf.Tensor]
+    """
+    from TFNetwork import get_layer_class
+    layer_desc = unit.copy()
+    layer_class_name = layer_desc.pop("class")
+    cl = get_layer_class(layer_class_name)
+    # Note: This is not totally correct. We should call transform_config_dict.
+    # But that will make it quite complicated...
+    layer_desc["name"] = name
+    assert issubclass(cl, LayerBase)
+    with cl.cls_layer_scope(name):
+      return cl.get_rec_initial_extra_outputs(batch_dim=batch_dim, rec_layer=rec_layer, **layer_desc)
+
+  @classmethod
+  def get_rec_initial_extra_outputs_shape_invariants(cls, unit, name, **kwargs):
+    """
+    :param dict[str] unit:
+    :param str name:
+    :return: optional shapes for the tensors by get_rec_initial_extra_outputs
+    :rtype: dict[str,tf.TensorShape]
+    """
+    # Very similar to get_rec_initial_extra_outputs.
+    from TFNetwork import get_layer_class
+    layer_desc = unit.copy()
+    layer_class_name = layer_desc.pop("class")
+    cl = get_layer_class(layer_class_name)
+    # Note: This is not totally correct. We should call transform_config_dict.
+    # But that will make it quite complicated...
+    layer_desc["name"] = name
+    assert issubclass(cl, LayerBase)
+    with cl.cls_layer_scope(name):
+      return cl.get_rec_initial_extra_outputs_shape_invariants(**layer_desc)
+
+
+class UnmaskLayer(LayerBase):
+  """
+  This is meant to be used together with :class:`MaskedComputationLayer`,
+  which operates on input [B,T,D], and given a mask, returns [B,T',D'].
+  This layer :class:`UnmaskLayer` is supposed to undo the masking,
+  i.e. to recover the original time dimension, i.e. given [B,T',D'], we output [B,T,D'].
+  This is done by repeating the output for the non-masked frames,
+  via the last masked frame.
+
+  If this layer is inside a recurrent loop, i.e. we get [B,D'] as input,
+  this is a no-op, and we just return the input as is.
+  In that case, the repetition logic is handled via :class:`MaskedComputationLayer`.
+  """
+  layer_class = "unmask"
+  recurrent = True
+
+  def __init__(self, mask, **kwargs):
+    """
+    :param LayerBase mask: the same as as used for :class:`MaskedComputationLayer`.
+      Outside loop: [B,T] or [T,B], original T. Inside loop, just [B].
+    """
+    from TFUtil import concat_with_opt_broadcast, nd_indices, same_control_flow_ctx
+    super(UnmaskLayer, self).__init__(**kwargs)
+    self.mask = mask
+    src_layer = self.sources[0]
+    if not src_layer.output.have_time_axis():
+      assert self.network.is_inside_rec_layer()
+      assert self.output.placeholder is not None  # should be the copy of source already
+      # Nothing needs to be done.
+    else:
+      rec_parent_layer = self.network.get_rec_parent_layer(inside_loop=False)
+      assert rec_parent_layer and isinstance(rec_parent_layer.cell, _SubnetworkRecCell)
+      batch_dim = self.get_batch_dim()
+      # noinspection PyProtectedMember
+      initial = rec_parent_layer.cell._get_init_output(src_layer.name, batch_dim=batch_dim)  # [B,D']
+      if self.network.is_inside_rec_layer():
+        with same_control_flow_ctx(src_layer.output.placeholder):
+          src = src_layer.output.copy_as_bt_or_tb_major()
+        mask_out = self.mask.output
+        assert mask_out.shape == () and mask_out.batch_shape == (None,) and mask_out.dtype == "bool", (
+          "%s: invalid mask %s (inside rec loop)" % (self, self.mask))
+        prev_t = self._rec_previous_layer.rec_vars_outputs["t"]
+        t = prev_t + tf.cast(mask_out.placeholder, tf.int32)
+        self.rec_vars_outputs["t"] = t
+        idxs_nd = nd_indices(tf.maximum(t, 0), indices_batch_major=src.is_batch_major)  # [B,2]
+        y = tf.gather_nd(src.placeholder, idxs_nd)  # [B,D']
+        y = tf.where(tf.equal(t, -1), initial, y)
+        self.output.placeholder = y
+
+      else:  # outside rec loop
+        assert src_layer.output.get_time_dim_tag() != self.mask.output.get_time_dim_tag(), (
+          "%s: unexpected source" % self)
+        src = src_layer.output.copy_as_time_major()
+        mask_out = self.mask.output
+        assert mask_out.shape == (None,) and mask_out.batch_shape == (None, None) and mask_out.dtype == "bool", (
+          "%s: invalid mask %s (outside rec loop)" % (self, self.mask))
+        mask_out = mask_out.copy_as_time_major()
+        mask_t = mask_out.placeholder  # [T,B], e.g. [1,0,1] (ignoring batch-dim for example)
+        idxs = tf.cumsum(tf.cast(mask_t, tf.int32), axis=mask_out.time_dim_axis)  # [T,B], e.g. [1,1,2]
+        initial_wt = tf.expand_dims(initial, axis=0)  # add time axis
+        src_t = concat_with_opt_broadcast(
+          [initial_wt, src.placeholder], allow_broadcast=[True, False], axis=0, name="concat_in_time")  # [T'+1,B,D']
+        idxs_nd = nd_indices(idxs, batch_axis=src.batch_dim_axis)  # [T,B,2]
+        y = tf.gather_nd(src_t, idxs_nd)  # [T,B,D']
+        self.output.placeholder = y
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    deps = super(UnmaskLayer, self).get_dep_layers()
+    deps.append(self.mask)
+    return deps
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    super(UnmaskLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["mask"] = get_layer(d["mask"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, network, sources, mask, **kwargs):
+    """
+    :param str name:
+    :param TFNetwork.TFNetwork network:
+    :param list[LayerBase] sources:
+    :param LayerBase mask:
+    :rtype: Data
+    """
+    assert len(sources) == 1
+    source, = sources
+    if not source or source.output.undefined:
+      return Data.create_undefined(name="%s_output" % name)
+    out = source.output.copy(name="%s_output" % name)
+    assert isinstance(out, Data)
+    if mask and not mask.output.undefined:
+      out.beam = SearchBeam.get_combined_beam(out.beam, mask.output.beam)
+    if network.is_inside_rec_layer():
+      if out.have_time_axis():
+        # The masked-computation layer could have been moved out. In that case, it will return some output
+        # which is not compatible with the rec layer (because reduced, because of the masking),
+        # thus when we unroll it to get into the loop, the RecLayer would have kept it as-is,
+        # i.e. it should still have that time-dim-axis.
+        # Maybe we should do some extra checks if that is like we assume, but for now, just assume that.
+        return out.copy_template_excluding_time_dim()
+      return out
+    assert out.have_time_axis()
+    out = out.copy_as_time_major()
+    out.size_placeholder[0] = mask.output.get_sequence_lengths()
+    return out
+
+  @classmethod
+  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, **kwargs):
+    """
+    :param tf.Tensor batch_dim: for this layer, might be with beam
+    :param TFNetworkRecLayer.RecLayer rec_layer:
+    :rtype: dict[str,tf.Tensor]
+    """
+    # This is only called if we are inside the rec layer.
+    # In that case, we have a state: The running index in our source.
+    return {"t": tf.zeros([batch_dim], dtype=tf.int32) - 1}
 
 
 # noinspection PyAbstractClass
