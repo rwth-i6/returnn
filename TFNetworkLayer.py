@@ -6268,16 +6268,18 @@ class SwitchLayer(LayerBase):
     from TFNetwork import CannotHandleUndefinedSourcesException
     if isinstance(condition, bool):
       if condition:
-        if true_from.output.undefined:
+        if not true_from or true_from.output.undefined:
           raise CannotHandleUndefinedSourcesException(
             layer_name=name, layer_desc=dict(condition=condition, true_from=true_from, false_from=false_from, **kwargs))
         return true_from.output.copy("%s_output" % name)
       else:
-        if false_from.output.undefined:
+        if not false_from or false_from.output.undefined:
           raise CannotHandleUndefinedSourcesException(
             layer_name=name, layer_desc=dict(condition=condition, true_from=true_from, false_from=false_from, **kwargs))
         return false_from.output.copy("%s_output" % name)
-    if true_from.output.undefined or false_from.output.undefined or condition.output.undefined:
+    if (
+          not true_from or not false_from or not condition or
+          true_from.output.undefined or false_from.output.undefined or condition.output.undefined):
       raise CannotHandleUndefinedSourcesException(
         layer_name=name, layer_desc=dict(condition=condition, true_from=true_from, false_from=false_from, **kwargs))
     out = Data.get_common_data([true_from.output, false_from.output, condition.output])
