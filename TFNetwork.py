@@ -2527,15 +2527,17 @@ class CustomCheckpointLoader:
     self.params_prefix = params_prefix
     self.load_if_prefix = load_if_prefix
     self.saveable_params = []
+    count = 0
     for param in saveable_params:
+      if load_if_prefix and self._get_param_name(param, assert_load_if_prefix_match=False) is None:
+        continue
+      count += 1
       custom_post_init = getattr(param, "custom_post_init", None)
       if custom_post_init:
         print("Not loading pre-initialized variables %s" % param, file=log.v2)
         continue
-      if load_if_prefix and self._get_param_name(param, assert_load_if_prefix_match=False) is None:
-        continue
       self.saveable_params.append(param)
-    assert self.saveable_params, "no saveable vars"
+    assert count > 0, "%s: no saveable vars" % self
     self.reader = tf.train.NewCheckpointReader(filename)
     self.net_vars = [v for v in self.saveable_params if isinstance(v, tf.Variable)]
     self.net_saveables = [v for v in self.saveable_params if not isinstance(v, tf.Variable)]
