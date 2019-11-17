@@ -6188,6 +6188,8 @@ class CompareLayer(LayerBase):
     :rtype: Data
     """
     if n_out is NotSpecified and not out_type:
+      if not sources[0] or sources[0].output.undefined:
+        return Data.create_undefined(name="%s_output" % kwargs["name"])
       out_type = sources[0].output.get_kwargs()
       out_type["name"] = "%s_output" % kwargs["name"]
       if out_type.get("sparse", False):
