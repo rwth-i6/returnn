@@ -11,6 +11,13 @@ import tensorflow as tf
 returnn_dir = os.path.dirname(os.path.abspath(__file__))
 kenlm_dir = returnn_dir + "/extern/kenlm"
 
+
+def kenlm_checked_out():
+  """
+  :rtype: bool
+  """
+  return os.path.exists("%s/lm/test.arpa" % kenlm_dir)
+
 # https://www.tensorflow.org/guide/extend/op
 # Also see TFUitl.TFArrayContainer for TF resources.
 # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/tensor.h
@@ -351,6 +358,7 @@ def get_tf_mod(verbose=False):
   # https://github.com/kpu/kenlm/blob/master/compile_query_only.sh
 
   # Collect files.
+  assert kenlm_checked_out(), "submodule in %r not checked out?" % kenlm_dir
   files = glob('%s/util/*.cc' % kenlm_dir)
   files += glob('%s/lm/*.cc' % kenlm_dir)
   files += glob('%s/util/double-conversion/*.cc' % kenlm_dir)

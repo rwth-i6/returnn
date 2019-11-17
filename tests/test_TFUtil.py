@@ -2395,6 +2395,8 @@ def test_string_words_calc_wer():
 
 def test_kenlm():
   import TFKenLM
+  if not TFKenLM.kenlm_checked_out():
+    raise unittest.SkipTest("KenLM not checked out")
   input_strings = ["beyond immediate concerns </s>"]
   test_lm_file = TFKenLM.kenlm_dir + "/lm/test.arpa"
   assert os.path.exists(test_lm_file)
@@ -2412,6 +2414,8 @@ def test_kenlm():
 
 def test_kenlm_bpe():
   import TFKenLM
+  if not TFKenLM.kenlm_checked_out():
+    raise unittest.SkipTest("KenLM not checked out")
   input_strings = [
     "beyond immediate concerns </s>",
     "be@@ yond imm@@ edi@@ ate conc@@ erns </s>",
