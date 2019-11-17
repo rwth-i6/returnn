@@ -2534,7 +2534,7 @@ class CustomCheckpointLoader:
       count += 1
       custom_post_init = getattr(param, "custom_post_init", None)
       if custom_post_init:
-        print("Not loading pre-initialized variables %s" % param, file=log.v2)
+        print("%s: Not loading pre-initialized variable %s" % (self, param), file=log.v2)
         continue
       self.saveable_params.append(param)
     assert count > 0, "%s: no saveable vars" % self
