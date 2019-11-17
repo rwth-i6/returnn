@@ -956,8 +956,7 @@ class Engine(EngineBase):
           saveable_params=self.network.get_params_list(),
           params_prefix=self_prefix, load_if_prefix=load_if_prefix,
           ignore_missing=opts.get("ignore_missing", False))
-        loader.set_as_custom_init()
-      self.network.initialize_params(session=self.tf_session)
+        loader.load_now(session=self.tf_session)
 
     if model_epoch_filename:
       print("loading weights from", model_epoch_filename, file=log.v2)
