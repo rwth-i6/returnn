@@ -152,7 +152,7 @@ class DimensionTag(object):
       return True
     if self.dyn_size is None:
       return False
-    assert self.get_tag_from_size_tensor(self.dyn_size) is self
+    assert self.get_tag_from_size_tensor(self.dyn_size).get_same_base() is self
     return True
 
   def is_equal(self, other, ignore_feature_dim=False, allow_same_feature_dim=False, allow_same_spatial_dim=None,
@@ -252,6 +252,12 @@ class DimensionTag(object):
           self.src_data.size_placeholder = {}
         self.src_data.size_placeholder[
           self.src_data.get_batch_axis_excluding_batch(self.src_axis)] = self.same_as.dyn_size
+    # If others dyn_size is None but we have a dyn_size, maybe update others dyn_size.
+    if self.dyn_size is not None and self.same_as.dyn_size is not self.dyn_size:
+      # Could be unset if it comes from the config, or from prev graph creation.
+      # This is important such that self.can_compare() is sane.
+      if self.same_as.dyn_size is None or self.same_as.dyn_size.graph is not self.dyn_size.graph:
+        self.same_as.dyn_size = self.dyn_size
 
   @classmethod
   def get_existing_tag_from_collection(cls, other, tags, is_equal_opts=None):
