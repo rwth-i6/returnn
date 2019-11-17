@@ -2571,9 +2571,9 @@ class GatherNdLayer(_ConcatInputLayer):
     :rtype: Data
     """
     input_data = get_concat_sources_data_template(sources).copy_as_batch_major()
-    position_data = position.output.copy_template().copy_as_batch_major()
-    if input_data.undefined or position_data.undefined:
+    if input_data.undefined or not position or position.output.undefined:
       return Data.create_undefined(name="%s_output" % name)
+    position_data = position.output.copy_template().copy_as_batch_major()
     shape = list(position_data.shape) + list(input_data.shape[1:])  # (B, ...) (w/o batch)
     out_type = position_data.get_kwargs()
     out_type["name"] = "%s_output" % name
