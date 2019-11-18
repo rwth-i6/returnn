@@ -1212,24 +1212,30 @@ class TFNetwork(object):
             ls.append(param)
     return ls
 
-  def declare_train_params(self, hidden_layer_selection=None, with_output=None):
+  def declare_train_params(self, hidden_layer_selection=None, with_output=None, global_trainable=None):
     """
     :param list[str]|None hidden_layer_selection:
     :param bool|None with_output:
+    :param bool|None global_trainable:
     """
-    if hidden_layer_selection is None:
-      hidden_layer_selection = [name for (name, layer) in self.layers.items() if not layer.is_output_layer()]
+    if global_trainable is None:
+      global_trainable = self.layers_desc.get("#trainable", True)
+    if global_trainable:
+      if hidden_layer_selection is None:
+        hidden_layer_selection = [name for (name, layer) in self.layers.items() if not layer.is_output_layer()]
+      else:
+        hidden_layer_selection = list(hidden_layer_selection)
+      if with_output is None:
+        with_output = True
+      if with_output:
+        hidden_layer_selection += [name for (name, layer) in self.layers.items() if layer.is_output_layer()]
+      hidden_layer_selection = set(hidden_layer_selection)
     else:
-      hidden_layer_selection = list(hidden_layer_selection)
-    if with_output is None:
-      with_output = True
-    if with_output:
-      hidden_layer_selection += [name for (name, layer) in self.layers.items() if layer.is_output_layer()]
-    hidden_layer_selection = set(hidden_layer_selection)
+      hidden_layer_selection = set()
     self._selected_train_layers = sorted(hidden_layer_selection)
     if self.extra_nets:
       for _, extra_net in self.extra_nets.items():
-        extra_net.declare_train_params()  # select all, currently...
+        extra_net.declare_train_params(global_trainable=global_trainable)  # select all, currently...
 
   def get_num_params(self):
     """
