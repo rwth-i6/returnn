@@ -416,12 +416,11 @@ def finalize():
   global quit_returnn
   quit_returnn = True
   sys.exited = True
-  if BackendEngine.is_theano_selected():
-    if engine:
+  if engine:
+    if BackendEngine.is_theano_selected():
       for device in engine.devices:
         device.terminate()
-  elif BackendEngine.is_tensorflow_selected():
-    if engine:
+    elif BackendEngine.is_tensorflow_selected():
       engine.finalize()
 
 

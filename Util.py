@@ -105,6 +105,11 @@ class BackendEngine:
   TensorFlow = 1
   selectedEngine = None  # type: typing.Optional[int]  # One of the possible engines.
 
+  class CannotSelectEngine(Exception):
+    """
+    Cannot select backend engine
+    """
+
   @classmethod
   def select_engine(cls, engine=None, config=None):
     """
@@ -147,7 +152,7 @@ class BackendEngine:
       return cls.TensorFlow
     except ImportError:
       pass
-    raise Exception("Neither Theano nor TF available.")
+    raise cls.CannotSelectEngine("Neither Theano nor TF available.")
 
   @classmethod
   def get_selected_engine(cls):
