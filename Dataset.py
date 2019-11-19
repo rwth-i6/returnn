@@ -1014,6 +1014,7 @@ class Dataset(object):
 
   def _generate_batches(self, recurrent_net,
                         batch_size, max_seqs=-1, max_seq_length=sys.maxsize,
+                        max_pad_size=None,
                         min_seq_length=0, pruning=0.0,
                         seq_drop=0.0, max_total_num_seqs=-1,
                         used_data_keys=None):
@@ -1021,6 +1022,7 @@ class Dataset(object):
     :param bool recurrent_net: If True, the batch might have a batch seq dimension > 1.
       Otherwise, the batch seq dimension is always 1 and multiple seqs will be concatenated.
     :param int|dict[str,int]|NumbersDict batch_size: Max number of frames in one batch.
+    :param int|dict[str,int]|NumbersDict max_pad_size: Max number of zero-padded frames in one batch.
     :param int max_seqs: Max number of seqs per batch.
     :param int max_total_num_seqs:
     :param int|dict[str,int]|NumbersDict max_seq_length:
@@ -1030,6 +1032,7 @@ class Dataset(object):
       batch_size = sys.maxsize
     batch_size = NumbersDict(batch_size)
     assert not batch_size.any_compare(NumbersDict(0), (lambda a, b: a <= b))
+    max_pad_size = NumbersDict(max_pad_size)
     if max_seqs == -1:
       max_seqs = float('inf')
     if not max_seq_length:
@@ -1074,9 +1077,16 @@ class Dataset(object):
         if self.rnd_seq_drop.random() < seq_drop:
           continue
         dt, ds = batch.try_sequence_as_slice(length)
-        if ds > 1 and ((dt * ds).any_compare(batch_size, (lambda a, b: a > b)) or ds > max_seqs):
-          yield batch
-          batch = Batch()
+        if batch.num_slices >= 1:
+          if (dt * ds).any_compare(batch_size, (lambda a, b: a > b)):
+            yield batch
+            batch = Batch()
+          elif ds > max_seqs:
+            yield batch
+            batch = Batch()
+          elif (dt * ds - batch.get_total_num_frames() - length).any_compare(max_pad_size, (lambda a, b: a > b)):
+            yield batch
+            batch = Batch()
         batch.add_sequence_as_slice(seq_idx=seq_idx, seq_start_frame=t_start, length=length)
       else:  # Not recurrent.
         while t_start.max_value() < t_end.max_value():

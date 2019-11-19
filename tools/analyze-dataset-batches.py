@@ -54,12 +54,14 @@ def analyze_dataset(options):
   max_seqs = config.int('max_seqs', -1)
   seq_drop = config.float('seq_drop', 0.0)
   max_seq_length = config.typed_value('max_seq_length', None) or config.float('max_seq_length', 0)
+  max_pad_size = config.typed_value("max_pad_size", None)
 
   batches = dataset.generate_batches(
     recurrent_net=recurrent,
     batch_size=batch_size,
     max_seqs=max_seqs,
     max_seq_length=max_seq_length,
+    max_pad_size=max_pad_size,
     seq_drop=seq_drop,
     used_data_keys=used_data_keys)
 

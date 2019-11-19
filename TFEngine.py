@@ -886,6 +886,7 @@ class Engine(EngineBase):
     if isinstance(self.max_seq_length, dict):
       self.max_seq_length = NumbersDict(self.max_seq_length)
     assert isinstance(self.max_seq_length, (int, float, NumbersDict))
+    self.max_pad_size = config.typed_value("max_pad_size", None)
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
 
@@ -1307,6 +1308,7 @@ class Engine(EngineBase):
         batch_size=self.batch_size,
         max_seqs=self.max_seqs,
         max_seq_length=self.max_seq_length,
+        max_pad_size=self.max_pad_size,
         seq_drop=self.seq_drop,
         shuffle_batches=self.shuffle_batches,
         used_data_keys=self.network.get_used_data_keys())
