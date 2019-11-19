@@ -113,6 +113,7 @@ def analyze_dataset(options):
   finally:
     print("Done. Total time %s. More seqs which we did not dumped: %s" % (
       hms(time.time() - start_time), batches.has_more()), file=log.v2)
+    print("Dataset epoch %i, order %r." % (dataset.epoch, dataset.seq_ordering))
     print("Num batches (steps): %i" % step, file=log.v1)
     print("Num seqs: %i" % total_num_seqs, file=log.v1)
     num_seqs_stats.dump(stream=log.v1, stream_prefix="Batch num seqs ")
@@ -153,7 +154,7 @@ def init(config_str, config_dataset, use_pretrain, epoch, verbosity):
   config.set("log", None)
   config.set("log_verbosity", verbosity)
   rnn.init_log()
-  print("Returnn dump-dataset starting up.", file=log.v2)
+  print("Returnn %s starting up." % __file__, file=log.v2)
   rnn.returnn_greeting()
   rnn.init_faulthandler()
   rnn.init_config_json_network()
