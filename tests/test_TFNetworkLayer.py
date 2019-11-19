@@ -680,15 +680,15 @@ def test_constant_layer():
       "num_outputs": 3,
       "num_inputs": 2,
       "network": {
-        "output": {"class": "constant", "value": 42, "from": []}
+        "output": {"class": "constant", "value": 42}
       }
     })
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_dict["network"])
     out = network.get_default_output_layer(must_exist=True)
     v = session.run(out.output.placeholder)
-    assert_equal(v.shape, (1,))  # (batch,), where batch==1 for broadcasting
-    assert_equal(v[0], 42)
+    assert_equal(v.shape, ())  # (batch,), where batch==1 for broadcasting
+    assert_equal(v, 42)
 
 
 def test_compare_layer():
@@ -699,17 +699,17 @@ def test_compare_layer():
       "num_outputs": 3,
       "num_inputs": 2,
       "network": {
-        "const": {"class": "constant", "value": 3, "from": []},
-        "output": {"class": "compare", "from": ["const"], "value": 3}
+        "const": {"class": "constant", "value": 3},
+        "output": {"class": "compare", "from": "const", "value": 3}
       }
     })
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_dict["network"])
     out = network.get_default_output_layer(must_exist=True)
     v = session.run(out.output.placeholder)
-    assert_equal(v.shape, (1,))  # (batch,), where batch==1 for broadcasting
+    assert_equal(v.shape, ())  # (batch,), where batch==1 for broadcasting
     assert_equal(v.dtype, numpy.dtype("bool"))
-    assert_equal(v[0], True)
+    assert_equal(v, True)
 
 
 def test_shift_layer():
