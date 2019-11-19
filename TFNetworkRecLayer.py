@@ -2004,9 +2004,15 @@ class _SubnetworkRecCell(object):
               element_shape=self.layer_data_templates[layer_name].output.batch_shape,
               size=tf.reduce_max(fixed_seq_len),
               infer_shape=True)
-            inp_ta = inp_ta.unstack(
-              layer.output.get_placeholder_as_time_major(),
-              name="%s_ta_unstack" % layer_name)
+            with tf.control_dependencies([
+                  tf.Assert(tf.equal(
+                    tf.shape(layer.output.placeholder)[layer.output.time_dim_axis], tf.reduce_max(fixed_seq_len)),
+                    ["input TA unstack", str(layer.output), "shape", tf.shape(layer.output.placeholder),
+                     "seq len", layer.output.get_sequence_lengths(), "do not match",
+                     "fixed seq len", fixed_seq_len, "max", tf.reduce_max(fixed_seq_len)])]):
+              inp_ta = inp_ta.unstack(
+                layer.output.get_placeholder_as_time_major(),
+                name="%s_ta_unstack" % layer_name)
             input_layers_moved_out_tas[layer_name] = inp_ta
 
       # Create a tensor array to store the intermediate values for each step i, e.g. of shape (batch, dim).
