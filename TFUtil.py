@@ -9002,6 +9002,88 @@ def get_positional_encoding(num_channels, length=None, position=None, min_timesc
   return signal
 
 
+def get_linear_alignment_out_to_in_indices(input_lens, output_lens, pad_value=0):
+  """
+  :param tf.Tensor|list[int] input_lens: [B]
+  :param tf.Tensor|list[int] output_lens: [B]
+  :param int pad_value:
+  :return: [B,outT], mapping to input positions [0..input_len-1].
+    Examples:
+      * input_len=7, output_len=3, resulting indices [1,3,5].
+      * input_len=3, output_len=3, resulting indices [0,1,2].
+      * input_len=2, output_len=4, resulting indices [0,0,1,1].
+  :rtype: tf.Tensor
+  """
+  input_lens = tf.convert_to_tensor(input_lens)
+  output_lens = tf.convert_to_tensor(output_lens)
+  out_time_dim = tf.reduce_max(output_lens)
+  out_times = tf.expand_dims(tf.range(out_time_dim), axis=0)  # (1,outT)
+  # Add 1, such that the first index is not necessarily at 0.
+  idxs = tf.cast(out_times + 1, tf.float32)  # (1,outT)
+
+  # We want: x[0] == (input_len+1)/(output_len+1), x[output_len] == input_len + 1.
+  factors = (
+    tf.maximum(tf.cast(input_lens + 1, tf.float32), 0.0) /
+    tf.maximum(tf.cast(output_lens + 1, tf.float32), 1.0))  # (B,)
+  factors = tf.expand_dims(factors, axis=1)  # (B,1)
+  idxs = idxs * factors  # (B,outT)
+  idxs = tf.cast(tf.round(idxs), tf.int32)
+  idxs = idxs - 1  # correct from above
+  # For safety, clip.
+  idxs = tf.clip_by_value(idxs, 0, expand_dims_unbroadcast(input_lens - 1, axis=1, dim=out_time_dim))  # (B,outT)
+
+  # Although not required for the padding area, it is helpful to have 0 there.
+  # (E.g. cheating gold targets in the rec layer requires this.)
+  idxs = where_bc(tf.less(out_times, tf.expand_dims(output_lens, axis=1)), idxs, pad_value)
+  return idxs
+
+
+def get_rnnt_linear_aligned_output(input_lens, targets, target_lens, blank_label_idx, pad_value=0):
+  """
+  RNN-T (https://arxiv.org/abs/1211.3711) has an output length of input_lens + target_lens.
+  Here we create a linear alignment.
+  Examples: (B is blank.)
+    * input_len=4, targets=[a,b,c] (len 3), output=[B,a,B,b,B,c,B] (len 7).
+    * input_len=0, targets=[a,b,c] (len 3), output=[a,b,c] (len 3).
+    * input_len=4, targets=[a] (len 1), output=[B,B,a,B,B] (len 5).
+    * input_len=3, targets=[a,b] (len 2), output=[B,a,B,b,B] (len 5)
+
+  :param tf.Tensor|list[int] input_lens: [B], int32. the input (or encoder) lengths
+  :param tf.Tensor|list[list[int]] targets: [B,targetT], int32
+  :param tf.Tensor|list[int] target_lens: [B], int32. the targets length
+  :param int blank_label_idx:
+  :param int pad_value:
+  :return: output [B,outT], output_lens [B]. The output is basically the target filled with blank in between.
+  :rtype: (tf.Tensor,tf.Tensor)
+  """
+  input_lens = tf.convert_to_tensor(input_lens)
+  targets = tf.convert_to_tensor(targets)
+  target_lens = tf.convert_to_tensor(target_lens)
+  out_lens = input_lens + target_lens
+  out_time_dim = tf.reduce_max(out_lens)
+  batch_dim = tf.shape(out_lens)[0]
+  target_time_dim = tf.shape(targets)[1]
+
+  # Build idx to scatter_nd of out_times.
+  idxs = get_linear_alignment_out_to_in_indices(
+    input_lens=out_lens, output_lens=target_lens, pad_value=-1)  # (B,targetT)
+  idxs = idxs + 1  # make valid pad_value
+
+  target_times = tf.expand_dims(tf.range(target_time_dim), axis=0)  # (1,targetT)
+  out_values = tf.concat([tf.tile([[blank_label_idx]], [batch_dim, 1]), targets], axis=1)  # (B,targetT+1)
+  # Build idx to gather_nd of out_values. Values [0..targetT].
+  idxs2 = tf.scatter_nd(
+    indices=nd_indices(idxs),
+    updates=tf.tile(target_times + 1, [batch_dim, 1]),
+    shape=[batch_dim, out_time_dim + 1])  # (B,outT+1)
+  idxs2 = idxs2[:, 1:]  # (B,outT). remove the scratch area.
+  out = tf.gather_nd(out_values, indices=nd_indices(idxs2))  # (B,outT)
+  # Although not required for the padding area, it is helpful to have 0 there.
+  # (E.g. cheating gold targets in the rec layer requires this.)
+  out = where_bc(tf.less(tf.range(out_time_dim)[None, :], out_lens[:, None]), out, pad_value)
+  return out, out_lens
+
+
 def get_non_deterministic_ops_from_graph():
   """
   Lists all non deterministic ops used in the default graph

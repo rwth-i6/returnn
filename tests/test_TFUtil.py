@@ -3307,6 +3307,66 @@ def test_get_position_encoding():
      [0.9092974066734314, 0.0001999999803956598, -0.416146844625473, 1.0]])
 
 
+def test_get_linear_alignment_out_to_in_indices():
+  #     Examples:
+  #       * input_len=7, output_len=3, resulting indices [1,3,5].
+  #       * input_len=3, output_len=3, resulting indices [0,1,2].
+  #       * input_len=2, output_len=4, resulting indices [0,0,1,1].
+  assert_equal(
+    session.run(get_linear_alignment_out_to_in_indices(input_lens=[7], output_lens=[3])).tolist(),
+    [[1, 3, 5]])
+  assert_equal(
+    session.run(get_linear_alignment_out_to_in_indices(input_lens=[3], output_lens=[3])).tolist(),
+    [[0, 1, 2]])
+  assert_equal(
+    session.run(get_linear_alignment_out_to_in_indices(input_lens=[2], output_lens=[4])).tolist(),
+    [[0, 0, 1, 1]])
+  assert_equal(
+    session.run(get_linear_alignment_out_to_in_indices(input_lens=[7, 3, 1], output_lens=[3, 3, 3])).tolist(),
+    [[1, 3, 5], [0, 1, 2], [0, 0, 0]])
+  assert_equal(
+    session.run(
+      get_linear_alignment_out_to_in_indices(input_lens=[7, 4, 2, 1], output_lens=[3, 4, 4, 2], pad_value=-1)).tolist(),
+    [[1, 3, 5, -1], [0, 1, 2, 3], [0, 0, 1, 1], [0, 0, -1, -1]])
+
+
+def test_get_rnnt_linear_aligned_output():
+  #   Examples: (B is blank.)
+  #     * input_len=4, targets=[a,b,c] (len 3), output=[B,a,B,b,B,c,B] (len 7).
+  #     * input_len=0, targets=[a,b,c] (len 3), output=[a,b,c] (len 3).
+  #     * input_len=4, targets=[a] (len 1), output=[B,B,a,B,B] (len 5).
+  #     * input_len=3, targets=[a,b] (len 2), output=[B,a,B,b,B] (len 5)
+  assert_equal(
+    session.run(get_rnnt_linear_aligned_output(
+      input_lens=[4], targets=[[1, 2, 3]], target_lens=[3], blank_label_idx=4)[0]).tolist(),
+    [[4, 1, 4, 2, 4, 3, 4]])
+  assert_equal(
+    session.run(get_rnnt_linear_aligned_output(
+      input_lens=[0], targets=[[1, 2, 3]], target_lens=[3], blank_label_idx=4)[0]).tolist(),
+    [[1, 2, 3]])
+  assert_equal(
+    session.run(get_rnnt_linear_aligned_output(
+      input_lens=[4], targets=[[1]], target_lens=[1], blank_label_idx=4)[0]).tolist(),
+    [[4, 4, 1, 4, 4]])
+  assert_equal(
+    session.run(get_rnnt_linear_aligned_output(
+      input_lens=[3], targets=[[1, 2]], target_lens=[2], blank_label_idx=4)[0]).tolist(),
+    [[4, 1, 4, 2, 4]])
+  assert_equal(
+    session.run(get_rnnt_linear_aligned_output(
+      input_lens=[2], targets=tf.zeros((1, 0), dtype=tf.int32), target_lens=[0], blank_label_idx=4)[0]).tolist(),
+    [[4, 4]])
+  assert_equal(
+    session.run(get_rnnt_linear_aligned_output(
+      input_lens=[4, 3, 2, 0],
+      targets=[[1, 2, 3], [1, 2, -1], [-1, -1, -1], [1, 2, 3]],
+      target_lens=[3, 2, 0, 3], blank_label_idx=4)[0]).tolist(),
+    [[4, 1, 4, 2, 4, 3, 4],
+     [4, 1, 4, 2, 4, 0, 0],
+     [4, 4, 0, 0, 0, 0, 0],
+     [1, 2, 3, 0, 0, 0, 0]])
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
