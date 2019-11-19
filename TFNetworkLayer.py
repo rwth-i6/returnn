@@ -3351,16 +3351,21 @@ class ConstantLayer(LayerBase):
   layer_class = "constant"
 
   # noinspection PyUnusedLocal
-  def __init__(self, sources, value=0., dtype=None, **kwargs):
+  def __init__(self, sources, value=0., dtype=None, with_batch_dim=False, **kwargs):
     """
     :param list[LayerBase] sources:
     :param int|float|bool value:
     :param str|None dtype:
+    :param bool with_batch_dim:
     """
     assert not sources, "constant layer cannot have sources"
     super(ConstantLayer, self).__init__(**kwargs)
-    # Add batch-dim to the constant.
-    self.output.placeholder = tf.expand_dims(tf.constant(value, dtype=self.output.dtype), axis=0)
+    value = tf.constant(value, dtype=self.output.dtype)
+    if with_batch_dim:
+      # Add batch-dim to the constant.
+      from TFUtil import expand_dims_unbroadcast
+      value = expand_dims_unbroadcast(value, axis=0, dim=self.get_batch_dim())
+    self.output.placeholder = value
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -3373,11 +3378,12 @@ class ConstantLayer(LayerBase):
     super(ConstantLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, value=0., dtype=None, **kwargs):
+  def get_out_data_from_opts(cls, name, value=0., dtype=None, with_batch_dim=False, **kwargs):
     """
     :param str name:
     :param int|float|bool value:
     :param str|None dtype:
+    :param bool with_batch_dim:
     :rtype: Data
     """
     if dtype is None:
@@ -3390,7 +3396,9 @@ class ConstantLayer(LayerBase):
       else:
         raise TypeError("cannot handle value %r of type %r" % (value, type(value)))
     return Data(
-      name="%s_const" % name, shape=(), batch_dim_axis=0, time_dim_axis=None, dtype=dtype)
+      name="%s_const" % name,
+      shape=(), batch_dim_axis=0 if with_batch_dim else None, time_dim_axis=None,
+      dtype=dtype)
 
 
 class GatingLayer(_ConcatInputLayer):
