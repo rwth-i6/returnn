@@ -1231,6 +1231,11 @@ def init_dataset(kwargs, extra_kwargs=None, default_kwargs=None):
   if isinstance(kwargs, (str, unicode)):
     if kwargs.startswith("{"):
       kwargs = eval(kwargs)
+    elif kwargs.startswith("config:"):
+      from Config import get_global_config
+      config = get_global_config()
+      data = eval(kwargs[len("config:"):], config.typed_dict, config.typed_dict)
+      return init_dataset(data, extra_kwargs=extra_kwargs, default_kwargs=default_kwargs)
     else:
       config_str = kwargs
       kwargs = {}
