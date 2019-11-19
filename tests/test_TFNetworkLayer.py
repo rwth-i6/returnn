@@ -1033,6 +1033,50 @@ def test_MergeDimsLayer_simple_feat():
     numpy.testing.assert_almost_equal(out_v, in_v.reshape(out_v.shape))
 
 
+def test_SwitchLayer_const_no_time():
+  config = Config({
+    "extern_data": {
+      "data": {"dim": 3, "sparse": True, "shape": ()},
+    },
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "input_eq_0": {"class": "compare", "from": "data", "value": 0},  # (B,)
+      "const0": {"class": "constant", "value": 0},
+      "const1": {"class": "constant", "value": 1},
+      "switch": {"class": "switch", "condition": "input_eq_0", "true_from": "const1", "false_from": "const0"},
+      "output": {"class": "copy", "from": "switch"}})
+    net.print_network_info()
+    feed_dict = make_feed_dict(net.extern_data.data.values())
+    out = session.run(net.get_default_output_layer().output.placeholder, feed_dict=feed_dict)
+    print(out)
+
+
+def test_SwitchLayer_const():
+  config = Config({
+    "extern_data": {
+      "data": {"dim": 3, "sparse": True},
+    },
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "input_eq_0": {"class": "compare", "from": "data", "value": 0},  # (B,T)
+      "const0": {"class": "constant", "value": 0},
+      "const1": {"class": "constant", "value": 1},
+      "switch": {
+        "class": "switch", "condition": "input_eq_0", "true_from": "const1", "false_from": "const0"
+        },
+      "output": {"class": "copy", "from": "switch"}})
+    net.print_network_info()
+    feed_dict = make_feed_dict(net.extern_data.data.values())
+    out = session.run(net.get_default_output_layer().output.placeholder, feed_dict=feed_dict)
+    print(out)
+
+
 def test_CondLayer_subnetwork_train():
   n_batch, n_time, n_in, n_out = 3, 7, 11, 13
   config = Config({

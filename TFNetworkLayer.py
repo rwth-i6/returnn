@@ -6286,6 +6286,7 @@ class SwitchLayer(LayerBase):
     out = out.copy(name="%s_output" % name)
     out.dtype = true_from.output.dtype
     out.sparse = true_from.output.sparse
+    out.dim = true_from.output.dim
     out.vocab = true_from.output.vocab
     return out
 
