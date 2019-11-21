@@ -197,8 +197,9 @@ class RecStepByStepLayer(RecLayer):
     Represents a state variable, i.e. either a state, a choice, or encoder state, etc.
     """
 
-    def __init__(self, name, initial_value, data_shape):
+    def __init__(self, parent, name, initial_value, data_shape):
       """
+      :param RecStepByStepLayer parent:
       :param str name:
       :param tf.Tensor|None initial_value:
         initial_value might have dim 1 in variable dimensions (which are not the batch-dim-axis),
@@ -208,6 +209,7 @@ class RecStepByStepLayer(RecLayer):
         and what we return by self.read().
         If it is not a scalar, and batch-dim-axis > 0, the created variable will still be in batch-major.
       """
+      self.parent = parent
       self.name = name
       self.orig_data_shape = data_shape
       self.var_data_shape = data_shape.copy_as_batch_major() if data_shape.batch_dim_axis is not None else data_shape
@@ -275,6 +277,13 @@ class RecStepByStepLayer(RecLayer):
       """
       assert self.final_value is not None
       value = self.final_value
+      from TFUtil import find_ops_path_output_to_input
+      fetches = []
+      for data in self.parent.network.extern_data.data.values():
+        fetches.append(data.placeholder)
+        fetches.extend(data.size_placeholder.values())
+      path = find_ops_path_output_to_input(value, fetches=fetches)
+      assert not path, "There should be no path from extern data to this final op value, but there is: %r" % (path,)
       if self.orig_data_shape.batch_dim_axis not in (0, None):
         x = self.orig_data_shape.copy()
         x.placeholder = value
@@ -348,7 +357,7 @@ class RecStepByStepLayer(RecLayer):
       # initial_value might have dim 1 in variable dimensions (which are not the batch-dim-axis),
       # see get_rec_initial_output, which should be fine for broadcasting.
       initial_value.set_shape(data_shape.batch_shape)
-    var = self.StateVar(name=name, initial_value=initial_value, data_shape=data_shape)
+    var = self.StateVar(parent=self, name=name, initial_value=initial_value, data_shape=data_shape)
     self.state_vars[name] = var
     return var.read()
 
