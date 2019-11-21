@@ -343,7 +343,7 @@ class TFNetwork(object):
     self.recurrent = False
     self._assigner_cache = {}  # type: typing.Dict[tf.Variable,VariableAssigner]
     self.concat_sources_dropout_cache = {}  # type: typing.Dict[typing.Tuple[typing.Tuple[LayerBase,...],float,typing.Optional[typing.Tuple[typing.Optional[int],...]]],Data]  # nopep8
-    self._batch_dim = None  # see get_batch_dim
+    self._batch_dim = None  # see get_data_batch_dim
     self._merge_all_summaries = None  # type: typing.Optional[tf.Tensor]
     self._graph_reset_callbacks = []  # type: typing.List[typing.Callable]
 
@@ -1722,13 +1722,14 @@ class TFNetwork(object):
     :rtype: int|tf.Tensor
     """
     from TFUtil import get_shape_dim, reuse_name_scope_of_tensor
+    if self._batch_dim is not None:
+      return self._batch_dim
     # First check parent because there we might get the true batch dim.
+    # (Do not check parent_layer, because that potentially includes a beam.)
     if self.parent_net:
       return self.parent_net.get_data_batch_dim()
     if self.extra_parent_net:
       return self.extra_parent_net.get_data_batch_dim()
-    if self._batch_dim is not None:
-      return self._batch_dim
     for key, data in self.extern_data.get_sorted_data_items():
       assert isinstance(data, Data)
       if data.available_for_inference:

@@ -238,7 +238,7 @@ class RecStepByStepLayer(RecLayer):
       self.final_value = None  # type: typing.Optional[tf.Tensor]
 
     def __repr__(self):
-      return "<StateVar %r>" % self.name
+      return "<StateVar %r, shape %r, initial %r>" % (self.name, self.var_data_shape, self.orig_initial_value)
 
     def set_final_value(self, final_value):
       """
@@ -438,6 +438,18 @@ class RecStepByStepLayer(RecLayer):
         for k, v in final_values.items()}
     raise TypeError("unhandled type %r" % (final_values,))
 
+  def get_batch_dim_from_state(self):
+    """
+    :return: batch-dim, from some (any) state var, scalar, int32
+    :rtype: tf.Tensor
+    """
+    for name, v in sorted(self.state_vars.items()):
+      assert isinstance(v, RecStepByStepLayer.StateVar)
+      if v.var_data_shape.batch_dim_axis is not None:
+        with tf.name_scope("batch_dim_from_state_%s" % v.name):
+          return tf.shape(v.var)[v.var_data_shape.batch_dim_axis]
+    raise Exception("None of the state vars do have a batch-dim: %s" % self.state_vars)
+
   def add_stochastic_var(self, name):
     """
     :param str name:
@@ -611,6 +623,13 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       net_vars = rec_layer.create_state_vars_recursive(
         name_prefix="state", initial_values=net_vars, data_shape=(prev_outputs_data, None))
     # We are ignoring acc_tas (the tensor arrays).
+
+    # Some layers make explicit use of the (global data) batch-dim,
+    # which they can get via TFNetwork.get_data_batch_dim().
+    # This will add a dependency on the external data, which we want to avoid.
+    # We can avoid that by taking the batch dim instead from one of the other states.
+    # Note that this would be wrong in beam search.
+    self.net._batch_dim = rec_layer.get_batch_dim_from_state()
 
     with tf.name_scope("cond"):
       rec_layer.create_state_var("cond", tf.constant(True))
