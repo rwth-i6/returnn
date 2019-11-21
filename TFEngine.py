@@ -939,6 +939,8 @@ class Engine(EngineBase):
       # - SubnetworkLayer also has a load_on_init option.
       # - LayerBase has custom_param_importer which is quite flexible.
       print("Start pre-loading weights...", file=log.v2)
+      # model_name will not be used directly, but it defines the order in which we apply the preloading.
+      # Variables are initialized by the first preload.
       for model_name, opts in sorted(self.preload_from_files.items()):
         assert isinstance(opts, dict)
         if opts.get("init_for_train", False):
@@ -957,6 +959,9 @@ class Engine(EngineBase):
           saveable_params=self.network.get_params_list(),
           params_prefix=self_prefix, load_if_prefix=load_if_prefix,
           ignore_missing=opts.get("ignore_missing", False))
+        # `set_as_custom_init` is also a marker for the vars, that they are preloaded,
+        # such that further checkpoint loaders will not load them again.
+        loader.set_as_custom_init()
         loader.load_now(session=self.tf_session)
 
     if model_epoch_filename:
