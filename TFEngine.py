@@ -1323,7 +1323,10 @@ class Engine(EngineBase):
     train_batches = self.dataset_batches['train']
 
     self.updater.set_learning_rate(self.learning_rate, session=self.tf_session)
-    trainer = Runner(engine=self, dataset=self.train_data, batches=train_batches, train=True)
+    trainer = Runner(
+      engine=self,
+      dataset=self.train_data, batches=train_batches,
+      train=self.network.layers_desc.get("#trainable", True))
     trainer.run(report_prefix=("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch)
 
     if not trainer.finalized:
