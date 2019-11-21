@@ -278,11 +278,11 @@ class RecStepByStepLayer(RecLayer):
       assert self.final_value is not None
       value = self.final_value
       from TFUtil import find_ops_path_output_to_input
-      fetches = []
+      feed_tensors = []
       for data in self.parent.network.extern_data.data.values():
-        fetches.append(data.placeholder)
-        fetches.extend(data.size_placeholder.values())
-      path = find_ops_path_output_to_input(value, fetches=fetches)
+        feed_tensors.append(data.placeholder)
+        feed_tensors.extend(data.size_placeholder.values())
+      path = find_ops_path_output_to_input(fetches=value, tensors=feed_tensors)
       assert not path, "There should be no path from extern data to this final op value, but there is: %r" % (path,)
       if self.orig_data_shape.batch_dim_axis not in (0, None):
         x = self.orig_data_shape.copy()
