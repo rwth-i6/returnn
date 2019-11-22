@@ -73,6 +73,51 @@ def make_scope():
       yield session
 
 
+class SimpleCumSumCell(BaseRNNCell):
+  """
+  Implements cumsum.
+  """
+
+  def __init__(self, num_units):
+    """
+    :param int num_units:
+    """
+    super(SimpleCumSumCell, self).__init__()
+    self._num_units = num_units
+
+  @property
+  def output_size(self):
+    """
+    :rtype: int
+    """
+    return self._num_units
+
+  @property
+  def state_size(self):
+    """
+    :rtype: int
+    """
+    return self._num_units
+
+  # noinspection PyMethodOverriding
+  def call(self, inputs, state):
+    """
+    :param tf.Tensor inputs:
+    :param tf.Tensor state:
+    :return: (output, state)
+    :rtype: (tf.Tensor, tf.Tensor)
+    """
+    inputs.set_shape((None, self._num_units))
+    state.set_shape((None, self._num_units))
+    current_state = inputs + state
+    return current_state, current_state
+
+
+# Currently there is no good API to register an external rec cell class...
+RecLayer._create_rnn_cells_dict()
+RecLayer._rnn_cells_dict["cumsum"] = SimpleCumSumCell
+
+
 def _check_train_simple_network(network, num_steps=10):
   num_inputs = 4
   num_outputs = 3
@@ -4274,10 +4319,16 @@ def test_MaskedComputationLayer_UnmaskLayer_in_loop():
             "eval": "tf.equal(source(0) % 2, source(1))"},
           "masked": {
             "class": "masked_computation", "from": "data:source", "mask": "mask",
-            "unit": {"class": "copy", "initial_output": -1},
-            },
+            "unit": {
+              "class": "subnetwork", "from": "data",
+              "subnetwork": {
+                "input0": {"class": "cast", "from": "data", "dtype": "float32"},
+                "input1": {"class": "expand_dims", "axis": "f", "from": "input0"},
+                "output": {"class": "rec", "unit": "cumsum", "n_out": 1, "from": "input1"},
+              },
+            }},
           "unmask": {"class": "unmask", "from": "masked", "mask": "mask"},
-          "output": {"class": "copy", "from": "unmask"},
+          "output": {"class": "squeeze", "from": "unmask", "axis": "f"},
         }
       }
     }
@@ -4296,13 +4347,13 @@ def test_MaskedComputationLayer_UnmaskLayer_in_loop():
     print(out_v)
     assert_equal(in_v.shape, out_v.shape)
     for b in range(in_v.shape[0]):
-      x = -1
+      x = 0.0
       for t in range(in_v.shape[1]):
         if t % 2 == 1:
-          y = in_v[b, t]
+          y = x + in_v[b, t]
         else:
           y = x
-        assert_equal(y, out_v[b, t])
+        numpy.testing.assert_almost_equal(y, out_v[b, t])
         x = y
 
 
@@ -4328,10 +4379,16 @@ def test_MaskedComputationLayer_UnmaskLayer_masked_outside():
           "masked": {
             "class": "masked_computation", "from": "data:source", "mask": "mask",
             "masked_from": "base:data:data_masked",
-            "unit": {"class": "copy", "initial_output": -1},
-            },
+            "unit": {
+              "class": "subnetwork", "from": "data",
+              "subnetwork": {
+                "input0": {"class": "cast", "from": "data", "dtype": "float32"},
+                "input1": {"class": "expand_dims", "axis": "f", "from": "input0"},
+                "output": {"class": "rec", "unit": "cumsum", "n_out": 1, "from": "input1"},
+              },
+            }},
           "unmask": {"class": "unmask", "from": "masked", "mask": "mask", "collocate_with": "in_loop_dummy"},
-          "output": {"class": "copy", "from": "unmask"},
+          "output": {"class": "squeeze", "from": "unmask", "axis": "f"},
         }
       }
     }
@@ -4355,13 +4412,13 @@ def test_MaskedComputationLayer_UnmaskLayer_masked_outside():
     print(out_v)
     assert_equal(in_v.shape, out_v.shape)
     for b in range(in_v.shape[0]):
-      x = -1
+      x = 0.0
       for t in range(in_v.shape[1]):
         if t % 2 == 1:
-          y = in_v[b, t]
+          y = x + in_v[b, t]
         else:
           y = x
-        assert_equal(y, out_v[b, t])
+        numpy.testing.assert_almost_equal(y, out_v[b, t])
         x = y
 
 
