@@ -4165,6 +4165,39 @@ class ExpandDimsLayer(_ConcatInputLayer):
     return data
 
 
+class CastLayer(CopyLayer):
+  """
+  Cast to some other dtype.
+  """
+  layer_class = "cast"
+
+  def __init__(self, dtype, output, **kwargs):
+    """
+    :param str dtype:
+    :param Data output:
+    """
+    super(CastLayer, self).__init__(output=output, **kwargs)
+    if self.output.dtype != dtype:
+      self.output = output
+      self.output.placeholder = tf.cast(self.input_data.placeholder, dtype)
+
+  @classmethod
+  def get_out_data_from_opts(cls, dtype, **kwargs):
+    """
+    :param str dtype:
+    :rtype: Data
+    """
+    out = super(CastLayer, cls).get_out_data_from_opts(**kwargs).copy_template()
+    out.dtype = dtype
+    if out.sparse and out.dtype.startswith("float") or out.dtype.startswith("complex"):
+      out.sparse = False
+      if out.feature_dim_axis is not None:
+        out.dim = out.batch_shape[out.feature_dim_axis]
+      else:
+        out.dim = None
+    return out
+
+
 class SwapAxesLayer(_ConcatInputLayer):
   """
   Swaps two axes. Basically a wrapper around :func:`TFUtil.swapaxes`.
