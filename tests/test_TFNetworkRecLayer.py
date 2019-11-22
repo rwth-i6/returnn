@@ -4254,6 +4254,117 @@ def test_GenericAttentionLayer_extra_spatial_multi_head():
   assert list(layer.output.size_placeholder.values())[0] is layer.weights.output.size_placeholder[0]
 
 
+def test_MaskedComputationLayer_UnmaskLayer_in_loop():
+  from test_TFNetworkLayer import make_feed_dict
+  from TFNetworkRecLayer import _SubnetworkRecCell
+  with make_scope() as session:
+    config = Config({"debug_print_layer_output_template": True})
+    net = TFNetwork(
+      extern_data=ExternData({"data": {"dim": 20, "sparse": True}}),
+      config=config)
+    net_dict = {
+      "output": {
+        "class": "rec",
+        "from": "data",
+        "optimize_move_layers_out": False,  # for this test, keep them all in
+        "unit": {
+          "const1": {"class": "constant", "value": 1, "with_batch_dim": True},  # just to broadcast mask
+          "mask": {
+            "class": "eval", "from": [":i", "const1"], "out_type": {"dtype": "bool"},
+            "eval": "tf.equal(source(0) % 2, source(1))"},
+          "masked": {
+            "class": "masked_computation", "from": "data:source", "mask": "mask",
+            "unit": {"class": "copy", "initial_output": -1},
+            },
+          "unmask": {"class": "unmask", "from": "masked", "mask": "mask"},
+          "output": {"class": "copy", "from": "unmask"},
+        }
+      }
+    }
+    net.construct_from_dict(net_dict)
+    rec_layer = net.get_layer("output")
+    assert isinstance(rec_layer, RecLayer)
+    rec_cell = rec_layer.cell
+    assert isinstance(rec_cell, _SubnetworkRecCell)
+    assert "masked" in rec_cell.layers_in_loop
+    assert "unmask" in rec_cell.layers_in_loop
+    in_data = net.get_layer("data").output
+    out_data = net.get_layer("output").output.copy_as_batch_major()
+    feed_dict = make_feed_dict(net.extern_data.data.values())
+    in_v, out_v = session.run((in_data.placeholder, out_data.placeholder), feed_dict=feed_dict)
+    print(in_v)
+    print(out_v)
+    assert_equal(in_v.shape, out_v.shape)
+    for b in range(in_v.shape[0]):
+      x = -1
+      for t in range(in_v.shape[1]):
+        if t % 2 == 1:
+          y = in_v[b, t]
+        else:
+          y = x
+        assert_equal(y, out_v[b, t])
+        x = y
+
+
+def test_MaskedComputationLayer_UnmaskLayer_masked_outside():
+  from TFNetworkRecLayer import _SubnetworkRecCell
+  with make_scope() as session:
+    config = Config({"debug_print_layer_output_template": True})
+    net = TFNetwork(
+      extern_data=ExternData({
+        "data": {"dim": 20, "sparse": True},
+        "data_masked": {"dim": 20, "sparse": True}}),
+      config=config)
+    net_dict = {
+      "output": {
+        "class": "rec",
+        "from": "data",
+        "unit": {
+          "const1": {"class": "constant", "value": 1, "with_batch_dim": True},  # just to broadcast mask
+          "in_loop_dummy": {"class": "combine", "kind": "add", "from": ["const1", "prev:in_loop_dummy"]},
+          "mask": {
+            "class": "eval", "from": [":i", "const1", "in_loop_dummy"], "out_type": {"dtype": "bool"},
+            "eval": "(tf.equal(source(0) % 2, source(1)), source(2))[0]", "collocate_with": "in_loop_dummy"},
+          "masked": {
+            "class": "masked_computation", "from": "data:source", "mask": "mask",
+            "masked_from": "base:data:data_masked",
+            "unit": {"class": "copy", "initial_output": -1},
+            },
+          "unmask": {"class": "unmask", "from": "masked", "mask": "mask", "collocate_with": "in_loop_dummy"},
+          "output": {"class": "copy", "from": "unmask"},
+        }
+      }
+    }
+    net.construct_from_dict(net_dict)
+    rec_layer = net.get_layer("output")
+    assert isinstance(rec_layer, RecLayer)
+    rec_cell = rec_layer.cell
+    assert isinstance(rec_cell, _SubnetworkRecCell)
+    assert "masked" in rec_cell.input_layers_moved_out
+    assert "unmask" in rec_cell.layers_in_loop
+    in_data = net.get_layer("data").output
+    out_data = net.get_layer("output").output.copy_as_batch_major()
+    feed_dict = {
+      net.extern_data.data["data"].placeholder: [[3, 4, 5, 6], [5, 4, -3, -4]],
+      net.extern_data.data["data"].size_placeholder[0]: [4, 2],
+      net.extern_data.data["data_masked"].placeholder: [[4, 6], [4, -4]],
+      net.extern_data.data["data_masked"].size_placeholder[0]: [2, 1]
+    }
+    in_v, out_v = session.run((in_data.placeholder, out_data.placeholder), feed_dict=feed_dict)
+    print(in_v)
+    print(out_v)
+    assert_equal(in_v.shape, out_v.shape)
+    for b in range(in_v.shape[0]):
+      x = -1
+      for t in range(in_v.shape[1]):
+        if t % 2 == 1:
+          y = in_v[b, t]
+        else:
+          y = x
+        assert_equal(y, out_v[b, t])
+        x = y
+
+
 def test_untrainable_sublayers():
   with make_scope() as session:
     config = Config()

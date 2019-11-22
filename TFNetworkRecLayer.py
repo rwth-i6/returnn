@@ -6326,17 +6326,21 @@ class MaskedComputationLayer(LayerBase):
 
     self.sub_layer = layer_class(**layer_desc)
     self.sub_layer.post_init(layer_desc)
-    self.output = self.sub_layer.output.copy(name="%s_output" % self.name)
+    self.output = self.sub_layer.output.copy(name="%s_output" % self.name).copy_compatible_to(self.output)
     self.rec_vars_outputs = self.sub_layer.rec_vars_outputs.copy()
 
     if self.mask:
       assert self._rec_previous_layer
       assert self.mask.output.shape == () and self.mask.output.batch_shape == (None,)
+      assert self.output.is_batch_major
+      prev_out = self.output.copy_template()
+      prev_out.placeholder = self._rec_previous_layer.rec_vars_outputs["_output"]
       mask_t = self.mask.output.placeholder
       self.output.placeholder = where_bc(
         condition=tf.reshape(mask_t, [-1] + [1] * (self.output.batch_ndim - 1)),  # add broadcast dims
         x=self.output.placeholder,
-        y=self._rec_previous_layer.output.placeholder)
+        y=prev_out.placeholder)
+      self.rec_vars_outputs["_output"] = self.output.placeholder
       for key, value in sorted(self.rec_vars_outputs.items()):
         assert isinstance(key, str)
         assert isinstance(value, tf.Tensor)
@@ -6375,7 +6379,6 @@ class MaskedComputationLayer(LayerBase):
     else:
       d["masked_from"] = None
       d["mask"] = get_layer(d["mask"])
-      d["rec_previous_layer"] = get_layer("prev:%s" % d["name"])  # enforce that we have it
     super(MaskedComputationLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
@@ -6422,12 +6425,15 @@ class MaskedComputationLayer(LayerBase):
     return layer_class, layer_desc
 
   @classmethod
-  def get_out_data_from_opts(cls, **kwargs):
+  def get_out_data_from_opts(cls, network, **kwargs):
     """
+    :param TFNetwork.TFNetwork network:
     :rtype: Data
     """
-    layer_class, layer_desc = cls._create_template(**kwargs)
+    layer_class, layer_desc = cls._create_template(network=network, **kwargs)
     output = layer_class.get_out_data_from_opts(**layer_desc)
+    if network.is_inside_rec_layer():
+      output = output.copy_as_batch_major()
     return output
 
   def get_constraints_value(self):
@@ -6448,7 +6454,7 @@ class MaskedComputationLayer(LayerBase):
     :param kwargs: other layer kwargs
     :rtype: list[TFNetwork.LossHolder]
     """
-    from TFNetwork import LossHolder, get_layer_class
+    from TFNetwork import LossHolder
     # See SubnetworkLayer.get_losses as another example.
     losses = super(MaskedComputationLayer, cls).get_losses(
       name=name, network=network, output=output, loss=loss, layer=layer, reduce_func=reduce_func, **kwargs)
@@ -6466,46 +6472,55 @@ class MaskedComputationLayer(LayerBase):
       losses.append(loss.copy_new_base(network=network, name="%s/%s" % (name, loss.name)))
     return losses
 
-  # noinspection PyMethodOverriding
   @classmethod
-  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, unit, name, **kwargs):
+  def get_rec_initial_output(cls, initial_output=None, **kwargs):
+    """
+    :param initial_output:
+    :rtype: tf.Tensor
+    """
+    assert initial_output is None, "%s %r, should be configured via the unit" % (cls, kwargs["name"])
+    d = cls.get_rec_initial_extra_outputs(**kwargs)
+    return d["_output"]
+
+  @classmethod
+  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, **kwargs):
     """
     :param tf.Tensor batch_dim: for this layer, might be with beam
     :param TFNetworkRecLayer.RecLayer rec_layer:
-    :param dict[str] unit:
     :param str name:
     :rtype: dict[str,tf.Tensor]
     """
-    from TFNetwork import get_layer_class
-    layer_desc = unit.copy()
-    layer_class_name = layer_desc.pop("class")
-    cl = get_layer_class(layer_class_name)
-    # Note: This is not totally correct. We should call transform_config_dict.
-    # But that will make it quite complicated...
-    layer_desc["name"] = name
-    assert issubclass(cl, LayerBase)
-    with cl.cls_layer_scope(name):
-      return cl.get_rec_initial_extra_outputs(batch_dim=batch_dim, rec_layer=rec_layer, **layer_desc)
+    layer_class, layer_desc = cls._create_template(**kwargs)
+    name = kwargs["name"]
+    output = kwargs["output"]
+    assert isinstance(name, str)
+    assert isinstance(output, Data)
+    assert issubclass(layer_class, LayerBase)
+    with layer_class.cls_layer_scope(name):
+      d = layer_class.get_rec_initial_extra_outputs(batch_dim=batch_dim, rec_layer=rec_layer, **layer_desc)
+      initial_out = layer_class.get_rec_initial_output(
+        batch_dim=batch_dim, rec_layer=rec_layer, output=output.copy_as_batch_major(), **layer_desc)
+      assert "_output" not in d
+      d["_output"] = initial_out
+      return d
 
   @classmethod
-  def get_rec_initial_extra_outputs_shape_invariants(cls, unit, name, **kwargs):
+  def get_rec_initial_extra_outputs_shape_invariants(cls, **kwargs):
     """
-    :param dict[str] unit:
-    :param str name:
     :return: optional shapes for the tensors by get_rec_initial_extra_outputs
     :rtype: dict[str,tf.TensorShape]
     """
     # Very similar to get_rec_initial_extra_outputs.
-    from TFNetwork import get_layer_class
-    layer_desc = unit.copy()
-    layer_class_name = layer_desc.pop("class")
-    cl = get_layer_class(layer_class_name)
-    # Note: This is not totally correct. We should call transform_config_dict.
-    # But that will make it quite complicated...
-    layer_desc["name"] = name
-    assert issubclass(cl, LayerBase)
-    with cl.cls_layer_scope(name):
-      return cl.get_rec_initial_extra_outputs_shape_invariants(**layer_desc)
+    layer_class, layer_desc = cls._create_template(**kwargs)
+    name = kwargs["name"]
+    output = kwargs["output"]
+    assert isinstance(name, str)
+    assert isinstance(output, Data)
+    assert issubclass(layer_class, LayerBase)
+    with layer_class.cls_layer_scope(name):
+      d = layer_class.get_rec_initial_extra_outputs_shape_invariants(**layer_desc)
+      d["_output"] = tf.TensorShape(output.copy_as_batch_major().batch_shape)
+      return d
 
 
 class UnmaskLayer(LayerBase):
@@ -6533,14 +6548,17 @@ class UnmaskLayer(LayerBase):
     super(UnmaskLayer, self).__init__(**kwargs)
     self.mask = mask
     src_layer = self.sources[0]
+    batch_dim = self.get_batch_dim()
     if not src_layer.output.have_time_axis():
       assert self.network.is_inside_rec_layer()
       assert self.output.placeholder is not None  # should be the copy of source already
       # Nothing needs to be done.
+      if self.network.is_inside_rec_layer():
+        # We have this state, although we don't need it, we still must set it.
+        self.rec_vars_outputs["t"] = tf.zeros([batch_dim], dtype=tf.int32) - 1
     else:
       rec_parent_layer = self.network.get_rec_parent_layer(inside_loop=False)
       assert rec_parent_layer and isinstance(rec_parent_layer.cell, _SubnetworkRecCell)
-      batch_dim = self.get_batch_dim()
       # noinspection PyProtectedMember
       initial = rec_parent_layer.cell._get_init_output(src_layer.name, batch_dim=batch_dim)  # [B,D']
       if self.network.is_inside_rec_layer():
@@ -6603,6 +6621,7 @@ class UnmaskLayer(LayerBase):
     """
     assert len(sources) == 1
     source, = sources
+    assert isinstance(source, LayerBase)
     if not source or source.output.undefined:
       return Data.create_undefined(name="%s_output" % name)
     out = source.output.copy(name="%s_output" % name)
@@ -6623,15 +6642,19 @@ class UnmaskLayer(LayerBase):
     out.size_placeholder[0] = mask.output.get_sequence_lengths()
     return out
 
+  # noinspection PyMethodOverriding
   @classmethod
-  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, **kwargs):
+  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, sources, **kwargs):
     """
     :param tf.Tensor batch_dim: for this layer, might be with beam
     :param TFNetworkRecLayer.RecLayer rec_layer:
+    :param list[LayerBase] sources:
     :rtype: dict[str,tf.Tensor]
     """
     # This is only called if we are inside the rec layer.
     # In that case, we have a state: The running index in our source.
+    # Note that if the source is also inside the rec layer, we do not need this.
+    # However, there is no way at this point to know this.
     return {"t": tf.zeros([batch_dim], dtype=tf.int32) - 1}
 
 
