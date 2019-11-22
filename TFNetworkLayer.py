@@ -5948,7 +5948,7 @@ class RemoveLayer(LayerBase):
 class CombineLayer(LayerBase):
   """
   Applies some binary operation on all sources, such as addition.
-  Also see :class:`ActivationLayer`.
+  Also see :class:`ActivationLayer`, or :class:`CompareLayer`.
   """
   layer_class = "combine"
 
@@ -6143,7 +6143,11 @@ class EvalLayer(CombineLayer):
   """
   Evaluates some string.
   The :class:`CombineLayer` provides this functionality, thus this is just a special case of it.
-  Also see :class:`ActivationLayer`.
+  Also see :class:`ActivationLayer`, or :class:`CompareLayer`.
+
+  The output type is defined as a broadcasted extension of all sources.
+  You can overwrite it by (partially) specifying `out_type`.
+  `out_type` can also be a generic Python function, returning a `Data` instance.
   """
   layer_class = "eval"
 
