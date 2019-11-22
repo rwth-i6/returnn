@@ -2126,9 +2126,11 @@ class _SubnetworkRecCell(object):
           maybe_transform(self.net.layers[k]).output.copy_compatible_to(
             self.layer_data_templates[k].output).placeholder
           for k in sorted(self._initial_outputs)]
-        extra_flat = [
-          sorted_values_from_dict(maybe_transform(self.net.layers[k]).rec_vars_outputs)
-          for k in sorted(self._initial_extra_outputs)]
+        extra_flat = []
+        for k, v in sorted(self._initial_extra_outputs.items()):
+          layer = maybe_transform(self.net.layers[k])
+          assert set(layer.rec_vars_outputs.keys()) == set(v.keys())
+          extra_flat.append(sorted_values_from_dict(layer.rec_vars_outputs))
         net_vars = (outputs_flat, extra_flat)
 
         if seq_len_info is not None:
