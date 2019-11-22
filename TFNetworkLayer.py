@@ -6548,7 +6548,8 @@ class SubnetworkLayer(LayerBase):
         # The actual layer is not so important.
         # In some cases (e.g. RnnCellLayer), we just want rec_vars_outputs.
         dummy_rec_previous_layer = InternalLayer(
-          name=layer_name, network=net, output=Data(name="dummy_rec_previous_layer(%s)" % layer_name, dim=1))
+          name=layer_name, network=net,
+          output=Data(name="dummy_rec_previous_layer(%s)" % layer_name, dim=1, undefined=True))
         dummy_rec_previous_layer.rec_vars_outputs.update({
           key[len(layer_name + "/"):]: value
           for (key, value) in self._rec_previous_layer.rec_vars_outputs.items()
@@ -6772,23 +6773,23 @@ class SubnetworkLayer(LayerBase):
       return h
     return super(SubnetworkLayer, self).get_last_hidden_state(key=key)
 
-  # noinspection PyMethodOverriding
   @classmethod
-  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, subnetwork, **kwargs):
+  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, **kwargs):
     """
     :param tf.Tensor batch_dim: for this layer, might be with beam
     :param TFNetworkRecLayer.RecLayer rec_layer:
     :param dict[str,dict[str]] subnetwork:
     :rtype: dict[str,tf.Tensor]
     """
+    from TFNetworkRecLayer import _TemplateLayer
+    subnet = cls._construct_template_subnet(
+      name=kwargs.get("name", "<unknown>"), network=kwargs["network"], subnetwork=kwargs["subnetwork"],
+      sources=kwargs["sources"], concat_sources=kwargs.get("concat_sources", True))
     extra_outputs = {}
-    for layer_name, layer_desc in subnetwork.items():
-      layer_desc = layer_desc.copy()
-      layer_class_name = layer_desc.pop("class")
-      cl = get_layer_class(layer_class_name)
-      # Note: This is not totally correct. We should call transform_config_dict.
-      # But that will make it quite complicated...
-      layer_desc["name"] = layer_name
+    for layer_name, sub_layer in subnet.layers.items():
+      assert isinstance(sub_layer, _TemplateLayer)
+      cl = sub_layer.layer_class_type
+      layer_desc = sub_layer.kwargs
       assert issubclass(cl, LayerBase)
       with cl.cls_layer_scope(layer_name):
         d = cl.get_rec_initial_extra_outputs(
@@ -6798,21 +6799,21 @@ class SubnetworkLayer(LayerBase):
     return extra_outputs
 
   @classmethod
-  def get_rec_initial_extra_outputs_shape_invariants(cls, subnetwork, **kwargs):
+  def get_rec_initial_extra_outputs_shape_invariants(cls, **kwargs):
     """
-    :param dict[str,dict[str]] subnetwork:
     :return: optional shapes for the tensors by get_rec_initial_extra_outputs
     :rtype: dict[str,tf.TensorShape]
     """
     # Very similar to get_rec_initial_extra_outputs.
+    from TFNetworkRecLayer import _TemplateLayer
+    subnet = cls._construct_template_subnet(
+      name=kwargs.get("name", "<unknown>"), network=kwargs["network"], subnetwork=kwargs["subnetwork"],
+      sources=kwargs["sources"], concat_sources=kwargs.get("concat_sources", True))
     shape_invariants = {}
-    for layer_name, layer_desc in subnetwork.items():
-      layer_desc = layer_desc.copy()
-      layer_class_name = layer_desc.pop("class")
-      cl = get_layer_class(layer_class_name)
-      # Note: This is not totally correct. We should call transform_config_dict.
-      # But that will make it quite complicated...
-      layer_desc["name"] = layer_name
+    for layer_name, sub_layer in subnet.layers.items():
+      assert isinstance(sub_layer, _TemplateLayer)
+      cl = sub_layer.layer_class_type
+      layer_desc = sub_layer.kwargs
       assert issubclass(cl, LayerBase)
       with cl.cls_layer_scope(layer_name):
         d = cl.get_rec_initial_extra_outputs_shape_invariants(**layer_desc)
