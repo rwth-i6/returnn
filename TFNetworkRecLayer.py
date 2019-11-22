@@ -594,7 +594,9 @@ class RecLayer(_ConcatInputLayer):
       with tf.variable_scope(tf.get_variable_scope(), initializer=self._fwd_weights_initializer):
         x = cell.get_input_transformed(x)
     if isinstance(cell, rnn_cell.RNNCell):  # e.g. BasicLSTMCell
-      if self._unroll:
+      if not self.input_data.have_time_axis():
+        y, final_state = cell(self.input_data.placeholder, self._initial_state)
+      elif self._unroll:
         assert self._max_seq_len is not None, "specify max_seq_len for unroll"
         # We must get x.shape[0] == self._max_seq_len, so pad it.
         x_shape = x.get_shape().as_list()
