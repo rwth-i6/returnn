@@ -4492,7 +4492,7 @@ class ChoiceLayer(BaseChoiceLayer):
     :return: final labels for all sources
     :rtype: list[tf.Tensor]
     """
-
+    from TFUtil import batch_gather
     with tf.name_scope("get_combined_labels"):
       # For each target we first have to get the labels that survived source pruning from the beam index
       # the outgoing label was generated from. So choose 'pruned_labels' according to 'src_beams'.
@@ -4514,7 +4514,7 @@ class ChoiceLayer(BaseChoiceLayer):
       # Now get the final target labels by indexing the incoming labels that survived pruning.
       labels = []
       for pruned_labels_src_beam_selected_, ids_ in zip(pruned_labels_src_beam_selected, ids):
-        labels_ = tf.squeeze(tf.batch_gather(pruned_labels_src_beam_selected_, tf.expand_dims(ids_, axis=-1)), axis=-1)
+        labels_ = tf.squeeze(batch_gather(pruned_labels_src_beam_selected_, tf.expand_dims(ids_, axis=-1)), axis=-1)
         labels.append(labels_)
 
       return labels
