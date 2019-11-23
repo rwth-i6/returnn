@@ -984,12 +984,17 @@ class _SubnetworkRecCell(object):
 
       # noinspection PyMethodParameters
       def __repr__(lself):
+        parent_names = []
+        parent = lself
+        while parent and parent.parent:
+          parent_names.insert(0, parent.parent_name or "?")
+          parent = parent.parent
         return (
           "<RecLayer construct template GetLayer>("
           "safe %r, allow_construct_in_call_nrs %r, allow_uninitialized_template %r, "
-          "count %r, parent %r, parent name %r)") % (
+          "count %r, parents %r)") % (
                  lself.safe, lself.allow_construct_in_call_nrs, lself.allow_uninitialized_template, lself.count,
-                 lself.parent, lself.parent_name)
+                 "/".join(parent_names) or None)
 
       def _add_uninitialized_count(self):
         getter = self
