@@ -6293,6 +6293,7 @@ class MaskedComputationLayer(LayerBase):
     """
     from TFNetwork import get_layer_class
     from TFUtil import where_bc
+    from tensorflow.python.util import nest
     super(MaskedComputationLayer, self).__init__(**kwargs)
     self.mask = mask
     self.masked_from = masked_from
@@ -6350,11 +6351,19 @@ class MaskedComputationLayer(LayerBase):
       self.rec_vars_outputs["_output"] = self.output.placeholder
       for key, value in sorted(self.rec_vars_outputs.items()):
         assert isinstance(key, str)
-        assert isinstance(value, tf.Tensor)
-        self.rec_vars_outputs[key] = where_bc(
-          condition=tf.reshape(mask_t, [-1] + [1] * (value.shape.ndims - 1)),  # add broadcast dims
-          x=value,
-          y=self._rec_previous_layer.rec_vars_outputs[key])
+        prev_value = self._rec_previous_layer.rec_vars_outputs[key]
+        nest.assert_same_structure(value, prev_value)
+        value_flat = nest.flatten(value)
+        prev_value_flat = nest.flatten(prev_value)
+        assert len(value_flat) == len(prev_value_flat)
+        res = []
+        for value_, prev_value_ in zip(value_flat, prev_value_flat):
+          assert isinstance(value_, tf.Tensor) and isinstance(prev_value_, tf.Tensor)
+          res.append(where_bc(
+            condition=tf.reshape(mask_t, [-1] + [1] * (value_.shape.ndims - 1)),  # add broadcast dims
+            x=value_,
+            y=prev_value_))
+        self.rec_vars_outputs[key] = nest.pack_sequence_as(value, res)
 
   def get_dep_layers(self):
     """
