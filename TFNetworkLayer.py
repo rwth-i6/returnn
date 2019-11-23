@@ -1859,6 +1859,8 @@ def concat_sources(src_layers):
   :rtype: Data
   """
   assert src_layers, "need source layers"
+  if any([not s or s.output.undefined for s in src_layers]):
+    return Data.create_undefined()
   if len(src_layers) == 1:
     return src_layers[0].output.copy()
   network = src_layers[0].network
@@ -1943,6 +1945,8 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0, dropout_noise_shape=N
   """
   assert src_layers, "need source layers"
   data = concat_sources(src_layers)
+  if data.undefined:
+    return data
   network = src_layers[0].network
   if network.train_flag is False and not dropout_on_forward:
     # If we know that we are not training, we always disable dropout.
