@@ -4653,6 +4653,8 @@ class ChoiceLayer(BaseChoiceLayer):
     else:  # no target. i.e. we must do search
       assert search, "%s %r: no target given, must do search" % (cls.__name__, name)
       # Output will be the sparse version of the input.
+      if not sources[0] or sources[0].output.undefined:
+        return Data.create_undefined(name="%s_output" % name)
       out_data = sources[0].output.copy_template().copy_as_batch_major()
       shape = list(out_data.batch_shape)
       del shape[out_data.feature_dim_axis]
