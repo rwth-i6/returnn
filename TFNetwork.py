@@ -2263,14 +2263,19 @@ class CannotHandleUndefinedSourcesException(Exception):
   Raised when some layer gets None (undefined) source(s) (because e.g. in RecLayer template construction),
   and cannot handle it (e.g. cannot infer the out_type in that case).
   """
-  def __init__(self, layer_name, layer_desc):
+  def __init__(self, layer_name, layer_desc, extended_info_str=None):
     """
     :param str layer_name:
     :param dict[str] layer_desc:
+    :param str|None extended_info_str:
     """
     from pprint import pformat
-    super(CannotHandleUndefinedSourcesException, self).__init__(
-      "%r: cannot handle undefined sources without defined out_type.\n%s" % (layer_name, pformat(layer_desc)))
+    info_strs = [
+      "%r: cannot handle undefined sources without defined out_type." % layer_name,
+      pformat(layer_desc)]
+    if extended_info_str:
+      info_strs.append(extended_info_str)
+    super(CannotHandleUndefinedSourcesException, self).__init__("\n".join(info_strs))
     self.layer_name = layer_name
     self.layer_desc = layer_desc
 

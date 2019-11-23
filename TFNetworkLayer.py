@@ -6706,12 +6706,25 @@ class SubnetworkLayer(LayerBase):
         if layer.get("is_output_layer"):
           get_templated_layer(layer_name)
 
-    except Exception:
-      print("%r: exception constructing template network (for deps and data shapes)" % cls)
-      print("Template network so far:")
+    except Exception as exc:
+      import sys
+      etype, value, tb = sys.exc_info()
+      import better_exchook
+      from TFNetwork import CannotHandleUndefinedSourcesException
+      from Util import StringIO
+      ss = StringIO()
+      print("%s %r: Exception constructing template network (for deps and data shapes): %s %s" % (
+        cls.__name__, name, type(exc).__name__, exc), file=ss)
+      print("Template network so far:", file=ss)
       from pprint import pprint
-      pprint(subnet.layers)
-      raise
+      pprint(subnet.layers, stream=ss)
+      if isinstance(exc, CannotHandleUndefinedSourcesException):
+        raise CannotHandleUndefinedSourcesException(
+          layer_name=name, layer_desc=dict(
+            subnetwork=subnetwork, sources=sources, network=network, concat_sources=concat_sources),
+          extended_info_str=ss.getvalue())
+      better_exchook.better_exchook(etype, value, tb, file=ss)
+      raise Exception(ss.getvalue())
 
     return subnet
 
