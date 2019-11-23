@@ -4193,7 +4193,7 @@ class CastLayer(CopyLayer):
     """
     out = super(CastLayer, cls).get_out_data_from_opts(**kwargs).copy_template()
     out.dtype = dtype
-    if out.sparse and out.dtype.startswith("float") or out.dtype.startswith("complex"):
+    if out.sparse and (out.dtype.startswith("float") or out.dtype.startswith("complex")):
       out.sparse = False
       if out.feature_dim_axis is not None:
         out.dim = out.batch_shape[out.feature_dim_axis]
