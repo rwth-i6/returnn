@@ -6628,7 +6628,7 @@ class UnmaskLayer(LayerBase):
     """
     assert len(sources) == 1
     source, = sources
-    assert isinstance(source, LayerBase)
+    assert isinstance(source, LayerBase) or source is None
     if not source or source.output.undefined:
       return Data.create_undefined(name="%s_output" % name)
     out = source.output.copy(name="%s_output" % name)
