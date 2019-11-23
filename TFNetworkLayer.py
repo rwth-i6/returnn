@@ -306,7 +306,7 @@ class LayerBase(object):
               feature_dim_axis = -1
           default_shape = list(sources_data.shape_dense)
           default_shape.insert(sources_data.batch_dim_axis, None)
-          default_shape[feature_dim_axis] = out_type["dim"]
+          default_shape[feature_dim_axis] = out_type.get("dim", None)
           default_shape.pop(out_type.get("batch_dim_axis"))
           out_type.setdefault("shape", tuple(default_shape))
       elif network.is_inside_rec_layer():
