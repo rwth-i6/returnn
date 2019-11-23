@@ -2368,7 +2368,7 @@ class _SubnetworkRecCell(object):
 
     return output, output_search_choices
 
-  def _opt_search_resolve(self, layer_name, acc_ta, final_net_vars, seq_len):
+  def _opt_search_resolve(self, layer_name, acc_ta, final_net_vars, seq_len, search_choices_cache):
     """
     This assumes that we have frame-wise accumulated outputs of the specific layer (acc_ta).
     If that layer depends on frame-wise search choices, i.e. if the batch dim includes a search beam,
@@ -2383,6 +2383,7 @@ class _SubnetworkRecCell(object):
     :param final_net_vars:
     :param tf.Tensor seq_len: shape (batch * beam,), has beam of the "end" layer in case of dynamic sequence lengths,
       otherwise beam of rec_layer.output
+    :param dict[LayerBase,SearchChoices] search_choices_cache: inner search choices layer -> final search choices
     :return: (new acc_ta, final search choices, resolved seq_len)
     :rtype: (tf.TensorArray,SearchChoices|None,tf.Tensor)
     """
@@ -2592,11 +2593,15 @@ class _SubnetworkRecCell(object):
 
     # Create the search choices for the rec layer accumulated output itself.
     # The beam scores will be of shape (batch, beam).
-    acc_search_choices = SearchChoices(owner=rec_layer, beam_size=latest_beam_size)
-    final_choice_rec_vars = self.get_layer_rec_var_from_loop_vars(
-      loop_vars=final_net_vars,
-      layer_name=latest_layer_choice.name)
-    acc_search_choices.set_beam_from_rec(final_choice_rec_vars)
+    if latest_layer_choice not in search_choices_cache:
+      acc_search_choices = SearchChoices(owner=rec_layer, beam_size=latest_beam_size)
+      final_choice_rec_vars = self.get_layer_rec_var_from_loop_vars(
+        loop_vars=final_net_vars,
+        layer_name=latest_layer_choice.name)
+      acc_search_choices.set_beam_from_rec(final_choice_rec_vars)
+      search_choices_cache[latest_layer_choice] = acc_search_choices
+    else:
+      acc_search_choices = search_choices_cache[latest_layer_choice]
 
     return new_acc_output_ta, acc_search_choices, seq_len
 
@@ -2880,6 +2885,7 @@ class _SubnetworkRecCell(object):
 
     prev_layers = {}  # type: typing.Dict[str,InternalLayer]
     loop_acc_layers = {}  # type: typing.Dict[str,InternalLayer]
+    search_choices_cache = {}  # type: typing.Dict[LayerBase,SearchChoices]
 
     def get_loop_acc_layer(name):
       """
@@ -2893,7 +2899,8 @@ class _SubnetworkRecCell(object):
         inner_layer = self.net.get_layer(name)
         acc_ta = loop_accumulated["output_%s" % name]
         acc_ta, search_choices, resolved_seq_len = self._opt_search_resolve(
-          layer_name=name, acc_ta=acc_ta, final_net_vars=final_net_vars, seq_len=seq_len)
+          layer_name=name, acc_ta=acc_ta, final_net_vars=final_net_vars, seq_len=seq_len,
+          search_choices_cache=search_choices_cache)
         output = self.layer_data_templates[name].output.copy_template_adding_time_dim(time_dim_axis=0)
         output.beam = search_choices.get_beam_info() if search_choices else None
         max_len = tf.reduce_max(resolved_seq_len)
