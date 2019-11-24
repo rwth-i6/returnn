@@ -3207,6 +3207,19 @@ def test_reclayer_optimize_out_softmax_over_spatial_rev_dot():
     rtol=1e-3)
 
 
+def test_reclayer_optimize_out_masked_computation_unmask():
+  check_reclayer_optimize_out(
+    {"class": "linear", "activation": None, "from": "unmask"},
+    other_subnet_layers={
+      "sum": {"class": "reduce", "mode": "sum", "from": "data:source", "axis": "f"},  # [B]
+      "mask": {"class": "compare", "from": "sum", "value": 0.0, "kind": "greater"},  # [B]
+      "masked": {
+        "class": "masked_computation", "mask": "mask", "from": "data:source",
+        "unit": {"class": "rec", "unit": "NativeLstm2", "n_out": 17}},
+      "unmask": {"class": "unmask", "from": "masked", "mask": "mask"}
+    })
+
+
 def test_reclayer_enc_time_dim_eval():
   """
     line: assert self.placeholder.shape[i].value == self.batch_shape[i]
@@ -4420,6 +4433,60 @@ def test_MaskedComputationLayer_UnmaskLayer_masked_outside():
           y = x
         numpy.testing.assert_almost_equal(y, out_v[b, t])
         x = y
+
+
+def test_MaskedComputationLayer_outside():
+  with make_scope() as session:
+    config = Config({"debug_print_layer_output_template": True})
+    tag = DimensionTag(kind=DimensionTag.Types.Spatial, description='time')
+    net = TFNetwork(
+      extern_data=ExternData({
+        "data": {"dim": 20, "sparse": True, "same_dim_tags_as": {"t": tag}},
+        "mask": {"dim": 2, "dtype": "bool", "sparse": True, "same_dim_tags_as": {"t": tag}}}),
+      config=config)
+    net_dict = {
+      "output": {
+        "class": "masked_computation", "from": "data", "mask": "data:mask",
+        "unit": {"class": "copy"}
+      },
+    }
+    net.construct_from_dict(net_dict)
+    in_data = net.get_layer("data").output
+    in_mask_data = net.get_layer("data:mask").output
+    out_data = net.get_layer("output").output.copy_as_batch_major()
+    feed_dict = {
+      net.extern_data.data["data"].placeholder: [[3, 4, 5, 6], [5, 4, -3, -4]],
+      net.extern_data.data["data"].size_placeholder[0]: [4, 2],
+      net.extern_data.data["mask"].placeholder: [[0, 1, 1, 0], [1, 0, 1, 0]],
+      net.extern_data.data["mask"].size_placeholder[0]: [4, 2]
+    }
+    in_v, in_mask_v, in_lens, out_v, out_lens = session.run(
+      (in_data.placeholder, in_mask_data.placeholder, in_data.get_sequence_lengths(),
+       out_data.placeholder, out_data.get_sequence_lengths()),
+      feed_dict=feed_dict)
+    assert isinstance(in_v, numpy.ndarray) and isinstance(in_mask_v, numpy.ndarray)
+    assert isinstance(in_lens, numpy.ndarray)
+    assert isinstance(out_v, numpy.ndarray) and isinstance(out_lens, numpy.ndarray)
+    print(in_v)
+    print(in_mask_v)
+    print(in_lens)
+    print(out_v)
+    print(out_lens)
+    assert in_v.shape == in_mask_v.shape and in_v.ndim == 2
+    num_batch = in_v.shape[0]
+    assert in_lens.shape == (num_batch,)
+    assert out_v.ndim == 2 and out_v.shape[0] == num_batch and out_lens.shape == (num_batch,)
+    for b in range(num_batch):
+      t_ = 0
+      for t in range(in_v.shape[1]):
+        if t >= in_lens[b]:
+          break
+        if not in_mask_v[b, t]:
+          continue
+        assert_equal(in_v[b, t], out_v[b, t_])
+        t_ += 1
+      assert_equal(t_, out_lens[b])
+    assert out_v.shape == (num_batch, max(out_lens))
 
 
 def test_untrainable_sublayers():

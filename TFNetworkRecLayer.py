@@ -6299,7 +6299,8 @@ class MaskedComputationLayer(LayerBase):
     :param LayerBase|None masked_from:
     """
     from TFNetwork import get_layer_class
-    from TFUtil import where_bc
+    from TFNetworkLayer import WrappedInternalLayer
+    from TFUtil import where_bc, get_shape, nd_indices
     from tensorflow.python.util import nest
     super(MaskedComputationLayer, self).__init__(**kwargs)
     self.mask = mask
@@ -6310,17 +6311,37 @@ class MaskedComputationLayer(LayerBase):
       source_data = masked_from.output.copy(
         name="%s_%s_masked_input" % (masked_from.output.name, self.output.name))
       source_data.available_for_inference = True  # we would make sure that this works at inference
-      from TFNetworkLayer import WrappedInternalLayer
       source = WrappedInternalLayer(
         base_layer=masked_from, network=masked_from.network, name=masked_from.name, output=source_data)
       assert not mask and not self.sources
     else:
       assert len(self.sources) == 1
       source, = self.sources
+      assert isinstance(source, LayerBase)
       assert mask
-      if not self.network.is_inside_rec_layer():
-        raise NotImplementedError("%s not inside rec loop, is not implemented" % self)
-      assert mask.output.shape == () and mask.output.dtype == "bool", "%s: invalid mask %s" % (self, mask)
+      if self.network.is_inside_rec_layer():
+        assert mask.output.shape == () and mask.output.dtype == "bool", (
+          "%s: invalid mask %s (inside rec loop)" % (self, mask))
+      else:
+        assert mask.output.have_time_axis() and mask.output.shape == (None,) and mask.output.dtype == "bool", (
+          "%s: invalid mask %s (outside rec loop)" % (self, mask))
+        source_data = source.output.copy_as_time_major()
+        mask_data = mask.output.copy_as_time_major()
+        assert source_data.is_same_time_dim(mask_data), "%s mask and source time dim do not match" % self
+        mask_t = where_bc(mask_data.placeholder, mask_data.get_sequence_mask(), tf.convert_to_tensor(False))
+        idxs = tf.cumsum(tf.cast(mask_t, tf.int32), axis=0)  # [T,B] -> idx in T' + 1
+        new_size = idxs[-1]  # [B]
+        new_time = tf.reduce_max(new_size)  # T'
+        idxs = where_bc(mask_t, idxs - 1, new_time)
+        tmp_shape = get_shape(source_data.placeholder)
+        tmp_shape[0] = new_time + 1  # one more for the padded data
+        res = tf.scatter_nd(nd_indices(idxs, batch_axis=1), source_data.placeholder, shape=tmp_shape)
+        res_data = source_data.copy_template()
+        res_data.size_placeholder[0] = new_size
+        res_data.placeholder = res[:new_time]
+        source = WrappedInternalLayer(
+          base_layer=source, network=source.network, name=source.name,
+          output=res_data)
 
     def sub_get_layer(sub_layer_name):
       """
@@ -6341,10 +6362,10 @@ class MaskedComputationLayer(LayerBase):
 
     self.sub_layer = layer_class(**layer_desc)
     self.sub_layer.post_init(layer_desc)
-    self.output = self.sub_layer.output.copy(name="%s_output" % self.name).copy_compatible_to(self.output)
+    self.output = self.sub_layer.output.copy(name="%s_output" % self.name)
     self.rec_vars_outputs = self.sub_layer.rec_vars_outputs.copy()
 
-    if self.mask:
+    if self.mask and self.network.is_inside_rec_layer():
       assert self._rec_previous_layer
       assert self.mask.output.shape == () and self.mask.output.batch_shape == (None,)
       assert self.output.is_batch_major
@@ -6415,6 +6436,7 @@ class MaskedComputationLayer(LayerBase):
     :return: layer_class, layer_desc
     """
     from TFNetwork import get_layer_class
+    from TFNetworkLayer import WrappedInternalLayer
     # We don't care about the right masked input here, but just about deriving the right output shape.
     if masked_from:
       if network.is_inside_rec_layer(inside_loop=True):
@@ -6424,12 +6446,18 @@ class MaskedComputationLayer(LayerBase):
         source_data = masked_from.output.copy_template(
           name="%s_%s_masked_input" % (masked_from.output.name, name))
       source_data.available_for_inference = True  # we would make sure that this works at inference
-      from TFNetworkLayer import WrappedInternalLayer
       source = WrappedInternalLayer(
         base_layer=masked_from, network=masked_from.network, name=masked_from.name, output=source_data)
     else:
       assert len(sources) == 1
       source, = sources
+      assert isinstance(source, LayerBase)
+      if not network.is_inside_rec_layer():
+        source_data = source.output.copy_template().copy_as_time_major()
+        source_data.size_placeholder[0] = None  # reset, as this is some new time-dim
+        source = WrappedInternalLayer(
+          base_layer=source, network=source.network, name=source.name,
+          output=source_data)
 
     def sub_get_layer(sub_layer_name):
       """
