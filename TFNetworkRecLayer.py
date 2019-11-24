@@ -256,6 +256,10 @@ class RecLayer(_ConcatInputLayer):
     ls += self._initial_state_deps
     if isinstance(self.cell, _SubnetworkRecCell):
       ls += self.cell.get_parent_deps()
+      if self.cell.input_layers_net and "output" in self.cell.input_layers_net.layers:
+        ls.append(self.cell.input_layers_net.layers["output"])
+      elif self.cell.output_layers_net and "output" in self.cell.output_layers_net.layers:
+        ls.append(self.cell.output_layers_net.layers["output"])
     return ls
 
   @classmethod
@@ -824,8 +828,7 @@ class RecLayer(_ConcatInputLayer):
     :return: output of shape (time, batch, dim)
     :rtype: tf.Tensor
     """
-    output, search_choices = cell.get_output(rec_layer=self)
-    self.search_choices = search_choices
+    output = cell.get_output(rec_layer=self)
     self._last_hidden_state = cell
     return output
 
@@ -1671,7 +1674,7 @@ class _SubnetworkRecCell(object):
     """
     :param RecLayer rec_layer:
     :return: output of shape (time, batch, dim), search choices
-    :rtype: (tf.Tensor, SearchChoices)
+    :rtype: tf.Tensor
     """
     from TFUtil import check_input_dim, tensor_array_stack, DimensionTag
 
@@ -2335,7 +2338,6 @@ class _SubnetworkRecCell(object):
       assert layer.search_choices
 
     with tf.name_scope("output"):
-      output_search_choices = None
       output_layer = None
       if self.input_layers_net and "output" in self.input_layers_net.layers:
         output_layer = self.input_layers_net.layers["output"]
@@ -2346,9 +2348,6 @@ class _SubnetworkRecCell(object):
         output_data = output_layer.output.copy_as_time_major()
         rec_layer.output.size_placeholder = output_data.size_placeholder.copy()
         output = output_data.placeholder
-        # If there are search choices, we have collected them while we accumulated the output,
-        # and we would have created a layer in output_layers_net in any case.
-        output_search_choices = output_layer.search_choices
       else:
         if rec_layer.output.size_placeholder is None:
           rec_layer.output.size_placeholder = {}
@@ -2366,7 +2365,7 @@ class _SubnetworkRecCell(object):
         continue
       self.parent_net.used_data_keys.add(key)
 
-    return output, output_search_choices
+    return output
 
   def _opt_search_resolve(self, layer_name, acc_ta, final_net_vars, seq_len, search_choices_cache):
     """
@@ -2383,9 +2382,9 @@ class _SubnetworkRecCell(object):
     :param final_net_vars:
     :param tf.Tensor seq_len: shape (batch * beam,), has beam of the "end" layer in case of dynamic sequence lengths,
       otherwise beam of rec_layer.output
-    :param dict[LayerBase,SearchChoices] search_choices_cache: inner search choices layer -> final search choices
-    :return: (new acc_ta, final search choices, resolved seq_len)
-    :rtype: (tf.TensorArray,SearchChoices|None,tf.Tensor)
+    :param dict[str,SearchChoices] search_choices_cache: inner search choices layer -> final search choices
+    :return: (new acc_ta, latest layer choice name, resolved seq_len)
+    :rtype: (tf.TensorArray,str|None,tf.Tensor)
     """
     import os
     from TFUtil import nd_indices, assert_min_tf_version, expand_dims_unbroadcast, get_valid_scope_name_from_str
@@ -2399,7 +2398,8 @@ class _SubnetworkRecCell(object):
     if not search_choices:
       return acc_ta, None, seq_len
     if search_choices.keep_raw:
-      return acc_ta, search_choices, seq_len
+      search_choices_cache[search_choices.owner.name] = search_choices
+      return acc_ta, search_choices.owner.name, seq_len
     layer_choice = search_choices.owner
     is_prev_choice = False
     if isinstance(layer_choice, _TemplateLayer):
@@ -2593,17 +2593,15 @@ class _SubnetworkRecCell(object):
 
     # Create the search choices for the rec layer accumulated output itself.
     # The beam scores will be of shape (batch, beam).
-    if latest_layer_choice not in search_choices_cache:
-      acc_search_choices = SearchChoices(owner=rec_layer, beam_size=latest_beam_size)
+    if latest_layer_choice.name not in search_choices_cache:
+      acc_search_choices = SearchChoices(owner=latest_layer_choice, beam_size=latest_beam_size)
       final_choice_rec_vars = self.get_layer_rec_var_from_loop_vars(
         loop_vars=final_net_vars,
         layer_name=latest_layer_choice.name)
       acc_search_choices.set_beam_from_rec(final_choice_rec_vars)
-      search_choices_cache[latest_layer_choice] = acc_search_choices
-    else:
-      acc_search_choices = search_choices_cache[latest_layer_choice]
+      search_choices_cache[latest_layer_choice.name] = acc_search_choices
 
-    return new_acc_output_ta, acc_search_choices, seq_len
+    return new_acc_output_ta, latest_layer_choice.name, seq_len
 
   def _input_layer_used_inside_loop(self, layer_name):
     """
@@ -2885,7 +2883,8 @@ class _SubnetworkRecCell(object):
 
     prev_layers = {}  # type: typing.Dict[str,InternalLayer]
     loop_acc_layers = {}  # type: typing.Dict[str,InternalLayer]
-    search_choices_cache = {}  # type: typing.Dict[LayerBase,SearchChoices]
+    search_choices_cache = {}  # type: typing.Dict[str,SearchChoices]  # inner layer -> acc search choices
+    loop_acc_layers_search_choices = {}  # type: typing.Dict[str,str]  # loop acc layer -> inner layer
 
     def get_loop_acc_layer(name):
       """
@@ -2898,9 +2897,10 @@ class _SubnetworkRecCell(object):
       with tf.name_scope(self.layer_data_templates[name].layer_class_type.cls_get_tf_scope_name(name)):
         inner_layer = self.net.get_layer(name)
         acc_ta = loop_accumulated["output_%s" % name]
-        acc_ta, search_choices, resolved_seq_len = self._opt_search_resolve(
+        acc_ta, latest_layer_choice_name, resolved_seq_len = self._opt_search_resolve(
           layer_name=name, acc_ta=acc_ta, final_net_vars=final_net_vars, seq_len=seq_len,
           search_choices_cache=search_choices_cache)
+        search_choices = search_choices_cache.get(latest_layer_choice_name, None)
         output = self.layer_data_templates[name].output.copy_template_adding_time_dim(time_dim_axis=0)
         output.beam = search_choices.get_beam_info() if search_choices else None
         max_len = tf.reduce_max(resolved_seq_len)
@@ -2930,8 +2930,9 @@ class _SubnetworkRecCell(object):
               output.size_placeholder[i + 1] = size
         assert isinstance(self.output_layers_net, TFNetwork)
         layer_ = self.output_layers_net.add_layer(
-          name=name, output=output, layer_class=InternalLayer, sources=[inner_layer])
-        layer_.search_choices = search_choices
+          name=name, output=output, layer_class=InternalLayer, sources=[])
+        if latest_layer_choice_name:
+          loop_acc_layers_search_choices[name] = latest_layer_choice_name
         loop_acc_layers[name] = layer_
         return layer_
 
@@ -2990,6 +2991,26 @@ class _SubnetworkRecCell(object):
         get_layer(layer_name)
       for layer_name in extra_output_layers:
         self.output_layers_net.layers[layer_name] = get_layer(layer_name)
+
+    # We want to have one single layer with search choices.
+    for name, search_choices in search_choices_cache.items():
+      if name not in self.output_layers_net.layers:
+        # Create dummy layer.
+        output = self.layer_data_templates[name].output.copy_template_adding_time_dim(time_dim_axis=0)
+        output.beam = search_choices.get_beam_info()
+        layer = InternalLayer(name=name, network=self.output_layers_net, output=output)
+        self.output_layers_net.layers[name] = layer
+      else:
+        layer = self.output_layers_net.layers[name]
+      # Set the search choices only for this layer.
+      layer.search_choices = search_choices
+      search_choices.owner = layer
+      # Now mark other layers with the same search choices dependent on this layer.
+      for name_, name__ in loop_acc_layers_search_choices.items():
+        if name__ == name:
+          layer_ = self.output_layers_net.layers[name_]
+          assert isinstance(layer_, InternalLayer)
+          layer_.sources.append(layer)
 
     # Now, after constructing all, maybe reset the time-dim-axis.
     # It is valid during the construction that layers set any time-dim-axis they want,
