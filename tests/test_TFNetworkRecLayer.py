@@ -3733,6 +3733,8 @@ def test_subnet_load_on_init_rec():
 
 def test_KenLmStateLayer():
   import TFKenLM
+  if not TFKenLM.kenlm_checked_out():
+    raise unittest.SkipTest("KenLM not checked out")
   TFKenLM.get_tf_mod(verbose=True)
   test_lm_file = TFKenLM.kenlm_dir + "/lm/test.arpa"
   assert os.path.exists(test_lm_file)
@@ -3804,6 +3806,8 @@ def test_KenLmStateLayer():
 
 def test_KenLmStateLayer_dense():
   import TFKenLM
+  if not TFKenLM.kenlm_checked_out():
+    raise unittest.SkipTest("KenLM not checked out")
   TFKenLM.get_tf_mod(verbose=True)
   test_lm_file = TFKenLM.kenlm_dir + "/lm/test.arpa"
   assert os.path.exists(test_lm_file)
