@@ -979,6 +979,20 @@ def test_Data_copy_move_axis_time_to_end():
   assert d2.shape == (None, 4, None) and d2.feature_dim_axis == 2 and d2.time_dim_axis == 3
 
 
+def test_sequence_mask_len_via_loop():
+  seq_len = tf.while_loop(
+    cond=lambda x: tf.less(x[0], 2),
+    body=lambda x: x + 1,
+    loop_vars=[tf.convert_to_tensor([1, 2])])
+  assert not has_control_flow_context(seq_len)
+  mask = sequence_mask_time_major(seq_len)
+  seq_len_v, mask_v = session.run((seq_len, mask))
+  print(seq_len_v)
+  assert_equal(seq_len_v.tolist(), [2, 3])
+  print(mask_v)
+  assert_equal(mask_v.tolist(), [[True, True], [True, True], [False, True]])
+
+
 def test_get_initializer_zero():
   shape = (2, 3)
   initializer = get_initializer(0.0)

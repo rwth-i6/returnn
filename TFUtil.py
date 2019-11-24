@@ -7886,6 +7886,7 @@ def _get_control_flows(v, yield_none):
   :rtype: typing.Iterator[tensorflow.python.ops.control_flow_ops.ControlFlowContext|None]
   """
   import numpy
+  from tensorflow.python.ops.control_flow_ops import ControlFlowContext
   if isinstance(v, (list, tuple)):
     for elem in v:
       for t in _get_control_flows(elem, yield_none=yield_none):
@@ -7899,6 +7900,11 @@ def _get_control_flows(v, yield_none):
   # Control flow context will be set to the context of the loop or so, if there is one, otherwise None.
   # noinspection PyProtectedMember
   ctx = v._control_flow_context
+  if ctx:
+    assert isinstance(ctx, ControlFlowContext)
+    if v.type in ["Exit", "RefExit"]:
+      # We are just exiting this context, so return the outer context.
+      ctx = ctx.outer_context
   if not yield_none and not ctx:
     return
   yield ctx
