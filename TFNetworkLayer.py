@@ -480,7 +480,7 @@ class LayerBase(object):
             # but instead lazily handle it in TFNetwork.get_extern_data,
             # such that we do not need to know in advance which data keys we need.
             # Also, if we are inside a rec layer, and doing search, we also cannot do that.
-            if not network.is_inside_rec_layer() or not network.search_flag:
+            if network.is_inside_rec_layer() and not network.search_flag:
               network.get_extern_data(target, mark_data_key_as_used=True)
     if d.get("initial_output", None):  # see get_rec_initial_output
       initial_output = d["initial_output"]
