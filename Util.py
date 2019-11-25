@@ -729,7 +729,7 @@ def pretty_print(obj, limit=None):
   if limit is None:
     limit = _pretty_print_limit
   if len(s) > limit:
-    s = s[:limit - 3]
+    s = s[:int(limit) - 3]
     s += "..."
   extra_info = _pp_extra_info(obj)
   if extra_info != "":
