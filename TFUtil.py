@@ -8098,17 +8098,21 @@ def _tensor_array_select_src_beams(ta, src_beams):
   return ta_new
 
 
-def beam_search(scores, beam_size, keep_beams=False, cheating_gold_targets=None, cheating_src_beam_idx=None):
+def beam_search(scores, beam_size, keep_beams=False,
+                cheating_gold_targets=None, cheating_src_beam_idx=None, cheating_exclusive=True):
   """
   This is mostly a higher-level wrapper around :func:`tf.nn.top_k`.
 
   :param tf.Tensor scores: (batch,beam_in,dim). combined scores (i.e. base beam scores + new scores),
     dense over the dims, such that we have labels in [0,...,dim-1].
+    These are supposed to be in +log space, although it just matters here that we take the maximum (or top-k).
   :param int|tf.Tensor beam_size:
   :param bool keep_beams: specifies that we keep the beam_in entries,
     i.e. we just expand, i.e. we just search on the dim. beam_size must be a multiple of beam_in.
   :param tf.Tensor|None cheating_gold_targets: (batch,), int32
   :param tf.Tensor|None cheating_src_beam_idx: (batch,), int32. If not given, assumes beam_in - 1. See code below.
+  :param bool cheating_exclusive: make sure that the cheating target does not occur twice,
+    i.e. no duplicates in search tree. This could have happened in our earlier implementation, or if this is disabled.
   :rtype: (tf.Tensor,tf.Tensor,tf.Tensor)
   :return: src_beams, labels, beam_scores.
     src_beams: (batch, beam) -> beam_in idx (int32),
@@ -8125,27 +8129,21 @@ def beam_search(scores, beam_size, keep_beams=False, cheating_gold_targets=None,
         cheating_src_beam_idx = tile_transposed(cheating_src_beam_idx, axis=0, multiples=beam_in)
     _, labels, beam_scores = beam_search(
       scores=scores, beam_size=beam_size // beam_in,
-      cheating_gold_targets=cheating_gold_targets, cheating_src_beam_idx=cheating_src_beam_idx)
+      cheating_gold_targets=cheating_gold_targets, cheating_src_beam_idx=cheating_src_beam_idx,
+      cheating_exclusive=cheating_exclusive)
     src_beams = tf.zeros([batch_dim, beam_in, beam_size // beam_in], dtype=tf.int32)
     src_beams += tf.range(beam_in)[None, :, None]
     src_beams = tf.reshape(src_beams, [batch_dim, beam_size])
     labels = tf.reshape(labels, [batch_dim, beam_size])
     beam_scores = tf.reshape(beam_scores, [batch_dim, beam_size])
     return src_beams, labels, beam_scores
-  scores_flat = tf.reshape(scores, [batch_dim, beam_in * in_dim])  # (batch, beam_in * dim)
   # `tf.nn.top_k` is the core function performing our search.
   # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
   top_k_size = beam_size
   if isinstance(in_dim, tf.Tensor) or isinstance(beam_size, tf.Tensor) or in_dim < beam_size:
     top_k_size = tf.minimum(beam_in * in_dim, top_k_size)
-  beam_scores, labels = tf.nn.top_k(scores_flat, k=top_k_size)
-  if top_k_size is not beam_size:
-    extra_shape = (batch_dim, beam_size - top_k_size)
-    labels = tf.concat([labels, tf.zeros(extra_shape, dtype=labels.dtype)], axis=-1)
-    beam_scores = tf.concat([beam_scores, tf.fill(extra_shape, float("-inf"))], axis=-1)
+  gold_labels, gold_scores = None, None
   if cheating_gold_targets is not None:
-    # It assumes that sorted=True in top_k, and the last entries in scores/labels are the worst.
-    # We replace them by the true labels.
     cheating_gold_targets = tf.clip_by_value(
       cheating_gold_targets, 0, in_dim - 1)  # safety, for invalid values...
     if cheating_src_beam_idx is None:
@@ -8154,8 +8152,6 @@ def beam_search(scores, beam_size, keep_beams=False, cheating_gold_targets=None,
     else:
       cheating_src_beam_idx = tf.clip_by_value(cheating_src_beam_idx, 0, beam_in - 1)  # safety
     gold_labels = cheating_src_beam_idx * in_dim + cheating_gold_targets  # (batch,)
-    gold_labels_bc = tf.expand_dims(gold_labels, axis=1)  # (batch,1)
-    labels = tf.concat([labels[:, :beam_size - 1], gold_labels_bc], axis=1)  # (batch,beam)
     if cheating_src_beam_idx.shape.ndims == 0:
       gold_scores = scores[:, cheating_src_beam_idx]  # (batch,in_dim)
     else:
@@ -8163,6 +8159,27 @@ def beam_search(scores, beam_size, keep_beams=False, cheating_gold_targets=None,
       gold_scores = tf.gather_nd(scores, indices=nd_indices(cheating_src_beam_idx))  # (batch,in_dim)
     # Note: In case the seq ended, we assume that the gold_targets are all 0, such that we get the right score.
     gold_scores = tf.gather_nd(gold_scores, indices=nd_indices(cheating_gold_targets))  # (batch,)
+    if cheating_exclusive:
+      # Now mask this in the scores, such that top_k will not select the gold target,
+      # because we later add it explicitly.
+      cheating_src_beam_idx_bc = expand_multiple_dims(
+        cheating_src_beam_idx, axes=[-1] * (2 - cheating_src_beam_idx.shape.ndims))  # [B|1,1]
+      mask_beam = tf.equal(tf.range(beam_in)[None, :], cheating_src_beam_idx_bc)  # [B|1,beam_in]
+      mask_dim = tf.equal(tf.range(in_dim)[None, :], cheating_gold_targets)  # [B,dim]
+      mask = tf.logical_and(mask_beam[:, :, None], mask_dim[:, None, :])  # [B,beam_in,dim]
+      scores = where_bc(mask, float("-inf"), scores)
+  scores_flat = tf.reshape(scores, [batch_dim, beam_in * in_dim])  # (batch, beam_in * dim)
+  # The main TF top_k call is here now:
+  beam_scores, labels = tf.nn.top_k(scores_flat, k=top_k_size)
+  if top_k_size is not beam_size:
+    extra_shape = (batch_dim, beam_size - top_k_size)
+    labels = tf.concat([labels, tf.zeros(extra_shape, dtype=labels.dtype)], axis=-1)
+    beam_scores = tf.concat([beam_scores, tf.fill(extra_shape, float("-inf"))], axis=-1)
+  if cheating_gold_targets is not None:
+    # It assumes that sorted=True in top_k, and the last entries in scores/labels are the worst.
+    # We replace them by the true labels.
+    gold_labels_bc = tf.expand_dims(gold_labels, axis=1)  # (batch,1)
+    labels = tf.concat([labels[:, :beam_size - 1], gold_labels_bc], axis=1)  # (batch,beam)
     gold_scores_bc = tf.expand_dims(gold_scores, axis=1)  # (batch,1)
     beam_scores = tf.concat([beam_scores[:, :beam_size - 1], gold_scores_bc], axis=1)  # (batch,beam)
   src_beams = labels // in_dim  # (batch, beam) -> beam_in idx

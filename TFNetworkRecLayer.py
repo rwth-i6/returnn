@@ -4139,7 +4139,8 @@ class ChoiceLayer(BaseChoiceLayer):
     :param list[int]|None source_beam_sizes: If there are several sources, they are pruned with these beam sizes
        before combination. If None, 'beam_size' is used for all sources. Has to have same length as number of sources.
     :param dict|None scheduled_sampling:
-    :param bool cheating: if True, will always add the true target in the beam
+    :param bool|str cheating: if True, will always add the true target in the beam.
+      if "exclusive", enables cheating_exclusive. see :func:`TFUtil.beam_search`.
     :param list[LayerBase]|None explicit_search_sources: will mark it as an additional dependency.
       You might use these also in custom_score_combine.
     :param callable|None custom_score_combine:
@@ -4163,7 +4164,7 @@ class ChoiceLayer(BaseChoiceLayer):
 
     if self.search_flag:
       if cheating:
-        print("%s: cheating enabled, i.e. we add the ground truth to the beam" % self, file=log.v2)
+        print("%s: cheating %r, i.e. we add the ground truth to the beam" % (self, cheating), file=log.v2)
       for source in self.sources:
         assert not source.output.sparse
       assert self.sources[0].output.dim == self.output.dim
@@ -4292,14 +4293,23 @@ class ChoiceLayer(BaseChoiceLayer):
         self.search_scores_base = scores_base
         self.search_scores_combined = scores_comb
         cheating_gold_targets, cheating_src_beam_idx = None, None
+        cheating_exclusive = False
         if cheating:
           cheating_gold_targets, cheating_src_beam_idx = self._get_cheating_targets_and_src_beam_idxs(scores_comb)
+          if isinstance(cheating, bool):
+            pass
+          elif isinstance(cheating, str):
+            assert cheating == "exclusive", "%s: invalid cheating %r" % (self, cheating)  # only possible variation atm
+            cheating_exclusive = True
+          else:
+            raise TypeError("%s: invalid cheating %r" % (self, cheating))
         # `tf.nn.top_k` is the core function performing our search. That is wrapped in `TFUtil.beam_search`.
         # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
         from TFUtil import beam_search
         src_beams, labels, scores = beam_search(
           scores=scores_comb, beam_size=beam_size, keep_beams=keep_beams,
-          cheating_gold_targets=cheating_gold_targets, cheating_src_beam_idx=cheating_src_beam_idx)
+          cheating_gold_targets=cheating_gold_targets, cheating_src_beam_idx=cheating_src_beam_idx,
+          cheating_exclusive=cheating_exclusive)
         self.search_choices.set_src_beams(src_beams)  # (batch, beam) -> beam_in idx
         labels = tf.reshape(labels, [net_batch_dim * beam_size])  # (batch * beam)
         labels = tf.cast(labels, self.output.dtype)
