@@ -1647,7 +1647,10 @@ class TFNetwork(object):
         if layer not in layers:
           layers.append(layer)
     if not layers:
-      if self.parent_layer:
+      # Use parent layer if available.
+      # Note that we should not mix layers from different context frames,
+      # e.g. inside and outside a rec loop, as the search choices cannot be compared.
+      if self.parent_layer and not self.is_inside_rec_layer():
         # noinspection PyProtectedMember
         return self.parent_layer.network._get_all_search_choices(sources=self.parent_layer.get_dep_layers())
       return []
@@ -1665,9 +1668,10 @@ class TFNetwork(object):
           # Get corresponding "prev:..." layers.
           from pprint import pformat
           assert all([l in _normalized_to_layer for l in normalized_choices]), "\n".join([
-            "No cur -> prev mapping for some layers.", "Base: %s" % base_search_choice,
-            "Prev choices:", pformat(layers),
-            "Cur choices:", pformat(normalized_choices), "Mapping:", pformat(_normalized_to_layer)])
+            "No cur -> prev mapping for some layers.", "",
+            "Base: %s" % base_search_choice, "", "Cur (normalized) base: %s" % normalized_base, "",
+            "Prev choices:", pformat(layers), "", "Cur (normalized) choices:", pformat(normalized_choices), "",
+            "Mapping:", pformat(_normalized_to_layer), ""])
           layers = [_normalized_to_layer[l] for l in normalized_choices]
           _layer_to_search_choices[base_search_choice] = layers
     return layers
