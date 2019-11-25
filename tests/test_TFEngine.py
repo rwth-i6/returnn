@@ -2725,7 +2725,7 @@ def test_grad_summaries():
     """
     :param bytes summary_proto: protobuf for summaries
     """
-    from tensorboard.compat.proto import summary_pb2
+    from tensorflow.core.framework import summary_pb2
     summaries = summary_pb2.Summary.FromString(summary_proto)
     summary_list = [val.tag for val in summaries.value]
     assert any([v.startswith("grads/") for v in summary_list])
