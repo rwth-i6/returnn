@@ -3059,11 +3059,11 @@ class _TemplateLayer(LayerBase):
     if self.is_initialized:
       return "<%s(%s)(%s) %r out_type=%s (construction stack %r)>" % (
         self.__class__.__name__, self.layer_class_type.__name__ if self.layer_class_type else None, self.layer_class,
-        self.name, self.output.get_description(with_name=False),
+        self.get_absolute_name(), self.output.get_description(with_name=False),
         self.construct_stack.name if self.construct_stack else None)
     else:
       return "<%s %r uninitialized, construction stack %r>" % (
-        self.__class__.__name__, self.name, self.construct_stack.name if self.construct_stack else None)
+        self.__class__.__name__, self.get_absolute_name(), self.construct_stack.name if self.construct_stack else None)
 
   def init(self, output, layer_class, template_type="template", **kwargs):
     """

@@ -209,7 +209,8 @@ class LayerBase(object):
 
   def __repr__(self):
     return "<%s %r out_type=%s>" % (
-      self.__class__.__name__, self.name, self.output.get_description(with_name=False) if self.output else None)
+      self.__class__.__name__, self.get_absolute_name(),
+      self.output.get_description(with_name=False) if self.output else None)
 
   @classmethod
   def get_out_data_from_opts(cls, **kwargs):
