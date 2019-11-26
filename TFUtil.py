@@ -9061,7 +9061,9 @@ def get_linear_alignment_out_to_in_indices(input_lens, output_lens, pad_value=0)
   return idxs
 
 
-def get_rnnt_linear_aligned_output(input_lens, targets, target_lens, blank_label_idx, pad_value=0):
+def get_rnnt_linear_aligned_output(
+  input_lens, targets, target_lens, blank_label_idx, pad_value=0,
+  targets_consume_time=False):
   """
   RNN-T (https://arxiv.org/abs/1211.3711) has an output length of input_lens + target_lens.
   Here we create a linear alignment.
@@ -9076,13 +9078,20 @@ def get_rnnt_linear_aligned_output(input_lens, targets, target_lens, blank_label
   :param tf.Tensor|list[int] target_lens: [B], int32. the targets length
   :param int blank_label_idx:
   :param int pad_value:
+  :param bool targets_consume_time: In the standard RNN-T, the target labels do not consume a time frame.
+    That is why the RNN-T label output length is input_lens + target_lens.
+    In RNA (https://www.isca-speech.org/archive/Interspeech_2017/abstracts/1705.html),
+    each target label consumes a time frame, thus the label output length is just input_lens.
   :return: output [B,outT], output_lens [B]. The output is basically the target filled with blank in between.
   :rtype: (tf.Tensor,tf.Tensor)
   """
   input_lens = tf.convert_to_tensor(input_lens)
   targets = tf.convert_to_tensor(targets)
   target_lens = tf.convert_to_tensor(target_lens)
-  out_lens = input_lens + target_lens
+  if targets_consume_time:
+    out_lens = input_lens
+  else:
+    out_lens = input_lens + target_lens
   out_time_dim = tf.reduce_max(out_lens)
   batch_dim = tf.shape(out_lens)[0]
   target_time_dim = tf.shape(targets)[1]

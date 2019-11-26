@@ -3379,6 +3379,11 @@ def test_get_rnnt_linear_aligned_output():
      [4, 1, 4, 2, 4, 0, 0],
      [4, 4, 0, 0, 0, 0, 0],
      [1, 2, 3, 0, 0, 0, 0]])
+  # RNA test
+  assert_equal(
+    session.run(get_rnnt_linear_aligned_output(
+      input_lens=[7], targets=[[1, 2, 3]], target_lens=[3], blank_label_idx=4, targets_consume_time=True)[0]).tolist(),
+    [[4, 1, 4, 2, 4, 3, 4]])
 
 
 if __name__ == "__main__":
