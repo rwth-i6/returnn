@@ -537,20 +537,22 @@ class LayerBase(object):
     return n_out
 
   @classmethod
-  def _make_loss(cls, class_name, opts, network, get_layer):
+  def _make_loss(cls, class_name, opts, network, get_layer, always_make=False):
     """
     :param str|None class_name:
     :param dict[str]|None opts:
     :param TFNetwork.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    :param bool always_make:
     :rtype: Loss|None
     """
-    if not network.eval_flag:
+    if not network.eval_flag and not always_make:
       # Don't resolve the loss opts on purpose.
       # This might result in a smaller network because it might skip some get_layer calls.
       # This is what we want, i.e. we don't want to resolve layers which are only needed for the loss.
       return None
     if not class_name:
+      assert not always_make
       return None
     if not opts:
       opts = {}
@@ -6958,6 +6960,143 @@ class AccumulateMeanLayer(ReduceLayer):
     return super(AccumulateMeanLayer, cls).get_out_data_from_opts(axes=axes, **kwargs)
 
 
+class LossLayer(LayerBase):
+  """
+  This layers wraps a :class:`Loss` calculation as a layer.
+  I.e. the loss will be calculated and returned by the layer.
+  But this loss will not be used as a loss by the updater.
+  If you want to use it as a loss, you can use the :class:`AsIsLoss`,
+  i.e. write ``"loss": "as_is"``.
+  """
+  layer_class = "loss"
+  recurrent = True  # we don't know. depends on the loss
+
+  def __init__(self, loss_, target_=None, use_error=False, **kwargs):
+    """
+    ``loss_`` and related params have the postfix ``_`` to distinguish them
+    from the loss options, which are used by the network and updater for training.
+    Some of these (e.g. ``loss_opts_``) are handled in :func:`transform_config_dict`.
+
+    :param Loss loss_:
+    :param LayerBase|None target_:
+    :param bool use_error: whether to output the loss error instead of the loss value
+    """
+    super(LossLayer, self).__init__(**kwargs)
+    assert len(self.sources) == 1
+    source = self.sources[0]
+    self.loss_ = loss_
+    self.target_ = target_
+    self.loss_.reduce_func = TFUtil.identity
+    self.loss_.use_flatten_frames = False
+    self.loss_.init(
+      output=source.output,
+      output_with_activation=source.output_before_activation,
+      target=target_.output if target_ else None,
+      layer=source)
+    self.loss_value = self._make_output_value(self.loss_.get_value())
+    self.error_value = self._make_output_value(self.loss_.get_error())
+    if use_error:
+      assert self.error_value is not None
+      self.output.placeholder = self.error_value
+    else:
+      assert self.loss_value is not None
+      self.output.placeholder = self.loss_value
+
+  def _make_output_value(self, value):
+    """
+    :param tf.Tensor|None value: either loss value or error value, as it comes out from Loss.get_value or Loss.get_error.
+      [B*T|T*B|B] just like source
+    :return: shape as self.output, e.g. [B,T] or [T,B] ...
+    :rtype: tf.Tensor|None
+    """
+    if value is None:
+      return None
+    # Note: This code is not complete. There are other cases.
+    # E.g. MseLoss leaves more dimensions... In that case, we should reduce_sum on them.
+    assert value.shape.ndims == 1  # [B*T|T*B|B] just like source
+    source = self.sources[0]
+    shape = TFUtil.get_shape(source.output.placeholder)
+    if source.output.have_feature_axis():
+      del shape[source.output.feature_dim_axis]
+    return tf.reshape(value, shape)
+
+  def get_sub_layer(self, layer_name):
+    """
+    :param str layer_name: sub layer name
+    :rtype: LayerBase|None
+    """
+    sub_layer_name = "%s/%s" % (self.name, layer_name)
+    out = self.output.copy_template(name="%s_output" % sub_layer_name)
+    if layer_name == "loss":
+      assert self.loss_value is not None, "%s: loss not defined" % self
+      out.placeholder = self.loss_value
+      return InternalLayer(name=sub_layer_name, network=self.network, output=out)
+    elif layer_name == "error":
+      assert self.error_value is not None, "%s: error not defined" % self
+      out.placeholder = self.error_value
+      return InternalLayer(name=sub_layer_name, network=self.network, output=out)
+    else:
+      raise Exception("%s: invalid sub layer %r" % (self, layer_name))
+
+  @classmethod
+  def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
+    """
+    :param str layer_name: sub layer name
+    :param dict[str] parent_layer_kwargs:
+    :rtype: (Data, TFNetwork, type)|None
+    """
+    if layer_name not in ["loss", "error"]:
+      return None
+    return cls.get_out_data_from_opts(**parent_layer_kwargs), parent_layer_kwargs["network"], InternalLayer  # same type
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    deps = super(LossLayer, self).get_dep_layers()
+    if self.target_:
+      deps.append(self.target_)
+    return deps
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param TFNetwork.TFNetwork network:
+    :param get_layer:
+    """
+    super(LossLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    assert "loss_" in d
+    if "target_" not in d:
+      target = get_loss_class(d["loss_"]).get_default_target(network.extern_data)
+      if target:
+        d["target_"] = target
+    if d.get("target_", None):
+      target = d["target_"]
+      if target.startswith("layer:"):
+        target = get_layer(target[len("layer:"):])
+      else:
+        target = get_layer("data:%s" % target)
+      d["target_"] = target
+    d["loss_"] = cls._make_loss(
+      class_name=d.pop("loss_", None), opts=d.pop("loss_opts_", {}),
+      network=network, get_layer=get_layer, always_make=True)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    assert len(sources) == 1
+    out = sources[0].output.copy_template(name="%s_output" % name)
+    if out.have_feature_axis():
+      out = out.copy_template_excluding_axis(out.feature_dim_axis)
+    out.dtype = "float32"
+    return out
+
+
 class FastBaumWelchLayer(_ConcatInputLayer):
   """
   Calls :func:`fast_baum_welch` or :func:`fast_baum_welch_by_sprint_automata`.
@@ -7663,6 +7802,9 @@ class Loss(object):
     self.use_normalized_loss = use_normalized_loss
     self.custom_norm_factor = custom_norm_factor
     self.scale = scale
+
+  def __repr__(self):
+    return "<%s %r>" % (self.__class__.__name__, self.layer or self.output)
 
   def _reduce_batch_time(self):
     """
