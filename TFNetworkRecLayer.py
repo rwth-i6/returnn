@@ -2629,6 +2629,7 @@ class _SubnetworkRecCell(object):
     :param set[str] needed_outputs:
     :return: nothing, will set self.input_layers_moved_out/output_layers_moved_out/layers_in_loop
     """
+    # TODO: Currently we do not have special logic for sub-layers here, although we should...
     layers_in_loop = []  # type: typing.List[_TemplateLayer]
 
     def visit(deps):
@@ -3107,8 +3108,9 @@ class _TemplateLayer(LayerBase):
 
     sub_layer_template = _TemplateLayer(self.network, full_layer_name)
     is_output_layer = self.is_output_layer()  # make sub-layers output layers too
-    collocate_with = [self.name]  # we cannot move a sub-layer out of the loop, if parent is inside
-    sub_layer_template.init(output, sub_layer_class, is_output_layer=is_output_layer, collocate_with=collocate_with,
+    # Do not use collocate_with on the sub layer, otherwise it could never be moved out.
+    # _move_outside_loop should handle this.
+    sub_layer_template.init(output, sub_layer_class, is_output_layer=is_output_layer,
                             name=full_layer_name, network=network)
     return sub_layer_template
 
