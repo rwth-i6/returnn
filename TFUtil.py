@@ -430,16 +430,32 @@ class SearchBeam:
       return beam2
     b1 = beam1
     b2 = beam2
+    used_next_frame = False
     if b1._next_frame and b2._next_frame:
       b1 = b1._next_frame
       b2 = b2._next_frame
+      used_next_frame = True
     l1 = b1._get_dependency_list()
     l2 = b2._get_dependency_list()
     if b2 in l1:
       return beam1
     if b1 in l2:
       return beam2
-    raise Exception("Cannot combine beams:\n 1: %s\n 2: %s" % (beam1, beam2))
+    if used_next_frame:
+      # Example: beam1: prev:out, beam2: prev:t, t->prev:out (l2).
+      if beam1 in l2:  # -> beam1 dep on beam2
+        return beam1
+      if beam2 in l1:
+        return beam2
+    raise Exception(
+      "\n".join([
+        "Cannot combine beams:",
+        "  1: %s (deps: %s, next %s, next deps %s)" % (
+          beam1, beam1._get_dependency_list(),
+          beam1._next_frame, beam1._next_frame._get_dependency_list() if beam1._next_frame else None),
+        "  2: %s (deps: %s, next %s, next deps %s)" % (
+          beam2, beam2._get_dependency_list(), beam2._next_frame,
+          beam2._next_frame._get_dependency_list() if beam2._next_frame else None)]))
 
 
 class Data(object):
