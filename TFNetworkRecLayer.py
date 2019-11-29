@@ -6332,7 +6332,7 @@ class OptimalCompletionsLayer(LayerBase):
       dim = max(dim, blank_idx + 1)
     return Data(
       name="%s_output" % name,
-      shape=(target_data.dim,), dim=dim, dtype="int32", sparse=False, time_dim_axis=None,
+      shape=(dim,), dim=dim, dtype="int32", sparse=False, time_dim_axis=None,
       beam=SearchBeam.get_combined_beam(source_data.beam, target_data.beam))
 
 
