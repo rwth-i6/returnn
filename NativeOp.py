@@ -5910,7 +5910,7 @@ class NextEditDistanceRowOp(NativeOpGenBase):
   inputs:
     :param last_row: 2d (batch,b_time + 1), int32. last edit distances
     :param a: symbols. 1d (batch,), int32. current.
-    :param a_n: scalar, int32. current position
+    :param a_n: (batch,), int32. current position
     :param a_ended: 1d (batch,), int32 (casted from bool, because int32 easier to handle)
     :param b: symbols. 2d (batch,b_time), int32
     :param b_len: 1d (batch,), int32
@@ -5922,7 +5922,7 @@ class NextEditDistanceRowOp(NativeOpGenBase):
      "need_contiguous": True, "gradient": "disconnected"},
     {"name": "a", "ndim": 1, "shape": (None,), "dtype": "int32",
      "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "a_n", "ndim": 0, "shape": (), "dtype": "int32",
+    {"name": "a_n", "ndim": 1, "shape": (None,), "dtype": "int32",
      "need_contiguous": True, "gradient": "disconnected"},
     {"name": "a_ended", "ndim": 1, "shape": (None,), "dtype": "int32",
      "need_contiguous": True, "gradient": "disconnected"},
@@ -5951,7 +5951,7 @@ class NextEditDistanceRowOp(NativeOpGenBase):
 
           int last_dist;
           if(!a_ended[batch_idx]) {
-            last_dist = *a_n + 1;  // Initial deletion error.
+            last_dist = a_n[batch_idx] + 1;  // Initial deletion error.
             next_row[batch_idx * (n_b_max_len + 1)] = last_dist;
             for(int t_b = 1; t_b <= b_len[batch_idx]; ++t_b) {
               int ins_error = last_row[batch_idx * (n_b_max_len + 1) + t_b] + 1;
@@ -5994,7 +5994,7 @@ class NextEditDistanceRowOp(NativeOpGenBase):
     Ndarray* out = *outputs[0];
     assert_cmp(Ndarray_NDIM(last_row), ==, 2);
     assert_cmp(Ndarray_NDIM(a), ==, 1);
-    assert_cmp(Ndarray_NDIM(a_n), ==, 0);
+    assert_cmp(Ndarray_NDIM(a_n), ==, 1);
     assert_cmp(Ndarray_NDIM(a_ended), ==, 1);
     assert_cmp(Ndarray_NDIM(b), ==, 2);
     assert_cmp(Ndarray_NDIM(b_len), ==, 1);
@@ -6006,6 +6006,7 @@ class NextEditDistanceRowOp(NativeOpGenBase):
     assert_cmp(Ndarray_DIMS(last_row)[0], ==, n_batch);
     assert_cmp(Ndarray_DIMS(last_row)[1], ==, n_b_max_len + 1);
     assert_cmp(Ndarray_DIMS(a)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(a_n)[0], ==, n_batch);
     assert_cmp(Ndarray_DIMS(a_ended)[0], ==, n_batch);
     assert_cmp(Ndarray_DIMS(b)[0], ==, n_batch);
     assert_cmp(Ndarray_DIMS(b)[1], ==, n_b_max_len);
@@ -6031,11 +6032,12 @@ class NextEditDistanceReduceOp(NativeOpGenBase):
   inputs:
     :param last_row: 2d (batch,b_time + 1), int32. last edit distances
     :param a: symbols. 2d (batch|1,n_labels), int32. current.
-    :param a_n: scalar, int32. current position
+    :param a_n: 1d (batch,), int32. current position
     :param a_ended: 1d (batch,), int32 (casted from bool, because int32 easier to handle)
     :param b: symbols. 2d (batch,b_time), int32
     :param b_len: 1d (batch,), int32
     :param optimal_completion: scalar, int32 (casted from bool). True -> reduce_min over row; False -> last of row
+    :param a_blank_idx: scalar, int32. use -1 to not use
   outputs:
     :param output: 2d (batch,n_labels), int32, next (unnormalized) (maybe optional) edit distance
   """
@@ -6044,7 +6046,7 @@ class NextEditDistanceReduceOp(NativeOpGenBase):
      "need_contiguous": True, "gradient": "disconnected"},
     {"name": "a", "ndim": 2, "shape": (None, None), "dtype": "int32",
      "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "a_n", "ndim": 0, "shape": (), "dtype": "int32",
+    {"name": "a_n", "ndim": 1, "shape": (None,), "dtype": "int32",
      "need_contiguous": True, "gradient": "disconnected"},
     {"name": "a_ended", "ndim": 1, "shape": (None,), "dtype": "int32",
      "need_contiguous": True, "gradient": "disconnected"},
@@ -6053,6 +6055,8 @@ class NextEditDistanceReduceOp(NativeOpGenBase):
     {"name": "b_len", "ndim": 1, "shape": (None,), "dtype": "int32",
      "need_contiguous": True, "gradient": "disconnected"},
     {"name": "optimal_completion", "ndim": 0, "shape": (), "dtype": "int32",
+     "gradient": "disconnected", "host_memory": True},
+    {"name": "a_blank_idx", "ndim": 0, "shape": (), "dtype": "int32",
      "gradient": "disconnected", "host_memory": True},
   )
   out_info = (
@@ -6069,7 +6073,8 @@ class NextEditDistanceReduceOp(NativeOpGenBase):
             const int32_t* b, const int32_t* b_len,
             int32_t* result,
             bool optimal_completion,
-            bool a_broadcast_batch
+            bool a_broadcast_batch,
+            int32_t a_blank_idx
       ) {
         int idx = threadIdx.x + blockDim.x * blockIdx.x;
         while(idx < n_batch * n_labels) {
@@ -6079,8 +6084,8 @@ class NextEditDistanceReduceOp(NativeOpGenBase):
 
           int total_min_error;
           int last_dist;
-          if(!a_ended[batch_idx]) {
-            last_dist = *a_n + 1;  // Initial deletion error.
+          if(!a_ended[batch_idx] && a_label != a_blank_idx) {
+            last_dist = a_n[batch_idx] + 1;  // Initial deletion error.
             total_min_error = last_dist;
             for(int t_b = 1; t_b <= b_len[batch_idx]; ++t_b) {
               int ins_error = last_row[batch_idx * (n_b_max_len + 1) + t_b] + 1;
@@ -6095,7 +6100,7 @@ class NextEditDistanceReduceOp(NativeOpGenBase):
               if(total_min_error > last_dist) total_min_error = last_dist;
             }
           }
-          else {  // a ended
+          else {  // a ended or blank
             // Just copy over.
             total_min_error = last_row[batch_idx * (n_b_max_len + 1)];
             for(int t_b = 0; t_b <= b_len[batch_idx]; ++t_b) {
@@ -6113,7 +6118,7 @@ class NextEditDistanceReduceOp(NativeOpGenBase):
   }
 
   c_fw_code = """
-    assert(n_inputs == 7);
+    assert(n_inputs == 8);
     assert(n_outputs == 1);
     Ndarray* last_row = inputs[0];
     Ndarray* a = inputs[1];
@@ -6122,10 +6127,11 @@ class NextEditDistanceReduceOp(NativeOpGenBase):
     Ndarray* b = inputs[4];
     Ndarray* b_len = inputs[5];
     bool optimal_completion = (bool) Ndarray_DEV_DATA_int32_scalar(inputs[6]);
+    int32_t a_blank_idx = Ndarray_DEV_DATA_int32_scalar(inputs[7]);
     Ndarray* out = *outputs[0];
     assert_cmp(Ndarray_NDIM(last_row), ==, 2);
     assert_cmp(Ndarray_NDIM(a), ==, 2);
-    assert_cmp(Ndarray_NDIM(a_n), ==, 0);
+    assert_cmp(Ndarray_NDIM(a_n), ==, 1);
     assert_cmp(Ndarray_NDIM(a_ended), ==, 1);
     assert_cmp(Ndarray_NDIM(b), ==, 2);
     assert_cmp(Ndarray_NDIM(b_len), ==, 1);
@@ -6141,6 +6147,7 @@ class NextEditDistanceReduceOp(NativeOpGenBase):
     if(!a_broadcast_batch)
       assert_cmp(Ndarray_DIMS(a)[0], ==, n_batch);
     assert_cmp(Ndarray_DIMS(a)[1], ==, n_labels);
+    assert_cmp(Ndarray_DIMS(a_n)[0], ==, n_batch);
     assert_cmp(Ndarray_DIMS(a_ended)[0], ==, n_batch);
     assert_cmp(Ndarray_DIMS(b)[0], ==, n_batch);
     assert_cmp(Ndarray_DIMS(b)[1], ==, n_b_max_len);
@@ -6153,7 +6160,7 @@ class NextEditDistanceReduceOp(NativeOpGenBase):
       Ndarray_DEV_DATA_int32(b), Ndarray_DEV_DATA_int32(b_len),
       Ndarray_DEV_DATA_int32(out),
       optimal_completion,
-      a_broadcast_batch
+      a_broadcast_batch, a_blank_idx
     ));
   """
 

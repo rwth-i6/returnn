@@ -6103,9 +6103,10 @@ class EditDistanceTableLayer(LayerBase):
   layer_class = "edit_distance_table"
   recurrent = True
 
-  def __init__(self, debug=False, **kwargs):
+  def __init__(self, debug=False, blank_idx=None, **kwargs):
     """
     :param bool debug:
+    :param int|None blank_idx: if given, will keep the same row for this source label
     """
     super(EditDistanceTableLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1, "%s: expects exactly a single source" % self
@@ -6122,14 +6123,25 @@ class EditDistanceTableLayer(LayerBase):
     assert source_data.batch_ndim == 1
     # Assume we are inside a rec loop.
     assert self.network.have_rec_step_info()
-    rec_step_info = self.network.get_rec_step_info()
     self._last_row = self._rec_previous_layer.rec_vars_outputs["state"]
+    rec_step_info = self.network.get_rec_step_info()
+    batch_dim = self.get_batch_dim()
+    mask_flag = rec_step_info.get_end_flag(target_search_choices=self.get_search_choices())
+    source = source_data.placeholder
+    if blank_idx is None:
+      from TFUtil import expand_dims_unbroadcast
+      source_len = expand_dims_unbroadcast(rec_step_info.step, axis=0, dim=batch_dim)
+    else:
+      source_len = self._rec_previous_layer.rec_vars_outputs["source_len"]
+      mask_flag = tf.logical_or(mask_flag, tf.equal(source, blank_idx))
     from TFNativeOp import next_edit_distance_row
     self._next_row = next_edit_distance_row(
       last_row=self._last_row,
-      a=source_data.placeholder, a_n=rec_step_info.step,
-      a_ended=rec_step_info.get_end_flag(target_search_choices=self.get_search_choices()),
+      a=source, a_n=source_len,
+      a_ended=mask_flag,
       b=target_data.placeholder, b_len=target_data.get_sequence_lengths())
+    if blank_idx is not None:
+      self.rec_vars_outputs["source_len"] = source_len + tf.where(mask_flag, 0, 1)
     if debug:
       from TFUtil import py_print, vocab_idx_repr
       print_out = [str(self)]
@@ -6173,7 +6185,10 @@ class EditDistanceTableLayer(LayerBase):
     target_data = cls._static_get_target_value(target=target, network=network)
     assert target_data, "target %r not found?" % target
     n_time = tf.shape(target_data.placeholder)[target_data.time_dim_axis]
-    return {"state": expand_dims_unbroadcast(tf.range(n_time + 1), axis=0, dim=batch_dim)}
+    d = {"state": expand_dims_unbroadcast(tf.range(n_time + 1), axis=0, dim=batch_dim)}
+    if kwargs.get("blank_idx", None) is not None:
+      d["source_len"] = tf.zeros((batch_dim,), dtype=tf.int32)
+    return d
 
   @classmethod
   def get_rec_initial_output(cls, **kwargs):
@@ -6237,9 +6252,10 @@ class OptimalCompletionsLayer(LayerBase):
   layer_class = "optimal_completions"
   recurrent = True
 
-  def __init__(self, debug=False, **kwargs):
+  def __init__(self, debug=False, blank_idx=None, **kwargs):
     """
     :param bool debug:
+    :param int|None blank_idx:
     """
     super(OptimalCompletionsLayer, self).__init__(**kwargs)
     src_layer, = self.sources
@@ -6252,15 +6268,22 @@ class OptimalCompletionsLayer(LayerBase):
     assert target_data, "%s: target %r not found?" % (self, self.target)
     assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
     from TFNativeOp import next_edit_distance_reduce
-    successors = tf.expand_dims(tf.range(target_data.dim), axis=0)
+    successors = tf.expand_dims(tf.range(self.output.dim), axis=0)  # [1,dim]
     rec_step_info = self.network.get_rec_step_info()
+    src_len = rec_step_info.step
+    if blank_idx is not None:
+      # We need the correct source len.
+      # This is currently a simple way, which expects it to come from EditDistanceTableLayer.
+      # Can easily be extended if needed...
+      assert "source_len" in src_layer.rec_vars_outputs
+      src_len = src_layer.rec_vars_outputs["source_len"]
     reduce_out = next_edit_distance_reduce(
       last_row=last_row,
-      a=successors, a_n=rec_step_info.step,
+      a=successors, a_n=src_len,
       a_ended=rec_step_info.get_end_flag(target_search_choices=self.get_search_choices()),
       b=target_data.placeholder, b_len=target_data.get_sequence_lengths(),
-      optimal_completion=True)
-    reduce_out.set_shape((None, target_data.dim))
+      optimal_completion=True, a_blank_idx=blank_idx)
+    reduce_out.set_shape((None, self.output.dim))
     if debug:
       from TFUtil import py_print, vocab_idx_repr
       print_out = [str(self)]
@@ -6282,12 +6305,13 @@ class OptimalCompletionsLayer(LayerBase):
     self.output.placeholder = reduce_out
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, target, network, _target_layers=None, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, target, network, _target_layers=None, blank_idx=None, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param str target:
     :param dict[str,LayerBase] _target_layers:
+    :param int|None blank_idx:
     :param TFNetwork.TFNetwork network:
     :rtype: Data
     """
@@ -6303,9 +6327,12 @@ class OptimalCompletionsLayer(LayerBase):
     assert target_data, "target %r not found?" % target
     assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
     assert target_data.sparse
+    dim = target_data.dim
+    if blank_idx is not None:
+      dim = max(dim, blank_idx + 1)
     return Data(
       name="%s_output" % name,
-      shape=(target_data.dim,), dim=target_data.dim, dtype="int32", sparse=False, time_dim_axis=None,
+      shape=(target_data.dim,), dim=dim, dtype="int32", sparse=False, time_dim_axis=None,
       beam=SearchBeam.get_combined_beam(source_data.beam, target_data.beam))
 
 

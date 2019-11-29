@@ -1436,7 +1436,7 @@ def next_edit_distance_row(last_row, a, a_n, a_ended, b, b_len):
 
   :param tf.Tensor last_row: 2d (batch,b_time + 1), int32. last edit distances
   :param tf.Tensor a: symbols. 1d (batch,), int32. current.
-  :param tf.Tensor a_n: scalar, int32. current position
+  :param tf.Tensor a_n: scalar or 1d (batch,), int32. current position
   :param tf.Tensor a_ended: 1d (batch,), int32 (casted from bool, because int32 easier to handle)
   :param tf.Tensor b: symbols. 2d (batch,b_time), int32
   :param tf.Tensor b_len: 1d (batch,), int32
@@ -1444,6 +1444,8 @@ def next_edit_distance_row(last_row, a, a_n, a_ended, b, b_len):
   :rtype: tf.Tensor
   """
   a_ended = tf.cast(a_ended, tf.int32)
+  if a_n.shape.ndims == 0:
+    a_n = tf.tile(tf.expand_dims(a_n, 0), tf.shape(a_ended))
   maker = OpMaker(OpDescription.from_gen_base(NativeOp.NextEditDistanceRowOp))
   op = maker.make_op()
   return op(last_row, a, a_n, a_ended, b, b_len)
@@ -1499,25 +1501,31 @@ def edit_distance_via_next_edit_distance_row(a, a_len, b, b_len, optimal_complet
       return tf.reduce_min(final_row, axis=1)
 
 
-def next_edit_distance_reduce(last_row, a, a_n, a_ended, b, b_len, optimal_completion=False):
+def next_edit_distance_reduce(last_row, a, a_n, a_ended, b, b_len, optimal_completion=False, a_blank_idx=None):
   """
   Wraps :class:`NativeOp.NextEditDistanceReduceOp`.
 
   :param tf.Tensor last_row: 2d (batch,b_time + 1), int32. last edit distances
   :param tf.Tensor a: symbols. 2d (batch|1,n_labels), int32. current.
-  :param tf.Tensor a_n: scalar, int32. current position
+  :param tf.Tensor a_n: scalar or 1d (batch,), int32. current position
   :param tf.Tensor a_ended: 1d (batch,), int32 (casted from bool, because int32 easier to handle)
   :param tf.Tensor b: symbols. 2d (batch,b_time), int32
   :param tf.Tensor b_len: 1d (batch,), int32
+  :param tf.Tensor|int|None a_blank_idx: scalar, int32
   :param bool|tf.Tensor optimal_completion:
   :return: 2d (batch,n_labels), int32, next (unnormalized) (optimal completion) edit distance
   :rtype: tf.Tensor
   """
   optimal_completion = tf.cast(tf.convert_to_tensor(optimal_completion), tf.int32)
   a_ended = tf.cast(a_ended, tf.int32)
+  if a_n.shape.ndims == 0:
+    a_n = tf.tile(tf.expand_dims(a_n, 0), tf.shape(a_ended))
+  if a_blank_idx is None:
+    a_blank_idx = -1
+  a_blank_idx = tf.cast(a_blank_idx, tf.int32)
   maker = OpMaker(OpDescription.from_gen_base(NativeOp.NextEditDistanceReduceOp))
   op = maker.make_op()
-  return op(last_row, a, a_n, a_ended, b, b_len, optimal_completion)
+  return op(last_row, a, a_n, a_ended, b, b_len, optimal_completion, a_blank_idx)
 
 
 def optimal_completion_edit_distance_per_successor_via_next_edit_distance(a, a_len, b, b_len, successors):
