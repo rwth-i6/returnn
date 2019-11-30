@@ -6108,6 +6108,7 @@ class EditDistanceTableLayer(LayerBase):
     :param bool debug:
     :param int|None blank_idx: if given, will keep the same row for this source label
     """
+    from TFUtil import where_bc
     super(EditDistanceTableLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1, "%s: expects exactly a single source" % self
     source_data = self.sources[0].output
@@ -6141,7 +6142,7 @@ class EditDistanceTableLayer(LayerBase):
       a_ended=mask_flag,
       b=target_data.placeholder, b_len=target_data.get_sequence_lengths())
     if blank_idx is not None:
-      self.rec_vars_outputs["source_len"] = source_len + tf.where(mask_flag, 0, 1)
+      self.rec_vars_outputs["source_len"] = source_len + where_bc(mask_flag, 0, 1)
     if debug:
       from TFUtil import py_print, vocab_idx_repr
       print_out = [str(self)]
@@ -6209,12 +6210,13 @@ class EditDistanceTableLayer(LayerBase):
     super(EditDistanceTableLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, target, network, _target_layers=None, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, target, network, _target_layers=None, blank_idx=None, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param str target:
     :param dict[str,LayerBase] _target_layers:
+    :param int|None blank_idx:
     :param TFNetwork.TFNetwork network:
     :rtype: Data
     """
@@ -6229,7 +6231,10 @@ class EditDistanceTableLayer(LayerBase):
     target_data = cls._static_get_target_value(target=target, _target_layers=_target_layers, network=network)
     assert target_data, "target %r not found?" % target
     assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
-    assert target_data.sparse and source_data.dim == target_data.dim
+    dim = target_data.dim
+    if blank_idx is not None:
+      dim = max(dim, blank_idx + 1)
+    assert target_data.sparse and source_data.dim == dim
     return Data(
       name="%s_output" % name, shape=(None, None) if source_data.have_time_axis() else (None,),
       dtype="int32", beam=SearchBeam.get_combined_beam(source_data.beam, target_data.beam))
@@ -6303,6 +6308,19 @@ class OptimalCompletionsLayer(LayerBase):
         "last_row", last_row]
       reduce_out = py_print(reduce_out, print_out)
     self.output.placeholder = reduce_out
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param TFNetwork.TFNetwork network:
+    :param get_layer:
+    """
+    super(OptimalCompletionsLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if d.get("n_out", NotSpecified) is not NotSpecified:
+      blank_idx = d.get("blank_idx", None)
+      if blank_idx is not None:
+        d["n_out"] = max(d["n_out"], blank_idx + 1)
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, target, network, _target_layers=None, blank_idx=None, **kwargs):
