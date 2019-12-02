@@ -920,7 +920,7 @@ class ExtractAudioFeatures:
                window_len=0.025, step_len=0.010,
                num_feature_filters=None, with_delta=False, norm_mean=None, norm_std_dev=None,
                features="mfcc", feature_options=None, random_permute=None, random_state=None, raw_ogg_opts=None,
-               post_process=None,
+               pre_process=None, post_process=None,
                sample_rate=None,
                peak_normalization=True, preemphasis=None, join_frames=None):
     """
@@ -930,12 +930,13 @@ class ExtractAudioFeatures:
     :param bool|int with_delta:
     :param numpy.ndarray|str|int|float|None norm_mean: if str, will interpret as filename
     :param numpy.ndarray|str|int|float|None norm_std_dev: if str, will interpret as filename
-    :param str features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank", "raw", "raw_ogg"
+    :param str|function features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank", "raw", "raw_ogg"
     :param dict[str]|None feature_options: provide additional parameters for the feature function
     :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
     :param numpy.random.RandomState|None random_state:
     :param dict[str]|None raw_ogg_opts:
-    :param function post_process:
+    :param function|None pre_process:
+    :param function|None post_process:
     :param int|None sample_rate:
     :param bool peak_normalization: set to False to disable the peak normalization for audio files
     :param float|None preemphasis: set a preemphasis filter coefficient
@@ -974,6 +975,7 @@ class ExtractAudioFeatures:
     self.random_state = random_state
     self.features = features
     self.feature_options = feature_options
+    self.pre_process = pre_process
     self.post_process = post_process
     self.sample_rate = sample_rate
     self.raw_ogg_opts = raw_ogg_opts
@@ -1050,6 +1052,10 @@ class ExtractAudioFeatures:
         opts=self.random_permute_opts,
         random_state=self.random_state)
 
+    if self.pre_process:
+      audio = self.pre_process(audio=audio, sample_rate=sample_rate, random_state=self.random_state)
+      assert isinstance(audio, numpy.ndarray) and len(audio.shape) == 1
+
     if self.features == "raw":
       assert self.num_feature_filters == 1
       feature_data = audio[:, None].astype("float32")  # add dummy dimension
@@ -1066,7 +1072,9 @@ class ExtractAudioFeatures:
         assert isinstance(self.feature_options, dict)
         kwargs.update(self.feature_options)
 
-      if self.features == "mfcc":
+      if callable(self.features):
+        feature_data = self.features(random_state=self.random_state, **kwargs)
+      elif self.features == "mfcc":
         feature_data = _get_audio_features_mfcc(**kwargs)
       elif self.features == "log_mel_filterbank":
         feature_data = _get_audio_log_mel_filterbank(**kwargs)
