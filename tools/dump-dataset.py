@@ -89,6 +89,8 @@ def dump_dataset(dataset, options):
     print("Dump shape to stdout", file=log.v3)
   elif options.type == "plot":
     print("Plot.", file=log.v3)
+  elif options.type == "interactive":
+    print("Interactive debug shell.", file=log.v3)
   elif options.type == "null":
     print("No dump.")
   else:
@@ -151,6 +153,9 @@ def dump_dataset(dataset, options):
           print("seq %i target %r: %s%s" % (seq_idx, target, pretty_print(targets), extra))
         elif options.type == "print_shape":
           print("seq %i target %r shape:" % (seq_idx, target), targets.shape)
+      if options.type == "interactive":
+        from Debug import debug_shell
+        debug_shell(locals())
     seq_len = dataset.get_seq_length(seq_idx)
     for key in dataset.get_data_keys():
       seq_len_stats[key].collect([seq_len[key]])
