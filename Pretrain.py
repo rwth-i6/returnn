@@ -426,9 +426,16 @@ class Pretrain:
   # -------------- Public interface
 
   def __str__(self):
-    return ("Pretrain construction algo %r, "
-            "number of pretrain epochs: %i (repetitions: %r)") % (
-            self._construction_algo, self.get_train_num_epochs(), self.repetitions)
+    parts = [
+      "Pretrain construction algo %r," % self._construction_algo,
+      "number of pretrain epochs: %i" % self.get_train_num_epochs()]
+    rep_set = set(self.repetitions)
+    if rep_set != {1}:
+      if len(rep_set) == 1:
+        parts.append("(repetitions: %i)" % self.repetitions[0])
+      else:
+        parts.append("(repetitions: %r)" % self.repetitions)
+    return " ".join(parts)
 
   def get_train_num_epochs(self):
     """
