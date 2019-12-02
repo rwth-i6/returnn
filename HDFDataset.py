@@ -1084,7 +1084,8 @@ class SimpleHDFWriter:
     if self.dim and not sparse:
       assert self.dim == inputs.shape[-1]
     if extra:
-      assert all([n_batch == value.shape[0] for value in extra.values()])
+      assert all([n_batch == value.shape[0] for value in extra.values()]), (
+        "n_batch %i, extra shapes: %r" % (n_batch, {key: value.shape for (key, value) in extra.items()}))
 
     seqlen_offset = self._seq_lengths.shape[0]
     self._seq_lengths.resize(seqlen_offset + n_batch, axis=0)
