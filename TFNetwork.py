@@ -2526,6 +2526,7 @@ class CustomCheckpointLoader:
   """
 
   def __init__(self, filename, saveable_params, params_prefix="", load_if_prefix="", ignore_missing=False,
+               ignore_params=(), ignore_params_prefixes=(),
                network=None):
     """
     :param str filename: filepattern for NewCheckpointReader
@@ -2535,6 +2536,8 @@ class CustomCheckpointLoader:
       the variables in the file are expected to have the same name but without this string.
     :param bool ignore_missing: any vars in the model, which are not found in the checkpoint, will be ignored.
       however, if there is no single var in the checkpoint, this is still an error.
+    :param typing.Container[str] ignore_params: these param (by name) will not be loaded
+    :param typing.Iterable[str] ignore_params_prefixes: these param (by prefix name) will not be loaded
     :param TFNetwork network:
     """
     self.filename = filename
@@ -2545,12 +2548,19 @@ class CustomCheckpointLoader:
     self.saveable_params = []
     count = 0
     for param in saveable_params:
-      if load_if_prefix and self._get_param_name(param, assert_load_if_prefix_match=False) is None:
+      param_name = self._get_param_name(param, assert_load_if_prefix_match=False)
+      if load_if_prefix and param_name is None:
+        continue
+      if param_name in ignore_params:
+        print("%s: Ignoring variable %s" % (self, param), file=log.v3)
+        continue
+      if any([param_name.startswith(prefix) for prefix in ignore_params_prefixes]):
+        print("%s: Ignoring variable %s" % (self, param), file=log.v3)
         continue
       count += 1
       custom_post_init = getattr(param, "custom_post_init", None)
       if custom_post_init:
-        print("%s: Not loading pre-initialized variable %s" % (self, param), file=log.v2)
+        print("%s: Not loading pre-initialized variable %s" % (self, param), file=log.v3)
         continue
       self.saveable_params.append(param)
     assert count > 0, "%s: no saveable vars" % self

@@ -958,7 +958,9 @@ class Engine(EngineBase):
           filename=model_filename,
           saveable_params=self.network.get_params_list(),
           params_prefix=self_prefix, load_if_prefix=load_if_prefix,
-          ignore_missing=opts.get("ignore_missing", False))
+          ignore_missing=opts.get("ignore_missing", False),
+          ignore_params=opts.get("ignore_params", ()),
+          ignore_params_prefixes=opts.get("ignore_params_prefixes", ()))
         # `set_as_custom_init` is also a marker for the vars, that they are preloaded,
         # such that further checkpoint loaders will not load them again.
         loader.set_as_custom_init()
