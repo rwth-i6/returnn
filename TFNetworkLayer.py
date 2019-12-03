@@ -1882,7 +1882,8 @@ def concat_sources(src_layers):
       assert not layer.output.sparse, "sparse concat not supported"
       assert layer.output.dtype == data.dtype, "incompatible dtype with layer %r" % layer
       # unbroadcast is needed for tf.concat.
-      layers_data.append(layer.output.copy_compatible_to(data, unbroadcast=True, data_dyn_shape=data_dyn_shape))
+      layers_data.append(layer.output.copy_compatible_to(
+        data, unbroadcast=True, except_feature=True, data_dyn_shape=data_dyn_shape))
     data.placeholder = tf.concat(
       axis=data.feature_dim_axis,
       values=[l.placeholder for l in layers_data])

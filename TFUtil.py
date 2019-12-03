@@ -668,6 +668,9 @@ class Data(object):
       for i in range(self.batch_ndim):
         if self.batch_shape[i] is None:
           continue  # we allow anything in the placeholder
+        if self.placeholder.shape[i].value != self.batch_shape[i]:
+          print("Mismatching shape: Tensor %r vs Data %r" % (self.placeholder, self))
+          print_graph_output(self.placeholder, max_depth=3)
         assert self.placeholder.shape[i].value == self.batch_shape[i]
       self.placeholder.set_shape(self.batch_shape)
       assert self.placeholder.dtype.base_dtype.name == self.dtype
@@ -1182,12 +1185,14 @@ class Data(object):
     v.sanity_check()
     return v
 
-  def copy_compatible_to(self, data, unbroadcast=False, data_dyn_shape=None, check_sparse=True, check_dtype=True):
+  def copy_compatible_to(self, data, unbroadcast=False, except_feature=False,
+                         data_dyn_shape=None, check_sparse=True, check_dtype=True):
     """
     :param Data data: other data which the returned tensor should be compatible to
       It would add any missing axes with a dim 1 axis for automatic broadcasting.
       It currently does not check whether existing dims match.
     :param bool unbroadcast: if True, all broadcast axes (axes with dim 1) will be tiled such that they match
+    :param bool except_feature: if unbroadcast, do not unbroadcast the feature dim
     :param tf.Tensor|list[tf.Tensor|int]|tuple[tf.Tensor|int]|None data_dyn_shape:
       For unbroadcast, if we do not want to rely on tf.shape(data.placeholder).
     :param bool check_sparse:
@@ -1298,6 +1303,8 @@ class Data(object):
           for axis in range(v.batch_ndim):
             if v.batch_shape[axis] != 1:
               continue
+            if except_feature and axis == v.feature_dim_axis:
+              continue
             if data.batch_shape[axis] is not None:
               tiles[axis] = data.batch_shape[axis]
             elif data_dyn_shape is not None:
@@ -1305,9 +1312,12 @@ class Data(object):
             else:
               assert data.placeholder, "need data.placeholder for unbroadcast (target data: %r)" % v
               tiles[axis] = tf.shape(data.placeholder)[axis]
-          v.placeholder = tf.tile(v.placeholder, tiles)
+          if set(tiles) != {1}:
+            v.placeholder = tf.tile(v.placeholder, tiles)
       new_shape = list(v.batch_shape)
       for axis in range(v.batch_ndim):
+        if except_feature and axis == data.feature_dim_axis:
+          continue
         if data.batch_shape[axis] != 1 and new_shape[axis] == 1:
           new_shape[axis] = data.batch_shape[axis]
       if v.feature_dim_axis is not None:
@@ -1315,7 +1325,7 @@ class Data(object):
       if v.batch_dim_axis is not None:
         del new_shape[v.batch_dim_axis]
       v.shape = tuple(new_shape)
-      if v.placeholder is not None:
+      if v.placeholder is not None and not except_feature:
         v.placeholder.set_shape(v.batch_shape)
     v.sanity_check()
     return v
@@ -8530,39 +8540,45 @@ def get_device_attr(dev):
     return _DeviceAttrMod.get_device_attr()
 
 
-def print_graph_output(fetches, file=sys.stdout):
+def print_graph_output(fetches, file=sys.stdout, max_depth=None):
   """
   :param tf.Operation|tf.Tensor|list[tf.Tensor|tf.Operation] fetches:
   :param typing.IO[str]|io.TextIOBase|io.StringIO file:
+  :param int|None max_depth:
   """
   if not isinstance(fetches, (list, tuple)):
     fetches = [fetches]
-  fetch_ops = [v.op if isinstance(v, tf.Tensor) else v for v in fetches]
-  assert all([isinstance(op, tf.Operation) for op in fetch_ops])
   visited = set()
 
-  def p(op, prefix="", indent=""):
+  def p(op, prefix="", indent=0):
     """
-    :param tf.Operation op:
+    :param tf.Operation|tf.Tensor op:
     :param str prefix:
-    :param str indent:
+    :param int indent:
     """
+    postfix = ""
+    if isinstance(op, tf.Tensor):
+      postfix = " [%i], shape %s" % (op.value_index, op.shape.as_list() if op.shape.ndims is not None else "<unknown>")
+      op = op.op
     assert isinstance(op, tf.Operation)
-    print("%s%s%r" % (indent, prefix, op), file=file)
+    print("%s%s%r%s" % ("  " * indent, prefix, op, postfix), file=file)
     if indent:
       if op in visited:
         return
     visited.add(op)
+    if max_depth is not None and indent > max_depth:
+      return
     if op.inputs:
       input_names = get_op_input_names(op)
       for i, x in enumerate(op.inputs):
-        p(x.op, prefix="inputs[%i] %r: " % (i, input_names[i]), indent=indent + "  ")
+        assert isinstance(x, tf.Tensor)
+        p(x, prefix="inputs[%i] %r: " % (i, input_names[i]), indent=indent + 1)
     if op.control_inputs:
       for i, x in enumerate(op.control_inputs):
-        p(x, prefix="control_inputs[%i]: " % (i,), indent=indent + "  ")
+        p(x, prefix="control_inputs[%i]: " % (i,), indent=indent + 1)
 
-  for op in fetch_ops:
-    p(op, prefix="fetch: ")
+  for fetch in fetches:
+    p(fetch, prefix="fetch: ")
 
 
 def find_ops_with_tensor_input(tensors, fetches=None, graph=None):
