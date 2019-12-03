@@ -9130,8 +9130,9 @@ def get_rnnt_linear_aligned_output(
 
   # Build idx to scatter_nd of out_times.
   idxs = get_linear_alignment_out_to_in_indices(
-    input_lens=out_lens, output_lens=target_lens, pad_value=-1)  # (B,targetT)
+    input_lens=tf.maximum(out_lens, target_lens), output_lens=target_lens, pad_value=-1)  # (B,targetT)
   idxs = idxs + 1  # make valid pad_value
+  idxs = where_bc(tf.greater(idxs, out_lens[:, None]), 0, idxs)  # fix if target_len > out_len
 
   target_times = tf.expand_dims(tf.range(target_time_dim), axis=0)  # (1,targetT)
   out_values = tf.concat([tf.tile([[blank_label_idx]], [batch_dim, 1]), targets], axis=1)  # (B,targetT+1)

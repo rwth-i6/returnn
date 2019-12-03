@@ -3342,6 +3342,10 @@ def test_get_linear_alignment_out_to_in_indices():
     session.run(
       get_linear_alignment_out_to_in_indices(input_lens=[7, 4, 2, 1], output_lens=[3, 4, 4, 2], pad_value=-1)).tolist(),
     [[1, 3, 5, -1], [0, 1, 2, 3], [0, 0, 1, 1], [0, 0, -1, -1]])
+  assert_equal(
+    session.run(get_linear_alignment_out_to_in_indices(input_lens=[2], output_lens=[3])).tolist(),
+    [[0, 1, 1]])
+
 
 
 def test_get_rnnt_linear_aligned_output():
@@ -3384,6 +3388,14 @@ def test_get_rnnt_linear_aligned_output():
     session.run(get_rnnt_linear_aligned_output(
       input_lens=[7], targets=[[1, 2, 3]], target_lens=[3], blank_label_idx=4, targets_consume_time=True)[0]).tolist(),
     [[4, 1, 4, 2, 4, 3, 4]])
+  assert_equal(
+    session.run(get_rnnt_linear_aligned_output(
+      input_lens=[3], targets=[[1, 2, 3]], target_lens=[3], blank_label_idx=4, targets_consume_time=True)[0]).tolist(),
+    [[1, 2, 3]])
+  assert_equal(
+    session.run(get_rnnt_linear_aligned_output(
+      input_lens=[2], targets=[[1, 2, 3]], target_lens=[3], blank_label_idx=4, targets_consume_time=True)[0]).tolist(),
+    [[1, 2]])
 
 
 if __name__ == "__main__":
