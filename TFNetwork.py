@@ -1880,6 +1880,12 @@ class TFNetwork(object):
     """
     self.get_root_network()._graph_reset_callbacks.append(cb)
 
+  def get_graph_reset_callbacks(self):
+    """
+    :rtype: list[()->None]
+    """
+    return self._graph_reset_callbacks
+
   def call_graph_reset_callbacks(self):
     """
     Calls any callbacks registered via :func:`register_graph_reset_callback`.

@@ -1241,9 +1241,6 @@ class Engine(EngineBase):
       new_network_desc = self.pretrain.get_network_json_for_epoch(self.epoch)
       # Always update config, if needed, even if nothing changed.
       # This might trigger enforcing some learning rate, or so.
-      if self.need_init_new_network(new_network_desc):
-        # Early call of reset callbacks, which might trigger some HDF dump or other things.
-        self.network.call_graph_reset_callbacks()
       self._maybe_update_config(net_desc=new_network_desc, epoch=self.epoch)
       if self.need_init_new_network(new_network_desc):
         self.init_new_network(new_network_desc)
@@ -1343,8 +1340,25 @@ class Engine(EngineBase):
         self.save_model(self.get_epoch_model_filename() + ".broken")
         sys.exit(1)
 
+    should_call_graph_reset_callbacks = False
+    should_save_model_after_eval = False
+    if (self.network.get_graph_reset_callbacks() and
+        # See also init_train_epoch().
+        self.need_init_new_network(
+          net_desc=self.pretrain.get_network_json_for_epoch(epoch=self.epoch + 1)
+            if self.is_pretrain_epoch(epoch=self.epoch + 1) else None)):
+      # Do not call it right now, but after eval model. See below.
+      should_call_graph_reset_callbacks = True
+      # In case that Returnn crashes now during eval (e.g. job timelimit exceeded),
+      # e.g. some HDF dump would be incomplete, but Returnn would load the saved model
+      # and continue with the next epoch anyway. We want to avoid this incompleteness.
+      should_save_model_after_eval = True
+
     if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):
-      self.save_model(self.get_epoch_model_filename())
+      if not should_save_model_after_eval:
+        self.save_model(self.get_epoch_model_filename())
+    else:
+      should_save_model_after_eval = False
     self.learning_rate_control.set_epoch_error(self.epoch, {"train_score": trainer.score, "train_error": trainer.error})
     if self._do_save():
       self.learning_rate_control.save()
@@ -1355,6 +1369,13 @@ class Engine(EngineBase):
       "error:", self.format_score(trainer.error),
       "elapsed:", hms(trainer.elapsed), file=log.v1)
     self.eval_model()
+
+    if should_call_graph_reset_callbacks:
+      # Early call of reset callbacks, which might trigger some HDF dump or other things.
+      # Do this after eval model, such that e.g. the HDF dump contains information about both train and dev.
+      self.network.call_graph_reset_callbacks()
+    if should_save_model_after_eval:
+      self.save_model(self.get_epoch_model_filename())
 
     if self.config.bool_or_other("cleanup_old_models", None):
       self.cleanup_old_models()
