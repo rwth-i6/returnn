@@ -6281,6 +6281,9 @@ def safe_log(x, eps=1e-20, use_fake_grad=True):
   :rtype: tf.Tensor
   """
   with tf.name_scope("safe_log"):
+    y = check_base_op_type_and_replace(x, "Exp", "Identity")
+    if y is not None:
+      return y
     y = check_base_op_type_and_replace(x, "Softmax", "LogSoftmax")
     if y is not None:
       return y
