@@ -6307,6 +6307,15 @@ def safe_exp(x, eps=1e-20):
   """
   import numpy
   with tf.name_scope("safe_exp"):
+    y = check_base_op_type_and_replace(x, "Log", "Identity")
+    if y is not None:
+      return y
+    y = check_base_op_type_and_replace(x, "LogSoftmax", "Softmax")
+    if y is not None:
+      return y
+    y = check_base_op_type_and_replace(x, "LogSigmoid", "Sigmoid")
+    if y is not None:
+      return y
     clip_value_min = numpy.log(eps)
     clip_value_max = numpy.log(1.0 / eps)
     x = clip_by_value_with_identity_grad(x, clip_value_min, clip_value_max)
