@@ -8010,7 +8010,7 @@ class Loss(object):
       "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output))
     expected_output_dim = self.get_auto_output_layer_dim(self.target.dim)
     assert expected_output_dim == self.output.dim, (
-      "Expected output dim is %i but the output has dim %r. " % (expected_output_dim, self.output.dim) +
+      "Expected output dim is %r but the output has dim %r. " % (expected_output_dim, self.output.dim) +
       "Target: %s, output: %s" % (self.target, self.output))
 
   def get_error(self):
@@ -8176,15 +8176,30 @@ class BinaryCrossEntropyLoss(Loss):
   """
   class_name = "bin_ce"
 
+  def _check_init(self):
+    assert self.target
+    assert self.target.batch_ndim == self.output.batch_ndim, (
+      "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output))
+
   def get_value(self):
     """
     :rtype: tf.Tensor
     """
-    assert not self.target.sparse, "sparse is not supported yet"
-    assert self.target.dim == self.output.dim
     with tf.name_scope("loss_bin_ce"):
-      out = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.output_flat, labels=self.target_flat)
-      return self.reduce_func(out * (1.0 / self.target.dim))
+      out = tf.nn.sigmoid_cross_entropy_with_logits(
+        logits=self.output_flat, labels=tf.cast(self.target_flat, self.output_flat.dtype))
+      return self.reduce_func(out) * (1.0 / (self.output.dim or 1))
+
+  def get_error(self):
+    """
+    :return: frame error rate as a scalar value with the default self.reduce_func (see also self.get_value)
+    :rtype: tf.Tensor
+    """
+    with tf.name_scope("loss_frame_error"):
+      targets_bool = tf.cast(self.target_flat, tf.float32) > 0.5
+      output_bool = self.output_flat > 0.  # logits
+      not_equal = tf.not_equal(output_bool, targets_bool)
+      return self.reduce_func(tf.cast(not_equal, tf.float32)) * (1.0 / (self.output.dim or 1))
 
 
 class GenericCELoss(Loss):
