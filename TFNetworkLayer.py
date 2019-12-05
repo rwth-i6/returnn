@@ -3394,6 +3394,7 @@ class ConstantLayer(LayerBase):
     :param bool with_batch_dim:
     :rtype: Data
     """
+    import numpy
     if dtype is None:
       if isinstance(value, int):
         dtype = "int32"
@@ -3403,9 +3404,10 @@ class ConstantLayer(LayerBase):
         dtype = "bool"
       else:
         raise TypeError("cannot handle value %r of type %r" % (value, type(value)))
+    shape = value.shape if isinstance(value, numpy.ndarray) else ()
     return Data(
       name="%s_const" % name,
-      shape=(), batch_dim_axis=0 if with_batch_dim else None, time_dim_axis=None,
+      shape=shape, batch_dim_axis=0 if with_batch_dim else None, time_dim_axis=None,
       dtype=dtype)
 
 
