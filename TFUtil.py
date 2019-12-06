@@ -4766,7 +4766,7 @@ class OpCodeCompiler(NativeCodeCompiler):
   CacheDirName = "returnn_tf_cache/ops"
 
   def __init__(self, use_cuda_if_available=True, cuda_auto_min_compute_capability=True,
-               include_paths=(), ld_flags=(), **kwargs):
+               include_paths=(), ld_flags=(), c_macro_defines=None, **kwargs):
     self._cuda_env = use_cuda_if_available and CudaEnv.get_instance()
     if use_cuda_if_available and is_gpu_available():
       # Currently we assume that if we provide CUDA code (thus set use_cuda_if_available=True),
@@ -4784,6 +4784,11 @@ class OpCodeCompiler(NativeCodeCompiler):
     tf_include = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
     tf_include_nsync = tf_include + "/external/nsync/public"  # https://github.com/tensorflow/tensorflow/issues/2412
     include_paths = list(include_paths) + [tf_include, tf_include_nsync]
+    c_macro_defines = {} if c_macro_defines is None else c_macro_defines.copy()
+    # https://github.com/rwth-i6/returnn/issues/87
+    # https://github.com/tensorflow/tensorflow/issues/17316
+    # https://github.com/tensorflow/tensorflow/issues/22766
+    c_macro_defines.setdefault("NDEBUG", 1)
     ld_flags = list(ld_flags)
     if have_min_tf_version((1, 14)):
       # https://github.com/tensorflow/tensorflow/issues/13607
@@ -4793,7 +4798,8 @@ class OpCodeCompiler(NativeCodeCompiler):
     # noinspection PyUnresolvedReferences
     use_cxx11_abi = hasattr(tf, 'CXX11_ABI_FLAG') and tf.CXX11_ABI_FLAG
     super(OpCodeCompiler, self).__init__(
-      include_paths=include_paths, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi, **kwargs)
+      include_paths=include_paths, c_macro_defines=c_macro_defines, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi,
+      **kwargs)
     self._tf_mod = None
 
   _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version", "with_cuda", "cuda_path", "nvcc_opts")
@@ -4845,10 +4851,15 @@ class TFNativeUtilCompiler(NativeCodeCompiler):
 
   CacheDirName = "returnn_tf_cache/tf_utils"
 
-  def __init__(self, include_paths=(), ld_flags=(), **kwargs):
+  def __init__(self, include_paths=(), ld_flags=(), c_macro_defines=None, **kwargs):
     tf_include = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
     tf_include_nsync = tf_include + "/external/nsync/public"  # https://github.com/tensorflow/tensorflow/issues/2412
     include_paths = list(include_paths) + [tf_include, tf_include_nsync]
+    c_macro_defines = {} if c_macro_defines is None else c_macro_defines.copy()
+    # https://github.com/rwth-i6/returnn/issues/87
+    # https://github.com/tensorflow/tensorflow/issues/17316
+    # https://github.com/tensorflow/tensorflow/issues/22766
+    c_macro_defines.setdefault("NDEBUG", 1)
     ld_flags = list(ld_flags)
     if have_min_tf_version((1, 14)):
       # https://github.com/tensorflow/tensorflow/issues/13607
@@ -4858,14 +4869,16 @@ class TFNativeUtilCompiler(NativeCodeCompiler):
     # noinspection PyUnresolvedReferences
     use_cxx11_abi = hasattr(tf, 'CXX11_ABI_FLAG') and tf.CXX11_ABI_FLAG
     super(TFNativeUtilCompiler, self).__init__(
-      include_paths=include_paths, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi, **kwargs)
+      include_paths=include_paths, c_macro_defines=c_macro_defines, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi,
+      **kwargs)
 
   _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version",)
 
   def _make_info_dict(self):
+    from Util import describe_tensorflow_version
     d = super(TFNativeUtilCompiler, self)._make_info_dict()
     # noinspection PyUnresolvedReferences
-    d.update({"tf_version": tf.__version__})
+    d.update({"tf_version": describe_tensorflow_version()})
     return d
 
 
