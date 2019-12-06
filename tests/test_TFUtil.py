@@ -13,7 +13,7 @@ import tensorflow as tf
 import sys
 sys.path += ["."]  # Python 3 hack
 from TFUtil import *
-from nose.tools import assert_equal, assert_not_equal, assert_is_instance, assert_is, assert_in
+from nose.tools import assert_equal, assert_not_equal, assert_is_instance, assert_is, assert_in, assert_true
 from numpy.testing.utils import assert_almost_equal, assert_allclose
 from pprint import pprint
 import unittest
@@ -2460,7 +2460,7 @@ def test_openfst():
   TFOpenFst.get_tf_mod(verbose=True)
 
   """
-  $ fstprint --osymbols=lexicon_opt.osyms --isymbols=lexicon_opt.isyms lexicon_opt.fst 
+  $ fstprint --osymbols=lexicon_opt.osyms --isymbols=lexicon_opt.isyms lexicon_opt.fst
   0	1	M	<epsilon>
   0	2	m	man
   0
@@ -2576,7 +2576,7 @@ def test_get_op_attrib_keys():
   assert isinstance(x, tf.Tensor)
   assert isinstance(x.op, tf.Operation)
   print("x op:", x.op.type)
-  assert_equal(x.op.type, "BatchMatMul")
+  assert_in(x.op.type, ["BatchMatMul", "BatchMatMulV2"])
   assert_equal(x.get_shape().as_list(), [3, 4, 7])
   attrib_keys = get_op_attrib_keys(x)
   print("matmul attrib keys:", attrib_keys)
@@ -2590,7 +2590,7 @@ def test_get_op_input_names_MatMul():
   assert isinstance(x, tf.Tensor)
   assert isinstance(x.op, tf.Operation)
   print("x op:", x.op.type)
-  assert_equal(x.op.type, "BatchMatMul")
+  assert_in(x.op.type, ['BatchMatMul', 'BatchMatMulV2'])
   input_names = get_op_input_names(x.op)
   print("matmul input names:", input_names)
   assert_equal(sorted(input_names), ['x', 'y'])
