@@ -116,7 +116,7 @@ struct OpenFstInstance : public ResourceBase {
   }
 
   string DebugString()
-#if (TF_MAJOR_VERSION >= 1 && TF_MINOR_VERSION >= 14)
+#if (TF_MAJOR_VERSION == 1 && TF_MINOR_VERSION >= 14) || (TF_MAJOR_VERSION > 1)
 const
 #endif
   override {

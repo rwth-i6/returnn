@@ -753,7 +753,7 @@ void* _malloc(size_t num_bytes) {
     Allocator* allocator =
         context->device()->GetAllocator(AllocatorAttributes());
     // Note: Starting with TF 1.14, there is no "Allocate" convenience wrapper anymore.
-#if (TF_MAJOR_VERSION == 1 && TF_MINOR_VERSION >= 14)
+#if (TF_MAJOR_VERSION == 1 && TF_MINOR_VERSION >= 14) || (TF_MAJOR_VERSION > 1)
     void* ptr = allocator->AllocateRaw(Allocator::kAllocatorAlignment, num_bytes);
 #else
     void* ptr = (void*) allocator->Allocate<uint8_t>(num_bytes);
