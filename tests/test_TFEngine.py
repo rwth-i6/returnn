@@ -391,15 +391,6 @@ def test_engine_train_grad_noise_sparse():
   # You might see "Converting sparse IndexedSlices to a dense Tensor of unknown shape."
   # but that is normally related to sth else.
 
-  def wrapped_slice_to_tensor(value, dtype=None, name=None, as_ref=False):
-    print("wrapped_slice_to_tensor:", value)
-    #assert "flatten_with_seq_len_mask" in value.name
-    from tensorflow.python.ops import gradients_impl
-    return gradients_impl._IndexedSlicesToTensor(value, dtype=dtype, name=name, as_ref=as_ref)
-
-  from tensorflow.python.framework import ops
-  ops.register_tensor_conversion_function(tf.IndexedSlices, wrapped_slice_to_tensor, priority=1)
-
   # Anyway, for now, just try to trigger relevant code,
   # ie. in add_scaled_noise_to_gradients(),
   # and don't really check whether it works.
