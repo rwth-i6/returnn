@@ -35,6 +35,8 @@ _src_code = """
 #include "tensorflow/core/platform/macros.h"
 #include "tensorflow/core/platform/mutex.h"
 #include "tensorflow/core/platform/types.h"
+#include "tensorflow/core/public/version.h"
+
 
 using namespace tensorflow;
 
@@ -158,7 +160,11 @@ struct KenLmModel : public ResourceBase {
     return total_score * logf(10.);
   }
 
-  string DebugString() override {
+  string DebugString()
+#if (TF_MAJOR_VERSION >= 1 && TF_MINOR_VERSION >= 14)
+const
+#endif
+  override {
     return strings::StrCat("KenLmModel[", filename_, "]");
   }
 
