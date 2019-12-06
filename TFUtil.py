@@ -4787,7 +4787,7 @@ class OpCodeCompiler(NativeCodeCompiler):
     ld_flags = list(ld_flags)
     if have_min_tf_version((1, 4)):
       # https://github.com/tensorflow/tensorflow/issues/13607
-      ld_flags += ["-L%s" % tf.sysconfig.get_lib(), "-ltensorflow_framework"]
+      ld_flags += tf.sysconfig.get_link_flags()
     # noinspection PyUnresolvedReferences
     use_cxx11_abi = hasattr(tf, 'CXX11_ABI_FLAG') and tf.CXX11_ABI_FLAG
     super(OpCodeCompiler, self).__init__(
@@ -4850,7 +4850,7 @@ class TFNativeUtilCompiler(NativeCodeCompiler):
     ld_flags = list(ld_flags)
     if have_min_tf_version((1, 4)):
       # https://github.com/tensorflow/tensorflow/issues/13607
-      ld_flags += ["-L%s" % tf.sysconfig.get_lib(), "-ltensorflow_framework"]
+      ld_flags += tf.sysconfig.get_link_flags()
     # noinspection PyUnresolvedReferences
     use_cxx11_abi = hasattr(tf, 'CXX11_ABI_FLAG') and tf.CXX11_ABI_FLAG
     super(TFNativeUtilCompiler, self).__init__(
@@ -7019,7 +7019,7 @@ class GlobalTensorArrayOpMaker:
     #include "tensorflow/core/platform/types.h"
 
     using namespace tensorflow;
-  
+
     // Adopted from https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/ops/data_flow_ops.cc.
     REGISTER_OP("GlobalTensorArray")
     .Input("size: int32")
@@ -7041,7 +7041,7 @@ class GlobalTensorArrayOpMaker:
       return Status::OK();
     })
     .Doc("GlobalTensorArray, persistent across runs");
-    
+
     // Copied from https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/tensor_array_ops.cc,
     // and https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/resource_op_kernel.h.
     // The original TensorArrayOp used the per-run ("per-step") resource manager container
@@ -7065,7 +7065,7 @@ class GlobalTensorArrayOpMaker:
                                 tensorflow::DT_STRING, tensorflow::TensorShape({2}),
                                 &handle_, alloc_attr));
       }
-    
+
       ~GlobalTensorArrayOp() {
         if (resource_ != nullptr) {
           resource_->Unref();
@@ -7078,7 +7078,7 @@ class GlobalTensorArrayOpMaker:
           }
         }
       }
-    
+
       void Compute(OpKernelContext* ctx) override {
         mutex_lock l(mu_);
         if (resource_ == nullptr) {
@@ -7094,7 +7094,7 @@ class GlobalTensorArrayOpMaker:
         Tensor* handle;
         OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({}), &handle));
         handle->flat<ResourceHandle>()(0) =
-            resource_->resource_handle(ctx);            
+            resource_->resource_handle(ctx);
         if (ctx->num_outputs() == 2) {
           // Create the flow output.
           Tensor* flow;
@@ -7107,14 +7107,14 @@ class GlobalTensorArrayOpMaker:
           }
         }
       }
-    
+
      private:
       Status CreateTensorArray(OpKernelContext* ctx, ResourceMgr* rm,
                                Tensor* tensor_array_output_handle,
                                TensorArray** output_tensor_array) EXCLUSIVE_LOCKS_REQUIRED(mu_) {
         const Tensor* tensor_size;
         TF_RETURN_IF_ERROR(ctx->input("size", &tensor_size));
-    
+
         if (!TensorShapeUtils::IsScalar(tensor_size->shape())) {
           return errors::InvalidArgument(
               "TensorArray size must be scalar, but had shape: ",
@@ -7124,18 +7124,18 @@ class GlobalTensorArrayOpMaker:
         if (size < 0) {
           return errors::InvalidArgument("Size should be >= 0.");
         }
-    
+
         TensorArray* tensor_array = new TensorArray(
             cinfo_.name(), dtype_, *tensor_array_output_handle, size, element_shape_,
             dynamic_size_, false /* multiple_writes_aggregate */,
             false /* is_grad */, -1 /* marked_size */, clear_after_read_);
-    
+
         // TODO: could use LookupOrCreate instead...
         TF_RETURN_IF_ERROR(
             rm->Create(cinfo_.container(), cinfo_.name(), tensor_array));
-    
+
         *output_tensor_array = tensor_array;
-    
+
         return Status::OK();
       }
 
@@ -7143,17 +7143,17 @@ class GlobalTensorArrayOpMaker:
       ContainerInfo cinfo_ GUARDED_BY(mu_);
       PersistentTensor handle_ GUARDED_BY(mu_);
       TensorArray* resource_ GUARDED_BY(mu_) = nullptr;
-      
+
       const DeviceType device_type_;
       DataType dtype_;
       PartialTensorShape element_shape_;
       bool dynamic_size_;
       bool clear_after_read_;
       string tensor_array_name_;  // The name used to create the TensorArray.
-      
+
       TF_DISALLOW_COPY_AND_ASSIGN(GlobalTensorArrayOp);
     };
-    
+
     REGISTER_KERNEL_BUILDER(Name("GlobalTensorArray").Device(DEVICE_CPU), GlobalTensorArrayOp);
 
   """
@@ -7217,6 +7217,7 @@ class TFArrayContainer(object):
     #include "tensorflow/core/platform/macros.h"
     #include "tensorflow/core/platform/mutex.h"
     #include "tensorflow/core/platform/types.h"
+    #include "tensorflow/core/public/version.h"
     #include "tensorflow/core/common_runtime/device.h"
 
     using namespace tensorflow;
@@ -7259,7 +7260,13 @@ class TFArrayContainer(object):
     struct ArrayContainer : public ResourceBase {
       ArrayContainer(const DataType& dtype) : dtype_(dtype) {}
 
-      string DebugString() override { return "ArrayContainer"; }
+  string DebugString()
+#if (TF_MAJOR_VERSION >= 1 && TF_MINOR_VERSION >= 14)
+const
+#endif
+override {
+      return "ArrayContainer";
+      }
       int64 MemoryUsed() const override { return 0; };
 
       mutex mu_;
@@ -7328,7 +7335,7 @@ class TFArrayContainer(object):
                                          " but got ", DataTypeString(ar->dtype_), ".");
         return Status::OK();
       }
-  
+
       DataType dtype_;
     };
     REGISTER_KERNEL_BUILDER(Name("ArrayContainerCreate").Device(DEVICE_CPU), ArrayContainerCreateOp);
@@ -7339,9 +7346,9 @@ class TFArrayContainer(object):
 
       void Compute(OpKernelContext* context) override {
         ArrayContainer* ar;
-        
+
         const Tensor* handle;
-        OP_REQUIRES_OK(context, context->input("handle", &handle));        
+        OP_REQUIRES_OK(context, context->input("handle", &handle));
         OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &ar));
         core::ScopedUnref unref(ar);
 
@@ -7418,7 +7425,7 @@ class TFArrayContainer(object):
         const Tensor* tensor_value;
         OP_REQUIRES_OK(context, context->input("index", &tensor_index));
         OP_REQUIRES_OK(context, context->input("value", &tensor_value));
-    
+
         OP_REQUIRES(context, TensorShapeUtils::IsScalar(tensor_index->shape()),
                     errors::InvalidArgument(
                         "index must be scalar, but had shape: ",
@@ -8075,6 +8082,19 @@ def tensor_array_element_shape(ta):
   :param tf.TensorArray ta:
   :rtype: tf.TensorShape
   """
+  tf_version = float(tf.version.VERSION.rsplit('.', 1)[0])
+  if tf_version >= 1.14:
+    return tensor_array_element_shape_py3_tf_1_14_and_later(ta)
+  else:
+    return tensor_array_element_shape_tf_up_to_1_13(ta)
+
+
+# noinspection PyProtectedMember
+def tensor_array_element_shape_tf_up_to_1_13(ta):
+  """
+  :param tf.TensorArray ta:
+  :rtype: tf.TensorShape
+  """
   # If it is know, _element_shape is a list with 1 entry, the element shape as tf.TensorShape.
   # Otherwise it is an empty list.
   assert isinstance(ta._element_shape, list)
@@ -8083,6 +8103,15 @@ def tensor_array_element_shape(ta):
     assert isinstance(ta._element_shape[0], tf.TensorShape)
     return ta._element_shape[0]
   return tf.TensorShape(None)
+
+
+def tensor_array_element_shape_py3_tf_1_14_and_later(ta):
+  """
+  :param tf.TensorArray ta:
+  :rtype: tf.TensorShape
+  """
+  assert isinstance(ta.element_shape, tf.TensorShape)
+  return ta.element_shape
 
 
 def tensor_array_like(ta, **kwargs):
