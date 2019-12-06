@@ -243,7 +243,12 @@ class OpMaker(object):
     for in_idx, v in enumerate(in_info):
       out_idx = v.get("want_inplace", -1)
       if out_idx >= 0:
-        code_forward_io += "context->forward_ref_input_to_ref_output(%i, %i);\n" % (in_idx, out_idx)
+        code_forward_io += """
+          // Note: forward_ref_input_to_ref_output expects the input tensor to be a reference, and not a value;
+          //   otherwise it will trigger an assertion.
+          if (IsRefType(context->input_dtype({in_idx})))
+            context->forward_ref_input_to_ref_output({in_idx}, {out_idx});
+          """.format(in_idx=in_idx, out_idx=out_idx)
     code_set_io = ""
     for in_idx, v in enumerate(in_info):
       ndim = len(v["shape"])
@@ -385,7 +390,7 @@ class OpMaker(object):
     if self.description.cpu_support:
       code_cpu_op = """
       %(user_code_kernels)s
-  
+
       class %(op_name)sOp : public OpKernel {
       public:
         explicit %(op_name)sOp(OpKernelConstruction* context) : OpKernel(context) {}
@@ -393,7 +398,7 @@ class OpMaker(object):
           %(code_compute)s
         }
       };
-  
+
       REGISTER_KERNEL_BUILDER(Name("%(op_name)s").Device(DEVICE_CPU), %(op_name)sOp);
       """ % format_args
     else:
