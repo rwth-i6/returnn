@@ -7100,6 +7100,97 @@ class LossLayer(LayerBase):
     return out
 
 
+class ForcedAlignmentLayer(_ConcatInputLayer):
+  """
+  Calculates a forced alignment, via Viterbi algorithm.
+  """
+  layer_class = "forced_align"
+
+  def __init__(self, align_target, topology, input_type, **kwargs):
+    """
+    :param LayerBase align_target:
+    :param str topology: e.g. "ctc"
+    :param str input_type: "log_prob" or "prob"
+    """
+    from TFNativeOp import get_ctc_fsa_fast_bw, fast_viterbi
+    super(ForcedAlignmentLayer, self).__init__(**kwargs)
+    self.align_target = align_target
+    assert topology == "ctc", "%s no other topology implemented" % self
+    logits_data = self.input_data.copy_as_time_major()
+    logits = logits_data.placeholder
+    assert logits.get_shape().ndims == 3 and logits.get_shape().dims[-1].value == logits_data.dim
+    assert align_target.output.shape == (None,) and align_target.output.dim == logits_data.dim - 1
+    if input_type == "log_prob":
+      pass  # ok
+    elif input_type == "prob":
+      logits = TFUtil.safe_log(logits)
+    else:
+      raise ValueError("%s: invalid input_type %r" % (self, input_type))
+
+    edges, weights, start_end_states = get_ctc_fsa_fast_bw(
+      targets=align_target.output.get_placeholder_as_batch_major(),
+      seq_lens=align_target.output.get_sequence_lengths(),
+      blank_idx=logits_data.dim - 1)
+    alignment, scores = fast_viterbi(
+      am_scores=logits, am_seq_len=logits_data.get_sequence_lengths(),
+      edges=edges, weights=weights, start_end_states=start_end_states)
+    self.alignment = alignment
+    self.scores = scores
+    self.output.placeholder = alignment
+
+  @classmethod
+  def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
+    """
+    :param str layer_name: sub layer name
+    :param dict[str] parent_layer_kwargs:
+    :rtype: (Data, TFNetwork, type)|None
+    """
+    if layer_name == "scores":
+      return Data(name="align_scores", shape=(), dtype="float32"), parent_layer_kwargs["network"], InternalLayer
+    return None
+
+  def get_sub_layer(self, layer_name):
+    """
+    :param str layer_name:
+    :rtype: LayerBase|None
+    """
+    if layer_name == "scores":
+      return InternalLayer(
+        name="%s_scores" % self.name, network=self.network,
+        output=Data(name="%s_scores_output" % self.name, shape=(), dtype="float32", placeholder=self.scores))
+    return None
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    return super(ForcedAlignmentLayer, self).get_dep_layers() + [self.align_target]
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param TFNetwork.TFNetwork network:
+    :param get_layer:
+    """
+    super(ForcedAlignmentLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["align_target"] = get_layer(d["align_target"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    src = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_time_major()
+    src.dtype = "int32"
+    src.sparse = True
+    src.shape = (None,)
+    src.feature_dim_axis = NotSpecified
+    return src
+
+
 class FastBaumWelchLayer(_ConcatInputLayer):
   """
   Calls :func:`fast_baum_welch` or :func:`fast_baum_welch_by_sprint_automata`.
@@ -9435,9 +9526,9 @@ class TripletLoss(Loss):
   def __init__(self, margin, multi_view_training=False, **kwargs):
     super(TripletLoss, self).__init__(**kwargs)
     """
-    :param float margin: how much the distance between instances of the same class 
+    :param float margin: how much the distance between instances of the same class
       should be smaller then distances between instances of different classes.
-    :param bool multi_view_training: True if we have a pair of inputs (x_a, x_s, x_d) 
+    :param bool multi_view_training: True if we have a pair of inputs (x_a, x_s, x_d)
       extracted from two different data representations (i.e. acoustic and orthographic)
     """
     self.margin = margin
