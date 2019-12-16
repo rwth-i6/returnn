@@ -5434,6 +5434,7 @@ class TimeChunkingLayer(_ConcatInputLayer):
     x = self.input_data.copy_as_time_major()
     index = tf.cast(x.get_sequence_mask(), tf.float32)
     out, oindex = chunk(x.placeholder, index=index, chunk_step=chunk_step, chunk_size=chunk_size)
+    out.set_shape((None, None, self.output.dim))
     self.output.placeholder = out
     self.output.size_placeholder = {0: tf.reduce_sum(tf.cast(oindex, tf.int32), axis=0)}
 
@@ -5473,6 +5474,7 @@ class TimeUnChunkingLayer(_ConcatInputLayer):
     index = tf.cast(x.get_sequence_mask(), tf.float32)
     out, oindex, factors = unchunk(
       x.placeholder, index=index, chunk_step=chunk_step, chunk_size=chunk_size, n_time=n_time, n_batch=n_batch)
+    out.set_shape((None, None, self.output.dim))
     self.output.placeholder = out
     self.output.size_placeholder = {0: chunking_layer.input_data.get_sequence_lengths()}
 
