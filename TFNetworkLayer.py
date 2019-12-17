@@ -6646,9 +6646,28 @@ class SubnetworkLayer(LayerBase):
       concat_sources=concat_sources, sources=kwargs["sources"])
     return subnet.layers["output"].output
 
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param TFNetwork.TFNetwork network:
+    :param get_layer:
+    """
+    super(SubnetworkLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    # Construct it now, just to resolve dependencies.
+    from TFNetwork import CannotHandleUndefinedSourcesException
+    try:
+      cls._construct_template_subnet(
+        name=d.get("name", "unknown-subnet"),
+        network=network, get_parent_layer=get_layer,
+        subnetwork=d["subnetwork"],
+        concat_sources=d.get("concat_sources", True), sources=d["sources"])
+    except CannotHandleUndefinedSourcesException:
+      pass  # ignore that here
+
   # noinspection PyShadowingNames
   @classmethod
-  def _construct_template_subnet(cls, name, network, subnetwork, sources, concat_sources=True):
+  def _construct_template_subnet(cls, name, network, subnetwork, sources, concat_sources=True, get_parent_layer=None):
     """
     Very similar to _SubnetworkRecCell._construct_template, but simpler.
 
@@ -6657,11 +6676,14 @@ class SubnetworkLayer(LayerBase):
     :param dict[str,dict[str]] subnetwork:
     :param list[LayerBase] sources:
     :param bool concat_sources:
+    :param (str)->LayerBase get_parent_layer:
     :rtype: TFNetwork.TFNetwork
     """
     assert "output" in subnetwork
     from TFNetwork import TFNetwork
     from TFNetworkRecLayer import _TemplateLayer
+    if not get_parent_layer:
+      get_parent_layer = network.get_layer
     # Placeholder, will not be used.
     sub_extern_data = cls._get_subnet_extern_data(
       base_network=network, sources=sources, concat_sources=concat_sources)
@@ -6702,7 +6724,7 @@ class SubnetworkLayer(LayerBase):
         layer_ = subnet.layers[name]
         return layer_
       if name.startswith("base:"):
-        layer_ = network.get_layer(name[len("base:"):])
+        layer_ = get_parent_layer(name[len("base:"):])
         return layer_
       return subnet.construct_layer(
         net_dict=subnetwork, name=name, get_layer=get_templated_layer, add_layer=add_templated_layer)
