@@ -6384,22 +6384,20 @@ class MaskedComputationLayer(LayerBase):
     self.mask = mask
     self.masked_from = masked_from
 
-    if masked_from:
-      assert not self.network.is_inside_rec_layer()
-      source_data = masked_from.output.copy(
-        name="%s_%s_masked_input" % (masked_from.output.name, self.output.name))
-      source_data.available_for_inference = True  # we would make sure that this works at inference
-      source = WrappedInternalLayer(
-        base_layer=masked_from, network=masked_from.network, name=masked_from.name, output=source_data)
-      assert not mask and not self.sources
-    else:
-      assert len(self.sources) == 1
-      source, = self.sources
+    sub_layers = {}  # type: typing.Dict[str,LayerBase]
+
+    def get_masked_layer(source):
+      """
+      :param LayerBase source:
+      :rtype: LayerBase
+      """
       assert isinstance(source, LayerBase)
       assert mask
       if self.network.is_inside_rec_layer():
         assert mask.output.shape == () and mask.output.dtype == "bool", (
           "%s: invalid mask %s (inside rec loop)" % (self, mask))
+        # We can just leave it as-is. The state will handled below.
+        return source
       else:
         assert mask.output.have_time_axis() and mask.output.shape == (None,) and mask.output.dtype == "bool", (
           "%s: invalid mask %s (outside rec loop)" % (self, mask))
@@ -6417,16 +6415,33 @@ class MaskedComputationLayer(LayerBase):
         res_data = source_data.copy_template()
         res_data.size_placeholder[0] = new_size
         res_data.placeholder = res[:new_time]
-        source = WrappedInternalLayer(
+        return WrappedInternalLayer(
           base_layer=source, network=source.network, name=source.name,
           output=res_data)
+
+    if masked_from:
+      assert not self.network.is_inside_rec_layer()
+      source_data = masked_from.output.copy(
+        name="%s_%s_masked_input" % (masked_from.output.name, self.output.name))
+      source_data.available_for_inference = True  # we would make sure that this works at inference
+      source = WrappedInternalLayer(
+        base_layer=masked_from, network=masked_from.network, name=masked_from.name, output=source_data)
+      assert not mask and not self.sources
+      sub_layers["data"] = source
+
+    else:
+      assert len(self.sources) == 1
+      sub_layers["data"] = get_masked_layer(self.sources[0])
 
     def sub_get_layer(sub_layer_name):
       """
       :param str sub_layer_name:
       :rtype: LayerBase
       """
-      assert sub_layer_name == "data"
+      if sub_layer_name in sub_layers:
+        return sub_layers[sub_layer_name]
+      source = get_masked_layer(self.network.get_layer(sub_layer_name))
+      sub_layers[sub_layer_name] = source
       return source
 
     layer_desc = unit.copy()
@@ -6502,19 +6517,26 @@ class MaskedComputationLayer(LayerBase):
       d["masked_from"] = None
       d["mask"] = get_layer(d["mask"])
     super(MaskedComputationLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    # Just call it for dep resolution.
+    cls._create_template(
+      name=d.get("name", "unknown-masked-subnet"), network=network, sources=d["sources"], masked_from=masked_from,
+      unit=d["unit"], get_layer=get_layer)
 
   @classmethod
-  def _create_template(cls, name, network, sources, masked_from, unit, **kwargs):
+  def _create_template(cls, name, network, sources, masked_from, unit, get_layer=None, **kwargs):
     """
     :param str name:
     :param TFNetwork.TFNetwork network:
     :param list[LayerBase] sources:
     :param dict[str] unit:
     :param LayerBase masked_from:
+    :param (str)->LayerBase get_layer:
     :return: layer_class, layer_desc
     """
     from TFNetwork import get_layer_class
     from TFNetworkLayer import WrappedInternalLayer
+    if not get_layer:
+      get_layer = network.get_layer
     # We don't care about the right masked input here, but just about deriving the right output shape.
     if masked_from:
       if network.is_inside_rec_layer(inside_loop=True):
@@ -6529,8 +6551,8 @@ class MaskedComputationLayer(LayerBase):
     else:
       assert len(sources) == 1
       source, = sources
-      assert isinstance(source, LayerBase)
-      if not network.is_inside_rec_layer():
+      assert isinstance(source, LayerBase) or not source
+      if not network.is_inside_rec_layer() and source:
         source_data = source.output.copy_template().copy_as_time_major()
         source_data.size_placeholder[0] = None  # reset, as this is some new time-dim
         source = WrappedInternalLayer(
@@ -6542,8 +6564,9 @@ class MaskedComputationLayer(LayerBase):
       :param str sub_layer_name:
       :rtype: LayerBase
       """
-      assert sub_layer_name == "data"
-      return source
+      if sub_layer_name == "data":
+        return source
+      return get_layer(sub_layer_name)
 
     layer_desc = unit.copy()
     class_name = layer_desc.pop("class")
