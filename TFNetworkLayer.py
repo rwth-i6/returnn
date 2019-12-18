@@ -2556,12 +2556,17 @@ class GatherNdLayer(_ConcatInputLayer):
     self.position = position
     from TFUtil import batch_gather
     x = self.input_data.copy_as_batch_major()
-    position = position.output.copy_as_batch_major()
+    position = position.output
     self.output.size_placeholder = position.size_placeholder.copy()
     for i in range(position.ndim, self.output.ndim):
       j = i - position.ndim + 1
       if j in x.size_placeholder:
         self.output.size_placeholder[i] = x.size_placeholder[j]
+    if position.batch_dim_axis is not None:
+      position = position.copy_as_batch_major()
+    else:
+      position = position.copy_add_batch_dim(batch_dim_axis=0)
+      position.placeholder = tf.tile(position.placeholder, [tf.shape(x.placeholder)[0]] + [1] * (position.batch_ndim - 1))
     self.output.placeholder = batch_gather(x.placeholder, position.placeholder)  # (B,...)
 
   def get_dep_layers(self):
@@ -2581,7 +2586,11 @@ class GatherNdLayer(_ConcatInputLayer):
     input_data = get_concat_sources_data_template(sources).copy_as_batch_major()
     if input_data.undefined or not position or position.output.undefined:
       return Data.create_undefined(name="%s_output" % name)
-    position_data = position.output.copy_template().copy_as_batch_major()
+    position_data = position.output.copy_template()
+    if position_data.batch_dim_axis is None:
+      position_data = position_data.copy_add_batch_dim(batch_dim_axis=0)
+    else:
+      position_data = position_data.copy_as_batch_major()
     shape = list(position_data.shape) + list(input_data.shape[1:])  # (B, ...) (w/o batch)
     out_type = position_data.get_kwargs()
     out_type["name"] = "%s_output" % name
