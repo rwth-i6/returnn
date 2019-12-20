@@ -390,9 +390,9 @@ def test_NativeLstm2_shape_inference_normal():
     weights = tf.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
     inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
     index = tf.ones([n_time, n_batch])
-    n_batch = tf.shape(inputs)[1]
-    c0 = tf.zeros((n_batch, n_hidden), dtype=tf.float32, name="initial_c")
-    y0 = tf.zeros((n_batch, n_hidden), dtype=tf.float32, name="initial_h")
+    n_batch_ = tf.shape(inputs)[1]
+    c0 = tf.zeros((n_batch_, n_hidden), dtype=tf.float32, name="initial_c")
+    y0 = tf.zeros((n_batch_, n_hidden), dtype=tf.float32, name="initial_h")
     start = tf.constant(0, name="start")
     step = tf.constant(1, name="step")
     print("inputs:", inputs, "shape:", inputs.shape)
