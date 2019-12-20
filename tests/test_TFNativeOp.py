@@ -170,7 +170,7 @@ finally:
   sys.stdout = orig_stdout
 
 
-def test_native2lstm_compile():
+def test_NativeLstm2_compile():
   op = make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
   print("op:", op)
   maker = op._op_maker
@@ -188,7 +188,7 @@ def test_native2lstm_compile():
 try:
   sys.stdout = sys.__stdout__
   print("travis_fold:start:script.nativelstm2compile")
-  test_native2lstm_compile()
+  test_NativeLstm2_compile()
 except Exception as exc:
   print("NativeLstm2 compile exception:", exc)
 finally:
@@ -379,6 +379,67 @@ def test_NativeLstm2_run():
       session.run(tf.global_variables_initializer())
       res = session.run(outputs)
       pprint(res)
+
+
+def test_NativeLstm2_shape_inference_normal():
+  op = make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
+  n_time = 2
+  n_batch = 1
+  n_hidden = 3
+  with tf.variable_scope("test_NativeLstm2_shape_inference_normal"):
+    weights = tf.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
+    inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
+    index = tf.ones([n_time, n_batch])
+    n_batch = tf.shape(inputs)[1]
+    c0 = tf.zeros((n_batch, n_hidden), dtype=tf.float32, name="initial_c")
+    y0 = tf.zeros((n_batch, n_hidden), dtype=tf.float32, name="initial_h")
+    start = tf.constant(0, name="start")
+    step = tf.constant(1, name="step")
+    print("inputs:", inputs, "shape:", inputs.shape)
+    out, _, _, final_cell_state = op(inputs, weights, y0, c0, index, start, step)
+    print("out:", out)
+    assert isinstance(out, tf.Tensor)
+    assert_equal(out.shape.as_list(), [n_time, n_batch, n_hidden])
+
+
+def test_NativeLstm2_shape_inference_unknown_batchnlen():
+  op = make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
+  n_time = None
+  n_batch = None
+  n_hidden = 3
+  with tf.variable_scope("test_NativeLstm2_shape_inference_unknown_batchnlen"):
+    weights = tf.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
+    inputs = tf.placeholder(tf.float32, [n_time, n_batch, n_hidden * 4], name="inputs")
+    index = tf.placeholder(tf.float32, [n_time, n_batch], name="index")
+    n_batch = tf.shape(inputs)[1]
+    c0 = tf.zeros((n_batch, n_hidden), dtype=tf.float32, name="initial_c")
+    y0 = tf.zeros((n_batch, n_hidden), dtype=tf.float32, name="initial_h")
+    start = tf.constant(0, name="start")
+    step = tf.constant(1, name="step")
+    print("inputs:", inputs, "shape:", inputs.shape)
+    out, _, _, final_cell_state = op(inputs, weights, y0, c0, index, start, step)
+    print("out:", out)
+    assert isinstance(out, tf.Tensor)
+    assert_equal(out.shape.as_list(), [None, None, n_hidden])
+
+
+def test_NativeLstm2_shape_inference_unknown_rank():
+  op = make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
+  n_hidden = 3
+  with tf.variable_scope("test_NativeLstm2_shape_inference_unknown_rank"):
+    weights = tf.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
+    inputs = tf.placeholder(tf.float32, name="inputs")
+    index = tf.reduce_sum(inputs, axis=2)
+    n_batch = tf.shape(inputs)[1]
+    c0 = tf.zeros((n_batch, n_hidden), dtype=tf.float32, name="initial_c")
+    y0 = tf.zeros((n_batch, n_hidden), dtype=tf.float32, name="initial_h")
+    start = tf.constant(0, name="start")
+    step = tf.constant(1, name="step")
+    print("inputs:", inputs, "shape:", inputs.shape)
+    out, _, _, final_cell_state = op(inputs, weights, y0, c0, index, start, step)
+    print("out:", out)
+    assert isinstance(out, tf.Tensor)
+    assert_equal(out.shape.as_list(), [None, None, n_hidden])
 
 
 def test_NativeLstm2_0len_run():
