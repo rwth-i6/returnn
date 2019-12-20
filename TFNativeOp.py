@@ -209,7 +209,9 @@ class OpMaker(object):
       """
       if isinstance(c, tuple):
         in_idx_, in_dim = c
-        return "c->Dim(c->input(%i), %i)" % (in_idx_, in_dim)
+        dim_if_def = "c->Dim(c->input(%i), %i)" % (in_idx_, in_dim)
+        def_check = "c->RankKnown(c->input(%i))" % in_idx_
+        return "%s ? %s : c->UnknownDim()" % (def_check, dim_if_def)
       elif isinstance(c, int):
         return str(c)
       else:
@@ -227,6 +229,8 @@ class OpMaker(object):
         i, ", ".join([make_dim_str(c) for c in v["shape"]]))
     code_register_op_io += """
     .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
+      if(!c)
+        return errors::InvalidArgument("undefined context");
       if(c->num_inputs() != %(num_inputs)i)
         return errors::InvalidArgument("wrong number of inputs. required %(num_inputs)i but got ", c->num_inputs());
       if(c->num_outputs() != %(num_outputs)i)
