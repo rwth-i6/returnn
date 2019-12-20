@@ -3275,6 +3275,20 @@ class NativeCodeCompiler(object):
     """
     return opts
 
+  @classmethod
+  def _transform_ld_flag(cls, opt):
+    """
+    :param str opt:
+    :rtype: str
+    """
+    if sys.platform == "darwin":
+      # It seems some versions of MacOS ld cannot handle the `-l:filename` argument correctly.
+      # E.g. TensorFlow 1.14 incorrectly uses this.
+      # https://github.com/tensorflow/tensorflow/issues/30564
+      if opt.startswith("-l:lib") and opt.endswith(".dylib"):
+        return "-l%s" % opt[len("-l:lib"):-len(".dylib")]
+    return opt
+
   def _maybe_compile_inner(self):
     # Directory should be created by the locking mechanism.
     assert os.path.exists(self._mod_path)
@@ -3293,7 +3307,7 @@ class NativeCodeCompiler(object):
     common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines.items())]
     common_opts += ["-g"]
     opts = common_opts + [self._c_filename, "-o", self._so_filename]
-    opts += self.ld_flags
+    opts += list(map(self._transform_ld_flag, self.ld_flags))
     cmd_bin = self._get_compiler_bin()
     cmd_args = [cmd_bin] + opts
     from subprocess import Popen, PIPE, STDOUT, CalledProcessError
