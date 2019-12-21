@@ -6546,8 +6546,8 @@ class SubnetworkLayer(LayerBase):
     """
     :param dict[str,dict] subnetwork: subnetwork as dict (JSON content). must have an "output" layer-
     :param bool concat_sources: if we concatenate all sources into one, like it is standard for most other layers
-    :param str|None load_on_init: if provided, for parameter initialization,
-      we will load the given model file.
+    :param str|dict[str]|None load_on_init: if provided, for parameter initialization,
+      we will load the given model file. see :class:`CustomCheckpointLoader`.
     :param float dropout: will be applied if train_flag is set
     :param tuple|list|dict|None dropout_noise_shape:
     :param dict[str,LayerBase]|None _parent_layer_cache:
@@ -6606,8 +6606,14 @@ class SubnetworkLayer(LayerBase):
       print("loading initial weights from", load_on_init, file=log.v2)
       self_prefix = self.get_absolute_name_scope_prefix()  # with "/" at end
       from TFNetwork import CustomCheckpointLoader
-      loader = CustomCheckpointLoader(
-        filename=load_on_init, saveable_params=list(self.params.values()), params_prefix=self_prefix, network=net)
+      opts = dict(saveable_params=list(self.params.values()), params_prefix=self_prefix, network=net)
+      if isinstance(load_on_init, str):
+        opts["filename"] = load_on_init
+      elif isinstance(load_on_init, dict):
+        opts.update(load_on_init)
+      else:
+        raise TypeError("%s: invalid load_on_init %r" % (self, load_on_init))
+      loader = CustomCheckpointLoader(**opts)
       loader.set_as_custom_init()
 
   # noinspection PyShadowingNames
