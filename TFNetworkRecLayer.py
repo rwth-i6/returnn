@@ -6578,7 +6578,6 @@ class MaskedComputationLayer(LayerBase):
       assert isinstance(source, LayerBase) or not source
       if not network.is_inside_rec_layer() and source:
         source_data = source.output.copy_template().copy_as_time_major()
-        source_data.size_placeholder[0] = None  # reset, as this is some new time-dim
         source = WrappedInternalLayer(
           base_layer=source, network=source.network, name=source.name,
           output=source_data)
@@ -6591,10 +6590,19 @@ class MaskedComputationLayer(LayerBase):
       if sub_layer_name == "data":
         return source
       if _parent_layer_cache and sub_layer_name in _parent_layer_cache:
-        return _parent_layer_cache[sub_layer_name]
-      layer = get_layer(sub_layer_name)
-      if _parent_layer_cache is not None:
-        _parent_layer_cache[sub_layer_name] = layer
+        layer = _parent_layer_cache[sub_layer_name]
+      else:
+        layer = get_layer(sub_layer_name)
+        if not layer:
+          return layer
+        if _parent_layer_cache is not None:
+          _parent_layer_cache[sub_layer_name] = layer
+      if not network.is_inside_rec_layer():
+        source_data = layer.output.copy_template().copy_as_time_major()
+        source_data.size_placeholder[0] = source.output.get_sequence_lengths()
+        layer = WrappedInternalLayer(
+          base_layer=layer, network=layer.network, name=layer.name,
+          output=source_data)
       return layer
 
     layer_desc = unit.copy()
