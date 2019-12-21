@@ -31,6 +31,7 @@ logging.getLogger('tensorflow').disabled = True
 import tensorflow as tf
 
 from TFNativeOp import *
+import TFUtil
 from TFUtil import is_gpu_available, get_available_gpu_min_compute_capability, CudaEnv
 import Util
 from Util import unicode
@@ -116,6 +117,14 @@ def dump_info():
     debug_lib_so(tf_pywrap_so, ["_ZTIN10tensorflow8OpKernelE"])
   else:
     print("TF pywrap so does not(!) exist:", tf_pywrap_so)
+  print("TF compiler version:", getattr(tf, "__compiler_version__", None))
+  print("GCC for TF:", TFUtil.get_tf_gcc_path())
+  print("Available GCC versions:")
+  for p in os.environ["PATH"].split(":"):
+    if os.path.isdir(p):
+      for name in os.listdir(p):
+        if name.startswith("gcc"):
+          print("  %s/%s" % (p, name))
   # See OpCodeCompiler. Is already not used anymore but still maybe relevant.
   if hasattr(sys, "getdlopenflags") and hasattr(sys, "setdlopenflags"):
     print("have (set|get)dlopenflags")
