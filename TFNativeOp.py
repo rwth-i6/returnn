@@ -230,7 +230,7 @@ class OpMaker(object):
     code_register_op_io += """
     .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
       if(!c)
-        return errors::InvalidArgument("undefined context");
+        return errors::InvalidArgument("undefined context (mismatch in C++ ABI?)");
       if(c->num_inputs() != %(num_inputs)i)
         return errors::InvalidArgument("wrong number of inputs. required %(num_inputs)i but got ", c->num_inputs());
       if(c->num_outputs() != %(num_outputs)i)

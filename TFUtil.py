@@ -4631,9 +4631,11 @@ _tf_gcc_path = None
 
 def get_tf_gcc_path():
   """
-  :return: path to a GCC version which is most suitable for TF
+  :return: path to a GCC version which is most suitable for TF (to have correct C++ ABI)
   :rtype: str
   """
+  if sys.platform == "darwin":
+    return "gcc"  # better default
   global _tf_gcc_path
   if _tf_gcc_path is not None:
     return _tf_gcc_path
@@ -4646,9 +4648,11 @@ _tf_gpp_path = None
 
 def get_tf_gpp_path():
   """
-  :return: path to a G++ version which is most suitable for TF
+  :return: path to a G++ version which is most suitable for TF (to have correct C++ ABI)
   :rtype: str
   """
+  if sys.platform == "darwin":
+    return "g++"  # better default
   global _tf_gpp_path
   if _tf_gpp_path is not None:
     return _tf_gpp_path
