@@ -3182,7 +3182,7 @@ class NativeCodeCompiler(object):
     assert isinstance(res, dict)
     return res
 
-  _relevant_info_keys = ("code_version", "code_hash", "c_macro_defines", "ld_flags")
+  _relevant_info_keys = ("code_version", "code_hash", "c_macro_defines", "ld_flags", "compiler_bin")
 
   def _make_info_dict(self):
     """
@@ -3195,6 +3195,7 @@ class NativeCodeCompiler(object):
       "code_hash": self._code_hash,
       "c_macro_defines": self.c_macro_defines,
       "ld_flags": self.ld_flags,
+      "compiler_bin": self._get_compiler_bin(),
     }
 
   def _make_code_hash(self):

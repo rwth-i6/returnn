@@ -4603,6 +4603,59 @@ class VariableAssigner(object):
     session.run(self.assign_op, feed_dict={self.assign_op.inputs[1]: value})
 
 
+def _get_tf_gcc_path(bin_name):
+  """
+  :param str bin_name:
+  :rtype: str
+  """
+  gcc_candidates = []
+  tf_gcc_version = getattr(tf, "__compiler_version__", None)
+  if tf_gcc_version:  # e.g. "4.8.5"
+    tf_gcc_version = tf_gcc_version.split(".")
+    for i in range(len(tf_gcc_version), 0, -1):
+      gcc_candidates.append("%s-%s" % (bin_name, ".".join(tf_gcc_version[:i])))
+  gcc_candidates.append(bin_name)
+
+  for gcc in gcc_candidates:
+    for p in os.environ["PATH"].split(":"):
+      pp = "%s/%s" % (p, gcc)
+      if os.path.exists(pp):
+        return pp
+
+  # Dummy fallback.
+  return bin_name
+
+
+_tf_gcc_path = None
+
+
+def get_tf_gcc_path():
+  """
+  :return: path to a GCC version which is most suitable for TF
+  :rtype: str
+  """
+  global _tf_gcc_path
+  if _tf_gcc_path is not None:
+    return _tf_gcc_path
+  _tf_gcc_path = _get_tf_gcc_path("gcc")
+  return _tf_gcc_path
+
+
+_tf_gpp_path = None
+
+
+def get_tf_gpp_path():
+  """
+  :return: path to a G++ version which is most suitable for TF
+  :rtype: str
+  """
+  global _tf_gpp_path
+  if _tf_gpp_path is not None:
+    return _tf_gpp_path
+  _tf_gpp_path = _get_tf_gcc_path("g++")
+  return _tf_gpp_path
+
+
 class CudaEnv(object):
   """
   Information about the Nvidia CUDA environment, and library.
@@ -4732,6 +4785,7 @@ class CudaEnv(object):
     :rtype: list[str]
     """
     return [
+      "-ccbin", get_tf_gcc_path(),
       "-I", "%s/include" % self.cuda_path,
       "-L", "%s/%s" % (self.cuda_path, self._get_lib_dir_name()),
       "-x", "cu",
@@ -4821,7 +4875,10 @@ class OpCodeCompiler(NativeCodeCompiler):
   def _get_compiler_bin(self):
     if self._with_cuda():
       return self._cuda_env.get_compiler_bin()
-    return super(OpCodeCompiler, self)._get_compiler_bin()
+    if self.is_cpp:
+      return get_tf_gpp_path()
+    else:
+      return get_tf_gcc_path()
 
   def _transform_compiler_opts(self, opts):
     if self._with_cuda():
