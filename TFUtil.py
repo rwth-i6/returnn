@@ -8635,8 +8635,8 @@ def get_device_attr(dev):
   :return: scalar string, eg. b'device: 2, name: GeForce GTX 1080 Ti, pci bus id: 0000:82:00.0, compute capability: 6.1'
   :rtype: tf.Tensor
   """
-  if ":XLA_" in dev:  # e.g. '/job:localhost/replica:0/task:0/device:XLA_GPU:0'
-    dev = dev.replace(":XLA_", ":")
+  # `dev` should be one of the available devices, e.g. via session.list_devices(), and exactly that,
+  # i.e. if that is XLA, it must be used as-is.
   with tf.device(dev):
     return _DeviceAttrMod.get_device_attr()
 
