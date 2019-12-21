@@ -6578,6 +6578,8 @@ class MaskedComputationLayer(LayerBase):
       assert isinstance(source, LayerBase) or not source
       if not network.is_inside_rec_layer() and source:
         source_data = source.output.copy_template().copy_as_time_major()
+        # Create own dummy time, to make sure we have some own custom.
+        source_data.size_placeholder[0] = tf.placeholder(tf.int32, shape=[None], name="dummy_time")
         source = WrappedInternalLayer(
           base_layer=source, network=source.network, name=source.name,
           output=source_data)
