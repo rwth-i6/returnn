@@ -6373,11 +6373,12 @@ class MaskedComputationLayer(LayerBase):
   layer_class = "masked_computation"
   recurrent = True
 
-  def __init__(self, mask, unit, masked_from, **kwargs):
+  def __init__(self, mask, unit, masked_from, _parent_layer_cache=None, **kwargs):
     """
     :param LayerBase|None mask:
     :param dict[str] unit:
     :param LayerBase|None masked_from:
+    :param dict[str,LayerBase]|None _parent_layer_cache:
     """
     from TFNetwork import get_layer_class
     from TFNetworkLayer import WrappedInternalLayer
@@ -6388,6 +6389,23 @@ class MaskedComputationLayer(LayerBase):
     self.masked_from = masked_from
 
     sub_layers = {}  # type: typing.Dict[str,LayerBase]
+    new_size, new_time, idxs = None, None, None
+    if mask:
+      if self.network.is_inside_rec_layer():
+        assert mask.output.shape == () and mask.output.dtype == "bool", (
+          "%s: invalid mask %s (inside rec loop)" % (self, mask))
+      else:
+        assert mask.output.have_time_axis() and mask.output.shape == (None,) and mask.output.dtype == "bool", (
+          "%s: invalid mask %s (outside rec loop)" % (self, mask))
+        mask_data = mask.output.copy_as_time_major()
+        mask_t = where_bc(mask_data.placeholder, mask_data.get_sequence_mask(), tf.convert_to_tensor(False))
+        idxs = tf.cumsum(tf.cast(mask_t, tf.int32), axis=0)  # [T,B] -> idx in T' + 1
+        if masked_from:
+          new_size = masked_from.output.get_sequence_lengths()
+        else:
+          new_size = idxs[-1]  # [B]
+        new_time = tf.reduce_max(new_size)  # T'
+        idxs = where_bc(mask_t, idxs - 1, new_time)
 
     def get_masked_layer(source):
       """
@@ -6397,39 +6415,30 @@ class MaskedComputationLayer(LayerBase):
       assert isinstance(source, LayerBase)
       assert mask
       if self.network.is_inside_rec_layer():
-        assert mask.output.shape == () and mask.output.dtype == "bool", (
-          "%s: invalid mask %s (inside rec loop)" % (self, mask))
         # We can just leave it as-is. The state will handled below.
         return source
       else:
-        assert mask.output.have_time_axis() and mask.output.shape == (None,) and mask.output.dtype == "bool", (
-          "%s: invalid mask %s (outside rec loop)" % (self, mask))
         source_data = source.output.copy_as_time_major()
-        mask_data = mask.output.copy_as_time_major()
         assert source_data.is_same_time_dim(mask_data), "%s mask and source time dim do not match" % self
-        mask_t = where_bc(mask_data.placeholder, mask_data.get_sequence_mask(), tf.convert_to_tensor(False))
-        idxs = tf.cumsum(tf.cast(mask_t, tf.int32), axis=0)  # [T,B] -> idx in T' + 1
-        new_size = idxs[-1]  # [B]
-        new_time = tf.reduce_max(new_size)  # T'
-        idxs = where_bc(mask_t, idxs - 1, new_time)
         tmp_shape = get_shape(source_data.placeholder)
         tmp_shape[0] = new_time + 1  # one more for the padded data
         res = tf.scatter_nd(nd_indices(idxs, batch_axis=1), source_data.placeholder, shape=tmp_shape)
         res_data = source_data.copy_template()
         res_data.size_placeholder[0] = new_size
         res_data.placeholder = res[:new_time]
-        return WrappedInternalLayer(
-          base_layer=source, network=source.network, name=source.name,
-          output=res_data)
+        layer_desc = dict(base_layer=source, network=source.network, name=source.name, output=res_data)
+        layer = WrappedInternalLayer(**layer_desc)
+        layer.post_init(layer_desc)
+        return layer
 
     if masked_from:
       assert not self.network.is_inside_rec_layer()
       source_data = masked_from.output.copy(
         name="%s_%s_masked_input" % (masked_from.output.name, self.output.name))
       source_data.available_for_inference = True  # we would make sure that this works at inference
-      source = WrappedInternalLayer(
-        base_layer=masked_from, network=masked_from.network, name=masked_from.name, output=source_data)
-      assert not mask and not self.sources
+      layer_desc = dict(base_layer=masked_from, network=masked_from.network, name=masked_from.name, output=source_data)
+      source = WrappedInternalLayer(**layer_desc)
+      source.post_init(layer_desc)
       sub_layers["data"] = source
 
     else:
@@ -6443,7 +6452,11 @@ class MaskedComputationLayer(LayerBase):
       """
       if sub_layer_name in sub_layers:
         return sub_layers[sub_layer_name]
-      source = get_masked_layer(self.network.get_layer(sub_layer_name))
+      if _parent_layer_cache and sub_layer_name in _parent_layer_cache:
+        layer = _parent_layer_cache[sub_layer_name]
+      else:
+        layer = self.network.get_layer(sub_layer_name)
+      source = get_masked_layer(layer)
       sub_layers[sub_layer_name] = source
       return source
 
@@ -6460,6 +6473,7 @@ class MaskedComputationLayer(LayerBase):
     self.sub_layer.post_init(layer_desc)
     self.output = self.sub_layer.output.copy(name="%s_output" % self.name)
     self.rec_vars_outputs = self.sub_layer.rec_vars_outputs.copy()
+    self.params = self.sub_layer.params
 
     if self.mask and self.network.is_inside_rec_layer():
       assert self._rec_previous_layer
@@ -6515,18 +6529,24 @@ class MaskedComputationLayer(LayerBase):
       d["masked_from"] = masked_from
       # We explicitly do not want to have these as deps.
       d["from"] = []
-      d["mask"] = None
     else:
       d["masked_from"] = None
-      d["mask"] = get_layer(d["mask"])
     super(MaskedComputationLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     # Just call it for dep resolution.
+    parent_layer_cache = d.setdefault("_parent_layer_cache", {})
     cls._create_template(
       name=d.get("name", "unknown-masked-subnet"), network=network, sources=d["sources"], masked_from=masked_from,
-      unit=d["unit"], get_layer=get_layer)
+      unit=d["unit"],
+      get_layer=get_layer, _parent_layer_cache=parent_layer_cache)
+    if masked_from and not parent_layer_cache:
+      # We explicitly do not want to have these as deps.
+      d["mask"] = None
+    else:
+      d["mask"] = get_layer(d["mask"])
 
   @classmethod
-  def _create_template(cls, name, network, sources, masked_from, unit, get_layer=None, **kwargs):
+  def _create_template(cls, name, network, sources, masked_from, unit,
+                       get_layer=None, _parent_layer_cache=None, **kwargs):
     """
     :param str name:
     :param TFNetwork.TFNetwork network:
@@ -6534,6 +6554,7 @@ class MaskedComputationLayer(LayerBase):
     :param dict[str] unit:
     :param LayerBase masked_from:
     :param (str)->LayerBase get_layer:
+    :param dict[str,LayerBase]|None parent_layer_cache:
     :return: layer_class, layer_desc
     """
     from TFNetwork import get_layer_class
@@ -6569,7 +6590,12 @@ class MaskedComputationLayer(LayerBase):
       """
       if sub_layer_name == "data":
         return source
-      return get_layer(sub_layer_name)
+      if _parent_layer_cache and sub_layer_name in _parent_layer_cache:
+        return _parent_layer_cache[sub_layer_name]
+      layer = get_layer(sub_layer_name)
+      if _parent_layer_cache is not None:
+        _parent_layer_cache[sub_layer_name] = layer
+      return layer
 
     layer_desc = unit.copy()
     class_name = layer_desc.pop("class")
