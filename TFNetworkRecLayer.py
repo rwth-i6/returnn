@@ -6387,6 +6387,9 @@ class MaskedComputationLayer(LayerBase):
     super(MaskedComputationLayer, self).__init__(**kwargs)
     self.mask = mask
     self.masked_from = masked_from
+    if _parent_layer_cache is None:
+      _parent_layer_cache = {}
+    self.parent_layer_cache = _parent_layer_cache
 
     sub_layers = {}  # type: typing.Dict[str,LayerBase]
     new_size, new_time, idxs = None, None, None
@@ -6426,9 +6429,11 @@ class MaskedComputationLayer(LayerBase):
         res_data = source_data.copy_template()
         res_data.size_placeholder[0] = new_size
         res_data.placeholder = res[:new_time]
+        res_data.beam = SearchBeam.get_combined_beam(res_data.beam, mask.output.beam)
         layer_desc = dict(base_layer=source, network=source.network, name=source.name, output=res_data)
         layer = WrappedInternalLayer(**layer_desc)
         layer.post_init(layer_desc)
+        layer.sources.extend([source, mask])  # add deps
         return layer
 
     if masked_from:
@@ -6439,6 +6444,7 @@ class MaskedComputationLayer(LayerBase):
       layer_desc = dict(base_layer=masked_from, network=masked_from.network, name=masked_from.name, output=source_data)
       source = WrappedInternalLayer(**layer_desc)
       source.post_init(layer_desc)
+      source.sources.append(masked_from)  # add dep
       sub_layers["data"] = source
 
     else:
@@ -6514,6 +6520,8 @@ class MaskedComputationLayer(LayerBase):
       deps.append(self.mask)
     if self.masked_from:
       deps.append(self.masked_from)
+    deps.extend(self.parent_layer_cache.values())
+    deps.extend(self.sub_layer.get_dep_layers())
     return deps
 
   @classmethod
