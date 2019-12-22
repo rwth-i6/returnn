@@ -159,7 +159,7 @@ class LayerBase(object):
     self._rec_previous_layer = rec_previous_layer
     self.collocate_with = collocate_with or []
     self.post_init_hooks = []  # list of functions
-    self.sources = sources
+    self.sources = list(sources)
     self.params = {}  # type: typing.Dict[str,tf.Variable]
     self.saveable_param_replace = {}  # type:  typing.Dict[tf.Variable,typing.Union['tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject',None]]  # see get_saveable_params_dict()  # nopep8
     self.reuse_params = reuse_params
@@ -2194,7 +2194,7 @@ class SelectSearchSourcesLayer(InternalLayer):
     elif search_choices == src_search_choices:
       pass
     elif not src_search_choices:
-      assert not self.output.beam, "no src %r search choices but beam?" % src
+      assert not self.output.beam, ("no src %r search choices but beam?" % src, src.network.debug_search_choices(src))
       self.output = self.output.copy_extend_with_beam(search_choices.get_beam_info())
     else:
       assert search_choices and search_choices != src_search_choices
@@ -6581,6 +6581,8 @@ class SubnetworkLayer(LayerBase):
           if key.startswith(layer_name + "/")})
         subnetwork[layer_name] = subnetwork[layer_name].copy()
         subnetwork[layer_name]["rec_previous_layer"] = dummy_rec_previous_layer
+    if concat_sources:
+      net.get_layer("data").sources.extend(self.sources)  # add deps, now
     net.construct_from_dict(subnetwork)
     self.subnetwork = net
     if self.network.eval_flag:
