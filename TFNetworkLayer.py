@@ -4833,7 +4833,7 @@ class ReduceLayer(_ConcatInputLayer):
           x_ = x.placeholder
     if f in (tf.argmax, tf.argmin):
       assert len(axes) == 1, "For argmax/argmin, only one reduction axis is supported"
-      y = tf.to_float(f(x_, axis=axes[0]))
+      y = f(x_, axis=axes[0], output_type=tf.int32)
       # argmax and argmin don't support keep_dims argument
       # so we emulate it manually
       if keep_dims:
@@ -4926,6 +4926,8 @@ class ReduceLayer(_ConcatInputLayer):
         i if out_batch_dim_axis is None or out_batch_dim_axis >= i else i - 1: size
         for (i, size) in out_size.items()}  # by axis without batch-dim
     sparse_out = mode.lower().startswith("arg")
+    if sparse_out:
+      out_feature_dim_axis = None
     return Data(
       name="%s_output" % name,
       shape=y_shape,
