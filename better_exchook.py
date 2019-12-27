@@ -433,7 +433,7 @@ def str_visible_len(s):
     """
     import re
     # via: https://github.com/chalk/ansi-regex/blob/master/index.js
-    s = re.sub("[\x1b\x9b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-PRZcf-nqry=><]", "", s)
+    s = re.sub("[\x1b\x9b][\\[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-PRZcf-nqry=><]", "", s)
     return len(s)
 
 
