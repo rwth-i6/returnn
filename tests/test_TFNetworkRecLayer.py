@@ -2670,6 +2670,179 @@ def test_rec_layer_rnn_train_and_search():
   run(search_flag=True)
 
 
+def test_rec_layer_local_att_train_and_search():
+  # https://github.com/rwth-i6/returnn-experiments/blob/master/2019-asr-local-attention/librispeech/local-heuristic.argmax.win05.exp3.ctc.config
+  # Note the small fix in p_t_in.
+  from TFNetworkRecLayer import _SubnetworkRecCell
+  n_src_dim = 5
+  n_tgt_dim = 7
+  beam_size = 3
+  config = Config()
+  config.update({
+    "debug_print_layer_output_template": True,
+    "debug_print_layer_output_shape": True})
+  EncKeyTotalDim = 14
+  AttWindowSize = 5
+  AttNumHeads = 1
+  EncValueTotalDim = 14
+  EncValuePerHeadDim = EncValueTotalDim // AttNumHeads
+  LstmDim = EncValueTotalDim // 2
+  target = "classes"
+
+  net_dict = {
+    #"lstm0_fw": {"class": "rec", "unit": "nativelstm2", "n_out": LstmDim, "direction": 1, "from": ["data"]},
+    #"lstm0_bw": {"class": "rec", "unit": "nativelstm2", "n_out": LstmDim, "direction": -1, "from": ["data"]},
+    #"lstm0_pool": {"class": "pool", "mode": "max", "padding": "same", "pool_size": (3,),
+    #               "from": ["lstm0_fw", "lstm0_bw"], "trainable": False},
+    #"lstm1_fw": {"class": "rec", "unit": "nativelstm2", "n_out": LstmDim, "direction": 1, "from": ["lstm0_pool"]},
+    #"lstm1_bw": {"class": "rec", "unit": "nativelstm2", "n_out": LstmDim, "direction": -1, "from": ["lstm0_pool"]},
+    #"encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},  # dim: EncValueTotalDim
+    "lstm0_pool": {"class": "pool", "mode": "max", "padding": "same", "pool_size": (3,)},
+    "encoder": {"class": "linear", "from": "lstm0_pool", "activation": "relu", "n_out": EncValueTotalDim},
+    "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"],
+                "n_out": EncKeyTotalDim},
+    "inv_fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"],
+                      "n_out": AttNumHeads},
+    "enc_value": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim),
+                  "from": ["encoder"]},  # (B, enc-T, H, D'/H)
+    "output": {"class": "rec", "from": [], 'cheating': config.bool("cheating", False), "unit": {
+      'output': {'class': 'choice', 'target': target, 'beam_size': beam_size,
+                 'cheating': config.bool("cheating", False), 'from': ["output_prob"], "initial_output": 0},
+      "end": {"class": "compare", "from": ["output"], "value": 0},
+      'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 21,
+                       "initial_output": 0},  # feedback_input
+      "weight_feedback": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev:accum_att_weights"],
+                          "n_out": EncKeyTotalDim},
+      "s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["s"],
+                        "n_out": EncKeyTotalDim},
+
+      # (T, B)
+      #"p_t": {"class": "eval", "from": "p_t_in", "eval": "tf.to_float(source(0))", "out_type": {"dtype": "float32"}},
+      #"p_t_in": {"class": "eval", "from": "prev:att_weights",
+      #           "eval": "tf.squeeze(tf.argmax(source(0, auto_convert=False), axis=1, output_type=tf.int32), axis=1)",
+      #           "out_type": {"shape": (), "batch_dim_axis": 0, "dtype": "int32"}},
+      "p_t_in": {"class": "reduce", "from": "prev:att_weights", "mode": "argmax", "axis": "t"},
+      # "p_t_print": {"class": "eval", "from": "p_t_in", "eval": "tf.Print(source(0), [tf.shape(source(0)),source(0)], \"p_t_in\", summarize=200)"},
+      # "p_t": {"class": "eval", "from": "p_t_in", "eval": "tf.maximum(0., source(0)))" % (AttWindowSize // 2),
+      # "out_type": {"sparse": False, "shape": (), "dtype": "float32"}, "initial_output": 0},
+      # "energy_in_enc_ctx": {"class": "slice_nd", "from": ["base:enc_ctx"], "start": "p_t", "size": AttWindowSize},  # (B, size, 1000)
+      "energy_in": {"class": "combine", "kind": "add", "from": ["base:enc_ctx", "weight_feedback", "s_transformed"],
+                    "n_out": EncKeyTotalDim},
+      "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+      "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"],
+                 "n_out": AttNumHeads},  # (B, enc-T, H)
+      "energy_reinterpreted": {"class": "reinterpret_data", "enforce_batch_major": True, "from": "energy",
+                               "trainable": False},
+      "att_weights": {"class": "softmax_over_spatial", "from": ["energy_reinterpreted"], "window_start": "p_t_in",
+                      "window_size": AttWindowSize},  # (B, enc-T, H)
+      # "att_weights_print": {"class": "eval", "from": "att_weights", "eval": "tf.Print(source(0), [tf.shape(source(0)), source(0)], summarize=99)"},
+      # "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, H)
+      # (B, T, H) + (B, T, H)
+      "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:inv_fertility"],
+                            "eval": "source(0) + source(1) * source(2) * 0.5",
+                            "out_type": {"dim": AttNumHeads, "shape": (None, AttNumHeads)}},
+      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
+      "att": {"class": "merge_dims", "axes": "except_batch", "from": ["att0"]},  # (B, H*V)
+      "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:target_embed", "prev:att"], "n_out": 10},
+      # transform
+      "readout_in": {"class": "linear", "from": ["s", "prev:target_embed", "att"], "activation": None, "n_out": 20},
+      # merge + post_merge bias
+      "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+      "output_prob": {
+        "class": "softmax", "from": ["readout"], "dropout": 0.3,
+        "target": target, "loss": "ce", "loss_opts": {"label_smoothing": 0.1},
+        "loss_only_on_non_search": True},
+    }, "target": target, "max_seq_len": "max_len_from('base:encoder')"},
+
+    "decision": {
+      "class": "decide", "from": ["output"], "loss": "edit_distance", "target": target,
+      "loss_only_on_non_search": False,
+    },
+
+    "ctc": {"class": "softmax", "from": ["encoder"], "loss": "ctc", "target": target,
+            "loss_opts": {"beam_width": 1, "ctc_opts": {"ignore_longer_outputs_than_inputs": True}}}
+  }
+
+  def run(train_flag=False, search_flag=False):
+    """
+    :param bool train_flag:
+    :param bool search_flag:
+    """
+    print("Create network with train_flag=%r, search_flag=%r." % (train_flag, search_flag))
+
+    from GeneratingDataset import StaticDataset
+    from TFDataPipeline import FeedDictDataProvider
+    from EngineBatch import Batch, BatchSetGenerator
+    from Util import dict_joined
+    dataset = StaticDataset(
+      data=[
+        {"data": numpy.random.normal(size=(11, n_src_dim)).astype("float32"),
+         "classes": numpy.array([3, 6, 0])},
+        {"data": numpy.random.normal(size=(13, n_src_dim)).astype("float32"),
+         "classes": numpy.array([3, 6, 2, 1, 4, 5, 0])}],
+      output_dim={"data": [n_src_dim, 2], "classes": [n_tgt_dim, 1]})
+    dataset.init_seq_order(epoch=1)
+    batch = Batch()
+    batch.add_sequence_as_slice(seq_idx=0, seq_start_frame=0, length=dataset.get_seq_length(0))
+    batch.add_sequence_as_slice(seq_idx=1, seq_start_frame=0, length=dataset.get_seq_length(1))
+    print("batch:", batch, "num frames:", batch.get_total_num_frames())
+    print("batch dims:", batch.max_num_frames_per_slice * batch.num_slices)
+    batch_generator = iter([batch])
+    batches = BatchSetGenerator(dataset, generator=batch_generator)
+
+    with make_scope() as session:
+      extern_data = ExternData({
+        "data": {"dim": n_src_dim},
+        "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
+
+      net = TFNetwork(
+        extern_data=extern_data, search_flag=search_flag, train_flag=train_flag, config=config)
+      net.construct_from_dict(net_dict)
+
+      out_layer = net.layers["output"]
+      assert isinstance(out_layer, RecLayer)
+      assert isinstance(out_layer.cell, _SubnetworkRecCell)
+      net.initialize_params(session)
+      data_provider = FeedDictDataProvider(
+        tf_session=session, extern_data=extern_data,
+        data_keys=["data", "classes"] if train_flag else ["data"],
+        dataset=dataset, batches=batches)
+      feed_dict, meta_step_info = data_provider.get_feed_dict(single_threaded=True)
+      if isinstance(net.train_flag, tf.Tensor):
+        feed_dict[net.train_flag] = train_flag
+      try:
+        print("Output:")
+        out = session.run(
+          dict_joined(
+            {"data:%s:seq_len" % k: v.get_sequence_lengths() for (k, v) in net.extern_data.data.items()},
+            {"layer:%s:out_seq_len" % k: l.output.get_sequence_lengths() for (k, l) in net.layers.items()},
+            {"rec_layer_in:%s:out_seq_len" % k: l.output.get_sequence_lengths()
+             for (k, l) in out_layer.cell.input_layers_net.layers.items()} if out_layer.cell.input_layers_net else {},
+            {"rec_layer_out:%s:out_seq_len" % k: l.output.get_sequence_lengths()
+             for (k, l) in out_layer.cell.output_layers_net.layers.items()} if out_layer.cell.output_layers_net else {},
+            {"output": out_layer.output.placeholder},
+            {"objective": tf.convert_to_tensor(net.get_objective())} if train_flag else {}
+          ) if train_flag else {"output": out_layer.output.placeholder},
+          feed_dict=feed_dict)
+        pprint(out)
+      except Exception as exc:
+        print()
+        print("EXCEPTION " + "-" * 60)
+        print("Exception happened:", type(exc), str(exc).splitlines()[0])
+        print()
+        out_layer.cell._handle_construct_exception()
+        print()
+        print("TF debug info:")
+        help_on_tf_exception(
+          session=session,
+          exception=exc, fetches=out_layer.output.placeholder, feed_dict=feed_dict, meta_step_info=meta_step_info,
+          extern_data=data_provider.extern_data)
+        raise
+
+  run(train_flag=True)
+  run(search_flag=True)
+
+
 def test_same_spatial_dim_after_rec_layers_with_pool():
   with make_scope() as session:
     config = Config({"debug_print_layer_output_template": True})
