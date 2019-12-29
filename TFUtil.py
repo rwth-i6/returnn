@@ -6531,7 +6531,8 @@ def smoothing_cross_entropy(logits,
                             labels,
                             label_smoothing,
                             gaussian=False,
-                            vocab_size=None):
+                            vocab_size=None,
+                            logits_are_normalized=False):
   """
   Cross entropy with label smoothing to limit over-confidence.
   Code adapted from here:
@@ -6546,6 +6547,7 @@ def smoothing_cross_entropy(logits,
     A common default value is 0.1. See:
       https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_hparams.py
   :param bool gaussian: Uses a gaussian distribution for label smoothing
+  :param bool logits_are_normalized:
   :return: Tensor of the same shape as `labels` and of the same dtype as `logits`.
   :rtype: tf.Tensor
   """
@@ -6579,8 +6581,11 @@ def smoothing_cross_entropy(logits,
         depth=vocab_size,
         on_value=confidence,
         off_value=low_confidence)  # shape(labels) + [vocab_size
-    xentropy = tf.nn.softmax_cross_entropy_with_logits(
-      logits=logits, labels=soft_targets)  # shape(labels)
+    if logits_are_normalized:
+      xentropy = -tf.reduce_sum(soft_targets * logits, axis=-1)
+    else:
+      xentropy = tf.nn.softmax_cross_entropy_with_logits(
+        logits=logits, labels=soft_targets)  # shape(labels)
     return xentropy - normalizing  # shape(labels)
 
 
