@@ -2698,7 +2698,7 @@ def test_rec_layer_local_att_train_and_search():
     #"lstm1_bw": {"class": "rec", "unit": "nativelstm2", "n_out": LstmDim, "direction": -1, "from": ["lstm0_pool"]},
     #"encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},  # dim: EncValueTotalDim
     "lstm0_pool": {"class": "pool", "mode": "max", "padding": "same", "pool_size": (3,)},
-    "encoder": {"class": "linear", "from": "lstm0_pool", "activation": "relu", "n_out": EncValueTotalDim},
+    "encoder": {"class": "rec", "unit": "nativelstm2", "from": "lstm0_pool", "n_out": EncValueTotalDim},
     "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"],
                 "n_out": EncKeyTotalDim},
     "inv_fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"],
@@ -2812,8 +2812,7 @@ def test_rec_layer_local_att_train_and_search():
         feed_dict[net.train_flag] = train_flag
       try:
         print("Output:")
-        out = session.run(
-          dict_joined(
+        fetches = dict_joined(
             {"data:%s:seq_len" % k: v.get_sequence_lengths() for (k, v) in net.extern_data.data.items()},
             {"layer:%s:out_seq_len" % k: l.output.get_sequence_lengths() for (k, l) in net.layers.items()},
             {"rec_layer_in:%s:out_seq_len" % k: l.output.get_sequence_lengths()
@@ -2822,8 +2821,8 @@ def test_rec_layer_local_att_train_and_search():
              for (k, l) in out_layer.cell.output_layers_net.layers.items()} if out_layer.cell.output_layers_net else {},
             {"output": out_layer.output.placeholder},
             {"objective": tf.convert_to_tensor(net.get_objective())} if train_flag else {}
-          ) if train_flag else {"output": out_layer.output.placeholder},
-          feed_dict=feed_dict)
+          ) if train_flag else {"output": out_layer.output.placeholder}
+        out = session.run(fetches, feed_dict=feed_dict)
         pprint(out)
       except Exception as exc:
         print()
@@ -2835,7 +2834,7 @@ def test_rec_layer_local_att_train_and_search():
         print("TF debug info:")
         help_on_tf_exception(
           session=session,
-          exception=exc, fetches=out_layer.output.placeholder, feed_dict=feed_dict, meta_step_info=meta_step_info,
+          exception=exc, fetches=fetches, feed_dict=feed_dict, meta_step_info=meta_step_info,
           extern_data=data_provider.extern_data)
         raise
 
