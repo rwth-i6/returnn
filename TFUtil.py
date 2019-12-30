@@ -8743,9 +8743,11 @@ def find_ops_path_output_to_input(tensors, fetches):
   if isinstance(tensors, tf.Tensor):
     tensors = [tensors]
   assert isinstance(tensors, (list, tuple, set))
-  tensors = set(tensors)
   assert all([isinstance(x, tf.Tensor) for x in tensors])
   assert len(tensors) > 0
+  # Operate on tensor names to not have problems with different object instances.
+  tensor_names = [x.name for x in tensors]
+  tensor_names = set(tensor_names)  # make unique
   if isinstance(fetches, (tf.Operation, tf.Tensor)):
     fetches = [fetches]
   fetches = [x.op if isinstance(x, (tf.Tensor, tf.Variable)) else x for x in fetches]
@@ -8762,7 +8764,7 @@ def find_ops_path_output_to_input(tensors, fetches):
     for op in cur_wave:
       visited.add(op)
       for x in op.inputs:
-        if x in tensors:  # found a path
+        if x.name in tensor_names:  # found a path
           result = [op]
           while op not in fetches:
             op = back_pointers[op]
