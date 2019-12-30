@@ -4303,7 +4303,12 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     """
     super(ReinterpretDataLayer, self).__init__(**kwargs)
     self.size_base = size_base
-    self.output.placeholder = self.input_data.placeholder
+    input_data = self.input_data
+    if enforce_batch_major:
+      input_data = input_data.copy_as_batch_major()
+    if enforce_time_major:
+      input_data = input_data.copy_as_time_major()
+    self.output.placeholder = input_data.placeholder
     if len(self.sources) == 1:
       self.output_loss = self.sources[0].output_loss
       if not self.dropout:
