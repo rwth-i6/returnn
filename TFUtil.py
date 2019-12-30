@@ -2227,11 +2227,12 @@ class Data(object):
     else:  # axis < batch_dim_axis
       seq_mask = sequence_mask_time_major(size)  # (T,B)
     shape = [1] * self.batch_ndim  # type: typing.List[typing.Union[int,tf.Tensor]]
-    placeholder_shape = tf.shape(self.placeholder)
-    shape[self.batch_dim_axis] = placeholder_shape[self.batch_dim_axis]
-    shape[axis] = placeholder_shape[axis]
-    seq_mask = tf.reshape(seq_mask, shape)
-    assert seq_mask.get_shape().ndims == self.batch_ndim
+    with tf.name_scope("get_sequence_mask_broadcast"):
+      placeholder_shape = tf.shape(self.placeholder)
+      shape[self.batch_dim_axis] = placeholder_shape[self.batch_dim_axis]
+      shape[axis] = placeholder_shape[axis]
+      seq_mask = tf.reshape(seq_mask, shape, name="seq_mask_reshape")
+      assert seq_mask.get_shape().ndims == self.batch_ndim
     return seq_mask
 
   def get_batch_dim(self):
