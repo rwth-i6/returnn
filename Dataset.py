@@ -84,7 +84,8 @@ class Dataset(object):
 
   def __init__(self, name=None,
                window=1, context_window=None, chunking=None,
-               seq_ordering='default', partition_epoch=None, repeat_epoch=None,
+               seq_ordering='default', random_seed_offset=0,
+               partition_epoch=None, repeat_epoch=None,
                seq_list_filter_file=None, unique_seq_tags=False,
                seq_order_seq_lens_file=None,
                shuffle_frames_of_nseqs=0, min_chunk_size=0, chunking_variance=0,
@@ -97,6 +98,7 @@ class Dataset(object):
     :param None|str|int|(int,int)|dict|(dict,dict) chunking: "chunk_size:chunk_step"
     :param str seq_ordering: "batching"-option in config. e.g. "default", "sorted" or "random".
       See self.get_seq_order_for_epoch() for more details.
+    :param int random_seed_offset:
     :param int|None partition_epoch:
     :param int|None repeat_epoch: Repeat the sequences in an epoch this many times. Useful to scale the dataset
       relative to other datasets, e.g. when used in CombinedDataset. Not allowed to be used in combination with
@@ -114,6 +116,7 @@ class Dataset(object):
     self.num_outputs = None  # type: typing.Optional[typing.Dict[str,typing.Tuple[int,int]]]  # tuple is num-classes, len(shape).  # nopep8
     self.window = window
     self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
+    self.random_seed_offset = random_seed_offset
     self.partition_epoch = partition_epoch or 1
     self.repeat_epoch = repeat_epoch or 1
     self.seq_tags_filter = set(self._load_seq_list_file(seq_list_filter_file)) if seq_list_filter_file else None
@@ -411,7 +414,7 @@ class Dataset(object):
       else:
         nth = int(tmp[1])
       rnd_seed = ((full_epoch - 1) // nth + 1) if full_epoch else 1
-      rnd = Random(rnd_seed)
+      rnd = Random(rnd_seed + self.random_seed_offset)
       rnd.shuffle(seq_index)  # Shuffle sequences.
       seq_index.sort(key=get_seq_len)  # Sort by length, starting with shortest.
       if len(tmp) == 0:
@@ -448,7 +451,7 @@ class Dataset(object):
       else:
         nth = int(tmp[1])
       rnd_seed = ((full_epoch - 1) // nth + 1) if full_epoch else 1
-      rnd = Random(rnd_seed)
+      rnd = Random(rnd_seed + self.random_seed_offset)
       rnd.shuffle(seq_index)
       out_index = []
       for i in range(bins):
@@ -464,7 +467,7 @@ class Dataset(object):
       nth = int(tmp[1]) if len(tmp) > 1 else 1
       # Keep this deterministic! Use fixed seed.
       rnd_seed = (full_epoch - 1) / nth + 1
-      rnd = Random(rnd_seed)
+      rnd = Random(rnd_seed + self.random_seed_offset)
       rnd.shuffle(seq_index)
     else:
       assert False, "invalid batching specified: " + self.seq_ordering
@@ -513,6 +516,17 @@ class Dataset(object):
 
     return seq_index
 
+  def _get_random_seed_for_epoch(self, epoch):
+    """
+    :param int|None epoch:
+    :rtype: int
+    """
+    partition_epoch = self.partition_epoch or 1
+    full_epoch = epoch or 1
+    if partition_epoch > 1:
+      full_epoch = (full_epoch - 1) // partition_epoch + 1
+    return full_epoch + self.random_seed_offset
+
   def init_seq_order(self, epoch=None, seq_list=None):
     """
     :type epoch: int|None
@@ -524,7 +538,7 @@ class Dataset(object):
     Call this when you reset the seq list.
     """
     self.epoch = epoch
-    self.rnd_seq_drop = Random(epoch or 1)
+    self.rnd_seq_drop = Random(self._get_random_seed_for_epoch(epoch=epoch))
     return False
 
   def finish_epoch(self):

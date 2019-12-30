@@ -785,7 +785,7 @@ class ExternSprintDataset(SprintDatasetBase):
     args += eval_shell_str(self.sprint_config)
     # Now our options. They might overwrite some of the config settings. (That is why we do it after the user opts.)
     args += [
-      "--*.seed=%i" % ((epoch - 1) // self.partition_epoch)]
+      "--*.seed=%i" % (self._get_random_seed_for_epoch(epoch=epoch) - 1)]
     if self.partition_epoch > 1:
       args += [
         "--*.corpus.partition=%i" % self.partition_epoch,

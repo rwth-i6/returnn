@@ -53,7 +53,7 @@ class GeneratingDataset(Dataset):
     """
     super(GeneratingDataset, self).init_seq_order(epoch=epoch)
     assert not seq_list, "predefined order doesn't make sense for %s" % self.__class__.__name__
-    self.random.seed(self.fixed_random_seed or epoch or 1)
+    self.random.seed(self.fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch))
     self._num_timesteps = 0
     self.reached_final_seq = False
     self.expected_load_seq_start = 0
@@ -2388,7 +2388,7 @@ class LibriSpeechCorpus(CachedDataset2):
     super(LibriSpeechCorpus, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if not epoch:
       epoch = 1
-    self._audio_random.seed(self._fixed_random_seed or epoch or 1)
+    self._audio_random.seed(self._fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch))
 
     def get_seq_len(i):
       """
@@ -2735,7 +2735,7 @@ class OggZipDataset(CachedDataset2):
     super(OggZipDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if not epoch:
       epoch = 1
-    self._audio_random.seed(self._fixed_random_seed or epoch or 1)
+    self._audio_random.seed(self._fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch))
 
     def get_seq_len(i):
       """
@@ -2931,7 +2931,7 @@ class Enwik8Corpus(CachedDataset2):
     if self.partition_epoch:
       epoch_part = (epoch - 1) % self.partition_epoch
       epoch = ((epoch - 1) // self.partition_epoch) + 1
-    self._random.seed(self._fixed_random_seed or epoch or 1)
+    self._random.seed(self._fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch))
     self._num_seqs = len(self._seq_starts)
     self._num_timesteps = len(self._data) - 1
     if self._batch_num_seqs is None:
