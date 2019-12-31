@@ -2093,6 +2093,24 @@ class DropoutLayer(CopyLayer):
   layer_class = "dropout"
 
 
+class ScaledGradientLayer(CopyLayer):
+  """
+  Just tf.identity in the forward pass.
+  Scales the gradient by some factor in backprop.
+  Can be used as gradient reversal layer (with negative factor).
+  Uses :func:`TFUtil.scaled_gradient`.
+  """
+  layer_class = "scaled_grad"
+
+  def __init__(self, scale, **kwargs):
+    """
+    :param float scale:
+    """
+    super(ScaledGradientLayer, self).__init__(**kwargs)
+    from TFUtil import scaled_gradient
+    self.output.placeholder = scaled_gradient(self.output.placeholder, scale=scale)
+
+
 class InternalLayer(LayerBase):
   """
   This is not supposed to be used by the user.

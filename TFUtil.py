@@ -2980,9 +2980,12 @@ def default_control_flow_ctx():
     yield dep
 
 
-class FlipGradientBuilder(object):
+class _ScaledGradientBuilder(object):
   """
-  Gradient Reversal Layer.
+  Use the ``scaled_gradient`` instance.
+  tf.identity in forward pass, but scales the gradient in backprop.
+  Can be used as gradient reversal layer (with negative scale).
+
   Discussion:
     https://github.com/fchollet/keras/issues/3119
     https://github.com/tensorflow/tensorflow/issues/4342
@@ -2996,24 +2999,39 @@ class FlipGradientBuilder(object):
     self.num_calls = 0
 
   def __call__(self, x, scale=1.0):
-    grad_name = "FlipGradient%d" % self.num_calls
+    """
+    :param tf.Tensor x:
+    :param float scale:
+    :rtype: tf.Tensor
+    """
+    grad_name = "ScaledGradient%d" % self.num_calls
 
     from tensorflow.python.framework import ops
 
     # noinspection PyUnusedLocal
     @ops.RegisterGradient(grad_name)
     def _flip_gradients(op, grad):
-      return [tf.negative(grad) * scale]
+      return [grad * scale]
 
     g = tf.get_default_graph()
     with g.gradient_override_map({"Identity": grad_name}):
-      y = tf.identity(x, "flip_gradient_identity")
+      y = tf.identity(x, name="scaled_gradient_identity")
 
     self.num_calls += 1
     return y
 
 
-flip_gradient = FlipGradientBuilder()
+scaled_gradient = _ScaledGradientBuilder()
+
+
+def flip_gradient(x, scale=1.0):
+  """
+  :param tf.Tensor x:
+  :param float scale:
+  :return: identity(x) but with flipped gradient (optionally scaled)
+  :rtype: tf.Tensor
+  """
+  return scaled_gradient(x, scale=-scale)
 
 
 def lookup_grad_func_by_name(op_type):
