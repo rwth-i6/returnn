@@ -7191,13 +7191,13 @@ class ForcedAlignmentLayer(_ConcatInputLayer):
   def __init__(self, align_target, topology, input_type, **kwargs):
     """
     :param LayerBase align_target:
-    :param str topology: e.g. "ctc"
+    :param str topology: e.g. "ctc" or "rna" (RNA is CTC without label loop)
     :param str input_type: "log_prob" or "prob"
     """
     from TFNativeOp import get_ctc_fsa_fast_bw, fast_viterbi
     super(ForcedAlignmentLayer, self).__init__(**kwargs)
     self.align_target = align_target
-    assert topology == "ctc", "%s no other topology implemented" % self
+    assert topology in ["ctc", "rna"], "%s no other topology implemented" % self
     logits_data = self.input_data.copy_as_time_major()
     logits = logits_data.placeholder
     assert logits.get_shape().ndims == 3 and logits.get_shape().dims[-1].value == logits_data.dim
@@ -7212,7 +7212,8 @@ class ForcedAlignmentLayer(_ConcatInputLayer):
     edges, weights, start_end_states = get_ctc_fsa_fast_bw(
       targets=align_target.output.get_placeholder_as_batch_major(),
       seq_lens=align_target.output.get_sequence_lengths(),
-      blank_idx=logits_data.dim - 1)
+      blank_idx=logits_data.dim - 1,
+      label_loop=topology == "ctc")
     alignment, scores = fast_viterbi(
       am_scores=logits, am_seq_len=logits_data.get_sequence_lengths(),
       edges=edges, weights=weights, start_end_states=start_end_states)

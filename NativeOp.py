@@ -1567,10 +1567,10 @@ class NativeLstm2(NativeOpGenBase):
       // if we can have Y[t] = 0 where mask[t] = 0.
       // That is why we need to keep track of Y[t-1] explicitly.
       float* y_prev = (float*) device_malloc(n_batch * n_cells * sizeof(float));
-  
+
       // H = X
       Ndarray_memcpy(Ndarray_DEV_DATA(H), Ndarray_DEV_DATA(X), T * n_batch * n_cells * 4 * sizeof(float));
-  
+
       assert_cmp(T, >, 0);
       assert_cmp(start, >=, 0);
       assert_cmp(start, <, T);
@@ -1588,7 +1588,7 @@ class NativeLstm2(NativeOpGenBase):
           Ndarray_DEV_DATA(W), n_cells, n_cells * 4,
           data_ptr(H, t), n_batch, n_cells * 4,
           false, false);
-  
+
         start_dev_kernel(lstm_kernel, (
           n_batch,
           n_cells,
@@ -2392,7 +2392,7 @@ class TwoDLSTM(NativeOpGenBase):
     """
 
   c_bw_code = """
-    // X, V_h, V_v, W, b, ptr_storage_fwd, ptr_storage_bwd, valid, workmem, workmem2, sizes, DYDummy, initialState, 
+    // X, V_h, V_v, W, b, ptr_storage_fwd, ptr_storage_bwd, valid, workmem, workmem2, sizes, DYDummy, initialState,
     //   initialOutput, iteration, CompleteY, H, DCompleteY, DH = inputs
     // DX, DV_h, DV_v, DW, Db = outputs
 
@@ -4709,7 +4709,7 @@ class FastViterbiOp(NativeOpGenBase):
       struct __attribute__((__packed__)) IdxAndVal {
         int idx;
         float val;
-      };    
+      };
     """,
     "04_select_max":
     """
@@ -4734,7 +4734,7 @@ class FastViterbiOp(NativeOpGenBase):
             return;
           U updated;
           updated.s = b;
-          
+
           U old;
           old.v64 = elem_atomic_cas((unsigned long long int*) a, prev.v64, updated.v64);
           if(old.v64 == prev.v64)
@@ -4947,7 +4947,7 @@ class FastViterbiOp(NativeOpGenBase):
     IdxAndVal* d_buffer = (IdxAndVal*) device_malloc((n_time + 1) * n_states * sizeof(IdxAndVal));
     int buffer_stride = n_states;
     start_dev_kernel(init_buffer, (n_time, n_states, d_buffer));
-    start_dev_kernel(init_first_frame, (n_batch, n_states, d_buffer, d_start_states));    
+    start_dev_kernel(init_first_frame, (n_batch, n_states, d_buffer, d_start_states));
 
     for(int t = 0; t < n_time; ++t) {
       start_dev_kernel(next_frame, (
@@ -4965,10 +4965,10 @@ class FastViterbiOp(NativeOpGenBase):
         d_edge_emission_idx,
         d_edge_seq_idx,
         d_edge_weights,
-        d_end_states      
+        d_end_states
       ));
     }
-    
+
     start_dev_kernel(select_scores, (
       n_batch,
       n_states,
@@ -4978,10 +4978,10 @@ class FastViterbiOp(NativeOpGenBase):
       d_end_states,
       d_score // out
     ));
-    
+
     int32_t* d_cur_state = (int32_t*) device_malloc(n_batch * sizeof(int32_t));
     Ndarray_memcpy(d_cur_state, d_end_states, n_batch * sizeof(int32_t));
-    
+
     for(int t = n_time - 1; t >= 0; --t) {
       start_dev_kernel(select_best_path, (
         n_batch,
@@ -4997,7 +4997,7 @@ class FastViterbiOp(NativeOpGenBase):
         d_output + t * output_stride // out
       ));
     }
-        
+
     device_free(d_cur_state);
     device_free(d_buffer);
   """
@@ -5017,6 +5017,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
     :param seq_lens: shape (batch), int32
     :param blank_idx: scalar, int32
     :param weights: shape (num_edges,), float32 (not used, except for target shape)
+    :param label_loop: scalar, int32 (casted from bool). True -> normal CTC; False -> RNA-like
   outputs:
     :param edges: (4,num_edges), int32, edges of the graph (from,to,emission_idx,sequence_idx)
     :param start_end_states: (2,batch), int32, (start,end) state idx in FSA
@@ -5034,6 +5035,8 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
      "need_contiguous": True, "gradient": "disconnected", "host_memory": True},
     {"name": "weights", "ndim": 1, "shape": (None,), "dtype": "float32",
      "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "label_loop", "ndim": 0, "shape": (), "dtype": "int32",
+     "need_contiguous": True, "gradient": "disconnected", "host_memory": True},
   )
   out_info = (
     {"name": "edges", "ndim": 2, "shape": (4, (3, 0)), "dtype": "int32", "need_contiguous": True},
@@ -5042,6 +5045,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
 
   c_extra_support_code = {
     "01_kernel": """
+      template<bool label_loop>
       DEF_KERNEL
       void construct_kernel
         (
@@ -5063,14 +5067,14 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
           int state_idx_offset = (n_time * 2 + 3) * batch_idx;
           int t = -1; // pos in targets
           int srel_edge_idx = -1; // state relative edge
-          // (seq_len * 2) - 1 is last label state idx. seq_len * 2 is last blank state idx. 
+          // (seq_len * 2) - 1 is last label state idx. seq_len * 2 is last blank state idx.
           int32_t dummy_state_idx = seq_len * 2 + 1;
           int32_t end_state_idx = seq_len * 2 + 2;
           int32_t state_idx = dummy_state_idx;
           int32_t to_state_idx = dummy_state_idx;
           if(rel_edge_idx == 0) {
             start_end_states[0 * n_batch + batch_idx] = state_idx_offset; // start
-            start_end_states[1 * n_batch + batch_idx] = state_idx_offset + end_state_idx; // end   
+            start_end_states[1 * n_batch + batch_idx] = state_idx_offset + end_state_idx; // end
           }
           int32_t emission_idx = blank_idx;
           int32_t label_idx = -1, next_label_idx = -1;
@@ -5119,7 +5123,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
               state_idx = 1;
               srel_edge_idx = rel_edge_idx - 3;
               if(srel_edge_idx == 0) {
-                to_state_idx = state_idx;
+                to_state_idx = label_loop ? state_idx : dummy_state_idx;
                 emission_idx = label_idx;
               }
               else if(srel_edge_idx == 1) {
@@ -5127,8 +5131,8 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
                 emission_idx = blank_idx;
               }
               else if(srel_edge_idx == 2) {
-                to_state_idx = end_state_idx;
-                emission_idx = label_idx;              
+                to_state_idx = label_loop ? end_state_idx : dummy_state_idx;
+                emission_idx = label_idx;
               }
               else if(srel_edge_idx == 3) {
                 to_state_idx = end_state_idx;
@@ -5176,7 +5180,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
               }
               else { // label loop state
                 if(srel_edge_idx == 0) {
-                  to_state_idx = state_idx;
+                  to_state_idx = label_loop ? state_idx : dummy_state_idx;
                   emission_idx = label_idx;
                 }
                 else if(srel_edge_idx == 1) {
@@ -5185,7 +5189,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
                 }
                 else if(srel_edge_idx == 2) {
                   // skip over blank to next label (if allowed <=> next label is different)
-                  if(label_idx != next_label_idx) {
+                  if(label_idx != next_label_idx || !label_loop) {
                     to_state_idx = state_idx + 2;
                     emission_idx = next_label_idx;
                   }
@@ -5200,8 +5204,8 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
               state_idx = (seq_len - 2) * 2 + 1;
               srel_edge_idx = 3;
               // skip over blank to next label / end state (if allowed <=> next label is different)
-              if(label_idx != next_label_idx) {
-                to_state_idx = end_state_idx;              
+              if(label_idx != next_label_idx || !label_loop) {
+                to_state_idx = end_state_idx;
                 emission_idx = next_label_idx;
               }
             }
@@ -5231,7 +5235,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
               state_idx = (seq_len - 1) * 2 + 1;
               srel_edge_idx = rel_edge_idx - (5 * (seq_len - 1) + 4);
               if(srel_edge_idx == 0) {
-                to_state_idx = state_idx;
+                to_state_idx = label_loop ? state_idx : dummy_state_idx;
                 emission_idx = label_idx;
               }
               else if(srel_edge_idx == 1) {
@@ -5239,8 +5243,8 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
                 emission_idx = blank_idx;
               }
               else if(srel_edge_idx == 2) {
-                to_state_idx = end_state_idx;
-                emission_idx = label_idx;              
+                to_state_idx = label_loop ? end_state_idx : dummy_state_idx;
+                emission_idx = label_idx;
               }
               else if(srel_edge_idx == 3) {
                 to_state_idx = end_state_idx;
@@ -5252,7 +5256,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
               t = -1;
               emission_idx = blank_idx;
               state_idx = (seq_len - 1) * 2 + 2;
-              srel_edge_idx = rel_edge_idx - (5 * (seq_len - 1) + 8);            
+              srel_edge_idx = rel_edge_idx - (5 * (seq_len - 1) + 8);
               if(srel_edge_idx == 0)
                 to_state_idx = state_idx;
               else
@@ -5264,12 +5268,12 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
               srel_edge_idx = -1;
             }
           }
-          
+
           edges[0 * n_edges + idx] = state_idx_offset + state_idx; // from
           edges[1 * n_edges + idx] = state_idx_offset + to_state_idx; // to
           edges[2 * n_edges + idx] = emission_idx; // emission
           edges[3 * n_edges + idx] = batch_idx; // batch
-          
+
           idx += gridDim.x * blockDim.x;
         }
       }
@@ -5277,12 +5281,13 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
   }
 
   c_fw_code = """
-    assert(n_inputs == 4);
+    assert(n_inputs == 5);
     assert(n_outputs == 2);
     Ndarray* targets = inputs[0];
     Ndarray* seq_lens = inputs[1];
     Ndarray* blank_idx_ref = inputs[2];
     Ndarray* weights = inputs[3];
+    bool label_loop = (bool) Ndarray_DEV_DATA_int32_scalar(inputs[4]);
     Ndarray* edges = *outputs[0];
     Ndarray* start_end_states = *outputs[1];
     assert_cmp(Ndarray_NDIM(targets), ==, 2);
@@ -5306,13 +5311,22 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
     Ndarray_memset(Ndarray_DEV_DATA_int32(edges), 255, 4 * n_edges * sizeof(int32_t));
     Ndarray_memset(Ndarray_DEV_DATA_int32(start_end_states), 255, 2 * n_batch * sizeof(int32_t));
     int32_t blank_idx = Ndarray_DEV_DATA_int32_scalar(blank_idx_ref);
-    
-    start_dev_kernel(construct_kernel, (
-      n_batch, n_time, n_edges,
-      Ndarray_DEV_DATA_int32(targets), Ndarray_DEV_DATA_int32(seq_lens),
-      blank_idx,
-      Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states)
-    ));
+
+    if(label_loop) {
+      start_dev_kernel(construct_kernel<true>, (
+        n_batch, n_time, n_edges,
+        Ndarray_DEV_DATA_int32(targets), Ndarray_DEV_DATA_int32(seq_lens),
+        blank_idx,
+        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states)
+      ));
+    } else {
+      start_dev_kernel(construct_kernel<false>, (
+        n_batch, n_time, n_edges,
+        Ndarray_DEV_DATA_int32(targets), Ndarray_DEV_DATA_int32(seq_lens),
+        blank_idx,
+        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states)
+      ));
+    }
   """
 
 

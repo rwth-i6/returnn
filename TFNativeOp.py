@@ -1233,7 +1233,7 @@ def tf_fast_bw_fsa_staircase(seq_lens, **opts):
   return edges, weights, start_end_states
 
 
-def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx):
+def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx, label_loop=True):
   """
   See :class:`NativeOp.GetCtcFsaFastBwOp`.
   Generates a FSA with CTC topology. The output format is compatible to :func:`fast_baum_welch`.
@@ -1241,6 +1241,7 @@ def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx):
   :param tf.Tensor targets: shape (batch,time), int32
   :param tf.Tensor seq_lens: shape (batch), int32
   :param int blank_idx:
+  :param bool label_loop: True -> normal CTC; False -> RNA-like
   :return: edges, weights, start_end_states;
     edges is (4,num_edges), int32, edges of the graph (from,to,emission_idx,sequence_idx).
     weights is (num_edges,), float32. all zero.
@@ -1255,7 +1256,7 @@ def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx):
   weights = tf.zeros((n_edges,))
   maker = OpMaker(OpDescription.from_gen_base(NativeOp.GetCtcFsaFastBwOp))
   op = maker.make_op()
-  edges, start_end_states = op(targets, seq_lens, blank_idx, weights)
+  edges, start_end_states = op(targets, seq_lens, blank_idx, weights, label_loop)
   return edges, weights, start_end_states
 
 
@@ -1274,7 +1275,7 @@ def fast_baum_welch_staircase(am_scores, seq_lens, **opts):
     am_scores=am_scores, edges=edges, weights=weights, start_end_states=start_end_states, float_idx=float_idx)
 
 
-def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_lens):
+def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_lens, ctc_merge_repeated=True):
   """
   Similar to :func:`tf.nn.ctc_loss`.
   We use our :func:`fast_baum_welch`.
@@ -1285,6 +1286,7 @@ def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_le
   :param bool logits_time_major:
   :param tf.Tensor targets: batch-major, [batch,time]
   :param tf.Tensor targets_seq_lens: (batch,)
+  :param bool ctc_merge_repeated:
   :return: loss, shape (batch,)
   :rtype: tf.Tensor
   """
@@ -1297,7 +1299,7 @@ def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_le
   seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch)
 
   edges, weights, start_end_states = get_ctc_fsa_fast_bw(
-    targets=targets, seq_lens=targets_seq_lens, blank_idx=dim - 1)
+    targets=targets, seq_lens=targets_seq_lens, blank_idx=dim - 1, label_loop=ctc_merge_repeated)
   fwdbwd, obs_scores = fast_baum_welch(
     am_scores=-log_sm, float_idx=seq_mask,
     edges=edges, weights=weights, start_end_states=start_end_states)

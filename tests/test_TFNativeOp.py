@@ -1730,12 +1730,13 @@ def _log_softmax(x, axis=-1):
   return lsm
 
 
-def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False):
+def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False, label_loop=True):
   """
   :param numpy.ndarray targets:
   :param numpy.ndarray target_seq_lens:
   :param int n_classes:
   :param bool with_native_fsa:
+  :param bool label_loop: ctc_merge_repeated in tf.nn.ctc_loss
   :return: nothing, just checks
   """
   n_batch, n_target_time = targets.shape
@@ -1755,17 +1756,27 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False):
   float_idx = int_idx.astype("float32")
   blank_idx = n_classes - 1
 
-  import Fsa
-  fsa = Fsa.get_ctc_fsa_fast_bw(targets=targets, seq_lens=target_seq_lens, blank_idx=blank_idx)
-  assert fsa.start_end_states.shape == (2, len(target_seq_lens))
-  edges = fsa.edges.astype("int32")
-  weights = fsa.weights.astype("float32")
-  start_end_states = fsa.start_end_states.astype("int32")
-  if with_native_fsa:
-    print("python edges:")
-    print(edges)
-    print("python start_end_states:")
-    print(start_end_states)
+  targets_tf = tf.constant(targets)
+  targets_seq_lens_tf = tf.constant(target_seq_lens)
+
+  if label_loop:
+    import Fsa
+    fsa = Fsa.get_ctc_fsa_fast_bw(targets=targets, seq_lens=target_seq_lens, blank_idx=blank_idx)
+    assert fsa.start_end_states.shape == (2, len(target_seq_lens))
+    edges = fsa.edges.astype("int32")
+    weights = fsa.weights.astype("float32")
+    start_end_states = fsa.start_end_states.astype("int32")
+    if with_native_fsa:
+      print("python edges:")
+      print(edges)
+      print("python start_end_states:")
+      print(start_end_states)
+  else:
+    import TFNativeOp
+    native_edges_tf, native_weights_tf, native_start_end_states_tf = TFNativeOp.get_ctc_fsa_fast_bw(
+      targets=targets_tf, seq_lens=targets_seq_lens_tf, blank_idx=blank_idx, label_loop=label_loop)
+    edges, weights, start_end_states = session.run(
+      (native_edges_tf, native_weights_tf, native_start_end_states_tf))
 
   fwdbwd, obs_scores = _py_baum_welch(
     am_scores=-_log_softmax(am_scores), float_idx=float_idx,
@@ -1773,9 +1784,6 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False):
   fwdbwd = numpy.exp(-fwdbwd)  # -log space -> prob space
   print(fwdbwd)
   print(obs_scores)
-
-  targets_tf = tf.constant(targets)
-  targets_seq_lens_tf = tf.constant(target_seq_lens)
 
   if with_native_fsa:
     import TFNativeOp
@@ -1812,7 +1820,7 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False):
   # inputs are unnormalized. tf.nn.ctc_loss does softmax internally.
   ref_ctc_loss_tf = tf.nn.ctc_loss(
     labels=targets_sparse_tf,
-    inputs=am_scores_tf, sequence_length=seq_lens_tf, time_major=True)
+    inputs=am_scores_tf, sequence_length=seq_lens_tf, time_major=True, ctc_merge_repeated=label_loop)
   # See grad definition of CTCLoss.
   # The op will calculate the gradient w.r.t. the logits (log softmax).
   # I.e. with y = softmax(z), this is \partial loss / \partial z = y - soft_align.
@@ -1893,6 +1901,21 @@ def test_ctc_fsa_batch4_len6_c8_native():
   target_seq_lens = numpy.array([6, 4, 2, 1], dtype="int32")
   n_classes = 8  # +1 because of blank
   check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch4_len6_c8_native_no_loop():
+  """
+  This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+  No label loop (ctc_merge_repeated False) is equivalent to the Recurrent Neural Aligner (RNA) topology.
+  """
+  targets = numpy.array([
+    [1, 2, 4, 4, 1, 0],
+    [2, 6, 3, 4, 0, 0],
+    [3, 3, 0, 0, 0, 0],
+    [5, 0, 0, 0, 0, 0]], dtype="int32")
+  target_seq_lens = numpy.array([6, 4, 2, 1], dtype="int32")
+  n_classes = 8  # +1 because of blank
+  check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, label_loop=False)
 
 
 def test_ctc_fsa_batch2_len2a():
