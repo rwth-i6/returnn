@@ -8479,6 +8479,8 @@ class CtcLoss(Loss):
     self._target_sparse_labels = None
     self._ctc_loss = None  # set in get_value
     self.beam_width = beam_width
+    if ctc_opts is None:
+      ctc_opts = {}
     self.ctc_opts = ctc_opts
     self.focal_loss_factor = focal_loss_factor
     self.use_native = use_native
@@ -8570,21 +8572,21 @@ class CtcLoss(Loss):
       labels = self._get_target_sparse_labels()
       # logits can be unnormalized. It will do softmax internally.
       if self.use_viterbi:
-        assert not self.ctc_opts
         import TFNativeOp
         self._ctc_loss = TFNativeOp.ctc_loss_viterbi(
           logits=logits, logits_seq_lens=seq_lens, logits_time_major=self.output.is_time_major,
-          targets=self.target.get_placeholder_as_batch_major(), targets_seq_lens=self.target_seq_lens)
+          targets=self.target.get_placeholder_as_batch_major(), targets_seq_lens=self.target_seq_lens,
+          **self.ctc_opts)
       elif self.use_native:
-        assert not self.ctc_opts
         import TFNativeOp
         self._ctc_loss = TFNativeOp.ctc_loss(
           logits=logits, logits_seq_lens=seq_lens, logits_time_major=self.output.is_time_major,
-          targets=self.target.get_placeholder_as_batch_major(), targets_seq_lens=self.target_seq_lens)
+          targets=self.target.get_placeholder_as_batch_major(), targets_seq_lens=self.target_seq_lens,
+          **self.ctc_opts)
       else:
         self._ctc_loss = tf.nn.ctc_loss(
           inputs=logits, labels=labels, sequence_length=seq_lens, time_major=self.output.is_time_major,
-          **(self.ctc_opts or {}))
+          **self.ctc_opts)
       loss = self._ctc_loss  # shape (batch,)
       if self.focal_loss_factor:
         # We are going up to (time,batch,dim), and we later use reduce_sum,
