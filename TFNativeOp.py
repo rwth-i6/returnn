@@ -1293,7 +1293,7 @@ def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_le
   if not logits_time_major:
     logits = tf.transpose(logits, [1, 0, 2])  # (time,batch,dim)
   log_sm = tf.nn.log_softmax(logits)  # (time,batch,dim)
-  from TFUtil import sequence_mask_time_major
+  from TFUtil import sequence_mask_time_major, where_bc
   seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch)
 
   edges, weights, start_end_states = get_ctc_fsa_fast_bw(
@@ -1304,7 +1304,7 @@ def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_le
   loss = obs_scores[0]  # (batch,)
   n_batch = tf.shape(loss)[0]
   bw = tf.exp(-fwdbwd)  # (time,batch,dim)
-  grad_x = (tf.exp(log_sm) - bw) * tf.cast(tf.expand_dims(seq_mask, 2), tf.float32)  # (time,batch,dim)
+  grad_x = where_bc(seq_mask[:, :, None], tf.exp(log_sm) - bw, 0.0)  # (time,batch,dim)
   from TFUtil import custom_gradient
   loss = tf.reshape(loss, [1, n_batch, 1])  # (1,batch,1), such that we can broadcast to logits/grad_x
   loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=logits, grad_x=grad_x)
