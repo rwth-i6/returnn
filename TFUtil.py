@@ -1348,6 +1348,7 @@ class Data(object):
       if data.time_dim_axis_excluding_batch in data.size_placeholder:
         del data.size_placeholder[data.time_dim_axis_excluding_batch]
     data.time_dim_axis = None
+    data.batch_dim_axis = 0
     data.sanity_check()
     return data
 

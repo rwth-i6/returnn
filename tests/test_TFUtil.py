@@ -339,6 +339,11 @@ def test_Data_copy_squeeze_axes_feature_axis():
   assert weights.size_placeholder[0] is squeezed.size_placeholder[0]
 
 
+def test_Data_copy_time_flattened():
+  x = Data(name='x', shape=(None, 1031), batch_dim_axis=1, auto_create_placeholders=True)
+  y = x.copy_time_flattened()
+
+
 def test_ExternData_via_config():
   # Like ExternData.init_from_config.
   from Config import Config
