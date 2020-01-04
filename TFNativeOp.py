@@ -1275,7 +1275,8 @@ def fast_baum_welch_staircase(am_scores, seq_lens, **opts):
     am_scores=am_scores, edges=edges, weights=weights, start_end_states=start_end_states, float_idx=float_idx)
 
 
-def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_lens, ctc_merge_repeated=True):
+def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_lens,
+             ctc_merge_repeated=True, logits_normalize=True):
   """
   Similar to :func:`tf.nn.ctc_loss`.
   We use our :func:`fast_baum_welch`.
@@ -1287,6 +1288,7 @@ def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_le
   :param tf.Tensor targets: batch-major, [batch,time]
   :param tf.Tensor targets_seq_lens: (batch,)
   :param bool ctc_merge_repeated:
+  :param bool logits_normalize: apply log_softmax on logits (default)
   :return: loss, shape (batch,)
   :rtype: tf.Tensor
   """
@@ -1294,7 +1296,10 @@ def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_le
   dim = logits.get_shape().dims[-1].value
   if not logits_time_major:
     logits = tf.transpose(logits, [1, 0, 2])  # (time,batch,dim)
-  log_sm = tf.nn.log_softmax(logits)  # (time,batch,dim)
+  if logits_normalize:
+    log_sm = tf.nn.log_softmax(logits)  # (time,batch,dim)
+  else:
+    log_sm = logits
   from TFUtil import sequence_mask_time_major, where_bc
   seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch)
 
