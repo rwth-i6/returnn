@@ -9321,6 +9321,15 @@ class ViaLayerLoss(Loss):
     # Use default frame-wise error to reference target.
     return super(ViaLayerLoss, self).get_error()
 
+  @classmethod
+  def get_default_target(cls, extern_data):
+    """
+    :param TFNetwork.ExternData extern_data:
+    :rtype: None
+    """
+    # We do not need any target.
+    return None
+
 
 class AsIsLoss(Loss):
   """
