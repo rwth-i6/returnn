@@ -7285,14 +7285,17 @@ class FastBaumWelchLayer(_ConcatInputLayer):
   layer_class = "fast_bw"
   recurrent = True
 
-  def __init__(self, align_target, sprint_opts=None,
+  def __init__(self, align_target, align_target_key=None,
+               ctc_opts=None, sprint_opts=None,
                input_type="log_prob",
                tdp_scale=1.0, am_scale=1.0, min_prob=0.0,
                staircase_seq_len_source=None,
                **kwargs):
     """
     :param str align_target: e.g. "sprint" or "staircase"
-    :param dict[str] sprint_opts:
+    :param str|None align_target_key: e.g. "classes", used for e.g. align_target "ctc"
+    :param dict[str] ctc_opts: used for align_target "ctc"
+    :param dict[str] sprint_opts: used for Sprint (RASR) for align_target "sprint"
     :param str input_type: "log_prob" or "prob"
     :param float tdp_scale:
     :param float am_scale:
@@ -9269,6 +9272,7 @@ class ViaLayerLoss(Loss):
     """
     :rtype: tf.Tensor
     """
+    from TFUtil import where_bc
     with tf.name_scope("ViaLayerLoss"):
       if self.error_signal_layer:
         assert not self.align_layer
@@ -9278,9 +9282,7 @@ class ViaLayerLoss(Loss):
         error_signal = self.output.placeholder - self.align_layer.output.copy_compatible_to(self.output).placeholder
       if self.output.is_time_axis_dynamic():
         seq_mask_bc = self.output.get_sequence_mask_broadcast()
-        error_signal = tf.where(
-          tf.logical_and(seq_mask_bc, tf.ones_like(error_signal, dtype=tf.bool)),
-          error_signal, tf.zeros_like(error_signal))
+        error_signal = where_bc(seq_mask_bc, error_signal, 0.0)
       if self.loss_wrt_to_act_in:
         assert self.output_with_activation, "activation unknown, via %r" % self.output
         if isinstance(self.loss_wrt_to_act_in, (str, unicode)):
@@ -9292,9 +9294,23 @@ class ViaLayerLoss(Loss):
       else:
         grad_wrt = self.output.placeholder
       from TFUtil import custom_gradient
+      loss = self._loss_value
+      assert isinstance(loss, tf.Tensor)
+      orig_loss_shape = tf.shape(loss)
+      # We need to add broadcast dims to loss such that it can be broadcasted to grad_wrt/error_signal.
+      if loss.shape.ndims == 0:  # scalar
+        pass  # should be ok...
+      elif loss.shape.ndims == 1:  # assume [batch]
+        loss = tf.reshape(
+          loss, [orig_loss_shape[0] if i == self.output.batch_dim_axis else 1 for i in range(self.output.batch_ndim)])
+      else:
+        # Just hope that is has the same prefix shape.
+        loss = tf.reshape(
+          loss, [orig_loss_shape[i] if i < loss.shape.ndims else 1 for i in range(self.output.batch_ndim)])
       loss = custom_gradient.generic_loss_and_error_signal(
-        loss=self._loss_value, x=grad_wrt, grad_x=error_signal)
-      return loss
+        loss=loss, x=grad_wrt, grad_x=error_signal)
+      loss = tf.reshape(loss, orig_loss_shape)
+      return self.reduce_func(loss)
 
   def get_error(self):
     """
