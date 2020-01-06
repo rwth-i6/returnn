@@ -2098,17 +2098,20 @@ class ScaledGradientLayer(CopyLayer):
   Just tf.identity in the forward pass.
   Scales the gradient by some factor in backprop.
   Can be used as gradient reversal layer (with negative factor).
-  Uses :func:`TFUtil.scaled_gradient`.
+  Uses :func:`TFUtil.scaled_gradient`, or :func:`tf.stop_gradient`
   """
   layer_class = "scaled_grad"
 
   def __init__(self, scale, **kwargs):
     """
-    :param float scale:
+    :param float scale: if 0., will use tf.stop_gradient
     """
     super(ScaledGradientLayer, self).__init__(**kwargs)
     from TFUtil import scaled_gradient
-    self.output.placeholder = scaled_gradient(self.output.placeholder, scale=scale)
+    if scale == 0.:
+      self.output.placeholder = tf.stop_gradient(self.output.placeholder)
+    else:
+      self.output.placeholder = scaled_gradient(self.output.placeholder, scale=scale)
 
 
 class InternalLayer(LayerBase):
