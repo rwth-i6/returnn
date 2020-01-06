@@ -7323,7 +7323,29 @@ class FastBaumWelchLayer(_ConcatInputLayer):
       am_scores = tf.minimum(am_scores, -numpy.log(min_prob))  # in -log space
     if am_scale != 1:
       am_scores *= am_scale
-    if align_target == "sprint":
+    if align_target == "ctc":
+      # See :func:`TFNativeOp.ctc_loss` for reference.
+      if ctc_opts is None:
+        ctc_opts = {}
+      targets_data = self._get_target_value(align_target_key)
+      ctc_opts = ctc_opts.copy()
+      ctc_opts.setdefault("blank_idx", targets_data.dim)
+      assert targets_data.dim + 1 == data.dim
+      ctc_merge_repeated = ctc_opts.pop("ctc_merge_repeated", NotSpecified)  # label_loop === ctc_merge_repeated
+      if ctc_merge_repeated is not NotSpecified:
+        assert "label_loop" not in ctc_opts
+        ctc_opts["label_loop"] = ctc_merge_repeated
+      from TFNativeOp import get_ctc_fsa_fast_bw, fast_baum_welch
+      edges, weights, start_end_states = get_ctc_fsa_fast_bw(
+        targets=targets_data.get_placeholder_as_batch_major(),
+        seq_lens=targets_data.get_sequence_lengths(),
+        **ctc_opts)
+      from TFUtil import sequence_mask_time_major
+      seq_mask = sequence_mask_time_major(data.get_sequence_lengths())
+      fwdbwd, obs_scores = fast_baum_welch(
+        am_scores=am_scores, float_idx=seq_mask,
+        edges=edges, weights=weights, start_end_states=start_end_states)
+    elif align_target == "sprint":
       from TFUtil import sequence_mask_time_major
       seq_mask = sequence_mask_time_major(data.get_sequence_lengths())
       from TFNativeOp import fast_baum_welch_by_sprint_automata
@@ -7340,7 +7362,7 @@ class FastBaumWelchLayer(_ConcatInputLayer):
         am_scores=am_scores, seq_lens=staircase_seq_len_source.output.get_sequence_lengths())
     else:
       raise Exception("%s: invalid align_target %r" % (self, align_target))
-    loss = tf.reduce_sum(obs_scores[0])
+    loss = obs_scores[0]  # [batch]
     self.output_loss = loss
     bw = tf.exp(-fwdbwd)
     self.output.placeholder = bw
