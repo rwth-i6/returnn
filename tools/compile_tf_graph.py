@@ -179,7 +179,7 @@ class RecStepByStepLayer(RecLayer):
     update_ops_list = []
     post_update_ops_list = []
 
-    # specific collections needed by sprint #
+    # specific collections needed by sprint
     update_ops_coll = tf.get_collection_ref("update_ops")
     post_update_ops_coll = tf.get_collection_ref("post_update_ops")
     encode_ops_coll = tf.get_collection_ref("encode_ops")
@@ -188,19 +188,13 @@ class RecStepByStepLayer(RecLayer):
     decoder_output_vars_coll = tf.get_collection_ref("decoder_output_vars")
     global_vars_coll = tf.get_collection_ref("global_vars")
 
-    # json info #
-    info = { "state_vars" : {}, "stochastic_var_order": [], "stochastic_vars": {},
-             "collections" : { "encode_ops" : [],
-                               "update_ops" : [],
-                               "post_update_ops" : [],
-                               "decode_ops" : [],
-                               "decoder_input_vars" : [],
-                               "decoder_output_vars" : [],
-                               "global_vars" : [] 
-                             }
-           }
+    # json info
+    info = { "state_vars": {}, "stochastic_var_order": [], "stochastic_vars": {},
+             "collections": { "encode_ops": [], "update_ops": [], "post_update_ops": [],
+               "decode_ops": [], "decoder_input_vars": [], "decoder_output_vars": [],
+               "global_vars": [] } }
 
-    # base vars #
+    # base vars
     print("State vars:")
     for name, var in sorted(rec_layer.state_vars.items()):
       assert isinstance(name, str)
@@ -215,12 +209,12 @@ class RecStepByStepLayer(RecLayer):
         init_base_ops_list.append(var.init_op())
         info["collections"]["encode_ops"].append(var.init_op().name)
 
-    # tile batch and group base ops #
+    # tile batch and group base ops
     init_base_ops_list.append( cell.parent_tile_multiples_var.initializer )
     info["collections"]["encode_ops"].append(cell.parent_tile_multiples_var.initializer.name)
     init_base_op = tf.group(*init_base_ops_list, name="rec_step_by_step_init_base_op")
 
-    # loop vars #
+    # loop vars
     for name, var in sorted(rec_layer.state_vars.items()):
       if name.startswith("stochastic_var_") or name.startswith("base_"): continue
       # global vars (hypothesis independent)
@@ -240,16 +234,16 @@ class RecStepByStepLayer(RecLayer):
         post_update_ops_list.append(var.final_op())
         info["collections"]["post_update_ops"].append(var.final_op().name)
 
-    # group encode_ops #
+    # group encode_ops
     with tf.control_dependencies( [init_base_op] ):
       init_op = tf.group(*init_ops_list, name="rec_step_by_step_init_op")
     encode_ops_coll.append( init_op )
  
-    # group post_update_ops #
+    # group post_update_ops
     post_update_op = tf.group(*post_update_ops_list, name="rec_step_by_step_post_update_op")
     post_update_ops_coll.append( post_update_op )
 
-    # stochastic vars # 
+    # stochastic vars
     print("Stochastic vars, and their order:")
     tile_batch_multiple = None
     for name in rec_layer.stochastic_var_order:
@@ -635,7 +629,6 @@ class ChoiceStateVarLayer(LayerBase):
       name="stochastic_var_choice_%s" % self.name, data_shape=self.output)
     rec_layer.add_stochastic_var(self.name)
 
-
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
     """
@@ -700,8 +693,13 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     self._parent_layers[layer_name] = layer
     return layer
 
-  # make state vars for input from outside the loop (automatic tile_batch)
   def make_base_state_vars(self, name, output):
+    """
+    make state vars for input from outside the loop (automatic tile_batch)
+    :param str name: layer name
+    :param output: layer output data
+    :rtype: converted output data 
+    """
     rec_layer = self.parent_rec_layer
     from TFUtil import tile_transposed
     output.placeholder = tile_transposed(
@@ -720,7 +718,6 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       dim_tag.set_tag_on_size_tensor(new_size)
       output.size_placeholder[i] = new_size
     return output
- 
 
   def _get_extern_data(self, data, i):
     """
@@ -737,7 +734,6 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       # slice specific time step TODO put before tile batch
       self.net.extern_data.data['source'].placeholder = tf.gather(output.placeholder, i, axis=output.time_dim_axis)
      
-
   def _while_loop(self, cond, body, loop_vars, shape_invariants):
     """
     :param function cond:
@@ -772,8 +768,8 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       # net_vars is (prev_outputs_flat, prev_extra_flat), and prev_outputs_flat corresponds to self._initial_outputs,
       # where the keys are the layer names.
       # prev_extra is always expected to be batch-major.
-      prev_outputs_data = list()
-      choice_dependent = list()
+      prev_outputs_data = []
+      choice_dependent = []
       for k in sorted(self._initial_outputs.keys()):
         choice_dependent.append(False)
         for source_layer in self.net_dict[k]['from']:
@@ -912,6 +908,7 @@ def main(argv):
       with open(args.output_file_state_vars_list, "w") as f:
         for param in tf.get_collection(CollectionKeys.STATE_VARS):
           f.write("%s\n" % param.name)
+
  
 if __name__ == '__main__':
   main(sys.argv)
