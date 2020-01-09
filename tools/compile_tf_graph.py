@@ -210,13 +210,14 @@ class RecStepByStepLayer(RecLayer):
         info["collections"]["encode_ops"].append(var.init_op().name)
 
     # tile batch and group base ops
-    init_base_ops_list.append( cell.parent_tile_multiples_var.initializer )
+    init_base_ops_list.append(cell.parent_tile_multiples_var.initializer)
     info["collections"]["encode_ops"].append(cell.parent_tile_multiples_var.initializer.name)
     init_base_op = tf.group(*init_base_ops_list, name="rec_step_by_step_init_base_op")
 
     # loop vars
     for name, var in sorted(rec_layer.state_vars.items()):
-      if name.startswith("stochastic_var_") or name.startswith("base_"): continue
+      if name.startswith("stochastic_var_") or name.startswith("base_"):
+        continue
       # global vars (hypothesis independent)
       if name.startswith("global_"):
         global_vars_coll.append(var.var)
@@ -235,7 +236,7 @@ class RecStepByStepLayer(RecLayer):
         info["collections"]["post_update_ops"].append(var.final_op().name)
 
     # group encode_ops
-    with tf.control_dependencies( [init_base_op] ):
+    with tf.control_dependencies([init_base_op]):
       init_op = tf.group(*init_ops_list, name="rec_step_by_step_init_op")
     encode_ops_coll.append( init_op )
  
@@ -330,7 +331,7 @@ class RecStepByStepLayer(RecLayer):
         [d if (d is not None) else 1 for d in self.var_data_shape.batch_shape],
         dtype=self.var_data_shape.dtype)
       zero_initializer.set_shape(self.var_data_shape.batch_shape)
-      # (state) variable collections #
+      # (state) variable collections 
       var_collections = [tf.GraphKeys.GLOBAL_VARIABLES]
       if choice_dependent is False:
         var_collections.append(CollectionKeys.STATE_VARS)
@@ -438,7 +439,7 @@ class RecStepByStepLayer(RecLayer):
     :param str name:
     :param tf.Tensor|None initial_value: assumes batch-major, if data_shape is not given
     :param Data|None data_shape:
-    :param bool|None:
+    :param bool|None choice_dependent: choice dependent or not relevant
     :rtype: tf.Tensor
     """
     assert name not in self.state_vars
@@ -662,6 +663,9 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
   """
 
   def __init__(self, parent_rec_layer, **kwargs):
+    """
+    :param RecStepByStepLayer:
+    """
     self._parent_layers = {}  # type: typing.Dict[str,WrappedInternalLayer]
     with helper_variable_scope():
       self.parent_tile_multiples_var = tf.get_variable(
@@ -697,8 +701,8 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     """
     make state vars for input from outside the loop (automatic tile_batch)
     :param str name: layer name
-    :param output: layer output data
-    :rtype: converted output data 
+    :param output: Data
+    :rtype: Data
     """
     rec_layer = self.parent_rec_layer
     from TFUtil import tile_transposed
@@ -777,7 +781,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
             choice_dependent[-1] = True
         prev_outputs_data.append(self.layer_data_templates[k].output)
 
-      def parse_recursive( nvs ):
+      def parse_recursive(nvs):
         if isinstance(nvs, (tuple, list)):
           return [ parse_recursive(v) for v in nvs ]
         if isinstance(nvs, tf.Tensor):
