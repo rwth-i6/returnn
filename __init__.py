@@ -1,14 +1,15 @@
 
 """
-This is here so that whole RETURNN can be imported as a submodule.
+This is here so that whole RETURNN can be imported as a submodule,
+i.e. modules can be imported relatively (``import returnn.TFUtil`` or so).
+
+Currently all of RETURNN is written with absolute imports.
+This probably should be changed, see also: https://github.com/rwth-i6/returnn/issues/162
+If we change that to relative imports, for some of the scripts we might need some solution like this:
+https://stackoverflow.com/questions/54576879/
+
+Anyway, as a very ugly workaround, to make it possible to import RETURNN as a package, we have this hack:
 """
-
-# Currently all of RETURNN is written with absolute imports.
-# This probably should be changed, see also: https://github.com/rwth-i6/returnn/issues/162
-# If we change that to relative imports, for some of the scripts we might need some solution like this:
-# https://stackoverflow.com/questions/54576879/
-
-# Anyway, as a very ugly workaround, to make it possible to import RETURNN as a package, we have this hack:
 
 
 from __future__ import absolute_import
@@ -43,7 +44,10 @@ def _setup():
     if mod_name in sys.modules:
       # This is difficult to get right.
       # We will just use the existing module. Print a warning.
-      print("RETURNN import warning: module %r already imported as an absolute module" % mod_name)
+      if int(os.environ.get("DEBUG_RETURNN_IMPORT", "0")):
+        print("RETURNN import warning: module %r already imported as an absolute module" % mod_name)
+        import better_exchook
+        better_exchook.print_tb(None)
       mod = sys.modules[mod_name]
     else:
       mod = _LazyLoader(mod_name)
