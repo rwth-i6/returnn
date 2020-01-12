@@ -950,16 +950,18 @@ def obj_diff_str(self, other):
       return d.keys()
     return None
 
+  class _NotSpecified:
+    def __repr__(self):
+      return "<not-specified>"
+  not_specified = _NotSpecified()
+
   self_attribs = _obj_attribs(self)
   other_attribs = _obj_attribs(other)
   if self_attribs is None or other_attribs is None:
     return "self: %r, other: %r" % (self, other)
   for attrib in sorted(set(self_attribs).union(other_attribs)):
-    if attrib not in self_attribs or attrib not in other_attribs:
-      s += ["attrib %r not on both" % attrib]
-      continue
-    value_self = getattr(self, attrib)
-    value_other = getattr(other, attrib)
+    value_self = getattr(self, attrib, not_specified)
+    value_other = getattr(other, attrib, not_specified)
     if isinstance(value_self, list):
       if not isinstance(value_other, list):
         s += ["attrib %r self is list but other is %r" % (attrib, type(value_other))]
