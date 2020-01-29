@@ -24,7 +24,7 @@ from Config import Config
 import argparse
 import Util
 from Util import NotSpecified
-from TFUtil import Data
+from TFUtil import Data, CollectionKeys
 from TFNetwork import TFNetwork
 from TFNetworkLayer import LayerBase, register_layer_class, WrappedInternalLayer
 from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell, ChoiceLayer
@@ -699,6 +699,10 @@ def main(argv):
 
     tf.group(*network.get_post_control_dependencies(), name="post_control_dependencies")
 
+    # Do some cleanup of collections which do not contain tensors or operations,
+    # because the tf.train.import_meta_graph code might fail otherwise.
+    tf.get_collection_ref(CollectionKeys.RETURNN_LAYERS).clear()
+
     if args.summaries_tensor_name:
       summaries_tensor = tf.summary.merge_all()
       assert isinstance(summaries_tensor, tf.Tensor), "no summaries in the graph?"
@@ -744,7 +748,6 @@ def main(argv):
 
     if args.output_file_state_vars_list:
       print("Write state var list to:", args.output_file_state_vars_list)
-      from TFUtil import CollectionKeys
       with open(args.output_file_state_vars_list, "w") as f:
         for param in tf.get_collection(CollectionKeys.STATE_VARS):
           assert param.name[-2:] == ":0"
