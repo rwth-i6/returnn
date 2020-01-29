@@ -661,7 +661,7 @@ def main(argv):
   argparser.add_argument("--summaries_tensor_name", help="create Tensor for tf.summary.merge_all()")
   argparser.add_argument("--rec_step_by_step", help="make step-by-step graph for this rec layer (eg. 'output')")
   argparser.add_argument("--rec_step_by_step_output_file", help="store meta info for rec_step_by_step (JSON)")
-  argparser.add_argument("--output_file", help='output pb, pbtxt or meta, metatxt file')
+  argparser.add_argument("--output_file", help='allowed extensions: pb, pbtxt, meta, metatxt, logdir')
   argparser.add_argument("--output_file_model_params_list", help="line-based, names of model params")
   argparser.add_argument("--output_file_state_vars_list", help="line-based, name of state vars")
   args = argparser.parse_args(argv[1:])
@@ -719,13 +719,19 @@ def main(argv):
     if args.output_file:
       filename = args.output_file
       _, ext = os.path.splitext(filename)
-      assert ext in [".pb", ".pbtxt", ".meta", ".metatxt"], 'filename %r extension invalid' % filename
-      print("Write graph to file:", filename)
-      graph_io.write_graph(
-        graph_def,
-        logdir=os.path.dirname(filename),
-        name=os.path.basename(filename),
-        as_text=ext.endswith("txt"))
+      if ext == ".logdir":
+        print("Write TF events to logdir:", filename)
+        writer = tf.summary.FileWriter(logdir=filename)
+        writer.add_graph(graph)
+        writer.flush()
+      else:
+        assert ext in [".pb", ".pbtxt", ".meta", ".metatxt"], 'filename %r extension invalid' % filename
+        print("Write graph to file:", filename)
+        graph_io.write_graph(
+          graph_def,
+          logdir=os.path.dirname(filename),
+          name=os.path.basename(filename),
+          as_text=ext.endswith("txt"))
     else:
       print("Use --output_file if you want to store the graph.")
 
