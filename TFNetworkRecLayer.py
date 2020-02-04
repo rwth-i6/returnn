@@ -2605,7 +2605,9 @@ class _SubnetworkRecCell(object):
       acc_search_choices = SearchChoices(owner=latest_layer_choice, beam_size=latest_beam_size)
       final_choice_rec_vars = self.get_layer_rec_var_from_loop_vars(
         loop_vars=final_net_vars,
-        layer_name=latest_layer_choice.name)
+        layer_name=latest_layer_choice.name,
+        final_frame=True,
+        seq_len=seq_len)
       acc_search_choices.set_beam_from_rec(final_choice_rec_vars)
       search_choices_cache[latest_layer_choice.name] = acc_search_choices
 
@@ -4159,6 +4161,7 @@ class ChoiceLayer(BaseChoiceLayer):
       assert self.network.search_flag, "%s: cannot use search if network.search_flag disabled" % self
     self.search_flag = search
     self.input_type = input_type
+    self.length_normalization = length_normalization
     self.explicit_search_sources = explicit_search_sources
     self.scheduled_sampling = CollectionReadCheckCovered.from_bool_or_dict(scheduled_sampling)
     self.cheating = cheating
@@ -4231,7 +4234,7 @@ class ChoiceLayer(BaseChoiceLayer):
         # However, currently it makes the code a bit simpler to just have always
         # the final beam-size everywhere.
         # Keep in mind that this might change at some future point.
-        if length_normalization:
+        if self.length_normalization:
           assert self.network.have_rec_step_info()
           t = self.network.get_rec_step_index()  # scalar
           end_flags_flat = self.network.get_rec_step_info().get_end_flag(
@@ -4769,6 +4772,20 @@ class ChoiceLayer(BaseChoiceLayer):
     if self.explicit_search_sources:
       ls.extend(self.explicit_search_sources)
     return ls
+
+  def post_process_final_rec_vars_outputs(self, rec_vars_outputs, seq_len):
+    """
+    :param dict[str,tf.Tensor] rec_vars_outputs:
+    :param tf.Tensor seq_len: shape (batch,)
+    :rtype: dict[str,tf.Tensor]
+    """
+    if self.length_normalization:
+      assert "choice_scores" in rec_vars_outputs
+      # Finalize length normalization. During search we keep an extra factor t (recurrent time step) for efficiency
+      # reasons (see self.get_output()). Remove it here.
+      num_time_steps = tf.reduce_max(seq_len) + 1  # + 1 to include sequence end
+      rec_vars_outputs["choice_scores"] /= tf.cast(num_time_steps, tf.float32)
+    return rec_vars_outputs
 
 
 class DecideLayer(BaseChoiceLayer):
