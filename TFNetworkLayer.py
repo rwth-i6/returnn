@@ -3880,6 +3880,112 @@ class MergeDimsLayer(_ConcatInputLayer):
     return data
 
 
+class SplitLayer(_ConcatInputLayer):
+  """
+  Splits one axis into multiple parts, via tf.split.
+  self.output is simply the input copied.
+  Each part can be accessed via the sublayers "/%i".
+  """
+  layer_class = "split"
+
+  def __init__(self, axis=None, num_splits=None, size_splits=None, **kwargs):
+    """
+    :param str|None axis: feature axis by default
+    :param int|None num_splits:
+    :param list[int]|None size_splits:
+    """
+    assert num_splits or size_splits, "%s: provide either num_splits or size_splits" % self
+    super(SplitLayer, self).__init__(**kwargs)
+    self.output = self.input_data
+    self.axis, self.size_splits = self._get_axis_size_splits_num_splits(
+      input_data=self.input_data, axis=axis, num_splits=num_splits, size_splits=size_splits,
+      err_prefix=self)
+    self.splits = tf.split(self.output.placeholder, self.size_splits, axis=self.axis)
+    assert len(self.splits) == len(self.size_splits)
+    self._sub_layers = {"%i" % i: self._make_split_layer(i) for i in range(len(self.splits))}
+
+  @classmethod
+  def _get_axis_size_splits_num_splits(cls, input_data, axis=None, num_splits=None, size_splits=None, err_prefix=None):
+    """
+    :param Data input_data:
+    :param str|None axis: feature axis by default
+    :param int|None num_splits:
+    :param list[int]|None size_splits:
+    :param object err_prefix:
+    :return: axis, size_splits
+    :rtype: (int, list[int])
+    """
+    assert num_splits or size_splits, "%s: provide either num_splits or size_splits" % err_prefix
+    if axis is None:
+      axis = "feature"
+    axis = input_data.get_axis_from_description(axis, allow_int=False)
+    dim = input_data.batch_shape[axis]
+    assert isinstance(dim, int), "%s: expects static axis %s in %r" % (err_prefix, axis, input_data)
+    if num_splits:
+      assert dim % num_splits == 0, "%s: expects multiple of %i in dim %i in %r" % (
+        err_prefix, num_splits, dim, input_data)
+      size_splits = [dim // num_splits for _ in range(num_splits)]
+    else:
+      if not isinstance(size_splits, (list, tuple)):
+        raise TypeError("%s: invalid type num_or_size_splits %r" % (err_prefix, size_splits))
+      size_splits = list(size_splits)
+      assert sum(size_splits) == dim, "%s: invalid num_or_size_splits %r for dim %i in %r" % (
+        err_prefix, size_splits, dim, input_data)
+    return axis, size_splits
+
+  def _make_split_layer(self, idx):
+    """
+    :param int idx:
+    :rtype: LayerBase
+    """
+    out = self.output.copy(name="%s/%i_output" % (self.name, idx))
+    axis_wo_b = out.get_batch_axis_excluding_batch(self.axis)
+    shape = list(out.shape)
+    shape[axis_wo_b] = self.size_splits[idx]
+    out.shape = tuple(shape)
+    if self.axis == self.output.feature_dim_axis:
+      out.dim = self.size_splits[idx]
+    out.placeholder = self.splits[idx]
+    out.sanity_check()
+    return InternalLayer(name="%s/%i" % (self.name, idx), network=self.network, output=out)
+
+  def get_sub_layer(self, layer_name):
+    """
+    :param str layer_name:
+    :rtype: LayerBase|None
+    """
+    return self._sub_layers.get(layer_name, None)
+
+  @classmethod
+  def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
+    """
+    :param str layer_name: name of the sub_layer (right part of '/' separated path)
+    :param dict[str] parent_layer_kwargs: kwargs for the parent layer (as kwargs in cls.get_out_data_from_opts())
+    :return: Data template, network and the class type of the sub-layer
+    :rtype: (Data, TFNetwork, type)|None
+    """
+    try:
+      idx = int(layer_name)
+    except ValueError:
+      return None
+    name = parent_layer_kwargs.get("name", "<unknown>")
+    out = get_concat_sources_data_template(parent_layer_kwargs["sources"], name="%s_output" % name)
+    axis, size_splits = cls._get_axis_size_splits_num_splits(
+      input_data=out,
+      axis=parent_layer_kwargs.get("axis", None),
+      num_splits=parent_layer_kwargs.get("num_splits", None),
+      size_splits=parent_layer_kwargs.get("size_splits", None),
+      err_prefix="%s/%s" % (name, layer_name))
+    out = out.copy(name="%s/%i_output" % (name, idx))
+    axis_wo_b = out.get_batch_axis_excluding_batch(axis)
+    shape = list(out.shape)
+    shape[axis_wo_b] = size_splits[idx]
+    out.shape = tuple(shape)
+    if axis == out.feature_dim_axis:
+      out.dim = size_splits[idx]
+    return out, parent_layer_kwargs["network"], InternalLayer
+
+
 class SplitDimsLayer(_ConcatInputLayer):
   """
   Splits one axis into multiple axes.
