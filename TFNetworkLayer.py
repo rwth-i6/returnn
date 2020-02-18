@@ -4314,7 +4314,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
                **kwargs):
     """
     :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
-    :param LayerBase|None size_base:
+    :param LayerBase|None size_base: copy the size_placeholder from the given layer
     :param dict[str,int|str] set_axes: the key is "B","T","F", value is via :func:`Data.get_axis_from_description`
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
