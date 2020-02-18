@@ -2718,8 +2718,8 @@ class OggZipDataset(CachedDataset2):
   def _read_segment_list(self, segment_file):
     """
     read a list of segment names in either plain text or gzip
+
     :param str segment_file:
-    :return:
     """
     if segment_file.endswith(".gz"):
       import gzip
