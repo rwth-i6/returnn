@@ -98,7 +98,7 @@ class SprintDatasetBase(Dataset):
     if orth_vocab:
       assert not bpe, "bpe has its own vocab"
       from GeneratingDataset import Vocabulary
-      self.orth_vocab = Vocabulary(**orth_vocab)
+      self.orth_vocab = Vocabulary.create_vocab(**orth_vocab)
       self.labels["orth_classes"] = self.orth_vocab.labels
     self.cond = Condition(lock=self.lock)
     self.add_data_thread_id = thread.get_ident()  # This will be created in the Sprint thread.
