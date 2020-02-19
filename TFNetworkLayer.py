@@ -6975,6 +6975,18 @@ class SubnetworkLayer(LayerBase):
           network=network, name="%s/%s" % (name, loss.name)))
     return losses
 
+  def get_sub_layer(self, layer_name):
+    """
+    :param str layer_name: name of the sub_layer (right part of '/' separated path)
+    :return: the sub_layer addressed in layer_name or None if no sub_layer exists
+    :rtype: LayerBase|None
+    """
+    from TFNetwork import LayerNotFound
+    try:
+      return self.subnetwork.get_layer(layer_name)
+    except LayerNotFound:
+      return None
+
   def get_last_hidden_state(self, key):
     """
     :param int|str|None key: also the special key "*"
