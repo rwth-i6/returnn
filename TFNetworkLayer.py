@@ -5676,11 +5676,13 @@ class DotLayer(LayerBase):
     b_out = self.sources[1].output.copy_as_batch_major()
     a_reduce_axes = a_out.get_axes_from_description(red1)
     b_reduce_axes = b_out.get_axes_from_description(red2)
-    assert a_reduce_axes and b_reduce_axes
+    assert a_reduce_axes and b_reduce_axes, "%s: sources %r, red1 %r, red2 %r" % (self, self.sources, red1, red2)
     a_var_axes = a_out.get_axes_from_description(var1)
     b_var_axes = b_out.get_axes_from_description(var2)
-    assert not set(a_reduce_axes).intersection(a_var_axes)
-    assert not set(b_reduce_axes).intersection(b_var_axes)
+    assert not set(a_reduce_axes).intersection(a_var_axes), "%s: sources %r, red1 %r, red2 %r, var1 %r, var2 %r" % (
+      self, self.sources, red1, red2, var1, var2)
+    assert not set(b_reduce_axes).intersection(b_var_axes), "%s: sources %r, red1 %r, red2 %r, var1 %r, var2 %r" % (
+      self, self.sources, red1, red2, var1, var2)
     a_rem_axes = [i for i in range(a_out.batch_ndim) if i not in a_var_axes + a_reduce_axes]
     b_rem_axes = [i for i in range(b_out.batch_ndim) if i not in b_var_axes + b_reduce_axes]
     transpose_a = bool(a_var_axes and a_reduce_axes[0] < a_var_axes[0])
@@ -5700,7 +5702,8 @@ class DotLayer(LayerBase):
     b_shape = [b_out.batch_shape[i] or b_shape[i] for i in range(b_out.batch_ndim)]
     a_rem_dims = [a_shape[i] for i in a_rem_axes]
     b_rem_dims = [b_shape[i] for i in b_rem_axes]
-    assert len(a_rem_axes) == len(b_rem_axes), "remaining shared (batch) axes do not match"
+    assert len(a_rem_axes) == len(b_rem_axes), "%s: remaining shared (batch) axes do not match. sources %r" % (
+      self, self.sources)
     assert all([
       isinstance(d1, tf.Tensor) or isinstance(d2, tf.Tensor) or d1 == d2
       for (d1, d2) in zip(a_rem_dims, b_rem_dims)])
@@ -5787,7 +5790,7 @@ class DotLayer(LayerBase):
     assert not a_out.beam or not b_out.beam or a_out.beam == b_out.beam
     a_reduce_axes = a_out.get_axes_from_description(red1)
     b_reduce_axes = b_out.get_axes_from_description(red2)
-    assert a_reduce_axes and b_reduce_axes
+    assert a_reduce_axes and b_reduce_axes, "%s: sources %r, red1 %r, red2 %r" % (name, sources, red1, red2)
     a_var_axes = a_out.get_axes_from_description(var1)
     b_var_axes = b_out.get_axes_from_description(var2)
     assert not set(a_reduce_axes).intersection(a_var_axes)
