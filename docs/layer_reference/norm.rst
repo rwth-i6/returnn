@@ -1,8 +1,8 @@
 .. _norm_layers:
 
-===========
-Norm Layers
-===========
+==============================
+Norm and Regularization Layers
+==============================
 
 
 Batch-Normalization Layer
@@ -12,6 +12,12 @@ Batch-Normalization Layer
 	:members:
 	:undoc-members:
 
+Dropout Layer
+-------------
+
+.. autoclass:: TFNetworkLayer.DropoutLayer
+    :members:
+    :undoc-members:
 
 Layer-Normalization Layer
 -------------------------
