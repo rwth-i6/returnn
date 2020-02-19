@@ -115,7 +115,7 @@ def parse_py_statement(line):
             if c in spaces:
                 pass
             elif c in ops:
-                yield ("op", c)
+                yield "op", c
             elif c == "#":
                 state = 6
             elif c == "\"":
@@ -129,7 +129,7 @@ def parse_py_statement(line):
             if c == "\\":
                 state = 4
             elif c == "\"":
-                yield ("str", cur_token)
+                yield "str", cur_token
                 cur_token = ""
                 state = 0
             else:
@@ -138,14 +138,14 @@ def parse_py_statement(line):
             if c == "\\":
                 state = 5
             elif c == "'":
-                yield ("str", cur_token)
+                yield "str", cur_token
                 cur_token = ""
                 state = 0
             else:
                 cur_token += c
         elif state == 3:  # identifier
             if c in spaces + ops + "#\"'":
-                yield ("id", cur_token)
+                yield "id", cur_token
                 cur_token = ""
                 state = 0
                 i -= 1
@@ -160,9 +160,9 @@ def parse_py_statement(line):
         elif state == 6:  # comment
             cur_token += c
     if state == 3:
-        yield ("id", cur_token)
+        yield "id", cur_token
     elif state == 6:
-        yield ("comment", cur_token)
+        yield "comment", cur_token
 
 
 def parse_py_statements(source_code):
@@ -305,7 +305,7 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
 
         except Exception:
             print("IPython Pdb exception:")
-            better_exchook(*sys.exc_info(), autodebugshell=False)
+            better_exchook(*sys.exc_info(), autodebugshell=False, file=sys.stdout)
 
     if not ipshell and have_ipython:
         # noinspection PyBroadException
@@ -327,7 +327,7 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
                 user_ns=user_ns, user_module=module)
         except Exception:
             print("IPython not available:")
-            better_exchook(*sys.exc_info(), autodebugshell=False)
+            better_exchook(*sys.exc_info(), autodebugshell=False, file=sys.stdout)
         else:
             if execWrapper:
                 old = ipshell.run_code
@@ -335,7 +335,7 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
     if ipshell:
         ipshell()
     else:
-        print("Use simple debug shell:")
+        print("Use simple pdb debug shell:")
         if traceback:
             import pdb
             pdb.post_mortem(traceback)
@@ -404,12 +404,12 @@ def is_source_code_missing_open_brackets(source_code):
     return not all([c == 0 for c in counters])
 
 
-def get_source_code(filename, lineno, module_globals):
+def get_source_code(filename, lineno, module_globals=None):
     """
     :param str filename:
     :param int lineno:
-    :param dict[str] module_globals:
-    :return: source code of that line
+    :param dict[str]|None module_globals:
+    :return: source code of that line (including newline)
     :rtype: str
     """
     import linecache
@@ -448,7 +448,7 @@ def add_indent_lines(prefix, s):
         return prefix
     prefix_len = str_visible_len(prefix)
     lines = s.splitlines(True)
-    return "".join([prefix + lines[0]] + [" " * prefix_len + l for l in lines[1:]])
+    return "".join([prefix + lines[0]] + [" " * prefix_len + line for line in lines[1:]])
 
 
 def get_indent_prefix(s):
@@ -470,7 +470,7 @@ def get_same_indent_prefix(lines):
     prefix = get_indent_prefix(lines[0])
     if not prefix:
         return ""
-    if all([l.startswith(prefix) for l in lines]):
+    if all([line.startswith(prefix) for line in lines]):
         return prefix
     return None
 
@@ -486,8 +486,8 @@ def remove_indent_lines(s):
     lines = s.splitlines(True)
     prefix = get_same_indent_prefix(lines)
     if prefix is None:  # not in expected format. just lstrip all lines
-        return "".join([l.lstrip() for l in lines])
-    return "".join([l[len(prefix):] for l in lines])
+        return "".join([line.lstrip() for line in lines])
+    return "".join([line[len(prefix):] for line in lines])
 
 
 def replace_tab_indent(s, replace="    "):
@@ -507,7 +507,7 @@ def replace_tab_indents(s, replace="    "):
     :rtype: str
     """
     lines = s.splitlines(True)
-    return "".join([replace_tab_indent(l, replace) for l in lines])
+    return "".join([replace_tab_indent(line, replace) for line in lines])
 
 
 def to_bool(s, fallback=None):
@@ -1151,8 +1151,8 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
     except Exception:
         output(color("ERROR: cannot get more detailed exception info because:", color.fg_colors[1], bold=True))
         import traceback
-        for l in traceback.format_exc().split("\n"):
-            output("   " + l)
+        for line in traceback.format_exc().split("\n"):
+            output("   " + line)
 
     return output.lines
 
@@ -1165,8 +1165,8 @@ def print_tb(tb, file=None, **kwargs):
     """
     if file is None:
         file = sys.stderr
-    for l in format_tb(tb=tb, **kwargs):
-        file.write(l)
+    for line in format_tb(tb=tb, **kwargs):
+        file.write(line)
     file.flush()
 
 
@@ -1179,27 +1179,67 @@ def better_exchook(etype, value, tb, debugshell=False, autodebugshell=True, file
     :param tb: traceback
     :param bool debugshell: spawn a debug shell at the context of the exception
     :param bool autodebugshell: if env DEBUG is an integer != 0, it will spawn a debug shell
-    :param io.TextIOBase|io.StringIO file: output stream where we will print the traceback and exception information.
-        stderr by default.
+    :param io.TextIOBase|io.StringIO|typing.TextIO file: output stream where we will print the traceback
+        and exception information. stderr by default.
     :param bool|None with_color: whether to use ANSI escape codes for colored output
     """
     if file is None:
         file = sys.stderr
 
-    def output(ln):
-        """
-        :param str ln:
-        :return: nothing, prints to ``file``
-        """
-        file.write(ln + "\n")
-
     color = Color(enable=with_color)
+    output = _Output(color=color)
+
+    def format_filename(s):
+        """
+        :param str s:
+        :rtype: str
+        """
+        base = os.path.basename(s)
+        return (
+            color('"' + s[:-len(base)], color.fg_colors[2]) +
+            color(base, color.fg_colors[2], bold=True) +
+            color('"', color.fg_colors[2]))
+
     output(color("EXCEPTION", color.fg_colors[1], bold=True))
     all_locals, all_globals = {}, {}
     if tb is not None:
-        print_tb(tb, allLocals=all_locals, allGlobals=all_globals, file=file, withTitle=True, with_color=color.enable)
+        output.lines.extend(
+            format_tb(
+                tb=tb, allLocals=all_locals, allGlobals=all_globals, withTitle=True, with_color=color.enable))
     else:
         output(color("better_exchook: traceback unknown", color.fg_colors[1]))
+
+    if isinstance(value, SyntaxError):
+        # The standard except hook will also print the source of the SyntaxError,
+        # so do it in a similar way here as well.
+        filename = value.filename
+        # Keep the output somewhat consistent with format_tb.
+        file_descr = "".join([
+            '  ',
+            color("File ", color.fg_colors[0], bold=True), format_filename(filename), ", ",
+            color("line ", color.fg_colors[0]), color("%d" % value.lineno, color.fg_colors[4])])
+        with output.fold_text_ctx(file_descr):
+            if not os.path.isfile(filename):
+                alt_fn = fallback_findfile(filename)
+                if alt_fn:
+                    output(
+                        color("    -- couldn't find file, trying this instead: ", color.fg_colors[0]) +
+                        format_filename(alt_fn))
+                    filename = alt_fn
+            source_code = get_source_code(filename, value.lineno)
+            if source_code:
+                # Similar to remove_indent_lines.
+                # But we need to know the indent-prefix such that we can use the syntax-error offset.
+                source_code = replace_tab_indents(source_code)
+                lines = source_code.splitlines(True)
+                indent_prefix = get_same_indent_prefix(lines)
+                if indent_prefix is None:
+                    indent_prefix = ""
+                source_code = "".join([line[len(indent_prefix):] for line in lines])
+                source_code = source_code.rstrip()
+                prefix = "    line: "
+                output(prefix, color.py_syntax_highlight(source_code), color=color.fg_colors[0])
+                output(" " * (len(prefix) + value.offset - len(indent_prefix) - 1) + "^", color=color.fg_colors[4])
 
     import types
 
@@ -1232,6 +1272,10 @@ def better_exchook(etype, value, tb, debugshell=False, autodebugshell=True, file
     else:
         output(_format_final_exc_line(etype.__name__, value))
 
+    for line in output.lines:
+        file.write(line)
+    file.flush()
+
     if autodebugshell:
         # noinspection PyBroadException
         try:
@@ -1241,7 +1285,6 @@ def better_exchook(etype, value, tb, debugshell=False, autodebugshell=True, file
     if debugshell:
         output("---------- DEBUG SHELL -----------")
         debug_shell(user_ns=all_locals, user_global_ns=all_globals, traceback=tb)
-    file.flush()
 
 
 def dump_all_thread_tracebacks(exclude_thread_ids=None, file=None):
@@ -1459,7 +1502,7 @@ def replace_traceback_format_tb():
 # ------------------------------------------------
 # Test/demo code starts here.
 
-def test_is_source_code_missing_open_brackets():
+def _test_is_source_code_missing_open_brackets():
     """
     Test :func:`is_source_code_missing_open_brackets`.
     """
@@ -1472,7 +1515,7 @@ def test_is_source_code_missing_open_brackets():
     assert is_source_code_missing_open_brackets("a[0]: 'b'}).b()[0]") is True
 
 
-def test_add_indent_lines():
+def _test_add_indent_lines():
     """
     Test :func:`add_indent_lines`.
     """
@@ -1480,7 +1523,7 @@ def test_add_indent_lines():
     assert add_indent_lines("foo ", " bar\n baz") == "foo  bar\n     baz"
 
 
-def test_get_same_indent_prefix():
+def _test_get_same_indent_prefix():
     """
     Test :func:`get_same_indent_prefix`.
     """
@@ -1489,7 +1532,7 @@ def test_get_same_indent_prefix():
     assert get_same_indent_prefix([" a", "  b"]) == " "
 
 
-def test_remove_indent_lines():
+def _test_remove_indent_lines():
     """
     Test :func:`remove_indent_lines`.
     """
@@ -1498,36 +1541,85 @@ def test_remove_indent_lines():
     assert remove_indent_lines("\ta\n\t b") == "a\n b"
 
 
+def _import_dummy_mod_by_path(filename):
+    """
+    :param str filename:
+    """
+    dummy_mod_name = "_dummy_mod_name"
+    if sys.version_info[0] == 2:
+        # noinspection PyDeprecation
+        import imp
+        # noinspection PyDeprecation
+        imp.load_source(dummy_mod_name, filename)
+    else:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(dummy_mod_name, filename)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+
+def _test_syntax_error():
+    """
+    Test :class:`SyntaxError`.
+    """
+    from io import StringIO, BytesIO
+    if sys.version_info[0] == 2:
+        exc_stdout = BytesIO()
+    else:
+        exc_stdout = StringIO()
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py") as f:
+        f.write("[\n\ndef foo():\n  pass\n")
+        f.flush()
+        filename = f.name
+        try:
+            _import_dummy_mod_by_path(filename)
+        except SyntaxError:
+            better_exchook(*sys.exc_info(), file=exc_stdout, autodebugshell=False)
+        else:
+            raise Exception("We expected to get a SyntaxError...")
+    # The standard exception hook prints sth like this:
+    """
+      File "/var/tmp/tmpx9twr8i2.py", line 3
+        def foo():
+          ^
+    SyntaxError: invalid syntax
+    """
+    lines = exc_stdout.getvalue().splitlines()
+    line4, line3, line2, line1 = lines[-4:]
+    assert "SyntaxError" in line1
+    assert "^" in line2
+    assert "line:" in line3 and "foo" in line3
+    assert os.path.basename(filename) in line4
+
+
+def _test():
+    for k, v in sorted(globals().items()):
+        if not k.startswith("_test_"):
+            continue
+        print("running: %s()" % k)
+        v()
+    print("ok.")
+    sys.exit()
+
+
+def _debug_shell():
+    debug_shell(locals(), globals())
+
+
+def _debug_shell_exception():
+    # noinspection PyBroadException
+    try:
+        raise Exception("demo exception")
+    except Exception:
+        better_exchook(*sys.exc_info(), debugshell=True)
+
+
 # noinspection PyMissingOrEmptyDocstring,PyBroadException
-def _main():
+def _demo():
     """
     Some demo.
     """
-
-    if sys.argv[1:] == ["test"]:
-        for k, v in sorted(globals().items()):
-            if not k.startswith("test_"):
-                continue
-            print("running: %s()" % k)
-            v()
-        print("ok.")
-        sys.exit()
-
-    elif sys.argv[1:] == ["debug_shell"]:
-        debug_shell(locals(), globals())
-        sys.exit()
-
-    elif sys.argv[1:] == ["debug_shell_exception"]:
-        try:
-            raise Exception("demo exception")
-        except Exception:
-            better_exchook(*sys.exc_info(), debugshell=True)
-        sys.exit()
-
-    elif sys.argv[1:]:
-        print("Usage: %s (test|...)" % sys.argv[0])
-        sys.exit(1)
-
     # some examples
     # this code produces this output: https://gist.github.com/922622
 
@@ -1584,6 +1676,31 @@ def _main():
     # and fail
     # noinspection PyUnresolvedReferences
     finalfail(sys)
+
+
+def _main():
+    """
+    Main entry point. Either calls the function, or just calls the demo.
+    """
+    from argparse import ArgumentParser
+    arg_parser = ArgumentParser()
+    arg_parser.add_argument("command", default="demo", help="test, debug_shell, demo, ...", nargs="?")
+    args = arg_parser.parse_args()
+    if args.command:
+        install()
+        if "_%s" % args.command in globals():
+            func_name = "_%s" % args.command
+        elif args.command in globals():
+            func_name = args.command
+        else:
+            print("Error: Function (_)%s not found." % args.command)
+            sys.exit(1)
+        print("Run %s()." % func_name)
+        func = globals()[func_name]
+        func()
+        sys.exit()
+    # Just run the demo.
+    _demo()
 
 
 if __name__ == "__main__":
