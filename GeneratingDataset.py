@@ -2890,7 +2890,7 @@ class OggZipDataset(CachedDataset2):
     :param dict[str] info:
     :rtype: str
     """
-    return info.get("seq_name", info["file"])
+    return info.get("seq_name", info.get("file", ""))
 
   def get_tag(self, seq_idx):
     """
