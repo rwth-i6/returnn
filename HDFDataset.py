@@ -1114,7 +1114,6 @@ class SimpleHDFWriter:
         self._insert_h5_other(
           "sizes", [seq_len[axis][i] for axis in range(ndim_with_seq_len)], add_time_dim=False, dtype="int32")
       if extra:
-        assert len(seq_len) == 1  # otherwise you likely will get trouble with seq len mismatch
         try:
           for key, value in extra.items():
             assert value.shape[0] == n_batch
