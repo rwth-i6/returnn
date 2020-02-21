@@ -4,6 +4,8 @@ interface for using RETURNN for regression.
 Applications are for example speech enhancement or mask estimations
 """
 
+from __future__ import print_function
+
 __author__ = 'menne'
 
 import os
@@ -92,7 +94,7 @@ class StereoDataset(CachedDataset2):
 
     self._seq_index_list = seq_index
     if epoch is not None:
-      print >> log.v4, "Reinitialize dataset seq order for epoch %i." % epoch
+      print("Reinitialize dataset seq order for epoch %i." % epoch, file=log.v4)
 
     return True
 
