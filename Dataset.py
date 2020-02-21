@@ -980,7 +980,9 @@ class Dataset(object):
             nr_of_full_chunks_key = (length[key] - chunk_size[key]) // chunk_step[key] + 1
             nr_of_full_chunks_default_key = (
               (length[default_key] - chunk_size[default_key]) // chunk_step[default_key] + 1)
-            assert nr_of_full_chunks_key == nr_of_full_chunks_default_key
+            assert nr_of_full_chunks_key == nr_of_full_chunks_default_key, (
+              "%s: iterate seqs with chunking: length %r, chunk size %r, chunk step %r, key %r, default key %r" % (
+                self, length, chunk_size, chunk_step, key, default_key))
         while length[default_key] > t[default_key]:
           chunk_start = NumbersDict(t)
           chunk_end = NumbersDict.min([t + chunk_size, length])
