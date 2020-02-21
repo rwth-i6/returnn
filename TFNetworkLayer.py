@@ -7830,7 +7830,7 @@ class HDFDumpLayer(LayerBase):
       try:
         if not self.hdf_writer:
           self.hdf_writer = SimpleHDFWriter(
-            filename=filename, dim=data.dim, ndim=ndim,
+            filename=self.filename, dim=data.dim, ndim=ndim,
             labels=labels,
             extra_type={
               key: (

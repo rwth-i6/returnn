@@ -1875,6 +1875,8 @@ class TFNetwork(object):
     (which would also lead to an error, because it cannot be serialized).
     Note: Currently these callbacks might get called multiple times,
     so make sure that this is not a problem.
+    Also make sure that the network/session is still in a valid state after this has been called,
+    e.g. such that further session runs would still work correctly.
 
     :param function cb:
     """
