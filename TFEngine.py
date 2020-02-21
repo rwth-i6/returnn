@@ -2266,6 +2266,8 @@ class Engine(EngineBase):
     assert isinstance(dataset, Dataset)
     if config:
       assert config is self.config
+    else:
+      config = self.config
 
     output_layer = self._get_output_layer()
     assert config.has('output_file'), 'output_file for priors numbers should be provided'
