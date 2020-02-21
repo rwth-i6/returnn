@@ -977,12 +977,15 @@ class Dataset(object):
           if chunk_step[key] == chunk_step[default_key]:
             raise Exception("Chunking with multiple data-keys of different length: %r" % length)
           else:
-            nr_of_full_chunks_key = (length[key] - chunk_size[key]) // chunk_step[key] + 1
-            nr_of_full_chunks_default_key = (
-              (length[default_key] - chunk_size[default_key]) // chunk_step[default_key] + 1)
-            assert nr_of_full_chunks_key == nr_of_full_chunks_default_key, (
-              "%s: iterate seqs with chunking: length %r, chunk size %r, chunk step %r, key %r, default key %r" % (
-                self, length, chunk_size, chunk_step, key, default_key))
+            limit = limit_default = 1
+            if self.min_chunk_size == chunk_size[default_key]:
+              limit = chunk_size[key]
+              limit_default = chunk_size[default_key]
+            nr_of_chunks = (length[key] - limit) // chunk_step[key] + 1
+            nr_of_chunks_default = (length[default_key] - limit_default) // chunk_step[default_key] + 1
+            assert nr_of_chunks == nr_of_chunks_default, (
+              "%s: iterate seqs with chunking: length %r, chunk size/step %r/%r (min %r), key %r (default %r)" % (
+                self, length, chunk_size, chunk_step, self.min_chunk_size, key, default_key))
         while length[default_key] > t[default_key]:
           chunk_start = NumbersDict(t)
           chunk_end = NumbersDict.min([t + chunk_size, length])
