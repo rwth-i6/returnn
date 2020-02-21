@@ -895,9 +895,9 @@ class Dataset(object):
     :rtype: str
     """
     labels = self.labels[key]
-    if len(labels) < 1000 and all([len(l) == 1 for l in labels]):
+    if len(labels) < 1000 and all([len(label) == 1 for label in labels]):
       # are these actually raw bytes? -> assume utf8
-      if all([ord(l) <= 255 for l in labels]):
+      if all([ord(label) <= 255 for label in labels]):
         try:
           if PY3:
             return bytes([ord(labels[c]) for c in data]).decode("utf8")
@@ -945,7 +945,7 @@ class Dataset(object):
     while self.is_less_than_num_seqs(s):
       length = self.get_seq_length(s)
       if chunk_size == 0:
-        yield (s, NumbersDict.constant_like(0, numbers_dict=length), length)
+        yield s, NumbersDict.constant_like(0, numbers_dict=length), length
       else:
         default_key = "data"
         if used_data_keys is not None:
@@ -990,7 +990,7 @@ class Dataset(object):
           if length.value is None:
             chunk_start.value = None
             chunk_end.value = None
-          yield (s, chunk_start, chunk_end)
+          yield s, chunk_start, chunk_end
           t += chunk_step
           if length[default_key] - t[default_key] <= self.min_chunk_size:
             break
