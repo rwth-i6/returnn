@@ -11,7 +11,7 @@ import contextlib
 import typing
 import TFUtil
 from Util import unicode, NotSpecified, CollectionReadCheckCovered
-from TFUtil import Data, SearchBeam, OutputWithActivation, CustomUpdate, dimshuffle, swapaxes
+from TFUtil import Data, SearchBeam, OutputWithActivation, CustomUpdate, dimshuffle, swapaxes, reuse_name_scope
 from Log import log
 
 
@@ -1134,7 +1134,7 @@ class LayerBase(object):
       tf.nn.batch_normalization()
       https://github.com/deepmind/sonnet/blob/master/sonnet/python/modules/batch_norm.py
     """
-    with tf.variable_scope("batch_norm"):
+    with reuse_name_scope(self.get_absolute_name_scope_prefix() + "batch_norm", absolute=True):
       if masked_time:
         x = data.get_placeholder_flattened(keep_dims=True)
         mean, variance = tf.nn.moments(x, axes=[0], keep_dims=True)
