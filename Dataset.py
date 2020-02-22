@@ -960,6 +960,17 @@ class Dataset(object):
             for k in used_data_keys:
               chunk_size[k] = max(int(chunk_size_orig[k] * chunking_variance), 1)
               chunk_step[k] = max(int(chunk_step_orig[k] * chunking_variance), 1)
+            # In case there are data keys with different chunk sizes,
+            # make sure we keep the original ratio.
+            smallest_key = [
+              k for k in sorted(used_data_keys, key=lambda key: (chunk_step_orig[key], key))
+              if chunk_step_orig[k] > 0][0]
+            for k in used_data_keys:
+              if chunk_size_orig[k] > chunk_size_orig[smallest_key]:
+                if chunk_size_orig[k] % chunk_size_orig[smallest_key] == 0:
+                  ratio = chunk_size_orig[k] // chunk_size_orig[smallest_key]
+                  chunk_size[k] = chunk_size[smallest_key] * ratio
+                  chunk_step[k] = chunk_step[smallest_key] * ratio
         assert chunk_step[default_key] > 0
         t = NumbersDict.constant_like(0, numbers_dict=length)
         # There are usually the 'data' (input) and 'classes' (targets) data-keys in `length` but there can be others.
