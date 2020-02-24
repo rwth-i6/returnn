@@ -4914,7 +4914,7 @@ class ReduceLayer(_ConcatInputLayer):
     reduce_rel_func = {"mean": tf.reduce_mean}
     arg_funcs = {name: getattr(tf, name) for name in ["argmax", "argmin"]}
     funcs = dict(list(reduce_abs_funcs.items()) + list(reduce_rel_func.items()) + list(arg_funcs.items()))
-    assert mode in funcs, "%s: invalid mode %r. choose from: %r" % (mode, funcs)
+    assert mode in funcs, "%s: invalid mode %r. choose from: %r" % (self, mode, funcs)
     f = funcs[mode]
     x_ = x.placeholder
     # Check if we should ignore some frames, e.g. via masking.
