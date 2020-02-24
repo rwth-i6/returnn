@@ -1,8 +1,8 @@
 .. _configuration_reference:
 
-=======================
-Configuration Reference
-=======================
+========================
+Configuration Parameters
+========================
 
 .. warning::
     The configuration reference is currently under construction and incomplete,

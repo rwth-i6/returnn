@@ -1,8 +1,8 @@
 .. _dataset_reference:
 
-=================
-Dataset Reference
-=================
+========
+Datasets
+========
 
 .. toctree::
     :maxdepth: 1
