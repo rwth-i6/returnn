@@ -61,60 +61,7 @@ Execution guide
 
 .. _tech_net_construct:
 
-Network structure construction
-------------------------------
-
-The network structure which defines the model topology is defined by the config ``network`` option,
-which is a dict, where each entry is a layer specification, which itself is a dict containing
-the kwargs for the specific layer class. E.g.:
-
-.. code-block:: python
-
-    network = {
-        "fw1": {"class": "linear", "activation": "relu", "dropout": 0.1, "n_out": 500},
-        "fw2": {"class": "linear", "activation": "relu", "dropout": 0.1, "n_out": 500, "from": ["fw1"]},
-        "output": {"class": "softmax", "loss": "ce", "from": ["fw2"]}
-    }
-
-The ``"class"`` key will get extracted from the layer arguments and the specific layer class will be used.
-For Theano, the base layer class is :py:class:`NetworkBaseLayer.Container` and :py:class:`NetworkBaseLayer.Layer`;
-for TensorFlow, it is :py:class:`TFNetworkLayer.LayerBase`.
-E.g. that would use the :py:class:`TFNetworkLayer.LinearLayer` class,
-and the ``LinearLayer.__init__`` will accepts arguments like ``activation``.
-In the given example, all the remaining arguments will get handled by the base layer.
-
-The construction itself can be found for TensorFlow in :py:func:`TFNetwork.TFNetwork.construct_from_dict`,
-which starts from the output layers goes over the sources of a layer, which are defined by ``"from"``.
-If a layer does not define ``"from"``, it will automatically get the input from the dataset data.
-
-Here is a 2 layer unidirectional LSTM network:
-
-.. code-block:: python
-
-    network = {
-        "lstm1": {"class": "rec", "unit": "lstm", "dropout": 0.1, "n_out": 500},
-        "lstm2": {"class": "rec", "unit": "lstm", "dropout": 0.1, "n_out": 500, "from": ["lstm1"]},
-        "output": {"class": "softmax", "loss": "ce", "from": ["lstm2"]}
-    }
-
-In TensorFlow, that would use the layer class :py:class:`TFNetworkRecLayer.RecLayer`
-which will handle the argument ``unit``.
-
-And here is a 3 layer bidirectional LSTM network:
-
-.. code-block:: python
-
-    network = {
-    "lstm0_fw" : { "class": "rec", "unit": "lstm", "n_out" : 500, "dropout": 0.1, "L2": 0.01, "direction": 1 },
-    "lstm0_bw" : { "class": "rec", "unit": "lstm", "n_out" : 500, "dropout": 0.1, "L2": 0.01, "direction": -1 },
-
-    "lstm1_fw" : { "class": "rec", "unit": "lstm", "n_out" : 500, "dropout": 0.1, "L2": 0.01, "direction": 1, "from" : ["lstm0_fw", "lstm0_bw"] },
-    "lstm1_bw" : { "class": "rec", "unit": "lstm", "n_out" : 500, "dropout": 0.1, "L2": 0.01, "direction": -1, "from" : ["lstm0_fw", "lstm0_bw"] },
-
-    "lstm2_fw" : { "class": "rec", "unit": "lstm", "n_out" : 500, "dropout": 0.1, "L2": 0.01, "direction": 1, "from" : ["lstm1_fw", "lstm1_bw"] },
-    "lstm2_bw" : { "class": "rec", "unit": "lstm", "n_out" : 500, "dropout": 0.1, "L2": 0.01, "direction": -1, "from" : ["lstm1_fw", "lstm1_bw"] },
-
-    "output" :   { "class" : "softmax", "loss" : "ce", "from" : ["lstm2_fw", "lstm2_bw"] }
+put" :   { "class" : "softmax", "loss" : "ce", "from" : ["lstm2_fw", "lstm2_bw"] }
     }
 
 
