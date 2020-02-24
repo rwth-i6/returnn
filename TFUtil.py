@@ -6323,7 +6323,7 @@ def _register_alternative_minmax_grad():
 def maximum_with_identity_grad(x, y):
   """
   :param tf.Tensor x:
-  :param tf.Tensor y:
+  :param tf.Tensor|float y:
   :return: tf.maximum(x, y) where each will receive the gradient
   :rtype: tf.Tensor
   """
@@ -6338,7 +6338,7 @@ def maximum_with_identity_grad(x, y):
 def minimum_with_identity_grad(x, y):
   """
   :param tf.Tensor x:
-  :param tf.Tensor y:
+  :param tf.Tensor|float y:
   :return: tf.minimum(x, y) where each will receive the gradient
   :rtype: tf.Tensor
   """

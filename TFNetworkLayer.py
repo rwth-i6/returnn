@@ -8521,7 +8521,7 @@ class BinaryCrossEntropyLoss(Loss):
     """
     with tf.name_scope("loss_frame_error"):
       targets_bool = tf.cast(self.target_flat, tf.float32) > 0.5
-      output_bool = self.output_flat > 0.  # logits
+      output_bool = tf.greater(self.output_flat, 0.)  # logits
       not_equal = tf.not_equal(output_bool, targets_bool)
       return self.reduce_func(tf.cast(not_equal, tf.float32)) * (1.0 / (self.output.dim or 1))
 
