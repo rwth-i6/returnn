@@ -4912,7 +4912,7 @@ class ReduceLayer(_ConcatInputLayer):
       mode = "mean"
     reduce_abs_funcs = {name: getattr(tf, "reduce_%s" % name) for name in ["max", "min", "sum", "logsumexp"]}
     reduce_rel_func = {"mean": tf.reduce_mean}
-    arg_funcs = {name: getattr(tf, "arg%s" % name) for name in ["max", "min"]}
+    arg_funcs = {name: getattr(tf, name) for name in ["argmax", "argmin"]}
     funcs = dict(list(reduce_abs_funcs.items()) + list(reduce_rel_func.items()) + list(arg_funcs.items()))
     assert mode in funcs, "%s: invalid mode %r. choose from: %r" % (mode, funcs)
     f = funcs[mode]
