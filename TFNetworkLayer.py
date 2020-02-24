@@ -4872,7 +4872,7 @@ class ReduceLayer(_ConcatInputLayer):
   def __init__(self, mode, axes=None, axis=None, keep_dims=False, enforce_batch_dim_axis=None, use_time_mask=None,
                **kwargs):
     """
-    :param str mode: "sum" or "max", "argmin", "min", "argmin", or "mean"
+    :param str mode: "sum" or "max", "argmin", "min", "argmax", "mean", "logsumexp"
     :param int|list[int]|str axes: One axis or multiple axis to reduce.
       It accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
       and it is strongly recommended to use some of these symbolic names.
@@ -4896,8 +4896,6 @@ class ReduceLayer(_ConcatInputLayer):
     if "n_out" in kwargs:
       assert kwargs["n_out"] == self.output.dim
     assert "out_type" not in kwargs
-    mode = mode.lower()
-    assert mode in ["max", "argmax", "min", "argmin", "sum", "avg", "mean"]
     assert not self.input_data.sparse
     x = self.input_data
     if enforce_batch_dim_axis is not None and x.batch_dim_axis != enforce_batch_dim_axis:
@@ -4909,24 +4907,19 @@ class ReduceLayer(_ConcatInputLayer):
       else:
         use_time_mask = False
     assert isinstance(use_time_mask, bool)
-    if mode == "max":
-      f = tf.reduce_max
-    elif mode == "argmax":
-      f = tf.argmax
-    elif mode == "min":
-      f = tf.reduce_min
-    elif mode == "argmin":
-      f = tf.argmin
-    elif mode == "sum":
-      f = tf.reduce_sum
-    elif mode in ["avg", "mean"]:
-      f = tf.reduce_mean
-    else:
-      raise Exception("invalid mode %r" % mode)
+    mode = mode.lower()
+    if mode == "avg":  # alias
+      mode = "mean"
+    reduce_abs_funcs = {name: getattr(tf, "reduce_%s" % name) for name in ["max", "min", "sum", "logsumexp"]}
+    reduce_rel_func = {"mean": tf.reduce_mean}
+    arg_funcs = {name: getattr(tf, "arg%s" % name) for name in ["max", "min"]}
+    funcs = dict(list(reduce_abs_funcs.items()) + list(reduce_rel_func.items()) + list(arg_funcs.items()))
+    assert mode in funcs, "%s: invalid mode %r. choose from: %r" % (mode, funcs)
+    f = funcs[mode]
     x_ = x.placeholder
     # Check if we should ignore some frames, e.g. via masking.
     if use_time_mask:
-      if f in (tf.reduce_sum, tf.reduce_min, tf.reduce_max) or (f == tf.reduce_mean and axes == [x.time_dim_axis]):
+      if mode in reduce_abs_funcs or (mode in reduce_rel_func and axes == [x.time_dim_axis]):
         # For sum, the fastest and simplest way is masking.
         for axis in axes:
           if axis == x.batch_dim_axis:
@@ -4940,12 +4933,13 @@ class ReduceLayer(_ConcatInputLayer):
             mask, [i for i in range(x.batch_ndim) if i not in [x.batch_dim_axis, axis]])  # e.g. (B,1,T) with axis=-1
           mask = tf.logical_and(mask, tf.ones_like(x_, dtype=mask.dtype))
 
+          zeros = tf.zeros_like(x.placeholder)
           replacement_value = {
-            tf.reduce_mean: tf.zeros_like(x.placeholder),
-            tf.reduce_sum: tf.zeros_like(x.placeholder),
-            tf.reduce_min: tf.zeros_like(x.placeholder) + x.placeholder.dtype.max,
-            tf.reduce_max: tf.zeros_like(x.placeholder) + x.placeholder.dtype.min
-          }
+            tf.reduce_mean: zeros,
+            tf.reduce_sum: zeros,
+            tf.reduce_logsumexp: zeros + x.placeholder.dtype.min,
+            tf.reduce_min: zeros + x.placeholder.dtype.max,
+            tf.reduce_max: zeros + x.placeholder.dtype.min}
 
           x_ = tf.where(mask, x_, replacement_value[f], "x_masked_axis_%i" % axis)
           if f == tf.reduce_mean:
@@ -4963,7 +4957,7 @@ class ReduceLayer(_ConcatInputLayer):
                   for a in axes if a != x.time_dim_axis]
           x = x.copy_time_flattened()
           x_ = x.placeholder
-    if f in (tf.argmax, tf.argmin):
+    if mode in arg_funcs:
       assert len(axes) == 1, "For argmax/argmin, only one reduction axis is supported"
       y = f(x_, axis=axes[0], output_type=tf.int32)
       # argmax and argmin don't support keep_dims argument
