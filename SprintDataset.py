@@ -236,8 +236,11 @@ class SprintDatasetBase(Dataset):
       return
     # We need to wait.
     assert thread.get_ident() != self.add_data_thread_id
-    print("%s %s: wait for seqs (%i,%i) (last added: %s) (current time: %s)" % (
-      self, currentThread().name, seq_start, seq_end, self._latest_added_seq(), time.strftime("%H:%M:%S")), file=log.v5)
+    if not self.suppress_load_seqs_print:
+      print(
+        "%s %s: wait for seqs (%i,%i) (last added: %s) (current time: %s)" % (
+          self, currentThread().name, seq_start, seq_end, self._latest_added_seq(), time.strftime("%H:%M:%S")),
+        file=log.v5)
     while not self._wait_for_seq_can_pass_check(seq_start=seq_start, seq_end=seq_end):
       self.cond.wait()
 
