@@ -1276,7 +1276,7 @@ def fast_baum_welch_staircase(am_scores, seq_lens, **opts):
 
 
 def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_lens,
-             ctc_merge_repeated=True, logits_normalize=True):
+             ctc_merge_repeated=True, logits_normalize=True, grad_wrt_softmax_in=True):
   """
   Similar to :func:`tf.nn.ctc_loss`.
   We use our :func:`fast_baum_welch`.
@@ -1288,7 +1288,12 @@ def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_le
   :param tf.Tensor targets: batch-major, [batch,time]
   :param tf.Tensor targets_seq_lens: (batch,)
   :param bool ctc_merge_repeated:
-  :param bool logits_normalize: apply log_softmax on logits (default)
+  :param bool logits_normalize: apply log_softmax on logits (default).
+    if False, you might also set grad_wrt_softmax_in=False
+  :param bool grad_wrt_softmax_in: assume ``p(s|x) = softmax(logits)``, and define the gradient w.r.t. logits.
+    This is ``p(s|x) - bw``, where ``bw`` is the Baum-Welch soft alignment.
+    If logits are already normalized (e.g. we just use ``log p(s|x) = logits``),
+    the error signal to logits should be ``-bw``.
   :return: loss, shape (batch,)
   :rtype: tf.Tensor
   """
@@ -1311,7 +1316,11 @@ def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_le
   loss = obs_scores[0]  # (batch,)
   n_batch = tf.shape(loss)[0]
   bw = tf.exp(-fwdbwd)  # (time,batch,dim)
-  grad_x = where_bc(seq_mask[:, :, None], tf.exp(log_sm) - bw, 0.0)  # (time,batch,dim)
+  if grad_wrt_softmax_in:
+    grad_x = tf.exp(log_sm) - bw  # (time,batch,dim)
+  else:
+    grad_x = -bw  # (time,batch,dim)
+  grad_x = where_bc(seq_mask[:, :, None], grad_x, 0.0)
   from TFUtil import custom_gradient
   loss = tf.reshape(loss, [1, n_batch, 1])  # (1,batch,1), such that we can broadcast to logits/grad_x
   loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=logits, grad_x=grad_x)
