@@ -96,7 +96,6 @@ class SprintDatasetBase(Dataset):
       self.labels["bpe"] = self.bpe.labels
     self.orth_vocab = None
     if orth_vocab:
-      assert not bpe, "bpe has its own vocab"
       from GeneratingDataset import Vocabulary
       self.orth_vocab = Vocabulary.create_vocab(**orth_vocab)
       self.labels["orth_classes"] = self.orth_vocab.labels
@@ -359,7 +358,6 @@ class SprintDatasetBase(Dataset):
       assert "bpe" not in targets
       targets["bpe"] = numpy.array(self.bpe.get_seq(orth), dtype="int32")
     if self.orth_vocab:
-      assert not self.orth_post_process
       assert "orth" in targets
       orth = targets["orth"]
       assert isinstance(orth, (str, unicode))
