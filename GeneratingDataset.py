@@ -1774,7 +1774,7 @@ class Vocabulary(object):
 
   def __init__(self, vocab_file, seq_postfix=None, unknown_label="UNK", num_labels=None):
     """
-    :param str vocab_file:
+    :param str|None vocab_file:
     :param str|None unknown_label:
     :param int num_labels: just for verification
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
@@ -1782,18 +1782,20 @@ class Vocabulary(object):
     self.vocab_file = vocab_file
     self.unknown_label = unknown_label
     self.num_labels = None  # will be set by _parse_vocab
-    self._parse_vocab(vocab_file)
+    self._parse_vocab()
     if num_labels is not None:
       assert self.num_labels == num_labels
+    self.unknown_label_id = self.vocab[self.unknown_label] if self.unknown_label is not None else None
     self.seq_postfix = seq_postfix or []
 
   def __repr__(self):
     return "Vocabulary(%r, num_labels=%s, unknown_label=%r)" % (self.vocab_file, self.num_labels, self.unknown_label)
 
-  def _parse_vocab(self, filename):
+  def _parse_vocab(self):
     """
-    :param str filename:
+    Sets self.vocab, self.labels, self.num_labels.
     """
+    filename = self.vocab_file
     import pickle
     if filename in self._cache:
       self.vocab, self.labels = self._cache[filename]
@@ -1822,7 +1824,6 @@ class Vocabulary(object):
       self.vocab = d
       self.labels = [label for (idx, label) in sorted(labels.items())]
       self._cache[filename] = (self.vocab, self.labels)
-    self.unknown_label_id = self.vocab[self.unknown_label] if self.unknown_label is not None else None
 
   @classmethod
   def create_vocab_dict_from_labels(cls, labels):
@@ -2090,6 +2091,7 @@ class BytePairEncoding(Vocabulary):
 class CharacterTargets(Vocabulary):
   """
   Uses characters as target labels.
+  Also see :class:`Utf8ByteTargets`.
   """
 
   def __init__(self, vocab_file, seq_postfix=None, unknown_label="@"):
@@ -2109,6 +2111,38 @@ class CharacterTargets(Vocabulary):
       seq = [self.vocab.get(k, self.unknown_label_id) for k in sentence]
     else:
       seq = [self.vocab[k] for k in sentence]
+    return seq + self.seq_postfix
+
+
+class Utf8ByteTargets(Vocabulary):
+  """
+  Uses bytes as target labels from UTF8 encoded text. All bytes (0-255) are allowed.
+  Also see :class:`CharacterTargets`.
+  """
+
+  def __init__(self, seq_postfix=None):
+    """
+    :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
+    """
+    super(Utf8ByteTargets, self).__init__(vocab_file=None, seq_postfix=seq_postfix, unknown_label=None)
+
+  def _parse_vocab(self):
+    """
+    Sets self.vocab, self.labels, self.num_labels.
+    """
+    self.vocab = {chr(i): i for i in range(256)}
+    self.labels = [chr(i) for i in range(256)]
+    self.num_labels = 256
+
+  def get_seq(self, sentence):
+    """
+    :param str sentence:
+    :rtype: list[int]
+    """
+    if sys.version_info[0] >= 3:
+      seq = list(sentence.encode("utf8"))
+    else:
+      seq = list(bytearray(sentence.encode("utf8")))
     return seq + self.seq_postfix
 
 
