@@ -3479,12 +3479,9 @@ class RnnCellLayer(_ConcatInputLayer):
     assert initial_output is None, "set initial_state instead"
     import re
     from TFUtil import get_initializer
-    # Cannot use self.var_creation_scope() when this is inside a RecLayer.
-    with reuse_name_scope(
-      "rec",
+    with reuse_name_scope("rec"), self.var_creation_scope(
       initializer=get_initializer(
-        weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self}),
-      reuse=getattr(tf, "AUTO_REUSE", None)
+        weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
     ) as scope:
       assert isinstance(scope, tf.VariableScope)
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
