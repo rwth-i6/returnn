@@ -379,10 +379,22 @@ class MetaDataset(CachedDataset2):
       dataset.finish_epoch()
 
   def _load_seqs(self, start, end):
-    for dataset_key in self.dataset_keys:
-      self.datasets[dataset_key].load_seqs(start, end)
-      for seq_idx in range(start, end):
-        self._check_dataset_seq(dataset_key, seq_idx)
+    """
+    :param int start: inclusive seq idx start
+    :param int end: exclusive seq idx end. can be more than num_seqs
+    """
+    # Pass on original start|end to super _load_seqs, to perform extra checks and cleanup.
+    # However, for load_seqs on our subdatasets, and other extra checks,
+    # do not redo them if they were already done.
+    # _load_seqs is often called many times with the same start|end, during chunked batch construction.
+    start_ = start
+    if self.added_data:
+      start_ = max(self.added_data[-1].seq_idx + 1, start)
+    if start_ < end:
+      for dataset_key in self.dataset_keys:
+        self.datasets[dataset_key].load_seqs(start_, end)
+        for seq_idx in range(start_, end):
+          self._check_dataset_seq(dataset_key, seq_idx)
     super(MetaDataset, self)._load_seqs(start=start, end=end)
 
   def _check_dataset_seq(self, dataset_key, seq_idx):
