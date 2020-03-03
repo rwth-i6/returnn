@@ -447,7 +447,7 @@ void HtkLatticeRescorer::WriteHtkLattice(const std::string &file_name) {
       ParseField(line, "J", &link_id);
 
       const Link &link = links_[link_id];
-      if (link.from == 0) {
+      if (clear_initial_links_ && link.from == 0) {
         const auto match = ParseField(line, "a");
         line.replace(match.first, match.second, "a=0.0 ");
       }
