@@ -1,3 +1,8 @@
+/*  Code adapted from rwthlm:
+
+  http://www-i6.informatik.rwth-aachen.de/~sundermeyer/rwthlm.html
+====================================================================*/
+
 #pragma once
 #include <cassert>
 #include <algorithm>
@@ -107,8 +112,7 @@ private:
   };
 
   static void Remap(const IntToInt &class_by_index, VocabularyPointer v);
-
-  // vocabulary has to contain </b> and may contain <unk>
+  // vocabulary has to contain <sb> and may contain <unk>
   const std::string unk_, sb_;
   int sb_index_;
   StringToInt index_by_word_;

@@ -1,3 +1,8 @@
+/*  Code adapted from rwthlm:
+
+  http://www-i6.informatik.rwth-aachen.de/~sundermeyer/rwthlm.html
+====================================================================*/
+
 #include <cassert>
 #include <cstdint>
 #include <set>
