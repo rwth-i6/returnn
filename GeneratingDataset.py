@@ -2741,7 +2741,7 @@ class OggZipDataset(CachedDataset2):
     if "file" in first_entry:
       assert isinstance(first_entry["file"], str)
     else:
-      assert self.feature_extractor, "feature extraction is enabled, but no audio files are specified"
+      assert not self.feature_extractor, "%s: feature extraction is enabled, but no audio files are specified" % self
       assert isinstance(first_entry["seq_name"], str)
     # add index to data list
     for entry in data:
