@@ -2664,6 +2664,7 @@ class OggZipDataset(CachedDataset2):
     import zipfile
     import Util
     from MetaDataset import EpochWiseFilter
+    self._separate_txt_files = {}  # name -> filename
     if (
       isinstance(path, str)
       and os.path.splitext(path)[1] != ".zip"
@@ -2675,12 +2676,23 @@ class OggZipDataset(CachedDataset2):
       self._zip_files = None
       assert not use_cache_manager, "cache manager only for zip file"
     else:
-      self.paths = path if isinstance(path, list) else [path]
-      for path in self.paths:
-        assert os.path.splitext(path)[1] == ".zip"
-      self._names = [os.path.splitext(os.path.basename(path))[0] for path in self.paths]
-      if use_cache_manager:
-        self.paths = [Util.cf(path) for path in self.paths]
+      if not isinstance(path, (tuple, list)):
+        path = [path]
+      self.paths = []
+      self._names = []
+      for path_ in path:
+        assert isinstance(path_, str)
+        name, ext = os.path.splitext(os.path.basename(path_))
+        if "." in name and ext == ".gz":
+          name, ext = name[:name.rindex(".")], name[name.rindex("."):] + ext
+        if use_cache_manager:
+          path_ = Util.cf(path_)
+        if ext == ".txt.gz":
+          self._separate_txt_files[name] = path_
+          continue
+        assert ext == ".zip"
+        self.paths.append(path_)
+        self._names.append(name)
       self._zip_files = [zipfile.ZipFile(path) for path in self.paths]
     self.segments = None  # type: typing.Optional[typing.Set[str]]
     if segment_file:
@@ -2720,6 +2732,13 @@ class OggZipDataset(CachedDataset2):
     :param int zip_index: index of the zip file to load, unused when loading without zip
     :rtype: bytes
     """
+    import os
+    if filename.endswith(".txt"):
+      name, _ = os.path.splitext(filename)
+      assert name == self._names[zip_index]
+      if name in self._separate_txt_files:
+        import gzip
+        return gzip.open(self._separate_txt_files[name], "rb").read()
     if self._zip_files is not None:
       return self._zip_files[zip_index].read(filename)
     return open("%s/%s" % (self.paths[0], filename), "rb").read()
