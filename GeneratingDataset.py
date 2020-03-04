@@ -2618,7 +2618,8 @@ class LibriSpeechCorpus(CachedDataset2):
 class OggZipDataset(CachedDataset2):
   """
   Generic dataset which reads a Zip file containing Ogg files for each sequence and a text document.
-  The feature extraction settings are determined by the ``audio`` option, which is passed to :class:`ExtractAudioFeatures`.
+  The feature extraction settings are determined by the ``audio`` option,
+  which is passed to :class:`ExtractAudioFeatures`.
   Does also support Wav files, and might even support other file formats readable by the 'soundfile'
   library (not tested). By setting ``audio`` or ``targets`` to ``None``, the dataset can be used in
   text only or audio only mode. The content of the zip file is:
@@ -2626,15 +2627,17 @@ class OggZipDataset(CachedDataset2):
     - a .txt file with the same name as the zipfile, containing a python list of dictionaries
     - a subfolder with the same name as the zipfile, containing the audio files
 
-  The dictionaries in the .txt file must have the following structure:
+  The dictionaries in the .txt file must be a list of dicts, i.e. have the following structure:
 
   .. code::
 
-    [{'seq_name': 'arbitrary_sequence_name', 'text': 'some utterance text', 'duration': 2.3, 'file': 'sequence0.wav'}, ...]
+    [{'text': 'some utterance text', 'duration': 2.3, 'file': 'sequence0.wav'},
+     ...]
 
-  If ``seq_name`` is not included, the seq_tag will be the name of the file. ``duration`` is mandatory, as this information
-  is needed for the sequence sorting.
-
+  The dict can optionally also have the entry ``'seq_name': 'arbitrary_sequence_name'``.
+  If ``seq_name`` is not included, the seq_tag will be the name of the file.
+  ``duration`` is mandatory, as this information is needed for the sequence sorting,
+  however, it does not have to match the real duration in any way.
   """
 
   def __init__(self, path, audio, targets,
@@ -2644,12 +2647,12 @@ class OggZipDataset(CachedDataset2):
                epoch_wise_filter=None,
                **kwargs):
     """
-    :param str path: filename to zip
+    :param str|list[str] path: filename to zip
     :param dict[str]|None audio: options for :class:`ExtractAudioFeatures`. use {} for default. None means to disable.
     :param dict[str]|None targets: options for :func:`Vocabulary.create_vocab` (e.g. :class:`BytePairEncoding`)
     :param str|list[str]|((str)->str)|None targets_post_process: :func:`get_post_processor_function`, applied on orth
     :param bool use_cache_manager: uses :func:`Util.cf`
-    :param str|None segment_file: specify a .txt or .gz text file containing sequence tags that will be used as whitelist
+    :param str|None segment_file: .txt or .gz text file containing sequence tags that will be used as whitelist
     :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'. otherwise epoch will be used
     :param float|int|None fixed_random_subset:
       Value in [0,1] to specify the fraction, or integer >=1 which specifies number of seqs.
@@ -2661,7 +2664,11 @@ class OggZipDataset(CachedDataset2):
     import zipfile
     import Util
     from MetaDataset import EpochWiseFilter
-    if not isinstance(path, list) and os.path.splitext(path)[1] != ".zip" and os.path.isdir(path) and os.path.isfile(path + ".txt"):
+    if (
+      isinstance(path, str)
+      and os.path.splitext(path)[1] != ".zip"
+      and os.path.isdir(path)
+      and os.path.isfile(path + ".txt")):
       # Special case (mostly for debugging) to directly access the filesystem, not via zip-file.
       self.paths = [os.path.dirname(path)]
       self._names = [os.path.basename(path)]
@@ -2675,7 +2682,7 @@ class OggZipDataset(CachedDataset2):
       if use_cache_manager:
         self.paths = [Util.cf(path) for path in self.paths]
       self._zip_files = [zipfile.ZipFile(path) for path in self.paths]
-    self.segments = None
+    self.segments = None  # type: typing.Optional[typing.Set[str]]
     if segment_file:
       self._read_segment_list(segment_file)
     kwargs.setdefault("name", self._names[0])
