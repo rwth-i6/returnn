@@ -2643,6 +2643,7 @@ class OggZipDataset(CachedDataset2):
   def __init__(self, path, audio, targets,
                targets_post_process=None,
                use_cache_manager=False, segment_file=None,
+               zip_audio_files_have_name_as_prefix=True,
                fixed_random_seed=None, fixed_random_subset=None,
                epoch_wise_filter=None,
                **kwargs):
@@ -2653,6 +2654,7 @@ class OggZipDataset(CachedDataset2):
     :param str|list[str]|((str)->str)|None targets_post_process: :func:`get_post_processor_function`, applied on orth
     :param bool use_cache_manager: uses :func:`Util.cf`
     :param str|None segment_file: .txt or .gz text file containing sequence tags that will be used as whitelist
+    :param bool zip_audio_files_have_name_as_prefix:
     :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'. otherwise epoch will be used
     :param float|int|None fixed_random_subset:
       Value in [0,1] to specify the fraction, or integer >=1 which specifies number of seqs.
@@ -2697,6 +2699,7 @@ class OggZipDataset(CachedDataset2):
     self.segments = None  # type: typing.Optional[typing.Set[str]]
     if segment_file:
       self._read_segment_list(segment_file)
+    self.zip_audio_files_have_name_as_prefix = zip_audio_files_have_name_as_prefix
     kwargs.setdefault("name", self._names[0])
     super(OggZipDataset, self).__init__(**kwargs)
     self.targets = Vocabulary.create_vocab(**targets) if targets is not None else None
@@ -2932,7 +2935,10 @@ class OggZipDataset(CachedDataset2):
     """
     import io
     seq = self._data[self._get_ref_seq_idx(seq_idx)]
-    audio_fn = "%s/%s" % (self._names[seq['_zip_file_index']], seq["file"])
+    if self.zip_audio_files_have_name_as_prefix:
+      audio_fn = "%s/%s" % (self._names[seq['_zip_file_index']], seq["file"])
+    else:
+      audio_fn = seq["file"]
     raw_bytes = self._read(audio_fn, seq['_zip_file_index'])
     return io.BytesIO(raw_bytes)
 
