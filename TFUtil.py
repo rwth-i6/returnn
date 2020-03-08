@@ -4699,6 +4699,7 @@ class CudaEnv(object):
       self.cuda_path = self._find_cuda_path()
       if self.verbose_find_cuda:
         print("CUDA path:", self.cuda_path)
+    self._max_compute_capability = None
 
   @classmethod
   def _find_nvcc_in_path(cls):
@@ -4804,6 +4805,31 @@ class CudaEnv(object):
     """
     return bool(self.cuda_path)
 
+  def get_max_compute_capability(self):
+    """
+    :return: the highest compute capability supported by nvcc, or float("inf") if not known
+    :rtype: float
+    """
+    if self._max_compute_capability is None:
+      cuda_occupancy_path = "%s/include/cuda_occupancy.h" % self.cuda_path
+      if os.path.exists(cuda_occupancy_path):
+        import re
+        major, minor = None, 0
+        for line in open(cuda_occupancy_path).read().splitlines():
+          m = re.match("^#define\\s+__CUDA_OCC_(MAJOR|MINOR)__\\s+([0-9]+)$", line)
+          if m:
+            s, v = m.groups()
+            v = int(v)
+            if s == "MAJOR":
+              major = v
+            else:
+              minor = v
+        if major:
+          self._max_compute_capability = float(major) + float(minor) * 0.1
+    if self._max_compute_capability is None:
+      self._max_compute_capability = float("inf")
+    return self._max_compute_capability
+
   def get_compiler_opts(self):
     """
     :rtype: list[str]
@@ -4858,6 +4884,7 @@ class OpCodeCompiler(NativeCodeCompiler):
       # Get CUDA compute capability of the current GPU device.
       min_compute_capability = get_available_gpu_min_compute_capability()
       if min_compute_capability:
+        min_compute_capability = min(min_compute_capability, self._cuda_env.get_max_compute_capability())
         self._nvcc_opts += ["-arch", "compute_%i" % int(min_compute_capability * 10)]
     tf_include = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
     tf_include_nsync = tf_include + "/external/nsync/public"  # https://github.com/tensorflow/tensorflow/issues/2412
