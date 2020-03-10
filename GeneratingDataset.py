@@ -2640,7 +2640,7 @@ class OggZipDataset(CachedDataset2):
   however, it does not have to match the real duration in any way.
   """
 
-  def __init__(self, path, audio, targets,
+  def __init__(self, path, audio, targets=None,
                targets_post_process=None,
                use_cache_manager=False, segment_file=None,
                zip_audio_files_have_name_as_prefix=True,
