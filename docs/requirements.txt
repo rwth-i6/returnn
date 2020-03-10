@@ -5,6 +5,7 @@ theano==0.9
 nose
 tensorflow==1.15.2
 numpydoc
-tornado
+tornado<=5.1.1
 futures
 better_exchook
+sphinx_rtd_theme
