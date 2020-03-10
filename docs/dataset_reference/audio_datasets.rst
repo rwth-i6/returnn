@@ -7,10 +7,12 @@ Audio Datasets
 Extern Sprint Dataset
 ---------------------
 
-.. automodule:: SprintDataset.ExternSprintDataset
+.. autoclass:: SprintDataset.ExternSprintDataset
+    :show-inheritance:
 
 
 Ogg Zip Dataset
 ---------------
 
-.. automodule:: GeneratingDataset.OggZipDataset
+.. autoclass:: GeneratingDataset.OggZipDataset
+    :show-inheritance:

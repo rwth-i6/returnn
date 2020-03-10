@@ -1,7 +1,7 @@
 .. _basic_usage:
 
 ===========
-Basic usage
+Basic Usage
 ===========
 
 Install RETURNN, :ref:`installation`.
@@ -27,7 +27,7 @@ as well as some training parameters.
 Some common config parameters:
 
 task
-    The task, such as ``train`` or ``forward``.
+    The task, such as ``train``, ``forward`` or ``search``.
 
 device
     E.g. ``gpu`` or ``cpu``. Can also be ``gpu0,gpu1`` for multi-GPU training.
@@ -35,50 +35,18 @@ device
 use_tensorflow
     If you set this to ``True``, TensorFlow will be used.
 
-train / dev
+train / dev / eval
     The datasets. This can be a filename to a hdf-file.
     Or it can be a dict with an entry ``class`` where you can choose a from a variety
     of other dataset implementations, including many synthetic generated data.
+    ``train`` and ``dev`` are used during training, while ``eval`` is usually used to define the dataset for the
+    ``forward`` or ``search`` task.
 
-extern_data (former num_outputs)
+extern_data
+    A dictionary
     Defines the source/target dimensions of the data. Both can be integers.
     extern_data can also be a dict if your dataset has other data streams.
-    The standard source data is called "``data``" by default,
-    and the standard target data is called "``classes``" by default.
-    You can also specify whether your data is dense or sparse (i.e. it is just the index),
-    which is specified by the number of dimensions, i.e. 2 (time-dim + feature-dim) or 1 (just time-dim).
-    When using no explicit definition, it is assumed that the data contains a time axis.
 
-    Example: :code:`extern_data = {"data": [100, 2], "classes": [5000, 1]}`.
-    This defines an input dimension of 100, and the input is dense (2),
-    and an output dimension of 5000, and the output provided by the dataset is sparse (1).
-
-    For a more explicit definition of the shapes, you can provide a dict instead of a list or tuple. This dict may
-    contain information to create "Data" objects. For extern_data, only ``dim`` and ``shape`` are required.
-    Example: :code:`'speaker_classes': {'dim': 1172, 'shape': (), 'sparse': True}`
-    This defines a sparse input for e.g. speaker classes that do not have a time axis.
-
-    In general, all input parameters to :class:`TFUtil.Data` can be provided.
-
-batching
-    The sorting variant when the mini-batches are created. E.g. ``random``.
-
-batch_size
-    The total number of frames. A mini-batch has at least a time-dimension
-    and a batch-dimension (or sequence-dimension), and depending on dense or sparse,
-    also a feature-dimension.
-    ``batch_size`` is the upper limit for ``time * sequences`` during creation of the mini-batches.
-
-max_seqs
-    The maximum number of sequences in one mini-batch.
-
-chunking
-    You can chunk sequences of your data into parts, which will greatly reduce the amount of needed zero-padding.
-    This option is a string of two numbers, separated by a comma, i.e. ``chunk_size:chunk_step``,
-    where ``chunk_size`` is the size of a chunk,
-    and ``chunk_step`` is the step after which we create the next chunk.
-    I.e. the chunks will overlap by ``chunk_size - chunk_step`` frames.
-    Set this to ``0`` to disable it, or for example ``100:75`` to enable it.
 
 network
     This is a dict which defines the network topology.
@@ -115,6 +83,27 @@ network
     e.g. you can choose between different LSTM implementations, or GRU, or standard RNN, etc.
     See :class:`TFNetworkRecLayer.RecLayer` or :class:`NetworkRecurrentLayer.RecurrentUnitLayer`.
     See also :ref:`tf_lstm_benchmark`.
+..
+    batching
+        The sorting variant when the mini-batches are created. E.g. ``random``.
+
+batch_size
+    The total number of frames. A mini-batch has at least a time-dimension
+    and a batch-dimension (or sequence-dimension), and depending on dense or sparse,
+    also a feature-dimension.
+    ``batch_size`` is the upper limit for ``time * sequences`` during creation of the mini-batches.
+
+max_seqs
+    The maximum number of sequences in one mini-batch.
+
+..
+    chunking
+        You can chunk sequences of your data into parts, which will greatly reduce the amount of needed zero-padding.
+        This option is a string of two numbers, separated by a comma, i.e. ``chunk_size:chunk_step``,
+        where ``chunk_size`` is the size of a chunk,
+        and ``chunk_step`` is the step after which we create the next chunk.
+        I.e. the chunks will overlap by ``chunk_size - chunk_step`` frames.
+        Set this to ``0`` to disable it, or for example ``100:75`` to enable it.
 
 learning_rate
     The learning rate during training, e.g. ``0.01``.
@@ -126,6 +115,8 @@ adam / nadam / ...
 model
     Defines the model file where RETURNN will save all model params after an epoch of training.
     For each epoch, it will suffix the filename by the epoch number.
+    When running ``forward`` or ``search``, the specified model will be loaded.
+    The epoch can then be selected with the paramter ``load_epoch``.
 
 num_epochs
     The number of epochs to train.
@@ -134,10 +125,10 @@ log_verbosity
     An integer. Common values are 3 or 4. Starting with 5, you will get an output per mini-batch.
 
 
-There are much more params, and more details to many of the listed ones.
-See the code for more details.
-All config params can also be passed as command line params.
-See the code for some usage. The generic form is ``++param value``.
+There are much more params, and more details to many of the listed ones. Details on the parameters can be found in the
+:ref:`parameter reference <parameter_reference>`. As the reference is still incomplete, please watch out for additional
+parameters that can be found in the code. All config params can also be passed as command line params.
+The generic form is ``++param value``, but more options are available. Please See the code for some usage.
 
 See :ref:`tech_overview` for more details and an overview how it all works.
 
@@ -145,3 +136,5 @@ See :ref:`tech_overview` for more details and an overview how it all works.
     :hidden:
 
     network.rst
+    data.rst
+    recurrent_subnet.rst
