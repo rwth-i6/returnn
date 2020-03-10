@@ -16,5 +16,6 @@ Layers / Modules
     utility.rst
     loss.rst
     softmax.rst
+    units.rst
 
 
