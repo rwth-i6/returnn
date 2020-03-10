@@ -59,9 +59,8 @@ Some recent development changelog can be seen `here <https://github.com/rwth-i6/
 
     getting_started/installation
     getting_started/basic_usage/basic_usage
-    getting_started/example_setups.rst
+    getting_started/framework.rst
     getting_started/faq.rst
-
 
 .. toctree::
     :hidden:
@@ -82,13 +81,13 @@ Some recent development changelog can be seen `here <https://github.com/rwth-i6/
     advanced/debugging.rst
     advanced/profiling.rst
     advanced/deterministic_training.rst
-    advanced/framework.rst
 
 .. toctree::
     :hidden:
     :caption: Applications
 
     applications/asr.rst
+    applications/lm.rst
     applications/mt.rst
 
 .. toctree::

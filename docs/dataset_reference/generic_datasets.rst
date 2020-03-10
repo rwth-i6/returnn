@@ -7,9 +7,11 @@ Generic Datasets
 HDF Dataset
 -----------
 
-.. automodule:: HDFDataset.HDFDataset
+.. autoclass:: HDFDataset.HDFDataset
+    :show-inheritance:
 
 Next Gen HDF Dataset
 --------------------
 
-.. automodule:: HDFDataset.NextGenHDFDataset
+.. autoclass:: HDFDataset.NextGenHDFDataset
+    :show-inheritance:

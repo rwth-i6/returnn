@@ -58,16 +58,6 @@ Execution guide
 - Then, depending on the ``task`` option, it might start ``engine.train``, ``engine.forward`` etc.
   (:py:func:`Engine.Engine.train` or :py:func:`TFEngine.Engine.train`), :ref:`tech_engine_train`.
 
-
-.. _tech_net_construct:
-
-put" :   { "class" : "softmax", "loss" : "ce", "from" : ["lstm2_fw", "lstm2_bw"] }
-    }
-
-
-
-.. _tech_engine_train:
-
 Training
 --------
 
