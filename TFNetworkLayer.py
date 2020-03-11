@@ -2829,6 +2829,11 @@ class LinearLayer(_ConcatInputLayer):
     n_in = input_data.dim
     n_out = self.output.dim
     assert n_in and n_out, "%r and %r" % (input_data, self.output)
+    in_split_info = [source.output.dim for source in self.sources]
+    if not all(in_split_info) or sum(in_split_info) != n_in:
+      print(
+        "%s: Warning: input split dims %r unclear for sources %r?" % (self, in_split_info, self.sources), file=log.v3)
+      in_split_info = None
 
     with self.var_creation_scope():
       # Our Theano default: normal distribution, std_dev = sqrt(12. / (fan_in + fan_out))
@@ -2845,6 +2850,9 @@ class LinearLayer(_ConcatInputLayer):
       weights = self.add_param(tf.get_variable(
         name="W", shape=weights_shape, dtype=tf.float32, initializer=fwd_weights_initializer))
       weights_ = weights
+      if in_split_info:
+        TFUtil.set_param_axes_split_info(
+          weights, [[n_out], in_split_info] if self.use_transposed_weights else [in_split_info, [n_out]])
 
       if self.use_transposed_weights:
         weights = tf.transpose(weights)
