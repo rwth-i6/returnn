@@ -100,6 +100,20 @@ def init(config_filename, log_verbosity):
   rnn.init_faulthandler()
 
 
+def generic_open(filename, mode="r"):
+  """
+  :param str filename:
+  :param str mode: text mode by default
+  :rtype: typing.TextIO|typing.BinaryIO
+  """
+  if filename.endswith(".gz"):
+    import gzip
+    if "b" not in mode:
+      mode += "t"
+    return gzip.open(filename, mode)
+  return open(filename, mode)
+
+
 def main(argv):
   argparser = argparse.ArgumentParser(description='Dump raw strings from dataset. Same format as in search.')
   argparser.add_argument('--config', help="filename to config-file. will use dataset 'eval' from it")
@@ -122,7 +136,7 @@ def main(argv):
   dataset.init_seq_order(epoch=1)
 
   try:
-    with open(args.out, "w") as output_file:
+    with generic_open(args.out, "w") as output_file:
       refs = get_raw_strings(dataset=dataset, options=args)
       output_file.write("{\n")
       for seq_tag, ref in refs:
