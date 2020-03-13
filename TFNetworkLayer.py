@@ -2829,11 +2829,7 @@ class LinearLayer(_ConcatInputLayer):
     n_in = input_data.dim
     n_out = self.output.dim
     assert n_in and n_out, "%r and %r" % (input_data, self.output)
-    in_split_info = [source.output.dim for source in self.sources]
-    if not all(in_split_info) or sum(in_split_info) != n_in:
-      print(
-        "%s: Warning: input split dims %r unclear for sources %r?" % (self, in_split_info, self.sources), file=log.v3)
-      in_split_info = None
+    in_split_info = self._get_in_split_info()
 
     with self.var_creation_scope():
       # Our Theano default: normal distribution, std_dev = sqrt(12. / (fan_in + fan_out))
@@ -2927,6 +2923,31 @@ class LinearLayer(_ConcatInputLayer):
     assert self.output.batch_dim_axis == self.input_data.batch_dim_axis
     assert self.output.time_dim_axis == self.input_data.time_dim_axis
     self.output.placeholder = x
+
+  def _get_in_split_info(self):
+    """
+    :rtype: list[int]|None
+    """
+    n_in = self.input_data.dim
+    in_split_info = []
+
+    def _add_src(src):
+      """
+      :param LayerBase src:
+      """
+      if isinstance(src, CopyLayer):  # special case, contains itself of multiple sources maybe
+        for src__ in src.sources:
+          _add_src(src__)
+        return
+      in_split_info.append(src.output.dim)
+
+    for src_ in self.sources:
+      _add_src(src_)
+    if not all(in_split_info) or sum(in_split_info) != n_in:
+      print(
+        "%s: Warning: input split dims %r unclear for sources %r?" % (self, in_split_info, self.sources), file=log.v3)
+      return None
+    return in_split_info
 
 
 class SoftmaxLayer(LinearLayer):
