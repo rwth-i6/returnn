@@ -21,8 +21,8 @@ exclude = {"autonet", "mod"}
 
 
 def generate():
-  if not os.path.exists("crnn"):
-    os.symlink("..", "crnn")
+  if not os.path.exists("returnn"):
+    os.symlink("..", "returnn")
 
   if not os.path.exists("api"):
     os.mkdir("api")
@@ -37,7 +37,7 @@ def generate():
     f.write(".. automodule:: %s\n\t:members:\n\t:undoc-members:\n\n" % modname)
     f.close()
 
-  for fn in sorted(os.listdir("crnn")):
+  for fn in sorted(os.listdir("returnn")):
     if not fn.endswith(".py"):
       continue
     if fn.startswith("_"):
