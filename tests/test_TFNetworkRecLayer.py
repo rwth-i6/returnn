@@ -4134,7 +4134,7 @@ def test_BlocksparseLSTM_load_params_from_native_lstm():
 
 def test_rec_layer_search_select_src_reuse_layer():
   from TFNetworkRecLayer import _SubnetworkRecCell
-  n_src_dim = 5
+  n_src_dim = 7
   n_tgt_dim = 7
   beam_size = 12
   config = Config()
