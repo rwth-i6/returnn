@@ -1,5 +1,6 @@
-from crnn.TFNetworkRecLayer import RecLayer
-from crnn.TFNativeOp import RecSeqCellOp
+import os
+from returnn.TFNetworkRecLayer import RecLayer
+from returnn.TFNetworkRecLayer import RecLayer
 from tensorflow.python.ops.rnn_cell_impl import RNNCell
 
 header_text = """
@@ -24,6 +25,9 @@ Note that the native implementations can not be in a recurrent subnetwork, as th
 
 
 def generate():
+  if not os.path.exists("returnn"):
+    os.symlink("..", "returnn")
+
   RecLayer._create_rnn_cells_dict()
   layer_names = sorted(list(RecLayer._rnn_cells_dict.keys()))
 
