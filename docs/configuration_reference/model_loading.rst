@@ -21,4 +21,13 @@ preload_from_files
     For all layers in your network whose layer name starts with prefix, it will load the parameters from
     the checkpoint specified by filename
     (It will look for the corresponding layer name without the prefix in the given checkpoint).
+    Example (without using a specific prefix)::
+
+        preload_from_files = {
+          "existing-model": {
+            "init_for_train": True,
+            "ignore_missing": True,  # if the checkpoint only partly covers your model
+            "filename": ".../net-model/network.163",  # your checkpoint file
+          }
+        }
 

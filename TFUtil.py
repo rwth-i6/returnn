@@ -152,7 +152,7 @@ class DimensionTag(object):
       return True
     if self.dyn_size is None:
       return False
-    assert self.get_tag_from_size_tensor(self.dyn_size) is self
+    assert self.get_tag_from_size_tensor(self.dyn_size).get_same_base() is self
     return True
 
   def is_equal(self, other, ignore_feature_dim=False, allow_same_feature_dim=False, allow_same_spatial_dim=None,
@@ -252,6 +252,12 @@ class DimensionTag(object):
           self.src_data.size_placeholder = {}
         self.src_data.size_placeholder[
           self.src_data.get_batch_axis_excluding_batch(self.src_axis)] = self.same_as.dyn_size
+    # If others dyn_size is None but we have a dyn_size, maybe update others dyn_size.
+    if self.dyn_size is not None and self.same_as.dyn_size is not self.dyn_size:
+      # Could be unset if it comes from the config, or from prev graph creation.
+      # This is important such that self.can_compare() is sane.
+      if self.same_as.dyn_size is None or self.same_as.dyn_size.graph is not self.dyn_size.graph:
+        self.same_as.dyn_size = self.dyn_size
 
   @classmethod
   def get_existing_tag_from_collection(cls, other, tags, is_equal_opts=None):
@@ -424,16 +430,32 @@ class SearchBeam:
       return beam2
     b1 = beam1
     b2 = beam2
+    used_next_frame = False
     if b1._next_frame and b2._next_frame:
       b1 = b1._next_frame
       b2 = b2._next_frame
+      used_next_frame = True
     l1 = b1._get_dependency_list()
     l2 = b2._get_dependency_list()
     if b2 in l1:
       return beam1
     if b1 in l2:
       return beam2
-    raise Exception("Cannot combine beams:\n 1: %s\n 2: %s" % (beam1, beam2))
+    if used_next_frame:
+      # Example: beam1: prev:out, beam2: prev:t, t->prev:out (l2).
+      if beam1 in l2:  # -> beam1 dep on beam2
+        return beam1
+      if beam2 in l1:
+        return beam2
+    raise Exception(
+      "\n".join([
+        "Cannot combine beams:",
+        "  1: %s (deps: %s, next %s, next deps %s)" % (
+          beam1, beam1._get_dependency_list(),
+          beam1._next_frame, beam1._next_frame._get_dependency_list() if beam1._next_frame else None),
+        "  2: %s (deps: %s, next %s, next deps %s)" % (
+          beam2, beam2._get_dependency_list(), beam2._next_frame,
+          beam2._next_frame._get_dependency_list() if beam2._next_frame else None)]))
 
 
 class Data(object):
@@ -646,6 +668,9 @@ class Data(object):
       for i in range(self.batch_ndim):
         if self.batch_shape[i] is None:
           continue  # we allow anything in the placeholder
+        if self.placeholder.shape[i].value != self.batch_shape[i]:
+          print("Mismatching shape: Tensor %r vs Data %r" % (self.placeholder, self))
+          print_graph_output(self.placeholder, max_depth=3)
         assert self.placeholder.shape[i].value == self.batch_shape[i]
       self.placeholder.set_shape(self.batch_shape)
       assert self.placeholder.dtype.base_dtype.name == self.dtype
@@ -1160,12 +1185,14 @@ class Data(object):
     v.sanity_check()
     return v
 
-  def copy_compatible_to(self, data, unbroadcast=False, data_dyn_shape=None, check_sparse=True, check_dtype=True):
+  def copy_compatible_to(self, data, unbroadcast=False, except_feature=False,
+                         data_dyn_shape=None, check_sparse=True, check_dtype=True):
     """
     :param Data data: other data which the returned tensor should be compatible to
       It would add any missing axes with a dim 1 axis for automatic broadcasting.
       It currently does not check whether existing dims match.
     :param bool unbroadcast: if True, all broadcast axes (axes with dim 1) will be tiled such that they match
+    :param bool except_feature: if unbroadcast, do not unbroadcast the feature dim
     :param tf.Tensor|list[tf.Tensor|int]|tuple[tf.Tensor|int]|None data_dyn_shape:
       For unbroadcast, if we do not want to rely on tf.shape(data.placeholder).
     :param bool check_sparse:
@@ -1276,6 +1303,8 @@ class Data(object):
           for axis in range(v.batch_ndim):
             if v.batch_shape[axis] != 1:
               continue
+            if except_feature and axis == v.feature_dim_axis:
+              continue
             if data.batch_shape[axis] is not None:
               tiles[axis] = data.batch_shape[axis]
             elif data_dyn_shape is not None:
@@ -1283,9 +1312,12 @@ class Data(object):
             else:
               assert data.placeholder, "need data.placeholder for unbroadcast (target data: %r)" % v
               tiles[axis] = tf.shape(data.placeholder)[axis]
-          v.placeholder = tf.tile(v.placeholder, tiles)
+          if set(tiles) != {1}:
+            v.placeholder = tf.tile(v.placeholder, tiles)
       new_shape = list(v.batch_shape)
       for axis in range(v.batch_ndim):
+        if except_feature and axis == data.feature_dim_axis:
+          continue
         if data.batch_shape[axis] != 1 and new_shape[axis] == 1:
           new_shape[axis] = data.batch_shape[axis]
       if v.feature_dim_axis is not None:
@@ -1293,7 +1325,7 @@ class Data(object):
       if v.batch_dim_axis is not None:
         del new_shape[v.batch_dim_axis]
       v.shape = tuple(new_shape)
-      if v.placeholder is not None:
+      if v.placeholder is not None and not except_feature:
         v.placeholder.set_shape(v.batch_shape)
     v.sanity_check()
     return v
@@ -1316,6 +1348,7 @@ class Data(object):
       if data.time_dim_axis_excluding_batch in data.size_placeholder:
         del data.size_placeholder[data.time_dim_axis_excluding_batch]
     data.time_dim_axis = None
+    data.batch_dim_axis = 0
     data.sanity_check()
     return data
 
@@ -2195,11 +2228,12 @@ class Data(object):
     else:  # axis < batch_dim_axis
       seq_mask = sequence_mask_time_major(size)  # (T,B)
     shape = [1] * self.batch_ndim  # type: typing.List[typing.Union[int,tf.Tensor]]
-    placeholder_shape = tf.shape(self.placeholder)
-    shape[self.batch_dim_axis] = placeholder_shape[self.batch_dim_axis]
-    shape[axis] = placeholder_shape[axis]
-    seq_mask = tf.reshape(seq_mask, shape)
-    assert seq_mask.get_shape().ndims == self.batch_ndim
+    with tf.name_scope("get_sequence_mask_broadcast"):
+      placeholder_shape = tf.shape(self.placeholder)
+      shape[self.batch_dim_axis] = placeholder_shape[self.batch_dim_axis]
+      shape[axis] = placeholder_shape[axis]
+      seq_mask = tf.reshape(seq_mask, shape, name="seq_mask_reshape")
+      assert seq_mask.get_shape().ndims == self.batch_ndim
     return seq_mask
 
   def get_batch_dim(self):
@@ -2583,16 +2617,21 @@ def get_param_axes_split_info(param):
   return getattr(param, "returnn_axes_split_info", None)
 
 
-def transform_param_axes_split_info_to_new_shape(axes_split_info, new_shape):
+def transform_param_axes_split_info_to_new_shape(axes_split_info, new_shape, debug_name="<unknown>"):
   """
   new_shape can be bigger or smaller than the old shape.
   In some simple cases, it is obvious how that should be done, e.g. [[a],[b]*4], [a*2,b*8] -> [[a*2],[b*2]*4]
   In some, it is not so. E.g. [[a+b],[b]*4], [a+b*2,b*8] -> [[a+b*2],[b*2]*4].
+
+  We should try to always return something, though.
+  If some case is not covered yet, extend this.
+
   See test cases as well, :func:`test_transform_param_axes_split_info_to_new_shape`.
   No TF involved here, however, fits better to the functions above.
 
   :param list[list[int]] axes_split_info:
   :param list[int]|tuple[int] new_shape:
+  :param str debug_name:
   :return: new axes-split-info for the new shape
   :rtype: list[list[int]]
   """
@@ -2606,21 +2645,24 @@ def transform_param_axes_split_info_to_new_shape(axes_split_info, new_shape):
       if new_dim % len(parts) == 0:
         dim_diff[parts[0]] = new_dim // len(parts)  # just a heuristic
   for i, (new_dim, parts) in enumerate(zip(new_shape, axes_split_info)):
-    assert len(parts) >= 1
+    assert len(parts) >= 1, "%s transform %r %r diff %r" % (debug_name, axes_split_info, new_shape, dim_diff)
     if len(parts) == 1:  # simple case
       new_axes_split_info.append([new_dim])
       continue
     new_parts = [dim_diff.get(d) for d in parts]
     if any([d is None for d in new_parts]):
-      assert sum([d is None for d in new_parts]) == 1
+      while sum([d is None for d in new_parts]) > 1:
+        # More than one entry is ambiguous. Assume the next one stayed the same.
+        j = [d is None for d in new_parts].index(True)
+        new_parts[j] = parts[j]
       j = [d is None for d in new_parts].index(True)
       new_parts[j] = new_dim - sum([d for d in new_parts if d is not None])
-      assert new_parts[j] > 0
+      assert new_parts[j] > 0, debug_name
     elif sum(new_parts) != new_dim:
       # another heuristic. assume that the first is wrong.
       new_parts[0] = new_dim - sum(new_parts[1:])
-      assert new_parts[0] > 0
-    assert sum(new_parts) == new_dim
+      assert new_parts[0] > 0, debug_name
+    assert sum(new_parts) == new_dim, debug_name
     new_axes_split_info.append(new_parts)
   return new_axes_split_info
 
@@ -2947,9 +2989,12 @@ def default_control_flow_ctx():
     yield dep
 
 
-class FlipGradientBuilder(object):
+class _ScaledGradientBuilder(object):
   """
-  Gradient Reversal Layer.
+  Use the ``scaled_gradient`` instance.
+  tf.identity in forward pass, but scales the gradient in backprop.
+  Can be used as gradient reversal layer (with negative scale).
+
   Discussion:
     https://github.com/fchollet/keras/issues/3119
     https://github.com/tensorflow/tensorflow/issues/4342
@@ -2963,24 +3008,39 @@ class FlipGradientBuilder(object):
     self.num_calls = 0
 
   def __call__(self, x, scale=1.0):
-    grad_name = "FlipGradient%d" % self.num_calls
+    """
+    :param tf.Tensor x:
+    :param float scale:
+    :rtype: tf.Tensor
+    """
+    grad_name = "ScaledGradient%d" % self.num_calls
 
     from tensorflow.python.framework import ops
 
     # noinspection PyUnusedLocal
     @ops.RegisterGradient(grad_name)
     def _flip_gradients(op, grad):
-      return [tf.negative(grad) * scale]
+      return [grad * scale]
 
     g = tf.get_default_graph()
     with g.gradient_override_map({"Identity": grad_name}):
-      y = tf.identity(x, "flip_gradient_identity")
+      y = tf.identity(x, name="scaled_gradient_identity")
 
     self.num_calls += 1
     return y
 
 
-flip_gradient = FlipGradientBuilder()
+scaled_gradient = _ScaledGradientBuilder()
+
+
+def flip_gradient(x, scale=1.0):
+  """
+  :param tf.Tensor x:
+  :param float scale:
+  :return: identity(x) but with flipped gradient (optionally scaled)
+  :rtype: tf.Tensor
+  """
+  return scaled_gradient(x, scale=-scale)
 
 
 def lookup_grad_func_by_name(op_type):
@@ -4571,6 +4631,63 @@ class VariableAssigner(object):
     session.run(self.assign_op, feed_dict={self.assign_op.inputs[1]: value})
 
 
+def _get_tf_gcc_path(bin_name):
+  """
+  :param str bin_name:
+  :rtype: str
+  """
+  gcc_candidates = []
+  tf_gcc_version = getattr(tf, "__compiler_version__", None)
+  if tf_gcc_version:  # e.g. "4.8.5"
+    tf_gcc_version = tf_gcc_version.split(".")
+    for i in range(len(tf_gcc_version), 0, -1):
+      gcc_candidates.append("%s-%s" % (bin_name, ".".join(tf_gcc_version[:i])))
+  gcc_candidates.append(bin_name)
+
+  for gcc in gcc_candidates:
+    for p in os.environ["PATH"].split(":"):
+      pp = "%s/%s" % (p, gcc)
+      if os.path.exists(pp):
+        return pp
+
+  # Dummy fallback.
+  return bin_name
+
+
+_tf_gcc_path = None
+
+
+def get_tf_gcc_path():
+  """
+  :return: path to a GCC version which is most suitable for TF (to have correct C++ ABI)
+  :rtype: str
+  """
+  if sys.platform == "darwin":
+    return "gcc"  # better default
+  global _tf_gcc_path
+  if _tf_gcc_path is not None:
+    return _tf_gcc_path
+  _tf_gcc_path = _get_tf_gcc_path("gcc")
+  return _tf_gcc_path
+
+
+_tf_gpp_path = None
+
+
+def get_tf_gpp_path():
+  """
+  :return: path to a G++ version which is most suitable for TF (to have correct C++ ABI)
+  :rtype: str
+  """
+  if sys.platform == "darwin":
+    return "g++"  # better default
+  global _tf_gpp_path
+  if _tf_gpp_path is not None:
+    return _tf_gpp_path
+  _tf_gpp_path = _get_tf_gcc_path("g++")
+  return _tf_gpp_path
+
+
 class CudaEnv(object):
   """
   Information about the Nvidia CUDA environment, and library.
@@ -4590,6 +4707,7 @@ class CudaEnv(object):
       self.cuda_path = self._find_cuda_path()
       if self.verbose_find_cuda:
         print("CUDA path:", self.cuda_path)
+    self._max_compute_capability = None
 
   @classmethod
   def _find_nvcc_in_path(cls):
@@ -4695,11 +4813,37 @@ class CudaEnv(object):
     """
     return bool(self.cuda_path)
 
+  def get_max_compute_capability(self):
+    """
+    :return: the highest compute capability supported by nvcc, or float("inf") if not known
+    :rtype: float
+    """
+    if self._max_compute_capability is None:
+      cuda_occupancy_path = "%s/include/cuda_occupancy.h" % self.cuda_path
+      if os.path.exists(cuda_occupancy_path):
+        import re
+        major, minor = None, 0
+        for line in open(cuda_occupancy_path).read().splitlines():
+          m = re.match("^#define\\s+__CUDA_OCC_(MAJOR|MINOR)__\\s+([0-9]+)$", line)
+          if m:
+            s, v = m.groups()
+            v = int(v)
+            if s == "MAJOR":
+              major = v
+            else:
+              minor = v
+        if major:
+          self._max_compute_capability = float(major) + float(minor) * 0.1
+    if self._max_compute_capability is None:
+      self._max_compute_capability = float("inf")
+    return self._max_compute_capability
+
   def get_compiler_opts(self):
     """
     :rtype: list[str]
     """
     return [
+      "-ccbin", get_tf_gcc_path(),
       "-I", "%s/include" % self.cuda_path,
       "-L", "%s/%s" % (self.cuda_path, self._get_lib_dir_name()),
       "-x", "cu",
@@ -4734,7 +4878,7 @@ class OpCodeCompiler(NativeCodeCompiler):
   CacheDirName = "returnn_tf_cache/ops"
 
   def __init__(self, use_cuda_if_available=True, cuda_auto_min_compute_capability=True,
-               include_paths=(), ld_flags=(), **kwargs):
+               include_paths=(), ld_flags=(), c_macro_defines=None, **kwargs):
     self._cuda_env = use_cuda_if_available and CudaEnv.get_instance()
     if use_cuda_if_available and is_gpu_available():
       # Currently we assume that if we provide CUDA code (thus set use_cuda_if_available=True),
@@ -4748,18 +4892,27 @@ class OpCodeCompiler(NativeCodeCompiler):
       # Get CUDA compute capability of the current GPU device.
       min_compute_capability = get_available_gpu_min_compute_capability()
       if min_compute_capability:
+        min_compute_capability = min(min_compute_capability, self._cuda_env.get_max_compute_capability())
         self._nvcc_opts += ["-arch", "compute_%i" % int(min_compute_capability * 10)]
     tf_include = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
     tf_include_nsync = tf_include + "/external/nsync/public"  # https://github.com/tensorflow/tensorflow/issues/2412
     include_paths = list(include_paths) + [tf_include, tf_include_nsync]
+    c_macro_defines = {} if c_macro_defines is None else c_macro_defines.copy()
+    # https://github.com/rwth-i6/returnn/issues/87
+    # https://github.com/tensorflow/tensorflow/issues/17316
+    # https://github.com/tensorflow/tensorflow/issues/22766
+    c_macro_defines.setdefault("NDEBUG", 1)
     ld_flags = list(ld_flags)
-    if have_min_tf_version((1, 4)):
+    if have_min_tf_version((1, 14)):
       # https://github.com/tensorflow/tensorflow/issues/13607
+      ld_flags += tf.sysconfig.get_link_flags()
+    elif have_min_tf_version((1, 4)):
       ld_flags += ["-L%s" % tf.sysconfig.get_lib(), "-ltensorflow_framework"]
     # noinspection PyUnresolvedReferences
     use_cxx11_abi = hasattr(tf, 'CXX11_ABI_FLAG') and tf.CXX11_ABI_FLAG
     super(OpCodeCompiler, self).__init__(
-      include_paths=include_paths, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi, **kwargs)
+      include_paths=include_paths, c_macro_defines=c_macro_defines, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi,
+      **kwargs)
     self._tf_mod = None
 
   _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version", "with_cuda", "cuda_path", "nvcc_opts")
@@ -4781,7 +4934,10 @@ class OpCodeCompiler(NativeCodeCompiler):
   def _get_compiler_bin(self):
     if self._with_cuda():
       return self._cuda_env.get_compiler_bin()
-    return super(OpCodeCompiler, self)._get_compiler_bin()
+    if self.is_cpp:
+      return get_tf_gpp_path()
+    else:
+      return get_tf_gcc_path()
 
   def _transform_compiler_opts(self, opts):
     if self._with_cuda():
@@ -4811,25 +4967,34 @@ class TFNativeUtilCompiler(NativeCodeCompiler):
 
   CacheDirName = "returnn_tf_cache/tf_utils"
 
-  def __init__(self, include_paths=(), ld_flags=(), **kwargs):
+  def __init__(self, include_paths=(), ld_flags=(), c_macro_defines=None, **kwargs):
     tf_include = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
     tf_include_nsync = tf_include + "/external/nsync/public"  # https://github.com/tensorflow/tensorflow/issues/2412
     include_paths = list(include_paths) + [tf_include, tf_include_nsync]
+    c_macro_defines = {} if c_macro_defines is None else c_macro_defines.copy()
+    # https://github.com/rwth-i6/returnn/issues/87
+    # https://github.com/tensorflow/tensorflow/issues/17316
+    # https://github.com/tensorflow/tensorflow/issues/22766
+    c_macro_defines.setdefault("NDEBUG", 1)
     ld_flags = list(ld_flags)
-    if have_min_tf_version((1, 4)):
+    if have_min_tf_version((1, 14)):
       # https://github.com/tensorflow/tensorflow/issues/13607
+      ld_flags += tf.sysconfig.get_link_flags()
+    elif have_min_tf_version((1, 4)):
       ld_flags += ["-L%s" % tf.sysconfig.get_lib(), "-ltensorflow_framework"]
     # noinspection PyUnresolvedReferences
     use_cxx11_abi = hasattr(tf, 'CXX11_ABI_FLAG') and tf.CXX11_ABI_FLAG
     super(TFNativeUtilCompiler, self).__init__(
-      include_paths=include_paths, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi, **kwargs)
+      include_paths=include_paths, c_macro_defines=c_macro_defines, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi,
+      **kwargs)
 
   _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version",)
 
   def _make_info_dict(self):
+    from Util import describe_tensorflow_version
     d = super(TFNativeUtilCompiler, self)._make_info_dict()
     # noinspection PyUnresolvedReferences
-    d.update({"tf_version": tf.__version__})
+    d.update({"tf_version": describe_tensorflow_version()})
     return d
 
 
@@ -6193,7 +6358,7 @@ def _register_alternative_minmax_grad():
 def maximum_with_identity_grad(x, y):
   """
   :param tf.Tensor x:
-  :param tf.Tensor y:
+  :param tf.Tensor|float y:
   :return: tf.maximum(x, y) where each will receive the gradient
   :rtype: tf.Tensor
   """
@@ -6208,7 +6373,7 @@ def maximum_with_identity_grad(x, y):
 def minimum_with_identity_grad(x, y):
   """
   :param tf.Tensor x:
-  :param tf.Tensor y:
+  :param tf.Tensor|float y:
   :return: tf.minimum(x, y) where each will receive the gradient
   :rtype: tf.Tensor
   """
@@ -6249,6 +6414,9 @@ def safe_log(x, eps=1e-20, use_fake_grad=True):
   :rtype: tf.Tensor
   """
   with tf.name_scope("safe_log"):
+    y = check_base_op_type_and_replace(x, "Exp", "Identity")
+    if y is not None:
+      return y
     y = check_base_op_type_and_replace(x, "Softmax", "LogSoftmax")
     if y is not None:
       return y
@@ -6272,6 +6440,15 @@ def safe_exp(x, eps=1e-20):
   """
   import numpy
   with tf.name_scope("safe_exp"):
+    y = check_base_op_type_and_replace(x, "Log", "Identity")
+    if y is not None:
+      return y
+    y = check_base_op_type_and_replace(x, "LogSoftmax", "Softmax")
+    if y is not None:
+      return y
+    y = check_base_op_type_and_replace(x, "LogSigmoid", "Sigmoid")
+    if y is not None:
+      return y
     clip_value_min = numpy.log(eps)
     clip_value_max = numpy.log(1.0 / eps)
     x = clip_by_value_with_identity_grad(x, clip_value_min, clip_value_max)
@@ -6409,7 +6586,8 @@ def smoothing_cross_entropy(logits,
                             labels,
                             label_smoothing,
                             gaussian=False,
-                            vocab_size=None):
+                            vocab_size=None,
+                            logits_are_normalized=False):
   """
   Cross entropy with label smoothing to limit over-confidence.
   Code adapted from here:
@@ -6424,6 +6602,7 @@ def smoothing_cross_entropy(logits,
     A common default value is 0.1. See:
       https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_hparams.py
   :param bool gaussian: Uses a gaussian distribution for label smoothing
+  :param bool logits_are_normalized:
   :return: Tensor of the same shape as `labels` and of the same dtype as `logits`.
   :rtype: tf.Tensor
   """
@@ -6457,8 +6636,11 @@ def smoothing_cross_entropy(logits,
         depth=vocab_size,
         on_value=confidence,
         off_value=low_confidence)  # shape(labels) + [vocab_size
-    xentropy = tf.nn.softmax_cross_entropy_with_logits(
-      logits=logits, labels=soft_targets)  # shape(labels)
+    if logits_are_normalized:
+      xentropy = -tf.reduce_sum(soft_targets * logits, axis=-1)
+    else:
+      xentropy = tf.nn.softmax_cross_entropy_with_logits(
+        logits=logits, labels=soft_targets)  # shape(labels)
     return xentropy - normalizing  # shape(labels)
 
 
@@ -6975,7 +7157,7 @@ class GlobalTensorArrayOpMaker:
     #include "tensorflow/core/platform/types.h"
 
     using namespace tensorflow;
-  
+
     // Adopted from https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/ops/data_flow_ops.cc.
     REGISTER_OP("GlobalTensorArray")
     .Input("size: int32")
@@ -6997,7 +7179,7 @@ class GlobalTensorArrayOpMaker:
       return Status::OK();
     })
     .Doc("GlobalTensorArray, persistent across runs");
-    
+
     // Copied from https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/tensor_array_ops.cc,
     // and https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/resource_op_kernel.h.
     // The original TensorArrayOp used the per-run ("per-step") resource manager container
@@ -7021,7 +7203,7 @@ class GlobalTensorArrayOpMaker:
                                 tensorflow::DT_STRING, tensorflow::TensorShape({2}),
                                 &handle_, alloc_attr));
       }
-    
+
       ~GlobalTensorArrayOp() {
         if (resource_ != nullptr) {
           resource_->Unref();
@@ -7034,7 +7216,7 @@ class GlobalTensorArrayOpMaker:
           }
         }
       }
-    
+
       void Compute(OpKernelContext* ctx) override {
         mutex_lock l(mu_);
         if (resource_ == nullptr) {
@@ -7050,7 +7232,7 @@ class GlobalTensorArrayOpMaker:
         Tensor* handle;
         OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({}), &handle));
         handle->flat<ResourceHandle>()(0) =
-            resource_->resource_handle(ctx);            
+            resource_->resource_handle(ctx);
         if (ctx->num_outputs() == 2) {
           // Create the flow output.
           Tensor* flow;
@@ -7063,14 +7245,14 @@ class GlobalTensorArrayOpMaker:
           }
         }
       }
-    
+
      private:
       Status CreateTensorArray(OpKernelContext* ctx, ResourceMgr* rm,
                                Tensor* tensor_array_output_handle,
                                TensorArray** output_tensor_array) EXCLUSIVE_LOCKS_REQUIRED(mu_) {
         const Tensor* tensor_size;
         TF_RETURN_IF_ERROR(ctx->input("size", &tensor_size));
-    
+
         if (!TensorShapeUtils::IsScalar(tensor_size->shape())) {
           return errors::InvalidArgument(
               "TensorArray size must be scalar, but had shape: ",
@@ -7080,18 +7262,18 @@ class GlobalTensorArrayOpMaker:
         if (size < 0) {
           return errors::InvalidArgument("Size should be >= 0.");
         }
-    
+
         TensorArray* tensor_array = new TensorArray(
             cinfo_.name(), dtype_, *tensor_array_output_handle, size, element_shape_,
             dynamic_size_, false /* multiple_writes_aggregate */,
             false /* is_grad */, -1 /* marked_size */, clear_after_read_);
-    
+
         // TODO: could use LookupOrCreate instead...
         TF_RETURN_IF_ERROR(
             rm->Create(cinfo_.container(), cinfo_.name(), tensor_array));
-    
+
         *output_tensor_array = tensor_array;
-    
+
         return Status::OK();
       }
 
@@ -7099,17 +7281,17 @@ class GlobalTensorArrayOpMaker:
       ContainerInfo cinfo_ GUARDED_BY(mu_);
       PersistentTensor handle_ GUARDED_BY(mu_);
       TensorArray* resource_ GUARDED_BY(mu_) = nullptr;
-      
+
       const DeviceType device_type_;
       DataType dtype_;
       PartialTensorShape element_shape_;
       bool dynamic_size_;
       bool clear_after_read_;
       string tensor_array_name_;  // The name used to create the TensorArray.
-      
+
       TF_DISALLOW_COPY_AND_ASSIGN(GlobalTensorArrayOp);
     };
-    
+
     REGISTER_KERNEL_BUILDER(Name("GlobalTensorArray").Device(DEVICE_CPU), GlobalTensorArrayOp);
 
   """
@@ -7173,6 +7355,7 @@ class TFArrayContainer(object):
     #include "tensorflow/core/platform/macros.h"
     #include "tensorflow/core/platform/mutex.h"
     #include "tensorflow/core/platform/types.h"
+    #include "tensorflow/core/public/version.h"
     #include "tensorflow/core/common_runtime/device.h"
 
     using namespace tensorflow;
@@ -7215,7 +7398,13 @@ class TFArrayContainer(object):
     struct ArrayContainer : public ResourceBase {
       ArrayContainer(const DataType& dtype) : dtype_(dtype) {}
 
-      string DebugString() override { return "ArrayContainer"; }
+  string DebugString()
+#if (TF_MAJOR_VERSION >= 1 && TF_MINOR_VERSION >= 14)
+const
+#endif
+override {
+      return "ArrayContainer";
+      }
       int64 MemoryUsed() const override { return 0; };
 
       mutex mu_;
@@ -7284,7 +7473,7 @@ class TFArrayContainer(object):
                                          " but got ", DataTypeString(ar->dtype_), ".");
         return Status::OK();
       }
-  
+
       DataType dtype_;
     };
     REGISTER_KERNEL_BUILDER(Name("ArrayContainerCreate").Device(DEVICE_CPU), ArrayContainerCreateOp);
@@ -7295,9 +7484,9 @@ class TFArrayContainer(object):
 
       void Compute(OpKernelContext* context) override {
         ArrayContainer* ar;
-        
+
         const Tensor* handle;
-        OP_REQUIRES_OK(context, context->input("handle", &handle));        
+        OP_REQUIRES_OK(context, context->input("handle", &handle));
         OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &ar));
         core::ScopedUnref unref(ar);
 
@@ -7374,7 +7563,7 @@ class TFArrayContainer(object):
         const Tensor* tensor_value;
         OP_REQUIRES_OK(context, context->input("index", &tensor_index));
         OP_REQUIRES_OK(context, context->input("value", &tensor_value));
-    
+
         OP_REQUIRES(context, TensorShapeUtils::IsScalar(tensor_index->shape()),
                     errors::InvalidArgument(
                         "index must be scalar, but had shape: ",
@@ -7880,6 +8069,7 @@ def _get_control_flows(v, yield_none):
   :rtype: typing.Iterator[tensorflow.python.ops.control_flow_ops.ControlFlowContext|None]
   """
   import numpy
+  from tensorflow.python.ops.control_flow_ops import ControlFlowContext
   if isinstance(v, (list, tuple)):
     for elem in v:
       for t in _get_control_flows(elem, yield_none=yield_none):
@@ -7893,6 +8083,11 @@ def _get_control_flows(v, yield_none):
   # Control flow context will be set to the context of the loop or so, if there is one, otherwise None.
   # noinspection PyProtectedMember
   ctx = v._control_flow_context
+  if ctx:
+    assert isinstance(ctx, ControlFlowContext)
+    if v.type in ["Exit", "RefExit"]:
+      # We are just exiting this context, so return the outer context.
+      ctx = ctx.outer_context
   if not yield_none and not ctx:
     return
   yield ctx
@@ -8025,14 +8220,18 @@ def tensor_array_element_shape(ta):
   :param tf.TensorArray ta:
   :rtype: tf.TensorShape
   """
-  # If it is know, _element_shape is a list with 1 entry, the element shape as tf.TensorShape.
-  # Otherwise it is an empty list.
-  assert isinstance(ta._element_shape, list)
-  assert len(ta._element_shape) <= 1
-  if ta._element_shape:
-    assert isinstance(ta._element_shape[0], tf.TensorShape)
-    return ta._element_shape[0]
-  return tf.TensorShape(None)
+  if have_min_tf_version((1, 14)):
+    assert isinstance(ta.element_shape, tf.TensorShape)
+    return ta.element_shape
+  else:
+    # If it is know, _element_shape is a list with 1 entry, the element shape as tf.TensorShape.
+    # Otherwise it is an empty list.
+    assert isinstance(ta._element_shape, list)
+    assert len(ta._element_shape) <= 1
+    if ta._element_shape:
+      assert isinstance(ta._element_shape[0], tf.TensorShape)
+      return ta._element_shape[0]
+    return tf.TensorShape(None)
 
 
 def tensor_array_like(ta, **kwargs):
@@ -8086,17 +8285,21 @@ def _tensor_array_select_src_beams(ta, src_beams):
   return ta_new
 
 
-def beam_search(scores, beam_size, keep_beams=False, cheating_gold_targets=None, cheating_src_beam_idx=None):
+def beam_search(scores, beam_size, keep_beams=False,
+                cheating_gold_targets=None, cheating_src_beam_idx=None, cheating_exclusive=True):
   """
   This is mostly a higher-level wrapper around :func:`tf.nn.top_k`.
 
   :param tf.Tensor scores: (batch,beam_in,dim). combined scores (i.e. base beam scores + new scores),
     dense over the dims, such that we have labels in [0,...,dim-1].
+    These are supposed to be in +log space, although it just matters here that we take the maximum (or top-k).
   :param int|tf.Tensor beam_size:
   :param bool keep_beams: specifies that we keep the beam_in entries,
     i.e. we just expand, i.e. we just search on the dim. beam_size must be a multiple of beam_in.
   :param tf.Tensor|None cheating_gold_targets: (batch,), int32
   :param tf.Tensor|None cheating_src_beam_idx: (batch,), int32. If not given, assumes beam_in - 1. See code below.
+  :param bool cheating_exclusive: make sure that the cheating target does not occur twice,
+    i.e. no duplicates in search tree. This could have happened in our earlier implementation, or if this is disabled.
   :rtype: (tf.Tensor,tf.Tensor,tf.Tensor)
   :return: src_beams, labels, beam_scores.
     src_beams: (batch, beam) -> beam_in idx (int32),
@@ -8113,27 +8316,21 @@ def beam_search(scores, beam_size, keep_beams=False, cheating_gold_targets=None,
         cheating_src_beam_idx = tile_transposed(cheating_src_beam_idx, axis=0, multiples=beam_in)
     _, labels, beam_scores = beam_search(
       scores=scores, beam_size=beam_size // beam_in,
-      cheating_gold_targets=cheating_gold_targets, cheating_src_beam_idx=cheating_src_beam_idx)
+      cheating_gold_targets=cheating_gold_targets, cheating_src_beam_idx=cheating_src_beam_idx,
+      cheating_exclusive=cheating_exclusive)
     src_beams = tf.zeros([batch_dim, beam_in, beam_size // beam_in], dtype=tf.int32)
     src_beams += tf.range(beam_in)[None, :, None]
     src_beams = tf.reshape(src_beams, [batch_dim, beam_size])
     labels = tf.reshape(labels, [batch_dim, beam_size])
     beam_scores = tf.reshape(beam_scores, [batch_dim, beam_size])
     return src_beams, labels, beam_scores
-  scores_flat = tf.reshape(scores, [batch_dim, beam_in * in_dim])  # (batch, beam_in * dim)
   # `tf.nn.top_k` is the core function performing our search.
   # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
   top_k_size = beam_size
   if isinstance(in_dim, tf.Tensor) or isinstance(beam_size, tf.Tensor) or in_dim < beam_size:
     top_k_size = tf.minimum(beam_in * in_dim, top_k_size)
-  beam_scores, labels = tf.nn.top_k(scores_flat, k=top_k_size)
-  if top_k_size is not beam_size:
-    extra_shape = (batch_dim, beam_size - top_k_size)
-    labels = tf.concat([labels, tf.zeros(extra_shape, dtype=labels.dtype)], axis=-1)
-    beam_scores = tf.concat([beam_scores, tf.fill(extra_shape, float("-inf"))], axis=-1)
+  gold_labels, gold_scores = None, None
   if cheating_gold_targets is not None:
-    # It assumes that sorted=True in top_k, and the last entries in scores/labels are the worst.
-    # We replace them by the true labels.
     cheating_gold_targets = tf.clip_by_value(
       cheating_gold_targets, 0, in_dim - 1)  # safety, for invalid values...
     if cheating_src_beam_idx is None:
@@ -8142,8 +8339,6 @@ def beam_search(scores, beam_size, keep_beams=False, cheating_gold_targets=None,
     else:
       cheating_src_beam_idx = tf.clip_by_value(cheating_src_beam_idx, 0, beam_in - 1)  # safety
     gold_labels = cheating_src_beam_idx * in_dim + cheating_gold_targets  # (batch,)
-    gold_labels_bc = tf.expand_dims(gold_labels, axis=1)  # (batch,1)
-    labels = tf.concat([labels[:, :beam_size - 1], gold_labels_bc], axis=1)  # (batch,beam)
     if cheating_src_beam_idx.shape.ndims == 0:
       gold_scores = scores[:, cheating_src_beam_idx]  # (batch,in_dim)
     else:
@@ -8151,6 +8346,27 @@ def beam_search(scores, beam_size, keep_beams=False, cheating_gold_targets=None,
       gold_scores = tf.gather_nd(scores, indices=nd_indices(cheating_src_beam_idx))  # (batch,in_dim)
     # Note: In case the seq ended, we assume that the gold_targets are all 0, such that we get the right score.
     gold_scores = tf.gather_nd(gold_scores, indices=nd_indices(cheating_gold_targets))  # (batch,)
+    if cheating_exclusive:
+      # Now mask this in the scores, such that top_k will not select the gold target,
+      # because we later add it explicitly.
+      cheating_src_beam_idx_bc = expand_multiple_dims(
+        cheating_src_beam_idx, axes=[-1] * (2 - cheating_src_beam_idx.shape.ndims))  # [B|1,1]
+      mask_beam = tf.equal(tf.range(beam_in)[None, :], cheating_src_beam_idx_bc)  # [B|1,beam_in]
+      mask_dim = tf.equal(tf.range(in_dim)[None, :], cheating_gold_targets[:, None])  # [B,dim]
+      mask = tf.logical_and(mask_beam[:, :, None], mask_dim[:, None, :])  # [B,beam_in,dim]
+      scores = where_bc(mask, float("-inf"), scores)
+  scores_flat = tf.reshape(scores, [batch_dim, beam_in * in_dim])  # (batch, beam_in * dim)
+  # The main TF top_k call is here now:
+  beam_scores, labels = tf.nn.top_k(scores_flat, k=top_k_size)
+  if top_k_size is not beam_size:
+    extra_shape = (batch_dim, beam_size - top_k_size)
+    labels = tf.concat([labels, tf.zeros(extra_shape, dtype=labels.dtype)], axis=-1)
+    beam_scores = tf.concat([beam_scores, tf.fill(extra_shape, float("-inf"))], axis=-1)
+  if cheating_gold_targets is not None:
+    # It assumes that sorted=True in top_k, and the last entries in scores/labels are the worst.
+    # We replace them by the true labels.
+    gold_labels_bc = tf.expand_dims(gold_labels, axis=1)  # (batch,1)
+    labels = tf.concat([labels[:, :beam_size - 1], gold_labels_bc], axis=1)  # (batch,beam)
     gold_scores_bc = tf.expand_dims(gold_scores, axis=1)  # (batch,1)
     beam_scores = tf.concat([beam_scores[:, :beam_size - 1], gold_scores_bc], axis=1)  # (batch,beam)
   src_beams = labels // in_dim  # (batch, beam) -> beam_in idx
@@ -8479,45 +8695,51 @@ def get_device_attr(dev):
   :return: scalar string, eg. b'device: 2, name: GeForce GTX 1080 Ti, pci bus id: 0000:82:00.0, compute capability: 6.1'
   :rtype: tf.Tensor
   """
-  if ":XLA_" in dev:  # e.g. '/job:localhost/replica:0/task:0/device:XLA_GPU:0'
-    dev = dev.replace(":XLA_", ":")
+  # `dev` should be one of the available devices, e.g. via session.list_devices(), and exactly that,
+  # i.e. if that is XLA, it must be used as-is.
   with tf.device(dev):
     return _DeviceAttrMod.get_device_attr()
 
 
-def print_graph_output(fetches, file=sys.stdout):
+def print_graph_output(fetches, file=sys.stdout, max_depth=None):
   """
   :param tf.Operation|tf.Tensor|list[tf.Tensor|tf.Operation] fetches:
   :param typing.IO[str]|io.TextIOBase|io.StringIO file:
+  :param int|None max_depth:
   """
   if not isinstance(fetches, (list, tuple)):
     fetches = [fetches]
-  fetch_ops = [v.op if isinstance(v, tf.Tensor) else v for v in fetches]
-  assert all([isinstance(op, tf.Operation) for op in fetch_ops])
   visited = set()
 
-  def p(op, prefix="", indent=""):
+  def p(op, prefix="", indent=0):
     """
-    :param tf.Operation op:
+    :param tf.Operation|tf.Tensor op:
     :param str prefix:
-    :param str indent:
+    :param int indent:
     """
+    postfix = ""
+    if isinstance(op, tf.Tensor):
+      postfix = " [%i], shape %s" % (op.value_index, op.shape.as_list() if op.shape.ndims is not None else "<unknown>")
+      op = op.op
     assert isinstance(op, tf.Operation)
-    print("%s%s%r" % (indent, prefix, op), file=file)
+    print("%s%s%r%s" % ("  " * indent, prefix, op, postfix), file=file)
     if indent:
       if op in visited:
         return
     visited.add(op)
+    if max_depth is not None and indent > max_depth:
+      return
     if op.inputs:
       input_names = get_op_input_names(op)
       for i, x in enumerate(op.inputs):
-        p(x.op, prefix="inputs[%i] %r: " % (i, input_names[i]), indent=indent + "  ")
+        assert isinstance(x, tf.Tensor)
+        p(x, prefix="inputs[%i] %r: " % (i, input_names[i]), indent=indent + 1)
     if op.control_inputs:
       for i, x in enumerate(op.control_inputs):
-        p(x, prefix="control_inputs[%i]: " % (i,), indent=indent + "  ")
+        p(x, prefix="control_inputs[%i]: " % (i,), indent=indent + 1)
 
-  for op in fetch_ops:
-    p(op, prefix="fetch: ")
+  for fetch in fetches:
+    p(fetch, prefix="fetch: ")
 
 
 def find_ops_with_tensor_input(tensors, fetches=None, graph=None):
@@ -8575,9 +8797,11 @@ def find_ops_path_output_to_input(tensors, fetches):
   if isinstance(tensors, tf.Tensor):
     tensors = [tensors]
   assert isinstance(tensors, (list, tuple, set))
-  tensors = set(tensors)
   assert all([isinstance(x, tf.Tensor) for x in tensors])
   assert len(tensors) > 0
+  # Operate on tensor names to not have problems with different object instances.
+  tensor_names = [x.name for x in tensors]
+  tensor_names = set(tensor_names)  # make unique
   if isinstance(fetches, (tf.Operation, tf.Tensor)):
     fetches = [fetches]
   fetches = [x.op if isinstance(x, (tf.Tensor, tf.Variable)) else x for x in fetches]
@@ -8594,7 +8818,7 @@ def find_ops_path_output_to_input(tensors, fetches):
     for op in cur_wave:
       visited.add(op)
       for x in op.inputs:
-        if x in tensors:  # found a path
+        if x.name in tensor_names:  # found a path
           result = [op]
           while op not in fetches:
             op = back_pointers[op]
@@ -8994,6 +9218,98 @@ def get_positional_encoding(num_channels, length=None, position=None, min_timesc
   # (length, channels) or (batch, length, channels).
   signal = tf.pad(signal, [[0, 0]] * len(position.shape) + [[0, num_channels % 2]])
   return signal
+
+
+def get_linear_alignment_out_to_in_indices(input_lens, output_lens, pad_value=0):
+  """
+  :param tf.Tensor|list[int] input_lens: [B]
+  :param tf.Tensor|list[int] output_lens: [B]
+  :param int pad_value:
+  :return: [B,outT], mapping to input positions [0..input_len-1].
+    Examples:
+      * input_len=7, output_len=3, resulting indices [1,3,5].
+      * input_len=3, output_len=3, resulting indices [0,1,2].
+      * input_len=2, output_len=4, resulting indices [0,0,1,1].
+  :rtype: tf.Tensor
+  """
+  input_lens = tf.convert_to_tensor(input_lens)
+  output_lens = tf.convert_to_tensor(output_lens)
+  out_time_dim = tf.reduce_max(output_lens)
+  out_times = tf.expand_dims(tf.range(out_time_dim), axis=0)  # (1,outT)
+  # Add 1, such that the first index is not necessarily at 0.
+  idxs = tf.cast(out_times + 1, tf.float32)  # (1,outT)
+
+  # We want: x[0] == (input_len+1)/(output_len+1), x[output_len] == input_len + 1.
+  factors = (
+    tf.maximum(tf.cast(input_lens + 1, tf.float32), 0.0) /
+    tf.maximum(tf.cast(output_lens + 1, tf.float32), 1.0))  # (B,)
+  factors = tf.expand_dims(factors, axis=1)  # (B,1)
+  idxs = idxs * factors  # (B,outT)
+  idxs = tf.cast(tf.round(idxs), tf.int32)
+  idxs = idxs - 1  # correct from above
+  # For safety, clip.
+  idxs = tf.clip_by_value(idxs, 0, expand_dims_unbroadcast(input_lens - 1, axis=1, dim=out_time_dim))  # (B,outT)
+
+  # Although not required for the padding area, it is helpful to have 0 there.
+  # (E.g. cheating gold targets in the rec layer requires this.)
+  idxs = where_bc(tf.less(out_times, tf.expand_dims(output_lens, axis=1)), idxs, pad_value)
+  return idxs
+
+
+def get_rnnt_linear_aligned_output(
+  input_lens, targets, target_lens, blank_label_idx, pad_value=0,
+  targets_consume_time=False):
+  """
+  RNN-T (https://arxiv.org/abs/1211.3711) has an output length of input_lens + target_lens.
+  Here we create a linear alignment.
+  Examples: (B is blank.)
+    * input_len=4, targets=[a,b,c] (len 3), output=[B,a,B,b,B,c,B] (len 7).
+    * input_len=0, targets=[a,b,c] (len 3), output=[a,b,c] (len 3).
+    * input_len=4, targets=[a] (len 1), output=[B,B,a,B,B] (len 5).
+    * input_len=3, targets=[a,b] (len 2), output=[B,a,B,b,B] (len 5)
+
+  :param tf.Tensor|list[int] input_lens: [B], int32. the input (or encoder) lengths
+  :param tf.Tensor|list[list[int]] targets: [B,targetT], int32
+  :param tf.Tensor|list[int] target_lens: [B], int32. the targets length
+  :param int blank_label_idx:
+  :param int pad_value:
+  :param bool targets_consume_time: In the standard RNN-T, the target labels do not consume a time frame.
+    That is why the RNN-T label output length is input_lens + target_lens.
+    In RNA (https://www.isca-speech.org/archive/Interspeech_2017/abstracts/1705.html),
+    each target label consumes a time frame, thus the label output length is just input_lens.
+  :return: output [B,outT], output_lens [B]. The output is basically the target filled with blank in between.
+  :rtype: (tf.Tensor,tf.Tensor)
+  """
+  input_lens = tf.convert_to_tensor(input_lens)
+  targets = tf.convert_to_tensor(targets)
+  target_lens = tf.convert_to_tensor(target_lens)
+  if targets_consume_time:
+    out_lens = input_lens
+  else:
+    out_lens = input_lens + target_lens
+  out_time_dim = tf.reduce_max(out_lens)
+  batch_dim = tf.shape(out_lens)[0]
+  target_time_dim = tf.shape(targets)[1]
+
+  # Build idx to scatter_nd of out_times.
+  idxs = get_linear_alignment_out_to_in_indices(
+    input_lens=tf.maximum(out_lens, target_lens), output_lens=target_lens, pad_value=-1)  # (B,targetT)
+  idxs = idxs + 1  # make valid pad_value
+  idxs = where_bc(tf.greater(idxs, out_lens[:, None]), 0, idxs)  # fix if target_len > out_len
+
+  target_times = tf.expand_dims(tf.range(target_time_dim), axis=0)  # (1,targetT)
+  out_values = tf.concat([tf.tile([[blank_label_idx]], [batch_dim, 1]), targets], axis=1)  # (B,targetT+1)
+  # Build idx to gather_nd of out_values. Values [0..targetT].
+  idxs2 = tf.scatter_nd(
+    indices=nd_indices(idxs),
+    updates=tf.tile(target_times + 1, [batch_dim, 1]),
+    shape=[batch_dim, out_time_dim + 1])  # (B,outT+1)
+  idxs2 = idxs2[:, 1:]  # (B,outT). remove the scratch area.
+  out = tf.gather_nd(out_values, indices=nd_indices(idxs2))  # (B,outT)
+  # Although not required for the padding area, it is helpful to have 0 there.
+  # (E.g. cheating gold targets in the rec layer requires this.)
+  out = where_bc(tf.less(tf.range(out_time_dim)[None, :], out_lens[:, None]), out, pad_value)
+  return out, out_lens
 
 
 def get_non_deterministic_ops_from_graph():

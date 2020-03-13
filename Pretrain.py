@@ -426,9 +426,16 @@ class Pretrain:
   # -------------- Public interface
 
   def __str__(self):
-    return ("Pretrain construction algo %r, "
-            "number of pretrain epochs: %i (repetitions: %r)") % (
-            self._construction_algo, self.get_train_num_epochs(), self.repetitions)
+    parts = [
+      "Pretrain construction algo %r," % self._construction_algo,
+      "number of pretrain epochs: %i" % self.get_train_num_epochs()]
+    rep_set = set(self.repetitions)
+    if rep_set != {1}:
+      if len(rep_set) == 1:
+        parts.append("(repetitions: %i)" % self.repetitions[0])
+      else:
+        parts.append("(repetitions: %r)" % self.repetitions)
+    return " ".join(parts)
 
   def get_train_num_epochs(self):
     """
@@ -551,27 +558,39 @@ def demo():
   import better_exchook
   better_exchook.install()
   import rnn
-  import sys
-  if len(sys.argv) <= 1:
-    print("usage: python %s [config] [other options]" % __file__)
-    print("example usage: python %s ++pretrain default ++pretrain_construction_algo from_input" % __file__)
-  rnn.init_config(command_line_options=sys.argv[1:])
+  import argparse
+  from Util import dict_diff_str
+  arg_parser = argparse.ArgumentParser()
+  arg_parser.add_argument("config")
+  arg_parser.add_argument("--diff", action="store_true", help="show diff only")
+  arg_parser.add_argument('other_returnn_args', nargs=argparse.REMAINDER, help="config updates or so")
+  args = arg_parser.parse_args()
+  rnn.init_config(
+    config_filename=args.config,
+    command_line_options=args.other_returnn_args,
+    extra_updates={"log": []})
   # noinspection PyProtectedMember
   rnn.config._hack_value_reading_debug()
-  rnn.config.update({"log": []})
   rnn.init_log()
-  rnn.init_backend_engine()
   if not rnn.config.value("pretrain", ""):
     print("config option 'pretrain' not set, will set it for this demo to 'default'")
     rnn.config.set("pretrain", "default")
   pretrain = pretrain_from_config(rnn.config)
   print("pretrain: %s" % pretrain)
   num_pretrain_epochs = pretrain.get_train_num_epochs()
+  last_net_json = None
   from pprint import pprint
   for epoch in range(1, 1 + num_pretrain_epochs):
     print("epoch %i (of %i) network json:" % (epoch, num_pretrain_epochs))
     net_json = pretrain.get_network_json_for_epoch(epoch)
-    pprint(net_json)
+    if args.diff:
+      if last_net_json is not None:
+        print(dict_diff_str(last_net_json, net_json))
+      else:
+        print("(initial)")
+    else:
+      pprint(net_json)
+    last_net_json = net_json
   print("done.")
 
 

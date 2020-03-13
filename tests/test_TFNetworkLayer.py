@@ -162,6 +162,26 @@ def test_concat_sources_missing_dim():
     session.run(out.output.placeholder)
 
 
+def test_concat_sources_dim1():
+  with make_scope() as session:
+    net_dict = {
+      "lin1": {"class": "linear", "activation": "sigmoid", "n_out": 5},
+      "lin2": {"class": "linear", "activation": "sigmoid", "n_out": 1},
+      "concat": {"class": "copy", "from": ["lin1", "lin2"]},
+      "output": {"class": "softmax", "loss": "ce", "from": "concat"}
+    }
+    config = Config({"debug_print_layer_output_template": True})
+    config.update(dict(num_inputs=4, num_outputs=9))
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+    assert_equal(network.get_layer("concat").output.shape, (None, 6))
+    out = network.get_default_output_layer()
+    assert out.output.shape == (None, 9)
+    feed_dict = make_feed_dict(network.extern_data.data.values(), same_time=True)
+    session.run(tf.global_variables_initializer())
+    session.run(out.output.placeholder, feed_dict=feed_dict)
+
+
 def test_LinearLayer_batch_feature_major():
   with make_scope() as session:
     network = TFNetwork(config=Config(), extern_data=ExternData(), train_flag=True)
@@ -452,6 +472,44 @@ def test_combine_layer_net_construct():
     network.construct_from_dict(net_dict)
 
 
+def test_CombineLayer_simple_add():
+  with make_scope() as session:
+    net_dict = {
+      "lin1": {"class": "linear", "activation": "sigmoid", "n_out": 5},
+      "lin2": {"class": "linear", "activation": "sigmoid", "n_out": 5},
+      "combine": {"class": "combine", "kind": "add", "from": ["lin1", "lin2"]},
+      "output": {"class": "softmax", "loss": "ce", "from": "combine"}
+    }
+    config = Config({"debug_print_layer_output_template": True})
+    config.update(dict(num_inputs=4, num_outputs=9))
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+    out = network.get_default_output_layer()
+    feed_dict = make_feed_dict(network.extern_data.data.values(), same_time=True)
+    session.run(tf.global_variables_initializer())
+    session.run(out.output.placeholder, feed_dict=feed_dict)
+
+
+def test_CombineLayer_broadcast():
+  with make_scope() as session:
+    net_dict = {
+      "lin1": {"class": "linear", "activation": "sigmoid", "n_out": 5},
+      "lin2": {"class": "linear", "activation": "sigmoid", "n_out": 1},
+      "combine": {"class": "combine", "kind": "add", "from": ["lin1", "lin2"]},
+      "output": {"class": "softmax", "loss": "ce", "from": "combine"}
+    }
+    config = Config({"debug_print_layer_output_template": True})
+    config.update(dict(num_inputs=4, num_outputs=9))
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+    assert_equal(network.get_layer("combine").output.shape, (None, 5))
+    out = network.get_default_output_layer()
+    assert out.output.shape == (None, 9)
+    feed_dict = make_feed_dict(network.extern_data.data.values(), same_time=True)
+    session.run(tf.global_variables_initializer())
+    session.run(out.output.placeholder, feed_dict=feed_dict)
+
+
 def test_CombineLayer_different_batch_axis():
   # ["base:enc_ctx", "weight_feedback", "s_transformed"]
   # base:enc_ctx: Data(name='enc_ctx_output', shape=(None, 14), batch_dim_axis=1)
@@ -680,15 +738,15 @@ def test_constant_layer():
       "num_outputs": 3,
       "num_inputs": 2,
       "network": {
-        "output": {"class": "constant", "value": 42, "from": []}
+        "output": {"class": "constant", "value": 42}
       }
     })
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_dict["network"])
     out = network.get_default_output_layer(must_exist=True)
     v = session.run(out.output.placeholder)
-    assert_equal(v.shape, (1,))  # (batch,), where batch==1 for broadcasting
-    assert_equal(v[0], 42)
+    assert_equal(v.shape, ())  # (batch,), where batch==1 for broadcasting
+    assert_equal(v, 42)
 
 
 def test_compare_layer():
@@ -699,17 +757,17 @@ def test_compare_layer():
       "num_outputs": 3,
       "num_inputs": 2,
       "network": {
-        "const": {"class": "constant", "value": 3, "from": []},
-        "output": {"class": "compare", "from": ["const"], "value": 3}
+        "const": {"class": "constant", "value": 3},
+        "output": {"class": "compare", "from": "const", "value": 3}
       }
     })
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_dict["network"])
     out = network.get_default_output_layer(must_exist=True)
     v = session.run(out.output.placeholder)
-    assert_equal(v.shape, (1,))  # (batch,), where batch==1 for broadcasting
+    assert_equal(v.shape, ())  # (batch,), where batch==1 for broadcasting
     assert_equal(v.dtype, numpy.dtype("bool"))
-    assert_equal(v[0], True)
+    assert_equal(v, True)
 
 
 def test_shift_layer():
@@ -1031,6 +1089,50 @@ def test_MergeDimsLayer_simple_feat():
     assert isinstance(out_v, numpy.ndarray)
     assert out_v.shape == (n_batch, n_time, n_in1 * n_in2)
     numpy.testing.assert_almost_equal(out_v, in_v.reshape(out_v.shape))
+
+
+def test_SwitchLayer_const_no_time():
+  config = Config({
+    "extern_data": {
+      "data": {"dim": 3, "sparse": True, "shape": ()},
+    },
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "input_eq_0": {"class": "compare", "from": "data", "value": 0},  # (B,)
+      "const0": {"class": "constant", "value": 0},
+      "const1": {"class": "constant", "value": 1},
+      "switch": {"class": "switch", "condition": "input_eq_0", "true_from": "const1", "false_from": "const0"},
+      "output": {"class": "copy", "from": "switch"}})
+    net.print_network_info()
+    feed_dict = make_feed_dict(net.extern_data.data.values())
+    out = session.run(net.get_default_output_layer().output.placeholder, feed_dict=feed_dict)
+    print(out)
+
+
+def test_SwitchLayer_const():
+  config = Config({
+    "extern_data": {
+      "data": {"dim": 3, "sparse": True},
+    },
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "input_eq_0": {"class": "compare", "from": "data", "value": 0},  # (B,T)
+      "const0": {"class": "constant", "value": 0},
+      "const1": {"class": "constant", "value": 1},
+      "switch": {
+        "class": "switch", "condition": "input_eq_0", "true_from": "const1", "false_from": "const0"
+        },
+      "output": {"class": "copy", "from": "switch"}})
+    net.print_network_info()
+    feed_dict = make_feed_dict(net.extern_data.data.values())
+    out = session.run(net.get_default_output_layer().output.placeholder, feed_dict=feed_dict)
+    print(out)
 
 
 def test_CondLayer_subnetwork_train():

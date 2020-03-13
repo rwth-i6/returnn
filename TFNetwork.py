@@ -343,7 +343,7 @@ class TFNetwork(object):
     self.recurrent = False
     self._assigner_cache = {}  # type: typing.Dict[tf.Variable,VariableAssigner]
     self.concat_sources_dropout_cache = {}  # type: typing.Dict[typing.Tuple[typing.Tuple[LayerBase,...],float,typing.Optional[typing.Tuple[typing.Optional[int],...]]],Data]  # nopep8
-    self._batch_dim = None  # see get_batch_dim
+    self._batch_dim = None  # see get_data_batch_dim
     self._merge_all_summaries = None  # type: typing.Optional[tf.Tensor]
     self._graph_reset_callbacks = []  # type: typing.List[typing.Callable]
 
@@ -1212,24 +1212,30 @@ class TFNetwork(object):
             ls.append(param)
     return ls
 
-  def declare_train_params(self, hidden_layer_selection=None, with_output=None):
+  def declare_train_params(self, hidden_layer_selection=None, with_output=None, global_trainable=None):
     """
     :param list[str]|None hidden_layer_selection:
     :param bool|None with_output:
+    :param bool|None global_trainable:
     """
-    if hidden_layer_selection is None:
-      hidden_layer_selection = [name for (name, layer) in self.layers.items() if not layer.is_output_layer()]
+    if global_trainable is None:
+      global_trainable = self.layers_desc.get("#trainable", True)
+    if global_trainable:
+      if hidden_layer_selection is None:
+        hidden_layer_selection = [name for (name, layer) in self.layers.items() if not layer.is_output_layer()]
+      else:
+        hidden_layer_selection = list(hidden_layer_selection)
+      if with_output is None:
+        with_output = True
+      if with_output:
+        hidden_layer_selection += [name for (name, layer) in self.layers.items() if layer.is_output_layer()]
+      hidden_layer_selection = set(hidden_layer_selection)
     else:
-      hidden_layer_selection = list(hidden_layer_selection)
-    if with_output is None:
-      with_output = True
-    if with_output:
-      hidden_layer_selection += [name for (name, layer) in self.layers.items() if layer.is_output_layer()]
-    hidden_layer_selection = set(hidden_layer_selection)
+      hidden_layer_selection = set()
     self._selected_train_layers = sorted(hidden_layer_selection)
     if self.extra_nets:
       for _, extra_net in self.extra_nets.items():
-        extra_net.declare_train_params()  # select all, currently...
+        extra_net.declare_train_params(global_trainable=global_trainable)  # select all, currently...
 
   def get_num_params(self):
     """
@@ -1641,7 +1647,10 @@ class TFNetwork(object):
         if layer not in layers:
           layers.append(layer)
     if not layers:
-      if self.parent_layer:
+      # Use parent layer if available.
+      # Note that we should not mix layers from different context frames,
+      # e.g. inside and outside a rec loop, as the search choices cannot be compared.
+      if self.parent_layer and not self.is_inside_rec_layer():
         # noinspection PyProtectedMember
         return self.parent_layer.network._get_all_search_choices(sources=self.parent_layer.get_dep_layers())
       return []
@@ -1659,9 +1668,10 @@ class TFNetwork(object):
           # Get corresponding "prev:..." layers.
           from pprint import pformat
           assert all([l in _normalized_to_layer for l in normalized_choices]), "\n".join([
-            "No cur -> prev mapping for some layers.", "Base: %s" % base_search_choice,
-            "Prev choices:", pformat(layers),
-            "Cur choices:", pformat(normalized_choices), "Mapping:", pformat(_normalized_to_layer)])
+            "No cur -> prev mapping for some layers.", "",
+            "Base: %s" % base_search_choice, "", "Cur (normalized) base: %s" % normalized_base, "",
+            "Prev choices:", pformat(layers), "", "Cur (normalized) choices:", pformat(normalized_choices), "",
+            "Mapping:", pformat(_normalized_to_layer), ""])
           layers = [_normalized_to_layer[l] for l in normalized_choices]
           _layer_to_search_choices[base_search_choice] = layers
     return layers
@@ -1716,13 +1726,14 @@ class TFNetwork(object):
     :rtype: int|tf.Tensor
     """
     from TFUtil import get_shape_dim, reuse_name_scope_of_tensor
+    if self._batch_dim is not None:
+      return self._batch_dim
     # First check parent because there we might get the true batch dim.
+    # (Do not check parent_layer, because that potentially includes a beam.)
     if self.parent_net:
       return self.parent_net.get_data_batch_dim()
     if self.extra_parent_net:
       return self.extra_parent_net.get_data_batch_dim()
-    if self._batch_dim is not None:
-      return self._batch_dim
     for key, data in self.extern_data.get_sorted_data_items():
       assert isinstance(data, Data)
       if data.available_for_inference:
@@ -1864,10 +1875,18 @@ class TFNetwork(object):
     (which would also lead to an error, because it cannot be serialized).
     Note: Currently these callbacks might get called multiple times,
     so make sure that this is not a problem.
+    Also make sure that the network/session is still in a valid state after this has been called,
+    e.g. such that further session runs would still work correctly.
 
     :param function cb:
     """
     self.get_root_network()._graph_reset_callbacks.append(cb)
+
+  def get_graph_reset_callbacks(self):
+    """
+    :rtype: list[()->None]
+    """
+    return self._graph_reset_callbacks
 
   def call_graph_reset_callbacks(self):
     """
@@ -2256,14 +2275,19 @@ class CannotHandleUndefinedSourcesException(Exception):
   Raised when some layer gets None (undefined) source(s) (because e.g. in RecLayer template construction),
   and cannot handle it (e.g. cannot infer the out_type in that case).
   """
-  def __init__(self, layer_name, layer_desc):
+  def __init__(self, layer_name, layer_desc, extended_info_str=None):
     """
     :param str layer_name:
     :param dict[str] layer_desc:
+    :param str|None extended_info_str:
     """
     from pprint import pformat
-    super(CannotHandleUndefinedSourcesException, self).__init__(
-      "%r: cannot handle undefined sources without defined out_type.\n%s" % (layer_name, pformat(layer_desc)))
+    info_strs = [
+      "%r: cannot handle undefined sources without defined out_type." % layer_name,
+      pformat(layer_desc)]
+    if extended_info_str:
+      info_strs.append(extended_info_str)
+    super(CannotHandleUndefinedSourcesException, self).__init__("\n".join(info_strs))
     self.layer_name = layer_name
     self.layer_desc = layer_desc
 
@@ -2510,6 +2534,7 @@ class CustomCheckpointLoader:
   """
 
   def __init__(self, filename, saveable_params, params_prefix="", load_if_prefix="", ignore_missing=False,
+               ignore_params=(), ignore_params_prefixes=(),
                network=None):
     """
     :param str filename: filepattern for NewCheckpointReader
@@ -2519,6 +2544,8 @@ class CustomCheckpointLoader:
       the variables in the file are expected to have the same name but without this string.
     :param bool ignore_missing: any vars in the model, which are not found in the checkpoint, will be ignored.
       however, if there is no single var in the checkpoint, this is still an error.
+    :param typing.Container[str] ignore_params: these param (by name) will not be loaded
+    :param typing.Iterable[str] ignore_params_prefixes: these param (by prefix name) will not be loaded
     :param TFNetwork network:
     """
     self.filename = filename
@@ -2527,15 +2554,24 @@ class CustomCheckpointLoader:
     self.params_prefix = params_prefix
     self.load_if_prefix = load_if_prefix
     self.saveable_params = []
+    count = 0
     for param in saveable_params:
+      param_name = self._get_param_name(param, assert_load_if_prefix_match=False)
+      if load_if_prefix and param_name is None:
+        continue
+      if param_name in ignore_params:
+        print("%s: Ignoring variable %s" % (self, param), file=log.v3)
+        continue
+      if any([param_name.startswith(prefix) for prefix in ignore_params_prefixes]):
+        print("%s: Ignoring variable %s" % (self, param), file=log.v3)
+        continue
+      count += 1
       custom_post_init = getattr(param, "custom_post_init", None)
       if custom_post_init:
-        print("Not loading pre-initialized variables %s" % param, file=log.v2)
-        continue
-      if load_if_prefix and self._get_param_name(param, assert_load_if_prefix_match=False) is None:
+        print("%s: Not loading pre-initialized variable %s" % (self, param), file=log.v3)
         continue
       self.saveable_params.append(param)
-    assert self.saveable_params, "no saveable vars"
+    assert count > 0, "%s: no saveable vars" % self
     self.reader = tf.train.NewCheckpointReader(filename)
     self.net_vars = [v for v in self.saveable_params if isinstance(v, tf.Variable)]
     self.net_saveables = [v for v in self.saveable_params if not isinstance(v, tf.Variable)]

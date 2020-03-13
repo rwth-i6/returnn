@@ -173,7 +173,12 @@ def load_hyps_refs(filename):
   :return: dict of seq_tag -> ref
   :rtype: dict[str,str]
   """
-  content = eval(open(filename).read())
+  if filename.endswith(".gz"):
+    import gzip
+    content_str = gzip.open(filename, "rt").read()
+  else:
+    content_str = open(filename).read()
+  content = eval(content_str)
   # See dump-dataset-raw-strings.py.
   # We expect that it is stored as a dict.
   assert isinstance(content, dict)

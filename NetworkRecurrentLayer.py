@@ -733,7 +733,7 @@ class RecurrentUnitLayer(Layer):
     for x_t, m, W in zip(self.sources, self.masks, self.W_in):
       if x_t.layer_class == 'source':
         RecurrentUnitLayer.last_segment_flag = T.all(T.eq(x_t.output[-1],T.ones_like(x_t.output[0])))
-        self.index = T.switch(RecurrentUnitLayer.last_segment_flag, self.index, T.set_subtensor(self.index[-1],T.zeros_like(self.index[-1])))
+        self.index = T.switch(RecurrentUnitLayer.last_segment_flag, T.set_subtensor(self.index[-1],T.zeros_like(self.index[-1])), self.index)
       if x_t.attrs['sparse']:
         if x_t.output.ndim == 3: out_dim = x_t.output.shape[2]
         elif x_t.output.ndim == 2: out_dim = 1

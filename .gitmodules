@@ -14,3 +14,6 @@
 	path = extern/ParseOggVorbis
 	url = https://github.com/albertz/ParseOggVorbis.git
 	branch = master
+[submodule "extern/HawkAaronWarpTransducer/warp-transducer"]
+	path = extern/HawkAaronWarpTransducer/warp-transducer
+	url = https://github.com/HawkAaron/warp-transducer.git

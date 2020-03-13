@@ -105,6 +105,11 @@ class BackendEngine:
   TensorFlow = 1
   selectedEngine = None  # type: typing.Optional[int]  # One of the possible engines.
 
+  class CannotSelectEngine(Exception):
+    """
+    Cannot select backend engine
+    """
+
   @classmethod
   def select_engine(cls, engine=None, config=None):
     """
@@ -147,7 +152,7 @@ class BackendEngine:
       return cls.TensorFlow
     except ImportError:
       pass
-    raise Exception("Neither Theano nor TF available.")
+    raise cls.CannotSelectEngine("Neither Theano nor TF available.")
 
   @classmethod
   def get_selected_engine(cls):
@@ -724,7 +729,7 @@ def pretty_print(obj, limit=None):
   if limit is None:
     limit = _pretty_print_limit
   if len(s) > limit:
-    s = s[:limit - 3]
+    s = s[:int(limit) - 3]
     s += "..."
   extra_info = _pp_extra_info(obj)
   if extra_info != "":
@@ -945,16 +950,18 @@ def obj_diff_str(self, other):
       return d.keys()
     return None
 
+  class _NotSpecified:
+    def __repr__(self):
+      return "<not-specified>"
+  not_specified = _NotSpecified()
+
   self_attribs = _obj_attribs(self)
   other_attribs = _obj_attribs(other)
   if self_attribs is None or other_attribs is None:
     return "self: %r, other: %r" % (self, other)
   for attrib in sorted(set(self_attribs).union(other_attribs)):
-    if attrib not in self_attribs or attrib not in other_attribs:
-      s += ["attrib %r not on both" % attrib]
-      continue
-    value_self = getattr(self, attrib)
-    value_other = getattr(other, attrib)
+    value_self = getattr(self, attrib, not_specified)
+    value_other = getattr(other, attrib, not_specified)
     if isinstance(value_self, list):
       if not isinstance(value_other, list):
         s += ["attrib %r self is list but other is %r" % (attrib, type(value_other))]
@@ -3177,7 +3184,7 @@ class NativeCodeCompiler(object):
     assert isinstance(res, dict)
     return res
 
-  _relevant_info_keys = ("code_version", "code_hash", "c_macro_defines", "ld_flags")
+  _relevant_info_keys = ("code_version", "code_hash", "c_macro_defines", "ld_flags", "compiler_bin")
 
   def _make_info_dict(self):
     """
@@ -3190,6 +3197,7 @@ class NativeCodeCompiler(object):
       "code_hash": self._code_hash,
       "c_macro_defines": self.c_macro_defines,
       "ld_flags": self.ld_flags,
+      "compiler_bin": self._get_compiler_bin(),
     }
 
   def _make_code_hash(self):
@@ -3270,6 +3278,20 @@ class NativeCodeCompiler(object):
     """
     return opts
 
+  @classmethod
+  def _transform_ld_flag(cls, opt):
+    """
+    :param str opt:
+    :rtype: str
+    """
+    if sys.platform == "darwin":
+      # It seems some versions of MacOS ld cannot handle the `-l:filename` argument correctly.
+      # E.g. TensorFlow 1.14 incorrectly uses this.
+      # https://github.com/tensorflow/tensorflow/issues/30564
+      if opt.startswith("-l:lib") and opt.endswith(".dylib"):
+        return "-l%s" % opt[len("-l:lib"):-len(".dylib")]
+    return opt
+
   def _maybe_compile_inner(self):
     # Directory should be created by the locking mechanism.
     assert os.path.exists(self._mod_path)
@@ -3288,7 +3310,7 @@ class NativeCodeCompiler(object):
     common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines.items())]
     common_opts += ["-g"]
     opts = common_opts + [self._c_filename, "-o", self._so_filename]
-    opts += self.ld_flags
+    opts += list(map(self._transform_ld_flag, self.ld_flags))
     cmd_bin = self._get_compiler_bin()
     cmd_args = [cmd_bin] + opts
     from subprocess import Popen, PIPE, STDOUT, CalledProcessError

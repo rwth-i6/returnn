@@ -11,6 +11,13 @@ import tensorflow as tf
 returnn_dir = os.path.dirname(os.path.abspath(__file__))
 kenlm_dir = returnn_dir + "/extern/kenlm"
 
+
+def kenlm_checked_out():
+  """
+  :rtype: bool
+  """
+  return os.path.exists("%s/lm/test.arpa" % kenlm_dir)
+
 # https://www.tensorflow.org/guide/extend/op
 # Also see TFUitl.TFArrayContainer for TF resources.
 # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/tensor.h
@@ -28,6 +35,8 @@ _src_code = """
 #include "tensorflow/core/platform/macros.h"
 #include "tensorflow/core/platform/mutex.h"
 #include "tensorflow/core/platform/types.h"
+#include "tensorflow/core/public/version.h"
+
 
 using namespace tensorflow;
 
@@ -151,7 +160,11 @@ struct KenLmModel : public ResourceBase {
     return total_score * logf(10.);
   }
 
-  string DebugString() override {
+  string DebugString()
+#if (TF_MAJOR_VERSION >= 1 && TF_MINOR_VERSION >= 14)
+const
+#endif
+  override {
     return strings::StrCat("KenLmModel[", filename_, "]");
   }
 
@@ -351,6 +364,7 @@ def get_tf_mod(verbose=False):
   # https://github.com/kpu/kenlm/blob/master/compile_query_only.sh
 
   # Collect files.
+  assert kenlm_checked_out(), "submodule in %r not checked out?" % kenlm_dir
   files = glob('%s/util/*.cc' % kenlm_dir)
   files += glob('%s/lm/*.cc' % kenlm_dir)
   files += glob('%s/util/double-conversion/*.cc' % kenlm_dir)

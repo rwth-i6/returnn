@@ -24,7 +24,7 @@ from Config import Config
 import argparse
 import Util
 from Util import NotSpecified
-from TFUtil import Data
+from TFUtil import Data, CollectionKeys
 from TFNetwork import TFNetwork
 from TFNetworkLayer import LayerBase, register_layer_class, WrappedInternalLayer
 from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell, ChoiceLayer
@@ -197,8 +197,9 @@ class RecStepByStepLayer(RecLayer):
     Represents a state variable, i.e. either a state, a choice, or encoder state, etc.
     """
 
-    def __init__(self, name, initial_value, data_shape):
+    def __init__(self, parent, name, initial_value, data_shape):
       """
+      :param RecStepByStepLayer parent:
       :param str name:
       :param tf.Tensor|None initial_value:
         initial_value might have dim 1 in variable dimensions (which are not the batch-dim-axis),
@@ -208,6 +209,7 @@ class RecStepByStepLayer(RecLayer):
         and what we return by self.read().
         If it is not a scalar, and batch-dim-axis > 0, the created variable will still be in batch-major.
       """
+      self.parent = parent
       self.name = name
       self.orig_data_shape = data_shape
       self.var_data_shape = data_shape.copy_as_batch_major() if data_shape.batch_dim_axis is not None else data_shape
@@ -236,7 +238,7 @@ class RecStepByStepLayer(RecLayer):
       self.final_value = None  # type: typing.Optional[tf.Tensor]
 
     def __repr__(self):
-      return "<StateVar %r>" % self.name
+      return "<StateVar %r, shape %r, initial %r>" % (self.name, self.var_data_shape, self.orig_initial_value)
 
     def set_final_value(self, final_value):
       """
@@ -275,6 +277,13 @@ class RecStepByStepLayer(RecLayer):
       """
       assert self.final_value is not None
       value = self.final_value
+      from TFUtil import find_ops_path_output_to_input
+      feed_tensors = []
+      for data in self.parent.network.extern_data.data.values():
+        feed_tensors.append(data.placeholder)
+        feed_tensors.extend(data.size_placeholder.values())
+      path = find_ops_path_output_to_input(fetches=value, tensors=feed_tensors)
+      assert not path, "There should be no path from extern data to this final op value, but there is: %r" % (path,)
       if self.orig_data_shape.batch_dim_axis not in (0, None):
         x = self.orig_data_shape.copy()
         x.placeholder = value
@@ -348,7 +357,7 @@ class RecStepByStepLayer(RecLayer):
       # initial_value might have dim 1 in variable dimensions (which are not the batch-dim-axis),
       # see get_rec_initial_output, which should be fine for broadcasting.
       initial_value.set_shape(data_shape.batch_shape)
-    var = self.StateVar(name=name, initial_value=initial_value, data_shape=data_shape)
+    var = self.StateVar(parent=self, name=name, initial_value=initial_value, data_shape=data_shape)
     self.state_vars[name] = var
     return var.read()
 
@@ -428,6 +437,18 @@ class RecStepByStepLayer(RecLayer):
         k: self.set_state_vars_final_values_recursive(name_prefix="%s_%s" % (name_prefix, k), final_values=v)
         for k, v in final_values.items()}
     raise TypeError("unhandled type %r" % (final_values,))
+
+  def get_batch_dim_from_state(self):
+    """
+    :return: batch-dim, from some (any) state var, scalar, int32
+    :rtype: tf.Tensor
+    """
+    for name, v in sorted(self.state_vars.items()):
+      assert isinstance(v, RecStepByStepLayer.StateVar)
+      if v.var_data_shape.batch_dim_axis is not None:
+        with tf.name_scope("batch_dim_from_state_%s" % v.name):
+          return tf.shape(v.var)[v.var_data_shape.batch_dim_axis]
+    raise Exception("None of the state vars do have a batch-dim: %s" % self.state_vars)
 
   def add_stochastic_var(self, name):
     """
@@ -603,6 +624,13 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
         name_prefix="state", initial_values=net_vars, data_shape=(prev_outputs_data, None))
     # We are ignoring acc_tas (the tensor arrays).
 
+    # Some layers make explicit use of the (global data) batch-dim,
+    # which they can get via TFNetwork.get_data_batch_dim().
+    # This will add a dependency on the external data, which we want to avoid.
+    # We can avoid that by taking the batch dim instead from one of the other states.
+    # Note that this would be wrong in beam search.
+    self.net._batch_dim = rec_layer.get_batch_dim_from_state()
+
     with tf.name_scope("cond"):
       rec_layer.create_state_var("cond", tf.constant(True))
       res = cond(i, net_vars, acc_tas, seq_len_info)
@@ -633,7 +661,7 @@ def main(argv):
   argparser.add_argument("--summaries_tensor_name", help="create Tensor for tf.summary.merge_all()")
   argparser.add_argument("--rec_step_by_step", help="make step-by-step graph for this rec layer (eg. 'output')")
   argparser.add_argument("--rec_step_by_step_output_file", help="store meta info for rec_step_by_step (JSON)")
-  argparser.add_argument("--output_file", help='output pb, pbtxt or meta, metatxt file')
+  argparser.add_argument("--output_file", help='allowed extensions: pb, pbtxt, meta, metatxt, logdir')
   argparser.add_argument("--output_file_model_params_list", help="line-based, names of model params")
   argparser.add_argument("--output_file_state_vars_list", help="line-based, name of state vars")
   args = argparser.parse_args(argv[1:])
@@ -671,6 +699,10 @@ def main(argv):
 
     tf.group(*network.get_post_control_dependencies(), name="post_control_dependencies")
 
+    # Do some cleanup of collections which do not contain tensors or operations,
+    # because the tf.train.import_meta_graph code might fail otherwise.
+    tf.get_collection_ref(CollectionKeys.RETURNN_LAYERS).clear()
+
     if args.summaries_tensor_name:
       summaries_tensor = tf.summary.merge_all()
       assert isinstance(summaries_tensor, tf.Tensor), "no summaries in the graph?"
@@ -691,13 +723,19 @@ def main(argv):
     if args.output_file:
       filename = args.output_file
       _, ext = os.path.splitext(filename)
-      assert ext in [".pb", ".pbtxt", ".meta", ".metatxt"], 'filename %r extension invalid' % filename
-      print("Write graph to file:", filename)
-      graph_io.write_graph(
-        graph_def,
-        logdir=os.path.dirname(filename),
-        name=os.path.basename(filename),
-        as_text=ext.endswith("txt"))
+      if ext == ".logdir":
+        print("Write TF events to logdir:", filename)
+        writer = tf.summary.FileWriter(logdir=filename)
+        writer.add_graph(graph)
+        writer.flush()
+      else:
+        assert ext in [".pb", ".pbtxt", ".meta", ".metatxt"], 'filename %r extension invalid' % filename
+        print("Write graph to file:", filename)
+        graph_io.write_graph(
+          graph_def,
+          logdir=os.path.dirname(filename),
+          name=os.path.basename(filename),
+          as_text=ext.endswith("txt"))
     else:
       print("Use --output_file if you want to store the graph.")
 
@@ -710,7 +748,6 @@ def main(argv):
 
     if args.output_file_state_vars_list:
       print("Write state var list to:", args.output_file_state_vars_list)
-      from TFUtil import CollectionKeys
       with open(args.output_file_state_vars_list, "w") as f:
         for param in tf.get_collection(CollectionKeys.STATE_VARS):
           assert param.name[-2:] == ":0"

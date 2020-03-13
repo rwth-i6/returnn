@@ -245,6 +245,8 @@ def main():
   arg_parser.add_argument("--raw_sample_rate", help="sample rate of audio input", type=int, default=8000)
   arg_parser.add_argument("--feat_sample_rate", help="sample rate of features for sync", type=int, default=100)
   arg_parser.add_argument("--ffmpeg_loglevel", help="loglevel for ffmpeg calls", type=str, default="info")
+  arg_parser.add_argument("--ffmpeg_acodec", help="force audio codec for ffmpeg calls", type=str)
+  arg_parser.add_argument("--number_of_channels", help="force number of channels for output audio", type=int, default=0)
   arg_parser.add_argument("--output", help="output zip filename (if empty, dummy run)", required=True)
   args = arg_parser.parse_args()
   subset_segment_list = None
@@ -319,8 +321,13 @@ def main():
     if args.sprint_cache:
       wav_tmp_filename = "%s/%s/%s_%s.wav" % (dest_dirname, rec_name, seq.start_time, seq.end_time)
       os.makedirs(os.path.dirname(wav_tmp_filename), exist_ok=True)
-      cmd = ["ffmpeg", "-i", rec_filename, "-ss", str(seq.start_time), "-t", str(duration), wav_tmp_filename,
-             "-loglevel", args.ffmpeg_loglevel]
+      cmd = ["ffmpeg"]
+      if args.ffmpeg_acodec:
+        cmd += ["-acodec", args.ffmpeg_acodec]  # https://trac.ffmpeg.org/ticket/2810
+      cmd += ["-i", rec_filename, "-ss", str(seq.start_time), "-t", str(duration)]
+      if args.number_of_channels > 0:
+        cmd += ["-ac", str(args.number_of_channels)]
+      cmd += [wav_tmp_filename, "-loglevel", args.ffmpeg_loglevel]
       print("$ %s" % " ".join(cmd))
       check_call(cmd)
       import soundfile  # pip install pysoundfile
@@ -343,7 +350,12 @@ def main():
       if os.path.exists(dest_filename):
         print("already exists, delete: %s" % os.path.basename(dest_filename))
         os.remove(dest_filename)
-      cmd = ["ffmpeg", "-i", source_filename]
+      cmd = ["ffmpeg"]
+      if args.ffmpeg_acodec:
+        cmd += ["-acodec", args.ffmpeg_acodec]  # https://trac.ffmpeg.org/ticket/2810
+      cmd += ["-i", source_filename]
+      if args.number_of_channels > 0:
+        cmd += ["-ac", str(args.number_of_channels)]
       if start_time:
         cmd += ["-ss", str(start_time)]
       if limit_duration:

@@ -391,15 +391,6 @@ def test_engine_train_grad_noise_sparse():
   # You might see "Converting sparse IndexedSlices to a dense Tensor of unknown shape."
   # but that is normally related to sth else.
 
-  def wrapped_slice_to_tensor(value, dtype=None, name=None, as_ref=False):
-    print("wrapped_slice_to_tensor:", value)
-    #assert "flatten_with_seq_len_mask" in value.name
-    from tensorflow.python.ops import gradients_impl
-    return gradients_impl._IndexedSlicesToTensor(value, dtype=dtype, name=name, as_ref=as_ref)
-
-  from tensorflow.python.framework import ops
-  ops.register_tensor_conversion_function(tf.IndexedSlices, wrapped_slice_to_tensor, priority=1)
-
   # Anyway, for now, just try to trigger relevant code,
   # ie. in add_scaled_noise_to_gradients(),
   # and don't really check whether it works.
@@ -2579,6 +2570,64 @@ def test_preload_from_files_ignore_missing():
   engine.finalize()
 
 
+# Test `init_network_from_config` for eval when both `model_epoch_filename` and `preload_from_files` are not None.
+def test_init_network_from_config_preload_from_files_eval():
+  import tempfile
+  model_tmp_dir = tempfile.mkdtemp("-tmp-checkpoint")
+  # Name ending with ".042" for `save_params_to_file` to generate a model checkpoint for epoch 42.
+  # The same files are also used for pre-loading.
+  preload_model_filename = model_tmp_dir + "/model.042"
+  with make_scope() as session:
+    config = Config()
+    n_in, n_hidden, n_out = 2, 5, 3
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "l1": {"class": "linear", "activation": None, "n_out": n_hidden},
+        "output": {"class": "linear", "activation": None, "n_out": n_out, "from": ["l1"]}
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.initialize_params(session)
+    network.save_params_to_file(filename=preload_model_filename, session=session)
+
+  config = Config()
+  config.update({
+    "num_outputs": n_out,
+    "num_inputs": n_in,
+    "network": {
+      "l1": {"class": "linear", "activation": None, "n_out": n_hidden},
+      "main_l1": {"class": "linear", "activation": None, "n_out": n_hidden},
+      "add": {"class": "eval", "eval": "source(0) + source(1)", "n_out": n_hidden, "from": ["l1", "main_l1"]},
+      "output": {"is_output_layer": True, "class": "linear", "activation": None, "n_out": n_out, "from": ["add"]},
+    },
+    "preload_from_files": {
+      'train_base': {
+        'filename': preload_model_filename,  # Pre-load from an arbitrary file.
+        'prefix': 'main_',
+      }
+    },
+    "task": "eval",
+    "load_epoch": 42,  # Load from a checkpoint.
+    "device": "cpu",
+    "batch_size": 50,
+    "model": model_tmp_dir + "/model",
+  })
+
+  from GeneratingDataset import DummyDataset
+  from TFEngine import Engine
+  seq_len = 5
+  n_data_dim = n_in
+  n_classes_dim = n_out
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=None, dev_data=cv_data, eval_data=None)
+  engine.finalize()
+
+
 def test_TikhonovRegularizationLayer():
   """
   Tests :class:`TikhonovRegularizationLayer`.
@@ -2667,7 +2716,7 @@ def test_grad_summaries():
     """
     :param bytes summary_proto: protobuf for summaries
     """
-    from tensorboard.compat.proto import summary_pb2
+    from tensorflow.core.framework import summary_pb2
     summaries = summary_pb2.Summary.FromString(summary_proto)
     summary_list = [val.tag for val in summaries.value]
     assert any([v.startswith("grads/") for v in summary_list])

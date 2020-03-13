@@ -53,7 +53,7 @@ class GeneratingDataset(Dataset):
     """
     super(GeneratingDataset, self).init_seq_order(epoch=epoch)
     assert not seq_list, "predefined order doesn't make sense for %s" % self.__class__.__name__
-    self.random.seed(self.fixed_random_seed or epoch or 1)
+    self.random.seed(self.fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch))
     self._num_timesteps = 0
     self.reached_final_seq = False
     self.expected_load_seq_start = 0
@@ -920,7 +920,7 @@ class ExtractAudioFeatures:
                window_len=0.025, step_len=0.010,
                num_feature_filters=None, with_delta=False, norm_mean=None, norm_std_dev=None,
                features="mfcc", feature_options=None, random_permute=None, random_state=None, raw_ogg_opts=None,
-               post_process=None,
+               pre_process=None, post_process=None,
                sample_rate=None,
                peak_normalization=True, preemphasis=None, join_frames=None):
     """
@@ -930,12 +930,13 @@ class ExtractAudioFeatures:
     :param bool|int with_delta:
     :param numpy.ndarray|str|int|float|None norm_mean: if str, will interpret as filename
     :param numpy.ndarray|str|int|float|None norm_std_dev: if str, will interpret as filename
-    :param str features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank", "raw", "raw_ogg"
+    :param str|function features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank", "raw", "raw_ogg"
     :param dict[str]|None feature_options: provide additional parameters for the feature function
     :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
     :param numpy.random.RandomState|None random_state:
     :param dict[str]|None raw_ogg_opts:
-    :param function post_process:
+    :param function|None pre_process:
+    :param function|None post_process:
     :param int|None sample_rate:
     :param bool peak_normalization: set to False to disable the peak normalization for audio files
     :param float|None preemphasis: set a preemphasis filter coefficient
@@ -974,6 +975,7 @@ class ExtractAudioFeatures:
     self.random_state = random_state
     self.features = features
     self.feature_options = feature_options
+    self.pre_process = pre_process
     self.post_process = post_process
     self.sample_rate = sample_rate
     self.raw_ogg_opts = raw_ogg_opts
@@ -1050,6 +1052,10 @@ class ExtractAudioFeatures:
         opts=self.random_permute_opts,
         random_state=self.random_state)
 
+    if self.pre_process:
+      audio = self.pre_process(audio=audio, sample_rate=sample_rate, random_state=self.random_state)
+      assert isinstance(audio, numpy.ndarray) and len(audio.shape) == 1
+
     if self.features == "raw":
       assert self.num_feature_filters == 1
       feature_data = audio[:, None].astype("float32")  # add dummy dimension
@@ -1066,7 +1072,9 @@ class ExtractAudioFeatures:
         assert isinstance(self.feature_options, dict)
         kwargs.update(self.feature_options)
 
-      if self.features == "mfcc":
+      if callable(self.features):
+        feature_data = self.features(random_state=self.random_state, **kwargs)
+      elif self.features == "mfcc":
         feature_data = _get_audio_features_mfcc(**kwargs)
       elif self.features == "log_mel_filterbank":
         feature_data = _get_audio_log_mel_filterbank(**kwargs)
@@ -1171,7 +1179,12 @@ def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.01
     audio, sr=sample_rate,
     n_mfcc=num_feature_filters,
     hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
-  energy = librosa.feature.rmse(
+  librosa_version = librosa.__version__.split(".")
+  if int(librosa_version[0]) >= 1 or (int(librosa_version[0]) == 0 and int(librosa_version[1]) >= 7):
+    rms_func = librosa.feature.rms
+  else:
+    rms_func = librosa.feature.rmse
+  energy = rms_func(
     audio,
     hop_length=int(step_len * sample_rate), frame_length=int(window_len * sample_rate))
   mfccs[0] = energy  # replace first MFCC with energy, per convention
@@ -1766,7 +1779,7 @@ class Vocabulary(object):
 
   def __init__(self, vocab_file, seq_postfix=None, unknown_label="UNK", num_labels=None):
     """
-    :param str vocab_file:
+    :param str|None vocab_file:
     :param str|None unknown_label:
     :param int num_labels: just for verification
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
@@ -1774,18 +1787,20 @@ class Vocabulary(object):
     self.vocab_file = vocab_file
     self.unknown_label = unknown_label
     self.num_labels = None  # will be set by _parse_vocab
-    self._parse_vocab(vocab_file)
+    self._parse_vocab()
     if num_labels is not None:
       assert self.num_labels == num_labels
+    self.unknown_label_id = self.vocab[self.unknown_label] if self.unknown_label is not None else None
     self.seq_postfix = seq_postfix or []
 
   def __repr__(self):
     return "Vocabulary(%r, num_labels=%s, unknown_label=%r)" % (self.vocab_file, self.num_labels, self.unknown_label)
 
-  def _parse_vocab(self, filename):
+  def _parse_vocab(self):
     """
-    :param str filename:
+    Sets self.vocab, self.labels, self.num_labels.
     """
+    filename = self.vocab_file
     import pickle
     if filename in self._cache:
       self.vocab, self.labels = self._cache[filename]
@@ -1814,7 +1829,6 @@ class Vocabulary(object):
       self.vocab = d
       self.labels = [label for (idx, label) in sorted(labels.items())]
       self._cache[filename] = (self.vocab, self.labels)
-    self.unknown_label_id = self.vocab[self.unknown_label] if self.unknown_label is not None else None
 
   @classmethod
   def create_vocab_dict_from_labels(cls, labels):
@@ -2082,6 +2096,7 @@ class BytePairEncoding(Vocabulary):
 class CharacterTargets(Vocabulary):
   """
   Uses characters as target labels.
+  Also see :class:`Utf8ByteTargets`.
   """
 
   def __init__(self, vocab_file, seq_postfix=None, unknown_label="@"):
@@ -2101,6 +2116,38 @@ class CharacterTargets(Vocabulary):
       seq = [self.vocab.get(k, self.unknown_label_id) for k in sentence]
     else:
       seq = [self.vocab[k] for k in sentence]
+    return seq + self.seq_postfix
+
+
+class Utf8ByteTargets(Vocabulary):
+  """
+  Uses bytes as target labels from UTF8 encoded text. All bytes (0-255) are allowed.
+  Also see :class:`CharacterTargets`.
+  """
+
+  def __init__(self, seq_postfix=None):
+    """
+    :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
+    """
+    super(Utf8ByteTargets, self).__init__(vocab_file=None, seq_postfix=seq_postfix, unknown_label=None)
+
+  def _parse_vocab(self):
+    """
+    Sets self.vocab, self.labels, self.num_labels.
+    """
+    self.vocab = {chr(i): i for i in range(256)}
+    self.labels = [chr(i) for i in range(256)]
+    self.num_labels = 256
+
+  def get_seq(self, sentence):
+    """
+    :param str sentence:
+    :rtype: list[int]
+    """
+    if sys.version_info[0] >= 3:
+      seq = list(sentence.encode("utf8"))
+    else:
+      seq = list(bytearray(sentence.encode("utf8")))
     return seq + self.seq_postfix
 
 
@@ -2247,7 +2294,7 @@ class LibriSpeechCorpus(CachedDataset2):
     :param str path: dir, should contain "train-*/*/*/{*.flac,*.trans.txt}", or "train-*.zip"
     :param str prefix: "train", "dev", "test", "dev-clean", "dev-other", ...
     :param str|list[str]|None orth_post_process: :func:`get_post_processor_function`, applied on orth
-    :param str|None targets: "bpe" or "chars" currently, if `None`, then "bpe"
+    :param str|None targets: "bpe" or "chars" or None
     :param dict[str]|None audio: options for :class:`ExtractAudioFeatures`
     :param dict[str]|None bpe: options for :class:`BytePairEncoding`
     :param dict[str]|None chars: options for :class:`CharacterTargets`
@@ -2288,7 +2335,6 @@ class LibriSpeechCorpus(CachedDataset2):
     if orth_post_process:
       from LmDataset import get_post_processor_function
       self.orth_post_process = get_post_processor_function(orth_post_process)
-    assert bpe or chars
     if targets == "bpe" or (targets is None and bpe is not None):
       assert bpe is not None and chars is None
       self.bpe = BytePairEncoding(**bpe)
@@ -2299,6 +2345,9 @@ class LibriSpeechCorpus(CachedDataset2):
       self.chars = CharacterTargets(**chars)
       self.labels = {"classes": self.chars.labels}
       self.targets = self.chars
+    elif targets is None:
+      assert bpe is None and chars is None
+      self.targets = None
     else:
       raise Exception("invalid targets %r. provide bpe or chars" % targets)
     self._fixed_random_seed = fixed_random_seed
@@ -2306,8 +2355,9 @@ class LibriSpeechCorpus(CachedDataset2):
     self.feature_extractor = (
       ExtractAudioFeatures(random_state=self._audio_random, **audio) if audio is not None else None)
     self.num_inputs = self.feature_extractor.get_feature_dimension() if self.feature_extractor else 0
-    self.num_outputs = {
-      "classes": [self.targets.num_labels, 1], "raw": {"dtype": "string", "shape": ()}}
+    self.num_outputs = {"raw": {"dtype": "string", "shape": ()}}
+    if self.targets:
+      self.num_outputs["classes"] = [self.targets.num_labels, 1]
     if self.feature_extractor:
       self.num_outputs["data"] = [self.num_inputs, 2]
     self.transs = self._collect_trans()
@@ -2380,7 +2430,7 @@ class LibriSpeechCorpus(CachedDataset2):
     super(LibriSpeechCorpus, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if not epoch:
       epoch = 1
-    self._audio_random.seed(self._fixed_random_seed or epoch or 1)
+    self._audio_random.seed(self._fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch))
 
     def get_seq_len(i):
       """
@@ -2513,11 +2563,11 @@ class LibriSpeechCorpus(CachedDataset2):
     """
     :param int seq_idx:
     :return: (bpe, txt)
-    :rtype: (list[int], str)
+    :rtype: (list[int]|None, str)
     """
     seq_key = self._reference_seq_order[self._get_ref_seq_idx(seq_idx)]
     targets_txt = self.transs[seq_key]
-    return self.targets.get_seq(targets_txt), targets_txt
+    return self.targets.get_seq(targets_txt) if self.targets else None, targets_txt
 
   def _open_audio_file(self, seq_idx):
     """
@@ -2555,11 +2605,12 @@ class LibriSpeechCorpus(CachedDataset2):
     else:
       features = numpy.zeros(())  # currently the API requires some dummy values...
     bpe, txt = self._get_transcription(seq_idx)
-    targets = numpy.array(bpe, dtype="int32")
-    raw = numpy.array(txt, dtype="object")
+    targets = {"raw": numpy.array(txt, dtype="object")}
+    if bpe is not None:
+      targets["classes"] = numpy.array(bpe, dtype="int32")
     return DatasetSeq(
       features=features,
-      targets={"classes": targets, "raw": raw},
+      targets=targets,
       seq_idx=seq_idx,
       seq_tag=seq_tag)
 
@@ -2567,7 +2618,8 @@ class LibriSpeechCorpus(CachedDataset2):
 class OggZipDataset(CachedDataset2):
   """
   Generic dataset which reads a Zip file containing Ogg files for each sequence and a text document.
-  The feature extraction settings are determined by the ``audio`` option, which is passed to :class:`ExtractAudioFeatures`.
+  The feature extraction settings are determined by the ``audio`` option,
+  which is passed to :class:`ExtractAudioFeatures`.
   Does also support Wav files, and might even support other file formats readable by the 'soundfile'
   library (not tested). By setting ``audio`` or ``targets`` to ``None``, the dataset can be used in
   text only or audio only mode. The content of the zip file is:
@@ -2575,29 +2627,34 @@ class OggZipDataset(CachedDataset2):
     - a .txt file with the same name as the zipfile, containing a python list of dictionaries
     - a subfolder with the same name as the zipfile, containing the audio files
 
-  The dictionaries in the .txt file must have the following structure:
+  The dictionaries in the .txt file must be a list of dicts, i.e. have the following structure:
 
   .. code::
 
-    [{'seq_name': 'arbitrary_sequence_name', 'text': 'some utterance text', 'duration': 2.3, 'file': 'sequence0.wav'}, ...]
+    [{'text': 'some utterance text', 'duration': 2.3, 'file': 'sequence0.wav'},
+     ...]
 
-  If ``seq_name`` is not included, the seq_tag will be the name of the file. ``duration`` is mandatory, as this information
-  is needed for the sequence sorting.
-
+  The dict can optionally also have the entry ``'seq_name': 'arbitrary_sequence_name'``.
+  If ``seq_name`` is not included, the seq_tag will be the name of the file.
+  ``duration`` is mandatory, as this information is needed for the sequence sorting,
+  however, it does not have to match the real duration in any way.
   """
 
-  def __init__(self, path, audio, targets,
+  def __init__(self, path, audio, targets=None,
                targets_post_process=None,
-               use_cache_manager=False,
+               use_cache_manager=False, segment_file=None,
+               zip_audio_files_have_name_as_prefix=True,
                fixed_random_seed=None, fixed_random_subset=None,
                epoch_wise_filter=None,
                **kwargs):
     """
-    :param str path: filename to zip
+    :param str|list[str] path: filename to zip
     :param dict[str]|None audio: options for :class:`ExtractAudioFeatures`. use {} for default. None means to disable.
     :param dict[str]|None targets: options for :func:`Vocabulary.create_vocab` (e.g. :class:`BytePairEncoding`)
     :param str|list[str]|((str)->str)|None targets_post_process: :func:`get_post_processor_function`, applied on orth
     :param bool use_cache_manager: uses :func:`Util.cf`
+    :param str|None segment_file: .txt or .gz text file containing sequence tags that will be used as whitelist
+    :param bool zip_audio_files_have_name_as_prefix:
     :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'. otherwise epoch will be used
     :param float|int|None fixed_random_subset:
       Value in [0,1] to specify the fraction, or integer >=1 which specifies number of seqs.
@@ -2609,20 +2666,40 @@ class OggZipDataset(CachedDataset2):
     import zipfile
     import Util
     from MetaDataset import EpochWiseFilter
-    if not isinstance(path, list) and os.path.splitext(path)[1] != ".zip" and os.path.isdir(path) and os.path.isfile(path + ".txt"):
+    self._separate_txt_files = {}  # name -> filename
+    if (
+      isinstance(path, str)
+      and os.path.splitext(path)[1] != ".zip"
+      and os.path.isdir(path)
+      and os.path.isfile(path + ".txt")):
       # Special case (mostly for debugging) to directly access the filesystem, not via zip-file.
       self.paths = [os.path.dirname(path)]
       self._names = [os.path.basename(path)]
       self._zip_files = None
       assert not use_cache_manager, "cache manager only for zip file"
     else:
-      self.paths = path if isinstance(path, list) else [path]
-      for path in self.paths:
-        assert os.path.splitext(path)[1] == ".zip"
-      self._names = [os.path.splitext(os.path.basename(path))[0] for path in self.paths]
-      if use_cache_manager:
-        self.paths = [Util.cf(path) for path in self.paths]
+      if not isinstance(path, (tuple, list)):
+        path = [path]
+      self.paths = []
+      self._names = []
+      for path_ in path:
+        assert isinstance(path_, str)
+        name, ext = os.path.splitext(os.path.basename(path_))
+        if "." in name and ext == ".gz":
+          name, ext = name[:name.rindex(".")], name[name.rindex("."):] + ext
+        if use_cache_manager:
+          path_ = Util.cf(path_)
+        if ext == ".txt.gz":
+          self._separate_txt_files[name] = path_
+          continue
+        assert ext == ".zip"
+        self.paths.append(path_)
+        self._names.append(name)
       self._zip_files = [zipfile.ZipFile(path) for path in self.paths]
+    self.segments = None  # type: typing.Optional[typing.Set[str]]
+    if segment_file:
+      self._read_segment_list(segment_file)
+    self.zip_audio_files_have_name_as_prefix = zip_audio_files_have_name_as_prefix
     kwargs.setdefault("name", self._names[0])
     super(OggZipDataset, self).__init__(**kwargs)
     self.targets = Vocabulary.create_vocab(**targets) if targets is not None else None
@@ -2658,6 +2735,13 @@ class OggZipDataset(CachedDataset2):
     :param int zip_index: index of the zip file to load, unused when loading without zip
     :rtype: bytes
     """
+    import os
+    if filename.endswith(".txt"):
+      name, _ = os.path.splitext(filename)
+      assert name == self._names[zip_index]
+      if name in self._separate_txt_files:
+        import gzip
+        return gzip.open(self._separate_txt_files[name], "rb").read()
     if self._zip_files is not None:
       return self._zip_files[zip_index].read(filename)
     return open("%s/%s" % (self.paths[0], filename), "rb").read()
@@ -2679,11 +2763,13 @@ class OggZipDataset(CachedDataset2):
     if "file" in first_entry:
       assert isinstance(first_entry["file"], str)
     else:
-      assert self.feature_extractor, "feature extraction is enabled, but no audio files are specified"
+      assert not self.feature_extractor, "%s: feature extraction is enabled, but no audio files are specified" % self
       assert isinstance(first_entry["seq_name"], str)
     # add index to data list
     for entry in data:
       entry['_zip_file_index'] = zip_index
+    if self.segments:
+      data[:] = [entry for entry in data if self._get_tag_from_info_dict(entry) in self.segments]
     return data
 
   def _collect_data(self):
@@ -2700,6 +2786,20 @@ class OggZipDataset(CachedDataset2):
       # collect data from a txt file
       data = self._collect_data_part(0)
     return data
+
+  def _read_segment_list(self, segment_file):
+    """
+    read a list of segment names in either plain text or gzip
+
+    :param str segment_file:
+    """
+    if segment_file.endswith(".gz"):
+      import gzip
+      segment_file_handle = gzip.open(segment_file)
+      self.segments = set([s.decode() for s in segment_file_handle.read().splitlines()])
+    else:
+      segment_file_handle = open(segment_file)
+      self.segments = set(segment_file_handle.read().splitlines())
 
   def _filter_fixed_random_subset(self, fixed_random_subset):
     """
@@ -2727,7 +2827,7 @@ class OggZipDataset(CachedDataset2):
     super(OggZipDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if not epoch:
       epoch = 1
-    self._audio_random.seed(self._fixed_random_seed or epoch or 1)
+    self._audio_random.seed(self._fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch))
 
     def get_seq_len(i):
       """
@@ -2790,7 +2890,7 @@ class OggZipDataset(CachedDataset2):
     :param dict[str] info:
     :rtype: str
     """
-    return info.get("seq_name", info["file"])
+    return info.get("seq_name", info.get("file", ""))
 
   def get_tag(self, seq_idx):
     """
@@ -2835,7 +2935,10 @@ class OggZipDataset(CachedDataset2):
     """
     import io
     seq = self._data[self._get_ref_seq_idx(seq_idx)]
-    audio_fn = "%s/%s" % (self._names[seq['_zip_file_index']], seq["file"])
+    if self.zip_audio_files_have_name_as_prefix:
+      audio_fn = "%s/%s" % (self._names[seq['_zip_file_index']], seq["file"])
+    else:
+      audio_fn = seq["file"]
     raw_bytes = self._read(audio_fn, seq['_zip_file_index'])
     return io.BytesIO(raw_bytes)
 
@@ -2923,7 +3026,7 @@ class Enwik8Corpus(CachedDataset2):
     if self.partition_epoch:
       epoch_part = (epoch - 1) % self.partition_epoch
       epoch = ((epoch - 1) // self.partition_epoch) + 1
-    self._random.seed(self._fixed_random_seed or epoch or 1)
+    self._random.seed(self._fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch))
     self._num_seqs = len(self._seq_starts)
     self._num_timesteps = len(self._data) - 1
     if self._batch_num_seqs is None:

@@ -11,7 +11,7 @@ import contextlib
 import typing
 import TFUtil
 from Util import unicode, NotSpecified, CollectionReadCheckCovered
-from TFUtil import Data, SearchBeam, OutputWithActivation, CustomUpdate, dimshuffle, swapaxes
+from TFUtil import Data, SearchBeam, OutputWithActivation, CustomUpdate, dimshuffle, swapaxes, reuse_name_scope
 from Log import log
 
 
@@ -159,7 +159,7 @@ class LayerBase(object):
     self._rec_previous_layer = rec_previous_layer
     self.collocate_with = collocate_with or []
     self.post_init_hooks = []  # list of functions
-    self.sources = sources
+    self.sources = list(sources)
     self.params = {}  # type: typing.Dict[str,tf.Variable]
     self.saveable_param_replace = {}  # type:  typing.Dict[tf.Variable,typing.Union['tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject',None]]  # see get_saveable_params_dict()  # nopep8
     self.reuse_params = reuse_params
@@ -209,7 +209,8 @@ class LayerBase(object):
 
   def __repr__(self):
     return "<%s %r out_type=%s>" % (
-      self.__class__.__name__, self.name, self.output.get_description(with_name=False) if self.output else None)
+      self.__class__.__name__, self.get_absolute_name(),
+      self.output.get_description(with_name=False) if self.output else None)
 
   @classmethod
   def get_out_data_from_opts(cls, **kwargs):
@@ -306,7 +307,7 @@ class LayerBase(object):
               feature_dim_axis = -1
           default_shape = list(sources_data.shape_dense)
           default_shape.insert(sources_data.batch_dim_axis, None)
-          default_shape[feature_dim_axis] = out_type["dim"]
+          default_shape[feature_dim_axis] = out_type.get("dim", None)
           default_shape.pop(out_type.get("batch_dim_axis"))
           out_type.setdefault("shape", tuple(default_shape))
       elif network.is_inside_rec_layer():
@@ -480,8 +481,8 @@ class LayerBase(object):
             # but instead lazily handle it in TFNetwork.get_extern_data,
             # such that we do not need to know in advance which data keys we need.
             # Also, if we are inside a rec layer, and doing search, we also cannot do that.
-            if not network.is_inside_rec_layer() or not network.search_flag:
-              network.used_data_keys.add(target)
+            if network.is_inside_rec_layer() and not network.search_flag:
+              network.get_extern_data(target, mark_data_key_as_used=True)
     if d.get("initial_output", None):  # see get_rec_initial_output
       initial_output = d["initial_output"]
       if isinstance(initial_output, str):
@@ -536,20 +537,22 @@ class LayerBase(object):
     return n_out
 
   @classmethod
-  def _make_loss(cls, class_name, opts, network, get_layer):
+  def _make_loss(cls, class_name, opts, network, get_layer, always_make=False):
     """
     :param str|None class_name:
     :param dict[str]|None opts:
     :param TFNetwork.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    :param bool always_make:
     :rtype: Loss|None
     """
-    if not network.eval_flag:
+    if not network.eval_flag and not always_make:
       # Don't resolve the loss opts on purpose.
       # This might result in a smaller network because it might skip some get_layer calls.
       # This is what we want, i.e. we don't want to resolve layers which are only needed for the loss.
       return None
     if not class_name:
+      assert not always_make
       return None
     if not opts:
       opts = {}
@@ -878,7 +881,7 @@ class LayerBase(object):
           if param_axes_split_info:
             TFUtil.check_param_axes_split_info(param.get_shape().as_list(), param_axes_split_info)
             old_axes_splits = TFUtil.transform_param_axes_split_info_to_new_shape(
-              param_axes_split_info, values.shape)
+              param_axes_split_info, values.shape, debug_name="param %r" % param.name)
             print("Param %r: transform old values of shape parts %r into new shape parts %r." % (
               param, old_axes_splits, param_axes_split_info), file=log.v3)
             values = TFUtil.copy_with_new_split_axes(
@@ -1131,7 +1134,7 @@ class LayerBase(object):
       tf.nn.batch_normalization()
       https://github.com/deepmind/sonnet/blob/master/sonnet/python/modules/batch_norm.py
     """
-    with tf.variable_scope("batch_norm"):
+    with reuse_name_scope(self.get_absolute_name_scope_prefix() + "batch_norm", absolute=True):
       if masked_time:
         x = data.get_placeholder_flattened(keep_dims=True)
         mean, variance = tf.nn.moments(x, axes=[0], keep_dims=True)
@@ -1859,6 +1862,8 @@ def concat_sources(src_layers):
   :rtype: Data
   """
   assert src_layers, "need source layers"
+  if any([not s or s.output.undefined for s in src_layers]):
+    return Data.create_undefined()
   if len(src_layers) == 1:
     return src_layers[0].output.copy()
   network = src_layers[0].network
@@ -1877,7 +1882,8 @@ def concat_sources(src_layers):
       assert not layer.output.sparse, "sparse concat not supported"
       assert layer.output.dtype == data.dtype, "incompatible dtype with layer %r" % layer
       # unbroadcast is needed for tf.concat.
-      layers_data.append(layer.output.copy_compatible_to(data, unbroadcast=True, data_dyn_shape=data_dyn_shape))
+      layers_data.append(layer.output.copy_compatible_to(
+        data, unbroadcast=True, except_feature=True, data_dyn_shape=data_dyn_shape))
     data.placeholder = tf.concat(
       axis=data.feature_dim_axis,
       values=[l.placeholder for l in layers_data])
@@ -1943,6 +1949,8 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0, dropout_noise_shape=N
   """
   assert src_layers, "need source layers"
   data = concat_sources(src_layers)
+  if data.undefined:
+    return data
   network = src_layers[0].network
   if network.train_flag is False and not dropout_on_forward:
     # If we know that we are not training, we always disable dropout.
@@ -2085,6 +2093,27 @@ class DropoutLayer(CopyLayer):
   layer_class = "dropout"
 
 
+class ScaledGradientLayer(CopyLayer):
+  """
+  Just tf.identity in the forward pass.
+  Scales the gradient by some factor in backprop.
+  Can be used as gradient reversal layer (with negative factor).
+  Uses :func:`TFUtil.scaled_gradient`, or :func:`tf.stop_gradient`
+  """
+  layer_class = "scaled_grad"
+
+  def __init__(self, scale, **kwargs):
+    """
+    :param float scale: if 0., will use tf.stop_gradient
+    """
+    super(ScaledGradientLayer, self).__init__(**kwargs)
+    from TFUtil import scaled_gradient
+    if scale == 0.:
+      self.output.placeholder = tf.stop_gradient(self.output.placeholder)
+    else:
+      self.output.placeholder = scaled_gradient(self.output.placeholder, scale=scale)
+
+
 class InternalLayer(LayerBase):
   """
   This is not supposed to be used by the user.
@@ -2186,7 +2215,7 @@ class SelectSearchSourcesLayer(InternalLayer):
     elif search_choices == src_search_choices:
       pass
     elif not src_search_choices:
-      assert not self.output.beam, "no src %r search choices but beam?" % src
+      assert not self.output.beam, ("no src %r search choices but beam?" % src, src.network.debug_search_choices(src))
       self.output = self.output.copy_extend_with_beam(search_choices.get_beam_info())
     else:
       assert search_choices and search_choices != src_search_choices
@@ -2548,12 +2577,17 @@ class GatherNdLayer(_ConcatInputLayer):
     self.position = position
     from TFUtil import batch_gather
     x = self.input_data.copy_as_batch_major()
-    position = position.output.copy_as_batch_major()
+    position = position.output
     self.output.size_placeholder = position.size_placeholder.copy()
     for i in range(position.ndim, self.output.ndim):
       j = i - position.ndim + 1
       if j in x.size_placeholder:
         self.output.size_placeholder[i] = x.size_placeholder[j]
+    if position.batch_dim_axis is not None:
+      position = position.copy_as_batch_major()
+    else:
+      position = position.copy_add_batch_dim(batch_dim_axis=0)
+      position.placeholder = tf.tile(position.placeholder, [tf.shape(x.placeholder)[0]] + [1] * (position.batch_ndim - 1))
     self.output.placeholder = batch_gather(x.placeholder, position.placeholder)  # (B,...)
 
   def get_dep_layers(self):
@@ -2571,9 +2605,13 @@ class GatherNdLayer(_ConcatInputLayer):
     :rtype: Data
     """
     input_data = get_concat_sources_data_template(sources).copy_as_batch_major()
-    position_data = position.output.copy_template().copy_as_batch_major()
-    if input_data.undefined or position_data.undefined:
+    if input_data.undefined or not position or position.output.undefined:
       return Data.create_undefined(name="%s_output" % name)
+    position_data = position.output.copy_template()
+    if position_data.batch_dim_axis is None:
+      position_data = position_data.copy_add_batch_dim(batch_dim_axis=0)
+    else:
+      position_data = position_data.copy_as_batch_major()
     shape = list(position_data.shape) + list(input_data.shape[1:])  # (B, ...) (w/o batch)
     out_type = position_data.get_kwargs()
     out_type["name"] = "%s_output" % name
@@ -2791,6 +2829,7 @@ class LinearLayer(_ConcatInputLayer):
     n_in = input_data.dim
     n_out = self.output.dim
     assert n_in and n_out, "%r and %r" % (input_data, self.output)
+    in_split_info = self._get_in_split_info()
 
     with self.var_creation_scope():
       # Our Theano default: normal distribution, std_dev = sqrt(12. / (fan_in + fan_out))
@@ -2807,6 +2846,9 @@ class LinearLayer(_ConcatInputLayer):
       weights = self.add_param(tf.get_variable(
         name="W", shape=weights_shape, dtype=tf.float32, initializer=fwd_weights_initializer))
       weights_ = weights
+      if in_split_info:
+        TFUtil.set_param_axes_split_info(
+          weights, [[n_out], in_split_info] if self.use_transposed_weights else [in_split_info, [n_out]])
 
       if self.use_transposed_weights:
         weights = tf.transpose(weights)
@@ -2881,6 +2923,31 @@ class LinearLayer(_ConcatInputLayer):
     assert self.output.batch_dim_axis == self.input_data.batch_dim_axis
     assert self.output.time_dim_axis == self.input_data.time_dim_axis
     self.output.placeholder = x
+
+  def _get_in_split_info(self):
+    """
+    :rtype: list[int]|None
+    """
+    n_in = self.input_data.dim
+    in_split_info = []
+
+    def _add_src(src):
+      """
+      :param LayerBase src:
+      """
+      if isinstance(src, CopyLayer):  # special case, contains itself of multiple sources maybe
+        for src__ in src.sources:
+          _add_src(src__)
+        return
+      in_split_info.append(src.output.dim)
+
+    for src_ in self.sources:
+      _add_src(src_)
+    if not all(in_split_info) or sum(in_split_info) != n_in:
+      print(
+        "%s: Warning: input split dims %r unclear for sources %r?" % (self, in_split_info, self.sources), file=log.v3)
+      return None
+    return in_split_info
 
 
 class SoftmaxLayer(LinearLayer):
@@ -2972,7 +3039,6 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     energy_data = energy_data.copy_move_axis(axis, -1)
     energy = energy_data.placeholder
     axis = energy_data.batch_ndim - 1
-    assert energy_data.have_time_axis()
     # if the time-axis is static, we can skip the masking
     if use_time_mask is None:
       use_time_mask = energy_data.is_axis_dynamic(axis)
@@ -3351,16 +3417,21 @@ class ConstantLayer(LayerBase):
   layer_class = "constant"
 
   # noinspection PyUnusedLocal
-  def __init__(self, sources, value=0., dtype=None, **kwargs):
+  def __init__(self, sources, value=0., dtype=None, with_batch_dim=False, **kwargs):
     """
     :param list[LayerBase] sources:
     :param int|float|bool value:
     :param str|None dtype:
+    :param bool with_batch_dim:
     """
     assert not sources, "constant layer cannot have sources"
     super(ConstantLayer, self).__init__(**kwargs)
-    # Add batch-dim to the constant.
-    self.output.placeholder = tf.expand_dims(tf.constant(value, dtype=self.output.dtype), axis=0)
+    value = tf.constant(value, dtype=self.output.dtype)
+    if with_batch_dim:
+      # Add batch-dim to the constant.
+      from TFUtil import expand_dims_unbroadcast
+      value = expand_dims_unbroadcast(value, axis=0, dim=self.get_batch_dim())
+    self.output.placeholder = value
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -3373,13 +3444,15 @@ class ConstantLayer(LayerBase):
     super(ConstantLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, value=0., dtype=None, **kwargs):
+  def get_out_data_from_opts(cls, name, value=0., dtype=None, with_batch_dim=False, **kwargs):
     """
     :param str name:
     :param int|float|bool value:
     :param str|None dtype:
+    :param bool with_batch_dim:
     :rtype: Data
     """
+    import numpy
     if dtype is None:
       if isinstance(value, int):
         dtype = "int32"
@@ -3389,8 +3462,11 @@ class ConstantLayer(LayerBase):
         dtype = "bool"
       else:
         raise TypeError("cannot handle value %r of type %r" % (value, type(value)))
+    shape = value.shape if isinstance(value, numpy.ndarray) else ()
     return Data(
-      name="%s_const" % name, shape=(), batch_dim_axis=0, time_dim_axis=None, dtype=dtype)
+      name="%s_const" % name,
+      shape=shape, batch_dim_axis=0 if with_batch_dim else None, time_dim_axis=None,
+      dtype=dtype)
 
 
 class GatingLayer(_ConcatInputLayer):
@@ -3833,6 +3909,112 @@ class MergeDimsLayer(_ConcatInputLayer):
     return data
 
 
+class SplitLayer(_ConcatInputLayer):
+  """
+  Splits one axis into multiple parts, via tf.split.
+  self.output is simply the input copied.
+  Each part can be accessed via the sublayers "/%i".
+  """
+  layer_class = "split"
+
+  def __init__(self, axis=None, num_splits=None, size_splits=None, **kwargs):
+    """
+    :param str|None axis: feature axis by default
+    :param int|None num_splits:
+    :param list[int]|None size_splits:
+    """
+    assert num_splits or size_splits, "%s: provide either num_splits or size_splits" % self
+    super(SplitLayer, self).__init__(**kwargs)
+    self.output = self.input_data
+    self.axis, self.size_splits = self._get_axis_size_splits_num_splits(
+      input_data=self.input_data, axis=axis, num_splits=num_splits, size_splits=size_splits,
+      err_prefix=self)
+    self.splits = tf.split(self.output.placeholder, self.size_splits, axis=self.axis)
+    assert len(self.splits) == len(self.size_splits)
+    self._sub_layers = {"%i" % i: self._make_split_layer(i) for i in range(len(self.splits))}
+
+  @classmethod
+  def _get_axis_size_splits_num_splits(cls, input_data, axis=None, num_splits=None, size_splits=None, err_prefix=None):
+    """
+    :param Data input_data:
+    :param str|None axis: feature axis by default
+    :param int|None num_splits:
+    :param list[int]|None size_splits:
+    :param object err_prefix:
+    :return: axis, size_splits
+    :rtype: (int, list[int])
+    """
+    assert num_splits or size_splits, "%s: provide either num_splits or size_splits" % err_prefix
+    if axis is None:
+      axis = "feature"
+    axis = input_data.get_axis_from_description(axis, allow_int=False)
+    dim = input_data.batch_shape[axis]
+    assert isinstance(dim, int), "%s: expects static axis %s in %r" % (err_prefix, axis, input_data)
+    if num_splits:
+      assert dim % num_splits == 0, "%s: expects multiple of %i in dim %i in %r" % (
+        err_prefix, num_splits, dim, input_data)
+      size_splits = [dim // num_splits for _ in range(num_splits)]
+    else:
+      if not isinstance(size_splits, (list, tuple)):
+        raise TypeError("%s: invalid type num_or_size_splits %r" % (err_prefix, size_splits))
+      size_splits = list(size_splits)
+      assert sum(size_splits) == dim, "%s: invalid num_or_size_splits %r for dim %i in %r" % (
+        err_prefix, size_splits, dim, input_data)
+    return axis, size_splits
+
+  def _make_split_layer(self, idx):
+    """
+    :param int idx:
+    :rtype: LayerBase
+    """
+    out = self.output.copy(name="%s/%i_output" % (self.name, idx))
+    axis_wo_b = out.get_batch_axis_excluding_batch(self.axis)
+    shape = list(out.shape)
+    shape[axis_wo_b] = self.size_splits[idx]
+    out.shape = tuple(shape)
+    if self.axis == self.output.feature_dim_axis:
+      out.dim = self.size_splits[idx]
+    out.placeholder = self.splits[idx]
+    out.sanity_check()
+    return InternalLayer(name="%s/%i" % (self.name, idx), network=self.network, output=out)
+
+  def get_sub_layer(self, layer_name):
+    """
+    :param str layer_name:
+    :rtype: LayerBase|None
+    """
+    return self._sub_layers.get(layer_name, None)
+
+  @classmethod
+  def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
+    """
+    :param str layer_name: name of the sub_layer (right part of '/' separated path)
+    :param dict[str] parent_layer_kwargs: kwargs for the parent layer (as kwargs in cls.get_out_data_from_opts())
+    :return: Data template, network and the class type of the sub-layer
+    :rtype: (Data, TFNetwork, type)|None
+    """
+    try:
+      idx = int(layer_name)
+    except ValueError:
+      return None
+    name = parent_layer_kwargs.get("name", "<unknown>")
+    out = get_concat_sources_data_template(parent_layer_kwargs["sources"], name="%s_output" % name)
+    axis, size_splits = cls._get_axis_size_splits_num_splits(
+      input_data=out,
+      axis=parent_layer_kwargs.get("axis", None),
+      num_splits=parent_layer_kwargs.get("num_splits", None),
+      size_splits=parent_layer_kwargs.get("size_splits", None),
+      err_prefix="%s/%s" % (name, layer_name))
+    out = out.copy(name="%s/%i_output" % (name, idx))
+    axis_wo_b = out.get_batch_axis_excluding_batch(axis)
+    shape = list(out.shape)
+    shape[axis_wo_b] = size_splits[idx]
+    out.shape = tuple(shape)
+    if axis == out.feature_dim_axis:
+      out.dim = size_splits[idx]
+    return out, parent_layer_kwargs["network"], InternalLayer
+
+
 class SplitDimsLayer(_ConcatInputLayer):
   """
   Splits one axis into multiple axes.
@@ -4157,6 +4339,39 @@ class ExpandDimsLayer(_ConcatInputLayer):
     return data
 
 
+class CastLayer(CopyLayer):
+  """
+  Cast to some other dtype.
+  """
+  layer_class = "cast"
+
+  def __init__(self, dtype, output, **kwargs):
+    """
+    :param str dtype:
+    :param Data output:
+    """
+    super(CastLayer, self).__init__(output=output, **kwargs)
+    if self.output.dtype != dtype:
+      self.output = output
+      self.output.placeholder = tf.cast(self.input_data.placeholder, dtype)
+
+  @classmethod
+  def get_out_data_from_opts(cls, dtype, **kwargs):
+    """
+    :param str dtype:
+    :rtype: Data
+    """
+    out = super(CastLayer, cls).get_out_data_from_opts(**kwargs).copy_template()
+    out.dtype = dtype
+    if out.sparse and (out.dtype.startswith("float") or out.dtype.startswith("complex")):
+      out.sparse = False
+      if out.feature_dim_axis is not None:
+        out.dim = out.batch_shape[out.feature_dim_axis]
+      else:
+        out.dim = None
+    return out
+
+
 class SwapAxesLayer(_ConcatInputLayer):
   """
   Swaps two axes. Basically a wrapper around :func:`TFUtil.swapaxes`.
@@ -4234,7 +4449,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
                **kwargs):
     """
     :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
-    :param LayerBase|None size_base:
+    :param LayerBase|None size_base: copy the size_placeholder from the given layer
     :param dict[str,int|str] set_axes: the key is "B","T","F", value is via :func:`Data.get_axis_from_description`
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
@@ -4244,7 +4459,12 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     """
     super(ReinterpretDataLayer, self).__init__(**kwargs)
     self.size_base = size_base
-    self.output.placeholder = self.input_data.placeholder
+    input_data = self.input_data
+    if enforce_batch_major:
+      input_data = input_data.copy_as_batch_major()
+    if enforce_time_major:
+      input_data = input_data.copy_as_time_major()
+    self.output.placeholder = input_data.placeholder
     if len(self.sources) == 1:
       self.output_loss = self.sources[0].output_loss
       if not self.dropout:
@@ -4681,7 +4901,7 @@ class ReduceLayer(_ConcatInputLayer):
   def __init__(self, mode, axes=None, axis=None, keep_dims=False, enforce_batch_dim_axis=None, use_time_mask=None,
                **kwargs):
     """
-    :param str mode: "sum" or "max", "argmin", "min", "argmin", or "mean"
+    :param str mode: "sum" or "max", "argmin", "min", "argmax", "mean", "logsumexp"
     :param int|list[int]|str axes: One axis or multiple axis to reduce.
       It accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
       and it is strongly recommended to use some of these symbolic names.
@@ -4705,8 +4925,6 @@ class ReduceLayer(_ConcatInputLayer):
     if "n_out" in kwargs:
       assert kwargs["n_out"] == self.output.dim
     assert "out_type" not in kwargs
-    mode = mode.lower()
-    assert mode in ["max", "argmax", "min", "argmin", "sum", "avg", "mean"]
     assert not self.input_data.sparse
     x = self.input_data
     if enforce_batch_dim_axis is not None and x.batch_dim_axis != enforce_batch_dim_axis:
@@ -4718,24 +4936,19 @@ class ReduceLayer(_ConcatInputLayer):
       else:
         use_time_mask = False
     assert isinstance(use_time_mask, bool)
-    if mode == "max":
-      f = tf.reduce_max
-    elif mode == "argmax":
-      f = tf.argmax
-    elif mode == "min":
-      f = tf.reduce_min
-    elif mode == "argmin":
-      f = tf.argmin
-    elif mode == "sum":
-      f = tf.reduce_sum
-    elif mode in ["avg", "mean"]:
-      f = tf.reduce_mean
-    else:
-      raise Exception("invalid mode %r" % mode)
+    mode = mode.lower()
+    if mode == "avg":  # alias
+      mode = "mean"
+    reduce_abs_funcs = {name: getattr(tf, "reduce_%s" % name) for name in ["max", "min", "sum", "logsumexp"]}
+    reduce_rel_func = {"mean": tf.reduce_mean}
+    arg_funcs = {name: getattr(tf, name) for name in ["argmax", "argmin"]}
+    funcs = dict(list(reduce_abs_funcs.items()) + list(reduce_rel_func.items()) + list(arg_funcs.items()))
+    assert mode in funcs, "%s: invalid mode %r. choose from: %r" % (self, mode, funcs)
+    f = funcs[mode]
     x_ = x.placeholder
     # Check if we should ignore some frames, e.g. via masking.
     if use_time_mask:
-      if f in (tf.reduce_sum, tf.reduce_min, tf.reduce_max) or (f == tf.reduce_mean and axes == [x.time_dim_axis]):
+      if mode in reduce_abs_funcs or (mode in reduce_rel_func and axes == [x.time_dim_axis]):
         # For sum, the fastest and simplest way is masking.
         for axis in axes:
           if axis == x.batch_dim_axis:
@@ -4749,12 +4962,13 @@ class ReduceLayer(_ConcatInputLayer):
             mask, [i for i in range(x.batch_ndim) if i not in [x.batch_dim_axis, axis]])  # e.g. (B,1,T) with axis=-1
           mask = tf.logical_and(mask, tf.ones_like(x_, dtype=mask.dtype))
 
+          zeros = tf.zeros_like(x.placeholder)
           replacement_value = {
-            tf.reduce_mean: tf.zeros_like(x.placeholder),
-            tf.reduce_sum: tf.zeros_like(x.placeholder),
-            tf.reduce_min: tf.zeros_like(x.placeholder) + x.placeholder.dtype.max,
-            tf.reduce_max: tf.zeros_like(x.placeholder) + x.placeholder.dtype.min
-          }
+            tf.reduce_mean: zeros,
+            tf.reduce_sum: zeros,
+            tf.reduce_logsumexp: zeros + x.placeholder.dtype.min,
+            tf.reduce_min: zeros + x.placeholder.dtype.max,
+            tf.reduce_max: zeros + x.placeholder.dtype.min}
 
           x_ = tf.where(mask, x_, replacement_value[f], "x_masked_axis_%i" % axis)
           if f == tf.reduce_mean:
@@ -4772,9 +4986,9 @@ class ReduceLayer(_ConcatInputLayer):
                   for a in axes if a != x.time_dim_axis]
           x = x.copy_time_flattened()
           x_ = x.placeholder
-    if f in (tf.argmax, tf.argmin):
+    if mode in arg_funcs:
       assert len(axes) == 1, "For argmax/argmin, only one reduction axis is supported"
-      y = tf.to_float(f(x_, axis=axes[0]))
+      y = f(x_, axis=axes[0], output_type=tf.int32)
       # argmax and argmin don't support keep_dims argument
       # so we emulate it manually
       if keep_dims:
@@ -4867,6 +5081,8 @@ class ReduceLayer(_ConcatInputLayer):
         i if out_batch_dim_axis is None or out_batch_dim_axis >= i else i - 1: size
         for (i, size) in out_size.items()}  # by axis without batch-dim
     sparse_out = mode.lower().startswith("arg")
+    if sparse_out:
+      out_feature_dim_axis = None
     return Data(
       name="%s_output" % name,
       shape=y_shape,
@@ -5383,6 +5599,7 @@ class TimeChunkingLayer(_ConcatInputLayer):
     x = self.input_data.copy_as_time_major()
     index = tf.cast(x.get_sequence_mask(), tf.float32)
     out, oindex = chunk(x.placeholder, index=index, chunk_step=chunk_step, chunk_size=chunk_size)
+    out.set_shape((None, None, self.output.dim))
     self.output.placeholder = out
     self.output.size_placeholder = {0: tf.reduce_sum(tf.cast(oindex, tf.int32), axis=0)}
 
@@ -5422,6 +5639,7 @@ class TimeUnChunkingLayer(_ConcatInputLayer):
     index = tf.cast(x.get_sequence_mask(), tf.float32)
     out, oindex, factors = unchunk(
       x.placeholder, index=index, chunk_step=chunk_step, chunk_size=chunk_size, n_time=n_time, n_batch=n_batch)
+    out.set_shape((None, None, self.output.dim))
     self.output.placeholder = out
     self.output.size_placeholder = {0: chunking_layer.input_data.get_sequence_lengths()}
 
@@ -5481,11 +5699,13 @@ class DotLayer(LayerBase):
     b_out = self.sources[1].output.copy_as_batch_major()
     a_reduce_axes = a_out.get_axes_from_description(red1)
     b_reduce_axes = b_out.get_axes_from_description(red2)
-    assert a_reduce_axes and b_reduce_axes
+    assert a_reduce_axes and b_reduce_axes, "%s: sources %r, red1 %r, red2 %r" % (self, self.sources, red1, red2)
     a_var_axes = a_out.get_axes_from_description(var1)
     b_var_axes = b_out.get_axes_from_description(var2)
-    assert not set(a_reduce_axes).intersection(a_var_axes)
-    assert not set(b_reduce_axes).intersection(b_var_axes)
+    assert not set(a_reduce_axes).intersection(a_var_axes), "%s: sources %r, red1 %r, red2 %r, var1 %r, var2 %r" % (
+      self, self.sources, red1, red2, var1, var2)
+    assert not set(b_reduce_axes).intersection(b_var_axes), "%s: sources %r, red1 %r, red2 %r, var1 %r, var2 %r" % (
+      self, self.sources, red1, red2, var1, var2)
     a_rem_axes = [i for i in range(a_out.batch_ndim) if i not in a_var_axes + a_reduce_axes]
     b_rem_axes = [i for i in range(b_out.batch_ndim) if i not in b_var_axes + b_reduce_axes]
     transpose_a = bool(a_var_axes and a_reduce_axes[0] < a_var_axes[0])
@@ -5505,7 +5725,8 @@ class DotLayer(LayerBase):
     b_shape = [b_out.batch_shape[i] or b_shape[i] for i in range(b_out.batch_ndim)]
     a_rem_dims = [a_shape[i] for i in a_rem_axes]
     b_rem_dims = [b_shape[i] for i in b_rem_axes]
-    assert len(a_rem_axes) == len(b_rem_axes), "remaining shared (batch) axes do not match"
+    assert len(a_rem_axes) == len(b_rem_axes), "%s: remaining shared (batch) axes do not match. sources %r" % (
+      self, self.sources)
     assert all([
       isinstance(d1, tf.Tensor) or isinstance(d2, tf.Tensor) or d1 == d2
       for (d1, d2) in zip(a_rem_dims, b_rem_dims)])
@@ -5592,7 +5813,7 @@ class DotLayer(LayerBase):
     assert not a_out.beam or not b_out.beam or a_out.beam == b_out.beam
     a_reduce_axes = a_out.get_axes_from_description(red1)
     b_reduce_axes = b_out.get_axes_from_description(red2)
-    assert a_reduce_axes and b_reduce_axes
+    assert a_reduce_axes and b_reduce_axes, "%s: sources %r, red1 %r, red2 %r" % (name, sources, red1, red2)
     a_var_axes = a_out.get_axes_from_description(var1)
     b_var_axes = b_out.get_axes_from_description(var2)
     assert not set(a_reduce_axes).intersection(a_var_axes)
@@ -5940,7 +6161,7 @@ class RemoveLayer(LayerBase):
 class CombineLayer(LayerBase):
   """
   Applies some binary operation on all sources, such as addition.
-  Also see :class:`ActivationLayer`.
+  Also see :class:`ActivationLayer`, or :class:`CompareLayer`.
   """
   layer_class = "combine"
 
@@ -6135,7 +6356,11 @@ class EvalLayer(CombineLayer):
   """
   Evaluates some string.
   The :class:`CombineLayer` provides this functionality, thus this is just a special case of it.
-  Also see :class:`ActivationLayer`.
+  Also see :class:`ActivationLayer`, or :class:`CompareLayer`.
+
+  The output type is defined as a broadcasted extension of all sources.
+  You can overwrite it by (partially) specifying `out_type`.
+  `out_type` can also be a generic Python function, returning a `Data` instance.
   """
   layer_class = "eval"
 
@@ -6188,6 +6413,8 @@ class CompareLayer(LayerBase):
     :rtype: Data
     """
     if n_out is NotSpecified and not out_type:
+      if not sources[0] or sources[0].output.undefined:
+        return Data.create_undefined(name="%s_output" % kwargs["name"])
       out_type = sources[0].output.get_kwargs()
       out_type["name"] = "%s_output" % kwargs["name"]
       if out_type.get("sparse", False):
@@ -6266,22 +6493,25 @@ class SwitchLayer(LayerBase):
     from TFNetwork import CannotHandleUndefinedSourcesException
     if isinstance(condition, bool):
       if condition:
-        if true_from.output.undefined:
+        if not true_from or true_from.output.undefined:
           raise CannotHandleUndefinedSourcesException(
             layer_name=name, layer_desc=dict(condition=condition, true_from=true_from, false_from=false_from, **kwargs))
         return true_from.output.copy("%s_output" % name)
       else:
-        if false_from.output.undefined:
+        if not false_from or false_from.output.undefined:
           raise CannotHandleUndefinedSourcesException(
             layer_name=name, layer_desc=dict(condition=condition, true_from=true_from, false_from=false_from, **kwargs))
         return false_from.output.copy("%s_output" % name)
-    if true_from.output.undefined or false_from.output.undefined or condition.output.undefined:
+    if (
+          not true_from or not false_from or not condition or
+          true_from.output.undefined or false_from.output.undefined or condition.output.undefined):
       raise CannotHandleUndefinedSourcesException(
         layer_name=name, layer_desc=dict(condition=condition, true_from=true_from, false_from=false_from, **kwargs))
     out = Data.get_common_data([true_from.output, false_from.output, condition.output])
     out = out.copy(name="%s_output" % name)
     out.dtype = true_from.output.dtype
     out.sparse = true_from.output.sparse
+    out.dim = true_from.output.dim
     out.vocab = true_from.output.vocab
     return out
 
@@ -6470,14 +6700,17 @@ class SubnetworkLayer(LayerBase):
   recurrent = True  # we don't know. depends on the subnetwork.
 
   # noinspection PyShadowingNames
-  def __init__(self, subnetwork, concat_sources=True, load_on_init=None, dropout=0, dropout_noise_shape=None, **kwargs):
+  def __init__(self, subnetwork, concat_sources=True, load_on_init=None,
+               dropout=0, dropout_noise_shape=None,
+               _parent_layer_cache=None, **kwargs):
     """
     :param dict[str,dict] subnetwork: subnetwork as dict (JSON content). must have an "output" layer-
     :param bool concat_sources: if we concatenate all sources into one, like it is standard for most other layers
-    :param str|None load_on_init: if provided, for parameter initialization,
-      we will load the given model file.
+    :param str|dict[str]|None load_on_init: if provided, for parameter initialization,
+      we will load the given model file. see :class:`CustomCheckpointLoader`.
     :param float dropout: will be applied if train_flag is set
     :param tuple|list|dict|None dropout_noise_shape:
+    :param dict[str,LayerBase]|None _parent_layer_cache:
     """
     super(SubnetworkLayer, self).__init__(**kwargs)
     from TFNetwork import TFNetwork
@@ -6491,6 +6724,8 @@ class SubnetworkLayer(LayerBase):
       train_flag=self.network.train_flag,
       search_flag=self.network.search_flag,
       parent_layer=self)
+    if _parent_layer_cache:
+      net.layers.update({"base:%s" % name: layer for (name, layer) in _parent_layer_cache.items()})
     if self._rec_previous_layer:
       # Make some rec_previous_layer for the subnet layers.
       subnetwork = subnetwork.copy()
@@ -6498,13 +6733,16 @@ class SubnetworkLayer(LayerBase):
         # The actual layer is not so important.
         # In some cases (e.g. RnnCellLayer), we just want rec_vars_outputs.
         dummy_rec_previous_layer = InternalLayer(
-          name=layer_name, network=net, output=Data(name="dummy_rec_previous_layer(%s)" % layer_name, dim=1))
+          name=layer_name, network=net,
+          output=Data(name="dummy_rec_previous_layer(%s)" % layer_name, dim=1, undefined=True))
         dummy_rec_previous_layer.rec_vars_outputs.update({
           key[len(layer_name + "/"):]: value
           for (key, value) in self._rec_previous_layer.rec_vars_outputs.items()
           if key.startswith(layer_name + "/")})
         subnetwork[layer_name] = subnetwork[layer_name].copy()
         subnetwork[layer_name]["rec_previous_layer"] = dummy_rec_previous_layer
+    if concat_sources:
+      net.get_layer("data").sources.extend(self.sources)  # add deps, now
     net.construct_from_dict(subnetwork)
     self.subnetwork = net
     if self.network.eval_flag:
@@ -6518,6 +6756,8 @@ class SubnetworkLayer(LayerBase):
         assert source.name in self.subnetwork.used_data_keys, "%s: some input is not used" % self
     self._update_used_data_keys()
     for layer in net.layers.values():
+      if layer.network is not net:  # e.g. copied "base" layers or so
+        continue
       if layer.params:
         assert layer.trainable == self.trainable, "partly trainable subnetworks not yet supported"
       self.params.update({"%s/%s" % (layer.name, k): v for (k, v) in layer.params.items()})
@@ -6528,8 +6768,14 @@ class SubnetworkLayer(LayerBase):
       print("loading initial weights from", load_on_init, file=log.v2)
       self_prefix = self.get_absolute_name_scope_prefix()  # with "/" at end
       from TFNetwork import CustomCheckpointLoader
-      loader = CustomCheckpointLoader(
-        filename=load_on_init, saveable_params=list(self.params.values()), params_prefix=self_prefix, network=net)
+      opts = dict(saveable_params=list(self.params.values()), params_prefix=self_prefix, network=net)
+      if isinstance(load_on_init, str):
+        opts["filename"] = load_on_init
+      elif isinstance(load_on_init, dict):
+        opts.update(load_on_init)
+      else:
+        raise TypeError("%s: invalid load_on_init %r" % (self, load_on_init))
+      loader = CustomCheckpointLoader(**opts)
       loader.set_as_custom_init()
 
   # noinspection PyShadowingNames
@@ -6578,14 +6824,34 @@ class SubnetworkLayer(LayerBase):
     if n_out is not NotSpecified or out_type:
       return super(SubnetworkLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, **kwargs)
     subnet = cls._construct_template_subnet(
-      name=kwargs["name"], network=kwargs["network"],
+      name=kwargs["name"], network=kwargs["network"], parent_layer_cache=kwargs.get("_parent_layer_cache", None),
       subnetwork=subnetwork,
       concat_sources=concat_sources, sources=kwargs["sources"])
     return subnet.layers["output"].output
 
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param TFNetwork.TFNetwork network:
+    :param get_layer:
+    """
+    super(SubnetworkLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    # Construct it now, just to resolve dependencies.
+    from TFNetwork import CannotHandleUndefinedSourcesException
+    try:
+      cls._construct_template_subnet(
+        name=d.get("name", "unknown-subnet"),
+        network=network, get_parent_layer=get_layer, parent_layer_cache=d.setdefault("_parent_layer_cache", {}),
+        subnetwork=d["subnetwork"],
+        concat_sources=d.get("concat_sources", True), sources=d["sources"])
+    except CannotHandleUndefinedSourcesException:
+      pass  # ignore that here
+
   # noinspection PyShadowingNames
   @classmethod
-  def _construct_template_subnet(cls, name, network, subnetwork, sources, concat_sources=True):
+  def _construct_template_subnet(cls, name, network, subnetwork, sources, concat_sources=True,
+                                 get_parent_layer=None, parent_layer_cache=None):
     """
     Very similar to _SubnetworkRecCell._construct_template, but simpler.
 
@@ -6594,11 +6860,15 @@ class SubnetworkLayer(LayerBase):
     :param dict[str,dict[str]] subnetwork:
     :param list[LayerBase] sources:
     :param bool concat_sources:
+    :param (str)->LayerBase get_parent_layer:
+    :param dict[str,LayerBase]|None parent_layer_cache:
     :rtype: TFNetwork.TFNetwork
     """
     assert "output" in subnetwork
     from TFNetwork import TFNetwork
     from TFNetworkRecLayer import _TemplateLayer
+    if not get_parent_layer:
+      get_parent_layer = network.get_layer
     # Placeholder, will not be used.
     sub_extern_data = cls._get_subnet_extern_data(
       base_network=network, sources=sources, concat_sources=concat_sources)
@@ -6639,7 +6909,12 @@ class SubnetworkLayer(LayerBase):
         layer_ = subnet.layers[name]
         return layer_
       if name.startswith("base:"):
-        layer_ = network.get_layer(name[len("base:"):])
+        parent_name = name[len("base:"):]
+        if parent_layer_cache and parent_name in parent_layer_cache:
+          return parent_layer_cache[parent_name]
+        layer_ = get_parent_layer(parent_name)
+        if parent_layer_cache is not None:
+          parent_layer_cache[parent_name] = layer_
         return layer_
       return subnet.construct_layer(
         net_dict=subnetwork, name=name, get_layer=get_templated_layer, add_layer=add_templated_layer)
@@ -6655,12 +6930,25 @@ class SubnetworkLayer(LayerBase):
         if layer.get("is_output_layer"):
           get_templated_layer(layer_name)
 
-    except Exception:
-      print("%r: exception constructing template network (for deps and data shapes)" % cls)
-      print("Template network so far:")
+    except Exception as exc:
+      import sys
+      etype, value, tb = sys.exc_info()
+      import better_exchook
+      from TFNetwork import CannotHandleUndefinedSourcesException
+      from Util import StringIO
+      ss = StringIO()
+      print("%s %r: Exception constructing template network (for deps and data shapes): %s %s" % (
+        cls.__name__, name, type(exc).__name__, exc), file=ss)
+      print("Template network so far:", file=ss)
       from pprint import pprint
-      pprint(subnet.layers)
-      raise
+      pprint(subnet.layers, stream=ss)
+      if isinstance(exc, CannotHandleUndefinedSourcesException):
+        raise CannotHandleUndefinedSourcesException(
+          layer_name=name, layer_desc=dict(
+            subnetwork=subnetwork, sources=sources, network=network, concat_sources=concat_sources),
+          extended_info_str=ss.getvalue())
+      better_exchook.better_exchook(etype, value, tb, file=ss)
+      raise Exception(ss.getvalue())
 
     return subnet
 
@@ -6695,6 +6983,7 @@ class SubnetworkLayer(LayerBase):
     else:
       subnet = cls._construct_template_subnet(
         name=name, network=network, subnetwork=kwargs["subnetwork"],
+        parent_layer_cache=kwargs.get("_parent_layer_cache", None),
         sources=kwargs["sources"], concat_sources=kwargs.get("concat_sources", True))
     for layer_name, sub_layer in sorted(subnet.layers.items()):
       if layer:
@@ -6712,6 +7001,18 @@ class SubnetworkLayer(LayerBase):
           network=network, name="%s/%s" % (name, loss.name)))
     return losses
 
+  def get_sub_layer(self, layer_name):
+    """
+    :param str layer_name: name of the sub_layer (right part of '/' separated path)
+    :return: the sub_layer addressed in layer_name or None if no sub_layer exists
+    :rtype: LayerBase|None
+    """
+    from TFNetwork import LayerNotFound
+    try:
+      return self.subnetwork.get_layer(layer_name)
+    except LayerNotFound:
+      return None
+
   def get_last_hidden_state(self, key):
     """
     :param int|str|None key: also the special key "*"
@@ -6722,23 +7023,24 @@ class SubnetworkLayer(LayerBase):
       return h
     return super(SubnetworkLayer, self).get_last_hidden_state(key=key)
 
-  # noinspection PyMethodOverriding
   @classmethod
-  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, subnetwork, **kwargs):
+  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, **kwargs):
     """
     :param tf.Tensor batch_dim: for this layer, might be with beam
     :param TFNetworkRecLayer.RecLayer rec_layer:
     :param dict[str,dict[str]] subnetwork:
     :rtype: dict[str,tf.Tensor]
     """
+    from TFNetworkRecLayer import _TemplateLayer
+    subnet = cls._construct_template_subnet(
+      name=kwargs.get("name", "<unknown>"), network=kwargs["network"], subnetwork=kwargs["subnetwork"],
+      parent_layer_cache=kwargs.get("_parent_layer_cache", None),
+      sources=kwargs["sources"], concat_sources=kwargs.get("concat_sources", True))
     extra_outputs = {}
-    for layer_name, layer_desc in subnetwork.items():
-      layer_desc = layer_desc.copy()
-      layer_class_name = layer_desc.pop("class")
-      cl = get_layer_class(layer_class_name)
-      # Note: This is not totally correct. We should call transform_config_dict.
-      # But that will make it quite complicated...
-      layer_desc["name"] = layer_name
+    for layer_name, sub_layer in subnet.layers.items():
+      assert isinstance(sub_layer, _TemplateLayer)
+      cl = sub_layer.layer_class_type
+      layer_desc = sub_layer.kwargs
       assert issubclass(cl, LayerBase)
       with cl.cls_layer_scope(layer_name):
         d = cl.get_rec_initial_extra_outputs(
@@ -6748,21 +7050,22 @@ class SubnetworkLayer(LayerBase):
     return extra_outputs
 
   @classmethod
-  def get_rec_initial_extra_outputs_shape_invariants(cls, subnetwork, **kwargs):
+  def get_rec_initial_extra_outputs_shape_invariants(cls, **kwargs):
     """
-    :param dict[str,dict[str]] subnetwork:
     :return: optional shapes for the tensors by get_rec_initial_extra_outputs
     :rtype: dict[str,tf.TensorShape]
     """
     # Very similar to get_rec_initial_extra_outputs.
+    from TFNetworkRecLayer import _TemplateLayer
+    subnet = cls._construct_template_subnet(
+      name=kwargs.get("name", "<unknown>"), network=kwargs["network"], subnetwork=kwargs["subnetwork"],
+      parent_layer_cache=kwargs.get("_parent_layer_cache", None),
+      sources=kwargs["sources"], concat_sources=kwargs.get("concat_sources", True))
     shape_invariants = {}
-    for layer_name, layer_desc in subnetwork.items():
-      layer_desc = layer_desc.copy()
-      layer_class_name = layer_desc.pop("class")
-      cl = get_layer_class(layer_class_name)
-      # Note: This is not totally correct. We should call transform_config_dict.
-      # But that will make it quite complicated...
-      layer_desc["name"] = layer_name
+    for layer_name, sub_layer in subnet.layers.items():
+      assert isinstance(sub_layer, _TemplateLayer)
+      cl = sub_layer.layer_class_type
+      layer_desc = sub_layer.kwargs
       assert issubclass(cl, LayerBase)
       with cl.cls_layer_scope(layer_name):
         d = cl.get_rec_initial_extra_outputs_shape_invariants(**layer_desc)
@@ -6889,6 +7192,235 @@ class AccumulateMeanLayer(ReduceLayer):
     return super(AccumulateMeanLayer, cls).get_out_data_from_opts(axes=axes, **kwargs)
 
 
+class LossLayer(LayerBase):
+  """
+  This layers wraps a :class:`Loss` calculation as a layer.
+  I.e. the loss will be calculated and returned by the layer.
+  But this loss will not be used as a loss by the updater.
+  If you want to use it as a loss, you can use the :class:`AsIsLoss`,
+  i.e. write ``"loss": "as_is"``.
+  """
+  layer_class = "loss"
+  recurrent = True  # we don't know. depends on the loss
+
+  def __init__(self, loss_, target_=None, use_error=False, **kwargs):
+    """
+    ``loss_`` and related params have the postfix ``_`` to distinguish them
+    from the loss options, which are used by the network and updater for training.
+    Some of these (e.g. ``loss_opts_``) are handled in :func:`transform_config_dict`.
+
+    :param Loss loss_:
+    :param LayerBase|None target_:
+    :param bool use_error: whether to output the loss error instead of the loss value
+    """
+    super(LossLayer, self).__init__(**kwargs)
+    assert len(self.sources) == 1
+    source = self.sources[0]
+    self.loss_ = loss_
+    self.target_ = target_
+    self.loss_.reduce_func = TFUtil.identity
+    self.loss_.use_flatten_frames = False
+    self.loss_.init(
+      output=source.output,
+      output_with_activation=source.output_before_activation,
+      target=target_.output if target_ else None,
+      layer=source)
+    self.loss_value = self._make_output_value(self.loss_.get_value())
+    self.error_value = self._make_output_value(self.loss_.get_error())
+    if use_error:
+      assert self.error_value is not None
+      self.output.placeholder = self.error_value
+    else:
+      assert self.loss_value is not None
+      self.output.placeholder = self.loss_value
+
+  def _make_output_value(self, value):
+    """
+    :param tf.Tensor|None value: either loss value or error value, as it comes out from Loss.get_value or Loss.get_error.
+      [B*T|T*B|B] just like source
+    :return: shape as self.output, e.g. [B,T] or [T,B] ...
+    :rtype: tf.Tensor|None
+    """
+    if value is None:
+      return None
+    # Note: This code is not complete. There are other cases.
+    # E.g. MseLoss leaves more dimensions... In that case, we should reduce_sum on them.
+    assert value.shape.ndims == 1  # [B*T|T*B|B] just like source
+    source = self.sources[0]
+    shape = TFUtil.get_shape(source.output.placeholder)
+    if source.output.have_feature_axis():
+      del shape[source.output.feature_dim_axis]
+    return tf.reshape(value, shape)
+
+  def get_sub_layer(self, layer_name):
+    """
+    :param str layer_name: sub layer name
+    :rtype: LayerBase|None
+    """
+    sub_layer_name = "%s/%s" % (self.name, layer_name)
+    out = self.output.copy_template(name="%s_output" % sub_layer_name)
+    if layer_name == "loss":
+      assert self.loss_value is not None, "%s: loss not defined" % self
+      out.placeholder = self.loss_value
+      return InternalLayer(name=sub_layer_name, network=self.network, output=out)
+    elif layer_name == "error":
+      assert self.error_value is not None, "%s: error not defined" % self
+      out.placeholder = self.error_value
+      return InternalLayer(name=sub_layer_name, network=self.network, output=out)
+    else:
+      raise Exception("%s: invalid sub layer %r" % (self, layer_name))
+
+  @classmethod
+  def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
+    """
+    :param str layer_name: sub layer name
+    :param dict[str] parent_layer_kwargs:
+    :rtype: (Data, TFNetwork, type)|None
+    """
+    if layer_name not in ["loss", "error"]:
+      return None
+    return cls.get_out_data_from_opts(**parent_layer_kwargs), parent_layer_kwargs["network"], InternalLayer  # same type
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    deps = super(LossLayer, self).get_dep_layers()
+    if self.target_:
+      deps.append(self.target_)
+    return deps
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param TFNetwork.TFNetwork network:
+    :param get_layer:
+    """
+    super(LossLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    assert "loss_" in d
+    if "target_" not in d:
+      target = get_loss_class(d["loss_"]).get_default_target(network.extern_data)
+      if target:
+        d["target_"] = target
+    if d.get("target_", None):
+      target = d["target_"]
+      if target.startswith("layer:"):
+        target = get_layer(target[len("layer:"):])
+      else:
+        target = get_layer("data:%s" % target)
+      d["target_"] = target
+    d["loss_"] = cls._make_loss(
+      class_name=d.pop("loss_", None), opts=d.pop("loss_opts_", {}),
+      network=network, get_layer=get_layer, always_make=True)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    assert len(sources) == 1
+    out = sources[0].output.copy_template(name="%s_output" % name)
+    if out.have_feature_axis():
+      out = out.copy_template_excluding_axis(out.feature_dim_axis)
+    out.dtype = "float32"
+    return out
+
+
+class ForcedAlignmentLayer(_ConcatInputLayer):
+  """
+  Calculates a forced alignment, via Viterbi algorithm.
+  """
+  layer_class = "forced_align"
+
+  def __init__(self, align_target, topology, input_type, **kwargs):
+    """
+    :param LayerBase align_target:
+    :param str topology: e.g. "ctc" or "rna" (RNA is CTC without label loop)
+    :param str input_type: "log_prob" or "prob"
+    """
+    from TFNativeOp import get_ctc_fsa_fast_bw, fast_viterbi
+    super(ForcedAlignmentLayer, self).__init__(**kwargs)
+    self.align_target = align_target
+    assert topology in ["ctc", "rna"], "%s no other topology implemented" % self
+    logits_data = self.input_data.copy_as_time_major()
+    logits = logits_data.placeholder
+    assert logits.get_shape().ndims == 3 and logits.get_shape().dims[-1].value == logits_data.dim
+    assert align_target.output.shape == (None,) and align_target.output.dim == logits_data.dim - 1
+    if input_type == "log_prob":
+      pass  # ok
+    elif input_type == "prob":
+      logits = TFUtil.safe_log(logits)
+    else:
+      raise ValueError("%s: invalid input_type %r" % (self, input_type))
+
+    edges, weights, start_end_states = get_ctc_fsa_fast_bw(
+      targets=align_target.output.get_placeholder_as_batch_major(),
+      seq_lens=align_target.output.get_sequence_lengths(),
+      blank_idx=logits_data.dim - 1,
+      label_loop=topology == "ctc")
+    alignment, scores = fast_viterbi(
+      am_scores=logits, am_seq_len=logits_data.get_sequence_lengths(),
+      edges=edges, weights=weights, start_end_states=start_end_states)
+    self.alignment = alignment
+    self.scores = scores
+    self.output.placeholder = alignment
+
+  @classmethod
+  def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
+    """
+    :param str layer_name: sub layer name
+    :param dict[str] parent_layer_kwargs:
+    :rtype: (Data, TFNetwork, type)|None
+    """
+    if layer_name == "scores":
+      return Data(name="align_scores", shape=(), dtype="float32"), parent_layer_kwargs["network"], InternalLayer
+    return None
+
+  def get_sub_layer(self, layer_name):
+    """
+    :param str layer_name:
+    :rtype: LayerBase|None
+    """
+    if layer_name == "scores":
+      return InternalLayer(
+        name="%s_scores" % self.name, network=self.network,
+        output=Data(name="%s_scores_output" % self.name, shape=(), dtype="float32", placeholder=self.scores))
+    return None
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    return super(ForcedAlignmentLayer, self).get_dep_layers() + [self.align_target]
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param TFNetwork.TFNetwork network:
+    :param get_layer:
+    """
+    super(ForcedAlignmentLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["align_target"] = get_layer(d["align_target"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    src = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_time_major()
+    src.dtype = "int32"
+    src.sparse = True
+    src.shape = (None,)
+    src.feature_dim_axis = NotSpecified
+    return src
+
+
 class FastBaumWelchLayer(_ConcatInputLayer):
   """
   Calls :func:`fast_baum_welch` or :func:`fast_baum_welch_by_sprint_automata`.
@@ -6897,14 +7429,17 @@ class FastBaumWelchLayer(_ConcatInputLayer):
   layer_class = "fast_bw"
   recurrent = True
 
-  def __init__(self, align_target, sprint_opts=None,
+  def __init__(self, align_target, align_target_key=None,
+               ctc_opts=None, sprint_opts=None,
                input_type="log_prob",
                tdp_scale=1.0, am_scale=1.0, min_prob=0.0,
                staircase_seq_len_source=None,
                **kwargs):
     """
     :param str align_target: e.g. "sprint" or "staircase"
-    :param dict[str] sprint_opts:
+    :param str|None align_target_key: e.g. "classes", used for e.g. align_target "ctc"
+    :param dict[str] ctc_opts: used for align_target "ctc"
+    :param dict[str] sprint_opts: used for Sprint (RASR) for align_target "sprint"
     :param str input_type: "log_prob" or "prob"
     :param float tdp_scale:
     :param float am_scale:
@@ -6932,7 +7467,29 @@ class FastBaumWelchLayer(_ConcatInputLayer):
       am_scores = tf.minimum(am_scores, -numpy.log(min_prob))  # in -log space
     if am_scale != 1:
       am_scores *= am_scale
-    if align_target == "sprint":
+    if align_target == "ctc":
+      # See :func:`TFNativeOp.ctc_loss` for reference.
+      if ctc_opts is None:
+        ctc_opts = {}
+      targets_data = self._get_target_value(align_target_key)
+      ctc_opts = ctc_opts.copy()
+      ctc_opts.setdefault("blank_idx", targets_data.dim)
+      assert targets_data.dim + 1 == data.dim
+      ctc_merge_repeated = ctc_opts.pop("ctc_merge_repeated", NotSpecified)  # label_loop === ctc_merge_repeated
+      if ctc_merge_repeated is not NotSpecified:
+        assert "label_loop" not in ctc_opts
+        ctc_opts["label_loop"] = ctc_merge_repeated
+      from TFNativeOp import get_ctc_fsa_fast_bw, fast_baum_welch
+      edges, weights, start_end_states = get_ctc_fsa_fast_bw(
+        targets=targets_data.get_placeholder_as_batch_major(),
+        seq_lens=targets_data.get_sequence_lengths(),
+        **ctc_opts)
+      from TFUtil import sequence_mask_time_major
+      seq_mask = sequence_mask_time_major(data.get_sequence_lengths())
+      fwdbwd, obs_scores = fast_baum_welch(
+        am_scores=am_scores, float_idx=seq_mask,
+        edges=edges, weights=weights, start_end_states=start_end_states)
+    elif align_target == "sprint":
       from TFUtil import sequence_mask_time_major
       seq_mask = sequence_mask_time_major(data.get_sequence_lengths())
       from TFNativeOp import fast_baum_welch_by_sprint_automata
@@ -6949,7 +7506,7 @@ class FastBaumWelchLayer(_ConcatInputLayer):
         am_scores=am_scores, seq_lens=staircase_seq_len_source.output.get_sequence_lengths())
     else:
       raise Exception("%s: invalid align_target %r" % (self, align_target))
-    loss = tf.reduce_sum(obs_scores[0])
+    loss = obs_scores[0]  # [batch]
     self.output_loss = loss
     bw = tf.exp(-fwdbwd)
     self.output.placeholder = bw
@@ -7296,7 +7853,7 @@ class HDFDumpLayer(LayerBase):
       try:
         if not self.hdf_writer:
           self.hdf_writer = SimpleHDFWriter(
-            filename=filename, dim=data.dim, ndim=ndim,
+            filename=self.filename, dim=data.dim, ndim=ndim,
             labels=labels,
             extra_type={
               key: (
@@ -7595,6 +8152,9 @@ class Loss(object):
     self.custom_norm_factor = custom_norm_factor
     self.scale = scale
 
+  def __repr__(self):
+    return "<%s %r>" % (self.__class__.__name__, self.layer or self.output)
+
   def _reduce_batch_time(self):
     """
     :return: In self.reduce_func, whether to expect that the loss is of shape (batch*time|time*batch,).
@@ -7798,7 +8358,7 @@ class Loss(object):
       "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output))
     expected_output_dim = self.get_auto_output_layer_dim(self.target.dim)
     assert expected_output_dim == self.output.dim, (
-      "Expected output dim is %i but the output has dim %r. " % (expected_output_dim, self.output.dim) +
+      "Expected output dim is %r but the output has dim %r. " % (expected_output_dim, self.output.dim) +
       "Target: %s, output: %s" % (self.target, self.output))
 
   def get_error(self):
@@ -7930,10 +8490,15 @@ class CrossEntropyLoss(Loss):
           if self.debug_dump:
             out = py_print(out, [tf.exp(tf.negative(out))], summarize=10000, message='target prob ')
         else:
-          assert not self.label_smoothing, "not implemented"
           print("Warning: using numerical unstable sparse Cross-Entropy loss calculation (%s to %s)" % (
             self.output, self.target), file=log.v3)
-          out = -safe_log(self.get_output_target_scores(), **self.safe_log_opts)
+          if self.label_smoothing:
+            out = smoothing_cross_entropy(
+              logits=safe_log(self.output_flat), logits_are_normalized=True,
+              labels=to_int32_64(self.target_flat), vocab_size=self.target.dim,
+              label_smoothing=self.label_smoothing, gaussian=self.label_smoothing_gaussian)  # shape(labels)
+          else:
+            out = -safe_log(self.get_output_target_scores(), **self.safe_log_opts)
         if self.focal_loss_factor:
           out *= (1.0 - self.get_output_target_scores()) ** self.focal_loss_factor
         if self.fake_upper_bound is not None:
@@ -7964,15 +8529,30 @@ class BinaryCrossEntropyLoss(Loss):
   """
   class_name = "bin_ce"
 
+  def _check_init(self):
+    assert self.target
+    assert self.target.batch_ndim == self.output.batch_ndim, (
+      "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output))
+
   def get_value(self):
     """
     :rtype: tf.Tensor
     """
-    assert not self.target.sparse, "sparse is not supported yet"
-    assert self.target.dim == self.output.dim
     with tf.name_scope("loss_bin_ce"):
-      out = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.output_flat, labels=self.target_flat)
-      return self.reduce_func(out * (1.0 / self.target.dim))
+      out = tf.nn.sigmoid_cross_entropy_with_logits(
+        logits=self.output_flat, labels=tf.cast(self.target_flat, self.output_flat.dtype))
+      return self.reduce_func(out) * (1.0 / (self.output.dim or 1))
+
+  def get_error(self):
+    """
+    :return: frame error rate as a scalar value with the default self.reduce_func (see also self.get_value)
+    :rtype: tf.Tensor
+    """
+    with tf.name_scope("loss_frame_error"):
+      targets_bool = tf.cast(self.target_flat, tf.float32) > 0.5
+      output_bool = tf.greater(self.output_flat, 0.)  # logits
+      not_equal = tf.not_equal(output_bool, targets_bool)
+      return self.reduce_func(tf.cast(not_equal, tf.float32)) * (1.0 / (self.output.dim or 1))
 
 
 class GenericCELoss(Loss):
@@ -8072,6 +8652,8 @@ class CtcLoss(Loss):
     self._target_sparse_labels = None
     self._ctc_loss = None  # set in get_value
     self.beam_width = beam_width
+    if ctc_opts is None:
+      ctc_opts = {}
     self.ctc_opts = ctc_opts
     self.focal_loss_factor = focal_loss_factor
     self.use_native = use_native
@@ -8163,21 +8745,21 @@ class CtcLoss(Loss):
       labels = self._get_target_sparse_labels()
       # logits can be unnormalized. It will do softmax internally.
       if self.use_viterbi:
-        assert not self.ctc_opts
         import TFNativeOp
         self._ctc_loss = TFNativeOp.ctc_loss_viterbi(
           logits=logits, logits_seq_lens=seq_lens, logits_time_major=self.output.is_time_major,
-          targets=self.target.get_placeholder_as_batch_major(), targets_seq_lens=self.target_seq_lens)
+          targets=self.target.get_placeholder_as_batch_major(), targets_seq_lens=self.target_seq_lens,
+          **self.ctc_opts)
       elif self.use_native:
-        assert not self.ctc_opts
         import TFNativeOp
         self._ctc_loss = TFNativeOp.ctc_loss(
           logits=logits, logits_seq_lens=seq_lens, logits_time_major=self.output.is_time_major,
-          targets=self.target.get_placeholder_as_batch_major(), targets_seq_lens=self.target_seq_lens)
+          targets=self.target.get_placeholder_as_batch_major(), targets_seq_lens=self.target_seq_lens,
+          **self.ctc_opts)
       else:
         self._ctc_loss = tf.nn.ctc_loss(
           inputs=logits, labels=labels, sequence_length=seq_lens, time_major=self.output.is_time_major,
-          **(self.ctc_opts or {}))
+          **self.ctc_opts)
       loss = self._ctc_loss  # shape (batch,)
       if self.focal_loss_factor:
         # We are going up to (time,batch,dim), and we later use reduce_sum,
@@ -8856,6 +9438,7 @@ class ViaLayerLoss(Loss):
     """
     :rtype: tf.Tensor
     """
+    from TFUtil import where_bc
     with tf.name_scope("ViaLayerLoss"):
       if self.error_signal_layer:
         assert not self.align_layer
@@ -8865,9 +9448,7 @@ class ViaLayerLoss(Loss):
         error_signal = self.output.placeholder - self.align_layer.output.copy_compatible_to(self.output).placeholder
       if self.output.is_time_axis_dynamic():
         seq_mask_bc = self.output.get_sequence_mask_broadcast()
-        error_signal = tf.where(
-          tf.logical_and(seq_mask_bc, tf.ones_like(error_signal, dtype=tf.bool)),
-          error_signal, tf.zeros_like(error_signal))
+        error_signal = where_bc(seq_mask_bc, error_signal, 0.0)
       if self.loss_wrt_to_act_in:
         assert self.output_with_activation, "activation unknown, via %r" % self.output
         if isinstance(self.loss_wrt_to_act_in, (str, unicode)):
@@ -8879,9 +9460,23 @@ class ViaLayerLoss(Loss):
       else:
         grad_wrt = self.output.placeholder
       from TFUtil import custom_gradient
+      loss = self._loss_value
+      assert isinstance(loss, tf.Tensor)
+      orig_loss_shape = tf.shape(loss)
+      # We need to add broadcast dims to loss such that it can be broadcasted to grad_wrt/error_signal.
+      if loss.shape.ndims == 0:  # scalar
+        pass  # should be ok...
+      elif loss.shape.ndims == 1:  # assume [batch]
+        loss = tf.reshape(
+          loss, [orig_loss_shape[0] if i == self.output.batch_dim_axis else 1 for i in range(self.output.batch_ndim)])
+      else:
+        # Just hope that is has the same prefix shape.
+        loss = tf.reshape(
+          loss, [orig_loss_shape[i] if i < loss.shape.ndims else 1 for i in range(self.output.batch_ndim)])
       loss = custom_gradient.generic_loss_and_error_signal(
-        loss=self._loss_value, x=grad_wrt, grad_x=error_signal)
-      return loss
+        loss=loss, x=grad_wrt, grad_x=error_signal)
+      loss = tf.reshape(loss, orig_loss_shape)
+      return self.reduce_func(loss)
 
   def get_error(self):
     """
@@ -8891,6 +9486,15 @@ class ViaLayerLoss(Loss):
       return None  # we don't have it
     # Use default frame-wise error to reference target.
     return super(ViaLayerLoss, self).get_error()
+
+  @classmethod
+  def get_default_target(cls, extern_data):
+    """
+    :param TFNetwork.ExternData extern_data:
+    :rtype: None
+    """
+    # We do not need any target.
+    return None
 
 
 class AsIsLoss(Loss):
@@ -9206,9 +9810,9 @@ class TripletLoss(Loss):
   def __init__(self, margin, multi_view_training=False, **kwargs):
     super(TripletLoss, self).__init__(**kwargs)
     """
-    :param float margin: how much the distance between instances of the same class 
+    :param float margin: how much the distance between instances of the same class
       should be smaller then distances between instances of different classes.
-    :param bool multi_view_training: True if we have a pair of inputs (x_a, x_s, x_d) 
+    :param bool multi_view_training: True if we have a pair of inputs (x_a, x_s, x_d)
       extracted from two different data representations (i.e. acoustic and orthographic)
     """
     self.margin = margin

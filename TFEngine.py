@@ -886,6 +886,7 @@ class Engine(EngineBase):
     if isinstance(self.max_seq_length, dict):
       self.max_seq_length = NumbersDict(self.max_seq_length)
     assert isinstance(self.max_seq_length, (int, float, NumbersDict))
+    self.max_pad_size = config.typed_value("max_pad_size", None)
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
 
@@ -938,6 +939,8 @@ class Engine(EngineBase):
       # - SubnetworkLayer also has a load_on_init option.
       # - LayerBase has custom_param_importer which is quite flexible.
       print("Start pre-loading weights...", file=log.v2)
+      # model_name will not be used directly, but it defines the order in which we apply the preloading.
+      # Variables are initialized by the first preload.
       for model_name, opts in sorted(self.preload_from_files.items()):
         assert isinstance(opts, dict)
         if opts.get("init_for_train", False):
@@ -955,9 +958,13 @@ class Engine(EngineBase):
           filename=model_filename,
           saveable_params=self.network.get_params_list(),
           params_prefix=self_prefix, load_if_prefix=load_if_prefix,
-          ignore_missing=opts.get("ignore_missing", False))
+          ignore_missing=opts.get("ignore_missing", False),
+          ignore_params=opts.get("ignore_params", ()),
+          ignore_params_prefixes=opts.get("ignore_params_prefixes", ()))
+        # `set_as_custom_init` is also a marker for the vars, that they are preloaded,
+        # such that further checkpoint loaders will not load them again.
         loader.set_as_custom_init()
-      self.network.initialize_params(session=self.tf_session)
+        loader.load_now(session=self.tf_session)
 
     if model_epoch_filename:
       print("loading weights from", model_epoch_filename, file=log.v2)
@@ -1234,9 +1241,6 @@ class Engine(EngineBase):
       new_network_desc = self.pretrain.get_network_json_for_epoch(self.epoch)
       # Always update config, if needed, even if nothing changed.
       # This might trigger enforcing some learning rate, or so.
-      if self.need_init_new_network(new_network_desc):
-        # Early call of reset callbacks, which might trigger some HDF dump or other things.
-        self.network.call_graph_reset_callbacks()
       self._maybe_update_config(net_desc=new_network_desc, epoch=self.epoch)
       if self.need_init_new_network(new_network_desc):
         self.init_new_network(new_network_desc)
@@ -1308,6 +1312,7 @@ class Engine(EngineBase):
         batch_size=self.batch_size,
         max_seqs=self.max_seqs,
         max_seq_length=self.max_seq_length,
+        max_pad_size=self.max_pad_size,
         seq_drop=self.seq_drop,
         shuffle_batches=self.shuffle_batches,
         used_data_keys=self.network.get_used_data_keys())
@@ -1317,7 +1322,10 @@ class Engine(EngineBase):
     train_batches = self.dataset_batches['train']
 
     self.updater.set_learning_rate(self.learning_rate, session=self.tf_session)
-    trainer = Runner(engine=self, dataset=self.train_data, batches=train_batches, train=True)
+    trainer = Runner(
+      engine=self,
+      dataset=self.train_data, batches=train_batches,
+      train=self.network.layers_desc.get("#trainable", True))
     trainer.run(report_prefix=("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch)
 
     if not trainer.finalized:
@@ -1332,8 +1340,25 @@ class Engine(EngineBase):
         self.save_model(self.get_epoch_model_filename() + ".broken")
         sys.exit(1)
 
+    should_call_graph_reset_callbacks = False
+    should_save_model_after_eval = False
+    if (self.network.get_graph_reset_callbacks() and
+        # See also init_train_epoch().
+        self.need_init_new_network(
+          net_desc=self.pretrain.get_network_json_for_epoch(epoch=self.epoch + 1)
+            if self.is_pretrain_epoch(epoch=self.epoch + 1) else None)):
+      # Do not call it right now, but after eval model. See below.
+      should_call_graph_reset_callbacks = True
+      # In case that Returnn crashes now during eval (e.g. job timelimit exceeded),
+      # e.g. some HDF dump would be incomplete, but Returnn would load the saved model
+      # and continue with the next epoch anyway. We want to avoid this incompleteness.
+      should_save_model_after_eval = True
+
     if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):
-      self.save_model(self.get_epoch_model_filename())
+      if not should_save_model_after_eval:
+        self.save_model(self.get_epoch_model_filename())
+    else:
+      should_save_model_after_eval = False
     self.learning_rate_control.set_epoch_error(self.epoch, {"train_score": trainer.score, "train_error": trainer.error})
     if self._do_save():
       self.learning_rate_control.save()
@@ -1344,6 +1369,13 @@ class Engine(EngineBase):
       "error:", self.format_score(trainer.error),
       "elapsed:", hms(trainer.elapsed), file=log.v1)
     self.eval_model()
+
+    if should_call_graph_reset_callbacks:
+      # Early call of reset callbacks, which might trigger some HDF dump or other things.
+      # Do this after eval model, such that e.g. the HDF dump contains information about both train and dev.
+      self.network.call_graph_reset_callbacks()
+    if should_save_model_after_eval:
+      self.save_model(self.get_epoch_model_filename())
 
     if self.config.bool_or_other("cleanup_old_models", None):
       self.cleanup_old_models()
@@ -1934,7 +1966,7 @@ class Engine(EngineBase):
 
   def search(self, dataset, do_eval=True, output_layer_names="output", output_file=None, output_file_format="txt"):
     """
-    :param Dataset.Dataset dataset:
+    :param Dataset dataset:
     :param bool do_eval: calculate errors. can only be done if we have the reference target
     :param str|list[str] output_layer_names:
     :param str output_file:
@@ -2234,6 +2266,8 @@ class Engine(EngineBase):
     assert isinstance(dataset, Dataset)
     if config:
       assert config is self.config
+    else:
+      config = self.config
 
     output_layer = self._get_output_layer()
     assert config.has('output_file'), 'output_file for priors numbers should be provided'

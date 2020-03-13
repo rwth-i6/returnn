@@ -14,7 +14,7 @@ import rnn
 from Log import log
 import argparse
 import numpy
-from Util import Stats, hms, pretty_print
+from Util import Stats, hms, hms_fraction, pretty_print
 import Util
 
 
@@ -89,6 +89,8 @@ def dump_dataset(dataset, options):
     print("Dump shape to stdout", file=log.v3)
   elif options.type == "plot":
     print("Plot.", file=log.v3)
+  elif options.type == "interactive":
+    print("Interactive debug shell.", file=log.v3)
   elif options.type == "null":
     print("No dump.")
   else:
@@ -151,6 +153,9 @@ def dump_dataset(dataset, options):
           print("seq %i target %r: %s%s" % (seq_idx, target, pretty_print(targets), extra))
         elif options.type == "print_shape":
           print("seq %i target %r shape:" % (seq_idx, target), targets.shape)
+      if options.type == "interactive":
+        from Debug import debug_shell
+        debug_shell(locals())
     seq_len = dataset.get_seq_length(seq_idx)
     for key in dataset.get_data_keys():
       seq_len_stats[key].collect([seq_len[key]])
@@ -162,7 +167,7 @@ def dump_dataset(dataset, options):
     seq_idx += 1
 
   print("Done. Total time %s. More seqs which we did not dumped: %s" % (
-    hms(time.time() - start_time), dataset.is_less_than_num_seqs(seq_idx)), file=log.v2)
+    hms_fraction(time.time() - start_time), dataset.is_less_than_num_seqs(seq_idx)), file=log.v2)
   for key in dataset.get_data_keys():
     seq_len_stats[key].dump(stream_prefix="Seq-length %r " % key, stream=log.v2)
   if stats:
@@ -203,15 +208,20 @@ def init(config_str, config_dataset, verbosity):
   if dataset_dict:
     assert not config_dataset
     config.set("train", dataset_dict)
-  elif config_dataset:
+  elif config_dataset and config_dataset != "train":
+    print("Use dataset %r from config." % config_dataset)
     config.set("train", "config:%s" % config_dataset)
   else:
+    print("Use train dataset from config.")
     assert config.value("train", None)
   rnn.init_log()
   print("Returnn dump-dataset starting up.", file=log.v2)
   rnn.returnn_greeting()
   rnn.init_faulthandler()
   rnn.init_config_json_network()
+  # We use 'train' from the config.
+  config.set("dev", None)
+  config.set("eval", None)
   rnn.init_data()
   rnn.print_task_properties()
 
