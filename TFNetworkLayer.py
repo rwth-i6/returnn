@@ -2930,19 +2930,13 @@ class LinearLayer(_ConcatInputLayer):
     """
     n_in = self.input_data.dim
     in_split_info = []
-
-    def _add_src(src):
-      """
-      :param LayerBase src:
-      """
+    src_queue = list(self.sources)
+    while src_queue:
+      src = src_queue.pop(0)
       if isinstance(src, CopyLayer):  # special case, contains itself of multiple sources maybe
-        for src__ in src.sources:
-          _add_src(src__)
-        return
+        src_queue = list(src.sources) + src_queue
+        continue
       in_split_info.append(src.output.dim)
-
-    for src_ in self.sources:
-      _add_src(src_)
     if not all(in_split_info) or sum(in_split_info) != n_in:
       print(
         "%s: Warning: input split dims %r unclear for sources %r?" % (self, in_split_info, self.sources), file=log.v3)
