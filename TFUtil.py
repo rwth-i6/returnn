@@ -2617,16 +2617,21 @@ def get_param_axes_split_info(param):
   return getattr(param, "returnn_axes_split_info", None)
 
 
-def transform_param_axes_split_info_to_new_shape(axes_split_info, new_shape):
+def transform_param_axes_split_info_to_new_shape(axes_split_info, new_shape, debug_name="<unknown>"):
   """
   new_shape can be bigger or smaller than the old shape.
   In some simple cases, it is obvious how that should be done, e.g. [[a],[b]*4], [a*2,b*8] -> [[a*2],[b*2]*4]
   In some, it is not so. E.g. [[a+b],[b]*4], [a+b*2,b*8] -> [[a+b*2],[b*2]*4].
+
+  We should try to always return something, though.
+  If some case is not covered yet, extend this.
+
   See test cases as well, :func:`test_transform_param_axes_split_info_to_new_shape`.
   No TF involved here, however, fits better to the functions above.
 
   :param list[list[int]] axes_split_info:
   :param list[int]|tuple[int] new_shape:
+  :param str debug_name:
   :return: new axes-split-info for the new shape
   :rtype: list[list[int]]
   """
@@ -2640,21 +2645,24 @@ def transform_param_axes_split_info_to_new_shape(axes_split_info, new_shape):
       if new_dim % len(parts) == 0:
         dim_diff[parts[0]] = new_dim // len(parts)  # just a heuristic
   for i, (new_dim, parts) in enumerate(zip(new_shape, axes_split_info)):
-    assert len(parts) >= 1
+    assert len(parts) >= 1, "%s transform %r %r diff %r" % (debug_name, axes_split_info, new_shape, dim_diff)
     if len(parts) == 1:  # simple case
       new_axes_split_info.append([new_dim])
       continue
     new_parts = [dim_diff.get(d) for d in parts]
     if any([d is None for d in new_parts]):
-      assert sum([d is None for d in new_parts]) == 1
+      while sum([d is None for d in new_parts]) > 1:
+        # More than one entry is ambiguous. Assume the next one stayed the same.
+        j = [d is None for d in new_parts].index(True)
+        new_parts[j] = parts[j]
       j = [d is None for d in new_parts].index(True)
       new_parts[j] = new_dim - sum([d for d in new_parts if d is not None])
-      assert new_parts[j] > 0
+      assert new_parts[j] > 0, debug_name
     elif sum(new_parts) != new_dim:
       # another heuristic. assume that the first is wrong.
       new_parts[0] = new_dim - sum(new_parts[1:])
-      assert new_parts[0] > 0
-    assert sum(new_parts) == new_dim
+      assert new_parts[0] > 0, debug_name
+    assert sum(new_parts) == new_dim, debug_name
     new_axes_split_info.append(new_parts)
   return new_axes_split_info
 

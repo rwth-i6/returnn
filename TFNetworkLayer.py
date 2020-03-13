@@ -881,7 +881,7 @@ class LayerBase(object):
           if param_axes_split_info:
             TFUtil.check_param_axes_split_info(param.get_shape().as_list(), param_axes_split_info)
             old_axes_splits = TFUtil.transform_param_axes_split_info_to_new_shape(
-              param_axes_split_info, values.shape)
+              param_axes_split_info, values.shape, debug_name="param %r" % param.name)
             print("Param %r: transform old values of shape parts %r into new shape parts %r." % (
               param, old_axes_splits, param_axes_split_info), file=log.v3)
             values = TFUtil.copy_with_new_split_axes(

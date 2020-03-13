@@ -2574,6 +2574,8 @@ def test_transform_param_axes_split_info_to_new_shape():
   assert_equal(transform_param_axes_split_info_to_new_shape([[7,7],[7]*4], [3+7*2,7*8]), [[3,7*2],[7*2]*4])
   assert_equal(transform_param_axes_split_info_to_new_shape([[7,7],[7]*4], [7*2+7*2,7*8]), [[7*2,7*2],[7*2]*4])
   assert_equal(transform_param_axes_split_info_to_new_shape([[7],[7]*4], [7,7*8]), [[7],[7*2]*4])
+  assert_equal(transform_param_axes_split_info_to_new_shape(
+    [[1000, 621, 1280], [1000]], (2645, 1000)), [[1000, 621, 1024], [1000]])
 
 
 def test_get_op_attrib_keys():
