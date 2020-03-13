@@ -4951,12 +4951,9 @@ class ReduceLayer(_ConcatInputLayer):
           if axis_wo_b not in x.size_placeholder:
             continue
           assert axis == x.time_dim_axis
-          mask = x.get_sequence_mask()  # e.g. (B,T)
-          mask = expand_multiple_dims(
-            mask, [i for i in range(x.batch_ndim) if i not in [x.batch_dim_axis, axis]])  # e.g. (B,1,T) with axis=-1
-          mask = tf.logical_and(mask, tf.ones_like(x_, dtype=mask.dtype))
+          mask = x.get_sequence_mask_broadcast(axis=axis)
 
-          zeros = tf.zeros_like(x.placeholder)
+          zeros = tf.zeros((), dtype=x.placeholder.dtype)
           replacement_value = {
             tf.reduce_mean: zeros,
             tf.reduce_sum: zeros,
@@ -4964,7 +4961,7 @@ class ReduceLayer(_ConcatInputLayer):
             tf.reduce_min: zeros + x.placeholder.dtype.max,
             tf.reduce_max: zeros + x.placeholder.dtype.min}
 
-          x_ = tf.where(mask, x_, replacement_value[f], "x_masked_axis_%i" % axis)
+          x_ = TFUtil.where_bc(mask, x_, replacement_value[f], "x_masked_axis_%i" % axis)
           if f == tf.reduce_mean:
             seq_len_bc = tf.reshape(
               x.get_sequence_lengths(),
