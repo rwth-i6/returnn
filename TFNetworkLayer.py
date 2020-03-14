@@ -4078,6 +4078,17 @@ class SplitDimsLayer(_ConcatInputLayer):
     data.name = "%s_output" % name
     if isinstance(axis, int):
       data = data.copy_as_batch_major()
+    if data.undefined:
+      # We cannot really cover all cases here. But at least some common ones.
+      if isinstance(axis, str) and axis.lower() == "f" and all([d > 0 for d in dims]):
+        if data.feature_dim_axis is not None:
+          data = data.copy_template_excluding_axis(axis=data.feature_dim_axis)
+        return Data(
+          name="%s_output_undefined" % name, undefined=True,
+          shape=data.shape + tuple(dims),
+          size_placeholder=data.size_placeholder,
+          batch_dim_axis=data.batch_dim_axis, time_dim_axis=data.time_dim_axis,
+          dtype=data.dtype, beam=data.beam)
     axis = data.get_axis_from_description(axis)
     if data.batch_shape[axis] is not None:
       resolved_shape_dims = cls._resolve_dims(old_dim=data.batch_shape[axis], new_dims=dims)
