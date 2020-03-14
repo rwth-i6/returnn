@@ -58,6 +58,8 @@ Execution guide
 - Then, depending on the ``task`` option, it might start ``engine.train``, ``engine.forward`` etc.
   (:py:func:`Engine.Engine.train` or :py:func:`TFEngine.Engine.train`), :ref:`tech_engine_train`.
 
+.. _tech_engine_train:
+
 Training
 --------
 
