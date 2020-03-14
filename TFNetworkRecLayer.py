@@ -3555,17 +3555,15 @@ class RnnCellLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :rtype: Data
     """
-    if sources and any([not src or src.output.undefined for src in sources]):
-      from TFNetwork import CannotHandleUndefinedSourcesException
-      raise CannotHandleUndefinedSourcesException(
-        layer_name=name, layer_desc=dict(n_out=n_out, sources=sources, **kwargs))
+    # In case some input is undefined, just assume we are inside the loop.
     beam = None
     for dep in sources:
-      beam = SearchBeam.get_combined_beam(beam, dep.output.beam)
+      if dep:
+        beam = SearchBeam.get_combined_beam(beam, dep.output.beam)
     shape = (n_out,)  # type: typing.Tuple[typing.Union[int,None],...]
     batch_dim_axis = 0
     time_dim_axis = None
-    if sources and sources[0].output.time_dim_axis is not None:
+    if sources and sources[0] and sources[0].output.time_dim_axis is not None:
       shape = (None,) + shape
       batch_dim_axis = 1
       time_dim_axis = 0
