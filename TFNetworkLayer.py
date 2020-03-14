@@ -5811,9 +5811,22 @@ class DotLayer(LayerBase):
     assert len(sources) == 2, "dot-layer %r: needs exactly two sources" % (name,)
     # See __init__.
     a_out = sources[0].output.copy_as_batch_major()
+    a_reduce_axes = a_out.get_axes_from_description(red1)
+    if not sources[1] or sources[1].output.undefined:
+      # Somewhat tricky but we can still do sth reasonable.
+      out = a_out.copy_template(name="%s_output_via_undef" % name)
+      for axis in reversed(sorted(a_reduce_axes)):
+        out = out.copy_template_excluding_axis(axis)
+      if isinstance(var2, (list, tuple)):
+        for axis in var2:
+          if isinstance(axis, str) and axis.lower() == "t?":
+            continue
+          out = out.copy_add_feature_dim()
+      elif var2 is not None:  # just assume a single axis...
+        out = out.copy_add_feature_dim()
+      return out
     b_out = sources[1].output.copy_as_batch_major()
     assert not a_out.beam or not b_out.beam or a_out.beam == b_out.beam
-    a_reduce_axes = a_out.get_axes_from_description(red1)
     b_reduce_axes = b_out.get_axes_from_description(red2)
     assert a_reduce_axes and b_reduce_axes, "%s: sources %r, red1 %r, red2 %r" % (name, sources, red1, red2)
     a_var_axes = a_out.get_axes_from_description(var1)
