@@ -918,7 +918,8 @@ class ExtractAudioFeatures:
 
   def __init__(self,
                window_len=0.025, step_len=0.010,
-               num_feature_filters=None, with_delta=False, norm_mean=None, norm_std_dev=None,
+               num_feature_filters=None, with_delta=False,
+               norm_mean=None, norm_std_dev=None,
                features="mfcc", feature_options=None, random_permute=None, random_state=None, raw_ogg_opts=None,
                pre_process=None, post_process=None,
                sample_rate=None,
@@ -928,8 +929,8 @@ class ExtractAudioFeatures:
     :param float step_len: in seconds
     :param int num_feature_filters:
     :param bool|int with_delta:
-    :param numpy.ndarray|str|int|float|None norm_mean: if str, will interpret as filename
-    :param numpy.ndarray|str|int|float|None norm_std_dev: if str, will interpret as filename
+    :param numpy.ndarray|str|int|float|None norm_mean: if str, will interpret as filename, or "per_seq"
+    :param numpy.ndarray|str|int|float|None norm_std_dev: if str, will interpret as filename, or "per_seq"
     :param str|function features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank", "raw", "raw_ogg"
     :param dict[str]|None feature_options: provide additional parameters for the feature function
     :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
@@ -985,11 +986,13 @@ class ExtractAudioFeatures:
     """
     :param str|None value:
     :return: shape (self.num_inputs,), float32
-    :rtype: numpy.ndarray|None
+    :rtype: numpy.ndarray|str|None
     """
     if value is None:
       return None
     if isinstance(value, str):
+      if value == "per_seq":
+        return value
       value = numpy.loadtxt(value)
     assert isinstance(value, numpy.ndarray)
     assert value.shape == (self.get_feature_dimension(),)
@@ -1099,13 +1102,17 @@ class ExtractAudioFeatures:
       assert feature_data.shape[1] == (self.with_delta + 1) * self.num_feature_filters
 
     if self.norm_mean is not None:
-      if isinstance(self.norm_mean, (int, float)):
+      if isinstance(self.norm_mean, str) and self.norm_mean == "per_seq":
+        feature_data -= numpy.mean(feature_data, axis=0, keepdims=True)
+      elif isinstance(self.norm_mean, (int, float)):
         feature_data -= self.norm_mean
       else:
         feature_data -= self.norm_mean[None, :]
 
     if self.norm_std_dev is not None:
-      if isinstance(self.norm_std_dev, (int, float)):
+      if isinstance(self.norm_std_dev, str) and self.norm_std_dev == "per_seq":
+        feature_data /= numpy.std(feature_data, axis=0, keepdims=True)
+      elif isinstance(self.norm_std_dev, (int, float)):
         feature_data /= self.norm_std_dev
       else:
         feature_data /= self.norm_std_dev[None, :]
