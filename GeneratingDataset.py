@@ -2847,9 +2847,11 @@ class OggZipDataset(CachedDataset2):
       return int(self._data[i]["duration"] * 100)
 
     if seq_list is not None:
-      seqs = {seq["file"]: i for i, seq in enumerate(self._data) if seq["file"] in seq_list}
+      seqs = {self._get_tag_from_info_dict(seq): i for i, seq in enumerate(self._data)\
+              if self._get_tag_from_info_dict(seq) in seq_list}
       for seq_tag in seq_list:
-        assert seq_tag in seqs, "did not found all requested seqs. we have eg: %s" % (self._data[0]["file"],)
+        assert seq_tag in seqs, "did not found all requested seqs. we have eg: %s" %\
+                                (self._get_tag_from_info_dict(self._data[0]),)
       self._seq_order = [seqs[seq_tag] for seq_tag in seq_list]
       self._num_seqs = len(self._seq_order)
     else:
