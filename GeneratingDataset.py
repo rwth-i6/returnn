@@ -1111,7 +1111,7 @@ class ExtractAudioFeatures:
 
     if self.norm_std_dev is not None:
       if isinstance(self.norm_std_dev, str) and self.norm_std_dev == "per_seq":
-        feature_data /= numpy.std(feature_data, axis=0, keepdims=True)
+        feature_data /= numpy.maximum(numpy.std(feature_data, axis=0, keepdims=True), 1e-2)
       elif isinstance(self.norm_std_dev, (int, float)):
         feature_data /= self.norm_std_dev
       else:
