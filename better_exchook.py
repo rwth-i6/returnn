@@ -357,7 +357,7 @@ def fallback_findfile(filename):
     :return: try to find the full filename, e.g. in modules, etc
     :rtype: str|None
     """
-    mods = [m for m in sys.modules.values() if m and getattr(m, "__file__", None) and filename in m.__file__]
+    mods = [m for m in list(sys.modules.values()) if m and getattr(m, "__file__", None) and filename in m.__file__]
     if len(mods) == 0:
         return None
     alt_fn = mods[0].__file__
