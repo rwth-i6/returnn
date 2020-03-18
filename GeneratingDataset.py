@@ -2724,7 +2724,15 @@ class OggZipDataset(CachedDataset2):
     self.feature_extractor = (
       ExtractAudioFeatures(random_state=self._audio_random, **audio) if audio is not None else None)
     self.num_inputs = self.feature_extractor.get_feature_dimension() if self.feature_extractor else 0
-    self.num_outputs = {"raw": {"dtype": "string", "shape": ()}}
+    self.num_outputs = {
+      "raw": {"dtype": "string", "shape": ()},
+      "orth": [256, 1]}
+    # Note: "orth" is actually the raw bytes of the utf8 string,
+    # so it does not make quite sense to associate a single str to each byte.
+    # However, some other code might expect that the labels are all strings, not bytes,
+    # and the API requires the labels to be strings.
+    # The code in Dataset.serialize_data tries to decode this case as utf8 (if possible).
+    self.labels["orth"] = [chr(i) for i in range(255)]
     if self.targets:
       self.num_outputs["classes"] = [self.targets.num_labels, 1]
     if self.feature_extractor:
@@ -2965,10 +2973,17 @@ class OggZipDataset(CachedDataset2):
       features = numpy.zeros(())  # currently the API requires some dummy values...
     targets, txt = self._get_transcription(seq_idx)
     targets = numpy.array(targets, dtype="int32")
-    txt = numpy.array(txt, dtype="object")
+    raw_txt = numpy.array(txt, dtype="object")
+    orth = txt.encode("utf8")
+    if PY3:
+      assert isinstance(orth, bytes)
+      orth = list(orth)
+    else:
+      orth = list(map(ord, orth))
+    orth = numpy.array(orth, dtype="uint8")
     return DatasetSeq(
       features=features,
-      targets={"classes": targets, "raw": txt},
+      targets={"classes": targets, "raw": raw_txt, "orth": orth},
       seq_idx=seq_idx,
       seq_tag=seq_tag)
 
