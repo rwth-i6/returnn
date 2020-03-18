@@ -1250,6 +1250,7 @@ def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx, label_loop=True):
   """
   assert targets.get_shape().ndims == 2
   targets_shape = tf.shape(targets)
+  targets = tf.cast(targets, tf.int32)
   n_batch = targets_shape[0]
   n_time = targets_shape[1]
   n_edges = n_batch * (5 * (n_time - 1) + 10)  # see op documentation
