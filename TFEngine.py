@@ -1438,8 +1438,21 @@ class Engine(EngineBase):
       return False
     return True
 
+  def _is_dataset_evaluated(self, name):
+    """
+    Check via self.learning_rate_control.
+
+    :param str name:
+    :rtype: bool
+    """
+    assert self.learning_rate_control.filename  # otherwise we would not have stored it
+    error_dict = self.learning_rate_control.get_epoch_error_dict(self.epoch)
+    if not error_dict:
+      return False
+    return any([k.startswith("%s_score" % name) for k in error_dict.keys()])
+
   def eval_model(self, output_file=None, output_per_seq_file=None, loss_name=None,
-                 output_per_seq_format=None, output_per_seq_file_format="txt"):
+                 output_per_seq_format=None, output_per_seq_file_format="txt", skip_already_evaluated=False):
     """
     Eval the current model on the eval datasets (dev + eval, whatever is set).
     See also :func:`self.search` for performing beam search.
@@ -1450,6 +1463,7 @@ class Engine(EngineBase):
     :param list[str]|tuple[str]|None output_per_seq_format:
       which properties of `loss_name` should be written to `output_per_seq_file`.
       allowed_outputs = {"seq_tag", "seq_len", "score", "error", "pos_score", "pos_error"}.
+    :param bool skip_already_evaluated:
     :param str output_per_seq_file_format: "txt" or "py"
     :return: nothing
     """
@@ -1546,6 +1560,8 @@ class Engine(EngineBase):
       dataset.init_seq_order(epoch=self.epoch)
 
     for dataset_name, dataset in self.get_eval_datasets().items():
+      if skip_already_evaluated and self._is_dataset_evaluated(name=dataset_name):
+        continue
       if dataset_name not in self.dataset_batches or not dataset.batch_set_generator_cache_whole_epoch():
         self.dataset_batches[dataset_name] = dataset.generate_batches(
           recurrent_net=self.network.recurrent,
@@ -1567,10 +1583,10 @@ class Engine(EngineBase):
       eval_dump_str += ["%s: score %s error %s" % (
                         dataset_name, self.format_score(tester.score), self.format_score(tester.error))]
       results[dataset_name] = {"score": tester.score, "error": tester.error}
-      if dataset_name == "dev":
-        self.learning_rate_control.set_epoch_error(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
-        if self._do_save():
-          self.learning_rate_control.save()
+      self.learning_rate_control.set_epoch_error(
+        self.epoch, {"%s_score" % dataset_name: tester.score, "%s_error" % dataset_name: tester.error})
+      if self._do_save():
+        self.learning_rate_control.save()
     print(" ".join(eval_dump_str), file=log.v1)
     if output_file:
       print('Write eval results to %r' % output_file, file=log.v3)
@@ -1609,13 +1625,13 @@ class Engine(EngineBase):
       return
     # noinspection PyAttributeOutsideInit
     self.epoch = self.start_epoch - 1
-    if self.learning_rate_control.need_error_info:
-      if self.dev_data:
-        if all([not k.startswith("dev_score")
-                for k in self.learning_rate_control.get_epoch_error_dict(self.epoch).keys()]):
+    if self.learning_rate_control.filename:
+      for name, dataset in self.get_eval_datasets().items():
+        if not self._is_dataset_evaluated(name=name):
           # This can happen when we have a previous model but did not test it yet.
           print("Last epoch model not yet evaluated on dev. Doing that now.", file=log.v4)
-          self.eval_model()
+          self.eval_model(skip_already_evaluated=True)
+          break
 
   def cleanup_old_models(self, ask_for_confirmation=False):
     """
