@@ -808,7 +808,7 @@ class Engine(EngineBase):
     :param Dataset|None value:
     """
     self.eval_datasets.pop("dev", None)
-    if val:
+    if value:
       self.eval_datasets["dev"] = value
 
   @property
@@ -824,7 +824,7 @@ class Engine(EngineBase):
     :param Dataset|None value:
     """
     self.eval_datasets.pop("eval", None)
-    if val:
+    if value:
       self.eval_datasets["eval"] = value
 
   def load_model(self, epoch=None, filename=None):
