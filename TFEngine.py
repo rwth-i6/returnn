@@ -28,7 +28,7 @@ import tensorflow as tf
 from tensorflow.python.client import timeline
 
 from EngineBase import EngineBase
-from Dataset import Dataset, Batch, BatchSetGenerator
+from Dataset import Dataset, Batch, BatchSetGenerator, init_dataset
 from LearningRateControl import load_learning_rate_control_from_config, LearningRateControl
 from Log import log
 from Pretrain import pretrain_from_config
@@ -860,6 +860,9 @@ class Engine(EngineBase):
       self.eval_datasets["dev"] = dev_data
     if eval_data:
       self.eval_datasets["eval"] = eval_data
+    if config.has("eval_datasets"):
+      for dataset_name, dataset_opts in config.typed_value("eval_datasets", {}).items():
+        self.eval_datasets[dataset_name] = init_dataset(dataset_opts, default_kwargs={"name": dataset_name})
     self.start_epoch, self.start_batch = self.get_train_start_epoch_batch(config)
     self.batch_size = config.typed_value('batch_size', 1)
     self.shuffle_batches = config.bool('shuffle_batches', False)
