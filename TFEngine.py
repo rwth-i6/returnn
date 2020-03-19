@@ -689,6 +689,7 @@ class Engine(EngineBase):
     self._merge_all_summaries = None
     self.dataset_batches = {}  # type: typing.Dict[str,BatchSetGenerator]
     self.train_data = None  # type: typing.Optional[Dataset]
+    self.eval_datasets = {}  # type: typing.Dict[str,Dataset]
     self.start_epoch = None  # type: typing.Optional[int]
     self.use_dynamic_train_flag = False
     self.use_search_flag = config.value("task", None) == "search"
@@ -792,12 +793,7 @@ class Engine(EngineBase):
     :return: dict of datasets used for eval (dev, eval)
     :rtype: dict[str,Dataset]
     """
-    eval_datasets = {}  # type: typing.Dict[str,Dataset]
-    for name, dataset in [("dev", self.dev_data), ("eval", self.eval_data)]:
-      if not dataset:
-        continue
-      eval_datasets[name] = dataset
-    return eval_datasets
+    return self.eval_datasets
 
   def load_model(self, epoch=None, filename=None):
     """
@@ -847,9 +843,9 @@ class Engine(EngineBase):
   def init_train_from_config(self, config=None, train_data=None, dev_data=None, eval_data=None):
     """
     :param Config.Config|None config:
-    :param Dataset.Dataset|None train_data:
-    :param Dataset.Dataset|None dev_data:
-    :param Dataset.Dataset|None eval_data:
+    :param Dataset|None train_data:
+    :param Dataset|None dev_data:
+    :param Dataset|None eval_data:
     """
     if not config:
       config = self.config
@@ -859,8 +855,11 @@ class Engine(EngineBase):
       set_config_num_inputs_outputs_from_dataset(config=config, dataset=train_data or dev_data or eval_data)
     self.use_dynamic_train_flag = True
     self.train_data = train_data
-    self.dev_data = dev_data
-    self.eval_data = eval_data
+    self.eval_datasets.clear()
+    if dev_data:
+      self.eval_datasets["dev"] = dev_data
+    if eval_data:
+      self.eval_datasets["eval"] = eval_data
     self.start_epoch, self.start_batch = self.get_train_start_epoch_batch(config)
     self.batch_size = config.typed_value('batch_size', 1)
     self.shuffle_batches = config.bool('shuffle_batches', False)
