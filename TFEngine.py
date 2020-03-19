@@ -795,6 +795,38 @@ class Engine(EngineBase):
     """
     return self.eval_datasets
 
+  @property
+  def dev_data(self):
+    """
+    :rtype: Dataset|None
+    """
+    return self.eval_datasets.get("dev", None)
+
+  @dev_data.setter
+  def dev_data(self, value):
+    """
+    :param Dataset|None value:
+    """
+    self.eval_datasets.pop("dev", None)
+    if val:
+      self.eval_datasets["dev"] = value
+
+  @property
+  def eval_data(self):
+    """
+    :rtype: Dataset|None
+    """
+    return self.eval_datasets.get("eval", None)
+
+  @eval_data.setter
+  def eval_data(self, value):
+    """
+    :param Dataset|None value:
+    """
+    self.eval_datasets.pop("eval", None)
+    if val:
+      self.eval_datasets["eval"] = value
+
   def load_model(self, epoch=None, filename=None):
     """
     :param int epoch:
