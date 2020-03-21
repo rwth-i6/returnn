@@ -890,6 +890,11 @@ class _SubnetworkRecCell(object):
     if rec_layer_name is None:
       assert parent_rec_layer
       rec_layer_name = parent_rec_layer.name
+    if parent_rec_layer:
+      # This is very ugly. However, during the template construction (_construct_template) below,
+      # recursively via self.net.get_rec_parent_layer, we might check for self.net.parent_layer.cell,
+      # before the __init__ here has finished.
+      parent_rec_layer.cell = self
     self.parent_rec_layer = parent_rec_layer
     self.parent_net = parent_net
     self.net_dict = deepcopy(net_dict)

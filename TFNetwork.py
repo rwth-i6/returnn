@@ -1765,7 +1765,12 @@ class TFNetwork(object):
     """
     if self._is_inside_rec_layer is not None:
       return self._is_inside_rec_layer
-    return self.get_rec_parent_layer(inside_loop=inside_loop) is not None
+    if self.get_rec_parent_layer(inside_loop=inside_loop) is not None:
+      return True
+    if self.parent_net:
+      # This might still return True, in case of template construction, where _is_inside_rec_layer is set.
+      return self.parent_net.is_inside_rec_layer(inside_loop=inside_loop)
+    return False
 
   def get_rec_parent_layer(self, inside_loop=True):
     """
