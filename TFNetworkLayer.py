@@ -4896,6 +4896,100 @@ class PoolLayer(_ConcatInputLayer):
       beam=data.beam)
 
 
+class TransposedConvLayer(_ConcatInputLayer):
+  """
+  Transposed convolution, sometimes also called deconvolution.
+  See :func:`tf.nn.conv2d_transpose` (currently we support 1D/2D).
+  """
+  layer_class = "transposed_conv"
+  recurrent = True
+
+  def __init__(self, filter_size, activation, strides=None, with_bias=True,
+               forward_weights_init="glorot_uniform", bias_init=0.0,
+               **kwargs):
+    """
+    :param list[int] filter_size:
+    :param list[int]|None strides: specifies the upscaling. by default, same as filter_size
+    :param bool with_bias:
+    :param str|None activation:
+    :param forward_weights_init:
+    :param bias_init:
+    """
+    from TFUtil import DimensionTag, get_initializer, get_activation_function, get_shape
+    super(TransposedConvLayer, self).__init__(**kwargs)
+    input_data = self.input_data.copy_as_batch_spatial_major()
+    spatial_axes = input_data.get_spatial_axes()
+    if strides is None:
+      strides = filter_size
+    assert len(spatial_axes) == len(filter_size) == len(strides), (
+      "%s: expected %i-D transposed-conv for input %r but got filter %r and strides %r" % (
+        self, len(spatial_axes), input_data, filter_size, strides))
+    assert len(spatial_axes) in [1, 2], "%s: %i-D not yet implemented..." % (self, len(spatial_axes))
+    x = input_data.placeholder
+    shape = get_shape(x)
+    if len(spatial_axes) == 1:
+      # TF supports only 2D transposed-conv, so wrap it.
+      shape = shape[:2] + [1] + shape[2:]
+      x = tf.reshape(x, shape)
+      filter_size = list(filter_size) + [1]
+      strides = list(strides) + [1]
+    filter_shape = list(filter_size) + [self.output.dim, input_data.dim]  # transposed
+    with self.var_creation_scope():
+      fwd_weights_initializer = get_initializer(
+        forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
+      filters = self.add_param(tf.get_variable(
+        # Use that name to easily identify the format later.
+        # E.g. we might want to switch to some more canonical format at some point.
+        name="W_native_transposed_conv", shape=filter_shape, initializer=fwd_weights_initializer))
+    output_shape = shape[:1] + [d * s for (d, s) in zip(shape[1:-1], strides)] + [self.output.dim]
+    y = tf.nn.conv2d_transpose(x, filter=filters, strides=[1] + list(strides) + [1], output_shape=output_shape)
+    if len(spatial_axes) == 1:
+      y = tf.reshape(y, output_shape[:2] + [self.output.dim])
+    if with_bias:
+      with self.var_creation_scope():
+        bias_initializer = get_initializer(
+          bias_init, seed=self.network.random.randint(2 ** 31) if bias_init else 0, eval_local_ns={"layer": self})
+        b = self.add_param(tf.get_variable(name="bias", shape=(self.output.dim,), initializer=bias_initializer))
+      y += b
+    if activation:
+      act_func = get_activation_function(activation)
+      self.output_before_activation = OutputWithActivation(y, act_func=act_func)
+    else:
+      self.output_before_activation = OutputWithActivation(y)
+    y = self.output_before_activation.y
+    self.output.placeholder = y
+    self.output.size_placeholder = {
+      i: input_data.size_placeholder[i]
+      for i in input_data.get_spatial_axes()
+      if i in input_data.size_placeholder}
+    for i, size in list(self.output.size_placeholder.items()):
+      if strides[i] != 1:
+        size = size * strides[i]
+        self.output.size_placeholder[i] = size
+        tag = DimensionTag(
+          description="spatial:%i:%s" % (i, self.get_absolute_name()),
+          kind=DimensionTag.Types.Spatial)
+        tag.set_tag_on_size_tensor(size)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, n_out, filter_size, strides=None, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param int n_out:
+    :param list[int] filter_size:
+    :param list[int]|None strides:
+    :rtype: Data
+    """
+    out = get_concat_sources_data_template(sources)
+    out = out.copy_as_batch_spatial_major()
+    out = out.copy_template(name="%s_output" % name)
+    assert out.have_feature_axis()
+    out = out.copy_template_replace_dim(axis=-1, new_dim=n_out)
+    out.size_placeholder.clear()  # will be reset in __init__
+    return out
+
+
 class ReduceLayer(_ConcatInputLayer):
   """
   This reduces some axis by using "sum" or "max".
