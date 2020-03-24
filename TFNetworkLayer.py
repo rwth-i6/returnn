@@ -5971,10 +5971,17 @@ class ResizeLayer(_ConcatInputLayer):
     # self.output.shape and self.output.batch_dim_axis are already set here via self.get_out_data_from_opts().
     axis = self.output.get_axis_from_description(axis)
     assert axis > 0, "batch-dim resize not supported"
-    self.output.placeholder = self.input_data.copy_as_batch_major().placeholder
-    self.output.size_placeholder = self.input_data.size_placeholder.copy()
+    input_data = self.input_data.copy_as_batch_major()
+    self.output.placeholder = input_data.placeholder
+    self.output.size_placeholder = input_data.size_placeholder.copy()
     if (axis - 1) in self.output.size_placeholder:
-      self.output.size_placeholder[axis - 1] *= factor
+      size = self.output.size_placeholder[axis - 1] * factor
+      self.output.size_placeholder[axis - 1] = size
+      from TFUtil import DimensionTag
+      tag = DimensionTag(
+        description="resize:%s" % self.get_absolute_name(),
+        kind=DimensionTag.Types.Spatial)
+      tag.set_tag_on_size_tensor(size)
 
     # images expected shape: [batch, height, width, channels]
     remaining_axes = [i for i in range(self.output.batch_ndim) if i not in (0, axis)]
@@ -6043,13 +6050,15 @@ class ResizeLayer(_ConcatInputLayer):
     :rtype: Data
     """
     out = get_concat_sources_data_template(sources).copy_as_batch_major()
-    out.name = "%s_output" % name
+    out = out.copy_template(name="%s_output" % name)
     axis = out.get_axis_from_description(axis)
     assert axis > 0, "batch-dim resize not supported"
     if out.shape[axis - 1] is not None:
       out_shape = list(out.shape)
       out_shape[axis - 1] *= factor
       out.shape = tuple(out_shape)
+    if axis - 1 in out.size_placeholder:
+      del out.size_placeholder[axis - 1]  # we will reset it
     return out
 
 
