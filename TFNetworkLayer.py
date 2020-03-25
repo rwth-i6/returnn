@@ -6080,10 +6080,10 @@ class ResizeLayer(_ConcatInputLayer):
     # images expected shape: [batch, height, width, channels]
     remaining_axes = [i for i in range(self.output.batch_ndim) if i not in (0, axis)]
     x = dimshuffle(self.output.placeholder, [0, axis, 'x'] + remaining_axes)  # [batch,height,width] + remaining_axes
-    shape = tf.shape(self.output.placeholder)
-    shape = [shape[i] for i in range(self.output.batch_ndim)]
+    from TFUtil import get_shape, optional_mul
+    shape = get_shape(self.output.placeholder)
     remaining_shape = [shape[i] for i in remaining_axes]
-    remaining_dim = tf.reduce_prod(remaining_shape) if remaining_axes else 1
+    remaining_dim = optional_mul(*remaining_shape) if remaining_axes else 1
     x = tf.reshape(x, [shape[0], shape[axis], 1, remaining_dim])  # [batch,height,width,channels]
     new_size = shape[axis] * factor
     if kind == "linear":
