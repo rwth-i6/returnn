@@ -25,8 +25,8 @@ logging.getLogger('tensorflow').disabled = True
 import generateapi
 generateapi.generate()
 
-#import generate_units
-#generate_units.generate()
+import generate_units
+generate_units.generate()
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
