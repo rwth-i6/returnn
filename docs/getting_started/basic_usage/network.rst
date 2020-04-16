@@ -5,7 +5,7 @@ Network Structure
 =================
 
 Construction
-------------------------------
+------------
 
 The network structure which defines the model topology is defined by the config ``network`` option,
 which is a dict, where each entry is a layer specification, which itself is a dict containing
@@ -14,12 +14,22 @@ the kwargs for the specific layer class. E.g.:
 .. code-block:: python
 
     network = {
-        "fw1": {"class": "linear", "activation": "relu", "dropout": 0.1, "n_out": 500},
+        "fw1": {"class": "linear", "activation": "relu", "dropout": 0.1, "n_out": 500, "from": ["data"]},
         "fw2": {"class": "linear", "activation": "relu", "dropout": 0.1, "n_out": 500, "from": ["fw1"]},
-        "output": {"class": "softmax", "loss": "ce", "from": ["fw2"]}
+        "output": {"class": "softmax", "loss": "ce", "from": ["fw2"], "target": "classes"}
     }
 
 The ``"class"`` key will get extracted from the layer arguments and the specific layer class will be used.
+Some arguments are available for all layer classes, such as ``dropout``.
+A list of all general arguments can be found below in :ref:`network_define_layers`.
+For the layer specific arguments such as ``activation``for the linear layer
+please have a look at the :ref:`layer_reference`.
+The ``from`` argument, which is also available for all layers, is a list of all input layers or datasets.
+``"data"`` denotes the default data input.
+More details on how to connect layers and datasets can be found below at :ref:`connecting`.
+
+
+
 For Theano, the base layer class is :py:class:`NetworkBaseLayer.Container` and :py:class:`NetworkBaseLayer.Layer`;
 for TensorFlow, it is :py:class:`TFNetworkLayer.LayerBase`.
 E.g. that would use the :py:class:`TFNetworkLayer.LinearLayer` class,
@@ -35,9 +45,9 @@ Here is a 2 layer unidirectional LSTM network:
 .. code-block:: python
 
     network = {
-        "lstm1": {"class": "rec", "unit": "lstm", "dropout": 0.1, "n_out": 500},
+        "lstm1": {"class": "rec", "unit": "lstm", "dropout": 0.1, "n_out": 500, "from": ["data"]},
         "lstm2": {"class": "rec", "unit": "lstm", "dropout": 0.1, "n_out": 500, "from": ["lstm1"]},
-        "output": {"class": "softmax", "loss": "ce", "from": ["lstm2"]}
+        "output": {"class": "softmax", "loss": "ce", "from": ["lstm2"], "target": "classes"}
     }
 
 In TensorFlow, that would use the layer class :py:class:`TFNetworkRecLayer.RecLayer`
@@ -60,11 +70,12 @@ And here is a 3 layer bidirectional LSTM network:
     "output" :   { "class" : "softmax", "loss" : "ce", "from" : ["lstm2_fw", "lstm2_bw"] }
     }
 
+.. _network_define_layers:
 
 Defining Layers
 -------------------
 
-Every usable layer with the tensorflow backend inherits from :class:`TFNetworkLayer.LayerBase`.
+Every usable layer with the TensorFlow backend inherits from :class:`TFNetworkLayer.LayerBase`.
 This class provides most of the parameters that can be set for each layer.
 
 Every layer accepts the following dictionary entries:
@@ -101,6 +112,8 @@ but another layer in the network, add 'layer:' as prefix.
 **L2** [:class:`float`] if specified, add the L2 norm of the parameters with the given factor to the total constraints.
 
 **darc1** [:class:`float`] if specified, add darc1 loss of the parameters with the given factor to the total constraints.
+
+**dropout** [:class:`float`] if specified, applies dropout in the input of the layer.
 
 **spatial_smoothing** [:class:`float`] if specified, add spatial-smoothing loss of the layer output with the given factor to the total constraints.
 
