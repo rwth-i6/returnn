@@ -1038,6 +1038,13 @@ class Engine(EngineBase):
         # To be sure, never keep the batch order.
         self.dataset_batches.clear()
         setattr(self, key, value)
+      if key == "chunking":
+        self.dataset_batches.pop("train", None)
+        # Note that this might not be 100% correct:
+        # E.g. if the dataset explicitly overwrites chunking.
+        # However, we assume, if the user explicitly specify to overwrite chunking now, that it should be applied.
+        # noinspection PyProtectedMember
+        self.train_data.chunk_size, self.train_data.chunk_step = Dataset._parse_chunking(value)
       if key in ["train", "dev", "eval"]:
         self.dataset_batches.pop(key, None)
         from Dataset import init_dataset

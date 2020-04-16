@@ -137,28 +137,7 @@ class Dataset(object):
     self._estimated_num_seqs = estimated_num_seqs
     self.min_chunk_size = min_chunk_size
     self.chunking_variance = chunking_variance
-    if isinstance(chunking, str):
-      if ":" in chunking:
-        chunking = tuple(map(int, chunking.split(":")))
-      else:
-        chunking = int(chunking)
-    if not isinstance(chunking, (tuple, list)):
-      chunking = (chunking, None)
-    chunk_size, chunk_step = chunking
-    if chunk_size is None:
-      chunk_size = 0
-    assert isinstance(chunk_size, (int, dict, NumbersDict))
-    chunk_size = NumbersDict(chunk_size)
-    assert chunk_size == 0 or chunk_size.min_value() > 0, "chunk size must not be negative"
-    self.chunk_size = chunk_size
-    if chunk_step in (None, 0):
-      chunk_step = self.chunk_size
-    assert isinstance(chunk_step, (int, dict, NumbersDict))
-    chunk_step = NumbersDict(chunk_step)
-    if self.chunk_size != 0:
-      assert sorted(chunk_step.keys()) == sorted(chunk_size.keys())
-      assert chunk_step.max_value() > 0, "chunking step must be positive (for some key)"
-    self.chunk_step = chunk_step
+    self.chunk_size, self.chunk_step = self._parse_chunking(chunking)
     if isinstance(context_window, (tuple, list)):
       assert len(context_window) == 2
       for elem in context_window:
@@ -192,6 +171,36 @@ class Dataset(object):
       self.__class__.__name__,
       getattr(self, "name", "<unknown>"),
       getattr(self, "epoch", "<unknown>"))
+
+  @staticmethod
+  def _parse_chunking(chunking):
+    """
+    :param None|str|int|(int,int)|dict|(dict,dict)|(NumbersDict,NumbersDict) chunking:
+      as it comes from the config / from the user
+    :return: chunk_size, chunk_step
+    :rtype: (NumbersDict,NumbersDict)
+    """
+    if isinstance(chunking, str):
+      if ":" in chunking:
+        chunking = tuple(map(int, chunking.split(":")))
+      else:
+        chunking = int(chunking)
+    if not isinstance(chunking, (tuple, list)):
+      chunking = (chunking, None)
+    chunk_size, chunk_step = chunking
+    if chunk_size is None:
+      chunk_size = 0
+    assert isinstance(chunk_size, (int, dict, NumbersDict))
+    chunk_size = NumbersDict(chunk_size)
+    assert chunk_size == 0 or chunk_size.min_value() > 0, "chunk size must not be negative"
+    if chunk_step in (None, 0):
+      chunk_step = chunk_size
+    assert isinstance(chunk_step, (int, dict, NumbersDict))
+    chunk_step = NumbersDict(chunk_step)
+    if chunk_size != 0:
+      assert sorted(chunk_step.keys()) == sorted(chunk_size.keys())
+      assert chunk_step.max_value() > 0, "chunking step must be positive (for some key)"
+    return chunk_size, chunk_step
 
   @staticmethod
   def _load_seq_list_file(filename, use_cache_manager=False, expect_list=True):
