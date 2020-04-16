@@ -58,6 +58,47 @@ Execution guide
 - Then, depending on the ``task`` option, it might start ``engine.train``, ``engine.forward`` etc.
   (:py:func:`Engine.Engine.train` or :py:func:`TFEngine.Engine.train`), :ref:`tech_engine_train`.
 
+.. _tech_engine_network:
+
+Network Construction
+--------------------
+
+The network structure which defines the model topology is defined by the config ``network`` option,
+which is a dict, where each entry is a layer specification, which itself is a dict containing
+the kwargs for the specific layer class. E.g.:
+
+.. code-block:: python
+
+    network = {
+        "fw1": {"class": "linear", "activation": "relu", "dropout": 0.1, "n_out": 500},
+        "fw2": {"class": "linear", "activation": "relu", "dropout": 0.1, "n_out": 500, "from": ["fw1"]},
+        "output": {"class": "softmax", "loss": "ce", "from": ["fw2"]}
+    }
+
+The ``"class"`` key will get extracted from the layer arguments and the specific layer class will be used.
+For Theano, the base layer class is :py:class:`NetworkBaseLayer.Container` and :py:class:`NetworkBaseLayer.Layer`;
+for TensorFlow, it is :py:class:`TFNetworkLayer.LayerBase`.
+E.g. that would use the :py:class:`TFNetworkLayer.LinearLayer` class,
+and the ``LinearLayer.__init__`` will accepts arguments like ``activation``.
+In the given example, all the remaining arguments will get handled by the base layer.
+
+The construction itself can be found for TensorFlow in :py:func:`TFNetwork.TFNetwork.construct_from_dict`,
+which starts from the output layers goes over the sources of a layer, which are defined by ``"from"``.
+If a layer does not define ``"from"``, it will automatically get the input from the dataset data.
+
+Here is a 2 layer unidirectional LSTM network:
+
+.. code-block:: python
+
+    network = {
+        "lstm1": {"class": "rec", "unit": "lstm", "dropout": 0.1, "n_out": 500},
+        "lstm2": {"class": "rec", "unit": "lstm", "dropout": 0.1, "n_out": 500, "from": ["lstm1"]},
+        "output": {"class": "softmax", "loss": "ce", "from": ["lstm2"]}
+    }
+
+In TensorFlow, that would use the layer class :py:class:`TFNetworkRecLayer.RecLayer`
+which will handle the argument ``unit``.
+
 .. _tech_engine_train:
 
 Training
