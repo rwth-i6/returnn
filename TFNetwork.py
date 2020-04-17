@@ -27,6 +27,7 @@ class ExternData(object):
     """
     :param None|dict[str,dict[str]] data: optional init kwargs for Data
     """
+    self._config = None  # type: typing.Optional["Config.Config"]
     self.data = {}  # type: typing.Dict[str,Data]
     self.default_input = default_input
     self.default_target = default_target
@@ -41,6 +42,7 @@ class ExternData(object):
     """
     :param Config.Config config:
     """
+    self._config = config
     from NetworkDescription import LayerNetworkDescription
     data_dims = LayerNetworkDescription.tf_extern_data_types_from_config(config)
     for key, init_args in data_dims.items():
@@ -147,7 +149,15 @@ class ExternData(object):
     :param str name:
     :rtype: Data
     """
-    return self.data[name]
+    try:
+      return self.data[name]
+    except KeyError:
+      config_extern_data = "<unknown>"
+      if self._config and self._config.has("extern_data"):
+        config_extern_data = self._config.opt_typed_value("extern_data")
+      raise KeyError(
+        "ExternData: unknown key %r. available keys: %s. config: %s" % (
+          name, list(self.data.keys()), config_extern_data))
 
   def get_default_input_data(self):
     """
