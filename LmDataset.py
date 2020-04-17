@@ -1557,6 +1557,15 @@ def lowercase(text):
   return text.lower()
 
 
+def lowercase_keep_special(text):
+  """
+  :param str text:
+  :rtype: str
+  """
+  # Anything which is not [..] or <..>.
+  return re.sub('(\\s|^)(?!(\\[\\S*\\])|(<\\S*>))\\S+(?=\\s|$)', lambda m: m.group(0).lower(), text)
+
+
 def collapse_whitespace(text):
   """
   :param str text:
@@ -1608,6 +1617,20 @@ def english_cleaners(text):
   """
   text = convert_to_ascii(text)
   text = lowercase(text)
+  text = normalize_numbers(text)
+  text = expand_abbreviations(text)
+  text = collapse_whitespace(text)
+  return text
+
+
+def english_cleaners_keep_special(text):
+  """
+  Pipeline for English text, including number and abbreviation expansion.
+  :param str text:
+  :rtype: str
+  """
+  text = convert_to_ascii(text)
+  text = lowercase_keep_special(text)
   text = normalize_numbers(text)
   text = expand_abbreviations(text)
   text = collapse_whitespace(text)
