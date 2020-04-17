@@ -1196,10 +1196,10 @@ class Engine(EngineBase):
     self._init_network(net_desc)
     if self.is_pretrain_epoch() and not self.pretrain.copy_output_layer:
       # "ifpossible" logic handled below. copy_output_layer=True is currently not enforced.
-      for l in self.network.get_output_layers():
-        if l.name in old_network_params.values_dict:
-          print("suspend copying of output layer: " + l.name, file=log.v2)
-          old_network_params.values_dict.pop(l.name)
+      for layer in self.network.get_output_layers():
+        if layer.name in old_network_params.values_dict:
+          print("suspend copying of output layer: " + layer.name, file=log.v2)
+          old_network_params.values_dict.pop(layer.name)
     # Optionally call some callback from config.
     # Do this before we call network.set_params_by_serialized, to allow to remove entries from old_network_params.
     if self.config.has("init_new_network_callback"):
@@ -2276,7 +2276,7 @@ class Engine(EngineBase):
 
   def search_single_seq(self, sources, output_layer_name=None):
     """
-    :param list[numpy.ndarray] sources: source sequences as a list of indices
+    :param list[numpy.ndarray|list[int]] sources: source sequences as a list of indices
     :param str|None output_layer_name: e.g. "output". if not set, will read from config "search_output_layer"
     :return: list of all hyps, which is a tuple of score and string
     :rtype: list[(float,str)]
@@ -2534,7 +2534,7 @@ class Engine(EngineBase):
           self.wfile.write(b"]\n")
 
         else:
-          self.wfile(("%r\n" % first_best_txt).encode("utf8"))
+          self.wfile.write(("%r\n" % first_best_txt).encode("utf8"))
 
     print("Simple search web server, listening on port %i." % port, file=log.v2)
     server_address = ('', port)
@@ -2553,6 +2553,7 @@ def get_global_engine():
   import sys
   main_mod = sys.modules["__main__"]  # should be rnn.py
   if isinstance(getattr(main_mod, "engine", None), Engine):
+    # noinspection PyUnresolvedReferences
     return main_mod.engine
   # Maybe __main__ is not rnn.py, or config not yet loaded.
   # Anyway, try directly. (E.g. for SprintInterface.)
