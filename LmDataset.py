@@ -1571,7 +1571,9 @@ def collapse_whitespace(text):
   :param str text:
   :rtype: str
   """
-  return re.sub(_whitespace_re, ' ', text)
+  text = re.sub(_whitespace_re, ' ', text)
+  text = text.strip()
+  return text
 
 
 def convert_to_ascii(text):
@@ -1617,7 +1619,7 @@ def english_cleaners(text):
   """
   text = convert_to_ascii(text)
   text = lowercase(text)
-  text = normalize_numbers(text)
+  text = normalize_numbers(text, with_spacing=True)
   text = expand_abbreviations(text)
   text = collapse_whitespace(text)
   return text
@@ -1631,7 +1633,7 @@ def english_cleaners_keep_special(text):
   """
   text = convert_to_ascii(text)
   text = lowercase_keep_special(text)
-  text = normalize_numbers(text)
+  text = normalize_numbers(text, with_spacing=True)
   text = expand_abbreviations(text)
   text = collapse_whitespace(text)
   return text
@@ -1652,6 +1654,22 @@ def get_remove_chars(chars):
     text = collapse_whitespace(text)
     return text
   return remove_chars
+
+
+def get_replace(old, new):
+  """
+  :param str old:
+  :param str new:
+  :rtype: (str)->str
+  """
+  def replace(text):
+    """
+    :param str text:
+    :rtype: str
+    """
+    text = text.replace(old, new)
+    return text
+  return replace
 
 
 _inflect = None
@@ -1729,7 +1747,17 @@ def _expand_number(m):
   :param typing.Match m:
   :rtype: str
   """
-  num = int(m.group(0))
+  num_s = m.group(0)
+  num_s = num_s.strip()
+  if "." in num_s:
+    return _get_inflect().number_to_words(num_s, andword='')
+  num = int(num_s)
+  if num_s.startswith("0") or num in {747}:
+    digits = {
+      "0": "zero",
+      "1": "one", "2": "two", "3": "three", "4": "four", "5": "five",
+      "6": "six", "7": "seven", "8": "eight", "9": "nine"}
+    return " ".join([digits.get(c, c) for c in num_s])
   if 1000 < num < 3000:
     if num == 2000:
       return 'two thousand'
@@ -1743,9 +1771,18 @@ def _expand_number(m):
     return _get_inflect().number_to_words(num, andword='')
 
 
-def normalize_numbers(text):
+def _expand_number_with_spacing(m):
+  """
+  :param typing.Match m:
+  :rtype: str
+  """
+  return " %s " % _expand_number(m)
+
+
+def normalize_numbers(text, with_spacing=False):
   """
   :param str text:
+  :param bool with_spacing:
   :rtype: str
   """
   text = re.sub(_comma_number_re, _remove_commas, text)
@@ -1753,7 +1790,7 @@ def normalize_numbers(text):
   text = re.sub(_dollars_re, _expand_dollars, text)
   text = re.sub(_decimal_number_re, _expand_decimal_point, text)
   text = re.sub(_ordinal_re, _expand_ordinal, text)
-  text = re.sub(_number_re, _expand_number, text)
+  text = re.sub(_number_re, _expand_number_with_spacing if with_spacing else _expand_number, text)
   return text
 
 
@@ -1777,16 +1814,22 @@ def get_post_processor_function(opts):
   """
   if not opts:
     return _dummy_identity_pp
+  if callable(opts):
+    res_test = opts("test")
+    assert isinstance(res_test, str), "%r does not seem as a valid function str->str" % (opts,)
+    return opts
   if isinstance(opts, str):
-    if "(" in opts:
+    if "(" in opts or "," in opts:
       f = eval(opts)
     else:
       f = globals()[opts]
+    if isinstance(f, (tuple, list)):
+      f = get_post_processor_function(f)
     assert callable(f)
     res_test = f("test")
     assert isinstance(res_test, str), "%r does not seem as a valid function str->str" % (opts,)
     return f
-  assert isinstance(opts, list)
+  assert isinstance(opts, (tuple, list))
   if len(opts) == 1:
     return get_post_processor_function(opts[0])
   pps = [get_post_processor_function(pp) for pp in opts]
@@ -1813,7 +1856,7 @@ def _main():
                        ", or otherwise filename, and will just dump")
   arg_parser.add_argument("--post_processor", nargs="*")
   args = arg_parser.parse_args()
-  if not args.lm_dataset.startswith("{") and os.path.isfile(args.lm_dataset):
+  if not args.lm_dataset.startswith("{"):
     callback = print
     if args.post_processor:
       pp = get_post_processor_function(args.post_processor)
@@ -1824,7 +1867,10 @@ def _main():
         """
         print(pp(text))
 
-    iter_corpus(args.lm_dataset, callback)
+    if os.path.isfile(args.lm_dataset):
+      iter_corpus(args.lm_dataset, callback)
+    else:
+      callback(args.lm_dataset)
     sys.exit(0)
 
   log.initialize(verbosity=[5])
