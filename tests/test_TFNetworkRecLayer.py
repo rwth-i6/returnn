@@ -5294,6 +5294,7 @@ def test_trafo_search_lm():
       assert out_seq_lens[i] == input_seq_lens[i] * 3 // 2  # we constructed the 'end' layer that way
       assert all(out_seqs[i, :input_seq_lens[i]] == input_seqs[i, :input_seq_lens[i]])
 
+
 def test_cumulated_attention_weights_search():
   rnd = numpy.random.RandomState(42)
   beam_size = 5
@@ -5310,8 +5311,8 @@ def test_cumulated_attention_weights_search():
                   'unit': {
                       'target_embed': { 'class': 'linear', 'activation': None, 'from': ['prev:output'], 'n_out': dim},
                       'att_energy': { 'class': 'dot', 'from': ['base:source_embed', 'target_embed'], 'red1': -1, 'red2': -1, 'var1': 'T', 'var2': 'T?', 'add_var2_if_empty': False},
-                      'cum_att_energy': {'class': 'combine', 'kind': 'add', 'from': ['prev:att_energy', 'att_energy'], 'initial_output': 'att_energy'},
-                      'att_weights': {'class': 'softmax_over_spatial', 'from': ['cum_att_energy']},
+                      'cum_att_energy': {'class': 'combine', 'kind': 'add', 'from': ['prev:att_energy', 'att_energy']},
+                      'att_weights': {'class': 'softmax_over_spatial', 'from': ['cum_att_energy'], 'axis': 'stag:extern_data:data'},
                       'att': {'class': 'generic_attention', 'base': 'base:source_embed', 'weights': 'att_weights', 'is_output_layer': True},
                       'output_prob': { 'class': 'softmax', 'from': ['att'], 'loss': 'ce', 'target': 'classes'},
                       'output': {'beam_size': beam_size, 'class': 'choice', 'from': ['output_prob'], 'initial_output': 0, 'target': 'classes'},
