@@ -1038,7 +1038,7 @@ class Engine(EngineBase):
         # To be sure, never keep the batch order.
         self.dataset_batches.clear()
         setattr(self, key, value)
-      if key == "chunking":
+      if key == "chunking" and self.train_data:
         self.dataset_batches.pop("train", None)
         # Note that this might not be 100% correct:
         # E.g. if the dataset explicitly overwrites chunking.
