@@ -1309,15 +1309,21 @@ def _get_random_permuted_audio(audio, sample_rate, opts, random_state):
   import scipy.ndimage
   import warnings
   audio = audio * random_state.uniform(opts.get("rnd_scale_lower", 0.8), opts.get("rnd_scale_upper", 1.0))
+  if opts.get("rnd_zoom_switch", 1.) > 0.:
+    opts.get("rnd_zoom_lower"), opts.get("rnd_zoom_upper"), opts.get("rnd_zoom_order")  # Mark as read.
   if random_state.uniform(0.0, 1.0) < opts.get("rnd_zoom_switch", 0.2):
     with warnings.catch_warnings():
       warnings.simplefilter("ignore")
       # Alternative: scipy.interpolate.interp2d
       factor = random_state.uniform(opts.get("rnd_zoom_lower", 0.9), opts.get("rnd_zoom_upper", 1.1))
-      audio = scipy.ndimage.zoom(audio, factor, order=3)
+      audio = scipy.ndimage.zoom(audio, factor, order=opts.get("rnd_zoom_order", 3))
+  if opts.get("rnd_stretch_switch", 1.) > 0.:
+    opts.get("rnd_stretch_lower"), opts.get("rnd_stretch_upper")  # Mark as read.
   if random_state.uniform(0.0, 1.0) < opts.get("rnd_stretch_switch", 0.2):
     rate = random_state.uniform(opts.get("rnd_stretch_lower", 0.9), opts.get("rnd_stretch_upper", 1.2))
     audio = librosa.effects.time_stretch(audio, rate=rate)
+  if opts.get("rnd_pitch_switch", 1.) > 0.:
+    opts.get("rnd_pitch_lower"), opts.get("rnd_pitch_upper", 1.)  # Mark as read.
   if random_state.uniform(0.0, 1.0) < opts.get("rnd_pitch_switch", 0.2):
     n_steps = random_state.uniform(opts.get("rnd_pitch_lower", -1.), opts.get("rnd_pitch_upper", 1.))
     audio = librosa.effects.pitch_shift(audio, sr=sample_rate, n_steps=n_steps)
