@@ -1052,12 +1052,15 @@ def test_MergeDimsLayer_SplitBatchTimeLayer_time_major():
   # Time major
   input_data = numpy.arange(n_time * n_batch * n_input_dim).reshape((n_time, n_batch, n_input_dim)).astype("float32")
   with make_scope() as session:
+    seq_lens = [n_time, n_time - 1, n_time - 2]
+    assert len(seq_lens) == n_batch and all([s > 0 for s in seq_lens])
     net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
     input_layer = net.add_layer(
       "input", InternalLayer,
       output=Data(
         name="input", shape=(None, n_input_dim), time_dim_axis=0, batch_dim_axis=1,
-        placeholder=tf.constant(input_data), size_placeholder={0: tf.constant([n_time] * n_batch)}))
+        placeholder=tf.constant(input_data),
+        size_placeholder={0: tf.constant(seq_lens)}))
     assert input_layer.output.is_time_major
     net.construct_from_dict({
       "merge_dims": {"class": "merge_dims", "from": "input", "axes": "BT"},
