@@ -10,6 +10,8 @@ It's simpler if it does not even start because of some error.
 Here I will outline several useful options, and methods in general.
 
 
+.. _debug_interactive:
+
 Interactive debugging
 ---------------------
 
@@ -28,7 +30,7 @@ You can run RETURNN via::
   ipython --pdb rnn.py your-config.py
 
 That will give you the IPython debugger shell once you hit an unhandled exception.
-You can summon the interactive shell by explicitly calling the following from the 
+You can summon the interactive shell by explicitly calling the following from the
 source code or from the config::
 
   import Debug
@@ -124,3 +126,34 @@ In many other cases, this can be hard, though.
 
 Measure things. Whatever you think is in some way useful, or gives you a hint
 whether it is doing the correct thing or not.
+
+
+Python exception
+----------------
+
+RETURNN uses :mod:`better_exchook`
+which will automatically provide an extended Python stack trace
+which normally should provide enough information
+to understand the problem and to fix it.
+Maybe interactively debugging this can be helpful:
+See :ref:`debug_interactive`.
+
+If there is a bug in RETURNN itself (or might be):
+In principle, a good way to work on a fix in a systematic way
+is to create a simple test case which reproduces the problem.
+Simplify further as much as possible
+to identify and understand the real problem.
+Then fix it.
+Commit both the test case and the fix (pull request).
+
+
+Crash
+-----
+
+E.g. segmentation fault (segfault, SIGSEGV).
+
+RETURNN uses the :mod:`faulthandler` Python module
+to provide a stack trace of the Python calls.
+
+You can set the env var ``DEBUG_SIGNAL_HANDLER``,
+which will load libSegFault.so.
