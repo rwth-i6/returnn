@@ -3845,6 +3845,18 @@ class MergeDimsLayer(_ConcatInputLayer):
         d[j] *= v
       else:
         d[j] = v
+    if self.input_data.batch_dim_axis in merge_axes:
+      # The batch axis got multiplied.
+      in_shape = tf.shape(self.input_data.placeholder)
+      batch_multiplier = tf.reduce_prod([
+        in_shape[axis] for axis in merge_axes if axis != self.input_data.batch_dim_axis])
+      from TFUtil import tile_transposed, DimensionTag
+      for j, v in sorted(d.items()):
+        d[j] = tile_transposed(v, axis=0, multiples=batch_multiplier)
+        # But keep the same dim-tag.
+        dim_tag = DimensionTag.get_tag_from_size_tensor(v)
+        if dim_tag is not None:
+          dim_tag.set_tag_on_size_tensor(d[j])
     return d
 
   @classmethod
