@@ -39,12 +39,14 @@ def make_scope():
 
 def make_feed_dict(data_list, same_time=False, n_batch=3, n_time=7):
   """
-  :param list[TFUtil.Data] data_list:
+  :param list[TFUtil.Data]|ExternData data_list:
   :param bool same_time:
   :param int n_batch:
   :param int n_time:
   :rtype: dict[tf.Tensor,numpy.ndarray]
   """
+  if isinstance(data_list, ExternData):
+    data_list = [value for (key, value) in sorted(data_list.data.items())]
   assert n_time > 0 and n_batch > 0
   rnd = numpy.random.RandomState(42)
   existing_sizes = {}  # type: typing.Dict[tf.Tensor,int]
@@ -1073,6 +1075,50 @@ def test_MergeDimsLayer_SplitBatchTimeLayer_time_major():
     assert output.is_time_major and output.shape == (None, n_input_dim)
     output_data = session.run(output.placeholder)
     numpy.testing.assert_almost_equal(input_data, output_data)
+
+
+def test_MergeDimsLayer_SplitBatchTimeLayer_two_time_axes():
+  n_dim = 11
+  with make_scope() as session:
+    net = TFNetwork(
+      config=Config({
+        "extern_data": {"data": {"shape": (None, None, n_dim)}},
+        "debug_print_layer_output_template": True}))
+    feed_dict = make_feed_dict(net.extern_data)
+    net.construct_from_dict({
+      "merge_dims": {"class": "merge_dims", "from": "data", "axes": "BT"},
+      "split_dims": {"class": "split_batch_time", "from": "merge_dims", "base": "data"},
+      "output": {"class": "copy", "from": "split_dims"}
+    })
+    input_data = net.extern_data.get_default_input_data()
+    assert set(input_data.size_placeholder.keys()) == {0, 1}
+    assert input_data.size_placeholder[0].name != input_data.size_placeholder[1].name
+    assert input_data.get_size_dim_tag(0) != input_data.get_size_dim_tag(1)
+    merged_data = net.layers["merge_dims"].output
+    assert set(merged_data.size_placeholder.keys()) == {0}
+    assert merged_data.get_size_dim_tag(0) != input_data.get_size_dim_tag(0)
+    assert merged_data.get_size_dim_tag(0) == input_data.get_size_dim_tag(1)  # like beam-search, still same dim-tag
+    output_data = net.get_default_output_layer().output
+    output_data = output_data.copy_as_batch_major()
+    assert output_data.shape == (None, None, n_dim)
+    assert output_data.get_size_dim_tag(0) == input_data.get_size_dim_tag(0)
+    assert output_data.get_size_dim_tag(1) == input_data.get_size_dim_tag(1)
+    input_value = session.run(input_data.placeholder, feed_dict=feed_dict)
+    merged_value = session.run(merged_data.placeholder, feed_dict=feed_dict)
+    output_value = session.run(output_data.placeholder, feed_dict=feed_dict)
+    assert input_value.shape == output_value.shape
+    assert input_value.shape[-1] == n_dim
+    n_batch, n_time0, n_time1, _ = input_value.shape
+    numpy.testing.assert_almost_equal(input_value, output_value)
+    assert merged_value.shape == (n_batch * n_time0, n_time1, n_dim)
+    numpy.testing.assert_almost_equal(input_value, merged_value.reshape(input_value.shape))
+    merged_size = session.run(merged_data.size_placeholder[0], feed_dict=feed_dict)
+    input_size0, input_size1 = session.run(
+      (input_data.size_placeholder[0], input_data.size_placeholder[1]), feed_dict=feed_dict)
+    assert input_size0.shape == input_size1.shape == (n_batch,)
+    assert merged_size.shape == (n_batch * n_time0,)
+    merged_size = merged_size.reshape(n_batch, n_time0)
+    assert (merged_size == input_size1[:, None]).all()
 
 
 def test_MergeDimsLayer_simple_feat():
