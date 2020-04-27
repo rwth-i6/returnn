@@ -4781,9 +4781,13 @@ class ChoiceLayer(BaseChoiceLayer):
     """
     if self.length_normalization:
       assert "choice_scores" in rec_vars_outputs
+      rec_layer = self.network.get_rec_parent_layer()
+      assert rec_layer
       # Finalize length normalization. During search we keep an extra factor t (recurrent time step) for efficiency
       # reasons (see self.get_output()). Remove it here.
-      num_time_steps = tf.reduce_max(seq_len) + 1  # + 1 to include sequence end
+      num_time_steps = tf.reduce_max(seq_len)
+      if not rec_layer.include_eos:
+        num_time_steps += 1  # + 1 to include sequence end
       rec_vars_outputs["choice_scores"] /= tf.cast(num_time_steps, tf.float32)
     return rec_vars_outputs
 
