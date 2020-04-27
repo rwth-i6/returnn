@@ -494,7 +494,17 @@ def model_epoch_from_filename(filename):
     # tf.contrib.framework.python.framework.checkpoint_utils.load_variable()
     # once we save that in the model.
     # See TFNetwork.Network._create_saver().
+    # We don't have it in the model, though.
     # For now, just parse it from filename.
+    # If TF, and symlink, resolve until no symlink anymore (e.g. if we symlinked the best epoch).
+    while True:
+      tf_meta_fn = "%s.meta" % filename
+      if os.path.exists(tf_meta_fn) and os.path.islink(tf_meta_fn):
+        tf_meta_fn_ = os.readlink(tf_meta_fn)
+        assert tf_meta_fn_.endswith(".meta"), "strange? %s, %s" % (filename, tf_meta_fn)
+        filename = tf_meta_fn_[:-len(".meta")]
+      else:
+        break
     m = re.match(".*\\.([0-9]+)", filename)
     assert m, "no match for %r" % filename
     return int(m.groups()[0])
