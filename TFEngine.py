@@ -951,8 +951,11 @@ class Engine(EngineBase):
     # In that case, epoch == self.start_epoch - 1.
     is_training = config.value('task', 'train') == 'train'
     is_first_train_epoch = is_training and not epoch
-    self.epoch = epoch or self.start_epoch
-    assert self.epoch
+    self.epoch = epoch
+    if not self.epoch and is_training:
+      assert self.start_epoch >= 1
+      self.epoch = self.start_epoch
+    assert self.epoch, "task %r" % config.value("task", "train")
 
     if self.pretrain:
       # This would be obsolete if we don't want to load an existing model.
