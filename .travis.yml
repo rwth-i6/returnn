@@ -65,6 +65,7 @@ env:
     - TEST=GeneratingDataset
     - TEST=hdf_dump
     - TEST=HDFDataset
+    - TEST=TranslationDataset
     - TEST=LearningRateControl
     - TEST=Log
     - TEST=multi_target
