@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ElementTree
 import zipfile
 import shutil
 from subprocess import check_call
+from glob import glob
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
