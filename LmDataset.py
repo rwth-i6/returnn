@@ -1057,7 +1057,9 @@ class TranslationDataset(CachedDataset2):
     :param str target_postfix: will concat this at the end of the target.
       You might want to add some sentence-end symbol.
     :param bool source_only: if targets are not available
-    :param str|None unknown_label: "UNK" or so. if not given, then will not replace unknowns but throw an error
+    :param str|dict[str,str]|None unknown_label: Label to replace out-of-vocabulary words with, e.g. "<UNK>".
+      If not given, will not replace unknowns but throw an error. Can also be a dict data_key -> unknown_label
+      to configure for each data key separately (default for each key is None).
     :param str seq_list_file: filename. line-separated list of line numbers defining fixed sequence order.
       multiple occurrences supported, thus allows for repeating examples while loading only once.
     :param bool use_cache_manager: uses :func:`Util.cf` for files
@@ -1093,6 +1095,12 @@ class TranslationDataset(CachedDataset2):
     self.num_inputs = self.num_outputs[self.main_source_data_key][0]
     self._reversed_vocabs = {k: self._reverse_vocab(k) for k in self._vocabs.keys()}
     self.labels = {k: self._get_label_list(k) for k in self._vocabs.keys()}
+
+    if not isinstance(unknown_label, dict):
+      assert isinstance(unknown_label, (str, type(None)))
+      unknown_label = {data_key: unknown_label for data_key in self._data_keys}
+    for data_key in self._data_keys:
+      unknown_label.setdefault(data_key, None)
     self._unknown_label = unknown_label
 
     self._seq_order = None  # type: typing.Optional[typing.List[int]]  # seq_idx -> line_nr
@@ -1243,14 +1251,14 @@ class TranslationDataset(CachedDataset2):
     """
     vocab = self._vocabs[data_key]
 
-    if self._unknown_label is None:
+    if self._unknown_label[data_key] is None:
       try:
         words_idxs = list(map(vocab.__getitem__, words))
       except KeyError as e:
         raise Exception(
           "Can not handle unknown token without unknown_label: %s (%s)" % (str(e), bytes(str(e), 'utf-8')))
     else:
-      unknown_label_id = vocab[self._unknown_label]
+      unknown_label_id = vocab[self._unknown_label[data_key]]
       words_idxs = [vocab.get(w, unknown_label_id) for w in words]
     return numpy.array(words_idxs, dtype=numpy.int32)
 
