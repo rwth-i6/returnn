@@ -1045,6 +1045,7 @@ class TranslationDataset(CachedDataset2):
 
   def __init__(self, path, file_postfix, source_postfix="", target_postfix="",
                source_only=False,
+               search_without_reference=False,
                unknown_label=None,
                seq_list_file=None,
                use_cache_manager=False,
@@ -1070,6 +1071,7 @@ class TranslationDataset(CachedDataset2):
     self.path = path
     self.file_postfix = file_postfix
     self.source_only = source_only
+    self.search_without_reference = search_without_reference
     self.seq_list = [int(n) for n in open(seq_list_file).read().splitlines()] if seq_list_file else None
     self._add_postfix = {self.source_file_prefix: source_postfix, self.target_file_prefix: target_postfix}
     self._use_cache_manager = use_cache_manager
@@ -1081,7 +1083,8 @@ class TranslationDataset(CachedDataset2):
     if not source_only:
       self._main_data_key_map[self.target_file_prefix] = self.main_target_data_key
 
-    self._files_to_read = [prefix for prefix in self._main_data_key_map.keys()]
+    self._files_to_read = [prefix for prefix in self._main_data_key_map.keys()
+      if not (prefix == self.target_file_prefix and search_without_reference)]
     self._data_files = {prefix: self._get_data_file(prefix) for prefix in self._files_to_read}
 
     self._data_keys = self._source_data_keys + self._target_data_keys
@@ -1154,7 +1157,7 @@ class TranslationDataset(CachedDataset2):
       self._data_files[self.source_file_prefix].seek(0, os.SEEK_SET)  # we will read it again below
 
       # Now, read and use the vocab for a compact representation in memory.
-      files_to_read = list(self._main_data_key_map.keys())
+      files_to_read = list(self._files_to_read)
       while True:
         for file_prefix in files_to_read:
           data_strs = self._data_files[file_prefix].readlines(10 ** 6)
@@ -1360,8 +1363,9 @@ class TranslationDataset(CachedDataset2):
       return None
     line_nr = self._seq_order[seq_idx]
 
+    data_keys = self._source_data_keys if self.search_without_reference else self._data_keys
     features = {data_key: self._get_data(key=data_key, line_nr=line_nr)
-      for data_key in self._source_data_keys + self._target_data_keys}
+      for data_key in data_keys}
     assert all([data is not None for data in features.values()])
 
     return DatasetSeq(
