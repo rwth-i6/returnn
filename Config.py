@@ -63,7 +63,7 @@ class Config:
       filename = "<config string>"
       content = f.read()
     content = content.strip()
-    if content.startswith("#!"):  # assume Python
+    if content.startswith("#!") or filename.endswith(".py"):  # assume Python
       from Util import custom_exec
       # Operate inplace on ourselves.
       # Also, we want that it's available as the globals() dict, so that defined functions behave well
