@@ -28,6 +28,9 @@ generateapi.generate()
 import generate_units
 generate_units.generate()
 
+import generate_optimizer
+generate_optimizer.generate()
+
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
