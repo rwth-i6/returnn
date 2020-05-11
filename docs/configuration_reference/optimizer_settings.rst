@@ -5,23 +5,14 @@ Optimizer Settings
 ==================
 
 .. note::
-    To define the update algorithm, there are two different methods. One is to set the desired algorithm explicitely,
-    e.g. ``adam = True`` or ``rmsprop = True``. The other method is to set the parameter ``optimizer``
-    and define the type by setting ``class`` in a dictionary. Currently available updater are:
-
-        - adam
-        - nadam
-        - adadelta
-        - adagrad
-        - rmsprop
-
-    if no updater is specified, SGD is used.
+    To define the update algorithm, set the parameter ``optimizer`` to a dictionary
+    and define the type by setting ``class``.
+    All available optimizers and their parameters can be found :ref:`here <optimizer>`.
+    Setting the learning rate should not set in the dict, but rather separately.
+    If no updater is specified, plain SGD is used.
 
 accum_grad_multiple_step
     An integer specifying the number of updates to stack the gradient, called "gradient accumulation".
-
-adam
-    Set to ``True`` to enable adam gradient updating.
 
 gradient_clip
     Specifiy a gradient clipping threshold.
@@ -56,8 +47,6 @@ newbob_multi_num_epochs
 newbob_multi_update_interval
 
 newbob_relative_error_threshold
-
-optimizer_epsilon
 
 user_learning_rate_control_always
 
