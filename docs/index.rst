@@ -70,6 +70,7 @@ Some recent development changelog can be seen `here <https://github.com/rwth-i6/
     configuration_reference/index.rst
     dataset_reference/index.rst
     layer_reference/index.rst
+    optimizer.rst
 
 .. toctree::
     :hidden:

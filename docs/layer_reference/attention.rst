@@ -32,19 +32,13 @@ Generic Attention Layer
     :members:
     :undoc-members:
 
-Generic Window Attention Layer
-------------------------------
-
-.. autoclass:: TFNetworkRecLayer.GenericWindowAttentionLayer
-    :members:
-    :undoc-members:
 
 Self-Attention Layer
 --------------------
 
 .. autoclass:: TFNetworkRecLayer.SelfAttentionLayer
     :members:
-    :undoc-member:
+    :undoc-members:
 
 
 

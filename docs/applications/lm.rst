@@ -1,7 +1,7 @@
 .. _lm:
 
 ==================
-Lanugage Modelling
+Language Modelling
 ==================
 
 For example setups for language modelling please have a look at:
