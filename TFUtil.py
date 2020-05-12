@@ -3814,7 +3814,7 @@ def load_txt_file_initializer(filename, dtype=tf.float32):
 
 def get_initializer(s, seed=None, eval_local_ns=None, dtype=tf.float32):
   """
-  :param str|dict[str]|float s: e.g. "glorot_uniform" or "truncated_normal" or "orthogonal",
+  :param str|dict[str]|float|numpy.ndarray s: e.g. "glorot_uniform" or "truncated_normal" or "orthogonal",
     or config dict with "class",
     or string to be `eval`ed if it contains "(". constant if a float is given.
   :param int|tf.Tensor seed:
@@ -3825,17 +3825,19 @@ def get_initializer(s, seed=None, eval_local_ns=None, dtype=tf.float32):
   """
   dtype = tf.as_dtype(dtype).base_dtype
   assert isinstance(dtype, tf.DType)
+  import numpy
   if isinstance(s, (float, int)):
     if s == 0:
       return tf.zeros_initializer(dtype=dtype)
     if s == 1:
       return tf.ones_initializer(dtype=dtype)
     return tf.constant_initializer(s, dtype=dtype)
+  if isinstance(s, numpy.ndarray):
+    return tf.constant_initializer(s, dtype=dtype, verify_shape=True)
   if not s and dtype == tf.string:
     return tf.zeros_initializer(dtype=dtype)
   if not s and dtype.is_integer:
     return tf.zeros_initializer(dtype=dtype)
-  import numpy
   import math
   from tensorflow.python.ops import init_ops
 
