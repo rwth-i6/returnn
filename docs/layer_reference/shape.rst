@@ -140,7 +140,7 @@ Time Chunking Layer
     :undoc-members:
 
 Time Un-Chunking Layer
--------------------
+----------------------
 
 .. autoclass:: TFNetworkLayer.TimeUnChunkingLayer
     :members:

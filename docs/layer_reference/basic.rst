@@ -37,7 +37,6 @@ Constant Layer
 
 .. autoclass:: TFNetworkLayer.ConstantLayer
     :members:
-    :undoc-members:
 
 Convolution Layer
 -----------------

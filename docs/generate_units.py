@@ -21,6 +21,7 @@ Common units are:
    * NativeLstm2, improved own native LSTM, should be the fastest and most powerful
 
 Note that the native implementations can not be in a recurrent subnetwork, as they process the whole sequence at once.
+A performance comparison of the different LSTM Layers is available :ref:`here <tf_lstm_benchmark>`.
 """
 
 
