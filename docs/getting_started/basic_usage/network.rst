@@ -4,6 +4,8 @@
 Network Structure
 =================
 
+.. _tech_engine_network:
+
 Construction
 ------------
 
@@ -154,3 +156,17 @@ The methods for initializations include, but are not limited to:
 The initialization is performed in :func:`TFUtil.get_initializer`.
 
 *Note:* the initalizers can be accessed both as e.g. ``"glorot_normal"`` or ``"glorot_normal_initializer"``.
+
+
+Managing Axes
+-------------
+
+In the default case, the axes of data that is passed between layers (such as batch, time, spatial and feature)
+are not visible to the user, and handled by RETURNN internally with the help of :class:`TFUtil.Data` objects.
+For layers that operate on specific axes, meaning they have an ``axis`` or ``axes`` parameter, different identifier
+(strings) can be used to select the correct axes. These identifier are e.g.
+
+    - ``B|batch:`` select the batch axis
+    - ``T|time:`` select the time axis
+    - ``F|feature`` select the feature axis
+    - ``S:<int>|spatial:<int>`` select a spatial axis from the list of all spatial axes (zero-based)

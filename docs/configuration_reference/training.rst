@@ -11,6 +11,7 @@ batch_size
     ``batch_size`` is the upper limit for ``time * sequences`` during creation of the mini-batches.
 
 batching
+    Defines the default value for ``seq_ordering`` across all datasets.
 
 chunking
     You can chunk sequences of your data into parts, which will greatly reduce the amount of needed zero-padding.

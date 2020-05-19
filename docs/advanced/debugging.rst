@@ -113,8 +113,8 @@ in principle.
 If it does not, you can design the toy samples in a way that helps you
 understand where it fails.
 In the extreme case, in theory, you should even be able to set the neural network
-weights by hand to solve the toy task. If you don't know how, then maybe your model
-is actually not powerful enough.
+weights by hand to solve the toy task.
+If you don't know how, then maybe your model is actually not powerful enough.
 If that works, you can make the toy task successively harder and more similar
 to the real task.
 If all the toy tasks work, but the real task still does not,

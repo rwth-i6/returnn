@@ -6,11 +6,13 @@ Model Loading
 
 import_model_train_epoch1
     If a path to a valid model is provided (for TF models without ``.meta`` extension),
-    use this to initialize the weights for training. If you do not want to start a new training, see ``load``.
+    use this to initialize the weights for training.
+    If you do not want to start a new training, see ``load``.
 
 load
     If a path to a valid model is provided (for TF models without ``.meta`` extension),
-    use this to load the specified model and training state. The training is continued from the last position.
+    use this to load the specified model and training state.
+    The training is continued from the last position.
 
 load_epoch
     Specifies the epoch index to load, based on the prefix given in ``model``.

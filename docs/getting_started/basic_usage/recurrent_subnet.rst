@@ -5,12 +5,13 @@ Recurrent Sub-Networks
 ======================
 
 For many task it will be necessary to define multiple that are applied as recurrent network over a sequential input,
-especially when running a search over sequences. While basic recurrent layers such as LSTM variants are defined by using
-the "``rec``" layer and selecting the desired "``unit``", custom sub-networks can be defined by passing a network
-dictionary for the "``unit``" attribute.  The defined structure will then be applied for each position of the sequence.
+especially when running a search over sequences.
+While basic recurrent layers such as LSTM variants are defined by using the "``rec``" layer and selecting the desired
+"``unit``", custom sub-networks can be defined by passing a network dictionary for the "``unit``" attribute.
+The defined structure will then be applied for each position of the sequence.
 As for the global network, an "``output``" layer is required to define which values will be the output of the subnet.
-The layer outputs of the previous timesteps can be accessed by adding the prefix "prev:" to the layer names. Static data
-from outside the subnet can be accessed via the layer prefix "base:".
+The layer outputs of the previous timesteps can be accessed by adding the prefix "prev:" to the layer names.
+Static data from outside the subnet can be accessed via the layer prefix "base:".
 
 Example of a recurrent "relu" layer:
 
@@ -30,8 +31,8 @@ Example of a recurrent "relu" layer:
           "n_out": n_out,
       }
 
-Layers with recurrent dependencies and hidden states (e.g. LSTMs) can be added as "``rnn_cell``" layer. For available
-cell units see :ref:`here <rec_units>`.
+Layers with recurrent dependencies and hidden states (e.g. LSTMs) can be added as "``rnn_cell``" layer.
+For available cell units see :ref:`here <rec_units>`.
 Example of an MLP-style attention mechanism with an LSTM layer:
 
 .. code-block:: python
@@ -51,4 +52,5 @@ Example of an MLP-style attention mechanism with an LSTM layer:
           "n_out": n_out
       }
 
-The ``from`` attribute can be empty when the output as a target. The sequence length will then be determined by this target.
+The ``from`` attribute can be empty when the output as a target.
+The sequence length will then be determined by this target.

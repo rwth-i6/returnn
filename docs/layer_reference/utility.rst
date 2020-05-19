@@ -32,6 +32,13 @@ Print Layer
     :members:
     :undoc-members:
 
+Scaled Gradient Layer
+--------------------
+
+.. autoclass:: TFNetworkLayer.ScaledGradientLayer
+    :members:
+    :undoc-members:
+
 Synthetic Gradient Layer
 ------------------------
 
