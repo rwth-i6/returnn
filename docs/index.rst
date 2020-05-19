@@ -57,10 +57,12 @@ Some recent development changelog can be seen `here <https://github.com/rwth-i6/
     :caption: Getting Started
     :maxdepth: 2
 
+    getting_started/tech_overview
     getting_started/installation
     getting_started/basic_usage/basic_usage
     getting_started/framework.rst
     getting_started/faq.rst
+    getting_started/tf_lstm_benchmark
 
 .. toctree::
     :hidden:
