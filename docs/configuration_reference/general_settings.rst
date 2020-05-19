@@ -25,6 +25,8 @@ extern_data (former num_outputs)
 
     For a more explicit definition of the shapes, you can provide a dict instead of a list or tuple. This dict may
     contain information to create "Data" objects. For extern_data, only ``dim`` and ``shape`` are required.
+    Example: :code:`'feature_data': {'dim': 80, 'shape': (None, 80)}`
+    This defines 80 dimensional features with a time axis of arbitrary length.
     Example: :code:`'speaker_classes': {'dim': 1172, 'shape': (), 'sparse': True}`
     This defines a sparse input for e.g. speaker classes that do not have a time axis.
 

@@ -30,7 +30,7 @@ task
     The task, such as ``train``, ``forward`` or ``search``.
 
 device
-    E.g. ``gpu`` or ``cpu``. Can also be ``gpu0,gpu1`` for multi-GPU training.
+    E.g. ``gpu`` or ``cpu``.
 
 use_tensorflow
     If you set this to ``True``, TensorFlow will be used.
@@ -43,9 +43,26 @@ train / dev / eval
     ``forward`` or ``search`` task.
 
 extern_data
-    A dictionary
     Defines the source/target dimensions of the data. Both can be integers.
     extern_data can also be a dict if your dataset has other data streams.
+    The standard source data is called "``data``" by default,
+    and the standard target data is called "``classes``" by default.
+    You can also specify whether your data is dense or sparse (i.e. it is just the index),
+    which is specified by the number of dimensions, i.e. 2 (time-dim + feature-dim) or 1 (just time-dim).
+    When using no explicit definition, it is assumed that the data contains a time axis.
+
+    Example: :code:`extern_data = {"data": [100, 2], "classes": [5000, 1]}`.
+    This defines an input dimension of 100, and the input is dense (2),
+    and an output dimension of 5000, and the output provided by the dataset is sparse (1).
+
+    For a more explicit definition of the shapes, you can provide a dict instead of a list or tuple. This dict may
+    contain information to create "Data" objects. For extern_data, only ``dim`` and ``shape`` are required.
+    Example: :code:`'feature_data': {'dim': 80, 'shape': (None, 80)}`
+    This defines 80 dimensional features with a time axis of arbitrary length.
+    Example: :code:`'speaker_classes': {'dim': 1172, 'shape': (), 'sparse': True}`
+    This defines a sparse input for e.g. speaker classes that do not have a time axis.
+
+    In general, all input parameters to :class:`TFUtil.Data` can be provided
 
 
 network
@@ -83,9 +100,24 @@ network
     e.g. you can choose between different LSTM implementations, or GRU, or standard RNN, etc.
     See :class:`TFNetworkRecLayer.RecLayer` or :class:`NetworkRecurrentLayer.RecurrentUnitLayer`.
     See also :ref:`tf_lstm_benchmark`.
-..
-    batching
-        The sorting variant when the mini-batches are created. E.g. ``random``.
+
+batching
+    Defines the default value for ``seq_ordering`` across all datasets.
+    It is recommended to not use this parameter,
+    but rather define ``seq_ordering`` explicitely in the datasets for better readability.
+    Possible values are:
+
+        - ``default``: Keep the sequences as is
+        - ``reverse``: Use the default sequences in reversed order
+        - ``random``: Shuffle the data with a predefined fixed seed
+        - ``random:<seed>``: Shuffle the data with the seed given
+        - ``sorted``: Sort by length (only if available), beginning with shortest sequences
+        - ``sorted_reverse``: Sort by length, beginning with longest sequences
+        - ``laplace:<n_buckets>``: Sort by length with n laplacian buckets (one bucket means going from shortest to longest and back with 1/n of the data).
+        - ``laplace:.<n_sequences>``: sort by length with n sequences per laplacian bucket.
+
+    Note that not all sequence order modes are available for all datasets,
+    and some datasets may provide additional modes.
 
 batch_size
     The total number of frames. A mini-batch has at least a time-dimension
@@ -95,15 +127,6 @@ batch_size
 
 max_seqs
     The maximum number of sequences in one mini-batch.
-
-..
-    chunking
-        You can chunk sequences of your data into parts, which will greatly reduce the amount of needed zero-padding.
-        This option is a string of two numbers, separated by a comma, i.e. ``chunk_size:chunk_step``,
-        where ``chunk_size`` is the size of a chunk,
-        and ``chunk_step`` is the step after which we create the next chunk.
-        I.e. the chunks will overlap by ``chunk_size - chunk_step`` frames.
-        Set this to ``0`` to disable it, or for example ``100:75`` to enable it.
 
 learning_rate
     The learning rate during training, e.g. ``0.01``.

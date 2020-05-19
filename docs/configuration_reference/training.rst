@@ -12,6 +12,21 @@ batch_size
 
 batching
     Defines the default value for ``seq_ordering`` across all datasets.
+    It is recommended to not use this parameter,
+    but rather define ``seq_ordering`` explicitely in the datasets for better readability.
+    Possible values are:
+
+        - ``default``: Keep the sequences as is
+        - ``reverse``: Use the default sequences in reversed order
+        - ``random``: Shuffle the data with a predefined fixed seed
+        - ``random:<seed>``: Shuffle the data with the seed given
+        - ``sorted``: Sort by length (only if available), beginning with shortest sequences
+        - ``sorted_reverse``: Sort by length, beginning with longest sequences
+        - ``laplace:<n_buckets>``: Sort by length with n laplacian buckets (one bucket means going from shortest to longest and back with 1/n of the data).
+        - ``laplace:.<n_sequences>``: sort by length with n sequences per laplacian bucket.
+
+    Note that not all sequence order modes are available for all datasets,
+    and some datasets may provide additional modes.
 
 chunking
     You can chunk sequences of your data into parts, which will greatly reduce the amount of needed zero-padding.
