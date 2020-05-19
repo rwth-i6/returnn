@@ -1,7 +1,7 @@
 .. _tech_overview:
 
 ======================
-Technological overview
+Technological Overview
 ======================
 
 RETURNN is mostly used as a tool where ``rnn.py`` (:mod:`rnn`) is the main entry point
@@ -10,13 +10,32 @@ To get an idea about how it works, it helps to follow roughly the execution path
 starting in :mod:`rnn`, esp. in :py:func:`rnn.main`.
 In all cases, the code itself should be checked for details and comments.
 
-So far, there are two calculation backends: Theano and TensorFlow,
+The main tasks of RETURNN are:
+
+    - Network construction via nested dictionaries
+    - Data loading with predefined and extendable dataset objects
+    - Automatic management of layer outputs (such as tensor axes and time dimensions) with a Data object
+    - Support of dynamic training schemes that allow for network structure and parameter changes during training
+    - Managing the losses and optimizer functions
+    - Learning rate scheduling based on training scores
+
+So far, RETURNN supports two calculation backends: Theano and TensorFlow,
 where Theano was the first backend, thus Theano-specific code files are currently not prefix
 but TensorFlow specific files are prefixed with ``TF``.
-This is implemented separately for both Theano and TensorFlow:
+It is recommended to stick to the TensorFlow backend, as Theano is no longer supported.
+
+
+Structure
+---------
+
+Many components are implemented separately for both Theano and TensorFlow:
 
 - The engine for high-level logic, although a bit is shared.
   :mod:`Engine`, :mod:`EngineTask` for Theano and :mod:`TFEngine` for TensorFlow.
+  For TensorFlow the engine contains the high level methods for training, forward pass, and other
+  executed tasks. It keeps track of the network, devices, models and the updater function, and is the main connection
+  between all these components. :mod:`TFEngine` also contains the :class:`TFEngine.Runner` which is responsible for
+  managing the TensorFlow session.
 - Network topology construction which constructs the computation graph
   for training or just forwarding.
   :mod:`Network`, :mod:`TFNetwork`.
@@ -27,7 +46,7 @@ This is implemented separately for both Theano and TensorFlow:
   and :mod:`TFNetworkLayer`, :mod:`TFNetworkRecLayer` for TensorFlow.
   This also means that Theano and TensorFlow don't support the same layers and
   even parameters can be different.
-- Some utilities :mod:`TheanoUtil` and :mod:`TFUtil`.
+- Some utilities :mod:`TheanoUtil` and :mod:`TFUtil`, which contains the :class:`TFUtil.Data` class.
 - Multi-GPU logic. :mod:`Device`, :mod:`EngineTask` for Theano and not yet implemented for TensorFlow.
 
 All the rest is shared for all backends, which mostly is:
@@ -58,7 +77,6 @@ Execution guide
 - Then, depending on the ``task`` option, it might start ``engine.train``, ``engine.forward`` etc.
   (:py:func:`Engine.Engine.train` or :py:func:`TFEngine.Engine.train`), :ref:`tech_engine_train`.
 
-.. _tech_engine_network:
 
 Network Construction
 --------------------

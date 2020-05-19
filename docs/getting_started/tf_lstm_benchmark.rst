@@ -1,7 +1,7 @@
 .. _tf_lstm_benchmark:
 
 =========================
-TensorFlow LSTM benchmark
+TensorFlow LSTM Benchmark
 =========================
 
 There are multiple LSTM implementations/kernels available in TensorFlow, and we also have our own kernel.
@@ -150,7 +150,7 @@ Also the number of available CPU threads differs.
 Each of those were run on Ubuntu 16.04 with TensorFlow 1.2 (installed via ``pip``), CUDA 8.0 and cuDNN 5.1.
 
 -----------------------
-Analysis and discussion
+Analysis and Discussion
 -----------------------
 
 We are quite proud that our own LSTM kernel (``NativeLSTM``)
