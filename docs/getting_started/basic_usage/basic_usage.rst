@@ -31,6 +31,8 @@ task
 
 device
     E.g. ``gpu`` or ``cpu``.
+    Although RETURNN will automatically detect and use a GPU if available,
+    a specific device can be enforced by setting this parameter.
 
 use_tensorflow
     If you set this to ``True``, TensorFlow will be used.

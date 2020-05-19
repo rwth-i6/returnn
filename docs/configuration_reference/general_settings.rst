@@ -8,7 +8,9 @@ dev
     A dictionary specifying the developement set. For details on datasets, see :ref:`dataset_reference`
 
 device
-    E.g. ``gpu`` or ``cpu``. Can also be ``gpu0,gpu1`` for multi-GPU training.
+    E.g. ``gpu`` or ``cpu``.
+    Although RETURNN will automatically detect and use a GPU if available,
+    a specific device can be enforced by setting this parameter.
 
 extern_data (former num_outputs)
     Defines the source/target dimensions of the data. Both can be integers.
