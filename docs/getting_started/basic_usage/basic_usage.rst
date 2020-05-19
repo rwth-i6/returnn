@@ -125,10 +125,12 @@ log_verbosity
     An integer. Common values are 3 or 4. Starting with 5, you will get an output per mini-batch.
 
 
-There are much more params, and more details to many of the listed ones. Details on the parameters can be found in the
-:ref:`parameter reference <parameter_reference>`. As the reference is still incomplete, please watch out for additional
-parameters that can be found in the code. All config params can also be passed as command line params.
-The generic form is ``++param value``, but more options are available. Please See the code for some usage.
+There are much more params, and more details to many of the listed ones.
+Details on the parameters can be found in the :ref:`parameter reference <parameter_reference>`.
+As the reference is still incomplete, please watch out for additional parameters that can be found in the code.
+All config params can also be passed as command line params.
+The generic form is ``++param value``, but more options are available.
+Please See the code for some usage.
 
 See :ref:`tech_overview` for more details and an overview how it all works.
 

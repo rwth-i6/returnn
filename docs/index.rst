@@ -97,8 +97,6 @@ Some recent development changelog can be seen `here <https://github.com/rwth-i6/
     :hidden:
     :caption: Internals
 
-    internals/tech_overview.rst
-    internals/tf_lstm_benchmark.rst
     api
 
 

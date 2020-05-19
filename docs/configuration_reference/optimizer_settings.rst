@@ -42,7 +42,10 @@ learning_rate_control
     Please also look at setting values with the ``newbob`` prefix for further customization
 
 learning_rate_control_error_measure
-    A str to define which score or error is used to control the learning rate reduction. Per default, Returnn will use dev_score_output. A typical choice would be dev_score_LAYERNAME or dev_error_LAYERNAME. Can be set to None to disable learning rate control.
+    A str to define which score or error is used to control the learning rate reduction.
+    Per default, Returnn will use dev_score_output.
+    A typical choice would be dev_score_LAYERNAME or dev_error_LAYERNAME.
+    Can be set to None to disable learning rate control.
 
 learning_rate_control_min_num_epochs_per_new_lr
     The number of epochs after the last update that the learning rate is kept constant.
@@ -53,7 +56,8 @@ learning_rate_control_relative_error_relative_lr
     Can be used with ``newbob_rel`` and ``newbob_multi_epoch``.
 
 learning_rate_file
-    A path to a file storing the learning rate for each epoch. Despite the name, also stores scores and errors.
+    A path to a file storing the learning rate for each epoch.
+    Despite the name, also stores scores and errors.
 
 newbob_error_threshold
     This is the absolute improvement that has to be achieved in order to _not_ reduce the learning rate.

@@ -80,7 +80,8 @@ with dense input with a very low number of dimensions (9)
 and single output class indices (sparse) with a very low number of class labels (2),
 so that the overhead of the final softmax layer should be minimal, as well as the whole input pipeline.
 We are not interested in the error performance on this task in this benchmark,
-as in theory the results should all be the same. In practice, they are not due to different implementations,
+as in theory the results should all be the same.
+In practice, they are not due to different implementations,
 and also the initialization is currently not the same in all cases.
 However, that has no effect on the runtime performance.
 
