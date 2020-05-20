@@ -4,6 +4,12 @@
 Text Datasets
 =============
 
+Language Model Dataset
+----------------------
+
+.. autoclass:: LmDataset.LmDataset
+    :show-inheritance:
+
 Translation Dataset
 -------------------
 

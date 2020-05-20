@@ -61,9 +61,12 @@ network
     For details sett :ref:`layer_reference`.
 
 num_inputs
+    Input feature dimension of the network, related to the 'data' tag.
+    Deprecated for the TensorFlow backend, see ``extern_data``
 
 num_outputs
-    Deprecated, see ``extern_data``
+    Output feature dimension of the network, related to the 'classes' tag.
+    Deprecated for the TensorFlow backend, see ``extern_data``
 
 task
     The task to run. Common cases are ``train``, ``forward`` or ``search``.
