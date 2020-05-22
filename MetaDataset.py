@@ -166,12 +166,10 @@ class MetaDataset(CachedDataset2):
 
   **Sequence Sorting:**
 
-  If the selected sequence order uses the length of the data (e.g. when using "sorted" or any kind of "laplace")
-  the "data" key of the data map is used.
-  In the above example, the sprint dataset would determine the sorting.
-  If a different dataset should be used for determining the sorting,
-  ``seq_order_control_dataset`` has to be specified, and the desired sorting needs to be set as parameter in this
-  sub-daset.
+  If the selected sequence order uses the length of the data (e.g. when using "sorted" or any kind of "laplace"),
+  a sub-dataset has to be specified via ``seq_order_control_dataset``.
+  The desired sorting needs to be set as parameter in this sub-daset, setting ``seq_ordering`` for the MetaDataset
+  will be ignored.
 
 
   """

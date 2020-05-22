@@ -19,8 +19,8 @@ Possible values for the sequence ordering are:
     - ``random:<seed>``: Shuffle the data with the seed given
     - ``sorted``: Sort by length (only if available), beginning with shortest sequences
     - ``sorted_reverse``: Sort by length, beginning with longest sequences
-    - ``laplace:<n_buckets>``: Sort by length with n laplacian buckets (one bucket means going from shortest to longest and back with 1/n of the data).
-    - ``laplace:.<n_sequences>``: sort by length with n sequences per laplacian bucket.
+    - ``laplace:<n_buckets>``: Create n randomly filled buckets, in which sequences are laplacian sorted by length (one bucket means going from shortest to longest and back with 1/n of the data).
+    - ``laplace:.<n_sequences>``: use n sequences for each laplacian sorted bucket instead of a fixed number of buckets.
 
 Note that not all sequence order modes are available for all datasets,
 and some datasets may provide additional modes. Also check the sequence ordering possibilities with the
