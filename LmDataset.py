@@ -26,6 +26,7 @@ class LmDataset(CachedDataset2):
   """
   Dataset useful for language modeling.
   It creates index sequences for either words, characters or other orthographics symbols based on a vocabulary.
+  Can also perform internal word to phoneme conversion with a lexicon file.
   Reads simple txt files or bliss xml files (also gzipped).
   """
 
@@ -55,7 +56,8 @@ class LmDataset(CachedDataset2):
     The LmDatasets also support the conversion of words to phonemes with the help of the
     :class:`LmDataset.PhoneSeqGenerator` class. To enable this mode, the input parameters to
     :class:`LmDataset.PhoneSeqGenerator` have to be provided as dict in ``phone_info``.
-    ``orth_symbols_file`` and ``orth_symbols_map_file`` are not used in this case.
+    As a lexicon file has to specified in this dict, ``orth_symbols_file`` and ``orth_symbols_map_file``
+    are not used in this case.
 
     The LmDataset does not work without providing a vocabulary with any of the above mentioned ways.
 
@@ -75,7 +77,8 @@ class LmDataset(CachedDataset2):
       will be set as postfix=[seq_end_symbol] or postfix=[] for parse_orth_opts.
     :param str|None unknown_symbol: token to represent unknown words.
     :param dict[str]|None parse_orth_opts: kwargs for parse_orthography().
-    :param dict|None phone_info: A dict containing parameters for :class:`LmDataset.PhoneSeqGenerator`.
+    :param dict|None phone_info: A dict containing parameters including a lexicon file for
+                                 :class:`LmDataset.PhoneSeqGenerator`.
     :param int add_random_phone_seqs: will add random seqs with the same len as the real seq as additional data.
     :param bool|int log_auto_replace_unknown_symbols: write about auto-replacements with unknown symbol.
       if this is an int, it will only log the first N replacements, and then keep quiet.
@@ -1042,12 +1045,20 @@ class TranslationDataset(CachedDataset2):
   Based on the conventions by our team for translation datasets.
   It gets a directory and expects these files:
 
-      source.dev(.gz)?
-      source.train(.gz)?
-      source.vocab.pkl
-      target.dev(.gz)?
-      target.train(.gz)?
-      target.vocab.pkl
+      - source.dev(.gz)
+      - source.train(.gz)
+      - source.vocab.pkl
+      - target.dev(.gz)
+      - target.train(.gz)
+      - target.vocab.pkl
+
+  The convention is to use "dev" and "train" as ``file_postfix`` for the dev and train set respectively, but any
+  file_postfix can be used. The target file and vocabulary do not have to exists when setting ``source_only``.
+  It is also automatically checked if a gzip version of the file exists.
+
+  To follow the RETURNN conventions on data input and output, the source text is mapped to the "data" key,
+  and the target text to the "classes" data key. Both are index sequences.
+
   """
 
   source_file_prefix = "source"
@@ -1070,6 +1081,7 @@ class TranslationDataset(CachedDataset2):
     :param str target_postfix: will concat this at the end of the target.
       You might want to add some sentence-end symbol.
     :param bool source_only: if targets are not available
+    :param bool search_without_reference:
     :param str|dict[str,str]|None unknown_label: Label to replace out-of-vocabulary words with, e.g. "<UNK>".
       If not given, will not replace unknowns but throw an error. Can also be a dict data_key -> unknown_label
       to configure for each data key separately (default for each key is None).

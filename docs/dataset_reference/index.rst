@@ -23,7 +23,8 @@ Possible values for the sequence ordering are:
     - ``laplace:.<n_sequences>``: sort by length with n sequences per laplacian bucket.
 
 Note that not all sequence order modes are available for all datasets,
-and some datasets may provide additional modes.
+and some datasets may provide additional modes. Also check the sequence ordering possibilities with the
+:ref:`MetaDataset <meta_dataset>`.
 
 
 

@@ -153,9 +153,9 @@ class MetaDataset(CachedDataset2):
       train = {"class": "MetaDataset", "seq_list_file": "seq_list.pkl",
                "datasets": {"sprint": train_sprint, "translation": train_translation},
                "data_map": {"data": ("sprint", "data"),
-               "target_text_sprint": ("sprint", "orth_classes"),
-               "source_text": ("translation", "data"),
-               "target_text": ("translation", "classes")},
+                            "target_text_sprint": ("sprint", "orth_classes"),
+                            "source_text": ("translation", "data"),
+                            "target_text": ("translation", "classes")},
                "seq_ordering": "random",
                "partition_epoch": 2,
       }
@@ -163,6 +163,17 @@ class MetaDataset(CachedDataset2):
   This combines a SprintDataset and a TranslationDataset.
   These are defined as ``"train_sprint"`` and ``"train_translation"`` separately.
   *Note that the current implementation expects one input feature to be called "data".*
+
+  **Sequence Sorting:**
+
+  If the selected sequence order uses the length of the data (e.g. when using "sorted" or any kind of "laplace")
+  the "data" key of the data map is used.
+  In the above example, the sprint dataset would determine the sorting.
+  If a different dataset should be used for determining the sorting,
+  ``seq_order_control_dataset`` has to be specified, and the desired sorting needs to be set as parameter in this
+  sub-daset.
+
+
   """
 
   def __init__(self,
