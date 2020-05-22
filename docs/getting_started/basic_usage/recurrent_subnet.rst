@@ -4,7 +4,7 @@
 Recurrent Sub-Networks
 ======================
 
-For many task it will be necessary to define multiple that are applied as recurrent network over a sequential input,
+For many task it will be necessary to define multiple layers that are applied as recurrent network over a sequential input,
 especially when running a search over sequences.
 While basic recurrent layers such as LSTM variants are defined by using the "``rec``" layer and selecting the desired
 "``unit``", custom sub-networks can be defined by passing a network dictionary for the "``unit``" attribute.
@@ -52,5 +52,5 @@ Example of an MLP-style attention mechanism with an LSTM layer:
           "n_out": n_out
       }
 
-The ``from`` attribute can be empty when the output as a target.
+The ``from`` attribute can be empty when using the output as a target.
 The sequence length will then be determined by this target.

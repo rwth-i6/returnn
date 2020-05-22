@@ -27,15 +27,6 @@ class LmDataset(CachedDataset2):
   Dataset useful for language modeling.
   It creates index sequences for either words, characters or other orthographics symbols based on a vocabulary.
   Reads simple txt files or bliss xml files (also gzipped).
-
-  The vocabulary can be provided by setting:
-
-    - **orth_symbols_file**: A file where each line is a symbol
-    - **orth_symbols_map_file**: A file with lines containing "<symbol> <index>" or a pickled python dict
-    - **phone_info**: A dict contianing parameters for :class:`LmDataset.PhoneSeqGenerator`
-
-  The LmDataset does not work without providing a vocabulary.
-
   """
 
   def __init__(self,
@@ -58,13 +49,24 @@ class LmDataset(CachedDataset2):
                delayed_seq_data_start_symbol="[START]",
                **kwargs):
     """
+    To use the LmDataset with words or characters, either ``orth_symbols_file`` or ``orth_symbols_map_file`` has to be
+    specified (both is not possible). If words should be used, set ``word_based`` to True.
+
+    The LmDatasets also support the conversion of words to phonemes with the help of the
+    :class:`LmDataset.PhoneSeqGenerator` class. To enable this mode, the input parameters to
+    :class:`LmDataset.PhoneSeqGenerator` have to be provided as dict in ``phone_info``.
+    ``orth_symbols_file`` and ``orth_symbols_map_file`` are not used in this case.
+
+    The LmDataset does not work without providing a vocabulary with any of the above mentioned ways.
+
     After initialization, the corpus is represented by self.orths (as a list of sequences).
     The vocabulary is given by self.orth_symbols and self.orth_symbols_map gives the corresponding
-    mapping from symbol to integer index.
+    mapping from symbol to integer index (in case ``phone_info`` is not set).
 
     :param str|()->str|list[str]|()->list[str] corpus_file: Bliss XML or line-based txt. optionally can be gzip.
-    :param str|()->str|None orth_symbols_file: list of orthography symbols, if you want to get orth symbol seqs.
-    :param str|()->str|None orth_symbols_map_file: list of orth symbols, each line: "symbol index".
+    :param str|()->str|None orth_symbols_file: a text file containing a list of orthography symbols
+    :param str|()->str|None orth_symbols_map_file: either a list of orth symbols, each line: "<symbol> <index>",
+                                                   or a pickled dictionary
     :param str|()->str|None orth_replace_map_file: JSON file with replacement dict for orth symbols.
     :param bool word_based: whether to parse single words, or otherwise will be character based.
     :param str|None word_end_symbol: If provided and if word_based is False (character based modeling), token to be used
@@ -73,7 +75,7 @@ class LmDataset(CachedDataset2):
       will be set as postfix=[seq_end_symbol] or postfix=[] for parse_orth_opts.
     :param str|None unknown_symbol: token to represent unknown words.
     :param dict[str]|None parse_orth_opts: kwargs for parse_orthography().
-    :param dict|None phone_info: if you want to get phone seqs, dict with lexicon_file etc. see PhoneSeqGenerator.
+    :param dict|None phone_info: A dict containing parameters for :class:`LmDataset.PhoneSeqGenerator`.
     :param int add_random_phone_seqs: will add random seqs with the same len as the real seq as additional data.
     :param bool|int log_auto_replace_unknown_symbols: write about auto-replacements with unknown symbol.
       if this is an int, it will only log the first N replacements, and then keep quiet.

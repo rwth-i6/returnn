@@ -23,7 +23,7 @@ In the case of the hdf file it could be that the input data are 100-dimensional 
 and the target data are 5,000 word classes.
 Then, ``extern_data`` would have to be defined as:
 
-.. code-block::
+.. code-block:: python
 
     extern_data = {'data': (100, 2), 'classes': (5000, 1)}
 
