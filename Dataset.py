@@ -131,8 +131,9 @@ class Dataset(object):
     self.weights = {}
     self.nbytes = 0
     self.num_running_chars = 0  # CTC running chars.
-    self._num_timesteps = 0
+    self._num_timesteps = 0 # TODO: this is only used by the HDFDataset, nowhere else
     self._num_codesteps = None  # type: typing.Optional[int]  # Num output frames, could be different from input, seq2seq, ctc.  # nopep8
+    # TODO: this variable is never set
     self._num_seqs = 0
     self._estimated_num_seqs = estimated_num_seqs
     self.min_chunk_size = min_chunk_size
@@ -227,6 +228,8 @@ class Dataset(object):
 
   def sliding_window(self, xr):
     """
+    TODO: This function is only used inside datasets -> could be protected
+
     :type xr: numpy.ndarray
     :rtype: numpy.ndarray
     """
@@ -242,6 +245,10 @@ class Dataset(object):
   # noinspection PyMethodMayBeStatic
   def preprocess(self, seq):
     """
+    TODO: This seems to be only called in a function of CachedDataset, which
+      is then only called in HDFDataset. Seems to be completely useless,
+      as there is no override at any point.
+
     :type seq: numpy.ndarray
     :rtype: numpy.ndarray
     """
@@ -249,6 +256,8 @@ class Dataset(object):
 
   def is_cached(self, start, end):
     """
+    TODO: Is only called within the Dataset itself, can be protected or even private
+
     :param int start: like in load_seqs(), sorted seq idx
     :param int end: like in load_seqs(), sorted seq idx
     :rtype: bool
@@ -261,6 +270,9 @@ class Dataset(object):
 
   def get_seq_length_nd(self, sorted_seq_idx):
     """
+    TODO: This function is only replaced in CachedDataset, and used only in get_seq_lenght of the
+      Dataset itself, so this code should never be executed.
+
     :type sorted_seq_idx: int
     :rtype: numpy.ndarray
     :returns the len of the input features and the len of each target sequence.
@@ -277,11 +289,13 @@ class Dataset(object):
 
   def get_seq_length(self, seq_idx):
     """
+    TODO: This function seems to be replaced in all existing subclasses, so the body might be removed here.
+
     :param int seq_idx:
     :rtype: NumbersDict
     :returns the len of the input features and the len of the target sequence.
     """
-    assert self.__class__.get_seq_length_nd is not Dataset.get_seq_length_nd, "Override get_seq_length."
+    assert self.__class__.get_seq_length_nd is not Dataset.get_seq_length_nd, "Override get_seq_length_nd in a subclass"
     input_len, output_len = self.get_seq_length_nd(seq_idx)
     d = {"data": input_len}
     d.update({k: output_len for k in self.get_target_list()})
@@ -291,11 +305,13 @@ class Dataset(object):
     """
     :rtype: int
     """
-    assert self._num_timesteps > 0
+    assert self._num_timesteps > 0 # TODO: this can only be valid for HDFDataset
     return self._num_timesteps
 
   def get_num_codesteps(self):
     """
+    TODO: this function has no usages
+
     :rtype: int|list[int]
     """
     if self._num_codesteps is None:
@@ -346,6 +362,9 @@ class Dataset(object):
 
   def _load_seqs(self, start, end):
     """
+    TODO: the existance of _load_seqs and load_seqs with the same name is not obvious to me,
+      maybe one should be renamed
+
     Load data sequences.
     :param int start: inclusive seq idx start
     :param int end: exclusive seq idx end. can be more than num_seqs
@@ -376,6 +395,9 @@ class Dataset(object):
     Returns the order of the given epoch.
     This is mostly a static method, except that is depends on the configured type of ordering,
     such as 'default' (= as-is), 'sorted' or 'random'. 'sorted' also uses the sequence length.
+
+    TODO: This function as to be used in the subclasses explicitely, so it is possible to write a dataset
+      that does not support the seq_ordering parameter and it will never cause a warning or assert
 
     :param int epoch: for 'random', this determines the random seed
     :param int num_seqs:
@@ -527,6 +549,9 @@ class Dataset(object):
 
   def _get_random_seed_for_epoch(self, epoch):
     """
+    Makes sure that each epoch is shuffled differently,
+    but fixed for repeated training runs.
+
     :param int|None epoch:
     :rtype: int
     """
@@ -545,6 +570,8 @@ class Dataset(object):
 
     This is called when we start a new epoch, or at initialization.
     Call this when you reset the seq list.
+
+    TODO: it does not seem to be obvious what the sub-classes do/should do when this function is caleld
     """
     self.epoch = epoch
     self.rnd_seq_drop = Random(self._get_random_seed_for_epoch(epoch=epoch))
@@ -555,11 +582,15 @@ class Dataset(object):
     This would get called at the end of the epoch (currently optional only).
     After this, further calls to :func:`get_data` or :func:`load_seqs` are invalid,
     until a new call to :func:`init_seq_order` follows.
+
+    TODO: currently this seems to be important only for the SprintDataset
     """
     self.epoch = None
 
   def get_current_seq_order(self):
     """
+    TODO: This function is only used by the MetaDataset, so this might be flagged as protected
+
     :return: many datasets use self.get_seq_order_for_epoch. this function would return the current seq order
       for the current epoch, after self.init_seq_order was called.
       Not all datasets implement this.
@@ -568,6 +599,10 @@ class Dataset(object):
     raise OptionalNotImplementedError
 
   def _base_init(self):
+    """
+    TODO: seems to be only used in initialize and one location SprintDataset, might be moved
+    :return:
+    """
     self.nbytes = 0
     self.zpad = None
     # We expect that the following attributes are already set elsewhere, by a derived class.
@@ -588,6 +623,8 @@ class Dataset(object):
 
   def initialize(self):
     """
+    TODO: Pycharm gives some weird usage places here...
+
     Does the main initialization before it can be used.
     This needs to be called before self.load_seqs() can be used.
     """
@@ -596,6 +633,8 @@ class Dataset(object):
 
   def get_times(self, sorted_seq_idx):
     """
+    TODO: is used only in eval mode, and implemented only by the CachedDataset
+
     :param int sorted_seq_idx:
     """
     raise OptionalNotImplementedError
@@ -606,6 +645,10 @@ class Dataset(object):
     :param str key: data-key, e.g. "data" or "classes"
     :rtype: numpy.ndarray
     :returns features or targets: format 2d (time,feature) (float)
+
+    TODO: the dependencies between the different get_X_data functions is not clear,
+      e.g. HDFDatasets calls this function from the other two
+
     """
     # Fallback implementation for old-style subclasses.
     if key == "data":
@@ -634,6 +677,7 @@ class Dataset(object):
   def get_ctc_targets(self, sorted_seq_idx):
     """
     Warning: This is deprecated/obsolete.
+    TODO: only used in the theano part
 
     :param int sorted_seq_idx:
     :rtype: numpy.ndarray|None
@@ -642,6 +686,8 @@ class Dataset(object):
 
   def get_data_slice(self, seq_idx, key, start_frame, end_frame):
     """
+    TODO: only used in the theano part
+
     :param int seq_idx:
     :param str key:
     :param int start_frame:
@@ -655,6 +701,9 @@ class Dataset(object):
     return data[start_frame:end_frame]
 
   def _get_data_slice_sparse(self, seq_idx, key, start_frame, end_frame):
+    """
+    TODO: This function has no usages
+    """
     key_prefix = key[:key.index("[")]
     sparse_info = key[key.index("[") + 1:key.index("]")].split(":")
     assert len(sparse_info) == 4
@@ -694,6 +743,13 @@ class Dataset(object):
 
   def get_total_num_seqs(self):
     """
+    TODO: this function is only used in DataSet and MetaDataset, so can be protected
+      This function should either be removed, or given a useful purpose
+      In Dataset is only used for an assert when self.seq_tags_filter is not None
+      In MetaDataset, it is surrounded with a try that catches for NotImplemented,
+      and just continues without any exception.
+      Meaning, this function is completely useless right now, and not used at any relevant point
+
     :return: total number of seqs, without partition epoch.
       Should be the same as len(self.get_all_tags()).
       Note that this is not possible with all datasets.
