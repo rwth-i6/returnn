@@ -132,7 +132,9 @@ class RecLayer(_ConcatInputLayer):
     if optimize_move_layers_out is None:
       optimize_move_layers_out = self.network.get_config().bool("optimize_move_layers_out", True)
     self._optimize_move_layers_out = optimize_move_layers_out
-    assert not cheating, "Cheating is an unused parameter, to enable cheating set the flag in a ChoiceLayer"
+    if cheating:
+      print("Warning: cheating is an unused parameter in RecLayer, "
+            "to enable cheating set the flag in a ChoiceLayer instead.", file=log.v2)
     self._unroll = unroll
     if back_prop is None:
       back_prop = self.network.train_flag is not False
