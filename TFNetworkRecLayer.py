@@ -104,7 +104,7 @@ class RecLayer(_ConcatInputLayer):
     :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
     :param str bias_init: see :func:`TFUtil.get_initializer`
     :param bool|None optimize_move_layers_out: will automatically move layers out of the loop when possible
-    :param bool cheating: make targets available, and determine length by them
+    :param bool cheating: Unused, is now part of ChoiceLayer
     :param bool unroll: if possible, unroll the loop (implementation detail)
     :param bool|None back_prop: for tf.while_loop. the default will use self.network.train_flag
     :param bool use_global_rec_step_offset:
@@ -132,9 +132,7 @@ class RecLayer(_ConcatInputLayer):
     if optimize_move_layers_out is None:
       optimize_move_layers_out = self.network.get_config().bool("optimize_move_layers_out", True)
     self._optimize_move_layers_out = optimize_move_layers_out
-    if cheating:
-      print("%s: cheating enabled, i.e. we know the ground truth seq length" % self, file=log.v2)
-    self._cheating = cheating
+    assert not cheating, "Cheating is an unused parameter, to enable cheating set the flag in a ChoiceLayer"
     self._unroll = unroll
     if back_prop is None:
       back_prop = self.network.train_flag is not False
