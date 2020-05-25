@@ -225,7 +225,7 @@ class Dataset(object):
       seq_list = open(filename).read().splitlines()
     return seq_list
 
-  def sliding_window(self, xr):
+  def _sliding_window(self, xr):
     """
     :type xr: numpy.ndarray
     :rtype: numpy.ndarray
@@ -238,14 +238,6 @@ class Dataset(object):
       shape=(x.shape[0] - self.window + 1, 1, self.window, self.num_inputs),
       strides=(x.strides[0], x.strides[1] * self.num_inputs) + x.strides
       ).reshape((xr.shape[0], self.num_inputs * self.window))
-
-  # noinspection PyMethodMayBeStatic
-  def preprocess(self, seq):
-    """
-    :type seq: numpy.ndarray
-    :rtype: numpy.ndarray
-    """
-    return seq
 
   def is_cached(self, start, end):
     """

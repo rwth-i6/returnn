@@ -336,7 +336,7 @@ class SprintDatasetBase(Dataset):
     if self.input_stddev != 1:
       features /= self.input_stddev
     if self.window > 1:
-      features = self.sliding_window(features)
+      features = self._sliding_window(features)
       assert features.shape == (num_frames, self.num_inputs * self.window)
 
     if targets is None:

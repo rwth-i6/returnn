@@ -255,9 +255,8 @@ class CachedDataset(Dataset):
     o = self._seq_start[idc][0] - self._seq_start[self.alloc_intervals[idi][0]][0]
     l = data.shape[0]
     x = data
-    x = self.preprocess(x)
     if self.window > 1:
-      x = self.sliding_window(x)
+      x = self._sliding_window(x)
     self.alloc_intervals[idi][2][o:o + l] = x
 
   def alloc_interval_index(self, ids):

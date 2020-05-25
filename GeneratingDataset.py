@@ -119,7 +119,7 @@ class GeneratingDataset(Dataset):
     seqs = [self.generate_seq(seq_idx=seq_idx) for seq_idx in range(start, end)]
     if self.window > 1:
       for seq in seqs:
-        seq.features["data"] = self.sliding_window(seq.features["data"])
+        seq.features["data"] = self._sliding_window(seq.features["data"])
     self._num_timesteps += sum([seq.num_frames for seq in seqs])
     self.added_data += seqs
 

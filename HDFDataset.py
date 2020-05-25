@@ -273,7 +273,7 @@ class HDFDataset(CachedDataset):
       inputs = fin['inputs']
       data = inputs[start_pos[0]:end_pos[0]]
       if self.window > 1:
-        data = self.sliding_window(data)
+        data = self._sliding_window(data)
     else:
       assert 'targets' in fin
       targets = fin['targets/data/' + key]
