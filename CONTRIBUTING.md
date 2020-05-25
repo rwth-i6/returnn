@@ -20,8 +20,12 @@ About new features:
 * Write them in a generic way, that is easily composeable,
   and reflects a core atomic functionality or concept,
   and not too much at once.
-  (Good examples: `LinearLayer`, `ConvLayer`, `DotLayer`, `EvalLayer`, ...;
-   bad examples: `AllophoneStateIdxParserLayer`, `NeuralTransducerLayer`, ...).
+  The (class/function/layer/whatever) name should reflect
+  the functionality/concept,
+  and less a specific task/model.
+  (Good examples: `LinearLayer`, `ConvLayer`, `DotLayer`, `EvalLayer`,  ...;
+   bad examples: `AllophoneStateIdxParserLayer`, `NeuralTransducerLayer`,
+   `TranslationDataset`, `LmDataset`).
   It should be easy to write a config using this,
   but also easy to understand what it does when reading a config.
   If you read a config, see `"class": "linear"`,
