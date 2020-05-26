@@ -7,6 +7,11 @@ General rules when contributing to the code of RETURNN:
 
 * The master branch of RETURNN is considered as stable.
   Keep it that way.
+  (This is for everything which is used by other people.
+   If you work on some new experimental feature, which would not affect other people,
+   or other people are well aware of the current development on it,
+   it's okay to push incomplete or experimental code to the master branch.
+   It is even encouraged to commit often and early and not wait too long.)
 * Do not break existing setups (unless there is a very good reason to do so).
 * Keep consistent and clean code style.
   Our code style follows mostly PEP8, except for 2 space indents, and 120 char line limits.
@@ -17,6 +22,12 @@ General rules when contributing to the code of RETURNN:
 
 About new features:
 
+* Is this useful for someone else? If not, or not sure yet, just put this into your config.
+  Almost all changes / extensions can be put into the config, without modifying RETURNN code.
+  (And if this is not possible for your specific change yet, or too complicated,
+   then let's discuss how to extend or generalize RETURNN
+   such that RETURNN becomes generic enough for this,
+   such that you do not need to modify RETURNN.)
 * Write them in a generic way, that is easily composeable,
   and reflects a core atomic functionality or concept,
   and not too much at once.
@@ -36,16 +47,17 @@ About new features:
   (If you keep adding options to your class, then you likely have not followed this principle
    of simplicity, and your class does too much at once.
    Better redesign it to have it atomic and move the flexibility and variations to the config.)
-* Is this useful for someone else? If not, or not sure yet, just put this into your config.
-  Almost all changes / extensions can be put into the config, without modifying RETURNN code.
-  (And if this is not possible for your specific change yet, or too complicated,
-   then let's discuss how to extend or generalize RETURNN
-   such that RETURNN becomes generic enough for this,
-   such that you do not need to modify RETURNN.)
-* If this is not used by everyone, you (as a user of this part of the code)
+* If this is not going to be used by everyone,
+  you (as a user of this part of the code)
   are responsible for this part of the code.
   This also means that you should have written tests such that other people will not accidently break this.
   This is your responsibility.
+* Even if this is work-in-progress, incomplete or experimental,
+  directly push this to the master branch
+  (or prepare for master branch -- see below on pull requests).
+  But write it in a way that it will not affect other parts,
+  i.e. that everything else keeps being stable,
+  and this would be an optional feature.
 
 The common process of a change would be like:
 
