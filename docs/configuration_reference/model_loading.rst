@@ -4,19 +4,27 @@
 Model Loading
 =============
 
+.. note::
+
+    This documentation does not cover all possible combinations of parameters for loading models.
+    For more details refer to `EngineBase.py <https://github.com/rwth-i6/returnn/blob/master/EngineBase.py>`_.
+
 import_model_train_epoch1
-    If a path to a valid model is provided (for TF models without ``.meta`` extension),
+    If a path to a valid model is provided
+    (for TF models paths with or without ``.meta`` or ``.index`` extension are possible),
     use this to initialize the weights for training.
     If you do not want to start a new training, see ``load``.
 
 load
-    If a path to a valid model is provided (for TF models without ``.meta`` extension),
+    If a path to a valid model is provided
+    (for TF models paths with or without ``.meta`` or ``.index`` extension are possible),
     use this to load the specified model and training state.
     The training is continued from the last position.
 
 load_epoch
-    Specifies the epoch index to load, based on the prefix given in ``model``.
-    If not set, RETURNN will use the latest epoch.
+    Specifies the epoch index, and selects the checkpoint based on the prefix given in ``model``.
+    If not set, RETURNN will determine the epoch from the filename or use the latest epoch in case
+    of providing only ``model``.
 
 preload_from_files
     A dictionary that should contain ``filename`` and ``prefix``.

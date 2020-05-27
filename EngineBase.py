@@ -75,12 +75,16 @@ class EngineBase(object):
     load_model_epoch_filename = config.value('load', '')
     if load_model_epoch_filename.endswith(".meta"):
       load_model_epoch_filename = load_model_epoch_filename[:-len(".meta")]
+    elif load_model_epoch_filename.endswith(".index"):
+        load_model_epoch_filename = load_model_epoch_filename[:-len(".index")]
     if load_model_epoch_filename:
       assert os.path.exists(load_model_epoch_filename + get_model_filename_postfix())
 
     import_model_train_epoch1 = config.value('import_model_train_epoch1', '')
     if import_model_train_epoch1.endswith(".meta"):
       import_model_train_epoch1 = import_model_train_epoch1[:-len(".meta")]
+    elif import_model_train_epoch1.endswith(".index"):
+        import_model_train_epoch1 = import_model_train_epoch1[:-len(".index")]
     if import_model_train_epoch1:
       assert os.path.exists(import_model_train_epoch1 + get_model_filename_postfix())
 
