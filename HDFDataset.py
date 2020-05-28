@@ -300,6 +300,15 @@ class HDFDataset(CachedDataset):
       return super(HDFDataset, self).get_targets(target, sorted_seq_idx)
     return self.get_data(sorted_seq_idx, target)
 
+  def get_estimated_seq_length(self, seq_idx):
+    """
+    :param int seq_idx: for current epoch, not the corpus seq idx
+    :rtype: int
+    :returns sequence length of "data", used for sequence sorting
+    """
+    real_seq_idx = self._seq_index[self._index_map[seq_idx]]
+    return int(self._get_seq_length_by_real_idx(real_seq_idx)[0])
+
   def _get_seq_length_by_real_idx(self, real_seq_idx):
     """
     :param int real_seq_idx:

@@ -277,6 +277,20 @@ class Dataset(object):
     """
     raise NotImplementedError
 
+  def get_estimated_seq_length(self, seq_idx):
+    """
+    In contrast to self.get_seq_length(), this method is designed to work for sequences that have not been loaded yet
+    via self.load_seqs().
+    Used by meta-datasets for sequence ordering. Currently we only provide one number, i.e. do not give different
+    estimates for the different data keys (as in get_seq_length()). It is up to the dataset what this number represents
+    and how it is computed.
+
+    :param int seq_idx: for current epoch, not the corpus seq idx
+    :rtype: int
+    :returns sequence length estimate (for sorting)
+    """
+    raise OptionalNotImplementedError
+
   def get_num_timesteps(self):
     """
     :rtype: int
