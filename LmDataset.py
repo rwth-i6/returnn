@@ -1382,6 +1382,17 @@ class TranslationDataset(CachedDataset2):
     self._num_seqs = len(self._seq_order)
     return True
 
+  def get_estimated_seq_length(self, seq_idx):
+    """
+    :param int seq_idx: for current epoch, not the corpus seq idx
+    :rtype: int
+    :returns sequence length of main source data key ("data"), used for sequence sorting
+    """
+    corpus_seq_idx = self.get_corpus_seq_idx(seq_idx)
+    assert corpus_seq_idx is not None
+
+    return len(self._get_data(key=self.main_source_data_key, line_nr=corpus_seq_idx))
+
   def _collect_single_seq(self, seq_idx):
     if seq_idx >= self._num_seqs:
       return None
