@@ -100,14 +100,7 @@ def _cleanup_old_models(config):
 session = tf.InteractiveSession()
 
 
-def test_DataProvider():
-  """
-  :param Dataset.Dataset dataset:
-  :param int seq_idx:
-  :param str|None output_layer_name: e.g. "output". if not set, will read from config "forward_output_layer"
-  :return: numpy array, output in time major format (time,batch,dim)
-  :rtype: numpy.ndarray
-  """
+def test_FeedDictDataProvider():
   from GeneratingDataset import DummyDataset
   seq_len = 5
   n_data_dim = 2
@@ -157,6 +150,73 @@ def test_DataProvider():
   numpy.testing.assert_almost_equal(list(data[0, 0]), [-0.5, -0.4])
   numpy.testing.assert_almost_equal(list(data[0, -1]), [0.3, 0.4])
   assert_equal(classes.tolist(), [[1, 2, 0, 1, 2]])
+
+
+def test_DatasetDataProvider():
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  num_seqs = 5
+  dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=num_seqs, seq_len=seq_len)
+  dataset.init_seq_order(epoch=1)
+
+  n_batch = 2
+  config = Config({
+    "max_seqs": n_batch,
+  })
+
+  with make_scope() as session:
+    extern_data = ExternData()
+    extern_data.init_from_dataset(dataset, auto_create_placeholders=False)
+
+    from TFDataPipeline import DatasetDataProvider
+    data_provider = DatasetDataProvider(
+      extern_data=extern_data, config=config, datasets={"train": dataset})
+
+    input_context = data_provider.contexts["train"]
+    assert isinstance(input_context.final_dataset, tf.data.Dataset)
+    assert input_context.final_dataset_init_iterator_op.graph is session.graph
+
+    data_provider.set_current_dataset(dataset_name="train")
+    data_provider.start_threads(session=session)
+
+    data, data_size, classes, classes_size = session.run([
+      extern_data.data["data"].placeholder,
+      extern_data.data["data"].get_sequence_lengths(),
+      extern_data.data["classes"].placeholder,
+      extern_data.data["classes"].get_sequence_lengths()])
+
+    assert_is_instance(data, numpy.ndarray)
+    assert_is_instance(data_size, numpy.ndarray)
+    assert_is_instance(classes, numpy.ndarray)
+    assert_is_instance(classes_size, numpy.ndarray)
+    assert_equal(data.shape, (n_batch, seq_len, n_data_dim))
+    assert_equal(data_size.shape, (n_batch,))
+    assert_equal(classes.shape, (n_batch, seq_len))
+    assert_equal(classes_size.shape, (n_batch,))
+    assert_equal(list(data_size), [seq_len] * n_batch)
+    assert_equal(list(classes_size), [seq_len] * n_batch)
+    numpy.testing.assert_almost_equal(list(data[0, 0]), [-0.5, -0.4])
+    numpy.testing.assert_almost_equal(list(data[0, -1]), [0.3, 0.4])
+    assert_equal(classes[0].tolist(), [1, 2, 0, 1, 2])
+
+    step = 1  # step 0 was above
+    while True:
+      try:
+        res = session.run(data_provider.iterator_next_element)
+      except tf.errors.OutOfRangeError as exc:
+        print("Got out-of-range (as expected):", exc.message)
+        break
+      print("step %i, res %r" % (step, res))
+      step += 1
+      if step > 10 * num_seqs:
+        break  # should not get here...
+
+    print("Finished after %i steps." % step)
+    assert step == (num_seqs - 1) // n_batch + 1
+
+    data_provider.stop_threads()
 
 
 def test_engine_train():

@@ -532,21 +532,33 @@ class InputContext(object):
         returnn_dataset.load_seqs(seq_idx, seq_idx + 1)
 
         res = {}  # type: typing.Dict[str,numpy.ndarray]
-        for key, data in self.extern_data.data.items():
-          value = returnn_dataset.get_data(seq_idx, key)
-          res[key] = value
-          for axis_wo_b, dim in enumerate(data.shape):
-            if dim is None:  # dynamic length -- need size info for it
-              size_key = "size:%s:%i" % (key, axis_wo_b)
-              res[size_key] = value.shape[axis_wo_b]
+        for key_, data_ in self.extern_data.data.items():
+          value = returnn_dataset.get_data(seq_idx, key_)
+          res[key_] = value
+          for axis_wo_b_, dim_ in enumerate(data_.shape):
+            if dim_ is None:  # dynamic length -- need size info for it
+              size_key_ = "size:%s:%i" % (key_, axis_wo_b_)
+              res[size_key_] = value.shape[axis_wo_b_]
         yield res
+        seq_idx += 1
 
       returnn_dataset.finish_epoch()
 
+    output_types = {}  # type: typing.Dict[str,tf.DType]
+    output_shapes = {}  # type: typing.Dict[str,tf.TensorShape]
+    for key, data in self.extern_data.data.items():
+      output_types[key] = tf.as_dtype(data.dtype)
+      output_shapes[key] = tf.TensorShape(data.shape)  # not batch-shape
+      for axis_wo_b, dim in enumerate(data.shape):
+        if dim is None:  # dynamic length -- need size info for it
+          size_key = "size:%s:%i" % (key, axis_wo_b)
+          output_types[size_key] = tf.as_dtype(data.size_dtype)
+          output_shapes[size_key] = tf.TensorShape([])  # scalar. will get batched later
+
     return tf.data.Dataset.from_generator(
       generator=generator,
-      output_types=self.iterator.output_types,
-      output_shapes=self.iterator.output_shapes)
+      output_types=output_types,
+      output_shapes=output_shapes)
 
   def get_default_max_seqs(self):
     """
@@ -660,9 +672,9 @@ class DatasetDataProvider(DataProviderBase):
           assert isinstance(data.size_placeholder[axis_wo_b], tf.Tensor), "next: %r" % (self.iterator_next_element,)
 
     dataset_pipeline_func = config.typed_value("dataset_pipeline")
-    if dataset_pipeline_func in [True, 1]:
+    if dataset_pipeline_func in [None, True, 1]:  # allow None here, if this class is used explicitly
       dataset_pipeline_func = self._dataset_pipeline_default
-    assert callable(dataset_pipeline_func)
+    assert callable(dataset_pipeline_func), "dataset_pipeline in config is invalid"
 
     if datasets is None or not datasets:  # e.g. in distributed TF
       # We don't use them here. These will be used by the dataset loader producer workers.

@@ -76,9 +76,10 @@ class ExternData(object):
       shape=shape, dim=dim, sparse=sparse, dtype=dtype,
       available_for_inference=available_for_inference)
 
-  def init_from_dataset(self, dataset):
+  def init_from_dataset(self, dataset, auto_create_placeholders=True):
     """
     :param Dataset.Dataset dataset:
+    :param bool auto_create_placeholders:
     """
     target_keys = list(dataset.get_target_list())
     if target_keys:
@@ -95,7 +96,7 @@ class ExternData(object):
         self.default_input = input_keys[0]
     for key in data_keys:
       self.data[key] = Data(
-        name=key, auto_create_placeholders=True,
+        name=key, auto_create_placeholders=auto_create_placeholders,
         **self.data_kwargs_from_dataset_key(dataset=dataset, key=key))
 
   def check_matched_dataset(self, dataset, used_data_keys=None):
