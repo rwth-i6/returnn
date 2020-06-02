@@ -246,7 +246,6 @@ def test_engine_train():
   engine.finalize()
 
 
-
 def test_engine_train_new_dataset_pipeline():
   from GeneratingDataset import DummyDataset
   seq_len = 5

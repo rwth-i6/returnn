@@ -260,6 +260,7 @@ class FeedDictDataProvider(DataProviderBase):
     """
     Stop the thread.
     """
+    self.dataset.finish_epoch()
     if not self.thread:
       return
     self.coord.request_stop()
@@ -703,6 +704,7 @@ class DatasetDataProvider(DataProviderBase):
       context.final_dataset_init_iterator_op = context.make_iterator_initializer(self.iterator)
       self.contexts[dataset_name] = context
 
+    self.current_dataset_reached_end = False
     self.current_dataset_complete_frac = 0.
     self.current_dataset_name = None  # type: typing.Optional[str]
 
@@ -713,6 +715,7 @@ class DatasetDataProvider(DataProviderBase):
     assert dataset_name in self.contexts
     self.current_dataset_name = dataset_name
     self.current_dataset_complete_frac = 0.
+    self.current_dataset_reached_end = False
 
   def start_threads(self, session):
     """
@@ -730,7 +733,7 @@ class DatasetDataProvider(DataProviderBase):
     session.run(init_op)
     # TODO actually it might be nice to start them explicitly in advance...
     #  I think this is currently not possible though.
-    #  With a custom final prefetcher (see comment in have_reached_end), this would be possible.
+    #  With a custom final prefetcher (see comment in have_more_data), this would be possible.
 
   def stop_threads(self):
     """
@@ -748,7 +751,13 @@ class DatasetDataProvider(DataProviderBase):
     :return: whether the next session.run() can run in the current epoch & dataset
     :rtype: bool
     """
-    # See have_reached_end.
+    # we will just raise tf.errors.OutOfRangeError otherwise
+    # TODO: horovod sync on this is likely broken then...
+    # TODO we could also have sth like an own custom PrefetchDataset in between,
+    #  which runs a background thread which always prefetches elements,
+    #  and an extra function to check whether we reached the end
+    #  (would block if not the case, and not prefetched yet).
+    # See also have_reached_end.
     assert self.current_dataset_name
     return True
 
@@ -766,14 +775,10 @@ class DatasetDataProvider(DataProviderBase):
     """
     :rtype: bool
     """
-    # we will just raise tf.errors.OutOfRangeError otherwise
-    # TODO: horovod sync on this is likely broken then...
-    # TODO we could also have sth like an own custom PrefetchDataset in between,
-    #  which runs a background thread which always prefetches elements,
-    #  and an extra function to check whether we reached the end
-    #  (would block if not the case, and not prefetched yet).
+    # If the last read on the iterator raised OutOfRange, this should return True.
+    # In addition, we could check the dataset itself (might need IPC if it lives in another process...).
     assert self.current_dataset_name
-    return False
+    return self.current_dataset_reached_end
 
   def get_dataset_name(self):
     """
@@ -790,9 +795,11 @@ class DatasetDataProvider(DataProviderBase):
     """
     # TODO ... this is somewhat tricky...
     #  we would need some IPC to the original RETURNN dataset if it lives in another process...
+    #  we could also feed complete_frac as part of the data itself...
     # self.current_dataset_complete_frac can be set if the dataset lives in the same process
     return self.current_dataset_complete_frac
 
+  # noinspection PyMethodMayBeStatic
   def _dataset_pipeline_default(self, context):
     """
     :param InputContext context:

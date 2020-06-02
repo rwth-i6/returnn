@@ -226,7 +226,6 @@ class Runner(object):
       self.score.update({key + ":exp": numpy.exp(value) for (key, value) in results.items() if key.startswith("cost:")})
     self.error = {key: value for (key, value) in results.items() if key.startswith("error:")}
     self.num_steps = num_steps
-    self.data_provider.dataset.finish_epoch()
     self.finalized = True
 
   def _get_batch_dim_from_fetches(self, fetches_results):
@@ -393,8 +392,8 @@ class Runner(object):
   def _horovod_signal_broadcast(self, have_more_data=True, error=False):
     """
     :param bool have_more_data: whether we have more data in this instance
-    :param bool error: whether some error occured here
-    :return: whether to stop (because some other instance stopped), whether an error occured
+    :param bool error: whether some error occurred here
+    :return: whether to stop (because some other instance stopped), whether an error occurred
     :rtype: (bool, bool)
     """
     if not self.engine.config.is_true("use_horovod"):
@@ -591,6 +590,10 @@ class Runner(object):
             if writer and "summary" in fetches_results:
               writer.add_summary(fetches_results["summary"], step + step_offset)
         except tf.errors.OpError as exc:
+          if isinstance(exc, tf.errors.OutOfRangeError) and isinstance(self.data_provider, DatasetDataProvider):
+            # This means that we got end-of-sequence from the dataset iterator.
+            self.data_provider.current_dataset_reached_end = True
+            break
           print("TensorFlow exception:", exc, file=log.v1)
           # Extra info will be printed below.
           raise
@@ -1383,7 +1386,7 @@ class Engine(EngineBase):
     self.updater.set_learning_rate(self.learning_rate, session=self.tf_session)
     trainer = Runner(
       engine=self,
-      dataset=self.train_data, batches=train_batches,
+      dataset_name="train", dataset=self.train_data, batches=train_batches,
       train=self.network.layers_desc.get("#trainable", True))
     trainer.run(report_prefix=("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch)
 
@@ -1632,7 +1635,7 @@ class Engine(EngineBase):
         print("reusing previous dataset batch order for %r dataset" % dataset_name, file=log.v4)
         self.dataset_batches[dataset_name].reset()
       tester = Runner(
-        engine=self, dataset=dataset, batches=self.dataset_batches[dataset_name],
+        engine=self, dataset_name=dataset_name, dataset=dataset, batches=self.dataset_batches[dataset_name],
         train=train, train_flag=train_flag,
         extra_fetches=extra_fetches, extra_fetches_callback=extra_fetches_callback)
       tester.run(report_prefix=self.get_epoch_str() + " %r eval" % dataset_name)
