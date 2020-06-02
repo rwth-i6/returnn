@@ -38,9 +38,10 @@ class ExternData(object):
   def __repr__(self):
     return "<ExternData data=%r>" % self.data
 
-  def init_from_config(self, config):
+  def init_from_config(self, config, auto_create_placeholders=True):
     """
     :param Config.Config config:
+    :param bool auto_create_placeholders:
     """
     self._config = config
     from NetworkDescription import LayerNetworkDescription
@@ -50,7 +51,7 @@ class ExternData(object):
       # In TensorFlow, the default is (batch,time,feature).
       # This is also what we use here, i.e.:
       # batch_dim_axis=0, time_dim_axis=1. See TFEngine.DataProvider._get_next_batch().
-      self.data[key] = Data(name=key, auto_create_placeholders=True, **init_args)
+      self.data[key] = Data(name=key, auto_create_placeholders=auto_create_placeholders, **init_args)
     self.default_target = config.value('target', 'classes')
 
   @classmethod

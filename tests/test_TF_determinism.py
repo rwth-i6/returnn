@@ -68,7 +68,7 @@ def test_determinism_of_vanillalstm():
     return engine
 
   def train_engine_fetch_vars(engine):
-    data_provider = engine._get_new_data_provider(dataset=engine.train_data, batches=engine.train_batches)
+    data_provider = engine._get_data_provider(dataset=engine.train_data, batches=engine.train_batches, feed_dict=True)
     feed_dict, _ = data_provider.get_feed_dict(single_threaded=True)
     trainer = Runner(engine=engine, dataset=engine.train_data, batches=engine.train_batches, train=True)
     feed_dict, _ = data_provider.get_feed_dict(single_threaded=True)

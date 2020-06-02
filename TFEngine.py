@@ -32,8 +32,9 @@ from Dataset import Dataset, Batch, BatchSetGenerator, init_dataset
 from LearningRateControl import load_learning_rate_control_from_config, LearningRateControl
 from Log import log
 from Pretrain import pretrain_from_config
-from TFNetwork import TFNetwork, help_on_tf_exception
+from TFNetwork import TFNetwork, ExternData, help_on_tf_exception
 from TFUpdater import Updater
+from TFDataPipeline import FeedDictDataProvider, DatasetDataProvider
 from Util import hms, NumbersDict, BackendEngine
 from pprint import pprint
 
@@ -50,12 +51,15 @@ class Runner(object):
   """
 
   # noinspection PyShadowingBuiltins
-  def __init__(self, engine, dataset, batches, train, eval=True, train_flag=None,
+  def __init__(self, engine,
+               dataset_name=None, dataset=None, batches=None,
+               train=False, eval=True, train_flag=None,
                extra_fetches=None, extra_fetches_callback=None):
     """
     :param Engine engine:
-    :param Dataset.Dataset dataset:
-    :param BatchSetGenerator batches:
+    :param str|None dataset_name: "train", "dev" or so
+    :param Dataset.Dataset|None dataset:
+    :param BatchSetGenerator|None batches:
     :param bool train: whether to do updates on the model
     :param bool|None train_flag: normally just as train. but e.g. maybe you want to have the train_flag but not train
     :param bool eval: whether to evaluate (i.e. calculate loss/error)
@@ -71,7 +75,7 @@ class Runner(object):
       dataset=dataset, used_data_keys=engine.network.get_used_data_keys())
     self.engine = engine
     # noinspection PyProtectedMember
-    self.data_provider = self.engine._get_new_data_provider(dataset=dataset, batches=batches)
+    self.data_provider = self.engine._get_data_provider(dataset_name=dataset_name, dataset=dataset, batches=batches)
     assert isinstance(self.data_provider, DataProviderBase)
     if train_flag is None:
       train_flag = train
@@ -688,6 +692,7 @@ class Engine(EngineBase):
     self._checked_uninitialized_vars = False
     self._merge_all_summaries = None
     self.dataset_batches = {}  # type: typing.Dict[str,BatchSetGenerator]
+    self.dataset_provider = None  # type: typing.Optional[DatasetDataProvider]
     self.train_data = None  # type: typing.Optional[Dataset]
     self.eval_datasets = {}  # type: typing.Dict[str,Dataset]
     self.start_epoch = None  # type: typing.Optional[int]
@@ -1113,12 +1118,19 @@ class Engine(EngineBase):
       train_flag = get_global_train_flag_placeholder()
     else:
       train_flag = False
-    # if False:  # TODO ...
-    #   extern_data = ExternData()
-    #   extern_data.init_from_config(self.config)
-    #   TODO...
+    use_dataset_pipeline = False
+    if self.config.is_true("dataset_pipeline"):
+      use_dataset_pipeline = True
+    extern_data = ExternData()
+    extern_data.init_from_config(config=self.config, auto_create_placeholders=not use_dataset_pipeline)
+    if use_dataset_pipeline:
+      datasets = self.eval_datasets.copy()
+      if self.train_data:
+        datasets["train"] = self.train_data
+      self.dataset_provider = DatasetDataProvider(extern_data=extern_data, datasets=datasets, config=self.config)
     self.network, self.updater = self.create_network(
       config=self.config,
+      extern_data=extern_data,
       rnd_seed=net_random_seed,
       train_flag=train_flag, eval_flag=self.use_eval_flag, search_flag=self.use_search_flag,
       initial_learning_rate=getattr(self, "initial_learning_rate", None),
@@ -1135,7 +1147,8 @@ class Engine(EngineBase):
       self.tf_session.run(bcast_op)
 
   @classmethod
-  def create_network(cls, config, rnd_seed, train_flag, eval_flag, search_flag, net_dict, initial_learning_rate=1.0):
+  def create_network(cls, config, rnd_seed, train_flag, eval_flag, search_flag, net_dict,
+                     extern_data=None, initial_learning_rate=1.0):
     """
     :param Config.Config config:
     :param int rnd_seed:
@@ -1143,6 +1156,7 @@ class Engine(EngineBase):
     :param float initial_learning_rate:
     :param bool eval_flag:
     :param bool search_flag:
+    :param ExternData|None extern_data:
     :param dict[str,dict[str]] net_dict:
     :return: network, updater
     :rtype: (TFNetwork, Updater|None)
@@ -1150,6 +1164,7 @@ class Engine(EngineBase):
     network = TFNetwork(
       name="root",
       config=config,
+      extern_data=extern_data,
       rnd_seed=rnd_seed,
       train_flag=train_flag,
       eval_flag=eval_flag,
@@ -1804,25 +1819,32 @@ class Engine(EngineBase):
         self.tf_session.run(tf.variables_initializer(uninitialized_vars))
       self._checked_uninitialized_vars = True
 
-  def _get_new_data_provider(self, dataset, batches):
+  def _get_data_provider(self, dataset_name=None, dataset=None, batches=None, feed_dict=None):
     """
-    :param Dataset.Dataset dataset:
-    :param BatchSetGenerator batches:
-    :rtype: TFDataPipeline.FeedDictDataProvider
+    :param str|None dataset_name:
+    :param Dataset.Dataset|None dataset:
+    :param BatchSetGenerator|None batches:
+    :param bool|None feed_dict:
+    :rtype: FeedDictDataProvider|DatasetDataProvider
     """
-    batch_slice = None
-    if self.config.is_true("use_horovod"):
-      # noinspection PyPackageRequirements,PyUnresolvedReferences
-      import horovod.tensorflow as hvd
-      batch_slice = slice(hvd.rank(), None, hvd.size())
-    from TFDataPipeline import FeedDictDataProvider
-    data_provider = FeedDictDataProvider(
-      tf_session=self.tf_session, extern_data=self.network.extern_data,
-      data_keys=self.network.get_used_data_keys(),
-      dataset=dataset, batches=batches,
-      batch_slice=batch_slice,
-      enforce_min_len1=self.config.is_true("enforce_min_len1", False))
-    return data_provider
+    if self.dataset_provider and feed_dict is not True and dataset_name:
+      self.dataset_provider.set_current_dataset(dataset_name=dataset_name)
+      return self.dataset_provider
+    else:
+      if self.dataset_provider and feed_dict is not False:
+        print("WARNING: dataset_provider is set (via dataset_pipeline) but not used", file=log.v2)
+      batch_slice = None
+      if self.config.is_true("use_horovod"):
+        # noinspection PyPackageRequirements,PyUnresolvedReferences
+        import horovod.tensorflow as hvd
+        batch_slice = slice(hvd.rank(), None, hvd.size())
+      data_provider = FeedDictDataProvider(
+        tf_session=self.tf_session, extern_data=self.network.extern_data,
+        data_keys=self.network.get_used_data_keys(),
+        dataset=dataset, batches=batches,
+        batch_slice=batch_slice,
+        enforce_min_len1=self.config.is_true("enforce_min_len1", False))
+      return data_provider
 
   def get_specific_feed_dict(self, dataset, seq_idx):
     """
@@ -1843,7 +1865,7 @@ class Engine(EngineBase):
       batch.init_with_one_full_sequence(seq_idx=seq_idx, dataset=dataset)
     batch_generator = iter([batch])
     batches = BatchSetGenerator(dataset, generator=batch_generator)
-    data_provider = self._get_new_data_provider(dataset=dataset, batches=batches)
+    data_provider = self._get_data_provider(dataset=dataset, batches=batches, feed_dict=True)
     feed_dict, _ = data_provider.get_feed_dict(single_threaded=True)
     return feed_dict
 
