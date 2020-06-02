@@ -148,9 +148,11 @@ class DataProviderBase(object):
       data_keys = extern_data.data.keys()
     self.data_keys = sorted(data_keys)  # type: typing.List[str]
 
-  def start_threads(self):
+  def start_threads(self, session):
     """
     Start threads.
+
+    :param tf.Session session:
     """
     raise NotImplementedError
 
@@ -243,9 +245,11 @@ class FeedDictDataProvider(DataProviderBase):
     self.cur_batch_idx = 0
     self.reached_end = False
 
-  def start_threads(self):
+  def start_threads(self, session):
     """
     Start the thread.
+
+    :param tf.Session session:
     """
     thread = Thread(target=self._thread_main, name="DataProvider thread")
     thread.daemon = True  # Thread will close when parent quits.
@@ -465,15 +469,21 @@ class InputContext(object):
   https://github.com/rwth-i6/returnn/issues/292
   """
 
-  def __init__(self, config, dataset_name, returnn_dataset):
+  def __init__(self, parent, extern_data, config, dataset_name, returnn_dataset, iterator):
     """
+    :param DatasetDataProvider parent:
+    :param ExternData extern_data:
     :param Config.Config config:
     :param str dataset_name: e.g. "train" or "dev"
     :param Dataset returnn_dataset:
+    :param tensorflow.data.Iterator iterator:
     """
+    self.parent = parent
+    self.extern_data = extern_data
     self.config = config  # TODO do we need that? maybe pass horovod and other context explicitly?
     self.dataset_name = dataset_name
     self.returnn_dataset = returnn_dataset  # TODO this might be unset later (if the dataset lives in a separate proc)
+    self.iterator = iterator
 
     self.num_dataset_producers = 1
     self.num_dataset_consumers = 1
@@ -489,41 +499,109 @@ class InputContext(object):
       self.num_dataset_consumers = self.horovod_size
       raise NotImplementedError  # TODO...
 
+    self.distributed_tf_enabled = False
     if config.is_true("distributed_tf"):
+      self.distributed_tf_enabled = True
       raise NotImplementedError  # TODO...
 
     # These will be set after init.
     self.final_dataset = None  # type: typing.Optional[tf.data.Dataset]
-    self.final_dataset_init_iterator = None  # type: typing.Optional[tf.Operation]
+    self.final_dataset_init_iterator_op = None  # type: typing.Optional[tf.Operation]
 
-  def get_returnn_dataset(self):
+  def get_returnn_dataset(self, **kwargs):
     """
-    :return: the RETURNN :class:`Dataset` instances wrapped in a :class:`tf.data.Dataset`
+    :return: The RETURNN :class:`Dataset` instances wrapped in a :class:`tf.data.Dataset`.
+      Note that in distributed TF, this dataset would only be used in the dataset loader worker.
+      However, in all cases this will return some dataset. You are not allowed to read from it, though.
+      A follow-up call to :func:`map_producer_to_consumer` will take care of this logic.
     :rtype: tensorflow.data.Dataset
     """
-    # TODO...
-    raise NotImplementedError
+    assert not kwargs
+    import os
 
-  def padded_batch_dataset(self, dataset):
+    def generator():
+      """
+      :rtype: dict[str,numpy.ndarray]
+      """
+      assert self.parent.current_dataset_name, "current dataset name not set"
+      returnn_dataset = self.parent.datasets[self.parent.current_dataset_name]
+      assert returnn_dataset, "RETURNN dataset not loaded in this proc (pid %i)" % os.getpid()
+
+      seq_idx = 0
+      while returnn_dataset.is_less_than_num_seqs(seq_idx):
+        returnn_dataset.load_seqs(seq_idx, seq_idx + 1)
+
+        res = {}  # type: typing.Dict[str,numpy.ndarray]
+        for key, data in self.extern_data.data.items():
+          value = returnn_dataset.get_data(seq_idx, key)
+          res[key] = value
+          for axis_wo_b, dim in enumerate(data.shape):
+            if dim is None:  # dynamic length -- need size info for it
+              size_key = "size:%s:%i" % (key, axis_wo_b)
+              res[size_key] = value.shape[axis_wo_b]
+        yield res
+
+      returnn_dataset.finish_epoch()
+
+    return tf.data.Dataset.from_generator(
+      generator=generator,
+      output_types=self.iterator.output_types,
+      output_shapes=self.iterator.output_shapes)
+
+  def get_default_max_seqs(self):
+    """
+    :return: batch size in number of seqs, used e.g. for padded_batch
+    :rtype: int
+    """
+    assert self.config.has("max_seqs") and self.config.int("max_seqs", 0) > 0
+    return self.config.int("max_seqs", 0)
+
+  def padded_batch_dataset(self, dataset, drop_remainder=False):
     """
     :param tensorflow.data.Dataset dataset:
+    :param bool drop_remainder: if True, we would have a static batch size
     :rtype: tensorflow.data.Dataset
     """
-    raise NotImplementedError  # TODO
+    # We could also use bucket_by_sequence_length.
+    return dataset.padded_batch(
+      batch_size=self.get_default_max_seqs(),
+      padded_shapes=dataset.output_shapes,
+      drop_remainder=drop_remainder)
 
   def map_producer_to_consumer(self, dataset):
     """
     :param tensorflow.data.Dataset dataset:
     :rtype: tensorflow.data.Dataset
     """
-    raise NotImplementedError  # TODO
+    if self.horovod_enabled:
+      raise NotImplementedError  # TODO
+    if self.distributed_tf_enabled:
+      raise NotImplementedError  # TODO
+    # Otherwise this is a no-op.
+    return dataset
+
+  # noinspection PyMethodMayBeStatic
+  def get_consumer_device(self):
+    """
+    :return: e.g. "/device:GPU:0"
+    :rtype: str
+    """
+    # TODO this is probably incomplete
+    import TFUtil
+    if TFUtil.is_gpu_available():
+      return "/device:GPU:0"
+    return "/device:CPU:0"
 
   def prefetch_to_consumer_device(self, dataset):
     """
+    This must be called on the consumer (trainer) worker,
+    i.e. after :func:`map_producer_to_consumer`.
+
     :param tensorflow.data.Dataset dataset:
     :rtype: tensorflow.data.Dataset
     """
-    raise NotImplementedError  # TODO
+    from tensorflow.python.data.experimental import prefetch_to_device
+    return prefetch_to_device(self.get_consumer_device())(dataset)
 
   def get_dataset_name(self):
     """
@@ -600,12 +678,17 @@ class DatasetDataProvider(DataProviderBase):
     if isinstance(datasets, (list, tuple)):
       datasets = {name: None for name in datasets}
     self.datasets = datasets  # type: typing.Dict[str,typing.Optional[Dataset]]
-    for dataset_name in datasets:
-      context = InputContext(dataset_name=dataset_name, config=config)  # TODO
+    self.contexts = {}  # type: typing.Dict[str,InputContext]
+    for dataset_name, returnn_dataset in datasets.items():
+      context = InputContext(
+        dataset_name=dataset_name, returnn_dataset=returnn_dataset,
+        iterator=self.iterator,
+        config=config, parent=self, extern_data=extern_data)
       dataset = dataset_pipeline_func(context)
       assert isinstance(dataset, tf.data.Dataset)
       context.final_dataset = dataset
-      context.final_dataset_init_iterator = context.make_iterator_initializer(self.iterator)
+      context.final_dataset_init_iterator_op = context.make_iterator_initializer(self.iterator)
+      self.contexts[dataset_name] = context
 
     self.current_dataset_name = None  # type: typing.Optional[str]
 
@@ -613,14 +696,23 @@ class DatasetDataProvider(DataProviderBase):
     """
     :param str dataset_name:
     """
+    assert dataset_name in self.contexts
     self.current_dataset_name = dataset_name
 
-  def start_threads(self):
+  def start_threads(self, session):
     """
     Start background threads.
 
-    Currently a no-op. All/any background threads of tf.data are started automatically when needed.
+    Currently this wil not actually start the background threads.
+    All/any background threads of tf.data are started automatically when needed.
+
+    However, this will initialize the TF dataset iterator.
+
+    :param tf.Session session:
     """
+    assert self.current_dataset_name
+    init_op = self.contexts[self.current_dataset_name].final_dataset_init_iterator_op
+    session.run(init_op)
     # TODO actually it might be nice to start them explicitly in advance...
     #  I think this is currently not possible though.
     #  With a custom final prefetcher (see comment in have_reached_end), this would be possible.
@@ -682,7 +774,7 @@ class DatasetDataProvider(DataProviderBase):
     :rtype: float
     """
     # TODO ... this is somewhat tricky...
-    #  we would need some IPC to the original RETURNN dataset...
+    #  we would need some IPC to the original RETURNN dataset if it lives in another process...
     return 0.
 
   def _dataset_pipeline_default(self, context):

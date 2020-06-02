@@ -513,7 +513,7 @@ class Runner(object):
     coord = self.data_provider.coord
 
     threads = tf.train.start_queue_runners(sess=sess, coord=coord)
-    self.data_provider.start_threads()
+    self.data_provider.start_threads(session=sess)
     self.start_time = time.time()
     elapsed_time_tf = 0.0
     step = None
