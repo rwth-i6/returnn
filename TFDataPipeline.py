@@ -529,6 +529,7 @@ class InputContext(object):
 
       seq_idx = 0
       while returnn_dataset.is_less_than_num_seqs(seq_idx):
+        self.parent.current_dataset_complete_frac = returnn_dataset.get_complete_frac(seq_idx)
         returnn_dataset.load_seqs(seq_idx, seq_idx + 1)
 
         res = {}  # type: typing.Dict[str,numpy.ndarray]
@@ -702,6 +703,7 @@ class DatasetDataProvider(DataProviderBase):
       context.final_dataset_init_iterator_op = context.make_iterator_initializer(self.iterator)
       self.contexts[dataset_name] = context
 
+    self.current_dataset_complete_frac = 0.
     self.current_dataset_name = None  # type: typing.Optional[str]
 
   def set_current_dataset(self, dataset_name):
@@ -710,6 +712,7 @@ class DatasetDataProvider(DataProviderBase):
     """
     assert dataset_name in self.contexts
     self.current_dataset_name = dataset_name
+    self.current_dataset_complete_frac = 0.
 
   def start_threads(self, session):
     """
@@ -787,7 +790,8 @@ class DatasetDataProvider(DataProviderBase):
     """
     # TODO ... this is somewhat tricky...
     #  we would need some IPC to the original RETURNN dataset if it lives in another process...
-    return 0.
+    # self.current_dataset_complete_frac can be set if the dataset lives in the same process
+    return self.current_dataset_complete_frac
 
   def _dataset_pipeline_default(self, context):
     """
