@@ -534,7 +534,8 @@ class InputContext(object):
         returnn_dataset.load_seqs(seq_idx, seq_idx + 1)
 
         res = {}  # type: typing.Dict[str,numpy.ndarray]
-        for key_, data_ in self.extern_data.data.items():
+        for key_ in self.parent.data_keys:
+          data_ = self.extern_data.data[key_]
           value = returnn_dataset.get_data(seq_idx, key_)
           res[key_] = value
           for axis_wo_b_, dim_ in enumerate(data_.shape):
