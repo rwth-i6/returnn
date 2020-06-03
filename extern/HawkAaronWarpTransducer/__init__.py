@@ -21,16 +21,23 @@ _tf_mod = None
 
 
 def is_checked_out():
-  """Checks if the git submodule is checkout out."""
+  """
+  Checks if the git submodule is checkout out.
+
+  :rtype: bool
+  """
   return os.path.isfile("%s/src/rnnt_entrypoint.cpp" % submodule_dir)
 
 
 def init_warprnnt(verbose=False):
   """
   Initialiazes and compiles the library. Caches the TF module.
+
   :param bool verbose:
   """
   global _tf_mod
+  if _tf_mod:
+    return
   assert is_checked_out(), "submodule not checked out? Run `git submodule update --init --recursive`"
 
   # References:
@@ -84,6 +91,7 @@ def rnnt_loss(acts, labels, input_lengths, label_lengths, blank_label=0):
   * This class performs the softmax operation internally.
   * The label reserved for the blank symbol should be label 0.
   """
+  init_warprnnt()
   loss, _ = _tf_mod.warp_rnnt(acts, labels, input_lengths,
                               label_lengths, blank_label)
   return loss
@@ -102,6 +110,3 @@ def _RNNTLossShape(op):
   inputs_shape = op.inputs[0].get_shape().with_rank(4)
   batch_size = inputs_shape[0]
   return [batch_size, inputs_shape]
-
-
-init_warprnnt()

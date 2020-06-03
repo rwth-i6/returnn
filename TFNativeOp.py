@@ -1622,6 +1622,9 @@ def have_blocksparse_requirements():
   min_compute_capability = TFUtil.get_available_gpu_min_compute_capability()
   if min_compute_capability < 3.5:
     return False
+  path = os.path.dirname(__file__) + "/extern/blocksparse/blocksparse"
+  if not os.path.exists(path):  # not checked out?
+    return False
   return True
 
 

@@ -2906,8 +2906,9 @@ def test_next_edit_distance_reduce_optimal_completion():
   print()
 
 
-@unittest.skipIf(not is_gpu_available(), "no gpu on this system")
-@unittest.skipIf(is_gpu_available() and get_available_gpu_min_compute_capability() < 3.5, "too low compute capability")
+#@unittest.skipIf(not is_gpu_available(), "no gpu on this system")
+#@unittest.skipIf(is_gpu_available() and get_available_gpu_min_compute_capability() < 3.5, "too low compute capability")
+@unittest.skipIf(not have_blocksparse_requirements(), "do not have Blocksparse requirements")
 def test_init_blocksparse():
   assert have_blocksparse_requirements()
   init_blocksparse()
@@ -3035,7 +3036,9 @@ def test_blocksparse_simple_feature_axis1():
 
 def _run_rnnt(acts, labels, input_lengths, label_lengths,
               expected_costs, expected_grads, blank):
-  from extern.HawkAaronWarpTransducer import rnnt_loss
+  from extern.HawkAaronWarpTransducer import rnnt_loss, is_checked_out
+  if not is_checked_out():
+    raise unittest.SkipTest("HawkAaronWarpTransducer not checked out?")
   assert_equal(acts.shape, expected_grads.shape)
   acts_t = tf.constant(acts)
   labels_t = tf.constant(labels)
@@ -3056,7 +3059,10 @@ def _run_rnnt(acts, labels, input_lengths, label_lengths,
 
 @unittest.skipIf(not is_gpu_available(), "no gpu on this system")
 def test_warprnnt_forward():
-  from extern.HawkAaronWarpTransducer import rnnt_loss
+  from extern.HawkAaronWarpTransducer import rnnt_loss, is_checked_out
+  if not is_checked_out():
+    raise unittest.SkipTest("HawkAaronWarpTransducer not checked out?")
+
   # Softmax activations for the following inputs:
   import numpy as np
   acts = np.array([0.1, 0.6, 0.1, 0.1, 0.1, 0.1,
