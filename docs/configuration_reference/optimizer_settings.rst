@@ -15,6 +15,11 @@ Optimizer Settings
     and many possible settings are available for the different control schemes.
     For the default values have a look at `LearningRateControl.py <https://github.com/rwth-i6/returnn/blob/master/LearningRateControl.py>`_.
 
+.. warning::
+    RETURNN will override the optimizer epsilon with 1e-16 if not specified otherwise, this can lead to unwanted
+    behaviour when assuming a default epsilon of e.g. 1e-8 for Adam.
+
+
 accum_grad_multiple_step
     An integer specifying the number of updates to stack the gradient, called "gradient accumulation".
 
@@ -59,6 +64,9 @@ learning_rate_file
     A path to a file storing the learning rate for each epoch.
     Despite the name, also stores scores and errors.
 
+min_learning_rate
+    Specifies the minimum learning rate.
+
 newbob_error_threshold
     This is the absolute improvement that has to be achieved in order to _not_ reduce the learning rate.
     Can be used with ``newbob_abs``.
@@ -80,9 +88,13 @@ newbob_relative_error_threshold
     Can be used with ``newbob_rel`` and ``newbob_multi_epoch``.
     The value can be positive or negative.
 
-min_learning_rate
-    Specifies the minimum learning rate.
+optimizer
+    A dictionary with a ``class`` entry for the optimizer.
+    Other keys are passed as parameters to the constructor of the optimizer class.
 
 relative_error_div_by_old
     If true the relative error is computed by dividing the error difference by the old error value instead of the
     current error value.
+
+use_learning_rate_control_always
+    If true, use the learning rate control scheme also during pre-training.

@@ -8,6 +8,10 @@ header_text = """
 Optimizer
 =========
 
+This is a list of all optimizers that can be used with RETURNN.
+If you are looking on how to set the optimizer correctly in the RETURNN config,
+please have a look at the :ref:`optimizer settings <optimizer_settings>`.
+
 """
 
 
