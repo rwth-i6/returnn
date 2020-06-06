@@ -4635,22 +4635,60 @@ class VariableAssigner(object):
 
 def _get_tf_gcc_path(bin_name):
   """
-  :param str bin_name:
+  :param str bin_name: e.g. "gcc" or "g++"
   :rtype: str
   """
   gcc_candidates = []
   tf_gcc_version = getattr(tf, "__compiler_version__", None)
-  if tf_gcc_version:  # e.g. "4.8.5"
-    tf_gcc_version = tf_gcc_version.split(".")
+  if tf_gcc_version:  # e.g. "4.8.5" or "5.4.0 20160609"
+    if " " in tf_gcc_version:
+      tf_gcc_version = tf_gcc_version[:tf_gcc_version.find(" ")]  # just "5.4.0"
+    tf_gcc_version = tf_gcc_version.split(".")  # ["5", "4", "0"]
     for i in range(len(tf_gcc_version), 0, -1):
       gcc_candidates.append("%s-%s" % (bin_name, ".".join(tf_gcc_version[:i])))
-  gcc_candidates.append(bin_name)
 
-  for gcc in gcc_candidates:
+    for gcc in gcc_candidates:
+      for p in os.environ["PATH"].split(":"):
+        pp = "%s/%s" % (p, gcc)
+        if os.path.exists(pp):
+          return pp
+    # No match found (even not same major version).
+
+    # Find all versions.
+    # Maybe we can use some other version instead.
+    # E.g. if we like to have GCC 5 (TF compiler version), but we have GCC 7, 8, 9 installed,
+    # instead of picking the default GCC (version 9), picking version 7 might make more sense.
+    # (Some nvcc versions also only support earlier GCC versions...)
+    available_binaries = {}  # major-version -> path
     for p in os.environ["PATH"].split(":"):
-      pp = "%s/%s" % (p, gcc)
-      if os.path.exists(pp):
-        return pp
+      if os.path.isdir(p):
+        for name in os.listdir(p):
+          if name.startswith("%s-" % bin_name):
+            version_str = name[len(bin_name) + 1:]
+            version_parts = version_str.split(".")
+            try:
+              major_version = int(version_parts[0])
+            except ValueError:
+              pass  # just ignore
+            else:
+              pp = "%s/%s" % (p, name)
+              available_binaries.setdefault(major_version, pp)
+              # Prefer shorter. Just some heuristic...
+              available_binaries[major_version] = min(available_binaries[major_version], pp)
+    if available_binaries:
+      tf_gcc_major_version = int(tf_gcc_version[0])  # e.g. 5
+      assert tf_gcc_major_version not in available_binaries  # we should have found it before
+      # Get closest version. This is just some heuristic...
+      # (Instead of such an heuristic, we might additionally add a mapping of known supported versions...)
+      version = min([(abs(v - tf_gcc_major_version), v) for v in sorted(available_binaries.keys())])[1]
+      return available_binaries[version]
+
+  # Just check for binary (without version) in PATH.
+  for p in os.environ["PATH"].split(":"):
+    pp = "%s/%s" % (p, bin_name)
+    if os.path.exists(pp):
+      return pp
+  # Not found.
 
   # Dummy fallback.
   return bin_name
