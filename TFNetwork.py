@@ -2437,6 +2437,8 @@ def help_on_tf_exception(
           if op_._control_flow_context:
             continue
           for x in list(op_.inputs) + list(op_.outputs) + list(op.control_inputs):
+            if isinstance(x, tf.Operation):
+              continue
             assert isinstance(x, tf.Tensor)
             # noinspection PyProtectedMember
             if x.dtype._is_ref_dtype and x not in stop_at_ts:
