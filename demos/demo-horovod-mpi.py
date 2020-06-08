@@ -55,6 +55,16 @@ for p in list(sys.path):
     i += 1
 print()
 
+try:
+  from mpi4py import MPI
+  name = MPI.Get_processor_name()
+  comm = MPI.COMM_WORLD
+  print("mpi4py:", "name: %s," % name, "rank: %i," % comm.Get_rank(), "size: %i" % comm.Get_size())
+  hosts = comm.allgather((comm.Get_rank(), name))  # Get the names of all the other hosts
+  print("  all hosts:", {key: item for (key, item) in hosts})
+except ImportError:
+  print("mpi4py not available")
+
 print("Import TF now...")
 import tensorflow as tf
 print("TF version:", tf.__version__)
