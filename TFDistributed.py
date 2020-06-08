@@ -10,20 +10,27 @@ import tensorflow as tf
 from tensorflow.python.training.server_lib import ClusterSpec
 
 
-class SGEClusterResolver(tf.distribute.cluster_resolver.ClusterResolver):
+class MPIClusterResolver(tf.distribute.cluster_resolver.ClusterResolver):
   """
-  ClusterResolver for the Sun Grid Engine (SGE) / Oracle Grid Engine,
-  when used with the parallel environment (PE) feature.
-  I.e. the SGE job was started e.g. via: `qsub -pe mpi 8`.
+  ClusterResolver for MPI.
 
-  We assume that the SGE `JOB_ID` env var is set.
+  If you use Sun Grid Engine (SGE) / Oracle Grid Engine,
+  with the parallel environment (PE) feature
+  (i.e. the SGE job was started e.g. via: `qsub -pe mpi 8`),
+  then you might run your sub processes via `mpirun`, e.g. like::
 
-  The `PE_HOSTFILE` env var points to a file which lists all hosts
+    mpirun -np 8 -mca pml ob1 -mca btl ^openib python returnn/rnn.py ...
+
+  SGE provides the `PE_HOSTFILE` env var points to a file which lists all hosts
   and number of slots per host.
+  This would be available for the process and node where `mpirun` is run,
+  but this might *not* be available on the subprocesses
+  which are started by `mpirun` remotely.
 
-  We also assume that each process (worker) is already started via Open MPI,
-  and that `OMPI_COMM_WORLD_LOCAL_RANK` and `OMPI_COMM_WORLD_LOCAL_SIZE` is set.
-  E.g. this might be via `mpirun` or via some other way.
+  Within such a MPI process, the only reliable way to get information about the other peer processes,
+  we must use MPI functions.
+  A straight-forward simple way for this is the `mpi4py <https://mpi4py.readthedocs.io/en/stable/>`_ module.
+  `mpi4py` can be mixed together with `Horovod <https://github.com/horovod/horovod>`_, so this is a sensible choice.
 
   This is somewhat similar to :class:`SlurmClusterResolver`.
   Also related: MPIClusterResolver (https://github.com/tensorflow/tensorflow/issues/38356).
@@ -32,12 +39,14 @@ class SGEClusterResolver(tf.distribute.cluster_resolver.ClusterResolver):
   """
 
   def __init__(self):
-    assert os.environ.get("JOB_ID", "") # not in SGE environment?
-    # TODO cannot use PE_HOSTFILE in all cases... this is not accessible if we are on another node...
-    # If on another host, we could connect to the main host. We could know via OMPI_MCA_orte_hnp_uri...
-    assert os.environ.get("PE_HOSTFILE", "")  # not in SGE parallel environment?
-    assert os.environ.get("OMPI_COMM_WORLD_LOCAL_SIZE", "")  # not in Open MPI environment? not started via mpirun?
-    # TODO we could use mpi4py or Horovod (but maybe not both together...)
+    from mpi4py import MPI
+    comm = MPI.COMM_WORLD
+    self._host = MPI.Get_processor_name()
+    self._port = _get_open_port()
+    self._rank = comm.Get_rank()
+    self._size = comm.Get_size()
+    hosts = comm.allgather((self._rank, self._host, self._port))
+    self._peers = {rank: "%s:%i" % (host, port) for (rank, host, port) in hosts}
 
   def cluster_spec(self):
     """Retrieve the current state of the cluster and return a ClusterSpec.
@@ -52,21 +61,6 @@ class SGEClusterResolver(tf.distribute.cluster_resolver.ClusterResolver):
     management system every time this function is invoked and reconstructing
     a cluster_spec, rather than attempting to cache anything.
     """
-    # qint.py might overwrite JOB_ID but sets SGE_JOB_ID instead.
-    job_id = int(os.environ.get("SGE_JOB_ID") or os.environ.get("JOB_ID") or 0)
-
-    with open(os.environ["PE_HOSTFILE"]) as f:
-      # Example content:
-      """
-      cluster-cn-229.informatik.rwth-aachen.de 1 4-GPU-1080@cluster-cn-229.informatik.rwth-aachen.de UNDEFINED
-      cluster-cn-234.informatik.rwth-aachen.de 2 4-GPU-1080-5h@cluster-cn-234.informatik.rwth-aachen.de UNDEFINED
-      """
-      for line in f.read().splitlines():
-        parts = line.split()
-        assert len(parts) >= 2
-        host_name = parts[0]
-        num_slots = int(parts[1])
-
     # TODO
     raise NotImplementedError()
 
@@ -88,3 +82,19 @@ class SGEClusterResolver(tf.distribute.cluster_resolver.ClusterResolver):
 
     # TODO via local job id, local host, local rank ...
     raise NotImplementedError()
+
+
+def _get_open_port():
+  """
+  https://stackoverflow.com/questions/2838244/get-open-tcp-port-in-python
+
+  :rtype: int
+  """
+  import socket
+  s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+  s.bind(("", 0))
+  s.listen(1)
+  port = s.getsockname()[1]
+  s.close()
+  return port
+
