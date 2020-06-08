@@ -12,14 +12,29 @@ for key, value in sorted(os.environ.items()):
 print()
 
 if os.environ.get("PE_HOSTFILE", ""):
-  with open(os.environ["PE_HOSTFILE"], "r") as f:
+  try:
     print("PE_HOSTFILE, %s:" % os.environ["PE_HOSTFILE"])
-    print(f.read())
+    with open(os.environ["PE_HOSTFILE"], "r") as f:
+      print(f.read())
+  except FileNotFoundError as exc:
+    print(exc)
 
 if os.environ.get("SGE_JOB_SPOOL_DIR", ""):
   print("SGE_JOB_SPOOL_DIR, %s:" % os.environ["SGE_JOB_SPOOL_DIR"])
   for name in os.listdir(os.environ["SGE_JOB_SPOOL_DIR"]):
     print(name)
+  print()
+
+if os.environ.get("OMPI_FILE_LOCATION", ""):
+  print("OMPI_FILE_LOCATION, %s:" % os.environ["OMPI_FILE_LOCATION"])
+  d = os.path.dirname(os.path.dirname(os.environ["OMPI_FILE_LOCATION"]))
+  print("dir:", d)
+  for name in os.listdir(d):
+    print(name)
+  print()
+  print("contact.txt:")
+  with open("%s/contact.txt" % d, "r") as f:
+    print(f.read())
   print()
 
 # https://github.com/horovod/horovod/issues/1123
@@ -40,9 +55,12 @@ for p in list(sys.path):
     i += 1
 print()
 
+print("Import TF now...")
 import tensorflow as tf
 print("TF version:", tf.__version__)
 
+import horovod
+print("Horovod version:", horovod.__version__)
 import horovod.tensorflow as hvd
 
 # Initialize Horovod
