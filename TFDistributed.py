@@ -65,7 +65,7 @@ class MPIClusterResolver(tf.distribute.cluster_resolver.ClusterResolver):
     Open MPI will automatically detect when it is running inside SGE and will just "do the Right Thing."
     Specifically, if you execute an mpirun command in a SGE job,
     it will automatically use the SGE mechanisms to launch and kill processes.
-    There is no need to specify what nodes to run on —
+    There is no need to specify what nodes to run on -
     Open MPI will obtain this information directly from SGE
     and default to a number of processes equal to the slot count specified.
 
