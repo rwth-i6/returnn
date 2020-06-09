@@ -20,11 +20,16 @@ RETURNN potentially could support all of this, although it will try to be very e
 Currently we do not use the high level strategy concept but only the low level functionality.
 This implementation was originally discussed `here <https://github.com/rwth-i6/returnn/issues/296`_.
 
+This is also related to `Horovod <https://github.com/horovod/horovod>`_.
+Horovod and distributed TF are orthogonal to each other.
+They can both be mixed, or used independently.
+
 This is also related to the dataset pipeline :mod:`TFDataPipeline`.
 """
 
 import os
 import typing
+import contextlib
 import tensorflow as tf
 from tensorflow.python.training.server_lib import ClusterSpec
 from tensorflow.python.distribute.cluster_resolver.cluster_resolver import format_master_url
@@ -32,6 +37,7 @@ from tensorflow.python.distribute.cluster_resolver.cluster_resolver import forma
 from tensorflow.python.distribute.distribute_lib import _DefaultDistributionExtended as DefaultDistributionExtended
 from Log import log
 from Config import Config
+from Util import CollectionReadCheckCovered
 
 
 class MPIClusterResolver(tf.distribute.cluster_resolver.ClusterResolver):
@@ -185,6 +191,46 @@ def _get_open_port():
   return port
 
 
+class LocalOnlyClusterResolver(tf.distribute.cluster_resolver.ClusterResolver):
+  def __init__(self):
+    self._port = _get_open_port()
+    self._host = "localhost:%i" % self._port
+    self.task_type = "worker"
+    self.task_id = 0
+    self.rpc_layer = "grpc"
+
+  def cluster_spec(self):
+    """
+    :rtype: ClusterSpec
+    """
+    return ClusterSpec({"worker": [self._host]})
+
+  def master(self, task_type=None, task_id=None, rpc_layer=None):
+    """Retrieves the name or URL of the session master.
+
+    Args:
+      task_type: (Optional) The type of the TensorFlow task of the master.
+      task_id: (Optional) The index of the TensorFlow task of the master.
+      rpc_layer: (Optional) The RPC protocol for the given cluster.
+
+    Returns:
+      The name or URL of the session master.
+
+    Implementors of this function must take care in ensuring that the master
+    returned is up-to-date at the time to calling this function. This usually
+    means retrieving the master every time this function is invoked.
+    """
+    task_type = task_type if task_type is not None else self.task_type
+    task_id = task_id if task_id is not None else self.task_id
+
+    if task_type is not None and task_id is not None:
+      return format_master_url(
+        self.cluster_spec().task_address(task_type, task_id),
+        rpc_layer or self.rpc_layer)
+
+    return ''
+
+
 _controller = None  # type: typing.Optional[_Controller]
 
 
@@ -208,7 +254,13 @@ class _Controller:
     """
     print("Initialize distributed TensorFlow", file=log.v2)
     self.config = config
-    if os.environ.get("TF_CONFIG", ""):
+    opts = config.get_of_type("distributed_tf", dict, {})
+    opts = CollectionReadCheckCovered(opts)
+    self.opts = opts
+    if opts.get("local_only", False):  # might be useful for testing
+      cluster_resolver = LocalOnlyClusterResolver()
+      print("Use local-only cluster resolver,", file=log.v4, end=" ")
+    elif os.environ.get("TF_CONFIG", ""):
       cluster_resolver = tf.distribute.cluster_resolver.TFConfigClusterResolver()
       print("Use TF_CONFIG %s," % os.environ["TF_CONFIG"], file=log.v4, end=" ")
     else:
@@ -219,13 +271,17 @@ class _Controller:
     cluster_spec = cluster_resolver.cluster_spec()
     self.cluster_spec = cluster_spec
     tf_session_opts = config.typed_dict.get("tf_session_opts", {})
-    config = tf.compat.v1.ConfigProto(**tf_session_opts)
+    server_config = tf.compat.v1.ConfigProto(**tf_session_opts)
+    # Note that there is no clean way currently in TF to uninit the TF server.
+    # If we would use this multiple times (e.g. in tests),
+    # it might actually be better to cache the server as a singleton...
     server = tf.distribute.Server(
       cluster_spec,
       job_name=cluster_resolver.task_type, task_index=cluster_resolver.task_id,
-      config=config)
+      config=server_config)
     self.server = server
     self.strategy = ReturnnDefaultStrategy()  # not really used currently...
+    self.opts.assert_all_read()
 
   def is_chief(self):
     """
@@ -267,6 +323,13 @@ def init_distributed_tf(config):
   _controller = _Controller(config=config)
 
 
+def is_enabled():
+  """
+  :rtype: bool
+  """
+  return bool(_controller)
+
+
 def get_session_target():
   """
   This would be called if you have a local custom graph in the current process (replica)
@@ -279,3 +342,21 @@ def get_session_target():
   """
   assert _controller, "init_distributed_tf not called?"
   return _controller.server.target
+
+
+@contextlib.contextmanager
+def _temporary_init_distributed_tf(config):
+  """
+  This is useful for tests.
+
+  :param config:
+  :return: scope where we have initialized distributed TF, and going out-of-scope will uninit again
+  """
+  global _controller
+  init_distributed_tf(config=config)
+  yield
+  # Now uninit again.
+  # Note that there is no real way to stop the server.
+  # If we use this often in tests, it might actually be better to cache the server as a singleton...
+  assert _controller
+  _controller = None  # type: typing.Optional[_Controller]
