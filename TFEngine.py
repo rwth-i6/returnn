@@ -1842,9 +1842,15 @@ class Engine(EngineBase):
         print("WARNING: dataset_provider is set (via dataset_pipeline) but not used", file=log.v2)
       batch_slice = None
       if self.config.is_true("use_horovod"):
-        # noinspection PyPackageRequirements,PyUnresolvedReferences
-        import horovod.tensorflow as hvd
-        batch_slice = slice(hvd.rank(), None, hvd.size())
+        ds_dist_opt = self.config.value("horovod_dataset_distribution", "shard")
+        if ds_dist_opt == "shard":
+          # noinspection PyPackageRequirements,PyUnresolvedReferences
+          import horovod.tensorflow as hvd
+          batch_slice = slice(hvd.rank(), None, hvd.size())
+        elif ds_dist_opt == "random_seed_offset":
+          pass  # nothing needed to be done here
+        else:
+          raise Exception("invalid horovod_dataset_distribution %r" % ds_dist_opt)
       data_provider = FeedDictDataProvider(
         tf_session=self.tf_session, extern_data=self.network.extern_data,
         data_keys=self.network.get_used_data_keys(),

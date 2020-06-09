@@ -84,7 +84,7 @@ class Dataset(object):
 
   def __init__(self, name=None,
                window=1, context_window=None, chunking=None,
-               seq_ordering='default', random_seed_offset=0,
+               seq_ordering='default', random_seed_offset=None,
                partition_epoch=None, repeat_epoch=None,
                seq_list_filter_file=None, unique_seq_tags=False,
                seq_order_seq_lens_file=None,
@@ -98,7 +98,7 @@ class Dataset(object):
     :param None|str|int|(int,int)|dict|(dict,dict) chunking: "chunk_size:chunk_step"
     :param str seq_ordering: "batching"-option in config. e.g. "default", "sorted" or "random".
       See self.get_seq_order_for_epoch() for more details.
-    :param int random_seed_offset:
+    :param int|None random_seed_offset:
     :param int|None partition_epoch:
     :param int|None repeat_epoch: Repeat the sequences in an epoch this many times. Useful to scale the dataset
       relative to other datasets, e.g. when used in CombinedDataset. Not allowed to be used in combination with
@@ -116,6 +116,8 @@ class Dataset(object):
     self.num_outputs = None  # type: typing.Optional[typing.Dict[str,typing.Tuple[int,int]]]  # tuple is num-classes, len(shape).  # nopep8
     self.window = window
     self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
+    if random_seed_offset is None:
+      random_seed_offset = self._get_default_random_seed_offset()
     self.random_seed_offset = random_seed_offset
     self.partition_epoch = partition_epoch or 1
     self.repeat_epoch = repeat_epoch or 1
@@ -171,6 +173,22 @@ class Dataset(object):
       self.__class__.__name__,
       getattr(self, "name", "<unknown>"),
       getattr(self, "epoch", "<unknown>"))
+
+  @staticmethod
+  def _get_default_random_seed_offset():
+    """
+    :return: 0 usually
+    :rtype: int
+    """
+    from Config import get_global_config
+    config = get_global_config(raise_exception=False)
+    if not config:
+      return 0
+    if config.is_true("use_horovod") and config.value("horovod_dataset_distribution", "") == "random_seed_offset":
+      # noinspection PyPackageRequirements,PyUnresolvedReferences
+      import horovod.tensorflow as hvd
+      return hvd.rank() * 13
+    return 0
 
   @staticmethod
   def _parse_chunking(chunking):
