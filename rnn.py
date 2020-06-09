@@ -365,6 +365,9 @@ def init_backend_engine():
     # Print available devices. Also make sure that get_tf_list_local_devices uses the correct TF session opts.
     print_available_devices(tf_session_opts=tf_session_opts, file=log.v2)
     debug_register_better_repr()
+    if config.is_true("distributed_tf"):
+      import TFDistributed
+      TFDistributed.init_distributed_tf(config)
   else:
     raise NotImplementedError
 

@@ -779,8 +779,12 @@ class Engine(EngineBase):
     print("Setup tf.Session with options %r ..." % opts, file=log.v2)
     config = tf.ConfigProto(**opts)
     # config.gpu_options.allow_growth=True
+    session_opts = dict(config=config)
+    if self.config.is_true("distributed_tf"):
+      import TFDistributed
+      session_opts["target"] = TFDistributed.get_session_target()
     # For debugging, see tfdbg.LocalCLIDebugWrapperSession.
-    self.tf_session = tf.Session(config=config)
+    self.tf_session = tf.Session(**session_opts)
 
   def _reset_graph(self):
     """
