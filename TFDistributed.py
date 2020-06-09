@@ -9,7 +9,7 @@ Distributed TensorFlow covers multiple levels of functionality:
   TF server and client (TF session) connecting to the server via gRPC.
   ClusterSpec describes the collection of all servers.
 
-* High level via strategies (:class: `tf.distribute.Strategy`).
+* High level via strategies (:class:`tf.distribute.Strategy`).
   See the `official guide <https://www.tensorflow.org/guide/distributed_training>`_.
   This can be used by the Keras API, by the Estimator API,
   and by a custom training loop.
@@ -27,6 +27,7 @@ They can both be mixed, or used independently.
 This is also related to the dataset pipeline :mod:`TFDataPipeline`.
 """
 
+from __future__ import print_function
 import os
 import typing
 import contextlib
