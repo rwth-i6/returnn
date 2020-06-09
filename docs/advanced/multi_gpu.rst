@@ -62,7 +62,13 @@ Relevant RETURNN settings
   if the reduce type is param, this will specify after how many update steps
   the model parameters will be synchronized (i.e. averaged)
 
-* ``horovod_scale_lr: bool``: whether to divide the lr by number of instances
+* ``horovod_scale_lr: bool``: whether to multiply the lr by number of instances
+  (False by default)
+  
+* ``horovod_dataset_distribution: str``: ``"shard"`` by default. one of:
+
+  * ``"shard"``: uses sharding for the dataset (via ``batch_slice`` for :class:`FeedDictDataProvider`)
+  * ``"random_seed_offset"``: sets the default ``random_seed_offset`` via the rank
 
 Recommendations
 ~~~~~~~~~~~~~~~
