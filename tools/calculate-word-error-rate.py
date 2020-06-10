@@ -18,24 +18,25 @@ import argparse
 from Util import Stats, hms
 from Dataset import Dataset, init_dataset
 import Util
+import TFCompat
 import TFUtil
 
 
 class WerComputeGraph:
   def __init__(self):
-    self.hyps = tf.placeholder(tf.string, [None])
-    self.refs = tf.placeholder(tf.string, [None])
+    self.hyps = TFCompat.v1.placeholder(tf.string, [None])
+    self.refs = TFCompat.v1.placeholder(tf.string, [None])
     self.wer, self.ref_num_words = TFUtil.string_words_calc_wer(hyps=self.hyps, refs=self.refs)
     self.total_wer_var = tf.Variable(initial_value=0, trainable=False, dtype=tf.int64)
     self.total_ref_num_words_var = tf.Variable(initial_value=0, trainable=False, dtype=tf.int64)
     self.update_total_wer = self.total_wer_var.assign_add(tf.reduce_sum(self.wer))
     self.update_ref_num_words = self.total_ref_num_words_var.assign_add(tf.reduce_sum(self.ref_num_words))
-    self.updated_normalized_wer = \
-      tf.cast(self.update_total_wer, tf.float32) / tf.cast(self.update_ref_num_words, tf.float32)
+    self.updated_normalized_wer = (
+      tf.cast(self.update_total_wer, tf.float32) / tf.cast(self.update_ref_num_words, tf.float32))
 
   def step(self, session, hyps, refs):
     """
-    :param tf.Session session:
+    :param TFCompat.v1.Session session:
     :param list[str] hyps:
     :param list[str] refs:
     :return: updated normalized WER
@@ -219,10 +220,10 @@ def main(argv):
 
   global wer_compute
   wer_compute = WerComputeGraph()
-  with tf.Session(config=tf.ConfigProto(device_count={"GPU": 0})) as _session:
+  with TFCompat.v1.Session(config=TFCompat.v1.ConfigProto(device_count={"GPU": 0})) as _session:
     global session
     session = _session
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     try:
       wer = calc_wer_on_dataset(dataset=dataset, refs=refs, options=args, hyps=hyps)
       print("Final WER: %.02f%%" % (wer * 100), file=log.v1)

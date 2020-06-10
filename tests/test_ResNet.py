@@ -18,6 +18,7 @@ from TFNetwork import *
 from TFNetworkLayer import *
 from TFEngine import *
 from Log import log
+import TFCompat
 import TFUtil
 TFUtil.debug_register_better_repr()
 
@@ -26,7 +27,7 @@ log.initialize(verbosity=[5])
 @contextlib.contextmanager
 def make_scope():
   with tf.Graph().as_default() as graph:
-    with tf.Session(graph=graph) as session:
+    with TFCompat.v1.Session(graph=graph) as session:
       yield session
 
 network = {}
@@ -303,11 +304,11 @@ def build_resnet(conv_time_dim):
   else:
     dr = (1, 1)
 
-  """ 
+  """
   See https://arxiv.org/pdf/1611.09288.pdf
   Fully connected layers are equivalent to, and can be trivially replaced by,
-  convolutional layers with kernel (1×1) (except the first convolution which 
-  has kernel size matching the output of the conv stack before being flattened 
+  convolutional layers with kernel (1×1) (except the first convolution which
+  has kernel size matching the output of the conv stack before being flattened
   for the fully connected layers).
   """
   add_sequential_layer("fc1" , {"class": "conv", "n_out": 2048, "filter_size": (3, 2), "auto_use_channel_first": NCHW,

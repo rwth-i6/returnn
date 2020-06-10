@@ -20,6 +20,7 @@ better_exchook.replace_traceback_format_tb()
 
 from Log import log
 from Config import Config
+import TFCompat
 from TFNetwork import *
 from TFNetworkRecLayer import *
 from TFUtil import is_gpu_available
@@ -66,10 +67,10 @@ def test_a_crash_abort():
 @contextlib.contextmanager
 def make_scope():
   """
-  :rtype: tf.Session
+  :rtype: TFCompat.v1.Session
   """
   with tf.Graph().as_default() as graph:
-    with tf.Session(graph=graph) as session:
+    with TFCompat.v1.Session(graph=graph) as session:
       yield session
 
 
@@ -205,9 +206,9 @@ def test_rhn_nan():
 
   with make_scope() as session:
     print("create graph")
-    tf.set_random_seed(42)
-    src_placeholder = tf.placeholder(tf.float32, (None, seq_len, num_inputs), name="src_placeholder")
-    tgt_placeholder = tf.placeholder(tf.float32, (None, seq_len, num_outputs), name="tgt_placeholder")
+    TFCompat.v1.set_random_seed(42)
+    src_placeholder = TFCompat.v1.placeholder(tf.float32, (None, seq_len, num_inputs), name="src_placeholder")
+    tgt_placeholder = TFCompat.v1.placeholder(tf.float32, (None, seq_len, num_outputs), name="tgt_placeholder")
     batch_size = tf.shape(src_placeholder)[0]
 
     def make_feed_dict():
@@ -218,7 +219,7 @@ def test_rhn_nan():
 
     from TFUtil import xavier_initializer
     default_var_initializer = xavier_initializer(seed=13)
-    with tf.variable_scope(tf.get_variable_scope(), initializer=default_var_initializer) as scope:
+    with TFCompat.v1.variable_scope(TFCompat.v1.get_variable_scope(), initializer=default_var_initializer) as scope:
       assert loop_variant in loop_variants
       if loop_variant in ["RecLayer", "dynamic_rnn"]:
         if loop_variant == "RecLayer":
@@ -227,7 +228,8 @@ def test_rhn_nan():
           with net.register_network_scope():
             from TFNetworkLayer import InternalLayer
             src_layer = InternalLayer(name='src', network=net, output=Data(
-              'src', shape=(None, num_inputs), placeholder=src_placeholder, size_placeholder={0: [seq_len]}))
+              'src', shape=(None, num_inputs), placeholder=src_placeholder,
+              size_placeholder={0: tf.convert_to_tensor([seq_len])}))
             with tf.name_scope("output"):
               rec_layer = RecLayer(
                 name='output', network=net, output=Data("out", shape=(None, num_outputs)), sources=[src_layer],
@@ -244,7 +246,7 @@ def test_rhn_nan():
             cell=rhn, inputs=x, time_major=True,
             sequence_length=[seq_len], dtype=tf.float32)
           y = tf.transpose(y, [1, 0, 2])
-        loss = tf.reduce_sum(tf.reduce_mean(tf.squared_difference(tgt_placeholder, y), axis=-1))
+        loss = tf.reduce_sum(tf.reduce_mean(TFCompat.v1.squared_difference(tgt_placeholder, y), axis=-1))
       else:
         rhn = RHNCell(num_units=num_outputs, is_training=True, dropout=0.9, dropout_seed=1, batch_size=batch_size)
         state = rhn.zero_state(batch_size, tf.float32)
@@ -258,7 +260,7 @@ def test_rhn_nan():
 
         def loop_iter(i, state, loss_ta):
           output, state = rhn(inputs=input_ta.read(i), state=state)
-          frame_loss = tf.reduce_mean(tf.squared_difference(target_ta.read(i), output), axis=1)
+          frame_loss = tf.reduce_mean(TFCompat.v1.squared_difference(target_ta.read(i), output), axis=1)
           assert frame_loss.get_shape().ndims == 1  # (batch,)
           # frame_loss = tf.Print(frame_loss, ["frame", i, "loss", tf.reduce_sum(frame_loss)])
           loss_ta = loss_ta.write(i, frame_loss)
@@ -280,13 +282,13 @@ def test_rhn_nan():
           loss = 0.0
           for i in range(seq_len):
             output, state = rhn(inputs=x[i], state=state)
-            frame_loss = tf.reduce_mean(tf.squared_difference(tgt_placeholder[:, i], output), axis=1)
+            frame_loss = tf.reduce_mean(TFCompat.v1.squared_difference(tgt_placeholder[:, i], output), axis=1)
             #frame_loss = tf.Print(frame_loss, ['frame', i, 'loss', frame_loss, 'SE of', tgt_placeholder[:, i], output])
             assert frame_loss.get_shape().ndims == 1  # (batch,)
             loss += tf.reduce_sum(frame_loss)
         else:
           assert False, "unexpected loop variant %r" % loop_variant
-    optimizer = tf.train.AdamOptimizer(learning_rate=0.1, epsilon=1e-16, use_locking=False)
+    optimizer = TFCompat.v1.train.AdamOptimizer(learning_rate=0.1, epsilon=1e-16, use_locking=False)
     minimize_op = optimizer.minimize(loss)
     from TFUtil import add_check_numerics_ops
     #check_op = add_check_numerics_ops()
@@ -294,12 +296,12 @@ def test_rhn_nan():
 
     print('variables:')
     train_vars = (
-      tf.trainable_variables() +
-      tf.get_collection(tf.GraphKeys.TRAINABLE_RESOURCE_VARIABLES))
+      TFCompat.v1.trainable_variables() +
+      TFCompat.v1.get_collection(TFCompat.v1.GraphKeys.TRAINABLE_RESOURCE_VARIABLES))
     print(train_vars)
     var_norms = [tf.nn.l2_loss(v) for v in train_vars]
     print('init vars')
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     print('graph size:', session.graph_def.ByteSize())
     print('train')
     for s in range(10):
@@ -324,12 +326,12 @@ def test_state_keep_over_epoch():
 
   with make_scope() as session:
     print("create graph")
-    tf.set_random_seed(42)
+    TFCompat.v1.set_random_seed(42)
     net = TFNetwork(extern_data=ExternData({'data': {"shape": (None, num_inputs)}}))
     net.construct_from_dict(net_dict)
     net.initialize_params(session)
     print("vars:")
-    print(tf.global_variables())
+    print(TFCompat.v1.global_variables())
     src = net.extern_data.data["data"].placeholder
     src_seq_len = net.extern_data.data["data"].size_placeholder[0]
     out = net.get_default_output_layer().output.get_placeholder_as_batch_major()
@@ -420,9 +422,9 @@ def test_slow_TensorArray():
   def linear(x, output_dim):
     input_dim = x.get_shape().dims[-1].value
     assert input_dim is not None
-    with tf.variable_scope("linear", reuse=tf.AUTO_REUSE):
-      weights = tf.get_variable("W", shape=(input_dim, output_dim))
-      bias = tf.get_variable("b", shape=(output_dim,))
+    with tf.variable_scope("linear", reuse=TFCompat.v1.AUTO_REUSE):
+      weights = TFCompat.v1.get_variable("W", shape=(input_dim, output_dim))
+      bias = TFCompat.v1.get_variable("b", shape=(output_dim,))
     assert x.get_shape().ndims == 2  # (batch,input_dim)
     return tf.matmul(x, weights) + bias
 
@@ -538,7 +540,7 @@ def test_deterministic_TensorArray():
 
 
 def test_rec_subnet_with_choice():
-  with tf.Session():
+  with TFCompat.v1.Session():
     config = Config()
     config.update({
       "num_outputs": 3,
@@ -568,7 +570,7 @@ def test_RecLayer_get_cudnn_params_size():
     my_size = RecLayer._get_cudnn_param_size(**common_kwargs)
     assert_equal(cu_size.eval(), my_size)
 
-  with tf.Session():
+  with TFCompat.v1.Session():
     check(rnn_mode="lstm", num_units=5, input_size=3)
     check(rnn_mode="lstm", num_units=5, input_size=5)
     check(rnn_mode="gru", num_units=7, input_size=5)
@@ -604,8 +606,8 @@ def test_cudnn_save_restore():
     num_outputs = 3
 
     print("Storing network with cuDNN.")
-    tf.reset_default_graph()
-    with tf.Session() as session:
+    TFCompat.v1.reset_default_graph()
+    with TFCompat.v1.Session() as session:
       config1 = Config()
       config1.update({
         "num_outputs": num_outputs,
@@ -652,8 +654,8 @@ def test_cudnn_save_restore():
 
     # First test if we can load the same network as-is. This will involve the RNNParamsSaveable.
     print("Testing restore of same network with cuDNN.")
-    tf.reset_default_graph()
-    with tf.Session() as session:
+    TFCompat.v1.reset_default_graph()
+    with TFCompat.v1.Session() as session:
       network1a = TFNetwork(config=config1, train_flag=True)
       network1a.construct_from_dict(config1.typed_dict["network"])
       print("Saveable params:")
@@ -681,8 +683,8 @@ def test_cudnn_save_restore():
     print()
 
     print("Testing restore of network with LSTMBlockCell.")
-    tf.reset_default_graph()
-    with tf.Session() as session:
+    TFCompat.v1.reset_default_graph()
+    with TFCompat.v1.Session() as session:
       # Now, in CPU, we would automatically use LSTMBlockCell instead.
       # Check if the import of the model works correctly in load_params_from_file().
       config2 = Config()
@@ -717,7 +719,7 @@ def test_cudnn_save_restore():
 def test_cudnn_rnn_params_to_canonical():
   # https://github.com/tensorflow/tensorflow/issues/9370
   from tensorflow.contrib.cudnn_rnn import CudnnLSTM
-  with tf.Session() as session:
+  with TFCompat.v1.Session() as session:
     def check(**kwargs):
       print("kwargs:", kwargs)
       model = CudnnLSTM(**kwargs)
@@ -761,7 +763,7 @@ def test_RecLayer_NativeLstm_Nan():
   })
 
   print("Reset default graph...")
-  tf.reset_default_graph()
+  TFCompat.v1.reset_default_graph()
   print("Create network...")
   network = TFNetwork(config=config, train_flag=True)
   network.construct_from_dict(config.typed_dict["network"])
@@ -780,7 +782,7 @@ def test_RecLayer_NativeLstm_Nan():
     }
 
   print("Creating session...")
-  with tf.Session() as session:
+  with TFCompat.v1.Session() as session:
     print("Init params...")
     network.initialize_params(session=session)
     print("Test run...")
@@ -826,7 +828,7 @@ def test_RecLayer_NativeLstm_Nan():
     import tempfile
     tmp_tf_logdir = tempfile.mkdtemp("tmp-tf-log")
     print("Write TF logs to:", tmp_tf_logdir)
-    writer = tf.summary.FileWriter(tmp_tf_logdir)
+    writer = TFCompat.v1.summary.FileWriter(tmp_tf_logdir)
     writer.add_graph(session.graph)
 
     print("Training...")
@@ -900,7 +902,7 @@ def test_RecLayer_NativeLstm_Nan():
 
 def find_op_by_type(session, type_name):
   """
-  :param tf.Session session:
+  :param TFCompat.v1.Session session:
   :param str type_name:
   :rtype: tf.Operation|None
   """
@@ -912,7 +914,7 @@ def find_op_by_type(session, type_name):
 
 def _lstm_grad_op(session, verbose=True):
   """
-  :param tf.Session session:
+  :param TFCompat.v1.Session session:
   :return: grad function
   """
   lstm_grad_op = find_op_by_type(session=session, type_name="LstmGenericBase")
@@ -1066,7 +1068,7 @@ def test_GradOfLstmGenericBase_simple_nan():
     i = tf.ones((n_time, n_batch))
     return op_func(Z, V_h, c, i)
   dummy = dummy_call()
-  with tf.Session() as session:
+  with TFCompat.v1.Session() as session:
     print("dummy out:", session.run(list(dummy)))
     grad_op = _lstm_grad_op(session)
     args = _demo_lstm_grad_args()
@@ -1220,7 +1222,7 @@ def test_search_no_rec_explicit():
   feed_dict = {
     net.extern_data.data["data"].placeholder: logits,
     net.extern_data.data["data"].size_placeholder[0]: [n_time]}
-  with tf.Session() as session:
+  with TFCompat.v1.Session() as session:
     assert_equal(session.run(net.get_data_batch_dim(), feed_dict=feed_dict), n_batch)
     out, out_sizes = session.run(
       (rec_layer.output.placeholder, rec_layer.output.get_sequence_lengths()),
@@ -1335,7 +1337,7 @@ def test_search_no_rec_explicit_dyn_len():
   feed_dict = {
     net.extern_data.data["data"].placeholder: logits,
     net.extern_data.data["data"].size_placeholder[0]: [n_time]}
-  with tf.Session() as session:
+  with TFCompat.v1.Session() as session:
     assert_equal(session.run(net.get_data_batch_dim(), feed_dict=feed_dict), n_batch)
     out, out_sizes = session.run(
       (rec_layer.output.placeholder, rec_layer.output.get_sequence_lengths()),
@@ -2110,7 +2112,7 @@ def test_rec_layer_move_out_of_loop():
     }
 
   print("Constructing search network.")
-  tf.reset_default_graph()
+  TFCompat.v1.reset_default_graph()
   extern_data = ExternData({
     "data": {"dim": n_src_dim, "sparse": True},
     "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
@@ -2148,7 +2150,7 @@ def test_rec_layer_move_out_of_loop():
     assert isinstance(out_layer, RecLayer)
     assert isinstance(out_layer.cell, _SubnetworkRecCell)
 
-    with tf.Session() as session:
+    with TFCompat.v1.Session() as session:
       net.initialize_params(session)
       data_provider = FeedDictDataProvider(
         tf_session=session, extern_data=extern_data,
@@ -2176,14 +2178,14 @@ def test_rec_layer_move_out_of_loop():
       except Exception as exc:
         print("Exception happened:", str(exc).splitlines()[0])
         print("Writing TF log file.")
-        writer = tf.summary.FileWriter(".", filename_suffix="test_rec_layer_move_out_of_loop")
+        writer = TFCompat.v1.summary.FileWriter(".", filename_suffix="test_rec_layer_move_out_of_loop")
         writer.add_graph(session.graph)
         writer.close()
         stop_event_writer_thread(writer)
         raise
 
   print("Constructing train network.")
-  tf.reset_default_graph()
+  TFCompat.v1.reset_default_graph()
   extern_data = ExternData({
     "data": {"dim": n_src_dim, "sparse": True},
     "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
@@ -2201,7 +2203,7 @@ def test_rec_layer_move_out_of_loop():
 
   print("Constructing train network with optimize_move_layers_out=False.")
   config.set("optimize_move_layers_out", False)
-  tf.reset_default_graph()
+  TFCompat.v1.reset_default_graph()
   extern_data = ExternData({
     "data": {"dim": n_src_dim, "sparse": True},
     "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
@@ -2276,7 +2278,7 @@ def test_rec_layer_move_out_of_loop_keep_constraints():
     }
 
   print("Constructing train network without constraints")
-  tf.reset_default_graph()
+  TFCompat.v1.reset_default_graph()
   extern_data = ExternData({
     "data": {"dim": n_src_dim, "sparse": True},
     "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
@@ -2292,7 +2294,7 @@ def test_rec_layer_move_out_of_loop_keep_constraints():
   assert_equal(train_net.get_total_constraints(), 0)
 
   print("Constructing train network with L2 norm on moved out input layer")
-  tf.reset_default_graph()
+  TFCompat.v1.reset_default_graph()
   extern_data = ExternData({
     "data": {"dim": n_src_dim, "sparse": True},
     "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
@@ -2308,7 +2310,7 @@ def test_rec_layer_move_out_of_loop_keep_constraints():
   assert_not_equal(train_net.get_total_constraints(), 0)
 
   print("Constructing train network with L2 norm on moved out output layer")
-  tf.reset_default_graph()
+  TFCompat.v1.reset_default_graph()
   extern_data = ExternData({
     "data": {"dim": n_src_dim, "sparse": True},
     "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
@@ -2393,7 +2395,7 @@ def test_rec_layer_move_out_of_loop_ref_att_generic_att():
   def train(net, session):
     """
     :param TFNetwork net:
-    :param tf.Session session:
+    :param TFCompat.v1.Session session:
     """
     from GeneratingDataset import StaticDataset
     from TFDataPipeline import FeedDictDataProvider
@@ -2472,7 +2474,7 @@ def test_rec_layer_move_out_of_loop_ref_att_generic_att():
     except Exception as exc:
       print("Exception happened:", str(exc).splitlines()[0])
       print("Writing TF log file.")
-      writer = tf.summary.FileWriter(".", filename_suffix="test_rec_layer_move_out_of_loop")
+      writer = TFCompat.v1.summary.FileWriter(".", filename_suffix="test_rec_layer_move_out_of_loop")
       writer.add_graph(session.graph)
       writer.close()
       stop_event_writer_thread(writer)
@@ -2943,7 +2945,7 @@ def test_rec_layer_search_select_src():
     }
 
   print("Constructing search network.")
-  tf.reset_default_graph()
+  TFCompat.v1.reset_default_graph()
   extern_data = ExternData({
     "data": {"dim": n_src_dim, "sparse": True},
     "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
@@ -4090,7 +4092,7 @@ def test_BlocksparseLSTM_load_params_from_native_lstm():
 
     from TFUtil import xavier_initializer
     default_var_initializer = xavier_initializer(seed=13)
-    with tf.variable_scope(tf.get_variable_scope(), initializer=default_var_initializer) as scope:
+    with tf.variable_scope(TFCompat.v1.get_variable_scope(), initializer=default_var_initializer) as scope:
       net = TFNetwork(config=Config(), extern_data=ExternData(), train_flag=False)
       with net.register_network_scope():
         from TFNetworkLayer import InternalLayer

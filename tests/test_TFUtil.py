@@ -13,6 +13,7 @@ import tensorflow as tf
 import sys
 sys.path += ["."]  # Python 3 hack
 from TFUtil import *
+import TFCompat
 from nose.tools import assert_equal, assert_not_equal, assert_is_instance, assert_is, assert_in, assert_true
 from numpy.testing.utils import assert_almost_equal, assert_allclose
 from pprint import pprint
@@ -24,7 +25,7 @@ better_exchook.replace_traceback_format_tb()
 
 print("TF version:", tf.__version__)
 
-session = tf.InteractiveSession()
+session = TFCompat.v1.InteractiveSession()
 
 
 def test_tf_version_tuple():
@@ -1075,7 +1076,7 @@ def test_close_event_writer_thread():
     return len([t for t in threading.enumerate() if isinstance(t, _EventLoggerThread)])
 
   tmp_dir = tempfile.mkdtemp()
-  writer = tf.summary.FileWriter(tmp_dir)
+  writer = TFCompat.v1.summary.FileWriter(tmp_dir)
   assert_equal(count_event_logger_threads(), 1)
   assert isinstance(writer.event_writer, EventFileWriter)
   assert isinstance(writer.event_writer._worker, _EventLoggerThread)
@@ -1144,17 +1145,17 @@ def test_circular_pad():
 
 def test_reuse_name_scope_double():
   with reuse_name_scope("double"):
-    assert_equal(tf.get_default_graph()._name_stack, "double")
+    assert_equal(TFCompat.v1.get_default_graph()._name_stack, "double")
     with reuse_name_scope("sub"):
-      assert_equal(tf.get_default_graph()._name_stack, "double/sub")
+      assert_equal(TFCompat.v1.get_default_graph()._name_stack, "double/sub")
       assert_equal(get_current_name_scope(), "double/sub")
 
 
 def test_reuse_name_scope_mix1():
   with reuse_name_scope("mix1"):
-    assert_equal(tf.get_default_graph()._name_stack, "mix1")
+    assert_equal(TFCompat.v1.get_default_graph()._name_stack, "mix1")
     with tf.name_scope("sub"):
-      assert_equal(tf.get_default_graph()._name_stack, "mix1/sub")
+      assert_equal(TFCompat.v1.get_default_graph()._name_stack, "mix1/sub")
       # The following is not true because get_current_name_scope is only var-scope:
       # assert_equal(get_current_name_scope(), "mix1/sub")
 
@@ -1162,7 +1163,7 @@ def test_reuse_name_scope_mix1():
 def test_reuse_name_scope_mix2():
   with tf.name_scope("mix2"):
     with reuse_name_scope("sub"):
-      assert_equal(tf.get_default_graph()._name_stack, "mix2/sub")
+      assert_equal(TFCompat.v1.get_default_graph()._name_stack, "mix2/sub")
       # The following is not true because get_current_name_scope is only var-scope:
       # assert_equal(get_current_name_scope(), "mix2/sub")
 
@@ -1182,7 +1183,7 @@ def test_reuse_name_scope_mix4():
 def test_reuse_name_scope_2():
   with reuse_name_scope("lstm2"):
     with reuse_name_scope("rec") as scope:
-      assert_is_instance(scope, tf.VariableScope)
+      assert_is_instance(scope, TFCompat.v1.VariableScope)
       assert_equal(scope.name, "lstm2/rec")
       assert_equal(get_current_name_scope(), "lstm2/rec")
       with tf.name_scope("sub"):
@@ -1192,7 +1193,7 @@ def test_reuse_name_scope_2():
 def test_reuse_name_scope():
   with reuse_name_scope("lstm0"):
     with tf.variable_scope("rec"):
-      a = tf.get_variable("a", shape=(3, 4))
+      a = TFCompat.v1.get_variable("a", shape=(3, 4))
       assert_is_instance(a, tf.Variable)
       assert_equal(a.name, "lstm0/rec/a:0")
 
@@ -1281,7 +1282,7 @@ def test_loop_var_creation():
   https://github.com/tensorflow/tensorflow/issues/8604
   """
 
-  # tf.reset_default_graph()  # Strange, this does not work.
+  # TFCompat.v1.reset_default_graph()  # Strange, this does not work.
   i = tf.constant(0)
 
   def body(i):
@@ -1295,7 +1296,7 @@ def test_loop_var_creation():
       # Note: tf.Variable directly will have this problem, as tf.constant() is in the current ctx.
       w1 = tf.Variable(name="w1", initial_value=tf.constant(1))
     # However, tf.get_variable should not have this problem.
-    w2 = tf.get_variable("w2", shape=(), dtype=tf.int32, initializer=tf.constant_initializer(2, dtype=tf.int32))
+    w2 = TFCompat.v1.get_variable("w2", shape=(), dtype=tf.int32, initializer=tf.constant_initializer(2, dtype=tf.int32))
     return [i + w1 + w2]
 
   loop = tf.while_loop(lambda i: tf.less(i, 5), body, [i])
@@ -1589,7 +1590,7 @@ def test_slice_nd_big():
 def test_CustomGradient_register_new_graph_generic_loss_and_error_signal():
   def check():
     with tf.Graph().as_default() as graph:
-      with tf.Session(graph=graph) as session:
+      with TFCompat.v1.Session(graph=graph) as session:
         custom_gradient.register_generic_loss_and_error_signal()
         x = tf.constant(2.)
         session.run(x)  # do some early call, before `generic_loss_and_error_signal` below
@@ -1604,7 +1605,7 @@ def test_CustomGradient_register_new_graph_generic_loss_and_error_signal():
 
 def test_CustomGradient_generic_loss_and_error_signal_post_func():
   with tf.Graph().as_default() as graph:
-    with tf.Session(graph=graph) as session:
+    with TFCompat.v1.Session(graph=graph) as session:
       custom_gradient.register_generic_loss_and_error_signal()
       x = tf.constant(5.)
       y = custom_gradient.generic_loss_and_error_signal(loss=2., x=x, grad_x=3.)
@@ -1673,7 +1674,7 @@ def test_var_init():
 def test_resource_var_init():
   # https://github.com/tensorflow/tensorflow/issues/11240
   # Will use :class:`ResourceVariable`.
-  v = tf.get_variable(
+  v = TFCompat.v1.get_variable(
     initializer=tf.constant_initializer(2), shape=(),
     trainable=False, name="test_resource_var_init", use_resource=True)
   with tf.control_dependencies([v.initializer]):
@@ -1961,7 +1962,7 @@ def test_VariableAssigner():
 
 
 def test_VariableAssigner_ResourceVariable():
-  v = tf.get_variable(
+  v = TFCompat.v1.get_variable(
     initializer=tf.constant_initializer(1.), shape=(),
     name="test_VariableAssigner_ResourceVariable", use_resource=True)
   session.run(v.initializer)
@@ -2422,7 +2423,7 @@ def test_kenlm():
   lm_tf = TFKenLM.ken_lm_load(filename=test_lm_file)
   input_strings_tf = tf.placeholder(tf.string, [None])
   output_scores_tf = TFKenLM.ken_lm_abs_score_strings(handle=lm_tf, strings=input_strings_tf)
-  with tf.Session() as session:
+  with TFCompat.v1.Session() as session:
     output_scores = session.run(output_scores_tf, feed_dict={input_strings_tf: input_strings})
   print("input strings:", input_strings)
   print("output scores:", output_scores)
@@ -2446,7 +2447,7 @@ def test_kenlm_bpe():
   lm_tf = TFKenLM.ken_lm_load(filename=test_lm_file)
   input_strings_tf = tf.placeholder(tf.string, [None])
   output_scores_tf = TFKenLM.ken_lm_abs_score_bpe_strings(handle=lm_tf, strings=input_strings_tf, bpe_merge_symbol="@@")
-  with tf.Session() as session:
+  with TFCompat.v1.Session() as session:
     output_scores = session.run(output_scores_tf, feed_dict={input_strings_tf: input_strings})
   print("input strings:", input_strings)
   print("output scores:", output_scores)
@@ -2616,7 +2617,7 @@ def test_get_op_input_names_Constant():
 
 def test_get_op_attrib_keys__is_variable_initialized():
   with tf.variable_scope("test_get_op_attrib_keys__is_variable_initialized"):
-    var = tf.get_variable("var", shape=(3,))
+    var = TFCompat.v1.get_variable("var", shape=(3,))
     check = tf.is_variable_initialized(var)
     print("check:", check)
     assert isinstance(check, tf.Tensor)
@@ -2636,15 +2637,15 @@ def test_print_graph_output():
 
 def test_get_var_ops():
   with tf.variable_scope("test_get_var_ops"):
-    v = tf.get_variable("v", ())
+    v = TFCompat.v1.get_variable("v", ())
     assert_equal(find_ops_with_tensor_input(v), [v.initializer])
 
 
 def test_find_ops_with_tensor_input():
   with tf.variable_scope("test_find_ops_with_tensor_input"):
     x0 = tf.constant(1.0, name="x0")
-    v1 = tf.get_variable("v1", ())
-    v2 = tf.get_variable("v2", ())
+    v1 = TFCompat.v1.get_variable("v1", ())
+    v2 = TFCompat.v1.get_variable("v2", ())
     x1a = tf.add(x0, v1, name="x1a")
     x1b = tf.add(x1a, v2, name="x1b")
     x2a = tf.multiply(v1, v2, name="x2a")
@@ -2657,7 +2658,7 @@ def test_find_ops_with_tensor_input():
 
 def test_get_var_update_ops():
   with tf.variable_scope("test_get_var_update_ops"):
-    v = tf.get_variable("v", ())
+    v = TFCompat.v1.get_variable("v", ())
     loss = (v - 1.0) ** 2
     opt = tf.train.AdamOptimizer()
     minimize_op = opt.minimize(loss=loss, var_list=[v])
@@ -2671,7 +2672,7 @@ def test_get_var_update_ops():
 
 def test_get_var_update_ops__get_variable_value_copy_before_update_ops():
   with tf.variable_scope("test_get_var_update_ops__get_variable_value_copy_before_update_ops"):
-    v = tf.get_variable("v", (), initializer=tf.zeros_initializer())
+    v = TFCompat.v1.get_variable("v", (), initializer=tf.zeros_initializer())
     assert isinstance(v, tf.Variable)
     loss = (v - 1.0) ** 2
     assert isinstance(loss, tf.Tensor)
@@ -2705,7 +2706,7 @@ def test_get_var_update_ops__get_variable_value_copy_before_update_ops():
 
 def test_get_variable_grad_from_update_ops():
   with tf.variable_scope("test_get_variable_grad_from_update_ops"):
-    var = tf.get_variable("var", (), initializer=tf.zeros_initializer())
+    var = TFCompat.v1.get_variable("var", (), initializer=tf.zeros_initializer())
     loss = (var - 1.0) ** 2
     for opt in [
       tf.train.AdamOptimizer(),
@@ -2731,7 +2732,7 @@ def test_get_variable_grad_from_update_ops():
 
 def test_get_variable_grad_from_update_ops_mix_sparse_dense():
   with tf.variable_scope("test_get_variable_grad_from_update_ops_mix_sparse_dense"):
-    var = tf.get_variable("var", (3, 5), initializer=tf.ones_initializer())
+    var = TFCompat.v1.get_variable("var", (3, 5), initializer=tf.ones_initializer())
     loss = tf.reduce_sum((tf.matmul(tf.nn.embedding_lookup(var, [1]) - 1.0, tf.transpose(var)) - 1.0) ** 2)
     ref_grad, = tf.gradients(loss, var)
     ref_grad = tf.convert_to_tensor(ref_grad)
@@ -2776,7 +2777,7 @@ def test_get_variable_grad_from_update_ops_mix_sparse_dense():
 
 def test_mixed_dense_sparse_grad():
   with tf.variable_scope("test_mixed_dense_sparse_grad"):
-    var = tf.get_variable("var", (3, 5), initializer=tf.ones_initializer())
+    var = TFCompat.v1.get_variable("var", (3, 5), initializer=tf.ones_initializer())
     session.run(var.initializer)
     loss = tf.reduce_sum(tf.nn.embedding_lookup(var, [1]) ** 2) + tf.reduce_sum(var ** 2)
     grad, = tf.gradients(loss, var)
@@ -3080,7 +3081,7 @@ def test_softmax_cross_entropy_over_size_gradient():
   n_dec_time = n_enc_time = 10
   n_extra_dim = 1
   tf.set_random_seed(42)
-  energy_tf = tf.get_variable(
+  energy_tf = TFCompat.v1.get_variable(
     "test_softmax_cross_entropy_over_size_gradient_var",
     shape=(n_batch, n_dec_time, n_enc_time, n_extra_dim),
     initializer=tf.random_normal_initializer(seed=23))
@@ -3172,7 +3173,7 @@ def test_FetchHelper_loop_invalid():
   print("Have GPU:", have_gpu)
   graph = tf.Graph()
   with graph.as_default():
-    session = tf.Session()
+    session = TFCompat.v1.Session()
     with session:
       with tf.device("/gpu:0" if have_gpu else "/cpu:0"):
         N = 3
@@ -3229,8 +3230,8 @@ def test_FetchHelper_loop_invalid():
 
 
 def test_FetchHelper_loop_invalid_vars_switch():
-  step = tf.get_variable("step", shape=(), dtype=tf.int64, initializer=tf.zeros_initializer(), trainable=False)
-  v = tf.get_variable(
+  step = TFCompat.v1.get_variable("step", shape=(), dtype=tf.int64, initializer=tf.zeros_initializer(), trainable=False)
+  v = TFCompat.v1.get_variable(
     name="var_accum_grad", shape=(), dtype=tf.float32,
     initializer=tf.zeros_initializer(), trainable=False)
   session.run(tf.global_variables_initializer())

@@ -406,13 +406,13 @@ class Runner(object):
     import horovod.tensorflow as hvd
     from TFUtil import global_tensor
     have_more_data_placeholder = global_tensor(
-      lambda: tf.placeholder(tf.int32, shape=(), name="horovod_have_more_data_placeholder"),
+      lambda: TFCompat.v1.placeholder(tf.int32, shape=(), name="horovod_have_more_data_placeholder"),
       name="horovod_have_more_data_placeholder")  # 0 or 1
     sum_have_data_t = global_tensor(
       lambda: hvd.allreduce(have_more_data_placeholder, average=False),
       name="horovod_sum_have_data")  # 0..size
     have_error_placeholder = global_tensor(
-      lambda: tf.placeholder(tf.int32, shape=(), name="horovod_have_error_placeholder"),
+      lambda: TFCompat.v1.placeholder(tf.int32, shape=(), name="horovod_have_error_placeholder"),
       name="horovod_have_error_placeholder")  # 0 or 1
     sum_have_error_t = global_tensor(
       lambda: hvd.allreduce(have_error_placeholder, average=False),
@@ -461,7 +461,7 @@ class Runner(object):
       :param tf.Variable var:
       :rtype: tf.Tensor
       """
-      return tf.assign(var, hvd.allreduce(var.read_value(), average=True))
+      return TFCompat.v1.assign(var, hvd.allreduce(var.read_value(), average=True))
 
     assign_ops = []
     for var in self.engine.updater.trainable_vars:
@@ -498,11 +498,11 @@ class Runner(object):
       # noinspection PyProtectedMember
       if self.engine._do_save():
         log_runtime_info_to_dir(logdir, config=self.engine.config)
-      writer = tf.summary.FileWriter(logdir)
+      writer = TFCompat.v1.summary.FileWriter(logdir)
     else:
       writer = None
     print("TF: log_dir: %s" % logdir, file=log.v5)
-    run_metadata = tf.RunMetadata()
+    run_metadata = TFCompat.v1.RunMetadata()
     debug_shell_in_runner = self.engine.config.bool("debug_shell_in_runner", False)
     debug_shell_in_runner_step = self.engine.config.int("debug_shell_in_runner_step", 1)
 
@@ -512,7 +512,7 @@ class Runner(object):
 
     coord = self.data_provider.coord
 
-    threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+    threads = TFCompat.v1.train.start_queue_runners(sess=sess, coord=coord)
     self.data_provider.start_threads(session=sess)
     self.start_time = time.time()
     elapsed_time_tf = 0.0
@@ -567,8 +567,8 @@ class Runner(object):
           if self.store_metadata_mod_step and step % self.store_metadata_mod_step == 0:
             # Slow run that stores extra information for debugging.
             print('Storing metadata', file=log.v5)
-            run_options = tf.RunOptions(
-              trace_level=tf.RunOptions.FULL_TRACE)
+            run_options = TFCompat.v1.RunOptions(
+              trace_level=TFCompat.v1.RunOptions.FULL_TRACE)
             # We could use tfdbg.add_debug_tensor_watch here.
             session_run_start_time = time.time()
             fetches_results = sess.run(
@@ -777,15 +777,15 @@ class Engine(EngineBase):
       opts["device_count"].setdefault("GPU", 0)
     # Note: We don't set intra_op_parallelism_threads and inter_op_parallelism_threads here anymore
     # because it is safer to do it via setup_tf_thread_pools() which we call very early.
-    print("Setup tf.Session with options %r ..." % opts, file=log.v2)
-    config = tf.ConfigProto(**opts)
+    print("Setup TF session with options %r ..." % opts, file=log.v2)
+    config = TFCompat.v1.ConfigProto(**opts)
     # config.gpu_options.allow_growth=True
     session_opts = dict(config=config)
     if self.config.is_true("distributed_tf"):
       import TFDistributed
       session_opts["target"] = TFDistributed.get_session_target()
     # For debugging, see tfdbg.LocalCLIDebugWrapperSession.
-    self.tf_session = tf.Session(**session_opts)
+    self.tf_session = TFCompat.v1.Session(**session_opts)
 
   def _reset_graph(self):
     """
@@ -794,7 +794,7 @@ class Engine(EngineBase):
     """
     if self.network:
       self.network.call_graph_reset_callbacks()
-    tf.reset_default_graph()
+    TFCompat.v1.reset_default_graph()
     self._checked_uninitialized_vars = False
     self._merge_all_summaries = None
     self._const_cache.clear()
@@ -1120,7 +1120,7 @@ class Engine(EngineBase):
       seed = self.config.int("random_seed", None)
       net_random_seed = (epoch * 3 + seed * 5 + 7) % (2 ** 31)
       tf_random_seed = (net_random_seed * 2 + 3) % (2 ** 31)
-    tf.set_random_seed(tf_random_seed)
+    TFCompat.v1.set_random_seed(tf_random_seed)
     from TFUtil import get_global_train_flag_placeholder
     if self.use_dynamic_train_flag:
       train_flag = get_global_train_flag_placeholder()
@@ -1150,7 +1150,7 @@ class Engine(EngineBase):
       import horovod.tensorflow as hvd
       # like hvd.broadcast_global_variables but selected vars only:
       bcast_op = tf.group(*[
-        tf.assign(var, hvd.broadcast(var, root_rank=0))
+        TFCompat.v1.assign(var, hvd.broadcast(var, root_rank=0))
         for var in self.network.get_params_list() + self.network.get_auxiliary_params()])
       self.tf_session.run(bcast_op)
 
@@ -1813,18 +1813,18 @@ class Engine(EngineBase):
       return
     with tf.name_scope("check_uninitialized_vars"):
       # Like tf.report_uninitialized_variables().
-      var_list = tf.global_variables() + tf.local_variables()
+      var_list = TFCompat.v1.global_variables() + TFCompat.v1.local_variables()
       if not var_list:
         return
       # Get a 1-D boolean tensor listing whether each variable is initialized.
       var_mask = tf.logical_not(tf.stack(
-        [tf.is_variable_initialized(v) for v in var_list])).eval(session=self.tf_session)
+        [TFCompat.v1.is_variable_initialized(v) for v in var_list])).eval(session=self.tf_session)
       assert len(var_mask) == len(var_list)
       uninitialized_vars = [v for (v, mask) in zip(var_list, var_mask) if mask]
       if uninitialized_vars:
         print("Note: There are still these uninitialized variables: %s" % [v.name for v in uninitialized_vars],
               file=log.v3)
-        self.tf_session.run(tf.variables_initializer(uninitialized_vars))
+        self.tf_session.run(TFCompat.v1.variables_initializer(uninitialized_vars))
       self._checked_uninitialized_vars = True
 
   def _get_data_provider(self, dataset_name=None, dataset=None, batches=None, feed_dict=None):

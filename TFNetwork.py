@@ -13,6 +13,7 @@ import contextlib
 import typing
 from Log import log
 from TFNetworkLayer import LayerBase, get_layer_class
+import TFCompat
 import TFUtil
 from TFUtil import Data, DimensionTag, reuse_name_scope, VariableAssigner
 
@@ -345,12 +346,13 @@ class TFNetwork(object):
       self.global_train_step = extra_parent_net.global_train_step
     else:
       # Reuse mostly because some of the test cases currently work that way.
-      with tf.variable_scope(tf.get_variable_scope(), reuse=getattr(tf, "AUTO_REUSE", None)):
-        self.global_train_step = tf.get_variable(
-          name="global_step", shape=(), dtype=tf.int64, initializer=tf.zeros_initializer(tf.int64),
-          collections=[tf.GraphKeys.GLOBAL_STEP], trainable=False)
+      with TFCompat.v1.variable_scope(
+            TFCompat.v1.get_variable_scope(), reuse=getattr(TFCompat.v1, "AUTO_REUSE", None)):
+        self.global_train_step = TFCompat.v1.get_variable(
+          name="global_step", shape=(), dtype=tf.int64, initializer=TFCompat.v1.zeros_initializer(tf.int64),
+          collections=[TFCompat.v1.GraphKeys.GLOBAL_STEP], trainable=False)
     self.epoch_step = None
-    self.saver = None  # type: typing.Optional[tf.train.Saver]
+    self.saver = None  # type: typing.Optional[TFCompat.v1.train.Saver]
     self.extra_vars_to_save = []  # type: typing.List[tf.Variable]
     self.recurrent = False
     self._assigner_cache = {}  # type: typing.Dict[tf.Variable,VariableAssigner]
@@ -938,7 +940,7 @@ class TFNetwork(object):
     # Note: This assumes that the summaries never change.
     # Both both training and evaluation on the CV dataset, this is the case.
     if self._merge_all_summaries is None:
-      self._merge_all_summaries = tf.summary.merge_all()
+      self._merge_all_summaries = TFCompat.v1.summary.merge_all()
     return self._merge_all_summaries
 
   def get_fetches_dict(self, config=None, should_train=None, should_eval=None, with_summary=False, with_size=False):
@@ -990,7 +992,7 @@ class TFNetwork(object):
         return x
       from TFUtil import global_tensor
       return global_tensor(
-        lambda: tf.reciprocal(reduce_sum(tf.reciprocal(x), name=name)),
+        lambda: TFCompat.v1.reciprocal(reduce_sum(TFCompat.v1.reciprocal(x), name=name)),
         name="fetch_inv_reduce_sum__" + name.replace(":", "__").replace("/", "_"))
 
     d = {}
@@ -1205,7 +1207,7 @@ class TFNetwork(object):
     """
     if self._selected_train_layers is None:
       self.declare_train_params()
-    trainable_vars_col = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+    trainable_vars_col = TFCompat.v1.get_collection(TFCompat.v1.GraphKeys.TRAINABLE_VARIABLES)
     assert isinstance(trainable_vars_col, list)
     ls = []  # type: typing.List[tf.Variable]
     for layer_name in sorted(self._selected_train_layers):
@@ -1264,7 +1266,7 @@ class TFNetwork(object):
 
   def initialize_params(self, session):
     """
-    :param tf.Session session:
+    :param TFCompat.v1.Session session:
 
     Note: This will create a new node to the graph for each call!
     And it will overwrite also the already initialized variables.
@@ -1274,7 +1276,7 @@ class TFNetwork(object):
     """
     var_list = self.get_params_list() + self.get_auxiliary_params()
     with tf.name_scope("var_initializer"):
-      initializer_op = tf.variables_initializer(var_list=var_list)
+      initializer_op = TFCompat.v1.variables_initializer(var_list=var_list)
     session.run(initializer_op)
     for var in var_list:
       # Some of our code could set this, e.g. the SubnetworkLayer.
@@ -1297,7 +1299,7 @@ class TFNetwork(object):
 
   def get_param_values_dict(self, session):
     """
-    :param tf.Session session:
+    :param TFCompat.v1.Session session:
     :return: dict: layer_name -> param_name -> variable numpy array
     :rtype: dict[str,dict[str,numpy.ndarray]]
     Note that this excludes auxiliary params.
@@ -1331,7 +1333,7 @@ class TFNetwork(object):
 
   def get_params_serialized(self, session):
     """
-    :param tf.Session session:
+    :param TFCompat.v1.Session session:
     :rtype: TFNetworkParamsSerialized
     """
     return TFNetworkParamsSerialized(
@@ -1341,7 +1343,7 @@ class TFNetwork(object):
   def set_params_by_serialized(self, serialized, session, **kwargs):
     """
     :param TFNetworkParamsSerialized serialized:
-    :param tf.Session session:
+    :param TFCompat.v1.Session session:
     :param kwargs: passed to :func:`set_param_values_by_dict`
     """
     self.set_param_values_by_dict(serialized.values_dict, session=session, **kwargs)
@@ -1350,13 +1352,13 @@ class TFNetwork(object):
   def set_global_train_step(self, step, session):
     """
     :param int step:
-    :param tf.Session session:
+    :param TFCompat.v1.Session session:
     """
     self.get_var_assigner(self.global_train_step).assign(step, session=session)
 
   def get_global_train_step(self, session):
     """
-    :param tf.Session session:
+    :param TFCompat.v1.Session session:
     :rtype: int
     """
     return self.global_train_step.eval(session=session)
@@ -1371,7 +1373,7 @@ class TFNetwork(object):
     if self.epoch_step is not None:
       return self.epoch_step
     with reuse_name_scope("", absolute=True):
-      self.epoch_step = tf.placeholder(name="epoch_step", shape=(), dtype=tf.int64)
+      self.epoch_step = TFCompat.v1.placeholder(name="epoch_step", shape=(), dtype=tf.int64)
     return self.epoch_step
 
   def reset_saver(self):
@@ -1385,7 +1387,7 @@ class TFNetwork(object):
   def _create_saver(self):
     # Saver for storing checkpoints of the model.
     with tf.name_scope("saver"):
-      self.saver = tf.train.Saver(
+      self.saver = TFCompat.v1.train.Saver(
         var_list=self.get_saveable_params_list(), max_to_keep=2 ** 31 - 1)
 
   def save_params_to_file(self, filename, session):
@@ -1394,7 +1396,7 @@ class TFNetwork(object):
     Note that the model parameters live inside the current TF session.
 
     :param str filename:
-    :param tf.Session session:
+    :param TFCompat.v1.Session session:
     """
     import os
     filename = os.path.abspath(filename)  # TF needs absolute path
@@ -1425,7 +1427,7 @@ class TFNetwork(object):
     Note that the model parameters live inside the current TF session.
 
     :param str filename:
-    :param tf.Session session:
+    :param TFCompat.v1.Session session:
     """
     if any([layer.custom_param_importer for layer in self.layers.values()]):
       # Need to use CustomCheckpointLoader because only that handles custom_param_importer correctly.
@@ -1506,7 +1508,7 @@ class TFNetwork(object):
     :param LayerBase|None src:
     :param LayerBase|None base_search_choice:
     :param list[LayerBase]|None sources:
-    :param dict[LayerBase]|None _layer_to_search_choices: keep track about visited layers in case there are circular deps
+    :param dict[LayerBase]|None _layer_to_search_choices: keep track of visited layers in case there are circular deps
     :param typing.TextIO|None debug_stream: if given, will print additional debug info into it
     :return: (direct or indirect) source LayerBase which has search_choices, or None
     :rtype: LayerBase|None
@@ -1673,18 +1675,18 @@ class TFNetwork(object):
         normalized_choices = self._get_all_search_choices(
           base_search_choice=normalized_base,
           _layer_to_search_choices=_layer_to_search_choices, _normalized_to_layer=_normalized_to_layer)
-        if any([l.get_normalized_layer() == l for l in normalized_choices]):
+        if any([layer.get_normalized_layer() == layer for layer in normalized_choices]):
           # Filter any "prev:..." layers away. This should always be correct.
           # Also, this is important to have the correct choice resolution for the prev layer (base_search_choice).
-          normalized_choices = [l for l in normalized_choices if l.get_normalized_layer() == l]
+          normalized_choices = [layer for layer in normalized_choices if layer.get_normalized_layer() == layer]
           # Get corresponding "prev:..." layers.
           from pprint import pformat
-          assert all([l in _normalized_to_layer for l in normalized_choices]), "\n".join([
+          assert all([layer in _normalized_to_layer for layer in normalized_choices]), "\n".join([
             "No cur -> prev mapping for some layers.", "",
             "Base: %s" % base_search_choice, "", "Cur (normalized) base: %s" % normalized_base, "",
             "Prev choices:", pformat(layers), "", "Cur (normalized) choices:", pformat(normalized_choices), "",
             "Mapping:", pformat(_normalized_to_layer), ""])
-          layers = [_normalized_to_layer[l] for l in normalized_choices]
+          layers = [_normalized_to_layer[layer] for layer in normalized_choices]
           _layer_to_search_choices[base_search_choice] = layers
     return layers
 
@@ -1872,7 +1874,7 @@ class TFNetwork(object):
     :param list[tf.Tensor|tf.Operation] deps:
     :return: nothing
     """
-    ls = tf.get_collection_ref(tf.GraphKeys.UPDATE_OPS)
+    ls = TFCompat.v1.get_collection_ref(TFCompat.v1.GraphKeys.UPDATE_OPS)
     assert isinstance(ls, list)
     ls.extend(deps)
 
@@ -1881,7 +1883,7 @@ class TFNetwork(object):
     """
     :rtype: list[tf.Operation]
     """
-    return tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+    return TFCompat.v1.get_collection(TFCompat.v1.GraphKeys.UPDATE_OPS)
 
   def register_graph_reset_callback(self, cb):
     """
@@ -1918,7 +1920,7 @@ class TFNetwork(object):
     :rtype: list[TFNetwork]
     """
     from TFUtil import CollectionKeys
-    coll = tf.get_collection_ref(CollectionKeys.RETURNN_NET_STACK)
+    coll = TFCompat.v1.get_collection_ref(CollectionKeys.RETURNN_NET_STACK)
     assert isinstance(coll, list)
     return coll
 
@@ -2279,8 +2281,8 @@ class NetworkConstructionDependencyLoopException(Exception):
     """
     msg = "Error: There is a dependency loop on layer %r." % layer_name
     msg += "\nConstruction stack (most recent first):"
-    for l in reversed(constructing_layers):
-      msg += "\n  %s" % l
+    for layer_name_ in reversed(constructing_layers):
+      msg += "\n  %s" % layer_name_
     super(NetworkConstructionDependencyLoopException, self).__init__(msg)
     self.network = network
     self.layer_name = layer_name
@@ -2382,7 +2384,7 @@ def help_on_tf_exception(
   Will try to provide as much helpful context information as possible.
   (This is not in :mod:`TFUtil` because it depends on `ExternData`, which is only defined here.)
 
-  :param tf.Session session:
+  :param TFCompat.v1.Session session:
   :param tf.errors.OpError|BaseException exception:
   :param tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor]|object|None fetches:
   :param dict[tf.Tensor,numpy.ndarray]|None feed_dict:
@@ -2446,7 +2448,7 @@ def help_on_tf_exception(
         # Note: Some code in graph_editor, which is used in copy_graph, results in lots of spam about
         # tf.GraphKeys.VARIABLES deprecated usage (e.g. via get_predefined_collection_names or so).
         # We just do this ugly patch here, to work around the spam.
-        tf.GraphKeys.VARIABLES = tf.GraphKeys.GLOBAL_VARIABLES
+        TFCompat.v1.GraphKeys.VARIABLES = TFCompat.v1.GraphKeys.GLOBAL_VARIABLES
         from TFUtil import FetchHelper
         debug_fetch, fetch_helpers, op_copied = FetchHelper.copy_graph(
           debug_fetch, target_op=op, fetch_helper_tensors=list(op.inputs),
@@ -2495,7 +2497,7 @@ def help_on_tf_exception(
           for fetch in list(found_fetch.control_inputs) + list(found_fetch.inputs):
             if isinstance(fetch, tf.Tensor) and fetch.op.type == "ScalarSummary":
               # Avoid error: Operation '...' has been marked as not fetchable
-              fetch = tf.summary.merge([fetch])
+              fetch = TFCompat.v1.summary.merge([fetch])
             try:
               session.run(fetch, feed_dict=feed_dict)
             except Exception as exc_:
@@ -2591,7 +2593,7 @@ class CustomCheckpointLoader:
         continue
       self.saveable_params.append(param)
     assert count > 0, "%s: no saveable vars" % self
-    self.reader = tf.train.NewCheckpointReader(filename)
+    self.reader = TFCompat.v1.train.NewCheckpointReader(filename)
     self.net_vars = [v for v in self.saveable_params if isinstance(v, tf.Variable)]
     self.net_saveables = [v for v in self.saveable_params if not isinstance(v, tf.Variable)]
     # All variables in the checkpoint:
@@ -2650,7 +2652,7 @@ class CustomCheckpointLoader:
     def assign_var(self, var, session):
       """
       :param tf.Variable var:
-      :param tf.Session session:
+      :param TFCompat.v1.Session session:
       """
       # This function gets called for every param of the layer.
       # However, the underlying custom_param_importer API
@@ -2716,7 +2718,7 @@ class CustomCheckpointLoader:
     def assign_var(self, var, session):
       """
       :param tf.Variable var:
-      :param tf.Session session:
+      :param TFCompat.v1.Session session:
       """
       if self.value is not None:
         VariableAssigner(var=var).assign(value=self.value, session=session)
@@ -2881,6 +2883,7 @@ class CustomCheckpointLoader:
 
       cudnn_postfix = "/cudnn/CudnnRNNParamsToCanonical:0"
 
+      # noinspection PyShadowingNames
       def __init__(self, prefix, target="lstm_block_wrapper/"):
         self.target = target
         self.keys = [target + "bias", target + "kernel"]
@@ -2929,18 +2932,18 @@ class CustomCheckpointLoader:
       # Check BasicLSTM -> NativeLSTM.
       if v.endswith("/rec/W_re"):
         prefix = v[:-len("/rec/W_re")]
-        cur_name_W = "%s/rec/W" % prefix
+        cur_name_w = "%s/rec/W" % prefix
         cur_name_b = "%s/rec/b" % prefix
         old_name_kernel = "%s/rec/lstm_cell/kernel" % prefix
         old_name_bias = "%s/rec/lstm_cell/bias" % prefix
         if (
               old_name_kernel in obsolete_var_names and
               old_name_bias in obsolete_var_names and
-              cur_name_W in missing_var_names and
+              cur_name_w in missing_var_names and
               cur_name_b in missing_var_names):
           loader = MakeLoadBasicToNativeLstm(basic_kernel=old_name_kernel, basic_bias=old_name_bias)
           var_name_map[v] = loader.get_w_re
-          var_name_map[cur_name_W] = loader.get_w
+          var_name_map[cur_name_w] = loader.get_w
           var_name_map[cur_name_b] = loader.get_b
     for v in obsolete_var_names:
       for k_old, k_new in map_list.items():
@@ -3012,7 +3015,7 @@ class CustomCheckpointLoader:
 
   def load_now(self, session):
     """
-    :param tf.Session session:
+    :param TFCompat.v1.Session session:
     :return: nothing, will assign the variables in the session
     """
     for var, value in self.get_variable_value_map().items():
@@ -3030,11 +3033,11 @@ class CustomCheckpointLoader:
       """
       :param tf.Variable var:
       :return: function
-      :rtype: (tf.Session)->None
+      :rtype: (TFCompat.v1.Session)->None
       """
       def var_post_init(session):
         """
-        :param tf.Session session:
+        :param TFCompat.v1.Session session:
         """
         assert var not in read_vars, "Cannot initialize this twice. On purpose, to free memory."
         read_vars.add(var)
@@ -3057,7 +3060,7 @@ def set_custom_post_init(var, func):
   in TFNetwork.initialize_params().
 
   :param tf.Variable var:
-  :param (tf.Session)->None func:
+  :param (TFCompat.v1.Session)->None func:
   """
   # This custom attribute is a big ugly but simple.
   # It's read in TFNetwork.initialize_params().

@@ -3004,7 +3004,7 @@ def maybe_make_dirs(dirname):
       os.makedirs(dirname)
     except Exception as exc:
       print("maybe_create_folder: exception creating dir:", exc)
-      # Maybe a concurrent process, e.g. tf.summary.FileWriter created it in the mean-while,
+      # Maybe a concurrent process, e.g. TFCompat.v1.summary.FileWriter created it in the mean-while,
       # so then it would be ok now if it exists, but fail if it does not exist.
       assert os.path.exists(dirname)
 

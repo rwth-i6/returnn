@@ -66,11 +66,11 @@ First the simple method via feed_dict and placeholders
 This is implemented in :class:`FeedDictDataProvider`.
 
 The input data which (and optionally the targets) can be represented with tf.placeholder
-and feed via feed_dict from tf.Session.run which does one train/eval/forward step.
+and feed via feed_dict from TFCompat.v1.Session.run which does one train/eval/forward step.
 In this case, any preprocessing such as chunking and batching must be done beforehand via Numpy.
 This was the initial implementation and is also the standard implementation for the Theano backend.
 
-This is not optimal because the tf.Session.run first has to copy the data from CPU to GPU
+This is not optimal because the TFCompat.v1.Session.run first has to copy the data from CPU to GPU
 and then can do whatever it is supposed to do (e.g. one train step).
 So copying and then the calculation is done in serial but it could be done in parallel
 with some other method which we will discuss below.
@@ -153,7 +153,7 @@ class DataProviderBase(object):
     """
     Start threads.
 
-    :param tf.Session session:
+    :param TFCompat.v1.Session session:
     """
     raise NotImplementedError
 
@@ -169,7 +169,7 @@ class DataProviderBase(object):
     in the current dataset (train or eval).
     This is called from the same thread which runs the main computation graph (e.g. train steps).
 
-    :param tf.Session session:
+    :param TFCompat.v1.Session session:
     :return: whether the next session.run() can run in the current epoch & dataset
     :rtype: bool
     """
@@ -220,7 +220,7 @@ class FeedDictDataProvider(DataProviderBase):
   def __init__(self, tf_session, dataset, batches, enforce_min_len1=False, capacity=10, tf_queue=None,
                batch_slice=None, **kwargs):
     """
-    :param tf.Session|tf.InteractiveSession tf_session:
+    :param TFCompat.v1.Session|TFCompat.v1.InteractiveSession tf_session:
     :param Dataset dataset:
     :param BatchSetGenerator batches:
     :param bool enforce_min_len1:
@@ -250,7 +250,7 @@ class FeedDictDataProvider(DataProviderBase):
     """
     Start the thread.
 
-    :param tf.Session session:
+    :param TFCompat.v1.Session session:
     """
     thread = Thread(target=self._thread_main, name="DataProvider thread")
     thread.daemon = True  # Thread will close when parent quits.
@@ -372,7 +372,7 @@ class FeedDictDataProvider(DataProviderBase):
 
   def have_more_data(self, session):
     """
-    :param tf.Session|None session:
+    :param TFCompat.v1.Session|None session:
     :rtype: bool
     :return: when we go through an epoch and finished reading, this will return False
     If this returns True, you can definitely read another item from the queue.
@@ -728,7 +728,7 @@ class DatasetDataProvider(DataProviderBase):
 
     However, this will initialize the TF dataset iterator.
 
-    :param tf.Session session:
+    :param TFCompat.v1.Session session:
     """
     assert self.current_dataset_name
     init_op = self.contexts[self.current_dataset_name].final_dataset_init_iterator_op
@@ -749,7 +749,7 @@ class DatasetDataProvider(DataProviderBase):
 
   def have_more_data(self, session):
     """
-    :param tf.Session session:
+    :param TFCompat.v1.Session session:
     :return: whether the next session.run() can run in the current epoch & dataset
     :rtype: bool
     """

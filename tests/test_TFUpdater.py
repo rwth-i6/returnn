@@ -26,7 +26,7 @@ log.initialize(verbosity=[5])
 @contextlib.contextmanager
 def make_scope():
   with tf.Graph().as_default() as graph:
-    with tf.Session(graph=graph) as session:
+    with TFCompat.v1.Session(graph=graph) as session:
       yield session
 
 

@@ -8,11 +8,11 @@ from __future__ import print_function
 
 import typing
 import tensorflow as tf
-import TFCompat
 from tensorflow.python.ops import resource_variable_ops
 
 from Log import log
 from TFNetwork import TFNetwork
+import TFCompat
 import TFUtil
 from TFUtil import tf_version_tuple, assert_min_tf_version, CustomUpdate, add_check_numerics_ops
 
@@ -27,7 +27,7 @@ def _init_optimizer_classes_dict():
   if _OptimizerClassesDictInitialized:
     return
   _OptimizerClassesDictInitialized = True
-  potential_list = list(vars(tf.train).items())
+  potential_list = list(vars(TFCompat.v1.train).items())
   if tf_version_tuple() >= (1, 2, 0):
     from tensorflow.contrib import opt
     potential_list += list(vars(opt).items())
@@ -165,7 +165,7 @@ class Updater(object):
   def set_learning_rate(self, value, session):
     """
     :param float value:
-    :param tf.Session session:
+    :param TFCompat.v1.Session session:
     """
     from TFUtil import VariableAssigner
     VariableAssigner(self.learning_rate_var).assign(value, session=session)
@@ -182,10 +182,10 @@ class Updater(object):
         opts = CollectionReadCheckCovered(self.config.typed_dict["dynamic_learning_rate"])
         # Currently all intervals of same step size.
         interval_steps = tf.constant(opts["interval"], name="interval", dtype=self.network.global_train_step.dtype)
-        step_in_interval = tf.mod(self.network.global_train_step, interval_steps, name="step_in_interval")
+        step_in_interval = TFCompat.v1.mod(self.network.global_train_step, interval_steps, name="step_in_interval")
         factor = tf.pow(
           tf.constant(opts["decay"], name="decay", dtype=tf.float32),
-          tf.to_float(step_in_interval, name="step_in_interval_float"), name="factor")
+          tf.cast(step_in_interval, dtype=tf.float32, name="step_in_interval_float"), name="factor")
         lr *= factor
         opts.assert_all_read()
     if self.config.is_true("use_horovod") and self.config.is_true("horovod_scale_lr"):
@@ -207,7 +207,7 @@ class Updater(object):
     # Keep track of all current available vars.
     # The optimizer could add some, even some which are not so-called "slot-vars",
     # and we want to keep track about them.
-    all_prev_existing_vars = tf.global_variables()  # type: typing.List[tf.Variable]
+    all_prev_existing_vars = TFCompat.v1.global_variables()  # type: typing.List[tf.Variable]
 
     trainable_vars_for_gradients = list(self.trainable_vars)
     trainable_vars_custom_update = []  # type: typing.List[tf.Variable]
@@ -224,7 +224,7 @@ class Updater(object):
         use_locking=self.use_locking)
       self.optimizer.create_all_needed_optimizers(trainable_vars_for_gradients)
 
-    with tf.variable_scope("optimize"):
+    with TFCompat.v1.variable_scope("optimize"):
       meta_losses_scope = MetaLosses.enter_gradient_scope()
       apply_grads = self.optimizer.get_apply_grads_op(self.loss, trainable_vars_for_gradients)
       meta_losses_scope.exit()
@@ -237,7 +237,7 @@ class Updater(object):
       self.optim_op = apply_grads
 
     if trainable_vars_custom_update:
-      with tf.variable_scope("custom_update"):
+      with TFCompat.v1.variable_scope("custom_update"):
         updates = [self.optim_op]
         for param in trainable_vars_custom_update:
           custom_update = getattr(param, "returnn_custom_update")
@@ -246,11 +246,11 @@ class Updater(object):
         self.optim_op = tf.group(*updates)
 
     if self.constraints is not None:
-      with tf.variable_scope("optimize_constraints"):
-        with tf.variable_scope("factor"):
+      with TFCompat.v1.variable_scope("optimize_constraints"):
+        with TFCompat.v1.variable_scope("factor"):
           factor = (self.get_current_step_learning_rate() / float(self.initial_learning_rate))
           factor *= self.config.float("decouple_constraints_factor", 0.025)
-        sgd_optimizer = tf.train.GradientDescentOptimizer(
+        sgd_optimizer = TFCompat.v1.train.GradientDescentOptimizer(
           learning_rate=factor, use_locking=self.use_locking)
         with tf.control_dependencies([self.optim_op]):
           self.optim_op = sgd_optimizer.minimize(self.constraints, var_list=self.trainable_vars)
@@ -303,7 +303,7 @@ class Updater(object):
     #   <tf.Variable 'optimize/beta2_power:0' shape=() dtype=float32_ref>]`
     # which do not correspond to trainable vars, thus we did not get them as slot vars above.
     other_new_vars = []
-    for v in tf.global_variables():
+    for v in TFCompat.v1.global_variables():
       if v in all_prev_existing_vars:
         continue
       if v in self.optimizer_vars:
@@ -313,7 +313,7 @@ class Updater(object):
       print("These additional variable were created by the optimizer: %s." % other_new_vars, file=log.v3)
       self.optimizer_vars += other_new_vars
     with tf.name_scope("optimizer_init_vars"):
-      self.optimizer_init_vars_op = tf.variables_initializer(self.optimizer_vars, name="init_optim_slot_vars")
+      self.optimizer_init_vars_op = TFCompat.v1.variables_initializer(self.optimizer_vars, name="init_optim_slot_vars")
 
     if self.config.bool_or_other("debug_grad_summaries", False):
       from TFUtil import variable_summaries, get_base_name, reuse_name_scope_of_tensor
@@ -330,7 +330,7 @@ class Updater(object):
 
     # Do this at the very end.
     with tf.control_dependencies([self.optim_op]):
-      incr_step_op = tf.assign_add(self.network.global_train_step, 1, name="global_train_step_increment")
+      incr_step_op = TFCompat.v1.assign_add(self.network.global_train_step, 1, name="global_train_step_increment")
     self.optim_op = tf.group(self.optim_op, incr_step_op, name="optim_and_step_incr")
 
     if self.config.bool("debug_save_updater_vars", False):
@@ -354,7 +354,7 @@ class Updater(object):
 
   def init_optimizer_vars(self, session):
     """
-    :param tf.Session session:
+    :param TFCompat.v1.Session session:
     """
     self.get_optim_op()  # make sure it is initialized
     session.run(self.optimizer_init_vars_op)
@@ -372,13 +372,13 @@ def accum_grad_multiple_step(grad, var, train_step, num_accum_steps):
   from TFUtil import reuse_name_scope_of_tensor, get_base_name
   with reuse_name_scope_of_tensor(grad, postfix="/%s_accum_grad" % get_base_name(grad)):
     shape = var.get_shape().as_list()
-    v = tf.get_variable(
+    v = TFCompat.v1.get_variable(
       name="var_accum_grad", shape=shape, dtype=grad.dtype,
       initializer=tf.zeros_initializer(), trainable=False)
     return tf.cond(
-      tf.less_equal(tf.mod(train_step, num_accum_steps), 0),
-      lambda: tf.assign(v, grad),
-      lambda: tf.assign_add(v, grad))
+      tf.less_equal(TFCompat.v1.mod(train_step, num_accum_steps), 0),
+      lambda: TFCompat.v1.assign(v, grad),
+      lambda: TFCompat.v1.assign_add(v, grad))
 
 
 class WrapOptimizer:
@@ -492,7 +492,7 @@ class WrapOptimizer:
     optimizer_opts["learning_rate"] = lr
     print("Create optimizer %s with options %r." % (optim_class, optimizer_opts), file=log.v2)
     optimizer = optim_class(**optimizer_opts)
-    assert isinstance(optimizer, tf.train.Optimizer)
+    assert isinstance(optimizer, Optimizer)
     return optimizer
 
   def _create_default_optimizer(self):
@@ -515,7 +515,7 @@ class WrapOptimizer:
       # Default Keras values: lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-8.
       # Our Theano default values: beta1=0.9, beta2=0.999, epsilon=1e-16
       # https://github.com/openai/improved-gan/blob/master/imagenet/train_imagenet.py: beta1=0.5
-      optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
+      optimizer = TFCompat.v1.train.AdamOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
     elif self.config.bool("nadam", False):
       assert_min_tf_version((1, 2, 0), "NadamOptimizer introduced in TF 1.2.0")
       assert not momentum
@@ -578,11 +578,11 @@ class WrapOptimizer:
     :rtype: tf.Operation
     """
     optimizer = self.optimizers[opt_key]
-    assert isinstance(optimizer, tf.train.Optimizer)
+    assert isinstance(optimizer, Optimizer)
     if accum_grad_multiple_num_steps >= 1:
       return tf.cond(
         tf.equal(
-          tf.mod(self.global_train_step, accum_grad_multiple_num_steps),
+          TFCompat.v1.mod(self.global_train_step, accum_grad_multiple_num_steps),
           accum_grad_multiple_num_steps - 1),
         true_fn=lambda: optimizer.apply_gradients(grads_and_vars),
         false_fn=lambda: tf.no_op(),
@@ -597,7 +597,7 @@ class WrapOptimizer:
     from collections import OrderedDict
     res = OrderedDict()
     for key, optimizer in self.optimizers.items():
-      assert isinstance(optimizer, tf.train.Optimizer)
+      assert isinstance(optimizer, Optimizer)
       res[key] = optimizer.get_slot_names()
     return res
 
@@ -660,7 +660,7 @@ class WrapOptimizer:
       :rtype: tf.Tensor
       """
       if x not in self._l2loss_cache:
-        with tf.colocate_with(x):
+        with TFCompat.v1.colocate_with(x):
           values = x
           if isinstance(values, tf.IndexedSlices):
             values = values.values
@@ -752,7 +752,7 @@ class WrapOptimizer:
       """
       norm = self.get_global_grad_norm(tag=global_norm_tag)
       # Also check nan/inf. Treat them as if we would have been over grad_norm_threshold.
-      zero_cond = tf.logical_or(tf.is_nan(norm), tf.is_inf(norm))
+      zero_cond = tf.logical_or(TFCompat.v1.is_nan(norm), TFCompat.v1.is_inf(norm))
       zero_cond = tf.logical_or(zero_cond, tf.greater(norm, grad_norm_threshold))
       return tf.where(zero_cond, tf.zeros_like(grad), grad)
 
@@ -830,7 +830,7 @@ class WrapOptimizer:
     if grad_clip_avg_norm:
       assert grad_clip_avg_norm > 0
       with tf.name_scope("grad_clip_avg_norm"):
-        grad = tf.clip_by_average_norm(grad, grad_clip_avg_norm)
+        grad = TFCompat.v1.clip_by_average_norm(grad, grad_clip_avg_norm)
     if grad_clip_global_norm:
       assert grad_clip_global_norm > 0
       with tf.name_scope("grad_clip_global_norm"):
@@ -951,38 +951,38 @@ class BaseCustomOptimizer(Optimizer):
   def _assign(self, ref, updates, indices=None):
     if indices is not None:
       if isinstance(ref, tf.Variable):
-        return tf.scatter_update(ref, indices, updates, use_locking=self._use_locking)
+        return TFCompat.v1.scatter_update(ref, indices, updates, use_locking=self._use_locking)
       elif isinstance(ref, resource_variable_ops.ResourceVariable):
         with tf.control_dependencies([resource_variable_ops.resource_scatter_update(ref.handle, indices, updates)]):
           return ref.value()
       else:
         raise TypeError("did not expect type %r" % type(ref))
     else:
-      return tf.assign(ref, updates, use_locking=self._use_locking)
+      return TFCompat.v1.assign(ref, updates, use_locking=self._use_locking)
 
   def _assign_add(self, ref, updates, indices=None):
     if indices is not None:
       if isinstance(ref, tf.Variable):
-        return tf.scatter_add(ref, indices, updates, use_locking=self._use_locking)
+        return TFCompat.v1.scatter_add(ref, indices, updates, use_locking=self._use_locking)
       elif isinstance(ref, resource_variable_ops.ResourceVariable):
         with tf.control_dependencies([resource_variable_ops.resource_scatter_add(ref.handle, indices, updates)]):
           return ref.value()
       else:
         raise TypeError("did not expect type %r" % type(ref))
     else:
-      return tf.assign_add(ref, updates, use_locking=self._use_locking)
+      return TFCompat.v1.assign_add(ref, updates, use_locking=self._use_locking)
 
   def _assign_sub(self, ref, updates, indices=None):
     if indices is not None:
       if isinstance(ref, tf.Variable):
-        return tf.scatter_sub(ref, indices, updates, use_locking=self._use_locking)
+        return TFCompat.v1.scatter_sub(ref, indices, updates, use_locking=self._use_locking)
       elif isinstance(ref, resource_variable_ops.ResourceVariable):
         with tf.control_dependencies([resource_variable_ops.resource_scatter_add(ref.handle, indices, -updates)]):
           return ref.value()
       else:
         raise TypeError("did not expect type %r" % type(ref))
     else:
-      return tf.assign_sub(ref, updates, use_locking=self._use_locking)
+      return TFCompat.v1.assign_sub(ref, updates, use_locking=self._use_locking)
 
   # noinspection PyMethodMayBeStatic
   def _gather(self, dense, indices=None):
@@ -1069,7 +1069,7 @@ class NeuralOptimizer1(BaseCustomOptimizer):
     # m_t = beta1 * m + (1 - beta1) * g_t
     beta1_t = tf.cast(self._beta1_t, var.dtype.base_dtype)
     m_scaled_g_values = grad * (1 - beta1_t)
-    m_t = tf.assign(m, m * beta1_t, use_locking=self._use_locking)
+    m_t = TFCompat.v1.assign(m, m * beta1_t, use_locking=self._use_locking)
     with tf.control_dependencies([m_t]):
       m_t = self._assign_add(m, updates=m_scaled_g_values, indices=indices)
     # update = lr * grad * where(...)
@@ -1121,17 +1121,17 @@ class GradVarianceScaledOptimizer(BaseCustomOptimizer):
 
     # m_t = beta1 * m + (1 - beta1) * g_t
     m_scaled_g_values = grad * (1 - beta1_t)
-    m_t = tf.assign(m, m * beta1_t, use_locking=self._use_locking)
+    m_t = TFCompat.v1.assign(m, m * beta1_t, use_locking=self._use_locking)
     with tf.control_dependencies([m_t]):
       m_t = self._assign_add(m, updates=m_scaled_g_values, indices=indices)
     m_gathered = self._gather(m_t, indices=indices)
 
     # Also see tf.nn.moments.
-    variance = tf.squared_difference(grad, m_gathered)
+    variance = TFCompat.v1.squared_difference(grad, m_gathered)
 
     # v_t = beta2 * v + (1 - beta2) * variance
     v_scaled_new_values = variance * (1 - beta2_t)
-    v_t = tf.assign(v, v * beta2_t, use_locking=self._use_locking)
+    v_t = TFCompat.v1.assign(v, v * beta2_t, use_locking=self._use_locking)
     with tf.control_dependencies([v_t]):
       v_t = self._assign_add(v, updates=v_scaled_new_values, indices=indices)
     v_gathered = self._gather(v_t, indices=indices)
@@ -1215,7 +1215,7 @@ class CustomAdamOptimizer(BaseCustomOptimizer):
     return tf.group(*[var_update, m, v])
 
   def _finish(self, update_ops, name_scope):
-    with tf.control_dependencies(update_ops), tf.colocate_with(self._beta1_power):
+    with tf.control_dependencies(update_ops), TFCompat.v1.colocate_with(self._beta1_power):
       update_beta1 = self._beta1_power.assign(
         self._beta1_power * self._beta1_t, use_locking=self._use_locking)
       update_beta2 = self._beta2_power.assign(

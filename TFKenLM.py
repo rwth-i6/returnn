@@ -459,9 +459,9 @@ if __name__ == "__main__":
   test_lm_file = kenlm_dir + "/lm/test.arpa"
   assert os.path.exists(test_lm_file)
   lm_tf = ken_lm_load(filename=test_lm_file)
-  input_strings_tf = tf.placeholder(tf.string, [None])
+  input_strings_tf = tf.compat.v1.placeholder(tf.string, [None])
   output_scores_tf = ken_lm_abs_score_strings(handle=lm_tf, strings=input_strings_tf)
-  with tf.Session() as session:
+  with tf.compat.v1.Session() as session:
     output_scores = session.run(output_scores_tf, feed_dict={input_strings_tf: input_strings})
     print("input strings:", input_strings, "(sys.argv[1:])")
     print("output scores:", output_scores)

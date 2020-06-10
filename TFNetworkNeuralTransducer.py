@@ -1,4 +1,5 @@
 import tensorflow as tf
+import TFCompat
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, Loss, get_concat_sources_data_template
 from TFNetworkRecLayer import RecLayer
 from TFUtil import Data, sparse_labels_with_seq_lens
@@ -37,7 +38,7 @@ class NeuralTransducerLayer(_ConcatInputLayer):
         initializer = get_initializer('glorot_uniform',
                                       seed=self.network.random.randint(2 ** 31),
                                       eval_local_ns={"layer": self})
-        embeddings = self.add_param(tf.get_variable(shape=[n_out, embedding_size], dtype=tf.float32,
+        embeddings = self.add_param(TFCompat.v1.get_variable(shape=[n_out, embedding_size], dtype=tf.float32,
                                                     initializer=initializer, name='nt_embedding'),
                                     trainable=True, saveable=True)
 
@@ -629,7 +630,7 @@ class NeuralTransducerLoss(Loss):
 
             logits_sparse = sparse_labels_with_seq_lens(tf.transpose(mod_logits), seq_lens=seq_lens)
             targets_sparse = sparse_labels_with_seq_lens(tf.transpose(new_targets), seq_lens=seq_lens)
-            
+
             e = tf.edit_distance(logits_sparse[0], targets_sparse[0], normalize=False)
             total = tf.reduce_sum(e)
 

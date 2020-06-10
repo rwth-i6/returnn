@@ -315,10 +315,10 @@ def _demo():
   # Some demo.
   assert os.path.exists(args.fst)
   fst_tf = get_fst(filename=args.fst)
-  states_tf = tf.placeholder(tf.int32, [None])
-  inputs_tf = tf.placeholder(tf.int32, [None])
+  states_tf = tf.compat.v1.placeholder(tf.int32, [None])
+  inputs_tf = tf.compat.v1.placeholder(tf.int32, [None])
   output_tf = fst_transition(fst_handle=fst_tf, states=states_tf, inputs=inputs_tf)
-  with tf.Session() as session:
+  with tf.compat.v1.Session() as session:
     out_next_states, out_labels, out_scores = session.run(
       output_tf, feed_dict={
         states_tf: args.states, inputs_tf: args.inputs})

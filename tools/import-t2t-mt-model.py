@@ -23,6 +23,7 @@ import Util
 
 import better_exchook
 import rnn
+import TFCompat
 from TFNetwork import TFNetwork
 from TFNetworkLayer import SourceLayer, LayerBase, LinearLayer
 
@@ -77,8 +78,8 @@ def t2t_score_file(filename):
   encoders = registry.problem(FLAGS_problem).feature_encoders(FLAGS_data_dir)
 
   # Prepare features for feeding into the model.
-  inputs_ph = tf.placeholder(dtype=tf.int32, shape=(None, None))  # Just length dimension.
-  targets_ph = tf.placeholder(dtype=tf.int32, shape=(None, None))  # Just length dimension.
+  inputs_ph = TFCompat.v1.placeholder(dtype=tf.int32, shape=(None, None))  # Just length dimension.
+  targets_ph = TFCompat.v1.placeholder(dtype=tf.int32, shape=(None, None))  # Just length dimension.
 
   features = {
       "inputs": inputs_ph,
@@ -93,15 +94,15 @@ def t2t_score_file(filename):
   #               or a dictionary of losses.
   final_output, losses = model(features)
   assert isinstance(losses, dict)
-  saver = tf.train.Saver()
+  saver = TFCompat.v1.train.Saver()
 
-  sess = tf.Session()
+  sess = TFCompat.v1.Session()
   # Load weights from checkpoint.
   ckpts = tf.train.get_checkpoint_state(FLAGS_output_dir)
   ckpt = ckpts.model_checkpoint_path
   saver.restore(sess, ckpt)
 
-  # writer = tf.summary.FileWriter('logs', sess.graph)
+  # writer = TFCompat.v1.summary.FileWriter('logs', sess.graph)
 
   # writer.close()
 
@@ -127,7 +128,7 @@ def t2t_score_file(filename):
     np_res = sess.run({"losses": losses, "final_output": final_output}, feed_dict=feed)
     pprint(np_res)
 
-    tvars = tf.trainable_variables()
+    tvars = TFCompat.v1.trainable_variables()
 
     print('t2t inputs_ph:', inputs_ph, inputs_numpy)
     print('t2t targets_ph:', targets_ph, targets_numpy)

@@ -49,7 +49,7 @@ print("TF version:", tf.__version__)
 @contextlib.contextmanager
 def make_scope():
   """
-  :rtype: tf.Session
+  :rtype: TFCompat.v1.Session
   """
   with tf.Graph().as_default() as graph:
     with TFCompat.v1.Session(graph=graph) as session:
@@ -3258,7 +3258,7 @@ if __name__ == "__main__":
   finally:
     try:
       session.close()
-      tf.reset_default_graph()
+      TFCompat.v1.reset_default_graph()
     except Exception as exc:
       print("test finally handler, exception:", type(exc).__name__, ":", exc)
     import threading

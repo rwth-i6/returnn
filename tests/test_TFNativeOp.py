@@ -31,6 +31,7 @@ logging.getLogger('tensorflow').disabled = True
 import tensorflow as tf
 
 from TFNativeOp import *
+import TFCompat
 import TFUtil
 from TFUtil import is_gpu_available, get_available_gpu_min_compute_capability, CudaEnv
 import Util
@@ -246,7 +247,7 @@ def test_NativeLstmCell_run():
   n_time = 2
   n_batch = 1
   n_hidden = 3
-  with tf.Session() as session:
+  with TFCompat.v1.Session() as session:
     with tf.variable_scope("test_NativeLstmCell_run"):
       cell = NativeLstmCell(n_hidden=n_hidden)
       inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
@@ -379,7 +380,7 @@ def test_NativeLstm2_run():
   n_time = 2
   n_batch = 1
   n_hidden = 3
-  with tf.Session() as session:
+  with TFCompat.v1.Session() as session:
     with tf.variable_scope("test_NativeLstm2_run"):
       cell = NativeLstm2(n_hidden=n_hidden)
       inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
@@ -396,7 +397,7 @@ def test_NativeLstm2_shape_inference_normal():
   n_batch = 1
   n_hidden = 3
   with tf.variable_scope("test_NativeLstm2_shape_inference_normal"):
-    weights = tf.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
+    weights = TFCompat.v1.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
     inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
     index = tf.ones([n_time, n_batch])
     n_batch_ = tf.shape(inputs)[1]
@@ -417,7 +418,7 @@ def test_NativeLstm2_shape_inference_unknown_batchnlen():
   n_batch = None
   n_hidden = 3
   with tf.variable_scope("test_NativeLstm2_shape_inference_unknown_batchnlen"):
-    weights = tf.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
+    weights = TFCompat.v1.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
     inputs = tf.placeholder(tf.float32, [n_time, n_batch, n_hidden * 4], name="inputs")
     index = tf.placeholder(tf.float32, [n_time, n_batch], name="index")
     n_batch = tf.shape(inputs)[1]
@@ -436,7 +437,7 @@ def test_NativeLstm2_shape_inference_unknown_rank():
   op = make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
   n_hidden = 3
   with tf.variable_scope("test_NativeLstm2_shape_inference_unknown_rank"):
-    weights = tf.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
+    weights = TFCompat.v1.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
     inputs = tf.placeholder(tf.float32, name="inputs")
     index = tf.reduce_sum(inputs, axis=2)
     n_batch = tf.shape(inputs)[1]
@@ -458,7 +459,7 @@ def test_NativeLstm2_0len_run():
   n_time = 0
   n_batch = 1
   n_hidden = 3
-  with tf.Session() as session:
+  with TFCompat.v1.Session() as session:
     with tf.variable_scope("test_NativeLstm2_0len_run"):
       cell = NativeLstm2(n_hidden=n_hidden)
       inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
@@ -2213,9 +2214,9 @@ def test_ctc_viterbi_loss():
 
   x = tf.constant(numpy.random.RandomState(42).normal(size=(seq_len, n_batch, n_input_dim)).astype("float32"))
   x_seq_len = tf.constant([seq_len, seq_len - 1, seq_len - 2])
-  weights = tf.get_variable(
+  weights = TFCompat.v1.get_variable(
     "ctc_viterbi_weights", shape=(n_input_dim, n_classes), initializer=tf.random_normal_initializer())
-  bias = tf.get_variable("ctc_viterbi_bias", shape=(n_classes,))
+  bias = TFCompat.v1.get_variable("ctc_viterbi_bias", shape=(n_classes,))
   var_list = [weights, bias]
   session.run(tf.initialize_variables(var_list))
   from TFUtil import dot
@@ -2937,7 +2938,7 @@ def test_blocksparse_simple():
   x_np = np.ones((hidden_size, minibatch_size), dtype='float32')
 
   # Initialize block-sparse weights
-  w = tf.get_variable("w", bsmm.w_shape, dtype=tf.float32, initializer=tf.random_uniform_initializer(-0.1, 0.1, seed=3))
+  w = TFCompat.v1.get_variable("w", bsmm.w_shape, dtype=tf.float32, initializer=tf.random_uniform_initializer(-0.1, 0.1, seed=3))
 
   # Block-sparse matrix multiplication
   y = bsmm(x, w)

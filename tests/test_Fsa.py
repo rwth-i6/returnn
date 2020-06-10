@@ -23,6 +23,7 @@ sys.path.insert(0, base_path)
 
 # Returnn imports
 import Fsa
+import TFCompat
 from TFUtil import is_gpu_available
 
 
@@ -326,7 +327,7 @@ def check_fast_bw_fsa_staircase(num_classes, out_seq_len, with_loop):
   print("expected full sum:")
   print(expected)
   fsa = Fsa.fast_bw_fsa_staircase(seq_lens=[num_classes], with_loop=with_loop)
-  with tf.Session().as_default():
+  with TFCompat.v1.Session().as_default():
     res = tf_baum_welch(fsa, num_classes=num_classes, out_seq_len=out_seq_len)
   print("baum-welch:")
   print(res)

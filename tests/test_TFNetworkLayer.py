@@ -18,6 +18,7 @@ from Config import Config
 from TFNetwork import *
 from TFNetworkLayer import *
 from Log import log
+import TFCompat
 import TFUtil
 TFUtil.debug_register_better_repr()
 
@@ -30,10 +31,10 @@ print("Numpy version:", numpy.__version__)
 @contextlib.contextmanager
 def make_scope():
   """
-  :rtype: tf.Session
+  :rtype: TFCompat.v1.Session
   """
   with tf.Graph().as_default() as graph:
-    with tf.Session(graph=graph) as session:
+    with TFCompat.v1.Session(graph=graph) as session:
       yield session
 
 
@@ -968,7 +969,7 @@ def test_SplitDimsLayer_resolve_dims():
 
 def _check_MergeDimsLayer(session, in_data_opts, in_static_shape, opts, out_data_shape, out_static_shape):
   """
-  :param tf.Session session:
+  :param TFCompat.v1.Session session:
   :param dict[str] in_data_opts:
   :param tuple[int] in_static_shape:
   :param dict[str] opts: for MergeDimsLayer
@@ -2253,7 +2254,7 @@ def test_ReuseParams_rec():
       network.extern_data.data["classes"].size_placeholder[0]: numpy.array([seq_len]),
     }
   print("Creating session...")
-  with tf.Session() as session:
+  with TFCompat.v1.Session() as session:
     print("Init params...")
     network.initialize_params(session=session)
     print("Testing reuse_params ...")
@@ -2287,7 +2288,7 @@ def test_LossAsIs_custom_dim():
   n_batch = 5
   n_enc_time = 11
   n_dec_time = 7
-  with tf.Session() as session:
+  with TFCompat.v1.Session() as session:
     enc_time = tf.constant([n_enc_time] * n_batch)
     dec_time = tf.constant([n_dec_time] * n_batch)
     network.add_layer(name="energy", layer_class=InternalLayer, output=Data(
@@ -2381,7 +2382,7 @@ def test_LinearLayer_simple_train():
     n_batch = 5
     n_time = 11
     rnd = numpy.random.RandomState(42)
-    with tf.Session() as session:
+    with TFCompat.v1.Session() as session:
       session.run(tf.global_variables_initializer())
       for step in range(5):
         info, _ = session.run(
@@ -2441,7 +2442,7 @@ def test_flat_net_construction():
     n_batch = 5
     n_time = 11
     rnd = numpy.random.RandomState(42)
-    with tf.Session() as session:
+    with TFCompat.v1.Session() as session:
       session.run(tf.global_variables_initializer())
       for step in range(5):
         info, _ = session.run(
@@ -2508,7 +2509,7 @@ def test_SyntheticGradientLayer():
     n_batch = 5
     n_time = 11
     rnd = numpy.random.RandomState(42)
-    with tf.Session() as session:
+    with TFCompat.v1.Session() as session:
       session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
       for step in range(5):
         info, _ = session.run(
@@ -2573,7 +2574,7 @@ def test_TikhonovRegularizationLayer():
     n_batch = 5
     n_time = 11
     rnd = numpy.random.RandomState(42)
-    with tf.Session() as session:
+    with TFCompat.v1.Session() as session:
       session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
       for step in range(5):
         info, _ = session.run(

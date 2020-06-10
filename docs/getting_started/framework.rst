@@ -38,7 +38,7 @@ Or you go lower level and construct the computation graph yourself::
     })
     fetches = net.get_fetches_dict()
 
-    with tf.Session() as session:
+    with tf.compat.v1.Session() as session:
         results = session.run(fetches, feed_dict={
             # ...
             # you could use FeedDictDataProvider
