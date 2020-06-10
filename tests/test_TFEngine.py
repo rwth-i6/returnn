@@ -14,6 +14,7 @@ import os
 sys.path += ["."]  # Python 3 hack
 sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
 
+import TFCompat
 from TFEngine import *
 import TFUtil
 from TFNetwork import ExternData
@@ -42,7 +43,7 @@ except ImportError:
   print("no faulthandler")
 
 
-print("TF version:", tf.VERSION)
+print("TF version:", tf.__version__)
 
 
 @contextlib.contextmanager
@@ -51,7 +52,7 @@ def make_scope():
   :rtype: tf.Session
   """
   with tf.Graph().as_default() as graph:
-    with tf.Session(graph=graph) as session:
+    with TFCompat.Session(graph=graph) as session:
       yield session
 
 
@@ -97,7 +98,7 @@ def _cleanup_old_models(config):
       os.remove(fn)
 
 
-session = tf.InteractiveSession()
+session = TFCompat.InteractiveSession()
 
 
 def test_FeedDictDataProvider():

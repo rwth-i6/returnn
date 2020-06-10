@@ -8,13 +8,13 @@ from __future__ import print_function
 
 import typing
 import tensorflow as tf
-from tensorflow.python.training.optimizer import Optimizer
+from TFCompat import Optimizer
 from tensorflow.python.ops import resource_variable_ops
 
 from Log import log
 from TFNetwork import TFNetwork
-from TFUtil import tf_version_tuple, assert_min_tf_version, CustomUpdate, add_check_numerics_ops, \
-  get_non_deterministic_ops_from_graph
+import TFUtil
+from TFUtil import tf_version_tuple, assert_min_tf_version, CustomUpdate, add_check_numerics_ops
 
 _OptimizerClassesDictInitialized = False
 _OptimizerClassesDict = {}  # type: typing.Dict[str,typing.Callable[[],Optimizer]]
@@ -140,7 +140,7 @@ class Updater(object):
 
     # After graph was build: look if it only uses deterministic ops
     if self.config.is_true('deterministic_train'):
-      non_det_ops = get_non_deterministic_ops_from_graph()
+      non_det_ops = TFUtil.get_non_deterministic_ops_from_graph()
       if non_det_ops:
         print("WARNING: The graph uses these non deterministic ops: {}".format(non_det_ops), file=log.v1)
 
@@ -1221,7 +1221,7 @@ class CustomAdamOptimizer(BaseCustomOptimizer):
     return tf.group(*update_ops + [update_beta1, update_beta2], name=name_scope)
 
 
-class AMSGradOptimizer(tf.train.Optimizer):
+class AMSGradOptimizer(Optimizer):
   """
   https://colab.research.google.com/notebook#fileId=1xXFAuHM2Ae-OmF5M8Cn9ypGCa_HHBgfG&scrollTo=N1-2wPHN1Otn
   https://openreview.net/pdf?id=ryQu7f-RZ

@@ -128,6 +128,7 @@ import tensorflow as tf
 
 from Dataset import Dataset, BatchSetGenerator
 from TFNetwork import ExternData, Data
+import TFCompat
 from Util import NumbersDict
 from Log import log
 
@@ -660,7 +661,7 @@ class DatasetDataProvider(DataProviderBase):
           size_key = "size:%s:%i" % (key, axis_wo_b)
           output_types[size_key] = tf.as_dtype(data.size_dtype)
           output_shapes[size_key] = tf.TensorShape([None])  # [Batch]
-    self.iterator = tf.data.Iterator.from_structure(output_types=output_types, output_shapes=output_shapes)
+    self.iterator = TFCompat.Iterator.from_structure(output_types=output_types, output_shapes=output_shapes)
     self.iterator_next_element = self.iterator.get_next()
     for key, data in extern_data.data.items():
       assert data.placeholder is None
