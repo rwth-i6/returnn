@@ -2121,7 +2121,7 @@ class _SubnetworkRecCell(object):
         if self.parent_rec_layer._use_global_rec_step_offset:
           from TFUtil import global_tensor
           step_info_i += global_tensor(
-            lambda: tf.placeholder(tf.int32, (), name="global_rec_step_offset"),
+            lambda: TFCompat.v1.placeholder(tf.int32, (), name="global_rec_step_offset"),
             name="global_rec_step_offset")
         rec_step_info = dict(i=step_info_i, end_flag=None, seq_lens=fixed_seq_len)
         end_flag, dyn_seq_len, prev_end_layer = None, None, None
@@ -6659,7 +6659,7 @@ class MaskedComputationLayer(LayerBase):
       if not network.is_inside_rec_layer() and source:
         source_data = source.output.copy_template().copy_as_time_major()
         # Create own dummy time, to make sure we have some own custom.
-        source_data.size_placeholder[0] = tf.placeholder(tf.int32, shape=[None], name="dummy_time")
+        source_data.size_placeholder[0] = TFCompat.v1.placeholder(tf.int32, shape=[None], name="dummy_time")
         source = WrappedInternalLayer(
           base_layer=source, network=source.network, name=source.name,
           output=source_data)
@@ -7081,7 +7081,7 @@ class RHNCell(BaseRNNCell):
     current_state = state
     for i in range(self.depth):
       current_state_masked = self._optional_dropout(current_state)
-      with tf.variable_scope('depth_%i' % i):
+      with TFCompat.v1.variable_scope('depth_%i' % i):
         state_transformed = self._linear(current_state_masked, self._num_units * 2)
       if i == 0:
         state_transformed += inputs

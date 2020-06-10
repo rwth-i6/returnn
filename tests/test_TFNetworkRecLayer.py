@@ -422,7 +422,7 @@ def test_slow_TensorArray():
   def linear(x, output_dim):
     input_dim = x.get_shape().dims[-1].value
     assert input_dim is not None
-    with tf.variable_scope("linear", reuse=TFCompat.v1.AUTO_REUSE):
+    with TFCompat.v1.variable_scope("linear", reuse=TFCompat.v1.AUTO_REUSE):
       weights = TFCompat.v1.get_variable("W", shape=(input_dim, output_dim))
       bias = TFCompat.v1.get_variable("b", shape=(output_dim,))
     assert x.get_shape().ndims == 2  # (batch,input_dim)
@@ -430,8 +430,8 @@ def test_slow_TensorArray():
 
   with make_scope() as session:
     print("create graph")
-    src_placeholder = tf.placeholder(tf.float32, (None, seq_len, num_inputs), name="src_placeholder")
-    tgt_placeholder = tf.placeholder(tf.float32, (None, seq_len, num_outputs), name="tgt_placeholder")
+    src_placeholder = TFCompat.v1.placeholder(tf.float32, (None, seq_len, num_inputs), name="src_placeholder")
+    tgt_placeholder = TFCompat.v1.placeholder(tf.float32, (None, seq_len, num_outputs), name="tgt_placeholder")
     batch_size = tf.shape(src_placeholder)[0]
 
     def make_feed_dict():
@@ -446,9 +446,9 @@ def test_slow_TensorArray():
     for f in range(seq_len):
       inputs = src_placeholder[:, f]
       x = tf.concat([inputs, state], axis=-1)
-      with tf.variable_scope('h'):
+      with TFCompat.v1.variable_scope('h'):
         h = tf.tanh(linear(x, num_outputs))
-      with tf.variable_scope('t'):
+      with TFCompat.v1.variable_scope('t'):
         t = tf.sigmoid(linear(x, num_outputs))
       state += t * (h - state)
       frame_loss = tf.reduce_mean(tf.squared_difference(tgt_placeholder[:, f], state), axis=1)
@@ -487,8 +487,8 @@ def test_deterministic_TensorArray():
     with make_scope() as session:
       tf.set_random_seed(42)
       print("create graph")
-      src_placeholder = tf.placeholder(tf.float32, (None, seq_len, num_inputs), name="src_placeholder")
-      tgt_placeholder = tf.placeholder(tf.float32, (None, seq_len, num_outputs), name="tgt_placeholder")
+      src_placeholder = TFCompat.v1.placeholder(tf.float32, (None, seq_len, num_inputs), name="src_placeholder")
+      tgt_placeholder = TFCompat.v1.placeholder(tf.float32, (None, seq_len, num_outputs), name="tgt_placeholder")
       batch_size = tf.shape(src_placeholder)[0]
 
       def make_feed_dict():
@@ -805,7 +805,7 @@ def test_RecLayer_NativeLstm_Nan():
     lstm_grad_outs_t = list(lstm_grad_op.outputs)
     lstm_grad_func = _lstm_grad_op(session=session)
     demo_grad_t = lstm_grad_func(*_demo_lstm_grad_args())
-    demo_grad2_input_placeholders = [tf.placeholder(v.dtype) for v in lstm_grad_ins_t]
+    demo_grad2_input_placeholders = [TFCompat.v1.placeholder(v.dtype) for v in lstm_grad_ins_t]
     demo_grad2_t = lstm_grad_func(*demo_grad2_input_placeholders)[1]
 
     print("Create updater...")
@@ -1072,7 +1072,7 @@ def test_GradOfLstmGenericBase_simple_nan():
     print("dummy out:", session.run(list(dummy)))
     grad_op = _lstm_grad_op(session)
     args = _demo_lstm_grad_args()
-    placeholders = [tf.placeholder(v.dtype) for v in args]
+    placeholders = [TFCompat.v1.placeholder(v.dtype) for v in args]
     lstm_grad_t = list(grad_op(*placeholders))
     for kwargs in [{}]:  # [{"factor": 0}, {"ones_like": True}, {"ones_like": True, "factor": -1}, {}]:
       print("Testing lstm grad args %r." % kwargs)
@@ -3005,7 +3005,7 @@ def test_RnnCellLayer_with_time():
     extern_data = ExternData()
     extern_data.init_from_dataset(train_data)
     net = TFNetwork(extern_data=extern_data)
-    with tf.variable_scope("input_no_time_l"):
+    with TFCompat.v1.variable_scope("input_no_time_l"):
       input_no_time_l = InternalLayer(
         name="input_no_time_l", network=net, out_type={"dim": train_data.num_inputs, "time_dim_axis": None})
       print("Input layer (without time-dim):", input_no_time_l)
@@ -3015,12 +3015,12 @@ def test_RnnCellLayer_with_time():
       assert input_no_time_l.output.dim == input_no_time_l.output.shape[-1]
       input_no_time_l.output.placeholder = LayerBase.get_rec_initial_output(
         batch_dim=1, name="input_no_time_l", n_out=10, output=input_no_time_l.output, rec_layer=None)  # dummy
-    with tf.variable_scope("prev_l1"):
+    with TFCompat.v1.variable_scope("prev_l1"):
       prev_l = InternalLayer(name="prev:l1", network=net, out_type={"dim": 10, "time_dim_axis": None})
       prev_l.rec_vars_outputs["state"] = RnnCellLayer.get_rec_initial_state(
         batch_dim=1, name="prev_l", n_out=10, unit="LSTMBlock")
       print("Previous time layer:", prev_l)
-    with tf.variable_scope("l1"):
+    with TFCompat.v1.variable_scope("l1"):
       l1 = RnnCellLayer(
         n_out=10, unit="LSTMBlock", network=net, name="l1", rec_previous_layer=prev_l, sources=[input_no_time_l])
       print("RnnCell layer (no time):", l1)
@@ -3029,14 +3029,14 @@ def test_RnnCellLayer_with_time():
       assert l1.output.batch_dim_axis == 0
       assert l1.output.dim == 10
       assert l1.output.shape == (10,)
-    with tf.variable_scope("data"):
+    with TFCompat.v1.variable_scope("data"):
       input_l = SourceLayer(network=net, name="data")
       print("Input layer (with time-dim):", input_l)
       assert input_l.output.dim == input_no_time_l.output.dim
       assert input_l.output.shape == (None, input_l.output.dim)
       assert input_l.output.time_dim_axis == 1
       assert not input_l.output.sparse
-    with tf.variable_scope("l2"):
+    with TFCompat.v1.variable_scope("l2"):
       l2 = RnnCellLayer(
         n_out=10, unit="LSTMBlock", network=net, name="l2", sources=[input_l])
       print("RnnCell layer (with time):", l2)
@@ -3937,7 +3937,7 @@ def test_KenLmStateLayer():
       assert isinstance(rec_state, dict)
       prev_layer = InternalLayer(name="prev:%s" % layer_base_opts["name"], network=net, output=layer_out.copy())
       prev_layer.rec_vars_outputs = {
-        k: tf.placeholder(name="prev_layer_%s" % k, shape=v.shape, dtype=v.dtype) for (k, v) in rec_state.items()}
+        k: TFCompat.v1.placeholder(name="prev_layer_%s" % k, shape=v.shape, dtype=v.dtype) for (k, v) in rec_state.items()}
       with reuse_name_scope(KenLmStateLayer.cls_get_tf_scope_name(layer_base_opts["name"])):
         layer = KenLmStateLayer(
           lm_file=test_lm_file,
@@ -3951,7 +3951,7 @@ def test_KenLmStateLayer():
 
       print("Ref score.")
       input_word_ids = [labels.index(w) for w in "be@@ yond imm@@ edi@@ ate conc@@ erns </s>".split()]
-      ref_score_str_placeholder = tf.placeholder(tf.string, shape=(), name="ref_score_str_placeholder")
+      ref_score_str_placeholder = TFCompat.v1.placeholder(tf.string, shape=(), name="ref_score_str_placeholder")
       tf_ref_score = TFKenLM.ken_lm_abs_score_strings(handle=layer.lm_handle, strings=ref_score_str_placeholder)
       ref_score = session.run(tf_ref_score, feed_dict={ref_score_str_placeholder: "beyond immediate concerns </s>"})
       print("ref score:", ref_score)
@@ -4017,7 +4017,7 @@ def test_KenLmStateLayer_dense():
       assert isinstance(rec_state, dict)
       prev_layer = InternalLayer(name="prev:%s" % layer_base_opts["name"], network=net, output=layer_out.copy())
       prev_layer.rec_vars_outputs = {
-        k: tf.placeholder(name="prev_layer_%s" % k, shape=v.shape, dtype=v.dtype) for (k, v) in rec_state.items()}
+        k: TFCompat.v1.placeholder(name="prev_layer_%s" % k, shape=v.shape, dtype=v.dtype) for (k, v) in rec_state.items()}
       with reuse_name_scope(KenLmStateLayer.cls_get_tf_scope_name(layer_base_opts["name"])):
         layer = KenLmStateLayer(
           output=layer_out, rec_previous_layer=prev_layer, **layer_base_opts)
@@ -4028,7 +4028,7 @@ def test_KenLmStateLayer_dense():
 
       print("Ref score.")
       input_word_ids = [labels.index(w) for w in "be@@ yond imm@@ edi@@ ate conc@@ erns </s>".split()]
-      ref_score_str_placeholder = tf.placeholder(tf.string, shape=(), name="ref_score_str_placeholder")
+      ref_score_str_placeholder = TFCompat.v1.placeholder(tf.string, shape=(), name="ref_score_str_placeholder")
       tf_ref_score = TFKenLM.ken_lm_abs_score_strings(handle=layer.lm_handle, strings=ref_score_str_placeholder)
       ref_score = session.run(tf_ref_score, feed_dict={ref_score_str_placeholder: "beyond immediate concerns </s>"})
       print("ref score:", ref_score)
@@ -4083,8 +4083,8 @@ def test_BlocksparseLSTM_load_params_from_native_lstm():
   with make_scope() as session:
     print("create graph")
     tf.set_random_seed(42)
-    src_placeholder = tf.placeholder(tf.float32, (batch_dim, seq_len, num_inputs), name="src_placeholder")
-    seq_len_placeholder = tf.placeholder(tf.int32, (batch_dim,), name="seq_len_placeholder")
+    src_placeholder = TFCompat.v1.placeholder(tf.float32, (batch_dim, seq_len, num_inputs), name="src_placeholder")
+    seq_len_placeholder = TFCompat.v1.placeholder(tf.int32, (batch_dim,), name="seq_len_placeholder")
     feed_dict = {
       src_placeholder: random.uniform(-1.0, 1.0, (batch_dim, seq_len, num_inputs)),
       seq_len_placeholder: [seq_len] * batch_dim
@@ -4092,7 +4092,7 @@ def test_BlocksparseLSTM_load_params_from_native_lstm():
 
     from TFUtil import xavier_initializer
     default_var_initializer = xavier_initializer(seed=13)
-    with tf.variable_scope(TFCompat.v1.get_variable_scope(), initializer=default_var_initializer) as scope:
+    with TFCompat.v1.variable_scope(TFCompat.v1.get_variable_scope(), initializer=default_var_initializer) as scope:
       net = TFNetwork(config=Config(), extern_data=ExternData(), train_flag=False)
       with net.register_network_scope():
         from TFNetworkLayer import InternalLayer

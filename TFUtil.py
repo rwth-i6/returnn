@@ -680,7 +680,7 @@ class Data(object):
   def get_placeholder_kwargs(self, with_batch=True):
     """
     :param bool with_batch:
-    :return: kwargs for tf.placeholder
+    :return: kwargs for tf.compat.v1.placeholder
     :rtype: dict[str]
     """
     return dict(name=self.name, dtype=self.dtype, shape=self.batch_shape if with_batch else self.shape)
@@ -697,7 +697,7 @@ class Data(object):
     """
     :param int axis:
     :param bool with_batch:
-    :return: kwargs for tf.placeholder
+    :return: kwargs for tf.compat.v1.placeholder
     :rtype: dict[str]
     """
     # For each batch a separate size.
@@ -2820,7 +2820,7 @@ def get_valid_scope_name_from_str(s):
 
 def get_current_var_scope_name():
   """
-  :return: current absolute variable scope name, via tf.variable_scope
+  :return: current absolute variable scope name, via tf.compat.v1.variable_scope
   :rtype: str
   """
   import TFCompat
@@ -2852,7 +2852,7 @@ def reuse_name_scope(name, absolute=None, **kwargs):
   :param str|TFCompat.v1.VariableScope name: relative or absolute name scope (absolute if absolute=True or if TFCompat.v1.VariableScope).
     must not end with "/".
   :param bool absolute: if True it will be absolute
-  :param kwargs: passed on to `tf.variable_scope`
+  :param kwargs: passed on to `tf.compat.v1.variable_scope`
   :return: yields the variable_scope
   """
   import TFCompat
@@ -2878,7 +2878,7 @@ def reuse_name_scope(name, absolute=None, **kwargs):
   if not absolute:
     assert name
     # First figure out the absolute name scope which we want to reuse/set.
-    # The current name scope is more reliable because tf.variable_scope
+    # The current name scope is more reliable because tf.compat.v1.variable_scope
     # will always also set the name scope.
     current_name_scope = get_current_name_scope()
     if current_name_scope:
@@ -2893,10 +2893,10 @@ def reuse_name_scope(name, absolute=None, **kwargs):
   # which is not what we want.
   with tf.name_scope(abs_name):
     # tf.name_scope will not set the variable scope.
-    # tf.variable_scope will also set the name scope, but the logic is broken
+    # tf.compat.v1.variable_scope will also set the name scope, but the logic is broken
     # for absolute name scopes, thus we had to do the tf.name_scope manually above.
     # We create the dummy_var_scope to force it to reuse that name,
-    # and the trailing "/" will work-around the broken tf.variable_scope() usage of tf.name_scope().
+    # and the trailing "/" will work-around the broken tf.compat.v1.variable_scope() usage of tf.name_scope().
     # Afterwards we fix that name again.
     # Note that the reuse-argument might be miss-leading in this context:
     # It means that TFCompat.v1.get_variable() will search for existing variables and errors otherwise.
@@ -6324,7 +6324,8 @@ def true_once():
     Internally, this creates a non-trainable variable as a helper.
   :rtype: tf.Tensor
   """
-  with tf.variable_scope("true_once"):
+  import TFCompat
+  with TFCompat.v1.variable_scope("true_once"):
     v = tf.Variable(initial_value=True, trainable=False, name="true_once_var")
     with tf.control_dependencies([init_variable_if_needed(v)]):
       # Cannot use tf.identity because that would give us a reference to the var but we want to copy it now.
@@ -7143,15 +7144,16 @@ class Condition(object):
   """
 
   def __init__(self, lock=None, name="Condition"):
+    import TFCompat
     self._name = name
-    with tf.variable_scope(name):
+    with TFCompat.v1.variable_scope(name):
       self._init_ops = []
       if not lock:
         lock = Lock()
         self._init_ops += [lock.init()]
       self.lock = lock
       self._waiting_counter = tf.Variable(initial_value=0, trainable=False, name="waiting_counter")
-      self._waiter_queue = tf.FIFOQueue(capacity=1, dtypes=[tf.bool], name="waiter_queue")
+      self._waiter_queue = TFCompat.v1.FIFOQueue(capacity=1, dtypes=[tf.bool], name="waiter_queue")
       self._init_ops += [self._waiting_counter.initializer]
 
   def init(self):

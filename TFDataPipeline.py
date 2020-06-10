@@ -65,7 +65,7 @@ First the simple method via feed_dict and placeholders
 
 This is implemented in :class:`FeedDictDataProvider`.
 
-The input data which (and optionally the targets) can be represented with tf.placeholder
+The input data which (and optionally the targets) can be represented with tf.compat.v1.placeholder
 and feed via feed_dict from TFCompat.v1.Session.run which does one train/eval/forward step.
 In this case, any preprocessing such as chunking and batching must be done beforehand via Numpy.
 This was the initial implementation and is also the standard implementation for the Theano backend.

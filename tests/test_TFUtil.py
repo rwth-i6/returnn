@@ -375,7 +375,7 @@ def test_4D_Data_get_placeholder_flattened():
   d = Data(name='test_data', shape=(None, 13, 17), dtype='float32',
            size_placeholder={0: size_placeholder}, batch_dim_axis=0,
            time_dim_axis=1, feature_dim_axis=3)
-  placeholder = tf.placeholder(shape=(None, None, 13, 17), dtype=tf.float32)
+  placeholder = TFCompat.v1.placeholder(shape=(None, None, 13, 17), dtype=tf.float32)
   d.placeholder = placeholder
   feed_data = np.random.rand(7, 9, 13, 17)
   res = session.run(d.placeholder, feed_dict={placeholder: feed_data})
@@ -391,11 +391,12 @@ def test_4D_Data_get_placeholder_flattened():
   assert res.shape[0] == 7 * 9 * 13
   assert len(res.shape) == 2
 
+
 def test_2D_Data_get_placeholder_flattened():
   import numpy as np
   d = Data(name='test_data', shape=(17,), dtype='float32',
            batch_dim_axis=0, feature_dim_axis=1)
-  placeholder = tf.placeholder(shape=(None, 17), dtype=tf.float32)
+  placeholder = TFCompat.v1.placeholder(shape=(None, 17), dtype=tf.float32)
   d.placeholder = placeholder
   feed_data = np.random.rand(7, 17)
   res = session.run(d.placeholder, feed_dict={placeholder: feed_data})
@@ -1170,12 +1171,12 @@ def test_reuse_name_scope_mix2():
 
 def test_reuse_name_scope_mix3():
   with reuse_name_scope("mix3"):
-    with tf.variable_scope("sub"):
+    with TFCompat.v1.variable_scope("sub"):
       assert_equal(get_current_name_scope(), "mix3/sub")
 
 
 def test_reuse_name_scope_mix4():
-  with tf.variable_scope("mix4"):
+  with TFCompat.v1.variable_scope("mix4"):
     with reuse_name_scope("sub"):
       assert_equal(get_current_name_scope(), "mix4/sub")
 
@@ -1192,7 +1193,7 @@ def test_reuse_name_scope_2():
 
 def test_reuse_name_scope():
   with reuse_name_scope("lstm0"):
-    with tf.variable_scope("rec"):
+    with TFCompat.v1.variable_scope("rec"):
       a = TFCompat.v1.get_variable("a", shape=(3, 4))
       assert_is_instance(a, tf.Variable)
       assert_equal(a.name, "lstm0/rec/a:0")
@@ -1215,34 +1216,34 @@ def test_reuse_name_scope_root():
 
 
 def test_reuse_var_scope():
-  with tf.variable_scope("v1"):
+  with TFCompat.v1.variable_scope("v1"):
     assert_equal(get_current_var_scope_name(), "v1")
     assert_equal(get_current_name_scope(), "v1")
-    with tf.variable_scope("v2") as scope:
+    with TFCompat.v1.variable_scope("v2") as scope:
       assert_equal(get_current_var_scope_name(), "v1/v2")
       assert_equal(get_current_name_scope(), "v1/v2")
       with tf.name_scope("v3"):
         assert_equal(get_current_name_scope(), "v1/v2/v3")
         assert_equal(get_current_var_scope_name(), "v1/v2")
         assert_equal(scope.name, "v1/v2")
-        # Note: tf.variable_scope(scope) is broken here.
+        # Note: TFCompat.v1.variable_scope(scope) is broken here.
         with reuse_name_scope(scope):
           assert_equal(get_current_var_scope_name(), "v1/v2")
           assert_equal(get_current_name_scope(), "v1/v2")
 
 
 def test_name_var_scope_mixing():
-  with tf.variable_scope("mv1"):
+  with TFCompat.v1.variable_scope("mv1"):
     assert_equal(get_current_var_scope_name(), "mv1")
     assert_equal(get_current_name_scope(), "mv1")
-    with tf.variable_scope("v2") as scope:
+    with TFCompat.v1.variable_scope("v2") as scope:
       assert_equal(get_current_var_scope_name(), "mv1/v2")
       assert_equal(get_current_name_scope(), "mv1/v2")
       with tf.name_scope("v3"):
         assert_equal(get_current_name_scope(), "mv1/v2/v3")
         assert_equal(get_current_var_scope_name(), "mv1/v2")
         assert_equal(scope.name, "mv1/v2")
-        # Note: tf.variable_scope("v4") is broken here.
+        # Note: TFCompat.v1.variable_scope("v4") is broken here.
         with reuse_name_scope("v4"):
           assert_equal(get_current_var_scope_name(), "mv1/v2/v3/v4")
           assert_equal(get_current_name_scope(), "mv1/v2/v3/v4")
@@ -1781,9 +1782,9 @@ def test_TensorArray():
   # This is by design.
   # Our :class:`GlobalTensorArrayOpMaker` could fix this.
   ta = tf.TensorArray(tf.int32, size=3)
-  index = tf.placeholder(tf.int32)
-  value = tf.placeholder(tf.int32)
-  flow = tf.placeholder(tf.float32)
+  index = TFCompat.v1.placeholder(tf.int32)
+  value = TFCompat.v1.placeholder(tf.int32)
+  flow = TFCompat.v1.placeholder(tf.float32)
   ta_new = tf.TensorArray(dtype=ta.dtype, handle=ta.handle, flow=flow)
   write = ta_new.write(index, value).flow
   read = ta_new.read(index)
@@ -1798,7 +1799,7 @@ def test_TensorArray():
 def test_ExplicitRandomShuffleQueue():
   # see test_TensorArray, which is internally used by ExplicitRandomShuffleQueue
   queue = ExplicitRandomShuffleQueue(capacity=3, min_after_dequeue=2, dtypes=[tf.int32])
-  placeholder = tf.placeholder(tf.int32, shape=())
+  placeholder = TFCompat.v1.placeholder(tf.int32, shape=())
   session.run(queue.init())
   enqueue = queue.enqueue(placeholder)
   dequeue = queue.dequeue()
@@ -2194,7 +2195,7 @@ def test_clip_by_value_with_identity_grad():
   limit = 1.0
   limits = -limit, limit
   with tf.name_scope("test_safe_log_and_grad"):
-    x_t = tf.placeholder(tf.float32, shape=(), name="x")
+    x_t = TFCompat.v1.placeholder(tf.float32, shape=(), name="x")
     y_t = clip_by_value_with_identity_grad(x_t, *limits)
     err_x_t, = tf.gradients(ys=y_t, xs=x_t, grad_ys=tf.constant(err_y))
     err2_x_t, = tf.gradients(ys=tf.clip_by_value(x_t, *limits), xs=x_t, grad_ys=tf.constant(err_y))
@@ -2213,7 +2214,7 @@ def test_clip_by_value_with_identity_grad():
 
 def test_safe_log_and_grad():
   with tf.name_scope("test_safe_log_and_grad"):
-    x_t = tf.placeholder(tf.float32, shape=(), name="x")
+    x_t = TFCompat.v1.placeholder(tf.float32, shape=(), name="x")
     y_t = safe_log(x_t)
     err_x_t, = tf.gradients(ys=y_t, xs=x_t)
     check_numerics_op = add_check_numerics_ops([y_t, err_x_t])
@@ -2238,7 +2239,7 @@ def test_safe_log_and_grad():
 
 def test_safe_exp_and_grad():
   with tf.name_scope("test_safe_log_and_grad"):
-    x_t = tf.placeholder(tf.float32, shape=(), name="x")
+    x_t = TFCompat.v1.placeholder(tf.float32, shape=(), name="x")
     y_t = safe_exp(x_t)
     err_x_t, = tf.gradients(ys=y_t, xs=x_t)
     check_numerics_op = add_check_numerics_ops([y_t, err_x_t])
@@ -2263,7 +2264,7 @@ def test_safe_exp_and_grad():
 
 def test_lin_exp_normed_limits_not_nan():
   with tf.name_scope("test_lin_exp_normed_limits_not_nan"):
-    x_t = tf.placeholder(tf.float32, shape=(None,), name="x")
+    x_t = TFCompat.v1.placeholder(tf.float32, shape=(None,), name="x")
     y_t = lin_exp_normed(x_t)
     # Also see :class:`CrossEntropyLoss`. here score instead of loss.
     score_t = safe_log(y_t[..., -1])
@@ -2328,8 +2329,8 @@ def test_string_merge():
   max_len = max(seq_lens)
   strings = [seq + [""] * (max_len - len(seq)) for seq in strings]
 
-  tf_strings = tf.placeholder(tf.string, [None, None])
-  tf_seq_lens = tf.placeholder(tf.int32, [None])
+  tf_strings = TFCompat.v1.placeholder(tf.string, [None, None])
+  tf_seq_lens = TFCompat.v1.placeholder(tf.int32, [None])
   tf_res = string_merge(tf_strings, tf_seq_lens)
   res = session.run(tf_res, feed_dict={tf_strings: strings, tf_seq_lens: seq_lens})
   print(res)
@@ -2360,7 +2361,7 @@ def test_vocab_string_merge():
 
 def test_string_replace():
   strings = ["sub@@ word test", "hel@@ lo wo@@ r@@ ld", "foo"]
-  tf_strings = tf.placeholder(tf.string, [None])
+  tf_strings = TFCompat.v1.placeholder(tf.string, [None])
   tf_res = string_replace(tf_strings, old="@@ ", new="")
   res = session.run(tf_res, feed_dict={tf_strings: strings})
   print(res)
@@ -2376,7 +2377,7 @@ def test_string_replace():
 def test_words_split_get_sparse_tensor_length():
   strings = ["subword test", "a b c d", "hello world", "foo"]
   word_lens = [len(s.split(" ")) for s in strings]
-  tf_strings = tf.placeholder(tf.string, [None])
+  tf_strings = TFCompat.v1.placeholder(tf.string, [None])
   tf_words = words_split(tf_strings)
   tf_dense_words = tf.sparse_to_dense(
     tf_words.indices, tf_words.dense_shape, tf_words.values, default_value="")
@@ -2402,8 +2403,8 @@ def test_words_split_get_sparse_tensor_length():
 def test_string_words_calc_wer():
   hyps = ["hello world", "a b c", "how are you", "good"]
   refs = ["hello nice world", "a x c d", "how are we", "good"]
-  tf_hyps = tf.placeholder(tf.string, [None])
-  tf_refs = tf.placeholder(tf.string, [None])
+  tf_hyps = TFCompat.v1.placeholder(tf.string, [None])
+  tf_refs = TFCompat.v1.placeholder(tf.string, [None])
   tf_wer, tf_ref_num_words = string_words_calc_wer(hyps=tf_hyps, refs=tf_refs)
   wer, ref_num_words = session.run([tf_wer, tf_ref_num_words], {tf_hyps: hyps, tf_refs: refs})
   print(wer, ref_num_words)
@@ -2421,7 +2422,7 @@ def test_kenlm():
   test_lm_file = TFKenLM.kenlm_dir + "/lm/test.arpa"
   assert os.path.exists(test_lm_file)
   lm_tf = TFKenLM.ken_lm_load(filename=test_lm_file)
-  input_strings_tf = tf.placeholder(tf.string, [None])
+  input_strings_tf = TFCompat.v1.placeholder(tf.string, [None])
   output_scores_tf = TFKenLM.ken_lm_abs_score_strings(handle=lm_tf, strings=input_strings_tf)
   with TFCompat.v1.Session() as session:
     output_scores = session.run(output_scores_tf, feed_dict={input_strings_tf: input_strings})
@@ -2445,7 +2446,7 @@ def test_kenlm_bpe():
   test_lm_file = TFKenLM.kenlm_dir + "/lm/test.arpa"
   assert os.path.exists(test_lm_file)
   lm_tf = TFKenLM.ken_lm_load(filename=test_lm_file)
-  input_strings_tf = tf.placeholder(tf.string, [None])
+  input_strings_tf = TFCompat.v1.placeholder(tf.string, [None])
   output_scores_tf = TFKenLM.ken_lm_abs_score_bpe_strings(handle=lm_tf, strings=input_strings_tf, bpe_merge_symbol="@@")
   with TFCompat.v1.Session() as session:
     output_scores = session.run(output_scores_tf, feed_dict={input_strings_tf: input_strings})
@@ -2488,8 +2489,8 @@ def test_openfst():
   output_symbols = {"man": 26, "Mars": 111, "Martian": 1530}
 
   fst_tf = TFOpenFst.get_fst(filename=fst_fn)
-  states_tf = tf.placeholder(tf.int32, [None])
-  inputs_tf = tf.placeholder(tf.int32, [None])
+  states_tf = TFCompat.v1.placeholder(tf.int32, [None])
+  inputs_tf = TFCompat.v1.placeholder(tf.int32, [None])
   output_tf = TFOpenFst.fst_transition(fst_handle=fst_tf, states=states_tf, inputs=inputs_tf)
 
   def transitions(states, inputs):
@@ -2616,7 +2617,7 @@ def test_get_op_input_names_Constant():
 
 
 def test_get_op_attrib_keys__is_variable_initialized():
-  with tf.variable_scope("test_get_op_attrib_keys__is_variable_initialized"):
+  with TFCompat.v1.variable_scope("test_get_op_attrib_keys__is_variable_initialized"):
     var = TFCompat.v1.get_variable("var", shape=(3,))
     check = tf.is_variable_initialized(var)
     print("check:", check)
@@ -2636,13 +2637,13 @@ def test_print_graph_output():
 
 
 def test_get_var_ops():
-  with tf.variable_scope("test_get_var_ops"):
+  with TFCompat.v1.variable_scope("test_get_var_ops"):
     v = TFCompat.v1.get_variable("v", ())
     assert_equal(find_ops_with_tensor_input(v), [v.initializer])
 
 
 def test_find_ops_with_tensor_input():
-  with tf.variable_scope("test_find_ops_with_tensor_input"):
+  with TFCompat.v1.variable_scope("test_find_ops_with_tensor_input"):
     x0 = tf.constant(1.0, name="x0")
     v1 = TFCompat.v1.get_variable("v1", ())
     v2 = TFCompat.v1.get_variable("v2", ())
@@ -2657,7 +2658,7 @@ def test_find_ops_with_tensor_input():
 
 
 def test_get_var_update_ops():
-  with tf.variable_scope("test_get_var_update_ops"):
+  with TFCompat.v1.variable_scope("test_get_var_update_ops"):
     v = TFCompat.v1.get_variable("v", ())
     loss = (v - 1.0) ** 2
     opt = tf.train.AdamOptimizer()
@@ -2671,7 +2672,7 @@ def test_get_var_update_ops():
 
 
 def test_get_var_update_ops__get_variable_value_copy_before_update_ops():
-  with tf.variable_scope("test_get_var_update_ops__get_variable_value_copy_before_update_ops"):
+  with TFCompat.v1.variable_scope("test_get_var_update_ops__get_variable_value_copy_before_update_ops"):
     v = TFCompat.v1.get_variable("v", (), initializer=tf.zeros_initializer())
     assert isinstance(v, tf.Variable)
     loss = (v - 1.0) ** 2
@@ -2705,7 +2706,7 @@ def test_get_var_update_ops__get_variable_value_copy_before_update_ops():
 
 
 def test_get_variable_grad_from_update_ops():
-  with tf.variable_scope("test_get_variable_grad_from_update_ops"):
+  with TFCompat.v1.variable_scope("test_get_variable_grad_from_update_ops"):
     var = TFCompat.v1.get_variable("var", (), initializer=tf.zeros_initializer())
     loss = (var - 1.0) ** 2
     for opt in [
@@ -2731,7 +2732,7 @@ def test_get_variable_grad_from_update_ops():
 
 
 def test_get_variable_grad_from_update_ops_mix_sparse_dense():
-  with tf.variable_scope("test_get_variable_grad_from_update_ops_mix_sparse_dense"):
+  with TFCompat.v1.variable_scope("test_get_variable_grad_from_update_ops_mix_sparse_dense"):
     var = TFCompat.v1.get_variable("var", (3, 5), initializer=tf.ones_initializer())
     loss = tf.reduce_sum((tf.matmul(tf.nn.embedding_lookup(var, [1]) - 1.0, tf.transpose(var)) - 1.0) ** 2)
     ref_grad, = tf.gradients(loss, var)
@@ -2776,7 +2777,7 @@ def test_get_variable_grad_from_update_ops_mix_sparse_dense():
 
 
 def test_mixed_dense_sparse_grad():
-  with tf.variable_scope("test_mixed_dense_sparse_grad"):
+  with TFCompat.v1.variable_scope("test_mixed_dense_sparse_grad"):
     var = TFCompat.v1.get_variable("var", (3, 5), initializer=tf.ones_initializer())
     session.run(var.initializer)
     loss = tf.reduce_sum(tf.nn.embedding_lookup(var, [1]) ** 2) + tf.reduce_sum(var ** 2)

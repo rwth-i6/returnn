@@ -248,7 +248,7 @@ def test_NativeLstmCell_run():
   n_batch = 1
   n_hidden = 3
   with TFCompat.v1.Session() as session:
-    with tf.variable_scope("test_NativeLstmCell_run"):
+    with TFCompat.v1.variable_scope("test_NativeLstmCell_run"):
       cell = NativeLstmCell(n_hidden=n_hidden)
       inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
       index = tf.ones([n_time, n_batch])
@@ -381,7 +381,7 @@ def test_NativeLstm2_run():
   n_batch = 1
   n_hidden = 3
   with TFCompat.v1.Session() as session:
-    with tf.variable_scope("test_NativeLstm2_run"):
+    with TFCompat.v1.variable_scope("test_NativeLstm2_run"):
       cell = NativeLstm2(n_hidden=n_hidden)
       inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
       index = tf.ones([n_time, n_batch])
@@ -396,7 +396,7 @@ def test_NativeLstm2_shape_inference_normal():
   n_time = 2
   n_batch = 1
   n_hidden = 3
-  with tf.variable_scope("test_NativeLstm2_shape_inference_normal"):
+  with TFCompat.v1.variable_scope("test_NativeLstm2_shape_inference_normal"):
     weights = TFCompat.v1.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
     inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
     index = tf.ones([n_time, n_batch])
@@ -417,10 +417,10 @@ def test_NativeLstm2_shape_inference_unknown_batchnlen():
   n_time = None
   n_batch = None
   n_hidden = 3
-  with tf.variable_scope("test_NativeLstm2_shape_inference_unknown_batchnlen"):
+  with TFCompat.v1.variable_scope("test_NativeLstm2_shape_inference_unknown_batchnlen"):
     weights = TFCompat.v1.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
-    inputs = tf.placeholder(tf.float32, [n_time, n_batch, n_hidden * 4], name="inputs")
-    index = tf.placeholder(tf.float32, [n_time, n_batch], name="index")
+    inputs = TFCompat.v1.placeholder(tf.float32, [n_time, n_batch, n_hidden * 4], name="inputs")
+    index = TFCompat.v1.placeholder(tf.float32, [n_time, n_batch], name="index")
     n_batch = tf.shape(inputs)[1]
     c0 = tf.zeros((n_batch, n_hidden), dtype=tf.float32, name="initial_c")
     y0 = tf.zeros((n_batch, n_hidden), dtype=tf.float32, name="initial_h")
@@ -436,9 +436,9 @@ def test_NativeLstm2_shape_inference_unknown_batchnlen():
 def test_NativeLstm2_shape_inference_unknown_rank():
   op = make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
   n_hidden = 3
-  with tf.variable_scope("test_NativeLstm2_shape_inference_unknown_rank"):
+  with TFCompat.v1.variable_scope("test_NativeLstm2_shape_inference_unknown_rank"):
     weights = TFCompat.v1.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
-    inputs = tf.placeholder(tf.float32, name="inputs")
+    inputs = TFCompat.v1.placeholder(tf.float32, name="inputs")
     index = tf.reduce_sum(inputs, axis=2)
     n_batch = tf.shape(inputs)[1]
     c0 = tf.zeros((n_batch, n_hidden), dtype=tf.float32, name="initial_c")
@@ -460,7 +460,7 @@ def test_NativeLstm2_0len_run():
   n_batch = 1
   n_hidden = 3
   with TFCompat.v1.Session() as session:
-    with tf.variable_scope("test_NativeLstm2_0len_run"):
+    with TFCompat.v1.variable_scope("test_NativeLstm2_0len_run"):
       cell = NativeLstm2(n_hidden=n_hidden)
       inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
       index = tf.ones([n_time, n_batch])
@@ -2399,8 +2399,8 @@ def _wrap_tf_edit_distance(a, b):
   global _wrap_tf_edit_distance_global_placeholders
   if not _wrap_tf_edit_distance_global_placeholders:
     with tf.name_scope("wrap_tf_edit_distance"):
-      a_tf = tf.placeholder(tf.int32, shape=(None,), name="a")
-      b_tf = tf.placeholder(tf.int32, shape=(None,), name="b")
+      a_tf = TFCompat.v1.placeholder(tf.int32, shape=(None,), name="a")
+      b_tf = TFCompat.v1.placeholder(tf.int32, shape=(None,), name="b")
       _wrap_tf_edit_distance_global_placeholders = [a_tf, b_tf]
       a_len_tf = tf.convert_to_tensor([tf.shape(a_tf)[0]])
       b_len_tf = tf.convert_to_tensor([tf.shape(b_tf)[0]])
@@ -2934,7 +2934,7 @@ def test_blocksparse_simple():
   bsmm = BlocksparseMatMul(sparsity, block_size=block_size, feature_axis=0)
 
   # Input to graph
-  x = tf.placeholder(tf.float32, shape=[hidden_size, None])
+  x = TFCompat.v1.placeholder(tf.float32, shape=[hidden_size, None])
   x_np = np.ones((hidden_size, minibatch_size), dtype='float32')
 
   # Initialize block-sparse weights

@@ -363,11 +363,11 @@ def test_ResNet():
     # Making two time-steps
     time_size = window_size + 1
     data_layer_win = Data(name='win', shape=(window_size, 64, 3), dim = 3, batch_dim_axis = 0, sparse = False)
-    data_layer_win.placeholder = tf.placeholder(shape=(None, window_size, 64, 3), dtype=tf.float32)
+    data_layer_win.placeholder = TFCompat.v1.placeholder(shape=(None, window_size, 64, 3), dtype=tf.float32)
 
     data_layer_nowin = Data(name='nowin', shape=(time_size, 64, 3), dim = 3, batch_dim_axis = 0,
                             time_dim_axis = 1, sparse = False)
-    data_layer_nowin.placeholder = tf.placeholder(shape=(None, time_size, 64, 3), dtype=tf.float32)
+    data_layer_nowin.placeholder = TFCompat.v1.placeholder(shape=(None, time_size, 64, 3), dtype=tf.float32)
 
     extern_data_nowin = ExternData()
     extern_data_nowin.data['data'] = data_layer_nowin

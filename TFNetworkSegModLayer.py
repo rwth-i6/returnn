@@ -1,7 +1,9 @@
 from __future__ import print_function
 
 import tensorflow as tf
+import TFCompat
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, get_concat_sources_data_template
+
 
 # ---------- Utilities ----------
 
@@ -16,7 +18,7 @@ def batch_sizes_after_windowing(sizes, window):
     r1 = tf.tile([window], [tf.maximum(x - window + 1, 0)])
     r2 = tf.range(tf.minimum(x, window - 1), 0, -1)
     return tf.concat([acc, r1, r2], 0)
-  return tf.foldl(fold_times, sizes, tf.placeholder_with_default(tf.zeros([0], dtype='int32'), [None]), name='fold_sizes')
+  return tf.foldl(fold_times, sizes, TFCompat.v1.placeholder_with_default(tf.zeros([0], dtype='int32'), [None]), name='fold_sizes')
 
 
 def batch_indices_after_windowing(sizes, window):
@@ -36,7 +38,7 @@ def batch_indices_after_windowing(sizes, window):
     return tf.concat([acc, tf.transpose(tf.stack([batch, start, end]))], axis=0)
 
   return tf.foldl(fold_batches, tf.stack([tf.range(tf.shape(sizes)[0]), sizes], axis=1),
-                  tf.placeholder_with_default(tf.zeros([0, 3], dtype='int32'), [None, 3]), name="fold_batches")
+                  TFCompat.v1.placeholder_with_default(tf.zeros([0, 3], dtype='int32'), [None, 3]), name="fold_batches")
 
 # ---------- Layers ----------
 
@@ -65,7 +67,7 @@ class SegmentInputLayer(_ConcatInputLayer):
         res  = tf.stack([res, tf.ones_like(res) * batch_idx], axis=2)  # add batch_index in second dim
       return tf.concat([acc, res], 0)
 
-    initial = tf.placeholder_with_default((tf.zeros([0, window, 2], dtype=tf.int32)), [None, window, 2])
+    initial = TFCompat.v1.placeholder_with_default((tf.zeros([0, window, 2], dtype=tf.int32)), [None, window, 2])
     indices = tf.foldl(fold_data, tf.stack([tf.range(tf.shape(sizes)[0]), sizes], axis=1), initial, name='fold_data')
 
     if self.input_data.is_time_major:
@@ -265,7 +267,7 @@ class SegmentAlignmentLayer(_ConcatInputLayer):
     super(SegmentAlignmentLayer, self).__init__(**kwargs)
     assert self.input_data.sparse
 
-    sizes = tf.div(self.input_data.size_placeholder[0], 2)
+    sizes = TFCompat.v1.div(self.input_data.size_placeholder[0], 2)
     batches = batch_indices_after_windowing(sizes, window)
     new_sizes = tf.fill((tf.shape(batches)[0],), window)
 
@@ -472,7 +474,7 @@ class NormalizeLengthScoresLayer(LayerBase):
     self.output = self.sources[0].output.copy()
     p = self.sources[0].output.placeholder
     win_size = tf.cast(tf.shape(p)[time_axis], dtype=tf.float32)
-    s = tf.log(p) * tf.expand_dims(tf.expand_dims(tf.range(win_size, dtype=tf.float32) + 1.0, -1), batch_axis)
+    s = TFCompat.v1.log(p) * tf.expand_dims(tf.expand_dims(tf.range(win_size, dtype=tf.float32) + 1.0, -1), batch_axis)
     self.output.placeholder = tf.exp(s)
 
   @classmethod

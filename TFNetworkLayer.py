@@ -1531,7 +1531,7 @@ class ReuseParams:
   def get_variable_scope(self, base_layer, **kwargs):
     """
     :param LayerBase base_layer:
-    :param kwargs: passed to tf.variable_scope
+    :param kwargs: passed to tf.compat.v1.variable_scope
     :rtype: TFCompat.v1.VariableScope
     """
     def _variable_custom_getter(**kwargs_):
