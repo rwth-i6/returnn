@@ -1718,62 +1718,6 @@ def test_enforce_copy():
   assert_equal(list(x.eval()), [3, 2, 3])
 
 
-def test_Lock():
-  lock = Lock()
-  session.run(lock.init())
-  v = tf.Variable(initial_value=0, trainable=False, name="test_Lock")
-  session.run(v.initializer)
-  with tf.control_dependencies([lock.lock()]):
-    with tf.control_dependencies([v.assign_add(1)]):
-      x = enforce_copy(v)
-      with tf.control_dependencies([x, lock.unlock()]):
-        x = tf.identity(x)
-  # Just checking lock + unlock, not really the behavior.
-  for i in range(5):
-    assert_equal(x.eval(), i + 1)
-    assert_equal(v.eval(), i + 1)
-
-
-def test_Condition():
-  cond = Condition()
-  v = tf.Variable(initial_value=0, trainable=False, name="test_Condition")
-  session.run([cond.init(), v.initializer])
-  with sequential_control_dependencies([
-    lambda: cond.lock.lock(),
-    lambda: v.assign_add(2),
-    lambda: cond.signal(),
-    lambda: cond.lock.unlock()
-  ]):
-    s = tf.no_op()
-  session.run(cond.lock.lock())
-  from threading import Thread
-  t = Thread(target=lambda: session.run(s))
-  t.start()
-  session.run(cond.wait())
-  assert_equal(v.eval(), 2)
-  t.join()
-  session.run(cond.lock.unlock())
-
-
-@unittest.skip("needs tensor_array.h, see https://github.com/tensorflow/tensorflow/issues/10527")
-def test_GlobalTensorArray():
-  GlobalTensorArrayOpMaker().get_op()
-
-
-def test_TFArrayContainer():
-  # Bug #10950 is fixed upstream, should be in TF 1.2.2.
-  # https://stackoverflow.com/questions/44455722/create-my-own-resource-types-tf-resource
-  # https://github.com/tensorflow/tensorflow/issues/1419
-  ta = TFArrayContainer(dtype=tf.int32)
-  print(ta._mod)
-  print(ta._mod.array_container_create.__doc__)
-  assert_equal(ta.get_size().eval(), 0)
-  session.run(ta.set_size(3))
-  assert_equal(ta.get_size().eval(), 3)
-  session.run(ta.set(1, [1, 2, 3]))
-  assert_equal(list(ta.get(1).eval()), [1, 2, 3])
-
-
 @unittest.skip("does not work")
 def test_TensorArray():
   # see https://stackoverflow.com/questions/44418036/
@@ -1793,36 +1737,6 @@ def test_TensorArray():
   f = session.run(write, feed_dict={index: 1, value: 2, flow: f})
   assert_equal(session.run(read, feed_dict={index: 0, flow: f}), 1)
   assert_equal(session.run(read, feed_dict={index: 1, flow: f}), 2)
-
-
-@unittest.skip("does not work")
-def test_ExplicitRandomShuffleQueue():
-  # see test_TensorArray, which is internally used by ExplicitRandomShuffleQueue
-  queue = ExplicitRandomShuffleQueue(capacity=3, min_after_dequeue=2, dtypes=[tf.int32])
-  placeholder = TFCompat.v1.placeholder(tf.int32, shape=())
-  session.run(queue.init())
-  enqueue = queue.enqueue(placeholder)
-  dequeue = queue.dequeue()
-  size = queue.size()
-  session.run(enqueue, feed_dict={placeholder: 1})
-  session.run(enqueue, feed_dict={placeholder: 2})
-  session.run(enqueue, feed_dict={placeholder: 3})
-  pool = {1, 2, 3}
-  for i in range(3):
-    d = session.run(dequeue)
-    assert_in(d, pool)
-    pool.remove(d)
-    session.run(enqueue, feed_dict={placeholder: i + 4})
-    pool.add(i + 4)
-    assert_equal(session.run(size), len(pool))
-  session.run(queue.min_after_dequeue_assign(0))
-  while pool:
-    d = session.run(dequeue)
-    assert_in(d, pool)
-    pool.remove(d)
-  assert_equal(session.run(size), 0)
-  session.run(enqueue, feed_dict={placeholder: 17})
-  assert_equal(session.run(dequeue), 17)
 
 
 def test_tfconv1d_evensize():
