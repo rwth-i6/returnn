@@ -24,6 +24,7 @@ else:
 if v2:
   tf.compat.v1.disable_eager_execution()
   tf.compat.v1.disable_v2_tensorshape()
+  tf.compat.v1.disable_control_flow_v2()
   # tf.compat.v1.disable_v2_behavior()  -- not sure on this
 
 try:

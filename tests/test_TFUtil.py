@@ -3159,6 +3159,15 @@ def test_FetchHelper_loop():
   assert isinstance(info, graph_editor.TransformerInfo)
   y = info.transformed(y)
 
+  # Note: This only works correct with tf.compat.v1.disable_control_flow_v2() currently...
+  # Maybe we need to extend graph_editor?
+  print(ops)
+  x = loop.y.op.inputs[0]
+  print(x)
+  print(info.transformed(x))
+  transformed_map = info._get_transformed_map(x)
+  print(transformed_map)
+
   fetch_helper = FetchHelper(info.transformed(loop.y.op.inputs[0]), verbose_stream=sys.stdout)
   fetch_helper.add_to_control_inputs(info.transformed(loop.y.op))
 
@@ -3182,10 +3191,10 @@ def test_FetchHelper_loop_invalid():
           def body(self, i, x):
             target_shape = tf.convert_to_tensor([i + 1, 2])
             with tf.device("/cpu:0"):
-              target_shape = tf.Print(target_shape, ["target shape:", target_shape])
+              target_shape = TFCompat.v1.Print(target_shape, ["target shape:", target_shape])
             self.y = tf.reshape(x / 2., target_shape)
             with tf.device("/cpu:0"):
-              y = tf.Print(self.y, ["i:", i, "y:", self.y, "shape:", tf.shape(self.y)])
+              y = TFCompat.v1.Print(self.y, ["i:", i, "y:", self.y, "shape:", tf.shape(self.y)])
             return i + 1, y
           def cond(self, i, x):
             return tf.less(i, N)
@@ -3235,12 +3244,12 @@ def test_FetchHelper_loop_invalid_vars_switch():
   v = TFCompat.v1.get_variable(
     name="var_accum_grad", shape=(), dtype=tf.float32,
     initializer=tf.zeros_initializer(), trainable=False)
-  session.run(tf.global_variables_initializer())
+  session.run(TFCompat.v1.global_variables_initializer())
 
   v = tf.cond(
-    tf.less_equal(tf.mod(step, 2), 0),
-    lambda: tf.assign(v, 2.0),
-    lambda: tf.assign_add(v, 3.0))
+    tf.less_equal(TFCompat.v1.mod(step, 2), 0),
+    lambda: TFCompat.v1.assign(v, 2.0),
+    lambda: TFCompat.v1.assign_add(v, 3.0))
   v = tf.identity(v)
   print("v:", v, v.dtype, v.op._control_flow_context)
 
@@ -3249,10 +3258,10 @@ def test_FetchHelper_loop_invalid_vars_switch():
     def body(self, i, x):
       target_shape = tf.convert_to_tensor([i + 1, 2 + tf.cast(v, tf.int32)])
       with tf.device("/cpu:0"):
-        target_shape = tf.Print(target_shape, ["target shape:", target_shape])
+        target_shape = TFCompat.v1.Print(target_shape, ["target shape:", target_shape])
       self.y = tf.reshape(x / 2., target_shape)
       with tf.device("/cpu:0"):
-        y = tf.Print(self.y, ["i:", i, "y:", self.y, "shape:", tf.shape(self.y)])
+        y = TFCompat.v1.Print(self.y, ["i:", i, "y:", self.y, "shape:", tf.shape(self.y)])
       return i + 1, y
     def cond(self, i, x):
       return tf.less(i, N)
