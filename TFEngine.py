@@ -32,6 +32,7 @@ from Dataset import Dataset, Batch, BatchSetGenerator, init_dataset
 from LearningRateControl import load_learning_rate_control_from_config, LearningRateControl
 from Log import log
 from Pretrain import pretrain_from_config
+import TFCompat
 from TFNetwork import TFNetwork, ExternData, help_on_tf_exception
 from TFUpdater import Updater
 from TFDataPipeline import FeedDictDataProvider, DatasetDataProvider
@@ -688,7 +689,7 @@ class Engine(EngineBase):
     self.orig_config = {}  # see _maybe_update_config
     self.devices_config = self._get_devices_config()
     self._check_devices()
-    self.tf_session = None  # type: typing.Optional[tf.Session]
+    self.tf_session = None  # type: typing.Optional[TFCompat.v1.Session]
     self.network = None  # type: typing.Optional[TFNetwork]
     self.updater = None  # type: typing.Optional[Updater]
     self.learning_rate_control = None  # type: typing.Optional[LearningRateControl]

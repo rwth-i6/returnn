@@ -5493,7 +5493,7 @@ def debug_register_better_repr():
   For debugging, it can be helpful to give some more info.
   This monkey-patches clazz.__repr__ of some TF classes.
   """
-  from TFCompat import VariableScope
+  import TFCompat
   from tensorflow.python.training import saver
 
   for cl, f in [
@@ -5501,7 +5501,7 @@ def debug_register_better_repr():
         (tf.Operation, _op_repr),
         (tf.Variable, _var_repr),
         (tf.TensorArray, _tensorarray_repr),
-        (VariableScope, _variablescope_repr),
+        (TFCompat.v1.VariableScope, _variablescope_repr),
         (saver.BaseSaverBuilder.SaveableObject, _saveable_repr),
         (saver.BaseSaverBuilder.SaveSpec, _savespec_repr)]:
     setattr(cl, "__repr__", f)

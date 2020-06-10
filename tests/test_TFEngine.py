@@ -52,7 +52,7 @@ def make_scope():
   :rtype: tf.Session
   """
   with tf.Graph().as_default() as graph:
-    with TFCompat.Session(graph=graph) as session:
+    with TFCompat.v1.Session(graph=graph) as session:
       yield session
 
 
@@ -98,7 +98,7 @@ def _cleanup_old_models(config):
       os.remove(fn)
 
 
-session = TFCompat.InteractiveSession()
+session = TFCompat.v1.InteractiveSession()
 
 
 def test_FeedDictDataProvider():

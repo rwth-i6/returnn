@@ -8,13 +8,15 @@ from __future__ import print_function
 
 import typing
 import tensorflow as tf
-from TFCompat import Optimizer
+import TFCompat
 from tensorflow.python.ops import resource_variable_ops
 
 from Log import log
 from TFNetwork import TFNetwork
 import TFUtil
 from TFUtil import tf_version_tuple, assert_min_tf_version, CustomUpdate, add_check_numerics_ops
+
+Optimizer = TFCompat.v1.train.Optimizer
 
 _OptimizerClassesDictInitialized = False
 _OptimizerClassesDict = {}  # type: typing.Dict[str,typing.Callable[[],Optimizer]]
