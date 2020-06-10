@@ -581,7 +581,7 @@ class InputContext(object):
     # We could also use bucket_by_sequence_length.
     return dataset.padded_batch(
       batch_size=self.get_default_max_seqs(),
-      padded_shapes=dataset.output_shapes,
+      padded_shapes=tf.compat.v1.data.get_output_shapes(dataset),
       drop_remainder=drop_remainder)
 
   def map_producer_to_consumer(self, dataset):
