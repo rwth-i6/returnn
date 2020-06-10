@@ -19,18 +19,18 @@ from __future__ import division
 from __future__ import print_function
 
 # pylint: disable=wildcard-import
-from tensorflow.contrib.graph_editor.edit import *
-from tensorflow.contrib.graph_editor.reroute import *
-from tensorflow.contrib.graph_editor.select import *
-from tensorflow.contrib.graph_editor.subgraph import *
-from tensorflow.contrib.graph_editor.transform import *
-from tensorflow.contrib.graph_editor.util import *
+from .edit import *
+from .reroute import *
+from .select import *
+from .subgraph import *
+from .transform import *
+from .util import *
 # pylint: enable=wildcard-import
 
 # some useful aliases
 # pylint: disable=g-bad-import-order
-from tensorflow.contrib.graph_editor import subgraph as _subgraph
-from tensorflow.contrib.graph_editor import util as _util
+from . import subgraph as _subgraph
+from . import util as _util
 # pylint: enable=g-bad-import-order
 ph = _util.make_placeholder_from_dtype_and_shape
 sgv = _subgraph.make_view

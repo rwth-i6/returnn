@@ -25,8 +25,8 @@ import six
 from six import iteritems
 from six import StringIO
 
-from tensorflow.contrib.graph_editor import select
-from tensorflow.contrib.graph_editor import util
+from . import select
+from . import util
 from tensorflow.python.framework import ops as tf_ops
 
 __all__ = [

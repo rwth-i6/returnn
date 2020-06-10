@@ -24,10 +24,10 @@ from functools import partial
 from six import iteritems
 from six import string_types
 from six import StringIO
-from tensorflow.contrib.graph_editor import reroute
-from tensorflow.contrib.graph_editor import select
-from tensorflow.contrib.graph_editor import subgraph
-from tensorflow.contrib.graph_editor import util
+from . import reroute
+from . import select
+from . import subgraph
+from . import util
 from tensorflow.python.framework import ops as tf_ops
 from tensorflow.python.platform import tf_logging as logging
 

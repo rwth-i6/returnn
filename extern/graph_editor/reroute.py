@@ -18,8 +18,8 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from tensorflow.contrib.graph_editor import subgraph as _subgraph
-from tensorflow.contrib.graph_editor import util as _util
+from . import subgraph as _subgraph
+from . import util as _util
 from tensorflow.python.framework import ops as _tf_ops
 
 from tensorflow.python.util.all_util import remove_undocumented
