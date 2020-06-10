@@ -794,7 +794,7 @@ class LayerBase(object):
     if isinstance(param, tf.Tensor):
       # This can happen with a custom_getter in TFCompat.v1.get_variable(), e.g. via self.reuse_params.
       # Check if we can still find the original variable.
-      from tensorflow.contrib import graph_editor
+      from extern import graph_editor
       import re
       possible_params = TFCompat.v1.get_collection(
         TFCompat.v1.GraphKeys.GLOBAL_VARIABLES, scope=re.escape(self.get_absolute_name_scope_prefix()))

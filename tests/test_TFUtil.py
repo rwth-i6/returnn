@@ -2167,7 +2167,7 @@ def _get_relevant_ops(xs, op_types):
   :return: list of matching ops
   :rtype: list[tf.Operation]
   """
-  from tensorflow.contrib import graph_editor
+  from extern import graph_editor
   return [x for x in graph_editor.get_backward_walk_ops(xs, inclusive=True) if x.type in op_types]
 
 
@@ -3127,11 +3127,11 @@ def test_FetchHelper_simple():
   v = session.run(y)
   numpy.testing.assert_almost_equal(v, numpy.sqrt(42.), decimal=5)
 
-  another_debug_test = tf.Print(y.op.inputs[0], ["debug print:"] + list(y.op.inputs))
+  another_debug_test = TFCompat.v1.Print(y.op.inputs[0], ["debug print:"] + list(y.op.inputs))
   # https://stackoverflow.com/questions/57707445/how-to-add-control-input-to-an-op-after-it-was-run-by-a-session
   # add_control_input(y.op, another_debug_test.op)
   # y.op._add_control_input(another_debug_test.op)
-  from tensorflow.contrib import graph_editor
+  from extern import graph_editor
   y = graph_editor.graph_replace(target_ts=y, replacement_ts={y.op.inputs[0]: another_debug_test}, reuse_dst_scope=True)
 
   fetch_helper = FetchHelper(y.op.inputs[0], verbose_stream=sys.stdout)
@@ -3153,7 +3153,7 @@ def test_FetchHelper_loop():
   _, y = tf.while_loop(cond=loop.cond, body=loop.body, loop_vars=(0, 42.))
   session.run(y)  # first run, to trigger https://stackoverflow.com/questions/57707445/
 
-  from tensorflow.contrib import graph_editor
+  from extern import graph_editor
   ops = graph_editor.get_backward_walk_ops([y.op], inclusive=True, control_inputs=True)
   _, info = graph_editor.copy(ops, reuse_dst_scope=True)
   assert isinstance(info, graph_editor.TransformerInfo)

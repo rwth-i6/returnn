@@ -990,7 +990,7 @@ def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclud
     print("graph of %s:" % example_dWr.name)
     from TFUtil import print_graph_output
     print_graph_output(example_dWr)
-    from tensorflow.contrib import graph_editor
+    from extern import graph_editor
     all_ops = graph_editor.get_backward_walk_ops(
       [y1, dWr1, y2, dWr2, example_dWr], inclusive=True, stop_at_ts=[dy, dd])
     print("all relevant ops:")

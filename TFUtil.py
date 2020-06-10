@@ -8091,7 +8091,7 @@ def add_check_numerics_ops(
   else:
     fetch_ops = [v.op if isinstance(v, tf.Tensor) else v for v in fetches]
     assert all([isinstance(op, tf.Operation) for op in fetch_ops])
-    from tensorflow.contrib import graph_editor
+    from extern import graph_editor
     ops = graph_editor.get_backward_walk_ops(fetch_ops, inclusive=True, control_inputs=True)
   if ignore_ops is None:
     # The checks could increase the memory usage a lot.
@@ -8877,7 +8877,7 @@ def find_ops_with_tensor_input(tensors, fetches=None, graph=None):
       fetches = [fetches]
     fetches = [x.op if isinstance(x, tf.Tensor) else x for x in fetches]
     assert all([isinstance(x, tf.Operation) for x in fetches])
-    from tensorflow.contrib import graph_editor
+    from extern import graph_editor
     all_ops = graph_editor.get_backward_walk_ops(
       fetches, inclusive=True, control_inputs=True, stop_at_ts=tensors)
   else:
@@ -8898,7 +8898,7 @@ def find_ops_with_tensor_input(tensors, fetches=None, graph=None):
 
 def find_ops_path_output_to_input(tensors, fetches):
   """
-  Searches backwards like in :func:`tensorflow.contrib.graph_editor.get_backward_walk_ops`
+  Searches backwards like in :func:`extern.graph_editor.get_backward_walk_ops`
   and then returns a found traceback, if there is one.
 
   :param tf.Tensor|tf.Variable|list[tf.Tensor] tensors: input
@@ -9016,7 +9016,7 @@ def get_variable_grad_from_update_ops(var, update_ops):
     # Case for sparse update in Adam:
     # m_scaled_g_values = grad * (1 - beta1_t)
     # m_t = scatter_add(m, indices, m_scaled_g_values)
-    from tensorflow.contrib import graph_editor
+    from extern import graph_editor
     all_ops = graph_editor.get_backward_walk_ops(update_ops, inclusive=True, control_inputs=True)
     all_ops = [x for x in all_ops if x.name.startswith(op_name_prefix)]
     scatter_add_ops = [x for x in all_ops if x.type == "ScatterAdd"]
@@ -9666,7 +9666,7 @@ class FetchHelper:
     from pprint import pformat
     from tensorflow.python.util import nest
     fetches_flat = nest.flatten(fetches)
-    from tensorflow.contrib import graph_editor
+    from extern import graph_editor
     ops = graph_editor.get_backward_walk_ops(
       seed_ops=[x.op if isinstance(x, (tf.Tensor, tf.Variable)) else x for x in fetches_flat],
       stop_at_ts=stop_at_ts,
@@ -9702,7 +9702,7 @@ class FetchHelper:
     :return: as fetches
     :rtype: tf.Tensor|list[tf.Tensor]
     """
-    from tensorflow.contrib import graph_editor
+    from extern import graph_editor
     fetches_copied = graph_editor.graph_replace(
       target_ts=fetches,
       replacement_ts={fetch_helper.tensor: fetch_helper.identity_with_dep for fetch_helper in fetch_helpers},
