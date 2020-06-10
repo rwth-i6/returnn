@@ -2740,7 +2740,7 @@ class OutputWithActivation(object):
   def get_log_output(self):
     """
     :rtype: tf.Tensor
-    :return: tf.log(output)
+    :return: tf.math.log(output)
     """
     if self.is_softmax_act_func():
       return tf.nn.log_softmax(self.x)
@@ -4480,7 +4480,7 @@ def batched_uniq(x, seq_lens):
   :rtype: (tf.Tensor, tf.Tensor)
   """
   y, new_seq_lens = sparse_labels_with_seq_lens(x, seq_lens=seq_lens, collapse_repeated=True)
-  z = tf.sparse_to_dense(sparse_indices=y.indices, sparse_values=y.values, output_shape=y.dense_shape)
+  z = TFCompat.v1.sparse_to_dense(sparse_indices=y.indices, sparse_values=y.values, output_shape=y.dense_shape)
   return z, new_seq_lens
 
 
@@ -6111,14 +6111,14 @@ def get_random_seed():
 
 def encode_raw(x, axis=-1, seq_lens=None):
   """
-  The inverse function of tf.decode_raw().
+  The inverse function of tf.compat.v1.decode_raw().
   Also see: https://stackoverflow.com/questions/43403147/how-to-create-a-encode-raw-tensorflow-function
 
   :param tf.Tensor x: of integer types [0,255], will get casted to uint8
   :param int axis: the axis to reduce-join the string. decode_raw has added it at the end
   :param tf.Tensor|None seq_lens: must have same shape as x after reduce-joining.
-    Note that using seq_lens will make our output not compatible with tf.decode_raw() anymore
-    because tf.decode_raw() requires all strings to be of the same length.
+    Note that using seq_lens will make our output not compatible with TFCompat.v1.decode_raw() anymore
+    because tf.compat.v1.decode_raw() requires all strings to be of the same length.
   :return: string tensor
   :rtype: tf.Tensor
   """
@@ -6183,12 +6183,13 @@ def remove_labels(x, labels):
   :return: x where all provided labels are removed, and the indices are changed accordingly
   :rtype: tf.SparseTensor
   """
+  import TFCompat
   if not labels:
     return x
   x.indices.set_shape((tf.TensorShape((None, 2))))
   x.values.set_shape((tf.TensorShape((None,))))
   x.dense_shape.set_shape(tf.TensorShape((2,)))
-  x_ = tf.sparse_to_dense(sparse_indices=x.indices, sparse_values=x.values, output_shape=x.dense_shape)
+  x_ = TFCompat.v1.sparse_to_dense(sparse_indices=x.indices, sparse_values=x.values, output_shape=x.dense_shape)
   seq_lens = get_sparse_tensor_length(x)
   z, _ = sparse_labels_with_seq_lens(x_, seq_lens=seq_lens, post_filter_idx=labels)
   return z
@@ -6375,6 +6376,7 @@ def view_as(x, dtype):
   :param tf.DType dtype:
   :return: x.view(dtype) equivalent (see numpy.view)
   """
+  import TFCompat
   import numpy
 
   # noinspection PyShadowingNames
@@ -6386,7 +6388,7 @@ def view_as(x, dtype):
     assert isinstance(x, numpy.ndarray)
     return x.view(dtype.as_numpy_dtype)
 
-  y, = tf.py_func(
+  y, = TFCompat.v1.py_func(
     py_wrap_numpy_view,
     [x], [dtype],
     name="py_wrap_numpy_view")
@@ -8559,7 +8561,7 @@ def compute_sampled_logits(weights,
                            subtract_log_q=True,
                            remove_accidental_hits=False,
                            partition_strategy="mod",
-                           name=None,
+                           name="compute_sampled_logits",
                            seed=None):
   """Helper function for nce_loss and sampled_softmax_loss functions.
   Computes sampled output training logits and labels suitable for implementing
@@ -8608,11 +8610,12 @@ def compute_sampled_logits(weights,
       These are the targets. If num_true > 1 the per-example labels are divided by num_true so they sum to 1.0.
   :rtype: (tf.Tensor, tf.Tensor)
   """
+  import TFCompat
 
   if not isinstance(weights, (list, tuple)):
     weights = [weights]
 
-  with tf.name_scope(name, "compute_sampled_logits"):
+  with tf.name_scope(name):
     if labels.dtype != tf.int64:
       labels = tf.cast(labels, tf.int64)
     labels_flat = tf.reshape(labels, [-1])
@@ -8679,7 +8682,7 @@ def compute_sampled_logits(weights,
            tf.expand_dims(num_sampled, 0)], 0)
       if sampled_logits.dtype != acc_weights.dtype:
         acc_weights = tf.cast(acc_weights, sampled_logits.dtype)
-      sampled_logits += tf.sparse_to_dense(
+      sampled_logits += TFCompat.v1.sparse_to_dense(
           sparse_indices,
           sampled_logits_shape,
           acc_weights,
@@ -8687,8 +8690,8 @@ def compute_sampled_logits(weights,
           validate_indices=False)
 
     if subtract_log_q:
-      true_logits -= tf.log(true_expected_count)
-      sampled_logits -= tf.log(sampled_expected_count)
+      true_logits -= TFCompat.v1.log(true_expected_count)
+      sampled_logits -= TFCompat.v1.log(sampled_expected_count)
 
     out_logits = tf.concat([true_logits, sampled_logits], 1)
 

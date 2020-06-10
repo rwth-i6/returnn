@@ -8705,7 +8705,7 @@ class GenericCELoss(Loss):
       :param tf.Tensor target:
       :rtype: tf.Tensor
       """
-      nlog_scores = -tf.log(tf.clip_by_value(y, 1.e-20, 1.e20))  # (time,dim)
+      nlog_scores = -TFCompat.v1.log(tf.clip_by_value(y, 1.e-20, 1.e20))  # (time,dim)
       # target is shape (time,) -> index.
       target_exp = tf.stack([tf.range(tf.shape(target)[0], dtype=tf.int32), target], axis=1)  # (time,2)
       # Thus K == 2. gather_nd out will be (target_exp.shape[0],) = (time,).
@@ -8743,7 +8743,7 @@ class GenericCELoss(Loss):
     assert self.output_with_activation
     x = self.output_with_activation.x
     y = self.output_with_activation.y
-    grad_f, = tf.gradients(tf.log(y), x)
+    grad_f, = tf.gradients(TFCompat.v1.log(y), x)
     assert grad_f is not None
     grad_f = flatten_with_seq_len_mask(grad_f, seq_lens=self.output_seq_lens, time_major=self.output.is_time_major)
     x = flatten_with_seq_len_mask(x, seq_lens=self.output_seq_lens, time_major=self.output.is_time_major)
@@ -9451,7 +9451,7 @@ class ExternSprintLoss(Loss):
       from TFSprint import get_sprint_loss_and_error_signal
       loss, error_signal = get_sprint_loss_and_error_signal(
         sprint_opts=self.sprint_opts,
-        log_posteriors=tf.log(output),
+        log_posteriors=TFCompat.v1.log(output),
         seq_lengths=self.output_seq_lens,
         seq_tags=seq_tags)
       loss = self.reduce_func(loss)
@@ -9502,7 +9502,7 @@ class FastBaumWelchLoss(Loss):
       from TFNativeOp import fast_baum_welch_by_sprint_automata
       fwdbwd, obs_scores = fast_baum_welch_by_sprint_automata(
         sprint_opts=self.sprint_opts,
-        am_scores=-tf.log(output),
+        am_scores=-TFCompat.v1.log(output),
         float_idx=seq_mask,
         tags=seq_tags)
       loss = self.reduce_func(obs_scores[0])

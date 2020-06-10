@@ -1249,7 +1249,7 @@ def check_chunk(x, index, chunk_size, chunk_step):
   """
   x = tf.convert_to_tensor(x)
   out1, oindex1 = pure_tf_chunk(x, index=index, chunk_size=chunk_size, chunk_step=chunk_step)
-  dout = tf.random_normal(tf.shape(out1))
+  dout = TFCompat.v1.random_normal(tf.shape(out1))
   dx1, = tf.gradients(ys=[out1], xs=[x], grad_ys=[dout])
   out2, oindex2 = chunk(x, index=index, chunk_size=chunk_size, chunk_step=chunk_step)
   dx2, = tf.gradients(ys=[out2], xs=[x], grad_ys=[dout])
@@ -1277,7 +1277,7 @@ def test_chunk_simple():
   n_batch = 1
   n_time = 17
   n_dim = 3
-  x = tf.random_normal((n_time, n_batch, n_dim))
+  x = TFCompat.v1.random_normal((n_time, n_batch, n_dim))
   index = [[1.] * n_time] * n_batch
   index = tf.convert_to_tensor(index)
   index = tf.transpose(index)
@@ -1294,7 +1294,7 @@ def test_chunk():
   n_batch = 3
   n_time = 17
   n_dim = 5
-  x = tf.random_normal((n_time, n_batch, n_dim))
+  x = TFCompat.v1.random_normal((n_time, n_batch, n_dim))
   index = [[1.] * n_time] * n_batch
   index[-1][-1] = 0.
   index[-1][-2] = 0.
@@ -1350,10 +1350,10 @@ def check_unchunk(x, index, chunk_size, chunk_step):
   """
   n_time, n_batch = tf.shape(x)[0], tf.shape(x)[1]
   x, index = chunk(x, index, chunk_size=chunk_size, chunk_step=chunk_step)
-  x = tf.random_normal(tf.shape(x))
+  x = TFCompat.v1.random_normal(tf.shape(x))
   out1, oindex1, ofactors1 = pure_tf_unchunk(
     x, index=index, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
-  dout = tf.random_normal(tf.shape(out1))
+  dout = TFCompat.v1.random_normal(tf.shape(out1))
   dx1, = tf.gradients(ys=[out1], xs=[x], grad_ys=[dout])
   out2, oindex2, ofactors2 = unchunk(
     x, index=index, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
@@ -1384,7 +1384,7 @@ def test_unchunk():
   n_batch = 3
   n_time = 17
   n_dim = 5
-  x = tf.random_normal((n_time, n_batch, n_dim))
+  x = TFCompat.v1.random_normal((n_time, n_batch, n_dim))
   index = [[1.] * n_time] * n_batch
   index[-1][-1] = 0.
   index[-1][-2] = 0.

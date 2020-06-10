@@ -1308,8 +1308,8 @@ def test_loop_var_creation():
 def test_dot_simple():
   n_time, n_batch = 7, 11
   n_in, n_out = 3, 5
-  weights = tf.random_normal((n_in, n_out))
-  x = tf.random_normal((n_time, n_batch, n_in))
+  weights = TFCompat.v1.random_normal((n_in, n_out))
+  x = TFCompat.v1.random_normal((n_time, n_batch, n_in))
   y = dot(x, weights)
   y.set_shape((n_time, n_batch, n_out))
   session.run(y)
@@ -1394,10 +1394,10 @@ def test_nd_indices_scatter_nd_time_major():
   seq_len = tf.convert_to_tensor([7, 4, 5])
   n_ts = 2
   n_k = 5
-  v = tf.random_normal((n_ts, n_k))
+  v = TFCompat.v1.random_normal((n_ts, n_k))
   v = expand_dims_unbroadcast(v, axis=0, dim=n_batch)  # (B,Ts,K)
   v = Data(name="v", shape=(n_ts, n_k), placeholder=v)
-  x = tf.random_normal((n_batch, n_time, n_k))
+  x = TFCompat.v1.random_normal((n_batch, n_time, n_k))
   x = Data(name="x", shape=(None, n_k), placeholder=x, size_placeholder={0: seq_len})
   print(x)
   print(v)
@@ -1632,20 +1632,20 @@ def test_global_tensor():
 
 
 def test_encode_raw_direct():
-  raw = tf.decode_raw(tf.constant("ABC"), tf.uint8)
+  raw = TFCompat.v1.decode_raw(tf.constant("ABC"), tf.uint8)
   assert_equal(list(raw.eval()), [65, 66, 67])
 
 
 def test_encode_raw_simple():
-  raw = tf.decode_raw(tf.constant("hello"), tf.uint8)
+  raw = TFCompat.v1.decode_raw(tf.constant("hello"), tf.uint8)
   back = encode_raw(raw)
   assert_equal(back.eval(), b"hello")
 
 
 def test_encode_raw_seq_lens():
-  strs = ["hello", "world", "a    "]  # all same lengths for tf.decode_raw
+  strs = ["hello", "world", "a    "]  # all same lengths for TFCompat.v1.decode_raw
   strs_stripped = [s.strip() for s in strs]
-  raw = tf.decode_raw(tf.constant(strs), tf.uint8)
+  raw = TFCompat.v1.decode_raw(tf.constant(strs), tf.uint8)
   seq_lens = tf.constant([len(s) for s in strs_stripped])
   back = encode_raw(raw, seq_lens=seq_lens)
   assert_equal(list(back.eval()), [s.encode("utf8") for s in strs_stripped])
@@ -1711,7 +1711,7 @@ def test_enforce_copy():
   a = tf.identity(v.read_value())
   b = enforce_copy(v.read_value())
   with tf.control_dependencies([a, b]):
-    with tf.control_dependencies([tf.assign(v, 3)]):
+    with tf.control_dependencies([TFCompat.v1.assign(v, 3)]):
       # `a` is a ref to v, thus also 3 now.
       # `b` is a copy, thus 2, as initially.
       x = tf.add(0, [a, b, v.read_value()])
@@ -1903,7 +1903,7 @@ def test_map_labels_SparseTensor():
   y = map_labels(x, label_map=label_map)
   assert isinstance(y, tf.SparseTensor)
   y_eval = session.run(y)
-  assert isinstance(y_eval, tf.SparseTensorValue)
+  assert isinstance(y_eval, TFCompat.v1.SparseTensorValue)
   assert_equal(y_eval.values.tolist(), [1, 2, 3, 0])
 
 
@@ -1912,7 +1912,7 @@ def test_sparse_labels():
   seq_lens = tf.constant([4, 2], name="seq_lens")
   y = sparse_labels(x, seq_lens=seq_lens)
   y_eval = session.run(y)
-  assert isinstance(y_eval, tf.SparseTensorValue)
+  assert isinstance(y_eval, TFCompat.v1.SparseTensorValue)
   assert isinstance(y_eval.indices, numpy.ndarray)
   assert isinstance(y_eval.values, numpy.ndarray)
   assert isinstance(y_eval.dense_shape, numpy.ndarray)
@@ -1930,7 +1930,7 @@ def test_remove_labels():
   y = remove_labels(x, labels=labels)
   assert isinstance(y, tf.SparseTensor)
   y_eval = session.run(y)
-  assert isinstance(y_eval, tf.SparseTensorValue)
+  assert isinstance(y_eval, TFCompat.v1.SparseTensorValue)
   assert isinstance(y_eval.indices, numpy.ndarray)
   assert isinstance(y_eval.values, numpy.ndarray)
   assert isinstance(y_eval.dense_shape, numpy.ndarray)
@@ -1950,7 +1950,7 @@ def test_ctc_greedy_decode():
   (y2,), _ = tf.nn.ctc_greedy_decoder(inputs=tf.transpose(logits, [1, 0, 2]), sequence_length=seq_lens)
   assert isinstance(y1, tf.SparseTensor)
   assert isinstance(y2, tf.SparseTensor)
-  z = tf.sparse_to_dense(
+  z = TFCompat.v1.sparse_to_dense(
     sparse_indices=y1.indices, sparse_values=y1.values, output_shape=y1.dense_shape, default_value=-1)
   z_eval = session.run(z)
   assert isinstance(z_eval, numpy.ndarray)
@@ -1960,7 +1960,7 @@ def test_ctc_greedy_decode():
     assert all([x == -1 for x in z_eval[i, len(expected_labels[i]):]])
   y1_eval = session.run(y1)
   y2_eval = session.run(y2)
-  assert isinstance(y1_eval, tf.SparseTensorValue)
+  assert isinstance(y1_eval, TFCompat.v1.SparseTensorValue)
   assert isinstance(y1_eval.indices, numpy.ndarray)
   assert isinstance(y1_eval.values, numpy.ndarray)
   assert isinstance(y1_eval.dense_shape, numpy.ndarray)
@@ -2133,7 +2133,7 @@ def test_safe_log_and_grad():
     err_x_t, = tf.gradients(ys=y_t, xs=x_t)
     check_numerics_op = add_check_numerics_ops([y_t, err_x_t])
     # For comparison:
-    y2_t = tf.log(x_t)
+    y2_t = TFCompat.v1.log(x_t)
     err2_x_t, = tf.gradients(ys=y2_t, xs=x_t)
 
   for x in [0.0, 100, 1e30, 1e-30]:
@@ -2203,7 +2203,7 @@ def test_check_base_op_type_and_replace_softmax():
   with tf.name_scope("test_check_base_op_type_and_replace_softmax"):
     z = tf.constant([1.0, 2.0])
     x = tf.nn.softmax(z)
-    y = tf.log(x)
+    y = TFCompat.v1.log(x)
     print("x:", x, list(x.op.inputs), "y:", y)
     y2 = check_base_op_type_and_replace(x, "Softmax", "LogSoftmax")
     print("y2:", y2)
@@ -2217,7 +2217,7 @@ def test_check_base_op_type_and_replace_sigmoid():
   with tf.name_scope("test_check_base_op_type_and_replace_sigmoid"):
     z = tf.constant([1.0, 2.0])
     x = tf.sigmoid(z)
-    y = tf.log(x)
+    y = TFCompat.v1.log(x)
     print("x:", x, list(x.op.inputs), "y:", y)
     y2 = check_base_op_type_and_replace(x, "Sigmoid", "LogSigmoid")
     print("y2:", y2)
@@ -2293,7 +2293,7 @@ def test_words_split_get_sparse_tensor_length():
   word_lens = [len(s.split(" ")) for s in strings]
   tf_strings = TFCompat.v1.placeholder(tf.string, [None])
   tf_words = words_split(tf_strings)
-  tf_dense_words = tf.sparse_to_dense(
+  tf_dense_words = TFCompat.v1.sparse_to_dense(
     tf_words.indices, tf_words.dense_shape, tf_words.values, default_value="")
   tf_num_words = get_sparse_tensor_length(tf_words)
   words, dense_words, num_words = session.run(
@@ -2301,7 +2301,7 @@ def test_words_split_get_sparse_tensor_length():
   print(words)
   print(dense_words)
   print(num_words)
-  assert isinstance(words, tf.SparseTensorValue)
+  assert isinstance(words, TFCompat.v1.SparseTensorValue)
   assert isinstance(dense_words, numpy.ndarray)
   assert isinstance(num_words, numpy.ndarray)
   assert dense_words.shape == (len(word_lens), max(word_lens))
@@ -2995,11 +2995,11 @@ def test_softmax_cross_entropy_over_size_gradient():
   n_batch = 2
   n_dec_time = n_enc_time = 10
   n_extra_dim = 1
-  tf.set_random_seed(42)
+  TFCompat.v1.set_random_seed(42)
   energy_tf = TFCompat.v1.get_variable(
     "test_softmax_cross_entropy_over_size_gradient_var",
     shape=(n_batch, n_dec_time, n_enc_time, n_extra_dim),
-    initializer=tf.random_normal_initializer(seed=23))
+    initializer=TFCompat.v1.random_normal_initializer(seed=23))
   ref_att_weights_tf = tf.reshape(
     tf.one_hot(tf.range(n_dec_time, dtype=tf.int32), n_enc_time, dtype=tf.float32),
     (1, n_dec_time, n_enc_time, n_extra_dim))

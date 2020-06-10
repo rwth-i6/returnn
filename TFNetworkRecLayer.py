@@ -4341,7 +4341,7 @@ class ChoiceLayer(BaseChoiceLayer):
           if random_sample_scale:
             # https://github.com/tensorflow/tensorflow/issues/9260
             # https://timvieira.github.io/blog/post/2014/08/01/gumbel-max-trick-and-weighted-reservoir-sampling/
-            scores_random_sample = -tf.log(-tf.log(tf.random_uniform(tf.shape(scores_in), 0, 1)))
+            scores_random_sample = -TFCompat.v1.log(-TFCompat.v1.log(tf.random_uniform(tf.shape(scores_in), 0, 1)))
           scores_comb = optional_add(
             optional_mul(scores_in, prob_scale),
             optional_mul(scores_base, base_beam_score_scale),

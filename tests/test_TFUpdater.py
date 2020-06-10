@@ -110,14 +110,14 @@ def test_Updater_CustomUpdate():
 def test_add_check_numerics_ops():
   with make_scope() as session:
     x = tf.constant(3.0, name="x")
-    y = tf.log(x * 3, name="y")
+    y = TFCompat.v1.log(x * 3, name="y")
     assert isinstance(y, tf.Tensor)
     assert_almost_equal(session.run(y), numpy.log(9.))
     check = add_check_numerics_ops([y])
     session.run(check)
-    z1 = tf.log(x - 3, name="z1")
+    z1 = TFCompat.v1.log(x - 3, name="z1")
     assert_equal(str(session.run(z1)), "-inf")
-    z2 = tf.log(x - 4, name="z2")
+    z2 = TFCompat.v1.log(x - 4, name="z2")
     assert_equal(str(session.run(z2)), "nan")
     check1 = add_check_numerics_ops([z1])
     try:
@@ -164,7 +164,7 @@ def test_grad_add_check_numerics_ops():
 def test_Updater_add_check_numerics_ops():
   class _Layer(DummyLayer):
     def _get_loss_value(self):
-      return tf.log(self.x)
+      return TFCompat.v1.log(self.x)
 
   from TFNetwork import TFNetwork, ExternData
   from Config import Config
