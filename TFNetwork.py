@@ -897,9 +897,9 @@ class TFNetwork(object):
       self.total_constraints = total_constraints
       self.total_objective = total_loss + total_constraints
       if not TFUtil.get_current_control_flow_context():  # summaries cannot be used when in loop or cond
-        tf.summary.scalar("loss", self.total_loss)
-        tf.summary.scalar("constraints", self.total_constraints)
-        tf.summary.scalar("objective", self.total_objective)
+        TFCompat.v1.summary.scalar("loss", self.total_loss)
+        TFCompat.v1.summary.scalar("constraints", self.total_constraints)
+        TFCompat.v1.summary.scalar("objective", self.total_objective)
 
   def maybe_construct_objective(self):
     """
@@ -2180,16 +2180,16 @@ class LossHolder:
       # A loss value is typically a scalar but there are cases of sequence or position wise loss values
       # (e.g. if the eval_output_file_per_seq option is used).
       if self._loss_value.get_shape().ndims == 0:
-        tf.summary.scalar("loss_%s" % name, self._loss_value * self._norm_factor)
+        TFCompat.v1.summary.scalar("loss_%s" % name, self._loss_value * self._norm_factor)
         if self._network.get_config().bool("calculate_exp_loss", False):
-          tf.summary.scalar("exp_loss_%s" % name, tf.exp(self._loss_value * self._norm_factor))
+          TFCompat.v1.summary.scalar("exp_loss_%s" % name, tf.exp(self._loss_value * self._norm_factor))
         if self._network.get_config().bool("debug_unnormalized_loss_summaries", False):
-          tf.summary.scalar("unnormalized_loss_%s" % name, self._loss_value)
+          TFCompat.v1.summary.scalar("unnormalized_loss_%s" % name, self._loss_value)
         if self._network.get_config().bool("debug_objective_loss_summaries", False):
-          tf.summary.scalar("objective_loss_%s" % name, self._loss_value_for_objective)
+          TFCompat.v1.summary.scalar("objective_loss_%s" % name, self._loss_value_for_objective)
     if self._error_value is not None:
       if self._error_value.get_shape().ndims == 0:
-        tf.summary.scalar("error_%s" % name, self._error_value * self._norm_factor)
+        TFCompat.v1.summary.scalar("error_%s" % name, self._error_value * self._norm_factor)
 
   def _prepare(self):
     """

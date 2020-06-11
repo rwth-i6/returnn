@@ -2796,7 +2796,7 @@ def variable_summaries(var, name=None, with_histogram=False):
     name = get_base_name(var)
   with tf.name_scope('summaries_%s' % name):
     for k, v in variable_scalar_summaries_dict(var, name=name).items():
-      tf.summary.scalar(k, v)
+      TFCompat.v1.summary.scalar(k, v)
     if with_histogram:
       tf.summary.histogram('%s_histogram' % name, var)
 
@@ -5341,7 +5341,7 @@ class MetaLosses(object):
     if cls.scope_ctx.scope:
       with tf.name_scope("grad_prediction_loss"):
         grad_prediction_loss = tf.reduce_mean(tf.square(synthetic_grad_x - tf.stop_gradient(grad_out)))
-        tf.summary.scalar("loss", grad_prediction_loss)
+        TFCompat.v1.summary.scalar("loss", grad_prediction_loss)
       # noinspection PyProtectedMember
       loss_info = op._RETURNN_loss_info
       cls.scope_ctx.scope.register_loss(MetaLosses.LossInfo(value=grad_prediction_loss, **loss_info))
@@ -5384,7 +5384,7 @@ class MetaLosses(object):
     if cls.scope_ctx.scope:
       with tf.name_scope("tikhonov_regularization_loss"):
         loss = tf.nn.l2_loss(grad_out)
-        tf.summary.scalar("loss", loss)
+        TFCompat.v1.summary.scalar("loss", loss)
       # noinspection PyProtectedMember
       loss_info = op._RETURNN_loss_info
       cls.scope_ctx.scope.register_loss(MetaLosses.LossInfo(value=loss, **loss_info))

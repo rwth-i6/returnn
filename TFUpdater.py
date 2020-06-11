@@ -706,7 +706,7 @@ class WrapOptimizer:
         with tf.name_scope("global_norm_for_tag_%s" % get_valid_scope_name_from_str(tag)):
           norm = self._global_norm({self.var_grads[var] for var in self.vars_by_tag[tag]})
         if self.optimizer.config.bool_or_other("debug_grad_summaries", False):
-          tf.summary.scalar("global_norm_for_tag_%s" % get_valid_scope_name_from_str(tag), norm)
+          TFCompat.v1.summary.scalar("global_norm_for_tag_%s" % get_valid_scope_name_from_str(tag), norm)
         self._global_grad_norm_per_tag[tag] = norm
       return self._global_grad_norm_per_tag[tag]
 
@@ -876,7 +876,7 @@ class WrapOptimizer:
       raise Exception("no single variable to train")
     global_info = self._GetGlobalInfo(optimizer=self, all_vars=var_list, var_grads=var_grads)
     if self.config.bool_or_other("debug_grad_summaries", False):
-      tf.summary.scalar("global_grad_norm", global_info.get_global_grad_norm())
+      TFCompat.v1.summary.scalar("global_grad_norm", global_info.get_global_grad_norm())
     grads_per_apply_grad_opts = {}  # dict apply_grad_opts -> list of (grad, var)
     for grad, var in grads_and_vars:
       assert var in var_list
