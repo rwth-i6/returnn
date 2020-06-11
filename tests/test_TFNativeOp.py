@@ -104,7 +104,11 @@ def dump_info():
   if TFUtil.have_min_tf_version((1, 14)):
     print("TF link flags:", tf.sysconfig.get_link_flags())
     print("TF compile flags:", tf.sysconfig.get_compile_flags())
-  print("TF cxx11 abi flag:", getattr(tf, 'CXX11_ABI_FLAG', "<undefined>"))
+  if hasattr(tf, "sysconfig"):
+    cxx11_abi_flag = tf.sysconfig.CXX11_ABI_FLAG
+  else:
+    cxx11_abi_flag = getattr(tf, 'CXX11_ABI_FLAG', "<undefined>")
+  print("TF cxx11 abi flag:", cxx11_abi_flag)
   tf_lib_so = tf.sysconfig.get_lib() + "/libtensorflow_framework.so"
   tf_pywrap_so = tf.sysconfig.get_lib() + "/python/_pywrap_tensorflow_internal.so"
   sys_exec("ls", "-la", tf.sysconfig.get_lib())

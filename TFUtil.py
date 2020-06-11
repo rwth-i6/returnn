@@ -4971,8 +4971,7 @@ class OpCodeCompiler(NativeCodeCompiler):
       ld_flags += tf.sysconfig.get_link_flags()
     elif have_min_tf_version((1, 4)):
       ld_flags += ["-L%s" % tf.sysconfig.get_lib(), "-ltensorflow_framework"]
-    # noinspection PyUnresolvedReferences
-    use_cxx11_abi = hasattr(tf, 'CXX11_ABI_FLAG') and tf.CXX11_ABI_FLAG
+    use_cxx11_abi = tf.sysconfig.CXX11_ABI_FLAG if hasattr(tf, "sysconfig") else getattr(tf, "CXX11_ABI_FLAG", False)
     super(OpCodeCompiler, self).__init__(
       include_paths=include_paths, c_macro_defines=c_macro_defines, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi,
       **kwargs)
@@ -5046,7 +5045,7 @@ class TFNativeUtilCompiler(NativeCodeCompiler):
     elif have_min_tf_version((1, 4)):
       ld_flags += ["-L%s" % tf.sysconfig.get_lib(), "-ltensorflow_framework"]
     # noinspection PyUnresolvedReferences
-    use_cxx11_abi = hasattr(tf, 'CXX11_ABI_FLAG') and tf.CXX11_ABI_FLAG
+    use_cxx11_abi = tf.sysconfig.CXX11_ABI_FLAG if hasattr(tf, "sysconfig") else getattr(tf, "CXX11_ABI_FLAG", False)
     super(TFNativeUtilCompiler, self).__init__(
       include_paths=include_paths, c_macro_defines=c_macro_defines, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi,
       **kwargs)
