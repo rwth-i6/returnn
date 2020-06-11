@@ -125,6 +125,8 @@ class TestDemos(object):
       # we want it unique below
       for fn in glob("dist/*.tar.gz"):
         os.remove(fn)
+    if os.path.exists("MANIFEST"):
+      os.remove("MANIFEST")  # auto-generated. will be recreated
     if os.path.exists("docs/crnn"):
       os.remove("docs/crnn")  # this is auto-generated, and confuses setup.py sdist
     tmp_model_dir = "/tmp/%s/returnn-demo-as-framework" % get_login_username()
