@@ -8889,7 +8889,7 @@ class CtcLoss(Loss):
           targets=self.target.get_placeholder_as_batch_major(), targets_seq_lens=self.target_seq_lens,
           **self.ctc_opts)
       else:
-        self._ctc_loss = tf.nn.ctc_loss(
+        self._ctc_loss = TFCompat.v1.nn.ctc_loss(
           inputs=logits, labels=labels, sequence_length=seq_lens, time_major=self.output.is_time_major,
           **self.ctc_opts)
       loss = self._ctc_loss  # shape (batch,)

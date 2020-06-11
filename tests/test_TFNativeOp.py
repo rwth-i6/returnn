@@ -1823,7 +1823,7 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False, la
   am_scores_tf = tf.constant(am_scores)
   seq_lens_tf = tf.constant(seq_lens)
   # inputs are unnormalized. tf.nn.ctc_loss does softmax internally.
-  ref_ctc_loss_tf = tf.nn.ctc_loss(
+  ref_ctc_loss_tf = TFCompat.v1.nn.ctc_loss(
     labels=targets_sparse_tf,
     inputs=am_scores_tf, sequence_length=seq_lens_tf, time_major=True, ctc_merge_repeated=label_loop)
   # See grad definition of CTCLoss.
