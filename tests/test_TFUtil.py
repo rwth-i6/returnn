@@ -987,10 +987,12 @@ def test_Data_copy_move_axis_time_to_end():
 
 
 def test_sequence_mask_len_via_loop():
-  seq_len, = tf.while_loop(
+  seq_len = tf.while_loop(
     cond=lambda x: tf.less(x[0], 2),
     body=lambda x: x + 1,
     loop_vars=[tf.convert_to_tensor([1, 2])])
+  if isinstance(seq_len, list):  # TF 2
+    seq_len = seq_len[0]
   assert not has_control_flow_context(seq_len)
   mask = sequence_mask_time_major(seq_len)
   seq_len_v, mask_v = session.run((seq_len, mask))
