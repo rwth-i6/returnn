@@ -147,7 +147,7 @@ def test_grad_add_check_numerics_ops():
     assert_equal(str(grad_x.eval()), "-inf")
 
     session.run(x.assign(1.0))
-    opt = tf.train.GradientDescentOptimizer(learning_rate=1.0)
+    opt = TFCompat.v1.train.GradientDescentOptimizer(learning_rate=1.0)
     train_op = opt.minimize(y, var_list=[x])
     check = add_check_numerics_ops([train_op])
     session.run(check)

@@ -2434,7 +2434,7 @@ class SliceLayer(_ConcatInputLayer):
             tf.maximum(0, self.output.size_placeholder[axis_wo_batch] + slice_end))
       if slice_step:
         self.output.size_placeholder[axis_wo_batch] = (
-          tf.ceil(tf.divide(self.output.size_placeholder[axis_wo_batch], slice_step)))
+          TFCompat.v1.ceil(tf.divide(self.output.size_placeholder[axis_wo_batch], slice_step)))
       from TFUtil import DimensionTag
       if not DimensionTag.get_tag_from_size_tensor(self.output.size_placeholder[axis_wo_batch]):
         tag = DimensionTag(
@@ -6134,14 +6134,15 @@ class ResizeLayer(_ConcatInputLayer):
       mask = tf.cast(tf.floor(random_tensor), dtype=tf.bool)
       mask = tf.concat([tf.ones((shape[axis], 1), dtype=tf.bool), mask], axis=1)  # (old_size, factor)
       mask = tf.reshape(mask, (new_size,))  # (new_size,)
-      new_size_dropped = tf.reduce_sum(tf.to_int32(mask))
+      new_size_dropped = tf.reduce_sum(tf.cast(mask, tf.int32))
       mask = expand_dims_unbroadcast(mask, axis=0, dim=shape[0])  # (batch,new_size)
       x = tf.boolean_mask(x, mask)  # [batch*new_size_dropped] + remaining_shape
       x = tf.reshape(x, [shape[0], new_size_dropped] + remaining_shape)  # [batch, new_size_dropped] + remaining_shape
       if (axis - 1) in self.output.size_placeholder:
         orig_mask = tf.sequence_mask(
           self.output.size_placeholder[axis - 1], maxlen=new_size, dtype=tf.bool)  # (batch,new_size)
-        self.output.size_placeholder[axis - 1] = tf.reduce_sum(tf.to_int32(tf.logical_and(mask, orig_mask)), axis=1)
+        self.output.size_placeholder[axis - 1] = tf.reduce_sum(
+          tf.cast(tf.logical_and(mask, orig_mask), tf.int32), axis=1)
     if axis != 1:
       perm = [0] + remaining_axes
       perm.insert(axis, 1)

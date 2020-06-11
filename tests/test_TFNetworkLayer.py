@@ -1296,7 +1296,7 @@ def test_ScatterNdLayer_RangeLayer():
     assert out_layer.output.feature_dim_axis_or_unspecified is NotSpecified and out_layer.output.feature_dim_axis == 2
     assert out_layer.output.time_dim_axis == 1
 
-    session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+    session.run(TFCompat.v1.variables_initializer(TFCompat.v1.global_variables() + [network.global_train_step]))
     info, out = session.run(
       (fetches, out_layer.output.placeholder),
       feed_dict={
@@ -1334,7 +1334,7 @@ def test_ScatterNdLayer_RangeLayer_RangeInAxisLayer():
     assert out_layer.output.feature_dim_axis_or_unspecified is NotSpecified and out_layer.output.feature_dim_axis == 3
     assert out_layer.output.time_dim_axis == 0
 
-    session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+    session.run(TFCompat.v1.variables_initializer(TFCompat.v1.global_variables() + [network.global_train_step]))
     info, out = session.run(
       (fetches, out_layer.output.placeholder),
       feed_dict={
@@ -2376,7 +2376,7 @@ def test_LinearLayer_simple_train():
     network.construct_from_dict(net_dict)
     data_input = network.extern_data.get_default_input_data()
     data_target = network.extern_data.get_default_target_data()
-    optimizer = tf.train.AdamOptimizer()
+    optimizer = TFCompat.v1.train.AdamOptimizer()
     network.maybe_construct_objective()
     update_op = optimizer.minimize(network.get_objective())
     n_batch = 5
@@ -2436,7 +2436,7 @@ def test_flat_net_construction():
     network.construct_from_dict(net_dict)
     data_input = network.extern_data.get_default_input_data()
     data_target = network.extern_data.get_default_target_data()
-    optimizer = tf.train.AdamOptimizer()
+    optimizer = TFCompat.v1.train.AdamOptimizer()
     network.maybe_construct_objective()
     update_op = optimizer.minimize(network.get_objective())
     n_batch = 5
@@ -2500,7 +2500,7 @@ def test_SyntheticGradientLayer():
     data_target = network.extern_data.get_default_target_data()
     from TFUpdater import Updater
     updater = Updater(config=config, network=network, initial_learning_rate=0.001)
-    updater.set_trainable_vars(tf.trainable_variables())
+    updater.set_trainable_vars(TFCompat.v1.trainable_variables())
     update_op = updater.get_optim_op()
     assert updater.optim_meta_losses_dict
     fetches = network.get_fetches_dict()
@@ -2510,7 +2510,7 @@ def test_SyntheticGradientLayer():
     n_time = 11
     rnd = numpy.random.RandomState(42)
     with TFCompat.v1.Session() as session:
-      session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+      session.run(TFCompat.v1.variables_initializer(TFCompat.v1.global_variables() + [network.global_train_step]))
       for step in range(5):
         info, _ = session.run(
           (fetches, update_op),
@@ -2565,7 +2565,7 @@ def test_TikhonovRegularizationLayer():
     data_target = network.extern_data.get_default_target_data()
     from TFUpdater import Updater
     updater = Updater(config=config, network=network, initial_learning_rate=0.001)
-    updater.set_trainable_vars(tf.trainable_variables())
+    updater.set_trainable_vars(TFCompat.v1.trainable_variables())
     update_op = updater.get_optim_op()
     assert updater.optim_meta_losses_dict
     fetches = network.get_fetches_dict()
@@ -2575,7 +2575,7 @@ def test_TikhonovRegularizationLayer():
     n_time = 11
     rnd = numpy.random.RandomState(42)
     with TFCompat.v1.Session() as session:
-      session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+      session.run(TFCompat.v1.variables_initializer(TFCompat.v1.global_variables() + [network.global_train_step]))
       for step in range(5):
         info, _ = session.run(
           (fetches, update_op),
@@ -2679,7 +2679,7 @@ def test_extra_search():
     fetches = network.get_fetches_dict()
     data_input = network.extern_data.data["data"]
 
-    session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+    session.run(TFCompat.v1.variables_initializer(TFCompat.v1.global_variables() + [network.global_train_step]))
     info, out = session.run(
       (fetches, layer_output.output.placeholder),
       feed_dict={
@@ -3070,7 +3070,7 @@ def test_CrossEntropyLoss():
     feed_dict = make_feed_dict(net.extern_data.data.values(), same_time=True)
     print("random classes:", feed_dict[net.extern_data.data["classes"].placeholder])
     loss_t = loss_holder.get_loss_value()
-    opt = tf.train.GradientDescentOptimizer(learning_rate=0.1)
+    opt = TFCompat.v1.train.GradientDescentOptimizer(learning_rate=0.1)
     minimize_op = opt.minimize(loss_t)
     last_loss_v = float("inf")
     for step in range(3):
@@ -3121,7 +3121,7 @@ def test_CrossEntropyLoss_masked_inf():
     mask_v = numpy.array([True] * n_out)
     feed_dict[mask_t] = mask_v
     loss_t = loss_holder.get_loss_value()
-    opt = tf.train.GradientDescentOptimizer(learning_rate=0.1)
+    opt = TFCompat.v1.train.GradientDescentOptimizer(learning_rate=0.1)
     minimize_op = opt.minimize(loss_t)
     last_loss_v = float("inf")
     for step in range(3):
@@ -3136,7 +3136,7 @@ def test_CrossEntropyLoss_masked_inf():
     rnd_classes = feed_dict[net.extern_data.data["classes"].placeholder]
     print("random classes:", rnd_classes)
     mask_v[rnd_classes[0, 0]] = False
-    var_t, = tf.trainable_variables()
+    var_t, = TFCompat.v1.trainable_variables()
     last_var_v = session.run(var_t)
     for step in range(3, 6):
       loss_v, _ = session.run((loss_t, minimize_op), feed_dict=feed_dict)
@@ -3190,7 +3190,7 @@ def test_CrossEntropyLoss_masked_inf_fake_upper_bound():
     mask_v = numpy.array([True] * n_out)
     feed_dict[mask_t] = mask_v
     loss_t = loss_holder.get_loss_value()
-    opt = tf.train.GradientDescentOptimizer(learning_rate=0.1)
+    opt = TFCompat.v1.train.GradientDescentOptimizer(learning_rate=0.1)
     minimize_op = opt.minimize(loss_t)
     last_loss_v = float("inf")
     for step in range(3):
@@ -3205,7 +3205,7 @@ def test_CrossEntropyLoss_masked_inf_fake_upper_bound():
     rnd_classes = feed_dict[net.extern_data.data["classes"].placeholder]
     print("random classes:", rnd_classes)
     mask_v[rnd_classes[0, 0]] = False
-    var_t, = tf.trainable_variables()
+    var_t, = TFCompat.v1.trainable_variables()
     last_var_v = session.run(var_t)
     for step in range(3, 6):
       loss_v, _ = session.run((loss_t, minimize_op), feed_dict=feed_dict)

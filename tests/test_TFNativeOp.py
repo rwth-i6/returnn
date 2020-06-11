@@ -2222,7 +2222,7 @@ def test_ctc_viterbi_loss():
     "ctc_viterbi_weights", shape=(n_input_dim, n_classes), initializer=tf.random_normal_initializer())
   bias = TFCompat.v1.get_variable("ctc_viterbi_bias", shape=(n_classes,))
   var_list = [weights, bias]
-  session.run(tf.initialize_variables(var_list))
+  session.run(TFCompat.v1.initialize_variables(var_list))
   from TFUtil import dot
   logits = dot(x, weights) + bias
   targets = tf.constant([[0, 1, 2, 0, 0], [3, 2, 4, 1, 1], [2, 0, 1, 2, 0]])
@@ -2234,7 +2234,7 @@ def test_ctc_viterbi_loss():
     targets=targets, targets_seq_lens=targets_seq_len)
   loss.set_shape((n_batch,))
   loss = tf.reduce_mean(loss)
-  opt = tf.train.GradientDescentOptimizer(learning_rate=0.1)
+  opt = TFCompat.v1.train.GradientDescentOptimizer(learning_rate=0.1)
   minimize = opt.minimize(loss, var_list=var_list)
   loss_vals = []
   for step in range(10):

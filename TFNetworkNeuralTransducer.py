@@ -125,7 +125,7 @@ class NeuralTransducerLayer(_ConcatInputLayer):
                 trans_hidden_init = tf.zeros([2, batch_size, transducer_hidden_units], dtype=tf.float32)
 
             # Do some more post processing
-            max_blocks = tf.to_int32(tf.shape(encoder_outputs)[0]/input_block_size)
+            max_blocks = tf.cast(tf.shape(encoder_outputs)[0] // input_block_size, tf.int32)
             transducer_list_outputs = tf.ones([max_blocks, batch_size], dtype=tf.int32) * transducer_max_width
             inference_mode = 1.0
             teacher_forcing_targets = tf.ones([transducer_max_width * max_blocks, batch_size], dtype=tf.int32)
@@ -239,7 +239,7 @@ class NeuralTransducerLayer(_ConcatInputLayer):
         :param int input_block_size: Input block size as specified in the __init__ function.
         :return: tf.tensor A vector the same shape as 'vector'.
         """
-        vector = tf.cast(tf.ceil(tf.cast(vector, tf.float32) / input_block_size), tf.float32) * tf.cast(transducer_max_width, tf.float32)
+        vector = tf.cast(TFCompat.v1.ceil(tf.cast(vector, tf.float32) / input_block_size), tf.float32) * tf.cast(transducer_max_width, tf.float32)
         vector = tf.cast(vector, tf.int32)
 
         return vector
@@ -626,7 +626,7 @@ class NeuralTransducerLoss(Loss):
 
             # Get find seq lens (due to having blank spaces in the modified targets we need to use this method to get
             # the correct seq lens)
-            seq_lens = tf.argmax(tf.cumsum(tf.to_int32(mask), axis=0), axis=0)
+            seq_lens = tf.argmax(tf.cumsum(tf.cast(mask, tf.int32), axis=0), axis=0)
             seq_lens = tf.reshape(seq_lens, shape=[tf.shape(seq_lens)[0]])
 
             logits_sparse = sparse_labels_with_seq_lens(tf.transpose(mod_logits), seq_lens=seq_lens)
@@ -635,7 +635,7 @@ class NeuralTransducerLoss(Loss):
             e = tf.edit_distance(logits_sparse[0], targets_sparse[0], normalize=False)
             total = tf.reduce_sum(e)
 
-            norm = tf.to_float(tf.reduce_sum(targets_lengths)) / tf.reduce_sum(tf.to_float(mask))
+            norm = tf.cast(tf.reduce_sum(targets_lengths), tf.float32) / tf.reduce_sum(tf.cast(mask, tf.float32))
             total = total * norm
 
             return total

@@ -6302,16 +6302,18 @@ def init_variable_if_needed(v):
   :param tf.Variable v:
   :rtype: tf.Operation
   """
+  import TFCompat
+
   def make_init():
     """
     :rtype: tf.Operation
     """
-    # Cannot use tf.variables_initializer(), see here: https://stackoverflow.com/questions/44354964/
-    with tf.control_dependencies([tf.assign(v, v.initial_value)]):
+    # Cannot use tf.compat.v1.variables_initializer(), see here: https://stackoverflow.com/questions/44354964/
+    with tf.control_dependencies([TFCompat.v1.assign(v, v.initial_value)]):
       return tf.no_op()
 
   maybe_init = tf.cond(
-    tf.is_variable_initialized(v),
+    TFCompat.v1.is_variable_initialized(v),
     lambda: tf.no_op(),
     make_init,
     name="maybe_init")
@@ -6343,7 +6345,7 @@ def true_once():
       x = tf.where(v.read_value(), True, False)
       with tf.control_dependencies([x]):
         x = tf.identity(x)
-        reset = tf.assign(v, False)
+        reset = TFCompat.v1.assign(v, False)
         with tf.control_dependencies([x, reset]):
           x = tf.identity(x)
   return x
@@ -6808,16 +6810,15 @@ def softmax_cross_entropy_over_size(logits, labels, stable_gradient=True):
   assert (any([dim is n_batch for dim in mask_expand_dims_shape]) and
           any([dim is enc_time_dim for dim in mask_expand_dims_shape]))
   mask = tf.reshape(mask, mask_expand_dims_shape)  # (...,B,...,enc-T), just like logits/labels
-  mask = tf.logical_and(mask, tf.ones_like(labels_t, dtype=tf.bool))  # unbroadcast, needed for tf.where
-  logits_t = tf.where(mask, logits_t, float("-inf") * tf.ones_like(logits_t))
+  logits_t = where_bc(mask, logits_t, float("-inf") * tf.ones_like(logits_t))
   # We only apply the mask to the logits. We expect that we already have it zeroed for labels.
   # Unfortunately we cannot use tf.nn.softmax_cross_entropy_with_logits because we would get inf loss.
-  log_probs_t = tf.nn.log_softmax(logits_t, dim=logits_enc_time_axis)
-  log_probs_t = tf.where(mask, log_probs_t, tf.zeros_like(logits_t))  # filter out the infs
+  log_probs_t = tf.nn.log_softmax(logits_t, axis=logits_enc_time_axis)
+  log_probs_t = where_bc(mask, log_probs_t, tf.zeros_like(logits_t))  # filter out the infs
   out = labels_t * log_probs_t
   out = -tf.reduce_sum(out, axis=logits_enc_time_axis, keepdims=True)
   if stable_gradient:
-    probs_t = tf.nn.softmax(logits_t, dim=logits_enc_time_axis)
+    probs_t = tf.nn.softmax(logits_t, axis=logits_enc_time_axis)
     out = custom_gradient.generic_loss_and_error_signal(loss=out, x=logits_t, grad_x=probs_t - labels_t)
   out = tf.squeeze(out, axis=logits_enc_time_axis)
   return out

@@ -76,7 +76,7 @@ def get_optimizer_class(class_name):
 
 class Updater(object):
   """
-  This will create the :class:`tf.train.Optimizer` instance given the config
+  This will create the :class:`tf.compat.v1.train.Optimizer` instance given the config
   and the update-op for all trainable vars.
   See the code of :func:`Updater.create_optimizer` for valid config options.
 
@@ -87,7 +87,7 @@ class Updater(object):
   1e-8 might be more stable. Or even 1e-6.
   Note that when the gradient is suddenly zero in one step, the update can be proportional to lr / eps.
 
-  From the :class:`tf.train.AdamOptimizer` documentation:
+  From the :class:`tf.compat.v1.train.AdamOptimizer` documentation:
 
       The default value of 1e-8 for epsilon might not be a good default in
       general. For example, when training an Inception network on ImageNet a
@@ -383,9 +383,9 @@ def accum_grad_multiple_step(grad, var, train_step, num_accum_steps):
 
 class WrapOptimizer:
   """
-  Wraps a tf.train.Optimizer (or multiple).
+  Wraps a tf.compat.v1.train.Optimizer (or multiple).
   This is wrapped for a simpler interface, and also to allow for multiple optimizers.
-  This class is not derived from tf.train.Optimizer itself, to keep it simple.
+  This class is not derived from tf.compat.v1.train.Optimizer itself, to keep it simple.
   """
 
   def __init__(self, config, learning_rate, global_train_step, use_locking):
@@ -400,11 +400,11 @@ class WrapOptimizer:
     self.global_train_step = global_train_step
     self.use_locking = use_locking
     from collections import OrderedDict
-    self.optimizers = OrderedDict()  # optimizer_opts|None -> tf.train.Optimizer
+    self.optimizers = OrderedDict()  # optimizer_opts|None -> tf.compat.v1.train.Optimizer
 
   def get_default_optimizer(self):
     """
-    :rtype: tf.train.Optimizer
+    :rtype: tf.compat.v1.train.Optimizer
     """
     return self.get_default_optimizer_item(auto_create_new=False)[1]
 
@@ -412,7 +412,7 @@ class WrapOptimizer:
     """
     :param bool auto_create_new:
     :return: key, optimizer
-    :rtype: (object, tf.train.Optimizer)
+    :rtype: (object, tf.compat.v1.train.Optimizer)
     """
     return self._get_optimizer_item_for_opts(None, auto_create_new=auto_create_new)
 
@@ -428,7 +428,7 @@ class WrapOptimizer:
     :param tf.Variable var:
     :param bool auto_create_new:
     :return: key, optimizer
-    :rtype: (object, tf.train.Optimizer)
+    :rtype: (object, tf.compat.v1.train.Optimizer)
     """
     updater_opts = getattr(var, "RETURNN_updater_opts", None)
     if not updater_opts:
@@ -446,7 +446,7 @@ class WrapOptimizer:
     :param dict[str]|str|None optimizer_opts:
     :param bool auto_create_new:
     :return: key, optimizer
-    :rtype: (object, tf.train.Optimizer)
+    :rtype: (object, tf.compat.v1.train.Optimizer)
     """
     from Util import make_hashable
     key = make_hashable(optimizer_opts)
@@ -460,7 +460,7 @@ class WrapOptimizer:
   def _create_optimizer(self, optimizer_opts):
     """
     :param dict[str]|str|None optimizer_opts: if dict, contains "class": opt_name. if str, then opt_name.
-    :rtype: tf.train.Optimizer
+    :rtype: tf.compat.v1.train.Optimizer
     """
     if optimizer_opts is None:
       return self._create_default_optimizer()
@@ -497,7 +497,7 @@ class WrapOptimizer:
 
   def _create_default_optimizer(self):
     """
-    :rtype: tf.train.Optimizer
+    :rtype: tf.compat.v1.train.Optimizer
     """
     lr = self.learning_rate
     epsilon = self.config.float("optimizer_epsilon", 1e-16)
@@ -1145,7 +1145,7 @@ class GradVarianceScaledOptimizer(BaseCustomOptimizer):
 class CustomAdamOptimizer(BaseCustomOptimizer):
   """
   Reimplementation of Adam.
-  See also :class:`tf.train.AdamOptimizer`.
+  See also :class:`tf.compat.v1.train.AdamOptimizer`.
 
   ```
   t <- t + 1

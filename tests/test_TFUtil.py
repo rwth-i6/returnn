@@ -1658,8 +1658,8 @@ def test_sequential_control_dependencies():
   v = tf.Variable(initial_value=2, trainable=False, name="test_sequential_control_dependencies")
   with sequential_control_dependencies([
     lambda: v.initializer,
-    lambda: tf.assign(v, 3),
-    lambda: tf.assign(v, v.read_value() + 5)
+    lambda: TFCompat.v1.assign(v, 3),
+    lambda: TFCompat.v1.assign(v, v.read_value() + 5)
   ]):
     x = v.read_value()
   assert_equal(x.eval(), 3 + 5)
@@ -3028,7 +3028,7 @@ def test_softmax_cross_entropy_over_size_gradient():
     res_flat_tf = flatten_with_seq_len_mask(res_tf, sizes_tf[0], batch_dim_axis=0, time_dim_axis=1)
     res_flat_tf.set_shape((sum(sizes[0]), n_extra_dim))
     loss_tf = tf.reduce_mean(res_tf)
-    optimizer = tf.train.GradientDescentOptimizer(learning_rate=1e2)
+    optimizer = TFCompat.v1.train.GradientDescentOptimizer(learning_rate=1e2)
     optim_op = optimizer.minimize(loss=loss_tf, var_list=[energy_tf])
     session.run(energy_tf.initializer)  # Note: the second time this is called, it will get a different init
     last_loss = float("inf")

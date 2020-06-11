@@ -4435,9 +4435,9 @@ class ChoiceLayer(BaseChoiceLayer):
       else:
         # sample from scores
         scores_in = self._get_scores(self.sources[0])  # +log scores, (batch, dim)
-        feedback_output = tf.multinomial(
+        feedback_output = TFCompat.v1.multinomial(
           scores_in, num_samples=1, seed=get_random_seed())  # (batch, num_samples), int64
-        feedback_output = tf.to_int32(tf.reshape(feedback_output, [-1]))  # (batch,), int32
+        feedback_output = tf.cast(tf.reshape(feedback_output, [-1]), tf.int32)  # (batch,), int32
 
       gold_mixing_prob = self.scheduled_sampling.get("gold_mixin_prob", False)
       if gold_mixing_prob:

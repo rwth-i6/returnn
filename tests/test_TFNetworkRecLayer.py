@@ -815,7 +815,7 @@ def test_RecLayer_NativeLstm_Nan():
     updater.set_learning_rate(0.1, session=session)
     updater.init_optimizer_vars(session=session)
     optim_op = updater.get_optim_op()
-    assert isinstance(updater.optimizer.get_default_optimizer(), tf.train.AdamOptimizer)
+    assert isinstance(updater.optimizer.get_default_optimizer(), TFCompat.v1.train.AdamOptimizer)
     adam_weights_m_t = updater.optimizer.get_slot(var=weights_t, name="m")
     adam_weights_v_t = updater.optimizer.get_slot(var=weights_t, name="v")
     assert isinstance(adam_weights_m_t, tf.Variable)
@@ -5120,7 +5120,7 @@ def test_extra_scatter_nd_search_train():
     assert isinstance(train3_out_layer_cell, _SubnetworkRecCell)
     assert not train3_out_layer_cell.layers_in_loop, "all should be moved out"
 
-    session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+    session.run(TFCompat.v1.variables_initializer(TFCompat.v1.global_variables() + [network.global_train_step]))
     outputs = [train1_search_out.placeholder, train1_out.placeholder,
                train2_search_out.placeholder, train2_out.placeholder, train3_out.placeholder]
     info, out = session.run(
@@ -5273,7 +5273,7 @@ def test_trafo_search_lm():
     print(input_seqs)
     print("lens:", input_seq_lens)
 
-    session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+    session.run(TFCompat.v1.variables_initializer(TFCompat.v1.global_variables() + [network.global_train_step]))
     fetches = (fetches, output_out.placeholder, output_out.get_sequence_lengths())
     feed_dict = {
       data_input.placeholder: input_seqs,
@@ -5328,7 +5328,7 @@ def test_PositionalEncodingLayer_offset_no_rec():
     assert data_input.batch_shape == (None, None)
 
     train_out = network.get_layer("output").output
-    session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+    session.run(TFCompat.v1.variables_initializer(TFCompat.v1.global_variables() + [network.global_train_step]))
     rand_data = rnd.randint(0, n_out, size=(n_batch, n_time,), dtype="int32")
     outputs = [train_out.placeholder]
     info, out = session.run(
@@ -5399,7 +5399,7 @@ def test_PositionalEncodingLayer_offset_in_rec():
     assert data_input.batch_shape == (None, None)
 
     train_out = network.get_layer("output").output
-    session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+    session.run(TFCompat.v1.variables_initializer(TFCompat.v1.global_variables() + [network.global_train_step]))
     rand_data = rnd.randint(0, n_out, size=(n_batch, n_time,), dtype="int32")
     outputs = [train_out.placeholder]
     info, out = session.run(

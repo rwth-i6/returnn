@@ -55,7 +55,7 @@ class BatchMedianPoolingLayer(_ConcatInputLayer):
     # - reshape input for usage with tf.nn.top_k
     reshaped_input = tf.reshape(tf.transpose(input_placeholder, [1, 2, 0]), shape=(tf.shape(input_placeholder)[1], tf.shape(input_placeholder)[2], tf.shape(input_placeholder)[0] / pool_size, pool_size))
     # - get median of each pool
-    median = tf.nn.top_k(reshaped_input, k=tf.cast(tf.ceil(tf.constant(pool_size, dtype=tf.float32) / 2), dtype=tf.int32)).values[:, :, :, -1]
+    median = tf.nn.top_k(reshaped_input, k=tf.cast(TFCompat.v1.ceil(tf.constant(pool_size, dtype=tf.float32) / 2.), dtype=tf.int32)).values[:, :, :, -1]
     median_batch_major = tf.transpose(median, [2, 0, 1])
     self.output.placeholder = median_batch_major
     self.output.size_placeholder = {self.output.time_dim_axis_excluding_batch: tf.strided_slice(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch], [0], tf.shape(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch]), [pool_size])}
