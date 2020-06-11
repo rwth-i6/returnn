@@ -7806,7 +7806,7 @@ class FramewiseStatisticsLayer(LayerBase):
       source.output_before_activation.x, output_seq_lens, time_major=output.is_time_major)
     target_seq_lens = target.size_placeholder[0]
     target_flat = flatten_with_seq_len_mask(target.placeholder, target_seq_lens, time_major=target.is_time_major)
-    target_flat.set_shape(tf.TensorShape([tf.Dimension(None)]))
+    target_flat.set_shape(tf.TensorShape([None]))
     loss_ce = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=output_before_softmax_flat, labels=target_flat)
     flat_last_dim = output_before_softmax_flat.get_shape().ndims - 1
     assert flat_last_dim == 1
@@ -7816,12 +7816,12 @@ class FramewiseStatisticsLayer(LayerBase):
     # target_flat is shape (time,) -> index.
     target_flat_exp = tf.stack([tf.range(tf.shape(target_flat)[0], dtype=tf.int32), target_flat], axis=1)
     true_label_prob = tf.gather_nd(output_flat, target_flat_exp)
-    true_label_prob.set_shape(tf.TensorShape([tf.Dimension(None)]))
+    true_label_prob.set_shape(tf.TensorShape([None]))
     true_label_prob_i32 = tf.clip_by_value(
       tf.cast(tf.round(true_label_prob * histogram_num_bins), tf.int32), 0, histogram_num_bins - 1)
     true_label_prob_histogram = tf.stack(
       [tf.equal(true_label_prob_i32, i) for i in range(histogram_num_bins)], axis=1)
-    true_label_prob_histogram.set_shape(tf.TensorShape([tf.Dimension(None), tf.Dimension(histogram_num_bins)]))
+    true_label_prob_histogram.set_shape(tf.TensorShape([None, histogram_num_bins]))
 
     mask_no_sil = tf.not_equal(target_flat, sil_label_idx)
     mask_sil = tf.equal(target_flat, sil_label_idx)
@@ -7834,8 +7834,8 @@ class FramewiseStatisticsLayer(LayerBase):
         initial_value=0, dtype=tf.int64, trainable=False, name="accumulated_seq_len")
       accumulated_seq_len_sil = tf.Variable(
         initial_value=0, dtype=tf.int64, trainable=False, name="accumulated_seq_len_sil")
-    accumulated_seq_len = tf.assign_add(accumulated_seq_len, tf.cast(seq_len, tf.int64))
-    accumulated_seq_len_sil = tf.assign_add(accumulated_seq_len_sil, tf.cast(seq_len_sil, tf.int64))
+    accumulated_seq_len = TFCompat.v1.assign_add(accumulated_seq_len, tf.cast(seq_len, tf.int64))
+    accumulated_seq_len_sil = TFCompat.v1.assign_add(accumulated_seq_len_sil, tf.cast(seq_len_sil, tf.int64))
     accumulated_seq_len_no_sil = accumulated_seq_len - accumulated_seq_len_sil
 
     self.stats["batch_seq_length"] = seq_len
@@ -7872,7 +7872,7 @@ class FramewiseStatisticsLayer(LayerBase):
             name="accumulated_%s" % k,
             initial_value=numpy.zeros(acc_shape, dtype=acc_dtype), dtype=acc_dtype,
             trainable=False)
-        acc_v = tf.assign_add(acc_v, tf.reduce_sum(tf.cast(v, acc_dtype), axis=0))
+        acc_v = TFCompat.v1.assign_add(acc_v, tf.reduce_sum(tf.cast(v, acc_dtype), axis=0))
         self.stats["accumulated_%s" % k] = tf.cast(acc_v, tf.float64) / tf.cast(acc_seq_len, tf.float64)
 
     self.stats["batch_loss_perplexity"] = tf.exp(self.stats["batch_loss_ce"])

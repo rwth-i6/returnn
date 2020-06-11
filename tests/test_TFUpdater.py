@@ -95,7 +95,7 @@ def test_Updater_CustomUpdate():
 
     class CustomUpdateAdd13(CustomUpdate):
       def update_var(self, var):
-        return tf.assign_add(var, 13.0)
+        return TFCompat.v1.assign_add(var, 13.0)
     CustomUpdateAdd13().set_on_var(layer.x)
 
     updater = Updater(config=config, network=network)

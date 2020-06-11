@@ -2562,7 +2562,7 @@ class CustomUpdate(object):
   def update_var(self, var):
     """
     :param tf.Variable var: variable to update
-    :return: operation which updates the variable, e.g. tf.assign_add(var, something)
+    :return: operation which updates the variable, e.g. tf.compat.v1.assign_add(var, something)
     :rtype: tf.Operation
     """
     raise NotImplementedError
@@ -2586,7 +2586,8 @@ class CustomUpdateExpAverage(CustomUpdate):
     :param tf.Variable var:
     :rtype: tf.Tensor
     """
-    return tf.assign_add(var, self.alpha * (self.average - var))  # ((alpha - 1) * old + alpha * new)
+    import TFCompat
+    return TFCompat.v1.assign_add(var, self.alpha * (self.average - var))  # ((alpha - 1) * old + alpha * new)
 
 
 def set_param_axes_split_info(param, axes_split_info):
