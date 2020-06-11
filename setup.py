@@ -33,12 +33,14 @@ pip3 install --user dist/*.tar.gz -v
 """
 
 from __future__ import print_function
-from distutils.core import setup
 import time
 from pprint import pprint
 import os
 import sys
 from subprocess import Popen, check_output, PIPE
+
+
+_my_dir = os.path.dirname(os.path.abspath(__file__))
 
 
 def debug_print_file(fn):
@@ -118,25 +120,42 @@ def git_head_version(git_dir="."):
   return "1.%s" % commit_date
 
 
+def get_version_str(verbose=False, allow_current_time=False):
+  """
+  :param bool verbose:
+  :param bool allow_current_time:
+  :rtype: str
+  """
+  if os.path.exists("%s/PKG-INFO" % _my_dir):
+    if verbose:
+      print("Found existing PKG-INFO.")
+    info = parse_pkg_info("%s/PKG-INFO" % _my_dir)
+    version = info["Version"]
+    if verbose:
+      print("Version via PKG-INFO:", version)
+  else:
+    try:
+      version = git_head_version()
+      if verbose:
+        print("Version via Git:", version)
+    except Exception as exc:
+      if verbose:
+        print("Exception while getting Git version:", exc)
+        sys.excepthook(*sys.exc_info())
+      if allow_current_time:
+        version = time.strftime("1.%Y%m%d.%H%M%S", time.gmtime())
+        if verbose:
+          print("Version via current time:", version)
+      else:
+        raise
+  return version
+
+
 def main():
   """
   Setup main entry
   """
-
-  if os.path.exists("PKG-INFO"):
-    print("Found existing PKG-INFO.")
-    info = parse_pkg_info("PKG-INFO")
-    version = info["Version"]
-    print("Version via PKG-INFO:", version)
-  else:
-    try:
-      version = git_head_version()
-      print("Version via Git:", version)
-    except Exception as exc:
-      print("Exception while getting Git version:", exc)
-      sys.excepthook(*sys.exc_info())
-      version = time.strftime("1.%Y%m%d.%H%M%S", time.gmtime())
-      print("Version via current time:", version)
+  version = get_version_str(verbose=True, allow_current_time=True)
 
   if os.environ.get("DEBUG", "") == "1":
     debug_print_file(".")
@@ -148,7 +167,7 @@ def main():
   if os.path.exists("PKG-INFO"):
     if os.path.exists("MANIFEST"):
       print("package_data, found PKG-INFO and MANIFEST")
-      package_data = open("MANIFEST").read().splitlines()
+      package_data = open("MANIFEST").read().splitlines() + ["PKG-INFO"]
     else:
       print("package_data, found PKG-INFO, no MANIFEST, use *")
       package_data = ["*"]
@@ -156,6 +175,7 @@ def main():
     print("dummy package_data, does not matter, likely you are running sdist")
     package_data = ["MANIFEST"]
 
+  from distutils.core import setup
   setup(
     name='returnn',
     version=version,

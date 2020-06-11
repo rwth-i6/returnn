@@ -17,6 +17,21 @@ py = sys.executable
 print("Python:", py)
 
 
+def which_pip():
+  from Util import which
+  # Before we look anywhere in PATH, check if there is some pip alongside to the Python executable.
+  # This might be more reliable.
+  dir_name, basename = py.rsplit("/", 1)
+  if basename.startswith("python"):
+    postfix = basename[len("python"):]
+    pip_path = "%s/pip%s" % (dir_name, postfix)
+    if os.path.exists(pip_path):
+      return pip_path
+  # Generic fallback.
+  pip_path = which("pip")
+  return pip_path
+
+
 def build_env():
   theano_flags = {key: value for (key, value)
                   in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
@@ -100,30 +115,34 @@ class TestDemos(object):
   def test_demo_returnn_as_framework(self):
     print("Prepare.")
     import subprocess
+    import shutil
     from glob import glob
-    from Util import which, get_login_username
+    from Util import get_login_username
     # echo via subprocess, because this stdout as well as the other will always be visible.
     subprocess.check_call(["echo", "travis_fold:start:test_demo_returnn_as_framework"])
     assert os.path.exists("setup.py")
     if glob("dist/*.tar.gz"):
-      subprocess.check_call(["rm"] + glob("dist/*.tar.gz"))  # we want it unique below
+      # we want it unique below
+      for fn in glob("dist/*.tar.gz"):
+        os.remove(fn)
     if os.path.exists("docs/crnn"):
       os.remove("docs/crnn")  # this is auto-generated, and confuses setup.py sdist
     tmp_model_dir = "/tmp/%s/returnn-demo-as-framework" % get_login_username()
     if os.path.exists(tmp_model_dir):
-      subprocess.check_call(["rm", "-rf", tmp_model_dir])
+      shutil.rmtree(tmp_model_dir, ignore_errors=True)
     print("setup.py sdist, to create package.")
     subprocess.check_call([py, "setup.py", "sdist"])
     dist_fns = glob("dist/*.tar.gz")
     assert len(dist_fns) == 1
     dist_fn = os.path.abspath(dist_fns[0])
-    pip_path = which("pip")
+    pip_path = which_pip()
     print("Pip install Returnn.")
     in_virtual_env = hasattr(sys, 'real_prefix')  # https://stackoverflow.com/questions/1871549/
     cmd = [py, pip_path, "install"]
     if not in_virtual_env:
       cmd += ["--user"]
     cmd += ["-v", dist_fn]
+    print("$ %s" % " ".join(cmd))
     subprocess.check_call(cmd, cwd="/")
     print("Running demo now.")
     subprocess.check_call([py, "demo-returnn-as-framework.py"], cwd="demos")
