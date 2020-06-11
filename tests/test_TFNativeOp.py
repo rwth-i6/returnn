@@ -1076,7 +1076,7 @@ def dummy_lstm_op(x, h_0, c_0, mask, W_f, W_r, b, n_time, n_batch, n_in_dim, n_c
   x = tf.convert_to_tensor(x)
   x.set_shape(tf.TensorShape((n_time, n_batch, n_in_dim)))
   # Have gradients for all.
-  y = tf.reduce_mean(x, axis=2, keep_dims=True)
+  y = tf.reduce_mean(x, axis=2, keepdims=True)
   y += tf.zeros((n_time, n_batch, n_cells))
   y *= tf.reduce_mean(W_f)
   y *= tf.reduce_mean(W_r)

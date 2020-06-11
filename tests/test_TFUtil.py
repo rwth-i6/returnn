@@ -380,12 +380,12 @@ def test_4D_Data_get_placeholder_flattened():
   feed_data = np.random.rand(7, 9, 13, 17)
   res = session.run(d.placeholder, feed_dict={placeholder: feed_data})
   print(res.shape)
-  flat_placeholder = d.get_placeholder_flattened(keep_dims=True)
+  flat_placeholder = d.get_placeholder_flattened(keepdims=True)
   res = session.run(flat_placeholder, feed_dict={placeholder: feed_data})
   print(res.shape)
   assert res.shape[0] == 7 * 9 * 13
   assert len(res.shape) == 4
-  flat_placeholder = d.get_placeholder_flattened(keep_dims=False)
+  flat_placeholder = d.get_placeholder_flattened(keepdims=False)
   res = session.run(flat_placeholder, feed_dict={placeholder: feed_data})
   print(res.shape)
   assert res.shape[0] == 7 * 9 * 13
@@ -401,10 +401,10 @@ def test_2D_Data_get_placeholder_flattened():
   feed_data = np.random.rand(7, 17)
   res = session.run(d.placeholder, feed_dict={placeholder: feed_data})
   print(res.shape)
-  flat_placeholder = d.get_placeholder_flattened(keep_dims=True)
+  flat_placeholder = d.get_placeholder_flattened(keepdims=True)
   res = session.run(flat_placeholder, feed_dict={placeholder: feed_data})
   assert res.shape == (7, 17)
-  flat_placeholder = d.get_placeholder_flattened(keep_dims=False)
+  flat_placeholder = d.get_placeholder_flattened(keepdims=False)
   res = session.run(flat_placeholder, feed_dict={placeholder: feed_data})
   assert res.shape == (7, 17)
 

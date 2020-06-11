@@ -508,9 +508,9 @@ class NoiseEstimationByFirstTFramesLayer(_ConcatInputLayer):
   def _get_noise_vector(self):
     input_placeholder = self.input_data.get_placeholder_as_batch_major()
     if self._nr_of_frames != -1:
-      noise_vector = tf.reduce_mean(input_placeholder[:, :self._nr_of_frames, :], axis=1, keep_dims=True)
+      noise_vector = tf.reduce_mean(input_placeholder[:, :self._nr_of_frames, :], axis=1, keepdims=True)
     else:
-      noise_vector = tf.reduce_mean(input_placeholder, axis=1, keep_dims=True)
+      noise_vector = tf.reduce_mean(input_placeholder, axis=1, keepdims=True)
     return noise_vector
 
 
@@ -551,7 +551,8 @@ class ParametricWienerFilterLayer(LayerBase):
       if (l_overwrite is None) or (p_overwrite is None) or (q_overwrite is None):
         assert parameter_vector is not None
         if average_parameters:
-          parameter_vector= tf.tile(tf.reduce_mean(parameter_vector, axis=1, keep_dims=True), [1, tf.shape(parameter_vector)[1], 1])
+          parameter_vector= tf.tile(
+            tf.reduce_mean(parameter_vector, axis=1, keepdims=True), [1, tf.shape(parameter_vector)[1], 1])
       if l_overwrite is not None:
         l = tf.constant(l_overwrite, dtype=tf.float32)
       else:

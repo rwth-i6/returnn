@@ -1854,9 +1854,9 @@ class Data(object):
     return flatten_with_seq_len_mask(self.placeholder, seq_lens, batch_dim_axis=self.batch_dim_axis,
                                      time_dim_axis=self.time_dim_axis)
 
-  def get_placeholder_flattened(self, keep_dims=False):
+  def get_placeholder_flattened(self, keepdims=False):
     """
-    :param bool keep_dims: if set, it will add broadcast dimensions after the flattening behind the first axis
+    :param bool keepdims: if set, it will add broadcast dimensions after the flattening behind the first axis
     :rtype: tf.Tensor
     :return: placeholder where all dynamic axes are flattened into a single axis.
       e.g. for the usual case (batch, time, dim), it becomes (batch'|time', dim),
@@ -1888,7 +1888,7 @@ class Data(object):
         [shape[i] for i in range(ndim) if i not in dyn_axes])
       dyn_axes = [0]
     assert dyn_axes == [0]
-    if keep_dims and orig_num_dyn_axes >= 2:
+    if keepdims and orig_num_dyn_axes >= 2:
       for i in orig_dyn_axes:
         if i not in dyn_axes:
           x = tf.expand_dims(x, axis=i)
@@ -3987,7 +3987,7 @@ def layer_norm(x, gain, bias, axis, epsilon=1e-6):
       gain = tf.reshape(gain, [dim if i == axis else 1 for i in range(ndim)], "gain_bc")
     if bias.get_shape().ndims == 1:
       bias = tf.reshape(bias, [dim if i == axis else 1 for i in range(ndim)], "bias_bc")
-    m, v = TFCompat.v1.nn.moments(x, axes=[axis], keep_dims=True)
+    m, v = TFCompat.v1.nn.moments(x, axes=[axis], keepdims=True)
     inv = TFCompat.v1.rsqrt(v + epsilon)
     inv *= gain
     return x * inv - m * inv + bias
@@ -5434,7 +5434,7 @@ def filter_grad(x, threshold, axis):
       assert isinstance(op, tf.Operation)
       assert isinstance(out_grad, tf.Tensor)
       out_grad.set_shape(op.inputs[0].get_shape())
-      keep_filter = tf.less(tf.reduce_max(out_grad ** 2, axis=axis, keep_dims=True), threshold)
+      keep_filter = tf.less(tf.reduce_max(out_grad ** 2, axis=axis, keepdims=True), threshold)
       # keep_filter must be the same shape as out_grad.
       keep_filter = tf.logical_and(keep_filter, tf.ones_like(out_grad, dtype=tf.bool))
       out_grad = tf.where(keep_filter, out_grad, tf.zeros_like(out_grad))
@@ -6565,9 +6565,9 @@ def l1_normalized(x, axis=-1, eps=1e-20, use_logsumexp=False, is_not_negative=Fa
       # Do that here, not after reduce_sum, so that we get a proper gradient to each entry.
       x = maximum_with_identity_grad(x, eps)
     if use_logsumexp:
-      weighted_input_sum = tf.exp(tf.reduce_logsumexp(TFCompat.v1.log(x), axis=axis, keep_dims=True))
+      weighted_input_sum = tf.exp(tf.reduce_logsumexp(TFCompat.v1.log(x), axis=axis, keepdims=True))
     else:
-      weighted_input_sum = tf.reduce_sum(x, axis=axis, keep_dims=True)
+      weighted_input_sum = tf.reduce_sum(x, axis=axis, keepdims=True)
     divisor = TFCompat.v1.reciprocal(weighted_input_sum)
     return tf.multiply(x, divisor)
 
@@ -6806,7 +6806,7 @@ def softmax_cross_entropy_over_size(logits, labels, stable_gradient=True):
   log_probs_t = tf.nn.log_softmax(logits_t, dim=logits_enc_time_axis)
   log_probs_t = tf.where(mask, log_probs_t, tf.zeros_like(logits_t))  # filter out the infs
   out = labels_t * log_probs_t
-  out = -tf.reduce_sum(out, axis=logits_enc_time_axis, keep_dims=True)
+  out = -tf.reduce_sum(out, axis=logits_enc_time_axis, keepdims=True)
   if stable_gradient:
     probs_t = tf.nn.softmax(logits_t, dim=logits_enc_time_axis)
     out = custom_gradient.generic_loss_and_error_signal(loss=out, x=logits_t, grad_x=probs_t - labels_t)
@@ -7682,18 +7682,18 @@ def to_float32(x):
   return x.cast_float32
 
 
-def batch_gather(x, indices, keep_dims=False):
+def batch_gather(x, indices, keepdims=False):
   """
   :param tf.Tensor x: (batch,dim,...)
   :param tf.Tensor indices: (batch,) -> [0..dim-1]
-  :param bool keep_dims:
+  :param bool keepdims:
   :return: x[batches,indices[batches]], (batch,...). or (batch,1,...) with keep_dims
   :rtype: tf.Tensor
   """
   with tf.name_scope('batch_gather'):
     idx_ext = nd_indices(to_int32_64(indices))
     y = tf.gather_nd(x, indices=idx_ext)
-    if keep_dims:
+    if keepdims:
       y = tf.expand_dims(y, axis=1)
     return y
 

@@ -1137,11 +1137,11 @@ class LayerBase(object):
     """
     with reuse_name_scope(self.get_absolute_name_scope_prefix() + "batch_norm", absolute=True):
       if masked_time:
-        x = data.get_placeholder_flattened(keep_dims=True)
-        mean, variance = TFCompat.v1.nn.moments(x, axes=[0], keep_dims=True)
+        x = data.get_placeholder_flattened(keepdims=True)
+        mean, variance = TFCompat.v1.nn.moments(x, axes=[0], keepdims=True)
       else:
         x = data.placeholder
-        mean, variance = TFCompat.v1.nn.moments(x, axes=data.get_axes(exclude_feature=True), keep_dims=True)
+        mean, variance = TFCompat.v1.nn.moments(x, axes=data.get_axes(exclude_feature=True), keepdims=True)
       if sample_mean is None:
         with self.var_creation_scope():
           sample_mean = self.add_param(tf.Variable(
@@ -2382,10 +2382,10 @@ class LayerNormLayer(_ConcatInputLayer):
     with self.var_creation_scope():
       scale = self.add_param(TFCompat.v1.get_variable("scale", [dim], initializer=tf.ones_initializer()))
       bias = self.add_param(TFCompat.v1.get_variable("bias", [dim], initializer=tf.zeros_initializer()))
-    mean = tf.reduce_mean(x, axis=[axis], keep_dims=True, name="mean")
-    variance = tf.reduce_mean(tf.square(x - mean), axis=[axis], keep_dims=True, name="variance")
+    mean = tf.reduce_mean(x, axis=[axis], keepdims=True, name="mean")
+    variance = tf.reduce_mean(tf.square(x - mean), axis=[axis], keepdims=True, name="variance")
     with tf.name_scope("normalized"):
-      norm_x = (x - mean) * tf.rsqrt(variance + epsilon)
+      norm_x = (x - mean) * TFCompat.v1.rsqrt(variance + epsilon)
     self.output.placeholder = norm_x * scale + bias
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
 
@@ -5104,7 +5104,7 @@ class ReduceLayer(_ConcatInputLayer):
       if keep_dims:
         y = expand_multiple_dims(y, axes=axes)
     else:
-      y = f(x_, axis=axes, keep_dims=keep_dims)
+      y = f(x_, axis=axes, keepdims=keep_dims)
     self.output.placeholder = y
 
   @classmethod
@@ -8749,7 +8749,7 @@ class GenericCELoss(Loss):
     x = flatten_with_seq_len_mask(x, seq_lens=self.output_seq_lens, time_major=self.output.is_time_major)
     y = flatten_with_seq_len_mask(y, seq_lens=self.output_seq_lens, time_major=self.output.is_time_major)
     assert y.get_shape().ndims == 2
-    y /= tf.reduce_sum(y, axis=1, keep_dims=True)
+    y /= tf.reduce_sum(y, axis=1, keepdims=True)
     assert self.output.dim == self.target.dim
     assert self.target.sparse
     return self._loss_func(x, y, grad_f, self.target_flat)
@@ -9236,7 +9236,7 @@ class ExpectedLoss(Loss):
       if self.subtract_average_loss:
         # Gradient variance reduction for the gradient of the value-weights.
         # In case that the values also are differentiable, we don't want it to propagate through this.
-        corrected_losses -= tf.stop_gradient(tf.reduce_mean(losses, axis=1, keep_dims=True, name="avg_loss"))
+        corrected_losses -= tf.stop_gradient(tf.reduce_mean(losses, axis=1, keepdims=True, name="avg_loss"))
       weighted_losses = tf.reduce_sum(corrected_losses * value_weights, axis=1, name="weighted_loss")  # (batch,)
       if self.loss_correction_grad_only and corrected_losses is not losses:
         weighted_losses += tf.stop_gradient(tf.reduce_sum((losses - corrected_losses) * value_weights, axis=1))
