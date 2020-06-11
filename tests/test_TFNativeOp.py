@@ -104,7 +104,7 @@ def dump_info():
   if TFUtil.have_min_tf_version((1, 14)):
     print("TF link flags:", tf.sysconfig.get_link_flags())
     print("TF compile flags:", tf.sysconfig.get_compile_flags())
-  if hasattr(tf, "sysconfig"):
+  if hasattr(tf, "sysconfig") and hasattr(tf.sysconfig, "CXX11_ABI_FLAG"):
     cxx11_abi_flag = tf.sysconfig.CXX11_ABI_FLAG
   else:
     cxx11_abi_flag = getattr(tf, 'CXX11_ABI_FLAG', "<undefined>")
