@@ -3765,6 +3765,7 @@ class VarianceScalingNonZero(init_ops.VarianceScaling):
     :param partition_info:
     :rtype: tf.Tensor
     """
+    import TFCompat
     import numpy
     from tensorflow.python.ops import init_ops
     if dtype is None:
@@ -4481,6 +4482,7 @@ def batched_uniq(x, seq_lens):
     max_new_time = max(new_seq_lens), seq_lens is of shape (batch,).
   :rtype: (tf.Tensor, tf.Tensor)
   """
+  import TFCompat
   y, new_seq_lens = sparse_labels_with_seq_lens(x, seq_lens=seq_lens, collapse_repeated=True)
   z = TFCompat.v1.sparse_to_dense(sparse_indices=y.indices, sparse_values=y.values, output_shape=y.dense_shape)
   return z, new_seq_lens
@@ -5338,6 +5340,7 @@ class MetaLosses(object):
     :return: grad for x
     :rtype: (tf.Tensor,)
     """
+    import TFCompat
     x, synthetic_grad_x = op.inputs
     if cls.scope_ctx.scope:
       with tf.name_scope("grad_prediction_loss"):
@@ -5382,6 +5385,7 @@ class MetaLosses(object):
     :return: grad for x
     :rtype: (tf.Tensor,)
     """
+    import TFCompat
     if cls.scope_ctx.scope:
       with tf.name_scope("tikhonov_regularization_loss"):
         loss = tf.nn.l2_loss(grad_out)
