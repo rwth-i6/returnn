@@ -7960,8 +7960,25 @@ def find_ops_with_tensor_input(tensors, fetches=None, graph=None):
   :rtype: list[tf.Operation]
   """
   if isinstance(tensors, tf.Variable):
-    # noinspection PyProtectedMember
-    tensors = [tensors._ref(), tensors.value()]
+    from tensorflow.python.ops.resource_variable_ops import ResourceVariable
+    if isinstance(tensors, ResourceVariable):
+      # To keep the behavior more consistent to the old-style ref-variable,
+      # we resolve all ReadVariableOp on the var resource handle,
+      # and also remove VarIsInitializedOp.
+      # If you do not want this, pass the var.handle directly to find_ops_with_tensor_input.
+      ops_ = find_ops_with_tensor_input(tensors.handle, fetches=fetches, graph=graph)
+      ops = []
+      for op in ops_:
+        if op.type == "ReadVariableOp":
+          ops += find_ops_with_tensor_input(op.outputs[0], fetches=fetches, graph=graph)
+        elif op.type == "VarIsInitializedOp":
+          pass  # remove this
+        else:
+          ops.append(op)
+      return ops
+    else:
+      # noinspection PyProtectedMember
+      tensors = [tensors._ref(), tensors.value()]
   if isinstance(tensors, tf.Tensor):
     tensors = [tensors]
   assert all([isinstance(x, tf.Tensor) for x in tensors])
