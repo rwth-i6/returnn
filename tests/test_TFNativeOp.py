@@ -61,8 +61,8 @@ except ImportError:
 print("TF version:", tf.__version__)
 
 CudaEnv.verbose_find_cuda = True
-session = tf.InteractiveSession()
-tf.set_random_seed(42)
+session = TFCompat.v1.InteractiveSession()
+TFCompat.v1.set_random_seed(42)
 
 
 def sys_exec(*args, **kwargs):

@@ -3784,11 +3784,11 @@ class VarianceScalingNonZero(init_ops.VarianceScaling):
     if self.distribution == "normal":
       stddev = numpy.sqrt(scale)
       limit = stddev * 2
-      x = tf.truncated_normal(shape, mean=0.0, stddev=stddev, dtype=dtype, seed=self.seed)
+      x = TFCompat.v1.truncated_normal(shape, mean=0.0, stddev=stddev, dtype=dtype, seed=self.seed)
     else:
       assert self.distribution == "uniform"
       limit = numpy.sqrt(3.0 * scale)
-      x = tf.random_uniform(shape, minval=-limit, maxval=limit, dtype=dtype, seed=self.seed)
+      x = TFCompat.v1.random_uniform(shape, minval=-limit, maxval=limit, dtype=dtype, seed=self.seed)
     x = wrap_distribution_non_zero(x, zero_limit=self.non_zero_fraction * limit, limit=limit)
     return x
 

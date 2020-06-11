@@ -4341,7 +4341,7 @@ class ChoiceLayer(BaseChoiceLayer):
           if random_sample_scale:
             # https://github.com/tensorflow/tensorflow/issues/9260
             # https://timvieira.github.io/blog/post/2014/08/01/gumbel-max-trick-and-weighted-reservoir-sampling/
-            scores_random_sample = -TFCompat.v1.log(-TFCompat.v1.log(tf.random_uniform(tf.shape(scores_in), 0, 1)))
+            scores_random_sample = -TFCompat.v1.log(-TFCompat.v1.log(TFCompat.v1.random_uniform(tf.shape(scores_in), 0, 1)))
           scores_comb = optional_add(
             optional_mul(scores_in, prob_scale),
             optional_mul(scores_base, base_beam_score_scale),
@@ -4440,7 +4440,7 @@ class ChoiceLayer(BaseChoiceLayer):
       if gold_mixing_prob:
         gold_targets = self._get_target_value().get_placeholder_as_batch_major()
         # draw choices over batch dimension
-        choice = tf.less(tf.random_uniform(tf.shape(feedback_output)[:1]), gold_mixing_prob)
+        choice = tf.less(TFCompat.v1.random_uniform(tf.shape(feedback_output)[:1]), gold_mixing_prob)
         feedback_output = tf.where(choice, gold_targets, feedback_output)
 
       self.output = Data(
@@ -7035,7 +7035,7 @@ class RHNCell(BaseRNNCell):
         keep_prob = 1.0 - self.dropout
         # uniform [keep_prob, 1.0 + keep_prob)
         random_tensor = keep_prob
-        random_tensor += tf.random_uniform((batch_size, self._num_units), seed=self.dropout_seed, dtype=tf.float32)
+        random_tensor += TFCompat.v1.random_uniform((batch_size, self._num_units), seed=self.dropout_seed, dtype=tf.float32)
         # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
         binary_tensor = tf.floor(random_tensor)
         return binary_tensor * (1.0 / keep_prob)
@@ -7497,7 +7497,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
         keep_prob = 1.0 - dropout
         # uniform [keep_prob, 1.0 + keep_prob)
         random_tensor = keep_prob
-        random_tensor += tf.random_uniform((batch_size, self._num_units), seed=self.dropout_seed, dtype=tf.float32)
+        random_tensor += TFCompat.v1.random_uniform((batch_size, self._num_units), seed=self.dropout_seed, dtype=tf.float32)
         # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
         binary_tensor = tf.floor(random_tensor)
         return binary_tensor * (1.0 / keep_prob)

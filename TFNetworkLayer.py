@@ -6128,7 +6128,7 @@ class ResizeLayer(_ConcatInputLayer):
       # We are going to build a mask over the axis. This mask will be shared over all seqs in the batch.
       # Similar to in tf.nn.dropout. Build random_tensor as uniform [keep_prob, 1.0 + keep_prob).
       random_tensor = 1.0 - fill_dropout  # keep_prop
-      random_tensor += tf.random_uniform(
+      random_tensor += TFCompat.v1.random_uniform(
         [shape[axis], factor - 1], seed=self.network.random.randint(2**31))  # (old_size, factor - 1)
       # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
       mask = tf.cast(tf.floor(random_tensor), dtype=tf.bool)

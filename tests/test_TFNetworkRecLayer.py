@@ -149,7 +149,7 @@ def _check_train_simple_network(network, num_steps=10):
 
   with make_scope() as session:
     print("Create network...")
-    tf.set_random_seed(42)
+    TFCompat.v1.set_random_seed(42)
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_dict["network"])
     network.print_network_info()
@@ -485,7 +485,7 @@ def test_deterministic_TensorArray():
     random = numpy.random.RandomState(seed=1)
 
     with make_scope() as session:
-      tf.set_random_seed(42)
+      TFCompat.v1.set_random_seed(42)
       print("create graph")
       src_placeholder = TFCompat.v1.placeholder(tf.float32, (None, seq_len, num_inputs), name="src_placeholder")
       tgt_placeholder = TFCompat.v1.placeholder(tf.float32, (None, seq_len, num_outputs), name="tgt_placeholder")
@@ -505,7 +505,7 @@ def test_deterministic_TensorArray():
         keep_prob = 0.9
         # uniform [keep_prob, 1.0 + keep_prob)
         random_tensor = keep_prob
-        random_tensor += tf.random_uniform((batch_size, cell.state_size), seed=1, dtype=state.dtype)
+        random_tensor += TFCompat.v1.random_uniform((batch_size, cell.state_size), seed=1, dtype=state.dtype)
         # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
         binary_tensor = tf.floor(random_tensor)
         noise_h = binary_tensor / keep_prob
@@ -723,7 +723,7 @@ def test_cudnn_rnn_params_to_canonical():
     def check(**kwargs):
       print("kwargs:", kwargs)
       model = CudnnLSTM(**kwargs)
-      params = tf.Variable(tf.random_uniform([model.params_size()], seed=1), validate_shape=False)
+      params = tf.Variable(TFCompat.v1.random_uniform([model.params_size()], seed=1), validate_shape=False)
       session.run(params.initializer)
       s1 = model.params_size().eval()
       print("param size:", s1)
@@ -4082,7 +4082,7 @@ def test_BlocksparseLSTM_load_params_from_native_lstm():
 
   with make_scope() as session:
     print("create graph")
-    tf.set_random_seed(42)
+    TFCompat.v1.set_random_seed(42)
     src_placeholder = TFCompat.v1.placeholder(tf.float32, (batch_dim, seq_len, num_inputs), name="src_placeholder")
     seq_len_placeholder = TFCompat.v1.placeholder(tf.int32, (batch_dim,), name="seq_len_placeholder")
     feed_dict = {
