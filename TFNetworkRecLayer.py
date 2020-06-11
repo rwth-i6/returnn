@@ -499,7 +499,7 @@ class RecLayer(_ConcatInputLayer):
         name = "StandardLSTM"
       else:
         name = "NativeLSTM2"
-    if name.lower() == "BasicLSTM" and name.lower() not in cls._rnn_cells_dict:
+    if name.lower() == "BasicLSTM".lower() and name.lower() not in cls._rnn_cells_dict:
       # TF 2 does not have BasicLSTM anymore. Use StandardLSTM instead.
       name = "StandardLSTM"
     if name.lower() not in cls._rnn_cells_dict:
