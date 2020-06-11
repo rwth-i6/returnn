@@ -174,8 +174,10 @@ def main():
     else:
       print("package_data, found PKG-INFO, no MANIFEST, use *")
       # Just using package_data = ["*"] would only take files from current dir.
-      from glob import glob
-      package_data = glob("**/*", recursive=True)
+      package_data = []
+      for root, dirs, files in os.walk('.'):
+        for file in files:
+          package_data.append(os.path.join(root, file))
   else:
     print("dummy package_data, does not matter, likely you are running sdist")
     package_data = ["MANIFEST"]
