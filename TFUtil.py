@@ -5732,7 +5732,17 @@ def where_bc(condition, x, y, name="where_bc"):
   """
   import TFCompat
   if TFCompat.v2:
-    # where_v2 supports broadcasting.
+    # where_v2 supports broadcasting. But we might still need to extend dims.
+    condition = tf.convert_to_tensor(condition)
+    x = tf.convert_to_tensor(x)
+    y = tf.convert_to_tensor(y)
+    ndims = max(condition.get_shape().ndims, x.get_shape().ndims, y.get_shape().ndims)
+    if x.get_shape().ndims < ndims:
+      x = expand_multiple_dims(x, [-1] * (ndims - x.get_shape().ndims))
+    if y.get_shape().ndims < ndims:
+      y = expand_multiple_dims(y, [-1] * (ndims - y.get_shape().ndims))
+    if condition.get_shape().ndims < ndims:
+      condition = expand_multiple_dims(condition, [-1] * (ndims - condition.get_shape().ndims))
     return TFCompat.v2.where(condition=condition, x=x, y=y, name=name)
   with tf.name_scope(name):
     common_shape = get_common_shape([condition, x, y])
