@@ -1551,7 +1551,7 @@ def deterministic_train_check(layer_opts):
     "start_epoch": 1,
     "num_epochs": 2,
     "batch_size": 10,
-    "nadam": True,
+    "adam": True,
     "learning_rate": 0.01,
     "debug_add_check_numerics_ops": True
   })
