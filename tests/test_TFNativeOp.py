@@ -253,7 +253,7 @@ def test_NativeLstmCell_run():
       inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
       index = tf.ones([n_time, n_batch])
       outputs, final_state = cell(inputs, index)
-      session.run(tf.global_variables_initializer())
+      session.run(TFCompat.v1.global_variables_initializer())
       res = session.run(outputs)
       pprint(res)
 
@@ -386,7 +386,7 @@ def test_NativeLstm2_run():
       inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
       index = tf.ones([n_time, n_batch])
       outputs, final_state = cell(inputs, index)
-      session.run(tf.global_variables_initializer())
+      session.run(TFCompat.v1.global_variables_initializer())
       res = session.run(outputs)
       pprint(res)
 
@@ -465,7 +465,7 @@ def test_NativeLstm2_0len_run():
       inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
       index = tf.ones([n_time, n_batch])
       outputs, final_state = cell(inputs, index)
-      session.run(tf.global_variables_initializer())
+      session.run(TFCompat.v1.global_variables_initializer())
       res = session.run(outputs)
       pprint(res)
 
@@ -2945,7 +2945,7 @@ def test_blocksparse_simple():
 
   # Run
   print('init vars')
-  session.run(tf.global_variables_initializer())
+  session.run(TFCompat.v1.global_variables_initializer())
   print('blocksparse matmul')
   result = session.run(y, feed_dict={x: x_np})
   print(result)

@@ -7447,11 +7447,12 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     beta_init = self.norm_shift
     if add_forget_bias and self.forget_bias > 0:
       beta_init += self.forget_bias
-    mean, variance = tf.nn.moments(inputs, axes=[-1], keep_dims=True)
-    normalized_input = (inputs - mean) * tf.rsqrt(variance + self.variance_epsilon)
+    mean, variance = TFCompat.v1.nn.moments(inputs, axes=[-1], keep_dims=True)
+    normalized_input = (inputs - mean) * TFCompat.v1.rsqrt(variance + self.variance_epsilon)
     g = TFCompat.v1.get_variable("gamma_" + name, shape=shape, initializer=gamma_init)
-    s = TFCompat.v1.get_variable("beta_" + name, shape=shape,
-                        initializer=tf.constant_initializer(beta_init)) if with_beta else None
+    s = TFCompat.v1.get_variable(
+      "beta_" + name, shape=shape,
+      initializer=tf.constant_initializer(beta_init)) if with_beta else None
     y = normalized_input * g
     if with_beta:
       y += s

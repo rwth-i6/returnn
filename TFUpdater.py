@@ -1126,7 +1126,7 @@ class GradVarianceScaledOptimizer(BaseCustomOptimizer):
       m_t = self._assign_add(m, updates=m_scaled_g_values, indices=indices)
     m_gathered = self._gather(m_t, indices=indices)
 
-    # Also see tf.nn.moments.
+    # Also see tf.compat.v1.nn.moments.
     variance = TFCompat.v1.squared_difference(grad, m_gathered)
 
     # v_t = beta2 * v + (1 - beta2) * variance

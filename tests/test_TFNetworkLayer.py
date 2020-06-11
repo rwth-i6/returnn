@@ -181,7 +181,7 @@ def test_concat_sources_dim1():
     out = network.get_default_output_layer()
     assert out.output.shape == (None, 9)
     feed_dict = make_feed_dict(network.extern_data.data.values(), same_time=True)
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     session.run(out.output.placeholder, feed_dict=feed_dict)
 
 
@@ -211,7 +211,7 @@ def test_LinearLayer_batch_feature_major():
     feed_dict = {
       source.output.placeholder: numpy.random.normal(size=(n_batch, n_in, n_time)).astype("float32"),
       source.output.size_placeholder[1]: numpy.array(n_times, dtype="int32")}
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     session.run(layer.output.placeholder, feed_dict=feed_dict)
 
 
@@ -283,7 +283,7 @@ def test_batch_norm():
                                                                                  sources=[src_nhwc],
                                                                                  network=net))
       batch_norm_2.post_init(layer_desc=None)
-    tf.global_variables_initializer().run()
+    TFCompat.v1.global_variables_initializer().run()
     out_1, seq_lens_1 = session.run([batch_norm_1.output.placeholder,
                                  batch_norm_1.output.size_placeholder[0]],
                                 feed_dict={src_nhwc.output.placeholder: input_data,
@@ -345,7 +345,7 @@ def test_batch_norm_unequal_seq_len():
                                                                                  sources=[src_nhwc],
                                                                                  network=net))
       batch_norm_2.post_init(layer_desc=None)
-    tf.global_variables_initializer().run()
+    TFCompat.v1.global_variables_initializer().run()
     out_1, seq_lens_1 = session.run([batch_norm_1.output.placeholder,
                                      batch_norm_1.output.size_placeholder[0]],
                                     feed_dict={src_nhwc.output.placeholder: input_data,
@@ -406,7 +406,7 @@ def test_activation_layer_net_construct_two_out():
       }})
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_value("network"))
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     out = network.layers["output"].output.placeholder
     out2 = network.layers["0out"].output.placeholder
     n_batch = 1
@@ -450,7 +450,7 @@ def test_cnn_building_block():
       }})
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_value("network"))
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     out = network.layers["output"].output.placeholder
     n_batch = 5
     seq_len = 10
@@ -489,7 +489,7 @@ def test_CombineLayer_simple_add():
     network.construct_from_dict(net_dict)
     out = network.get_default_output_layer()
     feed_dict = make_feed_dict(network.extern_data.data.values(), same_time=True)
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     session.run(out.output.placeholder, feed_dict=feed_dict)
 
 
@@ -509,7 +509,7 @@ def test_CombineLayer_broadcast():
     out = network.get_default_output_layer()
     assert out.output.shape == (None, 9)
     feed_dict = make_feed_dict(network.extern_data.data.values(), same_time=True)
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     session.run(out.output.placeholder, feed_dict=feed_dict)
 
 
@@ -1872,7 +1872,7 @@ def test_conv_layer_NCHW():
                                                 filter_size=filter_size, padding=padding,
                                                 auto_use_channel_first=True,
                                                 network=net, sources=[src_nchw]))
-    tf.global_variables_initializer().run()
+    TFCompat.v1.global_variables_initializer().run()
     out, seq_lens = session.run([conv_nhwc_from_nhwc.output.placeholder,
                                  conv_nhwc_from_nhwc.output.size_placeholder[0]],
                                 feed_dict={src_nhwc.output.placeholder: np.random.rand(10, 10, 16, 16),
@@ -1965,7 +1965,7 @@ def test_pool_layer_NCHW():
                                                 pool_size=pool_size, padding=padding,
                                                 use_channel_first=False,
                                                 network=net, sources=[src_nchw]))
-    tf.global_variables_initializer().run()
+    TFCompat.v1.global_variables_initializer().run()
     out, seq_lens = session.run([pool_nhwc_from_nhwc.output.placeholder,
                                  pool_nhwc_from_nhwc.output.size_placeholder[0]],
                                 feed_dict={src_nhwc.output.placeholder: np.random.rand(10, 11, 16, 16),
@@ -2383,7 +2383,7 @@ def test_LinearLayer_simple_train():
     n_time = 11
     rnd = numpy.random.RandomState(42)
     with TFCompat.v1.Session() as session:
-      session.run(tf.global_variables_initializer())
+      session.run(TFCompat.v1.global_variables_initializer())
       for step in range(5):
         info, _ = session.run(
           (network.get_fetches_dict(), update_op),
@@ -2443,7 +2443,7 @@ def test_flat_net_construction():
     n_time = 11
     rnd = numpy.random.RandomState(42)
     with TFCompat.v1.Session() as session:
-      session.run(tf.global_variables_initializer())
+      session.run(TFCompat.v1.global_variables_initializer())
       for step in range(5):
         info, _ = session.run(
           (network.get_fetches_dict(), update_op),
@@ -2710,7 +2710,7 @@ def test_HDFDumpLayer():
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_value("network"))
 
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     out = network.layers["output"].output.placeholder
     n_batch = 1
     seq_len = 4
@@ -2761,7 +2761,7 @@ def test_HDFDumpLayer_sparse():
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_value("network"))
 
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     n_batch = 1
     classes_data = numpy.array([[2, 5, 6]], dtype="int32")
     classes_seq_lens = [classes_data.shape[1]]
@@ -2807,7 +2807,7 @@ def test_HDFDumpLayer_fixed_length():
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_value("network"))
 
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     out = network.layers["output"].output.placeholder
     n_batch = 1
     seq_len = 4
@@ -2864,7 +2864,7 @@ def test_HDFDumpLayer_extra():
     network.construct_from_dict(config.typed_value("network"))
     network.print_network_info()
 
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     n_batch = 1
     input_data = numpy.array([[
       [1, -0.2, 0.3, -4, 5],
@@ -2935,7 +2935,7 @@ def test_HDFDumpLayer_dump_whole_batch_extra_sm():
     network.construct_from_dict(config.typed_value("network"))
     network.print_network_info()
 
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     n_batch = 1
     input_data = numpy.array([[
       [1, -0.2, 0.3, -4, 5],
@@ -3002,7 +3002,7 @@ def test_HDFDumpLayer_dump_whole_batch_extra_sm1():
     network.construct_from_dict(config.typed_value("network"))
     network.print_network_info()
 
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     n_batch = 1
     input_data = numpy.array([[
       [1, -0.2, 0.3, -4, 5],
@@ -3065,7 +3065,7 @@ def test_CrossEntropyLoss():
     loss_holder = losses_dict["output"]
     assert isinstance(loss_holder, LossHolder)
     assert isinstance(loss_holder.loss, CrossEntropyLoss)
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     print("Get loss:")
     feed_dict = make_feed_dict(net.extern_data.data.values(), same_time=True)
     print("random classes:", feed_dict[net.extern_data.data["classes"].placeholder])
@@ -3115,7 +3115,7 @@ def test_CrossEntropyLoss_masked_inf():
     loss_holder = losses_dict["output"]
     assert isinstance(loss_holder, LossHolder)
     assert isinstance(loss_holder.loss, CrossEntropyLoss)
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     print("Get loss:")
     feed_dict = make_feed_dict(net.extern_data.data.values(), same_time=True)
     mask_v = numpy.array([True] * n_out)
@@ -3184,7 +3184,7 @@ def test_CrossEntropyLoss_masked_inf_fake_upper_bound():
     loss_holder = losses_dict["output"]
     assert isinstance(loss_holder, LossHolder)
     assert isinstance(loss_holder.loss, CrossEntropyLoss)
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     print("Get loss:")
     feed_dict = make_feed_dict(net.extern_data.data.values(), same_time=True)
     mask_v = numpy.array([True] * n_out)
@@ -3229,7 +3229,7 @@ def test_reduce_mean_in_time():
     net.construct_from_dict({
       "output": {"class": "reduce", "mode": "mean", "axis": "T", "from": ["data"]}
     })
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     out = net.layers["output"].output.placeholder
     n_batch = 3
     max_seq_len = 10
@@ -3257,7 +3257,7 @@ def test_reduce_mean_batch_time():
     net.construct_from_dict({
       "output": {"class": "reduce", "mode": "mean", "axis": ["B", "T"], "from": ["data"]}
     })
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     out = net.layers["output"].output.placeholder
     n_batch = 3
     max_seq_len = 10

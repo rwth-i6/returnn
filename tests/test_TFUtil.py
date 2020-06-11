@@ -1301,7 +1301,7 @@ def test_loop_var_creation():
     return [i + w1 + w2]
 
   loop = tf.while_loop(lambda i: tf.less(i, 5), body, [i])
-  session.run(tf.global_variables_initializer())
+  session.run(TFCompat.v1.global_variables_initializer())
   session.run(loop)
 
 
@@ -2637,7 +2637,7 @@ def test_get_variable_grad_from_update_ops():
       print("update op keys:", get_op_attrib_keys(update_ops[0]))
       print("update op inputs by name:", get_op_input_names(update_ops[0]))
       session.run(var.initializer)  # reset
-      session.run(tf.global_variables_initializer())  # from Adam or so
+      session.run(TFCompat.v1.global_variables_initializer())  # from Adam or so
       assert_equal(session.run(var), 0.0)
       grad = get_variable_grad_from_update_ops(var, update_ops)
       print("grad:", grad)
@@ -2675,7 +2675,7 @@ def test_get_variable_grad_from_update_ops_mix_sparse_dense():
       print("update op keys:", get_op_attrib_keys(update_ops[0]))
       print("update op inputs by name:", get_op_input_names(update_ops[0]))
       session.run(var.initializer)  # reset
-      session.run(tf.global_variables_initializer())  # from Adam or so
+      session.run(TFCompat.v1.global_variables_initializer())  # from Adam or so
       try:
         grad = get_variable_grad_from_update_ops(var, update_ops)
       except Exception:

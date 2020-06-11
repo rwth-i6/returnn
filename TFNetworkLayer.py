@@ -1138,10 +1138,10 @@ class LayerBase(object):
     with reuse_name_scope(self.get_absolute_name_scope_prefix() + "batch_norm", absolute=True):
       if masked_time:
         x = data.get_placeholder_flattened(keep_dims=True)
-        mean, variance = tf.nn.moments(x, axes=[0], keep_dims=True)
+        mean, variance = TFCompat.v1.nn.moments(x, axes=[0], keep_dims=True)
       else:
         x = data.placeholder
-        mean, variance = tf.nn.moments(x, axes=data.get_axes(exclude_feature=True), keep_dims=True)
+        mean, variance = TFCompat.v1.nn.moments(x, axes=data.get_axes(exclude_feature=True), keep_dims=True)
       if sample_mean is None:
         with self.var_creation_scope():
           sample_mean = self.add_param(tf.Variable(
@@ -1150,7 +1150,7 @@ class LayerBase(object):
             trainable=False))
         # Use exponential moving average of batch mean.
         # Note: We could also use cumulative moving average. Our Theano implementation does that for inference.
-        sample_mean = tf.assign_add(sample_mean, (mean - sample_mean) * momentum)
+        sample_mean = TFCompat.v1.assign_add(sample_mean, (mean - sample_mean) * momentum)
       if sample_variance is None:
         # Note: Our Theano implementation does not use a moving average for this.
         with self.var_creation_scope():
@@ -1158,12 +1158,12 @@ class LayerBase(object):
             initial_value=tf.ones(data.get_bc_spatial_batch_shape()),
             name="%s_%s_variance" % (self.name, data.name),
             trainable=False))
-        sample_variance = tf.assign_add(sample_variance, (variance - sample_variance) * momentum)
+        sample_variance = TFCompat.v1.assign_add(sample_variance, (variance - sample_variance) * momentum)
       # If train or if force_sample, use default use_sample=0.0, otherwise use_sample=1.0.
       use_sample = 1.0 + tf.cast(tf.logical_or(self.network.train_flag, force_sample), tf.float32) * (use_sample - 1.0)
       mean = (1. - use_sample) * mean + use_sample * sample_mean
       variance = (1. - use_sample) * variance + use_sample * sample_variance
-      bn = (data.placeholder - mean) * tf.rsqrt(variance + epsilon)
+      bn = (data.placeholder - mean) * TFCompat.v1.rsqrt(variance + epsilon)
       if use_std:
         if gamma is None:
           with self.var_creation_scope():
@@ -4665,7 +4665,7 @@ class ConvLayer(_ConcatInputLayer):
     if input_data.is_batch_feature_major:
       assert self.output.is_batch_feature_major
       data_format = {1: "NCW", 2: "NCHW", 3: "NCDHW"}[len(filter_size)]
-    y = tf.nn.convolution(
+    y = TFCompat.v1.nn.convolution(
       input_data.placeholder, data_format=data_format,
       filter=filters,
       padding=padding, strides=strides, dilation_rate=dilation_rate)
@@ -4717,7 +4717,7 @@ class ConvLayer(_ConcatInputLayer):
       return -(-a // b)
 
     padding = padding.upper()
-    # See tf.nn.convolution() documentation for more.
+    # See tf.compat.v1.nn.convolution() documentation for more.
     if padding == "SAME":
       return ceildiv(in_dim, stride)
     elif padding == "VALID":
@@ -5402,7 +5402,7 @@ class WeightedSumLayer(_ConcatInputLayer):
       filters = self.add_param(TFCompat.v1.get_variable(
         name="W", shape=size, initializer=tf.constant_initializer(1.0 / numpy.prod(size))))
     filters = tf.reshape(filters, shape=list(size) + [1, 1])
-    y = tf.nn.convolution(x, filter=filters, padding=padding.upper())  # result: (new_batch_dim, ..., 1)
+    y = TFCompat.v1.nn.convolution(x, filter=filters, padding=padding.upper())  # result: (new_batch_dim, ..., 1)
     if keep_dims:
       y_shape = tf.shape(y)
       # Now split new_batch_dim again into the other_axes.

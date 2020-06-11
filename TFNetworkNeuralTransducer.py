@@ -398,10 +398,11 @@ class NeuralTransducerLoss(Loss):
 
         # Check for outliers and set their gradient to 0
         loss_time = tf.reduce_sum(stepwise_cross_entropy, axis=1)
-        mean, variance = tf.nn.moments(stepwise_cross_entropy, axes=[1])
-        loss_mask = tf.to_float(variance > self.max_variance)
-        stepwise_cross_entropy = tf.stop_gradient(tf.multiply(loss_mask, loss_time)) + \
-                                  tf.multiply(tf.to_float(tf.logical_not(tf.cast(loss_mask, tf.bool))), loss_time)
+        mean, variance = TFCompat.v1.nn.moments(stepwise_cross_entropy, axes=[1])
+        loss_mask = tf.cast(tf.greater(variance, self.max_variance), tf.float32)
+        stepwise_cross_entropy = (
+          tf.stop_gradient(tf.multiply(loss_mask, loss_time)) +
+          tf.multiply(tf.cast(tf.logical_not(tf.cast(loss_mask, tf.bool)), tf.float32), loss_time))
 
         if self.debug is True:
             stepwise_cross_entropy = tf.cond(tf.reduce_sum(loss_mask) >= 1,

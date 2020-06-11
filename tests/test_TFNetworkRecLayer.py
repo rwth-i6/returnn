@@ -1151,9 +1151,9 @@ def test_rec_explicit_lstm():
     from test_TFNetworkLayer import make_feed_dict
     feed_dict = make_feed_dict(list(net.extern_data.data.values()), same_time=True)
     fetches = net.get_fetches_dict()
-    optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.01)
+    optimizer = TFCompat.v1.train.GradientDescentOptimizer(learning_rate=0.01)
     fetches["optim_op"] = optimizer.minimize(loss=loss)
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     res = session.run(fetches, feed_dict=feed_dict)
     pprint(res)
 
@@ -3437,7 +3437,7 @@ def test_reclayer_enc_time_dim_eval():
     })
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_dict["network"])
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     output_layer = network.get_default_output_layer(must_exist=True)
     from test_TFNetworkLayer import make_feed_dict
     feed_dict = make_feed_dict(list(network.extern_data.data.values()))
@@ -4115,7 +4115,7 @@ def test_BlocksparseLSTM_load_params_from_native_lstm():
         y2 = layer2.output.get_placeholder_as_batch_major()
 
     print("run")
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     native_lstm_params = layer1.get_param_values_dict(session=session)
     np_y1 = session.run(y1, feed_dict=feed_dict)
     assert np_y1.shape == (batch_dim, seq_len, num_outputs)
