@@ -2012,7 +2012,7 @@ def test_rec_subnet_eval_init_out_apply0():
     "start_epoch": 1,
     "num_epochs": 2,
     "batch_size": 10,
-    "nadam": True,
+    "adam": True,
     "learning_rate": 0.01,
     "debug_print_layer_output_template": True
   })

@@ -5701,14 +5701,15 @@ def nan_to_num(x, nan_num=0, inf_num=1e30):
   :param float|tf.Tensor inf_num:
   :return: x with replaced nan and inf
   """
+  import TFCompat
   if isinstance(x, tf.IndexedSlices):
     return tf.IndexedSlices(values=nan_to_num(x.values), indices=x.indices, dense_shape=x.dense_shape)
   with tf.name_scope("nan_to_num"):
     nan_num = tf.convert_to_tensor(nan_num, dtype=x.dtype)
     inf_num = tf.convert_to_tensor(inf_num, dtype=x.dtype)
-    x = where_bc(tf.is_nan(x), nan_num, x)
-    x = where_bc(tf.logical_and(tf.is_inf(x), tf.greater(x, 0)), inf_num, x)
-    x = where_bc(tf.logical_and(tf.is_inf(x), tf.less(x, 0)), -inf_num, x)
+    x = where_bc(TFCompat.v1.is_nan(x), nan_num, x)
+    x = where_bc(tf.logical_and(TFCompat.v1.is_inf(x), tf.greater(x, 0)), inf_num, x)
+    x = where_bc(tf.logical_and(TFCompat.v1.is_inf(x), tf.less(x, 0)), -inf_num, x)
     return x
 
 
@@ -5728,6 +5729,10 @@ def where_bc(condition, x, y, name="where_bc"):
   :return: basically tf.where(condition, x, y)
   :rtype: tf.Tensor
   """
+  import TFCompat
+  if TFCompat.v2:
+    # where_v2 supports broadcasting.
+    return TFCompat.v2.where(condition=condition, x=x, y=y, name=name)
   with tf.name_scope(name):
     common_shape = get_common_shape([condition, x, y])
     condition = unbroadcast_to_common_shape(condition, common_shape=common_shape)
@@ -7651,7 +7656,8 @@ def filter_ended_scores(x, end_flags, batch_dim=None, dim=None, score_zero=0.0, 
       filter_score.set_shape(tf.TensorShape([
         batch_dim if isinstance(batch_dim, int) else None,
         dim if isinstance(dim, int) else None]))
-    x = tf.where(end_flags, filter_score, x)
+    end_flags_bc = tf.expand_dims(end_flags, axis=1)
+    x = where_bc(end_flags_bc, filter_score, x)
     x.set_shape(tf.TensorShape([
       batch_dim if isinstance(batch_dim, int) else None,
       dim if isinstance(dim, int) else None]))

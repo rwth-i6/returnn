@@ -4834,7 +4834,7 @@ class PoolLayer(_ConcatInputLayer):
     if input_data.is_batch_feature_major:
       assert self.output.is_batch_feature_major
       data_format = {1: "NCW", 2: "NCHW", 3: "NCDHW"}[len(pool_size)]
-    y = tf.nn.pool(
+    y = TFCompat.v1.nn.pool(
       x, window_shape=pool_size, pooling_type=mode, padding=padding,
       dilation_rate=dilation_rate, strides=strides, data_format=data_format)
     # y shape is [batch] + spatial_dims + [n_out].
