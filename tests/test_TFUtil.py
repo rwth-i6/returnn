@@ -1715,7 +1715,12 @@ def test_enforce_copy():
       # `a` is a ref to v, thus also 3 now.
       # `b` is a copy, thus 2, as initially.
       x = tf.add(0, [a, b, v.read_value()])
-  assert_equal(list(x.eval()), [3, 2, 3])
+  x_eval = list(x.eval())
+  assert len(x_eval) == 3
+  assert_equal(x_eval[1:], [2, 3])
+  # x[0] might depend on the implementation, and TF version.
+  # In TF 1, it is 3. In TF 2, it is 2. (2 is actually probably more correct...)
+  assert x_eval[0] in [2, 3]
 
 
 @unittest.skip("does not work")
