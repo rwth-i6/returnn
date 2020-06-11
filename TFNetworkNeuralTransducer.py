@@ -99,7 +99,7 @@ class NeuralTransducerLayer(_ConcatInputLayer):
 
         # Add all trainable params
         with self.var_creation_scope() as scope:
-            self._add_all_trainable_params(tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope.name))
+            self._add_all_trainable_params(tf.get_collection(TFCompat.v1.GraphKeys.TRAINABLE_VARIABLES, scope=scope.name))
 
     def build_full_transducer(self, transducer_hidden_units, embeddings, num_outputs, input_block_size,
                               transducer_max_width, encoder_outputs, trans_hidden_init):
@@ -376,7 +376,7 @@ class NeuralTransducerLoss(Loss):
         targets_lengths = self.target.size_placeholder[0]
 
         # Get alignment info into our targets
-        new_targets, mask = tf.py_func(func=self.get_alignment_from_logits_manager,
+        new_targets, mask = TFCompat.v1.py_func(func=self.get_alignment_from_logits_manager,
                                        inp=[logits, targets, logits_lengths, targets_lengths],
                                        Tout=(tf.int64, tf.bool), stateful=False)
 
@@ -612,7 +612,7 @@ class NeuralTransducerLoss(Loss):
             targets_lengths = self.target.size_placeholder[0]
 
             # Get alignment info into our targets
-            new_targets, mask = tf.py_func(func=self.get_alignment_from_logits_manager,
+            new_targets, mask = TFCompat.v1.py_func(func=self.get_alignment_from_logits_manager,
                                            inp=[logits, targets, logits_lengths, targets_lengths],
                                            Tout=(tf.int64, tf.bool), stateful=False)
 

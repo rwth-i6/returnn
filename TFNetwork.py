@@ -2446,7 +2446,7 @@ def help_on_tf_exception(
             if x.dtype._is_ref_dtype and x not in stop_at_ts:
               stop_at_ts.append(x)  # and also should not copy any variables/refs
         # Note: Some code in graph_editor, which is used in copy_graph, results in lots of spam about
-        # tf.GraphKeys.VARIABLES deprecated usage (e.g. via get_predefined_collection_names or so).
+        # tf.compat.v1.GraphKeys.VARIABLES deprecated usage (e.g. via get_predefined_collection_names or so).
         # We just do this ugly patch here, to work around the spam.
         TFCompat.v1.GraphKeys.VARIABLES = TFCompat.v1.GraphKeys.GLOBAL_VARIABLES
         from TFUtil import FetchHelper

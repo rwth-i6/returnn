@@ -8069,7 +8069,7 @@ class HDFDumpLayer(LayerBase):
         sys.excepthook(*sys.exc_info())
         raise
 
-    tf_write = tf.py_func(
+    tf_write = TFCompat.v1.py_func(
       py_write,
       [data.placeholder,
        self.network.get_seq_tags(beam=data.beam),
@@ -8218,7 +8218,7 @@ class OfficialResNetLayer(_ConcatInputLayer):
     # Very generic way to collect all created params.
     # Also, see the usage of :func:`LayerBase.cls_layer_scope`, e.g. for initial vars.
     scope_name_prefix = TFCompat.v1.get_variable_scope().name + "/"  # e.g. "layer1/"
-    params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=re.escape(scope_name_prefix))
+    params = tf.get_collection(TFCompat.v1.GraphKeys.GLOBAL_VARIABLES, scope=re.escape(scope_name_prefix))
     for p in params:
       if not p.name.startswith(scope_name_prefix):
         continue
@@ -9400,7 +9400,7 @@ class MeanSquaredError(Loss):
       else:
         y = self.target_flat
       assert y.get_shape().ndims == 2
-      out = tf.squared_difference(x, y)
+      out = TFCompat.v1.squared_difference(x, y)
       assert out.get_shape().ndims == 2
       out = self.reduce_func(tf.reduce_mean(out, axis=1))
       return out

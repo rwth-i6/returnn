@@ -19,11 +19,11 @@ from Util import NotSpecified, NativeCodeCompiler
 
 class CollectionKeys:
   """
-  Extension of :class:`tf.GraphKeys`
+  Extension of :class:`tf.compat.v1.GraphKeys`
   """
   RETURNN_LAYERS = "_RETURNN_layers"  # LayerBase instances
   RETURNN_NET_STACK = "_RETURNN_network_stack"  # TFNetwork instance stack
-  STATE_VARS = "_RETURNN_state_vars"  # tf.Variable, like e.g. tf.GraphKeys.LOCAL_VARIABLES
+  STATE_VARS = "_RETURNN_state_vars"  # tf.Variable, like e.g. tf.compat.v1.GraphKeys.LOCAL_VARIABLES
 
 
 def tf_version_tuple():
@@ -3823,7 +3823,8 @@ def load_txt_file_initializer(filename, dtype=tf.float32):
     """
     # noinspection PyShadowingNames
     def __call__(self, shape, dtype=None, partition_info=None):
-      v = tf.py_func(py_loader, [], dtype_)
+      import TFCompat
+      v = TFCompat.v1.py_func(py_loader, [], dtype_)
       v.set_shape(shape)
       return v
 
@@ -6369,7 +6370,7 @@ def enforce_copy(x):
 def view_as(x, dtype):
   """
   Does the numpy.view equivalent.
-  Note that the current implementation is inefficient (uses tf.py_func) and CPU-only.
+  Note that the current implementation is inefficient (uses TFCompat.v1.py_func) and CPU-only.
   Also see :func:`tf.bitcast`.
 
   :param tf.Tensor x:
@@ -7139,6 +7140,7 @@ def identity_with_debug_log(x, args, out, name="DebugLogOp"):
   :return: x
   :rtype: tf.Tensor
   """
+  import TFCompat
   from Util import dict_joined
   none_args = {k: None for (k, v) in args.items() if v is None}
   arg_keys = sorted([k for k in args.keys() if k not in none_args])
@@ -7153,7 +7155,7 @@ def identity_with_debug_log(x, args, out, name="DebugLogOp"):
     return x
 
   with tf.name_scope(name):
-    y, = tf.py_func(
+    y, = TFCompat.v1.py_func(
       py_func, [x] + [args[k] for k in arg_keys], [x.dtype], stateful=True)
     with tf.control_dependencies([y]):
       return tf.identity(x)
@@ -8322,6 +8324,7 @@ def py_print(pass_through_value, print_args, message=None, summarize=None, first
   :return: tf.identity(pass_through_value) with side effect of printing
   :rtype: tf.Tensor
   """
+  import TFCompat
   import numpy
   from numpy.lib import NumpyVersion
   if summarize is None:
@@ -8374,7 +8377,7 @@ def py_print(pass_through_value, print_args, message=None, summarize=None, first
       return False
 
   with tf.name_scope(name):
-    print_op = tf.py_func(_py_print, print_args, tf.bool, name=name)
+    print_op = TFCompat.v1.py_func(_py_print, print_args, tf.bool, name=name)
     with tf.control_dependencies([print_op]):
       return tf.identity(pass_through_value)
 

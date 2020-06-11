@@ -451,20 +451,20 @@ def test_slow_TensorArray():
       with TFCompat.v1.variable_scope('t'):
         t = tf.sigmoid(linear(x, num_outputs))
       state += t * (h - state)
-      frame_loss = tf.reduce_mean(tf.squared_difference(tgt_placeholder[:, f], state), axis=1)
+      frame_loss = tf.reduce_mean(TFCompat.v1.squared_difference(tgt_placeholder[:, f], state), axis=1)
       assert frame_loss.get_shape().ndims == 1  # (batch,)
       loss_ta = loss_ta.write(f, frame_loss)
     loss = tf.reduce_sum(loss_ta.stack())
-    optimizer = tf.train.AdamOptimizer(learning_rate=0.1, epsilon=1e-16, use_locking=False)
+    optimizer = TFCompat.v1.train.AdamOptimizer(learning_rate=0.1, epsilon=1e-16, use_locking=False)
     minimize_op = optimizer.minimize(loss)
 
     print('variables:')
     train_vars = (
-      tf.trainable_variables() +
-      tf.get_collection(tf.GraphKeys.TRAINABLE_RESOURCE_VARIABLES))
+      TFCompat.v1.trainable_variables() +
+      TFCompat.v1.get_collection(TFCompat.v1.GraphKeys.TRAINABLE_RESOURCE_VARIABLES))
     print(train_vars)
     print('init vars')
-    session.run(tf.global_variables_initializer())
+    session.run(TFCompat.v1.global_variables_initializer())
     print('graph size:', session.graph_def.ByteSize())
     print('train')
     for s in range(10):
@@ -512,20 +512,20 @@ def test_deterministic_TensorArray():
         state *= noise_h
 
         output, state = cell(inputs=src_placeholder[:, i], state=state)
-        frame_loss = tf.reduce_mean(tf.squared_difference(tgt_placeholder[:, i], output), axis=1)
+        frame_loss = tf.reduce_mean(TFCompat.v1.squared_difference(tgt_placeholder[:, i], output), axis=1)
         assert frame_loss.get_shape().ndims == 1  # (batch,)
         loss_ta = loss_ta.write(i, frame_loss)
       loss = tf.reduce_sum(loss_ta.stack())
-      optimizer = tf.train.AdamOptimizer(learning_rate=0.1, epsilon=1e-16, use_locking=False)
+      optimizer = TFCompat.v1.train.AdamOptimizer(learning_rate=0.1, epsilon=1e-16, use_locking=False)
       minimize_op = optimizer.minimize(loss)
 
       print('variables:')
       train_vars = (
-        tf.trainable_variables() +
-        tf.get_collection(tf.GraphKeys.TRAINABLE_RESOURCE_VARIABLES))
+        TFCompat.v1.trainable_variables() +
+        TFCompat.v1.get_collection(TFCompat.v1.GraphKeys.TRAINABLE_RESOURCE_VARIABLES))
       print(train_vars)
       print('init vars')
-      session.run(tf.global_variables_initializer())
+      session.run(TFCompat.v1.global_variables_initializer())
       print('graph size:', session.graph_def.ByteSize())
       print('train')
       loss_val = None

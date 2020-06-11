@@ -1220,7 +1220,7 @@ def tf_fast_bw_fsa_staircase(seq_lens, **opts):
       fsa.start_end_states.shape, len(seq_lens_), seq_lens_)
     return fsa.edges.astype("int32"), fsa.weights.astype("float32"), fsa.start_end_states.astype("int32")
 
-  edges, weights, start_end_states = tf.py_func(
+  edges, weights, start_end_states = TFCompat.v1.py_func(
     py_fast_bw_fsa_staircase_wrapper,
     [seq_lens],
     [tf.int32, tf.float32, tf.int32],

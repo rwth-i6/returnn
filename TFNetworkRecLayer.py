@@ -645,7 +645,7 @@ class RecLayer(_ConcatInputLayer):
     assert not self.input_data.sparse
     x, seq_len = self._get_input()
     if self._direction == -1:
-      x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
+      x = TFCompat.v1.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
     if isinstance(cell, BaseRNNCell):
       with TFCompat.v1.variable_scope(TFCompat.v1.get_variable_scope(), initializer=self._fwd_weights_initializer):
         x = cell.get_input_transformed(x)
@@ -692,7 +692,7 @@ class RecLayer(_ConcatInputLayer):
     else:
       raise Exception("invalid type: %s" % type(cell))
     if self._direction == -1:
-      y = tf.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
+      y = TFCompat.v1.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
     return y
 
   @staticmethod
@@ -780,7 +780,7 @@ class RecLayer(_ConcatInputLayer):
     x, seq_len = self._get_input()
     n_batch = tf.shape(seq_len)[0]
     if self._direction == -1:
-      x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
+      x = TFCompat.v1.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
     with TFCompat.v1.variable_scope("cudnn"):
       cell.build(x.get_shape())
       num_layers = 1
@@ -822,7 +822,7 @@ class RecLayer(_ConcatInputLayer):
       input_c = tf.zeros((num_layers, n_batch, self.output.dim), dtype=tf.float32)
       y, _ = cell(x, initial_state=(input_h, input_c))
     if self._direction == -1:
-      y = tf.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
+      y = TFCompat.v1.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
     return y
 
   def _get_output_native_rec_op(self, cell):
@@ -3863,7 +3863,7 @@ class RnnCellLayer(_ConcatInputLayer):
         var = TFCompat.v1.get_variable(
           'keep_state_%s' % key_name,
           validate_shape=False, initializer=tf.zeros(()),  # Dummy state, will not be used like this.
-          trainable=False, collections=[tf.GraphKeys.GLOBAL_VARIABLES, CollectionKeys.STATE_VARS])
+          trainable=False, collections=[TFCompat.v1.GraphKeys.GLOBAL_VARIABLES, CollectionKeys.STATE_VARS])
       assert isinstance(var, tf.Variable)
       var.set_shape(shape_invariant)
       rec_layer.saveable_param_replace[var] = None  # Do not save this variable.

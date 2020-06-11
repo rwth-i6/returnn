@@ -5,6 +5,7 @@ Like SprintErrorSignals.py but for TensorFlow.
 
 from SprintErrorSignals import SprintInstancePool
 import tensorflow as tf
+import TFCompat
 
 
 def py_get_sprint_automata_for_batch(sprint_opts, tags):
@@ -50,7 +51,7 @@ def get_sprint_automata_for_batch_op(sprint_opts, tags):
       raise
 
   tags.set_shape((None,))  # (batch,)
-  edges, weights, start_end_states = tf.py_func(
+  edges, weights, start_end_states = TFCompat.v1.py_func(
     py_wrap_get_sprint_automata_for_batch,
     [tags], [tf.int32, tf.float32, tf.int32],
     name="get_sprint_automata_for_batch")
@@ -110,7 +111,7 @@ def get_sprint_loss_and_error_signal(sprint_opts, log_posteriors, seq_lengths, s
   log_posteriors.set_shape((None, None, None))  # (time,batch,label)
   seq_lengths.set_shape((None,))  # (batch,)
   seq_tags.set_shape((None,))  # (batch,)
-  loss, error_signal = tf.py_func(
+  loss, error_signal = TFCompat.v1.py_func(
     py_wrap_get_sprint_loss_and_error_signal,
     [log_posteriors, seq_lengths, seq_tags], [tf.float32, tf.float32],
     name="get_sprint_loss_and_error_signal")
