@@ -3,6 +3,8 @@ include *.rst
 include *.md
 include *.txt
 include *.cpp
+include extern/*.py
+graft extern/graph_editor
 include LICENSE
 include CODEOWNERS
 include MANIFEST.in
