@@ -7114,6 +7114,78 @@ def prod(ls):
     return pure_prod(ls)  # tf.Tensor
 
 
+class _DevMaxBytesInUse:
+  """
+  Like ``tf.contrib.contrib.memory_stats.MaxBytesInUse``.
+  Reimplemented because ``tf.contrib`` got removed.
+
+  See code for reference:
+  https://github.com/tensorflow/tensorflow/blob/e210cb140a60a74d5e9ce3bf9ebedb21b4910f1c/tensorflow/contrib/memory_stats/kernels/memory_stats_ops.cc
+  """
+
+  _tf_mod = None
+
+  @classmethod
+  def get_mod(cls, verbose=False):
+    """
+    :param bool verbose:
+    :return: module
+    """
+    if cls._tf_mod:
+      return cls._tf_mod
+
+    src_code = """
+    #include "tensorflow/core/framework/common_shape_fns.h"
+    #include "tensorflow/core/framework/op.h"
+    #include "tensorflow/core/framework/op_kernel.h"
+
+    using namespace tensorflow;
+
+    REGISTER_OP("DevMaxBytesInUse")
+      .Output("out: int64")
+      .SetShapeFn(shape_inference::ScalarShape);
+
+    class DevMaxBytesInUseOp : public OpKernel {
+    public:
+      explicit DevMaxBytesInUseOp(OpKernelConstruction* context) : OpKernel(context) {}
+
+      void Compute(OpKernelContext* context) override {
+        Allocator* allocator =
+          context->device()->GetAllocator(AllocatorAttributes());
+        OP_REQUIRES(context, allocator, errors::Internal("No device allocator available."));
+        auto allocator_stats = allocator->GetStats();
+
+        Tensor* output_tensor = nullptr;
+        OP_REQUIRES_OK(
+          context, context->allocate_output(0, TensorShape({}), &output_tensor));
+        output_tensor->scalar<int64>()() = allocator_stats ? allocator_stats->peak_bytes_in_use : 0;
+      }
+    };
+
+    REGISTER_KERNEL_BUILDER(Name("DevMaxBytesInUse").Device(DEVICE_CPU), DevMaxBytesInUseOp);
+    REGISTER_KERNEL_BUILDER(Name("DevMaxBytesInUse").Device(DEVICE_GPU).HostMemory("out"), DevMaxBytesInUseOp);
+    """
+
+    compiler = OpCodeCompiler(
+      base_name="DevMaxBytesInUse", code_version=1, code=src_code,
+      is_cpp=True, use_cuda_if_available=True,
+      # This would lead to a get_tf_list_local_devices call, which we might not want at this point.
+      cuda_auto_min_compute_capability=False,
+      verbose=verbose)
+    tf_mod = compiler.load_tf_module()
+    assert hasattr(tf_mod, "dev_max_bytes_in_use"), "content of mod: %r" % (dir(tf_mod),)
+    cls._tf_mod = tf_mod
+    return tf_mod
+
+  @classmethod
+  def max_bytes_in_use(cls):
+    """
+    :return: scalar string
+    :rtype: tf.Tensor
+    """
+    return cls.get_mod().dev_max_bytes_in_use()
+
+
 def mem_usage_for_dev(dev_name):
   """
   :param str dev_name: e.g. "/device:GPU:0" or "/job:localhost/replica:0/task:0/device:GPU:0"
@@ -7127,10 +7199,13 @@ def mem_usage_for_dev(dev_name):
     """
     :rtype:  tf.Tensor
     """
-    from tensorflow.contrib import memory_stats
-    # It's not so clear what BytesInUse returns. https://stackoverflow.com/questions/47903039/
-    # Thus we always use MaxBytesInUse for now, although this is also not so nice.
-    bytes_in_use = memory_stats.MaxBytesInUse
+    try:
+      from tensorflow.contrib import memory_stats
+      # It's not so clear what BytesInUse returns. https://stackoverflow.com/questions/47903039/
+      # Thus we always use MaxBytesInUse for now, although this is also not so nice.
+      bytes_in_use = memory_stats.MaxBytesInUse
+    except ImportError:  # TF 2
+      bytes_in_use = _DevMaxBytesInUse.max_bytes_in_use
     # try:
     #   bytes_in_use = memory_stats.BytesInUse  # since TF 1.4.0
     # except AttributeError:

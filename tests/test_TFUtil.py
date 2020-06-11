@@ -3237,6 +3237,28 @@ def test_FetchHelper_loop_invalid_vars_switch():
     assert fetch_helper.callback_count >= 1
 
 
+def test_mem_usage_for_dev_via_tf_log_memory_usage():
+  d = {}
+  gpu_dev = None
+  for dev in get_tf_list_local_devices():
+    if dev.device_type != "GPU":
+      # mem_usage_for_dev currently only works for GPU
+      continue
+    d[dev.name] = mem_usage_for_dev(dev.name)
+    gpu_dev = dev.name
+  if not d:
+    print("No GPU devices, nothing to do.")
+    return  # nothing to do
+  res1 = session.run(d)
+  print(res1)
+  with tf.device(gpu_dev):
+    v = tf.Variable(name="c", initial_value=tf.zeros((100, 100)))
+  session.run(v.initializer)
+  res = session.run(d)
+  print(res)
+  assert res[gpu_dev] > res1[gpu_dev]
+
+
 def test_get_positional_encoding_batch_position():
   # Test `get_positional_encoding` with `position` with a batch dimension.
   num_channels = 8
