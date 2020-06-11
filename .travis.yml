@@ -90,23 +90,23 @@ matrix:
   include:
     - env: RUN=tests/pylint.py
     - env: RUN=tests/pycharm-inspect.py
-    - env: TEST=TFEngine TF_PACKAGE=tensotflow==2.2.0
-    - env: TEST=TFNativeOp TF_PACKAGE=tensotflow==2.2.0
-    - env: TEST=TFNetworkLayer TF_PACKAGE=tensotflow==2.2.0
-    - env: TEST=TFNetworkRecLayer TF_PACKAGE=tensotflow==2.2.0
-    - env: TEST=TFNetworkSigProcLayer TF_PACKAGE=tensotflow==2.2.0
-    - env: TEST=TFUpdater TF_PACKAGE=tensotflow==2.2.0
-    - env: TEST=TFUtil TF_PACKAGE=tensorflow==2.2.0
+    - env: TEST=TFEngine TF_PACKAGE=tensorflow
+    - env: TEST=TFNativeOp TF_PACKAGE=tensorflow
+    - env: TEST=TFNetworkLayer TF_PACKAGE=tensorflow
+    - env: TEST=TFNetworkRecLayer TF_PACKAGE=tensorflow
+    - env: TEST=TFNetworkSigProcLayer TF_PACKAGE=tensorflow
+    - env: TEST=TFUpdater TF_PACKAGE=tensorflow
+    - env: TEST=TFUtil TF_PACKAGE=tensorflow
   allow_failures:
     - env: RUN=tests/pylint.py
     - env: RUN=tests/pycharm-inspect.py
-    - env: TEST=TFEngine TF_PACKAGE=tensotflow==2.2.0
-    - env: TEST=TFNativeOp TF_PACKAGE=tensotflow==2.2.0
-    - env: TEST=TFNetworkLayer TF_PACKAGE=tensotflow==2.2.0
-    - env: TEST=TFNetworkRecLayer TF_PACKAGE=tensotflow==2.2.0
-    - env: TEST=TFNetworkSigProcLayer TF_PACKAGE=tensotflow==2.2.0
-    - env: TEST=TFUpdater TF_PACKAGE=tensotflow==2.2.0
-    - env: TEST=TFUtil TF_PACKAGE=tensorflow==2.2.0
+    - env: TEST=TFEngine TF_PACKAGE=tensorflow
+    - env: TEST=TFNativeOp TF_PACKAGE=tensorflow
+    - env: TEST=TFNetworkLayer TF_PACKAGE=tensorflow
+    - env: TEST=TFNetworkRecLayer TF_PACKAGE=tensorflow
+    - env: TEST=TFNetworkSigProcLayer TF_PACKAGE=tensorflow
+    - env: TEST=TFUpdater TF_PACKAGE=tensorflow
+    - env: TEST=TFUtil TF_PACKAGE=tensorflow
   fast_finish: true
 
 # command to run tests
