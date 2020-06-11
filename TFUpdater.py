@@ -527,26 +527,26 @@ class WrapOptimizer:
     elif self.config.bool("adadelta", False):
       assert not momentum
       print("Create Adadelta optimizer.", file=log.v2)
-      optimizer = tf.train.AdadeltaOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
+      optimizer = TFCompat.v1.train.AdadeltaOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
     elif self.config.bool("adagrad", False):
       assert not momentum
       print("Create Adagrad optimizer.", file=log.v2)
-      optimizer = tf.train.AdagradOptimizer(learning_rate=lr, use_locking=use_locking)
+      optimizer = TFCompat.v1.train.AdagradOptimizer(learning_rate=lr, use_locking=use_locking)
     elif self.config.is_of_type("rmsprop", float):
       print("Create RMSProp optimizer. With Decay %f" % (self.config.float("rmsprop", 0.9)), file=log.v2)
-      optimizer = tf.train.RMSPropOptimizer(
+      optimizer = TFCompat.v1.train.RMSPropOptimizer(
         decay=self.config.float("rmsprop", 0.9), learning_rate=lr, momentum=momentum, epsilon=epsilon,
         use_locking=use_locking)
     elif self.config.bool("rmsprop", False):
       print("Create RMSProp optimizer.", file=log.v2)
-      optimizer = tf.train.RMSPropOptimizer(
+      optimizer = TFCompat.v1.train.RMSPropOptimizer(
         learning_rate=lr, momentum=momentum, epsilon=epsilon, use_locking=use_locking)
     elif momentum:
       print("Create Momentum optimizer.", file=log.v2)
-      optimizer = tf.train.MomentumOptimizer(learning_rate=lr, momentum=momentum, use_locking=use_locking)
+      optimizer = TFCompat.v1.train.MomentumOptimizer(learning_rate=lr, momentum=momentum, use_locking=use_locking)
     else:
       print("Create SGD optimizer.", file=log.v2)
-      optimizer = tf.train.GradientDescentOptimizer(learning_rate=lr, use_locking=use_locking)
+      optimizer = TFCompat.v1.train.GradientDescentOptimizer(learning_rate=lr, use_locking=use_locking)
     return optimizer
 
   def _compute_gradients(self, loss, var_list):
