@@ -660,7 +660,7 @@ def main(argv):
   argparser.add_argument('--eval', type=int, default=0, help='calculate losses. 0 disable (default), 1 enable')
   argparser.add_argument('--search', type=int, default=0, help='beam search. 0 disable (default), 1 enable')
   argparser.add_argument("--verbosity", default=4, type=int, help="5 for all seqs (default: 4)")
-  argparser.add_argument("--summaries_tensor_name", help="create Tensor for tf.summary.merge_all()")
+  argparser.add_argument("--summaries_tensor_name", help="create Tensor for tf.compat.v1.summary.merge_all()")
   argparser.add_argument("--rec_step_by_step", help="make step-by-step graph for this rec layer (eg. 'output')")
   argparser.add_argument("--rec_step_by_step_output_file", help="store meta info for rec_step_by_step (JSON)")
   argparser.add_argument("--output_file", help='allowed extensions: pb, pbtxt, meta, metatxt, logdir')

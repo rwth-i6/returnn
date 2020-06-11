@@ -820,7 +820,7 @@ def test_RecLayer_NativeLstm_Nan():
     adam_weights_v_t = updater.optimizer.get_slot(var=weights_t, name="v")
     assert isinstance(adam_weights_m_t, tf.Variable)
     assert isinstance(adam_weights_v_t, tf.Variable)
-    summaries_t = tf.summary.merge_all()
+    summaries_t = TFCompat.v1.summary.merge_all()
 
     # https://github.com/tensorflow/tensorflow/blob/03beb65cecbc1e49ea477bca7f54543134b31d53/tensorflow/core/kernels/training_ops_gpu.cu.cc
     adam_update_t = adam_weights_m_t / (tf.sqrt(adam_weights_v_t) + 1e-8)

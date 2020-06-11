@@ -2788,8 +2788,9 @@ def variable_summaries(var, name=None, with_histogram=False):
   :param tf.Tensor|tf.Variable var:
   :param str name:
   :param bool with_histogram: adds histogram. note that this can add noticeable overhead
-  :return: nothing, use :func:`tf.summary.merge_all()` to collect the summaries
+  :return: nothing, use :func:`tf.compat.v1.summary.merge_all()` to collect the summaries
   """
+  import TFCompat
   if var.dtype == tf.string:
     return
   if not name:
@@ -6619,7 +6620,7 @@ def check_base_op_type_and_replace(x, op_type, new_op_type):
     inner = check_base_op_type_and_replace(x.op.inputs[0], op_type=op_type, new_op_type=new_op_type)
     if inner is None:
       return None
-    op = copy_op(x.op, inputs=[inner] + x.op.inputs[1:])
+    op = copy_op(x.op, inputs=[inner] + list(x.op.inputs[1:]))
     return op.outputs[0]
   if x.op.type != op_type:
     return None

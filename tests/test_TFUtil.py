@@ -987,7 +987,7 @@ def test_Data_copy_move_axis_time_to_end():
 
 
 def test_sequence_mask_len_via_loop():
-  seq_len = tf.while_loop(
+  seq_len, = tf.while_loop(
     cond=lambda x: tf.less(x[0], 2),
     body=lambda x: x + 1,
     loop_vars=[tf.convert_to_tensor([1, 2])])
@@ -1297,7 +1297,7 @@ def test_loop_var_creation():
       # Note: tf.Variable directly will have this problem, as tf.constant() is in the current ctx.
       w1 = tf.Variable(name="w1", initial_value=tf.constant(1))
     # However, tf.get_variable should not have this problem.
-    w2 = TFCompat.v1.get_variable("w2", shape=(), dtype=tf.int32, initializer=tf.constant_initializer(2, dtype=tf.int32))
+    w2 = TFCompat.v1.get_variable("w2", shape=(), dtype=tf.int32, initializer=tf.constant_initializer(2))
     return [i + w1 + w2]
 
   loop = tf.while_loop(lambda i: tf.less(i, 5), body, [i])
