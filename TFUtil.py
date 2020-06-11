@@ -6016,10 +6016,11 @@ def slice_nd(x, start, size):
     window_pos = tf.reshape(window_pos, (-1,))  # (n_batch*size,)
 
     # build mask for zero-padding
-    mask = tf.logical_or(window_pos > shape[1]-1, window_pos < 0)  # (n_batch*size,) tf.bool
+    mask = tf.logical_or(
+      tf.greater(window_pos, shape[1] - 1), tf.less(window_pos, 0))  # (n_batch*size,) tf.bool
 
     # clip indices so that gather_nd doesn't fail, will zero-pad later
-    clip_time_idx = tf.clip_by_value(window_pos, 0, shape[1]-1)
+    clip_time_idx = tf.clip_by_value(window_pos, 0, shape[1] - 1)
     indices = tf.stack([batch_idxs, clip_time_idx])  # (n_batch*size, 2)
     indices = tf.transpose(indices)  # (2, n_batch*size)
 
@@ -6029,7 +6030,8 @@ def slice_nd(x, start, size):
     new_shape = [shape[0], size] + shape[2:]
 
     # zero-pad
-    slices = tf.where(mask, tf.zeros_like(slices), slices)
+    mask_bc = expand_multiple_dims(mask, [-1] * (slices.get_shape().ndims - 1))
+    slices = where_bc(mask_bc, tf.zeros_like(slices), slices)
 
     slices = tf.reshape(slices, new_shape)  # (B, size, ...)
     return slices
