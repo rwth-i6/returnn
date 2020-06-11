@@ -1397,14 +1397,16 @@ class Engine(EngineBase):
 
     if not trainer.finalized:
       if trainer.device_crash_batch is not None:  # Otherwise we got an unexpected exception - a bug in our code.
-        self.save_model(self.get_epoch_model_filename() + ".crash_%i" % trainer.device_crash_batch)
+        if self.model_filename:
+          self.save_model(self.get_epoch_model_filename() + ".crash_%i" % trainer.device_crash_batch)
       print("Trainer not finalized, quitting.", file=log.v1)
       sys.exit(1)
 
     if any(numpy.isinf(list(trainer.score.values()))) or any(numpy.isnan(list(trainer.score.values()))):
       print("Model seems broken, got inf or nan final score: %s" % trainer.score, file=log.v1)
       if self.config.bool("stop_on_nonfinite_train_score", True):
-        self.save_model(self.get_epoch_model_filename() + ".broken")
+        if self.model_filename:
+          self.save_model(self.get_epoch_model_filename() + ".broken")
         sys.exit(1)
 
     should_call_graph_reset_callbacks = False

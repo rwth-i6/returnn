@@ -344,7 +344,8 @@ class Engine(EngineBase):
     trainer.join()
     if not trainer.finalized:
       if trainer.device_crash_batch is not None:  # Otherwise we got an unexpected exception - a bug in our code.
-        self.save_model(self.get_epoch_model_filename() + ".crash_%i" % trainer.device_crash_batch, self.epoch - 1)
+        if self.model_filename:
+          self.save_model(self.get_epoch_model_filename() + ".crash_%i" % trainer.device_crash_batch, self.epoch - 1)
       sys.exit(1)
 
     assert not any(numpy.isinf(list(trainer.score.values()))) or any(numpy.isnan(list(trainer.score.values()))), (
