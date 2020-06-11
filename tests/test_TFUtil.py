@@ -1868,7 +1868,7 @@ def test_variable_summaries():
   variable_summaries(v)
   variable_summaries(tf.square(v))
   session.run(v.initializer)
-  session.run(tf.summary.merge_all())
+  session.run(TFCompat.v1.summary.merge_all())
   assert_almost_equal(session.run(variable_scalar_summaries_dict(v)["test_variable_summaries_mean"]), -0.5)
 
 
@@ -2538,11 +2538,11 @@ def test_get_op_input_names_Constant():
 def test_get_op_attrib_keys__is_variable_initialized():
   with TFCompat.v1.variable_scope("test_get_op_attrib_keys__is_variable_initialized"):
     var = TFCompat.v1.get_variable("var", shape=(3,))
-    check = tf.is_variable_initialized(var)
+    check = TFCompat.v1.is_variable_initialized(var)
     print("check:", check)
     assert isinstance(check, tf.Tensor)
     print("op:", check.op)
-    assert_equal(check.op.type, "IsVariableInitialized")
+    assert check.op.type in {"IsVariableInitialized", "VarIsInitializedOp"}
     print("attrib keys:", get_op_attrib_keys(check.op))
 
 
@@ -2571,6 +2571,7 @@ def test_find_ops_with_tensor_input():
     x2a = tf.multiply(v1, v2, name="x2a")
     x2b = tf.multiply(x2a, x0, name="x2b")
     assert_equal(find_ops_with_tensor_input(x0), [x1a.op, x2b.op])
+    print("v1 usages:", find_ops_with_tensor_input(v1))
     assert_equal(find_ops_with_tensor_input(v1), [v1.initializer, x1a.op, x2a.op])
     assert_equal(find_ops_with_tensor_input(v2), [v2.initializer, x1b.op, x2a.op])
     assert_equal(find_ops_with_tensor_input(v2, fetches=[x2b]), [x2a.op])
@@ -2580,14 +2581,14 @@ def test_get_var_update_ops():
   with TFCompat.v1.variable_scope("test_get_var_update_ops"):
     v = TFCompat.v1.get_variable("v", ())
     loss = (v - 1.0) ** 2
-    opt = tf.train.AdamOptimizer()
+    opt = TFCompat.v1.train.AdamOptimizer()
     minimize_op = opt.minimize(loss=loss, var_list=[v])
     assert isinstance(minimize_op, tf.Operation)
     print("find_ops_with_tensor_input:", find_ops_with_tensor_input(v, fetches=minimize_op))
     print("get_var_update_ops:", get_var_update_ops(v, fetches=minimize_op))
     update_ops = get_var_update_ops(v, fetches=minimize_op)
     assert len(update_ops) == 1
-    assert update_ops[0].type == "ApplyAdam"
+    assert update_ops[0].type in {"ApplyAdam", "ResourceApplyAdam"}
 
 
 def test_get_var_update_ops__get_variable_value_copy_before_update_ops():
@@ -2596,14 +2597,14 @@ def test_get_var_update_ops__get_variable_value_copy_before_update_ops():
     assert isinstance(v, tf.Variable)
     loss = (v - 1.0) ** 2
     assert isinstance(loss, tf.Tensor)
-    opt = tf.train.GradientDescentOptimizer(learning_rate=1.0)
+    opt = TFCompat.v1.train.GradientDescentOptimizer(learning_rate=1.0)
     minimize_op = opt.minimize(loss=loss, var_list=[v])
     assert isinstance(minimize_op, tf.Operation)
     print("find_ops_with_tensor_input:", find_ops_with_tensor_input(v, fetches=minimize_op))
     print("get_var_update_ops:", get_var_update_ops(v, fetches=minimize_op))
     update_ops = get_var_update_ops(v, fetches=minimize_op)
     assert len(update_ops) == 1
-    assert update_ops[0].type == "ApplyGradientDescent"
+    assert update_ops[0].type in {"ApplyGradientDescent", "ResourceApplyGradientDescent"}
     with tf.control_dependencies(update_ops):
       # v.value() is the last snapshot (no new op), i.e. it points to the actual memory.
       # To make sure we get the value before the update (0), we must do a copy at the right point.
@@ -2629,10 +2630,10 @@ def test_get_variable_grad_from_update_ops():
     var = TFCompat.v1.get_variable("var", (), initializer=tf.zeros_initializer())
     loss = (var - 1.0) ** 2
     for opt in [
-      tf.train.AdamOptimizer(),
-      tf.train.GradientDescentOptimizer(learning_rate=1.0),
-      tf.train.MomentumOptimizer(learning_rate=0.1, momentum=0.9),
-      tf.train.RMSPropOptimizer(learning_rate=0.1),
+      TFCompat.v1.train.AdamOptimizer(),
+      TFCompat.v1.train.GradientDescentOptimizer(learning_rate=1.0),
+      TFCompat.v1.train.MomentumOptimizer(learning_rate=0.1, momentum=0.9),
+      TFCompat.v1.train.RMSPropOptimizer(learning_rate=0.1),
     ]:
       print("Optimizer:", opt)
       minimize_op = opt.minimize(loss=loss, var_list=[var])
@@ -2661,13 +2662,13 @@ def test_get_variable_grad_from_update_ops_mix_sparse_dense():
     print("ref grad value:")
     print(ref_grad_np)
     for opt in [
-      tf.train.AdamOptimizer(),
-      tf.train.GradientDescentOptimizer(learning_rate=1.0),
-      tf.train.MomentumOptimizer(learning_rate=0.1, momentum=0.9),
-      tf.train.RMSPropOptimizer(learning_rate=0.1),
+      TFCompat.v1.train.AdamOptimizer(),
+      TFCompat.v1.train.GradientDescentOptimizer(learning_rate=1.0),
+      TFCompat.v1.train.MomentumOptimizer(learning_rate=0.1, momentum=0.9),
+      TFCompat.v1.train.RMSPropOptimizer(learning_rate=0.1),
     ]:
       print("Optimizer:", opt)
-      if isinstance(opt, (tf.train.MomentumOptimizer, tf.train.RMSPropOptimizer)):
+      if isinstance(opt, (TFCompat.v1.train.MomentumOptimizer, TFCompat.v1.train.RMSPropOptimizer)):
         if is_gpu_available():
           print("Skipping because SparseApplyMomentum/SparseApplyRMSProp does not support GPU")
           print("supported_devices_for_op:", supported_devices_for_op("SparseApplyMomentum"))
@@ -2710,7 +2711,7 @@ def test_mixed_dense_sparse_grad():
     print(session.run(grad))
     print("grad dense value:")
     print(session.run(grad_dense))
-    opt = tf.train.GradientDescentOptimizer(learning_rate=1.0)
+    opt = TFCompat.v1.train.GradientDescentOptimizer(learning_rate=1.0)
     session.run(opt.minimize(loss=loss, var_list=[var]))
     var_np = session.run(var)
     print("var:")
