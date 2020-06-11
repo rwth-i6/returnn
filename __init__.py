@@ -27,11 +27,8 @@ _my_dir = _os.path.dirname(_os.path.abspath(__file__))
 _mod_cache = {}  # mod_name -> mod
 
 
-try:
-  from .setup import get_version_str as _get_version_str
-  __version__ = _get_version_str()
-except Exception:
-  __version__ = None
+from .setup import get_version_str as _get_version_str
+__version__ = _get_version_str(fallback="1.0.0")
 
 
 def _setup():

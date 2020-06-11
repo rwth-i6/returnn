@@ -120,10 +120,11 @@ def git_head_version(git_dir="."):
   return "1.%s" % commit_date
 
 
-def get_version_str(verbose=False, allow_current_time=False):
+def get_version_str(verbose=False, allow_current_time=False, fallback=None):
   """
   :param bool verbose:
   :param bool allow_current_time:
+  :param str|None fallback:
   :rtype: str
   """
   if os.path.exists("%s/PKG-INFO" % _my_dir):
@@ -147,6 +148,8 @@ def get_version_str(verbose=False, allow_current_time=False):
         if verbose:
           print("Version via current time:", version)
       else:
+        if fallback:
+          return fallback
         raise
   return version
 
