@@ -3449,7 +3449,7 @@ def get_tf_list_local_devices(tf_session_opts=None):
     # and we need that for e.g. get_available_gpu_min_compute_capability.
     # See also: https://github.com/tensorflow/tensorflow/issues/9374
     # However, we have get_device_attr, which provides gives us physical_device_desc.
-    with TFCompat.v1.Session(config=tf.ConfigProto(**tf_session_opts)) as session:
+    with TFCompat.v1.Session(config=TFCompat.v1.ConfigProto(**tf_session_opts)) as session:
       devs = list(session.list_devices())
       _list_local_devices = [_DeviceAttributes(dev=dev) for dev in devs]
       # Set physical_device_desc after we assigned _list_local_devices,
