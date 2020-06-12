@@ -990,7 +990,7 @@ def _check_MergeDimsLayer(session, in_data_opts, in_static_shape, opts, out_data
   :param dict[str] opts: for MergeDimsLayer
   :param tuple[int|None] out_data_shape:
   :param tuple[int] out_static_shape:
-  :param dict[int, tuple[int]] out_size_placeholder:
+  :param dict[int,tuple[int]]|None out_size_placeholder:
   :rtype: MergeDimsLayer
   """
   net = TFNetwork(extern_data=ExternData())
