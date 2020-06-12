@@ -1078,6 +1078,87 @@ def test_attention_train_then_search():
   engine.finalize()
 
 
+def test_attention_no_encoder_dependency():
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 7
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  dev_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  dev_data.init_seq_order(epoch=1)
+
+  from TFUtil import DimensionTag
+  enc_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="enc time")
+
+  config = Config()
+  config.update({
+    "model": "%s/model" % _get_tmp_dir(),
+    "batch_size": 5000,
+    "max_seqs": 2,
+    "extern_data": {'data': {'dim': n_data_dim, 'same_dim_tags_as': {'T': enc_time}},
+                    'classes': {'dim': n_classes_dim, 'sparse': True}},
+    "num_epochs": 1,
+    "network": {
+      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5, 'out_type': {}},
+      "enc_transformed": {'class': 'linear', 'from': ['encoder'], 'n_out': 1, 'activation': None},
+      "zero_enc_transformed": {'class': 'eval', 'from': ['enc_transformed'], 'eval': 'tf.zeros_like(source(0))'},
+      "output": {
+        "class": "rec",
+        "from": [],
+        "target": "classes", "max_seq_len": 5,
+        "unit": {
+          'output': {'class': 'choice', 'target': 'classes', 'beam_size': 4, 'from': ["output_prob"]},
+          "end": {"class": "compare", "from": ["output"], "value": 0},
+          'orth_embed': {'class': 'linear', 'activation': None, 'from': ['output'], "n_out": 7},
+          "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:c", "prev:orth_embed"], "n_out": 7},
+          "output_prob": {"class": "softmax", "from": ["prev:s", "c"], "target": "classes", "loss": "ce"},
+          # basic attention
+          "s_transformed": {'class': 'linear', 'from': ['s'], 'n_out': 6, 'activation': None},
+          "att_energy_tanh": {'class': 'activation', 'from': ['att_energy_in'], 'activation': 'tanh'},
+          "att_energy": {'class': 'linear', 'from': ['att_energy_tanh'], 'n_out': 1, 'activation': None,
+                         'out_type': {
+                                      'shape': (None, 1),
+                                      'time_dim_axis': 1,
+                                      'feature_dim_axis': 2,
+                                      'same_dim_tags_as': {'T': enc_time}},
+                         },
+          "att_weights": {'class': 'softmax_over_spatial', 'from': ['att_energy']},
+          # feedback
+          "accum_att_weights": {'class': 'combine', 'kind': 'add',
+                                'from': ['att_weights', 'prev:accum_att_weights'],
+                                'initial_output': "base:zero_enc_transformed",
+                                },
+          "convolved_att": {'class': 'conv', 'from': ['prev:accum_att_weights'], 'filter_size': (3,),
+                            'n_out': 4, 'padding': 'same'},
+          "location_feedback": {'class': 'linear', 'from': ['convolved_att'], 'n_out': 6, 'activation': None},
+          "att_energy_in": {'class': 'combine', 'kind': 'add', 'from': ['location_feedback', 's_transformed']},
+          "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights"},
+        },
+      },
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
+    },
+    "debug_print_layer_output_template": True,
+  })
+  _cleanup_old_models(config)
+  engine = Engine(config=config)
+  print("Train...")
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=dev_data)
+  engine.train()
+
+  print("Search...")
+  engine.use_search_flag = True
+  engine.use_dynamic_train_flag = False
+  engine.init_network_from_config(config)
+  engine.search(dataset=dev_data)
+  print("error keys:")
+  pprint(engine.network.losses_dict)
+  assert engine.network.total_objective is not None
+  assert "decision" in engine.network.losses_dict
+
+  engine.finalize()
+
+
 def test_attention_search_in_train_then_search():
   from GeneratingDataset import DummyDataset
   seq_len = 5
