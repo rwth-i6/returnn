@@ -2449,7 +2449,10 @@ def test_openfst():
 
 def test_layer_norms():
   from TFNativeOp import have_blocksparse_requirements
-  from tensorflow.contrib.layers import layer_norm as tf_contrib_layer_norm
+  try:
+    from tensorflow.contrib.layers import layer_norm as tf_contrib_layer_norm
+  except ImportError as exc:
+    raise unittest.SkipTest("%s, but just skipping..." % exc)
   rnd = numpy.random.RandomState(3)
   for ndim in [2, 3, 4]:
     dims = [3] * ndim
