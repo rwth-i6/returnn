@@ -3847,6 +3847,15 @@ class MergeDimsLayer(_ConcatInputLayer):
         d[j] *= v
       else:
         d[j] = v
+    for axis in merge_axes:
+      if self.output.get_batch_axis_excluding_batch(axis) in self.input_data.size_placeholder.keys():
+        continue  # is already covered in the first loop, so skip
+      new_axis = self._old_axis_to_new_axis(input_data=self.input_data, merge_axes=merge_axes, old_axis=axis)
+      if new_axis == self.output.batch_dim_axis:
+        continue
+      j = self.output.get_batch_axis_excluding_batch(new_axis)
+      if j in d:
+        d[j] *= self.input_data.get_dim(axis)
     if self.input_data.batch_dim_axis in merge_axes:
       # The batch axis got multiplied.
       in_shape = tf.shape(self.input_data.placeholder)
