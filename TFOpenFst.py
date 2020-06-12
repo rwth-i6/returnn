@@ -145,7 +145,7 @@ const
 
   const string filename_;
   mutex mu_;
-  Fst* fst_ GUARDED_BY(mu_);
+  Fst* fst_;
 };
 
 
@@ -162,7 +162,7 @@ class OpenFstLoadOp : public ResourceOpKernel<OpenFstInstance> {
   virtual bool IsCancellable() const { return false; }
   virtual void Cancel() {}
 
-  Status CreateResource(OpenFstInstance** ret) override EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+  Status CreateResource(OpenFstInstance** ret) override {
     try {
       *ret = new OpenFstInstance(filename_);
     } catch (std::exception& exc) {
