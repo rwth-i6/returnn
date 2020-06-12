@@ -1002,15 +1002,10 @@ def _check_MergeDimsLayer(session, in_data_opts, in_static_shape, opts, out_data
 
   if out_size_placeholder:
     n_batch = in_static_shape[src.output.batch_dim_axis]
-    for axis, dim in enumerate(in_data_opts['shape']):
+    for axis, dim in enumerate(src.output.batch_shape):
+      axis_wo_b = src.output.get_batch_axis_excluding_batch(axis)
       if dim is None:
-        n_time = in_static_shape[src.output.get_batch_axis(axis)]
-        dyn_size_v = numpy.array([n_time, max(n_time - 2, 1), max(n_time - 3, 1)])
-        if dyn_size_v.shape[0] > n_batch:
-          dyn_size_v = dyn_size_v[:n_batch]
-        elif dyn_size_v.shape[0] < n_batch:
-          assert False, "batch_size > 3 not available for testing size_placeholder"
-        src.output.size_placeholder[axis] = tf.constant(dyn_size_v)
+        src.output.size_placeholder[axis_wo_b] = tf.fill([n_batch], in_static_shape[axis])
 
   opts = opts.copy()
   print("opts:", opts)
