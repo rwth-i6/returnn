@@ -982,7 +982,7 @@ def test_SplitDimsLayer_resolve_dims():
 
 
 def _check_MergeDimsLayer(session, in_data_opts, in_static_shape, opts, out_data_shape, out_static_shape,
-                          out_size_placeholder=None):
+                          in_sizes=None, out_sizes=None):
   """
   :param TFCompat.v1.Session session:
   :param dict[str] in_data_opts:
@@ -990,7 +990,8 @@ def _check_MergeDimsLayer(session, in_data_opts, in_static_shape, opts, out_data
   :param dict[str] opts: for MergeDimsLayer
   :param tuple[int|None] out_data_shape:
   :param tuple[int] out_static_shape:
-  :param dict[int,tuple[int]]|None out_size_placeholder:
+  :param dict[int,tuple[int]]|None in_sizes:
+  :param dict[int,tuple[int]]|None out_sizes:
   :rtype: MergeDimsLayer
   """
   net = TFNetwork(extern_data=ExternData())
@@ -999,12 +1000,15 @@ def _check_MergeDimsLayer(session, in_data_opts, in_static_shape, opts, out_data
   print("input:", src.output)
   src.output.placeholder = tf.constant(rnd.normal(size=in_static_shape).astype("float32"), dtype=tf.float32)
   src.output.size_placeholder = {}
-
-  n_batch = in_static_shape[src.output.batch_dim_axis]
-  for axis, dim in enumerate(src.output.batch_shape):
-    axis_wo_b = src.output.get_batch_axis_excluding_batch(axis)
-    if dim is None:
-      src.output.size_placeholder[axis_wo_b] = tf.fill([n_batch], in_static_shape[axis])
+  if src.output.batch_dim_axis is not None:
+    n_batch = in_static_shape[src.output.batch_dim_axis]
+    for axis, dim in enumerate(src.output.batch_shape):
+      axis_wo_b = src.output.get_batch_axis_excluding_batch(axis)
+      if dim is None and axis_wo_b is not None:
+        if in_sizes and axis_wo_b in in_sizes:
+          src.output.size_placeholder[axis_wo_b] = tf.constant(in_sizes[axis_wo_b])
+        else:
+          src.output.size_placeholder[axis_wo_b] = tf.fill([n_batch], in_static_shape[axis])
 
   opts = opts.copy()
   print("opts:", opts)
@@ -1018,9 +1022,10 @@ def _check_MergeDimsLayer(session, in_data_opts, in_static_shape, opts, out_data
   print("output:", out_data)
   assert_equal(out_np.shape, out_static_shape)
 
-  if out_size_placeholder:
+  if out_sizes:
+    assert_equal(sorted(size_placeholder.keys()), sorted(out_sizes))
     for k in size_placeholder.keys():
-      numpy.testing.assert_array_equal(size_placeholder[k], out_size_placeholder[k])
+      numpy.testing.assert_array_equal(size_placeholder[k], out_sizes[k])
 
   return layer
 
@@ -1035,8 +1040,10 @@ def test_MergeDimsLayer_basic():
 
 def test_MergeDimsLayer_size_placeholder():
   with make_scope() as session:
-    _check_MergeDimsLayer(session, {"shape": (None, 2), "time_dim_axis": 1, "feature_dim_axis": 2}, (3, 4, 2), {"axes": "except_batch"}, (None,), (3, 8),
-                          out_size_placeholder={0: (8, 4, 2)})
+    _check_MergeDimsLayer(
+      session,
+      {"shape": (None, 2), "time_dim_axis": 1, "feature_dim_axis": 2}, (3, 4, 2), {"axes": "except_batch"}, (None,), (3, 8),
+      in_sizes={0: (4, 2, 1)}, out_sizes={0: (8, 4, 2)})
 
 
 def test_MergeDimsLayer_batch_time_ext():
