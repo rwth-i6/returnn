@@ -6086,7 +6086,7 @@ class KenLmStateLayer(_ConcatInputLayer):
         self.add_param(self.tf_vocab, saveable=False, trainable=False)
         set_custom_post_init(var=self.tf_vocab, func=self.vocab.tf_get_init_variable_func(var=self.tf_vocab))
     if input_dtype.is_integer:  # assume word-id in vocab
-      assert self.tf_vocab, "%s: provide vocab_file" % self
+      assert self.tf_vocab is not None, "%s: provide vocab_file" % self
       new_input = tf.gather(self.tf_vocab, indices=new_input) + " "
     else:
       assert input_dtype == tf.string
@@ -6101,7 +6101,7 @@ class KenLmStateLayer(_ConcatInputLayer):
     self.rec_vars_outputs["state"] = next_strings
     prev_scores = self._rec_previous_layer.rec_vars_outputs["scores"]
     if dense_output:
-      assert self.tf_vocab, "%s: provide vocab_file" % self
+      assert self.tf_vocab is not None, "%s: provide vocab_file" % self
       new_abs_scores, new_abs_scores_dense = TFKenLM.ken_lm_abs_score_bpe_strings_dense(
         handle=self.lm_handle,
         bpe_merge_symbol=bpe_merge_symbol or "",
@@ -6128,7 +6128,7 @@ class KenLmStateLayer(_ConcatInputLayer):
         "; sparse rel scores: ", new_abs_scores - prev_scores,
         "; min/max/mean rel scores: ",
         tf.reduce_min(new_rel_scores), "/", tf.reduce_max(new_rel_scores), "/", tf.reduce_mean(new_rel_scores)] +
-        ["; vocab: ", self.tf_vocab] if self.tf_vocab else []),
+        ["; vocab: ", self.tf_vocab] if self.tf_vocab is not None else []),
         lambda: new_rel_scores)
     self.rec_vars_outputs["scores"] = new_abs_scores
     self.output.placeholder = new_rel_scores
