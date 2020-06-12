@@ -1032,6 +1032,7 @@ def test_MergeDimsLayer_basic():
     _check_MergeDimsLayer(session, {"shape": (4, None, 7), "time_dim_axis": 2}, (2, 4, 3, 7), {"axes": "static"}, (None, 4 * 7), (2, 3, 4 * 7))
     _check_MergeDimsLayer(session, {"shape": (1, None), "time_dim_axis": 2, "feature_dim_axis": 1}, (2, 1, 4), {"axes": "except_batch"}, (None,), (2, 4))
 
+
 def test_MergeDimsLayer_size_placeholder():
   with make_scope() as session:
     _check_MergeDimsLayer(session, {"shape": (None, 2), "time_dim_axis": 1, "feature_dim_axis": 2}, (3, 4, 2), {"axes": "except_batch"}, (None,), (3, 8),
