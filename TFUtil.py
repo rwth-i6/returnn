@@ -6403,6 +6403,32 @@ def enforce_copy(x):
     return tf.add(x, zero)
 
 
+def copy_unknown_shape(x):
+  """
+  :param tf.Tensor x:
+  :return: tensor, copy of x, which has an unknown shape by intention
+  :rtype: tf.Tensor
+  """
+  import TFCompat
+  x = tf.convert_to_tensor(x)
+
+  # Currently we use py_func, which is somewhat inefficient, and also CPU-only.
+  # But this is fine for our use cases.
+
+  # noinspection PyShadowingNames
+  def py_copy(x_np):
+    """
+    :param numpy.ndarray x_np:
+    :rtype: numpy.ndarray
+    """
+    return x_np
+
+  y, = TFCompat.v1.py_func(py_copy, [x], [x.dtype], name="py_copy")
+  assert isinstance(y, tf.Tensor)
+  assert y.shape.ndims is None
+  return y
+
+
 def view_as(x, dtype):
   """
   Does the numpy.view equivalent.
