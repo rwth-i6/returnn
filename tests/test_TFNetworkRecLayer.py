@@ -3176,7 +3176,7 @@ def test_rec_subnet_simple_rnn():
     print("rnn_cell also fine.")
 
 
-def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, shared_base_net=None, rtol=1e-5):
+def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, shared_base_net=None, rtol=1e-4):
   """
   :param dict[str] subnet_layer_dict: opts for the output layer inside the rec-layer subnet
   :param dict[str,dict[str]] other_subnet_layers: other layers for the rec-layer subnet
