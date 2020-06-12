@@ -558,7 +558,10 @@ def test_rec_subnet_with_choice():
 
 @unittest.skipIf(not is_gpu_available(), "no gpu on this system")
 def test_RecLayer_get_cudnn_params_size():
-  from tensorflow.contrib.cudnn_rnn.ops.gen_cudnn_rnn_ops import cudnn_rnn_params_size
+  try:
+    from tensorflow.contrib.cudnn_rnn.ops.gen_cudnn_rnn_ops import cudnn_rnn_params_size
+  except ImportError:  # TF 2
+    from tensorflow.python.ops.gen_cudnn_rnn_ops import cudnn_rnn_params_size
 
   def check(num_units, input_size,
             rnn_mode="lstm", num_layers=1, direction="unidirectional", input_mode="linear_input",
