@@ -29,14 +29,27 @@ def _init_optimizer_classes_dict():
   _OptimizerClassesDictInitialized = True
   potential_list = list(vars(TFCompat.v1.train).items())
   if tf_version_tuple() >= (1, 2, 0):
-    from tensorflow.contrib import opt
-    potential_list += list(vars(opt).items())
+    try:
+      from tensorflow.contrib import opt
+      potential_list += list(vars(opt).items())
+    except ImportError:  # TF 2
+      pass
+  allowed_types = (Optimizer,)
+  if TFCompat.v2:
+    potential_list += list(vars(TFCompat.v2.keras.optimizers).items())
+    allowed_types += (TFCompat.v2.keras.optimizers.Optimizer,)
   potential_list += list(globals().items())
   for name, v in potential_list:
     assert isinstance(name, str)
+    # We might have duplicate names if TF v1 and v2 are mixed, etc.
+    # Allow this at this point.
+    if name.lower() in _OptimizerClassesDict:
+      continue
     if v is Optimizer:
       continue
-    if not isinstance(v, type) or not issubclass(v, Optimizer):
+    if not isinstance(v, type):
+      continue
+    if not issubclass(v, allowed_types):
       continue
     register_optimizer_class(v, name=name)
 
@@ -47,9 +60,12 @@ def register_optimizer_class(cls, name=None):
   :param str|None name:
   """
   _init_optimizer_classes_dict()
-  assert issubclass(cls, Optimizer)
   if not name:
     name = cls.__name__
+  if TFCompat.v2 and issubclass(cls, TFCompat.v2.keras.optimizers.Optimizer):
+    cls = KerasOptimizer.get_factory(cls)
+  else:
+    assert issubclass(cls, Optimizer)
   assert name.lower() not in _OptimizerClassesDict
   _OptimizerClassesDict[name.lower()] = cls
   if name.endswith("Optimizer"):
@@ -488,7 +504,7 @@ class WrapOptimizer:
       optimizer_opts.setdefault("use_locking", use_locking)
     assert "learning_rate" not in optimizer_opts, "learning_rate will be set implicitly"
     if "learning_rate_multiplier" in optimizer_opts:
-      lr *= optimizer_opts.pop("learning_rate_multiplier")
+      lr = lr * optimizer_opts.pop("learning_rate_multiplier")
     optimizer_opts["learning_rate"] = lr
     print("Create optimizer %s with options %r." % (optim_class, optimizer_opts), file=log.v2)
     optimizer = optim_class(**optimizer_opts)
@@ -522,8 +538,12 @@ class WrapOptimizer:
       print("Create NAdam optimizer.", file=log.v2)
       # TF default values: like Adam: beta1=0.9, beta2=0.999, epsilon=1e-8
       # Our Theano default values: decay=0.004, beta1=0.9, beta2=0.999, epsilon=1e-8
-      from tensorflow.contrib.opt import NadamOptimizer
-      optimizer = NadamOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
+      try:
+        from tensorflow.contrib.opt import NadamOptimizer
+        optimizer = NadamOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
+      except ImportError:  # TF 2
+        optimizer = tf.keras.optimizers.Nadam(learning_rate=lr, epsilon=epsilon)
+        optimizer = KerasOptimizer(optimizer)
     elif self.config.bool("adadelta", False):
       assert not momentum
       print("Create Adadelta optimizer.", file=log.v2)
@@ -892,6 +912,62 @@ class WrapOptimizer:
     if len(all_apply_grads) == 1:
       return all_apply_grads[0]
     return tf.group(*all_apply_grads)
+
+
+class KerasOptimizer(Optimizer):
+  """
+  Wraps a TF optimizer into a standard TF optimizer.
+  """
+
+  @classmethod
+  def get_factory(cls, keras_class):
+    """
+    :param keras_class: e.g. tf.keras.optimizers.Nadam
+    :return function (kwargs)->Optimizer
+    """
+    def creator(**kwargs):
+      kwargs = kwargs.copy()
+      kwargs.pop("use_locking", None)  # this is not used. just ignore
+      opt = keras_class(**kwargs)
+      return cls(opt, name=kwargs.get("name", None))
+    return creator
+
+  def __init__(self, optimizer, name=None):
+    """
+    :param tf.keras.optimizers.Optimizer optimizer:
+    :param str|None name:
+    """
+    if not name:
+      # noinspection PyProtectedMember
+      name = optimizer._name
+    super(KerasOptimizer, self).__init__(name=name, use_locking=True)  # always uses locking
+    self.keras_optimizer = optimizer
+    self._var_list = None
+
+  def _create_slots(self, var_list):
+    self._var_list = var_list
+    # noinspection PyProtectedMember
+    self.keras_optimizer._create_all_weights(var_list)
+
+  def _prepare(self):
+    # noinspection PyProtectedMember
+    self.keras_optimizer._prepare(self._var_list)
+
+  def _apply_dense(self, grad, var):
+    # There should only be resource vars...
+    return self._resource_apply_dense(grad, var)
+
+  def _apply_sparse(self, grad, var):
+    # There should only be resource vars...
+    return self._resource_apply_sparse(grad.values, var, grad.indices)
+
+  def _resource_apply_dense(self, grad, handle):
+    # noinspection PyProtectedMember
+    return self.keras_optimizer._resource_apply_dense(grad, handle, None)
+
+  def _resource_apply_sparse(self, grad, handle, indices):
+    # noinspection PyProtectedMember
+    return self.keras_optimizer._resource_apply_sparse(grad, handle, indices, None)
 
 
 class BaseCustomOptimizer(Optimizer):
