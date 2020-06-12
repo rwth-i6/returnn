@@ -1,11 +1,23 @@
 
 # start: nosetests $this_file --nologcapture
 from __future__ import division
+
 import logging
 logging.getLogger('tensorflow').disabled = True
+
+import os
+# Get us some further useful debug messages (in some cases, e.g. CUDA).
+# For example: https://github.com/tensorflow/tensorflow/issues/24496
+# os.environ["CUDNN_LOGINFO_DBG"] = "1"
+# os.environ["CUDNN_LOGDEST_DBG"] = "stdout"
+# The following might fix (workaround): Could not create cudnn handle: CUDNN_STATUS_INTERNAL_ERROR
+# (https://github.com/tensorflow/tensorflow/issues/24496).
+# os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+
 import tensorflow as tf
 import sys
 sys.path += ["."]  # Python 3 hack
+
 from nose.tools import assert_equal, assert_is_instance
 import contextlib
 import unittest
