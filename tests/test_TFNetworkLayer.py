@@ -1000,12 +1000,11 @@ def _check_MergeDimsLayer(session, in_data_opts, in_static_shape, opts, out_data
   src.output.placeholder = tf.constant(rnd.normal(size=in_static_shape).astype("float32"), dtype=tf.float32)
   src.output.size_placeholder = {}
 
-  if out_size_placeholder:
-    n_batch = in_static_shape[src.output.batch_dim_axis]
-    for axis, dim in enumerate(src.output.batch_shape):
-      axis_wo_b = src.output.get_batch_axis_excluding_batch(axis)
-      if dim is None:
-        src.output.size_placeholder[axis_wo_b] = tf.fill([n_batch], in_static_shape[axis])
+  n_batch = in_static_shape[src.output.batch_dim_axis]
+  for axis, dim in enumerate(src.output.batch_shape):
+    axis_wo_b = src.output.get_batch_axis_excluding_batch(axis)
+    if dim is None:
+      src.output.size_placeholder[axis_wo_b] = tf.fill([n_batch], in_static_shape[axis])
 
   opts = opts.copy()
   print("opts:", opts)
