@@ -6005,7 +6005,7 @@ class ShiftAxisLayer(_ConcatInputLayer):
     super(ShiftAxisLayer, self).__init__(**kwargs)
     assert isinstance(amount, int)
     axis = self.input_data.get_axis_from_description(axis)
-    paddings = numpy.zeros(shape=(self.input_data.batch_ndim, 2))
+    paddings = numpy.zeros(shape=(self.input_data.batch_ndim, 2), dtype="int32")
     if amount < 0:  # left-shift
       shifted = single_strided_slice(self.input_data.placeholder, axis=axis, begin=-amount)
       paddings[axis] = [0, -amount]
