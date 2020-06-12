@@ -40,6 +40,12 @@ _src_code = """
 
 using namespace tensorflow;
 
+#if (TF_MAJOR_VERSION < 2) || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION < 2)
+using tstring = std::string;
+#else
+using tstring = tensorflow::tstring;
+#endif
+
 
 REGISTER_OP("KenLmLoadModel")
 .Attr("filename: string")
@@ -104,7 +110,7 @@ struct KenLmModel : public ResourceBase {
   explicit KenLmModel(const string& filename)
       : filename_(filename), model_(filename.c_str()) {}
 
-  float abs_score(const string& text) {
+  float abs_score(const ::tstring& text) {
     float total = 0;
     mutex_lock l(mu_);
     lm::ngram::State state, out_state;
@@ -124,22 +130,22 @@ struct KenLmModel : public ResourceBase {
   // See comments below.
   // We expect that the text either ends with a space or not, i.e. "... word " or "... subword".
   float abs_score_dense(
-        const string& text, const string& last_word_join,
-        const TTypes<string>::ConstFlat labels, TTypes<float>::UnalignedFlat out_dense_scores) {
+        const ::tstring& text, const ::tstring& last_word_join,
+        const TTypes<::tstring>::ConstFlat labels, TTypes<float>::UnalignedFlat out_dense_scores) {
     assert(labels.size() == out_dense_scores.size());
     mutex_lock l(mu_);
     lm::ngram::State state, out_state;
     model_.BeginSentenceWrite(&state);
     // We expect that the text either ends with a space or not, i.e. "... word " or "... subword".
     // We split the text into words. In the first case, we would have an empty word at the end, otherwise not.
-    std::vector<string> words = tensorflow::str_util::Split(text, ' ');
+    auto words = tensorflow::str_util::Split(text, ' ');
     float total_score = 0;
-    string last_word = "";
+    ::tstring last_word = "";
     if(!words.empty()) {
       last_word = words[words.size() - 1];
       // Only up to the last word, which is either empty or a subword, which we join below.
       for(int i = 0; i < words.size() - 1; ++i) {
-        const string& word = words[i];
+        auto word = words[i];
         if(word.empty()) continue;
         auto word_idx = model_.BaseVocabulary().Index(word);
         total_score += model_.FullScore(state, word_idx, out_state).prob;
@@ -147,7 +153,7 @@ struct KenLmModel : public ResourceBase {
       }
     }
     for(int i = 0; i < labels.size(); ++i) {
-      string word = last_word + labels(i);
+      ::tstring word = last_word + labels(i);
       auto word_idx = model_.BaseVocabulary().Index(word);
       float score = model_.FullScore(state, word_idx, out_state).prob;
       out_dense_scores(i) = (total_score + score) * logf(10.);
@@ -170,7 +176,7 @@ const
 
   const string filename_;
   mutex mu_;
-  lm::ngram::ProbingModel model_ GUARDED_BY(mu_);
+  lm::ngram::ProbingModel model_;
 };
 
 
@@ -187,7 +193,7 @@ class KenLmLoadModelOp : public ResourceOpKernel<KenLmModel> {
   virtual bool IsCancellable() const { return false; }
   virtual void Cancel() {}
 
-  Status CreateResource(KenLmModel** ret) override EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+  Status CreateResource(KenLmModel** ret) override {
     try {
       *ret = new KenLmModel(filename_);
     } catch (std::exception& exc) {
@@ -225,7 +231,7 @@ class KenLmAbsScoreStringsOp : public OpKernel {
     core::ScopedUnref unref(lm);
 
     const Tensor& input_tensor = context->input(1);
-    auto input_flat = input_tensor.flat<string>();
+    auto input_flat = input_tensor.flat<::tstring>();
 
     Tensor* output_tensor = NULL;
     OP_REQUIRES_OK(context, context->allocate_output(0, input_tensor.shape(), &output_tensor));
@@ -257,17 +263,17 @@ class KenLmAbsScoreBpeStringsOp : public OpKernel {
       errors::InvalidArgument(
         "bpe_merge_symbol must be a single element but got shape ",
         context->input(1).shape().DebugString()));
-    const string& bpe_merge_symbol = context->input(1).flat<string>()(0);
+    const auto& bpe_merge_symbol = context->input(1).flat<::tstring>()(0);
 
     const Tensor& input_tensor = context->input(2);
-    auto input_flat = input_tensor.flat<string>();
+    auto input_flat = input_tensor.flat<::tstring>();
 
     Tensor* output_tensor = NULL;
     OP_REQUIRES_OK(context, context->allocate_output(0, input_tensor.shape(), &output_tensor));
     auto output_flat = output_tensor->flat<float>();
 
     for(int i = 0; i < input_flat.size(); ++i) {
-      std::string text = input_flat(i);
+      ::tstring text = input_flat(i);
       if(!bpe_merge_symbol.empty())
         text = tensorflow::str_util::StringReplace(text, bpe_merge_symbol + " ", "", /* replace_all */ true);
       tensorflow::StringPiece sp(text);
@@ -298,13 +304,13 @@ class KenLmAbsScoreBpeStringsDenseOp : public OpKernel {
       errors::InvalidArgument(
         "bpe_merge_symbol must be a single element but got shape ",
         context->input(1).shape().DebugString()));
-    const string& bpe_merge_symbol = context->input(1).flat<string>()(0);
+    const ::tstring& bpe_merge_symbol = context->input(1).flat<::tstring>()(0);
 
     const Tensor& input_tensor = context->input(2);
-    auto input_flat = input_tensor.flat<string>();
+    auto input_flat = input_tensor.flat<::tstring>();
 
     const Tensor& labels_tensor = context->input(3);
-    auto labels_flat = labels_tensor.flat<string>();
+    auto labels_flat = labels_tensor.flat<::tstring>();
 
     Tensor* output_tensor = NULL;
     OP_REQUIRES_OK(context, context->allocate_output(0, input_tensor.shape(), &output_tensor));
@@ -322,7 +328,7 @@ class KenLmAbsScoreBpeStringsDenseOp : public OpKernel {
       errors::Internal("CopyFrom failed"));
 
     for(int i = 0; i < input_flat.size(); ++i) {
-      string text = input_flat(i);
+      ::tstring text = input_flat(i);
       if(!bpe_merge_symbol.empty())
         text = tensorflow::str_util::StringReplace(text, bpe_merge_symbol + " ", "", /* replace_all */ true);
       output_flat(i) = lm->abs_score_dense(
@@ -390,6 +396,7 @@ def get_tf_mod(verbose=False):
     src_code += f_code
     src_code += "\n// ------------ %s : END } --------------\n\n" % os.path.basename(fn)
   src_code += "\n\n// ------------ our code now: ------------\n\n"
+  src_code += "#line 1 \"<our code>\"\n"
   src_code += _src_code
 
   compiler = OpCodeCompiler(
