@@ -214,10 +214,15 @@ class RecLayer(_ConcatInputLayer):
         self.cell = self._get_cell(unit, unit_opts=unit_opts)
         base_types = (rnn_cell.RNNCell,)
         if rnn_contrib:
+          # noinspection PyUnresolvedReferences
           base_types += (rnn_contrib.FusedRNNCell, rnn_contrib.LSTMBlockWrapper)
+        cudnn_types = None
+        if cudnn_rnn:
+          # noinspection PyUnresolvedReferences
+          cudnn_types = (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)
         if isinstance(self.cell, base_types):
           y = self._get_output_cell(self.cell)
-        elif cudnn_rnn and isinstance(self.cell, (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)):
+        elif cudnn_rnn and isinstance(self.cell, cudnn_types):
           y = self._get_output_cudnn(self.cell)
         elif isinstance(self.cell, TFNativeOp.RecSeqCellOp):
           y = self._get_output_native_rec_op(self.cell)
@@ -353,9 +358,9 @@ class RecLayer(_ConcatInputLayer):
     from tensorflow.python.util import nest
     source_data = get_concat_sources_data_template(sources) if sources else None
     if (
-        not source_data.have_time_axis()
-        if (source_data and not source_data.undefined)
-        else network.is_inside_rec_layer()):
+          not source_data.have_time_axis()
+          if (source_data and not source_data.undefined)
+          else network.is_inside_rec_layer()):
       # We expect to be inside another RecLayer, and should do a single step (like RnnCellLayer).
       out_time_dim_axis = None
       out_batch_dim_axis = 0
@@ -366,7 +371,7 @@ class RecLayer(_ConcatInputLayer):
     out_type = kwargs.get("out_type", None)
     loss = kwargs.get("loss", None)
     deps = list(sources)  # type: typing.List[LayerBase]
-    deps += [l for l in nest.flatten(initial_state) if isinstance(l, LayerBase)]
+    deps += [layer for layer in nest.flatten(initial_state) if isinstance(layer, LayerBase)]
     if out_type or n_out is not NotSpecified or loss:
       if out_type:
         assert out_type.get("time_dim_axis", out_time_dim_axis) == out_time_dim_axis
@@ -606,6 +611,7 @@ class RecLayer(_ConcatInputLayer):
       unit_opts = {}
     if is_gpu_available():
       try:
+        # noinspection PyUnresolvedReferences
         from tensorflow.contrib import cudnn_rnn
       except ImportError:
         pass
@@ -627,6 +633,7 @@ class RecLayer(_ConcatInputLayer):
     cell = rnn_cell_class(n_hidden, **unit_opts)
     base_types = (rnn_cell.RNNCell,)
     if rnn_contrib:
+      # noinspection PyUnresolvedReferences
       base_types += (rnn_contrib.FusedRNNCell, rnn_contrib.LSTMBlockWrapper)
     assert isinstance(cell, base_types)  # e.g. BasicLSTMCell
     return cell
@@ -776,6 +783,7 @@ class RecLayer(_ConcatInputLayer):
     :rtype: tf.Tensor
     """
     from TFUtil import get_current_var_scope_name
+    # noinspection PyUnresolvedReferences
     from tensorflow.contrib.cudnn_rnn.python.ops import cudnn_rnn_ops
     assert self._max_seq_len is None
     assert self.input_data
@@ -3687,8 +3695,7 @@ class RnnCellLayer(_ConcatInputLayer):
     :param str unit:
     :rtype: tf.Tensor
     """
-    import tensorflow.contrib.rnn as rnn_contrib
-    if isinstance(state, rnn_contrib.LSTMStateTuple):
+    if isinstance(state, rnn_cell.LSTMStateTuple):
       return state.h
     # Assume the state is the output. This might be wrong...
     assert isinstance(state, tf.Tensor)
@@ -3854,7 +3861,8 @@ class RnnCellLayer(_ConcatInputLayer):
       # Assume the first dimension to be batch_dim.
       assert shape_invariant[0] is None and all([d is not None for d in shape_invariant[1:]])
       with rec_layer.var_creation_scope() if rec_layer else dummy_noop_ctx():
-        var = TFCompat.v1.get_variable("initial_%s" % key_name, shape=initial_shape[1:], initializer=tf.zeros_initializer())
+        var = TFCompat.v1.get_variable(
+          "initial_%s" % key_name, shape=initial_shape[1:], initializer=tf.zeros_initializer())
       from TFUtil import expand_dims_unbroadcast
       var = expand_dims_unbroadcast(var, axis=0, dim=initial_shape[0])  # (batch,dim)
       return var
@@ -4344,7 +4352,8 @@ class ChoiceLayer(BaseChoiceLayer):
           if random_sample_scale:
             # https://github.com/tensorflow/tensorflow/issues/9260
             # https://timvieira.github.io/blog/post/2014/08/01/gumbel-max-trick-and-weighted-reservoir-sampling/
-            scores_random_sample = -TFCompat.v1.log(-TFCompat.v1.log(TFCompat.v1.random_uniform(tf.shape(scores_in), 0, 1)))
+            scores_random_sample = -TFCompat.v1.log(-TFCompat.v1.log(
+              TFCompat.v1.random_uniform(tf.shape(scores_in), 0, 1)))
           scores_comb = optional_add(
             optional_mul(scores_in, prob_scale),
             optional_mul(scores_base, base_beam_score_scale),
@@ -7626,10 +7635,7 @@ class TwoDLSTMLayer(LayerBase):
     super(TwoDLSTMLayer, self).__init__(**kwargs)
     import re
     from TFUtil import is_gpu_available
-    if is_gpu_available():
-      from tensorflow.contrib import cudnn_rnn
-    else:
-      assert False, "currently, there's no CPU support"
+    assert is_gpu_available(), "currently, there's no CPU support"
     self.pooling = pooling
     # On the random initialization:
     # For many cells, e.g. NativeLSTM: there will be a single recurrent weight matrix, (output.dim, output.dim * 4),
@@ -7923,13 +7929,14 @@ class ZoneoutLSTMCell(BaseRNNCell):
     :param float zoneout_factor_cell: cell zoneout factor
     :param float zoneout_factor_output: output zoneout factor
     """
+    super(ZoneoutLSTMCell, self).__init__()
+
     zm = min(zoneout_factor_output, zoneout_factor_cell)
     zs = max(zoneout_factor_output, zoneout_factor_cell)
-
     if zm < 0. or zs > 1.:
       raise ValueError('One/both provided Zoneout factors are not in [0, 1]')
 
-    self._cell = tf.nn.rnn_cell.LSTMCell(num_units, state_is_tuple=True)
+    self._cell = rnn_cell.LSTMCell(num_units, state_is_tuple=True)
     self._zoneout_cell = zoneout_factor_cell
     self._zoneout_outputs = zoneout_factor_output
     from TFNetwork import TFNetwork
@@ -7974,7 +7981,7 @@ class ZoneoutLSTMCell(BaseRNNCell):
              lambda: (1 - self._zoneout_outputs) * tf.nn.dropout(new_h - prev_h, (1 - self._zoneout_outputs)) + prev_h,
              lambda: (1 - self._zoneout_outputs) * new_h + self._zoneout_outputs * prev_h)
 
-    new_state = tf.nn.rnn_cell.LSTMStateTuple(c, h)
+    new_state = rnn_cell.LSTMStateTuple(c, h)
 
     return output, new_state
 
