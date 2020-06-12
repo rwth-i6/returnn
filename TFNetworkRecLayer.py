@@ -454,6 +454,8 @@ class RecLayer(_ConcatInputLayer):
       :param str key:
       :param type v:
       """
+      if v is BaseRNNCell:
+        return
       if isinstance(v, type) and issubclass(v, allowed_types):
         name = key
         if name.endswith("Cell"):
@@ -463,6 +465,8 @@ class RecLayer(_ConcatInputLayer):
         cls._rnn_cells_dict[name] = v
 
     for key, v in globals().items():
+      maybe_add(key, v)
+    for key, v in vars(rnn_cell).items():
       maybe_add(key, v)
     if rnn_contrib:
       for key, v in vars(rnn_contrib).items():
