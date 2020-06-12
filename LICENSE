@@ -109,6 +109,7 @@ Contains code from TensorFlow:
  - Apache License 2.0
  - Copyright 2017 The TensorFlow Authors. All rights reserved.
  - Various functions in TFUtil.py, TFUpdater.py.
+ - graph_editor from contrib.
 
 Contains code from pumpikano-tf-dann:
  - Website: https://github.com/pumpikano/tf-dann
