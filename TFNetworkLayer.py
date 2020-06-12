@@ -3849,7 +3849,7 @@ class MergeDimsLayer(_ConcatInputLayer):
         d[j] = v
     for axis in merge_axes:
       if self.output.get_batch_axis_excluding_batch(axis) in self.input_data.size_placeholder.keys():
-        continue # is already covered in the first loop, so skip
+        continue  # is already covered in the first loop, so skip
       new_axis = self._old_axis_to_new_axis(input_data=self.input_data, merge_axes=merge_axes, old_axis=axis)
       if new_axis == self.output.batch_dim_axis:
         continue
