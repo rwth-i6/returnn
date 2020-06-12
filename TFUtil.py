@@ -8106,7 +8106,7 @@ def var_handle_or_ref(var):
     return var.handle
   if isinstance(var, TFCompat.v1.Variable):
     # noinspection PyProtectedMember
-    return var._ref
+    return var._ref()
   raise TypeError("invalid type for var %r" % var)
 
 
