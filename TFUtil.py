@@ -3404,7 +3404,7 @@ class _DeviceAttributes:
     :param TFCompat.v1.Session session:
     """
     if "XLA_" in self.name:
-      continue  # XLA not supported currently by get_device_attr...
+      return  # XLA not supported currently by get_device_attr...
     physical_device_desc = session.run(get_device_attr(self.name))
     self.physical_device_desc = physical_device_desc.decode("utf8")
 
