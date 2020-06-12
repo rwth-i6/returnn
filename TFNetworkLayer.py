@@ -804,7 +804,7 @@ class LayerBase(object):
       all_ops = graph_editor.get_backward_walk_ops([param.op], inclusive=False, control_inputs=False)
       all_1st_tensors = [op.outputs[0] for op in all_ops if len(op.outputs) == 1]
       # noinspection PyProtectedMember
-      possible_params = [p for p in possible_params if p._ref() in all_1st_tensors]
+      possible_params = [p for p in possible_params if TFUtil.var_handle_or_ref(p) in all_1st_tensors]
       if not possible_params:
         # Not found. Just return as-is.
         return param

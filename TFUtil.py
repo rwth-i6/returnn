@@ -8066,6 +8066,21 @@ def print_graph_output(fetches, file=sys.stdout, max_depth=None):
     p(fetch, prefix="fetch: ")
 
 
+def var_handle_or_ref(var):
+  """
+  :param tf.Variable|tensorflow.python.ops.resource_variable_ops.ResourceVariable var:
+  :rtype: tf.Tensor
+  """
+  import TFCompat
+  from tensorflow.python.ops.resource_variable_ops import ResourceVariable
+  if isinstance(var, ResourceVariable):
+    return var.handle
+  if isinstance(var, TFCompat.v1.Variable):
+    # noinspection PyProtectedMember
+    return var._ref
+  raise TypeError("invalid type for var %r" % var)
+
+
 def find_ops_with_tensor_input(tensors, fetches=None, graph=None):
   """
   :param tf.Tensor|tf.Variable|list[tf.Tensor] tensors:
