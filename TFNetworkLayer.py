@@ -1270,7 +1270,7 @@ class LayerBase(object):
       assert numpy.prod(bc_shape) == data.dim
       with rec_layer.var_creation_scope():
         x = TFCompat.v1.get_variable(
-          "init_%s_var" % name, shape=(data.dim,), dtype=data.dtype, initializer=tf.zeros_initializer(dtype=data.dtype))
+          "init_%s_var" % name, shape=(data.dim,), dtype=data.dtype, initializer=tf.zeros_initializer())
       x = tf.reshape(x, bc_shape, name="init_%s_var_bc" % name)
       x = tf.tile(x, [batch_dim if (i == data.batch_dim_axis) else 1 for i in range(data.batch_ndim)],
                   name="init_%s_var_batch_bc" % name)

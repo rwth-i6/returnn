@@ -5098,6 +5098,7 @@ def add_scaled_noise_to_gradients(grads_and_vars, gradient_noise_scale, sparse_g
   :return: adapted grads_and_vars
   :rtype: list[(tf.Tensor|tf.IndexedSlices, tf.Variable)]
   """
+  import TFCompat
   gradients, variables = zip(*grads_and_vars)
   noisy_gradients = []
   for gradient in gradients:
@@ -5119,7 +5120,7 @@ def add_scaled_noise_to_gradients(grads_and_vars, gradient_noise_scale, sparse_g
         gradient_shape = gradient_values.get_shape()
       if isinstance(gradient_shape, tf.TensorShape) and not gradient_shape.is_fully_defined():
         gradient_shape = tf.shape(gradient_values)
-      noise = tf.truncated_normal(
+      noise = TFCompat.v1.truncated_normal(
         gradient_shape, stddev=gradient_noise_scale, name="%s_grad_noise" % name, seed=get_random_seed())
       gradient_values = tf.add(gradient_values, noise, name="%s_add_grad_noise" % name)
       if sparse_grads and isinstance(gradient, tf.IndexedSlices):

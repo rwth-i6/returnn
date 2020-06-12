@@ -6078,7 +6078,7 @@ class KenLmStateLayer(_ConcatInputLayer):
         assert self.input_data.sparse and self.vocab.num_labels == self.input_data.dim
         self.tf_vocab = TFCompat.v1.get_variable(
           name="vocab", shape=(self.vocab.num_labels,), dtype=tf.string, trainable=False,
-          initializer=tf.zeros_initializer(tf.string))
+          initializer=tf.zeros_initializer())
         self.add_param(self.tf_vocab, saveable=False, trainable=False)
         set_custom_post_init(var=self.tf_vocab, func=self.vocab.tf_get_init_variable_func(var=self.tf_vocab))
     if input_dtype.is_integer:  # assume word-id in vocab
