@@ -15,6 +15,8 @@ import os
 # os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 
 import tensorflow as tf
+print("TF version:", tf.__version__)
+
 import sys
 sys.path += ["."]  # Python 3 hack
 

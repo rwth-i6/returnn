@@ -21,7 +21,7 @@ else:
   v1 = tf.compat.v1
   v2 = tf.compat.v2
 
-if v2:
+if v2 and tf.__version__.startswith("2."):
   tf.compat.v1.disable_eager_execution()
   tf.compat.v1.disable_v2_tensorshape()
   tf.compat.v1.disable_control_flow_v2()
