@@ -3439,7 +3439,14 @@ def get_tf_list_local_devices(tf_session_opts=None):
   if _list_local_devices is not None:
     return _list_local_devices
   print("Collecting TensorFlow device list...")
-  if tf_session_opts and tf_session_opts.get("gpu_options", {}).get("visible_device_list", None):
+  if tf_session_opts and tf_session_opts.get("gpu_options", {}):
+    # On any gpu_options, e.g. gpu_options.per_process_gpu_memory_fraction:
+    # The first usage of a device will use the provided options.
+    # list_local_devices() will init the devices to get information, but it will just use the default GPU options.
+    # To avoid that, we must do the custom session creation here.
+    # The earlier session creation via setup_tf_thread_pools() is not enough,
+    # because that uses device_count={"GPU":0}, which will not init the GPU.
+    # On gpu_options.visible_device_list:
     # Note that setting CUDA_VISIBLE_DEVICES to the corresponding subset will not work because
     # CUDA will internally cache the devices, thus the first call to list_local_devices will init
     # all visible devices at that point, and TF/CUDA will get confused later
