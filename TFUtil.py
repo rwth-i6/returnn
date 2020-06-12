@@ -5743,6 +5743,9 @@ def where_bc(condition, x, y, name="where_bc"):
   import TFCompat
   if TFCompat.v2:
     # where_v2 supports broadcasting. But we might still need to extend dims.
+    # Note that the extend dims is on the opposite side as it would be common (in all other broadcasting ops).
+    # However, this matches the old tf.compat.v1.where behavior.
+    # (Actually the doc of this where_bc says we do not allow this anyway...? We should check where this is used...)
     condition = tf.convert_to_tensor(condition)
     x = tf.convert_to_tensor(x)
     y = tf.convert_to_tensor(y)

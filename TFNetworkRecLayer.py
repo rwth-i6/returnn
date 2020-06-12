@@ -6827,7 +6827,7 @@ class UnmaskLayer(LayerBase):
     :param LayerBase mask: the same as as used for :class:`MaskedComputationLayer`.
       Outside loop: [B,T] or [T,B], original T. Inside loop, just [B].
     """
-    from TFUtil import concat_with_opt_broadcast, nd_indices, same_control_flow_ctx
+    from TFUtil import concat_with_opt_broadcast, nd_indices, same_control_flow_ctx, where_bc
     super(UnmaskLayer, self).__init__(**kwargs)
     self.mask = mask
     src_layer = self.sources[0]
@@ -6850,12 +6850,12 @@ class UnmaskLayer(LayerBase):
         mask_out = self.mask.output
         assert mask_out.shape == () and mask_out.batch_shape == (None,) and mask_out.dtype == "bool", (
           "%s: invalid mask %s (inside rec loop)" % (self, self.mask))
-        prev_t = self._rec_previous_layer.rec_vars_outputs["t"]
-        t = prev_t + tf.cast(mask_out.placeholder, tf.int32)
+        prev_t = self._rec_previous_layer.rec_vars_outputs["t"]  # [B]
+        t = prev_t + tf.cast(mask_out.placeholder, tf.int32)  # [B]
         self.rec_vars_outputs["t"] = t
         idxs_nd = nd_indices(tf.maximum(t, 0), indices_batch_major=src.is_batch_major)  # [B,2]
         y = tf.gather_nd(src.placeholder, idxs_nd)  # [B,D']
-        y = tf.where(tf.equal(t, -1), initial, y)
+        y = where_bc(tf.equal(t, -1)[:, None], initial, y)
         self.output.placeholder = y
 
       else:  # outside rec loop
