@@ -7954,8 +7954,15 @@ class _DeviceAttrMod:
     #include "tensorflow/core/framework/op.h"
     #include "tensorflow/core/framework/op_kernel.h"
     #include "tensorflow/core/framework/device_attributes.pb.h"
+    #include "tensorflow/core/public/version.h"
 
     using namespace tensorflow;
+
+    #if (TF_MAJOR_VERSION < 2) || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION < 2)
+    using tstring = std::string;
+    #else
+    using tstring = tensorflow::tstring;
+    #endif
 
     REGISTER_OP("GetDeviceAttr")
       .Output("out: string")
@@ -7970,7 +7977,7 @@ class _DeviceAttrMod:
         Tensor* output_tensor = nullptr;
         OP_REQUIRES_OK(
             context, context->allocate_output(0, TensorShape({}), &output_tensor));
-        output_tensor->scalar<string>()() = attribs.physical_device_desc();
+        output_tensor->scalar<::tstring>()() = attribs.physical_device_desc();
       }
     };
 
