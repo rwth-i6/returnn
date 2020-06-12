@@ -24,9 +24,7 @@ from six import iteritems
 from six import string_types
 
 from . import util
-from tensorflow.python.ops import op_selector
 from tensorflow.python.framework import ops as tf_ops
-from tensorflow.python.util import deprecation
 
 
 
@@ -456,10 +454,6 @@ def get_forward_walk_ops(seed_ops,
   return result
 
 
-@deprecation.deprecated(
-    "2019-06-06",
-    "Please use tensorflow.python.ops.op_selector.get_backward_walk_ops.",
-    warn_once=True)
 def get_backward_walk_ops(seed_ops,
                           inclusive=True,
                           within_ops=None,
@@ -487,6 +481,10 @@ def get_backward_walk_ops(seed_ops,
     TypeError: if `seed_ops` or `within_ops` cannot be converted to a list of
       `tf.Operation`.
   """
+  try:
+    from tensorflow.contrib.graph_editor import select as op_selector
+  except ImportError:
+    from tensorflow.python.ops import op_selector
   return op_selector.get_backward_walk_ops(
       seed_ops,
       inclusive=inclusive,

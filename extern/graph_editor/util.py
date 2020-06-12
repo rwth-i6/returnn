@@ -21,9 +21,9 @@ from __future__ import print_function
 
 import re
 from six import iteritems
+import typing
 from tensorflow.python.framework import ops as tf_ops
 from tensorflow.python.ops import array_ops as tf_array_ops
-from tensorflow.python.util.compat import collections_abc
 
 __all__ = [
     "make_list_of_op",
@@ -157,7 +157,7 @@ def transform_tree(tree, fn, iterable_type=tuple):
         res = tree.__new__(type(tree),
                            (transform_tree(child, fn) for child in tree))
       return res
-    elif isinstance(tree, collections_abc.Sequence):
+    elif isinstance(tree, typing.Sequence):
       res = tree.__new__(type(tree))
       res.__init__(transform_tree(child, fn) for child in tree)
       return res
