@@ -12,7 +12,7 @@ https://github.com/tensorflow/lingvo/blob/master/lingvo/compat.py
 
 import tensorflow as tf
 
-if not getattr(tf, "compat", None) or not getattr(tf.compat, "v1", None):
+if not getattr(tf, "compat", None) or not getattr(tf.compat, "v2", None):
   v1 = tf
   v2 = None
 else:
