@@ -3998,7 +3998,7 @@ def layer_norm(x, gain, bias, axis, epsilon=1e-6):
       gain = tf.reshape(gain, [dim if i == axis else 1 for i in range(ndim)], "gain_bc")
     if bias.get_shape().ndims == 1:
       bias = tf.reshape(bias, [dim if i == axis else 1 for i in range(ndim)], "bias_bc")
-    m, v = TFCompat.v1.nn.moments(x, axes=[axis], keepdims=True)
+    m, v = TFCompat.v1.nn.moments(x, axes=[axis], keep_dims=True)
     inv = TFCompat.v1.rsqrt(v + epsilon)
     inv *= gain
     return x * inv - m * inv + bias
