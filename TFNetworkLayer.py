@@ -1138,10 +1138,10 @@ class LayerBase(object):
     with reuse_name_scope(self.get_absolute_name_scope_prefix() + "batch_norm", absolute=True):
       if masked_time:
         x = data.get_placeholder_flattened(keepdims=True)
-        mean, variance = TFCompat.v1.nn.moments(x, axes=[0], keepdims=True)
+        mean, variance = TFCompat.v1.nn.moments(x, axes=[0], keep_dims=True)
       else:
         x = data.placeholder
-        mean, variance = TFCompat.v1.nn.moments(x, axes=data.get_axes(exclude_feature=True), keepdims=True)
+        mean, variance = TFCompat.v1.nn.moments(x, axes=data.get_axes(exclude_feature=True), keep_dims=True)
       if sample_mean is None:
         with self.var_creation_scope():
           sample_mean = self.add_param(tf.Variable(
