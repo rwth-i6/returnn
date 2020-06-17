@@ -757,6 +757,80 @@ class DummyDatasetMultipleSequenceLength(DummyDataset):
     return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
 
 
+class DummyDatasetMultipleDataKeys(DummyDataset):
+  """
+  Like :class:`DummyDataset` this class provides dummy data without any meaning.
+  But it extends :class:`DummyDataset` such that it is able to provide data for multiple data keys,
+  not only `"data"` and `"classes"` (those are also overridable).
+  Further, `output_dim` is expected to be a `dict` now, which defines the data format for each
+  data key, which also enables the user to customize whether the data is sparse or dense.
+  It also provides the function of :class:`DummyDatasetMultipleSequenceLength` to customize the
+  sequence length for each data point.
+  """
+
+  def __init__(self, input_dim, output_dim, num_seqs, seq_len=None,
+               input_max_value=10.0, input_shift=None, input_scale=None, data_keys=None, **kwargs):
+    """
+    :param int input_dim:
+    :param dict output_dim:
+    :param int|float num_seqs:
+    :param int|dict[str,int] seq_len:
+    :param float input_max_value:
+    :param float|None input_shift:
+    :param float|None input_scale:
+    """
+    if data_keys is None:
+      data_keys = ["data", "classes"]
+    self.data_keys = data_keys
+
+    _seq_len = 20
+    if isinstance(seq_len, int):
+      _seq_len = seq_len
+      seq_len = None
+    if seq_len is None:
+      seq_len = {}
+      for key in self.data_keys:
+        seq_len[key] = _seq_len
+    assert set(data_keys) == set(seq_len.keys()), "the keys of seq_len (%s) must match the keys in data_keys=%s." % (str(seq_len.keys()), str(data_keys))
+
+    assert isinstance(output_dim, dict), "output_dim must be a dict containing a definition for each key in data_keys."
+    assert set(data_keys) == set(output_dim.keys()), "the keys of output_dim (%s) must match the keys in data_keys=%s." % (str(output_dim.keys()), str(data_keys))
+
+    super(DummyDatasetMultipleDataKeys, self).__init__(
+      input_dim=input_dim,
+      output_dim=output_dim,
+      num_seqs=num_seqs,
+      seq_len=seq_len,
+      input_max_value=input_max_value,
+      input_shift=input_shift,
+      input_scale=input_scale,
+      **kwargs)
+
+  def generate_seq(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: DatasetSeq
+    """
+    features = {}
+    i1 = seq_idx
+
+    for key in self.data_keys:
+      seq_len = self.seq_len[key]
+      output_dim = self.num_outputs[key][0]
+      is_sparse = self.num_outputs[key][1] == 1
+
+      if is_sparse:
+        i2 = i1 + seq_len
+        features[key] = numpy.array([i % self.num_outputs[key][0] for i in range(i1, i2)])
+      else:
+        i2 = i1 + seq_len * output_dim
+        features[key] = numpy.array([((i % self.input_max_value) + self.input_shift) * self.input_scale
+                                for i in range(i1, i2)]).reshape((seq_len, output_dim))
+      i1 = i2
+
+    return DatasetSeq(seq_idx=seq_idx, features=features, targets=None)
+
+
 class StaticDataset(GeneratingDataset):
   """
   Provide all the data as a list of dict of numpy arrays.
