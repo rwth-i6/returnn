@@ -761,23 +761,24 @@ class DummyDatasetMultipleDataKeys(DummyDataset):
   """
   Like :class:`DummyDataset` this class provides dummy data without any meaning.
   But it extends :class:`DummyDataset` such that it is able to provide data for multiple data keys,
-  not only `"data"` and `"classes"` (those are also overridable).
+  not only `"data"` and `"classes"` (those are also overridable, though the current implementation
+  expects a `"data"` key).
   Further, `output_dim` is expected to be a `dict` now, which defines the data format for each
   data key, which also enables the user to customize whether the data is sparse or dense.
   It also provides the function of :class:`DummyDatasetMultipleSequenceLength` to customize the
   sequence length for each data point.
   """
 
-  def __init__(self, input_dim, output_dim, num_seqs, seq_len=None,
+  def __init__(self, output_dim, num_seqs, seq_len=None,
                input_max_value=10.0, input_shift=None, input_scale=None, data_keys=None, **kwargs):
     """
-    :param int input_dim:
-    :param dict output_dim:
+    :param dict output_dim: `dict` defining the output for each data key (e.g. `{"data": [200, 2], "classes": [100, 1]}`).
     :param int|float num_seqs:
-    :param int|dict[str,int] seq_len:
+    :param int|dict[str,int] seq_len: definition of the sequence length for each data key, if `int` the given length is used for all data keys.
     :param float input_max_value:
     :param float|None input_shift:
     :param float|None input_scale:
+    :param list[str]|None data_keys: explicit declaration of the data keys, if `None` `"data"` and `"classes"` are used.
     """
     if data_keys is None:
       data_keys = ["data", "classes"]
@@ -797,7 +798,7 @@ class DummyDatasetMultipleDataKeys(DummyDataset):
     assert set(data_keys) == set(output_dim.keys()), "the keys of output_dim (%s) must match the keys in data_keys=%s." % (str(output_dim.keys()), str(data_keys))
 
     super(DummyDatasetMultipleDataKeys, self).__init__(
-      input_dim=input_dim,
+      input_dim=None,  # this was only used for the definition of "data", but this is handled by `output_dim` now.
       output_dim=output_dim,
       num_seqs=num_seqs,
       seq_len=seq_len,
