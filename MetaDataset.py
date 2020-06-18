@@ -824,7 +824,6 @@ class CombinedDataset(CachedDataset2):
     super(CombinedDataset, self).__init__(**kwargs)
     assert self.shuffle_frames_of_nseqs == 0  # not implemented. anyway only for non-recurrent nets
 
-    self.rnd = Random(self.epoch)
     self.dataset_keys = set([m[0] for m in data_map.keys()])  # type: typing.Set[str]
     self.dataset_idx2key_map = dict(enumerate(sorted(self.dataset_keys)))  # idx -> dataset-key
     self.data_keys = set(data_map.values())  # type: typing.Set[str]
@@ -892,7 +891,6 @@ class CombinedDataset(CachedDataset2):
     need_reinit = self.epoch is None or self.epoch != epoch
     num_seqs_saved = self._num_seqs
     super(CombinedDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)  # resets self._num_seqs
-    self.rnd.seed(epoch or 1)
 
     if not need_reinit:
       self._num_seqs = num_seqs_saved
@@ -914,8 +912,11 @@ class CombinedDataset(CachedDataset2):
         self.datasets[self.dataset_idx2key_map[dataset_idx]].num_seqs for dataset_idx in range(len(self.datasets))]
       self.dataset_seq_idx_boundaries = self._create_dataset_seq_idx_boundaries()
 
-      seq_order = self.get_seq_order_for_epoch(
-        epoch=epoch, num_seqs=total_num_seqs, get_seq_len=self._get_seq_length)
+      if self.seq_ordering == "random_dataset":
+        seq_order = self._get_random_dataset_seq_order(total_num_seqs)
+      else:
+        seq_order = self.get_seq_order_for_epoch(
+          epoch=epoch, num_seqs=total_num_seqs, get_seq_len=self._get_seq_length)
       self._num_seqs = len(seq_order)
 
       # Apply seq_order to self.dataset_seq_idx.
@@ -980,6 +981,38 @@ class CombinedDataset(CachedDataset2):
     dataset_seq_idx = seq_idx - self.dataset_seq_idx_boundaries[dataset_idx]
 
     return dataset_idx, dataset_seq_idx
+
+  def _get_random_dataset_seq_order(self, total_num_seqs):
+    """
+    Choose datasets randomly but preserve order within each dataset. This sorting method is unique to CombinedDataset.
+
+    :param int total_num_seqs:
+    :param int epoch:
+    :returns: sequence order
+    :rtype: list[int]
+    """
+    # Create a list containing each dataset_idx dataset.num_seqs-times and shuffle it.
+    dataset_ids = [self._seq_idx_to_dataset_seq_idx(seq_idx)[0] for seq_idx in range(total_num_seqs)]
+    rnd = self._get_random_seed_for_epoch(self.epoch)
+    rnd.shuffle(dataset_ids)
+
+    # Create the actual seq_order list.
+    # We want to keep the order within the sub-datasets, thus we assign seq_ids by simply counting up for each dataset.
+    # We however have to account for the different offsets needed when accessing self.dataset_seq_idx_list later.
+    seq_order = []
+    counters = [0] * len(self.datasets)
+    for dataset_idx in dataset_ids:
+      seq_order.append(counters[dataset_idx] + self.dataset_seq_idx_boundaries[dataset_idx])
+      counters[dataset_idx] += 1
+
+    assert sum(counters) == total_num_seqs
+
+    if self.partition_epoch:
+      seq_order = self._apply_partition_epoch(seq_order, self.partition_epoch, self.epoch)
+    if self.repeat_epoch:
+      seq_order = seq_order * self.repeat_epoch
+
+    return seq_order
 
   def _get_seq_length(self, seq_idx):
     """
