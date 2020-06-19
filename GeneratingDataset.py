@@ -677,8 +677,8 @@ class DummyDataset(GeneratingDataset):
   def __init__(self, input_dim, output_dim, num_seqs, seq_len=2,
                input_max_value=10.0, input_shift=None, input_scale=None, **kwargs):
     """
-    :param int input_dim:
-    :param int output_dim:
+    :param int|None input_dim:
+    :param int|dict[str,int|(int,int)|dict] output_dim:
     :param int|float num_seqs:
     :param int|dict[str,int] seq_len:
     :param float input_max_value:
@@ -772,13 +772,16 @@ class DummyDatasetMultipleDataKeys(DummyDataset):
   def __init__(self, output_dim, num_seqs, seq_len=None,
                input_max_value=10.0, input_shift=None, input_scale=None, data_keys=None, **kwargs):
     """
-    :param dict output_dim: `dict` defining the output for each data key (e.g. `{"data": [200, 2], "classes": [100, 1]}`).
+    :param dict[str,int|(int,int)|dict] output_dim: `dict` defining the output for each data key
+      (e.g. `{"data": [200, 2], "classes": [100, 1]}`).
     :param int|float num_seqs:
-    :param int|dict[str,int] seq_len: definition of the sequence length for each data key, if `int` the given length is used for all data keys.
+    :param int|dict[str,int] seq_len: definition of the sequence length for each data key,
+      if `int` the given length is used for all data keys.
     :param float input_max_value:
     :param float|None input_shift:
     :param float|None input_scale:
-    :param list[str]|None data_keys: explicit declaration of the data keys, if `None` `"data"` and `"classes"` are used.
+    :param list[str]|None data_keys: explicit declaration of the data keys,
+      if `None` `"data"` and `"classes"` are used.
     """
     if data_keys is None:
       data_keys = ["data", "classes"]
@@ -792,10 +795,13 @@ class DummyDatasetMultipleDataKeys(DummyDataset):
       seq_len = {}
       for key in self.data_keys:
         seq_len[key] = _seq_len
-    assert set(data_keys) == set(seq_len.keys()), "the keys of seq_len (%s) must match the keys in data_keys=%s." % (str(seq_len.keys()), str(data_keys))
-
-    assert isinstance(output_dim, dict), "output_dim must be a dict containing a definition for each key in data_keys."
-    assert set(data_keys) == set(output_dim.keys()), "the keys of output_dim (%s) must match the keys in data_keys=%s." % (str(output_dim.keys()), str(data_keys))
+    assert set(data_keys) == set(seq_len.keys()), (
+      "%s: the keys of seq_len (%s) must match the keys in data_keys=%s." % (self, str(seq_len.keys()), str(data_keys)))
+    assert isinstance(output_dim, dict), (
+      "%s: output_dim %r must be a dict containing a definition for each key in data_keys." % (self, output_dim))
+    assert set(data_keys) == set(output_dim.keys()), (
+      "%s: the keys of output_dim (%s) must match the keys in data_keys=%s." % (
+        self, str(output_dim.keys()), str(data_keys)))
 
     super(DummyDatasetMultipleDataKeys, self).__init__(
       input_dim=None,  # this was only used for the definition of "data", but this is handled by `output_dim` now.
@@ -825,8 +831,9 @@ class DummyDatasetMultipleDataKeys(DummyDataset):
         features[key] = numpy.array([i % self.num_outputs[key][0] for i in range(i1, i2)])
       else:
         i2 = i1 + seq_len * output_dim
-        features[key] = numpy.array([((i % self.input_max_value) + self.input_shift) * self.input_scale
-                                for i in range(i1, i2)]).reshape((seq_len, output_dim))
+        features[key] = numpy.array([
+          ((i % self.input_max_value) + self.input_shift) * self.input_scale
+          for i in range(i1, i2)]).reshape((seq_len, output_dim))
       i1 = i2
 
     return DatasetSeq(seq_idx=seq_idx, features=features, targets=None)
