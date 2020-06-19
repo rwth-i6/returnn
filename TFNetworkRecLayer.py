@@ -2218,6 +2218,7 @@ class _SubnetworkRecCell(object):
         net_vars = (outputs_flat, extra_flat)
 
         if seq_len_info is not None:
+          assert self.net.layers["end"].output.shape == (), "end layer %r unexpected shape" % self.net.layers["end"]
           choices = self.net.layers["end"].get_search_choices()
           if choices:
             from TFNetworkLayer import SelectSearchSourcesLayer
@@ -2227,9 +2228,11 @@ class _SubnetworkRecCell(object):
             assert cur_end_layer.search_choices_seq, (
               "unexpected search choices: cur end %r (via %r), prev end %r (via %r)" % (
                 choices, self.net.layers["end"], prev_end_layer.get_search_choices(), prev_end_layer))
+            assert cur_end_layer.output.shape == (), "end layer %r unexpected shape" % cur_end_layer
             with tf.name_scope("end_flag"):
               end_flag = cur_end_layer.output.placeholder
               end_flag = tf.logical_or(end_flag, self.net.layers["end"].output.placeholder)  # (batch * beam,)
+              end_flag.set_shape([None])
             with tf.name_scope("dyn_seq_len"):
               dyn_seq_len = cur_end_layer.transform_func(dyn_seq_len)
               dyn_seq_len += tf.where(
@@ -2238,8 +2241,10 @@ class _SubnetworkRecCell(object):
                 constant_with_shape(1, shape=tf.shape(end_flag)))  # (batch * beam,)
               seq_len_info = (end_flag, dyn_seq_len)
           else:
+            assert self.net.layers["end"].output.shape == (), "end layer %r unexpected shape" % self.net.layers["end"]
             with tf.name_scope("end_flag"):
               end_flag = tf.logical_or(end_flag, self.net.layers["end"].output.placeholder)
+              end_flag.set_shape([None])
             with tf.name_scope("dyn_seq_len"):
               dyn_seq_len += tf.where(
                 end_flag,
