@@ -33,7 +33,7 @@ class LayerBase(object):
               " docstring, document the args! "
               super(YourOwnLayer, self).__init__(**kwargs)
               # Now we need to set self.output, which must be of type :class:`Data`.
-              # It is set at this point to whatever we got from `selfget_out_data_from_opts()`,
+              # It is set at this point to whatever we got from `self.get_out_data_from_opts()`,
               # so it is enough if we set self.output.placeholder and self.output.size_placeholder,
               # but we could also reset self.output.
               self.output.placeholder = self.input_data.placeholder + 42  # whatever you want to do
