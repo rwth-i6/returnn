@@ -2061,6 +2061,161 @@ def test_rec_layer_multi_choice_search_resolve():
       raise
 
 
+def test_target_with_beam():
+  beam_size = 4
+  teacher_target = "classes"
+  student_target = "teacher_hypotheses_data"  # "teacher_hypotheses_data" is the teacher's beam data
+
+  AttNumHeads = 1
+  EncKeyTotalDim = 5
+  EncValueTotalDim = 5
+  EncValuePerHeadDim = EncValueTotalDim // AttNumHeads
+
+  net_dict = {
+    # Teacher seq2seq model
+    "teacher_encoder": {"class": "linear", "activation": None, "from": "data:data", "n_out": EncValueTotalDim,
+                        "trainable": False},  # dim: EncValueTotalDim
+
+    "teacher_enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["teacher_encoder"],
+                        "n_out": EncKeyTotalDim, "trainable": False},  # preprocessed_attended in Blocks
+    "teacher_inv_fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False,
+                              "from": ["teacher_encoder"], "n_out": AttNumHeads, "trainable": False},
+    "teacher_enc_value": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim),
+                          "from": ["teacher_encoder"], "trainable": False},  # (B, enc-T, H, D'/H)
+
+    "teacher_output": {"class": "rec", "from": [], "unit": {
+      'output': {'class': 'choice',
+                 'target': teacher_target,
+                 'beam_size': beam_size,
+                 'from': ["teacher_output_prob"], "initial_output": 0, "trainable": False},
+      "end": {"class": "compare", "from": ["output"], "value": 0, "trainable": False},
+      'teacher_target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'],
+                               "n_out": 5, "initial_output": 0, "trainable": False},  # feedback_input
+      "teacher_weight_feedback": {"class": "linear", "activation": None, "with_bias": False,
+                                  "from": ["prev:teacher_accum_att_weights"], "n_out": EncKeyTotalDim, "dropout": 0.3,
+                                  "trainable": False},
+      "teacher_s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["teacher_s"],
+                                "n_out": EncKeyTotalDim, "dropout": 0.3, "trainable": False},
+      "teacher_energy_in": {"class": "combine", "kind": "add",
+                            "from": ["base:teacher_enc_ctx", "teacher_weight_feedback", "teacher_s_transformed"],
+                            "n_out": EncKeyTotalDim, "trainable": False},
+      "teacher_energy_tanh": {"class": "activation", "activation": "tanh", "from": ["teacher_energy_in"],
+                              "trainable": False},
+      "teacher_energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["teacher_energy_tanh"],
+                         "n_out": AttNumHeads, "trainable": False},  # (B, enc-T, H)
+      "teacher_att_weights": {"class": "softmax_over_spatial", "from": ["teacher_energy"], "trainable": False},
+      # (B, enc-T, H)
+      "teacher_accum_att_weights": {"class": "eval", "from": ["prev:teacher_accum_att_weights", "teacher_att_weights",
+                                                              "base:teacher_inv_fertility"],
+                                    "eval": "source(0) + source(1) * source(2) * 0.5",
+                                    "out_type": {"dim": AttNumHeads, "shape": (None, AttNumHeads)}, "trainable": False},
+      "teacher_att0": {"class": "generic_attention", "weights": "teacher_att_weights", "base": "base:teacher_enc_value",
+                       "trainable": False},  # (B, H, V)
+      "teacher_att": {"class": "merge_dims", "axes": "except_batch", "from": ["teacher_att0"], "trainable": False},
+      # (B, H*V)
+      "teacher_s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:teacher_target_embed", "prev:teacher_att"],
+                    "n_out": 5, "dropout": 0.3, "trainable": False},  # transform
+      "teacher_readout_in": {"class": "linear", "from": ["teacher_s", "prev:teacher_target_embed", "teacher_att"],
+                             "activation": None, "n_out": 1000, "dropout": 0.3, "trainable": False},
+      # merge + post_merge bias
+      "teacher_readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["teacher_readout_in"],
+                          "trainable": False},
+      "teacher_output_prob": {
+        "class": "softmax", "from": ["teacher_readout"], "dropout": 0.3,
+        "target": teacher_target,
+        "trainable": False
+      }
+    }, "target": teacher_target, "max_seq_len": "max_len_from('base:teacher_encoder') * 3", "trainable": False},
+
+    # the teacher's decision layer is actually not used, since the hypotheses data is fetched from the teacher's choice layer (or teacher_output)...
+    "teacher_decision": {
+      "class": "decide", "from": ["teacher_output"], "loss": "edit_distance", "target": teacher_target,
+      "loss_opts": {},
+      "register_as_extern_data": "teacher_hypotheses",
+      "trainable": False
+    },
+
+    # Register Teacher's beam as external data
+    "teacher_hypotheses": {
+      "class": "copy", "from": ["extra.search:teacher_output"],
+      "register_as_extern_data": student_target
+    },
+
+    # Student seq2seq model
+    "student_encoder": {"class": "linear", "activation": None, "from": "data:data", "n_out": EncValueTotalDim},
+    # dim: EncValueTotalDim
+
+    "student_enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["student_encoder"],
+                        "n_out": EncKeyTotalDim},  # preprocessed_attended in Blocks
+    "student_inv_fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False,
+                              "from": ["student_encoder"], "n_out": AttNumHeads},
+    "student_enc_value": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim),
+                          "from": ["student_encoder"]},  # (B, enc-T, H, D'/H)
+
+    "student_output": {"class": "rec", "from": [], "unit": {
+      'output': {'class': 'choice', 'target': student_target, 'beam_size': beam_size,
+                 'from': ["student_output_prob"], "initial_output": 0},
+      "end": {"class": "compare", "from": ["output"], "value": 0},
+      'student_target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'],
+                               "n_out": 5, "initial_output": 0},  # feedback_input
+      "student_weight_feedback": {"class": "linear", "activation": None, "with_bias": False,
+                                  "from": ["prev:student_accum_att_weights"], "n_out": EncKeyTotalDim, "dropout": 0.3},
+      "student_s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["student_s"],
+                                "n_out": EncKeyTotalDim, "dropout": 0.3},
+      "student_energy_in": {"class": "combine", "kind": "add",
+                            "from": ["base:student_enc_ctx", "student_weight_feedback", "student_s_transformed"],
+                            "n_out": EncKeyTotalDim},
+      "student_energy_tanh": {"class": "activation", "activation": "tanh", "from": ["student_energy_in"]},
+      "student_energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["student_energy_tanh"],
+                         "n_out": AttNumHeads},  # (B, enc-T, H)
+      "student_att_weights": {"class": "softmax_over_spatial", "from": ["student_energy"]},  # (B, enc-T, H)
+      "student_accum_att_weights": {"class": "eval", "from": ["prev:student_accum_att_weights", "student_att_weights",
+                                                              "base:student_inv_fertility"],
+                                    "eval": "source(0) + source(1) * source(2) * 0.5",
+                                    "out_type": {"dim": AttNumHeads, "shape": (None, AttNumHeads)}},
+      "student_att0": {"class": "generic_attention", "weights": "student_att_weights",
+                       "base": "base:student_enc_value"},  # (B, H, V)
+      "student_att": {"class": "merge_dims", "axes": "except_batch", "from": ["student_att0"]},  # (B, H*V)
+      "student_s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:student_target_embed", "prev:student_att"],
+                    "n_out": 5, "dropout": 0.3},  # transform
+      "student_readout_in": {"class": "linear", "from": ["student_s", "prev:student_target_embed", "student_att"],
+                             "activation": None, "n_out": 6, "dropout": 0.3},  # merge + post_merge bias
+      "student_readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["student_readout_in"]},
+      "student_output_prob": {
+        "class": "softmax", "from": ["student_readout"], "dropout": 0.3,
+        "target": student_target,
+        "loss": "ce", "loss_opts": {"label_smoothing": 0.1}
+      }
+
+    }, "target": student_target, "max_seq_len": "max_len_from('base:student_encoder') * 3"},
+
+    # Declare Student's output as overall network's output
+    "output": {"class": "copy", "from": ["student_output"]}
+  }
+
+  config = Config({
+    "debug_print_layer_output_template": True,
+    "debug_print_layer_output_shape": True,
+  })
+
+  with make_scope() as session:
+    extern_data = ExternData({
+      "data": {"dim": 3, "sparse": True},
+      "classes": {"dim": 3, "sparse": True, "available_for_inference": False}})
+    network = TFNetwork(extern_data=extern_data, train_flag=True, config=config)
+    network.construct_from_dict(net_dict)
+    output_layer = network.get_default_output_layer()
+    x_data = extern_data.get_data("data")
+    y_data = output_layer.output
+
+    session.run(TFCompat.v1.global_variables_initializer())
+
+    from test_TFNetworkLayer import make_feed_dict
+    feed_dict = make_feed_dict([network.extern_data.data[key] for key in ["data", "classes"]])
+    x, y, loss = session.run((x_data.placeholder, y_data.placeholder, network.get_total_loss()), feed_dict=feed_dict)
+    assert x.shape[x_data.batch_dim_axis] * beam_size == y.shape[y_data.batch_dim_axis]
+
+
 def test_rec_layer_move_out_of_loop():
   from TFNetworkRecLayer import _SubnetworkRecCell
   from TFUtil import get_global_train_flag_placeholder, stop_event_writer_thread
