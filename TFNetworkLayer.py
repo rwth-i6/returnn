@@ -4963,6 +4963,45 @@ class PoolLayer(_ConcatInputLayer):
       beam=data.beam)
 
 
+class DctLayer(_ConcatInputLayer):
+  """
+  Layer to perform DCT
+  Wraps :func:`tf.signal.dct`. For further documentation on the input arguments, refer to
+  https://www.tensorflow.org/api_docs/python/tf/signal/dct
+  """
+
+  layer_class = "dct"
+  recurrent = True  # we should not shuffle in the time-dimension
+
+  def __init__(self, type=2, n=None, norm=None, **kwargs):
+    """
+    :param int type: DCT type to perform. Must be 1, 2, 3, or 4
+    :param int|None n: length of the transform
+    :param str|None norm: normalization to apply. Must be None or "ortho"
+    """
+    assert n is None, 'Not implemented yet for n other than None'
+    super(DctLayer, self).__init__(**kwargs)
+    input_data = self.input_data.copy_as_batch_spatial_major()
+    x = input_data.placeholder
+    y = TFCompat.v1.spectral.dct(x, type=type, n=n, norm=norm)
+    self.output.placeholder = y
+    if n is None:
+      self.output.size_placeholder = self.input_data.size_placeholder.copy()
+    else:
+      raise NotImplementedError
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    out = out.copy_as_batch_spatial_major()
+    return out
+
+
 class TransposedConvLayer(_ConcatInputLayer):
   """
   Transposed convolution, sometimes also called deconvolution.
