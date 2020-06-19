@@ -1425,7 +1425,7 @@ class _SubnetworkRecCell(object):
       layer = self.input_layers_net.layers[layer_name]
       assert isinstance(layer, LayerBase)
       if not self.parent_rec_layer.output.is_same_time_dim(layer.output):
-        assert not prev, "Time dim does not match: RecLayer %s (%r) vs sub layer %s (%r)." % (
+        assert name != "output" and not prev, "Time dim does not match: RecLayer %s (%r) vs sub layer %s (%r)." % (
           self.parent_rec_layer, self.parent_rec_layer.output.get_time_dim_tag(),
           layer, layer.output.get_time_dim_tag())
         return layer
@@ -2080,6 +2080,14 @@ class _SubnetworkRecCell(object):
               continue
             layer = self.input_layers_net.get_layer(layer_name)
             assert isinstance(layer, LayerBase)
+            if layer_name == "output":
+              assert layer.output.have_time_axis()
+              # If we don't know our own size yet, we can overtake it from this layer.
+              if not rec_layer.output.size_placeholder:
+                rec_layer.output.size_placeholder = {0: layer.output.get_sequence_lengths()}
+              if fixed_seq_len is None:
+                fixed_seq_len = layer.output.get_sequence_lengths()
+              assert rec_layer.output.is_same_time_dim(layer.output)
             # Only unroll if that is the same time dim.
             if not layer.output.mark_same_time(rec_layer.output):
               continue
