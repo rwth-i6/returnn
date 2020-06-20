@@ -3319,6 +3319,9 @@ class _TemplateLayer(LayerBase):
       assert layer != self
       search_choices = layer.get_search_choices()
       if not search_choices:
+        from pprint import pformat
+        assert not self.output.beam, "%s: beam %r but no search choices; deps\n%s" % (
+          self, self.output.beam, pformat(self.get_dep_layers()))
         return None
       # Normalize again. See maybe_transform.
       layer = search_choices.owner.get_normalized_layer()
