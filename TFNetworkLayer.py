@@ -1609,6 +1609,11 @@ class SearchChoices(object):
     self.beam_scores = None  # type: typing.Optional[tf.Tensor]  # (batch, beam)
     self.is_decided = is_decided
     self.keep_raw = keep_raw
+    if not owner.output.beam:
+      assert beam_size == 1
+    else:
+      assert owner.output.beam.beam_size == beam_size
+      owner.network.register_search_choices_for_beam(beam=owner.output.beam, search_choices=self)
 
   def __repr__(self):
     def short(v):
@@ -1815,6 +1820,10 @@ class SourceLayer(LayerBase):
         self, data_key, data,
         {k: v for (k, v) in network.extern_data.data.items() if v.placeholder is not None}))
     self.output = data
+    if self.output.beam:
+      # This can happen if register_as_extern_data was used on a layer with a beam.
+      search_choices = network.get_search_choices_from_beam(self.output.beam)
+      self.sources.append(search_choices.owner)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
