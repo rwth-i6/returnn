@@ -1767,7 +1767,7 @@ class _SubnetworkRecCell(object):
     time_dim_tag = None
     with tf.name_scope("subnet_base"):
       batch_dim = rec_layer.network.get_data_batch_dim()
-      input_beam_size = None  # type: typing.Optional[int]
+      input_beam = None  # type: typing.Optional[SearchBeam]
       if rec_layer.input_data:
         with tf.name_scope("source_tensor_array"):
           # noinspection PyProtectedMember
@@ -1783,10 +1783,17 @@ class _SubnetworkRecCell(object):
           data_tensor_arrays["source"] = source_ta
         input_search_choices = rec_layer.network.get_search_choices(sources=rec_layer.sources)
         if input_search_choices:
-          input_beam_size = input_search_choices.search_choices.beam_size
-          assert self.parent_rec_layer.input_data.beam_size == input_beam_size
+          assert rec_layer.input_data.beam.beam_size == input_search_choices.search_choices.beam_size
+          input_beam = rec_layer.input_data.beam
+        elif rec_layer.input_data.beam:
+          input_beam = rec_layer.input_data.beam
       else:
         input_seq_len = None
+        if rec_layer.target and rec_layer.network.eval_flag:
+          # noinspection PyProtectedMember
+          target_data = rec_layer._get_target_value(
+            target=rec_layer.target, mark_data_key_as_used=False)
+          input_beam = target_data.beam
       if rec_layer.output.size_placeholder and not output_template_search_choices:
         # See LayerBase._post_init_output(). could be set via target or size_target...
         # This should only be the case in training.
@@ -1807,7 +1814,8 @@ class _SubnetworkRecCell(object):
       if fixed_seq_len is not None:
         time_dim_tag = DimensionTag.get_tag_from_size_tensor(fixed_seq_len)
         with tf.name_scope("check_seq_len_batch_size"):
-          fixed_seq_len = check_input_dim(fixed_seq_len, axis=0, dim=batch_dim * (input_beam_size or 1))
+          fixed_seq_len = check_input_dim(
+            fixed_seq_len, axis=0, dim=batch_dim * (input_beam.beam_size if input_beam else 1))
           if time_dim_tag:
             time_dim_tag.set_tag_on_size_tensor(fixed_seq_len)
         max_seq_len = tf.reduce_max(fixed_seq_len, name="max_seq_len")
@@ -1930,7 +1938,7 @@ class _SubnetworkRecCell(object):
       # For search:
       # We will collect the search choices of the beam search,
       # to be able to reconstruct the final hypotheses.
-      output_beam_size = None
+      output_beam = None  # type: typing.Optional[SearchBeam]
       collected_choices = []  # type: typing.List[str]  # layer names
       if rec_layer.network.search_flag:
         for layer in self.layer_data_templates.values():
@@ -1960,7 +1968,7 @@ class _SubnetworkRecCell(object):
                 get=get_choices_getter(layer.name)))
 
         if collected_choices:
-          output_beam_size = self.layer_data_templates["output"].get_search_beam_size()
+          output_beam = self.layer_data_templates["output"].output.beam
           # Note: output_beam_size can be None, if output itself does not depend on any choice,
           # which might be uncommon, but is valid.
 
@@ -2338,10 +2346,13 @@ class _SubnetworkRecCell(object):
         _, final_net_vars, final_acc_tas = final_loop_vars
         assert fixed_seq_len is not None
         seq_len = fixed_seq_len
-        if output_beam_size is not None:
-          assert input_beam_size in (1, None)
+        if output_beam:
+          assert not input_beam or input_beam == output_beam, (
+            "%s: input beam %r, output beam %r, sources %r, target %r" % (
+              self.parent_rec_layer, input_beam, output_beam,
+              self.parent_rec_layer.sources, self.parent_rec_layer.target))
           from TFUtil import tile_transposed
-          seq_len = tile_transposed(seq_len, axis=0, multiples=output_beam_size)  # (batch * beam,)
+          seq_len = tile_transposed(seq_len, axis=0, multiples=output_beam.beam_size)  # (batch * beam,)
           if time_dim_tag:
             time_dim_tag.set_tag_on_size_tensor(seq_len)
       else:
