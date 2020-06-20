@@ -360,6 +360,7 @@ class TFNetwork(object):
     self._batch_dim = None  # see get_data_batch_dim
     self._merge_all_summaries = None  # type: typing.Optional[tf.Tensor]
     self._graph_reset_callbacks = []  # type: typing.List[typing.Callable]
+    self._map_search_beam_to_search_choices = {}  # type: typing.Dict[TFUtil.SearchBeam,"TFNetworkLayer.SearchChoices"]
 
   def __repr__(self):
     s = "TFNetwork %r" % self.name
@@ -1949,6 +1950,38 @@ class TFNetwork(object):
     finally:
       assert coll[-1] is self
       coll.pop(-1)
+
+  def get_search_choices_from_beam(self, beam):
+    """
+    Currently we have somewhat redundant information in
+    :class:`TFUtil.SearchBeam` (which is totally independent from other things in RETURNN (which is good))
+    and
+    :class:`TFNetworkLayer.SearchChoices` (which is more dependent on the RETURNN layers, and has some more info).
+    The :class:`Data` (which is also independent from other things in RETURNN (which is also good))
+    only knows about :class:`TFUtil.SearchBeam` but not about :class:`TFNetworkLayer.SearchChoices`.
+    Thus there are situations where we only have a ref to the former, but like to get a ref to the latter.
+
+    Note that this might (hopefully) get cleaned up at some point...
+
+    :param TFUtil.SearchBeam beam:
+    :rtype: TFNetworkLayer.SearchChoices|None
+    """
+    root_net = self.get_root_network()
+    if root_net is not self:
+      # Use the root network, to just use a single map where to look at.
+      return root_net.get_search_choices_from_beam(beam)
+    return self._map_search_beam_to_search_choices.get(beam, None)
+
+  def register_search_choices_for_beam(self, beam, search_choices):
+    """
+    :param TFUtil.SearchBeam beam:
+    :param TFNetworkLayer.SearchChoices search_choices:
+    """
+    root_net = self.get_root_network()
+    if root_net is not self:
+      # Use the root network, to just use a single map where to look at.
+      return root_net.register_search_choices_for_beam(beam, search_choices)
+    self._map_search_beam_to_search_choices[beam] = search_choices
 
 
 class TFNetworkParamsSerialized(object):
