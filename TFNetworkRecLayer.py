@@ -3323,6 +3323,8 @@ class _TemplateLayer(LayerBase):
         assert not self.output.beam, "%s: beam %r but no search choices; deps\n%s" % (
           self, self.output.beam, pformat(self.get_dep_layers()))
         return None
+      if search_choices.owner.network is not self.network:  # from somewhere else...
+        return search_choices
       # Normalize again. See maybe_transform.
       layer = search_choices.owner.get_normalized_layer()
       prev_layer = self._cell.net.layers["prev:%s" % layer.name]
