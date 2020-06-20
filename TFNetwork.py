@@ -1675,6 +1675,9 @@ class TFNetwork(object):
         normalized_choices = self._get_all_search_choices(
           base_search_choice=normalized_base,
           _layer_to_search_choices=_layer_to_search_choices, _normalized_to_layer=_normalized_to_layer)
+        if normalized_choices == layers:
+          # This looks independent. Return as is.
+          return layers
         if any([layer.get_normalized_layer() == layer for layer in normalized_choices]):
           # Filter any "prev:..." layers away. This should always be correct.
           # Also, this is important to have the correct choice resolution for the prev layer (base_search_choice).
