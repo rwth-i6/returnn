@@ -484,6 +484,10 @@ class LayerBase(object):
             # Also, if we are inside a rec layer, and doing search, we also cannot do that.
             if network.is_inside_rec_layer() and not network.search_flag:
               network.get_extern_data(target, mark_data_key_as_used=True)
+            if not network.search_flag:
+              # Also, there are cases when we want to have the target as an explicit layer dep,
+              # e.g. when the target has a beam, to derive the search choices.
+              target_layers[target] = get_layer("data:%s" % target)
     if d.get("initial_output", None):  # see get_rec_initial_output
       initial_output = d["initial_output"]
       if isinstance(initial_output, str):
