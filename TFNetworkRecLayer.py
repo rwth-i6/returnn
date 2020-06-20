@@ -2470,8 +2470,8 @@ class _SubnetworkRecCell(object):
     :param tf.Tensor seq_len: shape (batch * beam,), has beam of the "end" layer in case of dynamic sequence lengths,
       otherwise beam of rec_layer.output
     :param dict[str,SearchChoices] search_choices_cache: inner search choices layer -> final search choices
-    :return: (new acc_ta, latest layer choice name, resolved seq_len)
-    :rtype: (tf.TensorArray,str|None,tf.Tensor)
+    :return: (new acc_ta, latest layer choice name, search choices, resolved seq_len)
+    :rtype: (tf.TensorArray,str|None,SearchChoices|None,tf.Tensor)
     """
     import os
     from TFUtil import nd_indices, assert_min_tf_version, expand_dims_unbroadcast, get_valid_scope_name_from_str
@@ -2480,13 +2480,15 @@ class _SubnetworkRecCell(object):
     try:
       layer = self.net.get_layer(layer_name)
     except LayerNotFound:  # layer is not inside loop
-      return acc_ta, None, seq_len
+      return acc_ta, None, None, seq_len
     search_choices = layer.get_search_choices()
     if not search_choices:
-      return acc_ta, None, seq_len
+      return acc_ta, None, None, seq_len
+    if search_choices.owner.network is not self.net:
+      return acc_ta, None, search_choices, seq_len
     if search_choices.keep_raw:
       search_choices_cache[search_choices.owner.name] = search_choices
-      return acc_ta, search_choices.owner.name, seq_len
+      return acc_ta, search_choices.owner.name, search_choices, seq_len
     layer_choice = search_choices.owner
     is_prev_choice = False
     if isinstance(layer_choice, _TemplateLayer):
@@ -2690,7 +2692,7 @@ class _SubnetworkRecCell(object):
       acc_search_choices.set_beam_from_rec(final_choice_rec_vars)
       search_choices_cache[latest_layer_choice.name] = acc_search_choices
 
-    return new_acc_output_ta, latest_layer_choice.name, seq_len
+    return new_acc_output_ta, latest_layer_choice.name, search_choices, seq_len
 
   def _input_layer_used_inside_loop(self, layer_name):
     """
@@ -2987,17 +2989,16 @@ class _SubnetworkRecCell(object):
       with tf.name_scope(self.layer_data_templates[name].layer_class_type.cls_get_tf_scope_name(name)):
         inner_layer = self.net.get_layer(name)
         acc_ta = loop_accumulated["output_%s" % name]
-        acc_ta, latest_layer_choice_name, resolved_seq_len = self._opt_search_resolve(
+        acc_ta, latest_layer_choice_name, search_choices, resolved_seq_len = self._opt_search_resolve(
           layer_name=name, acc_ta=acc_ta, final_net_vars=final_net_vars, seq_len=seq_len,
           search_choices_cache=search_choices_cache)
-        search_choices = search_choices_cache.get(latest_layer_choice_name, None)
         output = self.layer_data_templates[name].output.copy_template_adding_time_dim(time_dim_axis=0)
         output.beam = search_choices.get_beam_info() if search_choices else None
         max_len = tf.reduce_max(resolved_seq_len)
         # We should have accumulated it.
         output.placeholder = tensor_array_stack(acc_ta, stop=max_len)  # e.g. (time,batch,dim)
         output.size_placeholder = {0: resolved_seq_len}
-        if search_choices and search_choices.keep_raw:
+        if latest_layer_choice_name and search_choices and search_choices.keep_raw:
           if output.beam != self.parent_rec_layer.output.beam:
             # TODO this is not quite correct...
             # (It is correct only if you use keep_beam or so...)
