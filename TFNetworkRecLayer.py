@@ -3239,7 +3239,7 @@ class _TemplateLayer(LayerBase):
       return self._cell
     rec_layer = self.network.parent_layer
     assert isinstance(rec_layer, RecLayer)
-    cell = self.network.parent_layer.cell
+    cell = rec_layer.cell
     assert isinstance(cell, _SubnetworkRecCell)
     return cell
 
