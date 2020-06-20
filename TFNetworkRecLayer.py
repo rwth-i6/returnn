@@ -3222,13 +3222,15 @@ class _TemplateLayer(LayerBase):
       layer.output.size_placeholder = {}  # must be set
     if rec_vars_prev_outputs is not None:
       layer.rec_vars_outputs = rec_vars_prev_outputs
+    if layer.output.beam:
+      search_choices = self.network.get_search_choices_from_beam(layer.output.beam)
+      if not search_choices or search_choices.owner.network is self.network:
+        layer.output.beam = layer.output.beam.copy_as_prev_frame()
     if self.search_choices:
       layer.search_choices = SearchChoices(owner=layer, beam_size=self.search_choices.beam_size)
       if rec_vars_prev_outputs:
         layer.search_choices.set_beam_from_own_rec()
       assert layer.output.beam and layer.output.beam.beam_size == self.search_choices.beam_size
-    if layer.output.beam:
-      layer.output.beam = layer.output.beam.copy_as_prev_frame()
     return layer
 
   def _get_cell(self):
