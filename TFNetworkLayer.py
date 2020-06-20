@@ -1789,10 +1789,19 @@ class SearchChoices(object):
     layers_flat = [v for v in nest.flatten(layer_desc) if isinstance(v, LayerBase)]
     if len(layers_flat) <= 1:
       return layer_desc
-    from functools import cmp_to_key
-    common_choices = max([layer.get_search_choices() for layer in layers_flat], key=cmp_to_key(cls.compare))
-    if not common_choices:
+    search_choicess = []
+    for layer in layers_flat:
+      if not layer.output.beam:
+        continue
+      search_choices = layer.get_search_choices()
+      from pprint import pformat
+      assert search_choices, "layer %r has beam %r but no search choices; from layer desc\n%s" % (
+        layer, layer.output.beam, pformat(layer_desc))
+      search_choicess.append(search_choices)
+    if not search_choicess:
       return layer_desc
+    from functools import cmp_to_key
+    common_choices = max(search_choicess, key=cmp_to_key(cls.compare))
     layer_desc = layer_desc.copy()
     layer_desc["_src_common_search_choices"] = common_choices
     return common_choices.translate_to_this_search_beam(layer_desc)
