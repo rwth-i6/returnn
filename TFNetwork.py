@@ -678,9 +678,8 @@ class TFNetwork(object):
     :param dict[str] layer_desc: opts
     :rtype: dict[str]
     """
-    if self.search_flag:
-      from TFNetworkLayer import SearchChoices
-      layer_desc = SearchChoices.translate_to_common_search_beam(layer_desc)
+    from TFNetworkLayer import SearchChoices
+    layer_desc = SearchChoices.translate_to_common_search_beam(layer_desc)
     layer_desc = layer_desc.copy()
     assert "name" not in layer_desc
     assert "network" not in layer_desc
