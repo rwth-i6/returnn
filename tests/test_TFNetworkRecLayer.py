@@ -2820,18 +2820,18 @@ def test_rec_layer_local_att_train_and_search():
       feed_dict, meta_step_info = data_provider.get_feed_dict(single_threaded=True)
       if isinstance(net.train_flag, tf.Tensor):
         feed_dict[net.train_flag] = train_flag
+      fetches = dict_joined(
+        {"data:%s:seq_len" % k: v.get_sequence_lengths() for (k, v) in net.extern_data.data.items()},
+        {"layer:%s:out_seq_len" % k: l.output.get_sequence_lengths() for (k, l) in net.layers.items()},
+        {"rec_layer_in:%s:out_seq_len" % k: l.output.get_sequence_lengths()
+         for (k, l) in out_layer.cell.input_layers_net.layers.items()} if out_layer.cell.input_layers_net else {},
+        {"rec_layer_out:%s:out_seq_len" % k: l.output.get_sequence_lengths()
+         for (k, l) in out_layer.cell.output_layers_net.layers.items()} if out_layer.cell.output_layers_net else {},
+        {"output": out_layer.output.placeholder},
+        {"objective": tf.convert_to_tensor(net.get_objective())} if train_flag else {}
+      ) if train_flag else {"output": out_layer.output.placeholder}
       try:
         print("Output:")
-        fetches = dict_joined(
-            {"data:%s:seq_len" % k: v.get_sequence_lengths() for (k, v) in net.extern_data.data.items()},
-            {"layer:%s:out_seq_len" % k: l.output.get_sequence_lengths() for (k, l) in net.layers.items()},
-            {"rec_layer_in:%s:out_seq_len" % k: l.output.get_sequence_lengths()
-             for (k, l) in out_layer.cell.input_layers_net.layers.items()} if out_layer.cell.input_layers_net else {},
-            {"rec_layer_out:%s:out_seq_len" % k: l.output.get_sequence_lengths()
-             for (k, l) in out_layer.cell.output_layers_net.layers.items()} if out_layer.cell.output_layers_net else {},
-            {"output": out_layer.output.placeholder},
-            {"objective": tf.convert_to_tensor(net.get_objective())} if train_flag else {}
-          ) if train_flag else {"output": out_layer.output.placeholder}
         out = session.run(fetches, feed_dict=feed_dict)
         pprint(out)
       except Exception as exc:
