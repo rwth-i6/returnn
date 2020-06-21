@@ -494,14 +494,12 @@ class LayerBase(object):
         if initial_output not in ["zeros", "ones", "var", "keep_over_epoch", "keep_over_epoch_no_init", "apply(0)"]:
           # if initial_output is not a reserved keyword, assume it is a layer
           d['initial_output'] = get_layer(initial_output)
-    if "n_out" not in d and targets and network.eval_flag:
+    if "n_out" not in d and targets:
       # Must be done here now because loss might be set to None later.
       target = targets[0]  # guess using first target
-      if target in target_layers:
-        d["n_out"] = target_layers[target].output.dim
-      else:
-        d["n_out"] = cls._guess_n_out_from_target_and_opt_loss(
-          network=network, target=target, loss_class_name=d.get("loss", None), get_layer=get_layer)
+      d["n_out"] = cls._guess_n_out_from_target_and_opt_loss(
+        network=network, target=target, target_layers=target_layers,
+        loss_class_name=d.get("loss", None), get_layer=get_layer)
     if d.pop("loss_only_on_non_search", None) and network.search_flag:
       d.pop("loss", None)
       d.pop("loss_scale", None)
@@ -526,17 +524,24 @@ class LayerBase(object):
       assert "loss_opts" not in d, "loss not defined, do not set loss_opts"
 
   @classmethod
-  def _guess_n_out_from_target_and_opt_loss(cls, network, target, loss_class_name, get_layer):
+  def _guess_n_out_from_target_and_opt_loss(cls, network, target, target_layers, loss_class_name, get_layer):
     """
     :param TFNetwork.TFNetwork network:
     :param str target: e.g. "classes"
+    :param dict[str,LayerBase] target_layers:
     :param str|None loss_class_name: e.g. "ce" or None
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     :return: n_out value
     :rtype: int
     """
-    n_out = cls._static_get_target_value(
-      target=target, network=network, mark_data_key_as_used=False, get_layer=get_layer).dim
+    if target in target_layers:
+      target_data = target_layers[target].output
+    else:
+      target_data = cls._static_get_target_value(
+        target=target, network=network, mark_data_key_as_used=False, get_layer=get_layer)
+      if not target_data:
+        return 1  # dummy value during template construction. this would be corrected later
+    n_out = target_data.dim
     if loss_class_name:
       n_out = get_loss_class(loss_class_name).get_auto_output_layer_dim(n_out)
     return n_out
@@ -955,8 +960,10 @@ class LayerBase(object):
     if target.startswith("layer:"):
       if not get_layer:
         get_layer = network.get_layer
-      return SelectSearchSourcesLayer.select_if_needed(
-        get_layer(target[len("layer:"):]), search_choices=search_choices).output
+      layer = get_layer(target[len("layer:"):])
+      if not layer:  # some get_layer during temp construction might return None
+        return None
+      return SelectSearchSourcesLayer.select_if_needed(layer, search_choices=search_choices).output
     assert network.extern_data.has_data(target), "target %r unknown" % target
     data = network.get_extern_data(target, mark_data_key_as_used=mark_data_key_as_used)
     if search_choices:
@@ -2186,6 +2193,7 @@ class SelectSearchSourcesLayer(InternalLayer):
     :param SearchChoices|None search_choices:
     :rtype: LayerBase
     """
+    assert isinstance(layer, LayerBase)
     if not search_choices:
       return layer
     layer_search_choices = layer.get_search_choices()
