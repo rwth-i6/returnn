@@ -838,7 +838,7 @@ def check_engine_search(extra_rec_kwargs=None):
     assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output", "prob"})
     assert_equal(set(rec_layer.cell.layers_in_loop), set())
   else:
-    assert_equal(set(rec_layer.cell.layers_in_loop), {"prob", "output", "end"})
+    assert_equal(set(rec_layer.cell.layers_in_loop).difference({"data:classes"}), {"prob", "output", "end"})
 
   # Now reinit for search.
   assert not engine.use_search_flag
