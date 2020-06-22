@@ -2375,6 +2375,20 @@ class ActivationLayer(CopyLayer):
     else:
       self.output_before_activation = OutputWithActivation(x)
     self.output.placeholder = self.output_before_activation.y
+    self.output.dtype = self.get_out_data_from_opts(activation=activation, **kwargs).dtype
+
+  @classmethod
+  def get_out_data_from_opts(cls, activation, **kwargs):
+    """
+    :param str activation:
+    :rtype: Data
+    """
+    # Get dtype based on inputs
+    out = super(ActivationLayer, cls).get_out_data_from_opts(**kwargs)
+    # Modify if needed based on activation function
+    if activation == "abs" and out.dtype == "complex64":
+      out.dtype = "float32"
+    return out
 
 
 class BatchNormLayer(CopyLayer):
