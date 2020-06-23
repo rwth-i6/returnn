@@ -2096,7 +2096,10 @@ def test_Loss_NCHW():
       src_nchw.output.size_placeholder = {1: TFCompat.v1.placeholder(shape=(None,), dtype=tf.int32)}
 
     with TFCompat.v1.variable_scope("activation"):
-      activation = ActivationLayer(name="activation", activation="softmax", network=net, sources=[src_nchw])
+      activation = ActivationLayer(
+        name="activation", activation="softmax", network=net, sources=[src_nchw],
+        output=ActivationLayer.get_out_data_from_opts(name="activation", activation="softmax", network=net,
+                                                      sources=[src_nchw]))
 
     target_placeholder = TFCompat.v1.placeholder(shape=(None, None, 16), dtype=tf.float32)
     target_size_placeholder = TFCompat.v1.placeholder(shape=(None,), dtype=tf.int32)
