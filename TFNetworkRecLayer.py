@@ -14,7 +14,7 @@ except ImportError:
   from tensorflow.python.ops import rnn_cell
 from TFNetwork import LayerNotFound
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template, Loss
-from TFUtil import Data, SearchBeam, reuse_name_scope, get_random_seed, select_src_beams
+from TFUtil import Data, SearchBeam, reuse_name_scope, get_random_seed, select_src_beams, DimensionTag
 from Util import NotSpecified
 from Log import log
 
@@ -948,7 +948,7 @@ class _SubnetworkRecCell(object):
     :param Data|None source_data: usually concatenated input from the rec-layer
     :param str|None rec_layer_name:
     """
-    from copy import deepcopy
+    from Util import deepcopy
     if parent_net is None and parent_rec_layer:
       parent_net = parent_rec_layer.network
     if source_data is None and parent_rec_layer:
@@ -963,7 +963,7 @@ class _SubnetworkRecCell(object):
       parent_rec_layer.cell = self
     self.parent_rec_layer = parent_rec_layer
     self.parent_net = parent_net
-    self.net_dict = deepcopy(net_dict)
+    self.net_dict = deepcopy(net_dict, stop_types=[tf.Tensor, tf.Operation, DimensionTag])
     from TFNetwork import TFNetwork, ExternData, LossHolder
     self.net = TFNetwork(
       name="%s/%s:rec-subnet" % (parent_net.name, rec_layer_name),
@@ -1396,8 +1396,8 @@ class _SubnetworkRecCell(object):
         prev_output=prev_outputs.get(name, None),
         rec_vars_prev_outputs=prev_extra.get(name, None))
 
-    from copy import deepcopy
-    net_dict = deepcopy(self.net_dict)
+    from Util import deepcopy
+    net_dict = deepcopy(self.net_dict, stop_types=[tf.Tensor, tf.Operation, DimensionTag])
     for name in net_dict.keys():
       if name in prev_layers:
         net_dict[name]["rec_previous_layer"] = prev_layers[name]
