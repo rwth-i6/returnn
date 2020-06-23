@@ -4812,7 +4812,7 @@ class ConvLayer(_ConcatInputLayer):
             filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
     feature_dim_axis = NotSpecified
     # Swap the dims if the input dim order doesn't fit the flag auto_use_channel_first.
-    if (TFUtil.is_gpu_available() and auto_use_channel_first) or data.is_batch_feature_major:
+    if TFUtil.is_gpu_available() and (auto_use_channel_first or data.is_batch_feature_major):
       feature_dim_axis = 1
       shape = shape[-1:] + shape[:-1]
     return {
