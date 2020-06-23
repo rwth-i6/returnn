@@ -3924,6 +3924,8 @@ def get_initializer(s, seed=None, eval_local_ns=None, dtype=tf.float32):
       if f == 1:
         return TFCompat.v1.ones_initializer(dtype=dtype)
       return TFCompat.v1.constant_initializer(f, dtype=dtype)
+    elif isinstance(f, numpy.ndarray):
+      return TFCompat.v1.constant_initializer(f, dtype=dtype, verify_shape=True)
     if not f:
       raise Exception("invalid initializer: %r" % s)
     if seed is not None:
