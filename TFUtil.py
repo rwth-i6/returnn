@@ -252,6 +252,12 @@ class DimensionTag(object):
           self.src_data.size_placeholder = {}
         self.src_data.size_placeholder[
           self.src_data.get_batch_axis_excluding_batch(self.src_axis)] = self.same_as.dyn_size
+        # if the tag is used in a recurrent layer during search, the placeholder has to be expanded by the beam size
+        if self.src_data.beam and (not self.same_as.src_data or not self.same_as.src_data.beam):
+          for i, v in sorted(self.src_data.size_placeholder.items()):
+            with same_control_flow_ctx(v):
+              self.src_data.size_placeholder[i] = tile_transposed(v, axis=0, multiples=self.src_data.beam.beam_size)
+            self.set_tag_on_size_tensor(self.src_data.size_placeholder[i])
     # If others dyn_size is None but we have a dyn_size, maybe update others dyn_size.
     if self.dyn_size is not None and self.same_as.dyn_size is not self.dyn_size:
       # Could be unset if it comes from the config, or from prev graph creation.
@@ -2125,7 +2131,8 @@ class Data(object):
     axis_wo_batch = self.get_batch_axis_excluding_batch(axis)
     if axis_wo_batch in self.size_placeholder:
       return True  # not quite the same as get_dynamic_axes
-    assert isinstance(self.batch_shape[axis], int)
+    assert isinstance(self.batch_shape[axis], int), (
+      "%s: the requested axis has neither a size_placeholder entry nor a fixed size" % self)
     return False
 
   def get_dynamic_size(self, axis):
