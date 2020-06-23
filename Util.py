@@ -2183,17 +2183,26 @@ def unicode_to_str(s):
   return s
 
 
-def deepcopy(x):
+def deepcopy(x, stop_types=None):
   """
   Simpler variant of copy.deepcopy().
   Should handle some edge cases as well, like copying module references.
 
   :param T x: an arbitrary object
+  :param list[type]|None stop_types: objects of these types will not be deep-copied, only the reference is passed
   :rtype: T
   """
   # See also class Pickler from TaskSystem.
   # Or: https://mail.python.org/pipermail/python-ideas/2013-July/021959.html
   from TaskSystem import Pickler, Unpickler
+
+  persistent_memo = {}  # id -> obj
+
+  def persistent_id(obj):
+    if stop_types and isinstance(obj, tuple(stop_types)):
+      persistent_memo[id(obj)] = obj
+      return id(obj)
+    return None
 
   def pickle_dumps(obj):
     """
@@ -2202,6 +2211,7 @@ def deepcopy(x):
     """
     sio = BytesIO()
     p = Pickler(sio)
+    p.persistent_id = persistent_id
     p.dump(obj)
     return sio.getvalue()
 
@@ -2212,6 +2222,7 @@ def deepcopy(x):
     :rtype: object
     """
     p = Unpickler(BytesIO(s))
+    p.persistent_load = persistent_memo.__getitem__
     return p.load()
 
   s = pickle_dumps(x)
