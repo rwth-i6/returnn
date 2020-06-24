@@ -20,11 +20,13 @@ General rules when contributing to the code of RETURNN:
    In that case, I very much recommend to use an IDE like PyCharm which will help you keeping these standards.)
 * Make sure all tests pass.
 * At the time being, we want to support earlier versions of TF 1
-  (consider at least TF 1.8, but maybe even TF 1.4).
+  (consider at least TF 1.8, but maybe even TF 1.4)
+  and also the most recent TF versions.
   So do not break existing setups.
   However, for new features, it is ok to target TF >=1.14
   (which already provides `tf.compat`),
-  and in general to use newer TF features (even maybe TF >=2), as long as this is just optional.
+  and in general to use newer TF features (even maybe TF >=2),
+  as long as your new feature (new layer or so) is just optional.
   For older TF support, `TFCompat.py` might be helpful. (See code for examples.)
 
 About new features:
