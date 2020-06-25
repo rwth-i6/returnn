@@ -1334,6 +1334,12 @@ class TranslationDataset(CachedDataset2):
     """
     return True
 
+  def get_all_tags(self):
+    """
+    :rtype: list[str]
+    """
+    return [self._tag_prefix + str(line_nr) for line_nr in range(len(self._data[self.main_source_data_key]))]
+
   def get_corpus_seq_idx(self, seq_idx):
     """
     :param int seq_idx:
