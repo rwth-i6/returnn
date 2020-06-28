@@ -596,6 +596,8 @@ class Runner(object):
             self.data_provider.current_dataset_reached_end = True
             break
           print("TensorFlow exception:", exc, file=log.v1)
+          # With Horovod: We are likely out-of-sync now. Avoid any further communication.
+          self._horovod_stopped_runner = True
           # Extra info will be printed below.
           raise
 
