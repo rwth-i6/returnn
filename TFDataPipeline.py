@@ -261,12 +261,12 @@ class FeedDictDataProvider(DataProviderBase):
     """
     Stop the thread.
     """
-    self.dataset.finish_epoch()
-    if not self.thread:
-      return
     self.coord.request_stop()
-    self._flush_all_data()
-    self.thread.join()
+    if self.thread:
+      self._flush_all_data()
+      self.thread.join()
+      self.thread = None
+    self.dataset.finish_epoch()
 
   def get_next_batch(self, consider_batch_slice):
     """
