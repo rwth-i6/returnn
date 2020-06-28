@@ -643,7 +643,7 @@ class Runner(object):
       self.run_exception = exc
 
     except BaseException as exc:
-      print("Exception %r in step %r." % (exc, step), file=log.v1)
+      print("Exception %r in step %r. (pid %i)" % (exc, step, os.getpid()), file=log.v1)
       if not isinstance(exc, CancelTrainingException):
         help_on_tf_exception(
           session=sess,
@@ -1399,7 +1399,7 @@ class Engine(EngineBase):
       if trainer.device_crash_batch is not None:  # Otherwise we got an unexpected exception - a bug in our code.
         if self.model_filename:
           self.save_model(self.get_epoch_model_filename() + ".crash_%i" % trainer.device_crash_batch)
-      print("Trainer not finalized, quitting.", file=log.v1)
+      print("Trainer not finalized, quitting. (pid %i)" % os.getpid(), file=log.v1)
       sys.exit(1)
 
     if any(numpy.isinf(list(trainer.score.values()))) or any(numpy.isnan(list(trainer.score.values()))):
