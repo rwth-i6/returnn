@@ -8173,7 +8173,9 @@ class HDFDumpLayer(LayerBase):
       tf.int64,  # return value is ignored
       stateful=True)
 
-    self.network.register_post_control_dependencies([tf_write])
+    import Util
+    if Util.should_write_to_disk(config=self.network.get_config()):
+      self.network.register_post_control_dependencies([tf_write])
 
   def _at_graph_reset(self):
     if self.hdf_writer:

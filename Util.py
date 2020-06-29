@@ -3077,6 +3077,21 @@ def log_runtime_info_to_dir(path, config):
       raise
 
 
+def should_write_to_disk(config):
+  """
+  :param Config.Config config:
+  :rtype: bool
+  """
+  if config.is_true("use_horovod"):
+    # noinspection PyPackageRequirements,PyUnresolvedReferences
+    import horovod.tensorflow as hvd
+    if hvd.rank() != 0:
+      return False
+  if config.is_true("dry_run"):
+    return False
+  return True
+
+
 class NativeCodeCompiler(object):
   """
   Helper class to compile native C/C++ code on-the-fly.

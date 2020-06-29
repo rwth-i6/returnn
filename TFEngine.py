@@ -1550,14 +1550,8 @@ class Engine(EngineBase):
     :return: whether to perform save on disk in this process. e.g. for Horovod rank != 0, do not save.
     :rtype: bool
     """
-    if self.config.is_true("use_horovod"):
-      # noinspection PyPackageRequirements,PyUnresolvedReferences
-      import horovod.tensorflow as hvd
-      if hvd.rank() != 0:
-        return False
-    if self.config.is_true("dry_run"):
-      return False
-    return True
+    import Util
+    return Util.should_write_to_disk(config=self.config)
 
   def _is_dataset_evaluated(self, name):
     """
