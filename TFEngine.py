@@ -389,6 +389,8 @@ class Runner(object):
     """
     :param int local_step:
     """
+    if not self.engine.config.is_true("use_horovod"):
+      return
     while True:
       hvd_stop, hvd_error = self._horovod_signal_broadcast(have_more_data=False)
       if hvd_error:
