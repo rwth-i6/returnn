@@ -943,13 +943,16 @@ class TFNetwork(object):
       self._merge_all_summaries = TFCompat.v1.summary.merge_all()
     return self._merge_all_summaries
 
-  def get_fetches_dict(self, config=None, should_train=None, should_eval=None, with_summary=False, with_size=False):
+  def get_fetches_dict(self, config=None, should_train=None, should_eval=None,
+                       with_summary=False, with_size=False,
+                       horovod_collected_reduce_inputs=None):
     """
     :param Config.Config|None config:
     :param bool|None should_train:
     :param bool|None should_eval:
     :param bool with_summary:
     :param bool with_size:
+    :param dict[str,(tf.Tensor,tf.Tensor)]|None horovod_collected_reduce_inputs: will write into. see below
     :return: values and actions which should be calculated and executed in self.run() by the TF session for each step
     :rtype: dict[str,tf.Tensor|tf.Operation]
     """
@@ -977,9 +980,12 @@ class TFNetwork(object):
       from TFUtil import global_tensor
       # noinspection PyUnresolvedReferences,PyPackageRequirements
       import horovod.tensorflow as hvd
-      return global_tensor(
+      out = global_tensor(
         lambda: hvd.allreduce(x, average=average),
-        name="fetch_reduce_sum__" + name.replace(":", "__").replace("/", "_"))
+        name="horovod_fetch_reduce_sum__" + name.replace(":", "__").replace("/", "_"))
+      if horovod_collected_reduce_inputs is not None and x.name not in horovod_collected_reduce_inputs:
+        horovod_collected_reduce_inputs[x.name] = (x, out)
+      return out
 
     def inv_reduce_sum(x, name):
       """
@@ -990,10 +996,7 @@ class TFNetwork(object):
       """
       if not config.is_true("use_horovod"):
         return x
-      from TFUtil import global_tensor
-      return global_tensor(
-        lambda: TFCompat.v1.reciprocal(reduce_sum(TFCompat.v1.reciprocal(x), name=name)),
-        name="fetch_inv_reduce_sum__" + name.replace(":", "__").replace("/", "_"))
+      return TFCompat.v1.reciprocal(reduce_sum(TFCompat.v1.reciprocal(x), name=name))
 
     d = {}
     if with_size:

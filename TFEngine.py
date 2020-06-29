@@ -92,6 +92,7 @@ class Runner(object):
     self.device_crash_batch = None  # type: typing.Optional[int]
     self.start_time = None
     self.elapsed = None
+    self.report_prefix = None  # type: typing.Optional[str]
     self._results_accumulated = NumbersDict()  # entries like "cost:output" or "loss"
     self._inv_norm_accumulated = NumbersDict()  # entries like "output"
     self.num_frames_accumulated = NumbersDict()  # for each data key (eg. "classes"), corresponding number of frames
@@ -104,6 +105,12 @@ class Runner(object):
       assert extra_fetches_callback
     self.extra_fetches_callback = extra_fetches_callback
     self._horovod_stopped_runner = False
+    self._horovod_finish_all = False
+    if engine.network.layers_desc.get("#finish_all_data", False):
+      self._horovod_finish_all = True
+    # With Horovod, during the main session.run, if reduce_type != grad or not training,
+    # the following tensors are enough to ensure that we are in sync.
+    self._horovod_collected_reduce_inputs = {}  # type: typing.Dict[str,(tf.Tensor,tf.Tensor)]  # name -> (input,output)
 
     from Util import terminal_size
     terminal_width, _ = terminal_size()
@@ -135,7 +142,8 @@ class Runner(object):
     d_fetches = self.engine.network.get_fetches_dict(
       config=self.engine.config,
       should_train=self._should_train, should_eval=self._should_eval,
-      with_summary=True, with_size=True)
+      with_summary=True, with_size=True,
+      horovod_collected_reduce_inputs=self._horovod_collected_reduce_inputs)
     d.update(d_fetches)
     if optim_op is not None:
       d["optim_op"] = optim_op
@@ -377,15 +385,31 @@ class Runner(object):
         d[k] = list(r)
     self.extra_fetches_callback(**d)
 
-  def _horovod_finish_data(self):
-    self._horovod_signal_broadcast(have_more_data=False)
+  def _horovod_finish_data(self, local_step):
+    """
+    :param int local_step:
+    """
+    while True:
+      hvd_stop, hvd_error = self._horovod_signal_broadcast(have_more_data=False)
+      if hvd_error:
+        print("WARNING: Horovod error just after finishing the epoch... (pid %i)" % os.getpid(), file=log.v2)
+        return  # or raise? but we just finished. let's first save etc
+      if hvd_stop:  # we expect this
+        return
+      # E.g. horovod_finish_all is enabled. Some other peer is still working.
+      start_time = time.time()
+      self._horovod_empty_step(local_step=local_step)
+      self._print_process(
+        report_prefix="%s (empty Horovod step, pid %i)" % (self.report_prefix, os.getpid()),
+        step=local_step, step_duration=time.time() - start_time, eval_info={})
+      local_step += 1
 
   def _horovod_signal_error(self):
     self._horovod_signal_broadcast(have_more_data=False, error=True)
 
   def _horovod_signal_have_more_data(self):
     """
-    :return: whether to stop (because some other instance stopped), whether an error occured
+    :return: whether to stop (because some other instance stopped), whether an error occurred
     :rtype: (bool, bool)
     """
     return self._horovod_signal_broadcast(have_more_data=True)
@@ -423,13 +447,36 @@ class Runner(object):
         have_more_data_placeholder: 1 if have_more_data else 0,
         have_error_placeholder: 1 if error else 0})
     stop = False
-    if sum_have_data < hvd.size() or sum_have_error > 0:
-      # Some of the peers do not have data anymore. Or some peer had an error.
-      # This means we should stop. Other peers will not expect further signals.
-      stop = True
-      self._horovod_stopped_runner = True
     error_occurred = sum_have_error > 0
+    if error_occurred:  # some peer had an error
+      stop = True
+    if self._horovod_finish_all:
+      if sum_have_data == 0:  # no peer has data anymore
+        stop = True
+    else:
+      if sum_have_data < hvd.size():  # some of the peers do not have data anymore
+        stop = True
+    if stop:
+      # Other peers will not expect further signals.
+      self._horovod_stopped_runner = True
     return stop, error_occurred
+
+  def _horovod_empty_step(self, local_step):
+    """
+    Call this if you want to proceed one step without doing anything.
+    E.g. when this local rank has finished the dataset but some other rank has not yet.
+
+    :param int local_step:
+    """
+    assert not self._should_train or self.engine.config.value("horovod_reduce_type", "") != "grad"
+    feed_dict = {}
+    fetches = {}
+    for key, (tensor_in, tensor_out) in self._horovod_collected_reduce_inputs.items():
+      feed_dict[tensor_in] = 0.0  # should be scalar
+      fetches[key] = tensor_out
+    self.engine.tf_session.run(fetches)
+    # Need to call this to keep communication in sync.
+    self._horovod_sync_params(local_step=local_step)
 
   def _horovod_sync_params(self, local_step, is_final=False):
     """
@@ -476,6 +523,7 @@ class Runner(object):
     """
     :param str report_prefix: prefix for logging, e.g. "train"
     """
+    self.report_prefix = report_prefix
     sess = self.engine.tf_session
     if self.engine.config.has("tf_log_dir"):
       logdir = self.engine.config.value("tf_log_dir", None)
@@ -628,7 +676,7 @@ class Runner(object):
         assert step + step_offset == final_global_train_step
 
       self._finalize(num_steps=step)
-      self._horovod_finish_data()
+      self._horovod_finish_data(local_step=step)
       self._horovod_sync_params(local_step=step, is_final=True)
 
       if self.stats:
