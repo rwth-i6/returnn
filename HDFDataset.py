@@ -890,7 +890,7 @@ class SimpleHDFWriter:
   Note that we dump to a temp file first, and only at :func:`close` we move it over to the real destination.
   """
 
-  def __init__(self, filename, dim, labels=None, ndim=None, extra_type=None, swmr=False):
+  def __init__(self, filename, dim, labels=None, ndim=None, extra_type=None, swmr=False, extend_existing_file=False):
     """
     :param str filename: Create file, truncate if exists
     :param int|None dim:
@@ -898,10 +898,12 @@ class SimpleHDFWriter:
     :param list[str]|None labels:
     :param dict[str,(int,int,str)]|None extra_type: key -> (dim,ndim,dtype)
     :param bool swmr: see http://docs.h5py.org/en/stable/swmr.html
+    :param bool extend_existing_file: True also means we expect that it exists
     """
     from Util import hdf5_strings, unicode
     import tempfile
     import os
+    import shutil
     if ndim is None:
       if dim is None:
         ndim = 1
@@ -913,34 +915,48 @@ class SimpleHDFWriter:
     if labels:
       assert len(labels) == dim
     self.filename = filename
-    # By default, we should not override existing data.
-    # If we want that at some later point, we can introduce an option for it.
-    assert not os.path.exists(self.filename)
     tmp_fd, self.tmp_filename = tempfile.mkstemp(suffix=".hdf")
     os.close(tmp_fd)
-    self._file = h5py.File(self.tmp_filename, "w", libver='latest' if swmr else None)
-
-    self._file.attrs['numTimesteps'] = 0  # we will increment this on-the-fly
-    self._file.attrs['inputPattSize'] = dim or 1
-    self._file.attrs['numDims'] = 1  # ignored?
-    self._file.attrs['numLabels'] = dim or 1
-    self._file.attrs['numSeqs'] = 0  # we will increment this on-the-fly
-    if labels:
-      hdf5_strings(self._file, 'labels', labels)
+    self.extend_existing_file = extend_existing_file
+    if extend_existing_file:
+      assert os.path.exists(self.filename)
+      shutil.copyfile(self.filename, self.tmp_filename)
     else:
-      self._file.create_dataset('labels', (0,), dtype="S5")  # dtype string length does not matter
+      # By default, we should not override existing data.
+      assert not os.path.exists(self.filename)
+    self._file = h5py.File(
+      self.tmp_filename,
+      "r+" if extend_existing_file else "w",
+      libver='latest' if swmr else None)
+
+    if not extend_existing_file:
+      self._file.attrs['numTimesteps'] = 0  # we will increment this on-the-fly
+      self._file.attrs['inputPattSize'] = dim or 1
+      self._file.attrs['numDims'] = 1  # ignored?
+      self._file.attrs['numLabels'] = dim or 1
+      self._file.attrs['numSeqs'] = 0  # we will increment this on-the-fly
+      if labels:
+        hdf5_strings(self._file, 'labels', labels)
+      else:
+        self._file.create_dataset('labels', (0,), dtype="S5")  # dtype string length does not matter
 
     self._datasets = {}  # type: typing.Dict[str, h5py.Dataset]  # key -> data
     # seq_length idx represents (seq_idx,data_key_idx),
     # where data_key_idx == 0 is for the main input data,
     # and otherwise data_key_idx == 1 + sorted(self._prepared_extra).index(data_key).
     # data_key_idx must allow for 2 entries by default, as HDFDataset assumes 'classes' by default.
-    self._seq_lengths = self._file.create_dataset("seqLengths", (0, 2), dtype='i', maxshape=(None, None))
+    if extend_existing_file:
+      self._seq_lengths = self._file["seqLengths"]
+    else:
+      self._seq_lengths = self._file.create_dataset("seqLengths", (0, 2), dtype='i', maxshape=(None, None))
     # Note about strings in HDF: http://docs.h5py.org/en/stable/strings.html
     # Earlier we used S%i, i.e. fixed-sized strings, with the calculated max string length.
-    # noinspection PyUnresolvedReferences
-    dt = h5py.special_dtype(vlen=unicode)
-    self._seq_tags = self._file.create_dataset('seqTags', (0,), dtype=dt, maxshape=(None,))
+    if extend_existing_file:
+      self._seq_tags = self._file["seqTags"]
+    else:
+      # noinspection PyUnresolvedReferences
+      dt = h5py.special_dtype(vlen=unicode)
+      self._seq_tags = self._file.create_dataset('seqTags', (0,), dtype=dt, maxshape=(None,))
 
     self._extra_num_time_steps = {}  # type: typing.Dict[str,int]  # key -> num-steps
     self._prepared_extra = set()
@@ -969,7 +985,7 @@ class SimpleHDFWriter:
       assert data_key != "inputs"
       if data_key in self._prepared_extra:
         return
-      if not self._prepared_extra:
+      if not self._prepared_extra and not self.extend_existing_file:
         # For the first time, need to create the groups.
         self._file.create_group('targets/data')
         self._file.create_group('targets/size')
@@ -983,13 +999,18 @@ class SimpleHDFWriter:
       if dtype == "string":
         # noinspection PyUnresolvedReferences
         dtype = h5py.special_dtype(vlen=str)
-      self._datasets[data_key] = self._file['targets/data'].create_dataset(
-        data_key, shape=[d if d else 0 for d in shape], dtype=dtype, maxshape=shape)
-      self._file['targets/size'].attrs[data_key] = [dim or 1, ndim]
-      self._extra_num_time_steps[data_key] = 0
+      if self.extend_existing_file:
+        self._datasets[data_key] = self._file['targets/data'][data_key]
+        assert shape[0] is None
+        self._extra_num_time_steps[data_key] = self._datasets[data_key].shape[0]
+      else:
+        self._datasets[data_key] = self._file['targets/data'].create_dataset(
+          data_key, shape=[d if d else 0 for d in shape], dtype=dtype, maxshape=shape)
+        self._file['targets/size'].attrs[data_key] = [dim or 1, ndim]
+        self._extra_num_time_steps[data_key] = 0
       self._prepared_extra.add(data_key)
       added_count += 1
-    if added_count:
+    if added_count and not self.extend_existing_file:
       assert self._prepared_extra
       self._seq_lengths.resize(1 + len(self._prepared_extra), axis=1)
     return bool(added_count)
@@ -1003,6 +1024,9 @@ class SimpleHDFWriter:
     """
     assert raw_data.ndim >= 1
     name = "inputs"
+    if self.extend_existing_file:
+      # Just expect that the same dataset already exists.
+      self._datasets[name] = self._file[name]
     if name not in self._datasets:
       self._datasets[name] = self._file.create_dataset(
         name, raw_data.shape, raw_data.dtype, maxshape=tuple(None for _ in raw_data.shape))
@@ -1049,7 +1073,7 @@ class SimpleHDFWriter:
     if self._prepare_extra({data_key: (dim, raw_data.ndim, dtype)}):
       # We added it now. Maybe other extra data keys were added before. The data_key_idx is different now.
       # Thus, seq_lengths might have become invalid. Reinit them.
-      assert seq_idx == 0  # We can only do that in the beginning.
+      assert seq_idx == 0 or self.extend_existing_file  # We can only do that in the beginning.
       for data_key_idx_0, data_key_ in enumerate(sorted(self._prepared_extra)):
         self._seq_lengths[seq_idx, data_key_idx_0 + 1] = self._extra_num_time_steps[data_key_]
 
@@ -1144,8 +1168,12 @@ class SimpleHDFWriter:
       self._file.close()
       self._file = None
     if self.tmp_filename:
-      assert not os.path.exists(self.filename)
-      shutil.copyfile(self.tmp_filename, self.filename)
+      if not self.extend_existing_file:
+        assert not os.path.exists(self.filename)
+        # Otherwise we have made sure that the existing file was copied and expanded.
+      tmp_dest_filename = "%s/.%s.copying" % (os.path.dirname(self.filename) or ".", os.path.basename(self.filename))
+      shutil.copyfile(self.tmp_filename, tmp_dest_filename)
+      shutil.move(tmp_dest_filename, self.filename)
       os.remove(self.tmp_filename)
       self.tmp_filename = None
 

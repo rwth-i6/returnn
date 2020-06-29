@@ -404,6 +404,40 @@ def test_SimpleHDFWriter_ndim1_var_len():
       reader.data["sizes"][i],)
 
 
+def test_SimpleHDFWriter_extend_existing_file():
+  fn = get_test_tmp_file(suffix=".hdf")
+  os.remove(fn)  # SimpleHDFWriter expects that the file does not exist
+  n_dim = 3
+  writer = SimpleHDFWriter(filename=fn, dim=n_dim, labels=None)
+  seq_lens = [2, 3]
+  writer.insert_batch(
+    inputs=numpy.random.normal(size=(len(seq_lens), max(seq_lens), n_dim)).astype("float32"),
+    seq_len=seq_lens,
+    seq_tag=["seq-%i" % i for i in range(len(seq_lens))])
+  writer.close()
+  assert os.path.exists(fn)
+
+  writer = SimpleHDFWriter(filename=fn, dim=n_dim, labels=None, extend_existing_file=True)
+  seq_lens2 = [4, 3, 2]
+  writer.insert_batch(
+    inputs=numpy.random.normal(size=(len(seq_lens2), max(seq_lens2), n_dim)).astype("float32"),
+    seq_len=seq_lens2,
+    seq_tag=["seq-%i" % (i + len(seq_lens)) for i in range(len(seq_lens2))])
+  writer.close()
+  seq_lens += seq_lens2
+
+  dataset = HDFDataset(files=[fn])
+  reader = DatasetTestReader(dataset=dataset)
+  reader.read_all()
+  assert "data" in reader.data_keys  # "classes" might be in there as well, although not really correct/existing
+  assert reader.data_sparse["data"] is False
+  assert list(reader.data_shape["data"]) == [n_dim]
+  assert reader.data_dtype["data"] == "float32"
+  assert len(seq_lens) == reader.num_seqs
+  for i, seq_len in enumerate(seq_lens):
+    assert reader.seq_lens[i]["data"] == seq_len
+
+
 @unittest.skip("unfinished...")
 def test_SimpleHDFWriter_swmr():
   fn = get_test_tmp_file(suffix=".hdf")
