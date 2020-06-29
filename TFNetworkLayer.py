@@ -8024,6 +8024,11 @@ class HDFDumpLayer(LayerBase):
   """
   Dumps into HDF file, compatible to :class:`HDFDataset`.
 
+  The HDF will be written to disk under the specified filename, if there was no error,
+  by default at graph reset, via :func:`TFNetwork.register_graph_reset_callback`.
+  Or after the dataset iteration run loop, with dump_per_run,
+  via :func:`TFNetwork.register_run_finished_callback`.
+
   Common usage would be to add this to your network with "is_output_layer": True,
   such that you don't need to make other layers depend on it.
 
@@ -8032,14 +8037,15 @@ class HDFDumpLayer(LayerBase):
   layer_class = "hdf_dump"
 
   def __init__(self, filename, extra=None, dump_whole_batches=False, labels=None,
-               extend_existing_file=False,
+               extend_existing_file=False, dump_per_run=False,
                **kwargs):
     """
-    :param str filename:
+    :param str|(()->str) filename:
     :param None|dict[str,LayerBase] extra:
     :param bool dump_whole_batches: dumps the whole batch as a single sequence into the HDF
     :param list[str]|None labels:
     :param bool extend_existing_file: True also means we expect that it exists
+    :param bool dump_per_run: write via :func:`TFNetwork.register_run_finished_callback`
     """
     super(HDFDumpLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1
@@ -8082,8 +8088,13 @@ class HDFDumpLayer(LayerBase):
       # noinspection PyBroadException
       try:
         if not self.hdf_writer:
+          filename_ = self.filename
+          if callable(filename_):
+            assert dump_per_run  # does not make sense otherwise
+            filename_ = filename_(**self.network.get_run_opts())
+          assert isinstance(filename_, str)
           self.hdf_writer = SimpleHDFWriter(
-            filename=self.filename,
+            filename=filename_,
             extend_existing_file=extend_existing_file,
             dim=data.dim, ndim=ndim,
             labels=labels,
@@ -8094,7 +8105,9 @@ class HDFDumpLayer(LayerBase):
                 value.dtype)
               for (key, value) in self.extra.items()
             })
-          self.network.register_graph_reset_callback(self._at_graph_reset)
+          if dump_per_run:
+            self.network.register_run_finished_callback(self._maybe_close)
+          self.network.register_graph_reset_callback(self._maybe_close)
 
         n_batch = data_np.shape[0]
         assert sizes.shape == (len(data.size_placeholder), n_batch) if data.size_placeholder else (0,)
@@ -8181,17 +8194,18 @@ class HDFDumpLayer(LayerBase):
       stateful=True)
 
     import Util
+    # The check covers multi-GPU and maybe dry-run.
+    # Note that for multi-GPU, horovod_dataset_distribution "shard" would need some other treatment,
+    # which is not yet implemented!
+    # In that case, we could gather all the batches.
     if Util.should_write_to_disk(config=self.network.get_config()):
       self.network.register_post_control_dependencies([tf_write])
 
   def _maybe_close(self):
     if self.hdf_writer:
-      print("HDFDumpLayer, wrote %i seqs to file %r." % (self.num_seqs_written, self.filename))
+      print("HDFDumpLayer, wrote %i seqs to file %r." % (self.num_seqs_written, self.hdf_writer.filename))
       self.hdf_writer.close()
       self.hdf_writer = None
-
-  def _at_graph_reset(self):
-    self._maybe_close()
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, **kwargs):

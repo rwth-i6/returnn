@@ -75,6 +75,7 @@ class Runner(object):
     engine.network.extern_data.check_matched_dataset(
       dataset=dataset, used_data_keys=engine.network.get_used_data_keys())
     self.engine = engine
+    self.dataset_name = dataset_name
     # noinspection PyProtectedMember
     self.data_provider = self.engine._get_data_provider(dataset_name=dataset_name, dataset=dataset, batches=batches)
     assert isinstance(self.data_provider, DataProviderBase)
@@ -573,6 +574,7 @@ class Runner(object):
     try:
       # step is like mini-batch in our usual terminology
       step = 0
+      self.engine.network.set_run_opts(epoch=self.engine.epoch, dataset_name=self.dataset_name)
       fetches_dict = self._get_fetches_dict()
       # After get_fetches_dict, maybe some new uninitialized vars. Last check.
       self.engine.check_uninitialized_vars()
@@ -677,9 +679,10 @@ class Runner(object):
         final_global_train_step = self.engine.network.get_global_train_step(session=sess)
         assert step + step_offset == final_global_train_step
 
-      self._finalize(num_steps=step)
       self._horovod_finish_data(local_step=step)
       self._horovod_sync_params(local_step=step, is_final=True)
+      self.engine.network.set_run_finished()
+      self._finalize(num_steps=step)
 
       if self.stats:
         print("Stats:", file=log.v1)
@@ -716,6 +719,8 @@ class Runner(object):
       try_and_ignore_exception(coord.request_stop)
       try_and_ignore_exception(lambda: coord.join(threads))
       try_and_ignore_exception(self.data_provider.stop_threads)
+      # ignored if called before
+      try_and_ignore_exception(lambda: self.engine.network.set_run_finished(error_occurred=True))
       self.elapsed = time.time() - self.start_time
 
 

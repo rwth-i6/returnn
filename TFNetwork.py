@@ -360,6 +360,8 @@ class TFNetwork(object):
     self._batch_dim = None  # see get_data_batch_dim
     self._merge_all_summaries = None  # type: typing.Optional[tf.Tensor]
     self._graph_reset_callbacks = []  # type: typing.List[typing.Callable]
+    self._run_opts = {}  # type: typing.Dict[str]
+    self._run_finished_callbacks = []  # type: typing.List[typing.Callable]
     self._map_search_beam_to_search_choices = {}  # type: typing.Dict[TFUtil.SearchBeam,"TFNetworkLayer.SearchChoices"]
 
   def __repr__(self):
@@ -1915,14 +1917,58 @@ class TFNetwork(object):
     """
     :rtype: list[()->None]
     """
-    return self._graph_reset_callbacks
+    return self.get_root_network()._graph_reset_callbacks
 
   def call_graph_reset_callbacks(self):
     """
     Calls any callbacks registered via :func:`register_graph_reset_callback`.
     """
-    for cb in self._graph_reset_callbacks:
+    for cb in self.get_graph_reset_callbacks():
       cb()
+
+  def set_run_opts(self, epoch, dataset_name):
+    """
+    The run options are valid during one loop over some dataset.
+
+    Contrary to epoch_step, train_flag, etc, we do not provide these as TF placeholders,
+    for convenience, because it is not needed right now.
+    If it is needed, it probably is easier to introduce auxiliary TF variables (on CPU) instead
+    and just set them once here.
+
+    :param int epoch:
+    :param str|None dataset_name:
+    """
+    root_net = self.get_root_network()
+    root_net._run_opts = dict(epoch=epoch, dataset_name=dataset_name)
+
+  def get_run_opts(self):
+    """
+    :rtype: dict[str]
+    """
+    opts = self.get_root_network()._run_opts
+    assert opts, "set_run_opts not called?"
+    return opts.copy()
+
+  def register_run_finished_callback(self, cb):
+    """
+    :param function cb:
+    """
+    self.get_root_network()._run_finished_callbacks.append(cb)
+
+  def set_run_finished(self, error_occurred=False):
+    """
+    Maybe calls any callbacks registered via :func:`register_run_finished_callback`
+    (if no error occurred)
+    and cleans up the run opts.
+
+    :param bool error_occurred:
+    """
+    root_net = self.get_root_network()
+    if not error_occurred:
+      for cb in root_net._run_finished_callbacks:
+        cb()
+    root_net._run_finished_callbacks[:] = []
+    root_net._run_opts.clear()
 
   @classmethod
   def get_network_stack(cls):
