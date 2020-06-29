@@ -1895,13 +1895,17 @@ class TFNetwork(object):
     """
     Note: These callbacks are not called automatically.
     You explicitly have to call :func:`call_graph_reset_callbacks`.
+
     Note: We don't store this in the graph itself (e.g. via tf.get_collection),
     as we don't want to serialize this
     (which would also lead to an error, because it cannot be serialized).
+
     Note: Currently these callbacks might get called multiple times,
     so make sure that this is not a problem.
     Also make sure that the network/session is still in a valid state after this has been called,
     e.g. such that further session runs would still work correctly.
+
+    Note: These callbacks will only be called if there was not any error.
 
     :param function cb:
     """

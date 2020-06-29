@@ -760,12 +760,12 @@ class Engine(EngineBase):
     self.preload_from_files = None  # type: typing.Optional[typing.Dict[str,typing.Dict[str]]]
     self.max_seqs = None  # type: typing.Optional[int]
 
-  def finalize(self):
+  def finalize(self, error_occurred=False):
     """
     Finalizes the TF session, network, graph.
     """
     self._close_tf_session()
-    self._reset_graph()
+    self._reset_graph(error_occurred=error_occurred)
 
   def get_const_tensor(self, key, value):
     """
@@ -839,12 +839,14 @@ class Engine(EngineBase):
     # For debugging, see tfdbg.LocalCLIDebugWrapperSession.
     self.tf_session = TFCompat.v1.Session(**session_opts)
 
-  def _reset_graph(self):
+  def _reset_graph(self, error_occurred=False):
     """
     Resets the default graph (of the current thread),
     and clears up any cached tensors created in it.
+
+    :param bool error_occurred:
     """
-    if self.network:
+    if self.network and not error_occurred:
       self.network.call_graph_reset_callbacks()
     TFCompat.v1.reset_default_graph()
     self._checked_uninitialized_vars = False

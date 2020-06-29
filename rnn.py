@@ -411,9 +411,11 @@ def init(config_filename=None, command_line_options=(), config_updates=None, ext
     init_engine(devices)
 
 
-def finalize():
+def finalize(error_occurred=False):
   """
   Cleanup at the end.
+
+  :param bool error_occurred:
   """
   print("Quitting", file=getattr(log, "v4", sys.stderr))
   global quit_returnn
@@ -424,7 +426,7 @@ def finalize():
       for device in engine.devices:
         device.terminate()
     elif BackendEngine.is_tensorflow_selected():
-      engine.finalize()
+      engine.finalize(error_occurred=error_occurred)
 
 
 def need_data():
@@ -648,7 +650,7 @@ def main(argv):
     print("KeyboardInterrupt", file=getattr(log, "v3", sys.stderr))
     if getattr(log, "verbose", [False] * 6)[5]:
       sys.excepthook(*sys.exc_info())
-  finalize()
+  finalize(error_occurred=return_code != 0)
   if return_code:
     sys.exit(return_code)
 
