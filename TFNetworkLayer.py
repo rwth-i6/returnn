@@ -8026,15 +8026,20 @@ class HDFDumpLayer(LayerBase):
 
   Common usage would be to add this to your network with "is_output_layer": True,
   such that you don't need to make other layers depend on it.
+
+  It currently uses :class:`SimpleHDFWriter` internally.
   """
   layer_class = "hdf_dump"
 
-  def __init__(self, filename, extra=None, dump_whole_batches=False, labels=None, **kwargs):
+  def __init__(self, filename, extra=None, dump_whole_batches=False, labels=None,
+               extend_existing_file=False,
+               **kwargs):
     """
     :param str filename:
     :param None|dict[str,LayerBase] extra:
     :param bool dump_whole_batches: dumps the whole batch as a single sequence into the HDF
     :param list[str]|None labels:
+    :param bool extend_existing_file: True also means we expect that it exists
     """
     super(HDFDumpLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1
@@ -8078,7 +8083,9 @@ class HDFDumpLayer(LayerBase):
       try:
         if not self.hdf_writer:
           self.hdf_writer = SimpleHDFWriter(
-            filename=self.filename, dim=data.dim, ndim=ndim,
+            filename=self.filename,
+            extend_existing_file=extend_existing_file,
+            dim=data.dim, ndim=ndim,
             labels=labels,
             extra_type={
               key: (
@@ -8177,11 +8184,14 @@ class HDFDumpLayer(LayerBase):
     if Util.should_write_to_disk(config=self.network.get_config()):
       self.network.register_post_control_dependencies([tf_write])
 
-  def _at_graph_reset(self):
+  def _maybe_close(self):
     if self.hdf_writer:
       print("HDFDumpLayer, wrote %i seqs to file %r." % (self.num_seqs_written, self.filename))
       self.hdf_writer.close()
       self.hdf_writer = None
+
+  def _at_graph_reset(self):
+    self._maybe_close()
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, **kwargs):
