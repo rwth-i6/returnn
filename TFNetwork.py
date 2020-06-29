@@ -2437,6 +2437,7 @@ def help_on_tf_exception(
     op = exception.op
     print("Failing op:", repr(op), file=file)
     assert op is None or isinstance(op, tf.Operation)
+    show_verbose_op_inputs = True
     if op and op.type == "Placeholder":
       # Likely this placeholder is not feeded, but used somewhere.
       # We assume that the usage of it is incorrect.
@@ -2449,7 +2450,12 @@ def help_on_tf_exception(
         input_to_output_ops = find_ops_path_output_to_input(op.outputs[0], fetches=fetches)
         print("Input to output:", file=file)
         pprint(input_to_output_ops, stream=file)
-    if op and op.inputs and not isinstance(exception, tf.errors.ResourceExhaustedError):
+      show_verbose_op_inputs = False
+    if op and op.type.startswith("Horovod"):
+      show_verbose_op_inputs = False
+    if isinstance(exception, tf.errors.ResourceExhaustedError):
+      show_verbose_op_inputs = False
+    if op and op.inputs and show_verbose_op_inputs:
       # The exception occurred in the op, but that means that all the inputs to the op were correctly calculated.
       # It is probably helpful to calculate these again, and show their shape.
       try:
