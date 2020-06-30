@@ -1121,19 +1121,27 @@ class Engine(EngineBase):
         # noinspection PyProtectedMember
         self.train_data.chunk_size, self.train_data.chunk_step = Dataset._parse_chunking(value)
       if key in ["train", "dev", "eval"]:
-        self.dataset_batches.pop(key, None)
-        from Dataset import init_dataset
-        dataset_kwargs = {"name": key}
-        if key != "train":
-          dataset_kwargs.update(Dataset.get_default_kwargs_eval(config=self.config))
-        Dataset.kwargs_update_from_config(config=self.config, kwargs=dataset_kwargs)
-        dataset = init_dataset(value, default_kwargs=dataset_kwargs)
-        old_dataset = getattr(self, "%s_data" % key)
-        if old_dataset:
-          assert isinstance(old_dataset, Dataset)
-          old_dataset.finish_epoch()
-        setattr(self, "%s_data" % key, dataset)
-        updated_datasets[key] = dataset
+        # `train` actually gets some special treatment, but unify nevertheless now.
+        key, value = "eval_datasets", {key: value}
+      if key == "eval_datasets":
+        assert isinstance(value, dict)
+        for key_, value_ in value.items():
+          self.dataset_batches.pop(key_, None)
+          from Dataset import init_dataset
+          dataset_kwargs = {"name": key_}
+          if key_ != "train":
+            dataset_kwargs.update(Dataset.get_default_kwargs_eval(config=self.config))
+          Dataset.kwargs_update_from_config(config=self.config, kwargs=dataset_kwargs)
+          dataset = init_dataset(value_, default_kwargs=dataset_kwargs)
+          old_dataset = self.train_data if key_ == "train" else self.eval_datasets.get(key_)
+          if old_dataset:
+            assert isinstance(old_dataset, Dataset)
+            old_dataset.finish_epoch()
+          if key_ == "train":
+            self.train_data = dataset
+          else:
+            self.eval_datasets[key_] = dataset
+          updated_datasets[key_] = dataset
 
     if self.orig_config:
       # We have updated the config before. Now, first, recover all entries.
