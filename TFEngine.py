@@ -1135,6 +1135,9 @@ class Engine(EngineBase):
         # Note that this might not be 100% correct:
         # E.g. if the dataset explicitly overwrites chunking.
         # However, we assume, if the user explicitly specify to overwrite chunking now, that it should be applied.
+        # Also note, if we overwrite the dataset later, this would be ignored anyway,
+        # but in that case, the newly initialized dataset
+        # would use the right chunking option from the config overwrite.
         # noinspection PyProtectedMember
         self.train_data.chunk_size, self.train_data.chunk_step = Dataset._parse_chunking(value)
       if key in ["train", "dev", "eval"]:
@@ -1160,32 +1163,45 @@ class Engine(EngineBase):
             self.eval_datasets[key_] = dataset
           updated_datasets[key_] = dataset
 
-    if self.orig_config:
-      # We have updated the config before. Now, first, recover all entries.
-      for key, value in self.orig_config.items():
-        set_value(key, value)
-      self.orig_config.clear()
-
     config_overwrites = net_desc.get("#config", {})
-    for key, value in config_overwrites.items():
+    old_orig_config = self.orig_config.copy()
+    self.orig_config.clear()
+    keys = sorted(set(config_overwrites.keys()).union(set(old_orig_config.keys())))
+    # See Dataset.kwargs_update_from_config.
+    for ds_args in ["chunking", "min_chunk_size", "chunking_variance", "batching", "window", "context_window"]:
+      if ds_args in keys:
+        # Add at the beginning. If we later overwrite the dataset, it would use the overwritten config value.
+        keys.remove(ds_args)
+        keys.insert(0, ds_args)
+
+    for key in keys:
+      if key in config_overwrites:
+        value = config_overwrites[key]
+      else:
+        value = old_orig_config[key]
+
       if key == "learning_rate":
         if not self.learning_rate_control:
           print("No lr control, ignore learning rate %r for epoch %i" % (value, epoch), file=log.v3)
           continue
         old_lr = self.learning_rate_control.get_learning_rate_for_epoch(epoch)
         print("Overwrite learning rate for epoch %i: %r -> %r" % (epoch, old_lr, value), file=log.v3)
-        assert self.config.is_true("use_learning_rate_control_always")
+        assert self.config.is_true("use_learning_rate_control_always") or not self.pretrain
         self.learning_rate_control.epoch_data[epoch].learning_rate = value
         continue
 
-      assert key in self.config.typed_dict, "config update key %r -> %r expected to be in orig. config" % (key, value)
-      orig_value = self.config.typed_dict[key]
-      print("Update config key %r for epoch %i: %r -> %r" % (key, epoch, orig_value, value), file=log.v3)
-      self.orig_config[key] = orig_value
+      if key in old_orig_config:
+        orig_value = old_orig_config.pop(key)
+      else:
+        assert key in self.config.typed_dict, "config update key %r -> %r expected to be in orig. config" % (key, value)
+        orig_value = self.config.typed_dict[key]
+      if key in config_overwrites:
+        print("Update config key %r for epoch %i: %r -> %r" % (key, epoch, orig_value, value), file=log.v3)
+        self.orig_config[key] = orig_value
       set_value(key, value)
 
     for dataset in updated_datasets.values():
-      dataset.init_seq_order(epoch=self.epoch)
+      dataset.init_seq_order(epoch=epoch)
 
   def _init_network(self, net_desc, epoch=None):
     """
