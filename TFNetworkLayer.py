@@ -8107,7 +8107,8 @@ class HDFDumpLayer(LayerBase):
             })
           if dump_per_run:
             self.network.register_run_finished_callback(self._maybe_close)
-          self.network.register_graph_reset_callback(self._maybe_close)
+          else:
+            self.network.register_graph_reset_callback(self._maybe_close)
 
         n_batch = data_np.shape[0]
         assert sizes.shape == (len(data.size_placeholder), n_batch) if data.size_placeholder else (0,)
