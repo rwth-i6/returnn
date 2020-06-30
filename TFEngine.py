@@ -744,6 +744,7 @@ class Engine(EngineBase):
     assert BackendEngine.is_tensorflow_selected()
     self.config = config
     self.orig_config = {}  # see _maybe_update_config
+    self.custom_get_net_dict = None  # type: typing.Optional[typing.Callable]
     self.devices_config = self._get_devices_config()
     self._check_devices()
     self.tf_session = None  # type: typing.Optional[TFCompat.v1.Session]
@@ -996,6 +997,27 @@ class Engine(EngineBase):
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
 
+  def _get_net_dict_for_epoch(self, epoch, config=None):
+    """
+    :param int epoch:
+    :param Config.Config|None config:
+    :rtype: dict[str]
+    """
+    if not config:
+      config = self.config
+    if self.is_pretrain_epoch(epoch=epoch):
+      # This would be obsolete if we don't want to load an existing model.
+      # In self.init_train_epoch(), we initialize a new model.
+      net_dict = self.pretrain.get_network_json_for_epoch(epoch)
+    elif self.custom_get_net_dict:
+      net_dict = self.custom_get_net_dict(epoch=epoch)
+      assert isinstance(net_dict, dict), "%s should return dict but returned %s" % (
+        self.custom_get_net_dict, type(net_dict))
+    else:
+      from Config import network_json_from_config
+      net_dict = network_json_from_config(config)
+    return net_dict
+
   def init_network_from_config(self, config=None, net_dict_post_proc=None):
     """
     :param Config.Config|None config:
@@ -1006,6 +1028,7 @@ class Engine(EngineBase):
     self.model_filename = config.value('model', None)
     self.preload_from_files = config.typed_value('preload_from_files', {})
     self.pretrain = pretrain_from_config(config)
+    self.custom_get_net_dict = config.typed_value("get_network")
     self.max_seqs = config.int('max_seqs', -1)
 
     epoch, model_epoch_filename = self.get_epoch_model(config)
@@ -1029,13 +1052,7 @@ class Engine(EngineBase):
       self.epoch = self.start_epoch
     assert self.epoch, "task %r" % config.value("task", "train")
 
-    if self.pretrain:
-      # This would be obsolete if we don't want to load an existing model.
-      # In self.init_train_epoch(), we initialize a new model.
-      net_dict = self.pretrain.get_network_json_for_epoch(self.epoch)
-    else:
-      from Config import network_json_from_config
-      net_dict = network_json_from_config(config)
+    net_dict = self._get_net_dict_for_epoch(epoch=self.epoch, config=config)
     if net_dict_post_proc:
       net_dict = net_dict_post_proc(net_dict)
 
@@ -1307,9 +1324,10 @@ class Engine(EngineBase):
     # In that case initialize output parameters randomly.
     self.network.set_params_by_serialized(
       old_network_params, session=self.tf_session,
-      ignore_wrong_shape=self.is_pretrain_epoch(),
-      copy_param_mode=self.pretrain.copy_param_mode if self.is_pretrain_epoch() else None,
-      ignore_non_existing=self.is_pretrain_epoch())
+      ignore_wrong_shape=self.is_pretrain_epoch() or self.custom_get_net_dict,
+      copy_param_mode=net_desc.get(
+        "#copy_param_mode", self.pretrain.copy_param_mode if self.is_pretrain_epoch() else None),
+      ignore_non_existing=self.is_pretrain_epoch() or self.custom_get_net_dict)
 
   def train(self):
     """
@@ -1369,16 +1387,15 @@ class Engine(EngineBase):
     """
     Init for the current train epoch.
     """
-    if self.is_pretrain_epoch():
-      # Note: For pretrain epochs, we ensure that the last pretrain epoch will have exactly the same
-      # network as we use after pretraining.
-      new_network_desc = self.pretrain.get_network_json_for_epoch(self.epoch)
+    if self.is_pretrain_epoch() or self.custom_get_net_dict:
+      new_network_desc = self._get_net_dict_for_epoch(epoch=self.epoch)
       # Always update config, if needed, even if nothing changed.
       # This might trigger enforcing some learning rate, or so.
       self._maybe_update_config(net_desc=new_network_desc, epoch=self.epoch)
       if self.need_init_new_network(new_network_desc):
         self.init_new_network(new_network_desc)
-      self.network.declare_train_params(**self.pretrain.get_train_param_args_for_epoch(self.epoch))
+      if self.is_pretrain_epoch():
+        self.network.declare_train_params(**self.pretrain.get_train_param_args_for_epoch(self.epoch))
     else:
       if self.need_init_new_network():
         self.init_new_network()
@@ -1481,8 +1498,10 @@ class Engine(EngineBase):
     if (self.network.get_graph_reset_callbacks() and
         # See also init_train_epoch().
         self.need_init_new_network(
-          net_desc=self.pretrain.get_network_json_for_epoch(epoch=self.epoch + 1)
-            if self.is_pretrain_epoch(epoch=self.epoch + 1) else None)):
+          net_desc=(
+            self._get_net_dict_for_epoch(epoch=self.epoch + 1)
+            if (self.is_pretrain_epoch(epoch=self.epoch + 1) or self.custom_get_net_dict)
+            else None))):
       # Do not call it right now, but after eval model. See below.
       should_call_graph_reset_callbacks = True
       # In case that Returnn crashes now during eval (e.g. job timelimit exceeded),
