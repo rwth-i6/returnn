@@ -315,7 +315,7 @@ class Config:
     :type key: str
     :type default: T
     :type index: int | None
-    :rtype: T | object
+    :rtype: T | typing.Any
     """
     value = self.typed_dict.get(key, default)
     if index is not None:
