@@ -85,11 +85,13 @@ class Pretrain:
     :param list[str]|tuple[str] output_layers: used for construction
     :param list[str]|tuple[str] input_layers: used for construction
     """
-    assert copy_param_mode in [None, "ifpossible", "subset"]
+    assert copy_param_mode in [None, "ifpossible", "subset", "reset"]
     if copy_output_layer is None:
       copy_output_layer = copy_param_mode
     if copy_output_layer is None:
       copy_output_layer = "ifpossible"
+    if copy_output_layer == "reset":
+      copy_output_layer = False
     if copy_output_layer:
       assert copy_output_layer is True or copy_output_layer in ["ifpossible", "subset"]
     self.copy_param_mode = copy_param_mode

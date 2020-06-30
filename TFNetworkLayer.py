@@ -870,6 +870,8 @@ class LayerBase(object):
       return
     if self.custom_param_importer:
       copy_param_mode = self.custom_param_importer
+    if copy_param_mode == "reset":
+      return  # just ignore. the random init was already done
     assert copy_param_mode in [None, "ifpossible", "subset"]
     if copy_param_mode:
       ignore_wrong_shape = True
