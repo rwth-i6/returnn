@@ -811,11 +811,17 @@ class CombinedDataset(CachedDataset2):
                data_map,
                data_dims=None,
                data_dtypes=None,
+               sampling_sizes=None,
                window=1, **kwargs):
     """
     :param dict[str,dict[str]] datasets: dataset-key -> dataset-kwargs. including keyword 'class' and maybe 'files'
     :param dict[(str,str),str] data_map: (dataset-key, dataset-data-key) -> self-data-key.
       Should contain 'data' as key. Also defines the target-list, which is all except 'data'.
+    :param dict[str,int]|int sampling_size: dataset-key -> number-of-sequences. If set, the given fixed amount of
+      sequences is taken from each dataset in every epoch (instead of using all). If an int is given, this number
+      is used for all datasets. The sequences will be taken in the order provided by the sub-datasets and we will
+      loop back to the beginning of the dataset each time we reach the end. Sequence ordering will be applied
+      after the sampling. Partition and repeat epoch are not supported when sampling.
     :param dict[str,(int,int)] data_dims: self-data-key -> data-dimension, len(shape) (1 ==> sparse repr).
        Deprecated/Only to double check. Read from data if not specified.
     :param dict[str,str] data_dtypes: self-data-key -> dtype. Read from data if not specified.
@@ -842,6 +848,10 @@ class CombinedDataset(CachedDataset2):
       for key in self.data_keys:
         target_lookup_table[dataset_key].setdefault(key, None)
     self.target_lookup_table = target_lookup_table
+
+    if isinstance(sampling_sizes, int):
+      sampling_sizes = {key: sampling_sizes for key in self.dataset_keys}
+    self.sampling_sizes = sampling_sizes
 
     # This will only initialize datasets needed for features occurring in data_map
     self.datasets = {key: init_dataset(datasets[key]) for key in self.dataset_keys}
@@ -912,7 +922,9 @@ class CombinedDataset(CachedDataset2):
         self.datasets[self.dataset_idx2key_map[dataset_idx]].num_seqs for dataset_idx in range(len(self.datasets))]
       self.dataset_seq_idx_boundaries = self._create_dataset_seq_idx_boundaries()
 
-      if self.seq_ordering == "random_dataset":
+      if self.sampling_sizes:
+        seq_order = self._get_sampling_seq_order()
+      elif self.seq_ordering == "random_dataset":
         seq_order = self._get_random_dataset_seq_order(total_num_seqs)
       else:
         seq_order = self.get_seq_order_for_epoch(
@@ -1013,6 +1025,57 @@ class CombinedDataset(CachedDataset2):
       seq_order = seq_order * self.repeat_epoch
 
     return seq_order
+
+  def _get_sampling_seq_order(self):
+    """
+    Collects a constant amount of sequences from the sub-datasets per epoch according to self.sampling_sizes.
+    Afterwards, sequence ordering is applied to the list of all collected sequences.
+
+    :returns: sequence order
+    :rtype: list[int]
+    """
+    assert self.partition_epoch in [None, 1], "partition_epoch not supported in combination with sampling_sizes."
+    assert self._seq_order_seq_lens_file is None, (
+      "seq_order_seq_lens_file not supported in combination with sampling_sizes.")
+    assert not self.unique_seq_tags, "unique_seq_tags not supported in combination with sampling_sizes."
+    assert self.seq_tags_filter is None, "seq_order_seq_lens_file in combination with sampling_sizes."
+
+    epoch = self.epoch or 1
+
+    total_num_seqs = sum(self.sampling_sizes.values())
+
+    seq_order = numpy.zeros(total_num_seqs, dtype='int32')
+    seq_order_length = 0
+
+    # For each dataset sample sequences and write to seq_order.
+    for dataset_idx in range(len(self.datasets)):
+      dataset_key = self.dataset_idx2key_map[dataset_idx]
+
+      sampling_size = self.sampling_sizes[dataset_key]
+
+      # All sequences should be seen in order. So start where we ended in last epoch.
+      epoch_offset = ((epoch - 1) * sampling_size) % self.datasets[dataset_key].num_seqs
+
+      # Take the next 'sampling_size' sequences. If reached the end, start at the beginning again.
+      dataset_seq_range = numpy.arange(epoch_offset, epoch_offset + sampling_size) % self.datasets[dataset_key].num_seqs
+
+      # Add the start position of the current dataset to get the global index.
+      seq_range = dataset_seq_range + self.dataset_seq_idx_boundaries[dataset_idx]
+
+      # Write the current range of the sequence order.
+      seq_order[seq_order_length:seq_order_length + sampling_size] = seq_range
+      seq_order_length += sampling_size
+
+    # We want to additionally sort the sequences in the current sample. For this, create a sequence order on a
+    # range of length of the number of sequences in the sample. Note that we have to map the indices to make use
+    # of self._get_seq_length here.
+    seq_order_remapping = self.get_seq_order_for_epoch(
+      epoch=epoch, num_seqs=len(seq_order), get_seq_len=lambda i: self._get_seq_length(seq_order[i]))
+
+    # Then use this order to reorder the sequences in the sample.
+    seq_order = numpy.take(seq_order, seq_order_remapping)
+
+    return list(seq_order)
 
   def _get_seq_length(self, seq_idx):
     """
