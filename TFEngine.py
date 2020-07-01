@@ -1045,9 +1045,9 @@ class Engine(EngineBase):
     # If there is an existing model, it might be higher than 1.
     # In that case, epoch == self.start_epoch - 1.
     is_training = config.value('task', 'train') == 'train'
-    is_first_train_epoch = is_training and not epoch
+    is_first_train_epoch = not epoch and (is_training or config.value('task', 'train') == 'initialize_model')
     self.epoch = epoch
-    if not self.epoch and is_training:
+    if is_first_train_epoch:
       assert self.start_epoch >= 1
       self.epoch = self.start_epoch
     assert self.epoch, "task %r" % config.value("task", "train")
