@@ -974,6 +974,9 @@ class TFNetwork(object):
       # The score is fine in each single instance.
       if config.value("horovod_dataset_distribution", "") != "random_seed_offset":
         use_horovod_reduction = True
+      # If we anyway sync each step (via grad reduction), we can also sync the score.
+      if config.value("horovod_reduce_type", "") == "grad":
+        use_horovod_reduction = True
 
     def reduce_sum(x, name, average=False):
       """
