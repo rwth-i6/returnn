@@ -129,6 +129,7 @@ import tensorflow as tf
 from Dataset import Dataset, BatchSetGenerator
 from TFNetwork import ExternData, Data
 import TFCompat
+import TFHorovod
 from Util import NumbersDict
 from Log import log
 
@@ -493,11 +494,10 @@ class InputContext(object):
     self.horovod_enabled = False
     self.horovod_rank = None
     self.horovod_size = None
-    if config.is_true("use_horovod"):
+    if TFHorovod.get_ctx(config=config):
       self.horovod_enabled = True
-      import horovod.tensorflow as hvd
-      self.horovod_rank = hvd.rank()  # rank 0 is the chief
-      self.horovod_size = hvd.size()
+      self.horovod_rank = TFHorovod.get_ctx().rank()  # rank 0 is the chief
+      self.horovod_size = TFHorovod.get_ctx().size()
       self.num_dataset_consumers = self.horovod_size
       raise NotImplementedError  # TODO...
 

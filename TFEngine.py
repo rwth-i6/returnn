@@ -36,6 +36,7 @@ import TFCompat
 from TFNetwork import TFNetwork, ExternData, help_on_tf_exception
 from TFUpdater import Updater
 from TFDataPipeline import FeedDictDataProvider, DatasetDataProvider
+import TFHorovod
 from Util import hms, NumbersDict, BackendEngine
 from pprint import pprint
 
@@ -471,7 +472,7 @@ class Runner(object):
 
     :param int local_step:
     """
-    assert not self._should_train or self.engine.config.value("horovod_reduce_type", "") != "grad"
+    assert not self._should_train or not TFHorovod.get_ctx().is_reduce_type_grad()
     feed_dict = {}
     fetches = {}
     for key, (tensor_in, tensor_out) in self._horovod_collected_reduce_inputs.items():
@@ -491,9 +492,10 @@ class Runner(object):
     :return: TF runtime
     :rtype: float
     """
-    if not self.engine.config.is_true("use_horovod"):
+    hvd_ctx = TFHorovod.get_ctx()
+    if not hvd_ctx:
       return 0.0
-    if self.engine.config.value("horovod_reduce_type", "") != "param":
+    if not hvd_ctx.is_reduce_type_param():
       return 0.0
     if not self._should_train:
       return 0.0
@@ -1940,16 +1942,8 @@ class Engine(EngineBase):
       if self.dataset_provider and feed_dict is not False:
         print("WARNING: dataset_provider is set (via dataset_pipeline) but not used", file=log.v2)
       batch_slice = None
-      if self.config.is_true("use_horovod"):
-        ds_dist_opt = self.config.value("horovod_dataset_distribution", "shard")
-        if ds_dist_opt == "shard":
-          # noinspection PyPackageRequirements,PyUnresolvedReferences
-          import horovod.tensorflow as hvd
-          batch_slice = slice(hvd.rank(), None, hvd.size())
-        elif ds_dist_opt == "random_seed_offset":
-          pass  # nothing needed to be done here
-        else:
-          raise Exception("invalid horovod_dataset_distribution %r" % ds_dist_opt)
+      if TFHorovod.get_ctx() and TFHorovod.get_ctx().is_dataset_distribution_shard():
+        batch_slice = TFHorovod.get_ctx().get_dataset_shard_batch_slice()
       data_provider = FeedDictDataProvider(
         tf_session=self.tf_session, extern_data=self.network.extern_data,
         data_keys=self.network.get_used_data_keys(),

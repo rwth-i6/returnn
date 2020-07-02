@@ -2533,27 +2533,6 @@ class Data(object):
     return common
 
 
-_horovod_is_initialized = False
-
-
-def init_horovod():
-  """
-  Initializes Horovod.
-  Provide this here such that we can remember whether we already initialized before.
-  """
-  global _horovod_is_initialized
-  if _horovod_is_initialized:
-    return
-  import socket
-  # noinspection PyUnresolvedReferences,PyPackageRequirements
-  import horovod.tensorflow as hvd
-  hvd.init()
-  print(
-    "Horovod initialized. Hostname %s, pid %i, rank %i / size %i, local rank %i / local size %i." % (
-      socket.gethostname(), os.getpid(), hvd.rank(), hvd.size(), hvd.local_rank(), hvd.local_size()))
-  _horovod_is_initialized = True
-
-
 class CustomUpdate(object):
   """
   Custom updates will be handled by :class:`TFUpdater`.

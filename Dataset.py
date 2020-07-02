@@ -184,10 +184,10 @@ class Dataset(object):
     config = get_global_config(raise_exception=False)
     if not config:
       return 0
-    if config.is_true("use_horovod") and config.value("horovod_dataset_distribution", "") == "random_seed_offset":
-      # noinspection PyPackageRequirements,PyUnresolvedReferences
-      import horovod.tensorflow as hvd
-      return hvd.rank() * 13
+    if config.is_true("use_horovod"):
+      import TFHorovod
+      if TFHorovod.get_ctx().is_dataset_distribution_random_seed_offset():
+        return TFHorovod.get_ctx().rank() * 13
     return 0
 
   @staticmethod

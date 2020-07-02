@@ -884,12 +884,14 @@ class WrapOptimizer:
       return tf.no_op(name="no_grad_vars_no_op")
 
     grads_and_vars = self._compute_gradients(loss, var_list=var_list)
-    if self.config.is_true("use_horovod") and self.config.value("horovod_reduce_type", "") == "grad":
-      # noinspection PyPackageRequirements,PyUnresolvedReferences
-      import horovod.tensorflow as hvd
-      grads_and_vars = [
-        (hvd.allreduce(grad, average=self.config.is_true("horovod_avg_grad")) if grad is not None else None, var)
-        for (grad, var) in grads_and_vars]
+    if self.config.is_true("use_horovod"):
+      import TFHorovod
+      if TFHorovod.get_ctx().is_reduce_type_grad():
+        # noinspection PyPackageRequirements,PyUnresolvedReferences
+        import horovod.tensorflow as hvd
+        grads_and_vars = [
+          (hvd.allreduce(grad, average=self.config.is_true("horovod_avg_grad")) if grad is not None else None, var)
+          for (grad, var) in grads_and_vars]
 
     var_grads = {var: grad for (grad, var) in grads_and_vars if grad is not None}
     if not var_grads:

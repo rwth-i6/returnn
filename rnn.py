@@ -334,11 +334,9 @@ def init_backend_engine():
         os.environ.get("TF_DEVICE"), config.opt_typed_value("device")), file=log.v4)
       config.set("device", os.environ.get("TF_DEVICE"))
     if config.is_true("use_horovod"):
+      import TFHorovod
+      hvd = TFHorovod.get_ctx(config=config)
       import socket
-      # noinspection PyPackageRequirements,PyUnresolvedReferences
-      import horovod.tensorflow as hvd
-      from TFUtil import init_horovod
-      init_horovod()  # make sure it is initialized
       if "gpu" in config.value("device", "") or os.environ.get("CUDA_VISIBLE_DEVICES", ""):
         # We assume that we want to use a GPU.
         gpu_opts = config.typed_dict.setdefault("tf_session_opts", {}).setdefault("gpu_options", {})
@@ -349,14 +347,8 @@ def init_backend_engine():
       else:
         if hvd.rank() == 0:  # Don't spam in all ranks.
           print("Horovod: Not using GPU.", file=log.v3)
-      horovod_reduce_type = config.value("horovod_reduce_type", "")
-      if horovod_reduce_type == "":
-        horovod_reduce_type = "grad"
-        config.set("horovod_reduce_type", horovod_reduce_type)
-      else:
-        assert horovod_reduce_type in ["grad", "param"], "config option 'horovod_reduce_type' invalid"
       if hvd.rank() == 0:  # Don't spam in all ranks.
-        print("Horovod: Reduce type:", horovod_reduce_type, file=log.v3)
+        print("Horovod: Reduce type:", hvd.get_reduce_type(), file=log.v3)
     from TFUtil import debug_register_better_repr, setup_tf_thread_pools, print_available_devices
     tf_session_opts = config.typed_value("tf_session_opts", {})
     assert isinstance(tf_session_opts, dict)

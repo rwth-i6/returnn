@@ -970,12 +970,9 @@ class TFNetwork(object):
       should_eval = self.eval_flag
     use_horovod_reduction = False
     if config.is_true("use_horovod"):
-      # With random_seed_offset, a sync/reduction here is not needed.
-      # The score is fine in each single instance.
-      if config.value("horovod_dataset_distribution", "") != "random_seed_offset":
-        use_horovod_reduction = True
-      # If we anyway sync each step (via grad reduction), we can also sync the score.
-      if config.value("horovod_reduce_type", "") == "grad":
+      import TFHorovod
+      if TFHorovod.get_ctx().should_sync_every_step():
+        # Note: This logic should be in sync with the logic in _horovod_signal_have_more_data.
         use_horovod_reduction = True
 
     def reduce_sum(x, name, average=False):

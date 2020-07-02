@@ -161,10 +161,8 @@ class Log:
     log_verbosity = config.int_list('log_verbosity', [])
     log_format = config.list('log_format', [])
     if config.is_true("use_horovod"):
-      # noinspection PyPackageRequirements,PyUnresolvedReferences
-      import horovod.tensorflow as hvd
-      from TFUtil import init_horovod
-      init_horovod()  # make sure it is initialized
+      import TFHorovod
+      hvd = TFHorovod.get_ctx(config=config)
       new_logs = []
       for fn in logs:
         fn_prefix, fn_ext = os.path.splitext(fn)
