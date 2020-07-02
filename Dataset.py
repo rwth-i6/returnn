@@ -187,7 +187,7 @@ class Dataset(object):
     if config.is_true("use_horovod"):
       import TFHorovod
       if TFHorovod.get_ctx().is_dataset_distribution_random_seed_offset():
-        return TFHorovod.get_ctx().rank() * 13
+        return TFHorovod.get_ctx().rank() * 16127
     return 0
 
   @staticmethod
