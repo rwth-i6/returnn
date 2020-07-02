@@ -411,11 +411,18 @@ class Runner(object):
   def _horovod_signal_error(self):
     self._horovod_signal_broadcast(have_more_data=False, error=True)
 
-  def _horovod_signal_have_more_data(self):
+  def _horovod_signal_have_more_data(self, local_step):
     """
+    :param int local_step:
     :return: whether to stop (because some other instance stopped), whether an error occurred
     :rtype: (bool, bool)
     """
+    if not TFHorovod.get_ctx():
+      return False, False
+    if not TFHorovod.get_ctx().should_sync_every_step():
+      # We only need to sync for the param sync.
+      if not self._horovod_should_sync_params_now(local_step=local_step):
+        return False, False
     return self._horovod_signal_broadcast(have_more_data=True)
 
   def _horovod_signal_broadcast(self, have_more_data=True, error=False):
@@ -472,15 +479,35 @@ class Runner(object):
 
     :param int local_step:
     """
-    assert not self._should_train or not TFHorovod.get_ctx().is_reduce_type_grad()
-    feed_dict = {}
-    fetches = {}
-    for key, (tensor_in, tensor_out) in self._horovod_collected_reduce_inputs.items():
-      feed_dict[tensor_in] = 0.0  # should be scalar
-      fetches[key] = tensor_out
-    self.engine.tf_session.run(fetches)
+    if self._horovod_collected_reduce_inputs:
+      assert not self._should_train or not TFHorovod.get_ctx().is_reduce_type_grad()
+      feed_dict = {}
+      fetches = {}
+      for key, (tensor_in, tensor_out) in self._horovod_collected_reduce_inputs.items():
+        feed_dict[tensor_in] = 0.0  # should be scalar
+        fetches[key] = tensor_out
+      self.engine.tf_session.run(fetches)
     # Need to call this to keep communication in sync.
     self._horovod_sync_params(local_step=local_step)
+
+  def _horovod_should_sync_params_now(self, local_step, is_final=False):
+    """
+    :param int local_step:
+    :param bool is_final:
+    :rtype: bool
+    """
+    hvd_ctx = TFHorovod.get_ctx()
+    if not hvd_ctx:
+      return False
+    if not hvd_ctx.is_reduce_type_param():
+      return False
+    if not self._should_train:
+      return False
+    if is_final:
+      return True
+    sync_step = hvd_ctx.get_param_sync_step()
+    assert sync_step >= 1
+    return local_step % sync_step == sync_step - 1
 
   def _horovod_sync_params(self, local_step, is_final=False):
     """
@@ -492,16 +519,7 @@ class Runner(object):
     :return: TF runtime
     :rtype: float
     """
-    hvd_ctx = TFHorovod.get_ctx()
-    if not hvd_ctx:
-      return 0.0
-    if not hvd_ctx.is_reduce_type_param():
-      return 0.0
-    if not self._should_train:
-      return 0.0
-    sync_step = self.engine.config.int("horovod_param_sync_step", 1)
-    assert sync_step >= 1
-    if not is_final and local_step % sync_step != sync_step - 1:
+    if not self._horovod_should_sync_params_now(local_step=local_step, is_final=is_final):
       return 0.0
     from TFUtil import global_tensor
     # noinspection PyUnresolvedReferences,PyPackageRequirements
@@ -585,7 +603,7 @@ class Runner(object):
         writer.add_graph(sess.graph)
       hvd_stop = hvd_error = False
       while self.data_provider.have_more_data(session=sess):
-        hvd_stop, hvd_error = self._horovod_signal_have_more_data()
+        hvd_stop, hvd_error = self._horovod_signal_have_more_data(local_step=step)
         if hvd_error:
           raise Exception("Some other Horovod peer failed.")
         if hvd_stop:

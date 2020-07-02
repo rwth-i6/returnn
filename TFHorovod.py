@@ -37,6 +37,7 @@ class HorovodContext:
     self._size = hvd.size()
     self._reduce_type = self._config.value("horovod_reduce_type", "grad")
     assert self._reduce_type in {"grad", "param"}
+    self._param_sync_step = config.int("horovod_param_sync_step", 1)
     self._dataset_distribution = self._config.value("horovod_dataset_distribution", "shard")
     assert self._dataset_distribution in {"shard", "random_seed_offset"}
 
@@ -70,6 +71,13 @@ class HorovodContext:
     :rtype: bool
     """
     return self._reduce_type == "param"
+
+  def get_param_sync_step(self):
+    """
+    :rtype: int
+    """
+    assert self.is_reduce_type_param()
+    return self._param_sync_step
 
   def is_dataset_distribution_shard(self):
     """
