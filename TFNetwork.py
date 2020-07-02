@@ -968,6 +968,12 @@ class TFNetwork(object):
       should_train = self.train_flag
     if should_eval is None:
       should_eval = self.eval_flag
+    use_horovod_reduction = False
+    if config.is_true("use_horovod"):
+      # With random_seed_offset, a sync/reduction here is not needed.
+      # The score is fine in each single instance.
+      if config.value("horovod_dataset_distribution", "") != "random_seed_offset":
+        use_horovod_reduction = True
 
     def reduce_sum(x, name, average=False):
       """
@@ -977,7 +983,7 @@ class TFNetwork(object):
       :return: sum(x) if horovod else x
       :rtype: tf.Tensor
       """
-      if not config.is_true("use_horovod"):
+      if not use_horovod_reduction:
         return x
       from TFUtil import global_tensor
       # noinspection PyUnresolvedReferences,PyPackageRequirements
@@ -996,7 +1002,7 @@ class TFNetwork(object):
       :return: reciprocal(sum(reciprocal(x))) if horovod else x
       :rtype: tf.Tensor
       """
-      if not config.is_true("use_horovod"):
+      if not use_horovod_reduction:
         return x
       return TFCompat.v1.reciprocal(reduce_sum(TFCompat.v1.reciprocal(x), name=name))
 
