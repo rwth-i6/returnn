@@ -35,11 +35,8 @@ class HorovodContext:
     self._local_size = hvd.local_size()
     self._rank = hvd.rank()
     self._size = hvd.size()
-    self._reduce_type = self._config.value("horovod_reduce_type", "grad")
-    assert self._reduce_type in {"grad", "param"}
-    self._param_sync_step = config.int("horovod_param_sync_step", 1)
-    self._dataset_distribution = self._config.value("horovod_dataset_distribution", "shard")
-    assert self._dataset_distribution in {"shard", "random_seed_offset"}
+    # Note: Rather than reading the config here, we will instead read it in the functions below on-the-fly.
+    # This allows e.g. the pretraining or custom get_network to temporarily overwrite the behavior for some epoch.
 
   def should_sync_every_step(self):
     """
@@ -58,32 +55,42 @@ class HorovodContext:
     """
     :rtype: str
     """
-    return self._reduce_type
+    reduce_type = self._config.value("horovod_reduce_type", "grad")
+    assert reduce_type in {"grad", "param"}
+    return reduce_type
 
   def is_reduce_type_grad(self):
     """
     :rtype: bool
     """
-    return self._reduce_type == "grad"
+    return self.get_reduce_type() == "grad"
 
   def is_reduce_type_param(self):
     """
     :rtype: bool
     """
-    return self._reduce_type == "param"
+    return self.get_reduce_type() == "param"
 
   def get_param_sync_step(self):
     """
     :rtype: int
     """
     assert self.is_reduce_type_param()
-    return self._param_sync_step
+    return self._config.int("horovod_param_sync_step", 1)
+
+  def get_dataset_distribution_type(self):
+    """
+    :rtype: str
+    """
+    dataset_distribution = self._config.value("horovod_dataset_distribution", "shard")
+    assert dataset_distribution in {"shard", "random_seed_offset"}
+    return dataset_distribution
 
   def is_dataset_distribution_shard(self):
     """
     :rtype: bool
     """
-    return self._dataset_distribution == "shard"
+    return self.get_dataset_distribution_type() == "shard"
 
   def get_dataset_shard_batch_slice(self):
     """
@@ -96,7 +103,7 @@ class HorovodContext:
     """
     :rtype: bool
     """
-    return self._dataset_distribution == "random_seed_offset"
+    return self.get_dataset_distribution_type() == "random_seed_offset"
 
   def rank(self):
     """
