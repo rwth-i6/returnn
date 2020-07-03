@@ -6,6 +6,14 @@ Note that you are supposed to be able to import this module even if Horovod is n
 The usage of this module / global context is also considered optional at this point.
 Horovod is enabled <==> ``use_horovod`` is enabled in the config.
 
+For relevant further config options, see the code of :class:`HorovodContext` below.
+Most importantly:
+
+* ``horovod_dataset_distribution``, recommended value ``"random_seed_offset"``, default value ``"shard"``
+* ``horovod_reduce_type``, recommended value ``"param"``, default value ``"grad"``
+* ``horovod_param_sync_step``, recommended value ``100``, default value ``1``
+
+Also see :ref:`multi_gpu`.
 Also see :mod:`TFDistributed`.
 """
 
