@@ -12,6 +12,7 @@ Most importantly:
 * ``horovod_dataset_distribution``, recommended value ``"random_seed_offset"``, default value ``"shard"``
 * ``horovod_reduce_type``, recommended value ``"param"``, default value ``"grad"``
 * ``horovod_param_sync_step``, recommended value ``100``, default value ``1``
+* ``horovod_param_sync_time_diff``, alternative to ``horovod_param_sync_step``, e.g. ``100.`` (secs), default ``None``
 
 Also see :ref:`multi_gpu`.
 Also see :mod:`TFDistributed`.
@@ -78,6 +79,13 @@ class HorovodContext:
     :rtype: bool
     """
     return self.get_reduce_type() == "param"
+
+  def get_param_sync_time_diff(self):
+    """
+    :rtype: float|None
+    """
+    assert self.is_reduce_type_param()
+    return self._config.float("horovod_param_sync_time_diff", None)
 
   def get_param_sync_step(self):
     """

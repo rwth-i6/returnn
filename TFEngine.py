@@ -106,6 +106,8 @@ class Runner(object):
     if extra_fetches is not None:
       assert extra_fetches_callback
     self.extra_fetches_callback = extra_fetches_callback
+    self._step_start_time = None  # type: typing.Optional[float]
+    self._horovod_last_param_sync_time = time.time()  # we assume it is synced right now
     self._horovod_stopped_runner = False
     self._horovod_finish_all = False
     if engine.network.layers_desc.get("#finish_all_data", False):
@@ -477,18 +479,27 @@ class Runner(object):
     Call this if you want to proceed one step without doing anything.
     E.g. when this local rank has finished the dataset but some other rank has not yet.
 
+    We assume that _horovod_signal_broadcast was called just before
+    (in any case, even if should_sync_every_step is False).
+
     :param int local_step:
     """
+    hvd_ctx = TFHorovod.get_ctx()
     if self._horovod_collected_reduce_inputs:
-      assert not self._should_train or not TFHorovod.get_ctx().is_reduce_type_grad()
+      assert hvd_ctx.should_sync_every_step()
+      assert not self._should_train or not hvd_ctx.is_reduce_type_grad()
       feed_dict = {}
       fetches = {}
       for key, (tensor_in, tensor_out) in self._horovod_collected_reduce_inputs.items():
         feed_dict[tensor_in] = 0.0  # should be scalar
         fetches[key] = tensor_out
       self.engine.tf_session.run(fetches)
+    else:
+      assert not hvd_ctx.should_sync_every_step()
     # Need to call this to keep communication in sync.
-    self._horovod_sync_params(local_step=local_step)
+    # Note: If used, sync always (via is_final=True), even if should_sync_every_step is False,
+    # because we always called _horovod_signal_broadcast before this.
+    self._horovod_sync_params(local_step=local_step, is_final=True)
 
   def _horovod_should_sync_params_now(self, local_step, is_final=False):
     """
@@ -505,6 +516,12 @@ class Runner(object):
       return False
     if is_final:
       return True
+    sync_time_diff = hvd_ctx.get_param_sync_time_diff()
+    if sync_time_diff is not None:
+      dt = self._step_start_time - self._horovod_last_param_sync_time
+      assert dt >= 0.
+      assert not hvd_ctx.should_sync_every_step()  # we would be out-of-sync otherwise
+      return dt >= sync_time_diff
     sync_step = hvd_ctx.get_param_sync_step()
     assert sync_step >= 1
     return local_step % sync_step == sync_step - 1
@@ -540,7 +557,8 @@ class Runner(object):
         name="horovod_sync_params__var_%s" % var.name[:-2].replace("/", "_")).op)
     start_time = time.time()
     self.engine.tf_session.run(assign_ops)
-    return time.time() - start_time
+    self._horovod_last_param_sync_time = time.time()
+    return self._horovod_last_param_sync_time - start_time
 
   def run(self, report_prefix):
     """
@@ -603,6 +621,7 @@ class Runner(object):
         writer.add_graph(sess.graph)
       hvd_stop = hvd_error = False
       while self.data_provider.have_more_data(session=sess):
+        self._step_start_time = time.time()
         hvd_stop, hvd_error = self._horovod_signal_have_more_data(local_step=step)
         if hvd_error:
           raise Exception("Some other Horovod peer failed.")
