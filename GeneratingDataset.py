@@ -3049,7 +3049,11 @@ class OggZipDataset(CachedDataset2):
     return len(self._data)
 
   def get_data_shape(self, key):
-    if self.feature_extractor is not None:
+    """
+    :returns get_data(*, key).shape[1:], i.e. num-frames excluded
+    :rtype: list[int]
+    """
+    if key == "data" and self.feature_extractor is not None:
       if self.feature_extractor.num_channels is not None:
         return [self.feature_extractor.num_channels, self.feature_extractor.get_feature_dimension()]
     return super(OggZipDataset, self).get_data_shape(key)
