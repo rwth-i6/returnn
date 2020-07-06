@@ -405,14 +405,15 @@ class Config:
     """
     if key in self.typed_dict:
       value = self.typed_value(key, default=default, index=index)
-      if value is not None:
-        if isinstance(value, (str, unicode)):
-          # Special case for float as str. We automatically cast this case.
-          # This is also to handle special values such as "inf".
-          value = float(value)
-        assert isinstance(value, (int, float))
-      return value
-    return float(self.value(key, default, index))
+    else:
+      value = self.value(key, default, index)
+    if value is not None:
+      if isinstance(value, (str, unicode)):
+        # Special case for float as str. We automatically cast this case.
+        # This is also to handle special values such as "inf".
+        value = float(value)
+      assert isinstance(value, (int, float))
+    return value
 
   def list(self, key, default=None):
     """
