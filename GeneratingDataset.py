@@ -1004,7 +1004,7 @@ class ExtractAudioFeatures:
                norm_mean=None, norm_std_dev=None,
                features="mfcc", feature_options=None, random_permute=None, random_state=None, raw_ogg_opts=None,
                pre_process=None, post_process=None,
-               sample_rate=None,
+               sample_rate=None, num_channels=None,
                peak_normalization=True, preemphasis=None, join_frames=None):
     """
     :param float window_len: in seconds
@@ -1021,10 +1021,12 @@ class ExtractAudioFeatures:
     :param function|None pre_process:
     :param function|None post_process:
     :param int|None sample_rate:
+    :param int|None num_channels: number of channels in audio
     :param bool peak_normalization: set to False to disable the peak normalization for audio files
     :param float|None preemphasis: set a preemphasis filter coefficient
     :param int|None join_frames: concatenate multiple frames together to a superframe
-    :return: (audio_len // int(step_len * sample_rate), (with_delta + 1) * num_feature_filters), float32
+    :return: float32 data of shape
+    (audio_len // int(step_len * sample_rate), num_channels (optional), (with_delta + 1) * num_feature_filters)
     :rtype: numpy.ndarray
     """
     self.window_len = window_len
@@ -1061,6 +1063,12 @@ class ExtractAudioFeatures:
     self.pre_process = pre_process
     self.post_process = post_process
     self.sample_rate = sample_rate
+    if num_channels is not None:
+      assert self.features == "raw", "Currently, multiple channels are only supported for raw waveforms"
+      self.num_dim = 3
+    else:
+      self.num_dim = 2
+    self.num_channels = num_channels
     self.raw_ogg_opts = raw_ogg_opts
     self.peak_normalization = peak_normalization
 
@@ -1143,7 +1151,14 @@ class ExtractAudioFeatures:
 
     if self.features == "raw":
       assert self.num_feature_filters == 1
-      feature_data = audio[:, None].astype("float32")  # add dummy dimension
+      if audio.ndim == 1:
+        audio = numpy.expand_dims(audio, axis=1)  # add dummy feature axis
+      if self.num_channels is not None:
+        if audio.ndim == 2:
+          audio = numpy.expand_dims(audio, axis=2)  # add dummy feature axis
+        assert audio.shape[1] == self.num_channels
+        assert audio.ndim == 3  # time, channel, feature
+      feature_data = audio.astype("float32")
 
     else:
       kwargs = {
@@ -1172,15 +1187,15 @@ class ExtractAudioFeatures:
       else:
         raise Exception("non-supported feature type %r" % (self.features,))
 
-    assert feature_data.ndim == 2
-    assert feature_data.shape[1] == self.num_feature_filters
+    assert feature_data.ndim == self.num_dim
+    assert feature_data.shape[-1] == self.num_feature_filters
 
     if self.with_delta:
       # noinspection PyPackageRequirements
       import librosa
       deltas = [librosa.feature.delta(feature_data, order=i, axis=0).astype("float32")
                 for i in range(1, self.with_delta + 1)]
-      feature_data = numpy.concatenate([feature_data] + deltas, axis=1)
+      feature_data = numpy.concatenate([feature_data] + deltas, axis=-1)
       assert feature_data.shape[1] == (self.with_delta + 1) * self.num_feature_filters
 
     if self.norm_mean is not None:
@@ -1189,7 +1204,12 @@ class ExtractAudioFeatures:
       elif isinstance(self.norm_mean, (int, float)):
         feature_data -= self.norm_mean
       else:
-        feature_data -= self.norm_mean[None, :]
+        if self.num_dim == 2:
+          feature_data -= self.norm_mean[numpy.newaxis, :]
+        elif self.num_dim == 3:
+          feature_data -= self.norm_mean[numpy.newaxis, numpy.newaxis, :]
+        else:
+          assert False, "Unexpected number of dimensions: {}".format(self.num_dim)
 
     if self.norm_std_dev is not None:
       if isinstance(self.norm_std_dev, str) and self.norm_std_dev == "per_seq":
@@ -1197,22 +1217,31 @@ class ExtractAudioFeatures:
       elif isinstance(self.norm_std_dev, (int, float)):
         feature_data /= self.norm_std_dev
       else:
-        feature_data /= self.norm_std_dev[None, :]
+        if self.num_dim == 2:
+          feature_data /= self.norm_std_dev[numpy.newaxis, :]
+        elif self.num_dim == 3:
+          feature_data /= self.norm_std_dev[numpy.newaxis, numpy.newaxis, :]
+        else:
+          assert False, "Unexpected number of dimensions: {}".format(self.num_dim)
 
     if self.join_frames is not None:
       pad_len = self.join_frames - (feature_data.shape[0] % self.join_frames)
       pad_len = pad_len % self.join_frames
       new_len = feature_data.shape[0] + pad_len
-      feature_data = numpy.pad(feature_data, pad_width=((0, pad_len), (0, 0)), mode="edge")
-      feature_data = numpy.reshape(feature_data,
-                                   newshape=(new_len // self.join_frames, feature_data.shape[1] * self.join_frames),
-                                   order='C')
+      if self.num_channels is None:
+        new_shape = (new_len // self.join_frames, feature_data.shape[-1] * self.join_frames)
+        pad_width = ((0, pad_len), (0, 0))
+      else:
+        new_shape = (new_len // self.join_frames, self.num_channels, feature_data.shape[-1] * self.join_frames)
+        pad_width = ((0, pad_len), (0, 0), (0, 0))
+      feature_data = numpy.pad(feature_data, pad_width=pad_width, mode="edge")
+      feature_data = numpy.reshape(feature_data, newshape=new_shape, order='C')
 
-    assert feature_data.shape[1] == self.get_feature_dimension()
+    assert feature_data.shape[-1] == self.get_feature_dimension()
     if self.post_process:
       feature_data = self.post_process(feature_data, seq_name=seq_name)
-      assert isinstance(feature_data, numpy.ndarray) and len(feature_data.shape) == 2
-      assert feature_data.shape[1] == self.get_feature_dimension()
+      assert isinstance(feature_data, numpy.ndarray) and feature_data.ndim == self.num_dims
+      assert feature_data.shape[-1] == self.get_feature_dimension()
     return feature_data
 
   def get_feature_dimension(self):
@@ -3018,6 +3047,12 @@ class OggZipDataset(CachedDataset2):
     :rtype: int
     """
     return len(self._data)
+
+  def get_data_shape(self, key):
+    if self.feature_extractor is not None:
+      if self.feature_extractor.num_channels is not None:
+        return [self.feature_extractor.num_channels, self.feature_extractor.get_feature_dimension()]
+    return super(OggZipDataset, self).get_data_shape(key)
 
   def _get_transcription(self, seq_idx):
     """
