@@ -2529,7 +2529,12 @@ def get_login_username():
   if sys.platform == 'win32':
     return os.getlogin()
   import pwd
-  return pwd.getpwuid(os.getuid())[0]
+  try:
+    return pwd.getpwuid(os.getuid())[0]
+  except KeyError: 
+    # pwd.getpwuid() can throw KeyError: 'getpwuid(): uid not found: 12345'
+    # this can happen e.g. in a docker environment with mapped uids unknown to the docker OS
+    return str(os.getuid())
 
 
 def get_temp_dir():
