@@ -64,6 +64,10 @@ class LearningRateControl(object):
         config.bool('learning_rate_control_relative_error_relative_lr', False)),
       "min_num_epochs_per_new_learning_rate": config.int("learning_rate_control_min_num_epochs_per_new_lr", 0),
       "relative_error_div_by_old": config.bool('newbob_relative_error_div_by_old', False),
+      "learning_rate_decay_factor": config.float(
+        'learning_rate_decay', config.float('newbob_learning_rate_decay', 0.5)),
+      "learning_rate_growth_factor": config.float(
+        'learning_rate_growth', config.float('newbob_learning_rate_growth', 1.0)),
       "filename": config.value('learning_rate_file', None),
     }
 
@@ -486,7 +490,7 @@ class NewbobRelative(LearningRateControl):
     :type config: Config.Config
     :rtype: dict[str]
     """
-    kwargs = NewbobAbs.newbob_base_load_initial_kwargs_from_config(config)
+    kwargs = super(NewbobRelative, cls).load_initial_kwargs_from_config(config)
     kwargs.update({
       "relative_error_threshold": config.float('newbob_relative_error_threshold', -0.01),
     })
@@ -495,7 +499,6 @@ class NewbobRelative(LearningRateControl):
   def __init__(self, relative_error_threshold, **kwargs):
     """
     :type relative_error_threshold: float
-    :type filename: str
     """
     super(NewbobRelative, self).__init__(**kwargs)
     self.relative_error_threshold = relative_error_threshold
@@ -530,25 +533,12 @@ class NewbobAbs(LearningRateControl):
   """
 
   @classmethod
-  def newbob_base_load_initial_kwargs_from_config(cls, config):
-    """
-    :type config: Config.Config
-    :rtype: dict[str]
-    """
-    kwargs = super(NewbobAbs, cls).load_initial_kwargs_from_config(config)
-    kwargs.update({
-      "learning_rate_decay_factor": config.float('newbob_learning_rate_decay', 0.5),
-      "learning_rate_growth_factor": config.float('newbob_learning_rate_growth', 1.0),
-    })
-    return kwargs
-
-  @classmethod
   def load_initial_kwargs_from_config(cls, config):
     """
     :type config: Config.Config
     :rtype: dict[str]
     """
-    kwargs = cls.newbob_base_load_initial_kwargs_from_config(config)
+    kwargs = super(NewbobAbs, cls).load_initial_kwargs_from_config(config)
     kwargs.update({
       "error_threshold": config.float('newbob_error_threshold', -0.01),
     })
@@ -601,21 +591,19 @@ class NewbobMultiEpoch(LearningRateControl):
     :type config: Config.Config
     :rtype: dict[str]
     """
-    kwargs = NewbobRelative.load_initial_kwargs_from_config(config)
+    kwargs = super(NewbobMultiEpoch, cls).load_initial_kwargs_from_config(config)
     kwargs.update({
       "num_epochs": config.int("newbob_multi_num_epochs", 5),
       "update_interval": config.int("newbob_multi_update_interval", config.int("newbob_multi_num_epochs", 5)),
+      "relative_error_threshold": config.float('newbob_relative_error_threshold', -0.01),
     })
     return kwargs
 
-  def __init__(self, num_epochs, update_interval,
-               relative_error_threshold,
-               **kwargs):
+  def __init__(self, num_epochs, update_interval, relative_error_threshold, **kwargs):
     """
     :param int num_epochs:
     :param int update_interval:
     :param float relative_error_threshold:
-    :param int filename:
     """
     super(NewbobMultiEpoch, self).__init__(**kwargs)
     self.num_epochs = num_epochs
