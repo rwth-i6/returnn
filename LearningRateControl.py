@@ -64,9 +64,9 @@ class LearningRateControl(object):
         config.bool('learning_rate_control_relative_error_relative_lr', False)),
       "min_num_epochs_per_new_learning_rate": config.int("learning_rate_control_min_num_epochs_per_new_lr", 0),
       "relative_error_div_by_old": config.bool('newbob_relative_error_div_by_old', False),
-      "learning_rate_decay_factor": config.float(
+      "learning_rate_decay": config.typed_value(
         'learning_rate_decay', config.float('newbob_learning_rate_decay', 0.5)),
-      "learning_rate_growth_factor": config.float(
+      "learning_rate_growth": config.typed_value(
         'learning_rate_growth', config.float('newbob_learning_rate_growth', 1.0)),
       "filename": config.value('learning_rate_file', None),
     }
@@ -85,8 +85,8 @@ class LearningRateControl(object):
                relative_error_also_relative_to_learning_rate=False,
                min_num_epochs_per_new_learning_rate=0,
                relative_error_div_by_old=False,
-               learning_rate_decay_factor=1.0,
-               learning_rate_growth_factor=1.0,
+               learning_rate_decay=1.0,
+               learning_rate_growth=1.0,
                filename=None):
     """
     :param float default_learning_rate: default learning rate. usually for epoch 1
@@ -94,8 +94,8 @@ class LearningRateControl(object):
     :param str|list[str]|None error_measure_key: for get_epoch_error_value() the key for EpochData.error which is a dict
     :param int min_num_epochs_per_new_learning_rate: if the lr was recently updated, use it for at least N epochs
     :param bool relative_error_div_by_old: if True, compute relative error as (new - old) / old.
-    :param float learning_rate_decay_factor:
-    :param float learning_rate_growth_factor:
+    :param float|(float)->float learning_rate_decay:
+    :param float|(float)->float learning_rate_growth:
     :param str filename: load from and save to file
     """
     self.epoch_data = {}  # type: typing.Dict[int,LearningRateControl.EpochData]
@@ -124,8 +124,8 @@ class LearningRateControl(object):
     self.relative_error_also_relative_to_learning_rate = relative_error_also_relative_to_learning_rate
     self.min_num_epochs_per_new_learning_rate = min_num_epochs_per_new_learning_rate
     self.relative_error_div_by_old = relative_error_div_by_old
-    self.learning_rate_decay_factor = learning_rate_decay_factor
-    self.learning_rate_growth_factor = learning_rate_growth_factor
+    self.learning_rate_decay = learning_rate_decay
+    self.learning_rate_growth = learning_rate_growth
 
   __repr__ = simple_obj_repr
 
@@ -140,21 +140,38 @@ class LearningRateControl(object):
       epoch_str = ", ".join(["%i: %s" % (epoch, self.epoch_data[epoch]) for epoch in epochs])
     return "%r, epoch data: %s, error key: %s" % (self, epoch_str, self.get_error_key(epoch=1))
 
+  @staticmethod
+  def _calc_learning_rate_update(learning_rate, update):
+    """
+    :param float learning_rate:
+    :param None|float|(float)->float update: factor, or generic func
+    :return: lr with update applied (e.g. decay factor)
+    :rtype: float
+    """
+    if update is None:
+      return learning_rate
+    if isinstance(update, float):
+      return learning_rate * update
+    assert callable(update)
+    learning_rate = update(learning_rate)
+    assert isinstance(learning_rate, float)
+    return learning_rate
+
   def _calc_learning_rate_decay(self, learning_rate):
     """
     :param float learning_rate:
     :return: lr with decay applied
     :rtype: float
     """
-    return learning_rate * self.learning_rate_decay_factor
+    return self._calc_learning_rate_update(learning_rate, update=self.learning_rate_decay)
 
   def _calc_learning_rate_growth(self, learning_rate):
     """
     :param float learning_rate:
-    :return: lr with decay applied
+    :return: lr with growth applied
     :rtype: float
     """
-    return learning_rate * self.learning_rate_growth_factor
+    return self._calc_learning_rate_update(learning_rate, update=self.learning_rate_growth)
 
   def calc_learning_rate_decay_or_grow(self, learning_rate, decay, grow=None):
     """
