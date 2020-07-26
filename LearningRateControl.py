@@ -136,6 +136,43 @@ class LearningRateControl(object):
       epoch_str = ", ".join(["%i: %s" % (epoch, self.epoch_data[epoch]) for epoch in epochs])
     return "%r, epoch data: %s, error key: %s" % (self, epoch_str, self.get_error_key(epoch=1))
 
+  def _calc_learning_rate_decay(self, learning_rate):
+    """
+    :param float learning_rate:
+    :return: lr with decay applied
+    :rtype: float
+    """
+    return learning_rate * self.learning_rate_decay_factor
+
+  def _calc_learning_rate_growth(self, learning_rate):
+    """
+    :param float learning_rate:
+    :return: lr with decay applied
+    :rtype: float
+    """
+    return learning_rate * self.learning_rate_growth_factor
+
+  def calc_learning_rate_decay_or_grow(self, learning_rate, decay, grow=None):
+    """
+    :param float learning_rate:
+    :param bool decay:
+    :param bool|None grow: default is not decay
+    :return: lr with decay or growth applied
+    :rtype: float
+    """
+    assert isinstance(decay, bool)
+    if grow is None:
+      grow = not decay
+    assert isinstance(grow, bool)
+    assert not (grow and decay)  # not sure if this makes sense...
+    if decay:
+      learning_rate = self._calc_learning_rate_decay(learning_rate)
+      if learning_rate < self.min_learning_rate:
+        learning_rate = self.min_learning_rate
+    if grow:
+      learning_rate = self._calc_learning_rate_growth(learning_rate)
+    return learning_rate
+
   def calc_learning_rate_for_epoch(self, epoch):
     """
     :type epoch: int
@@ -156,8 +193,6 @@ class LearningRateControl(object):
       if len(set(last_lrs)) >= 2 or 0 < len(last_lrs) < self.min_num_epochs_per_new_learning_rate:
         return last_lrs[-1]
     learning_rate = self.calc_learning_rate_for_epoch(epoch)
-    if learning_rate < self.min_learning_rate:
-      return self.min_learning_rate
     return learning_rate
 
   def _last_epochs_for_epoch(self, epoch, num_epochs):
@@ -484,8 +519,8 @@ class NewbobRelative(LearningRateControl):
     relative_error = self.calc_relative_error(last2_epoch, last_epoch)
     if relative_error is None:
       return learning_rate
-    if relative_error > self.relative_error_threshold:
-      learning_rate *= self.learning_rate_decay_factor
+    learning_rate = self.calc_learning_rate_decay_or_grow(
+      learning_rate, decay=relative_error > self.relative_error_threshold)
     return learning_rate
 
 
@@ -550,8 +585,7 @@ class NewbobAbs(LearningRateControl):
     if old_key != new_key:
       return learning_rate
     error_diff = new_error - old_error
-    if error_diff > self.error_threshold:
-      learning_rate *= self.learning_rate_decay_factor
+    learning_rate = self.calc_learning_rate_decay_or_grow(learning_rate, decay=error_diff > self.error_threshold)
     return learning_rate
 
 
@@ -600,7 +634,7 @@ class NewbobMultiEpoch(LearningRateControl):
     errors = [self.calc_relative_error(epochs[i], epochs[i + 1]) for i in range(len(epochs) - 1)]
     if any([e is None for e in errors]):
       return None
-    return numpy.mean(errors)
+    return float(numpy.mean(errors))
 
   def _calc_recent_mean_relative_error(self, epoch):
     """
@@ -631,10 +665,8 @@ class NewbobMultiEpoch(LearningRateControl):
     mean_relative_error = self._calc_recent_mean_relative_error(epoch)
     if mean_relative_error is None:
       return learning_rate
-    if mean_relative_error > self.relative_error_threshold:
-      learning_rate *= self.learning_rate_decay_factor
-    else:
-      learning_rate *= self.learning_rate_growth_factor
+    learning_rate = self.calc_learning_rate_decay_or_grow(
+      learning_rate, decay=mean_relative_error > self.relative_error_threshold)
     return learning_rate
 
 
