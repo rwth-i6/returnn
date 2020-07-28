@@ -8028,6 +8028,20 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
 
   Usually added to Self-Attention using key_shift.
   Parts of the code are adapted from Tensor2Tensor (https://github.com/tensorflow/tensor2tensor).
+
+  Example usage::
+
+      d[output + '_rel_pos'] = {"class": "relative_positional_encoding",
+                                "from": [output + '_self_att_laynorm'],
+                                "n_out": self.EncKeyTotalDim // self.AttNumHeads,
+                                "forward_weights_init": self.ff_init}
+      d[output + '_self_att_att'] = {"class": "self_attention",
+                                     "num_heads": self.AttNumHeads,
+                                     "total_key_dim": self.EncKeyTotalDim,
+                                     "n_out": self.EncValueTotalDim, "from": [output + '_self_att_laynorm'],
+                                     "attention_left_only": False, "attention_dropout": self.attention_dropout,
+                                     "forward_weights_init": self.ff_init, "key_shift": output + '_rel_pos'}
+
   """
   layer_class = "relative_positional_encoding"
   recurrent = True
@@ -8051,39 +8065,50 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
 
     if fixed:
       from TFUtil import get_positional_encoding
-      encoding_matrix = get_positional_encoding(length=tf.constant(2 * clipping + 1),
-                                          num_channels=n_out)
+      encoding_matrix = get_positional_encoding(
+        length=tf.constant(2 * clipping + 1),
+        num_channels=n_out)
     else:
       fwd_weights_initializer = get_initializer(
         forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
       with self.var_creation_scope():
         encoding_matrix = self.add_param(TFCompat.v1.get_variable(
-          name="encoding_matrix", shape=(2 * clipping + 1, n_out), initializer=fwd_weights_initializer
-        ))
+          name="encoding_matrix", shape=(2 * clipping + 1, n_out), initializer=fwd_weights_initializer))
 
     range_vec = tf.range(length) - offset
 
     if self.input_data.have_time_axis():
       range_mat = tf.reshape(tf.tile(range_vec, [length]), [length, length])
-      distance_mat = range_mat - tf.transpose(range_mat)
+      distance_mat = range_mat - tf.transpose(range_mat)  # [length,length]
     else:
-      distance_mat = tf.reshape(range_vec, [1, length])
+      distance_mat = tf.reshape(range_vec, [1, length])  # [1,length]
     distance_mat_clipped = tf.clip_by_value(distance_mat, -clipping, clipping)
     # Shift values to be >= 0. Each integer still uniquely identifies a relative
     # position difference.
-    position_info_indices = distance_mat_clipped + clipping
+    position_info_indices = distance_mat_clipped + clipping  # [length|1,length]
 
-    encoding = tf.gather(encoding_matrix, position_info_indices)
+    encoding = tf.gather(encoding_matrix, position_info_indices)  # [length|1,length,n_out]
 
     self.output.placeholder = encoding
 
   @classmethod
-  def get_out_data_from_opts(cls, n_out, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, n_out, **kwargs):
     """
+    :param str name:
+    :param list[LayerBase] sources:
     :param int n_out:
     :rtype: Data
     """
-    data = super().get_out_data_from_opts(n_out=n_out, **kwargs)
+    data = get_concat_sources_data_template(sources, name="%s_output" % name)
+    data = data.copy_template().copy_as_batch_major()
     data.batch_dim_axis = None
-    data.shape = (None, None, n_out)
+    data.feature_dim_axis = NotSpecified
+    if data.have_time_axis():
+      data.time_dim_axis = 0
+      data.shape = (None, None, n_out)
+      if data.size_placeholder and 0 in data.size_placeholder:
+        data.size_placeholder[1] = data.size_placeholder[0]
+    else:
+      # length will be ``network.get_rec_step_index() + 1``.
+      data.shape = (1, None, n_out)
     return data
