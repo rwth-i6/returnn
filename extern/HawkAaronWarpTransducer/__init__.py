@@ -105,8 +105,9 @@ def _RNNTLossGrad(op, grad_loss, _):
   return [grad_loss * grad, None, None, None]
 
 
-@ops.RegisterShape("WarpRNNT")
-def _RNNTLossShape(op):
-  inputs_shape = op.inputs[0].get_shape().with_rank(4)
-  batch_size = inputs_shape[0]
-  return [batch_size, inputs_shape]
+if hasattr(ops, "RegisterShape"):
+  @ops.RegisterShape("WarpRNNT")
+  def _RNNTLossShape(op):
+    inputs_shape = op.inputs[0].get_shape().with_rank(4)
+    batch_size = inputs_shape[0]
+    return [batch_size, inputs_shape]
