@@ -2531,7 +2531,7 @@ def get_login_username():
   import pwd
   try:
     return pwd.getpwuid(os.getuid())[0]
-  except KeyError: 
+  except KeyError:
     # pwd.getpwuid() can throw KeyError: 'getpwuid(): uid not found: 12345'
     # this can happen e.g. in a docker environment with mapped uids unknown to the docker OS
     return str(os.getuid())
@@ -3366,6 +3366,9 @@ class NativeCodeCompiler(object):
       print()
       if cmd_bin.endswith("/nvcc") and b"error: constexpr function return is non-constant" in stdout:
         print("This might be the error: https://github.com/tensorflow/tensorflow/issues/22766")
+        print()
+      if cmd_bin.endswith("/nvcc") and b"gcc versions later than" in stdout:
+        print("Your GCC version might be too new. This is a problem with some nvcc versions.")
         print()
       raise CalledProcessError(returncode=proc.returncode, cmd=cmd_args)
     assert os.path.exists(self._so_filename)
