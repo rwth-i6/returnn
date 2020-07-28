@@ -696,6 +696,8 @@ def main(argv):
       assert isinstance(layer, LayerBase)
       if layer.output.time_dim_axis is None:
         continue
+      if layer.output.batch_dim_axis is None:
+        continue
       with layer.cls_layer_scope(layer.name):
         tf.identity(layer.output.get_placeholder_as_batch_major(), name="output_batch_major")
 
