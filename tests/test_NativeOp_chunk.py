@@ -2,6 +2,7 @@
 import sys
 sys.path += ["."]  # Python 3 hack
 
+import TheanoNativeOp
 import NativeOp
 import numpy
 from numpy.testing.utils import assert_almost_equal
@@ -19,8 +20,8 @@ log.initialize()  # some code might need it
 TheanoUtil.monkey_patches()
 
 
-chunk = NativeOp.chunk
-unchunk = NativeOp.unchunk
+chunk = TheanoNativeOp.chunk
+unchunk = TheanoNativeOp.unchunk
 naive_chunk_start_frames = NativeOp.Chunking.naive_chunk_start_frames
 
 
@@ -119,11 +120,11 @@ def test_chunk_unchunk_grad2():
   chunk_step = 7
 
   out, oindex = chunk(x, index=index, chunk_size=chunk_size, chunk_step=chunk_step)
-  chunk_op = NativeOp.Chunking().make_op()
+  chunk_op = NativeOp.Chunking().make_theano_op()
   assert type(out.owner.op) is type(chunk_op)
 
   x2, index2, factors = unchunk(out, index=oindex, chunk_size=chunk_size, chunk_step=chunk_step, n_time=x.shape[0], n_batch=x.shape[1])
-  unchunk_op = NativeOp.UnChunking().make_op()
+  unchunk_op = NativeOp.UnChunking().make_theano_op()
   assert type(x2.owner.op) is type(unchunk_op)
 
   Dout, _, _, _, _, _ = unchunk_op.grad(x2.owner.inputs, (Dx2, None, None))

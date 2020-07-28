@@ -20,7 +20,7 @@ log.initialize()  # some code might need it
 TheanoUtil.monkey_patches()
 
 
-from NativeOp import subtensor_batched_index
+from TheanoNativeOp import subtensor_batched_index
 
 
 def test_1():

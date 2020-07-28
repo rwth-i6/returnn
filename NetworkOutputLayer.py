@@ -157,7 +157,7 @@ class OutputLayer(Layer):
       assert isinstance(self.y, tuple)
       assert len(self.y) == 3
       s0, s1, weight = self.y
-      from NativeOp import max_and_argmax_sparse
+      from TheanoNativeOp import max_and_argmax_sparse
       n_time = self.z.shape[0]
       n_batch = self.z.shape[1]
       mask = self.network.j[self.attrs.get("target", "").replace("[sparse:coo]", "[sparse:coo:2:0]")]
@@ -412,7 +412,7 @@ class FramewiseOutputLayer(OutputLayer):
         y_idx = self.y_data_flat
         assert y_idx.ndim == 1
         p = T.clip(self.p_y_given_x_flat, numpy.float32(1.e-38), numpy.float32(1.e20))
-        from NativeOp import subtensor_batched_index
+        from TheanoNativeOp import subtensor_batched_index
         logp = T.log(subtensor_batched_index(p, y_idx))
         assert logp.ndim == 1
         nll = -T.sum(logp * index)
@@ -436,7 +436,7 @@ class FramewiseOutputLayer(OutputLayer):
       if self.attrs.get("target", "").endswith("[sparse:coo]"):
         assert isinstance(self.y, tuple)
         assert len(self.y) == 3
-        from NativeOp import crossentropy_softmax_and_gradient_z_sparse
+        from TheanoNativeOp import crossentropy_softmax_and_gradient_z_sparse
         y_mask = self.network.j[self.attrs.get("target", "").replace("[sparse:coo]", "[sparse:coo:2:0]")]
         ce, grad_z = crossentropy_softmax_and_gradient_z_sparse(
           self.z, self.index, self.y[0], self.y[1], self.y[2], y_mask)
@@ -704,7 +704,7 @@ class SequenceOutputLayer(OutputLayer):
       #from TheanoUtil import print_to_file
       #edges = theano.printing.Print("edges", attrs=['shape'])(edges)
       #weights = theano.printing.Print("weights", attrs=['shape'])(weights)
-      fwdbwd, _ = FastBaumWelchOp().make_op()(scores, edges, weights, start_end_states, T.cast(index,'float32'), state_buffer)
+      fwdbwd, _ = FastBaumWelchOp().make_theano_op()(scores, edges, weights, start_end_states, T.cast(index, 'float32'), state_buffer)
       def viterbi(op,x):
         print(x.argmin(axis=-1))
       #fwdbwd = theano.printing.Print(global_fn=viterbi)(fwdbwd)
@@ -719,7 +719,7 @@ class SequenceOutputLayer(OutputLayer):
       #  emissions = T.exp(T.log(emissions) - self.prior_scale * T.log(T.maximum(self.priors, 1e-10)))
       scores = -T.log(emissions.reshape(self.z.shape))
       edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
-      fwdbwd, _ = FastBaumWelchOp().make_op()(scores, edges, weights, start_end_states, float_idx, state_buffer)
+      fwdbwd, _ = FastBaumWelchOp().make_theano_op()(scores, edges, weights, start_end_states, float_idx, state_buffer)
       err = T.exp(-fwdbwd) * scores
       return T.sum(err.reshape((err.shape[0]*err.shape[1],err.shape[2]))[idx]), None
     elif self.loss == 'fast_bw':
@@ -815,7 +815,7 @@ class SequenceOutputLayer(OutputLayer):
           state_buffer = T.zeros()  # TODO...
         else:
           raise Exception("invalid fsa_source %r" % self.fast_bw_opts.get("fsa_source"))
-        fwdbwd, obs_scores = FastBaumWelchOp().make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+        fwdbwd, obs_scores = FastBaumWelchOp().make_theano_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
         gamma = self.attrs.get("gamma", 1)
         need_renorm = False
         if gamma != 1:
@@ -962,9 +962,9 @@ class SequenceOutputLayer(OutputLayer):
           output_storage[2][0] = numpy.asarray(start_end_states, dtype='uint32').T.copy().view(dtype='float32')
 
       edges, weights, start_end_states = BuildSimpleFsaOp(state_models)(self.y)
-      fwdbwd, _, pw = SegmentFastBaumWelchOp(**bw_args).make_op()(self.p_y_given_x, batch_idxs, edges, weights, start_end_states,
-                                                                  length_models, T.cast(segment_layer.index, 'float32'),
-                                                                  am_score_scales, self.network.epoch)
+      fwdbwd, _, pw = SegmentFastBaumWelchOp(**bw_args).make_theano_op()(self.p_y_given_x, batch_idxs, edges, weights, start_end_states,
+                                                                         length_models, T.cast(segment_layer.index, 'float32'),
+                                                                         am_score_scales, self.network.epoch)
       bw = T.exp(-fwdbwd)
       self.y_data_flat = bw
       nlog_scores = -T.log(T.clip(self.p_y_given_x, numpy.float32(1.e-20), numpy.float(1.e20)))
@@ -998,7 +998,7 @@ class SequenceOutputLayer(OutputLayer):
         raise Exception("invalid fsa_source %r" % self.fast_bw_opts.get("fsa_source"))
 
       # Calculate numerator part
-      fwdbwd, obs_scores = FastBaumWelchOp().make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+      fwdbwd, obs_scores = FastBaumWelchOp().make_theano_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
       self.baumwelch_alignment = T.exp(-fwdbwd)
       self.num_scores = obs_scores
 
@@ -1108,7 +1108,7 @@ class SequenceOutputLayer(OutputLayer):
           raise Exception("invalid fsa_source %r" % self.fast_bw_opts.get("fsa_source"))
 
         # Calculate denominator part
-        fwdbwd, obs_scores = MultiEndFastBaumWelchOp().make_op()(am_scores, edges, weights, start_states, end_states, end_state_weigths, float_idx, state_buffer)
+        fwdbwd, obs_scores = MultiEndFastBaumWelchOp().make_theano_op()(am_scores, edges, weights, start_states, end_states, end_state_weigths, float_idx, state_buffer)
         return T.set_subtensor(prev_fwdbwd[:,seq_index,:], fwdbwd[:,seq_index,:]) , T.set_subtensor(prev_scores[:,seq_index], obs_scores[:,seq_index])
 
       [foo,bar], scan_updates = theano.scan(fn=loop_fkt,

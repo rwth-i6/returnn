@@ -204,7 +204,7 @@ def test_native_lstm():
 def test_fast_bw():
   print("Make op...")
   from NativeOp import FastBaumWelchOp
-  op = FastBaumWelchOp().make_op()  # (am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+  op = FastBaumWelchOp().make_theano_op()  # (am_scores, edges, weights, start_end_states, float_idx, state_buffer)
   print("Op:", op)
   n_batch = 3
   seq_len = 5
@@ -240,7 +240,7 @@ def test_fast_bw():
 def test_fast_bw_uniform():
   print("Make op...")
   from NativeOp import FastBaumWelchOp
-  op = FastBaumWelchOp().make_op()  # (am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+  op = FastBaumWelchOp().make_theano_op()  # (am_scores, edges, weights, start_end_states, float_idx, state_buffer)
   print("Op:", op)
   n_batch = 3
   seq_len = 7

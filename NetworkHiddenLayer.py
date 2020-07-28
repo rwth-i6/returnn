@@ -965,7 +965,7 @@ class TimeChunkingLayer(_NoOpLayer):
     self.set_attr("chunk_step", chunk_step)
     x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
     self.source_index = self.index
-    from NativeOp import chunk
+    from TheanoNativeOp import chunk
     self.output, self.index = chunk(x, index=self.source_index, chunk_size=chunk_size, chunk_step=chunk_step)
 
 
@@ -984,7 +984,7 @@ class TimeUnChunkingLayer(_NoOpLayer):
     chunk_step = chunking_layer_o.attrs["chunk_step"]
     n_time = chunking_layer_o.source_index.shape[0]
     n_batch = chunking_layer_o.source_index.shape[1]
-    from NativeOp import unchunk
+    from TheanoNativeOp import unchunk
     self.output, self.index, _ = unchunk(
       x, index=chunking_layer_o.index, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
 
@@ -1000,7 +1000,7 @@ class TimeFlatLayer(_NoOpLayer):
     self.source_index = self.index
     n_time = self.index.shape[0] * chunk_size
     n_batch = self.index.shape[1]
-    from NativeOp import unchunk
+    from TheanoNativeOp import unchunk
     self.output, self.index, _ = unchunk(
       x, index=self.index, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
 
@@ -2701,7 +2701,7 @@ class NativeLayer(_NoOpLayer):
     import NativeOp
     native_class_cls = getattr(NativeOp, native_class)
     assert issubclass(native_class_cls, NativeOp.NativeOpGenBase)
-    op = native_class_cls().make_op()
+    op = native_class_cls().make_theano_op()
 
     args = []
     args_info = []  # dict with ndim, shape, n_in
