@@ -159,7 +159,7 @@ class OpMaker(object):
     # http://stackoverflow.com/questions/37565367/designing-an-accumulating-tensorflow-gpu-operator
     # We also include NativeOp.cpp.
     # noinspection PyProtectedMember
-    in_info, out_info, _ = NativeOp.NativeOp._resolve_want_inplace_dummy(
+    in_info, out_info, _ = NativeOp.NativeOpBaseMixin._resolve_want_inplace_dummy(
       in_info=self.description.in_info, out_info=self.description.out_info)
     out_is_ref = dict()  # output vars which are inplace, out_name -> in_idx
     # want_inplace: output-index which this input should operate on

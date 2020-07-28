@@ -26,16 +26,16 @@ if BackendEngine.is_theano_selected():
   from theano.gof.opt import OpSub
   from TheanoUtil import try_register_gpu_opt, make_var_tuple, softmax
 
-  NativeOpBase = theano.Op
-  GpuNativeOpBase = theano.sandbox.cuda.GpuOp
+  TheanoNativeOpBase = theano.Op
+  TheanoGpuNativeOpBase = theano.sandbox.cuda.GpuOp
 
 else:  # no Theano
   theano = None
 
-  class NativeOpBase:
+  class TheanoNativeOpBase:
     """Dummy native op base."""
 
-  class GpuNativeOpBase:
+  class TheanoGpuNativeOpBase:
     """Dummy. Not used if not Theano."""
 
 
@@ -265,8 +265,7 @@ class NativeOpBaseMixin(object):
     return results
 
 
-
-class NativeOp(NativeOpBase, NativeOpBaseMixin):
+class TheanoNativeOp(TheanoNativeOpBase, NativeOpBaseMixin):
   """
   We wrap some C code which can define a forward pass
   and optionally a backward pass (for gradient calculation).
@@ -557,7 +556,7 @@ class NativeOp(NativeOpBase, NativeOpBaseMixin):
     }
 
 
-class GpuNativeOp(NativeOp, GpuNativeOpBase):
+class TheanoGpuNativeOp(TheanoNativeOp, TheanoGpuNativeOpBase):
   """
   Theano GPU native op.
   """
@@ -601,9 +600,9 @@ class GpuNativeOp(NativeOp, GpuNativeOpBase):
 
 
 if theano:
-  @gof.local_optimizer([NativeOp], inplace=True)
+  @gof.local_optimizer([TheanoNativeOp], inplace=True)
   def _inplace_native_op(node):
-    if isinstance(node.op, NativeOp) and not node.op.destroy_map:
+    if isinstance(node.op, TheanoNativeOp) and not node.op.destroy_map:
       kwargs = {k: getattr(node.op, k) for k in node.op.__props__}
       # TODO: We could try to make each input inplace individually.
       # What we do now is just to try to make all inplace.
@@ -633,15 +632,15 @@ if theano:
     pass
 
 
-  @try_register_gpu_opt(NativeOp)
+  @try_register_gpu_opt(TheanoNativeOp)
   def _local_gpu_native_op(node):
-    if isinstance(node.op, NativeOp):
+    if isinstance(node.op, TheanoNativeOp):
       # see also: https://github.com/Theano/Theano/blob/master/theano/sandbox/cuda/opt.py
       # noinspection PyUnresolvedReferences,PyPackageRequirements
       from theano.sandbox.cuda import host_from_gpu, gpu_from_host, as_cuda_ndarray_variable
       args = node.inputs
       if any([(x.owner and x.owner.op == host_from_gpu) for x in args]):
-        gpu_op = GpuNativeOp(**{key: getattr(node.op, key) for key in node.op.__props__})
+        gpu_op = TheanoGpuNativeOp(**{key: getattr(node.op, key) for key in node.op.__props__})
         args = [x.owner.inputs[0] if (x.owner and x.owner.op == host_from_gpu) else x
                 for x in args]
         from TheanoUtil import make_var_tuple
@@ -669,12 +668,12 @@ class NativeOpGenBase:
     assert self.in_info is not None
     assert self.out_info is not None
     assert self.c_fw_code is not None
-    return NativeOp(in_info=self.in_info, out_info=self.out_info,
-                    c_fw_code=self.c_fw_code, c_bw_code=self.c_bw_code,
-                    c_extra_support_code=self.c_extra_support_code,
-                    grad_input_map=self.grad_input_map,
-                    name=self.__class__.__name__,
-                    custom_grad=self.custom_grad)
+    return TheanoNativeOp(in_info=self.in_info, out_info=self.out_info,
+                          c_fw_code=self.c_fw_code, c_bw_code=self.c_bw_code,
+                          c_extra_support_code=self.c_extra_support_code,
+                          grad_input_map=self.grad_input_map,
+                          name=self.__class__.__name__,
+                          custom_grad=self.custom_grad)
 
   @classmethod
   def map_layer_inputs_to_op(cls, *inputs):
