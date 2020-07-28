@@ -163,6 +163,9 @@ def dump_info():
     debug_lib_so(f, ["sgemm"])
   print("find_libcudart_from_runtime:", Util.find_libcudart_from_runtime())
   print("_cuda_path_candidate_via_proc_map_libcudart:", TFUtil.CudaEnv._cuda_path_candidate_via_proc_map_libcudart())
+  for p in TFUtil.CudaEnv._cuda_path_candidates():
+    print("CUDA path candidate %s, lib dir %s, valid %s" % (
+      p, TFUtil.CudaEnv._get_lib_dir_name(p), TFUtil.CudaEnv._check_valid_cuda_path(p)))
 
 
 # Do this here such that we always see this log in Travis.

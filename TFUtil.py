@@ -4790,16 +4790,25 @@ class CudaEnv(object):
     :return: yields full path to libcudart.so
     :rtype: list[str]
     """
-    if not os.environ.get("LD_LIBRARY_PATH"):
-      return
-    for p in os.environ["LD_LIBRARY_PATH"].split(":"):
+    from Util import get_ld_paths
+    for p in get_ld_paths():
       pp = "%s/libcudart.so" % p
       if os.path.exists(pp):
         yield pp
 
   @classmethod
-  def _get_lib_dir_name(cls):
-    from Util import is_64bit_platform
+  def _get_lib_dir_name(cls, base_path):
+    """
+    :return: dir name in base path
+    :rtype: str
+    """
+    from Util import is_64bit_platform, get_ld_paths
+    for ld_path in get_ld_paths():
+      # We also want to allow "lib/x86_64-linux-gnu" for "/usr".
+      # However, this logic should not be triggered for incorrect cases.
+      # E.g. base_path="/usr" would be the prefix for most LD paths.
+      if ld_path.startswith(base_path + "/lib") and os.path.exists("%s/libcudart.so" % ld_path):
+        return ld_path[len(base_path) + 1:]
     if is_64bit_platform():
       return "lib64"
     return "lib"
@@ -4833,15 +4842,13 @@ class CudaEnv(object):
         print("found cuda nvcc (wanted postfix: %r): %s" % (postfix, p))
       if not p.endswith(postfix):
         continue
-      yield p[:-len(postfix)]
+      yield p[:-len(postfix)] or "/"
     for p in cls._find_lib_in_ld_path():
       # Expect p == "/usr/local/cuda-8.0/lib64/libcudart.so" or so.
-      postfix = "/%s/libcudart.so" % cls._get_lib_dir_name()
+      d = "/".join(p.split("/")[:-2]) or "/"  # Get "/usr/local/cuda-8.0".
       if cls.verbose_find_cuda:
-        print("found cuda lib (wanted postfix: %r): %s" % (postfix, p))
-      if not p.endswith(postfix):
-        continue
-      yield p[:-len(postfix)]
+        print("found cuda lib: %s (path %s)" % (p, d))
+      yield d
 
   @classmethod
   def _check_valid_cuda_path(cls, p):
@@ -4856,7 +4863,7 @@ class CudaEnv(object):
       return False
     if not os.path.exists("%s/include/cuda.h" % p):
       return False
-    if not os.path.exists("%s/%s/libcudart.so" % (p, cls._get_lib_dir_name())):
+    if not os.path.exists("%s/%s/libcudart.so" % (p, cls._get_lib_dir_name(p))):
       return False
     return True
 
@@ -4909,7 +4916,7 @@ class CudaEnv(object):
     return [
       "-ccbin", get_tf_gcc_path(),
       "-I", "%s/include" % self.cuda_path,
-      "-L", "%s/%s" % (self.cuda_path, self._get_lib_dir_name()),
+      "-L", "%s/%s" % (self.cuda_path, self._get_lib_dir_name(self.cuda_path)),
       "-x", "cu",
       "-v"]
 
