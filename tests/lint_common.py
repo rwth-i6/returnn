@@ -24,7 +24,6 @@ ignore_count_for_files = {
   'Device.py',
   'Engine.py',
   'EngineTask.py',
-  'External.py',
   'Fsa.py',
   'FunctionLoader.py',
   'Inv.py',
