@@ -99,15 +99,16 @@ matrix:
     - env: TEST=TFUtil TF_PACKAGE=tensorflow
     # The following are working now, so we do not allow failures anymore.
     # Also we fix a specific TF version, like above.
-    - env: TEST=TFEngine TF_PACKAGE=tensorflow==2.2.0
-    - env: TEST=TFNativeOp TF_PACKAGE=tensorflow==2.2.0
-    - env: TEST=TFNetworkLayer TF_PACKAGE=tensorflow==2.2.0
-    - env: TEST=TFNetworkRecLayer TF_PACKAGE=tensorflow==2.2.0
-    - env: TEST=TFUpdater TF_PACKAGE=tensorflow==2.2.0
-    - env: TEST=TFUtil TF_PACKAGE=tensorflow==2.2.0
+    - env: TEST=TFEngine TF_PACKAGE=tensorflow==2.3.0
+    - env: TEST=TFNativeOp TF_PACKAGE=tensorflow==2.3.0
+    - env: TEST=TFNetworkLayer TF_PACKAGE=tensorflow==2.3.0
+    - env: TEST=TFNetworkRecLayer TF_PACKAGE=tensorflow==2.3.0
+    - env: TEST=TFUpdater TF_PACKAGE=tensorflow==2.3.0
+    - env: TEST=TFUtil TF_PACKAGE=tensorflow==2.3.0
   allow_failures:
     - env: RUN=tests/pylint.py
     - env: RUN=tests/pycharm-inspect.py
+    # Also check with latest TF version. Allow failures until we explicitly tested it.
     - env: TEST=TFEngine TF_PACKAGE=tensorflow
     - env: TEST=TFNativeOp TF_PACKAGE=tensorflow
     - env: TEST=TFNetworkLayer TF_PACKAGE=tensorflow
