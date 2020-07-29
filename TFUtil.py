@@ -2734,7 +2734,8 @@ class OutputWithActivation(object):
     if self.act_func is tf.exp:
       return self.x
     if self.act_func is tf.sigmoid:
-      return tf.log_sigmoid(self.x)
+      import TFCompat
+      return TFCompat.v1.log_sigmoid(self.x)
     return safe_log(self.y)
 
 
@@ -2837,8 +2838,9 @@ def reuse_name_scope(name, absolute=None, **kwargs):
   Context manager to reuse an already created scope.
   We try to both set the variable scope and the name scope.
 
-  :param str|TFCompat.v1.VariableScope name: relative or absolute name scope (absolute if absolute=True or if TFCompat.v1.VariableScope).
-    must not end with "/".
+  :param str|TFCompat.v1.VariableScope name: relative or absolute name scope
+    (absolute if absolute=True or if tf.compat.v1.VariableScope).
+    Must not end with "/".
   :param bool absolute: if True it will be absolute
   :param kwargs: passed on to `tf.compat.v1.variable_scope`
   :return: yields the variable_scope
@@ -3140,10 +3142,9 @@ def check_input_ndim_equal_offset(x, y, y_ndim_offset=0):
   # Need to fall-back to runtime check.
   with tf.name_scope("check_input_ndim_equal_offset"):
     with tf.control_dependencies(
-      [TFCompat.v1.assert_equal(
+        [TFCompat.v1.assert_equal(
           tf.rank(x), tf.rank(y) + y_ndim_offset,
-          data=["ndim not equal with offset %i" % y_ndim_offset,
-          tf.shape(x), tf.shape(y)])]):
+          data=["ndim not equal with offset %i" % y_ndim_offset, tf.shape(x), tf.shape(y)])]):
       return tf.identity(x, "identity_with_ndim_equal_check")
 
 
@@ -6285,16 +6286,16 @@ def post_control_dependencies(x, updates):
 
 
 @contextlib.contextmanager
-def sequential_control_dependencies(l):
+def sequential_control_dependencies(ls):
   """
   tf.control_dependencies but each operation will be created such that it is executed
   after the ones coming before in the list, i.e. l[0] is executed first, l[-1] is executed last.
 
-  :param list[()->(tf.Operation|tf.Tensor)] l:
+  :param list[()->(tf.Operation|tf.Tensor)] ls:
   """
-  with tf.control_dependencies([l[0]()]) as dep:
-    if len(l) > 1:
-      with sequential_control_dependencies(l[1:]) as dep2:
+  with tf.control_dependencies([ls[0]()]) as dep:
+    if len(ls) > 1:
+      with sequential_control_dependencies(ls[1:]) as dep2:
         yield dep2
     else:
       yield dep
@@ -6310,10 +6311,11 @@ def global_queue(name, queue_type, capacity, dtypes, shapes=None, names=None):
   :param list[str]|None names:
   :rtype: tf.QueueBase
   """
+  import TFCompat
   queue_ref = global_tensor(
     name=name,
     f=lambda: queue_type(capacity=capacity, dtypes=dtypes, shapes=shapes, names=names).queue_ref)
-  queue = tf.QueueBase(dtypes=dtypes, shapes=shapes, names=names, queue_ref=queue_ref)
+  queue = TFCompat.v1.QueueBase(dtypes=dtypes, shapes=shapes, names=names, queue_ref=queue_ref)
   return queue
 
 
@@ -6379,8 +6381,9 @@ def raise_OutOfRangeError():
   """
   # Kind of hacky. We create some dummy queue, close it and every time we call dequeue on it,
   # it will raise the desired exception.
+  import TFCompat
   with tf.name_scope("raise_OutOfRangeError"):
-    queue = global_queue(name="raise_exception/queue", queue_type=tf.FIFOQueue, capacity=1, dtypes=[tf.bool])
+    queue = global_queue(name="raise_exception/queue", queue_type=TFCompat.v1.FIFOQueue, capacity=1, dtypes=[tf.bool])
     # We must only close it once, otherwise we could get a CancelledError.
     queue_open = global_tensor(f=true_once, name="raise_exception/queue_open")
     with tf.control_dependencies([tf.cond(queue_open, lambda: queue.close(), lambda: tf.no_op())]):
@@ -6955,14 +6958,14 @@ def interpolate_bilinear(grid, query_points, name='interpolate_bilinear', indexi
     # batch, y, and x coordinates are pulled into the first dimension.
     # Then we gather. Finally, we reshape the output back. It's possible this
     # code would be made simpler by using array_ops.gather_nd.
-    def gather(y_coords, x_coords, name):
+    def gather(y_coords, x_coords, name_):
       """
       :param tf.Tensor y_coords:
       :param tf.Tensor x_coords:
-      :param str name:
+      :param str name_:
       :rtype: tf.Tensor
       """
-      with tf.name_scope('gather-' + name):
+      with tf.name_scope('gather-' + name_):
         linear_coordinates = batch_offsets + y_coords * width + x_coords
         gathered_values = tf.gather(flattened_grid, linear_coordinates)
         return tf.reshape(gathered_values, [batch_size, num_queries, channels])
@@ -7927,11 +7930,11 @@ def kernels_registered_for_op(op_name):
   lib.kernels_registered_for_op(str(op_name).encode("utf8"), cb)
   assert Res.res is not None
   s = Res.res.decode("utf8")
-  ls = [l.strip() for l in s.splitlines()]
-  if "<no registered kernels>" in ls:
+  lines = [line.strip() for line in s.splitlines()]
+  if "<no registered kernels>" in lines:
     raise Exception("Op %r is unknown." % op_name)
-  ls = [l for l in ls if l]
-  return ls
+  lines = [line for line in lines if line]
+  return lines
 
 
 def supported_devices_for_op(op_name):

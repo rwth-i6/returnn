@@ -8,6 +8,10 @@ from __future__ import print_function
 
 import os
 import tensorflow as tf
+try:
+  from tensorflow.python.ops.nn import rnn_cell
+except ImportError:
+  from tensorflow.python.ops import rnn_cell
 from threading import RLock
 
 import NativeOp
@@ -95,6 +99,7 @@ class OpMaker(object):
     """
     :rtype: str
     """
+    # noinspection PyUnresolvedReferences
     from tensorflow.contrib.rnn.python.ops import lstm_ops
     lstm_ops_so = "%s/_lstm_ops.so" % os.path.dirname(lstm_ops.__file__)
     assert os.path.exists(lstm_ops_so)
@@ -724,7 +729,6 @@ class NativeLstmCell(RecSeqCellOp):
     n_batch = tf.shape(z)[1]
     n_out = tf.shape(rec_weights)[0]
     if initial_state is not None:
-      from tensorflow.python.ops.nn import rnn_cell
       if isinstance(initial_state, rnn_cell.LSTMStateTuple):
         initial_state = initial_state.c
       c = initial_state
@@ -831,7 +835,6 @@ class NativeLstm2(RecSeqCellOp):
 
   @property
   def state_size(self):
-    from tensorflow.python.ops.nn import rnn_cell
     return rnn_cell.LSTMStateTuple(c=self.n_hidden, h=self.n_hidden)
 
   def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
@@ -843,7 +846,6 @@ class NativeLstm2(RecSeqCellOp):
     :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
     :rtype: (tf.Tensor, tf.Tensor)
     """
-    from tensorflow.python.ops.nn import rnn_cell
     weights = TFCompat.v1.get_variable(
       name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
     TFUtil.set_param_axes_split_info(weights, [[self.n_hidden], [self.n_hidden] * 4])
@@ -1646,6 +1648,7 @@ def init_blocksparse(with_native_module=True):
     sys.path.insert(0, path)
   # test it
   if with_native_module:
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
     from blocksparse import op_module
     op_module.get_module()
 
