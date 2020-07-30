@@ -53,12 +53,23 @@ class BatchMedianPoolingLayer(_ConcatInputLayer):
 
     # get median over pooled batches
     # - reshape input for usage with tf.nn.top_k
-    reshaped_input = tf.reshape(tf.transpose(input_placeholder, [1, 2, 0]), shape=(tf.shape(input_placeholder)[1], tf.shape(input_placeholder)[2], tf.shape(input_placeholder)[0] / pool_size, pool_size))
+    reshaped_input = tf.reshape(
+      tf.transpose(input_placeholder, [1, 2, 0]),
+      shape=(
+        tf.shape(input_placeholder)[1],
+        tf.shape(input_placeholder)[2],
+        tf.shape(input_placeholder)[0] // pool_size,
+        pool_size))
     # - get median of each pool
-    median = tf.nn.top_k(reshaped_input, k=tf.cast(TFCompat.v1.ceil(tf.constant(pool_size, dtype=tf.float32) / 2.), dtype=tf.int32)).values[:, :, :, -1]
+    median = tf.nn.top_k(
+      reshaped_input,
+      k=tf.cast(TFCompat.v1.ceil(tf.constant(pool_size, dtype=tf.float32) / 2.), dtype=tf.int32)).values[:, :, :, -1]
     median_batch_major = tf.transpose(median, [2, 0, 1])
     self.output.placeholder = median_batch_major
-    self.output.size_placeholder = {self.output.time_dim_axis_excluding_batch: tf.strided_slice(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch], [0], tf.shape(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch]), [pool_size])}
+    self.output.size_placeholder = {
+      self.output.time_dim_axis_excluding_batch: tf.strided_slice(
+        self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch],
+        [0], tf.shape(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch]), [pool_size])}
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, pool_size, n_out=None, **kwargs):
@@ -66,9 +77,13 @@ class BatchMedianPoolingLayer(_ConcatInputLayer):
     assert not input_data.sparse
     return Data(
       name="%s_output" % name,
-      shape=[input_data.get_placeholder_as_batch_major().shape[1].value, input_data.get_placeholder_as_batch_major().shape[2].value],
+      shape=[
+        input_data.get_placeholder_as_batch_major().shape[1].value,
+        input_data.get_placeholder_as_batch_major().shape[2].value],
       dtype=input_data.dtype,
-      size_placeholder={0: tf.strided_slice(input_data.size_placeholder[input_data.time_dim_axis_excluding_batch], [0], tf.shape(input_data.size_placeholder[input_data.time_dim_axis_excluding_batch]), [pool_size])},
+      size_placeholder={0: tf.strided_slice(
+        input_data.size_placeholder[input_data.time_dim_axis_excluding_batch],
+        [0], tf.shape(input_data.size_placeholder[input_data.time_dim_axis_excluding_batch]), [pool_size])},
       sparse=False,
       batch_dim_axis=0,
       time_dim_axis=1)
@@ -78,7 +93,7 @@ class ComplexLinearProjectionLayer(_ConcatInputLayer):
   layer_class = "complex_linear_projection"
 
   def __init__(self, nr_of_filters, clp_weights_init="glorot_uniform", **kwargs):
-    if ('n_out' in kwargs and (kwargs['n_out'] != nr_of_filters)):
+    if 'n_out' in kwargs and kwargs['n_out'] != nr_of_filters:
         raise Exception('argument n_out of layer MelFilterbankLayer can not be different from nr_of_filters')
     kwargs['n_out'] = nr_of_filters
     self._nr_of_filters = nr_of_filters
@@ -249,7 +264,8 @@ class MelFilterbankLayer(_ConcatInputLayer):
     def tfMelFilterBank(fMin, fMax, samplingRate, fftSize, nrOfFilters):
       """
       Returns the filter matrix which yields the mel filter bank features, when applied to the spectrum as
-      tf.matmul(freqDom, filterMatrix), where freqDom has dimension (time, frequency) and filterMatrix is the matrix returned
+      tf.matmul(freqDom, filterMatrix), where freqDom has dimension (time, frequency)
+      and filterMatrix is the matrix returned
       by this function
       The filter matrix is computed according to equation 6.141 in
       [Huang & Acero+, 2001] "Spoken Language Processing - A Guide to Theroy, Algorithm, and System Development"
@@ -342,24 +358,29 @@ class MelFilterbankLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, n_out=None, **kwargs):
-    return super(MelFilterbankLayer, cls).get_out_data_from_opts(name=name, sources=sources, out_type={"dim": n_out, "batch_dim_axis": 0, "time_dim_axis": 1}, **kwargs)
+    return super(MelFilterbankLayer, cls).get_out_data_from_opts(
+      name=name, sources=sources, out_type={"dim": n_out, "batch_dim_axis": 0, "time_dim_axis": 1}, **kwargs)
 
 
 class MultiChannelMultiResolutionStftLayer(_ConcatInputLayer):
   """
   The layer applys a STFT to every channel separately and concatenates the frequency domain vectors for every frame.
-  The STFT is applied with multiple different frame- and fft-sizes and the resulting multi-channel stfts are concatenated.
+  The STFT is applied with multiple different frame- and fft-sizes
+  and the resulting multi-channel stfts are concatenated.
   Resulting in a tensor with the content [res_0-ch_0, ..., res_0-ch_N, res_1-ch_0, ... res_M-ch_N]
   The subsampling from T input samples to T' output frames is computed as follows:
   T' = (T - frame_size) / frame_shift + 1
-  frame_shift is the same for all resolutions and T' is computed according to a reference frame_size which is taken to be
-  frame_sizes[0]. For all other frame sizes the input is zero-padded or the output is cut to obtain the same T' as for the
+  frame_shift is the same for all resolutions and T' is computed according to a reference frame_size
+  which is taken to be
+  frame_sizes[0].
+  For all other frame sizes the input is zero-padded or the output is cut to obtain the same T' as for the
   reference frame_size.
   """
   layer_class = "multichannel_multiresolution_stft_layer"
   recurrent = True
 
-  def __init__(self, frame_shift, frame_sizes, fft_sizes, window="hanning", use_rfft=True, nr_of_channels=1, pad_last_frame=False, **kwargs):
+  def __init__(self, frame_shift, frame_sizes, fft_sizes, window="hanning", use_rfft=True,
+               nr_of_channels=1, pad_last_frame=False, **kwargs):
     """
     :param int frame_shift: frame shift for stft in samples
     :param list(int) frame_sizes: frame size for stft in samples
@@ -376,7 +397,7 @@ class MultiChannelMultiResolutionStftLayer(_ConcatInputLayer):
       size_placeholder_dict = {}
       nr_of_full_frames = (self.input_data.size_placeholder[0] - self._reference_frame_size) // self._frame_shift + 1
       nf_of_paded_frames = 0
-      if (self._pad_last_frame) and ((self.input_data.size_placeholder[0] - self._reference_frame_size) - (nr_of_full_frames - 1) * self._frame_shift > 0):
+      if self._pad_last_frame and ((self.input_data.size_placeholder[0] - self._reference_frame_size) - (nr_of_full_frames - 1) * self._frame_shift > 0):
         nf_of_paded_frames = 1
       size_placeholder_dict[0] = nr_of_full_frames + nf_of_paded_frames
       return size_placeholder_dict
