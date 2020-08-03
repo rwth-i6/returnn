@@ -975,9 +975,9 @@ class TwoDNativeLstmCell(RecSeqCellOp):
     TFUtil.set_param_axes_split_info(W_re, [[self.n_input_dim], [self.n_hidden] * 5])
 
     twod_input = tf.concat([
-      tf.tile( tf.expand_dims(source, 0), [tf.shape(target)[0], 1, 1, 1] ), # source
-      tf.tile( tf.expand_dims(target, 1), [1, tf.shape(source)[0], 1, 1] ) # target
-    ], axis=3) # (trg_len, src_len, batch, features)
+      tf.tile(tf.expand_dims(source, 0), [tf.shape(target)[0], 1, 1, 1]),  # source
+      tf.tile(tf.expand_dims(target, 1), [1, tf.shape(source)[0], 1, 1])  # target
+    ], axis=3)  # (trg_len, src_len, batch, features)
 
     outComplete, final_state = self.op(
       *self.map_layer_inputs_to_op(
