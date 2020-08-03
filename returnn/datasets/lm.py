@@ -9,12 +9,12 @@ from __future__ import print_function
 
 import os
 import sys
-from Dataset import DatasetSeq
-from CachedDataset2 import CachedDataset2
+from .basic import DatasetSeq
+from .cached2 import CachedDataset2
 import gzip
 import xml.etree.ElementTree as ElementTree
-from Util import parse_orthography, parse_orthography_into_symbols, load_json, BackendEngine, unicode
-from Log import log
+from returnn.util.basic import parse_orthography, parse_orthography_into_symbols, load_json, BackendEngine, unicode
+from returnn.log import log
 import numpy
 import time
 import re
@@ -1162,12 +1162,12 @@ class TranslationDataset(CachedDataset2):
       self._data[data_key].extend(data)
 
   def _thread_main(self):
-    from Util import interrupt_main
+    from returnn.util.basic import interrupt_main
     # noinspection PyBroadException
     try:
-      import better_exchook
-      better_exchook.install()
-      from Util import AsyncThreadRun
+      import returnn.util.better_exchook
+      returnn.util.better_exchook.install()
+      from returnn.util.basic import AsyncThreadRun
 
       # First iterate once over the data to get the data len as fast as possible.
       data_len = 0

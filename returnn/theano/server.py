@@ -32,14 +32,14 @@ from tornado.ioloop import IOLoop
 from tornado.queues import Queue, QueueEmpty
 import tornado.web
 
-from Log import log
-from GeneratingDataset import StaticDataset
-from Device import Device
-from Util import TheanoFlags
-from Config import get_devices_init_args
-from EngineTask import ForwardTaskThread
-import Engine
-import Config
+from returnn.log import log
+from returnn.datasets.generating import StaticDataset
+from returnn.theano.device import Device
+from returnn.util.basic import TheanoFlags
+from returnn.config import get_devices_init_args
+from returnn.theano.engine_task import ForwardTaskThread
+import returnn.theano.engine
+import returnn.config
 
 # TODO: Look into making these non-global.
 _max_amount_engines = 4
@@ -59,7 +59,7 @@ class Model:
     print('loading config %s' % config_file, file=log.v5)
     # Load and setup config
     try:
-      self.config = Config.Config()
+      self.config = returnn.config.Config()
       self.config.load_file(config_file)
       self.pause_after_first_seq = self.config.float('pause_after_first_seq', 0.2)
       self.batch_size = self.config.int('batch_size', 5000)
@@ -75,7 +75,7 @@ class Model:
       raise
 
     print('Starting engine for config %s' % config_file, file=log.v5)
-    self.engine = Engine.Engine(self.devices)
+    self.engine = returnn.theano.engine.Engine(self.devices)
     try:
       self.engine.init_network_from_config(config=self.config)
     except Exception:
@@ -162,7 +162,7 @@ class Server:
     """
 
     # Create temporary directories.
-    self.base_dir   = os.path.abspath(Config.get_global_config().value('__file__', ''))
+    self.base_dir   = os.path.abspath(returnn.config.get_global_config().value('__file__', ''))
     self.config_dir = os.path.join(self.base_dir, "configs")
     self.data_dir   = os.path.join(self.base_dir, "data")
 

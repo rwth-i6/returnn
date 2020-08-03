@@ -8,9 +8,9 @@ from __future__ import print_function
 import os
 import sys
 import typing
-from Util import BackendEngine, model_epoch_from_filename, get_model_filename_postfix
-from Log import log
-from Pretrain import Pretrain
+from returnn.util.basic import BackendEngine, model_epoch_from_filename, get_model_filename_postfix
+from returnn.log import log
+from returnn.pretrain import Pretrain
 
 
 class EngineBase(object):

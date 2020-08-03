@@ -22,9 +22,9 @@ import numpy
 import functools
 import typing
 
-from Log import log
-from EngineBatch import Batch, BatchSetGenerator
-from Util import PY3, try_run, NumbersDict, unicode, OptionalNotImplementedError
+from returnn.log import log
+from returnn.engine.batch import Batch, BatchSetGenerator
+from returnn.util.basic import PY3, try_run, NumbersDict, unicode, OptionalNotImplementedError
 
 
 class Dataset(object):
@@ -180,14 +180,14 @@ class Dataset(object):
     :return: 0 usually
     :rtype: int
     """
-    from Config import get_global_config
+    from returnn.config import get_global_config
     config = get_global_config(raise_exception=False)
     if not config:
       return 0
     if config.is_true("use_horovod"):
-      import TFHorovod
-      if TFHorovod.get_ctx().is_dataset_distribution_random_seed_offset():
-        return TFHorovod.get_ctx().rank() * 16127
+      import returnn.tf.horovod
+      if returnn.tf.horovod.get_ctx().is_dataset_distribution_random_seed_offset():
+        return returnn.tf.horovod.get_ctx().rank() * 16127
     return 0
 
   @staticmethod
@@ -229,8 +229,8 @@ class Dataset(object):
     :rtype: list[str]|dict[str,list[str]]
     """
     if use_cache_manager:
-      import Util
-      filename = Util.cf(filename)
+      import returnn.util.basic
+      filename = returnn.util.basic.cf(filename)
     if filename.endswith(".pkl"):
       import pickle
       seq_list = pickle.load(open(filename, 'rb'))
@@ -665,7 +665,7 @@ class Dataset(object):
     assert tuple(sparse_info[0:3]) == ("sparse", "coo", "2")
     s0 = self.get_data(seq_idx, "%s[sparse:coo:2:0]" % key_prefix)
     assert s0 is not None
-    from NativeOp import sparse_splice_offset_numpy
+    from returnn.native_op import sparse_splice_offset_numpy
     s0_start = sparse_splice_offset_numpy(s0, start_frame)
     s0_end = sparse_splice_offset_numpy(s0, end_frame)
     if sparse_info[-1] == "0":
@@ -1285,7 +1285,7 @@ def init_dataset(kwargs, extra_kwargs=None, default_kwargs=None):
     if kwargs.startswith("{"):
       kwargs = eval(kwargs)
     elif kwargs.startswith("config:"):
-      from Config import get_global_config
+      from returnn.config import get_global_config
       config = get_global_config()
       data = eval(kwargs[len("config:"):], config.typed_dict, config.typed_dict)
       return init_dataset(data, extra_kwargs=extra_kwargs, default_kwargs=default_kwargs)
@@ -1325,17 +1325,17 @@ def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs
   kwargs = kwargs.copy()
   if 'window' not in kwargs and config and config.has('window'):
     kwargs['window'] = config.int('window', 1)
-  from HDFDataset import HDFDataset
+  from returnn.datasets.hdf import HDFDataset
   if config_str.startswith("sprint:"):
     kwargs["sprintConfigStr"] = config_str[len("sprint:"):]
     assert config, "need config for dataset in 'sprint:...' format. or use 'ExternSprintDataset:...' instead"
     sprint_trainer_exec_path = config.value("sprint_trainer_exec_path", None)
     assert sprint_trainer_exec_path, "specify sprint_trainer_exec_path in config"
     kwargs["sprintTrainerExecPath"] = sprint_trainer_exec_path
-    from SprintDataset import ExternSprintDataset
+    from returnn.datasets.sprint import ExternSprintDataset
     cls = ExternSprintDataset
   elif config_str.startswith("config:"):
-    from Config import get_global_config
+    from returnn.config import get_global_config
     if not config:
       config = get_global_config()
     data = eval(config_str[len("config:"):], config.typed_dict, config.typed_dict)
@@ -1441,11 +1441,11 @@ def set_config_num_inputs_outputs_from_dataset(config, dataset):
   :param Config.Config config:
   :param Dataset dataset:
   """
-  from Util import BackendEngine
+  from returnn.util import BackendEngine
   if BackendEngine.is_tensorflow_selected():
     # TF supports more fine-grained specification,
     # however the dataset does not store that in num_outputs.
-    from TFNetwork import ExternData
+    from returnn.tf.network import ExternData
     config.set("extern_data", {
       key: ExternData.data_kwargs_from_dataset_key(dataset=dataset, key=key)
       for key in dataset.get_data_keys()})

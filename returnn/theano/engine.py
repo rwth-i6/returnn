@@ -11,16 +11,16 @@ import os
 from collections import OrderedDict
 import h5py
 import json
-from Network import LayerNetwork
-from EngineTask import TrainTaskThread, EvalTaskThread, HDFForwardTaskThread, ClassificationTaskThread, PriorEstimationTaskThread
-import SprintCache
-from Log import log
-from Updater import Updater
-import Device
-from LearningRateControl import load_learning_rate_control_from_config
-from Pretrain import pretrain_from_config
-import EngineUtil
-from Util import hms, hdf5_dimension, BackendEngine, model_epoch_from_filename, get_model_filename_postfix
+from returnn.theano.network import LayerNetwork
+from returnn.theano.engine_task import TrainTaskThread, EvalTaskThread, HDFForwardTaskThread, \
+  ClassificationTaskThread, PriorEstimationTaskThread
+from returnn.log import log
+from returnn.theano.updater import Updater
+import returnn.theano.device as device
+from returnn.learning_rate_control import load_learning_rate_control_from_config
+from returnn.pretrain import pretrain_from_config
+import returnn.theano.engine_util as engine_util
+from returnn.util.basic import hms
 import errno
 import time
 try:
@@ -33,9 +33,9 @@ except ImportError:  # Python3
   BaseHTTPServer = SimpleHTTPServer
 import json
 import cgi
-from GeneratingDataset import StaticDataset
+from returnn.datasets.generating import StaticDataset
 import hashlib
-from EngineBase import EngineBase
+from returnn.engine.base import EngineBase
 
 
 class Engine(EngineBase):
@@ -142,7 +142,7 @@ class Engine(EngineBase):
       old_network.load_hdf(last_model_hdf)
       last_model_hdf.close()
       # Copy params to new network.
-      from NetworkCopyUtils import intelli_copy_layer
+      from returnn.theano.network_copy_utils import intelli_copy_layer
       # network.hidden are the input + all hidden layers.
       for layer_name, layer in sorted(old_network.hidden.items()):
         print("Copy hidden layer %s" % layer_name, file=log.v3)
@@ -160,7 +160,7 @@ class Engine(EngineBase):
     elif last_model_hdf:
       network.load_hdf(last_model_hdf)
       last_model_hdf.close()
-      EngineUtil.maybe_subtract_priors(network, self.train_data, config)
+      engine_util.maybe_subtract_priors(network, self.train_data, config)
 
     self.network = network
 
@@ -430,7 +430,7 @@ class Engine(EngineBase):
     :return: numpy array, output in time major format (time,dim)
     :rtype: numpy.ndarray
     """
-    from EngineBatch import Batch, BatchSetGenerator
+    from returnn.engine.batch import Batch, BatchSetGenerator
     batch = Batch()
     batch.init_with_one_full_sequence(seq_idx=seq_idx, dataset=dataset)
     batch_generator = iter([batch])
@@ -662,9 +662,9 @@ class Engine(EngineBase):
       print("error:", 1.0 - sum([confusion_matrix[i,i] for i in range(confusion_matrix.shape[0])]) / float(data.num_timesteps), file=log.v1)
 
   def compute_priors(self, dataset, config):
-    from Dataset import Dataset
+    from returnn.datasets import Dataset
     assert isinstance(dataset, Dataset)
-    from Config import Config
+    from returnn.config import Config
     assert isinstance(config, Config)
 
     assert config.has('output_file'), 'output_file for priors numbers should be provided'
@@ -741,7 +741,7 @@ class SeqTrainParallelControl:
     max_seqs = self.config.int('max_seqs', -1)
     if max_seqs <= 0: max_seqs = float('inf')
     dataset = self.engine.train_data
-    from EngineBatch import Batch
+    from returnn.engine.batch import Batch
 
     # Collect all batches.
     forward_batches = []; ":type: list[EngineBatch.Batch]"
@@ -766,7 +766,7 @@ class SeqTrainParallelControl:
       self.forward_current_seq += 1
 
     # Forward the batches.
-    from EngineUtil import assign_dev_data
+    from returnn.theano.engine_util import assign_dev_data
     for batch in forward_batches:
       print("SeqTrainParallelControl, forward %r" % batch, file=log.v4)
       success = assign_dev_data(self.train_device, dataset, [batch], load_seqs=False)
@@ -829,5 +829,5 @@ class SeqTrainParallelControl:
       self._device_exec(func, **kwargs)
 
   def _device_exec(self, func, **kwargs):
-    assert isinstance(self.train_device, Device.Device)
+    assert isinstance(self.train_device, device.Device)
     return self.train_device._generic_exec_on_dev(("seq_train_parallel_control", func), **kwargs)

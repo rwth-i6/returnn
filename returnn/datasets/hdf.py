@@ -9,11 +9,10 @@ import collections
 import gc
 import h5py
 import numpy
-from CachedDataset import CachedDataset
-from CachedDataset2 import CachedDataset2
-from Dataset import Dataset, DatasetSeq
-from Log import log
-import Util
+from .cached import CachedDataset
+from .cached2 import CachedDataset2
+from .basic import Dataset, DatasetSeq
+from returnn.log import log
 
 
 # Common attribute names for HDF dataset, which should be used in order to be proceed with HDFDataset class.
@@ -36,8 +35,8 @@ class HDFDataset(CachedDataset):
     :param bool use_cache_manager: uses :func:`Util.cf` for files
     """
     super(HDFDataset, self).__init__(**kwargs)
-    assert self.partition_epoch == 1 or self.cache_byte_size_total_limit == 0, \
-      "To use partition_epoch in HDFDatasets, disable caching by setting cache_byte_size=0"
+    assert self.partition_epoch == 1 or self.cache_byte_size_total_limit == 0, (
+      "To use partition_epoch in HDFDatasets, disable caching by setting cache_byte_size=0")
     self._use_cache_manager = use_cache_manager
     self.files = []  # type: typing.List[str]  # file names
     self.h5_files = []  # type: typing.List[h5py.File]
@@ -65,7 +64,7 @@ class HDFDataset(CachedDataset):
     :param str|bytes|unicode s:
     :rtype: str
     """
-    from Util import unicode, PY3
+    from returnn.util.basic import unicode, PY3
     if not PY3 and isinstance(s, unicode):
       s = s.encode("utf8")
       assert isinstance(s, str)  # Python 2
@@ -83,7 +82,8 @@ class HDFDataset(CachedDataset):
     :type filename: str
     """
     if self._use_cache_manager:
-      filename = Util.cf(filename)
+      from returnn.util.basic import cf
+      filename = cf(filename)
     fin = h5py.File(filename, "r")
     if 'targets' in fin:
       self.labels = {
@@ -900,7 +900,7 @@ class SimpleHDFWriter:
     :param bool swmr: see http://docs.h5py.org/en/stable/swmr.html
     :param bool extend_existing_file: True also means we expect that it exists
     """
-    from Util import hdf5_strings, unicode
+    from returnn.util.basic import hdf5_strings, unicode
     import tempfile
     import os
     import shutil
@@ -980,6 +980,7 @@ class SimpleHDFWriter:
     :return: whether we added a new entry
     :rtype: bool
     """
+    from returnn.util.basic import hdf5_strings
     added_count = 0
     for data_key, (dim, ndim, dtype) in extra_type.items():
       assert data_key != "inputs"
@@ -990,7 +991,7 @@ class SimpleHDFWriter:
         self._file.create_group('targets/data')
         self._file.create_group('targets/size')
         self._file.create_group("targets/labels")
-      Util.hdf5_strings(self._file, "targets/labels/%s" % data_key, ["dummy-label"])
+      hdf5_strings(self._file, "targets/labels/%s" % data_key, ["dummy-label"])
       if ndim == 0:
         ndim = 1  # we will automatically add a dummy-dim
       shape = [None] * ndim  # type: typing.List[typing.Optional[int]]
@@ -1207,7 +1208,7 @@ class HDFDatasetWriter:
     :param int|float end_seq:
     :param bool use_progress_bar:
     """
-    from Util import NumbersDict, human_size, progress_bar_with_time, try_run, PY3
+    from returnn.util.basic import NumbersDict, human_size, progress_bar_with_time, try_run, PY3
     hdf_dataset = self.file
 
     print("Work on epoch: %i" % epoch, file=log.v3)

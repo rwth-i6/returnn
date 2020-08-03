@@ -6,7 +6,7 @@ This file is going to be imported by Debug.debug_shell() and available as intera
 import sys
 import numpy
 import h5py
-from Util import BackendEngine
+from returnn.util import BackendEngine
 
 if BackendEngine.is_theano_selected():
   # noinspection PyUnresolvedReferences,PyPackageRequirements
@@ -15,8 +15,8 @@ if BackendEngine.is_theano_selected():
   import theano.tensor as tt
   # noinspection PyUnresolvedReferences,PyPackageRequirements
   import theano.sandbox.cuda as cuda
-  from TheanoUtil import make_var_tuple
-  from Network import LayerNetwork
+  from returnn.theano.util import make_var_tuple
+  from returnn.theano.network import LayerNetwork
 else:
   theano = None
 
@@ -30,7 +30,7 @@ def find_obj_in_stack(cls, stack=None, all_threads=True):
   """
   if all_threads:
     assert stack is None
-    # noinspection PyProtectedMember
+    # noinspection PyProtectedMember,PyUnresolvedReferences
     for tid, stack in sys._current_frames().items():
       obj = find_obj_in_stack(cls=cls, stack=stack, all_threads=False)
       if obj is not None:
@@ -39,7 +39,7 @@ def find_obj_in_stack(cls, stack=None, all_threads=True):
 
   assert not all_threads
   if stack is None:
-    # noinspection PyProtectedMember
+    # noinspection PyProtectedMember,PyUnresolvedReferences
     stack = sys._getframe()
     assert stack, "could not get stack"
 
@@ -75,7 +75,7 @@ def get_device():
   global _device
   if _device:
     return _device
-  from Device import Device
+  from returnn.theano.device import Device
   _device = find_obj_in_stack(Device)
   return _device
 

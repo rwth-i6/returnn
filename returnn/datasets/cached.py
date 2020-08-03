@@ -4,11 +4,11 @@ import gc
 import sys
 import time
 import numpy
-import functools
 import threading
-from Dataset import Dataset
-from Log import log
-from Util import NumbersDict
+import typing
+from .basic import Dataset
+from returnn.log import log
+from returnn.util import NumbersDict
 
 
 class CachedDataset(Dataset):
@@ -35,12 +35,12 @@ class CachedDataset(Dataset):
     self.preload_end = 0
     self.max_ctc_length = 0
     self.ctc_targets = None
-    self.alloc_intervals = None  # type: list
+    self.alloc_intervals = None  # type: typing.Optional[list]
     self._seq_start = []  # [numpy.array([0,0])]  # uses sorted seq idx, see set_batching()
-    self._seq_index = []; """ :type: list[int] """  # Via init_seq_order(). seq_index idx -> hdf seq idx
-    self._seq_index_inv = {}; """ :type: dict[int,int] """  # Via init_seq_order(). hdf seq idx -> seq_index idx
+    self._seq_index = []  # type: typing.List[int]  # Via init_seq_order(). seq_index idx -> hdf seq idx
+    self._seq_index_inv = {}  # type: typing.Dict[int,int]  # Via init_seq_order(). hdf seq idx -> seq_index idx
     self._index_map = range(len(self._seq_index))  # sorted seq idx -> seq_index idx
-    self._tag_idx = {}; ":type: dict[str,int] "  # map of tag -> real-seq-idx. call _update_tag_idx
+    self._tag_idx = {}  # type: typing.Dict[str,int]  # map of tag -> real-seq-idx. call _update_tag_idx
     self.targets = {}
     self.target_keys = []
 
@@ -371,7 +371,7 @@ class CachedDataset(Dataset):
       return
     assert start < end
     i = 0
-    selection = []; """ :type: list[int] """
+    selection = []  # type: typing.List[int]
     modify = self._insert_alloc_interval if invert else self._remove_alloc_interval
     while i < len(self.alloc_intervals) - invert:
       ni = self.alloc_intervals[i + invert][1 - invert]  # insert mode: start idx of next alloc

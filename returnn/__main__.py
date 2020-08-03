@@ -24,31 +24,32 @@ import sys
 import time
 import typing
 import numpy
-from Log import log
-from Config import Config
-from Dataset import Dataset, init_dataset, init_dataset_via_str
-from HDFDataset import HDFDataset
-from Debug import init_ipython_kernel, init_better_exchook, init_faulthandler, init_cuda_not_in_main_proc_check
-from Util import init_thread_join_hack, describe_returnn_version, describe_theano_version, \
+import returnn
+from returnn.log import log
+from returnn.config import Config
+from returnn.datasets import Dataset, init_dataset, init_dataset_via_str
+from returnn.datasets.hdf import HDFDataset
+from returnn.util.debug import init_ipython_kernel, init_better_exchook, init_faulthandler, \
+  init_cuda_not_in_main_proc_check
+from returnn.util.basic import init_thread_join_hack, describe_returnn_version, describe_theano_version, \
   describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple
 
 if typing.TYPE_CHECKING:
+  import returnn.tf.engine
   try:
-    import TFEngine
+    # Try to import. Name does not matter, we will use full package name below.
+    import returnn.theano.engine as _
+    import returnn.theano.server as _
   except ImportError:
-    TFEngine = None
-  try:
-    import Engine
-  except ImportError:
-    Engine = None
+    _ = None
 
 config = None  # type: typing.Optional[Config]
-engine = None  # type: typing.Optional[typing.Union[TFEngine.Engine,Engine.Engine]]
+engine = None  # type: typing.Optional[typing.Union[returnn.tf.engine.Engine,returnn.theano.engine.Engine]]
 train_data = None  # type: typing.Optional[Dataset]
 dev_data = None  # type: typing.Optional[Dataset]
 eval_data = None  # type: typing.Optional[Dataset]
 quit_returnn = False
-server = None
+server = None  # type: typing.Optional[returnn.theano.server.Server]
 
 
 def init_config(config_filename=None, command_line_options=(), default_config=None, extra_updates=None):
@@ -113,8 +114,8 @@ def init_config(config_filename=None, command_line_options=(), default_config=No
 
   # I really don't know where to put this otherwise:
   if config.bool("EnableAutoNumpySharedMemPickling", False):
-    import TaskSystem
-    TaskSystem.SharedMemNumpyConfig["enabled"] = True
+    import returnn.util.task_system
+    returnn.util.task_system.SharedMemNumpyConfig["enabled"] = True
   # Server default options
   if config.value('task', 'train') == 'server':
     config.set('num_inputs', 2)
@@ -148,9 +149,9 @@ def init_theano_devices():
   """
   if not BackendEngine.is_theano_selected():
     return None
-  from Util import TheanoFlags
-  from Config import get_devices_init_args
-  from Device import Device
+  from returnn.util.basic import TheanoFlags
+  from returnn.config import get_devices_init_args
+  from returnn.theano.device import Device
   old_device_config = ",".join(config.list('device', ['default']))
   if config.value("task", "train") == "nop":
     return []
@@ -176,8 +177,8 @@ def get_cache_byte_sizes():
   :rtype: (int,int,int)
   :returns cache size in bytes for (train,dev,eval)
   """
-  import Util
-  cache_sizes_user = config.list('cache_size', ["%iG" % Util.default_cache_size_in_gbytes()])
+  import returnn.util.basic as util
+  cache_sizes_user = config.list('cache_size', ["%iG" % util.default_cache_size_in_gbytes()])
   num_datasets = 1 + config.has('dev') + config.has('eval')
   cache_factor = 1.0
   if len(cache_sizes_user) == 1:
@@ -286,11 +287,11 @@ def init_engine(devices):
   """
   global engine
   if BackendEngine.is_theano_selected():
-    import Engine
-    engine = Engine.Engine(devices)
+    from returnn.theano.engine import Engine
+    engine = Engine(devices)
   elif BackendEngine.is_tensorflow_selected():
-    import TFEngine
-    engine = TFEngine.Engine(config=config)
+    from returnn.tf.engine import Engine
+    engine = Engine(config=config)
   else:
     raise NotImplementedError
 
@@ -323,8 +324,8 @@ def init_backend_engine():
   BackendEngine.select_engine(config=config)
   if BackendEngine.is_theano_selected():
     print("Theano:", describe_theano_version(), file=log.v3)
-    import TheanoUtil
-    TheanoUtil.monkey_patches()
+    import returnn.theano.util
+    returnn.theano.util.monkey_patches()
   elif BackendEngine.is_tensorflow_selected():
     print("TensorFlow:", describe_tensorflow_version(), file=log.v3)
     if get_tensorflow_version_tuple()[0] == 0:
@@ -334,8 +335,8 @@ def init_backend_engine():
         os.environ.get("TF_DEVICE"), config.opt_typed_value("device")), file=log.v4)
       config.set("device", os.environ.get("TF_DEVICE"))
     if config.is_true("use_horovod"):
-      import TFHorovod
-      hvd = TFHorovod.get_ctx(config=config)
+      import returnn.tf.horovod
+      hvd = returnn.tf.horovod.get_ctx(config=config)
       import socket
       if "gpu" in config.value("device", "") or os.environ.get("CUDA_VISIBLE_DEVICES", ""):
         # We assume that we want to use a GPU.
@@ -349,7 +350,7 @@ def init_backend_engine():
           print("Horovod: Not using GPU.", file=log.v3)
       if hvd.rank() == 0:  # Don't spam in all ranks.
         print("Horovod: Reduce type:", hvd.get_reduce_type(), file=log.v3)
-    from TFUtil import debug_register_better_repr, setup_tf_thread_pools, print_available_devices
+    from returnn.tf.util.basic import debug_register_better_repr, setup_tf_thread_pools, print_available_devices
     tf_session_opts = config.typed_value("tf_session_opts", {})
     assert isinstance(tf_session_opts, dict)
     # This must be done after the Horovod logic, such that we only touch the devices we are supposed to touch.
@@ -358,8 +359,8 @@ def init_backend_engine():
     print_available_devices(tf_session_opts=tf_session_opts, file=log.v2)
     debug_register_better_repr()
     if config.is_true("distributed_tf"):
-      import TFDistributed
-      TFDistributed.init_distributed_tf(config)
+      import returnn.tf.distributed
+      returnn.tf.distributed.init_distributed_tf(config)
   else:
     raise NotImplementedError
 
@@ -375,7 +376,7 @@ def init(config_filename=None, command_line_options=(), config_updates=None, ext
   init_thread_join_hack()
   init_config(config_filename=config_filename, command_line_options=command_line_options, extra_updates=config_updates)
   if config.bool("patch_atfork", False):
-    from Util import maybe_restart_returnn_with_atfork_patch
+    from returnn.util.basic import maybe_restart_returnn_with_atfork_patch
     maybe_restart_returnn_with_atfork_patch()
   init_log()
   if extra_greeting:
@@ -396,9 +397,9 @@ def init(config_filename=None, command_line_options=(), config_updates=None, ext
     init_data()
   print_task_properties(devices)
   if config.value('task', 'train') == 'server':
-    import Server
+    from returnn.theano.server import Server
     global server
-    server = Server.Server(config)
+    server = Server(config)
   else:
     init_engine(devices)
 
@@ -438,7 +439,7 @@ def execute_main_task():
   """
   Executes the main task (via config ``task`` option).
   """
-  from Util import hms_fraction
+  from returnn.util.basic import hms_fraction
   start_time = time.time()
   task = config.value('task', 'train')
   if config.is_true("dry_run"):
@@ -527,10 +528,10 @@ def execute_main_task():
     assert config.has('label_file'), 'no output file provided'
     label_file = config.value('label_file', '')
     engine.init_network_from_config(config)
-    engine.classify(engine.devices[0], eval_data, label_file)
+    engine.classify(eval_data, label_file)
   elif task == "hyper_param_tuning":
-    import HyperParamTuning
-    tuner = HyperParamTuning.Optimization(config=config, train_data=train_data)
+    import returnn.tf.hyper_param_tuning
+    tuner = returnn.tf.hyper_param_tuning.Optimization(config=config, train_data=train_data)
     tuner.work()
   elif task == "cleanup_old_models":
     engine.cleanup_old_models(ask_for_confirmation=True)
@@ -587,7 +588,7 @@ def analyze_data(config):  # pylint: disable=redefined-outer-name
   data_key = config.value('data_key', 'data')
   assert ds.is_data_sparse(target), "need for prior calculation"
   assert not ds.is_data_sparse(data_key), "needed for mean/var estimation"
-  from Util import inplace_increment, progress_bar_with_time, NumbersDict
+  from returnn.util.basic import inplace_increment, progress_bar_with_time, NumbersDict
 
   priors = numpy.zeros((ds.get_data_dim(target),), dtype=dtype)
   mean = numpy.zeros((ds.get_data_dim(data_key),), dtype=dtype)

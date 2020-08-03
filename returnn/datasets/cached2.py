@@ -3,7 +3,7 @@
 Provides :class:`CachedDataset2`.
 """
 
-from Dataset import Dataset, DatasetSeq
+from .basic import Dataset, DatasetSeq
 from threading import Condition
 import typing
 try:

@@ -127,7 +127,7 @@ class Log:
         handler.setLevel(logging.DEBUG)
       elif os.path.isdir(os.path.dirname(t)):
         if "$" in t:
-          from Util import get_utc_start_time_filename_part
+          from returnn.util.basic import get_utc_start_time_filename_part
           t = string.Template(t).substitute(date=get_utc_start_time_filename_part())
         self.filename = t
         handler = logging.FileHandler(t)

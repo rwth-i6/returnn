@@ -6,7 +6,7 @@ This is shared across different backends.
 
 import random
 import typing
-from Util import NumbersDict
+from returnn.util import NumbersDict
 
 
 class BatchSeqCopyPart:

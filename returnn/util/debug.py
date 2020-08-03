@@ -52,7 +52,7 @@ def dump_all_thread_tracebacks(exclude_thread_ids=None, exclude_self=False):
   """
   if exclude_thread_ids is None:
     exclude_thread_ids = set()
-  import better_exchook
+  from returnn.util.better_exchook import print_tb
   import threading
 
   if exclude_self:
@@ -86,7 +86,7 @@ def dump_all_thread_tracebacks(exclude_thread_ids=None, exclude_self=False):
       elif tid in exclude_thread_ids:
         print("(Excluded thread.)")
       else:
-        better_exchook.print_tb(stack, file=sys.stdout)
+        print_tb(stack, file=sys.stdout)
       print("")
     print("That were all threads.")
   else:
@@ -98,7 +98,7 @@ def setup_warn_with_traceback():
   Installs some hook for ``warnings.showwarning``.
   """
   import warnings
-  import better_exchook
+  from returnn.util.better_exchook import print_tb
 
   def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
     """
@@ -111,8 +111,8 @@ def setup_warn_with_traceback():
     """
     log = file if hasattr(file, 'write') else sys.stderr
     log.write(warnings.formatwarning(message, category, filename, lineno, line))
-    # noinspection PyProtectedMember
-    better_exchook.print_tb(sys._getframe(), file=log)
+    # noinspection PyProtectedMember,PyUnresolvedReferences
+    print_tb(sys._getframe(), file=log)
 
   warnings.showwarning = warn_with_traceback
 
@@ -122,7 +122,7 @@ def init_better_exchook():
   Installs our own ``sys.excepthook``, which uses :mod:`better_exchook`,
   but adds some special handling for the main thread.
   """
-  import better_exchook
+  from returnn.util.better_exchook import better_exchook
 
   def excepthook(exc_type, exc_obj, exc_tb):
     """
@@ -157,11 +157,11 @@ def init_better_exchook():
         # Print the stack of all other threads.
         dump_all_thread_tracebacks(exclude_thread_ids={main_thread_id})
 
-    better_exchook.better_exchook(exc_type, exc_obj, exc_tb, file=sys.stdout)
+    better_exchook(exc_type, exc_obj, exc_tb, file=sys.stdout)
 
   sys.excepthook = excepthook
 
-  from Util import to_bool
+  from returnn.util.basic import to_bool
   if os.environ.get("DEBUG_WARN_WITH_TRACEBACK") and to_bool(os.environ.get("DEBUG_WARN_WITH_TRACEBACK")):
     setup_warn_with_traceback()
 
@@ -251,7 +251,7 @@ def init_faulthandler(sigusr1_chain=False):
 
   :param bool sigusr1_chain: whether the default SIGUSR1 handler should also be called.
   """
-  from Util import to_bool
+  from returnn.util.basic import to_bool
   # Enable libSigSegfault first, so that we can have both,
   # because faulthandler will also call the original sig handler.
   if os.environ.get("DEBUG_SIGNAL_HANDLER") and to_bool(os.environ.get("DEBUG_SIGNAL_HANDLER")):
@@ -415,14 +415,14 @@ def debug_shell(user_ns=None, user_global_ns=None, exit_afterwards=True):
   :param bool exit_afterwards: will do sys.exit(1) at the end
   """
   print("Debug shell:")
-  from Util import ObjAsDict
-  import DebugHelpers
-  user_global_ns_new = dict(ObjAsDict(DebugHelpers).items())
+  from returnn.util.basic import ObjAsDict
+  from . import debug_helpers
+  user_global_ns_new = dict(ObjAsDict(debug_helpers).items())
   if user_global_ns:
     user_global_ns_new.update(user_global_ns)  # may overwrite vars from DebugHelpers
-  user_global_ns_new["debug"] = DebugHelpers  # make this available always
+  user_global_ns_new["debug"] = debug_helpers  # make this available always
   print("Available debug functions/utils (via DebugHelpers):")
-  for k, v in sorted(vars(DebugHelpers).items()):
+  for k, v in sorted(vars(debug_helpers).items()):
     if k[:1] == "_":
       continue
     print("  %s (%s)" % (k, type(v)))
