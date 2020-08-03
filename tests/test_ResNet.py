@@ -16,7 +16,7 @@ better_exchook.replace_traceback_format_tb()
 from returnn.config import Config
 from returnn.tf.network import *
 from TFNetworkLayer import *
-from TFEngine import *
+from returnn.tf.engine import *
 from returnn.log import log
 import TFCompat
 import TFUtil

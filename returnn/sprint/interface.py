@@ -726,7 +726,7 @@ def _init_base(configfile=None, target_mode=None, epoch=None, sprint_opts=None):
     global Engine
     if BackendEngine.is_tensorflow_selected():
       # Use TFEngine.Engine class instead of Engine.Engine.
-      from TFEngine import Engine
+      from returnn.tf.engine import Engine
     elif BackendEngine.is_theano_selected():
       from Engine import Engine
 

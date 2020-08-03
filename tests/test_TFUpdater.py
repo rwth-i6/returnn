@@ -218,7 +218,7 @@ def test_Updater_simple_batch():
     updater.set_trainable_vars(network.get_trainable_params())
     updater.init_optimizer_vars(session=session)
 
-    from TFDataPipeline import FeedDictDataProvider
+    from returnn.tf.data_pipeline import FeedDictDataProvider
     batches = dataset.generate_batches(
       recurrent_net=network.recurrent,
       batch_size=100,
@@ -263,7 +263,7 @@ def test_Updater_multiple_optimizers():
     assert isinstance(updater.optimizer, WrapOptimizer)
     assert len(updater.optimizer.optimizers) == 3
 
-    from TFDataPipeline import FeedDictDataProvider
+    from returnn.tf.data_pipeline import FeedDictDataProvider
     batches = dataset.generate_batches(
       recurrent_net=network.recurrent,
       batch_size=100,
@@ -309,7 +309,7 @@ def test_Updater_multiple_optimizers_and_opts():
     assert isinstance(updater.optimizer, WrapOptimizer)
     assert len(updater.optimizer.optimizers) == 3
 
-    from TFDataPipeline import FeedDictDataProvider
+    from returnn.tf.data_pipeline import FeedDictDataProvider
     batches = dataset.generate_batches(
       recurrent_net=network.recurrent,
       batch_size=100,

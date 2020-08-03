@@ -28,7 +28,7 @@ import TFCompat
 from returnn.tf.util.basic import Data, CollectionKeys
 from returnn.tf.network import TFNetwork
 from TFNetworkLayer import LayerBase, register_layer_class, WrappedInternalLayer
-from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell, ChoiceLayer
+from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell, ChoiceLayer
 
 
 config = None  # type: typing.Optional[Config]
@@ -70,7 +70,7 @@ def create_graph(train_flag, eval_flag, search_flag, net_dict):
   :rtype: TFNetwork.TFNetwork
   """
   print("Loading network, train flag %s, eval flag %s, search flag %s" % (train_flag, eval_flag, search_flag))
-  from TFEngine import Engine
+  from returnn.tf.engine import Engine
   from returnn.tf.network import TFNetwork
   network, updater = Engine.create_network(
     config=config, rnd_seed=1,

@@ -1,7 +1,7 @@
 import tensorflow as tf
 import TFCompat
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, Loss, get_concat_sources_data_template
-from TFNetworkRecLayer import RecLayer
+from returnn.tf.layers.rec import RecLayer
 from returnn.tf.util.basic import Data, sparse_labels_with_seq_lens
 from returnn.util.basic import softmax
 

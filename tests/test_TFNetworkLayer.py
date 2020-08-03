@@ -1585,7 +1585,7 @@ def test_reuse_params_map_custom_dep_loop():
   })
   with make_scope() as session:
     print("Construct for training")
-    from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+    from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
     train_net = TFNetwork(config=config, train_flag=True)
     train_net.construct_from_dict(config.typed_dict["network"])
     train_rec_layer = train_net.layers["output"]

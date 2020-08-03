@@ -33,7 +33,7 @@ sys.path.append(returnn_dir)
 
 # Returnn imports
 import rnn
-from TFEngine import Runner
+from returnn.tf.engine import Runner
 from Dataset import init_dataset
 from returnn.util.basic import NumbersDict, Stats, deep_update_dict_values
 

@@ -126,11 +126,10 @@ from threading import Thread, Condition
 import numpy
 import tensorflow as tf
 
-from Dataset import Dataset, BatchSetGenerator
-from returnn.tf.network import ExternData, Data
-import TFCompat
-import TFHorovod
-from returnn.util.basic import NumbersDict
+from returnn.datasets.basic import Dataset, BatchSetGenerator
+from returnn.tf.network import ExternData
+import returnn.tf.compat as tf_compat
+import returnn.tf.horovod as tf_horovod
 from returnn.log import log
 
 
@@ -292,7 +291,7 @@ class FeedDictDataProvider(DataProviderBase):
         return None
       if step > 1 and (cur_batch_idx - start) % step != 0:
         return None
-    from Dataset import Batch, shapes_for_batches
+    from returnn.datasets.basic import Batch, shapes_for_batches
     assert isinstance(batch, Batch)
     # In Returnn with Theano, we usually have the shape (time,batch,feature).
     # In TensorFlow, the default is (batch,time,feature).
@@ -346,7 +345,7 @@ class FeedDictDataProvider(DataProviderBase):
 
   def _thread_main(self):
     try:
-      import better_exchook
+      from returnn.util import better_exchook
       better_exchook.install()
 
       while self.batches.has_more() and not self.coord.should_stop():
@@ -494,10 +493,10 @@ class InputContext(object):
     self.horovod_enabled = False
     self.horovod_rank = None
     self.horovod_size = None
-    if TFHorovod.get_ctx(config=config):
+    if tf_horovod.get_ctx(config=config):
       self.horovod_enabled = True
-      self.horovod_rank = TFHorovod.get_ctx().rank()  # rank 0 is the chief
-      self.horovod_size = TFHorovod.get_ctx().size()
+      self.horovod_rank = tf_horovod.get_ctx().rank()  # rank 0 is the chief
+      self.horovod_size = tf_horovod.get_ctx().size()
       self.num_dataset_consumers = self.horovod_size
       raise NotImplementedError  # TODO...
 
@@ -603,8 +602,8 @@ class InputContext(object):
     :rtype: str
     """
     # TODO this is probably incomplete
-    import TFUtil
-    if TFUtil.is_gpu_available():
+    import returnn.tf.util.basic
+    if returnn.tf.util.basic.is_gpu_available():
       return "/device:GPU:0"
     return "/device:CPU:0"
 
@@ -661,7 +660,7 @@ class DatasetDataProvider(DataProviderBase):
           size_key = "size:%s:%i" % (key, axis_wo_b)
           output_types[size_key] = tf.as_dtype(data.size_dtype)
           output_shapes[size_key] = tf.TensorShape([None])  # [Batch]
-    self.iterator = TFCompat.v1.data.Iterator.from_structure(output_types=output_types, output_shapes=output_shapes)
+    self.iterator = tf_compat.v1.data.Iterator.from_structure(output_types=output_types, output_shapes=output_shapes)
     self.iterator_next_element = self.iterator.get_next()
     for key, data in extern_data.data.items():
       assert data.placeholder is None

@@ -73,7 +73,7 @@ import rnn
 import Util
 from returnn.tf.network import TFNetwork
 from TFNetworkLayer import SourceLayer, LayerBase, LinearLayer
-from TFNetworkRecLayer import ChoiceLayer
+from returnn.tf.layers.rec import ChoiceLayer
 
 
 def get_network():
@@ -176,7 +176,7 @@ def main():
   print("Blocks total num params: %i" % blocks_total_num_params)
 
   # Init our network structure.
-  from TFNetworkRecLayer import _SubnetworkRecCell
+  from returnn.tf.layers.rec import _SubnetworkRecCell
   _SubnetworkRecCell._debug_out = []  # enable for debugging intermediate values below
   ChoiceLayer._debug_out = []  # also for debug outputs of search
   rnn.engine.use_search_flag = True  # construct the net as in search

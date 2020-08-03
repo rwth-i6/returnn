@@ -25,7 +25,7 @@ import numpy
 import numpy.testing
 from pprint import pprint
 import contextlib
-import better_exchook
+from returnn.util import better_exchook
 from returnn.log import log
 import returnn.util.debug
 
@@ -121,7 +121,7 @@ def test_FeedDictDataProvider():
   batch.add_frames(seq_idx=seq_idx, seq_start_frame=0, length=dataset.get_seq_length(seq_idx))
   batch_generator = iter([batch])
   batches = BatchSetGenerator(dataset, generator=batch_generator)
-  from TFDataPipeline import FeedDictDataProvider
+  from returnn.tf.data_pipeline import FeedDictDataProvider
   data_provider = FeedDictDataProvider(
     tf_session=session, extern_data=extern_data,
     data_keys=["data", "classes"],
@@ -171,7 +171,7 @@ def test_DatasetDataProvider():
     extern_data = ExternData()
     extern_data.init_from_dataset(dataset, auto_create_placeholders=False)
 
-    from TFDataPipeline import DatasetDataProvider
+    from returnn.tf.data_pipeline import DatasetDataProvider
     data_provider = DatasetDataProvider(
       extern_data=extern_data, config=config, datasets={"train": dataset})
 
@@ -324,7 +324,7 @@ def test_engine_train_uneven_batches():
 
 
 def test_engine_train_dummy_distributed():
-  import TFDistributed
+  import returnn.tf.distributed
   rnd = numpy.random.RandomState(42)
   from returnn.datasets.generating import StaticDataset
   n_data_dim = 2
@@ -366,14 +366,14 @@ def test_engine_train_dummy_distributed():
   })
   _cleanup_old_models(config)
 
-  with TFDistributed._temporary_init_distributed_tf(config=config):
-    assert TFDistributed.is_enabled()
+  with returnn.tf.distributed._temporary_init_distributed_tf(config=config):
+    assert returnn.tf.distributed.is_enabled()
     engine = Engine(config=config)
     engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
     tf_session = engine.tf_session
     assert isinstance(tf_session, tf.compat.v1.Session)
     print("Session uses target:", tf_session.sess_str)
-    assert tf_session.sess_str == TFDistributed.get_session_target().encode("utf8")
+    assert tf_session.sess_str == returnn.tf.distributed.get_session_target().encode("utf8")
     engine.train()
     engine.finalize()
 
@@ -724,7 +724,7 @@ def test_engine_end_layer(extra_rec_kwargs=None):
   """
   from returnn.util.basic import dict_joined
   from returnn.datasets.generating import DummyDataset
-  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+  from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 1
   n_classes_dim = 5
@@ -796,7 +796,7 @@ def check_engine_search(extra_rec_kwargs=None):
   """
   from returnn.util.basic import dict_joined
   from returnn.datasets.generating import DummyDataset
-  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+  from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 7
@@ -870,7 +870,7 @@ def check_engine_search_attention(extra_rec_kwargs=None):
   """
   from returnn.util.basic import dict_joined
   from returnn.datasets.generating import DummyDataset
-  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+  from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 7
@@ -1242,7 +1242,7 @@ def check_train_and_search_two_targets(net_dict):
   Tests training and search for network architectures having two targets ("classes_0", "classes_1")
   and two corresponding output layers ("decision_0", "decision_1").
   """
-  from MetaDataset import MetaDataset
+  from returnn.datasets.meta import MetaDataset
   from returnn.tf.util.basic import DimensionTag
   from test_HDFDataset import generate_hdf_from_other
 
@@ -1382,7 +1382,7 @@ def test_attention_two_dependent_targets():
 
 def test_rec_optim_all_out():
   from returnn.datasets.generating import DummyDataset
-  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+  from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 7
@@ -1689,7 +1689,7 @@ def test_deterministic_train_rec_nativelstm2():
 
 
 def _create_deterministic_layer_checks():
-  from TFNetworkLayer import get_layer_class_name_list, get_layer_class
+  from returnn.tf.layers.basic import get_layer_class_name_list, get_layer_class
   from returnn.util.basic import collect_mandatory_class_init_kwargs
   for cls_name in get_layer_class_name_list():
     cls = get_layer_class(cls_name)
@@ -1716,7 +1716,7 @@ def test_rec_subnet_auto_optimize():
   Thus, training should be equivalent.
   Also, training the one model, and then importing it in the original model, should work.
   """
-  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+  from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
   n_data_dim = 2
   n_classes_dim = 3
   from returnn.datasets.generating import DummyDataset
@@ -1941,7 +1941,7 @@ def test_rec_subnet_construct_2():
     train_net = TFNetwork(extern_data=extern_data, train_flag=True)
     train_net.construct_from_dict(net_dict)
     rec_layer = train_net.layers["output"]
-    from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+    from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
     assert isinstance(rec_layer, RecLayer)
     assert isinstance(rec_layer.cell, _SubnetworkRecCell)
     assert_equal(set(rec_layer.cell.input_layers_moved_out), {"output", "target_embed"})
@@ -2004,7 +2004,7 @@ def test_rec_subnet_construct_3():
     train_net = TFNetwork(extern_data=extern_data, train_flag=True)
     train_net.construct_from_dict(net_dict)
     rec_layer = train_net.layers["output"]
-    from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+    from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
     assert isinstance(rec_layer, RecLayer)
     assert isinstance(rec_layer.cell, _SubnetworkRecCell)
     assert_equal(set(rec_layer.cell.input_layers_moved_out), {"output", "target_embed"})
@@ -2438,7 +2438,7 @@ def test_search_multi_choice_hdf_dump():
 
     return net_dict
 
-  from Dataset import init_dataset
+  from returnn.datasets import init_dataset
 
   def run(task):
     """
@@ -2594,7 +2594,7 @@ def test_preload_from_files():
   })
 
   from returnn.datasets.generating import DummyDataset
-  from TFEngine import Engine
+  from returnn.tf.engine import Engine
   seq_len = 5
   n_data_dim = n_in
   n_classes_dim = n_out
@@ -2678,7 +2678,7 @@ def test_preload_from_files_with_reuse():
   })
 
   from returnn.datasets.generating import DummyDataset
-  from TFEngine import Engine
+  from returnn.tf.engine import Engine
   seq_len = 5
   n_data_dim = n_in
   n_classes_dim = n_out
@@ -2768,7 +2768,7 @@ def test_preload_from_files_ignore_missing():
   })
 
   from returnn.datasets.generating import DummyDataset
-  from TFEngine import Engine
+  from returnn.tf.engine import Engine
   seq_len = 5
   n_data_dim = n_in
   n_classes_dim = n_out
@@ -2843,7 +2843,7 @@ def test_init_network_from_config_preload_from_files_eval():
   })
 
   from returnn.datasets.generating import DummyDataset
-  from TFEngine import Engine
+  from returnn.tf.engine import Engine
   seq_len = 5
   n_data_dim = n_in
   n_classes_dim = n_out
@@ -2972,7 +2972,7 @@ def test_unflatten_2d():
   # See also test_SimpleHDFWriter_ndim1_var_len.
   # And unflatten_nd, and UnflattenNdLayer.
   from returnn.datasets.hdf import HDFDataset, SimpleHDFWriter
-  from Dataset import set_config_num_inputs_outputs_from_dataset
+  from returnn.datasets.basic import set_config_num_inputs_outputs_from_dataset
   # E.g. attention weights, shape (dec-time,enc-time) per seq.
   fn = _get_tmp_file(suffix=".hdf")
   os.remove(fn)  # SimpleHDFWriter expects that the file does not exist
@@ -3057,9 +3057,9 @@ def test_attention_forward_hdf_then_unflatten_2d():
   # See also test_SimpleHDFWriter_ndim1_var_len.
   # And unflatten_nd, and UnflattenNdLayer.
   from returnn.datasets.hdf import HDFDataset
-  from Dataset import set_config_num_inputs_outputs_from_dataset
+  from returnn.datasets.basic import set_config_num_inputs_outputs_from_dataset
   from returnn.datasets.generating import TaskNumberBaseConvertDataset
-  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+  from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
 
   # Simple version of e.g.:
   # https://github.com/rwth-i6/returnn-experiments/blob/master/2018-attention/wmt2017ende/blocks-flstm.enc6l.decb.pretrain2.adam.lr1e_3.mseqs100.bs4000.ls01.tembi0.invfert.oeps1e_8.gradnoise0.seqsort1000.config
@@ -3214,7 +3214,7 @@ def test_preinit_reset_train_dataset():
   # TaskNumberBaseConvertDataset does not support this, so we convert it to HDF.
   print("Preparing data...")
   from test_HDFDataset import generate_hdf_from_other, get_test_tmp_file
-  from Dataset import init_dataset
+  from returnn.datasets import init_dataset
   n_in, n_out = 2, 8
   default_train_hdf_fn = generate_hdf_from_other({
     "class": "TaskNumberBaseConvertDataset", "num_seqs": 11,
@@ -3339,7 +3339,7 @@ if __name__ == "__main__":
   finally:
     try:
       session.close()
-      TFCompat.v1.reset_default_graph()
+      tf_compat.v1.reset_default_graph()
     except Exception as exc:
       print("test finally handler, exception:", type(exc).__name__, ":", exc)
     import threading

@@ -31,7 +31,7 @@ from returnn.config import Config
 from returnn.log import log
 from Dataset import Dataset
 from returnn.datasets.generating import StaticDataset
-from TFEngine import Engine, Runner, CancelTrainingException
+from returnn.tf.engine import Engine, Runner, CancelTrainingException
 from returnn.util.basic import CollectionReadCheckCovered, hms_fraction, guess_requested_max_num_threads
 
 

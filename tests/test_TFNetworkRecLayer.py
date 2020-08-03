@@ -22,7 +22,7 @@ from returnn.log import log
 from returnn.config import Config
 import TFCompat
 from returnn.tf.network import *
-from TFNetworkRecLayer import *
+from returnn.tf.layers.rec import *
 from returnn.tf.util.basic import is_gpu_available
 import TFUtil
 TFUtil.debug_register_better_repr()
@@ -1167,7 +1167,7 @@ def test_rec_explicit_lstm():
 
 
 def test_search_no_rec_explicit():
-  from TFNetworkRecLayer import _SubnetworkRecCell
+  from returnn.tf.layers.rec import _SubnetworkRecCell
   beam_size = 3
   logits = numpy.array([
     [1., 2., 3., 0.],
@@ -1278,7 +1278,7 @@ def test_search_no_rec_explicit():
 
 
 def test_search_no_rec_explicit_dyn_len():
-  from TFNetworkRecLayer import _SubnetworkRecCell
+  from returnn.tf.layers.rec import _SubnetworkRecCell
   beam_size = 3
   logits = numpy.array([
     [-1., -2., -3., -9.],
@@ -2008,7 +2008,7 @@ def test_rec_layer_multi_choice_search_resolve():
   n_tgt_dim = 11
 
   from returnn.datasets.generating import StaticDataset
-  from TFDataPipeline import FeedDictDataProvider
+  from returnn.tf.data_pipeline import FeedDictDataProvider
   from EngineBatch import Batch, BatchSetGenerator
   dataset = StaticDataset(
     data=[
@@ -2217,7 +2217,7 @@ def test_target_with_beam():
 
 
 def test_rec_layer_move_out_of_loop():
-  from TFNetworkRecLayer import _SubnetworkRecCell
+  from returnn.tf.layers.rec import _SubnetworkRecCell
   from returnn.tf.util.basic import get_global_train_flag_placeholder, stop_event_writer_thread
   n_src_dim = 5
   n_tgt_dim = 7
@@ -2293,7 +2293,7 @@ def test_rec_layer_move_out_of_loop():
     :param TFNetwork net:
     """
     from returnn.datasets.generating import StaticDataset
-    from TFDataPipeline import FeedDictDataProvider
+    from returnn.tf.data_pipeline import FeedDictDataProvider
     from EngineBatch import Batch, BatchSetGenerator
     from returnn.util.basic import dict_joined
     dataset = StaticDataset(
@@ -2383,7 +2383,7 @@ def test_rec_layer_move_out_of_loop():
 
 
 def test_rec_layer_move_out_of_loop_keep_constraints():
-  from TFNetworkRecLayer import _SubnetworkRecCell
+  from returnn.tf.layers.rec import _SubnetworkRecCell
   from returnn.tf.util.basic import get_global_train_flag_placeholder
   n_src_dim = 5
   n_tgt_dim = 7
@@ -2494,7 +2494,7 @@ def test_rec_layer_move_out_of_loop_ref_att_generic_att():
   This will move out :class:`GenericAttentionLayer` (and basically everything)
   because we provide some reference att weights.
   """
-  from TFNetworkRecLayer import _SubnetworkRecCell
+  from returnn.tf.layers.rec import _SubnetworkRecCell
   from returnn.tf.util.basic import get_global_train_flag_placeholder, stop_event_writer_thread
   n_src_dim = 5
   n_tgt_dim = 7
@@ -2561,7 +2561,7 @@ def test_rec_layer_move_out_of_loop_ref_att_generic_att():
     :param TFCompat.v1.Session session:
     """
     from returnn.datasets.generating import StaticDataset
-    from TFDataPipeline import FeedDictDataProvider
+    from returnn.tf.data_pipeline import FeedDictDataProvider
     from EngineBatch import Batch, BatchSetGenerator
     from returnn.util.basic import dict_joined, softmax
     rnd = numpy.random.RandomState(42)
@@ -2695,7 +2695,7 @@ def test_same_spatial_dim_after_rec_layers():
 
 
 def test_rec_layer_rnn_train_and_search():
-  from TFNetworkRecLayer import _SubnetworkRecCell
+  from returnn.tf.layers.rec import _SubnetworkRecCell
   n_src_dim = 5
   n_tgt_dim = 7
   beam_size = 3
@@ -2763,7 +2763,7 @@ def test_rec_layer_rnn_train_and_search():
     print("Create network with train_flag=%r, search_flag=%r." % (train_flag, search_flag))
 
     from returnn.datasets.generating import StaticDataset
-    from TFDataPipeline import FeedDictDataProvider
+    from returnn.tf.data_pipeline import FeedDictDataProvider
     from EngineBatch import Batch, BatchSetGenerator
     from returnn.util.basic import dict_joined
     dataset = StaticDataset(
@@ -2838,7 +2838,7 @@ def test_rec_layer_rnn_train_and_search():
 def test_rec_layer_local_att_train_and_search():
   # https://github.com/rwth-i6/returnn-experiments/blob/master/2019-asr-local-attention/librispeech/local-heuristic.argmax.win05.exp3.ctc.config
   # Note the small fix in p_t_in.
-  from TFNetworkRecLayer import _SubnetworkRecCell
+  from returnn.tf.layers.rec import _SubnetworkRecCell
   n_src_dim = 5
   n_tgt_dim = 7
   beam_size = 3
@@ -2936,7 +2936,7 @@ def test_rec_layer_local_att_train_and_search():
     print("Create network with train_flag=%r, search_flag=%r." % (train_flag, search_flag))
 
     from returnn.datasets.generating import StaticDataset
-    from TFDataPipeline import FeedDictDataProvider
+    from returnn.tf.data_pipeline import FeedDictDataProvider
     from EngineBatch import Batch, BatchSetGenerator
     from returnn.util.basic import dict_joined
     dataset = StaticDataset(
@@ -3051,7 +3051,7 @@ def test_same_spatial_dim_after_rec_layers_with_pool():
 
 
 def test_rec_layer_search_select_src():
-  from TFNetworkRecLayer import _SubnetworkRecCell
+  from returnn.tf.layers.rec import _SubnetworkRecCell
   n_src_dim = 5
   n_tgt_dim = 7
   beam_size = 12
@@ -3239,7 +3239,7 @@ def test_rec_subnet_simple_rnn():
     output_layer = network.get_default_output_layer(must_exist=True)
     assert isinstance(output_layer, RecLayer)
     cell = output_layer.cell
-    from TFNetworkRecLayer import _SubnetworkRecCell
+    from returnn.tf.layers.rec import _SubnetworkRecCell
     assert isinstance(cell, _SubnetworkRecCell)
     cell_sub_layer_out = cell.layer_data_templates["output"].output
     assert isinstance(cell_sub_layer_out, Data)
@@ -3360,7 +3360,7 @@ def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, sha
     "num_inputs": n_in,
     "num_outputs": n_out
   })
-  from TFNetworkRecLayer import _SubnetworkRecCell
+  from returnn.tf.layers.rec import _SubnetworkRecCell
   with make_scope() as session:
     print("Create non-optimized rec layer (with subnet layer moved out)")
     rec_layer_dict["optimize_move_layers_out"] = False
@@ -3793,7 +3793,7 @@ class TransformerNetwork:
 
 
 def test_reclayer_optimize_out_transformer():
-  from TFNetworkRecLayer import _SubnetworkRecCell
+  from returnn.tf.layers.rec import _SubnetworkRecCell
   n_src_dim = 5
   n_tgt_dim = 7
 
@@ -3877,7 +3877,7 @@ def test_reclayer_optimize_out_transformer():
 
 
 def test_reclayer_move_out_input_train_and_search():
-  from TFNetworkRecLayer import _SubnetworkRecCell
+  from returnn.tf.layers.rec import _SubnetworkRecCell
   n_src_dim = 5
   n_tgt_dim = 7
   beam_size = 12
@@ -4298,7 +4298,7 @@ def test_BlocksparseLSTM_load_params_from_native_lstm():
 
 
 def test_rec_layer_search_select_src_reuse_layer():
-  from TFNetworkRecLayer import _SubnetworkRecCell
+  from returnn.tf.layers.rec import _SubnetworkRecCell
   n_src_dim = 7
   n_tgt_dim = 7
   beam_size = 12
@@ -4655,7 +4655,7 @@ def test_GenericAttentionLayer_extra_spatial_multi_head():
 
 def test_MaskedComputationLayer_UnmaskLayer_in_loop():
   from test_TFNetworkLayer import make_feed_dict
-  from TFNetworkRecLayer import _SubnetworkRecCell
+  from returnn.tf.layers.rec import _SubnetworkRecCell
   with make_scope() as session:
     config = Config({"debug_print_layer_output_template": True})
     net = TFNetwork(
@@ -4712,7 +4712,7 @@ def test_MaskedComputationLayer_UnmaskLayer_in_loop():
 
 
 def test_MaskedComputationLayer_UnmaskLayer_masked_outside():
-  from TFNetworkRecLayer import _SubnetworkRecCell
+  from returnn.tf.layers.rec import _SubnetworkRecCell
   with make_scope() as session:
     config = Config({"debug_print_layer_output_template": True})
     net = TFNetwork(
@@ -5066,7 +5066,7 @@ def test_OptimalCompletionsLayer():
 
 
 def test_extra_scatter_nd_search_train():
-  from TFNetworkRecLayer import _SubnetworkRecCell
+  from returnn.tf.layers.rec import _SubnetworkRecCell
   rnd = numpy.random.RandomState(42)
   n_batch, n_enc_time, n_in, n_dec_time, n_out = 2, 11, 5, 7, 6
   target = "classes"

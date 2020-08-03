@@ -202,7 +202,7 @@ class LayerNetworkDescription:
       if not isinstance(num_outputs, dict):
         num_outputs = {target: num_outputs}
       num_outputs = num_outputs.copy()
-      from Dataset import convert_data_dims
+      from returnn.datasets.basic import convert_data_dims
       num_outputs = convert_data_dims(num_outputs, leave_dict_as_is=BackendEngine.is_tensorflow_selected())
       if "data" in num_outputs:
         num_inputs = num_outputs["data"]
@@ -242,7 +242,7 @@ class LayerNetworkDescription:
       num_inputs = _num_inputs
       num_outputs = _num_outputs
     if not num_inputs and not num_outputs and config.has("load") and BackendEngine.is_theano_selected():
-      from Network import LayerNetwork
+      from returnn.theano.network import LayerNetwork
       import h5py
       model = h5py.File(config.value("load", ""), "r")
       # noinspection PyProtectedMember
@@ -277,11 +277,11 @@ class LayerNetworkDescription:
     :param bool reverse: reverse or not
     :rtype: dict[str]
     """
-    import Util
-    if Util.BackendEngine.is_theano_selected():
-      from NetworkLayer import get_layer_class
-    elif Util.BackendEngine.is_tensorflow_selected():
-      from TFNetworkLayer import get_layer_class
+    from returnn.util.basic import BackendEngine, getargspec
+    if BackendEngine.is_theano_selected():
+      from returnn.theano.layers.basic import get_layer_class
+    elif BackendEngine.is_tensorflow_selected():
+      from returnn.tf.layers.basic import get_layer_class
     else:
       raise NotImplementedError
     params = dict(self.default_layer_info)
@@ -298,7 +298,7 @@ class LayerNetworkDescription:
         else:
           params['name'] += "_bw"
           params['reverse'] = True
-      if 'sharpgates' in Util.getargspec(layer_class.__init__).args[1:]:
+      if 'sharpgates' in getargspec(layer_class.__init__).args[1:]:
         params['sharpgates'] = self.sharpgates
     return params
 

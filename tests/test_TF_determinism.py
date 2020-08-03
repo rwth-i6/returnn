@@ -26,7 +26,7 @@ import sys
 
 sys.path += ["."]  # Python 3 hack
 
-from TFEngine import *
+from returnn.tf.engine import *
 from returnn.config import Config
 
 from numpy.testing import assert_array_equal, assert_equal

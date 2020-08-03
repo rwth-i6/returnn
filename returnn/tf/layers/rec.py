@@ -7,13 +7,13 @@ from __future__ import print_function
 
 import typing
 import tensorflow as tf
-import TFCompat
+import returnn.tf.compat as tf_compat
 try:
   from tensorflow.python.ops.nn import rnn_cell
 except ImportError:
   from tensorflow.python.ops import rnn_cell
 from returnn.tf.network import LayerNotFound
-from TFNetworkLayer import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template, Loss
+from .basic import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template, Loss
 from returnn.tf.util.basic import Data, SearchBeam, reuse_name_scope, get_random_seed, select_src_beams, DimensionTag
 from returnn.util.basic import NotSpecified
 from returnn.log import log
@@ -132,7 +132,7 @@ class RecLayer(_ConcatInputLayer):
         from tensorflow.contrib import cudnn_rnn
       except ImportError:
         pass
-    import TFNativeOp
+    import returnn.tf.native_op as tf_native_op
     if direction is not None:
       assert direction in [-1, 1]
     self._last_hidden_state = None  # type: typing.Optional[tf.Tensor]
@@ -197,7 +197,7 @@ class RecLayer(_ConcatInputLayer):
     else:
       default_var_initializer = xavier_initializer(seed=self.network.random.randint(2**31))
     with reuse_name_scope("rec", initializer=default_var_initializer) as scope:
-      assert isinstance(scope, TFCompat.v1.VariableScope)
+      assert isinstance(scope, tf_compat.v1.VariableScope)
       self._rec_scope = scope
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
       with self.var_creation_scope():
@@ -224,7 +224,7 @@ class RecLayer(_ConcatInputLayer):
           y = self._get_output_cell(self.cell)
         elif cudnn_rnn and isinstance(self.cell, cudnn_types):
           y = self._get_output_cudnn(self.cell)
-        elif isinstance(self.cell, TFNativeOp.RecSeqCellOp):
+        elif isinstance(self.cell, tf_native_op.RecSeqCellOp):
           y = self._get_output_native_rec_op(self.cell)
         elif isinstance(self.cell, _SubnetworkRecCell):
           y = self._get_output_subnet_unit(self.cell)
@@ -236,7 +236,7 @@ class RecLayer(_ConcatInputLayer):
         # Very generic way to collect all created params.
         # Note that for the TF RNN cells, there is no other way to do this.
         # Also, see the usage of :func:`LayerBase.cls_layer_scope`, e.g. for initial vars.
-        params = TFCompat.v1.get_collection(TFCompat.v1.GraphKeys.GLOBAL_VARIABLES, scope=re.escape(scope_name_prefix))
+        params = tf_compat.v1.get_collection(tf_compat.v1.GraphKeys.GLOBAL_VARIABLES, scope=re.escape(scope_name_prefix))
         self._add_params(params=params, scope_name_prefix=scope_name_prefix)
         # More specific way. Should not really add anything anymore but you never know.
         # Also, this will update self.saveable_param_replace.
@@ -264,7 +264,7 @@ class RecLayer(_ConcatInputLayer):
       # Sublayers do not know whether the RecLayer is trainable. If it is not, we need to mark all defined parameters
       # as untrainable
       if not self.trainable:
-        trainable_collection_ref = p.graph.get_collection_ref(TFCompat.v1.GraphKeys.TRAINABLE_VARIABLES)
+        trainable_collection_ref = p.graph.get_collection_ref(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES)
         if p in trainable_collection_ref:
           trainable_collection_ref.remove(p)
 
@@ -501,7 +501,7 @@ class RecLayer(_ConcatInputLayer):
         name = m[name.lower()]
     if name.lower() in ["lstmp", "lstm"]:
       name = cls._default_lstm_unit
-    if not TFCompat.have_contrib and name.lower() in ["LSTMBlock".lower(), "LSTMBlockFused".lower()]:
+    if not tf_compat.have_contrib and name.lower() in ["LSTMBlock".lower(), "LSTMBlockFused".lower()]:
       # E.g. TF 2 does not have the contrib module and also does not have LSTMBlock anymore.
       # (Actually, the raw op is still there, but not the wrapper class...)
       if cell_only:
@@ -659,9 +659,9 @@ class RecLayer(_ConcatInputLayer):
     assert not self.input_data.sparse
     x, seq_len = self._get_input()
     if self._direction == -1:
-      x = TFCompat.v1.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
+      x = tf_compat.v1.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
     if isinstance(cell, BaseRNNCell):
-      with TFCompat.v1.variable_scope(TFCompat.v1.get_variable_scope(), initializer=self._fwd_weights_initializer):
+      with tf_compat.v1.variable_scope(tf_compat.v1.get_variable_scope(), initializer=self._fwd_weights_initializer):
         x = cell.get_input_transformed(x)
     if isinstance(cell, rnn_cell.RNNCell):  # e.g. BasicLSTMCell
       if not self.input_data.have_time_axis():
@@ -675,7 +675,7 @@ class RecLayer(_ConcatInputLayer):
         # Earlier, we just truncated it in that case and filled with zero afterwards,
         # which is bad, as this silently introduces wrong behavior for this case.
         with tf.control_dependencies([
-              TFCompat.v1.assert_greater_equal(
+              tf_compat.v1.assert_greater_equal(
                 self._max_seq_len, original_len,
                 message="required for unroll: max_seq_len >= seq_len")]):
           pad_len = tf.maximum(0, self._max_seq_len - original_len)  # max, in case we want to support truncate later
@@ -706,7 +706,7 @@ class RecLayer(_ConcatInputLayer):
     else:
       raise Exception("invalid type: %s" % type(cell))
     if self._direction == -1:
-      y = TFCompat.v1.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
+      y = tf_compat.v1.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
     return y
 
   @staticmethod
@@ -795,8 +795,8 @@ class RecLayer(_ConcatInputLayer):
     x, seq_len = self._get_input()
     n_batch = tf.shape(seq_len)[0]
     if self._direction == -1:
-      x = TFCompat.v1.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
-    with TFCompat.v1.variable_scope("cudnn"):
+      x = tf_compat.v1.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
+    with tf_compat.v1.variable_scope("cudnn"):
       cell.build(x.get_shape())
       num_layers = 1
       # noinspection PyProtectedMember
@@ -830,14 +830,14 @@ class RecLayer(_ConcatInputLayer):
         direction=cell.direction,
         scope="%s/params_canonical" % get_current_var_scope_name(),
         name="%s/params_canonical" % get_current_var_scope_name())
-      TFCompat.v1.add_to_collection(TFCompat.v1.GraphKeys.SAVEABLE_OBJECTS, params_saveable)
+      tf_compat.v1.add_to_collection(tf_compat.v1.GraphKeys.SAVEABLE_OBJECTS, params_saveable)
       self.saveable_param_replace[params] = params_saveable
       # It's like a fused cell, i.e. operates on the full sequence.
       input_h = tf.zeros((num_layers, n_batch, self.output.dim), dtype=tf.float32)
       input_c = tf.zeros((num_layers, n_batch, self.output.dim), dtype=tf.float32)
       y, _ = cell(x, initial_state=(input_h, input_c))
     if self._direction == -1:
-      y = TFCompat.v1.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
+      y = tf_compat.v1.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
     return y
 
   def _get_output_native_rec_op(self, cell):
@@ -856,14 +856,14 @@ class RecLayer(_ConcatInputLayer):
         # The cell get's x as-is. It will internally does the matrix mult and add the bias.
         pass
       else:
-        weights = TFCompat.v1.get_variable(
+        weights = tf_compat.v1.get_variable(
           name="W", shape=(self.input_data.dim, cell.n_input_dim), dtype=tf.float32,
           initializer=self._fwd_weights_initializer)
         if self.input_data.sparse:
           x = tf.nn.embedding_lookup(weights, to_int32_64(x))
         else:
           x = dot(x, weights)
-        b = TFCompat.v1.get_variable(
+        b = tf_compat.v1.get_variable(
           name="b", shape=(cell.n_input_dim,), dtype=tf.float32, initializer=self._bias_initializer)
         if len(cell.n_input_dim_parts) > 1:
           set_param_axes_split_info(weights, [[self.input_data.dim], cell.n_input_dim_parts])
@@ -1836,7 +1836,7 @@ class _SubnetworkRecCell(object):
             # Check for first key if input length matches data length
             if input_seq_len is not None:
               with tf.control_dependencies(
-                  [TFCompat.v1.assert_equal(
+                  [tf_compat.v1.assert_equal(
                     tf.reduce_max(input_seq_len), data_len,
                     ["RecLayer %r with sources %r:" % (rec_layer.name, rec_layer.sources),
                      " The length of the sources (", tf.reduce_max(input_seq_len),
@@ -1844,7 +1844,7 @@ class _SubnetworkRecCell(object):
                 data_len = tf.identity(data_len)
             if fixed_seq_len is not None:
               with tf.control_dependencies(
-                  [TFCompat.v1.assert_equal(
+                  [tf_compat.v1.assert_equal(
                     tf.reduce_max(fixed_seq_len), data_len,
                     ["RecLayer %r:" % (rec_layer.get_absolute_name(),),
                      " The predefined length (", tf.reduce_max(fixed_seq_len),
@@ -1854,7 +1854,7 @@ class _SubnetworkRecCell(object):
           else:
             # Check from second key on if data length is equal for all external data
             with tf.control_dependencies([
-              TFCompat.v1.assert_equal(
+              tf_compat.v1.assert_equal(
                 common_data_len, data_len,
                 ["RecLayer %r:" % rec_layer.name, " The length of all targets (%s) " % ", ".join(used_keys),
                  " has to be the same. Found length ", data_len, " for %s, which does not match length " % key,
@@ -2152,7 +2152,7 @@ class _SubnetworkRecCell(object):
         if self.parent_rec_layer._use_global_rec_step_offset:
           from returnn.tf.util.basic import global_tensor
           step_info_i += global_tensor(
-            lambda: TFCompat.v1.placeholder(tf.int32, (), name="global_rec_step_offset"),
+            lambda: tf_compat.v1.placeholder(tf.int32, (), name="global_rec_step_offset"),
             name="global_rec_step_offset")
         rec_step_info = dict(i=step_info_i, end_flag=None, seq_lens=fixed_seq_len)
         end_flag, dyn_seq_len, prev_end_layer = None, None, None
@@ -3588,7 +3588,7 @@ class RnnCellLayer(_ConcatInputLayer):
       initializer=get_initializer(
         weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
     ) as scope:
-      assert isinstance(scope, TFCompat.v1.VariableScope)
+      assert isinstance(scope, tf_compat.v1.VariableScope)
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
       self.cell = self._get_cell(n_out=n_out, unit=unit, unit_opts=unit_opts)
       assert isinstance(self.cell, rnn_cell.RNNCell)
@@ -3612,14 +3612,14 @@ class RnnCellLayer(_ConcatInputLayer):
           n_out=n_out, unit=unit, unit_opts=unit_opts,
           batch_dim=self.input_data.get_batch_dim(), name=self.name,
           initial_state=initial_state)
-        self.output.placeholder, state = TFCompat.v1.nn.dynamic_rnn(
+        self.output.placeholder, state = tf_compat.v1.nn.dynamic_rnn(
           self.cell,
           inputs=x,
           sequence_length=self.input_data.get_sequence_lengths(),
           initial_state=state0, time_major=True, scope=scope)
       self._hidden_state = state
       self.rec_vars_outputs["state"] = state
-      params = TFCompat.v1.get_collection(TFCompat.v1.GraphKeys.TRAINABLE_VARIABLES, scope=re.escape(scope_name_prefix))
+      params = tf_compat.v1.get_collection(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES, scope=re.escape(scope_name_prefix))
       assert params
       for p in params:
         self.add_param(p)
@@ -3897,7 +3897,7 @@ class RnnCellLayer(_ConcatInputLayer):
       # Assume the first dimension to be batch_dim.
       assert shape_invariant[0] is None and all([d is not None for d in shape_invariant[1:]])
       with rec_layer.var_creation_scope() if rec_layer else dummy_noop_ctx():
-        var = TFCompat.v1.get_variable(
+        var = tf_compat.v1.get_variable(
           "initial_%s" % key_name, shape=initial_shape[1:], initializer=tf.zeros_initializer())
       from returnn.tf.util.basic import expand_dims_unbroadcast
       var = expand_dims_unbroadcast(var, axis=0, dim=initial_shape[0])  # (batch,dim)
@@ -3907,10 +3907,10 @@ class RnnCellLayer(_ConcatInputLayer):
       from returnn.tf.util.basic import CollectionKeys, copy_unknown_shape
       assert rec_layer is not None
       with rec_layer.var_creation_scope():
-        var = TFCompat.v1.get_variable(
+        var = tf_compat.v1.get_variable(
           'keep_state_%s' % key_name,
           validate_shape=False, initializer=copy_unknown_shape(tf.zeros(())),  # Dummy state, will not be used.
-          trainable=False, collections=[TFCompat.v1.GraphKeys.GLOBAL_VARIABLES, CollectionKeys.STATE_VARS])
+          trainable=False, collections=[tf_compat.v1.GraphKeys.GLOBAL_VARIABLES, CollectionKeys.STATE_VARS])
       assert isinstance(var, tf.Variable)
       var.set_shape(shape_invariant)
       rec_layer.saveable_param_replace[var] = None  # Do not save this variable.
@@ -3926,10 +3926,10 @@ class RnnCellLayer(_ConcatInputLayer):
           last_state = rec_layer.get_last_hidden_state(key=key)
         last_state.set_shape(shape_invariant)
         rec_layer.network.register_post_control_dependencies(
-          [TFCompat.v1.assert_equal(tf.rank(last_state), len(shape_invariant), name="check_last_state_rank")] +
-          [TFCompat.v1.assert_equal(tf.shape(last_state)[i], dim, name="check_last_state_dim_%i" % i)
+          [tf_compat.v1.assert_equal(tf.rank(last_state), len(shape_invariant), name="check_last_state_rank")] +
+          [tf_compat.v1.assert_equal(tf.shape(last_state)[i], dim, name="check_last_state_dim_%i" % i)
            for i, dim in enumerate(shape_invariant) if dim is not None] +
-          [TFCompat.v1.assign(var, last_state, validate_shape=False, name="assign_last_state")])
+          [tf_compat.v1.assign(var, last_state, validate_shape=False, name="assign_last_state")])
 
       rec_layer.post_init_hooks.append(update_var)
       if initial_state == "keep_over_epoch_no_init":
@@ -4388,8 +4388,8 @@ class ChoiceLayer(BaseChoiceLayer):
           if random_sample_scale:
             # https://github.com/tensorflow/tensorflow/issues/9260
             # https://timvieira.github.io/blog/post/2014/08/01/gumbel-max-trick-and-weighted-reservoir-sampling/
-            scores_random_sample = -TFCompat.v1.log(-TFCompat.v1.log(
-              TFCompat.v1.random_uniform(tf.shape(scores_in), 0, 1)))
+            scores_random_sample = -tf_compat.v1.log(-tf_compat.v1.log(
+              tf_compat.v1.random_uniform(tf.shape(scores_in), 0, 1)))
           scores_comb = optional_add(
             optional_mul(scores_in, prob_scale),
             optional_mul(scores_base, base_beam_score_scale),
@@ -4480,7 +4480,7 @@ class ChoiceLayer(BaseChoiceLayer):
       else:
         # sample from scores
         scores_in = self._get_scores(self.sources[0])  # +log scores, (batch, dim)
-        feedback_output = TFCompat.v1.multinomial(
+        feedback_output = tf_compat.v1.multinomial(
           scores_in, num_samples=1, seed=get_random_seed())  # (batch, num_samples), int64
         feedback_output = tf.cast(tf.reshape(feedback_output, [-1]), tf.int32)  # (batch,), int32
 
@@ -4488,7 +4488,7 @@ class ChoiceLayer(BaseChoiceLayer):
       if gold_mixing_prob:
         gold_targets = self._get_target_value().get_placeholder_as_batch_major()
         # draw choices over batch dimension
-        choice = tf.less(TFCompat.v1.random_uniform(tf.shape(feedback_output)[:1]), gold_mixing_prob)
+        choice = tf.less(tf_compat.v1.random_uniform(tf.shape(feedback_output)[:1]), gold_mixing_prob)
         feedback_output = tf.where(choice, gold_targets, feedback_output)
 
       self.output = Data(
@@ -5546,7 +5546,7 @@ class ConcatAttentionLayer(GlobalAttentionContextBaseLayer):
       # Get source of shape (batch, inner, 1).
       source = tf.expand_dims(self.input_data.placeholder, axis=1)  # (batch, 1, inner)
       energy_in = tf.tanh(base_ctx + source)  # (batch, base_time, inner)
-      energy_weights = self.add_param(TFCompat.v1.get_variable("v", shape=(self.input_data.dim,)))  # (inner,)
+      energy_weights = self.add_param(tf_compat.v1.get_variable("v", shape=(self.input_data.dim,)))  # (inner,)
       energy_weights_bc = expand_multiple_dims(energy_weights, axes=(0, 1))  # (1, 1, inner)
       energy = tf.reduce_sum(energy_in * energy_weights_bc, axis=2)  # (batch, base_time)
       energy.set_shape(tf.TensorShape([None, None]))
@@ -5721,7 +5721,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
         forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
       n_in = self.input_data.dim
       mat_n_out = total_key_dim * 2 + total_value_dim  # Q, K, V
-      mat = self.add_param(TFCompat.v1.get_variable(
+      mat = self.add_param(tf_compat.v1.get_variable(
         name="QKV", shape=(n_in, mat_n_out), dtype=tf.float32, initializer=fwd_weights_initializer),
         axes_split_info=[[n_in], [total_key_dim, total_key_dim, total_value_dim]])
       if self._rec_previous_layer:
@@ -5800,7 +5800,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
       q_t = tf.transpose(q, [2, 0, 1, 3])  # [num_queries|1,batch,heads,key_dim]
       q_t_r = tf.reshape(
         q_t, [tf.shape(q_t)[0], batch_dim * num_heads, total_key_dim // num_heads])  # [num_queries|1,batch*heads,k-dim]
-      with tf.control_dependencies([TFCompat.v1.assert_equal(
+      with tf.control_dependencies([tf_compat.v1.assert_equal(
             message="check_shape_of_key_shift:",
             x=tf.shape(k_), y=[tf.shape(q_t)[0], tf.shape(energy)[-1], total_key_dim // num_heads])]):
         energy_ = tf.matmul(q_t_r, k_, transpose_b=True)  # [num_queries|1,batch*heads,num_keys]
@@ -6112,9 +6112,9 @@ class KenLmStateLayer(_ConcatInputLayer):
         from returnn.tf.network import set_custom_post_init
         self.vocab = Vocabulary(vocab_file=vocab_file, unknown_label=vocab_unknown_label)
         assert self.input_data.sparse and self.vocab.num_labels == self.input_data.dim
-        self.tf_vocab = TFCompat.v1.get_variable(
+        self.tf_vocab = tf_compat.v1.get_variable(
           name="vocab", shape=(self.vocab.num_labels,), dtype=tf.string, trainable=False,
-          initializer=TFCompat.v1.zeros_initializer())
+          initializer=tf_compat.v1.zeros_initializer())
         self.add_param(self.tf_vocab, saveable=False, trainable=False)
         set_custom_post_init(var=self.tf_vocab, func=self.vocab.tf_get_init_variable_func(var=self.tf_vocab))
     if input_dtype.is_integer:  # assume word-id in vocab
@@ -6707,7 +6707,7 @@ class MaskedComputationLayer(LayerBase):
       if not network.is_inside_rec_layer() and source:
         source_data = source.output.copy_template().copy_as_time_major()
         # Create own dummy time, to make sure we have some own custom.
-        source_data.size_placeholder[0] = TFCompat.v1.placeholder(tf.int32, shape=[None], name="dummy_time")
+        source_data.size_placeholder[0] = tf_compat.v1.placeholder(tf.int32, shape=[None], name="dummy_time")
         source = WrappedInternalLayer(
           base_layer=source, network=source.network, name=source.name,
           output=source_data)
@@ -7057,7 +7057,7 @@ class RHNCell(BaseRNNCell):
     from returnn.tf.util.basic import dot
     input_dim = x.get_shape().dims[-1].value
     assert input_dim is not None, "%r shape unknown" % (x,)
-    weights = TFCompat.v1.get_variable("W", shape=(input_dim, output_dim))
+    weights = tf_compat.v1.get_variable("W", shape=(input_dim, output_dim))
     x = dot(x, weights)
     return x
 
@@ -7083,7 +7083,7 @@ class RHNCell(BaseRNNCell):
         keep_prob = 1.0 - self.dropout
         # uniform [keep_prob, 1.0 + keep_prob)
         random_tensor = keep_prob
-        random_tensor += TFCompat.v1.random_uniform((batch_size, self._num_units), seed=self.dropout_seed, dtype=tf.float32)
+        random_tensor += tf_compat.v1.random_uniform((batch_size, self._num_units), seed=self.dropout_seed, dtype=tf.float32)
         # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
         binary_tensor = tf.floor(random_tensor)
         return binary_tensor * (1.0 / keep_prob)
@@ -7107,7 +7107,7 @@ class RHNCell(BaseRNNCell):
     :rtype: tf.Tensor
     """
     x = self._linear(x, self._num_units * 2)
-    bias = TFCompat.v1.get_variable(
+    bias = tf_compat.v1.get_variable(
       "b", shape=(self._num_units * 2,),
       initializer=tf.constant_initializer(
         [0.0] * self._num_units + [self.transform_bias] * self._num_units))
@@ -7129,7 +7129,7 @@ class RHNCell(BaseRNNCell):
     current_state = state
     for i in range(self.depth):
       current_state_masked = self._optional_dropout(current_state)
-      with TFCompat.v1.variable_scope('depth_%i' % i):
+      with tf_compat.v1.variable_scope('depth_%i' % i):
         state_transformed = self._linear(current_state_masked, self._num_units * 2)
       if i == 0:
         state_transformed += inputs
@@ -7492,10 +7492,10 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     beta_init = self.norm_shift
     if add_forget_bias and self.forget_bias > 0:
       beta_init += self.forget_bias
-    mean, variance = TFCompat.v1.nn.moments(inputs, axes=[-1], keep_dims=True)
-    normalized_input = (inputs - mean) * TFCompat.v1.rsqrt(variance + self.variance_epsilon)
-    g = TFCompat.v1.get_variable("gamma_" + name, shape=shape, initializer=gamma_init)
-    s = TFCompat.v1.get_variable(
+    mean, variance = tf_compat.v1.nn.moments(inputs, axes=[-1], keep_dims=True)
+    normalized_input = (inputs - mean) * tf_compat.v1.rsqrt(variance + self.variance_epsilon)
+    g = tf_compat.v1.get_variable("gamma_" + name, shape=shape, initializer=gamma_init)
+    s = tf_compat.v1.get_variable(
       "beta_" + name, shape=shape,
       initializer=tf.constant_initializer(beta_init)) if with_beta else None
     y = normalized_input * g
@@ -7517,14 +7517,14 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     from returnn.tf.util.basic import dot
     input_dim = inputs.get_shape().dims[-1].value
     assert input_dim is not None, "%r shape unknown" % (inputs,)
-    weights = TFCompat.v1.get_variable("W_" + name, shape=(input_dim, out_dim))
+    weights = tf_compat.v1.get_variable("W_" + name, shape=(input_dim, out_dim))
     out = dot(inputs, weights)
     if apply_bias:
       bias_init = [0.0] * out_dim
       if add_forget_bias and self.forget_bias > 0:
         assert 4 * self._num_units == out_dim
         bias_init[2*self._num_units:3*self._num_units] = [self.forget_bias] * self._num_units
-      bias = TFCompat.v1.get_variable("bias_" + name, shape=[out_dim], initializer=tf.constant_initializer(bias_init))
+      bias = tf_compat.v1.get_variable("bias_" + name, shape=[out_dim], initializer=tf.constant_initializer(bias_init))
       out += bias
     return out
 
@@ -7546,7 +7546,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
         keep_prob = 1.0 - dropout
         # uniform [keep_prob, 1.0 + keep_prob)
         random_tensor = keep_prob
-        random_tensor += TFCompat.v1.random_uniform((batch_size, self._num_units), seed=self.dropout_seed, dtype=tf.float32)
+        random_tensor += tf_compat.v1.random_uniform((batch_size, self._num_units), seed=self.dropout_seed, dtype=tf.float32)
         # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
         binary_tensor = tf.floor(random_tensor)
         return binary_tensor * (1.0 / keep_prob)
@@ -7715,7 +7715,7 @@ class TwoDLSTMLayer(LayerBase):
     else:
       default_var_initializer = xavier_initializer(seed=self.network.random.randint(2**31))
     with reuse_name_scope("rec-twod", initializer=default_var_initializer) as scope:
-      assert isinstance(scope, TFCompat.v1.VariableScope)
+      assert isinstance(scope, tf_compat.v1.VariableScope)
       self._rec_scope = scope
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
       with self.var_creation_scope():
@@ -7730,7 +7730,7 @@ class TwoDLSTMLayer(LayerBase):
       # Very generic way to collect all created params.
       # Note that for the TF RNN cells, there is no other way to do this.
       # Also, see the usage of :func:`LayerBase.cls_layer_scope`, e.g. for initial vars.
-      params = TFCompat.v1.get_collection(TFCompat.v1.GraphKeys.GLOBAL_VARIABLES, scope=re.escape(scope_name_prefix))
+      params = tf_compat.v1.get_collection(tf_compat.v1.GraphKeys.GLOBAL_VARIABLES, scope=re.escape(scope_name_prefix))
       self._add_params(params=params, scope_name_prefix=scope_name_prefix)
 
   @classmethod
@@ -7874,14 +7874,14 @@ class TwoDLSTMLayer(LayerBase):
       # The cell get's x as-is. It will internally does the matrix mult and add the bias.
       pass
     else:
-      weights = TFCompat.v1.get_variable(
+      weights = tf_compat.v1.get_variable(
         name="W", shape=(self.sources[0].output.dim, cell.n_input_dim), dtype=tf.float32,
         initializer=self._fwd_weights_initializer)
       if self.sources[0].output.sparse:
         x = tf.nn.embedding_lookup(weights, to_int32_64(x))
       else:
         x = dot(x, weights)
-      b = TFCompat.v1.get_variable(
+      b = tf_compat.v1.get_variable(
         name="b", shape=(cell.n_input_dim,), dtype=tf.float32, initializer=self._bias_initializer)
       if len(cell.n_input_dim_parts) > 1:
         set_param_axes_split_info(weights, [[self.sources[0].output.dim], cell.n_input_dim_parts])
@@ -8072,7 +8072,7 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
       fwd_weights_initializer = get_initializer(
         forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
       with self.var_creation_scope():
-        encoding_matrix = self.add_param(TFCompat.v1.get_variable(
+        encoding_matrix = self.add_param(tf_compat.v1.get_variable(
           name="encoding_matrix", shape=(2 * clipping + 1, n_out), initializer=fwd_weights_initializer))
 
     range_vec = tf.range(length) - offset

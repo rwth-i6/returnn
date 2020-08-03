@@ -12,9 +12,9 @@ import numpy
 import contextlib
 import typing
 from returnn.log import log
-from TFNetworkLayer import LayerBase, get_layer_class
-import TFCompat
-import TFUtil
+from returnn.tf.layers.basic import LayerBase, get_layer_class
+import returnn.tf.compat as tf_compat
+import returnn.tf.util.basic as tf_util
 from returnn.tf.util.basic import Data, DimensionTag, reuse_name_scope, VariableAssigner
 
 
@@ -45,7 +45,7 @@ class ExternData(object):
     :param bool auto_create_placeholders:
     """
     self._config = config
-    from NetworkDescription import LayerNetworkDescription
+    from returnn.network_description import LayerNetworkDescription
     data_dims = LayerNetworkDescription.tf_extern_data_types_from_config(config)
     for key, init_args in data_dims.items():
       # In Returnn with Theano, we usually have the shape (time,batch,feature).
@@ -346,13 +346,13 @@ class TFNetwork(object):
       self.global_train_step = extra_parent_net.global_train_step
     else:
       # Reuse mostly because some of the test cases currently work that way.
-      with TFCompat.v1.variable_scope(
-            TFCompat.v1.get_variable_scope(), reuse=getattr(TFCompat.v1, "AUTO_REUSE", None)):
-        self.global_train_step = TFCompat.v1.get_variable(
-          name="global_step", shape=(), dtype=tf.int64, initializer=TFCompat.v1.zeros_initializer(tf.int64),
-          collections=[TFCompat.v1.GraphKeys.GLOBAL_STEP], trainable=False)
+      with tf_compat.v1.variable_scope(
+            tf_compat.v1.get_variable_scope(), reuse=getattr(tf_compat.v1, "AUTO_REUSE", None)):
+        self.global_train_step = tf_compat.v1.get_variable(
+          name="global_step", shape=(), dtype=tf.int64, initializer=tf_compat.v1.zeros_initializer(tf.int64),
+          collections=[tf_compat.v1.GraphKeys.GLOBAL_STEP], trainable=False)
     self.epoch_step = None
-    self.saver = None  # type: typing.Optional[TFCompat.v1.train.Saver]
+    self.saver = None  # type: typing.Optional[tf.compat.v1.train.Saver]
     self.extra_vars_to_save = []  # type: typing.List[tf.Variable]
     self.recurrent = False
     self._assigner_cache = {}  # type: typing.Dict[tf.Variable,VariableAssigner]
@@ -362,7 +362,7 @@ class TFNetwork(object):
     self._graph_reset_callbacks = []  # type: typing.List[typing.Callable]
     self._run_opts = {}  # type: typing.Dict[str]
     self._run_finished_callbacks = []  # type: typing.List[typing.Callable]
-    self._map_search_beam_to_search_choices = {}  # type: typing.Dict[TFUtil.SearchBeam,"TFNetworkLayer.SearchChoices"]
+    self._map_search_beam_to_search_choices = {}  # type: typing.Dict[tf_util.SearchBeam,"TFNetworkLayer.SearchChoices"]
 
   def __repr__(self):
     s = "TFNetwork %r" % self.name
@@ -680,7 +680,7 @@ class TFNetwork(object):
     :param dict[str] layer_desc: opts
     :rtype: dict[str]
     """
-    from TFNetworkLayer import SearchChoices
+    from returnn.tf.layers.basic import SearchChoices
     layer_desc = SearchChoices.translate_to_common_search_beam(layer_desc)
     layer_desc = layer_desc.copy()
     assert "name" not in layer_desc
@@ -898,10 +898,10 @@ class TFNetwork(object):
       self.total_loss = total_loss
       self.total_constraints = total_constraints
       self.total_objective = total_loss + total_constraints
-      if not TFUtil.get_current_control_flow_context():  # summaries cannot be used when in loop or cond
-        TFCompat.v1.summary.scalar("loss", self.total_loss)
-        TFCompat.v1.summary.scalar("constraints", self.total_constraints)
-        TFCompat.v1.summary.scalar("objective", self.total_objective)
+      if not tf_util.get_current_control_flow_context():  # summaries cannot be used when in loop or cond
+        tf_compat.v1.summary.scalar("loss", self.total_loss)
+        tf_compat.v1.summary.scalar("constraints", self.total_constraints)
+        tf_compat.v1.summary.scalar("objective", self.total_objective)
 
   def maybe_construct_objective(self):
     """
@@ -942,7 +942,7 @@ class TFNetwork(object):
     # Note: This assumes that the summaries never change.
     # Both both training and evaluation on the CV dataset, this is the case.
     if self._merge_all_summaries is None:
-      self._merge_all_summaries = TFCompat.v1.summary.merge_all()
+      self._merge_all_summaries = tf_compat.v1.summary.merge_all()
     return self._merge_all_summaries
 
   def get_fetches_dict(self, config=None, should_train=None, should_eval=None,
@@ -961,7 +961,6 @@ class TFNetwork(object):
     # Note that it is important that we do not recreate graph nodes for every call to this function.
     # Thus everything which we access here should be cached.
     import os
-    import TFUtil
     if config is None:
       config = self.get_config()
     if should_train is None:
@@ -970,8 +969,8 @@ class TFNetwork(object):
       should_eval = self.eval_flag
     use_horovod_reduction = False
     if config.is_true("use_horovod"):
-      import TFHorovod
-      if TFHorovod.get_ctx().should_sync_every_step():
+      import returnn.tf.horovod
+      if returnn.tf.horovod.get_ctx().should_sync_every_step():
         # Note: This logic should be in sync with the logic in _horovod_signal_have_more_data.
         use_horovod_reduction = True
 
@@ -1004,7 +1003,7 @@ class TFNetwork(object):
       """
       if not use_horovod_reduction:
         return x
-      return TFCompat.v1.reciprocal(reduce_sum(TFCompat.v1.reciprocal(x), name=name))
+      return tf_compat.v1.reciprocal(reduce_sum(tf_compat.v1.reciprocal(x), name=name))
 
     d = {}
     if with_size:
@@ -1017,7 +1016,7 @@ class TFNetwork(object):
       # These values are cached internally and the graph nodes are created on the first call.
       loss = self.get_objective()
       if loss is 0:
-        loss = TFUtil.global_tensor(lambda: tf.constant(0.0), name="zero_loss")
+        loss = tf_util.global_tensor(lambda: tf.constant(0.0), name="zero_loss")
       else:  # non-constant-zero loss
         assert self.losses_dict
       d["loss"] = reduce_sum(loss, name="loss", average=True)
@@ -1045,11 +1044,11 @@ class TFNetwork(object):
         d["stats:%s:%s" % (layer.name, k)] = v
 
     if config.bool("tf_log_memory_usage", False):
-      for dev in TFUtil.get_tf_list_local_devices():
+      for dev in tf_util.get_tf_list_local_devices():
         if dev.device_type != "GPU":
           # mem_usage_for_dev currently only works for GPU
           continue
-        d["mem_usage:%s" % os.path.basename(dev.name.replace("/device:", "/"))] = TFUtil.mem_usage_for_dev(dev.name)
+        d["mem_usage:%s" % os.path.basename(dev.name.replace("/device:", "/"))] = tf_util.mem_usage_for_dev(dev.name)
 
     if self.get_post_control_dependencies():
       d["post_control_dependencies"] = self.get_post_control_dependencies()
@@ -1218,7 +1217,7 @@ class TFNetwork(object):
     """
     if self._selected_train_layers is None:
       self.declare_train_params()
-    trainable_vars_col = TFCompat.v1.get_collection(TFCompat.v1.GraphKeys.TRAINABLE_VARIABLES)
+    trainable_vars_col = tf_compat.v1.get_collection(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES)
     assert isinstance(trainable_vars_col, list)
     ls = []  # type: typing.List[tf.Variable]
     for layer_name in sorted(self._selected_train_layers):
@@ -1287,7 +1286,7 @@ class TFNetwork(object):
     """
     var_list = self.get_params_list() + self.get_auxiliary_params()
     with tf.name_scope("var_initializer"):
-      initializer_op = TFCompat.v1.variables_initializer(var_list=var_list)
+      initializer_op = tf_compat.v1.variables_initializer(var_list=var_list)
     session.run(initializer_op)
     for var in var_list:
       # Some of our code could set this, e.g. the SubnetworkLayer.
@@ -1384,7 +1383,7 @@ class TFNetwork(object):
     if self.epoch_step is not None:
       return self.epoch_step
     with reuse_name_scope("", absolute=True):
-      self.epoch_step = TFCompat.v1.placeholder(name="epoch_step", shape=(), dtype=tf.int64)
+      self.epoch_step = tf_compat.v1.placeholder(name="epoch_step", shape=(), dtype=tf.int64)
     return self.epoch_step
 
   def reset_saver(self):
@@ -1398,7 +1397,7 @@ class TFNetwork(object):
   def _create_saver(self):
     # Saver for storing checkpoints of the model.
     with tf.name_scope("saver"):
-      self.saver = TFCompat.v1.train.Saver(
+      self.saver = tf_compat.v1.train.Saver(
         var_list=self.get_saveable_params_list(), max_to_keep=2 ** 31 - 1)
 
   def save_params_to_file(self, filename, session):
@@ -1528,7 +1527,7 @@ class TFNetwork(object):
       # Note: Make sure we query from the current frame. Otherwise this would get ugly.
       # (Only for src; accept for base_search_choice, it should not matter.)
       assert src.get_normalized_layer() == src
-    from TFNetworkLayer import SearchChoices
+    from returnn.tf.layers.basic import SearchChoices
     from functools import cmp_to_key
     from pprint import pformat
     if _layer_to_search_choices is None:
@@ -1781,7 +1780,7 @@ class TFNetwork(object):
     :param LayerBase|None end_flag_source:
     :param tf.Tensor|None seq_lens: (batch,) int32, seq lens
     """
-    from TFNetworkRecLayer import RecStepInfoLayer
+    from returnn.tf.layers.rec import RecStepInfoLayer
     self.layers[":i"] = RecStepInfoLayer(
       name=":i", network=self, i=i, end_flag=end_flag, end_flag_source=end_flag_source, seq_lens=seq_lens)
 
@@ -1806,10 +1805,10 @@ class TFNetwork(object):
     :return: if we are a subnet of a :class:`RecLayer`, will return the RecLayer instance
     :rtype: TFNetworkRecLayer.RecLayer|None
     """
-    from TFNetworkRecLayer import RecLayer
+    from returnn.tf.layers.rec import RecLayer
     if isinstance(self.parent_layer, RecLayer):
       if inside_loop:
-        from TFNetworkRecLayer import _SubnetworkRecCell
+        from returnn.tf.layers.rec import _SubnetworkRecCell
         assert isinstance(self.parent_layer.cell, _SubnetworkRecCell)
         if self is not self.parent_layer.cell.net:
           return None
@@ -1829,7 +1828,7 @@ class TFNetwork(object):
     :param bool must_exist: if True, will throw exception if not available
     :rtype: TFNetworkRecLayer.RecStepInfoLayer|None
     """
-    from TFNetworkRecLayer import RecStepInfoLayer, _SubnetworkRecCell
+    from returnn.tf.layers.rec import RecStepInfoLayer, _SubnetworkRecCell
     # Fast path first. This also enables some simple debugging.
     if ":i" in self.layers and isinstance(self.layers[":i"], RecStepInfoLayer):
       return self.layers[":i"]
@@ -1888,7 +1887,7 @@ class TFNetwork(object):
     :param list[tf.Tensor|tf.Operation] deps:
     :return: nothing
     """
-    ls = TFCompat.v1.get_collection_ref(TFCompat.v1.GraphKeys.UPDATE_OPS)
+    ls = tf_compat.v1.get_collection_ref(tf_compat.v1.GraphKeys.UPDATE_OPS)
     assert isinstance(ls, list)
     ls.extend(deps)
 
@@ -1897,7 +1896,7 @@ class TFNetwork(object):
     """
     :rtype: list[tf.Operation]
     """
-    return TFCompat.v1.get_collection(TFCompat.v1.GraphKeys.UPDATE_OPS)
+    return tf_compat.v1.get_collection(tf_compat.v1.GraphKeys.UPDATE_OPS)
 
   def register_graph_reset_callback(self, cb):
     """
@@ -1982,7 +1981,7 @@ class TFNetwork(object):
     :rtype: list[TFNetwork]
     """
     from returnn.tf.util.basic import CollectionKeys
-    coll = TFCompat.v1.get_collection_ref(CollectionKeys.RETURNN_NET_STACK)
+    coll = tf_compat.v1.get_collection_ref(CollectionKeys.RETURNN_NET_STACK)
     assert isinstance(coll, list)
     return coll
 
@@ -2267,23 +2266,23 @@ class LossHolder:
     """
     if self._network.parent_net:
       return  # skip summaries. the root net should also do this
-    if TFUtil.get_current_control_flow_context():  # summaries cannot be used when in loop or cond
+    if tf_util.get_current_control_flow_context():  # summaries cannot be used when in loop or cond
       return
     name = self.get_tf_name()
     if self._loss_value is not None:
       # A loss value is typically a scalar but there are cases of sequence or position wise loss values
       # (e.g. if the eval_output_file_per_seq option is used).
       if self._loss_value.get_shape().ndims == 0:
-        TFCompat.v1.summary.scalar("loss_%s" % name, self._loss_value * self._norm_factor)
+        tf_compat.v1.summary.scalar("loss_%s" % name, self._loss_value * self._norm_factor)
         if self._network.get_config().bool("calculate_exp_loss", False):
-          TFCompat.v1.summary.scalar("exp_loss_%s" % name, tf.exp(self._loss_value * self._norm_factor))
+          tf_compat.v1.summary.scalar("exp_loss_%s" % name, tf.exp(self._loss_value * self._norm_factor))
         if self._network.get_config().bool("debug_unnormalized_loss_summaries", False):
-          TFCompat.v1.summary.scalar("unnormalized_loss_%s" % name, self._loss_value)
+          tf_compat.v1.summary.scalar("unnormalized_loss_%s" % name, self._loss_value)
         if self._network.get_config().bool("debug_objective_loss_summaries", False):
-          TFCompat.v1.summary.scalar("objective_loss_%s" % name, self._loss_value_for_objective)
+          tf_compat.v1.summary.scalar("objective_loss_%s" % name, self._loss_value_for_objective)
     if self._error_value is not None:
       if self._error_value.get_shape().ndims == 0:
-        TFCompat.v1.summary.scalar("error_%s" % name, self._error_value * self._norm_factor)
+        tf_compat.v1.summary.scalar("error_%s" % name, self._error_value * self._norm_factor)
 
   def _prepare(self):
     """
@@ -2548,7 +2547,7 @@ def help_on_tf_exception(
         # Note: Some code in graph_editor, which is used in copy_graph, results in lots of spam about
         # tf.compat.v1.GraphKeys.VARIABLES deprecated usage (e.g. via get_predefined_collection_names or so).
         # We just do this ugly patch here, to work around the spam.
-        TFCompat.v1.GraphKeys.VARIABLES = TFCompat.v1.GraphKeys.GLOBAL_VARIABLES
+        tf_compat.v1.GraphKeys.VARIABLES = tf_compat.v1.GraphKeys.GLOBAL_VARIABLES
         from returnn.tf.util.basic import FetchHelper
         debug_fetch, fetch_helpers, op_copied = FetchHelper.copy_graph(
           debug_fetch, target_op=op, fetch_helper_tensors=list(op.inputs),
@@ -2568,7 +2567,7 @@ def help_on_tf_exception(
       except Exception as sub_exc:
         print("We tried to fetch the op inputs (%r) but got another exception:" % (list(op.inputs),), file=file)
         print(sub_exc, file=file)
-        import better_exchook
+        from returnn.util import better_exchook
         better_exchook.better_exchook(*sys.exc_info(), autodebugshell=False, file=file)
       else:
         print("Op inputs:", file=file)
@@ -2597,7 +2596,7 @@ def help_on_tf_exception(
           for fetch in list(found_fetch.control_inputs) + list(found_fetch.inputs):
             if isinstance(fetch, tf.Tensor) and fetch.op.type == "ScalarSummary":
               # Avoid error: Operation '...' has been marked as not fetchable
-              fetch = TFCompat.v1.summary.merge([fetch])
+              fetch = tf_compat.v1.summary.merge([fetch])
             try:
               session.run(fetch, feed_dict=feed_dict)
             except Exception as exc_:
@@ -2606,7 +2605,7 @@ def help_on_tf_exception(
               print("Input to output op path:", file=file)
               pprint(input_to_output_ops, stream=file)
               if not input_to_output_ops:
-                TFUtil.print_graph_output(fetch, file=file)
+                tf_util.print_graph_output(fetch, file=file)
               break
   print("Step meta information:", file=file)
   pprint(meta_step_info, stream=file)
@@ -2693,7 +2692,7 @@ class CustomCheckpointLoader:
         continue
       self.saveable_params.append(param)
     assert count > 0, "%s: no saveable vars" % self
-    self.reader = TFCompat.v1.train.NewCheckpointReader(filename)
+    self.reader = tf_compat.v1.train.NewCheckpointReader(filename)
     self.net_vars = [v for v in self.saveable_params if isinstance(v, tf.Variable)]
     self.net_saveables = [v for v in self.saveable_params if not isinstance(v, tf.Variable)]
     # All variables in the checkpoint:
@@ -2992,7 +2991,7 @@ class CustomCheckpointLoader:
 
       # noinspection PyMethodParameters
       def _load(sself):
-        from TFNetworkRecLayer import RecLayer
+        from returnn.tf.layers.rec import RecLayer
         sself.data = RecLayer.convert_cudnn_canonical_to_lstm_block(
           reader=reader, prefix=sself.prefix, target=sself.target)
 

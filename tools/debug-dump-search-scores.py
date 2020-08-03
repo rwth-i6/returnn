@@ -24,7 +24,7 @@ from returnn.log import log
 from returnn.config import Config
 import argparse
 import Util
-from TFEngine import Engine
+from returnn.tf.engine import Engine
 from Dataset import init_dataset
 from MetaDataset import MetaDataset
 import better_exchook
