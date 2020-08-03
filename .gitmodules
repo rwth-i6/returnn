@@ -1,19 +1,19 @@
 [submodule "extern/blocksparse"]
-	path = extern/blocksparse
+	path = returnn/extern/blocksparse
 	url = https://github.com/albertz/blocksparse.git
 	branch = master
 [submodule "extern/kenlm"]
-	path = extern/kenlm
+	path = returnn/extern/kenlm
 	url = https://github.com/kpu/kenlm.git
 	branch = master
 [submodule "extern/openfst"]
-	path = extern/openfst
+	path = returnn/extern/openfst
 	url = https://github.com/mjansche/openfst.git
 	branch = 1.7.3
 [submodule "extern/ParseOggVorbis"]
-	path = extern/ParseOggVorbis
+	path = returnn/extern/ParseOggVorbis
 	url = https://github.com/albertz/ParseOggVorbis.git
 	branch = master
 [submodule "extern/HawkAaronWarpTransducer/warp-transducer"]
-	path = extern/HawkAaronWarpTransducer/warp-transducer
+	path = returnn/extern/HawkAaronWarpTransducer/warp-transducer
 	url = https://github.com/HawkAaron/warp-transducer.git
