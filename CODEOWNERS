@@ -2,9 +2,9 @@
 # https://github.blog/2017-07-06-introducing-code-owners/
 # https://chromium.googlesource.com/chromium/src/+/master/docs/code_reviews.md#OWNERS-files
 
-*       @rwth-i6/returnn @albertz
-TF*     @albertz
-Theano* @albertz @doetsch
+/returnn	@rwth-i6/returnn @albertz
+/returnn/tf	@albertz
+/returnn/theano	@albertz @doetsch
 
 better_exchook.py @albertz
 
