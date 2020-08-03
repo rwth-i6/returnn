@@ -980,7 +980,9 @@ class TwoDNativeLstmCell(RecSeqCellOp):
     ], axis=3) # (trg_len, src_len, batch, features)
 
     outComplete, final_state = self.op(
-      *self.map_layer_inputs_to_op(X=twod_input, V_h=Vh_re, V_v=Vv_re, W=W_re, i=src_mask, previous_state=previous_state, previous_output=previous_output, iteration=iteration))
+      *self.map_layer_inputs_to_op(
+        X=twod_input, V_h=Vh_re, V_v=Vv_re, W=W_re, i=src_mask,
+        previous_state=previous_state, previous_output=previous_output, iteration=iteration))
 
     # outComplete (trg_len, src_len, batch, n_hidden)
     # final_state (trg_len, src_len, batch, n_hidden*5)
