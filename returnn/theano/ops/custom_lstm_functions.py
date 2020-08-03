@@ -5,7 +5,7 @@ import os
 import theano
 import theano.tensor as T
 import numpy
-from Log import log
+from returnn.log import log
 import theano.sandbox.cuda as theano_cuda
 from collections import OrderedDict
 

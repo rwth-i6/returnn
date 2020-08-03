@@ -4,7 +4,7 @@ from __future__ import print_function
 import theano
 import numpy
 import os
-from Log import log
+from returnn.log import log
 from math import sqrt
 import theano.tensor.shared_randomstreams
 import theano.tensor as T

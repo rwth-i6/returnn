@@ -11,7 +11,7 @@ sys.path.append(returnn_dir)
 
 from argparse import ArgumentParser
 import pickle
-from Util import better_repr
+from returnn.util.basic import better_repr
 
 
 def main():

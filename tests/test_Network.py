@@ -4,7 +4,7 @@ sys.path += ["."]  # Python 3 hack
 
 
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_true, assert_false
-from Config import Config
+from returnn.config import Config
 try:
   from StringIO import StringIO
 except ImportError:  # Python 3

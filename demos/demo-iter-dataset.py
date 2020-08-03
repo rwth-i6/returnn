@@ -13,7 +13,7 @@ if parent_dir not in sys.path:
 
 import rnn
 from Engine import Engine
-from Log import log
+from returnn.log import log
 
 dev_num_batches = 1
 

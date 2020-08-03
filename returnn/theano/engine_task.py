@@ -11,9 +11,9 @@ import theano
 
 from Device import Device
 from EngineUtil import assign_dev_data
-from Log import log
+from returnn.log import log
 from TaskSystem import ProcConnectionDied
-from Util import hms, progress_bar, terminal_size, hdf5_strings, interrupt_main, NumbersDict
+from returnn.util.basic import hms, progress_bar, terminal_size, hdf5_strings, interrupt_main, NumbersDict
 
 
 class TaskThread(threading.Thread):

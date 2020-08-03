@@ -252,7 +252,7 @@ def get_tf_mod(verbose=False):
   if _tf_mod:
     return _tf_mod
   from glob import glob
-  from TFUtil import OpCodeCompiler
+  from returnn.tf.util.basic import OpCodeCompiler
 
   # Collect files.
   assert openfst_checked_out(), "submodule in %r not checked out?" % openfst_dir

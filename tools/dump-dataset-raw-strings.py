@@ -12,9 +12,9 @@ returnn_dir = os.path.dirname(my_dir)
 sys.path.insert(0, returnn_dir)
 
 import rnn
-from Log import log
+from returnn.log import log
 import argparse
-from Util import Stats, hms
+from returnn.util.basic import Stats, hms
 from Dataset import Dataset, init_dataset
 import Util
 

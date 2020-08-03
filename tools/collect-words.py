@@ -10,11 +10,11 @@ returnn_dir = os.path.dirname(my_dir)
 sys.path.append(returnn_dir)
 
 import rnn
-from Log import log
-from Config import Config
+from returnn.log import log
+from returnn.config import Config
 import argparse
-from Util import hms, human_size, parse_orthography, parse_orthography_into_symbols, unicode
-from LmDataset import Lexicon
+from returnn.util.basic import hms, human_size, parse_orthography, parse_orthography_into_symbols, unicode
+from returnn.datasets.lm import Lexicon
 import gzip
 import xml.etree.ElementTree as etree
 from pprint import pprint

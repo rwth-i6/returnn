@@ -71,7 +71,7 @@ sys.path.insert(0, returnn_dir)
 import better_exchook
 import rnn
 import Util
-from TFNetwork import TFNetwork
+from returnn.tf.network import TFNetwork
 from TFNetworkLayer import SourceLayer, LayerBase, LinearLayer
 from TFNetworkRecLayer import ChoiceLayer
 
@@ -333,7 +333,7 @@ def main():
     input_seq = input_seq[0]  # all the same, select beam 0
     assert isinstance(input_seq, numpy.ndarray)
     print("Debug input seq: %s" % input_seq.tolist())
-    from GeneratingDataset import StaticDataset
+    from returnn.datasets.generating import StaticDataset
     dataset = StaticDataset(
       data=[{"data": input_seq}],
       output_dim={"data": get_network().extern_data.get_default_input_data().get_kwargs()})

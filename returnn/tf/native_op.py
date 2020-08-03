@@ -17,7 +17,7 @@ from threading import RLock
 import NativeOp
 import TFCompat
 import TFUtil
-from Util import camel_case_to_snake_case
+from returnn.util.basic import camel_case_to_snake_case
 
 
 class OpDescription(NativeOp.NativeOpBaseMixin):
@@ -460,7 +460,7 @@ class OpMaker(object):
   def _make_mod(self):
     if self.cache_key in self.mod_cache:
       return self.mod_cache[self.cache_key]
-    from Util import find_lib
+    from returnn.util.basic import find_lib
     # Note about BLAS linkage:
     # TensorFlow (or its Eigen lib) likely has linked against some BLAS lib itself.
     # For our CPU code, we directly call some BLAS functions such as `sgemm_`.
@@ -721,7 +721,7 @@ class NativeLstmCell(RecSeqCellOp):
     assert i.get_shape().ndims == 2
     if i.dtype != tf.float32:
       if not hasattr(i, "cast_float32"):
-        from TFUtil import reuse_name_scope_of_tensor
+        from returnn.tf.util.basic import reuse_name_scope_of_tensor
         with reuse_name_scope_of_tensor(i):
           i_cast_float32 = tf.cast(i, dtype=tf.float32, name="index_cast_float32")
         i.cast_float32 = i_cast_float32
@@ -780,7 +780,7 @@ class NativeLstmLowMemCell(RecSeqCellOp):
     i.set_shape(tf.TensorShape([None, None]))
     if i.dtype != tf.float32:
       if not hasattr(i, "cast_float32"):
-        from TFUtil import reuse_name_scope_of_tensor
+        from returnn.tf.util.basic import reuse_name_scope_of_tensor
         with reuse_name_scope_of_tensor(i):
           i_cast_float32 = tf.cast(i, dtype=tf.float32, name="index_cast_float32")
         i.cast_float32 = i_cast_float32
@@ -850,14 +850,14 @@ class NativeLstm2(RecSeqCellOp):
       name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
     TFUtil.set_param_axes_split_info(weights, [[self.n_hidden], [self.n_hidden] * 4])
     if self.rec_weight_dropout:
-      from TFUtil import dropout
+      from returnn.tf.util.basic import dropout
       weights = dropout(
         weights, keep_prob=1.0 - self.rec_weight_dropout, cond_on_train=True,
         seed=TFUtil.get_random_seed())
     inputs.set_shape(tf.TensorShape([None, None, self.n_hidden * 4]))
     weights.set_shape(tf.TensorShape([self.n_hidden, self.n_hidden * 4]))
     index.set_shape(tf.TensorShape([None, None]))
-    from TFUtil import to_float32
+    from returnn.tf.util.basic import to_float32
     index = to_float32(index)
     n_batch = tf.shape(inputs)[1]
     if initial_state is None:
@@ -909,7 +909,7 @@ class TwoDNativeLstmCell(RecSeqCellOp):
     assert i.get_shape().ndims == 2
     if i.dtype != tf.float32:
       if not hasattr(i, "cast_float32"):
-        from TFUtil import reuse_name_scope_of_tensor
+        from returnn.tf.util.basic import reuse_name_scope_of_tensor
         with reuse_name_scope_of_tensor(i):
           i_cast_float32 = tf.cast(i, dtype=tf.float32, name="index_cast_float32")
         i.cast_float32 = i_cast_float32
@@ -1274,7 +1274,7 @@ def fast_baum_welch_staircase(am_scores, seq_lens, **opts):
   :return: (fwdbwd, obs_scores), fwdbwd is (time, batch, dim), obs_scores is (time, batch), in -log space
   :rtype: (tf.Tensor, tf.Tensor)
   """
-  from TFUtil import sequence_mask_time_major
+  from returnn.tf.util.basic import sequence_mask_time_major
   edges, weights, start_end_states = tf_fast_bw_fsa_staircase(seq_lens, **opts)
   float_idx = sequence_mask_time_major(seq_lens)
   return fast_baum_welch(
@@ -1311,7 +1311,7 @@ def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_le
     log_sm = tf.nn.log_softmax(logits)  # (time,batch,dim)
   else:
     log_sm = logits
-  from TFUtil import sequence_mask_time_major, where_bc
+  from returnn.tf.util.basic import sequence_mask_time_major, where_bc
   seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch)
 
   edges, weights, start_end_states = get_ctc_fsa_fast_bw(
@@ -1327,7 +1327,7 @@ def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_le
   else:
     grad_x = -bw  # (time,batch,dim)
   grad_x = where_bc(seq_mask[:, :, None], grad_x, 0.0)
-  from TFUtil import custom_gradient
+  from returnn.tf.util.basic import custom_gradient
   loss = tf.reshape(loss, [1, n_batch, 1])  # (1,batch,1), such that we can broadcast to logits/grad_x
   loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=logits, grad_x=grad_x)
   loss = tf.reshape(loss, [n_batch])
@@ -1393,12 +1393,12 @@ def ctc_loss_viterbi(logits, logits_seq_lens, logits_time_major, targets, target
   assert isinstance(ce_grad, tf.Tensor)
   ce_grad.set_shape(logits_flat.get_shape())  # (time*batch,dim)
   ce_grad = tf.reshape(ce_grad, tf.shape(logits))  # (time,batch,dim)
-  from TFUtil import sequence_mask_time_major
+  from returnn.tf.util.basic import sequence_mask_time_major
   seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch)
   seq_mask_bc_float = tf.cast(tf.expand_dims(seq_mask, 2), tf.float32)  # (time,batch,1)
   ce_grad *= seq_mask_bc_float
 
-  from TFUtil import custom_gradient
+  from returnn.tf.util.basic import custom_gradient
   n_batch = tf.shape(loss)[0]
   loss = tf.reshape(loss, [1, n_batch, 1])  # (1,batch,1), such that we can broadcast to logits/ce_grad
   loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=logits, grad_x=ce_grad)
@@ -1497,7 +1497,7 @@ def edit_distance_via_next_edit_distance_row(a, a_len, b, b_len, optimal_complet
   :return: (batch,) or (batch,time2+1) tensor, int32, un-normalized edit distance
   :rtype: tf.Tensor
   """
-  from TFUtil import expand_dims_unbroadcast
+  from returnn.tf.util.basic import expand_dims_unbroadcast
   with tf.name_scope("edit_distance_via_next_edit_distance_row"):
     initial_row = expand_dims_unbroadcast(tf.range(tf.shape(b)[1] + 1), axis=0, dim=tf.shape(b)[0])  # (B,time2+1)
 

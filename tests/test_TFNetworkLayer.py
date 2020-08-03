@@ -28,10 +28,10 @@ from pprint import pprint
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 
-from Config import Config
-from TFNetwork import *
+from returnn.config import Config
+from returnn.tf.network import *
 from TFNetworkLayer import *
-from Log import log
+from returnn.log import log
 import TFCompat
 import TFUtil
 TFUtil.debug_register_better_repr()
@@ -1304,7 +1304,7 @@ def test_CondLayer_subnetwork_train():
       assert loss is not None and loss < initial_loss and numpy.isfinite(initial_loss)
     except tf.errors.OpError as exc:
       print("TF exception:", type(exc).__name__, ":", exc)
-      from TFNetwork import help_on_tf_exception
+      from returnn.tf.network import help_on_tf_exception
       help_on_tf_exception(session=session, exception=exc, fetches=fetches, feed_dict=feed_dict)
       raise
 
@@ -2353,7 +2353,7 @@ def test_LossAsIs_custom_dim():
 
 
 def test_param_variational_noise():
-  from TFUtil import print_graph_output, find_ops_with_tensor_input
+  from returnn.tf.util.basic import print_graph_output, find_ops_with_tensor_input
   config = Config({
     "debug_print_layer_output_template": True,
     "param_variational_noise": 0.075,
@@ -2633,7 +2633,7 @@ def test_TikhonovRegularizationLayer():
 
 
 def test_split_info_input():
-  from TFUtil import print_graph_output, find_ops_with_tensor_input
+  from returnn.tf.util.basic import print_graph_output, find_ops_with_tensor_input
   config = Config({
     "debug_print_layer_output_template": True,
     "extern_data": {"data": {"dim": 7}}
@@ -3139,7 +3139,7 @@ def test_CrossEntropyLoss_masked_inf():
     def mask_func(source, **kwargs):
       x = source(0)
       assert x.shape.ndims == 3  # (B,T,n_out)
-      from TFUtil import where_bc
+      from returnn.tf.util.basic import where_bc
       mask_bc = mask_t[None, None, :]  # (1,1,n_out)
       return where_bc(mask_bc, x, float("-inf"))
 
@@ -3208,7 +3208,7 @@ def test_CrossEntropyLoss_masked_inf_fake_upper_bound():
     def mask_func(source, **kwargs):
       x = source(0)
       assert x.shape.ndims == 3  # (B,T,n_out)
-      from TFUtil import where_bc
+      from returnn.tf.util.basic import where_bc
       mask_bc = mask_t[None, None, :]  # (1,1,n_out)
       return where_bc(mask_bc, x, float("-inf"))
 

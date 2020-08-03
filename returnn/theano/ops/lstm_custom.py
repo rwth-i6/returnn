@@ -360,7 +360,7 @@ class LSTMCustomOp(theano.sandbox.cuda.GpuOp):
     :param freq: call frequency to custom function. int
     :param args: custom_inputs + initial_state_vars: other inputs for the custom function
     """
-    from Util import have_gpu
+    from returnn.util.basic import have_gpu
     assert have_gpu()
 
     assert len(args) == self._get_num_custom_vars() + self._get_num_state_vars(), self.recurrent_transform

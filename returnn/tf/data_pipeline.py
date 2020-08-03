@@ -127,11 +127,11 @@ import numpy
 import tensorflow as tf
 
 from Dataset import Dataset, BatchSetGenerator
-from TFNetwork import ExternData, Data
+from returnn.tf.network import ExternData, Data
 import TFCompat
 import TFHorovod
-from Util import NumbersDict
-from Log import log
+from returnn.util.basic import NumbersDict
+from returnn.log import log
 
 
 class DataProviderBase(object):
@@ -309,7 +309,7 @@ class FeedDictDataProvider(DataProviderBase):
     seq_lens = {k: numpy.zeros(shape=(shapes[k][0],), dtype=self.extern_data.data[k].size_dtype)
                 for k in self.data_keys if self.extern_data.data[k].have_time_axis()}
     self.dataset.load_seqs(batch.start_seq, batch.end_seq)
-    from Util import slice_pad_zeros
+    from returnn.util.basic import slice_pad_zeros
     with self.dataset.lock:
       for seq in batch.seqs:
         o = seq.batch_frame_offset

@@ -17,8 +17,8 @@ from Dataset import init_dataset
 from LmDataset import Lexicon, AllophoneState
 import collections
 from collections import defaultdict
-from Log import log
-from Util import uniq
+from returnn.log import log
+from returnn.util.basic import uniq
 
 
 def get_segment_name(tree):

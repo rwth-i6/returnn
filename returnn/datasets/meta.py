@@ -25,8 +25,8 @@ from __future__ import print_function
 
 from Dataset import Dataset, DatasetSeq, init_dataset, convert_data_dims
 from CachedDataset2 import CachedDataset2
-from Util import NumbersDict, load_json
-from Log import log
+from returnn.util.basic import NumbersDict, load_json
+from returnn.log import log
 from random import Random
 import numpy
 import sys

@@ -32,7 +32,7 @@ def get_layer_class(name, raise_exception=True):
   if name in LayerClasses:
     return LayerClasses[name]
   if name.startswith("config."):
-    from Config import get_global_config
+    from returnn.config import get_global_config
     config = get_global_config()
     cls = config.typed_value(name[len("config."):])
     import inspect

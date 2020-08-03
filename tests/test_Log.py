@@ -130,7 +130,7 @@ def test_simple_log():
   code = """
 from __future__ import print_function
 print("hello stdout 1")
-from Log import log
+from returnn.log import log
 log.initialize(verbosity=[], logs=[], formatter=[])
 print("hello stdout 2")
 print("hello log 1", file=log.v3)

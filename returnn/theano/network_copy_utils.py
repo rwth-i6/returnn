@@ -1,5 +1,5 @@
 
-from Log import log
+from returnn.log import log
 
 
 class LayerDoNotMatchForCopy(Exception): pass

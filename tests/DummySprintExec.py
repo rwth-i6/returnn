@@ -18,7 +18,7 @@ if parent_dir not in sys.path:
 
 import GeneratingDataset
 from Dataset import Dataset
-from Util import ObjAsDict
+from returnn.util.basic import ObjAsDict
 
 
 class ArgParser:

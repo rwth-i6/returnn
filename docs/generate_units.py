@@ -1,6 +1,6 @@
 import os
-from TFNetworkRecLayer import RecLayer
-from TFNativeOp import RecSeqCellOp
+from returnn.tf.layers.rec import RecLayer
+from returnn.tf.native_op import RecSeqCellOp
 from tensorflow.python.ops.rnn_cell_impl import RNNCell
 
 header_text = """

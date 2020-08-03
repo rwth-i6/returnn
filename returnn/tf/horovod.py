@@ -21,7 +21,7 @@ Also see :mod:`TFDistributed`.
 import os
 import socket
 import typing
-from Config import Config
+from returnn.config import Config
 
 
 class HorovodContext:
@@ -161,7 +161,7 @@ def get_ctx(config=None):
   if _is_set_up:
     return _ctx
   if not config:
-    from Config import get_global_config
+    from returnn.config import get_global_config
     config = get_global_config()
   _is_set_up = True
   if not config.is_true("use_horovod"):

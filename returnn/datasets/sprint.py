@@ -22,9 +22,9 @@ import typing
 import TaskSystem
 from Dataset import Dataset, DatasetSeq
 from CachedDataset2 import CachedDataset2
-from Log import log
+from returnn.log import log
 from TaskSystem import Unpickler, numpy_copy_and_set_unused
-from Util import eval_shell_str, interrupt_main, unicode, PY3, BytesIO
+from returnn.util.basic import eval_shell_str, interrupt_main, unicode, PY3, BytesIO
 
 
 class SprintDatasetBase(Dataset):
@@ -91,12 +91,12 @@ class SprintDatasetBase(Dataset):
         self.orth_post_process = get_post_processor_function(orth_post_process)
     self.bpe = None
     if bpe:
-      from GeneratingDataset import BytePairEncoding
+      from returnn.datasets.generating import BytePairEncoding
       self.bpe = BytePairEncoding(**bpe)
       self.labels["bpe"] = self.bpe.labels
     self.orth_vocab = None
     if orth_vocab:
-      from GeneratingDataset import Vocabulary
+      from returnn.datasets.generating import Vocabulary
       self.orth_vocab = Vocabulary.create_vocab(**orth_vocab)
       self.labels["orth_classes"] = self.orth_vocab.labels
     self.cond = Condition(lock=self.lock)
@@ -1177,9 +1177,9 @@ def demo():
   """
   print("SprintDataset demo.")
   from argparse import ArgumentParser
-  from Util import progress_bar_with_time
-  from Log import log
-  from Config import Config
+  from returnn.util.basic import progress_bar_with_time
+  from returnn.log import log
+  from returnn.config import Config
   from Dataset import init_dataset
   arg_parser = ArgumentParser()
   arg_parser.add_argument("--config", help="config with ExternSprintDataset", required=True)

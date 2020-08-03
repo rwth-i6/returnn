@@ -21,10 +21,10 @@ import numpy
 from Dataset import Dataset, init_dataset
 from SprintDataset import SprintDatasetBase
 from EngineBase import EngineBase
-from Log import log
+from returnn.log import log
 from EngineUtil import assign_dev_data_single_seq
 import Debug
-from Util import get_gpu_names, interrupt_main, to_bool, BackendEngine
+from returnn.util.basic import get_gpu_names, interrupt_main, to_bool, BackendEngine
 import TaskSystem
 import rnn
 
@@ -188,7 +188,7 @@ class PythonFeatureScorer(object):
     # We expect a filename to the priors, stored as txt, in +log space.
     assert isinstance(filename, str)
     assert os.path.exists(filename)
-    from Util import load_txt_vector
+    from returnn.util.basic import load_txt_vector
     prior = load_txt_vector(filename)  # +log space
     self.priors = -numpy.array(prior, dtype="float32") * numpy.float32(scale)  # -log space
     assert self.priors.shape == (self.output_dim,), "dim mismatch: %r != %i" % (self.priors.shape, self.output_dim)
@@ -641,7 +641,7 @@ def dump_flags():
     print("CUDA via", theano_cuda.__file__)
     print("CUDA available:", theano_cuda.cuda_available)
 
-    from Util import TheanoFlags
+    from returnn.util.basic import TheanoFlags
     print("THEANO_FLAGS:", TheanoFlags)
 
 

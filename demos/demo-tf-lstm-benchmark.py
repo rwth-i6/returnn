@@ -57,11 +57,11 @@ from pprint import pprint
 sys.path += [os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]
 
 import better_exchook
-from Log import log
-from Config import Config
-from Util import hms_fraction, describe_returnn_version, describe_tensorflow_version
+from returnn.log import log
+from returnn.config import Config
+from returnn.util.basic import hms_fraction, describe_returnn_version, describe_tensorflow_version
 from TFEngine import Engine
-from TFUtil import setup_tf_thread_pools, is_gpu_available, print_available_devices
+from returnn.tf.util.basic import setup_tf_thread_pools, is_gpu_available, print_available_devices
 from Dataset import init_dataset, Dataset
 
 

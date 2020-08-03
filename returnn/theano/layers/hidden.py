@@ -21,7 +21,7 @@ from NetworkBaseLayer import Layer
 from ActivationFunctions import strtoact, strtoact_single_joined, elu
 import TheanoUtil
 from TheanoUtil import class_idx_seq_to_1_of_k
-from Log import log
+from returnn.log import log
 from math import ceil
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 from TheanoUtil import print_to_file, DumpOp
@@ -615,7 +615,7 @@ class SubnetworkLayer(_NoOpLayer):
     if load == "<random>":
       print("subnetwork with random initialization", file=log.v2)
     else:
-      from Config import get_global_config
+      from returnn.config import get_global_config
       config = get_global_config()  # this is a bit hacky but works fine in all my cases...
       model_filename = load % {"self": self,
                                "global_config_load": config.value("load", None),
@@ -711,7 +711,7 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
       if load == "<random>":
         print("subnetwork with random initialization", file=log.v2)
       else:
-        from Config import get_global_config
+        from returnn.config import get_global_config
         config = get_global_config()  # this is a bit hacky but works fine in all my cases...
         model_filename = load % {"self": self,
                                  "global_config_load": config.value("load", None),

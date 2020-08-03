@@ -183,7 +183,7 @@ def main():
   assert os.path.exists(archiverExec), "Sprint archiver not found"
   assert args.crnnSaveEpoch >= 1
 
-  from Config import Config
+  from returnn.config import Config
   global config
   config = Config()
   config.load_file(configFile)

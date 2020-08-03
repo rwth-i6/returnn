@@ -4,7 +4,7 @@ import theano.tensor as T
 from FastLSTM import LSTMOp2Instance
 from OpLSTM import LSTMOpInstance
 import unittest
-from Util import have_gpu
+from returnn.util.basic import have_gpu
 
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")

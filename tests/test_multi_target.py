@@ -6,11 +6,11 @@ sys.path += ["."]  # Python 3 hack
 
 
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false, assert_greater, assert_almost_equal, assert_is
-from Config import Config
+from returnn.config import Config
 from Engine import Engine
 from Device import Device
-from Log import log
-from GeneratingDataset import StaticDataset, DummyDataset
+from returnn.log import log
+from returnn.datasets.generating import StaticDataset, DummyDataset
 from EngineUtil import assign_dev_data_single_seq
 import TheanoUtil
 import numpy

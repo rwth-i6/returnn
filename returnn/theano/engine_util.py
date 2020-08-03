@@ -8,7 +8,7 @@ from __future__ import print_function
 
 import numpy
 from EngineBatch import Batch
-from Log import log
+from returnn.log import log
 
 
 def assign_dev_data(device, dataset, batches, load_seqs=True):

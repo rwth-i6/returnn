@@ -35,7 +35,7 @@ sys.path.append(returnn_dir)
 import rnn
 from TFEngine import Runner
 from Dataset import init_dataset
-from Util import NumbersDict, Stats, deep_update_dict_values
+from returnn.util.basic import NumbersDict, Stats, deep_update_dict_values
 
 
 def inject_retrieval_code(net_dict, rec_layer_name, layers, dropout):
@@ -198,7 +198,7 @@ def main(argv):
     assert args.output_file
     assert len(layers) == 1
     sub_layer = network.get_layer("%s/%s" % (args.rec_layer, layers[0]))
-    from HDFDataset import SimpleHDFWriter
+    from returnn.datasets.hdf import SimpleHDFWriter
     hdf_writer = SimpleHDFWriter(filename=args.output_file, dim=sub_layer.output.dim, ndim=sub_layer.output.ndim)
 
   extra_fetches = {

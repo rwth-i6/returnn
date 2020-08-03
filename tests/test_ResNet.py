@@ -13,11 +13,11 @@ from pprint import pprint
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 
-from Config import Config
-from TFNetwork import *
+from returnn.config import Config
+from returnn.tf.network import *
 from TFNetworkLayer import *
 from TFEngine import *
-from Log import log
+from returnn.log import log
 import TFCompat
 import TFUtil
 TFUtil.debug_register_better_repr()

@@ -11,11 +11,11 @@ import re
 import numpy
 import contextlib
 import typing
-from Log import log
+from returnn.log import log
 from TFNetworkLayer import LayerBase, get_layer_class
 import TFCompat
 import TFUtil
-from TFUtil import Data, DimensionTag, reuse_name_scope, VariableAssigner
+from returnn.tf.util.basic import Data, DimensionTag, reuse_name_scope, VariableAssigner
 
 
 class ExternData(object):
@@ -292,7 +292,7 @@ class TFNetwork(object):
     :param str name: only for debugging
     """
     if not name:
-      from Util import try_get_caller_name
+      from returnn.util.basic import try_get_caller_name
       name = "<network via %s>" % try_get_caller_name(fallback="<unknown>")
     self.name = name
     if absolute_name_prefix:
@@ -304,7 +304,7 @@ class TFNetwork(object):
       config = parent_net._config
     if extern_data is None:
       if not config:
-        from Config import get_global_config
+        from returnn.config import get_global_config
         config = get_global_config()
       extern_data = ExternData()
       extern_data.init_from_config(config)
@@ -704,8 +704,8 @@ class TFNetwork(object):
     :rtype: LayerBase
     """
     from pprint import pprint
-    from Util import help_on_type_error_wrong_args
-    from TFUtil import py_print
+    from returnn.util.basic import help_on_type_error_wrong_args
+    from returnn.tf.util.basic import py_print
     layer_desc = self._create_layer_layer_desc(name=name, layer_desc=layer_desc)
     debug_print_layer_output_template = self.get_config().bool("debug_print_layer_output_template", False)
     debug_print_layer_output_shape = self.get_config().bool("debug_print_layer_output_shape", False)
@@ -748,7 +748,7 @@ class TFNetwork(object):
       if (debug_add_check_numerics_on_output
               and layer.output.dtype.startswith("float") and not layer.allow_inf_in_output):
         print("debug_add_check_numerics_on_output: add for layer %r: %r" % (name, layer.output.placeholder))
-        from TFUtil import identity_with_check_numerics
+        from returnn.tf.util.basic import identity_with_check_numerics
         layer.output.placeholder = identity_with_check_numerics(
           layer.output.placeholder,
           name="%s_identity_with_check_numerics_output" % layer_class.cls_get_tf_scope_name(name))
@@ -985,7 +985,7 @@ class TFNetwork(object):
       """
       if not use_horovod_reduction:
         return x
-      from TFUtil import global_tensor
+      from returnn.tf.util.basic import global_tensor
       # noinspection PyUnresolvedReferences,PyPackageRequirements
       import horovod.tensorflow as hvd
       out = global_tensor(
@@ -1411,7 +1411,7 @@ class TFNetwork(object):
     """
     import os
     filename = os.path.abspath(filename)  # TF needs absolute path
-    from Util import maybe_make_dirs
+    from returnn.util.basic import maybe_make_dirs
     maybe_make_dirs(os.path.dirname(filename))
     if not self.saver:
       self._create_saver()
@@ -1504,7 +1504,7 @@ class TFNetwork(object):
     :return: fn_train() if self.train_flag else fn_eval()
     :rtype: tf.Tensor
     """
-    from TFUtil import cond
+    from returnn.tf.util.basic import cond
     return cond(self.train_flag, fn_train, fn_eval)
 
   def get_search_choices(self, sources=None, src=None, base_search_choice=None, _layer_to_search_choices=None,
@@ -1753,7 +1753,7 @@ class TFNetwork(object):
     :return: int scalar tensor which states the batch-dim
     :rtype: int|tf.Tensor
     """
-    from TFUtil import get_shape_dim, reuse_name_scope_of_tensor
+    from returnn.tf.util.basic import get_shape_dim, reuse_name_scope_of_tensor
     if self._batch_dim is not None:
       return self._batch_dim
     # First check parent because there we might get the true batch dim.
@@ -1859,7 +1859,7 @@ class TFNetwork(object):
     :param bool fallback_dummy_config: if no config, return a new empty Config, otherwise return None
     :rtype: Config.Config|None
     """
-    from Config import Config, get_global_config
+    from returnn.config import Config, get_global_config
     if self._config:
       return self._config
     if self.parent_net:
@@ -1981,7 +1981,7 @@ class TFNetwork(object):
     """
     :rtype: list[TFNetwork]
     """
-    from TFUtil import CollectionKeys
+    from returnn.tf.util.basic import CollectionKeys
     coll = TFCompat.v1.get_collection_ref(CollectionKeys.RETURNN_NET_STACK)
     assert isinstance(coll, list)
     return coll
@@ -2238,7 +2238,7 @@ class LossHolder:
 
     # We want output of the form (B,T)
     if self.loss.output.time_dim_axis == 0:
-      from TFUtil import swapaxes
+      from returnn.tf.util.basic import swapaxes
       value = swapaxes(value, 0, 1)  # resulting in (B,T,...)
 
     return value
@@ -2317,7 +2317,7 @@ class LossHolder:
       if self._network.get_config().bool("debug_add_check_numerics_on_output", False):
         print("debug_add_check_numerics_on_output: add for layer loss %r: %r" % (
           self._layer.name, self._layer.output.placeholder))
-        from TFUtil import identity_with_check_numerics
+        from returnn.tf.util.basic import identity_with_check_numerics
         loss_value = identity_with_check_numerics(
           loss_value, name="%s_identity_with_check_numerics_loss" % self.get_tf_name())
     self._loss_value_for_fetch = loss_value
@@ -2488,7 +2488,7 @@ def help_on_tf_exception(
   """
   from pprint import pprint, pformat
   import traceback
-  from TFUtil import get_base_name, find_ops_with_tensor_input, find_ops_path_output_to_input
+  from returnn.tf.util.basic import get_base_name, find_ops_with_tensor_input, find_ops_path_output_to_input
   from tensorflow.python.util import nest
   if fetches is not None:
     fetches = nest.flatten(fetches)
@@ -2549,7 +2549,7 @@ def help_on_tf_exception(
         # tf.compat.v1.GraphKeys.VARIABLES deprecated usage (e.g. via get_predefined_collection_names or so).
         # We just do this ugly patch here, to work around the spam.
         TFCompat.v1.GraphKeys.VARIABLES = TFCompat.v1.GraphKeys.GLOBAL_VARIABLES
-        from TFUtil import FetchHelper
+        from returnn.tf.util.basic import FetchHelper
         debug_fetch, fetch_helpers, op_copied = FetchHelper.copy_graph(
           debug_fetch, target_op=op, fetch_helper_tensors=list(op.inputs),
           stop_at_ts=stop_at_ts,

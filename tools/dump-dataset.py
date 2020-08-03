@@ -11,10 +11,10 @@ returnn_dir = os.path.dirname(my_dir)
 sys.path.append(returnn_dir)
 
 import rnn
-from Log import log
+from returnn.log import log
 import argparse
 import numpy
-from Util import Stats, hms, hms_fraction, pretty_print
+from returnn.util.basic import Stats, hms, hms_fraction, pretty_print
 import Util
 
 

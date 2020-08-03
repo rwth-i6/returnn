@@ -5,9 +5,9 @@ from math import sqrt
 import numpy
 from theano import tensor as T
 import theano
-from Log import log
+from returnn.log import log
 from TheanoUtil import time_batch_make_flat, tiled_eye
-from Util import as_str
+from returnn.util.basic import as_str
 import json
 
 

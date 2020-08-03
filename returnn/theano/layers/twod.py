@@ -1,5 +1,5 @@
 from NetworkHiddenLayer import Layer
-from Log import log
+from returnn.log import log
 from cuda_implementation.OneDToTwoDOp import OneDToTwoDOp
 from cuda_implementation.CropToBatchImageSizeOp import CropToBatchImageSizeInstance, CropToBatchImageSizeZeroInstance
 from cuda_implementation.MultiDirectionalTwoDLSTMOp import MultiDirectionalTwoDLSTMOpInstance

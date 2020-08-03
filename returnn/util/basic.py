@@ -119,7 +119,7 @@ class BackendEngine:
     assert cls.selectedEngine is None, "already set"
     if engine is None:
       if config is None:
-        from Config import get_global_config
+        from returnn.config import get_global_config
         config = get_global_config()
       engine = cls._get_default_engine()
       if config.bool("use_theano", False):
@@ -2859,7 +2859,7 @@ def _consider_check_for_gpu():
     return False
   # noinspection PyBroadException
   try:
-    from Config import get_global_config
+    from returnn.config import get_global_config
     config = get_global_config()
   except Exception:
     config = None
@@ -3037,7 +3037,7 @@ def log_runtime_info_to_dir(path, config):
   import os
   import sys
   import shutil
-  from Config import Config
+  from returnn.config import Config
   try:
     hostname = get_hostname()
     content = [

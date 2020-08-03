@@ -16,7 +16,7 @@ from CachedDataset2 import CachedDataset2
 from Dataset import DatasetSeq
 from BundleFile import BundleFile
 from NormalizationData import NormalizationData
-from Log import log
+from returnn.log import log
 
 
 class StereoDataset(CachedDataset2):
@@ -69,7 +69,7 @@ class StereoDataset(CachedDataset2):
     if partition == self._partition_epoch-1:
       partition_size += self._seq_overhead
     return partition_size
-    
+
   def init_seq_order(self, epoch=None, seq_list=None):
     """
     :type epoch: int|None

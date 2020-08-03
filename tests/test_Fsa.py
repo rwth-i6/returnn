@@ -24,7 +24,7 @@ sys.path.insert(0, base_path)
 # Returnn imports
 import Fsa
 import TFCompat
-from TFUtil import is_gpu_available
+from returnn.tf.util.basic import is_gpu_available
 
 
 class Lexicon:
@@ -299,10 +299,10 @@ def tf_baum_welch(fsa, am_scores=None, num_classes=None, out_seq_len=None):
   am_scores = -numpy.log(am_scores)  # in -log space
   am_scores = tf.constant(am_scores, dtype=tf.float32)
   float_idx = tf.ones((out_seq_len, n_batch), dtype=tf.float32)
-  # from TFUtil import sequence_mask_time_major
+  # from returnn.tf.util.basic import sequence_mask_time_major
   # float_idx = tf.cast(sequence_mask_time_major(tf.convert_to_tensor(list(range(seq_len - n_batch + 1, seq_len + 1)))), dtype=tf.float32)
   print("Construct call...")
-  from TFNativeOp import fast_baum_welch
+  from returnn.tf.native_op import fast_baum_welch
   fwdbwd, obs_scores = fast_baum_welch(
     am_scores=am_scores, float_idx=float_idx,
     edges=edges, weights=weights, start_end_states=start_end_states)

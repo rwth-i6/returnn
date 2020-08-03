@@ -5,10 +5,10 @@ Some datasets for artificially generated data.
 
 from __future__ import print_function
 
-from Dataset import Dataset, DatasetSeq, convert_data_dims
-from CachedDataset2 import CachedDataset2
-from Util import class_idx_seq_to_1_of_k, CollectionReadCheckCovered, PY3
-from Log import log
+from .basic import Dataset, DatasetSeq, convert_data_dims
+from .cached2 import CachedDataset2
+from returnn.util.basic import class_idx_seq_to_1_of_k, CollectionReadCheckCovered, PY3
+from returnn.log import log
 import numpy
 import re
 import sys
@@ -1099,7 +1099,7 @@ class ExtractAudioFeatures:
       assert self.with_delta == 0 and self.norm_mean is None and self.norm_std_dev is None
       # We expect that raw_bytes comes from a Ogg file.
       try:
-        from extern.ParseOggVorbis.returnn_import import ParseOggVorbisLib
+        from returnn.extern.ParseOggVorbis.returnn_import import ParseOggVorbisLib
       except ImportError:
         print("Maybe you did not clone the submodule extern/ParseOggVorbis?")
         raise
@@ -1572,7 +1572,7 @@ class TimitDataset(CachedDataset2):
     self._fixed_random_seed = fixed_random_seed  # useful when used as eval dataset
     if random_permute_audio is None:
       random_permute_audio = train
-    from Util import CollectionReadCheckCovered
+    from returnn.util.basic import CollectionReadCheckCovered
     self._random_permute_audio = CollectionReadCheckCovered.from_bool_or_dict(random_permute_audio)
 
     self._seq_order = None  # type: typing.Optional[typing.List[int]]
@@ -1640,10 +1640,10 @@ class TimitDataset(CachedDataset2):
 
   def _reader_thread_main(self):
     import sys
-    from Util import interrupt_main
+    from returnn.util.basic import interrupt_main
     # noinspection PyBroadException
     try:
-      import better_exchook
+      from returnn.util import better_exchook
       better_exchook.install()
 
       # noinspection PyPackageRequirements
@@ -1940,7 +1940,7 @@ class Vocabulary(object):
         if not PY3:
           # Any utf8 string will not be a unicode string automatically, so enforce this.
           assert isinstance(d, dict)
-          from Util import py2_utf8_str_to_unicode
+          from returnn.util.basic import py2_utf8_str_to_unicode
           d = {py2_utf8_str_to_unicode(s): i for (s, i) in d.items()}
       assert isinstance(d, dict)
       assert self.unknown_label is None or self.unknown_label in d
@@ -1974,7 +1974,7 @@ class Vocabulary(object):
     :rtype: (tensorflow.Session)->None
     """
     import tensorflow as tf
-    from TFUtil import VariableAssigner
+    from returnn.tf.util.basic import VariableAssigner
     assert isinstance(var, tf.Variable)
     assert var.dtype.base_dtype == tf.string
     assert var.shape.as_list() == [self.num_labels]
@@ -2310,7 +2310,7 @@ class BlissDataset(CachedDataset2):
     """
     super(BlissDataset, self).__init__(**kwargs)
     assert norm_mean is None and norm_std_dev is None, "%s, not yet implemented..." % self
-    from Util import hms_fraction
+    from returnn.util.basic import hms_fraction
     import time
     start_time = time.time()
     self._num_feature_filters = num_feature_filters
@@ -2440,7 +2440,7 @@ class LibriSpeechCorpus(CachedDataset2):
     import os
     from glob import glob
     import zipfile
-    import Util
+    import returnn.util.basic
     self.path = path
     self.prefix = prefix
     self.use_zip = use_zip
@@ -2451,7 +2451,7 @@ class LibriSpeechCorpus(CachedDataset2):
       zip_fns = sorted(glob(zip_fn_pattern))
       assert zip_fns, "no files found: %r" % zip_fn_pattern
       if use_cache_manager:
-        zip_fns = [Util.cf(fn) for fn in zip_fns]
+        zip_fns = [returnn.util.basic.cf(fn) for fn in zip_fns]
       self._zip_files = {
         os.path.splitext(os.path.basename(fn))[0]: zipfile.ZipFile(fn)
         for fn in zip_fns}  # e.g. "train-clean-100" -> ZipFile
@@ -2459,7 +2459,7 @@ class LibriSpeechCorpus(CachedDataset2):
     assert os.path.exists(path + "/train-clean-100" + (".zip" if use_zip else ""))
     self.orth_post_process = None
     if orth_post_process:
-      from LmDataset import get_post_processor_function
+      from .lm import get_post_processor_function
       self.orth_post_process = get_post_processor_function(orth_post_process)
     if targets == "bpe" or (targets is None and bpe is not None):
       assert bpe is not None and chars is None
@@ -2552,7 +2552,7 @@ class LibriSpeechCorpus(CachedDataset2):
     :rtype: bool
     :returns whether the order changed (True is always safe to return)
     """
-    import Util
+    import returnn.util.basic
     super(LibriSpeechCorpus, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if not epoch:
       epoch = 1
@@ -2579,7 +2579,7 @@ class LibriSpeechCorpus(CachedDataset2):
       self._num_seqs = len(self._seq_order)
     if self.epoch_wise_filter:
       # Note: A more generic variant of this code is :class:`MetaDataset.EpochWiseFilter`.
-      from MetaDataset import EpochWiseFilter
+      from .meta import EpochWiseFilter
       old_num_seqs = self._num_seqs
       any_filter = False
       for (ep_start, ep_end), value in sorted(self.epoch_wise_filter.items()):
@@ -2610,7 +2610,7 @@ class LibriSpeechCorpus(CachedDataset2):
                 sorted([(len(self.transs[self._reference_seq_order[idx]]), idx) for idx in self._seq_order]))
               # Note: This is somewhat incorrect. But keep the behavior, such that old setups are reproducible.
               # You can use the option `use_new_filter` to get a better behavior.
-              num = Util.binary_search_any(
+              num = returnn.util.basic.binary_search_any(
                 cmp=lambda num_: numpy.mean(seqs[:num_, 0]) > max_mean_len, low=1, high=len(seqs) + 1)
               assert num is not None
               self._seq_order = list(seqs[:num, 1])
@@ -2790,8 +2790,8 @@ class OggZipDataset(CachedDataset2):
     """
     import os
     import zipfile
-    import Util
-    from MetaDataset import EpochWiseFilter
+    import returnn.util.basic
+    from .meta import EpochWiseFilter
     self._separate_txt_files = {}  # name -> filename
     if (
       isinstance(path, str)
@@ -2814,7 +2814,7 @@ class OggZipDataset(CachedDataset2):
         if "." in name and ext == ".gz":
           name, ext = name[:name.rindex(".")], name[name.rindex("."):] + ext
         if use_cache_manager:
-          path_ = Util.cf(path_)
+          path_ = returnn.util.basic.cf(path_)
         if ext == ".txt.gz":
           self._separate_txt_files[name] = path_
           continue
@@ -2836,7 +2836,7 @@ class OggZipDataset(CachedDataset2):
       if callable(targets_post_process):
         self.targets_post_process = targets_post_process
       else:
-        from LmDataset import get_post_processor_function
+        from .lm import get_post_processor_function
         self.targets_post_process = get_post_processor_function(targets_post_process)
     self._fixed_random_seed = fixed_random_seed
     self._audio_random = numpy.random.RandomState(1)

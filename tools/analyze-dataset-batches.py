@@ -20,11 +20,11 @@ returnn_dir = os.path.dirname(my_dir)
 sys.path.append(returnn_dir)
 
 import rnn
-from Log import log
+from returnn.log import log
 import Util
-from Util import Stats, hms, NumbersDict
+from returnn.util.basic import Stats, hms, NumbersDict
 from Dataset import Batch, Dataset, init_dataset
-from Config import Config
+from returnn.config import Config
 
 
 config = None  # type: typing.Optional[Config]

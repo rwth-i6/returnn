@@ -14,11 +14,11 @@ import os
 sys.path += ["."]  # Python 3 hack
 sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
 
-import TFCompat
-from TFEngine import *
-import TFUtil
-from TFNetwork import ExternData
-from Config import Config
+import returnn.tf.compat as tf_compat
+from returnn.tf.engine import *
+import returnn.tf.util.basic
+from returnn.tf.network import ExternData
+from returnn.config import Config
 from nose.tools import assert_equal, assert_is_instance
 import unittest
 import numpy
@@ -26,13 +26,13 @@ import numpy.testing
 from pprint import pprint
 import contextlib
 import better_exchook
-from Log import log
-import Debug
+from returnn.log import log
+import returnn.util.debug
 
 log.initialize(verbosity=[5])
-TFUtil.debug_register_better_repr()
+returnn.tf.util.basic.debug_register_better_repr()
 better_exchook.replace_traceback_format_tb()
-Debug.install_lib_sig_segfault()
+returnn.util.debug.install_lib_sig_segfault()
 
 try:
   import faulthandler
@@ -52,7 +52,7 @@ def make_scope():
   :rtype: TFCompat.v1.Session
   """
   with tf.Graph().as_default() as graph:
-    with TFCompat.v1.Session(graph=graph) as session:
+    with tf_compat.v1.Session(graph=graph) as session:
       yield session
 
 
@@ -98,11 +98,11 @@ def _cleanup_old_models(config):
       os.remove(fn)
 
 
-session = TFCompat.v1.InteractiveSession()
+session = tf_compat.v1.InteractiveSession()
 
 
 def test_FeedDictDataProvider():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -154,7 +154,7 @@ def test_FeedDictDataProvider():
 
 
 def test_DatasetDataProvider():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -221,7 +221,7 @@ def test_DatasetDataProvider():
 
 
 def test_engine_train():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -248,7 +248,7 @@ def test_engine_train():
 
 
 def test_engine_train_new_dataset_pipeline():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -278,7 +278,7 @@ def test_engine_train_new_dataset_pipeline():
 
 def test_engine_train_uneven_batches():
   rnd = numpy.random.RandomState(42)
-  from GeneratingDataset import StaticDataset
+  from returnn.datasets.generating import StaticDataset
   n_data_dim = 2
   n_classes_dim = 3
 
@@ -326,7 +326,7 @@ def test_engine_train_uneven_batches():
 def test_engine_train_dummy_distributed():
   import TFDistributed
   rnd = numpy.random.RandomState(42)
-  from GeneratingDataset import StaticDataset
+  from returnn.datasets.generating import StaticDataset
   n_data_dim = 2
   n_classes_dim = 3
 
@@ -379,7 +379,7 @@ def test_engine_train_dummy_distributed():
 
 
 def test_engine_train_subnet_loss():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -411,7 +411,7 @@ def test_engine_train_subnet_loss():
 
 
 def test_engine_train_rec_subnet_loss_optimized():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -444,7 +444,7 @@ def test_engine_train_rec_subnet_loss_optimized():
 
 
 def test_engine_train_rec_subnet_loss_non_optimized():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -478,7 +478,7 @@ def test_engine_train_rec_subnet_loss_non_optimized():
 
 
 def test_engine_train_accum_grad_multiple_step():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -505,7 +505,7 @@ def test_engine_train_accum_grad_multiple_step():
 
 
 def test_engine_train_accum_grad_multiple_step_sparse():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -540,7 +540,7 @@ def test_engine_train_grad_noise_sparse():
   # ie. in add_scaled_noise_to_gradients(),
   # and don't really check whether it works.
 
-  from GeneratingDataset import Task12AXDataset
+  from returnn.datasets.generating import Task12AXDataset
   train_data = Task12AXDataset(num_seqs=5)
   cv_data = Task12AXDataset(num_seqs=2)
   n_data_dim = train_data.num_outputs["data"][0]
@@ -581,7 +581,7 @@ def test_engine_train_grad_noise_sparse():
 
 
 def test_engine_analyze():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -608,7 +608,7 @@ def test_engine_analyze():
 
 
 def test_engine_forward_single():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -632,7 +632,7 @@ def test_engine_forward_single():
 
 
 def test_engine_forward_to_hdf():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   import tempfile
   output_file = tempfile.mktemp(suffix=".hdf", prefix="nose-tf-forward")
   seq_len = 5
@@ -670,7 +670,7 @@ def test_engine_forward_to_hdf():
     assert f.attrs['numSeqs'] == num_seqs
     assert f.attrs['numTimesteps'] == seq_len * num_seqs
 
-  from HDFDataset import HDFDataset
+  from returnn.datasets.hdf import HDFDataset
   ds = HDFDataset()
   ds.add_file(output_file)
 
@@ -682,7 +682,7 @@ def test_engine_forward_to_hdf():
 
 
 def test_engine_rec_subnet_count():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   # The dataset is actually not used.
   n_data_dim = 2
@@ -722,8 +722,8 @@ def test_engine_end_layer(extra_rec_kwargs=None):
   """
   :param dict[str] extra_rec_kwargs:
   """
-  from Util import dict_joined
-  from GeneratingDataset import DummyDataset
+  from returnn.util.basic import dict_joined
+  from returnn.datasets.generating import DummyDataset
   from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 1
@@ -794,8 +794,8 @@ def check_engine_search(extra_rec_kwargs=None):
   """
   :param dict[str] extra_rec_kwargs:
   """
-  from Util import dict_joined
-  from GeneratingDataset import DummyDataset
+  from returnn.util.basic import dict_joined
+  from returnn.datasets.generating import DummyDataset
   from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 2
@@ -868,8 +868,8 @@ def check_engine_search_attention(extra_rec_kwargs=None):
   """
   :param dict[str] extra_rec_kwargs:
   """
-  from Util import dict_joined
-  from GeneratingDataset import DummyDataset
+  from returnn.util.basic import dict_joined
+  from returnn.datasets.generating import DummyDataset
   from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 2
@@ -972,7 +972,7 @@ def check_engine_train_simple_attention(lstm_unit):
 
   }
 
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -1022,7 +1022,7 @@ def test_engine_train_simple_attention_basiclstm():
 
 
 def test_attention_train_then_search():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 7
@@ -1079,7 +1079,7 @@ def test_attention_train_then_search():
 
 
 def test_attention_no_encoder_dependency():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 7
@@ -1088,7 +1088,7 @@ def test_attention_no_encoder_dependency():
   dev_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
   dev_data.init_seq_order(epoch=1)
 
-  from TFUtil import DimensionTag
+  from returnn.tf.util.basic import DimensionTag
   enc_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="enc time")
 
   config = Config()
@@ -1160,7 +1160,7 @@ def test_attention_no_encoder_dependency():
 
 
 def test_attention_search_in_train_then_search():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 7
@@ -1243,7 +1243,7 @@ def check_train_and_search_two_targets(net_dict):
   and two corresponding output layers ("decision_0", "decision_1").
   """
   from MetaDataset import MetaDataset
-  from TFUtil import DimensionTag
+  from returnn.tf.util.basic import DimensionTag
   from test_HDFDataset import generate_hdf_from_other
 
   n_data_dim = 2
@@ -1381,7 +1381,7 @@ def test_attention_two_dependent_targets():
 
 
 def test_rec_optim_all_out():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 2
@@ -1484,7 +1484,7 @@ def test_rec_subnet_train_t3b():
     }
   }
 
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -1540,7 +1540,7 @@ def test_rec_subnet_train_t3d():
     }, "target": "classes", "max_seq_len": 75},
   }
 
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -1585,7 +1585,7 @@ def test_rec_subnet_train_t3d_simple():
     }, "target": "classes", "max_seq_len": 75},
   }
 
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -1638,7 +1638,7 @@ def deterministic_train_check(layer_opts):
   })
   _cleanup_old_models(config)
 
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
   cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
@@ -1690,7 +1690,7 @@ def test_deterministic_train_rec_nativelstm2():
 
 def _create_deterministic_layer_checks():
   from TFNetworkLayer import get_layer_class_name_list, get_layer_class
-  from Util import collect_mandatory_class_init_kwargs
+  from returnn.util.basic import collect_mandatory_class_init_kwargs
   for cls_name in get_layer_class_name_list():
     cls = get_layer_class(cls_name)
     if cls.__name__.startswith("_"):
@@ -1719,7 +1719,7 @@ def test_rec_subnet_auto_optimize():
   from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
   n_data_dim = 2
   n_classes_dim = 3
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=10, seq_len=seq_len)
   cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
@@ -1834,7 +1834,7 @@ def test_rec_subnet_construct_1():
   """
   n_data_dim = 2
   n_classes_dim = 3
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=10, seq_len=seq_len)
 
@@ -1891,7 +1891,7 @@ def test_rec_subnet_construct_1():
 def test_rec_subnet_construct_2():
   n_data_dim = 2
   n_classes_dim = 3
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=10, seq_len=seq_len)
 
@@ -1954,7 +1954,7 @@ def test_rec_subnet_construct_2():
 def test_rec_subnet_construct_3():
   n_data_dim = 2
   n_classes_dim = 3
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=10, seq_len=seq_len)
 
@@ -2075,7 +2075,7 @@ def test_rec_subnet_eval_init_out_apply0():
     }, "target": "classes", "max_seq_len": 7},
   }
 
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -2183,7 +2183,7 @@ def test_search_multi_choice_hdf_dump():
 
   def t_linear(source, **kwargs):
     import tensorflow as tf
-    from TFUtil import where_bc
+    from returnn.tf.util.basic import where_bc
     enc = source(1, as_data=True, auto_convert=False)
     dec = source(0, as_data=True, auto_convert=False)
     enc_lens = enc.get_sequence_lengths()
@@ -2518,7 +2518,7 @@ def test_net_safe_log_to_log_softmax():
   output_layer = net.get_default_output_layer(must_exist=True)
   out = output_layer.output.placeholder
   print(out)
-  from TFUtil import print_graph_output
+  from returnn.tf.util.basic import print_graph_output
   print_graph_output(out)
   assert out.op.type == "Sub"
   assert len(out.op.inputs) == 2
@@ -2593,7 +2593,7 @@ def test_preload_from_files():
     "model": model_tmp_dir + "/clone_model",
   })
 
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   from TFEngine import Engine
   seq_len = 5
   n_data_dim = n_in
@@ -2677,7 +2677,7 @@ def test_preload_from_files_with_reuse():
     "model": model_tmp_dir + "/clone_model",
   })
 
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   from TFEngine import Engine
   seq_len = 5
   n_data_dim = n_in
@@ -2767,7 +2767,7 @@ def test_preload_from_files_ignore_missing():
     "model": model_tmp_dir + "/clone_model",
   })
 
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   from TFEngine import Engine
   seq_len = 5
   n_data_dim = n_in
@@ -2842,7 +2842,7 @@ def test_init_network_from_config_preload_from_files_eval():
     "model": model_tmp_dir + "/model",
   })
 
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   from TFEngine import Engine
   seq_len = 5
   n_data_dim = n_in
@@ -2879,7 +2879,7 @@ def test_TikhonovRegularizationLayer():
 
   make_network(num_layers=3)
 
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -2913,7 +2913,7 @@ def test_TikhonovRegularizationLayer():
 
 
 def test_grad_summaries():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -2971,7 +2971,7 @@ def test_grad_summaries():
 def test_unflatten_2d():
   # See also test_SimpleHDFWriter_ndim1_var_len.
   # And unflatten_nd, and UnflattenNdLayer.
-  from HDFDataset import HDFDataset, SimpleHDFWriter
+  from returnn.datasets.hdf import HDFDataset, SimpleHDFWriter
   from Dataset import set_config_num_inputs_outputs_from_dataset
   # E.g. attention weights, shape (dec-time,enc-time) per seq.
   fn = _get_tmp_file(suffix=".hdf")
@@ -3056,9 +3056,9 @@ def test_unflatten_2d():
 def test_attention_forward_hdf_then_unflatten_2d():
   # See also test_SimpleHDFWriter_ndim1_var_len.
   # And unflatten_nd, and UnflattenNdLayer.
-  from HDFDataset import HDFDataset
+  from returnn.datasets.hdf import HDFDataset
   from Dataset import set_config_num_inputs_outputs_from_dataset
-  from GeneratingDataset import TaskNumberBaseConvertDataset
+  from returnn.datasets.generating import TaskNumberBaseConvertDataset
   from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
 
   # Simple version of e.g.:

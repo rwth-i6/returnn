@@ -363,7 +363,7 @@ def get_tf_mod(verbose=False):
     return _tf_mod
   import platform
   from glob import glob
-  from TFUtil import OpCodeCompiler
+  from returnn.tf.util.basic import OpCodeCompiler
 
   # References:
   # https://github.com/kpu/kenlm/blob/master/setup.py

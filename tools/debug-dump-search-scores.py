@@ -20,8 +20,8 @@ returnn_dir = os.path.dirname(my_dir)
 sys.path.insert(0, returnn_dir)
 
 import rnn
-from Log import log
-from Config import Config
+from returnn.log import log
+from returnn.config import Config
 import argparse
 import Util
 from TFEngine import Engine

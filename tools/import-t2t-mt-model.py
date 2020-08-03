@@ -24,7 +24,7 @@ import Util
 import better_exchook
 import rnn
 import TFCompat
-from TFNetwork import TFNetwork
+from returnn.tf.network import TFNetwork
 from TFNetworkLayer import SourceLayer, LayerBase, LinearLayer
 
 

@@ -19,10 +19,10 @@ import typing
 from threading import Condition
 
 import rnn
-import TaskSystem
-import Debug
-from TaskSystem import Pickler, Unpickler, numpy_set_unused
-from Util import to_bool, long
+import returnn.util.task_system
+import returnn.util.debug
+from returnn.util.task_system import Pickler, Unpickler, numpy_set_unused
+from returnn.util.basic import to_bool, long
 
 InitTypes = set()
 Verbose = False  # disables all per-segment log messages

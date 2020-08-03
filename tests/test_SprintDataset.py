@@ -5,10 +5,10 @@ sys.path += ["."]  # Python 3 hack
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 from EngineUtil import assign_dev_data, assign_dev_data_single_seq
 from EngineBatch import Batch
-from Log import log
-from Config import Config
+from returnn.log import log
+from returnn.config import Config
 import Util
-from GeneratingDataset import GeneratingDataset
+from returnn.datasets.generating import GeneratingDataset
 from Dataset import DatasetSeq
 from SprintDataset import ExternSprintDataset
 import numpy as np

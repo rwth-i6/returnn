@@ -8,7 +8,7 @@ sys.path.insert(0, "%s/.." % my_dir)
 sys.path.insert(0, "%s/../tools" % my_dir)  # for hdf_dump
 
 from Dataset import Dataset
-from HDFDataset import *
+from returnn.datasets.hdf import *
 from nose.tools import assert_equal
 from nose.tools import assert_not_equal
 from nose.tools import assert_raises
@@ -23,7 +23,7 @@ better_exchook.install()
 better_exchook.replace_traceback_format_tb()
 Util.init_thread_join_hack()
 
-from Log import log
+from returnn.log import log
 log.initialize(verbosity=[5])
 
 
@@ -144,7 +144,7 @@ def generate_hdf_from_other(opts, suffix=".hdf"):
   :rtype: str
   """
   # See test_hdf_dump.py and tools/hdf_dump.py.
-  from Util import make_hashable
+  from returnn.util.basic import make_hashable
   cache_key = make_hashable(opts)
   if cache_key in _hdf_cache:
     return _hdf_cache[cache_key]
@@ -214,7 +214,7 @@ class DatasetTestReader:
 
 def test_hdf_dump_not_frame_synced():
   num_seqs = 3
-  from GeneratingDataset import TaskNumberBaseConvertDataset
+  from returnn.datasets.generating import TaskNumberBaseConvertDataset
   hdf_fn = generate_hdf_from_other({"class": "TaskNumberBaseConvertDataset", "num_seqs": num_seqs})
   hdf = HDFDataset([hdf_fn])
   orig = TaskNumberBaseConvertDataset(num_seqs=num_seqs)
@@ -235,7 +235,7 @@ def test_hdf_dump_not_frame_synced():
 def test_HDFDataset_partition_epoch():
   partition_epoch = 3
   num_seqs = 11
-  from GeneratingDataset import TaskNumberBaseConvertDataset
+  from returnn.datasets.generating import TaskNumberBaseConvertDataset
   hdf_fn = generate_hdf_from_other({"class": "TaskNumberBaseConvertDataset", "num_seqs": num_seqs})
   hdf = HDFDataset([hdf_fn], partition_epoch=partition_epoch)
   orig = TaskNumberBaseConvertDataset(num_seqs=num_seqs)
@@ -513,7 +513,7 @@ def test_hdf_simple_iter_cached():
 
 
 def test_rnn_getCacheByteSizes_zero():
-  from Config import Config
+  from returnn.config import Config
   config = Config({"cache_size": "0"})
   import rnn
   rnn.config = config
@@ -524,7 +524,7 @@ def test_rnn_getCacheByteSizes_zero():
 
 def test_rnn_initData():
   hdf_fn = generate_hdf_from_dummy()
-  from Config import Config
+  from returnn.config import Config
   config = Config({"cache_size": "0", "train": hdf_fn, "dev": hdf_fn})
   import rnn
   rnn.config = config
@@ -562,7 +562,7 @@ def test_hdf_no_cache_iter():
 
 
 def test_hdf_data_short_int_dtype():
-  from GeneratingDataset import StaticDataset
+  from returnn.datasets.generating import StaticDataset
   dataset = StaticDataset([
     {"data": numpy.array([1, 2, 3], dtype="uint8"), "classes": numpy.array([-1, 5], dtype="int16")}],
     output_dim={"data": (255, 1), "classes": (10, 1)})
@@ -594,7 +594,7 @@ def test_hdf_data_short_int_dtype():
 
 
 def test_hdf_data_target_int32():
-  from GeneratingDataset import StaticDataset
+  from returnn.datasets.generating import StaticDataset
   dataset = StaticDataset([
     {"data": numpy.array([1, 2, 3], dtype="uint8"),
      "classes": numpy.array([2147483647, 2147483646, 2147483645], dtype="int32")}],
@@ -626,7 +626,7 @@ def test_hdf_data_target_int32():
 
 
 def test_hdf_target_float_dtype():
-  from GeneratingDataset import StaticDataset
+  from returnn.datasets.generating import StaticDataset
   dataset = StaticDataset([
     {"data": numpy.array([1, 2, 3], dtype="float32"), "classes": numpy.array([-1, 5], dtype="float32")}],
     output_dim={"data": (1, 1), "classes": (1, 1)})
@@ -658,7 +658,7 @@ def test_hdf_target_float_dtype():
 
 
 def test_hdf_target_float_dense():
-  from GeneratingDataset import StaticDataset
+  from returnn.datasets.generating import StaticDataset
   dataset = StaticDataset([
     {"data": numpy.array([[1, 2, 3], [2, 3, 4]], dtype="float32"),
      "classes": numpy.array([[-1, 5], [-2, 4], [-3, 2]], dtype="float32")}])

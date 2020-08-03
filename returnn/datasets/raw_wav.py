@@ -8,7 +8,7 @@ from __future__ import print_function
 import h5py
 from CachedDataset2 import CachedDataset2
 from Dataset import DatasetSeq
-from Log import log
+from returnn.log import log
 import tempfile
 import numpy as np
 import time

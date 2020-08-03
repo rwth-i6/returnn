@@ -63,7 +63,7 @@ class CLibAtForkDemo:
     self._load_lib()
 
   def _load_lib(self):
-    from Util import NativeCodeCompiler
+    from returnn.util.basic import NativeCodeCompiler
     native = NativeCodeCompiler(
       base_name="test_fork_exec", code_version=1, code=c_code_at_fork_demo, is_cpp=False,
       ld_flags=["-lpthread"])
@@ -208,7 +208,7 @@ def patched_check_demo_start_subprocess():
 
 
 def test_demo_start_subprocess_patched():
-  from Util import get_patch_atfork_lib
+  from returnn.util.basic import get_patch_atfork_lib
   from subprocess import check_call
   env = os.environ.copy()
   env["LD_PRELOAD"] = get_patch_atfork_lib()

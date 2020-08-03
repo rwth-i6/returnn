@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import better_exchook
 better_exchook.install()
 
-from Log import log
+from returnn.log import log
 from rnn import init, finalize
 
 arg_parser = argparse.ArgumentParser()

@@ -15,8 +15,8 @@ import theano
 import theano.tensor as T
 from TheanoUtil import try_register_gpu_opt
 from theano.sandbox.cuda import GpuOp
-from Util import make_hashable, make_dll_name, escape_c_str
-from Log import log
+from returnn.util.basic import make_hashable, make_dll_name, escape_c_str
+from returnn.log import log
 from pprint import pprint
 
 

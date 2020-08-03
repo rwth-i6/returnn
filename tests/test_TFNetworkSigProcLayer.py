@@ -16,9 +16,9 @@ import contextlib
 # Allow Returnn imports.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/..")
 
-from TFNetwork import *
+from returnn.tf.network import *
 from TFNetworkSigProcLayer import *
-from Config import Config
+from returnn.config import Config
 
 import better_exchook
 better_exchook.replace_traceback_format_tb()

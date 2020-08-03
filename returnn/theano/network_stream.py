@@ -1,5 +1,5 @@
 from TaskSystem import AsyncTask, ProcConnectionDied
-from Log import log
+from returnn.log import log
 import numpy
 import json
 try:

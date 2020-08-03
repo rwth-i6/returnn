@@ -12,7 +12,7 @@ logging.getLogger('tensorflow').disabled = True
 import tensorflow as tf
 import sys
 sys.path += ["."]  # Python 3 hack
-from TFUtil import *
+from returnn.tf.util.basic import *
 import TFCompat
 from nose.tools import assert_equal, assert_not_equal, assert_is_instance, assert_is, assert_in, assert_true
 from numpy.testing.utils import assert_almost_equal, assert_allclose
@@ -347,7 +347,7 @@ def test_Data_copy_time_flattened():
 
 def test_ExternData_via_config():
   # Like ExternData.init_from_config.
-  from Config import Config
+  from returnn.config import Config
   config = Config({
     "extern_data": {
       "data": (40, 2),
@@ -526,7 +526,7 @@ def test_Data_get_common_data_one_undefined_time():
   c.size_placeholder = b.size_placeholder.copy()
   print("c:", c)
   assert_equal(b.get_time_dim_tag(), c.get_time_dim_tag())
-  from Util import StringIO
+  from returnn.util.basic import StringIO
   warnings = StringIO()
   out = Data.get_common_data([a, b, c], warnings_out=warnings)
   warnings = warnings.getvalue()
@@ -1364,7 +1364,7 @@ def test_nd_indices_scatter_nd_time_major():
     :rtype: tf.Tensor
     """
     import tensorflow as tf
-    from TFUtil import nd_indices
+    from returnn.tf.util.basic import nd_indices
     v = v.copy_compatible_to(x)  # t_rel_var. (B, Ts, K)
     assert v.dim == x.dim
     t = t + 1  # shift by 1, because we init at -1
@@ -1988,7 +1988,7 @@ def test_supported_devices_for_op():
 def test_bleu_score():
   hyp = [1, 2, 3]
   truth = [2, 3]
-  from Util import compute_bleu
+  from returnn.util.basic import compute_bleu
   res = compute_bleu([truth], [hyp])
   print("res:", res)
   tf_res = session.run(bleu_score(
@@ -2005,7 +2005,7 @@ def test_bleu_score():
 def test_bleu_score_empty():
   hyp = []
   truth = [2, 3]
-  from Util import compute_bleu
+  from returnn.util.basic import compute_bleu
   res = compute_bleu([truth], [hyp])
   print("res:", res)
   tf_res = session.run(bleu_score(
@@ -2448,7 +2448,7 @@ def test_openfst():
 
 
 def test_layer_norms():
-  from TFNativeOp import have_blocksparse_requirements
+  from returnn.tf.native_op import have_blocksparse_requirements
   try:
     from tensorflow.contrib.layers import layer_norm as tf_contrib_layer_norm
   except ImportError as exc:
@@ -3103,7 +3103,7 @@ def test_FetchHelper_loop():
 
 
 def test_FetchHelper_loop_invalid():
-  from TFNetwork import help_on_tf_exception  # not needed for the test, but helpful for further debug output
+  from returnn.tf.network import help_on_tf_exception  # not needed for the test, but helpful for further debug output
   have_gpu = is_gpu_available()
   print("Have GPU:", have_gpu)
   graph = tf.Graph()

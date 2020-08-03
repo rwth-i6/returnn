@@ -15,18 +15,18 @@ from nose.tools import assert_equal, assert_is, assert_is_instance
 from numpy.testing.utils import assert_almost_equal, assert_allclose
 import theano.printing
 from pprint import pprint
-from GeneratingDataset import Task12AXDataset
+from returnn.datasets.generating import Task12AXDataset
 from Updater import Updater
-from Util import have_gpu
-from Util import NumbersDict
-from Config import Config
+from returnn.util.basic import have_gpu
+from returnn.util.basic import NumbersDict
+from returnn.config import Config
 from NetworkHiddenLayer import DumpLayer
 import rnn
 import EngineUtil
 import TheanoUtil
 import Network
 import better_exchook
-from Log import log
+from returnn.log import log
 
 better_exchook.replace_traceback_format_tb()
 log.initialize()  # some code needs it

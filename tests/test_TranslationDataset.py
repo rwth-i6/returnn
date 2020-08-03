@@ -19,7 +19,7 @@ sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
 
 import better_exchook
 from LmDataset import TranslationDataset, TranslationFactorsDataset
-from Util import init_thread_join_hack
+from returnn.util.basic import init_thread_join_hack
 
 better_exchook.install()
 better_exchook.replace_traceback_format_tb()

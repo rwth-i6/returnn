@@ -12,7 +12,7 @@ sys.path.append(returnn_dir)
 import argparse
 import rnn
 import json
-from Log import log
+from returnn.log import log
 from Pretrain import pretrain_from_config
 from Network import LayerNetwork
 

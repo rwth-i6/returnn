@@ -19,14 +19,14 @@ returnn_dir = os.path.dirname(my_dir)
 sys.path.insert(0, returnn_dir)
 
 import rnn
-from Log import log
-from Config import Config
+from returnn.log import log
+from returnn.config import Config
 import argparse
 import Util
-from Util import NotSpecified
+from returnn.util.basic import NotSpecified
 import TFCompat
-from TFUtil import Data, CollectionKeys
-from TFNetwork import TFNetwork
+from returnn.tf.util.basic import Data, CollectionKeys
+from returnn.tf.network import TFNetwork
 from TFNetworkLayer import LayerBase, register_layer_class, WrappedInternalLayer
 from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell, ChoiceLayer
 
@@ -71,7 +71,7 @@ def create_graph(train_flag, eval_flag, search_flag, net_dict):
   """
   print("Loading network, train flag %s, eval flag %s, search flag %s" % (train_flag, eval_flag, search_flag))
   from TFEngine import Engine
-  from TFNetwork import TFNetwork
+  from returnn.tf.network import TFNetwork
   network, updater = Engine.create_network(
     config=config, rnd_seed=1,
     train_flag=train_flag, eval_flag=eval_flag, search_flag=search_flag,
@@ -279,7 +279,7 @@ class RecStepByStepLayer(RecLayer):
       """
       assert self.final_value is not None
       value = self.final_value
-      from TFUtil import find_ops_path_output_to_input
+      from returnn.tf.util.basic import find_ops_path_output_to_input
       feed_tensors = []
       for data in self.parent.network.extern_data.data.values():
         feed_tensors.append(data.placeholder)
@@ -302,7 +302,7 @@ class RecStepByStepLayer(RecLayer):
       if self.var_data_shape.batch_dim_axis is None:
         return tf.no_op(name="tile_batch_state_var_no_op_%s" % self.name)
       # See also Data.copy_extend_with_beam.
-      from TFUtil import tile_transposed
+      from returnn.tf.util.basic import tile_transposed
       tiled_value = tile_transposed(
         self.var.read_value(), axis=self.var_data_shape.batch_dim_axis, multiples=repetitions)
       return TFCompat.v1.assign(self.var, tiled_value, name="tile_batch_state_var_%s" % self.name).op
@@ -315,7 +315,7 @@ class RecStepByStepLayer(RecLayer):
       """
       if self.var_data_shape.batch_dim_axis is None:
         return tf.no_op(name="select_src_beams_state_var_no_op_%s" % self.name)
-      from TFUtil import select_src_beams
+      from returnn.tf.util.basic import select_src_beams
       v = select_src_beams(self.var.read_value(), src_beams=src_beams)
       return TFCompat.v1.assign(self.var, v, name="select_src_beams_state_var_%s" % self.name).op
 
@@ -378,7 +378,7 @@ class RecStepByStepLayer(RecLayer):
     :return: same as initial_values, but the variables
     :rtype: T
     """
-    from Util import make_seq_of_type
+    from returnn.util.basic import make_seq_of_type
     if isinstance(name_prefix, (tuple, list)):
       assert isinstance(initial_values, (tuple, list))
       assert len(name_prefix) == len(initial_values)
@@ -417,7 +417,7 @@ class RecStepByStepLayer(RecLayer):
     :param T final_values:
     :rtype: T
     """
-    from Util import make_seq_of_type
+    from returnn.util.basic import make_seq_of_type
     if isinstance(name_prefix, (tuple, list)):
       assert isinstance(final_values, (tuple, list))
       assert len(name_prefix) == len(final_values)
@@ -507,7 +507,7 @@ class ChoiceStateVarLayer(LayerBase):
       if source.output_before_activation:
         scores_in = source.output_before_activation.get_log_output()
       else:
-        from TFUtil import safe_log
+        from returnn.tf.util.basic import safe_log
         scores_in = safe_log(scores_in)
     elif input_type == "log_prob":
       pass
@@ -572,7 +572,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     output = layer.output.copy()
     output.placeholder = rec_layer.create_state_var(
       name="base_value_%s" % layer_name, initial_value=output.placeholder, data_shape=output)
-    from TFUtil import DimensionTag
+    from returnn.tf.util.basic import DimensionTag
     for i, size in list(output.size_placeholder.items()):
       dim_tag = DimensionTag.get_tag_from_size_tensor(size)
       if not dim_tag:
@@ -679,7 +679,7 @@ def main(argv):
     # See :func:`Engine._init_network`.
     TFCompat.v1.set_random_seed(42)
     if args.train < 0:
-      from TFUtil import get_global_train_flag_placeholder
+      from returnn.tf.util.basic import get_global_train_flag_placeholder
       train_flag = get_global_train_flag_placeholder()
     else:
       train_flag = bool(args.train)

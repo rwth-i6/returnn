@@ -18,7 +18,7 @@ print("Python:", py)
 
 
 def which_pip():
-  from Util import which
+  from returnn.util.basic import which
   # Before we look anywhere in PATH, check if there is some pip alongside to the Python executable.
   # This might be more reliable.
   dir_name, basename = py.rsplit("/", 1)
@@ -85,7 +85,7 @@ def run_config_get_fer(config_filename):
 
 def cleanup_tmp_models(config_filename):
   assert os.path.exists(config_filename)
-  from Config import Config
+  from returnn.config import Config
   config = Config()
   config.load_file(config_filename)
   model_filename = config.value('model', '')
@@ -117,7 +117,7 @@ class TestDemos(object):
     import subprocess
     import shutil
     from glob import glob
-    from Util import get_login_username
+    from returnn.util.basic import get_login_username
     # echo via subprocess, because this stdout as well as the other will always be visible.
     subprocess.check_call(["echo", "travis_fold:start:test_demo_returnn_as_framework"])
     assert os.path.exists("setup.py")

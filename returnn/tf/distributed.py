@@ -36,9 +36,9 @@ from tensorflow.python.training.server_lib import ClusterSpec
 from tensorflow.python.distribute.cluster_resolver.cluster_resolver import format_master_url
 # noinspection PyProtectedMember
 from tensorflow.python.distribute.distribute_lib import _DefaultDistributionExtended as DefaultDistributionExtended
-from Log import log
-from Config import Config
-from Util import CollectionReadCheckCovered
+from returnn.log import log
+from returnn.config import Config
+from returnn.util.basic import CollectionReadCheckCovered
 
 
 class MPIClusterResolver(tf.distribute.cluster_resolver.ClusterResolver):

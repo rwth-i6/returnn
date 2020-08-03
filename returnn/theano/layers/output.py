@@ -16,8 +16,8 @@ from NetworkBaseLayer import Layer
 from NetworkHiddenLayer import CAlignmentLayer
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
 from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound, DumpOp
-from Util import as_str
-from Log import log
+from returnn.util.basic import as_str
+from returnn.log import log
 
 
 class OutputLayer(Layer):
@@ -288,7 +288,7 @@ class OutputLayer(Layer):
       # We expect a filename to the priors, stored as txt, in +log space.
       assert isinstance(log_prior, str)
       self.set_attr("log_prior", log_prior)
-      from Util import load_txt_vector
+      from returnn.util.basic import load_txt_vector
       assert os.path.exists(log_prior)
       log_prior = load_txt_vector(log_prior)
       assert len(log_prior) == self.attrs['n_out'], "dim missmatch: %i != %i" % (len(log_prior), self.attrs['n_out'])
@@ -580,7 +580,7 @@ class SequenceOutputLayer(OutputLayer):
         import json
         fast_bw_opts = json.loads(fast_bw_opts)
       self.set_attr("fast_bw_opts", fast_bw_opts)
-    from Util import CollectionReadCheckCovered
+    from returnn.util.basic import CollectionReadCheckCovered
     self.fast_bw_opts = CollectionReadCheckCovered(fast_bw_opts or {})
 
     if not isinstance(seg_fast_bw_opts, dict):
@@ -769,7 +769,7 @@ class SequenceOutputLayer(OutputLayer):
           from Fsa import ctc_fsa_for_label_seq
           num_lables = self.network.n_out[self.attrs["target"]][0]
           assert self.attrs["n_out"] == num_lables + 1  # one added for blank
-          from Util import uniq
+          from returnn.util.basic import uniq
           from theano.compile.ops import as_op  # http://deeplearning.net/software/theano/extending/extending_theano.html#as-op
           @as_op(itypes=[theano.tensor.fmatrix, theano.tensor.fmatrix],
                  otypes=[theano.tensor.fmatrix])  # TODO...
@@ -793,7 +793,7 @@ class SequenceOutputLayer(OutputLayer):
           from Fsa import ctc_fsa_for_label_seq
           num_lables = self.network.n_out[self.attrs["target"]][0]
           assert self.attrs["n_out"] == num_lables + 1  # one added for blank
-          from Util import uniq
+          from returnn.util.basic import uniq
           def get_seq_labels(seq_name):
             pass  # TODO... maybe from file? or corpus? or sprint?
           from theano.compile.ops import \
@@ -1018,7 +1018,7 @@ class SequenceOutputLayer(OutputLayer):
 
             def __init__(self, filename):
               super(LoadWfstOp, self).__init__()
-              from Util import make_hashable
+              from returnn.util.basic import make_hashable
               self.filename = make_hashable(filename)
               self.single_wfst = None  # type: dict
 

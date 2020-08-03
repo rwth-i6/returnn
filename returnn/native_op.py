@@ -8,7 +8,7 @@ Generic interface which automatically creates:
 
 import copy
 import numpy
-from Util import make_hashable, unicode, long
+from returnn.util.basic import make_hashable, unicode, long
 
 
 class NativeOpBaseMixin(object):
@@ -248,7 +248,7 @@ class NativeOpGenBase:
   cpu_support = True
 
   def make_theano_op(self):
-    from TheanoNativeOp import TheanoNativeOp
+    from returnn.theano.native_op import TheanoNativeOp
     assert self.in_info is not None
     assert self.out_info is not None
     assert self.c_fw_code is not None
@@ -304,8 +304,8 @@ class LstmGenericBase(NativeOpGenBase):
 
   @classmethod
   def map_layer_inputs_to_op(cls, Z, V_h, i):
-    import Util
-    assert Util.BackendEngine.is_theano_selected()
+    import returnn.util.basic
+    assert returnn.util.basic.BackendEngine.is_theano_selected()
     import theano.tensor as T
     assert Z.ndim == 3
     assert V_h.ndim == 2
@@ -2243,7 +2243,7 @@ class Chunking(NativeOpGenBase):
 
   @classmethod
   def theano_custom_grad(cls, op, inputs, output_grads):
-    from TheanoNativeOp import unchunk, T
+    from returnn.theano.native_op import unchunk, T
     assert len(op.in_info) == len(inputs)
     assert len(op.out_info) == len(output_grads)
 
@@ -2431,7 +2431,7 @@ class UnChunking(NativeOpGenBase):
 
   @classmethod
   def theano_custom_grad(cls, op, inputs, output_grads):
-    from TheanoNativeOp import chunk, T
+    from returnn.theano.native_op import chunk, T
     assert len(op.in_info) == len(inputs)
     assert len(op.out_info) == len(output_grads)
 

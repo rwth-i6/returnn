@@ -7,9 +7,9 @@ from Device import Device
 from EngineUtil import assign_dev_data, assign_dev_data_single_seq
 from EngineBatch import Batch
 import TheanoUtil
-from Log import log
-from Config import Config
-from GeneratingDataset import GeneratingDataset
+from returnn.log import log
+from returnn.config import Config
+from returnn.datasets.generating import GeneratingDataset
 from Dataset import DatasetSeq
 import numpy as np
 import better_exchook

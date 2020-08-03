@@ -3,8 +3,8 @@ from __future__ import print_function
 
 from TaskSystem import AsyncTask, ProcConnectionDied
 from Updater import Updater
-from Util import cmd, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main, CalledProcessError, NumbersDict, custom_exec, dict_joined, attr_chain
-from Log import log
+from returnn.util.basic import cmd, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main, CalledProcessError, NumbersDict, custom_exec, dict_joined, attr_chain
+from returnn.log import log
 from Network import LayerNetwork
 from collections import OrderedDict
 import numpy
@@ -20,7 +20,7 @@ except ImportError:
   from _thread import start_new_thread
 import Debug
 import re
-from Util import get_num_gpu_devices
+from returnn.util.basic import get_num_gpu_devices
 
 
 def get_device_attributes():

@@ -3,10 +3,10 @@ import sys
 sys.path += ["."]  # Python 3 hack
 
 
-from Config import Config
+from returnn.config import Config
 from Engine import Engine
 from Device import Device
-from Log import log
+from returnn.log import log
 import TheanoUtil
 
 log.initialize()

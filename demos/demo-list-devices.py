@@ -11,7 +11,7 @@ my_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(my_dir))  # parent dir, Returnn code
 
 import TFCompat
-from TFUtil import get_device_attr, setup_tf_thread_pools, print_available_devices, get_tf_list_local_devices
+from returnn.tf.util.basic import get_device_attr, setup_tf_thread_pools, print_available_devices, get_tf_list_local_devices
 
 
 def dump_devs(tf_session_opts, use_device_lib=False, filter_gpu=True):

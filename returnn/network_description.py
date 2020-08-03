@@ -5,8 +5,8 @@ Provides :class:`LayerNetworkDescription`.
 
 from __future__ import print_function
 
-from Util import simple_obj_repr, hdf5_dimension, hdf5_group, hdf5_shape
-from Log import log
+from returnn.util.basic import simple_obj_repr, hdf5_dimension, hdf5_group, hdf5_shape
+from returnn.log import log
 
 
 class LayerNetworkDescription:
@@ -194,7 +194,7 @@ class LayerNetworkDescription:
          i.e. ndim=1 means usually sparse data and ndim=2 means dense data.
     :rtype: (int,dict[str,(int,int)])
     """
-    from Util import BackendEngine
+    from returnn.util.basic import BackendEngine
     num_inputs = config.int('num_inputs', 0)
     target = config.value('target', 'classes')
     if config.is_typed('num_outputs'):

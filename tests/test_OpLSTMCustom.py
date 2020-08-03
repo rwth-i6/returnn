@@ -8,10 +8,10 @@ import unittest
 import theano
 import theano.tensor as T
 import numpy
-from Util import have_gpu
+from returnn.util.basic import have_gpu
 import RecurrentTransform
 import theano.sandbox.cuda as cuda
-from Log import log
+from returnn.log import log
 import better_exchook
 import CustomLSTMFunctions
 

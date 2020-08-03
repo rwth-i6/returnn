@@ -10,7 +10,7 @@ import TheanoUtil
 f32 = "float32"
 
 import better_exchook
-from Log import log
+from returnn.log import log
 
 better_exchook.replace_traceback_format_tb()
 log.initialize()  # some code might need it

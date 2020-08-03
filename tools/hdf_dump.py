@@ -9,12 +9,12 @@ my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
 sys.path.append(returnn_dir)
 
-from Log import log
+from returnn.log import log
 import rnn
 import argparse
 import HDFDataset
 from Dataset import Dataset, init_dataset
-from Config import Config
+from returnn.config import Config
 
 
 def hdf_dataset_init(file_name):

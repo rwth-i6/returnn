@@ -17,10 +17,10 @@ import atexit
 import signal
 import typing
 from threading import RLock, Thread
-import TaskSystem
-from TaskSystem import Pickler, Unpickler, numpy_set_unused
-from Util import eval_shell_str, make_hashable, BackendEngine
-from Log import log
+import returnn.util.task_system
+from returnn.util.task_system import Pickler, Unpickler, numpy_set_unused
+from returnn.util.basic import eval_shell_str, make_hashable, BackendEngine
+from returnn.log import log
 
 
 class SprintSubprocessInstance:
@@ -53,7 +53,7 @@ class SprintSubprocessInstance:
     self.sprintExecPath = sprintExecPath
     self.minPythonControlVersion = minPythonControlVersion
     if sprintConfigStr.startswith("config:"):
-      from Config import get_global_config
+      from returnn.config import get_global_config
       config = get_global_config()
       assert config
       sprintConfigStr = config.typed_dict[sprintConfigStr[len("config:"):]]
@@ -376,10 +376,10 @@ class SprintInstancePool:
       assert Device.is_device_host_proc()
       tags = Device.get_current_seq_tags()
     assert len(tags) == n_batch
-    
+
     batch_loss = numpy.zeros((n_batch,), dtype="float32")
     batch_error_signal = numpy.zeros_like(log_posteriors, dtype="float32")
-    
+
     # greedy solution to the scheduling problem
     sorted_length = sorted(enumerate(seq_lengths),key=lambda x:x[1],reverse=True)
     jobs = [ [] for i in range(self.max_num_instances) ]
@@ -777,7 +777,7 @@ if BackendEngine.is_theano_selected():
       print('SprintErrorSigOp: avg frame loss for segments:', loss.sum() / seq_lengths.sum(), file=log.v5)
       end_time = time.time()
       if self.debug_perform_time is None:
-        from Config import get_global_config
+        from returnn.config import get_global_config
         config = get_global_config()
         self.debug_perform_time = config.bool("debug_SprintErrorSigOp_perform_time", False)
       if self.debug_perform_time:

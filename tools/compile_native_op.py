@@ -14,9 +14,9 @@ returnn_dir = os.path.dirname(my_dir)
 sys.path.insert(0, returnn_dir)
 
 import rnn
-from Log import log
+from returnn.log import log
 import argparse
-from Util import Stats, hms
+from returnn.util.basic import Stats, hms
 from Dataset import Dataset, init_dataset
 import Util
 import TFUtil
@@ -47,7 +47,7 @@ def init(config_filename, log_verbosity):
   rnn.init_config_json_network()
   if 'network' in config.typed_dict:
     print("Loading network")
-    from TFNetwork import TFNetwork
+    from returnn.tf.network import TFNetwork
     network = TFNetwork(
       name="root",
       config=config,
@@ -59,7 +59,7 @@ def init(config_filename, log_verbosity):
 
 
 def main(argv):
-  from TFUtil import CudaEnv, NativeCodeCompiler
+  from returnn.tf.util.basic import CudaEnv, NativeCodeCompiler
   CudaEnv.verbose_find_cuda = True
   NativeCodeCompiler.CollectedCompilers = []
 
@@ -78,7 +78,7 @@ def main(argv):
   init(config_filename=args.config, log_verbosity=args.verbosity)
 
   import NativeOp
-  from TFNativeOp import make_op, OpMaker
+  from returnn.tf.native_op import make_op, OpMaker
   if args.native_op:
     print("Loading native op %r" % args.native_op)
     make_op(getattr(NativeOp, args.native_op), compiler_opts={"verbose": True},

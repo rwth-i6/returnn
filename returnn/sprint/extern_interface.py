@@ -11,9 +11,9 @@ import better_exchook
 import sys
 import os
 import typing
-import TaskSystem
-from TaskSystem import Pickler
-from Util import to_bool, unicode, BytesIO
+import returnn.util.task_system
+from returnn.util.task_system import Pickler
+from returnn.util.basic import to_bool, unicode, BytesIO
 
 # Start Sprint PythonSegmentOrder interface. {
 # We use the PythonSegmentOrder just to get an estimate (upper limit) about the number of sequences.

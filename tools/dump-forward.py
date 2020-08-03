@@ -10,7 +10,7 @@ returnn_dir = os.path.dirname(my_dir)
 sys.path.append(returnn_dir)
 
 import rnn
-from Log import log
+from returnn.log import log
 import argparse
 import numpy
 from better_exchook import pretty_print

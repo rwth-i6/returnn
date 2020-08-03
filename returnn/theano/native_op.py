@@ -4,7 +4,7 @@ import os
 from NativeOp import NativeOpBaseMixin, Chunking, UnChunking, SubtensorBatchedIndex, SparseToDense, \
   MaxAndArgmaxSparse, CrossEntropySoftmaxAndGradientZSparse
 from TheanoUtil import softmax
-from Util import escape_c_str, long
+from returnn.util.basic import escape_c_str, long
 
 # noinspection PyPackageRequirements,PyUnresolvedReferences
 import theano

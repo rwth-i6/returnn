@@ -14,7 +14,7 @@ import itertools
 import typing
 from copy import deepcopy
 from os.path import isfile
-from Log import log
+from returnn.log import log
 from LmDataset import Lexicon, StateTying
 
 

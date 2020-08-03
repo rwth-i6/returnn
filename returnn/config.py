@@ -64,7 +64,7 @@ class Config:
       content = f.read()
     content = content.strip()
     if content.startswith("#!") or filename.endswith(".py"):  # assume Python
-      from Util import custom_exec
+      from returnn.util.basic import custom_exec
       # Operate inplace on ourselves.
       # Also, we want that it's available as the globals() dict, so that defined functions behave well
       # (they would loose the local context otherwise).
@@ -74,7 +74,7 @@ class Config:
       custom_exec(content, filename, user_ns, user_ns)
       return
     if content.startswith("{"):  # assume JSON
-      from Util import load_json
+      from returnn.util.basic import load_json
       json_content = load_json(content=content)
       assert isinstance(json_content, dict)
       self.update(json_content)
@@ -371,7 +371,7 @@ class Config:
     v = str(self.value(key, None, index))
     if not v:
       return default
-    from Util import to_bool
+    from returnn.util.basic import to_bool
     return to_bool(v)
 
   def bool_or_other(self, key, default, index=0):
@@ -389,7 +389,7 @@ class Config:
     v = str(self.value(key, None, index))
     if not v:
       return default
-    from Util import to_bool
+    from returnn.util.basic import to_bool
     try:
       return to_bool(v)
     except ValueError:
@@ -518,16 +518,16 @@ def get_global_config(raise_exception=True, auto_create=False):
   """
   if _global_config:
     return _global_config
-  import TaskSystem
-  import Util
+  import returnn.util.task_system
+  from returnn.util.basic import BackendEngine
   try:
-    if Util.BackendEngine.is_theano_selected():
-      import Device
-      if not TaskSystem.isMainProcess:
+    if BackendEngine.is_theano_selected():
+      import returnn.theano.device
+      if not returnn.util.task_system.isMainProcess:
         # We expect that we are a Device subprocess.
-        assert Device.asyncChildGlobalDevice is not None
-        return Device.asyncChildGlobalDevice.config
-  except Util.BackendEngine.CannotSelectEngine:
+        assert returnn.theano.device.asyncChildGlobalDevice is not None
+        return returnn.theano.device.asyncChildGlobalDevice.config
+  except BackendEngine.CannotSelectEngine:
     pass  # ignore
   # We are the main process.
   import sys
@@ -536,7 +536,7 @@ def get_global_config(raise_exception=True, auto_create=False):
     return main_mod.config
   # Maybe __main__ is not rnn.py, or config not yet loaded.
   # Anyway, try directly. (E.g. for SprintInterface.)
-  import rnn
+  import returnn.__main__ as rnn
   if isinstance(rnn.config, Config):
     return rnn.config
   if auto_create:
@@ -554,7 +554,7 @@ def network_json_from_config(config, mask=None):
   :param str mask: "unity", "none" or "dropout"
   :rtype: dict[str]
   """
-  from Log import log
+  from returnn.log import log
   json_content = None
   if config.has("network") and config.is_typed("network"):
     json_content = config.typed_value("network")
@@ -587,7 +587,7 @@ def network_json_from_config(config, mask=None):
     if not mask:
       if sum(config.float_list('dropout', [0])) > 0.0:
         mask = "dropout"
-    from NetworkDescription import LayerNetworkDescription
+    from returnn.network_description import LayerNetworkDescription
     description = LayerNetworkDescription.from_config(config)
     json_content = description.to_json_content(mask=mask)
   return json_content
@@ -624,7 +624,7 @@ def get_devices_init_args(config):
   else:
     device_tags = {}
     ngpux = 0
-    from Util import get_num_gpu_devices
+    from returnn.util.basic import get_num_gpu_devices
     ncpus, ngpus = get_num_gpu_devices()
     if "all" in device_info:
       device_tags = {
@@ -678,9 +678,9 @@ def get_devices_init_args(config):
         for tag in tags]
       if len(devices) == 1 and ngpux > 1:
         devices = devices * ngpux
-      import TaskSystem
-      if TaskSystem.isMainProcess:  # On a child process, we can have the gpu device.
-        from Util import TheanoFlags
+      import returnn.util.task_system
+      if returnn.util.task_system.isMainProcess:  # On a child process, we can have the gpu device.
+        from returnn.util.basic import TheanoFlags
         assert not TheanoFlags.get("device", "").startswith("gpu"), (
           "The main proc is not supposed to use the GPU in multiprocessing mode. "
           "Do not set device=gpu in THEANO_FLAGS.")

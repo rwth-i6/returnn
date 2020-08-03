@@ -8,8 +8,8 @@ from __future__ import print_function
 
 import os
 import typing
-from Util import better_repr, simple_obj_repr, ObjAsDict, unicode
-from Log import log
+from returnn.util.basic import better_repr, simple_obj_repr, ObjAsDict, unicode
+from returnn.log import log
 import numpy
 
 
@@ -707,9 +707,9 @@ def demo():
   Demo run. Given some learning rate file (with scores / existing lrs), will calculate how lrs would have been set,
   given some config.
   """
-  import better_exchook
+  from returnn.util import better_exchook
   better_exchook.install()
-  import rnn
+  import returnn.__main__ as rnn
   import sys
   if len(sys.argv) <= 1:
     print("usage: python %s [config] [other options] [++check_learning_rates 1]" % __file__)
@@ -723,7 +723,7 @@ def demo():
   rnn.init_log()
   rnn.init_backend_engine()
   check_lr = rnn.config.bool("check_learning_rates", False)
-  from Pretrain import pretrain_from_config
+  from returnn.pretrain import pretrain_from_config
   pretrain = pretrain_from_config(rnn.config)
   first_non_pretrain_epoch = 1
   pretrain_learning_rate = None

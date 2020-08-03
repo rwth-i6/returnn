@@ -6,8 +6,8 @@ sys.path += ["."]  # Python 3 hack
 import unittest
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_true, assert_false
 from NetworkDescription import LayerNetworkDescription
-from Config import Config
-from Util import dict_diff_str
+from returnn.config import Config
+from returnn.util.basic import dict_diff_str
 from pprint import pprint
 import better_exchook
 better_exchook.replace_traceback_format_tb()

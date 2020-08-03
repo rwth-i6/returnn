@@ -4,7 +4,7 @@ from __future__ import print_function
 import tensorflow as tf
 import TFCompat
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, get_concat_sources_data_template
-from TFUtil import Data
+from returnn.tf.util.basic import Data
 
 
 class AlternatingRealToComplexLayer(_ConcatInputLayer):
@@ -102,7 +102,7 @@ class ComplexLinearProjectionLayer(_ConcatInputLayer):
     self.output.placeholder = self._build_clp_multiplication(self._clp_kernel)
 
   def _build_kernel(self, clp_weights_init):
-    from TFUtil import get_initializer
+    from returnn.tf.util.basic import get_initializer
     input_placeholder = self.input_data.get_placeholder_as_batch_major()
     kernel_width = input_placeholder.shape[2].value // 2
     kernel_height = self._nr_of_filters
@@ -114,7 +114,7 @@ class ComplexLinearProjectionLayer(_ConcatInputLayer):
     return clp_kernel
 
   def _build_clp_multiplication(self, clp_kernel):
-    from TFUtil import safe_log
+    from returnn.tf.util.basic import safe_log
     input_placeholder = self.input_data.get_placeholder_as_batch_major()
     TFCompat.v1.assert_equal(tf.shape(clp_kernel)[1], tf.shape(input_placeholder)[2] // 2)
     TFCompat.v1.assert_equal(tf.shape(clp_kernel)[2], self._nr_of_filters)
@@ -425,7 +425,7 @@ class MultiChannelMultiResolutionStftLayer(_ConcatInputLayer):
     return input_placeholder.shape[2]
 
   def _apply_stft_to_input(self):
-    from TFUtil import get_shape
+    from returnn.tf.util.basic import get_shape
     def _cropStftOutputToReferenceFrameSizeLength(channel_concatenated_stft, crop_size):
       return tf.slice(channel_concatenated_stft, [0, 0, 0], [get_shape(channel_concatenated_stft)[0], crop_size, get_shape(channel_concatenated_stft)[2]])
 

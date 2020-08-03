@@ -5,8 +5,8 @@ sys.path += ["."]  # Python 3 hack
 import unittest
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_greater, assert_true, assert_false
 from pprint import pprint
-from Config import Config
-from Util import PY3
+from returnn.config import Config
+from returnn.util.basic import PY3
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 if PY3:

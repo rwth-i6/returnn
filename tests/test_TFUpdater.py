@@ -11,7 +11,7 @@ import sys
 sys.path += ["."]  # Python 3 hack
 from TFUpdater import *
 from TFNetworkLayer import LayerBase, Loss
-from Log import log
+from returnn.log import log
 from nose.tools import assert_equal, assert_is_instance, assert_is, assert_in
 from numpy.testing.utils import assert_almost_equal
 import unittest
@@ -58,14 +58,14 @@ class DummyLayer(LayerBase):
 
   @classmethod
   def get_out_data_from_opts(cls, name, **kwargs):
-    from TFUtil import Data
+    from returnn.tf.util.basic import Data
     return Data(name="%s_output" % name, batch_dim_axis=None, shape=(), dtype="float32")  # scalar
 
 
 def test_Updater_GradientDescent():
   with make_scope() as session:
-    from TFNetwork import TFNetwork, ExternData
-    from Config import Config
+    from returnn.tf.network import TFNetwork, ExternData
+    from returnn.config import Config
 
     config = Config()
     network = TFNetwork(extern_data=ExternData(), train_flag=True)
@@ -83,9 +83,9 @@ def test_Updater_GradientDescent():
 
 def test_Updater_CustomUpdate():
   with make_scope() as session:
-    from TFNetwork import TFNetwork, ExternData
-    from Config import Config
-    from TFUtil import CustomUpdate
+    from returnn.tf.network import TFNetwork, ExternData
+    from returnn.config import Config
+    from returnn.tf.util.basic import CustomUpdate
 
     config = Config()
     network = TFNetwork(extern_data=ExternData(), train_flag=True)
@@ -166,8 +166,8 @@ def test_Updater_add_check_numerics_ops():
     def _get_loss_value(self):
       return TFCompat.v1.log(self.x)
 
-  from TFNetwork import TFNetwork, ExternData
-  from Config import Config
+  from returnn.tf.network import TFNetwork, ExternData
+  from returnn.config import Config
 
   with make_scope() as session:
     config = Config()
@@ -196,9 +196,9 @@ def test_Updater_add_check_numerics_ops():
 
 def test_Updater_simple_batch():
   with make_scope() as session:
-    from TFNetwork import TFNetwork, ExternData
-    from Config import Config
-    from GeneratingDataset import Task12AXDataset
+    from returnn.tf.network import TFNetwork, ExternData
+    from returnn.config import Config
+    from returnn.datasets.generating import Task12AXDataset
     dataset = Task12AXDataset()
     dataset.init_seq_order(epoch=1)
     extern_data = ExternData()
@@ -235,9 +235,9 @@ def test_Updater_simple_batch():
 
 def test_Updater_multiple_optimizers():
   with make_scope() as session:
-    from TFNetwork import TFNetwork, ExternData
-    from Config import Config
-    from GeneratingDataset import Task12AXDataset
+    from returnn.tf.network import TFNetwork, ExternData
+    from returnn.config import Config
+    from returnn.datasets.generating import Task12AXDataset
     dataset = Task12AXDataset()
     dataset.init_seq_order(epoch=1)
     extern_data = ExternData()
@@ -280,9 +280,9 @@ def test_Updater_multiple_optimizers():
 
 def test_Updater_multiple_optimizers_and_opts():
   with make_scope() as session:
-    from TFNetwork import TFNetwork, ExternData
-    from Config import Config
-    from GeneratingDataset import Task12AXDataset
+    from returnn.tf.network import TFNetwork, ExternData
+    from returnn.config import Config
+    from returnn.datasets.generating import Task12AXDataset
     dataset = Task12AXDataset()
     dataset.init_seq_order(epoch=1)
     extern_data = ExternData()

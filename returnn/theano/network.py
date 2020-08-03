@@ -11,8 +11,8 @@ from NetworkBaseLayer import Layer, SourceLayer
 from NetworkLayer import get_layer_class
 from NetworkLstmLayer import *
 from NetworkOutputLayer import OutputLayer, FramewiseOutputLayer, SequenceOutputLayer, DecoderOutputLayer, UnsupervisedOutputLayer
-from Util import dict_joined, as_str
-from Log import log
+from returnn.util.basic import dict_joined, as_str
+from returnn.log import log
 
 
 class LayerNetwork(object):
@@ -126,7 +126,7 @@ class LayerNetwork(object):
     :param str mask: "unity", "none" or "dropout"
     :rtype: dict[str]
     """
-    from Config import network_json_from_config
+    from returnn.config import network_json_from_config
     return network_json_from_config(config=config, mask=mask)
 
   @classmethod

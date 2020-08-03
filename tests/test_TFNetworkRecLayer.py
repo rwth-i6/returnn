@@ -18,12 +18,12 @@ import contextlib
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 
-from Log import log
-from Config import Config
+from returnn.log import log
+from returnn.config import Config
 import TFCompat
-from TFNetwork import *
+from returnn.tf.network import *
 from TFNetworkRecLayer import *
-from TFUtil import is_gpu_available
+from returnn.tf.util.basic import is_gpu_available
 import TFUtil
 TFUtil.debug_register_better_repr()
 
@@ -217,7 +217,7 @@ def test_rhn_nan():
         tgt_placeholder: random.uniform(-limit, limit, (1, seq_len, num_outputs)),
       }
 
-    from TFUtil import xavier_initializer
+    from returnn.tf.util.basic import xavier_initializer
     default_var_initializer = xavier_initializer(seed=13)
     with TFCompat.v1.variable_scope(TFCompat.v1.get_variable_scope(), initializer=default_var_initializer) as scope:
       assert loop_variant in loop_variants
@@ -290,7 +290,7 @@ def test_rhn_nan():
           assert False, "unexpected loop variant %r" % loop_variant
     optimizer = TFCompat.v1.train.AdamOptimizer(learning_rate=0.1, epsilon=1e-16, use_locking=False)
     minimize_op = optimizer.minimize(loss)
-    from TFUtil import add_check_numerics_ops
+    from returnn.tf.util.basic import add_check_numerics_ops
     #check_op = add_check_numerics_ops()
     check_op = tf.no_op()
 
@@ -904,7 +904,7 @@ def test_RecLayer_NativeLstm_Nan():
   import shutil
   shutil.rmtree(tmp_tf_logdir)
 
-  from TFUtil import stop_event_writer_thread
+  from returnn.tf.util.basic import stop_event_writer_thread
   stop_event_writer_thread(writer)
 
 
@@ -1062,7 +1062,7 @@ def test_GradOfLstmGenericBase_simple_nan():
   print("test_GradOfLstmGenericBase_simple_nan()")
   print("GPU available:", is_gpu_available())
   print("Create LSTM op...")
-  from TFNativeOp import make_lstm_op
+  from returnn.tf.native_op import make_lstm_op
   op_func = make_lstm_op(compiler_opts=dict(verbose=True))
   print("op_func:", op_func)
 
@@ -1400,7 +1400,7 @@ def test_search_multi_choice():
   Then we perform search, and get all the results, including beam scores, beam source indices, etc.
   Then we go through the results, and reproduce every single search step.
   """
-  from TFNetwork import help_on_tf_exception
+  from returnn.tf.network import help_on_tf_exception
   rnd = numpy.random.RandomState(42)
   num_choices = 2
   n_batch = 2
@@ -1669,7 +1669,7 @@ def test_search_multi_choice_simple_keep_beams():
   so it is a good base to copy and extend for other cases.
   Also, we extend here by keep_beams.
   """
-  from TFNetwork import help_on_tf_exception
+  from returnn.tf.network import help_on_tf_exception
   rnd = numpy.random.RandomState(42)
   num_choices = 2
   n_batch = 2
@@ -2007,7 +2007,7 @@ def test_rec_layer_multi_choice_search_resolve():
   n_src_dim = 7
   n_tgt_dim = 11
 
-  from GeneratingDataset import StaticDataset
+  from returnn.datasets.generating import StaticDataset
   from TFDataPipeline import FeedDictDataProvider
   from EngineBatch import Batch, BatchSetGenerator
   dataset = StaticDataset(
@@ -2218,7 +2218,7 @@ def test_target_with_beam():
 
 def test_rec_layer_move_out_of_loop():
   from TFNetworkRecLayer import _SubnetworkRecCell
-  from TFUtil import get_global_train_flag_placeholder, stop_event_writer_thread
+  from returnn.tf.util.basic import get_global_train_flag_placeholder, stop_event_writer_thread
   n_src_dim = 5
   n_tgt_dim = 7
   beam_size = 12
@@ -2292,10 +2292,10 @@ def test_rec_layer_move_out_of_loop():
     """
     :param TFNetwork net:
     """
-    from GeneratingDataset import StaticDataset
+    from returnn.datasets.generating import StaticDataset
     from TFDataPipeline import FeedDictDataProvider
     from EngineBatch import Batch, BatchSetGenerator
-    from Util import dict_joined
+    from returnn.util.basic import dict_joined
     dataset = StaticDataset(
       data=[
         {"data": numpy.array([2, 4, 1, 0]), "classes": numpy.array([3, 6, 0])},
@@ -2384,7 +2384,7 @@ def test_rec_layer_move_out_of_loop():
 
 def test_rec_layer_move_out_of_loop_keep_constraints():
   from TFNetworkRecLayer import _SubnetworkRecCell
-  from TFUtil import get_global_train_flag_placeholder
+  from returnn.tf.util.basic import get_global_train_flag_placeholder
   n_src_dim = 5
   n_tgt_dim = 7
   beam_size = 12
@@ -2495,7 +2495,7 @@ def test_rec_layer_move_out_of_loop_ref_att_generic_att():
   because we provide some reference att weights.
   """
   from TFNetworkRecLayer import _SubnetworkRecCell
-  from TFUtil import get_global_train_flag_placeholder, stop_event_writer_thread
+  from returnn.tf.util.basic import get_global_train_flag_placeholder, stop_event_writer_thread
   n_src_dim = 5
   n_tgt_dim = 7
   beam_size = 12
@@ -2560,10 +2560,10 @@ def test_rec_layer_move_out_of_loop_ref_att_generic_att():
     :param TFNetwork net:
     :param TFCompat.v1.Session session:
     """
-    from GeneratingDataset import StaticDataset
+    from returnn.datasets.generating import StaticDataset
     from TFDataPipeline import FeedDictDataProvider
     from EngineBatch import Batch, BatchSetGenerator
-    from Util import dict_joined, softmax
+    from returnn.util.basic import dict_joined, softmax
     rnd = numpy.random.RandomState(42)
 
     def create_rnd_flat_att_weights(dec_t, enc_t):
@@ -2762,10 +2762,10 @@ def test_rec_layer_rnn_train_and_search():
     """
     print("Create network with train_flag=%r, search_flag=%r." % (train_flag, search_flag))
 
-    from GeneratingDataset import StaticDataset
+    from returnn.datasets.generating import StaticDataset
     from TFDataPipeline import FeedDictDataProvider
     from EngineBatch import Batch, BatchSetGenerator
-    from Util import dict_joined
+    from returnn.util.basic import dict_joined
     dataset = StaticDataset(
       data=[
         {"data": numpy.random.normal(size=(11, n_src_dim)).astype("float32"),
@@ -2935,10 +2935,10 @@ def test_rec_layer_local_att_train_and_search():
     """
     print("Create network with train_flag=%r, search_flag=%r." % (train_flag, search_flag))
 
-    from GeneratingDataset import StaticDataset
+    from returnn.datasets.generating import StaticDataset
     from TFDataPipeline import FeedDictDataProvider
     from EngineBatch import Batch, BatchSetGenerator
-    from Util import dict_joined
+    from returnn.util.basic import dict_joined
     dataset = StaticDataset(
       data=[
         {"data": numpy.random.normal(size=(11, n_src_dim)).astype("float32"),
@@ -3161,7 +3161,7 @@ def test_rec_layer_search_select_src():
 
 
 def test_RnnCellLayer_with_time():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   from TFNetworkLayer import InternalLayer, SourceLayer, ReduceLayer
   train_data = DummyDataset(input_dim=2, output_dim=3, num_seqs=10, seq_len=5)
   with make_scope() as session:
@@ -4075,7 +4075,7 @@ def test_KenLmStateLayer():
   TFKenLM.get_tf_mod(verbose=True)
   test_lm_file = TFKenLM.kenlm_dir + "/lm/test.arpa"
   assert os.path.exists(test_lm_file)
-  from GeneratingDataset import Vocabulary
+  from returnn.datasets.generating import Vocabulary
   from TFNetworkLayer import InternalLayer
   import tempfile
   with make_scope() as session:
@@ -4148,7 +4148,7 @@ def test_KenLmStateLayer_dense():
   TFKenLM.get_tf_mod(verbose=True)
   test_lm_file = TFKenLM.kenlm_dir + "/lm/test.arpa"
   assert os.path.exists(test_lm_file)
-  from GeneratingDataset import Vocabulary
+  from returnn.datasets.generating import Vocabulary
   from TFNetworkLayer import InternalLayer
   import tempfile
   with make_scope() as session:
@@ -4231,7 +4231,7 @@ def test_KenLmStateLayer_dense():
 
 @unittest.skipIf(not is_gpu_available(), "no gpu on this system")
 def test_BlocksparseLSTM_load_params_from_native_lstm():
-  from TFNativeOp import have_blocksparse_requirements, init_blocksparse
+  from returnn.tf.native_op import have_blocksparse_requirements, init_blocksparse
   if not have_blocksparse_requirements():
     raise unittest.SkipTest("no blocksparse requirements")
   init_blocksparse()
@@ -4253,7 +4253,7 @@ def test_BlocksparseLSTM_load_params_from_native_lstm():
       seq_len_placeholder: [seq_len] * batch_dim
     }
 
-    from TFUtil import xavier_initializer
+    from returnn.tf.util.basic import xavier_initializer
     default_var_initializer = xavier_initializer(seed=13)
     with TFCompat.v1.variable_scope(TFCompat.v1.get_variable_scope(), initializer=default_var_initializer) as scope:
       net = TFNetwork(config=Config(), extern_data=ExternData(), train_flag=False)
@@ -5028,7 +5028,7 @@ def test_trainable_sublayers():
 def test_OptimalCompletionsLayer():
   with make_scope() as session:
     from TFNetworkLayer import InternalLayer
-    from TFUtil import expand_dims_unbroadcast
+    from returnn.tf.util.basic import expand_dims_unbroadcast
     net = TFNetwork(
       extern_data=ExternData({"target": {"dim": 20, "sparse": True}}),
       config=Config({"debug_print_layer_output_template": True}))
@@ -5078,7 +5078,7 @@ def test_extra_scatter_nd_search_train():
 
   def t_linear(source, **kwargs):
     import tensorflow as tf
-    from TFUtil import where_bc
+    from returnn.tf.util.basic import where_bc
     enc = source(1, as_data=True, auto_convert=False)
     dec = source(0, as_data=True, auto_convert=False)
     enc_lens = enc.get_sequence_lengths()

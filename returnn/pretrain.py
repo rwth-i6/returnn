@@ -6,8 +6,8 @@ This is independent from the backend (TF or Theano, etc).
 
 from __future__ import print_function
 
-from Log import log
-from Util import unicode, long
+from returnn.log import log
+from returnn.util.basic import unicode, long
 
 
 class WrapEpochValue:
@@ -467,8 +467,8 @@ class Pretrain:
     :param mask:
     :rtype: Network.LayerNetwork
     """
-    from Network import LayerNetwork
-    from NetworkBaseLayer import Layer
+    from returnn.theano.network import LayerNetwork
+    from returnn.theano.layers.base import Layer
     json_content = self.get_network_json_for_epoch(epoch)
     Layer.rng_seed = epoch
     return LayerNetwork.from_json(json_content, mask=mask, **self.network_init_args)
@@ -486,7 +486,7 @@ class Pretrain:
 
     # network.output is the remaining output layer.
     if self.copy_output_layer:
-      from NetworkCopyUtils import intelli_copy_layer, LayerDoNotMatchForCopy
+      from returnn.theano.network_copy_utils import intelli_copy_layer, LayerDoNotMatchForCopy
       for layer_name in new_network.output.keys():
         assert layer_name in old_network.output
         try:
@@ -524,12 +524,12 @@ def pretrain_from_config(config):
   :type config: Config.Config
   :rtype: Pretrain | None
   """
-  import Util
-  from Config import network_json_from_config
+  from returnn.util import BackendEngine
+  from returnn.config import network_json_from_config
   pretrain_type = config.bool_or_other("pretrain", None)
   if pretrain_type == "default" or (isinstance(pretrain_type, dict) and pretrain_type) or pretrain_type is True:
-    if Util.BackendEngine.is_theano_selected():
-      from Network import LayerNetwork
+    if BackendEngine.is_theano_selected():
+      from returnn.theano.network import LayerNetwork
       network_init_args = LayerNetwork.init_args_from_config(config)
     else:
       network_init_args = None
@@ -557,11 +557,11 @@ def demo():
   """
   Will print out the different network topologies of the specified pretraining scheme.
   """
-  import better_exchook
-  better_exchook.install()
-  import rnn
+  import returnn.util.better_exchook
+  returnn.util.better_exchook.install()
+  import returnn.__main__ as rnn
   import argparse
-  from Util import dict_diff_str
+  from returnn.util.basic import dict_diff_str
   arg_parser = argparse.ArgumentParser()
   arg_parser.add_argument("config")
   arg_parser.add_argument("--diff", action="store_true", help="show diff only")

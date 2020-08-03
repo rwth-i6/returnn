@@ -11,9 +11,9 @@ from pprint import pprint
 
 from EngineTask import TaskThread, TrainTaskThread, EvalTaskThread
 from Device import Device
-from Config import Config
-from Log import log
-from Util import hms, NumbersDict
+from returnn.config import Config
+from returnn.log import log
+from returnn.util.basic import hms, NumbersDict
 
 
 log.initialize(verbosity=[5])

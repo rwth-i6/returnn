@@ -2,8 +2,8 @@ import tensorflow as tf
 import TFCompat
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, Loss, get_concat_sources_data_template
 from TFNetworkRecLayer import RecLayer
-from TFUtil import Data, sparse_labels_with_seq_lens
-from Util import softmax
+from returnn.tf.util.basic import Data, sparse_labels_with_seq_lens
+from returnn.util.basic import softmax
 
 
 class NeuralTransducerLayer(_ConcatInputLayer):
@@ -34,7 +34,7 @@ class NeuralTransducerLayer(_ConcatInputLayer):
         # TODO: Build optimized version
 
         # Get embedding
-        from TFUtil import get_initializer
+        from returnn.tf.util.basic import get_initializer
         initializer = get_initializer('glorot_uniform',
                                       seed=self.network.random.randint(2 ** 31),
                                       eval_local_ns={"layer": self})
@@ -138,7 +138,7 @@ class NeuralTransducerLayer(_ConcatInputLayer):
             init_state = (0, outputs_ta, trans_hidden_init, 0)
 
             # Init the transducer cell
-            from TFUtil import get_initializer
+            from returnn.tf.util.basic import get_initializer
             transducer_cell_initializer = get_initializer('glorot_uniform',
                                                           seed=self.network.random.randint(2 ** 31),
                                                           eval_local_ns={"layer": self})

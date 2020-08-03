@@ -27,12 +27,12 @@ import sys
 import time
 import numpy
 import tensorflow as tf
-from Config import Config
-from Log import log
+from returnn.config import Config
+from returnn.log import log
 from Dataset import Dataset
-from GeneratingDataset import StaticDataset
+from returnn.datasets.generating import StaticDataset
 from TFEngine import Engine, Runner, CancelTrainingException
-from Util import CollectionReadCheckCovered, hms_fraction, guess_requested_max_num_threads
+from returnn.util.basic import CollectionReadCheckCovered, hms_fraction, guess_requested_max_num_threads
 
 
 Eps = 1e-16
@@ -395,7 +395,7 @@ class Optimization:
     :rtype: Config
     """
     assert set(self.hyper_params) == set(hyper_param_mapping.keys())
-    from Util import deepcopy
+    from returnn.util.basic import deepcopy
     config = deepcopy(self.config)
     assert isinstance(config, Config)
     for p, value in hyper_param_mapping.items():
@@ -412,10 +412,10 @@ class Optimization:
 
   def work(self):
     print("Starting hyper param search. Using %i threads." % self.num_threads, file=log.v1)
-    from TFUtil import get_available_gpu_devices
-    from Log import wrap_log_streams, StreamDummy
+    from returnn.tf.util.basic import get_available_gpu_devices
+    from returnn.log import wrap_log_streams, StreamDummy
     from threading import Thread, Condition
-    from Util import progress_bar, hms, is_tty
+    from returnn.util.basic import progress_bar, hms, is_tty
 
     class Outstanding:
       cond = Condition()

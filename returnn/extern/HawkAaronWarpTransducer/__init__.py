@@ -12,7 +12,7 @@ Importing this module immediately compiles the library and TF module.
 import tensorflow as tf
 from tensorflow.python.framework import ops
 import os
-from TFUtil import OpCodeCompiler
+from returnn.tf.util.basic import OpCodeCompiler
 
 
 warprnnt_dir = os.path.dirname(os.path.abspath(__file__))
