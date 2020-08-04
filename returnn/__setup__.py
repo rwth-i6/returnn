@@ -8,10 +8,12 @@ import time
 from pprint import pprint
 import os
 import sys
+import shutil
 from subprocess import Popen, check_output, PIPE
 
 
-_root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_my_dir = os.path.dirname(os.path.abspath(__file__))
+_root_dir = os.path.dirname(_my_dir)
 
 
 def debug_print_file(fn):
@@ -98,31 +100,43 @@ def get_version_str(verbose=False, allow_current_time=False, fallback=None):
   :param str|None fallback:
   :rtype: str
   """
-  if os.path.exists("%s/PKG-INFO" % _root_dir):
+  if os.path.exists("%s/PKG-INFO" % _my_dir):
+    if verbose:
+      print("Found existing src PKG-INFO.")
+    info = parse_pkg_info("%s/PKG-INFO" % _my_dir)
+    version = info["Version"]
+    if verbose:
+      print("Version via src PKG-INFO:", version)
+    return version
+  elif os.path.exists("%s/PKG-INFO" % _root_dir):
     if verbose:
       print("Found existing PKG-INFO.")
     info = parse_pkg_info("%s/PKG-INFO" % _root_dir)
     version = info["Version"]
     if verbose:
       print("Version via PKG-INFO:", version)
-  else:
+    return version
+  elif os.path.exists("%s/.git" % _root_dir):
     try:
-      version = git_head_version()
+      version = git_head_version(git_dir=_root_dir)
       if verbose:
         print("Version via Git:", version)
+      return version
     except Exception as exc:
       if verbose:
         print("Exception while getting Git version:", exc)
         sys.excepthook(*sys.exc_info())
-      if allow_current_time:
-        version = time.strftime("1.%Y%m%d.%H%M%S", time.gmtime())
-        if verbose:
-          print("Version via current time:", version)
-      else:
-        if fallback:
-          return fallback
-        raise
-  return version
+      if not allow_current_time and not fallback:
+        raise  # no fallback
+
+  if allow_current_time:
+    version = time.strftime("1.%Y%m%d.%H%M%S", time.gmtime())
+    if verbose:
+      print("Version via current time:", version)
+    return version
+  elif fallback:
+    return fallback
+  raise Exception("Cannot get RETURNN version.")
 
 
 def main():
@@ -144,6 +158,9 @@ def main():
       package_data = open("MANIFEST").read().splitlines() + ["PKG-INFO"]
     else:
       print("package_data, found PKG-INFO, no MANIFEST, use *")
+      # Currently the setup will ignore all other data except in returnn/.
+      # At least make the version available, via PKG-INFO.
+      shutil.copy("PKG-INFO", "returnn/")
       # Just using package_data = ["*"] would only take files from current dir.
       package_data = []
       for root, dirs, files in os.walk('.'):
@@ -158,7 +175,7 @@ def main():
     name='returnn',
     version=version,
     packages=['returnn'],
-    package_dir={'returnn': ''},
+    include_package_data=True,
     package_data={'returnn': package_data},  # filtered via MANIFEST.in
     description='The RWTH extensible training framework for universal recurrent neural networks',
     author='Albert Zeyer',
