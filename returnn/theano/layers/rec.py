@@ -2,17 +2,18 @@
 import numpy
 from theano import tensor as T
 import theano
-from NetworkHiddenLayer import HiddenLayer, CAlignmentLayer
+from .hidden import HiddenLayer, CAlignmentLayer
 from returnn.theano.layers.base import Container, Layer
-from ActivationFunctions import strtoact
+from returnn.theano.activation_functions import strtoact
 from math import sqrt
-from OpLSTM import LSTMOpInstance
-from OpLSTM import LSTMSOpInstance
-from OpBLSTM import BLSTMOpInstance
-import RecurrentTransform
+from returnn.theano.ops.lstm import LSTMOpInstance
+from returnn.theano.ops.lstm import LSTMSOpInstance
+from returnn.theano.ops.blstm import BLSTMOpInstance
+import returnn.theano.recurrent_transform as recurrent_transform_mod
 import json
 from returnn.theano.util import print_to_file
 from theano.ifelse import ifelse
+
 
 class Unit(Container):
   """
@@ -406,11 +407,11 @@ class LSTMC(Unit):
 
   def scan(self, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
     assert self.parent.recurrent_transform
-    import OpLSTMCustom
-    op = OpLSTMCustom.register_func(self.parent.recurrent_transform)
+    import returnn.theano.ops.lstm_custom as op_lstm_custom
+    op = op_lstm_custom.register_func(self.parent.recurrent_transform)
     custom_vars = self.parent.recurrent_transform.get_sorted_custom_vars()
     initial_state_vars = self.parent.recurrent_transform.get_sorted_state_vars_initial()
-    # See OpLSTMCustom.LSTMCustomOp.
+    # See op_lstm_custom.LSTMCustomOp.
     # Inputs args are: Z, c, y0, i, W_re, custom input vars, initial state vars
     # Results: (output) Y, (gates and cell state) H, (final cell state) d, state vars sequences
     op_res = op(z[::-(2 * go_backwards - 1)],
@@ -430,11 +431,11 @@ class LSTMR(Unit):
 
   def scan(self, x, z, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
     assert self.parent.recurrent_transform
-    import OpLSTMRec
-    op = OpLSTMRec.register_func(self.parent.recurrent_transform)
+    import returnn.theano.ops.lstm_rec as op_lstm_rec
+    op = op_lstm_rec.register_func(self.parent.recurrent_transform)
     custom_vars = self.parent.recurrent_transform.get_sorted_custom_vars()
     initial_state_vars = self.parent.recurrent_transform.get_sorted_state_vars_initial()
-    # See OpLSTMRec.LSTMRecOp.
+    # See op_lstm_rec.LSTMRecOp.
     # Inputs args are: Z, c, y0, i, custom input vars, initial state vars
     # Results: (output) Y, (gates and cell state) H, (final cell state) d, state vars sequences
     op_res = op(z[::-(2 * go_backwards - 1)],
@@ -817,8 +818,8 @@ class RecurrentUnitLayer(Layer):
     elif recurrent_transform == 'attention_segment':
       assert aligner.attention, "Segment-wise attention requires attention points!"
 
-    recurrent_transform_inst = RecurrentTransform.transform_classes[recurrent_transform](layer=self)
-    assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
+    recurrent_transform_inst = recurrent_transform_mod.transform_classes[recurrent_transform](layer=self)
+    assert isinstance(recurrent_transform_inst, recurrent_transform_mod.RecurrentTransformBase)
     unit.recurrent_transform = recurrent_transform_inst
     self.recurrent_transform = recurrent_transform_inst
     # scan over sequence

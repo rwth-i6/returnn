@@ -18,8 +18,8 @@ try:
 except ImportError:  # old Theano or so...
   pool = None
 from returnn.theano.layers.base import Layer
-from ActivationFunctions import strtoact, strtoact_single_joined, elu
-import TheanoUtil
+from returnn.theano.activation_functions import strtoact, strtoact_single_joined, elu
+import returnn.theano.util as theano_util
 from returnn.theano.util import class_idx_seq_to_1_of_k
 from returnn.log import log
 from math import ceil
@@ -289,7 +289,7 @@ class DownsampleLayer(_NoOpLayer):
       if a == 0:
         if padding:
           z = T.concatenate([z,T.zeros((f-T.mod(z.shape[a], f), z.shape[1], z.shape[2]), 'float32')],axis=0)
-        z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
+        z = theano_util.downsample(z, axis=a, factor=f, method=method)
         if sample_target or fit_target:
           if self.y_out.dtype == 'float32':
             if padding:
@@ -297,26 +297,26 @@ class DownsampleLayer(_NoOpLayer):
                 [self.y_out, T.zeros((f - T.mod(self.y_out.shape[0], f), self.y_out.shape[1], self.y_out.shape[2]),
                                      'float32')], axis=0)
             if sample_target:
-              self.y_out = TheanoUtil.downsample(self.y_out, axis=0, factor=f, method=method)
+              self.y_out = theano_util.downsample(self.y_out, axis=0, factor=f, method=method)
           else:
             if padding:
               self.y_out = T.concatenate(
                 [self.y_out, T.zeros((f - T.mod(self.y_out.shape[0], f), self.y_out.shape[1]), 'int32')], axis=0)
             if sample_target:
-              self.y_out = TheanoUtil.downsample(self.y_out, axis=0, factor=f, method='max')
+              self.y_out = theano_util.downsample(self.y_out, axis=0, factor=f, method='max')
       else:
-        z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
+        z = theano_util.downsample(z, axis=a, factor=f, method=method)
         if a < self.y_out.ndim:
-          self.y_out = TheanoUtil.downsample(self.y_out, axis=a, factor=f, method='max')
+          self.y_out = theano_util.downsample(self.y_out, axis=a, factor=f, method='max')
       if a == 0:
         self.index = self.sources[0].index
         if padding:
           self.index = T.concatenate([self.index, T.zeros((f-T.mod(self.index.shape[0], f), self.index.shape[1]), 'int8')], axis=0)
           if fit_target:
             self.index_out = self.index
-        self.index = TheanoUtil.downsample(self.index, axis=0, factor=f, method="min")
+        self.index = theano_util.downsample(self.index, axis=0, factor=f, method="min")
         if sample_target:
-          self.index_out = TheanoUtil.downsample(self.index_out, axis=0, factor=f, method="min")
+          self.index_out = theano_util.downsample(self.index_out, axis=0, factor=f, method="min")
         elif not fit_target:
           self.index_out = self.index if base is None else base[0].index_out
       elif a == 2:
@@ -365,7 +365,7 @@ class DownsampleLayer(_NoOpLayer):
       output = z[-1].reshape((z.shape[1] / num_batches, num_batches, z.shape[2]))
       #output = result[0][0].reshape((z.shape[1] / num_batches, num_batches, z.shape[2]))
     elif method == 'batch':
-      self.index = TheanoUtil.downsample(self.sources[0].index, axis=0, factor=factor[0], method="batch")
+      self.index = theano_util.downsample(self.sources[0].index, axis=0, factor=factor[0], method="batch")
       #z = theano.printing.Print("d", attrs=['shape'])(z)
     self.set_attr('n_out', n_out)
     self.make_output(output)
@@ -413,7 +413,7 @@ class UpsampleLayer(_NoOpLayer):
         target_axis_len = self.index.shape[0]
       elif a == 2:
         n_out = int(n_out * f)
-      z = TheanoUtil.upsample(z, axis=a, factor=f, method=method, target_axis_len=target_axis_len)
+      z = theano_util.upsample(z, axis=a, factor=f, method=method, target_axis_len=target_axis_len)
     self.set_attr('n_out', n_out)
     self.make_output(z)
 
@@ -781,7 +781,7 @@ class IndexToVecLayer(_NoOpLayer):
     super(IndexToVecLayer, self).__init__(**kwargs)
     self.set_attr('n_out', n_out)
 
-    z = T.cast(TheanoUtil.class_idx_seq_to_1_of_k(self.sources[0].output, n_out), dtype="float32")
+    z = T.cast(theano_util.class_idx_seq_to_1_of_k(self.sources[0].output, n_out), dtype="float32")
     self.output = z  # (time, batch, n_out)
 
 
@@ -1594,9 +1594,9 @@ class GenericCodeLayer(_NoOpLayer):
     self.set_attr('n_out', n_out)
     code = code.encode("utf8")
     self.set_attr('code', code)
-    import TheanoUtil
+    import theano_util
     output = eval(code, {"self": self, "s": self.sources,
-                         "T": T, "theano": theano, "numpy": numpy, "TU": TheanoUtil,
+                         "T": T, "theano": theano, "numpy": numpy, "TU": theano_util,
                          "f32": numpy.float32})
     self.make_output(output)
 

@@ -6,15 +6,15 @@ import os
 from theano import tensor as T
 import theano
 import theano.ifelse
-from BestPathDecoder import BestPathDecodeOp
-from TwoStateBestPathDecoder import TwoStateBestPathDecodeOp
-from CTC import CTCOp
-from TwoStateHMMOp import TwoStateHMMOp
-from OpNumpyAlign import NumpyAlignOp
-from NativeOp import FastBaumWelchOp, SegmentFastBaumWelchOp, MultiEndFastBaumWelchOp
+from returnn.theano.ops.best_path_decoder import BestPathDecodeOp
+from returnn.theano.ops.two_state_best_path_decoder import TwoStateBestPathDecodeOp
+from returnn.theano.ops.ctc import CTCOp
+from returnn.theano.ops.two_state_hmm import TwoStateHMMOp
+from returnn.theano.ops.numpy_align import NumpyAlignOp
+from returnn.native_op import FastBaumWelchOp, SegmentFastBaumWelchOp, MultiEndFastBaumWelchOp
 from returnn.theano.layers.base import Layer
-from NetworkHiddenLayer import CAlignmentLayer
-from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
+from .hidden import CAlignmentLayer
+from returnn.sprint.error_signals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
 from returnn.theano.util import time_batch_make_flat, grad_discard_out_of_bound, DumpOp
 from returnn.util.basic import as_str
 from returnn.log import log
@@ -157,7 +157,7 @@ class OutputLayer(Layer):
       assert isinstance(self.y, tuple)
       assert len(self.y) == 3
       s0, s1, weight = self.y
-      from TheanoNativeOp import max_and_argmax_sparse
+      from returnn.theano.native_op import max_and_argmax_sparse
       n_time = self.z.shape[0]
       n_batch = self.z.shape[1]
       mask = self.network.j[self.attrs.get("target", "").replace("[sparse:coo]", "[sparse:coo:2:0]")]
@@ -262,7 +262,7 @@ class OutputLayer(Layer):
     elif gauss_outputs:
       self.p_y_given_x = T.exp(-T.sqr(self.z))
     elif activation:
-      from ActivationFunctions import strtoact_single_joined
+      from returnn.theano.activation_functions import strtoact_single_joined
       act_f = strtoact_single_joined(activation)
       self.p_y_given_x = act_f(self.z)
     elif batchwise_softmax:
@@ -412,7 +412,7 @@ class FramewiseOutputLayer(OutputLayer):
         y_idx = self.y_data_flat
         assert y_idx.ndim == 1
         p = T.clip(self.p_y_given_x_flat, numpy.float32(1.e-38), numpy.float32(1.e20))
-        from TheanoNativeOp import subtensor_batched_index
+        from returnn.theano.native_op import subtensor_batched_index
         logp = T.log(subtensor_batched_index(p, y_idx))
         assert logp.ndim == 1
         nll = -T.sum(logp * index)
@@ -436,7 +436,7 @@ class FramewiseOutputLayer(OutputLayer):
       if self.attrs.get("target", "").endswith("[sparse:coo]"):
         assert isinstance(self.y, tuple)
         assert len(self.y) == 3
-        from TheanoNativeOp import crossentropy_softmax_and_gradient_z_sparse
+        from returnn.theano.native_op import crossentropy_softmax_and_gradient_z_sparse
         y_mask = self.network.j[self.attrs.get("target", "").replace("[sparse:coo]", "[sparse:coo:2:0]")]
         ce, grad_z = crossentropy_softmax_and_gradient_z_sparse(
           self.z, self.index, self.y[0], self.y[1], self.y[2], y_mask)
@@ -1172,6 +1172,7 @@ class SequenceOutputLayer(OutputLayer):
       import os
       os.environ['CTC_LIB'] = self.attrs.get('warp_ctc_lib', "/usr/lib")
       try:
+        # noinspection PyUnresolvedReferences
         from theano_ctc import ctc_cost
         # from theano_ctc.cpu_ctc import CpuCtc
       except Exception:
@@ -1189,7 +1190,7 @@ class SequenceOutputLayer(OutputLayer):
       ce = -T.sum(T.log(pcx))
       return ce, known_grads
     elif self.loss == 'ctc2':
-      from NetworkCtcLayer import ctc_cost, uniq_with_lengths, log_sum
+      from .ctc import ctc_cost, uniq_with_lengths, log_sum
       max_time = self.z.shape[0]
       num_batches = self.z.shape[1]
       time_mask = self.index.reshape((max_time, num_batches))

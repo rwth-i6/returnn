@@ -102,7 +102,7 @@ class Container(object):
     grp_class = as_str(grp.attrs['class'])
     if grp_class == "<unknown_softmax>": grp_class = "softmax"  # bug in some CRNN version. can be ignored.
     if grp_class != self.layer_class:
-      from NetworkLayer import get_layer_class
+      from .basic import get_layer_class
       if not get_layer_class(grp_class, raise_exception=False) is get_layer_class(self.layer_class):
         print("warning: invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")", file=log.v3)
     for p in self.params:
@@ -212,13 +212,14 @@ class Container(object):
       return self.rng.normal(loc=loc, scale=scale, size=size)
     def random_uniform(l, loc=0.0):
       return self.rng.uniform(low=-l + loc, high=l + loc, size=size)
-    import Config, Util
+    import returnn.config as config_mod
+    import returnn.util.basic as util
     try:
-      config = Config.get_global_config()
+      config = config_mod.get_global_config()
     except Exception:
       config = None
     else:
-      config = Util.DictAsObj(config.typed_dict)
+      config = util.DictAsObj(config.typed_dict)
     eval_locals = {
       "numpy": numpy,
       "rng": self.rng,
@@ -318,13 +319,14 @@ class Container(object):
     :rtype: theano.shared
     """
     if not name: name = "%s_%s_%i" % (default_name_prefix, self.name, len(self.params))
-    import Config, Util
+    from returnn.config import get_global_config
+    import returnn.util.basic as util
     try:
-      config = Config.get_global_config()
+      config = get_global_config()
     except Exception:
       config = None
     else:
-      config = Util.DictAsObj(config.typed_dict)
+      config = util.DictAsObj(config.typed_dict)
     eval_locals = {
       "numpy": numpy,
       "theano": theano,
@@ -755,13 +757,13 @@ class Layer(Container):
     if self.attrs['batch_norm']:
       self.output = self.batch_norm(self.output, self.attrs['n_out'], sample_mean=sample_mean, gamma=gamma, use_sample=self.attrs['bn_use_sample'])
     if self.attrs['residual']:
-      from NetworkHiddenLayer import concat_sources
+      from .hidden import concat_sources
       z, n_in = concat_sources(self.sources, unsparse=True, expect_source=False)
       assert n_in == self.attrs['n_out']
       self.output += z
     if self.attrs['layer_drop'] > 0.0:
       # Stochastic Depth, http://arxiv.org/abs/1603.09382
-      from NetworkHiddenLayer import concat_sources
+      from .hidden import concat_sources
       z, n_in = concat_sources(self.sources, unsparse=True, expect_source=False)
       n_out = self.attrs['n_out']
       if n_in != n_out:

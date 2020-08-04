@@ -13,9 +13,9 @@ except ImportError:
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 
 # others
-from NetworkHiddenLayer import _NoOpLayer
-from ActivationFunctions import strtoact
-from cuda_implementation.FractionalMaxPoolingOp import fmp
+from .hidden import _NoOpLayer
+from returnn.theano.activation_functions import strtoact
+from returnn.theano.ops.cuda_implementation.FractionalMaxPoolingOp import fmp
 from theano.sandbox.cuda import dnn
 
 class CNN(_NoOpLayer):

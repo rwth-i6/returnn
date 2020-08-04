@@ -3,8 +3,8 @@ import numpy
 import json
 from theano import tensor as T
 import theano
-from NetworkHiddenLayer import HiddenLayer, _NoOpLayer
-from ActivationFunctions import strtoact
+from .hidden import HiddenLayer, _NoOpLayer
+from returnn.theano.activation_functions import strtoact
 
 
 class RecurrentLayer(HiddenLayer):
