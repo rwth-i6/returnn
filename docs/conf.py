@@ -11,7 +11,7 @@
 
 import sys
 import os
-sys.path += [".", "returnn"]
+sys.path += [".", ".."]
 
 import faulthandler
 faulthandler.enable()

@@ -1,5 +1,5 @@
 import os
-import TFUpdater
+import returnn.tf.updater as updater
 
 header_text = """
 .. _optimizer:
@@ -17,10 +17,10 @@ please have a look at the :ref:`optimizer settings <optimizer_settings>`.
 
 def generate():
   if not os.path.exists("returnn"):
-    os.symlink("..", "returnn")
+    os.symlink("../returnn", "returnn")
 
-  TFUpdater._init_optimizer_classes_dict()
-  optimizer_dict = TFUpdater._OptimizerClassesDict
+  updater._init_optimizer_classes_dict()
+  optimizer_dict = updater._OptimizerClassesDict
 
 
   rst_file = open("optimizer.rst", "w")

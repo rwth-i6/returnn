@@ -27,7 +27,7 @@ A performance comparison of the different LSTM Layers is available :ref:`here <t
 
 def generate():
   if not os.path.exists("returnn"):
-    os.symlink("..", "returnn")
+    os.symlink("../returnn", "returnn")
 
   RecLayer._create_rnn_cells_dict()
   layer_names = sorted(list(RecLayer._rnn_cells_dict.keys()))

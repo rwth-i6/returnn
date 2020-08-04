@@ -22,7 +22,7 @@ exclude = {"autonet", "mod"}
 
 def generate():
   if not os.path.exists("returnn"):
-    os.symlink("..", "returnn")
+    os.symlink("../returnn", "returnn")
 
   if not os.path.exists("api"):
     os.mkdir("api")
