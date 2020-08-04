@@ -677,8 +677,8 @@ def _at_exit_handler():
     print("SprintInterface[pid %i] atexit handler, exit() was not called, calling it now" % (os.getpid(),))
     exit()
     print("All threads:")
-    import debug
-    debug.dump_all_thread_tracebacks(exclude_self=True)
+    from returnn.util.debug import dump_all_thread_tracebacks
+    dump_all_thread_tracebacks(exclude_self=True)
 
 
 def _init_base(configfile=None, target_mode=None, epoch=None, sprint_opts=None):

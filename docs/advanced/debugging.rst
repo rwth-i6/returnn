@@ -33,8 +33,8 @@ That will give you the IPython debugger shell once you hit an unhandled exceptio
 You can summon the interactive shell by explicitly calling the following from the
 source code or from the config::
 
-  import Debug
-  Debug.debug_shell(user_ns=locals(), user_global_ns=globals(), exit_afterwards=False)
+  from returnn.util.debug import debug_shell
+  debug_shell(user_ns=locals(), user_global_ns=globals(), exit_afterwards=False)
 
 
 Shapes and :class:`Data`

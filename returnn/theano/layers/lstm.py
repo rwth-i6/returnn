@@ -739,7 +739,7 @@ class NativeLstmLayer(HiddenLayer):
     z = self.get_linear_forward_output()
     assert z.ndim == 3
 
-    from NativeOp import LstmGenericBase
+    from returnn.native_op import LstmGenericBase
     lstm_op = LstmGenericBase().make_theano_op()
     op_out = lstm_op(*LstmGenericBase.map_layer_inputs_to_op(z[::direction], self.W_re, self.index[::direction]))
     from returnn.theano.util import make_var_tuple

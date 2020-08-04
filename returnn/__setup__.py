@@ -1,35 +1,6 @@
 
-
 """
-Usage:
-
-Create ~/.pypirc with info:
-
-    [distutils]
-    index-servers =
-        pypi
-
-    [pypi]
-    repository: https://upload.pypi.org/legacy/
-    username: ...
-    password: ...
-
-(Not needed anymore) Registering the project: python3 setup.py register
-New release: python3 setup.py sdist upload
-
-I had some trouble at some point, and this helped:
-pip3 install --user twine
-python3 setup.py sdist
-twine upload dist/*.tar.gz
-
-See also MANIFEST.in for included files.
-
-For debugging this script:
-
-python3 setup.py sdist
-pip3 install --user dist/*.tar.gz -v
-(Without -v, all stdout/stderr from here will not be shown.)
-
+Used by setup.py.
 """
 
 from __future__ import print_function
@@ -40,7 +11,7 @@ import sys
 from subprocess import Popen, check_output, PIPE
 
 
-_my_dir = os.path.dirname(os.path.abspath(__file__))
+_root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def debug_print_file(fn):
@@ -72,7 +43,7 @@ def parse_pkg_info(fn):
   return res
 
 
-def git_commit_rev(commit="HEAD", git_dir="."):
+def git_commit_rev(commit="HEAD", git_dir=_root_dir):
   """
   :param str commit:
   :param str git_dir:
@@ -83,7 +54,7 @@ def git_commit_rev(commit="HEAD", git_dir="."):
   return check_output(["git", "rev-parse", "--short", commit], cwd=git_dir).decode("utf8").strip()
 
 
-def git_is_dirty(git_dir="."):
+def git_is_dirty(git_dir=_root_dir):
   """
   :param str git_dir:
   :rtype: bool
@@ -97,7 +68,7 @@ def git_is_dirty(git_dir="."):
   raise Exception("unexpected return code %i" % proc.returncode)
 
 
-def git_commit_date(commit="HEAD", git_dir="."):
+def git_commit_date(commit="HEAD", git_dir=_root_dir):
   """
   :param str commit:
   :param str git_dir:
@@ -108,7 +79,7 @@ def git_commit_date(commit="HEAD", git_dir="."):
   return out
 
 
-def git_head_version(git_dir="."):
+def git_head_version(git_dir=_root_dir):
   """
   :param str git_dir:
   :rtype: str
@@ -127,10 +98,10 @@ def get_version_str(verbose=False, allow_current_time=False, fallback=None):
   :param str|None fallback:
   :rtype: str
   """
-  if os.path.exists("%s/PKG-INFO" % _my_dir):
+  if os.path.exists("%s/PKG-INFO" % _root_dir):
     if verbose:
       print("Found existing PKG-INFO.")
-    info = parse_pkg_info("%s/PKG-INFO" % _my_dir)
+    info = parse_pkg_info("%s/PKG-INFO" % _root_dir)
     version = info["Version"]
     if verbose:
       print("Version via PKG-INFO:", version)

@@ -803,6 +803,9 @@ class Pickler(_BasePickler):
       name = obj.__name__
 
     module = getattr(obj, "__module__", None)
+    if module == "__main__" and globals().get(name, None) is obj:
+      # Can happen if this is directly executed.
+      module = __name__  # should be correct now
     if module is None or module == "__main__":
       module = pickle.whichmodule(obj, name)
     if module is None or module == "__main__":
@@ -991,9 +994,6 @@ class ExecingProcess:
   @staticmethod
   def checkExec():
     if "--forkExecProc" in sys.argv:
-      mod_path = os.path.realpath(os.path.join(os.path.dirname(__file__), '..'))
-      if not any(mod_path == os.path.realpath(s) for s in sys.path):
-        sys.path.append(mod_path)
       try:
         from returnn.util import better_exchook
       except ImportError:
@@ -1391,9 +1391,14 @@ class ReadWriteLock(object):
 if __name__ == "__main__":
   # Make this the right module package.
   sys.path.insert(0, os.path.realpath(os.path.dirname(os.path.abspath(__file__)) + "/../.."))
+  import returnn.util  # make sure parent package exists
   __package__ = "returnn.util"
   __name__ = "returnn.util.task_system"
-  sys.modules[__name__] = sys.modules["__main__"]
+  mod = sys.modules["__main__"]
+  sys.modules[__name__] = mod
+  returnn.util.task_system = mod  # need to set this
+  import returnn.util.task_system as mod_  # make sure this works now
+  assert mod is mod_
   try:
     ExecingProcess.checkExec()  # Never returns if this proc is called via ExecingProcess.
   except KeyboardInterrupt:
