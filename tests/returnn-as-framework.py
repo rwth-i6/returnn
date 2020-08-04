@@ -22,7 +22,7 @@ def setup():
   print("Setup for importing RETURNN as framework/package.")
   tmp_dir = tempfile.mkdtemp()
   print("Temp dir:", tmp_dir)
-  os.symlink(_base_dir, "%s/returnn" % tmp_dir)
+  os.symlink("%s/returnn" % _base_dir, "%s/returnn" % tmp_dir)
   sys.path.insert(0, tmp_dir)
 
   print("Import returnn module/package.")

@@ -1,3 +1,5 @@
+
+from __future__ import print_function
 from returnn.util.task_system import AsyncTask, ProcConnectionDied
 from returnn.log import log
 import numpy
