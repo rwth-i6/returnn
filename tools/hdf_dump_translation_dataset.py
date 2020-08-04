@@ -393,13 +393,17 @@ def main():
   source_factors = args.source_factors.split(",") if args.source_factors else []
   target_factors = args.target_factors.split(",") if args.target_factors else []
 
-  assert len(source_factors) + 1 == len(source_vocabularies), ("Number of source factors must be one less "
+  assert len(source_factors) + 1 == len(source_vocabularies), (
+    "Number of source factors must be one less "
     "than number of source vocabularies (first factor is always called 'data')")
-  assert len(target_factors) + 1 == len(target_vocabularies), ("Number of target factors must be one less "
+  assert len(target_factors) + 1 == len(target_vocabularies), (
+    "Number of target factors must be one less "
     "than number of target vocabularies (first factor is always called 'classes')")
 
-  HDFTranslationDatasetCreator(args.hdf_file, args.source_corpus, args.target_corpus,
-    source_vocabularies, target_vocabularies, source_factors, target_factors, args.number_of_lines, args.factor_separator,
+  HDFTranslationDatasetCreator(
+    args.hdf_file, args.source_corpus, args.target_corpus,
+    source_vocabularies, target_vocabularies, source_factors, target_factors, args.number_of_lines,
+    args.factor_separator,
     args.compression, args.line_buffer_size, args.data_buffer_size).create()
 
 

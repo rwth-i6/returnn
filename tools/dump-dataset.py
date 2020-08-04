@@ -10,12 +10,12 @@ my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
 sys.path.append(returnn_dir)
 
-import rnn
+from returnn import __main__ as rnn
 from returnn.log import log
 import argparse
 import numpy
 from returnn.util.basic import Stats, hms, hms_fraction, pretty_print
-import Util
+from returnn.util import basic as util
 
 
 def plot(m):
@@ -23,6 +23,7 @@ def plot(m):
   :param numpy.ndarray m:
   """
   print("Plotting matrix of shape %s." % (m.shape,))
+  # noinspection PyUnresolvedReferences,PyPackageRequirements
   from matplotlib.pyplot import matshow, show
   matshow(m.transpose())
   show()
@@ -71,11 +72,11 @@ def dump_dataset(dataset, options):
   elif options.type == "stdout":
     print("Dump to stdout", file=log.v3)
     if options.stdout_limit is not None:
-      Util.set_pretty_print_default_limit(options.stdout_limit)
+      util.set_pretty_print_default_limit(options.stdout_limit)
       numpy.set_printoptions(
         threshold=sys.maxsize if options.stdout_limit == float("inf") else int(options.stdout_limit))
     if options.stdout_as_bytes:
-      Util.set_pretty_print_as_bytes(options.stdout_as_bytes)
+      util.set_pretty_print_as_bytes(options.stdout_as_bytes)
   elif options.type == "print_tag":
     print("Dump seq tag to stdout", file=log.v3)
   elif options.type == "dump_tag":
@@ -154,7 +155,7 @@ def dump_dataset(dataset, options):
         elif options.type == "print_shape":
           print("seq %i target %r shape:" % (seq_idx, target), targets.shape)
       if options.type == "interactive":
-        from Debug import debug_shell
+        from returnn.util.debug import debug_shell
         debug_shell(locals())
     seq_len = dataset.get_seq_length(seq_idx)
     for key in dataset.get_data_keys():
@@ -162,7 +163,7 @@ def dump_dataset(dataset, options):
     if stats:
       stats.collect(data)
     if options.type == "null":
-      Util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
+      util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
 
     seq_idx += 1
 

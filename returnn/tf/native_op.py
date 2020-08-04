@@ -32,7 +32,7 @@ class OpDescription(native_op.NativeOpBaseMixin):
   @classmethod
   def from_gen_base(cls, gen_base):
     """
-    :param NativeOp.NativeOpGenBase|Type[NativeOp.NativeOpGenBase] gen_base:
+    :param returnn.native_op.NativeOpGenBase|type[returnn.native_op.NativeOpGenBase] gen_base:
     :rtype: OpDescription
     """
     name = gen_base.__name__
@@ -631,7 +631,7 @@ def load_dump_file(filename):
 
 def make_op(cls, **kwargs):
   """
-  :param Type[NativeOp.NativeOpGenBase] cls:
+  :param type[returnn.native_op.NativeOpGenBase] cls:
   :param kwargs: passed to OpMaker
   :return: op
   :rtype: (tf.Tensor) -> tuple[tf.Tensor]

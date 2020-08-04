@@ -33,7 +33,7 @@ import sys
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
-sys.path.append(returnn_dir)
+sys.path.insert(0, returnn_dir)
 
 import argparse
 import numpy

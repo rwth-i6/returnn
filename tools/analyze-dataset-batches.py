@@ -17,13 +17,13 @@ from pprint import pformat
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
-sys.path.append(returnn_dir)
+sys.path.insert(0, returnn_dir)
 
-import rnn
+import returnn.__main__ as rnn
 from returnn.log import log
-import Util
+import returnn.util.basic as util
 from returnn.util.basic import Stats, hms, NumbersDict
-from Dataset import Batch, Dataset, init_dataset
+from returnn.datasets.basic import Batch, Dataset, init_dataset
 from returnn.config import Config
 
 
@@ -40,7 +40,7 @@ def analyze_dataset(options):
   print("Dataset target keys:", dataset.get_target_list(), file=log.v3)
   assert options.key in dataset.get_data_keys()
 
-  terminal_width, _ = Util.terminal_size()
+  terminal_width, _ = util.terminal_size()
   show_interactive_process_bar = (log.verbose[3] and (not log.verbose[5]) and terminal_width >= 0)
 
   start_time = time.time()
@@ -107,7 +107,7 @@ def analyze_dataset(options):
           batch_max_time, batch_num_used_frames, batch_num_used_frames / batch_max_time),
         file=log.v5)
       if show_interactive_process_bar:
-        Util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
+        util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
 
       step += 1
       batches.advance(1)
@@ -160,14 +160,14 @@ def init(config_str, config_dataset, use_pretrain, epoch, verbosity):
   rnn.returnn_greeting()
   rnn.init_faulthandler()
   rnn.init_config_json_network()
-  Util.BackendEngine.select_engine(config=config)
+  util.BackendEngine.select_engine(config=config)
   if not dataset_opts:
     if config_dataset:
       dataset_opts = "config:%s" % config_dataset
     else:
       dataset_opts = "config:train"
   if use_pretrain:
-    from Pretrain import pretrain_from_config
+    from returnn.pretrain import pretrain_from_config
     pretrain = pretrain_from_config(config)
     if pretrain:
       print("Using pretrain %s, epoch %i" % (pretrain, epoch), file=log.v2)
@@ -180,7 +180,7 @@ def init(config_str, config_dataset, use_pretrain, epoch, verbosity):
           assert isinstance(key, str)
           orig_value = config.typed_dict.get(key, None)
           if isinstance(orig_value, dict) and isinstance(value, dict):
-            diff_str = "\n" + Util.dict_diff_str(orig_value, value)
+            diff_str = "\n" + util.dict_diff_str(orig_value, value)
           elif isinstance(value, dict):
             diff_str = "\n%r ->\n%s" % (orig_value, pformat(value))
           else:

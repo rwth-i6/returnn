@@ -19,15 +19,15 @@ my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
 sys.path.insert(0, returnn_dir)
 
-import rnn
+import returnn.__main__ as rnn
 from returnn.log import log
 from returnn.config import Config
 import argparse
-import Util
+import returnn.util.basic as util
 from returnn.tf.engine import Engine
-from Dataset import init_dataset
-from MetaDataset import MetaDataset
-import better_exchook
+from returnn.datasets import init_dataset
+from returnn.datasets.meta import MetaDataset
+from returnn.util import better_exchook
 
 
 config = None  # type: typing.Optional[Config]
@@ -62,7 +62,7 @@ def init(config_filename, log_verbosity, remaining_args=()):
   print("Returnn %s starting up." % os.path.basename(__file__), file=log.v1)
   rnn.returnn_greeting()
   rnn.init_backend_engine()
-  assert Util.BackendEngine.is_tensorflow_selected(), "this is only for TensorFlow"
+  assert util.BackendEngine.is_tensorflow_selected(), "this is only for TensorFlow"
   rnn.init_faulthandler()
   better_exchook.replace_traceback_format_tb()  # makes some debugging easier
   rnn.init_config_json_network()

@@ -7,13 +7,13 @@ import sys
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
-sys.path.append(returnn_dir)
+sys.path.insert(0, returnn_dir)
 
 from returnn.log import log
-import rnn
+import returnn.__main__ as rnn
 import argparse
-import HDFDataset
-from Dataset import Dataset, init_dataset
+import returnn.datasets.hdf as hdf_dataset_mod
+from returnn.datasets import Dataset, init_dataset
 from returnn.config import Config
 
 
@@ -22,7 +22,7 @@ def hdf_dataset_init(file_name):
   :param str file_name: filename of hdf dataset file in the filesystem
   :rtype: HDFDataset.HDFDatasetWriter
   """
-  return HDFDataset.HDFDatasetWriter(filename=file_name)
+  return hdf_dataset_mod.HDFDatasetWriter(filename=file_name)
 
 
 def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):

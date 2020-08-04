@@ -20,7 +20,7 @@ my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
 sys.path.insert(0, returnn_dir)
 
-import SprintCache
+import returnn.sprint.cache
 
 
 class BlissItem:
@@ -130,13 +130,13 @@ class SprintCacheHandler:
     if "*" in opt:
       sprint_cache_fns = glob(opt)
       assert sprint_cache_fns, "nothing found under sprint cache pattern %r" % (opt,)
-      sprint_cache = SprintCache.FileArchiveBundle()
+      sprint_cache = returnn.sprint.cache.FileArchiveBundle()
       for fn in sprint_cache_fns:
         print("Load Sprint cache:", fn)
         sprint_cache.add_bundle_or_archive(fn)
     else:
       print("Load Sprint cache:", opt)
-      sprint_cache = SprintCache.open_file_archive(opt, must_exists=True)
+      sprint_cache = returnn.sprint.cache.open_file_archive(opt, must_exists=True)
     return sprint_cache
 
   @staticmethod

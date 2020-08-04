@@ -11,7 +11,7 @@ returnn_dir = os.path.dirname(my_dir)
 sys.path.insert(0, returnn_dir)
 
 # noinspection PyProtectedMember
-from LmDataset import _iter_bliss
+from returnn.datasets.lm import _iter_bliss
 
 
 def main():
@@ -30,6 +30,6 @@ def main():
 
 
 if __name__ == '__main__':
-  import better_exchook
+  from returnn.util import better_exchook
   better_exchook.install()
   main()

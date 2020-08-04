@@ -7,11 +7,11 @@ import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.install()
 
 from returnn.log import log
-from rnn import init, finalize
+from returnn.__main__ import init, finalize
 
 arg_parser = argparse.ArgumentParser()
 arg_parser.add_argument("--config")

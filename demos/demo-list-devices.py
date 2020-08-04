@@ -10,8 +10,9 @@ from tensorflow.python.client import device_lib
 my_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(my_dir))  # parent dir, Returnn code
 
-import TFCompat
-from returnn.tf.util.basic import get_device_attr, setup_tf_thread_pools, print_available_devices, get_tf_list_local_devices
+import returnn.tf.compat as tf_compat
+from returnn.tf.util.basic import get_device_attr, setup_tf_thread_pools
+from returnn.tf.util.basic import print_available_devices, get_tf_list_local_devices
 
 
 def dump_devs(tf_session_opts, use_device_lib=False, filter_gpu=True):
@@ -34,7 +35,7 @@ def dump_devs(tf_session_opts, use_device_lib=False, filter_gpu=True):
   print("num devs %i, CUDA num visible %r, TF num visible %r" % (len(devs), cuda_num_visible, tf_num_visible))
   print("devs:")
   pprint(devs)
-  with TFCompat.v1.Session(config=TFCompat.v1.ConfigProto(**tf_session_opts)) as session:
+  with tf_compat.v1.Session(config=tf_compat.v1.ConfigProto(**tf_session_opts)) as session:
     for dev in devs:
       print("dev name:", dev.name)
       print("dev attribs:", session.run(get_device_attr(dev.name)))
@@ -75,6 +76,6 @@ def main():
 
 
 if __name__ == "__main__":
-  import better_exchook
+  from returnn.util import better_exchook
   better_exchook.install()
   main()

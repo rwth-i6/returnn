@@ -29,12 +29,12 @@ from glob import glob
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
-sys.path.append(returnn_dir)
+sys.path.insert(0, returnn_dir)
 
 # Returnn imports
-import rnn
+import returnn.__main__ as rnn
 from returnn.tf.engine import Runner
-from Dataset import init_dataset
+from returnn.datasets import init_dataset
 from returnn.util.basic import NumbersDict, Stats, deep_update_dict_values
 
 

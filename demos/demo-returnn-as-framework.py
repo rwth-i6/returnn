@@ -11,11 +11,11 @@ import returnn  # pip install returnn
 print("RETURNN imported from:", returnn.__file__)
 print("RETURNN version:", returnn.__version__)
 
-from returnn.TFEngine import Engine
-from returnn.Dataset import init_dataset
-from returnn.Config import get_global_config
-from returnn.Util import get_login_username
-from returnn import better_exchook
+from returnn.tf.engine import Engine
+from returnn.datasets import init_dataset
+from returnn.config import get_global_config
+from returnn.util.basic import get_login_username
+from returnn.util import better_exchook
 
 
 better_exchook.install()

@@ -28,7 +28,7 @@ def main():
   open("%s/model.001.meta" % tmp_dir, "w").close()
   sys.path.insert(0, tmp_dir)
   print("Import SprintInterface (relative import).")
-  import returnn.SprintInterface as SprintInterface
+  import returnn.sprint.interface as SprintInterface
   print("SprintInterface.init")
   SprintInterface.init(
     inputDim=3, outputDim=5, cudaEnabled=0, targetMode='forward-only',

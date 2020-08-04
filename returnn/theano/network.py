@@ -112,7 +112,7 @@ class LayerNetwork(object):
     :rtype: LayerNetwork
     """
     json_content = cls.json_from_config(config, mask=mask)
-    from Pretrain import find_pretrain_wrap_values, pretrain_from_config
+    from returnn.pretrain import find_pretrain_wrap_values, pretrain_from_config
     if find_pretrain_wrap_values(json_content):
       pretrain = pretrain_from_config(config=config)
       assert pretrain, "found Pretrain WrapEpochValue but no pretrain configured"

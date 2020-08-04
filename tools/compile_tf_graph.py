@@ -18,16 +18,17 @@ my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
 sys.path.insert(0, returnn_dir)
 
-import rnn
+import returnn.__main__ as rnn
 from returnn.log import log
 from returnn.config import Config
 import argparse
-import Util
+import returnn.util.basic as util
 from returnn.util.basic import NotSpecified
-import TFCompat
+import returnn.tf.compat as tf_compat
 from returnn.tf.util.basic import Data, CollectionKeys
 from returnn.tf.network import TFNetwork
-from TFNetworkLayer import LayerBase, register_layer_class, WrappedInternalLayer
+from returnn.tf.layers.basic import LayerBase, register_layer_class
+from returnn.tf.layers.base import WrappedInternalLayer
 from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell, ChoiceLayer
 
 
@@ -55,7 +56,7 @@ def init(config_filename, log_verbosity):
   print("Returnn compile-tf-graph starting up.", file=log.v1)
   rnn.returnn_greeting()
   rnn.init_backend_engine()
-  assert Util.BackendEngine.is_tensorflow_selected(), "this is only for TensorFlow"
+  assert util.BackendEngine.is_tensorflow_selected(), "this is only for TensorFlow"
   rnn.init_faulthandler()
   rnn.init_config_json_network()
 
@@ -146,9 +147,9 @@ class RecStepByStepLayer(RecLayer):
     assert isinstance(rec_layer, RecStepByStepLayer)
     info = {"state_vars": {}, "stochastic_var_order": [], "stochastic_vars": {}}
     init_ops = []
-    tile_batch_repetitions = TFCompat.v1.placeholder(name="tile_batch_repetitions", shape=(), dtype=tf.int32)
+    tile_batch_repetitions = tf_compat.v1.placeholder(name="tile_batch_repetitions", shape=(), dtype=tf.int32)
     tile_batch_ops = []
-    src_beams = TFCompat.v1.placeholder(name="src_beams", shape=(None, None), dtype=tf.int32)  # (batch,beam)
+    src_beams = tf_compat.v1.placeholder(name="src_beams", shape=(None, None), dtype=tf.int32)  # (batch,beam)
     select_src_beams_ops = []
     next_step_ops = []
     print("State vars:")
@@ -232,7 +233,7 @@ class RecStepByStepLayer(RecLayer):
         [d if (d is not None) else 1 for d in self.var_data_shape.batch_shape],
         dtype=self.var_data_shape.dtype)
       zero_initializer.set_shape(self.var_data_shape.batch_shape)
-      self.var = TFCompat.v1.get_variable(
+      self.var = tf_compat.v1.get_variable(
         name=name, initializer=zero_initializer, validate_shape=False)  # type: tf.Variable
       self.var.set_shape(self.var_data_shape.batch_shape)
       assert self.var.shape.as_list() == list(self.var_data_shape.batch_shape)
@@ -270,7 +271,7 @@ class RecStepByStepLayer(RecLayer):
       :rtype: tf.Operation
       """
       assert self.var_initial_value is not None
-      return TFCompat.v1.assign(self.var, self.var_initial_value, name="init_state_var_%s" % self.name).op
+      return tf_compat.v1.assign(self.var, self.var_initial_value, name="init_state_var_%s" % self.name).op
 
     def final_op(self):
       """
@@ -291,7 +292,7 @@ class RecStepByStepLayer(RecLayer):
         x.placeholder = value
         x = x.copy_compatible_to(self.var_data_shape)
         value = x.placeholder
-      return TFCompat.v1.assign(self.var, value, name="final_state_var_%s" % self.name).op
+      return tf_compat.v1.assign(self.var, value, name="final_state_var_%s" % self.name).op
 
     def tile_batch_op(self, repetitions):
       """
@@ -305,7 +306,7 @@ class RecStepByStepLayer(RecLayer):
       from returnn.tf.util.basic import tile_transposed
       tiled_value = tile_transposed(
         self.var.read_value(), axis=self.var_data_shape.batch_dim_axis, multiples=repetitions)
-      return TFCompat.v1.assign(self.var, tiled_value, name="tile_batch_state_var_%s" % self.name).op
+      return tf_compat.v1.assign(self.var, tiled_value, name="tile_batch_state_var_%s" % self.name).op
 
     def select_src_beams_op(self, src_beams):
       """
@@ -317,7 +318,7 @@ class RecStepByStepLayer(RecLayer):
         return tf.no_op(name="select_src_beams_state_var_no_op_%s" % self.name)
       from returnn.tf.util.basic import select_src_beams
       v = select_src_beams(self.var.read_value(), src_beams=src_beams)
-      return TFCompat.v1.assign(self.var, v, name="select_src_beams_state_var_%s" % self.name).op
+      return tf_compat.v1.assign(self.var, v, name="select_src_beams_state_var_%s" % self.name).op
 
   def __init__(self, **kwargs):
     kwargs = kwargs.copy()
@@ -677,7 +678,7 @@ def main(argv):
     assert isinstance(graph, tf.Graph)
     print("Create graph...")
     # See :func:`Engine._init_network`.
-    TFCompat.v1.set_random_seed(42)
+    tf_compat.v1.set_random_seed(42)
     if args.train < 0:
       from returnn.tf.util.basic import get_global_train_flag_placeholder
       train_flag = get_global_train_flag_placeholder()
@@ -691,7 +692,7 @@ def main(argv):
       RecStepByStepLayer.post_compile(
         rec_layer_name=args.rec_step_by_step, network=network, output_file_name=args.rec_step_by_step_output_file)
 
-    from TFNetworkLayer import LayerBase
+    from returnn.tf.layers.base import LayerBase
     for layer in network.layers.values():
       assert isinstance(layer, LayerBase)
       if layer.output.time_dim_axis is None:
@@ -705,16 +706,16 @@ def main(argv):
 
     # Do some cleanup of collections which do not contain tensors or operations,
     # because the tf.train.import_meta_graph code might fail otherwise.
-    TFCompat.v1.get_collection_ref(CollectionKeys.RETURNN_LAYERS).clear()
+    tf_compat.v1.get_collection_ref(CollectionKeys.RETURNN_LAYERS).clear()
 
     if args.summaries_tensor_name:
-      summaries_tensor = TFCompat.v1.summary.merge_all()
+      summaries_tensor = tf_compat.v1.summary.merge_all()
       assert isinstance(summaries_tensor, tf.Tensor), "no summaries in the graph?"
       tf.identity(summaries_tensor, name=args.summaries_tensor_name)
 
     if args.output_file and os.path.splitext(args.output_file)[1] in [".meta", ".metatxt"]:
       # https://www.tensorflow.org/api_guides/python/meta_graph
-      saver = TFCompat.v1.train.Saver(
+      saver = tf_compat.v1.train.Saver(
         var_list=network.get_saveable_params_list(), max_to_keep=2 ** 31 - 1)
       graph_def = saver.export_meta_graph()
     else:
@@ -722,14 +723,14 @@ def main(argv):
 
     print("Graph collection keys:", graph.get_all_collection_keys())
     print("Graph num operations:", len(graph.get_operations()))
-    print("Graph def size:", Util.human_bytes_size(graph_def.ByteSize()))
+    print("Graph def size:", util.human_bytes_size(graph_def.ByteSize()))
 
     if args.output_file:
       filename = args.output_file
       _, ext = os.path.splitext(filename)
       if ext == ".logdir":
         print("Write TF events to logdir:", filename)
-        writer = TFCompat.v1.summary.FileWriter(logdir=filename)
+        writer = tf_compat.v1.summary.FileWriter(logdir=filename)
         writer.add_graph(graph)
         writer.flush()
       else:
@@ -753,7 +754,7 @@ def main(argv):
     if args.output_file_state_vars_list:
       print("Write state var list to:", args.output_file_state_vars_list)
       with open(args.output_file_state_vars_list, "w") as f:
-        for param in TFCompat.v1.get_collection(CollectionKeys.STATE_VARS):
+        for param in tf_compat.v1.get_collection(CollectionKeys.STATE_VARS):
           assert param.name[-2:] == ":0"
           f.write("%s\n" % param.name[:-2])
 

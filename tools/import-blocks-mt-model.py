@@ -68,11 +68,11 @@ my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
 sys.path.insert(0, returnn_dir)
 
-import better_exchook
-import rnn
-import Util
+from returnn.util import better_exchook
+import returnn.__main__ as rnn
+import returnn.util.basic as util
 from returnn.tf.network import TFNetwork
-from TFNetworkLayer import SourceLayer, LayerBase, LinearLayer
+from returnn.tf.layers.basic import SourceLayer, LayerBase, LinearLayer
 from returnn.tf.layers.rec import ChoiceLayer
 
 
@@ -131,7 +131,7 @@ def main():
       "allow_random_model_init": True,
       "debug_add_check_numerics_on_output": False},
     extra_greeting="Import Blocks MT model.")
-  assert Util.BackendEngine.is_tensorflow_selected()
+  assert util.BackendEngine.is_tensorflow_selected()
   config = rnn.config
 
   # Load Blocks MT model params.
@@ -153,7 +153,7 @@ def main():
     our_model_fn = config.value('model', "returnn-model") + ".imported"
     print("Will save Returnn model as %s." % our_model_fn)
     assert os.path.exists(os.path.dirname(our_model_fn) or "."), "model-dir does not exist"
-    assert not os.path.exists(our_model_fn + Util.get_model_filename_postfix()), "model-file already exists"
+    assert not os.path.exists(our_model_fn + util.get_model_filename_postfix()), "model-file already exists"
 
   blocks_mt_model = numpy.load(blocks_mt_model_fn)
   assert isinstance(blocks_mt_model, numpy.lib.npyio.NpzFile), "did not expect type %r in file %r" % (
@@ -344,7 +344,7 @@ def main():
       "enc_ctx": get_network().layers["enc_ctx"].output.get_placeholder_as_batch_major(),
       "output": get_network().layers["output"].output.get_placeholder_as_batch_major()
     }
-    from TFNetworkLayer import concat_sources
+    from returnn.tf.layers.basic import concat_sources
     for i in range(num_encoder_layers):
       extract_output_dict["enc_layer_%i" % i] = concat_sources(
         [get_network().layers["lstm%i_fw" % i], get_network().layers["lstm%i_bw" % i]]

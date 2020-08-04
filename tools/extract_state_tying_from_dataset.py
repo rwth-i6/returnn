@@ -7,14 +7,14 @@ import sys
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
-sys.path.append(returnn_dir)
+sys.path.insert(0, returnn_dir)
 
 import gzip
 from argparse import ArgumentParser
 from pprint import pprint
 import xml.etree.ElementTree as etree
-from Dataset import init_dataset
-from LmDataset import Lexicon, AllophoneState
+from returnn.datasets import init_dataset
+from returnn.datasets.lm import Lexicon, AllophoneState
 import collections
 from collections import defaultdict
 from returnn.log import log

@@ -12,21 +12,21 @@ my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
 sys.path.insert(0, returnn_dir)
 
-import rnn
+import returnn.__main__ as rnn
 from returnn.log import log
 import argparse
 from returnn.util.basic import Stats, hms
-from Dataset import Dataset, init_dataset
-import Util
-import TFCompat
-import TFUtil
+from returnn.datasets.basic import Dataset, init_dataset
+import returnn.util.basic as util
+import returnn.tf.compat as tf_compat
+import returnn.tf.util.basic as tf_util
 
 
 class WerComputeGraph:
   def __init__(self):
-    self.hyps = TFCompat.v1.placeholder(tf.string, [None])
-    self.refs = TFCompat.v1.placeholder(tf.string, [None])
-    self.wer, self.ref_num_words = TFUtil.string_words_calc_wer(hyps=self.hyps, refs=self.refs)
+    self.hyps = tf_compat.v1.placeholder(tf.string, [None])
+    self.refs = tf_compat.v1.placeholder(tf.string, [None])
+    self.wer, self.ref_num_words = tf_util.string_words_calc_wer(hyps=self.hyps, refs=self.refs)
     self.total_wer_var = tf.Variable(initial_value=0, trainable=False, dtype=tf.int64)
     self.total_ref_num_words_var = tf.Variable(initial_value=0, trainable=False, dtype=tf.int64)
     self.update_total_wer = self.total_wer_var.assign_add(tf.reduce_sum(self.wer))
@@ -62,7 +62,7 @@ def calc_wer_on_dataset(dataset, refs, options, hyps):
     options.endseq = float("inf")
   wer = 1.0
   remaining_hyp_seq_tags = set(hyps.keys())
-  interactive = Util.is_tty() and not log.verbose[5]
+  interactive = util.is_tty() and not log.verbose[5]
   collected = {"hyps": [], "refs": []}
   max_num_collected = 1
   if dataset:
@@ -123,7 +123,7 @@ def calc_wer_on_dataset(dataset, refs, options, hyps):
       del collected["refs"][:]
 
     if interactive:
-      Util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
+      util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
     elif log.verbose[5]:
       print(progress_prefix, "seq tag %r, ref/hyp len %i/%i chars" % (seq_tag, len(ref), len(hyp)))
     seq_idx += 1
@@ -162,7 +162,7 @@ def init(config_filename, log_verbosity):
   print("Returnn calculate-word-error-rate starting up.", file=log.v1)
   rnn.returnn_greeting()
   rnn.init_backend_engine()
-  assert Util.BackendEngine.is_tensorflow_selected(), "this is only for TensorFlow"
+  assert util.BackendEngine.is_tensorflow_selected(), "this is only for TensorFlow"
   rnn.init_faulthandler()
   rnn.init_config_json_network()
   rnn.print_task_properties()
@@ -220,10 +220,10 @@ def main(argv):
 
   global wer_compute
   wer_compute = WerComputeGraph()
-  with TFCompat.v1.Session(config=TFCompat.v1.ConfigProto(device_count={"GPU": 0})) as _session:
+  with tf_compat.v1.Session(config=tf_compat.v1.ConfigProto(device_count={"GPU": 0})) as _session:
     global session
     session = _session
-    session.run(TFCompat.v1.global_variables_initializer())
+    session.run(tf_compat.v1.global_variables_initializer())
     try:
       wer = calc_wer_on_dataset(dataset=dataset, refs=refs, options=args, hyps=hyps)
       print("Final WER: %.02f%%" % (wer * 100), file=log.v1)

@@ -11,12 +11,12 @@ my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
 sys.path.insert(0, returnn_dir)
 
-import rnn
+import returnn.__main__ as rnn
 from returnn.log import log
 import argparse
 from returnn.util.basic import Stats, hms
-from Dataset import Dataset, init_dataset
-import Util
+from returnn.datasets import Dataset, init_dataset
+import returnn.util.basic as util
 
 
 def get_raw_strings(dataset, options):
@@ -32,7 +32,7 @@ def get_raw_strings(dataset, options):
   seq_idx = options.startseq
   if options.endseq < 0:
     options.endseq = float("inf")
-  interactive = Util.is_tty() and not log.verbose[5]
+  interactive = util.is_tty() and not log.verbose[5]
   print("Iterating over %r." % dataset, file=log.v2)
   while dataset.is_less_than_num_seqs(seq_idx) and seq_idx <= options.endseq:
     dataset.load_seqs(seq_idx, seq_idx + 1)
@@ -66,7 +66,7 @@ def get_raw_strings(dataset, options):
     seq_len_stats.collect([len(ref)])
     refs.append((seq_tag, ref))
     if interactive:
-      Util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
+      util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
     elif log.verbose[5]:
       print(progress_prefix, "seq tag %r, ref len %i chars" % (seq_tag, len(ref)))
     seq_idx += 1

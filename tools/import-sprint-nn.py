@@ -7,13 +7,13 @@ import sys
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
-sys.path.append(returnn_dir)
+sys.path.insert(0, returnn_dir)
 
 import numpy as np
 import argparse
 import itertools
 
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.install()
 
 
@@ -113,11 +113,11 @@ def saveCrnnNetwork(epoch, layers):
   """
   print("Loading Crnn")
 
-  from Network import LayerNetwork
-  from NetworkHiddenLayer import ForwardLayer
-  from NetworkOutputLayer import OutputLayer
-  from Pretrain import pretrain_from_config
-  from EngineBase import EngineBase
+  from returnn.theano.network import LayerNetwork
+  from returnn.theano.layers.hidden import ForwardLayer
+  from returnn.theano.layers.output import OutputLayer
+  from returnn.pretrain import pretrain_from_config
+  from returnn.engine.base import EngineBase
 
   pretrain = pretrain_from_config(config)
   is_pretrain_epoch = pretrain and epoch <= pretrain.get_train_num_epochs()
