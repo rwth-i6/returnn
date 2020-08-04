@@ -42,9 +42,9 @@ class InvOp(theano.Op):
   def c_support_code(self):
     src = ""
     path = os.path.dirname(os.path.abspath(__file__))
-    with open(path + '/C_Support_Code.cpp', 'r') as f:
+    with open(path + '/c_support_code.cpp', 'r') as f:
       src += f.read()
-    with open(path + '/Inv.cpp', 'r') as f:
+    with open(path + '/inv.cpp', 'r') as f:
       src += f.read()
     return src
 
@@ -85,7 +85,7 @@ class InvOp(theano.Op):
                   SArrayF attentionSWr(attentionWr, 1, i);
                   if(%(viterbi)s)
                   {
-                    cls.viterbi(CSArrayF(xWr, 1, i), CSArrayI(yWr, 1, i), len_xWr(i), len_yWr(i), %(nstates)s, 
+                    cls.viterbi(CSArrayF(xWr, 1, i), CSArrayI(yWr, 1, i), len_xWr(i), len_yWr(i), %(nstates)s,
                                 %(min_skip)s, %(max_skip)s, %(focus)s, %(nil)s, %(coverage)s, attentionSWr);
                   } else
                   {
@@ -138,9 +138,9 @@ class InvOpBackTrace(theano.Op):
   def c_support_code(self):
     src = ""
     path = os.path.dirname(os.path.abspath(__file__))
-    with open(path + '/C_Support_Code.cpp', 'r') as f:
+    with open(path + '/c_support_code.cpp', 'r') as f:
       src += f.read()
-    with open(path + '/Inv.cpp', 'r') as f:
+    with open(path + '/inv.cpp', 'r') as f:
       src += f.read()
     return src
 
@@ -183,7 +183,7 @@ class InvOpBackTrace(theano.Op):
                   Inv cls;
                   SArrayF attentionSWr(attentionWr, 1, i);
                   SArrayI backtraceSWr(backtraceWr, 1, i);
-                  cls.viterbi_backtrace(CSArrayF(xWr, 1, i), CSArrayI(yWr, 1, i), len_xWr(i), len_yWr(i), %(nstates)s, 
+                  cls.viterbi_backtrace(CSArrayF(xWr, 1, i), CSArrayI(yWr, 1, i), len_xWr(i), len_yWr(i), %(nstates)s,
                                 %(min_skip)s, %(max_skip)s, %(focus)s, %(nil)s, %(coverage)s, attentionSWr, backtraceSWr);
               }
             }
@@ -225,9 +225,9 @@ class InvOpFull(theano.Op):
   def c_support_code(self):
     src = ""
     path = os.path.dirname(os.path.abspath(__file__))
-    with open(path + '/C_Support_Code.cpp', 'r') as f:
+    with open(path + '/c_support_code.cpp', 'r') as f:
       src += f.read()
-    with open(path + '/Inv.cpp', 'r') as f:
+    with open(path + '/inv.cpp', 'r') as f:
       src += f.read()
     return src
 
@@ -296,9 +296,9 @@ class AlignOp(theano.Op):
   def c_support_code(self):
     src = ""
     path = os.path.dirname(os.path.abspath(__file__))
-    with open(path + '/C_Support_Code.cpp', 'r') as f:
+    with open(path + '/c_support_code.cpp', 'r') as f:
       src += f.read()
-    with open(path + '/Inv.cpp', 'r') as f:
+    with open(path + '/inv.cpp', 'r') as f:
       src += f.read()
     return src
 
@@ -382,9 +382,9 @@ class StdOpFull(theano.Op):
   def c_support_code(self):
     src = ""
     path = os.path.dirname(os.path.abspath(__file__))
-    with open(path + '/C_Support_Code.cpp', 'r') as f:
+    with open(path + '/c_support_code.cpp', 'r') as f:
       src += f.read()
-    with open(path + '/Inv.cpp', 'r') as f:
+    with open(path + '/inv.cpp', 'r') as f:
       src += f.read()
     return src
 

@@ -1,7 +1,7 @@
 
 import os
 
-from NativeOp import NativeOpBaseMixin, Chunking, UnChunking, SubtensorBatchedIndex, SparseToDense, \
+from returnn.native_op import NativeOpBaseMixin, Chunking, UnChunking, SubtensorBatchedIndex, SparseToDense, \
   MaxAndArgmaxSparse, CrossEntropySoftmaxAndGradientZSparse
 from returnn.theano.util import softmax
 from returnn.util.basic import escape_c_str, long
@@ -175,7 +175,7 @@ class TheanoNativeOp(TheanoNativeOpBase, NativeOpBaseMixin):
     :return: Theano C++ code
     :rtype: str
     """
-    base_src = open(os.path.dirname(__file__) + "/NativeOp.cpp").read()
+    base_src = open(os.path.dirname(__file__) + "/../native_op.cpp").read()
     return "\n\n".join([
       T.blas.blas_header_text(),
       "#define CUDA 0",

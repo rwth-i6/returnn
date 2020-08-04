@@ -1,12 +1,13 @@
-from NetworkHiddenLayer import Layer
+
+from .hidden import Layer
 from returnn.log import log
-from cuda_implementation.OneDToTwoDOp import OneDToTwoDOp
-from cuda_implementation.CropToBatchImageSizeOp import CropToBatchImageSizeInstance, CropToBatchImageSizeZeroInstance
-from cuda_implementation.MultiDirectionalTwoDLSTMOp import MultiDirectionalTwoDLSTMOpInstance
-from cuda_implementation.BiDirectionalTwoDLSTMOp import BidirectionalTwoDLSTMOpInstance
-from cuda_implementation.CuDNNConvHWBCOp import CuDNNConvHWBCOpValidInstance
-from cuda_implementation.PoolHWBCOp import PoolHWBCOp
-from cuda_implementation.FractionalMaxPoolingOp import fmp
+from returnn.theano.ops.cuda_implementation.OneDToTwoDOp import OneDToTwoDOp
+from returnn.theano.ops.cuda_implementation.CropToBatchImageSizeOp import CropToBatchImageSizeInstance, CropToBatchImageSizeZeroInstance
+from returnn.theano.ops.cuda_implementation.MultiDirectionalTwoDLSTMOp import MultiDirectionalTwoDLSTMOpInstance
+from returnn.theano.ops.cuda_implementation.BiDirectionalTwoDLSTMOp import BidirectionalTwoDLSTMOpInstance
+from returnn.theano.ops.cuda_implementation.CuDNNConvHWBCOp import CuDNNConvHWBCOpValidInstance
+from returnn.theano.ops.cuda_implementation.PoolHWBCOp import PoolHWBCOp
+from returnn.theano.ops.cuda_implementation.FractionalMaxPoolingOp import fmp
 import theano
 import theano.tensor as T
 from theano.tensor.nnet import conv
@@ -16,7 +17,7 @@ except ImportError:  # old Theano or so...
   pool = None
 import numpy
 from math import sqrt
-from ActivationFunctions import strtoact
+from returnn.theano.activation_functions import strtoact
 
 import theano.printing
 from theano.ifelse import ifelse

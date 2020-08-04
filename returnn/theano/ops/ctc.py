@@ -21,27 +21,27 @@ class CTCOp(theano.Op):
         seq_lengths = theano.tensor.as_tensor_variable(seq_lengths)
         assert seq_lengths.ndim == 1  # vector of seqs lengths
         assert seq_lengths.dtype == "int32"
-        
+
         return theano.Apply(self, [x, y, seq_lengths], [T.fvector(), T.ftensor3(), T.fmatrix()])
         # first output: CTC error per sequence
         # second output: Derivative w.r.t. Softmax net input
-        
+
     def c_support_code(self):
         src = ""
         path = os.path.dirname(os.path.abspath(__file__))
-        with open(path + '/C_Support_Code.cpp', 'r') as f:
+        with open(path + '/c_support_code.cpp', 'r') as f:
             src += f.read()
-        with open(path + '/CTC.cpp', 'r') as f:
+        with open(path + '/ctc.cpp', 'r') as f:
             src += f.read()
         return src
 
     def c_compile_args(self):
-        return ['-fopenmp']	
+        return ['-fopenmp']
 
     def c_code(self, node, name, inp, out, sub):
         x, y, seq_lengths = inp
         errs, err_sigs, priors = out
-        fail = sub['fail']        
+        fail = sub['fail']
         return """
             Py_XDECREF(%(errs)s);
             Py_XDECREF(%(err_sigs)s);
@@ -63,13 +63,13 @@ class CTCOp(theano.Op):
                 ArrayF xWr(%(x)s);
                 ArrayI yWr(%(y)s);
                 CArrayI seqLensWr(%(seq_lengths)s);
-                
+
                 /*errsWr.debugPrint("errsWr");
                 errSigsWr.debugPrint("errSigsWr");
                 xWr.debugPrint("xWr");
                 yWr.debugPrint("yWr");
                 seqLensWr.debugPrint("seqLensWr");*/
-                
+
                 int numSeqs = seqLensWr.dim(0);
                 #pragma omp parallel for
                 for(int i = 0; i < numSeqs; ++i)
@@ -79,9 +79,9 @@ class CTCOp(theano.Op):
                     SArrayF priorsSWr(priorsWr, 0, i);
                     ctc.forwardBackward(CSArrayF(xWr, 1, i), CSArrayI(yWr, 0, i), seqLensWr(i), errsWr(i), errSigsSWr, priorsSWr);
                 }
-            }            
+            }
         """ % locals()
-    
+
     #IMPORTANT: change this, if you change the c-code
     def c_code_cache_version(self):
         return (2.10,)

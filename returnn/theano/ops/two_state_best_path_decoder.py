@@ -61,8 +61,8 @@ class TwoStateBestPathDecodeOp(theano.Op):
   def c_support_code(self):
     src = ""
     path = os.path.dirname(os.path.abspath(__file__))
-    with open(path + '/C_Support_Code.cpp', 'r') as f:
+    with open(path + '/c_support_code.cpp', 'r') as f:
       src += f.read()
-    with open(path + '/TwoStateBestPathDecoder.cpp', 'r') as f:
+    with open(path + '/two_state_best_path_decoder.cpp', 'r') as f:
       src += f.read()
     return src
