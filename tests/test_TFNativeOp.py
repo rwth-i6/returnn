@@ -9,7 +9,7 @@ import typing
 print("__file__:", __file__)
 base_path = os.path.realpath(os.path.dirname(os.path.abspath(__file__)) + "/..")
 print("base path:", base_path)
-sys.path.insert(0, base_path)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Do this here such that we always see this log in Travis.
 orig_stdout = sys.stdout
@@ -1566,7 +1566,7 @@ def test_FastBaumWelch():
   n_batch = 3
   seq_len = 5
   n_classes = 10
-  from Fsa import FastBwFsaShared
+  from returnn.util.fsa import FastBwFsaShared
   fsa = FastBwFsaShared()
   fsa.add_inf_loop(state_idx=0, num_emission_labels=n_classes)
   fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
@@ -1670,7 +1670,7 @@ def get_ctc_fsa_fast_bw_via_python(targets, seq_lens, blank_idx):
   :return: edges, weights, start_end_states
   :rtype: (tf.Tensor, tf.Tensor, tf.Tensor)
   """
-  from Fsa import get_ctc_fsa_fast_bw
+  from returnn.util.fsa import get_ctc_fsa_fast_bw
 
   def py_fast_bw_fsa_ctc_wrapper(targets_, seq_lens_):
     """
@@ -1795,7 +1795,7 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False, la
   print(obs_scores)
 
   if with_native_fsa:
-    import tf_native_op
+    import returnn.tf.native_op as tf_native_op
     native_edges_tf, native_weights_tf, native_start_end_states_tf = tf_native_op.get_ctc_fsa_fast_bw(
       targets=targets_tf, seq_lens=targets_seq_lens_tf, blank_idx=blank_idx)
     native_edges, native_weights, native_start_end_states = session.run(
@@ -2173,7 +2173,7 @@ def test_fast_viterbi_rnd():
   n_batch = 4
   seq_len = 23
   n_classes = 5
-  from Fsa import FastBwFsaShared
+  from returnn.util.fsa import FastBwFsaShared
   fsa = FastBwFsaShared()
   for i in range(n_classes):
     fsa.add_edge(i, i + 1, emission_idx=i)  # fwd

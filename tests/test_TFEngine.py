@@ -11,8 +11,7 @@ import tensorflow as tf
 import sys
 import os
 
-sys.path += ["."]  # Python 3 hack
-sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import returnn.tf.compat as tf_compat
 from returnn.tf.engine import *

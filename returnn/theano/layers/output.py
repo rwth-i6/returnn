@@ -766,7 +766,7 @@ class SequenceOutputLayer(OutputLayer):
           assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
           edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
         elif self.fast_bw_opts.get("fsa_source") == "ctc_from_uniq_y":
-          from Fsa import ctc_fsa_for_label_seq
+          from returnn.util.fsa import ctc_fsa_for_label_seq
           num_lables = self.network.n_out[self.attrs["target"]][0]
           assert self.attrs["n_out"] == num_lables + 1  # one added for blank
           from returnn.util.basic import uniq
@@ -790,7 +790,7 @@ class SequenceOutputLayer(OutputLayer):
           edges, weights, start_end_states = fsa_op(self.y, self.target_index)
           state_buffer = T.zeros()  # TODO...
         elif self.fast_bw_opts.get("fsa_source") == "ctc_from_chars":
-          from Fsa import ctc_fsa_for_label_seq
+          from returnn.util.fsa import ctc_fsa_for_label_seq
           num_lables = self.network.n_out[self.attrs["target"]][0]
           assert self.attrs["n_out"] == num_lables + 1  # one added for blank
           from returnn.util.basic import uniq

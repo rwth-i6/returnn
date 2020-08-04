@@ -1,6 +1,8 @@
 
 import sys
-sys.path += ["."]  # Python 3 hack
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import returnn.theano.native_op as theano_native_op
 import returnn.native_op as native_op

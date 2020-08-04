@@ -7,8 +7,9 @@ from __future__ import print_function
 import logging
 logging.getLogger('tensorflow').disabled = True
 import tensorflow as tf
+import os
 import sys
-sys.path += ["."]  # Python 3 hack
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from returnn.tf.updater import *
 from returnn.tf.layers.base import LayerBase, Loss
 import returnn.tf.compat as tf_compat

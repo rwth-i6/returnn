@@ -13,7 +13,7 @@ from nose.tools import assert_equal
 from nose.tools import assert_not_equal
 from nose.tools import assert_raises
 from nose.tools import raises
-import returnn.util as util
+import returnn.util.basic as util
 import h5py
 import numpy as np
 import os

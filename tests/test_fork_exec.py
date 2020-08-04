@@ -19,8 +19,8 @@ import sys
 from nose.tools import assert_equal, assert_is_instance
 from pprint import pprint
 
-sys.path += ["."]  # Python 3 hack
-sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from returnn.util import better_exchook
 better_exchook.install()
 better_exchook.replace_traceback_format_tb()

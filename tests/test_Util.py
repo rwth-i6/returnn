@@ -4,7 +4,7 @@ import sys
 import os
 
 my_dir = os.path.dirname(os.path.realpath(__file__))
-sys.path += [my_dir + "/.."]  # Python 3 hack
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from nose.tools import assert_equal, assert_not_equal, assert_raises, assert_true, assert_is
 from numpy.testing.utils import assert_almost_equal

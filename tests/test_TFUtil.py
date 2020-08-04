@@ -11,7 +11,7 @@ logging.getLogger('tensorflow').disabled = True
 
 import tensorflow as tf
 import sys
-sys.path += ["."]  # Python 3 hack
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from returnn.tf.util.basic import *
 import returnn.tf.compat as tf_compat
 from nose.tools import assert_equal, assert_not_equal, assert_is_instance, assert_is, assert_in, assert_true

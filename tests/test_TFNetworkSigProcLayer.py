@@ -14,7 +14,7 @@ import unittest
 import contextlib
 
 # Allow Returnn imports.
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/..")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from returnn.tf.network import *
 from returnn.tf.layers.signal_processing import *

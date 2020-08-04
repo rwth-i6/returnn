@@ -18,7 +18,7 @@ import tensorflow as tf
 print("TF version:", tf.__version__)
 
 import sys
-sys.path += ["."]  # Python 3 hack
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from nose.tools import assert_equal, assert_is_instance
 import contextlib

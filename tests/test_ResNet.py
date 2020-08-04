@@ -3,8 +3,9 @@ logging.getLogger('tensorflow').disabled = True
 import tensorflow as tf
 import sys
 import os
-sys.path += ["."]  # Python 3 hack
-sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from nose.tools import assert_equal, assert_is_instance
 import contextlib
 import unittest

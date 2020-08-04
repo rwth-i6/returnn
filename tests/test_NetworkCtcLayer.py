@@ -1,7 +1,10 @@
 
 
 import os
+import sys
+
 os.environ["THEANO_FLAGS"] = "mode=FAST_COMPILE"
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from returnn.theano.layers.ctc import *
 from nose.tools import assert_equal

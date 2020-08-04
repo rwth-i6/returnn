@@ -1,6 +1,11 @@
 import numpy
 import theano
 import theano.tensor as T
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 # from FastLSTM import LSTMOp2Instance
 from returnn.theano.ops.lstm import LSTMOpInstance
 import unittest

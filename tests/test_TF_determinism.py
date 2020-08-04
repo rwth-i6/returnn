@@ -23,8 +23,9 @@ Example:
 """
 
 import sys
+import os
 
-sys.path += ["."]  # Python 3 hack
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from returnn.tf.engine import *
 from returnn.config import Config

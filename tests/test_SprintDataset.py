@@ -1,6 +1,8 @@
 
 import sys
-sys.path += ["."]  # Python 3 hack
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 from returnn.theano.engine_util import assign_dev_data, assign_dev_data_single_seq

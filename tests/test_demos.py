@@ -1,7 +1,9 @@
 
 from __future__ import print_function
 import sys
-sys.path += ["."]  # Python 3 hack
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from subprocess import Popen, PIPE, STDOUT, CalledProcessError
 import re

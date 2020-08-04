@@ -8,7 +8,7 @@ logging.getLogger('tensorflow').disabled = True
 import tensorflow as tf
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/..")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nose.tools import assert_equal, assert_not_equal, assert_is_instance
 from numpy.testing.utils import assert_almost_equal, assert_allclose
 import unittest

@@ -30,13 +30,13 @@ def setup():
   import returnn
 
   print("Setup better_exchook.")
-  import returnn.better_exchook
-  returnn.better_exchook.install()
+  from returnn.util import better_exchook
+  better_exchook.install()
 
 
 def test_TaskSystem_Pickler():
-  from returnn.TaskSystem import Pickler
-  from returnn.Util import BytesIO
+  from returnn.util.task_system import Pickler
+  from returnn.util.task_system import BytesIO
   stream = BytesIO()
   pickler = Pickler(stream)
   obj = {"foo": "bar"}  # some dummy dict

@@ -21,7 +21,7 @@ base_dir = os.path.dirname(my_dir)
 sys.path.insert(0, base_dir)
 os.chdir(base_dir)
 
-import better_exchook  # noqa
+from returnn.util import better_exchook  # noqa
 better_exchook.install()
 
 

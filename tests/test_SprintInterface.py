@@ -2,12 +2,12 @@
 from __future__ import print_function
 
 import sys
-sys.path += ["."]  # Python 3 hack
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 import returnn.sprint.interface as SprintAPI
-import os
-import sys
 from tempfile import mkdtemp
 from returnn.theano.engine import Engine
 from returnn.config import Config

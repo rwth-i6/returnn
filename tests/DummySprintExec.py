@@ -13,11 +13,10 @@ from importlib import import_module
 # Add parent dir to Python path so that we can use GeneratingDataset and other CRNN code.
 my_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.normpath(my_dir + "/..")
-if parent_dir not in sys.path:
-  sys.path += [parent_dir]
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import GeneratingDataset
-from Dataset import Dataset
+import returnn.datasets.generating as generating_dataset
+from returnn.datasets import Dataset
 from returnn.util.basic import ObjAsDict
 
 
@@ -55,7 +54,7 @@ def main(argv):
   if args.get("pymod-name"):
     SprintAPI = import_module(args.get("pymod-name"))
   else:
-    import SprintExternInterface as SprintAPI
+    import returnn.sprint.extern_interface as SprintAPI
 
   inputDim = int(args.get("feature-dimension"))
   assert inputDim > 0
@@ -67,7 +66,7 @@ def main(argv):
                  config=sprintConfig, targetMode=targetMode)
 
   if args.get("crnn-dataset"):
-    dataset = eval(args.get("crnn-dataset"), {}, ObjAsDict(GeneratingDataset))
+    dataset = eval(args.get("crnn-dataset"), {}, ObjAsDict(generating_dataset))
     assert isinstance(dataset, Dataset)
     assert dataset.num_inputs == inputDim
     assert dataset.num_outputs == {"classes": (outputDim, 1), "data": (inputDim, 2)}

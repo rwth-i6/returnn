@@ -19,7 +19,7 @@ print("TF version:", tf.__version__)
 print("__file__:", __file__)
 base_path = os.path.realpath(os.path.dirname(os.path.abspath(__file__)) + "/..")
 print("base path:", base_path)
-sys.path.insert(0, base_path)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Returnn imports
 import returnn.util.fsa as fsa_util

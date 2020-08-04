@@ -1,6 +1,7 @@
 
+import os
 import sys
-sys.path += ["."]  # Python 3 hack
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
   from StringIO import StringIO
