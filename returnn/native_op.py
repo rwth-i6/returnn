@@ -6,6 +6,8 @@ Generic interface which automatically creates:
 * grad variants
 """
 
+from __future__ import absolute_import  # fix "import theano" in Python 2
+
 import copy
 import numpy
 from returnn.util.basic import make_hashable, unicode, long
