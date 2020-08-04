@@ -22,9 +22,9 @@ except ImportError:
 
 
 if theano:
-  import TheanoUtil
+  import returnn.theano.util
 
-  TheanoUtil.monkey_patches()
+  returnn.theano.util.monkey_patches()
 
   from returnn.theano.network import LayerNetwork
   from returnn.theano.layers.hidden import ForwardLayer

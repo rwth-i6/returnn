@@ -13,6 +13,7 @@ import theano.scan_module.scan_op
 from nose.tools import assert_equal, assert_is, assert_is_instance
 import returnn.theano.ops.multi_batch_beam as multi_batch_beam
 from returnn.theano.ops.multi_batch_beam import *
+import returnn.theano.ops.multi_batch_beam as multi_batch_beam_mod
 import returnn.theano.util as theano_util
 import theano.printing
 from pprint import pprint
@@ -23,7 +24,7 @@ better_exchook.replace_traceback_format_tb()
 theano_util.monkey_patches()
 
 
-naive_multi_batch_beam = multi_batch_beam._naive_multi_batch_beam
+naive_multi_batch_beam = multi_batch_beam_mod._naive_multi_batch_beam
 
 def numpy_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left=0, pad_right=0, idx_dim=0, batch_dim=1):
   array = T.as_tensor(array)
@@ -35,10 +36,10 @@ def numpy_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode,
   return beam.eval()
 
 def theano_cpu_multi_batch_beam(*args, **kwargs):
-  res = multi_batch_beam._theano_cpu_multi_batch_beam(*args, **kwargs)
+  res = multi_batch_beam_mod._theano_cpu_multi_batch_beam(*args, **kwargs)
   return res.eval()
 
-naive_multi_batch_beam_grad = multi_batch_beam._naive_multi_batch_beam_grad
+naive_multi_batch_beam_grad = multi_batch_beam_mod._naive_multi_batch_beam_grad
 
 def _eval_or_None(x):
   if isinstance(x.type, T.DisconnectedType):
@@ -65,7 +66,7 @@ def theano_cpu_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, 
   pad_left = T.as_tensor(pad_left)
   pad_right = T.as_tensor(pad_right)
   output_grad = T.as_tensor(output_grad)
-  res = multi_batch_beam._theano_cpu_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left, pad_right, idx_dim, batch_dim)
+  res = multi_batch_beam_mod._theano_cpu_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left, pad_right, idx_dim, batch_dim)
   D_array, D_pad_left, D_pad_right = T.grad(None, wrt=[array, pad_left, pad_right], known_grads={res: output_grad}, disconnected_inputs="ignore", return_disconnected="Disconnected")
   return list(map(_eval_or_None, [D_array, D_pad_left, D_pad_right]))
 

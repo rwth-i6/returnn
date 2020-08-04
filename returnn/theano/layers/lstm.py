@@ -1359,8 +1359,7 @@ class ActLstmLayer(HiddenLayer):
       tpi_initial = None  # inner time penalty
       inner_scan = theano.scan
       if unroll_inner_scan:
-        import TheanoUtil
-        inner_scan = TheanoUtil.unroll_scan
+        from returnn.theano.util import unroll_scan as inner_scan
       (s, h, hs, p, tpi, _), _ = inner_scan(
         inner_step,
         n_steps=n_max_calc_steps,
