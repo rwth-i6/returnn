@@ -766,7 +766,8 @@ class ExternSprintDataset(SprintDatasetBase):
     """
     :rtype: str
     """
-    return os.path.dirname(os.path.abspath(__file__))
+    from returnn import __root_dir__
+    return __root_dir__
 
   def _build_sprint_args(self):
     """
@@ -794,11 +795,11 @@ class ExternSprintDataset(SprintDatasetBase):
     args += [
       "--*.python-segment-order=true",
       "--*.python-segment-order-pymod-path=%s" % self._my_python_mod_path,
-      "--*.python-segment-order-pymod-name=SprintExternInterface",
+      "--*.python-segment-order-pymod-name=returnn.sprint.extern_interface",
       "--*.use-data-source=false",
       "--*.trainer=python-trainer",
       "--*.pymod-path=%s" % self._my_python_mod_path,
-      "--*.pymod-name=SprintExternInterface",
+      "--*.pymod-name=returnn.sprint.extern_interface",
       "--*.pymod-config=%s" % config_str]
     if self.predefined_seq_list_order:
       import tempfile

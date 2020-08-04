@@ -158,7 +158,8 @@ class SprintSubprocessInstance:
 
   @property
   def _my_python_mod_path(self):
-    return os.path.dirname(os.path.abspath(__file__))
+    from returnn import __root_dir__
+    return __root_dir__
 
   def _build_sprint_args(self):
     config_str = "c2p_fd:%i,p2c_fd:%i" % (
@@ -168,7 +169,7 @@ class SprintSubprocessInstance:
       config_str += ",EnableAutoNumpySharedMemPickling:True"
     if self.sprintControlConfig:
       config_str += "," + ",".join(["%s:%s" % (k, v) for (k, v) in sorted(self.sprintControlConfig.items())])
-    my_mod_name = "SprintControl"
+    my_mod_name = "returnn.sprint.control"
     args = [
       self.sprintExecPath,
       # Enable Sprint PythonControl
