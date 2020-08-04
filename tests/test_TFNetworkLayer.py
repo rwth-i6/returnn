@@ -45,7 +45,7 @@ print("Numpy version:", numpy.__version__)
 @contextlib.contextmanager
 def make_scope():
   """
-  :rtype: TFCompat.v1.Session
+  :rtype: tf.compat.v1.Session
   """
   with tf.Graph().as_default() as graph:
     with tf_compat.v1.Session(graph=graph) as session:
@@ -984,7 +984,7 @@ def test_SplitDimsLayer_resolve_dims():
 def _check_MergeDimsLayer(session, in_data_opts, in_static_shape, opts, out_data_shape, out_static_shape,
                           in_sizes=None, out_sizes=None):
   """
-  :param TFCompat.v1.Session session:
+  :param tf.compat.v1.Session session:
   :param dict[str] in_data_opts:
   :param tuple[int] in_static_shape:
   :param dict[str] opts: for MergeDimsLayer

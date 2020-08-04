@@ -360,7 +360,7 @@ def reuse_name_scope(name, absolute=None, **kwargs):
   Context manager to reuse an already created scope.
   We try to both set the variable scope and the name scope.
 
-  :param str|TFCompat.v1.VariableScope name: relative or absolute name scope
+  :param str|tf.compat.v1.VariableScope name: relative or absolute name scope
     (absolute if absolute=True or if tf.compat.v1.VariableScope).
     Must not end with "/".
   :param bool absolute: if True it will be absolute
@@ -410,7 +410,7 @@ def reuse_name_scope(name, absolute=None, **kwargs):
     # and the trailing "/" will work-around the broken tf.compat.v1.variable_scope() usage of tf.name_scope().
     # Afterwards we fix that name again.
     # Note that the reuse-argument might be miss-leading in this context:
-    # It means that TFCompat.v1.get_variable() will search for existing variables and errors otherwise.
+    # It means that tf.compat.v1.get_variable() will search for existing variables and errors otherwise.
     var_scope = tf_compat.v1.VariableScope(name=abs_name, reuse=kwargs.get("reuse", None))
     with tf_compat.v1.variable_scope(var_scope, **kwargs) as scope:
       assert isinstance(scope, tf_compat.v1.VariableScope)
@@ -429,7 +429,7 @@ def reuse_name_scope(name, absolute=None, **kwargs):
 @contextlib.contextmanager
 def opt_reuse_name_scope(name):
   """
-  :param str|TFCompat.v1.VariableScope name:
+  :param str|tf.compat.v1.VariableScope name:
   :return: yields the variable_scope
   """
   if name:
@@ -900,7 +900,7 @@ class _DeviceAttributes:
 
   def set_physical_device_desc(self, session):
     """
-    :param TFCompat.v1.Session session:
+    :param tf.compat.v1.Session session:
     """
     if "XLA_" in self.name:
       return  # XLA not supported currently by get_device_attr...
@@ -927,9 +927,9 @@ def get_tf_list_local_devices(tf_session_opts=None):
   so you should call :func:`setup_tf_thread_pools` first.
   Note that this will list all available devices.
   Any TF session might only use a subset of these.
-  You can get the list available in a given TF session by :func:`TFCompat.v1.Session.list_devices`.
+  You can get the list available in a given TF session by :func:`tf.compat.v1.Session.list_devices`.
 
-  :param dict[str]|None tf_session_opts: if given, will init a temp TFCompat.v1.Session with these opts
+  :param dict[str]|None tf_session_opts: if given, will init a temp tf.compat.v1.Session with these opts
   :rtype: list[tensorflow.core.framework.device_attributes_pb2.DeviceAttributes|_DeviceAttributes]
   """
   check_initial_tf_thread_pool_init(tf_session_opts=tf_session_opts)
@@ -949,7 +949,7 @@ def get_tf_list_local_devices(tf_session_opts=None):
     # CUDA will internally cache the devices, thus the first call to list_local_devices will init
     # all visible devices at that point, and TF/CUDA will get confused later
     # when another set of devices is visible.
-    # However, getting the list via TFCompat.v1.Session.list_devices() will not provide us with a full DeviceAttributes
+    # However, getting the list via tf.compat.v1.Session.list_devices() will not provide us with a full DeviceAttributes
     # with all needed information, as dev.physical_device_desc is missing,
     # and we need that for e.g. get_available_gpu_min_compute_capability.
     # See also: https://github.com/tensorflow/tensorflow/issues/9374
@@ -2157,7 +2157,7 @@ class VariableAssigner(object):
   def assign(self, value, session):
     """
     :param numpy.ndarray|int|float|list[str] value:
-    :param TFCompat.v1.Session session:
+    :param tf.compat.v1.Session session:
     """
     session.run(self.assign_op, feed_dict={self.assign_op.inputs[1]: value})
 
@@ -3005,7 +3005,7 @@ def _tensorarray_repr(x):
 
 def _variablescope_repr(x):
   """
-  :param TFCompat.v1.VariableScope x:
+  :param tf.compat.v1.VariableScope x:
   :rtype: str
   """
   return "<tf.compat.v1.VariableScope %r>" % x.name
@@ -3330,7 +3330,7 @@ def stop_event_writer_thread(event_writer):
   that the event writer thread is never stopped.
   This will try to stop it. Only do it if you don't use the event writer anymore.
 
-  :param TFCompat.v1.summary.FileWriter|tensorflow.python.summary.writer.event_file_writer.EventFileWriter|tensorflow.python.summary.writer.event_file_writer._EventLoggerThread event_writer:  # nopep8
+  :param tf.compat.v1.summary.FileWriter|tensorflow.python.summary.writer.event_file_writer.EventFileWriter|tensorflow.python.summary.writer.event_file_writer._EventLoggerThread event_writer:  # nopep8
   """
   try:
     from tensorflow.python.summary.writer.event_file_writer import CloseableQueue
@@ -3639,7 +3639,7 @@ def encode_raw(x, axis=-1, seq_lens=None):
   :param tf.Tensor x: of integer types [0,255], will get casted to uint8
   :param int axis: the axis to reduce-join the string. decode_raw has added it at the end
   :param tf.Tensor|None seq_lens: must have same shape as x after reduce-joining.
-    Note that using seq_lens will make our output not compatible with TFCompat.v1.decode_raw() anymore
+    Note that using seq_lens will make our output not compatible with tf.compat.v1.decode_raw() anymore
     because tf.compat.v1.decode_raw() requires all strings to be of the same length.
   :return: string tensor
   :rtype: tf.Tensor
@@ -3913,7 +3913,7 @@ def copy_unknown_shape(x):
 def view_as(x, dtype):
   """
   Does the numpy.view equivalent.
-  Note that the current implementation is inefficient (uses TFCompat.v1.py_func) and CPU-only.
+  Note that the current implementation is inefficient (uses tf.compat.v1.py_func) and CPU-only.
   Also see :func:`tf.bitcast`.
 
   :param tf.Tensor x:

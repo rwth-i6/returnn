@@ -67,7 +67,7 @@ def test_a_crash_abort():
 @contextlib.contextmanager
 def make_scope():
   """
-  :rtype: TFCompat.v1.Session
+  :rtype: tf.compat.v1.Session
   """
   with tf.Graph().as_default() as graph:
     with tf_compat.v1.Session(graph=graph) as session:
@@ -910,7 +910,7 @@ def test_RecLayer_NativeLstm_Nan():
 
 def find_op_by_type(session, type_name):
   """
-  :param TFCompat.v1.Session session:
+  :param tf.compat.v1.Session session:
   :param str type_name:
   :rtype: tf.Operation|None
   """
@@ -922,7 +922,7 @@ def find_op_by_type(session, type_name):
 
 def _lstm_grad_op(session, verbose=True):
   """
-  :param TFCompat.v1.Session session:
+  :param tf.compat.v1.Session session:
   :return: grad function
   """
   lstm_grad_op = find_op_by_type(session=session, type_name="LstmGenericBase")
@@ -2558,7 +2558,7 @@ def test_rec_layer_move_out_of_loop_ref_att_generic_att():
   def train(net, session):
     """
     :param TFNetwork net:
-    :param TFCompat.v1.Session session:
+    :param tf.compat.v1.Session session:
     """
     from returnn.datasets.generating import StaticDataset
     from returnn.tf.data_pipeline import FeedDictDataProvider

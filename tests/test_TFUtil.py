@@ -1228,7 +1228,7 @@ def test_reuse_var_scope():
         assert_equal(get_current_name_scope(), "v1/v2/v3")
         assert_equal(get_current_var_scope_name(), "v1/v2")
         assert_equal(scope.name, "v1/v2")
-        # Note: TFCompat.v1.variable_scope(scope) is broken here.
+        # Note: tf.compat.v1.variable_scope(scope) is broken here.
         with reuse_name_scope(scope):
           assert_equal(get_current_var_scope_name(), "v1/v2")
           assert_equal(get_current_name_scope(), "v1/v2")
@@ -1245,7 +1245,7 @@ def test_name_var_scope_mixing():
         assert_equal(get_current_name_scope(), "mv1/v2/v3")
         assert_equal(get_current_var_scope_name(), "mv1/v2")
         assert_equal(scope.name, "mv1/v2")
-        # Note: TFCompat.v1.variable_scope("v4") is broken here.
+        # Note: tf.compat.v1.variable_scope("v4") is broken here.
         with reuse_name_scope("v4"):
           assert_equal(get_current_var_scope_name(), "mv1/v2/v3/v4")
           assert_equal(get_current_name_scope(), "mv1/v2/v3/v4")
@@ -1285,7 +1285,7 @@ def test_loop_var_creation():
   https://github.com/tensorflow/tensorflow/issues/8604
   """
 
-  # TFCompat.v1.reset_default_graph()  # Strange, this does not work.
+  # tf.compat.v1.reset_default_graph()  # Strange, this does not work.
   i = tf.constant(0)
 
   def body(i):
@@ -1645,7 +1645,7 @@ def test_encode_raw_simple():
 
 
 def test_encode_raw_seq_lens():
-  strs = ["hello", "world", "a    "]  # all same lengths for TFCompat.v1.decode_raw
+  strs = ["hello", "world", "a    "]  # all same lengths for tf.compat.v1.decode_raw
   strs_stripped = [s.strip() for s in strs]
   raw = tf_compat.v1.decode_raw(tf.constant(strs), tf.uint8)
   seq_lens = tf.constant([len(s) for s in strs_stripped])
@@ -2382,10 +2382,10 @@ def test_kenlm_bpe():
 
 
 def test_openfst():
-  import TFOpenFst
-  if not TFOpenFst.openfst_checked_out():
+  import returnn.tf.util.open_fst as tf_open_fst
+  if not tf_open_fst.openfst_checked_out():
     raise unittest.SkipTest("OpenFST not checked out")
-  TFOpenFst.get_tf_mod(verbose=True)
+  tf_open_fst.get_tf_mod(verbose=True)
 
   """
   $ fstprint --osymbols=lexicon_opt.osyms --isymbols=lexicon_opt.isyms lexicon_opt.fst
@@ -2405,14 +2405,14 @@ def test_openfst():
   6	0	?	<epsilon>
   7	2	i	<epsilon>
   """
-  fst_fn = TFOpenFst.returnn_dir + "/tests/lexicon_opt.fst"
+  fst_fn = tf_open_fst.returnn_dir + "/tests/lexicon_opt.fst"
   assert os.path.exists(fst_fn)
   output_symbols = {"man": 26, "Mars": 111, "Martian": 1530}
 
-  fst_tf = TFOpenFst.get_fst(filename=fst_fn)
+  fst_tf = tf_open_fst.get_fst(filename=fst_fn)
   states_tf = tf_compat.v1.placeholder(tf.int32, [None])
   inputs_tf = tf_compat.v1.placeholder(tf.int32, [None])
-  output_tf = TFOpenFst.fst_transition(fst_handle=fst_tf, states=states_tf, inputs=inputs_tf)
+  output_tf = tf_open_fst.fst_transition(fst_handle=fst_tf, states=states_tf, inputs=inputs_tf)
 
   def transitions(states, inputs):
     return session.run(

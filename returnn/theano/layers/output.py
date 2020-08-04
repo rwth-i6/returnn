@@ -12,7 +12,7 @@ from CTC import CTCOp
 from TwoStateHMMOp import TwoStateHMMOp
 from OpNumpyAlign import NumpyAlignOp
 from NativeOp import FastBaumWelchOp, SegmentFastBaumWelchOp, MultiEndFastBaumWelchOp
-from NetworkBaseLayer import Layer
+from returnn.theano.layers.base import Layer
 from NetworkHiddenLayer import CAlignmentLayer
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
 from returnn.theano.util import time_batch_make_flat, grad_discard_out_of_bound, DumpOp

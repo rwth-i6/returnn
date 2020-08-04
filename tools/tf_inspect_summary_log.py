@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-This will dump some content from an event log, i.e. summaries/events written via `TFCompat.v1.summary.FileWriter`,
+This will dump some content from an event log, i.e. summaries/events written via `tf.compat.v1.summary.FileWriter`,
 which will be done by our TFEngine.
 
 Also see:

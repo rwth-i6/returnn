@@ -786,7 +786,7 @@ class GenericLstmLayer(_NoOpLayer):
     n_time = x.shape[0]
     n_batch = x.shape[1]
 
-    from NetworkBaseLayer import SourceLayer
+    from returnn.theano.layers.base import SourceLayer
     from NetworkLayer import get_layer_class
     def make_sublayer(x_in, x_re, index, name):
       layer_opts = sublayer.copy()

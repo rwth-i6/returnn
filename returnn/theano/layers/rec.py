@@ -3,7 +3,7 @@ import numpy
 from theano import tensor as T
 import theano
 from NetworkHiddenLayer import HiddenLayer, CAlignmentLayer
-from NetworkBaseLayer import Container, Layer
+from returnn.theano.layers.base import Container, Layer
 from ActivationFunctions import strtoact
 from math import sqrt
 from OpLSTM import LSTMOpInstance

@@ -27,10 +27,10 @@ better_exchook.replace_traceback_format_tb()
 @contextlib.contextmanager
 def make_scope():
   """
-  :rtype: TFCompat.v1.Session
+  :rtype: tf.compat.v1.Session
   """
   with tf.Graph().as_default() as graph:
-    with TFCompat.v1.Session(graph=graph) as session:
+    with tf_compat.v1.Session(graph=graph) as session:
       yield session
 
 

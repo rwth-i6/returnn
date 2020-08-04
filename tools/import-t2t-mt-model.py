@@ -101,7 +101,7 @@ def t2t_score_file(filename):
   ckpt = ckpts.model_checkpoint_path
   saver.restore(sess, ckpt)
 
-  # writer = TFCompat.v1.summary.FileWriter('logs', sess.graph)
+  # writer = tf.compat.v1.summary.FileWriter('logs', sess.graph)
 
   # writer.close()
 

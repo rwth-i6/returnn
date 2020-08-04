@@ -1276,7 +1276,7 @@ class TFNetwork(object):
 
   def initialize_params(self, session):
     """
-    :param TFCompat.v1.Session session:
+    :param tf.compat.v1.Session session:
 
     Note: This will create a new node to the graph for each call!
     And it will overwrite also the already initialized variables.
@@ -1309,7 +1309,7 @@ class TFNetwork(object):
 
   def get_param_values_dict(self, session):
     """
-    :param TFCompat.v1.Session session:
+    :param tf.compat.v1.Session session:
     :return: dict: layer_name -> param_name -> variable numpy array
     :rtype: dict[str,dict[str,numpy.ndarray]]
     Note that this excludes auxiliary params.
@@ -1343,7 +1343,7 @@ class TFNetwork(object):
 
   def get_params_serialized(self, session):
     """
-    :param TFCompat.v1.Session session:
+    :param tf.compat.v1.Session session:
     :rtype: TFNetworkParamsSerialized
     """
     return TFNetworkParamsSerialized(
@@ -1353,7 +1353,7 @@ class TFNetwork(object):
   def set_params_by_serialized(self, serialized, session, **kwargs):
     """
     :param TFNetworkParamsSerialized serialized:
-    :param TFCompat.v1.Session session:
+    :param tf.compat.v1.Session session:
     :param kwargs: passed to :func:`set_param_values_by_dict`
     """
     self.set_param_values_by_dict(serialized.values_dict, session=session, **kwargs)
@@ -1362,13 +1362,13 @@ class TFNetwork(object):
   def set_global_train_step(self, step, session):
     """
     :param int step:
-    :param TFCompat.v1.Session session:
+    :param tf.compat.v1.Session session:
     """
     self.get_var_assigner(self.global_train_step).assign(step, session=session)
 
   def get_global_train_step(self, session):
     """
-    :param TFCompat.v1.Session session:
+    :param tf.compat.v1.Session session:
     :rtype: int
     """
     return self.global_train_step.eval(session=session)
@@ -1406,7 +1406,7 @@ class TFNetwork(object):
     Note that the model parameters live inside the current TF session.
 
     :param str filename:
-    :param TFCompat.v1.Session session:
+    :param tf.compat.v1.Session session:
     """
     import os
     filename = os.path.abspath(filename)  # TF needs absolute path
@@ -1437,7 +1437,7 @@ class TFNetwork(object):
     Note that the model parameters live inside the current TF session.
 
     :param str filename:
-    :param TFCompat.v1.Session session:
+    :param tf.compat.v1.Session session:
     """
     if any([layer.custom_param_importer for layer in self.layers.values()]):
       # Need to use CustomCheckpointLoader because only that handles custom_param_importer correctly.
@@ -2477,7 +2477,7 @@ def help_on_tf_exception(
   Will try to provide as much helpful context information as possible.
   (This is not in :mod:`TFUtil` because it depends on `ExternData`, which is only defined here.)
 
-  :param TFCompat.v1.Session session:
+  :param tf.compat.v1.Session session:
   :param tf.errors.OpError|BaseException exception:
   :param tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor]|object|None fetches:
   :param dict[tf.Tensor,numpy.ndarray]|None feed_dict:
@@ -2751,7 +2751,7 @@ class CustomCheckpointLoader:
     def assign_var(self, var, session):
       """
       :param tf.Variable var:
-      :param TFCompat.v1.Session session:
+      :param tf.compat.v1.Session session:
       """
       # This function gets called for every param of the layer.
       # However, the underlying custom_param_importer API
@@ -2817,7 +2817,7 @@ class CustomCheckpointLoader:
     def assign_var(self, var, session):
       """
       :param tf.Variable var:
-      :param TFCompat.v1.Session session:
+      :param tf.compat.v1.Session session:
       """
       if self.value is not None:
         VariableAssigner(var=var).assign(value=self.value, session=session)
@@ -3114,7 +3114,7 @@ class CustomCheckpointLoader:
 
   def load_now(self, session):
     """
-    :param TFCompat.v1.Session session:
+    :param tf.compat.v1.Session session:
     :return: nothing, will assign the variables in the session
     """
     for var, value in self.get_variable_value_map().items():
@@ -3132,11 +3132,11 @@ class CustomCheckpointLoader:
       """
       :param tf.Variable var:
       :return: function
-      :rtype: (TFCompat.v1.Session)->None
+      :rtype: (tf.compat.v1.Session)->None
       """
       def var_post_init(session):
         """
-        :param TFCompat.v1.Session session:
+        :param tf.compat.v1.Session session:
         """
         assert var not in read_vars, "Cannot initialize this twice. On purpose, to free memory."
         read_vars.add(var)
@@ -3159,7 +3159,7 @@ def set_custom_post_init(var, func):
   in TFNetwork.initialize_params().
 
   :param tf.Variable var:
-  :param (TFCompat.v1.Session)->None func:
+  :param (tf.compat.v1.Session)->None func:
   """
   # This custom attribute is a big ugly but simple.
   # It's read in TFNetwork.initialize_params().

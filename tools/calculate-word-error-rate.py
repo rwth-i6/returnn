@@ -36,7 +36,7 @@ class WerComputeGraph:
 
   def step(self, session, hyps, refs):
     """
-    :param TFCompat.v1.Session session:
+    :param tf.compat.v1.Session session:
     :param list[str] hyps:
     :param list[str] refs:
     :return: updated normalized WER

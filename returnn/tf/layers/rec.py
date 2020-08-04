@@ -7252,7 +7252,7 @@ class BlocksparseLSTMCell(_WrapBaseCell):
 
   def load_params_from_native_lstm(self, values_dict, session):
     """
-    :param TFCompat.v1.Session session:
+    :param tf.compat.v1.Session session:
     :param dict[str,numpy.ndarray] values_dict:
     """
     assert set(values_dict.keys()) == {"W", "W_re", "b"}
@@ -8001,7 +8001,7 @@ class ZoneoutLSTMCell(BaseRNNCell):
 
     :param tf.Tensor inputs: input tensor to the cell
     :param tf.nn.rnn_cell.LSTMStateTuple state: previous state of the LSTM
-    :param TFCompat.v1.VariableScope scope: VariableScope for the created subgraph
+    :param tf.compat.v1.VariableScope scope: VariableScope for the created subgraph
     :return: tuple of output and LSTMStateTuple
     :rtype: (tf.Tensor, tf.nn.rnn_cell.LSTMStateTuple)
     """

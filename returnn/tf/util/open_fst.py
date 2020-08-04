@@ -274,7 +274,7 @@ def get_tf_mod(verbose=False):
     src_code += f_code
     src_code += "\n// ------------ %s : END } --------------\n\n" % os.path.basename(fn)
   src_code += "\n\n// ------------ our code now: ------------\n\n"
-  src_code += "#line 1 \"TFOpenFst.py:_src_code\"\n"
+  src_code += "#line 1 \"returnn/tf/util/open_fst.py:_src_code\"\n"
   src_code += _src_code
 
   compiler = OpCodeCompiler(

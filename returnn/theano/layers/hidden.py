@@ -17,7 +17,7 @@ try:
   from theano.tensor.signal import pool
 except ImportError:  # old Theano or so...
   pool = None
-from NetworkBaseLayer import Layer
+from returnn.theano.layers.base import Layer
 from ActivationFunctions import strtoact, strtoact_single_joined, elu
 import TheanoUtil
 from returnn.theano.util import class_idx_seq_to_1_of_k
@@ -861,7 +861,7 @@ class ChunkingSublayer(_NoOpLayer):
     t_last_start = T.maximum(source.shape[0] - chunk_size, 1)
     t_range = T.arange(t_last_start, step=chunk_step)
 
-    from NetworkBaseLayer import SourceLayer
+    from returnn.theano.layers.base import SourceLayer
     from NetworkLayer import get_layer_class
     def make_sublayer(source, index, name):
       layer_opts = sublayer.copy()

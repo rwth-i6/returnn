@@ -181,7 +181,7 @@ class Updater(object):
   def set_learning_rate(self, value, session):
     """
     :param float value:
-    :param TFCompat.v1.Session session:
+    :param tf.compat.v1.Session session:
     """
     from returnn.tf.util.basic import VariableAssigner
     VariableAssigner(self.learning_rate_var).assign(value, session=session)
@@ -370,7 +370,7 @@ class Updater(object):
 
   def init_optimizer_vars(self, session):
     """
-    :param TFCompat.v1.Session session:
+    :param tf.compat.v1.Session session:
     """
     self.get_optim_op()  # make sure it is initialized
     session.run(self.optimizer_init_vars_op)

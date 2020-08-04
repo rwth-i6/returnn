@@ -48,7 +48,7 @@ print("TF version:", tf.__version__)
 @contextlib.contextmanager
 def make_scope():
   """
-  :rtype: TFCompat.v1.Session
+  :rtype: tf.compat.v1.Session
   """
   with tf.Graph().as_default() as graph:
     with tf_compat.v1.Session(graph=graph) as session:

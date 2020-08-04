@@ -801,7 +801,7 @@ class LayerBase(object):
     """
     _param = param
     if isinstance(param, tf.Tensor):
-      # This can happen with a custom_getter in TFCompat.v1.get_variable(), e.g. via self.reuse_params.
+      # This can happen with a custom_getter in tf.compat.v1.get_variable(), e.g. via self.reuse_params.
       # Check if we can still find the original variable.
       from returnn.extern import graph_editor
       import re
@@ -862,7 +862,7 @@ class LayerBase(object):
     :param dict[str,numpy.ndarray] values_dict:
     :param bool ignore_wrong_shape:
     :param str|None copy_param_mode:
-    :param TFCompat.v1.Session session:
+    :param tf.compat.v1.Session session:
     """
     if callable(self.custom_param_importer):
       self.custom_param_importer(layer=self, values_dict=values_dict, session=session)
@@ -913,7 +913,7 @@ class LayerBase(object):
 
   def get_param_values_dict(self, session):
     """
-    :param TFCompat.v1.Session session:
+    :param tf.compat.v1.Session session:
     :return: dict name -> values
     :rtype: dict[str,numpy.ndarray]
     """
@@ -1579,7 +1579,7 @@ class ReuseParams:
     """
     :param LayerBase base_layer:
     :param kwargs: passed to tf.compat.v1.variable_scope
-    :rtype: TFCompat.v1.VariableScope
+    :rtype: tf.compat.v1.VariableScope
     """
     def _variable_custom_getter(**kwargs_):
       return self.variable_custom_getter(base_layer=base_layer, **kwargs_)

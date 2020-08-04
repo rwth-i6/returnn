@@ -1258,10 +1258,10 @@ def get_dataset_class(name):
   # Only those modules which make sense to be loaded by the user,
   # because this function is only used for such cases.
   mod_names = [
-    "HDFDataset", "SprintDataset", "GeneratingDataset", "NumpyDumpDataset",
-    "MetaDataset", "LmDataset", "StereoDataset", "RawWavDataset"]
+    "hdf", "sprint", "generating", "numpy_dump",
+    "meta", "lm", "stereo", "raw_wav"]
   for mod_name in mod_names:
-    mod = import_module(mod_name)
+    mod = import_module("returnn.datasets.%s" % mod_name)
     if name in vars(mod):
       clazz = getattr(mod, name)
       assert issubclass(clazz, Dataset)
