@@ -1,6 +1,6 @@
 import tensorflow as tf
-import TFCompat
-from TFNetworkLayer import LayerBase, _ConcatInputLayer, Loss, get_concat_sources_data_template
+import returnn.tf.compat as tf_compat
+from returnn.tf.layers.basic import LayerBase, _ConcatInputLayer, Loss, get_concat_sources_data_template
 from returnn.tf.layers.rec import RecLayer
 from returnn.tf.util.basic import Data, sparse_labels_with_seq_lens
 from returnn.util.basic import softmax
@@ -38,8 +38,8 @@ class NeuralTransducerLayer(_ConcatInputLayer):
         initializer = get_initializer('glorot_uniform',
                                       seed=self.network.random.randint(2 ** 31),
                                       eval_local_ns={"layer": self})
-        embeddings = self.add_param(TFCompat.v1.get_variable(shape=[n_out, embedding_size], dtype=tf.float32,
-                                                    initializer=initializer, name='nt_embedding'),
+        embeddings = self.add_param(tf_compat.v1.get_variable(shape=[n_out, embedding_size], dtype=tf.float32,
+                                                              initializer=initializer, name='nt_embedding'),
                                     trainable=True, saveable=True)
 
         # Ensure encoder is time major
@@ -99,7 +99,7 @@ class NeuralTransducerLayer(_ConcatInputLayer):
 
         # Add all trainable params
         with self.var_creation_scope() as scope:
-            self._add_all_trainable_params(tf.get_collection(TFCompat.v1.GraphKeys.TRAINABLE_VARIABLES, scope=scope.name))
+            self._add_all_trainable_params(tf.get_collection(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES, scope=scope.name))
 
     def build_full_transducer(self, transducer_hidden_units, embeddings, num_outputs, input_block_size,
                               transducer_max_width, encoder_outputs, trans_hidden_init):
@@ -239,7 +239,7 @@ class NeuralTransducerLayer(_ConcatInputLayer):
         :param int input_block_size: Input block size as specified in the __init__ function.
         :return: tf.tensor A vector the same shape as 'vector'.
         """
-        vector = tf.cast(TFCompat.v1.ceil(tf.cast(vector, tf.float32) / input_block_size), tf.float32) * tf.cast(transducer_max_width, tf.float32)
+        vector = tf.cast(tf_compat.v1.ceil(tf.cast(vector, tf.float32) / input_block_size), tf.float32) * tf.cast(transducer_max_width, tf.float32)
         vector = tf.cast(vector, tf.int32)
 
         return vector
@@ -376,9 +376,9 @@ class NeuralTransducerLoss(Loss):
         targets_lengths = self.target.size_placeholder[0]
 
         # Get alignment info into our targets
-        new_targets, mask = TFCompat.v1.py_func(func=self.get_alignment_from_logits_manager,
-                                       inp=[logits, targets, logits_lengths, targets_lengths],
-                                       Tout=(tf.int64, tf.bool), stateful=False)
+        new_targets, mask = tf_compat.v1.py_func(func=self.get_alignment_from_logits_manager,
+                                                 inp=[logits, targets, logits_lengths, targets_lengths],
+                                                 Tout=(tf.int64, tf.bool), stateful=False)
 
         # Get CE
         stepwise_cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=new_targets, logits=logits)
@@ -398,7 +398,7 @@ class NeuralTransducerLoss(Loss):
 
         # Check for outliers and set their gradient to 0
         loss_time = tf.reduce_sum(stepwise_cross_entropy, axis=1)
-        mean, variance = TFCompat.v1.nn.moments(stepwise_cross_entropy, axes=[1])
+        mean, variance = tf_compat.v1.nn.moments(stepwise_cross_entropy, axes=[1])
         loss_mask = tf.cast(tf.greater(variance, self.max_variance), tf.float32)
         stepwise_cross_entropy = (
           tf.stop_gradient(tf.multiply(loss_mask, loss_time)) +
@@ -613,9 +613,9 @@ class NeuralTransducerLoss(Loss):
             targets_lengths = self.target.size_placeholder[0]
 
             # Get alignment info into our targets
-            new_targets, mask = TFCompat.v1.py_func(func=self.get_alignment_from_logits_manager,
-                                           inp=[logits, targets, logits_lengths, targets_lengths],
-                                           Tout=(tf.int64, tf.bool), stateful=False)
+            new_targets, mask = tf_compat.v1.py_func(func=self.get_alignment_from_logits_manager,
+                                                     inp=[logits, targets, logits_lengths, targets_lengths],
+                                                     Tout=(tf.int64, tf.bool), stateful=False)
 
             output_label = tf.cast(tf.argmax(logits, axis=2), tf.int64)
             zeros = tf.zeros_like(output_label)

@@ -598,7 +598,7 @@ def demo():
 
 if __name__ == "__main__":
   import sys
-  sys.modules["Pretrain"] = sys.modules["__main__"]
+  sys.modules["returnn.pretrain"] = sys.modules["__main__"]
   try:
     demo()
   except BrokenPipeError:

@@ -236,7 +236,8 @@ class RecLayer(_ConcatInputLayer):
         # Very generic way to collect all created params.
         # Note that for the TF RNN cells, there is no other way to do this.
         # Also, see the usage of :func:`LayerBase.cls_layer_scope`, e.g. for initial vars.
-        params = tf_compat.v1.get_collection(tf_compat.v1.GraphKeys.GLOBAL_VARIABLES, scope=re.escape(scope_name_prefix))
+        params = tf_compat.v1.get_collection(
+          tf_compat.v1.GraphKeys.GLOBAL_VARIABLES, scope=re.escape(scope_name_prefix))
         self._add_params(params=params, scope_name_prefix=scope_name_prefix)
         # More specific way. Should not really add anything anymore but you never know.
         # Also, this will update self.saveable_param_replace.
@@ -311,7 +312,7 @@ class RecLayer(_ConcatInputLayer):
       for sub in d["unit"].values():  # iterate over the layers of the subnet
         assert isinstance(sub, dict)
         if "class" in sub:
-          from TFNetworkLayer import get_layer_class
+          from .basic import get_layer_class
           class_name = sub["class"]
           cl = get_layer_class(class_name)
           # Operate on a copy because we will transform the dict later.
@@ -429,9 +430,9 @@ class RecLayer(_ConcatInputLayer):
 
   @classmethod
   def _create_rnn_cells_dict(cls):
-    import TFNativeOp
+    import returnn.tf.native_op as tf_native_op
     from returnn.tf.util.basic import is_gpu_available
-    allowed_types = (rnn_cell.RNNCell, TFNativeOp.RecSeqCellOp)
+    allowed_types = (rnn_cell.RNNCell, tf_native_op.RecSeqCellOp)
     rnn_contrib = None
     try:
       # noinspection PyUnresolvedReferences
@@ -471,7 +472,7 @@ class RecLayer(_ConcatInputLayer):
     if rnn_contrib:
       for key, v in vars(rnn_contrib).items():
         maybe_add(key, v)
-    for key, v in vars(TFNativeOp).items():
+    for key, v in vars(tf_native_op).items():
       maybe_add(key, v)
     if cudnn_rnn:
       for key, v in vars(cudnn_rnn).items():
@@ -604,7 +605,7 @@ class RecLayer(_ConcatInputLayer):
       from tensorflow.contrib import rnn as rnn_contrib
     except ImportError:
       pass
-    import TFNativeOp
+    import returnn.tf.native_op as tf_native_op
     if isinstance(unit, dict):
       assert unit_opts is None
       return _SubnetworkRecCell(parent_rec_layer=self, net_dict=unit)
@@ -626,7 +627,7 @@ class RecLayer(_ConcatInputLayer):
             num_layers=1, num_units=n_hidden,
             input_mode='linear_input', direction='unidirectional', dropout=0.0, **unit_opts)
           return cell
-    if issubclass(rnn_cell_class, TFNativeOp.RecSeqCellOp):
+    if issubclass(rnn_cell_class, tf_native_op.RecSeqCellOp):
       # noinspection PyArgumentList
       cell = rnn_cell_class(
         n_hidden=n_hidden, n_input_dim=self.input_data.dim,
@@ -1010,7 +1011,7 @@ class _SubnetworkRecCell(object):
     It will init self.layer_data_templates and self.prev_layers_needed.
     """
     import sys
-    import better_exchook
+    from returnn.util import better_exchook
     from pprint import pformat
     from collections import OrderedDict
     from returnn.util.basic import StringIO
@@ -1379,7 +1380,7 @@ class _SubnetworkRecCell(object):
     :param set[str] needed_outputs: layers where we need outputs
     """
     from returnn.tf.network import TFNetwork
-    from TFNetworkLayer import InternalLayer
+    from .base import InternalLayer
     for key in data:
       self.net.extern_data.data[key].placeholder = data[key]
     for data_key, data in self.net.extern_data.data.items():
@@ -2237,7 +2238,7 @@ class _SubnetworkRecCell(object):
           assert self.net.layers["end"].output.shape == (), "end layer %r unexpected shape" % self.net.layers["end"]
           choices = self.net.layers["end"].get_search_choices()
           if choices:
-            from TFNetworkLayer import SelectSearchSourcesLayer
+            from .basic import SelectSearchSourcesLayer
             cur_end_layer = choices.translate_to_this_search_beam(prev_end_layer)
             assert isinstance(cur_end_layer, SelectSearchSourcesLayer), (
               "unexpected search choices: cur end %r, prev end %r" % (choices, prev_end_layer.get_search_choices()))
@@ -2485,8 +2486,8 @@ class _SubnetworkRecCell(object):
     :rtype: (tf.TensorArray,str|None,SearchChoices|None,tf.Tensor)
     """
     import os
-    from returnn.tf.util.basic import nd_indices, assert_min_tf_version, expand_dims_unbroadcast, get_valid_scope_name_from_str
-    from returnn.tf.util.basic import get_shape_dim
+    from returnn.tf.util.basic import nd_indices, assert_min_tf_version, expand_dims_unbroadcast
+    from returnn.tf.util.basic import get_shape_dim, get_valid_scope_name_from_str
     rec_layer = self.parent_rec_layer
     try:
       layer = self.net.get_layer(layer_name)
@@ -2880,7 +2881,7 @@ class _SubnetworkRecCell(object):
       return
 
     from returnn.tf.network import TFNetwork, ExternData
-    from TFNetworkLayer import InternalLayer
+    from .base import InternalLayer
     from returnn.tf.util.basic import concat_with_opt_broadcast
     self.input_layers_net = TFNetwork(
       name="%s/%s:rec-subnet-input" % (
@@ -2963,7 +2964,7 @@ class _SubnetworkRecCell(object):
     from returnn.tf.util.basic import tensor_array_stack, has_control_flow_context, concat_with_opt_broadcast, tile_transposed
     from returnn.tf.util.basic import DimensionTag
     from returnn.tf.network import TFNetwork, ExternData
-    from TFNetworkLayer import InternalLayer
+    from .base import InternalLayer
 
     if seq_len is not None:
       time_dim_tag = DimensionTag.get_tag_from_size_tensor(seq_len)
@@ -3619,7 +3620,8 @@ class RnnCellLayer(_ConcatInputLayer):
           initial_state=state0, time_major=True, scope=scope)
       self._hidden_state = state
       self.rec_vars_outputs["state"] = state
-      params = tf_compat.v1.get_collection(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES, scope=re.escape(scope_name_prefix))
+      params = tf_compat.v1.get_collection(
+        tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES, scope=re.escape(scope_name_prefix))
       assert params
       for p in params:
         self.add_param(p)
@@ -3646,8 +3648,8 @@ class RnnCellLayer(_ConcatInputLayer):
       cell = rnn_cell_class(n_out, **unit_opts)
       assert isinstance(cell, rnn_cell.RNNCell)
       return cell
-    import TFNativeOp
-    if issubclass(rnn_cell_class, TFNativeOp.RecSeqCellOp):
+    import returnn.tf.native_op as tf_native_op
+    if issubclass(rnn_cell_class, tf_native_op.RecSeqCellOp):
       # noinspection PyArgumentList
       return rnn_cell_class(n_hidden=n_out)
     raise TypeError("does not expect %r here for unit %r" % (rnn_cell_class, unit))
@@ -4823,7 +4825,7 @@ class ChoiceLayer(BaseChoiceLayer):
     :return: internal layer that outputs labels for the target corresponding to layer_name
     :rtype: InternalLayer
     """
-    from TFNetworkLayer import InternalLayer
+    from .base import InternalLayer
     assert layer_name.startswith("out_")
     index = int(layer_name[len("out_"):])
     sub_layer = InternalLayer(
@@ -4851,15 +4853,17 @@ class ChoiceLayer(BaseChoiceLayer):
 
     # The sub-layer with index n will output the n-th target. The out_data is taken directly
     # from the target as it is done in self.get_out_data_from_opts().
-    sub_layer_out_data = cls.get_out_data_from_opts(name=parent_layer_name + "/" + layer_name,
+    sub_layer_out_data = cls.get_out_data_from_opts(
+      name=parent_layer_name + "/" + layer_name,
       sources=sources, target=targets[index], network=network, beam_size=beam_size)
 
     if network.search_flag:
       # Create same beam as in parent layer (they have to compare equal)
-      sub_layer_out_data.beam = cls._create_search_beam(name=parent_layer_name, beam_size=beam_size,
+      sub_layer_out_data.beam = cls._create_search_beam(
+        name=parent_layer_name, beam_size=beam_size,
         sources=sources, network=network)
 
-    from TFNetworkLayer import InternalLayer
+    from .base import InternalLayer
     return sub_layer_out_data, network, InternalLayer
 
   def get_dep_layers(self):
@@ -5287,7 +5291,7 @@ class GenericAttentionLayer(AttentionBaseLayer):
     self.weights = weights
     assert not self.sources, "only base and weights are needed"
 
-    from TFNetworkLayer import DotLayer, InternalLayer
+    from .basic import DotLayer, InternalLayer
     if not weights.output.is_batch_major:
       weights = InternalLayer(
         network=weights.network, name="%s_batch_major" % weights.name,
@@ -5443,7 +5447,7 @@ class GenericAttentionLayer(AttentionBaseLayer):
     :param list[LayerBase] sources: ignored, should be empty (checked in __init__)
     :rtype: Data
     """
-    from TFNetworkLayer import DotLayer, InternalLayer
+    from .basic import DotLayer, InternalLayer
     if not weights.output.is_batch_major:
       weights = InternalLayer(
         network=weights.network, name="%s_batch_major" % weights.name,
@@ -5838,9 +5842,9 @@ class SelfAttentionLayer(_ConcatInputLayer):
       energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy), name="energy_masked")
     weights = tf.nn.softmax(energy)  # (batch,heads,time,time)
     if attention_dropout:
-      import TFUtil
+      import returnn.tf.util.basic as tf_util
       weights = self.network.cond_on_train(
-        fn_train=lambda: TFUtil.dropout(
+        fn_train=lambda: tf_util.dropout(
           weights,
           keep_prob=1 - attention_dropout,
           seed=self.network.random.randint(2 ** 31)),
@@ -6089,7 +6093,7 @@ class KenLmStateLayer(_ConcatInputLayer):
     """
     if callable(lm_file):
       lm_file = lm_file()
-    import TFKenLM
+    import returnn.tf.util.ken_lm as tf_ken_lm
     from returnn.tf.util.basic import expand_multiple_dims
     super(KenLmStateLayer, self).__init__(**kwargs)
     # Note: We later could extend it and have the state-behavior just as the :class:`CumsumLayer`.
@@ -6097,7 +6101,7 @@ class KenLmStateLayer(_ConcatInputLayer):
       "%s: currently expected to run inside rec layer" % self)
     # Create KenLM handle. Use var scope to explicitly have it outside the loop.
     with self.var_creation_scope():
-      self.lm_handle = TFKenLM.ken_lm_load(filename=lm_file)
+      self.lm_handle = tf_ken_lm.ken_lm_load(filename=lm_file)
     prev_step = self._rec_previous_layer.rec_vars_outputs["step"]
     next_step = prev_step + 1
     self.rec_vars_outputs["step"] = next_step
@@ -6134,7 +6138,7 @@ class KenLmStateLayer(_ConcatInputLayer):
     prev_scores = self._rec_previous_layer.rec_vars_outputs["scores"]
     if dense_output:
       assert self.tf_vocab is not None, "%s: provide vocab_file" % self
-      new_abs_scores, new_abs_scores_dense = TFKenLM.ken_lm_abs_score_bpe_strings_dense(
+      new_abs_scores, new_abs_scores_dense = tf_ken_lm.ken_lm_abs_score_bpe_strings_dense(
         handle=self.lm_handle,
         bpe_merge_symbol=bpe_merge_symbol or "",
         strings=next_strings,
@@ -6143,7 +6147,7 @@ class KenLmStateLayer(_ConcatInputLayer):
         new_abs_scores, [i + new_abs_scores.get_shape().ndims for i in range(self.tf_vocab.get_shape().ndims)])
       new_rel_scores = new_abs_scores_dense - new_abs_scores_bc
     else:
-      new_abs_scores = TFKenLM.ken_lm_abs_score_bpe_strings(
+      new_abs_scores = tf_ken_lm.ken_lm_abs_score_bpe_strings(
         handle=self.lm_handle,
         bpe_merge_symbol=bpe_merge_symbol or "",
         strings=next_strings)
@@ -6501,7 +6505,7 @@ class MaskedComputationLayer(LayerBase):
     :param dict[str,LayerBase]|None _parent_layer_cache:
     """
     from returnn.tf.network import get_layer_class
-    from TFNetworkLayer import WrappedInternalLayer
+    from .base import WrappedInternalLayer
     from returnn.tf.util.basic import where_bc, get_shape, nd_indices
     from tensorflow.python.util import nest
     super(MaskedComputationLayer, self).__init__(**kwargs)
@@ -6686,7 +6690,7 @@ class MaskedComputationLayer(LayerBase):
     :return: layer_class, layer_desc
     """
     from returnn.tf.network import get_layer_class
-    from TFNetworkLayer import WrappedInternalLayer
+    from .base import WrappedInternalLayer
     if not get_layer:
       get_layer = network.get_layer
     # We don't care about the right masked input here, but just about deriving the right output shape.
@@ -7078,12 +7082,12 @@ class RHNCell(BaseRNNCell):
         if self.batch_size is not None:
           batch_size = self.batch_size
         else:
-          from TFNetworkLayer import LayerBase
           batch_size = LayerBase.get_recent_layer().get_batch_dim()
         keep_prob = 1.0 - self.dropout
         # uniform [keep_prob, 1.0 + keep_prob)
         random_tensor = keep_prob
-        random_tensor += tf_compat.v1.random_uniform((batch_size, self._num_units), seed=self.dropout_seed, dtype=tf.float32)
+        random_tensor += tf_compat.v1.random_uniform(
+          (batch_size, self._num_units), seed=self.dropout_seed, dtype=tf.float32)
         # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
         binary_tensor = tf.floor(random_tensor)
         return binary_tensor * (1.0 / keep_prob)
@@ -7183,7 +7187,6 @@ class _WrapBaseCell(BaseRNNCell):
     if x.get_shape().ndims == 2 and batch_dim is None:
       # In that case, we are probably inside the recurrent loop,
       # so the best way to get the batch dim but not depend on `x`:
-      from TFNetworkLayer import LayerBase
       batch_dim = LayerBase.get_recent_layer().get_batch_dim()
     return self.cell.get_input_transformed(x, batch_dim=batch_dim)
 
@@ -7541,12 +7544,12 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
         """
         :rtype: tf.Tensor
         """
-        from TFNetworkLayer import LayerBase
         batch_size = LayerBase.get_recent_layer().get_batch_dim()
         keep_prob = 1.0 - dropout
         # uniform [keep_prob, 1.0 + keep_prob)
         random_tensor = keep_prob
-        random_tensor += tf_compat.v1.random_uniform((batch_size, self._num_units), seed=self.dropout_seed, dtype=tf.float32)
+        random_tensor += tf_compat.v1.random_uniform(
+          (batch_size, self._num_units), seed=self.dropout_seed, dtype=tf.float32)
         # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
         binary_tensor = tf.floor(random_tensor)
         return binary_tensor * (1.0 / keep_prob)
@@ -7799,10 +7802,10 @@ class TwoDLSTMLayer(LayerBase):
   def _get_cell(self, unit_opts=None):
     """
     :param None|dict[str] unit_opts:
-    :rtype: TFNativeOp.TwoDNativeLstmCell
+    :rtype: returnn.tf.native_op.TwoDNativeLstmCell
     """
-    import TFNativeOp
-    rnn_cell_class = TFNativeOp.TwoDNativeLstmCell
+    import returnn.tf.native_op as tf_native_op
+    rnn_cell_class = tf_native_op.TwoDNativeLstmCell
     n_hidden = self.output.dim
     if unit_opts is None:
       unit_opts = {}

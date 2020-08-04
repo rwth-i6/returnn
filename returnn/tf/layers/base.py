@@ -799,7 +799,6 @@ class LayerBase(object):
     :return: param
     :rtype tf.Variable
     """
-    import returnn.tf.util.basic as tf_util
     _param = param
     if isinstance(param, tf.Tensor):
       # This can happen with a custom_getter in TFCompat.v1.get_variable(), e.g. via self.reuse_params.
@@ -1854,7 +1853,6 @@ class SearchChoices(object):
     layer_desc = layer_desc.copy()
     layer_desc["_src_common_search_choices"] = common_choices
     return common_choices.translate_to_this_search_beam(layer_desc)
-
 
 
 class Loss(object):

@@ -3,28 +3,32 @@
 from __future__ import print_function
 
 import sys
-from TaskSystem import AsyncTask
+from .task_system import AsyncTask
+
 
 def start():
   # Create a real subprocess, not just a fork.
-  asyncTask = AsyncTask(func=process, name="My sub process", mustExec=True)
+  async_task = AsyncTask(func=process, name="My sub process", mustExec=True)
 
   # We have a connection (duplex pipe) to communicate.
-  asyncTask.conn.send(print_action)
-  assert asyncTask.conn.recv() == 42
-  asyncTask.conn.send(sys.exit)
+  async_task.conn.send(print_action)
+  assert async_task.conn.recv() == 42
+  async_task.conn.send(sys.exit)
 
-  asyncTask.join()
+  async_task.join()
+
 
 def print_action():
   print("Hello")
   return 42
 
-def process(asyncTask):
+
+def process(async_task):
   while True:
-    action = asyncTask.conn.recv()
+    action = async_task.conn.recv()
     res = action()
-    asyncTask.conn.send(res)
+    async_task.conn.send(res)
+
 
 if __name__ == "__main__":
   start()

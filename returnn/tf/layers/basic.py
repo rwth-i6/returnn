@@ -2314,7 +2314,7 @@ class SplitDimsLayer(_ConcatInputLayer):
       # We cannot really cover all cases here. But at least some common ones.
       if isinstance(axis, str) and axis.lower() == "f" and all([d > 0 for d in dims]):
         if data.feature_dim_axis is not None:
-          data = data.copy_template_excluding_axis(axis=data.feature_dim_axis)
+          data = data.copy_template_excluding_axis(exclude_axis=data.feature_dim_axis)
         return Data(
           name="%s_output_undefined" % name, undefined=True,
           shape=data.shape + tuple(dims),
@@ -2951,9 +2951,9 @@ class ConvLayer(_ConcatInputLayer):
                               auto_use_channel_first=False,
                               **kwargs):
     data = get_concat_sources_data_template(sources)
-    if data.undefined:
-      return data
     shape = [None] * len(filter_size) + [n_out]
+    if data.undefined:
+      return {"dim": n_out, "shape": shape}
     if isinstance(strides, int):
       strides = [strides] * len(filter_size)
     else:
@@ -4358,11 +4358,11 @@ class ResizeLayer(_ConcatInputLayer):
     x = tf.reshape(x, [shape[0], shape[axis], 1, remaining_dim])  # [batch,height,width,channels]
     new_size = shape[axis] * factor
     if kind == "linear":
-      x = tf.image.resize_bilinear(x, size=(new_size, 1))
+      x = tf_compat.v1.image.resize_bilinear(x, size=(new_size, 1))
     elif kind == "cubic":
-      x = tf.image.resize_bicubic(x, size=(new_size, 1))
+      x = tf_compat.v1.image.resize_bicubic(x, size=(new_size, 1))
     elif kind in ["nn", "nearest_neighbor"]:
-      x = tf.image.resize_nearest_neighbor(x, size=(new_size, 1))
+      x = tf_compat.v1.image.resize_nearest_neighbor(x, size=(new_size, 1))
     elif kind == "fill":
       if self.input_data.sparse:
         assert isinstance(fill_value, int)
@@ -4514,7 +4514,7 @@ class RemoveLayer(LayerBase):
     assert in_data.batch_ndim == 2
     in_seqs = in_data.placeholder  # (batch,time)
     in_mask = tf.logical_and(tf.not_equal(in_seqs, symbol), in_data.get_sequence_mask_broadcast())  # (batch,time)
-    out_seq_lens = tf.count_nonzero(in_mask, axis=1, dtype=tf.int32)  # (batch,)
+    out_seq_lens = tf_compat.v1.count_nonzero(in_mask, axis=1, dtype=tf.int32)  # (batch,)
     max_out_seq_len = tf.reduce_max(out_seq_lens)  # scalar
     from returnn.tf.util.basic import constant_with_shape
     zero_seq = constant_with_shape(0, shape=[max_out_seq_len], dtype=in_seqs.dtype)
@@ -4584,7 +4584,7 @@ class CombineLayer(LayerBase):
       with self.var_creation_scope():
         b = self.add_param(tf_compat.v1.get_variable(
           name="b", shape=(self.output.dim,),
-          initializer=tf.constant_initializer(value=0, dtype=tf.float32)))
+          initializer=tf.constant_initializer(value=0)))
       x += b
     if activation:
       from returnn.tf.util.basic import get_activation_function

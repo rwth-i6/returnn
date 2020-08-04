@@ -2,8 +2,8 @@
 from __future__ import print_function
 
 import tensorflow as tf
-import TFCompat
-from TFNetworkLayer import LayerBase, _ConcatInputLayer, get_concat_sources_data_template
+import returnn.tf.compat as tf_compat
+from returnn.tf.layers.basic import LayerBase, _ConcatInputLayer, get_concat_sources_data_template
 from returnn.tf.util.basic import Data
 
 
@@ -63,7 +63,7 @@ class BatchMedianPoolingLayer(_ConcatInputLayer):
     # - get median of each pool
     median = tf.nn.top_k(
       reshaped_input,
-      k=tf.cast(TFCompat.v1.ceil(tf.constant(pool_size, dtype=tf.float32) / 2.), dtype=tf.int32)).values[:, :, :, -1]
+      k=tf.cast(tf_compat.v1.ceil(tf.constant(pool_size, dtype=tf.float32) / 2.), dtype=tf.int32)).values[:, :, :, -1]
     median_batch_major = tf.transpose(median, [2, 0, 1])
     self.output.placeholder = median_batch_major
     self.output.size_placeholder = {
@@ -109,15 +109,15 @@ class ComplexLinearProjectionLayer(_ConcatInputLayer):
     with self.var_creation_scope():
       clp_weights_initializer = get_initializer(
         clp_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
-      clp_kernel = self.add_param(TFCompat.v1.get_variable(
+      clp_kernel = self.add_param(tf_compat.v1.get_variable(
         name="clp_kernel", shape=(2, kernel_width, kernel_height), dtype=tf.float32, initializer=clp_weights_initializer))
     return clp_kernel
 
   def _build_clp_multiplication(self, clp_kernel):
     from returnn.tf.util.basic import safe_log
     input_placeholder = self.input_data.get_placeholder_as_batch_major()
-    TFCompat.v1.assert_equal(tf.shape(clp_kernel)[1], tf.shape(input_placeholder)[2] // 2)
-    TFCompat.v1.assert_equal(tf.shape(clp_kernel)[2], self._nr_of_filters)
+    tf_compat.v1.assert_equal(tf.shape(clp_kernel)[1], tf.shape(input_placeholder)[2] // 2)
+    tf_compat.v1.assert_equal(tf.shape(clp_kernel)[2], self._nr_of_filters)
     input_real = tf.strided_slice(input_placeholder, [0, 0, 0], tf.shape(input_placeholder), [1, 1, 2])
     input_imag = tf.strided_slice(input_placeholder, [0, 0, 1], tf.shape(input_placeholder), [1, 1, 2])
     kernel_real = self._clp_kernel[0, :, :]
@@ -408,7 +408,7 @@ class MultiChannelMultiResolutionStftLayer(_ConcatInputLayer):
         raise Exception('argument n_out of layer MultiChannelStftLayer does not match the fft configuration')
     kwargs['n_out'] = n_out
     super(MultiChannelMultiResolutionStftLayer, self).__init__(**kwargs)
-    TFCompat.v1.assert_equal(nr_of_channels, self._get_nr_of_channels_from_input_placeholder())
+    tf_compat.v1.assert_equal(nr_of_channels, self._get_nr_of_channels_from_input_placeholder())
     self._nr_of_channels = nr_of_channels
     self._frame_shift = frame_shift
     self._frame_sizes = frame_sizes
@@ -436,7 +436,7 @@ class MultiChannelMultiResolutionStftLayer(_ConcatInputLayer):
         if self._window == "hanning":
             window = tf.contrib.signal.hann_window(window_length, dtype=dtype)
         if self._window == "blackman":
-            TFCompat.v1.assert_equal(frame_size, window_length)
+            tf_compat.v1.assert_equal(frame_size, window_length)
             import scipy.signal
             window = tf.constant(scipy.signal.blackman(frame_size), dtype=tf.float32)
         if self._window == "None" or self._window == "ones":
@@ -568,7 +568,7 @@ class ParametricWienerFilterLayer(LayerBase):
       parameter_vector = None
       if parameters is not None:
         parameter_vector = parameters.output.get_placeholder_as_batch_major()
-        TFCompat.v1.assert_equal(parameter_vector.shape[-1], 3)
+        tf_compat.v1.assert_equal(parameter_vector.shape[-1], 3)
       if (l_overwrite is None) or (p_overwrite is None) or (q_overwrite is None):
         assert parameter_vector is not None
         if average_parameters:
@@ -591,7 +591,7 @@ class ParametricWienerFilterLayer(LayerBase):
     filter_input_placeholder = filter_input.output.get_placeholder_as_batch_major()
     if filter_input_placeholder.dtype != tf.complex64:
       filter_input_placeholder = tf.cast(filter_input_placeholder, dtype=tf.complex64)
-    TFCompat.v1.assert_equal(noise_estimation.output.get_placeholder_as_batch_major().shape[-1], filter_input_placeholder.shape[-1])
+    tf_compat.v1.assert_equal(noise_estimation.output.get_placeholder_as_batch_major().shape[-1], filter_input_placeholder.shape[-1])
     ne = _NoiseEstimator.from_layer(noise_estimation)
     l, p, q = _getParametersFromConstructorInputs(parameters, l_overwrite, p_overwrite, q_overwrite, average_parameters)
     wiener = TfParametricWienerFilter(ne, [], l, p, q, inputTensorFreqDomain=filter_input_placeholder)

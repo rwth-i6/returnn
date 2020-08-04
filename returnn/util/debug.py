@@ -33,10 +33,10 @@ def auto_exclude_all_new_threads(func):
     :param kwargs:
     :return:
     """
-    # noinspection PyProtectedMember
+    # noinspection PyProtectedMember,PyUnresolvedReferences
     old_threads = set(sys._current_frames().keys())
     res = func(*args, **kwargs)
-    # noinspection PyProtectedMember
+    # noinspection PyProtectedMember,PyUnresolvedReferences
     new_threads = set(sys._current_frames().keys())
     new_threads -= old_threads
     global_exclude_thread_ids.update(new_threads)

@@ -25,11 +25,12 @@ from __future__ import print_function
 
 import sys
 import time
+import typing
 import numpy
-import tensorflow as tf
+import returnn.tf.compat as tf_compat
 from returnn.config import Config
 from returnn.log import log
-from Dataset import Dataset
+from returnn.datasets import Dataset
 from returnn.datasets.generating import StaticDataset
 from returnn.tf.engine import Engine, Runner, CancelTrainingException
 from returnn.util.basic import CollectionReadCheckCovered, hms_fraction, guess_requested_max_num_threads
@@ -75,7 +76,7 @@ class HyperParam:
     self.log_space = log
     self.default = default
     self.unique_idx = HyperParam._get_next_unique_idx()
-    self.usages = []  # type: list[_AttrChain]
+    self.usages = []  # type: typing.List[_AttrChain]
 
   _unique_idx = 0
 
@@ -305,7 +306,7 @@ class Optimization:
     train_data.init_seq_order(epoch=1)
     self.train_data = StaticDataset.copy_from_dataset(
       train_data, max_seqs=self.opts.get("num_train_steps", 100))
-    self.hyper_params = []  # type: list[HyperParam]
+    self.hyper_params = []  # type: typing.List[HyperParam]
     self._find_hyper_params()
     if not self.hyper_params:
       raise Exception("No hyper params found.")
@@ -404,9 +405,9 @@ class Optimization:
         attr_chain.write_attrib(base=config, new_value=value)
     tf_session_opts = config.typed_dict.setdefault("tf_session_opts", {})
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto
-    gpu_opts = tf_session_opts.setdefault("gpu_options", tf.GPUOptions())
+    gpu_opts = tf_session_opts.setdefault("gpu_options", tf_compat.v1.GPUOptions())
     if isinstance(gpu_opts, dict):
-      gpu_opts = tf.GPUOptions(**gpu_opts)
+      gpu_opts = tf_compat.v1.GPUOptions(**gpu_opts)
     gpu_opts.visible_device_list = ",".join(map(str, sorted(gpu_ids)))
     return config
 
@@ -419,7 +420,7 @@ class Optimization:
 
     class Outstanding:
       cond = Condition()
-      threads = []  # type: list[WorkerThread]
+      threads = []  # type: typing.List[WorkerThread]
       population = []
       exit = False
       exception = None
@@ -431,7 +432,7 @@ class Optimization:
         """
         super(WorkerThread, self).__init__(name="Hyper param tune train thread")
         self.gpu_ids = gpu_ids
-        self.trainer = None  # type: _IndividualTrainer
+        self.trainer = None  # type: typing.Optional[_IndividualTrainer]
         self.finished = False
         self.start()
 
@@ -572,7 +573,7 @@ class _IndividualTrainer:
     """
     self.optim = optim
     self.individual = individual
-    self.runner = None  # type: Runner
+    self.runner = None  # type: typing.Optional[Runner]
     self.gpu_ids = gpu_ids
     self.cancel_flag = False
 
@@ -675,8 +676,8 @@ class _AttrChain:
     :param object|dict base:
     """
     self.base = base
-    self.chain = []  # type: list[_AttribOrKey]
-    self.value = base  # type: HyperParam|object
+    self.chain = []  # type: typing.List[_AttribOrKey]
+    self.value = base  # type: typing.Union[HyperParam,object]
 
   def __str__(self):
     return "".join(map(str, self.chain))

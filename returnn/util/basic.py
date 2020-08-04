@@ -143,6 +143,7 @@ class BackendEngine:
     if "tensorflow" in sys.modules:
       return cls.TensorFlow
     try:
+      # noinspection PyPackageRequirements
       import theano
       return cls.Theano
     except ImportError:
@@ -1157,7 +1158,7 @@ def is_quitting():
   :return: whether we are currently quitting (via :func:`rnn.finalize`)
   :rtype: bool
   """
-  import rnn
+  import returnn.__main__ as rnn
   if rnn.quit_returnn:  # via rnn.finalize()
     return True
   if getattr(sys, "exited", False):  # set via Debug module when an unexpected SIGINT occurs, or here
@@ -1179,7 +1180,7 @@ def interrupt_main():
     # Not main thread. This will just exit the thread.
     sys.exit(1)
   sys.exited = True  # Don't do it twice.
-  # noinspection PyProtectedMember
+  # noinspection PyProtectedMember,PyUnresolvedReferences
   sys.exited_frame = sys._getframe()
   if is_main_thread:
     raise KeyboardInterrupt
@@ -1231,7 +1232,7 @@ def wrap_async_func(f):
   """
   # noinspection PyBroadException
   try:
-    import better_exchook
+    from . import better_exchook
     better_exchook.install()
     return f()
   except Exception:
@@ -2194,7 +2195,7 @@ def deepcopy(x, stop_types=None):
   """
   # See also class Pickler from TaskSystem.
   # Or: https://mail.python.org/pipermail/python-ideas/2013-July/021959.html
-  from TaskSystem import Pickler, Unpickler
+  from .task_system import Pickler, Unpickler
 
   persistent_memo = {}  # id -> obj
 
@@ -2358,7 +2359,7 @@ def overwrite_os_exec(prefix_args):
   if not _original_execve:
     _original_execve = os.execve
   if not _original_execvpe:
-    # noinspection PyProtectedMember
+    # noinspection PyProtectedMember,PyUnresolvedReferences
     _original_execvpe = os._execvpe
 
   # noinspection PyUnusedLocal
@@ -2962,7 +2963,7 @@ def try_get_caller_name(depth=1, fallback=None):
   """
   # noinspection PyBroadException
   try:
-    # noinspection PyProtectedMember
+    # noinspection PyProtectedMember,PyUnresolvedReferences
     frame = sys._getframe(depth + 1)  # one more to count ourselves
     return frame.f_code.co_name
   except Exception:
@@ -3103,7 +3104,7 @@ class NativeCodeCompiler(object):
   """
 
   CacheDirName = "returnn_native"
-  CollectedCompilers = None  # type: None|typing.List[NativeCodeCompiler]
+  CollectedCompilers = None  # type: typing.Optional[typing.List[NativeCodeCompiler]]
 
   def __init__(self, base_name, code_version, code,
                is_cpp=True, c_macro_defines=None, ld_flags=None,
@@ -3712,6 +3713,7 @@ def compute_bleu(reference_corpus,
   return np.float32(bleu)
 
 
+# noinspection PyPackageRequirements
 def monkeyfix_glib():
   """
   Fixes some stupid bugs such that SIGINT is not working.

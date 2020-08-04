@@ -18,6 +18,7 @@ def kenlm_checked_out():
   """
   return os.path.exists("%s/lm/test.arpa" % kenlm_dir)
 
+
 # https://www.tensorflow.org/guide/extend/op
 # Also see TFUitl.TFArrayContainer for TF resources.
 # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/tensor.h

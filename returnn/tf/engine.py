@@ -650,8 +650,8 @@ class Runner(object):
 
         if debug_shell_in_runner and debug_shell_in_runner_step == step:
           print("debug_shell_in_runner, step %i" % step, file=log.v1)
-          import Debug
-          Debug.debug_shell(user_ns=locals(), user_global_ns=globals(), exit_afterwards=False)
+          from returnn.util.debug import debug_shell
+          debug_shell(user_ns=locals(), user_global_ns=globals(), exit_afterwards=False)
 
         # Now do one calculation step. Optionally with metadata.
         try:

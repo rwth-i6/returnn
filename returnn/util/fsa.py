@@ -15,7 +15,7 @@ import typing
 from copy import deepcopy
 from os.path import isfile
 from returnn.log import log
-from LmDataset import Lexicon, StateTying
+from returnn.datasets.lm import Lexicon, StateTying
 
 
 class Edge:
@@ -633,8 +633,8 @@ class Hmm:
           # add to graph
           self.fsa.edges.append(phon_edge)
       # add silence and eps after word
-      self.fsa.edges.append(Edge(target_node, self.fsa.num_states + 1, Edge.SIL))
-      self.fsa.edges.append(Edge(target_node, self.fsa.num_states + 1, Edge.EPS))
+      self.fsa.edges.append(Edge(self.fsa.num_states, self.fsa.num_states + 1, Edge.SIL))
+      self.fsa.edges.append(Edge(self.fsa.num_states, self.fsa.num_states + 1, Edge.EPS))
       self.fsa.num_states += 1
     # final node
     self.fsa.num_states += 1

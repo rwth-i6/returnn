@@ -300,7 +300,7 @@ def _demo():
     """
     return [int(s_) for s_ in s.split(",")]
 
-  import better_exchook
+  from returnn.util import better_exchook
   better_exchook.install()
   from argparse import ArgumentParser
   arg_parser = ArgumentParser()

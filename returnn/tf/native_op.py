@@ -13,14 +13,18 @@ try:
 except ImportError:
   from tensorflow.python.ops import rnn_cell
 from threading import RLock
+import typing
 
-import NativeOp
-import TFCompat
-import TFUtil
+import returnn.native_op as native_op
+import returnn.tf.compat as tf_compat
+import returnn.tf.util.basic as tf_util
 from returnn.util.basic import camel_case_to_snake_case
 
+_base_dir = os.path.dirname(os.path.abspath(os.path.dirname(__file__)))
+_base_dir = os.path.realpath(_base_dir)  # Make canonical path-name.
 
-class OpDescription(NativeOp.NativeOpBaseMixin):
+
+class OpDescription(native_op.NativeOpBaseMixin):
   """
   Meta-info about an op, used by :class:`OpMaker`.
   """
@@ -64,9 +68,9 @@ class OpMaker(object):
   """
   https://www.tensorflow.org/guide/extend/op
   """
-  with_cuda = None  # type: None|bool
+  with_cuda = None  # type: typing.Optional[bool]
   # https://github.com/tensorflow/tensorflow/issues/6602
-  tf_blas_gemm_workaround = TFUtil.tf_version_tuple() < (1, 6, 0)
+  tf_blas_gemm_workaround = tf_util.tf_version_tuple() < (1, 6, 0)
   global_lock = RLock()
   mod_cache = {}  # cache_key -> mod
   op_cache = {}  # cache_key -> op
@@ -90,7 +94,7 @@ class OpMaker(object):
   @classmethod
   def _cls_init(cls):
     if cls.with_cuda is None:
-      cls.with_cuda = TFUtil.CudaEnv.get_instance().is_available()
+      cls.with_cuda = tf_util.CudaEnv.get_instance().is_available()
       if cls.with_cuda and cls.tf_blas_gemm_workaround:
         cls._load_cuda_blas_gemm()
 
@@ -114,15 +118,15 @@ class OpMaker(object):
     To make the symbols available in the namespace, load the library now.
     This issue if fixed with tensorflow 1.5
     """
-    if TFUtil.CudaEnv.verbose_find_cuda:
+    if tf_util.CudaEnv.verbose_find_cuda:
       print("Load tf.contrib lstm_ops...")
     lstm_ops_so = cls.cuda_blas_gemm_so_filename()
-    if TFUtil.CudaEnv.verbose_find_cuda:
+    if tf_util.CudaEnv.verbose_find_cuda:
       print("Load tf.contrib lstm_ops lib:", lstm_ops_so)
     # Maybe a bit hacky: Just load all symbols into the global namespace.
     from ctypes import RTLD_GLOBAL, CDLL
     CDLL(lstm_ops_so, mode=RTLD_GLOBAL)
-    if TFUtil.CudaEnv.verbose_find_cuda:
+    if tf_util.CudaEnv.verbose_find_cuda:
       print("tf.contrib lstm_ops lib loaded.")
 
   @property
@@ -144,9 +148,7 @@ class OpMaker(object):
     """
     :rtype: str
     """
-    my_dir = os.path.abspath(os.path.dirname(__file__) or os.getcwd())
-    my_dir = os.path.realpath(my_dir)  # Make canonical path-name.
-    support_native_op_cpp_filename = "%s/NativeOp.cpp" % my_dir
+    support_native_op_cpp_filename = "%s/native_op.cpp" % _base_dir
     assert os.path.exists(support_native_op_cpp_filename)
     return support_native_op_cpp_filename
 
@@ -164,7 +166,7 @@ class OpMaker(object):
     # http://stackoverflow.com/questions/37565367/designing-an-accumulating-tensorflow-gpu-operator
     # We also include NativeOp.cpp.
     # noinspection PyProtectedMember
-    in_info, out_info, _ = NativeOp.NativeOpBaseMixin._resolve_want_inplace_dummy(
+    in_info, out_info, _ = native_op.NativeOpBaseMixin._resolve_want_inplace_dummy(
       in_info=self.description.in_info, out_info=self.description.out_info)
     out_is_ref = dict()  # output vars which are inplace, out_name -> in_idx
     # want_inplace: output-index which this input should operate on
@@ -478,8 +480,8 @@ class OpMaker(object):
       ld_flags += ["-L%s" % path, "-l:%s" % os.path.basename(self.blas_lib)]
       have_blas_lib = True
     if not have_blas_lib and self.search_for_runtime_blas:
-      import Util
-      libs = Util.find_sgemm_libs_from_runtime()
+      from returnn.util.basic import find_sgemm_libs_from_runtime
+      libs = find_sgemm_libs_from_runtime()
       if libs:
         numpy_libs = [fn for fn in libs if "/numpy/.libs/" in fn]
         if numpy_libs:
@@ -521,7 +523,7 @@ class OpMaker(object):
         have_blas_lib = True
     if not have_blas_lib:
       print("WARNING: OpMaker: no BLAS lib found")
-    comp = TFUtil.OpCodeCompiler(
+    comp = tf_util.OpCodeCompiler(
       base_name=self.name, code_version=self.description.code_version,
       code=self._make_code(),
       include_deps=[self.support_native_op_cpp_filename],
@@ -567,7 +569,7 @@ class OpMaker(object):
           grad_inputs = list(fwd_op.inputs) + list(fwd_op.outputs) + list(bwd_grads)
           # noinspection PyProtectedMember
           grad_inputs = self.description._filter_grad_inputs(grad_inputs)
-          grad_outputs = TFUtil.make_var_tuple(grad_op(*grad_inputs))
+          grad_outputs = tf_util.make_var_tuple(grad_op(*grad_inputs))
           if grad_description.num_dummy_outs > 0:
             grad_outputs = grad_outputs[:-grad_description.num_dummy_outs]
           grad_outputs = self.description.make_results_of_gradient(grad_outputs)
@@ -645,7 +647,7 @@ def make_lstm_op(**kwargs):
   :return: op
   :rtype: (tf.Tensor) -> tuple[tf.Tensor]
   """
-  return make_op(NativeOp.LstmGenericBase, **kwargs)
+  return make_op(native_op.LstmGenericBase, **kwargs)
 
 
 class RecSeqCellOp(object):
@@ -745,9 +747,9 @@ class NativeLstmCell(RecSeqCellOp):
     :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
     :rtype: (tf.Tensor, tf.Tensor)
     """
-    rec_weights = TFCompat.v1.get_variable(
+    rec_weights = tf_compat.v1.get_variable(
       name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
-    TFUtil.set_param_axes_split_info(rec_weights, [[self.n_hidden], [self.n_hidden] * 4])
+    tf_util.set_param_axes_split_info(rec_weights, [[self.n_hidden], [self.n_hidden] * 4])
     out, _, final_state = self.op(
       *self.map_layer_inputs_to_op(z=inputs, rec_weights=rec_weights, i=index, initial_state=initial_state))
     return out, final_state
@@ -762,7 +764,7 @@ class NativeLstmLowMemCell(RecSeqCellOp):
 
   def __init__(self, **kwargs):
     super(NativeLstmLowMemCell, self).__init__(**kwargs)
-    self.op = make_op(NativeOp.LstmLowMem)
+    self.op = make_op(native_op.LstmLowMem)
     assert not self.input_is_sparse, "not supported"
 
   def map_layer_inputs_to_op(self, x, weights, b, i, initial_state=None):
@@ -805,11 +807,11 @@ class NativeLstmLowMemCell(RecSeqCellOp):
     :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
     :rtype: (tf.Tensor, tf.Tensor)
     """
-    weights = TFCompat.v1.get_variable(
+    weights = tf_compat.v1.get_variable(
       name="W", shape=(self.n_input_dim + self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
-    b = TFCompat.v1.get_variable(name="b", shape=(self.n_hidden * 4,), initializer=tf.zeros_initializer())
-    TFUtil.set_param_axes_split_info(weights, [[self.n_input_dim, self.n_hidden], [self.n_hidden] * 4])
-    TFUtil.set_param_axes_split_info(b, [[self.n_hidden] * 4])
+    b = tf_compat.v1.get_variable(name="b", shape=(self.n_hidden * 4,), initializer=tf.zeros_initializer())
+    tf_util.set_param_axes_split_info(weights, [[self.n_input_dim, self.n_hidden], [self.n_hidden] * 4])
+    tf_util.set_param_axes_split_info(b, [[self.n_hidden] * 4])
     out, _, final_state = self.op(
       *self.map_layer_inputs_to_op(x=inputs, weights=weights, b=b, i=index, initial_state=initial_state))
     return out, final_state
@@ -831,7 +833,7 @@ class NativeLstm2(RecSeqCellOp):
     self.n_input_dim_parts = [self.n_hidden] * 4
     self.n_input_dim = self.n_hidden * 4
     self.rec_weight_dropout = rec_weight_dropout
-    self.op = make_op(NativeOp.NativeLstm2)
+    self.op = make_op(native_op.NativeLstm2)
 
   @property
   def state_size(self):
@@ -846,14 +848,14 @@ class NativeLstm2(RecSeqCellOp):
     :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
     :rtype: (tf.Tensor, tf.Tensor)
     """
-    weights = TFCompat.v1.get_variable(
+    weights = tf_compat.v1.get_variable(
       name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
-    TFUtil.set_param_axes_split_info(weights, [[self.n_hidden], [self.n_hidden] * 4])
+    tf_util.set_param_axes_split_info(weights, [[self.n_hidden], [self.n_hidden] * 4])
     if self.rec_weight_dropout:
       from returnn.tf.util.basic import dropout
       weights = dropout(
         weights, keep_prob=1.0 - self.rec_weight_dropout, cond_on_train=True,
-        seed=TFUtil.get_random_seed())
+        seed=tf_util.get_random_seed())
     inputs.set_shape(tf.TensorShape([None, None, self.n_hidden * 4]))
     weights.set_shape(tf.TensorShape([self.n_hidden, self.n_hidden * 4]))
     index.set_shape(tf.TensorShape([None, None]))
@@ -890,7 +892,7 @@ class TwoDNativeLstmCell(RecSeqCellOp):
   def __init__(self, pooling, **kwargs):
     super(TwoDNativeLstmCell, self).__init__(**kwargs)
     self.pooling = pooling
-    self.op = make_op(NativeOp.TwoDLSTM)
+    self.op = make_op(native_op.TwoDLSTM)
 
   @classmethod
   def map_layer_inputs_to_op(cls, X, V_h, V_v, W, i, previous_state=None, previous_output=None, iteration=None):
@@ -966,20 +968,20 @@ class TwoDNativeLstmCell(RecSeqCellOp):
     :returns: shape (src_len, batch, n_hidden), shape(trg_len, src_len, batch, n_hidden), shape (trg_len, src_len, batch, n_hidden*5)
     :rtype: (tf.Tensor, tf.Tensor)
     """
-    Vh_re = TFCompat.v1.get_variable(
+    Vh_re = tf_compat.v1.get_variable(
       name="Vh_re", shape=(self.n_hidden, self.n_hidden * 5), initializer=recurrent_weights_initializer)
-    Vv_re = TFCompat.v1.get_variable(
+    Vv_re = tf_compat.v1.get_variable(
       name="Vv_re", shape=(self.n_hidden, self.n_hidden * 5), initializer=recurrent_weights_initializer)
-    W_re = TFCompat.v1.get_variable(
+    W_re = tf_compat.v1.get_variable(
       name="W_re", shape=(self.n_input_dim, self.n_hidden * 5), initializer=recurrent_weights_initializer)
-    TFUtil.set_param_axes_split_info(W_re, [[self.n_input_dim], [self.n_hidden] * 5])
+    tf_util.set_param_axes_split_info(W_re, [[self.n_input_dim], [self.n_hidden] * 5])
 
     twod_input = tf.concat([
       tf.tile(tf.expand_dims(source, 0), [tf.shape(target)[0], 1, 1, 1]),  # source
       tf.tile(tf.expand_dims(target, 1), [1, tf.shape(source)[0], 1, 1])  # target
     ], axis=3)  # (trg_len, src_len, batch, features)
 
-    outComplete, final_state = self.op(
+    out_complete, final_state = self.op(
       *self.map_layer_inputs_to_op(
         X=twod_input, V_h=Vh_re, V_v=Vv_re, W=W_re, i=src_mask,
         previous_state=previous_state, previous_output=previous_output, iteration=iteration))
@@ -987,18 +989,19 @@ class TwoDNativeLstmCell(RecSeqCellOp):
     # outComplete (trg_len, src_len, batch, n_hidden)
     # final_state (trg_len, src_len, batch, n_hidden*5)
 
-    def last_pooling(src_mask, outComplete):
+    def last_pooling(src_mask, out_complete):
       # The output of the operation are two 2D grids
       # For the prediction of the next target word, only the last output of each row is relevant
       # To select them, we have to find the position of the last word of each sentence
       # To this end, we shift the mask by one position and compare with the unshifted mask: The only position that's
       # different is the position of the last 1 (the last word).
-      # 1) append one 0 to the src mask. This ensures, that every mask ends in a 0, even if the sentence has maximal length
+      # 1) append one 0 to the src mask.
+      # This ensures, that every mask ends in a 0, even if the sentence has maximal length
       additional = tf.zeros([1, tf.shape(src_mask)[1]], dtype=tf.bool)
       extended_src_mask = tf.concat([src_mask, additional], axis=0)
 
       # 2) move the index by one position
-      rolled = tf.manip.roll(extended_src_mask, shift=[1], axis=[0])
+      rolled = tf_compat.v1.manip.roll(extended_src_mask, shift=[1], axis=[0])
 
       # 3) compare
       rolled = tf.cast(rolled, tf.uint8)
@@ -1006,22 +1009,23 @@ class TwoDNativeLstmCell(RecSeqCellOp):
       bitwise = tf.bitwise.bitwise_xor(rolled, extended_src_mask)
 
       # 4) we shifted the mask, this has to be undone. We have to remove the added 0 at the end as well
-      last_index = tf.manip.roll(bitwise, shift=[-1], axis=[0])
+      last_index = tf_compat.v1.manip.roll(bitwise, shift=[-1], axis=[0])
       last_index = tf.cast(last_index, dtype=tf.float32)
       last_index = last_index[:-1, :]
 
-      # So far, the mask had the shape (src_len, batch). To use it on the 2D output, we need (trg_len, src_len, batch, features)
+      # So far, the mask had the shape (src_len, batch).
+      # To use it on the 2D output, we need (trg_len, src_len, batch, features)
       last_index = tf.expand_dims(last_index, axis=0)
       last_index = tf.expand_dims(last_index, axis=3)
 
       # Mask out everything but the values for the last word, then sum to remove the dimension
-      selfComputedLastOut = outComplete * last_index
-      selfComputedLastOut = tf.reduce_sum(selfComputedLastOut, axis=1) # (trg_len, batch, n_hidden)
+      self_computed_last_out = out_complete * last_index
+      self_computed_last_out = tf.reduce_sum(self_computed_last_out, axis=1) # (trg_len, batch, n_hidden)
 
-      return selfComputedLastOut
+      return self_computed_last_out
 
-    def max_pooling(outComplete):
-      return tf.reduce_max(outComplete, axis=1)
+    def max_pooling(out_complete):
+      return tf.reduce_max(out_complete, axis=1)
 
     def average_pooling(src_mask, out_complete):
       src_mask = tf.cast(src_mask, dtype=tf.float32)  # (src_len, batch)
@@ -1034,7 +1038,7 @@ class TwoDNativeLstmCell(RecSeqCellOp):
 
     def weighted_pooling(src_mask, out_complete, target):
       trg_features = target.shape[2]
-      W_att = TFCompat.v1.get_variable(  # (trg_features, n_hidden)
+      W_att = tf_compat.v1.get_variable(  # (trg_features, n_hidden)
         name="W_att", shape=(trg_features, self.n_hidden), initializer=recurrent_weights_initializer)
 
       # if we assume the following shapes:
@@ -1056,15 +1060,15 @@ class TwoDNativeLstmCell(RecSeqCellOp):
       return weighted_sum
 
     if self.pooling == 'max':
-      output = max_pooling(outComplete)
+      output = max_pooling(out_complete)
     elif self.pooling == 'average':
-      output = average_pooling(src_mask, outComplete)
+      output = average_pooling(src_mask, out_complete)
     elif self.pooling == 'weighted':
-      output = weighted_pooling(src_mask, outComplete, target)
+      output = weighted_pooling(src_mask, out_complete, target)
     else:
-      output = last_pooling(src_mask, outComplete)
+      output = last_pooling(src_mask, out_complete)
 
-    return output, outComplete, final_state
+    return output, out_complete, final_state
 
 
 def chunk(x, index, chunk_size, chunk_step):
@@ -1086,7 +1090,7 @@ def chunk(x, index, chunk_size, chunk_step):
   chunk_params = tf.cast([chunk_size, chunk_step], tf.float32)  # that's currently the API...
   out_buffer = tf.zeros((chunk_size, n_batch * n_chunks, n_dim), dtype=x.dtype)
   oindex_buffer = tf.zeros((chunk_size, n_batch * n_chunks), dtype=index.dtype)
-  chunk_op = OpMaker(OpDescription.from_gen_base(NativeOp.Chunking)).make_op(grad_func=_chunk_grad)
+  chunk_op = OpMaker(OpDescription.from_gen_base(native_op.Chunking)).make_op(grad_func=_chunk_grad)
   out, oindex = chunk_op(x, index, out_buffer, oindex_buffer, chunk_params)
   return out, oindex
 
@@ -1131,7 +1135,7 @@ def unchunk(x, index, chunk_size, chunk_step, n_time, n_batch):
   out_buffer = tf.zeros((n_time, n_batch, n_dim), dtype=x.dtype)
   oindex_buffer = tf.zeros((n_time, n_batch), dtype=index.dtype)
   ofactors_buffer = tf.zeros((n_time, n_batch), dtype=x.dtype)
-  unchunk_op = OpMaker(OpDescription.from_gen_base(NativeOp.UnChunking)).make_op(grad_func=_unchunk_grad)
+  unchunk_op = OpMaker(OpDescription.from_gen_base(native_op.UnChunking)).make_op(grad_func=_unchunk_grad)
   out, oindex, ofactors = unchunk_op(x, index, out_buffer, oindex_buffer, ofactors_buffer, chunk_params)
   return out, oindex, ofactors
 
@@ -1158,7 +1162,7 @@ def make_fast_baum_welch_op(**kwargs):
   :return: op
   :rtype: (tf.Tensor) -> tuple[tf.Tensor]
   """
-  maker = OpMaker(OpDescription.from_gen_base(NativeOp.FastBaumWelchOp), **kwargs)
+  maker = OpMaker(OpDescription.from_gen_base(native_op.FastBaumWelchOp), **kwargs)
   return maker.make_op()
 
 
@@ -1193,7 +1197,7 @@ def fast_baum_welch_by_sprint_automata(am_scores, float_idx, tags, sprint_opts, 
   :return: (fwdbwd, obs_scores), fwdbwd is (time, batch, dim), obs_scores is (time, batch), in -log space
   :rtype: (tf.Tensor, tf.Tensor)
   """
-  from TFSprint import get_sprint_automata_for_batch_op
+  from returnn.tf.sprint import get_sprint_automata_for_batch_op
   edges, weights, start_end_states = get_sprint_automata_for_batch_op(sprint_opts=sprint_opts, tags=tags)
   if tdp_scale != 1:
     if tdp_scale == 0:
@@ -1212,7 +1216,7 @@ def tf_fast_bw_fsa_staircase(seq_lens, **opts):
   :return: edges, weights, start_end_states
   :rtype: (tf.Tensor, tf.Tensor, tf.Tensor)
   """
-  from Fsa import fast_bw_fsa_staircase
+  from returnn.util.fsa import fast_bw_fsa_staircase
 
   def py_fast_bw_fsa_staircase_wrapper(seq_lens_):
     """
@@ -1224,7 +1228,7 @@ def tf_fast_bw_fsa_staircase(seq_lens, **opts):
       fsa.start_end_states.shape, len(seq_lens_), seq_lens_)
     return fsa.edges.astype("int32"), fsa.weights.astype("float32"), fsa.start_end_states.astype("int32")
 
-  edges, weights, start_end_states = TFCompat.v1.py_func(
+  edges, weights, start_end_states = tf_compat.v1.py_func(
     py_fast_bw_fsa_staircase_wrapper,
     [seq_lens],
     [tf.int32, tf.float32, tf.int32],
@@ -1260,7 +1264,7 @@ def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx, label_loop=True):
   n_time = targets_shape[1]
   n_edges = n_batch * (5 * (n_time - 1) + 10)  # see op documentation
   weights = tf.zeros((n_edges,))
-  maker = OpMaker(OpDescription.from_gen_base(NativeOp.GetCtcFsaFastBwOp))
+  maker = OpMaker(OpDescription.from_gen_base(native_op.GetCtcFsaFastBwOp))
   op = maker.make_op()
   edges, start_end_states = op(targets, seq_lens, blank_idx, weights, label_loop)
   return edges, weights, start_end_states
@@ -1346,7 +1350,7 @@ def fast_viterbi(am_scores, am_seq_len, edges, weights, start_end_states):
   """
   last_state_idx = tf.reduce_max(start_end_states[1])
   n_states = last_state_idx + 1
-  maker = OpMaker(OpDescription.from_gen_base(NativeOp.FastViterbiOp))
+  maker = OpMaker(OpDescription.from_gen_base(native_op.FastViterbiOp))
   op = maker.make_op()
   alignment, scores = op(am_scores, am_seq_len, edges, weights, start_end_states, n_states)
   return alignment, scores
@@ -1417,7 +1421,7 @@ def edit_distance(a, a_len, b, b_len):
   :return: (batch,) tensor, int32, un-normalized edit distance
   :rtype: tf.Tensor
   """
-  maker = OpMaker(OpDescription.from_gen_base(NativeOp.EditDistanceOp))
+  maker = OpMaker(OpDescription.from_gen_base(native_op.EditDistanceOp))
   op = maker.make_op()
   return op(a, a_len, b, b_len)
 
@@ -1433,7 +1437,7 @@ def optimal_completion_edit_distance(a, a_len, b, b_len):
   :return: (batch,) tensor, int32, un-normalized edit distance
   :rtype: tf.Tensor
   """
-  maker = OpMaker(OpDescription.from_gen_base(NativeOp.OptimalCompletionEditDistanceOp))
+  maker = OpMaker(OpDescription.from_gen_base(native_op.OptimalCompletionEditDistanceOp))
   op = maker.make_op()
   return op(a, a_len, b, b_len)
 
@@ -1456,7 +1460,7 @@ def optimal_completion_edit_distance_per_successor(a, a_len, b, b_len, successor
     successors.set_shape((n_labels,))
   assert isinstance(successors, tf.Tensor)
   successors.set_shape((None,))
-  maker = OpMaker(OpDescription.from_gen_base(NativeOp.OptimalCompletionEditDistancePerSuccessorOp))
+  maker = OpMaker(OpDescription.from_gen_base(native_op.OptimalCompletionEditDistancePerSuccessorOp))
   op = maker.make_op()
   return op(a, a_len, b, b_len, successors)
 
@@ -1477,7 +1481,7 @@ def next_edit_distance_row(last_row, a, a_n, a_ended, b, b_len):
   a_ended = tf.cast(a_ended, tf.int32)
   if a_n.shape.ndims == 0:
     a_n = tf.tile(tf.expand_dims(a_n, 0), tf.shape(a_ended))
-  maker = OpMaker(OpDescription.from_gen_base(NativeOp.NextEditDistanceRowOp))
+  maker = OpMaker(OpDescription.from_gen_base(native_op.NextEditDistanceRowOp))
   op = maker.make_op()
   return op(last_row, a, a_n, a_ended, b, b_len)
 
@@ -1554,7 +1558,7 @@ def next_edit_distance_reduce(last_row, a, a_n, a_ended, b, b_len, optimal_compl
   if a_blank_idx is None:
     a_blank_idx = -1
   a_blank_idx = tf.cast(a_blank_idx, tf.int32)
-  maker = OpMaker(OpDescription.from_gen_base(NativeOp.NextEditDistanceReduceOp))
+  maker = OpMaker(OpDescription.from_gen_base(native_op.NextEditDistanceReduceOp))
   op = maker.make_op()
   return op(last_row, a, a_n, a_ended, b, b_len, optimal_completion, a_blank_idx)
 
@@ -1600,7 +1604,7 @@ def _debug_dumped_fast_baum_welch(prefix, postfix=".dump"):
   :rtype: (numpy.ndarray. numpy.ndarray)
   """
   with tf.Graph().as_default() as graph:
-    with TFCompat.v1.Session(graph=graph) as session:
+    with tf_compat.v1.Session(graph=graph) as session:
       arg_names = {
         "am_scores": None, "edges": None, "weights": None, "start_end_states": None, "float_idx": "index",
         "state_buffer": None}
@@ -1621,10 +1625,9 @@ def have_blocksparse_requirements():
   :return: whether we can use the OpenAI blocksparse module
   :rtype: bool
   """
-  import TFUtil
-  if not TFUtil.is_gpu_available():
+  if not tf_util.is_gpu_available():
     return False
-  min_compute_capability = TFUtil.get_available_gpu_min_compute_capability()
+  min_compute_capability = tf_util.get_available_gpu_min_compute_capability()
   if min_compute_capability < 3.5:
     return False
   path = os.path.dirname(__file__) + "/extern/blocksparse/blocksparse"
@@ -1637,10 +1640,9 @@ def init_blocksparse(with_native_module=True):
   """
   :param bool with_native_module:
   """
-  import TFUtil
   if with_native_module:
-    assert TFUtil.is_gpu_available(), "we currently need a GPU"
-    min_compute_capability = TFUtil.get_available_gpu_min_compute_capability()
+    assert tf_util.is_gpu_available(), "we currently need a GPU"
+    min_compute_capability = tf_util.get_available_gpu_min_compute_capability()
     assert min_compute_capability and min_compute_capability >= 3.5, "we need at least compute capability 3.5"
   path = os.path.dirname(__file__) + "/extern/blocksparse"
   assert os.path.exists(path), "maybe submodule not checked out?"
@@ -1660,9 +1662,9 @@ def demo():
   Simple demo for testing the compilation.
   """
   print("TFNativeOp demo")
-  TFUtil.CudaEnv.verbose_find_cuda = True
-  print("CUDA path: %s" % TFUtil.CudaEnv.get_instance().cuda_path)
-  op = make_op(NativeOp.LstmLowMem, compiler_opts={"static_version_name": "demo"})
+  tf_util.CudaEnv.verbose_find_cuda = True
+  print("CUDA path: %s" % tf_util.CudaEnv.get_instance().cuda_path)
+  op = make_op(native_op.LstmLowMem, compiler_opts={"static_version_name": "demo"})
   print(op)
 
 

@@ -694,7 +694,7 @@ class TFNetwork(object):
     This will create the layer given the layer_desc arguments.
 
     :param str name:
-    :param (()->LayerBase)|LayerBase layer_class:
+    :param (()->LayerBase)|LayerBase|type[LayerBase] layer_class:
     :param layer_desc: contains the kwargs for the layer class.
       the args should have been transformed via layer_class.transform_config_dict before (see construct_layer).
       must not contain "name" and "network", which will be automatically added here.
