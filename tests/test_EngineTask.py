@@ -9,8 +9,8 @@ import time
 import sys
 from pprint import pprint
 
-from EngineTask import TaskThread, TrainTaskThread, EvalTaskThread
-from Device import Device
+from returnn.theano.engine_task import TaskThread, TrainTaskThread, EvalTaskThread
+from returnn.theano.device import Device
 from returnn.config import Config
 from returnn.log import log
 from returnn.util.basic import hms, NumbersDict

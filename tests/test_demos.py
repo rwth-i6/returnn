@@ -9,7 +9,7 @@ import os
 import sys
 from glob import glob
 from nose.tools import assert_less, assert_in
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 

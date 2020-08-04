@@ -1,3 +1,3 @@
 
-import CustomLSTMFunctions as C
+import returnn.theano.ops.custom_lstm_functions
 

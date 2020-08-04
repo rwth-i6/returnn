@@ -9,12 +9,12 @@ sys.path += ["."]  # Python 3 hack
 import unittest
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 from returnn.datasets.generating import GeneratingDataset, DummyDataset, DummyDatasetMultipleSequenceLength
-from EngineBatch import Batch
-from Dataset import DatasetSeq
+from returnn.engine.batch import Batch
+from returnn.datasets.basic import DatasetSeq
 from returnn.util.basic import NumbersDict
 import numpy as np
 
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 from returnn.log import log

@@ -1,10 +1,14 @@
 import numpy
 import theano
 import theano.tensor as T
-from FastLSTM import LSTMOp2Instance
-from OpLSTM import LSTMOpInstance
+# from FastLSTM import LSTMOp2Instance
+from returnn.theano.ops.lstm import LSTMOpInstance
 import unittest
 from returnn.util.basic import have_gpu
+
+
+def LSTMOp2Instance(V_h, c, b, i, X, W):
+  return LSTMOpInstance(T.dot(X, W) + b, V_h, c, i)
 
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
@@ -51,16 +55,16 @@ def test_grad():
   #print numpy.asarray(Z_val), '\n', numpy.asarray(H_val)
   #print "done calling g"
 
-  print "calling f"
+  print("calling f")
   Z_val, d_val, DX_val, DW_val, DV_h_val, Dc_val, Db_val = f(V_h_val, c_val, b_val, i_val, X_val, W_val)
   #print numpy.asarray(Z_val), '\n', numpy.asarray(d_val), '\n', numpy.asarray(DX_val), '\n', \
     #numpy.asarray(DW_val), '\n', numpy.asarray(DV_h_val), '\n', numpy.asarray(Dc_val), '\n', numpy.asarray(Db_val)
   #print "----------"
   #print numpy.asarray(DX_val)
   #print "----------"
-  print "done calling f"
+  print("done calling f")
 
-  print "verifying grad..."
+  print("verifying grad...")
 
   #def testOp_only_b(b):
   #  return TestOp()(X_val, W_val, V_h_val, b)[0]
@@ -72,12 +76,12 @@ def test_grad():
   def LSTMOp_d(V_h, c, b, X, W):
     return LSTMOp2Instance(V_h, c, b, i_val, X, W)[2]
 
-  print "verifying grad of Z"
+  print("verifying grad of Z")
   theano.tests.unittest_tools.verify_grad(LSTMOp_Z, [V_h_val, c_val, b_val, X_val, W_val])
-  print "verifying grad of d"
+  print("verifying grad of d")
   theano.tests.unittest_tools.verify_grad(LSTMOp_d, [V_h_val, c_val, b_val, X_val, W_val])
 
-  print "success"
+  print("success")
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_grad_large():
@@ -93,7 +97,7 @@ def test_grad_large():
   #c_val = numpy.zeros((n_batch, n_cells), dtype='float32')
   i_val = numpy.ones((n_T, n_batch), dtype='int8')
 
-  print "verifying grad..."
+  print("verifying grad...")
 
   def LSTMOp_Z(V_h, c, b, X, W):
     return LSTMOp2Instance(V_h, c, b, i_val, X, W)[0]
@@ -101,12 +105,12 @@ def test_grad_large():
   def LSTMOp_d(V_h, c, b, X, W):
     return LSTMOp2Instance(V_h, c, b, i_val, X, W)[2]
 
-  print "verifying grad of Z"
+  print("verifying grad of Z")
   theano.tests.unittest_tools.verify_grad(LSTMOp_Z, [V_h_val, c_val, b_val, X_val, W_val])
-  print "verifying grad of d"
+  print("verifying grad of d")
   theano.tests.unittest_tools.verify_grad(LSTMOp_d, [V_h_val, c_val, b_val, X_val, W_val], eps=1e-3)
 
-  print "success"
+  print("success")
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_grad_large_with_index():
@@ -123,7 +127,7 @@ def test_grad_large_with_index():
   i_vals = [numpy.ones((n_T, n_batch), dtype='int8'),
             numpy.array([[1,1,1,1,1], [0,0,1,1,1], [0,0,1,1,1], [0,0,1,0,0]], dtype='int8').T]
 
-  print "verifying grad..."
+  print("verifying grad...")
 
   for i_val in i_vals:
     def LSTMOp_Z(V_h, c, b, X, W):
@@ -132,12 +136,12 @@ def test_grad_large_with_index():
     def LSTMOp_d(V_h, c, b, X, W):
       return LSTMOp2Instance(V_h, c, b, i_val, X, W)[2]
 
-    print "verifying grad of Z"
+    print("verifying grad of Z")
     theano.tests.unittest_tools.verify_grad(LSTMOp_Z, [V_h_val, c_val, b_val, X_val, W_val])
-    print "verifying grad of d"
+    print("verifying grad of d")
     theano.tests.unittest_tools.verify_grad(LSTMOp_d, [V_h_val, c_val, b_val, X_val, W_val], eps=1e-3)
 
-  print "success"
+  print("success")
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_compatible_with_other_implementation():
@@ -195,7 +199,7 @@ def test_compatible_with_other_implementation():
   for f, s, n in zip(vals_fast, vals_simple, names):
     assert numpy.allclose(f, s, rtol=3e-5), (n, f, s)
 
-  print "sucess"
+  print("sucess")
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_compatible_with_other_implementation_and_index_vector():
@@ -280,7 +284,7 @@ def test_compatible_with_other_implementation_and_index_vector():
       assert numpy.allclose(fa, sl)
   #print numpy.asarray(Z_val, 'float32')
   #print Z2_val
-  print "success"
+  print("success")
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_multiple_inputs():
@@ -340,35 +344,35 @@ def test_multiple_inputs():
     assert numpy.allclose(A1, A2)
   #print f_res[0], g_res[0]
 
-  print "success"
+  print("success")
 
 if __name__ == '__main__':
-  print "calling test_compatible_with_other_implementation()"
+  print("calling test_compatible_with_other_implementation()")
   test_compatible_with_other_implementation()
-  print "test_compatible_with_other_implementation(): success"
-  print "------------------"
+  print("test_compatible_with_other_implementation(): success")
+  print("------------------")
 
-  print "calling test_compatible_with_other_implementation_and_index_vector()"
+  print("calling test_compatible_with_other_implementation_and_index_vector()")
   test_compatible_with_other_implementation_and_index_vector()
-  print "test_compatible_with_other_implementation_and_index_vector(): success"
-  print "------------------"
+  print("test_compatible_with_other_implementation_and_index_vector(): success")
+  print("------------------")
 
-  print "calling test_multiple_inputs()"
+  print("calling test_multiple_inputs()")
   test_multiple_inputs()
-  print "test_multiple_inputs(): success"
-  print "------------------"
+  print("test_multiple_inputs(): success")
+  print("------------------")
 
-  print "calling test_grad()"
+  print("calling test_grad()")
   test_grad()
-  print "test_grad(): success"
-  print "------------------"
+  print("test_grad(): success")
+  print("------------------")
 
-  print "calling test_grad_large()"
+  print("calling test_grad_large()")
   test_grad_large()
-  print "test_grad_large(): success"
-  print "------------------"
+  print("test_grad_large(): success")
+  print("------------------")
 
-  print "calling test_grad_large_with_index()"
+  print("calling test_grad_large_with_index()")
   test_grad_large_with_index()
-  print "test_grad_large_with_index(): success"
-  print "------------------"
+  print("test_grad_large_with_index(): success")
+  print("------------------")

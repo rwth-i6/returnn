@@ -1,28 +1,31 @@
 
 LayerClasses = {}
 
-def _initLayerClasses():
+
+def _init_layer_classes():
   global LayerClasses
   from inspect import isclass
-  import NetworkHiddenLayer
-  import NetworkRecurrentLayer
-  import NetworkLstmLayer
-  import NetworkTwoDLayer
-  import NetworkBaseLayer
-  import NetworkCNNLayer
-  from NetworkOutputLayer import FramewiseOutputLayer
-  mods = [NetworkHiddenLayer, NetworkRecurrentLayer, NetworkLstmLayer, NetworkTwoDLayer, NetworkBaseLayer, NetworkCNNLayer]
+  from . import hidden
+  from . import rec
+  from . import lstm
+  from . import twod
+  from . import base
+  from . import cnn
+  from .output import FramewiseOutputLayer
+  mods = [hidden, rec, lstm, twod, base, cnn]
   for mod in mods:
     for _, clazz in vars(mod).items():
       if not isclass(clazz): continue
       layer_class = getattr(clazz, "layer_class", None)
       if not layer_class: continue
       LayerClasses[layer_class] = clazz
-  from NetworkHiddenLayer import ForwardLayer
+  from .hidden import ForwardLayer
   LayerClasses["forward"] = ForwardLayer  # used in crnn.config format
   LayerClasses["softmax"] = FramewiseOutputLayer
 
-_initLayerClasses()
+
+_init_layer_classes()
+
 
 def get_layer_class(name, raise_exception=True):
   """

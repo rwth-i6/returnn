@@ -7,21 +7,21 @@ my_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, "%s/.." % my_dir)
 sys.path.insert(0, "%s/../tools" % my_dir)  # for hdf_dump
 
-from Dataset import Dataset
+from returnn.datasets import Dataset
 from returnn.datasets.hdf import *
 from nose.tools import assert_equal
 from nose.tools import assert_not_equal
 from nose.tools import assert_raises
 from nose.tools import raises
-import Util
+import returnn.util as util
 import h5py
 import numpy as np
 import os
 import unittest
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.install()
 better_exchook.replace_traceback_format_tb()
-Util.init_thread_join_hack()
+util.init_thread_join_hack()
 
 from returnn.log import log
 log.initialize(verbosity=[5])

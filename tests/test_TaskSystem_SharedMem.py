@@ -5,10 +5,10 @@ import sys
 sys.path += ["."]  # Python 3 hack
 
 import threading
-from TaskSystem import *
+from returnn.util.task_system import *
 import unittest
 import gc
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 SharedMemNumpyConfig["enabled"] = True

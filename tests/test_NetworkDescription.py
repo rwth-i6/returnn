@@ -5,11 +5,11 @@ sys.path += ["."]  # Python 3 hack
 
 import unittest
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_true, assert_false
-from NetworkDescription import LayerNetworkDescription
+from returnn.network_description import LayerNetworkDescription
 from returnn.config import Config
 from returnn.util.basic import dict_diff_str
 from pprint import pprint
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 try:
@@ -24,9 +24,8 @@ if theano:
 
   TheanoUtil.monkey_patches()
 
-
-  from Network import LayerNetwork
-  from NetworkHiddenLayer import ForwardLayer
+  from returnn.theano.network import LayerNetwork
+  from returnn.theano.layers.hidden import ForwardLayer
 
 else:
   LayerNetwork = None

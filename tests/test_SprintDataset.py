@@ -3,19 +3,19 @@ import sys
 sys.path += ["."]  # Python 3 hack
 
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
-from EngineUtil import assign_dev_data, assign_dev_data_single_seq
-from EngineBatch import Batch
+from returnn.theano.engine_util import assign_dev_data, assign_dev_data_single_seq
+from returnn.engine.batch import Batch
 from returnn.log import log
 from returnn.config import Config
-import Util
+import returnn.util.basic as util
 from returnn.datasets.generating import GeneratingDataset
-from Dataset import DatasetSeq
-from SprintDataset import ExternSprintDataset
+from returnn.datasets.basic import DatasetSeq
+from returnn.datasets.sprint import ExternSprintDataset
 import numpy as np
 import os
 import sys
 import unittest
-import better_exchook
+from returnn.util import better_exchook
 
 try:
   import theano
@@ -24,13 +24,13 @@ except ImportError:
 
 better_exchook.install()
 better_exchook.replace_traceback_format_tb()
-Util.init_thread_join_hack()
+util.init_thread_join_hack()
 
 if theano:
-  from Device import Device
-  import TheanoUtil
+  from returnn.theano.device import Device
+  import returnn.theano.util as theano_util
 
-  TheanoUtil.monkey_patches()
+  theano_util.monkey_patches()
 
 
 dummyconfig_dict = {
@@ -72,7 +72,7 @@ def test_read_all():
   config = Config()
   config.update(dummyconfig_dict)
   print("Create ExternSprintDataset")
-  python2_exec = Util.which("python2")
+  python2_exec = util.which("python2")
   if python2_exec is None:
     raise unittest.SkipTest("python2 not found")
   num_seqs = 4
@@ -166,7 +166,7 @@ def test_py2_client():
   config = Config()
   config.update(dummyconfig_dict)
   print("Create ExternSprintDataset")
-  python2_exec = Util.which("python2")
+  python2_exec = util.which("python2")
   if python2_exec is None:
     raise unittest.SkipTest("python2 not found")
   num_seqs = 4

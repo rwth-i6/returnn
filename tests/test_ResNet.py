@@ -10,24 +10,24 @@ import contextlib
 import unittest
 import numpy.testing
 from pprint import pprint
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 from returnn.config import Config
 from returnn.tf.network import *
-from TFNetworkLayer import *
+from returnn.tf.layers.basic import *
 from returnn.tf.engine import *
 from returnn.log import log
-import TFCompat
-import TFUtil
-TFUtil.debug_register_better_repr()
+import returnn.tf.compat as tf_compat
+import returnn.tf.util.basic as tf_util
+tf_util.debug_register_better_repr()
 
 log.initialize(verbosity=[5])
 
 @contextlib.contextmanager
 def make_scope():
   with tf.Graph().as_default() as graph:
-    with TFCompat.v1.Session(graph=graph) as session:
+    with tf_compat.v1.Session(graph=graph) as session:
       yield session
 
 network = {}
@@ -363,11 +363,11 @@ def test_ResNet():
     # Making two time-steps
     time_size = window_size + 1
     data_layer_win = Data(name='win', shape=(window_size, 64, 3), dim = 3, batch_dim_axis = 0, sparse = False)
-    data_layer_win.placeholder = TFCompat.v1.placeholder(shape=(None, window_size, 64, 3), dtype=tf.float32)
+    data_layer_win.placeholder = tf_compat.v1.placeholder(shape=(None, window_size, 64, 3), dtype=tf.float32)
 
     data_layer_nowin = Data(name='nowin', shape=(time_size, 64, 3), dim = 3, batch_dim_axis = 0,
                             time_dim_axis = 1, sparse = False)
-    data_layer_nowin.placeholder = TFCompat.v1.placeholder(shape=(None, time_size, 64, 3), dtype=tf.float32)
+    data_layer_nowin.placeholder = tf_compat.v1.placeholder(shape=(None, time_size, 64, 3), dtype=tf.float32)
 
     extern_data_nowin = ExternData()
     extern_data_nowin.data['data'] = data_layer_nowin

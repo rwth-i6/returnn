@@ -22,8 +22,8 @@ print("base path:", base_path)
 sys.path.insert(0, base_path)
 
 # Returnn imports
-import Fsa
-import TFCompat
+import returnn.util.fsa as fsa_util
+import returnn.tf.compat as tf_compat
 from returnn.tf.util.basic import is_gpu_available
 
 
@@ -158,16 +158,16 @@ def main_custom():
     for lemma in lemmas:
       timings.write("Lemma: {}\n\n".format(lemma))
 
-      fsa = Fsa.Graph(lemma)
+      fsa = fsa_util.Graph(lemma)
       fsa.filename = lemma.lower().replace(' ', '-')
 
       word_start_time = time.time()
-      word = Fsa.AllPossibleWordsFsa(fsa)
+      word = fsa_util.AllPossibleWordsFsa(fsa)
       word.lexicon = lexicon
       word_run_start_time = time.time()
       word.run()
       word_run_end_time = time.time()
-      sav_word = Fsa.Store(fsa.num_states_word, fsa.edges_word)
+      sav_word = fsa_util.Store(fsa.num_states_word, fsa.edges_word)
       sav_word.filename = "{}_word_{}".format(fsa.filename, date_str)
       sav_word.fsa_to_dot_format()
       sav_word.save_to_file()
@@ -180,13 +180,13 @@ def main_custom():
       timings.write("Save time:  {}\n".format(word_end_time - word_run_end_time))
 
       asg_start_time = time.time()
-      asg = Fsa.Asg(fsa)
+      asg = fsa_util.Asg(fsa)
       asg.label_conversion = False
       asg.asg_repetition = 2
       asg_run_start_time = time.time()
       asg.run()
       asg_run_end_time = time.time()
-      sav_asg = Fsa.Store(fsa.num_states_asg, fsa.edges_asg)
+      sav_asg = fsa_util.Store(fsa.num_states_asg, fsa.edges_asg)
       sav_asg.filename = "{}_asg_{}".format(fsa.filename, date_str)
       sav_asg.fsa_to_dot_format()
       sav_asg.save_to_file()
@@ -199,12 +199,12 @@ def main_custom():
       timings.write("Save time:  {}\n".format(asg_end_time - asg_run_end_time))
 
       ctc_start_time = time.time()
-      ctc = Fsa.Ctc(fsa)
+      ctc = fsa_util.Ctc(fsa)
       ctc.label_conversion = False
       ctc_run_start_time = time.time()
       ctc.run()
       ctc_run_end_time = time.time()
-      sav_ctc = Fsa.Store(fsa.num_states_ctc, fsa.edges_ctc)
+      sav_ctc = fsa_util.Store(fsa.num_states_ctc, fsa.edges_ctc)
       sav_ctc.filename = "_+_ctc_{}".format(fsa.filename, date_str)
       sav_ctc.fsa_to_dot_format()
       sav_ctc.save_to_file()
@@ -217,14 +217,14 @@ def main_custom():
       timings.write("Save time:  {}\n".format(ctc_end_time - ctc_run_end_time))
 
       hmm_start_time = time.time()
-      hmm = Fsa.Hmm(fsa)
+      hmm = fsa_util.Hmm(fsa)
       hmm.lexicon = lexicon
       hmm.allo_num_states = 3
       hmm.state_tying_conversion = False
       hmm_run_start_time = time.time()
       hmm.run()
       hmm_run_end_time = time.time()
-      sav_hmm = Fsa.Store(fsa.num_states_hmm, fsa.edges_hmm)
+      sav_hmm = fsa_util.Store(fsa.num_states_hmm, fsa.edges_hmm)
       sav_hmm.filename = "{}_hmm_{}".format(fsa.filename, date_str)
       sav_hmm.fsa_to_dot_format()
       sav_hmm.save_to_file()
@@ -308,7 +308,7 @@ def tf_baum_welch(fsa, am_scores=None, num_classes=None, out_seq_len=None):
     edges=edges, weights=weights, start_end_states=start_end_states)
   print("Done.")
   print("Eval:")
-  session = tf.get_default_session()
+  session = tf_compat.get_default_session()
   fwdbwd, score = session.run([fwdbwd, obs_scores])
   print("BW score:")
   print(repr(score))
@@ -326,8 +326,8 @@ def check_fast_bw_fsa_staircase(num_classes, out_seq_len, with_loop):
   expected = slow_full_sum_staircase_uniform(num_classes=num_classes, out_seq_len=out_seq_len, with_loop=with_loop)
   print("expected full sum:")
   print(expected)
-  fsa = Fsa.fast_bw_fsa_staircase(seq_lens=[num_classes], with_loop=with_loop)
-  with TFCompat.v1.Session().as_default():
+  fsa = fsa_util.fast_bw_fsa_staircase(seq_lens=[num_classes], with_loop=with_loop)
+  with tf_compat.v1.Session().as_default():
     res = tf_baum_welch(fsa, num_classes=num_classes, out_seq_len=out_seq_len)
   print("baum-welch:")
   print(res)

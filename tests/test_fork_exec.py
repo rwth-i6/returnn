@@ -21,7 +21,7 @@ from pprint import pprint
 
 sys.path += ["."]  # Python 3 hack
 sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.install()
 better_exchook.replace_traceback_format_tb()
 

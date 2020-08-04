@@ -3,16 +3,16 @@ import sys
 sys.path += ["."]  # Python 3 hack
 
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
-from Device import Device
-from EngineUtil import assign_dev_data, assign_dev_data_single_seq
-from EngineBatch import Batch
-import TheanoUtil
+from returnn.theano.device import Device
+from returnn.theano.engine_util import assign_dev_data, assign_dev_data_single_seq
+from returnn.engine.batch import Batch
+import returnn.theano.util as theano_util
 from returnn.log import log
 from returnn.config import Config
 from returnn.datasets.generating import GeneratingDataset
-from Dataset import DatasetSeq
+from returnn.datasets.basic import DatasetSeq
 import numpy as np
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 
@@ -27,7 +27,7 @@ dummyconfig_dict = {
 
 
 log.initialize()
-TheanoUtil.monkey_patches()
+theano_util.monkey_patches()
 
 
 class DummyDevice(Device):

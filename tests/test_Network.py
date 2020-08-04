@@ -9,14 +9,14 @@ try:
   from StringIO import StringIO
 except ImportError:  # Python 3
   from io import StringIO
-from Network import LayerNetwork
-import TheanoUtil
+from returnn.theano.network import LayerNetwork
+import returnn.theano.util as theano_util
 import h5py
 import tempfile
 import os
 
 
-TheanoUtil.monkey_patches()
+theano_util.monkey_patches()
 
 
 config_enc_dec1_json = """

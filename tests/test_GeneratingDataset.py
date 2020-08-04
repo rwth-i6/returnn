@@ -10,12 +10,12 @@ sys.path += [my_dir + "/.."]  # Python 3 hack
 import unittest
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 from returnn.datasets.generating import *
-from Dataset import DatasetSeq
+from returnn.datasets.basic import DatasetSeq
 from returnn.util.basic import PY3, unicode
 import os
 import unittest
 
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.replace_traceback_format_tb()
 from returnn.log import log
 log.initialize(verbosity=[5])

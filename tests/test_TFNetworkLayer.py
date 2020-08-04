@@ -25,16 +25,16 @@ import contextlib
 import unittest
 import numpy.testing
 from pprint import pprint
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 from returnn.config import Config
 from returnn.tf.network import *
-from TFNetworkLayer import *
+from returnn.tf.layers.basic import *
 from returnn.log import log
-import TFCompat
-import TFUtil
-TFUtil.debug_register_better_repr()
+import returnn.tf.compat as tf_compat
+import returnn.tf.util.basic as tf_util
+tf_util.debug_register_better_repr()
 
 log.initialize(verbosity=[5])
 
@@ -48,7 +48,7 @@ def make_scope():
   :rtype: TFCompat.v1.Session
   """
   with tf.Graph().as_default() as graph:
-    with TFCompat.v1.Session(graph=graph) as session:
+    with tf_compat.v1.Session(graph=graph) as session:
       yield session
 
 
@@ -195,7 +195,7 @@ def test_concat_sources_dim1():
     out = network.get_default_output_layer()
     assert out.output.shape == (None, 9)
     feed_dict = make_feed_dict(network.extern_data.data.values(), same_time=True)
-    session.run(TFCompat.v1.global_variables_initializer())
+    session.run(tf_compat.v1.global_variables_initializer())
     session.run(out.output.placeholder, feed_dict=feed_dict)
 
 
@@ -214,7 +214,7 @@ def test_LinearLayer_batch_feature_major():
     out_template.sanity_check()
     assert out_template.shape == (n_out, None) and (out_template.feature_dim_axis, out_template.time_dim_axis) == (1, 2)
     assert out_template.is_batch_feature_major
-    with TFCompat.v1.variable_scope("lin"):
+    with tf_compat.v1.variable_scope("lin"):
       layer = LinearLayer(
         name="lin", network=network, n_out=n_out, activation=None, sources=[source], output=out_template)
     layer.output.sanity_check()
@@ -225,7 +225,7 @@ def test_LinearLayer_batch_feature_major():
     feed_dict = {
       source.output.placeholder: numpy.random.normal(size=(n_batch, n_in, n_time)).astype("float32"),
       source.output.size_placeholder[1]: numpy.array(n_times, dtype="int32")}
-    session.run(TFCompat.v1.global_variables_initializer())
+    session.run(tf_compat.v1.global_variables_initializer())
     session.run(layer.output.placeholder, feed_dict=feed_dict)
 
 
@@ -264,7 +264,7 @@ def test_batch_norm():
     import numpy as np
     net = TFNetwork(extern_data=ExternData())
     net.train_flag = True
-    with TFCompat.v1.variable_scope("src_nchw"):
+    with tf_compat.v1.variable_scope("src_nchw"):
       src_nhwc = InternalLayer(name="src_nchw", network=net, out_type={"dim": 16,
                                                                        "shape": (None, 16, 16),
                                                                        "batch_dim_axis": 0,
@@ -272,8 +272,8 @@ def test_batch_norm():
                                                                        "feature_dim_axis": 3,
                                                                        "sparse": False
                                                                        })
-      src_nhwc.output.placeholder = TFCompat.v1.placeholder(shape=(None, None, 16, 16), dtype=tf.float32)
-      src_nhwc.output.size_placeholder = {0: TFCompat.v1.placeholder(shape=(None,), dtype=tf.int32)}
+      src_nhwc.output.placeholder = tf_compat.v1.placeholder(shape=(None, None, 16, 16), dtype=tf.float32)
+      src_nhwc.output.size_placeholder = {0: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
 
     rnd = np.random.RandomState(42)
     mean =  tf.constant(rnd.rand(1, 1, 1, 16), name="rand_mean", dtype=tf.float32)
@@ -281,7 +281,7 @@ def test_batch_norm():
     input_data = rnd.rand(10, 11, 16, 16)
     seq_lens = np.array([11, 11, 11, 11, 11, 11, 11, 11, 11, 11])
 
-    with TFCompat.v1.variable_scope("batch_norm_masked_nchw"):
+    with tf_compat.v1.variable_scope("batch_norm_masked_nchw"):
       batch_norm_1 = BatchNormLayer(name="batch_norm_masked_nchw", network=net, masked_time=True,
                                     sample_mean=mean, sample_variance=variance,
                                     sources=[src_nhwc],
@@ -289,7 +289,7 @@ def test_batch_norm():
                                                                                  sources=[src_nhwc],
                                                                                  network=net))
       batch_norm_1.post_init(layer_desc=None)
-    with TFCompat.v1.variable_scope("batch_norm_nonmasked_nchw"):
+    with tf_compat.v1.variable_scope("batch_norm_nonmasked_nchw"):
       batch_norm_2 = BatchNormLayer(name="batch_norm_nonmasked_nchw", network=net, masked_time=False,
                                     sample_mean=mean, sample_variance=variance,
                                     sources=[src_nhwc],
@@ -297,7 +297,7 @@ def test_batch_norm():
                                                                                  sources=[src_nhwc],
                                                                                  network=net))
       batch_norm_2.post_init(layer_desc=None)
-    TFCompat.v1.global_variables_initializer().run()
+    tf_compat.v1.global_variables_initializer().run()
     out_1, seq_lens_1 = session.run([batch_norm_1.output.placeholder,
                                  batch_norm_1.output.size_placeholder[0]],
                                 feed_dict={src_nhwc.output.placeholder: input_data,
@@ -318,7 +318,7 @@ def test_batch_norm_unequal_seq_len():
     import numpy.testing as npt
     net = TFNetwork(extern_data=ExternData())
     net.train_flag = True
-    with TFCompat.v1.variable_scope("src_nhwc"):
+    with tf_compat.v1.variable_scope("src_nhwc"):
       src_nhwc = InternalLayer(name="src_nhwc", network=net, out_type={"dim": 16,
                                                                        "shape": (None, 16, 16),
                                                                        "batch_dim_axis": 0,
@@ -326,8 +326,8 @@ def test_batch_norm_unequal_seq_len():
                                                                        "feature_dim_axis": 3,
                                                                        "sparse": False
                                                                        })
-      src_nhwc.output.placeholder = TFCompat.v1.placeholder(shape=(None, None, 16, 16), dtype=tf.float32)
-      src_nhwc.output.size_placeholder = {0: TFCompat.v1.placeholder(shape=(None,), dtype=tf.int32)}
+      src_nhwc.output.placeholder = tf_compat.v1.placeholder(shape=(None, None, 16, 16), dtype=tf.float32)
+      src_nhwc.output.size_placeholder = {0: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
 
     rnd = np.random.RandomState(42)
     mean = tf.constant(rnd.rand(1, 1, 1, 16), name="rand_mean", dtype=tf.float32)
@@ -341,7 +341,7 @@ def test_batch_norm_unequal_seq_len():
     n1 = 9 * 11 * 16 + 5 * 16
     n2 = 10 * 11 * 16
 
-    with TFCompat.v1.variable_scope("batch_norm_masked_nchw"):
+    with tf_compat.v1.variable_scope("batch_norm_masked_nchw"):
       batch_norm_1 = BatchNormLayer(name="batch_norm_masked_nchw", network=net, masked_time=True,
                                     sample_mean=mean, sample_variance=variance,
                                     use_shift=False, use_std=False, epsilon=0.0,
@@ -350,7 +350,7 @@ def test_batch_norm_unequal_seq_len():
                                                                                  sources=[src_nhwc],
                                                                                  network=net))
       batch_norm_1.post_init(layer_desc=None)
-    with TFCompat.v1.variable_scope("batch_norm_nonmasked_nchw"):
+    with tf_compat.v1.variable_scope("batch_norm_nonmasked_nchw"):
       batch_norm_2 = BatchNormLayer(name="batch_norm_nonmasked_nchw", network=net, masked_time=False,
                                     sample_mean=mean, sample_variance=variance,
                                     use_shift=False, use_std=False, epsilon=0,
@@ -359,7 +359,7 @@ def test_batch_norm_unequal_seq_len():
                                                                                  sources=[src_nhwc],
                                                                                  network=net))
       batch_norm_2.post_init(layer_desc=None)
-    TFCompat.v1.global_variables_initializer().run()
+    tf_compat.v1.global_variables_initializer().run()
     out_1, seq_lens_1 = session.run([batch_norm_1.output.placeholder,
                                      batch_norm_1.output.size_placeholder[0]],
                                     feed_dict={src_nhwc.output.placeholder: input_data,
@@ -420,7 +420,7 @@ def test_activation_layer_net_construct_two_out():
       }})
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_value("network"))
-    session.run(TFCompat.v1.global_variables_initializer())
+    session.run(tf_compat.v1.global_variables_initializer())
     out = network.layers["output"].output.placeholder
     out2 = network.layers["0out"].output.placeholder
     n_batch = 1
@@ -464,7 +464,7 @@ def test_cnn_building_block():
       }})
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_value("network"))
-    session.run(TFCompat.v1.global_variables_initializer())
+    session.run(tf_compat.v1.global_variables_initializer())
     out = network.layers["output"].output.placeholder
     n_batch = 5
     seq_len = 10
@@ -503,7 +503,7 @@ def test_CombineLayer_simple_add():
     network.construct_from_dict(net_dict)
     out = network.get_default_output_layer()
     feed_dict = make_feed_dict(network.extern_data.data.values(), same_time=True)
-    session.run(TFCompat.v1.global_variables_initializer())
+    session.run(tf_compat.v1.global_variables_initializer())
     session.run(out.output.placeholder, feed_dict=feed_dict)
 
 
@@ -523,7 +523,7 @@ def test_CombineLayer_broadcast():
     out = network.get_default_output_layer()
     assert out.output.shape == (None, 9)
     feed_dict = make_feed_dict(network.extern_data.data.values(), same_time=True)
-    session.run(TFCompat.v1.global_variables_initializer())
+    session.run(tf_compat.v1.global_variables_initializer())
     session.run(out.output.placeholder, feed_dict=feed_dict)
 
 
@@ -1261,7 +1261,7 @@ def test_CondLayer_subnetwork_train():
     pprint(trainable_vars)
     cond_var = net.layers["cond"].params["lin/W"]
     assert cond_var in trainable_vars
-    from TFUpdater import Updater
+    from returnn.tf.updater import Updater
     updater = Updater(config=config, network=net, initial_learning_rate=0.1)
     updater.set_trainable_vars(trainable_vars)
     updater.init_optimizer_vars(session)
@@ -1337,7 +1337,7 @@ def test_ScatterNdLayer_RangeLayer():
     assert out_layer.output.feature_dim_axis_or_unspecified is NotSpecified and out_layer.output.feature_dim_axis == 2
     assert out_layer.output.time_dim_axis == 1
 
-    session.run(TFCompat.v1.variables_initializer(TFCompat.v1.global_variables() + [network.global_train_step]))
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
     info, out = session.run(
       (fetches, out_layer.output.placeholder),
       feed_dict={
@@ -1375,7 +1375,7 @@ def test_ScatterNdLayer_RangeLayer_RangeInAxisLayer():
     assert out_layer.output.feature_dim_axis_or_unspecified is NotSpecified and out_layer.output.feature_dim_axis == 3
     assert out_layer.output.time_dim_axis == 0
 
-    session.run(TFCompat.v1.variables_initializer(TFCompat.v1.global_variables() + [network.global_train_step]))
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
     info, out = session.run(
       (fetches, out_layer.output.placeholder),
       feed_dict={
@@ -1628,7 +1628,7 @@ def test_SliceLayer_NCHW():
   with make_scope() as session:
     import numpy as np
     net = TFNetwork(extern_data=ExternData())
-    with TFCompat.v1.variable_scope("src_nchw"):
+    with tf_compat.v1.variable_scope("src_nchw"):
       src_nchw = InternalLayer(name="src_nchw", network=net, out_type={"dim": 16,
                                                                        "shape": (16, None, 16),
                                                                        "batch_dim_axis": 0,
@@ -1636,9 +1636,9 @@ def test_SliceLayer_NCHW():
                                                                        "feature_dim_axis": 1,
                                                                        "sparse": False
                                                                        })
-      src_nchw.output.placeholder = TFCompat.v1.placeholder(shape=(None, 16, None, 16), dtype=tf.float32)
-      src_nchw.output.size_placeholder = {1: TFCompat.v1.placeholder(shape=(None,), dtype=tf.int32)}
-    with TFCompat.v1.variable_scope("src_nchw_feature_unspecified"):
+      src_nchw.output.placeholder = tf_compat.v1.placeholder(shape=(None, 16, None, 16), dtype=tf.float32)
+      src_nchw.output.size_placeholder = {1: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
+    with tf_compat.v1.variable_scope("src_nchw_feature_unspecified"):
       src_nchw_no_f = InternalLayer(name="src_nchw_feature_unspecified", network=net, out_type={"dim": 16,
                                                                                                 "shape": (16, None, 16),
                                                                                                 "batch_dim_axis": 0,
@@ -1646,14 +1646,14 @@ def test_SliceLayer_NCHW():
                                                                                                 "feature_dim_axis": NotSpecified,
                                                                                                 "sparse": False
                                                                                                 })
-      src_nchw_no_f.output.placeholder = TFCompat.v1.placeholder(shape=(None, 16, None, 16), dtype=tf.float32)
-      src_nchw_no_f.output.size_placeholder = {1: TFCompat.v1.placeholder(shape=(None,), dtype=tf.int32)}
-    with TFCompat.v1.variable_scope("slice1"):
+      src_nchw_no_f.output.placeholder = tf_compat.v1.placeholder(shape=(None, 16, None, 16), dtype=tf.float32)
+      src_nchw_no_f.output.size_placeholder = {1: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
+    with tf_compat.v1.variable_scope("slice1"):
       slice1 = SliceLayer(
         name="slice1", network=net, axis="f", slice_step=2, sources=[src_nchw],
         output=SliceLayer.get_out_data_from_opts(name="slice1", axis="f", slice_step=2,
                                                  sources=[src_nchw]))
-    with TFCompat.v1.variable_scope("slice2"):
+    with tf_compat.v1.variable_scope("slice2"):
       slice2 = SliceLayer(
         name="slice2", network=net, axis="f", slice_step=2, sources=[src_nchw_no_f],
         output=SliceLayer.get_out_data_from_opts(name="slice2", axis="f", slice_step=2,
@@ -1863,7 +1863,7 @@ def test_conv_layer_NCHW():
   with make_scope() as session:
     import numpy as np
     net = TFNetwork(extern_data=ExternData())
-    with TFCompat.v1.variable_scope("src_nhwc"):
+    with tf_compat.v1.variable_scope("src_nhwc"):
       src_nhwc = InternalLayer(name="src_nhwc", network=net, out_type={"dim": 16,
                                                                        "shape": (None, 16, 16),
                                                                        "batch_dim_axis": 0,
@@ -1871,9 +1871,9 @@ def test_conv_layer_NCHW():
                                                                        "feature_dim_axis": 3,
                                                                        "sparse": False
                                                                        })
-      src_nhwc.output.placeholder = TFCompat.v1.placeholder(shape=(None, None, 16, 16), dtype=tf.float32)
-      src_nhwc.output.size_placeholder = {0: TFCompat.v1.placeholder(shape=(None,), dtype=tf.int32)}
-    with TFCompat.v1.variable_scope("src_nchw"):
+      src_nhwc.output.placeholder = tf_compat.v1.placeholder(shape=(None, None, 16, 16), dtype=tf.float32)
+      src_nhwc.output.size_placeholder = {0: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
+    with tf_compat.v1.variable_scope("src_nchw"):
       src_nchw = InternalLayer(name="src_nchw", network=net, out_type={"dim": 16,
                                                                        "shape": (16, None, 16),
                                                                        "batch_dim_axis": 0,
@@ -1881,15 +1881,15 @@ def test_conv_layer_NCHW():
                                                                        "feature_dim_axis": 1,
                                                                        "sparse": False
                                                                        })
-      src_nchw.output.placeholder = TFCompat.v1.placeholder(shape=(None, 16, None, 16), dtype=tf.float32)
-      src_nchw.output.size_placeholder = {1: TFCompat.v1.placeholder(shape=(None,), dtype=tf.int32)}
+      src_nchw.output.placeholder = tf_compat.v1.placeholder(shape=(None, 16, None, 16), dtype=tf.float32)
+      src_nchw.output.size_placeholder = {1: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
 
     filters = 64
     filter_size = (5, 5)
     strides = (1, 2)
     padding = "VALID"
 
-    with TFCompat.v1.variable_scope("conv_nhwc_from_nhwc"):
+    with tf_compat.v1.variable_scope("conv_nhwc_from_nhwc"):
       conv_nhwc_from_nhwc = ConvLayer(
         name="conv_nhwc_from_nhwc", network=net, n_out=filters, filter_size=filter_size,
         padding=padding, strides=strides, auto_use_channel_first=False, sources=[src_nhwc],
@@ -1897,7 +1897,7 @@ def test_conv_layer_NCHW():
                                                 filter_size=filter_size, padding=padding,
                                                 auto_use_channel_first=False,
                                                 network=net, sources=[src_nhwc]))
-    with TFCompat.v1.variable_scope("conv_nchw_from_nhwc"):
+    with tf_compat.v1.variable_scope("conv_nchw_from_nhwc"):
       conv_nchw_from_nhwc = ConvLayer(
         name="conv_nchw_from_nhwc", network=net, n_out=filters, filter_size=filter_size,
         padding=padding, strides=strides, auto_use_channel_first=True, sources=[src_nhwc],
@@ -1905,7 +1905,7 @@ def test_conv_layer_NCHW():
                                                 filter_size=filter_size, padding=padding,
                                                 auto_use_channel_first=True,
                                                 network=net, sources=[src_nhwc]))
-    with TFCompat.v1.variable_scope("conv_nchw_from_nchw"):
+    with tf_compat.v1.variable_scope("conv_nchw_from_nchw"):
       conv_nchw_from_nchw = ConvLayer(
         name="conv_nchw_from_nchw", network=net, n_out=filters, filter_size=filter_size,
         padding=padding, strides=strides, auto_use_channel_first=True, sources=[src_nchw],
@@ -1913,7 +1913,7 @@ def test_conv_layer_NCHW():
                                                 filter_size=filter_size, padding=padding,
                                                 auto_use_channel_first=True,
                                                 network=net, sources=[src_nchw]))
-    TFCompat.v1.global_variables_initializer().run()
+    tf_compat.v1.global_variables_initializer().run()
     out, seq_lens = session.run([conv_nhwc_from_nhwc.output.placeholder,
                                  conv_nhwc_from_nhwc.output.size_placeholder[0]],
                                 feed_dict={src_nhwc.output.placeholder: np.random.rand(10, 10, 16, 16),
@@ -1922,7 +1922,7 @@ def test_conv_layer_NCHW():
     print(out.shape)
     assert_equal(out.shape, (10, 6, 6, 64))
     print(seq_lens)
-    time_dim_axis = 1 if TFUtil.is_gpu_available() else 0
+    time_dim_axis = 1 if tf_util.is_gpu_available() else 0
     out, seq_lens = session.run([conv_nchw_from_nhwc.output.placeholder,
                                  conv_nchw_from_nhwc.output.size_placeholder[time_dim_axis]],
                                 feed_dict={src_nhwc.output.placeholder: np.random.rand(10, 10, 16, 16),
@@ -1934,7 +1934,7 @@ def test_conv_layer_NCHW():
     else:
       assert_equal(out.shape, (10, 6, 6, 64))
     print(seq_lens)
-    if TFUtil.is_gpu_available():
+    if tf_util.is_gpu_available():
       out, seq_lens = session.run([conv_nchw_from_nchw.output.placeholder,
                                    conv_nchw_from_nchw.output.size_placeholder[1]],
                                   feed_dict={src_nchw.output.placeholder: np.random.rand(10, 16, 10, 16),
@@ -1949,7 +1949,7 @@ def test_pool_layer_NCHW():
   with make_scope() as session:
     import numpy as np
     net = TFNetwork(extern_data=ExternData())
-    with TFCompat.v1.variable_scope("src_nhwc"):
+    with tf_compat.v1.variable_scope("src_nhwc"):
       src_nhwc = InternalLayer(name="src_nhwc", network=net, out_type={"dim": 16,
                                                                        "shape": (None, 16, 16),
                                                                        "batch_dim_axis": 0,
@@ -1957,9 +1957,9 @@ def test_pool_layer_NCHW():
                                                                        "feature_dim_axis": 3,
                                                                        "sparse": False
                                                                        })
-      src_nhwc.output.placeholder = TFCompat.v1.placeholder(shape=(None, None, 16, 16), dtype=tf.float32)
-      src_nhwc.output.size_placeholder = {0: TFCompat.v1.placeholder(shape=(None,), dtype=tf.int32)}
-    with TFCompat.v1.variable_scope("src_nchw"):
+      src_nhwc.output.placeholder = tf_compat.v1.placeholder(shape=(None, None, 16, 16), dtype=tf.float32)
+      src_nhwc.output.size_placeholder = {0: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
+    with tf_compat.v1.variable_scope("src_nchw"):
       src_nchw = InternalLayer(name="src_nchw", network=net, out_type={"dim": 16,
                                                                        "shape": (16, None, 16),
                                                                        "batch_dim_axis": 0,
@@ -1967,14 +1967,14 @@ def test_pool_layer_NCHW():
                                                                        "feature_dim_axis": 1,
                                                                        "sparse": False
                                                                        })
-      src_nchw.output.placeholder = TFCompat.v1.placeholder(shape=(None, 16, None, 16), dtype=tf.float32)
-      src_nchw.output.size_placeholder = {1: TFCompat.v1.placeholder(shape=(None,), dtype=tf.int32)}
+      src_nchw.output.placeholder = tf_compat.v1.placeholder(shape=(None, 16, None, 16), dtype=tf.float32)
+      src_nchw.output.size_placeholder = {1: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
 
     pool_size = (5, 5)
     strides = (1, 2)
     padding = "VALID"
 
-    with TFCompat.v1.variable_scope("pool_nhwc_from_nhwc"):
+    with tf_compat.v1.variable_scope("pool_nhwc_from_nhwc"):
       pool_nhwc_from_nhwc = PoolLayer(
         name="pool_nhwc_from_nhwc", network=net, mode="max", pool_size=pool_size,
         padding=padding, strides=strides, use_channel_first=False, sources=[src_nhwc],
@@ -1982,7 +1982,7 @@ def test_pool_layer_NCHW():
                                                 pool_size=pool_size, padding=padding,
                                                 use_channel_first=False,
                                                 network=net, sources=[src_nhwc]))
-    with TFCompat.v1.variable_scope("pool_nchw_from_nhwc"):
+    with tf_compat.v1.variable_scope("pool_nchw_from_nhwc"):
       pool_nchw_from_nhwc = PoolLayer(
         name="pool_nchw_from_nhwc", network=net, mode="max", pool_size=pool_size,
         padding=padding, strides=strides, use_channel_first=True, sources=[src_nhwc],
@@ -1990,7 +1990,7 @@ def test_pool_layer_NCHW():
                                                 pool_size=pool_size, padding=padding,
                                                 use_channel_first=True,
                                                 network=net, sources=[src_nhwc]))
-    with TFCompat.v1.variable_scope("pool_nchw_from_nchw"):
+    with tf_compat.v1.variable_scope("pool_nchw_from_nchw"):
       pool_nchw_from_nchw = PoolLayer(
         name="pool_nchw_from_nchw", network=net, mode="max", pool_size=pool_size,
         padding=padding, strides=strides, use_channel_first=True, sources=[src_nchw],
@@ -1998,7 +1998,7 @@ def test_pool_layer_NCHW():
                                                 pool_size=pool_size, padding=padding,
                                                 use_channel_first=True,
                                                 network=net, sources=[src_nchw]))
-    with TFCompat.v1.variable_scope("pool_nhwc_from_nchw"):
+    with tf_compat.v1.variable_scope("pool_nhwc_from_nchw"):
       pool_nhwc_from_nchw = PoolLayer(
         name="pool_nhwc_from_nchw", network=net, mode="max", pool_size=pool_size,
         padding=padding, strides=strides, use_channel_first=False, sources=[src_nchw],
@@ -2006,7 +2006,7 @@ def test_pool_layer_NCHW():
                                                 pool_size=pool_size, padding=padding,
                                                 use_channel_first=False,
                                                 network=net, sources=[src_nchw]))
-    TFCompat.v1.global_variables_initializer().run()
+    tf_compat.v1.global_variables_initializer().run()
     out, seq_lens = session.run([pool_nhwc_from_nhwc.output.placeholder,
                                  pool_nhwc_from_nhwc.output.size_placeholder[0]],
                                 feed_dict={src_nhwc.output.placeholder: np.random.rand(10, 11, 16, 16),
@@ -2015,7 +2015,7 @@ def test_pool_layer_NCHW():
     print(out.shape)
     assert_equal(out.shape, (10, 7, 6, 16))
     print(seq_lens)
-    time_dim_axis = 1 if TFUtil.is_gpu_available() else 0
+    time_dim_axis = 1 if tf_util.is_gpu_available() else 0
     out, seq_lens = session.run([pool_nchw_from_nhwc.output.placeholder,
                                  pool_nchw_from_nhwc.output.size_placeholder[time_dim_axis]],
                                 feed_dict={src_nhwc.output.placeholder: np.random.rand(10, 11, 16, 16),
@@ -2027,7 +2027,7 @@ def test_pool_layer_NCHW():
     else:
       assert_equal(out.shape, (10, 7, 6, 16))
     print(seq_lens)
-    if TFUtil.is_gpu_available():
+    if tf_util.is_gpu_available():
       out, seq_lens = session.run([pool_nchw_from_nchw.output.placeholder,
                                    pool_nchw_from_nchw.output.size_placeholder[1]],
                                   feed_dict={src_nchw.output.placeholder: np.random.rand(10, 16, 11, 16),
@@ -2050,7 +2050,7 @@ def test_ReduceLayer_NCHW():
   with make_scope() as session:
     import numpy as np
     net = TFNetwork(extern_data=ExternData())
-    with TFCompat.v1.variable_scope("src_nchw"):
+    with tf_compat.v1.variable_scope("src_nchw"):
       src_nchw = InternalLayer(name="src_nchw", network=net, out_type={"dim": 16,
                                                                        "shape": (16, None, 16),
                                                                        "batch_dim_axis": 0,
@@ -2058,14 +2058,14 @@ def test_ReduceLayer_NCHW():
                                                                        "feature_dim_axis": 1,
                                                                        "sparse": False
                                                                        })
-      src_nchw.output.placeholder = TFCompat.v1.placeholder(shape=(None, 16, None, 16), dtype=tf.float32)
-      src_nchw.output.size_placeholder = {1: TFCompat.v1.placeholder(shape=(None,), dtype=tf.int32)}
-    with TFCompat.v1.variable_scope("reduce1"):
+      src_nchw.output.placeholder = tf_compat.v1.placeholder(shape=(None, 16, None, 16), dtype=tf.float32)
+      src_nchw.output.size_placeholder = {1: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
+    with tf_compat.v1.variable_scope("reduce1"):
       reduce1 = ReduceLayer(
         name="reduce1", network=net, mode="max", axis="f", sources=[src_nchw],
         output=ReduceLayer.get_out_data_from_opts(name="reduce1", mode="max", axis="f",
                                                   sources=[src_nchw]))
-    with TFCompat.v1.variable_scope("reduce2"):
+    with tf_compat.v1.variable_scope("reduce2"):
       reduce2 = ReduceLayer(
         name="reduce2", network=net, mode="max", axis="b", sources=[src_nchw],
         output=ReduceLayer.get_out_data_from_opts(name="reduce2", mode="max", axis="b",
@@ -2084,7 +2084,7 @@ def test_Loss_NCHW():
   with make_scope() as session:
     import numpy as np
     net = TFNetwork(extern_data=ExternData())
-    with TFCompat.v1.variable_scope("src_nchw"):
+    with tf_compat.v1.variable_scope("src_nchw"):
       src_nchw = InternalLayer(name="src_nchw", network=net, out_type={"dim": 16,
                                                                        "shape": (16, None),
                                                                        "batch_dim_axis": 0,
@@ -2092,22 +2092,22 @@ def test_Loss_NCHW():
                                                                        "feature_dim_axis": 1,
                                                                        "sparse": False
                                                                        })
-      src_nchw.output.placeholder = TFCompat.v1.placeholder(shape=(None, 16, None), dtype=tf.float32)
-      src_nchw.output.size_placeholder = {1: TFCompat.v1.placeholder(shape=(None,), dtype=tf.int32)}
+      src_nchw.output.placeholder = tf_compat.v1.placeholder(shape=(None, 16, None), dtype=tf.float32)
+      src_nchw.output.size_placeholder = {1: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
 
-    with TFCompat.v1.variable_scope("activation"):
+    with tf_compat.v1.variable_scope("activation"):
       activation = ActivationLayer(
         name="activation", activation="softmax", network=net, sources=[src_nchw],
         output=ActivationLayer.get_out_data_from_opts(name="activation", activation="softmax", network=net,
                                                       sources=[src_nchw]))
 
-    target_placeholder = TFCompat.v1.placeholder(shape=(None, None, 16), dtype=tf.float32)
-    target_size_placeholder = TFCompat.v1.placeholder(shape=(None,), dtype=tf.int32)
+    target_placeholder = tf_compat.v1.placeholder(shape=(None, None, 16), dtype=tf.float32)
+    target_size_placeholder = tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)
     target_data = Data(name="target", shape=(None, 16), placeholder=target_placeholder,
                        size_placeholder={0: target_size_placeholder},
                        time_dim_axis=1, feature_dim_axis=2)
 
-    with TFCompat.v1.variable_scope("loss"):
+    with tf_compat.v1.variable_scope("loss"):
       loss = CrossEntropyLoss(base_network=net)
       loss.init(output=activation.output, output_with_activation=activation.output_before_activation,
                 target=target_data, layer=activation)
@@ -2298,7 +2298,7 @@ def test_ReuseParams_rec():
       network.extern_data.data["classes"].size_placeholder[0]: numpy.array([seq_len]),
     }
   print("Creating session...")
-  with TFCompat.v1.Session() as session:
+  with tf_compat.v1.Session() as session:
     print("Init params...")
     network.initialize_params(session=session)
     print("Testing reuse_params ...")
@@ -2332,7 +2332,7 @@ def test_LossAsIs_custom_dim():
   n_batch = 5
   n_enc_time = 11
   n_dec_time = 7
-  with TFCompat.v1.Session() as session:
+  with tf_compat.v1.Session() as session:
     enc_time = tf.constant([n_enc_time] * n_batch)
     dec_time = tf.constant([n_dec_time] * n_batch)
     network.add_layer(name="energy", layer_class=InternalLayer, output=Data(
@@ -2420,14 +2420,14 @@ def test_LinearLayer_simple_train():
     network.construct_from_dict(net_dict)
     data_input = network.extern_data.get_default_input_data()
     data_target = network.extern_data.get_default_target_data()
-    optimizer = TFCompat.v1.train.AdamOptimizer()
+    optimizer = tf_compat.v1.train.AdamOptimizer()
     network.maybe_construct_objective()
     update_op = optimizer.minimize(network.get_objective())
     n_batch = 5
     n_time = 11
     rnd = numpy.random.RandomState(42)
-    with TFCompat.v1.Session() as session:
-      session.run(TFCompat.v1.global_variables_initializer())
+    with tf_compat.v1.Session() as session:
+      session.run(tf_compat.v1.global_variables_initializer())
       for step in range(5):
         info, _ = session.run(
           (network.get_fetches_dict(), update_op),
@@ -2480,14 +2480,14 @@ def test_flat_net_construction():
     network.construct_from_dict(net_dict)
     data_input = network.extern_data.get_default_input_data()
     data_target = network.extern_data.get_default_target_data()
-    optimizer = TFCompat.v1.train.AdamOptimizer()
+    optimizer = tf_compat.v1.train.AdamOptimizer()
     network.maybe_construct_objective()
     update_op = optimizer.minimize(network.get_objective())
     n_batch = 5
     n_time = 11
     rnd = numpy.random.RandomState(42)
-    with TFCompat.v1.Session() as session:
-      session.run(TFCompat.v1.global_variables_initializer())
+    with tf_compat.v1.Session() as session:
+      session.run(tf_compat.v1.global_variables_initializer())
       for step in range(5):
         info, _ = session.run(
           (network.get_fetches_dict(), update_op),
@@ -2542,9 +2542,9 @@ def test_SyntheticGradientLayer():
     network.construct_from_dict(net_dict)
     data_input = network.extern_data.get_default_input_data()
     data_target = network.extern_data.get_default_target_data()
-    from TFUpdater import Updater
+    from returnn.tf.updater import Updater
     updater = Updater(config=config, network=network, initial_learning_rate=0.001)
-    updater.set_trainable_vars(TFCompat.v1.trainable_variables())
+    updater.set_trainable_vars(tf_compat.v1.trainable_variables())
     update_op = updater.get_optim_op()
     assert updater.optim_meta_losses_dict
     fetches = network.get_fetches_dict()
@@ -2553,8 +2553,8 @@ def test_SyntheticGradientLayer():
     n_batch = 5
     n_time = 11
     rnd = numpy.random.RandomState(42)
-    with TFCompat.v1.Session() as session:
-      session.run(TFCompat.v1.variables_initializer(TFCompat.v1.global_variables() + [network.global_train_step]))
+    with tf_compat.v1.Session() as session:
+      session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
       for step in range(5):
         info, _ = session.run(
           (fetches, update_op),
@@ -2607,9 +2607,9 @@ def test_TikhonovRegularizationLayer():
     network.construct_from_dict(net_dict)
     data_input = network.extern_data.get_default_input_data()
     data_target = network.extern_data.get_default_target_data()
-    from TFUpdater import Updater
+    from returnn.tf.updater import Updater
     updater = Updater(config=config, network=network, initial_learning_rate=0.001)
-    updater.set_trainable_vars(TFCompat.v1.trainable_variables())
+    updater.set_trainable_vars(tf_compat.v1.trainable_variables())
     update_op = updater.get_optim_op()
     assert updater.optim_meta_losses_dict
     fetches = network.get_fetches_dict()
@@ -2618,8 +2618,8 @@ def test_TikhonovRegularizationLayer():
     n_batch = 5
     n_time = 11
     rnd = numpy.random.RandomState(42)
-    with TFCompat.v1.Session() as session:
-      session.run(TFCompat.v1.variables_initializer(TFCompat.v1.global_variables() + [network.global_train_step]))
+    with tf_compat.v1.Session() as session:
+      session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
       for step in range(5):
         info, _ = session.run(
           (fetches, update_op),
@@ -2723,7 +2723,7 @@ def test_extra_search():
     fetches = network.get_fetches_dict()
     data_input = network.extern_data.data["data"]
 
-    session.run(TFCompat.v1.variables_initializer(TFCompat.v1.global_variables() + [network.global_train_step]))
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
     info, out = session.run(
       (fetches, layer_output.output.placeholder),
       feed_dict={
@@ -2754,7 +2754,7 @@ def test_HDFDumpLayer():
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_value("network"))
 
-    session.run(TFCompat.v1.global_variables_initializer())
+    session.run(tf_compat.v1.global_variables_initializer())
     out = network.layers["output"].output.placeholder
     n_batch = 1
     seq_len = 4
@@ -2805,7 +2805,7 @@ def test_HDFDumpLayer_sparse():
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_value("network"))
 
-    session.run(TFCompat.v1.global_variables_initializer())
+    session.run(tf_compat.v1.global_variables_initializer())
     n_batch = 1
     classes_data = numpy.array([[2, 5, 6]], dtype="int32")
     classes_seq_lens = [classes_data.shape[1]]
@@ -2851,7 +2851,7 @@ def test_HDFDumpLayer_fixed_length():
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_value("network"))
 
-    session.run(TFCompat.v1.global_variables_initializer())
+    session.run(tf_compat.v1.global_variables_initializer())
     out = network.layers["output"].output.placeholder
     n_batch = 1
     seq_len = 4
@@ -2908,7 +2908,7 @@ def test_HDFDumpLayer_extra():
     network.construct_from_dict(config.typed_value("network"))
     network.print_network_info()
 
-    session.run(TFCompat.v1.global_variables_initializer())
+    session.run(tf_compat.v1.global_variables_initializer())
     n_batch = 1
     input_data = numpy.array([[
       [1, -0.2, 0.3, -4, 5],
@@ -2979,7 +2979,7 @@ def test_HDFDumpLayer_dump_whole_batch_extra_sm():
     network.construct_from_dict(config.typed_value("network"))
     network.print_network_info()
 
-    session.run(TFCompat.v1.global_variables_initializer())
+    session.run(tf_compat.v1.global_variables_initializer())
     n_batch = 1
     input_data = numpy.array([[
       [1, -0.2, 0.3, -4, 5],
@@ -3046,7 +3046,7 @@ def test_HDFDumpLayer_dump_whole_batch_extra_sm1():
     network.construct_from_dict(config.typed_value("network"))
     network.print_network_info()
 
-    session.run(TFCompat.v1.global_variables_initializer())
+    session.run(tf_compat.v1.global_variables_initializer())
     n_batch = 1
     input_data = numpy.array([[
       [1, -0.2, 0.3, -4, 5],
@@ -3109,12 +3109,12 @@ def test_CrossEntropyLoss():
     loss_holder = losses_dict["output"]
     assert isinstance(loss_holder, LossHolder)
     assert isinstance(loss_holder.loss, CrossEntropyLoss)
-    session.run(TFCompat.v1.global_variables_initializer())
+    session.run(tf_compat.v1.global_variables_initializer())
     print("Get loss:")
     feed_dict = make_feed_dict(net.extern_data.data.values(), same_time=True)
     print("random classes:", feed_dict[net.extern_data.data["classes"].placeholder])
     loss_t = loss_holder.get_loss_value()
-    opt = TFCompat.v1.train.GradientDescentOptimizer(learning_rate=0.1)
+    opt = tf_compat.v1.train.GradientDescentOptimizer(learning_rate=0.1)
     minimize_op = opt.minimize(loss_t)
     last_loss_v = float("inf")
     for step in range(3):
@@ -3134,7 +3134,7 @@ def test_CrossEntropyLoss_masked_inf():
         "data": {"dim": n_out},
         "classes": {"dim": n_out, "sparse": True},
       }})
-    mask_t = TFCompat.v1.placeholder(tf.bool, (n_out,), name="mask")
+    mask_t = tf_compat.v1.placeholder(tf.bool, (n_out,), name="mask")
 
     def mask_func(source, **kwargs):
       x = source(0)
@@ -3159,13 +3159,13 @@ def test_CrossEntropyLoss_masked_inf():
     loss_holder = losses_dict["output"]
     assert isinstance(loss_holder, LossHolder)
     assert isinstance(loss_holder.loss, CrossEntropyLoss)
-    session.run(TFCompat.v1.global_variables_initializer())
+    session.run(tf_compat.v1.global_variables_initializer())
     print("Get loss:")
     feed_dict = make_feed_dict(net.extern_data.data.values(), same_time=True)
     mask_v = numpy.array([True] * n_out)
     feed_dict[mask_t] = mask_v
     loss_t = loss_holder.get_loss_value()
-    opt = TFCompat.v1.train.GradientDescentOptimizer(learning_rate=0.1)
+    opt = tf_compat.v1.train.GradientDescentOptimizer(learning_rate=0.1)
     minimize_op = opt.minimize(loss_t)
     last_loss_v = float("inf")
     for step in range(3):
@@ -3180,7 +3180,7 @@ def test_CrossEntropyLoss_masked_inf():
     rnd_classes = feed_dict[net.extern_data.data["classes"].placeholder]
     print("random classes:", rnd_classes)
     mask_v[rnd_classes[0, 0]] = False
-    var_t, = TFCompat.v1.trainable_variables()
+    var_t, = tf_compat.v1.trainable_variables()
     last_var_v = session.run(var_t)
     for step in range(3, 6):
       loss_v, _ = session.run((loss_t, minimize_op), feed_dict=feed_dict)
@@ -3203,7 +3203,7 @@ def test_CrossEntropyLoss_masked_inf_fake_upper_bound():
         "data": {"dim": n_out},
         "classes": {"dim": n_out, "sparse": True},
       }})
-    mask_t = TFCompat.v1.placeholder(tf.bool, (n_out,), name="mask")
+    mask_t = tf_compat.v1.placeholder(tf.bool, (n_out,), name="mask")
 
     def mask_func(source, **kwargs):
       x = source(0)
@@ -3228,13 +3228,13 @@ def test_CrossEntropyLoss_masked_inf_fake_upper_bound():
     loss_holder = losses_dict["output"]
     assert isinstance(loss_holder, LossHolder)
     assert isinstance(loss_holder.loss, CrossEntropyLoss)
-    session.run(TFCompat.v1.global_variables_initializer())
+    session.run(tf_compat.v1.global_variables_initializer())
     print("Get loss:")
     feed_dict = make_feed_dict(net.extern_data.data.values(), same_time=True)
     mask_v = numpy.array([True] * n_out)
     feed_dict[mask_t] = mask_v
     loss_t = loss_holder.get_loss_value()
-    opt = TFCompat.v1.train.GradientDescentOptimizer(learning_rate=0.1)
+    opt = tf_compat.v1.train.GradientDescentOptimizer(learning_rate=0.1)
     minimize_op = opt.minimize(loss_t)
     last_loss_v = float("inf")
     for step in range(3):
@@ -3249,7 +3249,7 @@ def test_CrossEntropyLoss_masked_inf_fake_upper_bound():
     rnd_classes = feed_dict[net.extern_data.data["classes"].placeholder]
     print("random classes:", rnd_classes)
     mask_v[rnd_classes[0, 0]] = False
-    var_t, = TFCompat.v1.trainable_variables()
+    var_t, = tf_compat.v1.trainable_variables()
     last_var_v = session.run(var_t)
     for step in range(3, 6):
       loss_v, _ = session.run((loss_t, minimize_op), feed_dict=feed_dict)
@@ -3273,7 +3273,7 @@ def test_reduce_mean_in_time():
     net.construct_from_dict({
       "output": {"class": "reduce", "mode": "mean", "axis": "T", "from": ["data"]}
     })
-    session.run(TFCompat.v1.global_variables_initializer())
+    session.run(tf_compat.v1.global_variables_initializer())
     out = net.layers["output"].output.placeholder
     n_batch = 3
     max_seq_len = 10
@@ -3301,7 +3301,7 @@ def test_reduce_mean_batch_time():
     net.construct_from_dict({
       "output": {"class": "reduce", "mode": "mean", "axis": ["B", "T"], "from": ["data"]}
     })
-    session.run(TFCompat.v1.global_variables_initializer())
+    session.run(tf_compat.v1.global_variables_initializer())
     out = net.layers["output"].output.placeholder
     n_batch = 3
     max_seq_len = 10

@@ -7,7 +7,7 @@ from nose.tools import assert_equal, assert_is_instance, assert_in, assert_great
 from pprint import pprint
 from returnn.config import Config
 from returnn.util.basic import PY3
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.replace_traceback_format_tb()
 if PY3:
   from io import StringIO
@@ -85,7 +85,7 @@ hidden_type = ["forward", "lstm"]
 
 
 def test_rnn_init_config_py_global_var():
-  import rnn
+  import returnn.__main__ as rnn
   import tempfile
   with tempfile.NamedTemporaryFile(mode="w", suffix=".config", prefix="test_rnn_initConfig") as cfgfile:
     cfgfile.write("""#!rnn.py
@@ -120,7 +120,7 @@ def test_func():
 
 
 def test_rnn_init_config_py_cmd_type():
-  import rnn
+  import returnn.__main__ as rnn
   import tempfile
   with tempfile.NamedTemporaryFile(mode="w", suffix=".config", prefix="test_rnn_initConfig") as cfgfile:
     cfgfile.write("""#!rnn.py

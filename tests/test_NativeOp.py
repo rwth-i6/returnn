@@ -16,21 +16,21 @@ from numpy.testing.utils import assert_almost_equal, assert_allclose
 import theano.printing
 from pprint import pprint
 from returnn.datasets.generating import Task12AXDataset
-from Updater import Updater
+from returnn.theano.updater import Updater
 from returnn.util.basic import have_gpu
 from returnn.util.basic import NumbersDict
 from returnn.config import Config
-from NetworkHiddenLayer import DumpLayer
+from returnn.theano.layers.hidden import DumpLayer
 import rnn
-import EngineUtil
-import TheanoUtil
-import Network
-import better_exchook
+import returnn.theano.engine_util as engine_util
+import returnn.theano.util as theano_util
+import returnn.theano.network as network
+from returnn.util import better_exchook
 from returnn.log import log
 
 better_exchook.replace_traceback_format_tb()
 log.initialize()  # some code needs it
-TheanoUtil.monkey_patches()
+theano_util.monkey_patches()
 
 # Some code uses get_global_config().
 # Not sure about the most clean solution.
@@ -84,7 +84,7 @@ def test_DummyDevice():
   batch_gen = dataset.generate_batches(recurrent_net=True, batch_size=1000, max_seqs=3)
   batches = batch_gen.peek_next_n(1)
   dev = DummyDevice()
-  assign_success, _ = EngineUtil.assign_dev_data(device=dev, dataset=dataset, batches=batches)
+  assign_success, _ = engine_util.assign_dev_data(device=dev, dataset=dataset, batches=batches)
   assert assign_success
 
 
@@ -104,7 +104,7 @@ def load(lstm_opts=None):
   collected_data = {}
   DumpLayer.global_debug_container = collected_data
 
-  net = Network.LayerNetwork.from_json(
+  net = network.LayerNetwork.from_json(
     json_content=net_topo,
     n_in=num_inputs,
     n_out={"classes": (num_outputs, 1)},
@@ -123,7 +123,7 @@ def load(lstm_opts=None):
   batches = batch_gen.peek_next_n(1)
   # We need the DummyDevice for assign_dev_data.
   dev = DummyDevice()
-  assign_success, _ = EngineUtil.assign_dev_data(device=dev, dataset=dataset, batches=batches)
+  assign_success, _ = engine_util.assign_dev_data(device=dev, dataset=dataset, batches=batches)
   assert assign_success
   dev.initialize(net)
   dev.update_data()
@@ -158,6 +158,7 @@ def test_load():
 
 
 atol = 1e-7
+
 
 def compare_lstm(lstm_opts=None):
   res1 = load()
@@ -203,13 +204,13 @@ def test_native_lstm():
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_fast_bw():
   print("Make op...")
-  from NativeOp import FastBaumWelchOp
+  from returnn.native_op import FastBaumWelchOp
   op = FastBaumWelchOp().make_theano_op()  # (am_scores, edges, weights, start_end_states, float_idx, state_buffer)
   print("Op:", op)
   n_batch = 3
   seq_len = 5
   n_classes = 5
-  from Fsa import FastBwFsaShared
+  from returnn.util.fsa import FastBwFsaShared
   fsa = FastBwFsaShared()
   fsa.add_inf_loop(state_idx=0, num_emission_labels=n_classes)
   fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
@@ -239,13 +240,13 @@ def test_fast_bw():
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_fast_bw_uniform():
   print("Make op...")
-  from NativeOp import FastBaumWelchOp
+  from returnn.native_op import FastBaumWelchOp
   op = FastBaumWelchOp().make_theano_op()  # (am_scores, edges, weights, start_end_states, float_idx, state_buffer)
   print("Op:", op)
   n_batch = 3
   seq_len = 7
   n_classes = 5
-  from Fsa import FastBwFsaShared
+  from returnn.util.fsa import FastBwFsaShared
   fsa = FastBwFsaShared()
   for i in range(n_classes):
     fsa.add_edge(i, i + 1, emission_idx=i)  # fwd

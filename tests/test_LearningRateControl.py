@@ -3,12 +3,12 @@ import sys
 sys.path += ["."]  # Python 3 hack
 
 from returnn.config import Config
-from LearningRateControl import *
+from returnn.learning_rate_control import *
 from nose.tools import assert_equal
 import numpy
 import unittest
 
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 from returnn.log import log

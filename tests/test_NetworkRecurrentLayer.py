@@ -1,8 +1,8 @@
 
 import theano
 import numpy
-from NetworkBaseLayer import Container, SourceLayer
-from NetworkRecurrentLayer import RecurrentUnitLayer
+from returnn.theano.layers.base import Container, SourceLayer
+from returnn.theano.layers.rec import RecurrentUnitLayer
 
 Container.initialize_rng()
 

@@ -3,7 +3,7 @@ import sys
 sys.path += ["."]  # Python 3 hack
 
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
-from Pretrain import Pretrain, pretrain_from_config
+from returnn.pretrain import Pretrain, pretrain_from_config
 from returnn.config import Config
 
 

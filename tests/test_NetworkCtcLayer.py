@@ -3,7 +3,7 @@
 import os
 os.environ["THEANO_FLAGS"] = "mode=FAST_COMPILE"
 
-from NetworkCtcLayer import *
+from returnn.theano.layers.ctc import *
 from nose.tools import assert_equal
 
 

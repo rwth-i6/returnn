@@ -6,10 +6,10 @@ try:
   from StringIO import StringIO
 except ImportError:  # Python 3
   from io import BytesIO as StringIO
-from TaskSystem import *
+from returnn.util.task_system import *
 import inspect
 from nose.tools import assert_equal, assert_is_instance
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 

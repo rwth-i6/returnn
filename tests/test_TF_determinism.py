@@ -40,7 +40,7 @@ else:
 
 
 def load_data():
-  from rnn import load_data
+  from returnn.__main__ import load_data
   dev_data, _ = load_data(config, 0, 'dev', chunking=config.value("chunking", ""), seq_ordering="sorted",
                           shuffle_frames_of_nseqs=0)
   eval_data, _ = load_data(config, 0, 'eval', chunking=config.value("chunking", ""), seq_ordering="sorted",

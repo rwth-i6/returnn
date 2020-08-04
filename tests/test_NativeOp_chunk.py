@@ -2,27 +2,27 @@
 import sys
 sys.path += ["."]  # Python 3 hack
 
-import TheanoNativeOp
-import NativeOp
+import returnn.theano.native_op as theano_native_op
+import returnn.native_op as native_op
 import numpy
 from numpy.testing.utils import assert_almost_equal
 import theano.tensor as T
-import TheanoUtil
+import returnn.theano.util as theano_util
 import sys
 f32 = "float32"
 
 
-import better_exchook
+from returnn.util import better_exchook
 from returnn.log import log
 
 better_exchook.replace_traceback_format_tb()
 log.initialize()  # some code might need it
-TheanoUtil.monkey_patches()
+theano_util.monkey_patches()
 
 
-chunk = TheanoNativeOp.chunk
-unchunk = TheanoNativeOp.unchunk
-naive_chunk_start_frames = NativeOp.Chunking.naive_chunk_start_frames
+chunk = theano_native_op.chunk
+unchunk = theano_native_op.unchunk
+naive_chunk_start_frames = native_op.Chunking.naive_chunk_start_frames
 
 
 def get_num_chunks(n_time, chunk_size, chunk_step):
@@ -120,11 +120,11 @@ def test_chunk_unchunk_grad2():
   chunk_step = 7
 
   out, oindex = chunk(x, index=index, chunk_size=chunk_size, chunk_step=chunk_step)
-  chunk_op = NativeOp.Chunking().make_theano_op()
+  chunk_op = native_op.Chunking().make_theano_op()
   assert type(out.owner.op) is type(chunk_op)
 
   x2, index2, factors = unchunk(out, index=oindex, chunk_size=chunk_size, chunk_step=chunk_step, n_time=x.shape[0], n_batch=x.shape[1])
-  unchunk_op = NativeOp.UnChunking().make_theano_op()
+  unchunk_op = native_op.UnChunking().make_theano_op()
   assert type(x2.owner.op) is type(unchunk_op)
 
   Dout, _, _, _, _, _ = unchunk_op.grad(x2.owner.inputs, (Dx2, None, None))

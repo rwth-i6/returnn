@@ -12,7 +12,7 @@ from glob import glob
 from pprint import pprint
 import unittest
 from nose.tools import assert_less, assert_in, assert_equal
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 

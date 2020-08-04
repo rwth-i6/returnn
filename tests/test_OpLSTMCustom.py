@@ -12,7 +12,7 @@ from returnn.util.basic import have_gpu
 import RecurrentTransform
 import theano.sandbox.cuda as cuda
 from returnn.log import log
-import better_exchook
+from returnn.util import better_exchook
 import CustomLSTMFunctions
 
 log.initialize(verbosity=[5])

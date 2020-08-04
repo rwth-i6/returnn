@@ -17,10 +17,10 @@ import contextlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/..")
 
 from returnn.tf.network import *
-from TFNetworkSigProcLayer import *
+from returnn.tf.layers.signal_processing import *
 from returnn.config import Config
 
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 

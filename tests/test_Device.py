@@ -4,13 +4,13 @@ sys.path += ["."]  # Python 3 hack
 
 
 from returnn.config import Config
-from Engine import Engine
-from Device import Device
+from returnn.theano.engine import Engine
+from returnn.theano.device import Device
 from returnn.log import log
-import TheanoUtil
+import returnn.theano.util as theano_util
 
 log.initialize()
-TheanoUtil.monkey_patches()
+theano_util.monkey_patches()
 
 
 def test_Device_blocking_init():

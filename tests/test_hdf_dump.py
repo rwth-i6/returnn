@@ -13,7 +13,7 @@ from returnn.datasets.generating import DummyDataset
 from returnn.datasets.hdf import HDFDataset
 from returnn.util.basic import DictAsObj
 import unittest
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 

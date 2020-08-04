@@ -17,8 +17,8 @@ from nose.tools import raises
 sys.path += ["."]  # Python 3 hack
 sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
 
-import better_exchook
-from LmDataset import TranslationDataset, TranslationFactorsDataset
+from returnn.util import better_exchook
+from returnn.datasets.lm import TranslationDataset, TranslationFactorsDataset
 from returnn.util.basic import init_thread_join_hack
 
 better_exchook.install()
