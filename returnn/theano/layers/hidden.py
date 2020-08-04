@@ -17,6 +17,7 @@ try:
   from theano.tensor.signal import pool
 except ImportError:  # old Theano or so...
   pool = None
+from returnn.util.basic import unicode, long
 from returnn.theano.layers.base import Layer
 from returnn.theano.activation_functions import strtoact, strtoact_single_joined, elu
 import returnn.theano.util as theano_util
@@ -25,6 +26,8 @@ from returnn.log import log
 from math import ceil
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 from returnn.theano.util import print_to_file, DumpOp
+from returnn.theano.ops.inv_align import InvAlignOp
+
 
 class HiddenLayer(Layer):
   def __init__(self, activation="sigmoid", **kwargs):
@@ -334,7 +337,7 @@ class DownsampleLayer(_NoOpLayer):
       z = z.dimshuffle(1,0,2,3).reshape((z.shape[1],z.shape[0]*z.shape[2],z.shape[3]))
       #z = theano.printing.Print("b", attrs=['shape'])(z)
       from math import sqrt
-      from ActivationFunctions import elu
+      from returnn.theano.activation_functions import elu
       l = sqrt(6.) / sqrt(6 * n_out)
       values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n_out, n_out)), dtype=theano.config.floatX)
       self.A_in = self.add_param(self.shared(value=values, borrow=True, name = "A_in_" + self.name))
@@ -862,7 +865,7 @@ class ChunkingSublayer(_NoOpLayer):
     t_range = T.arange(t_last_start, step=chunk_step)
 
     from returnn.theano.layers.base import SourceLayer
-    from NetworkLayer import get_layer_class
+    from returnn.theano.layers.basic import get_layer_class
     def make_sublayer(source, index, name):
       layer_opts = sublayer.copy()
       cl = layer_opts.pop("class")
@@ -965,7 +968,7 @@ class TimeChunkingLayer(_NoOpLayer):
     self.set_attr("chunk_step", chunk_step)
     x, n_in = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
     self.source_index = self.index
-    from TheanoNativeOp import chunk
+    from returnn.theano.native_op import chunk
     self.output, self.index = chunk(x, index=self.source_index, chunk_size=chunk_size, chunk_step=chunk_step)
 
 
@@ -984,9 +987,10 @@ class TimeUnChunkingLayer(_NoOpLayer):
     chunk_step = chunking_layer_o.attrs["chunk_step"]
     n_time = chunking_layer_o.source_index.shape[0]
     n_batch = chunking_layer_o.source_index.shape[1]
-    from TheanoNativeOp import unchunk
+    from returnn.theano.native_op import unchunk
     self.output, self.index, _ = unchunk(
       x, index=chunking_layer_o.index, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
+
 
 class TimeFlatLayer(_NoOpLayer):
   layer_class = "time_flat"
@@ -1000,7 +1004,7 @@ class TimeFlatLayer(_NoOpLayer):
     self.source_index = self.index
     n_time = self.index.shape[0] * chunk_size
     n_batch = self.index.shape[1]
-    from TheanoNativeOp import unchunk
+    from returnn.theano.native_op import unchunk
     self.output, self.index, _ = unchunk(
       x, index=self.index, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
 
@@ -1438,7 +1442,7 @@ class TimeWarpGlobalLayer(_NoOpLayer):
     m = 1  # warp values: compression at idx
     self.W_warp = self.add_var_random_mat(n_in, m, name="W_warp")
     self.b_warp = self.add_param(self.create_bias(m, name="b_warp")).dimshuffle('x', 0)  # batch,m
-    from ActivationFunctions import relu
+    from returnn.theano.activation_functions import relu
     warp = T.dot(x, self.W_warp) + self.b_warp  # time,batch,m
     # Right now, we can only shrink the time.
     warp_compr = relu(warp[:, :, 0])  # time,batch
@@ -1594,7 +1598,6 @@ class GenericCodeLayer(_NoOpLayer):
     self.set_attr('n_out', n_out)
     code = code.encode("utf8")
     self.set_attr('code', code)
-    import theano_util
     output = eval(code, {"self": self, "s": self.sources,
                          "T": T, "theano": theano, "numpy": numpy, "TU": theano_util,
                          "f32": numpy.float32})
@@ -2149,7 +2152,7 @@ class AttentionVectorLayer(_NoOpLayer):
   def cost(self):
     return self.cost_val, None
 
-from OpInvAlign import InvAlignOp
+
 class StateAlignmentLayer(HiddenLayer):
   layer_class = 'state_alignment'
 
@@ -2440,6 +2443,7 @@ class CorruptionLayer(_NoOpLayer): # x = x + noise
       z = T.clip(z,numpy.float32(0),numpy.float32(1))
     self.make_output(z)
 
+
 class InputBase(Layer):
   layer_class = "input_base"
 
@@ -2450,6 +2454,7 @@ class InputBase(Layer):
     self.set_attr('from', ",".join([s.name for s in self.sources]))
     self.make_output(self.sources[0].W_in[0].dimshuffle(0,'x',1).repeat(self.index.shape[1],axis=1))
     self.set_attr('n_out', self.sources[0].W_in[0].get_value().shape[1])
+
 
 class ConvPoolLayer(ForwardLayer):
   layer_class = "convpool"
@@ -2474,7 +2479,7 @@ class ConvPoolLayer(ForwardLayer):
     w_shp = (2, 3, 9, 9)
     w_bound = numpy.sqrt(3 * 9 * 9)
     W = self.shared( numpy.asarray(
-                rng.uniform(
+                self.rng.uniform(
                     low=-1.0 / w_bound,
                     high=1.0 / w_bound,
                     size=w_shp),
@@ -2487,7 +2492,7 @@ class ConvPoolLayer(ForwardLayer):
     # them to random values to "simulate" learning.
     b_shp = (2,)
     b = self.shared(numpy.asarray(
-                rng.uniform(low=-.5, high=.5, size=b_shp),
+                self.rng.uniform(low=-.5, high=.5, size=b_shp),
                 dtype=input.dtype), name ='b')
 
     # build symbolic expression that computes the convolution of input with filters in w
@@ -2674,7 +2679,7 @@ class TorchLayer(_NoOpLayer):
     args += [self.index]
     args_info += [{"ndim": 2, "shape": (None, None), "gradient": "disconnected", "type": "input_index"}]
 
-    from TorchWrapper import TorchWrapperOp
+    from returnn.theano.ops.torch_wrapper import TorchWrapperOp
     op = TorchWrapperOp(
       name=self.name,
       in_info=args_info,
@@ -2698,9 +2703,9 @@ class NativeLayer(_NoOpLayer):
     assert isinstance(params, (tuple, list))  # list[param-init-dict]
     self.set_attr('native_class', native_class)
 
-    import NativeOp
-    native_class_cls = getattr(NativeOp, native_class)
-    assert issubclass(native_class_cls, NativeOp.NativeOpGenBase)
+    import returnn.native_op
+    native_class_cls = getattr(returnn.native_op, native_class)
+    assert issubclass(native_class_cls, returnn.native_op.NativeOpGenBase)
     op = native_class_cls().make_theano_op()
 
     args = []
@@ -2845,6 +2850,7 @@ class AlignmentLayer(ForwardLayer):
       index = theano.gradient.disconnected_grad(rindex)
       self.y_out = y_out
     elif search == 'search':
+      from returnn.theano.ops.inv_align import InvBacktrackOp
       y, att, idx = InvBacktrackOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in), -T.log(q_in))
       if not self.eval_flag:
         y_out, ratt, rindex = InvAlignOp(tdps, nstates)(self.sources[0].index, self.index, -T.log(p_in), y_in)
@@ -2855,6 +2861,7 @@ class AlignmentLayer(ForwardLayer):
       y_pad = T.zeros((max_length_y - y_in.shape[0] + 1, y_in.shape[1]), 'int32')
       self.y_out = T.concatenate([y_in, y_pad], axis=0)[:-1]
     elif search == 'decode':
+      from returnn.theano.ops.inv_align import InvDecodeOp
       y, att, idx = InvDecodeOp(tdps, nstates, 0)(self.sources[0].index, -T.log(p_in))
       norm = T.sum(self.index, dtype='float32') / T.sum(idx, dtype='float32')
       max_length_y = T.max(idx.sum(axis=0, acc_dtype='int32'))
@@ -2929,7 +2936,7 @@ class AlignmentLayer(ForwardLayer):
       self.cost_val = norm * T.sum(nll)
       self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
     elif search == 'ctc':
-      from BestPathDecoder import BestPathDecodeOp
+      from returnn.theano.ops.best_path_decoder import BestPathDecodeOp
       from theano.tensor.extra_ops import cpu_contiguous
       return T.sum(BestPathDecodeOp()(p_in, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc()))
 
@@ -2998,7 +3005,7 @@ class CAlignmentLayer(ForwardLayer):
     p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
     y_in = self.y_in[target].reshape(self.index.shape)
     from theano.tensor.extra_ops import cpu_contiguous
-    from Inv import InvOp
+    from returnn.theano.ops.inv import InvOp
     self.attention = InvOp(min_skip, max_skip, nstates, focus, nil, coverage, mode)(-T.log(p_in), cpu_contiguous(y_in),
                                                                                     T.sum(self.sources[0].index, axis=0,
                                                                                           dtype='int32'),
@@ -3187,7 +3194,7 @@ class InvBacktrackLayer(ForwardLayer):
     p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
     y_in = self.y_in[target].reshape(self.index.shape)
     from theano.tensor.extra_ops import cpu_contiguous
-    from Inv import InvOpBackTrace
+    from returnn.theano.ops.inv import InvOpBackTrace
     self.attention, self.backtrace = InvOpBackTrace(min_skip, max_skip, nstates,
                                                     focus, nil, coverage, mode)(-T.log(p_in), cpu_contiguous(y_in),
                                                                                  T.sum(self.sources[0].index, axis=0,
@@ -3333,7 +3340,7 @@ class FAlignmentLayer(ForwardLayer):
     self.p_y_given_x = p_in
     y_in = self.y_in[target].reshape(self.index.shape)
     from theano.tensor.extra_ops import cpu_contiguous
-    from Inv import InvAlign
+    from returnn.theano.ops.inv import InvAlignOp as InvAlign
     alpha = InvAlign(min_skip, max_skip, nstates, focus)(-T.log(self.p_y_given_x), cpu_contiguous(y_in),
                                                           T.sum(self.sources[0].index, axis=0, dtype='int32'),
                                                           T.sum(self.index, axis=0, dtype='int32'))
@@ -3384,7 +3391,7 @@ class FStdAlignmentLayer(ForwardLayer):
     y_in = self.y_in[target].reshape(self.index.shape)
 
     from theano.tensor.extra_ops import cpu_contiguous
-    from Inv import StdOpFull
+    from returnn.theano.ops.inv import StdOpFull
     att = StdOpFull(skip_tdp, nstates)(-T.log(self.p_y_given_x), cpu_contiguous(y_in),
                                         T.sum(self.sources[0].index, axis=0, dtype='int32'),
                                         T.sum(self.index, axis=0, dtype='int32'))
@@ -3913,8 +3920,6 @@ class RNNBlockLayer(ForwardLayer):
   def errors(self):
     return self.error_val
 
-from NativeOp import FastBaumWelchOp
-from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
 
 class SignalValue(ForwardLayer):
   layer_class = 'sigval'

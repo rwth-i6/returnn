@@ -23,7 +23,7 @@ from returnn.util.basic import have_gpu
 from returnn.util.basic import NumbersDict
 from returnn.config import Config
 from returnn.theano.layers.hidden import DumpLayer
-import rnn
+import returnn.__main__ as rnn
 import returnn.theano.engine_util as engine_util
 import returnn.theano.util as theano_util
 import returnn.theano.network as network

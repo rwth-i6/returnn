@@ -121,7 +121,7 @@ def test_returnn_tf_startup():
   out = run([py, "rnn.py", "-x", "nop", "++use_tensorflow", "1", "++log_verbosity", "5"])
   ls = out.splitlines()
   ls = filter_out(ls)
-  assert 3 <= len(ls) <= 40, "\n".join(ls)  # not fixed because might change
+  assert 3 <= len(ls) <= 100, "output:\n%s\n\nNum lines: %i" % ("\n".join(ls), len(ls))  # might change
   assert_equal(count_start_with(ls, "RETURNN starting up, version "), 1)
   assert_equal(count_start_with(ls, "TensorFlow: "), 1)
   assert_in("Task: No-operation", ls)

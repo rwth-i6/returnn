@@ -1389,6 +1389,11 @@ class ReadWriteLock(object):
 
 
 if __name__ == "__main__":
+  # Make this the right module package.
+  sys.path.insert(0, os.path.realpath(os.path.dirname(os.path.abspath(__file__)) + "/../.."))
+  __package__ = "returnn.util"
+  __name__ = "returnn.util.task_system"
+  sys.modules[__name__] = sys.modules["__main__"]
   try:
     ExecingProcess.checkExec()  # Never returns if this proc is called via ExecingProcess.
   except KeyboardInterrupt:
