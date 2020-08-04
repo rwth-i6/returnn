@@ -19,11 +19,11 @@ import time
 import numpy
 import typing
 
-import TaskSystem
-from Dataset import Dataset, DatasetSeq
-from CachedDataset2 import CachedDataset2
+import returnn.util.task_system as task_system
+from returnn.datasets.basic import Dataset, DatasetSeq
+from .cached2 import CachedDataset2
 from returnn.log import log
-from TaskSystem import Unpickler, numpy_copy_and_set_unused
+from returnn.util.task_system import Unpickler, numpy_copy_and_set_unused
 from returnn.util.basic import eval_shell_str, interrupt_main, unicode, PY3, BytesIO
 
 
@@ -774,7 +774,7 @@ class ExternSprintDataset(SprintDatasetBase):
     """
     config_str = "action:ExternSprintDataset,c2p_fd:%i,p2c_fd:%i" % (
       self.pipe_c2p[1].fileno(), self.pipe_p2c[0].fileno())
-    if TaskSystem.SharedMemNumpyConfig["enabled"]:
+    if task_system.SharedMemNumpyConfig["enabled"]:
       config_str += ",EnableAutoNumpySharedMemPickling:True"
     epoch = self.crnnEpoch or 1
     assert epoch >= 1
@@ -1180,7 +1180,7 @@ def demo():
   from returnn.util.basic import progress_bar_with_time
   from returnn.log import log
   from returnn.config import Config
-  from Dataset import init_dataset
+  from returnn.datasets.basic import init_dataset
   arg_parser = ArgumentParser()
   arg_parser.add_argument("--config", help="config with ExternSprintDataset", required=True)
   arg_parser.add_argument("--sprint_cache_dataset", help="kwargs dict for SprintCacheDataset", required=True)

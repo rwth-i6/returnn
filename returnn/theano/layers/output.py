@@ -15,7 +15,7 @@ from NativeOp import FastBaumWelchOp, SegmentFastBaumWelchOp, MultiEndFastBaumWe
 from NetworkBaseLayer import Layer
 from NetworkHiddenLayer import CAlignmentLayer
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
-from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound, DumpOp
+from returnn.theano.util import time_batch_make_flat, grad_discard_out_of_bound, DumpOp
 from returnn.util.basic import as_str
 from returnn.log import log
 
@@ -116,7 +116,7 @@ class OutputLayer(Layer):
     if auto_fix_target_length:
       self.set_attr("auto_fix_target_length", auto_fix_target_length)
       source_index = self.sources[0].index
-      from TheanoUtil import pad
+      from returnn.theano.util import pad
       self.index = pad(source=self.index, axis=0, target_axis_len=source_index.shape[0])
       if y is not None:
         y = pad(source=y, axis=0, target_axis_len=source_index.shape[0])
@@ -219,7 +219,7 @@ class OutputLayer(Layer):
       # Here some other similarities/distances we could try:
       # http://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.distance.pdist.html
       # https://brenocon.com/blog/2012/03/cosine-similarity-pearson-correlation-and-ols-coefficients/
-      from TheanoUtil import self_similarity_cosine
+      from returnn.theano.util import self_similarity_cosine
       self_similarity = self_similarity_cosine  # maybe other
       data_layer = self.find_data_layer()
       assert data_layer
@@ -445,7 +445,7 @@ class FramewiseOutputLayer(OutputLayer):
         # Use crossentropy_softmax_1hot to have a more stable and more optimized gradient calculation.
         # Theano fails to use it automatically; I guess our self.i indexing is too confusing.
         if self.attrs.get("auto_fix_target_length"):
-          from TheanoUtil import pad
+          from returnn.theano.util import pad
           xx = theano.ifelse.ifelse(T.lt(self.y_m[self.i].shape[0], 1), pad(self.y_m[self.i],0,1), self.y_m[self.i])
           yy = theano.ifelse.ifelse(T.lt(self.y_m[self.i].shape[0], 1), pad(self.y_data_flat[self.i],0,1), self.y_data_flat[self.i])
           nll, pcx = T.nnet.crossentropy_softmax_1hot(x=xx, y_idx=yy)
@@ -507,7 +507,7 @@ class FramewiseOutputLayer(OutputLayer):
       y = self.p_y_given_x  # Can be anything, e.g. exp or sigmoid, but not softmax.
       y /= T.sum(y, axis=2, keepdims=True)
       nlog_scores = -T.log(T.clip(y, numpy.float32(1.e-20), numpy.float(1.e20)))
-      from TheanoUtil import class_idx_seq_to_1_of_k
+      from returnn.theano.util import class_idx_seq_to_1_of_k
       y_idx = self.y
       assert y_idx.ndim == 2
       bw = class_idx_seq_to_1_of_k(y_idx, num_classes=self.attrs["n_out"])
@@ -701,7 +701,7 @@ class SequenceOutputLayer(OutputLayer):
       #scores = theano.printing.Print("after", attrs=['shape'])(scores)
       index = self.index.dimshuffle('x', 0, 1).repeat(S, axis=0).reshape((N * S, B))
       edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
-      #from TheanoUtil import print_to_file
+      #from returnn.theano.util import print_to_file
       #edges = theano.printing.Print("edges", attrs=['shape'])(edges)
       #weights = theano.printing.Print("weights", attrs=['shape'])(weights)
       fwdbwd, _ = FastBaumWelchOp().make_theano_op()(scores, edges, weights, start_end_states, T.cast(index, 'float32'), state_buffer)
@@ -737,7 +737,7 @@ class SequenceOutputLayer(OutputLayer):
             y2 = layer.network.output[out2].p_y_given_x
             y = numpy.float32(factor) * y2 + numpy.float32(1.0 - factor) * y
           if layer.fast_bw_opts.get("y_gauss_blur_sigma"):
-            from TheanoUtil import gaussian_filter_1d
+            from returnn.theano.util import gaussian_filter_1d
             y = gaussian_filter_1d(y, axis=0,
               sigma=numpy.float32(layer.fast_bw_opts["y_gauss_blur_sigma"]),
               window_radius=int(layer.fast_bw_opts.get("y_gauss_blur_window", layer.fast_bw_opts["y_gauss_blur_sigma"])))
@@ -1176,7 +1176,7 @@ class SequenceOutputLayer(OutputLayer):
         # from theano_ctc.cpu_ctc import CpuCtc
       except Exception:
         assert False, "install this: https://github.com/mcf06/theano_ctc"
-      from TheanoUtil import print_to_file
+      from returnn.theano.util import print_to_file
       yr = T.set_subtensor(self.y.flatten()[self.j], numpy.int32(-1)).reshape(self.y.shape).dimshuffle(1, 0)
       yr = print_to_file('yr', yr)
       cost = T.mean(ctc_cost(self.p_y_given_x, yr, self.index_for_ctc()))
@@ -1244,7 +1244,7 @@ class SequenceOutputLayer(OutputLayer):
       return super(SequenceOutputLayer, self).errors()
 
 
-from TheanoUtil import print_to_file
+from returnn.theano.util import print_to_file
 
 
 class UnsupervisedOutputLayer(OutputLayer):

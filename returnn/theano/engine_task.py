@@ -9,10 +9,10 @@ import time
 import numpy
 import theano
 
-from Device import Device
-from EngineUtil import assign_dev_data
+from returnn.theano.device import Device
+from returnn.theano.engine_util import assign_dev_data
 from returnn.log import log
-from TaskSystem import ProcConnectionDied
+from returnn.util.task_system import ProcConnectionDied
 from returnn.util.basic import hms, progress_bar, terminal_size, hdf5_strings, interrupt_main, NumbersDict
 
 
@@ -785,7 +785,7 @@ class HDFForwardTaskThread(TaskThread):
       assert len(results[0]) == 1
       features = results[0][0]
       batch = batchess[0][0]
-      from EngineBatch import Batch
+      from returnn.engine.batch import Batch
       assert isinstance(batch, Batch)
       if "inputs" not in self.cache:
         self.inputs = self.cache.create_dataset("inputs", (self.cache.attrs['numSeqs'], features.shape[-1]), dtype='f', maxshape=(None, None), compression=self.compression)

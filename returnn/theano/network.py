@@ -6,11 +6,11 @@ import h5py
 import theano
 from theano import tensor as T
 
-from NetworkDescription import LayerNetworkDescription
-from NetworkBaseLayer import Layer, SourceLayer
-from NetworkLayer import get_layer_class
-from NetworkLstmLayer import *
-from NetworkOutputLayer import OutputLayer, FramewiseOutputLayer, SequenceOutputLayer, DecoderOutputLayer, UnsupervisedOutputLayer
+from returnn.network_description import LayerNetworkDescription
+from returnn.theano.layers.base import Layer, SourceLayer
+from returnn.theano.layers.basic import get_layer_class
+from returnn.theano.layers.lstm import *
+from returnn.theano.layers.output import OutputLayer, FramewiseOutputLayer, SequenceOutputLayer, DecoderOutputLayer, UnsupervisedOutputLayer
 from returnn.util.basic import dict_joined, as_str
 from returnn.log import log
 
@@ -521,7 +521,7 @@ class LayerNetwork(object):
     if is_output_layer:
       if getattr(layer, "p_y_given_x", None) is None and layer.output:
         # Small little hack for layers which we use as output-layers whicgh don't set this.
-        from TheanoUtil import time_batch_make_flat
+        from returnn.theano.util import time_batch_make_flat
         layer.p_y_given_x = layer.output
         layer.p_y_given_x_flat = time_batch_make_flat(layer.output)
       self.declare_train_params()

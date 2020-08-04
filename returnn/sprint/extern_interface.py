@@ -7,11 +7,11 @@ This Sprint interface is to be used for ExternSprintDataset, which should automa
 
 from __future__ import print_function
 
-import better_exchook
+from returnn.util import better_exchook
 import sys
 import os
 import typing
-import returnn.util.task_system
+import returnn.util.task_system as task_system
 from returnn.util.task_system import Pickler
 from returnn.util.basic import to_bool, unicode, BytesIO
 
@@ -92,8 +92,8 @@ def _parse_config_str(config_str):
 
 
 def _common_init(config):
-  if to_bool(config.get("EnableAutoNumpySharedMemPickling", False)) and not TaskSystem.SharedMemNumpyConfig["enabled"]:
-    TaskSystem.SharedMemNumpyConfig["enabled"] = True
+  if to_bool(config.get("EnableAutoNumpySharedMemPickling", False)) and not task_system.SharedMemNumpyConfig["enabled"]:
+    task_system.SharedMemNumpyConfig["enabled"] = True
     print("SprintExternInterface[pid %i] EnableAutoNumpySharedMemPickling = True" % (os.getpid(),))
 
 

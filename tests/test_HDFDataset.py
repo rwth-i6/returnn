@@ -149,7 +149,7 @@ def generate_hdf_from_other(opts, suffix=".hdf"):
   if cache_key in _hdf_cache:
     return _hdf_cache[cache_key]
   fn = get_test_tmp_file(suffix=suffix)
-  from Dataset import init_dataset
+  from returnn.datasets.basic import init_dataset
   dataset = init_dataset(opts)
   hdf_dataset = HDFDatasetWriter(fn)
   hdf_dataset.dump_from_dataset(dataset)

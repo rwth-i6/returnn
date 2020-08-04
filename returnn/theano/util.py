@@ -535,7 +535,7 @@ def indices_in_flatten_array(ndim, shape, *args):
   return indices
 
 def circular_convolution(a, b):
-  from Device import is_using_gpu
+  from returnn.theano.device import is_using_gpu
   has_gpuarray = is_using_gpu()
   try:
     import pygpu

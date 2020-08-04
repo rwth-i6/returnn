@@ -6,8 +6,8 @@ Provide :class:`RawWavDataset`.
 from __future__ import print_function
 
 import h5py
-from CachedDataset2 import CachedDataset2
-from Dataset import DatasetSeq
+from .cached2 import CachedDataset2
+from returnn.datasets.basic import DatasetSeq
 from returnn.log import log
 import tempfile
 import numpy as np
@@ -84,7 +84,7 @@ class RawWavDataset(CachedDataset2):
     outputFeatures = self._get_output_features(wav_file_id)
     inputFeatures = inputFeatures.astype(np.float32)
     if outputFeatures is not None:
-      outputFeatures = targets.astype(np.float32)
+      outputFeatures = outputFeatures.astype(np.float32)
     return DatasetSeq(seq_idx, inputFeatures, outputFeatures)
 
   def _get_num_outputs(self, num_outputs):

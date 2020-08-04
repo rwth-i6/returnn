@@ -7,7 +7,7 @@ This is used both by Theano and TF.
 from __future__ import print_function
 
 import numpy
-from EngineBatch import Batch
+from returnn.engine.batch import Batch
 from returnn.log import log
 
 
@@ -20,7 +20,7 @@ def assign_dev_data(device, dataset, batches, load_seqs=True):
   :returns successful and how much batch idx to advance.
   :rtype: (bool,int)
   """
-  from Dataset import shapes_for_batches
+  from returnn.datasets.basic import shapes_for_batches
   shapes = shapes_for_batches(batches, data_keys=device.used_data_keys, dataset=dataset)
   if shapes is None:
     return False, len(batches)

@@ -155,7 +155,7 @@ def _check_train_simple_network(network, num_steps=10):
     network.print_network_info()
     network.initialize_params(session=session)
 
-    from TFUpdater import Updater
+    from returnn.tf.updater import Updater
     updater = Updater(config=config, network=network)
     updater.set_learning_rate(config.float("learning_rate", 1.0), session=session)
     updater.set_trainable_vars(network.get_trainable_params())
@@ -226,7 +226,7 @@ def test_rhn_nan():
           # Here I get nan.
           net = TFNetwork(config=Config(), extern_data=ExternData(), train_flag=True)
           with net.register_network_scope():
-            from TFNetworkLayer import InternalLayer
+            from returnn.tf.layers.base import InternalLayer
             src_layer = InternalLayer(name='src', network=net, output=Data(
               'src', shape=(None, num_inputs), placeholder=src_placeholder,
               size_placeholder={0: tf.convert_to_tensor([seq_len])}))
@@ -817,7 +817,7 @@ def test_RecLayer_NativeLstm_Nan():
     demo_grad2_t = lstm_grad_func(*demo_grad2_input_placeholders)[1]
 
     print("Create updater...")
-    from TFUpdater import Updater
+    from returnn.tf.updater import Updater
     updater = Updater(config=config, network=network)
     updater.set_trainable_vars(network.get_trainable_params())
     updater.set_learning_rate(0.1, session=session)
@@ -2009,7 +2009,7 @@ def test_rec_layer_multi_choice_search_resolve():
 
   from returnn.datasets.generating import StaticDataset
   from returnn.tf.data_pipeline import FeedDictDataProvider
-  from EngineBatch import Batch, BatchSetGenerator
+  from returnn.engine.batch import Batch, BatchSetGenerator
   dataset = StaticDataset(
     data=[
       {"data": numpy.random.normal(size=(11, n_src_dim)).astype("float32"),
@@ -2294,7 +2294,7 @@ def test_rec_layer_move_out_of_loop():
     """
     from returnn.datasets.generating import StaticDataset
     from returnn.tf.data_pipeline import FeedDictDataProvider
-    from EngineBatch import Batch, BatchSetGenerator
+    from returnn.engine.batch import Batch, BatchSetGenerator
     from returnn.util.basic import dict_joined
     dataset = StaticDataset(
       data=[
@@ -2562,7 +2562,7 @@ def test_rec_layer_move_out_of_loop_ref_att_generic_att():
     """
     from returnn.datasets.generating import StaticDataset
     from returnn.tf.data_pipeline import FeedDictDataProvider
-    from EngineBatch import Batch, BatchSetGenerator
+    from returnn.engine.batch import Batch, BatchSetGenerator
     from returnn.util.basic import dict_joined, softmax
     rnd = numpy.random.RandomState(42)
 
@@ -2764,7 +2764,7 @@ def test_rec_layer_rnn_train_and_search():
 
     from returnn.datasets.generating import StaticDataset
     from returnn.tf.data_pipeline import FeedDictDataProvider
-    from EngineBatch import Batch, BatchSetGenerator
+    from returnn.engine.batch import Batch, BatchSetGenerator
     from returnn.util.basic import dict_joined
     dataset = StaticDataset(
       data=[
@@ -2937,7 +2937,7 @@ def test_rec_layer_local_att_train_and_search():
 
     from returnn.datasets.generating import StaticDataset
     from returnn.tf.data_pipeline import FeedDictDataProvider
-    from EngineBatch import Batch, BatchSetGenerator
+    from returnn.engine.batch import Batch, BatchSetGenerator
     from returnn.util.basic import dict_joined
     dataset = StaticDataset(
       data=[
@@ -3162,7 +3162,7 @@ def test_rec_layer_search_select_src():
 
 def test_RnnCellLayer_with_time():
   from returnn.datasets.generating import DummyDataset
-  from TFNetworkLayer import InternalLayer, SourceLayer, ReduceLayer
+  from returnn.tf.layers.basic import InternalLayer, SourceLayer, ReduceLayer
   train_data = DummyDataset(input_dim=2, output_dim=3, num_seqs=10, seq_len=5)
   with make_scope() as session:
     extern_data = ExternData()
@@ -4069,14 +4069,14 @@ def test_subnet_load_on_init_rec():
 
 
 def test_KenLmStateLayer():
-  import TFKenLM
-  if not TFKenLM.kenlm_checked_out():
+  import returnn.tf.util.ken_lm as tf_ken_lm
+  if not tf_ken_lm.kenlm_checked_out():
     raise unittest.SkipTest("KenLM not checked out")
-  TFKenLM.get_tf_mod(verbose=True)
-  test_lm_file = TFKenLM.kenlm_dir + "/lm/test.arpa"
+  tf_ken_lm.get_tf_mod(verbose=True)
+  test_lm_file = tf_ken_lm.kenlm_dir + "/lm/test.arpa"
   assert os.path.exists(test_lm_file)
   from returnn.datasets.generating import Vocabulary
-  from TFNetworkLayer import InternalLayer
+  from returnn.tf.layers.base import InternalLayer
   import tempfile
   with make_scope() as session:
     with tempfile.NamedTemporaryFile(mode="w", prefix="vocab") as tmp_bpe_vocab_file:
@@ -4115,7 +4115,7 @@ def test_KenLmStateLayer():
       print("Ref score.")
       input_word_ids = [labels.index(w) for w in "be@@ yond imm@@ edi@@ ate conc@@ erns </s>".split()]
       ref_score_str_placeholder = tf_compat.v1.placeholder(tf.string, shape=(), name="ref_score_str_placeholder")
-      tf_ref_score = TFKenLM.ken_lm_abs_score_strings(handle=layer.lm_handle, strings=ref_score_str_placeholder)
+      tf_ref_score = tf_ken_lm.ken_lm_abs_score_strings(handle=layer.lm_handle, strings=ref_score_str_placeholder)
       ref_score = session.run(tf_ref_score, feed_dict={ref_score_str_placeholder: "beyond immediate concerns </s>"})
       print("ref score:", ref_score)
       assert_almost_equal(ref_score, -9.251298)  # example from :func:`test_kenlm`
@@ -4142,14 +4142,14 @@ def test_KenLmStateLayer():
 
 
 def test_KenLmStateLayer_dense():
-  import TFKenLM
-  if not TFKenLM.kenlm_checked_out():
+  import returnn.tf.util.ken_lm as tf_ken_lm
+  if not tf_ken_lm.kenlm_checked_out():
     raise unittest.SkipTest("KenLM not checked out")
-  TFKenLM.get_tf_mod(verbose=True)
-  test_lm_file = TFKenLM.kenlm_dir + "/lm/test.arpa"
+  tf_ken_lm.get_tf_mod(verbose=True)
+  test_lm_file = tf_ken_lm.kenlm_dir + "/lm/test.arpa"
   assert os.path.exists(test_lm_file)
   from returnn.datasets.generating import Vocabulary
-  from TFNetworkLayer import InternalLayer
+  from returnn.tf.layers.base import InternalLayer
   import tempfile
   with make_scope() as session:
     with tempfile.NamedTemporaryFile(mode="w", prefix="vocab") as tmp_bpe_vocab_file:
@@ -4192,7 +4192,7 @@ def test_KenLmStateLayer_dense():
       print("Ref score.")
       input_word_ids = [labels.index(w) for w in "be@@ yond imm@@ edi@@ ate conc@@ erns </s>".split()]
       ref_score_str_placeholder = tf_compat.v1.placeholder(tf.string, shape=(), name="ref_score_str_placeholder")
-      tf_ref_score = TFKenLM.ken_lm_abs_score_strings(handle=layer.lm_handle, strings=ref_score_str_placeholder)
+      tf_ref_score = tf_ken_lm.ken_lm_abs_score_strings(handle=layer.lm_handle, strings=ref_score_str_placeholder)
       ref_score = session.run(tf_ref_score, feed_dict={ref_score_str_placeholder: "beyond immediate concerns </s>"})
       print("ref score:", ref_score)
       assert_almost_equal(ref_score, -9.251298)  # example from :func:`test_kenlm`
@@ -4258,7 +4258,7 @@ def test_BlocksparseLSTM_load_params_from_native_lstm():
     with tf_compat.v1.variable_scope(tf_compat.v1.get_variable_scope(), initializer=default_var_initializer) as scope:
       net = TFNetwork(config=Config(), extern_data=ExternData(), train_flag=False)
       with net.register_network_scope():
-        from TFNetworkLayer import InternalLayer
+        from returnn.tf.layers.base import InternalLayer
         src_layer = InternalLayer(name='src', network=net, output=Data(
           'src', shape=(None, num_inputs), placeholder=src_placeholder, size_placeholder={0: seq_len_placeholder}))
         print("source layer:", src_layer)
@@ -4448,7 +4448,7 @@ def test_onlineblstm():
 
 
 def test_GenericAttentionLayer_basic0():
-  from TFNetworkLayer import InternalLayer
+  from returnn.tf.layers.base import InternalLayer
   net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
   kwargs = dict(
     name="att", network=net,
@@ -4468,7 +4468,7 @@ def test_GenericAttentionLayer_basic0():
 
 
 def test_GenericAttentionLayer_basic():
-  from TFNetworkLayer import InternalLayer
+  from returnn.tf.layers.base import InternalLayer
   net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
   # This is a common situation when the GenericAttentionLayer is inside a recurrent loop,
   # and it gets the encoder values from outside ("base:enc_value" or so),
@@ -4488,7 +4488,7 @@ def test_GenericAttentionLayer_basic():
 
 
 def test_GenericAttentionLayer_basic_multi_head():
-  from TFNetworkLayer import InternalLayer
+  from returnn.tf.layers.base import InternalLayer
   net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
   num_heads = 8
   kwargs = dict(
@@ -4509,7 +4509,7 @@ def test_GenericAttentionLayer_basic_multi_head():
 
 def test_GenericAttentionLayer_weights_auto_squeeze_time_end():
   # Example: weights (B,1,T), base (B,T,V)
-  from TFNetworkLayer import InternalLayer
+  from returnn.tf.layers.base import InternalLayer
   net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
   kwargs = dict(
     name="att", network=net,
@@ -4531,7 +4531,7 @@ def test_GenericAttentionLayer_weights_auto_squeeze_time_end():
 def test_GenericAttentionLayer_weights_static_time_axis():
   # Example: weights (B,1,W), base (B,W,V), where W: window_size (static)
   window_size = 10
-  from TFNetworkLayer import InternalLayer
+  from returnn.tf.layers.base import InternalLayer
   net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
   kwargs = dict(
     name="att", network=net,
@@ -4552,7 +4552,7 @@ def test_GenericAttentionLayer_weights_static_time_axis():
 
 def test_GenericAttentionLayer_weights_heads_time_end():
   # Example: weights (B,H,T), base (B,T,H,V)
-  from TFNetworkLayer import InternalLayer
+  from returnn.tf.layers.base import InternalLayer
   net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
   num_heads = 8
   kwargs = dict(
@@ -4574,7 +4574,7 @@ def test_GenericAttentionLayer_weights_heads_time_end():
 
 def test_GenericAttentionLayer_weights_heads_auto_squeeze_time_end():
   # Example: weights (B,H,1,T), base (B,T,H,V)
-  from TFNetworkLayer import InternalLayer
+  from returnn.tf.layers.base import InternalLayer
   net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
   num_heads = 8
   kwargs = dict(
@@ -4596,7 +4596,7 @@ def test_GenericAttentionLayer_weights_heads_auto_squeeze_time_end():
 
 
 def test_GenericAttentionLayer_extra_spatial():
-  from TFNetworkLayer import InternalLayer
+  from returnn.tf.layers.base import InternalLayer
   net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
   # This is the situation when the GenericAttentionLayer is outside the recurrent loop,
   # and it gets some encoder values (with different time axis),
@@ -4626,7 +4626,7 @@ def test_GenericAttentionLayer_extra_spatial():
 
 
 def test_GenericAttentionLayer_extra_spatial_multi_head():
-  from TFNetworkLayer import InternalLayer
+  from returnn.tf.layers.base import InternalLayer
   net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
   dec_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="dec time")
   enc_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="enc time")
@@ -5027,7 +5027,7 @@ def test_trainable_sublayers():
 
 def test_OptimalCompletionsLayer():
   with make_scope() as session:
-    from TFNetworkLayer import InternalLayer
+    from returnn.tf.layers.base import InternalLayer
     from returnn.tf.util.basic import expand_dims_unbroadcast
     net = TFNetwork(
       extern_data=ExternData({"target": {"dim": 20, "sparse": True}}),

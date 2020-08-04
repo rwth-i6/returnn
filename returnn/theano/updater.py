@@ -10,7 +10,7 @@ import theano.tensor.shared_randomstreams
 import theano.tensor as T
 import theano.ifelse
 import theano.compile
-from TheanoUtil import opt_contiguous_on_gpu
+from returnn.theano.util import opt_contiguous_on_gpu
 
 
 class Updater:

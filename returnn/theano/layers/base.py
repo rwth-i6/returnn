@@ -6,7 +6,7 @@ import numpy
 from theano import tensor as T
 import theano
 from returnn.log import log
-from TheanoUtil import time_batch_make_flat, tiled_eye
+from returnn.theano.util import time_batch_make_flat, tiled_eye
 from returnn.util.basic import as_str
 import json
 

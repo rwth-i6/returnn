@@ -11,7 +11,7 @@ from OpLSTM import LSTMSOpInstance
 from OpBLSTM import BLSTMOpInstance
 import RecurrentTransform
 import json
-from TheanoUtil import print_to_file
+from returnn.theano.util import print_to_file
 from theano.ifelse import ifelse
 
 class Unit(Container):

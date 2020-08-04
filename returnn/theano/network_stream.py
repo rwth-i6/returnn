@@ -1,4 +1,4 @@
-from TaskSystem import AsyncTask, ProcConnectionDied
+from returnn.util.task_system import AsyncTask, ProcConnectionDied
 from returnn.log import log
 import numpy
 import json
@@ -16,6 +16,7 @@ try:
 except ImportError:
   # noinspection PyUnresolvedReferences
   from _thread import start_new_thread
+
 
 class NetworkStream:
   class ThreadingServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
@@ -44,7 +45,7 @@ class NetworkStream:
     server = SimpleJSONRPCServer(('0.0.0.0', port))
     server.register_function(self.count, 'count')
     server.register_function(self.data, 'data')
-    print >> log.v3, "json-rpc streaming on port", port
+    print("json-rpc streaming on port", port, file=log.v3)
     start_new_thread(server.serve_forever,())
 
   def update(self, task, data, tags = []):

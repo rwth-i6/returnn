@@ -12,10 +12,10 @@ import os
 import numpy as np
 import h5py
 from collections import deque
-from CachedDataset2 import CachedDataset2
-from Dataset import DatasetSeq
-from BundleFile import BundleFile
-from NormalizationData import NormalizationData
+from .cached2 import CachedDataset2
+from returnn.datasets.basic import DatasetSeq
+from .bundle_file import BundleFile
+from .normalization_data import NormalizationData
 from returnn.log import log
 
 

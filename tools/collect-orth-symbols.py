@@ -206,7 +206,7 @@ def init(configFilename=None):
     rnn.init_log()
   else:
     log.initialize()
-  print("CRNN collect-orth-symbols starting up.", file=log.v3)
+  print("RETURNN collect-orth-symbols starting up.", file=log.v3)
   rnn.init_faulthandler()
   if configFilename:
     rnn.init_config_json_network()
@@ -243,7 +243,7 @@ def is_crnn_config(filename):
 
 def main(argv):
   argparser = argparse.ArgumentParser(description='Collect orth symbols.')
-  argparser.add_argument('input', help="CRNN config, Corpus Bliss XML or just txt-data")
+  argparser.add_argument('input', help="RETURNN config, Corpus Bliss XML or just txt-data")
   argparser.add_argument('--frame_time', type=int, default=10, help='time (in ms) per frame. not needed for Corpus Bliss XML')
   argparser.add_argument('--collect_time', type=int, default=True, help="collect time info. can be slow in some cases")
   argparser.add_argument('--dump_orth_syms', action='store_true', help="dump all orthographies")

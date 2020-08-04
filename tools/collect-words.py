@@ -160,7 +160,7 @@ def is_crnn_config(filename):
 
 def main(argv):
   argparser = argparse.ArgumentParser(description='Collect orth symbols.')
-  argparser.add_argument('input', help="CRNN config, Corpus Bliss XML or just txt-data")
+  argparser.add_argument('input', help="RETURNN config, Corpus Bliss XML or just txt-data")
   argparser.add_argument("--dump_orth", action="store_true")
   argparser.add_argument("--lexicon")
   args = argparser.parse_args(argv[1:])

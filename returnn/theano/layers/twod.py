@@ -125,7 +125,7 @@ class TwoDToOneDLayer(TwoDBaseLayer):
     elif collapse == 'mean':
       Y = Y.mean(axis=0)
     elif collapse == 'conv':
-      from TheanoUtil import circular_convolution
+      from returnn.theano.util import circular_convolution
       Y, _ = theano.scan(lambda x_i,x_p:circular_convolution(x_i,x_p),Y,Y[0])
       Y = Y[-1]
     elif collapse == 'flatten':
@@ -313,7 +313,7 @@ class TwoDLSTMLayer(TwoDBaseLayer):
     elif collapse_output == 'mean':
       Y = Y.mean(axis=0)
     elif collapse_output == 'conv':
-      from TheanoUtil import circular_convolution
+      from returnn.theano.util import circular_convolution
       Y, _ = theano.scan(lambda x_i,x_p:circular_convolution(x_i,x_p),Y,Y[0])
       Y = Y[-1]
     elif collapse_output == 'flatten':

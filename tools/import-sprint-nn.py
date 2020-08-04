@@ -132,7 +132,7 @@ def saveCrnnNetwork(epoch, layers):
   nHiddenLayers = len(network.hidden)
 
   # print network topology
-  print("Crnn Network layer topology:")
+  print("RETURNN Network layer topology:")
   print("input dim:", network.n_in)
   print("hidden layer count:", nHiddenLayers)
   print("output dim:", network.n_out["classes"])
@@ -178,7 +178,7 @@ def main():
   args = parser.parse_args()
 
   configFile = args.crnnConfigFile
-  assert os.path.exists(configFile), "CRNN config file not found"
+  assert os.path.exists(configFile), "RETURNN config file not found"
   archiverExec = args.sprintArchiverExec
   assert os.path.exists(archiverExec), "Sprint archiver not found"
   assert args.crnnSaveEpoch >= 1

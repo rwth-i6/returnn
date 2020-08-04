@@ -3,7 +3,7 @@
 Provides :class:`NumpyDumpDataset`.
 """
 
-from Dataset import Dataset, DatasetSeq
+from returnn.datasets.basic import Dataset, DatasetSeq
 import os
 import numpy
 import typing

@@ -1,6 +1,6 @@
 
 import theano.tensor as T
-from TheanoUtil import complex_bound
+from returnn.theano.util import complex_bound
 import numpy
 
 
@@ -10,7 +10,7 @@ def relu(z):
   # https://github.com/Lasagne/Lasagne/pull/163#issuecomment-81806482
   return (z + abs(z)) / 2.0
 
-def clipped01lu(z):    
+def clipped01lu(z):
   """
   0 for x <= 0
   x for 0 <= x <= 1
@@ -48,7 +48,7 @@ def softmax(z):
   if z.ndim <= 2:
     return T.nnet.softmax(z)
   else:
-    from TheanoUtil import time_batch_make_flat
+    from returnn.theano.util import time_batch_make_flat
     z_flat = time_batch_make_flat(z)
     assert z_flat.ndim == 2
     return T.reshape(T.nnet.softmax(z_flat), z.shape)
@@ -58,7 +58,7 @@ def log_softmax(z):
   if z.ndim <= 2:
     return T.nnet.logsoftmax(z)
   else:
-    from TheanoUtil import time_batch_make_flat
+    from returnn.theano.util import time_batch_make_flat
     z_flat = time_batch_make_flat(z)
     assert z_flat.ndim == 2
     return T.reshape(T.nnet.logsoftmax(z_flat), z.shape)

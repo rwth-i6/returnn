@@ -20,11 +20,11 @@ except ImportError:  # old Theano or so...
 from NetworkBaseLayer import Layer
 from ActivationFunctions import strtoact, strtoact_single_joined, elu
 import TheanoUtil
-from TheanoUtil import class_idx_seq_to_1_of_k
+from returnn.theano.util import class_idx_seq_to_1_of_k
 from returnn.log import log
 from math import ceil
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-from TheanoUtil import print_to_file, DumpOp
+from returnn.theano.util import print_to_file, DumpOp
 
 class HiddenLayer(Layer):
   def __init__(self, activation="sigmoid", **kwargs):
@@ -207,7 +207,7 @@ class WindowLayer(_NoOpLayer):
     self.set_attr('window', window)
     self.set_attr('delta', delta)
     self.set_attr('delta_delta', delta_delta)
-    from TheanoUtil import windowed_batch, delta_batch
+    from returnn.theano.util import windowed_batch, delta_batch
     out = windowed_batch(source, window=window)
     #d = delta_batch()  # TODO...
     self.make_output(out)
@@ -249,7 +249,7 @@ class WindowContextLayer(_NoOpLayer):
       mapped_out, _ = theano.map(wnd, sequences=[source, T.arange(source.shape[0])], non_sequences=[inp, weights])
       self.make_output(mapped_out[0][::-direction])
     else:
-      from TheanoUtil import context_batched
+      from returnn.theano.util import context_batched
       out = context_batched(source[::-direction], window=window)[::-direction]
       self.make_output(out)
 
@@ -1328,7 +1328,7 @@ class GaussianFilter1DLayer(_NoOpLayer):
     self.set_attr('sigma', sigma)
     self.set_attr('axis', axis)
     self.set_attr('window_radius', window_radius)
-    from TheanoUtil import gaussian_filter_1d
+    from returnn.theano.util import gaussian_filter_1d
     self.output = gaussian_filter_1d(z, sigma=sigma, axis=axis, window_radius=window_radius)
 
 
@@ -2729,7 +2729,7 @@ class NativeLayer(_NoOpLayer):
     args += [self.index]
     args_info += [{"ndim": 2, "shape": (None, None), "gradient": "disconnected", "type": "input_index"}]
 
-    from TheanoUtil import make_var_tuple
+    from returnn.theano.util import make_var_tuple
     args = make_var_tuple(native_class_cls.map_layer_inputs_to_op(*args))
     outputs = make_var_tuple(op(*args))
     self.output = native_class_cls.map_layer_output_from_op(*outputs)

@@ -3,7 +3,8 @@ import six
 import h5py
 import numpy as np
 
-from BundleFile import BundleFile
+from .bundle_file import BundleFile
+from returnn.util.basic import long
 
 
 class NormalizationData(object):
@@ -100,7 +101,7 @@ class NormalizationData(object):
     """
     accumulatedSum = None
     accumulatedSumOfSqr = None
-    totalFrames = 0 if six.PY3 else long()  # python 2/3 compatibility
+    totalFrames = long()
     bundle = BundleFile(bundleFilePath)
     for filePath in bundle.datasetFilePaths:
       with h5py.File(filePath, mode='r') as datasetFile:

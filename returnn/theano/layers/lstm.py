@@ -666,7 +666,7 @@ class LayerNormLstmLayer(HiddenLayer):
       grad_clip = numpy.float32(grad_clip)
     C, G = [T.tanh, T.nnet.sigmoid]
 
-    from TheanoUtil import layer_normalization
+    from returnn.theano.util import layer_normalization
     def _sliced_layer_norm(z, scale, idx):
       dimstart = n_cells * idx
       dimend = dimstart + n_cells
@@ -742,7 +742,7 @@ class NativeLstmLayer(HiddenLayer):
     from NativeOp import LstmGenericBase
     lstm_op = LstmGenericBase().make_theano_op()
     op_out = lstm_op(*LstmGenericBase.map_layer_inputs_to_op(z[::direction], self.W_re, self.index[::direction]))
-    from TheanoUtil import make_var_tuple
+    from returnn.theano.util import make_var_tuple
     out = LstmGenericBase.map_layer_output_from_op(*make_var_tuple(op_out))
     self.make_output(out[::direction])
 
@@ -947,7 +947,7 @@ class AssociativeLstmLayer(HiddenLayer):
       u_gated = u * ingate2  # (batch,n_cells)
       u_gated_bc = u_gated.dimshuffle(0, 'x', 1)  # (batch,n_copies,n_cells)
       forgetgate2_bc = forgetgate2.dimshuffle(0, 'x', 1)  # (batch,n_copies,n_cells)
-      from TheanoUtil import complex_elemwise_mult
+      from returnn.theano.util import complex_elemwise_mult
       s_t = complex_elemwise_mult(meminkeyP, u_gated_bc) + s_p * forgetgate2_bc  # (batch,n_copies,n_cells)
       readout_avg = T.mean(complex_elemwise_mult(memoutkeyP, s_t), axis=1)  # (batch,n_cells)
       h_t = CO(readout_avg) * outgate2
@@ -997,7 +997,7 @@ class LstmHalfGatesLayer(HiddenLayer):
       grad_clip = numpy.float32(grad_clip)
 
     self.W_re = self.add_param(self.create_random_uniform_weights(n=n_out, m=n_z, name="W_re_%s" % self.name))
-    from TheanoUtil import complex_elemwise_mult, complex_bound
+    from returnn.theano.util import complex_elemwise_mult, complex_bound
 
     # Some defaults.
     CI, CO = [T.tanh] * 2
@@ -1170,7 +1170,7 @@ class LstmComplexLayer(HiddenLayer):
       grad_clip = numpy.float32(grad_clip)
     use_complex_t = map(int, use_complex.split(":"))
     assert len(use_complex_t) == 4
-    from TheanoUtil import complex_dot, complex_elemwise_mult
+    from returnn.theano.util import complex_dot, complex_elemwise_mult
 
     n_re = n_z
     rec_dot = T.dot

@@ -3,7 +3,7 @@ import os
 
 from NativeOp import NativeOpBaseMixin, Chunking, UnChunking, SubtensorBatchedIndex, SparseToDense, \
   MaxAndArgmaxSparse, CrossEntropySoftmaxAndGradientZSparse
-from TheanoUtil import softmax
+from returnn.theano.util import softmax
 from returnn.util.basic import escape_c_str, long
 
 # noinspection PyPackageRequirements,PyUnresolvedReferences
@@ -18,7 +18,7 @@ from theano.compile import optdb
 from theano import gof
 # noinspection PyPackageRequirements,PyUnresolvedReferences
 from theano.gof.opt import OpSub
-from TheanoUtil import try_register_gpu_opt, make_var_tuple
+from returnn.theano.util import try_register_gpu_opt, make_var_tuple
 
 TheanoNativeOpBase = theano.Op
 TheanoGpuNativeOpBase = theano.sandbox.cuda.GpuOp
@@ -69,7 +69,7 @@ class TheanoNativeOp(TheanoNativeOpBase, NativeOpBaseMixin):
 
   @classmethod
   def contiguous(cls, v):
-    from TheanoUtil import Contiguous
+    from returnn.theano.util import Contiguous
     assert isinstance(v, theano.Variable)
     if getattr(v, 'owner', None):
       assert isinstance(v.owner, theano.Apply)
@@ -475,7 +475,7 @@ def _inplace_native_op(node):
     if not any_inplace:
       return False
     new_op = node.op.__class__(**kwargs)
-    from TheanoUtil import make_var_tuple
+    from returnn.theano.util import make_var_tuple
     # noinspection PyCallingNonCallable
     new_v = make_var_tuple(new_op(*node.inputs))
     return new_v
@@ -503,7 +503,7 @@ def _local_gpu_native_op(node):
       gpu_op = TheanoGpuNativeOp(**{key: getattr(node.op, key) for key in node.op.__props__})
       args = [x.owner.inputs[0] if (x.owner and x.owner.op == host_from_gpu) else x
               for x in args]
-      from TheanoUtil import make_var_tuple
+      from returnn.theano.util import make_var_tuple
       # noinspection PyCallingNonCallable
       outputs = make_var_tuple(gpu_op(*args))
       return [host_from_gpu(out) for out in outputs]

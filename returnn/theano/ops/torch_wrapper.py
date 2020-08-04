@@ -13,7 +13,7 @@
 import os, sys
 import theano
 import theano.tensor as T
-from TheanoUtil import try_register_gpu_opt
+from returnn.theano.util import try_register_gpu_opt
 from theano.sandbox.cuda import GpuOp
 from returnn.util.basic import make_hashable, make_dll_name, escape_c_str
 from returnn.log import log

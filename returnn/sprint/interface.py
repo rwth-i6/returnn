@@ -18,25 +18,21 @@ from threading import Event, Thread
 import typing
 import numpy
 
-from Dataset import Dataset, init_dataset
-from SprintDataset import SprintDatasetBase
-from EngineBase import EngineBase
+from returnn.datasets.basic import Dataset, init_dataset
+from returnn.datasets.sprint import SprintDatasetBase
+from returnn.engine.base import EngineBase
 from returnn.log import log
-from EngineUtil import assign_dev_data_single_seq
-import Debug
+import returnn.util.debug as debug
 from returnn.util.basic import get_gpu_names, interrupt_main, to_bool, BackendEngine
-import TaskSystem
-import rnn
+import returnn.util.task_system as task_system
+import returnn.__main__ as rnn
 
 if typing.TYPE_CHECKING:
+  import returnn.tf.engine
   try:
-    import TFEngine
+    import returnn.theano.engine
   except ImportError:
-    TFEngine = None
-  try:
-    import Engine as TheanoEngine
-  except ImportError:
-    TheanoEngine = None
+    pass
 
 _rnn_file = rnn.__file__
 _main_file = getattr(sys.modules["__main__"], "__file__", "")
@@ -59,11 +55,11 @@ MaxSegmentLength = 1
 TargetMode = None  # type: typing.Optional[str]
 Task = "train"
 
-Engine = None  # type: typing.Optional[typing.Union[typing.Type[TFEngine.Engine],typing.Type[TheanoEngine.Engine]]]
+Engine = None  # type: typing.Optional[typing.Union[typing.Type[returnn.tf.engine.Engine],typing.Type[returnn.theano.engine.Engine]]]  # nopep8
 config = None  # type: typing.Optional[rnn.Config]
 sprintDataset = None  # type: typing.Optional[SprintDatasetBase]
 customDataset = None  # type: typing.Optional[Dataset]
-engine = None  # type: typing.Optional[typing.Union[TFEngine.Engine,TheanoEngine.Engine,Engine]]
+engine = None  # type: typing.Optional[typing.Union[returnn.tf.engine.Engine,returnn.theano.engine.Engine,Engine]]
 
 
 # <editor-fold desc="generic init">
@@ -80,7 +76,7 @@ def init(name=None, sprint_unit=None, **kwargs):
   :return: some object or None
   :rtype: None|object
   """
-  print("CRNN Python SprintInterface init: name %r, sprint_unit %r, pid %i, kwargs %r" % (
+  print("RETURNN Python SprintInterface init: name %r, sprint_unit %r, pid %i, kwargs %r" % (
     name, sprint_unit, os.getpid(), kwargs))
   if name is None:
     return init_python_trainer(**kwargs)
@@ -426,8 +422,8 @@ def init_python_trainer(inputDim, outputDim, config, targetMode, **kwargs):
   config = config.split(",")
   config = {key: value for (key, value) in [s.split(":", 1) for s in config if s]}
 
-  if to_bool(config.get("EnableAutoNumpySharedMemPickling", False)) and not TaskSystem.SharedMemNumpyConfig["enabled"]:
-    TaskSystem.SharedMemNumpyConfig["enabled"] = True
+  if to_bool(config.get("EnableAutoNumpySharedMemPickling", False)) and not task_system.SharedMemNumpyConfig["enabled"]:
+    task_system.SharedMemNumpyConfig["enabled"] = True
     print("SprintInterface[pid %i] EnableAutoNumpySharedMemPickling = True" % (os.getpid(),))
 
   epoch = config.get("epoch", None)
@@ -681,8 +677,8 @@ def _at_exit_handler():
     print("SprintInterface[pid %i] atexit handler, exit() was not called, calling it now" % (os.getpid(),))
     exit()
     print("All threads:")
-    import Debug
-    Debug.dump_all_thread_tracebacks(exclude_self=True)
+    import debug
+    debug.dump_all_thread_tracebacks(exclude_self=True)
 
 
 def _init_base(configfile=None, target_mode=None, epoch=None, sprint_opts=None):
@@ -728,7 +724,7 @@ def _init_base(configfile=None, target_mode=None, epoch=None, sprint_opts=None):
       # Use TFEngine.Engine class instead of Engine.Engine.
       from returnn.tf.engine import Engine
     elif BackendEngine.is_theano_selected():
-      from Engine import Engine
+      from returnn.theano.engine import Engine
 
     import atexit
     atexit.register(_at_exit_handler)
@@ -796,7 +792,7 @@ def _start_train_thread(epoch=None):
 
     except BaseException:  # Catch all, even SystemExit. We must stop the main thread then.
       try:
-        print("CRNN train failed")
+        print("RETURNN train failed")
         sys.excepthook(*sys.exc_info())
       finally:
         # Exceptions are fatal. Stop now.
@@ -943,6 +939,7 @@ def _forward(segment_name, features):
   if BackendEngine.is_theano_selected():
     # Prepare data for device.
     device = engine.devices[0]
+    from returnn.theano.engine_util import assign_dev_data_single_seq
     success = assign_dev_data_single_seq(device, dataset=dataset, seq=seq_idx)
     assert success, "failed to allocate & assign data for seq %i, %s" % (seq_idx, segment_name)
 
@@ -1089,4 +1086,4 @@ def demo():
 
 
 if __name__ == "__main__":
-  Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
+  debug.debug_shell(user_ns=locals(), user_global_ns=globals())

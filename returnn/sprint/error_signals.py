@@ -17,7 +17,7 @@ import atexit
 import signal
 import typing
 from threading import RLock, Thread
-import returnn.util.task_system
+import returnn.util.task_system as task_system
 from returnn.util.task_system import Pickler, Unpickler, numpy_set_unused
 from returnn.util.basic import eval_shell_str, make_hashable, BackendEngine
 from returnn.log import log
@@ -164,7 +164,7 @@ class SprintSubprocessInstance:
     config_str = "c2p_fd:%i,p2c_fd:%i" % (
         self.pipe_c2p[1].fileno(), self.pipe_p2c[0].fileno())
     config_str += ",minPythonControlVersion:%i" % self.minPythonControlVersion
-    if TaskSystem.SharedMemNumpyConfig["enabled"]:
+    if task_system.SharedMemNumpyConfig["enabled"]:
       config_str += ",EnableAutoNumpySharedMemPickling:True"
     if self.sprintControlConfig:
       config_str += "," + ",".join(["%s:%s" % (k, v) for (k, v) in sorted(self.sprintControlConfig.items())])
@@ -372,26 +372,29 @@ class SprintInstancePool:
     assert n_batch == log_posteriors.shape[1]
 
     if tags is None:
-      import Device
-      assert Device.is_device_host_proc()
-      tags = Device.get_current_seq_tags()
+      import returnn.theano.device as theano_device
+      assert theano_device.is_device_host_proc()
+      tags = theano_device.get_current_seq_tags()
     assert len(tags) == n_batch
 
     batch_loss = numpy.zeros((n_batch,), dtype="float32")
     batch_error_signal = numpy.zeros_like(log_posteriors, dtype="float32")
 
     # greedy solution to the scheduling problem
-    sorted_length = sorted(enumerate(seq_lengths),key=lambda x:x[1],reverse=True)
-    jobs = [ [] for i in range(self.max_num_instances) ]
-    joblen = [0]*self.max_num_instances
-    for i,l in sorted_length:
-      j = min(enumerate(joblen),key=lambda x:x[1])[0]
+    sorted_length = sorted(enumerate(seq_lengths), key=lambda x: x[1], reverse=True)
+    jobs = [[] for i in range(self.max_num_instances)]
+    joblen = [0] * self.max_num_instances
+    for i, l in sorted_length:
+      j = min(enumerate(joblen), key=lambda x: x[1])[0]
       jobs[j].append(i)
-      joblen[j]+=l
+      joblen[j] += l
 
     if not BackendEngine.is_theano_selected() and self.max_num_instances > 1:
-      threads = [ReaderThread(self._get_instance(i), i, jobs[i], tags, seq_lengths, log_posteriors, batch_loss, batch_error_signal) for i in range(self.max_num_instances)]
-      for i,thread in enumerate(threads):
+      threads = [
+        ReaderThread(
+          self._get_instance(i), i, jobs[i], tags, seq_lengths, log_posteriors, batch_loss, batch_error_signal)
+        for i in range(self.max_num_instances)]
+      for i, thread in enumerate(threads):
         thread.join()
         if thread.exception:
           raise thread.exception
@@ -428,9 +431,9 @@ class SprintInstancePool:
     :rtype: (numpy.ndarray, numpy.ndarray, numpy.ndarray)
     """
     all_num_states = [None] * len(tags)  # type: list[int]
-    all_num_edges  = [None] * len(tags)  # type: list[int]
-    all_edges      = [None] * len(tags)  # type: list[numpy.ndarray]
-    all_weights    = [None] * len(tags)  # type: list[numpy.ndarray]
+    all_num_edges = [None] * len(tags)  # type: list[int]
+    all_edges = [None] * len(tags)  # type: list[numpy.ndarray]
+    all_weights = [None] * len(tags)  # type: list[numpy.ndarray]
     for bb in range(0, len(tags), self.max_num_instances):
       for i in range(self.max_num_instances):
         b = bb + i
@@ -451,9 +454,9 @@ class SprintInstancePool:
           raise RuntimeError(r[1])
         num_states, num_edges, edges, weights = r[1:]
         all_num_states[b] = num_states
-        all_num_edges [b] = num_edges
-        all_edges     [b] = edges.reshape((3, num_edges))  # (from, to, emission-idx) for each edge, uint32
-        all_weights   [b] = weights  # for each edge, float32
+        all_num_edges[b] = num_edges
+        all_edges[b] = edges.reshape((3, num_edges))  # (from, to, emission-idx) for each edge, uint32
+        all_weights[b] = weights  # for each edge, float32
     state_offset = 0
     for idx in range(len(all_edges)):
       num_edges = all_num_edges[idx]
@@ -465,8 +468,8 @@ class SprintInstancePool:
     start_end_states = numpy.empty((2, len(all_num_states)), dtype='uint32')
     state_offset = 0
     for idx, num_states in enumerate(all_num_states):
-      start_end_states[0,idx] = state_offset
-      start_end_states[1,idx] = state_offset + num_states - 1
+      start_end_states[0, idx] = state_offset
+      start_end_states[1, idx] = state_offset + num_states - 1
       state_offset += num_states
 
     return numpy.hstack(all_edges), numpy.hstack(all_weights), start_end_states
@@ -509,14 +512,15 @@ class SeqTrainParallelControlDevHost:
       self.seq_tag = calc_loss_state.seq_tag
       self.loss = calc_loss_state.loss
       self.hat_y = calc_loss_state.hat_y
+
     def __repr__(self):
       return "<LossData{seq_idx=%i, seq_tag=%r}>" % (self.seq_idx, self.seq_tag)
 
   def __init__(self, output_layer, output_target, sprint_opts, forward_seq_delay=5):
     # noinspection PyUnresolvedReferences,PyPackageRequirements
     import theano
-    import NetworkOutputLayer
-    assert isinstance(output_layer, NetworkOutputLayer.SequenceOutputLayer)
+    import returnn.theano.layers.output as theano_output_layer
+    assert isinstance(output_layer, theano_output_layer.SequenceOutputLayer)
     self.output_layer = output_layer
     self.output_target = output_target
     self.output_var_loss = theano.shared(numpy.zeros((1,), "float32"), name="loss")  # (batch,)
@@ -524,9 +528,9 @@ class SeqTrainParallelControlDevHost:
     sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts)
     assert isinstance(sprint_instance_pool, SprintInstancePool)
     self.sprint_instance_pool = sprint_instance_pool
-    import Device
-    assert Device.is_device_host_proc(), "SeqTrainParallelControlDevHost is expected to live in the Dev proc"
-    self.device = Device.deviceInstance
+    import returnn.theano.device as theano_device
+    assert theano_device.is_device_host_proc(), "SeqTrainParallelControlDevHost is expected to live in the Dev proc"
+    self.device = theano_device.deviceInstance
     self.train_started = False
     self.train_start_seq = 0
     self.train_end_seq = 0
@@ -581,7 +585,8 @@ class SeqTrainParallelControlDevHost:
     # Maybe cleanup some of calc_loss_states and move to loss_data_queue.
     for state in sorted(self.calc_loss_states, key=lambda s: s.seq_idx):
       assert isinstance(state, self.CalcLossState)
-      if state.hat_y is None: break  # break to keep loss_data_queue in order
+      if state.hat_y is None:
+        break  # break to keep loss_data_queue in order
       del self.calc_loss_states[self.calc_loss_states.index(state)]
       self.loss_data_queue.append(self.LossData(state))
 
@@ -601,8 +606,7 @@ class SeqTrainParallelControlDevHost:
       calc_loss_state.sprint_instance.get_loss_and_error_signal__send(
         seg_name=forward_data.seq_tag,
         seg_len=forward_data.posteriors.shape[0],
-        log_posteriors=log_posteriors
-      )
+        log_posteriors=log_posteriors)
       self.calc_loss_states.append(calc_loss_state)
       new_loss = True
 
@@ -638,7 +642,7 @@ class SeqTrainParallelControlDevHost:
     """
     assert self.train_have_loss_for_cur_batches()
     # See EngineUtil.assign_dev_data for reference.
-    from Dataset import Dataset
+    from returnn.datasets.basic import Dataset
     n_time, n_batch = Dataset.index_shape_for_batches(self.train_batches)
     n_output_dim = self.output_layer.attrs['n_out']
     output_loss = numpy.zeros((n_batch,), "float32")
@@ -686,10 +690,16 @@ class SeqTrainParallelControlDevHost:
 
     # If we have a sequence training criterion, posteriors might be in format (time,seq|batch,emission).
     if batch_posteriors.ndim == 2:
-      assert batch_posteriors.shape == (batch.max_num_frames_per_slice[self.output_target] * batch.num_slices, self.output_layer.attrs['n_out'])
-      batch_posteriors = batch_posteriors.reshape((batch.max_num_frames_per_slice[self.output_target], batch.num_slices, self.output_layer.attrs['n_out']))
+      assert batch_posteriors.shape == (
+        batch.max_num_frames_per_slice[self.output_target] * batch.num_slices,
+        self.output_layer.attrs['n_out'])
+      batch_posteriors = batch_posteriors.reshape(
+        (batch.max_num_frames_per_slice[self.output_target], batch.num_slices, self.output_layer.attrs['n_out']))
     # Posteriors are in format (time,emission).
-    assert batch_posteriors.shape == (batch.max_num_frames_per_slice[self.output_target], batch.num_slices, self.output_layer.attrs['n_out'])
+    assert batch_posteriors.shape == (
+      batch.max_num_frames_per_slice[self.output_target],
+      batch.num_slices,
+      self.output_layer.attrs['n_out'])
 
     for i in range(n_batch):
       assert batch.seqs[i].batch_slice == i
@@ -705,7 +715,9 @@ class SeqTrainParallelControlDevHost:
     """
     # This is called greedily until it returns False.
     # It's important that we have this behavior deterministic so that the training itself is deterministic.
-    return len(self.forward_data_queue) + len(self.calc_loss_states) + len(self.loss_data_queue) + num_seqs < self.forward_seq_delay
+    return (
+      len(self.forward_data_queue) + len(self.calc_loss_states) + len(self.loss_data_queue) + num_seqs
+      < self.forward_seq_delay)
 
   def remove_old_loss_data(self, current_start_seq):
     idx = 0
@@ -782,7 +794,7 @@ if BackendEngine.is_theano_selected():
         self.debug_perform_time = config.bool("debug_SprintErrorSigOp_perform_time", False)
       if self.debug_perform_time:
         print("SprintErrorSigOp perform time:", end_time - start_time, file=log.v1)
-        from Device import deviceInstance
+        from returnn.theano.device import deviceInstance
         assert deviceInstance.is_device_proc()
         forward_time = start_time - deviceInstance.compute_start_time
         print("SprintErrorSigOp forward time:", forward_time, file=log.v1)
@@ -834,16 +846,15 @@ if BackendEngine.is_theano_selected():
       error_signal is the grad w.r.t. z, i.e. before softmax is applied.
     """
     if output_layer and output_layer.train_flag:
-      import Device
-      if Device.is_device_host_proc():
-        if Device.deviceInstance.config.is_typed("seq_train_parallel"):
+      import returnn.theano.device as theano_device
+      if theano_device.is_device_host_proc():
+        if theano_device.deviceInstance.config.is_typed("seq_train_parallel"):
           print("sprint_loss_and_error_signal: seq_train_parallel for output_layer %r" % output_layer.name, file=log.v3)
-          assert not Device.deviceInstance.seq_train_parallel_control, "Only one supported so far."
-          control = \
-            SeqTrainParallelControlDevHost(
-              output_layer=output_layer, output_target=target, sprint_opts=sprint_opts,
-              **Device.deviceInstance.config.typed_value("seq_train_parallel"))
-          Device.deviceInstance.seq_train_parallel_control = control
+          assert not theano_device.deviceInstance.seq_train_parallel_control, "Only one supported so far."
+          control = SeqTrainParallelControlDevHost(
+            output_layer=output_layer, output_target=target, sprint_opts=sprint_opts,
+            **theano_device.deviceInstance.config.typed_value("seq_train_parallel"))
+          theano_device.deviceInstance.seq_train_parallel_control = control
           loss = control.output_var_loss
           hat_y = control.output_var_hat_y  # hat_y = posteriors - error_signal
           error_signal = T.exp(log_posteriors) - hat_y

@@ -23,8 +23,8 @@ The dataset classes MetaDataset and CombinedDataset which perform these tasks ar
 
 from __future__ import print_function
 
-from Dataset import Dataset, DatasetSeq, init_dataset, convert_data_dims
-from CachedDataset2 import CachedDataset2
+from returnn.datasets.basic import Dataset, DatasetSeq, init_dataset, convert_data_dims
+from .cached2 import CachedDataset2
 from returnn.util.basic import NumbersDict, load_json
 from returnn.log import log
 from random import Random
@@ -49,20 +49,20 @@ class EpochWiseFilter:
   @classmethod
   def filter_epoch(cls, opts, seq_order, get_seq_len, debug_msg_prefix):
     """
-    :param dict[str]|Util.CollectionReadCheckCovered opts:
+    :param dict[str]|returnn.util.basic.CollectionReadCheckCovered opts:
     :param list[int] seq_order: list of seq idxs
     :param ((int)->int) get_seq_len: seq idx -> len
     :param str debug_msg_prefix:
     :return: new seq_order
     :rtype: list[int]
     """
-    import Util
-    if not isinstance(opts, Util.CollectionReadCheckCovered):
-      opts = Util.CollectionReadCheckCovered(opts)
+    import returnn.util.basic as util
+    if not isinstance(opts, util.CollectionReadCheckCovered):
+      opts = util.CollectionReadCheckCovered(opts)
     if opts.get("max_mean_len"):
       max_mean_len = opts.get("max_mean_len")
       lens_and_seqs = numpy.array(sorted([(get_seq_len(idx), idx) for idx in seq_order]))
-      best_num = Util.binary_search_any(
+      best_num = util.binary_search_any(
         cmp=lambda num: numpy.mean(lens_and_seqs[:num, 0]) - max_mean_len, low=1, high=len(lens_and_seqs) + 1)
       assert best_num is not None
       selected_seq_idxs = set(lens_and_seqs[:best_num, 1])
@@ -601,7 +601,7 @@ class ClusteringDataset(CachedDataset2):
     assert seq_drop <= 1.0
     chunk_size = self.chunk_size
     chunk_step = self.chunk_step
-    from EngineBatch import Batch
+    from returnn.engine.batch import Batch
     batch = Batch()
     last_seq_idx = None
     for seq_idx, t_start, t_end in self.iterate_seqs(

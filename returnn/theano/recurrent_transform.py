@@ -4,8 +4,8 @@ import theano
 import theano.tensor as T
 import theano.sandbox.cuda as cuda
 import numpy
-from MultiBatchBeam import multi_batch_beam
-from ActivationFunctions import elu
+from returnn.theano.ops.multi_batch_beam import multi_batch_beam
+from returnn.theano.activation_functions import elu
 from theano.ifelse import ifelse
 
 
@@ -750,7 +750,7 @@ class AttentionInverted(AttentionBase):
     q = q / q.sum(axis=0,keepdims=True)
 
     q = w
-    from TheanoUtil import print_to_file
+    from returnn.theano.util import print_to_file
     #q = print_to_file('q', q)
     dt = q.argmax(axis=0) - T.cast(self.t,'int32') #+ max_skip
 
@@ -1109,8 +1109,8 @@ def get_dummy_recurrent_transform(recurrent_transform_name, n_out=5, n_batches=2
   This function is a useful helper for testing/debugging.
   """
   cls = transform_classes[recurrent_transform_name]
-  from NetworkRecurrentLayer import RecurrentUnitLayer
-  from NetworkBaseLayer import SourceLayer
+  from returnn.theano.layers.rec import RecurrentUnitLayer
+  from returnn.theano.layers.base import SourceLayer
   if getattr(RecurrentUnitLayer, "rng", None) is None:
     RecurrentUnitLayer.initialize_rng()
   index = theano.shared(numpy.array([[1] * n_batches] * n_input_t, dtype="int8"), name="i")

@@ -5323,7 +5323,7 @@ class SubnetworkLayer(LayerBase):
     except Exception as exc:
       import sys
       etype, value, tb = sys.exc_info()
-      import better_exchook
+      from returnn.util import better_exchook
       from returnn.tf.network import CannotHandleUndefinedSourcesException
       from returnn.util.basic import StringIO
       ss = StringIO()

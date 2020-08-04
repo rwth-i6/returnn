@@ -1,11 +1,11 @@
 
 from __future__ import print_function
 
-from TaskSystem import AsyncTask, ProcConnectionDied
-from Updater import Updater
+from returnn.util.task_system import AsyncTask, ProcConnectionDied
+from returnn.theano.updater import Updater
 from returnn.util.basic import cmd, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main, CalledProcessError, NumbersDict, custom_exec, dict_joined, attr_chain
 from returnn.log import log
-from Network import LayerNetwork
+from returnn.theano.network import LayerNetwork
 from collections import OrderedDict
 import numpy
 import sys
@@ -13,12 +13,13 @@ import os
 import signal
 import time
 import pickle
+import typing
 try:
   from thread import start_new_thread
 except ImportError:
   # noinspection PyUnresolvedReferences
   from _thread import start_new_thread
-import Debug
+import returnn.util.debug as debug
 import re
 from returnn.util.basic import get_num_gpu_devices
 
@@ -79,7 +80,7 @@ def is_using_gpu():
 asyncChildGlobalDevice = None
 
 # Any Device instance.
-deviceInstance = None; ":type: Device"
+deviceInstance = None  # type: typing.Optional[Device]
 
 def str2int(txt):
   try:
@@ -371,7 +372,7 @@ class Device(object):
     self.streams = []
     output_streams = {'train' : [],'eval' : []}
     if config.has('stream'):
-      from NetworkStream import NetworkStream
+      from returnn.theano.network_stream import NetworkStream
       for stream in config.value('stream', '').split():  # usage: layer_name.member_var:port
         stream, port = stream.split(':')
         layer, member = stream.split('.')
@@ -546,7 +547,7 @@ class Device(object):
         elif extract == "win_post":
           layer = self.testnet.get_layer(output_layer_name)
           p_y_given_x = getattr(layer, "p_y_given_x", layer.output)
-          from NetworkHiddenLayer import SegmentFinalStateLayer
+          from returnn.theano.layers.hidden import SegmentFinalStateLayer
           if isinstance(layer.sources[0],SegmentFinalStateLayer):
             w = layer.sources[0].base[0].attrs['win']
             t = layer.sources[0].base[0].timesteps
@@ -557,7 +558,7 @@ class Device(object):
             w = layer.copy_output.attrs['win']
             t = layer.copy_output.timesteps
             b = layer.copy_output.batches
-            from TheanoUtil import window_batch_timewise
+            from returnn.theano.util import window_batch_timewise
             fullind = window_batch_timewise(t,b,w,layer.copy_output.fullind)
             fullind = fullind.T
             p_y_given_x = p_y_given_x.reshape((p_y_given_x.shape[0]*p_y_given_x.shape[1],p_y_given_x.shape[2]))[fullind.flatten()]
@@ -710,7 +711,7 @@ class Device(object):
     block_size = self.block_size if self.block_size else batch_dim
     if self.config.bool("debug_shell_first_compute", False):
       print("debug_shell_first_compute", file=log.v1)
-      Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
+      debug.debug_shell(user_ns=locals(), user_global_ns=globals())
     if task == "train" or task == "theano_graph" or task == "eval":
       func = self.tester if task == "eval" else self.trainer
       output = []
@@ -777,7 +778,7 @@ class Device(object):
         self.dump_model_broken_info(model_broken_short_info)
       if self.config.bool("debug_shell_model_broken", False):
         print("debug_shell_model_broken", file=log.v1)
-        Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
+        debug.debug_shell(user_ns=locals(), user_global_ns=globals())
     # Pass on, let the Engine decide what to do (or also just fail).
 
     return output, outputs_format
@@ -869,7 +870,7 @@ class Device(object):
     try:
       # We do some minimal initialization, modelled after rnn.init().
       # This is needed because we are a new independent process. See startProc().
-      import rnn
+      import returnn.__main__ as rnn
       rnn.init_better_exchook()
       rnn.config = config
       rnn.init_log()
@@ -877,8 +878,8 @@ class Device(object):
       print("Device %s proc: THEANO_FLAGS = %r" % (device, os.environ.get("THEANO_FLAGS", None)), file=log.v4)
       rnn.init_faulthandler()
       rnn.init_config_json_network()
-      import TheanoUtil
-      TheanoUtil.monkey_patches()
+      import returnn.theano.util as theano_util
+      theano_util.monkey_patches()
       self.process_inner(device, config, self.update_specs, asyncTask)
     except ProcConnectionDied as e:
       print("Device %s proc, pid %i: Parent seem to have died: %s" % (device, os.getpid(), e), file=log.v2)
@@ -1037,7 +1038,7 @@ class Device(object):
           sys.excepthook(*sys.exc_info())
           # If there are any other than the main thread.
           # Actually, that would be unexpected.
-          Debug.dump_all_thread_tracebacks()
+          debug.dump_all_thread_tracebacks()
           return
         except MemoryError:
           output_queue.send("error")
@@ -1233,15 +1234,16 @@ class Device(object):
                      (self.name, hms(total_time), compute_frac * 100, update_frac * 100), file=log.v4)
 
   def need_reinit(self, json_content, train_param_args=None):
-    if self.config.bool('reinit', True) == False:
+    if not self.config.bool('reinit', True):
       return False
     assert self.trainnet
     if isinstance(json_content, str):
       import json
       json_content = json.loads(json_content)
     if self.trainnet.to_json_content() != json_content:
-      print("Device: reinit because network description differs. Diff:", \
-                       dict_diff_str(self.trainnet.to_json_content(), json_content), file=log.v3)
+      print(
+        "Device: reinit because network description differs. Diff:",
+        dict_diff_str(self.trainnet.to_json_content(), json_content), file=log.v3)
       return True
     if train_param_args is None:
       train_param_args = self.trainnet.get_train_param_args_default()
@@ -1390,7 +1392,7 @@ class Device(object):
         givens=self.make_input_givens(network),
         on_unused_input='warn',
         name="forwarder")
-    from TheanoUtil import make_var_tuple
+    from returnn.theano.util import make_var_tuple
     outputs = make_var_tuple(self.forwarder())
     assert len(outputs) == len(network.output)
     return {name: outputs[i] for i, (name, layer) in enumerate(sorted(network.output.items()))}

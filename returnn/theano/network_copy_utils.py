@@ -2,7 +2,8 @@
 from returnn.log import log
 
 
-class LayerDoNotMatchForCopy(Exception): pass
+class LayerDoNotMatchForCopy(Exception):
+  pass
 
 
 def intelli_copy_layer(old_layer, new_layer):
@@ -28,13 +29,14 @@ def intelli_copy_layer(old_layer, new_layer):
   new_output_param_name_map = {old_param_name: new_param_name
                                for old_param_name, new_param_name in zip(old_output_param_names,
                                                                          new_output_param_names)}
-  print >> log.v5, "Copy map: %s" % sorted(new_output_param_name_map.items())
+  print("Copy map: %s" % sorted(new_output_param_name_map.items()), file=log.v5)
   old_output_params = old_layer.get_params_dict()
   new_output_params = {new_output_param_name_map[old_param_name]: param
                        for old_param_name, param in old_output_params.items()}
   for p, v in new_output_params.items():
     self_param_shape = new_layer.params[p].get_value(borrow=True, return_internal_type=True).shape
     if self_param_shape != v.shape:
-      raise LayerDoNotMatchForCopy("In %s, param %s shape does not match. Expected (new layer) %s, got (old layer) %s." %
-                                   (new_layer, p, self_param_shape, v.shape))
+      raise LayerDoNotMatchForCopy(
+        "In %s, param %s shape does not match. Expected (new layer) %s, got (old layer) %s." %
+        (new_layer, p, self_param_shape, v.shape))
     new_layer.params[p].set_value(v, borrow=True)
