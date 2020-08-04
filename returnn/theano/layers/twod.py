@@ -350,8 +350,9 @@ class TwoDLSTMLayer(TwoDBaseLayer):
     b = self.add_param(b)
     return b
 
+
 def conv_crop_pool_op(X, sizes, output_sizes, W, b, n_in, n_maps, filter_height, filter_width, filter_dilation, poolsize):
-  from Device import is_using_gpu
+  from returnn.theano.device import is_using_gpu
   if is_using_gpu():
     conv_op = CuDNNConvHWBCOpValidInstance
     pool_op = PoolHWBCOp(poolsize)

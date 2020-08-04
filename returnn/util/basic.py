@@ -1232,7 +1232,7 @@ def wrap_async_func(f):
   """
   # noinspection PyBroadException
   try:
-    from . import better_exchook
+    from returnn.util import better_exchook
     better_exchook.install()
     return f()
   except Exception:

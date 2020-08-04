@@ -16,7 +16,7 @@ sys.path += [".", "returnn"]
 import faulthandler
 faulthandler.enable()
 
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.install()
 
 import logging

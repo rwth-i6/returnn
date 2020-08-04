@@ -2054,7 +2054,7 @@ def get_post_processor_function(opts):
 
 
 def _main():
-  import better_exchook
+  from returnn.util import better_exchook
   better_exchook.install()
   from argparse import ArgumentParser
   arg_parser = ArgumentParser()

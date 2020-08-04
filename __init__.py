@@ -53,7 +53,7 @@ def _setup():
       # We will just use the existing module. Print a warning.
       if int(os.environ.get("DEBUG_RETURNN_IMPORT", "0")):
         print("RETURNN import warning: module %r already imported as an absolute module" % mod_name)
-        import better_exchook
+        from returnn.util import better_exchook
         better_exchook.print_tb(None)
       mod = sys.modules[mod_name]
     else:

@@ -179,7 +179,7 @@ class Device(object):
     return "<Device %s %s>" % (self.name, async_str)
 
   def startProc(self, *args, **kwargs):
-    import better_exchook
+    from returnn.util import better_exchook
     better_exchook.install()
     try:
       self._startProc(*args, **kwargs)

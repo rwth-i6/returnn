@@ -458,7 +458,7 @@ def ken_lm_abs_score_bpe_strings_dense(handle, bpe_merge_symbol, strings, labels
 
 
 if __name__ == "__main__":
-  import better_exchook
+  from returnn.util import better_exchook
   better_exchook.install()
   # Try to compile now.
   get_tf_mod(verbose=True)

@@ -571,7 +571,7 @@ class RecurrentUnitLayer(Layer):
       kwargs['sources'] = []
       source_index = kwargs['index']
     unit_given = unit
-    from Device import is_using_gpu
+    from returnn.theano.device import is_using_gpu
     if unit == 'lstm':  # auto selection
       if not is_using_gpu():
         unit = 'lstme'

@@ -138,6 +138,6 @@ def main():
 
 
 if __name__ == '__main__':
-  import better_exchook
+  from returnn.util import better_exchook
   better_exchook.install()
   main()

@@ -3295,7 +3295,7 @@ def demo():
   """
   Some demo for some of the :class:`GeneratingDataset`.
   """
-  import better_exchook
+  from returnn.util import better_exchook
   better_exchook.install()
   log.initialize(verbosity=[5])
   import sys

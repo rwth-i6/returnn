@@ -995,7 +995,7 @@ class ExecingProcess:
       if not any(mod_path == os.path.realpath(s) for s in sys.path):
         sys.path.append(mod_path)
       try:
-        import better_exchook
+        from returnn.util import better_exchook
       except ImportError:
         pass  # Doesn't matter.
       else:

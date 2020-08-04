@@ -348,7 +348,7 @@ def test_fast_bw_fsa_staircase():
 
 
 if __name__ == "__main__":
-  import better_exchook
+  from returnn.util import better_exchook
   better_exchook.install()
   if len(sys.argv) <= 1:
     for k, v in sorted(globals().items()):

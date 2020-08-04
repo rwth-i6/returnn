@@ -5,7 +5,7 @@
 
 # Python code to execute, usually for sys.path manipulation such as
 # pygtk.require().
-init-hook=import better_exchook; better_exchook.install()
+init-hook=from returnn.util import better_exchook; better_exchook.install()
 
 # Profiled execution.
 profile=no

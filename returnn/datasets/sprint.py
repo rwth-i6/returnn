@@ -87,7 +87,7 @@ class SprintDatasetBase(Dataset):
       if callable(orth_post_process):
         self.orth_post_process = orth_post_process
       else:
-        from LmDataset import get_post_processor_function
+        from .lm import get_post_processor_function
         self.orth_post_process = get_post_processor_function(orth_post_process)
     self.bpe = None
     if bpe:
@@ -706,7 +706,7 @@ class ExternSprintDataset(SprintDatasetBase):
       sys.stdin = sys.__stdin__
       sys.stdout = sys.__stdout__
       sys.stderr = sys.__stderr__
-      import better_exchook
+      from returnn.util import better_exchook
       better_exchook.install()
       # noinspection PyBroadException
       try:
@@ -720,7 +720,7 @@ class ExternSprintDataset(SprintDatasetBase):
         sys.excepthook(*sys.exc_info())
       finally:
         print("%s child: exit" % self)
-        # noinspection PyProtectedMember
+        # noinspection PyProtectedMember,PyUnresolvedReferences
         os._exit(1)
         return  # Not reached.
 
@@ -998,7 +998,7 @@ class SprintCacheDataset(CachedDataset2):
       :param dict[str] allophone_labeling: kwargs for :class:`AllophoneLabeling`
       """
       self.data_key = data_key
-      from SprintCache import open_file_archive
+      from returnn.sprint.cache import open_file_archive
       self.sprint_cache = open_file_archive(filename)
       if not data_type:
         if data_key == "data":
@@ -1015,7 +1015,7 @@ class SprintCacheDataset(CachedDataset2):
       self.type = data_type
       self.allophone_labeling = None
       if allophone_labeling:
-        from SprintCache import AllophoneLabeling
+        from returnn.sprint.cache import AllophoneLabeling
         self.allophone_labeling = AllophoneLabeling(**allophone_labeling)
         self.sprint_cache.set_allophones(self.allophone_labeling.allophone_file)
       else:
@@ -1260,7 +1260,7 @@ def demo():
 
 
 if __name__ == "__main__":
-  import better_exchook
+  from returnn.util import better_exchook
   better_exchook.install()
   try:
     demo()
