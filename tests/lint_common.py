@@ -12,6 +12,13 @@ Our Python style:
 and follow further common Python conventions (closely follow PyCharm warnings).
 """
 
+import os
+
+_my_dir = os.path.dirname(os.path.abspath(__file__))
+_root_dir = os.path.dirname(_my_dir)
+assert os.path.exists("%s/rnn.py" % _root_dir)
+
+
 # Proceed like this: Fix all warnings for some file, then remove it from this list.
 # I removed already all files which really should not have warnings (mostly the TF backend + shared files).
 ignore_count_for_files = {
@@ -64,3 +71,23 @@ ignore_count_for_files = {
   'returnn/theano/ops/two_state_hmm.py',
   'returnn/theano/updater.py',
 }
+
+
+def find_all_py_source_files():
+  """
+  :rtype: list[str]
+  """
+  # Earlier this was a `glob("%s/*.py" % _root_dir)`. But not anymore, since we have the new package structure.
+  src_files = []
+  for root, dirs, files in os.walk(_root_dir):
+    if root == _root_dir:
+      root = ""
+    else:
+      assert root.startswith(_root_dir + "/")
+      root = root[len(_root_dir) + 1:]  # relative to the root
+      root += "/"
+    for file in files:
+      if file.endswith(".py"):
+        src_files.append(root + file)
+  src_files.sort(key=lambda fn: fn.split("/"))
+  return src_files
