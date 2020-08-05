@@ -9,13 +9,14 @@
 # https://github.com/hughperkins/pytorch
 # https://github.com/facebook/fblualib/blob/master/fblualib/python/README.md
 
+from __future__ import print_function
 
-import os, sys
+import os
 import theano
 import theano.tensor as T
 from returnn.theano.util import try_register_gpu_opt
 from theano.sandbox.cuda import GpuOp
-from returnn.util.basic import make_hashable, make_dll_name, escape_c_str
+from returnn.util.basic import make_hashable, make_dll_name, escape_c_str, long
 from returnn.log import log
 from pprint import pprint
 
@@ -26,6 +27,7 @@ _torch_include = "include"
 _torch_lib = "lib"
 _torch_share_lua = "share/lua/5.1"
 _torch_lib_lua = "lib/lua/5.1"
+
 
 def _init():
   global _initialized, _torch_base_dir
@@ -41,27 +43,27 @@ def _init():
       paths += [os.path.dirname(binpath)]  # parent dir
       break
   # Add some standard paths.
-  paths += map(
+  paths += list(map(
     os.path.expanduser,
     ["~/torch/install", "~/code/torch/install", "~/Programmierung/torch/install",
-     "/usr", "/usr/local"])
+     "/usr", "/usr/local"]))
   def is_torch_dir(p):
     if not os.path.exists("%s/lib/%s" % (p, make_dll_name("luajit"))): return False
     if not os.path.exists("%s/lib/%s" % (p, make_dll_name("TH"))): return False
     if not os.path.exists("%s/include/lua.h" % p): return False
     if not os.path.exists("%s/include/TH" % p): return False
     return True
-  paths = filter(is_torch_dir, paths)
-  print >>log.v4, "Found Lua & Torch dirs (will use the first one):"
+  paths = list(filter(is_torch_dir, paths))
+  print("Found Lua & Torch dirs (will use the first one):", file=log.v4)
   pprint(paths, log.v4)
   if not paths:
-    print >>log.v2, "ERROR: Did not found Lua & Torch."
+    print("ERROR: Did not found Lua & Torch.", file=log.v2)
   else:
     _torch_base_dir = paths[0]
     for p in ["%s/torch/init.lua" % _torch_share_lua, "%s/libtorch.so" % _torch_lib_lua]:
       fullp = "%s/%s" % (_torch_base_dir, p)
       if not os.path.exists(fullp):
-        print >>log.v2, "ERROR: Did not found Lua & Torch file:", fullp
+        print("ERROR: Did not found Lua & Torch file:", fullp, file=log.v2)
   _initialized = True
 
 
@@ -560,9 +562,9 @@ class TorchWrapperOp(theano.Op):
       'input_var_names_str': ", ".join(["%s" % inp for inp in inputs]),
       'output_var_names_str': ", ".join(["&%s" % out for out in outputs]),
       'output_ndims_str': ', '.join(["%i" % info["ndim"] for info in self.out_info]),
-      'output_shapes_flat_str':
+      'output_shapes_flat_str': (
         ', '.join([(("%i" % s) if isinstance(s, (int, long)) else "-1")
-                   for info in self.out_info for s in info["shape"]])
+                   for info in self.out_info for s in info["shape"]]))
     }
 
   def grad(self, inputs, output_grads):
