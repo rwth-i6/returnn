@@ -4,16 +4,15 @@ Used by setup.py.
 """
 
 from __future__ import print_function
-import time
 from pprint import pprint
 import os
 import sys
 import shutil
-from subprocess import Popen, check_output, PIPE
 
 
 _my_dir = os.path.dirname(os.path.abspath(__file__))
-_root_dir = os.path.dirname(_my_dir)
+# Use realpath to resolve any symlinks. We want the real root-dir, to be able to check the Git revision.
+_root_dir = os.path.dirname(os.path.realpath(_my_dir))
 
 
 def debug_print_file(fn):
@@ -34,6 +33,7 @@ def debug_print_file(fn):
 def parse_pkg_info(fn):
   """
   :param str fn:
+  :return: dict with info written by distutils. e.g. ``res["Version"]`` is the version.
   :rtype: dict[str,str]
   """
   res = {}
@@ -45,96 +45,73 @@ def parse_pkg_info(fn):
   return res
 
 
-def git_commit_rev(commit="HEAD", git_dir=_root_dir):
+def git_head_version(git_dir=_root_dir, long=False):
   """
-  :param str commit:
   :param str git_dir:
+  :param bool long: see :func:`get_version_str`
   :rtype: str
   """
-  if commit is None:
-    commit = "HEAD"
-  return check_output(["git", "rev-parse", "--short", commit], cwd=git_dir).decode("utf8").strip()
-
-
-def git_is_dirty(git_dir=_root_dir):
-  """
-  :param str git_dir:
-  :rtype: bool
-  """
-  proc = Popen(["git", "diff", "--no-ext-diff", "--quiet", "--exit-code"], cwd=git_dir, stdout=PIPE)
-  proc.communicate()
-  if proc.returncode == 0:
-    return False
-  if proc.returncode == 1:
-    return True
-  raise Exception("unexpected return code %i" % proc.returncode)
-
-
-def git_commit_date(commit="HEAD", git_dir=_root_dir):
-  """
-  :param str commit:
-  :param str git_dir:
-  :rtype: str
-  """
-  out = check_output(["git", "show", "-s", "--format=%ci", commit], cwd=git_dir).decode("utf8")
-  out = out.strip()[:-6].replace(":", "").replace("-", "").replace(" ", ".")
-  return out
-
-
-def git_head_version(git_dir=_root_dir):
-  """
-  :param str git_dir:
-  :rtype: str
-  """
+  from returnn.util.basic import git_commit_date, git_commit_rev, git_is_dirty
   commit_date = git_commit_date(git_dir=git_dir)  # like "20190202.154527"
-  # rev = git_commit_rev(git_dir=git_dir)
-  # is_dirty = git_is_dirty(git_dir=git_dir)
-  # Make this distutils.version.StrictVersion compatible.
-  return "1.%s" % commit_date
+  version = "1.%s" % commit_date  # distutils.version.StrictVersion compatible
+  if long:
+    # Keep SemVer compatible.
+    rev = git_commit_rev(git_dir=git_dir)
+    version += "+git.%s" % rev
+    if git_is_dirty(git_dir=git_dir):
+      version += ".dirty"
+  return version
 
 
-def get_version_str(verbose=False, allow_current_time=False, fallback=None):
+def get_version_str(verbose=False, fallback=None, long=False):
   """
   :param bool verbose:
-  :param bool allow_current_time:
   :param str|None fallback:
+  :param bool long:
+    False: Always distutils.version.StrictVersion compatible. just like "1.20190202.154527".
+    True: Will also add the revision string, like "1.20180724.141845+git.7865d01".
+      The format might change in the future.
+      We will keep it `SemVer <https://semver.org/>`__ compatible.
+      I.e. the string before the `"+"` will be the short version.
+      We always make sure that there is a `"+"` in the string.
   :rtype: str
   """
-  if os.path.exists("%s/PKG-INFO" % _my_dir):
+  # Earlier we checked PKG-INFO, via parse_pkg_info. Both in the root-dir as well as in my-dir.
+  # Now we should always have _setup_info_generated.py, copied by our own setup.
+  # Do not use PKG-INFO at all anymore (for now), as it would only have the short version.
+  # Only check _setup_info_generated in the current dir, not in the root-dir,
+  # because we want to only use it if this was installed via a package.
+  # Otherwise we want the current Git version.
+  if os.path.exists("%s/_setup_info_generated.py" % _my_dir):
+    # noinspection PyUnresolvedReferences
+    from . import _setup_info_generated as info
     if verbose:
-      print("Found existing src PKG-INFO.")
-    info = parse_pkg_info("%s/PKG-INFO" % _my_dir)
-    version = info["Version"]
-    if verbose:
-      print("Version via src PKG-INFO:", version)
-    return version
-  elif os.path.exists("%s/PKG-INFO" % _root_dir):
-    if verbose:
-      print("Found existing PKG-INFO.")
-    info = parse_pkg_info("%s/PKG-INFO" % _root_dir)
-    version = info["Version"]
-    if verbose:
-      print("Version via PKG-INFO:", version)
-    return version
-  elif os.path.exists("%s/.git" % _root_dir):
+      print("Found _setup_info_generated.py, long version %r, version %r." % (info.long_version, info.version))
+    if long:
+      assert "+" in info.long_version
+      return info.long_version
+    return info.version
+
+  if os.path.exists("%s/.git" % _root_dir):
     try:
-      version = git_head_version(git_dir=_root_dir)
+      version = git_head_version(git_dir=_root_dir, long=long)
       if verbose:
         print("Version via Git:", version)
+      if long:
+        assert "+" in version
       return version
     except Exception as exc:
       if verbose:
         print("Exception while getting Git version:", exc)
         sys.excepthook(*sys.exc_info())
-      if not allow_current_time and not fallback:
+      if not fallback:
         raise  # no fallback
 
-  if allow_current_time:
-    version = time.strftime("1.%Y%m%d.%H%M%S", time.gmtime())
+  if fallback:
     if verbose:
-      print("Version via current time:", version)
-    return version
-  elif fallback:
+      print("Version via fallback:", fallback)
+    if long:
+      assert "+" in fallback
     return fallback
   raise Exception("Cannot get RETURNN version.")
 
@@ -143,7 +120,11 @@ def main():
   """
   Setup main entry
   """
-  version = get_version_str(verbose=True, allow_current_time=True)
+  # Do not use current time as fallback for the version anymore,
+  # as this would result in a version which can be bigger than what we actually have,
+  # so this would not be useful at all.
+  long_version = get_version_str(verbose=True, fallback="1.0.0+setup-fallback-version", long=True)
+  version = long_version[:long_version.index("+")]
 
   if os.environ.get("DEBUG", "") == "1":
     debug_print_file(".")
@@ -159,8 +140,9 @@ def main():
     else:
       print("package_data, found PKG-INFO, no MANIFEST, use *")
       # Currently the setup will ignore all other data except in returnn/.
-      # At least make the version available, via PKG-INFO.
+      # At least make the version available.
       shutil.copy("PKG-INFO", "returnn/")
+      shutil.copy("_setup_info_generated.py", "returnn/")
       # Just using package_data = ["*"] would only take files from current dir.
       package_data = []
       for root, dirs, files in os.walk('.'):
@@ -168,7 +150,10 @@ def main():
           package_data.append(os.path.join(root, file))
   else:
     print("dummy package_data, does not matter, likely you are running sdist")
-    package_data = ["MANIFEST"]
+    with open("_setup_info_generated.py", "w") as f:
+      f.write("version = %r\n" % version)
+      f.write("long_version = %r\n" % long_version)
+    package_data = ["MANIFEST", "_setup_info_generated.py"]
 
   from distutils.core import setup
   setup(

@@ -1,14 +1,20 @@
 # https://packaging.python.org/guides/using-manifest-in/
 
+include MANIFEST.in
+include _setup_info_generated.py
+
 include LICENSE
 include CODEOWNERS
-include MANIFEST.in
+
+include .editorconfig
+include .kateconfig
+include .gitmodules
+include .gitignore
 
 include *.py
 include *.rst
 include *.md
 include *.txt
-include *.cpp
 graft returnn
 
 # Not all extern files.

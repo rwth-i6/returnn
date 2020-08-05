@@ -224,7 +224,7 @@ def sysexec_out(*args, **kwargs):
   out, _ = p.communicate()
   if p.returncode != 0:
     raise CalledProcessError(p.returncode, args)
-  out = out.decode("utf-8")
+  out = unicode_to_str(out)
   return out
 
 
@@ -244,23 +244,23 @@ def sysexec_ret_code(*args, **kwargs):
   return res
 
 
-def git_commit_rev(commit="HEAD", gitdir="."):
+def git_commit_rev(commit="HEAD", git_dir="."):
   """
   :param str commit:
-  :param str gitdir:
+  :param str git_dir:
   :rtype: str
   """
   if commit is None:
     commit = "HEAD"
-  return sysexec_out("git", "rev-parse", "--short", commit, cwd=gitdir).strip()
+  return sysexec_out("git", "rev-parse", "--short", commit, cwd=git_dir).strip()
 
 
-def git_is_dirty(gitdir="."):
+def git_is_dirty(git_dir="."):
   """
-  :param str gitdir:
+  :param str git_dir:
   :rtype: bool
   """
-  r = sysexec_ret_code("git", "diff", "--no-ext-diff", "--quiet", "--exit-code", cwd=gitdir)
+  r = sysexec_ret_code("git", "diff", "--no-ext-diff", "--quiet", "--exit-code", cwd=git_dir)
   if r == 0:
     return False
   if r == 1:
@@ -268,53 +268,38 @@ def git_is_dirty(gitdir="."):
   assert False, "bad return %i" % r
 
 
-def git_commit_date(commit="HEAD", gitdir="."):
+def git_commit_date(commit="HEAD", git_dir="."):
   """
   :param str commit:
-  :param str gitdir:
+  :param str git_dir:
   :rtype: str
   """
   return (
-    sysexec_out("git", "show", "-s", "--format=%ci", commit, cwd=gitdir)
+    sysexec_out("git", "show", "-s", "--format=%ci", commit, cwd=git_dir)
     .strip()[:-6]
     .replace(":", "")
     .replace("-", "")
     .replace(" ", "."))
 
 
-def git_describe_head_version(gitdir="."):
+def git_describe_head_version(git_dir="."):
   """
-  :param str gitdir:
+  :param str git_dir:
   :rtype: str
   """
-  cdate = git_commit_date(gitdir=gitdir)
-  rev = git_commit_rev(gitdir=gitdir)
-  is_dirty = git_is_dirty(gitdir=gitdir)
+  cdate = git_commit_date(git_dir=git_dir)
+  rev = git_commit_rev(git_dir=git_dir)
+  is_dirty = git_is_dirty(git_dir=git_dir)
   return "%s--git-%s%s" % (cdate, rev, "-dirty" if is_dirty else "")
-
-
-_returnn_version_info = None
 
 
 def describe_returnn_version():
   """
   :rtype: str
-  :return: string like "20171017.163840--git-ab2a1da", via :func:`git_describeHeadVersion`
+  :return: string like "1.20171017.163840+git-ab2a1da"
   """
-  # Note that we cache it to avoid any issues e.g. when we changed the directory afterwards
-  # so that a relative __file__ would be invalid (which we hopefully don't do).
-  # Or to not trigger any pthread_atfork bugs,
-  # e.g. from OpenBlas (https://github.com/tensorflow/tensorflow/issues/13802),
-  # which also hopefully should not happen, but it might.
-  global _returnn_version_info
-  if _returnn_version_info:
-    return _returnn_version_info
-  mydir = os.path.dirname(__file__)
-  try:
-    _returnn_version_info = git_describe_head_version(gitdir=mydir)
-  except Exception as e:
-    _returnn_version_info = "unknown(git exception: %r)" % e
-  return _returnn_version_info
+  from returnn import __long_version__
+  return __long_version__
 
 
 def describe_theano_version():
@@ -337,7 +322,7 @@ def describe_theano_version():
     if theano_dir.startswith("<"):
       git_info = "<unknown-dir>"
     elif os.path.exists(theano_dir + "/../.git"):
-      git_info = "git:" + git_describe_head_version(gitdir=theano_dir)
+      git_info = "git:" + git_describe_head_version(git_dir=theano_dir)
     elif "/site-packages/" in theano_dir:
       git_info = "<site-package>"
     else:
@@ -365,7 +350,7 @@ def describe_tensorflow_version():
     if tdir.startswith("<"):
       git_info = "<unknown-dir>"
     elif os.path.exists(tdir + "/../.git"):
-      git_info = "git:" + git_describe_head_version(gitdir=tdir)
+      git_info = "git:" + git_describe_head_version(git_dir=tdir)
     elif "/site-packages/" in tdir:
       git_info = "<site-package>"
     else:

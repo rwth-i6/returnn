@@ -6,6 +6,13 @@ E.g. like::
     import returnn.TFUtil
     import returnn.TFNativeOp
 
+Some old RETURNN configs also might directly have imports like::
+
+    import TFUtil
+    import TFHorovod
+
+This is supported as well.
+
 """
 
 import sys
