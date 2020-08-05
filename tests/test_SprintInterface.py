@@ -66,7 +66,7 @@ def create_first_epoch(config_filename):
 
 
 def test_forward():
-  tmpdir = mkdtemp("crnn-test-sprint")
+  tmpdir = mkdtemp("returnn-test-sprint")
   olddir = os.getcwd()
   os.chdir(tmpdir)
 

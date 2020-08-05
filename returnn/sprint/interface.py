@@ -359,7 +359,7 @@ def getSegmentList(corpusName, segmentList, **kwargs):
   # Loop over multiple epochs. Epochs start at 1.
   for curEpoch in range(startEpoch, finalEpoch + 1):
     if isTrainThreadStarted:
-      # So that the CRNN train thread always has the SprintDatasetBase in a sane state before we reset it.
+      # So that the RETURNN train thread always has the SprintDatasetBase in a sane state before we reset it.
       sprintDataset.wait_for_returnn_epoch(curEpoch)
     sprintDataset.init_sprint_epoch(curEpoch)
 
@@ -799,7 +799,7 @@ def _start_train_thread(epoch=None):
         interrupt_main()
 
   global trainThread
-  trainThread = Thread(target=train_thread_func, name="Sprint CRNN train thread")
+  trainThread = Thread(target=train_thread_func, name="Sprint RETURNN train thread")
   trainThread.daemon = True  # However, at clean exit(), will will join this thread.
   trainThread.start()
 
@@ -810,8 +810,8 @@ def _prepare_forwarding():
   assert engine
   assert config
   # Should already be set via setTargetMode().
-  assert config.list('extract') == ["posteriors"], "You need to have extract = posteriors in your CRNN config. " + \
-                                                   "You have: %s" % config.list('extract')
+  assert config.list('extract') == ["posteriors"], (
+    "You need to have extract = posteriors in your RETURNN config. You have: %s" % config.list('extract'))
 
   # Load network.
   engine.init_network_from_config(config)
@@ -858,7 +858,7 @@ def _train(segment_name, features, targets=None):
   assert engine is not None, "not initialized. call initBase()"
   assert sprintDataset
 
-  if sprintDataset.sprintFinalized:
+  if sprintDataset.sprint_finalized:
     return
   sprintDataset.add_new_data(features, targets, segment_name=segment_name)
 
@@ -968,8 +968,8 @@ def _forward(segment_name, features):
   print("posteriors min/max/mean/std:", stats, "time:", time.time() - start_time)
   if numpy.isinf(posteriors).any() or numpy.isnan(posteriors).any():
     print("posteriors:", posteriors)
-    debug_feat_fn = "/tmp/crnn.pid%i.sprintinterface.debug.features.txt" % os.getpid()
-    debug_post_fn = "/tmp/crnn.pid%i.sprintinterface.debug.posteriors.txt" % os.getpid()
+    debug_feat_fn = "/tmp/returnn.pid%i.sprintinterface.debug.features.txt" % os.getpid()
+    debug_post_fn = "/tmp/returnn.pid%i.sprintinterface.debug.posteriors.txt" % os.getpid()
     print("Wrote to files %s, %s" % (debug_feat_fn, debug_post_fn))
     numpy.savetxt(debug_feat_fn, features)
     numpy.savetxt(debug_post_fn, posteriors)

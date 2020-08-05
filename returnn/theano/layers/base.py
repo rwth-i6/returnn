@@ -100,7 +100,8 @@ class Container(object):
       return
 
     grp_class = as_str(grp.attrs['class'])
-    if grp_class == "<unknown_softmax>": grp_class = "softmax"  # bug in some CRNN version. can be ignored.
+    if grp_class == "<unknown_softmax>":
+      grp_class = "softmax"  # bug in some RETURNN version. can be ignored.
     if grp_class != self.layer_class:
       from .basic import get_layer_class
       if not get_layer_class(grp_class, raise_exception=False) is get_layer_class(self.layer_class):

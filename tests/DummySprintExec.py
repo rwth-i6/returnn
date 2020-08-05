@@ -10,7 +10,7 @@ import sys
 import os
 from importlib import import_module
 
-# Add parent dir to Python path so that we can use GeneratingDataset and other CRNN code.
+# Add parent dir to Python path so that we can use GeneratingDataset and other RETURNN code.
 my_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.normpath(my_dir + "/..")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

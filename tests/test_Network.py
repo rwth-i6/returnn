@@ -56,7 +56,7 @@ def test_enc_dec1_init():
 
 
 def test_enc_dec1_hdf():
-  filename = tempfile.mktemp(prefix="crnn-model-test")
+  filename = tempfile.mktemp(prefix="returnn-model-test")
   model = h5py.File(filename, "w")
 
   config = Config()

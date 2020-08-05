@@ -14,7 +14,7 @@ def test_LayerClasses_list():
   # Don't need to be the complete list.
   # This is mostly for the layer_class cleanup, to check whether we still have all.
 
-  assert_in("forward", LayerClasses)  # used in crnn.config format
+  assert_in("forward", LayerClasses)  # used in returnn.config format
   assert_in("hidden", LayerClasses)  # used in JSON format
   assert_in("recurrent", LayerClasses)
   assert_in('lstm', LayerClasses)

@@ -119,7 +119,7 @@ def getSegmentList(corpusName, segmentList, config, **kwargs):
 
   # If we were not initialized via PythonControl interface, this will initialize us
   # and setup the communication channel (PythonControl).
-  init(name="CRNN.PythonSegmentOrder", reference=corpusName, config=config)
+  init(name="RETURNN.PythonSegmentOrder", reference=corpusName, config=config)
   PythonControl.instance.check_control_loop_running()
   for segment_name in PythonControl.instance.segment_list_iterator():
     if isinstance(segment_name, bytes):
@@ -142,7 +142,7 @@ class SprintNnPythonLayer:
     print("RETURNN SprintControl[pid %i] SprintNnPythonLayer.__init__: %r, %r" % (os.getpid(), config, kwargs))
     # If we were not initialized via PythonControl interface, this will initialize us
     # and setup the communication channel (PythonControl).
-    init(name="CRNN.SprintNnPythonLayer", reference=self, config=config)
+    init(name="RETURNN.SprintNnPythonLayer", reference=self, config=config)
     self.input_size = None
     self.output_size = None
 
@@ -572,7 +572,7 @@ class PythonControl:
     :return: version string
     :rtype: str
     """
-    return "<version>CRNN.own_threaded_callback</version>"
+    return "<version>RETURNN.own_threaded_callback</version>"
 
   # noinspection PyUnusedLocal
   def own_tcb_get_loss_and_error_signal(self, seg_name, seg_len, posteriors):
@@ -702,7 +702,7 @@ class PythonControl:
             return  # no more segments
           self.cond.wait(timeout=1)
 
-      # We got a new segment name from the parent CRNN process (via self.handle_cmd_get_loss_and_error_signal()).
+      # We got a new segment name from the parent RETURNN process (via self.handle_cmd_get_loss_and_error_signal()).
       # We wait in this segment because we wait to get the error signal from Sprint
       # (via SprintNnPythonLayer.backpropagate()).
       # Sprint waits currently for us to get the new segment (in the PythonSegmentOrder code).

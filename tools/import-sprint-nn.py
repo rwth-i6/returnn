@@ -21,7 +21,7 @@ better_exchook.install()
 layerCount = 0  # automatically determined
 archiverExec = "./sprint-executables/archiver"
 
-# Crnn
+# RETURNN
 configFile = "config/crnn.config"
 inputDim = 0  # via config num_inputs
 outputDim = 0  # via config num_outputs
@@ -45,7 +45,7 @@ def parseSprintLayer(lines, float_type):
   dtype = "float64" if float_type == "f64" else "float32"
   matrix = np.array(rows, dtype=dtype)
   assert matrix.shape == (len(rows), nColumns)
-  matrix = matrix.transpose()  # Crnn format
+  matrix = matrix.transpose()  # RETURNN format
   bias = matrix[0,:]
   weights = matrix[1:,:]
   print("Sprint layer bias:", bias.shape, "weights:", weights.shape)
@@ -103,7 +103,7 @@ def saveCrnnLayer(layer, bias, weights):
   biasParams.set_value(bias)
   weightParams.set_value(weights)
 
-  print(("Saved Crnn layer %s" % layer.name))
+  print(("Saved RETURNN layer %s" % layer.name))
 
 
 def saveCrnnNetwork(epoch, layers):
@@ -111,7 +111,7 @@ def saveCrnnNetwork(epoch, layers):
   :type epoch: int
   :type layers: list[(numpy.ndarray, numpy.ndarray)]
   """
-  print("Loading Crnn")
+  print("Loading RETURNN")
 
   from returnn.theano.network import LayerNetwork
   from returnn.theano.layers.hidden import ForwardLayer
@@ -154,7 +154,7 @@ def saveCrnnNetwork(epoch, layers):
   saveCrnnLayer(network.output["output"], *layers[len(layers) - 1])
 
   import h5py
-  print(("Save Crnn model under %s" % filename))
+  print(("Save RETURNN model under %s" % filename))
   model = h5py.File(filename, "w")
   network.save_hdf(model, epoch)
   model.close()
@@ -168,9 +168,9 @@ def main():
   parser.add_argument('--sprintFirstLayer', default=1, type=int,
                       help='Sprint NN params first layer (default 1)')
   parser.add_argument('--crnnSaveEpoch', type=int, required=True,
-                      help='save this train epoch number in Crnn model')
+                      help='save this train epoch number in RETURNN model')
   parser.add_argument('--crnnConfigFile', required=True,
-                      help='CRNN config file')
+                      help='RETURNN (CRNN) config file')
   parser.add_argument('--sprintArchiverExec', default=archiverExec,
                       help='path to Sprint/RASR archiver executable')
   parser.add_argument('--floatType', default="f32",

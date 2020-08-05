@@ -11,7 +11,7 @@ from returnn.util import NumbersDict
 
 class BatchSeqCopyPart:
   """
-  A batch used for training in CRNN can consist of several parts from sequences,
+  A batch used for training in RETURNN can consist of several parts from sequences,
    ordered in various ways. The dataset, depending on the configuration, can
    generate these. For the non-recurrent case, we usually concatenate
    them together into one slice. For the recurrent case, we have a single

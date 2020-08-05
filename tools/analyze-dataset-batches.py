@@ -204,7 +204,7 @@ def init(config_str, config_dataset, use_pretrain, epoch, verbosity):
 
 def main():
   argparser = argparse.ArgumentParser(description='Anaylize dataset batches.')
-  argparser.add_argument('crnn_config', help="either filename to config-file, or dict for dataset")
+  argparser.add_argument('returnn_config', help="either filename to config-file, or dict for dataset")
   argparser.add_argument("--dataset", help="if given the config, specifies the dataset. e.g. 'dev'")
   argparser.add_argument('--epoch', type=int, default=1)
   argparser.add_argument('--endseq', type=int, default=-1, help='end seq idx (inclusive) or -1 (default: 10)')
@@ -213,7 +213,7 @@ def main():
   argparser.add_argument("--use_pretrain", action="store_true")
   args = argparser.parse_args()
   init(
-    config_str=args.crnn_config, config_dataset=args.dataset, epoch=args.epoch, use_pretrain=args.use_pretrain,
+    config_str=args.returnn_config, config_dataset=args.dataset, epoch=args.epoch, use_pretrain=args.use_pretrain,
     verbosity=args.verbosity)
   try:
     analyze_dataset(args)

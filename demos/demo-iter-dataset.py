@@ -5,7 +5,7 @@ from __future__ import print_function
 import sys
 import os
 
-# Add parent dir to Python path so that we can use GeneratingDataset and other CRNN code.
+# Add parent dir to Python path so that we can use GeneratingDataset and other RETURNN code.
 my_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.normpath(my_dir + "/..")
 if parent_dir not in sys.path:

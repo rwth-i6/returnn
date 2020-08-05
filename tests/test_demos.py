@@ -55,7 +55,7 @@ def build_env():
 def run(*args):
   args = list(args)
   print("run:", args)
-  # crnn by default outputs on stderr, so just merge both together
+  # RETURNN by default outputs on stderr, so just merge both together
   p = Popen(args, stdout=PIPE, stderr=STDOUT, env=build_env())
   out, _ = p.communicate()
   if p.returncode != 0:
@@ -131,6 +131,8 @@ class TestDemos(object):
       os.remove("MANIFEST")  # auto-generated. will be recreated
     if os.path.exists("docs/crnn"):
       os.remove("docs/crnn")  # this is auto-generated, and confuses setup.py sdist
+    if os.path.exists("docs/returnn"):
+      os.remove("docs/returnn")  # this is auto-generated, and confuses setup.py sdist
     tmp_model_dir = "/tmp/%s/returnn-demo-as-framework" % get_login_username()
     if os.path.exists(tmp_model_dir):
       shutil.rmtree(tmp_model_dir, ignore_errors=True)

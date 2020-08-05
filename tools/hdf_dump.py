@@ -88,20 +88,20 @@ def _is_crnn_config(filename):
 def main(argv):
   parser = argparse.ArgumentParser(description="Dump dataset or subset of dataset in external HDF dataset")
   parser.add_argument('config_file_or_dataset', type=str,
-                      help="Config file for CRNN, or directly the dataset init string")
+                      help="Config file for RETURNN, or directly the dataset init string")
   parser.add_argument('hdf_filename', type=str, help="File name of the HDF dataset, which will be created")
   parser.add_argument('--start_seq', type=int, default=0, help="Start sequence index of the dataset to dump")
   parser.add_argument('--end_seq', type=int, default=float("inf"), help="End sequence index of the dataset to dump")
   parser.add_argument('--epoch', type=int, default=1, help="Optional start epoch for initialization")
 
   args = parser.parse_args(argv[1:])
-  crnn_config = None
+  returnn_config = None
   dataset_config_str = None
   if _is_crnn_config(args.config_file_or_dataset):
-    crnn_config = args.config_file_or_dataset
+    returnn_config = args.config_file_or_dataset
   else:
     dataset_config_str = args.config_file_or_dataset
-  dataset = init(config_filename=crnn_config, cmd_line_opts=[], dataset_config_str=dataset_config_str)
+  dataset = init(config_filename=returnn_config, cmd_line_opts=[], dataset_config_str=dataset_config_str)
   hdf_dataset = hdf_dataset_init(args.hdf_filename)
   hdf_dump_from_dataset(dataset, hdf_dataset, args)
   hdf_close(hdf_dataset)

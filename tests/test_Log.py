@@ -30,7 +30,7 @@ def build_env():
 def run(args, input=None):
   args = list(args)
   print("run:", args)
-  # crnn by default outputs on stderr, so just merge both together
+  # RETURNN by default outputs on stderr, so just merge both together
   p = Popen(args, stdout=PIPE, stderr=STDOUT, stdin=PIPE, env=build_env())
   out, _ = p.communicate(input=input)
   print("Return code is %i" % p.returncode)

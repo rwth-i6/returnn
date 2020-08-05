@@ -70,7 +70,7 @@ class Config:
       # (they would loose the local context otherwise).
       user_ns = self.typed_dict
       # Always overwrite:
-      user_ns.update({"config": self, "__file__": filename, "__name__": "__crnn_config__"})
+      user_ns.update({"config": self, "__file__": filename, "__name__": "__returnn_config__"})
       custom_exec(content, filename, user_ns, user_ns)
       return
     if content.startswith("{"):  # assume JSON

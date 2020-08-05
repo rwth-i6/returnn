@@ -54,12 +54,12 @@ def init(configFilename, commandLineOptions):
 
 def main(argv):
   argparser = argparse.ArgumentParser(description='Forward something and dump it.')
-  argparser.add_argument('crnn_config_file')
+  argparser.add_argument('returnn_config')
   argparser.add_argument('--epoch', type=int, default=1)
   argparser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
   argparser.add_argument('--endseq', type=int, default=10, help='end seq idx (inclusive) or -1 (default: 10)')
   args = argparser.parse_args(argv[1:])
-  init(configFilename=args.crnn_config_file, commandLineOptions=[])
+  init(configFilename=args.returnn_config, commandLineOptions=[])
   dump(rnn.train_data, args)
   rnn.finalize()
 

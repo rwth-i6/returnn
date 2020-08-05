@@ -229,7 +229,7 @@ def init(config_str, config_dataset, verbosity):
 
 def main():
   argparser = argparse.ArgumentParser(description='Dump something from dataset.')
-  argparser.add_argument('crnn_config', help="either filename to config-file, or dict for dataset")
+  argparser.add_argument('returnn_config', help="either filename to config-file, or dict for dataset")
   argparser.add_argument("--dataset", help="if given the config, specifies the dataset. e.g. 'dev'")
   argparser.add_argument('--epoch', type=int, default=1)
   argparser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
@@ -239,13 +239,13 @@ def main():
   argparser.add_argument("--stdout_limit", type=float, default=None, help="e.g. inf to disable")
   argparser.add_argument("--stdout_as_bytes", action="store_true")
   argparser.add_argument("--verbosity", type=int, default=4, help="overwrites log_verbosity (default: 4)")
-  argparser.add_argument('--dump_prefix', default='/tmp/crnn.dump-dataset.')
+  argparser.add_argument('--dump_prefix', default='/tmp/returnn.dump-dataset.')
   argparser.add_argument('--dump_postfix', default='.txt.gz')
   argparser.add_argument("--key", default="data", help="data-key, e.g. 'data' or 'classes'. (default: 'data')")
   argparser.add_argument('--stats', action="store_true", help="calculate mean/stddev stats")
   argparser.add_argument('--dump_stats', help="file-prefix to dump stats to")
   args = argparser.parse_args()
-  init(config_str=args.crnn_config, config_dataset=args.dataset, verbosity=args.verbosity)
+  init(config_str=args.returnn_config, config_dataset=args.dataset, verbosity=args.verbosity)
   try:
     dump_dataset(rnn.train_data, args)
   except KeyboardInterrupt:

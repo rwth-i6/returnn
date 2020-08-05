@@ -106,10 +106,10 @@ class SprintDatasetBase(Dataset):
     self.reached_final_seq_seen_all = False
     self.multiple_epochs = False
     self._complete_frac = None
-    self.sprintEpoch = None  # in SprintInterface.getSegmentList()
-    self.crnnEpoch = None  # in CRNN train thread, Engine.train(). set via init_seq_order
+    self.sprint_epoch = None  # in SprintInterface.getSegmentList()
+    self.returnn_epoch = None  # in RETURNN train thread, Engine.train(). set via init_seq_order
     self.predefined_seq_list_order = None  # via init_seq_order
-    self.sprintFinalized = False
+    self.sprint_finalized = False
     self._target_black_list = []  # if we get non numpy arrays and cannot convert them
     self._reset_cache()
     assert self.shuffle_frames_of_nseqs == 0  # Currently broken. But just use Sprint itself to do this.
@@ -158,11 +158,11 @@ class SprintDatasetBase(Dataset):
     :type epoch: int | None
     Called by SprintInterface.getSegmentList() when we start a new epoch.
     We must not call this via self.init_seq_order() because we will already have filled the cache by Sprint
-    before the CRNN train thread starts the epoch.
+    before the RETURNN train thread starts the epoch.
     """
     with self.lock:
-      self.sprintEpoch = epoch
-      self.sprintFinalized = False
+      self.sprint_epoch = epoch
+      self.sprint_finalized = False
       self._reset_cache()
       self.cond.notify_all()
 
@@ -171,16 +171,16 @@ class SprintDatasetBase(Dataset):
     Called when SprintInterface.getSegmentList() ends.
     """
     with self.lock:
-      self.sprintFinalized = True
+      self.sprint_finalized = True
       self.cond.notify_all()
 
   def init_seq_order(self, epoch=None, seq_list=None):
     """
-    Called by CRNN train thread when we enter a new epoch.
+    Called by RETURNN train thread when we enter a new epoch.
     """
     super(SprintDatasetBase, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     with self.lock:
-      self.crnnEpoch = epoch
+      self.returnn_epoch = epoch
       self.predefined_seq_list_order = seq_list
       self.cond.notify_all()
       # No need to wait/check for Sprint thread here.
@@ -200,8 +200,8 @@ class SprintDatasetBase(Dataset):
     Called by SprintInterface.
     """
     with self.lock:
-      while epoch != self.crnnEpoch:
-        assert epoch > self.crnnEpoch
+      while epoch != self.returnn_epoch:
+        assert epoch > self.returnn_epoch
         self.cond.wait()
 
   def _wait_for_seq_can_pass_check(self, seq_start, seq_end):
@@ -408,7 +408,7 @@ class SprintDatasetBase(Dataset):
       # we just yielded a segment name, thus we are always in a Sprint epoch and thus ready for data.
       assert self.ready_for_data
       assert not self.reached_final_seq
-      assert not self.sprintFinalized
+      assert not self.sprint_finalized
 
       seq_idx = self.next_seq_to_be_added
 
@@ -777,7 +777,7 @@ class ExternSprintDataset(SprintDatasetBase):
       self.pipe_c2p[1].fileno(), self.pipe_p2c[0].fileno())
     if task_system.SharedMemNumpyConfig["enabled"]:
       config_str += ",EnableAutoNumpySharedMemPickling:True"
-    epoch = self.crnnEpoch or 1
+    epoch = self.returnn_epoch or 1
     assert epoch >= 1
     if isinstance(self.sprint_trainer_exec_path, (list, tuple)):
       args = list(self.sprint_trainer_exec_path)
@@ -803,7 +803,7 @@ class ExternSprintDataset(SprintDatasetBase):
       "--*.pymod-config=%s" % config_str]
     if self.predefined_seq_list_order:
       import tempfile
-      self.seq_list_file = tempfile.mktemp(prefix="crnn-sprint-predefined-seq-list")
+      self.seq_list_file = tempfile.mktemp(prefix="returnn-sprint-predefined-seq-list")
       with open(self.seq_list_file, "w") as f:
         for tag in self.predefined_seq_list_order:
           f.write(tag)
@@ -816,7 +816,7 @@ class ExternSprintDataset(SprintDatasetBase):
     if self.seq_tags_filter is not None:
       assert not self.predefined_seq_list_order
       import tempfile
-      self.seq_list_file = tempfile.mktemp(prefix="crnn-sprint-predefined-seq-filter")
+      self.seq_list_file = tempfile.mktemp(prefix="returnn-sprint-predefined-seq-filter")
       with open(self.seq_list_file, "w") as f:
         for tag in self.seq_tags_filter:
           f.write(tag)
@@ -890,7 +890,7 @@ class ExternSprintDataset(SprintDatasetBase):
           data_type, args = self._read_next_raw()
         except (IOError, EOFError):
           with self.lock:
-            if epoch != self.crnnEpoch:
+            if epoch != self.returnn_epoch:
               # We have passed on to a new epoch. This is a valid reason that the child has been killed.
               break
             if self.python_exit or not self.child_pid:
@@ -898,7 +898,7 @@ class ExternSprintDataset(SprintDatasetBase):
           raise
 
         with self.lock:
-          if epoch != self.crnnEpoch:
+          if epoch != self.returnn_epoch:
             break
           if self.python_exit or not self.child_pid:
             break
@@ -943,7 +943,7 @@ class ExternSprintDataset(SprintDatasetBase):
         # Don't catch KeyboardInterrupt here because that will get send by the main thread
         # when it is exiting. It's never by the user because SIGINT will always
         # trigger KeyboardInterrupt in the main thread only.
-        if epoch == self.crnnEpoch:
+        if epoch == self.returnn_epoch:
           with self.lock:
             self.finish_sprint_epoch(seen_all=False)
         try:
@@ -965,7 +965,10 @@ class ExternSprintDataset(SprintDatasetBase):
     if epoch is None:
       epoch = 1
     with self.lock:
-      if epoch == self.crnnEpoch and self.expected_load_seq_start == 0 and seq_list == self.predefined_seq_list_order:
+      if (
+        epoch == self.returnn_epoch and
+        self.expected_load_seq_start == 0 and
+        seq_list == self.predefined_seq_list_order):
         return
       # Reset epoch such that exiting the child will go smoothly.
       super(ExternSprintDataset, self).init_seq_order(epoch=None, seq_list=None)

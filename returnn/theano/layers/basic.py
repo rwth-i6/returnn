@@ -20,7 +20,7 @@ def _init_layer_classes():
       if not layer_class: continue
       LayerClasses[layer_class] = clazz
   from .hidden import ForwardLayer
-  LayerClasses["forward"] = ForwardLayer  # used in crnn.config format
+  LayerClasses["forward"] = ForwardLayer  # used in returnn.config format
   LayerClasses["softmax"] = FramewiseOutputLayer
 
 

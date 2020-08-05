@@ -311,7 +311,7 @@ class CNN(_NoOpLayer):
         pad=pad,
         mode=mode
       )
-    except: # old cudnn
+    except Exception:  # old cudnn
       pool_out = pool.pool_2d(
         input=inputs,
         ds=pool_size,
@@ -372,7 +372,7 @@ class NewConv(CNN):
   def __init__(self, **kwargs):
     super(NewConv, self).__init__(**kwargs)
 
-    # our CRNN input is 3D tensor that consists of (time, batch, dim)
+    # our RETURNN input is 3D tensor that consists of (time, batch, dim)
     # however, the convolution function only accept 4D tensor which is (batch size, stack size, nb row, nb col)
     # therefore, we should convert our input into 4D tensor
     inputs = self.sources[0].output  # (time, batch, input-dim = row * col * stack_size)
@@ -402,10 +402,9 @@ class NewConv(CNN):
       params=self.pool_params,
       modes=self.modes,
       others=self.other_params
-    ) # (batch, nb feature maps, out-row, out-col)
+    )  # (batch, nb feature maps, out-row, out-col)
 
-
-    # our CRNN only accept 3D tensor (time, batch, dim)
+    # our RETURNN only accept 3D tensor (time, batch, dim)
     # so, we have to convert back the output to 3D tensor
     # self.make_output(self.Output2)
     if self.attrs['batch_norm']:
@@ -505,7 +504,7 @@ class ConcatConv(CNN):
                    self.Output.shape[3],
                    self.Output.shape[1])).dimshuffle(0, 3, 1, 2)
 
-    # our CRNN only accept 3D tensor (time, batch, dim)
+    # our RETURNN only accept 3D tensor (time, batch, dim)
     # so, we have to convert back the output to 3D tensor
     output2 = self.Output.dimshuffle(3, 0, 1, 2)  # (time, batch, nb feature maps, out-row)
     self.output = output2.reshape((output2.shape[0], output2.shape[1],

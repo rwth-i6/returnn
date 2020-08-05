@@ -173,7 +173,7 @@ def main(argv):
     print("Read Bliss corpus:", bliss_filename)
   elif is_crnn_config(args.input):
     crnn_config_filename = args.input
-    print("Read corpus from Returnn config:", crnn_config_filename)
+    print("Read corpus from RETURNN config:", crnn_config_filename)
   else:  # treat just as txt
     txt_filename = args.input
     print("Read corpus from txt-file:", txt_filename)

@@ -1358,7 +1358,7 @@ class HDFDatasetWriter:
 
     assert offsets == total_seq_len  # Sanity check.
 
-    # Set some old-format attribs. Not needed for newer CRNN versions.
+    # Set some old-format attribs. Not needed for newer RETURNN versions.
     hdf_dataset.attrs[attr_inputPattSize] = dataset.num_inputs
     hdf_dataset.attrs[attr_numLabels] = dataset.num_outputs.get(default_data_target_key, (0, 0))[0]
 
