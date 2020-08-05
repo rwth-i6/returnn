@@ -40,7 +40,10 @@ class SprintSubprocessInstance:
 
   Version = 1  # increase when some protocol changes
 
-  def __init__(self, sprintExecPath, minPythonControlVersion=2, sprintConfigStr="", sprintControlConfig=None, usePythonSegmentOrder=True):
+  # Keep argument names as is, as these are coming directly from a user config file.
+  # noinspection PyPep8Naming
+  def __init__(self, sprintExecPath, minPythonControlVersion=2, sprintConfigStr="", sprintControlConfig=None,
+               usePythonSegmentOrder=True):
     """
     :param str sprintExecPath: this executable will be called for the sub proc.
     :param int minPythonControlVersion: will be checked in the subprocess. via Sprint PythonControl
@@ -81,18 +84,26 @@ class SprintSubprocessInstance:
           print("SprintSubprocessInstance: interrupt child proc %i" % self.child_pid, file=log.v5)
           os.kill(self.child_pid, signal.SIGKILL)
         else:
-          try: self._send(("exit",))
-          except Exception: pass
+          # noinspection PyBroadException
+          try:
+            self._send(("exit",))
+          except Exception:
+            pass
       else:
         self.child_pid = None
-      try: self.pipe_p2c[1].close()
-      except IOError: pass
-      try: self.pipe_c2p[0].close()
-      except IOError: pass
+      try:
+        self.pipe_p2c[1].close()
+      except IOError:
+        pass
+      try:
+        self.pipe_c2p[0].close()
+      except IOError:
+        pass
       if self.child_pid:
         self._join_child(wait=True, expected_exit_status=0 if not interrupt else None)
         self.child_pid = None
 
+  # noinspection PyMethodMayBeStatic
   def _env_update_child(self):
     theano_flags = {key: value for (key, value)
                     in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
@@ -102,7 +113,8 @@ class SprintSubprocessInstance:
                             "compiledir_%(platform)s-%(processor)s-%(python_version)s-%(python_bitwidth)s")
     compiledir_format = theano_flags["compiledir_format"]
     p = compiledir_format.find("--dev-")  # Device.startProc might have added that.
-    if p >= 0: compiledir_format = compiledir_format[:p]
+    if p >= 0:
+      compiledir_format = compiledir_format[:p]
     compiledir_format += "--sprint-sub"
     theano_flags["compiledir_format"] = compiledir_format
     theano_flags["device"] = "cpu"  # Force CPU.
@@ -119,6 +131,7 @@ class SprintSubprocessInstance:
     pid = os.fork()
     if pid == 0:  # child
       print("SprintSubprocessInstance: starting, pid %i" % os.getpid(), file=log.v5)
+      # noinspection PyBroadException
       try:
         self._env_update_child()
         sys.stdin.close()  # Force no tty stdin.
@@ -129,6 +142,7 @@ class SprintSubprocessInstance:
         print("SprintSubprocessInstance: Error when starting Sprint %r." % args, file=log.v1)
         sys.excepthook(*sys.exc_info())
       finally:
+        # noinspection PyUnresolvedReferences,PyProtectedMember
         os._exit(1)
         return  # Not reached.
 
@@ -146,6 +160,7 @@ class SprintSubprocessInstance:
       sys.excepthook(*sys.exc_info())
       raise Exception("SprintSubprocessInstance Sprint init failed")
 
+  # noinspection PyMethodMayBeStatic
   def _pipe_open(self):
     readend, writeend = os.pipe()
     if hasattr(os, "set_inheritable"):
@@ -268,37 +283,40 @@ class SprintSubprocessInstance:
     self._exit_child()
     self._start_child()
 
-class ReaderThread(Thread):
-      def __init__(self, instance, instance_idx, batch_idxs, tags, seq_lengths, log_posteriors, batch_loss, batch_error_signal):
-        """
-        :param int instance_idx:
-        """
-        super(ReaderThread, self).__init__(
-          name="SprintErrorSignals reader thread for Sprint instance %i" % instance_idx)
-        self.deamon = True
-        self.instance_idx = instance_idx
-        self.instance = instance
-        self.batch_idxs = batch_idxs
-        self.tags = tags
-        self.seq_lengths = seq_lengths
-        self.log_posteriors = log_posteriors
-        self.batch_loss = batch_loss
-        self.batch_error_signal = batch_error_signal
-        self.exception = None
-        self.start()
 
-      def run(self):
-        try:
-          for b in self.batch_idxs:
-            self.instance.get_loss_and_error_signal__send(
-              seg_name=self.tags[b], seg_len=self.seq_lengths[b], log_posteriors=self.log_posteriors[:self.seq_lengths[b], b])
-            seg_name, loss, error_signal = self.instance.get_loss_and_error_signal__read()
-            assert seg_name == self.tags[b]
-            self.batch_loss[b] = loss
-            self.batch_error_signal[:self.seq_lengths[b], b] = error_signal
-            numpy_set_unused(error_signal)
-        except Exception as exc:
-          self.exception = exc
+class ReaderThread(Thread):
+  def __init__(self, instance, instance_idx, batch_idxs, tags, seq_lengths, log_posteriors, batch_loss,
+               batch_error_signal):
+    """
+    :param int instance_idx:
+    """
+    super(ReaderThread, self).__init__(
+      name="SprintErrorSignals reader thread for Sprint instance %i" % instance_idx)
+    self.deamon = True
+    self.instance_idx = instance_idx
+    self.instance = instance
+    self.batch_idxs = batch_idxs
+    self.tags = tags
+    self.seq_lengths = seq_lengths
+    self.log_posteriors = log_posteriors
+    self.batch_loss = batch_loss
+    self.batch_error_signal = batch_error_signal
+    self.exception = None
+    self.start()
+
+  def run(self):
+    try:
+      for b in self.batch_idxs:
+        self.instance.get_loss_and_error_signal__send(
+          seg_name=self.tags[b], seg_len=self.seq_lengths[b],
+          log_posteriors=self.log_posteriors[:self.seq_lengths[b], b])
+        seg_name, loss, error_signal = self.instance.get_loss_and_error_signal__read()
+        assert seg_name == self.tags[b]
+        self.batch_loss[b] = loss
+        self.batch_error_signal[:self.seq_lengths[b], b] = error_signal
+        numpy_set_unused(error_signal)
+    except Exception as exc:
+      self.exception = exc
 
 
 class SprintInstancePool:
@@ -337,7 +355,7 @@ class SprintInstancePool:
     sprint_opts = sprint_opts.copy()
     self.max_num_instances = int(sprint_opts.pop("numInstances", 1))
     self.sprint_opts = sprint_opts
-    self.instances = []; ":type: list[SprintSubprocessInstance]"
+    self.instances = []  # type: typing.List[SprintSubprocessInstance]
 
   def _maybe_create_new_instance(self):
     if len(self.instances) < self.max_num_instances:
@@ -383,7 +401,7 @@ class SprintInstancePool:
 
     # greedy solution to the scheduling problem
     sorted_length = sorted(enumerate(seq_lengths), key=lambda x: x[1], reverse=True)
-    jobs = [[] for i in range(self.max_num_instances)]
+    jobs = [[] for _ in range(self.max_num_instances)]
     joblen = [0] * self.max_num_instances
     for i, l in sorted_length:
       j = min(enumerate(joblen), key=lambda x: x[1])[0]
@@ -407,13 +425,15 @@ class SprintInstancePool:
       for bb in range(0, n_batch, self.max_num_instances):
         for i in range(self.max_num_instances):
           b = bb + i
-          if b >= n_batch: break
+          if b >= n_batch:
+            break
           instance = self._get_instance(i)
           instance.get_loss_and_error_signal__send(
             seg_name=tags[b], seg_len=seq_lengths[b], log_posteriors=log_posteriors[:seq_lengths[b], b])
         for i in range(self.max_num_instances):
           b = bb + i
-          if b >= n_batch: break
+          if b >= n_batch:
+            break
           instance = self._get_instance(i)
           seg_name, loss, error_signal = instance.get_loss_and_error_signal__read()
           assert seg_name == tags[b]
@@ -431,25 +451,29 @@ class SprintInstancePool:
       start_end_states are of shape (2, batch), each (start,stop) state idx, batch = len(tags), of dtype uint32.
     :rtype: (numpy.ndarray, numpy.ndarray, numpy.ndarray)
     """
-    all_num_states = [None] * len(tags)  # type: list[int]
-    all_num_edges = [None] * len(tags)  # type: list[int]
-    all_edges = [None] * len(tags)  # type: list[numpy.ndarray]
-    all_weights = [None] * len(tags)  # type: list[numpy.ndarray]
+    all_num_states = [None] * len(tags)  # type: typing.List[typing.Optional[int]]
+    all_num_edges = [None] * len(tags)  # type: typing.List[typing.Optional[int]]
+    all_edges = [None] * len(tags)  # type: typing.List[typing.Optional[numpy.ndarray]]
+    all_weights = [None] * len(tags)  # type: typing.List[typing.Optional[numpy.ndarray]]
     for bb in range(0, len(tags), self.max_num_instances):
       for i in range(self.max_num_instances):
         b = bb + i
-        if b >= len(tags): break
+        if b >= len(tags):
+          break
         instance = self._get_instance(i)
         if isinstance(tags[0], str):
           segment_name = tags[b]
         else:
           segment_name = tags[b].view('S%d' % tags.shape[1])[0]
         assert isinstance(segment_name, str)
+        # noinspection PyProtectedMember
         instance._send(("export_allophone_state_fsa_by_segment_name", segment_name))
       for i in range(self.max_num_instances):
         b = bb + i
-        if b >= len(tags): break
+        if b >= len(tags):
+          break
         instance = self._get_instance(i)
+        # noinspection PyProtectedMember
         r = instance._read()
         if r[0] != 'ok':
           raise RuntimeError(r[1])
@@ -461,7 +485,7 @@ class SprintInstancePool:
     state_offset = 0
     for idx in range(len(all_edges)):
       num_edges = all_num_edges[idx]
-      all_edges[idx][0:2,:] += state_offset
+      all_edges[idx][0:2, :] += state_offset
       state_offset += all_num_states[idx]
       # add sequence_idx. becomes (from, to, emission-idx, seq-idx) for each edge
       all_edges[idx] = numpy.vstack((all_edges[idx], numpy.ones((1, num_edges), dtype='uint32') * idx))
@@ -525,7 +549,7 @@ class SeqTrainParallelControlDevHost:
     self.output_layer = output_layer
     self.output_target = output_target
     self.output_var_loss = theano.shared(numpy.zeros((1,), "float32"), name="loss")  # (batch,)
-    self.output_var_hat_y = theano.shared(numpy.zeros((1,1,1), "float32"), name='hat_y')  # (time,batch,dim)
+    self.output_var_hat_y = theano.shared(numpy.zeros((1, 1, 1), "float32"), name='hat_y')  # (time,batch,dim)
     sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts)
     assert isinstance(sprint_instance_pool, SprintInstancePool)
     self.sprint_instance_pool = sprint_instance_pool
@@ -537,9 +561,9 @@ class SeqTrainParallelControlDevHost:
     self.train_end_seq = 0
     self.train_batches = None
     self.forward_seq_delay = forward_seq_delay
-    self.forward_data_queue = []; ":type: list[SeqTrainParallelControl.ForwardData]"
-    self.calc_loss_states = []; ":type: list[SeqTrainParallelControlDevHost.CalcLossState]"
-    self.loss_data_queue = []; ":type: list[SeqTrainParallelControl.LossData]"
+    self.forward_data_queue = []  # type: typing.List[SeqTrainParallelControlDevHost.ForwardData]
+    self.calc_loss_states = []  # type: typing.List[SeqTrainParallelControlDevHost.CalcLossState]
+    self.loss_data_queue = []  # type: typing.List[SeqTrainParallelControlDevHost.LossData]
 
   def train_start_epoch(self):
     """
@@ -595,7 +619,8 @@ class SeqTrainParallelControlDevHost:
     new_loss = False
     while self.forward_data_queue:
       sprint = self.sprint_instance_pool.get_free_instance()
-      if not sprint: break  # Nothing we can do at the moment.
+      if not sprint:
+        break  # Nothing we can do at the moment.
       forward_data = self.forward_data_queue.pop(0)
       assert isinstance(forward_data, self.ForwardData)
       print("SeqTrainParallelControlDevHost, get_loss_and_error_signal seq idx:%i tag:%r len:%i" % (
@@ -653,15 +678,16 @@ class SeqTrainParallelControlDevHost:
       for seq in batch.seqs:
         o = seq.batch_frame_offset
         q = seq.batch_slice + offset_slice
-        l = seq.frame_length
+        frame_length = seq.frame_length
         # input-data, input-index will also be set in this loop. That is data-key "data".
         for k in [self.output_target]:
-          if l[k] == 0: continue
+          if frame_length[k] == 0:
+            continue
           loss, hat_y = self.get_loss_and_hat_y(seq.seq_idx)
           assert seq.seq_start_frame[k] < hat_y.shape[0]
           assert seq.seq_end_frame[k] <= hat_y.shape[0]
-          output_loss[q] += loss * float(l[k]) / hat_y.shape[0]
-          output_hat_y[o[k]:o[k] + l[k], q] = hat_y[seq.seq_start_frame[k]:seq.seq_end_frame[k]]
+          output_loss[q] += loss * float(frame_length[k]) / hat_y.shape[0]
+          output_hat_y[o[k]:o[k] + frame_length[k], q] = hat_y[seq.seq_start_frame[k]:seq.seq_end_frame[k]]
     self.output_var_loss.set_value(output_loss)
     self.output_var_hat_y.set_value(output_hat_y)
 
@@ -731,12 +757,15 @@ class SeqTrainParallelControlDevHost:
 
   def have_seqs_loss_data(self, start_seq, end_seq):
     assert start_seq <= end_seq
-    if start_seq == end_seq: return True
+    if start_seq == end_seq:
+      return True
     first_seq, last_seq = start_seq, end_seq - 1
     have_first, have_last = False, False
     for loss_data in self.loss_data_queue:
-      if loss_data.seq_idx == first_seq: have_first = True
-      if loss_data.seq_idx == last_seq: have_last = True
+      if loss_data.seq_idx == first_seq:
+        have_first = True
+      if loss_data.seq_idx == last_seq:
+        have_last = True
     if have_last:
       assert have_first  # otherwise, we removed the cache already although we still need it
     return have_first and have_last
@@ -745,10 +774,10 @@ class SeqTrainParallelControlDevHost:
 if BackendEngine.is_theano_selected():
   # noinspection PyPackageRequirements,PyUnresolvedReferences
   import theano
-  # noinspection PyPackageRequirements,PyUnresolvedReferences
+  # noinspection PyPackageRequirements,PyUnresolvedReferences,PyPep8Naming
   import theano.tensor as T
 
-
+  # noinspection PyAbstractClass
   class SprintErrorSigOp(theano.Op):
     """
     Op: log_posteriors, seq_lengths -> loss, error_signal (grad w.r.t. z, i.e. before softmax is applied)
@@ -800,7 +829,7 @@ if BackendEngine.is_theano_selected():
         forward_time = start_time - deviceInstance.compute_start_time
         print("SprintErrorSigOp forward time:", forward_time, file=log.v1)
 
-
+  # noinspection PyAbstractClass
   class SprintAlignmentAutomataOp(theano.Op):
     """
     Op: maps segment names (tags) to fsa automata (using sprint) that can be used to compute a BW-alignment
@@ -831,7 +860,7 @@ if BackendEngine.is_theano_selected():
       output_storage[0][0] = edges.view(dtype='float32')
       output_storage[1][0] = weights
       output_storage[2][0] = start_end_states.view(dtype='float32')
-      output_storage[3][0] = numpy.empty((2, start_end_states[1,-1] + 1), dtype='float32')
+      output_storage[3][0] = numpy.empty((2, start_end_states[1, -1] + 1), dtype='float32')
 
 
   def sprint_loss_and_error_signal(output_layer, target, sprint_opts, log_posteriors, seq_lengths):
