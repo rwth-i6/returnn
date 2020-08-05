@@ -230,7 +230,7 @@ def prepare_src_dir(files=None):
   os.mkdir(src_tmp_dir)
   os.symlink("%s/PyCharm.idea" % my_dir, "%s/.idea" % src_tmp_dir)
   for fn in files:
-    os.symlink(fn, "%s/%s" % (src_tmp_dir, os.path.basename(fn)))
+    os.symlink(os.path.abspath(fn), "%s/%s" % (src_tmp_dir, os.path.basename(fn)))
   print("All source files:")
   subprocess.check_call(["ls", "-la", src_tmp_dir])
   print("travis_fold:end:script.prepare")

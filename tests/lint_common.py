@@ -86,6 +86,9 @@ def find_all_py_source_files():
       assert root.startswith(_root_dir + "/")
       root = root[len(_root_dir) + 1:]  # relative to the root
       root += "/"
+    # Ignore tests, or other irrelevant directories.
+    if root not in ["", "returnn/", "demos/", "tools/"]:
+      continue
     for file in files:
       if file.endswith(".py"):
         src_files.append(root + file)
