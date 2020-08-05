@@ -285,10 +285,17 @@ class SprintSubprocessInstance:
 
 
 class ReaderThread(Thread):
-  def __init__(self, instance, instance_idx, batch_idxs, tags, seq_lengths, log_posteriors, batch_loss,
-               batch_error_signal):
+  def __init__(self, instance, instance_idx, batch_idxs, tags, seq_lengths, log_posteriors,
+               batch_loss, batch_error_signal):
     """
+    :param SprintSubprocessInstance instance:
     :param int instance_idx:
+    :param list[int] batch_idxs:
+    :param list[str] tags: seq names, length = batch
+    :param numpy.ndarray seq_lengths: 1d (batch)
+    :param numpy.ndarray log_posteriors: 3d (time,batch,label)
+    :param numpy.ndarray batch_loss: 1d (batch). will write result into it.
+    :param numpy.ndarray batch_error_signal: 3d (time,batch,label). will write results into it.
     """
     super(ReaderThread, self).__init__(
       name="SprintErrorSignals reader thread for Sprint instance %i" % instance_idx)
@@ -364,6 +371,10 @@ class SprintInstancePool:
     return None
 
   def _get_instance(self, i):
+    """
+    :param int i:
+    :rtype: SprintSubprocessInstance
+    """
     assert i < self.max_num_instances
     if i >= len(self.instances):
       assert i == len(self.instances)
