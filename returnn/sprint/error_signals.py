@@ -292,7 +292,7 @@ class ReaderThread(Thread):
     """
     super(ReaderThread, self).__init__(
       name="SprintErrorSignals reader thread for Sprint instance %i" % instance_idx)
-    self.deamon = True
+    self.daemon = True
     self.instance_idx = instance_idx
     self.instance = instance
     self.batch_idxs = batch_idxs
