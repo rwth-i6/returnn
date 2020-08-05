@@ -169,6 +169,24 @@ class TestDemos(object):
     subprocess.check_call([py, os.path.abspath("tests/returnn-as-framework.py"), "test_TaskSystem_Pickler()"], cwd="/")
     subprocess.check_call(["echo", "travis_fold:end:test_returnn_as_framework_TaskSystem"])
 
+  def test_returnn_as_framework_old_style_crnn_TFUtil(self):
+    import subprocess
+    # echo via subprocess, because this stdout as well as the other will always be visible.
+    subprocess.check_call(["echo", "travis_fold:start:test_returnn_as_framework_old_style_crnn_TFUtil"])
+    subprocess.check_call([
+      py, os.path.abspath("tests/returnn-as-framework.py"),
+      "--old-style", "--returnn-package-name", "crnn",
+      "test_old_style_import_crnn_TFUtil()"], cwd="/")
+    subprocess.check_call(["echo", "travis_fold:end:test_returnn_as_framework_old_style_crnn_TFUtil"])
+
+  def test_returnn_as_framework_old_style_TFUtil(self):
+    import subprocess
+    # echo via subprocess, because this stdout as well as the other will always be visible.
+    subprocess.check_call(["echo", "travis_fold:start:test_returnn_as_framework_old_style_TFUtil"])
+    subprocess.check_call([
+      py, os.path.abspath("tests/returnn-as-framework.py"), "--old-style", "test_old_style_import_TFUtil()"], cwd="/")
+    subprocess.check_call(["echo", "travis_fold:end:test_returnn_as_framework_old_style_TFUtil"])
+
 
 if __name__ == '__main__':
   better_exchook.install()

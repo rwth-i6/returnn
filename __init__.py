@@ -20,6 +20,14 @@ if globals().get("__package__", None) is None:
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+if __name__ == "returnn":
+  # This is a bit tricky. `import returnn` in here will not work, as this is the reference to ourselves!
+  # Thus delete this ref, to enforce a reload of the right module.
+  # For the user, this will actually replace the `returnn` module by the right one.
+  # But this should be compatible.
+  sys.modules.pop("returnn", None)
+  # It is important that we have some `import returnn` below.
+
 from returnn.__old_mod_loader__ import setup as _old_module_loader_setup  # nopep8
 
 # noinspection PyUnboundLocalVariable
