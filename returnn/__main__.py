@@ -627,12 +627,14 @@ def analyze_data(config):  # pylint: disable=redefined-outer-name
   print("Done.", file=log.v1)
 
 
-def main(argv):
+def main(argv=None):
   """
   Main entry point of RETURNN.
 
-  :param list[str] argv:
+  :param list[str]|None argv: ``sys.argv`` by default
   """
+  if argv is None:
+    argv = sys.argv
   return_code = 0
   try:
     assert len(argv) >= 2, "usage: %s <config>" % argv[0]
