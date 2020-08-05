@@ -7,10 +7,10 @@ This Sprint interface is to be used for ExternSprintDataset, which should automa
 
 from __future__ import print_function
 
-from returnn.util import better_exchook
 import sys
 import os
 import typing
+from returnn.util import better_exchook
 import returnn.util.task_system as task_system
 from returnn.util.task_system import Pickler
 from returnn.util.basic import to_bool, unicode, BytesIO
@@ -53,6 +53,8 @@ def getSegmentList(corpusName, segmentList, **kwargs):
 # Start Sprint PythonTrainer interface. {
 
 isInitialized = False
+InputDim = None  # type: typing.Optional[int]
+OutputDim = None  # type: typing.Optional[int]
 
 
 def exchook(exc_type, exc_obj, exc_tb):

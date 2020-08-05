@@ -48,6 +48,7 @@ DefaultSprintCrnnConfig = "config/crnn.config"
 startTime = None  # type: typing.Optional[float]
 isInitialized = False
 isTrainThreadStarted = False
+trainThread = None  # type: typing.Optional[Thread]
 isExited = False
 InputDim = None  # type: typing.Optional[int]
 OutputDim = None  # type: typing.Optional[int]
@@ -688,7 +689,6 @@ def _init_base(configfile=None, target_mode=None, epoch=None, sprint_opts=None):
   :param int epoch: via init(), this is set
   :param dict[str,str]|None sprint_opts: optional parameters to override values in configfile
   """
-
   global isInitialized
   isInitialized = True
   # Run through in any case. Maybe just to set targetMode.
@@ -697,6 +697,7 @@ def _init_base(configfile=None, target_mode=None, epoch=None, sprint_opts=None):
      # Set some dummy. Some code might want this (e.g. TensorFlow).
      sys.argv = [__file__]
 
+  global Engine
   global config
   if not config:
     # Some subset of what we do in rnn.init().
@@ -719,7 +720,6 @@ def _init_base(configfile=None, target_mode=None, epoch=None, sprint_opts=None):
     rnn.init_faulthandler(sigusr1_chain=True)
     rnn.init_config_json_network()
 
-    global Engine
     if BackendEngine.is_tensorflow_selected():
       # Use TFEngine.Engine class instead of Engine.Engine.
       from returnn.tf.engine import Engine
@@ -978,7 +978,7 @@ def _forward(segment_name, features):
   return posteriors
 
 
-Criterion = None
+Criterion = None  # type: typing.Optional[typing.Any]
 
 
 def make_criterion_class():

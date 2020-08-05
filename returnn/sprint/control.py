@@ -504,7 +504,8 @@ class PythonControl:
     Also called by us via self.run_threaded_control_loop().
     """
     print("RETURNN SprintControl[pid %i] PythonControl run_control_loop: %r, %r" % (os.getpid(), callback, kwargs))
-    print("RETURNN SprintControl[pid %i] PythonControl run_control_loop control: %r" % (os.getpid(), callback("version")))
+    print(
+      "RETURNN SprintControl[pid %i] PythonControl run_control_loop control: %r" % (os.getpid(), callback("version")))
     self.callback = callback
     with self.cond:
       assert not self.control_loop_started
@@ -555,7 +556,7 @@ class PythonControl:
       with self.cond:
         if self.control_loop_started:
           return
-        assert t.isAlive()
+        assert t.is_alive()
         self.cond.wait(timeout=1)
 
   def own_threaded_callback(self, cmd, *args):

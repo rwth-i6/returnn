@@ -63,7 +63,7 @@ class SprintSubprocessInstance:
     self.sprintConfig = eval_shell_str(sprintConfigStr)
     self.sprintControlConfig = sprintControlConfig
     self.usePythonSegmentOrder = usePythonSegmentOrder
-    self.child_pid = None
+    self.child_pid = None  # type: typing.Optional[int]
     self.parent_pid = os.getpid()
     # There is no generic way to see whether Python is exiting.
     # This is our workaround. We check for it in self.run_inner().
