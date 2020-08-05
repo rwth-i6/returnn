@@ -105,6 +105,7 @@ old_to_new_mod_mapping = {
   "TFUpdater": "tf.updater",
   "TFUtil": "tf.util.basic",
   "TheanoUtil": "theano.util",
+  "TorchWrapper": "theano.ops.torch_wrapper",
   "TwoStateBestPathDecoder": "theano.ops.two_state_best_path_decoder",
   "TwoStateHMMOp": "theano.ops.two_state_hmm",
   "Updater": "theano.updater",
