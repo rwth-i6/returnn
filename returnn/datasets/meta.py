@@ -863,11 +863,6 @@ class CombinedDataset(CachedDataset2):
     # This will only initialize datasets needed for features occurring in data_map
     self.datasets = {key: init_dataset(datasets[key]) for key in self.dataset_keys}
 
-    self.seq_corpus_tags_per_ds = {}
-    for key, ds in self.datasets.items():
-      assert ds.have_corpus_seq_idx()
-      self.seq_corpus_tags_per_ds[key] = ds.get_all_tags()
-
     self._estimated_num_seqs = sum([self.datasets[k].estimated_num_seqs for k in sorted(self.datasets.keys())])
     self.estimated_num_seq_per_subset = [self.datasets[k].estimated_num_seqs for k in sorted(self.datasets.keys())]
 
@@ -951,20 +946,20 @@ class CombinedDataset(CachedDataset2):
 
       # We only want to load those sequences in the sub-datasets that appear in seq_order. For this, we extract
       # sequence lists containing the subset of sequences for each dataset from seq_order.
-      seq_lists = [[] for _ in self.datasets]
+      seq_order_subdatasets = [[] for _ in self.datasets]
       for seq_idx in seq_order:
         dataset_idx, dataset_seq_idx = self._seq_idx_to_dataset_seq_idx(seq_idx)
         dataset = self.datasets[self.dataset_idx2key_map[dataset_idx]]
         dataset_corpus_seq_idx = dataset.get_corpus_seq_idx(dataset_seq_idx)
-        seq_tag = self.seq_corpus_tags_per_ds[self.dataset_idx2key_map[dataset_idx]][dataset_corpus_seq_idx]
-        seq_lists[dataset_idx].append(seq_tag)
+        seq_order_subdatasets[dataset_idx].append(dataset_corpus_seq_idx)
 
       # It may be large, so better delete it early, we don't need it anymore.
       del seq_order
 
       # Re-initialize sequence orders of sub-datasets with created sequence list.
       for dataset_idx, dataset_key in self.dataset_idx2key_map.items():
-        self.datasets[dataset_key].init_seq_order(epoch=epoch, seq_list=seq_lists[dataset_idx])
+        assert self.datasets[dataset_key].have_corpus_seq_idx()
+        self.datasets[dataset_key].init_seq_order(epoch=epoch, seq_order=seq_order_subdatasets[dataset_idx])
 
     else:
       self.dataset_sorted_seq_idx_list = []  # We will fill this as we go
