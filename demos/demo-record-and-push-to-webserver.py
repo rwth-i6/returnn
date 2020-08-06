@@ -37,16 +37,22 @@ elif args.input_type == "audio":
   fn = "/tmp/rec.wav"
   if os.path.exists(fn):
     os.remove(fn)
-  check_call([
-    "sox", "-d", "-c", "1", "-r", "16k", "-b", "16", fn,
-    # "noisered", "/tmp/speech.noise-profile", "0.3",
-    "silence", "1", "0.1", "0.1%", "1", "2.0", "1%",
-    "norm"],
+  check_call(
+    [
+      "sox", "-d", "-c", "1", "-r", "16k", "-b", "16", fn,
+      # "noisered", "/tmp/speech.noise-profile", "0.3",
+      "silence", "1", "0.1", "0.1%", "1", "2.0", "1%",
+      "norm"],
     stdin=sys.stdin)
   assert os.path.exists(fn)
 
+else:
+  raise Exception("invalid input type %r" % args.input_type)
+
+
 def get_curl_cmd():
   return ["curl", "-F", "file=@%s" % fn, args.http_host]
+
 
 if args.ssh_host:
   print("copy to remote machine", args.ssh_host)
