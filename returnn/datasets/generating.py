@@ -1271,7 +1271,8 @@ def _get_audio_linear_spectrogram(audio, sample_rate, window_len=0.025, step_len
   assert num_feature_filters % 2 == 0
 
   spectrogram = numpy.abs(librosa.core.stft(
-    audio, hop_length=int(step_len * sample_rate), win_length=int(window_len * sample_rate), n_fft=num_feature_filters*2))
+    audio, hop_length=int(step_len * sample_rate),
+    win_length=int(window_len * sample_rate), n_fft=num_feature_filters*2))
 
   # remove the DC part
   spectrogram = spectrogram[1:]

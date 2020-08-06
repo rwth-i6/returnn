@@ -181,7 +181,7 @@ class MetaDataset(CachedDataset2):
                seq_order_control_dataset=None,
                seq_lens_file=None,
                data_dims=None,
-               data_dtypes=None,
+               data_dtypes=None,  # noqa  # not used
                window=1, **kwargs):
     """
     :param dict[str,dict[str]] datasets: dataset-key -> dataset-kwargs. including keyword 'class' and maybe 'files'
@@ -508,16 +508,16 @@ class ClusteringDataset(CachedDataset2):
     self.expected_load_seq_start = 0
 
   def _load_cluster_map(self, filename):
-    ls = open(filename).read().splitlines()
-    assert "<coprus-key-map>" in ls[:3], "We expect the Sprint XML format."
+    lines = open(filename).read().splitlines()
+    assert "<coprus-key-map>" in lines[:3], "We expect the Sprint XML format."
     # It has lines like: <map-item key="CHiME3/dt05_bth/M03_22GC010M_BTH.CH5/1" value="0"/>
     import re
     pattern = re.compile('<map-item key="(.*)" value="(.*)"/>')
     cluster_map = {}  # type: typing.Dict[str,int]  # seq-name -> cluster-idx
-    for l in ls:
-      if not l.startswith("<map-item"):
+    for line in lines:
+      if not line.startswith("<map-item"):
         continue
-      seq_name, cluster_idx_s = pattern.match(l).groups()
+      seq_name, cluster_idx_s = pattern.match(line).groups()
       cluster_idx = int(cluster_idx_s)
       assert 0 <= cluster_idx < self.n_clusters
       cluster_map[seq_name] = cluster_idx
@@ -999,7 +999,6 @@ class CombinedDataset(CachedDataset2):
     Choose datasets randomly but preserve order within each dataset. This sorting method is unique to CombinedDataset.
 
     :param int total_num_seqs:
-    :param int epoch:
     :returns: sequence order
     :rtype: list[int]
     """
