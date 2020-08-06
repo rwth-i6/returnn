@@ -1240,7 +1240,7 @@ class ExtractAudioFeatures:
     assert feature_data.shape[-1] == self.get_feature_dimension()
     if self.post_process:
       feature_data = self.post_process(feature_data, seq_name=seq_name)
-      assert isinstance(feature_data, numpy.ndarray) and feature_data.ndim == self.num_dims
+      assert isinstance(feature_data, numpy.ndarray) and feature_data.ndim == self.num_dim
       assert feature_data.shape[-1] == self.get_feature_dimension()
     return feature_data
 
