@@ -87,19 +87,30 @@ def parse_pycharm_version(version_str):
   return tuple([int(p) for p in version_str_parts]), name
 
 
-def create_stub_dir(pycharm_dir, stub_dir, new_version=True):
+def create_stub_dir(pycharm_dir, stub_dir, pycharm_major_version):
   """
   :param str pycharm_dir:
   :param str stub_dir:
-  :param bool new_version:
+  :param int pycharm_major_version:
   """
   print("travis_fold:start:script.create_python_stubs")
   print("Generating Python stubs via helpers/generator3.py...")
-  if new_version:  # 2020
+  if pycharm_major_version >= 2020:
     generator_path = "%s/plugins/python-ce/helpers/generator3/__main__.py" % pycharm_dir
     assert os.path.exists(generator_path)
-    subprocess.check_call([sys.executable, generator_path, "-d", stub_dir])
-  else:  # 2019
+    cmd = [sys.executable, generator_path, "-d", stub_dir]
+    # The stdout can sometimes be very long. Thus we pipe and filter it a bit.
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    stdout, _ = proc.communicate()
+    if proc.returncode != 0:
+      raise subprocess.CalledProcessError(returncode=proc.returncode, cmd=cmd, output=stdout)
+    for line in stdout.splitlines():
+      line = line.decode("utf8")
+      if len(line) < 240:
+        print(line)
+      else:
+        print(line[:240] + "...")
+  elif pycharm_major_version <= 2019:
     generator_path = "%s/helpers/generator3.py" % pycharm_dir
     assert os.path.exists(generator_path)
     subprocess.check_call([sys.executable, generator_path, "-d", stub_dir, "-b"])
@@ -185,7 +196,7 @@ def setup_pycharm_python_interpreter(pycharm_dir):
       pycharm_system_dir, "%i.%i.%i" % sys.version_info[:3])
     print("Generate stub dir:", stub_dir)
     os.makedirs(stub_dir, exist_ok=True)
-    create_stub_dir(pycharm_dir=pycharm_dir, stub_dir=stub_dir)
+    create_stub_dir(pycharm_dir=pycharm_dir, stub_dir=stub_dir, pycharm_major_version=pycharm_version[0])
 
   jdk_table_fn = "%s/options/jdk.table.xml" % pycharm_config_dir
   print("Filename:", jdk_table_fn)
