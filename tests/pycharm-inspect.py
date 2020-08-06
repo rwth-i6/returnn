@@ -441,7 +441,7 @@ def main():
     inspect_class_blacklist={
       # PyInterpreterInspection: This inspection notifies you if the current project has no Python interpreter
       # configured or an invalid Python interpreter.
-      # "PyInterpreterInspection",  # TODO how to select this in PyCharm.idea?
+      # "PyInterpreterInspection",  # how to select this in PyCharm.idea? **Update** not a problem anymore?
       "SpellCheckingInspection",  # way too much for now... TODO this should be fixed later, probably in PyCharm.idea
       "PyClassHasNoInitInspection",  # not relevant?
     },
