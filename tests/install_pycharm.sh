@@ -2,7 +2,7 @@
 
 set -xe
 
-name="pycharm-community-2019.1"
+name="pycharm-community-2020.2"
 fn="$name.tar.gz"
 
 wget -c "https://download.jetbrains.com/python/$fn"

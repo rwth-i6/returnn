@@ -42,8 +42,8 @@ def install_pycharm():
   """
   # travis_fold: https://github.com/travis-ci/travis-ci/issues/1065
   print("travis_fold:start:script.install")
-  print("Install PyCharm...")
   pycharm_dir = "%s/pycharm" % tempfile.mkdtemp()
+  print("Install PyCharm into:", pycharm_dir)
   subprocess.check_call([my_dir + "/install_pycharm.sh"], cwd=os.path.dirname(pycharm_dir), stderr=subprocess.STDOUT)
   check_pycharm_dir(pycharm_dir)
   print("travis_fold:end:script.install")
@@ -57,8 +57,17 @@ def get_version_str_from_pycharm(pycharm_dir):
   :rtype: str
   """
   import re
+  import json
+  if os.path.exists("%s/product-info.json" % pycharm_dir):
+    d = json.load(open("%s/product-info.json" % pycharm_dir))
+    name = d["dataDirectoryName"]
+    assert isinstance(name, str)
+    assert name.startswith("PyCharm")
+    return name[len("PyCharm"):]
+  # This works on PyCharm 2019.
   code = open("%s/bin/pycharm.sh" % pycharm_dir).read()
   m = re.search("-Didea\\.paths\\.selector=PyCharm(\\S+) ", code)
+  assert m, "pycharm %r not as expected" % pycharm_dir
   return m.group(1)
 
 
@@ -78,29 +87,38 @@ def parse_pycharm_version(version_str):
   return tuple([int(p) for p in version_str_parts]), name
 
 
-def create_stub_dir(pycharm_dir, stub_dir):
+def create_stub_dir(pycharm_dir, stub_dir, new_version=True):
   """
   :param str pycharm_dir:
   :param str stub_dir:
+  :param bool new_version:
   """
   print("travis_fold:start:script.create_python_stubs")
   print("Generating Python stubs via helpers/generator3.py...")
-  subprocess.check_call([sys.executable, "%s/helpers/generator3.py" % pycharm_dir, "-d", stub_dir, "-b"])
-  print("Collecting further native modules...")
-  mod_names = []
-  for line in subprocess.check_output([
-        sys.executable, "%s/helpers/generator3.py" % pycharm_dir, "-L"]).decode("utf8").splitlines()[1:]:
-    # First line is version, so we skipped those.
-    # Then we get sth like "<module name> <other things>...".
-    assert isinstance(line, str)
-    mod_name = line.split()[0]
-    # There are duplicates. Ignore.
-    if mod_name not in mod_names:
-      mod_names.append(mod_name)
-  for mod_name in mod_names:
-    # Ignore errors here.
-    subprocess.call([sys.executable, "%s/helpers/generator3.py" % pycharm_dir, "-d", stub_dir, mod_name])
-  print("travis_fold:end:script.create_python_stubs")
+  if new_version:  # 2020
+    generator_path = "%s/plugins/python-ce/helpers/generator3/__main__.py" % pycharm_dir
+    assert os.path.exists(generator_path)
+    subprocess.check_call([sys.executable, generator_path, "-d", stub_dir])
+  else:  # 2019
+    generator_path = "%s/helpers/generator3.py" % pycharm_dir
+    assert os.path.exists(generator_path)
+    subprocess.check_call([sys.executable, generator_path, "-d", stub_dir, "-b"])
+    print("Collecting further native modules...")
+    mod_names = []
+    for line in subprocess.check_output([
+          sys.executable, generator_path, "-L"]).decode("utf8").splitlines()[1:]:
+      # First line is version, so we skipped those.
+      # Then we get sth like "<module name> <other things>...".
+      assert isinstance(line, str)
+      mod_name = line.split()[0]
+      # There are duplicates. Ignore.
+      if mod_name not in mod_names:
+        mod_names.append(mod_name)
+    for mod_name in mod_names:
+      print("Generate for %r." % mod_name)
+      # Ignore errors here.
+      subprocess.call([sys.executable, generator_path, "-d", stub_dir, mod_name])
+    print("travis_fold:end:script.create_python_stubs")
 
 
 _use_stub_zip = False
@@ -129,8 +147,8 @@ def setup_pycharm_python_interpreter(pycharm_dir):
     pycharm_system_dir = os.path.expanduser("~/Library/Caches/PyCharm%s" % pycharm_version_str)
   else:  # assume Linux/Unix
     if pycharm_version[0] >= 2020:
-      pycharm_config_dir = os.path.expanduser("~/.config/JetBrains/PyCharm%s/config" % pycharm_version_str)
-      pycharm_system_dir = os.path.expanduser("~/.config/JetBrains/PyCharm%s/system" % pycharm_version_str)
+      pycharm_config_dir = os.path.expanduser("~/.config/JetBrains/PyCharm%s" % pycharm_version_str)
+      pycharm_system_dir = os.path.expanduser("~/.cache/JetBrains/PyCharm%s" % pycharm_version_str)
     else:  # <= 2020
       pycharm_config_dir = os.path.expanduser("~/.PyCharm%s/config" % pycharm_version_str)
       pycharm_system_dir = os.path.expanduser("~/.PyCharm%s/system" % pycharm_version_str)
