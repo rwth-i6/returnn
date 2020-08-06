@@ -6479,7 +6479,7 @@ class OfficialResNetLayer(_ConcatInputLayer):
 
     import re
     # noinspection PyUnresolvedReferences
-    from extern.official_tf_resnet.resnet_model import Model
+    from returnn.extern.official_tf_resnet.resnet_model import Model
     super(OfficialResNetLayer, self).__init__(**kwargs)
 
     self.model = Model(resnet_size=resnet_size, num_classes=num_classes,

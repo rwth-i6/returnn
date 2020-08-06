@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 
+"""
+This explicitly compiles some of the native ops, and will tell you the so-filenames.
+Normally all native ops (e.g. NativeLstm2 etc) are compiled on-the-fly within RETURNN.
+When you export the computation graph (e.g. via ``compile_tf_graph.py``),
+you explicitly must load these native ops.
+"""
 
 from __future__ import print_function
 
@@ -16,10 +22,7 @@ sys.path.insert(0, returnn_dir)
 from returnn import __main__ as rnn
 from returnn.log import log
 import argparse
-from returnn.util.basic import Stats, hms
-from returnn.datasets.basic import Dataset, init_dataset
 import returnn.util.basic as util
-import returnn.tf.util.basic as tf_util
 
 
 def init(config_filename, log_verbosity):
@@ -59,6 +62,9 @@ def init(config_filename, log_verbosity):
 
 
 def main(argv):
+  """
+  Main entry.
+  """
   from returnn.tf.util.basic import CudaEnv, NativeCodeCompiler
   CudaEnv.verbose_find_cuda = True
   NativeCodeCompiler.CollectedCompilers = []
@@ -96,6 +102,7 @@ def main(argv):
   for compiler in NativeCodeCompiler.CollectedCompilers:
     assert isinstance(compiler, NativeCodeCompiler)
     print(compiler)
+    # noinspection PyProtectedMember
     libs.append(compiler._so_filename)
 
   if libs:

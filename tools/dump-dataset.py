@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 
+"""
+Iterates through any dataset, and prints/dump some information.
+This can also be used to collect statistics over the data like mean/variance.
+"""
+
 from __future__ import print_function
 
 import os
 import sys
 import time
+import typing
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
@@ -116,6 +122,7 @@ def dump_dataset(dataset, options):
         num_seqs_s = "?"
     progress_prefix = "%i/%s" % (seq_idx, num_seqs_s)
     progress = "%s (%.02f%%)" % (progress_prefix, complete_frac * 100)
+    data = None
     if complete_frac > 0:
       total_time_estimated = start_elapsed / complete_frac
       remaining_estimated = total_time_estimated - start_elapsed
@@ -180,6 +187,9 @@ def dump_dataset(dataset, options):
     dump_file.close()
 
 
+config = None  # type: typing.Optional["returnn.config.Config"]
+
+
 def init(config_str, config_dataset, verbosity):
   """
   :param str config_str: either filename to config-file, or dict for dataset
@@ -228,6 +238,9 @@ def init(config_str, config_dataset, verbosity):
 
 
 def main():
+  """
+  Main entry.
+  """
   argparser = argparse.ArgumentParser(description='Dump something from dataset.')
   argparser.add_argument('returnn_config', help="either filename to config-file, or dict for dataset")
   argparser.add_argument("--dataset", help="if given the config, specifies the dataset. e.g. 'dev'")

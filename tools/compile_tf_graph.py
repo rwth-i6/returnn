@@ -29,6 +29,7 @@ from returnn.tf.util.basic import Data, CollectionKeys
 from returnn.tf.network import TFNetwork
 from returnn.tf.layers.basic import LayerBase, register_layer_class
 from returnn.tf.layers.base import WrappedInternalLayer
+# noinspection PyProtectedMember
 from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell, ChoiceLayer
 
 
@@ -655,6 +656,9 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
 
 
 def main(argv):
+  """
+  Main entry.
+  """
   argparser = argparse.ArgumentParser(description='Compile some op')
   argparser.add_argument('config', help="filename to config-file")
   argparser.add_argument('--train', type=int, default=0, help='0 disable (default), 1 enable, -1 dynamic')

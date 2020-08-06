@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 
+"""
+Creates a HDF file, which can be read by :class:`HDFDataset`.
+The input is any other dataset (:class:`Dataset`).
+"""
+
 from __future__ import print_function
 
 import os
@@ -20,7 +25,7 @@ from returnn.config import Config
 def hdf_dataset_init(file_name):
   """
   :param str file_name: filename of hdf dataset file in the filesystem
-  :rtype: HDFDataset.HDFDatasetWriter
+  :rtype: hdf_dataset_mod.HDFDatasetWriter
   """
   return hdf_dataset_mod.HDFDatasetWriter(filename=file_name)
 
@@ -28,7 +33,7 @@ def hdf_dataset_init(file_name):
 def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
   """
   :param Dataset dataset: could be any dataset implemented as child of Dataset
-  :type hdf_dataset: HDFDataset.HDFDatasetWriter
+  :param hdf_dataset_mod.HDFDatasetWriter hdf_dataset:
   :param parser_args: argparse object from main()
   """
   hdf_dataset.dump_from_dataset(
@@ -72,10 +77,15 @@ def init(config_filename, cmd_line_opts, dataset_config_str):
 
 
 def _is_crnn_config(filename):
+  """
+  :param str filename:
+  :rtype: bool
+  """
   if filename.endswith(".gz"):
     return False
   if filename.endswith(".config"):
     return True
+  # noinspection PyBroadException
   try:
     config = Config()
     config.load_file(filename)
@@ -86,7 +96,10 @@ def _is_crnn_config(filename):
 
 
 def main(argv):
-  parser = argparse.ArgumentParser(description="Dump dataset or subset of dataset in external HDF dataset")
+  """
+  Main entry.
+  """
+  parser = argparse.ArgumentParser(description="Dump dataset or subset of dataset into external HDF dataset")
   parser.add_argument('config_file_or_dataset', type=str,
                       help="Config file for RETURNN, or directly the dataset init string")
   parser.add_argument('hdf_filename', type=str, help="File name of the HDF dataset, which will be created")
@@ -111,5 +124,3 @@ def main(argv):
 
 if __name__ == '__main__':
   main(sys.argv)
-
-
