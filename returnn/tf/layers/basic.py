@@ -6645,6 +6645,13 @@ class BinaryCrossEntropyLoss(Loss):
   """
   class_name = "bin_ce"
 
+  def __init__(self, pos_weight=None, **kwargs):
+    """
+    :param float|None pos_weight: weight of positive labels, see tf.nn.weighted_cross_entropy_with_logits.
+    """
+    super(BinaryCrossEntropyLoss, self).__init__(**kwargs)
+    self._pos_weight = pos_weight
+
   def _check_init(self):
     assert self.target
     assert self.target.batch_ndim == self.output.batch_ndim, (
@@ -6655,8 +6662,12 @@ class BinaryCrossEntropyLoss(Loss):
     :rtype: tf.Tensor
     """
     with tf.name_scope("loss_bin_ce"):
-      out = tf.nn.sigmoid_cross_entropy_with_logits(
-        logits=self.output_flat, labels=tf.cast(self.target_flat, self.output_flat.dtype))
+      target_flat = tf.cast(self.target_flat, self.output_flat.dtype)
+      if self._pos_weight is None:
+        out = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.output_flat, labels=target_flat)
+      else:
+        out = tf.nn.weighted_cross_entropy_with_logits(
+          logits=self.output_flat, labels=target_flat, pos_weight=self._pos_weight)
       return self.reduce_func(out) * (1.0 / (self.output.dim or 1))
 
   def get_error(self):
