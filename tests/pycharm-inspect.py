@@ -123,7 +123,7 @@ def setup_pycharm_python_interpreter(pycharm_dir):
     pycharm_config_dir = os.path.expanduser("~/Library/Preferences/PyCharm%s" % pycharm_version_str)
     pycharm_system_dir = os.path.expanduser("~/Library/Caches/PyCharm%s" % pycharm_version_str)
   else:  # assume Linux/Unix
-    if pycharm_version[0] >= 2020:  # not sure since when...
+    if pycharm_version[0] >= 2020:
       pycharm_config_dir = os.path.expanduser("~/.config/JetBrains/PyCharm%s/config" % pycharm_version_str)
       pycharm_system_dir = os.path.expanduser("~/.config/JetBrains/PyCharm%s/system" % pycharm_version_str)
     else:  # <= 2020
@@ -419,12 +419,19 @@ def report_inspect_dir(path,
       continue
 
     msg = "%s:%i: %s %s: %s" % (filename, line, problem_severity, inspect_class, description)
-    if inspect_class_not_counted and inspect_class in inspect_class_not_counted:
-      print(color.color(msg, color="black"))
-    else:
+    msg_counted = True
+    if inspect_class in inspect_class_not_counted:
+      msg_counted = False
+    if filename.startswith("tools/") or filename.startswith("demos/"):
+      # We have lots of these, but I'm not sure how to fix this in a better way (yet).
+      if "module level import not at top of file" in description:
+        msg_counted = False
+    if msg_counted:
       print(msg)
       if filename not in ignore_count_for_files:
         total_relevant_count += 1
+    else:
+      print(color.color(msg, color="black"))
     file_count += 1
 
   print("Total relevant inspection reports:", total_relevant_count)
