@@ -912,6 +912,7 @@ class CombinedDataset(CachedDataset2):
     for dataset in self.datasets.values():
       dataset.init_seq_order(epoch=epoch)
 
+    # noinspection PyBroadException
     try:
       total_num_seqs = sum([self.datasets[k].num_seqs for k in sorted(self.datasets.keys())])
     except Exception:
