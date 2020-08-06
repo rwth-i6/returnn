@@ -14,7 +14,7 @@ sys.path.insert(0, base_dir)
 os.chdir(base_dir)
 
 from returnn.util import better_exchook  # noqa
-from returnn.util.basic import pip_install  # noqa
+from returnn.util.basic import pip_install, pip_check_is_installed  # noqa
 
 py = sys.executable
 
@@ -25,7 +25,9 @@ def setup():
   """
   # travis_fold: https://github.com/travis-ci/travis-ci/issues/1065
   print("travis_fold:start:script.install")
-  pip_install("pylint", "better_exchook")
+  for pkg in ["pylint", "better-exchook"]:
+    if not pip_check_is_installed(pkg):
+      pip_install(pkg)
   print("travis_fold:end:script.install")
 
 
@@ -39,7 +41,11 @@ def main():
   num_relevant_files_with_errors = 0
   for rel_filename in find_all_py_source_files():
     print("travis_fold:start:pylint.%s" % rel_filename)
-    proc = subprocess.Popen(["pylint", rel_filename], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    extra_args = []
+    if "/" in rel_filename and not rel_filename.startswith("returnn/"):  # demos or tools
+      extra_args += [r"--module-rgx=([a-z_][a-z0-9_\-]*)$"]
+      extra_args += ["--disable=wrong-import-position"]  # for now
+    proc = subprocess.Popen(["pylint", rel_filename] + extra_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     stdout, _ = proc.communicate()
     stdout = stdout.decode("utf8")
     file_has_errors = proc.returncode != 0
