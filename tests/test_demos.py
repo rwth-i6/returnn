@@ -12,26 +12,12 @@ import sys
 from glob import glob
 from nose.tools import assert_less, assert_in
 from returnn.util import better_exchook
+from returnn.util.basic import which_pip
 better_exchook.replace_traceback_format_tb()
 
 
 py = sys.executable
 print("Python:", py)
-
-
-def which_pip():
-  from returnn.util.basic import which
-  # Before we look anywhere in PATH, check if there is some pip alongside to the Python executable.
-  # This might be more reliable.
-  dir_name, basename = py.rsplit("/", 1)
-  if basename.startswith("python"):
-    postfix = basename[len("python"):]
-    pip_path = "%s/pip%s" % (dir_name, postfix)
-    if os.path.exists(pip_path):
-      return pip_path
-  # Generic fallback.
-  pip_path = which("pip")
-  return pip_path
 
 
 def build_env():

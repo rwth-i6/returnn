@@ -19,33 +19,6 @@ better_exchook.install()
 py = sys.executable
 
 
-def which_pip():
-  from returnn.util.basic import which
-  # Before we look anywhere in PATH, check if there is some pip alongside to the Python executable.
-  # This might be more reliable.
-  dir_name, basename = py.rsplit("/", 1)
-  if basename.startswith("python"):
-    postfix = basename[len("python"):]
-    pip_path = "%s/pip%s" % (dir_name, postfix)
-    if os.path.exists(pip_path):
-      return pip_path
-  # Generic fallback.
-  pip_path = which("pip")
-  return pip_path
-
-
-def pip_install(*pkg_names):
-  pip_path = which_pip()
-  print("Pip install", pkg_names)
-  in_virtual_env = hasattr(sys, 'real_prefix')  # https://stackoverflow.com/questions/1871549/
-  cmd = [py, pip_path, "install"]
-  if not in_virtual_env:
-    cmd += ["--user"]
-  cmd += ["-v"] + list(pkg_names)
-  print("$ %s" % " ".join(cmd))
-  subprocess.check_call(cmd, cwd="/")
-
-
 def setup():
   """
   Some generic setup.

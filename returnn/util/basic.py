@@ -2329,6 +2329,62 @@ def which(program):
   return None
 
 
+def which_pip():
+  """
+  :rtype: str
+  :return: path to pip for the current Python env
+  """
+  # Before we look anywhere in PATH, check if there is some pip alongside to the Python executable.
+  # This might be more reliable.
+  py = sys.executable
+  dir_name, basename = py.rsplit("/", 1)
+  if basename.startswith("python"):
+    postfix = basename[len("python"):]
+    pip_path = "%s/pip%s" % (dir_name, postfix)
+    if os.path.exists(pip_path):
+      return pip_path
+  # Generic fallback.
+  pip_path = which("pip")
+  return pip_path
+
+
+def pip_install(*pkg_names):
+  """
+  Install packages via pip for the current Python env.
+
+  :param str pkg_names:
+  """
+  py = sys.executable
+  pip_path = which_pip()
+  print("Pip install", *pkg_names)
+  in_virtual_env = hasattr(sys, 'real_prefix')  # https://stackoverflow.com/questions/1871549/
+  cmd = [py, pip_path, "install"]
+  if not in_virtual_env:
+    cmd += ["--user"]
+  cmd += ["-v"] + list(pkg_names)
+  print("$ %s" % " ".join(cmd))
+  subprocess.check_call(cmd, cwd="/")
+  _pip_installed_packages.clear()  # force reload
+
+
+_pip_installed_packages = set()
+
+
+def pip_check_is_installed(pkg_name):
+  """
+  :param str pkg_name: without version, e.g. just "tensorflow" or "tensorflow-gpu"
+  :rtype: bool
+  """
+  if not _pip_installed_packages:
+    py = sys.executable
+    pip_path = which_pip()
+    cmd = [py, pip_path, "freeze"]
+    for line in sys_exec_out(*cmd).splitlines():
+      if line:
+        _pip_installed_packages.add(line[:line.index("==")])
+  return pkg_name in _pip_installed_packages
+
+
 _original_execv = None
 _original_execve = None
 _original_execvpe = None
