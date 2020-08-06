@@ -24,7 +24,7 @@ sys.path.insert(0, base_dir)
 os.chdir(base_dir)
 
 from returnn.util import better_exchook  # noqa
-better_exchook.install()
+from returnn.util.basic import pip_install, which_pip, pip_check_is_installed  # noqa
 
 
 def check_pycharm_dir(pycharm_dir):
@@ -151,6 +151,13 @@ def setup_pycharm_python_interpreter(pycharm_dir):
         cwd=os.path.dirname(stub_fn))
       assert os.path.isdir(stub_dir)
   else:
+    if not pip_check_is_installed("tensorflow") and not pip_check_is_installed("tensorflow-gpu"):
+      pip_install("tensorflow")
+    if not pip_check_is_installed("Theano"):
+      pip_install("theano==0.9")
+    for pkg in ["typing", "librosa", "PySoundFile", "nltk"]:
+      if not pip_check_is_installed(pkg):
+        pip_install(pkg)
     stub_dir = "%s/python_stubs/python%s-generated" % (
       pycharm_system_dir, "%i.%i.%i" % sys.version_info[:3])
     print("Generate stub dir:", stub_dir)
@@ -473,4 +480,5 @@ def main():
 
 
 if __name__ == "__main__":
+  better_exchook.install()
   main()
