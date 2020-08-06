@@ -16,9 +16,6 @@ please have a look at the :ref:`optimizer settings <optimizer_settings>`.
 
 
 def generate():
-  if not os.path.exists("returnn"):
-    os.symlink("../returnn", "returnn")
-
   updater._init_optimizer_classes_dict()
   optimizer_dict = updater._OptimizerClassesDict
 

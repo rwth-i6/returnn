@@ -11,6 +11,10 @@
 
 import sys
 import os
+
+if not os.path.exists("returnn"):
+  os.symlink("../returnn", "returnn")
+
 sys.path += [".", "returnn"]
 
 import faulthandler
