@@ -132,9 +132,11 @@ class LmDataset(CachedDataset2):
       self.seq_gen = None
     elif orth_symbols_map_file:
       assert not phone_info
-      orth_symbols_imap_list = [(int(b), a)
-                                for (a, b) in [l.split(None, 1)
-                                               for l in open(orth_symbols_map_file).read().splitlines()]]
+      orth_symbols_imap_list = [
+        (int(b), a)
+        for (a, b) in [
+          line.split(None, 1)
+          for line in open(orth_symbols_map_file).read().splitlines()]]
       orth_symbols_imap_list.sort()
       assert orth_symbols_imap_list[0][0] == 0
       assert orth_symbols_imap_list[-1][0] == len(orth_symbols_imap_list) - 1
@@ -798,9 +800,9 @@ class StateTying:
     """
     self.allo_map = {}  # allophone-state-str -> class-idx
     self.class_map = {}  # class-idx -> set(allophone-state-str)
-    ls = open(state_tying_file).read().splitlines()
-    for l in ls:
-      allo_str, class_idx_str = l.split()
+    lines = open(state_tying_file).read().splitlines()
+    for line in lines:
+      allo_str, class_idx_str = line.split()
       class_idx = int(class_idx_str)
       assert allo_str not in self.allo_map
       self.allo_map[allo_str] = class_idx
@@ -1107,7 +1109,8 @@ class TranslationDataset(CachedDataset2):
     if not source_only:
       self._main_data_key_map[self.target_file_prefix] = self.main_target_data_key
 
-    self._files_to_read = [prefix for prefix in self._main_data_key_map.keys()
+    self._files_to_read = [
+      prefix for prefix in self._main_data_key_map.keys()
       if not (prefix == self.target_file_prefix and search_without_reference)]
     self._data_files = {prefix: self._get_data_file(prefix) for prefix in self._files_to_read}
 
@@ -1150,7 +1153,7 @@ class TranslationDataset(CachedDataset2):
   def _extend_data(self, file_prefix, data_strs):
     """
     :param str file_prefix: prefix of the corpus file, "source" or "target"
-    :param list[str] data_strs: lines of text read from the corpus file
+    :param list[bytes] data_strs: lines of text read from the corpus file
     """
     data_key = self.main_source_data_key if file_prefix == self.source_file_prefix else self.main_target_data_key
 
@@ -1208,8 +1211,8 @@ class TranslationDataset(CachedDataset2):
     :rtype: str
     """
     if self._use_cache_manager:
-      import Util
-      filename = Util.cf(filename)
+      from returnn.util.basic import cf
+      filename = cf(filename)
     return filename
 
   def _get_data_file(self, prefix):
@@ -1384,7 +1387,8 @@ class TranslationDataset(CachedDataset2):
     else:
       num_seqs = self._get_data_len()
       self._seq_order = self.get_seq_order_for_epoch(
-        epoch=epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(self._get_data(key=self.main_source_data_key, line_nr=i)))
+        epoch=epoch, num_seqs=num_seqs,
+        get_seq_len=lambda i: len(self._get_data(key=self.main_source_data_key, line_nr=i)))
     self._num_seqs = len(self._seq_order)
     return True
 
@@ -1405,7 +1409,8 @@ class TranslationDataset(CachedDataset2):
     line_nr = self._seq_order[seq_idx]
 
     data_keys = self._source_data_keys if self.search_without_reference else self._data_keys
-    features = {data_key: self._get_data(key=data_key, line_nr=line_nr)
+    features = {
+      data_key: self._get_data(key=data_key, line_nr=line_nr)
       for data_key in data_keys}
     assert all([data is not None for data in features.values()])
 
@@ -1487,7 +1492,7 @@ class TranslationFactorsDataset(TranslationDataset):
     Similar to the base class method, but handles several data streams read from one string.
 
     :param str file_prefix: prefix of the corpus file, "source" or "target"
-    :param list[str] data_strs: lines of text read from the corpus file
+    :param list[bytes] data_strs: lines of text read from the corpus file
     """
     if file_prefix == self.source_file_prefix:
       data_keys = self._source_data_keys
@@ -1497,9 +1502,9 @@ class TranslationFactorsDataset(TranslationDataset):
 
     data = [
       self._factored_words_to_numpy(data_keys, s.decode("utf8").strip().split(), self._add_postfix[file_prefix])
-      for s in data_strs]  # type: list[list[str]] # shape: (len(data_strs), len(data_keys))
+      for s in data_strs]  # type: typing.List[typing.List[numpy.ndarray]] # shape: (len(data_strs), len(data_keys))
 
-    data = zip(*data)  # type: list[list[str]] # shape: (len(data_keys), len(data_strs))
+    data = zip(*data)  # type: typing.List[typing.Tuple[numpy.ndarray]] # shape: (len(data_keys), len(data_strs))
 
     with self._lock:
       for i, data in enumerate(data):
@@ -1638,7 +1643,6 @@ class ConfusionNetworkDataset(TranslationDataset):
 
   def _data_str_to_sparse_inputs(self, data_key, s, postfix=None):
     """
-    :param dict[str,int] vocab:
     :param str s:
     :param str postfix:
     :rtype: (numpy.ndarray, numpy.ndarray)
@@ -1660,7 +1664,7 @@ class ConfusionNetworkDataset(TranslationDataset):
   def _extend_data(self, file_prefix, data_strs):
     """
     :param str file_prefix: "source" or "target"
-    :param list[str|bytes] data_strs: array of input for the key
+    :param list[bytes] data_strs: array of input for the key
     """
     if file_prefix == self.source_file_prefix:  # the sparse inputs and weights
       key = self.main_source_data_key
@@ -1770,7 +1774,7 @@ def lowercase_keep_special(text):
   :rtype: str
   """
   # Anything which is not [..] or <..>.
-  return re.sub('(\\s|^)(?!(\\[\\S*\\])|(<\\S*>))\\S+(?=\\s|$)', lambda m: m.group(0).lower(), text)
+  return re.sub('(\\s|^)(?!(\\[\\S*])|(<\\S*>))\\S+(?=\\s|$)', lambda m: m.group(0).lower(), text)
 
 
 def collapse_whitespace(text):
