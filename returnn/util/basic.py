@@ -192,11 +192,11 @@ def get_model_filename_postfix():
   return ""
 
 
-def cmd(s):
+def sys_cmd_out_lines(s):
   """
-  :type s: str
+  :param str s: shell command
   :rtype: list[str]
-  :returns all stdout splitted by newline. Does not cover stderr.
+  :return: all stdout split by newline. Does not cover stderr.
   Raises CalledProcessError on error.
   """
   p = subprocess.Popen(s, stdout=subprocess.PIPE, shell=True, close_fds=True,
@@ -204,16 +204,16 @@ def cmd(s):
   stdout = p.communicate()[0]
   if PY3:
     stdout = stdout.decode("utf8")
-  result = [tag.strip() for tag in stdout.split('\n')[:-1]]
+  result = [line.strip() for line in stdout.split('\n')[:-1]]
   p.stdout.close()
   if p.returncode != 0:
-    raise CalledProcessError(p.returncode, s, "\n".join(result))
+    raise CalledProcessError(p.returncode, s, stdout)
   return result
 
 
-def sysexec_out(*args, **kwargs):
+def sys_exec_out(*args, **kwargs):
   """
-  :param args: for subprocess.Popen
+  :param str args: for subprocess.Popen
   :param kwargs: for subprocess.Popen
   :return: stdout as str (assumes utf8)
   :rtype: str
@@ -228,7 +228,7 @@ def sysexec_out(*args, **kwargs):
   return out
 
 
-def sysexec_ret_code(*args, **kwargs):
+def sys_exec_ret_code(*args, **kwargs):
   """
   :param str args: for subprocess.call
   :param kwargs: for subprocess.call
@@ -252,7 +252,7 @@ def git_commit_rev(commit="HEAD", git_dir="."):
   """
   if commit is None:
     commit = "HEAD"
-  return sysexec_out("git", "rev-parse", "--short", commit, cwd=git_dir).strip()
+  return sys_exec_out("git", "rev-parse", "--short", commit, cwd=git_dir).strip()
 
 
 def git_is_dirty(git_dir="."):
@@ -260,7 +260,7 @@ def git_is_dirty(git_dir="."):
   :param str git_dir:
   :rtype: bool
   """
-  r = sysexec_ret_code("git", "diff", "--no-ext-diff", "--quiet", "--exit-code", cwd=git_dir)
+  r = sys_exec_ret_code("git", "diff", "--no-ext-diff", "--quiet", "--exit-code", cwd=git_dir)
   if r == 0:
     return False
   if r == 1:
@@ -275,7 +275,7 @@ def git_commit_date(commit="HEAD", git_dir="."):
   :rtype: str
   """
   return (
-    sysexec_out("git", "show", "-s", "--format=%ci", commit, cwd=git_dir)
+    sys_exec_out("git", "show", "-s", "--format=%ci", commit, cwd=git_dir)
     .strip()[:-6]
     .replace(":", "")
     .replace("-", "")
@@ -972,7 +972,7 @@ def obj_diff_str(self, other):
         s += ["attrib %r self is dict but other is %r" % (attrib, type(value_other))]
       elif value_self != value_other:
         s += ["attrib %r dict differs:" % attrib]
-        s += ["  " + l for l in dict_diff_str(value_self, value_other).splitlines()]
+        s += ["  " + line for line in dict_diff_str(value_self, value_other).splitlines()]
     else:
       if value_self != value_other:
         s += ["attrib %r differ. self: %r, other: %r" % (attrib, value_self, value_other)]
@@ -992,18 +992,18 @@ def dict_diff_str(self, other):
   return obj_diff_str(DictAsObj(self), DictAsObj(other))
 
 
-def find_ranges(l):
+def find_ranges(ls):
   """
-  :type l: list[int]
+  :type ls: list[int]
   :returns list of ranges (start,end) where end is exclusive
   such that the union of range(start,end) matches l.
   :rtype: list[(int,int)]
   We expect that the incoming list is sorted and strongly monotonic increasing.
   """
-  if not l:
+  if not ls:
     return []
-  ranges = [(l[0], l[0])]
-  for k in l:
+  ranges = [(ls[0], ls[0])]
+  for k in ls:
     assert k >= ranges[-1][1]  # strongly monotonic increasing
     if k == ranges[-1][1]:
       ranges[-1] = (ranges[-1][0], k + 1)
@@ -1046,7 +1046,7 @@ def init_thread_join_hack():
       # them for delayed handling to the main thread which hangs.
       # See CPython signalmodule.c.
       # Currently the best solution I can think of:
-      while thread_obj.isAlive():
+      while thread_obj.is_alive():
         join_orig(thread_obj, timeout=0.1)
     elif thread.get_ident() == main_thread_id and timeout > 0.1:
       # Limit the timeout. This should not matter for the underlying code.
@@ -2225,7 +2225,7 @@ def load_txt_vector(filename):
   :param str filename:
   :rtype: list[float]
   """
-  return [float(l) for l in open(filename).read().splitlines() if l and not l.startswith("<")]
+  return [float(line) for line in open(filename).read().splitlines() if line and not line.startswith("<")]
 
 
 class CollectionReadCheckCovered:
@@ -2868,12 +2868,12 @@ def get_gpu_names():
     return "GeForce GTX 770"  # TODO
   elif sys.platform == 'darwin':
     # TODO parse via xml output
-    return cmd("system_profiler SPDisplaysDataType | "
+    return sys_cmd_out_lines("system_profiler SPDisplaysDataType | "
                "grep 'Chipset Model: NVIDIA' | "
                "sed 's/.*Chipset Model: NVIDIA *//;s/ *$//'")
   else:
     try:
-      return cmd('nvidia-smi -L | cut -d \'(\' -f 1 | cut -d \' \' -f 3- | sed -e \'s/\\ $//\'')
+      return sys_cmd_out_lines('nvidia-smi -L | cut -d \'(\' -f 1 | cut -d \' \' -f 3- | sed -e \'s/\\ $//\'')
     except CalledProcessError:
       return []
 
@@ -2887,14 +2887,14 @@ def _get_num_gpu_devices():
     return 1, 1  # TODO
   elif sys.platform == 'darwin':
     return (
-      int(cmd("sysctl -a | grep machdep.cpu.core_count | awk '{print $2}'")[0]),
-      len(cmd("system_profiler SPDisplaysDataType | grep 'Chipset Model: NVIDIA' | cat")))
+      int(sys_cmd_out_lines("sysctl -a | grep machdep.cpu.core_count | awk '{print $2}'")[0]),
+      len(sys_cmd_out_lines("system_profiler SPDisplaysDataType | grep 'Chipset Model: NVIDIA' | cat")))
   else:
-    num_cpus = len(cmd('cat /proc/cpuinfo | grep processor')) or 1
+    num_cpus = len(sys_cmd_out_lines('cat /proc/cpuinfo | grep processor')) or 1
     num_gpus = 0
     if _consider_check_for_gpu():
       try:
-        num_gpus = len(cmd('nvidia-smi -L'))
+        num_gpus = len(sys_cmd_out_lines('nvidia-smi -L'))
       except CalledProcessError:
         pass
     return num_cpus, num_gpus
@@ -3890,7 +3890,7 @@ def find_sym_in_exec(fn, sym):
     objdump = "otool -IHGv"
   shell_cmd = "%s %s | grep %s" % (objdump, fn, sym)
   try:
-    out = sysexec_out(shell_cmd, shell=True)
+    out = sys_exec_out(shell_cmd, shell=True)
   except CalledProcessError:  # none found
     return None
   assert isinstance(out, (str, unicode))

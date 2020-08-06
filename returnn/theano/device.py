@@ -3,7 +3,7 @@ from __future__ import print_function
 
 from returnn.util.task_system import AsyncTask, ProcConnectionDied
 from returnn.theano.updater import Updater
-from returnn.util.basic import cmd, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main, CalledProcessError, NumbersDict, custom_exec, dict_joined, attr_chain
+from returnn.util.basic import sys_cmd_out_lines, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main, CalledProcessError, NumbersDict, custom_exec, dict_joined, attr_chain
 from returnn.log import log
 from returnn.theano.network import LayerNetwork
 from collections import OrderedDict
@@ -55,13 +55,13 @@ def get_device_attributes():
   # Why is memory in bytes hard coded to 2GB for all cpus?
   if os.name != 'nt':
     if sys.platform == 'darwin':
-      mhz = int(float(cmd("system_profiler  SPHardwareDataType | "
+      mhz = int(float(sys_cmd_out_lines("system_profiler  SPHardwareDataType | "
                           "grep 'Processor Speed' | awk '{print $3}'")[0].replace(',','.')) * 1024)
       for i in range(get_num_gpu_devices()[0]):
         attributes["cpu" + str(cpu)] = (1, mhz, 2 * 1024 * 1024 * 1024)
         cpu += 1
     else:
-      for clock in cmd('cat /proc/cpuinfo | grep "cpu MHz" | cut -d \':\' -f 2 | sed \'s/^\\ //\''):
+      for clock in sys_cmd_out_lines('cat /proc/cpuinfo | grep "cpu MHz" | cut -d \':\' -f 2 | sed \'s/^\\ //\''):
         attributes["cpu" + str(cpu)] = (1, int(float(clock)), 2 * 1024 * 1024 * 1024)
         cpu += 1
     attributes["cpu127"] = (1, 1, 32 * 1024 * 1024 * 1024) # what does this line do? Why add a cpu with 32GB?
@@ -1426,7 +1426,7 @@ class Device(object):
   def update_memory(self):
     self.memory = self.attributes[2] - 512 * 1024 * 1024
     if self.name[0:3] != 'cpu':
-      self.memory = int(cmd("nvidia-smi -i "+ str(self.id) + " -q | grep -A 3 \"Memory Usage\" | tail -n 1 | cut -d ':' -f 2 | cut -d ' ' -f 2")[0])
+      self.memory = int(sys_cmd_out_lines("nvidia-smi -i " + str(self.id) + " -q | grep -A 3 \"Memory Usage\" | tail -n 1 | cut -d ':' -f 2 | cut -d ' ' -f 2")[0])
     return self.memory
 
   def get_memory_info(self):

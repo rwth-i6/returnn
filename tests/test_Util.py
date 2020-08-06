@@ -18,21 +18,21 @@ better_exchook.replace_traceback_format_tb()
 
 
 def test_cmd_true():
-  r = cmd("true")
+  r = sys_cmd_out_lines("true")
   assert_equal(r, [])
 
 
 def test_cmd_false():
-  assert_raises(CalledProcessError, lambda: cmd("false"))
+  assert_raises(CalledProcessError, lambda: sys_cmd_out_lines("false"))
 
 
 def test_cmd_stdout():
-  r = cmd("echo 1; echo 2;")
+  r = sys_cmd_out_lines("echo 1; echo 2;")
   assert_equal(r, ["1", "2"])
 
 
 def test_cmd_stderr():
-  r = cmd("echo x >/dev/stderr")
+  r = sys_cmd_out_lines("echo x >/dev/stderr")
   assert_equal(r, [], "cmd() output should only cover stdout")
 
 

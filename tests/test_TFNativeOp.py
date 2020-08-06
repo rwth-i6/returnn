@@ -68,7 +68,7 @@ tf_compat.v1.set_random_seed(42)
 
 def sys_exec(*args, **kwargs):
   print("$ %s" % " ".join(args))
-  out = util.sysexec_out(*args, **kwargs)
+  out = util.sys_exec_out(*args, **kwargs)
   print(out)
 
 
@@ -157,7 +157,7 @@ def dump_info():
   print("Numpy path: %r" % numpy_path)
   print("Numpy config:")
   numpy.show_config()
-  so_files = util.sysexec_out("find %s | grep \"\.so\"" % numpy_path, shell=True)
+  so_files = util.sys_exec_out("find %s | grep \"\\.so\"" % numpy_path, shell=True)
   print("Numpy so files:\n---\n%s\n---\n" % so_files)
   so_files = [f for f in so_files.splitlines() if f]
   for f in so_files:
