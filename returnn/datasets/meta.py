@@ -886,7 +886,7 @@ class CombinedDataset(CachedDataset2):
 
     self.data_dtypes = {data_key: _select_dtype(data_key, self.data_dims, data_dtypes) for data_key in self.data_keys}
 
-    self.dataset_seq_idx_boundaries = None  # type: typing.Optional[typing.List[typing.Tuple[int,int]]]
+    self.dataset_seq_idx_boundaries = None  # type: typing.Optional[typing.List[int]]
     self.dataset_sorted_seq_idx_list = None  # type: typing.Optional[typing.List[typing.Tuple[int,int]]]
     self.used_num_seqs_per_subset = None  # type: typing.Optional[typing.List[int]]
 
