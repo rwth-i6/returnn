@@ -55,6 +55,7 @@ enable=indexing-exception,old-raise-syntax
 #    unbalanced-tuple-unpacking,undefined-variable,not-context-manager
 
 disable =
+    import-outside-toplevel
 
 # Set the cache size for astng objects.
 cache-size=500
@@ -147,7 +148,8 @@ bad-functions=apply,input,reduce
 module-rgx=(([a-z_][a-z0-9_]*)|([A-Z][a-zA-Z0-9]+))$
 
 # Regular expression which should only match correct module level names
-const-rgx=^(_?[A-Z][A-Z0-9_]*|__[a-z0-9_]+__|_?[a-z][a-z0-9_]*)$
+# const-rgx=^(_?[A-Z][A-Z0-9_]*|__[a-z0-9_]+__|_?[a-z][a-z0-9_]*)$
+const-rgx=^([A-Za-z0-9_]*)$
 
 # Regular expression which should only match correct class names
 class-rgx=^_?[A-Z][a-zA-Z0-9]*$
