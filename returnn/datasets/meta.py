@@ -1005,7 +1005,8 @@ class CombinedDataset(CachedDataset2):
     """
     # Create a list containing each dataset_idx dataset.num_seqs-times and shuffle it.
     dataset_ids = [self._seq_idx_to_dataset_seq_idx(seq_idx)[0] for seq_idx in range(total_num_seqs)]
-    rnd = self._get_random_seed_for_epoch(self.epoch)
+    rnd_seed = self._get_random_seed_for_epoch(self.epoch)
+    rnd = Random(rnd_seed)
     rnd.shuffle(dataset_ids)
 
     # Create the actual seq_order list.
