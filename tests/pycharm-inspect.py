@@ -87,12 +87,17 @@ def create_stub_dir(pycharm_dir, stub_dir):
   print("Generating Python stubs via helpers/generator3.py...")
   subprocess.check_call([sys.executable, "%s/helpers/generator3.py" % pycharm_dir, "-d", stub_dir, "-b"])
   print("Collecting further native modules...")
+  mod_names = []
   for line in subprocess.check_output([
         sys.executable, "%s/helpers/generator3.py" % pycharm_dir, "-L"]).decode("utf8").splitlines()[1:]:
     # First line is version, so we skipped those.
     # Then we get sth like "<module name> <other things>...".
     assert isinstance(line, str)
     mod_name = line.split()[0]
+    # There are duplicates. Ignore.
+    if mod_name not in mod_names:
+      mod_names.append(mod_name)
+  for mod_name in mod_names:
     # Ignore errors here.
     subprocess.call([sys.executable, "%s/helpers/generator3.py" % pycharm_dir, "-d", stub_dir, mod_name])
   print("travis_fold:end:script.create_python_stubs")
