@@ -936,7 +936,7 @@ class StaticDataset(GeneratingDataset):
     :param str key:
     :rtype: str
     """
-    return self.data[0][key].dtype
+    return str(self.data[0][key].dtype)
 
 
 class CopyTaskDataset(GeneratingDataset):
