@@ -2361,7 +2361,7 @@ def pip_install(*pkg_names):
   cmd = [py, pip_path, "install"]
   if not in_virtual_env:
     cmd += ["--user"]
-  cmd += ["-v"] + list(pkg_names)
+  cmd += list(pkg_names)
   print("$ %s" % " ".join(cmd))
   subprocess.check_call(cmd, cwd="/")
   _pip_installed_packages.clear()  # force reload
