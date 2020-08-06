@@ -15,6 +15,8 @@ import subprocess
 import tempfile
 from glob import glob
 import argparse
+from xml.dom import minidom
+from xml.etree import ElementTree
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 base_dir = os.path.dirname(my_dir)
@@ -60,6 +62,22 @@ def get_version_str_from_pycharm(pycharm_dir):
   return m.group(1)
 
 
+def parse_pycharm_version(version_str):
+  """
+  :param str version_str: e.g. "CE2018.3"
+  :rtype: ((int,int),str)
+  :return: e.g. (2018,3),"CE"
+  """
+  name = ""
+  if version_str.startswith("CE"):
+    name = "CE"
+    version_str = version_str[2:]
+  assert version_str.startswith("2")
+  version_str_parts = version_str.split(".")
+  assert len(version_str_parts) == 2, "version %r" % version_str
+  return tuple([int(p) for p in version_str_parts]), name
+
+
 def create_stub_dir(pycharm_dir, stub_dir):
   """
   :param str pycharm_dir:
@@ -96,14 +114,21 @@ def setup_pycharm_python_interpreter(pycharm_dir):
   :param str pycharm_dir:
   """
   print("travis_fold:start:script.setup_pycharm_python_interpreter")
+  print("Setup PyCharm Python interpreter... (jdk.table.xml)")
+  print("Current Python:", sys.executable, sys.version, sys.version_info)
   name = "Python 3 (.../bin/python3)"  # used in our PyCharm.idea. this should match.
-  pycharm_version = get_version_str_from_pycharm(pycharm_dir)  # should match in install_pycharm.sh
+  pycharm_version_str = get_version_str_from_pycharm(pycharm_dir)  # should match in install_pycharm.sh
+  pycharm_version, pycharm_version_name = parse_pycharm_version(pycharm_version_str)
   if sys.platform == "darwin":
-    pycharm_config_dir = os.path.expanduser("~/Library/Preferences/PyCharm%s" % pycharm_version)
-    pycharm_system_dir = os.path.expanduser("~/Library/Caches/PyCharm%s" % pycharm_version)
+    pycharm_config_dir = os.path.expanduser("~/Library/Preferences/PyCharm%s" % pycharm_version_str)
+    pycharm_system_dir = os.path.expanduser("~/Library/Caches/PyCharm%s" % pycharm_version_str)
   else:  # assume Linux/Unix
-    pycharm_config_dir = os.path.expanduser("~/.PyCharm%s/config" % pycharm_version)
-    pycharm_system_dir = os.path.expanduser("~/.PyCharm%s/system" % pycharm_version)
+    if pycharm_version[0] >= 2020:  # not sure since when...
+      pycharm_config_dir = os.path.expanduser("~/.config/JetBrains/PyCharm%s/config" % pycharm_version_str)
+      pycharm_system_dir = os.path.expanduser("~/.config/JetBrains/PyCharm%s/system" % pycharm_version_str)
+    else:  # <= 2020
+      pycharm_config_dir = os.path.expanduser("~/.PyCharm%s/config" % pycharm_version_str)
+      pycharm_system_dir = os.path.expanduser("~/.PyCharm%s/system" % pycharm_version_str)
 
   # I just zipped the stubs from my current installation on Linux.
   # Maybe we can also reuse these stubs for other PyCharm versions, or even other Python versions.
@@ -136,7 +161,6 @@ def setup_pycharm_python_interpreter(pycharm_dir):
   print("Filename:", jdk_table_fn)
   os.makedirs(os.path.dirname(jdk_table_fn), exist_ok=True)
 
-  import xml.etree.ElementTree as ElementTree
   if os.path.exists(jdk_table_fn):
     print("Loading existing jdk.table.xml.")
     et = ElementTree.parse(jdk_table_fn)
@@ -193,8 +217,10 @@ def setup_pycharm_python_interpreter(pycharm_dir):
   paths_root = ElementTree.SubElement(jdk_entry, "roots")
   classes_paths = ElementTree.SubElement(ElementTree.SubElement(paths_root, "classPath"), "root", type="composite")
   relevant_paths = list(sys.path)
-  if os.getcwd() in relevant_paths:
-    relevant_paths.remove(os.getcwd())
+  if base_dir in relevant_paths:
+    relevant_paths.remove(base_dir)
+  if my_dir in relevant_paths:
+    relevant_paths.remove(my_dir)
   relevant_paths.extend([
     stub_dir,
     "$APPLICATION_HOME_DIR$/helpers/python-skeletons",
@@ -211,6 +237,13 @@ def setup_pycharm_python_interpreter(pycharm_dir):
 
   print("Save XML.")
   et.write(jdk_table_fn, encoding="UTF-8")
+
+  print("travis_fold:start:script.jdk_table")
+  print("XML content:")
+  rough_string = ElementTree.tostring(root, 'utf-8')
+  print(minidom.parseString(rough_string).toprettyxml(indent="  "))
+  print("travis_fold:end:script.jdk_table")
+
   print("travis_fold:end:script.setup_pycharm_python_interpreter")
 
 
@@ -285,7 +318,6 @@ def report_inspect_xml(fn):
   </problems>
   """
   inspect_class = os.path.splitext(os.path.basename(fn))[0]  # e.g. "PyPackageRequirementsInspection"
-  import xml.etree.ElementTree as ElementTree
   root = ElementTree.parse(fn).getroot()
   assert isinstance(root, ElementTree.Element)
   assert root.tag == "problems"
@@ -333,10 +365,14 @@ def report_inspect_dir(path,
   inspect_class_not_counted = set(inspect_class_not_counted or ())
 
   # maybe update inspect_class_not_counted
+  from lint_common import find_all_py_source_files
+  relevant_py_source_files = set(find_all_py_source_files())
   all_files = set()
   relevant_inspections_for_file = set()
   for filename, line, problem_severity, inspect_class, description in inspections:
     all_files.add(filename)
+    if filename not in relevant_py_source_files:
+      continue
     if inspect_class in inspect_class_blacklist:
       continue
     if inspect_class in inspect_class_not_counted:
@@ -403,7 +439,9 @@ def main():
   from lint_common import ignore_count_for_files
   inspect_kwargs = dict(
     inspect_class_blacklist={
-      "PyInterpreterInspection",  # TODO how to select this in PyCharm.idea?
+      # PyInterpreterInspection: This inspection notifies you if the current project has no Python interpreter
+      # configured or an invalid Python interpreter.
+      # "PyInterpreterInspection",  # TODO how to select this in PyCharm.idea?
       "SpellCheckingInspection",  # way too much for now... TODO this should be fixed later, probably in PyCharm.idea
       "PyClassHasNoInitInspection",  # not relevant?
     },
