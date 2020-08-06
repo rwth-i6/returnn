@@ -65,14 +65,15 @@ class NumpyDumpDataset(Dataset):
 
   # ------------ Dataset API --------------
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :param int|None epoch:
     :param list[str]|None seq_list:
+    :param list[int]|None seq_order:
     :rtype: bool
     """
-    super(NumpyDumpDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
-    if seq_list:
+    super(NumpyDumpDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+    if seq_list or seq_order:
       raise NotImplementedError
     if self.seq_ordering == "sorted":  # not supported atm
       self.seq_ordering = "default"

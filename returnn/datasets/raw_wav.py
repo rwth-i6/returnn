@@ -206,22 +206,23 @@ class RawWavDataset(CachedDataset2):
     assert len(self.added_data[0].get_data(key).shape) == 2
     return self.added_data[0].get_data(key).shape[1]
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :type epoch: int|None
     :param epoch: epoch number
-    :type seq_list: list[str] | None seq_list: In case we want to set a predefined order.
+    :param list[str]|None seq_list:
+    :param list[int]|None seq_order:
     :param seq_list: only None is currently supported
     Initialize lists:
       self.seq_index  # sorted seq idx
     """
-    super(RawWavDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    super(RawWavDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
 
     if epoch is None:
         self._seq_index_list = range(self.num_seqs)
         return True
 
-    if seq_list:
+    if seq_list or seq_order:
       raise NotImplementedError('init_seq_order of RawWavDataset does not support a predefined seq_list yet.')
     else:
       seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, lambda s: self.get_seq_length(s).get('data', None))

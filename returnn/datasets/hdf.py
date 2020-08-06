@@ -568,14 +568,17 @@ class NextGenHDFDataset(CachedDataset2):
 
     super(NextGenHDFDataset, self).initialize()
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :type epoch: int|None
-    :param list[str] | None seq_list: In case we want to set a predefined order.
+    :param list[str]|None seq_list: List of sequence tags, to set a predefined order.
+    :param list[int]|None seq_order: List of corpus sequence indices, to set a predefined order.
     """
-    super(NextGenHDFDataset, self).init_seq_order(epoch, seq_list)
+    super(NextGenHDFDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
 
-    if seq_list is not None:
+    if seq_order is not None:
+      self.seq_order = seq_order
+    elif seq_list is not None:
       self.seq_order = [self.seq_name_to_idx[s] for s in seq_list]
     else:
       epoch = epoch or 1
@@ -745,14 +748,17 @@ class SiameseHDFDataset(CachedDataset2):
 
     super(SiameseHDFDataset, self).initialize()
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :param int|None epoch: current epoch id
-    :param list[str] | None seq_list: In case we want to set a predefined order.
+    :param list[str]|None seq_list: List of sequence tags, to set a predefined order.
+    :param list[int]|None seq_order: List of corpus sequence indices, to set a predefined order.
     """
-    super(SiameseHDFDataset, self).init_seq_order(epoch, seq_list)
+    super(SiameseHDFDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
 
-    if seq_list is not None:
+    if seq_order is not None:
+      self.seq_order = seq_order
+    elif seq_list is not None:
       self.seq_order = [self.seq_name_to_idx[s] for s in seq_list]
     else:
       epoch = epoch or 1
