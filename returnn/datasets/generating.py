@@ -938,6 +938,14 @@ class StaticDataset(GeneratingDataset):
     """
     return str(self.data[0][key].dtype)
 
+  def is_data_sparse(self, key):
+    """
+    :param str key:
+    :rtype: bool
+    """
+    data_type = self.get_data_dtype(key)
+    return data_type.startswith("int")
+
 
 class CopyTaskDataset(GeneratingDataset):
   """
