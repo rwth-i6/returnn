@@ -88,8 +88,8 @@ env:
 
 matrix:
   include:
-    - env: RUN=tests/pylint.py
-    - env: RUN=tests/pycharm-inspect.py
+    - env: RUN=tests/pylint.py TF_PACKAGE=tensorflow==2.3.0
+    - env: RUN=tests/pycharm-inspect.py TF_PACKAGE=tensorflow==2.3.0
     - env: TEST=TFEngine TF_PACKAGE=tensorflow
     - env: TEST=TFNativeOp TF_PACKAGE=tensorflow
     - env: TEST=TFNetworkLayer TF_PACKAGE=tensorflow
@@ -106,8 +106,8 @@ matrix:
     - env: TEST=TFUpdater TF_PACKAGE=tensorflow==2.3.0
     - env: TEST=TFUtil TF_PACKAGE=tensorflow==2.3.0
   allow_failures:
-    - env: RUN=tests/pylint.py
-    - env: RUN=tests/pycharm-inspect.py
+    - env: RUN=tests/pylint.py TF_PACKAGE=tensorflow==2.3.0
+    - env: RUN=tests/pycharm-inspect.py TF_PACKAGE=tensorflow==2.3.0
     # Also check with latest TF version. Allow failures until we explicitly tested it.
     - env: TEST=TFEngine TF_PACKAGE=tensorflow
     - env: TEST=TFNativeOp TF_PACKAGE=tensorflow
