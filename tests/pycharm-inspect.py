@@ -129,7 +129,7 @@ def create_stub_dir(pycharm_dir, stub_dir, pycharm_major_version):
       print("Generate for %r." % mod_name)
       # Ignore errors here.
       subprocess.call([sys.executable, generator_path, "-d", stub_dir, mod_name])
-    print("travis_fold:end:script.create_python_stubs")
+  print("travis_fold:end:script.create_python_stubs")
 
 
 _use_stub_zip = False
@@ -305,6 +305,10 @@ def prepare_src_dir(files=None):
   os.symlink("%s/PyCharm.idea" % my_dir, "%s/.idea" % src_tmp_dir)
   for fn in files:
     os.symlink(os.path.abspath(fn), "%s/%s" % (src_tmp_dir, os.path.basename(fn)))
+  with open("%s/requirements.txt" % src_tmp_dir, "w") as f:
+    # We could ignore PyPackageRequirementsInspection. But instead, just whitelist all used packages.
+    for pkg in ["tensorflow", "theano", "numpy", "scipy", "librosa", "h5py", "horovod", "nltk"]:
+      f.write("%s\n" % pkg)
   print("All source files:")
   subprocess.check_call(["ls", "-la", src_tmp_dir])
   print("travis_fold:end:script.prepare")
