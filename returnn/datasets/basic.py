@@ -540,10 +540,12 @@ class Dataset(object):
       full_epoch = (full_epoch - 1) // partition_epoch + 1
     return full_epoch + self.random_seed_offset
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :type epoch: int|None
-    :param list[str] | None seq_list: In case we want to set a predefined order.
+    :param list[str]|None seq_list: List of sequence tags, to set a predefined order.
+    :param list[int]|None seq_order: List of corpus sequence indices, to set a predefined order. Only possible
+      if the dataset has such indices (see self.have_corpus_seq_idx()).
     :rtype: bool
     :returns whether the order changed (True is always safe to return)
 

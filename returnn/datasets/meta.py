@@ -326,21 +326,24 @@ class MetaDataset(CachedDataset2):
 
     return self.datasets[self.default_dataset_key].get_seq_length(seq_idx)["data"]
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :param int|None epoch:
-    :param list[str]|None seq_list:
+    :param list[str]|None seq_list: List of sequence tags, to set a predefined order.
+    :param list[int]|None seq_order: List of corpus sequence indices, to set a predefined order.
     :rtype: bool
     """
     need_reinit = self.epoch is None or self.epoch != epoch or seq_list
-    super(MetaDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    super(MetaDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
 
     if not need_reinit:
       self._num_seqs = len(self.seq_list_ordered[self.default_dataset_key])
       return False
 
     seq_order_dataset = None
-    if seq_list:
+    if seq_order:
+      seq_index = seq_order
+    elif seq_list:
       seq_index = [self.tag_idx[tag] for tag in seq_list]
     elif self.seq_order_control_dataset:
       seq_order_dataset = self.datasets[self.seq_order_control_dataset]
@@ -523,14 +526,15 @@ class ClusteringDataset(CachedDataset2):
       cluster_map[seq_name] = cluster_idx
     return cluster_map
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :param int epoch:
-    :param list[str]|int seq_list:
+    :param list[str]|None seq_list: List of sequence tags, to set a predefined order.
+    :param list[int]|None seq_order: List of corpus sequence indices, to set a predefined order.
     :rtype: bool
     """
-    self.dataset.init_seq_order(epoch=epoch, seq_list=seq_list)
-    return super(ClusteringDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    self.dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+    return super(ClusteringDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
 
   def get_data_keys(self):
     """
@@ -656,17 +660,20 @@ class ConcatDataset(CachedDataset2):
       assert ds.num_outputs == self.num_outputs
     self.dataset_seq_idx_offsets = None  # type: typing.Optional[typing.List[int]]
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :type epoch: int|None
-    :param list[str] | None seq_list: In case we want to set a predefined order.
+    :param list[str]|None seq_list: List of sequence tags, to set a predefined order.
+    :param list[int]|None seq_order: List of corpus sequence indices, to set a predefined order.
     """
     need_reinit = self.epoch is None or self.epoch != epoch
-    super(ConcatDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    super(ConcatDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
     self.dataset_seq_idx_offsets = [0]
     if not need_reinit:
       return False
 
+    if seq_order:
+      raise NotImplementedError("Predefined order via sequence indices for ConcatDataset")
     if seq_list:  # reference order
       seq_lists = []
       for dataset in self.datasets:
@@ -890,17 +897,18 @@ class CombinedDataset(CachedDataset2):
     self.dataset_sorted_seq_idx_list = None  # type: typing.Optional[typing.List[typing.Tuple[int,int]]]
     self.used_num_seqs_per_subset = None  # type: typing.Optional[typing.List[int]]
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :param int epoch:
     :param list[str]|None seq_list:
+    :param list[int]|None seq_order:
     :rtype: bool
     """
 
-    assert seq_list is None, "seq_list not supported for %s" % self.__class__
+    assert seq_list is None and seq_order is None, "seq_list and seq_order not supported for %s" % self.__class__
     need_reinit = self.epoch is None or self.epoch != epoch
     num_seqs_saved = self._num_seqs
-    super(CombinedDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)  # resets self._num_seqs
+    super(CombinedDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)  # resets num_seqs
 
     if not need_reinit:
       self._num_seqs = num_seqs_saved
@@ -1296,14 +1304,15 @@ class ConcatSeqsDataset(CachedDataset2):
     assert len(ls) == len(self.full_seq_list)
     return ls
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :param int epoch:
     :param list[str]|None seq_list:
+    :param list[int]|None seq_order:
     :rtype: bool
     """
-    super(ConcatSeqsDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
-    assert not seq_list  # not implemented
+    super(ConcatSeqsDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+    assert not seq_list and not seq_order  # not implemented
     if not seq_list:
       def get_seq_len(i):
         """
@@ -1449,20 +1458,21 @@ class ChunkShuffleDataset(CachedDataset2):
     self.rng = Random(0)
     self.load_seqs_end = None
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :type epoch: int|None
-    :param list[str] | None seq_list: In case we want to set a predefined order.
+    :param list[str]|None seq_list:
+    :param list[int]|None seq_order:
     """
     need_reinit = self.epoch is None or self.epoch != epoch
-    super(ChunkShuffleDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    super(ChunkShuffleDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
     self.load_seqs_end = 0
     self.dataset_last_load_seq_end = 0
     self.rng.seed(epoch or 1)
     if not need_reinit:
       return False
 
-    if seq_list:
+    if seq_list or seq_order:
       raise NotImplementedError("predefined order seq_list")
     if self.seq_ordering != "default":
       raise NotImplementedError("seq_ordering %s" % self.seq_ordering)

@@ -37,17 +37,19 @@ class CachedDataset2(Dataset):
     self.expected_load_seq_start = 0
     self._num_timesteps_accumulated = 0
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :param int|None epoch:
-    :param list[str] | None seq_list: In case we want to set a predefined order.
+    :param list[str]|None seq_list: List of sequence tags, to set a predefined order.
+    :param list[int]|None seq_order: List of corpus sequence indices, to set a predefined order. Only possible
+      if the dataset has such indices (see self.have_corpus_seq_idx()).
     :rtype: bool
     :returns whether the order changed (True is always safe to return)
 
     This is called when we start a new epoch, or at initialization.
     Call this when you reset the seq list.
     """
-    super(CachedDataset2, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    super(CachedDataset2, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
     if not epoch:
       epoch = 1
     self.expected_load_seq_start = 0
@@ -305,13 +307,14 @@ class SingleStreamPipeDataset(CachedDataset2):
     """
     return self.dtype
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :param int epoch:
     :param list[str]|None seq_list:
+    :param list[int]|None seq_order:
     :rtype: bool
     """
-    assert not seq_list
+    assert not seq_list and not seq_order
     super(SingleStreamPipeDataset, self).init_seq_order(epoch=epoch)
     with self.condition:
       self.producer_seq_idx = 0

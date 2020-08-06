@@ -45,14 +45,15 @@ class GeneratingDataset(Dataset):
     self.reached_final_seq = False
     self.added_data = []  # type: typing.List[DatasetSeq]
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :type epoch: int|None
-    :param seq_list: predefined order. doesn't make sense here
+    :param list[str]|None seq_list: predefined order via tags, doesn't make sense here
+    :param list[int]|None seq_order: predefined order via indices, doesn't make sense here
     This is called when we start a new epoch, or at initialization.
     """
     super(GeneratingDataset, self).init_seq_order(epoch=epoch)
-    assert not seq_list, "predefined order doesn't make sense for %s" % self.__class__.__name__
+    assert not seq_list and not seq_order, "predefined order doesn't make sense for %s" % self.__class__.__name__
     self.random.seed(self.fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch))
     self._num_timesteps = 0
     self.reached_final_seq = False
@@ -1770,14 +1771,15 @@ class TimitDataset(CachedDataset2):
     stream.close()
     p.terminate()
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :param int epoch:
     :param list[str]|None seq_list:
+    :param list[int]|None seq_order:
     :rtype: bool
     """
-    assert seq_list is None
-    super(TimitDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    assert seq_list is None and seq_order is None
+    super(TimitDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
     self._num_seqs = len(self._seq_tags)
     self._seq_order = self.get_seq_order_for_epoch(
       epoch=epoch, num_seqs=self._num_seqs, get_seq_len=lambda i: len(self._seq_tags[i][1]))
@@ -2378,14 +2380,15 @@ class BlissDataset(CachedDataset2):
         name_tree = name_tree[:-1]
     self._num_seqs = len(self._seqs)
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :param int|None epoch:
-    :param list[str] | None seq_list: In case we want to set a predefined order.
+    :param list[str]|None seq_list: Predefined order via list of tags, not used here.
+    :param list[int]|None seq_order: Predefined order via list of indices, not used here.
     :rtype: bool
     :returns whether the order changed (True is always safe to return)
     """
-    super(BlissDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    super(BlissDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
     self._num_seqs = len(self._seqs)
     return True
 
@@ -2543,18 +2546,19 @@ class LibriSpeechCorpus(CachedDataset2):
     assert transs
     return transs
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     If random_shuffle_epoch1, for epoch 1 with "random" ordering, we leave the given order as is.
     Otherwise, this is mostly the default behavior.
 
     :param int|None epoch:
-    :param list[str]|None seq_list: In case we want to set a predefined order.
+    :param list[str]|None seq_list: List of sequence tags, to set a predefined order.
+    :param list[int]|None seq_order: List of corpus sequence indices, to set a predefined order.
     :rtype: bool
     :returns whether the order changed (True is always safe to return)
     """
     import returnn.util.basic
-    super(LibriSpeechCorpus, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    super(LibriSpeechCorpus, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
     if not epoch:
       epoch = 1
     self._audio_random.seed(self._fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch))
@@ -2566,18 +2570,19 @@ class LibriSpeechCorpus(CachedDataset2):
       """
       return len(self.transs[self._reference_seq_order[i]])
 
-    if seq_list is not None:
+    if seq_order is not None:
+      self._seq_order = seq_order
+    elif seq_list is not None:
       seqs = [i for i in range(len(self._reference_seq_order)) if self._get_tag(i) in seq_list]
       seqs = {self._get_tag(i): i for i in seqs}
       for seq_tag in seq_list:
         assert seq_tag in seqs, "did not found all requested seqs. we have eg: %s" % (self._get_tag(0),)
       self._seq_order = [seqs[seq_tag] for seq_tag in seq_list]
-      self._num_seqs = len(self._seq_order)
     else:
       num_seqs = len(self._reference_seq_order)
       self._seq_order = self.get_seq_order_for_epoch(
         epoch=epoch, num_seqs=num_seqs, get_seq_len=get_seq_len)
-      self._num_seqs = len(self._seq_order)
+    self._num_seqs = len(self._seq_order)
     if self.epoch_wise_filter:
       # Note: A more generic variant of this code is :class:`MetaDataset.EpochWiseFilter`.
       from .meta import EpochWiseFilter
@@ -2949,17 +2954,18 @@ class OggZipDataset(CachedDataset2):
     seqs = seqs[:fixed_random_subset]
     self._data = seqs
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     If random_shuffle_epoch1, for epoch 1 with "random" ordering, we leave the given order as is.
     Otherwise, this is mostly the default behavior.
 
     :param int|None epoch:
-    :param list[str]|None seq_list: In case we want to set a predefined order.
+    :param list[str]|None seq_list: List of sequence tags, to set a predefined order.
+    :param list[int]|None seq_order: List of corpus sequence indices, to set a predefined order.
     :rtype: bool
     :returns whether the order changed (True is always safe to return)
     """
-    super(OggZipDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    super(OggZipDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
     if not epoch:
       epoch = 1
     self._audio_random.seed(self._fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch))
@@ -2974,7 +2980,9 @@ class OggZipDataset(CachedDataset2):
       """
       return int(self._data[i]["duration"] * 100)
 
-    if seq_list is not None:
+    if seq_order is not None:
+      self._seq_order = seq_order
+    elif seq_list is not None:
       seqs = {
         self._get_tag_from_info_dict(seq): i for i, seq in enumerate(self._data)
         if self._get_tag_from_info_dict(seq) in seq_list}
@@ -2982,7 +2990,6 @@ class OggZipDataset(CachedDataset2):
         assert seq_tag in seqs, ("did not found all requested seqs. we have eg: %s" % (
           self._get_tag_from_info_dict(self._data[0]),))
       self._seq_order = [seqs[seq_tag] for seq_tag in seq_list]
-      self._num_seqs = len(self._seq_order)
     else:
       num_seqs = len(self._data)
       self._seq_order = self.get_seq_order_for_epoch(
@@ -2990,7 +2997,7 @@ class OggZipDataset(CachedDataset2):
       if self.epoch_wise_filter:
         self.epoch_wise_filter.debug_msg_prefix = str(self)
         self._seq_order = self.epoch_wise_filter.filter(epoch=epoch, seq_order=self._seq_order, get_seq_len=get_seq_len)
-      self._num_seqs = len(self._seq_order)
+    self._num_seqs = len(self._seq_order)
 
     return True
 
@@ -3168,13 +3175,14 @@ class Enwik8Corpus(CachedDataset2):
     """
     return "uint8"
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :param int epoch:
     :param list[str]|None seq_list:
+    :param list[int]|None seq_order:
     :rtype: bool
     """
-    super(Enwik8Corpus, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    super(Enwik8Corpus, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
     if not epoch:
       epoch = 1
     epoch_part = None

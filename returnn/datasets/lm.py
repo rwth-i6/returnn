@@ -239,13 +239,14 @@ class LmDataset(CachedDataset2):
     """
     return self.dtype
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     If random_shuffle_epoch1, for epoch 1 with "random" ordering, we leave the given order as is.
     Otherwise, this is mostly the default behavior.
 
     :param int|None epoch:
-    :param list[str] | None seq_list: In case we want to set a predefined order.
+    :param list[str]|None seq_list: List of sequence tags, to set a predefined order.
+    :param list[int]|None seq_order: List of corpus sequence indices, to set a predefined order.
     :rtype: bool
     :returns whether the order changed (True is always safe to return)
     """
@@ -254,11 +255,13 @@ class LmDataset(CachedDataset2):
             "Please activate auto_replace_unknown_symbol if you want to prevent invalid sequences!",
             file=log.v4)
       self.error_on_invalid_seq = True
-    super(LmDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    super(LmDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
     if not epoch:
       epoch = 1
 
-    if seq_list is not None:
+    if seq_order is not None:
+      self.seq_order = seq_order
+    elif seq_list is not None:
       self.seq_order = [int(s[len(self._tag_prefix):]) for s in seq_list]
     else:
       self.seq_order = self.get_seq_order_for_epoch(
@@ -1366,23 +1369,26 @@ class TranslationDataset(CachedDataset2):
     """
     return "int32"  # sparse -> label idx
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     If random_shuffle_epoch1, for epoch 1 with "random" ordering, we leave the given order as is.
     Otherwise, this is mostly the default behavior.
 
     :param int|None epoch:
-    :param list[str] | None seq_list: In case we want to set a predefined order.
+    :param list[str]|None seq_list: List of sequence tags, to set a predefined order.
+    :param list[int]|None seq_order: List of corpus sequence indices, to set a predefined order.
     :rtype: bool
     :returns whether the order changed (True is always safe to return)
     """
-    super(TranslationDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    super(TranslationDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
     if not epoch:
       epoch = 1
 
     if seq_list is None and self.seq_list:
       seq_list = self.seq_list
-    if seq_list is not None:
+    if seq_order:
+      self._seq_order = seq_order
+    elif seq_list is not None:
       self._seq_order = [int(s[len(self._tag_prefix):]) for s in seq_list]
     else:
       num_seqs = self._get_data_len()

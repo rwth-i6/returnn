@@ -174,11 +174,13 @@ class SprintDatasetBase(Dataset):
       self.sprint_finalized = True
       self.cond.notify_all()
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     Called by RETURNN train thread when we enter a new epoch.
     """
-    super(SprintDatasetBase, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    if seq_order:
+      raise NotImplementedError("Predefined sequence order via indices in SprintDataset.")
+    super(SprintDatasetBase, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
     with self.lock:
       self.returnn_epoch = epoch
       self.predefined_seq_list_order = seq_list
@@ -954,12 +956,15 @@ class ExternSprintDataset(SprintDatasetBase):
           # Exceptions are fatal. If we can recover, we should handle it in run_inner().
           interrupt_main()
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :param int epoch:
     :param list[str]|None seq_list:
+    :param list[int]|None seq_order:
     :rtype: bool
     """
+    if seq_order:
+      raise NotImplementedError("Predefined sequence order via indices in ExternSprintDataset.")
     if seq_list:
       assert self.partition_epoch == 1, "specifying partition_epoch and using seq_list not supported"
     if epoch is None:
@@ -971,14 +976,14 @@ class ExternSprintDataset(SprintDatasetBase):
         seq_list == self.predefined_seq_list_order):
         return
       # Reset epoch such that exiting the child will go smoothly.
-      super(ExternSprintDataset, self).init_seq_order(epoch=None, seq_list=None)
+      super(ExternSprintDataset, self).init_seq_order(epoch=None, seq_list=None, seq_order=None)
     # Exit child, before we overwrite anything, such as new epoch or seq_list.
     self._exit_child(wait_thread=True)
     with self.lock:  # Lock should not be needed now, but just to make it clean.
       if self._num_seqs:
         self._estimated_num_seqs = self._num_seqs  # last epoch num_seqs is a good estimate
       self._num_seqs = None  # we are not certain whether we have the same num_seqs for this epoch
-      super(ExternSprintDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+      super(ExternSprintDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
     self._start_child(epoch)
     return True
 
@@ -1111,15 +1116,16 @@ class SprintCacheDataset(CachedDataset2):
         k1 = sorted_list1[i]
         assert k0 == k1
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :param int epoch:
     :param list[str]|None seq_list:
+    :param list[int]|None seq_order:
     :rtype: bool
     """
-    assert not seq_list
+    assert not seq_list and not seq_order
     need_reinit = self.epoch is None or self.epoch != epoch
-    super(SprintCacheDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    super(SprintCacheDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
     if not need_reinit:
       return False
     self._num_seqs = len(self.seq_list_original)

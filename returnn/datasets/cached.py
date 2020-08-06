@@ -59,15 +59,18 @@ class CachedDataset(Dataset):
             max(temp_cache_size_bytes / float(1024 * 1024 * 1024), 0),
             file=log.v4)
 
-  def init_seq_order(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
     :type epoch: int|None
-    :param list[str] | None seq_list: In case we want to set a predefined order.
+    :param list[str]|None seq_list: List of sequence tags, to set a predefined order.
+    :param list[int]|None seq_order: List of corpus sequence indices, to set a predefined order.
     Initialize lists:
       self.seq_index  # sorted seq idx
     """
-    super(CachedDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
-    if seq_list is not None:
+    super(CachedDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+    if seq_order is not None:
+      seq_index = seq_order
+    elif seq_list is not None:
       self._update_tag_idx()
       seq_index = [self._tag_idx[tag] for tag in seq_list]
     else:
