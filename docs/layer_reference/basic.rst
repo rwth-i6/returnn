@@ -7,131 +7,131 @@ Basic Layers
 Accumulate Mean Layer
 ---------------------
 
-.. autoclass:: TFNetworkLayer.AccumulateMeanLayer
+.. autoclass:: returnn.tf.layers.basic.AccumulateMeanLayer
     :members:
     :undoc-members:
 
 Activation Layer
 ----------------
 
-.. autoclass:: TFNetworkLayer.ActivationLayer
+.. autoclass:: returnn.tf.layers.basic.ActivationLayer
     :members:
     :undoc-members:
 
 Combine Layer
 -------------
 
-.. autoclass:: TFNetworkLayer.CombineLayer
+.. autoclass:: returnn.tf.layers.basic.CombineLayer
     :members:
     :undoc-members:
 
 Compare Layer
 -------------
 
-.. autoclass:: TFNetworkLayer.CompareLayer
+.. autoclass:: returnn.tf.layers.basic.CompareLayer
     :members:
     :undoc-members:
 
 Constant Layer
 --------------
 
-.. autoclass:: TFNetworkLayer.ConstantLayer
+.. autoclass:: returnn.tf.layers.basic.ConstantLayer
     :members:
 
 Convolution Layer
 -----------------
 
-.. autoclass:: TFNetworkLayer.ConvLayer
+.. autoclass:: returnn.tf.layers.basic.ConvLayer
     :members:
     :undoc-members:
 
 Copy Layer
 ----------
 
-.. autoclass:: TFNetworkLayer.CopyLayer
+.. autoclass:: returnn.tf.layers.basic.CopyLayer
     :members:
     :undoc-members:
 
 Cumulative Sum Layer
 --------------------
 
-.. autoclass:: TFNetworkLayer.CumsumLayer
+.. autoclass:: returnn.tf.layers.basic.CumsumLayer
     :members:
     :undoc-members:
 
 Dot Layer
 ---------
 
-.. autoclass:: TFNetworkLayer.DotLayer
+.. autoclass:: returnn.tf.layers.basic.DotLayer
     :members:
     :undoc-members:
 
 Elementwise Product Layer
 -------------------------
 
-.. autoclass:: TFNetworkLayer.ElemwiseProdLayer
+.. autoclass:: returnn.tf.layers.basic.ElemwiseProdLayer
     :members:
     :undoc-members:
 
 Gating Layer
 ------------
 
-.. autoclass:: TFNetworkLayer.GatingLayer
+.. autoclass:: returnn.tf.layers.basic.GatingLayer
     :members:
     :undoc-members:
 
 Linear Layer
 ------------
 
-.. autoclass:: TFNetworkLayer.LinearLayer
+.. autoclass:: returnn.tf.layers.basic.LinearLayer
     :members:
     :undoc-members:
 
 Pooling Layer
 -------------
 
-.. autoclass:: TFNetworkLayer.PoolLayer
+.. autoclass:: returnn.tf.layers.basic.PoolLayer
     :members:
     :undoc-members:
 
 Reduce Layer
 ------------
 
-.. autoclass:: TFNetworkLayer.ReduceLayer
+.. autoclass:: returnn.tf.layers.basic.ReduceLayer
     :members:
     :undoc-members:
 
 Reduce-Out Layer
 ----------------
 
-.. autoclass:: TFNetworkLayer.ReduceOutLayer
+.. autoclass:: returnn.tf.layers.basic.ReduceOutLayer
     :members:
     :undoc-members:
 
 Switch Layer
 ------------
 
-.. autoclass:: TFNetworkLayer.SwitchLayer
+.. autoclass:: returnn.tf.layers.basic.SwitchLayer
     :members:
     :undoc-members:
 
 Variable Layer
 --------------
 
-.. autoclass:: TFNetworkLayer.VariableLayer
+.. autoclass:: returnn.tf.layers.basic.VariableLayer
     :members:
     :undoc-members:
 
 Weighted Sum Layer
 ------------------
 
-.. autoclass:: TFNetworkLayer.WeightedSumLayer
+.. autoclass:: returnn.tf.layers.basic.WeightedSumLayer
     :members:
     :undoc-members:
 
 Window Layer
 ------------
 
-.. autoclass:: TFNetworkLayer.WindowLayer
+.. autoclass:: returnn.tf.layers.basic.WindowLayer
     :members:
     :undoc-members:

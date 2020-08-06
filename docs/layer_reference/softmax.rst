@@ -7,20 +7,20 @@ Softmax Layers
 Batched Softmax Layer
 ---------------------
 
-.. autoclass:: TFNetworkLayer.BatchSoftmaxLayer
+.. autoclass:: returnn.tf.layers.basic.BatchSoftmaxLayer
     :members:
     :undoc-members:
 
 Softmax Layer
 -------------
 
-.. autoclass:: TFNetworkLayer.SoftmaxLayer
+.. autoclass:: returnn.tf.layers.basic.SoftmaxLayer
     :members:
     :undoc-members:
 
 Softmax-Over-Spatial Layer
 --------------------------
 
-.. autoclass:: TFNetworkLayer.SoftmaxOverSpatialLayer
+.. autoclass:: returnn.tf.layers.basic.SoftmaxOverSpatialLayer
     :members:
     :undoc-members:
