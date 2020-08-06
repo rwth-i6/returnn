@@ -2501,8 +2501,8 @@ def get_lsb_release():
   :rtype: dict[str,str]
   """
   d = {}
-  for l in open("/etc/lsb-release").read().splitlines():
-    k, v = l.split("=", 1)
+  for line in open("/etc/lsb-release").read().splitlines():
+    k, v = line.split("=", 1)
     if v[0] == v[-1] == "\"":
       v = v[1:-1]
     d[k] = v
@@ -2819,7 +2819,9 @@ def read_sge_num_procs(job_id=None):
   if proc.returncode:
     raise CalledProcessError(proc.returncode, sge_cmd, stdout)
   stdout = stdout.decode("utf8")
-  ls = [l[len("hard resource_list:"):].strip() for l in stdout.splitlines() if l.startswith("hard resource_list:")]
+  ls = [
+    line[len("hard resource_list:"):].strip()
+    for line in stdout.splitlines() if line.startswith("hard resource_list:")]
   assert len(ls) == 1
   opts = dict([opt.split("=", 1) for opt in ls[0].split(",")])
   try:
@@ -2924,9 +2926,10 @@ def get_gpu_names():
     return "GeForce GTX 770"  # TODO
   elif sys.platform == 'darwin':
     # TODO parse via xml output
-    return sys_cmd_out_lines("system_profiler SPDisplaysDataType | "
-               "grep 'Chipset Model: NVIDIA' | "
-               "sed 's/.*Chipset Model: NVIDIA *//;s/ *$//'")
+    return sys_cmd_out_lines(
+      "system_profiler SPDisplaysDataType | "
+      "grep 'Chipset Model: NVIDIA' | "
+      "sed 's/.*Chipset Model: NVIDIA *//;s/ *$//'")
   else:
     try:
       return sys_cmd_out_lines('nvidia-smi -L | cut -d \'(\' -f 1 | cut -d \' \' -f 3- | sed -e \'s/\\ $//\'')
