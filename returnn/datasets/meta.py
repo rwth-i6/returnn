@@ -1272,9 +1272,9 @@ class ConcatSeqsDataset(CachedDataset2):
     self.num_inputs = self.sub_dataset.num_inputs
     self.labels = self.sub_dataset.labels
     if use_cache_manager:
-      import Util
-      seq_list_file = Util.cf(seq_list_file)
-      seq_len_file = Util.cf(seq_len_file)
+      from returnn.util.basic import cf
+      seq_list_file = cf(seq_list_file)
+      seq_len_file = cf(seq_len_file)
     self._seq_order = None
     self.full_seq_list = open(seq_list_file).read().splitlines()
     self.seq_lens = eval(open(seq_len_file).read())
