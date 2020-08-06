@@ -14,7 +14,7 @@ sys.path.insert(0, base_dir)
 os.chdir(base_dir)
 
 from returnn.util import better_exchook  # noqa
-better_exchook.install()
+from returnn.util.basic import pip_install  # noqa
 
 py = sys.executable
 
@@ -70,4 +70,5 @@ def main():
 
 
 if __name__ == "__main__":
+  better_exchook.install()
   main()
