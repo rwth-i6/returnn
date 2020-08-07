@@ -245,9 +245,9 @@ def wrap_log_streams(alternative_stream, also_sys_stdout=False, tf_log_verbosity
     sys.stdout = alternative_stream
   orig_tf_log_verbosity = None
   if tf_log_verbosity is not None:
-    import tensorflow as tf
-    orig_tf_log_verbosity = tf.logging.get_verbosity()
-    tf.logging.set_verbosity(tf_log_verbosity)
+    import returnn.tf.compat as tf_compat
+    orig_tf_log_verbosity = tf_compat.v1.logging.get_verbosity()
+    tf_compat.v1.logging.set_verbosity(tf_log_verbosity)
   try:
     yield orig_v_attribs["v1"], alternative_stream
   finally:
@@ -258,5 +258,5 @@ def wrap_log_streams(alternative_stream, also_sys_stdout=False, tf_log_verbosity
     if also_sys_stdout:
       sys.stdout = orig_stdout
     if tf_log_verbosity is not None:
-      import tensorflow as tf
-      tf.logging.set_verbosity(orig_tf_log_verbosity)
+      import returnn.tf.compat as tf_compat
+      tf_compat.v1.logging.set_verbosity(orig_tf_log_verbosity)
