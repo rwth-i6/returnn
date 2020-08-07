@@ -609,10 +609,6 @@ def main():
       # False alarms.
       "PyTypeCheckerInspection",  # too much false alarms: https://youtrack.jetbrains.com/issue/PY-34893
 
-      # Most of the times these are valid.
-      # Unfortunately there are some rare cases where these report false alarms as well...
-      "PyArgumentListInspection",  # Numpy false alarms: Parameter 'd0' unfilled, ...
-
       # Not critical.
       "SpellCheckingInspection",  # way too much for now...
       "PyClassHasNoInitInspection",  # not relevant?
