@@ -537,6 +537,8 @@ def report_inspect_dir(inspect_xml_dir,
   file_count = None
   last_filename = None
   for filename, line, problem_severity, inspect_class, description in inspections:
+    if filename not in returnn_py_source_files:
+      continue  # for now, to not spam Travis too much
     if inspect_class in inspect_class_blacklist:
       continue
 
