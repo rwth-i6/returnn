@@ -99,9 +99,9 @@ class Log:
       'verbose': logging.Formatter('%(levelname)s - %(asctime)s %(message)s', datefmt='%Y-%m-%d,%H:%M:%S.%MS')
     }
     self.v = [logging.getLogger('v' + str(v)) for v in range(6)]
-    for l in self.v:
+    for logger in self.v:
       # Reset handler list, in case we have initialized some earlier (e.g. multiple log.initialize() calls).
-      l.handlers = []
+      logger.handlers = []
     if 'stdout' not in logs:
       logs.append('stdout')
     if len(formatter) == 1:
@@ -249,7 +249,7 @@ def wrap_log_streams(alternative_stream, also_sys_stdout=False, tf_log_verbosity
     orig_tf_log_verbosity = tf.logging.get_verbosity()
     tf.logging.set_verbosity(tf_log_verbosity)
   try:
-    yield (orig_v_attribs["v1"], alternative_stream)
+    yield orig_v_attribs["v1"], alternative_stream
   finally:
     # Restore original values.
     log.v = orig_v_list
