@@ -96,7 +96,7 @@ class NumpyDumpDataset(Dataset):
     :param int seq_idx:
     :rtype: numpy.ndarray
     """
-    return self._get_cache_seq(seq_idx).features
+    return self._get_cache_seq(seq_idx).get_data("data")
 
   def get_targets(self, target, seq_idx):
     """
@@ -104,7 +104,7 @@ class NumpyDumpDataset(Dataset):
     :param int seq_idx:
     :rtype: numpy.ndarray
     """
-    return self._get_cache_seq(seq_idx).targets.get(target, None)
+    return self._get_cache_seq(seq_idx).get_data(target)
 
   def get_ctc_targets(self, seq_idx):
     """
@@ -170,4 +170,3 @@ class NumpyDumpDataset(Dataset):
     last_seq_idx = self._get_cache_last_seq_idx()
     assert seq_idx == last_seq_idx + 1
     self.cached_seqs += [DatasetSeq(seq_idx, features, targets)]
-
