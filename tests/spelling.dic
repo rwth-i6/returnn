@@ -7,6 +7,7 @@ blstm
 darc
 doetsch
 dtype
+enwik
 exchook
 filterbank
 idxs
@@ -30,8 +31,12 @@ returnn
 rnnt
 rwth
 soundfile
+subword
 tanh
 tensorflow
 timit
+tuske
+uint
 voigtlaender
+warprnnt
 zeyer
