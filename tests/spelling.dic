@@ -52,6 +52,7 @@ qsub
 quaero
 rasr
 recog
+regularizer
 rescore
 rescorer
 returnn
