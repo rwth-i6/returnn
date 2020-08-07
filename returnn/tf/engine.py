@@ -234,10 +234,10 @@ class Runner(object):
     results = {key: self._normalize_loss(value, key, self._inv_norm_accumulated)
                for (key, value) in self._results_accumulated.items()}
     self.results = results
-    self.score = {key: value for (key, value) in results.items() if key.startswith("cost:")}
+    self.score = {key: float(value) for (key, value) in results.items() if key.startswith("cost:")}
     if self.engine.config.bool("calculate_exp_loss", False):
-      self.score.update({key + ":exp": numpy.exp(value) for (key, value) in results.items() if key.startswith("cost:")})
-    self.error = {key: value for (key, value) in results.items() if key.startswith("error:")}
+      self.score.update({key + ":exp": float(numpy.exp(value)) for (key, value) in results.items() if key.startswith("cost:")})
+    self.error = {key: float(value) for (key, value) in results.items() if key.startswith("error:")}
     self.num_steps = num_steps
     self.finalized = True
 
