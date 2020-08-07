@@ -11,9 +11,7 @@ from __future__ import print_function
 
 import os
 import sys
-import time
-import tensorflow as tf
-import numpy
+import typing
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
@@ -23,6 +21,9 @@ from returnn import __main__ as rnn
 from returnn.log import log
 import argparse
 import returnn.util.basic as util
+
+
+config = None  # type: typing.Optional["returnn.config.Config"]
 
 
 def init(config_filename, log_verbosity):

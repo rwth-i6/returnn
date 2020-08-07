@@ -152,7 +152,8 @@ def dump_dataset(dataset, options):
       for target in dataset.get_target_list():
         targets = dataset.get_targets(target, seq_idx)
         if options.type == "numpy":
-          numpy.savetxt("%s%i.targets.%s%s" % (options.dump_prefix, seq_idx, target, options.dump_postfix), targets, fmt='%i')
+          numpy.savetxt(
+            "%s%i.targets.%s%s" % (options.dump_prefix, seq_idx, target, options.dump_postfix), targets, fmt='%i')
         elif options.type == "stdout":
           extra = ""
           if target in dataset.labels and len(dataset.labels[target]) > 1:

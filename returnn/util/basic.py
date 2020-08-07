@@ -3561,7 +3561,7 @@ class Stats:
 
   def collect(self, data):
     """
-    :param numpy.ndarray data: shape (time, dim) or (time,)
+    :param numpy.ndarray|list[int]|list[float] data: shape (time, dim) or (time,)
     """
     import numpy
     if isinstance(data, (list, tuple)):
