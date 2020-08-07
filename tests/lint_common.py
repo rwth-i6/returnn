@@ -70,6 +70,11 @@ ignore_count_for_files = {
   'returnn/theano/ops/two_state_best_path_decoder.py',
   'returnn/theano/ops/two_state_hmm.py',
   'returnn/theano/updater.py',
+
+  # Ignore some outdated or rarely used tools.
+  'tools/import-blocks-mt-model.py',
+  'tools/import-sprint-nn.py',
+  'tools/import-t2t-mt-model.py',
 }
 
 
