@@ -137,7 +137,7 @@ class RecLayer(_ConcatInputLayer):
       assert direction in [-1, 1]
     self._last_hidden_state = None  # type: typing.Optional[tf.Tensor]
     self._direction = direction
-    self._initial_state_deps = [l for l in nest.flatten(initial_state) if isinstance(l, LayerBase)]
+    self._initial_state_deps = [layer for layer in nest.flatten(initial_state) if isinstance(layer, LayerBase)]
     self._input_projection = input_projection
     self._max_seq_len = max_seq_len
     self.include_eos = include_eos
@@ -697,7 +697,7 @@ class RecLayer(_ConcatInputLayer):
           cell=cell, inputs=x, time_major=True, sequence_length=seq_len, dtype=tf.float32,
           initial_state=self._initial_state)
       self._last_hidden_state = final_state
-    elif rnn_contrib and isinstance(cell, (rnn_contrib.FusedRNNCell, rnn_contrib.LSTMBlockWrapper)):  # e.g. LSTMBlockFusedCell # nopep8
+    elif rnn_contrib and isinstance(cell, (rnn_contrib.FusedRNNCell, rnn_contrib.LSTMBlockWrapper)):  # noqa # e.g. LSTMBlockFusedCell
       # Will get (time,batch,ydim).
       assert self._max_seq_len is None
       y, final_state = cell(
@@ -839,7 +839,7 @@ class RecLayer(_ConcatInputLayer):
       y, _ = cell(x, initial_state=(input_h, input_c))
     if self._direction == -1:
       y = tf_compat.v1.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
-    return y
+    return y  # noqa
 
   def _get_output_native_rec_op(self, cell):
     """
@@ -1082,6 +1082,9 @@ class _SubnetworkRecCell(object):
           getter = getter.parent
 
       def reset(self):
+        """
+        Reset.
+        """
         self.count = 0
         self.got_uninitialized_deps_count = 0
 
@@ -2191,6 +2194,7 @@ class _SubnetworkRecCell(object):
 
         transformed_cache = {}  # type: typing.Dict[LayerBase,LayerBase]  # layer -> layer
 
+        # noinspection PyShadowingNames
         def maybe_transform(layer):
           """
           This will be available in the next loop frame as the "prev:..." layer.
@@ -2640,13 +2644,16 @@ class _SubnetworkRecCell(object):
       # noinspection PyProtectedMember
       with reuse_name_scope(rec_layer._rec_scope.name + "/while_loop_search_resolve_body", absolute=True):
         # We start at the output layer choice base, and search for its source, i.e. for the previous time frame.
+        # noinspection PyShadowingNames
         for choice_ in choice_seq_in_frame:
           with tf.name_scope("choice_beams_%s" % get_valid_scope_name_from_str(choice_.name)):
             assert_min_tf_version((1, 1), "gather_nd")
             idxs_exp = nd_indices(choice_beams)  # (batch, beam_out, 2) -> (batch idx, beam idx)
+            # noinspection PyShadowingNames
             src_choice_beams = self.final_acc_tas_dict["choice_%s" % choice_.name].read(
               i, name="ta_read_choice")  # (batch, beam) -> beam_in idx
             assert src_choice_beams.get_shape().ndims == 2
+            # noinspection PyShadowingNames
             src_choice_beams = tf.gather_nd(src_choice_beams, idxs_exp)  # (batch, beam_out)
 
           if new_acc_output_ta_ is not None and choice_ == layer_choice:
@@ -2660,6 +2667,7 @@ class _SubnetworkRecCell(object):
           src_choice_beams,
           new_acc_output_ta_)
 
+    # noinspection PyUnusedLocal
     def search_resolve_cond(i, *args):
       """
       :param tf.Tensor i: rec step index, scalar, int32
@@ -2739,15 +2747,15 @@ class _SubnetworkRecCell(object):
       """
       :param list[LayerBase] deps:
       """
-      for l in deps:
-        if not isinstance(l, _TemplateLayer):  # real layer from base net or so
+      for layer in deps:
+        if not isinstance(layer, _TemplateLayer):  # real layer from base net or so
           continue
-        if l.name == "data" or l.name.startswith("data:"):
+        if layer.name == "data" or layer.name.startswith("data:"):
           continue
-        assert self.layer_data_templates[l.name] is l
-        if l not in layers_in_loop:
-          layers_in_loop.append(l)
-          visit(l.dependencies)
+        assert self.layer_data_templates[layer.name] is layer
+        if layer not in layers_in_loop:
+          layers_in_loop.append(layer)
+          visit(layer.dependencies)
     visit([self.layer_data_templates[name] for name in needed_outputs])
 
     self.input_layers_moved_out = []  # type: typing.List[str]
@@ -2852,17 +2860,17 @@ class _SubnetworkRecCell(object):
       file=log_stream)
     remaining_layers = set(self.net_dict.keys())
 
-    def dump_info(s, l):
+    def dump_info(s, ls):
       """
       :param str s:
-      :param list[str] l:
+      :param list[str] ls:
       """
-      print("  %s: (#: %i)" % (s, len(l)), file=log_stream)
-      for layer_name in l:
+      print("  %s: (#: %i)" % (s, len(ls)), file=log_stream)
+      for layer_name in ls:
         print("    %s" % layer_name, file=log_stream)
         if layer_name in remaining_layers:  # sub-layers are not in the net_dict, or auto-constructed like ":i"
           remaining_layers.remove(layer_name)
-      if not l:
+      if not ls:
         print("    None", file=log_stream)
 
     dump_info("Input layers moved out of loop", self.input_layers_moved_out)
@@ -2961,8 +2969,8 @@ class _SubnetworkRecCell(object):
     """
     if not self.output_layers_moved_out and not extra_output_layers:
       return
-    from returnn.tf.util.basic import tensor_array_stack, has_control_flow_context, concat_with_opt_broadcast, tile_transposed
-    from returnn.tf.util.basic import DimensionTag
+    from returnn.tf.util.basic import tensor_array_stack, has_control_flow_context, concat_with_opt_broadcast
+    from returnn.tf.util.basic import DimensionTag, tile_transposed
     from returnn.tf.network import TFNetwork, ExternData
     from .base import InternalLayer
 
@@ -2990,6 +2998,7 @@ class _SubnetworkRecCell(object):
     search_choices_cache = {}  # type: typing.Dict[str,SearchChoices]  # inner layer -> acc search choices
     loop_acc_layers_search_choices = {}  # type: typing.Dict[str,str]  # loop acc layer -> inner layer
 
+    # noinspection PyShadowingNames
     def get_loop_acc_layer(name):
       """
       :param str name:
@@ -3039,6 +3048,7 @@ class _SubnetworkRecCell(object):
         loop_acc_layers[name] = layer_
         return layer_
 
+    # noinspection PyShadowingNames
     def get_prev_layer(name):
       """
       :param str name: excluding "prev:" prefix
@@ -3065,6 +3075,7 @@ class _SubnetworkRecCell(object):
         return layer
 
     # get_layer similar to in self._construct() but simplified.
+    # noinspection PyShadowingNames
     def get_layer(name):
       """
       :param str name:
@@ -6537,6 +6548,7 @@ class MaskedComputationLayer(LayerBase):
         new_time = tf.reduce_max(new_size)  # T'
         idxs = where_bc(mask_t, idxs - 1, new_time)
 
+    # noinspection PyShadowingNames
     def get_masked_layer(source):
       """
       :param LayerBase source:
@@ -6589,6 +6601,7 @@ class MaskedComputationLayer(LayerBase):
         layer = _parent_layer_cache[sub_layer_name]
       else:
         layer = self.network.get_layer(sub_layer_name)
+      # noinspection PyShadowingNames
       source = get_masked_layer(layer)
       sub_layers[sub_layer_name] = source
       return source
@@ -6679,6 +6692,7 @@ class MaskedComputationLayer(LayerBase):
     else:
       d["mask"] = get_layer(d["mask"])
 
+  # noinspection PyUnusedLocal
   @classmethod
   def _create_template(cls, name, network, sources, masked_from, unit,
                        get_layer=None, _parent_layer_cache=None, **kwargs):
@@ -6735,6 +6749,7 @@ class MaskedComputationLayer(LayerBase):
         if _parent_layer_cache is not None:
           _parent_layer_cache[sub_layer_name] = layer
       if not network.is_inside_rec_layer():
+        # noinspection PyShadowingNames
         source_data = layer.output.copy_template().copy_as_time_major()
         source_data.size_placeholder[0] = source.output.get_sequence_lengths()
         layer = WrappedInternalLayer(
@@ -6813,7 +6828,6 @@ class MaskedComputationLayer(LayerBase):
     """
     :param tf.Tensor batch_dim: for this layer, might be with beam
     :param TFNetworkRecLayer.RecLayer rec_layer:
-    :param str name:
     :rtype: dict[str,tf.Tensor]
     """
     layer_class, layer_desc = cls._create_template(**kwargs)

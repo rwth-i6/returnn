@@ -1,4 +1,8 @@
 
+"""
+This module contains the layer base class :class:`LayerBase`.
+"""
+
 from __future__ import print_function
 
 import typing
