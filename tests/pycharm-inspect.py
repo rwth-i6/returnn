@@ -192,7 +192,7 @@ def setup_pycharm_python_interpreter(pycharm_dir):
       pip_install("tensorflow")
     if not pip_check_is_installed("Theano"):
       pip_install("theano==0.9")
-    for pkg in ["typing", "librosa", "PySoundFile", "nltk", "horovod"]:
+    for pkg in ["typing", "librosa", "PySoundFile", "nltk", "horovod", "matplotlib"]:
       if not pip_check_is_installed(pkg):
         try:
           pip_install(pkg)
@@ -394,10 +394,15 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
   root = ElementTree.Element("problems")
   from lint_common import find_all_py_source_files
   for py_src_file in find_all_py_source_files():
+    ignore_codes = "E121,E123,E126,E226,E24,E704,W503,W504"  # PyCharm defaults
+    ignore_codes += ",E111,E114"  # our defaults (4 space indents for code/comment)
+    if "/" in py_src_file and py_src_file.split("/")[0] != "returnn":
+      # Ignore warning (for now): module level import not at top of file.
+      ignore_codes += ",E402"
     cmd = [
       sys.executable, "%s/plugins/python-ce/helpers/pycodestyle.py" % pycharm_dir,
       py_src_file,
-      "--ignore=E121,E123,E126,E226,E24,E704,W503,W504,E111,E114",
+      "--ignore=%s" % ignore_codes,
       "--max-line-length=120"]
     print("$ %s" % " ".join(cmd))
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -509,6 +514,7 @@ def report_inspect_dir(inspect_xml_dir,
     if filename not in relevant_inspections_for_file:
       ignore_count_for_files.add(filename)
 
+  print("Reporting individual files. We skip all files which have no warnings at all.")
   color = better_exchook.Color()
   total_relevant_count = 0
   file_count = None
@@ -576,9 +582,20 @@ def main():
     inspect_class_blacklist={
     },
     inspect_class_not_counted={
-      "PyTypeCheckerInspection",  # too much of these: https://youtrack.jetbrains.com/issue/PY-34893
+      # Here we disable more than what you would do in the IDE.
+      # The aim is that any left over warnings are always indeed important and should be fixed.
+
+      # False alarms.
+      "PyTypeCheckerInspection",  # too much false alarms: https://youtrack.jetbrains.com/issue/PY-34893
+
+      # Most of the times these are valid.
+      # Unfortunately there are some rare cases where these report false alarms as well...
+      "PyArgumentListInspection",  # Numpy false alarms: Parameter 'd0' unfilled, ...
+
+      # Not critical.
       "SpellCheckingInspection",  # way too much for now...
       "PyClassHasNoInitInspection",  # not relevant?
+      "PyMethodMayBeStaticInspection",  # not critical
     },
     ignore_count_for_files=ignore_count_for_files)
 
