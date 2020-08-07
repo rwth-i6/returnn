@@ -206,7 +206,7 @@ class Task12AXDataset(GeneratingDataset):
   Description here: http://psych.colorado.edu/~oreilly/pubs-abstr.html#OReillyFrank06
   """
 
-  _input_classes = "123ABCXYZ"
+  _input_classes = "123ABCXYZ"  # noqa
   _output_classes = "LR"
 
   def __init__(self, **kwargs):
@@ -376,7 +376,7 @@ class TaskXmlModelingDataset(GeneratingDataset):
   """
 
   # Blank, XML-tags and some chars.
-  _input_classes = " <>/abcdefgh"
+  _input_classes = " <>/abcdefgh"  # noqa
   _output_classes = _input_classes
 
   def __init__(self, limit_stack_depth=4, **kwargs):
@@ -473,7 +473,7 @@ class TaskVariableAssignmentDataset(GeneratingDataset):
   """
 
   # Blank/Delim/End, Store/Query, and some chars for key/value.
-  _input_classes = " ,.SQ()abcdefgh"
+  _input_classes = " ,.SQ()abcdefgh"  # noqa
   _output_classes = _input_classes
 
   def __init__(self, **kwargs):
@@ -907,7 +907,7 @@ class StaticDataset(GeneratingDataset):
       assert output_dim[key][1] == len(first_data_output.shape)
       if len(first_data_output.shape) >= 2:
         assert output_dim[key][0] == first_data_output.shape[-1]
-    assert sorted(output_dim.keys()) == self.data_keys, "output_dim does noth match the given data"
+    assert sorted(output_dim.keys()) == self.data_keys, "output_dim does not match the given data"
 
     super(StaticDataset, self).__init__(input_dim=input_dim, output_dim=output_dim, num_seqs=num_seqs, **kwargs)
 
@@ -1132,7 +1132,7 @@ class ExtractAudioFeatures:
       assert sample_rate == self.sample_rate, "currently no conversion implemented..."
 
     if self.preemphasis:
-      from scipy import signal
+      from scipy import signal  # noqa
       audio = signal.lfilter([1, -self.preemphasis], [1], audio)
 
     if self.peak_normalization:
@@ -1364,7 +1364,7 @@ def _get_audio_db_mel_filterbank(audio, sample_rate,
   assert fmin >= 0
   assert min_amp > 0
 
-  import librosa
+  import librosa  # noqa
   mel_filterbank = librosa.feature.melspectrogram(
     audio, sr=sample_rate,
     n_mels=num_feature_filters,
@@ -1682,8 +1682,8 @@ class TimitDataset(CachedDataset2):
     phn_fn = "%s/%s.phn" % (self._timit_dir, seq_tag)
     assert os.path.exists(phn_fn)
     phone_seq = []
-    for l in open(phn_fn).read().splitlines():
-      t0, t1, p = l.split()
+    for line in open(phn_fn).read().splitlines():
+      t0, t1, p = line.split()
       phone_seq.append(p)
     return phone_seq
 
@@ -2350,7 +2350,7 @@ class BlissDataset(CachedDataset2):
     corpus_file = open(filename, 'rb')
     if filename.endswith(".gz"):
       corpus_file = gzip.GzipFile(fileobj=corpus_file)
-    SeqInfo = self.SeqInfo
+    SeqInfo = self.SeqInfo  # noqa
     context = iter(ElementTree.iterparse(corpus_file, events=('start', 'end')))
     elem_tree = []
     name_tree = []
@@ -2524,8 +2524,8 @@ class LibriSpeechCorpus(CachedDataset2):
             subdir = path[1]  # e.g. "train-clean-100"
             assert subdir == name
             if path[-1].endswith(".trans.txt"):
-              for l in zip_file.read(info).decode("utf8").splitlines():
-                seq_name, txt = l.split(" ", 1)
+              for line in zip_file.read(info).decode("utf8").splitlines():
+                seq_name, txt = line.split(" ", 1)
                 speaker_id, chapter_id, seq_id = map(int, seq_name.split("-"))
                 if self.orth_post_process:
                   txt = self.orth_post_process(txt)
@@ -2536,8 +2536,8 @@ class LibriSpeechCorpus(CachedDataset2):
           continue
         subdir = os.path.basename(subdir)  # e.g. "train-clean-100"
         for fn in glob("%s/%s/*/*/*.trans.txt" % (self.path, subdir)):
-          for l in open(fn).read().splitlines():
-            seq_name, txt = l.split(" ", 1)
+          for line in open(fn).read().splitlines():
+            seq_name, txt = line.split(" ", 1)
             speaker_id, chapter_id, seq_id = map(int, seq_name.split("-"))
             if self.orth_post_process:
               txt = self.orth_post_process(txt)
@@ -3269,7 +3269,7 @@ class Enwik8Corpus(CachedDataset2):
     print("%s: create %s" % (self, self._hdf_filename), file=log.v2)
     num_test_chars = 5000000
 
-    raw_data = zipfile.ZipFile(self._zip_filename).read('enwik8')
+    raw_data = zipfile.ZipFile(self._zip_filename).read('enwik8').decode("utf8")
     raw_data = numpy.fromstring(raw_data, dtype=numpy.uint8)
     unique, data = numpy.unique(raw_data, return_inverse=True)
 
