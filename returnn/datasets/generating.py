@@ -870,10 +870,11 @@ class StaticDataset(GeneratingDataset):
       data=data, target_list=dataset.get_target_list(),
       output_dim=dataset.num_outputs, input_dim=dataset.num_inputs)
 
-  def __init__(self, data, target_list=None, output_dim=None, input_dim=None, **kwargs):
+  def __init__(self, data, target_list=None, output_dim=None, input_dim=None, sort_data_key=None, **kwargs):
     """
     :param list[dict[str,numpy.ndarray]] data: list of seqs, each provide the data for each data-key
     :param int|None input_dim:
+    :param str|None sort_data_key: key of data stream used for sorting by length, defaults to "data" if present
     :param int|dict[str,(int,int)|list[int]] output_dim:
     """
     assert len(data) > 0
@@ -881,6 +882,7 @@ class StaticDataset(GeneratingDataset):
     num_seqs = len(data)
     first_data = data[0]
     self.data_keys = sorted(first_data.keys())
+    self.sort_data_key = sort_data_key or ("data" if "data" in self.data_keys else False) or self.data_keys[0]
     if target_list is not None:
       for key in target_list:
         assert key in self.data_keys
@@ -909,14 +911,34 @@ class StaticDataset(GeneratingDataset):
         assert output_dim[key][0] == first_data_output.shape[-1]
     assert sorted(output_dim.keys()) == self.data_keys, "output_dim does not match the given data"
 
+    self.seq_order = None
+
     super(StaticDataset, self).__init__(input_dim=input_dim, output_dim=output_dim, num_seqs=num_seqs, **kwargs)
+
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
+    """
+    :param int|None epoch:
+    :param list[str]|None seq_list:
+    :param list[int]|None seq_order:
+    :rtype: bool
+    """
+    super(StaticDataset, self).init_seq_order(epoch=epoch, seq_list=None, seq_order=None)
+    if seq_order:
+      self.seq_order = seq_order
+    elif seq_list:
+      self.seq_order = [int(tag[len("seq-"):]) for tag in seq_list]
+    else:
+      self.seq_order = numpy.array(self.get_seq_order_for_epoch(
+        epoch=epoch, num_seqs=len(self.data), get_seq_len=lambda i: len(self.data[i][self.sort_data_key])))
+    self._num_seqs = len(self.seq_order)
+    return True
 
   def generate_seq(self, seq_idx):
     """
     :param int seq_idx:
     :rtype: DatasetSeq
     """
-    data = self.data[seq_idx]
+    data = self.data[self.seq_order[seq_idx]]
     return DatasetSeq(seq_idx=seq_idx, features={key: data[key] for key in self.data_keys})
 
   def get_data_keys(self):
