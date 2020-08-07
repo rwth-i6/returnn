@@ -45,7 +45,8 @@ def generate():
       if fn.startswith("_"):
         continue
       if os.path.isdir(os.path.join(path, fn)):
-        scan_modules(modpath + [fn])
+        if not os.path.exists(os.path.join(path, fn, ".git")):
+          scan_modules(modpath + [fn])
       if not fn.endswith(".py"):
         continue
       modname, _ = os.path.splitext(os.path.basename(fn))
