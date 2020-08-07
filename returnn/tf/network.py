@@ -1808,6 +1808,7 @@ class TFNetwork(object):
     from returnn.tf.layers.rec import RecLayer
     if isinstance(self.parent_layer, RecLayer):
       if inside_loop:
+        # noinspection PyProtectedMember
         from returnn.tf.layers.rec import _SubnetworkRecCell
         assert isinstance(self.parent_layer.cell, _SubnetworkRecCell)
         if self is not self.parent_layer.cell.net:
@@ -1828,6 +1829,7 @@ class TFNetwork(object):
     :param bool must_exist: if True, will throw exception if not available
     :rtype: TFNetworkRecLayer.RecStepInfoLayer|None
     """
+    # noinspection PyProtectedMember
     from returnn.tf.layers.rec import RecStepInfoLayer, _SubnetworkRecCell
     # Fast path first. This also enables some simple debugging.
     if ":i" in self.layers and isinstance(self.layers[":i"], RecStepInfoLayer):
@@ -2929,6 +2931,9 @@ class CustomCheckpointLoader:
       return load_native_lstm_bias
 
     class MakeLoadBasicToNativeLstm:
+      """
+      BasicLSTM -> NativeLSTM converter.
+      """
       def __init__(self, basic_kernel, basic_bias):
         """
         :param str basic_kernel:
@@ -2964,14 +2969,23 @@ class CustomCheckpointLoader:
         self._bias = new_bias
 
       def get_w_re(self):
+        """
+        :rtype: numpy.ndarray
+        """
         self._calc()
         return self._w_re
 
       def get_w(self):
+        """
+        :rtype: numpy.ndarray
+        """
         self._calc()
         return self._w_ff
 
       def get_b(self):
+        """
+        :rtype: numpy.ndarray
+        """
         self._calc()
         return self._bias
 
