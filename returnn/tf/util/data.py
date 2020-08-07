@@ -1,4 +1,7 @@
 
+"""
+Provides :class:`Data`, :class:`DimensionTag`, :class:`SearchBeam`.
+"""
 
 from __future__ import print_function, division
 

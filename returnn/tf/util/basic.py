@@ -1,7 +1,6 @@
 
 """
 Lots of random utility functions for TensorFlow.
-Also provides :class:`Data`.
 """
 
 from __future__ import print_function, division
@@ -2727,7 +2726,7 @@ class CustomGradient(object):
     x.set_shape(grad_x.get_shape())
     grad_x.set_shape(x.get_shape())
     generic_loss_and_error_signal = self.register_generic_loss_and_error_signal()
-    loss_out = generic_loss_and_error_signal(loss, x, grad_x)
+    loss_out = generic_loss_and_error_signal(loss, x, grad_x)  # noqa
     loss_out.set_shape(loss.get_shape())
     return loss_out
 
@@ -2876,7 +2875,7 @@ class MetaLosses(object):
       op=cls._identity_ignore_second_fwd,
       grad_op=cls._synthetic_gradient_bwd,
       name="synthetic_gradient")
-    y = op(x, synthetic_grad_x)
+    y = op(x, synthetic_grad_x)  # noqa
     y.op._RETURNN_loss_info = {
       "name": loss_name, "source": loss_source, "scale": loss_scale, "norm_factor": tf.size(x)}
     y.set_shape(x.get_shape())
@@ -2916,7 +2915,7 @@ class MetaLosses(object):
       op=cls._identity_ignore_second_fwd,
       grad_op=cls._tikhonov_gradient_bwd,
       name="tikhonov_regularized")
-    y = op(x, dummy)
+    y = op(x, dummy)  # noqa
     y.op._RETURNN_loss_info = {
       "name": loss_name, "source": loss_source, "scale": loss_scale, "norm_factor": tf.size(x)}
     y.set_shape(x.get_shape())
@@ -4718,7 +4717,7 @@ def mem_usage_for_dev(dev_name):
     :rtype:  tf.Tensor
     """
     try:
-      from tensorflow.contrib import memory_stats
+      from tensorflow.contrib import memory_stats  # noqa
       # It's not so clear what BytesInUse returns. https://stackoverflow.com/questions/47903039/
       # Thus we always use MaxBytesInUse for now, although this is also not so nice.
       bytes_in_use = memory_stats.MaxBytesInUse
@@ -5813,7 +5812,7 @@ def vocab_idx_repr(labels, data):
   :param tf.Tensor labels: int32, indices in vocab
   :param Data data: might have vocab
   :return: string or int32, shape as labels, or maybe without last axis
-  :rtype:
+  :rtype: tf.Tensor
   """
   if data.vocab:
     vocab = get_shared_vocab(data.vocab.labels)

@@ -237,6 +237,10 @@ REGISTER_KERNEL_BUILDER(Name("OpenFstTransition").Device(DEVICE_CPU), OpenFstTra
 
 
 def openfst_checked_out():
+  """
+  :return: whether the Git submodule is checked out
+  :rtype: bool
+  """
   return os.path.exists("%s/src/include/fst/fst.h" % openfst_dir)
 
 
