@@ -158,8 +158,8 @@ class ComplexToAlternatingRealLayer(_ConcatInputLayer):
 
     input_placeholder = self.input_data.get_placeholder_as_batch_major()
 
-    real_value = tf.real(input_placeholder)
-    imag_value = tf.imag(input_placeholder)
+    real_value = tf_compat.v1.real(input_placeholder)
+    imag_value = tf_compat.v1.imag(input_placeholder)
     self.output.placeholder = _interleaveVectors(real_value, imag_value)
     self.output.size_placeholder = {0: self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch]}
 
@@ -442,6 +442,7 @@ class MultiChannelMultiResolutionStftLayer(_ConcatInputLayer):
         if self._window == "None" or self._window == "ones":
           window = tf.ones((window_length,), dtype=dtype)
         return window
+
       def _padTimeSignal(input_placeholder, frame_size):
         if frame_size > self._reference_frame_size:
           return tf.concat([input_signal, tf.ones([get_shape(input_signal)[0], frame_size-self._reference_frame_size, get_shape(input_signal)[2]])*1e-7], axis=1)
@@ -456,8 +457,7 @@ class MultiChannelMultiResolutionStftLayer(_ConcatInputLayer):
           frame_step=self._frame_shift,
           fft_length=fft_size,
           window_fn=_get_window,
-          pad_end=self._pad_last_frame
-        )
+          pad_end=self._pad_last_frame)
         channel_wise_stft = tf.transpose(channel_wise_stft, [0, 2, 1, 3])
         batch_dim = tf.shape(channel_wise_stft)[0]
         time_dim = tf.shape(channel_wise_stft)[1]
