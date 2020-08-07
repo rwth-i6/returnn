@@ -578,7 +578,7 @@ class Data(object):
       assert isinstance(vocab, Vocabulary)
       assert self.sparse, "%s should represent indices of %s" % (self, vocab)
       assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
-    self.vocab = vocab
+    self.vocab = vocab  # type: typing.Optional[Vocabulary]
     if same_dim_tags_as:
       # Note that this currently does not work as intended at template construction time...
       for _axis, _dim_tag in sorted(same_dim_tags_as.items()):
