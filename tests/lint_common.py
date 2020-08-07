@@ -22,7 +22,6 @@ assert os.path.exists("%s/rnn.py" % _root_dir)
 # Proceed like this: Fix all warnings for some file, then remove it from this list.
 # I removed already all files which really should not have warnings (mostly the TF backend + shared files).
 ignore_count_for_files = {
-  'returnn/network_description.py',
   'returnn/util/fsa.py',
   'returnn/util/task_system.py',
   'returnn/util/task_system_example.py',
@@ -80,10 +79,14 @@ ignore_count_for_files = {
   'returnn/theano/ops/two_state_hmm.py',
   'returnn/theano/updater.py',
 
-  # Ignore some outdated or rarely used tools.
+  # Ignore some outdated or rarely used tools/demos.
   'tools/import-blocks-mt-model.py',
   'tools/import-sprint-nn.py',
   'tools/import-t2t-mt-model.py',
+  'demos/mdlstm/IAM/create_IAM_dataset.py',
+  'demos/mdlstm/IAM/decode.py',
+  'demos/mdlstm/artificial/create_test_h5.py',
+  'demos/mdlstm/artificial_rgb/create_test_h5.py',
 }
 
 

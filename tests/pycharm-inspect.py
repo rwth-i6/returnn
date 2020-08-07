@@ -344,7 +344,7 @@ def prepare_src_dir(files=None):
   print("travis_fold:start:script.prepare")
   print("Prepare project source files...")
   if not files:
-    files = ["returnn", "tools", "tests", "demos", "rnn.py", "setup.py", "__init__.py"]
+    files = ["returnn", "tools", "demos", "rnn.py", "setup.py", "__init__.py"]
   src_tmp_dir = "%s/returnn" % tempfile.mkdtemp()
   os.mkdir(src_tmp_dir)
   shutil.copytree("%s/PyCharm.idea" % my_dir, "%s/.idea" % src_tmp_dir, symlinks=True)
@@ -463,7 +463,20 @@ def report_inspect_xml(fn):
     line = int(problem.find("./line").text.strip())
     problem_severity = problem.find("./problem_class").attrib["severity"]
     description = problem.find("./description").text.strip()
+
+    # Do some filtering for false positives. This is ugly, but the other solution would be to ignore all of them.
+    possible_false_positive = False
+    if inspect_class == "PyArgumentListInspection" and "'d0' unfilled" in description:  # Numpy false positive
+      possible_false_positive = True
+    if inspect_class == "PyArgumentListInspection" and "'d1' unfilled" in description:  # Numpy false positive
+      possible_false_positive = True
+    if inspect_class == "PyArgumentListInspection" and "'self' unfilled" in description:  # Numpy false positive
+      possible_false_positive = True
+    if possible_false_positive:
+      problem_severity = "POSSIBLE-FALSE %s" % problem_severity
+
     result.append((filename, line, problem_severity, inspect_class, description))
+
   return result
 
 
@@ -498,16 +511,20 @@ def report_inspect_dir(inspect_xml_dir,
 
   # maybe update inspect_class_not_counted
   from lint_common import find_all_py_source_files
-  relevant_py_source_files = set(find_all_py_source_files())
+  returnn_py_source_files = set(find_all_py_source_files())
   all_files = set()
   relevant_inspections_for_file = set()
+  explicitly_ignored_files = ignore_count_for_files
+  ignore_count_for_files = set(ignore_count_for_files)
   for filename, line, problem_severity, inspect_class, description in inspections:
     all_files.add(filename)
-    if filename not in relevant_py_source_files:
+    if filename not in returnn_py_source_files:
       continue
     if inspect_class in inspect_class_blacklist:
       continue
     if inspect_class in inspect_class_not_counted:
+      continue
+    if problem_severity.startswith("POSSIBLE-FALSE "):
       continue
     relevant_inspections_for_file.add(filename)
   for filename in all_files:
@@ -525,8 +542,12 @@ def report_inspect_dir(inspect_xml_dir,
 
     if filename != last_filename:
       if last_filename:
-        if last_filename in ignore_count_for_files:
-          print("The inspection reports for this file are currently ignored.")
+        if last_filename in explicitly_ignored_files:
+          print("This file is on the ignore list.")
+        elif last_filename not in returnn_py_source_files:
+          print("This file is not part of the official RETURNN Python source code.")
+        elif last_filename in ignore_count_for_files:
+          print("The inspection reports for this file are all non critical.")
         else:
           print(color.color("The inspection reports for this file are fatal!", color="red"))
         print("travis_fold:end:inspect.%s" % last_filename)
