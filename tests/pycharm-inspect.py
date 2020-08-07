@@ -6,11 +6,14 @@ Will use the PyCharm code inspection.
 See here:
   https://github.com/albertz/pycharm-inspect
   https://stackoverflow.com/questions/55323910/pycharm-code-style-check-via-command-line
+  https://youtrack.jetbrains.com/issue/PY-34863
   https://youtrack.jetbrains.com/issue/PY-34864
 """
 
 import os
 import sys
+import re
+import shutil
 import subprocess
 import tempfile
 from glob import glob
@@ -19,9 +22,9 @@ from xml.dom import minidom
 from xml.etree import ElementTree
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
-base_dir = os.path.dirname(my_dir)
-sys.path.insert(0, base_dir)
-os.chdir(base_dir)
+root_dir = os.path.dirname(my_dir)
+sys.path.insert(0, root_dir)
+os.chdir(root_dir)
 
 from returnn.util import better_exchook  # noqa
 from returnn.util.basic import pip_install, which_pip, pip_check_is_installed  # noqa
@@ -189,9 +192,13 @@ def setup_pycharm_python_interpreter(pycharm_dir):
       pip_install("tensorflow")
     if not pip_check_is_installed("Theano"):
       pip_install("theano==0.9")
-    for pkg in ["typing", "librosa", "PySoundFile", "nltk"]:
+    for pkg in ["typing", "librosa", "PySoundFile", "nltk", "horovod"]:
       if not pip_check_is_installed(pkg):
-        pip_install(pkg)
+        try:
+          pip_install(pkg)
+        except subprocess.CalledProcessError as exc:
+          print("Pip install failed:", exc)
+          print("Ignore...")
     stub_dir = "%s/python_stubs/python%s-generated" % (
       pycharm_system_dir, "%i.%i.%i" % sys.version_info[:3])
     print("Generate stub dir:", stub_dir)
@@ -258,8 +265,8 @@ def setup_pycharm_python_interpreter(pycharm_dir):
   paths_root = ElementTree.SubElement(jdk_entry, "roots")
   classes_paths = ElementTree.SubElement(ElementTree.SubElement(paths_root, "classPath"), "root", type="composite")
   relevant_paths = list(sys.path)
-  if base_dir in relevant_paths:
-    relevant_paths.remove(base_dir)
+  if root_dir in relevant_paths:
+    relevant_paths.remove(root_dir)
   if my_dir in relevant_paths:
     relevant_paths.remove(my_dir)
   relevant_paths.extend([
@@ -288,6 +295,44 @@ def setup_pycharm_python_interpreter(pycharm_dir):
   print("travis_fold:end:script.setup_pycharm_python_interpreter")
 
 
+def read_spelling_dict():
+  """
+  :rtype: list[str]
+  """
+  return open("%s/spelling.dic" % my_dir).read().splitlines()
+
+
+def create_spelling_dict_xml(src_dir):
+  """
+  Need to create this on-the-fly for the current user.
+  """
+  # Example:
+  """
+  <component name="ProjectDictionaryState">
+  <dictionary name="az">
+    <words>
+      <w>dtype</w>
+      <w>idxs</w>
+      <w>keepdims</w>
+      ...
+    </words>
+  </dictionary>
+  </component>
+  """
+  from returnn.util.basic import get_login_username
+  user_name = get_login_username()
+  root = ElementTree.Element("component", name="ProjectDictionaryState")
+  dict_ = ElementTree.SubElement(root, "dictionary", name=user_name)
+  words = ElementTree.SubElement(dict_, "words")
+  for w in read_spelling_dict():
+    ElementTree.SubElement(words, "w").text = w
+  et = ElementTree.ElementTree(root)
+  print("Save XML.")
+  xml_filename = "%s/.idea/dictionaries/%s.xml" % (src_dir, user_name)
+  os.makedirs(os.path.dirname(xml_filename), exist_ok=True)
+  et.write(xml_filename, encoding="UTF-8")
+
+
 def prepare_src_dir(files=None):
   """
   New clean source dir, where we symlink only the relevant src files.
@@ -299,47 +344,84 @@ def prepare_src_dir(files=None):
   print("travis_fold:start:script.prepare")
   print("Prepare project source files...")
   if not files:
-    files = ["returnn", "tools", "demos", "rnn.py", "setup.py", "__init__.py"]
+    files = ["returnn", "tools", "tests", "demos", "rnn.py", "setup.py", "__init__.py"]
   src_tmp_dir = "%s/returnn" % tempfile.mkdtemp()
   os.mkdir(src_tmp_dir)
-  os.symlink("%s/PyCharm.idea" % my_dir, "%s/.idea" % src_tmp_dir)
+  shutil.copytree("%s/PyCharm.idea" % my_dir, "%s/.idea" % src_tmp_dir, symlinks=True)
   for fn in files:
-    os.symlink(os.path.abspath(fn), "%s/%s" % (src_tmp_dir, os.path.basename(fn)))
-  with open("%s/requirements.txt" % src_tmp_dir, "w") as f:
-    # We could ignore PyPackageRequirementsInspection. But instead, just whitelist all used packages.
-    for pkg in ["tensorflow", "theano", "numpy", "scipy", "librosa", "h5py", "horovod", "nltk"]:
-      f.write("%s\n" % pkg)
+    fn = "%s/%s" % (root_dir, fn)
+    dst = "%s/%s" % (src_tmp_dir, os.path.basename(fn))
+    if os.path.isdir(fn):
+      shutil.copytree(fn, dst, symlinks=True)
+    else:
+      shutil.copy(fn, dst)
+  create_spelling_dict_xml(src_tmp_dir)
   print("All source files:")
   subprocess.check_call(["ls", "-la", src_tmp_dir])
   print("travis_fold:end:script.prepare")
   return src_tmp_dir
 
 
-def run_inspect(pycharm_dir, src_dir):
+def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
   """
   :param str pycharm_dir:
   :param str src_dir:
+  :param bool skip_pycharm_inspect:
   :return: dir of xml files
   :rtype: str
   """
   out_tmp_dir = tempfile.mkdtemp()
 
   print("travis_fold:start:script.inspect")
-  # Note: Will not run if PyCharm is already running.
-  # Maybe we can find some workaround for this?
-  # See here: https://stackoverflow.com/questions/55339010/run-pycharm-inspect-sh-even-if-pycharm-is-already-running
-  # And here: https://github.com/albertz/pycharm-inspect
-  # Also: https://stackoverflow.com/questions/55323910/pycharm-code-style-check-via-command-line
-  cmd = [
-    "%s/bin/inspect.sh" % pycharm_dir,
-    src_dir,
-    "%s/PyCharm-inspection-profile.xml" % my_dir,
-    out_tmp_dir,
-    "-v2"]
-  print("$ %s" % " ".join(cmd))
-  subprocess.check_call(cmd, stderr=subprocess.STDOUT)
-  print("travis_fold:end:script.inspect")
+  if not skip_pycharm_inspect:
+    # Note: Will not run if PyCharm is already running.
+    # Maybe we can find some workaround for this?
+    # See here: https://stackoverflow.com/questions/55339010/run-pycharm-inspect-sh-even-if-pycharm-is-already-running
+    # And here: https://github.com/albertz/pycharm-inspect
+    # Also: https://stackoverflow.com/questions/55323910/pycharm-code-style-check-via-command-line
+    cmd = [
+      "%s/bin/inspect.sh" % pycharm_dir,
+      src_dir,
+      "%s/PyCharm-inspection-profile.xml" % my_dir,
+      out_tmp_dir,
+      "-v2"]
+    print("$ %s" % " ".join(cmd))
+    subprocess.check_call(cmd, stderr=subprocess.STDOUT)
 
+  # PyCharm does not do PEP8 code style checks by itself but uses the (bundled) pycodestyle tool.
+  # https://youtrack.jetbrains.com/issue/PY-43901
+  # Do that now.
+  root = ElementTree.Element("problems")
+  from lint_common import find_all_py_source_files
+  for py_src_file in find_all_py_source_files():
+    cmd = [
+      sys.executable, "%s/plugins/python-ce/helpers/pycodestyle.py" % pycharm_dir,
+      py_src_file,
+      "--ignore=E121,E123,E126,E226,E24,E704,W503,W504,E111,E114",
+      "--max-line-length=120"]
+    print("$ %s" % " ".join(cmd))
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    stdout, _ = proc.communicate()
+    # We do not check returncode, as this is always non-zero if there is any warning.
+    for line in stdout.decode("utf8").splitlines():
+      # Example line: demos/demo-record-and-push-to-webserver.py:48:1: E302 expected 2 blank lines, found 1
+      m = re.match("^(.*):([0-9]+):([0-9]+): ([EW][0-9]+) (.+)$", line)
+      assert m, "unexpected line %r" % line
+      fn_, line_nr, col_nr, warn_id, description = m.groups()
+      assert fn_ == py_src_file, "unexpected line %r" % line
+      line_nr, col_nr = int(line_nr), int(col_nr)
+      description = "%s: %s" % (warn_id, description)
+      prob = ElementTree.SubElement(root, "problem")
+      # Note: We do not aim to have this complete. This is just enough such that report_inspect_xml can read it.
+      ElementTree.SubElement(prob, "file").text = "file://$PROJECT_DIR$/%s" % py_src_file
+      ElementTree.SubElement(prob, "line").text = str(line_nr)
+      ElementTree.SubElement(prob, "offset").text = str(col_nr)
+      ElementTree.SubElement(prob, "problem_class", severity="WEAK WARNING", id=warn_id).text = description
+      ElementTree.SubElement(prob, "description").text = description
+  et = ElementTree.ElementTree(root)
+  et.write("%s/Pep8CodeStyle.xml" % out_tmp_dir, encoding="UTF-8")
+
+  print("travis_fold:end:script.inspect")
   return out_tmp_dir
 
 
@@ -380,27 +462,27 @@ def report_inspect_xml(fn):
   return result
 
 
-def report_inspect_dir(path,
+def report_inspect_dir(inspect_xml_dir,
                        inspect_class_blacklist=None, inspect_class_not_counted=None,
                        ignore_count_for_files=()):
   """
-  :param str path:
+  :param str inspect_xml_dir:
   :param set[str]|None inspect_class_blacklist:
   :param set[str]|None inspect_class_not_counted:
   :param set[str]|tuple[str]|None ignore_count_for_files:
   :return: count of reports
   :rtype: int
   """
-  if os.path.isfile(path):
-    assert path.endswith(".xml")
-    fs = [path]
+  if os.path.isfile(inspect_xml_dir):
+    assert inspect_xml_dir.endswith(".xml")
+    inspect_xml_files = [inspect_xml_dir]
   else:
-    assert os.path.isdir(path)
-    fs = list(glob(path + "/*.xml"))
-    assert fs
+    assert os.path.isdir(inspect_xml_dir)
+    inspect_xml_files = list(glob(inspect_xml_dir + "/*.xml"))
+    assert inspect_xml_files
 
   inspections = []
-  for fn in fs:
+  for fn in inspect_xml_files:
     inspections.extend(report_inspect_xml(fn))
   inspections.sort()
   inspections.append((None, None, None, None, None))  # final marker
@@ -485,20 +567,18 @@ def main():
   arg_parser.add_argument("--pycharm")
   arg_parser.add_argument("--setup_pycharm_only", action="store_true")
   arg_parser.add_argument("--skip_setup_pycharm", action="store_true")
+  arg_parser.add_argument("--skip_pycharm_inspect", action="store_true", help="only PEP8")
   arg_parser.add_argument("--files", nargs="*")
   args = arg_parser.parse_args()
 
   from lint_common import ignore_count_for_files
   inspect_kwargs = dict(
     inspect_class_blacklist={
-      # PyInterpreterInspection: This inspection notifies you if the current project has no Python interpreter
-      # configured or an invalid Python interpreter.
-      # "PyInterpreterInspection",  # how to select this in PyCharm.idea? **Update** not a problem anymore?
-      "SpellCheckingInspection",  # way too much for now... TODO this should be fixed later, probably in PyCharm.idea
-      "PyClassHasNoInitInspection",  # not relevant?
     },
     inspect_class_not_counted={
       "PyTypeCheckerInspection",  # too much of these: https://youtrack.jetbrains.com/issue/PY-34893
+      "SpellCheckingInspection",  # way too much for now...
+      "PyClassHasNoInitInspection",  # not relevant?
     },
     ignore_count_for_files=ignore_count_for_files)
 
@@ -513,13 +593,13 @@ def main():
   else:
     pycharm_dir = install_pycharm()
 
-  if not args.skip_setup_pycharm:
+  if not args.skip_setup_pycharm and not args.skip_pycharm_inspect:
     setup_pycharm_python_interpreter(pycharm_dir=pycharm_dir)
   if args.setup_pycharm_only:
     return
 
   src_dir = prepare_src_dir(files=args.files)
-  res_dir = run_inspect(pycharm_dir=pycharm_dir, src_dir=src_dir)
+  res_dir = run_inspect(pycharm_dir=pycharm_dir, src_dir=src_dir, skip_pycharm_inspect=args.skip_pycharm_inspect)
   if report_inspect_dir(res_dir, **inspect_kwargs) > 0:
     sys.exit(1)
 
