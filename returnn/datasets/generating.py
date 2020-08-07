@@ -615,7 +615,7 @@ class TaskNumberBaseConvertDataset(GeneratingDataset):
       input_dim=input_base,
       output_dim={"data": (input_base, 1), "classes": (output_base, 1)},
       **kwargs)
-    chars = "0123456789abcdefghijklmnopqrstuvwxyz"
+    chars = "0123456789abcdefghijklmnopqrstuvwxyz"  # noqa
     assert 2 <= input_base <= len(chars) and 2 <= output_base <= len(chars)
     self.input_base = input_base
     self.output_base = output_base
@@ -1295,7 +1295,7 @@ def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.01
   """
   # noinspection PyPackageRequirements
   import librosa
-  mfccs = librosa.feature.mfcc(
+  features = librosa.feature.mfcc(
     audio, sr=sample_rate,
     n_mfcc=num_feature_filters,
     hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
@@ -1303,14 +1303,14 @@ def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.01
   if int(librosa_version[0]) >= 1 or (int(librosa_version[0]) == 0 and int(librosa_version[1]) >= 7):
     rms_func = librosa.feature.rms
   else:
-    rms_func = librosa.feature.rmse
+    rms_func = librosa.feature.rmse  # noqa
   energy = rms_func(
     audio,
     hop_length=int(step_len * sample_rate), frame_length=int(window_len * sample_rate))
-  mfccs[0] = energy  # replace first MFCC with energy, per convention
-  assert mfccs.shape[0] == num_feature_filters  # (dim, time)
-  mfccs = mfccs.transpose().astype("float32")  # (time, dim)
-  return mfccs
+  features[0] = energy  # replace first MFCC with energy, per convention
+  assert features.shape[0] == num_feature_filters  # (dim, time)
+  features = features.transpose().astype("float32")  # (time, dim)
+  return features
 
 
 def _get_audio_log_mel_filterbank(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=80):
