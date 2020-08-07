@@ -27,7 +27,6 @@ from . import util
 from tensorflow.python.framework import ops as tf_ops
 
 
-
 __all__ = [
     "can_be_regex",
     "make_regex",
@@ -428,7 +427,12 @@ def get_forward_walk_ops(seed_ops,
     within_ops = frozenset(within_ops)
     seed_ops &= within_ops
 
+  # noinspection PyShadowingNames
   def is_within(op):
+    """
+    :param tf.Operation op:
+    :rtype: bool
+    """
     return (within_ops is None or op in within_ops) and (
         within_ops_fn is None or within_ops_fn(op))
 

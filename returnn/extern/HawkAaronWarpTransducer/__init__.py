@@ -9,15 +9,16 @@ Other references:
 Importing this module immediately compiles the library and TF module.
 """
 
+import os
+import typing
 import tensorflow as tf
 from tensorflow.python.framework import ops
-import os
 from returnn.tf.util.basic import OpCodeCompiler
 
 
 warprnnt_dir = os.path.dirname(os.path.abspath(__file__))
 submodule_dir = os.path.join(warprnnt_dir, "warp-transducer")
-_tf_mod = None
+_tf_mod = None  # type: typing.Optional[typing.Any]
 
 
 def is_checked_out():
@@ -31,7 +32,7 @@ def is_checked_out():
 
 def init_warprnnt(verbose=False):
   """
-  Initialiazes and compiles the library. Caches the TF module.
+  Initializes and compiles the library. Caches the TF module.
 
   :param bool verbose:
   """
@@ -43,8 +44,9 @@ def init_warprnnt(verbose=False):
   # References:
   # https://github.com/HawkAaron/warp-transducer/blob/master/tensorflow_binding/setup.py
 
-  src_files = ['%s/src/rnnt_entrypoint.cpp' % submodule_dir,
-               '%s/tensorflow_binding/src/warprnnt_op.cc' % submodule_dir]
+  src_files = [
+    '%s/src/rnnt_entrypoint.cpp' % submodule_dir,
+    '%s/tensorflow_binding/src/warprnnt_op.cc' % submodule_dir]
   assert all([os.path.isfile(f) for f in src_files]), "submodule in %r not checked out?" % warprnnt_dir
   src_code = ""
   for fn in src_files:
@@ -98,7 +100,7 @@ def rnnt_loss(acts, labels, input_lengths, label_lengths, blank_label=0):
 
 
 @ops.RegisterGradient("WarpRNNT")
-def _RNNTLossGrad(op, grad_loss, _):
+def _warprnnt_loss_grad(op, grad_loss, _):
   grad = op.outputs[1]
   # NOTE since here we are batch first, cannot use _BroadcastMul
   grad_loss = tf.reshape(grad_loss, (-1, 1, 1, 1))
@@ -107,7 +109,7 @@ def _RNNTLossGrad(op, grad_loss, _):
 
 if hasattr(ops, "RegisterShape"):
   @ops.RegisterShape("WarpRNNT")
-  def _RNNTLossShape(op):
+  def _warprnnt_loss_shape(op):
     inputs_shape = op.inputs[0].get_shape().with_rank(4)
     batch_size = inputs_shape[0]
     return [batch_size, inputs_shape]

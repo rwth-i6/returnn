@@ -562,7 +562,7 @@ class SubGraphView(object):
     """
     try:
       subgraph_id = self._input_ts.index(t)
-    except:
+    except ValueError:
       raise ValueError("Can't find {} in inputs of subgraph {}.".format(
           t.name, self.name))
     return subgraph_id
@@ -579,7 +579,7 @@ class SubGraphView(object):
     """
     try:
       subgraph_id = self._output_ts.index(t)
-    except:
+    except ValueError:
       raise ValueError("Can't find {} in outputs of subgraph {}.".format(
           t.name, self.name))
     return subgraph_id
