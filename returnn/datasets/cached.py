@@ -45,6 +45,9 @@ class CachedDataset(Dataset):
     self.target_keys = []
 
   def initialize(self):
+    """
+    Initialization.
+    """
     super(CachedDataset, self).initialize()
 
     if self.cache_byte_size_limit_at_start > 0:

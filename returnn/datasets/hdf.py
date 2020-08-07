@@ -523,6 +523,9 @@ class NextGenHDFDataset(CachedDataset2):
         self.add_file(fn)
 
   def add_file(self, path):
+    """
+    :param str path:
+    """
     self.files.append(path)
     self.h5_files.append(h5py.File(path))
 
@@ -562,6 +565,9 @@ class NextGenHDFDataset(CachedDataset2):
           for nf in num_features if nf[1] != nf[2]]))
 
   def initialize(self):
+    """
+    Initialization.
+    """
     total_seqs = len(self.all_seq_names)
     self._num_seqs = total_seqs
     self._estimated_num_seqs = total_seqs
@@ -612,6 +618,10 @@ class NextGenHDFDataset(CachedDataset2):
                       targets=targets)
 
   def get_data_dtype(self, key):
+    """
+    :param str key: e.g. "data"
+    :rtype: str
+    """
     if key == 'data':
       return self.get_data_dtype(self.input_stream_name)
     return self.all_parsers[key][0].get_dtype()
