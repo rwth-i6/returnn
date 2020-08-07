@@ -5,6 +5,7 @@ Provides :class:`LayerNetworkDescription`.
 
 from __future__ import print_function
 
+import typing
 from returnn.util.basic import simple_obj_repr, hdf5_dimension, hdf5_group, hdf5_shape
 from returnn.log import log
 
@@ -51,12 +52,18 @@ class LayerNetworkDescription:
     return not self == other
 
   def init_args(self):
-    import inspect
-    return {arg: getattr(self, arg) for arg in inspect.getargspec(self.__init__).args[1:]}
+    """
+    :rtype: dict[str]
+    """
+    from returnn.util.basic import getargspec
+    return {arg: getattr(self, arg) for arg in getargspec(self.__init__).args[1:]}
 
   __repr__ = simple_obj_repr
 
   def copy(self):
+    """
+    :rtype: LayerNetworkDescription
+    """
     args = self.init_args()
     return self.__class__(**args)
 
@@ -85,9 +92,10 @@ class LayerNetworkDescription:
       for i in range(len(hidden_size) - len(hidden_name)):
         hidden_name.append("_")
     for i, name in enumerate(hidden_name):
-      if name == "_": hidden_name[i] = "hidden_%d" % i
-    L1_reg = config.float('L1_reg', 0.0)
-    L2_reg = config.float('L2_reg', 0.0)
+      if name == "_":
+        hidden_name[i] = "hidden_%d" % i
+    l1_reg = config.float('L1_reg', 0.0)
+    l2_reg = config.float('L2_reg', 0.0)
     bidirectional = config.bool('bidirectional', True)
     truncation = config.int('truncation', -1)
     actfct = config.list('activation')
@@ -103,7 +111,7 @@ class LayerNetworkDescription:
       for i in range(len(hidden_size) + 1 - len(dropout)):
         dropout.append(dropout[-1])
     dropout = [float(d) for d in dropout]
-    hidden_info = []; """ :type: list[dict[str]] """
+    hidden_info = []  # type: typing.List[typing.Dict[str]]
     for i in range(len(hidden_size)):
       hidden_info.append({
         "layer_class": hidden_type[i],  # e.g. 'forward'
@@ -114,7 +122,7 @@ class LayerNetworkDescription:
       })
     output_info = {"loss": loss, "dropout": dropout[-1]}
     default_layer_info = {
-      "L1": L1_reg, "L2": L2_reg,
+      "L1": l1_reg, "L2": l2_reg,
       "forward_weights_init": config.value("forward_weights_init", None),
       "bias_init": config.value("bias_init", None),
       "substitute_param_expr": config.value("substitute_param_expr", None)

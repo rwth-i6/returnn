@@ -20,7 +20,7 @@ def kenlm_checked_out():
 
 
 # https://www.tensorflow.org/guide/extend/op
-# Also see TFUitl.TFArrayContainer for TF resources.
+# Also see TFUtil.TFArrayContainer for TF resources.
 # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/tensor.h
 # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/tensor_shape.h
 # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/tensor_types.h

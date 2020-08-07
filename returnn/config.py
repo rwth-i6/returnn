@@ -140,7 +140,7 @@ class Config:
     parser.add_option("-o", "--order", dest="order", help="[default/sorted/random] Ordering of sequences.")
     parser.add_option("-p", "--loss", dest="loss", help="[loglik/sse/ctc] Objective function to be optimized.")
     parser.add_option("-q", "--cache", dest="cache",
-                      help="[INTEGER] Cache size in bytes (supports notation for kilo (K), mega (M) and gigabtye (G)).")
+                      help="[INTEGER] Cache size in bytes (supports notation for kilo (K), mega (M) and gigabyte (G)).")
     parser.add_option("-r", "--learning_rate", dest="learning_rate",
                       help="[FLOAT] Learning rate in gradient descent optimization.")
     parser.add_option("-s", "--hidden_sizes", dest="hidden_sizes",
@@ -533,7 +533,7 @@ def get_global_config(raise_exception=True, auto_create=False):
   import sys
   main_mod = sys.modules["__main__"]  # should be rnn.py
   if isinstance(getattr(main_mod, "config", None), Config):
-    return main_mod.config
+    return main_mod.config  # noqa
   # Maybe __main__ is not rnn.py, or config not yet loaded.
   # Anyway, try directly. (E.g. for SprintInterface.)
   import returnn.__main__ as rnn

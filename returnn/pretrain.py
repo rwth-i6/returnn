@@ -159,15 +159,15 @@ class Pretrain:
         net1, net2 = old_net_jsons[i:i+2]
       assert isinstance(net1, dict)
       assert isinstance(net2, dict)
-      for l in sorted(net1.keys()):
-        assert l in net2
+      for layer_name in sorted(net1.keys()):
+        assert layer_name in net2
       have_new_trainable = False
-      for l in sorted(net2.keys()):
-        if self._is_layer_output(net2, l):
+      for layer_name in sorted(net2.keys()):
+        if self._is_layer_output(net2, layer_name):
           continue  # ignore output layers
-        if l in net1:
+        if layer_name in net1:
           continue  # already had before
-        if net2[l].get("trainable", True):
+        if net2[layer_name].get("trainable", True):
           have_new_trainable = True
           break
       if have_new_trainable:
@@ -287,63 +287,63 @@ class Pretrain:
     needed = set()
 
     # noinspection PyShadowingNames
-    def update_needed(l):
+    def update_needed(layer_name):
       """
-      :param str l:
+      :param str layer_name:
       """
-      needed.update(set(new_net[l].get("from", ["data"])).difference(list(new_net.keys()) + ["data"]))
+      needed.update(set(new_net[layer_name].get("from", ["data"])).difference(list(new_net.keys()) + ["data"]))
     # First search for non-trainable layers (like input windows or so).
     # You must specify "trainable": False in the layer at the moment.
     while True:
       descendants = self._find_layer_descendants(self._original_network_json, sources)
       added_something = False
-      for l in descendants:
-        if l in new_net:
+      for layer_name in descendants:
+        if layer_name in new_net:
           continue
-        if self._original_network_json[l].get("trainable", True):
+        if self._original_network_json[layer_name].get("trainable", True):
           continue
-        if l in needed:
-          needed.remove(l)
+        if layer_name in needed:
+          needed.remove(layer_name)
         added_something = True
-        sources.append(l)
-        new_net[l] = deepcopy(self._original_network_json[l])
-        update_needed(l)
+        sources.append(layer_name)
+        new_net[layer_name] = deepcopy(self._original_network_json[layer_name])
+        update_needed(layer_name)
       if not added_something:
         break
     # First do a search of depth `num_steps` through the net.
     for _ in range(num_steps):
       descendants = self._find_layer_descendants(self._original_network_json, sources)
       sources = []
-      for l in descendants:
-        if l in new_net:
+      for layer_name in descendants:
+        if layer_name in new_net:
           continue
-        if l in needed:
-          needed.remove(l)
-        sources.append(l)
-        new_net[l] = deepcopy(self._original_network_json[l])
-        update_needed(l)
+        if layer_name in needed:
+          needed.remove(layer_name)
+        sources.append(layer_name)
+        new_net[layer_name] = deepcopy(self._original_network_json[layer_name])
+        update_needed(layer_name)
       if not sources:  # This means we reached the end.
         return False
     # Add all output layers.
-    for l in sorted(self._original_network_json.keys()):
-      if l in new_net:
+    for layer_name in sorted(self._original_network_json.keys()):
+      if layer_name in new_net:
         continue
-      if not self._is_layer_output(self._original_network_json, l):
+      if not self._is_layer_output(self._original_network_json, layer_name):
         continue
-      if l in needed:
-        needed.remove(l)
-      new_net[l] = deepcopy(self._original_network_json[l])
-      update_needed(l)
+      if layer_name in needed:
+        needed.remove(layer_name)
+      new_net[layer_name] = deepcopy(self._original_network_json[layer_name])
+      update_needed(layer_name)
     if not needed:  # Nothing needed anymore, i.e. no missing layers, i.e. we arrived at the final network topology.
       return False
     # Now fill in all missing ones.
-    for l in sorted(new_net.keys()):
-      sources = new_net[l].get("from", ["data"])
-      sources2 = self._find_existing_inputs(new_net, l)
+    for layer_name in sorted(new_net.keys()):
+      sources = new_net[layer_name].get("from", ["data"])
+      sources2 = self._find_existing_inputs(new_net, layer_name)
       if sources != sources2:
         if "data" in sources2:
           sources2.remove("data")
-        new_net[l]["from"] = sources2
+        new_net[layer_name]["from"] = sources2
     self._step_net_jsons.append(new_net)
     return True
 
