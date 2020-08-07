@@ -1915,7 +1915,9 @@ class Vocabulary(object):
     """
     self.vocab_file = vocab_file
     self.unknown_label = unknown_label
-    self.num_labels = None  # will be set by _parse_vocab
+    self.num_labels = None  # type: typing.Optional[int]  # will be set by _parse_vocab
+    self.vocab = None  # type: typing.Optional[typing.Dict[str,int]]  # label->idx
+    self.labels = None  # type: typing.Optional[typing.List[str]]
     self._parse_vocab()
     if num_labels is not None:
       assert self.num_labels == num_labels
