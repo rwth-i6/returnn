@@ -5709,7 +5709,8 @@ class SelfAttentionLayer(_ConcatInputLayer):
     :param bool attention_left_only: will mask out the future. see Attention is all you need.
     :param str|float|int|None initial_state: see RnnCellLayer.get_rec_initial_state_inner().
     :param bool restrict_state_to_last_seq: see code comment below
-    :param None|tf.Tensor state_var_lengths: if passed, a Tensor containing the number of keys in the state_var for
+    :param None|tf.Tensor|()->tf.Tensor state_var_lengths:
+      if passed, a Tensor containing the number of keys in the state_var for
       each batch-entry, used for decoding in RASR.
     """
     super(SelfAttentionLayer, self).__init__(**kwargs)
@@ -5829,7 +5830,9 @@ class SelfAttentionLayer(_ConcatInputLayer):
           self.input_data.get_sequence_lengths(), maxlen=tf.shape(energy)[-1])  # (batch,time)
         energy_mask = tf.reshape(energy_mask, [tf.shape(energy)[0], 1, 1, tf.shape(energy)[-1]])  # (batch,1,1,time)
       if state_var_lengths is not None and prev_kv_left is not None:
-        state_var_lengths = state_var_lengths()
+        if callable(state_var_lengths):
+          state_var_lengths = state_var_lengths()
+        assert isinstance(state_var_lengths, tf.Tensor)
         state_var_max_length = tf.shape(prev_kv_left)[-2]
         total_max_length = tf.shape(energy)[-1]
         inverted_prefix_mask = tf.sequence_mask(
