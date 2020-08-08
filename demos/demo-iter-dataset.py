@@ -1,16 +1,15 @@
 #!/usr/bin/env python
 
+"""
+Iterate through a dataset, just like RETURNN would do in training.
+"""
+
 from __future__ import print_function
 
 import sys
-import os
+import typing
 
-# Add parent dir to Python path so that we can use GeneratingDataset and other RETURNN code.
-my_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.normpath(my_dir + "/..")
-if parent_dir not in sys.path:
-  sys.path.insert(0, parent_dir)
-
+import _setup_returnn_env  # noqa
 from returnn import __main__ as rnn
 from returnn.log import log
 from returnn.engine.base import EngineBase
@@ -34,6 +33,9 @@ def iterate_dataset(dataset, recurrent_net, batch_size, max_seqs):
 
 
 def iterate_epochs():
+  """
+  Iterate through epochs.
+  """
   start_epoch, start_batch = EngineBase.get_train_start_epoch_batch(config)
   final_epoch = EngineBase.config_get_final_epoch(config)
 
@@ -52,7 +54,14 @@ def iterate_epochs():
   print("Finished all epochs.", file=log.v3)
 
 
+config = None  # type: typing.Optional["returnn.config.Config"]
+
+
 def init(config_filename, command_line_options):
+  """
+  :param str config_filename:
+  :param list[str] command_line_options:
+  """
   rnn.init_better_exchook()
   rnn.init_thread_join_hack()
   rnn.init_config(config_filename, command_line_options)
@@ -67,6 +76,9 @@ def init(config_filename, command_line_options):
 
 
 def main(argv):
+  """
+  Main entry.
+  """
   assert len(argv) >= 2, "usage: %s <config>" % argv[0]
   init(config_filename=argv[1], command_line_options=argv[2:])
   iterate_epochs()

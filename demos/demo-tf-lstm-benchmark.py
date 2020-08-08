@@ -49,13 +49,11 @@ GeForce GTX 680:
 
 from __future__ import print_function
 import sys
-import os
 import time
 from argparse import ArgumentParser
 from pprint import pprint
 
-sys.path += [os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]
-
+import _setup_returnn_env  # noqa
 from returnn.util import better_exchook
 from returnn.log import log
 from returnn.config import Config
@@ -154,6 +152,9 @@ def benchmark(lstm_unit, use_gpu):
 
 
 def main():
+  """
+  Main entry.
+  """
   global LstmCellTypes
   print("Benchmarking LSTMs.")
   better_exchook.install()

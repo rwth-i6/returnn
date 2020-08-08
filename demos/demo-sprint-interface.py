@@ -16,6 +16,9 @@ assert os.path.exists("%s/rnn.py" % _base_dir)
 
 
 def main():
+  """
+  Main entry.
+  """
   tmp_dir = tempfile.mkdtemp()
   os.symlink("%s/returnn" % _base_dir, "%s/returnn" % tmp_dir)
   config_fn = "%s/returnn.config" % tmp_dir
