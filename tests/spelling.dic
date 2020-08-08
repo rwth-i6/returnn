@@ -4,6 +4,7 @@ adagrad
 argparse
 attribs
 audioread
+automata
 backprop
 bilinear
 blocksparse
@@ -74,7 +75,9 @@ timit
 tuske
 uint
 vanhoucke
+viterbi
 voigtlaender
 warprnnt
+welch
 zeyer
 zoneout
