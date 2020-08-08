@@ -192,7 +192,8 @@ def setup_pycharm_python_interpreter(pycharm_dir):
       pip_install("tensorflow")
     if not pip_check_is_installed("Theano"):
       pip_install("theano==0.9")
-    for pkg in ["typing", "librosa", "PySoundFile", "nltk", "horovod", "matplotlib", "mpi4py"]:
+    # Note: Horovod will usually fail to install in this env.
+    for pkg in ["typing", "librosa", "PySoundFile", "nltk", "matplotlib", "mpi4py"]:
       if not pip_check_is_installed(pkg):
         try:
           pip_install(pkg)
