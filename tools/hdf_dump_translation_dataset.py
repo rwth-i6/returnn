@@ -231,7 +231,6 @@ class HDFTranslationDatasetCreator(object):
     :param list[int] target_lengths: lengths of all target lines in current chunk
     """
     # We treat source factors as targets internally because HDF format does not support multiple inputs.
-    target_data_keys = self.source_data_keys[1:] + self.target_data_keys
 
     # For each sequence, seqLengths is expected to contain the length of the input and the length of each of the
     # targets, in alphabetical order of the target data keys. As all source and all target factors share the
