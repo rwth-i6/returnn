@@ -900,10 +900,10 @@ class _Output:
         output_text = prefix[1:] + output_buf.getvalue()
         self.lines.append(output_text)
 
-    def _pp_extra_info(self, obj, depthlimit=3):
+    def _pp_extra_info(self, obj, depth_limit=3):
         """
-        :param object|typing.Sized obj:
-        :param int depthlimit:
+        :param typing.Any|typing.Sized obj:
+        :param int depth_limit:
         :rtype: str
         """
         s = []
@@ -916,14 +916,14 @@ class _Output:
                     s += ["len = " + str(obj.__len__())]
             except Exception:
                 pass
-        if depthlimit > 0 and hasattr(obj, "__getitem__"):
+        if depth_limit > 0 and hasattr(obj, "__getitem__"):
             # noinspection PyBroadException
             try:
                 if type(obj) in (str, unicode):
                     pass  # doesn't make sense to get subitems here
                 else:
-                    subobj = obj.__getitem__(0)
-                    extra_info = self._pp_extra_info(subobj, depthlimit - 1)
+                    subobj = obj.__getitem__(0)  # noqa
+                    extra_info = self._pp_extra_info(subobj, depth_limit - 1)
                     if extra_info != "":
                         s += ["_[0]: {" + extra_info + "}"]
             except Exception:
@@ -1555,7 +1555,7 @@ def _import_dummy_mod_by_path(filename):
         import importlib.util
         spec = importlib.util.spec_from_file_location(dummy_mod_name, filename)
         mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        spec.loader.exec_module(mod)  # noqa
 
 
 def _test_syntax_error():
