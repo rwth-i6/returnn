@@ -72,17 +72,20 @@ class FileArchive:
     """
     return unpack("b", self.f.read(1))[0]
 
-  def read_bytes(self, l):
+  def read_bytes(self, length):
     """
+    :param int length:
     :rtype: bytes
     """
-    return unpack('%ds' % l, self.f.read(l))[0]
+    return unpack('%ds' % length, self.f.read(length))[0]
 
-  def read_str(self, l, enc='ascii'):
+  def read_str(self, length, encoding='ascii'):
     """
+    :param int length:
+    :param str encoding:
     :rtype: str
     """
-    return self.read_bytes(l).decode(enc)
+    return self.read_bytes(length).decode(encoding)
 
   def read_f32(self):
     """
@@ -623,7 +626,7 @@ class AllophoneLabeling(object):
     """
     assert phoneme_file or state_tying_file
     self.allophone_file = allophone_file
-    self.allophones = [l for l in open(allophone_file).read().splitlines() if l and l[0] != "#"]
+    self.allophones = [line for line in open(allophone_file).read().splitlines() if line and line[0] != "#"]
     self.allophones_idx = {p: i for i, p in enumerate(self.allophones)}
     self.sil_allo_state_id = self.allophones_idx[silence_phone + "{#+#}@i@f"]
     if verbose_out:
@@ -645,8 +648,8 @@ class AllophoneLabeling(object):
           print("AllophoneLabeling: %i phones = labels." % self.num_labels, file=verbose_out)
     if state_tying_file:
       self.state_tying = {k: int(v)
-                          for l in open(state_tying_file).read().splitlines()
-                          for (k, v) in [l.split()]}
+                          for line in open(state_tying_file).read().splitlines()
+                          for (k, v) in [line.split()]}
       self.sil_label_idx = self.state_tying[silence_phone + "{#+#}@i@f.0"]
       self.num_allo_states = self._get_num_allo_states()
       self.state_tying_by_allo_state_idx = {
@@ -734,15 +737,15 @@ class MixtureSet:
     """
     return unpack('b', self.f.read(1))[0]
 
-  def read_str(self, l, enc='ascii'):
+  def read_str(self, length, encoding='ascii'):
     """
-    :param int l:
-    :param str enc:
+    :param int length:
+    :param str encoding:
     :rtype: str
     """
     a = array.array('b')
-    a.fromfile(self.f, l)
-    return a.tostring().decode(enc)
+    a.fromfile(self.f, length)
+    return a.tostring().decode(encoding)
 
   def read_f32(self):
     """
@@ -903,13 +906,15 @@ class WordBoundaries:
     """
     return int(unpack("i", self.f.read(4))[0])
 
-  def read_str(self, l, enc='ascii'):
+  def read_str(self, length, encoding='ascii'):
     """
+    :param int length:
+    :param str encoding:
     :rtype: str
     """
     a = array.array('b')
-    a.fromfile(self.f, l)
-    return a.tostring().decode(enc)
+    a.fromfile(self.f, length)
+    return a.tostring().decode(encoding)
 
   def __init__(self, filename):
     """

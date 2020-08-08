@@ -10,6 +10,7 @@ from __future__ import absolute_import  # fix "import theano" in Python 2
 
 import copy
 import numpy
+import typing
 from returnn.util.basic import make_hashable, unicode, long
 
 
@@ -134,7 +135,13 @@ class NativeOpBaseMixin(object):
     assert len(inputs) == len(self.in_info) + len(self.out_info) * 2
     return [inputs[i] for i in self.grad_input_map]
 
+  # noinspection PyUnusedLocal
   def infer_shape(self, node, input_shapes):
+    """
+    :param node:
+    :param input_shapes:
+    :rtype: list[tuple[int]]
+    """
     assert len(input_shapes) == len(self.in_info)
     out_shapes = []
     for info in self.out_info:
@@ -143,7 +150,8 @@ class NativeOpBaseMixin(object):
         if isinstance(s, tuple):  # we interpret this as a reference to input shapes
           assert len(s) == 2, "dim %r invalid in info %r" % (s, info)
           assert 0 <= s[0] < len(input_shapes), "dim %r invalid in info %r" % (s, info)
-          assert 0 <= s[1] < self.in_info[s[0]]["ndim"], "dim idx %r invalid in input %i %r, info %r" % (s[1], s[0], self.in_info[s[0]], info)
+          assert 0 <= s[1] < self.in_info[s[0]]["ndim"], (
+            "dim idx %r invalid in input %i %r, info %r" % (s[1], s[0], self.in_info[s[0]], info))
           out_shape[idx] = input_shapes[s[0]][s[1]]
       assert not any([s is None for s in out_shape]), "out_shape %r, out_info %r" % (out_shape, self.out_info)
       out_shapes += [tuple(out_shape)]
@@ -239,17 +247,20 @@ class NativeOpGenBase:
   Base interface for op generation.
   See NativeOp.__init__() for attribs.
   """
-  in_info = None  # type: tuple[dict[str]]
-  out_info = None  # type: tuple[dict[str]]
+  in_info = None  # type: typing.Tuple[typing.Dict[str]]
+  out_info = None  # type: typing.Tuple[typing.Dict[str]]
   c_fw_code = None  # type: str
   c_bw_code = None  # type: str
-  c_extra_support_code = None  # type: dict[str,str]
-  code_version = None  # type: tuple[int]|int
+  c_extra_support_code = None  # type: typing.Dict[str,str]
+  code_version = None  # type: typing.Union[typing.Tuple[int], int]
   grad_input_map = None
   theano_custom_grad = None
   cpu_support = True
 
   def make_theano_op(self):
+    """
+    :rtype: returnn.theano.native_op.TheanoNativeOp
+    """
     from returnn.theano.native_op import TheanoNativeOp
     assert self.in_info is not None
     assert self.out_info is not None
@@ -263,10 +274,18 @@ class NativeOpGenBase:
 
   @classmethod
   def map_layer_inputs_to_op(cls, *inputs):
+    """
+    :param inputs:
+    :return: inputs
+    """
     return inputs
 
   @classmethod
   def map_layer_output_from_op(cls, *outputs):
+    """
+    :param outputs:
+    :return: outputs[0]
+    """
     return outputs[0]
 
 
@@ -300,15 +319,23 @@ class LstmGenericBase(NativeOpGenBase):
     {"name": "d", "ndim": 2, "shape": ((2, 0), (2, 1)), "need_contiguous": True}
   )
 
+  # noinspection PyPep8Naming,PyUnusedLocal
   @classmethod
   def grad_input_map(cls, Z, V_h, c, i,  Y, H, d,  DY, DH, Dd):
-    return (V_h, c, i,  Y, H,  DY, Dd)
+    """
+    Map grads.
+    """
+    return V_h, c, i,  Y, H,  DY, Dd
 
+  # noinspection PyPep8Naming
   @classmethod
   def map_layer_inputs_to_op(cls, Z, V_h, i):
+    """
+    Map.
+    """
     import returnn.util.basic
     assert returnn.util.basic.BackendEngine.is_theano_selected()
-    import theano.tensor as T
+    import theano.tensor as T  # noqa
     assert Z.ndim == 3
     assert V_h.ndim == 2
     assert i.ndim == 2
@@ -543,9 +570,21 @@ class LstmLowMem(NativeOpGenBase):
     {"name": "C", "ndim": 3, "shape": ((0, 0), (0, 1), (4, 1)), "need_contiguous": True},
     {"name": "d", "ndim": 2, "shape": ((0, 1), (4, 1)), "need_contiguous": True}
   )
+
+  # noinspection PyPep8Naming,PyUnusedLocal
   @classmethod
-  def grad_input_map(cls, X, W, b, y0, c0, i, start, step,   Y, C, d,   DY, DC, Dd):
-    return (X, W, b, y0, c0, i, start, step,   Y, C,   DY, Dd)
+  def grad_input_map(
+        cls,
+        X, W, b, y0, c0, i, start, step,
+        Y, C, d,
+        DY, DC, Dd):
+    """
+    Map args.
+    """
+    return (
+      X, W, b, y0, c0, i, start, step,
+      Y, C,
+      DY, Dd)
 
   c_extra_support_code = {
     "lstm_kernel": """
@@ -988,8 +1027,11 @@ class NativeLstm2(NativeOpGenBase):
     {"name": "H", "ndim": 3, "shape": ((0, 0), (0, 1), (1, 1)), "need_contiguous": True},
     {"name": "d", "ndim": 2, "shape": ((0, 1), (1, 0)), "need_contiguous": True}
   )
+
+  # noinspection PyMissingOrEmptyDocstring,PyUnusedLocal,PyPep8Naming
   @classmethod
   def grad_input_map(cls, X, W, y0, c0, i, start, step,   Y, C, H, d,   DY, DC, DH, Dd):
+    # noinspection PyRedundantParentheses
     return (X, W, y0, c0, i, start, step,   Y, C, H,   DY, Dd)
 
   c_extra_support_code = {
@@ -1367,7 +1409,8 @@ class TwoDLSTM(NativeOpGenBase):
     :param W: recurrent matrix. 2d (dim,dim*5)
     :param b: bias. 2d (batch,dim)
     :param ptr_storage: ptr_storage. 1d (1 * 5 * max_diag_size * sizeof(float*) / sizeof(float))
-    :param valid: used internally to store which cells are valid (have to be computed). 1d (1 * max_diag_size * n_minibatch)
+    :param valid: used internally to store which cells are valid (have to be computed).
+      1d (1 * max_diag_size * n_minibatch)
     :param workmem2: used internally. 3d (H[0], H[2], H[3])
     :param sizes: height (target) x width (source) of the unpadded sentences. 2d (batch, 2)
   outputs:
@@ -1405,15 +1448,17 @@ class TwoDLSTM(NativeOpGenBase):
      },  # "bw_in_var": {"want_inplace": "dummy_out"}},
   )
 
+  # noinspection PyMissingOrEmptyDocstring,PyPep8Naming
   @classmethod
   def grad_input_map(cls, X, V_h, V_v, W, b, ptr_storage_fwd, ptr_storage_bwd, valid, workmem, workmem2, sizes, DYDummy,
-                     initialState, initialOutput, iteration, CompleteY, H, DCompleteY, DH):  # ?
+                     initialState, initialOutput, iteration, CompleteY, H, DCompleteY, DH):
     return (X, V_h, V_v, W, b, ptr_storage_fwd, ptr_storage_bwd, valid, workmem, workmem2, sizes, DYDummy, initialState,
             initialOutput, iteration, CompleteY, H, DCompleteY, DH)
 
+  # noinspection PyMissingOrEmptyDocstring,PyPep8Naming
   @classmethod
   def map_layer_inputs_to_op(cls, Zs, Zt, V_h, V_v, W, b, ptr_storage):
-    assert (0)  # no support for Theano
+    assert False  # no support for Theano
 
   c_extra_support_code = {
     "01_repvec": """
@@ -1446,20 +1491,24 @@ class TwoDLSTM(NativeOpGenBase):
       }
     """,
     "03_data_ptr": """
-      //if nd is 2 then assume a weight matrix and just return beginning of data
-      //else nd should be 3 and we pick the x part
+      // if nd is 2 then assume a weight matrix and just return beginning of data
+      // else nd should be 3 and we pick the x part
       float* data_ptr(const Ndarray* a, int y, int x, int outer_dim=0) {
           assert(Ndarray_NDIM(a) == 2 || Ndarray_NDIM(a) == 4 || Ndarray_NDIM(a) == 5);
           if(Ndarray_NDIM(a) == 2)
               return Ndarray_DEV_DATA(a);
           else if(Ndarray_NDIM(a) == 4) {
               Ndarray_DIMS_Type dims = Ndarray_HOST_DIMS(a);
-              return Ndarray_DEV_DATA(a) + y * dims[1] * dims[2] * dims[3] + x * dims[2] * dims[3]; // row-major or minor?
+              return Ndarray_DEV_DATA(a)
+                + y * dims[1] * dims[2] * dims[3]
+                + x * dims[2] * dims[3]; // row-major or minor?
           }
           else {
               Ndarray_DIMS_Type dims = Ndarray_HOST_DIMS(a);
-              return Ndarray_DEV_DATA(a) + outer_dim * dims[1] * dims[2] * dims[3] * dims[4] +
-           y * dims[2] * dims[3] * dims[4] + x * dims[3] * dims[4];
+              return Ndarray_DEV_DATA(a)
+                + outer_dim * dims[1] * dims[2] * dims[3] * dims[4]
+                + y * dims[2] * dims[3] * dims[4]
+                + x * dims[3] * dims[4];
           }
       }
 
@@ -1470,7 +1519,7 @@ class TwoDLSTM(NativeOpGenBase):
       }
     """,
     "04_affine_y_x_batched_onedir": """
-      //ys and xs: base indices, offset by y_A, x_A (-1,0,1)
+      // ys and xs: base indices, offset by y_A, x_A (-1,0,1)
       void affine_y_x_batched_onedir(OpKernelContext* context, int y_A, int x_A,
         const Ndarray * A1,
         const Ndarray * B1,
@@ -1524,7 +1573,10 @@ class TwoDLSTM(NativeOpGenBase):
         const float alpha = 1;
         const float beta = 1;
 
-        Ndarray_sgemm_batched(transB, transA, B_dim[1], A_dim[0], A_dim[1], &alpha, B_ptrs_data, ldB, A_ptrs_data, ldA, &beta, C_ptrs_data, B_dim[1], 1 * batch_size, batch_size == 1);
+        Ndarray_sgemm_batched(
+          transB, transA, B_dim[1], A_dim[0], A_dim[1], &alpha,
+          B_ptrs_data, ldB, A_ptrs_data, ldA, &beta,
+          C_ptrs_data, B_dim[1], 1 * batch_size, batch_size == 1);
       }
     """,
     "05_lstm_stable_cell_kernel_batched": """
@@ -1539,7 +1591,8 @@ class TwoDLSTM(NativeOpGenBase):
         //data[3*n_cells..4*n_cells-1] : output gate
         //data[5*n_cells..6*n_cells-1] : cell state
         //output[0*n_cells..1*n_cells-1]: cell output
-        //valids: either 1.0 or 0.0, indicating if the current (y,x) position is still inside the image in this minibatch
+        //valids: either 1.0 or 0.0, indicating if the current (y,x) position
+        //  is still inside the image in this minibatch
         //repeated for every mini-batch
 
         int idx = threadIdx.x + blockDim.x * blockIdx.x;
@@ -1592,7 +1645,8 @@ class TwoDLSTM(NativeOpGenBase):
     """,
     "06_do_lstm_batched_onedir": """
       // H, CompleteY, ys, xs, ptr_storage
-      void do_lstm_batched_onedir(OpKernelContext* context, Ndarray* H, Ndarray* initialState, float iteration, Ndarray* completeOut,
+      void do_lstm_batched_onedir(
+       OpKernelContext* context, Ndarray* H, Ndarray* initialState, float iteration, Ndarray* completeOut,
        const std::vector<int>& ys, const std::vector<int>& xs,
        Ndarray* ptr_storage, Ndarray* valid_storage, Ndarray* sizes)
       {
@@ -1608,7 +1662,8 @@ class TwoDLSTM(NativeOpGenBase):
         std::vector<float> valid(1 * n_minibatch * n_outer_batch, 1.0f);
 
         float* h_sizes; // the sizes array is stored on the GPU, we have to copy it to the CPU
-        int dsize = (n_outer_batch) * (n_minibatch) * sizeof(float) * 2; // (*2), because we have 2 (height, width) numbers
+        int dsize =
+          (n_outer_batch) * (n_minibatch) * sizeof(float) * 2; // (*2), because we have 2 (height, width) numbers
         h_sizes = (float*)malloc(dsize);
         HANDLE_ERROR(cudaMemcpy(h_sizes, Ndarray_DEV_DATA(sizes), dsize, cudaMemcpyDeviceToHost));
 
@@ -1688,10 +1743,14 @@ class TwoDLSTM(NativeOpGenBase):
         //delta[4*n_cells..5*n_cells-1] : cell state
         //epsilon[0*n_cells..1*n_cells-1]: cell output derivative
         //next_epsilon_y[0*n_cells..1*n_cells-1]: cell state derivative * forget_gate * lambda_gate (of next timestep)
-        //next_epsilon_x[0*n_cells..1*n_cells-1]: cell state derivative * forget_gate * (-1*)lambda_gate (of next timestep)
-        //epsilon_y[0*n_cells..1*n_cells-1]: cell state derivative * forget_gate * lambda_gate (of current timestep, as output)
-        //epsilon_x[0*n_cells..1*n_cells-1]: cell state derivative * forget_gate * (1-lambda_gate) (of current timestep, as output)
-        //valids: either 1.0 or 0.0, indicating if the current (y,x) position is still inside the image in this minibatch
+        //next_epsilon_x[0*n_cells..1*n_cells-1]:
+        //  cell state derivative * forget_gate * (-1*)lambda_gate (of next timestep)
+        //epsilon_y[0*n_cells..1*n_cells-1]:
+        //  cell state derivative * forget_gate * lambda_gate (of current timestep, as output)
+        //epsilon_x[0*n_cells..1*n_cells-1]:
+        //  cell state derivative * forget_gate * (1-lambda_gate) (of current timestep, as output)
+        //valids: either 1.0 or 0.0, indicating if the current (y,x) position
+        //  is still inside the image in this minibatch
         //repeated for every mini-batch
 
         float near_zero = 0.00000000001f;
@@ -1782,7 +1841,8 @@ class TwoDLSTM(NativeOpGenBase):
       }
     """,
     "08_do_lstm_bwd_batched_onedir": """
-      //epsilon are the derivates w.r.t. Z, delta stores the gate and cell activations and will store the derivatives later
+      //epsilon are the derivates w.r.t. Z, delta stores the gate and cell activations
+      //  and will store the derivatives later
       void do_lstm_bwd_batched_onedir(OpKernelContext* context, Ndarray * delta1, Ndarray * epsilon1,
        const Ndarray* CompleteY, Ndarray * workmem1,
        int height, int width, const std::vector<int>& ys, const std::vector<int>& xs,
@@ -1799,7 +1859,8 @@ class TwoDLSTM(NativeOpGenBase):
         std::vector<float> valid(1 * n_minibatch * n_outer_batch, 1.0f);
 
         float* h_sizes; // the sizes array is stored on the GPU, we have to copy it to the CPU
-        int dsize = (n_outer_batch) * (n_minibatch) * sizeof(float) * 2; // (*2), because we have 2 (height, width) numbers
+        int dsize =
+          (n_outer_batch) * (n_minibatch) * sizeof(float) * 2; // (*2), because we have 2 (height, width) numbers
         h_sizes = (float*)malloc(dsize);
         HANDLE_ERROR(cudaMemcpy(h_sizes, Ndarray_DEV_DATA(sizes), dsize, cudaMemcpyDeviceToHost));
 
@@ -1884,7 +1945,8 @@ class TwoDLSTM(NativeOpGenBase):
   }
 
   c_fw_code = """
-    // X*, V_h, V_v, W, b, ptr_storage_fwd, ptr_storage_bwd, valid, workmem, sizes, DYDummy, initialState, initialOutput, iteration = input_names (*: inplace)
+    // X*, V_h, V_v, W, b, ptr_storage_fwd, ptr_storage_bwd, valid, workmem, sizes, DYDummy,
+    //   initialState, initialOutput, iteration = input_names (*: inplace)
     // CompleteY, H = output_names
 
     assert(n_inputs == 15);
@@ -2059,7 +2121,9 @@ class TwoDLSTM(NativeOpGenBase):
       affine_y_x_batched_onedir(context, 1, 0, delta1, V_v,
         epsilon, ys_v, xs_v, ptr_storage_bwd, height, width, 0, false, true);
 
-      do_lstm_bwd_batched_onedir(context, delta1, epsilon, CompleteY, workmem, X_dim[0], X_dim[2], ys, xs, ptr_storage_bwd, valid_storage, sizes, diag+1);
+      do_lstm_bwd_batched_onedir(
+        context, delta1, epsilon, CompleteY, workmem,
+        X_dim[0], X_dim[2], ys, xs, ptr_storage_bwd, valid_storage, sizes, diag+1);
     }
 
     //DW = X^T * delta
@@ -2079,7 +2143,8 @@ class TwoDLSTM(NativeOpGenBase):
     {
       float * workmem2_1_data_ptr = Ndarray_DEV_DATA(workmem2) + y * block_size;
       float * delta1_data_ptr = data_ptr(delta1, y, 0);
-      HANDLE_ERROR(cudaMemcpy(workmem2_1_data_ptr, delta1_data_ptr, block_size * sizeof(float), cudaMemcpyDeviceToDevice));
+      HANDLE_ERROR(cudaMemcpy(
+        workmem2_1_data_ptr, delta1_data_ptr, block_size * sizeof(float), cudaMemcpyDeviceToDevice));
       HANDLE_ERROR(cudaMemset(delta1_data_ptr, 0, sizeof(float) * H_dim[2] * H_dim[3]));
     }
 
@@ -2091,7 +2156,8 @@ class TwoDLSTM(NativeOpGenBase):
     {
       float * workmem2_1_data_ptr = Ndarray_DEV_DATA(workmem2) + y * block_size;
       float * delta1_data_ptr = data_ptr(delta1, y, 0);
-      HANDLE_ERROR(cudaMemcpy(delta1_data_ptr, workmem2_1_data_ptr, block_size * sizeof(float), cudaMemcpyDeviceToDevice));
+      HANDLE_ERROR(cudaMemcpy(
+        delta1_data_ptr, workmem2_1_data_ptr, block_size * sizeof(float), cudaMemcpyDeviceToDevice));
     }
 
     //DV_v = Y[0..end-1]^T * delta[1..end]
@@ -2124,7 +2190,8 @@ class Chunking(NativeOpGenBase):
     {"name": "index", "ndim": 2, "shape": (None, None), "gradient": "disconnected"},
     {"name": "output_buffer", "ndim": 3, "shape": (None, None, None), "want_inplace": 0, "gradient": "disconnected"},
     {"name": "oindex_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 1, "gradient": "disconnected"},
-    {"name": "chunk_params", "ndim": 1, "shape": (2,), "need_contiguous": True, "gradient": "disconnected"},  # (chunk_size, chunk_step)
+    {"name": "chunk_params", "ndim": 1, "shape": (2,),
+     "need_contiguous": True, "gradient": "disconnected"},  # (chunk_size, chunk_step)
   )
   out_info = (
     {"name": "output", "ndim": 3, "shape": ((2, 0), (2, 1), (2, 2))},
@@ -2239,32 +2306,40 @@ class Chunking(NativeOpGenBase):
     chunk_start_frames = []
     while True:
       chunk_start_frames.append(t)
-      if t + chunk_size >= n_time: break
+      if t + chunk_size >= n_time:
+        break
       t += chunk_step
     return chunk_start_frames
 
   @classmethod
   def theano_custom_grad(cls, op, inputs, output_grads):
-    from returnn.theano.native_op import unchunk, T
+    """
+    :param op:
+    :param inputs:
+    :param output_grads:
+    :return: grads
+    """
+    from theano import tensor as T  # noqa
+    from returnn.theano.native_op import unchunk
     assert len(op.in_info) == len(inputs)
     assert len(op.out_info) == len(output_grads)
 
-    input, index, _, _, chunk_params = inputs
-    Dout, _ = output_grads
+    x, index, _, _, chunk_params = inputs
+    d_out, _ = output_grads
 
-    assert input.ndim == 3
-    n_time = input.shape[0]
-    n_batch = input.shape[1]
+    assert x.ndim == 3
+    n_time = x.shape[0]
+    n_batch = x.shape[1]
     chunk_size = chunk_params[0]
     chunk_step = chunk_params[1]
     out, oindex = op(*inputs)
-    Dinput, _, factors = unchunk(
-      Dout, index=oindex, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
+    d_input, _, factors = unchunk(
+      d_out, index=oindex, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
     # We applied the factor in unchunk, but for this gradient, we actually don't want that, so undo it.
-    Dinput /= factors.dimshuffle(0, 1, 'x')
+    d_input /= factors.dimshuffle(0, 1, 'x')
 
     # noinspection PyCallingNonCallable
-    grads = [Dinput] + [T.DisconnectedType()() for inp in inputs[1:]]
+    grads = [d_input] + [T.DisconnectedType()() for _ in inputs[1:]]
     assert len(grads) == len(inputs)
     return grads
 
@@ -2284,7 +2359,8 @@ class UnChunking(NativeOpGenBase):
     {"name": "output_buffer", "ndim": 3, "shape": (None, None, None), "want_inplace": 0, "gradient": "disconnected"},
     {"name": "oindex_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 1, "gradient": "disconnected"},
     {"name": "ofactors_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 2, "gradient": "disconnected"},
-    {"name": "chunk_params", "ndim": 1, "shape": (2,), "need_contiguous": True, "gradient": "disconnected"},  # (chunk_size, chunk_step)
+    {"name": "chunk_params", "ndim": 1, "shape": (2,),
+     "need_contiguous": True, "gradient": "disconnected"},  # (chunk_size, chunk_step)
   )
   out_info = (
     {"name": "output", "ndim": 3, "shape": ((2, 0), (2, 1), (2, 2))},
@@ -2433,21 +2509,28 @@ class UnChunking(NativeOpGenBase):
 
   @classmethod
   def theano_custom_grad(cls, op, inputs, output_grads):
-    from returnn.theano.native_op import chunk, T
+    """
+    :param op:
+    :param inputs:
+    :param output_grads:
+    :return: grads
+    """
+    import theano.tensor as T  # noqa
+    from returnn.theano.native_op import chunk
     assert len(op.in_info) == len(inputs)
     assert len(op.out_info) == len(output_grads)
 
-    input, index, _, _, _, chunk_params = inputs
-    Dout, _, _ = output_grads
+    x, index, _, _, _, chunk_params = inputs
+    d_out, _, _ = output_grads
 
     chunk_size = chunk_params[0]
     chunk_step = chunk_params[1]
     out, oindex, factors = op(*inputs)
-    Dout *= factors.dimshuffle(0, 1, 'x')
-    Dinput, _ = chunk(Dout, index=oindex, chunk_size=chunk_size, chunk_step=chunk_step)
+    d_out *= factors.dimshuffle(0, 1, 'x')
+    d_input, _ = chunk(d_out, index=oindex, chunk_size=chunk_size, chunk_step=chunk_step)
 
     # noinspection PyCallingNonCallable
-    grads = [Dinput] + [T.DisconnectedType()() for inp in inputs[1:]]
+    grads = [d_input] + [T.DisconnectedType()() for _ in inputs[1:]]
     assert len(grads) == len(inputs)
     return grads
 
@@ -2468,8 +2551,12 @@ class SubtensorBatchedIndex(NativeOpGenBase):
     {"name": "y", "ndim": 2, "shape": ((0, 0), (0, 1))},
   )
 
+  # noinspection PyUnusedLocal,PyPep8Naming
   @classmethod
   def grad_input_map(cls, x, idx,  y,  DY):
+    """
+    Map.
+    """
     return x, idx, DY
 
   c_extra_support_code = {
@@ -2683,8 +2770,10 @@ class MaxAndArgmaxSparse(NativeOpGenBase):
     {"name": "s1", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
     {"name": "weight", "ndim": 2, "shape": (None, None), "need_contiguous": True},
     {"name": "mask", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "_out_max", "ndim": 2, "shape": (None, None), "need_contiguous": True, "want_inplace": 0, "gradient": "disconnected"},
-    {"name": "_out_arg", "ndim": 2, "shape": (None, None), "need_contiguous": True, "want_inplace": 1, "gradient": "disconnected"},
+    {"name": "_out_max", "ndim": 2, "shape": (None, None),
+     "need_contiguous": True, "want_inplace": 0, "gradient": "disconnected"},
+    {"name": "_out_arg", "ndim": 2, "shape": (None, None),
+     "need_contiguous": True, "want_inplace": 1, "gradient": "disconnected"},
   )
   out_info = (
     {"name": "out_max", "ndim": 2, "shape": ((4, 0), (4, 1))},
@@ -2929,14 +3018,14 @@ class CrossEntropySoftmaxAndGradientZSparse(NativeOpGenBase):
 
 
 common_fast_bw_kernels = {
-  "001_set_start_states" : """
+  "001_set_start_states": """
     DEF_KERNEL
     void set_start_states(float* states, unsigned* start_states) {
       unsigned state_idx = start_states[blockIdx.x * blockDim.x + threadIdx.x];
       states[state_idx] = 0.0;
     }
   """,
-  "010_fill_array" : """
+  "010_fill_array": """
     DEF_KERNEL
     void fill_array(float* array, float value, unsigned size) {
       unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -3031,6 +3120,7 @@ common_fast_bw_kernels = {
 
 
 class FastBaumWelchOp(NativeOpGenBase):
+  # noinspection PyUnresolvedReferences
   """
   inputs:
     :param am_scores: scores in -log space. 3d (time,batch,dim)
@@ -3040,23 +3130,30 @@ class FastBaumWelchOp(NativeOpGenBase):
     :param output: Baum-Welch alignment, scores in -log space. 3d (time,batch,dim), like am_scores
   """
   in_info = (
-    {"name": "am_scores",        "ndim": 3, "shape": (None,   None,    None), "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "edges",            "ndim": 2, "shape": (None,   None),          "dtype": "int32", "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "weights",          "ndim": 1, "shape": (None,),                 "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "start_end_states", "ndim": 2, "shape": (2,      None),          "dtype": "int32", "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "index",            "ndim": 2, "shape": ((0, 0), (0, 1)),        "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "state_buffer",     "ndim": 2, "shape": (2,      None),          "need_contiguous": True, "gradient": "disconnected"}
+    {"name": "am_scores",        "ndim": 3, "shape": (None,   None,    None),
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "edges",            "ndim": 2, "shape": (None,   None),          "dtype": "int32",
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "weights",          "ndim": 1, "shape": (None,),
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "start_end_states", "ndim": 2, "shape": (2,      None),          "dtype": "int32",
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "index",            "ndim": 2, "shape": ((0, 0), (0, 1)),
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "state_buffer",     "ndim": 2, "shape": (2,      None),
+     "need_contiguous": True, "gradient": "disconnected"}
   )
   out_info = (
-    {"name": "output", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True },
-    {"name": "sums",   "ndim": 2, "shape": ((0, 0), (0, 1)),         "need_contiguous": True },
+    {"name": "output", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True},
+    {"name": "sums",   "ndim": 2, "shape": ((0, 0), (0, 1)),         "need_contiguous": True},
   )
 
   c_extra_support_code = copy.copy(common_fast_bw_kernels)
   c_extra_support_code.update({
     "100_init_bwd_state_buffer": """
       DEF_KERNEL
-      void init_bwd_state_buffer(float* states, unsigned* end_states, unsigned t, unsigned max_t, float* index, unsigned index_stride) {
+      void init_bwd_state_buffer(
+          float* states, unsigned* end_states, unsigned t, unsigned max_t, float* index, unsigned index_stride) {
         unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (index[t * index_stride + idx] == 1.0 && (t == max_t || index[(t + 1) * index_stride + idx] == 0.0)) {
           unsigned state_idx = end_states[idx];
@@ -3067,7 +3164,8 @@ class FastBaumWelchOp(NativeOpGenBase):
     "101_next_frame": """
       DEF_KERNEL
       void next_frame(bool fwd, unsigned num_edges, unsigned  num_emissions,
-                      unsigned* sequence_idxs, unsigned* from_buffer, unsigned* to_buffer, float* weight_buffer, unsigned* emission_idxs,
+                      unsigned* sequence_idxs, unsigned* from_buffer, unsigned* to_buffer, float* weight_buffer,
+                      unsigned* emission_idxs,
                       float* prev_frame, float* next_frame, float* am_scores, float* edge_buffer) {
         unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (idx >= num_edges) {
@@ -3151,16 +3249,21 @@ class FastBaumWelchOp(NativeOpGenBase):
     "110_write_alignment_to_file": """
       void write_alignment_to_file(float* d_state_buffer, float* d_index, unsigned index_stride,
                                    unsigned* d_start_states, unsigned* d_end_states,
-                                   float pruning, unsigned n_frames, unsigned n_seqs, unsigned n_states, unsigned batch_idx) {
+                                   float pruning, unsigned n_frames, unsigned n_seqs, unsigned n_states,
+                                   unsigned batch_idx) {
         std::vector<float>    state_buffer((n_frames + 1u) * n_states);
         std::vector<float>    index       (n_frames * index_stride);
         std::vector<unsigned> start_states(n_seqs);
         std::vector<unsigned> end_states  (n_seqs);
 
-        //HANDLE_ERROR(cudaMemcpy(state_buffer.data(), d_state_buffer, state_buffer.size() * sizeof(float), cudaMemcpyDeviceToHost));
-        //HANDLE_ERROR(cudaMemcpy(index.data(),        d_index,        index.size()        * sizeof(float), cudaMemcpyDeviceToHost));
-        //HANDLE_ERROR(cudaMemcpy(start_states.data(), d_start_states, start_states.size() * sizeof(float), cudaMemcpyDeviceToHost));
-        //HANDLE_ERROR(cudaMemcpy(end_states.data(),   d_end_states,   end_states.size()   * sizeof(float), cudaMemcpyDeviceToHost));
+        //HANDLE_ERROR(cudaMemcpy(
+        //  state_buffer.data(), d_state_buffer, state_buffer.size() * sizeof(float), cudaMemcpyDeviceToHost));
+        //HANDLE_ERROR(cudaMemcpy(
+        //  index.data(),        d_index,        index.size()        * sizeof(float), cudaMemcpyDeviceToHost));
+        //HANDLE_ERROR(cudaMemcpy(
+        //  start_states.data(), d_start_states, start_states.size() * sizeof(float), cudaMemcpyDeviceToHost));
+        //HANDLE_ERROR(cudaMemcpy(
+        //  end_states.data(),   d_end_states,   end_states.size()   * sizeof(float), cudaMemcpyDeviceToHost));
 
         for (unsigned seq = 0u; seq < n_seqs; seq++) {
           std::stringstream filename;
@@ -3190,7 +3293,8 @@ class FastBaumWelchOp(NativeOpGenBase):
     """,
     "111_write_output_to_file": """
       void write_output_to_file(float* d_out, float* d_index, unsigned index_stride,
-                                float pruning, unsigned n_frames, unsigned n_seqs, unsigned n_emissions, unsigned batch_idx) {
+                                float pruning, unsigned n_frames, unsigned n_seqs, unsigned n_emissions,
+                                unsigned batch_idx) {
         std::vector<float> buffer(n_frames * n_seqs * n_emissions);
         std::vector<float> index (n_frames * index_stride);
 
@@ -3254,14 +3358,20 @@ class FastBaumWelchOp(NativeOpGenBase):
     static unsigned batch_idx  = 0u;
     float           pruning    = 10.f;
 
-    unsigned* d_from              = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges) + 0 * Ndarray_STRIDE(edges, 0));
-    unsigned* d_to                = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges) + 1 * Ndarray_STRIDE(edges, 0));
-    unsigned* d_emission_idxs     = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges) + 2 * Ndarray_STRIDE(edges, 0));
-    unsigned* d_sequence_idxs     = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges) + 3 * Ndarray_STRIDE(edges, 0));
-    float*    d_weights           = Ndarray_DEV_DATA(weights);
-    float*    d_am_scores         = Ndarray_DEV_DATA(am_scores);
-    unsigned* d_start_states      = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(start_end_states) + 0 * Ndarray_STRIDE(start_end_states, 0));
-    unsigned* d_end_states        = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(start_end_states) + 1 * Ndarray_STRIDE(start_end_states, 0));
+    unsigned* d_from = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges)
+      + 0 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_to = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges)
+      + 1 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_emission_idxs = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges)
+      + 2 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_sequence_idxs = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges)
+      + 3 * Ndarray_STRIDE(edges, 0));
+    float*    d_weights = Ndarray_DEV_DATA(weights);
+    float*    d_am_scores = Ndarray_DEV_DATA(am_scores);
+    unsigned* d_start_states = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(start_end_states)
+      + 0 * Ndarray_STRIDE(start_end_states, 0));
+    unsigned* d_end_states = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(start_end_states)
+      + 1 * Ndarray_STRIDE(start_end_states, 0));
     float*    d_index             = Ndarray_DEV_DATA(index);
     float*    d_state_buffer_prev = Ndarray_DEV_DATA(state_buffer) + 0 * Ndarray_STRIDE(state_buffer, 0);
     float*    d_state_buffer_next = Ndarray_DEV_DATA(state_buffer) + 1 * Ndarray_STRIDE(state_buffer, 0);
@@ -3303,7 +3413,9 @@ class FastBaumWelchOp(NativeOpGenBase):
 
     // initialize the state buffer
     n_fill_blocks = (n_states + n_threads - 1u) / n_threads;
-    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states));
+    start_dev_kernel2(
+      fill_array, n_fill_blocks, n_threads, 0,
+      (d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states));
     HANDLE_LAST_ERROR();
     start_dev_kernel2(set_start_states, 1, n_seqs, 0, (d_state_buffer_prev, d_start_states));
     HANDLE_LAST_ERROR();
@@ -3319,7 +3431,9 @@ class FastBaumWelchOp(NativeOpGenBase):
 
     // fwd pass
     for (unsigned t = 0u; t < n_frames; t++) {
-      start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states));
+      start_dev_kernel2(
+        fill_array, n_fill_blocks, n_threads, 0,
+        (d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states));
       HANDLE_LAST_ERROR();
       start_dev_kernel2(next_frame, n_blocks, n_threads, 0,
         (true, n_edges, sequence_stride,
@@ -3334,7 +3448,9 @@ class FastBaumWelchOp(NativeOpGenBase):
     }
 
     // bwd pass
-    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states));
+    start_dev_kernel2(
+      fill_array, n_fill_blocks, n_threads, 0,
+      (d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states));
     HANDLE_LAST_ERROR();
     for (unsigned t = n_frames; t > 0; t--) {
       start_dev_kernel2(init_bwd_state_buffer, 1, n_seqs, 0,
@@ -3342,9 +3458,12 @@ class FastBaumWelchOp(NativeOpGenBase):
       HANDLE_LAST_ERROR();
       if (dump_alignment && batch_idx %% dump_every == 0) {
         float alpha = 1.0f;
-        //HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all + t * n_states, 1));
+        //HANDLE_ERROR(cublasSaxpy(
+        //  handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all + t * n_states, 1));
       }
-      start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states));
+      start_dev_kernel2(
+        fill_array, n_fill_blocks, n_threads, 0,
+        (d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states));
       HANDLE_LAST_ERROR();
       start_dev_kernel2(next_frame, n_blocks, n_threads, 0,
         (false, n_edges, sequence_stride,
@@ -3371,7 +3490,9 @@ class FastBaumWelchOp(NativeOpGenBase):
     }
 
     n_fill_blocks = (n_frames * n_seqs * n_emissions + n_threads - 1u) / n_threads;
-    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_out, std::numeric_limits<float>::infinity(), n_frames * n_seqs * n_emissions));
+    start_dev_kernel2(
+      fill_array, n_fill_blocks, n_threads, 0,
+      (d_out, std::numeric_limits<float>::infinity(), n_frames * n_seqs * n_emissions));
     HANDLE_LAST_ERROR();
 
     frame_stride    = Ndarray_STRIDE(out, 0);
@@ -3415,18 +3536,26 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     :param output: Baum-Welch alignment, scores in -log space. 3d (time,batch,dim), like am_scores
   """
   in_info = (
-    {"name": "am_scores",         "ndim": 3, "shape": (None,   None,    None), "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "edges",             "ndim": 2, "shape": (None,   None),          "need_contiguous": True, "gradient": "disconnected", "dtype": "int32"},
-    {"name": "weights",           "ndim": 1, "shape": (None,),                 "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "start_states",      "ndim": 1, "shape": (None),                  "need_contiguous": True, "gradient": "disconnected", "dtype": "int32"},
-    {"name": "end_states",        "ndim": 2, "shape": (None, 2),               "need_contiguous": True, "gradient": "disconnected", "dtype": "int32"},
-    {"name": "end_state_weights", "ndim": 1, "shape": ((4, 0)),                "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "index",             "ndim": 2, "shape": ((0, 0), (0, 1)),        "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "state_buffer",      "ndim": 2, "shape": (2,      None),          "need_contiguous": True, "gradient": "disconnected"}
+    {"name": "am_scores",         "ndim": 3, "shape": (None,   None,    None),
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "edges",             "ndim": 2, "shape": (None,   None),
+     "need_contiguous": True, "gradient": "disconnected", "dtype": "int32"},
+    {"name": "weights",           "ndim": 1, "shape": (None,),
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "start_states",      "ndim": 1, "shape": (None,),
+     "need_contiguous": True, "gradient": "disconnected", "dtype": "int32"},
+    {"name": "end_states",        "ndim": 2, "shape": (None, 2),
+     "need_contiguous": True, "gradient": "disconnected", "dtype": "int32"},
+    {"name": "end_state_weights", "ndim": 1, "shape": ((4, 0),),
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "index",             "ndim": 2, "shape": ((0, 0), (0, 1)),
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "state_buffer",      "ndim": 2, "shape": (2,      None),
+     "need_contiguous": True, "gradient": "disconnected"}
   )
   out_info = (
-    {"name": "output", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True },
-    {"name": "sums",   "ndim": 2, "shape": ((0, 0), (0, 1)),         "need_contiguous": True },
+    {"name": "output", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True},
+    {"name": "sums",   "ndim": 2, "shape": ((0, 0), (0, 1)),         "need_contiguous": True},
   )
 
   c_extra_support_code = copy.copy(FastBaumWelchOp.c_extra_support_code)
@@ -3434,14 +3563,16 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     "100_init_bwd_state_buffer": """
       __global__
       void init_bwd_state_buffer(unsigned t, unsigned max_t, unsigned num_endstates, unsigned index_stride,
-                                 float* states, unsigned const* end_states, float const* end_state_weights, float const* index) {
+                                 float* states, unsigned const* end_states, float const* end_state_weights,
+                                 float const* index) {
         unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (idx >= num_endstates) {
           return;
         }
 
         unsigned seq_idx = end_states[idx * 2u + 0u];
-        if (index[t * index_stride + seq_idx] == 1.0 && (t == max_t || index[(t + 1) * index_stride + seq_idx] == 0.0)) {
+        if (index[t * index_stride + seq_idx] == 1.0
+            && (t == max_t || index[(t + 1) * index_stride + seq_idx] == 0.0)) {
           unsigned state_idx = end_states[idx * 2u + 1u];
           float    weight    = end_state_weights[idx];
           states[state_idx] = weight;
@@ -3450,7 +3581,8 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     """})
 
   c_fw_code = """
-    // am_scores, edges, weights, start_states, end_states, end_state_weights, index, state_buffer* = input_names (*: inplace)
+    // am_scores, edges, weights, start_states, end_states, end_state_weights,
+    //   index, state_buffer* = input_names (*: inplace)
     // output = output_names
     assert(n_inputs  == 8);
     assert(n_outputs == 2);
@@ -3479,10 +3611,14 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     static unsigned batch_idx  = 0u;
     float           pruning    = 10.f;
 
-    unsigned* d_from              = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges) + 0 * Ndarray_STRIDE(edges, 0));
-    unsigned* d_to                = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges) + 1 * Ndarray_STRIDE(edges, 0));
-    unsigned* d_emission_idxs     = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges) + 2 * Ndarray_STRIDE(edges, 0));
-    unsigned* d_sequence_idxs     = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges) + 3 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_from = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges)
+      + 0 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_to = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges)
+      + 1 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_emission_idxs = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges)
+      + 2 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_sequence_idxs = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges)
+      + 3 * Ndarray_STRIDE(edges, 0));
     float*    d_weights           = Ndarray_DEV_DATA(weights);
     float*    d_am_scores         = Ndarray_DEV_DATA(am_scores);
     unsigned* d_start_states      = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(start_states));
@@ -3560,11 +3696,14 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
 //      std::cerr << "frame " << t << std::endl;
       next_frame<<<n_blocks, n_threads>>>(true, n_edges, sequence_stride,
                                           d_sequence_idxs, d_from, d_to, d_weights, d_emission_idxs,
-                                          d_state_buffer_prev, d_state_buffer_next, d_am_scores + t * frame_stride, d_edge_buffer + t * n_edges);
+                                          d_state_buffer_prev, d_state_buffer_next, d_am_scores + t * frame_stride,
+                                          d_edge_buffer + t * n_edges);
 //      cudaDeviceSynchronize();
 //      HANDLE_LAST_ERROR();
       if (dump_alignment and batch_idx %% dump_every == 0) {
-        cudaMemcpy(d_state_buffer_all + (t + 1u) * n_states, d_state_buffer_next, n_states * sizeof(float), cudaMemcpyDeviceToDevice);
+        cudaMemcpy(
+          d_state_buffer_all + (t + 1u) * n_states, d_state_buffer_next, n_states * sizeof(float),
+          cudaMemcpyDeviceToDevice);
       }
       std::swap(d_state_buffer_prev, d_state_buffer_next);
     }
@@ -3576,19 +3715,24 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
 //    cudaDeviceSynchronize();
 //    HANDLE_LAST_ERROR();
     for (unsigned t = n_frames; t > 0; t--) {
-      init_bwd_state_buffer<<<n_end_state_blocks, n_end_state_threads>>>(t - 1, n_frames - 1, n_end_states, index_stride, d_state_buffer_prev, d_end_states, d_end_state_weights,  d_index);
+      init_bwd_state_buffer<<<n_end_state_blocks, n_end_state_threads>>>(
+        t - 1, n_frames - 1, n_end_states, index_stride,
+        d_state_buffer_prev, d_end_states, d_end_state_weights,  d_index);
 //      cudaDeviceSynchronize();
 //      HANDLE_LAST_ERROR();
       if (dump_alignment and batch_idx %% dump_every == 0) {
         float alpha = 1.0f;
-//        HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all + t * n_states, 1));
+//        HANDLE_ERROR(cublasSaxpy(
+//          handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all + t * n_states, 1));
       }
       fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states);
 //      cudaDeviceSynchronize();
 //      HANDLE_LAST_ERROR();
       next_frame<<<n_blocks, n_threads>>>(false, n_edges, sequence_stride,
                                           d_sequence_idxs, d_to, d_from, d_weights, d_emission_idxs,
-                                          d_state_buffer_prev, d_state_buffer_next, d_am_scores + (t - 1) * frame_stride, d_edge_buffer + (t - 1) * n_edges);
+                                          d_state_buffer_prev, d_state_buffer_next,
+                                          d_am_scores + (t - 1) * frame_stride,
+                                          d_edge_buffer + (t - 1) * n_edges);
 //      cudaDeviceSynchronize();
 //      HANDLE_LAST_ERROR();
       std::swap(d_state_buffer_prev, d_state_buffer_next);
@@ -3610,7 +3754,8 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     }
 
     n_fill_blocks = (n_frames * n_seqs * n_emissions + n_threads - 1u) / n_threads;
-    fill_array<<<n_fill_blocks, n_threads>>>(d_out, std::numeric_limits<float>::infinity(), n_frames * n_seqs * n_emissions);
+    fill_array<<<n_fill_blocks, n_threads>>>(
+      d_out, std::numeric_limits<float>::infinity(), n_frames * n_seqs * n_emissions);
 //    cudaDeviceSynchronize();
 //    HANDLE_LAST_ERROR();
 
@@ -3647,21 +3792,33 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
 
 
 class SegmentFastBaumWelchOp(NativeOpGenBase):
+  """
+  Segmental Baum-Welch...
+  """
   in_info = (
-    {"name": "am_scores",        "ndim": 3, "shape": (None,   None,    None), "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "batch_idxs",       "ndim": 2, "shape": (None,   None),          "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "edges",            "ndim": 2, "shape": (None,   None),          "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "weights",          "ndim": 1, "shape": ((2, 1),),               "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "length_models",    "ndim": 2, "shape": (None,   (0, 0)),        "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "start_end_states", "ndim": 2, "shape": (2,      None),          "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "index",            "ndim": 2, "shape": ((0, 0), (0, 1)),        "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "am_score_scales",  "ndim": 1, "shape": (None,),                 "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "epoch",            "ndim": 0, "shape": tuple(),                 "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "am_scores",        "ndim": 3, "shape": (None,   None,    None),
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "batch_idxs",       "ndim": 2, "shape": (None,   None),
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "edges",            "ndim": 2, "shape": (None,   None),
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "weights",          "ndim": 1, "shape": ((2, 1),),
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "length_models",    "ndim": 2, "shape": (None,   (0, 0)),
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "start_end_states", "ndim": 2, "shape": (2,      None),
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "index",            "ndim": 2, "shape": ((0, 0), (0, 1)),
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "am_score_scales",  "ndim": 1, "shape": (None,),
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "epoch",            "ndim": 0, "shape": (),
+     "need_contiguous": True, "gradient": "disconnected"},
   )
   out_info = (
-    {"name": "output",                "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True },
-    {"name": "normalization_factors", "ndim": 2, "shape": ((0, 0), (0, 1)),         "need_contiguous": True },
-    {"name": "posterior_weigths",     "ndim": 2, "shape": ((0, 0), (0, 1)),         "need_contiguous": True },
+    {"name": "output",                "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True},
+    {"name": "normalization_factors", "ndim": 2, "shape": ((0, 0), (0, 1)),         "need_contiguous": True},
+    {"name": "posterior_weigths",     "ndim": 2, "shape": ((0, 0), (0, 1)),         "need_contiguous": True},
   )
 
   c_extra_support_code = copy.copy(common_fast_bw_kernels)
@@ -3700,11 +3857,14 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
     """,
     "102_next_frame_fwd": """
       __global__
-      void next_frame_fwd(unsigned time, unsigned num_states, unsigned num_edges, unsigned num_emissions, unsigned num_seg_frames,
+      void next_frame_fwd(unsigned time, unsigned num_states, unsigned num_edges, unsigned num_emissions,
+                          unsigned num_seg_frames,
                           unsigned num_tot_frames, unsigned num_seqs, unsigned num_am_score_scales,
-                          unsigned const* sequence_idxs, unsigned const* from_buffer, unsigned const* to_buffer, float const* weight_buffer,
+                          unsigned const* sequence_idxs, unsigned const* from_buffer, unsigned const* to_buffer,
+                          float const* weight_buffer,
                           unsigned const* emission_idxs, unsigned const* lenmod_idxs, int const* batch_idxs,
-                          float const* am_scores, float const* length_models, float const* am_score_scales, float const* epoch,
+                          float const* am_scores, float const* length_models, float const* am_score_scales,
+                          float const* epoch,
                           float* state_buffer, float* edge_buffer) {
         const unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (idx >= num_edges) {
@@ -3752,11 +3912,14 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
     """,
     "103_next_frame_bwd": """
       __global__
-      void next_frame_bwd(unsigned time, unsigned num_states, unsigned num_edges, unsigned num_emissions, unsigned num_seg_frames,
+      void next_frame_bwd(unsigned time, unsigned num_states, unsigned num_edges, unsigned num_emissions,
+                          unsigned num_seg_frames,
                           unsigned num_tot_frames, unsigned num_seqs, unsigned num_am_score_scales,
-                          unsigned const* sequence_idxs, unsigned const* from_buffer, unsigned const* to_buffer, float const* weight_buffer,
+                          unsigned const* sequence_idxs, unsigned const* from_buffer, unsigned const* to_buffer,
+                          float const* weight_buffer,
                           unsigned const* emission_idxs, unsigned const* lenmod_idxs, int const* batch_idxs,
-                          float const* am_scores, float const* length_models, float const* am_score_scales, float const* epoch,
+                          float const* am_scores, float const* length_models, float const* am_score_scales,
+                          float const* epoch,
                           float* state_buffer, float* edge_buffer) {
         const unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (idx >= num_edges) {
@@ -3795,7 +3958,8 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
             edge_buffer_out[i * num_edges] = CUDART_INF_F;
           }
           else {
-            const float val = prev_val + edge_weight + am_score_scale * am_buffer_in[i * num_emissions] + length_scores[i];
+            const float val =
+              prev_val + edge_weight + am_score_scale * am_buffer_in[i * num_emissions] + length_scores[i];
             edge_buffer_out[i * num_edges] += prev_val;
             acc_val = prob_add(acc_val, val);
           }
@@ -3806,8 +3970,10 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
     """,
     "104_compute_framewise_sum": """
       __global__
-      void compute_framewise_sum(unsigned num_tot_frames, unsigned num_seqs, unsigned num_seg_frames, unsigned num_batches, unsigned num_edges,
-                                 unsigned const* sequence_idxs, int const* batch_idxs, float const* index, float const* edge_buffer,
+      void compute_framewise_sum(unsigned num_tot_frames, unsigned num_seqs, unsigned num_seg_frames,
+                                 unsigned num_batches, unsigned num_edges,
+                                 unsigned const* sequence_idxs, int const* batch_idxs, float const* index,
+                                 float const* edge_buffer,
                                  float* output_buffer) {
         extern __shared__ float sum[];
 
@@ -3871,8 +4037,10 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
     """,
     "106_compute_targets": """
       __global__
-      void compute_targets(unsigned num_tot_frames, unsigned num_seg_frames, unsigned num_edges, unsigned num_batches, unsigned num_seqs, unsigned num_emissions,
-                           unsigned const* sequence_idxs, unsigned const* emission_idxs, int const* batch_idxs, float const* index,
+      void compute_targets(unsigned num_tot_frames, unsigned num_seg_frames, unsigned num_edges, unsigned num_batches,
+                           unsigned num_seqs, unsigned num_emissions,
+                           unsigned const* sequence_idxs, unsigned const* emission_idxs, int const* batch_idxs,
+                           float const* index,
                            float const* edge_buffer, float const* normalization_buffer, float* output_buffer) {
         const unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (idx >= num_tot_frames * num_seg_frames * num_edges) {
@@ -3897,12 +4065,15 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
         const unsigned emission_idx  = emission_idxs[edge_idx];
         const float    normalization = normalization_buffer[seg_length * num_batches + batch_idx];
 
-        atomic_prob_add(output_buffer + seg_length * num_batches * num_emissions + batch_idx * num_emissions + emission_idx, edge_buffer[idx] - normalization);
+        atomic_prob_add(
+          output_buffer + seg_length * num_batches * num_emissions + batch_idx * num_emissions + emission_idx,
+          edge_buffer[idx] - normalization);
       }
     """,
     "107_compute_posterior_weights": """
     __global__
-    void compute_posterior_weights(unsigned num_tot_frames, unsigned num_seg_frames, unsigned num_seqs, unsigned num_batches,
+    void compute_posterior_weights(unsigned num_tot_frames, unsigned num_seg_frames, unsigned num_seqs,
+                                   unsigned num_batches,
                                    float const* state_buffer, unsigned const* start_states, int const* batch_idxs,
                                    float const* index, float const* normalization_factors, float* posterior_weigths) {
         const unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -3928,7 +4099,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
         }
     }
     """
- })
+  })
 
   c_fw_code = """
     // inputs:  am_scores, batch_idxs, edges, weights, length_models, start_end_states, index, am_score_scales, epoch
@@ -3954,15 +4125,22 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
 
     float*    d_am_scores         = Ndarray_DEV_DATA(ary_am_scores);
     int*      d_batch_idxs        = reinterpret_cast<int*>(Ndarray_DEV_DATA(ary_batch_idxs));
-    unsigned* d_from              = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_edges) + 0 * Ndarray_STRIDE(ary_edges, 0));
-    unsigned* d_to                = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_edges) + 1 * Ndarray_STRIDE(ary_edges, 0));
-    unsigned* d_emission_idxs     = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_edges) + 2 * Ndarray_STRIDE(ary_edges, 0));
-    unsigned* d_lenmod_idxs       = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_edges) + 3 * Ndarray_STRIDE(ary_edges, 0));
-    unsigned* d_sequence_idxs     = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_edges) + 4 * Ndarray_STRIDE(ary_edges, 0));
+    unsigned* d_from              =
+      reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_edges) + 0 * Ndarray_STRIDE(ary_edges, 0));
+    unsigned* d_to                =
+      reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_edges) + 1 * Ndarray_STRIDE(ary_edges, 0));
+    unsigned* d_emission_idxs     =
+      reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_edges) + 2 * Ndarray_STRIDE(ary_edges, 0));
+    unsigned* d_lenmod_idxs       =
+      reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_edges) + 3 * Ndarray_STRIDE(ary_edges, 0));
+    unsigned* d_sequence_idxs     =
+      reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_edges) + 4 * Ndarray_STRIDE(ary_edges, 0));
     float*    d_weights           = Ndarray_DEV_DATA(ary_weights);
     float*    d_length_models     = Ndarray_DEV_DATA(ary_length_models);
-    unsigned* d_start_states      = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_start_end_states) + 0 * Ndarray_STRIDE(ary_start_end_states, 0));
-    unsigned* d_end_states        = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_start_end_states) + 1 * Ndarray_STRIDE(ary_start_end_states, 0));
+    unsigned* d_start_states      =
+      reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_start_end_states) + 0 * Ndarray_STRIDE(ary_start_end_states, 0));
+    unsigned* d_end_states        =
+      reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_start_end_states) + 1 * Ndarray_STRIDE(ary_start_end_states, 0));
     float*    d_index             = Ndarray_DEV_DATA(ary_index);
     float*    d_am_score_scales   = Ndarray_DEV_DATA(ary_am_score_scales);
     float*    d_epoch             = Ndarray_DEV_DATA(ary_epoch);
@@ -3973,14 +4151,17 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
     std::vector<int> seq_lengths;
     if (NEW_BATCH_IDX_FORMAT) {
       seq_lengths.resize(Ndarray_DIMS(ary_batch_idxs)[0]);
-      HANDLE_ERROR(cudaMemcpy(seq_lengths.data(), d_batch_idxs, seq_lengths.size() * sizeof(int), cudaMemcpyDeviceToHost));
+      HANDLE_ERROR(cudaMemcpy(
+        seq_lengths.data(), d_batch_idxs, seq_lengths.size() * sizeof(int), cudaMemcpyDeviceToHost));
     }
 
     const unsigned n_seg_frames      = Ndarray_DIMS(ary_am_scores)[0];
     const unsigned n_batches         = Ndarray_DIMS(ary_am_scores)[1];
     const unsigned n_emissions       = Ndarray_DIMS(ary_am_scores)[2];
-    const unsigned n_seqs            = NEW_BATCH_IDX_FORMAT ? (Ndarray_DIMS(ary_batch_idxs)[0] - 1) : Ndarray_DIMS(ary_batch_idxs)[1];
-    const unsigned n_tot_frames      = NEW_BATCH_IDX_FORMAT ? seq_lengths.back()                     : Ndarray_DIMS(ary_batch_idxs)[0];
+    const unsigned n_seqs            =
+      NEW_BATCH_IDX_FORMAT ? (Ndarray_DIMS(ary_batch_idxs)[0] - 1) : Ndarray_DIMS(ary_batch_idxs)[1];
+    const unsigned n_tot_frames      =
+      NEW_BATCH_IDX_FORMAT ? seq_lengths.back()                     : Ndarray_DIMS(ary_batch_idxs)[0];
     const unsigned n_edges           = Ndarray_DIMS(ary_edges)[1];
     const unsigned n_length_models   = Ndarray_DIMS(ary_length_models)[1];
     const unsigned n_am_score_scales = Ndarray_DIMS(ary_am_score_scales)[0];
@@ -4016,7 +4197,8 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
     float* d_state_buffer = reinterpret_cast<float*>(device_malloc(n_states * n_ringbuffer_frames * sizeof(float)));
     HANDLE_LAST_ERROR();
     n_fill_blocks = (n_states * n_ringbuffer_frames + n_threads - 1u) / n_threads;
-    fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer, std::numeric_limits<float>::infinity(), n_states * n_ringbuffer_frames);
+    fill_array<<<n_fill_blocks, n_threads>>>(
+      d_state_buffer, std::numeric_limits<float>::infinity(), n_states * n_ringbuffer_frames);
     HANDLE_LAST_ERROR();
 
     // initialize sum buffer and posterior weigths
@@ -4035,8 +4217,10 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
       float* d_state_buffer_prev = d_state_buffer + ((t - 1) %% n_ringbuffer_frames) * n_states;
       fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states);
       HANDLE_LAST_ERROR();
-      next_frame_fwd<<<n_blocks, n_threads>>>(t, n_states, n_edges, n_emissions, n_seg_frames, n_tot_frames, n_seqs, n_am_score_scales,
-                                              d_sequence_idxs, d_from, d_to, d_weights, d_emission_idxs, d_lenmod_idxs, d_batch_idxs,
+      next_frame_fwd<<<n_blocks, n_threads>>>(t, n_states, n_edges, n_emissions, n_seg_frames, n_tot_frames, n_seqs,
+                                              n_am_score_scales,
+                                              d_sequence_idxs, d_from, d_to, d_weights, d_emission_idxs, d_lenmod_idxs,
+                                              d_batch_idxs,
                                               d_am_scores, d_length_models, d_am_score_scales, d_epoch,
                                               d_state_buffer, d_edge_buffer + t * n_seg_frames * n_edges);
       HANDLE_LAST_ERROR();
@@ -4050,21 +4234,25 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
 
     // bwd pass
     n_fill_blocks = (n_states * n_ringbuffer_frames + n_threads - 1u) / n_threads;
-    fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer, std::numeric_limits<float>::infinity(), n_states * n_ringbuffer_frames);
+    fill_array<<<n_fill_blocks, n_threads>>>(
+      d_state_buffer, std::numeric_limits<float>::infinity(), n_states * n_ringbuffer_frames);
     HANDLE_LAST_ERROR();
     n_fill_blocks = (n_states + n_threads - 1u) / n_threads;
     for (unsigned t = n_tot_frames; t > 0; t--) {
-      //std::cerr << "bwd t: " << t << " " << n_tot_frames << " buffer next: " << ((t-1) %% n_ringbuffer_frames) << std::endl;
+      //std::cerr <<
+      //"bwd t: " << t << " " << n_tot_frames << " buffer next: " << ((t-1) %% n_ringbuffer_frames) << std::endl;
       float* d_state_buffer_next = d_state_buffer + ((t - 1) %% n_ringbuffer_frames) * n_states;
       float* d_state_buffer_prev = d_state_buffer + ( t      %% n_ringbuffer_frames) * n_states;
       fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states);
       HANDLE_LAST_ERROR();
-      init_bwd_state_buffer<<<1, n_seqs>>>(t - 1, n_batches, n_seqs, d_batch_idxs, d_index, d_state_buffer_prev, d_end_states);
+      init_bwd_state_buffer<<<1, n_seqs>>>(
+        t - 1, n_batches, n_seqs, d_batch_idxs, d_index, d_state_buffer_prev, d_end_states);
       HANDLE_LAST_ERROR();
-      next_frame_bwd<<<n_blocks, n_threads>>>(t - 1, n_states, n_edges, n_emissions, n_seg_frames, n_tot_frames, n_seqs, n_am_score_scales,
-                                              d_sequence_idxs, d_to, d_from, d_weights, d_emission_idxs, d_lenmod_idxs, d_batch_idxs,
-                                              d_am_scores, d_length_models, d_am_score_scales, d_epoch,
-                                              d_state_buffer, d_edge_buffer + (t - 1) * n_seg_frames * n_edges);
+      next_frame_bwd<<<n_blocks, n_threads>>>(
+        t - 1, n_states, n_edges, n_emissions, n_seg_frames, n_tot_frames, n_seqs, n_am_score_scales,
+        d_sequence_idxs, d_to, d_from, d_weights, d_emission_idxs, d_lenmod_idxs, d_batch_idxs,
+        d_am_scores, d_length_models, d_am_score_scales, d_epoch,
+        d_state_buffer, d_edge_buffer + (t - 1) * n_seg_frames * n_edges);
       HANDLE_LAST_ERROR();
 
       //std::stringstream ss;
@@ -4073,9 +4261,10 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
     }
 
     n_blocks = (n_tot_frames * n_seg_frames + n_threads - 1) / n_threads;
-    compute_framewise_sum<<<n_blocks, n_threads, n_threads * n_seqs * sizeof(float)>>>(n_tot_frames, n_seqs, n_seg_frames, n_batches, n_edges,
-                                                                                       d_sequence_idxs, d_batch_idxs,
-                                                                                       d_index, d_edge_buffer, d_norm_factors);
+    compute_framewise_sum<<<n_blocks, n_threads, n_threads * n_seqs * sizeof(float)>>>(
+      n_tot_frames, n_seqs, n_seg_frames, n_batches, n_edges,
+      d_sequence_idxs, d_batch_idxs,
+      d_index, d_edge_buffer, d_norm_factors);
     HANDLE_LAST_ERROR();
 
     //dump_to_file_2d(d_norm_factors, n_seg_frames, n_batches, "dump/norm_factors_1.dump");
@@ -4090,16 +4279,19 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
 
     n_blocks = (n_tot_frames * n_seqs + n_threads - 1) / n_threads;
     compute_posterior_weights<<<n_blocks, n_threads>>>(n_tot_frames, n_seg_frames, n_seqs, n_batches, d_state_buffer,
-                                                       d_start_states, d_batch_idxs, d_index, d_norm_factors, d_posterior_weights);
+                                                       d_start_states, d_batch_idxs, d_index, d_norm_factors,
+                                                       d_posterior_weights);
     HANDLE_LAST_ERROR();
 
     n_fill_blocks = (n_batches * n_seg_frames * n_emissions + n_threads - 1u) / n_threads;
-    fill_array<<<n_fill_blocks, n_threads>>>(d_out, std::numeric_limits<float>::infinity(), n_batches * n_seg_frames * n_emissions);
+    fill_array<<<n_fill_blocks, n_threads>>>(
+      d_out, std::numeric_limits<float>::infinity(), n_batches * n_seg_frames * n_emissions);
     HANDLE_LAST_ERROR();
 
     n_blocks = (n_tot_frames * n_seg_frames * n_edges + n_threads - 1) / n_threads;
     compute_targets<<<n_blocks, n_threads>>>(n_tot_frames, n_seg_frames, n_edges, n_batches, n_seqs, n_emissions,
-                                             d_sequence_idxs, d_emission_idxs, d_batch_idxs, d_index, d_edge_buffer, d_norm_factors, d_out);
+                                             d_sequence_idxs, d_emission_idxs, d_batch_idxs, d_index, d_edge_buffer,
+                                             d_norm_factors, d_out);
     HANDLE_LAST_ERROR();
 
     //dump_to_file_1d(d_weights,       n_edges, "dump/edge_weights.dump");
@@ -4138,24 +4330,29 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
     # the code expects a two-dimensional array that stores the batch index (within the given am_scores) for any
     # timeframe and sequence index. if the flag is true we expect a list of offsets (as given by a cumulative sum
     # of the sequence lengths).
-
-    to_cpp_bool = lambda v : 'true' if v else 'false'
-    extra_lines = []
-    extra_lines.append('const bool segmentwise_normalization = %s;' % to_cpp_bool(segmentwise_normalization))
-    extra_lines.append('const bool dump_targets = %s;' % to_cpp_bool(dump_targets_interval is not None))
-    extra_lines.append('const unsigned dump_targets_interval = %d;' % (0 if dump_targets_interval is None else dump_targets_interval))
+    def _to_cpp_bool(v):
+      return 'true' if v else 'false'
+    extra_lines = [
+      'const bool segmentwise_normalization = %s;' % _to_cpp_bool(segmentwise_normalization),
+      'const bool dump_targets = %s;' % _to_cpp_bool(dump_targets_interval is not None),
+      'const unsigned dump_targets_interval = %d;' % (
+        0 if dump_targets_interval is None else dump_targets_interval)]
 
     self.c_extra_support_code = dict(**self.c_extra_support_code)
-    self.c_extra_support_code['000_batch_format'] = '#define NEW_BATCH_IDX_FORMAT %s\n' % to_cpp_bool(new_batch_idxs_format)
+    self.c_extra_support_code['000_batch_format'] = (
+      '#define NEW_BATCH_IDX_FORMAT %s\n' % _to_cpp_bool(new_batch_idxs_format))
     if new_batch_idxs_format:
       in_info = list(self.in_info)  # copy class member to instance
-      in_info[1] = {"name": "batch_idxs", "ndim": 1, "shape": (None,), "need_contiguous": True, "gradient": "disconnected"}
+      in_info[1] = {
+        "name": "batch_idxs", "ndim": 1, "shape": (None,),
+        "need_contiguous": True, "gradient": "disconnected"}
       self.in_info = tuple(in_info)
 
     self.c_fw_code = '\n'.join(extra_lines) + '\n' + self.c_fw_code
 
 
 class FastViterbiOp(NativeOpGenBase):
+  # noinspection PyUnresolvedReferences
   """
   inputs:
     :param am_scores: scores in +log space. 3d (time,batch,dim)

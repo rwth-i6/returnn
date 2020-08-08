@@ -30,7 +30,7 @@ import returnn.__main__ as rnn
 if typing.TYPE_CHECKING:
   import returnn.tf.engine
   try:
-    import returnn.theano.engine
+    import returnn.theano.engine  # noqa
   except ImportError:
     pass
 

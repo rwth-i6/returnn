@@ -40,6 +40,11 @@ Eps = 1e-16
 
 
 class HyperParam:
+  """
+  Represents one hyper parameter.
+  """
+
+  # noinspection PyShadowingNames
   def __init__(self, dtype=None, bounds=None, classes=None, log=False, default=None):
     """
     :param str|type|None|list dtype: e.g. "float", "int" or "bool", or if Collection, will be classes
@@ -100,12 +105,21 @@ class HyperParam:
     return "HyperParam(%s%s)" % (dtype_name, ext)
 
   def get_canonical_usage(self):
+    """
+    :rtype: _AttrChain
+    """
     return self.get_sorted_usages()[0]
 
   def get_sorted_usages(self):
+    """
+    :rtype: list[_AttrChain]
+    """
     return sorted(self.usages, key=lambda chain: min(2, len(chain.chain)))
 
   def description(self):
+    """
+    :rtype: str
+    """
     if len(self.usages) == 0:
       usage_str = "<no usage>"
     elif len(self.usages) == 1:
@@ -219,9 +233,15 @@ class HyperParam:
     return self.dtype(scipy.special.ndtri(x))
 
   def get_initial_value(self):
+    """
+    :rtype: float|int|bool|object
+    """
     return self.get_value(selected=0.5)
 
   def get_default_value(self):
+    """
+    :rtype: float|int|bool|object
+    """
     if self.default is not None:
       return self.dtype(self.default)
     return self.get_initial_value()
@@ -254,10 +274,15 @@ class HyperParam:
 
 
 class TrainException(Exception):
-  pass
+  """
+  Exception from training.
+  """
 
 
 class Individual:
+  """
+  One instance of hyper params.
+  """
   def __init__(self, hyper_param_mapping, name):
     """
     :param dict[HyperParam] hyper_param_mapping:
@@ -295,9 +320,12 @@ class Individual:
 
 
 class Optimization:
+  """
+  Hyper parameter optimization handler class.
+  """
   def __init__(self, config, train_data):
     """
-    :param Config.Config config:
+    :param returnn.config.Config config:
     :param Dataset train_data:
     """
     self.config = config
@@ -310,7 +338,7 @@ class Optimization:
     self._find_hyper_params()
     if not self.hyper_params:
       raise Exception("No hyper params found.")
-    self.hyper_params.sort(key=lambda p: p.unique_idx)
+    self.hyper_params.sort(key=lambda p_: p_.unique_idx)
     print("We have found these hyper params:")
     for p in self.hyper_params:
       print(" %s" % p.description())
@@ -412,6 +440,9 @@ class Optimization:
     return config
 
   def work(self):
+    """
+    Start the optimization.
+    """
     print("Starting hyper param search. Using %i threads." % self.num_threads, file=log.v1)
     from returnn.tf.util.basic import get_available_gpu_devices
     from returnn.log import wrap_log_streams, StreamDummy
@@ -419,6 +450,9 @@ class Optimization:
     from returnn.util.basic import progress_bar, hms, is_tty
 
     class Outstanding:
+      """
+      Queue of outstanding work.
+      """
       cond = Condition()
       threads = []  # type: typing.List[WorkerThread]
       population = []
@@ -426,6 +460,9 @@ class Optimization:
       exception = None
 
     class WorkerThread(Thread):
+      """
+      Worker threader.
+      """
       def __init__(self, gpu_ids):
         """
         :param set[int] gpu_ids:
@@ -437,6 +474,9 @@ class Optimization:
         self.start()
 
       def cancel(self, join=False):
+        """
+        :param bool join:
+        """
         with Outstanding.cond:
           if self.trainer:
             self.trainer.cancel_flag = True
@@ -446,12 +486,19 @@ class Optimization:
           self.join()
 
       def get_complete_frac(self):
+        """
+        :rtype: float
+        """
         with Outstanding.cond:
           if self.trainer and self.trainer.runner:
             return self.trainer.runner.data_provider.get_complete_frac()
         return 0.0
 
+      # noinspection PyMethodParameters
       def run(self_thread):
+        """
+        Run thread.
+        """
         try:
           while True:
             with Outstanding.cond:
@@ -461,6 +508,7 @@ class Optimization:
                 self_thread.finished = True
                 Outstanding.cond.notify_all()
                 return
+              # noinspection PyShadowingNames
               individual = Outstanding.population.pop(0)
               self_thread.trainer = _IndividualTrainer(optim=self, individual=individual, gpu_ids=self_thread.gpu_ids)
             self_thread.name = "Hyper param tune train thread on %r" % individual.name
@@ -480,7 +528,6 @@ class Optimization:
 
     best_individuals = []
     population = []
-    canceled = False
     num_gpus = len(get_available_gpu_devices())
     print("Num available GPUs:", num_gpus)
     num_gpus = num_gpus or 1  # Would be ignored anyway.

@@ -740,7 +740,7 @@ def progress_bar(complete=1.0, prefix="", suffix="", file=None):
   :param float complete: from 0.0 to 1.0
   :param str prefix:
   :param str suffix:
-  :param io.TextIOWrapper|None file: where to print. stdout by default
+  :param io.TextIOWrapper|typing.TextIO|None file: where to print. stdout by default
   :return: nothing, will print on ``file``
   """
   if file is None:

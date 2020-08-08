@@ -389,6 +389,10 @@ class HDFDataset(CachedDataset):
 # ------------------------------------------------------------------------------
 
 class StreamParser(object):
+  """
+  Stream parser.
+  """
+
   def __init__(self, seq_names, stream):
     self.seq_names = seq_names
     self.stream = stream
@@ -398,16 +402,31 @@ class StreamParser(object):
     self.dtype = None
 
   def get_data(self, seq_name):
+    """
+    :param str seq_name:
+    :rtype: numpy.ndarray
+    """
     raise NotImplementedError()
 
   def get_seq_length(self, seq_name):
+    """
+    :param str seq_name:
+    :rtype: int
+    """
     raise NotImplementedError()
 
   def get_dtype(self):
+    """
+    :rtype: str
+    """
+    assert isinstance(self.dtype, str)
     return self.dtype
 
 
 class FeatureSequenceStreamParser(StreamParser):
+  """
+  Feature sequence stream parser.
+  """
   def __init__(self, *args, **kwargs):
     super(FeatureSequenceStreamParser, self).__init__(*args, **kwargs)
 
@@ -418,7 +437,7 @@ class FeatureSequenceStreamParser(StreamParser):
       if self.num_features is None:
         self.num_features = seq_data.shape[1]
       if self.dtype is None:
-        self.dtype = seq_data.dtype
+        self.dtype = str(seq_data.dtype)
 
       assert seq_data.shape[1] == self.num_features
       assert seq_data.dtype == self.dtype
@@ -426,13 +445,24 @@ class FeatureSequenceStreamParser(StreamParser):
     self.feature_type = 2
 
   def get_data(self, seq_name):
+    """
+    :param str seq_name:
+    :rtype: numpy.ndarray
+    """
     return self.stream['data'][seq_name][...]
 
   def get_seq_length(self, seq_name):
+    """
+    :param str seq_name:
+    :rtype: int
+    """
     return self.stream['data'][seq_name].shape[0]
 
 
 class SparseStreamParser(StreamParser):
+  """
+  Sparse stream parser.
+  """
   def __init__(self, *args, **kwargs):
     super(SparseStreamParser, self).__init__(*args, **kwargs)
 
@@ -441,20 +471,31 @@ class SparseStreamParser(StreamParser):
       assert len(seq_data.shape) == 1
 
       if self.dtype is None:
-        self.dtype = seq_data.dtype
-      assert seq_data.dtype == self.dtype
+        self.dtype = str(seq_data.dtype)
+      assert str(seq_data.dtype) == self.dtype
 
     self.num_features = self.stream['feature_names'].shape[0]
     self.feature_type = 1
 
   def get_data(self, seq_name):
+    """
+    :param str seq_name:
+    :rtype: numpy.ndarray
+    """
     return self.stream['data'][seq_name][:]
 
   def get_seq_length(self, seq_name):
+    """
+    :param str seq_name:
+    :rtype: int
+    """
     return self.stream['data'][seq_name].shape[0]
 
 
 class SegmentAlignmentStreamParser(StreamParser):
+  """
+  Segment alignment stream parser.
+  """
   def __init__(self, *args, **kwargs):
     super(SegmentAlignmentStreamParser, self).__init__(*args, **kwargs)
 
@@ -462,8 +503,8 @@ class SegmentAlignmentStreamParser(StreamParser):
       seq_data = self.stream['data'][s]
 
       if self.dtype is None:
-        self.dtype = seq_data.dtype
-      assert seq_data.dtype == self.dtype
+        self.dtype = str(seq_data.dtype)
+      assert str(seq_data.dtype) == self.dtype
 
       assert len(seq_data.shape) == 2
       assert seq_data.shape[1] == 2
@@ -472,7 +513,11 @@ class SegmentAlignmentStreamParser(StreamParser):
     self.feature_type = 1
 
   def get_data(self, seq_name):
-    # we return flatted two-dimensional data where the 2nd dimension is 2 [class, segment end]
+    """
+    :param str seq_name:
+    :return: flatted two-dimensional data where the 2nd dimension is 2 [class, segment end]
+    :rtype: numpy.ndarray
+    """
     length = self.get_seq_length(seq_name) // 2
     segments = self.stream['data'][seq_name][:]
 
@@ -489,6 +534,10 @@ class SegmentAlignmentStreamParser(StreamParser):
     return alignment
 
   def get_seq_length(self, seq_name):
+    """
+    :param str seq_name:
+    :rtype: int
+    """
     return 2 * sum(self.stream['data'][seq_name][:, 1])
 
 

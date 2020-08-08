@@ -253,6 +253,9 @@ class SprintSubprocessInstance:
       self.is_calculating = True
 
   def get_loss_and_error_signal__have_data(self):
+    """
+    :rtype: bool
+    """
     assert self.is_calculating
     return self._poll()
 
@@ -275,16 +278,25 @@ class SprintSubprocessInstance:
     return self._cur_seg_name, loss, error_signal
 
   def exit_handler(self):
+    """
+    Called at exit. Exit child.
+    """
     assert os.getpid() == self.parent_pid
     self.python_exit = True
     self._exit_child(should_interrupt=True)
 
   def init(self):
+    """
+    Init. (Re)Start child.
+    """
     self._exit_child()
     self._start_child()
 
 
 class ReaderThread(Thread):
+  """
+  Sprint reader thread.
+  """
   def __init__(self, instance, instance_idx, batch_idxs, tags, seq_lengths, log_posteriors,
                batch_loss, batch_error_signal):
     """
@@ -312,6 +324,9 @@ class ReaderThread(Thread):
     self.start()
 
   def run(self):
+    """
+    Main thread func.
+    """
     try:
       for b in self.batch_idxs:
         self.instance.get_loss_and_error_signal__send(
@@ -341,6 +356,10 @@ class SprintInstancePool:
 
   @classmethod
   def get_global_instance(cls, sprint_opts):
+    """
+    :param dict[str] sprint_opts:
+    :rtype: SprintInstancePool
+    """
     sprint_opts = make_hashable(sprint_opts)
     with cls.class_lock:
       if sprint_opts in cls.global_instances:
@@ -365,6 +384,9 @@ class SprintInstancePool:
     self.instances = []  # type: typing.List[SprintSubprocessInstance]
 
   def _maybe_create_new_instance(self):
+    """
+    :rtype: SprintSubprocessInstance|None
+    """
     if len(self.instances) < self.max_num_instances:
       self.instances.append(SprintSubprocessInstance(**self.sprint_opts))
       return self.instances[-1]
@@ -415,7 +437,7 @@ class SprintInstancePool:
     jobs = [[] for _ in range(self.max_num_instances)]
     joblen = [0] * self.max_num_instances
     for i, l in sorted_length:
-      j = min(enumerate(joblen), key=lambda x: x[1])[0]
+      j = min(enumerate(joblen), key=lambda x: x[1])[0]  # noqa
       jobs[j].append(i)
       joblen[j] += l
 
@@ -511,6 +533,9 @@ class SprintInstancePool:
     return numpy.hstack(all_edges), numpy.hstack(all_weights), start_end_states
 
   def get_free_instance(self):
+    """
+    :rtype: SprintSubprocessInstance|None
+    """
     for inst in self.instances:
       if not inst.is_calculating:
         return inst
@@ -524,6 +549,9 @@ class SeqTrainParallelControlDevHost:
   """
 
   class CalcLossState:
+    """
+    Current state of forwarding + loss calculation.
+    """
     def __init__(self, forward_data, sprint_instance):
       assert isinstance(forward_data, SeqTrainParallelControlDevHost.ForwardData)
       assert isinstance(sprint_instance, SprintSubprocessInstance)
@@ -531,17 +559,26 @@ class SeqTrainParallelControlDevHost:
       self.seq_tag = forward_data.seq_tag
       self.sprint_instance = sprint_instance
       self.posteriors = forward_data.posteriors
-      self.loss = None
-      self.hat_y = None
+      self.loss = None  # type: typing.Optional[float]
+      self.hat_y = None  # type: typing.Optional[numpy.ndarray]
 
   class ForwardData:
+    """
+    Data from forwarding.
+    """
     def __init__(self, seq_idx, seq_tag, posteriors):
       self.seq_idx = seq_idx
       self.seq_tag = seq_tag
       self.posteriors = posteriors  # 2d array (T, output_dim)
 
   class LossData:
+    """
+    Data from loss calculation, including gradient / error signal.
+    """
     def __init__(self, calc_loss_state):
+      """
+      :param SeqTrainParallelControlDevHost.CalcLossState calc_loss_state:
+      """
       assert isinstance(calc_loss_state, SeqTrainParallelControlDevHost.CalcLossState)
       assert calc_loss_state.hat_y is not None
       self.seq_idx = calc_loss_state.seq_idx
@@ -667,6 +704,10 @@ class SeqTrainParallelControlDevHost:
     self.remove_old_loss_data(start_seq)
 
   def get_loss_and_hat_y(self, seq_idx):
+    """
+    :param int seq_idx:
+    :return:
+    """
     for loss_data in self.loss_data_queue:
       assert isinstance(loss_data, self.LossData)
       if loss_data.seq_idx == seq_idx:
@@ -758,6 +799,9 @@ class SeqTrainParallelControlDevHost:
       < self.forward_seq_delay)
 
   def remove_old_loss_data(self, current_start_seq):
+    """
+    :param int current_start_seq:
+    """
     idx = 0
     for i, loss_data in enumerate(list(self.loss_data_queue)):
       if loss_data.seq_idx < current_start_seq:
@@ -767,6 +811,11 @@ class SeqTrainParallelControlDevHost:
     del self.loss_data_queue[:idx]
 
   def have_seqs_loss_data(self, start_seq, end_seq):
+    """
+    :param int start_seq:
+    :param int end_seq:
+    :rtype: bool
+    """
     assert start_seq <= end_seq
     if start_seq == end_seq:
       return True
@@ -803,12 +852,24 @@ if BackendEngine.is_theano_selected():
       self.debug_perform_time = None
 
     def make_node(self, log_posteriors, seq_lengths):
+      """
+      :param log_posteriors:
+      :param seq_lengths:
+      :return: apply
+      """
       log_posteriors = theano.tensor.as_tensor_variable(log_posteriors)
       seq_lengths = theano.tensor.as_tensor_variable(seq_lengths)
       assert seq_lengths.ndim == 1  # vector of seqs lengths
       return theano.Apply(self, [log_posteriors, seq_lengths], [T.fvector(), log_posteriors.type()])
 
+    # noinspection PyUnusedLocal
     def perform(self, node, inputs, output_storage, params=None):
+      """
+      :param node:
+      :param inputs:
+      :param output_storage:
+      :param params:
+      """
       start_time = time.time()
       log_posteriors, seq_lengths = inputs
 
@@ -854,11 +915,22 @@ if BackendEngine.is_theano_selected():
       self.sprint_instance_pool = None  # type: typing.Optional[SprintInstancePool]
 
     def make_node(self, tags):
+      """
+      :param tags:
+      :return: apply
+      """
       # the edges/start_end_state output has to be a float matrix because that is the only dtype supported
       # by CudaNdarray. We need unsigned ints. Thus we return a view on the unsigned int matrix
       return theano.Apply(self, [tags], [T.fmatrix(), T.fvector(), T.fmatrix(), T.fmatrix()])
 
+    # noinspection PyUnusedLocal
     def perform(self, node, inputs, output_storage, params=None):
+      """
+      :param node:
+      :param inputs:
+      :param output_storage:
+      :param params:
+      """
       tags = inputs[0]
 
       if self.sprint_instance_pool is None:
