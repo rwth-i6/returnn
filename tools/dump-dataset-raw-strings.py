@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 
+"""
+Go through a dataset, and collects the targets (or other data) as raw strings,
+and writes it to a file in Python format.
+"""
+
 from __future__ import print_function
 
 import os
@@ -9,10 +14,7 @@ import numpy
 import argparse
 import typing
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
-
+import _setup_returnn_env  # noqa
 import returnn.__main__ as rnn
 from returnn.log import log
 from returnn.util.basic import Stats, hms

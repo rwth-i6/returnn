@@ -9,8 +9,7 @@ import sys
 import os
 import argparse
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import _setup_returnn_env  # noqa
 from returnn.util import better_exchook
 from returnn.log import log
 from returnn.__main__ import init, finalize

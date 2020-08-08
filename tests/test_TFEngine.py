@@ -4,15 +4,8 @@
 
 from __future__ import print_function
 
-import logging
-logging.getLogger('tensorflow').disabled = True
-
+import _setup_test_env  # noqa
 import tensorflow as tf
-import sys
-import os
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import returnn.tf.compat as tf_compat
 from returnn.tf.engine import *
 import returnn.tf.util.basic
@@ -27,19 +20,6 @@ import contextlib
 from returnn.util import better_exchook
 from returnn.log import log
 import returnn.util.debug
-
-log.initialize(verbosity=[5])
-returnn.tf.util.basic.debug_register_better_repr()
-better_exchook.replace_traceback_format_tb()
-returnn.util.debug.install_lib_sig_segfault()
-
-try:
-  import faulthandler
-  # Enable after libSigSegfault, so that we have both,
-  # because faulthandler will also call the original sig handler.
-  faulthandler.enable()
-except ImportError:
-  print("no faulthandler")
 
 
 print("TF version:", tf.__version__)

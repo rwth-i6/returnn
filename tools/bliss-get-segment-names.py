@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
 
+"""
+Goes through a Sprint Bliss XML file,
+and prints out segment names on stdout.
+
+Additionally, it provides functionality to merge consecutive sequences together,
+such that you increase the average sequence length.
+This can be used for :class:`ConcatSeqsDataset`.
+"""
+
 from __future__ import print_function
 
 import os
 import sys
 from argparse import ArgumentParser
 import gzip
-import xml.etree.ElementTree as etree
-
-
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
+from xml.etree import ElementTree
+import _setup_returnn_env  # noqa
 
 
 class BlissItem:
+  """
+  Bliss item.
+  """
   def __init__(self, segment_name, recording_filename, start_time, end_time, orth):
     """
     :param str segment_name:
@@ -35,6 +43,9 @@ class BlissItem:
 
   @property
   def delta_time(self):
+    """
+    :rtype: float
+    """
     return self.end_time - self.start_time
 
 
@@ -48,8 +59,8 @@ def iter_bliss(filename):
   if filename.endswith(".gz"):
     corpus_file = gzip.GzipFile(fileobj=corpus_file)
 
-  context = iter(etree.iterparse(corpus_file, events=('start', 'end')))
-  _, root = next(context) # get root element
+  context = iter(ElementTree.iterparse(corpus_file, events=('start', 'end')))
+  _, root = next(context)  # get root element
   name_tree = [root.attrib["name"]]
   elem_tree = [root]
   count_tree = [0]
@@ -85,6 +96,9 @@ def iter_bliss(filename):
 
 
 def main():
+  """
+  Main entry.
+  """
   arg_parser = ArgumentParser()
   arg_parser.add_argument("bliss_filename")
   arg_parser.add_argument("--subset_segment_file")

@@ -77,9 +77,6 @@ class Hyp:
     self.bpe_sym_history = bpe_sym_history
     self.cur_node = cur_node
 
-  def copy(self):
-    pass
-
 
 class Search:
   """
@@ -198,6 +195,9 @@ def xml_prettify(element, indent='  '):
 
 
 def main():
+  """
+  Main entry.
+  """
   arg_parser = ArgumentParser()
   arg_parser.add_argument("--bpe_vocab", required=True)
   arg_parser.add_argument("--word_vocab", required=True)
@@ -227,7 +227,11 @@ def main():
 
   visited_words = set()
 
+  # noinspection PyShadowingNames
   def visit_word(word):
+    """
+    :param str word:
+    """
     if word in visited_words:
       return
     visited_words.add(word)

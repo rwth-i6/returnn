@@ -1,11 +1,7 @@
 
 from __future__ import print_function
 
-import sys
-import os
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import _setup_test_env  # noqa
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_greater
 import time
 import sys
@@ -16,9 +12,6 @@ from returnn.theano.device import Device
 from returnn.config import Config
 from returnn.log import log
 from returnn.util.basic import hms, NumbersDict
-
-
-log.initialize(verbosity=[5])
 
 
 config = Config()

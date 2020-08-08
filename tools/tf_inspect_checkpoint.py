@@ -28,13 +28,8 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import os
+import _setup_returnn_env  # noqa
 import sys
-
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
-
 import argparse
 import numpy
 
@@ -46,6 +41,9 @@ FLAGS = None
 
 
 def print_tensor(v):
+  """
+  :param numpy.ndarray v:
+  """
   print(v)
   # See :func:`variable_scalar_summaries_dict`.
   mean = numpy.mean(v)
@@ -162,7 +160,7 @@ if __name__ == "__main__":
     "--all_tensors",
     nargs="?",
     const=True,
-    type="bool",
+    type=bool,
     default=False,
     help="If True, print the values of all the tensors.")
   parser.add_argument(

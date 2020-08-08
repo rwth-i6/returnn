@@ -1,27 +1,32 @@
 #!/usr/bin/env python
 
+"""
+Collect orth symbols.
+"""
+
 from __future__ import print_function
 
 import os
 import sys
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
-
+import _setup_returnn_env  # noqa
 import returnn.__main__ as rnn
 from returnn.log import log
 from returnn.config import Config
 import argparse
 from returnn.util.basic import hms, human_size, parse_orthography, parse_orthography_into_symbols, unicode
 import gzip
-import xml.etree.ElementTree as etree
-from pprint import pprint
+from xml.etree import ElementTree
 import wave
 import time
 
 
 def found_sub_seq(sub_seq, seq):
+  """
+  :param list[str] sub_seq:
+  :param list[str] seq:
+  :rtype: bool
+  """
   # Very inefficient naive implementation:
   for i in range(len(seq)):
     if seq[i:i+len(sub_seq)] == sub_seq:
@@ -48,11 +53,15 @@ def iter_dataset(dataset, options, callback):
 
 
 def get_wav_time_len(filename):
+  """
+  :param str filename:
+  :rtype: float
+  """
   f = wave.open(filename)
   num_frames = f.getnframes()
-  framerate = f.getframerate()
+  frame_rate = f.getframerate()
   f.close()
-  return num_frames / float(framerate)
+  return num_frames / float(frame_rate)
 
 
 def iter_bliss(filename, options, callback):
@@ -62,7 +71,7 @@ def iter_bliss(filename, options, callback):
 
   def getelements(tag):
     """Yield *tag* elements from *filename_or_file* xml incrementaly."""
-    context = iter(etree.iterparse(corpus_file, events=('start', 'end')))
+    context = iter(ElementTree.iterparse(corpus_file, events=('start', 'end')))
     _, root = next(context) # get root element
     tree = [root]
     for event, elem in context:
@@ -111,11 +120,12 @@ def iter_txt(filename, options, callback):
     print("No time-info in txt.", file=log.v3)
     options.collect_time = False
 
-  for l in f:
-    l = l.strip()
-    if not l: continue
+  for line in f:
+    line = line.strip()
+    if not line:
+      continue
 
-    callback(frame_len=0, orth=l)
+    callback(frame_len=0, orth=line)
 
 
 def collect_stats(options, iter_corpus):
@@ -166,7 +176,9 @@ def collect_stats(options, iter_corpus):
     if time.time() - Stats.process_last_time > 2:
       Stats.process_last_time = time.time()
       if options.collect_time:
-        print("Collect process, total frame len so far:", hms(Stats.total_frame_len * (options.frame_time / 1000.0)), file=log.v3)
+        print(
+          "Collect process, total frame len so far:", hms(Stats.total_frame_len * (options.frame_time / 1000.0)),
+          file=log.v3)
       else:
         print("Collect process, total orth len so far:", human_size(Stats.total_orth_len), file=log.v3)
 
@@ -177,7 +189,9 @@ def collect_stats(options, iter_corpus):
     Stats.orth_syms_set -= set(filter_syms)
 
   if options.collect_time:
-    print("Total frame len:", Stats.total_frame_len, "time:", hms(Stats.total_frame_len * (options.frame_time / 1000.0)), file=log.v3)
+    print(
+      "Total frame len:", Stats.total_frame_len, "time:", hms(Stats.total_frame_len * (options.frame_time / 1000.0)),
+      file=log.v3)
   else:
     print("No time stats (--collect_time False).", file=log.v3)
   print("Total orth len:", Stats.total_orth_len, "(%s)" % human_size(Stats.total_orth_len), end=' ', file=log.v3)
@@ -191,24 +205,24 @@ def collect_stats(options, iter_corpus):
   if orth_symbols_filename:
     orth_syms_file = open(orth_symbols_filename, "wb")
     for orth_sym in sorted(Stats.orth_syms_set):
-      orth_syms_file.write("%s\n" % unicode(orth_sym).encode("utf8"))
+      orth_syms_file.write(b"%s\n" % unicode(orth_sym).encode("utf8"))
     orth_syms_file.close()
     print("Wrote orthography symbols to", orth_symbols_filename, file=log.v3)
   else:
     print("Provide --output to save the symbols.", file=log.v3)
 
 
-def init(configFilename=None):
+def init(config_filename=None):
   rnn.init_better_exchook()
   rnn.init_thread_join_hack()
-  if configFilename:
-    rnn.init_config(configFilename, command_line_options=[])
+  if config_filename:
+    rnn.init_config(config_filename, command_line_options=[])
     rnn.init_log()
   else:
     log.initialize()
   print("RETURNN collect-orth-symbols starting up.", file=log.v3)
   rnn.init_faulthandler()
-  if configFilename:
+  if config_filename:
     rnn.init_config_json_network()
     rnn.init_data()
     rnn.print_task_properties()
@@ -219,12 +233,12 @@ def is_bliss(filename):
     corpus_file = open(filename, 'rb')
     if filename.endswith(".gz"):
       corpus_file = gzip.GzipFile(fileobj=corpus_file)
-    context = iter(etree.iterparse(corpus_file, events=('start', 'end')))
+    context = iter(ElementTree.iterparse(corpus_file, events=('start', 'end')))
     _, root = next(context)  # get root element
     return True
   except IOError:  # 'Not a gzipped file' or so
     pass
-  except etree.ParseError:  # 'syntax error' or so
+  except ElementTree.ParseError:  # 'syntax error' or so
     pass
   return False
 
@@ -244,13 +258,16 @@ def is_crnn_config(filename):
 def main(argv):
   argparser = argparse.ArgumentParser(description='Collect orth symbols.')
   argparser.add_argument('input', help="RETURNN config, Corpus Bliss XML or just txt-data")
-  argparser.add_argument('--frame_time', type=int, default=10, help='time (in ms) per frame. not needed for Corpus Bliss XML')
+  argparser.add_argument(
+    '--frame_time', type=int, default=10, help='time (in ms) per frame. not needed for Corpus Bliss XML')
   argparser.add_argument('--collect_time', type=int, default=True, help="collect time info. can be slow in some cases")
   argparser.add_argument('--dump_orth_syms', action='store_true', help="dump all orthographies")
   argparser.add_argument('--filter_orth_sym', help="dump orthographies which match this filter")
   argparser.add_argument('--filter_orth_syms_seq', help="dump orthographies which match this filter")
-  argparser.add_argument('--max_seq_frame_len', type=int, default=float('inf'), help="collect only orthographies <= this max frame len")
-  argparser.add_argument('--max_seq_orth_len', type=int, default=float('inf'), help="collect only orthographies <= this max orth len")
+  argparser.add_argument(
+    '--max_seq_frame_len', type=int, default=float('inf'), help="collect only orthographies <= this max frame len")
+  argparser.add_argument(
+    '--max_seq_orth_len', type=int, default=float('inf'), help="collect only orthographies <= this max orth len")
   argparser.add_argument('--add_numbers', type=int, default=True, help="add chars 0-9 to orth symbols")
   argparser.add_argument('--add_lower_alphabet', type=int, default=True, help="add chars a-z to orth symbols")
   argparser.add_argument('--add_upper_alphabet', type=int, default=True, help="add chars A-Z to orth symbols")
@@ -267,7 +284,7 @@ def main(argv):
     crnn_config_filename = args.input
   else:  # treat just as txt
     txt_filename = args.input
-  init(configFilename=crnn_config_filename)
+  init(config_filename=crnn_config_filename)
 
   if bliss_filename:
     iter_corpus = lambda cb: iter_bliss(bliss_filename, options=args, callback=cb)

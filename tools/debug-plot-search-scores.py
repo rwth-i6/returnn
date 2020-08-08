@@ -9,7 +9,6 @@ from __future__ import print_function, division
 
 from math import ceil
 import typing
-import sys
 import os
 from pprint import pprint
 import argparse
@@ -17,10 +16,7 @@ import h5py
 import numpy
 from glob import glob
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
-
+import _setup_returnn_env  # noqa
 from returnn.datasets.lm import Lexicon
 import returnn.util.basic as util
 

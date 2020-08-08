@@ -3,15 +3,11 @@
 
 from __future__ import print_function
 
+import _setup_test_env  # noqa
 import os
-#os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
 import logging
-logging.getLogger('tensorflow').disabled = True
-#logging.getLogger("tensorflow").setLevel(logging.INFO)
-
 import tensorflow as tf
 import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from returnn.tf.util.basic import *
 import returnn.tf.compat as tf_compat
 from nose.tools import assert_equal, assert_not_equal, assert_is_instance, assert_is, assert_in, assert_true
@@ -20,7 +16,6 @@ from pprint import pprint
 import unittest
 import numpy.testing
 from returnn.util import better_exchook
-better_exchook.replace_traceback_format_tb()
 
 
 print("TF version:", tf.__version__)

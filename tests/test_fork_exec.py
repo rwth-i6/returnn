@@ -14,16 +14,12 @@ https://bugs.python.org/issue31814
 
 from __future__ import print_function
 
+import _setup_test_env  # noqa
 import os
 import sys
 from nose.tools import assert_equal, assert_is_instance
 from pprint import pprint
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from returnn.util import better_exchook
-better_exchook.install()
-better_exchook.replace_traceback_format_tb()
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 
+"""
+Calculates word error rate (WER).
+"""
+
 from __future__ import print_function
 
 import os
@@ -7,11 +11,9 @@ import sys
 import time
 import tensorflow as tf
 import numpy
+import typing
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
-
+import _setup_returnn_env  # noqa
 import returnn.__main__ as rnn
 from returnn.log import log
 import argparse
@@ -23,6 +25,10 @@ import returnn.tf.util.basic as tf_util
 
 
 class WerComputeGraph:
+  """
+  Creates TF computation graph to calculate the WER.
+  """
+
   def __init__(self):
     self.hyps = tf_compat.v1.placeholder(tf.string, [None])
     self.refs = tf_compat.v1.placeholder(tf.string, [None])
@@ -34,6 +40,7 @@ class WerComputeGraph:
     self.updated_normalized_wer = (
       tf.cast(self.update_total_wer, tf.float32) / tf.cast(self.update_ref_num_words, tf.float32))
 
+  # noinspection PyShadowingNames
   def step(self, session, hyps, refs):
     """
     :param tf.compat.v1.Session session:
@@ -141,6 +148,9 @@ def calc_wer_on_dataset(dataset, refs, options, hyps):
   return wer
 
 
+config = None  # type: typing.Optional["returnn.config.Config"]
+
+
 def init(config_filename, log_verbosity):
   """
   :param str config_filename: filename to config-file
@@ -190,19 +200,26 @@ def load_hyps_refs(filename):
   return content
 
 
+wer_compute = None  # type: typing.Optional[WerComputeGraph]
+session = None  # type: typing.Optional[tf.compat.v1.Session]
+
+
 def main(argv):
-  argparser = argparse.ArgumentParser(description='Dump something from dataset.')
-  argparser.add_argument('--config', help="filename to config-file. will use dataset 'eval' from it")
-  argparser.add_argument("--dataset", help="dataset, overwriting config")
-  argparser.add_argument("--refs", help="same format as hyps. alternative to providing dataset/config")
-  argparser.add_argument("--hyps", help="hypotheses, dumped via search in py format")
-  argparser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
-  argparser.add_argument('--endseq', type=int, default=-1, help='end seq idx (inclusive) or -1 (default: -1)')
-  argparser.add_argument("--key", default="raw", help="data-key, e.g. 'data' or 'classes'. (default: 'raw')")
-  argparser.add_argument("--verbosity", default=4, type=int, help="5 for all seqs (default: 4)")
-  argparser.add_argument("--out", help="if provided, will write WER% (as string) to this file")
-  argparser.add_argument("--expect_full", action="store_true", help="full dataset should be scored")
-  args = argparser.parse_args(argv[1:])
+  """
+  Main entry.
+  """
+  arg_parser = argparse.ArgumentParser(description='Dump something from dataset.')
+  arg_parser.add_argument('--config', help="filename to config-file. will use dataset 'eval' from it")
+  arg_parser.add_argument("--dataset", help="dataset, overwriting config")
+  arg_parser.add_argument("--refs", help="same format as hyps. alternative to providing dataset/config")
+  arg_parser.add_argument("--hyps", help="hypotheses, dumped via search in py format")
+  arg_parser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
+  arg_parser.add_argument('--endseq', type=int, default=-1, help='end seq idx (inclusive) or -1 (default: -1)')
+  arg_parser.add_argument("--key", default="raw", help="data-key, e.g. 'data' or 'classes'. (default: 'raw')")
+  arg_parser.add_argument("--verbosity", default=4, type=int, help="5 for all seqs (default: 4)")
+  arg_parser.add_argument("--out", help="if provided, will write WER% (as string) to this file")
+  arg_parser.add_argument("--expect_full", action="store_true", help="full dataset should be scored")
+  args = arg_parser.parse_args(argv[1:])
   assert args.config or args.dataset or args.refs
 
   init(config_filename=args.config, log_verbosity=args.verbosity)

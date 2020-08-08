@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 
+"""
+Dump translation dataset to HDF.
+"""
+
 from __future__ import print_function
 
 import sys
 import argparse
 import gzip
 import pickle
+import typing
 
 import numpy
 import h5py
@@ -168,7 +173,8 @@ class HDFTranslationDatasetCreator(object):
         labels = [numpy.array(label, dtype=dtype, ndmin=1) for label in labels]
         labels = numpy.concatenate(labels)
 
-        self.hdf_file["targets/labels"].create_dataset(data_key, (self._vocabulary_sizes[side][index],),
+        self.hdf_file["targets/labels"].create_dataset(
+          data_key, (self._vocabulary_sizes[side][index],),
           data=labels, dtype=dtype)
 
   def _write_data(self):
@@ -242,7 +248,7 @@ class HDFTranslationDatasetCreator(object):
       target_sequence_lengths[data_key] = target_lengths
 
     # Now sort by key.
-    key_lengths_tuples_sorted = sorted(target_sequence_lengths.items(), key=lambda x: x[0])
+    key_lengths_tuples_sorted = sorted(target_sequence_lengths.items(), key=lambda x: x[0])  # type: typing.List[typing.Tuple[str,typing.List[int]]]  # nopep8
     target_lengths_sorted = [key_length_tuple[1] for key_length_tuple in key_lengths_tuples_sorted]
 
     # Finally, add one time the source lengths for the input ("data") and convert to numpy.
@@ -364,6 +370,9 @@ class HDFTranslationDatasetCreator(object):
 
 
 def parse_args():
+  """
+  :rtype: argparse.Namespace
+  """
   parser = argparse.ArgumentParser()
   parser.add_argument("-s", "--source_corpus", required=True, help="Source corpus file, possibly zipped.")
   parser.add_argument("-t", "--target_corpus", required=True, help="Target corpus file, possibly zipped.")
@@ -393,6 +402,9 @@ def parse_args():
 
 
 def main():
+  """
+  Main entry.
+  """
   args = parse_args()
 
   # In case of source or target factors we need a vocabularies for each.

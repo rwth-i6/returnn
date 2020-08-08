@@ -1,21 +1,19 @@
 
 from __future__ import print_function
 
+import _setup_test_env  # noqa
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import threading
 from returnn.util.task_system import *
 import unittest
 import gc
-from returnn.util import better_exchook
-better_exchook.replace_traceback_format_tb()
 
 SharedMemNumpyConfig["enabled"] = True
 SharedMemNumpyConfig["auto_pickling_min_size"] = 1
 
 try:
+  # noinspection PyCompatibility
   from StringIO import StringIO
 except ImportError:  # Python 3
   from io import BytesIO as StringIO
@@ -27,9 +25,11 @@ def pickle_dumps(obj):
   p.dump(obj)
   return sio.getvalue()
 
+
 def pickle_loads(s):
   p = Unpickler(StringIO(s))
   return p.load()
+
 
 def find_numpy_shared_by_shmid(shmid):
   for sh in SharedNumpyArray.ServerInstances:

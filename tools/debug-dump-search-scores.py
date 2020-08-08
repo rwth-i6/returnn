@@ -15,10 +15,7 @@ import os
 import sys
 from pprint import pprint
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
-
+import _setup_returnn_env  # noqa
 import returnn.__main__ as rnn
 from returnn.log import log
 from returnn.config import Config
@@ -145,6 +142,9 @@ def prepare_compile(rec_layer_name, net_dict, cheating, dump_att_weights, hdf_fi
 
 
 def main(argv):
+  """
+  Main entry.
+  """
   arg_parser = argparse.ArgumentParser(description='Dump search scores and other info to HDF file.')
   arg_parser.add_argument('config', help="filename to config-file")
   arg_parser.add_argument("--dataset", default="config:train")

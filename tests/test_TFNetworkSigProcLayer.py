@@ -1,10 +1,9 @@
 
 from __future__ import print_function
 
-# Disable extensive TF debug verbosity. Must come before the first TF import.
-import logging
-logging.getLogger('tensorflow').disabled = True
+import _setup_test_env  # noqa
 
+import logging
 import sys
 import os
 import os.path
@@ -12,9 +11,6 @@ import tensorflow as tf
 import numpy as np
 import unittest
 import contextlib
-
-# Allow Returnn imports.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from returnn.tf.network import *
 from returnn.tf.layers.signal_processing import *

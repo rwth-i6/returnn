@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
 
+"""
+Goes through a Sprint Bliss XML file,
+and writes out sequence lengths based on the start/end time,
+into a Python-formatted file.
+"""
+
 from __future__ import print_function
 
-import os
 import sys
 from argparse import ArgumentParser
 import gzip
 from xml.etree import ElementTree
 import itertools
-
-
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
+import _setup_returnn_env  # noqa
 
 
 class BlissItem:
+  """
+  Represents one entry in the Bliss XML.
+  """
   def __init__(self, segment_name, recording_filename, start_time, end_time, orth):
     """
     :param str segment_name:
@@ -36,6 +40,9 @@ class BlissItem:
 
   @property
   def delta_time(self):
+    """
+    :rtype: float
+    """
     return self.end_time - self.start_time
 
 
@@ -86,6 +93,9 @@ def iter_bliss(filename):
 
 
 def main():
+  """
+  Main entry.
+  """
   arg_parser = ArgumentParser()
   arg_parser.add_argument("bliss_filename", nargs="+")
   arg_parser.add_argument("--output", default="/dev/stdout")

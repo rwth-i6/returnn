@@ -14,8 +14,7 @@ from nose.tools import assert_not_equal
 from nose.tools import assert_raises
 from nose.tools import raises
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import _setup_test_env  # noqa
 from returnn.util import better_exchook
 from returnn.datasets.lm import TranslationDataset, TranslationFactorsDataset
 from returnn.util.basic import init_thread_join_hack

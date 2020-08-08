@@ -7,16 +7,12 @@ The input is any other dataset (:class:`Dataset`).
 
 from __future__ import print_function
 
-import os
 import sys
+import argparse
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
-
+import _setup_returnn_env  # noqa
 from returnn.log import log
 import returnn.__main__ as rnn
-import argparse
 import returnn.datasets.hdf as hdf_dataset_mod
 from returnn.datasets import Dataset, init_dataset
 from returnn.config import Config

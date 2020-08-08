@@ -4,8 +4,7 @@ from __future__ import print_function
 import sys
 import os
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import _setup_test_env  # noqa
 import sys
 import numpy
 import theano
@@ -18,7 +17,6 @@ import returnn.theano.util as theano_util
 import theano.printing
 from pprint import pprint
 from returnn.util import better_exchook
-better_exchook.replace_traceback_format_tb()
 
 
 theano_util.monkey_patches()

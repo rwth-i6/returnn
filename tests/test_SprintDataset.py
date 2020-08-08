@@ -1,9 +1,5 @@
 
-import sys
-import os
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import _setup_test_env  # noqa
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 from returnn.theano.engine_util import assign_dev_data, assign_dev_data_single_seq
 from returnn.engine.batch import Batch
@@ -24,10 +20,6 @@ try:
 except ImportError:
   theano = None
 
-better_exchook.install()
-better_exchook.replace_traceback_format_tb()
-util.init_thread_join_hack()
-
 if theano:
   from returnn.theano.device import Device
   import returnn.theano.util as theano_util
@@ -44,7 +36,6 @@ dummyconfig_dict = {
   "bidirectional": False,
 }
 
-log.initialize(verbosity=[5])
 
 os.chdir((os.path.dirname(__file__) or ".") + "/..")
 assert os.path.exists("rnn.py")

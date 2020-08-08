@@ -2,9 +2,7 @@
 import sys
 import os
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-
+import _setup_test_env  # noqa
 import returnn.native_op as native_op
 import numpy
 from numpy.testing.utils import assert_almost_equal

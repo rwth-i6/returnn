@@ -11,17 +11,14 @@ from __future__ import print_function
 import typing
 import os
 import sys
+import argparse
 import tensorflow as tf
 from tensorflow.python.framework import graph_io
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
-
+import _setup_returnn_env  # noqa
 import returnn.__main__ as rnn
 from returnn.log import log
 from returnn.config import Config
-import argparse
 import returnn.util.basic as util
 from returnn.util.basic import NotSpecified
 import returnn.tf.compat as tf_compat

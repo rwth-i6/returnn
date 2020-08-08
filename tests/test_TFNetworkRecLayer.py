@@ -3,12 +3,11 @@
 
 from __future__ import print_function
 
+import _setup_test_env  # noqa
 import logging
-logging.getLogger('tensorflow').disabled = True
 import tensorflow as tf
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nose.tools import assert_equal, assert_not_equal, assert_is_instance
 from numpy.testing.utils import assert_almost_equal, assert_allclose
 import unittest
@@ -16,7 +15,6 @@ import numpy.testing
 from pprint import pprint
 import contextlib
 from returnn.util import better_exchook
-better_exchook.replace_traceback_format_tb()
 
 from returnn.log import log
 from returnn.config import Config

@@ -1,9 +1,5 @@
 
-import sys
-import os
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import _setup_test_env  # noqa
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 from returnn.theano.device import Device
 from returnn.theano.engine_util import assign_dev_data, assign_dev_data_single_seq
@@ -14,8 +10,6 @@ from returnn.config import Config
 from returnn.datasets.generating import GeneratingDataset
 from returnn.datasets.basic import DatasetSeq
 import numpy as np
-from returnn.util import better_exchook
-better_exchook.replace_traceback_format_tb()
 
 
 dummyconfig_dict = {

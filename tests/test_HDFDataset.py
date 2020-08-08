@@ -3,9 +3,7 @@ from __future__ import print_function
 
 import os
 import sys
-my_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, "%s/.." % my_dir)
-sys.path.insert(0, "%s/../tools" % my_dir)  # for hdf_dump
+import _setup_test_env  # noqa
 
 from returnn.datasets import Dataset
 from returnn.datasets.hdf import *
@@ -19,12 +17,9 @@ import numpy as np
 import os
 import unittest
 from returnn.util import better_exchook
-better_exchook.install()
-better_exchook.replace_traceback_format_tb()
-util.init_thread_join_hack()
 
-from returnn.log import log
-log.initialize(verbosity=[5])
+
+my_dir = os.path.dirname(os.path.abspath(__file__))
 
 
 class TestHDFDataset(object):

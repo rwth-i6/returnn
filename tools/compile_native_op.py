@@ -13,10 +13,7 @@ import os
 import sys
 import typing
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
-
+import _setup_returnn_env  # noqa
 from returnn import __main__ as rnn
 from returnn.log import log
 import argparse

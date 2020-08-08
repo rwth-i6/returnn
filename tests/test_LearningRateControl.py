@@ -2,8 +2,7 @@
 import sys
 import os
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import _setup_test_env  # noqa
 from returnn.config import Config
 from returnn.learning_rate_control import *
 from nose.tools import assert_equal
@@ -11,10 +10,7 @@ import numpy
 import unittest
 
 from returnn.util import better_exchook
-better_exchook.replace_traceback_format_tb()
-
 from returnn.log import log
-log.initialize()
 
 
 def test_save_load():

@@ -1,8 +1,7 @@
 
 import os
 import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import _setup_test_env  # noqa
 try:
   from StringIO import StringIO
 except ImportError:  # Python 3

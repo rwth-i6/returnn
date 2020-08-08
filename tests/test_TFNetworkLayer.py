@@ -2,41 +2,23 @@
 # start: nosetests $this_file --nologcapture
 from __future__ import division
 
+import _setup_test_env  # noqa
 import logging
-logging.getLogger('tensorflow').disabled = True
-
 import os
-# Get us some further useful debug messages (in some cases, e.g. CUDA).
-# For example: https://github.com/tensorflow/tensorflow/issues/24496
-# os.environ["CUDNN_LOGINFO_DBG"] = "1"
-# os.environ["CUDNN_LOGDEST_DBG"] = "stdout"
-# The following might fix (workaround): Could not create cudnn handle: CUDNN_STATUS_INTERNAL_ERROR
-# (https://github.com/tensorflow/tensorflow/issues/24496).
-# os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
-
 import tensorflow as tf
-print("TF version:", tf.__version__)
-
 import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from nose.tools import assert_equal, assert_is_instance
 import contextlib
 import unittest
 import numpy.testing
 from pprint import pprint
 from returnn.util import better_exchook
-better_exchook.replace_traceback_format_tb()
-
 from returnn.config import Config
 from returnn.tf.network import *
 from returnn.tf.layers.basic import *
 from returnn.log import log
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
-tf_util.debug_register_better_repr()
-
-log.initialize(verbosity=[5])
 
 print("TF version:", tf.__version__)
 print("Numpy version:", numpy.__version__)

@@ -1,8 +1,4 @@
 
-import sys
-import os
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _setup_test_env  # noqa
 
 import returnn.theano.ops.custom_lstm_functions
-

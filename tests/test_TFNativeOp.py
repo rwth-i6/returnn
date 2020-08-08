@@ -3,33 +3,13 @@
 
 from __future__ import print_function
 
+import _setup_test_env  # noqa
+import _set_num_threads1  # noqa
 import os
 import sys
 import typing
-print("__file__:", __file__)
-base_path = os.path.realpath(os.path.dirname(os.path.abspath(__file__)) + "/..")
-print("base path:", base_path)
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-# Do this here such that we always see this log in Travis.
-orig_stdout = sys.stdout
-try:
-  sys.stdout = sys.__stdout__  # Nosetests has overwritten sys.stdout
-
-  # Do this very early, before we import numpy/TF, such that it can have an effect.
-  for env_var in ["OPENBLAS_NUM_THREADS", "GOTO_NUM_THREADS", "OMP_NUM_THREADS"]:
-    print("Env %s = %s" % (env_var, os.environ.get(env_var, None)))
-    # Overwrite with 1. This should make the test probably more deterministic. Not sure...
-    os.environ[env_var] = "1"
-
-finally:
-  sys.stdout = orig_stdout
-
-
 import logging
-logging.getLogger('tensorflow').disabled = True
 import tensorflow as tf
-
 from returnn.tf.native_op import *
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
@@ -45,20 +25,12 @@ from numpy.testing.utils import assert_almost_equal, assert_allclose
 import os
 from pprint import pprint
 from returnn.util import better_exchook
-better_exchook.replace_traceback_format_tb()
-
 import returnn.util.debug as debug
-debug.install_lib_sig_segfault()
-
-try:
-  import faulthandler
-  # Enable after libSigSegfault, so that we have both,
-  # because faulthandler will also call the original sig handler.
-  faulthandler.enable()
-except ImportError:
-  print("no faulthandler")
 
 
+print("__file__:", __file__)
+base_path = os.path.realpath(os.path.dirname(os.path.abspath(__file__)) + "/..")
+print("base path:", base_path)
 print("TF version:", tf.__version__)
 
 CudaEnv.verbose_find_cuda = True

@@ -1,9 +1,6 @@
 
-import sys
-import os
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import _setup_test_env  # noqa
 
 from returnn.config import Config
 from returnn.theano.engine import Engine
@@ -11,7 +8,6 @@ from returnn.theano.device import Device
 from returnn.log import log
 import returnn.theano.util as theano_util
 
-log.initialize()
 theano_util.monkey_patches()
 
 
@@ -32,4 +28,3 @@ def test_Device_blocking_init():
   """
 
   Device("cpu", config=config, blocking=True)
-

@@ -1,45 +1,55 @@
 #!/usr/bin/env python3
 
+"""
+Extract state tying from dataset.
+"""
+
 from __future__ import print_function
 
 import os
-import sys
-
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
-
 import gzip
 from argparse import ArgumentParser
 from pprint import pprint
-import xml.etree.ElementTree as etree
-from returnn.datasets import init_dataset
-from returnn.datasets.lm import Lexicon, AllophoneState
+from xml.etree import ElementTree
 import collections
 from collections import defaultdict
+import typing
+
+import _setup_returnn_env  # noqa
+from returnn.datasets import init_dataset
+from returnn.datasets.lm import Lexicon, AllophoneState
 from returnn.log import log
 from returnn.util.basic import uniq
 
 
 def get_segment_name(tree):
-  def m(x):
+  """
+  :param tree:
+  :return:
+  """
+  def _m(x):
     if "name" in x.attrib:
       return x.attrib["name"]
     if x.tag == "segment":
       return "1"
     assert False, "unknown name: %r, %r" % (x, vars(x))
-  return "/".join(map(m, tree))
+  return "/".join(map(_m, tree))
 
 
 def iter_bliss_orth(filename):
+  """
+  :param str filename:
+  :return:
+  """
   corpus_file = open(filename, 'rb')
   if filename.endswith(".gz"):
     corpus_file = gzip.GzipFile(fileobj=corpus_file)
 
+  # noinspection PyShadowingNames
   def getelements(tag):
     """Yield *tag* elements from *filename_or_file* xml incrementally."""
-    context = iter(etree.iterparse(corpus_file, events=('start', 'end')))
-    _, root = next(context) # get root element
+    context = iter(ElementTree.iterparse(corpus_file, events=('start', 'end')))
+    _, root = next(context)  # get root element
     tree = [root]
     for event, elem in context:
       if event == "start":
@@ -56,7 +66,7 @@ def iter_bliss_orth(filename):
     orth_split = orth_raw.split()
     orth = " ".join(orth_split)
 
-    yield (get_segment_name(tree + [elem]), orth)
+    yield get_segment_name(tree + [elem]), orth
 
 
 def iter_dataset_targets(dataset):
@@ -71,11 +81,14 @@ def iter_dataset_targets(dataset):
     targets = dataset.get_targets("classes", seq_idx)
     assert targets.ndim == 1  # sparse
     targets = targets.astype("int32")
-    yield (segment_name, targets)
+    yield segment_name, targets
     seq_idx += 1
 
 
 class OrthHandler:
+  """
+  Orthography handler.
+  """
 
   allo_add_all = False  # only via lexicon
 
@@ -157,10 +170,12 @@ class OrthHandler:
     if self.lexicon.phonemes[phon_id]["variation"] == "none":
       return [()]
     if self.allo_add_all:
-      return [()] + [
+      res = [()]  # type: typing.List[typing.Tuple[str, ...]]
+      res += [
         (p,)
         for p in sorted(self.lexicon.phonemes.keys())
         if self.lexicon.phonemes[p]["variation"] == "context"]
+      return res
     return [
       ((p,) if p else ())
       for p in sorted(self.phon_to_possible_ctx_via_lex[direction][phon_id])]
@@ -200,10 +215,13 @@ class OrthHandler:
             a.state = state
             a.boundary = boundary
             if not all_boundary_variations:
-              if not left_ctx: a.mark_initial()
-              if not right_ctx: a.mark_final()
+              if not left_ctx:
+                a.mark_initial()
+              if not right_ctx:
+                a.mark_final()
             yield a
 
+  # noinspection PyMethodMayBeStatic
   def _phones_to_allos(self, phones):
     for p in phones:
       a = AllophoneState()
@@ -211,7 +229,8 @@ class OrthHandler:
       yield a
 
   def _allos_set_context(self, allos):
-    if self.allo_context_len == 0: return
+    if self.allo_context_len == 0:
+      return
     ctx = []
     for a in allos:
       if self.lexicon.phonemes[a.id]["variation"] == "context":
@@ -263,6 +282,9 @@ class OrthHandler:
 
 
 def main():
+  """
+  Main entry.
+  """
   arg_parser = ArgumentParser()
   arg_parser.add_argument("--action")
   arg_parser.add_argument("--print_seq", action='store_true')
@@ -279,7 +301,7 @@ def main():
   arg_parser.add_argument("--allo_add_all", action="store_true")
   args = arg_parser.parse_args()
 
-  dataset = init_dataset(config_str=args.dataset) if args.dataset else None
+  dataset = init_dataset(args.dataset) if args.dataset else None
   corpus = dict(iter_bliss_orth(filename=args.corpus)) if args.corpus else None
   lexicon = Lexicon(filename=args.lexicon) if args.lexicon else None
   silence_label = args.silence
@@ -295,8 +317,8 @@ def main():
     lexicon=lexicon,
     allo_context_len=args.context,
     allo_num_states=args.hmm_states)
-  map_idx_to_allo = defaultdict(set)  # type: dict[int, set[AllophoneState]]
-  map_allo_to_idx = {}  # type: dict[AllophoneState, int]
+  map_idx_to_allo = defaultdict(set)  # type: typing.Dict[int, typing.Set[AllophoneState]]
+  map_allo_to_idx = {}  # type: typing.Dict[AllophoneState, int]
   if args.allo_add_all:
     orth_handler.allo_add_all = True
 

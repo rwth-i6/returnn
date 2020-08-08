@@ -26,12 +26,10 @@ import sys
 import numpy as np
 import argparse
 from glob import glob
-
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
+import typing
 
 # Returnn imports
+import _setup_returnn_env  # noqa
 import returnn.__main__ as rnn
 from returnn.tf.engine import Runner
 from returnn.datasets import init_dataset
@@ -52,8 +50,8 @@ def inject_retrieval_code(net_dict, rec_layer_name, layers, dropout):
   assert config is not None
   assert rec_layer_name in net_dict
   assert net_dict[rec_layer_name]["class"] == "rec"
-  for l in layers:
-    assert l in net_dict[rec_layer_name]['unit'], "layer %r not found" % l
+  for layer in layers:
+    assert layer in net_dict[rec_layer_name]['unit'], "layer %r not found" % layer
 
   new_layers_descr = net_dict.copy()  # actually better would be deepcopy...
   for sub_layer in layers:
@@ -64,6 +62,9 @@ def inject_retrieval_code(net_dict, rec_layer_name, layers, dropout):
     deep_update_dict_values(net_dict, "dropout", dropout)
     deep_update_dict_values(net_dict, "rec_weight_dropout", dropout)
   return new_layers_descr
+
+
+config = None  # type: typing.Optional["returnn.config.Config"]
 
 
 def init_returnn(config_fn, args):
@@ -100,6 +101,10 @@ def init_net(args, layers):
   :param list[str] layers:
   """
   def net_dict_post_proc(net_dict):
+    """
+    :param dict[str,dict[str]] net_dict:
+    :rtype: dict[str,dict[str]]
+    """
     return inject_retrieval_code(net_dict, rec_layer_name=args.rec_layer, layers=layers, dropout=args.dropout)
 
   rnn.engine.use_dynamic_train_flag = True  # will be set via Runner. maybe enabled if we want dropout
@@ -107,6 +112,9 @@ def init_net(args, layers):
 
 
 def main(argv):
+  """
+  Main entry.
+  """
   argparser = argparse.ArgumentParser(description=__doc__)
   argparser.add_argument("config_file", type=str, help="RETURNN config, or model-dir")
   argparser.add_argument("--epoch", type=int)
@@ -210,9 +218,9 @@ def main(argv):
     "target_data": network.get_extern_data(network.extern_data.default_input),
     "target_classes": network.get_extern_data(network.extern_data.default_target),
   }
-  for l in layers:
-    sub_layer = rnn.engine.network.get_layer("%s/%s" % (args.rec_layer, l))
-    extra_fetches["rec_%s" % l] = sub_layer.output.get_placeholder_as_batch_major()
+  for layer in layers:
+    sub_layer = rnn.engine.network.get_layer("%s/%s" % (args.rec_layer, layer))
+    extra_fetches["rec_%s" % layer] = sub_layer.output.get_placeholder_as_batch_major()
   dataset.init_seq_order(epoch=1, seq_list=args.seq_list or None)  # use always epoch 1, such that we have same seqs
   dataset_batch = dataset.generate_batches(
     recurrent_net=network.recurrent,
@@ -223,7 +231,7 @@ def main(argv):
     max_total_num_seqs=args.num_seqs,
     used_data_keys=network.used_data_keys)
 
-  stats = {l: Stats() for l in layers}
+  stats = {layer: Stats() for layer in layers}
 
   # (**dict[str,numpy.ndarray|str|list[numpy.ndarray|str])->None
   def fetch_callback(seq_idx, seq_tag, target_data, target_classes, output, output_len, encoder_len, **kwargs):
@@ -239,9 +247,10 @@ def main(argv):
     """
     n_batch = len(seq_idx)
     for i in range(n_batch):
-      for l in layers:
-        att_weights = kwargs["rec_%s" % l][i]
-        stats[l].collect(att_weights.flatten())
+      # noinspection PyShadowingNames
+      for layer in layers:
+        att_weights = kwargs["rec_%s" % layer][i]
+        stats[layer].collect(att_weights.flatten())
     if args.output_format == "npy":
       data = {}
       for i in range(n_batch):
@@ -253,25 +262,27 @@ def main(argv):
           'output_len': output_len[i],
           'encoder_len': encoder_len[i],
         }
-        for l in [("rec_%s" % l) for l in layers]:
-          assert l in kwargs
-          out = kwargs[l][i]
+        # noinspection PyShadowingNames
+        for layer in [("rec_%s" % layer) for layer in layers]:
+          assert layer in kwargs
+          out = kwargs[layer][i]
           assert out.ndim >= 2
           assert out.shape[0] >= output_len[i] and out.shape[1] >= encoder_len[i]
-          data[i][l] = out[:output_len[i], :encoder_len[i]]
+          data[i][layer] = out[:output_len[i], :encoder_len[i]]
         fname = args.dump_dir + '/%s_ep%03d_data_%i_%i.npy' % (model_name, rnn.engine.epoch, seq_idx[0], seq_idx[-1])
         np.save(fname, data)
     elif args.output_format == "png":
       for i in range(n_batch):
-        for l in layers:
+        # noinspection PyShadowingNames
+        for layer in layers:
           extra_postfix = ""
           if args.dropout is not None:
             extra_postfix += "_dropout%.2f" % args.dropout
           elif args.train_flag:
             extra_postfix += "_train"
           fname = args.dump_dir + '/%s_ep%03d_plt_%05i_%s%s.png' % (
-            model_name, rnn.engine.epoch, seq_idx[i], l, extra_postfix)
-          att_weights = kwargs["rec_%s" % l][i]
+            model_name, rnn.engine.epoch, seq_idx[i], layer, extra_postfix)
+          att_weights = kwargs["rec_%s" % layer][i]
           att_weights = att_weights.squeeze(axis=2)  # (out,enc)
           assert att_weights.shape[0] >= output_len[i] and att_weights.shape[1] >= encoder_len[i]
           att_weights = att_weights[:output_len[i], :encoder_len[i]]
@@ -303,8 +314,8 @@ def main(argv):
                   extra_fetches=extra_fetches,
                   extra_fetches_callback=fetch_callback)
   runner.run(report_prefix="att-weights epoch %i" % rnn.engine.epoch)
-  for l in layers:
-    stats[l].dump(stream_prefix="Layer %r " % l)
+  for layer in layers:
+    stats[layer].dump(stream_prefix="Layer %r " % layer)
   if not runner.finalized:
     print("Some error occured, not finalized.")
     sys.exit(1)

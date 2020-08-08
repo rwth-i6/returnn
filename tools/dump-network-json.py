@@ -1,23 +1,31 @@
 #!/usr/bin/env python
 
+"""
+Dumps the network topology as JSON on stdout.
+"""
+
 from __future__ import print_function
 
-import os
 import sys
-
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
-
 import argparse
-import returnn.__main__ as rnn
 import json
+import typing
+
+import _setup_returnn_env  # noqa
+import returnn.__main__ as rnn
 from returnn.log import log
 from returnn.pretrain import pretrain_from_config
 from returnn.config import network_json_from_config
 
 
+config = None  # type: typing.Optional["returnn.config.Config"]
+
+
 def init(config_filename, command_line_options):
+  """
+  :param str config_filename:
+  :param list[str] command_line_options:
+  """
   rnn.init_better_exchook()
   rnn.init_config(config_filename, command_line_options)
   global config
@@ -29,11 +37,14 @@ def init(config_filename, command_line_options):
 
 
 def main(argv):
-  argparser = argparse.ArgumentParser(description='Dump network as JSON.')
-  argparser.add_argument('returnn_config_file')
-  argparser.add_argument('--epoch', default=1, type=int)
-  argparser.add_argument('--out', default="/dev/stdout")
-  args = argparser.parse_args(argv[1:])
+  """
+  Main entry.
+  """
+  arg_parser = argparse.ArgumentParser(description='Dump network as JSON.')
+  arg_parser.add_argument('returnn_config_file')
+  arg_parser.add_argument('--epoch', default=1, type=int)
+  arg_parser.add_argument('--out', default="/dev/stdout")
+  args = arg_parser.parse_args(argv[1:])
   init(config_filename=args.returnn_config_file, command_line_options=[])
 
   pretrain = pretrain_from_config(config)

@@ -15,10 +15,7 @@ import argparse
 import numpy
 from pprint import pformat
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
-
+import _setup_returnn_env  # noqa
 import returnn.__main__ as rnn
 from returnn.log import log
 import returnn.util.basic as util
@@ -203,15 +200,18 @@ def init(config_str, config_dataset, use_pretrain, epoch, verbosity):
 
 
 def main():
-  argparser = argparse.ArgumentParser(description='Anaylize dataset batches.')
-  argparser.add_argument('returnn_config', help="either filename to config-file, or dict for dataset")
-  argparser.add_argument("--dataset", help="if given the config, specifies the dataset. e.g. 'dev'")
-  argparser.add_argument('--epoch', type=int, default=1)
-  argparser.add_argument('--endseq', type=int, default=-1, help='end seq idx (inclusive) or -1 (default: 10)')
-  argparser.add_argument("--verbosity", type=int, default=5, help="overwrites log_verbosity (default: 4)")
-  argparser.add_argument("--key", default="data", help="data-key, e.g. 'data' or 'classes'. (default: 'data')")
-  argparser.add_argument("--use_pretrain", action="store_true")
-  args = argparser.parse_args()
+  """
+  Main entry.
+  """
+  arg_parser = argparse.ArgumentParser(description='Anaylize dataset batches.')
+  arg_parser.add_argument('returnn_config', help="either filename to config-file, or dict for dataset")
+  arg_parser.add_argument("--dataset", help="if given the config, specifies the dataset. e.g. 'dev'")
+  arg_parser.add_argument('--epoch', type=int, default=1)
+  arg_parser.add_argument('--endseq', type=int, default=-1, help='end seq idx (inclusive) or -1 (default: 10)')
+  arg_parser.add_argument("--verbosity", type=int, default=5, help="overwrites log_verbosity (default: 4)")
+  arg_parser.add_argument("--key", default="data", help="data-key, e.g. 'data' or 'classes'. (default: 'data')")
+  arg_parser.add_argument("--use_pretrain", action="store_true")
+  args = arg_parser.parse_args()
   init(
     config_str=args.returnn_config, config_dataset=args.dataset, epoch=args.epoch, use_pretrain=args.use_pretrain,
     verbosity=args.verbosity)

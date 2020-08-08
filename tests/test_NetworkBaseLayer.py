@@ -2,8 +2,7 @@
 import sys
 import os
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import _setup_test_env  # noqa
 from returnn.theano.layers.base import Container
 from nose.tools import assert_equal, assert_is_none
 

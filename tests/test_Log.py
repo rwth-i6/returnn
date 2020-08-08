@@ -1,11 +1,7 @@
 
 from __future__ import print_function
 
-import sys
-import os
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import _setup_test_env  # noqa
 from subprocess import Popen, PIPE, STDOUT, CalledProcessError
 import re
 import os
@@ -15,7 +11,6 @@ from pprint import pprint
 import unittest
 from nose.tools import assert_less, assert_in, assert_equal
 from returnn.util import better_exchook
-better_exchook.replace_traceback_format_tb()
 
 
 py = sys.executable
@@ -56,7 +51,7 @@ def filter_out(ls):
       continue
     # RuntimeWarning|FutureWarning are warnings and they include the code-line in the next output line
     if i + 1 < len(ls) and ls[i + 1].startswith("  "):
-      if re.match(".*:\d+: RuntimeWarning: numpy.*", s) or re.match(".*:\d+: FutureWarning: .*", s):
+      if re.match(".*:\\d+: RuntimeWarning: numpy.*", s) or re.match(".*:\\d+: FutureWarning: .*", s):
         i += 2
         continue
     res.append(ls[i])
@@ -88,7 +83,7 @@ faulthandler import error. No module named faulthandler
 Theano: 0.9.0 (<site-package> in /home/travis/virtualenv/python2.7.14/lib/python2.7/site-packages/theano)
 Task: No-operation
 elapsed: 0:00:00.0001
-"""
+"""  # noqa
   ls = filter(None, s.splitlines())
   ls = filter_out(ls)
   pprint(ls)

@@ -3,13 +3,12 @@
 
 from __future__ import print_function
 
+import _setup_test_env  # noqa
 
 import logging
-logging.getLogger('tensorflow').disabled = True
 import tensorflow as tf
 import os
 import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from returnn.tf.updater import *
 from returnn.tf.layers.base import LayerBase, Loss
 import returnn.tf.compat as tf_compat
@@ -20,9 +19,6 @@ import unittest
 import numpy.testing
 import contextlib
 from returnn.util import better_exchook
-
-better_exchook.replace_traceback_format_tb()
-log.initialize(verbosity=[5])
 
 
 @contextlib.contextmanager

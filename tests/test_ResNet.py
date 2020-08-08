@@ -1,19 +1,14 @@
-import logging
-logging.getLogger('tensorflow').disabled = True
+
+import _setup_test_env  # noqa
 import tensorflow as tf
 import sys
 import os
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from nose.tools import assert_equal, assert_is_instance
 import contextlib
 import unittest
 import numpy.testing
 from pprint import pprint
 from returnn.util import better_exchook
-better_exchook.replace_traceback_format_tb()
-
 from returnn.config import Config
 from returnn.tf.network import *
 from returnn.tf.layers.basic import *
@@ -21,9 +16,7 @@ from returnn.tf.engine import *
 from returnn.log import log
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
-tf_util.debug_register_better_repr()
 
-log.initialize(verbosity=[5])
 
 @contextlib.contextmanager
 def make_scope():
@@ -31,8 +24,10 @@ def make_scope():
     with tf_compat.v1.Session(graph=graph) as session:
       yield session
 
+
 network = {}
 _last = "data"
+
 
 def build_resnet(conv_time_dim):
   # network

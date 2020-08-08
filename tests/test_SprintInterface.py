@@ -4,8 +4,7 @@ from __future__ import print_function
 import sys
 import os
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import _setup_test_env  # noqa
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 import returnn.sprint.interface as SprintAPI
 from tempfile import mkdtemp

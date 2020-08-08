@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 
+"""
+Goes through a Sprint Bliss XML file, converts the audio to ogg (via ffmpeg),
+and creates a corresponding ZIP files.
+The created files are compatible with the :class:`OggZipDataset`.
+"""
+
 from __future__ import print_function
 
 import typing
@@ -16,14 +22,14 @@ import shutil
 from subprocess import check_call
 from glob import glob
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
-
+import _setup_returnn_env  # noqa
 import returnn.sprint.cache
 
 
 class BlissItem:
+  """
+  Bliss item.
+  """
   def __init__(self, segment_name, recording_filename, start_time, end_time, orth, speaker_name=None):
     """
     :param str segment_name:
@@ -46,6 +52,9 @@ class BlissItem:
 
   @property
   def delta_time(self):
+    """
+    :rtype: float
+    """
     return self.end_time - self.start_time
 
 
@@ -157,6 +166,7 @@ class SprintCacheHandler:
       items = list(iter_bliss(opt))
     return {seq.segment_name: (seq.start_time, seq.end_time) for seq in items}
 
+  # noinspection PyUnusedLocal
   def feature_post_process(self, feature_data, seq_name, **kwargs):
     """
     :param numpy.ndarray feature_data:
@@ -238,6 +248,9 @@ def hms(s):
 
 
 def main():
+  """
+  Main entry.
+  """
   arg_parser = ArgumentParser()
   arg_parser.add_argument("bliss_filename")
   arg_parser.add_argument("--subset_segment_file")
@@ -341,6 +354,7 @@ def main():
       start_time = 0
       limit_duration = False
     else:
+      soundfile = audio_synced = sample_rate = wav_tmp_filename = None
       source_filename = rec_filename
       start_time = seq.start_time
       limit_duration = True
