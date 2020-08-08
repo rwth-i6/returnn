@@ -41,6 +41,9 @@ def setup():
   log.initialize(verbosity=[5])
 
   # TF is optional.
+  # Note that importing TF still has a small side effect:
+  # BackendEngine._get_default_engine() will return TF by default, if TF is already loaded.
+  # For most tests, this does not matter.
   try:
     import tensorflow as tf
   except ImportError:

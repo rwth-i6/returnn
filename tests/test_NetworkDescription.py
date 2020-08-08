@@ -9,11 +9,12 @@ from returnn.config import Config
 from returnn.util.basic import dict_diff_str
 from pprint import pprint
 from returnn.util import better_exchook
-import returnn.util.basic
+from returnn.util.basic import BackendEngine
 
 try:
   # noinspection PyPackageRequirements
   import theano
+  BackendEngine.select_engine(engine=BackendEngine.Theano)
 except ImportError:
   theano = None
 
@@ -127,7 +128,6 @@ def test_NetworkDescription_to_json_config1():
   config = Config()
   config.update(config1_dict)
   desc = LayerNetworkDescription.from_config(config)
-  returnn.util.basic.BackendEngine.select_engine(config=config)
   desc_json_content = desc.to_json_content()
   pprint(desc_json_content)
   assert_in("hidden_0", desc_json_content)
@@ -160,7 +160,6 @@ def test_NetworkDescription_to_json_config1():
 def test_config1_to_json_network_copy():
   config = Config()
   config.update(config1_dict)
-  returnn.util.basic.BackendEngine.select_engine(config=config)
   orig_network = LayerNetwork.from_config_topology(config)
   orig_json_content = orig_network.to_json_content()
   pprint(orig_json_content)
@@ -177,7 +176,6 @@ def test_config1_to_json_network_copy():
 def test_config2_bidirect_lstm():
   config = Config()
   config.update(config2_dict)
-  returnn.util.basic.BackendEngine.select_engine(config=config)
   desc = LayerNetworkDescription.from_config(config)
   assert_true(desc.bidirectional)
   network = LayerNetwork.from_config_topology(config)

@@ -1,15 +1,17 @@
 
+from __future__ import print_function
 import _setup_test_env  # noqa
 import unittest
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 from returnn.pretrain import Pretrain, pretrain_from_config
 from returnn.config import Config
-import returnn.util.basic
+from returnn.util.basic import BackendEngine
 
 
 try:
   # noinspection PyPackageRequirements
   import theano
+  BackendEngine.select_engine(engine=BackendEngine.Theano)
 except ImportError:
   theano = None
 
@@ -89,7 +91,6 @@ def test_config1():
 def test_config2():
   config = Config()
   config.update(config2_dict)
-  returnn.util.basic.BackendEngine.select_engine(config=config)
   pretrain = pretrain_from_config(config)
   assert_equal(pretrain.get_train_num_epochs(), 3)
 
@@ -98,7 +99,6 @@ def test_config2():
 def test_config3():
   config = Config()
   config.update(config3_dict)
-  returnn.util.basic.BackendEngine.select_engine(config=config)
   config.network_topology_json = config3_json
   pretrain = pretrain_from_config(config)
   assert_equal(pretrain.get_train_num_epochs(), 3)
