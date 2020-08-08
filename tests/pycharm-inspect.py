@@ -396,9 +396,6 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
   for py_src_file in find_all_py_source_files():
     ignore_codes = "E121,E123,E126,E226,E24,E704,W503,W504"  # PyCharm defaults
     ignore_codes += ",E111,E114"  # our defaults (4 space indents for code/comment)
-    if "/" in py_src_file and py_src_file.split("/")[0] != "returnn":
-      # Ignore warning (for now): module level import not at top of file.
-      ignore_codes += ",E402"
     cmd = [
       sys.executable, "%s/plugins/python-ce/helpers/pycodestyle.py" % pycharm_dir,
       py_src_file,

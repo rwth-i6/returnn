@@ -1,6 +1,7 @@
 accum
 adadelta
 adagrad
+argparse
 attribs
 audioread
 backprop
@@ -19,6 +20,7 @@ dtype
 enwik
 excepthook
 exchook
+ffmpeg
 filterbank
 frac
 gelu

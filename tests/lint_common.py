@@ -170,6 +170,8 @@ ignore_count_for_files = {
   'returnn/theano/native_op.py',
 
   # Ignore some outdated or rarely used tools/demos.
+  'tools/collect-orth-symbols.py',
+  'tools/debug-plot-search-scores.py',
   'tools/import-blocks-mt-model.py',
   'tools/import-sprint-nn.py',
   'tools/import-t2t-mt-model.py',
