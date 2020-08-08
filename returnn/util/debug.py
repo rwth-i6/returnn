@@ -233,7 +233,7 @@ def install_lib_sig_segfault():
     import ctypes.util
     # libSegFault on Unix/Linux, not on MacOSX
     libfn = ctypes.util.find_library("SegFault")
-    assert libfn
+    assert libfn, "libSegFault not found"
     # Nothing more needed than loading it, it will automatically register itself.
     ctypes.CDLL(libfn)
     print("Installed libSegFault.so.")

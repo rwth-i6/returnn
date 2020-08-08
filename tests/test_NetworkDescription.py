@@ -85,8 +85,8 @@ config2_dict = {
   "num_inputs": 40,
   "num_outputs": 4498,
   "bidirectional": True,
-  "hidden_size": (500,500,500),
-  "hidden_type": "lstm_opt",
+  "hidden_size": (500, 500, 500),
+  "hidden_type": "forward",
   "activation": "sigmoid",
   "dropout": 0.1,
 }

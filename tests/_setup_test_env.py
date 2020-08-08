@@ -40,8 +40,15 @@ def setup():
   from returnn.log import log
   log.initialize(verbosity=[5])
 
-  import returnn.tf.util.basic as tf_util
-  tf_util.debug_register_better_repr()
+  # TF is optional.
+  try:
+    import tensorflow as tf
+  except ImportError:
+    tf = None
+
+  if tf:
+    import returnn.tf.util.basic as tf_util
+    tf_util.debug_register_better_repr()
 
   import returnn.util.debug as debug
   debug.install_lib_sig_segfault()
