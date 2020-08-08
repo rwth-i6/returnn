@@ -571,6 +571,8 @@ def report_inspect_dir(inspect_xml_dir,
     msg_counted = True
     if inspect_class in inspect_class_not_counted:
       msg_counted = False
+    if problem_severity.startswith("POSSIBLE-FALSE "):
+      msg_counted = False
     if filename.startswith("tools/") or filename.startswith("demos/"):
       # We have lots of these, but I'm not sure how to fix this in a better way (yet).
       if "module level import not at top of file" in description:
