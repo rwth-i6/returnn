@@ -469,6 +469,8 @@ def report_inspect_xml(fn):
       possible_false_positive = True
     if inspect_class == "PyArgumentListInspection" and "'self' unfilled" in description:  # Numpy false positive
       possible_false_positive = True
+    if inspect_class == "PyStringFormatInspection" and "Unexpected type None" in description:
+      possible_false_positive = True
     if possible_false_positive:
       problem_severity = "POSSIBLE-FALSE %s" % problem_severity
 
