@@ -135,6 +135,7 @@ def filter_demo_output(ls):
   ls = [l for l in ls if not l.startswith("loaded lib: ")]
   ls = [l for l in ls if not l.startswith("dlopen: ")]
   ls = [l for l in ls if "installLibSigSegfault" not in l and "libSegFault" not in l]
+  ls = [l for l in ls if "faulthandler" not in l]
   found_hello = False
   for i, l in enumerate(ls):
     # Those can be very early, before the hello.
