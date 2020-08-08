@@ -945,7 +945,6 @@ if BackendEngine.is_theano_selected():
       output_storage[2][0] = start_end_states.view(dtype='float32')
       output_storage[3][0] = numpy.empty((2, start_end_states[1, -1] + 1), dtype='float32')
 
-
   def sprint_loss_and_error_signal(output_layer, target, sprint_opts, log_posteriors, seq_lengths):
     """
     :param NetworkOutputLayer.SequenceOutputLayer output_layer: output layer

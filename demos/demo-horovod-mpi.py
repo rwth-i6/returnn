@@ -78,9 +78,9 @@ def main():
   import tensorflow as tf
   print("TF version:", tf.__version__)
 
-  import horovod
+  import horovod  # noqa
   print("Horovod version:", horovod.__version__)
-  import horovod.tensorflow as hvd
+  import horovod.tensorflow as hvd  # noqa
 
   # Initialize Horovod
   hvd.init()

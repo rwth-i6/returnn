@@ -602,7 +602,6 @@ class Optimization:
           print(" %s -> %s" % (p.description(), best_individuals[0].hyper_param_mapping[p]))
     except KeyboardInterrupt:
       print("KeyboardInterrupt, canceled search.")
-      canceled = True
 
     print("Best %i settings:" % len(best_individuals))
     for individual in best_individuals:
@@ -625,6 +624,9 @@ class _IndividualTrainer:
     self.cancel_flag = False
 
   def run(self):
+    """
+    Run the trainer.
+    """
     if self.individual.cost is not None:
       return self.individual.cost
     start_time = time.time()
