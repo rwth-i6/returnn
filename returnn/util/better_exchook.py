@@ -1160,7 +1160,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
 def print_tb(tb, file=None, **kwargs):
     """
     :param types.TracebackType|types.FrameType|StackSummary tb:
-    :param io.TextIOBase|io.StringIO|None file: stderr by default
+    :param io.TextIOBase|io.StringIO|typing.TextIO|None file: stderr by default
     :return: nothing, prints to ``file``
     """
     if file is None:
@@ -1179,7 +1179,7 @@ def better_exchook(etype, value, tb, debugshell=False, autodebugshell=True, file
     :param tb: traceback
     :param bool debugshell: spawn a debug shell at the context of the exception
     :param bool autodebugshell: if env DEBUG is an integer != 0, it will spawn a debug shell
-    :param io.TextIOBase|io.StringIO|typing.TextIO file: output stream where we will print the traceback
+    :param io.TextIOBase|io.StringIO|typing.TextIO|None file: output stream where we will print the traceback
         and exception information. stderr by default.
     :param bool|None with_color: whether to use ANSI escape codes for colored output
     """
@@ -1292,7 +1292,7 @@ def dump_all_thread_tracebacks(exclude_thread_ids=None, file=None):
     Prints the traceback of all threads.
 
     :param set[int]|list[int]|None exclude_thread_ids: threads to exclude
-    :param io.TextIOBase|io.StringIO file: output stream
+    :param io.TextIOBase|io.StringIO|typing.TextIO|None file: output stream
     """
     if exclude_thread_ids is None:
         exclude_thread_ids = []
