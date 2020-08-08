@@ -532,8 +532,8 @@ def get_global_config(raise_exception=True, auto_create=False):
   # We are the main process.
   import sys
   main_mod = sys.modules["__main__"]  # should be rnn.py
-  if isinstance(getattr(main_mod, "config", None), Config):
-    return main_mod.config  # noqa
+  if hasattr(main_mod, "config") and isinstance(main_mod.config, Config):
+    return main_mod.config
   # Maybe __main__ is not rnn.py, or config not yet loaded.
   # Anyway, try directly. (E.g. for SprintInterface.)
   import returnn.__main__ as rnn

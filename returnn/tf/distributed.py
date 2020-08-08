@@ -88,7 +88,7 @@ class MPIClusterResolver(tf.distribute.cluster_resolver.ClusterResolver):
   """
 
   def __init__(self):
-    # noinspection PyPackageRequirements
+    # noinspection PyPackageRequirements,PyUnresolvedReferences
     from mpi4py import MPI
     comm = MPI.COMM_WORLD
     self._host = MPI.Get_processor_name()
@@ -193,6 +193,10 @@ def _get_open_port():
 
 
 class LocalOnlyClusterResolver(tf.distribute.cluster_resolver.ClusterResolver):
+  """
+  Cluster resolver for one local instance.
+  """
+
   def __init__(self):
     self._port = _get_open_port()
     self._host = "localhost:%i" % self._port
@@ -302,6 +306,10 @@ class _Controller:
 
 # not really used currently
 class ReturnnDefaultStrategy(tf.distribute.Strategy):
+  """
+  RETURNN default strategy.
+  """
+
   def __init__(self):
     super(ReturnnDefaultStrategy, self).__init__(
       extended=ReturnnDefaultStrategyExtended(self))
@@ -310,7 +318,9 @@ class ReturnnDefaultStrategy(tf.distribute.Strategy):
 # not really used currently
 # noinspection PyAbstractClass
 class ReturnnDefaultStrategyExtended(DefaultDistributionExtended):
-  pass
+  """
+  RETURNN default strategy extended.
+  """
 
 
 def init_distributed_tf(config):

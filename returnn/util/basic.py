@@ -55,7 +55,7 @@ else:
     # noinspection PyUnresolvedReferences,PyCompatibility
     from StringIO import StringIO as BytesIO
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
+returnn_root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 class NotSpecified(object):
@@ -543,7 +543,7 @@ def terminal_size(file=sys.stdout):
       import fcntl
       import termios
       import struct
-      cr_ = struct.unpack('hh', fcntl.ioctl(fd, termios.TIOCGWINSZ, '1234'))
+      cr_ = struct.unpack('hh', fcntl.ioctl(fd, termios.TIOCGWINSZ, '1234'))  # noqa
     except Exception:
       return
     return cr_
@@ -658,7 +658,7 @@ def _pp_extra_info(obj, depth_limit=3):
       if type(obj) in (str, unicode, list, tuple, dict) and len(obj) <= 5:
         pass  # don't print len in this case
       else:
-        s += ["len = %i" % obj.__len__()]
+        s += ["len = %i" % obj.__len__()]  # noqa
     except Exception:
       pass
   if depth_limit > 0 and hasattr(obj, "__getitem__"):
@@ -667,7 +667,7 @@ def _pp_extra_info(obj, depth_limit=3):
       if type(obj) in (str, unicode):
         pass  # doesn't make sense to get sub items here
       else:
-        sub_obj = obj.__getitem__(0)
+        sub_obj = obj.__getitem__(0)  # noqa
         extra_info = _pp_extra_info(sub_obj, depth_limit - 1)
         if extra_info != "":
           s += ["_[0]: {%s}" % extra_info]
@@ -1077,14 +1077,14 @@ def init_thread_join_hack():
     if thread.get_ident() == main_thread_id:
       if timeout is None:
         # Use a timeout anyway. This should not matter for the underlying code.
-        return cond_wait_orig(cond, timeout=0.1)
+        return cond_wait_orig(cond, timeout=0.1)  # noqa  # https://youtrack.jetbrains.com/issue/PY-43915
       # There is some code (e.g. multiprocessing.pool) which relies on that
       # we respect the real specified timeout.
       # However, we cannot do multiple repeated calls to cond_wait_orig as we might miss the condition notify.
       # But in some Python versions, the underlying cond_wait_orig will anyway also use sleep.
-      return cond_wait_orig(cond, timeout=timeout)
+      return cond_wait_orig(cond, timeout=timeout)  # noqa
     else:
-      return cond_wait_orig(cond, timeout=timeout)
+      return cond_wait_orig(cond, timeout=timeout)  # noqa
   Condition.wait = cond_wait_hacked
 
   # And the same for Lock.acquire, very similar to Condition.wait.
@@ -1093,7 +1093,7 @@ def init_thread_join_hack():
   # noinspection PyPep8Naming
   Lock = None
   if Lock:
-    lock_acquire_orig = Lock.acquire
+    lock_acquire_orig = Lock.acquire  # noqa
 
     # Note: timeout argument was introduced in Python 3.
     def lock_acquire_hacked(lock, blocking=True, timeout=-1):
@@ -1323,7 +1323,7 @@ def random_orthogonal(shape, gain=1., seed=None):
 
 
 _have_inplace_increment = None
-_native_inplace_increment = None
+_native_inplace_increment = None  # type: typing.Optional[typing.Callable[[np.ndarray,np.ndarray,np.ndarray],np.ndarray]]  # nopep8
 
 
 def inplace_increment(x, idx, y):
@@ -1332,8 +1332,14 @@ def inplace_increment(x, idx, y):
   The difference to the Numpy version is that in case some index is there multiple
   times, it will only be incremented once (and it is not specified which one).
   See also theano.tensor.subtensor.AdvancedIncSubtensor documentation.
+
+  :param numpy.ndarray x:
+  :param numpy.ndarray idx:
+  :param numpy.ndarray y:
+  :rtype: numpy.ndarray
   """
-  global _have_inplace_increment, inplace_increment, _native_inplace_increment
+  # https://youtrack.jetbrains.com/issue/PY-28498
+  global _have_inplace_increment, inplace_increment, _native_inplace_increment  # noqa
   if _have_inplace_increment is None:
     native_inpl_incr = None
     # noinspection PyPackageRequirements,PyUnresolvedReferences
@@ -1342,17 +1348,17 @@ def inplace_increment(x, idx, y):
       # noinspection PyPackageRequirements,PyUnresolvedReferences
       import theano.gof.cutils  # needed to import cutils_ext
       try:
-        from cutils_ext.cutils_ext import inplace_increment as native_inpl_incr
+        from cutils_ext.cutils_ext import inplace_increment as native_inpl_incr  # noqa
       except ImportError:
         pass
     if native_inpl_incr:
       _have_inplace_increment = True
       _native_inplace_increment = native_inpl_incr
       inplace_increment = native_inpl_incr  # replace myself
-      return inplace_increment(x, idx, y)
+      return inplace_increment(x, idx, y)  # noqa
     _have_inplace_increment = False
   if _have_inplace_increment is True:
-    return _native_inplace_increment(x, idx, y)
+    return _native_inplace_increment(x, idx, y)  # noqa
   raise NotImplementedError("need Numpy 1.8 or later")
 
 
@@ -2185,6 +2191,10 @@ def deepcopy(x, stop_types=None):
   persistent_memo = {}  # id -> obj
 
   def persistent_id(obj):
+    """
+    :param object obj:
+    :rtype: int|None
+    """
     if stop_types and isinstance(obj, tuple(stop_types)):
       persistent_memo[id(obj)] = obj
       return id(obj)
@@ -2823,7 +2833,7 @@ def read_sge_num_procs(job_id=None):
     line[len("hard resource_list:"):].strip()
     for line in stdout.splitlines() if line.startswith("hard resource_list:")]
   assert len(ls) == 1
-  opts = dict([opt.split("=", 1) for opt in ls[0].split(",")])
+  opts = dict([opt.split("=", 1) for opt in ls[0].split(",")])  # noqa
   try:
     return int(opts["num_proc"])
   except ValueError as exc:
@@ -3646,15 +3656,15 @@ def is_namedtuple(cls):
 
 def make_seq_of_type(cls, seq):
   """
-  :param T cls: e.g. tuple, list or namedtuple
+  :param type[T] cls: e.g. tuple, list or namedtuple
   :param list|tuple|T seq:
   :return: cls(seq) or cls(*seq)
   :rtype: T|list|tuple
   """
   assert issubclass(cls, (list, tuple))
   if is_namedtuple(cls):
-    return cls(*seq)
-  return cls(seq)
+    return cls(*seq)  # noqa
+  return cls(seq)  # noqa
 
 
 @contextlib.contextmanager
@@ -3875,7 +3885,7 @@ def generic_import_module(filename):
   if not os.path.exists(filename):
     assert filename[0] != '/'
     # Maybe relative to Returnn?
-    prefix_dir = "%s/" % my_dir
+    prefix_dir = "%s/" % returnn_root_dir
   assert os.path.exists(prefix_dir + filename)
   assert filename.endswith('.py') or os.path.isdir(prefix_dir + filename)
   dirs = filename.split("/")

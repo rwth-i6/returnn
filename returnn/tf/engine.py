@@ -236,7 +236,8 @@ class Runner(object):
     self.results = results
     self.score = {key: float(value) for (key, value) in results.items() if key.startswith("cost:")}
     if self.engine.config.bool("calculate_exp_loss", False):
-      self.score.update({key + ":exp": float(numpy.exp(value)) for (key, value) in results.items() if key.startswith("cost:")})
+      self.score.update({
+        key + ":exp": float(numpy.exp(value)) for (key, value) in results.items() if key.startswith("cost:")})
     self.error = {key: float(value) for (key, value) in results.items() if key.startswith("error:")}
     self.num_steps = num_steps
     self.finalized = True
@@ -1436,7 +1437,7 @@ class Engine(EngineBase):
       if self.epoch != self.final_epoch:
         print("Stopped after epoch %i and not %i as planned." % (self.epoch, self.final_epoch), file=log.v3)
 
-    print("Finished training in epoch %i." % self.epoch, file=log.v3)
+    print("Finished training in epoch %i." % self.epoch, file=log.v3)  # noqa
 
   def init_train_epoch(self):
     """

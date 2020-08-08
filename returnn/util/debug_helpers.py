@@ -114,7 +114,6 @@ if BackendEngine.is_theano_selected():
       result = result[0]
     return result
 
-
   class DebugNn:
     """
     Debug helper for NN.

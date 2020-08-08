@@ -30,7 +30,7 @@ def _init_optimizer_classes_dict():
   potential_list = list(vars(tf_compat.v1.train).items())
   if tf_version_tuple() >= (1, 2, 0):
     try:
-      from tensorflow.contrib import opt
+      from tensorflow.contrib import opt  # noqa
       potential_list += list(vars(opt).items())
     except ImportError:  # TF 2
       pass
@@ -539,7 +539,7 @@ class WrapOptimizer:
       # TF default values: like Adam: beta1=0.9, beta2=0.999, epsilon=1e-8
       # Our Theano default values: decay=0.004, beta1=0.9, beta2=0.999, epsilon=1e-8
       try:
-        from tensorflow.contrib.opt import NadamOptimizer
+        from tensorflow.contrib.opt import NadamOptimizer  # noqa
         optimizer = NadamOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
       except ImportError:  # TF 2
         optimizer = tf.keras.optimizers.Nadam(learning_rate=lr, epsilon=epsilon)
@@ -924,10 +924,14 @@ class KerasOptimizer(Optimizer):
   @classmethod
   def get_factory(cls, keras_class):
     """
-    :param keras_class: e.g. tf.keras.optimizers.Nadam
+    :param type[T] keras_class: e.g. tf.keras.optimizers.Nadam
     :return function (kwargs)->Optimizer
     """
     def creator(**kwargs):
+      """
+      Factory.
+      :rtype: T
+      """
       kwargs = kwargs.copy()
       kwargs.pop("use_locking", None)  # this is not used. just ignore
       opt = keras_class(**kwargs)
@@ -1253,7 +1257,6 @@ class CustomAdamOptimizer(BaseCustomOptimizer):
     self._epsilon_t = tf.convert_to_tensor(self._epsilon, name="epsilon")
 
   def _create_slots(self, var_list):
-    first_var = min(var_list, key=lambda x: x.name)
     self._beta1_power = tf.Variable(
       initial_value=self._beta1, name="beta1_power")
     self._beta2_power = tf.Variable(
