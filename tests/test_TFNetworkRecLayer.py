@@ -5573,6 +5573,54 @@ def test_PositionalEncodingLayer_offset_in_rec():
     print(out)  # random...
 
 
+def test_RelativePositionalEncodingLayer():
+  # Test `RelativePositionalEncodingLayer` with an example similar to its example usage.
+  rnd = numpy.random.RandomState(42)
+  n_batch, n_out, n_time = 3, 5, 7
+  EncKeyTotalDim = 9
+  EncValueTotalDim = 18
+  AttNumHeads = 3
+  net_dict = {
+    'rel_pos': {
+      "class": "relative_positional_encoding",
+      "from": "data",
+      "n_out": EncKeyTotalDim // AttNumHeads
+    },
+    'output': {
+      "class": "self_attention",
+      "num_heads": AttNumHeads,
+      "total_key_dim": EncKeyTotalDim,
+      "n_out": EncValueTotalDim, "from": "data",
+      "attention_left_only": False,
+      "key_shift": 'rel_pos'
+    }
+  }
+  config = Config()
+  config.update({
+    "extern_data": {"data": {"dim": n_out, "sparse": False}},
+    "debug_print_layer_output_template": True
+  })
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    pprint(network.extern_data.data)
+    network.construct_from_dict(net_dict)
+    fetches = network.get_fetches_dict()
+    data_input = network.extern_data.data["data"]
+    assert data_input.batch_shape == (None, None, n_out)
+    train_out = network.get_layer("output").output
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+    rand_data = rnd.rand(n_batch, n_time, n_out)
+    outputs = [train_out.placeholder]
+    info, out = session.run(
+      (fetches, outputs),
+      feed_dict={
+        data_input.placeholder: rand_data,
+        data_input.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="float32"),
+      })
+    print(info)
+    print(out)  # random...
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
