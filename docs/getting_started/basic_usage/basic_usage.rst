@@ -13,18 +13,31 @@ Now ``rnn.py`` is the main entry point. Usage::
 where ``config-file`` is a config file for RETURNN.
 See `here for an example <https://github.com/rwth-i6/returnn/blob/master/demos/demo-tf-native-lstm2.12ax.config>`_,
 and `many more examples from the demos <https://github.com/rwth-i6/returnn/blob/master/demos/>`_.
-We support multiple config syntax, such as simple line-based ``key value``,
-JSON based which is determined by a "``{``" at the beginning of the file
-or Python code which is determined by a "``#!``" at the beginning of the file.
-There is a variety of config params.
+The configuration syntax can be in three different forms:
 
-``rnn.py`` will execute some task, such as ``train`` or ``forward``. You must define the task
-and the train and dev datasets which it will use,
-the mini-batch construction variants,
-as well as the neural network topology,
-as well as some training parameters.
+  - a simple line-based file with ``key value`` pairs
+  - a JSON file (determined by a "``{``" at the beginning of the file)
+  - executable python code (determined by a "``#!``" at the beginning of the file)
 
-Some common config parameters:
+Config files using the python code syntax are the de-facto standard for all current examples and setups.
+The parameters can be set by defining global variables, but it is possible to use any form of python code such
+as functions and classes to construct your network or fill in global variables based on more complex decisions.
+The python syntax config files may also contain additional code such as layer or dataset definitions.
+
+When calling ``rnn.py`` will execute some ``task``, such as ``train``, ``forward`` or ``search``.
+
+The task ``train`` will train a model specified by a given network structure.
+After training each epoch on provided `training data, the current parameters will be stored to a model checkpoint file.
+Besides the training data, a development dataset is used to evaluate the current model, and store the evaluation
+results in a separate file.
+
+The task ``forward`` will run a forward pass of the network, given an evaluation dataset, and store the results in
+an HDF file.
+
+The task ``search`` is used to run the network with the beam-search algorithm.
+The results are serialized into text form and stored in a plain text file python dictionary format file.
+
+The following parameters are very common, and are used in most RETURNN config files:
 
 task
     The task, such as ``train``, ``forward`` or ``search``.
@@ -35,14 +48,33 @@ device
     a specific device can be enforced by setting this parameter.
 
 use_tensorflow
-    If you set this to ``True``, TensorFlow will be used.
+    If you set this to ``True``, the TensorFlow will be used.
+    Otherwise, the installed backend is used.
+    If both backends are installed (TensorFlow and Theano), RETURNN will use Theano as default for legacy reasons.
 
 train / dev / eval
-    The datasets. This can be a filename to a hdf-file.
-    Or it can be a dict with an entry ``class`` where you can choose a from a variety
-    of other dataset implementations, including many synthetic generated data.
+    The datasets parameters are set to a python dict with a mandatory entry ``class``.
+    The ``class`` attribute needs to be set to the class name of the dataset that should be used.
+    An overview over available datasets can be found :ref:`here <dataset_reference>`.
     ``train`` and ``dev`` are used during training, while ``eval`` is usually used to define the dataset for the
     ``forward`` or ``search`` task.
+
+    Beside passing the constructor parameters to the specficic Dataset, there are some common parameters such as:
+
+    ``seq_ordering``: This defines the order of the sequences provided by the dataset.
+    Possible values are:
+
+        - ``default``: Keep the sequences as is
+        - ``reverse``: Use the default sequences in reversed order
+        - ``random``: Shuffle the data with a predefined fixed seed
+        - ``random:<seed>``: Shuffle the data with the seed given
+        - ``sorted``: Sort by length (only if available), beginning with shortest sequences
+        - ``sorted_reverse``: Sort by length, beginning with longest sequences
+        - ``laplace:<n_buckets>``: Sort by length with n laplacian buckets (one bucket means going from shortest to longest and back with 1/n of the data).
+        - ``laplace:.<n_sequences>``: sort by length with n sequences per laplacian bucket.
+
+    Note that not all sequence order modes are available for all datasets,
+    and some datasets may provide additional modes.
 
 extern_data
     Defines the source/target dimensions of the data. Both can be integers.
@@ -64,7 +96,7 @@ extern_data
     Example: :code:`'speaker_classes': {'dim': 1172, 'shape': (), 'sparse': True}`
     This defines a sparse input for e.g. speaker classes that do not have a time axis.
 
-    In general, all input parameters to :class:`TFUtil.Data` can be provided
+    In general, all input parameters to :class:`Data <returnn.tf.util.data.Data>` can be provided
 
 
 network
@@ -103,24 +135,6 @@ network
     See :class:`TFNetworkRecLayer.RecLayer` or :class:`NetworkRecurrentLayer.RecurrentUnitLayer`.
     See also :ref:`tf_lstm_benchmark`.
 
-batching
-    Defines the default value for ``seq_ordering`` across all datasets.
-    It is recommended to not use this parameter,
-    but rather define ``seq_ordering`` explicitely in the datasets for better readability.
-    Possible values are:
-
-        - ``default``: Keep the sequences as is
-        - ``reverse``: Use the default sequences in reversed order
-        - ``random``: Shuffle the data with a predefined fixed seed
-        - ``random:<seed>``: Shuffle the data with the seed given
-        - ``sorted``: Sort by length (only if available), beginning with shortest sequences
-        - ``sorted_reverse``: Sort by length, beginning with longest sequences
-        - ``laplace:<n_buckets>``: Sort by length with n laplacian buckets (one bucket means going from shortest to longest and back with 1/n of the data).
-        - ``laplace:.<n_sequences>``: sort by length with n sequences per laplacian bucket.
-
-    Note that not all sequence order modes are available for all datasets,
-    and some datasets may provide additional modes.
-
 batch_size
     The total number of frames. A mini-batch has at least a time-dimension
     and a batch-dimension (or sequence-dimension), and depending on dense or sparse,
@@ -150,10 +164,11 @@ log_verbosity
     An integer. Common values are 3 or 4. Starting with 5, you will get an output per mini-batch.
 
 
-There are much more params, and more details to many of the listed ones.
+There are much more parameters, and more details to many of the listed ones.
 Details on the parameters can be found in the :ref:`parameter reference <parameter_reference>`.
 As the reference is still incomplete, please watch out for additional parameters that can be found in the code.
-All config params can also be passed as command line params.
+
+All configuration params can also be passed as command line parameters.
 The generic form is ``++param value``, but more options are available.
 Please See the code for some usage.
 
