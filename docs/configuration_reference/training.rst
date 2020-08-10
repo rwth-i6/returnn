@@ -47,8 +47,9 @@ cleanup_old_models
 
 max_seq_length
     A dict with string:integer pairs. The string must be a valid data key,
-    and the integer specifies the upper bound for this data object. Batches, where the specified data object exceeds
-    the upper bound are discarded. Note that some datasets (e.g ``OggZipDataset``) load and process the data
+    and the integer specifies the upper bound for this data object.
+    During batch construction any sequence where the specified data object exceeds the upper bound are discarded.
+    Note that some datasets (e.g ``OggZipDataset``) load and process the data
     to determine the length, so even for discarded sequences data processing might be performed.
 
 max_seqs
