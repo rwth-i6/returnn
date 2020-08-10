@@ -8123,6 +8123,7 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
     data = data.copy_template().copy_as_batch_major()
     data.batch_dim_axis = None
     data.feature_dim_axis = NotSpecified
+    data.dim = n_out
     if data.have_time_axis():
       data.time_dim_axis = 0
       data.shape = (None, None, n_out)
