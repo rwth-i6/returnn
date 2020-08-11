@@ -255,6 +255,8 @@ def main():
   arg_parser.add_argument("bliss_filename")
   arg_parser.add_argument("--subset_segment_file")
   arg_parser.add_argument("--no_ogg", help="skip generating ogg files", action="store_true")
+  arg_parser.add_argument(
+    "--no_conversion", help="skip ffmpeg call, assume audio is correct already", action="store_true")
   arg_parser.add_argument("--no_cleanup", help="don't delete our temp files", action="store_true")
   arg_parser.add_argument("--sprint_cache", help="filename of feature cache for synchronization")
   arg_parser.add_argument("--raw_sample_rate", help="sample rate of audio input", type=int, default=8000)
@@ -366,19 +368,25 @@ def main():
       if os.path.exists(dest_filename):
         print("already exists, delete: %s" % os.path.basename(dest_filename))
         os.remove(dest_filename)
-      cmd = ["ffmpeg"]
-      if args.ffmpeg_acodec:
-        cmd += ["-acodec", args.ffmpeg_acodec]  # https://trac.ffmpeg.org/ticket/2810
-      cmd += ["-i", source_filename]
-      if args.number_of_channels > 0:
-        cmd += ["-ac", str(args.number_of_channels)]
-      if start_time:
-        cmd += ["-ss", str(start_time)]
-      if limit_duration:
-        cmd += ["-t", str(duration)]
-      cmd += [dest_filename, "-loglevel", args.ffmpeg_loglevel]
-      print("$ %s" % " ".join(cmd))
-      check_call(cmd)
+      if args.no_conversion:
+        assert source_filename.endswith(".ogg")
+        print("skip ffmpeg, copy instead (%s -> %s)" % (
+          os.path.basename(source_filename), dest_filename[len(dest_dirname) + 1:]))
+        shutil.copy(src=source_filename, dst=dest_filename)
+      else:
+        cmd = ["ffmpeg"]
+        if args.ffmpeg_acodec:
+          cmd += ["-acodec", args.ffmpeg_acodec]  # https://trac.ffmpeg.org/ticket/2810
+        cmd += ["-i", source_filename]
+        if args.number_of_channels > 0:
+          cmd += ["-ac", str(args.number_of_channels)]
+        if start_time:
+          cmd += ["-ss", str(start_time)]
+        if limit_duration:
+          cmd += ["-t", str(duration)]
+        cmd += [dest_filename, "-loglevel", args.ffmpeg_loglevel]
+        print("$ %s" % " ".join(cmd))
+        check_call(cmd)
     if args.sprint_cache:
       audio_ogg, sample_rate_ogg = soundfile.read(dest_filename)
       assert len(audio_synced) == len(audio_ogg), "Number of frames in synced wav and converted ogg do not match"
