@@ -2973,7 +2973,7 @@ def _op_repr(x):
   extra = ""
   if x.type == "Const":
     from tensorflow.python.framework import tensor_util
-    extra += " value=%s" % (tensor_util.constant_value(x.outputs[0]),)
+    extra += " value=%s" % (tensor_util.MakeNdarray(x.get_attr("value")),)
   return "<tf.Operation %r type=%s%s>" % (x.name, x.type, extra)
 
 
