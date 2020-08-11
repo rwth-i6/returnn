@@ -732,13 +732,13 @@ def native_lstm2(x, h_0, c_0, mask, W_f, W_r, b, n_time, n_batch, n_in_dim, n_ce
   assert n_time > 0
   assert 0 <= start < n_time
   assert step != 0
-  x = tf.convert_to_tensor(x)
-  h_0 = tf.convert_to_tensor(h_0)
-  c_0 = tf.convert_to_tensor(c_0)
-  mask = tf.convert_to_tensor(mask)
-  W_f = tf.convert_to_tensor(W_f)
-  W_r = tf.convert_to_tensor(W_r)
-  b = tf.convert_to_tensor(b)
+  x = tf.convert_to_tensor(x, name="x")
+  h_0 = tf.convert_to_tensor(h_0, name="h_0")
+  c_0 = tf.convert_to_tensor(c_0, name="c_0")
+  mask = tf.convert_to_tensor(mask, name="mask")
+  W_f = tf.convert_to_tensor(W_f, name="W_f")
+  W_r = tf.convert_to_tensor(W_r, name="W_r")
+  b = tf.convert_to_tensor(b, name="b")
   x.set_shape(tf.TensorShape((n_time, n_batch, n_in_dim)))
   h_0.set_shape(tf.TensorShape((n_batch, n_cells)))
   c_0.set_shape(tf.TensorShape((n_batch, n_cells)))
@@ -860,18 +860,18 @@ def wrap_lstm_grad(op, x, h_0, c_0, dy, dd, mask, W_f, W_r, b, n_time, n_batch, 
   assert n_time > 0
   assert 0 <= start < n_time
   assert step != 0
-  x = tf.convert_to_tensor(x)
-  h_0 = tf.convert_to_tensor(h_0)
-  c_0 = tf.convert_to_tensor(c_0)
+  x = tf.convert_to_tensor(x, name="x")
+  h_0 = tf.convert_to_tensor(h_0, name="h_0")
+  c_0 = tf.convert_to_tensor(c_0, name="c_0")
   with tf.name_scope("gradients"):
     # Note that tensor_array_grad._GetGradSource() has this ugly hack
     # which requires that we have the "gradients" prefix.
-    dy = tf.identity(tf.convert_to_tensor(dy), name="dy")
-    dd = tf.identity(tf.convert_to_tensor(dd), name="dd")
-  mask = tf.convert_to_tensor(mask)
-  W_f = tf.convert_to_tensor(W_f)
-  W_r = tf.convert_to_tensor(W_r)
-  b = tf.convert_to_tensor(b)
+    dy = tf.identity(tf.convert_to_tensor(dy, name="dy"), name="dy")
+    dd = tf.identity(tf.convert_to_tensor(dd, name="dd"), name="dd")
+  mask = tf.convert_to_tensor(mask, name="mask")
+  W_f = tf.convert_to_tensor(W_f, name="W_f")
+  W_r = tf.convert_to_tensor(W_r, name="W_r")
+  b = tf.convert_to_tensor(b, name="b")
   x.set_shape(tf.TensorShape((n_time, n_batch, n_in_dim)))
   h_0.set_shape(tf.TensorShape((n_batch, n_cells)))
   c_0.set_shape(tf.TensorShape((n_batch, n_cells)))
@@ -906,8 +906,8 @@ def wrap_lstm_grad(op, x, h_0, c_0, dy, dd, mask, W_f, W_r, b, n_time, n_batch, 
 
 
 def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclude=(), **kwargs):
-  dy = tf.convert_to_tensor(dy)
-  dd = tf.convert_to_tensor(dd)
+  dy = tf.convert_to_tensor(dy, name="dy")
+  dd = tf.convert_to_tensor(dd, name="dd")
   mask_bc = tf.expand_dims(kwargs["mask"], axis=2)
   mask_bc.set_shape(tf.TensorShape((kwargs["n_time"], kwargs["n_batch"], 1)))
   y1, d1, dx1, dh01, dc01, dWf1, dWr1, db1 = wrap_lstm_grad(op=op1, dy=dy, dd=dd, name=name1, **kwargs)
@@ -977,6 +977,8 @@ def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclud
     pprint(all_ops)
   v_op_ins, v_op_outs, vdWr1_, vdWr2_ = session.run(
     [list(example_dWr.op.inputs), list(example_dWr.op.outputs), dWr1, dWr2])
+  if not numpy.allclose(vdWr1_, vdWr2_, rtol=rtol, equal_nan=True):
+    not_all_close.append("dWr (extra run)")
   if not_all_close:
     print("inputs:")
     for x, v in zip(example_dWr.op.inputs, v_op_ins):
@@ -990,18 +992,21 @@ def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclud
     print(vdWr1_)
     print("dWr2:")
     print(vdWr2_)
-  if not numpy.allclose(vdWr1_, vdWr2_, rtol=rtol, equal_nan=True):
-    not_all_close.append("dWr (extra run)")
   for i in range(5):  # run multiple times. maybe this triggers an exception
     v_op_outs_direct, vdWr1_, vdWr2_ = session.run(
       [list(example_dWr.op.outputs), dWr1, dWr2], {x: v for (x, v) in zip(example_dWr.op.inputs, v_op_ins)})
-    if not_all_close:
-      print("outputs direct:")
-      for x, v, v_ in zip(example_dWr.op.outputs, v_op_outs_direct, v_op_outs):
-        print("%s:" % x)
-        print(v)
     for x, v, v_ in zip(example_dWr.op.outputs, v_op_outs_direct, v_op_outs):
-      assert_allclose(v, v_, rtol=rtol, err_msg="mismatch for %s" % x)
+      if not numpy.allclose(v, v_, rtol=rtol):
+        print("! mismatch for %s direct-vs-def, run %i" % (x, i))
+        for x_, v__ in zip(example_dWr.op.inputs, v_op_ins):
+          print("direct input", x_, "=")
+          print(v__)
+        not_all_close.append("%s direct-vs-def, run %i" % (x, i))
+      if not_all_close:
+        print("output direct %s:" % x)
+        print(v)
+        print("output def:")
+        print(v_)
     assert_allclose(vdWr1_, vdWr2_, rtol=rtol, err_msg="mismatch for dWr (extra run %i)" % i)
   if not_all_close:
     print("raise exception now: not all close: %r" % (not_all_close,))
