@@ -4555,7 +4555,11 @@ class RemoveLayer(LayerBase):
 
 class CombineLayer(LayerBase):
   """
-  Applies some binary operation on all sources, such as addition.
+  Applies a binary operation, such as addition, to all sources while accumulating the partial results.
+  In the first step, the binary operation is performed on the first two sources.
+  After the first step, the previous results is always the left-hand operator.
+
+  Its basic working is similar to the `reduce` function used in functional programming.
   Also see :class:`ActivationLayer`, or :class:`CompareLayer`.
   """
   layer_class = "combine"
@@ -4565,10 +4569,10 @@ class CombineLayer(LayerBase):
                eval=None, eval_locals=None, eval_for_output_loss=False,
                **kwargs):
     """
-    :param str kind: e.g. "average" or "add", or "eval"
+    :param str kind: currently accepted values are `average`, `add`, `sub`, `mul`, or `eval`
     :param list[LayerBase] sources:
     :param str|None activation: if provided, activation function to apply, e.g. "tanh" or "relu"
-    :param bool with_bias: if given, will add a bias
+    :param bool with_bias: if given, will add a trainable bias tensor
     :param str|callable eval: for kind="eval", will eval this string. or function. see :func:`_op_kind_eval`
     :param dict[str]|None eval_locals: locals for eval
     :param bool eval_for_output_loss: will do the same eval on layer.output_loss
@@ -4769,39 +4773,53 @@ class EvalLayer(CombineLayer):
 
 class CompareLayer(LayerBase):
   """
-  This layer performs an elementwise comparison of all provided sources, and returnns a boolean vector
-  of the same shape.
-  If the `value` parameter is provided, all elements in the provided sources are also compared to this value.
+  Compares element-wise the tokens of all input sequences among themselves and/or with a specified given value.
+  The comparisons are performed in a chain according to the order in which they are listed.
 
-  If more than two sources are provided, each additional source will be compared against the first source,
-  and the results will be combined by a logical conjunction.
+  Example::
+
+      {"class": "compare", "from": ["i1", "i2"], "value": val, "kind": "less"}
+
+  computes i1 < i2 < val and it is true only if the whole chain of operations is true.
+  The final result is the logical "and" of all comparisons. Note that `value` is the last element to be compared to.
+
+  A common example usage is the `end` layer in a rec subnetwork to specify the stopping criterion,
+  e.g. the last generated token is equal to the end-of-sentence token::
+
+      "output": {"class": "rec", "from": [], "unit": {
+          .
+          .
+          .
+          "end": {"class": "compare", "from": "output", "value": end_of_sentence_id}
+      }, "target": "classes0"}
+
   """
   layer_class = "compare"
 
   def __init__(self, kind="equal", value=None, **kwargs):
     """
-    :param str kind: Which comparison operation to use, e.g. "equal" or other supported tf comparison ops
+    :param str kind: which comparison operation to use, e.g. "equal", "greater", "less"
+      or other supported TF comparison ops
     :param float|int|None value: if specified, will also compare to this
     """
     super(CompareLayer, self).__init__(**kwargs)
     assert len(self.sources) >= 1
     if value is None:
-      assert len(self.sources) >= 2
+      assert len(self.sources) >= 2, "{} requires at least two elements to compare".format(self)
     op = getattr(tf, kind)  # e.g. tf.equal
-    from returnn.tf.util.basic import swapaxes
-    x = self.sources[0].output.placeholder
+    from returnn.tf.util.basic import swapaxes, opt_logical_and
+    common_data = Data.get_common_data([s.output for s in self.sources])
+    x = self.sources[0].output.copy_compatible_to(common_data).placeholder
     batch_axis = self.sources[0].output.batch_dim_axis
-    r_last = None
-    if value is not None:
-      r_last = op(x, value)
+    r_last = True
     for source in self.sources[1:]:
-      x2 = source.output.placeholder
+      x2 = source.output.copy_compatible_to(common_data).placeholder
       if source.output.batch_dim_axis != batch_axis:
         x2 = swapaxes(x2, batch_axis, source.output.batch_dim_axis)
-      r = op(x, x2)
-      if r_last is not None:
-        r = tf.logical_and(r_last, r)
-      r_last = r
+      r_last = opt_logical_and(r_last, op(x, x2))
+      x = x2
+    if value is not None:
+      r_last = opt_logical_and(r_last, op(x, value))
     self.output.placeholder = r_last
 
   @classmethod
@@ -4812,16 +4830,31 @@ class CompareLayer(LayerBase):
     :param list[LayerBase] sources:
     :rtype: Data
     """
-    if n_out is NotSpecified and not out_type:
-      if not sources[0] or sources[0].output.undefined:
-        return Data.create_undefined(name="%s_output" % kwargs["name"])
-      out_type = sources[0].output.get_kwargs()
-      out_type["name"] = "%s_output" % kwargs["name"]
-      if out_type.get("sparse", False):
-        out_type["dim"] = 2  # True or False
-      out_type["dtype"] = "bool"
-      out_type["vocab"] = None
-    return super(CompareLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, sources=sources, **kwargs)
+    out_type_ = {}
+    sources_ = [s for s in sources if s and not s.output.undefined]
+    if sources and not sources_:
+      if n_out is NotSpecified and not out_type:
+        from returnn.tf.network import CannotHandleUndefinedSourcesException
+        raise CannotHandleUndefinedSourcesException(
+          layer_name=kwargs["name"], layer_desc=dict(
+            n_out=n_out, out_type=out_type, sources=sources, **kwargs))
+    sources = sources_
+    if sources:
+      out_type_.update(Data.get_common_data([s.output for s in sources], warnings_out=log.v4).get_kwargs())
+    if n_out is not NotSpecified:
+      out_type_["dim"] = n_out
+    elif out_type_.get("sparse", False):
+      out_type_["dim"] = 2
+    out_type_["dtype"] = "bool"
+    out_type_["name"] = "%s_output" % kwargs["name"]
+    if out_type:
+      if isinstance(out_type, dict):
+        out_type_.update(out_type)
+      elif callable(out_type):
+        out_type_ = out_type  # just overwrite
+      else:
+        raise TypeError("unexpected type of out_type %r" % (out_type,))
+    return super(CompareLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type_, sources=sources, **kwargs)
 
 
 class SwitchLayer(LayerBase):
