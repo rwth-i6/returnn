@@ -111,7 +111,6 @@ ignore_count_for_files = {
   'returnn/datasets/stereo.py',
   'returnn/tf/layers/neural_transducer.py',
   'returnn/tf/layers/segmental_model.py',
-  'returnn/tf/layers/signal_processing.py',
 
   # Copied to RETURNN, still work-in-progress to clean up.
   "returnn/extern/graph_editor/reroute.py",
