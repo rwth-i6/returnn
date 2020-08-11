@@ -4769,13 +4769,18 @@ class EvalLayer(CombineLayer):
 
 class CompareLayer(LayerBase):
   """
-  Compares (e.g. equality check) all the sources element-wise.
+  This layer performs an elementwise comparison of all provided sources, and returnns a boolean vector
+  of the same shape.
+  If the `value` parameter is provided, all elements in the provided sources are also compared to this value.
+
+  If more than two sources are provided, each additional source will be compared against the first source,
+  and the results will be combined by a logical conjunction.
   """
   layer_class = "compare"
 
   def __init__(self, kind="equal", value=None, **kwargs):
     """
-    :param str kind: e.g. "equal"
+    :param str kind: Which comparison operation to use, e.g. "equal" or other supported tf comparison ops
     :param float|int|None value: if specified, will also compare to this
     """
     super(CompareLayer, self).__init__(**kwargs)
