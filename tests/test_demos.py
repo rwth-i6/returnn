@@ -87,12 +87,12 @@ class TestDemos(object):
     assert os.path.exists("rnn.py")
 
   def test_demo_task12ax(self):
-    fer = run_config_get_fer("demos/demo-task12ax.config")
+    fer = run_config_get_fer("demos/demo-theano-task12ax.config")
     assert_less(fer, 0.01)
 
   def test_demo_iter_dataset_task12ax(self):
-    cleanup_tmp_models("demos/demo-task12ax.config")
-    out = run(py, "demos/demo-iter-dataset.py", "demos/demo-task12ax.config")
+    cleanup_tmp_models("demos/demo-theano-task12ax.config")
+    out = run(py, "demos/demo-iter-dataset.py", "demos/demo-theano-task12ax.config")
     assert_in("Epoch 5.", out.splitlines())
 
   def test_demo_returnn_as_framework(self):
