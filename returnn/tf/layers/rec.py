@@ -949,7 +949,7 @@ class _SubnetworkRecCell(object):
     :param Data|None source_data: usually concatenated input from the rec-layer
     :param str|None rec_layer_name:
     """
-    from returnn.util.basic import deepcopy
+    from returnn.tf.util.basic import safe_deep_copy
     if parent_net is None and parent_rec_layer:
       parent_net = parent_rec_layer.network
     if source_data is None and parent_rec_layer:
@@ -964,7 +964,7 @@ class _SubnetworkRecCell(object):
       parent_rec_layer.cell = self
     self.parent_rec_layer = parent_rec_layer
     self.parent_net = parent_net
-    self.net_dict = deepcopy(net_dict, stop_types=[tf.Tensor, tf.Operation, DimensionTag])
+    self.net_dict = safe_deep_copy(net_dict)
     from returnn.tf.network import TFNetwork, ExternData, LossHolder
     self.net = TFNetwork(
       name="%s/%s:rec-subnet" % (parent_net.name, rec_layer_name),
@@ -1400,8 +1400,8 @@ class _SubnetworkRecCell(object):
         prev_output=prev_outputs.get(name, None),
         rec_vars_prev_outputs=prev_extra.get(name, None))
 
-    from returnn.util.basic import deepcopy
-    net_dict = deepcopy(self.net_dict, stop_types=[tf.Tensor, tf.Operation, DimensionTag])
+    from returnn.tf.util.basic import safe_deep_copy
+    net_dict = safe_deep_copy(self.net_dict)
     for name in net_dict.keys():
       if name in prev_layers:
         net_dict[name]["rec_previous_layer"] = prev_layers[name]

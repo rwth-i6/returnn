@@ -6335,6 +6335,25 @@ def compute_sampled_logits(weights,
     return out_logits, out_targets
 
 
+def safe_deep_copy(obj):
+  """
+  :param T obj:
+  :return: deepcopy of obj, without copying TF types, Python modules, functions/lambdas
+  :rtype: T
+  """
+  import types
+  from returnn.util.basic import deepcopy
+  stop_types = [
+    # Python types.
+    types.FunctionType, types.LambdaType, types.BuiltinFunctionType, types.BuiltinMethodType,
+    types.ModuleType,
+    # Common TF types.
+    tf.Tensor, tf.Operation, tf.Variable, tf.Graph, tf_compat.v1.Session,
+    # Our own types, which should not be copied.
+    DimensionTag]
+  return deepcopy(obj, stop_types=stop_types)
+
+
 class FetchHelper:
   """
   ``session.run(tensor)`` does not work if ``tensor`` is inside a loop (``tf.while_loop``) (or ``tf.cond``).
