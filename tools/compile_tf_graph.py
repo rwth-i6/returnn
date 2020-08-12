@@ -66,7 +66,7 @@ def create_graph(train_flag, eval_flag, search_flag, net_dict):
   :param bool search_flag:
   :param dict[str,dict[str]] net_dict:
   :return: adds to the current graph, and then returns the network
-  :rtype: TFNetwork.TFNetwork
+  :rtype: returnn.tf.network.TFNetwork
   """
   print("Loading network, train flag %s, eval flag %s, search flag %s" % (train_flag, eval_flag, search_flag))
   from returnn.tf.engine import Engine
@@ -524,7 +524,7 @@ class ChoiceStateVarLayer(LayerBase):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     assert d.get("from", NotSpecified) is not NotSpecified, "specify 'from' explicitly for choice layer"

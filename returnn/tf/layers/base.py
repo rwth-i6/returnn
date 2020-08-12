@@ -79,7 +79,7 @@ class LayerBase(object):
     See :func:`TFNetwork.construct_from_dict`.
 
     :param str name:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param Data output:
     :param NotSpecified|None|int n_out: output dim
     :param dict[str] out_type: kwargs for Data class. more explicit than n_out.
@@ -235,7 +235,7 @@ class LayerBase(object):
     """
     Called via BaseLayer.get_out_data_from_opts().
 
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param str name:
     :param dict[str]|None|(()->Data) out_type:
     :param int|None|NotSpecified n_out:
@@ -335,7 +335,7 @@ class LayerBase(object):
                         **kwargs):
     """
     :param Data output:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param str|list[str]|None target:
     :param str|None size_target:
     :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
@@ -425,7 +425,7 @@ class LayerBase(object):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
       The name `get_layer` might be misleading, as this should return an existing layer,
       or construct it if it does not exist yet.
@@ -527,7 +527,7 @@ class LayerBase(object):
   @classmethod
   def _guess_n_out_from_target_and_opt_loss(cls, network, target, target_layers, loss_class_name, get_layer):
     """
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param str target: e.g. "classes"
     :param dict[str,LayerBase] target_layers:
     :param str|None loss_class_name: e.g. "ce" or None
@@ -553,7 +553,7 @@ class LayerBase(object):
     """
     :param str|None class_name:
     :param dict[str]|None opts:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     :param bool always_make:
     :rtype: Loss|None
@@ -951,7 +951,7 @@ class LayerBase(object):
     """
     :param str target:
     :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param bool mark_data_key_as_used: forwarded self.network.get_extern_data()
     :param None|((str) -> LayerBase) get_layer: function to get or construct another layer
     :param SearchChoices|None search_choices:
@@ -1031,7 +1031,7 @@ class LayerBase(object):
     When overriding this, make sure that it works both with `layer` set and unset.
 
     :param str name: layer name
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param Loss|None loss: argument just as for __init__
     :param Data output: the output (template) for the layer
     :param LayerBase|None layer:
@@ -1043,7 +1043,7 @@ class LayerBase(object):
       However, if you provide reduce_func = TFUtil.identity, you can get the unreduced tensor.
     :param kwargs: all the remaining __init__ args
     :return: the losses defined by this layer
-    :rtype: list[TFNetwork.LossHolder]
+    :rtype: list[returnn.tf.network.LossHolder]
     """
     if not loss:
       return []
@@ -1058,7 +1058,7 @@ class LayerBase(object):
 
     :param ((tf.Tensor)->tf.Tensor)|None reduce_func: as in get_losses
     :return: the losses defined by this layer
-    :rtype: list[TFNetwork.LossHolder]
+    :rtype: list[returnn.tf.network.LossHolder]
     """
     return self.__class__.get_losses(reduce_func=reduce_func, layer=self, **self.kwargs)
 
@@ -1396,7 +1396,7 @@ class ReuseParams:
           None would be interpret as the option `auto_create_missing`.
           A dict would specify :func:`ReuseParams.__init__` options.
             The option reuse_layer would be specified as a str, and represents a layer name.
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     :rtype: ReuseParams|None
     """
@@ -1454,7 +1454,7 @@ class ReuseParams:
     def __init__(self, layer_name, network, get_layer):
       """
       :param str layer_name:
-      :param TFNetwork.TFNetwork network:
+      :param returnn.tf.network.TFNetwork network:
       :param ((str) -> LayerBase) get_layer:
       """
       self.layer_name = layer_name
@@ -1476,7 +1476,7 @@ class ReuseParams:
 
     def create_dummy_layer(self, dep_loop_exception):
       """
-      :param TFNetwork.NetworkConstructionDependencyLoopException dep_loop_exception:
+      :param returnn.tf.network.NetworkConstructionDependencyLoopException dep_loop_exception:
       :rtype: LayerBase
       """
       from .basic import get_layer_class
@@ -1756,7 +1756,7 @@ class SearchChoices(object):
 
   def get_beam_info(self):
     """
-    :rtype: TFUtil.SearchBeam|None
+    :rtype: returnn.tf.util.data.SearchBeam|None
     """
     if self.owner.output.beam is None:
       assert self.beam_size == 1
@@ -1870,7 +1870,7 @@ class Loss(object):
                use_normalized_loss=False, custom_norm_factor=None,
                scale=1.0):
     """
-    :param TFNetwork.TFNetwork base_network:
+    :param returnn.tf.network.TFNetwork base_network:
     :param bool use_flatten_frames: will use :func:`TFUtil.flatten_with_seq_len_mask`
     :param bool use_normalized_loss: the loss used in optimization will be normalized
     :param float|function|None custom_norm_factor:
@@ -1969,7 +1969,7 @@ class Loss(object):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace, the loss_opts
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
 
     Will modify `d` such that it becomes the kwargs for `self.__init__()`.

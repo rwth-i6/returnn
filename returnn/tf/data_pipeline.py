@@ -213,7 +213,7 @@ class DataProviderBase(object):
 class FeedDictDataProvider(DataProviderBase):
   """
   This class will fill all the placeholders used for training or forwarding or evaluation etc.
-  of a `TFNetwork.Network`.
+  of a :class:`returnn.tf.network.TFNetwork`.
   It will run a background thread which reads the data from a dataset and puts it into a queue.
   """
 

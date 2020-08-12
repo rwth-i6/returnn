@@ -46,7 +46,7 @@ Many components are implemented separately for both Theano and TensorFlow:
   and :mod:`TFNetworkLayer`, :mod:`TFNetworkRecLayer` for TensorFlow.
   This also means that Theano and TensorFlow don't support the same layers and
   even parameters can be different.
-- Some utilities :mod:`TheanoUtil` and :mod:`TFUtil`, which contains the :class:`TFUtil.Data` class.
+- Some utilities :mod:`TheanoUtil` and :mod:`TFUtil`, which contains the :class:`returnn.tf.util.data.Data` class.
 - Multi-GPU logic. :mod:`Device`, :mod:`EngineTask` for Theano and not yet implemented for TensorFlow.
 
 All the rest is shared for all backends, which mostly is:
@@ -95,12 +95,12 @@ the kwargs for the specific layer class. E.g.:
 
 The ``"class"`` key will get extracted from the layer arguments and the specific layer class will be used.
 For Theano, the base layer class is :py:class:`NetworkBaseLayer.Container` and :py:class:`NetworkBaseLayer.Layer`;
-for TensorFlow, it is :py:class:`TFNetworkLayer.LayerBase`.
+for TensorFlow, it is :py:class:`returnn.tf.layers.base.LayerBase`.
 E.g. that would use the :py:class:`TFNetworkLayer.LinearLayer` class,
 and the ``LinearLayer.__init__`` will accepts arguments like ``activation``.
 In the given example, all the remaining arguments will get handled by the base layer.
 
-The construction itself can be found for TensorFlow in :py:func:`TFNetwork.TFNetwork.construct_from_dict`,
+The construction itself can be found for TensorFlow in :py:func:`returnn.tf.network.TFNetwork.construct_from_dict`,
 which starts from the output layers goes over the sources of a layer, which are defined by ``"from"``.
 If a layer does not define ``"from"``, it will automatically get the input from the dataset data.
 

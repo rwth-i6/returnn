@@ -289,7 +289,7 @@ class RecLayer(_ConcatInputLayer):
     This method transforms the templates in the config dictionary into references
     of the layer instances (and creates them in the process).
     :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     if isinstance(d.get("unit"), dict):
@@ -350,7 +350,7 @@ class RecLayer(_ConcatInputLayer):
   @classmethod
   def get_out_data_from_opts(cls, network, unit, sources=(), initial_state=None, **kwargs):
     """
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param str|dict[str] unit:
     :param list[LayerBase] sources:
     :param str|LayerBase|list[str|LayerBase] initial_state:
@@ -541,13 +541,13 @@ class RecLayer(_ConcatInputLayer):
   def get_losses(cls, name, network, output, loss=None, reduce_func=None, layer=None, **kwargs):
     """
     :param str name: layer name
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param Loss|None loss: argument just as for __init__
     :param Data output: the output (template) for the layer
     :param ((tf.Tensor)->tf.Tensor)|None reduce_func:
     :param LayerBase|None layer:
     :param kwargs: other layer kwargs
-    :rtype: list[TFNetwork.LossHolder]
+    :rtype: list[returnn.tf.network.LossHolder]
     """
     from returnn.tf.network import LossHolder
     losses = super(RecLayer, cls).get_losses(
@@ -945,7 +945,7 @@ class _SubnetworkRecCell(object):
     """
     :param dict[str,dict[str]] net_dict: dict for the subnetwork, layer name -> layer dict
     :param RecLayer parent_rec_layer:
-    :param TFNetwork.TFNetwork parent_net:
+    :param returnn.tf.network.TFNetwork parent_net:
     :param Data|None source_data: usually concatenated input from the rec-layer
     :param str|None rec_layer_name:
     """
@@ -3144,7 +3144,7 @@ class _TemplateLayer(LayerBase):
 
   def __init__(self, network, name, construct_stack=None, cell=None):
     """
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param str name:
     :param LayerBase|None construct_stack: just for debugging repr
     :param _SubnetworkRecCell|None cell:
@@ -3441,7 +3441,7 @@ class _SubnetworkRecWrappedLoss(Loss):
   def init(self, output, output_with_activation=None, target=None, layer=None):
     """
     :param Data output:
-    :param None|TFNetworkLayer.OutputWithActivation output_with_activation:
+    :param None|returnn.tf.layers.basic.OutputWithActivation output_with_activation:
     :param Data|None target:
     :param LayerBase|None layer:
     """
@@ -3537,7 +3537,7 @@ class RecStepInfoLayer(LayerBase):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     d.setdefault("from", [])  # source does not make sense
@@ -3546,7 +3546,7 @@ class RecStepInfoLayer(LayerBase):
   @classmethod
   def get_out_data_from_opts(cls, network, **kwargs):
     """
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :rtype: Data
     """
     # Check for the normal case first. If we don't have a parent rec layer, also fallback to this (e.g. debugging).
@@ -3969,7 +3969,7 @@ class RnnCellLayer(_ConcatInputLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     super(RnnCellLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -3981,7 +3981,7 @@ class RnnCellLayer(_ConcatInputLayer):
   def transform_initial_state(initial_state, network, get_layer):
     """
     :param str|float|int|list[str|float|int]|dict[str]|None initial_state:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     def resolve(v):
@@ -4134,7 +4134,7 @@ class BaseChoiceLayer(LayerBase):
   def cls_get_search_beam_size(
     cls, network, beam_size, search=NotSpecified, sources=(), _src_common_search_choices=None, **kwargs):
     """
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param list[LayerBase] sources:
     :param int|None beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
     :param NotSpecified|bool search:
@@ -4160,7 +4160,7 @@ class BaseChoiceLayer(LayerBase):
   @classmethod
   def get_rec_initial_extra_outputs(cls, network, beam_size, **kwargs):
     """
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param int beam_size:
     :rtype: dict[str,tf.Tensor]
     """
@@ -4191,7 +4191,7 @@ class BaseChoiceLayer(LayerBase):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     if "rec_previous_layer" in d:
@@ -4744,7 +4744,7 @@ class ChoiceLayer(BaseChoiceLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     assert d.get("from", NotSpecified) is not NotSpecified, "specify 'from' explicitly for choice layer"
@@ -4778,8 +4778,8 @@ class ChoiceLayer(BaseChoiceLayer):
     :param str name:
     :param int beam_size:
     :param list[LayerBase] sources:
-    :param TFNetwork.TFNetwork network:
-    :rtype: TFUtil.SearchBeam
+    :param returnn.tf.network.TFNetwork network:
+    :rtype: returnn.tf.util.data.SearchBeam
     """
     from returnn.tf.util.basic import SearchBeam
     search_dep = NotSpecified
@@ -4796,7 +4796,7 @@ class ChoiceLayer(BaseChoiceLayer):
     :param str name:
     :param list[LayerBase] sources:
     :param str target:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param int beam_size:
     :param NotSpecified|bool search:
     :param dict|bool scheduled_sampling:
@@ -4938,7 +4938,7 @@ class DecideLayer(BaseChoiceLayer):
   @classmethod
   def cls_get_search_beam_size(cls, network=None, **kwargs):
     """
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :rtype: int|None
     """
     if network.search_flag:
@@ -5000,7 +5000,7 @@ class DecideLayer(BaseChoiceLayer):
     """
     :param str name:
     :param list[LayerBase] sources:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :rtype: Data
     """
     assert len(sources) == 1
@@ -5046,7 +5046,7 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
   def cls_get_search_beam_size(cls, sources, network, **kwargs):
     """
     :param list[LayerBase] sources:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :rtype: int|None
     """
     assert len(sources) == 1
@@ -5066,7 +5066,7 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     d.setdefault("from", [])  # using "data" does not make much sense
@@ -5078,7 +5078,7 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
     """
     :param str name:
     :param list[LayerBase] sources:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :rtype: Data
     """
     assert len(sources) == 1
@@ -5105,7 +5105,7 @@ class ChoiceGetBeamScoresLayer(LayerBase):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     d.setdefault("from", [])  # using "data" does not make much sense
@@ -5143,7 +5143,7 @@ class ChoiceGetSrcBeamsLayer(LayerBase):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     d.setdefault("from", [])  # using "data" does not make much sense
@@ -5223,7 +5223,7 @@ class AttentionBaseLayer(_ConcatInputLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     super(AttentionBaseLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -5271,7 +5271,7 @@ class GlobalAttentionContextBaseLayer(AttentionBaseLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     super(GlobalAttentionContextBaseLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -5352,7 +5352,7 @@ class GenericAttentionLayer(AttentionBaseLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     d.setdefault("from", [])
@@ -5879,7 +5879,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     super(SelfAttentionLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -6053,7 +6053,7 @@ class PositionalEncodingLayer(_ConcatInputLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str)->LayerBase) get_layer:
     """
     if d.get("from", None) is None:
@@ -6069,7 +6069,7 @@ class PositionalEncodingLayer(_ConcatInputLayer):
   def get_out_data_from_opts(cls, name, network, add_to_input=False, sources=(), **kwargs):
     """
     :param str name:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param bool add_to_input:
     :param list[LayerBase] sources:
     :rtype: Data
@@ -6315,7 +6315,7 @@ class EditDistanceTableLayer(LayerBase):
     :param list[LayerBase] sources:
     :param str name:
     :param str target:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :rtype: dict[str,tf.Tensor]
     """
     assert len(sources) == 1, "%s %r: expects exactly a single source" % (cls.__name__, name)
@@ -6345,7 +6345,7 @@ class EditDistanceTableLayer(LayerBase):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     d.setdefault("n_out", None)  # avoid the default NotSpecified behavior, because we use target differently
@@ -6359,7 +6359,7 @@ class EditDistanceTableLayer(LayerBase):
     :param str target:
     :param dict[str,LayerBase] _target_layers:
     :param int|None blank_idx:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :rtype: Data
     """
     assert len(sources) == 1, "%s %r: expects exactly a single source" % (cls.__name__, name)
@@ -6455,7 +6455,7 @@ class OptimalCompletionsLayer(LayerBase):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     super(OptimalCompletionsLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -6472,7 +6472,7 @@ class OptimalCompletionsLayer(LayerBase):
     :param str target:
     :param dict[str,LayerBase] _target_layers:
     :param int|None blank_idx:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :rtype: Data
     """
     assert len(sources) == 1, "%s %r: expects exactly a single source" % (cls.__name__, name)
@@ -6669,7 +6669,7 @@ class MaskedComputationLayer(LayerBase):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     masked_from = d.pop("masked_from", None)
@@ -6699,7 +6699,7 @@ class MaskedComputationLayer(LayerBase):
                        get_layer=None, _parent_layer_cache=None, **kwargs):
     """
     :param str name:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param list[LayerBase] sources:
     :param dict[str] unit:
     :param LayerBase masked_from:
@@ -6769,7 +6769,7 @@ class MaskedComputationLayer(LayerBase):
   @classmethod
   def get_out_data_from_opts(cls, network, **kwargs):
     """
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :rtype: Data
     """
     layer_class, layer_desc = cls._create_template(network=network, **kwargs)
@@ -6788,13 +6788,13 @@ class MaskedComputationLayer(LayerBase):
   def get_losses(cls, name, network, output, loss=None, reduce_func=None, layer=None, **kwargs):
     """
     :param str name: layer name
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param Loss|None loss: argument just as for __init__
     :param Data output: the output (template) for the layer
     :param LayerBase|None layer:
     :param ((tf.Tensor)->tf.Tensor)|None reduce_func:
     :param kwargs: other layer kwargs
-    :rtype: list[TFNetwork.LossHolder]
+    :rtype: list[returnn.tf.network.LossHolder]
     """
     from returnn.tf.network import LossHolder
     # See SubnetworkLayer.get_losses as another example.
@@ -6945,7 +6945,7 @@ class UnmaskLayer(LayerBase):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     super(UnmaskLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -6955,7 +6955,7 @@ class UnmaskLayer(LayerBase):
   def get_out_data_from_opts(cls, name, network, sources, mask, **kwargs):
     """
     :param str name:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param list[LayerBase] sources:
     :param LayerBase mask:
     :rtype: Data

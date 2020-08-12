@@ -32,7 +32,7 @@ extern_data (former num_outputs)
     Example: :code:`'speaker_classes': {'dim': 1172, 'shape': (), 'sparse': True}`
     This defines a sparse input for e.g. speaker classes that do not have a time axis.
 
-    In general, all input parameters to :class:`TFUtil.Data` can be provided
+    In general, all input parameters to :class:`returnn.tf.util.data.Data` can be provided
 
 log
     path to the log, or list of paths for multiple logs.

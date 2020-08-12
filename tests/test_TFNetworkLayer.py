@@ -36,7 +36,7 @@ def make_scope():
 
 def make_feed_dict(data_list, same_time=False, n_batch=3, n_time=7):
   """
-  :param list[TFUtil.Data]|ExternData data_list:
+  :param list[returnn.tf.util.data.Data]|ExternData data_list:
   :param bool same_time:
   :param int n_batch:
   :param int n_time:

@@ -25,7 +25,7 @@ class SourceLayer(LayerBase):
 
   def __init__(self, network, data_key=None, sources=(), **kwargs):
     """
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param str|None data_key:
     :param tuple sources:
     """
@@ -48,7 +48,7 @@ class SourceLayer(LayerBase):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     d.setdefault("from", [])  # source does not make sense
@@ -57,7 +57,7 @@ class SourceLayer(LayerBase):
   @classmethod
   def get_out_data_from_opts(cls, network, data_key=None, **kwargs):
     """
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param str|None data_key:
     :rtype: Data
     """
@@ -304,7 +304,7 @@ class CopyLayer(_ConcatInputLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     super(CopyLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -492,7 +492,7 @@ class SelectSearchSourcesLayer(InternalLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     super(SelectSearchSourcesLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -762,7 +762,7 @@ class SliceNdLayer(_ConcatInputLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     super(SliceNdLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -840,7 +840,7 @@ class GatherNdLayer(_ConcatInputLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     super(GatherNdLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -1001,7 +1001,7 @@ class ScatterNdLayer(_ConcatInputLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param (str)->LayerBase get_layer:
     """
     super(ScatterNdLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -1319,7 +1319,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     super(SoftmaxOverSpatialLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -1435,7 +1435,7 @@ class SeqLenMaskLayer(_ConcatInputLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     super(SeqLenMaskLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -1494,7 +1494,7 @@ class RangeLayer(LayerBase):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param (str)->LayerBase get_layer:
     """
     d.setdefault("from", [])
@@ -1644,7 +1644,7 @@ class ConstantLayer(LayerBase):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     d.setdefault("from", [])
@@ -2391,7 +2391,7 @@ class SplitBatchTimeLayer(_ConcatInputLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     super(SplitBatchTimeLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -2467,7 +2467,7 @@ class UnflattenNdLayer(_ConcatInputLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     super(UnflattenNdLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -2725,7 +2725,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     super(ReinterpretDataLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -3873,7 +3873,7 @@ class PrefixInTimeLayer(_ConcatInputLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     super(PrefixInTimeLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -4025,7 +4025,7 @@ class TimeUnChunkingLayer(_ConcatInputLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     super(TimeUnChunkingLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -4862,7 +4862,7 @@ class SwitchLayer(LayerBase):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     d.setdefault("from", [])
@@ -5014,7 +5014,7 @@ class CondLayer(LayerBase):
     """
     :param dict[str] d:
     :param str key: e.g. "true_layer"
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param (str)->LayerBase get_layer:
     :return: nothing, will replace inplace in ``d``
     """
@@ -5034,7 +5034,7 @@ class CondLayer(LayerBase):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param (str)->LayerBase get_layer:
     """
     super(CondLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -5047,7 +5047,7 @@ class CondLayer(LayerBase):
     """
     :param LayerBase|dict[str] layer:
     :param str name:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :rtype: Data
     """
     if layer is None:
@@ -5068,7 +5068,7 @@ class CondLayer(LayerBase):
     :param LayerBase|dict[str] true_layer:
     :param LayerBase|dict[str] false_layer:
     :param str name:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :rtype: Data
     """
     # Only take one single out.
@@ -5182,7 +5182,7 @@ class SubnetworkLayer(LayerBase):
   @classmethod
   def _get_subnet_extern_data(cls, base_network, sources, concat_sources, dropout=0, dropout_noise_shape=None):
     """
-    :param TFNetwork.TFNetwork base_network:
+    :param returnn.tf.network.TFNetwork base_network:
     :param list[LayerBase] sources:
     :param bool concat_sources:
     :param float dropout: will be applied if train_flag is set
@@ -5233,7 +5233,7 @@ class SubnetworkLayer(LayerBase):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     super(SubnetworkLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -5256,13 +5256,13 @@ class SubnetworkLayer(LayerBase):
     Very similar to _SubnetworkRecCell._construct_template, but simpler.
 
     :param str name:
-    :param TFNetwork.TFNetwork network: parent net
+    :param returnn.tf.network.TFNetwork network: parent net
     :param dict[str,dict[str]] subnetwork:
     :param list[LayerBase] sources:
     :param bool concat_sources:
     :param (str)->LayerBase get_parent_layer:
     :param dict[str,LayerBase]|None parent_layer_cache:
-    :rtype: TFNetwork.TFNetwork
+    :rtype: returnn.tf.network.TFNetwork
     """
     assert "output" in subnetwork
     from returnn.tf.network import TFNetwork
@@ -5365,13 +5365,13 @@ class SubnetworkLayer(LayerBase):
   def get_losses(cls, name, network, output, loss=None, reduce_func=None, layer=None, **kwargs):
     """
     :param str name: layer name
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param Loss|None loss: argument just as for __init__
     :param Data output: the output (template) for the layer
     :param LayerBase|None layer:
     :param ((tf.Tensor)->tf.Tensor)|None reduce_func:
     :param kwargs: other layer kwargs
-    :rtype: list[TFNetwork.LossHolder]
+    :rtype: list[returnn.tf.network.LossHolder]
     """
     from returnn.tf.network import LossHolder
     from .rec import _TemplateLayer
@@ -5513,7 +5513,7 @@ class VariableLayer(LayerBase):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     # Overwrite default behavior for default sources.
@@ -5694,7 +5694,7 @@ class LossLayer(LayerBase):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     super(LossLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -5800,7 +5800,7 @@ class ForcedAlignmentLayer(_ConcatInputLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     super(ForcedAlignmentLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -5916,7 +5916,7 @@ class FastBaumWelchLayer(_ConcatInputLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     super(FastBaumWelchLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -5960,7 +5960,7 @@ class SyntheticGradientLayer(_ConcatInputLayer):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     super(SyntheticGradientLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -6397,7 +6397,7 @@ class HDFDumpLayer(LayerBase):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     super(HDFDumpLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -6430,7 +6430,7 @@ class ImageSummaryLayer(LayerBase):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace, the loss_opts
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     d["sources"] = [get_layer(d.pop("from"))]
@@ -7187,7 +7187,7 @@ class ExpectedLoss(Loss):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d:
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
     assert "loss" in d, "specify 'loss' in 'loss_opts' for the expected loss"
@@ -7565,7 +7565,7 @@ class ViaLayerLoss(Loss):
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace, the loss_opts
-    :param TFNetwork.TFNetwork network:
+    :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     for key in ["error_signal_layer", "align_layer"]:
@@ -8112,7 +8112,7 @@ def auto_register_layer_classes(vars_values):
   """
   Example usage::
 
-      from TFNetworkLayer import auto_register_layer_classes
+      from returnn.tf.layers.basic import auto_register_layer_classes
       auto_register_layer_classes('extern_private/your_stuff/CoolThingy.py')
 
 

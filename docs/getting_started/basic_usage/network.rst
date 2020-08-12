@@ -33,12 +33,12 @@ More details on how to connect layers and datasets can be found below at :ref:`c
 
 
 For Theano, the base layer class is :py:class:`NetworkBaseLayer.Container` and :py:class:`NetworkBaseLayer.Layer`;
-for TensorFlow, it is :py:class:`TFNetworkLayer.LayerBase`.
+for TensorFlow, it is :py:class:`returnn.tf.layers.base.LayerBase`.
 E.g. that would use the :py:class:`TFNetworkLayer.LinearLayer` class,
 and the ``LinearLayer.__init__`` will accepts arguments like ``activation``.
 In the given example, all the remaining arguments will get handled by the base layer.
 
-The construction itself can be found for TensorFlow in :py:func:`TFNetwork.TFNetwork.construct_from_dict`,
+The construction itself can be found for TensorFlow in :py:func:`returnn.tf.network.TFNetwork.construct_from_dict`,
 which starts from the output layers goes over the sources of a layer, which are defined by ``"from"``.
 If a layer does not define ``"from"``, it will automatically get the input from the dataset data.
 
@@ -77,7 +77,7 @@ And here is a 3 layer bidirectional LSTM network:
 Defining Layers
 -------------------
 
-Every usable layer with the TensorFlow backend inherits from :class:`TFNetworkLayer.LayerBase`.
+Every usable layer with the TensorFlow backend inherits from :class:`returnn.tf.layers.base.LayerBase`.
 This class provides most of the parameters that can be set for each layer.
 
 Every layer accepts the following dictionary entries:
@@ -90,11 +90,11 @@ defines the layer name.
 
 **n_out** [:class:`int`] specifies the output feature dimension, and is usually set for every layer, but the argument is not strictly required.
 If ``n_out`` is not specified or set to :class:`None`, it will try to determine the output size by a provided ``target``.
-If a loss is given, it will set ``n_out`` to the value provided by :func:`TFNetworkLayer.Loss.get_auto_output_layer_dim`.
+If a loss is given, it will set ``n_out`` to the value provided by :func:`returnn.tf.layers.base.Loss.get_auto_output_layer_dim`.
 
 **out_type** [:class:`dict[str]`] specifies the output shape in more details. The keys are ``dim`` and ``shape``.
 If ``output`` is specified, the values are used to check if the output matches the given dimension and shape. Otherwise, it
-is passed to :func:`TFNetworkLayer.LayerBase.get_out_data_from_opts`.
+is passed to :func:`returnn.tf.layers.base.LayerBase.get_out_data_from_opts`.
 
 **loss** [:class:`str`] every layer can have its output connected to a loss function. For available loss functions,
 see :ref:`loss`. When specifying a loss, also ``target`` has to be set (see below). In addition, ``loss_scale`` (defaults to 1)
@@ -162,7 +162,7 @@ Managing Axes
 -------------
 
 In the default case, the axes of data that is passed between layers (such as batch, time, spatial and feature)
-are not visible to the user, and handled by RETURNN internally with the help of :class:`TFUtil.Data` objects.
+are not visible to the user, and handled by RETURNN internally with the help of :class:`returnn.tf.util.data.Data` objects.
 For layers that operate on specific axes, meaning they have an ``axis`` or ``axes`` parameter, different identifier
 (strings) can be used to select the correct axes. These identifier are e.g.
 

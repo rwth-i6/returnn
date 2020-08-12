@@ -65,7 +65,7 @@ class Runner(object):
     :param bool train: whether to do updates on the model
     :param bool|None train_flag: normally just as train. but e.g. maybe you want to have the train_flag but not train
     :param bool eval: whether to evaluate (i.e. calculate loss/error)
-    :param dict[str,tf.Tensor|TFUtil.Data|TFNetworkLayer.LayerBase|()->tf.Tensor)]|None extra_fetches:
+    :param dict[str,tf.Tensor|returnn.tf.util.data.Data|returnn.tf.layers.base.LayerBase|()->tf.Tensor)]|None extra_fetches:
       additional fetches per step.
       `extra_fetches_callback` will be called with these. In case of Data/LayerBase, it will return a list,
       where each item corresponds to the batch-seq.
@@ -2035,7 +2035,7 @@ class Engine(EngineBase):
   def _get_output_layer(self, output_layer_name=None):
     """
     :param str|None output_layer_name: e.g. "output". if not set, will read from config "forward_output_layer"
-    :rtype: TFNetworkLayer.LayerBase
+    :rtype: returnn.tf.layers.base.LayerBase
     """
     if not output_layer_name:
       output_layer_name = self.config.value("forward_output_layer", self.network.get_default_output_layer_name())
