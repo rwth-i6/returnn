@@ -1439,10 +1439,18 @@ class TFNetwork(object):
     :param str filename:
     :param tf.compat.v1.Session session:
     """
-    if any([layer.custom_param_importer for layer in self.layers.values()]):
+    saveable_params = self.get_saveable_params_list()
+    must_use_custom_checkpoint_loader = False
+    if any([have_custom_post_init(param) for param in saveable_params]):
+      # We must keep the behavior consistent.
+      # CustomCheckpointLoader will not load any params with a custom init.
+      must_use_custom_checkpoint_loader = True
+    if any([layer.custom_param_importer for layer in self._get_all_layers()]):
       # Need to use CustomCheckpointLoader because only that handles custom_param_importer correctly.
+      must_use_custom_checkpoint_loader = True
+    if must_use_custom_checkpoint_loader:
       loader = CustomCheckpointLoader(
-        filename=filename, saveable_params=self.get_saveable_params_list(), network=self)
+        filename=filename, saveable_params=saveable_params, network=self)
       loader.load_now(session=session)
       return
     if not self.saver:
@@ -1458,7 +1466,7 @@ class TFNetwork(object):
       print("load_params_from_file: some variables not found", file=log.v2)
       try:
         loader = CustomCheckpointLoader(
-          filename=filename, saveable_params=self.get_saveable_params_list(), network=self)
+          filename=filename, saveable_params=saveable_params, network=self)
         if not loader.missing_var_names:
           print("Strange, nothing missing? Pre-loaded missing variables from other checkpoints?", file=log.v2)
         loader.load_now(session=session)
@@ -2688,8 +2696,7 @@ class CustomCheckpointLoader:
         print("%s: Ignoring variable %s" % (self, param), file=log.v3)
         continue
       count += 1
-      custom_post_init = getattr(param, "custom_post_init", None)
-      if custom_post_init:
+      if have_custom_post_init(param):
         print("%s: Not loading pre-initialized variable %s" % (self, param), file=log.v3)
         continue
       self.saveable_params.append(param)
@@ -2810,7 +2817,7 @@ class CustomCheckpointLoader:
     def __init__(self, value=None, custom_param_importer=None):
       """
       :param numpy.ndarray|None value:
-      :param CustomCheckpointLoader.CustomParamImporter custom_param_importer:
+      :param CustomCheckpointLoader.CustomParamImporter|None custom_param_importer:
       """
       assert value is not None or custom_param_importer
       self.value = value
@@ -3170,11 +3177,25 @@ class CustomCheckpointLoader:
 def set_custom_post_init(var, func):
   """
   It registers the provided `func` such that it gets called for this variable
-  in TFNetwork.initialize_params().
+  in :func:`TFNetwork.initialize_params`.
 
   :param tf.Variable var:
   :param (tf.compat.v1.Session)->None func:
   """
   # This custom attribute is a big ugly but simple.
   # It's read in TFNetwork.initialize_params().
+  assert callable(func)
   var.custom_post_init = func
+
+
+def have_custom_post_init(var):
+  """
+  :param tf.Variable var:
+  :return: whether :func:`set_custom_post_init` was called on this var, i.e. we have custom init
+  :rtype: bool
+  """
+  custom_post_init = getattr(var, "custom_post_init", None)
+  if custom_post_init:
+    assert callable(custom_post_init)
+    return True
+  return False
