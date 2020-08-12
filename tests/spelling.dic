@@ -6,6 +6,7 @@ attribs
 audioread
 automata
 backprop
+bahdanau
 bilinear
 blocksparse
 bptt
@@ -37,6 +38,7 @@ kingma
 horovod
 librosa
 logits
+luong
 lstm
 maxout
 mdlstm

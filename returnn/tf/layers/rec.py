@@ -14,7 +14,7 @@ except ImportError:
   from tensorflow.python.ops import rnn_cell
 from returnn.tf.network import LayerNotFound
 from .basic import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template, Loss
-from returnn.tf.util.basic import Data, SearchBeam, reuse_name_scope, get_random_seed, select_src_beams, DimensionTag
+from returnn.tf.util.basic import Data, SearchBeam, reuse_name_scope, get_random_seed, select_src_beams
 from returnn.util.basic import NotSpecified
 from returnn.log import log
 
@@ -487,7 +487,7 @@ class RecLayer(_ConcatInputLayer):
     """
     :param str name: cell name, minus the "Cell" at the end
     :param bool cell_only: i.e. for single-step execution
-    :rtype: () -> rnn_cell.RNNCell|TFNativeOp.RecSeqCellOp
+    :rtype: type[rnn_cell.RNNCell]|type[returnn.tf.native_op.RecSeqCellOp]
     """
     if not cls._rnn_cells_dict:
       cls._create_rnn_cells_dict()
