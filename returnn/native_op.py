@@ -1334,6 +1334,12 @@ class NativeLstm2(NativeOpGenBase):
       assert_cmp(start, <, T);
       assert_cmp(step, !=, 0);
       int abs_step = std::abs(step);
+
+      if(abs_step > 1 || start > 0)
+        // Normally the kernel would visit and reset all DX.
+        // But with abs_step>1 or start>0, we will not visit all. Reset now.
+        Ndarray_memset(Ndarray_DEV_DATA(DX), 0, T * n_batch * n_cells * 4 * sizeof(float));
+
       // e.g.:
       // step=1, start=0, T=10 -> num_steps=10=T
       // step=5, start=0, T=10 -> num_steps=2=T/step
@@ -1379,13 +1385,25 @@ class NativeLstm2(NativeOpGenBase):
       }
 
       //DW = Y[0..T-2]^T * DX[1..T-1]  (if step==1)
-      if(num_steps > 1)
-        affine_raw(
-          data_ptr(Y, std::min(start, end) + std::max(0, -step)), (num_steps - 1) * n_batch, n_cells,
-          data_ptr(DX, std::min(start, end) + std::max(0, step)), (num_steps - 1) * n_batch, n_cells * 4,
-          Ndarray_DEV_DATA(DW), n_cells, n_cells * 4,
-          true, false, 0.0f, 1.0f,
-          abs_step, abs_step);
+      if(num_steps > 1) {
+        if(abs_step == 1) {
+          affine_raw(
+            data_ptr(Y, std::min(start, end) + std::max(0, -step)), (num_steps - 1) * n_batch, n_cells,
+            data_ptr(DX, std::min(start, end) + std::max(0, step)), (num_steps - 1) * n_batch, n_cells * 4,
+            Ndarray_DEV_DATA(DW), n_cells, n_cells * 4,
+            true, false, 0.0f, 1.0f);
+        } else {
+          // Unfortunately we cannot do efficient striding. Thus loop again.
+          t = end - step;  // one before
+          for(; (step > 0) ? (t >= start) : (t <= start); t -= step) {
+            affine_raw(
+              data_ptr(Y, t), n_batch, n_cells,
+              data_ptr(DX, t + step), n_batch, n_cells * 4,
+              Ndarray_DEV_DATA(DW), n_cells, n_cells * 4,
+              true, false);
+          }
+        }
+      }
 
       //DW += y0^T * DX[0]
       affine_raw(
