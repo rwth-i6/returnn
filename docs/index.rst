@@ -98,6 +98,7 @@ Some recent development changelog can be seen `here <https://github.com/rwth-i6/
     :caption: Internals
 
     api
+    internals/search.rst
 
 
 Refs
