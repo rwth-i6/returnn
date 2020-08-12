@@ -3681,7 +3681,8 @@ class RnnCellLayer(_ConcatInputLayer):
     shape = (n_out,)  # type: typing.Tuple[typing.Union[int,None],...]
     batch_dim_axis = 0
     time_dim_axis = None
-    if sources and sources[0] and sources[0].output.time_dim_axis is not None:
+    sources_ = [s for s in sources if s and not s.output.undefined]
+    if sources_ and sources_[0].output.time_dim_axis is not None:
       shape = (None,) + shape
       batch_dim_axis = 1
       time_dim_axis = 0
@@ -3690,7 +3691,7 @@ class RnnCellLayer(_ConcatInputLayer):
       shape=shape, dim=n_out,
       batch_dim_axis=batch_dim_axis,
       time_dim_axis=time_dim_axis,
-      size_placeholder={} if not sources else sources[0].output.size_placeholder.copy(),
+      size_placeholder={} if not sources_ else sources_[0].output.size_placeholder.copy(),
       beam=beam)
 
   def get_absolute_name_scope_prefix(self):
