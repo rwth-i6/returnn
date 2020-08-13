@@ -43,6 +43,8 @@ def install_pycharm():
   :return: pycharm dir
   :rtype: str
   """
+  # https://github.community/t/has-github-action-somthing-like-travis-fold/16841
+  print("::group::install")
   # travis_fold: https://github.com/travis-ci/travis-ci/issues/1065
   print("travis_fold:start:script.install")
   pycharm_dir = "%s/pycharm" % tempfile.mkdtemp()
@@ -50,6 +52,7 @@ def install_pycharm():
   subprocess.check_call([my_dir + "/install_pycharm.sh"], cwd=os.path.dirname(pycharm_dir), stderr=subprocess.STDOUT)
   check_pycharm_dir(pycharm_dir)
   print("travis_fold:end:script.install")
+  print("::endgroup::")
   return pycharm_dir
 
 
@@ -96,6 +99,7 @@ def create_stub_dir(pycharm_dir, stub_dir, pycharm_major_version):
   :param str stub_dir:
   :param int pycharm_major_version:
   """
+  print("::group::create_python_stubs")
   print("travis_fold:start:script.create_python_stubs")
   print("Generating Python stubs via helpers/generator3.py...")
   if pycharm_major_version >= 2020:
@@ -133,6 +137,7 @@ def create_stub_dir(pycharm_dir, stub_dir, pycharm_major_version):
       # Ignore errors here.
       subprocess.call([sys.executable, generator_path, "-d", stub_dir, mod_name])
   print("travis_fold:end:script.create_python_stubs")
+  print("::endgroup::")
 
 
 _use_stub_zip = False
@@ -150,6 +155,7 @@ def setup_pycharm_python_interpreter(pycharm_dir):
 
   :param str pycharm_dir:
   """
+  print("::group::setup_pycharm_python_interpreter")
   print("travis_fold:start:script.setup_pycharm_python_interpreter")
   print("Setup PyCharm Python interpreter... (jdk.table.xml)")
   print("Current Python:", sys.executable, sys.version, sys.version_info)
@@ -287,13 +293,16 @@ def setup_pycharm_python_interpreter(pycharm_dir):
   print("Save XML.")
   et.write(jdk_table_fn, encoding="UTF-8")
 
+  print("::group::jdk_table")
   print("travis_fold:start:script.jdk_table")
   print("XML content:")
   rough_string = ElementTree.tostring(root, 'utf-8')
   print(minidom.parseString(rough_string).toprettyxml(indent="  "))
   print("travis_fold:end:script.jdk_table")
+  print("::endgroup::")
 
   print("travis_fold:end:script.setup_pycharm_python_interpreter")
+  print("::endgroup::")
 
 
 def read_spelling_dict():
@@ -342,6 +351,7 @@ def prepare_src_dir(files=None):
   :return: src dir
   :rtype: str
   """
+  print("::group::prepare")
   print("travis_fold:start:script.prepare")
   print("Prepare project source files...")
   if not files:
@@ -360,6 +370,7 @@ def prepare_src_dir(files=None):
   print("All source files:")
   subprocess.check_call(["ls", "-la", src_tmp_dir])
   print("travis_fold:end:script.prepare")
+  print("::endgroup::")
   return src_tmp_dir
 
 
@@ -373,6 +384,7 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
   """
   out_tmp_dir = tempfile.mkdtemp()
 
+  print("::group::inspect")
   print("travis_fold:start:script.inspect")
   if not skip_pycharm_inspect:
     # Note: Will not run if PyCharm is already running.
@@ -425,6 +437,7 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
   et.write("%s/Pep8CodeStyle.xml" % out_tmp_dir, encoding="UTF-8")
 
   print("travis_fold:end:script.inspect")
+  print("::endgroup::")
   return out_tmp_dir
 
 
@@ -553,7 +566,9 @@ def report_inspect_dir(inspect_xml_dir,
         else:
           print(color.color("The inspection reports for this file are fatal!", color="red"))
         print("travis_fold:end:inspect.%s" % last_filename)
+        print("::endgroup::")
       if filename:
+        print("::group::inspect.%s" % filename)
         print("travis_fold:start:inspect.%s" % filename)
         print(color.color(
           "File: %s" % filename, color="black" if filename in ignore_count_for_files else "red"))
