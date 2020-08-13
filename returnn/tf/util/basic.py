@@ -919,7 +919,7 @@ class _DeviceAttributes:
 _list_local_devices = None
 
 
-def get_tf_list_local_devices(tf_session_opts=None):
+def get_tf_list_local_devices(tf_session_opts=None, file=None):
   """
   This uses tensorflow.device_lib.list_local_devices().
   Note that a call to this will trigger the internal TF thread pool inits,
@@ -929,13 +929,14 @@ def get_tf_list_local_devices(tf_session_opts=None):
   You can get the list available in a given TF session by :func:`tf.compat.v1.Session.list_devices`.
 
   :param dict[str]|None tf_session_opts: if given, will init a temp tf.compat.v1.Session with these opts
+  :param typing.TextIO|None file: log_stream stream for print statements, defaults to sys.stdout
   :rtype: list[tensorflow.core.framework.device_attributes_pb2.DeviceAttributes|_DeviceAttributes]
   """
   check_initial_tf_thread_pool_init(tf_session_opts=tf_session_opts)
   global _list_local_devices
   if _list_local_devices is not None:
     return _list_local_devices
-  print("Collecting TensorFlow device list...")
+  print("Collecting TensorFlow device list...", file=file)
   if tf_session_opts and tf_session_opts.get("gpu_options", {}):
     # On any gpu_options, e.g. gpu_options.per_process_gpu_memory_fraction:
     # The first usage of a device will use the provided options.
@@ -990,7 +991,7 @@ def print_available_devices(tf_session_opts=None, file=None):
   so you should call :func:`setup_tf_thread_pools` first.
 
   :param dict[str]|None tf_session_opts: if given, will init a temp Session with these opts
-  :param io.FileIO file:
+  :param typing.TextIO|None file: file stream for print statements, defaults to sys.stdout
   """
   if file is None:
     file = sys.stdout
@@ -1003,7 +1004,7 @@ def print_available_devices(tf_session_opts=None, file=None):
   if tf_session_opts and tf_session_opts.get("gpu_options", {}).get("visible_device_list", None):
     print("TF session gpu_options.visible_device_list is set to %r." % (
       tf_session_opts["gpu_options"]["visible_device_list"],), file=file)
-  devs = get_tf_list_local_devices(tf_session_opts=tf_session_opts)
+  devs = get_tf_list_local_devices(tf_session_opts=tf_session_opts, file=file)
   print("Local devices available to TensorFlow:", file=file)
   for i, dev in enumerate(devs):
     print("  %i/%i: %s" % (i + 1, len(devs), "\n       ".join(str(dev).splitlines())), file=file)

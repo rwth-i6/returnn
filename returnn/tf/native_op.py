@@ -7,6 +7,7 @@ Wrappers for most relevant NativeOp ops.
 from __future__ import print_function
 
 import os
+import sys
 import tensorflow as tf
 try:
   from tensorflow.python.ops.nn import rnn_cell
@@ -74,6 +75,7 @@ class OpMaker(object):
   global_lock = RLock()
   mod_cache = {}  # cache_key -> mod
   op_cache = {}  # cache_key -> op
+  log_stream = sys.stdout  # type: typing.TextIO
 
   def __init__(self, description, compiler_opts=None,
                search_for_runtime_blas=True, search_for_numpy_blas=True, search_for_system_blas=True,
@@ -529,6 +531,7 @@ class OpMaker(object):
       include_deps=[self.support_native_op_cpp_filename],
       ld_flags=ld_flags,
       use_cuda_if_available=self.with_cuda,
+      log_stream=self.log_stream,
       **dict(self.compiler_opts))
     mod = comp.load_tf_module()
     mod._op_compiler = comp
