@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          # - 2.7  # comment out while we are experimenting
+          - 3.7
+        tf-version:
+          - 2.3.0
+        action:
+          - TEST=TFEngine
+          - TEST=TFNativeOp
+          - TEST=TFNetworkLayer
+          - TEST=TFNetworkRecLayer
+          - TEST=TFUpdater
+          - TEST=TFUtil
+          - TEST=Config
+          - TEST=Dataset
+          - TEST=Device
+          - TEST=EngineTask
+          - TEST=EngineUtil
+          - TEST=fork_exec
+          - TEST=Fsa
+          - TEST=GeneratingDataset
+          - TEST=hdf_dump
+          - TEST=HDFDataset
+          - TEST=TranslationDataset
+          - TEST=LearningRateControl
+          - TEST=Log
+          - TEST=multi_target
+          - TEST=NativeOp_chunk
+          - TEST=NativeOp_sparse
+          - TEST=NativeOp_subtensor_batched_index
+          - TEST=Network
+          - TEST=NetworkBaseLayer
+          - TEST=NetworkDescription
+          - TEST=NetworkLayer
+          - TEST=Pretrain
+          - TEST=SprintDataset
+          - TEST=SprintInterface
+          - TEST=TaskSystem
+          - TEST=TaskSystem_SharedMem
+          - TEST=TheanoUtil
+          - TEST=Util
+        include:
+          - action: TEST=TFUtil
+            python-version: 2.7
+            tf-version: 1.14.0
+          - action: TEST=TFUtil
+            python-version: 3.7
+            tf-version: 1.15.3
+          - action: TEST=TFEngine
+            python-version: 3.7
+            tf-version: 1.15.3
+          - action: TEST=TFNativeOp
+            python-version: 2.7
+            tf-version: 1.4.0
+          - action: TEST=TFNativeOp
+            python-version: 3.6
+            tf-version: 1.8.0
+          - action: TEST=TFNativeOp
+            python-version: 3.7
+            tf-version: 1.14.0
+          - action: TEST=TFNetworkSigProcLayer
+            python-version: 3.7
+            tf-version: 1.15.3
+          - action: TEST=demos
+            python-version: 3.6
+            tf-version: 2.3.0
+          - action: TEST=MultiBatchBeam
+            python-version: 3.6
+            tf-version: 2.3.0
+          - action: TEST=NativeOp
+            python-version: 3.6
+            tf-version: 2.3.0
+          - action: RUN=tests/pycharm-inspect.py
+            python-version: 3.7
+            tf-version: 2.3.0
+
+        # exclude:
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - uses: actions/setup-python@v2
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Cache dependencies
+      uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cache
+          ~/.local
+        key: cache-${{ runner.os }}-py${{ matrix.python-version }}-tf${{ matrix.tf-version }}
+        restore-keys: |
+          cache-${{ runner.os }}-py${{ matrix.python-version }}-
+
+    - name: Setup dependencies
+      run: |
+        echo "::add-path::~/.local/bin"
+
+        pip install --user --upgrade pip setuptools wheel
+        pip install --user typing | cat  # needed for Python 2 in some cases
+        pip install --user -r requirements.txt | cat
+        pip install --user --upgrade tensorflow==${{ matrix.tf-version }} | cat
+        pip install --user theano==0.9 | cat
+        pip install --user nose
+  
+        echo "[global]" >> ~/.theanorc
+        echo "device = cpu" >> ~/.theanorc
+        echo "floatX = float32" >> ~/.theanorc
+
+    - name: Test Python/Numpy/TF/Theano versions.
+      run: |
+        echo "Python env: $(type python) $(python --version)"
+        echo "Nosetests env: $(type nosetests)" 
+        python -c "import numpy; print('NumPy:', numpy.version.full_version)"
+        python -c "import tensorflow as tf; print('TensorFlow:', tf.__git_version__, tf.__version__, tf.__file__)"
+        python -c "import theano; print('Theano:', theano.__version__)"
+        
+    - name: Run test
+      run: |
+        export ${{ matrix.action }}
+        if [[ ! -z "$TEST" ]]; then nosetests tests/test_$TEST.py; fi
+        if [[ ! -z "$RUN" ]]; then $RUN; fi
