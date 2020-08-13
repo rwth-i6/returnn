@@ -3164,7 +3164,7 @@ class NativeCodeCompiler(object):
                is_cpp=True, c_macro_defines=None, ld_flags=None,
                include_paths=(), include_deps=None,
                static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False,
-               use_cxx11_abi=False, verbose=False):
+               use_cxx11_abi=False, log_stream=None, verbose=False):
     """
     :param str base_name: base name for the module, e.g. "zero_out"
     :param int|tuple[int] code_version: check for the cache whether to reuse
@@ -3180,6 +3180,7 @@ class NativeCodeCompiler(object):
     :param bool should_cleanup_old_all: whether we should look in the cache dir
       and check all ops if we can delete some old ones which are older than some limit (self._cleanup_time_limit_days)
     :param bool should_cleanup_old_mydir: whether we should delete our op dir before we compile there.
+    :param typing.TextIO|None log_stream: file stream for print statements
     :param bool verbose: be slightly more verbose
     """
     if self.CollectedCompilers is not None:
@@ -3203,8 +3204,9 @@ class NativeCodeCompiler(object):
       self._cleanup_old()
     self._should_cleanup_old_mydir = should_cleanup_old_mydir
     self.use_cxx11_abi = use_cxx11_abi
+    self._log_stream = log_stream
     if self.verbose:
-      print("%s: %r" % (self.__class__.__name__, self))
+      print("%s: %r" % (self.__class__.__name__, self), file=log_stream)
 
   def __repr__(self):
     return "<%s %r in %r>" % (self.__class__.__name__, self.base_name, self._mod_path)
@@ -3410,7 +3412,7 @@ class NativeCodeCompiler(object):
     cmd_bin = self._get_compiler_bin()
     cmd_args = [cmd_bin] + opts
     from subprocess import Popen, PIPE, STDOUT, CalledProcessError
-    print("%s call: %s" % (self.__class__.__name__, " ".join(cmd_args)))
+    print("%s call: %s" % (self.__class__.__name__, " ".join(cmd_args)), file=self._log_stream)
     proc = Popen(cmd_args, cwd=self._mod_path, stdout=PIPE, stderr=STDOUT)
     stdout, stderr = proc.communicate()
     assert stderr is None  # should only have stdout

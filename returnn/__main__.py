@@ -357,6 +357,8 @@ def init_backend_engine():
     setup_tf_thread_pools(log_file=log.v3, tf_session_opts=tf_session_opts)
     # Print available devices. Also make sure that get_tf_list_local_devices uses the correct TF session opts.
     print_available_devices(tf_session_opts=tf_session_opts, file=log.v2)
+    from returnn.tf.native_op import OpMaker
+    OpMaker.log_stream = log.v3
     debug_register_better_repr()
     if config.is_true("distributed_tf"):
       import returnn.tf.distributed
