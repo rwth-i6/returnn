@@ -109,13 +109,17 @@ jobs:
       run: |
         echo "::add-path::~/.local/bin"
 
+        pip2 install -qq --upgrade pip setuptools wheel six | cat  # Python2<->Python3
+        pip2 install --user -r requirements.txt | cat  # need for Python2<->Python3 communication tests
+        pip2 install --user typing | cat
+
         pip install --user --upgrade pip setuptools wheel
         pip install --user typing | cat  # needed for Python 2 in some cases
         pip install --user -r requirements.txt | cat
         pip install --user --upgrade tensorflow==${{ matrix.tf-version }} | cat
         pip install --user theano==0.9 | cat
         pip install --user nose
-  
+
         echo "[global]" >> ~/.theanorc
         echo "device = cpu" >> ~/.theanorc
         echo "floatX = float32" >> ~/.theanorc
@@ -123,11 +127,11 @@ jobs:
     - name: Test Python/Numpy/TF/Theano versions.
       run: |
         echo "Python env: $(type python) $(python --version)"
-        echo "Nosetests env: $(type nosetests)" 
+        echo "Nosetests env: $(type nosetests)"
         python -c "import numpy; print('NumPy:', numpy.version.full_version)"
         python -c "import tensorflow as tf; print('TensorFlow:', tf.__git_version__, tf.__version__, tf.__file__)"
         python -c "import theano; print('Theano:', theano.__version__)"
-        
+
     - name: Run test
       run: |
         export ${{ matrix.action }}
