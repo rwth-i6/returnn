@@ -29,6 +29,42 @@ os.chdir(root_dir)
 from returnn.util import better_exchook  # noqa
 from returnn.util.basic import pip_install, which_pip, pip_check_is_installed  # noqa
 
+travis_env = os.environ.get("TRAVIS") == "true"
+github_env = os.environ.get("GITHUB_ACTIONS") == "true"
+folds = []
+
+
+def fold_start(name):
+  """
+  :param str name:
+  """
+  if github_env:
+    # https://github.community/t/has-github-action-somthing-like-travis-fold/16841
+    if not folds:  # nested folds not supported, https://github.com/actions/toolkit/issues/112
+      print("::group::%s" % name)
+
+  if travis_env:
+    # travis_fold: https://github.com/travis-ci/travis-ci/issues/1065
+    print("travis_fold:start:%s" % name)
+
+  folds.append(name)
+
+
+def fold_end():
+  """
+  Ends the fold.
+  """
+  assert folds
+
+  if travis_env:
+    print("travis_fold:end:%s" % folds[-1])
+
+  if github_env:
+    if len(folds) == 1:
+      print("::endgroup::")
+
+  folds.pop(-1)
+
 
 def check_pycharm_dir(pycharm_dir):
   """
@@ -43,17 +79,14 @@ def install_pycharm():
   :return: pycharm dir
   :rtype: str
   """
-  # https://github.community/t/has-github-action-somthing-like-travis-fold/16841
-  print("::group::install")
-  # travis_fold: https://github.com/travis-ci/travis-ci/issues/1065
+  fold_start("script.install")
   print("travis_fold:start:script.install")
   pycharm_dir = "%s/pycharm" % tempfile.mkdtemp()
   print("Install PyCharm into:", pycharm_dir)
   sys.stdout.flush()
   subprocess.check_call([my_dir + "/install_pycharm.sh"], cwd=os.path.dirname(pycharm_dir), stderr=subprocess.STDOUT)
   check_pycharm_dir(pycharm_dir)
-  print("travis_fold:end:script.install")
-  print("::endgroup::")
+  fold_end()
   return pycharm_dir
 
 
@@ -100,8 +133,7 @@ def create_stub_dir(pycharm_dir, stub_dir, pycharm_major_version):
   :param str stub_dir:
   :param int pycharm_major_version:
   """
-  print("::group::create_python_stubs")
-  print("travis_fold:start:script.create_python_stubs")
+  fold_start("script.create_python_stubs")
   print("Generating Python stubs via helpers/generator3.py...")
   if pycharm_major_version >= 2020:
     generator_path = "%s/plugins/python-ce/helpers/generator3/__main__.py" % pycharm_dir
@@ -139,8 +171,7 @@ def create_stub_dir(pycharm_dir, stub_dir, pycharm_major_version):
       sys.stdout.flush()
       # Ignore errors here.
       subprocess.call([sys.executable, generator_path, "-d", stub_dir, mod_name])
-  print("travis_fold:end:script.create_python_stubs")
-  print("::endgroup::")
+  fold_end()
 
 
 _use_stub_zip = False
@@ -158,8 +189,7 @@ def setup_pycharm_python_interpreter(pycharm_dir):
 
   :param str pycharm_dir:
   """
-  print("::group::setup_pycharm_python_interpreter")
-  print("travis_fold:start:script.setup_pycharm_python_interpreter")
+  fold_start("script.setup_pycharm_python_interpreter")
   print("Setup PyCharm Python interpreter... (jdk.table.xml)")
   print("Current Python:", sys.executable, sys.version, sys.version_info)
   name = "Python 3 (.../bin/python3)"  # used in our PyCharm.idea. this should match.
@@ -297,16 +327,13 @@ def setup_pycharm_python_interpreter(pycharm_dir):
   print("Save XML.")
   et.write(jdk_table_fn, encoding="UTF-8")
 
-  print("::group::jdk_table")
-  print("travis_fold:start:script.jdk_table")
+  fold_start("script.jdk_table")
   print("XML content:")
   rough_string = ElementTree.tostring(root, 'utf-8')
   print(minidom.parseString(rough_string).toprettyxml(indent="  "))
-  print("travis_fold:end:script.jdk_table")
-  print("::endgroup::")
+  fold_end()
 
-  print("travis_fold:end:script.setup_pycharm_python_interpreter")
-  print("::endgroup::")
+  fold_end()
 
 
 def read_spelling_dict():
@@ -355,8 +382,7 @@ def prepare_src_dir(files=None):
   :return: src dir
   :rtype: str
   """
-  print("::group::prepare")
-  print("travis_fold:start:script.prepare")
+  fold_start("script.prepare")
   print("Prepare project source files...")
   if not files:
     files = ["returnn", "tools", "demos", "rnn.py", "setup.py", "__init__.py"]
@@ -372,9 +398,9 @@ def prepare_src_dir(files=None):
       shutil.copy(fn, dst)
   create_spelling_dict_xml(src_tmp_dir)
   print("All source files:")
+  sys.stdout.flush()
   subprocess.check_call(["ls", "-la", src_tmp_dir])
-  print("travis_fold:end:script.prepare")
-  print("::endgroup::")
+  fold_end()
   return src_tmp_dir
 
 
@@ -388,8 +414,7 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
   """
   out_tmp_dir = tempfile.mkdtemp()
 
-  print("::group::inspect")
-  print("travis_fold:start:script.inspect")
+  fold_start("script.inspect")
   if not skip_pycharm_inspect:
     # Note: Will not run if PyCharm is already running.
     # Maybe we can find some workaround for this?
@@ -419,6 +444,7 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
       "--ignore=%s" % ignore_codes,
       "--max-line-length=120"]
     print("$ %s" % " ".join(cmd))
+    sys.stdout.flush()
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     stdout, _ = proc.communicate()
     # We do not check returncode, as this is always non-zero if there is any warning.
@@ -440,8 +466,7 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
   et = ElementTree.ElementTree(root)
   et.write("%s/Pep8CodeStyle.xml" % out_tmp_dir, encoding="UTF-8")
 
-  print("travis_fold:end:script.inspect")
-  print("::endgroup::")
+  fold_end()
   return out_tmp_dir
 
 
@@ -562,20 +587,23 @@ def report_inspect_dir(inspect_xml_dir,
     if filename != last_filename:
       if last_filename:
         if last_filename in explicitly_ignored_files:
-          print("This file is on the ignore list.")
+          msg = color.color("This file is on the ignore list.", color="black")
         elif last_filename not in returnn_py_source_files:
-          print("This file is not part of the official RETURNN Python source code.")
+          msg = color.color("This file is not part of the official RETURNN Python source code.", color="black")
         elif last_filename in ignore_count_for_files:
-          print("The inspection reports for this file are all non critical.")
+          msg = color.color("The inspection reports for this file are all non critical.", color="black")
         else:
-          print(color.color("The inspection reports for this file are fatal!", color="red"))
-        print("travis_fold:end:inspect.%s" % last_filename)
-        print("::endgroup::")
+          msg = color.color("The inspection reports for this file are fatal!", color="red")
+        print(msg)
+        fold_end()
       if filename:
-        print("::group::inspect.%s" % filename)
-        print("travis_fold:start:inspect.%s" % filename)
-        print(color.color(
-          "File: %s" % filename, color="black" if filename in ignore_count_for_files else "red"))
+        file_msg = color.color(
+          "File: %s" % filename, color="black" if filename in ignore_count_for_files else "red")
+        if github_env:
+          fold_start(file_msg)
+        else:
+          fold_start("inspect.%s" % filename)
+          print(file_msg)
       last_filename = filename
       file_count = 0
     if not filename:
