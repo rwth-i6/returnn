@@ -1051,6 +1051,9 @@ class Engine(EngineBase):
       net_dict = self.custom_get_net_dict(epoch=epoch)
       assert isinstance(net_dict, dict), "%s should return dict but returned %s" % (
         self.custom_get_net_dict, type(net_dict))
+    elif self.pretrain:
+      # Use the net from pretrain. This might resolve things like WrapEpochValue.
+      net_dict = self.pretrain.get_final_network_json()
     else:
       from returnn.config import network_json_from_config
       net_dict = network_json_from_config(config)
