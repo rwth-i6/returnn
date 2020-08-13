@@ -49,6 +49,7 @@ def install_pycharm():
   print("travis_fold:start:script.install")
   pycharm_dir = "%s/pycharm" % tempfile.mkdtemp()
   print("Install PyCharm into:", pycharm_dir)
+  sys.stdout.flush()
   subprocess.check_call([my_dir + "/install_pycharm.sh"], cwd=os.path.dirname(pycharm_dir), stderr=subprocess.STDOUT)
   check_pycharm_dir(pycharm_dir)
   print("travis_fold:end:script.install")
@@ -122,6 +123,7 @@ def create_stub_dir(pycharm_dir, stub_dir, pycharm_major_version):
     assert os.path.exists(generator_path)
     subprocess.check_call([sys.executable, generator_path, "-d", stub_dir, "-b"])
     print("Collecting further native modules...")
+    sys.stdout.flush()
     mod_names = []
     for line in subprocess.check_output([
           sys.executable, generator_path, "-L"]).decode("utf8").splitlines()[1:]:
@@ -134,6 +136,7 @@ def create_stub_dir(pycharm_dir, stub_dir, pycharm_major_version):
         mod_names.append(mod_name)
     for mod_name in mod_names:
       print("Generate for %r." % mod_name)
+      sys.stdout.flush()
       # Ignore errors here.
       subprocess.call([sys.executable, generator_path, "-d", stub_dir, mod_name])
   print("travis_fold:end:script.create_python_stubs")
@@ -194,6 +197,7 @@ def setup_pycharm_python_interpreter(pycharm_dir):
         cwd=os.path.dirname(stub_fn))
       assert os.path.isdir(stub_dir)
   else:
+    sys.stdout.flush()
     if not pip_check_is_installed("tensorflow") and not pip_check_is_installed("tensorflow-gpu"):
       pip_install("tensorflow")
     if not pip_check_is_installed("Theano"):
