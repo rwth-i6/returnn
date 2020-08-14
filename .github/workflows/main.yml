@@ -12,7 +12,6 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-          # - 2.7  # comment out while we are experimenting
           - 3.7
         tf-version:
           - 2.3.0
@@ -59,6 +58,9 @@ jobs:
             python-version: 3.7
             tf-version: 1.15.3
           - action: TEST=TFEngine
+            python-version: 2.7
+            tf-version: 2.1.0
+          - action: TEST=TFEngine
             python-version: 3.7
             tf-version: 1.15.3
           - action: TEST=TFNativeOp
@@ -85,8 +87,6 @@ jobs:
           - action: RUN=tests/pycharm-inspect.py
             python-version: 3.7
             tf-version: 2.3.0
-
-        # exclude:
 
     steps:
     - uses: actions/checkout@v2
