@@ -5982,8 +5982,9 @@ class SelfAttentionLayer(_ConcatInputLayer):
     if data.time_dim_axis is None:
       # Assume inside RecLayer. See get_rec_initial_extra_outputs.
       total_value_dim = n_out
-      return {"k_left": tf.TensorShape((None, num_heads, None, total_key_dim // num_heads)),
-              "v_left": tf.TensorShape((None, num_heads, None, total_value_dim // num_heads))}
+      return {
+        "k_left": tf.TensorShape((None, num_heads, None, total_key_dim // num_heads)),
+        "v_left": tf.TensorShape((None, num_heads, None, total_value_dim // num_heads))}
     return {}
 
   def post_process_final_rec_vars_outputs(self, rec_vars_outputs, seq_len):
