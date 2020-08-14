@@ -34,6 +34,10 @@ from returnn.util.basic import pip_install, which_pip, pip_check_is_installed, h
 travis_env = os.environ.get("TRAVIS") == "true"
 github_env = os.environ.get("GITHUB_ACTIONS") == "true"
 
+gray_color = "black"  # black is usually gray
+if github_env:
+  gray_color = "white"  # black is black, on black background. so just use white
+
 
 class _StdoutTextFold:
   def __init__(self, name):
@@ -635,18 +639,18 @@ def report_inspect_dir(inspect_xml_dir,
     if filename != last_filename:
       if last_filename:
         if last_filename in explicitly_ignored_files:
-          msg = color.color("This file is on the ignore list.", color="black")
+          msg = color.color("This file is on the ignore list.", color=gray_color)
         elif last_filename not in returnn_py_source_files:
-          msg = color.color("This file is not part of the official RETURNN Python source code.", color="black")
+          msg = color.color("This file is not part of the official RETURNN Python source code.", color=gray_color)
         elif last_filename in ignore_count_for_files:
-          msg = color.color("The inspection reports for this file are all non critical.", color="black")
+          msg = color.color("The inspection reports for this file are all non critical.", color=gray_color)
         else:
           msg = color.color("The inspection reports for this file are fatal!", color="red")
         print(msg)
         fold_end()
       if filename:
         file_msg = color.color(
-          "File: %s" % filename, color="black" if filename in ignore_count_for_files else "red")
+          "File: %s" % filename, color=gray_color if filename in ignore_count_for_files else "red")
         if github_env:
           fold_start(file_msg)
         else:
@@ -673,7 +677,7 @@ def report_inspect_dir(inspect_xml_dir,
       if filename not in ignore_count_for_files:
         total_relevant_count += 1
     else:
-      print(color.color(msg, color="black"))
+      print(color.color(msg, color=gray_color))
     file_count += 1
 
   print("Total relevant inspection reports:", total_relevant_count)
