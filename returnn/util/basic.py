@@ -1250,7 +1250,7 @@ def class_idx_seq_to_1_of_k(seq, num_classes):
   :rtype: np.ndarray
   """
   num_frames = len(seq)
-  m = np.zeros((num_frames, num_classes))
+  m = np.zeros((num_frames, num_classes), dtype='float32')
   m[np.arange(num_frames), seq] = 1
   return m
 
