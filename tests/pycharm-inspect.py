@@ -13,9 +13,11 @@ See here:
 import os
 import sys
 import re
+import time
 import shutil
 import subprocess
 import tempfile
+import typing
 from glob import glob
 import argparse
 from xml.dom import minidom
@@ -27,27 +29,56 @@ sys.path.insert(0, root_dir)
 os.chdir(root_dir)
 
 from returnn.util import better_exchook  # noqa
-from returnn.util.basic import pip_install, which_pip, pip_check_is_installed  # noqa
+from returnn.util.basic import pip_install, which_pip, pip_check_is_installed, hms  # noqa
 
 travis_env = os.environ.get("TRAVIS") == "true"
 github_env = os.environ.get("GITHUB_ACTIONS") == "true"
-folds = []
+
+
+class _StdoutTextFold:
+  def __init__(self, name):
+    """
+    :param str name:
+    """
+    self.name = name
+    self.start_time = time.time()
+
+    if github_env:
+      # https://github.community/t/has-github-action-somthing-like-travis-fold/16841
+      if not folds:  # nested folds not supported, https://github.com/actions/toolkit/issues/112
+        print("::group::%s" % name)
+
+    if travis_env:
+      # travis_fold: https://github.com/travis-ci/travis-ci/issues/1065
+      print("travis_fold:start:%s" % name)
+
+    sys.stdout.flush()
+
+  def finish(self):
+    """
+    End fold.
+    """
+    elapsed_time = time.time() - self.start_time
+    print("%s: Elapsed time: %s" % (self.name, hms(elapsed_time)))
+
+    if travis_env:
+      print("travis_fold:end:%s" % folds[-1])
+
+    if github_env:
+      if len(folds) == 1:
+        print("::endgroup::")
+
+    sys.stdout.flush()
+
+
+folds = []  # type: typing.List[_StdoutTextFold]
 
 
 def fold_start(name):
   """
   :param str name:
   """
-  if github_env:
-    # https://github.community/t/has-github-action-somthing-like-travis-fold/16841
-    if not folds:  # nested folds not supported, https://github.com/actions/toolkit/issues/112
-      print("::group::%s" % name)
-
-  if travis_env:
-    # travis_fold: https://github.com/travis-ci/travis-ci/issues/1065
-    print("travis_fold:start:%s" % name)
-
-  folds.append(name)
+  folds.append(_StdoutTextFold(name))
 
 
 def fold_end():
@@ -55,14 +86,7 @@ def fold_end():
   Ends the fold.
   """
   assert folds
-
-  if travis_env:
-    print("travis_fold:end:%s" % folds[-1])
-
-  if github_env:
-    if len(folds) == 1:
-      print("::endgroup::")
-
+  folds[-1].finish()
   folds.pop(-1)
 
 
@@ -245,7 +269,7 @@ def setup_pycharm_python_interpreter(pycharm_dir):
         cwd=os.path.dirname(stub_fn))
       assert os.path.isdir(stub_dir)
   else:
-    sys.stdout.flush()
+    fold_start("script.opt_install_further_py_deps")
     if not pip_check_is_installed("tensorflow") and not pip_check_is_installed("tensorflow-gpu"):
       pip_install("tensorflow")
     if not pip_check_is_installed("Theano"):
@@ -258,11 +282,16 @@ def setup_pycharm_python_interpreter(pycharm_dir):
         except subprocess.CalledProcessError as exc:
           print("Pip install failed:", exc)
           print("Ignore...")
+    fold_end()
+
     stub_dir = "%s/python_stubs/python%s-generated" % (
       pycharm_system_dir, "%i.%i.%i" % sys.version_info[:3])
-    print("Generate stub dir:", stub_dir)
-    os.makedirs(stub_dir, exist_ok=True)
-    create_stub_dir(pycharm_dir=pycharm_dir, stub_dir=stub_dir, pycharm_major_version=pycharm_version[0])
+    if os.path.exists(stub_dir):
+      print("Python stubs already exists, not recreating (%s)" % stub_dir)
+    else:
+      print("Generate stub dir:", stub_dir)
+      os.makedirs(stub_dir)
+      create_stub_dir(pycharm_dir=pycharm_dir, stub_dir=stub_dir, pycharm_major_version=pycharm_version[0])
 
   jdk_table_fn = "%s/options/jdk.table.xml" % pycharm_config_dir
   print("Filename:", jdk_table_fn)
