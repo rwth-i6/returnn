@@ -635,6 +635,7 @@ class _IndividualTrainer:
     for p in self.optim.hyper_params:
       print(" %s -> %s" % (p.description(), hyper_param_mapping[p]), file=log.v2)
     config = self.optim.create_config_instance(hyper_param_mapping, gpu_ids=self.gpu_ids)
+    # init_train_from_config expects to have the train task
     config.set("task", "train")
     engine = Engine(config=config)
     train_data = StaticDataset.copy_from_dataset(self.optim.train_data)
