@@ -673,7 +673,7 @@ def report_inspect_dir(inspect_xml_dir,
     if problem_severity.startswith("POSSIBLE-FALSE "):
       msg_counted = False
     if msg_counted:
-      print(msg)
+      print(color.color(msg, color="red"))
       if filename not in ignore_count_for_files:
         total_relevant_count += 1
     else:
