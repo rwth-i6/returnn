@@ -130,6 +130,7 @@ jobs:
         echo "Nosetests env: $(type nosetests)"
         python -c "import numpy; print('NumPy:', numpy.version.full_version)"
         python -c "import tensorflow as tf; print('TensorFlow:', tf.__git_version__, tf.__version__, tf.__file__)"
+        python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
         python -c "import theano; print('Theano:', theano.__version__)"
 
     - name: Run test
