@@ -133,6 +133,14 @@ jobs:
         python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
         python -c "import theano; print('Theano:', theano.__version__)"
 
+    - name: Cache PyCharm
+      if: matrix.action == 'RUN=tests/pycharm-inspect.py'
+      uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cache/JetBrains
+        key: cache-pycharm-${{ runner.os }}-py${{ matrix.python-version }}-tf${{ matrix.tf-version }}
+
     - name: Run test
       run: |
         export ${{ matrix.action }}
