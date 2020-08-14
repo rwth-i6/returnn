@@ -288,7 +288,7 @@ class Task12AXDataset(GeneratingDataset):
     input_seq = self.generate_input_seq(seq_len)
     output_seq = self.make_output_seq(input_seq)
     features = class_idx_seq_to_1_of_k(input_seq, num_classes=len(self._input_classes))
-    targets = numpy.array(output_seq)
+    targets = numpy.array(output_seq, dtype='int32')
     return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
 
 
