@@ -84,6 +84,12 @@ jobs:
           - action: TEST=NativeOp
             python-version: 3.6
             tf-version: 2.3.0
+          - action: TEST=SprintDataset
+            python-version: 2.7
+            tf-version: 1.15.0
+          - action: TEST=SprintInterface
+            python-version: 2.7
+            tf-version: 1.15.0
           - action: RUN=tests/pycharm-inspect.py
             python-version: 3.7
             tf-version: 2.3.0
