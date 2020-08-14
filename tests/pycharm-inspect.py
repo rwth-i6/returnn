@@ -81,11 +81,29 @@ def install_pycharm():
   """
   fold_start("script.install")
   print("travis_fold:start:script.install")
-  pycharm_dir = "%s/pycharm" % tempfile.mkdtemp()
+  install_dir = tempfile.mkdtemp()
+  pycharm_dir = "%s/pycharm" % install_dir
   print("Install PyCharm into:", pycharm_dir)
   sys.stdout.flush()
-  subprocess.check_call([my_dir + "/install_pycharm.sh"], cwd=os.path.dirname(pycharm_dir), stderr=subprocess.STDOUT)
+
+  pycharm_version = (2020, 2)
+  name = "pycharm-community-%i.%i" % pycharm_version
+  fn = "%s.tar.gz" % name
+
+  subprocess.check_call(
+    ["wget", "-c", "https://download.jetbrains.com/python/%s" % fn],
+    cwd=install_dir,
+    stderr=subprocess.STDOUT)
+  tar_out = subprocess.check_output(
+    ["tar", "-xzvf", fn],
+    cwd=install_dir,
+    stderr=subprocess.STDOUT)
+  print((b"\n".join(tar_out.splitlines()[-10:])).decode("utf8"))
+  assert os.path.isdir("%s/%s" % (install_dir, name))
+  os.remove("%s/%s" % (install_dir, fn))
+  os.rename("%s/%s" % (install_dir, name), pycharm_dir)
   check_pycharm_dir(pycharm_dir)
+
   fold_end()
   return pycharm_dir
 
@@ -193,7 +211,7 @@ def setup_pycharm_python_interpreter(pycharm_dir):
   print("Setup PyCharm Python interpreter... (jdk.table.xml)")
   print("Current Python:", sys.executable, sys.version, sys.version_info)
   name = "Python 3 (.../bin/python3)"  # used in our PyCharm.idea. this should match.
-  pycharm_version_str = get_version_str_from_pycharm(pycharm_dir)  # should match in install_pycharm.sh
+  pycharm_version_str = get_version_str_from_pycharm(pycharm_dir)
   pycharm_version, pycharm_version_name = parse_pycharm_version(pycharm_version_str)
   if sys.platform == "darwin":
     pycharm_config_dir = os.path.expanduser("~/Library/Preferences/PyCharm%s" % pycharm_version_str)
