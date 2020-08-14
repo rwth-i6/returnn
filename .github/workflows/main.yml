@@ -59,7 +59,7 @@ jobs:
             tf-version: 1.15.3
           - action: TEST=TFEngine
             python-version: 2.7
-            tf-version: 1.14.0
+            tf-version: 1.15.0
           - action: TEST=TFEngine
             python-version: 3.7
             tf-version: 1.15.3
