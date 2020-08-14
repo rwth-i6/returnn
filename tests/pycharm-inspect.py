@@ -115,7 +115,8 @@ def install_pycharm():
   fn = "%s.tar.gz" % name
 
   subprocess.check_call(
-    ["wget", "-c", "https://download.jetbrains.com/python/%s" % fn],
+    ["wget", "--progress=dot:mega",
+     "-c", "https://download.jetbrains.com/python/%s" % fn],
     cwd=install_dir,
     stderr=subprocess.STDOUT)
   tar_out = subprocess.check_output(
