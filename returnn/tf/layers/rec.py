@@ -1287,10 +1287,10 @@ class _SubnetworkRecCell(object):
       if "end" in self.net_dict:  # used to specify ending of a sequence
         get_templated_layer.construct("end")
 
-      for layer_name, layer in self.net_dict.items():
+      for layer_name, layer in sorted(self.net_dict.items()):
         if self.parent_net.eval_flag and layer.get("loss"):  # only collect losses if we need them
           get_templated_layer.construct(layer_name)
-      for layer_name, layer in self.net_dict.items():
+      for layer_name, layer in sorted(self.net_dict.items()):
         if layer.get("is_output_layer"):
           get_templated_layer.construct(layer_name)
 
