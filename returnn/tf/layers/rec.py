@@ -1268,10 +1268,9 @@ class _SubnetworkRecCell(object):
               net_dict=self.net_dict, name=name,
               get_layer=default_get_layer, add_layer=default_get_layer.add_templated_layer)
           except NetworkConstructionDependencyLoopException as loop_exc:
-            if loop_exc.network is self.net and loop_exc.layer_name == name:
-              if layer_.is_initialized and lself.iterative_testing and not lself.reconstruct:
-                # Return anyway. This will be resolved later.
-                return layer_
+            if layer_.is_initialized and lself.iterative_testing and not lself.reconstruct:
+              # Return anyway. This will be resolved later.
+              return layer_
             raise
           except Exception:
             raise
