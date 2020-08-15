@@ -1040,11 +1040,14 @@ class _SubnetworkRecCell(object):
                    iterative_testing=True, reconstruct=False,
                    parent=None, parent_name=None):
         """
-        :param bool safe:
-        :param typing.Set[int]|None allow_construct_in_call_nrs:
-        :param bool allow_uninitialized_template:
-        :param bool iterative_testing:
-        :param bool reconstruct:
+        :param bool safe: True -> do not construct any new layers. only return None, or existing (maybe uninitialized)
+        :param typing.Set[int]|None allow_construct_in_call_nrs: if given, construct is only allowed for this time
+          (counted by call count)
+        :param bool allow_uninitialized_template: whether an uninitialized template layer can be returned
+        :param bool iterative_testing: whether we should iterate through multiple get_layer variants
+        :param bool reconstruct: if layer exists and is initialized, do not return it but reconstruct it.
+          It could have been initialized with incorrect sources (marked as partially finished),
+          and thus the data output might be wrong.
         :param GetLayer|None parent:
         :param str|None parent_name:
         """
