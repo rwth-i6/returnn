@@ -724,7 +724,7 @@ def test_cudnn_save_restore():
 @unittest.skipIf(not is_gpu_available(), "no gpu on this system")
 def test_cudnn_rnn_params_to_canonical():
   # https://github.com/tensorflow/tensorflow/issues/9370
-  from tensorflow.contrib.cudnn_rnn import CudnnLSTM
+  from tensorflow.contrib.cudnn_rnn import CudnnLSTM  # noqa
   with tf_compat.v1.Session() as session:
     def check(**kwargs):
       print("kwargs:", kwargs)
