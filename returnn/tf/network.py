@@ -1924,7 +1924,7 @@ class TFNetwork(object):
 
     Note: These callbacks will only be called if there was not any error.
 
-    :param function cb:
+    :param function|()->None cb:
     """
     self.get_root_network()._graph_reset_callbacks.append(cb)
 
@@ -1966,7 +1966,7 @@ class TFNetwork(object):
 
   def register_run_finished_callback(self, cb):
     """
-    :param function cb:
+    :param function|()->None cb:
     """
     self.get_root_network()._run_finished_callbacks.append(cb)
 
