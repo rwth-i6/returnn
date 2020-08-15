@@ -1041,7 +1041,7 @@ class _SubnetworkRecCell(object):
                    parent=None, parent_name=None):
         """
         :param bool safe:
-        :param typing.Optional[typing.Set[int]] allow_construct_in_call_nrs:
+        :param typing.Set[int]|None allow_construct_in_call_nrs:
         :param bool allow_uninitialized_template:
         :param bool iterative_testing:
         :param bool reconstruct:
