@@ -252,16 +252,9 @@ class LayerBase(object):
       return out_type(
         network=network, name=name, n_out=n_out, target=target, size_target=size_target, sources=sources, loss=loss,
         **kwargs)
-    if sources and [src for src in sources if src and not src.output.undefined]:
-      # Ok if we have some undefined but also some defined; filter out just the defined.
-      sources = [src for src in sources if src and not src.output.undefined]
-    if sources and (not sources[0] or sources[0].output.undefined) and not out_type:
-      from returnn.tf.network import CannotHandleUndefinedSourcesException
-      raise CannotHandleUndefinedSourcesException(
-        layer_name=name,
-        layer_desc=dict(
-          network=network, n_out=n_out, target=target, size_target=size_target, sources=sources, loss=loss,
-          **kwargs))
+    # Filter out undefined. Still try our best to come up with some reasonable default.
+    # Any template construction should be aware of that, and eventually resolve it.
+    sources = [src for src in sources if src and not src.output.undefined]
     if out_type is None:
       out_type = {}  # type: typing.Dict[str]
     else:

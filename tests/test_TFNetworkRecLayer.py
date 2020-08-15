@@ -1140,8 +1140,7 @@ def test_rec_explicit_lstm():
       "c": {"class": "eval", "from": ["input_gate", "cell_in", "forget_gate", "prev:c"],
             "eval": "source(0) * source(1) + source(2) * source(3)"},
       "output": {"class": "eval", "from": ["output_gate", "c"],
-                 "eval": "source(0) * source(1)",
-                 "out_type": {"shape": (10,)}},
+                 "eval": "source(0) * source(1)"},
     }},
     "output": {"class": "softmax", "loss": "ce", "from": "lstm"}
   }
