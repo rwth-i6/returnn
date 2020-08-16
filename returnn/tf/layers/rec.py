@@ -1036,13 +1036,10 @@ class _SubnetworkRecCell(object):
       """
       # noinspection PyMethodParameters
       def __init__(lself,
-                   safe=False, allow_construct_in_call_nrs=None, allow_uninitialized_template=False,
+                   allow_uninitialized_template=False,
                    iterative_testing=True, reconstruct=False,
                    parent=None, parent_name=None):
         """
-        :param bool safe: True -> do not construct any new layers. only return None, or existing (maybe uninitialized)
-        :param typing.Set[int]|None allow_construct_in_call_nrs: if given, construct is only allowed for this time
-          (counted by call count)
         :param bool allow_uninitialized_template: whether an uninitialized template layer can be returned
         :param bool iterative_testing: whether we should iterate through multiple get_layer variants
         :param bool reconstruct: if layer exists and is initialized, do not return it but reconstruct it.
@@ -1051,8 +1048,6 @@ class _SubnetworkRecCell(object):
         :param GetLayer|None parent:
         :param str|None parent_name:
         """
-        lself.safe = safe
-        lself.allow_construct_in_call_nrs = allow_construct_in_call_nrs
         lself.allow_uninitialized_template = allow_uninitialized_template
         if parent:
           assert isinstance(parent, GetLayer)
@@ -1060,7 +1055,6 @@ class _SubnetworkRecCell(object):
         lself.parent_name = parent_name
         lself.iterative_testing = iterative_testing
         lself.reconstruct = reconstruct
-        lself.count = 0
         lself.got_uninitialized_deps_count = 0
 
       # noinspection PyMethodParameters
@@ -1072,9 +1066,9 @@ class _SubnetworkRecCell(object):
           parent = parent.parent
         return (
           "<RecLayer construct template GetLayer>("
-          "safe %r, allow_construct_in_call_nrs %r, allow_uninitialized_template %r, "
-          "count %r, parents %r)") % (
-                 lself.safe, lself.allow_construct_in_call_nrs, lself.allow_uninitialized_template, lself.count,
+          "allow_uninitialized_template %r, "
+          "parents %r)") % (
+                 lself.allow_uninitialized_template,
                  "/".join(parent_names) or None)
 
       def _add_uninitialized_count(self):
@@ -1088,7 +1082,6 @@ class _SubnetworkRecCell(object):
         """
         Reset.
         """
-        self.count = 0
         self.got_uninitialized_deps_count = 0
 
       def construct(self, layer_name_):
@@ -1200,14 +1193,6 @@ class _SubnetworkRecCell(object):
           # * layer_class.transform_config_dict (via construct_layer)
           # * layer_class.get_out_data_from_opts (via add_templated_layer)
           ConstructCtx.partially_finished.append(layer_)
-        lself.count += 1
-        if lself.allow_construct_in_call_nrs is not None:
-          if (lself.count - 1) not in lself.allow_construct_in_call_nrs:
-            lself._add_uninitialized_count()
-            return None
-        if lself.safe:
-          lself._add_uninitialized_count()
-          return None
         ConstructCtx.layers.append(layer_)
         try:
           default_get_layer = GetLayer(parent=lself, parent_name=_name)
