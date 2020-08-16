@@ -299,10 +299,16 @@ class LayerBase(object):
               feature_dim_axis = sources_data.feature_dim_axis
             else:
               feature_dim_axis = -1
-          default_shape = list(sources_data.shape_dense)
-          default_shape.insert(sources_data.batch_dim_axis, None)
-          default_shape[feature_dim_axis] = out_type.get("dim", None)
-          default_shape.pop(out_type.get("batch_dim_axis"))
+          if sources_data.shape:
+            default_shape = list(sources_data.shape_dense)
+            default_shape.insert(sources_data.batch_dim_axis, None)
+            default_shape[feature_dim_axis] = out_type.get("dim", None)
+            default_shape.pop(out_type.get("batch_dim_axis"))
+          else:  # source is scalar
+            if out_type.get("dim") or out_type.get("feature_dim_axis") is not None:
+              default_shape = (out_type.get("dim"),)
+            else:
+              default_shape = ()
           out_type.setdefault("shape", tuple(default_shape))
       elif network.is_inside_rec_layer():
         if out_type.get("sparse", False):
