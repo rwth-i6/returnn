@@ -2007,7 +2007,7 @@ def help_on_type_error_wrong_args(cls, kwargs):
     if arg not in all_kwargs:
       unknown_args.append(arg)
   if mandatory_args or unknown_args:
-    print("Args mismatch? Missing are %r, unknowns are %r." % (mandatory_args, unknown_args))
+    print("Args mismatch? Missing are %r, unknowns are %r. Kwargs %r." % (mandatory_args, unknown_args, kwargs))
 
 
 def custom_exec(source, source_filename, user_ns, user_global_ns):
