@@ -92,8 +92,6 @@ def concat_sources(src_layers):
   :rtype: Data
   """
   assert src_layers, "need source layers"
-  if any([not s or s.output.undefined for s in src_layers]):
-    return Data.create_undefined()
   if len(src_layers) == 1:
     return src_layers[0].output.copy()
   network = src_layers[0].network
@@ -140,8 +138,6 @@ def get_concat_sources_data_template(src_layers, name=None):
   :rtype: Data
   """
   assert src_layers, "need source layers"
-  if any([not s or s.output.undefined for s in src_layers]):
-    return Data.create_undefined(name=name)
   if len(src_layers) == 1:
     return src_layers[0].output.copy(name=name)
   dim = 0
@@ -152,8 +148,8 @@ def get_concat_sources_data_template(src_layers, name=None):
     # as this is for a template only anyway.
     # The real checks are in concat_sources.
     assert not layer.output.sparse
-    assert layer.output.dim is not None
-    dim += layer.output.dim
+    if layer.output.dim is not None:  # just ignore at this point if None (e.g. during template construction)
+      dim += layer.output.dim
     beam = SearchBeam.get_combined_beam(beam, layer.output.beam)
   shape = list(common_source.shape)
   shape[common_source.get_batch_axis_excluding_batch(common_source.feature_dim_axis)] = dim
@@ -179,8 +175,6 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0, dropout_noise_shape=N
   """
   assert src_layers, "need source layers"
   data = concat_sources(src_layers)
-  if data.undefined:
-    return data
   network = src_layers[0].network
   if network.train_flag is False and not dropout_on_forward:
     # If we know that we are not training, we always disable dropout.
@@ -291,21 +285,19 @@ class CopyLayer(_ConcatInputLayer):
     # If all sources are defined, use them to get the exact out_type.
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
     # Instead of checking or raising an exception, just overwrite, as this could be the template construction.
-    if out.undefined or out_type or n_out is not NotSpecified:
-      # Otherwise use given out_type information and resort to generic base method.
-      if out_type or n_out is not NotSpecified:
-        if not out_type:
-          out_type = {}
-        else:
-          out_type = out_type.copy()
-        if out.sparse:
-          out_type["sparse"] = True  # otherwise the default get_out_data_from_opts would assume dense
-        if n_out is not NotSpecified:
-          out_type["dim"] = n_out
-        elif out.dim is not None:
-          out_type.setdefault("dim", out.dim)
-        out = super(CopyLayer, cls).get_out_data_from_opts(
-          name=name, out_type=out_type, n_out=n_out, sources=sources, **kwargs)
+    if out_type or n_out is not NotSpecified:
+      if not out_type:
+        out_type = {}
+      else:
+        out_type = out_type.copy()
+      if out.sparse:
+        out_type["sparse"] = True  # otherwise the default get_out_data_from_opts would assume dense
+      if n_out is not NotSpecified:
+        out_type["dim"] = n_out
+      elif out.dim is not None:
+        out_type.setdefault("dim", out.dim)
+      out = super(CopyLayer, cls).get_out_data_from_opts(
+        name=name, out_type=out_type, n_out=n_out, sources=sources, **kwargs)
     out.beam = SearchBeam.get_combined_beam(out.beam, *[dep.output.beam for dep in extra_deps if dep])
     return out
 
@@ -824,8 +816,6 @@ class GatherNdLayer(_ConcatInputLayer):
     :rtype: Data
     """
     input_data = get_concat_sources_data_template(sources).copy_as_batch_major()
-    if input_data.undefined or not position or position.output.undefined:
-      return Data.create_undefined(name="%s_output" % name)
     position_data = position.output.copy_template()
     if position_data.batch_dim_axis is None:
       position_data = position_data.copy_add_batch_dim(batch_dim_axis=0)
@@ -993,13 +983,6 @@ class ScatterNdLayer(_ConcatInputLayer):
     :rtype: Data
     """
     input_data = get_concat_sources_data_template(sources)
-    if position.output.undefined or input_data.undefined:
-      from returnn.tf.network import CannotHandleUndefinedSourcesException
-      raise CannotHandleUndefinedSourcesException(
-        layer_name=name,
-        layer_desc=dict(
-          sources=sources, position=position, position_axis=position_axis,
-          output_dim_via_time_from=output_dim_via_time_from, **kwargs))
     common, output, replace_common_axis, input_extra_axes = cls._get_axes(
       input_data=input_data, position=position.output, position_axis=position_axis,
       output_dim_via_time_from=output_dim_via_time_from.output)
@@ -1311,8 +1294,6 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     :rtype: Data
     """
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
-    if out.undefined:
-      return out
     axis = cls._get_axis_to_reduce(out, axis=axis, exception_prefix="%s %r" % (cls.__name__, name))
     out = out.copy_move_axis(axis, -1)
     if isinstance(start, LayerBase):
@@ -1468,8 +1449,6 @@ class SeqLenMaskLayer(_ConcatInputLayer):
     :rtype: Data
     """
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
-    if out.undefined:
-      return out
     if isinstance(start, LayerBase):
       out.beam = SearchBeam.get_combined_beam(out.beam, start.output.beam)
     if isinstance(window_start, LayerBase):
@@ -2320,17 +2299,6 @@ class SplitDimsLayer(_ConcatInputLayer):
     data.name = "%s_output" % name
     if isinstance(axis, int):
       data = data.copy_as_batch_major()
-    if data.undefined:
-      # We cannot really cover all cases here. But at least some common ones.
-      if isinstance(axis, str) and axis.lower() == "f" and all([d > 0 for d in dims]):
-        if data.feature_dim_axis is not None:
-          data = data.copy_template_excluding_axis(exclude_axis=data.feature_dim_axis)
-        return Data(
-          name="%s_output_undefined" % name, undefined=True,
-          shape=data.shape + tuple(dims),
-          size_placeholder=data.size_placeholder,
-          batch_dim_axis=data.batch_dim_axis, time_dim_axis=data.time_dim_axis,
-          dtype=data.dtype, beam=data.beam)
     axis = data.get_axis_from_description(axis)
     if data.batch_shape[axis] is not None:
       resolved_shape_dims = cls._resolve_dims(old_dim=data.batch_shape[axis], new_dims=dims)
@@ -2759,8 +2727,6 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param int|None increase_sparse_dim: add this to the dim. assumes that it is sparse
     """
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
-    if out.undefined:
-      return out
     assert not (enforce_batch_major and enforce_time_major)
     if enforce_batch_major:
       out = out.copy_as_batch_major()
@@ -2963,8 +2929,6 @@ class ConvLayer(_ConcatInputLayer):
                               **kwargs):
     data = get_concat_sources_data_template(sources)
     shape = [None] * len(filter_size) + [n_out]
-    if data.undefined:
-      return {"dim": n_out, "shape": shape}
     if isinstance(strides, int):
       strides = [strides] * len(filter_size)
     else:
@@ -3424,8 +3388,6 @@ class ReduceLayer(_ConcatInputLayer):
     if enforce_batch_dim_axis is None and cls.need_enforce_batch_dim_axis(axes):
       enforce_batch_dim_axis = 0
     x = get_concat_sources_data_template(sources)
-    if x.undefined:
-      return Data.create_undefined(name=name)
     assert not x.sparse
     if enforce_batch_dim_axis is not None and x.batch_dim_axis != enforce_batch_dim_axis:
       x = x.copy_with_batch_dim_axis(enforce_batch_dim_axis)
@@ -3518,9 +3480,6 @@ class ReduceOutLayer(_ConcatInputLayer):
     :rtype: Data
     """
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
-    if out.undefined:
-      from returnn.tf.network import CannotHandleUndefinedSourcesException
-      raise CannotHandleUndefinedSourcesException(layer_name=name, layer_desc=dict(sources=sources, **kwargs))
     assert not out.sparse
     assert out.dim % num_pieces == 0
     out.dim //= num_pieces
@@ -3625,8 +3584,6 @@ class StackLayer(LayerBase):
     :param list[LayerBase] sources:
     :rtype: Data
     """
-    if any([not src or src.output.undefined for src in sources]):
-      return Data.create_undefined(name)
     axis, common_source = cls._get_axis_and_common(sources)
     return (
       common_source
@@ -3903,7 +3860,7 @@ class PrefixInTimeLayer(_ConcatInputLayer):
     """
     # Note: Time seq len is not correct...
     x = get_concat_sources_data_template(sources, name="%s_output" % name)
-    if size_base and not x.undefined:
+    if size_base:
       x.size_placeholder[x.time_dim_axis_excluding_batch] = size_base.output.get_sequence_lengths()
     if isinstance(repeat, LayerBase):
       x = x.copy_as_batch_spatial_major()
@@ -4192,19 +4149,6 @@ class DotLayer(LayerBase):
     # See __init__.
     a_out = sources[0].output.copy_as_batch_major()
     a_reduce_axes = a_out.get_axes_from_description(red1)
-    if not sources[1] or sources[1].output.undefined:
-      # Somewhat tricky but we can still do sth reasonable.
-      out = a_out.copy_template(name="%s_output_via_undef" % name)
-      for axis in reversed(sorted(a_reduce_axes)):
-        out = out.copy_template_excluding_axis(axis)
-      if isinstance(var2, (list, tuple)):
-        for axis in var2:
-          if isinstance(axis, str) and axis.lower() == "t?":
-            continue
-          out = out.copy_add_feature_dim()
-      elif var2 is not None:  # just assume a single axis...
-        out = out.copy_add_feature_dim()
-      return out
     b_out = sources[1].output.copy_as_batch_major()
     assert not a_out.beam or not b_out.beam or a_out.beam == b_out.beam
     b_reduce_axes = b_out.get_axes_from_description(red2)
@@ -4492,8 +4436,6 @@ class CombineDimsLayer(_ConcatInputLayer):
     :rtype: Data
     """
     out = get_concat_sources_data_template(sources)
-    if out.undefined:
-      return out
     axes = out.get_axes_from_description(axes)
     assert len(axes) >= 2
     axes = sorted(axes)
@@ -4623,14 +4565,6 @@ class CombineLayer(LayerBase):
     :rtype: Data
     """
     out_type_ = {}
-    sources_ = [s for s in sources if s and not s.output.undefined]
-    if sources and not sources_:
-      if n_out is NotSpecified and not out_type:
-        from returnn.tf.network import CannotHandleUndefinedSourcesException
-        raise CannotHandleUndefinedSourcesException(
-          layer_name=kwargs["name"], layer_desc=dict(
-            n_out=n_out, out_type=out_type, sources=sources, **kwargs))
-    sources = sources_
     if sources:
       out_type_.update(Data.get_common_data([s.output for s in sources], warnings_out=log.v4).get_kwargs())
     if n_out is not NotSpecified:
@@ -4841,14 +4775,6 @@ class CompareLayer(LayerBase):
     :rtype: Data
     """
     out_type_ = {}
-    sources_ = [s for s in sources if s and not s.output.undefined]
-    if sources and not sources_:
-      if n_out is NotSpecified and not out_type:
-        from returnn.tf.network import CannotHandleUndefinedSourcesException
-        raise CannotHandleUndefinedSourcesException(
-          layer_name=kwargs["name"], layer_desc=dict(
-            n_out=n_out, out_type=out_type, sources=sources, **kwargs))
-    sources = sources_
     if sources:
       out_type_.update(Data.get_common_data([s.output for s in sources], warnings_out=log.v4).get_kwargs())
     if n_out is not NotSpecified:
@@ -4933,23 +4859,11 @@ class SwitchLayer(LayerBase):
     :param LayerBase|None false_from:
     :rtype: Data
     """
-    from returnn.tf.network import CannotHandleUndefinedSourcesException
     if isinstance(condition, bool):
       if condition:
-        if not true_from or true_from.output.undefined:
-          raise CannotHandleUndefinedSourcesException(
-            layer_name=name, layer_desc=dict(condition=condition, true_from=true_from, false_from=false_from, **kwargs))
         return true_from.output.copy("%s_output" % name)
       else:
-        if not false_from or false_from.output.undefined:
-          raise CannotHandleUndefinedSourcesException(
-            layer_name=name, layer_desc=dict(condition=condition, true_from=true_from, false_from=false_from, **kwargs))
         return false_from.output.copy("%s_output" % name)
-    if (
-          not true_from or not false_from or not condition or
-          true_from.output.undefined or false_from.output.undefined or condition.output.undefined):
-      raise CannotHandleUndefinedSourcesException(
-        layer_name=name, layer_desc=dict(condition=condition, true_from=true_from, false_from=false_from, **kwargs))
     out = Data.get_common_data([true_from.output, false_from.output, condition.output])
     out = out.copy(name="%s_output" % name)
     out.dtype = true_from.output.dtype
@@ -5093,8 +5007,6 @@ class CondLayer(LayerBase):
     :param returnn.tf.network.TFNetwork network:
     :rtype: Data
     """
-    if layer is None:
-      return Data.create_undefined(name=name)
     if isinstance(layer, LayerBase):
       return layer.output
     assert isinstance(layer, dict)
@@ -5177,7 +5089,7 @@ class SubnetworkLayer(LayerBase):
         # In some cases (e.g. RnnCellLayer), we just want rec_vars_outputs.
         dummy_rec_previous_layer = InternalLayer(
           name=layer_name, network=net,
-          output=Data(name="dummy_rec_previous_layer(%s)" % layer_name, dim=1, undefined=True))
+          output=Data(name="dummy_rec_previous_layer(%s)" % layer_name, dim=1))
         dummy_rec_previous_layer.rec_vars_outputs.update({
           key[len(layer_name + "/"):]: value
           for (key, value) in self._rec_previous_layer.rec_vars_outputs.items()
@@ -5281,15 +5193,11 @@ class SubnetworkLayer(LayerBase):
     """
     super(SubnetworkLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     # Construct it now, just to resolve dependencies.
-    from returnn.tf.network import CannotHandleUndefinedSourcesException
-    try:
-      cls._construct_template_subnet(
-        name=d.get("name", "unknown-subnet"),
-        network=network, get_parent_layer=get_layer, parent_layer_cache=d.setdefault("_parent_layer_cache", {}),
-        subnetwork=d["subnetwork"],
-        concat_sources=d.get("concat_sources", True), sources=d["sources"])
-    except CannotHandleUndefinedSourcesException:
-      pass  # ignore that here
+    cls._construct_template_subnet(
+      name=d.get("name", "unknown-subnet"),
+      network=network, get_parent_layer=get_layer, parent_layer_cache=d.setdefault("_parent_layer_cache", {}),
+      subnetwork=d["subnetwork"],
+      concat_sources=d.get("concat_sources", True), sources=d["sources"])
 
   # noinspection PyShadowingNames
   @classmethod
@@ -5377,7 +5285,6 @@ class SubnetworkLayer(LayerBase):
       import sys
       etype, value, tb = sys.exc_info()
       from returnn.util import better_exchook
-      from returnn.tf.network import CannotHandleUndefinedSourcesException
       from returnn.util.basic import StringIO
       ss = StringIO()
       print("%s %r: Exception constructing template network (for deps and data shapes): %s %s" % (
@@ -5385,11 +5292,6 @@ class SubnetworkLayer(LayerBase):
       print("Template network so far:", file=ss)
       from pprint import pprint
       pprint(subnet.layers, stream=ss)
-      if isinstance(exc, CannotHandleUndefinedSourcesException):
-        raise CannotHandleUndefinedSourcesException(
-          layer_name=name, layer_desc=dict(
-            subnetwork=subnetwork, sources=sources, network=network, concat_sources=concat_sources),
-          extended_info_str=ss.getvalue())
       better_exchook.better_exchook(etype, value, tb, file=ss)
       raise Exception(ss.getvalue())
 

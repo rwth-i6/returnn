@@ -445,7 +445,6 @@ class Data(object):
                auto_create_placeholders=False,
                vocab=None,
                same_dim_tags_as=None,
-               undefined=False,
                beam=None):
     """
     :param str name:
@@ -467,14 +466,12 @@ class Data(object):
     :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
     :param str|dict[str]|GeneratingDataset.Vocabulary|None vocab:
     :param dict[int|str,DimensionTag]|None same_dim_tags_as: will mark our dimension tags to be the same
-    :param bool undefined:
     :param SearchBeam|None beam: the batch-dim could be extended by a beam-size,
       such that it represents the merged dims [batch, beam_size].
     """
     assert isinstance(name, str)
     assert dtype is None or isinstance(dtype, str)
     self.name = name
-    self.undefined = undefined
     if sparse is None:
       sparse = False
     self.sparse = sparse
@@ -595,15 +592,6 @@ class Data(object):
     assert x.get_shape().ndims == 0, "currently only scalars supported"
     return Data(name=str(x.op.name), shape=(), batch_dim_axis=None, dtype=x.dtype.name, placeholder=x)
 
-  @classmethod
-  def create_undefined(cls, name=None):
-    """
-    :param str name:
-    :return: Data with undefined=True. the shape/dtype does not really matter
-    :rtype: Data
-    """
-    return Data(name="%s_undefined" % (name or "unknown"), shape=(), dim=None, undefined=True)
-
   def sanity_check(self, ignore_placeholder=False):
     """
     Performs some sanity checks on self, and raises exceptions if something is not sane.
@@ -677,8 +665,6 @@ class Data(object):
       keys += ["feature_dim_axis"]
     if not self.available_for_inference:
       keys += ["available_for_inference"]
-    if self.undefined:
-      keys += ["undefined"]
     if self.beam is not None:
       keys += ["beam"]
     if self.vocab:
@@ -718,8 +704,6 @@ class Data(object):
       keys.append("placeholder")
     if not self.available_for_inference:
       keys.append("available_for_inference")
-    if self.undefined:
-      keys.append("undefined")
     if self.beam is not None:
       keys.append("beam")
     args = ["%s=%r" % (key, getattr(self, key)) for key in keys]

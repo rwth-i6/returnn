@@ -307,6 +307,10 @@ class RecLayer(_ConcatInputLayer):
         # Only used to resolve deps to base network.
         if name.startswith("base:"):
           return get_layer(name[len("base:"):])  # calls get_layer of parent network
+        from returnn.tf.layers.basic import InternalLayer
+        return InternalLayer(
+          name=name, network=subnet,
+          output=Data(name="dummy:RecLayer.transform_config_dict(%s)" % name, dim=1))
       from returnn.tf.network import TFNetwork, ExternData
       subnet = TFNetwork(parent_net=network, extern_data=network.extern_data)  # dummy subnet
       for sub in d["unit"].values():  # iterate over the layers of the subnet
@@ -358,10 +362,7 @@ class RecLayer(_ConcatInputLayer):
     """
     from tensorflow.python.util import nest
     source_data = get_concat_sources_data_template(sources) if sources else None
-    if (
-          not source_data.have_time_axis()
-          if (source_data and not source_data.undefined)
-          else network.is_inside_rec_layer()):
+    if source_data and not source_data.have_time_axis():
       # We expect to be inside another RecLayer, and should do a single step (like RnnCellLayer).
       out_time_dim_axis = None
       out_batch_dim_axis = 0
@@ -1015,11 +1016,10 @@ class _SubnetworkRecCell(object):
     from pprint import pformat
     from collections import OrderedDict
     from returnn.util.basic import StringIO
-    from returnn.tf.network import CannotHandleUndefinedSourcesException, NetworkConstructionDependencyLoopException
+    from returnn.tf.network import NetworkConstructionDependencyLoopException
     # The stack trace is not so interesting for these exceptions.
     skip_stack_trace_exception_types = (
-      CannotHandleUndefinedSourcesException,
-      NetworkConstructionDependencyLoopException)
+      NetworkConstructionDependencyLoopException,)
 
     class ConstructCtx:
       """
@@ -1113,8 +1113,6 @@ class _SubnetworkRecCell(object):
         layer_desc["network"] = self.net
         layer_.kwargs = layer_desc  # set it now already for better debugging
         output = layer_class.get_out_data_from_opts(**layer_desc)
-        if output.undefined:
-          raise CannotHandleUndefinedSourcesException(layer_name=name, layer_desc=layer_desc)
         layer_.init(layer_class=layer_class, output=output, **layer_desc)
         if layer_ in ConstructCtx.partially_finished:
           if lself.got_uninitialized_deps_count == 0:  # in this case, we safely know that it is finished
@@ -3665,7 +3663,6 @@ class RnnCellLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :rtype: Data
     """
-    # In case some input is undefined, just assume we are inside the loop.
     beam = None
     for dep in sources:
       if dep:
@@ -3673,8 +3670,7 @@ class RnnCellLayer(_ConcatInputLayer):
     shape = (n_out,)  # type: typing.Tuple[typing.Union[int,None],...]
     batch_dim_axis = 0
     time_dim_axis = None
-    sources_ = [s for s in sources if s and not s.output.undefined]
-    if sources_ and sources_[0].output.time_dim_axis is not None:
+    if sources and sources[0].output.time_dim_axis is not None:
       shape = (None,) + shape
       batch_dim_axis = 1
       time_dim_axis = 0
@@ -3683,7 +3679,7 @@ class RnnCellLayer(_ConcatInputLayer):
       shape=shape, dim=n_out,
       batch_dim_axis=batch_dim_axis,
       time_dim_axis=time_dim_axis,
-      size_placeholder={} if not sources_ else sources_[0].output.size_placeholder.copy(),
+      size_placeholder={} if not sources else sources[0].output.size_placeholder.copy(),
       beam=beam)
 
   def get_absolute_name_scope_prefix(self):
@@ -4140,10 +4136,6 @@ class BaseChoiceLayer(LayerBase):
       # Note: _src_common_search_choices might not be set during template construction,
       # but this fallback would still work then (at least for ChoiceLayer).
       if sources:
-        if not sources[0] or sources[0].output.undefined:
-          from returnn.tf.network import CannotHandleUndefinedSourcesException
-          raise CannotHandleUndefinedSourcesException(
-            layer_name=kwargs["name"], layer_desc=dict(sources=sources, beam_size=beam_size, network=network, **kwargs))
         return sources[0].output.beam.beam_size if sources[0].output.beam else None
       return None
     return beam_size
@@ -4774,9 +4766,7 @@ class ChoiceLayer(BaseChoiceLayer):
     :rtype: returnn.tf.util.data.SearchBeam
     """
     from returnn.tf.util.basic import SearchBeam
-    search_dep = NotSpecified
-    if sources and sources[0] and not sources[0].output.undefined:
-      search_dep = sources[0].output.beam
+    search_dep = sources[0].output.beam
     return SearchBeam(
       beam_size=beam_size, dependency=search_dep,
       name="%s%s" % (network.get_absolute_name_prefix(), name))
@@ -4804,8 +4794,6 @@ class ChoiceLayer(BaseChoiceLayer):
     else:  # no target. i.e. we must do search
       assert search, "%s %r: no target given, must do search" % (cls.__name__, name)
       # Output will be the sparse version of the input.
-      if not sources[0] or sources[0].output.undefined:
-        return Data.create_undefined(name="%s_output" % name)
       out_data = sources[0].output.copy_template().copy_as_batch_major()
       shape = list(out_data.batch_shape)
       del shape[out_data.feature_dim_axis]
@@ -5887,13 +5875,8 @@ class SelfAttentionLayer(_ConcatInputLayer):
     :rtype: Data
     """
     assert sources
-    defined_sources = [src for src in sources if src and not src.output.undefined]
-    if not defined_sources:
-      from returnn.tf.network import CannotHandleUndefinedSourcesException
-      raise CannotHandleUndefinedSourcesException(
-        layer_name=name, layer_desc=dict(n_out=n_out, sources=sources, **kwargs))
     import numpy
-    out = defined_sources[0].output.copy_as_batch_major().copy(name="%s_output" % name)
+    out = sources[0].output.copy_as_batch_major().copy(name="%s_output" % name)
     if out.sparse:
       out.dtype = "float32"
       out.sparse = False
@@ -6355,10 +6338,6 @@ class EditDistanceTableLayer(LayerBase):
     :rtype: Data
     """
     assert len(sources) == 1, "%s %r: expects exactly a single source" % (cls.__name__, name)
-    if not sources[0] or sources[0].output.undefined:
-      from returnn.tf.network import CannotHandleUndefinedSourcesException
-      raise CannotHandleUndefinedSourcesException(
-        layer_name=name, layer_desc=dict(sources=sources, target=target, network=network, **kwargs))
     source_data = sources[0].output
     assert source_data.dtype == "int32" and source_data.batch_ndim <= 2 and source_data.sparse
     assert target, "%s %r: 'target' must be set" % (cls.__name__, name)
@@ -6468,10 +6447,6 @@ class OptimalCompletionsLayer(LayerBase):
     :rtype: Data
     """
     assert len(sources) == 1, "%s %r: expects exactly a single source" % (cls.__name__, name)
-    if not sources[0] or sources[0].output.undefined:
-      from returnn.tf.network import CannotHandleUndefinedSourcesException
-      raise CannotHandleUndefinedSourcesException(
-        layer_name=name, layer_desc=dict(sources=sources, target=target, network=network, **kwargs))
     source_data = sources[0].output
     assert source_data.dtype == "int32" and source_data.batch_ndim == 2
     assert target, "%s %r: 'target' must be set" % (cls.__name__, name)
@@ -6721,6 +6696,8 @@ class MaskedComputationLayer(LayerBase):
       if not network.is_inside_rec_layer() and source:
         source_data = source.output.copy_template().copy_as_time_major()
         # Create own dummy time, to make sure we have some own custom.
+        if source_data.size_placeholder is None:
+          source_data.size_placeholder = {}
         source_data.size_placeholder[0] = tf_compat.v1.placeholder(tf.int32, shape=[None], name="dummy_time")
         source = WrappedInternalLayer(
           base_layer=source, network=source.network, name=source.name,
@@ -6744,6 +6721,8 @@ class MaskedComputationLayer(LayerBase):
       if not network.is_inside_rec_layer():
         # noinspection PyShadowingNames
         source_data = layer.output.copy_template().copy_as_time_major()
+        if source_data.size_placeholder is None:
+          source_data.size_placeholder = {}
         source_data.size_placeholder[0] = source.output.get_sequence_lengths()
         layer = WrappedInternalLayer(
           base_layer=layer, network=layer.network, name=layer.name,
@@ -6954,13 +6933,10 @@ class UnmaskLayer(LayerBase):
     """
     assert len(sources) == 1
     source, = sources
-    assert isinstance(source, LayerBase) or source is None
-    if not source or source.output.undefined:
-      return Data.create_undefined(name="%s_output" % name)
+    assert isinstance(source, LayerBase)
     out = source.output.copy(name="%s_output" % name)
     assert isinstance(out, Data)
-    if mask and not mask.output.undefined:
-      out.beam = SearchBeam.get_combined_beam(out.beam, mask.output.beam)
+    out.beam = SearchBeam.get_combined_beam(out.beam, mask.output.beam)
     if network.is_inside_rec_layer():
       if out.have_time_axis():
         # The masked-computation layer could have been moved out. In that case, it will return some output

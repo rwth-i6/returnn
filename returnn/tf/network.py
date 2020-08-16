@@ -721,12 +721,10 @@ class TFNetwork(object):
         assert isinstance(output_template, Data), "%s %r layer_desc %r ['output'] is not a Data instance" % (
           layer_class.__name__, name, layer_desc)
         output_template.sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
-        assert not output_template.undefined
         output_template_special_axes = output_template.get_special_axes_dict()
         layer = layer_class(**layer_desc)
         layer.post_init(layer_desc)
         layer.output.sanity_check()
-        assert not layer.output.undefined
         # The axes should not have moved now.
         output_special_axes = layer.output.get_special_axes_dict()
         assert output_template_special_axes == output_special_axes, "%s %r: not equal: %r == %r, from data %r -> %r" % (
@@ -2394,28 +2392,6 @@ class NetworkConstructionDependencyLoopException(Exception):
     self.network = network
     self.layer_name = layer_name
     self.net_dict = net_dict
-
-
-class CannotHandleUndefinedSourcesException(Exception):
-  """
-  Raised when some layer gets None (undefined) source(s) (because e.g. in RecLayer template construction),
-  and cannot handle it (e.g. cannot infer the out_type in that case).
-  """
-  def __init__(self, layer_name, layer_desc, extended_info_str=None):
-    """
-    :param str layer_name:
-    :param dict[str] layer_desc:
-    :param str|None extended_info_str:
-    """
-    from pprint import pformat
-    info_strs = [
-      "%r: cannot handle undefined sources without defined out_type." % layer_name,
-      pformat(layer_desc)]
-    if extended_info_str:
-      info_strs.append(extended_info_str)
-    super(CannotHandleUndefinedSourcesException, self).__init__("\n".join(info_strs))
-    self.layer_name = layer_name
-    self.layer_desc = layer_desc
 
 
 class _DelayedConstructionException(Exception):

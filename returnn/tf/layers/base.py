@@ -252,9 +252,7 @@ class LayerBase(object):
       return out_type(
         network=network, name=name, n_out=n_out, target=target, size_target=size_target, sources=sources, loss=loss,
         **kwargs)
-    # Filter out undefined. Still try our best to come up with some reasonable default.
     # Any template construction should be aware of that, and eventually resolve it.
-    sources = [src for src in sources if src and not src.output.undefined]
     if out_type is None:
       out_type = {}  # type: typing.Dict[str]
     else:
@@ -1487,12 +1485,16 @@ class ReuseParams:
       def opt_get_layer(layer_name):
         """
         :param str layer_name:
-        :rtype: LayerBase|None
+        :rtype: LayerBase
         """
         if layer_name in self.network.layers:
           return self.network.layers[layer_name]
         print("ReuseParams: non-existing layer %r, ignoring..." % layer_name, file=log.v4)
-        return None
+        return InternalLayer(
+          name=layer_name, network=self.network,
+          output=Data(
+            name="LazyLayerResolver_dummy_output_%s" % layer_name,
+            shape=()))
 
       def get_dummy_input_layer(layer_name):
         """
