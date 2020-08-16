@@ -290,13 +290,22 @@ class CopyLayer(_ConcatInputLayer):
     """
     # If all sources are defined, use them to get the exact out_type.
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
-    if out.undefined:
+    # Instead of checking or raising an exception, just overwrite, as this could be the template construction.
+    if out.undefined or out_type or n_out is not NotSpecified:
       # Otherwise use given out_type information and resort to generic base method.
       if out_type or n_out is not NotSpecified:
+        if not out_type:
+          out_type = {}
+        else:
+          out_type = out_type.copy()
+        if out.sparse:
+          out_type["sparse"] = True  # otherwise the default get_out_data_from_opts would assume dense
+        if n_out is not NotSpecified:
+          out_type["dim"] = n_out
+        elif out.dim is not None:
+          out_type.setdefault("dim", out.dim)
         out = super(CopyLayer, cls).get_out_data_from_opts(
           name=name, out_type=out_type, n_out=n_out, sources=sources, **kwargs)
-    elif n_out is not NotSpecified:
-      assert out.dim == n_out, "Given n_out conflicts with source dimensions."
     out.beam = SearchBeam.get_combined_beam(out.beam, *[dep.output.beam for dep in extra_deps if dep])
     return out
 
