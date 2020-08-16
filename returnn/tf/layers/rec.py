@@ -1129,23 +1129,23 @@ class _SubnetworkRecCell(object):
         :param str name: layer name
         :param bool is_prev_time_frame: layer of prev frame ("prev:...")
         :return: layer, or None
-        :rtype: LayerBase|None
+        :rtype: LayerBase
         """
         _name = name
         if name.startswith("prev:"):
           name = name[len("prev:"):]
           self.prev_layers_needed.add(name)
           layer_ = lself.__call__(name, is_prev_time_frame=True)
-          if layer_ and name in self.layer_data_templates:
+          if name in self.layer_data_templates:
             assert isinstance(layer_, _TemplateLayer)
-            if layer_ not in ConstructCtx.partially_finished:  # it might not be final
-              layer_ = self.get_prev_template_layer(name)
-            elif layer_.is_initialized:
-              lself._add_uninitialized_count()
-              layer_ = layer_.copy_as_prev_time_frame()
+            if layer_.is_initialized:
+              if layer_ not in ConstructCtx.partially_finished:  # it might not be final
+                layer_ = self.get_prev_template_layer(name)
+              else:
+                lself._add_uninitialized_count()
+                layer_ = layer_.copy_as_prev_time_frame()
             else:
               lself._add_uninitialized_count()
-              return None
           return layer_
         if name in self.layer_data_templates:
           layer_ = self.layer_data_templates[name]
@@ -1253,6 +1253,7 @@ class _SubnetworkRecCell(object):
             except NetworkConstructionDependencyLoopException:
               if layer_.is_initialized and lself.iterative_testing and not lself.reconstruct:
                 # Return anyway. This will be resolved later.
+                lself._add_uninitialized_count()
                 return layer_
               raise
             except Exception:
