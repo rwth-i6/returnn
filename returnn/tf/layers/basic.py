@@ -2971,13 +2971,15 @@ class ConvLayer(_ConcatInputLayer):
     assert len(dilation_rate) == len(filter_size)
     padding = padding.upper()
     if input_expand_dims == 0 and not input_add_feature_dim and not input_split_feature_dim:
-      # Maybe we have a chance to correctly define the output shapes.
-      index_shift = data.get_spatial_axes()[0]
-      for i in range(len(filter_size)):
-        if data.shape[i + index_shift] is not None:
-          shape[i] = cls.calc_out_dim(
-            in_dim=data.shape[i + index_shift],
-            filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
+      # Be relaxed about incorrect input data. Throw errors later. This can also work during template construction.
+      if len(data.get_spatial_axes()) >= len(filter_size):
+        # Maybe we have a chance to correctly define the output shapes.
+        index_shift = data.get_spatial_axes()[0]
+        for i in range(len(filter_size)):
+          if data.shape[i + index_shift] is not None:
+            shape[i] = cls.calc_out_dim(
+              in_dim=data.shape[i + index_shift],
+              filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
     feature_dim_axis = NotSpecified
     # Swap the dims if the input dim order doesn't fit the flag auto_use_channel_first.
     if tf_util.is_gpu_available() and (auto_use_channel_first or data.is_batch_feature_major):
