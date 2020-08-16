@@ -1211,6 +1211,7 @@ class _SubnetworkRecCell(object):
         ConstructCtx.layers.append(layer_)
         try:
           default_get_layer = GetLayer(parent=lself, parent_name=_name)
+          default_success = False
           # See how far we can get without recursive layer construction.
           # We only want to get the data template for now.
           # If that fails in some way,
@@ -1234,6 +1235,8 @@ class _SubnetworkRecCell(object):
               self.net.construct_layer(
                 net_dict=self.net_dict, name=name,
                 get_layer=get_layer, add_layer=get_layer.add_templated_layer)
+              if get_layer is default_get_layer:
+                default_success = True
               break  # we did it, so get out of the loop
             except Exception:
               # Pretty generic exception handling but anything could happen.
@@ -1254,20 +1257,21 @@ class _SubnetworkRecCell(object):
                   out = StringIO()
                   better_exchook.better_exchook(etype, value, tb, file=out)
                   ConstructCtx.collected_exceptions[exc_key] = out.getvalue()
-          # Now, do again, but with full recursive layer construction, to determine the dependencies.
-          ConstructCtx.most_recent = list(ConstructCtx.layers)
-          try:
-            default_get_layer.reset()
-            self.net.construct_layer(
-              net_dict=self.net_dict, name=name,
-              get_layer=default_get_layer, add_layer=default_get_layer.add_templated_layer)
-          except NetworkConstructionDependencyLoopException:
-            if layer_.is_initialized and lself.iterative_testing and not lself.reconstruct:
-              # Return anyway. This will be resolved later.
-              return layer_
-            raise
-          except Exception:
-            raise
+          if not default_success:
+            # Now, do again, but with full recursive layer construction, to determine the dependencies.
+            ConstructCtx.most_recent = list(ConstructCtx.layers)
+            try:
+              default_get_layer.reset()
+              self.net.construct_layer(
+                net_dict=self.net_dict, name=name,
+                get_layer=default_get_layer, add_layer=default_get_layer.add_templated_layer)
+            except NetworkConstructionDependencyLoopException:
+              if layer_.is_initialized and lself.iterative_testing and not lself.reconstruct:
+                # Return anyway. This will be resolved later.
+                return layer_
+              raise
+            except Exception:
+              raise
         finally:
           assert ConstructCtx.layers[-1] is layer_, "invalid stack %r, expected top layer %r" % (
             ConstructCtx.layers, layer_)
