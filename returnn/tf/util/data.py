@@ -2419,7 +2419,7 @@ class Data(object):
   def get_common_data(cls, sources, warnings_out=None, out_shape=None):
     """
     :param list[Data] sources:
-    :param io.TextIOBase|io.StringIO|None warnings_out:
+    :param io.TextIOBase|io.StringIO|typing.TextIO|None warnings_out:
     :param list[int|tf.Tensor]|None out_shape: will insert the shape dynamically
     :return: some generic data where the sources should be compatible to (with copy_compatible_to),
       i.e. it contains the union of all axes from all sources (least common multiple).
