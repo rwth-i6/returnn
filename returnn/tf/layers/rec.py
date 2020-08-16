@@ -3143,9 +3143,9 @@ class _TemplateLayer(LayerBase):
     """
     # Init with some dummy.
     super(_TemplateLayer, self).__init__(
-      out_type={"name": "dummy_initial_template_data", "undefined": True,
+      out_type={"name": "dummy_initial_template_data",
                 "batch_dim_axis": 0, "time_dim_axis": None,
-                "shape": (None,), "dim": None},  # (B,D) but D is unknown. no time-dim
+                "shape": ()},  # (B,). no time-dim
       name=name, network=network)
     self.output.size_placeholder = {}  # must be initialized
     self.layer_class = ":uninitialized-template"
