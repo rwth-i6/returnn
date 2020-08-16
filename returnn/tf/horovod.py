@@ -162,7 +162,9 @@ def get_ctx(config=None):
     return _ctx
   if not config:
     from returnn.config import get_global_config
-    config = get_global_config()
+    config = get_global_config(raise_exception=False)
+    if not config:
+      return None
   _is_set_up = True
   if not config.is_true("use_horovod"):
     return None
