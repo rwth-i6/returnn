@@ -1222,18 +1222,12 @@ class _SubnetworkRecCell(object):
           get_layer_candidates = []  # type: typing.List[GetLayer]
           # noinspection PyProtectedMember
           if lself.iterative_testing and name not in self.net._construction_stack.layers:
+            # We can get away with only two variants, because the reconstruction code below
+            # for partially finished layers will make sure that everything is correct.
             get_layer_candidates = [
               default_get_layer,
-              GetLayer(
-                allow_construct_in_call_nrs={0}, allow_uninitialized_template=False, parent=lself, parent_name=_name),
-              GetLayer(
-                allow_construct_in_call_nrs={1}, allow_uninitialized_template=False, parent=lself, parent_name=_name),
-              GetLayer(
-                safe=True, allow_uninitialized_template=False, parent=lself, parent_name=_name),
-              GetLayer(
-                allow_construct_in_call_nrs={0}, allow_uninitialized_template=True, parent=lself, parent_name=_name),
-              GetLayer(
-                safe=True, allow_uninitialized_template=True, parent=lself, parent_name=_name)]
+              GetLayer(allow_uninitialized_template=True, parent=lself, parent_name=_name),
+            ]
           for get_layer in get_layer_candidates:
             # noinspection PyBroadException
             try:
