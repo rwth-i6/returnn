@@ -539,7 +539,6 @@ class ActivationLayer(CopyLayer):
     else:
       self.output_before_activation = OutputWithActivation(x)
     self.output.placeholder = self.output_before_activation.y
-    self.output.dtype = self.get_out_data_from_opts(activation=activation, **kwargs).dtype
 
   @classmethod
   def get_out_data_from_opts(cls, activation, **kwargs):
