@@ -9,7 +9,10 @@ on:
 
 jobs:
   publish:
-    if: github.event.workflow_run.conclusion == 'success'
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'master' &&
+      github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
 
     steps:
