@@ -1,0 +1,29 @@
+name: Publish
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [master]
+    types:
+      - completed
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions/setup-python@v2
+      with:
+        python-version: 3.7
+
+    - run: python3 setup.py sdist
+
+    # - run: pip3 install twine
+
+    # https://github.com/marketplace/actions/pypi-publish
+    # - name: Publish a Python distribution to PyPI
+    #  uses: pypa/gh-action-pypi-publish@master
+    #  with:
+    #    user: __token__
+    #    password: ${{ secrets.pypi_password }}
