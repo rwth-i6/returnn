@@ -17,13 +17,18 @@ jobs:
       with:
         python-version: 3.7
 
+    - name: Install Python deps
+      run: |
+        echo "::add-path::~/.local/bin"
+        pip3 install --user --upgrade pip setuptools wheel
+        pip3 install --user typing  # needed for Python 2 in some cases
+        pip3 install --user -r requirements.txt
+
     - run: python3 setup.py sdist
 
-    # - run: pip3 install twine
-
     # https://github.com/marketplace/actions/pypi-publish
-    # - name: Publish a Python distribution to PyPI
-    #  uses: pypa/gh-action-pypi-publish@master
-    #  with:
-    #    user: __token__
-    #    password: ${{ secrets.pypi_password }}
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@master
+      with:
+        user: __token__
+        password: ${{ secrets.pypi_password }}
