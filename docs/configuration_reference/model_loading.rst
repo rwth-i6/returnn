@@ -7,7 +7,8 @@ Model Loading
 .. note::
 
     This documentation does not cover all possible combinations of parameters for loading models.
-    For more details refer to `EngineBase.py <https://github.com/rwth-i6/returnn/blob/master/EngineBase.py>`_.
+    For more details, please refer to
+    `EngineBase <https://github.com/rwth-i6/returnn/blob/master/returnn/engine/base.py>`_.
 
 import_model_train_epoch1
     If a path to a valid model is provided
