@@ -1125,10 +1125,7 @@ def test_attention_no_encoder_dependency():
           "att_energy_tanh": {'class': 'activation', 'from': ['att_energy_in'], 'activation': 'tanh'},
           "att_energy": {'class': 'linear', 'from': ['att_energy_tanh'], 'n_out': 1, 'activation': None,
                          'out_type': {
-                                      'shape': (None, 1),
-                                      'time_dim_axis': 1,
-                                      'feature_dim_axis': 2,
-                                      'same_dim_tags_as': {'T': enc_time}},
+                           'same_dim_tags_as': {'T': enc_time}},
                          },
           "att_weights": {'class': 'softmax_over_spatial', 'from': ['att_energy']},
           # feedback
