@@ -171,15 +171,21 @@ def main():
     # https://pypi.python.org/pypi?%3Aaction=list_classifiers
     classifiers=[
       'Development Status :: 5 - Production/Stable',
+      'Environment :: Console',
+      'Environment :: GPU',
+      'Environment :: GPU :: NVIDIA CUDA',
       'Intended Audience :: Developers',
       'Intended Audience :: Education',
       'Intended Audience :: Science/Research',
-      'License :: OSI Approved :: BSD License',
+      'License :: Other/Proprietary License',
       'Operating System :: MacOS :: MacOS X',
       'Operating System :: Microsoft :: Windows',
       'Operating System :: POSIX',
       'Operating System :: Unix',
       'Programming Language :: Python',
+      'Programming Language :: Python :: 3',
+      'Topic :: Scientific/Engineering',
+      'Topic :: Scientific/Engineering :: Artificial Intelligence',
       'Topic :: Software Development :: Libraries :: Python Modules',
     ]
   )
