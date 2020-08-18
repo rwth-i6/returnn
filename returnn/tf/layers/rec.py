@@ -1030,6 +1030,30 @@ class _SubnetworkRecCell(object):
       partially_finished = []  # type: typing.List[_TemplateLayer]
       collected_exceptions = OrderedDict()  # type: OrderedDict[object,str]  # exc_key -> formatted exception/stack str
 
+      @classmethod
+      def collect_exception(cls):
+        """
+        Collect most recent exception.
+        Pretty generic exception handling but anything could happen.
+        We don't do any output by default, as this could be very spammy,
+        but we collect the traceback, in case we get some other error later.
+        Then go on with the next get_layer.
+        """
+        exc_type, value, tb = sys.exc_info()
+        exc_last_frame = list(better_exchook.iter_traceback(tb))[-1]
+        exc_key = (exc_last_frame.f_code.co_filename, exc_last_frame.f_lineno, exc_last_frame.f_code.co_name)
+        if exc_key not in cls.collected_exceptions:
+          if isinstance(value, skip_stack_trace_exception_types):
+            color = better_exchook.Color()
+            cls.collected_exceptions[exc_key] = "%s\n%s: %s\n" % (
+              color("EXCEPTION", color.fg_colors[1], bold=True),
+              color(exc_type.__name__, color.fg_colors[1]),
+              str(value))
+          else:
+            out = StringIO()
+            better_exchook.better_exchook(exc_type, value, tb, file=out)
+            cls.collected_exceptions[exc_key] = out.getvalue()
+
     class GetLayer:
       """
       Helper class to provide the ``get_layer`` function with specific properties.
@@ -1087,12 +1111,19 @@ class _SubnetworkRecCell(object):
       def construct(self, layer_name_):
         """
         Note: Different from just __call__: We reset first.
+        Also, we catch exceptions.
+        The layer should be in partially_finished in any case afterwards,
+        and we make sure later that we finally manage to construct them all.
 
         :param str layer_name_:
         """
         assert not self.parent
         self.reset()
-        self.__call__(layer_name_)
+        # noinspection PyBroadException
+        try:
+          self.__call__(layer_name_)
+        except Exception:
+          ConstructCtx.collect_exception()
 
       # noinspection PyMethodParameters
       def add_templated_layer(lself, name, layer_class, **layer_desc):
@@ -1225,24 +1256,7 @@ class _SubnetworkRecCell(object):
                 default_success = True
               break  # we did it, so get out of the loop
             except Exception:
-              # Pretty generic exception handling but anything could happen.
-              # We don't do any output by default, as this could be very spammy,
-              # but we collect the traceback, in case we get some other error later.
-              # Then go on with the next get_layer.
-              etype, value, tb = sys.exc_info()
-              exc_last_frame = list(better_exchook.iter_traceback(tb))[-1]
-              exc_key = (exc_last_frame.f_code.co_filename, exc_last_frame.f_lineno, exc_last_frame.f_code.co_name)
-              if exc_key not in ConstructCtx.collected_exceptions:
-                if isinstance(value, skip_stack_trace_exception_types):
-                  color = better_exchook.Color()
-                  ConstructCtx.collected_exceptions[exc_key] = "%s\n%s: %s\n" % (
-                    color("EXCEPTION", color.fg_colors[1], bold=True),
-                    color(etype.__name__, color.fg_colors[1]),
-                    str(value))
-                else:
-                  out = StringIO()
-                  better_exchook.better_exchook(etype, value, tb, file=out)
-                  ConstructCtx.collected_exceptions[exc_key] = out.getvalue()
+              ConstructCtx.collect_exception()
           if not default_success:
             # Now, do again, but with full recursive layer construction, to determine the dependencies.
             ConstructCtx.most_recent = list(ConstructCtx.layers)
@@ -1319,6 +1333,7 @@ class _SubnetworkRecCell(object):
           continue
         if len(ConstructCtx.partially_finished) >= old_len and not recent_changes:
           # No changes anymore. There is no real point in continuing. Just break.
+          assert all([layer.is_initialized for layer in ConstructCtx.partially_finished])
           break
         loop_limit -= 1
         assert loop_limit >= 0, (
