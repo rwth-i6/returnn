@@ -1145,6 +1145,7 @@ class _SubnetworkRecCell(object):
             else:
               lself._add_uninitialized_count()
           return layer_
+        earlier_layer_output = None  # type: typing.Optional[Data]
         if name in self.layer_data_templates:
           layer_ = self.layer_data_templates[name]
           if ConstructCtx.layers:
@@ -1157,6 +1158,8 @@ class _SubnetworkRecCell(object):
             if layer_ in ConstructCtx.partially_finished:
               lself._add_uninitialized_count()
             return layer_
+          if layer_.is_initialized:
+            earlier_layer_output = layer_.output
         if name.startswith("base:"):
           assert not is_prev_time_frame
           layer_ = self._get_parent_layer(name[len("base:"):])
@@ -1191,10 +1194,10 @@ class _SubnetworkRecCell(object):
           # * layer_class.transform_config_dict (via construct_layer)
           # * layer_class.get_out_data_from_opts (via add_templated_layer)
           ConstructCtx.partially_finished.append(layer_)
+        default_get_layer = GetLayer(parent=lself, parent_name=_name)
+        default_success = False  # whether construction was successful with default_get_layer
         ConstructCtx.layers.append(layer_)
         try:
-          default_get_layer = GetLayer(parent=lself, parent_name=_name)
-          default_success = False
           # See how far we can get without recursive layer construction.
           # We only want to get the data template for now.
           # If that fails in some way,
@@ -1248,19 +1251,33 @@ class _SubnetworkRecCell(object):
               self.net.construct_layer(
                 net_dict=self.net_dict, name=name,
                 get_layer=default_get_layer, add_layer=default_get_layer.add_templated_layer)
+              default_success = True
             except NetworkConstructionDependencyLoopException:
               if layer_.is_initialized and lself.iterative_testing and not lself.reconstruct:
-                # Return anyway. This will be resolved later.
-                lself._add_uninitialized_count()
-                return layer_
-              raise
+                pass  # Return anyway. This will be resolved later.
+              else:
+                raise
             except Exception:
               raise
+
         finally:
           assert ConstructCtx.layers[-1] is layer_, "invalid stack %r, expected top layer %r" % (
             ConstructCtx.layers, layer_)
           ConstructCtx.layers.pop(-1)
+
+          if layer_.is_initialized:
+            if not layer_.output.size_placeholder and earlier_layer_output and earlier_layer_output.size_placeholder:
+              # E.g. during reconstruct, but based on other partially finished / incomplete sources.
+              # However, maybe we got useful dim tags / size placeholders from a previous (partial) construction.
+              # Copy if it matches.
+              # Do this even if there was an exception, but with new partial construction.
+              if earlier_layer_output.matches_var_dim_pattern(layer_.output):
+                layer_.output.size_placeholder = earlier_layer_output.size_placeholder.copy()
+
+        # It was constructed now.
         assert layer_.is_initialized
+        if not default_success:
+          lself._add_uninitialized_count()
         return layer_
 
     get_templated_layer = GetLayer()
