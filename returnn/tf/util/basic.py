@@ -1430,6 +1430,8 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None, cond_on_train=
   """
   Computes dropout.
   Like :func:`tf.nn.dropout` but avoid :func:`tf.div` if possible.
+  If `noise_shape` is statically known, and `x` is inside a recurrent loop,
+  we will reuse the same mask for all frames.
 
   :param tf.Tensor x:
   :param float|tf.Tensor keep_prob:
@@ -1454,16 +1456,27 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None, cond_on_train=
       return x
     inv_keep_prob = 1.0 / keep_prob
 
-    noise_shape = noise_shape if noise_shape is not None else tf.shape(x)
     if isinstance(noise_shape, (list, tuple)):
-      noise_shape = [d if isinstance(d, int) else tf.shape(x)[i] for (i, d) in enumerate(noise_shape)]
-    # uniform [keep_prob, 1.0 + keep_prob)
-    random_tensor = keep_prob
-    random_tensor += tf_compat.v1.random_uniform(noise_shape, seed=seed, dtype=x.dtype)
-    # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
-    binary_tensor = tf.floor(random_tensor)
-    if apply_correction_factor:
-      binary_tensor *= inv_keep_prob
+      assert len(noise_shape) == x.shape.ndims
+      noise_shape = [d if isinstance(d, int) else get_shape_dim(x, i) for (i, d) in enumerate(noise_shape)]
+    elif noise_shape is None:
+      noise_shape = get_shape(x)
+    else:
+      assert isinstance(noise_shape, tf.Tensor) and noise_shape.shape.as_list() == [x.shape.ndims]
+      from tensorflow.python.framework import tensor_util
+      noise_shape_v = tensor_util.constant_value(noise_shape)
+      if noise_shape_v is not None:
+        noise_shape = [int(noise_shape_v[i]) for i in range(x.shape.ndims)]
+    # If noise_shape is fully static, calculate it outside of any ctx (e.g. recurrent loop).
+    # This effectively means that the mask would get reused for multiple frames, if `x` is inside a recurrent loop.
+    with same_control_flow_ctx(noise_shape):
+      # uniform [keep_prob, 1.0 + keep_prob)
+      random_tensor = keep_prob
+      random_tensor += tf_compat.v1.random_uniform(noise_shape, seed=seed, dtype=x.dtype)
+      # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
+      binary_tensor = tf.floor(random_tensor)
+      if apply_correction_factor:
+        binary_tensor *= inv_keep_prob
     ret = x * binary_tensor
     assert isinstance(ret, tf.Tensor)
     ret.set_shape(x.get_shape())
@@ -4860,7 +4873,6 @@ def _get_control_flows(v, yield_none):
   """
   :param tf.Tensor|tf.Operation|int|float|None|list[tf.Tensor|tf.Operation|int|float] v:
   :param bool yield_none: the default context is None. specifies whether we should return that
-    (currently still skips non-tensors (int or so)).
   :return: yields control flow contexts
   :rtype: typing.Iterator[tensorflow.python.ops.control_flow_ops.ControlFlowContext|None]
   """
@@ -4872,6 +4884,7 @@ def _get_control_flows(v, yield_none):
         yield t
     return
   if isinstance(v, (int, float, numpy.integer, type(None))):
+    yield None
     return
   if isinstance(v, tf.Tensor):
     v = v.op
@@ -4918,6 +4931,8 @@ def same_control_flow_ctx(x):
     # Just stay in the current context.
     yield None
     return
+  if len(ctxs) > 1 and None in ctxs:
+    ctxs.remove(None)
   assert len(ctxs) == 1, "found multiple context: %r" % ctxs
   graph = tf_compat.v1.get_default_graph()
   ctx = list(ctxs)[0]
