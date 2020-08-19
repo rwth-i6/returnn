@@ -1025,12 +1025,18 @@ class Engine(EngineBase):
     self.seq_drop = config.float('seq_drop', 0.0)
     self.seq_drop_freq = config.float('seq_drop_freq', 10)
     self.max_seq_length = config.typed_value('max_seq_length', None) or config.float('max_seq_length', 0)
+    self.min_seq_length = config.typed_value('min_seq_length', None) or config.float('min_seq_length', 0)
     self.inc_seq_length = config.float('inc_seq_length', 0)
     if not self.max_seq_length:
       self.max_seq_length = sys.maxsize  # type: typing.Union[int,float,typing.Dict[str,int]|NumbersDict]
     if isinstance(self.max_seq_length, dict):
       self.max_seq_length = NumbersDict(self.max_seq_length)
     assert isinstance(self.max_seq_length, (int, float, NumbersDict))
+    if not self.min_seq_length:
+      self.min_seq_length = 0
+    if isinstance(self.min_seq_length, dict):
+      self.min_seq_length = NumbersDict(self.min_seq_length)
+    assert isinstance(self.min_seq_length, (int, float, NumbersDict))
     self.max_pad_size = config.typed_value("max_pad_size", None)
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
@@ -1520,6 +1526,7 @@ class Engine(EngineBase):
         batch_size=self.batch_size,
         max_seqs=self.max_seqs,
         max_seq_length=self.max_seq_length,
+        min_seq_length=self.min_seq_length,
         max_pad_size=self.max_pad_size,
         seq_drop=self.seq_drop,
         shuffle_batches=self.shuffle_batches,
