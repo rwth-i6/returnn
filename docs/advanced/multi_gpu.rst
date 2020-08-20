@@ -70,6 +70,11 @@ Relevant RETURNN settings
   the model parameters will be synchronized (i.e. averaged)
   **The default is 1, but the recommended value is 100.**
 
+* ``horovod_param_sync_time_diff: float``:
+  alternative to ``horovod_param_sync_step``, e.g. ``100.`` (secs),
+  default ``None``.
+  This might be more efficient.
+
 * ``horovod_scale_lr: bool``: whether to multiply the lr by number of instances
   (False by default)
 
