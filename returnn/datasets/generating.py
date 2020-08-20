@@ -10,7 +10,6 @@ from .cached2 import CachedDataset2
 from returnn.util.basic import class_idx_seq_to_1_of_k, CollectionReadCheckCovered, PY3
 from returnn.log import log
 import numpy
-import re
 import sys
 import typing
 
