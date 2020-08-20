@@ -96,7 +96,10 @@ def dump_dataset(dataset, options):
   elif options.type == "interactive":
     print("Interactive debug shell.", file=log.v3)
   elif options.type == "null":
-    print("No dump.")
+    if options.dump_stats:
+      print("No dump (except stats).")
+    else:
+      print("No dump.")
   else:
     raise Exception("unknown dump option type %r" % options.type)
 
