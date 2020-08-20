@@ -117,10 +117,10 @@ def test_BytePairEncoding_unicode():
   assert_equal(bpe.num_labels, 189)
   assert_equal(bpe.labels[5], "z")
   assert_equal(bpe.vocab["z"], 5)
-  assert_equal(bpe._bpe_codes[("n", "d</w>")], 1)
+  assert_equal(bpe.bpe._bpe_codes[("n", "d</w>")], 1)
   assert_equal(bpe.labels[6], u"å")
   assert_equal(bpe.vocab[u"å"], 6)
-  assert_equal(bpe._bpe_codes[(u"à", u"nd</w>")], 2)
+  assert_equal(bpe.bpe._bpe_codes[(u"à", u"nd</w>")], 2)
 
   def get_bpe_seq(text):
     """
