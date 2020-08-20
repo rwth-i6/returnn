@@ -7,7 +7,7 @@ import unittest
 
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 
-from returnn.datasets.map import MapDataset
+from returnn.datasets.map import MapDatasetBase
 from returnn.config import Config
 from returnn.tf.engine import Engine
 
@@ -38,7 +38,7 @@ def _cleanup_old_models(config):
       os.remove(fn)
 
 
-class CustomDataset(MapDataset):
+class CustomDataset(MapDatasetBase):
 
   def __init__(self, **kwargs):
     super(CustomDataset, self).__init__(**kwargs)
