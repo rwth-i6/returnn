@@ -4,6 +4,11 @@ Provide basic Byte-Pair-Encoding (BPE) utilities.
 """
 
 import re
+import typing
+import numpy
+
+
+BpeMergeSymbol = "@@"
 
 
 class StandardBytePairEncoder:
@@ -39,7 +44,7 @@ class StandardBytePairEncoder:
     self._bpe_codes = dict([(code, i) for (i, code) in reversed(list(enumerate(self._bpe_codes)))])
     self._bpe_codes_reverse = dict([(pair[0] + pair[1], pair) for pair, i in self._bpe_codes.items()])
     self._bpe_encode_cache = {}
-    self._bpe_separator = '@@'
+    self._bpe_separator = BpeMergeSymbol
 
   @staticmethod
   def _get_pairs(word):
@@ -203,3 +208,213 @@ class StandardBytePairEncoder:
         output.append(new_word[-1])
 
     return output
+
+
+class PrefixTree:
+  """
+  Prefix tree / trie.
+  This class represents both a single node and the tree.
+  """
+
+  def __init__(self, prefix="", root=None):
+    """
+    :param str prefix:
+    :param PrefixTree|None root:
+    """
+    self.prefix = prefix
+    self.arcs = {}  # type: typing.Dict[str,PrefixTree]
+    self.finished = False
+    self.bpe_finished = False
+    self.is_root = not root
+    self.root = root
+
+  def add(self, postfix, root=None):
+    """
+    :param str postfix:
+    :param None|PrefixTree root:
+    :rtype: PrefixTree
+    """
+    if not root:
+      if self.is_root:
+        root = self
+      else:
+        assert self.root
+        root = self.root
+    if postfix == BpeMergeSymbol:
+      arc = postfix
+      postfix_ = ""
+    else:
+      arc = postfix[:1]
+      postfix_ = postfix[1:]
+    if arc in self.arcs:
+      child = self.arcs[arc]
+    else:
+      child = PrefixTree(root=root, prefix=self.prefix + arc)
+      self.arcs[arc] = child
+    if arc == BpeMergeSymbol and not postfix_:
+      self.bpe_finished = True
+    if postfix_:
+      return child.add(postfix_, root=root)
+    else:
+      child.finished = True
+      return child
+
+
+class Hyp:
+  """
+  Represents a hypothesis in the search.
+  """
+
+  def __init__(self, bpe_sym_history, cur_node):
+    """
+    :param list[str] bpe_sym_history:
+    :param PrefixTree cur_node:
+    """
+    self.bpe_sym_history = bpe_sym_history
+    self.cur_node = cur_node
+
+
+class Search:
+  """
+  Covers the search hyps and the search itself.
+  """
+
+  def __init__(self, bpe, word, word_pos=0):
+    """
+    :param PrefixTree bpe:
+    :param str word:
+    :param int word_pos:
+    """
+    self.bpe = bpe
+    self.word = word
+    self.word_pos = word_pos
+    self.hyps = [Hyp(bpe_sym_history=[], cur_node=bpe)]  # type: typing.List[Hyp]
+    self.final_bpe_seqs = None  # type: typing.Optional[typing.List[typing.List[str]]]
+
+  def _get_finished(self):
+    assert self.word_pos == len(self.word)
+    finals = []  # type: typing.List[typing.List[str]]
+    for hyp in self.hyps:
+      if hyp.cur_node.finished:
+        finals.append(hyp.bpe_sym_history + [hyp.cur_node.prefix])
+    self.final_bpe_seqs = finals
+
+  def _expand(self):
+    assert self.word_pos < len(self.word)
+    char = self.word[self.word_pos]
+    new_hyps = []  # type: typing.List[Hyp]
+    for hyp in self.hyps:
+      if hyp.cur_node.bpe_finished:
+        next_node = self.bpe.arcs.get(char)
+        if next_node:
+          new_hyps.append(
+            Hyp(
+              bpe_sym_history=hyp.bpe_sym_history + [hyp.cur_node.prefix + "@@"],
+              cur_node=next_node))
+      next_node = hyp.cur_node.arcs.get(char)
+      if next_node:
+        new_hyps.append(Hyp(bpe_sym_history=hyp.bpe_sym_history, cur_node=next_node))
+    self.hyps = new_hyps
+
+  def search(self):
+    """
+    :return: collection of possible BPE symbol seqs
+    :rtype: list[list[str]]
+    """
+    while self.word_pos < len(self.word):
+      self._expand()
+      self.word_pos += 1
+    self._get_finished()
+    return self.final_bpe_seqs
+
+
+class SamplingBytePairEncoder:
+  """
+  Will randomly sample from any possible BPE split.
+  """
+
+  def __init__(self, labels, unknown_label=None):
+    """
+    :param list[str] labels: vocab
+    :param str|None unknown_label:
+    """
+    self.labels = labels
+    self.unknown_label = unknown_label
+    if unknown_label:
+      assert unknown_label in self.labels
+    self._rnd = numpy.random.RandomState(0)
+
+    # build prefix tree
+    bpe = PrefixTree()
+    for bpe_sym in labels:
+      bpe.add(bpe_sym)
+    self._bpe_prefix_tree = bpe
+    self._cached_bpe_splits_per_word = {}  # type: typing.Dict[str,typing.List[typing.List[str]]]
+
+  def get_bpe_splits_for_word(self, word):
+    """
+    :param str word:
+    :rtype: list[list[str]]
+    """
+    if word in self._cached_bpe_splits_per_word:
+      return self._cached_bpe_splits_per_word[word]
+    bpe_sym_seqs = Search(bpe=self._bpe_prefix_tree, word=word).search()
+    self._cached_bpe_splits_per_word[word] = bpe_sym_seqs
+    return bpe_sym_seqs
+
+  def segment_sentence(self, sentence):
+    """
+    Segment single sentence (whitespace-tokenized string) with BPE encoding.
+
+    :param str sentence:
+    :rtype: list[str]
+    """
+    output = []
+    for word in sentence.split():
+      bpe_sym_seqs = self.get_bpe_splits_for_word(word)
+      if not bpe_sym_seqs:
+        if self.unknown_label:
+          output.append(self.unknown_label)
+          continue
+        else:
+          raise Exception("no BPE-split for word %r" % word)
+      idx = self._rnd.randint(0, len(bpe_sym_seqs))
+      output.append(bpe_sym_seqs[idx])
+    return output
+
+
+def _demo():
+  import sys
+  import os
+  my_dir = os.path.dirname(os.path.abspath(__file__))
+  root_dir = os.path.dirname(os.path.dirname(my_dir))
+  assert os.path.exists("%s/returnn/__init__.py" % root_dir)
+  sys.path.insert(0, root_dir)
+
+  from returnn.util import better_exchook
+  better_exchook.install()
+
+  import argparse
+  arg_parser = argparse.ArgumentParser()
+  arg_parser.add_argument("--vocab", required=True)
+  arg_parser.add_argument("--input")
+  args = arg_parser.parse_args()
+
+  from returnn.datasets.generating import Vocabulary
+  vocab = Vocabulary(vocab_file=args.vocab, unknown_label=None)
+
+  bpe = SamplingBytePairEncoder(labels=vocab.labels)
+  if args.input:
+    for word in args.input.split():
+      print("%s: %s" % (word, bpe.get_bpe_splits_for_word(word)))
+    return
+
+  print("Reading from stdin:")
+  while True:
+    line = sys.stdin.readline()
+    line = line.strip()
+    print(bpe.segment_sentence(line))
+
+
+if __name__ == "__main__":
+  _demo()
