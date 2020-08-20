@@ -1204,7 +1204,7 @@ class DatasetSeq:
     :param numpy.ndarray|dict[str,numpy.ndarray] features: format 2d (time,feature) (float)
     :param dict[str,numpy.ndarray]|numpy.ndarray|None targets: name -> format 1d (time) (idx of output-feature)
     :param numpy.ndarray|None ctc_targets: format 1d (time) (idx of output-feature)
-    :param str seq_tag: sequence name / tag
+    :param str|None seq_tag: sequence name / tag
     """
     assert isinstance(seq_idx, int)
     self.seq_idx = seq_idx
