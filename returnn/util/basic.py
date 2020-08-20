@@ -3820,6 +3820,7 @@ def monkeypatch_audioread():
 
 
 _cf_cache = {}
+_cf_msg_printed = False
 
 
 def cf(filename):
@@ -3829,18 +3830,23 @@ def cf(filename):
   :return: filename
   :rtype: str
   """
+  global _cf_msg_printed
   import os
   from subprocess import check_output
   if filename in _cf_cache:
     return _cf_cache[filename]
   debug_mode = int(os.environ.get("DEBUG", 0))
   if debug_mode or get_hostname() == "cluster-cn-211" or not is_running_on_cluster():
-    print("use local file: %s" % filename)
+    if not _cf_msg_printed:
+      print("Cache manager: not used, use local file: %s (discard further messages)" % filename)
+      _cf_msg_printed = True
     return filename  # for debugging
   try:
     cached_fn = check_output(["cf", filename]).strip().decode("utf8")
   except CalledProcessError:
-    print("Cache manager: Error occured, using local file")
+    if not _cf_msg_printed:
+      print("Cache manager: Error occurred, using local file")
+      _cf_msg_printed = True
     return filename
   assert os.path.exists(cached_fn)
   _cf_cache[filename] = cached_fn
