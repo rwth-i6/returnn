@@ -1539,6 +1539,11 @@ class ReuseParams:
         output.beam = None
         output.placeholder = tf.zeros(
           [d or 1 for d in output.batch_shape], dtype=output.dtype, name="%s_dummy" % output.name)
+        if not output.size_placeholder:
+          output.size_placeholder = {}
+        for i, dim in enumerate(output.shape):
+          if dim is None and i not in output.size_placeholder:
+            output.size_placeholder[i] = tf.ones([1], dtype=tf.int32, name="dummy_reuse_params_size")
         output.sanity_check()
         print("ReuseParams: creating dummy input %r with %r" % (layer_name, output), file=log.v4)
         return InternalLayer(name=layer_name, network=network, output=output)
