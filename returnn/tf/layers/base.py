@@ -1486,7 +1486,10 @@ class ReuseParams:
 
       layer_name = self.layer_name
       network = self.network
+      with_time_dim = False
       while layer_name.startswith("base:") and network.parent_net:
+        if network.parent_layer and network.parent_layer.output.have_time_axis():
+          with_time_dim = True
         layer_name = layer_name[len("base:"):]
         network = network.parent_net
 
@@ -1514,7 +1517,7 @@ class ReuseParams:
             name=layer_name, network=net,
             output=Data(
               name="LazyLayerResolver_dummy_output_%s" % layer_name,
-              shape=()))
+              shape=(None, 1) if with_time_dim else ()))
 
         if self.network.parent_net is network and self.network.parent_layer:
           if layer_name.startswith(self.network.parent_layer.name + "/"):
@@ -1523,6 +1526,8 @@ class ReuseParams:
             if layer_name in net.layers:
               # Don't return layer, could be inside loop and that wont work.
               output = net.layers[layer_name].output.copy_template()
+              if not output.have_time_axis() and with_time_dim:
+                output = output.copy_template_adding_time_dim()
         if not output:
           layer_desc_ = net.layers_desc[layer_name].copy()
           class_name_ = layer_desc_.pop("class")
