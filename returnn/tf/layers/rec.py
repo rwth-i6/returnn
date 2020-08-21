@@ -3045,7 +3045,12 @@ class _SubnetworkRecCell(object):
           layer_name=name, acc_ta=acc_ta, final_net_vars=final_net_vars, seq_len=seq_len,
           search_choices_cache=search_choices_cache)
         output = self.layer_data_templates[name].output.copy_template_adding_time_dim(time_dim_axis=0)
-        output.beam = search_choices.get_beam_info() if search_choices else None
+        if latest_layer_choice_name:
+          output.beam = self.net.layers[latest_layer_choice_name].search_choices.get_beam_info()
+        elif search_choices:
+          output.beam = search_choices.get_beam_info()
+        else:
+          output.beam = None
         max_len = tf.reduce_max(resolved_seq_len)
         # We should have accumulated it.
         output.placeholder = tensor_array_stack(acc_ta, stop=max_len)  # e.g. (time,batch,dim)
