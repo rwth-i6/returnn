@@ -976,6 +976,7 @@ class _SubnetworkRecCell(object):
       is_inside_rec_layer=True,
       absolute_name_prefix="%s%s/" % (parent_net.get_absolute_name_prefix(), rec_layer_name),
       parent_net=parent_net)
+    self.net.layers_desc.update(self.net_dict)
     if source_data:
       self.net.extern_data.data["source"] = (
         source_data.copy_template_excluding_time_dim())
@@ -2927,6 +2928,7 @@ class _SubnetworkRecCell(object):
       search_flag=self.parent_net.search_flag,
       parent_layer=self.parent_rec_layer,
       parent_net=self.parent_net)
+    self.input_layers_net.layers_desc.update(self.net_dict)
     if self.parent_rec_layer.input_data:
       self.input_layers_net.extern_data.data["source"] = \
         self.parent_rec_layer.input_data
@@ -3014,6 +3016,7 @@ class _SubnetworkRecCell(object):
       search_flag=self.parent_net.search_flag,
       parent_layer=self.parent_rec_layer,
       parent_net=self.parent_net)
+    self.output_layers_net.layers_desc.update(self.net_dict)
     if self.parent_rec_layer.input_data:
       self.output_layers_net.extern_data.data["source"] = \
         self.parent_rec_layer.input_data
