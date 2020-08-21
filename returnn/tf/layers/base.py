@@ -209,8 +209,8 @@ class LayerBase(object):
       func()
 
   def __repr__(self):
-    return "<%s %r out_type=%s>" % (
-      self.__class__.__name__, self.get_absolute_name(),
+    return "<%s %s%r out_type=%s>" % (
+      self.__class__.__name__, self.network.get_absolute_name_prefix(), self.name,
       self.output.get_description(with_name=False) if self.output else None)
 
   @classmethod

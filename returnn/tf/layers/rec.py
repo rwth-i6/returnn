@@ -3199,9 +3199,9 @@ class _TemplateLayer(LayerBase):
 
   def __repr__(self):
     if self.is_initialized:
-      return "<%s(%s)(%s) %r out_type=%s (construction stack %r)>" % (
+      return "<%s(%s)(%s) %s%r out_type=%s (construction stack %r)>" % (
         self.__class__.__name__, self.layer_class_type.__name__ if self.layer_class_type else None, self.layer_class,
-        self.get_absolute_name(), self.output.get_description(with_name=False),
+        self.network.get_absolute_name_prefix(), self.name, self.output.get_description(with_name=False),
         self.construct_stack.name if self.construct_stack else None)
     else:
       return "<%s %r uninitialized, construction stack %r>" % (
