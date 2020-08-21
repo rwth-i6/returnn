@@ -274,7 +274,7 @@ class Hyp:
     self.cur_node = cur_node
 
 
-class Search:
+class CharSyncSearch:
   """
   Covers the search hyps and the search itself.
   """
@@ -309,7 +309,7 @@ class Search:
         if next_node:
           new_hyps.append(
             Hyp(
-              bpe_sym_history=hyp.bpe_sym_history + [hyp.cur_node.prefix + "@@"],
+              bpe_sym_history=hyp.bpe_sym_history + [hyp.cur_node.prefix + BpeMergeSymbol],
               cur_node=next_node))
       next_node = hyp.cur_node.arcs.get(char)
       if next_node:
@@ -328,39 +328,119 @@ class Search:
     return self.final_bpe_seqs
 
 
+class HypInPos:
+  """
+  Represents a hypothesis in the search.
+  """
+
+  def __init__(self, bpe_sym_history, cur_node, pos):
+    """
+    :param list[str] bpe_sym_history:
+    :param PrefixTree cur_node:
+    :param int pos:
+    """
+    self.bpe_sym_history = bpe_sym_history
+    self.cur_node = cur_node
+    self.pos = pos
+
+
+class DepthFirstSearch:
+  """
+  Depth-first search.
+  """
+
+  def __init__(self, bpe, word, sampler=None):
+    """
+    :param PrefixTree bpe:
+    :param str word:
+    :param (()->bool)|None sampler:
+    """
+    self.bpe = bpe
+    self.word = word
+    self.sampler = sampler
+    self.hyps = []  # type: typing.List[HypInPos]
+    self.final_bpe_seq = None  # type: typing.Optional[typing.List[str]]
+    self._add_hyp(HypInPos(bpe_sym_history=[], cur_node=bpe, pos=0))
+
+  def _add_hyp(self, hyp):
+    """
+    :param HypInPos hyp:
+    """
+    if hyp.pos >= len(self.word):
+      if hyp.cur_node.finished:
+        self.final_bpe_seq = hyp.bpe_sym_history + [hyp.cur_node.prefix]
+    else:
+      self.hyps.append(hyp)
+
+  def _expand(self):
+    hyp = self.hyps.pop(-1)
+
+    # Now check for possible further hyps.
+    char = self.word[hyp.pos]
+    new_hyps = []  # type: typing.List[HypInPos]
+    if hyp.cur_node.bpe_finished:
+      next_node = self.bpe.arcs.get(char)
+      if next_node:
+        new_hyps.append(
+          HypInPos(
+            bpe_sym_history=hyp.bpe_sym_history + [hyp.cur_node.prefix + BpeMergeSymbol],
+            cur_node=next_node, pos=hyp.pos + 1))
+    next_node = hyp.cur_node.arcs.get(char)
+    if next_node:
+      new_hyps.append(HypInPos(bpe_sym_history=hyp.bpe_sym_history, cur_node=next_node, pos=hyp.pos + 1))
+
+    # Note that the order we check them will make this a depth-first or breadth-first search.
+    if self.sampler and self.sampler():
+      new_hyps = list(reversed(new_hyps))
+    for hyp in new_hyps:
+      self._add_hyp(hyp)
+
+  def search(self):
+    """
+    :return: BPE symbol seq if one is found
+    :rtype: list[str]|None
+    """
+    while self.hyps and self.final_bpe_seq is None:
+      self._expand()
+    return self.final_bpe_seq
+
+
 class SamplingBytePairEncoder:
   """
   Will randomly sample from any possible BPE split.
   """
 
-  def __init__(self, labels, unknown_label=None):
+  def __init__(self, labels, breadth_prob, rnd, unknown_label=None):
     """
     :param list[str] labels: vocab
+    :param float breadth_prob: 1.0 will lead to breadth-first search, 0.0 to depth-first search.
+      other values are stochastic.
+    :param numpy.random.RandomState rnd:
     :param str|None unknown_label:
     """
     self.labels = labels
     self.unknown_label = unknown_label
     if unknown_label:
       assert unknown_label in self.labels
-    self._rnd = numpy.random.RandomState(0)
+    self.breadth_prob = breadth_prob
+    self.rnd = rnd
 
     # build prefix tree
     bpe = PrefixTree()
     for bpe_sym in labels:
       bpe.add(bpe_sym)
     self._bpe_prefix_tree = bpe
-    self._cached_bpe_splits_per_word = {}  # type: typing.Dict[str,typing.List[typing.List[str]]]
 
-  def get_bpe_splits_for_word(self, word):
+  def _sampler(self):
+    # When this returns true, it will differ from depth-first search.
+    return self.rnd.random_sample() <= self.breadth_prob
+
+  def get_bpe_split_for_word(self, word):
     """
     :param str word:
-    :rtype: list[list[str]]
+    :rtype: list[str]|None
     """
-    if word in self._cached_bpe_splits_per_word:
-      return self._cached_bpe_splits_per_word[word]
-    bpe_sym_seqs = Search(bpe=self._bpe_prefix_tree, word=word).search()
-    self._cached_bpe_splits_per_word[word] = bpe_sym_seqs
-    return bpe_sym_seqs
+    return DepthFirstSearch(bpe=self._bpe_prefix_tree, word=word, sampler=self._sampler).search()
 
   def segment_sentence(self, sentence):
     """
@@ -371,15 +451,14 @@ class SamplingBytePairEncoder:
     """
     output = []
     for word in sentence.split():
-      bpe_sym_seqs = self.get_bpe_splits_for_word(word)
-      if not bpe_sym_seqs:
+      bpe_sym_seq = self.get_bpe_split_for_word(word)
+      if bpe_sym_seq is None:
         if self.unknown_label:
           output.append(self.unknown_label)
           continue
         else:
           raise Exception("no BPE-split for word %r" % word)
-      idx = self._rnd.randint(0, len(bpe_sym_seqs))
-      output.append(bpe_sym_seqs[idx])
+      output.append(bpe_sym_seq)
     return output
 
 
@@ -397,21 +476,44 @@ def _demo():
   import argparse
   arg_parser = argparse.ArgumentParser()
   arg_parser.add_argument("--vocab", required=True)
-  arg_parser.add_argument("--input")
+  arg_parser.add_argument("--unk")
+  arg_parser.add_argument("--input", help="text. if not given, will read from stdin")
+  arg_parser.add_argument("--seed", type=int, default=0)
+  arg_parser.add_argument("--all", action="store_true")
+  arg_parser.add_argument(
+    "--breadth-prob", type=float, default=0.0,
+    help="1.0 will lead to breadth-first search, 0.0 to depth-first search. other values are stochastic.")
   args = arg_parser.parse_args()
 
   from returnn.datasets.generating import Vocabulary
   vocab = Vocabulary(vocab_file=args.vocab, unknown_label=None)
+  rnd = numpy.random.RandomState(args.seed)
 
-  bpe = SamplingBytePairEncoder(labels=vocab.labels)
   if args.input:
+    bpe_prefix_tree = PrefixTree()
+    for bpe_sym in vocab.labels:
+      bpe_prefix_tree.add(bpe_sym)
+
+    def _sampler():
+      # When this returns true, it will differ from depth-first search.
+      return rnd.random_sample() <= args.breadth_prob
+
     for word in args.input.split():
-      print("%s: %s" % (word, bpe.get_bpe_splits_for_word(word)))
+      if args.all:
+        bpe_sym_seqs = CharSyncSearch(bpe=bpe_prefix_tree, word=word).search()
+        print("%s: %s" % (word, bpe_sym_seqs))
+      else:
+        greedy = DepthFirstSearch(bpe=bpe_prefix_tree, word=word, sampler=_sampler).search()
+        print("%s: %s" % (word, greedy))
     return
 
+  bpe = SamplingBytePairEncoder(labels=vocab.labels, breadth_prob=args.breadth_prob, rnd=rnd, unknown_label=args.unk)
   print("Reading from stdin:")
   while True:
-    line = sys.stdin.readline()
+    try:
+      line = sys.stdin.readline()
+    except KeyboardInterrupt:
+      return
     line = line.strip()
     print(bpe.segment_sentence(line))
 

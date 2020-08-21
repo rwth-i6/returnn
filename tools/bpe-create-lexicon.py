@@ -116,7 +116,7 @@ def main():
     if word in visited_words:
       return
     visited_words.add(word)
-    bpe_sym_seqs = bpe_utils.Search(bpe=bpe, word=word).search()
+    bpe_sym_seqs = bpe_utils.CharSyncSearch(bpe=bpe, word=word).search()
     if not bpe_sym_seqs:
       print("no BPE seq found for word %r" % word)
       return
