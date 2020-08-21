@@ -1019,7 +1019,7 @@ class _SubnetworkRecCell(object):
     from returnn.tf.network import NetworkConstructionDependencyLoopException
     # The stack trace is not so interesting for these exceptions.
     skip_stack_trace_exception_types = (
-      NetworkConstructionDependencyLoopException,)
+      NetworkConstructionDependencyLoopException, LayerNotFound)
 
     class ConstructCtx:
       """
@@ -1030,14 +1030,17 @@ class _SubnetworkRecCell(object):
       partially_finished = []  # type: typing.List[_TemplateLayer]
       collected_exceptions = OrderedDict()  # type: OrderedDict[object,str]  # exc_key -> formatted exception/stack str
 
+      # noinspection PyShadowingNames
       @classmethod
-      def collect_exception(cls):
+      def collect_exception(cls, layer_name):
         """
         Collect most recent exception.
         Pretty generic exception handling but anything could happen.
         We don't do any output by default, as this could be very spammy,
         but we collect the traceback, in case we get some other error later.
         Then go on with the next get_layer.
+
+        :param str layer_name:
         """
         exc_type, value, tb = sys.exc_info()
         exc_last_frame = list(better_exchook.iter_traceback(tb))[-1]
@@ -1046,7 +1049,7 @@ class _SubnetworkRecCell(object):
           if isinstance(value, skip_stack_trace_exception_types):
             color = better_exchook.Color()
             cls.collected_exceptions[exc_key] = "%s\n%s: %s\n" % (
-              color("EXCEPTION", color.fg_colors[1], bold=True),
+              color("EXCEPTION while constructing layer %r" % layer_name, color.fg_colors[1], bold=True),
               color(exc_type.__name__, color.fg_colors[1]),
               str(value))
           else:
@@ -1123,7 +1126,7 @@ class _SubnetworkRecCell(object):
         try:
           self.__call__(layer_name_)
         except Exception:
-          ConstructCtx.collect_exception()
+          ConstructCtx.collect_exception(layer_name=layer_name_)
 
       # noinspection PyMethodParameters
       def add_templated_layer(lself, name, layer_class, **layer_desc):
@@ -1256,7 +1259,7 @@ class _SubnetworkRecCell(object):
                 default_success = True
               break  # we did it, so get out of the loop
             except Exception:
-              ConstructCtx.collect_exception()
+              ConstructCtx.collect_exception(layer_name=name)
           if not default_success:
             # Now, do again, but with full recursive layer construction, to determine the dependencies.
             ConstructCtx.most_recent = list(ConstructCtx.layers)
@@ -1333,7 +1336,10 @@ class _SubnetworkRecCell(object):
           continue
         if len(ConstructCtx.partially_finished) >= old_len and not recent_changes:
           # No changes anymore. There is no real point in continuing. Just break.
-          assert all([layer.is_initialized for layer in ConstructCtx.partially_finished])
+          assert all([layer.is_initialized for layer in ConstructCtx.partially_finished]), (
+            "Failed to initialize layers:\n" +
+            "".join(["  %s\n" % layer for layer in ConstructCtx.partially_finished if not layer.is_initialized]) +
+            "Check the further debug output for the partial construction and other exceptions.")
           break
         loop_limit -= 1
         assert loop_limit >= 0, (
