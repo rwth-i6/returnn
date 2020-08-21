@@ -1471,12 +1471,11 @@ class ReuseParams:
       with reuse_name_scope(self.var_scope):
         try:
           return self.get_layer_func(self.layer_name)
-        except (NetworkConstructionDependencyLoopException, LayerNotFound) as exc:
-          return self.create_dummy_layer(layer_exception=exc)
+        except (NetworkConstructionDependencyLoopException, LayerNotFound):
+          return self.create_dummy_layer()
 
-    def create_dummy_layer(self, layer_exception):
+    def create_dummy_layer(self):
       """
-      :param returnn.tf.network.NetworkLayerException layer_exception:
       :rtype: LayerBase
       """
       from .basic import get_layer_class
