@@ -2113,7 +2113,7 @@ def test_target_with_beam():
       "teacher_s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:teacher_target_embed", "prev:teacher_att"],
                     "n_out": 5, "dropout": 0.3, "trainable": False},  # transform
       "teacher_readout_in": {"class": "linear", "from": ["teacher_s", "prev:teacher_target_embed", "teacher_att"],
-                             "activation": None, "n_out": 1000, "dropout": 0.3, "trainable": False},
+                             "activation": None, "n_out": 10, "dropout": 0.3, "trainable": False},
       # merge + post_merge bias
       "teacher_readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["teacher_readout_in"],
                           "trainable": False},
@@ -2208,7 +2208,7 @@ def test_target_with_beam():
     session.run(tf_compat.v1.global_variables_initializer())
 
     from test_TFNetworkLayer import make_feed_dict
-    feed_dict = make_feed_dict([network.extern_data.data[key] for key in ["data", "classes"]])
+    feed_dict = make_feed_dict([network.extern_data.data[key] for key in ["data", "classes"]], n_batch=3)
     x, y, loss = session.run((x_data.placeholder, y_data.placeholder, network.get_total_loss()), feed_dict=feed_dict)
     assert x.shape[x_data.batch_dim_axis] * beam_size == y.shape[y_data.batch_dim_axis]
 
