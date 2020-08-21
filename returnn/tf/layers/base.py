@@ -1405,10 +1405,10 @@ class ReuseParams:
       :param str layer_name:
       :rtype: LayerBase|ReuseParams.LazyLayerResolver
       """
-      from returnn.tf.network import NetworkConstructionDependencyLoopException
+      from returnn.tf.network import NetworkConstructionDependencyLoopException, LayerNotFound
       try:
         return get_layer(layer_name)
-      except NetworkConstructionDependencyLoopException:
+      except (NetworkConstructionDependencyLoopException, LayerNotFound):
         # This dependency loop is not seen as critical. We allow it to be done later.
         # So any template construction of this layer should work.
         return ReuseParams.LazyLayerResolver(layer_name=layer_name, network=network, get_layer=get_layer)
@@ -1463,17 +1463,17 @@ class ReuseParams:
       """
       :rtype: LayerBase
       """
-      from returnn.tf.network import NetworkConstructionDependencyLoopException
+      from returnn.tf.network import NetworkConstructionDependencyLoopException, LayerNotFound
       from returnn.tf.util.basic import reuse_name_scope
       with reuse_name_scope(self.var_scope):
         try:
           return self.get_layer_func(self.layer_name)
-        except NetworkConstructionDependencyLoopException as exc:
-          return self.create_dummy_layer(dep_loop_exception=exc)
+        except (NetworkConstructionDependencyLoopException, LayerNotFound) as exc:
+          return self.create_dummy_layer(layer_exception=exc)
 
-    def create_dummy_layer(self, dep_loop_exception):
+    def create_dummy_layer(self, layer_exception):
       """
-      :param returnn.tf.network.NetworkConstructionDependencyLoopException dep_loop_exception:
+      :param returnn.tf.network.NetworkLayerException layer_exception:
       :rtype: LayerBase
       """
       from .basic import get_layer_class
@@ -1482,47 +1482,66 @@ class ReuseParams:
          "thus creating it on dummy inputs now") % self.layer_name,
         file=log.v4)
 
+      if layer_exception.network is self.network:
+        net_dict = layer_exception.net_dict
+        network = self.network
+        layer_name = self.layer_name
+      elif layer_exception.network is self.network.parent_net:
+        if not self.layer_name.startswith("base:"):
+          raise NotImplementedError(
+            "exception %r, layer %r in net %r" % (layer_exception, self.layer_name, self.network))
+        layer_name = self.layer_name[len("base:"):]
+        net_dict = layer_exception.net_dict
+        network = self.network.parent_net
+      else:
+        raise NotImplementedError(
+          "exception %r, layer %r in net %r" % (layer_exception, self.layer_name, self.network))
+
+      # noinspection PyShadowingNames
       def opt_get_layer(layer_name):
         """
         :param str layer_name:
         :rtype: LayerBase
         """
-        if layer_name in self.network.layers:
-          return self.network.layers[layer_name]
+        if layer_name in network.layers:
+          return network.layers[layer_name]
         print("ReuseParams: non-existing layer %r, ignoring..." % layer_name, file=log.v4)
         return InternalLayer(
-          name=layer_name, network=self.network,
+          name=layer_name, network=network,
           output=Data(
             name="LazyLayerResolver_dummy_output_%s" % layer_name,
             shape=()))
 
+      # noinspection PyShadowingNames
       def get_dummy_input_layer(layer_name):
         """
         :param str layer_name:
         :rtype: LayerBase
         """
-        if layer_name in self.network.layers:
-          return self.network.layers[layer_name]
-        print("ReuseParams: creating dummy input %r" % layer_name, file=log.v4)
-        layer_desc_ = dep_loop_exception.net_dict[layer_name].copy()
+        if layer_name in network.layers:
+          return network.layers[layer_name]
+        layer_desc_ = net_dict[layer_name].copy()
         class_name_ = layer_desc_.pop("class")
         layer_class_ = get_layer_class(class_name_)
-        layer_class_.transform_config_dict(layer_desc_, network=self.network, get_layer=opt_get_layer)
+        layer_class_.transform_config_dict(layer_desc_, network=network, get_layer=opt_get_layer)
         # noinspection PyProtectedMember
-        layer_desc_ = self.network._create_layer_layer_desc(name=layer_name, layer_desc=layer_desc_)
+        layer_desc_ = network._create_layer_layer_desc(name=layer_name, layer_desc=layer_desc_)
         output = layer_class_.get_out_data_from_opts(**layer_desc_).copy()
         output.beam = None
         output.placeholder = tf.zeros(
           [d or 1 for d in output.batch_shape], dtype=output.dtype, name="%s_dummy" % output.name)
         output.sanity_check()
-        return InternalLayer(name=layer_name, network=self.network, output=output)
+        print("ReuseParams: creating dummy input %r with %r" % (layer_name, output), file=log.v4)
+        return InternalLayer(name=layer_name, network=network, output=output)
 
-      layer_desc = dep_loop_exception.net_dict[self.layer_name].copy()
+      layer_desc = net_dict[layer_name].copy()
       class_name = layer_desc.pop("class")
       layer_class = get_layer_class(class_name)
-      layer_class.transform_config_dict(layer_desc, network=self.network, get_layer=get_dummy_input_layer)
-      # noinspection PyProtectedMember
-      return self.network._create_layer(name=self.layer_name, layer_class=layer_class, **layer_desc)
+      layer_class.transform_config_dict(layer_desc, network=network, get_layer=get_dummy_input_layer)
+      with reuse_name_scope(network.get_absolute_name_scope_prefix()[:-1], absolute=True):
+        # noinspection PyProtectedMember
+        return network._create_layer(
+          name=layer_name, layer_class=layer_class, **layer_desc)
 
   # noinspection PyShadowingBuiltins
   def __init__(self, reuse_layer=None, map=None, custom=None, auto_create_missing=False):
