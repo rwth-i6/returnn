@@ -4708,6 +4708,59 @@ def test_MaskedComputationLayer_UnmaskLayer_in_loop():
         x = y
 
 
+def test_att_train_search_loss_prev_beam():
+  beam_size = 1
+  num_ner_labels = 13
+  net_dict = {
+    'output': {
+      'class': 'rec',
+      'from': 'data',
+      'target': 'classes',
+      'unit': {
+        'crf_rec_in': {"class": "linear", "from": 'prev:classes_copy', "activation": None, "n_out": 10},
+        'crf_rec': {'class': 'linear', 'from': ['raw', 'crf_rec_in'], "activation": "relu",
+                    "target": 'classes'},
+        'enc_ctx_slice': {'class': 'copy', 'from': 'data:source'},
+        'source_embed_slice': {'class': 'copy', 'from': 'data:source'},
+        'output': {
+          'beam_size': beam_size, 'class': 'choice', 'from': ['crf_rec'], 'initial_output': 0, 'target': 'classes'},
+        'raw': {'class': 'linear',
+                'from': ['enc_ctx_slice', 'lstm_tgt'],
+                'n_out': num_ner_labels,
+                'activation': None,
+                'is_output_layer': True},
+        'classes_copy': {'class': 'copy', 'from': 'output', "initial_output": 0},
+        'is_O': {"class": "compare", "kind": "equal", "from": ["prev:classes_copy"], "value": 0},
+        'tgt_lstm_input': {"class": "switch", "condition": "is_O",
+                           "true_from": "source_embed_slice", "false_from": "prev:target_embed"},
+        'lstm_tgt': {'class': 'rec', 'from': ['tgt_lstm_input'], 'n_out': 12, 'unit': 'nativelstm2'},
+        'target_embed': {
+          'class': 'linear', 'activation': None, 'from': 'output', 'initial_output': 0, 'n_out': 10}
+      }
+    },
+    'loss_layer': {
+      'class': 'linear', "activation": "softmax", "target": "classes", 'from': ['output/raw'], 'loss': 'ce'},
+  }
+  with make_scope() as session:
+    config = Config({"debug_print_layer_output_template": True})
+    net = TFNetwork(
+      extern_data=ExternData({
+        "data": {"dim": 10},
+        "classes": {"dim": 20, "sparse": True}}),
+      config=config,
+      train_flag=True, search_flag=True)
+    net.construct_from_dict(net_dict)
+    net.maybe_construct_objective()
+    print(net.losses_dict)
+
+    net.initialize_params(session)
+
+    from test_TFNetworkLayer import make_feed_dict
+    feed_dict = make_feed_dict(net.extern_data, same_time=True)
+    loss = session.run(net.total_loss, feed_dict=feed_dict)
+    print("loss:", loss)
+
+
 def test_MaskedComputationLayer_UnmaskLayer_masked_outside():
   from returnn.tf.layers.rec import _SubnetworkRecCell
   with make_scope() as session:
