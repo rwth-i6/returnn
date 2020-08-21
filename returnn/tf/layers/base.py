@@ -1501,21 +1501,6 @@ class ReuseParams:
           "exception %r, layer %r in net %r" % (layer_exception, self.layer_name, self.network))
 
       # noinspection PyShadowingNames
-      def opt_get_layer(layer_name):
-        """
-        :param str layer_name:
-        :rtype: LayerBase
-        """
-        if layer_name in network.layers:
-          return network.layers[layer_name]
-        print("ReuseParams: non-existing layer %r, ignoring..." % layer_name, file=log.v4)
-        return InternalLayer(
-          name=layer_name, network=network,
-          output=Data(
-            name="LazyLayerResolver_dummy_output_%s" % layer_name,
-            shape=()))
-
-      # noinspection PyShadowingNames
       def get_dummy_input_layer(layer_name):
         """
         :param str layer_name:
@@ -1523,13 +1508,39 @@ class ReuseParams:
         """
         if layer_name in network.layers:
           return network.layers[layer_name]
-        layer_desc_ = net_dict[layer_name].copy()
-        class_name_ = layer_desc_.pop("class")
-        layer_class_ = get_layer_class(class_name_)
-        layer_class_.transform_config_dict(layer_desc_, network=network, get_layer=opt_get_layer)
-        # noinspection PyProtectedMember
-        layer_desc_ = network._create_layer_layer_desc(name=layer_name, layer_desc=layer_desc_)
-        output = layer_class_.get_out_data_from_opts(**layer_desc_).copy()
+        output = None
+        net = network
+
+        # noinspection PyShadowingNames
+        def opt_get_layer(layer_name):
+          """
+          :param str layer_name:
+          :rtype: LayerBase
+          """
+          if layer_name in net.layers:
+            return net.layers[layer_name]
+          print("ReuseParams: non-existing layer %r in %r, ignoring..." % (layer_name, net), file=log.v4)
+          return InternalLayer(
+            name=layer_name, network=net,
+            output=Data(
+              name="LazyLayerResolver_dummy_output_%s" % layer_name,
+              shape=()))
+
+        if self.network.parent_net is network and self.network.parent_layer:
+          if layer_name.startswith(self.network.parent_layer.name + "/"):
+            net = self.network
+            layer_name = layer_name[len(net.parent_layer.name) + 1:]
+            if layer_name in self.network.layers:
+              # Don't return layer, could be inside loop and that wont work.
+              output = net.layers[layer_name].output.copy_template()
+        if not output:
+          layer_desc_ = net.layers_desc[layer_name].copy()
+          class_name_ = layer_desc_.pop("class")
+          layer_class_ = get_layer_class(class_name_)
+          layer_class_.transform_config_dict(layer_desc_, network=net, get_layer=opt_get_layer)
+          # noinspection PyProtectedMember
+          layer_desc_ = net._create_layer_layer_desc(name=layer_name, layer_desc=layer_desc_)
+          output = layer_class_.get_out_data_from_opts(**layer_desc_).copy()
         output.beam = None
         output.placeholder = tf.zeros(
           [d or 1 for d in output.batch_shape], dtype=output.dtype, name="%s_dummy" % output.name)
