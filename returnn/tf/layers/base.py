@@ -1459,6 +1459,9 @@ class ReuseParams:
       self.get_layer_func = get_layer
       self.var_scope = tf_compat.v1.get_variable_scope()
 
+    def __repr__(self):
+      return "<%s layer %r, net %r>" % (self.__class__.__name__, self.layer_name, self.network)
+
     def get_layer(self):
       """
       :rtype: LayerBase
@@ -1556,6 +1559,9 @@ class ReuseParams:
     self.param_map = map
     self.custom_func = custom
     self.auto_create_missing = auto_create_missing
+
+  def __repr__(self):
+    return "<%s reuse_layer %r, map %r>" % (self.__class__.__name__, self._reuse_layer, self.param_map)
 
   @property
   def reuse_layer(self):
