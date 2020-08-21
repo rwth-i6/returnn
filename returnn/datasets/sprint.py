@@ -181,6 +181,8 @@ class SprintDatasetBase(Dataset):
     if seq_order:
       raise NotImplementedError("Predefined sequence order via indices in SprintDataset.")
     super(SprintDatasetBase, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+    if self.orth_vocab:
+      self.orth_vocab.set_random_seed(self._get_random_seed_for_epoch(epoch=epoch))
     with self.lock:
       self.returnn_epoch = epoch
       self.predefined_seq_list_order = seq_list

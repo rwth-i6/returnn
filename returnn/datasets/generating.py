@@ -1926,6 +1926,16 @@ class Vocabulary(object):
   def __repr__(self):
     return "Vocabulary(%r, num_labels=%s, unknown_label=%r)" % (self.vocab_file, self.num_labels, self.unknown_label)
 
+  def set_random_seed(self, seed):
+    """
+    This can be called for a new epoch or so.
+    Usually it has no effect, as there is no randomness.
+    However, some vocab class could introduce some sampling process.
+
+    :param int seed:
+    """
+    pass  # usually there is no randomness, so ignore
+
   def _parse_vocab(self):
     """
     Sets self.vocab, self.labels, self.num_labels.
@@ -2037,6 +2047,43 @@ class BytePairEncoding(Vocabulary):
     super(BytePairEncoding, self).__init__(vocab_file=vocab_file, seq_postfix=seq_postfix, unknown_label=unknown_label)
     from returnn.util.bpe import StandardBytePairEncoder
     self.bpe = StandardBytePairEncoder(bpe_codes_file=bpe_file, labels=self.labels)
+
+  def get_seq(self, sentence):
+    """
+    :param str sentence:
+    :rtype: list[int]
+    """
+    segments = self.bpe.segment_sentence(sentence)
+    seq = self.get_seq_indices(segments)
+    return seq + self.seq_postfix
+
+
+class SamplingBytePairEncoding(Vocabulary):
+  """
+  Vocab based on Byte-Pair-Encoding (BPE).
+  Like :class:`BytePairEncoding`, but here we randomly sample from different possible BPE splits.
+  This will encode the text on-the-fly with BPE.
+  """
+
+  def __init__(self, vocab_file, breadth_prob, seq_postfix=None, unknown_label="UNK"):
+    """
+    :param str vocab_file:
+    :param float breadth_prob:
+    :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
+    :param str|None unknown_label:
+    """
+    super(SamplingBytePairEncoding, self).__init__(
+      vocab_file=vocab_file, seq_postfix=seq_postfix, unknown_label=unknown_label)
+    from returnn.util.bpe import SamplingBytePairEncoder
+    self.rnd = numpy.random.RandomState(0)
+    self.bpe = SamplingBytePairEncoder(
+      labels=self.labels, breadth_prob=breadth_prob, rnd=self.rnd, unknown_label=unknown_label)
+
+  def set_random_seed(self, seed):
+    """
+    :param int seed:
+    """
+    self.rnd.seed(seed)
 
   def get_seq(self, sentence):
     """
@@ -2250,7 +2297,7 @@ class LibriSpeechCorpus(CachedDataset2):
     :param str path: dir, should contain "train-*/*/*/{*.flac,*.trans.txt}", or "train-*.zip"
     :param str prefix: "train", "dev", "test", "dev-clean", "dev-other", ...
     :param str|list[str]|None orth_post_process: :func:`get_post_processor_function`, applied on orth
-    :param str|None targets: "bpe" or "chars" or None
+    :param str|dict[str]|None targets: "bpe" or "chars" or None or dict for :func:`Vocabulary.create_vocab`
     :param dict[str]|None audio: options for :class:`ExtractAudioFeatures`
     :param dict[str]|None bpe: options for :class:`BytePairEncoding`
     :param dict[str]|None chars: options for :class:`CharacterTargets`
@@ -2291,21 +2338,22 @@ class LibriSpeechCorpus(CachedDataset2):
     if orth_post_process:
       from .lm import get_post_processor_function
       self.orth_post_process = get_post_processor_function(orth_post_process)
-    if targets == "bpe" or (targets is None and bpe is not None):
+    if isinstance(targets, dict):
+      assert bpe is None and chars is None
+      self.targets = Vocabulary.create_vocab(**targets)
+    elif targets == "bpe" or (targets is None and bpe is not None):
       assert bpe is not None and chars is None
-      self.bpe = BytePairEncoding(**bpe)
-      self.targets = self.bpe
-      self.labels = {"classes": self.bpe.labels}
+      self.targets = BytePairEncoding(**bpe)
     elif targets == "chars" or (targets is None and chars is not None):
       assert bpe is None and chars is not None
-      self.chars = CharacterTargets(**chars)
-      self.labels = {"classes": self.chars.labels}
-      self.targets = self.chars
+      self.targets = CharacterTargets(**chars)
     elif targets is None:
       assert bpe is None and chars is None
-      self.targets = None
+      self.targets = None  # type: typing.Optional[Vocabulary]
     else:
       raise Exception("invalid targets %r. provide bpe or chars" % targets)
+    if self.targets:
+      self.labels["classes"] = self.targets.labels
     self._fixed_random_seed = fixed_random_seed
     self._audio_random = numpy.random.RandomState(1)
     self.feature_extractor = (
@@ -2387,7 +2435,10 @@ class LibriSpeechCorpus(CachedDataset2):
     super(LibriSpeechCorpus, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
     if not epoch:
       epoch = 1
-    self._audio_random.seed(self._fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch))
+    random_seed = self._fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch)
+    self._audio_random.seed(random_seed)
+    if self.targets:
+      self.targets.set_random_seed(random_seed)
 
     def get_seq_len(i):
       """
@@ -2794,7 +2845,10 @@ class OggZipDataset(CachedDataset2):
     super(OggZipDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
     if not epoch:
       epoch = 1
-    self._audio_random.seed(self._fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch))
+    random_seed = self._fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch)
+    self._audio_random.seed(random_seed)
+    if self.targets:
+      self.targets.set_random_seed(random_seed)
 
     def get_seq_len(i):
       """

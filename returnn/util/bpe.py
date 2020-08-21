@@ -458,7 +458,7 @@ class SamplingBytePairEncoder:
           continue
         else:
           raise Exception("no BPE-split for word %r" % word)
-      output.append(bpe_sym_seq)
+      output.extend(bpe_sym_seq)
     return output
 
 
@@ -504,7 +504,7 @@ def _demo():
         print("%s: %s" % (word, bpe_sym_seqs))
       else:
         greedy = DepthFirstSearch(bpe=bpe_prefix_tree, word=word, sampler=_sampler).search()
-        print("%s: %s" % (word, greedy))
+        print("%s: %s" % (word, " ".join(greedy)))
     return
 
   bpe = SamplingBytePairEncoder(labels=vocab.labels, breadth_prob=args.breadth_prob, rnd=rnd, unknown_label=args.unk)
@@ -512,10 +512,12 @@ def _demo():
   while True:
     try:
       line = sys.stdin.readline()
+      if line == "":  # EOF
+        return
     except KeyboardInterrupt:
       return
     line = line.strip()
-    print(bpe.segment_sentence(line))
+    print(" ".join(bpe.segment_sentence(line)))
 
 
 if __name__ == "__main__":
