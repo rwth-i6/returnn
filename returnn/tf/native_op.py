@@ -828,14 +828,16 @@ class NativeLstm2(RecSeqCellOp):
   does_input_projection = False
   does_direction_handling = True
 
-  def __init__(self, rec_weight_dropout=0.0, **kwargs):
+  def __init__(self, rec_weight_dropout=0.0, rec_weight_dropout_shape=None, **kwargs):
     """
     :param float rec_weight_dropout: weight dropout in the recurrent matrix, https://openreview.net/pdf?id=SyyGPP0TZ
+    :param tuple[int|None]|None rec_weight_dropout_shape: e.g. (None,1) to use dropout on all rec inputs (save memory)
     """
     super(NativeLstm2, self).__init__(**kwargs)
     self.n_input_dim_parts = [self.n_hidden] * 4
     self.n_input_dim = self.n_hidden * 4
     self.rec_weight_dropout = rec_weight_dropout
+    self.rec_weight_dropout_shape = rec_weight_dropout_shape
     self.op = make_op(native_op.NativeLstm2)
 
   @property
@@ -860,7 +862,9 @@ class NativeLstm2(RecSeqCellOp):
     if self.rec_weight_dropout:
       from returnn.tf.util.basic import dropout
       weights = dropout(
-        weights, keep_prob=1.0 - self.rec_weight_dropout, cond_on_train=True,
+        weights, keep_prob=1.0 - self.rec_weight_dropout,
+        noise_shape=self.rec_weight_dropout_shape,
+        cond_on_train=True,
         seed=tf_util.get_random_seed())
     inputs.set_shape(tf.TensorShape([None, None, self.n_hidden * 4]))
     weights.set_shape(tf.TensorShape([self.n_hidden, self.n_hidden * 4]))
