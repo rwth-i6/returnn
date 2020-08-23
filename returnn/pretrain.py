@@ -5,6 +5,7 @@ This is independent from the backend (TF or Theano, etc).
 """
 
 from __future__ import print_function
+from __future__ import absolute_import
 
 from returnn.log import log
 from returnn.util.basic import unicode, long
@@ -598,6 +599,15 @@ def demo():
 
 if __name__ == "__main__":
   import sys
+  import os
+  __package__ = "returnn"  # pylint: disable=redefined-builtin
+  my_dir = os.path.dirname(os.path.abspath(__file__))
+  sys.path.insert(0, os.path.dirname(my_dir))
+  if "" in sys.path:
+    sys.path.remove("")
+  if my_dir in sys.path:
+    sys.path.remove(my_dir)
+  import returnn
   sys.modules["returnn.pretrain"] = sys.modules["__main__"]
   try:
     demo()
