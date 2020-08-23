@@ -2870,7 +2870,10 @@ class ConvLayer(_ConcatInputLayer):
         bias_initializer = get_initializer(
           bias_init, seed=self.network.random.randint(2 ** 31) if bias_init else 0, eval_local_ns={"layer": self})
         b = self.add_param(tf_compat.v1.get_variable(name="bias", shape=(n_out,), initializer=bias_initializer))
-      y += b
+      if input_data.is_batch_feature_major:
+        y += tf.reshape(b, [1, n_out] + [1] * len(filter_size))
+      else:
+        y += b
     if activation:
       from returnn.tf.util.basic import get_activation_function
       act_func = get_activation_function(activation)
