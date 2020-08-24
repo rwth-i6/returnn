@@ -2154,6 +2154,41 @@ def test_ResizeLayer_fill_dropout():
       assert_equal([s for s in out[i] if s != fill_value], src_seqs[i])
 
 
+def test_PostfixInTimeLayer():
+  with make_scope() as session:
+    import numpy as np
+    net = TFNetwork(extern_data=ExternData())
+    src = InternalLayer(name="src", network=net, out_type={"dim": 2, "dtype": "int32"})
+    src_seqs = np.array([[[1, 1], [2, 2], [3, 3], [4, 4], [5, 5]], [[6, 6], [7, 7], [8, 8], [0, 0], [0, 0]]])
+    src_seq_lens = [5, 3]
+    src.output.placeholder = tf.constant(src_seqs, dtype=tf.int32)
+    src.output.size_placeholder = {0: tf.constant(src_seq_lens, dtype=tf.int32)}
+
+    static_postfix = -7
+    layer_postfix = InternalLayer(
+      name="postfix", network=net, out_type={"dim": 2, "time_dim_axis": None, "dtype": "int32"})
+    layer_postfix.output.placeholder = tf.constant([[-7, -8], [-9, -10]], dtype=tf.int32)
+
+    for postfix in [static_postfix, layer_postfix]:
+      for repeat in (1, 3):
+        layer = PostfixInTimeLayer(
+          name="postfix_in_time", network=net,
+          sources=[src], postfix=postfix, repeat=repeat,
+          output=PostfixInTimeLayer.get_out_data_from_opts(
+            name="postfix_in_time", network=net, sources=[src], postfix=postfix, repeat=repeat))
+        out, seq_lens = session.run([layer.output.placeholder, layer.output.size_placeholder[0]])
+        print(out)
+        print(seq_lens)
+        assert isinstance(out, numpy.ndarray)
+        assert isinstance(seq_lens, numpy.ndarray)
+        assert out.shape == (2, 5 + repeat, 2)
+        assert all(new_len == src_len + repeat for new_len, src_len in zip(seq_lens, src_seq_lens))
+        assert out[0, src_seq_lens[0] - 1, 0] == src_seqs[0, src_seq_lens[0] - 1, 0]
+        assert out[1, src_seq_lens[1] - 1, 0] == src_seqs[1, src_seq_lens[1] - 1, 0]
+        assert out[0, src_seq_lens[0], 0] == -7
+        assert out[0, src_seq_lens[0] + repeat - 1, 0] == -7
+
+
 def test_DotLayer():
   with make_scope() as session:
     B = 2
