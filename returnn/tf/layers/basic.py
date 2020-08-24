@@ -3879,15 +3879,21 @@ class PostfixInTimeLayer(_ConcatInputLayer):
 
   def __init__(self, postfix=0.0, repeat=1, **kwargs):
     """
-    :param float|int postfix: constant
+    :param float|int|LayerBase postfix: constant or other layer without time axis to use as postfix
     :param int repeat: how often to repeat the postfix
     """
     from returnn.tf.util.basic import DimensionTag
     super(PostfixInTimeLayer, self).__init__(**kwargs)
     self.output = self.input_data.copy(name="%s_output" % self.name)
     assert self.output.time_dim_axis is not None
-    assert isinstance(postfix, (float, int)), "other layer src not yet supported"
-    c = tf.constant(postfix, dtype=self.output.dtype)
+    assert isinstance(postfix, (float, int, LayerBase))
+    if isinstance(postfix, LayerBase):
+      assert not postfix.output.have_time_axis(), 'Postfix layer with time axis not implemented yet'
+      postfix = postfix.output.copy_compatible_to(self.output)
+      assert self.output.time_dim_axis_excluding_batch not in postfix.size_placeholder
+      c = postfix.placeholder
+    else:
+      c = tf.constant(postfix, dtype=self.output.dtype)
     added_shape = [
       ((self.output.batch_shape[i] or tf.shape(self.output.placeholder)[i])
        if (i != self.output.time_dim_axis)
@@ -3920,6 +3926,19 @@ class PostfixInTimeLayer(_ConcatInputLayer):
     """
     # Note: Time seq len is not correct...
     return get_concat_sources_data_template(sources, name="%s_output" % name)
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param returnn.tf.network.TFNetwork network:
+    :param get_layer:
+    """
+    super(PostfixInTimeLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if d.get("postfix", None):
+      postfix = d["postfix"]
+      if isinstance(postfix, str):
+        d["postfix"] = get_layer(postfix)
 
 
 class TimeChunkingLayer(_ConcatInputLayer):
