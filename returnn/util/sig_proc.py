@@ -76,7 +76,7 @@ class GammatoneFilterbank(object):
     """
     Returns an array with the parameters of the gammatone filterbank
 
-    :return: gammatone filterbank
+    :return: gammatone filterbank of shape (self.length * self.sample_rate, self.num_channels)
     :rtype: numpy.array
     """
     center_freqs = self.center_frequencies(self.num_channels, self.freq_max, self.freq_min)
@@ -107,22 +107,22 @@ class GammatoneFilterbank(object):
     return freq_center
 
   @staticmethod
-  def bandwidth_by_center_frequency(freq, l_=24.7, q_=9.264491981582191):
+  def bandwidth_by_center_frequency(freq, lin_approx_coeff=24.7, quality_factor=9.264491981582191):
     """
     Get bandwidth (named B in [1]) by center frequency using a linear approximation of the equivalent rectangular
-    bandwidth from
+    bandwidth (ERB) from
     Glasberg, Brian R., and Brian CJ Moore. "Derivation of auditory filter shapes from notched-noise data."
     Hearing research, 1990
-    The values are taken from there and are also used in RASR, see
+    The default values are taken from there and are also used in RASR, see
     https://github.com/rwth-i6/rasr/blob/master/src/Signal/GammaTone.cc
 
     :param float freq: center frequency
-    :param float l_:
-    :param float q_: audiological (ERB) based filter quality factor
+    :param float lin_approx_coeff: coefficient for the linear approximation of the ERB
+    :param float quality_factor: audiological (ERB) based filter quality factor
     :return: bandwidth
     :rtype: float
     """
-    return l_ * (1 / (l_ * q_) * freq + 1.0)
+    return lin_approx_coeff * (1 / (lin_approx_coeff * quality_factor) * freq + 1.0)
 
   def gammatone_impulse_response(self, f_center, length, sample_rate, output_gain=1., filter_order=4, phase_shift=0.):
     """
@@ -140,7 +140,10 @@ class GammatoneFilterbank(object):
     bandwidth = self.bandwidth_by_center_frequency(f_center)  # bandwidth (duration of impulse response)
     num_samples = int(numpy.floor(sample_rate * length))
     t = numpy.linspace(1. / sample_rate, length, num_samples)
-    return output_gain * numpy.power(t, filter_order - 1) * numpy.exp(-2 * numpy.pi * bandwidth * t) * (
+    return (
+      output_gain *
+      numpy.power(t, filter_order - 1) *
+      numpy.exp(-2 * numpy.pi * bandwidth * t) *
       numpy.cos(2 * numpy.pi * f_center * t + phase_shift))
 
   @staticmethod
