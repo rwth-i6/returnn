@@ -671,17 +671,20 @@ class TFNetwork(object):
       self._construction_stack.remove(name)
     return add_layer(name=name, layer_class=layer_class, **layer_desc)
 
-  def _create_layer_layer_desc(self, name, layer_desc):
+  def _create_layer_layer_desc(self, name, layer_desc, template=True):
     """
     This is called *after* :func:`LayerBase.transform_config_dict`
     and *before* :func:`LayerBase.get_out_data_from_opts`.
 
     :param str name: layer name
     :param dict[str] layer_desc: opts
+    :param bool template: for template inference, we do not need the full logic
     :rtype: dict[str]
     """
     from returnn.tf.layers.basic import SearchChoices
-    layer_desc = SearchChoices.translate_to_common_search_beam(layer_desc)
+    if not template:
+      # This might not even work correctly during template construction.
+      layer_desc = SearchChoices.translate_to_common_search_beam(layer_desc)
     layer_desc = layer_desc.copy()
     assert "name" not in layer_desc
     assert "network" not in layer_desc
@@ -706,7 +709,7 @@ class TFNetwork(object):
     from pprint import pprint
     from returnn.util.basic import help_on_type_error_wrong_args
     from returnn.tf.util.basic import py_print
-    layer_desc = self._create_layer_layer_desc(name=name, layer_desc=layer_desc)
+    layer_desc = self._create_layer_layer_desc(name=name, layer_desc=layer_desc, template=False)
     debug_print_layer_output_template = self.get_config().bool("debug_print_layer_output_template", False)
     debug_print_layer_output_shape = self.get_config().bool("debug_print_layer_output_shape", False)
     debug_add_check_numerics_on_output = self.get_config().bool(
