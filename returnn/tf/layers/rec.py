@@ -8045,11 +8045,15 @@ class ZoneoutLSTMCell(BaseRNNCell):
 
     from returnn.tf.util.basic import cond
     c = cond(self.is_training,
-             lambda: (1 - self._zoneout_cell) * tf.nn.dropout(new_c - prev_c, (1 - self._zoneout_cell)) + prev_c,
+             lambda: (1 - self._zoneout_cell) * tf_compat.v1.nn.dropout(
+               new_c - prev_c,
+               keep_prob=(1 - self._zoneout_cell)) + prev_c,
              lambda: (1 - self._zoneout_cell) * new_c + self._zoneout_cell * prev_c)
 
     h = cond(self.is_training,
-             lambda: (1 - self._zoneout_outputs) * tf.nn.dropout(new_h - prev_h, (1 - self._zoneout_outputs)) + prev_h,
+             lambda: (1 - self._zoneout_outputs) * tf_compat.v1.nn.dropout(
+               new_h - prev_h,
+               keep_prob=(1 - self._zoneout_outputs)) + prev_h,
              lambda: (1 - self._zoneout_outputs) * new_h + self._zoneout_outputs * prev_h)
 
     new_state = rnn_cell.LSTMStateTuple(c, h)
