@@ -1,3 +1,7 @@
+"""
+Collection of generic utilities related to signal processing
+"""
+
 import numpy
 
 

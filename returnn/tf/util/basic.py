@@ -1354,12 +1354,15 @@ class GammatoneFilterbankInitializer(init_ops.Initializer):
   def __call__(self, shape, dtype=None, partition_info=None):
     """
     :param tuple[int] shape:
-    :param tf.DType dtype:
+    :param tf.DType|None dtype:
     :param partition_info:
     :rtype: tf.Tensor
     """
+    import numpy
     fbank = self.gammatone_filterbank.get_gammatone_filterbank()
-    fbank = numpy.reshape(numpy.transpose(fbank), shape).astype(dtype.as_numpy_dtype)
+    fbank = numpy.reshape(fbank, shape)
+    if dtype is not None:
+      fbank = fbank.astype(dtype.as_numpy_dtype)
     return tf.convert_to_tensor(fbank, dtype=dtype)
 
 
