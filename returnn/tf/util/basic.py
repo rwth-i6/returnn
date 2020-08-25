@@ -1339,6 +1339,41 @@ def load_txt_file_initializer(filename, dtype=tf.float32):
   return LoadTxtFileInitializer()
 
 
+class GammatoneFilterbankInitializer(init_ops.Initializer):
+  """
+  Initializer for a gammatone filterbank, e.g., to initialize weights of a convolutional layer.
+  """
+
+  def __init__(self, **kwargs):
+    """
+    :param kwargs: kwargs for GammatoneFilterbank
+    """
+    from returnn.util.sig_proc import GammatoneFilterbank
+    self.gammatone_filterbank = GammatoneFilterbank(**kwargs)
+
+  def __call__(self, shape, dtype=tf.float32, partition_info=None):
+    """
+    :param tuple[int] shape:
+    :param tf.DType dtype:
+    :param partition_info:
+    :rtype: tf.Tensor
+    """
+    import numpy
+    fbank = self.gammatone_filterbank.get_gammatone_filterbank()
+    # Check whether shape and specified parameters for gammatone filterbank match. Currently, this is just implemented
+    # for the case that the expected shape is (sample_rate * length, num_channels) with possibly additional 1-dim axes
+    # in between.
+    gammatone_shape = (
+      int(self.gammatone_filterbank.sample_rate * self.gammatone_filterbank.length),
+      self.gammatone_filterbank.num_channels
+    )
+    assert shape[0] == gammatone_shape[0], "Expected shape does not match given gammatone filterbank paramerers"
+    assert shape[-1] == gammatone_shape[-1], "Expected shape does not match given gammatone filterbank paramerers"
+    fbank = numpy.reshape(fbank, shape)
+    fbank = fbank.astype(dtype.as_numpy_dtype)
+    return tf.convert_to_tensor(fbank, dtype=dtype)
+
+
 def get_initializer(s, seed=None, eval_local_ns=None, dtype=tf.float32):
   """
   :param str|dict[str]|float|numpy.ndarray s: e.g. "glorot_uniform" or "truncated_normal" or "orthogonal",
