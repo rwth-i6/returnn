@@ -1158,8 +1158,8 @@ class LayerBase(object):
         mean, variance = tf_compat.v1.nn.moments(x, axes=data.get_axes(exclude_feature=True), keep_dims=True)
       if sample_mean is None:
         with self.var_creation_scope():
-          sample_mean = self.add_param(tf.Variable(
-            initial_value=tf.zeros(data.get_bc_spatial_batch_shape()),
+          sample_mean = self.add_param(tf_compat.v1.get_variable(
+            shape=data.get_bc_spatial_batch_shape(), initializer=tf_compat.v1.zeros_initializer(),
             name="%s_%s_mean" % (self.name, data.name),
             trainable=False))
         # Use exponential moving average of batch mean.
@@ -1168,8 +1168,8 @@ class LayerBase(object):
       if sample_variance is None:
         # Note: Our Theano implementation does not use a moving average for this.
         with self.var_creation_scope():
-          sample_variance = self.add_param(tf.Variable(
-            initial_value=tf.ones(data.get_bc_spatial_batch_shape()),
+          sample_variance = self.add_param(tf_compat.v1.get_variable(
+            shape=data.get_bc_spatial_batch_shape(), initializer=tf_compat.v1.ones_initializer(),
             name="%s_%s_variance" % (self.name, data.name),
             trainable=False))
         sample_variance = tf_compat.v1.assign_add(sample_variance, (variance - sample_variance) * momentum)
@@ -1181,16 +1181,16 @@ class LayerBase(object):
       if use_std:
         if gamma is None:
           with self.var_creation_scope():
-            gamma = self.add_param(tf.Variable(
-              initial_value=tf.ones(data.get_bc_spatial_batch_shape()),
+            gamma = self.add_param(tf_compat.v1.get_variable(
+              shape=data.get_bc_spatial_batch_shape(), initializer=tf_compat.v1.ones_initializer(),
               name="%s_%s_gamma" % (self.name, data.name),
               trainable=True))
         bn *= gamma
       if use_shift:
         if beta is None:
           with self.var_creation_scope():
-            beta = self.add_param(tf.Variable(
-              initial_value=tf.zeros(data.get_bc_spatial_batch_shape()),
+            beta = self.add_param(tf_compat.v1.get_variable(
+              shape=data.get_bc_spatial_batch_shape(), initializer=tf_compat.v1.zeros_initializer(),
               name="%s_%s_beta" % (self.name, data.name),
               trainable=True))
         bn += beta
