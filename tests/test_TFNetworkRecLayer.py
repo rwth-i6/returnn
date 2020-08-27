@@ -5592,6 +5592,89 @@ def test_trafo_search_lm():
       assert all(out_seqs[i, :input_seq_lens[i]] == input_seqs[i, :input_seq_lens[i]])
 
 
+def test_cumulated_attention_weights_search():
+  rnd = numpy.random.RandomState(42)
+  beam_size = 5
+  dim = 7
+
+  # Config works during training, but building graph raises exception during search:
+  # Trying to reshape input tensor with n values into tensor with n * beam_size values
+  net_dict = {
+    'source_embed': { 'class': 'linear', 'activation': None, 'n_out': dim},
+    'output': {
+      'class': 'rec',
+      'from': [],
+      'max_seq_len': "max_len_from('base:source_embed') * 3",
+      'target': 'classes',
+      'unit': {
+          'target_embed': { 'class': 'linear', 'activation': None, 'from': ['prev:output'], 'n_out': dim},
+          'att_energy': {
+            'class': 'dot', 'from': ['base:source_embed', 'target_embed'],
+            'red1': -1, 'red2': -1, 'var1': 'T', 'var2': 'T?', 'add_var2_if_empty': False},
+          'cum_att_energy': {'class': 'combine', 'kind': 'add', 'from': ['prev:att_energy', 'att_energy']},
+          'att_weights': {
+            'class': 'softmax_over_spatial', 'from': ['cum_att_energy'], 'axis': 'stag:extern_data:data'},
+          'att': { 'class': 'generic_attention', 'base': 'base:source_embed', 'weights': 'att_weights'},
+          'output_prob': { 'class': 'softmax', 'from': ['att'], 'loss': 'ce', 'target': 'classes'},
+          'output': {
+            'beam_size': beam_size, 'class': 'choice', 'from': ['output_prob'],
+            'initial_output': 0, 'target': 'classes'},
+          'end': {'class': 'compare', 'from': ['output'], 'value': 0},
+      }},
+    'decision': {'class': 'decide', 'from': ['output'], 'loss': 'edit_distance', 'loss_opts': {}, 'target': 'classes'},
+  }
+
+  n_batch, n_in, n_time = 3, 19, 9
+  n_out = n_in
+
+  config = Config()
+  config.update({
+    "extern_data": {"data": {"dim": n_out, "sparse": True}, "classes": {"dim": n_out, "sparse": True}},
+    "search_output_layer": "decision",
+    "debug_print_layer_output_shape": True,
+    "debug_print_layer_output_template": True})
+
+  # Try different permutations of the cum_att_energy inputs, previously these behaved differently
+  for source_layers in [["prev:att_energy", "att_energy"], ["att_energy", "prev:att_energy"]]:
+    with make_scope() as session:
+      network = TFNetwork(config=config, train_flag=False, search_flag=True)
+      pprint(network.extern_data.data)
+      net_dict["output"]["unit"]["cum_att_energy"]["from"] = source_layers
+      network.construct_from_dict(net_dict)
+
+      fetches = network.get_fetches_dict()
+      data_input = network.extern_data.data["data"]
+      assert data_input.batch_shape == (None, None)
+      output_out = network.get_layer("decision").output
+      assert output_out.is_batch_major and output_out.sparse and output_out.dim == n_out and output_out.shape == (None,)
+
+      input_seq_lens = numpy.array([n_time, n_time - 5, n_time - 4], dtype="int32")
+      assert input_seq_lens.shape == (n_batch,) and all(input_seq_lens > 0)
+      input_seqs = rnd.randint(1, n_out, size=(n_batch, n_time,), dtype="int32")
+      print("input:")
+      print(input_seqs)
+      print("lens:", input_seq_lens)
+
+      session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+      fetches = (fetches, output_out.placeholder, output_out.get_sequence_lengths())
+      feed_dict = {
+        data_input.placeholder: input_seqs,
+        data_input.size_placeholder[0]: input_seq_lens}
+      try:
+        info, out_seqs, out_seq_lens = session.run(fetches, feed_dict=feed_dict)
+      except Exception as exc:
+        print("EXCEPTION:", type(exc), exc)
+        help_on_tf_exception(session=session, exception=exc, fetches=fetches, feed_dict=feed_dict)
+        raise
+      print(info)
+      print("output:")
+      print(out_seqs)  # random...
+      print("lens:", out_seq_lens)
+      assert isinstance(out_seqs, numpy.ndarray) and isinstance(out_seq_lens, numpy.ndarray)
+      assert len(out_seqs.shape) == 2 and out_seqs.shape[0] == n_batch
+      assert out_seq_lens.shape == (n_batch,)
+
+
 def test_PositionalEncodingLayer_offset_no_rec():
   # Test `offset` option when `PositionalEncodingLayer` is out of loop.
   rnd = numpy.random.RandomState(42)
