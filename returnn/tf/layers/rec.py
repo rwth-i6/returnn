@@ -5770,18 +5770,26 @@ class SelfAttentionLayer(_ConcatInputLayer):
       if self._rec_previous_layer:
         assert self.input_data.time_dim_axis is None
         assert attention_left_only
-        # (batch,heads,time,kv-dim//heads)
-        prev_kv_left = self._rec_previous_layer.rec_vars_outputs["kv_left"]
+        # (batch,heads,time,k-dim//heads)
+        prev_k_left = self._rec_previous_layer.rec_vars_outputs["k_left"]
+        # (batch,heads,time,v-dim//heads)
+        prev_v_left = self._rec_previous_layer.rec_vars_outputs["v_left"]
       else:
         assert self.input_data.time_dim_axis is not None
         batch_dim = self.input_data.get_batch_dim()
-        prev_kv_left = (
-          RnnCellLayer.get_rec_initial_state_inner(
+        if initial_state is not None:
+          prev_k_left = RnnCellLayer.get_rec_initial_state_inner(
             initial_state=initial_state, name=self.name, rec_layer=self,
-            state_key="kv_left",
-            initial_shape=(batch_dim, num_heads, 0, (total_key_dim + total_value_dim) // num_heads),
-            shape_invariant=(None, num_heads, None, (total_key_dim + total_value_dim) // num_heads))
-          if initial_state is not None else None)
+            state_key="k_left",
+            initial_shape=(batch_dim, num_heads, 0, total_key_dim // num_heads),
+            shape_invariant=(None, num_heads, None, total_key_dim // num_heads))
+          prev_v_left = RnnCellLayer.get_rec_initial_state_inner(
+            initial_state=initial_state, name=self.name, rec_layer=self,
+            state_key="v_left",
+            initial_shape=(batch_dim, num_heads, 0, total_value_dim // num_heads),
+            shape_invariant=(None, num_heads, None, total_value_dim // num_heads))
+        else:
+          prev_k_left, prev_v_left = None, None
     x = self.input_data.placeholder
     if self.input_data.sparse:
       x = tf.nn.embedding_lookup(mat, to_int32_64(x))
@@ -5805,31 +5813,36 @@ class SelfAttentionLayer(_ConcatInputLayer):
     x.set_shape((None, num_heads, None, mat_n_out // num_heads))
     q, k, v = tf.split(
       x, [total_key_dim // num_heads, total_key_dim // num_heads, total_value_dim // num_heads], axis=-1, name="qkv")
+    # (batch,heads,time|1,{q,k,v}-dim//heads)
     q.set_shape((None, num_heads, None, total_key_dim // num_heads))
     k.set_shape((None, num_heads, None, total_key_dim // num_heads))
     v.set_shape((None, num_heads, None, total_value_dim // num_heads))
     q *= (total_key_dim // num_heads) ** -0.5
     orig_k = k
     orig_q = q
-    if prev_kv_left is not None:
+    have_prev_kv_left = (prev_k_left is not None)
+    assert have_prev_kv_left == (prev_v_left is not None)
+    if have_prev_kv_left:
       # Memory for kv.
-      kv = tf.concat([k, v], axis=-1)  # (batch,heads,1|time,kv-dim//heads)
-      kv.set_shape((None, num_heads, None, (total_key_dim + total_value_dim) // num_heads))
-      self.rec_vars_outputs["kv_left"] = kv  # usually will be overwritten by the new kv below
-      kv = tf.concat([prev_kv_left, kv], axis=2)
-      kv.set_shape((None, num_heads, None, (total_key_dim + total_value_dim) // num_heads))
+      self.rec_vars_outputs["k_left"] = k  # usually will be overwritten by the new k below
+      self.rec_vars_outputs["v_left"] = v  # usually will be overwritten by the new v below
+      k = tf.concat([prev_k_left, k], axis=2)
+      v = tf.concat([prev_v_left, v], axis=2)
+      k.set_shape((None, num_heads, None, total_key_dim // num_heads))
+      v.set_shape((None, num_heads, None, total_value_dim // num_heads))
       if restrict_state_to_last_seq:
-        # 'Last' means the current `kv` here, before the concat with `prev_kv_left`.
-        # I.e. we wont update `rec_vars_outputs` to the concatenated variant; it will exclude `prev_kv_left`.
-        # Note that this means a difference depending whether we are inside the loop or not.
+        # 'Last' means the current `k`/`v` here, before the concat with `prev_k_left` / `prev_v_left`.
+        # I.e. we wont update `rec_vars_outputs` to the concatenated variant; it will exclude `prev_k_left` and
+        # `prev_v_left`. Note that this means a difference depending whether we are inside the loop or not.
         # If we are inside the loop, we should update until the end of the seq, and then restrict to the last seq.
         # This is handled in post_process_final_rec_vars_outputs.
         # Otherwise just leave `rec_vars_outputs` as it is already.
         if self._rec_previous_layer:
-          self.rec_vars_outputs["kv_left"] = kv
+          self.rec_vars_outputs["k_left"] = k
+          self.rec_vars_outputs["v_left"] = v
       else:  # this is usually the case
-        self.rec_vars_outputs["kv_left"] = kv
-      k, v = tf.split(kv, [total_key_dim // num_heads, total_value_dim // num_heads], axis=-1)
+        self.rec_vars_outputs["k_left"] = k
+        self.rec_vars_outputs["v_left"] = v
     # Dot-attention. Resulting last time dimension will be used to perform the softmax over, and will the be reduced.
     # (batch,heads,num_queries|1,num_keys) e.g. (batch,heads,time|1,time)
     energy = tf.matmul(q, k, transpose_b=True, name="energy")
@@ -5860,18 +5873,18 @@ class SelfAttentionLayer(_ConcatInputLayer):
         num_keys = tf.shape(orig_k)[2]
         # (1,1,num_queries,num_keys)
         energy_mask = matrix_triangular((1, 1, num_queries, num_keys), dtype=tf.bool, lower=True)
-        if prev_kv_left is not None:
-          energy_mask_left = tf.ones((1, 1, num_queries, tf.shape(prev_kv_left)[2]), dtype=tf.bool)
+        if have_prev_kv_left:
+          energy_mask_left = tf.ones((1, 1, num_queries, tf.shape(prev_k_left)[2]), dtype=tf.bool)
           energy_mask = tf.concat([energy_mask_left, energy_mask], axis=-1)
       else:
         energy_mask = tf.sequence_mask(
           self.input_data.get_sequence_lengths(), maxlen=tf.shape(energy)[-1])  # (batch,time)
         energy_mask = tf.reshape(energy_mask, [tf.shape(energy)[0], 1, 1, tf.shape(energy)[-1]])  # (batch,1,1,time)
-      if state_var_lengths is not None and prev_kv_left is not None:
+      if state_var_lengths is not None and have_prev_kv_left:
         if callable(state_var_lengths):
           state_var_lengths = state_var_lengths()
         assert isinstance(state_var_lengths, tf.Tensor)
-        state_var_max_length = tf.shape(prev_kv_left)[-2]
+        state_var_max_length = tf.shape(prev_k_left)[-2]
         total_max_length = tf.shape(energy)[-1]
         inverted_prefix_mask = tf.sequence_mask(
           state_var_max_length - state_var_lengths, maxlen=total_max_length, name="inverted_prefix_mask")
@@ -5881,7 +5894,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
       # Currently tf.where does not support broadcasting...
       energy_mask = tf.logical_and(energy_mask, tf.ones_like(energy, dtype=tf.bool))
       energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy), name="energy_masked")
-    weights = tf.nn.softmax(energy)  # (batch,heads,time,time)
+    weights = tf.nn.softmax(energy, name="weights")  # (batch,heads,time,time)
     if attention_dropout:
       import returnn.tf.util.basic as tf_util
       weights = self.network.cond_on_train(
@@ -5955,16 +5968,25 @@ class SelfAttentionLayer(_ConcatInputLayer):
     data = get_concat_sources_data_template(sources)
     data = data.copy_as_batch_major()
     if data.time_dim_axis is None or initial_state is not None:
-      kv_dim = total_key_dim + n_out
+      total_value_dim = n_out
       # Assume inside RecLayer, or initial_state set explicitly.
       # Before, we used a tf.TensorArray.
       # However, that has higher memory consumptions than just using a tensor and concatenating to it.
-      # (batch,heads,time,kv-dim//heads)
-      kv_left = RnnCellLayer.get_rec_initial_state_inner(rec_layer=rec_layer, state_key="kv_left",
-                                                         name=name, initial_state=initial_state,
-                                                         initial_shape=(batch_dim, num_heads, 0, kv_dim // num_heads),
-                                                         shape_invariant=(None, num_heads, None, kv_dim // num_heads))
-      return {"kv_left": kv_left}
+      # Still, this is not ideal as we create a new tensor containing the previous t-1 keys/values for every time step
+      # t, thus requiring quadratic memory usage.
+      # (batch,heads,time,k-dim//heads)
+      k_left = RnnCellLayer.get_rec_initial_state_inner(
+        initial_state=initial_state, name=name, rec_layer=rec_layer,
+        state_key="k_left",
+        initial_shape=(batch_dim, num_heads, 0, total_key_dim // num_heads),
+        shape_invariant=(None, num_heads, None, total_key_dim // num_heads))
+      # (batch,heads,time,v-dim//heads)
+      v_left = RnnCellLayer.get_rec_initial_state_inner(
+        initial_state=initial_state, name=name, rec_layer=rec_layer,
+        state_key="v_left",
+        initial_shape=(batch_dim, num_heads, 0, total_value_dim // num_heads),
+        shape_invariant=(None, num_heads, None, total_value_dim // num_heads))
+      return {"k_left": k_left, "v_left": v_left}
     return {}
 
   @classmethod
@@ -5981,7 +6003,9 @@ class SelfAttentionLayer(_ConcatInputLayer):
     if data.time_dim_axis is None:
       # Assume inside RecLayer. See get_rec_initial_extra_outputs.
       total_value_dim = n_out
-      return {"kv_left": tf.TensorShape((None, num_heads, None, (total_key_dim + total_value_dim) // num_heads))}
+      return {
+        "k_left": tf.TensorShape((None, num_heads, None, total_key_dim // num_heads)),
+        "v_left": tf.TensorShape((None, num_heads, None, total_value_dim // num_heads))}
     return {}
 
   def post_process_final_rec_vars_outputs(self, rec_vars_outputs, seq_len):
@@ -5991,9 +6015,10 @@ class SelfAttentionLayer(_ConcatInputLayer):
     :rtype: dict[str,tf.Tensor]
     """
     if self.input_data.time_dim_axis is None and self._restrict_state_to_last_seq:
-      # kv_left should be of shape (batch, heads, time, kv_dim_per_head).
+      # k_left and v_left should be of shape (batch, heads, time, {k,v}_dim_per_head).
       # time will be >= max(seq_len); could be more if we use e.g. initial_state=keep_over_epoch.
-      rec_vars_outputs["kv_left"] = rec_vars_outputs["kv_left"][:, :, -tf.reduce_max(seq_len):]
+      rec_vars_outputs["k_left"] = rec_vars_outputs["k_left"][:, :, -tf.reduce_max(seq_len):]
+      rec_vars_outputs["v_left"] = rec_vars_outputs["v_left"][:, :, -tf.reduce_max(seq_len):]
     return rec_vars_outputs
 
 
