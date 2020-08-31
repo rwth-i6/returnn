@@ -26,3 +26,6 @@ ipython-kernel-*.json
 
 # via test cases run directly in this directory
 /dataset_id*
+
+# via GitHub codespaces
+/pythonenv*
