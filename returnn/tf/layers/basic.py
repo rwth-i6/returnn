@@ -642,7 +642,7 @@ class SliceLayer(_ConcatInputLayer):
             tf.maximum(0, self.output.size_placeholder[axis_wo_batch] + slice_end))
       if slice_step:
         self.output.size_placeholder[axis_wo_batch] = (
-          tf_compat.v1.ceil(tf.divide(self.output.size_placeholder[axis_wo_batch], slice_step)))
+          tf.cast(tf_compat.v1.ceil(tf.divide(self.output.size_placeholder[axis_wo_batch], slice_step)), tf.int32))
       from returnn.tf.util.basic import DimensionTag
       if not DimensionTag.get_tag_from_size_tensor(self.output.size_placeholder[axis_wo_batch]):
         tag = DimensionTag(
