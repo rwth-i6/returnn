@@ -7199,7 +7199,7 @@ class ExpectedLoss(Loss):
       corrected_losses = losses
       if self.norm_scores:
         scores_norm_shift = tf.reduce_logsumexp(
-          beam_scores, name="scores_norm_shift", axis=1, keep_dims=True)  # (batch,1)
+          beam_scores, name="scores_norm_shift", axis=1, keepdims=True)  # (batch,1)
         if self.norm_scores_stop_gradient:
           scores_norm_shift = tf.stop_gradient(scores_norm_shift)
         # Thus sum(value_weights) == 1.
