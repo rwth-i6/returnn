@@ -3888,11 +3888,13 @@ class PostfixInTimeLayer(_ConcatInputLayer):
     assert self.output.time_dim_axis is not None
     assert isinstance(postfix, (float, int, LayerBase))
     if isinstance(postfix, LayerBase):
+      self.postfix_layer = postfix
       assert not postfix.output.have_time_axis(), 'Postfix layer with time axis not implemented yet'
       postfix = postfix.output.copy_compatible_to(self.output)
       assert self.output.time_dim_axis_excluding_batch not in postfix.size_placeholder
       c = postfix.placeholder
     else:
+      self.postfix_layer = None
       c = tf.constant(postfix, dtype=self.output.dtype)
     added_shape = [
       ((self.output.batch_shape[i] or tf.shape(self.output.placeholder)[i])
@@ -3918,14 +3920,18 @@ class PostfixInTimeLayer(_ConcatInputLayer):
     tag.set_tag_on_size_tensor(self.output.size_placeholder[self.output.time_dim_axis_excluding_batch])
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, postfix=0.0, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
+    :param float|int|LayerBase postfix: constant or other layer without time axis to use as postfix
     :rtype: Data
     """
     # Note: Time seq len is not correct...
-    return get_concat_sources_data_template(sources, name="%s_output" % name)
+    out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    if isinstance(postfix, LayerBase):
+      out.beam = SearchBeam.get_combined_beam(out.beam, postfix.output.beam)
+    return out
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -3939,6 +3945,15 @@ class PostfixInTimeLayer(_ConcatInputLayer):
       postfix = d["postfix"]
       if isinstance(postfix, str):
         d["postfix"] = get_layer(postfix)
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    deps = super(PostfixInTimeLayer, self).get_dep_layers()
+    if self.postfix_layer:
+      deps.append(self.postfix_layer)
+    return deps
 
 
 class TimeChunkingLayer(_ConcatInputLayer):
