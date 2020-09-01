@@ -126,18 +126,27 @@ jobs:
         pip install --user theano==0.9 | cat
         pip install --user nose
 
+        # Theano setup.
         echo "[global]" >> ~/.theanorc
         echo "device = cpu" >> ~/.theanorc
         echo "floatX = float32" >> ~/.theanorc
 
+        # Enforce the right Python interpreter for nosetests.
+        echo "#!/usr/bin/env python" > ~/nosetests
+        cat ~/.local/bin/nosetests >> ~/nosetests
+        chmod +x ~/nosetests
+        mv ~/nosetests ~/.local/bin/nosetests
+
     - name: Test Python/Numpy/TF/Theano versions.
       run: |
         echo "Python env: $(type python) $(python --version)"
-        echo "Nosetests env: $(type nosetests)"
         python -c "import numpy; print('NumPy:', numpy.version.full_version)"
         python -c "import tensorflow as tf; print('TensorFlow:', tf.__git_version__, tf.__version__, tf.__file__)"
         python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
         python -c "import theano; print('Theano:', theano.__version__)"
+
+        echo "Nosetests env: $(type nosetests)"
+        nosetests -V
 
     - name: Cache PyCharm
       if: matrix.action == 'RUN=tests/pycharm-inspect.py'
