@@ -607,6 +607,56 @@ class LayerNormLayer(_ConcatInputLayer):
     return get_concat_sources_data_template(sources, name="%s_output" % name)
 
 
+class NormLayer(_ConcatInputLayer):
+  """
+  Normalize over specified axes, e.g. time and/or feature axis.
+  In case of just feature, this corresponds to layer norm.
+  """
+  layer_class = "norm"
+
+  def __init__(self, axes, param_shape="F", scale=True, bias=True, epsilon=1e-6, **kwargs):
+    """
+    :param str|list[str] axes: axes over which the mean and variance are computed, e.g. "F" or "TF"
+    :param str|list[str]|tuple[str]|int|list[int]|tuple[int] param_shape: shape of the scale and bias parameters
+    :param bool scale: add trainable scale parameters
+    :param bool bias: add trainable bias parameters
+    :param float epsilon: epsilon for numerical stability
+    """
+    super(NormLayer, self).__init__(**kwargs)
+    assert not self.input_data.sparse
+    x = self.input_data.placeholder
+    assert isinstance(param_shape, str)  # not implemented otherwise yet
+    param_axes = sorted(self.input_data.get_axes_from_description(param_shape))
+    param_shape = [self.input_data.batch_shape[axis] for axis in param_axes]
+    assert all(isinstance(dim, int) for dim in param_shape), "%s: only static param shape allowed" % self
+    param_bc_shape = [dim if axis in param_axes else 1 for (axis, dim) in enumerate(self.input_data.batch_shape)]
+    axes = self.input_data.get_axes_from_description(axes)
+
+    mean = tf.reduce_mean(x, axis=axes, keepdims=True, name="mean")
+    variance = tf.reduce_mean(tf.square(x - mean), axis=axes, keepdims=True, name="variance")
+    with tf.name_scope("normalized"):
+      norm_x = (x - mean) * tf_compat.v1.rsqrt(variance + epsilon)
+    if scale:
+      with self.var_creation_scope():
+        scale_param = self.add_param(tf_compat.v1.get_variable("scale", param_shape, initializer=tf.ones_initializer()))
+      norm_x *= tf.reshape(scale_param, param_bc_shape)
+    if bias:
+      with self.var_creation_scope():
+        bias_param = self.add_param(tf_compat.v1.get_variable("bias", param_shape, initializer=tf.zeros_initializer()))
+      norm_x += tf.reshape(bias_param, param_bc_shape)
+    self.output.placeholder = norm_x
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
+
+  @classmethod
+  def get_out_data_from_opts(cls, sources, name, **kwargs):
+    """
+    :param list[LayerBase] sources:
+    :param str name:
+    :rtype: Data
+    """
+    return get_concat_sources_data_template(sources, name="%s_output" % name)
+
+
 class SliceLayer(_ConcatInputLayer):
   """
   Slicing on the input, i.e. x[start:end:step] in some axis.
