@@ -632,17 +632,18 @@ class NormLayer(_ConcatInputLayer):
     param_bc_shape = [dim if axis in param_axes else 1 for (axis, dim) in enumerate(self.input_data.batch_shape)]
     axes = self.input_data.get_axes_from_description(axes)
 
-    with self.var_creation_scope():
-      scale_params = self.add_param(tf_compat.v1.get_variable("scale", param_bc_shape, initializer=tf.ones_initializer()))
-      bias_params = self.add_param(tf_compat.v1.get_variable("bias", param_bc_shape, initializer=tf.zeros_initializer()))
     mean = tf.reduce_mean(x, axis=axes, keepdims=True, name="mean")
     variance = tf.reduce_mean(tf.square(x - mean), axis=axes, keepdims=True, name="variance")
     with tf.name_scope("normalized"):
       norm_x = (x - mean) * tf_compat.v1.rsqrt(variance + epsilon)
     if scale:
-      norm_x *= scale_params
+      with self.var_creation_scope():
+        scale_param = self.add_param(tf_compat.v1.get_variable("scale", param_shape, initializer=tf.ones_initializer()))
+      norm_x *= tf.reshape(scale_param, param_bc_shape)
     if bias:
-      norm_x += bias_params
+      with self.var_creation_scope():
+        bias_param = self.add_param(tf_compat.v1.get_variable("bias", param_shape, initializer=tf.zeros_initializer()))
+      norm_x += tf.reshape(bias_param, param_bc_shape)
     self.output.placeholder = norm_x
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
 
