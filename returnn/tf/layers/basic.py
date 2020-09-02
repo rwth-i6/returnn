@@ -625,24 +625,16 @@ class NormLayer(_ConcatInputLayer):
     super(NormLayer, self).__init__(**kwargs)
     assert not self.input_data.sparse
     x = self.input_data.placeholder
-    if scale or bias:
-      if isinstance(param_shape, int):
-        param_shape = [param_shape]
-      elif ((isinstance(param_shape, list) or isinstance(param_shape, tuple)) and
-            all(isinstance(x, int) for x in param_shape)):
-        param_shape = param_shape
-      elif (isinstance(param_shape, str) or
-            ((isinstance(param_shape, list) or isinstance(param_shape, tuple)) and
-            all(isinstance(x, str) for x in param_shape))):
-        param_shape = self.input_data.get_bc_shape(opts={ax: -1 for ax in param_shape})
-      assert len(param_shape) == len(self.input_data.batch_shape), (
-        "Dimension does not match input. Maybe broadcast dimensions are not included explicitly?")
-      assert all(isinstance(x, int) for x in param_shape)
+    assert isinstance(param_shape, str)  # not implemented otherwise yet
+    param_axes = sorted(self.input_data.get_axes_from_description(param_shape))
+    param_shape = [self.input_data.batch_shape[axis] for axis in param_axes]
+    assert all(isinstance(dim, int) for dim in param_shape), "%s: only static param shape allowed" % self
+    param_bc_shape = [dim if axis in param_axes else 1 for (axis, dim) in enumerate(self.input_data.batch_shape)]
     axes = self.input_data.get_axes_from_description(axes)
 
     with self.var_creation_scope():
-      scale_params = self.add_param(tf_compat.v1.get_variable("scale", param_shape, initializer=tf.ones_initializer()))
-      bias_params = self.add_param(tf_compat.v1.get_variable("bias", param_shape, initializer=tf.zeros_initializer()))
+      scale_params = self.add_param(tf_compat.v1.get_variable("scale", param_bc_shape, initializer=tf.ones_initializer()))
+      bias_params = self.add_param(tf_compat.v1.get_variable("bias", param_bc_shape, initializer=tf.zeros_initializer()))
     mean = tf.reduce_mean(x, axis=axes, keepdims=True, name="mean")
     variance = tf.reduce_mean(tf.square(x - mean), axis=axes, keepdims=True, name="variance")
     with tf.name_scope("normalized"):
