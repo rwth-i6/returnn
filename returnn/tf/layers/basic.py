@@ -621,7 +621,7 @@ class NormLayer(_ConcatInputLayer):
   """
   Normalize over specified axes, e.g. time and/or feature axis.
   In case of just feature (``axes="F"``),
-  this corresponds to `layer normalization <https://arxiv.org/abs/1607.06450`__ (see :class:`LayerNormLayer`).
+  this corresponds to `layer normalization <https://arxiv.org/abs/1607.06450>`__ (see :class:`LayerNormLayer`).
   In case of time and feature (``axes="TF"``) for a 3D input,
   or more general all except batch (``axes="except_batch"``),
   this corresponds to `group normalization <https://arxiv.org/abs/1803.08494>`__ with G=1,
