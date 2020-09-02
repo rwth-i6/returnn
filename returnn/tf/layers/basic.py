@@ -558,6 +558,8 @@ class ActivationLayer(CopyLayer):
 class BatchNormLayer(CopyLayer):
   """
   Implements batch-normalization (http://arxiv.org/abs/1502.03167) as a separate layer.
+
+  Also see :class:`NormLayer`.
   """
   layer_class = "batch_norm"
 
@@ -577,7 +579,15 @@ class BatchNormLayer(CopyLayer):
 
 class LayerNormLayer(_ConcatInputLayer):
   """
-  Applies layer-normalization.
+  Applies `layer-normalization <https://arxiv.org/abs/1607.06450>`__.
+
+  Note that we *just* normalize over the feature-dim axis here.
+  This is consistent to the default behavior of :class:`tf.keras.layers.LayerNormalization`
+  and also how it is commonly used in many models, including Transformer.
+
+  However, there are cases where it would be common to normalize over all axes except batch-dim,
+  or all axes except batch and time.
+  For a more generic variant, see :class:`NormLayer`.
   """
   layer_class = "layer_norm"
 
@@ -610,14 +620,34 @@ class LayerNormLayer(_ConcatInputLayer):
 class NormLayer(_ConcatInputLayer):
   """
   Normalize over specified axes, e.g. time and/or feature axis.
-  In case of just feature, this corresponds to layer norm.
+  In case of just feature (``axes="F"``),
+  this corresponds to `layer normalization <https://arxiv.org/abs/1607.06450`__ (see :class:`LayerNormLayer`).
+  In case of time and feature (``axes="TF"``) for a 3D input,
+  or more general all except batch (``axes="except_batch"``),
+  this corresponds to `group normalization <https://arxiv.org/abs/1803.08494>`__ with G=1,
+  or non-standard layer normalization.
+  (The definition of layer-normalization is not clear on what axes should be normalized over.
+  In many other frameworks, the default axis is just the last axis,
+  which is usually the feature axis.
+  However, in certain implementations and models,
+  it is also common to normalize over all axes except batch.)
+
+  The statistics are calculated just on the input.
+  There are no running statistics (in contrast to batch normalization, see :class:`BatchNormLayer`).
+
+  For some discussion on the definition of layer-norm vs group-norm,
+  also see
+  `here <https://stats.stackexchange.com/questions/485550/is-group-norm-with-g-1-equiv-to-layer-norm>`__
+  and `here <https://github.com/tensorflow/addons/issues/2143>`__.
   """
   layer_class = "norm"
 
   def __init__(self, axes, param_shape="F", scale=True, bias=True, epsilon=1e-6, **kwargs):
     """
     :param str|list[str] axes: axes over which the mean and variance are computed, e.g. "F" or "TF"
-    :param str|list[str]|tuple[str]|int|list[int]|tuple[int] param_shape: shape of the scale and bias parameters
+    :param str|list[str]|tuple[str]|int|list[int]|tuple[int] param_shape: shape of the scale and bias parameters.
+      You can also refer to (static) axes of the input, such as the feature-dim.
+      This is also the default, i.e. a param-shape of [F], independent of the axes to normalize over.
     :param bool scale: add trainable scale parameters
     :param bool bias: add trainable bias parameters
     :param float epsilon: epsilon for numerical stability
