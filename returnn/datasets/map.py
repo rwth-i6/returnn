@@ -1,5 +1,6 @@
 from returnn.datasets.basic import DatasetSeq
 from returnn.datasets.cached2 import CachedDataset2
+from returnn.util.basic import OptionalNotImplementedError
 
 
 class MapDatasetBase(CachedDataset2):
@@ -8,7 +9,7 @@ class MapDatasetBase(CachedDataset2):
   For global sorting, the length information needs to be known beforehand.
   """
 
-  def __init__(self, name=None, seq_ordering='default', random_seed_offset=None,
+  def __init__(self, name=None, num_outputs=None, seq_ordering='default', random_seed_offset=None,
                partition_epoch=None):
     """
 
@@ -24,7 +25,7 @@ class MapDatasetBase(CachedDataset2):
       partition_epoch=partition_epoch
     )
 
-    self.num_outputs = {}
+    self.num_outputs = num_outputs or {}
     self._seq_order = None
 
   def __len__(self):
@@ -53,7 +54,7 @@ class MapDatasetBase(CachedDataset2):
     :return:
     :rtype: int|None
     """
-    raise NotImplemented
+    raise OptionalNotImplementedError
 
   def get_seq_tag(self, seq_idx):
     """
@@ -63,7 +64,7 @@ class MapDatasetBase(CachedDataset2):
     :return:
     :rtype str|None
     """
-    return None
+    return "seq-%i" % seq_idx
 
   def get_seq_order(self, epoch=None):
     """
@@ -75,38 +76,7 @@ class MapDatasetBase(CachedDataset2):
     :return: seq_order
     :rtype list[int]
     """
-    return None
-
-  def get_data_dim(self, key):
-    """
-    :param str key: e.g. "data" or "classes"
-    :return: number of classes, no matter if sparse or not
-    :rtype: int
-    """
-    super().get_data_dim(key)
-
-  def get_data_dtype(self, key):
-    """
-    :param str key: e.g. "data" or "classes"
-    :return: dtype as str, e.g. "int32" or "float32"
-    :rtype: str
-    """
-    super().get_data_dtype(key)
-
-  def is_data_sparse(self, key):
-    """
-    :param str key: e.g. "data" or "classes"
-    :return: whether the data is sparse
-    :rtype: bool
-    """
-    super().is_data_sparse(key)
-
-  def get_data_shape(self, key):
-    """
-    :returns get_data(*, key).shape[1:], i.e. num-frames excluded
-    :rtype: list[int]
-    """
-    super().get_data_shape(key)
+    raise OptionalNotImplementedError
 
   # Internal Functions, do not override
 
@@ -131,14 +101,14 @@ class MapDatasetBase(CachedDataset2):
     if seq_list or seq_order:
       raise NotImplementedError
 
-    if self.get_seq_len(0) is None:
+    try:
+      self._seq_order = self.get_seq_order_for_epoch(
+        epoch=epoch, num_seqs=len(self), get_seq_len=self.get_seq_len)
+    except OptionalNotImplementedError:
       # only support seq_ordering that need no length here
       assert self.seq_ordering in ["default", "reverse", "random"]
       self._seq_order = self.get_seq_order_for_epoch(
         epoch=epoch, num_seqs=len(self), get_seq_len=None)
-    else:
-      self._seq_order = self.get_seq_order_for_epoch(
-        epoch=epoch, num_seqs=len(self), get_seq_len=self.get_seq_len)
 
   def _collect_single_seq(self, seq_idx):
     """
@@ -157,10 +127,13 @@ class MapDatasetBase(CachedDataset2):
     return self._seq_order
 
   def get_tag(self, sorted_seq_idx):
-    seq_len = self.get_seq_tag(self.get_corpus_seq_idx(sorted_seq_idx))
-    if seq_len is None:
-      seq_len = super().get_tag(sorted_seq_idx)
-    return seq_len
+    """
+
+    :param sorted_seq_idx:
+    :return:
+    """
+    seq_tag= self.get_seq_tag(self.get_corpus_seq_idx(sorted_seq_idx))
+    return seq_tag
 
   def get_corpus_seq_idx(self, sorted_seq_idx):
     """
@@ -169,3 +142,49 @@ class MapDatasetBase(CachedDataset2):
     :rtype: int
     """
     return self._seq_order[sorted_seq_idx]
+
+  def get_data_dim(self, key):
+    """
+    :param str key: e.g. "data" or "classes"
+    :return: number of classes, no matter if sparse or not
+    :rtype: int
+    """
+    if key in self.num_outputs:
+      return self.num_outputs[key].get("dim", 1)
+    return 1  # unknown
+
+  def get_data_dtype(self, key):
+    """
+    :param str key: e.g. "data" or "classes"
+    :return: dtype as str, e.g. "int32" or "float32"
+    :rtype: str
+    """
+    if self.is_data_sparse(key):
+      return "int32"
+    return "float32"
+
+  def is_data_sparse(self, key):
+    """
+    :param str key: e.g. "data" or "classes"
+    :return: whether the data is sparse
+    :rtype: bool
+    """
+    # Note: We cannot call get_data_dtype, as we would maybe result in infinite recursion.
+    if key in self.num_outputs:
+      return self.num_outputs[key].get("sparse", False)
+    return False
+
+  def get_data_shape(self, key):
+    """
+    :returns get_data(*, key).shape[1:], i.e. num-frames excluded
+    :rtype: list[int]
+    """
+    if key in self.num_outputs:
+      if "shape" in self.num_outputs[key].keys():
+        if self.num_outputs[key]["shape"][0] is None:
+          return self.num_outputs[key]["shape"][1:]
+        else:
+          assert False, "data shape has no time axis, calling get_data_shape is not possible"
+    if self.is_data_sparse(key):
+      return []
+    return [self.get_data_dim(key)]
