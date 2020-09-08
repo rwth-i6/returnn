@@ -11,6 +11,7 @@ from returnn.datasets.map import MapDatasetBase
 from returnn.config import Config
 from returnn.tf.engine import Engine
 
+
 def _get_tmp_dir():
   """
   :return: dirname
@@ -74,20 +75,18 @@ class CustomDatasetDualSeqLen(CustomDataset):
     self.data2.append(numpy.asarray([[2, 3, 1], [2, 3, 2], [2, 3, 3]]))
     self.data2.append(numpy.asarray([[2, 2, 2], [2, 2, 2]]))
 
-    #self.num_outputs = {'data': {'shape': (None, 3), 'dim': 3},
-    #                    'data2': {'shape': (None, 3), 'dim': 3}}
+    self.num_outputs = {'data': {'shape': (None, 3), 'dim': 3},
+                        'data2': {'shape': (None, 3), 'dim': 3}}
 
   def get_seq_len(self, seq_idx):
     return len(self.data[seq_idx])
 
   def __getitem__(self, seq_idx):
-    print("oida: %i" % seq_idx)
     return {'data': self.data[seq_idx],
             'data2': self.data2[seq_idx]}
 
 
 def test_init():
-
   data = CustomDataset()
   data.init_seq_order(epoch=1)
   data.load_seqs(0, 1)
@@ -99,8 +98,11 @@ def test_sorting():
   data = CustomDatasetSeqLen(seq_ordering="sorted")
   data.init_seq_order(epoch=1)
   data.load_seqs(0, 3)
+  raw_ = data.get_data(seq_idx=0, key="data")
+  assert_equal(raw_[0, 0], 1)
+  raw_ = data.get_data(seq_idx=1, key="data")
+  assert_equal(raw_[0, 0], 2)
   raw_ = data.get_data(seq_idx=2, key="data")
-  print(raw_)
   assert_equal(raw_[0, 0], 3)
 
 

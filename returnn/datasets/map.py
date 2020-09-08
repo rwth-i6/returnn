@@ -78,7 +78,9 @@ class MapDatasetBase(CachedDataset2):
     """
     raise OptionalNotImplementedError
 
+  # -----------------------------------
   # Internal Functions, do not override
+  # -----------------------------------
 
   @property
   def num_seqs(self):
