@@ -3319,6 +3319,14 @@ class TransposedConvLayer(_ConcatInputLayer):
     out = out.copy_template(name="%s_output" % name)
     assert out.have_feature_axis()
     out = out.copy_template_replace_dim(axis=-1, new_dim=n_out)
+    shape = list(out.shape)
+    if strides is None:
+      strides = filter_size
+    assert len(strides) == len(out.get_spatial_axes()), "Expected strides for all spatial axes"
+    for idx, axis in enumerate(out.get_spatial_axes()):  # counted without batch-dim axis
+      if axis + 1 not in out.get_dynamic_axes():  # out.get_dynamic_axes() is counted with batch-dim axis
+        shape[axis] *= strides[idx]
+    out.shape = tuple(shape)
     out.size_placeholder.clear()  # will be reset in __init__
     return out
 
