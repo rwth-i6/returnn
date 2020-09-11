@@ -1,3 +1,7 @@
+"""
+Provides :class:`MapDatasetBase`
+"""
+
 from returnn.datasets.basic import DatasetSeq
 from returnn.datasets.cached2 import CachedDataset2
 from returnn.util.basic import OptionalNotImplementedError
@@ -13,10 +17,11 @@ class MapDatasetBase(CachedDataset2):
                partition_epoch=None):
     """
 
-    :param name:
-    :param seq_ordering:
-    :param random_seed_offset:
-    :param partition_epoch:
+    :param str name: name of the dataset
+    :param dict num_outputs: definition of the data as constructor parameters of a Data object
+    :param str seq_ordering: string to define the sequence ordering
+    :param int|None random_seed_offset: provide a seed offset for the sequence ordering
+    :param int|None partition_epoch:
     """
     super(MapDatasetBase, self).__init__(
       name=name,
@@ -134,7 +139,7 @@ class MapDatasetBase(CachedDataset2):
     :param sorted_seq_idx:
     :return:
     """
-    seq_tag= self.get_seq_tag(self.get_corpus_seq_idx(sorted_seq_idx))
+    seq_tag = self.get_seq_tag(self.get_corpus_seq_idx(sorted_seq_idx))
     return seq_tag
 
   def get_corpus_seq_idx(self, sorted_seq_idx):
