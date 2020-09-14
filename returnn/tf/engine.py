@@ -2130,7 +2130,7 @@ class Engine(EngineBase):
     for i, seq_len in output.size_placeholder.items():
       extra_fetches["seq_len_%i" % i] = seq_len
     batches = data.generate_batches(
-      recurrent_net=self.network.recurrent,
+      recurrent_net=True,  # Using non-recurrent batch construction leads to incorrect seqLengths in the HDF
       batch_size=batch_size,
       max_seqs=self.max_seqs,
       used_data_keys=self.network.get_used_data_keys())
