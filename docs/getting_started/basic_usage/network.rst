@@ -157,7 +157,7 @@ The initialization is performed in :func:`TFUtil.get_initializer`.
 
 *Note:* the initalizers can be accessed both as e.g. ``"glorot_normal"`` or ``"glorot_normal_initializer"``.
 
-
+.. _managing_axes:
 Managing Axes
 -------------
 
@@ -169,4 +169,19 @@ For layers that operate on specific axes, meaning they have an ``axis`` or ``axe
     - ``B|batch:`` select the batch axis
     - ``T|time:`` select the time axis
     - ``F|feature`` select the feature axis
-    - ``S:<int>|spatial:<int>`` select a spatial axis from the list of all spatial axes (zero-based)
+    - ``spatial`` select all spatial axes (not batch and not feature, needs dynamic length)
+    - ``S:<int>|spatial:<int>`` select a single spatial axis from the list of all spatial axes (zero-based, can be negative)
+    - ``dyn|dynamic`` select all dynamic axes (all spacial axes and time even if it has no dynamic length)
+    - ``D:<int>|dyn:<int>|dynamic:<int>`` select a specific dynamic axis (zero-based, can be negative)
+    - ``T?`` select time axis if existing, none otherwise
+    - ``spatial_except_time`` select all spatial axes but also not the time axis
+    - ``except_time```select all axes except time and batch axis
+    - ``except_batch`` select all axes except batch axis
+
+
+Note that all identifier can be used case-insensitive.
+For ``axes`` paramater it is also possible to provide a tuple or list of the above identifiers.
+For debugging purposes it is also possible to use an intereger to directly access an axis,
+but this should not be used in finished configurations.
+If something is unclear, or not working as intended, please refer to
+:func:`Data.get_axes_from_description() <returnn.tf.util.data.Data.get_axes_from_description()>`.

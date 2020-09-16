@@ -96,5 +96,8 @@ relative_error_div_by_old
     If true the relative error is computed by dividing the error difference by the old error value instead of the
     current error value.
 
+reset_updater_vars_mod_step
+    The number of epochs after which the internal states of all optimizers will be resetted to their initial state.
+
 use_learning_rate_control_always
     If true, use the learning rate control scheme also during pre-training.

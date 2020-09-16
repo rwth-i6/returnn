@@ -4,12 +4,8 @@
 Technological Overview
 ======================
 
-RETURNN is mostly used as a tool where ``rnn.py`` (:mod:`rnn`) is the main entry point
-but you can also use it as a framework / Python module to use in your own Python code.
-To get an idea about how it works, it helps to follow roughly the execution path
-starting in :mod:`rnn`, esp. in :py:func:`rnn.main`.
-In all cases, the code itself should be checked for details and comments.
-
+RETURNN is a machine learning toolkit that can be used as standalone application or framework for training and running
+sequential neural network architectures.
 The main tasks of RETURNN are:
 
     - Network construction via nested dictionaries
@@ -19,10 +15,14 @@ The main tasks of RETURNN are:
     - Managing the losses and optimizer functions
     - Learning rate scheduling based on training scores
 
-So far, RETURNN supports two calculation backends: Theano and TensorFlow,
-where Theano was the first backend, thus Theano-specific code files are currently not prefix
-but TensorFlow specific files are prefixed with ``TF``.
+RETURNN supports two calculation backends: TensorFlow and Theano.
 It is recommended to stick to the TensorFlow backend, as Theano is no longer supported.
+
+RETURNN is mostly used as a tool where ``rnn.py`` is the main entry point
+but you can also use it as a framework / Python module to use in your own Python code.
+To get an idea about how it works, it helps to follow roughly the execution path
+starting in :mod:`rnn`, esp. in :py:func:`rnn.main`.
+In all cases, the code itself should be checked for details and comments.
 
 
 Structure
