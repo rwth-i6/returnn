@@ -1802,6 +1802,8 @@ class WindowLayer(_ConcatInputLayer):
   E.g. if the input is (batch, time, dim), the output is (batch, time, window_size, dim).
   If you want to merge the (window_size, dim) together to (window_size * dim,),
   you can use the MergeDimsLayer, e.g. {"class": "merge_dims", "axes": "except_time"}.
+  Use stride==window_size and window_right=window_size - 1 in combination with a
+  MergeDimsLayer to achieve feature stacking with right-hand zero padding.
 
   This is not to take out a window from the time-dimension.
   See :class:`SliceLayer` or :class:`SliceNdLayer`.
@@ -1809,13 +1811,14 @@ class WindowLayer(_ConcatInputLayer):
   layer_class = "window"
   recurrent = True  # we must not allow any shuffling in the time-dim or so
 
-  def __init__(self, window_size, window_left=None, window_right=None, axis="T", padding="same", **kwargs):
+  def __init__(self, window_size, window_left=None, window_right=None, axis="T", padding="same", stride=1, **kwargs):
     """
     :param int window_size:
     :param int|None window_left:
     :param int|None window_right:
     :param str|int axis: see Data.get_axis_from_description()
     :param str padding: "same" or "valid"
+    :param int stride: return only each Nth window
     :param kwargs:
     """
     super(WindowLayer, self).__init__(**kwargs)
@@ -1835,14 +1838,14 @@ class WindowLayer(_ConcatInputLayer):
       self.output.placeholder = windowed_nd(
         data.placeholder,
         window_size=window_size, window_left=window_left, window_right=window_right,
-        padding=padding, time_axis=axis, new_window_axis=axis + 1)
+        padding=padding, time_axis=axis, new_window_axis=axis + 1, stride=stride)
     self.output.placeholder.set_shape(tf.TensorShape(self.output.batch_shape))
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
     axis_wo_b = self.output.get_batch_axis_excluding_batch(axis)
     if axis_wo_b in self.output.size_placeholder:
       self.output.size_placeholder[axis_wo_b] = ConvLayer.calc_out_dim(
         in_dim=self.output.size_placeholder[axis_wo_b],
-        filter_size=window_size, stride=1, dilation_rate=1, padding=padding)
+        filter_size=window_size, stride=stride, dilation_rate=1, padding=padding)
 
   @classmethod
   def get_out_data_from_opts(cls, name, window_size, axis="T", sources=(), **kwargs):
