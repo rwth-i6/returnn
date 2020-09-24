@@ -3481,7 +3481,7 @@ def opt_logical_and(*args):
 
 
 def windowed_nd(source, window_size, window_left=None, window_right=None,
-                padding="same", time_axis=1, new_window_axis=2):
+                padding="same", time_axis=1, new_window_axis=2, stride=1):
   """
   Constructs a new "window" axis which is a moving input over the time-axis.
   If you want to take out a window, i.e. a slice, see :func:`slice_nd`.
@@ -3493,6 +3493,7 @@ def windowed_nd(source, window_size, window_left=None, window_right=None,
   :param str padding: "same" or "valid"
   :param int time_axis:
   :param int new_window_axis:
+  :param int stride: return only each Nth windwow
   :return: tensor of shape (..., n_time, ..., window, ...)
   :rtype: tf.Tensor
   """
@@ -3542,9 +3543,9 @@ def windowed_nd(source, window_size, window_left=None, window_right=None,
     final = tiled_reshape_shift
     if new_window_axis != 0:
       final = move_axis(final, 0, new_window_axis)  # (n_time+window,...,window,...)
-      final = final[:n_out_time]  # (n_out_time,...,window,...)
+      final = final[:n_out_time:stride]  # (n_out_time//stride,...,window,...)
     else:
-      final = final[:, :n_out_time]  # (window,n_out_time,...)
+      final = final[:, :n_out_time:stride]  # (window,n_out_time//stride,...)
     # Move time-axis back to its original place.
     if new_window_axis <= time_axis:
       time_axis += 1  # New window axis was inserted before.
