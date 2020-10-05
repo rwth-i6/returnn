@@ -4910,6 +4910,7 @@ class CompareLayer(LayerBase):
     elif out_type_.get("sparse", False):
       out_type_["dim"] = 2
     out_type_["dtype"] = "bool"
+    out_type_["vocab"] = None
     out_type_["name"] = "%s_output" % kwargs["name"]
     if out_type:
       if isinstance(out_type, dict):
