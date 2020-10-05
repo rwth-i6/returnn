@@ -11,12 +11,16 @@
 
 import sys
 import os
-sys.path += [".", "crnn"]
+
+if not os.path.exists("returnn"):
+  os.symlink("../returnn", "returnn")
+
+sys.path += [".", "returnn"]
 
 import faulthandler
 faulthandler.enable()
 
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.install()
 
 import logging
@@ -24,6 +28,12 @@ logging.getLogger('tensorflow').disabled = True
 
 import generateapi
 generateapi.generate()
+
+import generate_units
+generate_units.generate()
+
+import generate_optimizer
+generate_optimizer.generate()
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
@@ -70,7 +80,7 @@ master_doc = 'index'
 
 # General information about the project.
 project = u'RETURNN'
-copyright = u'2014–2018, %s contributors' % project
+copyright = u'2014–2020, %s contributors' % project
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -93,7 +103,7 @@ release = version + "-dev"
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
-exclude_patterns = ['_build', "crnn"]
+exclude_patterns = ['_build', "returnn"]
 
 # The reST default role (used for this markup: `text`) to use for all
 # documents.
@@ -136,7 +146,7 @@ def linkcode_resolve(domain, info):
         import inspect
         import os
         fn = inspect.getsourcefile(obj)
-        fn = os.path.relpath(fn, start="crnn")
+        fn = os.path.relpath(fn, start="returnn")
         source, lineno = inspect.getsourcelines(obj)
         return fn, lineno, lineno + len(source) - 1
 
@@ -147,7 +157,7 @@ def linkcode_resolve(domain, info):
     except Exception:
         filename = info['module'].replace('.', '/') + '.py'
     tag = 'master' if 'dev' in release else ('v' + release)
-    return "https://github.com/rwth-i6/returnn/blob/%s/%s" % (tag, filename)
+    return "https://github.com/rwth-i6/returnn/blob/%s/returnn/%s" % (tag, filename)
 
 
 # -- Options for HTML output ----------------------------------------------

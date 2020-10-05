@@ -1,9 +1,11 @@
 
 
 import os
-os.environ["THEANO_FLAGS"] = "mode=FAST_COMPILE"
+import sys
 
-from NetworkCtcLayer import *
+os.environ["THEANO_FLAGS"] = "mode=FAST_COMPILE"
+import _setup_test_env  # noqa
+from returnn.theano.layers.ctc import *
 from nose.tools import assert_equal
 
 

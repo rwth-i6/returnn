@@ -1,9 +1,7 @@
 
 from __future__ import print_function
 
-import sys
-sys.path += ["."]  # Python 3 hack
-
+import _setup_test_env  # noqa
 from subprocess import Popen, PIPE, STDOUT, CalledProcessError
 import re
 import os
@@ -12,8 +10,7 @@ from glob import glob
 from pprint import pprint
 import unittest
 from nose.tools import assert_less, assert_in, assert_equal
-import better_exchook
-better_exchook.replace_traceback_format_tb()
+from returnn.util import better_exchook
 
 
 py = sys.executable
@@ -28,7 +25,7 @@ def build_env():
 def run(args, input=None):
   args = list(args)
   print("run:", args)
-  # crnn by default outputs on stderr, so just merge both together
+  # RETURNN by default outputs on stderr, so just merge both together
   p = Popen(args, stdout=PIPE, stderr=STDOUT, stdin=PIPE, env=build_env())
   out, _ = p.communicate(input=input)
   print("Return code is %i" % p.returncode)
@@ -54,7 +51,7 @@ def filter_out(ls):
       continue
     # RuntimeWarning|FutureWarning are warnings and they include the code-line in the next output line
     if i + 1 < len(ls) and ls[i + 1].startswith("  "):
-      if re.match(".*:\d+: RuntimeWarning: numpy.*", s) or re.match(".*:\d+: FutureWarning: .*", s):
+      if re.match(".*:\\d+: RuntimeWarning: numpy.*", s) or re.match(".*:\\d+: FutureWarning: .*", s):
         i += 2
         continue
     res.append(ls[i])
@@ -86,7 +83,7 @@ faulthandler import error. No module named faulthandler
 Theano: 0.9.0 (<site-package> in /home/travis/virtualenv/python2.7.14/lib/python2.7/site-packages/theano)
 Task: No-operation
 elapsed: 0:00:00.0001
-"""
+"""  # noqa
   ls = filter(None, s.splitlines())
   ls = filter_out(ls)
   pprint(ls)
@@ -119,7 +116,7 @@ def test_returnn_tf_startup():
   out = run([py, "rnn.py", "-x", "nop", "++use_tensorflow", "1", "++log_verbosity", "5"])
   ls = out.splitlines()
   ls = filter_out(ls)
-  assert 3 <= len(ls) <= 40, "\n".join(ls)  # not fixed because might change
+  assert 3 <= len(ls) <= 100, "output:\n%s\n\nNum lines: %i" % ("\n".join(ls), len(ls))  # might change
   assert_equal(count_start_with(ls, "RETURNN starting up, version "), 1)
   assert_equal(count_start_with(ls, "TensorFlow: "), 1)
   assert_in("Task: No-operation", ls)
@@ -130,7 +127,7 @@ def test_simple_log():
   code = """
 from __future__ import print_function
 print("hello stdout 1")
-from Log import log
+from returnn.log import log
 log.initialize(verbosity=[], logs=[], formatter=[])
 print("hello stdout 2")
 print("hello log 1", file=log.v3)

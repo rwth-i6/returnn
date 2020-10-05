@@ -2,18 +2,20 @@
 # -*- coding: utf8 -*-
 
 import sys
-sys.path += ["."]  # Python 3 hack
+import os
+
+import _setup_test_env  # noqa
 sys.path += ["tools"]
 
 from hdf_dump import *
 import os
-from Log import log
+from returnn.log import log
 import tempfile
-from GeneratingDataset import DummyDataset
-from HDFDataset import HDFDataset
-from Util import DictAsObj
+from returnn.datasets.generating import DummyDataset
+from returnn.datasets.hdf import HDFDataset
+from returnn.util.basic import DictAsObj
 import unittest
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 

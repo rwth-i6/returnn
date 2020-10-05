@@ -5,23 +5,30 @@ Norm and Regularization Layers
 ==============================
 
 
+Generic Normalization Layer
+---------------------------
+
+.. autoclass:: returnn.tf.layers.basic.NormLayer
+    :members:
+    :undoc-members:
+
 Batch-Normalization Layer
 -------------------------
 
-.. autoclass:: TFNetworkLayer.BatchNormLayer
-	:members:
-	:undoc-members:
-
-Dropout Layer
--------------
-
-.. autoclass:: TFNetworkLayer.DropoutLayer
+.. autoclass:: returnn.tf.layers.basic.BatchNormLayer
     :members:
     :undoc-members:
 
 Layer-Normalization Layer
 -------------------------
 
-.. autoclass:: TFNetworkLayer.LayerNormLayer
-	:members:
-	:undoc-members:
+.. autoclass:: returnn.tf.layers.basic.LayerNormLayer
+    :members:
+    :undoc-members:
+
+Dropout Layer
+-------------
+
+.. autoclass:: returnn.tf.layers.basic.DropoutLayer
+    :members:
+    :undoc-members:

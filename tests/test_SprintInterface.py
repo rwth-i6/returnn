@@ -2,31 +2,29 @@
 from __future__ import print_function
 
 import sys
-sys.path += ["."]  # Python 3 hack
-
-from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
-import SprintInterface as SprintAPI
 import os
-import sys
+
+import _setup_test_env  # noqa
+from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
+import returnn.sprint.interface as SprintAPI
 from tempfile import mkdtemp
-from Engine import Engine
-from Config import Config
-from Log import log
-from Network import LayerNetwork
-import TheanoUtil
+from returnn.theano.engine import Engine
+from returnn.config import Config
+from returnn.log import log
+from returnn.theano.network import LayerNetwork
+import returnn.theano.util as theano_util
 import shutil
 import numpy
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 
 log.initialize()
-TheanoUtil.monkey_patches()
+theano_util.monkey_patches()
 
 
 def install_sigint_handler():
   import signal
-  import Util
 
   def signal_handler(signal, frame):
     print("\nSIGINT at:")
@@ -52,6 +50,7 @@ def install_sigint_handler():
 
   old_action = signal.signal(signal.SIGINT, signal_handler)
 
+
 install_sigint_handler()
 
 
@@ -65,10 +64,8 @@ def create_first_epoch(config_filename):
   Engine._epoch_model = None
 
 
-
-
 def test_forward():
-  tmpdir = mkdtemp("crnn-test-sprint")
+  tmpdir = mkdtemp("returnn-test-sprint")
   olddir = os.getcwd()
   os.chdir(tmpdir)
 

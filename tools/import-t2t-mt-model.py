@@ -19,12 +19,12 @@ my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
 sys.path.insert(0, returnn_dir)
 
-import Util
-
-import better_exchook
-import rnn
-from TFNetwork import TFNetwork
-from TFNetworkLayer import SourceLayer, LayerBase, LinearLayer
+import returnn.util.basic as util
+from returnn.util import better_exchook
+import returnn.__main__ as rnn
+import returnn.tf.compat as tf_compat
+from returnn.tf.network import TFNetwork
+from returnn.tf.layers.basic import SourceLayer, LayerBase, LinearLayer
 
 
 
@@ -77,8 +77,8 @@ def t2t_score_file(filename):
   encoders = registry.problem(FLAGS_problem).feature_encoders(FLAGS_data_dir)
 
   # Prepare features for feeding into the model.
-  inputs_ph = tf.placeholder(dtype=tf.int32, shape=(None, None))  # Just length dimension.
-  targets_ph = tf.placeholder(dtype=tf.int32, shape=(None, None))  # Just length dimension.
+  inputs_ph = tf_compat.v1.placeholder(dtype=tf.int32, shape=(None, None))  # Just length dimension.
+  targets_ph = tf_compat.v1.placeholder(dtype=tf.int32, shape=(None, None))  # Just length dimension.
 
   features = {
       "inputs": inputs_ph,
@@ -93,15 +93,15 @@ def t2t_score_file(filename):
   #               or a dictionary of losses.
   final_output, losses = model(features)
   assert isinstance(losses, dict)
-  saver = tf.train.Saver()
+  saver = tf_compat.v1.train.Saver()
 
-  sess = tf.Session()
+  sess = tf_compat.v1.Session()
   # Load weights from checkpoint.
   ckpts = tf.train.get_checkpoint_state(FLAGS_output_dir)
   ckpt = ckpts.model_checkpoint_path
   saver.restore(sess, ckpt)
 
-  # writer = tf.summary.FileWriter('logs', sess.graph)
+  # writer = tf.compat.v1.summary.FileWriter('logs', sess.graph)
 
   # writer.close()
 
@@ -127,7 +127,7 @@ def t2t_score_file(filename):
     np_res = sess.run({"losses": losses, "final_output": final_output}, feed_dict=feed)
     pprint(np_res)
 
-    tvars = tf.trainable_variables()
+    tvars = tf_compat.v1.trainable_variables()
 
     print('t2t inputs_ph:', inputs_ph, inputs_numpy)
     print('t2t targets_ph:', targets_ph, targets_numpy)
@@ -284,7 +284,7 @@ def main():
       "debug_print_layer_output_template": True,
       "debug_add_check_numerics_on_output": False},
     extra_greeting="Import t2t model.")
-  assert Util.BackendEngine.is_tensorflow_selected()
+  assert util.BackendEngine.is_tensorflow_selected()
   config = rnn.config
 
   rnn.engine.init_train_from_config(config=config)

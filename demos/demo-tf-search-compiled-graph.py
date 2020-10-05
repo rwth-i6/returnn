@@ -71,14 +71,14 @@ def main():
 
   # Load the graph
   if os.path.splitext(args.graph)[1] in [".meta", ".metatxt"]:  # meta graph
-    saver = tf.train.import_meta_graph(args.graph)
+    saver = tf.compat.v1.train.import_meta_graph(args.graph)
   else:  # normal graph
-    graph_def = tf.GraphDef()
+    graph_def = tf.compat.v1.GraphDef()
     graph_def.ParseFromString(open(args.graph, "rb").read())
     tf.import_graph_def(graph_def)
-    saver = tf.train.Saver()
+    saver = tf.compat.v1.train.Saver()
 
-  with tf.Session() as session:
+  with tf.compat.v1.Session() as session:
     # Load the params.
     saver.restore(session, args.chkpt)
 
@@ -138,6 +138,6 @@ def main():
 
 
 if __name__ == '__main__':
-  import better_exchook
+  from returnn.util import better_exchook
   better_exchook.install()
   main()

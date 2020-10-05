@@ -4,54 +4,34 @@
 
 from __future__ import print_function
 
-import logging
-logging.getLogger('tensorflow').disabled = True
-
+import _setup_test_env  # noqa
 import tensorflow as tf
-import sys
-import os
-
-sys.path += ["."]  # Python 3 hack
-sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
-
-from TFEngine import *
-import TFUtil
-from TFNetwork import ExternData
-from Config import Config
+import returnn.tf.compat as tf_compat
+from returnn.tf.engine import *
+import returnn.tf.util.basic
+from returnn.tf.network import ExternData
+from returnn.config import Config
 from nose.tools import assert_equal, assert_is_instance
 import unittest
 import numpy
 import numpy.testing
 from pprint import pprint
 import contextlib
-import better_exchook
-from Log import log
-import Debug
-
-log.initialize(verbosity=[5])
-TFUtil.debug_register_better_repr()
-better_exchook.replace_traceback_format_tb()
-Debug.install_lib_sig_segfault()
-
-try:
-  import faulthandler
-  # Enable after libSigSegfault, so that we have both,
-  # because faulthandler will also call the original sig handler.
-  faulthandler.enable()
-except ImportError:
-  print("no faulthandler")
+from returnn.util import better_exchook
+from returnn.log import log
+import returnn.util.debug
 
 
-print("TF version:", tf.VERSION)
+print("TF version:", tf.__version__)
 
 
 @contextlib.contextmanager
 def make_scope():
   """
-  :rtype: tf.Session
+  :rtype: tf.compat.v1.Session
   """
   with tf.Graph().as_default() as graph:
-    with tf.Session(graph=graph) as session:
+    with tf_compat.v1.Session(graph=graph) as session:
       yield session
 
 
@@ -97,18 +77,11 @@ def _cleanup_old_models(config):
       os.remove(fn)
 
 
-session = tf.InteractiveSession()
+session = tf_compat.v1.InteractiveSession()
 
 
-def test_DataProvider():
-  """
-  :param Dataset.Dataset dataset:
-  :param int seq_idx:
-  :param str|None output_layer_name: e.g. "output". if not set, will read from config "forward_output_layer"
-  :return: numpy array, output in time major format (time,batch,dim)
-  :rtype: numpy.ndarray
-  """
-  from GeneratingDataset import DummyDataset
+def test_FeedDictDataProvider():
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -127,7 +100,7 @@ def test_DataProvider():
   batch.add_frames(seq_idx=seq_idx, seq_start_frame=0, length=dataset.get_seq_length(seq_idx))
   batch_generator = iter([batch])
   batches = BatchSetGenerator(dataset, generator=batch_generator)
-  from TFDataPipeline import FeedDictDataProvider
+  from returnn.tf.data_pipeline import FeedDictDataProvider
   data_provider = FeedDictDataProvider(
     tf_session=session, extern_data=extern_data,
     data_keys=["data", "classes"],
@@ -159,8 +132,75 @@ def test_DataProvider():
   assert_equal(classes.tolist(), [[1, 2, 0, 1, 2]])
 
 
+def test_DatasetDataProvider():
+  from returnn.datasets.generating import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  num_seqs = 5
+  dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=num_seqs, seq_len=seq_len)
+  dataset.init_seq_order(epoch=1)
+
+  n_batch = 2
+  config = Config({
+    "max_seqs": n_batch,
+  })
+
+  with make_scope() as session:
+    extern_data = ExternData()
+    extern_data.init_from_dataset(dataset, auto_create_placeholders=False)
+
+    from returnn.tf.data_pipeline import DatasetDataProvider
+    data_provider = DatasetDataProvider(
+      extern_data=extern_data, config=config, datasets={"train": dataset})
+
+    input_context = data_provider.contexts["train"]
+    assert isinstance(input_context.final_dataset, tf.data.Dataset)
+    assert input_context.final_dataset_init_iterator_op.graph is session.graph
+
+    data_provider.set_current_dataset(dataset_name="train")
+    data_provider.start_threads(session=session)
+
+    data, data_size, classes, classes_size = session.run([
+      extern_data.data["data"].placeholder,
+      extern_data.data["data"].get_sequence_lengths(),
+      extern_data.data["classes"].placeholder,
+      extern_data.data["classes"].get_sequence_lengths()])
+
+    assert_is_instance(data, numpy.ndarray)
+    assert_is_instance(data_size, numpy.ndarray)
+    assert_is_instance(classes, numpy.ndarray)
+    assert_is_instance(classes_size, numpy.ndarray)
+    assert_equal(data.shape, (n_batch, seq_len, n_data_dim))
+    assert_equal(data_size.shape, (n_batch,))
+    assert_equal(classes.shape, (n_batch, seq_len))
+    assert_equal(classes_size.shape, (n_batch,))
+    assert_equal(list(data_size), [seq_len] * n_batch)
+    assert_equal(list(classes_size), [seq_len] * n_batch)
+    numpy.testing.assert_almost_equal(list(data[0, 0]), [-0.5, -0.4])
+    numpy.testing.assert_almost_equal(list(data[0, -1]), [0.3, 0.4])
+    assert_equal(classes[0].tolist(), [1, 2, 0, 1, 2])
+
+    step = 1  # step 0 was above
+    while True:
+      try:
+        res = session.run(data_provider.iterator_next_element)
+      except tf.errors.OutOfRangeError as exc:
+        print("Got out-of-range (as expected):", exc.message)
+        break
+      print("step %i, res %r" % (step, res))
+      step += 1
+      if step > 10 * num_seqs:
+        break  # should not get here...
+
+    print("Finished after %i steps." % step)
+    assert step == (num_seqs - 1) // n_batch + 1
+
+    data_provider.stop_threads()
+
+
 def test_engine_train():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -186,9 +226,66 @@ def test_engine_train():
   engine.finalize()
 
 
+def test_engine_train_newbob():
+  from returnn.datasets.generating import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "%s/model" % _get_tmp_dir(),
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {"output": {"class": "softmax", "loss": "ce"}},
+    "start_epoch": 1,
+    "num_epochs": 5,
+    "learning_rate_control": "newbob",
+  })
+  _cleanup_old_models(config)
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+
+  engine.finalize()
+
+
+def test_engine_train_new_dataset_pipeline():
+  from returnn.datasets.generating import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=5, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=3, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "%s/model" % _get_tmp_dir(),
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {"output": {"class": "softmax", "loss": "ce"}},
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "max_seqs": 2,
+    "dataset_pipeline": True
+  })
+  _cleanup_old_models(config)
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  assert engine.dataset_provider
+  engine.train()
+  engine.finalize()
+
+
 def test_engine_train_uneven_batches():
   rnd = numpy.random.RandomState(42)
-  from GeneratingDataset import StaticDataset
+  from returnn.datasets.generating import StaticDataset
   n_data_dim = 2
   n_classes_dim = 3
 
@@ -233,8 +330,63 @@ def test_engine_train_uneven_batches():
   engine.finalize()
 
 
+def test_engine_train_dummy_distributed():
+  import returnn.tf.distributed
+  rnd = numpy.random.RandomState(42)
+  from returnn.datasets.generating import StaticDataset
+  n_data_dim = 2
+  n_classes_dim = 3
+
+  def get_data(num_seqs):
+    return [
+      {
+        "data": rnd.uniform(-1., 1., (seq_len, n_data_dim)).astype("float32"),
+        "classes": rnd.choice(range(n_classes_dim), (seq_len,)).astype("int32")
+      }
+      for seq_len in [rnd.choice(list(range(1, 50)) + list(range(1, 20))) for _ in range(num_seqs)]]
+
+  train_data = StaticDataset(
+    input_dim=n_data_dim, output_dim=n_classes_dim,
+    data=get_data(20))
+  print("train data seq lens:", [len(d["data"]) for d in train_data.data])
+  train_data.init_seq_order(epoch=1)
+  cv_data = StaticDataset(input_dim=n_data_dim, output_dim=n_classes_dim, data=get_data(3))
+  print("cv data seq lens:", [len(d["data"]) for d in cv_data.data])
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "%s/model" % _get_tmp_dir(),
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "rnn": {"class": "rec", "unit": "lstm", "n_out": 3},  # make it recurrent
+      "output": {"class": "softmax", "loss": "ce", "from": "rnn"}},
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "batch_size": 50,  # set it such that sometimes we have num-seqs 1, 2 or 3 in a single batch
+    "adam": True,
+    "learning_rate": 0.001,
+    "tf_log_memory_usage": True,
+    "log_batch_size": True,
+    "distributed_tf": {"local_only": True},
+  })
+  _cleanup_old_models(config)
+
+  with returnn.tf.distributed._temporary_init_distributed_tf(config=config):
+    assert returnn.tf.distributed.is_enabled()
+    engine = Engine(config=config)
+    engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+    tf_session = engine.tf_session
+    assert isinstance(tf_session, tf.compat.v1.Session)
+    print("Session uses target:", tf_session.sess_str)
+    assert tf_session.sess_str == returnn.tf.distributed.get_session_target().encode("utf8")
+    engine.train()
+    engine.finalize()
+
+
 def test_engine_train_subnet_loss():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -266,7 +418,7 @@ def test_engine_train_subnet_loss():
 
 
 def test_engine_train_rec_subnet_loss_optimized():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -299,7 +451,7 @@ def test_engine_train_rec_subnet_loss_optimized():
 
 
 def test_engine_train_rec_subnet_loss_non_optimized():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -333,7 +485,7 @@ def test_engine_train_rec_subnet_loss_non_optimized():
 
 
 def test_engine_train_accum_grad_multiple_step():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -360,7 +512,7 @@ def test_engine_train_accum_grad_multiple_step():
 
 
 def test_engine_train_accum_grad_multiple_step_sparse():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -395,7 +547,7 @@ def test_engine_train_grad_noise_sparse():
   # ie. in add_scaled_noise_to_gradients(),
   # and don't really check whether it works.
 
-  from GeneratingDataset import Task12AXDataset
+  from returnn.datasets.generating import Task12AXDataset
   train_data = Task12AXDataset(num_seqs=5)
   cv_data = Task12AXDataset(num_seqs=2)
   n_data_dim = train_data.num_outputs["data"][0]
@@ -436,7 +588,7 @@ def test_engine_train_grad_noise_sparse():
 
 
 def test_engine_analyze():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -463,7 +615,7 @@ def test_engine_analyze():
 
 
 def test_engine_forward_single():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -487,7 +639,7 @@ def test_engine_forward_single():
 
 
 def test_engine_forward_to_hdf():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   import tempfile
   output_file = tempfile.mktemp(suffix=".hdf", prefix="nose-tf-forward")
   seq_len = 5
@@ -525,7 +677,7 @@ def test_engine_forward_to_hdf():
     assert f.attrs['numSeqs'] == num_seqs
     assert f.attrs['numTimesteps'] == seq_len * num_seqs
 
-  from HDFDataset import HDFDataset
+  from returnn.datasets.hdf import HDFDataset
   ds = HDFDataset()
   ds.add_file(output_file)
 
@@ -537,7 +689,7 @@ def test_engine_forward_to_hdf():
 
 
 def test_engine_rec_subnet_count():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   # The dataset is actually not used.
   n_data_dim = 2
@@ -577,9 +729,9 @@ def test_engine_end_layer(extra_rec_kwargs=None):
   """
   :param dict[str] extra_rec_kwargs:
   """
-  from Util import dict_joined
-  from GeneratingDataset import DummyDataset
-  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+  from returnn.util.basic import dict_joined
+  from returnn.datasets.generating import DummyDataset
+  from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 1
   n_classes_dim = 5
@@ -649,9 +801,9 @@ def check_engine_search(extra_rec_kwargs=None):
   """
   :param dict[str] extra_rec_kwargs:
   """
-  from Util import dict_joined
-  from GeneratingDataset import DummyDataset
-  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+  from returnn.util.basic import dict_joined
+  from returnn.datasets.generating import DummyDataset
+  from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 7
@@ -693,7 +845,7 @@ def check_engine_search(extra_rec_kwargs=None):
     assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output", "prob"})
     assert_equal(set(rec_layer.cell.layers_in_loop), set())
   else:
-    assert_equal(set(rec_layer.cell.layers_in_loop), {"prob", "output", "end"})
+    assert_equal(set(rec_layer.cell.layers_in_loop).difference({"data:classes"}), {"prob", "output", "end"})
 
   # Now reinit for search.
   assert not engine.use_search_flag
@@ -723,9 +875,9 @@ def check_engine_search_attention(extra_rec_kwargs=None):
   """
   :param dict[str] extra_rec_kwargs:
   """
-  from Util import dict_joined
-  from GeneratingDataset import DummyDataset
-  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+  from returnn.util.basic import dict_joined
+  from returnn.datasets.generating import DummyDataset
+  from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 7
@@ -827,7 +979,7 @@ def check_engine_train_simple_attention(lstm_unit):
 
   }
 
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -877,7 +1029,7 @@ def test_engine_train_simple_attention_basiclstm():
 
 
 def test_attention_train_then_search():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 7
@@ -933,8 +1085,244 @@ def test_attention_train_then_search():
   engine.finalize()
 
 
+def test_attention_no_encoder_dependency():
+  from returnn.datasets.generating import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 7
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  dev_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  dev_data.init_seq_order(epoch=1)
+
+  from returnn.tf.util.basic import DimensionTag
+  enc_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="enc time")
+
+  config = Config()
+  config.update({
+    "model": "%s/model" % _get_tmp_dir(),
+    "batch_size": 5000,
+    "max_seqs": 2,
+    "extern_data": {'data': {'dim': n_data_dim, 'same_dim_tags_as': {'T': enc_time}},
+                    'classes': {'dim': n_classes_dim, 'sparse': True}},
+    "num_epochs": 1,
+    "network": {
+      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5, 'out_type': {}},
+      "enc_transformed": {'class': 'linear', 'from': ['encoder'], 'n_out': 1, 'activation': None},
+      "zero_enc_transformed": {'class': 'eval', 'from': ['enc_transformed'], 'eval': 'tf.zeros_like(source(0))'},
+      "output": {
+        "class": "rec",
+        "from": [],
+        "target": "classes", "max_seq_len": 5,
+        "unit": {
+          'output': {'class': 'choice', 'target': 'classes', 'beam_size': 4, 'from': ["output_prob"]},
+          "end": {"class": "compare", "from": ["output"], "value": 0},
+          'orth_embed': {'class': 'linear', 'activation': None, 'from': ['output'], "n_out": 7},
+          "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:c", "prev:orth_embed"], "n_out": 7},
+          "output_prob": {"class": "softmax", "from": ["prev:s", "c"], "target": "classes", "loss": "ce"},
+          # basic attention
+          "s_transformed": {'class': 'linear', 'from': ['s'], 'n_out': 6, 'activation': None},
+          "att_energy_tanh": {'class': 'activation', 'from': ['att_energy_in'], 'activation': 'tanh'},
+          "att_energy": {'class': 'linear', 'from': ['att_energy_tanh'], 'n_out': 1, 'activation': None,
+                         'out_type': {
+                           'same_dim_tags_as': {'T': enc_time}},
+                         },
+          "att_weights": {'class': 'softmax_over_spatial', 'from': ['att_energy']},
+          # feedback
+          "accum_att_weights": {'class': 'combine', 'kind': 'add',
+                                'from': ['att_weights', 'prev:accum_att_weights'],
+                                'initial_output': "base:zero_enc_transformed",
+                                },
+          "convolved_att": {'class': 'conv', 'from': ['prev:accum_att_weights'], 'filter_size': (3,),
+                            'n_out': 4, 'padding': 'same'},
+          "location_feedback": {'class': 'linear', 'from': ['convolved_att'], 'n_out': 6, 'activation': None},
+          "att_energy_in": {'class': 'combine', 'kind': 'add', 'from': ['location_feedback', 's_transformed']},
+          "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights"},
+        },
+      },
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
+    },
+    "debug_print_layer_output_template": True,
+  })
+  _cleanup_old_models(config)
+  engine = Engine(config=config)
+  print("Train...")
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=dev_data)
+  engine.train()
+
+  print("Search...")
+  engine.use_search_flag = True
+  engine.use_dynamic_train_flag = False
+  engine.init_network_from_config(config)
+  engine.search(dataset=dev_data)
+  print("error keys:")
+  pprint(engine.network.losses_dict)
+  assert engine.network.total_objective is not None
+  assert "decision" in engine.network.losses_dict
+
+  engine.finalize()
+
+
+def check_attention_variant(recurrent_unit_dict):
+  from returnn.datasets.generating import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 7
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  dev_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  dev_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "%s/model" % _get_tmp_dir(),
+    "batch_size": 5000,
+    "max_seqs": 2,
+    "extern_data": {'data': {'dim': n_data_dim},
+                    'classes': {'dim': n_classes_dim, 'sparse': True}},
+    "num_epochs": 1,
+    "network": {
+      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5},
+      "enc_transformed": {'class': 'linear', 'from': ['encoder'], 'n_out': 6, 'activation': None},
+      "output": {
+        "class": "rec",
+        "from": [],
+        "target": "classes", "max_seq_len": 5,
+        "unit": recurrent_unit_dict,
+      },
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
+    },
+    "debug_print_layer_output_template": True,
+  })
+  _cleanup_old_models(config)
+  engine = Engine(config=config)
+  print("Train...")
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=dev_data)
+  engine.train()
+
+  print("Search...")
+  engine.use_search_flag = True
+  engine.use_dynamic_train_flag = False
+  engine.init_network_from_config(config)
+  engine.search(dataset=dev_data)
+  print("error keys:")
+  pprint(engine.network.losses_dict)
+  assert engine.network.total_objective is not None
+  assert "decision" in engine.network.losses_dict
+
+  engine.finalize()
+
+
+def test_attention_convolutional_feedback_variant1():
+  recurrent_unit_dict = {
+    'output': {'class': 'choice', 'target': 'classes', 'beam_size': 4, 'from': ["output_prob"]},
+    "end": {"class": "compare", "from": ["output"], "value": 0},
+    'orth_embed': {'class': 'linear', 'activation': None, 'from': ['output'], "n_out": 7},
+    "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:c", "prev:orth_embed"], "n_out": 7},
+    "output_prob": {"class": "softmax", "from": ["prev:s", "c"], "target": "classes", "loss": "ce"},
+    # basic attention
+    "s_transformed": {'class': 'linear', 'from': ['s'], 'n_out': 6, 'activation': None},
+    "att_energy_tanh": {'class': 'activation', 'from': ['att_energy_in'], 'activation': 'tanh'},
+    "att_energy": {'class': 'linear', 'from': ['att_energy_tanh'], 'n_out': 1, 'activation': None,
+                   },
+    "att_weights": {'class': 'softmax_over_spatial', 'from': ['att_energy']},
+    'accum_att_weights': {'class': 'eval',
+                          'eval': 'source(0) + source(1)',
+                          'from': ['prev:accum_att_weights', 'att_weights'],
+                          'is_output_layer': True,
+                          'out_type': {'dim': 1, 'shape': (None, 1)}},
+    'feedback_pad_left': {'axes': 's:0',
+                          'class': 'pad',
+                          'from': ['prev:accum_att_weights'],
+                          'mode': 'constant',
+                          'padding': ((2, 0),),
+                          'value': 1},
+    'feedback_pad_right': {'axes': 's:0',
+                           'class': 'pad',
+                           'from': ['feedback_pad_left'],
+                           'mode': 'constant',
+                           'padding': ((0, 2),),
+                           'value': 0},
+    "convolved_att": {'class': 'conv', 'from': ['feedback_pad_right'], 'filter_size': (5,),
+                      'n_out': 4, 'padding': 'valid'},
+    "location_feedback": {'class': 'linear', 'from': ['convolved_att'], 'n_out': 6, 'activation': None},
+    "att_energy_in": {'class': 'combine', 'kind': 'add', 'from': [
+      'base:enc_transformed', 'location_feedback', 's_transformed']},
+    "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights"},
+  }
+
+  check_attention_variant(recurrent_unit_dict)
+
+
+def test_attention_convolutional_feedback_variant2():
+  recurrent_unit_dict = {
+    'output': {'class': 'choice', 'target': 'classes', 'beam_size': 4, 'from': ["output_prob"]},
+    "end": {"class": "compare", "from": ["output"], "value": 0},
+    'orth_embed': {'class': 'linear', 'activation': None, 'from': ['output'], "n_out": 7},
+    "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:c", "prev:orth_embed"], "n_out": 7},
+    "output_prob": {"class": "softmax", "from": ["prev:s", "c"], "target": "classes", "loss": "ce"},
+    # basic attention
+    "s_transformed": {'class': 'linear', 'from': ['s'], 'n_out': 6, 'activation': None},
+    "att_energy_tanh": {'class': 'activation', 'from': ['att_energy_in'], 'activation': 'tanh'},
+    "att_energy": {'class': 'linear', 'from': ['att_energy_tanh'], 'n_out': 1, 'activation': None,
+                   },
+    "att_weights": {'class': 'softmax_over_spatial', 'from': ['att_energy']},
+    # feedback
+    "accum_att_weights": {'class': 'combine', 'kind': 'add',
+                          'from': ['att_weights', 'prev:accum_att_weights'],
+                          },
+    "convolved_att": {'class': 'conv', 'from': ['prev:accum_att_weights'], 'filter_size': (5,),
+                      'n_out': 4, 'padding': 'same'},
+    "location_feedback": {'class': 'linear', 'from': ['convolved_att'], 'n_out': 6, 'activation': None},
+    "att_energy_in": {'class': 'combine', 'kind': 'add', 'from': [
+      'base:enc_transformed', 'location_feedback', 's_transformed']},
+    "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights"},
+  }
+
+  check_attention_variant(recurrent_unit_dict)
+
+
+def test_attention_convolutional_feedback_variant3():
+  recurrent_unit_dict = {
+    'output': {'class': 'choice', 'target': 'classes', 'beam_size': 4, 'from': ["output_prob"]},
+    "end": {"class": "compare", "from": ["output"], "value": 0},
+    'orth_embed': {'class': 'linear', 'activation': None, 'from': ['output'], "n_out": 7},
+    "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:c", "prev:orth_embed"], "n_out": 7},
+    "output_prob": {"class": "softmax", "from": ["prev:s", "c"], "target": "classes", "loss": "ce"},
+    # basic attention
+    "s_transformed": {'class': 'linear', 'from': ['s'], 'n_out': 6, 'activation': None},
+    "att_energy_tanh": {'class': 'activation', 'from': ['att_energy_in'], 'activation': 'tanh'},
+    "att_energy": {'class': 'linear', 'from': ['att_energy_tanh'], 'n_out': 1, 'activation': None,
+                   },
+    "att_weights": {'class': 'softmax_over_spatial', 'from': ['att_energy']},
+    "accum_att_weights": {'class': 'combine', 'kind': 'add',
+                          'from': ['att_weights', 'prev:accum_att_weights'],
+                          },
+    'feedback_pad_left': {'axes': 's:0',
+                          'class': 'pad',
+                          'from': ['prev:accum_att_weights'],
+                          'mode': 'constant',
+                          'padding': ((2, 0),),
+                          'value': 1},
+    'feedback_pad_right': {'axes': 's:0',
+                           'class': 'pad',
+                           'from': ['feedback_pad_left'],
+                           'mode': 'constant',
+                           'padding': ((0, 2),),
+                           'value': 0},
+    "convolved_att": {'class': 'conv', 'from': ['feedback_pad_right'], 'filter_size': (5,),
+                      'n_out': 4, 'padding': 'valid'},
+    "location_feedback": {'class': 'linear', 'from': ['convolved_att'], 'n_out': 6, 'activation': None},
+    "att_energy_in": {'class': 'combine', 'kind': 'add', 'from': [
+      'base:enc_transformed', 'location_feedback', 's_transformed']},
+    "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights"},
+  }
+
+  check_attention_variant(recurrent_unit_dict)
+
+
 def test_attention_search_in_train_then_search():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 7
@@ -1016,8 +1404,8 @@ def check_train_and_search_two_targets(net_dict):
   Tests training and search for network architectures having two targets ("classes_0", "classes_1")
   and two corresponding output layers ("decision_0", "decision_1").
   """
-  from MetaDataset import MetaDataset
-  from TFUtil import DimensionTag
+  from returnn.datasets.meta import MetaDataset
+  from returnn.tf.util.basic import DimensionTag
   from test_HDFDataset import generate_hdf_from_other
 
   n_data_dim = 2
@@ -1155,8 +1543,8 @@ def test_attention_two_dependent_targets():
 
 
 def test_rec_optim_all_out():
-  from GeneratingDataset import DummyDataset
-  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+  from returnn.datasets.generating import DummyDataset
+  from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 7
@@ -1258,7 +1646,7 @@ def test_rec_subnet_train_t3b():
     }
   }
 
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -1314,7 +1702,7 @@ def test_rec_subnet_train_t3d():
     }, "target": "classes", "max_seq_len": 75},
   }
 
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -1359,7 +1747,7 @@ def test_rec_subnet_train_t3d_simple():
     }, "target": "classes", "max_seq_len": 75},
   }
 
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -1406,13 +1794,13 @@ def deterministic_train_check(layer_opts):
     "start_epoch": 1,
     "num_epochs": 2,
     "batch_size": 10,
-    "nadam": True,
+    "adam": True,
     "learning_rate": 0.01,
     "debug_add_check_numerics_ops": True
   })
   _cleanup_old_models(config)
 
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
   cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
@@ -1463,8 +1851,8 @@ def test_deterministic_train_rec_nativelstm2():
 
 
 def _create_deterministic_layer_checks():
-  from TFNetworkLayer import get_layer_class_name_list, get_layer_class
-  from Util import collect_mandatory_class_init_kwargs
+  from returnn.tf.layers.basic import get_layer_class_name_list, get_layer_class
+  from returnn.util.basic import collect_mandatory_class_init_kwargs
   for cls_name in get_layer_class_name_list():
     cls = get_layer_class(cls_name)
     if cls.__name__.startswith("_"):
@@ -1490,10 +1878,10 @@ def test_rec_subnet_auto_optimize():
   Thus, training should be equivalent.
   Also, training the one model, and then importing it in the original model, should work.
   """
-  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+  from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
   n_data_dim = 2
   n_classes_dim = 3
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=10, seq_len=seq_len)
   cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
@@ -1608,7 +1996,7 @@ def test_rec_subnet_construct_1():
   """
   n_data_dim = 2
   n_classes_dim = 3
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=10, seq_len=seq_len)
 
@@ -1665,7 +2053,7 @@ def test_rec_subnet_construct_1():
 def test_rec_subnet_construct_2():
   n_data_dim = 2
   n_classes_dim = 3
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=10, seq_len=seq_len)
 
@@ -1715,7 +2103,7 @@ def test_rec_subnet_construct_2():
     train_net = TFNetwork(extern_data=extern_data, train_flag=True)
     train_net.construct_from_dict(net_dict)
     rec_layer = train_net.layers["output"]
-    from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+    from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
     assert isinstance(rec_layer, RecLayer)
     assert isinstance(rec_layer.cell, _SubnetworkRecCell)
     assert_equal(set(rec_layer.cell.input_layers_moved_out), {"output", "target_embed"})
@@ -1728,7 +2116,7 @@ def test_rec_subnet_construct_2():
 def test_rec_subnet_construct_3():
   n_data_dim = 2
   n_classes_dim = 3
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=10, seq_len=seq_len)
 
@@ -1778,7 +2166,7 @@ def test_rec_subnet_construct_3():
     train_net = TFNetwork(extern_data=extern_data, train_flag=True)
     train_net.construct_from_dict(net_dict)
     rec_layer = train_net.layers["output"]
-    from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+    from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
     assert isinstance(rec_layer, RecLayer)
     assert isinstance(rec_layer.cell, _SubnetworkRecCell)
     assert_equal(set(rec_layer.cell.input_layers_moved_out), {"output", "target_embed"})
@@ -1849,7 +2237,7 @@ def test_rec_subnet_eval_init_out_apply0():
     }, "target": "classes", "max_seq_len": 7},
   }
 
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -1867,7 +2255,7 @@ def test_rec_subnet_eval_init_out_apply0():
     "start_epoch": 1,
     "num_epochs": 2,
     "batch_size": 10,
-    "nadam": True,
+    "adam": True,
     "learning_rate": 0.01,
     "debug_print_layer_output_template": True
   })
@@ -1957,7 +2345,7 @@ def test_search_multi_choice_hdf_dump():
 
   def t_linear(source, **kwargs):
     import tensorflow as tf
-    from TFUtil import where_bc
+    from returnn.tf.util.basic import where_bc
     enc = source(1, as_data=True, auto_convert=False)
     dec = source(0, as_data=True, auto_convert=False)
     enc_lens = enc.get_sequence_lengths()
@@ -2212,7 +2600,7 @@ def test_search_multi_choice_hdf_dump():
 
     return net_dict
 
-  from Dataset import init_dataset
+  from returnn.datasets import init_dataset
 
   def run(task):
     """
@@ -2292,7 +2680,7 @@ def test_net_safe_log_to_log_softmax():
   output_layer = net.get_default_output_layer(must_exist=True)
   out = output_layer.output.placeholder
   print(out)
-  from TFUtil import print_graph_output
+  from returnn.tf.util.basic import print_graph_output
   print_graph_output(out)
   assert out.op.type == "Sub"
   assert len(out.op.inputs) == 2
@@ -2367,8 +2755,8 @@ def test_preload_from_files():
     "model": model_tmp_dir + "/clone_model",
   })
 
-  from GeneratingDataset import DummyDataset
-  from TFEngine import Engine
+  from returnn.datasets.generating import DummyDataset
+  from returnn.tf.engine import Engine
   seq_len = 5
   n_data_dim = n_in
   n_classes_dim = n_out
@@ -2451,8 +2839,8 @@ def test_preload_from_files_with_reuse():
     "model": model_tmp_dir + "/clone_model",
   })
 
-  from GeneratingDataset import DummyDataset
-  from TFEngine import Engine
+  from returnn.datasets.generating import DummyDataset
+  from returnn.tf.engine import Engine
   seq_len = 5
   n_data_dim = n_in
   n_classes_dim = n_out
@@ -2541,8 +2929,8 @@ def test_preload_from_files_ignore_missing():
     "model": model_tmp_dir + "/clone_model",
   })
 
-  from GeneratingDataset import DummyDataset
-  from TFEngine import Engine
+  from returnn.datasets.generating import DummyDataset
+  from returnn.tf.engine import Engine
   seq_len = 5
   n_data_dim = n_in
   n_classes_dim = n_out
@@ -2616,8 +3004,8 @@ def test_init_network_from_config_preload_from_files_eval():
     "model": model_tmp_dir + "/model",
   })
 
-  from GeneratingDataset import DummyDataset
-  from TFEngine import Engine
+  from returnn.datasets.generating import DummyDataset
+  from returnn.tf.engine import Engine
   seq_len = 5
   n_data_dim = n_in
   n_classes_dim = n_out
@@ -2653,7 +3041,7 @@ def test_TikhonovRegularizationLayer():
 
   make_network(num_layers=3)
 
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -2687,7 +3075,7 @@ def test_TikhonovRegularizationLayer():
 
 
 def test_grad_summaries():
-  from GeneratingDataset import DummyDataset
+  from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -2745,8 +3133,8 @@ def test_grad_summaries():
 def test_unflatten_2d():
   # See also test_SimpleHDFWriter_ndim1_var_len.
   # And unflatten_nd, and UnflattenNdLayer.
-  from HDFDataset import HDFDataset, SimpleHDFWriter
-  from Dataset import set_config_num_inputs_outputs_from_dataset
+  from returnn.datasets.hdf import HDFDataset, SimpleHDFWriter
+  from returnn.datasets.basic import set_config_num_inputs_outputs_from_dataset
   # E.g. attention weights, shape (dec-time,enc-time) per seq.
   fn = _get_tmp_file(suffix=".hdf")
   os.remove(fn)  # SimpleHDFWriter expects that the file does not exist
@@ -2830,10 +3218,10 @@ def test_unflatten_2d():
 def test_attention_forward_hdf_then_unflatten_2d():
   # See also test_SimpleHDFWriter_ndim1_var_len.
   # And unflatten_nd, and UnflattenNdLayer.
-  from HDFDataset import HDFDataset
-  from Dataset import set_config_num_inputs_outputs_from_dataset
-  from GeneratingDataset import TaskNumberBaseConvertDataset
-  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+  from returnn.datasets.hdf import HDFDataset
+  from returnn.datasets.basic import set_config_num_inputs_outputs_from_dataset
+  from returnn.datasets.generating import TaskNumberBaseConvertDataset
+  from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
 
   # Simple version of e.g.:
   # https://github.com/rwth-i6/returnn-experiments/blob/master/2018-attention/wmt2017ende/blocks-flstm.enc6l.decb.pretrain2.adam.lr1e_3.mseqs100.bs4000.ls01.tembi0.invfert.oeps1e_8.gradnoise0.seqsort1000.config
@@ -2988,7 +3376,7 @@ def test_preinit_reset_train_dataset():
   # TaskNumberBaseConvertDataset does not support this, so we convert it to HDF.
   print("Preparing data...")
   from test_HDFDataset import generate_hdf_from_other, get_test_tmp_file
-  from Dataset import init_dataset
+  from returnn.datasets import init_dataset
   n_in, n_out = 2, 8
   default_train_hdf_fn = generate_hdf_from_other({
     "class": "TaskNumberBaseConvertDataset", "num_seqs": 11,
@@ -3113,7 +3501,7 @@ if __name__ == "__main__":
   finally:
     try:
       session.close()
-      tf.reset_default_graph()
+      tf_compat.v1.reset_default_graph()
     except Exception as exc:
       print("test finally handler, exception:", type(exc).__name__, ":", exc)
     import threading

@@ -15,19 +15,16 @@ import os
 import sys
 from pprint import pprint
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
-
-import rnn
-from Log import log
-from Config import Config
+import _setup_returnn_env  # noqa
+import returnn.__main__ as rnn
+from returnn.log import log
+from returnn.config import Config
 import argparse
-import Util
-from TFEngine import Engine
-from Dataset import init_dataset
-from MetaDataset import MetaDataset
-import better_exchook
+import returnn.util.basic as util
+from returnn.tf.engine import Engine
+from returnn.datasets import init_dataset
+from returnn.datasets.meta import MetaDataset
+from returnn.util import better_exchook
 
 
 config = None  # type: typing.Optional[Config]
@@ -62,7 +59,7 @@ def init(config_filename, log_verbosity, remaining_args=()):
   print("Returnn %s starting up." % os.path.basename(__file__), file=log.v1)
   rnn.returnn_greeting()
   rnn.init_backend_engine()
-  assert Util.BackendEngine.is_tensorflow_selected(), "this is only for TensorFlow"
+  assert util.BackendEngine.is_tensorflow_selected(), "this is only for TensorFlow"
   rnn.init_faulthandler()
   better_exchook.replace_traceback_format_tb()  # makes some debugging easier
   rnn.init_config_json_network()
@@ -145,6 +142,9 @@ def prepare_compile(rec_layer_name, net_dict, cheating, dump_att_weights, hdf_fi
 
 
 def main(argv):
+  """
+  Main entry.
+  """
   arg_parser = argparse.ArgumentParser(description='Dump search scores and other info to HDF file.')
   arg_parser.add_argument('config', help="filename to config-file")
   arg_parser.add_argument("--dataset", default="config:train")

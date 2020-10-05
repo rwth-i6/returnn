@@ -6,6 +6,16 @@ or any changes which could potentially break or change the behavior of existing 
 This is intentionally kept short. For a full change log, just see the Git log.
 
 
+## 2020-08-03: New code structure ([discussion](https://github.com/rwth-i6/returnn/issues/162))
+
+## 2020-06-30: New generic training pipeline / extended custom pretraining ([discussion](https://github.com/rwth-i6/returnn/issues/311))
+
+## 2020-06-12: TensorFlow 2 support ([discussion](https://github.com/rwth-i6/returnn/issues/283))
+
+## 2020-06-10: Distributed TensorFlow support ([discussion](https://github.com/rwth-i6/returnn/issues/296), [wiki](https://github.com/rwth-i6/returnn/wiki/Distributed-TensorFlow))
+
+## 2020-06-05: New TF dataset pipeline via `tf.dataset` ([discussion](https://github.com/rwth-i6/returnn/issues/292))
+
 ## 2019-08-20: Pretrain `#config` can overwrite datasets (`train`, `dev`, `eval`)
 
 ## 2019-08-13: `Data` `batch_shape_meta` extra debug repr output

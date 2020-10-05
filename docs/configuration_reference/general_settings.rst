@@ -8,7 +8,9 @@ dev
     A dictionary specifying the developement set. For details on datasets, see :ref:`dataset_reference`
 
 device
-    E.g. ``gpu`` or ``cpu``. Can also be ``gpu0,gpu1`` for multi-GPU training.
+    E.g. ``gpu`` or ``cpu``.
+    Although RETURNN will automatically detect and use a GPU if available,
+    a specific device can be enforced by setting this parameter.
 
 extern_data (former num_outputs)
     Defines the source/target dimensions of the data. Both can be integers.
@@ -25,10 +27,12 @@ extern_data (former num_outputs)
 
     For a more explicit definition of the shapes, you can provide a dict instead of a list or tuple. This dict may
     contain information to create "Data" objects. For extern_data, only ``dim`` and ``shape`` are required.
+    Example: :code:`'feature_data': {'dim': 80, 'shape': (None, 80)}`
+    This defines 80 dimensional features with a time axis of arbitrary length.
     Example: :code:`'speaker_classes': {'dim': 1172, 'shape': (), 'sparse': True}`
     This defines a sparse input for e.g. speaker classes that do not have a time axis.
 
-    In general, all input parameters to :class:`TFUtil.Data` can be provided
+    In general, all input parameters to :class:`returnn.tf.util.data.Data` can be provided
 
 log
     path to the log, or list of paths for multiple logs.
@@ -57,9 +61,12 @@ network
     For details sett :ref:`layer_reference`.
 
 num_inputs
+    Input feature dimension of the network, related to the 'data' tag.
+    Deprecated for the TensorFlow backend, see ``extern_data``
 
 num_outputs
-    Deprecated, see ``extern_data``
+    Output feature dimension of the network, related to the 'classes' tag.
+    Deprecated for the TensorFlow backend, see ``extern_data``
 
 task
     The task to run. Common cases are ``train``, ``forward`` or ``search``.

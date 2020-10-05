@@ -7,6 +7,7 @@ Dataset Combination
 .. automodule:: MetaDataset
 
 
+.. _meta_dataset:
 
 Meta Dataset
 ------------

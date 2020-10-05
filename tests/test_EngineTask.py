@@ -1,22 +1,17 @@
 
 from __future__ import print_function
 
-import sys
-sys.path += ["."]  # Python 3 hack
-
+import _setup_test_env  # noqa
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_greater
 import time
 import sys
 from pprint import pprint
 
-from EngineTask import TaskThread, TrainTaskThread, EvalTaskThread
-from Device import Device
-from Config import Config
-from Log import log
-from Util import hms, NumbersDict
-
-
-log.initialize(verbosity=[5])
+from returnn.theano.engine_task import TaskThread, TrainTaskThread, EvalTaskThread
+from returnn.theano.device import Device
+from returnn.config import Config
+from returnn.log import log
+from returnn.util.basic import hms, NumbersDict
 
 
 config = Config()

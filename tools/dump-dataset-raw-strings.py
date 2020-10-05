@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
 
+"""
+Go through a dataset, and collects the targets (or other data) as raw strings,
+and writes it to a file in Python format.
+"""
+
 from __future__ import print_function
 
 import os
 import sys
 import time
 import numpy
-
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
-
-import rnn
-from Log import log
 import argparse
-from Util import Stats, hms
-from Dataset import Dataset, init_dataset
-import Util
+import typing
+
+import _setup_returnn_env  # noqa
+import returnn.__main__ as rnn
+from returnn.log import log
+from returnn.util.basic import Stats, hms
+from returnn.datasets import Dataset, init_dataset
+import returnn.util.basic as util
 
 
 def get_raw_strings(dataset, options):
@@ -32,7 +35,7 @@ def get_raw_strings(dataset, options):
   seq_idx = options.startseq
   if options.endseq < 0:
     options.endseq = float("inf")
-  interactive = Util.is_tty() and not log.verbose[5]
+  interactive = util.is_tty() and not log.verbose[5]
   print("Iterating over %r." % dataset, file=log.v2)
   while dataset.is_less_than_num_seqs(seq_idx) and seq_idx <= options.endseq:
     dataset.load_seqs(seq_idx, seq_idx + 1)
@@ -66,7 +69,7 @@ def get_raw_strings(dataset, options):
     seq_len_stats.collect([len(ref)])
     refs.append((seq_tag, ref))
     if interactive:
-      Util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
+      util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
     elif log.verbose[5]:
       print(progress_prefix, "seq tag %r, ref len %i chars" % (seq_tag, len(ref)))
     seq_idx += 1
@@ -76,6 +79,9 @@ def get_raw_strings(dataset, options):
     dataset.is_less_than_num_seqs(seq_idx),), file=log.v1)
   seq_len_stats.dump(stream_prefix="Seq-length %r " % (options.key,), stream=log.v2)
   return refs
+
+
+config = None  # type: typing.Optional["returnn.config.Config"]
 
 
 def init(config_filename, log_verbosity):
@@ -115,15 +121,18 @@ def generic_open(filename, mode="r"):
 
 
 def main(argv):
-  argparser = argparse.ArgumentParser(description='Dump raw strings from dataset. Same format as in search.')
-  argparser.add_argument('--config', help="filename to config-file. will use dataset 'eval' from it")
-  argparser.add_argument("--dataset", help="dataset, overwriting config")
-  argparser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
-  argparser.add_argument('--endseq', type=int, default=-1, help='end seq idx (inclusive) or -1 (default: -1)')
-  argparser.add_argument("--key", default="raw", help="data-key, e.g. 'data' or 'classes'. (default: 'raw')")
-  argparser.add_argument("--verbosity", default=4, type=int, help="5 for all seqs (default: 4)")
-  argparser.add_argument("--out", required=True, help="out-file. py-format as in task=search")
-  args = argparser.parse_args(argv[1:])
+  """
+  Main entry.
+  """
+  arg_parser = argparse.ArgumentParser(description='Dump raw strings from dataset. Same format as in search.')
+  arg_parser.add_argument('--config', help="filename to config-file. will use dataset 'eval' from it")
+  arg_parser.add_argument("--dataset", help="dataset, overwriting config")
+  arg_parser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
+  arg_parser.add_argument('--endseq', type=int, default=-1, help='end seq idx (inclusive) or -1 (default: -1)')
+  arg_parser.add_argument("--key", default="raw", help="data-key, e.g. 'data' or 'classes'. (default: 'raw')")
+  arg_parser.add_argument("--verbosity", default=4, type=int, help="5 for all seqs (default: 4)")
+  arg_parser.add_argument("--out", required=True, help="out-file. py-format as in task=search")
+  args = arg_parser.parse_args(argv[1:])
   assert args.config or args.dataset
 
   init(config_filename=args.config, log_verbosity=args.verbosity)

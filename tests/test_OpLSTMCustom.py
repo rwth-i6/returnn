@@ -2,17 +2,18 @@
 from __future__ import print_function
 
 import sys
-sys.path += ["."]  # Python 3 hack
+import os
 
+import _setup_test_env  # noqa
 import unittest
 import theano
 import theano.tensor as T
 import numpy
-from Util import have_gpu
+from returnn.util.basic import have_gpu
 import RecurrentTransform
 import theano.sandbox.cuda as cuda
-from Log import log
-import better_exchook
+from returnn.log import log
+from returnn.util import better_exchook
 import CustomLSTMFunctions
 
 log.initialize(verbosity=[5])

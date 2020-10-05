@@ -11,6 +11,22 @@ batch_size
     ``batch_size`` is the upper limit for ``time * sequences`` during creation of the mini-batches.
 
 batching
+    Defines the default value for ``seq_ordering`` across all datasets.
+    It is recommended to not use this parameter,
+    but rather define ``seq_ordering`` explicitely in the datasets for better readability.
+    Possible values are:
+
+        - ``default``: Keep the sequences as is
+        - ``reverse``: Use the default sequences in reversed order
+        - ``random``: Shuffle the data with a predefined fixed seed
+        - ``random:<seed>``: Shuffle the data with the seed given
+        - ``sorted``: Sort by length (only if available), beginning with shortest sequences
+        - ``sorted_reverse``: Sort by length, beginning with longest sequences
+        - ``laplace:<n_buckets>``: Sort by length with n laplacian buckets (one bucket means going from shortest to longest and back with 1/n of the data).
+        - ``laplace:.<n_sequences>``: sort by length with n sequences per laplacian bucket.
+
+    Note that not all sequence order modes are available for all datasets,
+    and some datasets may provide additional modes.
 
 chunking
     You can chunk sequences of your data into parts, which will greatly reduce the amount of needed zero-padding.
@@ -31,8 +47,9 @@ cleanup_old_models
 
 max_seq_length
     A dict with string:integer pairs. The string must be a valid data key,
-    and the integer specifies the upper bound for this data object. Batches, where the specified data object exceeds
-    the upper bound are discarded. Note that some datasets (e.g ``OggZipDataset``) load and process the data
+    and the integer specifies the upper bound for this data object.
+    During batch construction any sequence where the specified data object exceeds the upper bound are discarded.
+    Note that some datasets (e.g ``OggZipDataset``) load and process the data
     to determine the length, so even for discarded sequences data processing might be performed.
 
 max_seqs

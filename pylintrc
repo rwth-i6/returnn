@@ -5,7 +5,13 @@
 
 # Python code to execute, usually for sys.path manipulation such as
 # pygtk.require().
-init-hook=import better_exchook; better_exchook.install()
+# Expect that we have better_exchook installed globally.
+init-hook=
+    import better_exchook
+    better_exchook.install()
+    from pylint.config import find_pylintrc
+    import os, sys
+    sys.path.insert(0, os.path.dirname(find_pylintrc()))
 
 # Profiled execution.
 profile=no
@@ -38,8 +44,18 @@ enable=indexing-exception,old-raise-syntax
 # --enable=similarities". If you want to run only the classes checker, but have
 # no Warning level messages displayed, use"--disable=all --enable=classes
 # --disable=W"
-disable=design,similarities,no-self-use,attribute-defined-outside-init,locally-disabled,star-args,pointless-except,bad-option-value,global-statement,fixme,suppressed-message,useless-suppression,locally-enabled,no-member,no-name-in-module,import-error,unsubscriptable-object,unbalanced-tuple-unpacking,undefined-variable,not-context-manager
+# Google default:
+# disable =
+#    design,similarities,no-self-use,attribute-defined-outside-init,
+#    locally-disabled,star-args,pointless-except,bad-option-value,
+#    global-statement,
+#    fixme,
+#    suppressed-message,useless-suppression,locally-enabled,no-member,
+#    no-name-in-module,import-error,unsubscriptable-object,
+#    unbalanced-tuple-unpacking,undefined-variable,not-context-manager
 
+disable =
+    import-outside-toplevel
 
 # Set the cache size for astng objects.
 cache-size=500
@@ -125,13 +141,15 @@ bad-functions=apply,input,reduce
 
 # Disable the report(s) with the given id(s).
 # All non-Google reports are disabled by default.
-disable-report=R0001,R0002,R0003,R0004,R0101,R0102,R0201,R0202,R0220,R0401,R0402,R0701,R0801,R0901,R0902,R0903,R0904,R0911,R0912,R0913,R0914,R0915,R0921,R0922,R0923
+# Google default:
+# disable-report=R0001,R0002,R0003,R0004,R0101,R0102,R0201,R0202,R0220,R0401,R0402,R0701,R0801,R0901,R0902,R0903,R0904,R0911,R0912,R0913,R0914,R0915,R0921,R0922,R0923
 
 # Regular expression which should only match correct module names
 module-rgx=(([a-z_][a-z0-9_]*)|([A-Z][a-zA-Z0-9]+))$
 
 # Regular expression which should only match correct module level names
-const-rgx=^(_?[A-Z][A-Z0-9_]*|__[a-z0-9_]+__|_?[a-z][a-z0-9_]*)$
+# const-rgx=^(_?[A-Z][A-Z0-9_]*|__[a-z0-9_]+__|_?[a-z][a-z0-9_]*)$
+const-rgx=^([A-Za-z0-9_]*)$
 
 # Regular expression which should only match correct class names
 class-rgx=^_?[A-Z][a-zA-Z0-9]*$

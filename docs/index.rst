@@ -49,33 +49,56 @@ Questions can also be asked on
 Some recent development changelog can be seen `here <https://github.com/rwth-i6/returnn/blob/master/CHANGELOG.md>`__.
 
 
-User guide
-----------
+.. Getting Started
+.. ---------------
 
 .. toctree::
+    :hidden:
+    :caption: Getting Started
     :maxdepth: 2
 
-    installation
-    basic_usage
-    tech_overview
-    tf_lstm_benchmark
-    multi_gpu
-    deterministic_training
-    debugging
-    profiling
+    getting_started/tech_overview
+    getting_started/installation
+    getting_started/basic_usage/basic_usage
+    getting_started/framework.rst
+    getting_started/faq.rst
+    getting_started/tf_lstm_benchmark
+
+.. toctree::
+    :hidden:
+    :caption: Reference
+    :maxdepth: 2
+
     configuration_reference/index.rst
     dataset_reference/index.rst
     layer_reference/index.rst
-
-
-API Reference
--------------
+    optimizer.rst
 
 .. toctree::
+    :hidden:
+    :caption: Advanced Topics
     :maxdepth: 2
-    :glob:
+
+    advanced/pretraining.rst
+    advanced/multi_gpu.rst
+    advanced/debugging.rst
+    advanced/profiling.rst
+    advanced/deterministic_training.rst
+
+.. toctree::
+    :hidden:
+    :caption: Applications
+
+    applications/asr.rst
+    applications/lm.rst
+    applications/mt.rst
+
+.. toctree::
+    :hidden:
+    :caption: Internals
 
     api
+    internals/search.rst
 
 
 Refs

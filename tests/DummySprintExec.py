@@ -1,35 +1,43 @@
 #!/usr/bin/env python
 
-# This script will emulate a Sprint executable, so that we can use it for SprintDatasetBase.
-# This is useful for tests.
-# To generate data, we can use the GeneratingDataset code.
+"""
+This script will emulate a Sprint executable, so that we can use it for SprintDatasetBase.
+This is useful for tests.
+To generate data, we can use the GeneratingDataset code.
+"""
 
 from __future__ import print_function
 
 import sys
-import os
 from importlib import import_module
 
-# Add parent dir to Python path so that we can use GeneratingDataset and other CRNN code.
-my_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.normpath(my_dir + "/..")
-if parent_dir not in sys.path:
-  sys.path += [parent_dir]
-
-import GeneratingDataset
-from Dataset import Dataset
-from Util import ObjAsDict
+import _setup_test_env  # noqa
+import returnn.datasets.generating as generating_dataset
+from returnn.datasets import Dataset
+from returnn.util.basic import ObjAsDict
 
 
 class ArgParser:
+  """
+  Emulate the Sprint argument parser.
+  """
 
   def __init__(self):
     self.args = {}
 
   def add(self, key, value):
+    """
+    :param str key:
+    :param str value:
+    """
     self.args[key] = value
 
   def get(self, key, default=None):
+    """
+    :param str key:
+    :param str|T|None default:
+    :rtype: str|T|None
+    """
     return self.args.get(key, default)
 
   def parse(self, argv):
@@ -48,29 +56,33 @@ class ArgParser:
 
 
 def main(argv):
+  """
+  Main entry.
+  """
   print("DummySprintExec init", argv)
   args = ArgParser()
   args.parse(argv[1:])
 
   if args.get("pymod-name"):
-    SprintAPI = import_module(args.get("pymod-name"))
+    sprint_api = import_module(args.get("pymod-name"))
   else:
-    import SprintExternInterface as SprintAPI
+    import returnn.sprint.extern_interface as sprint_api
 
-  inputDim = int(args.get("feature-dimension"))
-  assert inputDim > 0
-  outputDim = int(args.get("trainer-output-dimension"))
-  assert outputDim > 0
-  sprintConfig = args.get("pymod-config", "")
-  targetMode = args.get("target-mode", "target-generic")
-  SprintAPI.init(inputDim=inputDim, outputDim=outputDim,
-                 config=sprintConfig, targetMode=targetMode)
+  input_dim = int(args.get("feature-dimension"))
+  assert input_dim > 0
+  output_dim = int(args.get("trainer-output-dimension"))
+  assert output_dim > 0
+  sprint_config = args.get("pymod-config", "")
+  target_mode = args.get("target-mode", "target-generic")
+  sprint_api.init(
+    inputDim=input_dim, outputDim=output_dim,
+    config=sprint_config, targetMode=target_mode)
 
   if args.get("crnn-dataset"):
-    dataset = eval(args.get("crnn-dataset"), {}, ObjAsDict(GeneratingDataset))
+    dataset = eval(args.get("crnn-dataset"), {}, ObjAsDict(generating_dataset))
     assert isinstance(dataset, Dataset)
-    assert dataset.num_inputs == inputDim
-    assert dataset.num_outputs == {"classes": (outputDim, 1), "data": (inputDim, 2)}
+    assert dataset.num_inputs == input_dim
+    assert dataset.num_outputs == {"classes": (output_dim, 1), "data": (input_dim, 2)}
     dataset.init_seq_order(epoch=1)
 
     seq_idx = 0
@@ -79,22 +91,22 @@ def main(argv):
       features = dataset.get_data(seq_idx, "data")
       features = features.T  # Sprint-like
       kwargs = {"features": features}
-      if targetMode == "target-generic":
+      if target_mode == "target-generic":
         if "orth" in dataset.get_target_list():
           kwargs["orthography"] = dataset.get_targets("orth", seq_idx)
         if "classes" in dataset.get_target_list():
           kwargs["alignment"] = dataset.get_targets("classes", seq_idx)
         print("DummySprintExec seq_idx %i feedInputAndTarget(**%r)" % (seq_idx, kwargs))
-        SprintAPI.feedInputAndTarget(**kwargs)
+        sprint_api.feedInputAndTarget(**kwargs)
       else:
-        raise NotImplementedError("targetMode = %s" % targetMode)
+        raise NotImplementedError("targetMode = %s" % target_mode)
       seq_idx += 1
 
   print("DummySprintExec exit")
-  SprintAPI.exit()
+  sprint_api.exit()
 
 
 if __name__ == "__main__":
-  import better_exchook
+  from returnn.util import better_exchook
   better_exchook.install()
   main(sys.argv)

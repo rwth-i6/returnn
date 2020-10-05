@@ -3,28 +3,23 @@ from __future__ import print_function
 
 import os
 import sys
-my_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, "%s/.." % my_dir)
-sys.path.insert(0, "%s/../tools" % my_dir)  # for hdf_dump
+import _setup_test_env  # noqa
 
-from Dataset import Dataset
-from HDFDataset import *
+from returnn.datasets import Dataset
+from returnn.datasets.hdf import *
 from nose.tools import assert_equal
 from nose.tools import assert_not_equal
 from nose.tools import assert_raises
 from nose.tools import raises
-import Util
+import returnn.util.basic as util
 import h5py
 import numpy as np
 import os
 import unittest
-import better_exchook
-better_exchook.install()
-better_exchook.replace_traceback_format_tb()
-Util.init_thread_join_hack()
+from returnn.util import better_exchook
 
-from Log import log
-log.initialize(verbosity=[5])
+
+my_dir = os.path.dirname(os.path.abspath(__file__))
 
 
 class TestHDFDataset(object):
@@ -144,12 +139,12 @@ def generate_hdf_from_other(opts, suffix=".hdf"):
   :rtype: str
   """
   # See test_hdf_dump.py and tools/hdf_dump.py.
-  from Util import make_hashable
+  from returnn.util.basic import make_hashable
   cache_key = make_hashable(opts)
   if cache_key in _hdf_cache:
     return _hdf_cache[cache_key]
   fn = get_test_tmp_file(suffix=suffix)
-  from Dataset import init_dataset
+  from returnn.datasets.basic import init_dataset
   dataset = init_dataset(opts)
   hdf_dataset = HDFDatasetWriter(fn)
   hdf_dataset.dump_from_dataset(dataset)
@@ -214,7 +209,7 @@ class DatasetTestReader:
 
 def test_hdf_dump_not_frame_synced():
   num_seqs = 3
-  from GeneratingDataset import TaskNumberBaseConvertDataset
+  from returnn.datasets.generating import TaskNumberBaseConvertDataset
   hdf_fn = generate_hdf_from_other({"class": "TaskNumberBaseConvertDataset", "num_seqs": num_seqs})
   hdf = HDFDataset([hdf_fn])
   orig = TaskNumberBaseConvertDataset(num_seqs=num_seqs)
@@ -235,7 +230,7 @@ def test_hdf_dump_not_frame_synced():
 def test_HDFDataset_partition_epoch():
   partition_epoch = 3
   num_seqs = 11
-  from GeneratingDataset import TaskNumberBaseConvertDataset
+  from returnn.datasets.generating import TaskNumberBaseConvertDataset
   hdf_fn = generate_hdf_from_other({"class": "TaskNumberBaseConvertDataset", "num_seqs": num_seqs})
   hdf = HDFDataset([hdf_fn], partition_epoch=partition_epoch)
   orig = TaskNumberBaseConvertDataset(num_seqs=num_seqs)
@@ -404,6 +399,40 @@ def test_SimpleHDFWriter_ndim1_var_len():
       reader.data["sizes"][i],)
 
 
+def test_SimpleHDFWriter_extend_existing_file():
+  fn = get_test_tmp_file(suffix=".hdf")
+  os.remove(fn)  # SimpleHDFWriter expects that the file does not exist
+  n_dim = 3
+  writer = SimpleHDFWriter(filename=fn, dim=n_dim, labels=None)
+  seq_lens = [2, 3]
+  writer.insert_batch(
+    inputs=numpy.random.normal(size=(len(seq_lens), max(seq_lens), n_dim)).astype("float32"),
+    seq_len=seq_lens,
+    seq_tag=["seq-%i" % i for i in range(len(seq_lens))])
+  writer.close()
+  assert os.path.exists(fn)
+
+  writer = SimpleHDFWriter(filename=fn, dim=n_dim, labels=None, extend_existing_file=True)
+  seq_lens2 = [4, 3, 2]
+  writer.insert_batch(
+    inputs=numpy.random.normal(size=(len(seq_lens2), max(seq_lens2), n_dim)).astype("float32"),
+    seq_len=seq_lens2,
+    seq_tag=["seq-%i" % (i + len(seq_lens)) for i in range(len(seq_lens2))])
+  writer.close()
+  seq_lens += seq_lens2
+
+  dataset = HDFDataset(files=[fn])
+  reader = DatasetTestReader(dataset=dataset)
+  reader.read_all()
+  assert "data" in reader.data_keys  # "classes" might be in there as well, although not really correct/existing
+  assert reader.data_sparse["data"] is False
+  assert list(reader.data_shape["data"]) == [n_dim]
+  assert reader.data_dtype["data"] == "float32"
+  assert len(seq_lens) == reader.num_seqs
+  for i, seq_len in enumerate(seq_lens):
+    assert reader.seq_lens[i]["data"] == seq_len
+
+
 @unittest.skip("unfinished...")
 def test_SimpleHDFWriter_swmr():
   fn = get_test_tmp_file(suffix=".hdf")
@@ -479,9 +508,9 @@ def test_hdf_simple_iter_cached():
 
 
 def test_rnn_getCacheByteSizes_zero():
-  from Config import Config
+  from returnn.config import Config
   config = Config({"cache_size": "0"})
-  import rnn
+  import returnn.__main__ as rnn
   rnn.config = config
   sizes = rnn.get_cache_byte_sizes()
   assert len(sizes) == 3
@@ -490,9 +519,9 @@ def test_rnn_getCacheByteSizes_zero():
 
 def test_rnn_initData():
   hdf_fn = generate_hdf_from_dummy()
-  from Config import Config
+  from returnn.config import Config
   config = Config({"cache_size": "0", "train": hdf_fn, "dev": hdf_fn})
-  import rnn
+  import returnn.__main__ as rnn
   rnn.config = config
   rnn.init_data()
   train, dev = rnn.train_data, rnn.dev_data
@@ -528,7 +557,7 @@ def test_hdf_no_cache_iter():
 
 
 def test_hdf_data_short_int_dtype():
-  from GeneratingDataset import StaticDataset
+  from returnn.datasets.generating import StaticDataset
   dataset = StaticDataset([
     {"data": numpy.array([1, 2, 3], dtype="uint8"), "classes": numpy.array([-1, 5], dtype="int16")}],
     output_dim={"data": (255, 1), "classes": (10, 1)})
@@ -560,7 +589,7 @@ def test_hdf_data_short_int_dtype():
 
 
 def test_hdf_data_target_int32():
-  from GeneratingDataset import StaticDataset
+  from returnn.datasets.generating import StaticDataset
   dataset = StaticDataset([
     {"data": numpy.array([1, 2, 3], dtype="uint8"),
      "classes": numpy.array([2147483647, 2147483646, 2147483645], dtype="int32")}],
@@ -592,7 +621,7 @@ def test_hdf_data_target_int32():
 
 
 def test_hdf_target_float_dtype():
-  from GeneratingDataset import StaticDataset
+  from returnn.datasets.generating import StaticDataset
   dataset = StaticDataset([
     {"data": numpy.array([1, 2, 3], dtype="float32"), "classes": numpy.array([-1, 5], dtype="float32")}],
     output_dim={"data": (1, 1), "classes": (1, 1)})
@@ -624,7 +653,7 @@ def test_hdf_target_float_dtype():
 
 
 def test_hdf_target_float_dense():
-  from GeneratingDataset import StaticDataset
+  from returnn.datasets.generating import StaticDataset
   dataset = StaticDataset([
     {"data": numpy.array([[1, 2, 3], [2, 3, 4]], dtype="float32"),
      "classes": numpy.array([[-1, 5], [-2, 4], [-3, 2]], dtype="float32")}])

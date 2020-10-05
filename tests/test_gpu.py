@@ -1,9 +1,12 @@
 
 from __future__ import print_function
 
+import sys
+import os
+import _setup_test_env  # noqa
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 import unittest
-from Util import have_gpu
+from returnn.util.basic import have_gpu
 
 
 def test_have_gpu():

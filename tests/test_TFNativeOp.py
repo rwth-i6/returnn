@@ -3,38 +3,20 @@
 
 from __future__ import print_function
 
+import _setup_test_env  # noqa
+import _set_num_threads1  # noqa
 import os
 import sys
 import typing
-print("__file__:", __file__)
-base_path = os.path.realpath(os.path.dirname(os.path.abspath(__file__)) + "/..")
-print("base path:", base_path)
-sys.path.insert(0, base_path)
-
-# Do this here such that we always see this log in Travis.
-orig_stdout = sys.stdout
-try:
-  sys.stdout = sys.__stdout__  # Nosetests has overwritten sys.stdout
-
-  # Do this very early, before we import numpy/TF, such that it can have an effect.
-  for env_var in ["OPENBLAS_NUM_THREADS", "GOTO_NUM_THREADS", "OMP_NUM_THREADS"]:
-    print("Env %s = %s" % (env_var, os.environ.get(env_var, None)))
-    # Overwrite with 1. This should make the test probably more deterministic. Not sure...
-    os.environ[env_var] = "1"
-
-finally:
-  sys.stdout = orig_stdout
-
-
 import logging
-logging.getLogger('tensorflow').disabled = True
 import tensorflow as tf
-
-from TFNativeOp import *
-import TFUtil
-from TFUtil import is_gpu_available, get_available_gpu_min_compute_capability, CudaEnv
-import Util
-from Util import unicode
+from returnn.tf.native_op import *
+import returnn.tf.compat as tf_compat
+import returnn.tf.util.basic as tf_util
+from returnn.tf.util.basic import is_gpu_available, get_available_gpu_min_compute_capability, CudaEnv
+import returnn.util.basic as util
+import returnn.native_op as native_op
+from returnn.util.basic import unicode
 import unittest
 from nose.tools import assert_equal, assert_is_instance
 import numpy
@@ -42,31 +24,23 @@ import numpy.testing
 from numpy.testing.utils import assert_almost_equal, assert_allclose
 import os
 from pprint import pprint
-import better_exchook
-better_exchook.replace_traceback_format_tb()
-
-import Debug
-Debug.install_lib_sig_segfault()
-
-try:
-  import faulthandler
-  # Enable after libSigSegfault, so that we have both,
-  # because faulthandler will also call the original sig handler.
-  faulthandler.enable()
-except ImportError:
-  print("no faulthandler")
+from returnn.util import better_exchook
+import returnn.util.debug as debug
 
 
+print("__file__:", __file__)
+base_path = os.path.realpath(os.path.dirname(os.path.abspath(__file__)) + "/..")
+print("base path:", base_path)
 print("TF version:", tf.__version__)
 
 CudaEnv.verbose_find_cuda = True
-session = tf.InteractiveSession()
-tf.set_random_seed(42)
+session = tf_compat.v1.InteractiveSession()
+tf_compat.v1.set_random_seed(42)
 
 
 def sys_exec(*args, **kwargs):
   print("$ %s" % " ".join(args))
-  out = Util.sysexec_out(*args, **kwargs)
+  out = util.sys_exec_out(*args, **kwargs)
   print(out)
 
 
@@ -93,17 +67,21 @@ def test_numpy_gemm():
 
 def dump_info():
   # Some generic stuff.
-  print("Number available CPUs:", Util.get_number_available_cpus())
+  print("Number available CPUs:", util.get_number_available_cpus())
   sys_exec("g++", "--version")
   print("TF __file__:", tf.__file__)
   print("TF version:", tf.__version__)
-  print("TF describe version:", Util.describe_tensorflow_version())
+  print("TF describe version:", util.describe_tensorflow_version())
   print("TF include:", tf.sysconfig.get_include())
   print("TF lib:", tf.sysconfig.get_lib())
-  if TFUtil.have_min_tf_version((1, 14)):
+  if tf_util.have_min_tf_version((1, 14)):
     print("TF link flags:", tf.sysconfig.get_link_flags())
     print("TF compile flags:", tf.sysconfig.get_compile_flags())
-  print("TF cxx11 abi flag:", getattr(tf, 'CXX11_ABI_FLAG', "<undefined>"))
+  if hasattr(tf, "sysconfig") and hasattr(tf.sysconfig, "CXX11_ABI_FLAG"):
+    cxx11_abi_flag = tf.sysconfig.CXX11_ABI_FLAG
+  else:
+    cxx11_abi_flag = getattr(tf, 'CXX11_ABI_FLAG', "<undefined>")
+  print("TF cxx11 abi flag:", cxx11_abi_flag)
   tf_lib_so = tf.sysconfig.get_lib() + "/libtensorflow_framework.so"
   tf_pywrap_so = tf.sysconfig.get_lib() + "/python/_pywrap_tensorflow_internal.so"
   sys_exec("ls", "-la", tf.sysconfig.get_lib())
@@ -118,7 +96,7 @@ def dump_info():
   else:
     print("TF pywrap so does not(!) exist:", tf_pywrap_so)
   print("TF compiler version:", getattr(tf, "__compiler_version__", None))
-  print("GCC for TF:", TFUtil.get_tf_gcc_path())
+  print("GCC for TF:", tf_util.get_tf_gcc_path())
   print("Available GCC versions:")
   for p in os.environ["PATH"].split(":"):
     if os.path.isdir(p):
@@ -134,11 +112,11 @@ def dump_info():
     print("Have /proc")
     # sys_exec("cat", "/proc/%i/maps" % os.getpid())
     print("Mapped executables/libs:")
-    fns = Util.collect_proc_maps_exec_files()
+    fns = util.collect_proc_maps_exec_files()
     pprint(fns)
     fns_with_sgemm = []
     for fn in fns:
-      out = Util.find_sym_in_exec(fn, "sgemm_")
+      out = util.find_sym_in_exec(fn, "sgemm_")
       if out:
         print(out)
         fns_with_sgemm.append(fn)
@@ -151,13 +129,16 @@ def dump_info():
   print("Numpy path: %r" % numpy_path)
   print("Numpy config:")
   numpy.show_config()
-  so_files = Util.sysexec_out("find %s | grep \"\.so\"" % numpy_path, shell=True)
+  so_files = util.sys_exec_out("find %s | grep \"\\.so\"" % numpy_path, shell=True)
   print("Numpy so files:\n---\n%s\n---\n" % so_files)
   so_files = [f for f in so_files.splitlines() if f]
   for f in so_files:
     debug_lib_so(f, ["sgemm"])
-  print("find_libcudart_from_runtime:", Util.find_libcudart_from_runtime())
-  print("_cuda_path_candidate_via_proc_map_libcudart:", TFUtil.CudaEnv._cuda_path_candidate_via_proc_map_libcudart())
+  print("find_libcudart_from_runtime:", util.find_libcudart_from_runtime())
+  print("_cuda_path_candidate_via_proc_map_libcudart:", tf_util.CudaEnv._cuda_path_candidate_via_proc_map_libcudart())
+  for p in tf_util.CudaEnv._cuda_path_candidates():
+    print("CUDA path candidate %s, lib dir %s, valid %s" % (
+      p, tf_util.CudaEnv._get_lib_dir_name(p), tf_util.CudaEnv._check_valid_cuda_path(p)))
 
 
 # Do this here such that we always see this log in Travis.
@@ -180,7 +161,7 @@ finally:
 
 
 def test_NativeLstm2_compile():
-  op = make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
+  op = make_op(native_op.NativeLstm2, compiler_opts={"verbose": True})
   print("op:", op)
   maker = op._op_maker
   print("op maker:", maker)
@@ -188,7 +169,7 @@ def test_NativeLstm2_compile():
   print("op mod:", mod)
   comp = mod._op_compiler
   print("op compiler:", comp)
-  assert isinstance(comp, TFUtil.OpCodeCompiler)
+  assert isinstance(comp, tf_util.OpCodeCompiler)
   print("info dict:")
   pprint(comp._info_dict)
 
@@ -241,18 +222,18 @@ def test_NativeLstmCell():
 
 def test_NativeLstmCell_run():
   from pprint import pprint
-  from Util import describe_tensorflow_version
+  from returnn.util.basic import describe_tensorflow_version
   print("TensorFlow:", describe_tensorflow_version())
   n_time = 2
   n_batch = 1
   n_hidden = 3
-  with tf.Session() as session:
-    with tf.variable_scope("test_NativeLstmCell_run"):
+  with tf_compat.v1.Session() as session:
+    with tf_compat.v1.variable_scope("test_NativeLstmCell_run"):
       cell = NativeLstmCell(n_hidden=n_hidden)
       inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
       index = tf.ones([n_time, n_batch])
       outputs, final_state = cell(inputs, index)
-      session.run(tf.global_variables_initializer())
+      session.run(tf_compat.v1.global_variables_initializer())
       res = session.run(outputs)
       pprint(res)
 
@@ -269,7 +250,7 @@ def test_NativeLstmLowMemCell():
 
 
 def test_LstmLowMem_fwd_simple_1():
-  lstm = make_op(NativeOp.LstmLowMem)
+  lstm = make_op(native_op.LstmLowMem)
   n_time = 1
   n_batch = 1
   n_in = 1
@@ -305,7 +286,7 @@ def test_LstmLowMem_fwd_simple_1():
 
 
 def test_LstmLowMem_bwd_simple_1():
-  lstm = make_op(NativeOp.LstmLowMem)
+  lstm = make_op(native_op.LstmLowMem)
   lstm_grad = lstm.grad_op
   n_time = 1
   n_batch = 1
@@ -374,29 +355,29 @@ def test_LstmLowMem_bwd_simple_1():
 
 def test_NativeLstm2_run():
   from pprint import pprint
-  from Util import describe_tensorflow_version
+  from returnn.util.basic import describe_tensorflow_version
   print("TensorFlow:", describe_tensorflow_version())
   n_time = 2
   n_batch = 1
   n_hidden = 3
-  with tf.Session() as session:
-    with tf.variable_scope("test_NativeLstm2_run"):
+  with tf_compat.v1.Session() as session:
+    with tf_compat.v1.variable_scope("test_NativeLstm2_run"):
       cell = NativeLstm2(n_hidden=n_hidden)
       inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
       index = tf.ones([n_time, n_batch])
       outputs, final_state = cell(inputs, index)
-      session.run(tf.global_variables_initializer())
+      session.run(tf_compat.v1.global_variables_initializer())
       res = session.run(outputs)
       pprint(res)
 
 
 def test_NativeLstm2_shape_inference_normal():
-  op = make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
+  op = make_op(native_op.NativeLstm2, compiler_opts={"verbose": True})
   n_time = 2
   n_batch = 1
   n_hidden = 3
-  with tf.variable_scope("test_NativeLstm2_shape_inference_normal"):
-    weights = tf.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
+  with tf_compat.v1.variable_scope("test_NativeLstm2_shape_inference_normal"):
+    weights = tf_compat.v1.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
     inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
     index = tf.ones([n_time, n_batch])
     n_batch_ = tf.shape(inputs)[1]
@@ -412,14 +393,14 @@ def test_NativeLstm2_shape_inference_normal():
 
 
 def test_NativeLstm2_shape_inference_unknown_batchnlen():
-  op = make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
+  op = make_op(native_op.NativeLstm2, compiler_opts={"verbose": True})
   n_time = None
   n_batch = None
   n_hidden = 3
-  with tf.variable_scope("test_NativeLstm2_shape_inference_unknown_batchnlen"):
-    weights = tf.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
-    inputs = tf.placeholder(tf.float32, [n_time, n_batch, n_hidden * 4], name="inputs")
-    index = tf.placeholder(tf.float32, [n_time, n_batch], name="index")
+  with tf_compat.v1.variable_scope("test_NativeLstm2_shape_inference_unknown_batchnlen"):
+    weights = tf_compat.v1.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
+    inputs = tf_compat.v1.placeholder(tf.float32, [n_time, n_batch, n_hidden * 4], name="inputs")
+    index = tf_compat.v1.placeholder(tf.float32, [n_time, n_batch], name="index")
     n_batch = tf.shape(inputs)[1]
     c0 = tf.zeros((n_batch, n_hidden), dtype=tf.float32, name="initial_c")
     y0 = tf.zeros((n_batch, n_hidden), dtype=tf.float32, name="initial_h")
@@ -433,11 +414,11 @@ def test_NativeLstm2_shape_inference_unknown_batchnlen():
 
 
 def test_NativeLstm2_shape_inference_unknown_rank():
-  op = make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
+  op = make_op(native_op.NativeLstm2, compiler_opts={"verbose": True})
   n_hidden = 3
-  with tf.variable_scope("test_NativeLstm2_shape_inference_unknown_rank"):
-    weights = tf.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
-    inputs = tf.placeholder(tf.float32, name="inputs")
+  with tf_compat.v1.variable_scope("test_NativeLstm2_shape_inference_unknown_rank"):
+    weights = tf_compat.v1.get_variable(name="W_re", shape=(n_hidden, n_hidden * 4))
+    inputs = tf_compat.v1.placeholder(tf.float32, name="inputs")
     index = tf.reduce_sum(inputs, axis=2)
     n_batch = tf.shape(inputs)[1]
     c0 = tf.zeros((n_batch, n_hidden), dtype=tf.float32, name="initial_c")
@@ -453,18 +434,18 @@ def test_NativeLstm2_shape_inference_unknown_rank():
 
 def test_NativeLstm2_0len_run():
   from pprint import pprint
-  from Util import describe_tensorflow_version
+  from returnn.util.basic import describe_tensorflow_version
   print("TensorFlow:", describe_tensorflow_version())
   n_time = 0
   n_batch = 1
   n_hidden = 3
-  with tf.Session() as session:
-    with tf.variable_scope("test_NativeLstm2_0len_run"):
+  with tf_compat.v1.Session() as session:
+    with tf_compat.v1.variable_scope("test_NativeLstm2_0len_run"):
       cell = NativeLstm2(n_hidden=n_hidden)
       inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
       index = tf.ones([n_time, n_batch])
       outputs, final_state = cell(inputs, index)
-      session.run(tf.global_variables_initializer())
+      session.run(tf_compat.v1.global_variables_initializer())
       res = session.run(outputs)
       pprint(res)
 
@@ -751,13 +732,13 @@ def native_lstm2(x, h_0, c_0, mask, W_f, W_r, b, n_time, n_batch, n_in_dim, n_ce
   assert n_time > 0
   assert 0 <= start < n_time
   assert step != 0
-  x = tf.convert_to_tensor(x)
-  h_0 = tf.convert_to_tensor(h_0)
-  c_0 = tf.convert_to_tensor(c_0)
-  mask = tf.convert_to_tensor(mask)
-  W_f = tf.convert_to_tensor(W_f)
-  W_r = tf.convert_to_tensor(W_r)
-  b = tf.convert_to_tensor(b)
+  x = tf.convert_to_tensor(x, name="x")
+  h_0 = tf.convert_to_tensor(h_0, name="h_0")
+  c_0 = tf.convert_to_tensor(c_0, name="c_0")
+  mask = tf.convert_to_tensor(mask, name="mask")
+  W_f = tf.convert_to_tensor(W_f, name="W_f")
+  W_r = tf.convert_to_tensor(W_r, name="W_r")
+  b = tf.convert_to_tensor(b, name="b")
   x.set_shape(tf.TensorShape((n_time, n_batch, n_in_dim)))
   h_0.set_shape(tf.TensorShape((n_batch, n_cells)))
   c_0.set_shape(tf.TensorShape((n_batch, n_cells)))
@@ -765,8 +746,8 @@ def native_lstm2(x, h_0, c_0, mask, W_f, W_r, b, n_time, n_batch, n_in_dim, n_ce
   W_f.set_shape(tf.TensorShape((n_in_dim, n_cells * 4)))
   W_r.set_shape(tf.TensorShape((n_cells, n_cells * 4)))
   b.set_shape(tf.TensorShape((n_cells * 4,)))
-  op = make_op(NativeOp.NativeLstm2)
-  from TFUtil import dot, expand_multiple_dims
+  op = make_op(native_op.NativeLstm2)
+  from returnn.tf.util.basic import dot, expand_multiple_dims
   intern = dot(x, W_f)
   intern.set_shape(tf.TensorShape((n_time, n_batch, n_cells * 4)))
   intern += expand_multiple_dims(b, (0, 1))
@@ -879,18 +860,18 @@ def wrap_lstm_grad(op, x, h_0, c_0, dy, dd, mask, W_f, W_r, b, n_time, n_batch, 
   assert n_time > 0
   assert 0 <= start < n_time
   assert step != 0
-  x = tf.convert_to_tensor(x)
-  h_0 = tf.convert_to_tensor(h_0)
-  c_0 = tf.convert_to_tensor(c_0)
+  x = tf.convert_to_tensor(x, name="x")
+  h_0 = tf.convert_to_tensor(h_0, name="h_0")
+  c_0 = tf.convert_to_tensor(c_0, name="c_0")
   with tf.name_scope("gradients"):
     # Note that tensor_array_grad._GetGradSource() has this ugly hack
     # which requires that we have the "gradients" prefix.
-    dy = tf.identity(tf.convert_to_tensor(dy), name="dy")
-    dd = tf.identity(tf.convert_to_tensor(dd), name="dd")
-  mask = tf.convert_to_tensor(mask)
-  W_f = tf.convert_to_tensor(W_f)
-  W_r = tf.convert_to_tensor(W_r)
-  b = tf.convert_to_tensor(b)
+    dy = tf.identity(tf.convert_to_tensor(dy, name="dy"), name="dy")
+    dd = tf.identity(tf.convert_to_tensor(dd, name="dd"), name="dd")
+  mask = tf.convert_to_tensor(mask, name="mask")
+  W_f = tf.convert_to_tensor(W_f, name="W_f")
+  W_r = tf.convert_to_tensor(W_r, name="W_r")
+  b = tf.convert_to_tensor(b, name="b")
   x.set_shape(tf.TensorShape((n_time, n_batch, n_in_dim)))
   h_0.set_shape(tf.TensorShape((n_batch, n_cells)))
   c_0.set_shape(tf.TensorShape((n_batch, n_cells)))
@@ -925,8 +906,8 @@ def wrap_lstm_grad(op, x, h_0, c_0, dy, dd, mask, W_f, W_r, b, n_time, n_batch, 
 
 
 def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclude=(), **kwargs):
-  dy = tf.convert_to_tensor(dy)
-  dd = tf.convert_to_tensor(dd)
+  dy = tf.convert_to_tensor(dy, name="dy")
+  dd = tf.convert_to_tensor(dd, name="dd")
   mask_bc = tf.expand_dims(kwargs["mask"], axis=2)
   mask_bc.set_shape(tf.TensorShape((kwargs["n_time"], kwargs["n_batch"], 1)))
   y1, d1, dx1, dh01, dc01, dWf1, dWr1, db1 = wrap_lstm_grad(op=op1, dy=dy, dd=dd, name=name1, **kwargs)
@@ -979,7 +960,7 @@ def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclud
     print("not all close (%r). print some debug info." % (not_all_close,))
     if nan_tensors:
       print("Have nan tensors:", nan_tensors)
-      from TFUtil import add_check_numerics_ops
+      from returnn.tf.util.basic import add_check_numerics_ops
       check_op = add_check_numerics_ops(nan_tensors)
       try:
         session.run(nan_tensors + [check_op])
@@ -987,15 +968,17 @@ def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclud
         print("As expected, got TF exception with add_check_numerics_ops:")
         print(exc)
     print("graph of %s:" % example_dWr.name)
-    from TFUtil import print_graph_output
+    from returnn.tf.util.basic import print_graph_output
     print_graph_output(example_dWr)
-    from tensorflow.contrib import graph_editor
+    from returnn.extern import graph_editor
     all_ops = graph_editor.get_backward_walk_ops(
       [y1, dWr1, y2, dWr2, example_dWr], inclusive=True, stop_at_ts=[dy, dd])
     print("all relevant ops:")
     pprint(all_ops)
   v_op_ins, v_op_outs, vdWr1_, vdWr2_ = session.run(
     [list(example_dWr.op.inputs), list(example_dWr.op.outputs), dWr1, dWr2])
+  if not numpy.allclose(vdWr1_, vdWr2_, rtol=rtol, equal_nan=True):
+    not_all_close.append("dWr (extra run)")
   if not_all_close:
     print("inputs:")
     for x, v in zip(example_dWr.op.inputs, v_op_ins):
@@ -1009,18 +992,21 @@ def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclud
     print(vdWr1_)
     print("dWr2:")
     print(vdWr2_)
-  if not numpy.allclose(vdWr1_, vdWr2_, rtol=rtol, equal_nan=True):
-    not_all_close.append("dWr (extra run)")
   for i in range(5):  # run multiple times. maybe this triggers an exception
     v_op_outs_direct, vdWr1_, vdWr2_ = session.run(
       [list(example_dWr.op.outputs), dWr1, dWr2], {x: v for (x, v) in zip(example_dWr.op.inputs, v_op_ins)})
-    if not_all_close:
-      print("outputs direct:")
-      for x, v, v_ in zip(example_dWr.op.outputs, v_op_outs_direct, v_op_outs):
-        print("%s:" % x)
-        print(v)
     for x, v, v_ in zip(example_dWr.op.outputs, v_op_outs_direct, v_op_outs):
-      assert_allclose(v, v_, rtol=rtol, err_msg="mismatch for %s" % x)
+      if not numpy.allclose(v, v_, rtol=rtol):
+        print("! mismatch for %s direct-vs-def, run %i" % (x, i))
+        for x_, v__ in zip(example_dWr.op.inputs, v_op_ins):
+          print("direct input", x_, "=")
+          print(v__)
+        not_all_close.append("%s direct-vs-def, run %i" % (x, i))
+      if not_all_close:
+        print("output direct %s:" % x)
+        print(v)
+        print("output def:")
+        print(v_)
     assert_allclose(vdWr1_, vdWr2_, rtol=rtol, err_msg="mismatch for dWr (extra run %i)" % i)
   if not_all_close:
     print("raise exception now: not all close: %r" % (not_all_close,))
@@ -1071,7 +1057,7 @@ def dummy_lstm_op(x, h_0, c_0, mask, W_f, W_r, b, n_time, n_batch, n_in_dim, n_c
   x = tf.convert_to_tensor(x)
   x.set_shape(tf.TensorShape((n_time, n_batch, n_in_dim)))
   # Have gradients for all.
-  y = tf.reduce_mean(x, axis=2, keep_dims=True)
+  y = tf.reduce_mean(x, axis=2, keepdims=True)
   y += tf.zeros((n_time, n_batch, n_cells))
   y *= tf.reduce_mean(W_f)
   y *= tf.reduce_mean(W_r)
@@ -1080,7 +1066,7 @@ def dummy_lstm_op(x, h_0, c_0, mask, W_f, W_r, b, n_time, n_batch, n_in_dim, n_c
 
 
 @unittest.skipIf(
-  not TFUtil.have_min_tf_version((1, 5)), "TF 1.3.0 bug: https://github.com/tensorflow/tensorflow/issues/13355")
+  not tf_util.have_min_tf_version((1, 5)), "TF 1.3.0 bug: https://github.com/tensorflow/tensorflow/issues/13355")
 def test_tensorarray_grad():
   def gen(shape, offset):
     return (numpy.arange(numpy.prod(shape)) + offset).reshape(shape).astype("float32")
@@ -1166,7 +1152,7 @@ def test_tensorarray_grad():
 
 
 @unittest.skipIf(
-  not TFUtil.have_min_tf_version((1, 5)), "TF 1.3.0 bug: https://github.com/tensorflow/tensorflow/issues/13355")
+  not tf_util.have_min_tf_version((1, 5)), "TF 1.3.0 bug: https://github.com/tensorflow/tensorflow/issues/13355")
 def test_tensorarray_grad_simple():
   n_time = 1
   n_dim = 1
@@ -1207,7 +1193,7 @@ def pure_tf_chunk(x, index, chunk_size, chunk_step):
     out is of shape (chunk_size, n_batch * n_chunks, n_dim), oindex of shape (chunk_size, n_batch * n_chunks).
   :rtype: (tf.Tensor,tf.Tensor)
   """
-  from TFUtil import windowed_nd, get_shape_dim
+  from returnn.tf.util.basic import windowed_nd, get_shape_dim
   assert x.get_shape().ndims == 3
   n_time = get_shape_dim(x, 0)
   n_batch = get_shape_dim(x, 1)
@@ -1248,7 +1234,7 @@ def check_chunk(x, index, chunk_size, chunk_step):
   """
   x = tf.convert_to_tensor(x)
   out1, oindex1 = pure_tf_chunk(x, index=index, chunk_size=chunk_size, chunk_step=chunk_step)
-  dout = tf.random_normal(tf.shape(out1))
+  dout = tf_compat.v1.random_normal(tf.shape(out1))
   dx1, = tf.gradients(ys=[out1], xs=[x], grad_ys=[dout])
   out2, oindex2 = chunk(x, index=index, chunk_size=chunk_size, chunk_step=chunk_step)
   dx2, = tf.gradients(ys=[out2], xs=[x], grad_ys=[dout])
@@ -1276,7 +1262,7 @@ def test_chunk_simple():
   n_batch = 1
   n_time = 17
   n_dim = 3
-  x = tf.random_normal((n_time, n_batch, n_dim))
+  x = tf_compat.v1.random_normal((n_time, n_batch, n_dim))
   index = [[1.] * n_time] * n_batch
   index = tf.convert_to_tensor(index)
   index = tf.transpose(index)
@@ -1293,7 +1279,7 @@ def test_chunk():
   n_batch = 3
   n_time = 17
   n_dim = 5
-  x = tf.random_normal((n_time, n_batch, n_dim))
+  x = tf_compat.v1.random_normal((n_time, n_batch, n_dim))
   index = [[1.] * n_time] * n_batch
   index[-1][-1] = 0.
   index[-1][-2] = 0.
@@ -1318,7 +1304,7 @@ def pure_tf_unchunk(x, index, chunk_size, chunk_step, n_time, n_batch):
   :return: out, oindex, ofactors
   :rtype: (tf.Tensor,tf.Tensor,tf.Tensor)
   """
-  from TFUtil import where_bc
+  from returnn.tf.util.basic import where_bc
   assert x.get_shape().ndims == 3
   n_dim = tf.shape(x)[2]
   # Hack via tf.gradients.
@@ -1349,10 +1335,10 @@ def check_unchunk(x, index, chunk_size, chunk_step):
   """
   n_time, n_batch = tf.shape(x)[0], tf.shape(x)[1]
   x, index = chunk(x, index, chunk_size=chunk_size, chunk_step=chunk_step)
-  x = tf.random_normal(tf.shape(x))
+  x = tf_compat.v1.random_normal(tf.shape(x))
   out1, oindex1, ofactors1 = pure_tf_unchunk(
     x, index=index, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
-  dout = tf.random_normal(tf.shape(out1))
+  dout = tf_compat.v1.random_normal(tf.shape(out1))
   dx1, = tf.gradients(ys=[out1], xs=[x], grad_ys=[dout])
   out2, oindex2, ofactors2 = unchunk(
     x, index=index, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
@@ -1383,7 +1369,7 @@ def test_unchunk():
   n_batch = 3
   n_time = 17
   n_dim = 5
-  x = tf.random_normal((n_time, n_batch, n_dim))
+  x = tf_compat.v1.random_normal((n_time, n_batch, n_dim))
   index = [[1.] * n_time] * n_batch
   index[-1][-1] = 0.
   index[-1][-2] = 0.
@@ -1498,7 +1484,7 @@ def test_py_baum_welch():
   n_batch = 3
   seq_len = 7
   n_classes = 5
-  from Fsa import FastBwFsaShared
+  from returnn.util.fsa import FastBwFsaShared
   fsa = FastBwFsaShared()
   for i in range(n_classes):
     fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
@@ -1557,7 +1543,7 @@ def test_FastBaumWelch():
   n_batch = 3
   seq_len = 5
   n_classes = 10
-  from Fsa import FastBwFsaShared
+  from returnn.util.fsa import FastBwFsaShared
   fsa = FastBwFsaShared()
   fsa.add_inf_loop(state_idx=0, num_emission_labels=n_classes)
   fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
@@ -1596,7 +1582,7 @@ def test_fast_bw_uniform():
   n_batch = 3
   seq_len = 7
   n_classes = 5
-  from Fsa import FastBwFsaShared
+  from returnn.util.fsa import FastBwFsaShared
   fsa = FastBwFsaShared()
   for i in range(n_classes):
     fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
@@ -1610,7 +1596,7 @@ def test_fast_bw_uniform():
   am_scores = -numpy.log(am_scores)  # in -log space
   am_scores = tf.constant(am_scores, dtype=tf.float32)
   float_idx = tf.ones((seq_len, n_batch), dtype=tf.float32)
-  # from TFUtil import sequence_mask_time_major
+  # from returnn.tf.util.basic import sequence_mask_time_major
   # float_idx = tf.cast(sequence_mask_time_major(tf.convert_to_tensor(list(range(seq_len - n_batch + 1, seq_len + 1)))), dtype=tf.float32)
   print("Construct call...")
   fwdbwd, obs_scores = fast_baum_welch(
@@ -1661,7 +1647,7 @@ def get_ctc_fsa_fast_bw_via_python(targets, seq_lens, blank_idx):
   :return: edges, weights, start_end_states
   :rtype: (tf.Tensor, tf.Tensor, tf.Tensor)
   """
-  from Fsa import get_ctc_fsa_fast_bw
+  from returnn.util.fsa import get_ctc_fsa_fast_bw
 
   def py_fast_bw_fsa_ctc_wrapper(targets_, seq_lens_):
     """
@@ -1674,7 +1660,7 @@ def get_ctc_fsa_fast_bw_via_python(targets, seq_lens, blank_idx):
       fsa.start_end_states.shape, len(seq_lens_), seq_lens_)
     return fsa.edges.astype("int32"), fsa.weights.astype("float32"), fsa.start_end_states.astype("int32")
 
-  edges, weights, start_end_states = tf.py_func(
+  edges, weights, start_end_states = tf_compat.v1.py_func(
     py_fast_bw_fsa_ctc_wrapper,
     [targets, seq_lens],
     [tf.int32, tf.float32, tf.int32],
@@ -1707,7 +1693,7 @@ def ctc_loss_via_python_fsa(logits, logits_seq_lens, time_major, targets, target
   if not time_major:
     logits = tf.transpose(logits, [1, 0, 2])  # (time,batch,dim)
   log_sm = tf.nn.log_softmax(logits)  # (time,batch,dim)
-  from TFUtil import sequence_mask_time_major
+  from returnn.tf.util.basic import sequence_mask_time_major
   seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch)
 
   edges, weights, start_end_states = get_ctc_fsa_fast_bw_via_python(
@@ -1718,7 +1704,7 @@ def ctc_loss_via_python_fsa(logits, logits_seq_lens, time_major, targets, target
   loss = obs_scores[0]  # (batch,)
   bw = tf.exp(-fwdbwd)  # (time,batch,dim)
   grad_x = (tf.exp(log_sm) - bw) * tf.expand_dims(seq_mask, 2)  # (time,batch,dim)
-  from TFUtil import custom_gradient
+  from returnn.tf.util.basic import custom_gradient
   loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=logits, grad_x=grad_x)
   return loss
 
@@ -1760,8 +1746,8 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False, la
   targets_seq_lens_tf = tf.constant(target_seq_lens)
 
   if label_loop:
-    import Fsa
-    fsa = Fsa.get_ctc_fsa_fast_bw(targets=targets, seq_lens=target_seq_lens, blank_idx=blank_idx)
+    import returnn.util.fsa as fsa
+    fsa = fsa.get_ctc_fsa_fast_bw(targets=targets, seq_lens=target_seq_lens, blank_idx=blank_idx)
     assert fsa.start_end_states.shape == (2, len(target_seq_lens))
     edges = fsa.edges.astype("int32")
     weights = fsa.weights.astype("float32")
@@ -1772,8 +1758,8 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False, la
       print("python start_end_states:")
       print(start_end_states)
   else:
-    import TFNativeOp
-    native_edges_tf, native_weights_tf, native_start_end_states_tf = TFNativeOp.get_ctc_fsa_fast_bw(
+    import returnn.tf.native_op as tf_native_op
+    native_edges_tf, native_weights_tf, native_start_end_states_tf = tf_native_op.get_ctc_fsa_fast_bw(
       targets=targets_tf, seq_lens=targets_seq_lens_tf, blank_idx=blank_idx, label_loop=label_loop)
     edges, weights, start_end_states = session.run(
       (native_edges_tf, native_weights_tf, native_start_end_states_tf))
@@ -1786,8 +1772,8 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False, la
   print(obs_scores)
 
   if with_native_fsa:
-    import TFNativeOp
-    native_edges_tf, native_weights_tf, native_start_end_states_tf = TFNativeOp.get_ctc_fsa_fast_bw(
+    import returnn.tf.native_op as tf_native_op
+    native_edges_tf, native_weights_tf, native_start_end_states_tf = tf_native_op.get_ctc_fsa_fast_bw(
       targets=targets_tf, seq_lens=targets_seq_lens_tf, blank_idx=blank_idx)
     native_edges, native_weights, native_start_end_states = session.run(
       (native_edges_tf, native_weights_tf, native_start_end_states_tf))
@@ -1813,12 +1799,12 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False, la
     fwdbwd = native_fwdbwd
     obs_scores = native_obs_scores
 
-  from TFUtil import sparse_labels
+  from returnn.tf.util.basic import sparse_labels
   targets_sparse_tf = sparse_labels(targets_tf, targets_seq_lens_tf)
   am_scores_tf = tf.constant(am_scores)
   seq_lens_tf = tf.constant(seq_lens)
   # inputs are unnormalized. tf.nn.ctc_loss does softmax internally.
-  ref_ctc_loss_tf = tf.nn.ctc_loss(
+  ref_ctc_loss_tf = tf_compat.v1.nn.ctc_loss(
     labels=targets_sparse_tf,
     inputs=am_scores_tf, sequence_length=seq_lens_tf, time_major=True, ctc_merge_repeated=label_loop)
   # See grad definition of CTCLoss.
@@ -2069,7 +2055,7 @@ def test_py_viterbi():
   n_batch = 3
   seq_len = 7
   n_classes = 5
-  from Fsa import FastBwFsaShared
+  from returnn.util.fsa import FastBwFsaShared
   fsa = FastBwFsaShared()
   for i in range(n_classes):
     fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
@@ -2116,7 +2102,7 @@ def test_fast_viterbi():
   n_batch = 3
   seq_len = 7
   n_classes = 5
-  from Fsa import FastBwFsaShared
+  from returnn.util.fsa import FastBwFsaShared
   fsa = FastBwFsaShared()
   for i in range(n_classes):
     fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
@@ -2164,7 +2150,7 @@ def test_fast_viterbi_rnd():
   n_batch = 4
   seq_len = 23
   n_classes = 5
-  from Fsa import FastBwFsaShared
+  from returnn.util.fsa import FastBwFsaShared
   fsa = FastBwFsaShared()
   for i in range(n_classes):
     fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
@@ -2213,12 +2199,12 @@ def test_ctc_viterbi_loss():
 
   x = tf.constant(numpy.random.RandomState(42).normal(size=(seq_len, n_batch, n_input_dim)).astype("float32"))
   x_seq_len = tf.constant([seq_len, seq_len - 1, seq_len - 2])
-  weights = tf.get_variable(
+  weights = tf_compat.v1.get_variable(
     "ctc_viterbi_weights", shape=(n_input_dim, n_classes), initializer=tf.random_normal_initializer())
-  bias = tf.get_variable("ctc_viterbi_bias", shape=(n_classes,))
+  bias = tf_compat.v1.get_variable("ctc_viterbi_bias", shape=(n_classes,))
   var_list = [weights, bias]
-  session.run(tf.initialize_variables(var_list))
-  from TFUtil import dot
+  session.run(tf_compat.v1.initialize_variables(var_list))
+  from returnn.tf.util.basic import dot
   logits = dot(x, weights) + bias
   targets = tf.constant([[0, 1, 2, 0, 0], [3, 2, 4, 1, 1], [2, 0, 1, 2, 0]])
   targets.set_shape((n_batch, None))
@@ -2229,7 +2215,7 @@ def test_ctc_viterbi_loss():
     targets=targets, targets_seq_lens=targets_seq_len)
   loss.set_shape((n_batch,))
   loss = tf.reduce_mean(loss)
-  opt = tf.train.GradientDescentOptimizer(learning_rate=0.1)
+  opt = tf_compat.v1.train.GradientDescentOptimizer(learning_rate=0.1)
   minimize = opt.minimize(loss, var_list=var_list)
   loss_vals = []
   for step in range(10):
@@ -2312,7 +2298,7 @@ def test_edit_distance():
   b = tf.constant(b_np)
   a_len = tf.constant(a_len_np)
   b_len = tf.constant(b_len_np)
-  from TFUtil import sparse_labels
+  from returnn.tf.util.basic import sparse_labels
   for i in range(n_batch):
     print("testing batch", i, "/", n_batch)
     _a = a[i:i + 1, :a_len_np[i]]
@@ -2398,12 +2384,12 @@ def _wrap_tf_edit_distance(a, b):
   global _wrap_tf_edit_distance_global_placeholders
   if not _wrap_tf_edit_distance_global_placeholders:
     with tf.name_scope("wrap_tf_edit_distance"):
-      a_tf = tf.placeholder(tf.int32, shape=(None,), name="a")
-      b_tf = tf.placeholder(tf.int32, shape=(None,), name="b")
+      a_tf = tf_compat.v1.placeholder(tf.int32, shape=(None,), name="a")
+      b_tf = tf_compat.v1.placeholder(tf.int32, shape=(None,), name="b")
       _wrap_tf_edit_distance_global_placeholders = [a_tf, b_tf]
       a_len_tf = tf.convert_to_tensor([tf.shape(a_tf)[0]])
       b_len_tf = tf.convert_to_tensor([tf.shape(b_tf)[0]])
-      from TFUtil import sparse_labels
+      from returnn.tf.util.basic import sparse_labels
       a_tf = tf.expand_dims(a_tf, axis=0)
       b_tf = tf.expand_dims(b_tf, axis=0)
       a_tf = sparse_labels(a_tf, a_len_tf)
@@ -2714,7 +2700,7 @@ def test_next_edit_distance_row():
   b = tf.constant(b_np)
   a_len = tf.constant(a_len_np)
   b_len = tf.constant(b_len_np)
-  from TFUtil import sparse_labels
+  from returnn.tf.util.basic import sparse_labels
   for i in range(n_batch):
     print("testing batch", i, "/", n_batch)
     _a = a[i:i + 1, :a_len_np[i]]
@@ -2906,8 +2892,9 @@ def test_next_edit_distance_reduce_optimal_completion():
   print()
 
 
-@unittest.skipIf(not is_gpu_available(), "no gpu on this system")
-@unittest.skipIf(is_gpu_available() and get_available_gpu_min_compute_capability() < 3.5, "too low compute capability")
+#@unittest.skipIf(not is_gpu_available(), "no gpu on this system")
+#@unittest.skipIf(is_gpu_available() and get_available_gpu_min_compute_capability() < 3.5, "too low compute capability")
+@unittest.skipIf(not have_blocksparse_requirements(), "do not have Blocksparse requirements")
 def test_init_blocksparse():
   assert have_blocksparse_requirements()
   init_blocksparse()
@@ -2932,18 +2919,18 @@ def test_blocksparse_simple():
   bsmm = BlocksparseMatMul(sparsity, block_size=block_size, feature_axis=0)
 
   # Input to graph
-  x = tf.placeholder(tf.float32, shape=[hidden_size, None])
+  x = tf_compat.v1.placeholder(tf.float32, shape=[hidden_size, None])
   x_np = np.ones((hidden_size, minibatch_size), dtype='float32')
 
   # Initialize block-sparse weights
-  w = tf.get_variable("w", bsmm.w_shape, dtype=tf.float32, initializer=tf.random_uniform_initializer(-0.1, 0.1, seed=3))
+  w = tf_compat.v1.get_variable("w", bsmm.w_shape, dtype=tf.float32, initializer=tf.random_uniform_initializer(-0.1, 0.1, seed=3))
 
   # Block-sparse matrix multiplication
   y = bsmm(x, w)
 
   # Run
   print('init vars')
-  session.run(tf.global_variables_initializer())
+  session.run(tf_compat.v1.global_variables_initializer())
   print('blocksparse matmul')
   result = session.run(y, feed_dict={x: x_np})
   print(result)
@@ -3035,7 +3022,9 @@ def test_blocksparse_simple_feature_axis1():
 
 def _run_rnnt(acts, labels, input_lengths, label_lengths,
               expected_costs, expected_grads, blank):
-  from extern.HawkAaronWarpTransducer import rnnt_loss
+  from returnn.extern.HawkAaronWarpTransducer import rnnt_loss, is_checked_out
+  if not is_checked_out():
+    raise unittest.SkipTest("HawkAaronWarpTransducer not checked out?")
   assert_equal(acts.shape, expected_grads.shape)
   acts_t = tf.constant(acts)
   labels_t = tf.constant(labels)
@@ -3056,7 +3045,10 @@ def _run_rnnt(acts, labels, input_lengths, label_lengths,
 
 @unittest.skipIf(not is_gpu_available(), "no gpu on this system")
 def test_warprnnt_forward():
-  from extern.HawkAaronWarpTransducer import rnnt_loss
+  from returnn.extern.HawkAaronWarpTransducer import rnnt_loss, is_checked_out
+  if not is_checked_out():
+    raise unittest.SkipTest("HawkAaronWarpTransducer not checked out?")
+
   # Softmax activations for the following inputs:
   import numpy as np
   acts = np.array([0.1, 0.6, 0.1, 0.1, 0.1, 0.1,

@@ -4,35 +4,34 @@ import sys
 import os
 
 my_dir = os.path.dirname(os.path.realpath(__file__))
-sys.path += [my_dir + "/.."]  # Python 3 hack
-
+import _setup_test_env  # noqa
 from nose.tools import assert_equal, assert_not_equal, assert_raises, assert_true, assert_is
 from numpy.testing.utils import assert_almost_equal
-from Util import *
+from returnn.util.basic import *
 import numpy as np
 import numpy
 import unittest
 
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 
 def test_cmd_true():
-  r = cmd("true")
+  r = sys_cmd_out_lines("true")
   assert_equal(r, [])
 
 
 def test_cmd_false():
-  assert_raises(CalledProcessError, lambda: cmd("false"))
+  assert_raises(CalledProcessError, lambda: sys_cmd_out_lines("false"))
 
 
 def test_cmd_stdout():
-  r = cmd("echo 1; echo 2;")
+  r = sys_cmd_out_lines("echo 1; echo 2;")
   assert_equal(r, ["1", "2"])
 
 
 def test_cmd_stderr():
-  r = cmd("echo x >/dev/stderr")
+  r = sys_cmd_out_lines("echo x >/dev/stderr")
   assert_equal(r, [], "cmd() output should only cover stdout")
 
 
@@ -167,7 +166,7 @@ def test_NativeCodeCompiler():
     static int magic = 13;
 
     extern "C" void set_magic(int i) { magic = i; }
-    extern "C" int get_magic() { return magic; } 
+    extern "C" int get_magic() { return magic; }
     """)
   import ctypes
   lib = native.load_lib_ctypes()
@@ -229,7 +228,7 @@ def test_deepcopy_mod():
 
 
 def test_deepcopy_config():
-  from Config import Config
+  from returnn.config import Config
   config = Config()
   deepcopy(config)
 

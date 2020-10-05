@@ -9,7 +9,6 @@ from __future__ import print_function, division
 
 from math import ceil
 import typing
-import sys
 import os
 from pprint import pprint
 import argparse
@@ -17,12 +16,9 @@ import h5py
 import numpy
 from glob import glob
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
-
-from LmDataset import Lexicon
-import Util
+import _setup_returnn_env  # noqa
+from returnn.datasets.lm import Lexicon
+import returnn.util.basic as util
 
 
 class Alignment:
@@ -58,7 +54,7 @@ class Alignment:
         value=self.value, start_frame=self.start_frame, end_frame=self.end_frame,
         word_start=self.word_start, word_end=self.word_end)
 
-    __repr__ = Util.simple_obj_repr
+    __repr__ = util.simple_obj_repr
 
     def __eq__(self, other):
       """
@@ -214,7 +210,7 @@ def phone_alignment_to_word_alignment(lexicon, words, phone_alignment):
       self.lemma_phone_i = lemma_phone_i
       self.word_alignment = word_alignment
 
-    __repr__ = Util.simple_obj_repr
+    __repr__ = util.simple_obj_repr
 
     def is_lemma_finished(self):
       if not self.lemma_phones:
@@ -1001,7 +997,7 @@ def main():
 
 if __name__ == '__main__':
   try:
-    import better_exchook
+    from returnn.util import better_exchook
     better_exchook.install()
   except ImportError:
     better_exchook = None

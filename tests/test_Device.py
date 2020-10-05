@@ -1,16 +1,14 @@
 
-import sys
-sys.path += ["."]  # Python 3 hack
 
+import _setup_test_env  # noqa
 
-from Config import Config
-from Engine import Engine
-from Device import Device
-from Log import log
-import TheanoUtil
+from returnn.config import Config
+from returnn.theano.engine import Engine
+from returnn.theano.device import Device
+from returnn.log import log
+import returnn.theano.util as theano_util
 
-log.initialize()
-TheanoUtil.monkey_patches()
+theano_util.monkey_patches()
 
 
 def test_Device_blocking_init():
@@ -30,4 +28,3 @@ def test_Device_blocking_init():
   """
 
   Device("cpu", config=config, blocking=True)
-

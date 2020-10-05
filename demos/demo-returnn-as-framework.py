@@ -4,13 +4,22 @@
 This demonstrates how to use RETURNN as a framework.
 """
 
-import returnn  # pip install returnn
-from returnn.TFEngine import Engine
-from returnn.Dataset import init_dataset
-from returnn.Config import get_global_config
-from returnn.Util import get_login_username
-from returnn import better_exchook
+from __future__ import print_function
 
+import tensorflow as tf
+
+import returnn  # pip install returnn
+from returnn.tf.engine import Engine
+from returnn.datasets import init_dataset
+from returnn.config import get_global_config
+from returnn.util.basic import get_login_username
+from returnn.util import better_exchook
+
+
+print("TF version:", tf.__version__)
+print("RETURNN imported from:", returnn.__file__)
+print("RETURNN version:", returnn.__version__)
+print("RETURNN long version:", returnn.__long_version__)
 
 better_exchook.install()
 
@@ -28,7 +37,7 @@ config.update(dict(
   },
 
   # training
-  nadam=True,
+  adam=True,
   learning_rate=0.01,
   num_epochs=5,
   debug_add_check_numerics_ops=True,

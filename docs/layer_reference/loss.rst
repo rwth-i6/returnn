@@ -7,119 +7,119 @@ Loss Functions
 As-Is Loss
 ----------
 
-.. autoclass:: TFNetworkLayer.AsIsLoss
+.. autoclass:: returnn.tf.layers.basic.AsIsLoss
     :members:
     :undoc-members:
 
 Binary Cross-Entropy Loss
 -------------------------
 
-.. autoclass:: TFNetworkLayer.BinaryCrossEntropyLoss
+.. autoclass:: returnn.tf.layers.basic.BinaryCrossEntropyLoss
     :members:
     :undoc-members:
 
 Bleu Loss
 ---------
 
-.. autoclass:: TFNetworkLayer.BleuLoss
+.. autoclass:: returnn.tf.layers.basic.BleuLoss
     :members:
     :undoc-members:
 
 Cross-Entropy Loss
 ------------------
 
-.. autoclass:: TFNetworkLayer.CrossEntropyLoss
+.. autoclass:: returnn.tf.layers.basic.CrossEntropyLoss
     :members:
     :undoc-members:
 
 CTC Loss
 --------
 
-.. autoclass:: TFNetworkLayer.CtcLoss
+.. autoclass:: returnn.tf.layers.basic.CtcLoss
     :members:
     :undoc-members:
 
 Deep Clustering Loss
 --------------------
 
-.. autoclass:: TFNetworkLayer.DeepClusteringLoss
+.. autoclass:: returnn.tf.layers.basic.DeepClusteringLoss
     :members:
     :undoc-members:
 
 Edit Distance Loss
 ------------------
 
-.. autoclass:: TFNetworkLayer.EditDistanceLoss
+.. autoclass:: returnn.tf.layers.basic.EditDistanceLoss
     :members:
     :undoc-members:
 
 Expected Loss
 -------------
 
-.. autoclass:: TFNetworkLayer.ExpectedLoss
+.. autoclass:: returnn.tf.layers.basic.ExpectedLoss
     :members:
     :undoc-members:
 
 Extern Sprint Loss
 ------------------
 
-.. autoclass:: TFNetworkLayer.ExternSprintLoss
+.. autoclass:: returnn.tf.layers.basic.ExternSprintLoss
     :members:
     :undoc-members:
 
 Fast Baum Welch Loss
 --------------------
 
-.. autoclass:: TFNetworkLayer.FastBaumWelchLoss
+.. autoclass:: returnn.tf.layers.basic.FastBaumWelchLoss
     :members:
     :undoc-members:
 
 Generic Cross-Entropy Loss
 --------------------------
 
-.. autoclass:: TFNetworkLayer.GenericCELoss
+.. autoclass:: returnn.tf.layers.basic.GenericCELoss
     :members:
     :undoc-members:
 
 Mean-L1 Loss
 -----------------------
 
-.. autoclass:: TFNetworkLayer.MeanSquaredError
+.. autoclass:: returnn.tf.layers.basic.MeanSquaredError
     :members:
     :undoc-members:
 
 Mean-Squared-Error Loss
 -----------------------
 
-.. autoclass:: TFNetworkLayer.MeanSquaredError
+.. autoclass:: returnn.tf.layers.basic.MeanSquaredError
     :members:
     :undoc-members:
 
 L1 Loss
 -------
 
-.. autoclass:: TFNetworkLayer.L1Loss
+.. autoclass:: returnn.tf.layers.basic.L1Loss
     :members:
     :undoc-members:
 
 Sampling-Based Loss
 --------------------
 
-.. autoclass:: TFNetworkLayer.SamplingBasedLoss
+.. autoclass:: returnn.tf.layers.basic.SamplingBasedLoss
     :members:
     :undoc-members:
 
 Triplet Loss
 ------------
 
-.. autoclass:: TFNetworkLayer.TripletLoss
+.. autoclass:: returnn.tf.layers.basic.TripletLoss
     :members:
     :undoc-members:
 
 Via Layer Loss
 --------------
 
-.. autoclass:: TFNetworkLayer.ViaLayerLoss
+.. autoclass:: returnn.tf.layers.basic.ViaLayerLoss
     :members:
     :undoc-members:
 

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 
+"""
+Calculates word error rate (WER).
+"""
+
 from __future__ import print_function
 
 import os
@@ -7,35 +11,39 @@ import sys
 import time
 import tensorflow as tf
 import numpy
+import typing
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
-
-import rnn
-from Log import log
+import _setup_returnn_env  # noqa
+import returnn.__main__ as rnn
+from returnn.log import log
 import argparse
-from Util import Stats, hms
-from Dataset import Dataset, init_dataset
-import Util
-import TFUtil
+from returnn.util.basic import Stats, hms
+from returnn.datasets.basic import Dataset, init_dataset
+import returnn.util.basic as util
+import returnn.tf.compat as tf_compat
+import returnn.tf.util.basic as tf_util
 
 
 class WerComputeGraph:
+  """
+  Creates TF computation graph to calculate the WER.
+  """
+
   def __init__(self):
-    self.hyps = tf.placeholder(tf.string, [None])
-    self.refs = tf.placeholder(tf.string, [None])
-    self.wer, self.ref_num_words = TFUtil.string_words_calc_wer(hyps=self.hyps, refs=self.refs)
+    self.hyps = tf_compat.v1.placeholder(tf.string, [None])
+    self.refs = tf_compat.v1.placeholder(tf.string, [None])
+    self.wer, self.ref_num_words = tf_util.string_words_calc_wer(hyps=self.hyps, refs=self.refs)
     self.total_wer_var = tf.Variable(initial_value=0, trainable=False, dtype=tf.int64)
     self.total_ref_num_words_var = tf.Variable(initial_value=0, trainable=False, dtype=tf.int64)
     self.update_total_wer = self.total_wer_var.assign_add(tf.reduce_sum(self.wer))
     self.update_ref_num_words = self.total_ref_num_words_var.assign_add(tf.reduce_sum(self.ref_num_words))
-    self.updated_normalized_wer = \
-      tf.cast(self.update_total_wer, tf.float32) / tf.cast(self.update_ref_num_words, tf.float32)
+    self.updated_normalized_wer = (
+      tf.cast(self.update_total_wer, tf.float32) / tf.cast(self.update_ref_num_words, tf.float32))
 
+  # noinspection PyShadowingNames
   def step(self, session, hyps, refs):
     """
-    :param tf.Session session:
+    :param tf.compat.v1.Session session:
     :param list[str] hyps:
     :param list[str] refs:
     :return: updated normalized WER
@@ -61,7 +69,7 @@ def calc_wer_on_dataset(dataset, refs, options, hyps):
     options.endseq = float("inf")
   wer = 1.0
   remaining_hyp_seq_tags = set(hyps.keys())
-  interactive = Util.is_tty() and not log.verbose[5]
+  interactive = util.is_tty() and not log.verbose[5]
   collected = {"hyps": [], "refs": []}
   max_num_collected = 1
   if dataset:
@@ -122,7 +130,7 @@ def calc_wer_on_dataset(dataset, refs, options, hyps):
       del collected["refs"][:]
 
     if interactive:
-      Util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
+      util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
     elif log.verbose[5]:
       print(progress_prefix, "seq tag %r, ref/hyp len %i/%i chars" % (seq_tag, len(ref), len(hyp)))
     seq_idx += 1
@@ -138,6 +146,9 @@ def calc_wer_on_dataset(dataset, refs, options, hyps):
   if options.expect_full:
     assert not remaining_hyp_seq_tags, "There are still remaining hypotheses."
   return wer
+
+
+config = None  # type: typing.Optional["returnn.config.Config"]
 
 
 def init(config_filename, log_verbosity):
@@ -161,7 +172,7 @@ def init(config_filename, log_verbosity):
   print("Returnn calculate-word-error-rate starting up.", file=log.v1)
   rnn.returnn_greeting()
   rnn.init_backend_engine()
-  assert Util.BackendEngine.is_tensorflow_selected(), "this is only for TensorFlow"
+  assert util.BackendEngine.is_tensorflow_selected(), "this is only for TensorFlow"
   rnn.init_faulthandler()
   rnn.init_config_json_network()
   rnn.print_task_properties()
@@ -189,19 +200,26 @@ def load_hyps_refs(filename):
   return content
 
 
+wer_compute = None  # type: typing.Optional[WerComputeGraph]
+session = None  # type: typing.Optional[tf.compat.v1.Session]
+
+
 def main(argv):
-  argparser = argparse.ArgumentParser(description='Dump something from dataset.')
-  argparser.add_argument('--config', help="filename to config-file. will use dataset 'eval' from it")
-  argparser.add_argument("--dataset", help="dataset, overwriting config")
-  argparser.add_argument("--refs", help="same format as hyps. alternative to providing dataset/config")
-  argparser.add_argument("--hyps", help="hypotheses, dumped via search in py format")
-  argparser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
-  argparser.add_argument('--endseq', type=int, default=-1, help='end seq idx (inclusive) or -1 (default: -1)')
-  argparser.add_argument("--key", default="raw", help="data-key, e.g. 'data' or 'classes'. (default: 'raw')")
-  argparser.add_argument("--verbosity", default=4, type=int, help="5 for all seqs (default: 4)")
-  argparser.add_argument("--out", help="if provided, will write WER% (as string) to this file")
-  argparser.add_argument("--expect_full", action="store_true", help="full dataset should be scored")
-  args = argparser.parse_args(argv[1:])
+  """
+  Main entry.
+  """
+  arg_parser = argparse.ArgumentParser(description='Dump something from dataset.')
+  arg_parser.add_argument('--config', help="filename to config-file. will use dataset 'eval' from it")
+  arg_parser.add_argument("--dataset", help="dataset, overwriting config")
+  arg_parser.add_argument("--refs", help="same format as hyps. alternative to providing dataset/config")
+  arg_parser.add_argument("--hyps", help="hypotheses, dumped via search in py format")
+  arg_parser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
+  arg_parser.add_argument('--endseq', type=int, default=-1, help='end seq idx (inclusive) or -1 (default: -1)')
+  arg_parser.add_argument("--key", default="raw", help="data-key, e.g. 'data' or 'classes'. (default: 'raw')")
+  arg_parser.add_argument("--verbosity", default=4, type=int, help="5 for all seqs (default: 4)")
+  arg_parser.add_argument("--out", help="if provided, will write WER% (as string) to this file")
+  arg_parser.add_argument("--expect_full", action="store_true", help="full dataset should be scored")
+  args = arg_parser.parse_args(argv[1:])
   assert args.config or args.dataset or args.refs
 
   init(config_filename=args.config, log_verbosity=args.verbosity)
@@ -219,10 +237,10 @@ def main(argv):
 
   global wer_compute
   wer_compute = WerComputeGraph()
-  with tf.Session(config=tf.ConfigProto(device_count={"GPU": 0})) as _session:
+  with tf_compat.v1.Session(config=tf_compat.v1.ConfigProto(device_count={"GPU": 0})) as _session:
     global session
     session = _session
-    session.run(tf.global_variables_initializer())
+    session.run(tf_compat.v1.global_variables_initializer())
     try:
       wer = calc_wer_on_dataset(dataset=dataset, refs=refs, options=args, hyps=hyps)
       print("Final WER: %.02f%%" % (wer * 100), file=log.v1)

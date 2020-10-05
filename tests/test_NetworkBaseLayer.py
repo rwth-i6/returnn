@@ -1,9 +1,11 @@
 
 import sys
-sys.path += ["."]  # Python 3 hack
+import os
 
-from NetworkBaseLayer import Container
+import _setup_test_env  # noqa
+from returnn.theano.layers.base import Container
 from nose.tools import assert_equal, assert_is_none
+
 
 class TestContainer(object):
 

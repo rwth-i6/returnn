@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 
+"""
+Iterates through any dataset, and prints/dump some information.
+This can also be used to collect statistics over the data like mean/variance.
+"""
+
 from __future__ import print_function
 
 import os
 import sys
 import time
+import typing
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.append(returnn_dir)
-
-import rnn
-from Log import log
+import _setup_returnn_env  # noqa
+from returnn import __main__ as rnn
+from returnn.log import log
 import argparse
 import numpy
-from Util import Stats, hms, hms_fraction, pretty_print
-import Util
+from returnn.util.basic import Stats, hms, hms_fraction, pretty_print
+from returnn.util import basic as util
 
 
 def plot(m):
@@ -23,6 +26,7 @@ def plot(m):
   :param numpy.ndarray m:
   """
   print("Plotting matrix of shape %s." % (m.shape,))
+  # noinspection PyUnresolvedReferences,PyPackageRequirements
   from matplotlib.pyplot import matshow, show
   matshow(m.transpose())
   show()
@@ -71,11 +75,11 @@ def dump_dataset(dataset, options):
   elif options.type == "stdout":
     print("Dump to stdout", file=log.v3)
     if options.stdout_limit is not None:
-      Util.set_pretty_print_default_limit(options.stdout_limit)
+      util.set_pretty_print_default_limit(options.stdout_limit)
       numpy.set_printoptions(
         threshold=sys.maxsize if options.stdout_limit == float("inf") else int(options.stdout_limit))
     if options.stdout_as_bytes:
-      Util.set_pretty_print_as_bytes(options.stdout_as_bytes)
+      util.set_pretty_print_as_bytes(options.stdout_as_bytes)
   elif options.type == "print_tag":
     print("Dump seq tag to stdout", file=log.v3)
   elif options.type == "dump_tag":
@@ -92,7 +96,10 @@ def dump_dataset(dataset, options):
   elif options.type == "interactive":
     print("Interactive debug shell.", file=log.v3)
   elif options.type == "null":
-    print("No dump.")
+    if options.dump_stats:
+      print("No dump (except stats).")
+    else:
+      print("No dump.")
   else:
     raise Exception("unknown dump option type %r" % options.type)
 
@@ -115,6 +122,7 @@ def dump_dataset(dataset, options):
         num_seqs_s = "?"
     progress_prefix = "%i/%s" % (seq_idx, num_seqs_s)
     progress = "%s (%.02f%%)" % (progress_prefix, complete_frac * 100)
+    data = None
     if complete_frac > 0:
       total_time_estimated = start_elapsed / complete_frac
       remaining_estimated = total_time_estimated - start_elapsed
@@ -144,7 +152,8 @@ def dump_dataset(dataset, options):
       for target in dataset.get_target_list():
         targets = dataset.get_targets(target, seq_idx)
         if options.type == "numpy":
-          numpy.savetxt("%s%i.targets.%s%s" % (options.dump_prefix, seq_idx, target, options.dump_postfix), targets, fmt='%i')
+          numpy.savetxt(
+            "%s%i.targets.%s%s" % (options.dump_prefix, seq_idx, target, options.dump_postfix), targets, fmt='%i')
         elif options.type == "stdout":
           extra = ""
           if target in dataset.labels and len(dataset.labels[target]) > 1:
@@ -154,7 +163,7 @@ def dump_dataset(dataset, options):
         elif options.type == "print_shape":
           print("seq %i target %r shape:" % (seq_idx, target), targets.shape)
       if options.type == "interactive":
-        from Debug import debug_shell
+        from returnn.util.debug import debug_shell
         debug_shell(locals())
     seq_len = dataset.get_seq_length(seq_idx)
     for key in dataset.get_data_keys():
@@ -162,7 +171,7 @@ def dump_dataset(dataset, options):
     if stats:
       stats.collect(data)
     if options.type == "null":
-      Util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
+      util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
 
     seq_idx += 1
 
@@ -177,6 +186,9 @@ def dump_dataset(dataset, options):
   if dump_file:
     print("Dumped to file:", dump_file.name, file=log.v2)
     dump_file.close()
+
+
+config = None  # type: typing.Optional["returnn.config.Config"]
 
 
 def init(config_str, config_dataset, verbosity):
@@ -220,15 +232,20 @@ def init(config_str, config_dataset, verbosity):
   rnn.init_faulthandler()
   rnn.init_config_json_network()
   # We use 'train' from the config.
-  config.set("dev", None)
-  config.set("eval", None)
+  if config.has("dev"):
+    config.set("dev", None)
+  if config.has("eval"):
+    config.set("eval", None)
   rnn.init_data()
   rnn.print_task_properties()
 
 
 def main():
+  """
+  Main entry.
+  """
   argparser = argparse.ArgumentParser(description='Dump something from dataset.')
-  argparser.add_argument('crnn_config', help="either filename to config-file, or dict for dataset")
+  argparser.add_argument('returnn_config', help="either filename to config-file, or dict for dataset")
   argparser.add_argument("--dataset", help="if given the config, specifies the dataset. e.g. 'dev'")
   argparser.add_argument('--epoch', type=int, default=1)
   argparser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
@@ -238,13 +255,13 @@ def main():
   argparser.add_argument("--stdout_limit", type=float, default=None, help="e.g. inf to disable")
   argparser.add_argument("--stdout_as_bytes", action="store_true")
   argparser.add_argument("--verbosity", type=int, default=4, help="overwrites log_verbosity (default: 4)")
-  argparser.add_argument('--dump_prefix', default='/tmp/crnn.dump-dataset.')
+  argparser.add_argument('--dump_prefix', default='/tmp/returnn.dump-dataset.')
   argparser.add_argument('--dump_postfix', default='.txt.gz')
   argparser.add_argument("--key", default="data", help="data-key, e.g. 'data' or 'classes'. (default: 'data')")
   argparser.add_argument('--stats', action="store_true", help="calculate mean/stddev stats")
   argparser.add_argument('--dump_stats', help="file-prefix to dump stats to")
   args = argparser.parse_args()
-  init(config_str=args.crnn_config, config_dataset=args.dataset, verbosity=args.verbosity)
+  init(config_str=args.returnn_config, config_dataset=args.dataset, verbosity=args.verbosity)
   try:
     dump_dataset(rnn.train_data, args)
   except KeyboardInterrupt:

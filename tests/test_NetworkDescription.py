@@ -1,32 +1,31 @@
 
 import sys
-sys.path += ["."]  # Python 3 hack
 
-
+import _setup_test_env  # noqa
 import unittest
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_true, assert_false
-from NetworkDescription import LayerNetworkDescription
-from Config import Config
-from Util import dict_diff_str
+from returnn.network_description import LayerNetworkDescription
+from returnn.config import Config
+from returnn.util.basic import dict_diff_str
 from pprint import pprint
-import better_exchook
-better_exchook.replace_traceback_format_tb()
+from returnn.util import better_exchook
+from returnn.util.basic import BackendEngine
 
 try:
   # noinspection PyPackageRequirements
   import theano
+  BackendEngine.select_engine(engine=BackendEngine.Theano)
 except ImportError:
   theano = None
 
 
 if theano:
-  import TheanoUtil
+  import returnn.theano.util
 
-  TheanoUtil.monkey_patches()
+  returnn.theano.util.monkey_patches()
 
-
-  from Network import LayerNetwork
-  from NetworkHiddenLayer import ForwardLayer
+  from returnn.theano.network import LayerNetwork
+  from returnn.theano.layers.hidden import ForwardLayer
 
 else:
   LayerNetwork = None
@@ -82,11 +81,12 @@ config1_dict = {
 }
 
 config2_dict = {
+  "use_theano": True,
   "pretrain": "default",
   "num_inputs": 40,
   "num_outputs": 4498,
   "bidirectional": True,
-  "hidden_size": (500,500,500),
+  "hidden_size": (500, 500, 500),
   "hidden_type": "lstm_opt",
   "activation": "sigmoid",
   "dropout": 0.1,

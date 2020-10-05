@@ -7,13 +7,13 @@ import sys
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
-sys.path.append(returnn_dir)
+sys.path.insert(0, returnn_dir)
 
 import numpy as np
 import argparse
 import itertools
 
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.install()
 
 
@@ -21,7 +21,7 @@ better_exchook.install()
 layerCount = 0  # automatically determined
 archiverExec = "./sprint-executables/archiver"
 
-# Crnn
+# RETURNN
 configFile = "config/crnn.config"
 inputDim = 0  # via config num_inputs
 outputDim = 0  # via config num_outputs
@@ -45,7 +45,7 @@ def parseSprintLayer(lines, float_type):
   dtype = "float64" if float_type == "f64" else "float32"
   matrix = np.array(rows, dtype=dtype)
   assert matrix.shape == (len(rows), nColumns)
-  matrix = matrix.transpose()  # Crnn format
+  matrix = matrix.transpose()  # RETURNN format
   bias = matrix[0,:]
   weights = matrix[1:,:]
   print("Sprint layer bias:", bias.shape, "weights:", weights.shape)
@@ -103,7 +103,7 @@ def saveCrnnLayer(layer, bias, weights):
   biasParams.set_value(bias)
   weightParams.set_value(weights)
 
-  print(("Saved Crnn layer %s" % layer.name))
+  print(("Saved RETURNN layer %s" % layer.name))
 
 
 def saveCrnnNetwork(epoch, layers):
@@ -111,13 +111,13 @@ def saveCrnnNetwork(epoch, layers):
   :type epoch: int
   :type layers: list[(numpy.ndarray, numpy.ndarray)]
   """
-  print("Loading Crnn")
+  print("Loading RETURNN")
 
-  from Network import LayerNetwork
-  from NetworkHiddenLayer import ForwardLayer
-  from NetworkOutputLayer import OutputLayer
-  from Pretrain import pretrain_from_config
-  from EngineBase import EngineBase
+  from returnn.theano.network import LayerNetwork
+  from returnn.theano.layers.hidden import ForwardLayer
+  from returnn.theano.layers.output import OutputLayer
+  from returnn.pretrain import pretrain_from_config
+  from returnn.engine.base import EngineBase
 
   pretrain = pretrain_from_config(config)
   is_pretrain_epoch = pretrain and epoch <= pretrain.get_train_num_epochs()
@@ -132,7 +132,7 @@ def saveCrnnNetwork(epoch, layers):
   nHiddenLayers = len(network.hidden)
 
   # print network topology
-  print("Crnn Network layer topology:")
+  print("RETURNN Network layer topology:")
   print("input dim:", network.n_in)
   print("hidden layer count:", nHiddenLayers)
   print("output dim:", network.n_out["classes"])
@@ -154,7 +154,7 @@ def saveCrnnNetwork(epoch, layers):
   saveCrnnLayer(network.output["output"], *layers[len(layers) - 1])
 
   import h5py
-  print(("Save Crnn model under %s" % filename))
+  print(("Save RETURNN model under %s" % filename))
   model = h5py.File(filename, "w")
   network.save_hdf(model, epoch)
   model.close()
@@ -168,9 +168,9 @@ def main():
   parser.add_argument('--sprintFirstLayer', default=1, type=int,
                       help='Sprint NN params first layer (default 1)')
   parser.add_argument('--crnnSaveEpoch', type=int, required=True,
-                      help='save this train epoch number in Crnn model')
+                      help='save this train epoch number in RETURNN model')
   parser.add_argument('--crnnConfigFile', required=True,
-                      help='CRNN config file')
+                      help='RETURNN (CRNN) config file')
   parser.add_argument('--sprintArchiverExec', default=archiverExec,
                       help='path to Sprint/RASR archiver executable')
   parser.add_argument('--floatType', default="f32",
@@ -178,12 +178,12 @@ def main():
   args = parser.parse_args()
 
   configFile = args.crnnConfigFile
-  assert os.path.exists(configFile), "CRNN config file not found"
+  assert os.path.exists(configFile), "RETURNN config file not found"
   archiverExec = args.sprintArchiverExec
   assert os.path.exists(archiverExec), "Sprint archiver not found"
   assert args.crnnSaveEpoch >= 1
 
-  from Config import Config
+  from returnn.config import Config
   global config
   config = Config()
   config.load_file(configFile)

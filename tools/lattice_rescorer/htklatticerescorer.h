@@ -1,3 +1,8 @@
+/*  Code adapted from rwthlm:
+
+  http://www-i6.informatik.rwth-aachen.de/~sundermeyer/rwthlm.html
+====================================================================*/
+
 #pragma once
 #include <algorithm>
 #include <queue>
@@ -27,22 +32,22 @@ public:
 
   HtkLatticeRescorer(const ConstVocabularyPointer &vocabulary,
                      tensorflow::Session* session,
-					 const std::vector<std::string> state_vars,
-					 const std::vector<std::string> state_vars_assign_ops,
-					 const std::vector<std::string> state_vars_assign_inputs,
-					 const std::vector<int> state_vars_size,
+                     const std::vector<std::string> state_vars,
+                     const std::vector<std::string> state_vars_assign_ops,
+                     const std::vector<std::string> state_vars_assign_inputs,
+                     const std::vector<int> state_vars_size,
                      const std::vector<std::string> tensor_names,
                      const OutputFormat output_format,
                      const int num_oov_words,
                      const float nn_lambda,
                      const LookAheadSemiring semiring,
                      const float look_ahead_lm_scale,
-					 const float lm_scale,
+                     const float lm_scale,
                      const float pruning_threshold,
                      const size_t pruning_limit,
                      const int dp_order,
-					 const bool is_dependent,
-					 const bool clear_initial_links,
+                     const bool is_dependent,
+                     const bool clear_initial_links,
                      const bool set_sb_next_to_last_links,
                      const bool set_sb_last_links)
       : Rescorer(vocabulary, num_oov_words, nn_lambda),
@@ -58,7 +63,7 @@ public:
         pruning_limit_(pruning_limit),
         semiring_(semiring),
         look_ahead_lm_scale_(look_ahead_lm_scale),
-		lm_scale_(lm_scale),
+        lm_scale_(lm_scale),
         pruning_threshold_(pruning_threshold),
         epsilon_(1e-8),
         dp_order_(dp_order),
@@ -112,7 +117,7 @@ private:
           const float score)
         : link_id(link_id),
           history_word(history_word),
-          to_node_id(to_node_id),  //FIXME brauchen wir to_node_id überhaupt?? redundant mit links_[link_id].to!!!?
+          to_node_id(to_node_id),
           predecessor_traceback_id(predecessor_traceback_id),
           score(score) {
     }
@@ -172,8 +177,8 @@ private:
     const Link &link = links_[traceback_[traceback_id].link_id];
     const float from_look_ahead_score = nodes_[link.from].look_ahead_score,
                to_look_ahead_score = nodes_[link.to].look_ahead_score;
-	return (GetScore(traceback_id) - GetScore(GetPredecessorID(traceback_id)) -
-		   link.am_score - to_look_ahead_score + from_look_ahead_score) / lm_scale_;
+    return (GetScore(traceback_id) - GetScore(GetPredecessorID(traceback_id)) -
+            link.am_score - to_look_ahead_score + from_look_ahead_score) / lm_scale_;
   }
 
   int GetPredecessorID(const int traceback_id) const {
@@ -230,21 +235,25 @@ private:
   void WriteHtkLattice(const std::string &file_name);
   void WriteExpandedHtkLattice(const std::string &file_name);
   // Initialize the state variables in LSTM cell with zeros
-  // state_vars_assign_ops: the names of assignment operation nodes of state variables in LSTM cell. These names can be found is .metatxt
-  // state_vars_assign_inputs: the inputs of state variables assignment, each includes the name of a state variable and the name of
+  // state_vars_assign_ops: the names of assignment operation nodes of state variables in LSTM cell.
+  //   These names can be found is .metatxt
+  // state_vars_assign_inputs: the inputs of state variables assignment,
+  //   each includes the name of a state variable and the name of
   void InitStateVars(tensorflow::Session* session, const std::vector<std::string> state_vars_assign_ops,
-					 const std::vector<std::string> state_vars_assign_inputs, const std::vector<int> state_vars_size);
+                     const std::vector<std::string> state_vars_assign_inputs, const std::vector<int> state_vars_size);
   // Set the state variables in LSTM cell
   // state_vars: the names of state variables in LSTM cell
   // state: the values of state variables of a hypothesis
   void TF_SetState(tensorflow::Session* session, const std::vector<std::string> state_vars_assign_ops,
-				   const std::vector<std::string> state_vars_assign_inputs, const std::vector<int> state_vars_size, const State &state);
+                   const std::vector<std::string> state_vars_assign_inputs, const std::vector<int> state_vars_size,
+                   const State &state);
   // Extract the current value of state variables and store them in the corresponding hypothesis.state
   // state_vars: the names of state variables in LSTM cell
   // state: a pointer to new_hypothesis.state, to store the current values of the new hypothesis
   void TF_ExtractState(tensorflow::Session* session, const std::vector<std::string> state_vars, State *state) const;
   // Compute P(w|h)
-  // tensor_names: the names of tensors needed for feeding and fetching, please check the text file example/tensor_names_list
+  // tensor_names:
+  //   the names of tensors needed for feeding and fetching, please check the text file example/tensor_names_list
   // history_word: the index of the word fed into the graph when doing inference
   // target_word: the index of the word to be predicted in the next time frame
   // word_index: the position of the history_word in the sentence,
@@ -252,10 +261,8 @@ private:
   //                word_index of <sb> = 0
   //                word index of 'a' = 1
   //                work index of 'b' = 2
-  //            TODO: this parameter is NO more needed by the graph created in the newest returnn,but here we still the old version graph
-  float TF_ComputeLogProbability(tensorflow::Session* session, const std::vector<std::string> tensor_names, const int history_word,
-                                const int target_word, const tensorflow::int64 word_index);
-
+  float TF_ComputeLogProbability(tensorflow::Session* session, const std::vector<std::string> tensor_names,
+                                 const int history_word, const int target_word, const tensorflow::int64 word_index);
   const int unk_index_, dp_order_;
   const size_t pruning_limit_;
   const LookAheadSemiring semiring_;
@@ -263,7 +270,7 @@ private:
   const float look_ahead_lm_scale_, lm_scale_, pruning_threshold_, epsilon_;
   const bool is_dependent_,
              clear_initial_links_,
-			 set_sb_next_to_last_links_,
+             set_sb_next_to_last_links_,
              set_sb_last_links_;
   std::vector<int> single_best_, topological_order_, state_vars_size_;
   std::unordered_map<int, std::string> oov_by_link_;
@@ -276,8 +283,6 @@ private:
   std::vector<Trace> traceback_;
   std::unordered_map<int, float> best_score_by_time_;
   tensorflow::Session* session_;
-  const std::vector<std::string> state_vars_,
-								 state_vars_assign_ops_,
-								 state_vars_assign_inputs_,
-                                 tensor_names_;
+  const std::vector<std::string> state_vars_, state_vars_assign_ops_,
+    state_vars_assign_inputs_, tensor_names_;
 };

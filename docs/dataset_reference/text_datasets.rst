@@ -4,7 +4,14 @@
 Text Datasets
 =============
 
-HDF Dataset
------------
+Language Model Dataset
+----------------------
 
-.. automodule:: LmDataset.TranslationDataset
+.. autoclass:: LmDataset.LmDataset
+    :show-inheritance:
+
+Translation Dataset
+-------------------
+
+.. autoclass:: LmDataset.TranslationDataset
+    :show-inheritance:

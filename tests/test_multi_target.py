@@ -2,27 +2,25 @@
 from __future__ import print_function
 
 import sys
-sys.path += ["."]  # Python 3 hack
+import os
 
-
+import _setup_test_env  # noqa
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false, assert_greater, assert_almost_equal, assert_is
-from Config import Config
-from Engine import Engine
-from Device import Device
-from Log import log
-from GeneratingDataset import StaticDataset, DummyDataset
-from EngineUtil import assign_dev_data_single_seq
-import TheanoUtil
+from returnn.config import Config
+from returnn.theano.engine import Engine
+from returnn.theano.device import Device
+from returnn.log import log
+from returnn.datasets.generating import StaticDataset, DummyDataset
+from returnn.theano.engine_util import assign_dev_data_single_seq
+import returnn.theano.util as theano_util
 import numpy
 from pprint import pprint
 import theano
 from theano import tensor as T
-import better_exchook
-better_exchook.replace_traceback_format_tb()
+from returnn.util import better_exchook
 
 
-log.initialize()
-TheanoUtil.monkey_patches()
+theano_util.monkey_patches()
 
 
 def get_num_params(p_list):

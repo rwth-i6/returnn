@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
 
+"""
+This explicitly compiles some of the native ops, and will tell you the so-filenames.
+Normally all native ops (e.g. NativeLstm2 etc) are compiled on-the-fly within RETURNN.
+When you export the computation graph (e.g. via ``compile_tf_graph.py``),
+you explicitly must load these native ops.
+"""
 
 from __future__ import print_function
 
 import os
 import sys
-import time
-import tensorflow as tf
-import numpy
+import typing
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
-
-import rnn
-from Log import log
+import _setup_returnn_env  # noqa
+from returnn import __main__ as rnn
+from returnn.log import log
 import argparse
-from Util import Stats, hms
-from Dataset import Dataset, init_dataset
-import Util
-import TFUtil
+import returnn.util.basic as util
+
+
+config = None  # type: typing.Optional["returnn.config.Config"]
 
 
 def init(config_filename, log_verbosity):
@@ -42,12 +43,12 @@ def init(config_filename, log_verbosity):
   print("Returnn compile-native-op starting up.", file=log.v1)
   rnn.returnn_greeting()
   rnn.init_backend_engine()
-  assert Util.BackendEngine.is_tensorflow_selected(), "this is only for TensorFlow"
+  assert util.BackendEngine.is_tensorflow_selected(), "this is only for TensorFlow"
   rnn.init_faulthandler()
   rnn.init_config_json_network()
   if 'network' in config.typed_dict:
     print("Loading network")
-    from TFNetwork import TFNetwork
+    from returnn.tf.network import TFNetwork
     network = TFNetwork(
       name="root",
       config=config,
@@ -59,7 +60,10 @@ def init(config_filename, log_verbosity):
 
 
 def main(argv):
-  from TFUtil import CudaEnv, NativeCodeCompiler
+  """
+  Main entry.
+  """
+  from returnn.tf.util.basic import CudaEnv, NativeCodeCompiler
   CudaEnv.verbose_find_cuda = True
   NativeCodeCompiler.CollectedCompilers = []
 
@@ -77,11 +81,13 @@ def main(argv):
   args = argparser.parse_args(argv[1:])
   init(config_filename=args.config, log_verbosity=args.verbosity)
 
-  import NativeOp
-  from TFNativeOp import make_op, OpMaker
+  import returnn.native_op as native_op
+  from returnn.tf.native_op import make_op, OpMaker
   if args.native_op:
     print("Loading native op %r" % args.native_op)
-    make_op(getattr(NativeOp, args.native_op), compiler_opts={"verbose": True},
+    op_gen = getattr(native_op, args.native_op)
+    assert issubclass(op_gen, native_op.NativeOpGenBase)
+    make_op(op_gen, compiler_opts={"verbose": True},
             search_for_numpy_blas=args.search_for_numpy_blas, blas_lib=args.blas_lib)
 
   libs = []
@@ -94,6 +100,7 @@ def main(argv):
   for compiler in NativeCodeCompiler.CollectedCompilers:
     assert isinstance(compiler, NativeCodeCompiler)
     print(compiler)
+    # noinspection PyProtectedMember
     libs.append(compiler._so_filename)
 
   if libs:

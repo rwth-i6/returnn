@@ -1,8 +1,12 @@
 
 import theano
 import numpy
-from NetworkBaseLayer import Container, SourceLayer
-from NetworkRecurrentLayer import RecurrentUnitLayer
+import sys
+import os
+
+import _setup_test_env  # noqa
+from returnn.theano.layers.base import Container, SourceLayer
+from returnn.theano.layers.rec import RecurrentUnitLayer
 
 Container.initialize_rng()
 

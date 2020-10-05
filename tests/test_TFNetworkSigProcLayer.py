@@ -1,10 +1,9 @@
 
 from __future__ import print_function
 
-# Disable extensive TF debug verbosity. Must come before the first TF import.
-import logging
-logging.getLogger('tensorflow').disabled = True
+import _setup_test_env  # noqa
 
+import logging
 import sys
 import os
 import os.path
@@ -13,24 +12,21 @@ import numpy as np
 import unittest
 import contextlib
 
-# Allow Returnn imports.
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/..")
+from returnn.tf.network import *
+from returnn.tf.layers.signal_processing import *
+from returnn.config import Config
 
-from TFNetwork import *
-from TFNetworkSigProcLayer import *
-from Config import Config
-
-import better_exchook
+from returnn.util import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 
 @contextlib.contextmanager
 def make_scope():
   """
-  :rtype: tf.Session
+  :rtype: tf.compat.v1.Session
   """
   with tf.Graph().as_default() as graph:
-    with tf.Session(graph=graph) as session:
+    with tf_compat.v1.Session(graph=graph) as session:
       yield session
 
 
@@ -87,7 +83,7 @@ def test_MultichannelStftLayer():
       import numpy as np
       frame_start = frame_nr * frame_shift
       frame_end = frame_start + frame_size
-      frame = time_sig[0, frame_start:frame_end, channel_nr] 
+      frame = time_sig[0, frame_start:frame_end, channel_nr]
       if window_name == "hanning":
           window = np.hanning(frame_size)
       windowed_frame = window * frame
@@ -115,11 +111,11 @@ def test_MultichannelStftLayer():
       layer = network.layers[layer_name]
       test_output = session.run(layer.output.placeholder, {network.get_extern_data('data').placeholder: test_input})
       ref0 = _get_ref_output(test_input, fft_size, frame_size, frame_shift, window, 0, 0)
-      # np.fft.rfft and tensorflow.python.ops.rfft differ a little bit in their 
+      # np.fft.rfft and tensorflow.python.ops.rfft differ a little bit in their
       # results, thus an error margin is allowed in the result
       resultDiff = np.abs(test_output[0, 0, 0:(int(fft_size / 2) + 1)] - ref0)
-      assert np.mean(resultDiff) < 0.02 
-      assert np.max(resultDiff) < 1 
+      assert np.mean(resultDiff) < 0.02
+      assert np.max(resultDiff) < 1
       pass
 
   test_rfftStftConfig_01()
@@ -130,7 +126,7 @@ def test_MultichannelMultiResStftLayer():
       import numpy as np
       frame_start = frame_nr * frame_shift
       frame_end = frame_start + frame_size
-      frame = time_sig[0, frame_start:frame_end, channel_nr] 
+      frame = time_sig[0, frame_start:frame_end, channel_nr]
       if window_name == "hanning":
           window = np.hanning(frame_size)
       windowed_frame = window * frame
@@ -161,8 +157,8 @@ def test_MultichannelMultiResStftLayer():
       ref0 = _get_ref_output_single_res(test_input, fft_sizes[0], frame_sizes[0], frame_shift, window, 0, 0)
       resultDiff = np.abs(test_output[0, 0, 0:(int(fft_sizes[0] / 2) + 1)] - ref0)
       assert test_output.shape[2] == num_outputs
-      assert np.mean(resultDiff) < 0.02 
-      assert np.max(resultDiff) < 1 
+      assert np.mean(resultDiff) < 0.02
+      assert np.max(resultDiff) < 1
 
   def test_stftConfig_multi_res_01():
     with make_scope() as session:
@@ -194,8 +190,8 @@ def test_MultichannelMultiResStftLayer():
       ref11 = _get_ref_output_single_res(test_input, fft_sizes[1], frame_sizes[1], frame_shift, window, comparison_frame, 1)
       ref = np.concatenate([ref00, ref01, ref10, ref11], axis=0)
       resultDiff = np.abs(test_output[0, comparison_frame, :] - ref)
-      assert np.mean(resultDiff) < 0.02 
-      assert np.max(resultDiff) < 1 
+      assert np.mean(resultDiff) < 0.02
+      assert np.max(resultDiff) < 1
 
   def test_stftConfig_multi_res_02():
     with make_scope() as session:
@@ -229,7 +225,7 @@ def test_MultichannelMultiResStftLayer():
       ref = np.concatenate([ref00, ref01, ref10, ref11, ref20, ref21], axis=0)
       resultDiff = np.abs(test_output[0, comparison_frame, :] - ref)
       assert np.mean(resultDiff) < 0.06
-      assert np.max(resultDiff) < 1 
+      assert np.max(resultDiff) < 1
 
   test_stftConfig_single_res_01()
   test_stftConfig_multi_res_01()

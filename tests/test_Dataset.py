@@ -4,20 +4,18 @@
 from __future__ import print_function
 
 import sys
-sys.path += ["."]  # Python 3 hack
-
+import _setup_test_env  # noqa
 import unittest
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
-from GeneratingDataset import GeneratingDataset, DummyDataset, DummyDatasetMultipleSequenceLength
-from EngineBatch import Batch
-from Dataset import DatasetSeq
-from Util import NumbersDict
+from returnn.datasets.generating import GeneratingDataset, DummyDataset, DummyDatasetMultipleSequenceLength
+from returnn.engine.batch import Batch
+from returnn.datasets.basic import DatasetSeq
+from returnn.util.basic import NumbersDict
 import numpy as np
 
-import better_exchook
-better_exchook.replace_traceback_format_tb()
+from returnn.util import better_exchook
 
-from Log import log
+from returnn.log import log
 log.initialize()
 
 
@@ -287,7 +285,7 @@ def test_batches_context_window():
 
 
 def test_task12ax_window():
-  from GeneratingDataset import Task12AXDataset
+  from returnn.datasets.generating import Task12AXDataset
   window = 3
   dataset_kwargs = dict(num_seqs=10)
   dataset1 = Task12AXDataset(**dataset_kwargs)

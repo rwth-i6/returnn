@@ -14,16 +14,12 @@ https://bugs.python.org/issue31814
 
 from __future__ import print_function
 
+import _setup_test_env  # noqa
 import os
 import sys
 from nose.tools import assert_equal, assert_is_instance
 from pprint import pprint
 
-sys.path += ["."]  # Python 3 hack
-sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
-import better_exchook
-better_exchook.install()
-better_exchook.replace_traceback_format_tb()
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -63,7 +59,7 @@ class CLibAtForkDemo:
     self._load_lib()
 
   def _load_lib(self):
-    from Util import NativeCodeCompiler
+    from returnn.util.basic import NativeCodeCompiler
     native = NativeCodeCompiler(
       base_name="test_fork_exec", code_version=1, code=c_code_at_fork_demo, is_cpp=False,
       ld_flags=["-lpthread"])
@@ -138,6 +134,8 @@ def filter_demo_output(ls):
   ls = [l for l in ls if not l.startswith("Compiler call: ")]
   ls = [l for l in ls if not l.startswith("loaded lib: ")]
   ls = [l for l in ls if not l.startswith("dlopen: ")]
+  ls = [l for l in ls if "installLibSigSegfault" not in l and "libSegFault" not in l]
+  ls = [l for l in ls if "faulthandler" not in l]
   found_hello = False
   for i, l in enumerate(ls):
     # Those can be very early, before the hello.
@@ -208,7 +206,7 @@ def patched_check_demo_start_subprocess():
 
 
 def test_demo_start_subprocess_patched():
-  from Util import get_patch_atfork_lib
+  from returnn.util.basic import get_patch_atfork_lib
   from subprocess import check_call
   env = os.environ.copy()
   env["LD_PRELOAD"] = get_patch_atfork_lib()

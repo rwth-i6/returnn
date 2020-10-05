@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
 
+"""
+List all CPU/GPU devices which are accessible to TensorFlow.
+"""
+
 import os
-import sys
 from pprint import pprint
 from argparse import ArgumentParser
-import tensorflow as tf
 from tensorflow.python.client import device_lib
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(my_dir))  # parent dir, Returnn code
-
-from TFUtil import get_device_attr, setup_tf_thread_pools, print_available_devices, get_tf_list_local_devices
+import _setup_returnn_env  # noqa
+import returnn.tf.compat as tf_compat
+from returnn.tf.util.basic import get_device_attr, setup_tf_thread_pools
+from returnn.tf.util.basic import print_available_devices, get_tf_list_local_devices
 
 
 def dump_devs(tf_session_opts, use_device_lib=False, filter_gpu=True):
+  """
+  :param dict[str] tf_session_opts:
+  :param bool use_device_lib:
+  :param bool filter_gpu:
+  """
   s = os.environ.get("CUDA_VISIBLE_DEVICES", None)
   cuda_num_visible = None
   if s is not None:
@@ -33,13 +40,16 @@ def dump_devs(tf_session_opts, use_device_lib=False, filter_gpu=True):
   print("num devs %i, CUDA num visible %r, TF num visible %r" % (len(devs), cuda_num_visible, tf_num_visible))
   print("devs:")
   pprint(devs)
-  with tf.Session(config=tf.ConfigProto(**tf_session_opts)) as session:
+  with tf_compat.v1.Session(config=tf_compat.v1.ConfigProto(**tf_session_opts)) as session:
     for dev in devs:
       print("dev name:", dev.name)
       print("dev attribs:", session.run(get_device_attr(dev.name)))
 
 
 def main():
+  """
+  Main entry.
+  """
   arg_parser = ArgumentParser()
   arg_parser.add_argument("--try_subsets", action="store_true")
   arg_parser.add_argument("--visible_device_list")
@@ -74,6 +84,6 @@ def main():
 
 
 if __name__ == "__main__":
-  import better_exchook
+  from returnn.util import better_exchook
   better_exchook.install()
   main()

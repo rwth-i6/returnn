@@ -1,27 +1,30 @@
 #!/usr/bin/env python3
 
+"""
+This is a wrapper around :func:`returnn.tf.engine.Engine.cleanup_old_models`.
+"""
+
 from __future__ import print_function
 import sys
 import os
 import argparse
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-import better_exchook
-better_exchook.install()
-
-from Log import log
-from rnn import init, finalize
-
-arg_parser = argparse.ArgumentParser()
-arg_parser.add_argument("--config")
-arg_parser.add_argument("--cwd", help="will change to this dir")
-arg_parser.add_argument("--model", help="model filenames")
-arg_parser.add_argument("--scores", help="learning_rate_control file, e.g. newbob.data")
-arg_parser.add_argument("--dry_run", action="store_true")
+import _setup_returnn_env  # noqa
+from returnn.util import better_exchook
+from returnn.log import log
+from returnn.__main__ import init, finalize
 
 
 def main():
+  """
+  Main entry.
+  """
+  arg_parser = argparse.ArgumentParser()
+  arg_parser.add_argument("--config")
+  arg_parser.add_argument("--cwd", help="will change to this dir")
+  arg_parser.add_argument("--model", help="model filenames")
+  arg_parser.add_argument("--scores", help="learning_rate_control file, e.g. newbob.data")
+  arg_parser.add_argument("--dry_run", action="store_true")
   args = arg_parser.parse_args()
   return_code = 0
   try:
@@ -34,7 +37,7 @@ def main():
         "use_tensorflow": True,
         "need_data": False,
         "device": "cpu"})
-    from rnn import engine, config
+    from returnn.__main__ import engine, config
     if args.model:
       config.set("model", args.model)
     if args.scores:
@@ -54,4 +57,5 @@ def main():
 
 
 if __name__ == "__main__":
+  better_exchook.install()
   main()

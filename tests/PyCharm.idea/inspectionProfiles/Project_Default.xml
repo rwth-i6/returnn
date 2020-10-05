@@ -4,13 +4,37 @@
     <inspection_tool class="PyCompatibilityInspection" enabled="true" level="WARNING" enabled_by_default="true">
       <option name="ourVersions">
         <value>
-          <list size="3">
+          <list size="5">
             <item index="0" class="java.lang.String" itemvalue="2.7" />
             <item index="1" class="java.lang.String" itemvalue="3.6" />
             <item index="2" class="java.lang.String" itemvalue="3.7" />
+            <item index="3" class="java.lang.String" itemvalue="3.8" />
+            <item index="4" class="java.lang.String" itemvalue="3.9" />
           </list>
         </value>
       </option>
+    </inspection_tool>
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+    <option name="ignoredPackages">
+      <value>
+        <list size="14">
+          <item index="0" class="java.lang.String" itemvalue="tensorflow" />
+          <item index="1" class="java.lang.String" itemvalue="theano" />
+          <item index="2" class="java.lang.String" itemvalue="numpy" />
+          <item index="3" class="java.lang.String" itemvalue="scipy" />
+          <item index="4" class="java.lang.String" itemvalue="h5py" />
+          <item index="5" class="java.lang.String" itemvalue="librosa" />
+          <item index="6" class="java.lang.String" itemvalue="soundfile" />
+          <item index="7" class="java.lang.String" itemvalue="audioread" />
+          <item index="8" class="java.lang.String" itemvalue="better_exchook" />
+          <item index="9" class="java.lang.String" itemvalue="matplotlib" />
+          <item index="10" class="java.lang.String" itemvalue="horovod" />
+          <item index="11" class="java.lang.String" itemvalue="nltk" />
+          <item index="12" class="java.lang.String" itemvalue="six" />
+          <item index="13" class="java.lang.String" itemvalue="mpi4py" />
+        </list>
+      </value>
+    </option>
     </inspection_tool>
     <inspection_tool class="PyMissingOrEmptyDocstringInspection" enabled="true" level="WEAK WARNING" enabled_by_default="true" />
     <inspection_tool class="PyMissingTypeHintsInspection" enabled="true" level="WEAK WARNING" enabled_by_default="true" />

@@ -1,3 +1,8 @@
+/*  Code adapted from rwthlm:
+
+  http://www-i6.informatik.rwth-aachen.de/~sundermeyer/rwthlm.html
+====================================================================*/
+
 #pragma once
 #include <cassert>
 #include <memory>
@@ -11,7 +16,7 @@
 #include <iomanip>
 
 struct State {
-	std::vector<std::vector<float>> states;
+  std::vector<std::vector<float>> states;
 };
 
 class Rescorer {

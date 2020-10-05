@@ -23,11 +23,11 @@ Example:
 """
 
 import sys
+import os
 
-sys.path += ["."]  # Python 3 hack
-
-from TFEngine import *
-from Config import Config
+import _setup_test_env  # noqa
+from returnn.tf.engine import *
+from returnn.config import Config
 
 from numpy.testing import assert_array_equal, assert_equal
 
@@ -40,7 +40,7 @@ else:
 
 
 def load_data():
-  from rnn import load_data
+  from returnn.__main__ import load_data
   dev_data, _ = load_data(config, 0, 'dev', chunking=config.value("chunking", ""), seq_ordering="sorted",
                           shuffle_frames_of_nseqs=0)
   eval_data, _ = load_data(config, 0, 'eval', chunking=config.value("chunking", ""), seq_ordering="sorted",
@@ -68,7 +68,7 @@ def test_determinism_of_vanillalstm():
     return engine
 
   def train_engine_fetch_vars(engine):
-    data_provider = engine._get_new_data_provider(dataset=engine.train_data, batches=engine.train_batches)
+    data_provider = engine._get_data_provider(dataset=engine.train_data, batches=engine.train_batches, feed_dict=True)
     feed_dict, _ = data_provider.get_feed_dict(single_threaded=True)
     trainer = Runner(engine=engine, dataset=engine.train_data, batches=engine.train_batches, train=True)
     feed_dict, _ = data_provider.get_feed_dict(single_threaded=True)

@@ -1,11 +1,32 @@
+# https://packaging.python.org/guides/using-manifest-in/
+
+include MANIFEST.in
+include _setup_info_generated.py
+
+include LICENSE
+include CODEOWNERS
+
+include .editorconfig
+include .kateconfig
+include .gitmodules
+include .gitignore
+
 include *.py
 include *.rst
 include *.md
 include *.txt
-include *.cpp
-include LICENSE
-include CODEOWNERS
-include MANIFEST.in
+graft returnn
+
+# Not all extern files.
+prune returnn/extern_private
+prune returnn/extern
+include returnn/extern/*.py
+graft returnn/extern/graph_editor
+
 graft tools
 graft demos
-global-exclude *.pyc
+graft tests
+
+global-exclude *.py[cod]
+global-exclude __pycache__
+global-exclude .history*

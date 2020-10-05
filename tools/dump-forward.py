@@ -1,19 +1,18 @@
 #!/usr/bin/env python
 
+"""
+For debugging, go through some dataset, forward it through the net, and output the layer activations on stdout.
+"""
+
 from __future__ import print_function
 
-import os
 import sys
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.append(returnn_dir)
-
-import rnn
-from Log import log
+import _setup_returnn_env  # noqa
+import returnn.__main__ as rnn
+from returnn.log import log
 import argparse
-import numpy
-from better_exchook import pretty_print
+from returnn.util.basic import pretty_print
 
 
 def dump(dataset, options):
@@ -43,23 +42,30 @@ def dump(dataset, options):
   print("Done. More seqs which we did not dumped: %s" % dataset.is_less_than_num_seqs(seq_idx), file=log.v1)
 
 
-def init(configFilename, commandLineOptions):
+def init(config_filename, command_line_options):
+  """
+  :param str config_filename:
+  :param list[str] command_line_options:
+  """
   rnn.init(
-    config_filename=configFilename, command_line_options=commandLineOptions,
+    config_filename=config_filename, command_line_options=command_line_options,
     config_updates={"log": None},
-    extra_greeting="CRNN dump-forward starting up.")
+    extra_greeting="RETURNN dump-forward starting up.")
   rnn.engine.init_train_from_config(config=rnn.config, train_data=rnn.train_data)
   # rnn.engine.init_network_from_config(rnn.config)
 
 
 def main(argv):
-  argparser = argparse.ArgumentParser(description='Forward something and dump it.')
-  argparser.add_argument('crnn_config_file')
-  argparser.add_argument('--epoch', type=int, default=1)
-  argparser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
-  argparser.add_argument('--endseq', type=int, default=10, help='end seq idx (inclusive) or -1 (default: 10)')
-  args = argparser.parse_args(argv[1:])
-  init(configFilename=args.crnn_config_file, commandLineOptions=[])
+  """
+  Main entry.
+  """
+  arg_parser = argparse.ArgumentParser(description='Forward something and dump it.')
+  arg_parser.add_argument('returnn_config')
+  arg_parser.add_argument('--epoch', type=int, default=1)
+  arg_parser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
+  arg_parser.add_argument('--endseq', type=int, default=10, help='end seq idx (inclusive) or -1 (default: 10)')
+  args = arg_parser.parse_args(argv[1:])
+  init(config_filename=args.returnn_config, command_line_options=[])
   dump(rnn.train_data, args)
   rnn.finalize()
 

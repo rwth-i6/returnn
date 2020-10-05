@@ -1,3 +1,9 @@
+/* Implement main rescoring algorithm.
+
+Code adapted from rwthlm:
+  http://www-i6.informatik.rwth-aachen.de/~sundermeyer/rwthlm.html
+==================================================================*/
+
 #include <cmath>
 #include <algorithm>
 #include <functional>
@@ -91,7 +97,7 @@ void HtkLatticeRescorer::ParseLine(const std::string &line, int *num_links) {
     ParseField(line, "a", &link.am_score);
     ParseField(line, "v", &link.pronunciation);
 
-	if (clear_initial_links_ && link.from == 0) {
+    if (clear_initial_links_ && link.from == 0) {
       link.lm_score = 0.;
       link.am_score = 0.;
     }
@@ -120,10 +126,9 @@ void HtkLatticeRescorer::Reset() {
   if (is_dependent_)
     nodes_.clear();
   if (nodes_.empty()) {
-	InitStateVars(session_, state_vars_assign_ops_, state_vars_assign_inputs_, state_vars_size_);
-	TF_ExtractState(session_, state_vars_, &hypothesis.state);
-	}
-	else {
+    InitStateVars(session_, state_vars_assign_ops_, state_vars_assign_inputs_, state_vars_size_);
+    TF_ExtractState(session_, state_vars_, &hypothesis.state);
+  } else {
     // use best ending state of previous lattice
     const int final_node_id = sorted_nodes_.back()->id;
     assert(successor_links_[final_node_id].empty());
@@ -133,7 +138,6 @@ void HtkLatticeRescorer::Reset() {
       node_hypotheses.pop();
     hypothesis.state = node_hypotheses.top().state;
   }
-
 
   nodes_.clear();
   single_best_.clear();
@@ -308,7 +312,7 @@ void HtkLatticeRescorer::RescoreLattice() {
     while (!node_hypotheses.empty()) {
       const Hypothesis &hypothesis = node_hypotheses.top();
       for (const int link_id : successor_links_[node->id]) {
-        //Sets the current value of state variables in LSTM cell
+        // Sets the current value of state variables in LSTM cell
         TF_SetState(session_, state_vars_assign_ops_, state_vars_assign_inputs_, state_vars_size_, hypothesis.state);
         const Link &link = links_[link_id];
 
@@ -320,25 +324,25 @@ void HtkLatticeRescorer::RescoreLattice() {
         if (link.lm_score == 0.) {
           new_hypothesis.state = hypothesis.state;
         } else {
-			const int target_word = link.word;
-;			  const tensorflow::int64 word_index = hypothesis.history_word_index;
-			new_hypothesis.score -= log((1. - nn_lambda_) * exp(-link.lm_score) +
-			nn_lambda_ * exp(TF_ComputeLogProbability(session_, tensor_names_, history_word, target_word, word_index))/
-            (link.word == unk_index_ ? num_oov_words_ + 1. : 1.))* lm_scale_;
-			new_hypothesis.history_word_index = hypothesis.history_word_index+1;
-            //Extracts the new value of state variables in LSTM cell and store them in the corresponding hypothesis
-			TF_ExtractState(session_, state_vars_, &new_hypothesis.state);
-		  }
+          const int target_word = link.word;
+          const tensorflow::int64 word_index = hypothesis.history_word_index;
+          new_hypothesis.score -= log((1. - nn_lambda_) * exp(-link.lm_score) +
+            nn_lambda_ * exp(TF_ComputeLogProbability(session_, tensor_names_, history_word, target_word, word_index)) /
+            (link.word == unk_index_ ? num_oov_words_ + 1. : 1.)) * lm_scale_;
+          new_hypothesis.history_word_index = hypothesis.history_word_index+1;
+          // Extracts the new value of state variables in LSTM cell and store them in the corresponding hypothesis
+          TF_ExtractState(session_, state_vars_, &new_hypothesis.state);
+        }
         // This must be done, independent of whether we have an LM score or not!
         float &best_score = best_score_by_time_[nodes_[link.to].time];
         if (best_score == 0. || new_hypothesis.score < best_score)
           best_score = new_hypothesis.score;
-			new_hypothesis.traceback_id = AddTraceback(
-            link_id,
-            link.lm_score == 0. ? history_word : link.word,
-            hypothesis.traceback_id,
-            link.to,
-            new_hypothesis.score);
+        new_hypothesis.traceback_id = AddTraceback(
+          link_id,
+          link.lm_score == 0. ? history_word : link.word,
+          hypothesis.traceback_id,
+          link.to,
+          new_hypothesis.score);
         hypotheses_[link.to].push(new_hypothesis);
       }
       node_hypotheses.pop();
@@ -443,7 +447,7 @@ void HtkLatticeRescorer::WriteHtkLattice(const std::string &file_name) {
       ParseField(line, "J", &link_id);
 
       const Link &link = links_[link_id];
-      if (link.from == 0) {
+      if (clear_initial_links_ && link.from == 0) {
         const auto match = ParseField(line, "a");
         line.replace(match.first, match.second, "a=0.0 ");
       }
@@ -527,7 +531,6 @@ void HtkLatticeRescorer::WriteExpandedHtkLattice(const std::string &file_name) {
                                      traceback_id,
                                      score_comparator);
     assert(it != traceback_ids.end());
-
     new_node_id[traceback_id] = new_node_id[*it];
   }
 
@@ -557,71 +560,73 @@ void HtkLatticeRescorer::WriteExpandedHtkLattice(const std::string &file_name) {
 }
 
 // Initialize the state variables with zeros in the LSTM cell
-void HtkLatticeRescorer::InitStateVars(tensorflow::Session* session, const std::vector<std::string> state_vars_assign_ops,
-										const std::vector<std::string> state_vars_assign_inputs,
-                                        const std::vector<int> state_vars_size) {
-	assert(state_vars_assign_ops.size()==state_vars_assign_inputs.size());
-	std::vector<tensorflow::Tensor> outputs;
-	std::string var_assign_op_name, var_assign_op_input_name;
-	for (int i=0; i < state_vars_assign_ops.size(); i++) {
-        tensorflow::Input::Initializer zeros(0.0f, tensorflow::TensorShape({1, state_vars_size[i]}));
-		var_assign_op_name = state_vars_assign_ops[i];
-		var_assign_op_input_name = state_vars_assign_inputs[i];
-        //Please check the following link if you don't know how to use session->Run(),
-        //https://haosdent.gitbooks.io/tensorflow-document/content/api_docs/cc/ClassSession.html
-		TF_CHECK_OK(session->Run({{var_assign_op_input_name, zeros.tensor}}, {var_assign_op_name}, {}, &outputs));
-	}
+void HtkLatticeRescorer::InitStateVars(tensorflow::Session* session,
+                                       const std::vector<std::string> state_vars_assign_ops,
+                                       const std::vector<std::string> state_vars_assign_inputs,
+                                       const std::vector<int> state_vars_size) {
+  assert(state_vars_assign_ops.size()==state_vars_assign_inputs.size());
+  std::vector<tensorflow::Tensor> outputs;
+  std::string var_assign_op_name, var_assign_op_input_name;
+  for (int i=0; i < state_vars_assign_ops.size(); i++) {
+    tensorflow::Input::Initializer zeros(0.0f, tensorflow::TensorShape({1, state_vars_size[i]}));
+    var_assign_op_name = state_vars_assign_ops[i];
+    var_assign_op_input_name = state_vars_assign_inputs[i];
+    // Please check the following link if you don't know how to use session->Run(),
+    // https://haosdent.gitbooks.io/tensorflow-document/content/api_docs/cc/ClassSession.html
+    TF_CHECK_OK(session->Run({{var_assign_op_input_name, zeros.tensor}}, {var_assign_op_name}, {}, &outputs));
+  }
 }
 
-//Set the states variables in LSTM cell
+// Set the states variables in LSTM cell
 void HtkLatticeRescorer::TF_SetState(tensorflow::Session *session, const std::vector<std::string> state_vars_assign_ops,
-									 const std::vector<std::string> state_vars_assign_inputs, const std::vector<int> state_vars_size, const State &state) {
-	assert(state_vars_assign_ops.size()==state_vars_assign_inputs.size());
-	std::vector<tensorflow::Tensor> outputs;
-	std::string var_assign_op_name, var_assign_op_input_name;
-	for (int i=0; i < state_vars_assign_ops.size(); i++) {
-		tensorflow::Input::Initializer keep_state_var(0.0f, tensorflow::TensorShape({1, state_vars_size[i]}));
-		var_assign_op_name = state_vars_assign_ops[i];
-		var_assign_op_input_name = state_vars_assign_inputs[i];
-		std::copy(state.states[i].begin(), state.states[i].begin()+state.states[i].size(), keep_state_var.tensor.flat<float>().data());
-		TF_CHECK_OK(session->Run({{var_assign_op_input_name, keep_state_var.tensor}}, {var_assign_op_name}, {}, &outputs));
-	}
+                                     const std::vector<std::string> state_vars_assign_inputs,
+                                     const std::vector<int> state_vars_size, const State &state) {
+  assert(state_vars_assign_ops.size() == state_vars_assign_inputs.size());
+  std::vector<tensorflow::Tensor> outputs;
+  std::string var_assign_op_name, var_assign_op_input_name;
+  for (int i=0; i < state_vars_assign_ops.size(); i++) {
+    tensorflow::Input::Initializer keep_state_var(0.0f, tensorflow::TensorShape({1, state_vars_size[i]}));
+    var_assign_op_name = state_vars_assign_ops[i];
+    var_assign_op_input_name = state_vars_assign_inputs[i];
+    std::copy(state.states[i].begin(), state.states[i].begin() + state.states[i].size(),
+              keep_state_var.tensor.flat<float>().data());
+    TF_CHECK_OK(session->Run({{var_assign_op_input_name, keep_state_var.tensor}}, {var_assign_op_name}, {}, &outputs));
+  }
 }
 
-//extract the current states of LSTM and store them in the hypothesis
-void HtkLatticeRescorer::TF_ExtractState(tensorflow::Session* session, const std::vector<std::string> state_vars, State *state) const {
-	std::vector<float> lstm_state;
-	std::vector<tensorflow::Tensor> outputs;
-	for (int i=0; i < state_vars.size(); i++) {
-		TF_CHECK_OK(session->Run({}, {state_vars[i]}, {}, &outputs));
-		float *keep_state_var_ptr = outputs[0].flat<float>().data(); // access the value of the Tensor "score"
-		lstm_state.resize(outputs[0].dim_size(1));
-		std::copy_n(keep_state_var_ptr, lstm_state.size(), lstm_state.begin());
-		state->states.push_back(lstm_state);
-	}
-}
-//compute p(w|h)
-float HtkLatticeRescorer::TF_ComputeLogProbability(tensorflow::Session* session, const std::vector<std::string> tensor_names,
-                                                    const int history_word, const int target_word, const tensorflow::int64 word_index) {
-        tensorflow::Tensor in_word = tensorflow::Tensor(tensorflow::DT_INT32, tensorflow::TensorShape({1, 1}));
-        in_word.scalar<int>()() = history_word;
-	    tensorflow::Tensor delayed_dim0_size = tensorflow::Tensor(tensorflow::DT_INT32, tensorflow::TensorShape({1}));
-        delayed_dim0_size.scalar<int>()() = 1;
-        tensorflow::Tensor epoch_step = tensorflow::Tensor(tensorflow::DT_INT64, tensorflow::TensorShape({}));
-	    epoch_step.scalar<tensorflow::int64>()() = word_index;
-        std::vector<tensorflow::Tensor> outputs;
-        std::vector<std::pair<std::string, tensorflow::Tensor>> inputs;
-        inputs = {{tensor_names[0], delayed_dim0_size},
-                 {tensor_names[1], in_word},
-            	{tensor_names[2], epoch_step}};
-        TF_CHECK_OK(session->Run(inputs,{tensor_names[3]},
-					{tensor_names[4]}, &outputs));
-        tensorflow::Tensor probs = outputs[0];
-        float *probs_ptr = probs.flat<float>().data(); // access the value of the Tensor "score"
-		std::vector<float> probs_vec;
-        probs_vec.resize(probs.dim_size(2));
-        std::copy(probs_ptr, probs_ptr + probs_vec.size(), probs_vec.begin());
-
-		return log(probs_vec[target_word]);
+// Extract the current states of LSTM and store them in the hypothesis
+void HtkLatticeRescorer::TF_ExtractState(tensorflow::Session* session,
+                                         const std::vector<std::string> state_vars, State *state) const {
+  std::vector<float> lstm_state;
+  std::vector<tensorflow::Tensor> outputs;
+  for (int i=0; i < state_vars.size(); i++) {
+    TF_CHECK_OK(session->Run({}, {state_vars[i]}, {}, &outputs));
+    float *keep_state_var_ptr = outputs[0].flat<float>().data(); // access the value of the Tensor "score"
+    lstm_state.resize(outputs[0].dim_size(1));
+    std::copy_n(keep_state_var_ptr, lstm_state.size(), lstm_state.begin());
+    state->states.push_back(lstm_state);
+  }
 }
 
+// Compute log p(w|h)
+float HtkLatticeRescorer::TF_ComputeLogProbability(tensorflow::Session* session,
+                                                   const std::vector<std::string> tensor_names,
+                                                   const int history_word, const int target_word,
+                                                   const tensorflow::int64 word_index) {
+  tensorflow::Tensor in_word = tensorflow::Tensor(tensorflow::DT_INT32, tensorflow::TensorShape({1, 1}));
+  in_word.scalar<int>()() = history_word;
+  tensorflow::Tensor delayed_dim0_size = tensorflow::Tensor(tensorflow::DT_INT32, tensorflow::TensorShape({1}));
+  delayed_dim0_size.scalar<int>()() = 1;
+  tensorflow::Tensor epoch_step = tensorflow::Tensor(tensorflow::DT_INT64, tensorflow::TensorShape({}));
+  epoch_step.scalar<tensorflow::int64>()() = word_index;
+  std::vector<tensorflow::Tensor> outputs;
+  std::vector<std::pair<std::string, tensorflow::Tensor>> inputs;
+  inputs = {{tensor_names[0], delayed_dim0_size}, {tensor_names[1], in_word}, {tensor_names[2], epoch_step}};
+  TF_CHECK_OK(session->Run(inputs,{tensor_names[3]}, {tensor_names[4]}, &outputs));
+  tensorflow::Tensor probs = outputs[0];
+  float *probs_ptr = probs.flat<float>().data();  // access the value of the Tensor "score"
+  std::vector<float> probs_vec;
+  probs_vec.resize(probs.dim_size(2));
+  std::copy(probs_ptr, probs_ptr + probs_vec.size(), probs_vec.begin());
+  return log(probs_vec[target_word]);
+}

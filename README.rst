@@ -47,5 +47,5 @@ There is also `a wiki <https://github.com/rwth-i6/returnn/wiki>`_.
 Questions can also be asked on
 `StackOverflow using the RETURNN tag <https://stackoverflow.com/questions/tagged/returnn>`_.
 
-.. image:: https://travis-ci.org/rwth-i6/returnn.svg?branch=master
-    :target: https://travis-ci.org/rwth-i6/returnn
+.. image:: https://github.com/rwth-i6/returnn/workflows/CI/badge.svg
+    :target: https://github.com/rwth-i6/returnn/actions

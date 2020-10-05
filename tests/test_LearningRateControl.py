@@ -1,18 +1,16 @@
 
 import sys
-sys.path += ["."]  # Python 3 hack
+import os
 
-from Config import Config
-from LearningRateControl import *
+import _setup_test_env  # noqa
+from returnn.config import Config
+from returnn.learning_rate_control import *
 from nose.tools import assert_equal
 import numpy
 import unittest
 
-import better_exchook
-better_exchook.replace_traceback_format_tb()
-
-from Log import log
-log.initialize()
+from returnn.util import better_exchook
+from returnn.log import log
 
 
 def test_save_load():
@@ -69,7 +67,7 @@ def test_load():
       'train_error_ctc': 0.13954045252681482,
       'train_error_decision': 0.0,
       'train_error_output/output_prob': 0.106904268810835,
-      'train_score_ctc': 0.5132869609859635, 
+      'train_score_ctc': 0.5132869609859635,
       'train_score_output/output_prob': 0.5098970897590558,
       }),
     }""")

@@ -1,22 +1,22 @@
 
 import sys
-sys.path += ["."]  # Python 3 hack
+import os
 
-
+import _setup_test_env  # noqa
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_true, assert_false
-from Config import Config
+from returnn.config import Config
 try:
   from StringIO import StringIO
 except ImportError:  # Python 3
   from io import StringIO
-from Network import LayerNetwork
-import TheanoUtil
+from returnn.theano.network import LayerNetwork
+import returnn.theano.util as theano_util
 import h5py
 import tempfile
 import os
 
 
-TheanoUtil.monkey_patches()
+theano_util.monkey_patches()
 
 
 config_enc_dec1_json = """
@@ -54,7 +54,7 @@ def test_enc_dec1_init():
 
 
 def test_enc_dec1_hdf():
-  filename = tempfile.mktemp(prefix="crnn-model-test")
+  filename = tempfile.mktemp(prefix="returnn-model-test")
   model = h5py.File(filename, "w")
 
   config = Config()

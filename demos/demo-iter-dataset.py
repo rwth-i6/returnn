@@ -1,24 +1,23 @@
 #!/usr/bin/env python
 
+"""
+Iterate through a dataset, just like RETURNN would do in training.
+"""
+
 from __future__ import print_function
 
 import sys
-import os
+import typing
 
-# Add parent dir to Python path so that we can use GeneratingDataset and other CRNN code.
-my_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.normpath(my_dir + "/..")
-if parent_dir not in sys.path:
-  sys.path += [parent_dir]
-
-import rnn
-from Engine import Engine
-from Log import log
+import _setup_returnn_env  # noqa
+from returnn import __main__ as rnn
+from returnn.log import log
+from returnn.engine.base import EngineBase
 
 dev_num_batches = 1
 
 
-def iterateDataset(dataset, recurrent_net, batch_size, max_seqs):
+def iterate_dataset(dataset, recurrent_net, batch_size, max_seqs):
   """
   :type dataset: Dataset.Dataset
   :type recurrent_net: bool
@@ -33,9 +32,12 @@ def iterateDataset(dataset, recurrent_net, batch_size, max_seqs):
     batch_gen.advance(len(batches))
 
 
-def iterateEpochs():
-  start_epoch, start_batch = Engine.get_train_start_epoch_batch(config)
-  final_epoch = Engine.config_get_final_epoch(config)
+def iterate_epochs():
+  """
+  Iterate through epochs.
+  """
+  start_epoch, start_batch = EngineBase.get_train_start_epoch_batch(config)
+  final_epoch = EngineBase.config_get_final_epoch(config)
 
   print("Starting with epoch %i, batch %i." % (start_epoch, start_batch), file=log.v3)
   print("Final epoch is: %i" % final_epoch, file=log.v3)
@@ -47,19 +49,26 @@ def iterateEpochs():
   for epoch in range(start_epoch, final_epoch + 1):
     print("Epoch %i." % epoch, file=log.v3)
     rnn.train_data.init_seq_order(epoch)
-    iterateDataset(rnn.train_data, recurrent_net=recurrent_net, batch_size=batch_size, max_seqs=max_seqs)
+    iterate_dataset(rnn.train_data, recurrent_net=recurrent_net, batch_size=batch_size, max_seqs=max_seqs)
 
   print("Finished all epochs.", file=log.v3)
 
 
-def init(configFilename, commandLineOptions):
+config = None  # type: typing.Optional["returnn.config.Config"]
+
+
+def init(config_filename, command_line_options):
+  """
+  :param str config_filename:
+  :param list[str] command_line_options:
+  """
   rnn.init_better_exchook()
   rnn.init_thread_join_hack()
-  rnn.init_config(configFilename, commandLineOptions)
+  rnn.init_config(config_filename, command_line_options)
   global config
   config = rnn.config
   rnn.init_log()
-  print("CRNN demo-dataset starting up", file=log.v3)
+  print("RETURNN demo-dataset starting up", file=log.v3)
   rnn.init_faulthandler()
   rnn.init_config_json_network()
   rnn.init_data()
@@ -67,9 +76,12 @@ def init(configFilename, commandLineOptions):
 
 
 def main(argv):
+  """
+  Main entry.
+  """
   assert len(argv) >= 2, "usage: %s <config>" % argv[0]
-  init(configFilename=argv[1], commandLineOptions=argv[2:])
-  iterateEpochs()
+  init(config_filename=argv[1], command_line_options=argv[2:])
+  iterate_epochs()
   rnn.finalize()
 
 

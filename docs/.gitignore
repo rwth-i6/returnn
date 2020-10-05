@@ -2,4 +2,6 @@
 
 # auto generated at the moment
 /api/*.rst
-/crnn
+/layer_reference/units.rst
+optimizer.rst
+/returnn

@@ -1,26 +1,26 @@
 
 import sys
-sys.path += ["."]  # Python 3 hack
+import os
 
-
-import NativeOp
+import _setup_test_env  # noqa
+import returnn.native_op as native_op
 import numpy
 from numpy.testing.utils import assert_almost_equal
 import theano.tensor as T
-import TheanoUtil
+import returnn.theano.util as theano_util
 import sys
 f32 = "float32"
 
 
-import better_exchook
-from Log import log
+from returnn.util import better_exchook
+from returnn.log import log
 
 better_exchook.replace_traceback_format_tb()
 log.initialize()  # some code might need it
-TheanoUtil.monkey_patches()
+theano_util.monkey_patches()
 
 
-from NativeOp import subtensor_batched_index
+from returnn.theano.native_op import subtensor_batched_index
 
 
 def test_1():

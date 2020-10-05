@@ -6,133 +6,11 @@ Given BPE codes/vocab, create a lexicon (mapping of words to all possible BPE se
 
 from __future__ import print_function
 
-import typing
 from argparse import ArgumentParser
 from xml.etree import ElementTree
 
-
-BpeMergeSymbol = "@@"
-
-
-class PrefixTree:
-  """
-  Prefix tree / trie.
-  This class represents both a single node and the tree.
-  """
-
-  def __init__(self, prefix="", root=None):
-    """
-    :param str prefix:
-    :param PrefixTree|None root:
-    """
-    self.prefix = prefix
-    self.arcs = {}  # type: typing.Dict[str,PrefixTree]
-    self.finished = False
-    self.bpe_finished = False
-    self.is_root = not root
-    self.root = root
-
-  def add(self, postfix, root=None):
-    """
-    :param str postfix:
-    :param None|PrefixTree root:
-    :rtype: PrefixTree
-    """
-    if not root:
-      if self.is_root:
-        root = self
-      else:
-        assert self.root
-        root = self.root
-    if postfix == BpeMergeSymbol:
-      arc = postfix
-      postfix_ = ""
-    else:
-      arc = postfix[:1]
-      postfix_ = postfix[1:]
-    if arc in self.arcs:
-      child = self.arcs[arc]
-    else:
-      child = PrefixTree(root=root, prefix=self.prefix + arc)
-      self.arcs[arc] = child
-    if arc == BpeMergeSymbol and not postfix_:
-      self.bpe_finished = True
-    if postfix_:
-      return child.add(postfix_, root=root)
-    else:
-      child.finished = True
-      return child
-
-
-class Hyp:
-  """
-  Represents a hypothesis in the search.
-  """
-
-  def __init__(self, bpe_sym_history, cur_node):
-    """
-    :param list[str] bpe_sym_history:
-    :param PrefixTree cur_node:
-    """
-    self.bpe_sym_history = bpe_sym_history
-    self.cur_node = cur_node
-
-  def copy(self):
-    pass
-
-
-class Search:
-  """
-  Covers the search hyps and the search itself.
-  """
-
-  def __init__(self, bpe, word, word_pos=0):
-    """
-    :param PrefixTree bpe:
-    :param str word:
-    :param int word_pos:
-    """
-    self.bpe = bpe
-    self.word = word
-    self.word_pos = word_pos
-    self.hyps = [Hyp(bpe_sym_history=[], cur_node=bpe)]  # type: typing.List[Hyp]
-    self.final_bpe_seqs = None  # type: typing.Optional[typing.List[typing.List[str]]]
-
-  def _get_finished(self):
-    assert self.word_pos == len(self.word)
-    finals = []  # type: typing.List[typing.List[str]]
-    for hyp in self.hyps:
-      if hyp.cur_node.finished:
-        finals.append(hyp.bpe_sym_history + [hyp.cur_node.prefix])
-    self.final_bpe_seqs = finals
-
-  def _expand(self):
-    assert self.word_pos < len(self.word)
-    char = self.word[self.word_pos]
-    new_hyps = []  # type: typing.List[Hyp]
-    for hyp in self.hyps:
-      if hyp.cur_node.bpe_finished:
-        next_node = self.bpe.arcs.get(char)
-        if next_node:
-          new_hyps.append(
-            Hyp(
-              bpe_sym_history=hyp.bpe_sym_history + [hyp.cur_node.prefix + "@@"],
-              cur_node=next_node))
-      next_node = hyp.cur_node.arcs.get(char)
-      if next_node:
-        new_hyps.append(Hyp(bpe_sym_history=hyp.bpe_sym_history, cur_node=next_node))
-    self.hyps = new_hyps
-
-  def search(self):
-    """
-    :return: collection of possible BPE symbol seqs
-    :rtype: list[list[str]]
-    """
-    while self.word_pos < len(self.word):
-      self._expand()
-      self.word_pos += 1
-    self._get_finished()
-    return self.final_bpe_seqs
+import _setup_returnn_env  # noqa
+from returnn.util import bpe as bpe_utils
 
 
 def parse_vocab(filename):
@@ -198,6 +76,9 @@ def xml_prettify(element, indent='  '):
 
 
 def main():
+  """
+  Main entry.
+  """
   arg_parser = ArgumentParser()
   arg_parser.add_argument("--bpe_vocab", required=True)
   arg_parser.add_argument("--word_vocab", required=True)
@@ -213,7 +94,7 @@ def main():
   print("Words: num %i, first %r" % (len(words), words[0]))
 
   print("Build BPE prefix tree...")
-  bpe = PrefixTree()
+  bpe = bpe_utils.PrefixTree()
   for bpe_sym in bpe_syms:
     bpe.add(bpe_sym)
 
@@ -227,11 +108,15 @@ def main():
 
   visited_words = set()
 
+  # noinspection PyShadowingNames
   def visit_word(word):
+    """
+    :param str word:
+    """
     if word in visited_words:
       return
     visited_words.add(word)
-    bpe_sym_seqs = Search(bpe=bpe, word=word).search()
+    bpe_sym_seqs = bpe_utils.CharSyncSearch(bpe=bpe, word=word).search()
     if not bpe_sym_seqs:
       print("no BPE seq found for word %r" % word)
       return
@@ -253,7 +138,7 @@ def main():
     visit_word(word)
 
   for bpe_sym in bpe_syms:
-    if bpe_sym.endswith(BpeMergeSymbol):
+    if bpe_sym.endswith(bpe_utils.BpeMergeSymbol):
       continue
     if bpe_sym not in words:
       continue
@@ -271,6 +156,6 @@ def main():
 
 
 if __name__ == '__main__':
-  import better_exchook
+  from returnn.util import better_exchook
   better_exchook.install()
   main()

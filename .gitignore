@@ -22,6 +22,10 @@ ipython-kernel-*.json
 /MANIFEST
 /build
 /dist
+/_setup_info_generated.py
 
 # via test cases run directly in this directory
 /dataset_id*
+
+# via GitHub codespaces
+/pythonenv*

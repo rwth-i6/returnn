@@ -1,36 +1,33 @@
-import logging
-logging.getLogger('tensorflow').disabled = True
+
+import _setup_test_env  # noqa
 import tensorflow as tf
 import sys
 import os
-sys.path += ["."]  # Python 3 hack
-sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
 from nose.tools import assert_equal, assert_is_instance
 import contextlib
 import unittest
 import numpy.testing
 from pprint import pprint
-import better_exchook
-better_exchook.replace_traceback_format_tb()
+from returnn.util import better_exchook
+from returnn.config import Config
+from returnn.tf.network import *
+from returnn.tf.layers.basic import *
+from returnn.tf.engine import *
+from returnn.log import log
+import returnn.tf.compat as tf_compat
+import returnn.tf.util.basic as tf_util
 
-from Config import Config
-from TFNetwork import *
-from TFNetworkLayer import *
-from TFEngine import *
-from Log import log
-import TFUtil
-TFUtil.debug_register_better_repr()
-
-log.initialize(verbosity=[5])
 
 @contextlib.contextmanager
 def make_scope():
   with tf.Graph().as_default() as graph:
-    with tf.Session(graph=graph) as session:
+    with tf_compat.v1.Session(graph=graph) as session:
       yield session
+
 
 network = {}
 _last = "data"
+
 
 def build_resnet(conv_time_dim):
   # network
@@ -303,11 +300,11 @@ def build_resnet(conv_time_dim):
   else:
     dr = (1, 1)
 
-  """ 
+  """
   See https://arxiv.org/pdf/1611.09288.pdf
   Fully connected layers are equivalent to, and can be trivially replaced by,
-  convolutional layers with kernel (1×1) (except the first convolution which 
-  has kernel size matching the output of the conv stack before being flattened 
+  convolutional layers with kernel (1×1) (except the first convolution which
+  has kernel size matching the output of the conv stack before being flattened
   for the fully connected layers).
   """
   add_sequential_layer("fc1" , {"class": "conv", "n_out": 2048, "filter_size": (3, 2), "auto_use_channel_first": NCHW,
@@ -362,11 +359,11 @@ def test_ResNet():
     # Making two time-steps
     time_size = window_size + 1
     data_layer_win = Data(name='win', shape=(window_size, 64, 3), dim = 3, batch_dim_axis = 0, sparse = False)
-    data_layer_win.placeholder = tf.placeholder(shape=(None, window_size, 64, 3), dtype=tf.float32)
+    data_layer_win.placeholder = tf_compat.v1.placeholder(shape=(None, window_size, 64, 3), dtype=tf.float32)
 
     data_layer_nowin = Data(name='nowin', shape=(time_size, 64, 3), dim = 3, batch_dim_axis = 0,
                             time_dim_axis = 1, sparse = False)
-    data_layer_nowin.placeholder = tf.placeholder(shape=(None, time_size, 64, 3), dtype=tf.float32)
+    data_layer_nowin.placeholder = tf_compat.v1.placeholder(shape=(None, time_size, 64, 3), dtype=tf.float32)
 
     extern_data_nowin = ExternData()
     extern_data_nowin.data['data'] = data_layer_nowin

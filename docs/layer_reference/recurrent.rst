@@ -7,49 +7,49 @@ Recurrent Layers
 Choice Layer
 ------------
 
-.. autoclass:: TFNetworkRecLayer.ChoiceLayer
+.. autoclass:: returnn.tf.layers.rec.ChoiceLayer
     :members:
     :undoc-members:
 
 Decision Layer
 --------------
 
-.. autoclass:: TFNetworkRecLayer.DecideLayer
+.. autoclass:: returnn.tf.layers.rec.DecideLayer
     :members:
     :undoc-members:
 
 Get Accumulated Output Layer
 ----------------------------
 
-.. autoclass:: TFNetworkRecLayer.GetRecAccumulatedOutputLayer
+.. autoclass:: returnn.tf.layers.rec.GetRecAccumulatedOutputLayer
     :members:
     :undoc-members:
 
 Get Last Hidden State Layer
 ---------------------------
 
-.. autoclass:: TFNetworkRecLayer.GetLastHiddenStateLayer
+.. autoclass:: returnn.tf.layers.rec.GetLastHiddenStateLayer
     :members:
     :undoc-members:
 
 Positional Encoding Layer
 -------------------------
 
-.. autoclass:: TFNetworkRecLayer.PositionalEncodingLayer
+.. autoclass:: returnn.tf.layers.rec.PositionalEncodingLayer
     :members:
     :undoc-members:
 
 Recurrent Layer
 ---------------
 
-.. autoclass:: TFNetworkRecLayer.RecLayer
+.. autoclass:: returnn.tf.layers.rec.RecLayer
     :members:
     :undoc-members:
 
 RNN Cell Layer
 --------------
 
-.. autoclass:: TFNetworkRecLayer.RnnCellLayer
+.. autoclass:: returnn.tf.layers.rec.RnnCellLayer
     :members:
     :undoc-members:
 
@@ -57,7 +57,7 @@ RNN Cell Layer
 Self-Attention Layer
 --------------------
 
-.. autoclass:: TFNetworkRecLayer.SelfAttentionLayer
+.. autoclass:: returnn.tf.layers.rec.SelfAttentionLayer
     :members:
     :undoc-members:
 

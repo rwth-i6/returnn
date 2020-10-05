@@ -1,36 +1,30 @@
 
-import sys
-sys.path += ["."]  # Python 3 hack
-
+import _setup_test_env  # noqa
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
-from EngineUtil import assign_dev_data, assign_dev_data_single_seq
-from EngineBatch import Batch
-from Log import log
-from Config import Config
-import Util
-from GeneratingDataset import GeneratingDataset
-from Dataset import DatasetSeq
-from SprintDataset import ExternSprintDataset
+from returnn.theano.engine_util import assign_dev_data, assign_dev_data_single_seq
+from returnn.engine.batch import Batch
+from returnn.log import log
+from returnn.config import Config
+import returnn.util.basic as util
+from returnn.datasets.generating import GeneratingDataset
+from returnn.datasets.basic import DatasetSeq
+from returnn.datasets.sprint import ExternSprintDataset
 import numpy as np
 import os
 import sys
 import unittest
-import better_exchook
+from returnn.util import better_exchook
 
 try:
   import theano
 except ImportError:
   theano = None
 
-better_exchook.install()
-better_exchook.replace_traceback_format_tb()
-Util.init_thread_join_hack()
-
 if theano:
-  from Device import Device
-  import TheanoUtil
+  from returnn.theano.device import Device
+  import returnn.theano.util as theano_util
 
-  TheanoUtil.monkey_patches()
+  theano_util.monkey_patches()
 
 
 dummyconfig_dict = {
@@ -42,7 +36,6 @@ dummyconfig_dict = {
   "bidirectional": False,
 }
 
-log.initialize(verbosity=[5])
 
 os.chdir((os.path.dirname(__file__) or ".") + "/..")
 assert os.path.exists("rnn.py")
@@ -72,7 +65,7 @@ def test_read_all():
   config = Config()
   config.update(dummyconfig_dict)
   print("Create ExternSprintDataset")
-  python2_exec = Util.which("python2")
+  python2_exec = util.which("python2")
   if python2_exec is None:
     raise unittest.SkipTest("python2 not found")
   num_seqs = 4
@@ -166,7 +159,7 @@ def test_py2_client():
   config = Config()
   config.update(dummyconfig_dict)
   print("Create ExternSprintDataset")
-  python2_exec = Util.which("python2")
+  python2_exec = util.which("python2")
   if python2_exec is None:
     raise unittest.SkipTest("python2 not found")
   num_seqs = 4

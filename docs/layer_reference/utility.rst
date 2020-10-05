@@ -7,42 +7,42 @@ Utility Layers
 Framewise Statistics Layer
 --------------------------
 
-.. autoclass:: TFNetworkLayer.FramewiseStatisticsLayer
+.. autoclass:: returnn.tf.layers.basic.FramewiseStatisticsLayer
     :members:
     :undoc-members:
 
 HDFDumpLayer
 ------------
 
-.. autoclass:: TFNetworkLayer.HDFDumpLayer
+.. autoclass:: returnn.tf.layers.basic.HDFDumpLayer
     :members:
     :undoc-members:
 
 Image Summary Layer
 -------------------
 
-.. autoclass:: TFNetworkLayer.ImageSummaryLayer
+.. autoclass:: returnn.tf.layers.basic.ImageSummaryLayer
     :members:
     :undoc-members:
 
 Print Layer
 -----------
 
-.. autoclass:: TFNetworkLayer.PrintLayer
+.. autoclass:: returnn.tf.layers.basic.PrintLayer
     :members:
     :undoc-members:
 
-Scale Gradient Layer
+Scaled Gradient Layer
 --------------------
 
-.. autoclass:: TFNetworkLayer.ScaleGradientLayer
+.. autoclass:: returnn.tf.layers.basic.ScaledGradientLayer
     :members:
     :undoc-members:
 
 Synthetic Gradient Layer
 ------------------------
 
-.. autoclass:: TFNetworkLayer.SyntheticGradientLayer
+.. autoclass:: returnn.tf.layers.basic.SyntheticGradientLayer
     :members:
     :undoc-members:
 

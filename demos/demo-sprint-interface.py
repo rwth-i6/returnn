@@ -16,8 +16,11 @@ assert os.path.exists("%s/rnn.py" % _base_dir)
 
 
 def main():
+  """
+  Main entry.
+  """
   tmp_dir = tempfile.mkdtemp()
-  os.symlink(_base_dir, "%s/returnn" % tmp_dir)
+  os.symlink("%s/returnn" % _base_dir, "%s/returnn" % tmp_dir)
   config_fn = "%s/returnn.config" % tmp_dir
   with open(config_fn, "w") as f:
     f.write("#!rnn.py\n")  # Python format
@@ -28,9 +31,9 @@ def main():
   open("%s/model.001.meta" % tmp_dir, "w").close()
   sys.path.insert(0, tmp_dir)
   print("Import SprintInterface (relative import).")
-  import returnn.SprintInterface as SprintInterface
+  import returnn.sprint.interface
   print("SprintInterface.init")
-  SprintInterface.init(
+  returnn.sprint.interface.init(
     inputDim=3, outputDim=5, cudaEnabled=0, targetMode='forward-only',
     config='epoch:1,action:nop,configfile:%s' % config_fn)  # normally action:forward
   print("Ok.")
