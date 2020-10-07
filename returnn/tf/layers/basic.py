@@ -2195,7 +2195,8 @@ class MergeDimsLayer(_ConcatInputLayer):
       input_data=input_data, merge_axes=axes, old_axis=input_data.batch_dim_axis)
     new_shape = [d for (i, d) in enumerate(data.batch_shape) if i not in axes]
     new_shape.insert(merge_target_axis, res_dim)
-    new_shape.pop(data.batch_dim_axis)
+    if data.batch_dim_axis is not None:
+      new_shape.pop(data.batch_dim_axis)
     data.shape = tuple(new_shape)
     data.time_dim_axis = cls._old_axis_to_new_axis(
       input_data=input_data, merge_axes=axes, old_axis=input_data.time_dim_axis)
