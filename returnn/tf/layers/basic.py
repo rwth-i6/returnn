@@ -4294,6 +4294,11 @@ class DotLayer(LayerBase):
     b_var_dims = [b_shape[i] for i in b_var_axes]
 
     def find_axis(a_axis, b_axis):
+      """
+      :param int|None a_axis:
+      :param int|None b_axis:
+      :rtype: int|None|NotSpecified
+      """
       axis = None
       if a_axis is not None:
         axis = cls._axis1_to_output(a_axis, a_rem_axes=a_rem_axes, a_var_axes=a_var_axes)
