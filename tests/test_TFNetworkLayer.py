@@ -2227,6 +2227,52 @@ def test_DotLayer():
     assert_equal(seq_lens.tolist(), a_seq_lens)
     assert_equal(out.shape, (B, H, max(a_seq_lens), 1))
 
+def test_DotLayer2():
+  """ Test if DotLayer can handle inputs which dont have a batch-dim
+  """
+  with make_scope() as session:
+    B = 3
+    S1, S2, R, V = 2, 4, 8, 16
+    net = TFNetwork(extern_data=ExternData())
+
+    a = InternalLayer(name='A',
+                      network=net,
+                      out_type={'shape': (S1, S2, R),
+                                'batch_dim_axis': 0,
+                                'time_dim_axis': None})
+    assert a.output.batch_dim_axis == 0
+    assert a.output.time_dim_axis is None
+    assert a.output.shape == (S1, S2, R)
+    assert a.output.dim == R
+    a.output.placeholder = tf.reshape(tf.range(B * S1 * S2 * R, dtype=tf.float32), (B, S1, S2, R))
+    a.output.size_placeholder = {}
+
+    b = InternalLayer(name='B',
+                      network=net,
+                      out_type={'shape': (S1, S2, R, V),
+                                'batch_dim_axis': None,
+                                'time_dim_axis': None})
+    assert b.output.batch_dim_axis == None
+    assert b.output.time_dim_axis == None
+    assert b.output.shape == (S1, S2, R, V)
+    assert b.output.dim == V
+    b.output.placeholder = tf.reshape(tf.range(S1 * S2 * R * V, dtype=tf.float32), (S1, S2, R, V))
+    b.output.size_placeholder = {}
+
+    kwargs = dict(
+      name="dot", network=net, sources=[a, b], debug=True,
+      red1='F', red2='spatial:-1', var1='B', var2='F')
+    layer = DotLayer(output=DotLayer.get_out_data_from_opts(**kwargs), **kwargs)
+    print(layer, layer.output)
+    assert layer.output.batch_dim_axis == 2
+    assert layer.output.time_dim_axis is None
+    assert layer.output.shape == (S1, S2, V)
+    assert layer.output.batch_shape == (S1, S2, None, V)
+    assert layer.output.dim == V
+    out = session.run(layer.output.placeholder)
+    assert isinstance(out, numpy.ndarray)
+    assert_equal(out.shape, (S1, S2, B, V))
+
 
 def test_subnet_load_on_init():
   import tempfile
