@@ -922,8 +922,6 @@ class CombinedDataset(CachedDataset2):
       total_num_seqs = None
 
     if total_num_seqs is not None:
-      self.used_num_seqs_per_subset = [
-        self.datasets[self.dataset_idx2key_map[dataset_idx]].num_seqs for dataset_idx in range(len(self.datasets))]
       self.dataset_seq_idx_boundaries = self._create_dataset_seq_idx_boundaries()
 
       if self.sampling_sizes:
@@ -958,9 +956,11 @@ class CombinedDataset(CachedDataset2):
       del seq_order
 
       # Re-initialize sequence orders of sub-datasets with created sequence list.
+      self.used_num_seqs_per_subset = []
       for dataset_idx, dataset_key in self.dataset_idx2key_map.items():
         assert self.datasets[dataset_key].have_corpus_seq_idx()
         self.datasets[dataset_key].init_seq_order(epoch=epoch, seq_order=seq_order_subdatasets[dataset_idx])
+        self.used_num_seqs_per_subset.append(len(seq_order_subdatasets[dataset_idx]))
 
     else:
       self.dataset_sorted_seq_idx_list = []  # We will fill this as we go
@@ -975,8 +975,11 @@ class CombinedDataset(CachedDataset2):
 
     :rtype: list[int]
     """
+    num_seqs_per_subset = [
+      self.datasets[self.dataset_idx2key_map[dataset_idx]].num_seqs for dataset_idx in range(len(self.datasets))]
+
     dataset_seq_idx_boundaries = [0]
-    for dataset_num_seqs in self.used_num_seqs_per_subset:
+    for dataset_num_seqs in num_seqs_per_subset:
       dataset_seq_idx_boundaries.append(dataset_num_seqs + dataset_seq_idx_boundaries[-1])
 
     return dataset_seq_idx_boundaries
