@@ -117,6 +117,14 @@ but another layer in the network, add 'layer:' as prefix.
 
 **dropout** [:class:`float`] if specified, applies dropout in the input of the layer.
 
+**dropout_noise_shape** [:class:`None` | :class:`dict` | :class:`list` | :class:`tuple`] Specify for which axes the dropout
+mask will be broadcasted (= re-used). Use `1` for broadcasting and `None` otherwise. When using a `dict`, the default
+axis labels can be used (see :ref:`Managing Axes <managing_axes>` below).
+To disable broadcasting for all axes `{"*": None}` can be used.
+Note that the the dropout mask will always be shared inside a recurrent layer for all recurrent steps.
+
+**dropout_on_forward** [:class:`bool`] if set to true, will also apply dropout during all tasks, and not only during training.
+
 **spatial_smoothing** [:class:`float`] if specified, add spatial-smoothing loss of the layer output with the given factor to the total constraints.
 
 **register_as_extern_data** [:class:`str`] register the output of the layer as an accessable entry of extern_data.
@@ -158,6 +166,7 @@ The initialization is performed in :func:`TFUtil.get_initializer`.
 *Note:* the initalizers can be accessed both as e.g. ``"glorot_normal"`` or ``"glorot_normal_initializer"``.
 
 .. _managing_axes:
+
 Managing Axes
 -------------
 
@@ -166,6 +175,7 @@ are not visible to the user, and handled by RETURNN internally with the help of 
 For layers that operate on specific axes, meaning they have an ``axis`` or ``axes`` parameter, different identifier
 (strings) can be used to select the correct axes. These identifier are e.g.
 
+    - ``*:`` select all axes
     - ``B|batch:`` select the batch axis
     - ``T|time:`` select the time axis
     - ``F|feature`` select the feature axis
@@ -175,12 +185,12 @@ For layers that operate on specific axes, meaning they have an ``axis`` or ``axe
     - ``D:<int>|dyn:<int>|dynamic:<int>`` select a specific dynamic axis (zero-based, can be negative)
     - ``T?`` select time axis if existing, none otherwise
     - ``spatial_except_time`` select all spatial axes but also not the time axis
-    - ``except_time```select all axes except time and batch axis
+    - ``except_time`` select all axes except time and batch axis
     - ``except_batch`` select all axes except batch axis
 
 
 Note that all identifier can be used case-insensitive.
-For ``axes`` paramater it is also possible to provide a tuple or list of the above identifiers.
+For ``axes`` parameter it is also possible to provide a tuple or list of the above identifiers.
 For debugging purposes it is also possible to use an intereger to directly access an axis,
 but this should not be used in finished configurations.
 If something is unclear, or not working as intended, please refer to

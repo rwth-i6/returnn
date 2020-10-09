@@ -167,9 +167,11 @@ def get_concat_sources_data_template(src_layers, name=None):
 def concat_sources_with_opt_dropout(src_layers, dropout=0, dropout_noise_shape=None, dropout_on_forward=False):
   """
   :param list[LayerBase] src_layers:
-  :param float dropout: will be applied if train_flag is set
-  :param tuple|list|dict|None dropout_noise_shape:
-  :param bool dropout_on_forward: apply dropout during inference
+  :param float dropout: dropout rate that will be applied if train_flag is set or dropout_on_forward is enabled
+  :param tuple|list|dict|None dropout_noise_shape: provide 1 for broadcasting or None otherwise for each axis.
+  The default "None" will broadcast across all dynamic axes including the batch axis.
+  Use {"*": None} to disable broadcasting for all axes.
+  :param bool dropout_on_forward: apply dropout also during inference
   :return: data with placeholders set
   :rtype: Data
   """
