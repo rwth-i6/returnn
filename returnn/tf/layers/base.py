@@ -80,7 +80,7 @@ class LayerBase(object):
 
     :param str name:
     :param returnn.tf.network.TFNetwork network:
-    :param Data output:
+    :param Data|None output: Set a specific output instead of using :func:`get_out_data_from_opts`
     :param NotSpecified|None|int n_out: output dim
     :param dict[str] out_type: kwargs for Data class. more explicit than n_out.
     :param list[LayerBase] sources: via self.transform_config_dict()
@@ -1341,6 +1341,16 @@ class InternalLayer(LayerBase):
   """
   This is not supposed to be used by the user.
   It is used by some code to construct a wrapper layer or so.
+  """
+
+
+class DataNotAvailableLayer(InternalLayer):
+  """
+  This is a dummy layer that is created when the output template is flagged "not available for inference".
+  The output template should be passed to the constructor to correctly forward the information
+  in case any dependent output is exported with "register_as_extern_data".
+
+  See :func:`returnn.tf.network._create_layer`
   """
 
 
