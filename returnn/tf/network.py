@@ -420,36 +420,6 @@ class TFNetwork(object):
       return self.extra_parent_net.get_absolute_name_prefix() + my_prefix
     return ""
 
-  def construct_from(self, list_or_dict):
-    """
-    :param list[dict[str]] | dict[str,dict[str]] list_or_dict:
-    """
-    if isinstance(list_or_dict, (tuple, list)):
-      self.construct_from_list(list_or_dict)
-    elif isinstance(list_or_dict, dict):
-      self.construct_from_dict(list_or_dict)
-    else:
-      raise Exception("unsupported: %r (type %r)" % (list_or_dict, type(list_or_dict)))
-
-  def construct_from_list(self, net_list):
-    """
-    :param list[dict[str]] net_list: list of layer descriptions
-    """
-    net_dict = {}  # type: typing.Dict[str,typing.Dict[str]]
-    for i, layer_desc in enumerate(net_list):
-      layer_desc = layer_desc.copy()
-      name = layer_desc.pop("name", None)
-      if not name:
-        if i == len(net_list) - 1:
-          name = "output"
-        else:
-          name = "layer%i" % i
-      if i == len(net_list) - 1:
-        if "target" not in layer_desc:
-          layer_desc["target"] = self.extern_data.default_target
-      net_dict[name] = layer_desc
-    self.construct_from_dict(net_dict)
-
   def construct_from_dict(self, net_dict):
     """
     :param dict[str,dict[str]] net_dict:
