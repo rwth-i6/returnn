@@ -167,9 +167,11 @@ def get_concat_sources_data_template(src_layers, name=None):
 def concat_sources_with_opt_dropout(src_layers, dropout=0, dropout_noise_shape=None, dropout_on_forward=False):
   """
   :param list[LayerBase] src_layers:
-  :param float dropout: will be applied if train_flag is set
-  :param tuple|list|dict|None dropout_noise_shape:
-  :param bool dropout_on_forward: apply dropout during inference
+  :param float dropout: dropout rate that will be applied if train_flag is set or dropout_on_forward is enabled
+  :param tuple|list|dict|None dropout_noise_shape: provide 1 for broadcasting or None otherwise for each axis.
+  The default "None" will broadcast across all dynamic axes including the batch axis.
+  Use {"*": None} to disable broadcasting for all axes.
+  :param bool dropout_on_forward: apply dropout also during inference
   :return: data with placeholders set
   :rtype: Data
   """
@@ -2195,7 +2197,8 @@ class MergeDimsLayer(_ConcatInputLayer):
       input_data=input_data, merge_axes=axes, old_axis=input_data.batch_dim_axis)
     new_shape = [d for (i, d) in enumerate(data.batch_shape) if i not in axes]
     new_shape.insert(merge_target_axis, res_dim)
-    new_shape.pop(data.batch_dim_axis)
+    if data.batch_dim_axis is not None:
+      new_shape.pop(data.batch_dim_axis)
     data.shape = tuple(new_shape)
     data.time_dim_axis = cls._old_axis_to_new_axis(
       input_data=input_data, merge_axes=axes, old_axis=input_data.time_dim_axis)
@@ -4162,8 +4165,8 @@ class DotLayer(LayerBase):
     """
     from returnn.tf.util.basic import prod
     super(DotLayer, self).__init__(**kwargs)
-    a_out = self.sources[0].output.copy_as_batch_major()
-    b_out = self.sources[1].output.copy_as_batch_major()
+    a_out = self.sources[0].output.copy()
+    b_out = self.sources[1].output.copy()
     a_reduce_axes = a_out.get_axes_from_description(red1)
     b_reduce_axes = b_out.get_axes_from_description(red2)
     assert a_reduce_axes and b_reduce_axes, "%s: sources %r, red1 %r, red2 %r" % (self, self.sources, red1, red2)
@@ -4275,9 +4278,9 @@ class DotLayer(LayerBase):
     """
     assert len(sources) == 2, "dot-layer %r: needs exactly two sources" % (name,)
     # See __init__.
-    a_out = sources[0].output.copy_as_batch_major()
+    a_out = sources[0].output.copy()
     a_reduce_axes = a_out.get_axes_from_description(red1)
-    b_out = sources[1].output.copy_as_batch_major()
+    b_out = sources[1].output.copy()
     assert not a_out.beam or not b_out.beam or a_out.beam == b_out.beam
     b_reduce_axes = b_out.get_axes_from_description(red2)
     assert a_reduce_axes and b_reduce_axes, "%s: sources %r, red1 %r, red2 %r" % (name, sources, red1, red2)
@@ -4292,35 +4295,54 @@ class DotLayer(LayerBase):
     a_rem_dims = [a_shape[i] for i in a_rem_axes]
     a_var_dims = [a_shape[i] for i in a_var_axes]
     b_var_dims = [b_shape[i] for i in b_var_axes]
-    time_dim_axis = None
-    if a_out.time_dim_axis is not None:
-      time_dim_axis = cls._axis1_to_output(a_out.time_dim_axis, a_rem_axes=a_rem_axes, a_var_axes=a_var_axes)
-    if time_dim_axis is None and b_out.time_dim_axis is not None:
-      time_dim_axis = cls._axis2_to_output(
-        b_out.time_dim_axis, b_rem_axes=b_rem_axes, a_var_axes=a_var_axes, b_var_axes=b_var_axes)
-    if time_dim_axis is None and (a_out.time_dim_axis is not None or b_out.time_dim_axis is not None):
-      # We had some time dim axis before and reduced it now.
-      # But maybe there are others, so let's automatically figure out.
-      time_dim_axis = NotSpecified
+
+    def find_axis(a_axis, b_axis):
+      """
+      :param int|None a_axis:
+      :param int|None b_axis:
+      :rtype: int|None|NotSpecified
+      """
+      axis = None
+      if a_axis is not None:
+        axis = cls._axis1_to_output(a_axis, a_rem_axes=a_rem_axes, a_var_axes=a_var_axes)
+      if axis is None and b_axis is not None:
+        axis = cls._axis2_to_output(b_axis, b_rem_axes=b_rem_axes, a_var_axes=a_var_axes, b_var_axes=b_var_axes)
+      if axis is None and (a_axis is not None or b_axis is not None):
+        # We had some time dim axis before and reduced it now.
+        # But maybe there are others, so let's automatically figure out.
+        # this should not happen for the batch_dim_axis, we chack for that outside this function
+        axis = NotSpecified
+      return axis
+
+    time_dim_axis = find_axis(a_out.time_dim_axis, b_out.time_dim_axis)
+    batch_dim_axis = find_axis(a_out.batch_dim_axis, b_out.batch_dim_axis)
+    assert batch_dim_axis != NotSpecified or (a_out.batch_dim_axis is None and b_out.batch_dim_axis is None)
+
     if not b_var_dims and add_var2_if_empty:
       b_var_dims.append(1)
+
     # Collect dynamic size info.
     size_placeholder = {}
     for axis1_wo_b in sorted(a_out.size_placeholder.keys()):
-      axis_out_wb = cls._axis1_to_output(axis1_wo_b + 1, a_rem_axes=a_rem_axes, a_var_axes=a_var_axes)
+      axis_out_wb = cls._axis1_to_output(a_out.get_batch_axis(axis1_wo_b), a_rem_axes=a_rem_axes, a_var_axes=a_var_axes)
       if axis_out_wb is None:
         continue
-      size_placeholder[axis_out_wb - 1] = a_out.size_placeholder[axis1_wo_b]
+      size_placeholder[a_out.get_batch_axis_excluding_batch(axis_out_wb)] = a_out.size_placeholder[axis1_wo_b]
     for axis2_wo_b in sorted(b_out.size_placeholder.keys()):
       axis_out_wb = cls._axis2_to_output(
-        axis2_wo_b + 1, b_rem_axes=b_rem_axes, a_var_axes=a_var_axes, b_var_axes=b_var_axes)
+        b_out.get_batch_axis(axis2_wo_b), b_rem_axes=b_rem_axes, a_var_axes=a_var_axes, b_var_axes=b_var_axes)
       if axis_out_wb is None or axis_out_wb in size_placeholder:
         continue
-      size_placeholder[axis_out_wb - 1] = b_out.size_placeholder[axis2_wo_b]
+      size_placeholder[b_out.get_batch_axis_excluding_batch(axis_out_wb)] = b_out.size_placeholder[axis2_wo_b]
+
+    shape = list(a_rem_dims + a_var_dims + b_var_dims)
+    if batch_dim_axis is not None and batch_dim_axis is not NotSpecified:
+      shape.pop(batch_dim_axis)
+
     return Data(
       name="%s_output" % name,
-      shape=tuple(a_rem_dims[1:] + a_var_dims + b_var_dims),
-      batch_dim_axis=0,
+      shape=tuple(shape),
+      batch_dim_axis=batch_dim_axis,
       time_dim_axis=time_dim_axis,
       dtype=a_out.dtype,
       size_placeholder=size_placeholder,
@@ -4910,6 +4932,7 @@ class CompareLayer(LayerBase):
     elif out_type_.get("sparse", False):
       out_type_["dim"] = 2
     out_type_["dtype"] = "bool"
+    out_type_["vocab"] = None
     out_type_["name"] = "%s_output" % kwargs["name"]
     if out_type:
       if isinstance(out_type, dict):

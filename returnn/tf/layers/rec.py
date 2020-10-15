@@ -3644,7 +3644,10 @@ class RnnCellLayer(_ConcatInputLayer):
         x = self.input_data.placeholder
         if isinstance(self.cell, BaseRNNCell):
           x = self.cell.get_input_transformed(x)
-        assert not self.input_data or self.input_data.time_dim_axis is None
+        assert not self.input_data or self.input_data.time_dim_axis is None, (
+          "A recurrent layer is not allowed to have input data with a remaining time axis.\n"
+          "A possible reason for this error is that the 'target' of the rec layer does not\n"
+          "match the targets of the sub-layers")
         self.output.time_dim_axis = None
         self.output.batch_dim_axis = 0
         prev_state = self._rec_previous_layer.rec_vars_outputs["state"]
