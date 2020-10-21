@@ -17,3 +17,6 @@
 [submodule "extern/HawkAaronWarpTransducer/warp-transducer"]
 	path = returnn/extern/HawkAaronWarpTransducer/warp-transducer
 	url = https://github.com/HawkAaron/warp-transducer.git
+[submodule "returnn/extern/WarpRna/warp-rna"]
+	path = returnn/extern/WarpRna/warp-rna
+	url = https://github.com/Spotlight0xff/warp-rna.git
