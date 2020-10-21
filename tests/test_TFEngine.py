@@ -3477,6 +3477,63 @@ def test_preinit_reset_train_dataset():
       assert os.path.exists(fn)  # should have been created now
 
 
+def test_non_available_data_construction():
+  from returnn.datasets.generating import DummyDataset, StaticDataset
+  import tempfile
+  output_file = tempfile.mktemp(suffix=".hdf", prefix="nose-tf-forward")
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 7
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  dev_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  dev_data.init_seq_order(epoch=1)
+  search_data = StaticDataset(
+    data=[{'data': numpy.ones((seq_len, n_data_dim), dtype="float32")}], output_dim={'data': (n_data_dim, 2)})
+  search_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "%s/model" % _get_tmp_dir(),
+    "batch_size": 5000,
+    "max_seqs": 2,
+    "extern_data": {
+      'data': {'dim': n_data_dim, 'shape': (None, n_data_dim), 'available_for_inference': True},
+      'classes': {'dim': n_classes_dim, 'shape': (None,), 'sparse': True, 'available_for_inference': False}},
+    "num_epochs": 1,
+    "network": {
+      "data_target": {
+        "class": "linear", "activation": "tanh", "from": "data:classes", "n_out": 4,
+        "register_as_extern_data": "extra_target"},
+      "input": {"class": "linear", "from": "data", "activation": "tanh", "n_out": 3},
+      "extra_output": {
+        "class": "linear", "from": "input", "activation": "tanh", "n_out": 4,
+        "target": "extra_target", "loss": "mse"},
+      "output": {"class": "softmax", "from": "input", "target": "classes", "loss": "ce"},
+    }
+  })
+  _cleanup_old_models(config)
+  engine = Engine(config=config)
+  print("Train...")
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=dev_data)
+  engine.train()
+
+  print("Forward...")
+  engine.use_search_flag = False
+  engine.use_eval_flag = False
+  engine.use_dynamic_train_flag = False
+  engine.init_network_from_config(config)
+  engine.forward_to_hdf(data=search_data, output_file=output_file, batch_size=1)
+
+  print("Search...")
+  engine.use_search_flag = True
+  engine.init_network_from_config(config)
+  engine.search(dataset=search_data, do_eval=False)
+  print("error keys:")
+
+  engine.finalize()
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
