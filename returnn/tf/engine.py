@@ -2201,7 +2201,7 @@ class Engine(EngineBase):
   def search(self, dataset, do_eval=True, output_layer_names="output", output_file=None, output_file_format="txt"):
     """
     :param Dataset dataset:
-    :param bool do_eval: calculate errors. can only be done if we have the reference target
+    :param bool do_eval: calculate errors and print reference. can only be done if we have the reference target
     :param str|list[str] output_layer_names:
     :param str output_file:
     :param str output_file_format: "txt" or "py"
@@ -2296,7 +2296,8 @@ class Engine(EngineBase):
       for target_idx in range(num_targets):
         outputs.append(kwargs["output_" + output_layer_names[target_idx]])
         beam_scores.append(kwargs["beam_scores_" + output_layer_names[target_idx]])
-        targets.append(kwargs["target_" + target_keys[target_idx]])
+        if do_eval:
+          targets.append(kwargs["target_" + target_keys[target_idx]])
 
       n_batch = len(seq_idx)  # without beam
       assert n_batch == len(seq_tag)
@@ -2307,7 +2308,7 @@ class Engine(EngineBase):
           assert beam_scores[target_idx].shape == (n_batch, out_beam_sizes[target_idx])
 
         assert n_batch * (out_beam_sizes[target_idx] or 1) == len(outputs[target_idx])
-        if targets[target_idx] is not None:
+        if do_eval and targets[target_idx] is not None:
           assert n_batch == len(targets[target_idx])
 
         if output_layers[target_idx].output.dim == 256 and output_layers[target_idx].output.sparse:
@@ -2337,8 +2338,9 @@ class Engine(EngineBase):
                   file=log.v4)
             out_idx = batch_idx * out_beam_sizes[target_idx]
           if target_keys[target_idx] and dataset.can_serialize_data(target_keys[target_idx]):
-            print("  ref:", dataset.serialize_data(key=target_keys[target_idx], data=targets[target_idx][batch_idx]),
-                  file=log.v4)
+            if do_eval:
+              print("  ref:", dataset.serialize_data(key=target_keys[target_idx], data=targets[target_idx][batch_idx]),
+                    file=log.v4)
             if out_beam_sizes[target_idx] is None:
               print("  hyp:", dataset.serialize_data(key=target_keys[target_idx], data=outputs[target_idx][out_idx]),
                     file=log.v4)
@@ -2378,8 +2380,9 @@ class Engine(EngineBase):
       extra_fetches["beam_scores_" + output_layer_names[target_idx]] = output_layer_beam_scores[target_idx]
       # We use target_keys[target_idx] and not output_layer_names[target_idx]
       # for the key to avoid fetching the same target multiple times.
-      extra_fetches["target_" + target_keys[target_idx]] = self.network.get_extern_data(
-        target_keys[target_idx], mark_data_key_as_used=True)
+      if do_eval:
+        extra_fetches["target_" + target_keys[target_idx]] = self.network.get_extern_data(
+          target_keys[target_idx], mark_data_key_as_used=True)
 
     runner = Runner(
       engine=self, dataset=dataset, batches=batches, train=train, eval=do_eval,
