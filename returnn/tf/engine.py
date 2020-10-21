@@ -1006,6 +1006,10 @@ class Engine(EngineBase):
     if config.has("eval_datasets"):
       for dataset_name, dataset_opts in config.typed_value("eval_datasets", {}).items():
         self.eval_datasets[dataset_name] = init_dataset(dataset_opts, default_kwargs={"name": dataset_name})
+    if config.has("custom_iterate_seqs"):  # monkey-patch `iterate_seqs`
+      custom_iterate_seqs = config.typed_value("custom_iterate_seqs")
+      assert callable(custom_iterate_seqs)
+      self.train_data.__class__.iterate_seqs = custom_iterate_seqs
     self.start_epoch, self.start_batch = self.get_train_start_epoch_batch(config)
     self.batch_size = config.typed_value('batch_size', 1)
     self.shuffle_batches = config.bool('shuffle_batches', False)
