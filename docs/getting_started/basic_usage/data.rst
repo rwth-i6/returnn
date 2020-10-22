@@ -88,4 +88,8 @@ The parameter "``same_time_dims_as``" takes a dictionary with axes indices or ax
 as key and the `DimensionTag` as value.
 For the above example, there is no difference in using `'T'` or `1` as key.
 
+In case you want to synchronize layer outputs, a "``reinterpret_data``"
+layer (:class:`ReinterpretDataLayer <returnn.tf.layers.basic.ReinterpretDataLayer>`) can be used.
+
+
 
