@@ -3544,14 +3544,11 @@ def test_regression_choice():
       "c_in": {"class": "linear", "activation": "tanh", "from": ["s"], "n_out": 20},
       "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:encoder", "base_ctx": "base:enc_ctx",
             "n_out": 20},
-      "output": {"class": "linear", "from": ["s", "c"], "target": "data", 'n_out': 2, 'activation': None,
-                 "loss": "mse"},
-      "choice": {'class': 'choice', 'beam_size': 1, 'input_type': 'regression', 'from': 'output',
+      "output_pred": {"class": "linear", "from": ["s", "c"], "target": "data", 'n_out': 2, 'activation': None,
+                      "loss": "mse"},
+      "output": {'class': 'choice', 'beam_size': 1, 'input_type': 'regression', 'from': 'output_pred',
                  'target': 'data', 'n_out': 2},
-      # this works for training
-      "feedback": {'class': 'linear', 'from': 'prev:choice', 'n_out': 5, 'activation': 'tanh'},
-      # this works for decoding
-      #"feedback": {'class': 'linear', 'from': 'prev:output', 'n_out': 5, 'activation': 'tanh'},
+      "feedback": {'class': 'linear', 'from': 'prev:output', 'n_out': 5, 'activation': 'tanh'},
       'end_compare': {'class': 'compare', 'from': ['stop_token_sigmoid'], 'kind': 'greater', 'value': 0.5},
       'end': {'class': 'squeeze', 'from': ['end_compare'], 'axis': 'F'},
       'stop_token_sigmoid': {'activation': 'sigmoid', 'class': 'linear', 'from': ['s'], 'n_out': 1}
@@ -3584,13 +3581,11 @@ def test_regression_choice():
     "start_epoch": 1,
     "num_epochs": 2,
     "learning_rate": 0.01,
-    "nadam": True,
-    "gradient_noise": 0.3,
-    "debug_add_check_numerics_ops": True,
+    "adam": True,
     "debug_print_layer_output_template": True,
     "debug_print_layer_output_shape": True,
-    "debug_add_check_numerics_on_output": True,
   })
+
   _cleanup_old_models(config)
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=dataset, dev_data=dataset, eval_data=None)
@@ -3599,6 +3594,13 @@ def test_regression_choice():
   print("Used data keys:")
   pprint(engine.network.used_data_keys)
   engine.train()
+
+  print("Search...")
+  engine.use_search_flag = True
+  engine.use_eval_flag = False
+  engine.use_dynamic_train_flag = False
+  engine.init_network_from_config(config)
+  engine.search(dataset=search_data)
 
   print("Forward...")
   engine.use_search_flag = False
