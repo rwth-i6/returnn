@@ -3600,14 +3600,14 @@ def test_regression_choice():
   engine.use_eval_flag = False
   engine.use_dynamic_train_flag = False
   engine.init_network_from_config(config)
-  engine.search(dataset=search_data)
+  engine.search(dataset=search_data, do_eval=False)
 
   print("Forward...")
   engine.use_search_flag = False
   engine.use_eval_flag = False
   engine.use_dynamic_train_flag = False
   engine.init_network_from_config(config)
-  engine.forward_to_hdf(data=search_data, output_file=output_file, batch_size=1)
+  engine.forward_to_hdf(data=dataset, output_file=output_file, batch_size=1)
 
   engine.finalize()
 
