@@ -3534,6 +3534,82 @@ def test_non_available_data_construction():
   engine.finalize()
 
 
+def test_regression_choice():
+  net_dict = {
+    "encoder": {"class": "linear", "activation": "tanh", "from": ["data:classes"], "n_out": 20},
+    "enc_ctx": {"class": "linear", "activation": "tanh", "from": ["encoder"], "n_out": 20},
+
+    "output": {"class": "rec", "from": [], "max_seq_len": 10, "unit": {
+      "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:c", "feedback"], "n_out": 20},
+      "c_in": {"class": "linear", "activation": "tanh", "from": ["s"], "n_out": 20},
+      "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:encoder", "base_ctx": "base:enc_ctx",
+            "n_out": 20},
+      "output": {"class": "linear", "from": ["s", "c"], "target": "data", 'n_out': 2, 'activation': None,
+                 "loss": "mse"},
+      "choice": {'class': 'choice', 'beam_size': 1, 'input_type': 'regression', 'from': 'output',
+                 'target': 'data', 'n_out': 2},
+      # this works for training
+      "feedback": {'class': 'linear', 'from': 'prev:choice', 'n_out': 5, 'activation': 'tanh'},
+      # this works for decoding
+      #"feedback": {'class': 'linear', 'from': 'prev:output', 'n_out': 5, 'activation': 'tanh'},
+      'end_compare': {'class': 'compare', 'from': ['stop_token_sigmoid'], 'kind': 'greater', 'value': 0.5},
+      'end': {'class': 'squeeze', 'from': ['end_compare'], 'axis': 'F'},
+      'stop_token_sigmoid': {'activation': 'sigmoid', 'class': 'linear', 'from': ['s'], 'n_out': 1}
+    }, "target": "data"}
+
+  }
+
+  from returnn.datasets.generating import DummyDataset, StaticDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  dataset.init_seq_order(epoch=1)
+  search_data = StaticDataset(
+    data=[{'classes': numpy.ones((seq_len,), dtype="int32")}], output_dim={'classes': (n_classes_dim, 1)})
+  search_data.init_seq_order(epoch=1)
+
+  import tempfile
+  output_file = tempfile.mktemp(suffix=".hdf", prefix="nose-tf-forward")
+
+  config = Config()
+  config.update({
+    "model": "%s/model" % _get_tmp_dir(),
+    "batch_size": 100,
+    "max_seqs": 2,
+    "extern_data": {
+      'data': {'dim': n_data_dim, 'shape': (None, n_data_dim), 'available_for_inference': False},
+      'classes': {'dim': n_classes_dim, 'shape': (None,), 'sparse': True, 'available_for_inference': True}},
+    "network": net_dict,
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "learning_rate": 0.01,
+    "nadam": True,
+    "gradient_noise": 0.3,
+    "debug_add_check_numerics_ops": True,
+    "debug_print_layer_output_template": True,
+    "debug_print_layer_output_shape": True,
+    "debug_add_check_numerics_on_output": True,
+  })
+  _cleanup_old_models(config)
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=dataset, dev_data=dataset, eval_data=None)
+  print("Extern data:")
+  pprint(engine.network.extern_data.data)
+  print("Used data keys:")
+  pprint(engine.network.used_data_keys)
+  engine.train()
+
+  print("Forward...")
+  engine.use_search_flag = False
+  engine.use_eval_flag = False
+  engine.use_dynamic_train_flag = False
+  engine.init_network_from_config(config)
+  engine.forward_to_hdf(data=search_data, output_file=output_file, batch_size=1)
+
+  engine.finalize()
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
