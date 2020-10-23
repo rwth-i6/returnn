@@ -2269,7 +2269,8 @@ class _SubnetworkRecCell(object):
 
         if seq_len_info is not None:
           assert self.net.layers["end"].output.shape == (), "end layer %r unexpected shape" % self.net.layers["end"]
-          choices = self.net.layers["end"].get_search_choices()
+          end_layer = maybe_transform(self.net.layers["end"])
+          choices = end_layer.get_search_choices()
           if choices:
             from .basic import SelectSearchSourcesLayer
             cur_end_layer = choices.translate_to_this_search_beam(prev_end_layer)
@@ -2277,7 +2278,7 @@ class _SubnetworkRecCell(object):
               "unexpected search choices: cur end %r, prev end %r" % (choices, prev_end_layer.get_search_choices()))
             assert cur_end_layer.search_choices_seq, (
               "unexpected search choices: cur end %r (via %r), prev end %r (via %r)" % (
-                choices, self.net.layers["end"], prev_end_layer.get_search_choices(), prev_end_layer))
+                choices, end_layer, prev_end_layer.get_search_choices(), prev_end_layer))
             assert cur_end_layer.output.shape == (), "end layer %r unexpected shape" % cur_end_layer
             with tf.name_scope("end_flag"):
               end_flag = cur_end_layer.output.placeholder
@@ -2597,7 +2598,12 @@ class _SubnetworkRecCell(object):
       end_layer = None
 
     if end_layer:
+      # seq_len is determined from the end-layer. We need to translate it to the right beam.
       end_layer_choice = self.net.get_search_choices(src=end_layer)
+      assert end_layer_choice and end_layer_choice.search_choices
+      if end_layer_choice.name.startswith("prev:"):
+        # Logic from maybe_transform. It would be translated to the current beam.
+        end_layer_choice = self.net.layers[end_layer_choice.name[len("prev:"):]]
       assert end_layer_choice in choice_seq_in_frame, (
         "End layer must not have a beam independent from output layer '{}'.".format(layer_name))
 
