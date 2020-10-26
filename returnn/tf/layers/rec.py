@@ -2115,6 +2115,8 @@ class _SubnetworkRecCell(object):
       if self.input_layers_moved_out:
         with tf.name_scope("input_layers_moved_out"):
           self._construct_input_layers_moved_out()
+          if fixed_seq_len is None and rec_layer.output.size_placeholder:  # might have set it by now
+            fixed_seq_len = rec_layer.output.size_placeholder[0]
           for layer_name in self.input_layers_moved_out:
             # Create only Tensor arrays for those which we use inside the loop.
             if not self._input_layer_used_inside_loop(layer_name):
@@ -2123,11 +2125,6 @@ class _SubnetworkRecCell(object):
             assert isinstance(layer, LayerBase)
             if layer_name == "output":
               assert layer.output.have_time_axis()
-              # If we don't know our own size yet, we can overtake it from this layer.
-              if not rec_layer.output.size_placeholder:
-                rec_layer.output.size_placeholder = {0: layer.output.get_sequence_lengths()}
-              if fixed_seq_len is None:
-                fixed_seq_len = layer.output.get_sequence_lengths()
               assert rec_layer.output.is_same_time_dim(layer.output)
             # Only unroll if that is the same time dim.
             if not layer.output.mark_same_time(rec_layer.output):
@@ -2269,7 +2266,8 @@ class _SubnetworkRecCell(object):
 
         if seq_len_info is not None:
           assert self.net.layers["end"].output.shape == (), "end layer %r unexpected shape" % self.net.layers["end"]
-          choices = self.net.layers["end"].get_search_choices()
+          end_layer = maybe_transform(self.net.layers["end"])
+          choices = end_layer.get_search_choices()
           if choices:
             from .basic import SelectSearchSourcesLayer
             cur_end_layer = choices.translate_to_this_search_beam(prev_end_layer)
@@ -2277,7 +2275,7 @@ class _SubnetworkRecCell(object):
               "unexpected search choices: cur end %r, prev end %r" % (choices, prev_end_layer.get_search_choices()))
             assert cur_end_layer.search_choices_seq, (
               "unexpected search choices: cur end %r (via %r), prev end %r (via %r)" % (
-                choices, self.net.layers["end"], prev_end_layer.get_search_choices(), prev_end_layer))
+                choices, end_layer, prev_end_layer.get_search_choices(), prev_end_layer))
             assert cur_end_layer.output.shape == (), "end layer %r unexpected shape" % cur_end_layer
             with tf.name_scope("end_flag"):
               end_flag = cur_end_layer.output.placeholder
@@ -2597,7 +2595,12 @@ class _SubnetworkRecCell(object):
       end_layer = None
 
     if end_layer:
+      # seq_len is determined from the end-layer. We need to translate it to the right beam.
       end_layer_choice = self.net.get_search_choices(src=end_layer)
+      assert end_layer_choice and end_layer_choice.search_choices
+      if end_layer_choice.name.startswith("prev:"):
+        # Logic from maybe_transform. It would be translated to the current beam.
+        end_layer_choice = self.net.layers[end_layer_choice.name[len("prev:"):]]
       assert end_layer_choice in choice_seq_in_frame, (
         "End layer must not have a beam independent from output layer '{}'.".format(layer_name))
 
@@ -2984,6 +2987,19 @@ class _SubnetworkRecCell(object):
     with reuse_name_scope(self.parent_rec_layer._rec_scope):
       for layer_name in self.input_layers_moved_out:
         get_layer(layer_name)
+
+    # We might have figured out the real output seq length (and dim tag) by now.
+    if not self.parent_rec_layer.output.size_placeholder and "output" in self.input_layers_moved_out:
+      output_layer = self.input_layers_net.layers["output"]
+      assert output_layer.output.have_time_axis()
+      self.parent_rec_layer.output.size_placeholder = {0: output_layer.output.get_sequence_lengths()}
+    # This might be set e.g. by ChoiceLayer, or losses.
+    if not self.parent_rec_layer.output.size_placeholder and self.input_layers_net.used_data_keys:
+      for data_key in sorted(self.input_layers_net.used_data_keys):
+        data = self.input_layers_net.extern_data.data[data_key]
+        if data.have_time_axis():
+          self.parent_rec_layer.output.size_placeholder = {0: data.get_sequence_lengths()}
+          break
 
   def _construct_output_layers_moved_out(self, loop_accumulated, seq_len, extra_output_layers, final_net_vars):
     """
@@ -3645,6 +3661,7 @@ class RnnCellLayer(_ConcatInputLayer):
         if isinstance(self.cell, BaseRNNCell):
           x = self.cell.get_input_transformed(x)
         assert not self.input_data or self.input_data.time_dim_axis is None, (
+          self, self.input_data,
           "A recurrent layer is not allowed to have input data with a remaining time axis.\n"
           "A possible reason for this error is that the 'target' of the rec layer does not\n"
           "match the targets of the sub-layers")
