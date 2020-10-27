@@ -362,23 +362,18 @@ class RecLayer(_ConcatInputLayer):
     """
     from tensorflow.python.util import nest
     source_data = get_concat_sources_data_template(sources) if sources else None
-    if source_data and not source_data.have_time_axis():
-      # We expect to be inside another RecLayer, and should do a single step (like RnnCellLayer).
-      out_time_dim_axis = None
-      out_batch_dim_axis = 0
-    else:
-      out_time_dim_axis = 0
-      out_batch_dim_axis = 1
     n_out = kwargs.get("n_out", NotSpecified)
     out_type = kwargs.get("out_type", None)
     loss = kwargs.get("loss", None)
     deps = list(sources)  # type: typing.List[LayerBase]
     deps += [layer for layer in nest.flatten(initial_state) if isinstance(layer, LayerBase)]
     if out_type or n_out is not NotSpecified or loss:
-      if out_type:
-        assert out_type.get("time_dim_axis", out_time_dim_axis) == out_time_dim_axis
-        assert out_type.get("batch_dim_axis", out_batch_dim_axis) == out_batch_dim_axis
       out = super(RecLayer, cls).get_out_data_from_opts(network=network, sources=sources, **kwargs)
+      if source_data and not source_data.have_time_axis():
+        # We expect to be inside another RecLayer, and should do a single step (like RnnCellLayer).
+        out = out.copy_as_batch_major()  # The output is then [B,F]
+      else:
+        out = out.copy_as_time_batch_major()  # Otherwise the output is always [T,B,F]
     else:
       out = None
     if isinstance(unit, dict):  # subnetwork
@@ -390,15 +385,15 @@ class RecLayer(_ConcatInputLayer):
         assert sub_out.dim == out.dim
         assert sub_out.shape == out.shape
       out = sub_out
-      out_batch_dim_axis = out.batch_dim_axis  # maybe the subnet does not have a batch-axis (rare but valid)
       deps += subnet.get_parent_deps()
     assert out
-    out.time_dim_axis = out_time_dim_axis
-    out.batch_dim_axis = out_batch_dim_axis
     cls._post_init_output(output=out, sources=sources, network=network, **kwargs)
     for dep in deps:
       if dep:
         out.beam = SearchBeam.get_combined_beam(out.beam, dep.output.beam)
+    if out_type:
+      assert out_type.get("time_dim_axis", out.time_dim_axis) == out.time_dim_axis
+      assert out_type.get("batch_dim_axis", out.batch_dim_axis) == out.batch_dim_axis
     return out
 
   def get_absolute_name_scope_prefix(self):
@@ -531,11 +526,7 @@ class RecLayer(_ConcatInputLayer):
     """
     assert self.input_data
     if self.input_data.have_time_axis():
-      x = self.input_data.placeholder  # (batch,time,dim) or (time,batch,dim)
-      if not self.input_data.is_time_major:
-        assert self.input_data.batch_dim_axis == 0
-        assert self.input_data.time_dim_axis == 1
-        x = self.input_data.get_placeholder_as_time_major()  # (time,batch,[dim])
+      x = self.input_data.copy_as_time_batch_major().placeholder
       seq_len = self.input_data.get_sequence_lengths()
       return x, seq_len
     else:  # no time-dim-axis, expect to be inside another RecLayer
