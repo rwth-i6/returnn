@@ -900,6 +900,17 @@ class Data(object):
     data = data.copy_with_feature_dim_axis(1)
     return data
 
+  def copy_as_time_batch_major(self):
+    """
+    :return: copy of self with batch_dim_axis == 1 and time_dim_axis == 0
+    :rtype: Data
+    """
+    assert self.have_batch_axis() and self.have_time_axis()
+    data = self.copy_as_bt_or_tb_major()
+    if data.time_dim_axis == 1:
+      data = data.copy_move_axis(0, 1)
+    return data
+
   def copy_as_batch_spatial_major(self):
     """
     :return: copy with batch_dim_axis == 0, then all dynamic axes, then any other spatial axes, last feature axis
