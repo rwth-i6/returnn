@@ -3604,6 +3604,32 @@ def test_reclayer_enc_time_dim_eval():
     session.run(output_layer.output.placeholder, feed_dict=feed_dict)
 
 
+def test_reclayer_batch_feature_input():
+  """
+  Test if the RecLayer is capable of handling [B,F,T] input
+  """
+  with make_scope() as session:
+    config = Config()
+    config.update({
+      "debug_print_layer_output_template": True,
+      "debug_print_layer_output_shape": True,
+      "extern_data": {
+        "data": {'dim': 5, 'shape': (5, None), 'time_dim_axis': 2, 'feature_dim_axis': 1},
+      },
+      "network": {
+        'output': {
+          'class': 'rec', 'direction': 1, 'from': 'data', 'n_out': 2, 'unit': 'nativelstm2'},
+        }
+      })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    session.run(tf_compat.v1.global_variables_initializer())
+    output_layer = network.get_default_output_layer(must_exist=True)
+    from test_TFNetworkLayer import make_feed_dict
+    feed_dict = make_feed_dict(list(network.extern_data.data.values()))
+    session.run(output_layer.output.placeholder, feed_dict=feed_dict)
+
+
 class TransformerNetwork:
 
   def __init__(self):
