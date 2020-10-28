@@ -21,14 +21,14 @@ you can use these LSTM kernels via the ``unit`` argument:
     via `dynamic_rnn <https://www.tensorflow.org/api_docs/python/tf/nn/dynamic_rnn>`_.
     I.e. the cell itself is pure TensorFlow, and the loop over time is done via ``tf.while_loop``.
     This has some more options compared to ``BasicLSTM``.
-* ``LSTMBlock`` (GPU and CPU).
-    Uses `tf.contrib.rnn.LSTMBlockCell <https://www.tensorflow.org/api_docs/python/tf/contrib/rnn/LSTMBlockCell>`_
+* ``LSTMBlock`` (GPU and CPU, only TF 1).
+    Uses `tf.contrib.rnn.LSTMBlockCell <https://www.tensorflow.org/versions/r1.15/api_docs/python/tf/contrib/rnn/LSTMBlockCell>`_
     via `dynamic_rnn <https://www.tensorflow.org/api_docs/python/tf/nn/dynamic_rnn>`_.
     The time-step operation is implemented as a single TF operation,
     and the loop over time is done via ``tf.while_loop``.
     Thus this should be faster than ``BasicLSTM`` and ``StandardLSTM``.
-* ``LSTMBlockFused`` (GPU and CPU).
-    Uses `tf.contrib.rnn.LSTMBlockFusedCell <https://www.tensorflow.org/api_docs/python/tf/contrib/rnn/LSTMBlockFusedCell>`_.
+* ``LSTMBlockFused`` (GPU and CPU, only TF 1).
+    Uses `tf.contrib.rnn.LSTMBlockFusedCell <https://www.tensorflow.org/versions/r1.15/api_docs/python/tf/contrib/rnn/LSTMBlockFusedCell>`_.
     The loop over time is part of the op ("fused" in TF terminology),
     thus this is like ``NativeLSTM`` and ``CudnnLSTM`` a single op for the whole calculation.
     This is based on ``LSTMBlock`` and should thus be faster than ``LSTMBlock``.
@@ -40,6 +40,11 @@ you can use these LSTM kernels via the ``unit`` argument:
 * ``NativeLSTM`` (GPU and CPU).
     Uses our own CUDA kernel which can also be compiled on CPU.
     The loop over time is also done via C++ code inside the op ("fused").
+    See :mod:`TFNativeOp`.
+* ``NativeLstm2`` (GPU and CPU).
+    Uses our own CUDA kernel which can also be compiled on CPU.
+    The loop over time is also done via C++ code inside the op ("fused").
+    This should be slightly faster than ``NativeLstm``.
     See :mod:`TFNativeOp`.
 
 If you just use ``LSTM``, it will currently use ``NativeLSTM`` by default.

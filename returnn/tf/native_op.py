@@ -848,7 +848,7 @@ class NativeLstm2(RecSeqCellOp):
     """
     :param float rec_weight_dropout: weight dropout in the recurrent matrix, https://openreview.net/pdf?id=SyyGPP0TZ
     :param tuple[int|None]|None rec_weight_dropout_shape: e.g. (None,1) to use dropout on all rec inputs (save memory)
-    :float forget_bias:
+    :param float forget_bias:
     """
     super(NativeLstm2, self).__init__(**kwargs)
     assert forget_bias == 0, "Not implemented/supported (should be done via right param init)"

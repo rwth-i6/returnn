@@ -14,10 +14,10 @@ These are the units that can be used in a :class:`TFNetworkRecLayer.RecLayer` ty
 Common units are:
 
    * BasicLSTM (the cell), via official TF, pure TF implementation
-   * LSTMBlock (the cell), via tf.contrib.rnn.
-   * LSTMBlockFused, via tf.contrib.rnn. should be much faster than BasicLSTM
+   * LSTMBlock (the cell), via tf.contrib.rnn, only TF <=1
+   * LSTMBlockFused, via tf.contrib.rnn. should be much faster than BasicLSTM. only TF <=1.
    * CudnnLSTM, via tf.contrib.cudnn_rnn. This is experimental yet.
-   * NativeLSTM, our own native LSTM. should be faster than LSTMBlockFused.
+   * NativeLSTM, our own native LSTM. should be faster than LSTMBlockFused, and similar or faster than CudnnLSTM
    * NativeLstm2, improved own native LSTM, should be the fastest and most powerful
 
 Note that the native implementations can not be in a recurrent subnetwork, as they process the whole sequence at once.
