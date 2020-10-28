@@ -492,6 +492,13 @@ class RecLayer(_ConcatInputLayer):
     """
     if not cls._rnn_cells_dict:
       cls._create_rnn_cells_dict()
+    # We have some automatic replacement logic here.
+    # In our CustomCheckpointLoader, we have logic to automatically convert one param format into another.
+    # Be careful though that the defaults still might lead to different computations.
+    # E.g. StandardLSTM/BasicLSTM use forget_bias=1 by default, which is not used for param initialization,
+    # but will always be added.
+    # Thus when changing from e.g. NativeLSTM -> StandardLSTM, param importing works,
+    # but you explicitly need to specify `"unit_opts": {"forget_bias": 0.0}`, otherwise it will be wrong.
     from returnn.tf.util.basic import is_gpu_available
     if not is_gpu_available():
       m = {"cudnnlstm": "LSTMBlockFused", "cudnngru": "GRUBlock"}
