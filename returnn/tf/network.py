@@ -2859,6 +2859,7 @@ class CustomCheckpointLoader:
 
       return load_old
 
+    # noinspection PyShadowingNames
     def make_load_weights_nativelstm_to_basic(new_name, postfix):
       """
       :param str new_name:
@@ -2889,6 +2890,7 @@ class CustomCheckpointLoader:
 
       return load_native_lstm_weights
 
+    # noinspection PyShadowingNames
     def make_load_bias_nativelstm_to_basic(new_name, postfix):
       """
       :param str new_name:
