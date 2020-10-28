@@ -439,6 +439,18 @@ class OpMaker(object):
         #undef blockIdx
         #undef blockDim
         #undef gridDim
+        #undef DEF_SHARED
+        #undef DEV_FUNC
+        #undef HANDLE_LAST_ERROR
+        #undef HOST_FUNC
+        #undef INF_F
+        #undef NAN_F
+        #undef elem_atomic_add
+        #undef elem_atomic_cas
+        #undef elem_atomic_min
+        #undef float_as_int
+        #undef int_as_float
+        #undef start_dev_kernel2
         #include "%(native_op_cpp_filename)s"
 
         %(user_code_kernels)s
