@@ -32,6 +32,13 @@ Get Last Hidden State Layer
     :members:
     :undoc-members:
 
+Masked Computation Layer
+------------------------
+
+.. autoclass:: returnn.tf.layers.rec.MaskedComputationLayer
+    :members:
+    :undoc-members:
+
 Positional Encoding Layer
 -------------------------
 

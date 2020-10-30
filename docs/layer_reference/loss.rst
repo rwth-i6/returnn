@@ -4,6 +4,13 @@
 Loss Functions
 ==============
 
+LossLayer
+---------
+
+.. autoclass:: returnn.tf.layers.basic.LossLayer
+    :members:
+    :undoc-members:
+
 As-Is Loss
 ----------
 
