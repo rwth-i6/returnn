@@ -3604,6 +3604,32 @@ def test_reclayer_enc_time_dim_eval():
     session.run(output_layer.output.placeholder, feed_dict=feed_dict)
 
 
+def test_reclayer_batch_feature_input():
+  """
+  Test if the RecLayer is capable of handling [B,F,T] input
+  """
+  with make_scope() as session:
+    config = Config()
+    config.update({
+      "debug_print_layer_output_template": True,
+      "debug_print_layer_output_shape": True,
+      "extern_data": {
+        "data": {'dim': 5, 'shape': (5, None), 'time_dim_axis': 2, 'feature_dim_axis': 1},
+      },
+      "network": {
+        'output': {
+          'class': 'rec', 'direction': 1, 'from': 'data', 'n_out': 2, 'unit': 'nativelstm2'},
+        }
+      })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    session.run(tf_compat.v1.global_variables_initializer())
+    output_layer = network.get_default_output_layer(must_exist=True)
+    from test_TFNetworkLayer import make_feed_dict
+    feed_dict = make_feed_dict(list(network.extern_data.data.values()))
+    session.run(output_layer.output.placeholder, feed_dict=feed_dict)
+
+
 class TransformerNetwork:
 
   def __init__(self):
@@ -4063,6 +4089,94 @@ def test_subnet_load_on_init_rec():
     print(output_np)
     assert_almost_equal(output_orig_np, output_np)
     print("They are equal!")
+
+
+def test_convert_lstm_params_save_load():
+  """
+  Test conversions from different units to different units.
+  """
+  n_in, n_hidden0, n_hidden1, n_hidden2, n_out = 2, 5, 7, 11, 3
+
+  def make_config(lstm_unit):
+    """
+    :param str lstm_unit:
+    :rtype: Config
+    """
+    unit_opts = {}
+    if lstm_unit.lower() in {"standardlstm", "basiclstm", "lstmblock", "lstmblockfused"}:
+      # Other units would have forget bias 0.0 by default, or add it to the param at param initialization.
+      # Thus explicitly use this for the calculation.
+      unit_opts["forget_bias"] = 0.0
+    net_dict = {
+      "input": {"class": "linear", "n_out": n_hidden0, "activation": None, "with_bias": False},
+      "lstm1": {"class": "rec", "unit": lstm_unit, "unit_opts": unit_opts, "n_out": n_hidden1, "from": "input"},
+      "lstm2": {"class": "rec", "unit": lstm_unit, "unit_opts": unit_opts, "n_out": n_hidden2, "from": "lstm1"},
+      "output": {"class": "softmax", "n_out": n_out, "from": "lstm2"}}
+    return Config({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": net_dict})
+
+  import tempfile
+  model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
+  input_np = [
+    [[0.7, 0.1], [-0.3, -0.1], [0.2, -0.1]],
+    [[1.0, -0.4], [-0.2, 0.3], [0.0, 0.0]]]
+  input_np = numpy.array(input_np, dtype="float32")
+  input_seq_lens = [3, 2]
+  n_batch = len(input_seq_lens)
+  assert_equal(input_np.shape, (n_batch, max(input_seq_lens), n_in))
+
+  def construct_load_save_forward(lstm_unit, prev_lstm_unit=None, output_ref=None):
+    """
+    :param str lstm_unit:
+    :param str|None prev_lstm_unit:
+    :param numpy.ndarray|None output_ref:
+    """
+    with make_scope() as session:
+      config = make_config(lstm_unit)
+      network = TFNetwork(config=config, train_flag=True)
+      network.construct_from_dict(config.typed_dict["network"])
+      if prev_lstm_unit:
+        print("*** Load params from prev NN with LSTM unit %r -> %r." % (prev_lstm_unit, lstm_unit))
+        network.load_params_from_file(filename="%s/model.%s" % (model_tmp_dir, prev_lstm_unit), session=session)
+      else:
+        print("*** Randomly initialize params.")
+        network.initialize_params(session)
+      network.save_params_to_file(filename="%s/model.%s" % (model_tmp_dir, lstm_unit), session=session)
+
+      input_placeholder = network.extern_data.data["data"].placeholder
+      input_seq_lens_placeholder = network.extern_data.data["data"].size_placeholder[0]
+      output_layer = network.get_default_output_layer(must_exist=True)
+      output_np, output_seq_lens = session.run(
+        (output_layer.output.get_placeholder_as_batch_major(), output_layer.output.get_sequence_lengths()),
+        feed_dict={input_placeholder: input_np, input_seq_lens_placeholder: input_seq_lens})
+      assert_equal(list(output_seq_lens), input_seq_lens)
+      assert_equal(output_np.shape, (n_batch, max(input_seq_lens), n_out))
+      for t in range(max(output_seq_lens)):
+        for b in range(n_batch):
+          if t >= output_seq_lens[b]:
+            output_np[b, t] = 0.0
+      if output_ref is not None:
+        assert_allclose(
+          output_ref, output_np,
+          rtol=1e-5,
+          err_msg="Output not same after converting %s -> %s" % (prev_lstm_unit, lstm_unit))
+        print("*** All outputs match when converting %r -> %r." % (prev_lstm_unit, lstm_unit))
+      return output_np
+
+  output_ref = construct_load_save_forward(lstm_unit="lstm")  # using default LSTM
+
+  for src_lstm_unit, tgt_lstm_unit in [
+    ("lstm", "nativelstm"),
+    ("nativelstm", "nativelstm2"),
+    ("nativelstm2", "standardlstm"),
+    ("nativelstm2", "basiclstm"),
+    ("standardlstm", "lstmblock"),
+    ("lstmblock", "standardlstm"),
+    ("standardlstm", "nativelstm2"),
+  ]:
+    construct_load_save_forward(lstm_unit=tgt_lstm_unit, prev_lstm_unit=src_lstm_unit, output_ref=output_ref)
 
 
 def test_KenLmStateLayer():

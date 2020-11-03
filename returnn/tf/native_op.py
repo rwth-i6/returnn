@@ -439,6 +439,18 @@ class OpMaker(object):
         #undef blockIdx
         #undef blockDim
         #undef gridDim
+        #undef DEF_SHARED
+        #undef DEV_FUNC
+        #undef HANDLE_LAST_ERROR
+        #undef HOST_FUNC
+        #undef INF_F
+        #undef NAN_F
+        #undef elem_atomic_add
+        #undef elem_atomic_cas
+        #undef elem_atomic_min
+        #undef float_as_int
+        #undef int_as_float
+        #undef start_dev_kernel2
         #include "%(native_op_cpp_filename)s"
 
         %(user_code_kernels)s
@@ -704,8 +716,12 @@ class NativeLstmCell(RecSeqCellOp):
   Native LSTM.
   """
 
-  def __init__(self, **kwargs):
+  def __init__(self, forget_bias=0.0, **kwargs):
+    """
+    :param float forget_bias:
+    """
     super(NativeLstmCell, self).__init__(**kwargs)
+    assert forget_bias == 0, "Not implemented/supported (should be done via right param init)"
     self.n_input_dim_parts = [self.n_hidden] * 4
     self.n_input_dim = self.n_hidden * 4
     self.op = make_lstm_op()
@@ -828,12 +844,14 @@ class NativeLstm2(RecSeqCellOp):
   does_input_projection = False
   does_direction_handling = True
 
-  def __init__(self, rec_weight_dropout=0.0, rec_weight_dropout_shape=None, **kwargs):
+  def __init__(self, rec_weight_dropout=0.0, rec_weight_dropout_shape=None, forget_bias=0.0, **kwargs):
     """
     :param float rec_weight_dropout: weight dropout in the recurrent matrix, https://openreview.net/pdf?id=SyyGPP0TZ
     :param tuple[int|None]|None rec_weight_dropout_shape: e.g. (None,1) to use dropout on all rec inputs (save memory)
+    :param float forget_bias:
     """
     super(NativeLstm2, self).__init__(**kwargs)
+    assert forget_bias == 0, "Not implemented/supported (should be done via right param init)"
     self.n_input_dim_parts = [self.n_hidden] * 4
     self.n_input_dim = self.n_hidden * 4
     self.rec_weight_dropout = rec_weight_dropout
