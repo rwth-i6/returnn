@@ -2609,6 +2609,107 @@ def test_LossAsIs_custom_dim():
     assert loss
 
 
+def test_LossLayer_sublayers():
+  from returnn.tf.util.basic import DimensionTag
+  n_in, n_out = 7, 11
+  time_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
+
+  config = Config({
+    "extern_data": {
+      'data': {"dim": n_in, "same_dim_tags_as": {"t": time_tag}},
+      'classes': {'dim': n_out, 'dtype': 'int64', 'sparse': True, "same_dim_tags_as": {"t": time_tag}},
+      'prev-classes': {'dim': n_out, 'dtype': 'int64', 'sparse': True, "same_dim_tags_as": {"t": time_tag}}},
+    "debug_print_layer_output_template": True,
+  })
+  net_dict = {
+    'encoder-output': {"class": "linear", "activation": "relu", "n_out": 10},
+
+    'left-output': {'class': 'softmax', 'from': 'encoder-output', 'n_out': n_out},
+    'left-output-ce': {'class': 'loss',
+                       'from': 'left-output',
+                       'loss': 'as_is',
+                       'loss_': 'ce',
+                       'loss_scale': 0,
+                       'target_': 'prev-classes'},
+    'left-err': {'class': 'copy', 'from': 'left-output-ce/error', 'loss': 'as_is', 'loss_scale': 0},
+    'left-loss': {'class': 'copy', 'from': 'left-output-ce', 'loss': 'as_is'},
+
+    'past-embed': {'activation': None, 'class': 'linear', 'from': ['data:prev-classes'], 'n_out': 10},
+    'center-output': {'class': 'softmax', 'from': ['encoder-output', 'past-embed'], 'n_out': n_out},
+    'center-output-ce': {'class': 'loss',
+                         'from': 'center-output',
+                         'loss': 'as_is',
+                         'loss_': 'ce',
+                         'loss_scale': 0,
+                         'target_': 'classes'},
+    'center-err': {'class': 'copy', 'from': 'center-output-ce/error', 'loss': 'as_is', 'loss_scale': 0},
+    'center-loss': {'class': 'copy', 'from': 'center-output-ce', 'loss': 'as_is'},
+  }
+  print("Layers:", sorted(net_dict.keys()))
+
+  print("Training")
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    # Check defaults available for inference.
+    assert network.extern_data.data["data"].available_for_inference
+    assert not network.extern_data.data["classes"].available_for_inference
+    assert not network.extern_data.data["prev-classes"].available_for_inference
+    network.construct_from_dict(net_dict)
+    optimizer = tf_compat.v1.train.AdamOptimizer()
+    fetches_dict = network.get_fetches_dict(should_train=True, should_eval=True, with_size=True)
+    fetches_dict["optim_op"] = optimizer.minimize(network.get_objective())
+    feed_dict = make_feed_dict(network.extern_data, same_time=True)
+    session.run(tf_compat.v1.global_variables_initializer())
+    for step in range(3):
+      try:
+        results = session.run(fetches_dict, feed_dict=feed_dict)
+      except tf.errors.OpError as exc:
+        help_on_tf_exception(
+          session=session,
+          exception=exc, fetches=fetches_dict, feed_dict=feed_dict,
+          extern_data=network.extern_data)
+        raise
+      pprint(results)
+
+  print("Forwarding")
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=False)
+    network.construct_from_dict(net_dict)
+    # Not sure if we would always expect that all layers with losses are constructed in this case,
+    # but this is current behavior.
+    # In any case, if we do that, they should infer the available_for_inference correctly.
+    assert network.layers["encoder-output"].output.available_for_inference
+    assert network.layers["left-output"].output.available_for_inference
+    assert not network.layers["past-embed"].output.available_for_inference
+    assert not network.layers["center-output"].output.available_for_inference
+    assert not network.layers["center-output-ce"].output.available_for_inference
+    assert not network.layers["center-loss"].output.available_for_inference
+    assert not network.layers["center-err"].output.available_for_inference
+    fetches_dict = network.get_fetches_dict(should_train=False, should_eval=False, with_size=True)
+    feed_dict = make_feed_dict(network.extern_data, same_time=True)
+    session.run(tf_compat.v1.global_variables_initializer())
+    results = session.run(fetches_dict, feed_dict=feed_dict)
+    pprint(results)
+
+  print("Forwarding with fixed available-for-inference")
+  with make_scope() as session:
+    config.typed_dict["extern_data"]["prev-classes"]["available_for_inference"] = True
+    network = TFNetwork(config=config, train_flag=False)
+    network.construct_from_dict(net_dict)
+    assert network.layers["encoder-output"].output.available_for_inference
+    assert network.layers["left-output"].output.available_for_inference
+    assert network.layers["past-embed"].output.available_for_inference
+    assert network.layers["center-output"].output.available_for_inference
+    assert not network.layers["center-output-ce"].output.available_for_inference
+    assert not network.layers["center-loss"].output.available_for_inference
+    assert not network.layers["center-err"].output.available_for_inference
+    fetches_dict = network.get_fetches_dict(should_train=False, should_eval=False, with_size=True)
+    feed_dict = make_feed_dict(network.extern_data, same_time=True)
+    session.run(tf_compat.v1.global_variables_initializer())
+    results = session.run(fetches_dict, feed_dict=feed_dict)
+    pprint(results)
+
+
 def test_param_variational_noise():
   from returnn.tf.util.basic import print_graph_output, find_ops_with_tensor_input
   config = Config({
