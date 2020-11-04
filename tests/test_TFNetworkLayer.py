@@ -3016,6 +3016,93 @@ def test_split_info_input():
     # for param init handling, output dim split do matter.
 
 
+def test_extra1():
+  n_in, n_out = 2, 3
+  config = Config({
+    "extern_data": {"data": {"dim": n_in}},
+    "debug_print_layer_output_template": True,
+  })
+  net_dict = {
+    "input": {"class": "linear", "activation": "relu", "n_out": n_out, "from": "data"},
+    "extra.2:input": {"class": "linear", "activation": None, "n_out": n_out, "from": "data"},
+    # "extra.3:input automatically ...
+    "output1": {"class": "copy", "from": "input", "is_output_layer": True},
+    "output2": {"class": "activation", "from": "extra.2:input", "activation": "relu", "is_output_layer": True},
+    "output3": {"class": "copy", "from": "extra.3:input", "is_output_layer": True},
+  }
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+
+    assert "extra.2" in network.extra_nets
+    assert "extra.3" in network.extra_nets
+    params = network.get_params_list()
+    print("Params:", params)
+    assert len(params) == 2  # W + b
+
+    feed_dict = make_feed_dict(network.extern_data)
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+    out1 = session.run(network.layers["output1"].output.placeholder, feed_dict=feed_dict)
+    out2 = session.run(network.layers["output2"].output.placeholder, feed_dict=feed_dict)
+    out3 = session.run(network.layers["output3"].output.placeholder, feed_dict=feed_dict)
+    numpy.testing.assert_almost_equal(out1, out2)
+    numpy.testing.assert_almost_equal(out2, out3)
+
+
+def test_extra_subnet():
+  n_in, n_out = 3, 3
+  config = Config({
+    "extern_data": {"data": {"dim": n_in}},
+    "debug_print_layer_output_template": True,
+  })
+  net_dict = {
+    "subnet": {
+      "class": "subnetwork",
+      "subnetwork": {
+        "output": {"class": "linear", "activation": "relu", "n_out": n_out},
+        "output2": {"class": "linear", "activation": "relu", "n_out": n_out, "is_output_layer": True},
+      },
+    },
+    "extra.2:subnet": {
+      "class": "subnetwork",
+      "subnetwork": {
+        "output": {"class": "copy"},
+        "output2": {"class": "linear", "activation": None, "n_out": n_out, "is_output_layer": True},
+      },
+    },
+    # extra.3:subnet automatically
+    "sub1_output1": {"class": "copy", "from": "subnet/output", "is_output_layer": True},
+    "sub1_output2": {"class": "copy", "from": "subnet/output2", "is_output_layer": True},
+    "sub2_output1": {"class": "copy", "from": "extra.2:subnet/output", "is_output_layer": True},
+    "sub2_output2": {
+      "class": "activation", "activation": "relu", "from": "extra.2:subnet/output2", "is_output_layer": True},
+    "sub3_output1": {"class": "copy", "from": "extra.3:subnet/output", "is_output_layer": True},
+    "sub3_output2": {"class": "copy", "from": "extra.3:subnet/output2", "is_output_layer": True},
+  }
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+    assert "extra.2" in network.extra_nets
+    assert "extra.3" in network.extra_nets
+    params = network.get_params_list()
+    print("Params:", params)
+    assert len(params) == 4
+
+    feed_dict = make_feed_dict(network.extern_data)
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+    in_ = feed_dict[network.extern_data.data["data"].placeholder]
+    sub1_out1 = session.run(network.layers["sub1_output1"].output.placeholder, feed_dict=feed_dict)
+    sub1_out2 = session.run(network.layers["sub1_output2"].output.placeholder, feed_dict=feed_dict)
+    sub2_out1 = session.run(network.layers["sub2_output1"].output.placeholder, feed_dict=feed_dict)
+    sub2_out2 = session.run(network.layers["sub2_output2"].output.placeholder, feed_dict=feed_dict)
+    sub3_out1 = session.run(network.layers["sub3_output1"].output.placeholder, feed_dict=feed_dict)
+    sub3_out2 = session.run(network.layers["sub3_output2"].output.placeholder, feed_dict=feed_dict)
+    numpy.testing.assert_almost_equal(sub1_out1, sub3_out1)
+    numpy.testing.assert_almost_equal(sub1_out2, sub3_out2)
+    numpy.testing.assert_almost_equal(sub1_out2, sub2_out2)
+    numpy.testing.assert_almost_equal(in_, sub2_out1)
+
+
 def test_extra_search():
   class Callbacks:
     history = []
