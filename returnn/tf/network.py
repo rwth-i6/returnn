@@ -697,7 +697,9 @@ class TFNetwork(object):
         output_template_special_axes = output_template.get_special_axes_dict()
         if not output_template.available_for_inference and not self.eval_flag:
           from returnn.tf.layers.base import DataNotAvailableLayer
-          return DataNotAvailableLayer(name=layer_desc['name'], network=layer_desc['network'], output=output_template)
+          return DataNotAvailableLayer(
+            name=layer_desc['name'], network=layer_desc['network'], output=output_template,
+            layer_class=layer_class, layer_desc=layer_desc)
         layer = layer_class(**layer_desc)
         layer.post_init(layer_desc)
         layer.output.sanity_check()

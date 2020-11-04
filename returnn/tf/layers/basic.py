@@ -5811,10 +5811,11 @@ class LossLayer(LayerBase):
       network=network, get_layer=get_layer, always_make=True)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, target_=None, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
+    :param LayerBase|None target_:
     :rtype: Data
     """
     assert len(sources) == 1
@@ -5822,6 +5823,9 @@ class LossLayer(LayerBase):
     if out.have_feature_axis():
       out = out.copy_template_excluding_axis(out.feature_dim_axis)
     out.dtype = "float32"
+    if target_:
+      out.beam = SearchBeam.get_combined_beam(out.beam, target_.output.beam)
+      out.available_for_inference = out.available_for_inference & target_.output.available_for_inference
     return out
 
 
@@ -6681,11 +6685,12 @@ class CrossEntropyLoss(Loss):
     """
     output_flat = self.output_flat
     if output_flat is None:
-      output_flat = self.output.get_placeholder_time_flattened()
+      output_flat = self._flatten_or_merge(
+        self.output.placeholder, self.output_seq_lens, time_major=self.output.is_time_major)
     target_flat_exp = tf.stack(
       [tf.range(tf.shape(self.target_flat)[0], dtype=tf.int32),
        tf.cast(self.target_flat, tf.int32)], axis=1)  # (time,2)
-    out = tf.gather_nd(output_flat, target_flat_exp)
+    out = tf.gather_nd(output_flat, target_flat_exp, name="ce_output_target_scores")
     return out
 
   def get_value(self):

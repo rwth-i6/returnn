@@ -2609,6 +2609,107 @@ def test_LossAsIs_custom_dim():
     assert loss
 
 
+def test_LossLayer_sublayers():
+  from returnn.tf.util.basic import DimensionTag
+  n_in, n_out = 7, 11
+  time_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
+
+  config = Config({
+    "extern_data": {
+      'data': {"dim": n_in, "same_dim_tags_as": {"t": time_tag}},
+      'classes': {'dim': n_out, 'dtype': 'int64', 'sparse': True, "same_dim_tags_as": {"t": time_tag}},
+      'prev-classes': {'dim': n_out, 'dtype': 'int64', 'sparse': True, "same_dim_tags_as": {"t": time_tag}}},
+    "debug_print_layer_output_template": True,
+  })
+  net_dict = {
+    'encoder-output': {"class": "linear", "activation": "relu", "n_out": 10},
+
+    'left-output': {'class': 'softmax', 'from': 'encoder-output', 'n_out': n_out},
+    'left-output-ce': {'class': 'loss',
+                       'from': 'left-output',
+                       'loss': 'as_is',
+                       'loss_': 'ce',
+                       'loss_scale': 0,
+                       'target_': 'prev-classes'},
+    'left-err': {'class': 'copy', 'from': 'left-output-ce/error', 'loss': 'as_is', 'loss_scale': 0},
+    'left-loss': {'class': 'copy', 'from': 'left-output-ce', 'loss': 'as_is'},
+
+    'past-embed': {'activation': None, 'class': 'linear', 'from': ['data:prev-classes'], 'n_out': 10},
+    'center-output': {'class': 'softmax', 'from': ['encoder-output', 'past-embed'], 'n_out': n_out},
+    'center-output-ce': {'class': 'loss',
+                         'from': 'center-output',
+                         'loss': 'as_is',
+                         'loss_': 'ce',
+                         'loss_scale': 0,
+                         'target_': 'classes'},
+    'center-err': {'class': 'copy', 'from': 'center-output-ce/error', 'loss': 'as_is', 'loss_scale': 0},
+    'center-loss': {'class': 'copy', 'from': 'center-output-ce', 'loss': 'as_is'},
+  }
+  print("Layers:", sorted(net_dict.keys()))
+
+  print("Training")
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    # Check defaults available for inference.
+    assert network.extern_data.data["data"].available_for_inference
+    assert not network.extern_data.data["classes"].available_for_inference
+    assert not network.extern_data.data["prev-classes"].available_for_inference
+    network.construct_from_dict(net_dict)
+    optimizer = tf_compat.v1.train.AdamOptimizer()
+    fetches_dict = network.get_fetches_dict(should_train=True, should_eval=True, with_size=True)
+    fetches_dict["optim_op"] = optimizer.minimize(network.get_objective())
+    feed_dict = make_feed_dict(network.extern_data, same_time=True)
+    session.run(tf_compat.v1.global_variables_initializer())
+    for step in range(3):
+      try:
+        results = session.run(fetches_dict, feed_dict=feed_dict)
+      except tf.errors.OpError as exc:
+        help_on_tf_exception(
+          session=session,
+          exception=exc, fetches=fetches_dict, feed_dict=feed_dict,
+          extern_data=network.extern_data)
+        raise
+      pprint(results)
+
+  print("Forwarding")
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=False)
+    network.construct_from_dict(net_dict)
+    # Not sure if we would always expect that all layers with losses are constructed in this case,
+    # but this is current behavior.
+    # In any case, if we do that, they should infer the available_for_inference correctly.
+    assert network.layers["encoder-output"].output.available_for_inference
+    assert network.layers["left-output"].output.available_for_inference
+    assert not network.layers["past-embed"].output.available_for_inference
+    assert not network.layers["center-output"].output.available_for_inference
+    assert not network.layers["center-output-ce"].output.available_for_inference
+    assert not network.layers["center-loss"].output.available_for_inference
+    assert not network.layers["center-err"].output.available_for_inference
+    fetches_dict = network.get_fetches_dict(should_train=False, should_eval=False, with_size=True)
+    feed_dict = make_feed_dict(network.extern_data, same_time=True)
+    session.run(tf_compat.v1.global_variables_initializer())
+    results = session.run(fetches_dict, feed_dict=feed_dict)
+    pprint(results)
+
+  print("Forwarding with fixed available-for-inference")
+  with make_scope() as session:
+    config.typed_dict["extern_data"]["prev-classes"]["available_for_inference"] = True
+    network = TFNetwork(config=config, train_flag=False)
+    network.construct_from_dict(net_dict)
+    assert network.layers["encoder-output"].output.available_for_inference
+    assert network.layers["left-output"].output.available_for_inference
+    assert network.layers["past-embed"].output.available_for_inference
+    assert network.layers["center-output"].output.available_for_inference
+    assert not network.layers["center-output-ce"].output.available_for_inference
+    assert not network.layers["center-loss"].output.available_for_inference
+    assert not network.layers["center-err"].output.available_for_inference
+    fetches_dict = network.get_fetches_dict(should_train=False, should_eval=False, with_size=True)
+    feed_dict = make_feed_dict(network.extern_data, same_time=True)
+    session.run(tf_compat.v1.global_variables_initializer())
+    results = session.run(fetches_dict, feed_dict=feed_dict)
+    pprint(results)
+
+
 def test_param_variational_noise():
   from returnn.tf.util.basic import print_graph_output, find_ops_with_tensor_input
   config = Config({
@@ -2913,6 +3014,93 @@ def test_split_info_input():
     # the param init handling...
     # actually, for param init handling, input dim splits do not matter. they matter just for copying/growing-pretrain.
     # for param init handling, output dim split do matter.
+
+
+def test_extra1():
+  n_in, n_out = 2, 3
+  config = Config({
+    "extern_data": {"data": {"dim": n_in}},
+    "debug_print_layer_output_template": True,
+  })
+  net_dict = {
+    "input": {"class": "linear", "activation": "relu", "n_out": n_out, "from": "data"},
+    "extra.2:input": {"class": "linear", "activation": None, "n_out": n_out, "from": "data"},
+    # "extra.3:input automatically ...
+    "output1": {"class": "copy", "from": "input", "is_output_layer": True},
+    "output2": {"class": "activation", "from": "extra.2:input", "activation": "relu", "is_output_layer": True},
+    "output3": {"class": "copy", "from": "extra.3:input", "is_output_layer": True},
+  }
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+
+    assert "extra.2" in network.extra_nets
+    assert "extra.3" in network.extra_nets
+    params = network.get_params_list()
+    print("Params:", params)
+    assert len(params) == 2  # W + b
+
+    feed_dict = make_feed_dict(network.extern_data)
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+    out1 = session.run(network.layers["output1"].output.placeholder, feed_dict=feed_dict)
+    out2 = session.run(network.layers["output2"].output.placeholder, feed_dict=feed_dict)
+    out3 = session.run(network.layers["output3"].output.placeholder, feed_dict=feed_dict)
+    numpy.testing.assert_almost_equal(out1, out2)
+    numpy.testing.assert_almost_equal(out2, out3)
+
+
+def test_extra_subnet():
+  n_in, n_out = 3, 3
+  config = Config({
+    "extern_data": {"data": {"dim": n_in}},
+    "debug_print_layer_output_template": True,
+  })
+  net_dict = {
+    "subnet": {
+      "class": "subnetwork",
+      "subnetwork": {
+        "output": {"class": "linear", "activation": "relu", "n_out": n_out},
+        "output2": {"class": "linear", "activation": "relu", "n_out": n_out, "is_output_layer": True},
+      },
+    },
+    "extra.2:subnet": {
+      "class": "subnetwork",
+      "subnetwork": {
+        "output": {"class": "copy"},
+        "output2": {"class": "linear", "activation": None, "n_out": n_out, "is_output_layer": True},
+      },
+    },
+    # extra.3:subnet automatically
+    "sub1_output1": {"class": "copy", "from": "subnet/output", "is_output_layer": True},
+    "sub1_output2": {"class": "copy", "from": "subnet/output2", "is_output_layer": True},
+    "sub2_output1": {"class": "copy", "from": "extra.2:subnet/output", "is_output_layer": True},
+    "sub2_output2": {
+      "class": "activation", "activation": "relu", "from": "extra.2:subnet/output2", "is_output_layer": True},
+    "sub3_output1": {"class": "copy", "from": "extra.3:subnet/output", "is_output_layer": True},
+    "sub3_output2": {"class": "copy", "from": "extra.3:subnet/output2", "is_output_layer": True},
+  }
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+    assert "extra.2" in network.extra_nets
+    assert "extra.3" in network.extra_nets
+    params = network.get_params_list()
+    print("Params:", params)
+    assert len(params) == 4
+
+    feed_dict = make_feed_dict(network.extern_data)
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+    in_ = feed_dict[network.extern_data.data["data"].placeholder]
+    sub1_out1 = session.run(network.layers["sub1_output1"].output.placeholder, feed_dict=feed_dict)
+    sub1_out2 = session.run(network.layers["sub1_output2"].output.placeholder, feed_dict=feed_dict)
+    sub2_out1 = session.run(network.layers["sub2_output1"].output.placeholder, feed_dict=feed_dict)
+    sub2_out2 = session.run(network.layers["sub2_output2"].output.placeholder, feed_dict=feed_dict)
+    sub3_out1 = session.run(network.layers["sub3_output1"].output.placeholder, feed_dict=feed_dict)
+    sub3_out2 = session.run(network.layers["sub3_output2"].output.placeholder, feed_dict=feed_dict)
+    numpy.testing.assert_almost_equal(sub1_out1, sub3_out1)
+    numpy.testing.assert_almost_equal(sub1_out2, sub3_out2)
+    numpy.testing.assert_almost_equal(sub1_out2, sub2_out2)
+    numpy.testing.assert_almost_equal(in_, sub2_out1)
 
 
 def test_extra_search():
