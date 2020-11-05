@@ -1957,7 +1957,7 @@ class Engine(EngineBase):
     """
     if self._checked_uninitialized_vars:
       return
-    with tf.name_scope("check_uninitialized_vars"):
+    with tf.name_scope("check_uninitialized_vars"), self.tf_session.graph.as_default():
       # Like tf.report_uninitialized_variables().
       var_list = tf_compat.v1.global_variables() + tf_compat.v1.local_variables()
       if not var_list:
