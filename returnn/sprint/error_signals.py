@@ -19,7 +19,7 @@ import typing
 from threading import RLock, Thread
 import returnn.util.task_system as task_system
 from returnn.util.task_system import Pickler, Unpickler, numpy_set_unused
-from returnn.util.basic import eval_shell_str, make_hashable, BackendEngine
+from returnn.util.basic import eval_shell_str, make_hashable, BackendEngine, BytesIO, PY3
 from returnn.log import log
 
 
@@ -209,12 +209,47 @@ class SprintSubprocessInstance:
   def _send(self, v):
     assert os.getpid() == self.parent_pid
     p = self.pipe_p2c[1]  # see _start_child
-    Pickler(p).dump(v)
+    #Pickler(p).dump(v)
+    import struct
+    stream = BytesIO()
+    Pickler(stream, protocol=2).dump(v)
+    raw_data = stream.getvalue()
+    assert len(raw_data) > 0
+    p.write(struct.pack("<i", len(raw_data)))
+    p.write(raw_data)
 
   def _read(self):
     assert os.getpid() == self.parent_pid
     p = self.pipe_c2p[0]  # see _start_child
-    return Unpickler(p).load()
+    #return Unpickler(p).load()
+    import struct
+    size_raw = p.read(4)
+    if len(size_raw) < 4:
+      raise EOFError("%s: got nothing from Sprint. check error in Sprint" % (self))
+    size, = struct.unpack("<i", size_raw)
+    assert size > 0, "%s: We expect to get some non-empty package. Invalid Python mod in Sprint?" % (self,)
+    stream = BytesIO()
+    read_size = 0
+    while read_size < size:
+      data_raw = p.read(size - read_size)
+      if len(data_raw) == 0:
+        raise EOFError("%s: expected to read %i bytes but got EOF after %i bytes" % (self, size, read_size))
+      read_size += len(data_raw)
+      stream.write(data_raw)
+    stream.seek(0)
+    try:
+      if PY3:
+        data = Unpickler(stream, encoding="bytes").load()
+      else:
+        data = Unpickler(stream).load()
+    except EOFError:
+      raise Exception("%s: parse error of %i bytes (%r)" % (self, size, stream.getvalue()))
+    # first is always return status
+    if isinstance(data[0], bytes):
+      data = list(data)
+      data[0] = data[0].decode('utf-8')
+      data = tuple(data)
+    return data
 
   def _poll(self):
     assert os.getpid() == self.parent_pid
@@ -496,6 +531,8 @@ class SprintInstancePool:
         instance = self._get_instance(i)
         if isinstance(tags[0], str):
           segment_name = tags[b]
+        elif isinstance(tags[0], bytes):
+          segment_name = tags[b].decode('utf-8')
         else:
           segment_name = tags[b].view('S%d' % tags.shape[1])[0]
         assert isinstance(segment_name, str)
