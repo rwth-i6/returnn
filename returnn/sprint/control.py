@@ -403,7 +403,6 @@ class PythonControl:
     return loss, error_signal
 
   def _send(self, data):
-    #Pickler(self.pipe_c2p).dump(data)
     import struct
     stream = BytesIO()
     Pickler(stream).dump(data)
@@ -414,7 +413,6 @@ class PythonControl:
     self.pipe_c2p.flush()
 
   def _read(self):
-    #return Unpickler(self.pipe_p2c).load()
     import struct
     size_raw = self.pipe_p2c.read(4)
     if len(size_raw) < 4:

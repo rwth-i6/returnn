@@ -209,7 +209,6 @@ class SprintSubprocessInstance:
   def _send(self, v):
     assert os.getpid() == self.parent_pid
     p = self.pipe_p2c[1]  # see _start_child
-    #Pickler(p).dump(v)
     import struct
     stream = BytesIO()
     Pickler(stream, protocol=2).dump(v)
@@ -221,7 +220,6 @@ class SprintSubprocessInstance:
   def _read(self):
     assert os.getpid() == self.parent_pid
     p = self.pipe_c2p[0]  # see _start_child
-    #return Unpickler(p).load()
     import struct
     size_raw = p.read(4)
     if len(size_raw) < 4:
