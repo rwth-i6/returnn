@@ -595,7 +595,7 @@ def network_json_from_config(config, mask=None):
 
 def get_devices_init_args(config):
   """
-  :type config: Config.Config
+  :param Config config:
   :rtype: list[dict[str]]
   """
   import re
@@ -687,3 +687,29 @@ def get_devices_init_args(config):
     else:
       devices = [{"device": tags[0], "config": config, "blocking": True}]
   return devices
+
+
+def tf_should_use_gpu(config):
+  """
+  :param Config config:
+  :rtype: bool
+  """
+  cfg_dev = config.value("device", None)
+  # Short path.
+  if cfg_dev == "gpu":
+    return True
+  if cfg_dev == "cpu":
+    return False
+  if not cfg_dev:
+    # Better default: Use GPU if available.
+    from returnn.log import log
+    from returnn.tf.util.basic import is_gpu_available
+    if is_gpu_available():
+      print("Device not set explicitly, and we found a GPU, which we will use.", file=log.v2)
+      config.set("device", "gpu")
+    else:
+      print("Device not set explicitly, and no GPU found.", file=log.v2)
+      config.set("device", "cpu")
+  devs = get_devices_init_args(config)
+  assert len(devs) == 1, "multiple devices not supported yet for TF"
+  return any([d["device"].startswith("gpu") for d in devs])

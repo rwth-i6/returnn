@@ -1024,7 +1024,11 @@ def print_available_devices(tf_session_opts=None, file=None):
 def is_gpu_available():
   """
   Returns whether TensorFlow can access a GPU.
-  This uses tensorflow.device_lib.list_local_devices().
+  This uses tensorflow.device_lib.list_local_devices(),
+  i.e. this is independent from the current TF session.
+  If you want to know whether the current TF session has a GPU available,
+  use :func:`is_gpu_available_in_session`.
+
   Note that a call to this will trigger the internal TF thread pool inits,
   so you should call :func:`setup_tf_thread_pools` first.
 
@@ -1032,6 +1036,32 @@ def is_gpu_available():
   """
   # Also, we could maybe use tf.test.is_gpu_available().
   return len(get_available_gpu_devices()) > 0
+
+
+def is_gpu_available_in_session(session=None):
+  """
+  :param tf.compat.v1.Session|None session:
+    If None, will use current active/default session.
+    If that is also not available (no current active session),
+    we check a RETURNN global config,
+    and return whether the RETURNN global config will use GPU or not.
+    If the RETURNN global config is not available,
+    we will use if a GPU is in general available for TF.
+  :returns: whether the TensorFlow session has a GPU device.
+    Also see :func:`is_gpu_available`.
+  :rtype: bool
+  """
+  if not session:
+    session = tf_compat.v1.get_default_session()
+    if not session:
+      # Now we assume a RETURNN environment, with a global config.
+      import returnn.config
+      config = returnn.config.get_global_config(raise_exception=False)  # use set_global_config if this fails
+      if config:
+        return returnn.config.tf_should_use_gpu(config)
+      return is_gpu_available()
+  devs = session.list_devices()
+  return any([x for x in devs if x.device_type == 'GPU'])
 
 
 def get_available_gpu_devices():
