@@ -603,7 +603,7 @@ class InputContext(object):
     """
     # TODO this is probably incomplete
     import returnn.tf.util.basic
-    if returnn.tf.util.basic.is_gpu_available():
+    if returnn.tf.util.basic.is_gpu_available_in_session():
       return "/device:GPU:0"
     return "/device:CPU:0"
 

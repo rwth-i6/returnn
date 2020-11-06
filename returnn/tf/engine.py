@@ -783,7 +783,6 @@ class Engine(EngineBase):
     self.config = config
     self.orig_config = {}  # see _maybe_update_config
     self.custom_get_net_dict = None  # type: typing.Optional[typing.Callable]
-    self.devices_config = self._get_devices_config()
     self._check_devices()
     self.tf_session = None  # type: typing.Optional[tf.compat.v1.Session]
     self.network = None  # type: typing.Optional[TFNetwork]
@@ -822,30 +821,15 @@ class Engine(EngineBase):
       self._const_cache[key] = tf.constant(value=value, name="const_%s" % key)
     return self._const_cache[key]
 
-  def _get_devices_config(self):
-    """
-    :rtype: list[dict[str]]
-    """
-    from returnn.config import get_devices_init_args
-    if not self.config.value("device", None):
-      # Better default: Use GPU if available.
-      from returnn.tf.util.basic import is_gpu_available
-      if is_gpu_available():
-        print("Device not set explicitly, and we found a GPU, which we will use.", file=log.v2)
-        self.config.set("device", "gpu")
-      else:
-        print("Device not set explicitly, and no GPU found.", file=log.v2)
-    return get_devices_init_args(self.config)
-
   def is_requesting_for_gpu(self):
     """
     :rtype: bool
     """
-    return any([d["device"].startswith("gpu") for d in self.devices_config])
+    from returnn.config import tf_should_use_gpu
+    return tf_should_use_gpu(self.config)
 
   def _check_devices(self):
     from returnn.tf.util.basic import is_gpu_available
-    assert len(self.devices_config) == 1, "multiple devices not supported yet for TF"
     if self.is_requesting_for_gpu():
       assert tf.test.is_built_with_cuda(), "You use a CPU-only TF version. Use tensorflow-gpu."
       assert is_gpu_available(), "no GPU available"
@@ -1957,7 +1941,7 @@ class Engine(EngineBase):
     """
     if self._checked_uninitialized_vars:
       return
-    with tf.name_scope("check_uninitialized_vars"):
+    with tf.name_scope("check_uninitialized_vars"), self.tf_session.graph.as_default():
       # Like tf.report_uninitialized_variables().
       var_list = tf_compat.v1.global_variables() + tf_compat.v1.local_variables()
       if not var_list:

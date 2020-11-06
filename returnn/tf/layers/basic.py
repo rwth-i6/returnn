@@ -1147,7 +1147,7 @@ class LinearLayer(_ConcatInputLayer):
         b = None
 
     with tf.name_scope("linear"):
-      from returnn.tf.util.basic import dot, to_int32_64, is_gpu_available, move_axis
+      from returnn.tf.util.basic import dot, to_int32_64, is_gpu_available_in_session, move_axis
       x = input_data.placeholder
       ndim = x.get_shape().ndims
 
@@ -1157,7 +1157,7 @@ class LinearLayer(_ConcatInputLayer):
         ndim += 1
       elif self.input_data.feature_dim_axis == self.input_data.batch_ndim - 1:
         x = dot(x, weights_, transpose_b=self.use_transposed_weights)
-      elif self.input_data.is_batch_feature_major and is_gpu_available():  # CuDNN has a fast version for this
+      elif self.input_data.is_batch_feature_major and is_gpu_available_in_session():  # CuDNN has fast version for this
         # Use conv instead, it has optimized code for batch-feature major (only CuDNN).
         x_shape = None
         if self.input_data.batch_ndim > 3:
@@ -3043,7 +3043,7 @@ class ConvLayer(_ConcatInputLayer):
               filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
     feature_dim_axis = NotSpecified
     # Swap the dims if the input dim order doesn't fit the flag auto_use_channel_first.
-    if tf_util.is_gpu_available() and (auto_use_channel_first or data.is_batch_feature_major):
+    if tf_util.is_gpu_available_in_session() and (auto_use_channel_first or data.is_batch_feature_major):
       feature_dim_axis = 1
       shape = shape[-1:] + shape[:-1]
     return {
@@ -3180,7 +3180,7 @@ class PoolLayer(_ConcatInputLayer):
           filter_size=pool_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
     feature_dim_axis = NotSpecified
     # Swap the dims if use_channel_first is set.
-    if tf_util.is_gpu_available() and use_channel_first:
+    if tf_util.is_gpu_available_in_session() and use_channel_first:
       feature_dim_axis = 1
       shape = shape[-1:] + shape[:-1]
     return Data(

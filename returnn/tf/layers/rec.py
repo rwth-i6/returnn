@@ -117,7 +117,7 @@ class RecLayer(_ConcatInputLayer):
     """
     super(RecLayer, self).__init__(**kwargs)
     import re
-    from returnn.tf.util.basic import is_gpu_available
+    from returnn.tf.util.basic import is_gpu_available_in_session
     rnn_contrib = None
     try:
       # noinspection PyUnresolvedReferences
@@ -126,7 +126,7 @@ class RecLayer(_ConcatInputLayer):
       pass
     from tensorflow.python.util import nest
     cudnn_rnn = None
-    if is_gpu_available():
+    if is_gpu_available_in_session():
       try:
         # noinspection PyUnresolvedReferences
         from tensorflow.contrib import cudnn_rnn
@@ -427,7 +427,7 @@ class RecLayer(_ConcatInputLayer):
   @classmethod
   def _create_rnn_cells_dict(cls):
     import returnn.tf.native_op as tf_native_op
-    from returnn.tf.util.basic import is_gpu_available
+    from returnn.tf.util.basic import is_gpu_available_in_session
     allowed_types = (rnn_cell.RNNCell, tf_native_op.RecSeqCellOp)
     rnn_contrib = None
     try:
@@ -437,7 +437,7 @@ class RecLayer(_ConcatInputLayer):
     except ImportError:
       pass
     cudnn_rnn = None
-    if is_gpu_available():
+    if is_gpu_available_in_session():
       try:
         # noinspection PyUnresolvedReferences
         from tensorflow.contrib import cudnn_rnn
@@ -494,8 +494,8 @@ class RecLayer(_ConcatInputLayer):
     # but will always be added.
     # Thus when changing from e.g. NativeLSTM -> StandardLSTM, param importing works,
     # but you explicitly need to specify `"unit_opts": {"forget_bias": 0.0}`, otherwise it will be wrong.
-    from returnn.tf.util.basic import is_gpu_available
-    if not is_gpu_available():
+    from returnn.tf.util.basic import is_gpu_available_in_session
+    if not is_gpu_available_in_session():
       m = {"cudnnlstm": "LSTMBlockFused", "cudnngru": "GRUBlock"}
       if name.lower() in m:
         if name.lower() not in cls._warn_msg_once_for_cell_name:
@@ -597,7 +597,7 @@ class RecLayer(_ConcatInputLayer):
     :param None|dict[str] unit_opts:
     :rtype: _SubnetworkRecCell|tensorflow.contrib.rnn.RNNCell|tensorflow.contrib.rnn.FusedRNNCell|TFNativeOp.RecSeqCellOp  # nopep8
     """
-    from returnn.tf.util.basic import is_gpu_available
+    from returnn.tf.util.basic import is_gpu_available_in_session
     rnn_contrib = None
     try:
       # noinspection PyUnresolvedReferences
@@ -613,7 +613,7 @@ class RecLayer(_ConcatInputLayer):
     n_hidden = self.output.dim
     if unit_opts is None:
       unit_opts = {}
-    if is_gpu_available():
+    if is_gpu_available_in_session():
       try:
         # noinspection PyUnresolvedReferences
         from tensorflow.contrib import cudnn_rnn
@@ -7298,8 +7298,8 @@ class BlocksparseLSTMCell(_WrapBaseCell):
     if kwargs.get('is_training', None) is None:
       from returnn.tf.network import TFNetwork
       kwargs['is_training'] = TFNetwork.get_current_network().train_flag
-    from returnn.tf.util.basic import is_gpu_available
-    if not is_gpu_available():
+    from returnn.tf.util.basic import is_gpu_available_in_session
+    if not is_gpu_available_in_session():
       kwargs.setdefault("fast_layer_norm", False)
     super(BlocksparseLSTMCell, self).__init__(*args, **kwargs)
 
@@ -7387,8 +7387,8 @@ class BlocksparseMultiplicativeMultistepLSTMCell(_WrapBaseCell):
     if kwargs.get('is_training', None) is None:
       from returnn.tf.network import TFNetwork
       kwargs['is_training'] = TFNetwork.get_current_network().train_flag
-    from returnn.tf.util.basic import is_gpu_available
-    if not is_gpu_available():
+    from returnn.tf.util.basic import is_gpu_available_in_session
+    if not is_gpu_available_in_session():
       kwargs.setdefault("fast_layer_norm", False)
     super(BlocksparseMultiplicativeMultistepLSTMCell, self).__init__(*args, **kwargs)
 
@@ -7748,8 +7748,8 @@ class TwoDLSTMLayer(LayerBase):
     """
     super(TwoDLSTMLayer, self).__init__(**kwargs)
     import re
-    from returnn.tf.util.basic import is_gpu_available
-    assert is_gpu_available(), "currently, there's no CPU support"
+    from returnn.tf.util.basic import is_gpu_available_in_session
+    assert is_gpu_available_in_session(), "currently, there's no CPU support"
     self.pooling = pooling
     # On the random initialization:
     # For many cells, e.g. NativeLSTM: there will be a single recurrent weight matrix, (output.dim, output.dim * 4),
