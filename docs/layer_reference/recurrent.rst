@@ -11,10 +11,31 @@ Choice Layer
     :members:
     :undoc-members:
 
-Decision Layer
---------------
+Choice Get Beam Scores Layer
+----------------------------
+
+.. autoclass:: returnn.tf.layers.rec.ChoiceGetBeamScoresLayer
+    :members:
+    :undoc-members:
+
+Choice Get Source Beams Layer
+-----------------------------
+
+.. autoclass:: returnn.tf.layers.rec.ChoiceGetSrcBeamsLayer
+    :members:
+    :undoc-members:
+
+Decide Layer
+------------
 
 .. autoclass:: returnn.tf.layers.rec.DecideLayer
+    :members:
+    :undoc-members:
+
+Decide Keep Beam Layer
+----------------------
+
+.. autoclass:: returnn.tf.layers.rec.DecideKeepBeamLayer
     :members:
     :undoc-members:
 
@@ -39,10 +60,10 @@ Masked Computation Layer
     :members:
     :undoc-members:
 
-Positional Encoding Layer
--------------------------
+Unmasking Layer
+---------------
 
-.. autoclass:: returnn.tf.layers.rec.PositionalEncodingLayer
+.. autoclass:: returnn.tf.layers.rec.UnmaskLayer
     :members:
     :undoc-members:
 
@@ -59,7 +80,6 @@ RNN Cell Layer
 .. autoclass:: returnn.tf.layers.rec.RnnCellLayer
     :members:
     :undoc-members:
-
 
 Self-Attention Layer
 --------------------

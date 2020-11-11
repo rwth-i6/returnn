@@ -10,12 +10,14 @@ Layers / Modules
     basic.rst
     shape.rst
     recurrent.rst
+    units.rst
     attention.rst
     norm.rst
     custom.rst
     utility.rst
     loss.rst
     softmax.rst
-    units.rst
+    generative.rst
+    alignment.rst
 
 
