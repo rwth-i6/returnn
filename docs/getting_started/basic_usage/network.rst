@@ -179,10 +179,12 @@ For layers that operate on specific axes, meaning they have an ``axis`` or ``axe
     - ``B|batch:`` select the batch axis
     - ``T|time:`` select the time axis
     - ``F|feature`` select the feature axis
-    - ``spatial`` select all spatial axes (not batch and not feature, needs dynamic length)
+    - ``spatial`` select all spatial axes (not batch and not feature)
     - ``S:<int>|spatial:<int>`` select a single spatial axis from the list of all spatial axes (zero-based, can be negative)
-    - ``dyn|dynamic`` select all dynamic axes (all spacial axes and time even if it has no dynamic length)
+    - ``dyn|dynamic`` select all dynamic axes (all spacial axes with dynamic time and time even if it has no dynamic length)
     - ``D:<int>|dyn:<int>|dynamic:<int>`` select a specific dynamic axis (zero-based, can be negative)
+    - ``static`` select all static axes (not batch, and has a fixed dimension)
+    - ``static:<int>`` select a specific static axis
     - ``T?`` select time axis if existing, none otherwise
     - ``spatial_except_time`` select all spatial axes but also not the time axis
     - ``except_time`` select all axes except time and batch axis
