@@ -3637,13 +3637,14 @@ class SqueezeLayer(_ConcatInputLayer):
     input_data = get_concat_sources_data_template(sources)
     if enforce_batch_dim_axis is not None:
       input_data = input_data.copy_with_batch_dim_axis(enforce_batch_dim_axis)
-    if axis == "auto":
-      axis = cls._get_axes(axis, input_data=input_data)
+    axis_indices = cls._get_axes(axis, input_data=input_data)
     if allow_no_op:
-      if not cls._get_axes(axis, input_data=input_data):
+      if not axis_indices:
         return input_data.copy("%s_output" % kwargs["name"])
-    return ReduceLayer.get_out_data_from_opts(
-      axis=axis, keep_dims=False, enforce_batch_dim_axis=enforce_batch_dim_axis, sources=sources, **kwargs)
+    # remove the axis in reversed order
+    for axis_idx in sorted(axis_indices, reverse=True):
+      input_data = input_data.copy_template_excluding_axis(axis_idx)
+    return input_data
 
 
 class StackLayer(LayerBase):
