@@ -2395,6 +2395,154 @@ class Engine(EngineBase):
         raise Exception("invalid output_file_format %r" % output_file_format)
       output_file.close()
 
+  def single_inference(self, input_data, output_layer_names=None):
+    """
+    Generic function that runs the network on the given input data and fetches outputs from the given output layers.
+    It aims to provide a one-line interface to run a model when using RETURNN as a framework.
+
+    We expect that the network has been initialized via self.init_network_from_config(). Depending on whether
+    self.use_search_flag was set, this function will be similar to self.forward() or self.search().
+
+    Input data is given as a list (i.e. batch) of sequences. The data for each sequence is given in a
+    <data_key> -> <data> dictionary. For numeric inputs, we expect <data> to be numpy arrays. For string inputs, we
+    support doing the vocabulary lookup here. This means <data> can be a numpy array of vocabulary indices, or a list of
+    strings which we will convert to vocabulary indices internally. For this, the vocabulary has to be set for the
+    corresponding data key in external_data, e.g. by setting 'extern_data = {"data": {"vocab": "vocab.pkl", ...}}' in
+    the config.
+
+    Outputs will be returned as a list of sequence data, each being a dict <output_layer_name> -> <data>, where <data>
+    is a numpy array. If a vocabulary for the target of the output layer is set in extern_data, the output is
+    interpreted as vocabulary indices and we create an additional entry in the output dicts with the key
+    "<output_layer_name>:string" (e.g. "output:string") containing a list of strings corresponding to the vocabulary
+    indices.
+    If we are doing search and the output of an output layer has a beam, <data> will be a list of numpy arrays instead,
+    corresponding to the hyps in the beam (also for the ":string" data). In addition, there will be an output
+    "<output_layer_name>:beam_scores" which contains the beam scores for this output layer as a list of floats.
+
+    The shapes of all in- and output numpy arrays correspond to what is defined as extern_data in the config.
+
+    :param list[dict]|dict input_data: Batch of data_key -> data dicts, see above.
+      Giving a single sequence (i.e. no list) is also supported. In that case, output will be a single dict too.
+    :param str|list[str]|None output_layer_names: Names of the layers to fetch outputs from. If not set, will read
+      from config "search_output_layer".
+    :return: Outputs of all output layers and possibly additional outputs ":string" and ":beam_scores" for all
+      sequences, see above.
+    :rtype: list[dict]|dict
+    """
+    from returnn.datasets.map import FromListDataset
+
+    is_single_sequence = False
+    if not isinstance(input_data, list):
+      # Support input of a single sequence without a "batch".
+      input_data = [input_data]
+      is_single_sequence = True
+
+    assert input_data and isinstance(input_data[0], dict), (
+      "Expected list of sequence data, each of which being a dict data_key->data.")
+
+    # Get input data types (shape, dim, dtype, etc.) from network.
+    input_data_keys = input_data[0].keys()
+    input_data_types = {}
+    for data_key in input_data_keys:
+      assert data_key in self.network.extern_data.data, "Data key '{}' is unknown to the network.".format(data_key)
+      input_data_types[data_key] = self.network.extern_data.data[data_key]
+
+    # Convert all string data to vocabulary indices.
+    input_data_converted = [{} for _ in input_data]
+    for seq_idx, seq_input_data in enumerate(input_data):
+      assert seq_input_data.keys() == input_data_keys, "All input sequences must provide the same data keys."
+      for data_key in input_data_keys:
+        # For convenient type checking, but also to support any other input that can be converted to an array.
+        data = numpy.array(seq_input_data[data_key])
+        if data.dtype.char in ["S", "U"]:  # string types
+          # TODO: support string arrays with 0 or more than 1 dimension
+          assert data.ndim == 1, "Currently, only 1-D string sequences are supported for automatic vocabulary lookup."
+          vocab = self.network.extern_data.data[data_key].vocab
+          assert vocab, "Got string data but found no vocabulary for {} in extern data.".format(data_key)
+          input_data_converted[seq_idx][data_key] = numpy.array(vocab.get_seq_indices(data.tolist()))
+        else:
+          input_data_converted[seq_idx][data_key] = data
+
+    output_layer_names = output_layer_names or self.config.typed_value("search_output_layer", "output")
+    if not isinstance(output_layer_names, list):
+      output_layer_names = [output_layer_names]
+
+    # Create fetches dict. We fetch the layer outputs, and also sequence lengths and beam scores if applicable.
+    fetches_dict = {}
+    for output_layer_name in output_layer_names:
+      output_layer = self.network.layers[output_layer_name]
+      output_placeholder = output_layer.output.get_placeholder_as_batch_major()
+      fetches_dict[output_layer_name] = output_placeholder
+
+      if output_layer.output.have_time_axis():
+        output_seq_lens = output_layer.output.get_sequence_lengths()
+        fetches_dict[output_layer_name + ":seq_lens"] = output_seq_lens
+
+      search_choices = output_layer.get_search_choices()
+      if search_choices:
+        output_layer_beam_scores = search_choices.beam_scores
+        fetches_dict[output_layer_name + ":beam_scores"] = output_layer_beam_scores
+
+    dataset = FromListDataset(data_list=input_data_converted, num_outputs=input_data_types)
+    dataset.init_seq_order(epoch=1)
+
+    output_batch = self.run_single(dataset=dataset, output_dict=fetches_dict, seq_idx=-1)
+
+    output_data = []
+    for seq_idx in range(len(input_data)):
+      seq_data = {}
+      for output_layer_name in output_layer_names:
+        output_layer = self.network.layers[output_layer_name]
+
+        beam_size = output_layer.output.beam.beam_size if output_layer.output.beam else 1
+        beam_first_idx = seq_idx * beam_size
+        beam_last_idx = (seq_idx + 1) * beam_size
+
+        output = output_batch[output_layer_name][beam_first_idx:beam_last_idx, :]
+
+        # Unpack the batch dim (here: the beam) into a list.
+        output = list(output)
+
+        # Remove padding from outputs by applying sequence length.
+        if output_layer.output.have_time_axis():
+          output_seq_lens = output_batch[output_layer_name + ":seq_lens"][beam_first_idx:beam_last_idx]
+          output = [output_[:length] for output_, length in zip(output, output_seq_lens)]
+          # TODO: handle multiple dynamic axes
+
+        if output_layer_name + ":beam_scores" in fetches_dict:
+          seq_data[output_layer_name + ":beam_scores"] = (
+            output_batch[output_layer_name + ":beam_scores"][seq_idx].tolist())
+
+        # Convert indices to string if vocabulary is found.
+        vocab, string_output = None, None
+        if output_layer.target and output_layer.target in self.network.extern_data.data:
+          vocab = self.network.extern_data.data[output_layer.target].vocab
+
+        if vocab:
+          if self.network.extern_data.data[output_layer.target].ndim != 1:
+            # TODO: support string arrays with 0 or more than 1 dimension
+            print("WARNING: Currently, only 1-D string sequences are supported for automatic vocabulary lookup. "
+                  "Will not create output '{}:string'".format(output_layer_name), file=log.v2)
+          else:
+            string_output = [vocab.get_seq_labels(output_).split() for output_ in output] if vocab else None
+
+        if not output_layer.output.beam:
+          # Remove beam dim if originally there was none.
+          output = output[0]
+          string_output = string_output[0] if string_output else None
+
+        seq_data[output_layer_name] = output
+        if string_output:
+          seq_data[output_layer_name + ":string"] = string_output
+
+      output_data.append(seq_data)
+
+    if is_single_sequence:
+      assert len(output_data) == 1
+      output_data = output_data[0]
+
+    return output_data
+
   def search_single(self, dataset, seq_idx, output_layer_name=None):
     """
     Performs search.
