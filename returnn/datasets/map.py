@@ -197,3 +197,41 @@ class MapDatasetWrapper(CachedDataset2):
     if self.is_data_sparse(key):
       return []
     return [self.get_data_dim(key)]
+
+
+class FromListDataset(MapDatasetBase):
+  """
+  Simple implementation of a MapDataset where all data is given in a list.
+  """
+  def __init__(self, data_list, sort_data_key=None, **kwargs):
+    """
+    :param list[dict[str,numpy.ndarray]] data_list: sequence data as a dict data_key -> data for all sequences.
+    :param str sort_data_key: Sequence length will be determined from data of this data_key.
+    """
+    self._data_list = data_list
+    self._sort_data_key = sort_data_key
+    super(FromListDataset, self).__init__(**kwargs)
+
+  def __len__(self):
+    """
+    :return: total number of sequences in the dataset
+    :rtype: int
+    """
+    return len(self._data_list)
+
+  def __getitem__(self, seq_idx):
+    """
+    :param int seq_idx:
+    :return: The content of a single dataset entry
+    :rtype dict[str,numpy.array]
+    """
+    return self._data_list[seq_idx]
+
+  def get_seq_len(self, seq_idx):
+    """
+    :param seq_idx:
+    :return: length of data for 'sort_data_key'
+    :rtype: int
+    """
+    assert self._sort_data_key, "Specify which data key should be used for sequence sorting via 'sort_data_key'."
+    return len(self._data_list[seq_idx][self._sort_data_key])
