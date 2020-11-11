@@ -28,6 +28,8 @@ def generate():
     if not optimizer_name.endswith("optimizer"):
       module = optimizer_class.__module__
       class_name = optimizer_class.__name__
+      if class_name == "creator":
+        continue
       name = class_name[:-len("Optimizer")]
 
       rst_file.write("\n")
