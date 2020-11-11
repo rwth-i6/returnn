@@ -32,3 +32,10 @@ Dropout Layer
 .. autoclass:: returnn.tf.layers.basic.DropoutLayer
     :members:
     :undoc-members:
+
+Tikhonov Regularization Layer
+-----------------------------
+
+.. autoclass:: returnn.tf.layers.basic.TikhonovRegularizationLayer
+    :members:
+    :undoc-members:

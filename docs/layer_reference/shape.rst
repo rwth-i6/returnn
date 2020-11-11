@@ -18,6 +18,13 @@ Expand Dimensions Layer
     :members:
     :undoc-members:
 
+GatherNdLayer
+-------------
+
+.. autoclass:: returnn.tf.layers.basic.GatherNdLayer
+    :members:
+    :undoc-members:
+
 Merge Dimensions Layer
 ----------------------
 
@@ -143,5 +150,12 @@ Time Un-Chunking Layer
 ----------------------
 
 .. autoclass:: returnn.tf.layers.basic.TimeUnChunkingLayer
+    :members:
+    :undoc-members:
+
+Window Layer
+------------
+
+.. autoclass:: returnn.tf.layers.basic.WindowLayer
     :members:
     :undoc-members:

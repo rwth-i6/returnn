@@ -129,9 +129,3 @@ Weighted Sum Layer
     :members:
     :undoc-members:
 
-Window Layer
-------------
-
-.. autoclass:: returnn.tf.layers.basic.WindowLayer
-    :members:
-    :undoc-members:
