@@ -955,6 +955,183 @@ def test_engine_search_attention():
   check_engine_search_attention()
 
 
+def test_engine_single_inference():
+  import pickle
+  from returnn.datasets.generating import Vocabulary
+
+  # Create some dummy vocabularies.
+  input_voc_size = 7
+  input_vocabulary = Vocabulary.create_vocab_dict_from_labels(["input" + str(i) for i in range(input_voc_size)])
+  input_vocabulary_file = _get_tmp_file(suffix=".pkl")
+  pickle.dump(input_vocabulary, open(input_vocabulary_file, "wb"))
+
+  output_voc_size = 3
+  output_vocabulary = Vocabulary.create_vocab_dict_from_labels(["output" + str(i) for i in range(output_voc_size)])
+  output_vocabulary_file = _get_tmp_file(suffix=".pkl")
+  pickle.dump(output_vocabulary, open(output_vocabulary_file, "wb"))
+
+  from returnn.tf.util.data import DimensionTag
+  time_dim_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="input time")
+  # We want to test string (sparse) and float (dense) in- and outputs. For floats, we test data with and without time
+  # axis. For strings, Engine.inference() currently assumes a time axis.
+  extern_data = {
+    "string_seq_input": {
+      "dim": input_voc_size, "sparse": True, "vocab": {"vocab_file": input_vocabulary_file, 'unknown_label': None},
+      "available_for_inference": True, "same_dim_tags_as": {"t": time_dim_tag}},
+    "float_input": {
+      "dim": None, "shape": (), "sparse": False, "time_dim_axis": None, "available_for_inference": True},
+    "float_seq_input": {
+      "dim": 2, "shape": (None, 2), "sparse": False, "available_for_inference": True,
+      "same_dim_tags_as": {"t": time_dim_tag}},
+    "string_seq_output": {
+      "dim": output_voc_size, "sparse": True, "vocab": {"vocab_file": output_vocabulary_file, 'unknown_label': None},
+      "same_dim_tags_as": {"t": time_dim_tag}},
+    "float_output": {"dim": 5, "sparse": False, "time_dim_axis": None},
+    "float_seq_output": {"dim": 5, "shape": (None, 5), "sparse": False, "same_dim_tags_as": {"t": time_dim_tag}},
+  }
+
+  # Define some dummy input. Two sequences of different length to test whether padding is removed correctly.
+  # Passing float data in lists instead of numpy array should also work.
+  dummy_data = [
+    {"string_seq_input": ["input0", "input1", "input2"], "float_input": numpy.array(1.0),
+     "float_seq_input": numpy.array([[0.0, 1.0], [2.0, 3.0], [4.0, 5.0]])},
+    {"string_seq_input": ["input3", "input4"], "float_input": -1.0,
+     "float_seq_input": [[0.0, -1.0], [-2.0, -3.0]]},
+  ]
+  output_layer_names = ["output", "output_embedding", "mean_output_embedding"]
+
+  # Test forward
+
+  # Some network that has the desired in- and outputs and which we can forward.
+  config = Config()
+  config.update({
+    "model": "%s/model" % _get_tmp_dir(),
+    "extern_data": extern_data,
+    "network": {
+      "input_embedding": {"class": "linear", "activation": None, "n_out": 2, "from": "data:string_seq_input"},
+      "sum": {
+        "class": "combine", "kind": "add", "from": ["data:float_input", "data:float_seq_input", "input_embedding"]},
+      "prob": {"class": "softmax", "from": "sum", "target": "string_seq_output"},
+      "output": {
+        "class": "eval", "eval": "tf.argmax(source(0, auto_convert=False), axis=1)", "from": "prob",
+        "target": "string_seq_output", "out_type": {
+          "dim": output_voc_size, "shape": (None,), "sparse": True, "dtype": "int64"}},
+      "output_embedding": {
+        "class": "linear", "activation": None, "n_out": 5, "from": "output", "is_output_layer": True},
+      "mean_output_embedding": {
+        "class": "reduce", "mode": "mean", "axis": "T", "from": "output_embedding", "is_output_layer": True},
+    }
+  })
+
+  _cleanup_old_models(config)
+  engine = Engine(config=config)
+  # Init train once to have a (randomly initialized) model we can do inference with.
+  engine.init_train_from_config(config=config, train_data=None, dev_data=None, eval_data=None)
+
+  engine.use_search_flag = False
+  engine.init_network_from_config(config=config)
+
+  outputs = engine.single_inference(input_data=dummy_data, output_layer_names=output_layer_names)
+
+  assert len(outputs) == len(dummy_data), "There should be one output for each of the input sequences."
+
+  for seq_index in [0, 1]:
+    assert set(outputs[seq_index].keys()) == {"output", "output:string", "output_embedding", "mean_output_embedding"}
+
+    for key, output in outputs[seq_index].items():
+      if key == "output:string":
+        assert isinstance(output, list) and isinstance(output[0], str), "Expected list of strings."
+        assert len(output) == 3 if seq_index == 0 else 2, "Wrong sequence length. Padding not removed?"
+      else:
+        assert isinstance(output, numpy.ndarray)
+
+  # Test search
+
+  # Some network that has the desired in- and outputs and can perform search.
+  beam_size = 4
+  config = Config()
+  config.update({
+    "model": "%s/model" % _get_tmp_dir(),
+    "extern_data": extern_data,
+    "network": {
+      "input_embedding": {"class": "linear", "activation": None, "n_out": 2, "from": "data:string_seq_input"},
+      "sum": {
+        "class": "combine", "kind": "add", "from": ["data:float_input", "data:float_seq_input", "input_embedding"]},
+      "output": {
+        "class": "rec", "from": "sum", "target": "string_seq_output",
+        "unit": {
+          "prob": {
+            "class": "softmax", "from": ["prev:output_embedding", "data:source"],
+            "target": "string_seq_output"},
+          "output": {
+            "class": "choice", "beam_size": beam_size, "from": ["prob"], "target": "string_seq_output"},
+          "output_embedding": {
+            "class": "linear", "activation": None, "n_out": 5, "from": "output", "is_output_layer": True},
+        },
+      },
+      "output_embedding": {
+        "class": "copy", "from": "output/output_embedding", "target": "float_seq_output", "is_output_layer": True},
+      "mean_output_embedding": {
+        "class": "reduce", "mode": "mean", "axis": "T", "from": "output_embedding", "target": "float_output",
+        "is_output_layer": True},
+      "decision": {
+        "class": "decide", "from": ["output"], "target": "string_seq_output", "is_output_layer": True},
+    }
+  })
+
+  # Init train once to have a (randomly initialized) model we can do inference with.
+  engine.init_train_from_config(config=config, train_data=None, dev_data=None, eval_data=None)
+
+  # Test search
+  engine.use_search_flag = True
+  engine.use_dynamic_train_flag = False
+  engine.init_network_from_config(config=config)
+
+  output_layer_names += ["decision", "input_embedding"]  # to test output layers without beam and with decided beam
+  outputs = engine.single_inference(input_data=dummy_data, output_layer_names=output_layer_names)
+
+  assert len(outputs) == len(dummy_data), "There should be one output for each of the input sequences."
+
+  for seq_index in [0, 1]:
+    # All output layers except "input_embedding" are in or after the beam, so we expect beam scores. In addition,
+    # "output" and "decision" should have been converted to strings using the output vocabulary.
+    assert set(outputs[seq_index].keys()) == {
+      "output", "output:beam_scores", "output:string", "decision", "decision:beam_scores", "decision:string",
+      "output_embedding", "output_embedding:beam_scores", "mean_output_embedding", "mean_output_embedding:beam_scores",
+      "input_embedding"}
+
+    for key, output in outputs[seq_index].items():
+      # Check we got the right number of beam scores.
+      if key.endswith(":beam_scores"):
+        assert isinstance(output, list) and isinstance(output[0], float), "Expected beam scores as list of floats."
+        if key == "decision:beam_scores":
+          assert len(output) == 1, "After decision there should be only one beam score per sequence."
+        else:
+          assert len(output) == beam_size, "Wrong number of beam scores."
+        continue
+
+      if key.endswith(":string"):
+        if key == "decision:string":
+          first_best_output = output
+        else:
+          assert len(output) == beam_size
+          first_best_output = output[0]
+        assert isinstance(first_best_output, list) and isinstance(first_best_output[0], str), (
+          "Expected list of strings.")
+        assert len(first_best_output) == 3 if seq_index == 0 else 2, "Wrong sequence length. Padding not removed?"
+        continue
+
+      if key in ["input_embedding", "decision"]:
+        # No beam.
+        assert isinstance(output, numpy.ndarray), "Float data output should be a numpy array."
+      else:
+        assert isinstance(output, list), "This output should have been a beam."
+        assert len(output) == beam_size, "Wrong number of hyps in the beam."
+        assert isinstance(output[0], numpy.ndarray), "Float data output should be a numpy array."
+
+  engine.finalize()
+
+
 def check_engine_train_simple_attention(lstm_unit):
   net_dict = {
     "lstm0_fw": {"class": "rec", "unit": lstm_unit, "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": 1},

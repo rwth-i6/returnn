@@ -2429,7 +2429,7 @@ class Engine(EngineBase):
       sequences, see above.
     :rtype: list[dict]|dict
     """
-    from returnn.datasets.map import FromListDataset
+    from returnn.datasets.map import FromListDataset, MapDatasetWrapper
 
     is_single_sequence = False
     if not isinstance(input_data, list):
@@ -2483,7 +2483,7 @@ class Engine(EngineBase):
         output_layer_beam_scores = search_choices.beam_scores
         fetches_dict[output_layer_name + ":beam_scores"] = output_layer_beam_scores
 
-    dataset = FromListDataset(data_list=input_data_converted, num_outputs=input_data_types)
+    dataset = MapDatasetWrapper(FromListDataset(data_list=input_data_converted, num_outputs=input_data_types))
     dataset.init_seq_order(epoch=1)
 
     output_batch = self.run_single(dataset=dataset, output_dict=fetches_dict, seq_idx=-1)
