@@ -14,6 +14,6 @@ Forced Alignment Layer
 Fast Baum-Welch Layer
 ---------------------
 
-.. autoclass:: returnn.tf.layers.basic.ForcedAlignmentLayer
+.. autoclass:: returnn.tf.layers.basic.FastBaumWelchLayer
     :members:
     :undoc-members:

@@ -4630,6 +4630,9 @@ class CombineDimsLayer(_ConcatInputLayer):
 class RemoveLayer(LayerBase):
   """
   Currently, assumes sparse data, and removes a specific symbol from the data.
+
+  It is recommended to use :class:`MaskedComputationLayer` in combination with e.g.
+  a :class:CompareLayer` instead, as this provides more flexibility.
   """
   layer_class = "remove"
 
@@ -5728,6 +5731,8 @@ class LossLayer(LayerBase):
   But this loss will not be used as a loss by the updater.
   If you want to use it as a loss, you can use the :class:`AsIsLoss`,
   i.e. write ``"loss": "as_is"``.
+
+  Note that the loss options for the wrapped loss need to be provided via ``loss_opts_``.
   """
   layer_class = "loss"
   recurrent = True  # we don't know. depends on the loss
