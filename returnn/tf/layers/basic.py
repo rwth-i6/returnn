@@ -3242,12 +3242,17 @@ class TransposedConvLayer(_ConcatInputLayer):
   layer_class = "transposed_conv"
   recurrent = True
 
-  def __init__(self, filter_size, activation, strides=None, with_bias=True,
+  def __init__(self, filter_size, activation, strides=None,
+               remove_padding=0,
+               output_padding=0,
+               with_bias=True,
                forward_weights_init="glorot_uniform", bias_init=0.0,
                **kwargs):
     """
     :param list[int] filter_size:
     :param list[int]|None strides: specifies the upscaling. by default, same as filter_size
+    :param list[int]|int remove_padding:
+    :param list[int]|int output_padding:
     :param bool with_bias:
     :param str|None activation:
     :param forward_weights_init:
@@ -3259,7 +3264,11 @@ class TransposedConvLayer(_ConcatInputLayer):
     spatial_axes = input_data.get_spatial_axes()
     if strides is None:
       strides = filter_size
-    assert len(spatial_axes) == len(filter_size) == len(strides), (
+    if isinstance(remove_padding, int):
+      remove_padding = [remove_padding] * len(spatial_axes)
+    if isinstance(output_padding, int):
+      output_padding = [output_padding] * len(spatial_axes)
+    assert len(spatial_axes) == len(filter_size) == len(strides) == len(remove_padding) == len(output_padding), (
       "%s: expected %i-D transposed-conv for input %r but got filter %r and strides %r" % (
         self, len(spatial_axes), input_data, filter_size, strides))
     assert len(spatial_axes) in [1, 2], "%s: %i-D not yet implemented..." % (self, len(spatial_axes))
@@ -3271,6 +3280,7 @@ class TransposedConvLayer(_ConcatInputLayer):
       x = tf.reshape(x, shape)
       filter_size = list(filter_size) + [1]
       strides = list(strides) + [1]
+      output_padding = list(output_padding) + [0]
     filter_shape = list(filter_size) + [self.output.dim, input_data.dim]  # transposed
     with self.var_creation_scope():
       fwd_weights_initializer = get_initializer(
@@ -3279,10 +3289,17 @@ class TransposedConvLayer(_ConcatInputLayer):
         # Use that name to easily identify the format later.
         # E.g. we might want to switch to some more canonical format at some point.
         name="W_native_transposed_conv", shape=filter_shape, initializer=fwd_weights_initializer))
-    output_shape = shape[:1] + [d * s for (d, s) in zip(shape[1:-1], strides)] + [self.output.dim]
-    y = tf.nn.conv2d_transpose(x, filter=filters, strides=[1] + list(strides) + [1], output_shape=output_shape)
+    output_shape = (
+      shape[:1] + [d * s + p for (d, s, p) in zip(shape[1:-1], strides, output_padding)] + [self.output.dim])
+    y = tf.nn.conv2d_transpose(x, filters, strides=[1] + list(strides) + [1], output_shape=output_shape)
     if len(spatial_axes) == 1:
       y = tf.reshape(y, output_shape[:2] + [self.output.dim])
+    if any(remove_padding):
+      from returnn.tf.util.basic import single_strided_slice
+      for i, p in enumerate(remove_padding):
+        if p:
+          assert p > 0
+          y = single_strided_slice(y, axis=i + 1, begin=p, end=-p)
     if with_bias:
       with self.var_creation_scope():
         bias_initializer = get_initializer(
@@ -3302,8 +3319,8 @@ class TransposedConvLayer(_ConcatInputLayer):
       for i in input_data.get_spatial_axes()
       if i in input_data.size_placeholder}
     for i, size in list(self.output.size_placeholder.items()):
-      if strides[i] != 1:
-        size = size * strides[i]
+      if strides[i] != 1 or remove_padding[i] != 0 or output_padding[i] != 0:
+        size = size * strides[i] + output_padding[i] - remove_padding[i]
         self.output.size_placeholder[i] = size
         tag = DimensionTag(
           description="spatial:%i:%s" % (i, self.get_absolute_name()),
@@ -3311,13 +3328,17 @@ class TransposedConvLayer(_ConcatInputLayer):
         tag.set_tag_on_size_tensor(size)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, n_out, filter_size, strides=None, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, n_out,
+                             filter_size, strides=None,
+                             remove_padding=0, output_padding=0, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param int n_out:
     :param list[int] filter_size:
     :param list[int]|None strides:
+    :param list[int]|int remove_padding:
+    :param list[int]|int output_padding:
     :rtype: Data
     """
     out = get_concat_sources_data_template(sources)
@@ -3328,10 +3349,15 @@ class TransposedConvLayer(_ConcatInputLayer):
     shape = list(out.shape)
     if strides is None:
       strides = filter_size
-    assert len(strides) == len(out.get_spatial_axes()), "Expected strides for all spatial axes"
+    if isinstance(remove_padding, int):
+      remove_padding = [remove_padding] * len(filter_size)
+    if isinstance(output_padding, int):
+      output_padding = [output_padding] * len(filter_size)
+    assert len(strides) == len(out.get_spatial_axes()) == len(remove_padding) == len(output_padding), (
+      "Expected strides for all spatial axes")
     for idx, axis in enumerate(out.get_spatial_axes()):  # counted without batch-dim axis
       if axis + 1 not in out.get_dynamic_axes():  # out.get_dynamic_axes() is counted with batch-dim axis
-        shape[axis] *= strides[idx]
+        shape[axis] = shape[axis] * strides[idx] + output_padding[idx] - remove_padding[idx]
     out.shape = tuple(shape)
     out.size_placeholder.clear()  # will be reset in __init__
     return out
