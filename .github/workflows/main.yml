@@ -113,7 +113,7 @@ jobs:
 
     - name: Setup dependencies
       run: |
-        echo "::add-path::~/.local/bin"
+        echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
 
         pip2 install -qq --upgrade pip setuptools wheel six | cat  # Python2<->Python3
         pip2 install --user -r requirements.txt | cat  # need for Python2<->Python3 communication tests
