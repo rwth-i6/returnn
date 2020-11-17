@@ -57,12 +57,22 @@ Some recent development changelog can be seen `here <https://github.com/rwth-i6/
     :caption: Getting Started
     :maxdepth: 2
 
-    getting_started/tech_overview
-    getting_started/installation
-    getting_started/basic_usage/basic_usage
+    getting_started/tech_overview.rst
+    getting_started/installation.rst
+    getting_started/basic_usage.rst
     getting_started/framework.rst
     getting_started/faq.rst
-    getting_started/tf_lstm_benchmark
+    getting_started/tf_lstm_benchmark.rst
+
+.. toctree::
+    :hidden:
+    :caption: User Guide
+    :maxdepth: 2
+
+    user_guide/network.rst
+    user_guide/data.rst
+    user_guide/recurrent_subnet.rst
+
 
 .. toctree::
     :hidden:
@@ -97,7 +107,7 @@ Some recent development changelog can be seen `here <https://github.com/rwth-i6/
     :hidden:
     :caption: Internals
 
-    api
+    api.rst
     internals/search.rst
 
 

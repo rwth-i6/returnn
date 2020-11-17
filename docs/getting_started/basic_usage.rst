@@ -173,9 +173,3 @@ Please See the code for some usage.
 
 See :ref:`tech_overview` for more details and an overview how it all works.
 
-.. toctree::
-    :hidden:
-
-    network.rst
-    data.rst
-    recurrent_subnet.rst
