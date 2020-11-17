@@ -4698,7 +4698,7 @@ class CombineLayer(LayerBase):
                eval=None, eval_locals=None, eval_for_output_loss=False,
                **kwargs):
     """
-    :param str kind: currently accepted values are `average`, `add`, `sub`, `mul`, or `eval`
+    :param str kind: currently accepted values are `average`, `add`, `sub`, `mul`, 'truediv', or `eval`
     :param list[LayerBase] sources:
     :param str|None activation: if provided, activation function to apply, e.g. "tanh" or "relu"
     :param bool with_bias: if given, will add a trainable bias tensor
@@ -4707,7 +4707,7 @@ class CombineLayer(LayerBase):
     :param bool eval_for_output_loss: will do the same eval on layer.output_loss
     """
     super(CombineLayer, self).__init__(sources=sources, **kwargs)
-    assert kind in ["average", "add", "sub", "mul", "eval"], (
+    assert kind in ["average", "add", "sub", "mul", "truediv", "eval"], (
       "%s: Invalid `kind` %r for this layer." % (self, kind))
     op = self._get_op(kind=kind, eval_str=eval, eval_locals=eval_locals)
     x = op(sources)
@@ -4794,6 +4794,13 @@ class CombineLayer(LayerBase):
     :rtype: tf.Tensor
     """
     return self._op_dense_fn(sources, tf.multiply)
+
+  def _op_kind_truediv(self, sources):
+    """
+    :param list[LayerBase] sources:
+    :rtype: tf.Tensor
+    """
+    return self._op_dense_fn(sources, tf.truediv)
 
   def _op_kind_average(self, sources):
     """
