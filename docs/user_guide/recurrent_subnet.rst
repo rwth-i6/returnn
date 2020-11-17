@@ -6,12 +6,15 @@ Recurrent Sub-Networks
 
 For many task it will be necessary to define multiple layers that are applied as recurrent network over a sequential input,
 especially when running a search over sequences.
-While basic recurrent layers such as LSTM variants are defined by using the "``rec``" layer and selecting the desired
-"``unit``", custom sub-networks can be defined by passing a network dictionary for the "``unit``" attribute.
+While basic recurrent layers such as LSTM variants are defined by using the ``rec`` layer and selecting the desired
+``unit``, custom sub-networks can be defined by passing a network dictionary for the ``unit`` attribute.
 The defined structure will then be applied for each position of the sequence.
-As for the global network, an "``output``" layer is required to define which values will be the output of the subnet.
-The layer outputs of the previous timesteps can be accessed by adding the prefix "``prev:``" to the layer names.
-Static data from outside the subnet can be accessed via the layer prefix "``base:``".
+As for the global network, an ``output`` layer is required to define which values will be the output of the subnet.
+The layer outputs of the previous timesteps can be accessed by adding the prefix ``prev:`` to the layer names.
+Static data from outside the subnet can be accessed via the layer prefix ``base:``.
+
+Recurrent Nets with Fixed Step Count
+====================================
 
 Example of a recurrent "relu" layer:
 
@@ -30,15 +33,15 @@ Example of a recurrent "relu" layer:
           },
           "n_out": n_out,
       }
-
-Layers with recurrent dependencies and hidden states (e.g. LSTMs) can be added as "``rnn_cell``" layer.
-For available cell units see :ref:`here <rec_units>`.
 The number of steps is determined by the time axis of the input.
 If multiple inputs are given, they will be concatenated on the feature axis.
+Layers with recurrent dependencies and hidden states (e.g. LSTMs) can be added as ``rnn_cell`` layer.
+For available cell units see :ref:`here <rec_units>`.
 Currently there is no support to access two layer outputs directly.
 The concatenated data can be split by using a :class`SliceLayer <returnn.tf.layers.basic.SliceLayer>` on the feature axis.
 
-**Recurrent net with independent step count:**
+Recurrent Nets with Independent Step Count
+==========================================
 
 If the number of steps in the recurrent net should be determined by a condition
 Example of an MLP-style attention mechanism with an LSTM layer:
@@ -66,12 +69,30 @@ Example of an MLP-style attention mechanism with an LSTM layer:
       }
 
 The ``from`` attribute can be empty when using the output as a target.
-The sequence length will then be determined by this target.
+The sequence length will then be determined by this target during training,
+and with an ``end``-layer during inference. The output of the ``end``-layer needs to be of shape ``[B]``
+and of type boolean.
+If the end-layer is not based on sparse data it is often required to use a
+:class:`SqueezeLayer <returnn.tf.layers.basic.SqueezeLayer>` to remove the feature axis.
+
+Additional Information
+======================
 
 **Using Multiple Outputs**
 
 Besides the default ``output`` layer, additional layers can be flaged as output layer.
 When adding the parameter ``is_output_layer`` and setting it to ``True``,
-the output of a sublayer can be accessed by using the pattern "``recurrent_layer/sublayer``".
+the output of a sublayer can be accessed by using the pattern ``recurrent_layer/sublayer``.
+
+**Accessing Previous Time Steps**
+
+By using the ``"prev:"``-prefix it is only possible to acces the layer outputs from previous time steps.
+If a larger history needs to be accessed it is necessesary to use a
+:class:`WindowLayer <returnn.tf.layers.basic.WindowLayer>`.
+The parameter ``"window_size"`` can then be used to determine the number of previous steps
+that need to be accessed.
+The output will be of shape ``[B,window_size,D]``.
+For steps outside the recurrency the layer will return zeros.
+
 
 
