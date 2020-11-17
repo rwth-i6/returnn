@@ -32,13 +32,6 @@ Print Layer
     :members:
     :undoc-members:
 
-Remove Layer
-------------
-
-.. autoclass:: returnn.tf.layers.basic.RemoveLayer
-    :members:
-    :undoc-members:
-
 Scaled Gradient Layer
 --------------------
 

@@ -4,6 +4,13 @@
 Loss Functions
 ==============
 
+This is a list of all loss functions that can be used by adding ``"loss": "<class_name_of_loss>"`` to a layer.
+Additional input parameters to the respective loss classes can be given via ``loss_opts``.
+A scale for a loss can be set via ``loss_scale`` (also see :ref:`network_define_layers`)
+
+If the output of a loss function is needed as a part of the network,
+the ``LossLayer`` can be used in combination with one of the losses.
+
 LossLayer
 ---------
 

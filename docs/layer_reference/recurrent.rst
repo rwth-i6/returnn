@@ -18,24 +18,10 @@ Choice Get Beam Scores Layer
     :members:
     :undoc-members:
 
-Choice Get Source Beams Layer
------------------------------
-
-.. autoclass:: returnn.tf.layers.rec.ChoiceGetSrcBeamsLayer
-    :members:
-    :undoc-members:
-
 Decide Layer
 ------------
 
 .. autoclass:: returnn.tf.layers.rec.DecideLayer
-    :members:
-    :undoc-members:
-
-Decide Keep Beam Layer
-----------------------
-
-.. autoclass:: returnn.tf.layers.rec.DecideKeepBeamLayer
     :members:
     :undoc-members:
 

@@ -12,14 +12,14 @@ Positional Encoding Layer
     :undoc-members:
 
 Range Layer
-----------
+-----------
 
 .. autoclass:: returnn.tf.layers.basic.RangeLayer
     :members:
     :undoc-members:
 
 Range in Axis Layer
-----------
+-------------------
 
 .. autoclass:: returnn.tf.layers.basic.RangeInAxisLayer
     :members:

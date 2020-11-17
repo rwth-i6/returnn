@@ -5060,6 +5060,8 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
   """
   This just marks the search choices as decided, but does not change them (in contrast to :class:`DecideLayer`).
   You can use this to get out some values as-is, without having them resolved to the final choices.
+
+  For internal usage only.
   """
   layer_class = "decide_keep_beam"
 
