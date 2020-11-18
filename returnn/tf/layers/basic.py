@@ -5733,6 +5733,11 @@ class LossLayer(LayerBase):
   i.e. write ``"loss": "as_is"``.
 
   Note that the loss options for the wrapped loss need to be provided via ``loss_opts_``.
+
+  .. note::
+
+    The ``LossLayer`` might be deprecated in the future in favor of implementing the losses as actual layers.
+
   """
   layer_class = "loss"
   recurrent = True  # we don't know. depends on the loss

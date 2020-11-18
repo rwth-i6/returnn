@@ -5135,6 +5135,11 @@ class ChoiceGetBeamScoresLayer(LayerBase):
   """
   Gets beam scores from :class:`SearchChoices`.
   This requires that the source has search choices.
+
+  .. note::
+
+    This layer might be deprecated in the future.
+
   """
   layer_class = "choice_get_beam_scores"
 
