@@ -13,6 +13,7 @@ Layers / Modules
     units.rst
     attention.rst
     norm.rst
+    regularization.rst
     custom.rst
     utility.rst
     loss.rst

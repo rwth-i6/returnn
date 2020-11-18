@@ -1,8 +1,8 @@
 .. _norm_layers:
 
-==============================
-Norm and Regularization Layers
-==============================
+====================
+Normalization Layers
+====================
 
 
 Generic Normalization Layer
@@ -23,19 +23,5 @@ Layer-Normalization Layer
 -------------------------
 
 .. autoclass:: returnn.tf.layers.basic.LayerNormLayer
-    :members:
-    :undoc-members:
-
-Dropout Layer
--------------
-
-.. autoclass:: returnn.tf.layers.basic.DropoutLayer
-    :members:
-    :undoc-members:
-
-Tikhonov Regularization Layer
------------------------------
-
-.. autoclass:: returnn.tf.layers.basic.TikhonovRegularizationLayer
     :members:
     :undoc-members:
