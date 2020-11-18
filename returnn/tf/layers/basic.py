@@ -622,6 +622,9 @@ class LayerNormLayer(_ConcatInputLayer):
 class NormLayer(_ConcatInputLayer):
   """
   Normalize over specified axes, e.g. time and/or feature axis.
+
+  Note: For calculating a norm, see :class:`MathNormLayer` instead.
+
   In case of just feature (``axes="F"``),
   this corresponds to `layer normalization <https://arxiv.org/abs/1607.06450>`__ (see :class:`LayerNormLayer`).
   In case of time and feature (``axes="TF"``) for a 3D input,
@@ -687,6 +690,36 @@ class NormLayer(_ConcatInputLayer):
     :rtype: Data
     """
     return get_concat_sources_data_template(sources, name="%s_output" % name)
+
+
+class MathNormLayer(_ConcatInputLayer):
+  """
+  Calculates sum(x ** p).
+  """
+  layer_class = "math_norm"
+
+  def __init__(self, p, axes, keep_dims=False, **kwargs):
+    """
+    :param int|float p:
+    :param float eps:
+    :param str|list[str] axes:
+    :param bool keep_dims:
+    """
+    super(MathNormLayer, self).__init__(**kwargs)
+    x = self.input_data.copy()
+    x.placeholder = x.placeholder ** p
+    self.output.placeholder = ReduceLayer.reduce(x, mode="sum", axes=axes, keep_dims=keep_dims)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, axes, keep_dims=False, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param str|list[str] axes:
+    :param bool keep_dims:
+    :rtype: Data
+    """
+    return ReduceLayer.get_out_data_from_opts(name=name, sources=sources, axes=axes, keep_dims=keep_dims)
 
 
 class SliceLayer(_ConcatInputLayer):
@@ -3387,21 +3420,41 @@ class ReduceLayer(_ConcatInputLayer):
     :param bool use_time_mask: if we reduce over the time-dim axis, use the seq len info.
       By default, in that case, it will be True.
     """
-    from returnn.tf.util.basic import expand_multiple_dims
     super(ReduceLayer, self).__init__(**kwargs)
     if axis is not None:
       assert axes is None, "don't provide both 'axes' and 'axis', layer %r" % kwargs["name"]
       axes = axis
-    if enforce_batch_dim_axis is None and self.need_enforce_batch_dim_axis(axes):
+    self.output.placeholder = self.reduce(
+      input_data=self.input_data,
+      mode=mode, axes=axes, keep_dims=keep_dims, enforce_batch_dim_axis=enforce_batch_dim_axis,
+      use_time_mask=use_time_mask)
+
+  @classmethod
+  def reduce(cls, input_data, mode, axes=None, keep_dims=False, enforce_batch_dim_axis=None, use_time_mask=None):
+    """
+    :param Data input_data:
+    :param str mode: "sum" or "max", "argmin", "min", "argmax", "mean", "logsumexp"
+    :param int|list[int]|str axes: One axis or multiple axis to reduce.
+      It accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
+      and it is strongly recommended to use some of these symbolic names.
+      See :func:`Data.get_axes_from_description`.
+    :param bool keep_dims: if dimensions should be kept (will be 1)
+    :param int enforce_batch_dim_axis: will swap the batch-dim-axis of the input with the given axis.
+      e.g. 0: will convert the input into batch-major format if not already like that.
+      Note that this is still not enough in some cases, e.g. when the other axes are also not as expected.
+      The strong recommendation is to use a symbolic axis description.
+    :param bool use_time_mask: if we reduce over the time-dim axis, use the seq len info.
+      By default, in that case, it will be True.
+    :rtype: tf.Tensor
+    """
+    from returnn.tf.util.basic import expand_multiple_dims
+    if enforce_batch_dim_axis is None and cls.need_enforce_batch_dim_axis(axes):
       enforce_batch_dim_axis = 0
-    if "n_out" in kwargs:
-      assert kwargs["n_out"] == self.output.dim
-    assert "out_type" not in kwargs
-    assert not self.input_data.sparse
-    x = self.input_data
+    assert not input_data.sparse
+    x = input_data
     if enforce_batch_dim_axis is not None and x.batch_dim_axis != enforce_batch_dim_axis:
       x = x.copy_with_batch_dim_axis(enforce_batch_dim_axis)
-    axes = self.get_axes(axes, input_data=x)
+    axes = cls.get_axes(axes, input_data=x)
     if use_time_mask is None:
       if x.time_dim_axis in axes:
         use_time_mask = True
@@ -3415,7 +3468,7 @@ class ReduceLayer(_ConcatInputLayer):
     reduce_rel_func = {"mean": tf.reduce_mean}
     arg_funcs = {name: getattr(tf, name) for name in ["argmax", "argmin"]}
     funcs = dict(list(reduce_abs_funcs.items()) + list(reduce_rel_func.items()) + list(arg_funcs.items()))
-    assert mode in funcs, "%s: invalid mode %r. choose from: %r" % (self, mode, funcs)
+    assert mode in funcs, "invalid mode %r. choose from: %r" % (mode, funcs)
     f = funcs[mode]
     x_ = x.placeholder
     # Check if we should ignore some frames, e.g. via masking.
@@ -3464,7 +3517,7 @@ class ReduceLayer(_ConcatInputLayer):
         y = expand_multiple_dims(y, axes=axes)
     else:
       y = f(x_, axis=axes, keepdims=keep_dims)
-    self.output.placeholder = y
+    return y
 
   @classmethod
   def need_enforce_batch_dim_axis(cls, axes):
