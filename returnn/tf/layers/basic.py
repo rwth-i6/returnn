@@ -3576,7 +3576,8 @@ class ReduceLayer(_ConcatInputLayer):
     if keep_dims:
       for i in axes:
         y_shape[i] = 1
-      del y_shape[x.batch_dim_axis]
+      if x.batch_dim_axis is not None:
+        del y_shape[x.batch_dim_axis]
       out_size = {i: size for (i, size) in out_size.items() if x.get_batch_axis(i) not in axes}
     else:
       if out_batch_dim_axis in axes:
