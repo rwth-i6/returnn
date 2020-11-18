@@ -5732,11 +5732,22 @@ class LossLayer(LayerBase):
   If you want to use it as a loss, you can use the :class:`AsIsLoss`,
   i.e. write ``"loss": "as_is"``.
 
-  Note that the loss options for the wrapped loss need to be provided via ``loss_opts_``.
+  Note that the loss options for the wrapped loss need to be provided via ``loss_opts_``,
+  and it does not apply any reduce function.
 
   .. note::
 
     The ``LossLayer`` might be deprecated in the future in favor of implementing the losses as actual layers.
+
+    If you want to define a loss inside the network, it is recommended to define it explicitly.
+    An example could be:
+
+    ``"se_loss": {"class": "eval", "eval": "(source(0) - source(1)) ** 2", "from": ["output", "data:classes"]}``
+
+    Followed by an e.g. mean reduce if needed:
+
+    ``"mse_loss": {"class": "reduce", "mode": "mean", "axis": "F", "from": "se_loss"}``
+
 
   """
   layer_class = "loss"
