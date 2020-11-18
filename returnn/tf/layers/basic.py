@@ -694,7 +694,7 @@ class NormLayer(_ConcatInputLayer):
 
 class MathNormLayer(_ConcatInputLayer):
   """
-  Calculates sum(x ** p).
+  Calculates sum(abs(x) ** p) ** (1./p).
   """
   layer_class = "math_norm"
 
@@ -707,8 +707,8 @@ class MathNormLayer(_ConcatInputLayer):
     """
     super(MathNormLayer, self).__init__(**kwargs)
     x = self.input_data.copy()
-    x.placeholder = x.placeholder ** p
-    self.output.placeholder = ReduceLayer.reduce(x, mode="sum", axes=axes, keep_dims=keep_dims)
+    x.placeholder = tf.abs(x.placeholder) ** p
+    self.output.placeholder = ReduceLayer.reduce(x, mode="sum", axes=axes, keep_dims=keep_dims) ** (1. / p)
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, axes, keep_dims=False, **kwargs):
