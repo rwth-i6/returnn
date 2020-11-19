@@ -112,7 +112,7 @@ class DimensionTag(object):
     return True
 
   def is_equal(self, other, ignore_feature_dim=False, allow_same_feature_dim=False, allow_same_spatial_dim=None,
-               treat_feature_as_spatial=False):
+               treat_feature_as_spatial=False, broadcast_matches=False):
     """
     Compares self to other for equality.
     Note that the default behavior is very restrictive.
@@ -124,6 +124,7 @@ class DimensionTag(object):
     :param bool allow_same_feature_dim:
     :param bool|None allow_same_spatial_dim:
     :param bool treat_feature_as_spatial:
+    :param bool broadcast_matches:
     :rtype: bool
     """
     if allow_same_spatial_dim is None:
@@ -142,7 +143,10 @@ class DimensionTag(object):
       if other_kind == self.Types.Feature:
         other_kind = self.Types.Spatial
     if self.dimension != other.dimension:
-      return False
+      if broadcast_matches and self.dimension == 1 or other.dimension == 1:
+        pass  # pass on
+      else:
+        return False
     if self_kind != other_kind:
       return False
     if self_kind == other_kind == self.Types.Batch:
@@ -2437,7 +2441,7 @@ class Data(object):
     if any([s.beam for s in sources]):
       # Note: we don't use copy_extend_with_beam because we don't want to create any ops in the TF graph at this point.
       common.beam = SearchBeam.get_combined_beam(*[s.beam for s in sources])
-    is_equal_opts = dict(ignore_feature_dim=True, allow_same_spatial_dim=True)
+    is_equal_opts = dict(ignore_feature_dim=True, allow_same_spatial_dim=True, broadcast_matches=True)
     all_dim_tags, tags_dict = DimensionTag.get_all_dimension_tags(sources, is_equal_opts=is_equal_opts)
     # Note: We cannot compare len(all_dims_tags) to len(shape) as e.g. shape (B,1,1,D) would have only 3 dim tags.
     largest_dim_tags, tags_dict_ = DimensionTag.get_all_dimension_tags([common], is_equal_opts=is_equal_opts)

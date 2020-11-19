@@ -509,6 +509,27 @@ def test_CombineLayer_broadcast():
     session.run(out.output.placeholder, feed_dict=feed_dict)
 
 
+def test_CombineLayer_broadcast_multiple():
+  with make_scope() as session:
+    net_dict = {
+      "p1": {"class": "variable", "shape": (5, 5, 3), "add_batch_axis": False},
+      "p2": {"class": "variable", "shape": (5, 1, 1), "add_batch_axis": False},
+      "combine": {"class": "combine", "kind": "add", "from": ["p1", "p2"]},
+      "output": {"class": "softmax", "loss": "ce", "from": "combine"}
+    }
+    config = Config({"debug_print_layer_output_template": True})
+    config.update(dict(num_inputs=4, num_outputs=9))
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+    assert_equal(network.get_layer("combine").output.batch_shape, (5, 5, 3))
+    out = network.get_default_output_layer()
+    assert out.output.batch_shape == (5, 5, 9) and not out.output.have_batch_axis()
+    feed_dict = make_feed_dict(network.extern_data.data.values(), same_time=True)
+    session.run(tf_compat.v1.global_variables_initializer())
+    out_v = session.run(out.output.placeholder, feed_dict=feed_dict)
+    assert out_v.shape == out.output.batch_shape
+
+
 def test_CombineLayer_different_batch_axis():
   # ["base:enc_ctx", "weight_feedback", "s_transformed"]
   # base:enc_ctx: Data(name='enc_ctx_output', shape=(None, 14), batch_dim_axis=1)

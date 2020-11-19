@@ -501,6 +501,13 @@ def test_Data_get_common_data_extra_static_spatial():
   assert d1.shape == common.shape
 
 
+def test_Data_get_common_data_broadcast_multiple():
+  d1 = Data(name='d_orig', shape=(5, 5, 3), dtype='float32', batch_dim_axis=None)
+  d2 = Data(name='d_bc', shape=(5, 1, 1), dtype='float32', batch_dim_axis=None)
+  common = Data.get_common_data([d1, d2], warnings_out=sys.stdout)
+  assert d1.shape == common.shape
+
+
 def test_Data_get_common_data_extra2_static_spatial():
   d1 = Data(name='t', shape=(None, 32, 32, 128), dtype='float32', auto_create_placeholders=True)
   d2 = Data(name='r', shape=(None, 32, 32, 128), dtype='float32', auto_create_placeholders=True)
