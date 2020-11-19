@@ -4276,12 +4276,29 @@ def copy_op(op, op_type=None, inputs=None):
   return new_op
 
 
+def simplify_neg(a):
+  """
+  :param T|tf.Tensor|int|float|numpy.ndarray|numpy.number a:
+  :return: -b. but the operation is potentially simplified
+  :rtype: T|tf.Tensor|int|float|numpy.ndarray|numpy.number
+  """
+  import numpy
+  if isinstance(a, (int, float, numpy.number, numpy.ndarray)):
+    return -a
+  from tensorflow.python.framework import tensor_util
+  assert isinstance(a, tf.Tensor)
+  a_ = tensor_util.constant_value(a)
+  if a_ is not None:
+    return -a_
+  return -a
+
+
 def simplify_add(a, b):
   """
-  :param T|tf.Tensor|int|float|numpy.ndarray a:
-  :param T|tf.Tensor|int|float|numpy.ndarray b:
+  :param T|tf.Tensor|int|float|numpy.ndarray|numpy.number a:
+  :param T|tf.Tensor|int|float|numpy.ndarray|numpy.number b:
   :return: a - b. but the operation is potentially simplified
-  :rtype: T|tf.Tensor|int|float|numpy.ndarray
+  :rtype: T|tf.Tensor|int|float|numpy.ndarray|numpy.number
 
   Obviously, it is not possible to perform simplification in all cases.
   So this never can be complete.
@@ -4289,19 +4306,19 @@ def simplify_add(a, b):
 
   (a + b) + (-b) == a
   """
-  if isinstance(a, (int, float)):
+  import numpy
+  if isinstance(a, (int, float, numpy.number, numpy.ndarray)):
     if isinstance(b, tf.Tensor):
       return simplify_add(b, a)
     return a + b  # fallback
   assert isinstance(a, tf.Tensor)
-  import numpy
   from tensorflow.python.framework import tensor_util
   if isinstance(b, tf.Tensor):
     b_ = tensor_util.constant_value(b)
     if b_ is None:
       return a + b  # fallback
     b = b_
-  assert isinstance(b, (int, float, numpy.ndarray))  # not implemented otherwise
+  assert isinstance(b, (int, float, numpy.number, numpy.ndarray))  # not implemented otherwise
   if isinstance(b, int):
     b = numpy.int32(b)   # use right type
   if isinstance(b, float):
@@ -4338,7 +4355,7 @@ def simplify_sub(a, b):
 
   Wraps to :func:`simplify_add`
   """
-  return simplify_add(a, -b)
+  return simplify_add(a, simplify_neg(b))
 
 
 def simplify_nonzero_seq_length(x):
