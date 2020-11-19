@@ -3357,7 +3357,9 @@ class TransposedConvLayer(_ConcatInputLayer):
       if i in input_data.size_placeholder}
     for i, size in list(self.output.size_placeholder.items()):
       if strides[i] != 1 or remove_padding[i] != 0 or output_padding[i] != 0:
-        size = size * strides[i] + output_padding[i] - remove_padding[i]
+        if strides[i] != 1:
+          size = size * strides[i]
+        size = tf_util.simplify_add(size, output_padding[i] - remove_padding[i])
         self.output.size_placeholder[i] = size
         tag = DimensionTag(
           description="spatial:%i:%s" % (i, self.get_absolute_name()),

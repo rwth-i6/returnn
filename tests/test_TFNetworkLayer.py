@@ -3821,6 +3821,41 @@ def test_automatic_seq_lengths():
     assert out_lens is in_data.size_placeholder[0]
 
 
+def test_automatic_seq_lengths2():
+  with make_scope() as session:
+    n_out = 5
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out},
+      }})
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "layer0": {
+        'class': 'conv', 'from': 'data', 'activation': None, 'with_bias': True, 'n_out': n_out,
+        'filter_size': (1,), 'padding': 'valid'},
+      "output": {"class": "copy", "from": "layer0"},
+    })
+    session.run(tf_compat.v1.global_variables_initializer())
+    in_data = net.extern_data.get_default_input_data()
+    out_data = net.layers["output"].output.copy_as_batch_spatial_major()
+    assert_equal(out_data.shape, in_data.shape)
+    n_batch = 3
+    max_seq_len = 10
+    feed = make_feed_dict([in_data], n_batch=n_batch, n_time=max_seq_len)
+    out_lens = out_data.get_sequence_lengths()
+    out_v, out_lens_v = session.run((out_data.placeholder, out_lens), feed_dict=feed)
+    in_v = feed[in_data.placeholder]
+    in_lens_v = feed[in_data.size_placeholder[0]]
+    assert_equal(in_v.shape, out_v.shape)
+    assert_equal(in_lens_v.tolist(), out_lens_v.tolist())
+    # So far, everything should always be true, unless we have messed some op really up.
+    # Now we want to do the main test, i.e. whether we get the same tensor.
+    from returnn.tf.util.basic import print_graph_output
+    print_graph_output(out_lens)
+    assert out_lens is in_data.size_placeholder[0]
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()

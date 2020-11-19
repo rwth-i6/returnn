@@ -2126,6 +2126,19 @@ def test_simplify_sub():
   assert a_b_ is x
 
 
+def test_simplify_sub2():
+  x = tf_compat.v1.placeholder(tf.int32, shape=[3], name="x")
+  a = x
+  b = 0
+  a_b = a - b
+  print("Normal:")
+  print_graph_output(a_b)
+  a_b_ = simplify_sub(a, b)
+  print("Simplified:")
+  print_graph_output(a_b_)
+  assert a_b_ is x
+
+
 def test_clip_by_value_with_identity_grad():
   err_y = 42.0
   limit = 1.0
