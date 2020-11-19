@@ -4249,8 +4249,8 @@ def copy_op(op, op_type=None, inputs=None):
   Copies a tf.Operation.
 
   :param tf.Operation op:
-  :param str|None op_type:
-  :param list[tf.Tensor]|None inputs:
+  :param str|None op_type: if given, overwrites op.type, otherwise uses the same op.type
+  :param list[tf.Tensor]|None inputs: if given, overwrites op.inputs, otherwise uses the same op.inputs
   :return: copy of op but optionally change op.type == op_type or op.inputs == inputs
   :rtype: tf.Operation
   """
@@ -4274,6 +4274,69 @@ def copy_op(op, op_type=None, inputs=None):
     dtypes=[x.dtype for x in op.outputs],  # output types
     attrs=dict(op.node_def.attr.items()))
   return new_op
+
+
+def simplify_sub(a, b):
+  """
+  :param T|tf.Tensor|int|float|numpy.ndarray a:
+  :param T|tf.Tensor|int|float|numpy.ndarray b:
+  :return: a - b. but the operation is potentially simplified
+  :rtype: T|tf.Tensor|int|float|numpy.ndarray
+
+  Obviously, it is not possible to perform simplification in all cases.
+  So this never can be complete.
+  This just covers some very simple cases, e.g:
+
+  (a + b) - b == a
+  """
+  if isinstance(a, (int, float)):
+    return a - b  # fallback. ignore type(b)
+  assert isinstance(a, tf.Tensor)
+  import numpy
+  from tensorflow.python.framework import tensor_util
+  if isinstance(b, tf.Tensor):
+    b_ = tensor_util.constant_value(b)
+    if b_ is None:
+      return a - b  # fallback
+    b = b_
+  assert isinstance(b, (int, float, numpy.ndarray))  # not implemented otherwise
+  if isinstance(b, int):
+    b = numpy.int32(b)   # use right type
+  if isinstance(b, float):
+    b = numpy.float(b)
+  if a.op.type in {"Add", "AddV2"}:
+    a_dyn_parts = []
+    a_const_parts = [-b]
+    for a_part in a.op.inputs:
+      a_part_ = tensor_util.constant_value(a_part)
+      if a_part_ is not None:
+        a_const_parts.append(a_part_)
+      else:
+        a_dyn_parts.append(a_part)
+    a_const = optional_add(*a_const_parts)
+    if not a_dyn_parts:
+      return a_const
+    a_parts = list(a_dyn_parts)
+    if numpy.count_nonzero(a_const) > 0:
+      a_parts.append(tf.constant(a_const))
+    return optional_add(*a_parts)
+  # Fallback
+  return a - b
+
+
+def simplify_nonzero_seq_length(x):
+  """
+  :param tf.Tensor|int|float|numpy.ndarray x:
+  :return: max(x, 0), or simplified if possible
+  :rtype: tf.Tensor|int|float|numpy.ndarray
+  """
+  dim_tag = DimensionTag.get_tag_from_size_tensor(x)
+  if dim_tag:
+    return x  # we already now that it is positive
+  import numpy
+  if isinstance(x, (int, float, numpy.ndarray)):
+    return max(x, 0)
+  return tf.maximum(x, 0)
 
 
 def copy_tensor(x):

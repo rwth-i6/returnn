@@ -2113,6 +2113,19 @@ def test_safe_log_with_softmax3d_move_axis():
   assert len(x_ops) == 1 and x_ops[0].type == "LogSoftmax"
 
 
+def test_simplify_sub():
+  x = tf_compat.v1.placeholder(tf.int32, shape=[3], name="x")
+  a = x + 3
+  b = tf.constant(3)
+  a_b = a - b
+  print("Normal:")
+  print_graph_output(a_b)
+  a_b_ = simplify_sub(a, b)
+  print("Simplified:")
+  print_graph_output(a_b_)
+  assert a_b_ is x
+
+
 def test_clip_by_value_with_identity_grad():
   err_y = 42.0
   limit = 1.0

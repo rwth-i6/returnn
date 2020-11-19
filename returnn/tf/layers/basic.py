@@ -2014,6 +2014,8 @@ class PadLayer(_ConcatInputLayer):
         continue
       if a not in self.output.size_placeholder:
         continue
+      if p == 0:
+        continue
       self.output.size_placeholder[a] += p
 
   @classmethod
@@ -3038,8 +3040,10 @@ class ConvLayer(_ConcatInputLayer):
     if padding == "SAME":
       return ceildiv(in_dim, stride)
     elif padding == "VALID":
-      max_func = tf.maximum if isinstance(in_dim, tf.Tensor) else max
-      return max_func(ceildiv((in_dim - (filter_size - 1) * dilation_rate), stride), 0)
+      return tf_util.simplify_nonzero_seq_length(
+        ceildiv(
+          (tf_util.simplify_sub(in_dim, (filter_size - 1) * dilation_rate)),
+          stride))
     else:
       raise Exception("invalid padding %r" % padding)
 
