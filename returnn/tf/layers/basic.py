@@ -1769,6 +1769,8 @@ class ConstantLayer(LayerBase):
         dtype = "float32"
       elif isinstance(value, bool):
         dtype = "bool"
+      elif isinstance(value, numpy.ndarray):
+        dtype = str(value.dtype)
       else:
         raise TypeError("cannot handle value %r of type %r" % (value, type(value)))
     shape = value.shape if isinstance(value, numpy.ndarray) else ()
