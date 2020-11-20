@@ -2000,6 +2000,7 @@ class PadLayer(_ConcatInputLayer):
     :param int|float value: what constant value to pad, with mode=="constant"
     :param str mode: "constant", "reflect" or "symmetric"
     """
+    from returnn.tf.util.data import DimensionTag
     super(PadLayer, self).__init__(**kwargs)
     axes = self.input_data.get_axes_from_description(axes)
     padding = self._transform_padding(padding=padding, axes=axes)
@@ -2018,7 +2019,14 @@ class PadLayer(_ConcatInputLayer):
         continue
       if p == 0:
         continue
-      self.output.size_placeholder[a] += p
+      size = self.output.size_placeholder[a]
+      size = tf_util.simplify_add(size, p)
+      self.output.size_placeholder[a] = size
+      if not DimensionTag.get_tag_from_size_tensor(size):
+        tag = DimensionTag(
+          description="spatial:%i:%s" % (a, self.get_absolute_name()),
+          kind=DimensionTag.Types.Spatial)
+        tag.set_tag_on_size_tensor(size)
 
   @classmethod
   def _transform_padding(cls, padding, axes):
@@ -2939,6 +2947,7 @@ class ConvLayer(_ConcatInputLayer):
     :param bool with_bias: if True, will add a bias to the output features
     :param None|str activation: if set, will apply this function at the end
     """
+    from returnn.tf.util.data import DimensionTag
     padding = padding.upper()
     assert padding in ["SAME", "VALID"], "no other padding supported at the moment"
     assert "out_type" not in kwargs, "don't set out_type explicitly for this layer"
@@ -3015,10 +3024,16 @@ class ConvLayer(_ConcatInputLayer):
       if i in input_data.size_placeholder}
     index_shift = self.output.get_spatial_axes()[0]
     for i in list(self.output.size_placeholder.keys()):
-      self.output.size_placeholder[i] = self.calc_out_dim(
+      size = self.calc_out_dim(
         in_dim=self.output.size_placeholder[i],
         filter_size=filter_size[i - index_shift], stride=strides[i - index_shift],
         dilation_rate=dilation_rate[i - index_shift], padding=padding)
+      self.output.size_placeholder[i] = size
+      if not DimensionTag.get_tag_from_size_tensor(size):
+        tag = DimensionTag(
+          description="spatial:%i:%s" % (i, self.get_absolute_name()),
+          kind=DimensionTag.Types.Spatial)
+        tag.set_tag_on_size_tensor(size)
 
   @classmethod
   def calc_out_dim(cls, in_dim, filter_size, stride, padding, dilation_rate=1):
@@ -3367,10 +3382,11 @@ class TransposedConvLayer(_ConcatInputLayer):
           size = size * strides[i]
         size = tf_util.simplify_add(size, output_padding[i] - remove_padding[i])
         self.output.size_placeholder[i] = size
-        tag = DimensionTag(
-          description="spatial:%i:%s" % (i, self.get_absolute_name()),
-          kind=DimensionTag.Types.Spatial)
-        tag.set_tag_on_size_tensor(size)
+        if not DimensionTag.get_tag_from_size_tensor(size):
+          tag = DimensionTag(
+            description="spatial:%i:%s" % (i, self.get_absolute_name()),
+            kind=DimensionTag.Types.Spatial)
+          tag.set_tag_on_size_tensor(size)
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, n_out,
