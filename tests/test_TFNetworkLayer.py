@@ -1351,6 +1351,68 @@ def test_ScatterNdLayer_RangeLayer():
     print(out)  # random...
 
 
+def _run_repeat_layer(session, net, input_data_layer):
+  repetitions_data_layer = InternalLayer(
+    name="repetitions", network=net,
+    out_type={'shape': (None,), 'feature_dim_axis': None, 'dtype': 'int32'})
+  repetitions_data_layer.output.placeholder = tf.constant(
+    [[1, 3, 2, 1, 3, 4, 1, 1, 2, 1],
+     [3, 2, 1, 3, 0, 1, 1, 0, 0, 0]], dtype="int32")  # [B, T] (sparse)
+  repetitions_data_layer.output.size_placeholder = {0: tf.constant([10, 7], dtype="int32")}  # [B]
+
+  opts = {
+    'network': net, 'name': 'repeat_layer_test', 'sources': [input_data_layer],
+    'repetitions': repetitions_data_layer, 'axis': 'T'}
+  out_data = RepeatLayer.get_out_data_from_opts(**opts)
+  out_data.sanity_check()
+  print(out_data)
+  repeat_layer = RepeatLayer(output=out_data, **opts)
+  print(repeat_layer.output)
+
+  output, size_placeholder = session.run([repeat_layer.output.placeholder, repeat_layer.output.size_placeholder])
+  assert numpy.all(numpy.equal(size_placeholder[0], numpy.asarray([19, 11])))
+  assert numpy.all(numpy.equal(output.shape, numpy.asarray([2, 19, 5])))
+  # the 6 last positions of the second sequence need to be padded with zeros
+  assert numpy.all(numpy.equal(output[1, 11:], 0))
+  assert out_data.shape == (None, 5)
+  assert out_data.batch_dim_axis == 0
+  assert out_data.time_dim_axis == 1
+
+
+def test_RepeatLayerBTF():
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData())
+    input_data_layer = InternalLayer(name="src", network=net, out_type={'shape': (None, 5), 'dim': 5})
+    input_data_layer.output.size_placeholder = {0: tf.constant([10, 7])}  # [B]
+    input_data_layer.output.placeholder = tf_compat.v1.random_uniform((2, 10, 5))  # [B, T, F]
+
+    _run_repeat_layer(session, net, input_data_layer)
+
+
+def test_RepeatLayerTBF():
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData())
+    input_data_layer = InternalLayer(
+      name="src", network=net,
+      out_type={'shape': (None, 5), 'dim': 5, 'batch_dim_axis': 1, 'time_dim_axis': 0})
+    input_data_layer.output.size_placeholder = {0: tf.constant([10, 7])}  # [B]
+    input_data_layer.output.placeholder = tf_compat.v1.random_uniform((10, 2, 5))  # [T, B, F]
+
+    _run_repeat_layer(session, net, input_data_layer)
+
+
+def test_RepeatLayerBFT():
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData())
+    input_data_layer = InternalLayer(
+      name="src", network=net,
+      out_type={'shape': (5, None), 'dim': 5, 'time_dim_axis': 2, 'feature_dim_axis': 1})
+    input_data_layer.output.size_placeholder = {1: tf.constant([10, 7])}  # [B]
+    input_data_layer.output.placeholder = tf_compat.v1.random_uniform((2, 5, 10))  # [B, F, T]
+
+    _run_repeat_layer(session, net, input_data_layer)
+
+
 def test_ScatterNdLayer_RangeLayer_RangeInAxisLayer():
   n_batch, n_time, n_ts, n_in, n_out = 2, 3, 6, 7, 11
   rnd = numpy.random.RandomState(42)
