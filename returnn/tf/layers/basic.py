@@ -2886,7 +2886,11 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         if s == "feature_dim_axis":
           out.dim = out.batch_shape[out.feature_dim_axis]
     if size_base:
-      out.size_placeholder = size_base.output.size_placeholder.copy()
+      assert len(out.size_placeholder) == len(size_base.output.size_placeholder)
+      # Keep same indices. Assumes same order of spatial dims.
+      out.size_placeholder = {
+        i: size_base.output.size_placeholder[j]
+        for (i, j) in zip(sorted(out.size_placeholder), sorted(size_base.output.size_placeholder))}
     if set_sparse is not None:
       assert isinstance(set_sparse, bool)
       out.sparse = set_sparse
