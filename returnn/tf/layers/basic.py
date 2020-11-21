@@ -3365,6 +3365,7 @@ class TransposedConvLayer(_ConcatInputLayer):
       from returnn.tf.util.basic import single_strided_slice
       for i, p in enumerate(remove_padding):
         if p:
+          assert isinstance(p, int)
           assert p > 0
           y = single_strided_slice(y, axis=i + 1, begin=p, end=-p)
     if with_bias:
@@ -3390,7 +3391,10 @@ class TransposedConvLayer(_ConcatInputLayer):
         self.output.size_placeholder[i],
         filter_size=filter_size[i], stride=strides[i],
         padding=padding, output_padding=output_padding[i])
-      size = tf_util.simplify_add(size, -remove_padding[i] * 2)
+      r = remove_padding[i]
+      if r:
+        assert isinstance(r, int)
+        size = tf_util.simplify_add(size, -r * 2)
       self.output.size_placeholder[i] = size
       if not DimensionTag.get_tag_from_size_tensor(size):
         tag = DimensionTag(
