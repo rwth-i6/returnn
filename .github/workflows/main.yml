@@ -116,7 +116,7 @@ jobs:
         echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
         echo "Python ${{matrix.python-version}}"
         echo "pip: $(type pip)"
-        echo "pip2: $(type pip)"
+        echo "pip2: $(type pip2)"
 
         pip2 install -qq --upgrade pip setuptools wheel six | cat  # Python2<->Python3
         pip2 install --user -r requirements.txt | cat  # need for Python2<->Python3 communication tests
@@ -126,6 +126,8 @@ jobs:
         pip install --user typing | cat  # needed for Python 2 in some cases
 
         if [ "${{matrix.python-version}}" == "2.7" ]; then
+          echo "Cleaning ub potential messed up tensorboard for Python 2.7."
+          echo "Current site-packages:"
           ls ~/.local/lib/python2.7/site-packages
           # https://github.com/tensorflow/tensorboard/issues/1862#issuecomment-521876133
           rm -rf ~/.local/lib/python2.7/site-packages/tensorboard* || true
