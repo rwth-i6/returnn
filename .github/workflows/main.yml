@@ -114,6 +114,9 @@ jobs:
     - name: Setup dependencies
       run: |
         echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
+        echo "Python ${{matrix.python-version}}"
+        echo "pip: $(type pip)"
+        echo "pip2: $(type pip)"
 
         pip2 install -qq --upgrade pip setuptools wheel six | cat  # Python2<->Python3
         pip2 install --user -r requirements.txt | cat  # need for Python2<->Python3 communication tests
@@ -121,10 +124,14 @@ jobs:
 
         pip install --user --upgrade pip setuptools wheel
         pip install --user typing | cat  # needed for Python 2 in some cases
+
+        if [ "${{matrix.python-version}}" == "2.7" ]; then
+          ls ~/.local/lib/python2.7/site-packages
+          # https://github.com/tensorflow/tensorboard/issues/1862#issuecomment-521876133
+          rm -rf ~/.local/lib/python2.7/site-packages/tensorboard* || true
+        fi
+
         pip install --user -r requirements.txt | cat
-        # https://github.com/tensorflow/tensorboard/issues/1862#issuecomment-521876133
-        pip3 uninstall tensorflow-tensorboard || true
-        pip3 uninstall tensorboard || true
         pip install --user --upgrade tensorflow==${{ matrix.tf-version }} | cat
         pip install --user theano==0.9 | cat
         pip install --user nose
