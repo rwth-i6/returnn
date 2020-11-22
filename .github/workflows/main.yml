@@ -122,6 +122,8 @@ jobs:
         pip install --user --upgrade pip setuptools wheel
         pip install --user typing | cat  # needed for Python 2 in some cases
         pip install --user -r requirements.txt | cat
+        # https://github.com/tensorflow/tensorboard/issues/1862#issuecomment-521876133
+        pip3 uninstall tensorflow-tensorboard
         pip install --user --upgrade tensorflow==${{ matrix.tf-version }} | cat
         pip install --user theano==0.9 | cat
         pip install --user nose
