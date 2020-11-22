@@ -4499,19 +4499,32 @@ class DotLayer(LayerBase):
     if not b_var_dims and add_var2_if_empty:
       b_var_dims.append(1)
 
+    def get_batch_axis_excluding_batch(axis):
+      """
+      :param int axis:
+      :return int:
+      """
+      if batch_dim_axis is None:
+        return axis
+      if axis == batch_dim_axis:
+        return None
+      if axis < batch_dim_axis:
+        return axis
+      return axis - 1
+
     # Collect dynamic size info.
     size_placeholder = {}
     for axis1_wo_b in sorted(a_out.size_placeholder.keys()):
       axis_out_wb = cls._axis1_to_output(a_out.get_batch_axis(axis1_wo_b), a_rem_axes=a_rem_axes, a_var_axes=a_var_axes)
       if axis_out_wb is None:
         continue
-      size_placeholder[a_out.get_batch_axis_excluding_batch(axis_out_wb)] = a_out.size_placeholder[axis1_wo_b]
+      size_placeholder[get_batch_axis_excluding_batch(axis_out_wb)] = a_out.size_placeholder[axis1_wo_b]
     for axis2_wo_b in sorted(b_out.size_placeholder.keys()):
       axis_out_wb = cls._axis2_to_output(
         b_out.get_batch_axis(axis2_wo_b), b_rem_axes=b_rem_axes, a_var_axes=a_var_axes, b_var_axes=b_var_axes)
       if axis_out_wb is None or axis_out_wb in size_placeholder:
         continue
-      size_placeholder[b_out.get_batch_axis_excluding_batch(axis_out_wb)] = b_out.size_placeholder[axis2_wo_b]
+      size_placeholder[get_batch_axis_excluding_batch(axis_out_wb)] = b_out.size_placeholder[axis2_wo_b]
 
     shape = list(a_rem_dims + a_var_dims + b_var_dims)
     if batch_dim_axis is not None and batch_dim_axis is not NotSpecified:
