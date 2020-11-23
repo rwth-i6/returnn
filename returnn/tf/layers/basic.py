@@ -2924,9 +2924,10 @@ class ConvLayer(_ConcatInputLayer):
   def __init__(self, n_out, filter_size, padding, strides=1, dilation_rate=1,
                input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None,
                auto_use_channel_first=False,
-               with_bias=False,
+               with_bias=NotSpecified,
                activation=None,
                forward_weights_init="glorot_uniform", bias_init=0.0,
+               filter=None, bias=None,
                **kwargs):
     """
     :param int n_out: number of outgoing features
@@ -2944,8 +2945,10 @@ class ConvLayer(_ConcatInputLayer):
     :param None|int input_split_feature_dim: if set, like input_add_feature_dim it will add a new feature dim
       which is of value input_split_feature_dim, and the original input feature dim
       will be divided by input_split_feature_dim, thus it must be a multiple of that value.
-    :param bool with_bias: if True, will add a bias to the output features
+    :param bool|NotSpecified with_bias: if True, will add a bias to the output features. False by default
     :param None|str activation: if set, will apply this function at the end
+    :param LayerBase|None filter: if given, will not create an own parameter, but use this as the filter
+    :param LayerBase|None bias: if given, will not create an own parameter, but use this as the bias
     """
     from returnn.tf.util.data import DimensionTag
     padding = padding.upper()
@@ -2987,11 +2990,15 @@ class ConvLayer(_ConcatInputLayer):
       "consider using input_expand_dims or input_add_feature_dim.")
     filter_shape = list(filter_size) + [input_data.dim, n_out]
     from returnn.tf.util.basic import get_initializer
-    with self.var_creation_scope():
-      fwd_weights_initializer = get_initializer(
-        forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
-      filters = self.add_param(tf_compat.v1.get_variable(
-        name="W", shape=filter_shape, initializer=fwd_weights_initializer))
+    if filter:
+      assert filter.output.batch_shape == tuple(filter_shape)
+      filters = filter.output.placeholder
+    else:
+      with self.var_creation_scope():
+        fwd_weights_initializer = get_initializer(
+          forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
+        filters = self.add_param(tf_compat.v1.get_variable(
+          name="W", shape=filter_shape, initializer=fwd_weights_initializer))
     data_format = None
     if input_data.is_batch_feature_major:
       assert self.output.is_batch_feature_major
@@ -3001,15 +3008,23 @@ class ConvLayer(_ConcatInputLayer):
       filter=filters,
       padding=padding, strides=strides, dilation_rate=dilation_rate)
     # y shape is [batch] + dynamic_dims + [n_out].
+    if with_bias is NotSpecified:
+      with_bias = True if bias else False
+    if bias:
+      assert with_bias
     if with_bias:
-      with self.var_creation_scope():
-        bias_initializer = get_initializer(
-          bias_init, seed=self.network.random.randint(2 ** 31) if bias_init else 0, eval_local_ns={"layer": self})
-        b = self.add_param(tf_compat.v1.get_variable(name="bias", shape=(n_out,), initializer=bias_initializer))
-      if input_data.is_batch_feature_major:
-        y += tf.reshape(b, [1, n_out] + [1] * len(filter_size))
+      if bias:
+        b_ = bias.output.copy_compatible_to(self.output)
+        y += b_.placeholder
       else:
-        y += b
+        with self.var_creation_scope():
+          bias_initializer = get_initializer(
+            bias_init, seed=self.network.random.randint(2 ** 31) if bias_init else 0, eval_local_ns={"layer": self})
+          b = self.add_param(tf_compat.v1.get_variable(name="bias", shape=(n_out,), initializer=bias_initializer))
+        if input_data.is_batch_feature_major:
+          y += tf.reshape(b, [1, n_out] + [1] * len(filter_size))
+        else:
+          y += b
     if activation:
       from returnn.tf.util.basic import get_activation_function
       act_func = get_activation_function(activation)
@@ -3120,6 +3135,19 @@ class ConvLayer(_ConcatInputLayer):
     """
     out_type = cls._get_out_type_from_opts(**kwargs)
     return super(ConvLayer, cls).get_out_data_from_opts(out_type=out_type, **kwargs)
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param returnn.tf.network.TFNetwork network:
+    :param get_layer:
+    """
+    super(ConvLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if d.get("filter"):
+      d["filter"] = get_layer(d["filter"])
+    if d.get("bias"):
+      d["bias"] = get_layer(d["bias"])
 
 
 class PoolLayer(_ConcatInputLayer):
