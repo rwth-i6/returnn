@@ -3029,7 +3029,7 @@ class ConvLayer(_ConcatInputLayer):
   layer_class = "conv"
   recurrent = True  # we must not allow any shuffling in the time-dim or so
 
-  # noinspection PyUnusedLocal
+  # noinspection PyUnusedLocal,PyShadowingBuiltins
   def __init__(self, n_out, filter_size, padding, strides=1, dilation_rate=1,
                input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None,
                auto_use_channel_first=False,
