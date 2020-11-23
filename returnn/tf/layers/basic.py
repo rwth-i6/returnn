@@ -3442,12 +3442,14 @@ class TransposedConvLayer(_ConcatInputLayer):
   layer_class = "transposed_conv"
   recurrent = True
 
+  # noinspection PyShadowingBuiltins
   def __init__(self, filter_size, activation, strides=None,
                padding="same",
                remove_padding=0,
                output_padding=None,
                with_bias=True,
                forward_weights_init="glorot_uniform", bias_init=0.0,
+               filter=None, filter_perm=None, bias=None,
                **kwargs):
     """
     :param list[int] filter_size:
@@ -3455,10 +3457,14 @@ class TransposedConvLayer(_ConcatInputLayer):
     :param str padding: "same" or "valid"
     :param list[int]|int remove_padding:
     :param list[int|None]|int|None output_padding:
-    :param bool with_bias:
+    :param bool with_bias: whether to add a bias. enabled by default.
+      Note that the default is different from ConvLayer!
     :param str|None activation:
     :param forward_weights_init:
     :param bias_init:
+    :param LayerBase|None filter: if given, will not create an own parameter, but use this as the filter
+    :param dict[str,str]|None filter_perm: transposes the filter (input filter as layer)
+    :param LayerBase|None bias: if given, will not create an own parameter, but use this as the bias
     """
     from returnn.tf.util.basic import DimensionTag, get_initializer, get_activation_function, get_shape
     super(TransposedConvLayer, self).__init__(**kwargs)
@@ -3485,13 +3491,23 @@ class TransposedConvLayer(_ConcatInputLayer):
       strides = list(strides) + [1]
       output_padding = list(output_padding) + [0]
     filter_shape = list(filter_size) + [self.output.dim, input_data.dim]  # transposed
-    with self.var_creation_scope():
-      fwd_weights_initializer = get_initializer(
-        forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
-      filters = self.add_param(tf_compat.v1.get_variable(
-        # Use that name to easily identify the format later.
-        # E.g. we might want to switch to some more canonical format at some point.
-        name="W_native_transposed_conv", shape=filter_shape, initializer=fwd_weights_initializer))
+    if filter:
+      filter_data = filter.output
+      if filter_perm:
+        filter_data = TransposeLayer.transpose(filter_data, perm=filter_perm, name="filter_transposed")
+      if filter_data.batch_ndim < len(filter_shape) and len(spatial_axes) == 1:
+        # Special case. Allow this.
+        filter_data = filter_data.copy_add_spatial_dim(1)
+      assert filter_data.batch_shape == tuple(filter_shape)
+      filters = filter_data.placeholder
+    else:
+      with self.var_creation_scope():
+        fwd_weights_initializer = get_initializer(
+          forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
+        filters = self.add_param(tf_compat.v1.get_variable(
+          # Use that name to easily identify the format later.
+          # E.g. we might want to switch to some more canonical format at some point.
+          name="W_native_transposed_conv", shape=filter_shape, initializer=fwd_weights_initializer))
     output_shape = (
       shape[:1] +
       [self.deconv_output_length(
@@ -3510,13 +3526,19 @@ class TransposedConvLayer(_ConcatInputLayer):
           assert isinstance(p, int)
           assert p > 0
           y = single_strided_slice(y, axis=i + 1, begin=p, end=-p)
+    if bias:
+      assert with_bias
     if with_bias:
-      with self.var_creation_scope():
-        bias_initializer = get_initializer(
-          bias_init, seed=self.network.random.randint(2 ** 31) if bias_init else 0, eval_local_ns={"layer": self})
-        b = self.add_param(tf_compat.v1.get_variable(
-          name="bias", shape=(self.output.dim,), initializer=bias_initializer))
-      y += b
+      if bias:
+        b_ = bias.output.copy_compatible_to(self.output)
+        y += b_.placeholder
+      else:
+        with self.var_creation_scope():
+          bias_initializer = get_initializer(
+            bias_init, seed=self.network.random.randint(2 ** 31) if bias_init else 0, eval_local_ns={"layer": self})
+          b = self.add_param(tf_compat.v1.get_variable(
+            name="bias", shape=(self.output.dim,), initializer=bias_initializer))
+        y += b
     if activation:
       act_func = get_activation_function(activation)
       self.output_before_activation = OutputWithActivation(y, act_func=act_func)
@@ -3633,6 +3655,19 @@ class TransposedConvLayer(_ConcatInputLayer):
     out.shape = tuple(shape)
     out.size_placeholder.clear()  # will be reset in __init__
     return out
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param returnn.tf.network.TFNetwork network:
+    :param get_layer:
+    """
+    super(TransposedConvLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if d.get("filter"):
+      d["filter"] = get_layer(d["filter"])
+    if d.get("bias"):
+      d["bias"] = get_layer(d["bias"])
 
 
 class ReduceLayer(_ConcatInputLayer):
