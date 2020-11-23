@@ -2721,7 +2721,19 @@ class CastLayer(CopyLayer):
 class SwapAxesLayer(_ConcatInputLayer):
   """
   Swaps two axes. Basically a wrapper around :func:`TFUtil.swapaxes`.
-  See also :class:`ReinterpretDataLayer`.
+  Note that usually, this should not be needed, and it is recommended not to be used,
+  as this will be unnecessarily inefficient.
+  Normally, all RETURNN layers will automatically transpose the input data into whatever format they need.
+
+  All axes always have a special meaning (e.g. feature dim or time dim)
+  or dimension tag (e.g. for time axes, including dyn seq lengths).
+  If you need to change the meaning (and not actually transpose / swap axes),
+  you need to use :class:`ReinterpretDataLayer`.
+
+  See also :class:`TransposeLayer` for a more generic variant.
+
+  See also :class:`ReinterpretDataLayer`, which does not swap/transpose axes,
+  but allows to reinterpret their meaning / dim tags.
   """
   layer_class = "swap_axes"
 
@@ -2774,11 +2786,11 @@ class SwapAxesLayer(_ConcatInputLayer):
     shape = list(out.shape)
     shape[axis1_wo_b], shape[axis2_wo_b] = shape[axis2_wo_b], shape[axis1_wo_b]
     out.shape = tuple(shape)
-    if not out.sparse:
-      out.dim = out.shape[-1]
     out.time_dim_axis = cls._translate_axis(out.time_dim_axis, axis1, axis2)
     if out.feature_dim_axis_or_unspecified is not NotSpecified:
       out.feature_dim_axis = cls._translate_axis(out.feature_dim_axis, axis1, axis2)
+    if out.feature_dim_axis is not None:
+      out.dim = out.shape[out.feature_dim_axis]
     return out
 
 
