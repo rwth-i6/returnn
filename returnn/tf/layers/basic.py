@@ -2790,7 +2790,7 @@ class SwapAxesLayer(_ConcatInputLayer):
     if out.feature_dim_axis_or_unspecified is not NotSpecified:
       out.feature_dim_axis = cls._translate_axis(out.feature_dim_axis, axis1, axis2)
     if out.feature_dim_axis is not None:
-      out.dim = out.shape[out.feature_dim_axis]
+      out.dim = out.batch_shape[out.feature_dim_axis]
     return out
 
 
