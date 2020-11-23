@@ -2782,6 +2782,89 @@ class SwapAxesLayer(_ConcatInputLayer):
     return out
 
 
+class TransposeLayer(_ConcatInputLayer):
+  """
+  Basically a wrapper around :func:`tf.transpose`.
+  Note that usually, this should not be needed, and it is recommended not to be used,
+  as this will be unnecessarily inefficient.
+  Normally, all RETURNN layers will automatically transpose the input data into whatever format they need.
+
+  All axes always have a special meaning (e.g. feature dim or time dim)
+  or dimension tag (e.g. for time axes, including dyn seq lengths).
+  If you need to change the meaning (and not actually transpose / swap axes),
+  you need to use :class:`ReinterpretDataLayer`.
+
+  See also :class:`ReinterpretDataLayer`, which does not transpose axes,
+  but allows to reinterpret their meaning / dim tags.
+  """
+  layer_class = "transpose"
+
+  def __init__(self, perm, **kwargs):
+    """
+    :param dict[str,str] perm: target axis -> source axis
+    """
+    super(TransposeLayer, self).__init__(**kwargs)
+    self.perm = perm
+    perm_ = self.get_perm_int(input_data=self.input_data, perm=perm)
+    self.output.placeholder = tf.transpose(
+      self.input_data.placeholder, [perm_[i] for i in range(self.input_data.batch_ndim)])
+
+  @classmethod
+  def get_perm_int(cls, input_data, perm):
+    """
+    :param Data input_data:
+    :param dict[str,str] perm:
+    :rtype: dict[int,int]
+    """
+    def _axis(a):
+      """
+      :param str a:
+      :rtype: int
+      """
+      return input_data.get_axis_from_description(a, allow_int=False)
+    perm_ = {_axis(i): _axis(j) for (i, j) in perm.items()}
+    assert len(perm) == len(perm_) == len(set(perm_.values())), "data %s, perm %r invalid" % (input_data, perm)
+    target_axes = set(perm_)
+    source_axes = set(perm_.values())
+    rem_target_axes = [i for i in range(input_data.batch_ndim) if i not in target_axes]
+    rem_source_axes = [i for i in range(input_data.batch_ndim) if i not in source_axes]
+    assert len(rem_target_axes) == len(rem_source_axes)
+    perm_.update({i: j for (i, j) in zip(rem_target_axes, rem_source_axes)})
+    assert len(perm_) == len(set(perm_.values())) == input_data.batch_ndim
+    return perm_
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, perm, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param dict[str,str] perm: target axis -> source axis
+    :rtype: Data
+    """
+    input_data = get_concat_sources_data_template(sources, name="%s_output" % name)
+    perm = cls.get_perm_int(input_data=input_data, perm=perm)
+    shape = [input_data.batch_shape[perm[i]] for i in range(input_data.batch_ndim)]
+    if input_data.have_batch_axis():
+      shape.pop(perm[input_data.batch_dim_axis])
+    out = input_data.copy_template(name="%s_output" % name)
+    out.shape = tuple(shape)
+    out.batch_dim_axis = perm[input_data.batch_dim_axis] if input_data.have_batch_axis() else None
+    out.time_dim_axis = perm[input_data.time_dim_axis] if input_data.have_time_axis() else None
+    if input_data.feature_dim_axis_or_unspecified is NotSpecified:
+      out.feature_dim_axis = NotSpecified
+      if out.feature_dim_axis is not None:
+        out.dim = out.batch_shape[out.feature_dim_axis]
+    elif input_data.feature_dim_axis_or_unspecified is None:
+      out.feature_dim_axis = None
+    else:
+      out.feature_dim_axis = perm[input_data.feature_dim_axis_or_unspecified]
+    if input_data.size_placeholder:
+      out.size_placeholder = {
+        out.get_batch_axis_excluding_batch(perm[input_data.get_batch_axis(i)]): size
+        for (i, size) in input_data.size_placeholder.items()}
+    return out
+
+
 class ReinterpretDataLayer(_ConcatInputLayer):
   """
   Acts like the :class:`CopyLayer` but reinterprets the role of some axes or data.
