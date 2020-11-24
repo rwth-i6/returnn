@@ -3131,6 +3131,13 @@ class _SubnetworkRecCell(object):
       :param str name:
       :rtype: LayerBase
       """
+      if '/' in name:
+        # It may be a hierarchical path to a sub-layer, which should have been found by get_layer()
+        # but maybe it's not constructed yet, so try constructing the root layer.
+        root_layer = get_layer(name.split('/')[0])
+        sub_layer = root_layer.get_sub_layer('/'.join(name.split('/')[1:]))  # get the sub-layer from the root-layer
+        if sub_layer:
+          return sub_layer
       if name.startswith("prev:"):
         return get_prev_layer(name[len("prev:"):])
       if name.startswith("base:"):
