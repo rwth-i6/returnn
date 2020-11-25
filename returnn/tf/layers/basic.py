@@ -4506,8 +4506,7 @@ class DotLayer(LayerBase):
       """
       if batch_dim_axis is None:
         return axis
-      if axis == batch_dim_axis:
-        return None
+      assert axis != batch_dim_axis
       if axis < batch_dim_axis:
         return axis
       return axis - 1
