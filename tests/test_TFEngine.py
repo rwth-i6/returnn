@@ -1497,6 +1497,12 @@ def test_attention_two_targets():
 
   check_train_and_search_two_targets(net_dict=net_dict)
 
+  # Also test with label feedback from only one of the outputs. This is a special case, where during search the
+  # sub-layer "output_1" == "output/out_1" could be optimized out of the loop, but the root layer is in the loop.
+  net_dict["output"]["unit"]["orth_embed"]["from"] = ["orth_embed_0"]
+
+  check_train_and_search_two_targets(net_dict=net_dict)
+
 
 def test_attention_two_dependent_targets():
   """
