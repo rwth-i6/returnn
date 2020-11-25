@@ -3554,6 +3554,12 @@ def test_reclayer_optimize_out_masked_computation_unmask():
     })
 
 
+def test_reclayer_optimize_out_access_split():
+  check_reclayer_optimize_out(
+    subnet_layer_dict={"class": "copy", "from": "split/0", "n_out": 5},
+    other_subnet_layers={"split": {"class": "split", "from": ["data:source"], "size_splits": [5, 8]}})
+
+
 def test_reclayer_enc_time_dim_eval():
   """
     line: assert self.placeholder.shape[i].value == self.batch_shape[i]
