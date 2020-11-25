@@ -139,7 +139,7 @@ def get_concat_sources_data_template(src_layers, name=None):
   """
   assert src_layers, "need source layers"
   if len(src_layers) == 1:
-    return src_layers[0].output.copy(name=name)
+    return src_layers[0].output.copy_template(name=name)
   dim = 0
   beam = None
   common_source = Data.get_common_data([s.output for s in src_layers])
