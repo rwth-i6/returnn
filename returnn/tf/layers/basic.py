@@ -4502,7 +4502,7 @@ class DotLayer(LayerBase):
     def get_batch_axis_excluding_batch(axis):
       """
       :param int axis:
-      :return int:
+      :rtype: int
       """
       if batch_dim_axis is None:
         return axis
