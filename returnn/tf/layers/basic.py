@@ -540,6 +540,7 @@ class ActivationLayer(CopyLayer):
       act_func = get_activation_function(activation)
       if act_func in {tf.nn.softmax, tf.nn.log_softmax} and self.output.feature_dim_axis != self.output.batch_ndim - 1:
         # Make sure we use the right axis. Don't use OutputWithActivation.
+        # noinspection PyArgumentList
         self.output.placeholder = act_func(x, axis=self.output.feature_dim_axis)
         self.output_before_activation = None
       else:
@@ -1238,10 +1239,17 @@ class LinearLayer(_ConcatInputLayer):
     if self.activation:
       from returnn.tf.util.basic import get_activation_function
       act_func = get_activation_function(self.activation)
-      self.output_before_activation = OutputWithActivation(x, act_func=act_func)
+      if act_func in {tf.nn.softmax, tf.nn.log_softmax} and self.output.feature_dim_axis != self.output.batch_ndim - 1:
+        # Make sure we use the right axis. Don't use OutputWithActivation.
+        # noinspection PyArgumentList
+        x = act_func(x, axis=self.output.feature_dim_axis)
+        self.output_before_activation = None
+      else:
+        self.output_before_activation = OutputWithActivation(x, act_func=act_func)
     else:
       self.output_before_activation = OutputWithActivation(x)
-    x = self.output_before_activation.y
+    if self.output_before_activation:
+      x = self.output_before_activation.y
 
     assert self.output.batch_dim_axis == self.input_data.batch_dim_axis
     assert self.output.time_dim_axis == self.input_data.time_dim_axis
