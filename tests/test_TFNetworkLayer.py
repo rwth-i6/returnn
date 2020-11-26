@@ -2116,7 +2116,7 @@ def test_Loss_NCHW():
                 target=target_data, layer=activation)
 
     random_input = np.random.rand(10, 16, 32)
-    loss_out, out_flat = session.run([loss.get_value(), loss.output_before_softmax_flat],
+    loss_out, out_flat = session.run([loss.get_value(), loss.output_flat],
                                      feed_dict={src_nchw.output.placeholder: random_input,
                                                 src_nchw.output.size_placeholder[1]: np.full(shape=(10,), fill_value=32),
                                                 target_placeholder: np.random.rand(10, 32, 16),

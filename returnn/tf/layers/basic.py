@@ -541,6 +541,7 @@ class ActivationLayer(CopyLayer):
       if act_func in {tf.nn.softmax, tf.nn.log_softmax} and self.output.feature_dim_axis != self.output.batch_ndim - 1:
         # Make sure we use the right axis. Don't use OutputWithActivation.
         self.output.placeholder = act_func(x, axis=self.output.feature_dim_axis)
+        self.output_before_activation = None
       else:
         self.output_before_activation = OutputWithActivation(x, act_func=act_func)
     else:
