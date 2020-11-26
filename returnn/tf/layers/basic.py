@@ -538,10 +538,15 @@ class ActivationLayer(CopyLayer):
     if activation:
       from returnn.tf.util.basic import get_activation_function
       act_func = get_activation_function(activation)
-      self.output_before_activation = OutputWithActivation(x, act_func=act_func)
+      if act_func in {tf.nn.softmax, tf.nn.log_softmax} and self.output.feature_dim_axis != self.output.batch_ndim - 1:
+        # Make sure we use the right axis. Don't use OutputWithActivation.
+        self.output.placeholder = act_func(x, axis=self.output.feature_dim_axis)
+      else:
+        self.output_before_activation = OutputWithActivation(x, act_func=act_func)
     else:
       self.output_before_activation = OutputWithActivation(x)
-    self.output.placeholder = self.output_before_activation.y
+    if self.output_before_activation:
+      self.output.placeholder = self.output_before_activation.y
 
   @classmethod
   def get_out_data_from_opts(cls, activation, **kwargs):
