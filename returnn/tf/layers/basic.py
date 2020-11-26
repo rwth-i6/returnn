@@ -1327,7 +1327,8 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
   layer_class = "softmax_over_spatial"
 
   def __init__(self, axis=None, energy_factor=None,
-               start=None, window_start=None, window_size=None, use_time_mask=None, **kwargs):
+               start=None, window_start=None, window_size=None, use_time_mask=None,
+               log_space=False, **kwargs):
     """
     :param str|None axis: which axis to do the softmax over
     :param float|None energy_factor: the energy will be scaled by this factor.
@@ -1338,6 +1339,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     :param LayerBase|int|None window_size:
     :param bool use_time_mask: if True, assumes dyn seq len, and use it for masking.
       By default, if dyn seq len exists, it uses it.
+    :param bool log_space: if True, returns in log space (i.e. uses log_softmax)
     """
     from returnn.tf.util.basic import where_bc
     super(SoftmaxOverSpatialLayer, self).__init__(**kwargs)
@@ -1366,7 +1368,8 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
       energy = where_bc(energy_mask, energy, float("-inf"), name="energy_masked")
     if energy_factor:
       energy = tf.multiply(energy, energy_factor, name="energy_scaled")
-    self.output_before_activation = OutputWithActivation(energy, act_func=tf.nn.softmax)  # (...,T)
+    self.output_before_activation = OutputWithActivation(
+      energy, act_func=tf.nn.log_softmax if log_space else tf.nn.softmax)  # (...,T)
     self.output.placeholder = self.output_before_activation.y
 
   def get_dep_layers(self):
