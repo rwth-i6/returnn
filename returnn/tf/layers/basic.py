@@ -2702,6 +2702,100 @@ class ExpandDimsLayer(_ConcatInputLayer):
     return data
 
 
+class RepeatLayer(_ConcatInputLayer):
+  """
+  A wrapper around tf.repeat, but supports an additional batch axis for the durations
+  The sum of the repetitions has to be non-zero for each sequence in the batch.
+
+  This layer can only be used with Tensorflow 1.15.0 or newer.
+  """
+  layer_class = "repeat"
+
+  def __init__(self, repetitions, axis="T", **kwargs):
+    """
+    :param LayerBase repetitions: number of repetitions for each sequence and position in target axis, [B,T] or [T,B]
+    :param str axis: (dynamic) axis for repetition (currently only time axis is supported)
+    """
+    from returnn.tf.util.data import DimensionTag
+    super(RepeatLayer, self).__init__(**kwargs)
+    self.repetitions = repetitions
+    repetitions_data = self.repetitions.output
+    input_data = self.input_data
+    assert self.input_data and self.input_data.have_batch_axis()
+    input_data = input_data.copy_as_batch_major()
+    original_axis = input_data.get_axis_from_description(axis, allow_int=False)
+    input_data = input_data.copy_move_axis(original_axis, 1)
+    repetitions_data = repetitions_data.copy_as_batch_major()
+    assert repetitions_data.dtype in ["int32", "int64"]
+    assert repetitions_data.have_batch_axis() and repetitions_data.batch_ndim == 2, (
+      "RepeatLayer only accepts repetitions of the shape (B, None|S) or (None|S, B)")
+    assert input_data.shape[0] == repetitions_data.shape[0], (
+      "Axis mismatch between input (%i) and repetitions (%i)" %
+      (input_data.shape[0], repetitions_data.shape[0]))
+    # pad the target axis
+    paddings = [(0, 1) if i == 1 else (0, 0) for i in range(input_data.batch_ndim)]
+    padded_data = tf.pad(input_data.placeholder, paddings)  # [B, T+1, ...]
+    # those are the sequence lengths after expansion
+    target_seq_len = tf.reduce_sum(repetitions_data.placeholder, axis=1)  # [B], the new size_placeholder for 'T'
+    # maximum sequence length after expansion
+    max_duration = tf.reduce_max(target_seq_len)  # [] == T'
+    # the new padding is the difference of the maximum to the new target
+    target_padding_steps = tf.expand_dims(max_duration - target_seq_len, 1)  # [B, 1]
+    # add the repetitions for the artificial padding position
+    target_repetitions = tf.concat([repetitions_data.placeholder, target_padding_steps], axis=1)  # [B, T+1]
+    # flatten batch and time
+    shape = tf_util.get_shape(padded_data)
+    flat_shape = [shape[0] * shape[1]] + shape[2:]
+    reshaped_data = tf.reshape(padded_data, flat_shape)  # [B * T+1, F]
+    reshaped_repetitions = tf.reshape(target_repetitions, (shape[0] * shape[1],))  # [B * T+1]
+    # run the repetition
+    repeated_data = tf.repeat(reshaped_data, reshaped_repetitions, axis=0)  # [B * T', ...]
+    # unflatten the output
+    target_shape = [shape[0], max_duration] + shape[2:]
+    self.output.placeholder = tf.reshape(repeated_data, target_shape)  # [B, T', ...]
+    # copy (optional) additional size placeholders
+    self.output.size_placeholder = {k: v for k, v in input_data.size_placeholder.items() if k != 0}
+    # set the size_placeholder of the target axis
+    self.output.size_placeholder[0] = target_seq_len
+    tag = DimensionTag(
+      description="repeated:%s" % self.get_absolute_name(),
+      kind=DimensionTag.Types.Spatial)
+    tag.set_tag_on_size_tensor(target_seq_len)
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    deps = super(RepeatLayer, self).get_dep_layers()
+    deps.append(self.repetitions)
+    return deps
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param returnn.tf.network.TFNetwork network:
+    :param get_layer:
+    """
+    super(RepeatLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["repetitions"] = get_layer(d["repetitions"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, axis, repetitions, sources=(), **kwargs):
+    """
+    :param str name:
+    :param str axis:
+    :param LayerBase repetitions:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    data = get_concat_sources_data_template(sources, name="%s_output" % name)
+    data = data.copy_as_batch_major()
+    axis = data.get_axis_from_description(axis, allow_int=False)
+    data = data.copy_move_axis(axis, data.get_batch_axis(0))
+    return data
+
+
 class CastLayer(CopyLayer):
   """
   Cast to some other dtype.
