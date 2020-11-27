@@ -3453,7 +3453,7 @@ class PoolLayer(_ConcatInputLayer):
       i: input_data.size_placeholder[i]
       for i in range(len(pool_size))
       if i in input_data.size_placeholder}
-    index_shift = self.output.time_dim_axis_excluding_batch
+    index_shift = self.output.get_spatial_axes()[0]
     for i in list(self.output.size_placeholder.keys()):
       self.output.size_placeholder[i] = ConvLayer.calc_out_dim(
         in_dim=self.output.size_placeholder[i],
@@ -3498,7 +3498,7 @@ class PoolLayer(_ConcatInputLayer):
       # Identity function. Just copy and don't do anything.
       return data
     padding = padding.upper()
-    index_shift = data.time_dim_axis_excluding_batch
+    index_shift = data.get_spatial_axes()[0]
     for i in range(len(pool_size)):
       if data.shape[i + index_shift] is not None:
         shape[i] = ConvLayer.calc_out_dim(
