@@ -3211,7 +3211,9 @@ class ConvLayer(_ConcatInputLayer):
       "consider using input_expand_dims or input_add_feature_dim.")
     filter_shape = list(filter_size) + [input_data.dim, n_out]
     from returnn.tf.util.basic import get_initializer
+    self.filter_layer = None
     if filter:
+      self.filter_layer = filter
       filter_data = filter.output
       if filter_perm:
         filter_data = TransposeLayer.transpose(filter_data, perm=filter_perm, name="filter_transposed")
@@ -3237,8 +3239,10 @@ class ConvLayer(_ConcatInputLayer):
       with_bias = True if bias else False
     if bias:
       assert with_bias
+    self.bias_layer = None
     if with_bias:
       if bias:
+        self.bias_layer = bias
         b_ = bias.output.copy_compatible_to(self.output)
         y += b_.placeholder
       else:
@@ -3360,6 +3364,17 @@ class ConvLayer(_ConcatInputLayer):
     """
     out_type = cls._get_out_type_from_opts(**kwargs)
     return super(ConvLayer, cls).get_out_data_from_opts(out_type=out_type, **kwargs)
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    deps = super(ConvLayer, self).get_dep_layers()
+    if self.filter_layer:
+      deps.append(self.filter_layer)
+    if self.bias_layer:
+      deps.append(self.bias_layer)
+    return deps
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -3602,7 +3617,9 @@ class TransposedConvLayer(_ConcatInputLayer):
       strides = list(strides) + [1]
       output_padding = list(output_padding) + [0]
     filter_shape = list(filter_size) + [self.output.dim, input_data.dim]  # transposed
+    self.filter_layer = None
     if filter:
+      self.filter_layer = filter
       filter_data = filter.output
       if filter_perm:
         filter_data = TransposeLayer.transpose(filter_data, perm=filter_perm, name="filter_transposed")
@@ -3639,8 +3656,10 @@ class TransposedConvLayer(_ConcatInputLayer):
           y = single_strided_slice(y, axis=i + 1, begin=p, end=-p)
     if bias:
       assert with_bias
+    self.bias_layer = None
     if with_bias:
       if bias:
+        self.bias_layer = bias
         b_ = bias.output.copy_compatible_to(self.output)
         y += b_.placeholder
       else:
@@ -3766,6 +3785,17 @@ class TransposedConvLayer(_ConcatInputLayer):
     out.shape = tuple(shape)
     out.size_placeholder.clear()  # will be reset in __init__
     return out
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    deps = super(TransposedConvLayer, self).get_dep_layers()
+    if self.filter_layer:
+      deps.append(self.filter_layer)
+    if self.bias_layer:
+      deps.append(self.bias_layer)
+    return deps
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
