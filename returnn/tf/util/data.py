@@ -181,6 +181,10 @@ class DimensionTag(object):
     """
     return not (self == other)
 
+  def __hash__(self):
+    base = self.get_same_base()
+    return hash((base.kind, base.description))
+
   def get_same_base(self):
     """
     :rtype: DimensionTag
