@@ -2096,23 +2096,39 @@ class MergeDimsLayer(_ConcatInputLayer):
   """
   layer_class = "merge_dims"
 
-  def __init__(self, axes, n_out=None, **kwargs):
+  def __init__(self, axes, keep_order=False, n_out=None, **kwargs):
     """
     :param str|list[str]|list[int] axes: see Data.get_axes_from_description(), e.g. "except_time"
+    :param bool keep_order: By default (for historical reasons), the axes are sorted, and then merged.
+      Thus, the order of incoming axes will influence the result.
+      E.g. inputs [B,S,F] and [B,F,S], with ``axes=["S","F"]``, will get different results,
+      although the output shape is [B,S*F] in both cases.
+      This is bad: In general, other layers in RETURNN might reorder the axes for various reasons,
+      and all layers should behave in the same way, no matter the order.
+      It is recommended to set ``keep_order=True``, such that the order defined in ``axes`` defines the behavior,
+      and not the incoming axis order.
     :param int|None n_out:
     """
     super(MergeDimsLayer, self).__init__(**kwargs)
-    axes = self.input_data.get_axes_from_description(axes)
-    axes = sorted(axes)
+    if keep_order:
+      assert isinstance(axes, (tuple, list)), "%s: unique axes %r required" % (self, axes)
+      axes_ = []
+      for axis in axes:
+        axis_ = self.input_data.get_axes_from_description(axis, allow_int=False)
+        assert len(axis_) <= 1, "%s: unique axes %r required, but got %r -> %r" % (self, axes, axis, axis_)
+        axes_ += axis_
+      axes = axes_
+    else:
+      axes = self.input_data.get_axes_from_description(axes)
+      axes = sorted(axes)
     merge_target_axis = self._get_target_axis(input_data=self.input_data, merge_axes=axes)
     x = self.input_data.placeholder
     if len(axes) > 1:
-      axes = sorted(axes)
       # Transpose so that all axes are behind each other.
       perm = [i for i in range(self.input_data.batch_ndim) if i not in axes]
       # If batch axis included, move to front.
       # This is such that we can deterministically undo this later, e.g. in SplitBatchTimeLayer.
-      if self.input_data.batch_dim_axis in axes:
+      if self.input_data.batch_dim_axis in axes and not keep_order:
         axes.remove(self.input_data.batch_dim_axis)
         axes.insert(0, self.input_data.batch_dim_axis)
       for i, a in enumerate(axes):
@@ -2125,7 +2141,7 @@ class MergeDimsLayer(_ConcatInputLayer):
       i1 = i0 + len(axes)
       if all([isinstance(d, int) for d in shape[i0:i1]]):
         import numpy
-        res_dim = numpy.prod(shape[i0:i1])
+        res_dim = int(numpy.prod(shape[i0:i1]))
       else:
         res_dim = tf.reduce_prod(shape[i0:i1])
       x = tf.reshape(
@@ -2235,7 +2251,7 @@ class MergeDimsLayer(_ConcatInputLayer):
     import numpy
     res_dim = None
     if all([data.batch_shape[i] is not None for i in axes]):
-      res_dim = numpy.prod([data.batch_shape[i] for i in axes])
+      res_dim = int(numpy.prod([data.batch_shape[i] for i in axes]))
     if not data.sparse and data.feature_dim_axis in axes:  # will also merge the feature dim
       if res_dim is not None and n_out is not NotSpecified:
         assert res_dim == n_out
