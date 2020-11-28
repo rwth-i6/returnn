@@ -2009,7 +2009,7 @@ class Data(object):
     :rtype: int
     """
     dim_tags = self.get_batch_shape_dim_tags()
-    matching_dim_tags = [(axis, tag) for axis, tag in enumerate(dim_tags) if name in tag.description]
+    matching_dim_tags = [(axis, tag) for axis, tag in enumerate(dim_tags) if name.lower() in tag.description.lower()]
     if spatial_only:
       matching_dim_tags = [(axis, tag) for axis, tag in matching_dim_tags if tag.kind == DimensionTag.Types.Spatial]
     assert len(matching_dim_tags) == 1, "%r: tag name %r is not unique in dim tags %r" % (self, name, dim_tags)
