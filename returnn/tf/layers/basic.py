@@ -613,7 +613,13 @@ class LayerNormLayer(_ConcatInputLayer):
     variance = tf.reduce_mean(tf.square(x - mean), axis=[axis], keepdims=True, name="variance")
     with tf.name_scope("normalized"):
       norm_x = (x - mean) * tf_compat.v1.rsqrt(variance + epsilon)
-    self.output.placeholder = norm_x * scale + bias
+    if axis != self.input_data.batch_ndim - 1:
+      ndim = self.input_data.batch_ndim
+      scale_bc = tf.reshape(scale, [dim if i == axis else 1 for i in range(ndim)])
+      bias_bc = tf.reshape(bias, [dim if i == axis else 1 for i in range(ndim)])
+      self.output.placeholder = norm_x * scale_bc + bias_bc
+    else:
+      self.output.placeholder = norm_x * scale + bias
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
 
   @classmethod
