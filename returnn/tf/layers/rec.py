@@ -992,6 +992,10 @@ class _SubnetworkRecCell(object):
     self._construct_template()
     self._initial_outputs = None  # type: typing.Optional[typing.Dict[str,tf.Tensor]]
     self._initial_extra_outputs = None  # type: typing.Optional[typing.Dict[str,typing.Dict[str,typing.Union[tf.Tensor,typing.Tuple[tf.Tensor,...]]]]]  # nopep8
+
+    # input_layers_moved_out, output_layers_moved_out and layers_in_loop include (used) sub-layers as separate
+    # entries, this way in- and outputting them to the loop via TensorArrays will be handled just as for normal
+    # layers.
     self.input_layers_moved_out = []  # type: typing.List[str]
     self.output_layers_moved_out = []  # type: typing.List[str]
     self.layers_in_loop = None   # type: typing.Optional[typing.List[str]]
@@ -1202,14 +1206,20 @@ class _SubnetworkRecCell(object):
         if '/' in name:
           # this is probably a path to a sub-layer
           root_name = name.split('/')[0]
+          # Get the root layer. Note, this will also add the root layer (and following layers) as a dependency
+          # to ConstructCtx.layers[-1] which is what we want (see below).
           root_layer = lself.__call__(
-            ("prev:%s" % root_name) if is_prev_time_frame else root_name)  # get the root-layer
+            ("prev:%s" % root_name) if is_prev_time_frame else root_name)
           sub_layer = root_layer.get_sub_layer('/'.join(name.split('/')[1:]))  # get the sub-layer from the root-layer
           if sub_layer:  # get_sub_layer returns None by default (if sub-layer not found)
             # add to templates so we will collect output in self.get_output if this is an output layer
             if isinstance(sub_layer, _TemplateLayer):
               self.layer_data_templates[name] = sub_layer
-              sub_layer.add_dependency(root_layer, is_prev_time_frame=False)
+              if ConstructCtx.layers:
+                # Add the sub-layer to the dependencies just so we will visit it in self._move_outside_loop().
+                # Note, we don't add dependencies to the sub-layer, instead, the dependency graph continues via the root
+                # layer (see above).
+                ConstructCtx.layers[-1].add_dependency(sub_layer, is_prev_time_frame=is_prev_time_frame)
             return sub_layer
         # Need to create layer instance here now to not run into recursive loops.
         # We will extend it later in add_templated_layer().
@@ -2770,7 +2780,8 @@ class _SubnetworkRecCell(object):
     :param set[str] needed_outputs:
     :return: nothing, will set self.input_layers_moved_out/output_layers_moved_out/layers_in_loop
     """
-    # TODO: Currently we do not have special logic for sub-layers here, although we should...
+    # Note, that layers_in_loop will also contain sublayers as separate entries (added via layer.dependencies)
+    # because we might need to accumulate their outputs into separate TensorArrays.
     layers_in_loop = []  # type: typing.List[_TemplateLayer]
 
     def visit(deps):
