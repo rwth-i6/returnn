@@ -5733,7 +5733,9 @@ class SubnetworkLayer(LayerBase):
     in the subnetwork,
   otherwise with ``concat_sources=False``,
     the input to this layer will be represented as ``"data:input_layer_name"``
+    and also ``"data:0"`` to ``"data:<n-1>"`` for n inputs,
     for each input, in the subnetwork.
+    The first input will also be simply available as ``"data:data"``/``"data"`.
   """
 
   layer_class = "subnetwork"
@@ -5837,9 +5839,12 @@ class SubnetworkLayer(LayerBase):
           sources, dropout=dropout, dropout_noise_shape=dropout_noise_shape))
     else:
       assert not dropout, "not implemented without concat_sources"
-      for source in sources:
+      for i, source in enumerate(sources):
         assert isinstance(source, LayerBase)
         sub_extern_data.data[source.name] = source.output
+        sub_extern_data.data[str(i)] = source.output
+        if i == 0:
+          sub_extern_data.data[sub_extern_data.default_input] = source.output
     # Copy data (e.g. target classes) over from base network.
     for key, data in base_network.extern_data.data.items():
       sub_extern_data.data.setdefault(key, data)
