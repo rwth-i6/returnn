@@ -2813,6 +2813,12 @@ class _SubnetworkRecCell(object):
         return False
       if self.parent_net.search_flag and layer.search_choices:
         return False  # need to perform the search inside the loop currently
+      if '/' in layer.name:  # True if this is a sub-layer
+        root_layer_name = layer.name.split('/')[0]
+        root_layer = self.layer_data_templates.get(root_layer_name)
+        assert root_layer, "Root layer '{}' not found for sub-layer '{}'.".format(root_layer_name, layer.name)
+        # sub-layers are in the same net as the root layer by definition
+        return output_can_move_out(root_layer)
       # layer.output is used by other layers?
       for other_layer in layers_in_loop:
         if layer in other_layer.dependencies:
@@ -2849,6 +2855,12 @@ class _SubnetworkRecCell(object):
       if self.parent_net.search_flag and layer.search_choices:
         return False  # need to perform the search inside the loop currently
       layer_deps = layer.dependencies
+      if '/' in layer.name:  # True if this is a sub-layer
+        root_layer_name = layer.name.split('/')[0]
+        root_layer = self.layer_data_templates.get(root_layer_name)
+        assert root_layer, "Root layer '{}' not found for sub-layer '{}'.".format(root_layer_name, layer.name)
+        # sub-layers are in the same net as the root layer by definition
+        return input_can_move_out(root_layer)
       # We depend on other layers from this sub-network?
       for other_layer in layers_in_loop:
         if other_layer in layer_deps:
@@ -3282,8 +3294,6 @@ class _TemplateLayer(LayerBase):
 
     sub_layer_template = _TemplateLayer(self.network, full_layer_name)
     is_output_layer = self.is_output_layer()  # make sub-layers output layers too
-    # Do not use collocate_with on the sub layer, otherwise it could never be moved out.
-    # _move_outside_loop should handle this.
     sub_layer_template.init(output, sub_layer_class, is_output_layer=is_output_layer,
                             name=full_layer_name, network=network)
     return sub_layer_template
