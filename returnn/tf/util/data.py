@@ -2570,7 +2570,11 @@ class Data(object):
       elif all([a in "btf" for a in axes]):
         return self.get_axes_from_description(list(axes))
       elif axes.startswith("stag:"):  # spatial tag
-        axes = self.get_axis_by_tag_name(axes[len("stag:"):], spatial_only=True)
+        if axes.endswith('?'):
+          stag_axes = self.get_axis_by_tag_name(axes[len("stag:"):-len('?')], spatial_only=True, must_exist=False)
+          axes = [stag_axes] if stag_axes is not None else []
+        else:
+          axes = self.get_axis_by_tag_name(axes[len("stag:"):], spatial_only=True)
       else:
         raise Exception("invalid axis mode %r" % axes)
     if isinstance(axes, int):
@@ -2601,18 +2605,24 @@ class Data(object):
     assert len(axes) == 1, "%r: %r is not a unique axis but %r" % (self, axis, axes)
     return axes[0]
 
-  def get_axis_by_tag_name(self, name, spatial_only=False):
+  def get_axis_by_tag_name(self, name, spatial_only=False, must_exist=True):
     """
     :param str name: the tag name, or part of it (must be unique, and must exist)
     :param bool spatial_only:
-    :rtype: int
+    :param bool must_exist: if False, return None if the tag does not exist instead of raising exception
+    :rtype: int|None
     """
     dim_tags = self.get_batch_shape_dim_tags()
     matching_dim_tags = [(axis, tag) for axis, tag in enumerate(dim_tags) if name.lower() in tag.description.lower()]
     if spatial_only:
       matching_dim_tags = [(axis, tag) for axis, tag in matching_dim_tags if tag.kind == DimensionTag.Types.Spatial]
-    assert len(matching_dim_tags) == 1, "%r: tag name %r is not unique in dim tags %r" % (self, name, dim_tags)
-    return matching_dim_tags[0][0]
+    assert len(matching_dim_tags) <= 1, "%r: tag name %r is not unique in dim tags %r" % (self, name, dim_tags)
+    if len(matching_dim_tags) == 1:
+      return matching_dim_tags[0][0]
+    elif must_exist:
+      assert len(matching_dim_tags) == 1, "%r: tag name %r does not exist in dim tags %r" % (self, name, dim_tags)
+    else:
+      return None
 
   def get_batch_axis_excluding_batch(self, axis):
     """
