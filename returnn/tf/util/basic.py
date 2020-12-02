@@ -1241,6 +1241,18 @@ def gelu2(x):
   return x * tf.sigmoid(1.702 * x)
 
 
+def gelu3(x):
+  """
+  Another version of the GELU, as it is used in PyTorch
+  https://github.com/pytorch/pytorch/blob/b7f4b6a6de30116f1b44a08fab9499dd5eb2de7d/test/cpp/api/functional.cpp#L839-L845
+
+  :param tf.Tensor x:
+  :rtype: tf.Tensor
+  """
+  import numpy
+  return 0.5 * x * (1 + tf.math.erf(x / tf.cast(numpy.sqrt(2), x.dtype)))
+
+
 def random_uniform_abs_initializer(limit, **kwargs):
   """
   :param float|int|tf.Tensor limit:
