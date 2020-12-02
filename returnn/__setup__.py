@@ -92,15 +92,21 @@ def get_version_str(verbose=False, fallback=None, long=False):
       return info.long_version
     return info.version
 
-  if os.path.exists("%s/_setup_info_generated.py" % _root_dir):
-    # noinspection PyUnresolvedReferences
-    import _setup_info_generated as info
+  info_in_root_filename = "%s/_setup_info_generated.py" % _root_dir
+  if os.path.exists(info_in_root_filename):
+    # The root dir might not be in sys.path, so just load directly.
+    code = compile(open(info_in_root_filename).read(), info_in_root_filename, "exec")
+    info = {}
+    eval(code, info)
+    version = info["version"]
+    long_version = info["long_version"]
     if verbose:
-      print("Found _setup_info_generated.py in root, long version %r, version %r." % (info.long_version, info.version))
+      print(
+        "Found %r in root, long version %r, version %r." % (info_in_root_filename, long_version, version))
     if long:
-      assert "+" in info.long_version
-      return info.long_version
-    return info.version
+      assert "+" in long_version
+      return long_version
+    return version
 
   if os.path.exists("%s/.git" % _root_dir):
     try:
