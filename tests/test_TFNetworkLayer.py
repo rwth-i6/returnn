@@ -974,6 +974,50 @@ def test_SplitDimsLayer_simple_feat():
     numpy.testing.assert_almost_equal(out_v, in_v.reshape(out_v.shape))
 
 
+def test_SplitDimsLayer_simple_time():
+  n_batch, n_time, n_in = 7, 3, 20
+  config = Config({
+    "extern_data": {"data": {"dim": n_in}},
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {"class": "split_dims", "axis": "t", "dims": (-1, 1)}})
+    assert_equal(
+      net.get_default_output_layer().output.get_dim_tag(1),
+      net.extern_data.get_default_input_data().get_dim_tag(1))
+    out_t = net.get_default_output_layer().output.placeholder
+    assert out_t.shape.as_list() == [None, None, 1, 20]
+    in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_time, n_in))
+    out_v = session.run(out_t, feed_dict={net.extern_data.data["data"].placeholder: in_v})
+    assert isinstance(out_v, numpy.ndarray)
+    assert out_v.shape == (n_batch, n_time, 1, n_in)
+    numpy.testing.assert_almost_equal(out_v, in_v.reshape(out_v.shape))
+
+
+def test_SplitDimsLayer_simple_time2():
+  n_batch, n_time, n_in = 7, 3, 20
+  config = Config({
+    "extern_data": {"data": {"dim": n_in}},
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {"class": "split_dims", "axis": "t", "dims": (1, -1)}})
+    assert_equal(
+      net.get_default_output_layer().output.get_dim_tag(2),
+      net.extern_data.get_default_input_data().get_dim_tag(1))
+    out_t = net.get_default_output_layer().output.placeholder
+    assert out_t.shape.as_list() == [None, 1, None, 20]
+    in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_time, n_in))
+    out_v = session.run(out_t, feed_dict={net.extern_data.data["data"].placeholder: in_v})
+    assert isinstance(out_v, numpy.ndarray)
+    assert out_v.shape == (n_batch, 1, n_time, n_in)
+    numpy.testing.assert_almost_equal(out_v, in_v.reshape(out_v.shape))
+
+
 def test_SplitDimsLayer_resolve_dims():
   assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, -1)), (3, 5))
   assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, 5)), (3, 5))

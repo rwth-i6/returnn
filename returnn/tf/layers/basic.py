@@ -2429,10 +2429,6 @@ class SplitDimsLayer(_ConcatInputLayer):
       if new_shape[i] == -1 and self.output.batch_shape[i] is not None:
         new_shape[i] = self.output.batch_shape[i]
     self.output.placeholder = tf.reshape(data.placeholder, shape=new_shape)
-    self.output.size_placeholder = {
-      (i if (data.get_batch_axis(i) < axis) else i + len(dims) - 1): v
-      for (i, v) in data.size_placeholder.items()}
-    assert axis != data.time_dim_axis, "size not yet implemented correctly..."
 
   @classmethod
   def _resolve_dims(cls, old_dim, new_dims):
@@ -2449,12 +2445,31 @@ class SplitDimsLayer(_ConcatInputLayer):
       assert all([d != 0 or d == -1 or d > 0 for d in new_dims])
       assert len([d for d in new_dims if d == -1]) == 1
       new_pos_dims = [d for d in new_dims if d > 0]
-      n = numpy.prod(new_pos_dims)
+      n = int(numpy.prod(new_pos_dims))
       assert old_dim % n == 0
       rem = old_dim // n
       new_dims_resolved = tuple([(d if (d > 0) else rem) for d in new_dims])
     assert numpy.prod(new_dims_resolved) == old_dim
     return new_dims_resolved
+
+  @classmethod
+  def _map_old_axis_to_new_axis(cls, split_axis, dims, old_axis, require_exact=True):
+    """
+    :param int split_axis:
+    :param tuple[int] dims: might include -1
+    :param int old_axis:
+    :param bool require_exact: if True, must be unique, always returns int, or raise exception
+    :rtype: int
+    """
+    if old_axis < split_axis:
+      return old_axis
+    if old_axis > split_axis:
+      return old_axis + len(dims) - 1
+    if -1 in dims:
+      assert dims.count(-1) == 1 and all([d in {-1, 1} for d in dims])
+      return old_axis + dims.index(-1)
+    assert not require_exact
+    return old_axis
 
   @classmethod
   def get_out_data_from_opts(cls, name, axis, dims, sources=(), **kwargs):
@@ -2477,17 +2492,16 @@ class SplitDimsLayer(_ConcatInputLayer):
     if axis != data.batch_dim_axis:
       axis_wb = data.get_batch_axis_excluding_batch(axis)
       data.shape = data.shape[:axis_wb] + resolved_shape_dims + data.shape[axis_wb + 1:]
-      if data.batch_dim_axis is not None and axis < data.batch_dim_axis:
-        data.batch_dim_axis += len(dims) - 1
+      if data.batch_dim_axis is not None:
+        data.batch_dim_axis = cls._map_old_axis_to_new_axis(split_axis=axis, dims=dims, old_axis=data.batch_dim_axis)
     else:  # axis == data.batch_dim_axis
       new_batch_shape = data.batch_shape[:axis] + resolved_shape_dims + data.batch_shape[axis + 1:]
       assert any([d == -1 for d in dims])
       new_batch_axis = data.batch_dim_axis + [d == -1 for d in dims].index(True)
       data.batch_dim_axis = new_batch_axis
       data.shape = new_batch_shape[:new_batch_axis] + new_batch_shape[new_batch_axis + 1:]
-    assert axis != data.time_dim_axis, "size not yet implemented correctly..."
-    if data.time_dim_axis is not None and axis < data.time_dim_axis:
-      data.time_dim_axis += len(dims) - 1
+    if data.time_dim_axis is not None:
+      data.time_dim_axis = cls._map_old_axis_to_new_axis(split_axis=axis, dims=dims, old_axis=data.time_dim_axis)
     if data.feature_dim_axis is None and not data.sparse and any([d > 0 for d in dims]):
       # We want to have the last index where dims[index] > 0.
       i = len(dims) - list(reversed([d > 0 for d in dims])).index(True) - 1
@@ -2498,6 +2512,11 @@ class SplitDimsLayer(_ConcatInputLayer):
         data.feature_dim_axis = new_feature_dim_axis
     if data.feature_dim_axis is not None:
       data.dim = data.batch_shape[data.feature_dim_axis]
+    data.size_placeholder = {
+      data.get_batch_axis_excluding_batch(
+        cls._map_old_axis_to_new_axis(
+          split_axis=axis, dims=dims, old_axis=data.get_batch_axis(i))): v
+      for (i, v) in data.size_placeholder.items()}
     return data
 
 
