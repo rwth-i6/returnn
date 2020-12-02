@@ -15,8 +15,15 @@ or MPI for any kind of transfer,
 including multiple nodes in a cluster network.
 Horovod requires that you have a working **MPI** setup.
 
-Also see :mod:`TFHorovod`.
-Also see :mod:`TFDistributed`.
+Also see :mod:`returnn.tf.horovod`.
+
+We also have partial support for ``tf.distributed``,
+i.e. the official TF way for distributed computation.
+Please refer to `our wiki for an overview of distributed TensorFlow <https://github.com/rwth-i6/returnn/wiki/Distributed-TensorFlow>`__.
+
+Also see :mod:`returnn.tf.distributed`.
+
+See `our wiki for an overview of possible distributed training variants <https://github.com/rwth-i6/returnn/wiki/Distributed-training-experience>`__.
 
 ------------
 Installation
@@ -90,8 +97,13 @@ Recommendations
 
 You should use a fast dataset implementation,
 or use ``horovod_dataset_distribution = "random_seed_offset"``.
-We recommend to use ``HDFDataset`` with ``cache_size = 0`` in your config.
+
+In case you do not use ``horovod_dataset_distribution = "random_seed_offset"``,
+we recommend to use ``HDFDataset`` (with ``cache_size = 0``) in your config.
 You can use ``tools/hdf_dump.py`` to convert any dataset into a HDF dataset.
+
+You should use ``horovod_reduce_type = "param"``
+and either ``horovod_param_sync_step = 100`` or ``horovod_param_sync_time_diff = 100.``.
 
 Single node, multiple GPUs
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
