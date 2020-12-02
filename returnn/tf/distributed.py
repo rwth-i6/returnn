@@ -18,7 +18,7 @@ Distributed TensorFlow covers multiple levels of functionality:
 
 RETURNN potentially could support all of this, although it will try to be very explicit about it.
 Currently we do not use the high level strategy concept but only the low level functionality.
-This implementation was originally discussed `here <https://github.com/rwth-i6/returnn/issues/296`_.
+This implementation was originally discussed `here <https://github.com/rwth-i6/returnn/issues/296>`_.
 
 This is also related to `Horovod <https://github.com/horovod/horovod>`_.
 Horovod and distributed TF are orthogonal to each other.
