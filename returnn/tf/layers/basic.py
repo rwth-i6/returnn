@@ -2537,7 +2537,7 @@ class SplitDimsLayer(_ConcatInputLayer):
       data = data.copy_as_batch_major()
     axis = data.get_axis_from_description(axis)
     if data.batch_shape[axis] is not None:
-      resolved_shape_dims = cls._resolve_dims(old_dim=data.batch_shape[axis], new_dims=dims)
+      resolved_shape_dims = cls._resolve_dims(old_dim=data.batch_shape[axis], new_dims=tuple(dims))
     else:
       resolved_shape_dims = tuple([(d if (d >= 0) else None) for d in dims])
     if axis != data.batch_dim_axis:
