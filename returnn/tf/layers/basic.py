@@ -2148,6 +2148,8 @@ class MergeDimsLayer(_ConcatInputLayer):
   Or input is (batch, time, height, dim) and axes="except_time", then we get (batch, time, height*dim).
   See also :class:`CombineDimsLayer`.
   When batch and time got merged, :class:`SplitBatchTimeLayer` can undo this.
+  When you want to merge batch and time, but remove the padding efficiently, i.e. flatten it,
+  see :class:`FlattenBatchLayer`.
   """
   layer_class = "merge_dims"
 
@@ -2630,8 +2632,55 @@ class SplitBatchTimeLayer(_ConcatInputLayer):
     return data
 
 
+class FlattenBatchLayer(_ConcatInputLayer):
+  """
+  Merges one axis into the batch axis.
+  If the axis has dynamic lengths, this would use flattening,
+  i.e. recalculate the padding, i.e. the size changes.
+  This basically wraps :func:`flatten_with_seq_len_mask`.
+  See also :class:`MergeDimsLayer`, which does not do flattening,
+  i.e. the size stays the same.
+  """
+  layer_class = "flatten_batch"
+
+  def __init__(self, axis="T", **kwargs):
+    """
+    :param str axis:
+    """
+    super(FlattenBatchLayer, self).__init__(**kwargs)
+    assert self.input_data.have_batch_axis()
+    x = self.input_data.copy_as_batch_major()
+    axis = x.get_axis_from_description(axis, allow_int=False)
+    assert axis != x.batch_dim_axis
+    if x.is_axis_dynamic(axis):
+      self.output.placeholder = tf_util.flatten_with_seq_len_mask(
+        x.placeholder, seq_lens=x.get_dynamic_size(axis), batch_dim_axis=0, time_dim_axis=axis)
+    else:
+      x = x.copy_move_axis(axis, 1)  # (B,T,...)
+      out_shape = tf_util.get_shape(x.placeholder)
+      out_shape = [out_shape[0] * out_shape[1]] + out_shape[2:]
+      self.output.placeholder = tf.reshape(x.placeholder, out_shape)
+
+  @classmethod
+  def get_out_data_from_opts(cls, sources, name, axis="T", **kwargs):
+    """
+    :param list[LayerBase] sources:
+    :param str name:
+    :param str axis:
+    :rtype: Data
+    """
+    out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    out = out.copy_as_batch_major()
+    axis = out.get_axis_from_description(axis, allow_int=False)
+    assert axis != out.batch_dim_axis
+    out = out.copy_template_excluding_axis(axis)
+    return out
+
+
 class UnflattenNdLayer(_ConcatInputLayer):
   """
+  This keeps the batch axis as-is, i.e. the flattening/unflattening did not happen on the batch axis.
+
   Example:
 
     Assumes that the input is of shape (B,T,<Ds>) which represents flattened images,
