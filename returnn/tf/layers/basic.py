@@ -738,7 +738,21 @@ class MathNormLayer(_ConcatInputLayer):
 class SliceLayer(_ConcatInputLayer):
   """
   Slicing on the input, i.e. x[start:end:step] in some axis.
-  See also :class:`SliceNdLayer`.
+  See also :class:`SliceNdLayer`, for variable start.
+  See also :class:`GatherLayer`, for one single position.
+
+  Note that __getitem__ on a TF tensor (or also Numpy ND array) is more generic,
+  and supports slices in multiple axes, as well as adding new dimensions, etc.
+  It even allows to get boolean values, and then applies a boolean mask.
+  See TF _slice_helper (== tf.Tensor.__getitem__) for a generic implementation,
+  which calls tf.strided_slice.
+  If we ever need such more generic support, we might consider adding a new layer,
+  like ``GenericSliceLayer``, which gets a ``splice_spec``,
+  just like ``_slice_helper`` (argument to ``__getitem__``).
+  But any such a slice can already be constructed with multiple individual layers,
+  which perform individual slices (per axis).
+
+  We just support slicing in a single axis here, with optional striding (slice_step).
   """
   layer_class = "slice"
 
@@ -895,6 +909,41 @@ class SliceNdLayer(_ConcatInputLayer):
     """
     super(SliceNdLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     d["start"] = get_layer(d["start"])
+
+
+class GatherLayer(_ConcatInputLayer):
+  """
+  This is basically ``x[position]`` in some axis.
+  See also :class:`SliceLayer`.
+  See also :class:`GatherNdLayer`, which works on the time-axis, but supports different positions per batch.
+
+  (Currently `position` can just be an integer, so it's much less generic than ``tf.gather``.
+   However, we might extend this to lists, arrays, or even other layers.)
+  """
+  layer_class = "gather"
+
+  def __init__(self, axis, position, **kwargs):
+    """
+    :param str axis:
+    :param int position:
+    """
+    super(GatherLayer, self).__init__(**kwargs)
+    axis = self.input_data.get_axis_from_description(axis, allow_int=False)
+    assert isinstance(position, int)  # nothing else implemented yet
+    slices = [slice(None, None)] * axis + [position]  # type: typing.List[typing.Union[slice, int]]
+    self.output.placeholder = self.input_data.placeholder[slices]
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, axis, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param str axis:
+    :rtype: Data
+    """
+    out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    axis = out.get_axis_from_description(axis, allow_int=False)
+    return out.copy_template_excluding_axis(axis)
 
 
 class GatherNdLayer(_ConcatInputLayer):
