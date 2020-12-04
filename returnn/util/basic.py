@@ -3355,6 +3355,11 @@ class NativeCodeCompiler(object):
       os.utime(self._info_filename, None)
       return
     lock = LockFile(self._mod_path)
+    if not self._need_recompile():  # check again
+      if self.verbose:
+        print("%s: No need to recompile after we waited: %s" % (self.__class__.__name__, self._so_filename))
+      os.utime(self._info_filename, None)
+      return
     if self._should_cleanup_old_mydir and not lock.is_locked():
       if os.path.exists(self._mod_path):
         self._cleanup_old_path(self._mod_path, reason="need recompile")
