@@ -1213,6 +1213,8 @@ def get_activation_function(s):
     return getattr(tf.nn, s)  # e.g. relu, elu, sigmoid, softmax, ...
   elif hasattr(tf, s):
     return getattr(tf, s)  # e.g. log, abs
+  elif hasattr(tf, "math") and hasattr(tf.math, s):
+    return getattr(tf.math, s)  # e.g. log in tf2
   elif s in globals():
     return globals()[s]  # e.g. safe_log
   raise Exception("invalid activation function: %r" % s)
