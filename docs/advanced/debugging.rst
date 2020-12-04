@@ -10,6 +10,32 @@ It's simpler if it does not even start because of some error.
 Here I will outline several useful options, and methods in general.
 
 
+Test case
+---------
+
+In many cases, it can be helpful to write a test case to reproduce some error.
+This can then also be part of RETURNN such that this error will not happen anymore in the future.
+And it is helpful to better understand the problem and to debug it on your local computer,
+esp with an interaticte graphical debugger like PyCharm.
+
+If this is not an error, but just strange or wrong behavior,
+it can be helpful to setup some toy data, and small network,
+which you can also run on your local computer.
+A fast turnaround time is important,
+and easy access to all information you need.
+
+It might also be useful to inspect the gradients,
+if they look like what you expect (gradients w.r.t. activations).
+
+
+TensorFlow tools
+----------------
+
+RETURNN uses TensorFlow.
+So you can use all the native TensorFlow debugging tools.
+Please refer to the TF documentation or other resources.
+
+
 .. _debug_interactive:
 
 Interactive debugging
@@ -35,6 +61,11 @@ source code or from the config::
 
   from returnn.util.debug import debug_shell
   debug_shell(user_ns=locals(), user_global_ns=globals(), exit_afterwards=False)
+
+Setting up a graphical debugger (e.g. PyCharm) and using breakpoints
+can be even more helpful.
+For that, it might be useful to have setup a small toy example
+which you can easily start on your local computer.
 
 
 Shapes and :class:`Data`
