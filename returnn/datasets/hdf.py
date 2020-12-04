@@ -1296,15 +1296,15 @@ class HDFDatasetWriter:
     else:
       default_data_input_key = data_input_keys[0]
     print("Using input data key:", default_data_input_key)
+    default_data_target_key = None
     if len(data_target_keys) > 1:
       if "classes" in data_target_keys:
         default_data_target_key = "classes"
       else:
-        raise Exception("not sure which target data key to use from %r" % (data_target_keys,))
+        print("Warning: not sure which target data key to use from {}. Will not set the '{}' attibute.".format(
+          data_target_keys, attr_numLabels), file=log.v2)
     elif len(data_target_keys) == 1:
       default_data_target_key = data_target_keys[0]
-    else:
-      default_data_target_key = None
     print("Using target data key:", default_data_target_key)
 
     hdf_data_key_map = {key: key for key in data_keys if key != default_data_input_key}
@@ -1361,18 +1361,11 @@ class HDFDatasetWriter:
         progress_bar_with_time(float(i) / num_seqs)
 
     print("Set seq len info...", file=log.v3)
-    hdf_dataset.create_dataset(attr_seqLengths, shape=(num_seqs, 2), dtype="int32")
+    hdf_dataset.create_dataset(attr_seqLengths, shape=(num_seqs, 1 + len(data_target_keys)), dtype="int32")
     for i, seq_len in enumerate(seq_lens):
       data_len = seq_len[default_data_input_key]
-      if len(data_target_keys) > 0:
-        targets_len = seq_len[default_data_target_key]
-        for data_key in data_target_keys:
-          assert seq_len[data_key] == targets_len, "different lengths in multi-target not supported"
-        if targets_len is None:
-          targets_len = data_len
-        hdf_dataset[attr_seqLengths][i] = [data_len, targets_len]
-      else:
-        hdf_dataset[attr_seqLengths][i] = [data_len]
+      targets_lens = [seq_len[data_key] for data_key in sorted(data_target_keys)]
+      hdf_dataset[attr_seqLengths][i] = [data_len] + targets_lens
       if use_progress_bar:
         progress_bar_with_time(float(i) / num_seqs)
 
@@ -1430,6 +1423,7 @@ class HDFDatasetWriter:
 
     # Set some old-format attribs. Not needed for newer RETURNN versions.
     hdf_dataset.attrs[attr_inputPattSize] = dataset.num_inputs
-    hdf_dataset.attrs[attr_numLabels] = dataset.num_outputs.get(default_data_target_key, (0, 0))[0]
+    if default_data_target_key:
+      hdf_dataset.attrs[attr_numLabels] = dataset.num_outputs.get(default_data_target_key, (0, 0))[0]
 
     print("All done.", file=log.v3)
