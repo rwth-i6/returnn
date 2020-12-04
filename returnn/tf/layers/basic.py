@@ -4327,10 +4327,9 @@ class StackLayer(LayerBase):
     axis_, common_source = cls._get_axis_and_common(sources)
     if axis is None:
       axis = axis_
-    return (
-      common_source
-        .copy_template(name="%s_output" % name)
-        .copy_add_spatial_dim(spatial_dim_axis=axis, dim=len(sources)))
+    out = common_source.copy_template(name="%s_output" % name)
+    out = out.copy_add_spatial_dim(spatial_dim_axis=axis, dim=len(sources))
+    return out
 
 
 class WeightedSumLayer(_ConcatInputLayer):
