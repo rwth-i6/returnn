@@ -4287,10 +4287,17 @@ class StackLayer(LayerBase):
   """
   layer_class = "stack"
 
-  def __init__(self, **kwargs):
+  def __init__(self, axis=None, **kwargs):
+    """
+    :param int|None axis: new axis.
+      If not given, will use Data.get_default_new_axis_for_dim_tag(<spatial>),
+      i.e. some reasonable default for a new spatial axis.
+    """
     super(StackLayer, self).__init__(**kwargs)
     data_dyn_shape = []
-    axis, common_source = self._get_axis_and_common(self.sources, data_dyn_shape=data_dyn_shape)
+    axis_, common_source = self._get_axis_and_common(self.sources, data_dyn_shape=data_dyn_shape)
+    if axis is None:
+      axis = axis_
     assert self.output.batch_shape[axis] == len(self.sources)
     sources_ = [
       src.output.copy_compatible_to(common_source, unbroadcast=True, data_dyn_shape=data_dyn_shape)
@@ -4310,17 +4317,20 @@ class StackLayer(LayerBase):
     return common_source.get_default_new_axis_for_dim_tag(tag), common_source
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, axis=None, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
+    :param int|None axis:
     :rtype: Data
     """
-    axis, common_source = cls._get_axis_and_common(sources)
+    axis_, common_source = cls._get_axis_and_common(sources)
+    if axis is None:
+      axis = axis_
     return (
       common_source
-      .copy_add_spatial_dim(spatial_dim_axis=axis, dim=len(sources))
-      .copy_template(name="%s_output" % name))
+        .copy_template(name="%s_output" % name)
+        .copy_add_spatial_dim(spatial_dim_axis=axis, dim=len(sources)))
 
 
 class WeightedSumLayer(_ConcatInputLayer):
