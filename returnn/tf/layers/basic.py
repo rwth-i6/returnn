@@ -5936,8 +5936,13 @@ class SubnetworkLayer(LayerBase):
     if concat_sources:
       assert sub_extern_data.default_input in self.subnetwork.used_data_keys, "%s: inputs are not used" % self
     else:
-      for source in self.sources:
-        assert source.name in self.subnetwork.used_data_keys, "%s: some input is not used" % self
+      # See _get_subnet_extern_data below.
+      for i, source in enumerate(self.sources):
+        potential_names = {str(i), source.name}
+        if i == 0:
+          potential_names.add(sub_extern_data.default_input)
+        if not potential_names.intersection(self.subnetwork.used_data_keys):
+          print("%s: Warning: input %i (%s) is not used" % (self, i, source), file=log.v3)
     self._update_used_data_keys()
     for layer in net.layers.values():
       if layer.network is not net:  # e.g. copied "base" layers or so
