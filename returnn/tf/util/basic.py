@@ -1849,6 +1849,27 @@ def flatten_with_seq_len_mask(x, seq_lens, batch_dim_axis=None, time_dim_axis=No
     return res
 
 
+def flatten_with_seq_len_mask_time_major(x, seq_lens, batch_dim_axis, time_dim_axis):
+  """
+  :param tf.Tensor x: shape (batch,...s..., time, ...s'...) or shape (time,...s...., batch, ...s'...)
+  :param tf.Tensor seq_lens: shape (batch,) of int32
+  :param int batch_dim_axis: index of batch_dim in x
+  :param int time_dim_axis: index of time_dim in x
+  :return: tensor of shape (time', ...s...s'...) where time' = sum(seq_len) <= batch*time
+  :rtype: tf.Tensor
+  """
+  assert batch_dim_axis != time_dim_axis
+  with tf.name_scope("flatten_with_seq_len_mask_time_major"):
+    # If not (time,batch,...s...), transform.
+    if batch_dim_axis != 1 or time_dim_axis != 0:
+      dyn_axes = [time_dim_axis, batch_dim_axis]
+      perm = dyn_axes + [i for i in range(len(x.shape)) if i not in dyn_axes]
+      x = tf.transpose(x, perm=perm)
+    mask = sequence_mask_time_major(seq_lens, maxlen=tf.shape(x)[0])  # shape (time,batch)
+    res = tf.boolean_mask(x, mask)
+    return res
+
+
 def expand_dims_unbroadcast(x, axis, dim, name="expand_dims_unbroadcast"):
   """
   :param tf.Tensor|float|int x:

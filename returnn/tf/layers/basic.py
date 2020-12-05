@@ -2637,26 +2637,36 @@ class FlattenBatchLayer(_ConcatInputLayer):
   Merges one axis into the batch axis.
   If the axis has dynamic lengths, this would use flattening,
   i.e. recalculate the padding, i.e. the size changes.
-  This basically wraps :func:`flatten_with_seq_len_mask`.
+  This basically wraps :func:`flatten_with_seq_len_mask` or :func:`flatten_with_seq_len_mask_time_major`.
   See also :class:`MergeDimsLayer`, which does not do flattening,
   i.e. the size stays the same.
   """
   layer_class = "flatten_batch"
 
-  def __init__(self, axis="T", **kwargs):
+  def __init__(self, axis="T", batch_major=True, **kwargs):
     """
     :param str axis:
+    :param bool batch_major: if False, will flatten in time-major manner
     """
     super(FlattenBatchLayer, self).__init__(**kwargs)
     assert self.input_data.have_batch_axis()
-    x = self.input_data.copy_as_batch_major()
+    x = self.input_data
     axis = x.get_axis_from_description(axis, allow_int=False)
     assert axis != x.batch_dim_axis
     if x.is_axis_dynamic(axis):
-      self.output.placeholder = tf_util.flatten_with_seq_len_mask(
-        x.placeholder, seq_lens=x.get_dynamic_size(axis), batch_dim_axis=0, time_dim_axis=axis)
+      if batch_major:
+        self.output.placeholder = tf_util.flatten_with_seq_len_mask(
+          x.placeholder, seq_lens=x.get_dynamic_size(axis), batch_dim_axis=x.batch_dim_axis, time_dim_axis=axis)
+      else:
+        self.output.placeholder = tf_util.flatten_with_seq_len_mask_time_major(
+          x.placeholder, seq_lens=x.get_dynamic_size(axis), batch_dim_axis=x.batch_dim_axis, time_dim_axis=axis)
     else:
-      x = x.copy_move_axis(axis, 1)  # (B,T,...)
+      if batch_major:
+        x = x.copy_as_batch_major()  # (B,...)
+        x = x.copy_move_axis(axis, 1)  # (B,T,...)
+      else:
+        x = x.copy_move_axis(axis, 0)  # (T,...)
+        x = x.copy_move_axis(x.batch_dim_axis, 1)  # (T,B,...)
       out_shape = tf_util.get_shape(x.placeholder)
       out_shape = [out_shape[0] * out_shape[1]] + out_shape[2:]
       self.output.placeholder = tf.reshape(x.placeholder, out_shape)
