@@ -1297,14 +1297,17 @@ class HDFDatasetWriter:
       data_keys.remove("raw")
     data_target_keys = [key for key in dataset.get_target_list() if key in data_keys]
     data_input_keys = [key for key in data_keys if key not in data_target_keys]
-    assert len(data_input_keys) > 0
-    if len(data_input_keys) > 1:
-      if "data" in data_input_keys:
-        default_data_input_key = "data"
+    default_data_input_key = None
+    progress_bar_data_key = None
+    if data_input_keys:
+      if len(data_input_keys) > 1:
+        if "data" in data_input_keys:
+          default_data_input_key = "data"
+        else:
+          raise Exception("not sure which input data key to use from %r" % (data_input_keys,))
       else:
-        raise Exception("not sure which input data key to use from %r" % (data_input_keys,))
-    else:
-      default_data_input_key = data_input_keys[0]
+        default_data_input_key = data_input_keys[0]
+      progress_bar_data_key = default_data_input_key
     print("Using input data key:", default_data_input_key)
     default_data_target_key = None
     if len(data_target_keys) > 1:
@@ -1315,9 +1318,14 @@ class HDFDatasetWriter:
           data_target_keys, attr_numLabels), file=log.v2)
     elif len(data_target_keys) == 1:
       default_data_target_key = data_target_keys[0]
+    progress_bar_data_key = progress_bar_data_key or default_data_target_key or data_target_keys[0]
     print("Using target data key:", default_data_target_key)
 
-    hdf_data_key_map = {key: key for key in data_keys if key != default_data_input_key}
+    # All but one of the inputs have to be treated as targets because our HDF format only supports one input.
+    data_target_keys += [key for key in data_input_keys if key != default_data_input_key]
+    data_input_key = default_data_input_key
+
+    hdf_data_key_map = {key: key for key in data_keys if key != data_input_key}
     if "data" in hdf_data_key_map:
       hdf_data_key_map["data"] = "classes"  # Replace "data" which is reserved for input key in HDFDataset.
       assert "classes" not in hdf_data_key_map
@@ -1371,11 +1379,11 @@ class HDFDatasetWriter:
         progress_bar_with_time(float(i) / num_seqs)
 
     print("Set seq len info...", file=log.v3)
-    hdf_dataset.create_dataset(attr_seqLengths, shape=(num_seqs, 1 + len(data_target_keys)), dtype="int32")
+    hdf_dataset.create_dataset(attr_seqLengths, shape=(num_seqs, len(data_keys)), dtype="int32")
     for i, seq_len in enumerate(seq_lens):
-      data_len = seq_len[default_data_input_key]
+      data_len = [seq_len[data_input_key]] if data_input_key else []
       targets_lens = [seq_len[data_key] for data_key in sorted(data_target_keys)]
-      hdf_dataset[attr_seqLengths][i] = [data_len] + targets_lens
+      hdf_dataset[attr_seqLengths][i] = data_len + targets_lens
       if use_progress_bar:
         progress_bar_with_time(float(i) / num_seqs)
 
@@ -1384,7 +1392,7 @@ class HDFDatasetWriter:
     hdf_dataset.create_group('targets/size')
     hdf_dataset.create_group('targets/labels')
     for data_key in data_keys:
-      if data_key == default_data_input_key:
+      if data_input_key and data_key == data_input_key:
         hdf_dataset.create_dataset(
           'inputs', shape=shapes[data_key], dtype=dataset.get_data_dtype(data_key))
       else:
@@ -1400,7 +1408,7 @@ class HDFDatasetWriter:
         labels = ["%s-class-%i" % (data_key, i) for i in range(dataset.get_data_dim(data_key))]
       print("Labels for %s:" % data_key, labels[:3], "...", file=log.v5)
       max_label_len = max(map(len, labels))
-      if data_key != default_data_input_key:
+      if not data_input_key or data_key != data_input_key:
         hdf_dataset['targets/labels'].create_dataset(hdf_data_key_map[data_key],
                                                      (len(labels),), dtype="S%i" % (max_label_len + 1))
         for i, label in enumerate(labels):
@@ -1417,7 +1425,7 @@ class HDFDatasetWriter:
       assert tag == tag_  # Just a check for sanity. We expect the same order.
       seq_len = dataset.get_seq_length(seq_idx)
       for data_key in data_keys:
-        if data_key == default_data_input_key:
+        if data_input_key and data_key == data_input_key:
           hdf_data = hdf_dataset['inputs']
         else:
           hdf_data = hdf_dataset['targets/data'][hdf_data_key_map[data_key]]
@@ -1425,7 +1433,7 @@ class HDFDatasetWriter:
         hdf_data[offsets[data_key]:offsets[data_key] + seq_len[data_key]] = data
 
       if use_progress_bar:
-        progress_bar_with_time(float(offsets[default_data_input_key]) / total_seq_len[default_data_input_key])
+        progress_bar_with_time(float(offsets[progress_bar_data_key]) / total_seq_len[progress_bar_data_key])
 
       offsets += seq_len
 
