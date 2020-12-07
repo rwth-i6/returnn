@@ -2945,6 +2945,49 @@ class RepeatLayer(_ConcatInputLayer):
     return data
 
 
+class TileLayer(_ConcatInputLayer):
+  """
+  A wrapper around tf.tile
+  """
+  layer_class = "tile"
+
+  def __init__(self, multiples, **kwargs):
+    """
+    :param dict[str, int] multiples: number of multiples per axis (axis provided as str)
+    """
+    super(TileLayer, self).__init__(**kwargs)
+    self.multiples = multiples
+    input_data = self.input_data
+
+    multiples_full = [1] * input_data.batch_ndim
+    for axis, multiple in multiples.items():
+      a = input_data.get_axis_from_description(axis, allow_int=False)
+      if multiple != 1:
+        assert a not in input_data.get_dynamic_axes(), "Tiling of dynamic axes not yet implemented"
+        assert a != input_data.batch_dim_axis, "Tiling of batch axis not yet implemented"
+      multiples_full[a] *= multiple
+
+    self.output.placeholder = tf.tile(input_data.placeholder, multiples_full)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, multiples, sources=(), **kwargs):
+    """
+    :param str name:
+    :param dict[str, int] multiples:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    data = get_concat_sources_data_template(sources, name="%s_output" % name)
+    for axis, multiple in multiples.items():
+      a = data.get_batch_axis_excluding_batch(data.get_axis_from_description(axis, allow_int=False))
+      if a is None or data.shape[a] is None:
+        continue
+      data.shape = data.shape[:a] + (data.shape[a] * multiple,) + data.shape[a + 1:]
+    if not data.sparse:
+      data.dim = data.batch_shape[data.feature_dim_axis]
+    return data
+
+
 class CastLayer(CopyLayer):
   """
   Cast to some other dtype.

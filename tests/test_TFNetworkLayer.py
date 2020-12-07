@@ -1457,6 +1457,32 @@ def test_RepeatLayerBFT():
     _run_repeat_layer(session, net, input_data_layer)
 
 
+def test_TileLayer():
+  with make_scope() as session:
+    n_out = 5
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out},
+      }})
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "output": {"class": "tile", "multiples": {"F": 3}, "from": ["data"]}
+    })
+    session.run(tf_compat.v1.global_variables_initializer())
+    out = net.layers["output"].output.placeholder
+    n_batch = 3
+    max_seq_len = 10
+    feed = make_feed_dict(net.extern_data.data.values(), n_batch=n_batch, n_time=max_seq_len, same_time=True)
+    v = session.run(out, feed_dict=feed)
+    input_len = feed[net.extern_data.data["data"].size_placeholder[0]]
+    input_data = feed[net.extern_data.data["data"].placeholder]
+
+    ref = numpy.tile(input_data, [1, 1, 3])
+
+    numpy.testing.assert_allclose(ref, v, rtol=1e-5)
+
+
 def test_ScatterNdLayer_RangeLayer_RangeInAxisLayer():
   n_batch, n_time, n_ts, n_in, n_out = 2, 3, 6, 7, 11
   rnd = numpy.random.RandomState(42)
