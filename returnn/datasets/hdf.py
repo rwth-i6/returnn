@@ -114,9 +114,11 @@ class HDFDataset(CachedDataset):
       self.target_keys = ['classes']
 
     seq_lengths = fin[attr_seqLengths][...]  # shape (num_seqs,num_target_keys + 1)
+    num_input_keys = 1 if 'inputs' in fin else 0
     if len(seq_lengths.shape) == 1:
-      seq_lengths = numpy.array(zip(*[seq_lengths.tolist() for _ in range(len(self.target_keys)+1)]))
-    assert seq_lengths.ndim == 2 and seq_lengths.shape[1] == len(self.target_keys) + 1
+      seq_lengths = numpy.array(
+        zip(*[seq_lengths.tolist() for _ in range(num_input_keys + len(self.target_keys))]))
+    assert seq_lengths.ndim == 2 and seq_lengths.shape[1] == num_input_keys + len(self.target_keys)
 
     if prev_target_keys is not None and prev_target_keys != self.target_keys:
       print("Warning: %s: loaded prev files %s, which defined target keys %s. Now loaded %s and got target keys %s." % (
@@ -152,10 +154,13 @@ class HDFDataset(CachedDataset):
 
     if 'maxCTCIndexTranscriptionLength' in fin.attrs:
       self.max_ctc_length = max(self.max_ctc_length, fin.attrs['maxCTCIndexTranscriptionLength'])
-    if len(fin['inputs'].shape) == 1:  # sparse
-      num_inputs = [fin.attrs[attr_inputPattSize], 1]
+    if 'inputs' in fin:
+      if len(fin['inputs'].shape) == 1:  # sparse
+        num_inputs = [fin.attrs[attr_inputPattSize], 1]
+      else:
+        num_inputs = [fin['inputs'].shape[1], len(fin['inputs'].shape)]  # fin.attrs[attr_inputPattSize]
     else:
-      num_inputs = [fin['inputs'].shape[1], len(fin['inputs'].shape)]  # fin.attrs[attr_inputPattSize]
+      num_inputs = [0, 0]
     if self.num_inputs == 0:
       self.num_inputs = num_inputs[0]
     assert self.num_inputs == num_inputs[0], "wrong input dimension in file %s (expected %s got %s)" % (
@@ -170,7 +175,8 @@ class HDFDataset(CachedDataset):
           num_outputs[k] = tuple([int(v) for v in fin['targets/size'].attrs[k]])
     else:
       num_outputs = {'classes': [int(fin.attrs[attr_numLabels]), 1]}
-    num_outputs["data"] = num_inputs
+    if 'inputs' in fin:
+      num_outputs["data"] = num_inputs
     if not self.num_outputs:
       self.num_outputs = num_outputs
     assert self.num_outputs == num_outputs, "wrong dimensions in file %s (expected %s got %s)" % (
@@ -194,8 +200,9 @@ class HDFDataset(CachedDataset):
           ndim = len(fin['targets/data'][name].shape)
           dim = 1 if ndim == 1 else fin['targets/data'][name].shape[-1]
           self.num_outputs[str(name)] = (dim, ndim)
-    self.data_dtype["data"] = str(fin['inputs'].dtype)
-    assert len(self.target_keys) == len(self.file_seq_start[0][0]) - 1
+    if 'inputs' in fin:
+      self.data_dtype["data"] = str(fin['inputs'].dtype)
+    assert num_input_keys + len(self.target_keys) == len(self.file_seq_start[0][0])
 
   def _load_seqs(self, start, end):
     """
@@ -231,7 +238,7 @@ class HDFDataset(CachedDataset):
       if start == 0 or self.cache_byte_size_total_limit > 0:  # suppress with disabled cache
         print("loading file %d/%d (seq range %i-%i)" % (i+1, len(self.files), start, end), self.files[i], file=log.v4)
       fin = self.h5_files[i]
-      inputs = fin['inputs']
+      inputs = fin['inputs'] if self.num_inputs > 0 else None
       targets = None
       if 'targets' in fin:
         targets = {k: fin['targets/data/' + k] for k in fin['targets/data']}
@@ -247,7 +254,8 @@ class HDFDataset(CachedDataset):
             ldx = self.target_keys.index(k) + 1
             self.targets[k][self.get_seq_start(idc)[ldx]:self.get_seq_start(idc)[ldx] + q[ldx] - p[ldx]] = (
               targets[k][p[ldx]:q[ldx]])
-        self._set_alloc_intervals_data(idc, data=inputs[p[0]:q[0]])
+        if inputs:
+          self._set_alloc_intervals_data(idc, data=inputs[p[0]:q[0]])
         self.preload_set.add(idc)
     gc.collect()
 
@@ -270,6 +278,7 @@ class HDFDataset(CachedDataset):
     end_pos = self.file_seq_start[file_idx][real_file_seq_idx + 1]
 
     if key == "data":
+      assert 'inputs' in fin, "'data' key is reserved for 'inputs' in the HDF file, but 'inputs' not found in HDF file."
       inputs = fin['inputs']
       data = inputs[start_pos[0]:end_pos[0]]
       if self.window > 1:
@@ -277,7 +286,8 @@ class HDFDataset(CachedDataset):
     else:
       assert 'targets' in fin
       targets = fin['targets/data/' + key]
-      ldx = self.target_keys.index(key) + 1
+      first_target_idx = 1 if self.num_inputs > 0 else 0  # self.num_inputs == 0 if no 'inputs' in HDF file
+      ldx = first_target_idx + self.target_keys.index(key)
       data = targets[start_pos[ldx]:end_pos[ldx]]
     return data
 
