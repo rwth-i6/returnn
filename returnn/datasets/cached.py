@@ -479,8 +479,13 @@ class CachedDataset(Dataset):
     :rtype: NumbersDict
     """
     lengths = self.get_seq_length_nd(seq_idx)
-    d = {"data": lengths[0]}
-    for k, l in zip(self.target_keys, lengths[1:]):
+    d = {}
+    first_target_idx = 0
+    # We allow using only targets. In this case self.num_inputs == 0 and the "data" key is not used.
+    if self.num_inputs > 1:
+      d["data"] = lengths[0]
+      first_target_idx = 1
+    for k, l in zip(self.target_keys, lengths[first_target_idx:]):
       d[k] = l
     return NumbersDict(d)
 
