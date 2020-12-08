@@ -1805,6 +1805,63 @@ def test_SliceLayer_NCHW():
     assert slice2.output.dim == 8 and slice2.output.feature_dim_axis == 3
 
 
+def test_GatherLayer():
+  with make_scope() as session:
+    import numpy as np
+    net = TFNetwork(extern_data=ExternData())
+    batch_dim, gather_dim, time_dim, feature_dim1, feature_dim2 = 3, 4, 2, 1, 2
+    # [B, D, T, F1]
+    values = InternalLayer(
+      name="values", network=net,
+      out_type={"batch_dim_axis": 0, "time_dim_axis": 2, "feature_dim_axis": 3,
+        "shape": [gather_dim, None, feature_dim1], "sparse": False})
+    # [B, T, F2]
+    position = InternalLayer(
+      name="position", network=net,
+      out_type={"batch_dim_axis": 0, "time_dim_axis": 1, "shape": [None, feature_dim2],
+        "sparse": True, "dim": gather_dim})
+
+    random = np.random.RandomState(42)
+    values_seqs = random.rand(batch_dim, gather_dim, time_dim, 1).astype('float32')
+    seq_lens = random.randint(1, time_dim, size=[batch_dim])
+    seq_lens_tensor = tf.constant(seq_lens, dtype=tf.int32)
+    values.output.placeholder = tf.constant(values_seqs, dtype=tf.float32)
+    values.output.size_placeholder = {1: seq_lens_tensor}
+    position_seqs = random.randint(low=0, high=gather_dim, size=[batch_dim, time_dim, feature_dim2])
+    position.output.placeholder = tf.constant(position_seqs, dtype=tf.int32)
+    position.output.size_placeholder = {0: seq_lens_tensor}
+    position.output.sanity_check()
+    values.output.sanity_check()
+
+    # should become [B, T, F2, F1]
+    layer = GatherLayer(
+      name="gather", network=net,
+      sources=[values], position=position, axis="static:0",
+      output=GatherLayer.get_out_data_from_opts(
+        name="gather", sources=[values], position=position, axis="static:0"))
+    layer.output.sanity_check()
+    out_seqs, size = session.run([layer.output.placeholder, layer.output.size_placeholder])
+    assert isinstance(out_seqs, numpy.ndarray)
+
+    # test shapes
+    assert layer.output.batch_dim_axis == 0 and layer.output.time_dim_axis == 1
+    assert layer.output.batch_shape == (None, None, 2, 1)
+    assert np.shape(out_seqs) == (batch_dim, time_dim, 2, 1)
+    assert layer.output.dtype == values.output.dtype
+    assert np.array_equal(size[0], seq_lens)
+
+    print('values [B, D, T, F1]:', repr(values_seqs))
+    print('position [B, T, F2]:', position_seqs)
+    print('produced output [B, T, F2, F1]:', out_seqs)
+
+    # test values
+    for b in range(batch_dim):
+      for t in range(seq_lens[b]):
+        for f2 in range(feature_dim2):
+          for f1 in range(feature_dim1):
+            np.testing.assert_almost_equal(out_seqs[b, t, f2, f1], values_seqs[b, position_seqs[b, t, f2], t, f1])
+
+
 def test_SliceNdLayer():
   n_batch = 5
   n_time = 7
