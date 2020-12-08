@@ -2465,7 +2465,7 @@ class SplitDimsLayer(_ConcatInputLayer):
   def __init__(self, axis, dims, **kwargs):
     """
     :param str axis: e.g. "F"
-    :param tuple[int] dims: what the axis should be split into. e.g. (window, -1)
+    :param tuple[int]|list[int] dims: what the axis should be split into. e.g. (window, -1)
     """
     super(SplitDimsLayer, self).__init__(**kwargs)
     data = self.input_data
@@ -2485,7 +2485,7 @@ class SplitDimsLayer(_ConcatInputLayer):
   def _resolve_dims(cls, old_dim, new_dims):
     """
     :param int old_dim:
-    :param tuple[int] new_dims:
+    :param tuple[int]|list[int] new_dims:
     :return: new_dims with -1 resolved
     :rtype: tuple[int]
     """
@@ -2499,9 +2499,9 @@ class SplitDimsLayer(_ConcatInputLayer):
       n = int(numpy.prod(new_pos_dims))
       assert old_dim % n == 0
       rem = old_dim // n
-      new_dims_resolved = tuple([(d if (d > 0) else rem) for d in new_dims])
+      new_dims_resolved = [(d if (d > 0) else rem) for d in new_dims]
     assert numpy.prod(new_dims_resolved) == old_dim
-    return new_dims_resolved
+    return tuple(new_dims_resolved)
 
   @classmethod
   def _map_old_axis_to_new_axis(cls, split_axis, dims, old_axis, require_exact=True):
@@ -2537,7 +2537,7 @@ class SplitDimsLayer(_ConcatInputLayer):
       data = data.copy_as_batch_major()
     axis = data.get_axis_from_description(axis)
     if data.batch_shape[axis] is not None:
-      resolved_shape_dims = cls._resolve_dims(old_dim=data.batch_shape[axis], new_dims=tuple(dims))
+      resolved_shape_dims = cls._resolve_dims(old_dim=data.batch_shape[axis], new_dims=dims)
     else:
       resolved_shape_dims = tuple([(d if (d >= 0) else None) for d in dims])
     if axis != data.batch_dim_axis:
