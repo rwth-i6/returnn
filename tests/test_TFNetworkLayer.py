@@ -1568,6 +1568,37 @@ def test_ConvLayer_get_valid_out_dim():
   assert_equal(ConvLayer.calc_out_dim(in_dim=2, stride=1, filter_size=3, padding="valid"), 0)
 
 
+def test_RandIntLayer():
+  with make_scope() as session:
+    from returnn.tf.util.data import DimensionTag
+    n_out = 5
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out}}
+    })
+    net = TFNetwork(config=config, train_flag=True)
+    n_batch = 3
+    max_seq_len = 10
+    feed = make_feed_dict(net.extern_data.data.values(), n_batch=n_batch, n_time=max_seq_len, same_time=True)
+    size_placeholder = net.extern_data.data["data"].size_placeholder[0]
+    input_len = feed[size_placeholder]
+    sz = (
+      DimensionTag(description="batch", kind=DimensionTag.Types.Batch),
+      DimensionTag(description="time", kind=DimensionTag.Types.Time, dyn_size=size_placeholder),
+      DimensionTag(description="feature", kind=DimensionTag.Types.Feature, dimension=5),
+      3,
+    )
+    net.construct_from_dict({
+      "output": {"class": "rand_int", "shape": sz, "minval": 3, "maxval": 10, "seed": 42}
+    })
+    session.run(tf_compat.v1.global_variables_initializer())
+    out = net.layers["output"].output.placeholder
+    v = session.run(out, feed_dict=feed)
+
+    assert_equal(v.shape, (n_batch, max(input_len), 5, 3))
+
+
 def test_untrainable_params():
   with make_scope() as session:
     config = Config()

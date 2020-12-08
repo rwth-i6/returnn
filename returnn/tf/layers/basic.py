@@ -1645,6 +1645,112 @@ class SeqLenMaskLayer(_ConcatInputLayer):
     return out
 
 
+class RandIntLayer(LayerBase):
+  """Generates random numbers using ``tf.random.uniform``"""
+  layer_class = "rand_int"
+
+  # noinspection PyUnusedLocal
+  def __init__(self, shape, maxval, minval=0, dtype="int32", seed=None, **kwargs):
+    """
+    :param tuple[DimensionTag|int]|list[DimensionTag|int] shape: desired shape of output tensor
+    :param int maxval: upper bound (exclusive) on range of random values
+    :param int minval: lower bound (inclusive) on range of random values
+    :param str dtype: type of the output. For random ints, int32 and int64 make sense, but could also be floats
+    :param int|None seed: random seed
+    :param kwargs:
+    """
+    from returnn.tf.util.data import DimensionTag
+    super(RandIntLayer, self).__init__(**kwargs)
+
+    shape_parsed = []
+    batch_dim_axes = []
+    dyn_axes_sizes = []
+    for ax, s in enumerate(shape):
+      if isinstance(s, int):
+        shape_parsed.append(s)
+      elif isinstance(s, DimensionTag):
+        if s.kind == DimensionTag.Types.Batch:
+          batch_dim_axes.append(ax)
+          shape_parsed.append(self.get_batch_dim())
+        elif isinstance(s.dimension, int):
+          shape_parsed.append(s.dimension)
+        elif s.dimension is None:
+          assert s.dyn_size is not None
+          shape_parsed.append(tf.reduce_max(s.dyn_size))
+          dyn_axes_sizes.append(tf.fill(tf.shape(s.dyn_size), shape_parsed[-1]))
+        else:
+          assert False
+      else:
+        raise NotImplementedError
+    shape_parsed = tuple(shape_parsed)
+
+    if batch_dim_axes:
+      assert len(batch_dim_axes) == 1
+      self.output.size_placeholder = {i: size_placeholder for i, size_placeholder in enumerate(dyn_axes_sizes)}
+    else:
+      self.output.size_placeholder = {}
+
+    self.output.placeholder = tf.random.uniform(shape_parsed, minval=minval, maxval=maxval, dtype=dtype, seed=seed)
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param returnn.tf.network.TFNetwork network:
+    :param (str)->LayerBase get_layer:
+    """
+    d.setdefault("from", [])
+    super(RandIntLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, shape, maxval, minval=0, dtype="int32", **kwargs):
+    """
+    :param str name:
+    :param tuple[DimensionTag|int]|list[DimensionTag|int] shape: desired shape of output tensor
+    :param int maxval: upper bound (exclusive) on range of random values
+    :param int minval: lower bound (inclusive) on range of random values
+    :param str dtype: type of the output. For random ints, int32 and int64 make sense, but could also be floats
+    :param kwargs:
+    :rtype: Data
+    """
+    from returnn.tf.util.data import DimensionTag, NotSpecified
+
+    shape_parsed = []
+    batch_dim_axis = None
+    time_dim_axis = None
+    feature_dim_axis = None
+    for ax, s in enumerate(shape):
+      if isinstance(s, int):
+        shape_parsed.append(s)
+        feature_dim_axis = ax
+      elif isinstance(s, DimensionTag):
+        if s.kind == DimensionTag.Types.Batch:
+          batch_dim_axis = ax
+        elif isinstance(s.dimension, int):
+          shape_parsed.append(s.dimension)
+          feature_dim_axis = ax
+        elif s.dimension is None:
+          shape_parsed.append(None)
+          time_dim_axis = ax
+        else:
+          assert False
+      else:
+        raise NotImplementedError
+    shape_parsed = tuple(shape_parsed)
+
+    if feature_dim_axis is not None:
+      if batch_dim_axis is None or (isinstance(batch_dim_axis, int) and batch_dim_axis > feature_dim_axis):
+        dim = shape_parsed[feature_dim_axis]
+      else:
+        dim = shape_parsed[feature_dim_axis - 1]
+    else:
+      dim = NotSpecified
+
+    return Data(
+      name="%s_output" % name, shape=shape_parsed, dim=dim, dtype=dtype,
+      batch_dim_axis=batch_dim_axis, time_dim_axis=time_dim_axis, feature_dim_axis=feature_dim_axis)
+
+
 class RangeLayer(LayerBase):
   """
   Generic wrapper around ``tf.range``.
