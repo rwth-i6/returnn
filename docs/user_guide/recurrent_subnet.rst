@@ -40,6 +40,8 @@ For available cell units see :ref:`here <rec_units>`.
 Currently there is no support to access two layer outputs directly.
 The concatenated data can be split by using a :class`SliceLayer <returnn.tf.layers.basic.SliceLayer>` on the feature axis.
 
+.. _recurrent_subnet_independent:
+
 Recurrent Nets with Independent Step Count
 ==========================================
 
@@ -63,7 +65,8 @@ Example of an MLP-style attention mechanism with an LSTM layer:
                              'target': 'stop_token_target', 'from': ['output']},
               'stop_token_sigmoid': {'class': 'activation', 'activation': 'sigmoid', 'from': ['stop_token']},
               "end": {"class": "compare", "from": ["output"], "value": 0}
-              "output_prob": {"class": "softmax", "from": ["decoder"], "target": target, "loss": "ce"}
+              "output_prob": {"class": "softmax", "from": ["decoder"], "target": "classes", "loss": "ce"},
+              'output': {'class': 'choice', 'target': "classes", 'beam_size': 12, 'from': ["output_prob"], "initial_output": 0},
           }
           "n_out": n_out
       }
@@ -74,6 +77,11 @@ and with an ``end``-layer during inference. The output of the ``end``-layer need
 and of type boolean.
 If the end-layer is not based on sparse data it is often required to use a
 :class:`SqueezeLayer <returnn.tf.layers.basic.SqueezeLayer>` to remove the feature axis.
+
+To enable beam-search, a :class:`ChoiceLayer <returnn.tf.layers.rec.ChoiceLayer>` must be used.
+The choice layer will provide true labels as output during training.
+During search, it will extend the batch dimension by the ``beam_size`` and manage the sequences in the beam.
+For further information about the internals of beam-search, please have a look at :ref:`search`.
 
 Additional Information
 ======================

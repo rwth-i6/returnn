@@ -23,6 +23,8 @@ The following classes and functions are related to beam search:
 
     - :func:`returnn.tf.network.TFNetwork.get_search_choices()`
 
+For an example implementation of search, please have a look at :ref:`recurrent_subnet_independent`.
+
 Choice- and Decide Layer
 ------------------------
 
