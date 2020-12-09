@@ -1584,8 +1584,8 @@ def test_RandIntLayer():
     size_placeholder = net.extern_data.data["data"].size_placeholder[0]
     input_len = feed[size_placeholder]
     sz = (
-      DimensionTag(description="batch", kind=DimensionTag.Types.Batch),
-      DimensionTag(description="time", kind=DimensionTag.Types.Time, dyn_size=size_placeholder),
+      DimensionTag(kind=DimensionTag.Types.Batch),
+      net.extern_data.data["data"].get_size_dim_tag(0),
       DimensionTag(description="feature", kind=DimensionTag.Types.Feature, dimension=5),
       3,
     )

@@ -1646,7 +1646,9 @@ class SeqLenMaskLayer(_ConcatInputLayer):
 
 
 class RandIntLayer(LayerBase):
-  """Generates random numbers using ``tf.random.uniform``"""
+  """
+  Generates random numbers using ``tf.random.uniform``
+  """
   layer_class = "rand_int"
 
   # noinspection PyUnusedLocal
@@ -1657,7 +1659,6 @@ class RandIntLayer(LayerBase):
     :param int minval: lower bound (inclusive) on range of random values
     :param str dtype: type of the output. For random ints, int32 and int64 make sense, but could also be floats
     :param int|None seed: random seed
-    :param kwargs:
     """
     from returnn.tf.util.data import DimensionTag
     super(RandIntLayer, self).__init__(**kwargs)
@@ -1679,9 +1680,9 @@ class RandIntLayer(LayerBase):
           shape_parsed.append(tf.reduce_max(s.dyn_size))
           dyn_axes_sizes.append(tf.fill(tf.shape(s.dyn_size), shape_parsed[-1]))
         else:
-          assert False
+          raise Exception("%s: invalid dim tag %s" % (self, s))
       else:
-        raise NotImplementedError
+        raise TypeError("%s: invalid dim %s" % (self, type(s)))
     shape_parsed = tuple(shape_parsed)
 
     if batch_dim_axes:
@@ -1710,15 +1711,12 @@ class RandIntLayer(LayerBase):
     :param int maxval: upper bound (exclusive) on range of random values
     :param int minval: lower bound (inclusive) on range of random values
     :param str dtype: type of the output. For random ints, int32 and int64 make sense, but could also be floats
-    :param kwargs:
     :rtype: Data
     """
     from returnn.tf.util.data import DimensionTag, NotSpecified
 
     shape_parsed = []
     batch_dim_axis = None
-    time_dim_axis = None
-    feature_dim_axis = None
     for ax, s in enumerate(shape):
       if isinstance(s, int):
         shape_parsed.append(s)
@@ -1738,17 +1736,8 @@ class RandIntLayer(LayerBase):
         raise NotImplementedError
     shape_parsed = tuple(shape_parsed)
 
-    if feature_dim_axis is not None:
-      if batch_dim_axis is None or (isinstance(batch_dim_axis, int) and batch_dim_axis > feature_dim_axis):
-        dim = shape_parsed[feature_dim_axis]
-      else:
-        dim = shape_parsed[feature_dim_axis - 1]
-    else:
-      dim = NotSpecified
-
     return Data(
-      name="%s_output" % name, shape=shape_parsed, dim=dim, dtype=dtype,
-      batch_dim_axis=batch_dim_axis, time_dim_axis=time_dim_axis, feature_dim_axis=feature_dim_axis)
+      name="%s_output" % name, shape=shape_parsed, dtype=dtype, batch_dim_axis=batch_dim_axis)
 
 
 class RangeLayer(LayerBase):
