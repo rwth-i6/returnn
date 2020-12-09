@@ -112,7 +112,7 @@ class DimensionTag(object):
     return True
 
   def is_equal(self, other, ignore_feature_dim=False, allow_same_feature_dim=False, allow_same_spatial_dim=None,
-               treat_feature_as_spatial=False, broadcast_matches=False):
+               treat_feature_as_spatial=False, broadcast_matches=False, unknown_spatial_matches=False):
     """
     Compares self to other for equality.
     Note that the default behavior is very restrictive.
@@ -125,6 +125,7 @@ class DimensionTag(object):
     :param bool|None allow_same_spatial_dim:
     :param bool treat_feature_as_spatial:
     :param bool broadcast_matches:
+    :param bool unknown_spatial_matches:
     :rtype: bool
     """
     if allow_same_spatial_dim is None:
@@ -160,6 +161,8 @@ class DimensionTag(object):
         return True
     if self_kind == other_kind == self.Types.Spatial:
       if self.dimension is not None and allow_same_spatial_dim:
+        return True
+      if unknown_spatial_matches and ((self.dyn_size is None) != (other.dyn_size is None)):
         return True
     if self.description == other.description:
       return True
@@ -2501,3 +2504,56 @@ class Data(object):
     # Simple fallback: Use first with biggest batch_ndim.
     # Was even simpler before: Use first.
     return common
+
+  def find_matching_dims(self, dim_tag, is_equal_opts):
+    """
+    Finds the dimensions of this Data that match another DimensionTag
+
+    :param DimensionTag dim_tag:
+    :param dict[str,bool]|None is_equal_opts: passed to DimensionTag.is_equal
+    :rtype: list[int] a list of matching axes, counted with batch dim. Sorted in ascending order
+    """
+    return [axis for axis in range(self.batch_ndim) if self.get_dim_tag(axis).is_equal(dim_tag, **is_equal_opts)]
+
+  def find_matching_dim_map(self, other, other_axes):
+    """
+    Looks up all other_axes of another Data in this Data. Does not allow duplicates.
+
+    :param Data other:
+    :param list[int] other_axes: a list of axes of ``other``, counted with batch dim
+    :return: a dict mapping other axes to own axes, all counted with batch dim
+    :rtype: dict[int,int]
+    """
+    def map_other_axis_to_self(other_axis, taken_self_axes):
+      """
+      :param int other_axis: counted with batch dim
+      :param list[int] taken_self_axes: axes that should not be used again
+      :return: the axis of ``self`` that matches ``other_axis``, counted with batch dim
+      :rtype: int
+      """
+      is_equal_opts = dict(
+        allow_same_feature_dim=True, allow_same_spatial_dim=True, treat_feature_as_spatial=True)
+      other_axis_dim_tag = other.get_dim_tag(other_axis)
+      matching = [
+        self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts)
+        if self_axis not in taken_self_axes
+      ]
+      if not matching:
+        # The DimensionTags do not match. Then we also allow one single dyn_size to be unknown
+        is_equal_opts["unknown_spatial_matches"] = True
+        matching = [
+          self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts)
+          if self_axis not in taken_self_axes
+        ]
+        assert len(matching) == 1, 'cannot match the axes %s from %s to %s' % (other_axes, other, self)
+      assert matching, 'cannot match the axes %s from %s to %s' % (other_axes, other, self)
+      # If there are multiple matches (e.g. because two axes have the same feature dim), leave their order intact.
+      # We do this by always choosing the first unused match which is the smallest axes
+      return matching[0]
+
+    other_to_self_mapping = {}
+    for axis in other_axes:
+      other_to_self_mapping[axis] = map_other_axis_to_self(axis, other_to_self_mapping.values())
+    assert len(other_to_self_mapping) == len(other_axes), 'other_axes may not contain duplicates'
+
+    return other_to_self_mapping
