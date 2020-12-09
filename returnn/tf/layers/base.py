@@ -1128,6 +1128,8 @@ class LayerBase(object):
                  use_shift=True, use_std=True, use_sample=0.0, force_sample=False,
                  momentum=0.99, epsilon=1e-3,
                  sample_mean=None, sample_variance=None,
+                 update_sample_only_in_training=False,
+                 delay_sample_update=False,
                  gamma=None, beta=None,
                  masked_time=True):
     """
@@ -1137,6 +1139,8 @@ class LayerBase(object):
     :param float use_sample: defaults to 0.0 which is used in training
     :param bool force_sample: even in eval, use the use_sample factor
     :param float momentum: for the running average of sample_mean and sample_std
+    :param bool update_sample_only_in_training:
+    :param bool delay_sample_update:
     :param float epsilon:
     :param tf.Tensor sample_mean:
     :param tf.Tensor sample_variance:
@@ -1146,6 +1150,13 @@ class LayerBase(object):
     :rtype: tf.Tensor
 
     http://arxiv.org/abs/1502.03167
+
+    With our default settings:
+
+    - In training: use_sample=0, i.e. not using running average, using current batch mean/var.
+    - Not in training (e.g. eval): use_sample=1, i.e. using running average, not using current batch mean/var.
+    - The running average includes the statistics of the current batch.
+    - The running average is also updated when not training.
 
     Also see:
       tf.nn.batch_normalization()
@@ -1158,6 +1169,9 @@ class LayerBase(object):
       else:
         x = data.placeholder
         mean, variance = tf_compat.v1.nn.moments(x, axes=data.get_axes(exclude_feature=True), keep_dims=True)
+      if update_sample_only_in_training:
+        momentum = tf.where(self.network.train_flag, momentum, 0.0)
+      delayed_ops = []  # type: typing.List[tf.Operation]
       if sample_mean is None:
         with self.var_creation_scope():
           sample_mean = self.add_param(tf_compat.v1.get_variable(
@@ -1166,7 +1180,11 @@ class LayerBase(object):
             trainable=False))
         # Use exponential moving average of batch mean.
         # Note: We could also use cumulative moving average. Our Theano implementation does that for inference.
-        sample_mean = tf_compat.v1.assign_add(sample_mean, (mean - sample_mean) * momentum)
+        updated_sample_mean = tf_compat.v1.assign_add(sample_mean, (mean - sample_mean) * momentum)
+        if delay_sample_update:
+          delayed_ops.append(updated_sample_mean.op)
+        else:
+          sample_mean = updated_sample_mean
       if sample_variance is None:
         # Note: Our Theano implementation does not use a moving average for this.
         with self.var_creation_scope():
@@ -1174,7 +1192,11 @@ class LayerBase(object):
             shape=data.get_bc_spatial_batch_shape(), initializer=tf_compat.v1.ones_initializer(),
             name="%s_%s_variance" % (self.name, data.name),
             trainable=False))
-        sample_variance = tf_compat.v1.assign_add(sample_variance, (variance - sample_variance) * momentum)
+        updated_sample_variance = tf_compat.v1.assign_add(sample_variance, (variance - sample_variance) * momentum)
+        if delay_sample_update:
+          delayed_ops.append(updated_sample_variance.op)
+        else:
+          sample_variance = updated_sample_variance
       # If train or if force_sample, use default use_sample=0.0, otherwise use_sample=1.0.
       if self.network.train_flag is not False or force_sample:
         if force_sample:
@@ -1186,6 +1208,11 @@ class LayerBase(object):
       mean = (1. - use_sample) * mean + use_sample * sample_mean
       variance = (1. - use_sample) * variance + use_sample * sample_variance
       bn = (data.placeholder - mean) * tf_compat.v1.rsqrt(variance + epsilon)
+      if delayed_ops:
+        for op in delayed_ops:
+          # Make sure we update after we calculated the batch norm.
+          tf_util.add_control_input(op, control_input=bn.op)
+        self.network.register_post_control_dependencies(delayed_ops)
       if use_std:
         if gamma is None:
           with self.var_creation_scope():
