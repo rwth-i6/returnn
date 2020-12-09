@@ -1663,6 +1663,8 @@ class RandIntLayer(LayerBase):
     from returnn.tf.util.data import DimensionTag
     super(RandIntLayer, self).__init__(**kwargs)
 
+    seed = seed if seed is not None else self.network.random.randint(2 ** 31)
+
     shape_parsed = []
     batch_dim_axes = []
     dyn_axes_sizes = []
@@ -1713,27 +1715,22 @@ class RandIntLayer(LayerBase):
     :param str dtype: type of the output. For random ints, int32 and int64 make sense, but could also be floats
     :rtype: Data
     """
-    from returnn.tf.util.data import DimensionTag, NotSpecified
+    from returnn.tf.util.data import DimensionTag
 
     shape_parsed = []
     batch_dim_axis = None
     for ax, s in enumerate(shape):
       if isinstance(s, int):
         shape_parsed.append(s)
-        feature_dim_axis = ax
-      elif isinstance(s, DimensionTag):
+      else:
+        assert isinstance(s, DimensionTag)
         if s.kind == DimensionTag.Types.Batch:
           batch_dim_axis = ax
         elif isinstance(s.dimension, int):
           shape_parsed.append(s.dimension)
-          feature_dim_axis = ax
-        elif s.dimension is None:
-          shape_parsed.append(None)
-          time_dim_axis = ax
         else:
-          assert False
-      else:
-        raise NotImplementedError
+          assert s.dimension is None
+          shape_parsed.append(None)
     shape_parsed = tuple(shape_parsed)
 
     return Data(
