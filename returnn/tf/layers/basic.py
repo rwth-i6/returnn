@@ -3334,6 +3334,7 @@ class ConvLayer(_ConcatInputLayer):
 
   # noinspection PyUnusedLocal,PyShadowingBuiltins
   def __init__(self, n_out, filter_size, padding, strides=1, dilation_rate=1,
+               groups=1,
                input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None,
                auto_use_channel_first=False,
                with_bias=NotSpecified,
@@ -3350,6 +3351,7 @@ class ConvLayer(_ConcatInputLayer):
     :param int|tuple[int] strides: strides for the spatial dims,
       i.e. length of this tuple should be the same as filter_size, or a single int.
     :param int|tuple[int] dilation_rate: dilation for the spatial dims
+    :param int groups: grouped convolution
     :param int input_expand_dims: number of dynamic dims to add to the input
     :param bool input_add_feature_dim: will add a dim at the end and use input-feature-dim == 1,
       and use the original input feature-dim as a spatial dim.
@@ -3401,7 +3403,10 @@ class ConvLayer(_ConcatInputLayer):
       "this is %i-D conv but number of spatial dims is %i in the input %s. " % (
         len(filter_size), len(input_data.get_spatial_axes()), self.input_data.get_description()) +
       "consider using input_expand_dims or input_add_feature_dim.")
-    filter_shape = list(filter_size) + [input_data.dim, n_out]
+    n_in = input_data.dim
+    if groups != 1:
+      assert groups >= 1 and n_in % groups == 0 and n_out % groups == 0
+    filter_shape = list(filter_size) + [n_in // groups, n_out]
     from returnn.tf.util.basic import get_initializer
     self.filter_layer = None
     if filter:
@@ -3422,10 +3427,30 @@ class ConvLayer(_ConcatInputLayer):
     if input_data.is_batch_feature_major:
       assert self.output.is_batch_feature_major
       data_format = {1: "NCW", 2: "NCHW", 3: "NCDHW"}[len(filter_size)]
-    y = tf_compat.v1.nn.convolution(
-      input_data.placeholder, data_format=data_format,
-      filter=filters,
-      padding=padding, strides=strides, dilation_rate=dilation_rate)
+    if groups == n_in and len(filter_size) <= 2:  # depthwise conv
+      x = input_data.placeholder
+      if len(filter_size) == 1:
+        filters = tf.reshape(filters, [filter_size[0], 1, n_in, n_out // n_in])  # [1,K,n_in,n_out//n_in]
+        x = tf.expand_dims(x, axis=-1 if self.output.is_batch_feature_major else -2)  # [B,T,1,n_in]
+        strides = strides + [1]
+        dilation_rate = dilation_rate + [1]
+      else:
+        filters = tf.reshape(filters, list(filter_size) + [n_in, n_out // n_in])  # K+[n_in,n_out//n_in]
+      y = tf.nn.depthwise_conv2d(
+        x, data_format=data_format,
+        filter=filters,
+        padding=padding,
+        strides=([1] + strides + [1]) if self.output.is_batch_feature_major else ([1, 1] + strides),
+        dilations=dilation_rate)
+      if len(filter_size) == 1:
+        y = tf.squeeze(y, axis=-1 if self.output.is_batch_feature_major else -2)
+        strides = strides[:-1]
+        dilation_rate = dilation_rate[:-1]
+    else:
+      y = tf_compat.v1.nn.convolution(
+        input_data.placeholder, data_format=data_format,
+        filter=filters,
+        padding=padding, strides=strides, dilation_rate=dilation_rate)
     # y shape is [batch] + dynamic_dims + [n_out].
     if with_bias is NotSpecified:
       with_bias = True if bias else False
