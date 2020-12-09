@@ -1176,7 +1176,13 @@ class LayerBase(object):
             trainable=False))
         sample_variance = tf_compat.v1.assign_add(sample_variance, (variance - sample_variance) * momentum)
       # If train or if force_sample, use default use_sample=0.0, otherwise use_sample=1.0.
-      use_sample = 1.0 + tf.cast(tf.logical_or(self.network.train_flag, force_sample), tf.float32) * (use_sample - 1.0)
+      if self.network.train_flag is not False or force_sample:
+        if force_sample:
+          pass  # leave use_sample as-is
+        else:
+          use_sample = tf.where(self.network.train_flag, use_sample, 1.0)
+      else:
+        use_sample = 1.0
       mean = (1. - use_sample) * mean + use_sample * sample_mean
       variance = (1. - use_sample) * variance + use_sample * sample_variance
       bn = (data.placeholder - mean) * tf_compat.v1.rsqrt(variance + epsilon)
