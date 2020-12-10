@@ -1688,7 +1688,6 @@ class ReuseParams:
     assert cur_scope_rel == "" or abs_cur_scope.endswith("/")
     assert param.name[-2:] == ":0"
     abs_param_name = param.name[:-2]
-    assert isinstance(abs_param_name, str)
     abs_param_scope, _sep, param_name = abs_param_name.rpartition("/")
     assert param_name and (abs_param_scope + _sep).endswith(cur_scope_rel)
     if cur_scope_rel:
