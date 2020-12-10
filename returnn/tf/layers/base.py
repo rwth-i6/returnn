@@ -1677,15 +1677,23 @@ class ReuseParams:
     :return: e.g. "base_layer/" or "base_layer/rec/", always with "/" at end
     :rtype: str
     """
-    abs_scope_prefix = base_layer.get_absolute_name_scope_prefix()  # e.g. "current_layer/" or "current_layer/rec/"
+    # abs_scope_prefix: e.g. "current_layer/" or "current_layer/rec/"
+    abs_scope_prefix = base_layer.get_absolute_name_scope_prefix()
     assert abs_scope_prefix.endswith("/")
     from returnn.tf.util.basic import get_current_var_scope_name
-    cur_scope = get_current_var_scope_name() + "/"  # e.g. "current_layer/rec/" or "current_layer/"
-    assert cur_scope.startswith(abs_scope_prefix)
+    # abs_cur_scope: e.g. "current_layer/rec/" or "current_layer/" or "current_layer/batch_norm/"
+    abs_cur_scope = get_current_var_scope_name() + "/"
+    assert abs_cur_scope.startswith(abs_scope_prefix)
+    cur_scope_rel = abs_cur_scope[len(abs_scope_prefix):]  # e.g. "batch_norm/" or ""
+    assert cur_scope_rel == "" or abs_cur_scope.endswith("/")
     assert param.name[-2:] == ":0"
     abs_param_name = param.name[:-2]
-    param_name = abs_param_name.split("/")[-1]
-    assert param_name
+    assert isinstance(abs_param_name, str)
+    abs_param_scope, _sep, param_name = abs_param_name.rpartition("/")
+    assert param_name and (abs_param_scope + _sep).endswith(cur_scope_rel)
+    if cur_scope_rel:
+      param_name = cur_scope_rel + param_name
+    del abs_param_scope
     assert abs_param_name.endswith("/" + param_name)
     if self.custom_func:  # Could be any base absolute name scope prefix, so just return what we have.
       return abs_param_name[:-len(param_name)]
