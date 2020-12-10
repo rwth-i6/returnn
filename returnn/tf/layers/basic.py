@@ -1666,32 +1666,22 @@ class RandIntLayer(LayerBase):
     seed = seed if seed is not None else self.network.random.randint(2 ** 31)
 
     shape_parsed = []
-    batch_dim_axes = []
-    dyn_axes_sizes = []
     for ax, s in enumerate(shape):
       if isinstance(s, int):
         shape_parsed.append(s)
       elif isinstance(s, DimensionTag):
         if s.kind == DimensionTag.Types.Batch:
-          batch_dim_axes.append(ax)
           shape_parsed.append(self.get_batch_dim())
         elif isinstance(s.dimension, int):
           shape_parsed.append(s.dimension)
         elif s.dimension is None:
           assert s.dyn_size is not None
           shape_parsed.append(tf.reduce_max(s.dyn_size))
-          dyn_axes_sizes.append(tf.fill(tf.shape(s.dyn_size), shape_parsed[-1]))
         else:
           raise Exception("%s: invalid dim tag %s" % (self, s))
       else:
         raise TypeError("%s: invalid dim %s" % (self, type(s)))
     shape_parsed = tuple(shape_parsed)
-
-    if batch_dim_axes:
-      assert len(batch_dim_axes) == 1
-      self.output.size_placeholder = {i: size_placeholder for i, size_placeholder in enumerate(dyn_axes_sizes)}
-    else:
-      self.output.size_placeholder = {}
 
     self.output.placeholder = tf.random.uniform(shape_parsed, minval=minval, maxval=maxval, dtype=dtype, seed=seed)
 
@@ -1719,22 +1709,32 @@ class RandIntLayer(LayerBase):
 
     shape_parsed = []
     batch_dim_axis = None
+    dyn_axes_sizes = {}
     for ax, s in enumerate(shape):
       if isinstance(s, int):
         shape_parsed.append(s)
       else:
         assert isinstance(s, DimensionTag)
         if s.kind == DimensionTag.Types.Batch:
+          assert batch_dim_axis is None, "Cannot have multiple batch axes"
           batch_dim_axis = ax
         elif isinstance(s.dimension, int):
           shape_parsed.append(s.dimension)
         else:
           assert s.dimension is None
           shape_parsed.append(None)
+          dyn_axes_sizes[ax] = s.dyn_size
     shape_parsed = tuple(shape_parsed)
 
-    return Data(
-      name="%s_output" % name, shape=shape_parsed, dtype=dtype, batch_dim_axis=batch_dim_axis)
+    data = Data(name="%s_output" % name, shape=shape_parsed, dtype=dtype, batch_dim_axis=batch_dim_axis)
+
+    if batch_dim_axis is not None:
+      data.size_placeholder = {data.get_batch_axis_excluding_batch(i): size for i, size in dyn_axes_sizes.items()}
+    else:
+      assert not dyn_axes_sizes, "Cannot have dynamic axes without a batch axis"
+      data.size_placeholder = {}
+
+    return data
 
 
 class RangeLayer(LayerBase):

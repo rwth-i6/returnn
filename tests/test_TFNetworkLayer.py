@@ -1584,9 +1584,9 @@ def test_RandIntLayer():
     size_placeholder = net.extern_data.data["data"].size_placeholder[0]
     input_len = feed[size_placeholder]
     sz = (
+      DimensionTag(description="feature", kind=DimensionTag.Types.Feature, dimension=5),
       DimensionTag(kind=DimensionTag.Types.Batch),
       net.extern_data.data["data"].get_size_dim_tag(0),
-      DimensionTag(description="feature", kind=DimensionTag.Types.Feature, dimension=5),
       3,
     )
     net.construct_from_dict({
@@ -1596,7 +1596,7 @@ def test_RandIntLayer():
     out = net.layers["output"].output.placeholder
     v = session.run(out, feed_dict=feed)
 
-    assert_equal(v.shape, (n_batch, max(input_len), 5, 3))
+    assert_equal(v.shape, (5, n_batch, max(input_len), 3))
 
 
 def test_untrainable_params():
