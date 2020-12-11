@@ -3519,7 +3519,7 @@ class ConvLayer(_ConcatInputLayer):
     if input_data.is_batch_feature_major:
       assert self.output.is_batch_feature_major
       data_format = {1: "NCW", 2: "NCHW", 3: "NCDHW"}[len(filter_size)]
-    if groups == n_in and len(filter_size) <= 2:  # depthwise conv
+    if groups == n_in and n_in > 1 and len(filter_size) <= 2:  # depthwise conv
       x = input_data.placeholder
       if len(filter_size) == 1:
         filters = tf.reshape(filters, [filter_size[0], 1, n_in, n_out // n_in])  # [1,K,n_in,n_out//n_in]
