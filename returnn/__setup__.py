@@ -7,7 +7,6 @@ from __future__ import print_function
 from pprint import pprint
 import os
 import sys
-import shutil
 
 
 _my_dir = os.path.dirname(os.path.abspath(__file__))
