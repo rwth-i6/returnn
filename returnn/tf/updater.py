@@ -191,7 +191,17 @@ class Updater(object):
     :rtype: tf.Tensor
     """
     lr = self.learning_rate_var
-    if self.config.typed_dict.get("dynamic_learning_rate"):
+    if callable(self.config.typed_dict.get("dynamic_learning_rate")):
+      import inspect
+      learning_rate_function = self.config.typed_dict.get("dynamic_learning_rate")
+      signature = inspect.signature(learning_rate_function)
+      assert any([arg.kind == inspect.Parameter.VAR_KEYWORD for arg in signature.parameters.values()]), (
+        "please specify **kwargs in dynamic_learning_rate for future compatibility")
+      lr = learning_rate_function(
+        network=self.network,
+        global_train_step=self.network.global_train_step,
+        learning_rate=lr)
+    elif self.config.typed_dict.get("dynamic_learning_rate"):
       # To implement any kind of cyclic learning rate during the epoch. E.g.: https://arxiv.org/abs/1608.03983
       with tf.name_scope("dynamic_learning_rate"):
         from returnn.util.basic import CollectionReadCheckCovered
