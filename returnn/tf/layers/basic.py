@@ -4992,6 +4992,13 @@ class DotLayer(LayerBase):
       self, self.sources, red1, red2, var1, var2)
     a_rem_axes = [i for i in range(a_out.batch_ndim) if i not in a_var_axes + a_reduce_axes]
     b_rem_axes = [i for i in range(b_out.batch_ndim) if i not in b_var_axes + b_reduce_axes]
+    assert len(a_rem_axes) == len(b_rem_axes)
+
+    # ensure that a_rem_axes and b_rem_axes are in the same order
+    map_a_to_b_rem_axes = b_out.find_matching_dim_map(a_out, a_rem_axes)
+    assert all(b_axis in map_a_to_b_rem_axes.values() for b_axis in b_rem_axes)
+    b_rem_axes = [map_a_to_b_rem_axes[a_axis] for a_axis in a_rem_axes]
+
     transpose_a = bool(a_var_axes and a_reduce_axes[0] < a_var_axes[0])
     transpose_b = bool(b_var_axes and b_reduce_axes[0] > b_var_axes[0])
     # For A, if not transpose_a, we must reorder the axes as: a_rem_axes + a_var_axes + a_reduce_axes.

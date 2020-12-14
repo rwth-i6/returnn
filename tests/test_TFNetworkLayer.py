@@ -723,6 +723,64 @@ def test_CombineLayer_two_time_dims_first_not_most_generic_with_n_out():
     assert out_np.shape == (n_time1, n_batch, n_time2, n_dim)
 
 
+def test_dot_layer_shuffled_remaining_dims_static():
+  with make_scope() as session:
+    import numpy as np
+    net_dict = {
+      "a": {"class": "split_dims", "axis": "static:0", "dims": (2, 3, 5)},
+      "b": {"class": "transpose", "from": ["a"], "perm": {"static:0": "static:1", "static:1": "static:0"}},
+      "dot": {
+        "class": "dot", "from": ["a", "b"],
+        "red1": "static:-1", "red2": "static:-1", "var1": None, "var2": None,
+        "debug": True},
+      "output": {"class": "merge_dims", "axes": "static", "from": ["dot"]}
+    }
+    config = Config()
+    config.update({
+      "extern_data": {"data": {"shape": (30,)}},
+      "network": net_dict
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    out = network.get_default_output_layer(must_exist=True)
+    input_data = np.ones(shape=(17, 30))
+    feed_dict = {network.layers['data'].output.placeholder: input_data}
+
+    # just check that it runs
+    session.run(out.output.placeholder, feed_dict)
+
+
+def test_dot_layer_shuffled_remaining_dims_dynamic():
+  with make_scope() as session:
+    import numpy as np
+    batch_size = 8
+    time_size = 20
+    feat_size = 10
+    net_dict = {
+      "a": {"class": "copy", "from": "data"},
+      "b": {"class": "transpose", "from": ["a"], "perm": {"B": "T", "T": "B"}},
+      "dot": {
+        "class": "dot", "from": ["a", "b"],
+        "red1": "F", "red2": "F", "var1": None, "var2": None,
+        "debug": True},
+      "output": {"class": "copy", "from": ["dot"]}
+    }
+    config = Config()
+    config.update({
+      "num_outputs": 1,
+      "num_inputs": feat_size,
+      "network": net_dict
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    out = network.get_default_output_layer(must_exist=True)
+    input_data = np.ones(shape=(batch_size, time_size, feat_size))
+    feed_dict = {network.layers['data'].output.placeholder: input_data}
+
+    # just check that it runs
+    session.run(out.output.placeholder, feed_dict)
+
+
 def test_dropout_layer_net_construct():
   with make_scope() as session:
     net_dict = {
