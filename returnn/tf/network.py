@@ -2271,7 +2271,8 @@ class LossHolder:
           tf_compat.v1.summary.scalar("exp_loss_%s" % name, tf.exp(self._loss_value * self._norm_factor))
         if self._network.get_config().bool("debug_unnormalized_loss_summaries", False):
           tf_compat.v1.summary.scalar("unnormalized_loss_%s" % name, self._loss_value)
-        if self._network.get_config().bool("debug_objective_loss_summaries", False) and self._loss_value_for_objective:
+        if (self._network.get_config().bool("debug_objective_loss_summaries", False) and
+                self._loss_value_for_objective is not None):
           tf_compat.v1.summary.scalar("objective_loss_%s" % name, self._loss_value_for_objective)
     if self._error_value is not None:
       if self._error_value.get_shape().ndims == 0:
