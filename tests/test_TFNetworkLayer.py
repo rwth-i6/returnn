@@ -1822,7 +1822,7 @@ def test_GatherLayer():
         "sparse": True, "dim": gather_dim})
 
     random = np.random.RandomState(42)
-    values_seqs = random.rand(batch_dim, gather_dim, time_dim, 1).astype('float32')
+    values_seqs = random.rand(batch_dim, gather_dim, time_dim, feature_dim1).astype('float32')
     seq_lens = random.randint(1, time_dim, size=[batch_dim])
     seq_lens_tensor = tf.constant(seq_lens, dtype=tf.int32)
     values.output.placeholder = tf.constant(values_seqs, dtype=tf.float32)
@@ -1844,13 +1844,14 @@ def test_GatherLayer():
     assert isinstance(out_seqs, numpy.ndarray)
 
     # test shapes
+    print('shapes: values', values.output, 'position', position.output, 'output', layer.output)
     assert layer.output.batch_dim_axis == 0 and layer.output.time_dim_axis == 1
-    assert layer.output.batch_shape == (None, None, 2, 1)
-    assert np.shape(out_seqs) == (batch_dim, time_dim, 2, 1)
+    assert layer.output.batch_shape == (None, None, feature_dim2, feature_dim1)
+    assert np.shape(out_seqs) == (batch_dim, time_dim, feature_dim2, feature_dim1)
     assert layer.output.dtype == values.output.dtype
     assert np.array_equal(size[0], seq_lens)
 
-    print('values [B, D, T, F1]:', repr(values_seqs))
+    print('values [B, D, T, F1]:', values_seqs)
     print('position [B, T, F2]:', position_seqs)
     print('produced output [B, T, F2, F1]:', out_seqs)
 
@@ -1860,6 +1861,51 @@ def test_GatherLayer():
         for f2 in range(feature_dim2):
           for f1 in range(feature_dim1):
             np.testing.assert_almost_equal(out_seqs[b, t, f2, f1], values_seqs[b, position_seqs[b, t, f2], t, f1])
+
+
+def test_GatherLayer_constant_position():
+  with make_scope() as session:
+    import numpy as np
+    net = TFNetwork(extern_data=ExternData())
+    batch_dim, gather_dim, feature_dim1, feature_dim2 = 3, 4, 1, 2
+    # [B, F1, D, F2]
+    values = InternalLayer(
+      name="values", network=net,
+      out_type={"batch_dim_axis": 0, "feature_dim_axis": 3, "time_dim_axis": None,
+        "shape": [feature_dim1, gather_dim, feature_dim2]})
+    position = 3
+
+    random = np.random.RandomState(42)
+    values_seqs = random.rand(batch_dim, feature_dim1, gather_dim, feature_dim2).astype('float32')
+    values.output.placeholder = tf.constant(values_seqs, dtype=tf.float32)
+    values.output.sanity_check()
+
+    # should become [B, F1, F2]
+    layer = GatherLayer(
+      name="gather", network=net,
+      sources=[values], position=position, axis="static:-2",
+      output=GatherLayer.get_out_data_from_opts(
+        name="gather", sources=[values], position=position, axis="static:-2"))
+    layer.output.sanity_check()
+    out_seqs = session.run(layer.output.placeholder)
+    assert isinstance(out_seqs, numpy.ndarray)
+
+    # test shapes
+    print('shapes: values', values.output, 'position', position, 'output', layer.output)
+    assert layer.output.batch_dim_axis == 0 and layer.output.feature_dim_axis == 2
+    assert layer.output.batch_shape == (None, feature_dim1, feature_dim2)
+    assert np.shape(out_seqs) == (batch_dim, feature_dim1, feature_dim2)
+    assert layer.output.dtype == values.output.dtype
+
+    print('values [B, F1, D, F2]:', values_seqs)
+    print('position:', position)
+    print('produced output [B, F1, F2]:', out_seqs)
+
+    # test values
+    for b in range(batch_dim):
+      for f1 in range(feature_dim1):
+        for f2 in range(feature_dim2):
+          np.testing.assert_almost_equal(out_seqs[b, f1, f2], values_seqs[b, f1, position, f2])
 
 
 def test_SliceNdLayer():
