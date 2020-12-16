@@ -913,44 +913,249 @@ class SliceNdLayer(_ConcatInputLayer):
 
 class GatherLayer(_ConcatInputLayer):
   """
-  This is basically ``x[position]`` in some axis.
-  See also :class:`SliceLayer`.
-  See also :class:`GatherNdLayer`, which works on the time-axis, but supports different positions per batch.
+  Gathers slices on a specified axis from the input layer using indices from a ``position`` layer.
+  If the input is a layer of the shape ``[B,D,F1]``, and position of shape ``[B,F2]``, this will yield output of the
+  shape ``[B,F2,F1]`` where
 
-  (Currently `position` can just be an integer, so it's much less generic than ``tf.gather``.
-   However, we might extend this to lists, arrays, or even other layers.)
+  ``output[b,f2,f1] = input[b,position[b,f2],f1]``
+
+  (if ``D`` is the axis to gather from).
+  In general, all shared axes of the input and the positions will be considered as batch-axes.
+
+  The ``position`` argument can also be an ``int``.
+  In this case, this simply gives ``input[position]`` one the specified ``axis``.
+
+  It's basically a wrapper around ``tf.gather``.
+  It provides the same functionality as the deprecated ``GatherNdLayer``, but is more generic.
+  See also :class:`GatherNdLayer`.
   """
   layer_class = "gather"
 
-  def __init__(self, axis, position, **kwargs):
+  def __init__(self, position, axis, **kwargs):
     """
-    :param str axis:
-    :param int position:
+    :param LayerBase|int position: Layer containing the indices used to select the slices of the input from.
+      If another layer, must be of type ``int32`` or ``int64``.
+      Can also specify a constant ``int``.
+    :param str axis: The axis into which we gather the indices into
     """
     super(GatherLayer, self).__init__(**kwargs)
-    axis = self.input_data.get_axis_from_description(axis, allow_int=False)
-    assert isinstance(position, int)  # nothing else implemented yet
-    slices = [slice(None, None)] * axis + [position]  # type: typing.List[typing.Union[slice, int]]
-    self.output.placeholder = self.input_data.placeholder[slices]
+    self.position = position
+
+    input_data = self.input_data
+    if isinstance(position, int):
+      position_data = Data.from_tensor(tf.constant(position))
+    else:
+      position_data = position.output
+    old_gather_axis = input_data.get_axis_from_description(axis, allow_int=False)  # might be moved later
+
+    # determine all common axes of input_data and position_data
+    common_axes_input, common_axes_position, input_axes, position_axes = (
+      self._get_common_input_position_axes(input_data, position_data, old_gather_axis))
+    batch_dims = len(common_axes_input)
+
+    # move gather axis back if necessary s.t. common axes are always in front
+    gather_axis = max(batch_dims, old_gather_axis)
+
+    # (BatchAxes.., InputAxesBeforeGatherAxis, gather_axis, InputAxesAfterGatherAxis..)
+    params = tf.transpose(
+      input_data.placeholder,
+      common_axes_input + input_axes[:gather_axis-batch_dims] + [old_gather_axis] + input_axes[gather_axis-batch_dims:])
+    # (BatchAxes.., PositionAxes..)
+    indices = tf.transpose(position_data.placeholder, common_axes_position + position_axes)
+    # (BatchAxes.., InputAxesBeforeGatherAxis, PositionAxes.., InputAxesAfterGatherAxis..)
+    self.output.placeholder = tf.gather(params=params, indices=indices, axis=gather_axis, batch_dims=batch_dims)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, axis, **kwargs):
+  def _get_common_input_position_axes(cls, input_data, position_data, old_gather_axis):
+    """
+    Determine all common axes of input_data and position_data.
+    All other axes will be specific axes then (except for the gather axis of ``input_data``).
+    Will not change the order of the position axes.
+
+    :param Data input_data:
+    :param Data position_data:
+    :param int old_gather_axis: gather axis of ``input_data`` counted with batch dim (before any transformation)
+    :rtype: (list[int], list[int], list[int], list[int])
+    :return: (common_axes_input, common_axes_position, specific_input_axes, specific_position_axes), all counted with
+    batch dim.
+    """
+    is_equal_opts = dict(ignore_feature_dim=True, allow_same_spatial_dim=True, broadcast_matches=True)
+    common_axes_pairs = [
+      (input_axis, position_axis)
+      for input_axis in range(input_data.batch_ndim) for position_axis in range(position_data.batch_ndim)
+      if not input_axis == old_gather_axis
+      if input_data.get_dim_tag(input_axis).is_equal(position_data.get_dim_tag(position_axis), **is_equal_opts)
+    ]
+    common_axes_input, common_axes_position = zip(*common_axes_pairs) if common_axes_pairs else ([], [])
+    common_axes_input, common_axes_position = list(common_axes_input), list(common_axes_position)
+    specific_input_axes = [
+      axis for axis in range(input_data.batch_ndim) if axis not in common_axes_input and not axis == old_gather_axis]
+    specific_position_axes = [axis for axis in range(position_data.batch_ndim) if axis not in common_axes_position]
+    return common_axes_input, common_axes_position, specific_input_axes, specific_position_axes
+
+  @classmethod
+  def _translate_input_axis(
+    cls, input_axis, old_gather_axis, common_axes_input, input_axes, position_axes):
+    """
+    :param int input_axis: batch axis of input_data
+    :param int old_gather_axis: gather axis of ``input_data`` counted with batch dim
+    :param list[int] common_axes_input:
+    :param list[int] input_axes:
+    :param list[int] position_axes:
+    :rtype: int|None
+    :return: batch axis of output
+    """
+    if input_axis in common_axes_input:
+      return common_axes_input.index(input_axis)
+    elif input_axis < old_gather_axis:
+      return len(common_axes_input) + input_axes.index(input_axis)
+    elif input_axis == old_gather_axis:
+      return None  # the gather axis will not be present in the output
+    else:
+      return len(common_axes_input) + len(position_axes) + input_axes.index(input_axis)
+
+  @classmethod
+  def _translate_position_axis(
+    cls, position_axis, old_gather_axis, common_axes_position, position_axes):
+    """
+    :param int position_axis: batch axis of position_data
+    :param int old_gather_axis: gather axis of ``input_data`` counted with batch dim
+    :param list[int] common_axes_position:
+    :param list[int] position_axes:
+    :rtype: int
+    :return: batch axis of output
+    """
+    if position_axis in common_axes_position:
+      return common_axes_position.index(position_axis)
+    else:
+      num_input_axes_before = min(0, old_gather_axis - len(common_axes_position))
+      return len(common_axes_position) + num_input_axes_before + position_axes.index(position_axis)
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    if isinstance(self.position, LayerBase):
+      return super(GatherLayer, self).get_dep_layers() + [self.position]
+    else:
+      return super(GatherLayer, self).get_dep_layers()
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, position, axis, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
+    :param LayerBase|int position:
     :param str axis:
     :rtype: Data
     """
-    out = get_concat_sources_data_template(sources, name="%s_output" % name)
-    axis = out.get_axis_from_description(axis, allow_int=False)
-    return out.copy_template_excluding_axis(axis)
+    input_data = get_concat_sources_data_template(sources)
+    old_gather_axis = input_data.get_axis_from_description(axis, allow_int=False)
+
+    if isinstance(position, int):
+      position_data = Data(name="constant_position", dtype="int32", shape=(), batch_dim_axis=None)
+    else:
+      position_data = position.output.copy_template()
+    assert position_data.dtype in ["int32", "int64"]
+
+    # determine all common axes of input_data and position_data
+    common_axes_input, common_axes_position, input_axes, position_axes = (
+      cls._get_common_input_position_axes(input_data, position_data, old_gather_axis))
+    batch_dims = len(common_axes_input)
+
+    # move gather axis back if necessary s.t. common axes are always in front
+    gather_axis = max(batch_dims, old_gather_axis)
+
+    # (BatchAxes.., InputAxesBeforeGatherAxis, PositionAxes.., InputAxesAfterGatherAxis..)
+    shape = (
+      [input_data.batch_shape[ax] for ax in common_axes_input if ax != input_data.batch_dim_axis] +
+      [input_data.batch_shape[ax] for ax in input_axes[:gather_axis-batch_dims] if ax != input_data.batch_dim_axis] +
+      [position_data.batch_shape[ax] for ax in position_axes if ax != position_data.batch_dim_axis] +
+      [input_data.batch_shape[ax] for ax in input_axes[gather_axis-batch_dims:] if ax != input_data.batch_dim_axis])
+    out_type = input_data.get_kwargs()
+    out_type["name"] = "%s_output" % name
+    out_type["shape"] = shape
+    out_type["beam"] = SearchBeam.get_combined_beam(input_data.beam, position_data.beam)
+    out_type["available_for_inference"] = input_data.available_for_inference and position_data.available_for_inference
+
+    # Take axes from input_data if they exist there, otherwise from position_data
+    for axis_kind in Data.SpecialAxesNames:
+      input_axis, position_axis = getattr(input_data, axis_kind), getattr(position_data, axis_kind)
+      if input_axis is not None and input_axis != old_gather_axis:
+        out_type[axis_kind] = cls._translate_input_axis(
+          input_axis, old_gather_axis, common_axes_input, input_axes, position_axes)
+      elif position_axis is not None:
+        out_type[axis_kind] = cls._translate_position_axis(
+          position_axis, old_gather_axis, common_axes_position, position_axes)
+      else:
+        out_type[axis_kind] = None
+    # feature_dim_axis needs to be handled differently if it is NotSpecified
+    if (input_data.feature_dim_axis_or_unspecified is NotSpecified and
+            position_data.feature_dim_axis_or_unspecified is NotSpecified):
+      out_type["feature_dim_axis"] = NotSpecified
+    elif input_data.feature_dim_axis_or_unspecified is NotSpecified:
+      assert position_data.feature_dim_axis_or_unspecified is not NotSpecified
+      if position_data.feature_dim_axis is not None:
+        out_type["feature_dim_axis"] = cls._translate_position_axis(
+          position_data.feature_dim_axis, old_gather_axis, common_axes_position, position_axes)
+      else:
+        out_type["feature_dim_axis"] = NotSpecified
+    elif position_data.feature_dim_axis_or_unspecified is NotSpecified:
+      assert input_data.feature_dim_axis_or_unspecified is not NotSpecified
+      if input_data.feature_dim_axis is not None:
+        out_type["feature_dim_axis"] = cls._translate_input_axis(
+          input_data.feature_dim_axis, old_gather_axis, common_axes_input, input_axes, position_axes)
+      else:
+        out_type["feature_dim_axis"] = NotSpecified
+    else:
+      assert input_data.feature_dim_axis_or_unspecified is not NotSpecified
+      assert position_data.feature_dim_axis_or_unspecified is not NotSpecified
+      pass  # keep the logic as before
+
+    output_data = Data(**out_type)
+
+    # Take size_placeholder from input_data if they exist there, otherwise from position_data
+    size_placeholder = {}
+    for input_axis, size in input_data.size_placeholder.items():
+      input_axis = input_data.get_batch_axis(input_axis)
+      if input_axis == old_gather_axis:
+        continue
+      output_axis = output_data.get_batch_axis_excluding_batch(
+        cls._translate_input_axis(input_axis, old_gather_axis, common_axes_input, input_axes, position_axes))
+      size_placeholder[output_axis] = size
+    for position_axis, size in position_data.size_placeholder.items():
+      position_axis = position_data.get_batch_axis(position_axis)
+      output_axis = output_data.get_batch_axis_excluding_batch(cls._translate_position_axis(
+        position_axis, old_gather_axis, common_axes_position, position_axes))
+      size_placeholder.setdefault(output_axis, size)
+    output_data.size_placeholder = size_placeholder
+
+    return output_data
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param returnn.tf.network.TFNetwork network:
+    :param get_layer:
+    """
+    super(GatherLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
+    if not isinstance(d["position"], int):
+      assert isinstance(d["position"], str), "Invalid 'position' type %s" % type(d["position"])
+      d["position"] = get_layer(d["position"])
 
 
 class GatherNdLayer(_ConcatInputLayer):
   """
+  Warning: This layer is deprecated, use the more general :class:`GatherLayer` instead.
+  :class:`GatherLayer` should be equivalent, but is more general (supports multiple batch dimensions, can specify gather
+   axis) and its name is less misleading.
+
   This takes out a position from some axis, e.g. ``x[pos]``.
   This layers allows a different position for each batch.
-  It's basically a wrapper around ``tf.gather_nd``.
+  It's basically a wrapper around ``tf.gather`` (the name of this layer is misleading).
+  See also :class:`GatherLayer` instead, which will replace this layer in the future.
   See also :class:`SliceNdLayer`.
   See also :class:`ScatterNdLayer`, which is the inverse operation.
   """
