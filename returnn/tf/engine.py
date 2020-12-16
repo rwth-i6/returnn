@@ -2003,6 +2003,10 @@ class Engine(EngineBase):
     batches = BatchSetGenerator(dataset, generator=batch_generator)
     data_provider = self._get_data_provider(dataset=dataset, batches=batches, feed_dict=True)
     feed_dict, _ = data_provider.get_feed_dict(single_threaded=True)
+    if isinstance(self.network.train_flag, tf.Tensor):
+      feed_dict[self.network.train_flag] = False
+    if isinstance(self.network.epoch_step, tf.Tensor):
+      feed_dict[self.network.epoch_step] = 0
     return feed_dict
 
   def run_single(self, dataset, seq_idx, output_dict, ext_feed_dict=None):
