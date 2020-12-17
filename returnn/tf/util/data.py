@@ -144,7 +144,7 @@ class DimensionTag(object):
       if other_kind == self.Types.Feature:
         other_kind = self.Types.Spatial
     if self.dimension != other.dimension:
-      if broadcast_matches and self.dimension == 1 or other.dimension == 1:
+      if broadcast_matches and (self.dimension == 1 or other.dimension == 1):
         pass  # pass on
       else:
         return False
@@ -163,7 +163,7 @@ class DimensionTag(object):
       if allow_same_spatial_dim:
         if self.dimension is not None:
           return True
-        if broadcast_matches and self.dimension == 1 or other.dimension == 1:
+        if broadcast_matches and (self.dimension == 1 or other.dimension == 1):
           return True
       if unknown_spatial_matches and ((self.dyn_size is None) != (other.dyn_size is None)):
         return True
