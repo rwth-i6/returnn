@@ -746,6 +746,29 @@ def test_CombineLayer_time_broadcast():
     assert out_v.shape == (n_batch, n_features, n_time)
 
 
+def test_CombineLayer_time_broadcast_swapped():
+  with make_scope() as session:
+    n_batch, n_time, n_features = 3, 7, 5
+    net_dict = {
+      "output": {"class": "combine", "kind": "add", "from": ["data:in1", "data:in2"]},
+    }
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "in1": {"shape": (n_features, None), "batch_dim_axis": 0, "time_dim_axis": 2},
+        "in2": {"shape": (n_features, 1), "batch_dim_axis": None, "time_dim_axis": None, "feature_dim_axis": 0},
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+    out = network.get_default_output_layer()
+    assert_equal(out.output.batch_shape, (None, n_features, None))
+    feed_dict = make_feed_dict(network.extern_data, n_batch=n_batch, n_time=n_time)
+    session.run(tf_compat.v1.global_variables_initializer())
+    out_v = session.run(out.output.placeholder, feed_dict=feed_dict)
+    assert out_v.shape == (n_batch, n_features, n_time)
+
+
 def test_dot_layer_shuffled_remaining_dims_static():
   with make_scope() as session:
     import numpy as np
