@@ -160,8 +160,11 @@ class DimensionTag(object):
       if allow_same_feature_dim:
         return True
     if self_kind == other_kind == self.Types.Spatial:
-      if self.dimension is not None and allow_same_spatial_dim:
-        return True
+      if allow_same_spatial_dim:
+        if self.dimension is not None:
+          return True
+        if broadcast_matches and self.dimension == 1 or other.dimension == 1:
+          return True
       if unknown_spatial_matches and ((self.dyn_size is None) != (other.dyn_size is None)):
         return True
     if self.description == other.description:
