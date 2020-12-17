@@ -1806,8 +1806,9 @@ class Engine(EngineBase):
           for seq_idx in range(len(results_per_seq)):
             seq_tag = seq_idx_to_tag[seq_idx]
             f.write("%r: {" % seq_tag)
-            f.write(", ".join([
-              "%r: %r" % (req_out, results_per_seq[seq_tag][req_out]) for req_out in output_per_seq_format]))
+            with numpy.printoptions(threshold=sys.maxsize):
+              f.write(", ".join([
+                "%r: %r" % (req_out, results_per_seq[seq_tag][req_out]) for req_out in output_per_seq_format]))
             f.write("},\n")
           f.write("}\n")
         else:
