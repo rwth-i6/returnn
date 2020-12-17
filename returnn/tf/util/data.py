@@ -2530,7 +2530,7 @@ class Data(object):
     def map_other_axis_to_self(other_axis, taken_self_axes):
       """
       :param int other_axis: counted with batch dim
-      :param list[int] taken_self_axes: axes that should not be used again
+      :param set[int] taken_self_axes: axes that should not be used again
       :return: the axis of ``self`` that matches ``other_axis``, counted with batch dim
       :rtype: int
       """
@@ -2539,15 +2539,13 @@ class Data(object):
       other_axis_dim_tag = other.get_dim_tag(other_axis)
       matching = [
         self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts)
-        if self_axis not in taken_self_axes
-      ]
+        if self_axis not in taken_self_axes]
       if not matching:
         # The DimensionTags do not match. Then we also allow one single dyn_size to be unknown
         is_equal_opts["unknown_spatial_matches"] = True
         matching = [
           self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts)
-          if self_axis not in taken_self_axes
-        ]
+          if self_axis not in taken_self_axes]
         assert len(matching) == 1, 'cannot match the axes %s from %s to %s' % (other_axes, other, self)
       assert matching, 'cannot match the axes %s from %s to %s' % (other_axes, other, self)
       # If there are multiple matches (e.g. because two axes have the same feature dim), leave their order intact.
@@ -2556,7 +2554,6 @@ class Data(object):
 
     other_to_self_mapping = {}
     for axis in other_axes:
-      other_to_self_mapping[axis] = map_other_axis_to_self(axis, other_to_self_mapping.values())
+      other_to_self_mapping[axis] = map_other_axis_to_self(axis, set(other_to_self_mapping.values()))
     assert len(other_to_self_mapping) == len(other_axes), 'other_axes may not contain duplicates'
-
     return other_to_self_mapping
