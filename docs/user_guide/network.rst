@@ -4,8 +4,6 @@
 Network Structure
 =================
 
-.. _tech_engine_network:
-
 Construction
 ------------
 
@@ -48,9 +46,9 @@ Here is a 2 layer unidirectional LSTM network:
 .. code-block:: python
 
     network = {
-        "lstm1": {"class": "rec", "unit": "lstm", "dropout": 0.1, "n_out": 500, "from": ["data"]},
-        "lstm2": {"class": "rec", "unit": "lstm", "dropout": 0.1, "n_out": 500, "from": ["lstm1"]},
-        "output": {"class": "softmax", "loss": "ce", "from": ["lstm2"], "target": "classes"}
+        "lstm1": {"class": "rec", "unit": "lstm", "dropout": 0.1, "n_out": 500, "from": "data"},
+        "lstm2": {"class": "rec", "unit": "lstm", "dropout": 0.1, "n_out": 500, "from": "lstm1"},
+        "output": {"class": "softmax", "loss": "ce", "from": "lstm2", "target": "classes"}
     }
 
 In TensorFlow, that would use the layer class :py:class:`returnn.tf.layers.rec.RecLayer`

@@ -10,7 +10,28 @@ RETURNN - RWTH extensible training framework for universal recurrent neural netw
 is a Theano/TensorFlow-based implementation of modern recurrent neural network architectures.
 It is optimized for fast and reliable training of recurrent neural networks in a multi-GPU environment.
 
-Features include:
+The high-level features and goals of RETURNN are:
+
+* **Simplicity**
+
+    – Writing config / code is simple & straight-forward (setting up experiment, defining model)
+    – Debugging in case of problems is simple
+    – Reading config / code is simple (defined model, training, decoding all becomes clear)
+
+* **Flexibility**
+
+    – Allow for many different kinds of experiments / models
+
+* **Efficiency**
+
+    – Training speed
+    – Decoding speed
+
+All items are important for research, decoding speed is esp. important for production.
+
+Here are the `slides of the Interspeech 2020 tutorial "Efficient and Flexible Implementation of Machine Learning for ASR and MT" with an introduction of the core concepts <https://www-i6.informatik.rwth-aachen.de/publications/download/1154/Zeyer--2020.pdf>`__.
+
+More specific features include:
 
 - Mini-batch training of feed-forward neural networks
 - Sequence-chunking based batch training for recurrent neural networks
@@ -29,7 +50,6 @@ and `technological overview <https://returnn.readthedocs.io/en/latest/tech_overv
 (`slides <https://www-i6.informatik.rwth-aachen.de/web/Software/returnn/downloads/workshop-2019-01-29/01.returnn-overview.session1.handout.v1.pdf>`__,
 `exercise sheet <https://www-i6.informatik.rwth-aachen.de/web/Software/returnn/downloads/workshop-2019-01-29/01.exercise_sheet.pdf>`__;
 hosted by eBay).
-Here are the `slides of the Interspeech 2020 tutorial "Efficient and Flexible Implementation of Machine Learning for ASR and MT" with an introduction of the core concepts <https://www-i6.informatik.rwth-aachen.de/publications/download/1154/Zeyer--2020.pdf>`__.
 
 There are `many example demos <https://github.com/rwth-i6/returnn/blob/master/demos/>`_
 which work on artificially generated data,

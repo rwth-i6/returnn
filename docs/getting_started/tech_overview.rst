@@ -4,8 +4,13 @@
 Technological Overview
 ======================
 
-RETURNN is a machine learning toolkit that can be used as standalone application or framework for training and running
+RETURNN is a machine learning toolkit that can be used as standalone application
+or Python framework for training and running
 sequential neural network architectures.
+
+For an overview of the core concepts behind RETURNN,
+see the slides of `our Interspeech 2020 tutorial about machine learning frameworks including RETURNN <https://www-i6.informatik.rwth-aachen.de/publications/download/1154/Zeyer--2020.pdf>`__.
+
 The main tasks of RETURNN are:
 
     - Network construction, i.e. definition of the computation graph
@@ -129,15 +134,15 @@ Here is a 2 layer unidirectional LSTM network:
 .. code-block:: python
 
     network = {
-        "lstm1": {"class": "rec", "unit": "lstm", "dropout": 0.1, "n_out": 500},
-        "lstm2": {"class": "rec", "unit": "lstm", "dropout": 0.1, "n_out": 500, "from": ["lstm1"]},
-        "output": {"class": "softmax", "loss": "ce", "from": ["lstm2"]}
+        "lstm1": {"class": "rec", "unit": "lstm", "dropout": 0.1, "n_out": 500, "from": "data"},
+        "lstm2": {"class": "rec", "unit": "lstm", "dropout": 0.1, "n_out": 500, "from": "lstm1"},
+        "output": {"class": "softmax", "loss": "ce", "from": "lstm2"}
     }
 
 In TensorFlow, that would use the layer class :py:class:`returnn.tf.layers.rec.RecLayer`
 which will handle the argument ``unit``.
 
-See :ref:`network` for more.
+See :ref:`network` for more about the network construction and layer declarations.
 
 
 .. _tech_engine_train:
