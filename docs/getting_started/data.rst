@@ -96,9 +96,12 @@ Current shortcomings
   In the future, we probably should make this more explicit
   by using the :class:`returnn.tf.util.data.DimensionTag` object instance explicitly.
 
-* The logic to define the default time/feature axes can be ambiguous in some cases.
+* The logic to define the default time/feature axes can be ambiguous in some (rare, exotic) cases.
   Thus, when you use ``"axis": "T"`` in your code, and the tensor has multiple time/spatial axes,
   it sometimes can lead to unexpected behavior.
+  This might be a problem also for all layers which operate on the feature dim axis,
+  such as :class:`returnn.tf.layers.basic.LinearLayer` and many others.
+  (Although in most cases, there is no ambiguity about it...)
 
 * There are sometimes cases where layers are dependent on the order of the axis.
   Examples:
@@ -106,6 +109,11 @@ Current shortcomings
     - :class:`returnn.tf.layers.ConvLayer`:
       The order of the spatial axes matters.
       You define a kernel shape, and the first entry corresponds to the first spatial axis, etc.
+
+    - :class:`returnn.tf.layers.MergeDimsLayer`:
+      The order of the merged axes matters.
+      (Unless you specify the option ``keep_order``, in which cases the input order does not matter,
+      and just the order of what is specified in the config matters.)
 
 * New dim tags are currently created in the ``__init__`` of a layer,
   but they should be created (uniquely) by ``get_out_data_from_opts``.

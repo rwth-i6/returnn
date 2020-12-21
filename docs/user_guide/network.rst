@@ -75,7 +75,7 @@ And here is a 3 layer bidirectional LSTM network:
 .. _network_define_layers:
 
 Defining Layers
--------------------
+---------------
 
 Every usable layer with the TensorFlow backend inherits from :class:`returnn.tf.layers.base.LayerBase`.
 This class provides most of the parameters that can be set for each layer.

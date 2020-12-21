@@ -137,6 +137,8 @@ Here is a 2 layer unidirectional LSTM network:
 In TensorFlow, that would use the layer class :py:class:`returnn.tf.layers.rec.RecLayer`
 which will handle the argument ``unit``.
 
+See :ref:`network` for more.
+
 
 .. _tech_engine_train:
 

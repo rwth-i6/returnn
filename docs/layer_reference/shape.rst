@@ -18,10 +18,10 @@ Expand Dimensions Layer
     :members:
     :undoc-members:
 
-GatherNdLayer
--------------
+Gather Layer
+------------
 
-.. autoclass:: returnn.tf.layers.basic.GatherNdLayer
+.. autoclass:: returnn.tf.layers.basic.GatherLayer
     :members:
     :undoc-members:
 
