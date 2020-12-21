@@ -5,7 +5,7 @@ Main entry point
 ================
 
 This is the main entry point, providing :func:`main`.
-See :func:`rnn.init_config` for some arguments, or just run ``./rnn.py --help``.
+See :func:`init_config` for some arguments, or just run ``./rnn.py --help``.
 See :ref:`tech_overview` for a technical overview.
 """
 

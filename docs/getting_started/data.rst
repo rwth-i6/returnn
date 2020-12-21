@@ -67,7 +67,7 @@ Example usages
 
 See :ref:`managing_axes`.
 
-:class:`returnn.tf.layers.basic.SoftmaxOverSpatial`
+:class:`returnn.tf.layers.basic.SoftmaxOverSpatialLayer`
 could be used like
 
 .. code-block:: python
