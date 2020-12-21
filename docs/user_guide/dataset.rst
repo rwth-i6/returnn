@@ -1,8 +1,8 @@
-.. _data:
+.. _dataset:
 
-=================
-Data Input/Output
-=================
+====================
+Dataset Input/Output
+====================
 
 The parameters that are used to correctly define the data inputs are the three dataset variables ``train``, ``dev`` and
 ``eval``, as well as the parameter ``extern_data`` to define the data shapes.

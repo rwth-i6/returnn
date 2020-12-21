@@ -71,7 +71,7 @@ Some recent development changelog can be seen `here <https://github.com/rwth-i6/
     :maxdepth: 2
 
     user_guide/network.rst
-    user_guide/data.rst
+    user_guide/dataset.rst
     user_guide/recurrent_subnet.rst
 
 
