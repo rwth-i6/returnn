@@ -59,6 +59,7 @@ Some recent development changelog can be seen `here <https://github.com/rwth-i6/
     :maxdepth: 2
 
     getting_started/tech_overview.rst
+    getting_started/data.rst
     getting_started/installation.rst
     getting_started/basic_usage.rst
     getting_started/framework.rst

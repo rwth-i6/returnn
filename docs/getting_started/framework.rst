@@ -1,4 +1,4 @@
-.. framework:
+.. _framework:
 
 ====================
 RETURNN as Framework
