@@ -26,6 +26,9 @@ better_exchook.install()
 import logging
 logging.getLogger('tensorflow').disabled = True
 
+# Disable compilation with Theano.
+os.environ["THEANO_FLAGS"] = "mode=FAST_COMPILE,CXX="
+
 import generateapi
 generateapi.generate()
 
