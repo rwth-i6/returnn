@@ -4,7 +4,8 @@
 Recurrent Sub-Networks
 ======================
 
-For many task it will be necessary to define multiple layers that are applied as recurrent network over a sequential input,
+For many task it will be necessary to define multiple layers
+that are applied as recurrent network over a sequential input,
 especially when running a search over sequences.
 While basic recurrent layers such as LSTM variants are defined by using the ``rec`` layer and selecting the desired
 ``unit``, custom sub-networks can be defined by passing a network dictionary for the ``unit`` attribute.
@@ -22,7 +23,7 @@ Example of a recurrent "relu" layer:
 
       {
           "class": "rec",
-          "from": ["input"],
+          "from": "input",
           "unit": {
             # Recurrent subnet here, operate on a single time-step:
             "output": {
@@ -33,12 +34,15 @@ Example of a recurrent "relu" layer:
           },
           "n_out": n_out,
       }
+
 The number of steps is determined by the time axis of the input.
 If multiple inputs are given, they will be concatenated on the feature axis.
 Layers with recurrent dependencies and hidden states (e.g. LSTMs) can be added as ``rnn_cell`` layer.
 For available cell units see :ref:`here <rec_units>`.
-Currently there is no support to access two layer outputs directly.
-The concatenated data can be split by using a :class`SliceLayer <returnn.tf.layers.basic.SliceLayer>` on the feature axis.
+
+Concatenated data can be split by using
+:class:`SplitLayer <returnn.tf.layers.basic.SplitLayer>` or
+:class:`SliceLayer <returnn.tf.layers.basic.SliceLayer>` on the feature axis.
 
 .. _recurrent_subnet_independent:
 
@@ -54,19 +58,19 @@ Example of an MLP-style attention mechanism with an LSTM layer:
           "class": "rec",
           "from": [],
           "unit": {
-              "state_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["output"], "n_out": 128},
+              "state_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": "output", "n_out": 128},
               "energy_in": {"class": "combine", "kind": "add", "from": ["base:enc_ctx", "s_transformed"], "n_out": 128},
-              "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
-              "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"], "n_out": 128},
-              "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, H)
+              "energy_tanh": {"class": "activation", "activation": "tanh", "from": "energy_in"},
+              "energy": {"class": "linear", "activation": None, "with_bias": False, "from": "energy_tanh", "n_out": 128},
+              "att_weights": {"class": "softmax_over_spatial", "from": "energy"},  # (B, enc-T, H)
               "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
-              "decoder": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:att"], "n_out": 256, 'target': 'data'},
+              "decoder": {"class": "rnn_cell", "unit": "LSTMBlock", "from": "prev:att", "n_out": 256, 'target': 'data'},
               'stop_token': {'class': 'linear', 'activation': None, 'n_out': 1, 'loss': 'bin_ce',
-                             'target': 'stop_token_target', 'from': ['output']},
-              'stop_token_sigmoid': {'class': 'activation', 'activation': 'sigmoid', 'from': ['stop_token']},
-              "end": {"class": "compare", "from": ["output"], "value": 0}
-              "output_prob": {"class": "softmax", "from": ["decoder"], "target": "classes", "loss": "ce"},
-              'output': {'class': 'choice', 'target': "classes", 'beam_size': 12, 'from': ["output_prob"], "initial_output": 0},
+                             'target': 'stop_token_target', 'from': 'output'},
+              'stop_token_sigmoid': {'class': 'activation', 'activation': 'sigmoid', 'from': 'stop_token'},
+              "end": {"class": "compare", "from": "output", "value": 0}
+              "output_prob": {"class": "softmax", "from": "decoder", "target": "classes", "loss": "ce"},
+              'output': {'class': 'choice', 'target': "classes", 'beam_size': 12, 'from': "output_prob", "initial_output": 0},
           }
           "n_out": n_out
       }
