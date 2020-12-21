@@ -2278,7 +2278,7 @@ class WindowLayer(_ConcatInputLayer):
   def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, window_size, axis="T", sources=(), **kwargs):
     """
     :param tf.Tensor batch_dim:
-    :param TFNetworkRecLayer.RecLayer|LayerBase rec_layer:
+    :param returnn.tf.layers.rec.RecLayer|LayerBase rec_layer:
     :param int window_size:
     :param str axis:
     :param list[LayerBase] sources:
@@ -2343,7 +2343,7 @@ class CumsumLayer(_ConcatInputLayer):
   def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, axis="T", sources=(), **kwargs):
     """
     :param tf.Tensor batch_dim:
-    :param TFNetworkRecLayer.RecLayer|LayerBase rec_layer:
+    :param returnn.tf.layers.rec.RecLayer|LayerBase rec_layer:
     :param str axis:
     :param list[LayerBase] sources:
     :rtype: dict[str,tf.Tensor]
@@ -6581,7 +6581,7 @@ class SubnetworkLayer(LayerBase):
   def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, **kwargs):
     """
     :param tf.Tensor batch_dim: for this layer, might be with beam
-    :param TFNetworkRecLayer.RecLayer rec_layer:
+    :param returnn.tf.layers.rec.RecLayer rec_layer:
     :rtype: dict[str,tf.Tensor]
     """
     from .rec import _TemplateLayer

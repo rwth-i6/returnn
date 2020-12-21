@@ -10,7 +10,7 @@ header_text = """
 Recurrent Units
 ===============
 
-These are the units that can be used in a :class:`TFNetworkRecLayer.RecLayer` type of layer.
+These are the units that can be used in a :class:`returnn.tf.layers.rec.RecLayer` type of layer.
 Common units are:
 
    * BasicLSTM (the cell), via official TF, pure TF implementation

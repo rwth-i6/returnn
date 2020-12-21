@@ -32,9 +32,10 @@ More details on how to connect layers and datasets can be found below at :ref:`c
 
 
 
-For Theano, the base layer class is :py:class:`NetworkBaseLayer.Container` and :py:class:`NetworkBaseLayer.Layer`;
+For Theano, the base layer class is
+:py:class:`returnn.theano.layers.base.Container` and :py:class:`returnn.theano.layers.base.Layer`;
 for TensorFlow, it is :py:class:`returnn.tf.layers.base.LayerBase`.
-E.g. that would use the :py:class:`TFNetworkLayer.LinearLayer` class,
+E.g. that would use the :py:class:`returnn.tf.layers.basic.LinearLayer` class,
 and the ``LinearLayer.__init__`` will accepts arguments like ``activation``.
 In the given example, all the remaining arguments will get handled by the base layer.
 
@@ -52,7 +53,7 @@ Here is a 2 layer unidirectional LSTM network:
         "output": {"class": "softmax", "loss": "ce", "from": ["lstm2"], "target": "classes"}
     }
 
-In TensorFlow, that would use the layer class :py:class:`TFNetworkRecLayer.RecLayer`
+In TensorFlow, that would use the layer class :py:class:`returnn.tf.layers.rec.RecLayer`
 which will handle the argument ``unit``.
 
 And here is a 3 layer bidirectional LSTM network:

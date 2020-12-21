@@ -9,7 +9,7 @@ In this benchmark, we try to compare the runtime performance during training for
 We try to measure in a way that it should be generic and not be specific for our Returnn framework.
 You can run this benchmark yourself with `this script <https://github.com/rwth-i6/returnn/blob/master/demos/demo-tf-lstm-benchmark.py>`_.
 
-In Returnn with the TensorFlow backend, the ``rec`` layer (:class:`TFNetworkRecLayer.RecLayer`)
+In Returnn with the TensorFlow backend, the ``rec`` layer (:class:`returnn.tf.layers.rec.RecLayer`)
 you can use these LSTM kernels via the ``unit`` argument:
 
 * ``BasicLSTM`` (GPU and CPU).

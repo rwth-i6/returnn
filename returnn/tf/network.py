@@ -1792,7 +1792,7 @@ class TFNetwork(object):
     """
     :param bool inside_loop: only return if the network is constructed within the loop (not moved out)
     :return: if we are a subnet of a :class:`RecLayer`, will return the RecLayer instance
-    :rtype: TFNetworkRecLayer.RecLayer|None
+    :rtype: returnn.tf.layers.rec.RecLayer|None
     """
     from returnn.tf.layers.rec import RecLayer
     if isinstance(self.parent_layer, RecLayer):

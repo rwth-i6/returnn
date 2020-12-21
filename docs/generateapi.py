@@ -28,7 +28,7 @@ def generate():
     """
     :param str modname:
     """
-    fn = "api/%s.rst" % modname[len("returnn."):]
+    fn = "api/%s.rst" % (modname[len("returnn."):] or "base")
     if os.path.exists(fn):
       return
     f = open(fn, "w")
@@ -49,6 +49,10 @@ def generate():
       if not os.path.isdir(os.path.join(path, fn)):
         continue
       if os.path.exists(os.path.join(path, fn, ".git")):
+        continue
+      if fn == "__pycache__":
+        continue
+      if not os.path.exists(os.path.join(path, fn, "__init__.py")):
         continue
       scan_modules(modpath + [fn])
 

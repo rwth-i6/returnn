@@ -6403,7 +6403,7 @@ class EditDistanceTableLayer(LayerBase):
   def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, sources, name, target, network, **kwargs):
     """
     :param tf.Tensor batch_dim: for this layer, might be with beam
-    :param TFNetworkRecLayer.RecLayer rec_layer:
+    :param returnn.tf.layers.rec.RecLayer rec_layer:
     :param list[LayerBase] sources:
     :param str name:
     :param str target:
@@ -6916,7 +6916,7 @@ class MaskedComputationLayer(LayerBase):
   def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, **kwargs):
     """
     :param tf.Tensor batch_dim: for this layer, might be with beam
-    :param TFNetworkRecLayer.RecLayer rec_layer:
+    :param returnn.tf.layers.rec.RecLayer rec_layer:
     :rtype: dict[str,tf.Tensor]
     """
     layer_class, layer_desc = cls._create_template(**kwargs)
@@ -7073,7 +7073,7 @@ class UnmaskLayer(LayerBase):
   def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, sources, **kwargs):
     """
     :param tf.Tensor batch_dim: for this layer, might be with beam
-    :param TFNetworkRecLayer.RecLayer rec_layer:
+    :param returnn.tf.layers.rec.RecLayer rec_layer:
     :param list[LayerBase] sources:
     :rtype: dict[str,tf.Tensor]
     """

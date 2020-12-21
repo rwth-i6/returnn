@@ -1289,7 +1289,7 @@ class LayerBase(object):
     :param tf.Tensor batch_dim: including beam size in beam search
     :param str name: layer name
     :param Data output: template
-    :param TFNetworkRecLayer.RecLayer rec_layer:
+    :param returnn.tf.layers.rec.RecLayer rec_layer:
     :param str|float|int|tf.Tensor|None initial_output:
     :rtype: tf.Tensor
     """
