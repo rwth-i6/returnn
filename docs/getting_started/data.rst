@@ -106,11 +106,11 @@ Current shortcomings
 * There are sometimes cases where layers are dependent on the order of the axis.
   Examples:
 
-    - :class:`returnn.tf.layers.ConvLayer`:
+    - :class:`returnn.tf.layers.basic.ConvLayer`:
       The order of the spatial axes matters.
       You define a kernel shape, and the first entry corresponds to the first spatial axis, etc.
 
-    - :class:`returnn.tf.layers.MergeDimsLayer`:
+    - :class:`returnn.tf.layers.basic.MergeDimsLayer`:
       The order of the merged axes matters.
       (Unless you specify the option ``keep_order``, in which cases the input order does not matter,
       and just the order of what is specified in the config matters.)
