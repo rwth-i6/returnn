@@ -7,7 +7,8 @@ Generation and Search
 .. note::
 
     There is no ``beam_size`` parameter for the config, as ``beam_size`` is a parameter for the ``choice`` layer.
-    For further details, see :class:`TFNetworkRecLayer.ChoiceLayer`
+    For further details, see :class:`returnn.tf.layers.rec.ChoiceLayer`
+    and :ref:`search`.
 
 
 forward_override_hdf_output

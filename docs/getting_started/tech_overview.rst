@@ -76,10 +76,13 @@ All the rest is shared for all backends, which mostly is:
 Execution guide
 ---------------
 
-- :py:func:`returnn.__main__.main` will parse command line arguments and read in a config.
-- Then logging :mod:`Log` is initialized, based on verbosity and other settings.
+- :py:func:`returnn.__main__.main` will parse command line arguments and read in a config
+  (:class:`returnn.config.Config`).
+- Then logging (:mod:`returnn.log`, :class:`returnn.log.Log`)
+  is initialized, based on verbosity and other settings.
 - Then it initializes the datasets (``train``, ``dev``, ``eval`` in config),
   i.e. :py:class:`returnn.datasets.Dataset` instances.
+  See :ref:`dataset` and :ref:`dataset_reference`.
 - Theano-only: :py:class:`returnn.theano.device.Device` instances.
 - The engine, i.e. a :py:class:`returnn.tf.engine.Engine` instance.
 - Depending on the ``task`` option, some engine initialization
@@ -87,6 +90,8 @@ Execution guide
 - Then, depending on the ``task`` option, it might start ``engine.train``, ``engine.forward`` etc.
   (:py:func:`returnn.tf.engine.Engine.train`), :ref:`tech_engine_train`.
 
+
+.. _tech_net_construct:
 
 Network Construction
 --------------------
@@ -114,6 +119,11 @@ The construction itself can be found for TensorFlow in :py:func:`returnn.tf.netw
 which starts from the output layers goes over the sources of a layer, which are defined by ``"from"``.
 If a layer does not define ``"from"``, it will automatically get the input from the dataset data.
 
+The network itself is stored in a :class:`returnn.tf.network.TFNetwork`.
+
+The network, layers, and the dataset make heavy use of :class:`returnn.tf.util.data.Data`,
+see :ref:`data`.
+
 Here is a 2 layer unidirectional LSTM network:
 
 .. code-block:: python
@@ -135,6 +145,7 @@ Training
 
 The engine will loop over the epochs and the individual batches / steps and loads and saves the model.
 The specific implementation is different in Theano and TensorFlow.
-See the code for more details, i.e. :mod:`returnn.theano.engine`, :mod:`returnn.theano.engine_task` for Theano
+See the code for more details, i.e. :mod:`returnn.theano.engine`,
+:mod:`returnn.theano.engine_task` for Theano
 and :mod:`returnn.tf.engine` for TensorFlow.
 
