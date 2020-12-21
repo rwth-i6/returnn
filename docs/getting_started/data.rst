@@ -118,6 +118,8 @@ Current shortcomings
 * New dim tags are currently created in the ``__init__`` of a layer,
   but they should be created (uniquely) by ``get_out_data_from_opts``.
 
+* Static dimensions are not consistently handled via dim tags yet.
+
 
 Related work
 ------------
