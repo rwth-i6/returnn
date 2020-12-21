@@ -144,6 +144,28 @@ which will handle the argument ``unit``.
 
 See :ref:`network` for more about the network construction and layer declarations.
 
+See also the next section specifically about :ref:`recurrency <tech_overview_recurrency>`.
+
+
+.. _tech_overview_recurrency:
+
+Recurrency
+----------
+
+Recurrency :=
+Anything which is defined by step-by-step execution,
+where current step depends on previous step, such as RNN, beam search, etc.
+
+This is all covered by :class:`returnn.tf.layers.rec.RecLayer`,
+which is a generic wrapper around ``tf.while_loop``.
+It covers:
+
+* Definition of stochastic variables (the output classes itself but also latent variables)
+  for either beam search or training (e.g. using ground truth values)
+* Automatic optimizations
+
+See :ref:`recurrency` for more details how this works.
+
 
 .. _tech_engine_train:
 
