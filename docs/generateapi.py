@@ -28,7 +28,7 @@ def generate():
     """
     :param str modname:
     """
-    fn = "api/%s.rst" % (modname[len("returnn."):] or "base")
+    fn = "api/%s.rst" % (modname[len("returnn."):] or "___base")
     if os.path.exists(fn):
       return
     f = open(fn, "w")
