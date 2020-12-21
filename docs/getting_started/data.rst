@@ -70,7 +70,7 @@ See :ref:`managing_axes`.
 :class:`returnn.tf.layers.basic.SoftmaxOverSpatial`
 could be used like
 
-.. code-block::
+.. code-block:: python
 
     "att_weights": {"class": "softmax_over_spatial", "from": "energy"}
 
@@ -78,7 +78,7 @@ This would use the default time axis of the energy.
 
 Or:
 
-.. code-block::
+.. code-block:: python
 
     "att_weights": {"class": "softmax_over_spatial", "from": "energy", "axis": "stag:encoder"}
 
