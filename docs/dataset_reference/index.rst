@@ -4,8 +4,10 @@
 Datasets
 ========
 
-All datasets in RETURNN are based on the :class:`Dataset`,
-and most are also based on either :class:`CachedDataset` or :class:`CachedDataset2`.
+All datasets in RETURNN are based on the :class:`returnn.datasets.Dataset`,
+and most are also based on either
+:class:`returnn.datasets.cached.CachedDataset` or
+:class:`returnn.datasets.cached2.CachedDataset2`.
 The common parameters that can be used across most datasets are:
 
     - ``partition_epoch``: split the data into smaller parts per epoch
@@ -43,11 +45,11 @@ Also check the sequence ordering possibilities with the :ref:`MetaDataset <meta_
     combination.rst
 
 
-.. autoclass:: Dataset.Dataset
+.. autoclass:: returnn.datasets.Dataset
     :show-inheritance:
 
-.. autoclass:: CachedDataset.CachedDataset
+.. autoclass:: returnn.datasets.cached.CachedDataset
     :show-inheritance:
 
-.. autoclass:: CachedDataset2.CachedDataset2
+.. autoclass:: returnn.datasets.cached2.CachedDataset2
     :show-inheritance:
