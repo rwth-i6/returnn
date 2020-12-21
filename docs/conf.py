@@ -27,7 +27,7 @@ import logging
 logging.getLogger('tensorflow').disabled = True
 
 # Disable compilation with Theano.
-os.environ["THEANO_FLAGS"] = "mode=FAST_COMPILE,CXX="
+os.environ["THEANO_FLAGS"] = "mode=FAST_COMPILE,cxx="
 # If it anyway tries to compile, this might fix some other problems.
 # /usr/bin/ld:
 #  /home/docs/.pyenv/versions/3.7.9/lib/libpython3.7m.a(ceval.o):
