@@ -25,6 +25,9 @@ def generate():
     os.mkdir("api")
 
   def makeapi(modname):
+    """
+    :param str modname:
+    """
     fn = "api/%s.rst" % modname[len("returnn."):]
     if os.path.exists(fn):
       return
@@ -36,18 +39,26 @@ def generate():
 
   def scan_modules(modpath):
     """
-
-    :param list modpath:
-    :return:
+    :param list[str] modpath:
     """
+    makeapi(".".join(modpath))
     path = "/".join(modpath)
+
+    # First all sub packages.
     for fn in sorted(os.listdir(path)):
-      if fn.startswith("_"):
+      if not os.path.isdir(os.path.join(path, fn)):
         continue
+      if os.path.exists(os.path.join(path, fn, ".git")):
+        continue
+      scan_modules(modpath + [fn])
+
+    # Now all sub modules in this package.
+    for fn in sorted(os.listdir(path)):
       if os.path.isdir(os.path.join(path, fn)):
-        if not os.path.exists(os.path.join(path, fn, ".git")):
-          scan_modules(modpath + [fn])
+        continue
       if not fn.endswith(".py"):
+        continue
+      if fn == "__init__.py":
         continue
       modname, _ = os.path.splitext(os.path.basename(fn))
       if modname in exclude:
