@@ -9,7 +9,7 @@ sequential neural network architectures.
 The main tasks of RETURNN are:
 
     - Network construction, i.e. definition of the computation graph
-    - Dataset loading with predefined and extendable :class:`Dataset` objects
+    - Dataset loading with predefined and extendable :class:`returnn.datasets.Dataset` objects
     - Automatic management of layer outputs (such as tensor axes and time dimensions)
       with a :ref:`Data <data>` object
     - Support of dynamic training schemes that allow for network structure and parameter changes during training
@@ -39,7 +39,7 @@ Many components are implemented separately for both Theano and TensorFlow:
   For TensorFlow the engine contains the high level methods for training, forward pass, and other
   executed tasks. It keeps track of the network, devices, models and the updater function, and is the main connection
   between all these components. :mod:`returnn.tf.engine` also contains
-  the :class:`Runner` which is responsible for
+  the :class:`returnn.tf.engine.Runner` which is responsible for
   managing the TensorFlow session.
 - Network topology construction which constructs the computation graph
   for training or just forwarding.
@@ -79,13 +79,13 @@ Execution guide
 - :py:func:`returnn.__main__.main` will parse command line arguments and read in a config.
 - Then logging :mod:`Log` is initialized, based on verbosity and other settings.
 - Then it initializes the datasets (``train``, ``dev``, ``eval`` in config),
-  i.e. :py:class:`Dataset` instances.
-- Theano-only: :py:class:`Device` instances.
-- The engine, i.e. a :py:class:`Engine` instance.
+  i.e. :py:class:`returnn.datasets.Dataset` instances.
+- Theano-only: :py:class:`returnn.theano.device.Device` instances.
+- The engine, i.e. a :py:class:`returnn.tf.engine.Engine` instance.
 - Depending on the ``task`` option, some engine initialization
   which also initializes the network computation graph, :ref:`tech_net_construct`.
 - Then, depending on the ``task`` option, it might start ``engine.train``, ``engine.forward`` etc.
-  (:py:func:`Engine.train`), :ref:`tech_engine_train`.
+  (:py:func:`returnn.tf.engine.Engine.train`), :ref:`tech_engine_train`.
 
 
 Network Construction
@@ -124,7 +124,7 @@ Here is a 2 layer unidirectional LSTM network:
         "output": {"class": "softmax", "loss": "ce", "from": ["lstm2"]}
     }
 
-In TensorFlow, that would use the layer class :py:class:`TFNetworkRecLayer.RecLayer`
+In TensorFlow, that would use the layer class :py:class:`returnn.tf.layers.rec.RecLayer`
 which will handle the argument ``unit``.
 
 

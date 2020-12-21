@@ -1,6 +1,8 @@
 
 """
 Provides :class:`Data`, :class:`DimensionTag`, :class:`SearchBeam`.
+
+See :ref:`data` for some higher-level description.
 """
 
 from __future__ import print_function, division
@@ -299,7 +301,7 @@ class SearchBeam:
   Represents info about the beam from some beam search (e.g. via :func:`beam_search`),
   e.g. such as the beam size, but also the dependencies.
   This is somewhat parallel to :class:`SearchChoices`, but simpler,
-  and independent from the layers/network (:class:`LayerBase`).
+  and independent from the layers/network (:class:`returnn.tf.layers.base.LayerBase`).
   """
 
   def __init__(self, beam_size, dependency=NotSpecified, name=None, _next_frame=None):
@@ -442,6 +444,8 @@ class Data(object):
   whether we should consider it sparse data (i.e. it represents indices).
   This is used in TFNetwork to describe the dataset external data
   as well as in every layer's output.
+
+  See :ref:`data`.
   """
 
   size_dtype = "int32"
