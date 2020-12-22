@@ -131,8 +131,10 @@ network
     See :ref:`api` or the code itself for documentation of the arguments for each layer class type.
     The ``rec`` layer class in particular supports a wide range of arguments, and several units which can be used,
     e.g. you can choose between different LSTM implementations, or GRU, or standard RNN, etc.
-    See :class:`returnn.tf.layers.rec.RecLayer` or :class:`NetworkRecurrentLayer.RecurrentUnitLayer`.
+    See :class:`returnn.tf.layers.rec.RecLayer` or :class:`returnn.theano.layers.rec.RecurrentUnitLayer`.
     See also :ref:`tf_lstm_benchmark`.
+
+    See :ref:`network` for more on how to define the network, and losses.
 
 batch_size
     The total number of frames. A mini-batch has at least a time-dimension
@@ -173,3 +175,4 @@ Please See the code for some usage.
 
 See :ref:`tech_overview` for more details and an overview how it all works.
 
+See :ref:`training` for more about training.

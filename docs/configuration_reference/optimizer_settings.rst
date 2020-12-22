@@ -1,4 +1,5 @@
 .. _optimizer_settings:
+.. _learning_rate_scheduling_settings:
 
 ==================
 Optimizer Settings
@@ -13,7 +14,7 @@ Optimizer Settings
 
     The learning rate control scheme is set with ``learning_rate_control``,
     and many possible settings are available for the different control schemes.
-    For the default values have a look at `LearningRateControl.py <https://github.com/rwth-i6/returnn/blob/master/LearningRateControl.py>`_.
+    For the default values have a look at :mod:`returnn.learning_rate_control`.
 
 .. warning::
     RETURNN will override the optimizer epsilon with 1e-16 if not specified otherwise, this can lead to unwanted
@@ -24,7 +25,7 @@ accum_grad_multiple_step
     An integer specifying the number of updates to stack the gradient, called "gradient accumulation".
 
 gradient_clip
-    Specifiy a gradient clipping threshold.
+    Specify a gradient clipping threshold.
 
 gradient_noise
     Apply a (gaussian?) noise to the gradient with given deviation (variance? stddev?)

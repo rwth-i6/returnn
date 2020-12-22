@@ -14,8 +14,8 @@ the kwargs for the specific layer class. E.g.:
 .. code-block:: python
 
     network = {
-        "fw1": {"class": "linear", "activation": "relu", "dropout": 0.1, "n_out": 500, "from": ["data"]},
-        "fw2": {"class": "linear", "activation": "relu", "dropout": 0.1, "n_out": 500, "from": ["fw1"]},
+        "fw1": {"class": "linear", "activation": "relu", "dropout": 0.1, "n_out": 500, "from": "data"},
+        "fw2": {"class": "linear", "activation": "relu", "dropout": 0.1, "n_out": 500, "from": "fw1"},
         "output": {"class": "softmax", "loss": "ce", "from": ["fw2"], "target": "classes"}
     }
 

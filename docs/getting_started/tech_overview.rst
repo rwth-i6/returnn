@@ -108,13 +108,14 @@ the kwargs for the specific layer class. E.g.:
 .. code-block:: python
 
     network = {
-        "fw1": {"class": "linear", "activation": "relu", "dropout": 0.1, "n_out": 500},
-        "fw2": {"class": "linear", "activation": "relu", "dropout": 0.1, "n_out": 500, "from": ["fw1"]},
-        "output": {"class": "softmax", "loss": "ce", "from": ["fw2"]}
+        "fw1": {"class": "linear", "activation": "relu", "dropout": 0.1, "n_out": 500, "from": "data"},
+        "fw2": {"class": "linear", "activation": "relu", "dropout": 0.1, "n_out": 500, "from": "fw1"},
+        "output": {"class": "softmax", "loss": "ce", "from": "fw2"}
     }
 
 The ``"class"`` key will get extracted from the layer arguments and the specific layer class will be used.
-For Theano, the base layer class is :py:class:`NetworkBaseLayer.Container` and :py:class:`NetworkBaseLayer.Layer`;
+For Theano, the base layer class is
+:py:class:`returnn.theano.layers.base.Container` and :py:class:`returnn.theano.layers.base.Layer`;
 for TensorFlow, it is :py:class:`returnn.tf.layers.base.LayerBase`.
 E.g. that would use the :py:class:`returnn.tf.layers.basic.LinearLayer` class,
 and the ``LinearLayer.__init__`` will accepts arguments like ``activation``.
@@ -178,3 +179,4 @@ See the code for more details, i.e. :mod:`returnn.theano.engine`,
 :mod:`returnn.theano.engine_task` for Theano
 and :mod:`returnn.tf.engine` for TensorFlow.
 
+See :ref:`training` for an overview of relevant training aspects.

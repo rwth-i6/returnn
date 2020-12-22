@@ -81,6 +81,7 @@ Some recent development changelog can be seen `here <https://github.com/rwth-i6/
     getting_started/tech_overview.rst
     getting_started/data.rst
     getting_started/recurrency.rst
+    getting_started/training.rst
     getting_started/native_ops.rst
     getting_started/installation.rst
     getting_started/basic_usage.rst

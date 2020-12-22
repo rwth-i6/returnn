@@ -1397,9 +1397,9 @@ class LinearLayer(_ConcatInputLayer):
     :param str|None activation: e.g. "relu", or None
     :param bool with_bias:
     :param float|None grad_filter: if grad norm is higher than this threshold (before activation), the grad is removed
-    :param str forward_weights_init: see :func:`TFUtil.get_initializer`
-    :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
-    :param str|float bias_init: see :func:`TFUtil.get_initializer`
+    :param str forward_weights_init: see :func:`returnn.tf.util.basic.get_initializer`
+    :param str recurrent_weights_init: see :func:`returnn.tf.util.basic.get_initializer`
+    :param str|float bias_init: see :func:`returnn.tf.util.basic.get_initializer`
     :param bool use_transposed_weights: If True, define the weight matrix with transposed dimensions (n_out, n_in).
     """
     super(LinearLayer, self).__init__(**kwargs)
