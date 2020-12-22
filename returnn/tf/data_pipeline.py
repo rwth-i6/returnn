@@ -82,7 +82,9 @@ Also the chunk shuffling is more difficult to implement and would be slower comp
 Implementation via new tf.dataset API
 -------------------------------------
 
-This is planned, but not yet started.
+Define ``def dataset_pipeline(context: InputContext) -> tf.data.Dataset``
+in your config.
+See :class:`DatasetDataProvider`.
 
 
 Some use case

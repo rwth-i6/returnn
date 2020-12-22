@@ -22,13 +22,31 @@ and `delay_sample_update=True`.
 
 ## 2020-08-03: New code structure ([discussion](https://github.com/rwth-i6/returnn/issues/162))
 
+`TFEngine` (or `returnn.TFEngine`) becomes `returnn.tf.engine`, etc.
+
 ## 2020-06-30: New generic training pipeline / extended custom pretraining ([discussion](https://github.com/rwth-i6/returnn/issues/311))
+
+Define `def get_network(epoch: int, **kwargs): ...` in your config,
+as an alternative to `pretrain` with custom `construction_algo` and `network`.
+Otherwise this is pretty similar in behavior
+(with all similar features, such as `#config` overwrites, dataset overwrites, etc),
+but not treated as "pretraining",
+but used always.
 
 ## 2020-06-12: TensorFlow 2 support ([discussion](https://github.com/rwth-i6/returnn/issues/283))
 
+Configs basically should "just work".
+We recommend everyone to use TF2 now.
+
 ## 2020-06-10: Distributed TensorFlow support ([discussion](https://github.com/rwth-i6/returnn/issues/296), [wiki](https://github.com/rwth-i6/returnn/wiki/Distributed-TensorFlow))
 
+See [`returnn.tf.distributed`](https://returnn.readthedocs.io/en/latest/api/tf.distributed.html).
+
 ## 2020-06-05: New TF dataset pipeline via `tf.dataset` ([discussion](https://github.com/rwth-i6/returnn/issues/292))
+
+Define `def dataset_pipeline(context: InputContext) -> tf.data.Dataset`
+in your config.
+See [`returnn.tf.data_pipeline`](https://returnn.readthedocs.io/en/latest/api/tf.data_pipeline.html).
 
 ## 2019-08-20: Pretrain `#config` can overwrite datasets (`train`, `dev`, `eval`)
 
