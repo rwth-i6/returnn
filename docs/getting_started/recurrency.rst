@@ -59,3 +59,48 @@ i.e. outside of the loop.
 
 All layers are implemented in a way that they perform the same mathematical calculation
 whether they are inside the loop or outside.
+
+Example:
+
+.. code-block:: python
+
+    network = {
+        "input": {"class": "rec", "unit": "nativelstm2", "n_out": 20},  # encoder
+        "input_last": {"class": "get_last_hidden_state", "from": "input", "n_out":40},
+
+        "output": {"class": "rec", "from": [], "target": "classes", "unit": {  # decoder
+            "embed": {"class":"linear", "activation":None, "from":"output", "n_out":10},
+            "s": {"class": "rec", "unit": "nativelstm2", "n_out": 20, "from": "prev:embed", "initial_state": "base:input_last"},
+            "p": {"class":"softmax", "from":"s", "target": "classes", "loss": "ce"},
+            "output": {"class":"choice", "from":"p", "target":"classes", "beam_size":8}
+        }}
+    }
+
+In this example, in training:
+
+- ``output`` is using the ground truth values, i.e. independent of anything in the loop, and can be moved out.
+- ``embed`` depends on ``output``, which is moved out, so it can also be calculated outside the loop.
+- ``s`` depends on ``embed``, which is moved out, so it can also be calculated outside the loop.
+  Note that ``s`` has some internal state, and in fact needs to be calculated recurrently.
+  But because it can be calculated independently from the loop, it can make use of **very efficient** kernels:
+  In this case, it uses our ``NativeLstm2`` implementation.
+- ``p`` depends on ``s``, and its loss calculation depends on the ground truth values,
+  so it also can be calculated outside.
+  This will result in a **very efficient** and parallel ``tf.matmul``.
+
+With search enabled, in recognition:
+
+``output`` depends on the probability distribution ``p``.
+Effectively nothing can be moved out, because everything depends on each other.
+This is still **as efficient as it possible can be**.
+The ``output`` :class:`returnn.tf.layers.rec.ChoiceLayer` will use ``tf.nn.top_k`` internally.
+
+This example also shows how one single definition of the network
+can be used for both training and recognition,
+and in a **very efficient** way.
+
+Consider the `Transformer <https://arxiv.org/abs/1706.03762>`__ as another example.
+The Transformer can be defined in a similar straight-forward way,
+using ``output`` for the output labels with :class:`returnn.tf.layers.rec.ChoiceLayer`.
+In training, it will result naturally in the standard fully parallel training.
+In decoding, it is also as efficient as it possible can be.
