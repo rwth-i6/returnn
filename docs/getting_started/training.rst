@@ -128,6 +128,9 @@ Batching and dataset shuffling
 
 See :ref:`configuration_training`.
 
+See :ref:`dataset` about how the dataset is loaded,
+and how you can implement your own custom dataset.
+
 
 .. _pretraining:
 
