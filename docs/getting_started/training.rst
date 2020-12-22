@@ -5,6 +5,7 @@ Training
 ========
 
 This is a summary and overview of all relevant training aspects.
+See also :ref:`configuration_training`.
 
 
 .. _training_loss:
@@ -37,7 +38,7 @@ Regularization
 
 * Extra loss terms
 
-  * L2
+  * L2 (can be added to layer options, see :class:`returnn.tf.layers.base.LayerBase`)
   * Other auxiliary losses (supervised or unsupervised)
 
 * Model variations
@@ -62,9 +63,10 @@ The default is stochastic gradient descent (SGD),
 but Adam is also very common.
 
 See :ref:`optimizer` and :ref:`optimizer_settings` for more.
+E.g. ``optimizer = "adam"`` in your config.
 
 Also very relevant is the learning rate,
-and also the learning rate scheduling (see :ref:`lr_scheduling`).
+and also the learning rate scheduling (see :ref:`training_lr_scheduling`).
 
 
 .. _training_param_init:
@@ -94,6 +96,10 @@ Common features:
   * Exponentially or inverse square root, or other variation
   * With constant rate, or depending on cross-validation score (sometimes called "Newbob")
 
+* Reset learning rate on certain epochs, or increase again
+
+Set ``learning_rate_control`` in your config.
+Predefine certain learning rates (``learning_rates`` in config) for resets or warmup.
 See :ref:`learning_rate_scheduling_settings`.
 
 

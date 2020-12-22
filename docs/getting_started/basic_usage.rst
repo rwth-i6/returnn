@@ -59,7 +59,7 @@ train / dev / eval
     ``train`` and ``dev`` are used during training, while ``eval`` is usually used to define the dataset for the
     ``forward`` or ``search`` task.
 
-    Beside passing the constructor parameters to the specficic Dataset, there are some common parameters such as:
+    Beside passing the constructor parameters to the specific Dataset, there are some common parameters such as:
 
     ``seq_ordering``: This defines the order of the sequences provided by the dataset.
     Possible values are:
@@ -75,6 +75,8 @@ train / dev / eval
 
     Note that not all sequence order modes are available for all datasets,
     and some datasets may provide additional modes.
+
+    See also :ref:`dataset`.
 
 extern_data
     Defines the source/target dimensions of the data as a dictionary of dictionaries describing data streams.
@@ -172,6 +174,8 @@ As the reference is still incomplete, please watch out for additional parameters
 All configuration params can also be passed as command line parameters.
 The generic form is ``++param value``, but more options are available.
 Please See the code for some usage.
+
+See also :ref:`general_settings`.
 
 See :ref:`tech_overview` for more details and an overview how it all works.
 

@@ -24,6 +24,9 @@ I.e. specifically you would define your output labels as stochastic variables,
 and their probability distribution.
 The automatic optimization will make this efficient for the case of training.
 
+Also see :ref:`recurrent_subnet`
+for more about the usage of the :class:`returnn.tf.layers.rec.RecLayer`.
+
 
 .. _recurrency_stochastic_vars:
 
@@ -50,6 +53,9 @@ see :ref:`min_exp_risk_training`.
 
 For details on how beam search is implemented,
 see :ref:`search`.
+
+For details about how to use it for recognition or generation,
+see :ref:`generation_search`.
 
 
 .. _recurrency_automatic_optimization:
