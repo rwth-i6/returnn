@@ -1132,6 +1132,7 @@ class LayerBase(object):
                  delay_sample_update=False,
                  param_version=0,
                  gamma=None, beta=None,
+                 gamma_init=1.0, beta_init=0.0,
                  masked_time=True):
     """
     :param Data data:
@@ -1148,6 +1149,8 @@ class LayerBase(object):
     :param tf.Tensor sample_variance:
     :param tf.Tensor gamma:
     :param tf.Tensor beta:
+    :param str|float gamma_init: see :func:`TFUtil.get_initializer`, for the scale
+    :param str|float beta_init: see :func:`TFUtil.get_initializer`, for the mean
     :param bool masked_time: flatten and mask input tensor
     :rtype: tf.Tensor
 
@@ -1227,16 +1230,22 @@ class LayerBase(object):
       if use_std:
         if gamma is None:
           with self.var_creation_scope():
+            from returnn.tf.util.basic import get_initializer
+            gamma_initializer = get_initializer(
+              gamma_init, seed=self.network.random.randint(2 ** 31) if gamma_init else 0, eval_local_ns={"layer": self})
             gamma = self.add_param(tf_compat.v1.get_variable(
-              shape=data.get_bc_spatial_batch_shape(), initializer=tf_compat.v1.ones_initializer(),
+              shape=data.get_bc_spatial_batch_shape(), initializer=gamma_initializer,
               name="%sgamma" % param_name_prefix,
               trainable=True))
         bn *= gamma
       if use_shift:
         if beta is None:
           with self.var_creation_scope():
+            from returnn.tf.util.basic import get_initializer
+            beta_initializer = get_initializer(
+              beta_init, seed=self.network.random.randint(2 ** 31) if beta_init else 0, eval_local_ns={"layer": self})
             beta = self.add_param(tf_compat.v1.get_variable(
-              shape=data.get_bc_spatial_batch_shape(), initializer=tf_compat.v1.zeros_initializer(),
+              shape=data.get_bc_spatial_batch_shape(), initializer=beta_initializer,
               name="%sbeta" % param_name_prefix,
               trainable=True))
         bn += beta
