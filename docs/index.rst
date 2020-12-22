@@ -97,6 +97,7 @@ Some recent development changelog can be seen `here <https://github.com/rwth-i6/
     user_guide/network.rst
     user_guide/dataset.rst
     user_guide/recurrent_subnet.rst
+    user_guide/extending_returnn.rst
 
 
 .. toctree::

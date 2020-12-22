@@ -37,7 +37,7 @@ About new features:
    then let's discuss how to extend or generalize RETURNN
    such that RETURNN becomes generic enough for this,
    such that you do not need to modify RETURNN.)
-* Write them in a generic way, that is easily composeable,
+* Write them in a generic way, that is easily composable,
   and reflects a core atomic functionality or concept,
   and not too much at once.
   The (class/function/layer/whatever) name should reflect
@@ -51,7 +51,7 @@ About new features:
   If you read a config, see `"class": "linear"`,
   it should be clear just from reading the config what is happening there,
   without needing to look up the RETURNN documentation or code
-  (assuming a certain minimal amount of familarity with RETURNN).
+  (assuming a certain minimal amount of familiarity with RETURNN).
   Functions/classes/layers should ideally have not much arguments, as a consequence of this.
   (If you keep adding options to your class, then you likely have not followed this principle
    of simplicity, and your class does too much at once.
@@ -59,7 +59,7 @@ About new features:
 * If this is not going to be used by everyone,
   you (as a user of this part of the code)
   are responsible for this part of the code.
-  This also means that you should have written tests such that other people will not accidently break this.
+  This also means that you should have written tests such that other people will not accidentally break this.
   This is your responsibility.
 * Even if this is work-in-progress, incomplete or experimental,
   directly push this to the master branch
@@ -70,10 +70,10 @@ About new features:
 
 The common process of a change would be like:
 
-* Make sure you read [the documentation](https://returnn.readthedocs.io/en/latest/).
+* Make sure you read [the documentation](https://returnn.readthedocs.io/).
   And also watched the introduction video.
 * If you are new to the project, make a pull request.
-* If you are unsure about some change / extention
+* If you are unsure about some change / extension
   (e.g. how to implement it, or how to fix it),
   talk to some of us first
   (e.g. our internal Slack RETURNN channel, or via mail),

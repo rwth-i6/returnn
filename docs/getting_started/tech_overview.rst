@@ -32,6 +32,9 @@ To get an idea about how it works, it helps to follow roughly the execution path
 starting in :mod:`returnn.__main__`, esp. in :py:func:`returnn.__main__.main`.
 In all cases, the code itself should be checked for details and comments.
 
+If you want to work on the RETURNN code, e.g. for an extension,
+please see :ref:`extending_returnn`.
+
 
 Structure
 ---------
