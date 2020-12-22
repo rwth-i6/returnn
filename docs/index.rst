@@ -87,6 +87,7 @@ Some recent development changelog can be seen `here <https://github.com/rwth-i6/
     getting_started/basic_usage.rst
     getting_started/framework.rst
     getting_started/faq.rst
+    getting_started/recent_development.rst
     getting_started/tf_lstm_benchmark.rst
 
 .. toctree::
