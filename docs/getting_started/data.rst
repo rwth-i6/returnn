@@ -10,10 +10,12 @@ and its axes.
 This is all in the :class:`returnn.tf.util.data.Data` class.
 
 This was introduced with the TF backend in 2016.
+The idea and concept is also explained in the slides of
+`our Interspeech 2020 tutorial about machine learning frameworks including RETURNN <https://www-i6.informatik.rwth-aachen.de/publications/download/1154/Zeyer--2020.pdf>`__.
 
-It is conceptually similar to named tensors / named axes
+It is conceptually similar to *named tensors / named axes*
 in other frameworks,
-but goes much beyond that by having many other meta information
+but goes much beyond that by having lots of other meta information
 about a tensor and its axes.
 Also, an axis name is not simply a string like in other frameworks,
 but a :class:`returnn.tf.util.data.DimensionTag` object.
@@ -22,11 +24,11 @@ Specifically, the information :class:`returnn.tf.util.data.Data` covers:
 
 * **Shape**
 
-    - Dimension tags for each axis (:class:`returnn.tf.util.data.DimensionTag`)
-    - Specific handling of batch axis
-    - Default spatial/time axis
-    - Default feature axis
-    - Shape itself
+  * Dimension tags for each axis (:class:`returnn.tf.util.data.DimensionTag`)
+  * Specific handling of batch axis
+  * Default spatial/time axis
+  * Default feature axis
+  * Shape itself
 
 * **Sequence lengths**
   (tensor of shape [Batch]) for each variable-length axis
@@ -38,8 +40,8 @@ Specifically, the information :class:`returnn.tf.util.data.Data` covers:
   i.e. data represents class indices
   (implies ``int`` data type)
 
-    - Number of classes
-    - Vocabulary for classes
+  * Number of classes
+  * Vocabulary for classes
 
 * **Beam search** information (beam scores, beam source indices for traceback)
   (:class:`returnn.tf.util.data.SearchBeam`)
@@ -57,9 +59,9 @@ Layers are flexible w.r.t. the input format:
 
 * A layer potentially changes the order of axes for efficiency.
 
-    - [Time,Batch,Feature] is more efficient for RNNs
-    - [Batch,Feature,Time] is more efficient for CNNs
-    - [Batch,Time,Feature] is the default
+  * [Time,Batch,Feature] is more efficient for RNNs
+  * [Batch,Feature,Time] is more efficient for CNNs
+  * [Batch,Time,Feature] is the default
 
 
 Example usages
@@ -84,6 +86,12 @@ Or:
 
 This would use the dimension tag called "encoder".
 
+:class:`returnn.tf.layers.basic.ReduceLayer`, example doing max over the encoder time axis:
+
+.. code-block:: python
+
+    "output": {"class": "reduce", "axis": "stag:encoder", "mode": "max", "from": "encoder"}
+
 :class:`returnn.tf.layers.basic.DotLayer`.
 
 
@@ -106,14 +114,14 @@ Current shortcomings
 * There are sometimes cases where layers are dependent on the order of the axis.
   Examples:
 
-    - :class:`returnn.tf.layers.basic.ConvLayer`:
-      The order of the spatial axes matters.
-      You define a kernel shape, and the first entry corresponds to the first spatial axis, etc.
+  * :class:`returnn.tf.layers.basic.ConvLayer`:
+    The order of the spatial axes matters.
+    You define a kernel shape, and the first entry corresponds to the first spatial axis, etc.
 
-    - :class:`returnn.tf.layers.basic.MergeDimsLayer`:
-      The order of the merged axes matters.
-      (Unless you specify the option ``keep_order``, in which cases the input order does not matter,
-      and just the order of what is specified in the config matters.)
+  * :class:`returnn.tf.layers.basic.MergeDimsLayer`:
+    The order of the merged axes matters.
+    (Unless you specify the option ``keep_order``, in which cases the input order does not matter,
+    and just the order of what is specified in the config matters.)
 
 * New dim tags are currently created in the ``__init__`` of a layer,
   but they should be created (uniquely) by ``get_out_data_from_opts``.
