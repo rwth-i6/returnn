@@ -39,7 +39,14 @@ The default behavior is:
 Note that there can be multiple stochastic variables.
 Usually the output classes are one stochastic variable.
 But there can be additional stochastic variables,
+e.g. latent variables,
 e.g. for the segment boundaries or time position in a hard attention model.
+
+For latent variables, you might want to perform search,
+while keeping the output labels fixed to the ground truth ("forced alignment").
+
+You might also want to perform search over the output labels in training,
+see :ref:`min_exp_risk_training`.
 
 For details on how beam search is implemented,
 see :ref:`search`.
@@ -104,3 +111,41 @@ The Transformer can be defined in a similar straight-forward way,
 using ``output`` for the output labels with :class:`returnn.tf.layers.rec.ChoiceLayer`.
 In training, it will result naturally in the standard fully parallel training.
 In decoding, it is also as efficient as it possible can be.
+
+
+.. _min_exp_risk_training:
+
+Min expected risk training
+--------------------------
+
+Also:
+
+* Min expected WER training
+* Max expected BLEU training
+* Reinforcement learning
+
+By default,
+:class:`returnn.tf.layers.rec.ChoiceLayer`
+would return the ground truth in training.
+However, this is flexible.
+In *minimum expected risk training*,
+you want to perform search also in training.
+
+Example for min expected WER training:
+
+.. code-block:: python
+
+    "encoder": ...,
+
+    "output": {"class": "rec", "unit": { ...
+        "output_prob": {"class": "softmax", "from": "readout", "target": "classes"},
+        "output": {"class": "choice", "target": "classes", "beam_size": 4, "from": "output_prob", "initial_output": 0},
+    } ...}, # [T|’time:var:extern_data:classes’,B], int32, dim 1030, beam ’output’, beam size 4
+
+    "min_wer": {
+        "class": "copy",
+        "from": "extra.search:output",  # currently the syntax to enable search
+        "loss": "expected_loss", # expect beam search results with beam scores
+        "target": "classes",
+        "loss_opts": {"loss": {"class": "edit_distance"}, "loss_kind": "error"}
+    }
