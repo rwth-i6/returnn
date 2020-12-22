@@ -1028,7 +1028,7 @@ class GatherLayer(_ConcatInputLayer):
     if position_axis in common_axes_position:
       return common_axes_position.index(position_axis)
     else:
-      num_input_axes_before = min(0, old_gather_axis - len(common_axes_position))
+      num_input_axes_before = max(0, old_gather_axis - len(common_axes_position))
       return len(common_axes_position) + num_input_axes_before + position_axes.index(position_axis)
 
   def get_dep_layers(self):
