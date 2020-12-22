@@ -1392,7 +1392,7 @@ class LinearLayer(_ConcatInputLayer):
   layer_class = "linear"
 
   def __init__(self, activation, with_bias=True, grad_filter=None, forward_weights_init="glorot_uniform",
-               bias_init=0.0, use_transposed_weights=False, **kwargs):
+               bias_init=0.0, use_transposed_weights=False, weights=None, bias=None, **kwargs):
     """
     :param str|None activation: e.g. "relu", or None
     :param bool with_bias:
@@ -1401,6 +1401,8 @@ class LinearLayer(_ConcatInputLayer):
     :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
     :param str|float bias_init: see :func:`TFUtil.get_initializer`
     :param bool use_transposed_weights: If True, define the weight matrix with transposed dimensions (n_out, n_in).
+    :param LayerBase|None weights: if given, will not create an own parameter, but use this as the weights
+    :param LayerBase|None bias: if given, will not create an own parameter, but use this as the bias
     """
     super(LinearLayer, self).__init__(**kwargs)
     from returnn.tf.util.basic import get_initializer
@@ -1415,36 +1417,50 @@ class LinearLayer(_ConcatInputLayer):
     assert n_in and n_out, "%r and %r" % (input_data, self.output)
     in_split_info = self._get_in_split_info()
 
-    with self.var_creation_scope():
-      # Our Theano default: normal distribution, std_dev = sqrt(12. / (fan_in + fan_out))
-      # glorot_normal = variance_scaling_initializer(scale=1.0, mode="fan_avg", distribution="normal")
-      #  -> std_dev = sqrt(2. / (fan_in + fan_out)).
-      #  Or use VarianceScaling(scale=6.0, mode="fan_avg", distribution="normal") to get the same as in Theano.
-      fwd_weights_initializer = get_initializer(
-        forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
+    if weights:
       if self.use_transposed_weights:
-        weights_shape = (n_out, n_in)
+        assert weights.output.batch_shape == (n_out, n_in)
+        weights = tf.transpose(weights.output.placeholder)
       else:
-        weights_shape = (n_in, n_out)
-
-      weights = self.add_param(tf_compat.v1.get_variable(
-        name="W", shape=weights_shape, dtype=tf.float32, initializer=fwd_weights_initializer))
+        assert weights.output.batch_shape == (n_in, n_out)
+        weights = weights.output.placeholder
       weights_ = weights
-      if in_split_info:
-        tf_util.set_param_axes_split_info(
-          weights, [[n_out], in_split_info] if self.use_transposed_weights else [in_split_info, [n_out]])
+    else:
+      with self.var_creation_scope():
+        # Our Theano default: normal distribution, std_dev = sqrt(12. / (fan_in + fan_out))
+        # glorot_normal = variance_scaling_initializer(scale=1.0, mode="fan_avg", distribution="normal")
+        #  -> std_dev = sqrt(2. / (fan_in + fan_out)).
+        #  Or use VarianceScaling(scale=6.0, mode="fan_avg", distribution="normal") to get the same as in Theano.
+        fwd_weights_initializer = get_initializer(
+          forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
+        if self.use_transposed_weights:
+          weights_shape = (n_out, n_in)
+        else:
+          weights_shape = (n_in, n_out)
 
-      if self.use_transposed_weights:
-        weights = tf.transpose(weights)
+        weights = self.add_param(tf_compat.v1.get_variable(
+          name="W", shape=weights_shape, dtype=tf.float32, initializer=fwd_weights_initializer))
+        weights_ = weights
+        if in_split_info:
+          tf_util.set_param_axes_split_info(
+            weights, [[n_out], in_split_info] if self.use_transposed_weights else [in_split_info, [n_out]])
 
-      if self.with_bias:
-        bias_initializer = get_initializer(
-          bias_init, seed=self.network.random.randint(2 ** 31) if bias_init else 0, eval_local_ns={"layer": self})
-        b = self.add_param(tf_compat.v1.get_variable(
-          name="b", shape=(n_out,), dtype=tf.float32, initializer=bias_initializer))
+        if self.use_transposed_weights:
+          weights = tf.transpose(weights)
+
+    if self.with_bias:
+      if bias:
+        b = bias.output.copy_compatible_to(self.output).placeholder
       else:
-        assert not bias_init
-        b = None
+        with self.var_creation_scope():
+          bias_initializer = get_initializer(
+            bias_init, seed=self.network.random.randint(2 ** 31) if bias_init else 0, eval_local_ns={"layer": self})
+          b = self.add_param(tf_compat.v1.get_variable(
+            name="b", shape=(n_out,), dtype=tf.float32, initializer=bias_initializer))
+    else:
+      assert not bias_init
+      assert not bias
+      b = None
 
     with tf.name_scope("linear"):
       from returnn.tf.util.basic import dot, to_int32_64, is_gpu_available_in_session, move_axis
@@ -1533,6 +1549,19 @@ class LinearLayer(_ConcatInputLayer):
         "%s: Warning: input split dims %r unclear for sources %r?" % (self, in_split_info, self.sources), file=log.v3)
       return None
     return in_split_info
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param returnn.tf.network.TFNetwork network:
+    :param get_layer:
+    """
+    super(LinearLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if d.get("weights"):
+      d["weights"] = get_layer(d["weights"])
+    if d.get("bias"):
+      d["bias"] = get_layer(d["bias"])
 
 
 class SoftmaxLayer(LinearLayer):
