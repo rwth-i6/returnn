@@ -6,6 +6,20 @@ or any changes which could potentially break or change the behavior of existing 
 This is intentionally kept short. For a full change log, just see the Git log.
 
 
+## 2020-12-09: New `batch_norm` settings
+
+We did not change the defaults.
+However, we observed that the defaults don't make sense.
+So if you have used `batch_norm` with the defaults before,
+you likely want to redo any such experiments.
+See [here](https://github.com/rwth-i6/pytorch-to-returnn/blob/a209cb6b2d43ae5a6dc46db42101b3c653dad03b/pytorch_to_returnn/torch/nn/modules/batchnorm.py#L97)
+for reasonable defaults.
+Esp you want to set `momentum` to a small number, like 0.1,
+and you probably want `update_sample_only_in_training=True`
+and `delay_sample_update=True`.
+
+## 2020-11-06: [PyTorch-to-RETURNN project](https://github.com/rwth-i6/pytorch-to-returnn)
+
 ## 2020-08-03: New code structure ([discussion](https://github.com/rwth-i6/returnn/issues/162))
 
 ## 2020-06-30: New generic training pipeline / extended custom pretraining ([discussion](https://github.com/rwth-i6/returnn/issues/311))
