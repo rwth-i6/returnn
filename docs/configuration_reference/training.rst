@@ -4,6 +4,8 @@
 Training
 ========
 
+See also :ref:`training` for an overview of the relevant aspects.
+
 batch_size
     An integer defining the batch size in data items (frames, words, subwords, etc.) per batch.
     A mini-batch has at least a time-dimension and a batch-dimension (or sequence-dimension),
@@ -13,7 +15,7 @@ batch_size
 batching
     Defines the default value for ``seq_ordering`` across all datasets.
     It is recommended to not use this parameter,
-    but rather define ``seq_ordering`` explicitely in the datasets for better readability.
+    but rather define ``seq_ordering`` explicitly in the datasets for better readability.
     Possible values are:
 
         - ``default``: Keep the sequences as is
@@ -22,7 +24,8 @@ batching
         - ``random:<seed>``: Shuffle the data with the seed given
         - ``sorted``: Sort by length (only if available), beginning with shortest sequences
         - ``sorted_reverse``: Sort by length, beginning with longest sequences
-        - ``laplace:<n_buckets>``: Sort by length with n laplacian buckets (one bucket means going from shortest to longest and back with 1/n of the data).
+        - ``laplace:<n_buckets>``: Sort by length with n laplacian buckets
+          (one bucket means going from shortest to longest and back with 1/n of the data).
         - ``laplace:.<n_sequences>``: sort by length with n sequences per laplacian bucket.
 
     Note that not all sequence order modes are available for all datasets,
@@ -65,13 +68,4 @@ start_epoch
     An integer or string specifying the epoch to start the training at. The default is 'auto'.
 
 stop_on_nonfinite_train_score
-    If set to ``False``, the training will not be interupted if a single update step has a loss with NaN of Inf
-
-
-
-
-
-
-
-
-
+    If set to ``False``, the training will not be interrupted if a single update step has a loss with NaN of Inf

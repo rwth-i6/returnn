@@ -4,7 +4,8 @@
 Deterministic training
 ======================
 
-There are couple of TF operations which have a non-deterministic GPU implementation (for efficiency reasons), i.e. the result when executed on the GPU is non-deterministic.
+There are couple of TF operations which have a non-deterministic GPU implementation (for efficiency reasons),
+i.e. the result when executed on the GPU is non-deterministic.
 See also `here <https://www.twosigma.com/insights/article/a-workaround-for-non-determinism-in-tensorflow/>`_.
 
 Non-deterministic ops:
@@ -17,7 +18,11 @@ Non-deterministic ops:
 
 E.g. however ``matmul`` is deterministic. From the CUDA doc:
 
-  By design, all CUBLAS API routines from a given toolkit version, generate the same bit-wise results at every run when executed on GPUs with the same architecture and the same number of SMs. However, bit-wise reproducibility is not guaranteed across toolkit version because the implementation might differ due to some implementation changes.
+  By design, all CUBLAS API routines from a given toolkit version,
+  generate the same bit-wise results at every run
+  when executed on GPUs with the same architecture and the same number of SMs.
+  However, bit-wise reproducibility is not guaranteed across toolkit version
+  because the implementation might differ due to some implementation changes.
 
 
 The option ``deterministic_train`` controls whether Returnn should use deterministic ops as far as possible.

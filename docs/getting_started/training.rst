@@ -114,6 +114,21 @@ Not only the learning rate can be scheduled, but many other aspects as well, suc
 * Curriculum learning (i.e. take only an "easy" subset of training data initially, e.g. only the short sequences)
 
 
+Batching and dataset shuffling
+------------------------------
+
+* How to build up individual mini-batches (their size, and the logic for that)
+
+  * Batch size (``batch_size``, ``max_seqs``, ``max_seq_length``)
+  * Chunking (``chunking``)
+
+* How to shuffle the dataset (the sequences), or how to iterate through it
+
+  * E.g. shuffle seqs, and sort buckets (``"laplace"``) to reduce padding
+
+See :ref:`configuration_training`.
+
+
 .. _pretraining:
 
 Pretraining
@@ -168,3 +183,9 @@ Multi-GPU training
 ------------------
 
 See :ref:`multi_gpu`.
+
+
+Deterministic training
+----------------------
+
+See :ref:`deterministic_training`.
