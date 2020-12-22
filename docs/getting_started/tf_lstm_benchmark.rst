@@ -4,7 +4,8 @@
 TensorFlow LSTM Benchmark
 =========================
 
-There are multiple LSTM implementations/kernels available in TensorFlow, and we also have our own kernel.
+There are multiple LSTM implementations/kernels available in TensorFlow, and we also have our own kernel
+(via :ref:`native_ops`).
 In this benchmark, we try to compare the runtime performance during training for each of the kernels.
 We try to measure in a way that it should be generic and not be specific for our Returnn framework.
 You can run this benchmark yourself with `this script <https://github.com/rwth-i6/returnn/blob/master/demos/demo-tf-lstm-benchmark.py>`_.
@@ -40,12 +41,12 @@ you can use these LSTM kernels via the ``unit`` argument:
 * ``NativeLSTM`` (GPU and CPU).
     Uses our own CUDA kernel which can also be compiled on CPU.
     The loop over time is also done via C++ code inside the op ("fused").
-    See :mod:`TFNativeOp`.
+    See :mod:`returnn.native_op`.
 * ``NativeLstm2`` (GPU and CPU).
     Uses our own CUDA kernel which can also be compiled on CPU.
     The loop over time is also done via C++ code inside the op ("fused").
     This should be slightly faster than ``NativeLstm``.
-    See :mod:`TFNativeOp`.
+    See :mod:`returnn.native_op`.
 
 If you just use ``LSTM``, it will currently use ``NativeLSTM`` by default.
 Except of ``NativeLSTM``, all of these kernels are part of the official TensorFlow framework.

@@ -53,7 +53,7 @@ class RecLayer(_ConcatInputLayer):
 
       {
           "class": "rec",
-          "from": ["input"],
+          "from": "input",
           "unit": {
             # Recurrent subnet here, operate on a single time-step:
             "output": {
@@ -76,6 +76,8 @@ class RecLayer(_ConcatInputLayer):
 
   This layer can also be inside another RecLayer. In that case, it behaves similar to :class:`RnnCellLayer`.
   (This support is somewhat incomplete yet. It should work for the native units such as NativeLstm.)
+
+  Also see :ref:`recurrency`.
   """
 
   layer_class = "rec"

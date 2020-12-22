@@ -1,9 +1,15 @@
 
 """
 Generic interface which automatically creates:
-* CPU and GPU op
+
+* CPU and GPU (CUDA) op
 * inplace and not inplace
 * grad variants
+
+See :mod:`returnn.tf.native_op` and :mod:`returnn.theano.native_op`
+for usage in TensorFlow and Theano.
+
+See :ref:`native_ops` for more background.
 """
 
 from __future__ import absolute_import  # fix "import theano" in Python 2
