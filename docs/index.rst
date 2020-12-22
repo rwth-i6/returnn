@@ -15,18 +15,18 @@ The high-level features and goals of RETURNN are:
 
 * **Simplicity**
 
-    – Writing config / code is simple & straight-forward (setting up experiment, defining model)
-    – Debugging in case of problems is simple
-    – Reading config / code is simple (defined model, training, decoding all becomes clear)
+  * Writing config / code is simple & straight-forward (setting up experiment, defining model)
+  * Debugging in case of problems is simple
+  * Reading config / code is simple (defined model, training, decoding all becomes clear)
 
 * **Flexibility**
 
-    – Allow for many different kinds of experiments / models
+  * Allow for many different kinds of experiments / models
 
 * **Efficiency**
 
-    – Training speed
-    – Decoding speed
+  * Training speed
+  * Decoding speed
 
 All items are important for research, decoding speed is esp. important for production.
 
