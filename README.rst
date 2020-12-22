@@ -29,7 +29,7 @@ The high-level features and goals of RETURNN are:
 
 All items are important for research, decoding speed is esp. important for production.
 
-Here are the `slides of the Interspeech 2020 tutorial "Efficient and Flexible Implementation of Machine Learning for ASR and MT" with an introduction of the core concepts <https://www-i6.informatik.rwth-aachen.de/publications/download/1154/Zeyer--2020.pdf>`__.
+See our `slides of the Interspeech 2020 tutorial "Efficient and Flexible Implementation of Machine Learning for ASR and MT" with an introduction of the core concepts <https://www-i6.informatik.rwth-aachen.de/publications/download/1154/Zeyer--2020.pdf>`__.
 
 More specific features include:
 
