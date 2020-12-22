@@ -36,6 +36,11 @@ The default behavior is:
 * In training, it will just return the ground truth values.
 * With search enabled (in recognition), it will do beam search.
 
+Note that there can be multiple stochastic variables.
+Usually the output classes are one stochastic variable.
+But there can be additional stochastic variables,
+e.g. for the segment boundaries or time position in a hard attention model.
+
 For details on how beam search is implemented,
 see :ref:`search`.
 
