@@ -310,7 +310,7 @@ def variable_summaries(var, name=None, with_histogram=False):
     for k, v in variable_scalar_summaries_dict(var, name=name).items():
       tf_compat.v1.summary.scalar(k, v)
     if with_histogram:
-      tf.summary.histogram('%s_histogram' % name, var)
+      tf_compat.v1.summary.histogram('%s_histogram' % name, var)
 
 
 def get_valid_scope_name_from_str(s):
