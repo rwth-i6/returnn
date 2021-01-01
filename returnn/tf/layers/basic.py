@@ -1112,6 +1112,10 @@ class GatherLayer(_ConcatInputLayer):
       assert position_data.feature_dim_axis_or_unspecified is not NotSpecified
       pass  # keep the logic as before
 
+    # If not sparse, the feature dim axis could now originate from position, let Data figure this out
+    if not out_type["sparse"]:
+      out_type["dim"] = NotSpecified
+
     output_data = Data(**out_type)
 
     # Take size_placeholder from input_data if they exist there, otherwise from position_data
