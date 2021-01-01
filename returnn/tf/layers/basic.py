@@ -5320,6 +5320,13 @@ class DotLayer(LayerBase):
     assert not set(b_reduce_axes).intersection(b_var_axes)
     a_rem_axes = [i for i in range(a_out.batch_ndim) if i not in a_var_axes + a_reduce_axes]
     b_rem_axes = [i for i in range(b_out.batch_ndim) if i not in b_var_axes + b_reduce_axes]
+    assert len(a_rem_axes) == len(b_rem_axes)
+
+    # ensure that a_rem_axes and b_rem_axes are in the same order
+    map_a_to_b_rem_axes = b_out.find_matching_dim_map(a_out, a_rem_axes)
+    assert all(b_axis in map_a_to_b_rem_axes.values() for b_axis in b_rem_axes)
+    b_rem_axes = [map_a_to_b_rem_axes[a_axis] for a_axis in a_rem_axes]
+
     a_shape = a_out.batch_shape
     b_shape = b_out.batch_shape
     a_rem_dims = [a_shape[i] for i in a_rem_axes]
