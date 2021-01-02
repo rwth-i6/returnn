@@ -5966,15 +5966,12 @@ class CompareLayer(LayerBase):
     if value is None:
       assert len(self.sources) >= 2, "{} requires at least two elements to compare".format(self)
     op = getattr(tf, kind)  # e.g. tf.equal
-    from returnn.tf.util.basic import swapaxes, opt_logical_and
+    from returnn.tf.util.basic import opt_logical_and
     common_data = Data.get_common_data([s.output for s in self.sources])
     x = self.sources[0].output.copy_compatible_to(common_data).placeholder
-    batch_axis = self.sources[0].output.batch_dim_axis
     r_last = True
     for source in self.sources[1:]:
       x2 = source.output.copy_compatible_to(common_data).placeholder
-      if source.output.batch_dim_axis != batch_axis:
-        x2 = swapaxes(x2, batch_axis, source.output.batch_dim_axis)
       r_last = opt_logical_and(r_last, op(x, x2))
       x = x2
     if value is not None:
