@@ -3615,6 +3615,12 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     if set_sparse is not None:
       assert isinstance(set_sparse, bool)
       out.sparse = set_sparse
+      if not set_sparse:
+        assert set_sparse_dim is NotSpecified
+        if out.feature_dim_axis is None:
+          out.dim = None
+        else:
+          out.dim = out.batch_shape[out.feature_dim_axis]
     if set_sparse_dim is not NotSpecified:
       assert set_sparse_dim is None or isinstance(set_sparse_dim, int)
       out.dim = set_sparse_dim
