@@ -90,6 +90,13 @@ except NameError:  # Python3
 
 def parse_py_statement(line):
     """
+    Parse Python statement into tokens.
+    Note that this is incomplete.
+    It should be simple and fast and just barely enough for what we need here.
+
+    Reference:
+    https://docs.python.org/3/reference/lexical_analysis.html
+
     :param str line:
     :return: yields (type, value)
     :rtype: typing.Iterator[typing.Tuple[str,str]]
@@ -118,7 +125,7 @@ def parse_py_statement(line):
                 yield "op", c
             elif c == "#":
                 state = 6
-            elif c == "\"":
+            elif c == '"':
                 state = 1
             elif c == "'":
                 state = 2
@@ -144,11 +151,17 @@ def parse_py_statement(line):
             else:
                 cur_token += c
         elif state == 3:  # identifier
-            if c in spaces + ops + "#\"'":
+            if c in spaces + ops + "#":
                 yield "id", cur_token
                 cur_token = ""
                 state = 0
                 i -= 1
+            elif c == '"':  # identifier is string prefix
+                cur_token = ""
+                state = 1
+            elif c == "'":  # identifier is string prefix
+                cur_token = ""
+                state = 2
             else:
                 cur_token += c
         elif state == 4:  # escape in "
@@ -377,31 +390,56 @@ def fallback_findfile(filename):
     return alt_fn
 
 
-def is_source_code_missing_open_brackets(source_code):
+def is_source_code_missing_brackets(source_code, prioritize_missing_open=False):
     """
+    We check whether this source code snippet (e.g. one line) is complete/even w.r.t. opening/closing brackets.
+
     :param str source_code:
-    :return: whether this source code snippet (e.g. one line) is complete/even w.r.t. opening/closing brackets
-    :rtype: bool
+    :param bool prioritize_missing_open: once we found any missing open bracket, directly return -1
+    :return: 1 if missing_close, -1 if missing_open, 0 otherwise.
+        I.e. whether there are missing open/close brackets.
+        E.g. this would mean that you might want to include the prev/next source code line as well in the stack trace.
+    :rtype: int
     """
     open_brackets = "[{("
     close_brackets = "]})"
-    last_close_bracket = [-1]  # stack
+    last_bracket = [-1]  # stack
     counters = [0] * len(open_brackets)
-    # Go in reverse order through the tokens.
-    # Thus, we first should see the closing brackets, and then the matching opening brackets.
-    for t_type, t_content in reversed(list(parse_py_statements(source_code))):
+    missing_open = False
+    for t_type, t_content in list(parse_py_statements(source_code)):
         if t_type != "op":
             continue  # we are from now on only interested in ops (including brackets)
         if t_content in open_brackets:
             idx = open_brackets.index(t_content)
-            if last_close_bracket[-1] == idx:  # ignore if we haven't seen the closing one
-                counters[idx] -= 1
-                del last_close_bracket[-1]
+            counters[idx] += 1
+            last_bracket.append(idx)
         elif t_content in close_brackets:
             idx = close_brackets.index(t_content)
-            counters[idx] += 1
-            last_close_bracket += [idx]
-    return not all([c == 0 for c in counters])
+            if last_bracket[-1] == idx:
+                counters[idx] -= 1
+                del last_bracket[-1]
+            else:
+                if prioritize_missing_open:
+                    return -1
+                missing_open = True
+    missing_close = not all([c == 0 for c in counters])
+    if missing_close:
+        return 1
+    if missing_open:
+        return -1
+    return 0
+
+
+def is_source_code_missing_open_brackets(source_code):
+    """
+    We check whether this source code snippet (e.g. one line) is complete/even w.r.t. opening/closing brackets.
+
+    :param str source_code:
+    :return: whether there are missing open brackets.
+        E.g. this would mean that you might want to include the previous source code line as well in the stack trace.
+    :rtype: bool
+    """
+    return is_source_code_missing_brackets(source_code, prioritize_missing_open=True) < 0
 
 
 def get_source_code(filename, lineno, module_globals=None):
@@ -417,11 +455,23 @@ def get_source_code(filename, lineno, module_globals=None):
     source_code = linecache.getline(filename, lineno, module_globals)
     # In case of a multi-line statement, lineno is usually the last line.
     # We are checking for missing open brackets and add earlier code lines.
-    while is_source_code_missing_open_brackets(source_code):
-        if lineno <= 0:
+    start_line = end_line = lineno
+    lines = None
+    while True:
+        missing_bracket_level = is_source_code_missing_brackets(source_code)
+        if missing_bracket_level == 0:
             break
-        lineno -= 1
-        source_code = "".join([linecache.getline(filename, lineno, module_globals), source_code])
+        if not lines:
+            lines = linecache.getlines(filename, module_globals)
+        if missing_bracket_level < 0:  # missing open bracket, add prev line
+            start_line -= 1
+            if start_line < 1:  # 1-indexed
+                break
+        else:
+            end_line += 1
+            if end_line > len(lines):  # 1-indexed
+                break
+        source_code = "".join(lines[start_line - 1:end_line])  # 1-indexed
     return source_code
 
 
@@ -1591,6 +1641,26 @@ def _test_syntax_error():
     assert "^" in line2
     assert "line:" in line3 and "foo" in line3
     assert os.path.basename(filename) in line4
+
+
+def _test_get_source_code_multi_line():
+    dummy_fn = "<_test_multi_line_src>"
+    source_code = "(lambda _x: None)("
+    source_code += "__name__,\n" + len(source_code) * " " + "42)\n"
+    set_linecache(filename=dummy_fn, source=source_code)
+
+    src = get_source_code(filename=dummy_fn, lineno=2)
+    assert src == source_code
+
+    src = get_source_code(filename=dummy_fn, lineno=1)
+    assert src == source_code
+
+
+def _test_parse_py_statement_prefixed_str():
+    # Our parser just ignores the prefix. But that is fine.
+    code = "b'f(1,'"
+    statements = (list(parse_py_statement(code)))
+    assert statements == [("str", "f(1,")]
 
 
 def _test():
