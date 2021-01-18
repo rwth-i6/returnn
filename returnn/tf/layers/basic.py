@@ -3224,7 +3224,7 @@ class ExpandDimsLayer(_ConcatInputLayer):
     axis = axis.lower()
     if axis in ["f", "feature"]:
       assert not data.sparse
-      assert data.feature_dim_axis_or_unspecified is NotSpecified
+      assert data.feature_dim_axis_or_unspecified is NotSpecified or data.feature_dim_axis is None
       return data.batch_ndim
     elif axis in ["spatial", "time", "t"]:
       if data.sparse:
@@ -3250,11 +3250,13 @@ class ExpandDimsLayer(_ConcatInputLayer):
       data = data.copy_as_batch_major()
     axis = cls._get_axis(data=data, axis=axis)
     if axis == data.batch_ndim and not data.sparse:
-      assert data.feature_dim_axis_or_unspecified is NotSpecified
+      assert data.feature_dim_axis_or_unspecified is NotSpecified or data.feature_dim_axis is None
       data.dim = dim
     axis_wo_batch = data.get_batch_axis_excluding_batch(axis)
     data.shape = data.shape[:axis_wo_batch] + (dim,) + data.shape[axis_wo_batch:]
     if isinstance(init_axis, str):
+      if init_axis.lower() in ["feature", "f"] and data.feature_dim_axis is None:
+        data.feature_dim_axis = axis
       if init_axis.lower() in ["spatial", "time", "t"] and data.time_dim_axis is None:
         data.time_dim_axis = axis
     return data
