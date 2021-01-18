@@ -3714,7 +3714,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
     :param LayerBase|None size_base: similar as size_target
-    :param dict[str,int] set_axes:
+    :param dict[str,int|None] set_axes:
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
     :param bool|None set_sparse: if bool, set sparse value to this
@@ -3753,10 +3753,14 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         s = map_axis_name(s)
         if isinstance(i, int):
           assert enforce_batch_major or enforce_time_major, "%r: explicit set_axes %r" % (name, set_axes)
-        i = out.get_axis_from_description(i)
+        if i is not None:
+          i = out.get_axis_from_description(i)
         setattr(out, s, i)
         if s == "feature_dim_axis":
-          out.dim = out.batch_shape[out.feature_dim_axis]
+          if i is None:
+            out.dim = None
+          else:
+            out.dim = out.batch_shape[out.feature_dim_axis]
     if out.size_placeholder is not None and size_base:  # size_placeholder might be None, e.g. via DataNotAvailableLayer
       assert size_base.output.size_placeholder is not None
       assert len(out.size_placeholder) == len(size_base.output.size_placeholder)
