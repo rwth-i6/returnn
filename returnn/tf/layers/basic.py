@@ -2759,34 +2759,80 @@ class SplitDimsLayer(_ConcatInputLayer):
   i.e. the input is (batch, time, window * feature),
   you can set axis="F", dims=(window, -1),
   and you will get the output (batch, time, window, feature).
+
+  If the split axis has a dynamic length,
+  exactly one of the axes that we split into need to also have a dynamic length.
+  You can e.g. use this to split the input dimension into smaller "chunks" of a fixed window size.
+  E.g. you could have input (batch, time, feature) and set axis="T", dims=(-1, window),
+  to get output (batch, split_time, window, feature).
+  In this case, the exact sequence lengths are lost and everything is padded to multiples of the window size using
+  the given padding value.
+  Use :class:`ReinterpretDataLayer` to receive back the original sequence lengths after merging.
+
   Also see :class:`SplitBatchTimeLayer`.
+  Also see :class:`MergeDimsLayer` which can undo this operation.
   """
   layer_class = "split_dims"
 
-  def __init__(self, axis, dims, **kwargs):
+  def __init__(self, axis, dims, pad_to_multiples=None, pad_value=0, **kwargs):
     """
     :param str axis: e.g. "F"
     :param tuple[int]|list[int] dims: what the axis should be split into. e.g. (window, -1)
+    :param bool|None pad_to_multiples: If true, input will be padded to the next multiple of the product of the
+      static dims, such that splitting is actually possible.
+      By default this is done iff the axis has a dynamic size
+    :param int|float pad_value: What pad value to use for pad_to_multiples
     """
     super(SplitDimsLayer, self).__init__(**kwargs)
     data = self.input_data
     if isinstance(axis, int):
       data = data.copy_as_batch_major()
+    axis = data.get_axis_from_description(axis)
+    if pad_to_multiples is None:
+      pad_to_multiples = data.is_axis_dynamic(axis)
+
     from returnn.tf.util.basic import get_shape
     old_shape = get_shape(data.placeholder)
-    axis = data.get_axis_from_description(axis)
     new_shape = old_shape[:axis] + list(dims) + old_shape[axis + 1:]
     assert len(new_shape) == len(self.output.batch_shape)
     for i in range(len(new_shape)):
       if new_shape[i] == -1 and self.output.batch_shape[i] is not None:
         new_shape[i] = self.output.batch_shape[i]
+
+    import numpy
+    new_pos_dims = [d for d in dims if d > 0]
+    constant_size = int(numpy.prod(new_pos_dims))
+    assert not data.is_axis_dynamic(axis) or pad_to_multiples or constant_size == 1
+    if pad_to_multiples and constant_size != 1:
+      assert len([d for d in dims if d == -1]) == 1
+      old_size = old_shape[axis]
+      pad_size = (-old_size) % constant_size
+
+      paddings = [(0, 0)] * axis + [(0, pad_size)] + [(0, 0)] * (data.batch_ndim - axis - 1)
+      data.placeholder = tf.pad(data.placeholder, paddings=paddings, constant_values=pad_value)
+
+      axis_wo_batch = data.get_batch_axis_excluding_batch(axis + dims.index(-1))
+      if axis_wo_batch in data.size_placeholder:
+        # When there is support for this, this should already be created in get_out_data_from_opts
+        # Note: currently get_out_data_from_opts already sets data.size_placeholder[axis_wo_batch] to the input size
+        # (meaning we do not need to transform the axis here)
+        dyn_size = -(-data.size_placeholder[axis_wo_batch] // constant_size)  # == ceildiv(size, constant_size)
+        self.output.size_placeholder[axis_wo_batch] = dyn_size
+        from returnn.tf.util.data import DimensionTag
+        if not DimensionTag.get_tag_from_size_tensor(dyn_size):
+          tag = DimensionTag(
+            description="split-time:%i:%s" % (axis, self.get_absolute_name()),
+            kind=DimensionTag.Types.Spatial)
+          tag.set_tag_on_size_tensor(dyn_size)
+
     self.output.placeholder = tf.reshape(data.placeholder, shape=new_shape)
 
   @classmethod
-  def _resolve_dims(cls, old_dim, new_dims):
+  def _resolve_dims(cls, old_dim, new_dims, pad_to_multiples=False):
     """
     :param int old_dim:
     :param tuple[int]|list[int] new_dims:
+    :param bool|None pad_to_multiples:
     :return: new_dims with -1 resolved
     :rtype: tuple[int]
     """
@@ -2794,10 +2840,12 @@ class SplitDimsLayer(_ConcatInputLayer):
     if all([d > 0 for d in new_dims]):
       new_dims_resolved = new_dims
     else:
-      assert all([d != 0 or d == -1 or d > 0 for d in new_dims])
+      assert all([d != 0 and (d == -1 or d > 0) for d in new_dims])
       assert len([d for d in new_dims if d == -1]) == 1
       new_pos_dims = [d for d in new_dims if d > 0]
       n = int(numpy.prod(new_pos_dims))
+      if pad_to_multiples:
+        old_dim += (-old_dim) % n
       assert old_dim % n == 0
       rem = old_dim // n
       new_dims_resolved = [(d if (d > 0) else rem) for d in new_dims]
@@ -2818,29 +2866,35 @@ class SplitDimsLayer(_ConcatInputLayer):
     if old_axis > split_axis:
       return old_axis + len(dims) - 1
     if -1 in dims:
-      assert dims.count(-1) == 1 and all([d in {-1, 1} for d in dims])
+      assert dims.count(-1) == 1
       return old_axis + dims.index(-1)
     assert not require_exact
     return old_axis
 
   @classmethod
-  def get_out_data_from_opts(cls, name, axis, dims, sources=(), **kwargs):
+  def get_out_data_from_opts(cls, name, axis, dims, pad_to_multiples=None, sources=(), **kwargs):
     """
     :param str name:
     :param str|int axis:
     :param tuple[int] dims:
+    :param bool|None pad_to_multiples:
     :param list[LayerBase] sources:
     :rtype: Data
     """
-    data = get_concat_sources_data_template(sources)
-    data.name = "%s_output" % name
+    input_data = get_concat_sources_data_template(sources)
+    data = input_data.copy("%s_output" % name)
     if isinstance(axis, int):
       data = data.copy_as_batch_major()
     axis = data.get_axis_from_description(axis)
+    if pad_to_multiples is None:
+      pad_to_multiples = data.is_axis_dynamic(axis)
+
     if data.batch_shape[axis] is not None:
-      resolved_shape_dims = cls._resolve_dims(old_dim=data.batch_shape[axis], new_dims=dims)
+      resolved_shape_dims = cls._resolve_dims(
+        old_dim=data.batch_shape[axis], new_dims=dims, pad_to_multiples=pad_to_multiples)
     else:
       resolved_shape_dims = tuple([(d if (d >= 0) else None) for d in dims])
+
     if axis != data.batch_dim_axis:
       axis_wb = data.get_batch_axis_excluding_batch(axis)
       data.shape = data.shape[:axis_wb] + resolved_shape_dims + data.shape[axis_wb + 1:]
@@ -2852,8 +2906,10 @@ class SplitDimsLayer(_ConcatInputLayer):
       new_batch_axis = data.batch_dim_axis + [d == -1 for d in dims].index(True)
       data.batch_dim_axis = new_batch_axis
       data.shape = new_batch_shape[:new_batch_axis] + new_batch_shape[new_batch_axis + 1:]
+
     if data.time_dim_axis is not None:
       data.time_dim_axis = cls._map_old_axis_to_new_axis(split_axis=axis, dims=dims, old_axis=data.time_dim_axis)
+
     if data.feature_dim_axis is None and not data.sparse and any([d > 0 for d in dims]):
       # We want to have the last index where dims[index] > 0.
       i = len(dims) - list(reversed([d > 0 for d in dims])).index(True) - 1
@@ -2864,11 +2920,14 @@ class SplitDimsLayer(_ConcatInputLayer):
         data.feature_dim_axis = new_feature_dim_axis
     if data.feature_dim_axis is not None:
       data.dim = data.batch_shape[data.feature_dim_axis]
+
+    # Use input_data.get_batch_axis(..) as batch_dim_axis of data might have changed by now
     data.size_placeholder = {
       data.get_batch_axis_excluding_batch(
         cls._map_old_axis_to_new_axis(
-          split_axis=axis, dims=dims, old_axis=data.get_batch_axis(i))): v
-      for (i, v) in data.size_placeholder.items()}
+          split_axis=axis, dims=dims, old_axis=input_data.get_batch_axis(i))): v
+      for (i, v) in input_data.size_placeholder.items()}
+
     return data
 
 

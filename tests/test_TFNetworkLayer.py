@@ -1131,6 +1131,13 @@ def test_SplitDimsLayer_resolve_dims():
   assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, 3, -1)), (2, 3, 5))
   assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, 3, -1, 1)), (2, 3, 5, 1))
 
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, -1), pad_to_multiples=True), (3, 5))
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5 + 1, new_dims=(3, -1), pad_to_multiples=True), (3, 6))
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, 3, -1), pad_to_multiples=True), (2, 3, 5))
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, 3, -1, 1), pad_to_multiples=True), (2, 3, 5, 1))
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5 + 2, new_dims=(2, 3, -1), pad_to_multiples=True), (2, 3, 6))
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5 + 2, new_dims=(2, 3, -1, 1), pad_to_multiples=True), (2, 3, 6, 1))
+
 
 def _check_MergeDimsLayer(session, in_data_opts, in_static_shape, opts, out_data_shape, out_static_shape,
                           in_sizes=None, out_sizes=None):
