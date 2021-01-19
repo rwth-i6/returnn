@@ -5765,10 +5765,11 @@ class CombineLayer(LayerBase):
     self.output.placeholder = x
 
   @classmethod
-  def get_out_data_from_opts(cls, n_out=NotSpecified, out_type=None, sources=(), **kwargs):
+  def get_out_data_from_opts(cls, eval_locals=None, n_out=NotSpecified, out_type=None, sources=(), **kwargs):
     """
+    :param dict[str]|None eval_locals: locals for eval, will also pass to out_type is out_type is a function
     :param int|None|NotSpecified n_out:
-    :param dict[str]|None out_type:
+    :param dict[str]|None|(()->Data) out_type:
     :param list[LayerBase] sources:
     :rtype: Data
     """
@@ -5782,7 +5783,15 @@ class CombineLayer(LayerBase):
       if isinstance(out_type, dict):
         out_type_.update(out_type)
       elif callable(out_type):
-        out_type_ = out_type  # just overwrite
+        def call_out_type_with_eval_locals(**out_type_kwargs):
+          """
+          :param out_type_kwargs:
+          :rtype: Data
+          """
+          out_type_kwargs = out_type_kwargs.copy()
+          out_type_kwargs.update(eval_locals or {})
+          return out_type(**out_type_kwargs)
+        out_type_ = call_out_type_with_eval_locals
       else:
         raise TypeError("unexpected type of out_type %r" % (out_type,))
     return super(CombineLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type_, sources=sources, **kwargs)
