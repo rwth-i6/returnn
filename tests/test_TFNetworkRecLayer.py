@@ -3385,8 +3385,8 @@ def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, sha
     assert_equal(set(net1_subnet.input_layers_moved_out), set())
     assert_equal(set(net2_subnet.input_layers_moved_out), set())
     assert_equal(set(net1_subnet.output_layers_moved_out), set())
-    # output_layers_moved_out will contain sublayers if present
-    output_root_layers_moved_out = [name for name in net2_subnet.output_layers_moved_out if '/' not in name]
+    # output_layers_moved_out will contain sublayers and ':i' etc if present
+    output_root_layers_moved_out = [name for name in net2_subnet.output_layers_moved_out if '/' not in name and ':' not in name]
     assert_equal(set(output_root_layers_moved_out), {"output"}.union(set(other_subnet_layers or [])))
     assert_equal([
       v.name.split("/")[1:] for v in net1.get_params_list()], [v.name.split("/")[1:] for v in net2.get_params_list()])
