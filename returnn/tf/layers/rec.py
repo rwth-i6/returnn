@@ -3736,7 +3736,7 @@ class RecStepInfoLayer(LayerBase):
     """
     # Check for the normal case first. If we don't have a parent rec layer, also fallback to this (e.g. debugging).
     if network.is_inside_rec_layer() or not isinstance(network.parent_layer, RecLayer):
-      return Data(name="i", shape=(), batch_dim_axis=None, dtype="int32", sparse=False)
+      return Data(name="i", shape=(), batch_dim_axis=None, feature_dim_axis=None, dtype="int32", sparse=False)
     # This only is valid if we are moved out from a RecLayer.
     assert isinstance(network.parent_layer, RecLayer)
     # We need to get the time-dim and seq lens.
@@ -3745,8 +3745,8 @@ class RecStepInfoLayer(LayerBase):
     assert 0 in network.parent_layer.output.size_placeholder
     seq_lens = network.parent_layer.output.size_placeholder[0]
     return Data(
-      name="i_unrolled", shape=(None,), time_dim_axis=0, batch_dim_axis=None, dtype="int32", sparse=False,
-      size_placeholder={0: seq_lens})
+      name="i_unrolled", shape=(None,), time_dim_axis=0, batch_dim_axis=None, feature_dim_axis=None, dtype="int32",
+      sparse=False, size_placeholder={0: seq_lens})
 
 
 class RnnCellLayer(_ConcatInputLayer):
