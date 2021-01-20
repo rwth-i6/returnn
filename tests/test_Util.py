@@ -31,7 +31,7 @@ def test_cmd_stdout():
 
 
 def test_cmd_stderr():
-  r = sys_cmd_out_lines("echo x >/dev/stderr")
+  r = sys_cmd_out_lines("echo x >&2")
   assert_equal(r, [], "cmd() output should only cover stdout")
 
 
