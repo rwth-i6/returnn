@@ -1384,6 +1384,28 @@ def test_SwitchLayer_const():
     print(out)
 
 
+def test_SwitchLayer_masking():
+  config = Config({
+    "extern_data": {
+      "data": {"dim": 3, "sparse": False},
+    },
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "projected": {"class": "gather", "from": "data", "axis": "F", "position": 0}, # (B,T)
+      "mask": {"class": "compare", "from": "projected", "value": 0, "kind": "greater"},  # (B,T)
+      "switch": {
+        "class": "switch", "condition": "mask", "true_from": "data", "false_from": float("-inf")
+        },
+      "output": {"class": "copy", "from": "switch"}})
+    net.print_network_info()
+    feed_dict = make_feed_dict(net.extern_data.data.values())
+    out = session.run(net.get_default_output_layer().output.placeholder, feed_dict=feed_dict)
+    print(out)
+
+
 def test_CondLayer_subnetwork_train():
   n_batch, n_time, n_in, n_out = 3, 7, 11, 13
   config = Config({

@@ -610,6 +610,33 @@ class Data(object):
     assert x.get_shape().ndims == 0, "currently only scalars supported"
     return Data(name=str(x.op.name), shape=(), batch_dim_axis=None, dtype=x.dtype.name, placeholder=x)
 
+  @classmethod
+  def template_from_constant(cls, x, name, dtype=None, with_batch_dim=False):
+    """
+    :param int|float|bool|numpy.ndarray x:
+    :param str name:
+    :param str|None dtype:
+    :param bool with_batch_dim:
+    :rtype: Data
+    """
+    import numpy
+    if dtype is None:
+      if isinstance(x, int):
+        dtype = "int32"
+      elif isinstance(x, float):
+        dtype = "float32"
+      elif isinstance(x, bool):
+        dtype = "bool"
+      elif isinstance(x, numpy.ndarray):
+        dtype = str(x.dtype)
+      else:
+        raise TypeError("cannot handle value %r of type %r" % (x, type(x)))
+    shape = x.shape if isinstance(x, numpy.ndarray) else ()
+    return Data(
+      name=name,
+      shape=shape, batch_dim_axis=0 if with_batch_dim else None, time_dim_axis=None,
+      dtype=dtype)
+
   def sanity_check(self, ignore_placeholder=False):
     """
     Performs some sanity checks on self, and raises exceptions if something is not sane.
