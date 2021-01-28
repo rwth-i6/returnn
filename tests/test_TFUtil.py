@@ -442,6 +442,27 @@ def test_Data_copy_compatible_to_add_batch_dim():
   assert d2.batch_dim_axis is not None and d2.batch_shape == (None, 1, 1)
 
 
+def test_Data_copy_compatible_to_add_feature_dim():
+  common_data = Data(name='energy', shape=(None, 3), time_dim_axis=0, batch_dim_axis=None)  # [T,F]
+  d1 = Data(name='mask', shape=(None,), batch_dim_axis=None, time_dim_axis=0, feature_dim_axis=None)  # [T]
+  d2 = d1.copy_compatible_to(common_data)
+  assert d2.batch_dim_axis is None and d2.time_dim_axis is not None and d2.batch_shape == (None, 1)
+
+
+def test_Data_copy_compatible_to_add_batch_feature_dim():
+  common_data = Data(name='energy', shape=(None, 3))  # [B,T,F]
+  d1 = Data(name='mask', shape=(None,), batch_dim_axis=None, time_dim_axis=0, feature_dim_axis=None)  # [T]
+  d2 = d1.copy_compatible_to(common_data)
+  assert d2.batch_dim_axis is not None and d2.time_dim_axis is not None and d2.batch_shape == (None, None, 1)
+
+
+def test_Data_copy_compatible_to_add_time_dim():
+  common_data = Data(name='energy', shape=(None, 3))  # [B,T,F]
+  d1 = Data(name='mask', shape=(3,))  # [B,F]
+  d2 = d1.copy_compatible_to(common_data)
+  assert d2.time_dim_axis is not None and d2.batch_shape == (None, 1, 3)
+
+
 def test_Data_copy_compatible_to_time_axis_at_end():
   data = Data(name='att_weights_output', shape=(1, None), time_dim_axis=2, feature_dim_axis=1)
   common_data = Data(name='accum_att_weights_output', shape=(None, 1))
