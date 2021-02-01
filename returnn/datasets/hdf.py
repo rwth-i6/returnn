@@ -1364,12 +1364,15 @@ class HDFDatasetWriter:
     hdf_dataset.create_dataset(attr_seqLengths, shape=(num_seqs, 2), dtype="int32")
     for i, seq_len in enumerate(seq_lens):
       data_len = seq_len[default_data_input_key]
-      targets_len = seq_len[default_data_target_key]
-      for data_key in data_target_keys:
-        assert seq_len[data_key] == targets_len, "different lengths in multi-target not supported"
-      if targets_len is None:
-        targets_len = data_len
-      hdf_dataset[attr_seqLengths][i] = [data_len, targets_len]
+      if len(data_target_keys) > 0:
+        targets_len = seq_len[default_data_target_key]
+        for data_key in data_target_keys:
+          assert seq_len[data_key] == targets_len, "different lengths in multi-target not supported"
+        if targets_len is None:
+          targets_len = data_len
+        hdf_dataset[attr_seqLengths][i] = [data_len, targets_len]
+      else:
+        hdf_dataset[attr_seqLengths][i] = [data_len]
       if use_progress_bar:
         progress_bar_with_time(float(i) / num_seqs)
 
