@@ -333,7 +333,7 @@ class MetaDataset(CachedDataset2):
     :param list[int]|None seq_order: List of corpus sequence indices, to set a predefined order.
     :rtype: bool
     """
-    need_reinit = self.epoch is None or self.epoch != epoch or seq_list
+    need_reinit = self.epoch is None or self.epoch != epoch or seq_list or self.expected_load_seq_start > 0
     super(MetaDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
 
     if not need_reinit:
