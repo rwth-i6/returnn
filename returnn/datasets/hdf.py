@@ -1287,7 +1287,7 @@ class HDFDatasetWriter:
       data_keys.remove("raw")
     data_target_keys = [key for key in dataset.get_target_list() if key in data_keys]
     data_input_keys = [key for key in data_keys if key not in data_target_keys]
-    assert len(data_input_keys) > 0 and len(data_target_keys) > 0
+    assert len(data_input_keys) > 0
     if len(data_input_keys) > 1:
       if "data" in data_input_keys:
         default_data_input_key = "data"
@@ -1301,8 +1301,10 @@ class HDFDatasetWriter:
         default_data_target_key = "classes"
       else:
         raise Exception("not sure which target data key to use from %r" % (data_target_keys,))
-    else:
+    elif len(data_target_keys) == 1:
       default_data_target_key = data_target_keys[0]
+    else:
+      default_data_target_key = None
     print("Using target data key:", default_data_target_key)
 
     hdf_data_key_map = {key: key for key in data_keys if key != default_data_input_key}
