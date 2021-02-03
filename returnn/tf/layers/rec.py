@@ -97,6 +97,7 @@ class RecLayer(_ConcatInputLayer):
                unroll=False, back_prop=None,
                use_global_rec_step_offset=False,
                include_eos=False,
+               padded_data_keys=None,
                debug=None,
                _time_dim_tag=None,
                **kwargs):
@@ -119,6 +120,9 @@ class RecLayer(_ConcatInputLayer):
     :param bool|None back_prop: for tf.while_loop. the default will use self.network.train_flag
     :param bool use_global_rec_step_offset:
     :param bool include_eos: for search, whether we should include the frame where "end" is True
+    :param list[str] padded_data_keys: List of data keys for which the data is allowed to have a different length
+      than the other data, even though on the same time axis. If accessed in time steps greater than the data length
+      the value will be zero.
     :param bool|None debug:
     :param DimensionTag|None _time_dim_tag:
     """
@@ -149,6 +153,9 @@ class RecLayer(_ConcatInputLayer):
     self._max_seq_len = max_seq_len
     self.time_dim_tag = _time_dim_tag
     self.include_eos = include_eos
+    self.padded_data_keys = padded_data_keys or []
+    if padded_data_keys:
+      assert isinstance(unit, _SubnetworkRecCell), "'padded_data_keys' only implemented for custom unit."
     if optimize_move_layers_out is None:
       optimize_move_layers_out = self.network.get_config().bool("optimize_move_layers_out", True)
     self._optimize_move_layers_out = optimize_move_layers_out
@@ -2003,34 +2010,36 @@ class _SubnetworkRecCell(object):
         data_placeholder = data.get_placeholder_as_time_major()
         with tf.name_scope("check_data_len"):
           data_len = tf.shape(data_placeholder)[0]
-          if common_data_len is None:
-            # Check for first key if input length matches data length
-            if input_seq_len is not None:
-              with tf.control_dependencies(
-                  [tf_compat.v1.assert_equal(
-                    tf.reduce_max(input_seq_len), data_len,
-                    ["RecLayer %r with sources %r:" % (rec_layer.name, rec_layer.sources),
-                     " The length of the sources (", tf.reduce_max(input_seq_len),
-                     ") differ from the length of the target ", key, "(", data_len, ")."])]):
+          # padded data keys are allowed to have any length, so don't check
+          if key not in self.parent_rec_layer.padded_data_keys:
+            if common_data_len is None:
+              # Check for first key if input length matches data length
+              if input_seq_len is not None:
+                with tf.control_dependencies(
+                    [tf_compat.v1.assert_equal(
+                      tf.reduce_max(input_seq_len), data_len,
+                      ["RecLayer %r with sources %r:" % (rec_layer.name, rec_layer.sources),
+                       " The length of the sources (", tf.reduce_max(input_seq_len),
+                       ") differ from the length of the target ", key, "(", data_len, ")."])]):
+                  data_len = tf.identity(data_len)
+              if fixed_seq_len is not None:
+                with tf.control_dependencies(
+                    [tf_compat.v1.assert_equal(
+                      tf.reduce_max(fixed_seq_len), data_len,
+                      ["RecLayer %r:" % (rec_layer.get_absolute_name(),),
+                       " The predefined length (", tf.reduce_max(fixed_seq_len),
+                       ") differs from the length of the target ", key, "(", data_len, ")."])]):
+                  data_len = tf.identity(data_len)
+              common_data_len = data_len
+            else:
+              # Check from second key on if data length is equal for all external data
+              with tf.control_dependencies([
+                tf_compat.v1.assert_equal(
+                  common_data_len, data_len,
+                  ["RecLayer %r:" % rec_layer.name, " The length of all targets (%s) " % ", ".join(used_keys),
+                   " has to be the same. Found length ", data_len, " for %s, which does not match length " % key,
+                   common_data_len, " of the other data."])]):
                 data_len = tf.identity(data_len)
-            if fixed_seq_len is not None:
-              with tf.control_dependencies(
-                  [tf_compat.v1.assert_equal(
-                    tf.reduce_max(fixed_seq_len), data_len,
-                    ["RecLayer %r:" % (rec_layer.get_absolute_name(),),
-                     " The predefined length (", tf.reduce_max(fixed_seq_len),
-                     ") differs from the length of the target ", key, "(", data_len, ")."])]):
-                data_len = tf.identity(data_len)
-            common_data_len = data_len
-          else:
-            # Check from second key on if data length is equal for all external data
-            with tf.control_dependencies([
-              tf_compat.v1.assert_equal(
-                common_data_len, data_len,
-                ["RecLayer %r:" % rec_layer.name, " The length of all targets (%s) " % ", ".join(used_keys),
-                 " has to be the same. Found length ", data_len, " for %s, which does not match length " % key,
-                 common_data_len, " of the other data."])]):
-              data_len = tf.identity(data_len)
         data_ta = tf.TensorArray(
           name=key + "_ta",
           dtype=data.dtype,
@@ -2343,8 +2352,21 @@ class _SubnetworkRecCell(object):
           for (k, v) in zip(sorted(self._initial_extra_outputs), prev_extra_flat)}
         with tf.name_scope("prev_extra"):
           prev_extra = identity_op_nested(prev_extra)
-        data_ = {
-          key_: ta.read(i, name="{}_ta_read".format(key_)) for key_, ta in data_tensor_arrays.items()}
+
+        data_ = {}
+        for key_, ta in data_tensor_arrays.items():
+          if key_ in self.parent_rec_layer.padded_data_keys:
+            # batch_dim in ta.element_shape is undefined, so replace it
+            element_shape = tf.concat([tf.expand_dims(batch_dim, axis=0), ta.element_shape[1:]], axis=0)
+
+            # when trying to access tensor array beyond sequence length, use zeros as padding value
+            data_[key_] = tf.cond(
+              pred=(i < ta.size()),
+              true_fn=lambda: ta.read(i, name="{}_ta_read".format(key_)),
+              false_fn=lambda: tf.zeros(shape=element_shape, dtype=ta.dtype, name="{}_ta_padding".format(key_)))
+          else:
+            data_[key_] = ta.read(i, name="{}_ta_read".format(key_))
+
         # noinspection PyProtectedMember
         with reuse_name_scope(self.parent_rec_layer._rec_scope):
           self._construct(
