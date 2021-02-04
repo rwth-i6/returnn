@@ -114,7 +114,8 @@ class DimensionTag(object):
     return True
 
   def is_equal(self, other, ignore_feature_dim=False, allow_same_feature_dim=False, allow_same_spatial_dim=None,
-               treat_feature_as_spatial=False, broadcast_matches=False, unknown_spatial_matches=False):
+               treat_feature_as_spatial=False, broadcast_matches=False, unknown_spatial_matches=False,
+               different_static_matches=False):
     """
     Compares self to other for equality.
     Note that the default behavior is very restrictive.
@@ -128,6 +129,7 @@ class DimensionTag(object):
     :param bool treat_feature_as_spatial:
     :param bool broadcast_matches:
     :param bool unknown_spatial_matches:
+    :param bool different_static_matches:
     :rtype: bool
     """
     if allow_same_spatial_dim is None:
@@ -139,6 +141,8 @@ class DimensionTag(object):
     self_kind = self.kind
     other_kind = other.kind
     if self_kind == other_kind == self.Types.Feature and ignore_feature_dim:
+      return True
+    if different_static_matches and self.dimension is not None and other.dimension is not None:
       return True
     if treat_feature_as_spatial:
       if self_kind == self.Types.Feature:
@@ -167,7 +171,7 @@ class DimensionTag(object):
           return True
         if broadcast_matches and (self.dimension == 1 or other.dimension == 1):
           return True
-      if unknown_spatial_matches and ((self.dyn_size is None) != (other.dyn_size is None)):
+      if unknown_spatial_matches and ((self.dyn_size is None) or (other.dyn_size is None)):
         return True
     if self.description == other.description:
       return True
@@ -824,14 +828,16 @@ class Data(object):
     assert self.time_dim_axis is not None
     return self.copy_move_axis(self.time_dim_axis, time_dim_axis)
 
-  def copy_move_axis(self, old_axis, new_axis):
+  def copy_move_axis(self, old_axis, new_axis, keep_other_axes_intact=False):
     """
     :param int old_axis: counted with batch-dim
     :param int new_axis: counted with batch-dim
+    :param bool keep_other_axes_intact: if False, will shift all axes between old_axis and new_axis.
+      if True, all axes except old_axis and new_axis will remain unchanged
     :return: copy of myself with moved axis (see :func:`move_axis`)
     :rtype: Data
     """
-    from .basic import move_axis
+    from .basic import move_axis, swapaxes
     if old_axis < 0:
       old_axis += self.batch_ndim
       assert old_axis >= 0
@@ -851,6 +857,12 @@ class Data(object):
       """
       if axis is None:
         return None
+      if keep_other_axes_intact:
+        if axis == old_axis:
+          return new_axis
+        if axis == new_axis:
+          return old_axis
+        return axis
       if old_axis == new_axis:
         return axis
       if axis < min(old_axis, new_axis) or axis > max(old_axis, new_axis):
@@ -865,7 +877,10 @@ class Data(object):
 
     data = self.copy()
     if data.placeholder is not None:
-      data.placeholder = move_axis(data.placeholder, old_axis, new_axis)
+      if keep_other_axes_intact:
+        data.placeholder = swapaxes(data.placeholder, old_axis, new_axis)
+      else:
+        data.placeholder = move_axis(data.placeholder, old_axis, new_axis)
     data.batch_dim_axis = translate_axis(self.batch_dim_axis)
     new_feature_dim_axis = translate_axis(self.feature_dim_axis)
     if new_feature_dim_axis != data.feature_dim_axis:
@@ -1088,25 +1103,42 @@ class Data(object):
     else:
       return self.batch_ndim  # add it at the end
 
-  def copy_add_dim_by_tag(self, dim_tag, unbroadcast=False, axis=None):
+  def copy_add_dim_by_tag(self, dim_tag, unbroadcast=False, axis=None, dyn_size=None):
     """
     :param DimensionTag dim_tag:
     :param bool unbroadcast:
     :param int|None axis:
+    :param tf.Tensor|int|None dyn_size:
+      For unbroadcast, if we do not want to rely on dim_tag.dimension.
     :rtype: Data
     """
     if axis is None:
       axis = self.get_default_new_axis_for_dim_tag(dim_tag=dim_tag)
+    if dyn_size is None:
+      dyn_size = dim_tag.dimension
+
+    def maybe_unbroadcast_placeholder(data):
+      """
+      :param Data data:
+      """
+      if data.placeholder is None:
+        return
+      assert data.batch_shape[axis] == 1
+      assert dyn_size is not None, 'need dyn_size or dim_tag.dimension for unbroadcast'
+      with tf.name_scope("copy_add_dim_by_tag_unbroadcast"):
+        tiles = [1] * axis + [dyn_size] + [1] * (data.batch_ndim - axis - 1)
+        data.placeholder = tf.tile(data.placeholder, tiles)
+
     if dim_tag.kind == DimensionTag.Types.Batch:
       res = self.copy_add_batch_dim(batch_dim_axis=axis)
       if unbroadcast:
-        assert res.placeholder is None  # not implemented yet...
+        maybe_unbroadcast_placeholder(res)
       return res
     # Note: if dim_tag is feature, but we are sparse, we just treat is as spatial, handled below.
     if dim_tag.kind == DimensionTag.Types.Feature and not self.sparse:
       res = self.copy_add_feature_dim(axis=axis)
       if unbroadcast:
-        assert res.placeholder is None  # not implemented yet...
+        maybe_unbroadcast_placeholder(res)
         res.dim = dim_tag.dimension
         shape = list(res.shape)
         shape[res.get_batch_axis_excluding_batch(res.feature_dim_axis)] = dim_tag.dimension
@@ -1117,7 +1149,7 @@ class Data(object):
     res = self.copy_add_spatial_dim(spatial_dim_axis=axis, dim=1)
     assert res.batch_shape[axis] == 1
     if unbroadcast:
-      assert res.placeholder is None  # not implemented yet...
+      maybe_unbroadcast_placeholder(res)
       shape = list(res.shape)
       shape[res.get_batch_axis_excluding_batch(axis)] = dim_tag.dimension
       res.shape = tuple(shape)
@@ -1190,123 +1222,69 @@ class Data(object):
         v.dim = v.batch_shape[v.feature_dim_axis]
       else:
         v.dim = None
-    if data.batch_dim_axis is not None and v.batch_dim_axis is None:
-      v = v.copy_add_batch_dim(0)  # later we might move the axis
     if v.batch_dim_axis is not None and data.batch_dim_axis is None:
       raise ValueError("copy_compatible_to: self %r has batch-dim, but target data %r has not" % (self, data))
     if data.batch_ndim < v.batch_ndim:
       raise ValueError("copy_compatible_to: self %r already has more dims than target data %r" % (self, data))
-    start = v
-    _, dim_tags = DimensionTag.get_all_dimension_tags([start, data], dict(allow_same_feature_dim=True))
-    assert len(dim_tags[start]) == start.batch_ndim
-    assert len(dim_tags[data]) == data.batch_ndim
-    # This sets it explicitly. We will later make it NotSpecified if needed.
-    # This avoids unexpected behavior after copy_add_spatial_dim and simplifies the logic.
-    v.feature_dim_axis = v.feature_dim_axis
-    # Add dims, in case we miss any.
-    for axis in range(data.batch_ndim):
-      if axis == data.batch_dim_axis:
-        continue
-      axis_wo_batch = data.get_batch_axis_excluding_batch(axis)
-      v_axis = v.get_batch_axis(axis_wo_batch)
-      existing_axis = None
-      if dim_tags[data][axis] in dim_tags[start]:
-        existing_axis = dim_tags[start].index(dim_tags[data][axis])
-      if existing_axis is None:
-        # Try a bit harder to find an existing.
-        if axis == data.feature_dim_axis and v.feature_dim_axis is not None:
-          if v.batch_shape[v.feature_dim_axis] == data.batch_shape[axis]:
-            if v.batch_shape[v.feature_dim_axis] is not None:
-              existing_axis = v.feature_dim_axis  # There might be cases that the dim_tags did not match.
-          if v.batch_shape[v.feature_dim_axis] == 1:
-            existing_axis = v.feature_dim_axis  # Interpret the existing as broadcast dim.
-        if axis == data.time_dim_axis and v.time_dim_axis is not None:
-          if v.batch_shape[v.time_dim_axis] == data.batch_shape[axis]:
-            if v.batch_shape[v.time_dim_axis] is not None:
-              existing_axis = v.time_dim_axis  # There might be cases that the dim_tags did not match.
-          if v.batch_shape[v.time_dim_axis] == 1:
-            existing_axis = v.time_dim_axis  # Interpret the existing as broadcast dim.
-      if existing_axis is not None:
-        # We go from left to right, so we should have moved it already.
-        # However, it could be that we confused some other axis earlier.
-        if existing_axis > v_axis:
-          v = v.copy_move_axis(old_axis=existing_axis, new_axis=v_axis)
-          dim_tags[start].insert(v_axis, dim_tags[start].pop(existing_axis))  # keep consistent
-        continue
-      if data.batch_ndim > v.batch_ndim:
-        if axis == data.feature_dim_axis:
-          v = v.copy_add_feature_dim(v_axis)
+
+    is_equal_opts = dict(
+      allow_same_feature_dim=True, allow_same_spatial_dim=True, treat_feature_as_spatial=True, ignore_feature_dim=True,
+      different_static_matches=True)
+    mapped_axes = data.find_matching_dim_map(v, list(range(v.batch_ndim)), is_equal_opts)  # maps v -> data
+    assert len(mapped_axes) == v.batch_ndim
+
+    for target_axis in range(data.batch_ndim):
+      new_v_axis = min(target_axis, v.batch_ndim)
+      if target_axis not in mapped_axes.values():
+        # Dim in data, but not in v
+        if unbroadcast and not (except_feature and data.feature_dim_axis == target_axis):
+          if data.batch_shape[target_axis] is not None:
+            axis_dyn_size = data.batch_shape[target_axis]
+          elif data_dyn_shape is not None:
+            axis_dyn_size = data_dyn_shape[target_axis]
+          else:
+            assert data.placeholder, "need data.placeholder for unbroadcast (target data: %r)" % v
+            axis_dyn_size = tf.shape(data.placeholder)[target_axis]
+          v = v.copy_add_dim_by_tag(
+            data.get_dim_tag(target_axis), axis=new_v_axis, unbroadcast=True, dyn_size=axis_dyn_size)
         else:
-          v = v.copy_add_spatial_dim(v_axis, auto_time_dim_axis=False)  # time-dim would be set later
-        dim_tags[start].insert(v_axis, v.get_dim_tag(v_axis))  # keep consistent
-        if axis == data.time_dim_axis and v.time_dim_axis != v_axis:
-          v.time_dim_axis = v_axis
-        if axis == data.feature_dim_axis and v.feature_dim_axis != v_axis:
-          v.feature_dim_axis = v_axis
-    # Now we assume that we have all missing axes added,
-    # but they might still be in a wrong order.
+          # Default case, no unbroadcast
+          v = v.copy_add_dim_by_tag(data.get_dim_tag(target_axis), axis=new_v_axis, unbroadcast=False)
+        # Keep mapped_axes consistent
+        mapped_axes = {v_ax + (1 if v_ax >= new_v_axis else 0): trg_ax for v_ax, trg_ax in mapped_axes.items()}
+        mapped_axes[new_v_axis] = target_axis
+      else:
+        # Dim exists in both data and in v. Maybe order is wrong.
+        matching_v_axes = [v_ax for v_ax, trg_ax in mapped_axes.items() if trg_ax == target_axis]
+        assert len(matching_v_axes) == 1
+        matching_v_axis = matching_v_axes[0]
+        if target_axis != matching_v_axis:
+          # Order was wrong
+          v = v.copy_move_axis(matching_v_axis, new_v_axis, keep_other_axes_intact=True)
+          # Keep mapped_axes consistent
+          mapped_axes[matching_v_axis], mapped_axes[new_v_axis] = mapped_axes[new_v_axis], mapped_axes[matching_v_axis]
+
     assert v.batch_ndim == data.batch_ndim
-    # Now maybe move batch/feature axis.
-    # We might do multiple iterations here, depending on which axis comes first.
-    # This is a bit ugly, but the code is simpler.
-    num_iterations = 0
-    while True:
-      num_iterations += 1
-      assert num_iterations <= 4
-      if v.batch_dim_axis != data.batch_dim_axis:
-        assert data.batch_dim_axis is not None and v.batch_dim_axis is not None
-        v = v.copy_with_batch_dim_axis(data.batch_dim_axis)
-        assert v.batch_dim_axis == data.batch_dim_axis
-        continue
-      if v.feature_dim_axis != data.feature_dim_axis:
-        assert data.feature_dim_axis is not None and v.feature_dim_axis is not None
-        v = v.copy_with_feature_dim_axis(data.feature_dim_axis)
-        assert v.feature_dim_axis == data.feature_dim_axis
-        if data.feature_dim_axis_or_unspecified is NotSpecified:
-          v.feature_dim_axis = NotSpecified
-          assert v.feature_dim_axis == data.feature_dim_axis
-        continue
-      # Now we have both equal.
-      break
-    if data.feature_dim_axis_or_unspecified is NotSpecified and v.feature_dim_axis_or_unspecified is not NotSpecified:
-      if v._default_feature_dim_axis() == v.feature_dim_axis:
-        v.feature_dim_axis = NotSpecified
+    assert all(mapped_axes[ax] == ax for ax in range(v.batch_ndim))
+
+    # Ensure time_dim_axis and feature_dim_axis is same as in data
+    assert v.batch_dim_axis == data.batch_dim_axis  # there is only at most one batch_dim_axis
+    v.time_dim_axis = data.time_dim_axis
+    if data.feature_dim_axis_or_unspecified is NotSpecified:
+      v.feature_dim_axis = NotSpecified
+    else:
+      v.feature_dim_axis = data.feature_dim_axis
+    if v.feature_dim_axis is not None:
+      v.dim = v.batch_shape[v.feature_dim_axis]
+    else:
+      v.dim = None
+
+    # Reset sparse
     if self.sparse:
       v.feature_dim_axis = NotSpecified
       v.sparse = True  # reset
       v.dim = self.dim  # reset
-    if unbroadcast and any([d1 != 1 and d2 == 1 for (d1, d2) in zip(data.batch_shape, v.batch_shape)]):
-      v.size_placeholder.update(data.size_placeholder or {})
-      if v.placeholder is not None:
-        with tf.name_scope("copy_compatible_to_unbroadcast"):
-          tiles = [1] * v.batch_ndim
-          for axis in range(v.batch_ndim):
-            if v.batch_shape[axis] != 1:
-              continue
-            if except_feature and axis == v.feature_dim_axis:
-              continue
-            if data.batch_shape[axis] is not None:
-              tiles[axis] = data.batch_shape[axis]
-            elif data_dyn_shape is not None:
-              tiles[axis] = data_dyn_shape[axis]
-            else:
-              assert data.placeholder, "need data.placeholder for unbroadcast (target data: %r)" % v
-              tiles[axis] = tf.shape(data.placeholder)[axis]
-          if set(tiles) != {1}:
-            v.placeholder = tf.tile(v.placeholder, tiles)
-      new_shape = list(v.batch_shape)
-      for axis in range(v.batch_ndim):
-        if except_feature and axis == data.feature_dim_axis:
-          continue
-        if data.batch_shape[axis] != 1 and new_shape[axis] == 1:
-          new_shape[axis] = data.batch_shape[axis]
-      if v.feature_dim_axis is not None:
-        v.dim = new_shape[v.feature_dim_axis]
-      if v.batch_dim_axis is not None:
-        del new_shape[v.batch_dim_axis]
-      v.shape = tuple(new_shape)
-      if v.placeholder is not None and not except_feature:
-        v.placeholder.set_shape(v.batch_shape)
+
     v.sanity_check()
     return v
 
@@ -2522,15 +2500,20 @@ class Data(object):
     """
     return [axis for axis in range(self.batch_ndim) if self.get_dim_tag(axis).is_equal(dim_tag, **is_equal_opts)]
 
-  def find_matching_dim_map(self, other, other_axes):
+  def find_matching_dim_map(self, other, other_axes, is_equal_opts=None):
     """
     Looks up all other_axes of another Data in this Data. Does not allow duplicates.
 
     :param Data other:
     :param list[int] other_axes: a list of axes of ``other``, counted with batch dim
     :return: a dict mapping other axes to own axes, all counted with batch dim
+    :param dict[str,bool]|None is_equal_opts: passed to DimensionTag.is_equal
     :rtype: dict[int,int]
     """
+    if is_equal_opts is None:
+      is_equal_opts = dict(
+        allow_same_feature_dim=True, allow_same_spatial_dim=True, treat_feature_as_spatial=True)
+
     def map_other_axis_to_self(other_axis, taken_self_axes):
       """
       :param int other_axis: counted with batch dim
@@ -2538,20 +2521,28 @@ class Data(object):
       :return: the axis of ``self`` that matches ``other_axis``, counted with batch dim
       :rtype: int
       """
-      is_equal_opts = dict(
-        allow_same_feature_dim=True, allow_same_spatial_dim=True, treat_feature_as_spatial=True)
       other_axis_dim_tag = other.get_dim_tag(other_axis)
       matching = [
         self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts)
         if self_axis not in taken_self_axes]
       if not matching:
-        # The DimensionTags do not match. Then we also allow one single dyn_size to be unknown
+        # Try harder by allowing broadcasting to match
+        is_equal_opts["broadcast_matches"] = True
+        matching = [
+          self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts)
+          if self_axis not in taken_self_axes]
+        assert len(matching) <= 1, 'cannot match the axes %s from %s to %s. Failing to match axis %s' % (
+          other_axes, other, self, other_axis)
+      if not matching:
+        # If still not, then also allow one single dyn_size to be unknown
         is_equal_opts["unknown_spatial_matches"] = True
         matching = [
           self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts)
           if self_axis not in taken_self_axes]
-        assert len(matching) == 1, 'cannot match the axes %s from %s to %s' % (other_axes, other, self)
-      assert matching, 'cannot match the axes %s from %s to %s' % (other_axes, other, self)
+        assert len(matching) == 1, 'cannot match the axes %s from %s to %s. Failing to match axis %s' % (
+          other_axes, other, self, other_axis)
+      assert matching, 'cannot match the axes %s from %s to %s. Failing at axis %s' % (
+        other_axes, other, self, other_axis)
       # If there are multiple matches (e.g. because two axes have the same feature dim), leave their order intact.
       # We do this by always choosing the first unused match which is the smallest axes
       return matching[0]

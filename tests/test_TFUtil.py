@@ -293,6 +293,65 @@ def test_Data_copy_compatible_to_time_major():
   assert d2a.feature_dim_axis == d1.feature_dim_axis
 
 
+def test_Data_find_matching_dim_map_different_static_dims():
+  d1 = Data(name='p1_output', shape=(5, 5, 3), batch_dim_axis=None, time_dim_axis=None)  # [5,5,F|3]
+  d2 = Data(name='p2_output', shape=(5, 1, 1), batch_dim_axis=None, time_dim_axis=None)  # [5,1,F|1]
+
+  # default should not match
+  is_equal_opts = dict(allow_same_feature_dim=True, allow_same_spatial_dim=True, treat_feature_as_spatial=True)
+  assert_equal(d1.find_matching_dims(d2.get_dim_tag(0), is_equal_opts=is_equal_opts), [0,1])
+  assert_equal(d1.find_matching_dims(d2.get_dim_tag(1), is_equal_opts=is_equal_opts), [])
+  assert_equal(d1.find_matching_dims(d2.get_dim_tag(2), is_equal_opts=is_equal_opts), [])
+
+  failed = False
+  try:
+    d1.find_matching_dim_map(d2, list(range(d2.batch_ndim)), is_equal_opts)  # maps d2 -> d1
+  except AssertionError:
+    failed = True  # excepted
+  assert failed, 'should have failed'
+
+  # with different_static_matches=True should match
+  is_equal_opts = dict(
+    allow_same_feature_dim=True, allow_same_spatial_dim=True, treat_feature_as_spatial=True,
+    different_static_matches=True)
+  assert_equal(d1.find_matching_dims(d2.get_dim_tag(0), is_equal_opts=is_equal_opts), [0,1,2])
+  assert_equal(d1.find_matching_dims(d2.get_dim_tag(1), is_equal_opts=is_equal_opts), [0,1,2])
+  assert_equal(d1.find_matching_dims(d2.get_dim_tag(2), is_equal_opts=is_equal_opts), [0,1,2])
+  mapping = d1.find_matching_dim_map(d2, list(range(d2.batch_ndim)), is_equal_opts)  # maps d2 -> d1
+  assert len(mapping.values()) == d2.batch_ndim
+  assert all(mapping[i] == i for i in range(d2.batch_ndim))
+
+  d2_compatible = d2.copy_compatible_to(d1)
+  assert d2_compatible.batch_shape == d2.batch_shape
+  d1_compatible = d1.copy_compatible_to(d2)
+  assert d1_compatible.batch_shape == d1.batch_shape
+
+
+def test_Data_find_matching_dim_map_broadcast_matches():
+  d1 = Data(name='d1', shape=(5, None), time_dim_axis=2)  # [B,F|5,T]
+  d2 = Data(name='d2', shape=(5, 1), batch_dim_axis=None, time_dim_axis=None, feature_dim_axis=0)  # [F|5,1]
+  print('d1:', d1)
+  print('d2:', d2)
+
+  # default should not match
+  is_equal_opts = dict(allow_same_feature_dim=True, allow_same_spatial_dim=True, treat_feature_as_spatial=True)
+  assert_equal(d1.find_matching_dims(d2.get_dim_tag(0), is_equal_opts=is_equal_opts), [1])
+  assert_equal(d1.find_matching_dims(d2.get_dim_tag(1), is_equal_opts=is_equal_opts), [])
+
+  # with broadcast_matches=True should match
+  is_equal_opts_match = dict(
+    allow_same_feature_dim=True, allow_same_spatial_dim=True, treat_feature_as_spatial=True, broadcast_matches=True)
+  assert_equal(d1.find_matching_dims(d2.get_dim_tag(0), is_equal_opts=is_equal_opts_match), [1])
+  assert_equal(d1.find_matching_dims(d2.get_dim_tag(1), is_equal_opts=is_equal_opts_match), [1,2])
+
+  mapping = d1.find_matching_dim_map(d2, list(range(d2.batch_ndim)), is_equal_opts)  # maps d2 -> d1
+  assert mapping[0] == 1 and mapping[1] == 2
+
+  copied = d2.copy_compatible_to(d1)
+  assert copied.batch_ndim == d1.batch_ndim and copied.batch_shape == (None, 5, 1)
+  print('copied compatible:', copied)
+
+
 def test_Data_sparse_int32_with_dim_kwargs_init():
   data = Data(name="classes_with_dim", shape=(None,), dim=10, sparse=True, dtype="int32")
   assert data.sparse and data.have_time_axis() and data.shape == (None,) and data.dim == 10
@@ -1378,6 +1437,7 @@ def test_scatter_nd():
   session.run(ref_grad)
 
 
+@unittest.skip('v.copy_compatible_to(x) in rel_embed tries to match a [B,2,F|5] tensor to [B,T,F|5]. We do not allow that!')
 def test_nd_indices_scatter_nd_time_major():
   def rel_embed(x, v, t):
     """
