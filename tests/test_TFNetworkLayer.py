@@ -415,6 +415,54 @@ def test_activation_layer_net_construct_two_out():
     assert_equal(v.tolist(), [[[0, 0], [0, 0], [2, 2]]])
 
 
+def _test_simple_eval_func(s):
+  with make_scope() as session:
+    num_inputs = 2
+    config = Config()
+    config.update({
+      "extern_data": {"data": {"dim": num_inputs}},
+      "network": {
+        "output": {"class": "eval", "eval": "%s(source(0))" % s, "from": "data"}
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+    feed = make_feed_dict(network.extern_data)
+    out = network.get_default_output_layer().output.placeholder
+    session.run(out, feed_dict=feed)
+
+
+def test_simple_eval_tanh():
+  _test_simple_eval_func("tf.tanh")
+
+
+def test_simple_eval_sigmoid():
+  _test_simple_eval_func("tf.sigmoid")
+
+
+def _test_simple_activation(s):
+  with make_scope() as session:
+    num_inputs = 2
+    config = Config()
+    config.update({
+      "extern_data": {"data": {"dim": num_inputs}},
+      "network": {
+        "output": {"class": "activation", "activation": s, "from": "data"}
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+    feed = make_feed_dict(network.extern_data)
+    out = network.get_default_output_layer().output.placeholder
+    session.run(out, feed_dict=feed)
+
+
+def test_simple_activation_tanh():
+  _test_simple_activation("tanh")
+
+
+def test_simple_activation_log_sigmoid():
+  _test_simple_activation("log_sigmoid")
+
+
 def test_cnn_building_block():
   with make_scope() as session:
     num_inputs = 192
