@@ -297,27 +297,21 @@ def test_Data_find_matching_dim_map_different_static_dims():
   d1 = Data(name='p1_output', shape=(5, 5, 3), batch_dim_axis=None, time_dim_axis=None)  # [5,5,F|3]
   d2 = Data(name='p2_output', shape=(5, 1, 1), batch_dim_axis=None, time_dim_axis=None)  # [5,1,F|1]
 
-  # default should not match
+  # without broadcast_matches=False should not match
   is_equal_opts = dict(allow_same_feature_dim=True, allow_same_spatial_dim=True, treat_feature_as_spatial=True)
   assert_equal(d1.find_matching_dims(d2.get_dim_tag(0), is_equal_opts=is_equal_opts), [0,1])
   assert_equal(d1.find_matching_dims(d2.get_dim_tag(1), is_equal_opts=is_equal_opts), [])
   assert_equal(d1.find_matching_dims(d2.get_dim_tag(2), is_equal_opts=is_equal_opts), [])
 
-  failed = False
-  try:
-    d1.find_matching_dim_map(d2, list(range(d2.batch_ndim)), is_equal_opts)  # maps d2 -> d1
-  except AssertionError:
-    failed = True  # excepted
-  assert failed, 'should have failed'
-
-  # with different_static_matches=True should match
+  # with broadcast_matches=True should match
   is_equal_opts = dict(
     allow_same_feature_dim=True, allow_same_spatial_dim=True, treat_feature_as_spatial=True,
-    different_static_matches=True)
-  assert_equal(d1.find_matching_dims(d2.get_dim_tag(0), is_equal_opts=is_equal_opts), [0,1,2])
+    broadcast_matches=True)
+  assert_equal(d1.find_matching_dims(d2.get_dim_tag(0), is_equal_opts=is_equal_opts), [0,1])
   assert_equal(d1.find_matching_dims(d2.get_dim_tag(1), is_equal_opts=is_equal_opts), [0,1,2])
   assert_equal(d1.find_matching_dims(d2.get_dim_tag(2), is_equal_opts=is_equal_opts), [0,1,2])
-  mapping = d1.find_matching_dim_map(d2, list(range(d2.batch_ndim)), is_equal_opts)  # maps d2 -> d1
+
+  mapping = d1.find_matching_dim_map(d2, list(range(d2.batch_ndim)))  # maps d2 -> d1
   assert len(mapping.values()) == d2.batch_ndim
   assert all(mapping[i] == i for i in range(d2.batch_ndim))
 
