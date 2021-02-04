@@ -88,7 +88,8 @@ class MapDatasetWrapper(CachedDataset2):
     :returns number of sequences in the current epoch
     :rtype: int
     """
-    assert self._seq_order is not None, "num_seqs is only known after calling init_seq_order()"
+    if self._seq_order is None:
+      raise NotImplementedError("'num_seqs' is only known after calling init_seq_order().")
     return len(self._seq_order)
 
   def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
