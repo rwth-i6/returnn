@@ -114,8 +114,7 @@ class DimensionTag(object):
     return True
 
   def is_equal(self, other, ignore_feature_dim=False, allow_same_feature_dim=False, allow_same_spatial_dim=None,
-               treat_feature_as_spatial=False, broadcast_matches=False, unknown_spatial_matches=False,
-               different_static_matches=False):
+               treat_feature_as_spatial=False, broadcast_matches=False, unknown_spatial_matches=False):
     """
     Compares self to other for equality.
     Note that the default behavior is very restrictive.
@@ -129,7 +128,6 @@ class DimensionTag(object):
     :param bool treat_feature_as_spatial:
     :param bool broadcast_matches:
     :param bool unknown_spatial_matches:
-    :param bool different_static_matches:
     :rtype: bool
     """
     if allow_same_spatial_dim is None:
@@ -141,8 +139,6 @@ class DimensionTag(object):
     self_kind = self.kind
     other_kind = other.kind
     if self_kind == other_kind == self.Types.Feature and ignore_feature_dim:
-      return True
-    if different_static_matches and self.dimension is not None and other.dimension is not None:
       return True
     if treat_feature_as_spatial:
       if self_kind == self.Types.Feature:
@@ -1228,8 +1224,7 @@ class Data(object):
       raise ValueError("copy_compatible_to: self %r already has more dims than target data %r" % (self, data))
 
     is_equal_opts = dict(
-      allow_same_feature_dim=True, allow_same_spatial_dim=True, treat_feature_as_spatial=True, ignore_feature_dim=True,
-      different_static_matches=True)
+      allow_same_feature_dim=True, allow_same_spatial_dim=True, treat_feature_as_spatial=True, ignore_feature_dim=True)
     mapped_axes = data.find_matching_dim_map(v, list(range(v.batch_ndim)), is_equal_opts)  # maps v -> data
     assert len(mapped_axes) == v.batch_ndim
 
@@ -2531,8 +2526,6 @@ class Data(object):
         matching = [
           self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts)
           if self_axis not in taken_self_axes]
-        assert len(matching) <= 1, 'cannot match the axes %s from %s to %s. Failing to match axis %s' % (
-          other_axes, other, self, other_axis)
       if not matching:
         # If still not, then also allow one single dyn_size to be unknown
         is_equal_opts["unknown_spatial_matches"] = True
