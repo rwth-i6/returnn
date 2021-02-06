@@ -851,16 +851,39 @@ class Data(object):
     assert self.time_dim_axis is not None
     return self.copy_move_axis(self.time_dim_axis, time_dim_axis)
 
-  def copy_move_axis(self, old_axis, new_axis, keep_other_axes_intact=False):
+  def _copy_template_translate_axes(self, translate_axis):
+    """
+    :param (int|None)->(int|None) translate_axis: function translating an axis to another, both counted with batch-dim.
+      Should map `None` to `None`
+    :return: copy of myself but with translated axes, and without a placeholder
+    """
+    data = self.copy()
+    data.placeholder = None
+    data.batch_dim_axis = translate_axis(self.batch_dim_axis)
+    new_feature_dim_axis = translate_axis(self.feature_dim_axis)
+    if new_feature_dim_axis != data.feature_dim_axis:
+      # Only assign in this case. Otherwise, e.g. if it is NotSpecified, leave it like that.
+      data.feature_dim_axis = new_feature_dim_axis
+    data.time_dim_axis = translate_axis(self.time_dim_axis)
+    if data.size_placeholder:
+      data.size_placeholder = {
+        data.get_batch_axis_excluding_batch(translate_axis(self.get_batch_axis(i))): size
+        for (i, size) in data.size_placeholder.items()}
+      assert None not in data.size_placeholder
+    new_shape = [None] * data.ndim
+    for i, dim in enumerate(self.shape):
+      new_shape[data.get_batch_axis_excluding_batch(translate_axis(self.get_batch_axis(i)))] = dim
+    data.shape = tuple(new_shape)
+    data.sanity_check()
+    return data
+
+  def copy_move_axis(self, old_axis, new_axis):
     """
     :param int old_axis: counted with batch-dim
     :param int new_axis: counted with batch-dim
-    :param bool keep_other_axes_intact: if False, will shift all axes between old_axis and new_axis.
-      if True, all axes except old_axis and new_axis will remain unchanged
     :return: copy of myself with moved axis (see :func:`move_axis`)
     :rtype: Data
     """
-    from .basic import move_axis, swapaxes
     if old_axis < 0:
       old_axis += self.batch_ndim
       assert old_axis >= 0
@@ -880,12 +903,6 @@ class Data(object):
       """
       if axis is None:
         return None
-      if keep_other_axes_intact:
-        if axis == old_axis:
-          return new_axis
-        if axis == new_axis:
-          return old_axis
-        return axis
       if old_axis == new_axis:
         return axis
       if axis < min(old_axis, new_axis) or axis > max(old_axis, new_axis):
@@ -898,27 +915,46 @@ class Data(object):
       assert new_axis <= axis < old_axis
       return axis + 1
 
-    data = self.copy()
-    if data.placeholder is not None:
-      if keep_other_axes_intact:
-        data.placeholder = swapaxes(data.placeholder, old_axis, new_axis)
-      else:
-        data.placeholder = move_axis(data.placeholder, old_axis, new_axis)
-    data.batch_dim_axis = translate_axis(self.batch_dim_axis)
-    new_feature_dim_axis = translate_axis(self.feature_dim_axis)
-    if new_feature_dim_axis != data.feature_dim_axis:
-      # Only assign in this case. Otherwise, e.g. if it is NotSpecified, leave it like that.
-      data.feature_dim_axis = new_feature_dim_axis
-    data.time_dim_axis = translate_axis(self.time_dim_axis)
-    if data.size_placeholder:
-      data.size_placeholder = {
-        data.get_batch_axis_excluding_batch(translate_axis(self.get_batch_axis(i))): size
-        for (i, size) in data.size_placeholder.items()}
-      assert None not in data.size_placeholder
-    new_shape = [None] * data.ndim
-    for i, dim in enumerate(self.shape):
-      new_shape[data.get_batch_axis_excluding_batch(translate_axis(self.get_batch_axis(i)))] = dim
-    data.shape = tuple(new_shape)
+    data = self._copy_template_translate_axes(translate_axis)
+    if self.placeholder is not None:
+      from .basic import move_axis
+      data.placeholder = move_axis(self.placeholder, old_axis, new_axis)
+    data.sanity_check()
+    return data
+
+  def copy_swap_axes(self, axis1, axis2):
+    """
+    Like :func:`Data.copy_move_axis`, but keeps all other axes unchanged.
+    :param int axis1: counted with batch-dim
+    :param int axis2: counted with batch-dim
+    :return: copy of myself with moved axis (see :func:`swapaxes`)
+    :rtype: Data
+    """
+    if axis1 < 0:
+      axis1 += self.batch_ndim
+    assert 0 <= axis1 < self.batch_ndim
+    if axis2 < 0:
+      axis2 += self.batch_ndim
+    assert 0 <= axis2 < self.batch_ndim
+    if axis1 == axis2:
+      return self.copy()
+
+    def translate_axis(axis):
+      """
+      :param int|None axis:
+      :return: axis after move_axis
+      :rtype: int|None
+      """
+      if axis == axis1:
+        return axis2
+      if axis == axis2:
+        return axis1
+      return axis
+
+    data = self._copy_template_translate_axes(translate_axis)
+    if self.placeholder is not None:
+      from .basic import swapaxes
+      data.placeholder = swapaxes(self.placeholder, axis1, axis2)
     data.sanity_check()
     return data
 
@@ -1126,42 +1162,50 @@ class Data(object):
     else:
       return self.batch_ndim  # add it at the end
 
-  def copy_add_dim_by_tag(self, dim_tag, unbroadcast=False, axis=None, dyn_size=None):
+  def copy_add_dim_by_tag(self, dim_tag, unbroadcast=False, axis=None):
     """
     :param DimensionTag dim_tag:
-    :param bool unbroadcast:
+    :param bool unbroadcast: If True unbroadcast the newly added axis.
+      If `dim_tag.src_data` has a placeholder, will use the shape from there.
+      Otherwise, uses `dim_tag.dimension` (if static) or `dim_tag.dyn_size` (if dynamic) to infer shape.
     :param int|None axis:
-    :param tf.Tensor|int|None dyn_size:
-      For unbroadcast, if we do not want to rely on dim_tag.dimension.
     :rtype: Data
     """
     if axis is None:
       axis = self.get_default_new_axis_for_dim_tag(dim_tag=dim_tag)
-    if dyn_size is None:
-      dyn_size = dim_tag.dimension
 
-    def maybe_unbroadcast_placeholder(data):
+    def maybe_unbroadcast_placeholder():
       """
-      :param Data data:
+      If a placeholder is set, unbroadcasts the newly added axis
       """
-      if data.placeholder is None:
+      if res.placeholder is None:
         return
-      assert data.batch_shape[axis] == 1
-      assert dyn_size is not None, 'need dyn_size or dim_tag.dimension for unbroadcast'
+      assert res.batch_shape[axis] == 1
       with tf.name_scope("copy_add_dim_by_tag_unbroadcast"):
-        tiles = [1] * axis + [dyn_size] + [1] * (data.batch_ndim - axis - 1)
-        data.placeholder = tf.tile(data.placeholder, tiles)
+        dyn_size = None
+        if dim_tag.src_data is not None and dim_tag.src_axis is not None and dim_tag.src_data.placeholder is not None:
+          dyn_size = tf.shape(dim_tag.src_data.placeholder)[dim_tag.src_axis]
+        if dyn_size is None:
+          dyn_size = dim_tag.dimension
+        if dyn_size is None and dim_tag.dyn_size is not None:
+          dyn_size = tf.math.reduce_max(dim_tag.dyn_size)
+        if dyn_size is None and dim_tag.kind == DimensionTag.Types.Batch:
+          from returnn.tf.layers.base import LayerBase
+          dyn_size = LayerBase.get_recent_layer().get_batch_dim()
+        assert dyn_size is not None, 'need placeholder, dim_tag.dimension or dim_tag.dyn_size for unbroadcast'
+        tiles = [1] * axis + [dyn_size] + [1] * (res.batch_ndim - axis - 1)
+        res.placeholder = tf.tile(res.placeholder, tiles)
 
     if dim_tag.kind == DimensionTag.Types.Batch:
       res = self.copy_add_batch_dim(batch_dim_axis=axis)
       if unbroadcast:
-        maybe_unbroadcast_placeholder(res)
+        maybe_unbroadcast_placeholder()
       return res
     # Note: if dim_tag is feature, but we are sparse, we just treat is as spatial, handled below.
     if dim_tag.kind == DimensionTag.Types.Feature and not self.sparse:
       res = self.copy_add_feature_dim(axis=axis)
       if unbroadcast:
-        maybe_unbroadcast_placeholder(res)
+        maybe_unbroadcast_placeholder()
         res.dim = dim_tag.dimension
         shape = list(res.shape)
         shape[res.get_batch_axis_excluding_batch(res.feature_dim_axis)] = dim_tag.dimension
@@ -1172,7 +1216,7 @@ class Data(object):
     res = self.copy_add_spatial_dim(spatial_dim_axis=axis, dim=1)
     assert res.batch_shape[axis] == 1
     if unbroadcast:
-      maybe_unbroadcast_placeholder(res)
+      maybe_unbroadcast_placeholder()
       shape = list(res.shape)
       shape[res.get_batch_axis_excluding_batch(axis)] = dim_tag.dimension
       res.shape = tuple(shape)
@@ -1220,6 +1264,7 @@ class Data(object):
     v.sanity_check()
     return v
 
+  # noinspection PyUnusedLocal
   def copy_compatible_to(self, data, unbroadcast=False, except_feature=False,
                          data_dyn_shape=None, check_sparse=True, check_dtype=True):
     """
@@ -1228,13 +1273,15 @@ class Data(object):
       It currently does not check whether existing dims match.
     :param bool unbroadcast: if True, all broadcast axes (axes with dim 1) will be tiled such that they match
     :param bool except_feature: if unbroadcast, do not unbroadcast the feature dim
-    :param tf.Tensor|list[tf.Tensor|int]|tuple[tf.Tensor|int]|None data_dyn_shape:
-      For unbroadcast, if we do not want to rely on tf.shape(data.placeholder).
+    :param tf.Tensor|list[tf.Tensor|int]|tuple[tf.Tensor|int]|None data_dyn_shape: deprecated, will be ignored.
+      If unbroadcast=True, use the DimensionTags of `data` to specify the shape to unbroadcast to.
+      See :func:`copy_add_axis_by_dim_tag`.
     :param bool check_sparse:
     :param bool check_dtype:
     :returns: Data, might add broadcast dimensions
     :rtype: Data
     """
+    del data_dyn_shape  # ignored
     assert not check_sparse or self.sparse == data.sparse
     assert not check_dtype or self.dtype == data.dtype
     v = self.copy()
@@ -1259,19 +1306,8 @@ class Data(object):
       new_v_axis = min(target_axis, v.batch_ndim)
       if target_axis not in mapped_axes.values():
         # Dim in data, but not in v
-        if unbroadcast and not (except_feature and data.feature_dim_axis == target_axis):
-          if data.batch_shape[target_axis] is not None:
-            axis_dyn_size = data.batch_shape[target_axis]
-          elif data_dyn_shape is not None:
-            axis_dyn_size = data_dyn_shape[target_axis]
-          else:
-            assert data.placeholder, "need data.placeholder for unbroadcast (target data: %r)" % v
-            axis_dyn_size = tf.shape(data.placeholder)[target_axis]
-          v = v.copy_add_dim_by_tag(
-            data.get_dim_tag(target_axis), axis=new_v_axis, unbroadcast=True, dyn_size=axis_dyn_size)
-        else:
-          # Default case, no unbroadcast
-          v = v.copy_add_dim_by_tag(data.get_dim_tag(target_axis), axis=new_v_axis, unbroadcast=False)
+        unbroadcast_axis = unbroadcast and not (except_feature and data.feature_dim_axis == target_axis)
+        v = v.copy_add_dim_by_tag(data.get_dim_tag(target_axis), axis=new_v_axis, unbroadcast=unbroadcast_axis)
         # Keep mapped_axes consistent
         mapped_axes = {v_ax + (1 if v_ax >= new_v_axis else 0): trg_ax for v_ax, trg_ax in mapped_axes.items()}
         mapped_axes[new_v_axis] = target_axis
@@ -1282,7 +1318,7 @@ class Data(object):
         matching_v_axis = matching_v_axes[0]
         if target_axis != matching_v_axis:
           # Order was wrong
-          v = v.copy_move_axis(matching_v_axis, new_v_axis, keep_other_axes_intact=True)
+          v = v.copy_swap_axes(matching_v_axis, new_v_axis)
           # Keep mapped_axes consistent
           mapped_axes[matching_v_axis], mapped_axes[new_v_axis] = mapped_axes[new_v_axis], mapped_axes[matching_v_axis]
 
