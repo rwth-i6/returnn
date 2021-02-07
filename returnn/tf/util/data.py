@@ -851,14 +851,35 @@ class Data(object):
     assert self.time_dim_axis is not None
     return self.copy_move_axis(self.time_dim_axis, time_dim_axis)
 
-  def _copy_template_translate_axes(self, translate_axis):
+  def copy_transpose(self, perm):
     """
-    :param (int|None)->(int|None) translate_axis: function translating an axis to another, both counted with batch-dim.
-      Should map `None` to `None`
-    :return: copy of myself but with translated axes, and without a placeholder
+    :param list[int] perm: permutation of the axes, counted with batch-dim.
+      Maps the new axes to the old axes
+    :return: copy of myself with permuted axes
+    :rtype: Data
     """
+    assert len(perm) == self.batch_ndim
+    assert set(perm) == set(range(self.batch_ndim))
+    if all(perm[axis] == axis for axis in range(self.batch_ndim)):
+      return self.copy()
+    inv_perm_ = {j: i for (i, j) in enumerate(perm)}
+    inv_perm = [j for (i, j) in sorted(inv_perm_.items())]
+
+    def translate_axis(axis):
+      """
+      :param int|None axis: counted with batch-dim
+      :return: translated axis (if not None)
+      :rtype: int|None
+      """
+      if axis is None:
+        return None
+      return inv_perm[axis]
+
     data = self.copy()
-    data.placeholder = None
+    if self.placeholder is not None:
+      from returnn.tf.util.basic import get_valid_scope_name_from_str
+      data.placeholder = tf.transpose(
+        self.placeholder, perm, name="%s_transpose" % get_valid_scope_name_from_str(self.name))
     data.batch_dim_axis = translate_axis(self.batch_dim_axis)
     new_feature_dim_axis = translate_axis(self.feature_dim_axis)
     if new_feature_dim_axis != data.feature_dim_axis:
@@ -895,32 +916,10 @@ class Data(object):
     if old_axis == new_axis:
       return self.copy()
 
-    def translate_axis(axis):
-      """
-      :param int|None axis:
-      :return: axis after move_axis
-      :rtype: int|None
-      """
-      if axis is None:
-        return None
-      if old_axis == new_axis:
-        return axis
-      if axis < min(old_axis, new_axis) or axis > max(old_axis, new_axis):
-        return axis
-      if axis == old_axis:
-        return new_axis
-      if old_axis < new_axis:
-        assert old_axis < axis <= new_axis
-        return axis - 1
-      assert new_axis <= axis < old_axis
-      return axis + 1
-
-    data = self._copy_template_translate_axes(translate_axis)
-    if self.placeholder is not None:
-      from .basic import move_axis
-      data.placeholder = move_axis(self.placeholder, old_axis, new_axis)
-    data.sanity_check()
-    return data
+    perm = list(range(self.batch_ndim))
+    old = perm.pop(old_axis)
+    perm.insert(new_axis, old)
+    return self.copy_transpose(perm)
 
   def copy_swap_axes(self, axis1, axis2):
     """
@@ -939,24 +938,9 @@ class Data(object):
     if axis1 == axis2:
       return self.copy()
 
-    def translate_axis(axis):
-      """
-      :param int|None axis:
-      :return: axis after move_axis
-      :rtype: int|None
-      """
-      if axis == axis1:
-        return axis2
-      if axis == axis2:
-        return axis1
-      return axis
-
-    data = self._copy_template_translate_axes(translate_axis)
-    if self.placeholder is not None:
-      from .basic import swapaxes
-      data.placeholder = swapaxes(self.placeholder, axis1, axis2)
-    data.sanity_check()
-    return data
+    perm = list(range(self.batch_ndim))
+    perm[axis1], perm[axis2] = perm[axis2], perm[axis1]
+    return self.copy_transpose(perm)
 
   def copy_as_bt_or_tb_major(self):
     """
@@ -1264,24 +1248,18 @@ class Data(object):
     v.sanity_check()
     return v
 
-  # noinspection PyUnusedLocal
-  def copy_compatible_to(self, data, unbroadcast=False, except_feature=False,
-                         data_dyn_shape=None, check_sparse=True, check_dtype=True):
+  def copy_compatible_to(self, data, unbroadcast=False, except_feature=False, check_sparse=True, check_dtype=True):
     """
     :param Data data: other data which the returned tensor should be compatible to
       It would add any missing axes with a dim 1 axis for automatic broadcasting.
       It currently does not check whether existing dims match.
     :param bool unbroadcast: if True, all broadcast axes (axes with dim 1) will be tiled such that they match
     :param bool except_feature: if unbroadcast, do not unbroadcast the feature dim
-    :param tf.Tensor|list[tf.Tensor|int]|tuple[tf.Tensor|int]|None data_dyn_shape: deprecated, will be ignored.
-      If unbroadcast=True, use the DimensionTags of `data` to specify the shape to unbroadcast to.
-      See :func:`copy_add_axis_by_dim_tag`.
     :param bool check_sparse:
     :param bool check_dtype:
     :returns: Data, might add broadcast dimensions
     :rtype: Data
     """
-    del data_dyn_shape  # ignored
     assert not check_sparse or self.sparse == data.sparse
     assert not check_dtype or self.dtype == data.dtype
     v = self.copy()
@@ -1328,10 +1306,7 @@ class Data(object):
     # Ensure time_dim_axis and feature_dim_axis is same as in data
     assert v.batch_dim_axis == data.batch_dim_axis  # there is only at most one batch_dim_axis
     v.time_dim_axis = data.time_dim_axis
-    if data.feature_dim_axis_or_unspecified is NotSpecified:
-      v.feature_dim_axis = NotSpecified
-    else:
-      v.feature_dim_axis = data.feature_dim_axis
+    v.feature_dim_axis = data.feature_dim_axis_or_unspecified
     if v.feature_dim_axis is not None:
       v.dim = v.batch_shape[v.feature_dim_axis]
     else:
@@ -2465,29 +2440,23 @@ class Data(object):
     return tuple([self.get_dim_tag(i) for i in range(self.batch_ndim)])
 
   @classmethod
-  def get_common_data(cls, sources, warnings_out=None, out_shape=None):
+  def get_common_data(cls, sources, warnings_out=None):
     """
     :param list[Data] sources:
     :param io.TextIOBase|io.StringIO|typing.TextIO|None warnings_out:
-    :param list[int|tf.Tensor]|None out_shape: will insert the shape dynamically
     :return: some generic data where the sources should be compatible to (with copy_compatible_to),
       i.e. it contains the union of all axes from all sources (least common multiple).
     :rtype: Data|None
     """
-    assert not out_shape
     if not sources:
       return None
     assert sources
     if len(sources) == 1:
-      if out_shape is not None:
-        out_shape.extend(sources[0].get_dynamic_batch_shape())
       return sources[0]
     max_ndim = max([s.batch_ndim for s in sources])
     # Try with the (first) largest.
     common = [s for s in sources if s.batch_ndim == max_ndim][0]
     common = common.copy()
-    if out_shape is not None:
-      out_shape.extend(common.get_dynamic_batch_shape())
     if any([s.beam for s in sources]):
       # Note: we don't use copy_extend_with_beam because we don't want to create any ops in the TF graph at this point.
       common.beam = SearchBeam.get_combined_beam(*[s.beam for s in sources])
@@ -2521,12 +2490,6 @@ class Data(object):
       return common
     # Ok, there is some other axis (or multiple), or we cannot identify/compare them because of incomplete information.
     # Try something more complex: Make all axes unique.
-    # Note that this should also work at template construction time,
-    # where we do not have access to the size_placeholder,
-    # and thus the dimension tags are not reliable (in the current implementation).
-    tags_dict_ext = {
-      id(tag): [(data, tags_dict[data].index(tag)) for data in sources if tag in tags_dict[data]]
-      for tag in all_dim_tags}
     for dim_tag in all_dim_tags:
       if not dim_tag.can_compare():
         if warnings_out:
@@ -2540,10 +2503,6 @@ class Data(object):
         largest_dim_tags.append(dim_tag)
         axis = common.get_default_new_axis_for_dim_tag(dim_tag)
         common = common.copy_template().copy_add_dim_by_tag(dim_tag, unbroadcast=True, axis=axis)
-        if out_shape is not None:
-          tag_data, tag_data_axis = tags_dict_ext[id(dim_tag)][0]
-          assert isinstance(tag_data, Data)
-          out_shape.insert(axis, tag_data.get_dim(tag_data_axis))
     # Simple fallback: Use first with biggest batch_ndim.
     # Was even simpler before: Use first.
     return common
