@@ -1431,7 +1431,6 @@ def test_scatter_nd():
   session.run(ref_grad)
 
 
-@unittest.skip('v.copy_compatible_to(x) in rel_embed tries to match a [B,2,F|5] tensor to [B,T,F|5]. We do not allow that!')
 def test_nd_indices_scatter_nd_time_major():
   def rel_embed(x, v, t):
     """
@@ -1442,8 +1441,8 @@ def test_nd_indices_scatter_nd_time_major():
     """
     import tensorflow as tf
     from returnn.tf.util.basic import nd_indices
-    v = v.copy_compatible_to(x)  # t_rel_var. (B, Ts, K)
-    assert v.dim == x.dim
+    v = v.copy_move_axis(v.batch_dim_axis, x.batch_dim_axis)  # t_rel_var. (B, Ts, K) or (Ts, B, K)
+    assert v.feature_dim_axis == x.feature_dim_axis and v.dim == x.dim
     t = t + 1  # shift by 1, because we init at -1
     # t = tf.Print(t, ["t:", t])
     time_dim = tf.shape(x.placeholder)[x.time_dim_axis]
