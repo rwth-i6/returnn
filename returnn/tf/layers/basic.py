@@ -100,9 +100,7 @@ def concat_sources(src_layers):
     return network.concat_sources_dropout_cache[cache_key].copy()
   data = get_concat_sources_data_template(src_layers)
   # Currently we assume that get_concat_sources_data_template will match Data.get_common_data (besides the dim).
-  data_dyn_shape = []
-  common_source = Data.get_common_data(
-    [s.output for s in src_layers], warnings_out=log.v4, out_shape=data_dyn_shape)
+  common_source = Data.get_common_data([s.output for s in src_layers], warnings_out=log.v4)
   data.size_placeholder = common_source.size_placeholder.copy()  # to get right dimension tags
   layers_data = []
   with _name_scope_for_concat_src_layers(src_layers, "concat_sources"):
@@ -110,8 +108,7 @@ def concat_sources(src_layers):
       assert not layer.output.sparse, "sparse concat not supported"
       assert layer.output.dtype == data.dtype, "incompatible dtype with layer %r" % layer
       # unbroadcast is needed for tf.concat.
-      layers_data.append(layer.output.copy_compatible_to(
-        data, unbroadcast=True, except_feature=True, data_dyn_shape=data_dyn_shape))
+      layers_data.append(layer.output.copy_compatible_to(data, unbroadcast=True, except_feature=True))
     data.placeholder = tf.concat(
       axis=data.feature_dim_axis,
       values=[layer_data.placeholder for layer_data in layers_data])
@@ -1282,7 +1279,7 @@ class ScatterNdLayer(_ConcatInputLayer):
     pos_shape = [position.output.get_dim(i) for i in range(pos_ndim)]
     output_dim = output_dim_via_time_from.output.time_dimension()
     input_shape = pos_shape + [self.input_data.get_dim(i) for i in input_extra_axes]
-    input_expanded = self.input_data.copy_compatible_to(common, unbroadcast=True, data_dyn_shape=input_shape)
+    input_expanded = self.input_data.copy_compatible_to(common, unbroadcast=True)
     input_v = input_expanded.placeholder
     if filter_invalid_indices:
       mask = tf.logical_or(tf.less(pos_v, 0), tf.greater_equal(pos_v, output_dim))
@@ -4738,25 +4735,23 @@ class StackLayer(LayerBase):
       i.e. some reasonable default for a new spatial axis.
     """
     super(StackLayer, self).__init__(**kwargs)
-    data_dyn_shape = []
-    axis_, common_source = self._get_axis_and_common(self.sources, data_dyn_shape=data_dyn_shape)
+    axis_, common_source = self._get_axis_and_common(self.sources)
     if axis is None:
       axis = axis_
     assert self.output.batch_shape[axis] == len(self.sources)
     sources_ = [
-      src.output.copy_compatible_to(common_source, unbroadcast=True, data_dyn_shape=data_dyn_shape)
+      src.output.copy_compatible_to(common_source, unbroadcast=True)
       for src in self.sources]
     self.output.placeholder = tf.stack([src.placeholder for src in sources_], axis=axis)
 
   @classmethod
-  def _get_axis_and_common(cls, sources, data_dyn_shape=None):
+  def _get_axis_and_common(cls, sources):
     """
     :param list[LayerBase] sources:
-    :param list[int]|None data_dyn_shape:
     :rtype: (int,Data)
     """
     from returnn.tf.util.basic import DimensionTag
-    common_source = Data.get_common_data([src.output for src in sources], out_shape=data_dyn_shape).copy_template()
+    common_source = Data.get_common_data([src.output for src in sources]).copy_template()
     tag = DimensionTag(kind=DimensionTag.Types.Spatial, dimension=1)
     return common_source.get_default_new_axis_for_dim_tag(tag), common_source
 
