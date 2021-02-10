@@ -1107,6 +1107,22 @@ def test_SoftmaxOverSpatialLayer_window():
     numpy.testing.assert_allclose(out_np[~mask], 0, rtol=1e-5)  # check if masking worked
 
 
+def test_SplitLayer_after_SplitDimsLayer():
+  n_batch, n_time, n_in = 7, 3, 40
+  config = Config({
+    "extern_data": {"data": {"dim": n_in}},
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope():
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "split_heads": {"class": "split_dims", "dims": (2, -1), "axis": "F"},  # [B,T,2,F|20]
+      "split_qkv": {"class": "split", "size_splits": (5, 5, 10), "axis": "F", "from": "split_heads"},
+      "output": {"class": "copy", "from": "split_qkv/0"}})  # [B,T,2,F|5]
+    out_t = net.get_default_output_layer().output.placeholder
+    assert out_t.shape.as_list() == [None, None, 2, 5]
+
+
 def test_SplitDimsLayer_simple_feat():
   n_batch, n_time, n_in = 7, 3, 20
   config = Config({
