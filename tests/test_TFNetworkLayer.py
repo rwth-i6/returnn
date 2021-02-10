@@ -1281,7 +1281,7 @@ def test_MergeDimsLayer_batch_time_time_major_ext():
       {"shape": (None, 5, 3), "time_dim_axis": 0, "batch_dim_axis": 1}, (n_time, n_batch, 5, 3),
       {"axes": "BT"}, (5, 3), (n_time * n_batch, 5, 3))
     assert layer.output.batch_dim_axis == 0
-    assert layer.output.time_dim_axis == 1  # Note: This is currently the behavior, but maybe we change that.
+    assert layer.output.time_dim_axis is None  # Note: This behavior was changed.
 
 
 def test_MergeDimsLayer_except_time_ext():
@@ -1302,7 +1302,8 @@ def test_MergeDimsLayer_static_time():
       session,
       {"shape": (3, 5), "time_dim_axis": 1}, (n_batch, 3, 5),
       {"axes": "static"}, (15,), (n_batch, 15))
-    assert layer.output.batch_dim_axis == 0 and layer.output.time_dim_axis == layer.output.feature_dim_axis == 1
+    assert layer.output.batch_dim_axis == 0 and layer.output.feature_dim_axis == 1
+    assert layer.output.time_dim_axis is None
 
 
 def test_MergeDimsLayer_SplitBatchTimeLayer_time_major():
