@@ -2707,6 +2707,14 @@ class SplitLayer(_ConcatInputLayer):
     return self._sub_layers.get(layer_name, None)
 
   @classmethod
+  def get_out_data_from_opts(cls, sources, **kwargs):
+    """
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    return get_concat_sources_data_template(sources)
+
+  @classmethod
   def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
     """
     :param str layer_name: name of the sub_layer (right part of '/' separated path)
