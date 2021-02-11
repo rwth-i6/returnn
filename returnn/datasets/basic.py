@@ -114,6 +114,7 @@ class Dataset(object):
     self.rnd_seq_drop = None  # type: typing.Optional[Random]
     self.num_inputs = 0  # usually not used, but num_outputs instead, which is more generic
     self.num_outputs = None  # type: typing.Optional[typing.Dict[str,typing.Tuple[int,int]]]  # tuple is num-classes, len(shape).  # nopep8
+    self.default_data_key = "data"  # type: str  # Allows Datasets to re-define their input/default data key
     self.window = window
     self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
     if random_seed_offset is None:

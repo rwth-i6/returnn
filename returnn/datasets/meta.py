@@ -180,6 +180,7 @@ class MetaDataset(CachedDataset2):
                seq_list_file=None,
                seq_order_control_dataset=None,
                seq_lens_file=None,
+               default_data_key="data",
                data_dims=None,
                data_dtypes=None,  # noqa  # not used
                window=1, **kwargs):
@@ -197,6 +198,8 @@ class MetaDataset(CachedDataset2):
     :param str|None seq_order_control_dataset: if set, this dataset will define the order for each epoch.
     :param str|None seq_lens_file: filename. json. dict[str,dict[str,int]], seq-tag -> data-key -> len.
       Use if getting sequence length from loading data is too costly.
+    :param str|None default_data_key: if seq_order_control_dataset is not set, this will determine which dataset
+      is the default dataset, and which data stream is used for the sequence length computation
     :param dict[str,(int,int)] data_dims: self-data-key -> data-dimension, len(shape) (1 ==> sparse repr).
        Deprecated/Only to double check. Read from data if not specified.
     :param dict[str,str] data_dtypes: self-data-key -> dtype. Read from data if not specified.
@@ -208,9 +211,11 @@ class MetaDataset(CachedDataset2):
     self.data_map = data_map
     self.dataset_keys = set([m[0] for m in self.data_map.values()])  # type: typing.Set[str]
     self.data_keys = set(self.data_map.keys())  # type: typing.Set[str]
-    assert "data" in self.data_keys
-    self.target_list = sorted(self.data_keys - {"data"})
-    self.default_dataset_key = seq_order_control_dataset or self.data_map["data"][0]
+    self.target_list = sorted(self.data_keys)
+    self.default_dataset_key = seq_order_control_dataset or self.data_map[default_data_key][0]
+    assert default_data_key in self.data_map.keys(), (
+      "default data key %s was not found in data map: %s" % (default_data_key, self.data_map))
+    self.default_data_key = default_data_key
     self.seq_order_control_dataset = seq_order_control_dataset
 
     # This will only initialize datasets needed for features occuring in data_map
@@ -237,7 +242,6 @@ class MetaDataset(CachedDataset2):
     if data_dims:
       data_dims = convert_data_dims(data_dims)
       self.data_dims = data_dims
-      assert "data" in data_dims
       for key in self.target_list:
         assert key in data_dims
     else:
@@ -251,7 +255,7 @@ class MetaDataset(CachedDataset2):
       if dataset_data_key in dataset.labels:
         self.labels[data_key] = dataset.labels[dataset_data_key]
 
-    self.num_inputs = self.data_dims["data"][0]
+    self.num_inputs = self.data_dims[default_data_key][0] if default_data_key in self.data_dims.keys() else 0
     self.num_outputs = self.data_dims
 
     self.orig_seq_order_is_initialized = False
@@ -317,14 +321,13 @@ class MetaDataset(CachedDataset2):
     return seq_list
 
   def _get_dataset_seq_length(self, seq_idx):
+    default_dataset = self.datasets[self.default_dataset_key]
     if not self.orig_seq_order_is_initialized:
       # To use get_seq_length() we first have to init the sequence order once in original order.
       # If sequence lengths are not needed by get_seq_order_for_epoch this is never executed.
-      self.datasets[self.default_dataset_key].init_seq_order(
-        epoch=self.epoch, seq_list=self.seq_list_original[self.default_dataset_key])
+      default_dataset.init_seq_order(epoch=self.epoch, seq_list=self.seq_list_original[self.default_dataset_key])
       self.orig_seq_order_is_initialized = True
-
-    return self.datasets[self.default_dataset_key].get_seq_length(seq_idx)["data"]
+    return default_dataset.get_seq_length(seq_idx)[default_dataset.default_data_key]
 
   def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
@@ -357,7 +360,8 @@ class MetaDataset(CachedDataset2):
           :param int s:
           :rtype: int
           """
-          return self._seq_lens[self.seq_list_original[self.default_dataset_key][s]]["data"]
+          default_dataset_default_data_key = self.datasets[self.default_dataset_key].default_data_key
+          return self._seq_lens[self.seq_list_original[self.default_dataset_key][s]][default_dataset_default_data_key]
       elif self._seq_order_seq_lens_file:
         get_seq_len = self._get_seq_order_seq_lens_by_idx
       else:
@@ -434,9 +438,8 @@ class MetaDataset(CachedDataset2):
     :rtype: DatasetSeq
     """
     seq_tag = self.seq_list_ordered[self.default_dataset_key][seq_idx]
-    features = self._get_data(seq_idx, "data")
-    targets = {target: self._get_data(seq_idx, target) for target in self.target_list}
-    return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features, targets=targets)
+    features = {target: self._get_data(seq_idx, target) for target in self.target_list}
+    return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features, targets=None)
 
   def get_seq_length(self, sorted_seq_idx):
     """
