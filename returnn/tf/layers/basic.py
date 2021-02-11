@@ -6192,12 +6192,12 @@ class SwitchLayer(LayerBase):
     :rtype: list[LayerBase]
     """
     if isinstance(self.condition, LayerBase):
-      return [self.condition, self.true_from, self.false_from]
-    assert isinstance(self.condition, bool)
-    if self.condition:
-      return [self.true_from]
+      dep_layers = [self.condition, self.true_from, self.false_from]
     else:
-      return [self.false_from]
+      assert isinstance(self.condition, bool)
+      dep_layers = [self.true_from] if self.condition else [self.false_from]
+    # Filter out constants
+    return [layer for layer in dep_layers if isinstance(layer, LayerBase)]
 
 
 class CondLayer(LayerBase):
