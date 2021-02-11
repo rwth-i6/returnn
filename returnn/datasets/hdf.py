@@ -18,7 +18,6 @@ from returnn.log import log
 # Common attribute names for HDF dataset, which should be used in order to be proceed with HDFDataset class.
 attr_seqLengths = 'seqLengths'
 attr_inputPattSize = 'inputPattSize'
-attr_numLabels = 'numLabels'
 attr_times = 'times'
 attr_ctcIndexTranscription = 'ctcIndexTranscription'
 
@@ -165,16 +164,14 @@ class HDFDataset(CachedDataset):
       self.num_inputs = num_inputs[0]
     assert self.num_inputs == num_inputs[0], "wrong input dimension in file %s (expected %s got %s)" % (
                                              filename, self.num_inputs, num_inputs[0])
+    num_outputs = {}
     if 'targets/size' in fin:
-      num_outputs = {}
       for k in self.target_keys:
         if numpy.isscalar(fin['targets/size'].attrs[k]):
           num_outputs[k] = (int(fin['targets/size'].attrs[k]), len(fin['targets/data'][k].shape))
         else:  # hdf_dump will give directly as tuple
           assert fin['targets/size'].attrs[k].shape == (2,)
           num_outputs[k] = tuple([int(v) for v in fin['targets/size'].attrs[k]])
-    else:
-      num_outputs = {'classes': [int(fin.attrs[attr_numLabels]), 1]}
     if 'inputs' in fin:
       num_outputs["data"] = num_inputs
     if not self.num_outputs:
@@ -1290,6 +1287,7 @@ class HDFDatasetWriter:
     dataset.init_seq_order(epoch)
 
     data_keys = sorted(dataset.get_data_keys())
+    assert data_keys, "Got no data keys from dataset to write to HDF."
     print("Data keys:", data_keys, file=log.v3)
     if "orth" in data_keys:  # special workaround for now, not handled
       data_keys.remove("orth")
@@ -1298,7 +1296,6 @@ class HDFDatasetWriter:
     data_target_keys = [key for key in dataset.get_target_list() if key in data_keys]
     data_input_keys = [key for key in data_keys if key not in data_target_keys]
     default_data_input_key = None
-    progress_bar_data_key = None
     if data_input_keys:
       if len(data_input_keys) > 1:
         if "data" in data_input_keys:
@@ -1308,18 +1305,9 @@ class HDFDatasetWriter:
       else:
         default_data_input_key = data_input_keys[0]
       progress_bar_data_key = default_data_input_key
+    else:
+      progress_bar_data_key = "classes" if "classes" in data_target_keys else data_target_keys[0]
     print("Using input data key:", default_data_input_key)
-    default_data_target_key = None
-    if len(data_target_keys) > 1:
-      if "classes" in data_target_keys:
-        default_data_target_key = "classes"
-      else:
-        print("Warning: not sure which target data key to use from {}. Will not set the '{}' attibute.".format(
-          data_target_keys, attr_numLabels), file=log.v2)
-    elif len(data_target_keys) == 1:
-      default_data_target_key = data_target_keys[0]
-    progress_bar_data_key = progress_bar_data_key or default_data_target_key or data_target_keys[0]
-    print("Using target data key:", default_data_target_key)
 
     # All but one of the inputs have to be treated as targets because our HDF format only supports one input.
     data_target_keys += [key for key in data_input_keys if key != default_data_input_key]
@@ -1441,7 +1429,5 @@ class HDFDatasetWriter:
 
     # Set some old-format attribs. Not needed for newer RETURNN versions.
     hdf_dataset.attrs[attr_inputPattSize] = dataset.num_inputs
-    if default_data_target_key:
-      hdf_dataset.attrs[attr_numLabels] = dataset.num_outputs.get(default_data_target_key, (0, 0))[0]
 
     print("All done.", file=log.v3)
