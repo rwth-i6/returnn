@@ -657,6 +657,13 @@ class Data(object):
     if self.feature_dim_axis is not None:
       assert self.dim == self.batch_shape[self.feature_dim_axis], (
         "%s: inconsistent dim. feature axis or unspecified: %r." % (self, self.feature_dim_axis_or_unspecified))
+    if self.size_placeholder is not None:
+      assert None not in self.size_placeholder
+      for i, dyn_size in self.size_placeholder.items():
+        assert 0 <= i < self.ndim
+        assert dyn_size.dtype in (tf.int32, tf.int64)
+        assert dyn_size.shape.ndims == 1, (
+          "%s: all size_placeholder entries should have shape [B], but got: %r" % (self, self.size_placeholder))
     if not ignore_placeholder and self.placeholder is not None:
       # Note: We could just call self.placeholder.set_shape.
       # However, we are more explicit. We assume that the placeholder has already a known shape, and error otherwise.
