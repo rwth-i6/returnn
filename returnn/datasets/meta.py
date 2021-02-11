@@ -255,7 +255,6 @@ class MetaDataset(CachedDataset2):
       if dataset_data_key in dataset.labels:
         self.labels[data_key] = dataset.labels[dataset_data_key]
 
-    self.num_inputs = self.data_dims[default_data_key][0] if default_data_key in self.data_dims.keys() else 0
     self.num_outputs = self.data_dims
 
     self.orig_seq_order_is_initialized = False
