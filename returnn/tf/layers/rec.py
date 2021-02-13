@@ -8457,18 +8457,19 @@ class CumConcatLayer(_ConcatInputLayer):
     axis = self._get_rec_history_axis(data, axis)
 
     if axis is None:
-      axis = 0
+      axis = 1
       # placeholder will get dim 1 (i.e. exactly one slice for frame t), but shape has to be None (= variable)
-      data = data.copy_add_spatial_dim(dim=1, spatial_dim_axis=axis)
+      data = data.copy_as_batch_major().copy_add_spatial_dim(dim=1, spatial_dim_axis=axis)
       axis_wo_batch = data.get_batch_axis_excluding_batch(axis)
       data.shape = data.shape[:axis_wo_batch] + (None,) + data.shape[axis_wo_batch+1:]
 
-      last_frames = self._rec_previous_layer.rec_vars_outputs["state"]  # [t, ..., D]
-      current_frame = data.placeholder  # [1, ..., D]
-      concat_frames = tf.concat([last_frames, current_frame], axis=axis)  # [t+1, ..., D]
+      last_frames = self._rec_previous_layer.rec_vars_outputs["state"]  # [B, t, ..., D]
+      current_frame = data.placeholder  # [B, 1, ..., D]
+      concat_frames = tf.concat([last_frames, current_frame], axis=axis)  # [B, t+1, ..., D]
       self.rec_vars_outputs["state"] = concat_frames
       data.placeholder = concat_frames
-      dyn_size = tf.tile(tf.expand_dims(self.network.get_rec_step_index() + 1, axis=0), [data.get_batch_dim()])
+
+      dyn_size = tf.broadcast_to(self.network.get_rec_step_index() + 1, [data.get_batch_dim()])
     else:
       # If not inside a RecLayer, this layer is a no-op
       data.size_placeholder = self.input_data.size_placeholder.copy()
@@ -8516,13 +8517,18 @@ class CumConcatLayer(_ConcatInputLayer):
     if axis is None:
       # TODO: Is there a better way to figure out we are actually in a RecLayer?
       # Assume inside a RecLayer, add a new rec-history time axis
-      axis = 0
+      # Currently SelectSearchSourcesLayer assumes that all rec_vars_outputs are batch-major.
+      # Therefore we here copy the input as batch-major, and then add the time axis at axis 1.
+      # In the future, when SelectSearchSourcesLayer has support for this, we can change this to operate on axis 0,
+      # which should be more efficient
+      axis = 1
       # placeholder will get dim 1 (i.e. exactly one slice for frame t), but shape has to be None (= variable)
-      data = data.copy_add_spatial_dim(dim=1, spatial_dim_axis=axis)
+      data = data.copy_as_batch_major().copy_add_spatial_dim(dim=1, spatial_dim_axis=axis)
       axis_wo_batch = data.get_batch_axis_excluding_batch(axis)
       data.shape = data.shape[:axis_wo_batch] + (None,) + data.shape[axis_wo_batch+1:]
 
-      dyn_size = tf.zeros(shape=())  # temporarily, will be overridden
+      # will be overwritten later
+      dyn_size = tf.zeros((0,), dtype='int32', name='temporary_dyn_size')
     else:
       dyn_size = tf.identity(data.get_dynamic_size(axis))
 
@@ -8549,8 +8555,8 @@ class CumConcatLayer(_ConcatInputLayer):
     :rtype: dict[str,tf.Tensor]
     """
     if network.is_inside_rec_layer():
-      data = get_concat_sources_data_template(sources)
-      data = data.copy_add_spatial_dim(dim=0, spatial_dim_axis=0)
+      data = get_concat_sources_data_template(sources).copy_as_batch_major()
+      data = data.copy_add_spatial_dim(dim=0, spatial_dim_axis=1)
 
       return {"state": tf.zeros(data.get_batch_shape(batch_dim=batch_dim), dtype=data.dtype)}
     else:
@@ -8564,12 +8570,10 @@ class CumConcatLayer(_ConcatInputLayer):
     :rtype: dict[str, tf.TensorShape]
     """
     if network.is_inside_rec_layer():
-      data = get_concat_sources_data_template(sources)
-      data = data.copy_add_spatial_dim(dim=1, spatial_dim_axis=0)
-      axis = data.time_dim_axis
-
-      shape = data.get_batch_shape(batch_dim=None)
-      shape = shape[:axis] + (None,) + shape[axis+1:]
+      axis = 1
+      data = get_concat_sources_data_template(sources).copy_as_batch_major()
+      shape = data.batch_shape
+      shape = shape[:axis] + (None,) + shape[axis:]
       return {"state": tf.TensorShape(shape)}
     else:
       return {}
