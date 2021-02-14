@@ -7480,6 +7480,8 @@ class PrintLayer(LayerBase):
       with tf.control_dependencies([output]):
         self.output.placeholder = tf.identity(source.output.placeholder)
       self.output.size_placeholder = source.output.size_placeholder.copy()
+      if source.allow_inf_in_output:
+        self.allow_inf_in_output = True
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, **kwargs):
