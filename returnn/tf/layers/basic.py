@@ -1179,9 +1179,7 @@ class GatherNdLayer(_ConcatInputLayer):
     if position.batch_dim_axis is not None:
       position = position.copy_as_batch_major()
     else:
-      position = position.copy_add_batch_dim(batch_dim_axis=0)
-      position.placeholder = tf.tile(
-        position.placeholder, [tf.shape(x.placeholder)[0]] + [1] * (position.batch_ndim - 1))
+      position = position.copy_add_batch_dim(batch_dim_axis=0, batch_dim=tf.shape(x.placeholder)[x.batch_dim_axis])
     self.output.placeholder = batch_gather(x.placeholder, position.placeholder)  # (B,...)
 
   def get_dep_layers(self):
