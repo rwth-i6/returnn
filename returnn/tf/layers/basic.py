@@ -2025,11 +2025,7 @@ class RangeInAxisLayer(LayerBase):
       out = tf.reshape(out, out_shape)  # add missing axes (keep_dims)
       if unbroadcast:
         out = out + tf.zeros(source_shape, dtype=out.dtype)
-      self.output.placeholder = out
-      self.output.size_placeholder = {i: size for (i, size) in source.size_placeholder.items() if i == axis_wo_b}
-    else:
-      self.output.placeholder = out
-      self.output.size_placeholder = {0: size for (i, size) in source.size_placeholder.items() if i == axis_wo_b}
+    self.output.placeholder = out
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, axis, dtype="int32", keepdims=True, sparse=False, **kwargs):
@@ -2049,6 +2045,7 @@ class RangeInAxisLayer(LayerBase):
       out = source.copy_template(name="%s_output" % name)
       out.shape = tuple([d if (i == axis_wo_b) else 1 for (i, d) in enumerate(out.shape)])
       out.dtype = dtype
+      out.size_placeholder = {i: size for (i, size) in source.size_placeholder.items() if i == axis_wo_b}
     else:
       dim = source.batch_shape[axis]
       out = Data(name="%s_output" % name, shape=(dim,), dim=dim, dtype=dtype, batch_dim_axis=None)
@@ -2056,6 +2053,7 @@ class RangeInAxisLayer(LayerBase):
         out.time_dim_axis = 0
       if axis != source.feature_dim_axis:
         out.feature_dim_axis = None
+      out.size_placeholder = {0: size for (i, size) in source.size_placeholder.items() if i == axis_wo_b}
     out.sparse = sparse
     return out
 
