@@ -295,6 +295,25 @@ class DimensionTag(object):
         res.append(tag)
     return res
 
+  def get_dim_value(self):
+    """
+    Infers the dim this axis should have if unbroadcasted.
+    If `self.src_data` has a placeholder, will use the shape from there.
+    Otherwise, uses `self.dimension` (if static) or `self.dyn_size` (if dynamic).
+    :rtype: int|tf.Tensor
+    """
+    if self.dimension is not None:
+      return self.dimension
+    if self.kind == self.Types.Batch:
+      from returnn.tf.layers.base import LayerBase
+      return LayerBase.get_recent_layer().get_batch_dim()
+    if self.src_data is not None and self.src_axis is not None and self.src_data.placeholder is not None:
+      from returnn.tf.util.basic import get_shape
+      return get_shape(self.src_data.placeholder)[self.src_axis]
+    if self.dyn_size is not None:
+      return tf.math.reduce_max(self.dyn_size)
+    raise Exception('%s: need placeholder, self.dimension or self.dyn_size for dim value' % self)
+
 
 class SearchBeam:
   """
@@ -1021,9 +1040,10 @@ class Data(object):
     assert self.feature_dim_axis is not None
     return self.copy_with_feature_dim_axis(-1)
 
-  def copy_add_batch_dim(self, batch_dim_axis):
+  def copy_add_batch_dim(self, batch_dim_axis, batch_dim):
     """
     :param int batch_dim_axis:
+    :param int|tf.Tensor batch_dim: the batch dim to unbroadcast to
     :return: copy of myself with added batch-dim
     :rtype: Data
     """
@@ -1035,6 +1055,10 @@ class Data(object):
     data = self.copy()
     if data.placeholder is not None:
       data.placeholder = tf.expand_dims(data.placeholder, batch_dim_axis, name="%s_add_batch_dim" % self.name)
+      if not isinstance(batch_dim, int) or batch_dim != 1:
+        assert batch_dim is not None
+        tiles = [1] * batch_dim_axis + [batch_dim] + [1] * (self.batch_ndim - batch_dim_axis)
+        data.placeholder = tf.tile(data.placeholder, tiles)
     data.batch_dim_axis = batch_dim_axis
     other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
     for k, a in other_special_axes.items():
@@ -1157,8 +1181,7 @@ class Data(object):
     """
     :param DimensionTag dim_tag:
     :param bool unbroadcast: If True unbroadcast the newly added axis.
-      If `dim_tag.src_data` has a placeholder, will use the shape from there.
-      Otherwise, uses `dim_tag.dimension` (if static) or `dim_tag.dyn_size` (if dynamic) to infer shape.
+      Will infer the unbroadcast shape via :func:`DimensionTag.get_dim_value`
     :param int|None axis:
     :rtype: Data
     """
@@ -1171,26 +1194,15 @@ class Data(object):
       """
       if res.placeholder is None:
         return
+      assert dim_tag.kind != DimensionTag.Types.Batch
       assert res.batch_shape[axis] == 1
       with tf.name_scope("copy_add_dim_by_tag_unbroadcast"):
-        dyn_size = None
-        if dim_tag.src_data is not None and dim_tag.src_axis is not None and dim_tag.src_data.placeholder is not None:
-          dyn_size = tf.shape(dim_tag.src_data.placeholder)[dim_tag.src_axis]
-        if dyn_size is None:
-          dyn_size = dim_tag.dimension
-        if dyn_size is None and dim_tag.dyn_size is not None:
-          dyn_size = tf.math.reduce_max(dim_tag.dyn_size)
-        if dyn_size is None and dim_tag.kind == DimensionTag.Types.Batch:
-          from returnn.tf.layers.base import LayerBase
-          dyn_size = LayerBase.get_recent_layer().get_batch_dim()
-        assert dyn_size is not None, 'need placeholder, dim_tag.dimension or dim_tag.dyn_size for unbroadcast'
-        tiles = [1] * axis + [dyn_size] + [1] * (res.batch_ndim - axis - 1)
+        tiles = [1] * axis + [dim_tag.get_dim_value()] + [1] * (res.batch_ndim - axis - 1)
         res.placeholder = tf.tile(res.placeholder, tiles)
 
     if dim_tag.kind == DimensionTag.Types.Batch:
-      res = self.copy_add_batch_dim(batch_dim_axis=axis)
-      if unbroadcast:
-        maybe_unbroadcast_placeholder()
+      batch_dim = dim_tag.get_dim_value() if unbroadcast else 1
+      res = self.copy_add_batch_dim(batch_dim_axis=axis, batch_dim=batch_dim)
       return res
     # Note: if dim_tag is feature, but we are sparse, we just treat is as spatial, handled below.
     if dim_tag.kind == DimensionTag.Types.Feature and not self.sparse:
