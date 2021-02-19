@@ -3059,6 +3059,33 @@ def test_ReuseParams_dep_loop_3():
     session.run(network.get_default_output_layer().output.placeholder, feed_dict=feed)
 
 
+def test_ReuseParams_different_names():
+  n_batch, n_time, n_total, n_heads = 7, 3, 40, 2
+  assert n_total % n_heads == 0
+  config = Config({
+    "extern_data": {"data": {"dim": n_total}},
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope():
+    net = TFNetwork(config=config)
+
+    def custom(reuse_layer, *args, **kwargs):
+      return reuse_layer.params['QKV']
+
+    net.construct_from_dict({
+      "self_att": {"class": "self_attention", "num_heads": n_heads, "total_key_dim": n_total, "n_out": n_total},
+      "linear": {"class": "linear", "n_out": n_total * 3, "activation": None, "with_bias": False,
+        "reuse_params": {
+          "auto_create_missing": False,  # should not matter as we do not have any bias
+          "map": {"W": {"reuse_layer": "self_att", "custom": custom}}}},
+      "output": {"class": "copy", "from": "linear"}})
+
+    self_att = net.get_layer("self_att")
+    linear = net.get_layer("linear")
+    assert list(self_att.params.keys()) == ["QKV"] and list(linear.params.keys()) == ["W"]
+    assert self_att.params["QKV"] is linear.params["W"]
+
+
 def test_LossAsIs_custom_dim():
   config = Config()
   config.update({
