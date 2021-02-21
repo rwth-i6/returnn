@@ -1123,6 +1123,31 @@ def test_SplitLayer_after_SplitDimsLayer():
     assert out_t.shape.as_list() == [None, None, 2, 5]
 
 
+def test_SplitLayer_search():
+  n_batch, n_time, n_in, n_out = 7, 3, 10, 10
+  beam_size = 4
+  config = Config({
+    "extern_data": {
+      "data": {"dim": n_in},
+      "classes": {"dim": n_out, "sparse": True, "available_for_inference": False}},
+    "debug_print_layer_output_template": True
+  })
+  with make_scope():
+    net = TFNetwork(config=config, search_flag=True, train_flag=False, eval_flag=True)
+    net.construct_from_dict({
+      "encoder_seq": {"class": "linear", "activation": "tanh", "n_out": 5},
+      "encoder": {"class": "reduce", "mode": "sum", "from": ["encoder_seq"], "axis": "T"},
+      "output": {"class": "rec", "from": [], "target": "classes", "max_seq_len": 20, "unit": {
+        "embed": {"class": "linear", "from": ["prev:output"], "activation": None, "n_out": 10},
+        "split": {"class": "split", "size_splits": (5, 5), "axis": "F", "from": ["embed"]},
+        "output_prob": {"class": "softmax", "from": ["split/0", "base:encoder"], "target": "classes", "loss": "ce"},
+        "output": {
+          "class": "choice", "target": "classes", "beam_size": beam_size, "from": ["output_prob"], "initial_output": 0},
+        "end": {"class": "compare", "from": ["output"], "value": 0}
+      }},
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes"}})
+
+
 def test_SplitDimsLayer_simple_feat():
   n_batch, n_time, n_in = 7, 3, 20
   config = Config({
