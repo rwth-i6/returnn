@@ -88,7 +88,7 @@ class HDFDataset(CachedDataset):
       self.labels = {
         k: [self._decode(item) for item in fin["targets/labels"][k][...].tolist()]
         for k in fin['targets/labels']}
-    if not self.labels:
+    if not self.labels and "labels" in fin:
       labels = [item.split('\0')[0] for item in fin["labels"][...].tolist()]  # type: typing.List[str]
       self.labels = {'classes': labels}
       assert len(self.labels['classes']) == len(labels), (
