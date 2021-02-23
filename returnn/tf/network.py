@@ -1158,6 +1158,8 @@ class TFNetwork(object):
     for layer in self._get_all_layers():
       assert isinstance(layer, LayerBase)
       for param_name, param in sorted(layer.params.items()):
+        if isinstance(param, tf.Tensor):  # could happen with reuse_param
+          continue
         assert isinstance(param, tf.Variable)
         if param in ls:  # could happen with reuse_params
           continue
@@ -1205,6 +1207,8 @@ class TFNetwork(object):
       layer = self.layers[layer_name]
       assert isinstance(layer, LayerBase)
       for param_name, param in sorted(layer.params.items()):
+        if isinstance(param, tf.Tensor):  # could happen with reuse_params
+          continue
         assert isinstance(param, tf.Variable)
         if param in trainable_vars_col:
           ls.append(param)

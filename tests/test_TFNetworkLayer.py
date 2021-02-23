@@ -1875,7 +1875,7 @@ def test_reuse_params_map_custom():
     l1 = network.layers["l1"]
     l2 = network.layers["output"]
     assert_equal(set(l1.params.keys()), {"W"})
-    assert_equal(set(l2.params.keys()), {"b"})
+    assert_equal(set(l2.params.keys()), {"W", "b"})
     assert_equal(set(network.get_trainable_params()), {l1.params["W"], l2.params["b"]})
 
 
@@ -1904,7 +1904,7 @@ def test_reuse_params_map_custom_rev():
     network.construct_from_dict(config.typed_dict["network"])
     l1 = network.layers["l1"]
     l2 = network.layers["output"]
-    assert_equal(set(l1.params.keys()), {"b"})
+    assert_equal(set(l1.params.keys()), {"W", "b"})
     assert_equal(set(l2.params.keys()), {"W"})
     assert_equal(set(network.get_trainable_params()), {l2.params["W"], l1.params["b"]})
 
@@ -1968,7 +1968,7 @@ def test_reuse_params_map_custom_dep_loop():
     assert_equal(set(train_rec_layer.cell.input_layers_moved_out), {"output", "target_embed"})
     assert_equal(set(train_rec_layer.cell.output_layers_moved_out), {"output_prob", "readout", "readout_in"})
     assert isinstance(train_rec_layer.cell.output_layers_net, TFNetwork)
-    assert_equal(set(train_rec_layer.cell.output_layers_net.layers["output_prob"].params.keys()), {"b"})
+    assert_equal(set(train_rec_layer.cell.output_layers_net.layers["output_prob"].params.keys()), {"W", "b"})
   with make_scope() as session:
     print("Construct for search")
     search_net = TFNetwork(config=config, train_flag=False, eval_flag=True, search_flag=True)

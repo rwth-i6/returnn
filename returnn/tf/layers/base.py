@@ -161,7 +161,7 @@ class LayerBase(object):
     self.collocate_with = collocate_with or []
     self.post_init_hooks = []  # list of functions
     self.sources = list(sources)
-    self.params = {}  # type: typing.Dict[str,tf.Variable]
+    self.params = {}  # type: typing.Dict[str,typing.Union[tf.Variable,tf.Tensor]]
     self.saveable_param_replace = {}  # type:  typing.Dict[tf.Variable,typing.Union['tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject',None]]  # see get_saveable_params_dict()  # nopep8
     self.reuse_params = reuse_params
     self.param_device = param_device
@@ -810,36 +810,44 @@ class LayerBase(object):
       import re
       possible_params = tf_compat.v1.get_collection(
         tf_compat.v1.GraphKeys.GLOBAL_VARIABLES, scope=re.escape(self.get_absolute_name_scope_prefix()))
-      if not possible_params:
-        # None found. Just return as-is.
-        return param
-      all_ops = graph_editor.get_backward_walk_ops([param.op], inclusive=False, control_inputs=False)
-      all_1st_tensors = [op.outputs[0] for op in all_ops if len(op.outputs) == 1]
-      # noinspection PyProtectedMember
-      possible_params = [p for p in possible_params if tf_util.var_handle_or_ref(p) in all_1st_tensors]
-      if not possible_params:
-        # Not found. Just return as-is.
-        return param
-      assert len(possible_params) == 1
-      param = possible_params[0]
-    assert isinstance(param, tf.Variable)
-    if not self.trainable:
-      trainable_collection_ref = param.graph.get_collection_ref(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES)
-      if param in trainable_collection_ref:
-        trainable_collection_ref.remove(param)
-    if trainable is None:
-      trainable = param in param.graph.get_collection_ref(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES)
-    if saveable is None:
-      saveable = True
-    if custom_update:
-      assert trainable
-      custom_update.set_on_var(param)
-    if axes_split_info:
-      tf_util.set_param_axes_split_info(param, axes_split_info)
-    if getattr(param, "_RETURNN_layer_map_name", None) is not None:
+      if possible_params:
+        all_ops = graph_editor.get_backward_walk_ops([param.op], inclusive=False, control_inputs=False)
+        all_1st_tensors = [op.outputs[0] for op in all_ops if len(op.outputs) == 1]
+        # noinspection PyProtectedMember
+        possible_params = [p for p in possible_params if tf_util.var_handle_or_ref(p) in all_1st_tensors]
+        if possible_params:
+          assert len(possible_params) == 1
+          param = possible_params[0]
+    assert isinstance(param, (tf.Variable, tf.Tensor))
+    if isinstance(param, tf.Variable):
+      if not self.trainable:
+        trainable_collection_ref = param.graph.get_collection_ref(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES)
+        if param in trainable_collection_ref:
+          trainable_collection_ref.remove(param)
+      if trainable is None:
+        trainable = param in param.graph.get_collection_ref(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES)
+      if saveable is None:
+        saveable = True
+      if custom_update:
+        assert trainable
+        custom_update.set_on_var(param)
+      if axes_split_info:
+        tf_util.set_param_axes_split_info(param, axes_split_info)
+      if not saveable:
+        self.saveable_param_replace[param] = None
+      if getattr(param, "RETURNN_layer", None) is None:
+        param.RETURNN_layer = self
+      if getattr(param, "RETURNN_updater_opts", None) is None and self.updater_opts.truth_value:
+        param.RETURNN_updater_opts = self.updater_opts
+      # Note that any further postprocessing on the parameter should not be done here,
+      # as we cannot guarantee that the result from this method is really used,
+      # e.g. when we use official TF code such as the official LSTM cell.
+      # The better way is to do it in self.var_creation_scope(), which also applies in those cases.
+
+    if getattr(_param, "_RETURNN_layer_map_name", None) is not None:
       # Be explicit, take param_name directly from ReuseParams.variable_custom_getter
       # noinspection PyProtectedMember
-      param_name = param._RETURNN_layer_map_name
+      param_name = _param._RETURNN_layer_map_name
     else:
       if self.reuse_params:
         name_scope_prefix = self.reuse_params.get_absolute_name_scope_prefix(base_layer=self, param=param)
@@ -851,18 +859,7 @@ class LayerBase(object):
       param_name = param.name[len(name_scope_prefix):-2]
     if param_name not in self.params:
       self.params[param_name] = param
-    else:
-      assert self.params[param_name] is param
-    if not saveable:
-      self.saveable_param_replace[param] = None
-    if getattr(param, "RETURNN_layer", None) is None:
-      param.RETURNN_layer = self
-    if getattr(param, "RETURNN_updater_opts", None) is None and self.updater_opts.truth_value:
-      param.RETURNN_updater_opts = self.updater_opts
-    # Note that any further postprocessing on the parameter should not be done here,
-    # as we cannot guarantee that the result from this method is really used,
-    # e.g. when we use official TF code such as the official LSTM cell.
-    # The better way is to do it in self.var_creation_scope(), which also applies in those cases.
+    assert self.params[param_name] is param
     return _param
 
   def set_param_values_by_dict(self, values_dict, session, ignore_wrong_shape=False, copy_param_mode=None):
