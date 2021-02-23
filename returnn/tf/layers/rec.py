@@ -1156,6 +1156,12 @@ class _SubnetworkRecCell(object):
         if layer_ in ConstructCtx.partially_finished:
           if lself.got_uninitialized_deps_count == 0:  # in this case, we safely know that it is finished
             ConstructCtx.partially_finished.remove(layer_)
+            # Sub-layers were also added to 'partially_finished' to re-init them as well if necessary.
+            # But 'add_templated_layer' is not called for sub-layers, so clean them up here as well.
+            for sub_layer in layer_.sub_layers.values():
+              if sub_layer in ConstructCtx.partially_finished:
+                ConstructCtx.partially_finished.remove(sub_layer)
+
         return layer_
 
       # noinspection PyMethodParameters
@@ -1222,6 +1228,8 @@ class _SubnetworkRecCell(object):
                 # Note, we don't add dependencies to the sub-layer, instead, the dependency graph continues via the root
                 # layer (see above).
                 ConstructCtx.layers[-1].add_dependency(sub_layer, is_prev_time_frame=is_prev_time_frame)
+                if sub_layer not in ConstructCtx.partially_finished:
+                  ConstructCtx.partially_finished.append(sub_layer)
             return sub_layer
         # Need to create layer instance here now to not run into recursive loops.
         # We will extend it later in add_templated_layer().
