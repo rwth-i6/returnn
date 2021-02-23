@@ -800,7 +800,7 @@ class LayerBase(object):
     :param bool|None saveable:
     :param list[list[int]]|None axes_split_info: e.g. [[n],[n]*4] for LSTM matrices
     :return: param
-    :rtype tf.Variable
+    :rtype tf.Variable|tf.Tensor
     """
     _param = param
     if isinstance(param, tf.Tensor):
@@ -836,14 +836,19 @@ class LayerBase(object):
       custom_update.set_on_var(param)
     if axes_split_info:
       tf_util.set_param_axes_split_info(param, axes_split_info)
-    if self.reuse_params:
-      name_scope_prefix = self.reuse_params.get_absolute_name_scope_prefix(base_layer=self, param=param)
+    if getattr(param, "_RETURNN_layer_map_name", None) is not None:
+      # Be explicit, take param_name directly from ReuseParams.variable_custom_getter
+      # noinspection PyProtectedMember
+      param_name = param._RETURNN_layer_map_name
     else:
-      name_scope_prefix = self.get_absolute_name_scope_prefix()
-    assert param.name
-    assert param.name[:len(name_scope_prefix)] == name_scope_prefix
-    assert param.name[-2:] == ":0"
-    param_name = param.name[len(name_scope_prefix):-2]
+      if self.reuse_params:
+        name_scope_prefix = self.reuse_params.get_absolute_name_scope_prefix(base_layer=self, param=param)
+      else:
+        name_scope_prefix = self.get_absolute_name_scope_prefix()
+      assert param.name
+      assert param.name[:len(name_scope_prefix)] == name_scope_prefix
+      assert param.name[-2:] == ":0"
+      param_name = param.name[len(name_scope_prefix):-2]
     if param_name not in self.params:
       self.params[param_name] = param
     else:
@@ -1755,8 +1760,12 @@ class ReuseParams:
     assert name.startswith(abs_scope_prefix)
     param_name = name[len(abs_scope_prefix):]  # e.g. "W" (not "rec/W")
     if self.custom_func:
-      return self.custom_func(
+      variable = self.custom_func(
         base_layer=base_layer, reuse_layer=self.reuse_layer, name=param_name, getter=getter, full_name=name, **kwargs)
+      # The name of the variable created by custom_func might not match param_name.
+      # We store it here for LayerBase.add_param.
+      variable._RETURNN_layer_map_name = param_name
+      return variable
     if self.param_map is not None:
       if not self.auto_create_missing:
         assert param_name in self.param_map
