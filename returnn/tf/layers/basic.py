@@ -2699,7 +2699,7 @@ class SplitLayer(_ConcatInputLayer):
       out.dim = self.size_splits[idx]
     out.placeholder = self.splits[idx]
     out.sanity_check()
-    return InternalLayer(name="%s/%i" % (self.name, idx), network=self.network, output=out)
+    return InternalLayer(name="%s/%i" % (self.name, idx), network=self.network, output=out, sources=self.sources)
 
   def get_sub_layer(self, layer_name):
     """
