@@ -3243,6 +3243,7 @@ class _TemplateLayer(LayerBase):
     self.construct_stack = construct_stack
     self._template_base = None  # type: typing.Optional[_TemplateLayer]
     self._cell = cell
+    self.sub_layers = {}  # type: typing.Dict[str,_TemplateLayer]  # layer name -> layer
 
   def __repr__(self):
     if self.is_initialized:
@@ -3294,10 +3295,13 @@ class _TemplateLayer(LayerBase):
     assert res, "Could not get out data for sub-layer template {}.".format(full_layer_name)
     output, network, sub_layer_class = res
 
-    sub_layer_template = _TemplateLayer(self.network, full_layer_name)
+    # The sub-layer might be referenced as a dependency in other layers, so we have to store and update the layer
+    # instead of creating a new instance if we get called several times.
+    sub_layer_template = self.sub_layers.get(layer_name, _TemplateLayer(self.network, full_layer_name))
     is_output_layer = self.is_output_layer()  # make sub-layers output layers too
     sub_layer_template.init(output, sub_layer_class, is_output_layer=is_output_layer,
                             name=full_layer_name, network=network)
+    self.sub_layers.setdefault(layer_name, sub_layer_template)
     return sub_layer_template
 
   def copy_as_prev_time_frame(self, prev_output=None, rec_vars_prev_outputs=None):
