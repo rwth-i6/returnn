@@ -2499,9 +2499,9 @@ class MergeDimsLayer(_ConcatInputLayer):
     else:
       axes = self.input_data.get_axes_from_description(axes)
       axes = sorted(axes)
-    merge_target_axis = self._get_target_axis(input_data=self.input_data, merge_axes=axes)
     x = self.input_data.placeholder
     if len(axes) > 1:
+      merge_target_axis = self._get_target_axis(input_data=self.input_data, merge_axes=axes)
       # Transpose so that all axes are behind each other.
       perm = [i for i in range(self.input_data.batch_ndim) if i not in axes]
       # If batch axis included, move to front.
@@ -2554,7 +2554,7 @@ class MergeDimsLayer(_ConcatInputLayer):
     :param int|None old_axis:
     :rtype: int|None
     """
-    if old_axis is None:
+    if old_axis is None or len(merge_axes) <= 1:
       return old_axis
     target_axis = cls._get_target_axis(input_data=input_data, merge_axes=merge_axes)
     if old_axis in merge_axes:
