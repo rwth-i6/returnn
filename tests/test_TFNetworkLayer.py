@@ -1347,6 +1347,48 @@ def test_MergeDimsLayer_static_time():
     assert layer.output.time_dim_axis is None
 
 
+def test_MergeDimsLayer_dim_tags():
+  n_batch = 3
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData())
+    rnd = numpy.random.RandomState(42)
+
+    src_data = Data("input", shape=(None, 1, 2, 1), feature_dim_axis=None)
+    input_static_shape = (n_batch, 7, 1, 2, 1)
+    src_data.placeholder = tf.constant(rnd.normal(size=input_static_shape).astype("float32"), dtype=tf.float32)
+    src_data.size_placeholder = {}
+    from returnn.tf.util.basic import DimensionTag
+    # map axis_wo_batch -> (tag description, dyn_size)
+    tag_names_with_dyn_size = {0: ("key-chunk", [4, 2, 3]), 1: ("key-window", [1, 1, 1]), 2: ("att-heads", [2, 2, 2])}
+    for axis_wo_batch, (description, dyn_size) in tag_names_with_dyn_size.items():
+      tag = DimensionTag(description=description, kind=DimensionTag.Types.Spatial)
+      dyn_size = tf.constant(dyn_size)
+      src_data.size_placeholder[axis_wo_batch] = dyn_size
+      tag.set_tag_on_size_tensor(dyn_size)
+    print('in data:', src_data)  # should be [B,T|'key-chunk',1|'key-window',2|'att-heads',1]
+    assert (
+      src_data.get_axis_by_tag_name('key-chunk') == 1 and src_data.get_axis_by_tag_name('key-window') == 2 and
+      src_data.get_axis_by_tag_name('att-heads') == 3)
+
+    merge_axes = ['stag:key-window', 'spatial:-1']
+    print('merge axes:', merge_axes)
+
+    src = InternalLayer(name="src", network=net, output=src_data)
+    opts = {"network": net, "name": "merge_dims_test", "sources": [src], "axes": merge_axes}
+    out_data = MergeDimsLayer.get_out_data_from_opts(**opts)
+    out_data.sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
+    print('template out data:', out_data)  # should be [B,T|'key-chunk',1|<anything>,2|'att-heads',1]
+    assert out_data.shape == src_data.shape[:-1]
+    assert out_data.get_axis_by_tag_name('key-chunk') == 1 and out_data.get_axis_by_tag_name('att-heads') == 3
+
+    layer = MergeDimsLayer(output=out_data, **opts)
+    layer.output.sanity_check()
+    out_data = layer.output
+    print('layer out data:', out_data)
+    assert out_data.shape == src_data.shape[:-1]
+    assert out_data.get_axis_by_tag_name('key-chunk') == 1 and out_data.get_axis_by_tag_name('att-heads') == 3
+
+
 def test_MergeDimsLayer_SplitBatchTimeLayer_time_major():
   n_batch = 3
   n_time = 4
