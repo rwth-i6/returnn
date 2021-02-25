@@ -2626,7 +2626,8 @@ class MergeDimsLayer(_ConcatInputLayer):
     # Set size_placeholder, here for now without merging any axes. Merged axes are then updated in __init__.
     data.size_placeholder = {}
     for old_axis, dyn_size in sorted(input_data.size_placeholder.items()):
-      new_axis = cls._old_axis_to_new_axis(input_data=input_data, merge_axes=axes, old_axis=old_axis)
+      new_axis = cls._old_axis_to_new_axis(
+        input_data=input_data, merge_axes=axes, old_axis=input_data.get_batch_axis(old_axis))
       if new_axis != data.batch_dim_axis:
         data.size_placeholder[data.get_batch_axis_excluding_batch(new_axis)] = dyn_size
     return data
