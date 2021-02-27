@@ -5009,7 +5009,7 @@ def add_check_numerics_ops(
     ignore_ops = {
       "Add", "AddN", "Sum", "Mul", "MatMul", "Sub", "L2Loss", "Floor", "Neg", "UnsortedSegmentSum",
       "Switch", "Merge", "PreventGradient",
-      "Select", "Maximum", "Minimum", "Abs", "Sign",
+      "Select", "SelectV2", "Maximum", "Minimum", "Abs", "Sign",
       "Const", "Identity", "Fill", "ZerosLike",
       "Reshape", "Tile", "ExpandDims", "ConcatV2", "Transpose",
       "Slice", "StridedSlice", "StridedSliceGrad", "Gather",
