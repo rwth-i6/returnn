@@ -1113,8 +1113,7 @@ class ExtractAudioFeatures:
     # Instead, use PySoundFile, which is also faster. See here for discussions:
     # https://github.com/beetbox/audioread/issues/64
     # https://github.com/librosa/librosa/issues/681
-    # noinspection PyPackageRequirements
-    import soundfile  # pip install pysoundfile
+    import soundfile  # noqa  # pip install pysoundfile
     # integer audio formats are automatically transformed in the range [-1,1]
     audio, sample_rate = soundfile.read(raw_bytes)
     return self.get_audio_features(audio=audio, sample_rate=sample_rate, seq_name=seq_name)
@@ -1191,8 +1190,7 @@ class ExtractAudioFeatures:
     assert feature_data.shape[-1] == self.num_feature_filters
 
     if self.with_delta:
-      # noinspection PyPackageRequirements
-      import librosa
+      import librosa  # noqa
       deltas = [librosa.feature.delta(feature_data, order=i, axis=0).astype("float32")
                 for i in range(1, self.with_delta + 1)]
       feature_data = numpy.concatenate([feature_data] + deltas, axis=-1)
@@ -1263,8 +1261,7 @@ def _get_audio_linear_spectrogram(audio, sample_rate, window_len=0.025, step_len
   :return: (audio_len // int(step_len * sample_rate), num_feature_filters), float32
   :rtype: numpy.ndarray
   """
-  # noinspection PyPackageRequirements
-  import librosa
+  import librosa  # noqa
 
   min_n_fft = int(window_len * sample_rate)
   assert num_feature_filters*2 >= min_n_fft
@@ -1292,8 +1289,7 @@ def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.01
   :return: (audio_len // int(step_len * sample_rate), num_feature_filters), float32
   :rtype: numpy.ndarray
   """
-  # noinspection PyPackageRequirements
-  import librosa
+  import librosa  # noqa
   features = librosa.feature.mfcc(
     audio, sr=sample_rate,
     n_mfcc=num_feature_filters,
@@ -1328,8 +1324,7 @@ def _get_audio_log_mel_filterbank(audio, sample_rate, window_len=0.025, step_len
   :return: (audio_len // int(step_len * sample_rate), num_feature_filters), float32
   :rtype: numpy.ndarray
   """
-  # noinspection PyPackageRequirements
-  import librosa
+  import librosa  # noqa
   mel_filterbank = librosa.feature.melspectrogram(
     audio, sr=sample_rate,
     n_mels=num_feature_filters,
@@ -1394,8 +1389,7 @@ def _get_audio_log_log_mel_filterbank(audio, sample_rate, window_len=0.025, step
   :return: (audio_len // int(step_len * sample_rate), num_feature_filters), float32
   :rtype: numpy.ndarray
   """
-  # noinspection PyPackageRequirements
-  import librosa
+  import librosa  # noqa
   mel_filterbank = librosa.feature.melspectrogram(
     audio, sr=sample_rate,
     n_mels=num_feature_filters,
@@ -1417,10 +1411,8 @@ def _get_random_permuted_audio(audio, sample_rate, opts, random_state):
   :return: audio randomly permuted
   :rtype: numpy.ndarray
   """
-  # noinspection PyPackageRequirements
-  import librosa
-  # noinspection PyPackageRequirements
-  import scipy.ndimage
+  import librosa  # noqa
+  import scipy.ndimage  # noqa
   import warnings
   audio = audio * random_state.uniform(opts.get("rnd_scale_lower", 0.8), opts.get("rnd_scale_upper", 1.0))
   if opts.get("rnd_zoom_switch", 1.) > 0.:
@@ -1647,8 +1639,7 @@ class TimitDataset(CachedDataset2):
       from returnn.util import better_exchook
       better_exchook.install()
 
-      # noinspection PyPackageRequirements
-      import librosa
+      import librosa  # noqa
 
       for seq_tag in self._seq_tags:
         audio_filename = "%s/%s.wav" % (self._timit_dir, seq_tag)
@@ -1659,8 +1650,7 @@ class TimitDataset(CachedDataset2):
         # Instead, use PySoundFile, which is also faster. See here for discussions:
         # https://github.com/beetbox/audioread/issues/64
         # https://github.com/librosa/librosa/issues/681
-        # noinspection PyPackageRequirements
-        import soundfile  # pip install pysoundfile
+        import soundfile  # noqa  # pip install pysoundfile
         audio, sample_rate = soundfile.read(audio_filename)
         with self._lock:
           self._audio_data[seq_tag] = (audio, sample_rate)
@@ -1849,7 +1839,7 @@ class NltkTimitDataset(TimitDataset):
     timit_dir should be such that audio_filename = "%s/%s.wav" % (timit_dir, seq_tag).
     """
     import os
-    from nltk.downloader import Downloader
+    from nltk.downloader import Downloader  # noqa
     downloader = Downloader(download_dir=self._nltk_download_dir)
     print("NLTK corpus download dir:", downloader.download_dir, file=log.v3)
     timit_dir = downloader.download_dir + "/corpora/timit"
@@ -1859,8 +1849,8 @@ class NltkTimitDataset(TimitDataset):
     assert os.path.exists(timit_dir + "/timitdic.txt"), "TIMIT download broken? remove the directory %r" % timit_dir
     self._timit_dir = timit_dir
 
-    from nltk.data import FileSystemPathPointer
-    from nltk.corpus.reader.timit import TimitCorpusReader
+    from nltk.data import FileSystemPathPointer  # noqa
+    from nltk.corpus.reader.timit import TimitCorpusReader  # noqa
     self._data_reader = TimitCorpusReader(FileSystemPathPointer(timit_dir))
     utterance_ids = self._data_reader.utteranceids()
     assert isinstance(utterance_ids, list)
