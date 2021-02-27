@@ -2095,6 +2095,79 @@ class SamplingBytePairEncoding(Vocabulary):
     return seq + self.seq_postfix
 
 
+class SentencePieces(Vocabulary):
+  """
+  Uses the SentencePiece software,
+  which supports different kind of subword units (including BPE, unigram, ...).
+
+  https://github.com/google/sentencepiece/
+  https://github.com/google/sentencepiece/tree/master/python
+
+  Dependency::
+
+    pip3 install --user sentencepiece
+
+  """
+
+  def __init__(self, **opts):
+    """
+    :param str model_file: The sentencepiece model file path.
+    :param str model_proto: The sentencepiece model serialized proto.
+    :param type out_type: output type. int or str. (Default = int)
+    :param bool add_bos: Add <s> to the result (Default = false)
+    :param bool add_eos: Add </s> to the result (Default = false)
+      <s>/</s> is added after reversing (if enabled).
+    :param bool reverse: Reverses the tokenized sequence (Default = false)
+    :param bool enable_sampling: (Default = false)
+    :param int nbest_size: sampling parameters for unigram. Invalid for BPE-Dropout.
+      nbest_size = {0,1}: No sampling is performed.
+      nbest_size > 1: samples from the nbest_size results.
+      nbest_size < 0: (Default). assuming that nbest_size is infinite and samples
+        from the all hypothesis (lattice) using
+        forward-filtering-and-backward-sampling algorithm.
+    :param float alpha: Soothing parameter for unigram sampling, and dropout probability of
+      merge operations for BPE-dropout. (Default = 0.1)
+    """
+    import sentencepiece as spm
+    self._opts = opts
+    self._cache_key = opts.get("model_file", None)
+    self.sp = spm.SentencePieceProcessor(**opts)
+    super(SentencePieces, self).__init__(
+      vocab_file=None, seq_postfix=None, unknown_label=self.sp.IdToPiece(self.sp.unk_id()))
+
+  def __repr__(self):
+    return "SentencePieces(%r)" % (self._opts,)
+
+  def _parse_vocab(self):
+    self.num_labels = self.sp.vocab_size()
+    if self._cache_key and self._cache_key in self._cache:
+      self.vocab, self.labels = self._cache[self._cache_key]
+      assert self.unknown_label in self.vocab and self.num_labels == len(self.vocab) == len(self.labels)
+      return
+    self.labels = [self.sp.id_to_piece(i) for i in range(self.num_labels)]
+    self.vocab = {label: i for (i, label) in enumerate(self.labels)}
+    if self._cache_key:
+      self._cache[self._cache_key] = (self.vocab, self.labels)
+
+  def set_random_seed(self, seed):
+    """
+    :param int seed:
+    """
+    # Unfortunately, there is only a global seed,
+    # and also, it will only be used for new threads
+    # where the random generator was not used yet...
+    # https://github.com/google/sentencepiece/issues/635
+    import sentencepiece as spm
+    spm.set_random_generator_seed(seed)
+
+  def get_seq(self, sentence):
+    """
+    :param str sentence: assumed to be seq of vocab entries separated by whitespace
+    :rtype: list[int]
+    """
+    return self.sp.encode(sentence, out_type=int)
+
+
 class CharacterTargets(Vocabulary):
   """
   Uses characters as target labels.
