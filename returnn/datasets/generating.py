@@ -2128,10 +2128,10 @@ class SentencePieces(Vocabulary):
     :param float alpha: Soothing parameter for unigram sampling, and dropout probability of
       merge operations for BPE-dropout. (Default = 0.1)
     """
-    import sentencepiece as spm
+    import sentencepiece as spm  # noqa
     self._opts = opts
     self._cache_key = opts.get("model_file", None)
-    self.sp = spm.SentencePieceProcessor(**opts)
+    self.sp = spm.SentencePieceProcessor(**opts)  # noqa
     super(SentencePieces, self).__init__(
       vocab_file=None, seq_postfix=None, unknown_label=self.sp.IdToPiece(self.sp.unk_id()))
 
@@ -2144,7 +2144,7 @@ class SentencePieces(Vocabulary):
       self.vocab, self.labels = self._cache[self._cache_key]
       assert self.unknown_label in self.vocab and self.num_labels == len(self.vocab) == len(self.labels)
       return
-    self.labels = [self.sp.id_to_piece(i) for i in range(self.num_labels)]
+    self.labels = [self.sp.id_to_piece(i) for i in range(self.num_labels)]  # noqa
     self.vocab = {label: i for (i, label) in enumerate(self.labels)}
     if self._cache_key:
       self._cache[self._cache_key] = (self.vocab, self.labels)
@@ -2157,7 +2157,7 @@ class SentencePieces(Vocabulary):
     # and also, it will only be used for new threads
     # where the random generator was not used yet...
     # https://github.com/google/sentencepiece/issues/635
-    import sentencepiece as spm
+    import sentencepiece as spm  # noqa
     spm.set_random_generator_seed(seed)
 
   def get_seq(self, sentence):
@@ -2165,7 +2165,7 @@ class SentencePieces(Vocabulary):
     :param str sentence: assumed to be seq of vocab entries separated by whitespace
     :rtype: list[int]
     """
-    return self.sp.encode(sentence, out_type=int)
+    return self.sp.encode(sentence, out_type=int)  # noqa
 
 
 class CharacterTargets(Vocabulary):
