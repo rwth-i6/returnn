@@ -8088,7 +8088,6 @@ class CtcLoss(Loss):
     :param bool output_in_log_space: False -> output expected in prob space. see self.get_output_logits
     :param int beam_width: used in eval
     :param dict[str]|None ctc_opts: other kwargs used for tf.nn.ctc_loss
-    :param float focal_loss_factor: see https://arxiv.org/abs/1708.02002. 0 means disabled. generalized for CTC
     :param bool use_native: use our native implementation (:func:`TFNativeOp.ctc_loss`)
     :param bool use_viterbi: instead of full-sum, use only best path (via :func:`ctc_loss_viterbi`)
     """
@@ -8102,7 +8101,6 @@ class CtcLoss(Loss):
     if ctc_opts is None:
       ctc_opts = {}
     self.ctc_opts = ctc_opts
-    self.focal_loss_factor = focal_loss_factor
     self.use_native = use_native
     self.use_viterbi = use_viterbi
 
@@ -8172,14 +8170,6 @@ class CtcLoss(Loss):
     soft_align.set_shape(tf.TensorShape((None, None, self.output.dim)))
     return soft_align
 
-  def get_focal_loss_factor(self):
-    """
-    :return: shape (time, batch, dim)
-    :rtype: tf.Tensor
-    """
-    y = self.output.get_placeholder_as_time_major()
-    return (1.0 - y) ** self.focal_loss_factor
-
   def get_value(self):
     """
     :rtype: tf.Tensor
@@ -8208,16 +8198,6 @@ class CtcLoss(Loss):
           inputs=logits, labels=labels, sequence_length=seq_lens, time_major=self.output.is_time_major,
           **self.ctc_opts)
       loss = self._ctc_loss  # shape (batch,)
-      if self.focal_loss_factor:
-        # We are going up to (time,batch,dim), and we later use reduce_sum,
-        # and we want the same normalization, thus we multiply that in now.
-        loss /= tf.cast(self.output_seq_lens, tf.float32)
-        loss /= tf.cast(self.output.dim, tf.float32)
-        loss = tf.expand_dims(loss, axis=0)  # (time,batch)
-        loss = tf.expand_dims(loss, axis=2)  # (time,batch,dim)
-        loss *= self.get_focal_loss_factor()
-        from returnn.tf.util.basic import flatten_with_seq_len_mask
-        loss = flatten_with_seq_len_mask(loss, seq_lens=self.output_seq_lens, time_major=True)  # (time_flat,dim)
       return self.reduce_func(loss)
 
   def get_error(self):
