@@ -6120,7 +6120,7 @@ class SwitchLayer(LayerBase):
     if isinstance(condition, bool):
       src = get_source_output(true_from if condition else false_from, const_name="const_output")
       self.output = src.copy("%s_output" % self.name)
-      if get_source_allow_inf_in_output(src):
+      if get_source_allow_inf_in_output(true_from if condition else false_from):
         self.allow_inf_in_output = True
     else:
       assert isinstance(condition, LayerBase)
