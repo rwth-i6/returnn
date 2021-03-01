@@ -2206,7 +2206,7 @@ class WindowLayer(_ConcatInputLayer):
     :param int window_size:
     :param int|None window_left:
     :param int|None window_right:
-    :param str|int axis: see Data.get_axis_from_description()
+    :param str axis: see Data.get_axis_from_description()
     :param str padding: "same" or "valid"
     :param int stride: return only each Nth window
     :param kwargs:
@@ -2215,6 +2215,7 @@ class WindowLayer(_ConcatInputLayer):
     data = self.input_data.copy_as_batch_major()
     if axis == "T" and data.time_dim_axis is None:
       # Assume inside RecLayer.
+      axis = None
       assert self._rec_previous_layer, "%s: expected to be used inside a RecLayer" % self
       assert padding == "same"
       prev_state = self._rec_previous_layer.rec_vars_outputs["state"]  # (batch,window,...)
@@ -2231,11 +2232,12 @@ class WindowLayer(_ConcatInputLayer):
         padding=padding, time_axis=axis, new_window_axis=axis + 1, stride=stride)
     self.output.placeholder.set_shape(tf.TensorShape(self.output.batch_shape))
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
-    axis_wo_b = self.output.get_batch_axis_excluding_batch(axis)
-    if axis_wo_b in self.output.size_placeholder:
-      self.output.size_placeholder[axis_wo_b] = ConvLayer.calc_out_dim(
-        in_dim=self.output.size_placeholder[axis_wo_b],
-        filter_size=window_size, stride=stride, dilation_rate=1, padding=padding)
+    if axis is not None:
+      axis_wo_b = self.output.get_batch_axis_excluding_batch(axis)
+      if axis_wo_b in self.output.size_placeholder:
+        self.output.size_placeholder[axis_wo_b] = ConvLayer.calc_out_dim(
+          in_dim=self.output.size_placeholder[axis_wo_b],
+          filter_size=window_size, stride=stride, dilation_rate=1, padding=padding)
 
   @classmethod
   def get_out_data_from_opts(cls, name, window_size, axis="T", sources=(), **kwargs):
