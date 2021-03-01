@@ -8080,7 +8080,6 @@ class CtcLoss(Loss):
 
   def __init__(self, target_collapse_repeated=False, auto_clip_target_len=False, output_in_log_space=False,
                beam_width=100, ctc_opts=None,
-               focal_loss_factor=0.0,
                use_native=False, use_viterbi=False, **kwargs):
     """
     :param bool target_collapse_repeated: like preprocess_collapse_repeated option for CTC. used for sparse_labels().
