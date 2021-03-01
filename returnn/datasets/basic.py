@@ -906,10 +906,13 @@ class Dataset(object):
   def serialize_data(self, key, data):
     """
     :param str key: e.g. "classes". self.labels[key] should be set
-    :param numpy.ndarray data: 1D
+    :param numpy.ndarray data: 0D or 1D
     :rtype: str
     """
     labels = self.labels[key]
+    if data.ndim == 0:
+      data = numpy.expand_dims(data, axis=0)
+    assert data.ndim == 1
     if len(labels) < 1000 and all([len(label) == 1 for label in labels]):
       # are these actually raw bytes? -> assume utf8
       if all([ord(label) <= 255 for label in labels]):
