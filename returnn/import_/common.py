@@ -185,5 +185,6 @@ def _find_root_python_package(full_path):
     p = full_path.rfind("/", 0, p)
     assert p > 0
     d = full_path[:p]
+    assert os.path.isdir(d)
     if not os.path.exists(d + "/__init__.py"):
       return d
