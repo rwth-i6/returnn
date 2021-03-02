@@ -1528,7 +1528,9 @@ class TranslationFactorsDataset(TranslationDataset):
     """
     numpy_data = []
 
-    if len(data_keys) > 1:
+    if not words:
+      words_per_factor = [[]] * len(data_keys)
+    elif len(data_keys) > 1:
       factored_words = [word.split(self._factor_separator) for word in words]
       assert all(len(factors) == len(data_keys) for factors in factored_words), (
         "All words must have all factors. Expected: " + self._factor_separator.join(data_keys))
