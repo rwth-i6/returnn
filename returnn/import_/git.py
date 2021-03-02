@@ -75,25 +75,10 @@ def get_repo_path(repo, version):
   """
   repo_ = _get_repo(repo)
   work_dir = repo_.get_work_dir(version)
-  return work_dir.get_path()
-
-
-def get_repo_file_path(repo, path, version):
-  """
-  :param str repo: e.g. "github.com/rwth-i6/returnn-experiments"
-  :param str path: path inside the repo, without starting "/"
-  :param str|None version: e.g. "20211231-0123abcd0123"
-  :return: path to local file|dir in our package dir
-  :rtype: str
-
-  This also ensures that the returned path exists.
-  If the repo is not checked out yet, or not cloned yet,
-  it will do so.
-  """
-  repo_path = get_repo_path(repo, version)
-  full_path = "%s/%s" % (repo_path, path)
-  assert os.path.exists(full_path)
-  return full_path
+  path = work_dir.get_path()
+  if not version:
+    common.logger.warn("Access to development working tree %s", path)
+  return path
 
 
 def _simple_validate_repo_name(repo):
