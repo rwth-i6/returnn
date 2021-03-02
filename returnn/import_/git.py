@@ -165,8 +165,10 @@ def _simple_validate_date(date):
 
 def _simple_validate_version(version):
   """
-  :param str version:
+  :param str|None version:
   """
+  if not version:
+    return
   date, rev = version.split("-")
   _simple_validate_date(date)
   _simple_validate_commit_rev(rev)
