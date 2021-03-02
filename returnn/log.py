@@ -71,7 +71,6 @@ class Log:
     self.filename = None  # type: typing.Optional[str]
     self.v = None  # type: typing.Optional[typing.List[logging.Logger]]
     self.verbose = None  # type: typing.Optional[typing.List[bool]]
-    self.error = None  # type: typing.Optional[Stream]
     self.v0 = None  # type: typing.Optional[Stream]
     self.v1 = None  # type: typing.Optional[Stream]
     self.v2 = None  # type: typing.Optional[Stream]
@@ -143,7 +142,6 @@ class Log:
       if not self.v[i].handlers:
         self.verbose[i] = False
         self.v[i].addHandler(null)
-    self.error = Stream(self.v[0], logging.CRITICAL)
     self.v0 = Stream(self.v[0], logging.ERROR)
     self.v1 = Stream(self.v[1], logging.INFO)
     self.v2 = Stream(self.v[2], logging.INFO)
