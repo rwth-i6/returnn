@@ -15,7 +15,7 @@ def setup():
   """
   import logging
 
-  # For RETURNN, enable all logging, up to debug level.
+  # Enable all logging, up to debug level.
   logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s %(name)s %(levelname)s: %(message)s')

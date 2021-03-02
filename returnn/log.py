@@ -80,9 +80,11 @@ class Log:
 
   def initialize(self, logs=None, verbosity=None, formatter=None):
     """
-    :param list[str] logs:
-    :param list[int] verbosity:
-    :param list[str] formatter: 'default', 'timed', 'raw' or 'verbose'
+    This resets and configures the "returnn" logger.
+
+    :param list[str] logs: "stdout", "|<pipe-cmd>", "<filename>"|"<filename>$date<ext>". "stdout" is always added
+    :param list[int] verbosity: levels 0-5 for the log handlers
+    :param list[str] formatter: 'default', 'timed', 'raw' or 'verbose', for the log handlers
     """
     if formatter is None:
       formatter = []
@@ -97,15 +99,44 @@ class Log:
       'raw': logging.Formatter('%(message)s'),
       'verbose': logging.Formatter('%(levelname)s - %(asctime)s %(message)s', datefmt='%Y-%m-%d,%H:%M:%S.%MS')
     }
-    self.v = [logging.getLogger('v' + str(v)) for v in range(6)]
-    for logger in self.v:
-      # Reset handler list, in case we have initialized some earlier (e.g. multiple log.initialize() calls).
-      logger.handlers = []
+    logger = logging.getLogger("returnn")
+    # Note on propagation:
+    # This is not so clear. By default, the root logger anyway does nothing.
+    # However, if you mix RETURNN with other code, which might setup the root logger
+    # (e.g. via logging.basicConfig(...)), then there is some root logger,
+    # and maybe we should also use it.
+    # But at this point here, we might not know about this
+    # -- maybe the user would call logging.basicConfig(...) at some later point.
+    # In any case, if there is a root logger and we would propagate,
+    # we maybe should not add "stdout" here,
+    # although that might depend on the root logger level and handlers.
+    # For now, we just disable propagation, to keep that separated
+    # and avoid any such problems.
+    # We might want to make this configurable at some point,
+    # but then we should also change the (default) logic for "stdout".
+    logger.propagate = False
+    # Reset handler list, in case we have initialized some earlier (e.g. multiple log.initialize() calls).
+    logger.handlers = []
+    self.v = [logger] * 6  # no need for separate loggers, we do all via log levels
     if 'stdout' not in logs:
       logs.append('stdout')
     if len(formatter) == 1:
       # if only one format provided, use it for all logs
       formatter = [formatter[0]] * len(logs)
+    # Define own level names. In reverse order, such that the name by default still has the default behavior.
+    logging.addLevelName(logging.DEBUG + 2, "DEBUG")
+    logging.addLevelName(logging.DEBUG + 1, "DEBUG")
+    logging.addLevelName(logging.DEBUG + 0, "DEBUG")
+    logging.addLevelName(logging.INFO + 1, "INFO")
+    logging.addLevelName(logging.INFO + 0, "INFO")
+    _VerbosityToLogLevel = {
+      0: logging.ERROR,
+      1: logging.INFO + 1,
+      2: logging.INFO,
+      3: logging.DEBUG + 2,
+      4: logging.DEBUG + 1,
+      5: logging.DEBUG}
+    self.verbose = [False] * 6
     for i in range(len(logs)):
       t = logs[i]
       v = 3
@@ -114,6 +145,8 @@ class Log:
       elif len(verbosity) == 1:
         v = verbosity[0]
       assert v <= 5, "invalid verbosity: " + str(v)
+      for j in range(v + 1):
+        self.verbose[j] = True
       f = fmt['default'] if i >= len(formatter) or formatter[i] not in fmt else fmt[formatter[i]]
       if t == 'stdout':
         handler = logging.StreamHandler(sys.stdout)
@@ -130,24 +163,18 @@ class Log:
         handler = logging.FileHandler(t)
       else:
         assert False, "invalid log target %r" % t
-      handler.setLevel(logging.DEBUG)
+      handler.setLevel(_VerbosityToLogLevel[v])
       handler.setFormatter(f)
-      for j in range(v + 1):
-        if handler not in self.v[j].handlers:
-          self.v[j].addHandler(handler)
-    self.verbose = [True] * 6
-    null = logging.NullHandler()
-    for i in range(len(self.v)):
-      self.v[i].setLevel(logging.DEBUG)
-      if not self.v[i].handlers:
-        self.verbose[i] = False
-        self.v[i].addHandler(null)
-    self.v0 = Stream(self.v[0], logging.ERROR)
-    self.v1 = Stream(self.v[1], logging.INFO)
-    self.v2 = Stream(self.v[2], logging.INFO)
-    self.v3 = Stream(self.v[3], logging.DEBUG)
-    self.v4 = Stream(self.v[4], logging.DEBUG)
-    self.v5 = Stream(self.v[5], logging.DEBUG)
+      logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    if not logger.handlers:
+      logger.addHandler(logging.NullHandler())
+    self.v0 = Stream(self.v[0], _VerbosityToLogLevel[0])
+    self.v1 = Stream(self.v[1], _VerbosityToLogLevel[1])
+    self.v2 = Stream(self.v[2], _VerbosityToLogLevel[2])
+    self.v3 = Stream(self.v[3], _VerbosityToLogLevel[3])
+    self.v4 = Stream(self.v[4], _VerbosityToLogLevel[4])
+    self.v5 = Stream(self.v[5], _VerbosityToLogLevel[5])
 
   def init_by_config(self, config):
     """
@@ -169,15 +196,6 @@ class Log:
 
 
 log = Log()
-
-# Some external code (e.g. pyzmq) will initialize the logging system
-# via logging.basicConfig(). That will set a handler to the root logger,
-# if there is none. This default handler usually prints to stderr.
-# Because all our custom loggers are childs of the root logger,
-# this will have the effect that everything gets logged twice.
-# By adding a dummy handler to the root logger, we will avoid that
-# it adds any other default handlers.
-logging.getLogger().addHandler(logging.NullHandler())
 
 
 class StreamThreadLocal(threading.local):
