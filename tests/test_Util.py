@@ -283,6 +283,31 @@ def test_CollectionReadCheckCovered():
   assert x and x.truth_value
 
 
+def test_logging():
+  # There is no real test. But you can interactively test this.
+  import logging
+  logging.getLogger("returnn").debug("Hello from returnn logger.")
+  logging.getLogger("returnn.import_").debug("Hello from returnn.import_ logger.")
+
+
+def test_import_():
+  from returnn.import_ import import_
+  mod = import_("github.com/rwth-i6/returnn-experiments", "common/test.py", "20210302-01094bef2761")
+  print("Loaded mod %s, name %s, file %s" % (mod, mod.__name__, mod.__file__))
+  assert_equal(mod.hello(), "hello world")
+
+
+def test_import_wrong_date():
+  from returnn.import_ import import_
+  from returnn.import_.common import InvalidVersion
+  try:
+    import_("github.com/rwth-i6/returnn-experiments", "common/test.py", "20210301-01094bef2761")
+  except InvalidVersion as exc:
+    print("got expected exception:", exc)
+  else:
+    raise Exception("We expected an invalid version exception but got nothing.")
+
+
 if __name__ == "__main__":
   better_exchook.install()
   if len(sys.argv) <= 1:

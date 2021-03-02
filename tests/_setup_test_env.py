@@ -13,9 +13,14 @@ def setup():
   """
   Calls necessary setups.
   """
+  import logging
+
+  # For RETURNN, enable all logging, up to debug level.
+  logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s %(name)s %(levelname)s: %(message)s')
 
   # Disable extensive TF debug verbosity. Must come before the first TF import.
-  import logging
   logging.getLogger('tensorflow').disabled = True
   # os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
   # logging.getLogger("tensorflow").setLevel(logging.INFO)

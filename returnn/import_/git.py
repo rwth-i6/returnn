@@ -43,16 +43,17 @@ import os
 import typing
 from subprocess import check_call, check_output, SubprocessError
 import re
+from . import common
 
-_DefaultPkgPath = "~/returnn/pkg"
-_EnvPkgPath = "RETURNN_PKG_PATH"
 _MinNumHashDigits = 7
 _DefaultNumHashDigits = 12
 _FullNumHashDigits = 40
 _RevDigitsRe = re.compile("^[0123456789abcdef]*$")
 _DateFormat = "%Y%m%d%H%M%S"
 _DateFormatLen = 14
-_DateFormatAllowedSubLens = (8, 10, 12)
+_DateFormatAllowedLens = (8, 10, 12, 14)  # Day only, or partial time.
+# Not too complicated but also not totally dumb.
+_DateRe = re.compile(r"^(\d\d\d\d)([01]\d)([0123]\d)(([012]\d)(([0-5]\d)([0-5]\d)?)?)?$")
 
 
 def stat_repo(repo, version):
@@ -95,31 +96,6 @@ def get_repo_file_path(repo, path, version):
   return full_path
 
 
-class _Globals:
-  def __init__(self):
-    self._package_path = None  # type: typing.Optional[str]
-
-  @property
-  def package_path(self):
-    """
-    :return: directory where packages are stored (default: ~/returnn/pkg)
-    :rtype: str
-    """
-    if self._package_path:
-      return self._package_path
-    if _EnvPkgPath in os.environ:
-      path = os.environ[_EnvPkgPath]
-      assert os.path.isdir(path), "import pkg path via env %s: is not a dir: %r" % (_EnvPkgPath, path)
-    else:
-      path = os.path.expanduser(_DefaultPkgPath)
-      os.makedirs(path, exist_ok=True)
-    self._package_path = path
-    return path
-
-
-_globals = _Globals()
-
-
 def _simple_validate_repo_name(repo):
   """
   :param str repo:
@@ -133,7 +109,7 @@ def _main_repo_path(repo):
   :return: main repo dir (which includes the Git objects)
   :rtype: str
   """
-  return "%s/%s" % (_globals.package_path, repo)
+  return "%s/%s" % (common.package_path(), repo)
 
 
 def _dev_repo_path(repo):
@@ -180,6 +156,22 @@ def _simple_validate_commit_rev(rev):
   assert len(rev) >= _MinNumHashDigits and _RevDigitsRe.match(rev)
 
 
+def _simple_validate_date(date):
+  """
+  :param str date:
+  """
+  assert len(date) in _DateFormatAllowedLens and _DateRe.match(date)
+
+
+def _simple_validate_version(version):
+  """
+  :param str version:
+  """
+  date, rev = version.split("-")
+  _simple_validate_date(date)
+  _simple_validate_commit_rev(rev)
+
+
 def _rev_from_version(version):
   """
   :param str version: e.g. "20211231-0123abcd0123"
@@ -201,7 +193,7 @@ def _version_from_date_and_rev(date, rev):
   :param str rev:
   """
   _simple_validate_commit_rev(rev)
-  return "v%s-%s" % (date, rev)
+  return "%s-%s" % (date, rev)
 
 
 def _sys_git_clone_repo(repo):
@@ -210,6 +202,7 @@ def _sys_git_clone_repo(repo):
   """
   url = _repo_remote_url(repo)
   main_path = _main_repo_path(repo)
+  common.logger.info("Git clone %s", repo)
   check_call(["git", "clone", url, main_path])
 
 
@@ -222,6 +215,7 @@ def _sys_git_fetch(repo):
   # We might want to extend this logic to be more like Go...
   # https://github.com/golang/go/blob/724d0720b3e/src/cmd/go/internal/modfetch/codehost/git.go#L366
   main_path = _main_repo_path(repo)
+  common.logger.info("Git fetch %s", repo)
   check_call(["git", "fetch"], cwd=main_path)
 
 
@@ -233,6 +227,7 @@ def _sys_git_create_repo_workdir(repo, version):
   main_path = _main_repo_path(repo)
   rev = _rev_from_version(version)
   version_path = _repo_path(repo, version)
+  common.logger.info("Git add worktree %s: %s", repo, version)
   check_call(
     ["git", "worktree", "add", version_path, rev],
     cwd=main_path)
@@ -260,6 +255,8 @@ def _sys_git_stat_local_rev(repo, rev):
   out = out.decode("utf8")
   full_rev, date = out.split()
   assert full_rev.startswith(rev) and len(full_rev) == _FullNumHashDigits
+  _simple_validate_commit_rev(full_rev)
+  _simple_validate_date(date)
   return full_rev, date
 
 
@@ -345,17 +342,22 @@ class _Repo:
     self._load_work_dirs()
     rev = _rev_from_version(version)
     if rev in self._work_dirs:
-      return self._work_dirs[rev]
+      work_dir = self._work_dirs[rev]
+      work_dir.validate_version(version)
+      return work_dir
     for rev_, work_dir in self._work_dirs.items():
       if rev_.startswith(rev) or (len(rev) > len(rev_) and rev.startswith(rev_)):
+        work_dir.validate_version(version)
         self._work_dirs[rev] = work_dir
         return work_dir
     work_dir = self._get_work_dir_stat_local(rev)
     if work_dir:
+      work_dir.validate_version(version)
       return work_dir
     _sys_git_fetch(self.name)
     work_dir = self._get_work_dir_stat_local(rev)
     assert work_dir, "Git repo %s, version %s unknown." % (self.name, version)
+    work_dir.validate_version(version)
     return work_dir
 
 
@@ -367,14 +369,40 @@ class _RepoWorkDir:
     """
     if not isinstance(repo, _Repo):
       repo = _get_repo(repo)
+    _simple_validate_version(version)
     self.repo = repo
     self.version = version
+    if version:
+      self.version_date, self.version_rev = version.split("-")
+    else:
+      self.version_date, self.version_rev = None, None
 
   def get_path(self):
     """
     :rtype: str
     """
     return _repo_path(self.repo.name, self.version)
+
+  def validate_version(self, version):
+    """
+    :param str|None version:
+    """
+    if version:
+      assert self.version
+      date, rev = version.split("-")
+      _simple_validate_date(date)
+      _simple_validate_commit_rev(rev)
+      if not self.version_date.startswith(date):
+        raise common.InvalidVersion("Version %s, date does not match in %s" % (self.version, version))
+      if len(rev) <= len(self.version_rev):
+        if not self.version_rev.startswith(rev):
+          raise common.InvalidVersion("Version %s, revision does not match in %s" % (self.version, version))
+      else:
+        if not rev.startswith(self.version_rev):
+          raise common.InvalidVersion("Version %s, revision does not match in %s" % (self.version, version))
+    else:
+      if self.version:
+        raise common.InvalidVersion("Development version, got %s" % (version,))
 
 
 _repo_cache = {}  # type: typing.Dict[str,_Repo]
