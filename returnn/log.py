@@ -139,7 +139,7 @@ class Log:
         if handler not in self.v[j].handlers:
           self.v[j].addHandler(handler)
     self.verbose = [True] * 6
-    null = logging.FileHandler(os.devnull)
+    null = logging.NullHandler()
     for i in range(len(self.v)):
       self.v[i].setLevel(logging.DEBUG)
       if not self.v[i].handlers:
