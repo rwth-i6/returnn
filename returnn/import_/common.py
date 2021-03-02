@@ -129,8 +129,18 @@ def module_name(repo, repo_path, path, version):
   :param str repo_path: what get_repo_path returns, e.g. "/home/az/returnn/pkg/...@v..."
   :param str path: path to file in repo
   :param str|None version: e.g. "20211231-0123abcd0123". None for development working copy
-  :return: module name. as a side-effect, makes sure that all symlinks are setup
+  :return: module name. as a side-effect, we make sure that importing this module works
   :rtype: str
+
+  Note on the internals:
+
+  We could have dynamically loaded the module directly from the package path,
+  in some way.
+  The reason we choose this different approach to create a real directory
+  with symlinks is such that we can potentially make use
+  of auto-completion features in editors.
+  It might also make debugging easier.
+  So, in this function, we make sure that all symlinks are correctly setup.
   """
   full_path = "%s/%s" % (repo_path, path)
   py_pkg_dirname = _find_root_python_package(full_path)

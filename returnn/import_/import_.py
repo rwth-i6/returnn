@@ -17,5 +17,6 @@ def import_(repo, path, version=None):
   """
   assert path and path[:1] != "/" and ".." not in path
   repo_path = get_repo_path(repo=repo, version=version)
+  # `module_name` has the side effect that `import_module` below will just work.
   mod_name = module_name(repo=repo, repo_path=repo_path, path=path, version=version)
   return importlib.import_module(mod_name)

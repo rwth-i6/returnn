@@ -297,6 +297,15 @@ def test_import_():
   assert_equal(mod.hello(), "hello world")
 
 
+def test_import_pkg_py_import():
+  from returnn.import_ import import_
+  mod = import_("github.com/rwth-i6/returnn-experiments", "common", "20210302-01094bef2761")
+  print("Loaded mod %s, name %s, file %s" % (mod, mod.__name__, mod.__file__))
+  # noinspection PyUnresolvedReferences
+  from returnn_import.github_com.rwth_i6.returnn_experiments.v20210302133012_01094bef2761 import common
+  assert common is mod
+
+
 def test_import_wrong_date():
   from returnn.import_ import import_
   from returnn.import_.common import InvalidVersion
