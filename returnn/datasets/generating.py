@@ -1186,7 +1186,7 @@ class ExtractAudioFeatures:
       else:
         raise Exception("non-supported feature type %r" % (self.features,))
 
-    assert feature_data.ndim == self.num_dim
+    assert feature_data.ndim == self.num_dim, "got feature data shape %r" % (feature_data.shape,)
     assert feature_data.shape[-1] == self.num_feature_filters
 
     if self.with_delta:
