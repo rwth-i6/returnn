@@ -118,22 +118,20 @@ class Log:
       f = fmt['default'] if i >= len(formatter) or formatter[i] not in fmt else fmt[formatter[i]]
       if t == 'stdout':
         handler = logging.StreamHandler(sys.stdout)
-        handler.setLevel(logging.DEBUG)
       elif t.startswith("|"):  # pipe-format
         proc_cmd = t[1:].strip()
         from subprocess import Popen, PIPE
         proc = Popen(proc_cmd, shell=True, stdin=PIPE)
         handler = logging.StreamHandler(proc.stdin)
-        handler.setLevel(logging.DEBUG)
       elif os.path.isdir(os.path.dirname(t)):
         if "$" in t:
           from returnn.util.basic import get_utc_start_time_filename_part
           t = string.Template(t).substitute(date=get_utc_start_time_filename_part())
         self.filename = t
         handler = logging.FileHandler(t)
-        handler.setLevel(logging.DEBUG)
       else:
         assert False, "invalid log target %r" % t
+      handler.setLevel(logging.DEBUG)
       handler.setFormatter(f)
       for j in range(v + 1):
         if handler not in self.v[j].handlers:
