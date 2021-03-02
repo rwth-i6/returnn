@@ -1608,8 +1608,10 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
       This is like a temperature for the softmax.
       In Attention-is-all-you-need, this is set to 1/sqrt(base_ctx.dim).
     :param LayerBase|None start: Tensor of shape (B,) indicating the start frame
-    :param LayerBase|None window_start: Tensor of shape (B,) indicating the window start
-    :param LayerBase|int|None window_size:
+    :param LayerBase|int|None window_start: Layer with output of shape (B,) or (constant) int value indicating
+      the window start.
+    :param LayerBase|int|None window_size: Layer with output of shape (B,) or (constant) int value indicating
+      the window size.
     :param bool use_time_mask: if True, assumes dyn seq len, and use it for masking.
       By default, if dyn seq len exists, it uses it.
     :param bool log_space: if True, returns in log space (i.e. uses log_softmax)
@@ -1629,14 +1631,14 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     # if the time-axis is static, we can skip the masking
     if use_time_mask is None:
       use_time_mask = energy_data.is_axis_dynamic(axis)
-    if start or window_start or window_size is not None:
+    if start or window_start is not None or window_size is not None:
       assert use_time_mask
     if use_time_mask:
       energy_mask = SeqLenMaskLayer.build_mask(
         energy_data,
         axis=axis,
         start=start.output if start else None,
-        window_start=window_start.output if window_start else None,
+        window_start=window_start.output if isinstance(window_start, LayerBase) else window_start,
         window_size=window_size.output if isinstance(window_size, LayerBase) else window_size)
       energy = where_bc(energy_mask, energy, float("-inf"), name="energy_masked")
     if energy_factor:
@@ -1743,7 +1745,7 @@ class SeqLenMaskLayer(_ConcatInputLayer):
       axis=axis,
       seq_len_source=seq_len_source.output if seq_len_source else None,
       start=start.output if start else None,
-      window_start=window_start.output if window_start else None,
+      window_start=window_start.output if isinstance(window_start, LayerBase) else window_start,
       window_size=window_size.output if isinstance(window_size, LayerBase) else window_size)
     from returnn.tf.util.basic import where_bc
     x_ = where_bc(mask, self.input_data.placeholder, mask_value)
@@ -1779,8 +1781,11 @@ class SeqLenMaskLayer(_ConcatInputLayer):
       start_data = start.copy_compatible_to(
         x, check_sparse=False, check_dtype=False)  # adds dummy time-dim
       energy_mask = tf.logical_and(energy_mask, tf.greater_equal(idxs, start_data.placeholder))
-    if window_start:
+    if window_start is not None:
       assert window_size, "set window_size explicitly"
+      if not isinstance(window_start, Data):
+        assert isinstance(window_start, int)
+        window_start = Data.from_tensor(tf.constant(window_start))
       if not isinstance(window_size, Data):
         assert isinstance(window_size, int)
         window_size = Data.from_tensor(tf.constant(window_size))
