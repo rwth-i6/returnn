@@ -161,15 +161,17 @@ def module_name(repo, repo_path, path, version):
     repo_v = repo_v + "/dev"
   py_pkg_dir = "%s/%s%s" % (_package_import_pkg_path(), _normalize_pkg_name(repo_v), _normalize_pkg_name(rel_pkg_dir))
   _mk_py_pkg_dirs(_package_import_pkg_path(), py_pkg_dir)
-  symlink_file = "%s/%s" % (py_pkg_dir, rel_pkg_path0)
+  symlink_file, target_file_extension = os.path.splitext("%s/%s" % (py_pkg_dir, rel_pkg_path0))
   symlink_target = "%s%s/%s" % (repo_path, rel_pkg_dir, rel_pkg_path0)
+  if target_file_extension:
+    # if the target has a file extension, force it to be always .py for the symlink
+    symlink_file = symlink_file + ".py"
   if os.path.exists(symlink_file):
     assert os.readlink(symlink_file) == symlink_target
   else:
     logger.debug("Symlink %s -> %s", symlink_file, symlink_target)
     os.symlink(symlink_target, symlink_file, target_is_directory=os.path.isdir(symlink_target))
-
-  repo_and_path = "%s/%s" % (repo_v, path[:-3] if path.endswith(".py") else path)
+  repo_and_path = "%s/%s" % (repo_v, os.path.splitext(path)[0])
   name = _normalize_pkg_name(repo_and_path).replace("/", ".")
   return ModuleNamePrefix + name
 
