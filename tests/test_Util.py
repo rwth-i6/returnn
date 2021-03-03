@@ -317,6 +317,32 @@ def test_import_wrong_date():
     raise Exception("We expected an invalid version exception but got nothing.")
 
 
+def test_import_wrong_pkg_py_import():
+  from pprint import pprint
+  from returnn.import_ import import_
+  from returnn.import_.common import _registered_modules, MissingExplicitImport
+  # Use some other commit here which is not used by the other tests, to not mess up.
+  mod = import_("github.com/rwth-i6/returnn-experiments", "common", "20210302-10beb9d1c57e")
+  print("Loaded mod %s, name %s, file %s" % (mod, mod.__name__, mod.__file__))
+  print("Registered modules:")
+  pprint(_registered_modules)
+
+  # Mod name, without "common".
+  mod_name = "returnn_import.github_com.rwth_i6.returnn_experiments.v20210302153450_10beb9d1c57e"
+  assert mod_name in _registered_modules
+  assert mod_name in sys.modules
+  # Remove from both to force a reload.
+  del _registered_modules[mod_name]
+  del sys.modules[mod_name]
+
+  try:
+    import returnn_import.github_com.rwth_i6.returnn_experiments.v20210302153450_10beb9d1c57e
+  except MissingExplicitImport as exc:  # but *not* a normal ImportError
+    print("Got expected exception:", exc)
+  else:
+    raise Exception("We expected an import error exception but got nothing.")
+
+
 if __name__ == "__main__":
   better_exchook.install()
   if len(sys.argv) <= 1:

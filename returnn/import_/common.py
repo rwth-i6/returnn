@@ -24,6 +24,12 @@ class InvalidVersion(Exception):
   """
 
 
+class MissingExplicitImport(ImportError):
+  """
+  Corresponding `import_` call missing.
+  """
+
+
 def package_path():
   """
   :return: directory where packages are stored (default: ~/returnn/pkg)
@@ -110,8 +116,13 @@ def setup_py_pkg(mod_globals):
 
   :param dict[str] mod_globals: globals() in the package
   """
-  # Dummy...
-  logger.debug("pkg mod %s %s", mod_globals.get("__name__"), mod_globals.get("__file__"))
+  mod_name = mod_globals["__name__"]
+  logger.debug("import_ pkg mod %s %s", mod_name, mod_globals.get("__file__"))
+  if mod_name not in _registered_modules:
+    from pprint import pformat
+    raise MissingExplicitImport(
+      "You must call `import_(...)` before you can access the module %s.\nRegistered modules:\n%s" % (
+        mod_name, pformat(_registered_modules)))
 
 
 def _normalize_pkg_name(name):
@@ -122,6 +133,25 @@ def _normalize_pkg_name(name):
   name = name.replace(".", "_")
   name = name.replace("-", "_")
   return name
+
+
+# For every `module_name` call, we insert an entry in here.
+_registered_modules = {}  # type: typing.Dict[str]
+
+
+def _register_module(mod_name, info):
+  """
+  :param str mod_name:
+  :param object info: just used for reporting
+  """
+  assert mod_name.startswith(ModuleNamePrefix)
+  _registered_modules[mod_name] = info
+  p = -1
+  while True:
+    p = mod_name.find(".", p + 1)
+    if p < 0:
+      break
+    _registered_modules[mod_name[:p]] = info
 
 
 def module_name(repo, repo_path, path, version):
@@ -169,6 +199,10 @@ def module_name(repo, repo_path, path, version):
   else:
     logger.debug("Symlink %s -> %s", symlink_file, symlink_target)
     os.symlink(symlink_target, symlink_file, target_is_directory=os.path.isdir(symlink_target))
+
+  _register_module(
+    mod_name=ModuleNamePrefix + _normalize_pkg_name(repo_v + rel_pkg_dir).replace("/", "."),
+    info=dict(repo=repo, pkg_dir=rel_pkg_dir[1:], version=version))
 
   repo_and_path = "%s/%s" % (repo_v, path[:-3] if path.endswith(".py") else path)
   name = _normalize_pkg_name(repo_and_path).replace("/", ".")
