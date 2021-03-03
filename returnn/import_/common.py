@@ -14,6 +14,7 @@ _DefaultPkgPath = os.path.expanduser("~/returnn/pkg")
 _EnvPkgPath = "RETURNN_PKG_PATH"
 _pkg_path = None  # type: typing.Optional[str]
 _DefaultPkgImportPath = os.path.expanduser("~/returnn/_pkg_import")
+_EnvPkgImportPath = "RETURNN_PKG_IMPORT_PATH"
 _pkg_import_path = None  # type: typing.Optional[str]
 
 
@@ -49,7 +50,7 @@ def _package_import_path():
   global _pkg_import_path
   if _pkg_import_path:
     return _pkg_import_path
-  _pkg_import_path = _DefaultPkgImportPath
+  _pkg_import_path = os.environ.get(_EnvPkgImportPath, _DefaultPkgImportPath)
   _setup_pkg_import()
   return _pkg_import_path
 
