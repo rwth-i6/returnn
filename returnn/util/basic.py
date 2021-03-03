@@ -244,15 +244,18 @@ def sys_exec_ret_code(*args, **kwargs):
   return res
 
 
-def git_commit_rev(commit="HEAD", git_dir="."):
+def git_commit_rev(commit="HEAD", git_dir=".", length=None):
   """
   :param str commit:
   :param str git_dir:
+  :param int|None length:
   :rtype: str
   """
   if commit is None:
     commit = "HEAD"
-  return sys_exec_out("git", "rev-parse", "--short", commit, cwd=git_dir).strip()
+  return sys_exec_out(
+    "git", "rev-parse", "--short=%i" % length if length else "--short", commit,
+    cwd=git_dir).strip()
 
 
 def git_is_dirty(git_dir="."):
@@ -3008,6 +3011,21 @@ def try_and_ignore_exception(f):
     return None
 
 
+def try_get_stack_frame(depth=1):
+  """
+  :param int depth:
+  :rtype: types.FrameType|None
+  :return: caller function name. this is just for debugging
+  """
+  # noinspection PyBroadException
+  try:
+    # noinspection PyProtectedMember,PyUnresolvedReferences
+    frame = sys._getframe(depth + 1)  # one more to count ourselves
+    return frame
+  except Exception:
+    return None
+
+
 def try_get_caller_name(depth=1, fallback=None):
   """
   :param int depth:
@@ -3015,13 +3033,10 @@ def try_get_caller_name(depth=1, fallback=None):
   :rtype: str|None
   :return: caller function name. this is just for debugging
   """
-  # noinspection PyBroadException
-  try:
-    # noinspection PyProtectedMember,PyUnresolvedReferences
-    frame = sys._getframe(depth + 1)  # one more to count ourselves
+  frame = try_get_stack_frame(depth + 1)  # one more to count ourselves
+  if frame:
     return frame.f_code.co_name
-  except Exception:
-    return fallback
+  return fallback
 
 
 def camel_case_to_snake_case(name):

@@ -66,10 +66,11 @@ def stat_repo(repo, version):
   repo_.get_work_dir(version)
 
 
-def get_repo_path(repo, version):
+def get_repo_path(repo, version, _report_dev_version_usage_stack_frame_depth=1):
   """
   :param str repo: e.g. "github.com/rwth-i6/returnn-experiments"
   :param str|None version: e.g. "20211231-0123abcd0123"
+  :param int _report_dev_version_usage_stack_frame_depth:
   :return: path to repo
   :rtype: str
   """
@@ -77,7 +78,7 @@ def get_repo_path(repo, version):
   work_dir = repo_.get_work_dir(version)
   path = work_dir.get_path()
   if not version:
-    common.logger.warn("Access to development working tree %s", path)
+    _report_usage_dev_version(path=path, stack_frame_depth=_report_dev_version_usage_stack_frame_depth + 1)
   return path
 
 
@@ -407,3 +408,28 @@ def _get_repo(repo):
   obj = _Repo(repo)
   _repo_cache[repo] = obj
   return obj
+
+
+def _report_usage_dev_version(path, stack_frame_depth):
+  """
+  :param str path:
+  :param int stack_frame_depth:
+  """
+  common.logger.warn("Access to development working tree: %s", path)
+  from returnn.util.basic import try_get_stack_frame
+  frame = try_get_stack_frame(depth=stack_frame_depth + 1)
+  if frame:
+    from returnn.util.better_exchook import get_source_code, add_indent_lines
+    src = get_source_code(filename=frame.f_code.co_filename, lineno=frame.f_lineno, module_globals=frame.f_globals)
+    common.logger.warn(
+      "  Called from: %s:%i, code:\n%s",
+      frame.f_code.co_filename, frame.f_lineno,
+      add_indent_lines("    ", src.rstrip()))
+  else:
+    common.logger.warn("  (Could not get stack frame information from calling code.)")
+  from returnn.util.basic import git_commit_date, git_commit_rev, git_is_dirty
+  rev = git_commit_rev(git_dir=path, length=_DefaultNumHashDigits)
+  commit_date = git_commit_date(git_dir=path)  # like "20190202.154527"
+  common.logger.warn("  Current version: %s-%s", commit_date.replace(".", ""), rev)
+  if git_is_dirty(git_dir=path):
+    common.logger.warn("  (Warning, code is dirty. Commit your recent changes.)")
