@@ -3502,9 +3502,11 @@ int __register_atfork(void (*prepare)(void), void (*parent)(void), void (*child)
 }
 
 // Another way to ignore atfork handlers: Override fork.
+#ifdef __linux__ // only works on Linux currently
 pid_t fork(void) {
   return syscall(SYS_clone, SIGCHLD, 0);
 }
+#endif
 
 __attribute__((constructor))
 void patch_atfork_init() {
@@ -3551,7 +3553,7 @@ def maybe_restart_returnn_with_atfork_patch():
     return
   lib = get_patch_atfork_lib()
   env = os.environ.copy()
-  env["LD_PRELOAD"] = lib
+  env["DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"] = lib
   env["__RETURNN_TRY_ATFORK_PATCHED"] = "1"
   print("Restarting Returnn with atfork patch...", sys.executable, sys.argv)
   sys.stdout.flush()
