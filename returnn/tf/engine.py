@@ -185,7 +185,7 @@ class Runner(object):
     :param dict[str] eval_info: via :func:`_collect_eval_info`
     :return: nothing, will be printed to log
     """
-    if not self._show_interactive_process_bar and not log.v[5]:
+    if not self._show_interactive_process_bar and not log.verbose[5]:
       return
     start_elapsed = time.time() - self.start_time
     complete = self.data_provider.get_complete_frac()
