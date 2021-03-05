@@ -343,6 +343,29 @@ def test_import_wrong_pkg_py_import():
     raise Exception("We expected an import error exception but got nothing.")
 
 
+def test_literal_py_to_pickle():
+  import ast
+  from returnn.util import literal_py_to_pickle
+
+  def check(s):
+    print("check:", s)
+    a = ast.literal_eval(s)
+    b = literal_py_to_pickle.literal_eval(s)
+    assert_equal(a, b)
+
+  checks = [
+    "0", "1",
+    "0.0", "1.23",
+    '""', '"abc"', "''", "'abc'",
+    '"abc\\n\\x00\\x01\\"\'abc"',
+    "[]", "[1]", "[1,2,3]",
+    "{}", "{'a': 'b', 1: 2}",
+    "{1}", "{1,2,3}",
+  ]
+  for s in checks:
+    check(s)
+
+
 if __name__ == "__main__":
   better_exchook.install()
   if len(sys.argv) <= 1:

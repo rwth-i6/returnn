@@ -141,10 +141,22 @@ Contains code from keithito-tacotron:
  - Copyright (c) 2017 Keith Ito
  - Some code in LmDataset.py.
 
-Contains code from Tacotron-2
+Contains code from Tacotron-2:
  - Website: https://github.com/Rayhane-mamah/Tacotron-2
  - MIT License (MIT)
  - Copyright (c) 2018 Rayhane Mama
  - ZoneoutLSTMCell in TFNetworkRecLayer.py
+
+Contains code from literal-python-to-pickle:
+ - Website: https://github.com/albertz/literal-python-to-pickle
+ - MIT License (MIT)
+ - Copyright (c) 2021 Albert Zeyer
+ - literal_py_to_pickle.py, py-to-pickle.cpp
+
+Contains code from CPython:
+ - https://www.python.org/
+ - Python Software Foundation License (PSF)
+ - Copyright 2001..2021 Python Software Foundation
+ - py-to-pickle.cpp
 
 Various code snippets from StackOverflow, which are under Creative Commons / Public Domain.
