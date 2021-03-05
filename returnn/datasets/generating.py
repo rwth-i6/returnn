@@ -2835,7 +2835,8 @@ class OggZipDataset(CachedDataset2):
     :return: data entries
     :rtype: list[dict[str]]
     """
-    data = eval(self._read("%s.txt" % self._names[zip_index], zip_index))  # type: typing.List[typing.Dict[str]]
+    from returnn.util.literal_py_to_pickle import literal_eval
+    data = literal_eval(self._read("%s.txt" % self._names[zip_index], zip_index))  # type: typing.List[typing.Dict[str]]
     assert data and isinstance(data, list)
     first_entry = data[0]
     assert isinstance(first_entry, dict)
