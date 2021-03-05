@@ -7900,8 +7900,8 @@ class CrossEntropyLoss(Loss):
     """
     output_flat = self.output_flat
     if output_flat is None:
-      output_flat = self._flatten_or_merge(
-        self.output.placeholder, self.output_seq_lens, time_major=self.output.is_time_major)
+      output_flat = self.output_before_softmax_flat
+    assert output_flat is not None
     target_flat_exp = tf.stack(
       [tf.range(tf.shape(self.target_flat)[0], dtype=tf.int32),
        tf.cast(self.target_flat, tf.int32)], axis=1)  # (time,2)
