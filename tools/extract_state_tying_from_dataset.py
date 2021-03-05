@@ -62,7 +62,7 @@ def iter_bliss_orth(filename):
 
   for tree, elem in getelements("segment"):
     elem_orth = elem.find("orth")
-    orth_raw = elem_orth.text  # should be unicode
+    orth_raw = elem_orth.text or ""  # should be unicode
     orth_split = orth_raw.split()
     orth = " ".join(orth_split)
 

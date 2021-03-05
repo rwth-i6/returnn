@@ -104,7 +104,7 @@ def iter_bliss(filename, options, callback):
     else:
       frame_len = 0
     elem_orth = elem.find("orth")
-    orth_raw = elem_orth.text  # should be unicode
+    orth_raw = elem_orth.text or ""  # should be unicode
     orth_split = orth_raw.split()
     orth = " ".join(orth_split)
 

@@ -67,7 +67,7 @@ def iter_bliss(filename):
       recording_filename = elem.attrib["audio"] if event == "start" else None
     if event == 'end' and elem.tag == "segment":
       elem_orth = elem.find("orth")
-      orth_raw = elem_orth.text  # should be unicode
+      orth_raw = elem_orth.text or ""  # should be unicode
       orth_split = orth_raw.split()
       orth = " ".join(orth_split)
       segment_name = "/".join(name_tree)

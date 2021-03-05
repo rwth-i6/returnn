@@ -2302,7 +2302,7 @@ class BlissDataset(CachedDataset2):
         info = SeqInfo()
         info.idx = idx
         info.tag = "/".join(name_tree)
-        info.orth_raw = elem.find("orth").text
+        info.orth_raw = elem.find("orth").text or ""
         info.audio_path = cur_recording
         info.audio_start = float(elem.attrib["start"])
         info.audio_end = float(elem.attrib["end"])
