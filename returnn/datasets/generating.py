@@ -1135,7 +1135,8 @@ class ExtractAudioFeatures:
 
     if self.peak_normalization:
       peak = numpy.max(numpy.abs(audio))
-      audio /= peak
+      if peak != 0.0:
+        audio /= peak
 
     if self.random_permute_opts and self.random_permute_opts.truth_value:
       audio = _get_random_permuted_audio(
