@@ -19,7 +19,7 @@ def literal_eval(s):
   and it should be ~5x faster.
 
   :param str|bytes s:
-  :rtype: object
+  :return: any object
   """
   raw_pickle = py_to_pickle(s)
   return pickle.loads(raw_pickle)

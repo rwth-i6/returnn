@@ -180,7 +180,7 @@ struct MemReader : Reader {
 	virtual int read_next_char() {
 		if(p >= size)
 			return EOF;
-		char c = data[p];
+		unsigned char c = (unsigned char) data[p];
 		++p;
 		return c;
 	}
