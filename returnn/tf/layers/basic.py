@@ -7560,7 +7560,7 @@ class HDFDumpLayer(LayerBase):
     ndim = data.ndim
     if dump_whole_batches:
       ndim = data.ndim - len(data.size_placeholder) + 1
-    ndim_without_features = ndim - (0 if data.sparse else 1)
+    ndim_without_features = ndim - (0 if data.sparse or data.feature_dim_axis is None else 1)
     # Open the HDF writer lazily. We only want to start writing (or overwriting) once we really start.
     # E.g. when just building the graph for importing a model,
     # it should not touch (delete/overwrite) an existing file!
