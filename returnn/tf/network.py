@@ -406,7 +406,6 @@ class TFNetwork(object):
     self.recurrent = False
     self._assigner_cache = {}  # type: typing.Dict[tf.Variable,VariableAssigner]
     self.concat_sources_dropout_cache = {}  # type: typing.Dict[typing.Tuple[typing.Tuple[LayerBase,...],float,typing.Optional[typing.Tuple[typing.Optional[int],...]]],Data]  # nopep8
-    self._batch_dim = None  # type: typing.Union[tf.Tensor,int,None]  # see get_data_batch_dim
     self._merge_all_summaries = None  # type: typing.Optional[tf.Tensor]
     self._graph_reset_callbacks = []  # type: typing.List[typing.Callable]
     self._run_opts = {}  # type: typing.Dict[str]
@@ -1790,15 +1789,14 @@ class TFNetwork(object):
     :return: int scalar tensor which states the batch-dim
     :rtype: int|tf.Tensor
     """
-    if self._batch_dim is not None:
-      return self._batch_dim
-    # First check parent because there we might get the true batch dim.
-    # (Do not check parent_layer, because that potentially includes a beam.)
-    if self.parent_net:
-      return self.parent_net.get_data_batch_dim()
-    if self.extra_parent_net:
-      return self.extra_parent_net.get_data_batch_dim()
-    return self.extern_data.get_batch_info().dim
+    return self.get_batch_info().dim
+
+  def get_batch_info(self):
+    """
+    :return: global batch info from root network from extern data
+    :rtype: returnn.tf.util.data.BatchInfo
+    """
+    return self.get_root_network().extern_data.get_batch_info()
 
   def set_rec_step_info(self, i, end_flag=None, end_flag_source=None, seq_lens=None):
     """
