@@ -232,7 +232,7 @@ class _ConcatInputLayer(LayerBase):
     elif mask == "dropout":
       assert dropout > 0
     self.dropout = dropout
-    self.input_data = None
+    self.input_data = None  # type: typing.Optional[Data]
     if self.sources:
       self.input_data = concat_sources_with_opt_dropout(
         self.sources, dropout=dropout, dropout_noise_shape=dropout_noise_shape, dropout_on_forward=dropout_on_forward)
