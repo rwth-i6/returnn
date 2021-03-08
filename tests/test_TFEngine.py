@@ -746,17 +746,23 @@ def test_engine_end_layer(extra_rec_kwargs=None):
   config.update({
     "model": "%s/model" % _get_tmp_dir(),
     "batch_size": 5000,
-    "num_outputs": n_classes_dim,
-    "num_inputs": n_data_dim,
+    "extern_data": {
+      "data": {"dim": n_data_dim, "available_for_inference": False},
+      "classes": {"dim": n_classes_dim, "sparse": True, "available_for_inference": True}},
+    "target": "classes",
     "network": {
+      "enc0": {"class": "linear", "activation": "sigmoid", "n_out": 3, "from": "data:classes"},
+      "enc1": {"class": "reduce", "mode": "max", "axis": "t", "from": "enc0"},
       "output": dict_joined({
         "class": "rec", "from": [], "max_seq_len": 10, "target": "classes",
         "unit": {
-          "output": {"class": "linear", "activation": "tanh", "out_type": {"dim": n_classes_dim}, "from": ["prev:output"]},
-          'stop_token': {'class': 'linear', 'activation': None, 'n_out': 1, 'loss': 'bin_ce', 'loss_scale': 1.0, 'target': 'data', 'from': ['output']},
-          'stop_token_sigmoid': {'class': 'activation', 'activation': 'sigmoid', 'from': ['stop_token']},
-          'end_compare': {'class': 'compare', 'kind': 'greater', 'from': ['stop_token_sigmoid'], 'value': 0.5},
-          'end': {'class': 'squeeze', 'from': ['end_compare'], 'axis': 'F'},
+          "output": {"class": "linear", "activation": "tanh", "n_out": n_classes_dim,
+                     "from": ["prev:output", "base:enc1"]},
+          'stop_token': {'class': 'linear', 'activation': None, 'n_out': 1, 'loss': 'bin_ce', 'loss_scale': 1.0,
+                         'target': 'data', 'from': 'output'},
+          'stop_token_sigmoid': {'class': 'activation', 'activation': 'sigmoid', 'from': 'stop_token'},
+          'end_compare': {'class': 'compare', 'kind': 'greater', 'from': 'stop_token_sigmoid', 'value': 0.5},
+          'end': {'class': 'squeeze', 'from': 'end_compare', 'axis': 'F'},
         }
       }, extra_rec_kwargs or {}),
     }
