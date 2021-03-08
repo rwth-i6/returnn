@@ -315,6 +315,204 @@ class DimensionTag(object):
     raise Exception('%s: need placeholder, self.dimension or self.dyn_size for dim value' % self)
 
 
+class BatchInfo:
+  """
+  A batched tensor is a tensor with batch dimension,
+  i.e. consisting of multiple samples/sequences
+  which are supposed to be totally independent of each other.
+
+  This class provides some additional information
+  about the batch dimension.
+  Only one instance per different type of batch-dim is expected
+  (i.e. `batch_info1 is batch_info2` <==> same batch info).
+
+  When we pass data from the dataset to the network
+  (in all cases (training, inference ...) via :class:`Runner` in the TF engine),
+  we get a batch dimension due to the minibatch construction.
+  This is a global batch size
+  (usually dynamic, because every minibatch/step can have a different amount of samples,
+  although we can also support static sizes, which is needed e.g. for TPUs).
+
+  When we do beam search (see :class:`SearchBeam`),
+  we have multiple hypotheses per batch item,
+  and thus a different batch dimension.
+
+  We can also pack arrays (multiple sequences)
+  (also referred to as "flattened tensors", "non-padded tensors", "ragged tensors").
+  See e.g. :class:`FlattenBatchLayer` or :func:`flatten_with_seq_len_mask`.
+  Also see :class:`tf.RaggedTensor` which also represents
+  packed tensors (but only batch-major, although this is just a reinterpreation).
+  We do not directly use :class:`tf.RaggedTensor` in :class:`Data`
+  to have robust and reliable code (which expects :class:`tf.Tensor`).
+  However, we maybe can make use of some of the functions in :mod:`tf.ragged`.
+  """
+
+  class VirtualDimBase(object):
+    """
+    Represents one virtual dim, flattened into the batch dim.
+    """
+    def short_repr(self):
+      """
+      :rtype: str
+      """
+      raise NotImplementedError
+
+  class FixedDim(VirtualDimBase):
+    """
+    Represents a dim with fixed size.
+    """
+    def __init__(self, size):
+      """
+      :param tf.Tensor|int size:
+      """
+      self.size = size
+
+    def short_repr(self):
+      """
+      :rtype: str
+      """
+      if isinstance(self.size, int):
+        return "F(%i)" % self.size
+      return "F(?)"
+
+  class GlobalBatchDim(FixedDim):
+    """
+    Represents the global batch dim.
+    """
+    def short_repr(self):
+      """
+      :rtype: str
+      """
+      if isinstance(self.size, int):
+        return "B(%i)" % self.size
+      return "B(?)"
+
+  class BeamDim(FixedDim):
+    """
+    Represents a search beam.
+    """
+    def __init__(self, beam):
+      """
+      :param SearchBeam beam:
+      """
+      super(BatchInfo.BeamDim, self).__init__(size=beam.beam_size)
+      self.beam = beam
+
+    def short_repr(self):
+      """
+      :rtype: str
+      """
+      return "Beam{%r}(%s)" % (self.beam.name, self.size)
+
+  class VariableDim(VirtualDimBase):
+    """
+    Represents a dim with variable sizes.
+    Variable w.r.t. other dims (must be per batch entry).
+    """
+    def __init__(self, sizes, key_axes, dim_tag):
+      """
+      :param tf.Tensor sizes: shape [B_flat]
+      :param list[BatchInfo.VirtualDimBase] key_axes:
+        most common case would be [GlobalBatchDim(...)],
+        but [GlobalBatchDim(...),BeamDim(...)] is also common.
+      :param DimensionTag dim_tag:
+      """
+      self.sizes = sizes
+      self.key_axes = key_axes
+      self.dim_tag = dim_tag
+
+    def short_repr(self):
+      """
+      :rtype: str
+      """
+      return "Var{%r}" % (self.dim_tag.description,)
+
+  def __init__(self, base=None, beam=None, virtual_dims=None):
+    """
+    :param BatchInfo|None base:
+      If this is extended or based on another batch.
+      Except of the batch dim of the dataset minibatch,
+      we would always have a base.
+    :param SearchBeam|None beam:
+    :param list[BatchInfo.VirtualDimBase] virtual_dims:
+
+    In most cases, this constructor would probably not be used directly by the user.
+    """
+    self.base = base
+    self.beam = beam
+    if not virtual_dims:
+      assert base and beam
+      virtual_dims = base.virtual_dims + [BatchInfo.BeamDim(beam=beam)]
+    self.virtual_dims = virtual_dims
+    self._dim = None  # type: typing.Optional[typing.Union[tf.Tensor,int]]
+    self.descendants = []  # type: typing.List[BatchInfo]
+    self.descendants_by_beam_name = {}  # type: typing.Dict[str,BatchInfo]
+    if base:
+      base.descendants.append(self)
+      if beam:
+        assert beam.name not in base.descendants_by_beam_name
+        base.descendants_by_beam_name[beam.name] = self
+
+  @classmethod
+  def make_global_batch_info(cls, batch_dim):
+    """
+    :param tf.Tensor|int batch_dim:
+    :rtype: BatchInfo
+    """
+    return BatchInfo(virtual_dims=[BatchInfo.GlobalBatchDim(size=batch_dim)])
+
+  def __repr__(self):
+    return "BatchInfo{%s}" % ", ".join([dim.short_repr() for dim in self.virtual_dims])
+
+  @property
+  def dim(self):
+    """
+    :rtype: tf.Tensor|int
+    """
+    if self._dim is not None:
+      return self._dim
+    if len(self.virtual_dims) == 1:
+      dim = self.virtual_dims[0]
+      assert isinstance(dim, BatchInfo.FixedDim)
+      return dim.size
+    from returnn.tf.util.basic import same_control_flow_ctx, optional_mul
+    if all(isinstance(dim, BatchInfo.FixedDim) for dim in self.virtual_dims):
+      dims = self.virtual_dims  # type: typing.List[BatchInfo.FixedDim]
+      sizes = [dim.size for dim in dims]
+      with same_control_flow_ctx(sizes):
+        value = optional_mul(*sizes)  # type: typing.Union[tf.Tensor,int]
+      self._dim = value
+      return value
+    raise NotImplementedError("%r.dim()" % self)
+
+  @dim.setter
+  def dim(self, value):
+    """
+    :param tf.Tensor|int value:
+    """
+    self._dim = value
+
+  def get_base_chain(self):
+    """
+    :rtype: list[BatchInfo]
+    """
+    bases = []
+    base = self.base
+    while base:
+      bases.append(base)
+      base = base.base
+    return bases
+
+  def copy_extend_with_beam(self, beam):
+    """
+    :param SearchBeam beam:
+    :rtype: BatchInfo
+    """
+    if beam.name in self.descendants_by_beam_name:
+      return self.descendants_by_beam_name[beam.name]
+    return BatchInfo(base=self, beam=beam)
+
+
 class SearchBeam:
   """
   Represents info about the beam from some beam search (e.g. via :func:`beam_search`),
@@ -482,6 +680,7 @@ class Data(object):
                auto_create_placeholders=False,
                vocab=None,
                same_dim_tags_as=None,
+               batch=None,
                beam=None):
     """
     :param str name:
@@ -501,8 +700,10 @@ class Data(object):
     :param dict[int,tf.Tensor]|None size_placeholder: for every None in shape, this will describe the size.
       The size is always a tensor of shape (batch,), i.e. the size can be different for each sequence in a batch.
     :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
+    :param bool auto_create_placeholders: This will create a tf.placeholder.
     :param str|dict[str]|GeneratingDataset.Vocabulary|None vocab:
     :param dict[int|str,DimensionTag]|None same_dim_tags_as: will mark our dimension tags to be the same
+    :param BatchInfo|None batch:
     :param SearchBeam|None beam: the batch-dim could be extended by a beam-size,
       such that it represents the merged dims [batch, beam_size].
     """
@@ -602,6 +803,7 @@ class Data(object):
       size_placeholder = {}
     self.size_placeholder = size_placeholder  # type: typing.Dict[int,tf.Tensor]  # axis w.o. batch -> size (batch,)
     self.available_for_inference = available_for_inference
+    self.batch = batch
     self.beam = beam
     if vocab is not None:
       from returnn.datasets.generating import Vocabulary
@@ -736,6 +938,8 @@ class Data(object):
       keys += ["feature_dim_axis"]
     if not self.available_for_inference:
       keys += ["available_for_inference"]
+    if self.batch is not None:
+      keys += ["batch"]
     if self.beam is not None:
       keys += ["beam"]
     if self.vocab:
@@ -775,6 +979,8 @@ class Data(object):
       keys.append("placeholder")
     if not self.available_for_inference:
       keys.append("available_for_inference")
+    if self.batch is not None:
+      keys.append("batch")
     if self.beam is not None:
       keys.append("beam")
     args = ["%s=%r" % (key, getattr(self, key)) for key in keys]
@@ -1386,6 +1592,8 @@ class Data(object):
             data.size_placeholder[i] = tile_transposed(v, axis=0, multiples=beam.beam_size)
           if tag is not None:
             tag.set_tag_on_size_tensor(data.size_placeholder[i])
+      if data.batch:
+        data.batch = data.batch.copy_extend_with_beam(beam)
       data.beam = beam
       return data
 
