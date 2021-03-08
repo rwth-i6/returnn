@@ -1569,10 +1569,13 @@ def test_rec_optim_all_out():
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
+      "enc0": {"class": "linear", "activation": "sigmoid", "n_out": 3},
+      "enc1": {"class": "reduce", "mode": "max", "axis": "t", "from": "enc0"},
       "output": {
         "class": "rec", "optimize_move_layers_out": True, "from": [], "max_seq_len": 10, "target": "classes",
         "unit": {
-          "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
+          "embed": {"class": "linear", "from": "prev:output", "activation": "sigmoid", "n_out": 3},
+          "prob": {"class": "softmax", "from": ["embed", "base:enc1"], "loss": "ce", "target": "classes"},
           "output": {"class": "choice", "beam_size": 4, "from": ["prob"], "target": "classes", "initial_output": 0},
           "end": {"class": "compare", "from": ["output"], "value": 0}
         }
@@ -1595,7 +1598,7 @@ def test_rec_optim_all_out():
   assert rec_layer._optimize_move_layers_out
   # Now it was initialized and optimized for training.
   assert_equal(set(rec_layer.cell.input_layers_moved_out), set())
-  assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output", "prob"})
+  assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output", "prob", "embed"})
   assert_equal(set(rec_layer.cell.layers_in_loop), set())
 
   # Now reinit for search.
@@ -1612,7 +1615,7 @@ def test_rec_optim_all_out():
   # Now it was initialized and optimized for search.
   assert_equal(set(rec_layer.cell.input_layers_moved_out), set())
   assert_equal(set(rec_layer.cell.output_layers_moved_out), set())
-  assert_equal(set(rec_layer.cell.layers_in_loop), {"prob", "output", "end"})
+  assert_equal(set(rec_layer.cell.layers_in_loop), {"prob", "output", "end", "embed"})
 
   engine.search(dataset=dataset)
   print("error keys:")
