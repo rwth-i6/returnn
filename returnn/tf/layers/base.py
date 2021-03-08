@@ -698,7 +698,7 @@ class LayerBase(object):
     Normally it is self.network.get_batch_dim()
     but if we do search and there was a choice layer, it it multiplied by the beam size.
     :return: batch dim * beam size
-    :rtype: tf.Tensor
+    :rtype: tf.Tensor|int
     """
     batch_dim = self.network.get_data_batch_dim()
     beam_size = self.get_search_beam_size()
