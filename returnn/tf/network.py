@@ -54,6 +54,7 @@ class ExternData(object):
       # batch_dim_axis=0, time_dim_axis=1. See TFEngine.DataProvider._get_next_batch().
       self.data[key] = Data(name=key, auto_create_placeholders=auto_create_placeholders, **init_args)
     self.default_target = config.value('target', 'classes')
+    self._set_batch_info()
 
   @classmethod
   def data_kwargs_from_dataset_key(cls, dataset, key):
@@ -79,7 +80,7 @@ class ExternData(object):
 
   def init_from_dataset(self, dataset, auto_create_placeholders=True):
     """
-    :param Dataset.Dataset dataset:
+    :param returnn.datasets.Dataset dataset:
     :param bool auto_create_placeholders:
     """
     target_keys = list(dataset.get_target_list())
@@ -99,6 +100,34 @@ class ExternData(object):
       self.data[key] = Data(
         name=key, auto_create_placeholders=auto_create_placeholders,
         **self.data_kwargs_from_dataset_key(dataset=dataset, key=key))
+    self._set_batch_info()
+
+  def _set_batch_info(self):
+    from returnn.tf.util.basic import reuse_name_scope_of_tensor, get_shape_dim
+    from returnn.tf.util.data import BatchInfo
+    batch_info = None  # type: typing.Optional[BatchInfo]
+    # Maybe we already set it, and then added new data items.
+    for key, data in self.get_sorted_data_items():
+      assert isinstance(data, Data)
+      if data.available_for_inference and data.batch:
+        batch_info = data.batch
+        break
+    if not batch_info:
+      batch_dim = None  # type: typing.Union[tf.Tensor,int,None]
+      for key, data in self.get_sorted_data_items():
+        assert isinstance(data, Data)
+        if data.available_for_inference:
+          with reuse_name_scope_of_tensor(data.placeholder):
+            # We now get it from the shape of the data placeholder.
+            # An alternative might be to also have it as a separate placeholder.
+            batch_dim = get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
+            break
+      if batch_dim is None:
+        return  # no exception here, maybe not used. fail later in get_batch_info
+      batch_info = BatchInfo.make_global_batch_info(batch_dim=batch_dim)
+    for data in self.data.values():
+      if not data.batch:
+        data.batch = batch_info
 
   def check_matched_dataset(self, dataset, used_data_keys=None):
     """
@@ -132,6 +161,7 @@ class ExternData(object):
     """
     for key, value in data.items():
       self.data[key] = Data(name=key, auto_create_placeholders=True, **value)
+    self._set_batch_info()
 
   def register_data(self, data):
     """
@@ -222,6 +252,17 @@ class ExternData(object):
       [data for _, data in self.get_sorted_data_items()],
       dict(allow_same_feature_dim=allow_same_feature_dim))
     return tags
+
+  def get_batch_info(self):
+    """
+    :rtype: returnn.tf.util.data.BatchInfo
+    """
+    for key, data in self.get_sorted_data_items():
+      assert isinstance(data, Data)
+      if data.available_for_inference:
+        assert data.batch
+        return data.batch
+    raise Exception("We cannot tell the batch dim.")
 
 
 class _NetworkConstructionStack:
@@ -357,7 +398,7 @@ class TFNetwork(object):
     self.recurrent = False
     self._assigner_cache = {}  # type: typing.Dict[tf.Variable,VariableAssigner]
     self.concat_sources_dropout_cache = {}  # type: typing.Dict[typing.Tuple[typing.Tuple[LayerBase,...],float,typing.Optional[typing.Tuple[typing.Optional[int],...]]],Data]  # nopep8
-    self._batch_dim = None  # see get_data_batch_dim
+    self._batch_dim = None  # type: typing.Union[tf.Tensor,int,None]  # see get_data_batch_dim
     self._merge_all_summaries = None  # type: typing.Optional[tf.Tensor]
     self._graph_reset_callbacks = []  # type: typing.List[typing.Callable]
     self._run_opts = {}  # type: typing.Dict[str]
@@ -1741,7 +1782,6 @@ class TFNetwork(object):
     :return: int scalar tensor which states the batch-dim
     :rtype: int|tf.Tensor
     """
-    from returnn.tf.util.basic import get_shape_dim, reuse_name_scope_of_tensor
     if self._batch_dim is not None:
       return self._batch_dim
     # First check parent because there we might get the true batch dim.
@@ -1750,15 +1790,7 @@ class TFNetwork(object):
       return self.parent_net.get_data_batch_dim()
     if self.extra_parent_net:
       return self.extra_parent_net.get_data_batch_dim()
-    for key, data in self.extern_data.get_sorted_data_items():
-      assert isinstance(data, Data)
-      if data.available_for_inference:
-        self.used_data_keys.add(key)
-        with reuse_name_scope_of_tensor(data.placeholder):
-          batch_dim = get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
-          self._batch_dim = batch_dim
-          return batch_dim
-    raise Exception("We cannot tell the batch dim.")
+    return self.extern_data.get_batch_info().dim
 
   def set_rec_step_info(self, i, end_flag=None, end_flag_source=None, seq_lens=None):
     """
