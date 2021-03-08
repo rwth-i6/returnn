@@ -54,7 +54,7 @@ class ExternData(object):
       # batch_dim_axis=0, time_dim_axis=1. See TFEngine.DataProvider._get_next_batch().
       self.data[key] = Data(name=key, auto_create_placeholders=auto_create_placeholders, **init_args)
     self.default_target = config.value('target', 'classes')
-    self._set_batch_info()
+    self.init_batch_info()
 
   @classmethod
   def data_kwargs_from_dataset_key(cls, dataset, key):
@@ -100,9 +100,14 @@ class ExternData(object):
       self.data[key] = Data(
         name=key, auto_create_placeholders=auto_create_placeholders,
         **self.data_kwargs_from_dataset_key(dataset=dataset, key=key))
-    self._set_batch_info()
+    self.init_batch_info()
 
-  def _set_batch_info(self):
+  def init_batch_info(self):
+    """
+    Initializes and sets the batch info on the extern data,
+    i.e. sets ``Data.batch``.
+    See :class:`BatchInfo`.
+    """
     from returnn.tf.util.basic import reuse_name_scope_of_tensor, get_shape_dim
     from returnn.tf.util.data import BatchInfo
     batch_info = None  # type: typing.Optional[BatchInfo]
@@ -116,11 +121,14 @@ class ExternData(object):
       batch_dim = None  # type: typing.Union[tf.Tensor,int,None]
       for key, data in self.get_sorted_data_items():
         assert isinstance(data, Data)
-        if data.available_for_inference:
+        if data.available_for_inference and data.placeholder is not None:
           with reuse_name_scope_of_tensor(data.placeholder):
-            # We now get it from the shape of the data placeholder.
+            # We now get it from the shape of the data placeholder (or size placeholder).
             # An alternative might be to also have it as a separate placeholder.
-            batch_dim = get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
+            if data.size_placeholder and 0 in data.size_placeholder:
+              batch_dim = get_shape_dim(data.size_placeholder[0], data.batch_dim_axis, name="batch_dim")
+            else:
+              batch_dim = get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
             break
       if batch_dim is None:
         return  # no exception here, maybe not used. fail later in get_batch_info
@@ -161,7 +169,7 @@ class ExternData(object):
     """
     for key, value in data.items():
       self.data[key] = Data(name=key, auto_create_placeholders=True, **value)
-    self._set_batch_info()
+    self.init_batch_info()
 
   def register_data(self, data):
     """

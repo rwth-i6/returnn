@@ -675,6 +675,7 @@ class DatasetDataProvider(DataProviderBase):
           size_key = "size:%s:%i" % (key, axis_wo_b)
           data.size_placeholder[axis_wo_b] = self.iterator_next_element[size_key]
           assert isinstance(data.size_placeholder[axis_wo_b], tf.Tensor), "next: %r" % (self.iterator_next_element,)
+    extern_data.init_batch_info()
 
     dataset_pipeline_func = config.typed_value("dataset_pipeline")
     if dataset_pipeline_func in [None, True, 1]:  # allow None here, if this class is used explicitly
