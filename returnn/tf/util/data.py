@@ -305,6 +305,8 @@ class DimensionTag(object):
     if self.dimension is not None:
       return self.dimension
     if self.kind == self.Types.Batch:
+      if self.src_data:
+        return self.src_data.get_batch_dim()
       from returnn.tf.layers.base import LayerBase
       return LayerBase.get_recent_layer().get_batch_dim()
     if self.src_data is not None and self.src_axis is not None and self.src_data.placeholder is not None:
