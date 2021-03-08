@@ -817,15 +817,18 @@ def check_engine_search(extra_rec_kwargs=None):
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
+      "enc0": {"class": "linear", "activation": "sigmoid", "n_out": 3},
+      "enc1": {"class": "reduce", "mode": "max", "axis": "t", "from": "enc0"},
       "output": dict_joined({
         "class": "rec", "from": [], "max_seq_len": 10, "target": "classes",
         "unit": {
-          "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
-          "output": {"class": "choice", "beam_size": 4, "from": ["prob"], "target": "classes", "initial_output": 0},
-          "end": {"class": "compare", "from": ["output"], "value": 0}
+          "embed": {"class": "linear", "from": "prev:output", "activation": "sigmoid", "n_out": 3},
+          "prob": {"class": "softmax", "from": ["embed", "base:enc1"], "loss": "ce", "target": "classes"},
+          "output": {"class": "choice", "beam_size": 4, "from": "prob", "target": "classes", "initial_output": 0},
+          "end": {"class": "compare", "from": "output", "value": 0}
         }
       }, extra_rec_kwargs or {}),
-      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
+      "decision": {"class": "decide", "from": "output", "loss": "edit_distance"}
     }
   })
   _cleanup_old_models(config)
@@ -842,10 +845,12 @@ def check_engine_search(extra_rec_kwargs=None):
   assert isinstance(rec_layer.cell, _SubnetworkRecCell)
   if rec_layer._optimize_move_layers_out:
     assert_equal(set(rec_layer.cell.input_layers_moved_out), set())
-    assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output", "prob"})
+    assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output", "embed", "prob"})
     assert_equal(set(rec_layer.cell.layers_in_loop), set())
   else:
-    assert_equal(set(rec_layer.cell.layers_in_loop).difference({"data:classes"}), {"prob", "output", "end"})
+    assert_equal(
+      set(rec_layer.cell.layers_in_loop).difference({"data:classes"}),
+      {"embed", "prob", "output", "end"})
 
   # Now reinit for search.
   assert not engine.use_search_flag
