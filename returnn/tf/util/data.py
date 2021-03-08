@@ -2465,11 +2465,17 @@ class Data(object):
 
   def get_batch_dim(self):
     """
-    :rtype: tf.Tensor
+    :rtype: tf.Tensor|int
     """
-    assert self.placeholder is not None
     assert self.batch_dim_axis is not None
-    return tf.shape(self.placeholder)[self.batch_dim_axis]
+    if self.batch:
+      if self.beam:
+        assert self.batch.beam
+      return self.batch.dim
+    # Note: We need this fallback code for now
+    # until we consistently have set self.batch correctly in all cases.
+    from returnn.tf.layers.base import LayerBase
+    return LayerBase.get_recent_layer().get_batch_dim()
 
   def get_spatial_batch_axes(self):
     """
