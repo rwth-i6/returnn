@@ -442,13 +442,14 @@ class RecStepByStepLayer(RecLayer):
   def get_batch_dim_from_state(self):
     """
     :return: batch-dim, from some (any) state var, scalar, int32
-    :rtype: tf.Tensor
+    :rtype: tf.Tensor|int
     """
+    from returnn.tf.util.basic import get_shape_dim
     for name, v in sorted(self.state_vars.items()):
       assert isinstance(v, RecStepByStepLayer.StateVar)
       if v.var_data_shape.batch_dim_axis is not None:
         with tf.name_scope("batch_dim_from_state_%s" % v.name):
-          return tf.shape(v.var)[v.var_data_shape.batch_dim_axis]
+          return get_shape_dim(v.var.value(), v.var_data_shape.batch_dim_axis)
     raise Exception("None of the state vars do have a batch-dim: %s" % self.state_vars)
 
   def add_stochastic_var(self, name):
@@ -630,7 +631,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     # This will add a dependency on the external data, which we want to avoid.
     # We can avoid that by taking the batch dim instead from one of the other states.
     # Note that this would be wrong in beam search.
-    self.net._batch_dim = rec_layer.get_batch_dim_from_state()
+    self.net.get_batch_info().dim = rec_layer.get_batch_dim_from_state()
 
     with tf.name_scope("cond"):
       rec_layer.create_state_var("cond", tf.constant(True))
