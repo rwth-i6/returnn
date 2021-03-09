@@ -1824,6 +1824,7 @@ def flatten_with_seq_len_mask(x, seq_lens, batch_dim_axis=None, time_dim_axis=No
   :rtype: tf.Tensor
   """
   if time_major is not None:
+    assert batch_dim_axis is None and time_dim_axis is None
     if time_major:
       batch_dim_axis, time_dim_axis = 1, 0
     else:
@@ -1839,10 +1840,10 @@ def flatten_with_seq_len_mask(x, seq_lens, batch_dim_axis=None, time_dim_axis=No
       x = tf.transpose(x, perm=perm)
       batch_dim_axis = 0
       time_dim_axis = 1
-    x = check_dim_equal(x, batch_dim_axis, seq_lens, batch_dim_axis, ["batch-dim does not match"])  # batch dim
+    x = check_dim_equal(x, batch_dim_axis, seq_lens, 0, ["batch-dim does not match"])  # batch dim
     # int64? -> https://github.com/tensorflow/tensorflow/issues/6518
     # Batch and time dims have to be in front of the tensor in order to apply the mask.
-    mask = sequence_mask(seq_lens, maxlen=tf.shape(x)[time_dim_axis])  # shape (batch,time)
+    mask = sequence_mask(seq_lens, maxlen=get_shape_dim(x, time_dim_axis))  # shape (batch,time)
     mask = check_input_ndim(mask, 2)
     mask = check_dim_equal(mask, 0, x, batch_dim_axis)
     mask = check_dim_equal(mask, 1, x, time_dim_axis)
