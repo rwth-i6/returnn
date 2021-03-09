@@ -1482,6 +1482,30 @@ def test_MergeDimsLayer_simple_feat():
     numpy.testing.assert_almost_equal(out_v, in_v.reshape(out_v.shape))
 
 
+def test_FlattenBatchLayer():
+  n_batch, n_time, n_in = 3, 4, 2
+  config = Config({
+    "extern_data": {"data": {"dim": n_in, "dtype": "int32"}},
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {"class": "flatten_batch", "batch_major": False}})
+    out_data = net.get_default_output_layer().output
+    assert out_data.batch_shape == (None, n_in) and not out_data.size_placeholder
+    out_t = net.get_default_output_layer().output.placeholder
+    assert out_t.shape.as_list() == [None, n_in]
+    in_v = numpy.arange(0, n_batch * n_time * n_in).reshape((n_time, n_batch, n_in)).transpose(1, 0, 2)
+    in_seq_lens = [4, 3, 2]
+    out_v = session.run(out_t, feed_dict={
+      net.extern_data.data["data"].placeholder: in_v,
+      net.extern_data.data["data"].size_placeholder[0]: in_seq_lens})
+    assert isinstance(out_v, numpy.ndarray)
+    assert out_v.shape == (sum(in_seq_lens), n_in)
+    assert_equal(out_v.tolist(), [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9], [10, 11], [12, 13], [14, 15], [18, 19]])
+
+
 def test_SwitchLayer_const_no_time():
   config = Config({
     "extern_data": {
