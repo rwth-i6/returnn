@@ -1516,6 +1516,27 @@ def test_move_axis():
   assert_equal(list(session.run(tf.shape(move_axis(x, old_axis=2, new_axis=1)))), [2, 5, 3])
 
 
+def test_flatten_with_seq_len_mask():
+  n_batch, n_time, n_dim = 3, 4, 2
+  seq_lens = tf.convert_to_tensor([4, 3, 2])
+  x = tf.convert_to_tensor(numpy.arange(0, n_batch * n_time * n_dim).reshape((n_time, n_batch, n_dim)))
+  assert x.shape.ndims == 3
+  print("x (time-major):", x.eval().tolist())
+  print("x (batch-major):", x.eval().transpose(1, 0, 2).tolist())
+  assert_equal(x.eval()[0].tolist(), [[0, 1], [2, 3], [4, 5]])
+  assert_equal(x.eval()[:3, 0].tolist(), [[0, 1], [6, 7], [12, 13]])
+  flat_bm = flatten_with_seq_len_mask(x, seq_lens=seq_lens, batch_dim_axis=1, time_dim_axis=0)
+  assert flat_bm.shape.ndims == 2
+  print("flat (batch-major):", flat_bm.eval().tolist())
+  assert_equal(
+    flat_bm.eval().tolist(), [[0, 1], [6, 7], [12, 13], [18, 19], [2, 3], [8, 9], [14, 15], [4, 5], [10, 11]])
+  flat_tm = flatten_with_seq_len_mask_time_major(x, seq_lens=seq_lens, batch_dim_axis=1, time_dim_axis=0)
+  assert flat_tm.shape.ndims == 2
+  print("flat (time-major):", flat_tm.eval().tolist())
+  assert_equal(
+    flat_tm.eval().tolist(), [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9], [10, 11], [12, 13], [14, 15], [18, 19]])
+
+
 def test_constant_with_shape():
   x = session.run(constant_with_shape(3, [2, 3]))
   assert_equal(x.shape, (2, 3))
