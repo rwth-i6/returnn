@@ -387,7 +387,7 @@ class BatchInfo:
       """
       if isinstance(self.size, int):
         return "B(%i)" % self.size
-      return "B(?)"
+      return "B"
 
   class BeamDim(FixedDim):
     """
@@ -465,6 +465,12 @@ class BatchInfo:
 
   def __repr__(self):
     return "BatchInfo{%s}" % ", ".join([dim.short_repr() for dim in self.virtual_dims])
+
+  def short_repr(self):
+    """
+    :rtype: str
+    """
+    return "&".join([dim.short_repr() for dim in self.virtual_dims])
 
   @property
   def dim(self):
@@ -957,7 +963,9 @@ class Data(object):
     :return: description of self. also used for __repr__
     :rtype: str
     """
-    keys = ["shape"]
+    # Avoid redundant information (most information is covered in batch_shape_meta).
+    # Also try to avoid confusion (e.g. `shape` vs `batch_shape`).
+    keys = []
     if self.sparse:
       keys.append("dtype")
       keys.append("sparse")
@@ -965,25 +973,13 @@ class Data(object):
     else:
       if self.dtype != "float32":
         keys.append("dtype")
-    if self.batch_dim_axis != 0:
-      keys.append("batch_dim_axis")
-    if (
-          self.time_dim_axis is None or
-          self.time_dim_axis >= 2 or
-          self.batch_dim_axis is None or
-          self.batch_dim_axis >= 2):
-      keys.append("time_dim_axis")
-    if self._feature_dim_axis is not NotSpecified:
-      keys.append("feature_dim_axis")
     if with_name:
       keys.insert(0, "name")
     if with_placeholder:
       keys.append("placeholder")
     if not self.available_for_inference:
       keys.append("available_for_inference")
-    if self.batch is not None:
-      keys.append("batch")
-    if self.beam is not None:
+    if self.beam is not None and not self.batch:  # with batch, it is contained already in batch_shape_meta
       keys.append("beam")
     args = ["%s=%r" % (key, getattr(self, key)) for key in keys]
     args += ["batch_shape_meta=[%s]" % ",".join(self.get_batch_axes_short_description())]
@@ -997,7 +993,10 @@ class Data(object):
     for axis, dim_tag in enumerate(self.get_batch_shape_dim_tags()):
       descriptions = []
       if axis == self.batch_dim_axis:
-        descriptions.append("B")
+        if self.batch:
+          descriptions.append(self.batch.short_repr())
+        else:
+          descriptions.append("B?")
       if axis == self.time_dim_axis:
         descriptions.append("T")
       if axis == self.feature_dim_axis:
@@ -1009,7 +1008,7 @@ class Data(object):
           descriptions.append(repr(dim_tag.description))
         else:
           descriptions.append("?")
-      else:
+      elif axis != self.batch_dim_axis or not self.batch:
         descriptions.append(str(self.batch_shape[axis]))
         if dim_tag.kind == DimensionTag.Types.Spatial and dim_tag.dyn_size is not None:
           descriptions.append(repr(dim_tag.description))
