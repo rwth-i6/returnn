@@ -6795,7 +6795,7 @@ class VariableLayer(LayerBase):
       out = var
       if add_batch_axis:
         # Unbroadcast to not confuse some other layers
-        batch_dim = self.get_batch_dim()
+        batch_dim = self.output.get_batch_dim()
         out = expand_dims_unbroadcast(out, axis=self.output.batch_dim_axis, dim=batch_dim)
       if add_time_axis:
         out = tf.expand_dims(out, axis=self.output.time_dim_axis)
@@ -6814,9 +6814,11 @@ class VariableLayer(LayerBase):
     super(VariableLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, shape, dtype="float32", add_batch_axis=True, add_time_axis=False, **kwargs):
+  def get_out_data_from_opts(cls, name, network,
+                             shape, dtype="float32", add_batch_axis=True, add_time_axis=False, **kwargs):
     """
     :param str name:
+    :param returnn.tf.network.TFNetwork network:
     :param tuple[int]|list[int] shape:
     :param str dtype:
     :param bool add_batch_axis:
@@ -6838,7 +6840,9 @@ class VariableLayer(LayerBase):
     return Data(
       name="%s_output" % name, shape=shape, dtype=dtype,
       dim=shape[-1] if shape else None,
-      batch_dim_axis=batch_dim_axis, time_dim_axis=time_dim_axis)
+      batch_dim_axis=batch_dim_axis,
+      batch=network.get_global_batch_info() if add_batch_axis else None,
+      time_dim_axis=time_dim_axis)
 
 
 class AccumulateMeanLayer(ReduceLayer):
