@@ -797,6 +797,19 @@ class BatchInfo:
     new_dim_idx = -1 if batch_major else self._next_spatial_major_index()
     return self._copy_extend_dim(new_dim=new_dim, new_dim_idx=new_dim_idx)
 
+  def copy_extend_with_padded_or_fixed_dim_tag(self, dim_tag, batch_major):
+    """
+    :param DimensionTag dim_tag:
+    :param bool batch_major: if True, add new dim in front. otherwise, add new dim at the end
+    :rtype: BatchInfo
+    """
+    if dim_tag.dyn_size is not None:
+      new_dim = self._make_padded_dim(dim_tag)
+    else:
+      new_dim = BatchInfo.FixedDim(size=dim_tag.get_dim_value())
+    new_dim_idx = -1 if batch_major else self._next_spatial_major_index()
+    return self._copy_extend_dim(new_dim=new_dim, new_dim_idx=new_dim_idx)
+
   def _copy_extend_dim(self, new_dim, new_dim_idx):
     """
     :param BatchInfo.VirtualDimBase new_dim:

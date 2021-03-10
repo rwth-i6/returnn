@@ -2578,10 +2578,12 @@ class MergeDimsLayer(_ConcatInputLayer):
     return d
 
   @classmethod
-  def get_out_data_from_opts(cls, name, axes, sources=(), n_out=NotSpecified, out_type=None, **kwargs):
+  def get_out_data_from_opts(cls, name, axes, keep_order=False,
+                             sources=(), n_out=NotSpecified, out_type=None, **kwargs):
     """
     :param str name:
     :param str|list[str] axes:
+    :param bool keep_order:
     :param list[LayerBase] sources:
     :param int|None|NotSpecified n_out:
     :param None|dict[str] out_type:
@@ -2638,6 +2640,12 @@ class MergeDimsLayer(_ConcatInputLayer):
         input_data=input_data, merge_axes=axes, old_axis=input_data.get_batch_axis(old_axis))
       if new_axis != data.batch_dim_axis:
         data.size_placeholder[data.get_batch_axis_excluding_batch(new_axis)] = dyn_size
+    if input_data.batch_dim_axis in axes and data.batch:
+      for axis in axes:
+        if axis != input_data.batch_dim_axis:
+          data.batch = data.batch.copy_extend_with_padded_or_fixed_dim_tag(
+            dim_tag=input_data.get_dim_tag(axis),
+            batch_major=(axis > input_data.batch_dim_axis) if keep_order else True)
     return data
 
 
