@@ -127,12 +127,12 @@ class ExternData(object):
       batch_dim = None  # type: typing.Union[tf.Tensor,int,None]
       for key, data in self.get_sorted_data_items():
         assert isinstance(data, Data)
-        if data.available_for_inference and data.placeholder is not None:
+        if data.available_for_inference and data.have_batch_axis() and data.placeholder is not None:
           with reuse_name_scope_of_tensor(data.placeholder):
             # We now get it from the shape of the data placeholder (or size placeholder).
             # An alternative might be to also have it as a separate placeholder.
             if data.size_placeholder and 0 in data.size_placeholder:
-              batch_dim = get_shape_dim(data.size_placeholder[0], data.batch_dim_axis, name="batch_dim")
+              batch_dim = get_shape_dim(data.size_placeholder[0], 0, name="batch_dim")
             else:
               batch_dim = get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
             break
@@ -183,6 +183,7 @@ class ExternData(object):
     """
     assert data.name not in self.data
     self.data[data.name] = data
+    self.init_batch_info()
 
   def has_data(self, name):
     """
