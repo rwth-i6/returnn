@@ -1513,6 +1513,61 @@ def test_FlattenBatchLayer():
     assert_equal(out_v.tolist(), [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9], [10, 11], [12, 13], [14, 15], [18, 19]])
 
 
+def test_FlattenBatchLayer_Combine():
+  from returnn.tf.util.data import BatchInfo
+  n_batch, n_time1, n_time2, n_in = 3, 4, 5, 2
+  config = Config({
+    "extern_data": {
+      "data1": {"dim": n_in, "dtype": "int32", "available_for_inference": True},
+      "data2": {"dim": n_in, "dtype": "int32", "available_for_inference": True}},
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "flat1": {"class": "flatten_batch", "batch_major": False, "from": "data:data1"},
+      "flat2": {"class": "flatten_batch", "batch_major": False, "from": "data:data2"},
+      "out_flat": {"class": "combine", "kind": "mul", "from": ["flat1", "flat2"], "is_output_layer": True},
+      "out_std": {"class": "combine", "kind": "mul", "from": ["data:data1", "data:data2"], "is_output_layer": True},
+    })
+    in1_data = net.extern_data.data["data1"]
+    in2_data = net.extern_data.data["data2"]
+    out_flat_data = net.get_layer("out_flat").output
+    assert out_flat_data.batch_shape == (None, n_in) and not out_flat_data.size_placeholder
+    assert out_flat_data.batch != net.get_global_batch_info()
+    assert len(out_flat_data.batch.virtual_dims) == 3
+    batch_flat_dim0, batch_flat_dim1, batch_flat_dim2 = out_flat_data.batch.virtual_dims
+    assert isinstance(batch_flat_dim0, BatchInfo.PackedDim)
+    assert isinstance(batch_flat_dim1, BatchInfo.PackedDim)
+    assert isinstance(batch_flat_dim2, BatchInfo.GlobalBatchDim)
+    assert batch_flat_dim0.sizes is in1_data.size_placeholder[0]
+    assert batch_flat_dim1.sizes is in2_data.size_placeholder[0]
+    out_flat_t = out_flat_data.placeholder
+    assert out_flat_t.shape.as_list() == [None, n_in]
+    out_std_data = net.get_layer("out_std").output
+    assert out_std_data.batch_shape == (None, None, None, n_in)
+    assert out_std_data.batch == in1_data.batch == in2_data.batch == net.get_global_batch_info()
+    assert out_std_data.get_size_dim_tag(0) == in1_data.get_size_dim_tag(0)
+    assert out_std_data.get_size_dim_tag(1) == in2_data.get_size_dim_tag(0)
+    out_std_t = out_std_data.placeholder
+    rnd = numpy.random.RandomState(42)
+    in1_v = rnd.randint(1, 50, size=(n_batch, n_time1, n_in), dtype="int32")
+    in1_seq_lens = numpy.array([4, 3, 2])
+    in2_v = rnd.randint(1, 50, size=(n_batch, n_time2, n_in), dtype="int32")
+    in2_seq_lens = numpy.array([5, 5, 2])
+    out_flat_v, out_std_v = session.run((out_flat_t, out_std_t), feed_dict={
+      in1_data.placeholder: in1_v,
+      in1_data.size_placeholder[0]: in1_seq_lens,
+      in2_data.placeholder: in2_v,
+      in2_data.size_placeholder[0]: in2_seq_lens
+    })
+    assert isinstance(out_flat_v, numpy.ndarray)
+    assert out_flat_v.shape == (sum(in1_seq_lens * in2_seq_lens), n_in)
+    assert isinstance(out_std_v, numpy.ndarray)
+    assert out_std_v.shape == (n_batch, n_time1, n_time2, n_in)
+    raise NotImplementedError  # TODO check equal
+
+
 def test_SwitchLayer_const_no_time():
   config = Config({
     "extern_data": {
