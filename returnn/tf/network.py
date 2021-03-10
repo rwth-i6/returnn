@@ -54,6 +54,12 @@ class ExternData(object):
       # batch_dim_axis=0, time_dim_axis=1. See TFEngine.DataProvider._get_next_batch().
       self.data[key] = Data(name=key, auto_create_placeholders=auto_create_placeholders, **init_args)
     self.default_target = config.value('target', 'classes')
+    any_available_for_inference = any(data.available_for_inference for data in self.data.values())
+    if not any_available_for_inference:
+      # This is a heuristic.
+      for key, data in self.data.items():
+        if key != self.default_target:
+          data.available_for_inference = True
     self.init_batch_info()
 
   @classmethod
