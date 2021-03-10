@@ -1463,6 +1463,12 @@ class WrappedInternalLayer(InternalLayer):
     """
     return self.base_layer.get_absolute_name_scope_prefix()
 
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    return [self.base_layer]
+
 
 class ReuseParams:
   """
