@@ -4904,6 +4904,8 @@ class ChoiceLayer(BaseChoiceLayer):
       out_data.beam = cls._create_search_beam(name=name, beam_size=beam_size, sources=sources, network=network)
     elif sources and sources[0]:
       out_data.beam = sources[0].output.beam
+    if out_data.beam and out_data.batch:
+      out_data.batch = out_data.batch.copy_set_beam(out_data.beam)
     if cheating or scheduled_sampling or not search:
       cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=True)  # mark as used
     return out_data
