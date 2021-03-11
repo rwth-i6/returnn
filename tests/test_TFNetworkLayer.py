@@ -1483,6 +1483,7 @@ def test_MergeDimsLayer_simple_feat():
 
 
 def test_FlattenBatchLayer():
+  from returnn.tf.util.data import BatchInfo
   n_batch, n_time, n_in = 3, 4, 2
   config = Config({
     "extern_data": {"data": {"dim": n_in, "dtype": "int32"}},
@@ -1492,15 +1493,21 @@ def test_FlattenBatchLayer():
     net = TFNetwork(config=config)
     net.construct_from_dict({
       "output": {"class": "flatten_batch", "batch_major": False}})
+    in_data = net.extern_data.data["data"]
     out_data = net.get_default_output_layer().output
     assert out_data.batch_shape == (None, n_in) and not out_data.size_placeholder
+    assert len(out_data.batch.virtual_dims) == 2
+    batch_flat_dim0, batch_flat_dim1 = out_data.batch.virtual_dims
+    assert isinstance(batch_flat_dim0, BatchInfo.PackedDim)
+    assert isinstance(batch_flat_dim1, BatchInfo.GlobalBatchDim)
+    assert batch_flat_dim0.sizes is in_data.size_placeholder[0]
     out_t = net.get_default_output_layer().output.placeholder
     assert out_t.shape.as_list() == [None, n_in]
     in_v = numpy.arange(0, n_batch * n_time * n_in).reshape((n_time, n_batch, n_in)).transpose(1, 0, 2)
     in_seq_lens = [4, 3, 2]
     out_v = session.run(out_t, feed_dict={
-      net.extern_data.data["data"].placeholder: in_v,
-      net.extern_data.data["data"].size_placeholder[0]: in_seq_lens})
+      in_data.placeholder: in_v,
+      in_data.size_placeholder[0]: in_seq_lens})
     assert isinstance(out_v, numpy.ndarray)
     assert out_v.shape == (sum(in_seq_lens), n_in)
     assert_equal(out_v.tolist(), [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9], [10, 11], [12, 13], [14, 15], [18, 19]])
