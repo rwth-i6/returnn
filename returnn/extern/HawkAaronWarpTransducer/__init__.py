@@ -13,7 +13,8 @@ import os
 import typing
 import tensorflow as tf
 from tensorflow.python.framework import ops
-from returnn.tf.util.basic import OpCodeCompiler
+from returnn.util.basic import dict_joined
+from returnn.tf.util.basic import OpCodeCompiler, is_gpu_available, CudaEnv
 
 
 warprnnt_dir = os.path.dirname(os.path.abspath(__file__))
@@ -57,11 +58,15 @@ def init_warprnnt(verbose=False):
     src_code += f_code
     src_code += "\n// ------------ %s : END } --------------\n\n" % os.path.basename(fn)
 
+  with_cuda = CudaEnv.get_instance().is_available() and is_gpu_available()
+  with_omp = os.name.startswith("linux")
   compiler = OpCodeCompiler(
     base_name="warprnnt_kernels", code_version=1, code=src_code,
     include_paths=(submodule_dir + "/include",),
-    c_macro_defines={"WITH_OMP": 1},
-    ld_flags=["-Xcompiler", "-fopenmp"],
+    c_macro_defines=dict_joined(
+      {"WITH_OMP": 1} if with_omp else {"RNNT_DISABLE_OMP": 1},
+      {"WARPRNNT_ENABLE_GPU": 1} if with_cuda else {}),
+    ld_flags=["-Xcompiler", "-fopenmp"] if with_omp else [],
     is_cpp=True, use_cuda_if_available=True,
     verbose=verbose)
   tf_mod = compiler.load_tf_module()
