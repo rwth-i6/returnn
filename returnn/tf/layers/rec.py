@@ -3335,6 +3335,8 @@ class _TemplateLayer(LayerBase):
       search_choices = self.network.get_search_choices_from_beam(layer.output.beam)
       if not search_choices or search_choices.owner.network is self.network:
         layer.output.beam = layer.output.beam.copy_as_prev_frame()
+        if layer.output.batch:
+          layer.output.batch = layer.output.batch.copy_set_beam(layer.output.beam)
     if self.search_choices:
       layer.search_choices = SearchChoices(owner=layer, beam_size=self.search_choices.beam_size)
       if rec_vars_prev_outputs:
