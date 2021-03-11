@@ -62,7 +62,6 @@ def stat_repo(repo, version):
   :param str|None version: e.g. "20211231-0123abcd0123"
   """
   repo_ = _get_repo(repo)
-  repo_.stat()
   repo_.get_work_dir(version)
 
 
@@ -260,12 +259,6 @@ class _Repo:
     self._dev_work_dir = None  # type: typing.Optional[_RepoWorkDir]
     self._work_dirs = {}  # type: typing.Dict[str,_RepoWorkDir]  # commit-rev -> entry
 
-  def stat(self):
-    """
-    Stat repo.
-    """
-    self._clone()
-
   def get_dev_dir_path(self):
     """
     :rtype: str
@@ -321,10 +314,12 @@ class _Repo:
     """
     :param str|None version:
     :rtype: _RepoWorkDir
+    :return: work dir. this makes sure that the work dir also exists
     """
     if not version:
       if self._dev_work_dir:
         return self._dev_work_dir
+      self._clone()
       self._dev_work_dir = _RepoWorkDir(self, None)
       return self._dev_work_dir
     self._load_work_dirs()
