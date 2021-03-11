@@ -1524,7 +1524,9 @@ class TimitDataset(CachedDataset2):
     return d
 
   def __init__(self, timit_dir, train=True, preload=False,
-               num_feature_filters=40, feature_window_len=0.025, feature_step_len=0.010, with_delta=False,
+               features="mfcc",
+               num_feature_filters=40,
+               feature_window_len=0.025, feature_step_len=0.010, with_delta=False,
                norm_mean=None, norm_std_dev=None,
                random_permute_audio=None, num_phones=61,
                demo_play_audio=False, fixed_random_seed=None, **kwargs):
@@ -1532,6 +1534,7 @@ class TimitDataset(CachedDataset2):
     :param str|None timit_dir: directory of TIMIT. should contain train/filelist.phn and test/filelist.core.phn
     :param bool train: whether to use the train or core test data
     :param bool preload: if True, here at __init__, we will wait until we loaded all the data
+    :param str|function features: see :class:`ExtractAudioFeatures`
     :param int num_feature_filters: e.g. number of MFCCs
     :param bool|int with_delta: whether to add delta features (doubles the features dim). if int, up to this degree
     :param str norm_mean: file with mean values which are used for mean-normalization of the final features
@@ -1544,6 +1547,7 @@ class TimitDataset(CachedDataset2):
     super(TimitDataset, self).__init__(**kwargs)
     from threading import Lock, Thread
     self._lock = Lock()
+    self._features = features
     self._num_feature_filters = num_feature_filters
     self._feature_window_len = feature_window_len
     self._feature_step_len = feature_step_len
@@ -1804,8 +1808,9 @@ class TimitDataset(CachedDataset2):
     # and: https://groups.google.com/forum/#!topic/librosa/V4Z1HpTKn8Q
     audio, sample_rate = self._get_audio(seq_tag)
     audio_feature_extractor = ExtractAudioFeatures(
-      window_len=self._feature_window_len, step_len=self._feature_step_len,
+      features=self._features,
       num_feature_filters=self._num_feature_filters, with_delta=self._with_delta,
+      window_len=self._feature_window_len, step_len=self._feature_step_len,
       norm_mean=self._norm_mean, norm_std_dev=self._norm_std_dev,
       random_permute=self._random_permute_audio, random_state=self._random)
     mfccs = audio_feature_extractor.get_audio_features(
