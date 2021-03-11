@@ -1176,10 +1176,10 @@ class GatherNdLayer(_ConcatInputLayer):
       j = i - position.ndim + 1
       if j in x.size_placeholder:
         self.output.size_placeholder[i] = x.size_placeholder[j]
-    if position.batch_dim_axis is not None:
+    if position.have_batch_axis():
       position = position.copy_as_batch_major()
     else:
-      position = position.copy_add_batch_dim(batch_dim_axis=0, batch_dim=tf.shape(x.placeholder)[x.batch_dim_axis])
+      position = position.copy_add_batch_dim(batch_dim_axis=0, batch=self.input_data.batch)
     self.output.placeholder = batch_gather(x.placeholder, position.placeholder)  # (B,...)
 
   def get_dep_layers(self):
@@ -1197,11 +1197,12 @@ class GatherNdLayer(_ConcatInputLayer):
     :rtype: Data
     """
     input_data = get_concat_sources_data_template(sources).copy_as_batch_major()
+    assert input_data.have_batch_axis()
     position_data = position.output.copy_template()
-    if position_data.batch_dim_axis is None:
-      position_data = position_data.copy_add_batch_dim(batch_dim_axis=0)
-    else:
+    if position_data.have_batch_axis():
       position_data = position_data.copy_as_batch_major()
+    else:
+      position_data = position_data.copy_add_batch_dim(batch_dim_axis=0, batch=input_data.batch)
     shape = list(position_data.shape) + list(input_data.shape[1:])  # (B, ...) (w/o batch)
     out_type = position_data.get_kwargs()
     out_type["name"] = "%s_output" % name

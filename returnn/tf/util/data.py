@@ -323,6 +323,8 @@ class BatchInfo:
   i.e. consisting of multiple samples/sequences
   which are supposed to be totally independent of each other.
 
+  The batch dim can consists out of one or more flattened "virtual" dims,
+  which :class:`BatchInfo` keeps track of.
   This class provides some additional information
   about the batch dimension.
   Only one instance per different type of batch-dim is expected
@@ -333,7 +335,8 @@ class BatchInfo:
   we get a batch dimension due to the minibatch construction.
   This is a global batch size
   (usually dynamic, because every minibatch/step can have a different amount of samples,
-  although we can also support static sizes, which is needed e.g. for TPUs).
+  although we can also support static sizes, which is needed e.g. for TPUs)
+  represented by :class:`BatchInfo.GlobalBatchDim`.
 
   When we do beam search (see :class:`SearchBeam`),
   we have multiple hypotheses per batch item,
@@ -343,7 +346,7 @@ class BatchInfo:
   (also referred to as "flattened tensors", "non-padded tensors", "ragged tensors").
   See e.g. :class:`FlattenBatchLayer` or :func:`flatten_with_seq_len_mask`.
   Also see :class:`tf.RaggedTensor` which also represents
-  packed tensors (but only batch-major, although this is just a reinterpreation).
+  packed tensors (but only batch-major, although this is just a reinterpretation).
   We do not directly use :class:`tf.RaggedTensor` in :class:`Data`
   to have robust and reliable code (which expects :class:`tf.Tensor`).
   However, we maybe can make use of some of the functions in :mod:`tf.ragged`.
@@ -358,6 +361,9 @@ class BatchInfo:
       :rtype: str
       """
       raise NotImplementedError
+
+    def __repr__(self):
+      return "%s{%s}" % (self.__class__.__name__, self.short_repr())
 
   class FixedDim(VirtualDimBase):
     """
@@ -379,7 +385,7 @@ class BatchInfo:
 
   class GlobalBatchDim(FixedDim):
     """
-    Represents the global batch dim.
+    Represents the global batch dim by the network (minibatch construction from the dataset).
     """
     def short_repr(self):
       """
@@ -406,62 +412,177 @@ class BatchInfo:
       """
       return "Beam{%r}(%s)" % (self.beam.name, self.size)
 
-  class VariableDim(VirtualDimBase):
+  class PaddedDim(FixedDim):
     """
-    Represents a dim with variable sizes.
-    Variable w.r.t. other dims (must be per batch entry).
+    Represents a dim with variable size, which is flattened with padding (not packed) into the batch.
     """
-    def __init__(self, sizes, key_axes, dim_tag):
+    def __init__(self, dim_tag):
       """
-      :param tf.Tensor sizes: shape [B_flat]
-      :param list[BatchInfo.VirtualDimBase] key_axes:
-        most common case would be [GlobalBatchDim(...)],
-        but [GlobalBatchDim(...),BeamDim(...)] is also common.
       :param DimensionTag dim_tag:
       """
-      self.sizes = sizes
-      self.key_axes = key_axes
+      super(BatchInfo.PaddedDim, self).__init__(size=dim_tag.get_dim_value())
       self.dim_tag = dim_tag
 
     def short_repr(self):
       """
       :rtype: str
       """
-      return "Var{%r}" % (self.dim_tag.description,)
+      return "Padded{%r}" % self.dim_tag.description
 
-  def __init__(self, base=None, beam=None, virtual_dims=None):
+  class PackedDim(VirtualDimBase):
+    """
+    Represents a dim with variable sizes, which is packed (un-padded) into the batch.
+    Variable w.r.t. other dims (must be per batch entry).
+    """
+    def __init__(self, dim_tag, key_axes):
+      """
+      :param DimensionTag dim_tag:
+      :param list[BatchInfo.VirtualDimBase] key_axes:
+        most common case would be [GlobalBatchDim(...)],
+        but [GlobalBatchDim(...),BeamDim(...)] is also common.
+      """
+      self.dim_tag = dim_tag
+      self.key_axes = key_axes
+
+    @property
+    def sizes(self):
+      """
+      :return: shape [B_flat]
+      :rtype: tf.Tensor
+      """
+      assert self.dim_tag.dyn_size is not None
+      return self.dim_tag.dyn_size
+
+    def short_repr(self):
+      """
+      :rtype: str
+      """
+      return "Packed{%r}" % (self.dim_tag.description,)
+
+  def __init__(self, base, new_dim, new_dim_index=None):
     """
     :param BatchInfo|None base:
       If this is extended or based on another batch.
       Except of the batch dim of the dataset minibatch,
       we would always have a base.
-    :param SearchBeam|None beam:
-    :param list[BatchInfo.VirtualDimBase] virtual_dims:
+    :param BatchInfo.VirtualDimBase|None new_dim:
+    :param int|None new_dim_index:
 
     In most cases, this constructor would probably not be used directly by the user.
     """
     self.base = base
-    self.beam = beam
-    if not virtual_dims:
-      assert base and beam
-      virtual_dims = base.virtual_dims + [BatchInfo.BeamDim(beam=beam)]
-    self.virtual_dims = virtual_dims
+    virtual_dims = list(base.virtual_dims) if base else []
+    if new_dim:
+      if new_dim_index is None:
+        assert not virtual_dims
+        new_dim_index = 0
+      if new_dim_index < 0:
+        assert new_dim_index == -1
+        virtual_dims.append(new_dim)
+      else:
+        virtual_dims.insert(new_dim_index, new_dim)
+    self.virtual_dims = virtual_dims  # type: typing.List[BatchInfo.VirtualDimBase]
     self._dim = None  # type: typing.Optional[typing.Union[tf.Tensor,int]]
+    # These self._global_... attributes are meant
+    # to be accessed only via the global (root) object (via get_global_base).
+    # They store global information.
+    # We don't use class attributes because this should not be global per process but only per network.
+    self._global_beam_dims_by_beam_name = {}  # type: typing.Dict[str,BatchInfo.BeamDim]
+    self._global_padded_dims_by_dim_tag = {}  # type: typing.Dict[DimensionTag,BatchInfo.PaddedDim]
+    self._packed_dims_by_dim_tag = {}  # type: typing.Dict[DimensionTag,BatchInfo.PackedDim]
     self.descendants = []  # type: typing.List[BatchInfo]
-    self.descendants_by_beam_name = {}  # type: typing.Dict[str,BatchInfo]
+    self._descendants_by_beam_name = {}  # type: typing.Dict[str,BatchInfo]
+    self._global_descendants_by_virtual_dims = {}  # type: typing.Dict[typing.Tuple[BatchInfo.VirtualDimBase,...],BatchInfo]  # noqa
     if base:
       base.descendants.append(self)
-      if beam:
-        assert beam.name not in base.descendants_by_beam_name
-        base.descendants_by_beam_name[beam.name] = self
+      if isinstance(new_dim, BatchInfo.BeamDim):
+        beam = new_dim.beam
+        assert beam.name not in base._descendants_by_beam_name
+        base._descendants_by_beam_name[beam.name] = self
+    global_base = self.get_global_base()
+    assert tuple(self.virtual_dims) not in global_base._global_descendants_by_virtual_dims
+    global_base._global_descendants_by_virtual_dims[tuple(self.virtual_dims)] = self
 
   @classmethod
   def make_global_batch_info(cls, batch_dim):
     """
     :param tf.Tensor|int batch_dim:
+    :return: global batch info w.r.t. the network / graph
     :rtype: BatchInfo
     """
-    return BatchInfo(virtual_dims=[BatchInfo.GlobalBatchDim(size=batch_dim)])
+    # This is not stored in a class attrib because this is only w.r.t. the network, not global in the process.
+    return BatchInfo(base=None, new_dim=BatchInfo.GlobalBatchDim(size=batch_dim))
+
+  _global_broadcast_batch = None  # type: typing.Optional[BatchInfo]
+
+  @classmethod
+  def make_global_broadcast_batch_info(cls):
+    """
+    :return: BatchInfo with no virtual dims, s.t. the dimension is 1 (== prod([])) (broadcastable)
+    :rtype: BatchInfo
+    """
+    if cls._global_broadcast_batch:
+      return cls._global_broadcast_batch
+    cls._global_broadcast_batch = BatchInfo(base=None, new_dim=None)
+    return cls._global_broadcast_batch
+
+  @classmethod
+  def get_common_batch_info(cls, batches):
+    """
+    :param list[BatchInfo] batches:
+    :rtype: BatchInfo|None
+    """
+    if not batches:
+      return None
+    if len(batches) == 1:
+      return batches[0]
+    batches_ = []
+    for batch in batches:
+      if batch not in batches_:
+        batches_.append(batch)
+    batches = batches_
+    if len(batches) == 1:
+      return batches[0]
+    base = batches[0].get_global_base()
+
+    # Collect all dims.
+    all_virtual_dims = []
+    for batch in batches:
+      for dim in batch.virtual_dims:
+        if dim not in all_virtual_dims:
+          # We want to get a reasonable order.
+          same_type_last_idx = None
+          for i, dim_ in enumerate(all_virtual_dims):
+            if type(dim_) == type(dim):
+              same_type_last_idx = i
+          if same_type_last_idx is not None:
+            all_virtual_dims.insert(same_type_last_idx + 1, dim)
+          else:
+            all_virtual_dims.append(dim)
+
+    # Check if some batch already has them all.
+    for batch in batches:
+      if set(batch.virtual_dims) == set(all_virtual_dims):  # allow different order here
+        return batch
+
+    # Ok, need to extend.
+    global_batch_dims = [dim for dim in all_virtual_dims if isinstance(dim, BatchInfo.GlobalBatchDim)]
+    assert len(global_batch_dims) == 1
+    global_batch_dim = global_batch_dims[0]
+    assert base.virtual_dims == [global_batch_dim]
+    beams = [dim for dim in all_virtual_dims if isinstance(dim, BatchInfo.BeamDim)]
+    if beams:
+      base = base.copy_extend_with_beam(SearchBeam.get_combined_beam(*(b.beam for b in beams)))
+    dim_idx = 0
+    for dim in all_virtual_dims:
+      if dim in global_batch_dims:
+        dim_idx += 1 + len(beams)
+        continue
+      if dim in beams:
+        continue
+      base = base._copy_extend_dim(new_dim=dim, new_dim_idx=dim_idx)
+      dim_idx += 1
+    return base
 
   def __repr__(self):
     return "BatchInfo{%s}" % ", ".join([dim.short_repr() for dim in self.virtual_dims])
@@ -470,7 +591,8 @@ class BatchInfo:
     """
     :rtype: str
     """
-    return "&".join([dim.short_repr() for dim in self.virtual_dims])
+    # "x" is the Theano-style shortcut for a broadcast dim.
+    return "&".join([dim.short_repr() for dim in self.virtual_dims] or ["Bx"])
 
   @property
   def dim(self):
@@ -479,6 +601,8 @@ class BatchInfo:
     """
     if self._dim is not None:
       return self._dim
+    if not self.virtual_dims:
+      return 1
     if len(self.virtual_dims) == 1:
       dim = self.virtual_dims[0]
       assert isinstance(dim, BatchInfo.FixedDim)
@@ -500,6 +624,41 @@ class BatchInfo:
     """
     self._dim = value
 
+  @property
+  def static_dim(self):
+    """
+    :rtype: int|None
+    """
+    # This should be safe. Do not call self.dim.
+    if self._dim is not None:
+      return self._dim if isinstance(self._dim, int) else None
+    if not self.virtual_dims:
+      return 1
+    if len(self.virtual_dims) == 1:
+      dim = self.virtual_dims[0]
+      assert isinstance(dim, BatchInfo.FixedDim)
+      return dim.size if isinstance(dim.size, int) else None
+    from functools import reduce
+    from operator import mul
+    if all(isinstance(dim, BatchInfo.FixedDim) for dim in self.virtual_dims):
+      dims = self.virtual_dims  # type: typing.List[BatchInfo.FixedDim]
+      sizes = [dim.size for dim in dims]
+      if all(isinstance(s, int) for s in sizes):
+        return reduce(mul, sizes, 1)
+      return None
+    return None
+
+  @property
+  def beam(self):
+    """
+    :rtype: SearchBeam|None
+    """
+    beams = [dim for dim in self.virtual_dims if isinstance(dim, BatchInfo.BeamDim)]
+    if beams:
+      # Just return first. In case you need more custom logic, directly check the dims.
+      return beams[0].beam
+    return None
+
   def get_base_chain(self):
     """
     :rtype: list[BatchInfo]
@@ -511,14 +670,150 @@ class BatchInfo:
       base = base.base
     return bases
 
+  def get_global_base(self):
+    """
+    :rtype: BatchInfo
+    """
+    if not self.base:
+      return self
+    return self.get_base_chain()[-1]
+
+  def get_global_batch_dim(self):
+    """
+    :rtype: BatchInfo.GlobalBatchDim
+    """
+    global_beam_dims = [dim for dim in self.virtual_dims if isinstance(dim, BatchInfo.GlobalBatchDim)]
+    assert len(global_beam_dims) == 1
+    return global_beam_dims[0]
+
+  def _make_beam_dim(self, beam):
+    """
+    :param SearchBeam beam:
+    :rtype: BatchInfo.BeamDim
+    """
+    assert self.virtual_dims
+    root = self.get_global_base()
+    if beam.name in root._global_beam_dims_by_beam_name:
+      return root._global_beam_dims_by_beam_name[beam.name]
+    new_dim = BatchInfo.BeamDim(beam=beam)
+    root._global_beam_dims_by_beam_name[beam.name] = new_dim
+    return new_dim
+
+  def _make_packed_dim(self, dim_tag):
+    """
+    :param DimensionTag dim_tag:
+    :rtype: BatchInfo.PackedDim
+    """
+    assert self.virtual_dims
+    assert dim_tag.dyn_size is not None
+    dim_tag_base = dim_tag.get_same_base()
+    if dim_tag_base in self._packed_dims_by_dim_tag:
+      return self._packed_dims_by_dim_tag[dim_tag_base]
+    new_dim = BatchInfo.PackedDim(dim_tag=dim_tag, key_axes=self.virtual_dims)
+    self._packed_dims_by_dim_tag[dim_tag_base] = new_dim
+    return new_dim
+
+  def _make_padded_dim(self, dim_tag):
+    """
+    :param DimensionTag dim_tag:
+    :rtype: BatchInfo.PaddedDim
+    """
+    assert self.virtual_dims
+    root = self.get_global_base()
+    assert dim_tag.dyn_size is not None
+    dim_tag_base = dim_tag.get_same_base()
+    if dim_tag_base in root._global_padded_dims_by_dim_tag:
+      return root._global_padded_dims_by_dim_tag[dim_tag_base]
+    new_dim = BatchInfo.PaddedDim(dim_tag=dim_tag_base)
+    root._global_padded_dims_by_dim_tag[dim_tag_base] = new_dim
+    return new_dim
+
+  def _next_spatial_major_index(self):
+    idx = None
+    for i, dim in enumerate(self.virtual_dims):
+      if isinstance(dim, BatchInfo.GlobalBatchDim):
+        break
+      if isinstance(dim, BatchInfo.BeamDim):
+        break
+      assert isinstance(dim, BatchInfo.FixedDim)
+      idx = i + 1
+    if idx is not None:
+      return idx
+    return 0
+
   def copy_extend_with_beam(self, beam):
     """
     :param SearchBeam beam:
     :rtype: BatchInfo
     """
-    if beam.name in self.descendants_by_beam_name:
-      return self.descendants_by_beam_name[beam.name]
-    return BatchInfo(base=self, beam=beam)
+    assert self.virtual_dims
+    if self.beam == beam:
+      return self
+    if beam.name in self._descendants_by_beam_name:
+      return self._descendants_by_beam_name[beam.name]
+    return BatchInfo(
+      base=self,
+      new_dim=self._make_beam_dim(beam),
+      new_dim_index=self.virtual_dims.index(self.get_global_batch_dim()) + 1)
+
+  def copy_remove_beam(self):
+    """
+    :rtype: BatchInfo
+    """
+    assert self.virtual_dims
+    if not self.beam:
+      return self
+    root = self.get_global_base()
+    dims_wo_beam = [dim for dim in self.virtual_dims if not isinstance(dim, BatchInfo.BeamDim)]
+    return root._global_descendants_by_virtual_dims[tuple(dims_wo_beam)]  # must exist
+
+  def copy_set_beam(self, beam):
+    """
+    :param SearchBeam|None beam:
+    :rtype: BatchInfo
+    """
+    batch = self.copy_remove_beam()
+    if beam:
+      batch = batch.copy_extend_with_beam(beam)
+    return batch
+
+  def copy_extend_with_packed_dim_tag(self, dim_tag, batch_major):
+    """
+    :param DimensionTag dim_tag:
+    :param bool batch_major: if True, add new dim in front. otherwise, add new dim at the end
+    :rtype: BatchInfo
+    """
+    new_dim = self._make_packed_dim(dim_tag)
+    new_dim_idx = -1 if batch_major else self._next_spatial_major_index()
+    return self._copy_extend_dim(new_dim=new_dim, new_dim_idx=new_dim_idx)
+
+  def copy_extend_with_padded_dim_tag(self, dim_tag, batch_major):
+    """
+    :param DimensionTag dim_tag:
+    :param bool batch_major: if True, add new dim in front. otherwise, add new dim at the end
+    :rtype: BatchInfo
+    """
+    new_dim = self._make_padded_dim(dim_tag)
+    new_dim_idx = -1 if batch_major else self._next_spatial_major_index()
+    return self._copy_extend_dim(new_dim=new_dim, new_dim_idx=new_dim_idx)
+
+  def _copy_extend_dim(self, new_dim, new_dim_idx):
+    """
+    :param BatchInfo.VirtualDimBase new_dim:
+    :param int new_dim_idx:
+    :rtype: BatchInfo
+    """
+    assert self.virtual_dims
+    root = self.get_global_base()
+    virtual_dims = list(self.virtual_dims)
+    if new_dim_idx < 0:
+      assert new_dim_idx == -1
+      virtual_dims.append(new_dim)
+    else:
+      virtual_dims.insert(new_dim_idx, new_dim)
+    if tuple(virtual_dims) in root._global_descendants_by_virtual_dims:
+      return root._global_descendants_by_virtual_dims[tuple(virtual_dims)]
+    return BatchInfo(base=self, new_dim=new_dim, new_dim_index=new_dim_idx)
 
 
 class SearchBeam:
@@ -727,6 +1022,8 @@ class Data(object):
       else:
         dtype = "float32"
     self.dtype = dtype  # type: str
+    self.batch = batch
+    self.beam = beam
     assert batch_dim_axis is None or isinstance(batch_dim_axis, int)
     self.batch_dim_axis = batch_dim_axis  # type: typing.Optional[int]  # None -> no batch dim axis
     if shape is None:
@@ -811,8 +1108,6 @@ class Data(object):
       size_placeholder = {}
     self.size_placeholder = size_placeholder  # type: typing.Dict[int,tf.Tensor]  # axis w.o. batch -> size (batch,)
     self.available_for_inference = available_for_inference
-    self.batch = batch
-    self.beam = beam
     if vocab is not None:
       from returnn.datasets.generating import Vocabulary
       if isinstance(vocab, str):
@@ -979,8 +1274,11 @@ class Data(object):
       keys.append("placeholder")
     if not self.available_for_inference:
       keys.append("available_for_inference")
-    if self.beam is not None and not self.batch:  # with batch, it is contained already in batch_shape_meta
-      keys.append("beam")
+    if self.beam is not None:
+      # With batch, it should be contained already in batch_shape_meta (if everything is correct).
+      # We anyway add it, in case sth is incorrect or incomplete.
+      if not self.batch or self.batch.beam != self.beam:
+        keys.append("beam")
     args = ["%s=%r" % (key, getattr(self, key)) for key in keys]
     args += ["batch_shape_meta=[%s]" % ",".join(self.get_batch_axes_short_description())]
     return "Data(%s)" % ", ".join(args)
@@ -1247,14 +1545,17 @@ class Data(object):
     assert self.feature_dim_axis is not None
     return self.copy_with_feature_dim_axis(-1)
 
-  def copy_add_batch_dim(self, batch_dim_axis, batch_dim):
+  def copy_add_batch_dim(self, batch_dim_axis, batch=None):
     """
     :param int batch_dim_axis:
-    :param int|tf.Tensor batch_dim: the batch dim to unbroadcast to
+    :param BatchInfo|None batch:
     :return: copy of myself with added batch-dim
     :rtype: Data
     """
     assert self.batch_dim_axis is None
+    if not batch:
+      from returnn.tf.layers.base import LayerBase
+      batch = LayerBase.get_recent_layer().get_batch_info()
     if batch_dim_axis < 0:
       assert batch_dim_axis + self.batch_ndim + 1 >= 0
       batch_dim_axis += self.batch_ndim + 1
@@ -1262,11 +1563,13 @@ class Data(object):
     data = self.copy()
     if data.placeholder is not None:
       data.placeholder = tf.expand_dims(data.placeholder, batch_dim_axis, name="%s_add_batch_dim" % self.name)
-      if not isinstance(batch_dim, int) or batch_dim != 1:
-        assert batch_dim is not None
-        tiles = [1] * batch_dim_axis + [batch_dim] + [1] * (self.batch_ndim - batch_dim_axis)
+      if not isinstance(batch.dim, int) or batch.dim != 1:
+        tiles = [1] * batch_dim_axis + [batch.dim] + [1] * (self.batch_ndim - batch_dim_axis)
         data.placeholder = tf.tile(data.placeholder, tiles)
     data.batch_dim_axis = batch_dim_axis
+    data.batch = batch
+    assert not data.beam
+    data.beam = batch.beam
     other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
     for k, a in other_special_axes.items():
       setattr(data, k, a if (a < batch_dim_axis) else (a + 1))
@@ -1408,8 +1711,11 @@ class Data(object):
         res.placeholder = tf.tile(res.placeholder, tiles)
 
     if dim_tag.kind == DimensionTag.Types.Batch:
-      batch_dim = dim_tag.get_dim_value() if unbroadcast else 1
-      res = self.copy_add_batch_dim(batch_dim_axis=axis, batch_dim=batch_dim)
+      if unbroadcast:
+        batch_info = dim_tag.src_data.batch if dim_tag.src_data else None
+      else:
+        batch_info = BatchInfo.make_global_broadcast_batch_info()
+      res = self.copy_add_batch_dim(batch_dim_axis=axis, batch=batch_info)
       return res
     # Note: if dim_tag is feature, but we are sparse, we just treat is as spatial, handled below.
     if dim_tag.kind == DimensionTag.Types.Feature and not self.sparse:
@@ -1474,6 +1780,35 @@ class Data(object):
     v.sanity_check()
     return v
 
+  def copy_extend_batch(self, batch):
+    """
+    Similar as copy_compatible_to with unbroadcast=True,
+    we would possibly extend/expand our batch dim.
+    See :class:`BatchInfo`.
+    This assumes that we already have a batch dim
+    (otherwise see :func:`copy_add_batch_dim`).
+
+    This excludes any beam expansion, which is handled explicitly elsewhere
+    (e.g. see :func:`copy_extend_with_beam`).
+
+    :param BatchInfo batch:
+    :rtype: Data
+    """
+    assert self.have_batch_axis()
+    assert self.batch, "%s: batch unset" % self
+    data = self.copy()
+    batch = batch.copy_set_beam(data.beam)
+    if data.batch.beam != data.beam:  # Check for some buggy code.
+      data.batch = data.batch.copy_set_beam(data.beam)
+    if data.batch == batch:
+      return data
+    data.batch = batch
+    if self.placeholder is not None:
+      raise NotImplementedError("%s: copy_ext_batch(%s) with placeholder" % (self, batch))
+    if self.size_placeholder:
+      raise NotImplementedError("%s: copy_ext_batch(%s) with sizes" % (self, batch))
+    return data
+
   def copy_compatible_to(self, data, unbroadcast=False, except_feature=False, check_sparse=True, check_dtype=True):
     """
     :param Data data: other data which the returned tensor should be compatible to
@@ -1489,6 +1824,8 @@ class Data(object):
     assert not check_sparse or self.sparse == data.sparse
     assert not check_dtype or self.dtype == data.dtype
     v = self.copy()
+    if v.batch and data.batch and v.batch != data.batch:
+      v = v.copy_extend_batch(data.batch)
     v.sparse = data.sparse  # we will later reset it. this is to better count the axes (feature and spatial)
     if not v.sparse:
       # We might need to reset the dim, as it would be invalid otherwise. Reset later.
@@ -1594,7 +1931,7 @@ class Data(object):
           if tag is not None:
             tag.set_tag_on_size_tensor(data.size_placeholder[i])
       if data.batch:
-        data.batch = data.batch.copy_extend_with_beam(beam)
+        data.batch = data.batch.copy_set_beam(beam)
       data.beam = beam
       return data
 
@@ -1848,7 +2185,7 @@ class Data(object):
     :return: shape with added batch-dim. e.g. (batch,time,feat) = (None,None,128)
     :rtype: tuple[int|None]
     """
-    return self.get_batch_shape(batch_dim=None)
+    return self.get_batch_shape(batch_dim=self.get_static_batch_dim())
 
   def get_batch_shape(self, batch_dim):
     """
@@ -2471,12 +2808,23 @@ class Data(object):
     assert self.batch_dim_axis is not None
     if self.batch:
       if self.beam:
-        assert self.batch.beam
+        assert self.batch.beam == self.beam
       return self.batch.dim
     # Note: We need this fallback code for now
     # until we consistently have set self.batch correctly in all cases.
     from returnn.tf.layers.base import LayerBase
-    return LayerBase.get_recent_layer().get_batch_dim()
+    batch = LayerBase.get_recent_layer().get_batch_info()
+    batch = batch.copy_set_beam(self.beam)
+    return batch.dim
+
+  def get_static_batch_dim(self):
+    """
+    :rtype: int|None
+    """
+    # Do not fallback to get_batch_dim or get_recent_layer or so. This should be safe.
+    if not self.batch:
+      return None
+    return self.batch.static_dim
 
   def get_spatial_batch_axes(self):
     """
@@ -2688,9 +3036,11 @@ class Data(object):
     if len(sources) == 1:
       return sources[0]
     max_ndim = max([s.batch_ndim for s in sources])
+    common_batch = BatchInfo.get_common_batch_info([src.batch for src in sources if src.batch])
     # Try with the (first) largest.
     common = [s for s in sources if s.batch_ndim == max_ndim][0]
     common = common.copy()
+    common.batch = common_batch  # no copy_ext_batch because we don't want TF ops
     if any([s.beam for s in sources]):
       # Note: we don't use copy_extend_with_beam because we don't want to create any ops in the TF graph at this point.
       common.beam = SearchBeam.get_combined_beam(*[s.beam for s in sources])

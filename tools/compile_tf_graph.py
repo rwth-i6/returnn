@@ -631,7 +631,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     # This will add a dependency on the external data, which we want to avoid.
     # We can avoid that by taking the batch dim instead from one of the other states.
     # Note that this would be wrong in beam search.
-    self.net.get_batch_info().dim = rec_layer.get_batch_dim_from_state()
+    self.net.get_global_batch_info().dim = rec_layer.get_batch_dim_from_state()
 
     with tf.name_scope("cond"):
       rec_layer.create_state_var("cond", tf.constant(True))

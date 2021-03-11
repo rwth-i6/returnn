@@ -694,18 +694,26 @@ class LayerBase(object):
 
   def get_batch_dim(self):
     """
-    The batch dim by this layer, not taken from our output but calculated.
+    The batch dim by this layer, not taken from our output placeholder but calculated.
     Normally it is self.network.get_batch_dim()
     but if we do search and there was a choice layer, it it multiplied by the beam size.
+
     :return: batch dim * beam size
     :rtype: tf.Tensor|int
     """
-    batch_dim = self.network.get_data_batch_dim()
-    beam_size = self.get_search_beam_size()
-    if beam_size is not None:
-      with tf.name_scope("batch_beam_dim"):
-        batch_dim *= beam_size
-    return batch_dim
+    return self.get_batch_info().dim
+
+  def get_batch_info(self):
+    """
+    :rtype: returnn.tf.util.data.BatchInfo
+    """
+    if self.output.batch and self.output.batch.beam == self.output.beam:
+      return self.output.batch
+    # Fallback.
+    batch = self.network.get_global_batch_info()
+    if self.output.beam:
+      batch = batch.copy_extend_with_beam(self.output.beam)
+    return batch
 
   @contextlib.contextmanager
   def var_creation_scope(self, **kwargs):

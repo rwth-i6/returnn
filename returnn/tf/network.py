@@ -276,7 +276,7 @@ class ExternData(object):
       assert isinstance(data, Data)
       if data.available_for_inference:
         assert data.batch
-        return data.batch
+        return data.batch.get_global_base()
     raise Exception("We cannot tell the batch dim.")
 
 
@@ -1796,14 +1796,23 @@ class TFNetwork(object):
     :return: int scalar tensor which states the batch-dim
     :rtype: int|tf.Tensor
     """
-    return self.get_batch_info().dim
+    return self.get_global_batch_info().dim
 
-  def get_batch_info(self):
+  def get_global_batch_info(self):
     """
     :return: global batch info from root network from extern data
     :rtype: returnn.tf.util.data.BatchInfo
     """
-    return self.get_root_network().extern_data.get_batch_info()
+    root = self.get_root_network()
+    if root.extern_data.data:
+      return root.extern_data.get_batch_info()
+    # This is an unusual case where we have no extern data at all.
+    # Some test cases might have this though, and in principle we could allow it.
+    # We use the very first layer which has a batch-dim and use that.
+    for layer in LayerBase.get_global_layer_list():
+      if layer.output.batch:
+        return layer.output.batch.get_global_base()
+    raise Exception("%s: Cannot get global batch info" % root)
 
   def set_rec_step_info(self, i, end_flag=None, end_flag_source=None, seq_lens=None):
     """
