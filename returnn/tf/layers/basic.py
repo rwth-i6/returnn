@@ -3043,18 +3043,22 @@ class FlattenBatchLayer(_ConcatInputLayer):
       self.output.placeholder = tf.reshape(x.placeholder, out_shape)
 
   @classmethod
-  def get_out_data_from_opts(cls, sources, name, axis="T", **kwargs):
+  def get_out_data_from_opts(cls, sources, name, axis="T", batch_major=True, **kwargs):
     """
     :param list[LayerBase] sources:
     :param str name:
     :param str axis:
+    :param bool batch_major: if False, will flatten in time-major manner
     :rtype: Data
     """
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
     out = out.copy_as_batch_major()
     axis = out.get_axis_from_description(axis, allow_int=False)
     assert axis != out.batch_dim_axis
+    dim_tag = out.get_dim_tag(axis)
     out = out.copy_template_excluding_axis(axis)
+    if out.batch:
+      out.batch = out.batch.copy_extend_with_packed_dim_tag(dim_tag, batch_major=batch_major)
     return out
 
 
