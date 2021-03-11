@@ -75,10 +75,10 @@ def get_repo_path(repo, version, _report_dev_version_usage_stack_frame_depth=1):
   """
   repo_ = _get_repo(repo)
   work_dir = repo_.get_work_dir(version)
-  path = work_dir.get_path()
+  repo_path = work_dir.get_path()
   if not version:
-    _report_usage_dev_version(path=path, stack_frame_depth=_report_dev_version_usage_stack_frame_depth + 1)
-  return path
+    _report_usage_dev_version(repo_path=repo_path, stack_frame_depth=_report_dev_version_usage_stack_frame_depth + 1)
+  return repo_path
 
 
 def _simple_validate_repo_name(repo):
@@ -405,12 +405,12 @@ def _get_repo(repo):
   return obj
 
 
-def _report_usage_dev_version(path, stack_frame_depth):
+def _report_usage_dev_version(repo_path, stack_frame_depth):
   """
-  :param str path:
+  :param str repo_path:
   :param int stack_frame_depth:
   """
-  common.logger.warn("Access to development working tree: %s", path)
+  common.logger.warn("Access to development working tree: %s", repo_path)
   from returnn.util.basic import try_get_stack_frame
   frame = try_get_stack_frame(depth=stack_frame_depth + 1)
   if frame:
@@ -423,8 +423,11 @@ def _report_usage_dev_version(path, stack_frame_depth):
   else:
     common.logger.warn("  (Could not get stack frame information from calling code.)")
   from returnn.util.basic import git_commit_date, git_commit_rev, git_is_dirty
-  rev = git_commit_rev(git_dir=path, length=_DefaultNumHashDigits)
-  commit_date = git_commit_date(git_dir=path)  # like "20190202.154527"
-  common.logger.warn("  Current version: %s-%s", commit_date.replace(".", ""), rev)
-  if git_is_dirty(git_dir=path):
+  rev = git_commit_rev(git_dir=repo_path, length=_DefaultNumHashDigits)
+  commit_date = git_commit_date(git_dir=repo_path)  # like "20190202.154527"
+  commit_date = commit_date.replace(".", "")
+  version = "%s-%s" % (commit_date[:8], rev[:_MinNumHashDigits])
+  import_str = "v%s_%s" % (commit_date, rev)
+  common.logger.warn("  Current version: %s (%s)", version, import_str)
+  if git_is_dirty(git_dir=repo_path):
     common.logger.warn("  (Warning, code is dirty. Commit your recent changes.)")

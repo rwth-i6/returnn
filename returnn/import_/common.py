@@ -154,13 +154,15 @@ def _register_module(mod_name, info):
     _registered_modules[mod_name[:p]] = info
 
 
-def module_name(repo, repo_path, path, version):
+def module_name(repo, repo_path, path, version, make_ready=True):
   """
   :param str repo: e.g. "github.com/rwth-i6/returnn-experiments"
   :param str repo_path: what get_repo_path returns, e.g. "/home/az/returnn/pkg/...@v..."
-  :param str path: path to file in repo
-  :param str|None version: e.g. "20211231-0123abcd0123". None for development working copy
-  :return: module name. as a side-effect, we make sure that importing this module works
+  :param str path: path to file in repo. can be arbitrary (empty) with make_ready=False
+  :param str|None version: e.g. "20211231-0123abcd0123". None for development working copy.
+    ignored with make_ready=False. just used for reporting.
+  :param bool make_ready: if True, we make sure that importing this module works
+  :return: module name
   :rtype: str
 
   Note on the internals:
@@ -185,24 +187,27 @@ def module_name(repo, repo_path, path, version):
   rel_pkg_dir = py_pkg_dirname[len(repo_path):]  # starting with "/"
 
   repo_dir_name = os.path.dirname(repo)
-  repo_v = "%s/%s" % (repo_dir_name, os.path.basename(repo_path))  # eg "github.com/rwth-i6/returnn-experiments@v..."
-  if version:
+  repo_path_basename = os.path.basename(repo_path)
+  repo_v = "%s/%s" % (repo_dir_name, repo_path_basename)  # eg "github.com/rwth-i6/returnn-experiments@v..."
+  if "@v" in repo_path_basename:
     repo_v = repo_v.replace("@v", "/v")
   else:
     repo_v = repo_v + "/dev"
-  py_pkg_dir = "%s/%s%s" % (_package_import_pkg_path(), _normalize_pkg_name(repo_v), _normalize_pkg_name(rel_pkg_dir))
-  _mk_py_pkg_dirs(_package_import_pkg_path(), py_pkg_dir)
-  symlink_file = "%s/%s" % (py_pkg_dir, rel_pkg_path0)
-  symlink_target = "%s%s/%s" % (repo_path, rel_pkg_dir, rel_pkg_path0)
-  if os.path.exists(symlink_file):
-    assert os.readlink(symlink_file) == symlink_target
-  else:
-    logger.debug("Symlink %s -> %s", symlink_file, symlink_target)
-    os.symlink(symlink_target, symlink_file, target_is_directory=os.path.isdir(symlink_target))
 
-  _register_module(
-    mod_name=ModuleNamePrefix + _normalize_pkg_name(repo_v + rel_pkg_dir).replace("/", "."),
-    info=dict(repo=repo, pkg_dir=rel_pkg_dir[1:], version=version))
+  if make_ready:
+    py_pkg_dir = "%s/%s%s" % (_package_import_pkg_path(), _normalize_pkg_name(repo_v), _normalize_pkg_name(rel_pkg_dir))
+    _mk_py_pkg_dirs(_package_import_pkg_path(), py_pkg_dir)
+    symlink_file = "%s/%s" % (py_pkg_dir, rel_pkg_path0)
+    symlink_target = "%s%s/%s" % (repo_path, rel_pkg_dir, rel_pkg_path0)
+    if os.path.exists(symlink_file):
+      assert os.readlink(symlink_file) == symlink_target
+    else:
+      logger.debug("Symlink %s -> %s", symlink_file, symlink_target)
+      os.symlink(symlink_target, symlink_file, target_is_directory=os.path.isdir(symlink_target))
+
+    _register_module(
+      mod_name=ModuleNamePrefix + _normalize_pkg_name(repo_v + rel_pkg_dir).replace("/", "."),
+      info=dict(repo=repo, pkg_dir=rel_pkg_dir[1:], version=version))
 
   repo_and_path = "%s/%s" % (repo_v, path[:-3] if path.endswith(".py") else path)
   name = _normalize_pkg_name(repo_and_path).replace("/", ".")
