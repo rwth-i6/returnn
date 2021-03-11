@@ -10,6 +10,7 @@ Importing this module immediately compiles the library and TF module.
 """
 
 import os
+import sys
 import typing
 import tensorflow as tf
 from tensorflow.python.framework import ops
@@ -59,7 +60,7 @@ def init_warprnnt(verbose=False):
     src_code += "\n// ------------ %s : END } --------------\n\n" % os.path.basename(fn)
 
   with_cuda = CudaEnv.get_instance().is_available() and is_gpu_available()
-  with_omp = os.name.startswith("linux")
+  with_omp = sys.platform.startswith("linux")
   compiler = OpCodeCompiler(
     base_name="warprnnt_kernels", code_version=1, code=src_code,
     include_paths=(submodule_dir + "/include",),
