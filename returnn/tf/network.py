@@ -733,7 +733,8 @@ class TFNetwork(object):
     """
     from pprint import pprint
     from returnn.util.basic import help_on_type_error_wrong_args
-    from returnn.tf.util.basic import py_print
+    from returnn.tf.util.basic import py_print, get_shape_dim
+    from returnn.tf.util.data import BatchInfo
     layer_desc = self._create_layer_layer_desc(name=name, layer_desc=layer_desc, template=False)
     debug_print_layer_output_template = self.get_config().bool("debug_print_layer_output_template", False)
     debug_print_layer_output_shape = self.get_config().bool("debug_print_layer_output_shape", False)
@@ -743,11 +744,24 @@ class TFNetwork(object):
       try:
         if "output" not in layer_desc:
           layer_desc["output"] = layer_class.get_out_data_from_opts(**layer_desc)
-        if debug_print_layer_output_template:
-          print("layer %s/%r output: %r" % (self.name, name, layer_desc["output"]))
         output_template = layer_desc["output"]
         assert isinstance(output_template, Data), "%s %r layer_desc %r ['output'] is not a Data instance" % (
           layer_class.__name__, name, layer_desc)
+        if output_template.have_batch_axis():
+          if not output_template.batch:
+            # Some heuristic for now to fix missing batch info. We should try to fix get_out_data_from_opts though...
+            if LayerBase.get_global_layer_list():
+              output_template.batch = LayerBase.get_recent_layer().get_batch_info()
+            elif self.extern_data.data:
+              output_template.batch = self.extern_data.get_batch_info()
+            else:
+              # No layers at all yet. This implies that the output must already have a placeholder.
+              assert output_template.placeholder is not None and not output_template.beam
+              output_template.batch = BatchInfo.make_global_batch_info(
+                batch_dim=get_shape_dim(output_template.placeholder, output_template.batch_dim_axis, name="batch_dim"))
+          output_template.batch = output_template.batch.copy_set_beam(output_template.beam)
+        if debug_print_layer_output_template:
+          print("layer %s/%r output: %r" % (self.name, name, output_template))
         output_template.sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
         output_template_special_axes = output_template.get_special_axes_dict()
         if not output_template.available_for_inference and not self.eval_flag:
