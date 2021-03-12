@@ -2605,6 +2605,16 @@ def get_temp_dir():
   return "/tmp/%s" % username
 
 
+def get_cache_dir():
+  """
+  :return: used to cache non-critical things. by default get_temp_dir. unless you define env RETURNN_CACHE_DIR
+  :rtype: str
+  """
+  if "RETURNN_CACHE_DIR" in os.environ:
+    return os.environ["RETURNN_CACHE_DIR"]
+  return get_temp_dir()
+
+
 class LockFile(object):
   """
   Simple lock file.
@@ -3201,7 +3211,7 @@ class NativeCodeCompiler(object):
     if self.CollectedCompilers is not None:
       self.CollectedCompilers.append(self)
     self.verbose = verbose
-    self.cache_dir = "%s/%s" % (get_temp_dir(), self.CacheDirName)
+    self.cache_dir = "%s/%s" % (get_cache_dir(), self.CacheDirName)
     self._include_paths = list(include_paths)
     self.base_name = base_name
     self.code_version = code_version
