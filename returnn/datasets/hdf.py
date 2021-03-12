@@ -1114,12 +1114,13 @@ class SimpleHDFWriter:
   def _insert_h5_other(self, data_key, raw_data, dtype=None, add_time_dim=False, dim=None):
     """
     :param str data_key:
-    :param numpy.ndarray|int|float|list[int] raw_data: shape=(time,data) or shape=(time,) or shape=()...
+    :param numpy.ndarray|int|float|list[int]|numpy.float32|numpy.int32 raw_data:
+      shape=(time,data) or shape=(time,) or shape=()...
     :param str|None dtype:
     :param bool add_time_dim:
     :param int|None dim:
     """
-    if isinstance(raw_data, (int, float, list, numpy.float32)):
+    if isinstance(raw_data, (int, float, list, numpy.float32, numpy.int32)):
       raw_data = numpy.array(raw_data)
     assert isinstance(raw_data, numpy.ndarray), "raw_data is %r of type %r" % (raw_data, type(raw_data))
     if add_time_dim or raw_data.ndim == 0:
