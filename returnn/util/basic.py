@@ -3967,7 +3967,7 @@ def collect_proc_maps_exec_files():
     address_start, address_end, perms, offset, dev, i_node, path_name = m.groups()
     if "x" not in perms:
       continue
-    if not path_name or path_name.startswith("["):
+    if not path_name or path_name.startswith("[") or "(deleted)" in path_name:
       continue
     if path_name not in fns:
       fns.append(path_name)
