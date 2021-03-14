@@ -46,3 +46,8 @@ preload_from_files
           }
         }
 
+load_ignore_missing_vars
+    If enabled, it will ignore missing variables when loading a checkpoint.
+    Otherwise it will error on missing variables.
+    Non-loaded variables are using the standard variable initialization (e.g. random init).
+    By default, this is disabled.
