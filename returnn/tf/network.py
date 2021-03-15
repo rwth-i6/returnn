@@ -1498,9 +1498,13 @@ class TFNetwork(object):
     if any([layer.custom_param_importer for layer in self._get_all_layers()]):
       # Need to use CustomCheckpointLoader because only that handles custom_param_importer correctly.
       must_use_custom_checkpoint_loader = True
+    ignore_missing_vars = self.get_config().bool("load_ignore_missing_vars", False)
+    if ignore_missing_vars:
+      must_use_custom_checkpoint_loader = True
     if must_use_custom_checkpoint_loader:
       loader = CustomCheckpointLoader(
-        filename=filename, saveable_params=saveable_params, network=self)
+        filename=filename, saveable_params=saveable_params, network=self,
+        ignore_missing=ignore_missing_vars)
       loader.load_now(session=session)
       return
     if not self.saver:
@@ -1516,7 +1520,8 @@ class TFNetwork(object):
       print("load_params_from_file: some variables not found", file=log.v2)
       try:
         loader = CustomCheckpointLoader(
-          filename=filename, saveable_params=saveable_params, network=self)
+          filename=filename, saveable_params=saveable_params, network=self,
+          ignore_missing=self.get_config().bool("load_ignore_missing_vars", False))
         if not loader.missing_var_names:
           print("Strange, nothing missing? Pre-loaded missing variables from other checkpoints?", file=log.v2)
         loader.load_now(session=session)
