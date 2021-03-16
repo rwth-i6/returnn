@@ -355,7 +355,7 @@ class LayerBase(object):
           search_choices=_src_common_search_choices,
           network=network, mark_data_key_as_used=network.eval_flag).size_placeholder.copy()
       elif common_source and common_source.matches_var_dim_pattern(output):
-        output.size_placeholder = common_source.size_placeholder.copy()
+        output.size_placeholder = common_source.size_placeholder.copy() if common_source.size_placeholder else {}
       elif network.train_flag is not False and target:
         # TODO: In training, this is ok. Maybe as well as for eval but not clear.
         # In forward, mark_data_key_as_used=False should be used and anyway that target value is not available.
