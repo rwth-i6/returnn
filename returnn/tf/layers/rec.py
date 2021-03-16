@@ -1176,6 +1176,7 @@ class _SubnetworkRecCell(object):
         """
         _name = name
         if name.startswith("prev:"):
+          assert not is_prev_time_frame, "%s: only prev frame can be accessed" % self
           name = name[len("prev:"):]
           self.prev_layers_needed.add(name)
           layer_ = lself.__call__(name, is_prev_time_frame=True)
