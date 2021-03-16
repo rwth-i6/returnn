@@ -3612,6 +3612,79 @@ def test_reclayer_enc_time_dim_eval():
     session.run(output_layer.output.placeholder, feed_dict=feed_dict)
 
 
+def test_reclayer_subnetwork_sublayer():
+  import threading
+  from returnn.tf.layers.rec import _SubnetworkRecCell
+
+  class _Closure:
+    lock = threading.Lock()
+    counter = 0
+
+  def _subnet_base_dummy_func(x):
+    with _Closure.lock:
+      print("** subnet_base_dummy_func", _Closure.counter)
+      _Closure.counter += 1
+    return x
+
+  def _subnet_base_eval_func(source, **_kwargs):
+    x = source(0)
+    y, = tf_compat.v1.py_func(
+      _subnet_base_dummy_func,
+      [x], [tf.float32],
+      name="subnet_base_dummy_func")
+    y.set_shape(x.get_shape())
+    return y
+
+  with make_scope() as session:
+    config = Config()
+    config.update({
+      "debug_print_layer_output_template": True,
+      "debug_print_layer_output_shape": True,
+      "extern_data": {
+        "data": {"dim": 5},
+      },
+      "network": {
+        "encoder": {"class": "eval", "from": "data", "eval": "source(0) + 1"},
+        "output": {
+          "class": "rec",
+          "from": "data",
+          "unit": {
+            "outside": {"class": "reduce", "mode": "max", "axis": "t", "from": "base:encoder"},
+            "subnet": {
+              "class": "subnetwork", "from": "data:source",
+              "subnetwork": {
+                "a": {"class": "eval", "from": "base:outside", "eval": _subnet_base_eval_func},
+                "b": {"class": "combine", "kind": "add", "from": ["data", "a", "base:prev:inside"]},
+                "output": {"class": "copy", "from": "b"},
+              }
+            },
+            "subnet_a": {"class": "copy", "from": "subnet/a"},
+            "subnet_b": {"class": "copy", "from": "subnet/b"},
+            "inside": {"class": "combine", "kind": "add", "from": ["subnet_a", "subnet_b", "subnet"]},
+            "output": {"class": "copy", "from": "inside"},
+          }},
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+
+    # With the new subnetwork construction logic, individual sub layers can be moved out of the recurrent loop.
+    rec_layer = network.get_layer("output")
+    assert isinstance(rec_layer, RecLayer)
+    rec_cell = rec_layer.cell
+    assert isinstance(rec_cell, _SubnetworkRecCell)
+    assert_equal(set(rec_cell.input_layers_moved_out), {"outside", "subnet/a", "subnet_a"})
+    assert_equal(set(rec_cell.layers_in_loop), {"inside", "subnet", "subnet/b", "subnet/output", "subnet_b"})
+    assert_equal(set(rec_cell.output_layers_moved_out), {"output"})
+
+    session.run(tf_compat.v1.global_variables_initializer())
+    from test_TFNetworkLayer import make_feed_dict
+    feed_dict = make_feed_dict(list(network.extern_data.data.values()))
+    session.run(rec_layer.output.placeholder, feed_dict=feed_dict)
+    # We expect that the _subnet_base_eval_func is exactly called once.
+    assert _Closure.counter == 1
+
+
 def test_reclayer_batch_feature_input():
   """
   Test if the RecLayer is capable of handling [B,F,T] input
