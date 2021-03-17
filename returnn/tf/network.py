@@ -329,7 +329,7 @@ class TFNetwork(object):
 
   def __init__(self, config=None, extern_data=None, rnd_seed=None,
                train_flag=None, eval_flag=None, search_flag=None,
-               parent_layer=None, parent_net=None, extra_parent_net=None,
+               parent_layer=None, parent_net=None, extra_parent_net=None, extra_name_prefix=None,
                is_inside_rec_layer=None,
                absolute_name_prefix=None, name=None):
     """
@@ -343,6 +343,7 @@ class TFNetwork(object):
     :param TFNetwork|None parent_net:
     :param TFNetwork|None extra_parent_net: we are on the same level (not really a child),
       but an "extra" net of extra_parent_net
+    :param str|None extra_name_prefix:
     :param bool is_inside_rec_layer: at template construction, use this
     :param str|None absolute_name_prefix:
     :param str name: only for debugging
@@ -398,7 +399,12 @@ class TFNetwork(object):
     self.parent_net = parent_net
     self._is_inside_rec_layer = is_inside_rec_layer
     self.extra_parent_net = extra_parent_net
+    self.extra_name_prefix = extra_name_prefix
+    self.extra_deps_in_extra = False
+    self.extra_only_template = False
+    self.is_root_in_ctx = not parent_net  # default. might be overwritten
     self.extra_nets = {}  # type: typing.Dict[str,TFNetwork]
+    self.subnets = {}  # type: typing.Dict[str,Subnetwork]
     self._selected_train_layers = None
     self._construction_stack = _NetworkConstructionStack()
     self.layers_desc = {}  # type: typing.Dict[str,typing.Dict[str]]
@@ -456,6 +462,36 @@ class TFNetwork(object):
       return self.extra_parent_net.get_root_network()
     return self
 
+  def get_root_ctx_network(self):
+    """
+    :return: in contrast to :func:`get_root_network`, stop where we have ``is_root_in_ctx`` set,
+      and return that network, together with the prefix
+    :rtype: (TFNetwork, str)
+    """
+    path = []
+    net = self
+    while True:
+      if net.is_root_in_ctx:
+        break  # stop here
+      if net.extra_parent_net:
+        path.append(net.extra_name_prefix + ":")
+        net = net.extra_parent_net
+        continue
+      if net.parent_net:
+        if net.parent_layer:
+          path.append(net.parent_layer.name + "/")
+        net = net.parent_net
+        continue
+      break
+    return net, "".join(reversed(path))
+
+  def is_extra_internal_template_construction(self):
+    """
+    :rtype: LayerBase|None
+    """
+    net, _ = self.get_root_ctx_network()
+    return net.extra_parent_net and net.extra_only_template
+
   def get_absolute_name_scope_prefix(self):
     """
     :return: TF scope name, always with "/" at the end, or ""
@@ -486,18 +522,23 @@ class TFNetwork(object):
       return self.extra_parent_net.get_absolute_name_prefix() + my_prefix
     return ""
 
-  def construct_from_dict(self, net_dict):
+  def construct_from_dict(self, net_dict, get_layer=None):
     """
     :param dict[str,dict[str]] net_dict:
+    :param ((str)->LayerBase)|None get_layer:
     """
     self.layers_desc.update(net_dict)
+
+    # First check only register_as_extern_data.
     for name, layer_desc in sorted(net_dict.items()):
       assert isinstance(name, str)
       if name.startswith("#"):  # ignore this
         continue
       assert isinstance(layer_desc, dict)
       if layer_desc.get("register_as_extern_data"):
-        self.construct_layer(net_dict, name)
+        self.construct_layer(net_dict, name, get_layer=get_layer)
+
+    # Now the main construction.
     for name, layer_desc in sorted(net_dict.items()):
       assert isinstance(name, str)
       if name.startswith("#"):  # ignore this
@@ -510,19 +551,30 @@ class TFNetwork(object):
       if (name == "output" or name.endswith(":output")
               or layer_desc.get("loss", None)
               or layer_desc.get("is_output_layer", False)):
-        self.construct_layer(net_dict, name)
+        self.construct_layer(net_dict, name, get_layer=get_layer)
+
+    # Possibly create remaining sub layers in subnetworks.
+    for name, subnet in sorted(self.subnets.items()):
+      assert isinstance(subnet, Subnetwork)
+      subnet.complete_construction_parent_subnet_layer(parent_get_layer=get_layer)
+      self.layers.update({
+        "%s/%s" % (subnet.name_in_parent, sub_name): sub_layer
+        for (sub_name, sub_layer) in subnet.net.layers.items()})
+
     assert not self._construction_stack.layers
 
   # Currently this pattern is very simple.
   # This pattern might be extended, when we want to make it more flexible.
-  _extra_layer_name_prefix_pattern = re.compile("^(extra(\\.[A-Za-z0-9_.]+)?):")
+  _extra_layer_name_prefix_pattern = re.compile("^(extra(\\.[A-Za-z0-9_.()]+)?):")
 
-  def _get_extra_net(self, search_flag=None, net_name=None, prefix_name=None, auto_create=True):
+  def _get_extra_net(self, search_flag=None, net_name=None, prefix_name=None, auto_create=True, boundary=False):
     """
     :param bool|None search_flag:
     :param str|None net_name:
     :param str|None prefix_name: e.g. "extra.search" or "extra.WhateverYouWant" or just "extra"
     :param bool auto_create:
+    :param bool boundary: implies that other extra / non-extra networks cannot directly access this,
+      and also that this is never shared
     :return: (net, prefix_name)
     :rtype: (TFNetwork|None,str)
     """
@@ -532,26 +584,52 @@ class TFNetwork(object):
       assert search_flag is not None
       prefix_name = "extra.search" if search_flag else "extra"
     if prefix_name and not net_name:
-      net_name = prefix_name
-    if self.extra_parent_net:  # Also, only the root can have other extra nets.
-      assert not auto_create
-      return None, prefix_name
+      net_name = "%s(%s)" % (self.name, prefix_name)
+    assert not self.extra_parent_net  # Only the base can have other extra nets.
     if prefix_name not in self.extra_nets:
       if not auto_create:
         return None, prefix_name
-      self.extra_nets[prefix_name] = TFNetwork(
+      extra_net = TFNetwork(
         config=self._config, extern_data=self.extern_data, name=net_name,
         rnd_seed=self.random.randint(2 ** 31),
         train_flag=self.train_flag, eval_flag=self.eval_flag,
         search_flag=search_flag if search_flag is not None else self.search_flag,
-        extra_parent_net=self)
+        extra_parent_net=self, extra_name_prefix=prefix_name)
+      if boundary:
+        extra_net.is_root_in_ctx = True
+      else:
+        self.extra_nets[prefix_name] = extra_net
+    else:
+      assert not boundary
+      extra_net = self.extra_nets[prefix_name]
     if search_flag is not None:
-      assert self.extra_nets[prefix_name].search_flag == search_flag
-    return self.extra_nets[prefix_name], prefix_name
+      assert extra_net.search_flag == search_flag
+    return extra_net, prefix_name
+
+  def make_extra_net(self, prefix_name, net_name=None, only_template=False, boundary=False):
+    """
+    :param str prefix_name: "extra.Whatever"
+    :param str|None net_name:
+    :param bool only_template:
+    :param bool boundary:
+    :rtype: TFNetwork
+    """
+    assert self._extra_layer_name_prefix_pattern.match(prefix_name + ":")
+    base_net = self.extra_parent_net or self
+    net, prefix_ = base_net._get_extra_net(
+      search_flag=self.search_flag, prefix_name=prefix_name, net_name=net_name,
+      boundary=boundary)
+    assert prefix_ == prefix_name
+    if only_template:
+      assert boundary
+      net.extra_only_template = True
+    return net
 
   def construct_extra_net(self, net_dict, layer_list,
                           search_flag=None, dep_layers_in_extra=False,
-                          net_name=None, prefix_name=None):
+                          check_existing=False,
+                          net_name=None, prefix_name=None,
+                          base_get_layer=None, base_add_layer=None):
     """
     The purpose is to create another net like `self` but with different flags,
     e.g. with `search_flag = True`.
@@ -570,40 +648,59 @@ class TFNetwork(object):
     :param bool|None search_flag:
     :param bool dep_layers_in_extra: layers not in layer_list, but which are not yet created,
       will be part of the extra net, not self.
+    :param bool check_existing:
     :param str|None net_name:
     :param str|None prefix_name: e.g. "extra.search", such that layers would be called like "extra.search:layer"
+    :param base_get_layer: like in construct_layer
+    :param base_add_layer: like in construct_layer
     :return: the layers created via layer_list (all in extra net)
     :rtype: list[LayerBase]
     """
+    assert not self.extra_parent_net  # call this from the base
     extra_net, prefix_name = self._get_extra_net(
       search_flag=search_flag, net_name=net_name, prefix_name=prefix_name)
     extra_net.layers_desc.update(net_dict)
+    if dep_layers_in_extra:
+      extra_net.extra_deps_in_extra = True
+
+    if not base_get_layer:
+      def base_get_layer(src_name):
+        """
+        :param str src_name:
+        :rtype: LayerBase
+        """
+        return self.construct_layer(net_dict=net_dict, name=src_name, get_layer=get_layer, add_layer=base_add_layer)
+    if not base_add_layer:
+      base_add_layer = self.add_layer
 
     def get_layer(src_name):
       """
       :param str src_name:
       :rtype: LayerBase
       """
+      if self._extra_layer_name_prefix_pattern.match(src_name):  # This is explicitly specifying an extra net.
+        # Use the standard logic for that, even same extra net (logic handled in self, not the extra net).
+        return base_get_layer(src_name)
       explicit_extra_layer_name = "%s:%s" % (prefix_name, src_name)
-      if explicit_extra_layer_name in net_dict:
+      if explicit_extra_layer_name.split("/", 1)[0] in net_dict:
         # This is a special marked layer, which is named like this to specify that it should explicitly
         # be used in this case.
-        return extra_net.construct_layer(net_dict=net_dict, name=explicit_extra_layer_name, get_layer=get_layer)
+        # Call via base to make sure any custom getter sees this...
+        return base_get_layer(explicit_extra_layer_name)
       if dep_layers_in_extra:
-        return extra_net.construct_layer(net_dict=net_dict, name=src_name, get_layer=get_layer)
-      try:
-        return extra_net.get_layer(src_name)
-      except LayerNotFound:
-        pass  # ok, we will try to construct it then
-      # Create it in self, not in the extra net.
-      return self.construct_layer(net_dict=net_dict, name=src_name, get_layer=get_layer)
+        return extra_net.construct_layer(
+          net_dict=net_dict, name=src_name, get_layer=get_layer, add_layer=base_add_layer)
+      return base_get_layer(src_name)
 
     created_layers = []
     for layer_name in layer_list:
+      if not self._extra_layer_name_prefix_pattern.match(layer_name):
+        layer_name = "%s:%s" % (prefix_name, layer_name)
       # Always (re)create the specified layer in the layer_list (or return it if it already in the extra net).
       # However, any dependencies might resolve to the main net.
       created_layers.append(extra_net.construct_layer(
-        net_dict=net_dict, name=layer_name, check_existing=False, get_layer=get_layer))
+        net_dict=net_dict, name=layer_name, check_existing=check_existing,
+        get_layer=get_layer, add_layer=base_add_layer))
 
     if extra_net.recurrent:
       self.recurrent = True
@@ -633,6 +730,15 @@ class TFNetwork(object):
       By default, this wraps self.construct_layer().
       I.e. the name might be misleading, as this should return an existing layer,
       or construct it if it does not exist yet.
+
+      Note on custom nested/wrapped get_layer:
+        This is tricky. When an outer get_layer calls an inner get_layer,
+        then the inner get_layer might construct the layer,
+        and this construction never can get back to the outer get_layer again.
+        This is fine when this is anyway not allowed
+        (e.g. to "base:...", where the base net is not allowed to access this parent net).
+        But otherwise, this is not an option!
+
     :param ((str, LayerBase, dict) -> LayerBase) | None add_layer: by default self.add_layer
     :param bool check_existing: check self.get_layer. (self.layers will be checked in any case)
     :rtype: LayerBase
@@ -644,9 +750,6 @@ class TFNetwork(object):
         return self.get_layer(name)
       except LayerNotFound:
         pass  # ok, we will try to construct it then
-    if name in self._construction_stack.layers:
-      raise NetworkConstructionDependencyLoopException(
-        layer_name=name, constructing_layers=self._construction_stack.layers, net_dict=net_dict, network=self)
     if self._flat_construction_enabled():
       delayed_exc = _DelayedConstructionException(
         network=self, layer_name=name,
@@ -656,27 +759,28 @@ class TFNetwork(object):
       if self._construction_stack.layers:
         raise delayed_exc
     if not get_layer:
+      # set get_layer to wrap construct_layer
       def get_layer(src_name):
         """
         :param str src_name:
         :rtype: LayerBase
         """
-        return self.construct_layer(net_dict=net_dict, name=src_name)  # set get_layer to wrap construct_layer
+        return self.construct_layer(net_dict=net_dict, name=src_name, get_layer=get_layer, add_layer=add_layer)
+    full_name = name
+    sub_layer_name = None
     if '/' in name:
-      # It may be a hierarchical path to a sub-layer, which should have been found by get_layer()
-      # but maybe it's not constructed yet, so try constructing the root layer.
-      root_layer = get_layer(name.split('/')[0])
-      sub_layer = root_layer.get_sub_layer('/'.join(name.split('/')[1:]))  # get the sub-layer from the root-layer
-      if sub_layer:
-        return sub_layer
-      # Pass on here. Maybe we find the layer. Otherwise it will fail below.
+      # It may be a hierarchical path to a sub-layer.
+      name, sub_layer_name = name.split("/", 1)
     layer_desc = None
+    extra_prefix = None
     if self._extra_layer_name_prefix_pattern.match(name):
-      prefix, name_ = name.split(":", 1)
+      extra_prefix, name_ = name.split(":", 1)
       if self.extra_parent_net:
-        extra_net, _ = self.extra_parent_net._get_extra_net(prefix_name=prefix, auto_create=False)
+        extra_net, _ = self.extra_parent_net._get_extra_net(prefix_name=extra_prefix, auto_create=False)
         if extra_net is not self:
-          return self.extra_parent_net.construct_extra_net(net_dict=net_dict, layer_list=[name], prefix_name=prefix)[0]
+          return self.extra_parent_net.construct_extra_net(
+            net_dict=net_dict, layer_list=[full_name], prefix_name=extra_prefix, check_existing=check_existing,
+            base_get_layer=get_layer, base_add_layer=add_layer)[0]
         if name in net_dict:
           # We explicitly allow this, and want to construct it here in this extra net, from this layer desc.
           layer_desc = net_dict[name]
@@ -684,7 +788,15 @@ class TFNetwork(object):
         # such that param-sharing etc works as expected.
         name = name_
       else:
-        return self.construct_extra_net(net_dict=net_dict, layer_list=[name], prefix_name=prefix)[0]
+        return self.construct_extra_net(
+          net_dict=net_dict, layer_list=[full_name], prefix_name=extra_prefix, check_existing=check_existing,
+          base_get_layer=get_layer, base_add_layer=add_layer)[0]
+    elif self.extra_parent_net:
+      extra_prefix = self.extra_name_prefix
+      explicit_extra_layer_name = "%s:%s" % (self.extra_name_prefix, name)
+      if explicit_extra_layer_name in net_dict:
+        layer_desc = net_dict[explicit_extra_layer_name]
+      # Pass on here to construct the layer here in this extra net, as this was explicitly called.
     if not layer_desc:
       if name not in net_dict:
         if name == "data":
@@ -700,16 +812,70 @@ class TFNetwork(object):
       raise LayerNotFound("layer %r not found in %r" % (name, self), layer_name=name, network=self, net_dict=net_dict)
     if not add_layer:
       add_layer = self.add_layer
-    layer_desc = layer_desc.copy()
-    class_name = layer_desc.pop("class")
+
+    net = self
+    class_name = layer_desc["class"]
     layer_class = get_layer_class(class_name)
-    self._construction_stack.append(name)
+    base_name = name
+    # Loop for deeper sub layers.
+    while True:
+      subnet = layer_class.cls_get_sub_network(name=base_name, network=net, layer_desc=layer_desc)
+      if not subnet and base_name in net.subnets:
+        subnet = net.subnets[base_name]
+      if subnet:
+        if not sub_layer_name:
+          break  # go on to construct the main
+        if "/" in sub_layer_name:
+          base_name, sub_layer_name = sub_layer_name.split("/", 1)
+        else:
+          base_name, sub_layer_name = sub_layer_name, None
+        get_layer = subnet.get_sub_layer_func(get_layer)
+        net = subnet.net
+        name = name + "/" + base_name
+        if not subnet.have_layer(base_name):
+          raise LayerNotFound(
+            "sub-layer %r not found in %r" % (base_name, net),
+            layer_name=base_name, network=net)
+        layer_desc = subnet.get_layer_desc(base_name)
+        layer_class = subnet.get_layer_class(base_name)
+        continue
+
+      if not sub_layer_name:
+        break
+
+      # No subnet. Need to stop here and use regular sub layer logic.
+      root_layer = get_layer(base_name)
+      sub_layer = root_layer.get_sub_layer(sub_layer_name)
+      if not sub_layer:
+        raise LayerNotFound(
+          "sub-layer %r not found in %r" % (sub_layer_name, root_layer),
+          layer_name=name + "/" + sub_layer_name, network=net)
+      return sub_layer
+
+    layer_desc = layer_desc.copy()
+    layer_desc.pop("class")
+    # Note about name:
+    # The name can be to the root network (full name) or to the owning/direct network (`net`) (base_name).
+    # The name can optionally have a prefix (here we only care about extra net prefix "extra...:").
+    # The prefix is implied by the owning network.
+    layer_desc["_network"] = net
+    layer_desc["_name"] = base_name
+    name_with_prefix = ("%s:%s" % (extra_prefix, name)) if extra_prefix else name
+    if name_with_prefix in self._construction_stack.layers:
+      raise NetworkConstructionDependencyLoopException(
+        layer_name=name_with_prefix, constructing_layers=self._construction_stack.layers,
+        net_dict=net_dict, network=self)
+    self._construction_stack.append(name_with_prefix)
     try:
       # This call would also resolve dependencies, and e.g. recursively then create them (via get_layer calls).
-      layer_class.transform_config_dict(layer_desc, network=self, get_layer=get_layer)
+      layer_class.transform_config_dict(layer_desc, network=net, get_layer=get_layer)
     finally:
-      self._construction_stack.remove(name)
-    return add_layer(name=name, layer_class=layer_class, **layer_desc)
+      self._construction_stack.remove(name_with_prefix)
+    # add_layer here is to the root network, and potentially non-extra (or different extra),
+    # so we give the full name with prefix.
+    # add_layer can potentially also be simple and must work without knowing about sub networks or prefixes,
+    # i.e. it can operate on a flat name space of layers.
+    return add_layer(name=name_with_prefix, layer_class=layer_class, **layer_desc)
 
   def _create_layer_layer_desc(self, name, layer_desc, template=True):
     """
@@ -755,7 +921,7 @@ class TFNetwork(object):
     debug_print_layer_output_shape = self.get_config().bool("debug_print_layer_output_shape", False)
     debug_add_check_numerics_on_output = self.get_config().bool(
       "debug_add_check_numerics_on_output", False)  # also see debug_add_check_numerics_ops
-    with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)), self.register_network_scope():
+    with self.layer_creation_scope(name):
       try:
         if "output" not in layer_desc:
           layer_desc["output"] = layer_class.get_out_data_from_opts(**layer_desc)
@@ -820,6 +986,23 @@ class TFNetwork(object):
     assert layer.output.size_placeholder is not None
     return layer
 
+  @contextlib.contextmanager
+  def layer_creation_scope(self, name):
+    """
+    :param str name:
+    :return: ctx
+    """
+    with self.register_network_scope():
+      expected_name_scope = self.get_absolute_name_scope_prefix()[:-1]
+      if tf_util.get_current_name_scope() == expected_name_scope:
+        with reuse_name_scope(LayerBase.cls_get_tf_scope_name(name)):
+          yield
+      else:
+        # Be relaxed about this. Allow calls from inconsistent name scopes.
+        prefix = self.get_absolute_name_scope_prefix()
+        with reuse_name_scope(prefix + LayerBase.cls_get_tf_scope_name(name), absolute=True):
+          yield
+
   def add_layer(self, name, layer_class, **layer_desc):
     """
     This will construct the layer given the layer_desc arguments,
@@ -834,8 +1017,19 @@ class TFNetwork(object):
       the layer_class will usually then define the layer.output and its placeholder.
       there is one notable exception: the InternalLayer, where you predefine the output.
     """
+    if self._extra_layer_name_prefix_pattern.match(name):
+      prefix, name_ = name.split(":", 1)
+      extra_net, _ = (self.extra_parent_net or self)._get_extra_net(prefix_name=prefix)
+      layer = extra_net.add_layer(name=name_, layer_class=layer_class, **layer_desc)
+    else:
+      root_name, sub_name = name.split("/", 1) if "/" in name else (name, None)
+      if sub_name and root_name in self.subnets:
+        subnet = self.subnets[root_name]
+        with self.layer_creation_scope(root_name):
+          layer = subnet.net.add_layer(name=sub_name, layer_class=layer_class, **layer_desc)
+      else:
+        layer = self._create_layer(name=name, layer_class=layer_class, **layer_desc)
     assert name not in self.layers
-    layer = self._create_layer(name=name, layer_class=layer_class, **layer_desc)
     self.layers[name] = layer
     if layer.recurrent:
       self.recurrent = True
@@ -882,6 +1076,22 @@ class TFNetwork(object):
       data = data.copy_extend_with_beam(beam)
     return data.placeholder
 
+  def make_subnet(self, name, opts):
+    """
+    :param str name:
+    :param dict[str] opts:
+    :rtype: Subnetwork
+    """
+    if name in self.subnets:
+      subnet = self.subnets[name]
+    else:
+      subnet = Subnetwork(parent_net=self, name=name, opts=opts)
+      # Template implies that this subnet must not be accessed directly from the base/parent,
+      # thus do not store a reference.
+      if not subnet.template:
+        self.subnets[name] = subnet
+    return subnet
+
   def get_losses_initialized(self, reduce_func=None, with_total=False):
     """
     :param ((tf.Tensor)->tf.Tensor)|None reduce_func: as in get_losses. e.g. TFUtil.identity
@@ -897,20 +1107,13 @@ class TFNetwork(object):
       total_loss = None
       total_constraints = None
     losses_multi_dict = {}  # type: typing.Dict[str,typing.List[typing.Tuple[typing.Optional[str],LossHolder]]]
-    layer_items = [(None, layer) for name, layer in sorted(self.layers.items())]
-    if self.extra_nets:
-      for extra_name_prefix, extra_net in sorted(self.extra_nets.items()):
-        assert isinstance(extra_net, TFNetwork)
-        layer_items += [(extra_name_prefix, layer) for (name, layer) in sorted(extra_net.layers.items())]
-    for extra_name_prefix, layer in layer_items:
+    # self.layers also include extra net layers and sub layers, see add_layer.
+    for name, layer in sorted(self.layers.items()):
       assert isinstance(layer, LayerBase)
-      assert not extra_name_prefix or isinstance(extra_name_prefix, str)
-      if not extra_name_prefix:
-        name = layer.name
-      else:
-        name = "%s/%s" % (extra_name_prefix, layer.name)
+      extra_name_prefix = None
+      if self._extra_layer_name_prefix_pattern.match(name):
+        extra_name_prefix, name = name.split(":", 1)
       tf_scope_name = layer.cls_get_tf_scope_name(name=name)
-      assert isinstance(layer, LayerBase)
       with reuse_name_scope("loss"):
         with reuse_name_scope(tf_scope_name):
           losses = layer.get_losses_initialized(reduce_func=reduce_func)
@@ -1189,14 +1392,28 @@ class TFNetwork(object):
     """
     if layer_name in self.layers:
       return self.layers[layer_name]
+    if '/' in layer_name:  # path to a sub-layer
+      root_layer_name, sub_layer_name = layer_name.split("/", 1)
+      root_layer = self.get_layer(root_layer_name)  # get the root-layer (first part of the path)
+      sub_layer = root_layer.get_sub_layer(sub_layer_name)  # get the sub-layer from the root-layer
+      if not sub_layer:
+        raise LayerNotFound(
+          "sub-layer %r not found in layer %r in net %r" % (root_layer, sub_layer, self),
+          layer_name=layer_name, network=self)
+      return sub_layer
     if self._extra_layer_name_prefix_pattern.match(layer_name):
+      if self.extra_parent_net:
+        return self.extra_parent_net.get_layer(layer_name)
       prefix, layer_name = layer_name.split(":", 1)
       extra_net, _ = self._get_extra_net(prefix_name=prefix, auto_create=False)
       if not extra_net:
         raise LayerNotFound(
           "cannot get layer %r, no extra net for %r" % (layer_name, self),
           layer_name=layer_name, network=self)
-      return extra_net.get_layer(layer_name)
+      if layer_name not in extra_net.layers:
+        raise LayerNotFound(
+          "layer %r not found in extra net %r" % (layer_name, extra_net), layer_name=layer_name, network=self)
+      return extra_net.layers[layer_name]
     if layer_name.startswith("base:"):
       if not self.parent_net:
         raise LayerNotFound(
@@ -1205,12 +1422,6 @@ class TFNetwork(object):
     if layer_name == "data" or layer_name.startswith("data:"):
       # Not created yet. Try to create it now.
       return self.construct_layer(name=layer_name, net_dict={}, check_existing=False)
-    if '/' in layer_name:
-      # this is probably a path to a sub-layer
-      root_layer = self.get_layer(layer_name.split('/')[0])  # get the root-layer (first part of the path)
-      sub_layer = root_layer.get_sub_layer('/'.join(layer_name.split('/')[1:]))  # get the sub-layer from the root-layer
-      if sub_layer:  # get_sub_layer returns None by default (if sub-layer not found)
-        return sub_layer
     if self.extra_parent_net:
       return self.extra_parent_net.get_layer(layer_name)
     if layer_name not in self.layers:
@@ -1219,7 +1430,7 @@ class TFNetwork(object):
 
   def _get_all_layers(self):
     """
-    :return: all layers, including extra net (but excluding layers which already exist in self)
+    :return: all layers, including extra net. duplicates are made unique
     :rtype: list[LayerBase]
     """
     layers = []
@@ -2126,6 +2337,375 @@ class TFNetwork(object):
     self._map_search_beam_to_search_choices[beam] = search_choices
 
 
+class Subnetwork:
+  """
+  Represents a subnetwork.
+
+  Despite the different namespace, optionally some variable sharing,
+  and optionally some custom input data,
+  layers behave just as in the root network,
+  with the same dependency resolution (both ways).
+  I.e. a layer outside can depend only on a single sub layer
+  and not the whole subnetwork
+  (in contrast to :func:`LayerBase.get_sub_layer`).
+
+  This is usually used with :class:`SubnetworkLayer`,
+  via :func:`LayerBase:cls_get_sub_network`.
+
+  This works for custom calls on :func:`TFNetwork.construct_layer`
+  with custom ``get_layer`` or ``add_layer``
+  e.g. in template construction from the :class:`RecLayer` subnetwork
+  and doesn't require extra logic for this.
+
+  This has also a mode to start its own template construction,
+  for the case this layer is embedded in another layer
+  (e.g. :class:`CondLayer` or :class:`MaskedComputationLayer`,
+  in contrast to :class:`SubnetworkLayer`).
+  This is triggered by a special type of extra parent network
+  with ``extra_only_template`` set.
+  This implies that the parent (non-extra) network
+  can not directly access the sub network,
+  which is important for the template construction here
+  (see :func:`_construct_template_subnet`).
+
+  A special extra parent can also have the ``extra_boundary`` flag set,
+  which triggers that we have our own construction code
+  (but not using templates, but constructing the real layers).
+  This is used also for the embedded case (e.g. :class:`MaskedComputationLayer`).
+  This is needed when the parent (non-extra) network
+  cannot directly access this sub network.
+  """
+
+  def __init__(self, parent_net, name, opts=None):
+    """
+    :param TFNetwork parent_net:
+    :param str name:
+    :param dict[str]|None opts:
+    """
+    from .layers.basic import InternalLayer
+    self.parent_net = parent_net
+    self.name = name
+    if parent_net.extra_name_prefix:
+      # Such that get_layer/construct_layer is unique to this extra net, also for not-yet-existing layers.
+      self.name_in_parent = "%s:%s" % (parent_net.extra_name_prefix, name)
+    else:
+      self.name_in_parent = name
+
+    template = parent_net.extra_parent_net and parent_net.extra_only_template
+    self.template = template
+    self.parent_cannot_access = template or (parent_net.extra_parent_net and parent_net.is_root_in_ctx)
+
+    subnet_layer_dict = opts.copy()
+    self._net_dict = subnet_layer_dict.pop("subnetwork")  # type: typing.Optional[typing.Dict[str,typing.Any]]
+    from_arg = subnet_layer_dict.pop("from", subnet_layer_dict.pop("_from", "data"))
+    self._from_arg = list(from_arg) if isinstance(from_arg, (list, tuple)) else [from_arg]
+    self._concat_sources = subnet_layer_dict.pop("concat_sources", True)
+    self._dropout = subnet_layer_dict.pop("dropout", 0)
+    self._dropout_noise_shape = subnet_layer_dict.pop("dropout_noise_shape", None)
+    subnet_layer_dict.pop("class", None)
+    subnet_layer_dict.pop("_network", None)
+    subnet_layer_dict.pop("_name", None)
+
+    # Other SubnetworkLayer specific arguments:
+    subnet_layer_dict.pop("rec_previous_layer", None)  # this would be handled by the SubnetworkLayer
+    subnet_layer_dict.pop("load_on_init", None)  # handled by the SubnetworkLayer
+
+    # We also allow that this gets called after transform_config_dict.
+    subnet_layer_dict.pop("name", None)
+    subnet_layer_dict.pop("network", None)
+    subnet_layer_dict.pop("sources", None)
+    subnet_layer_dict.pop("output", None)
+    subnet_layer_dict.pop("n_out", None)
+    subnet_layer_dict.pop("out_type", None)
+
+    # The SubnetworkLayer is created only later (if at all).
+    # But it doesn't really matter which layer we have as the parent layer for our subnetwork,
+    # as long as the namespace and other context is correctly set up.
+    self.layer = InternalLayer(
+      name=name, network=parent_net, output=Data(name="dummy_output", shape=()),
+      # Pass on remaining args, which might be relevant for custom scopes..
+      **subnet_layer_dict)
+    self.net = TFNetwork(
+      name="%s/%s(subnet)" % (parent_net.name, name),
+      extern_data=ExternData(),  # directly accessing base layers instead
+      train_flag=parent_net.train_flag,
+      search_flag=parent_net.search_flag,
+      parent_layer=self.layer,
+      rnd_seed=0 if template else None)  # seed 0 is not used when we construct the templates
+    self.net.layers_desc.update(self._net_dict)
+    # Copy extern_data to some degree.
+    # Note that for all layer access to "data" or "data:...",
+    # we handle that in _get_data to lazily resolve dependencies.
+    # So this is only for targets / anything except the input.
+    for key, value in self.parent_net.extern_data.data.items():
+      if key != "data":
+        self.net.extern_data.data[key] = value
+
+  def __repr__(self):
+    return "%s{%s}" % (self.__class__.__name__, self.net.name)
+
+  def _get_data(self, name, get_layer):
+    """
+    :param str name:
+    :param (str)->LayerBase get_layer:
+    :rtype: LayerBase
+    """
+    layer_name = "data:%s" % name
+    if layer_name in self.net.layers:
+      return self.net.layers[layer_name]
+    assert self._from_arg, "%s: set_sources_args not called? or no source but asked for %r" % (self, name)
+
+    def base_get_layer(name_):
+      """
+      :param str name_:
+      :rtype: LayerBase
+      """
+      return get_layer("base:" + name_)
+
+    if self._concat_sources:
+      if name == "data":
+        if len(self._from_arg) == 1 and not self._dropout:
+          # Fast path, doesn't need any temporary layers.
+          return base_get_layer(self._from_arg[0])
+        self._net_dict.update({
+          layer_name: {
+            "class": "copy", "from": ["base:%s" % arg for arg in self._from_arg],
+            "dropout": self._dropout, "dropout_noise_shape": self._dropout_noise_shape}})
+        # This should trigger the creation.
+        return get_layer(layer_name)
+
+      else:  # name != "data"
+        return base_get_layer("data:%s" % name)
+
+    # Not concat_sources
+    for i, arg in enumerate(self._from_arg):
+      if name == arg or name == str(i) or (name == "data" and i == 0):
+        if not self._dropout:
+          # Fast path, doesn't need any temporary layers.
+          return base_get_layer(arg)
+        self._net_dict.update({
+          layer_name: {
+            "class": "copy", "from": "base:%s" % arg,
+            "dropout": self._dropout, "dropout_noise_shape": self._dropout_noise_shape}})
+        # This should trigger the creation.
+        return get_layer(layer_name)
+
+    # Fallback to extern data from base.
+    return base_get_layer("data:%s" % name)
+
+  def get_sub_layer_func(self, base_get_layer):
+    """
+    :param ((str)->LayerBase)|None base_get_layer:
+    :rtype: (str)->LayerBase
+    """
+    # Without custom getter, we can just use the standard construction.
+    # This works also in cases when other layers from the parent net can not access sub layers directly,
+    # so no extra net with extra_boundary is needed.
+    # Otherwise this is via explicit parent_cannot_access.
+    use_direct_construct = self.parent_cannot_access or not base_get_layer
+    if not base_get_layer:
+      base_get_layer = self.parent_net.get_layer
+
+    def wrapped_get_layer(name):
+      """
+      :param str name:
+      :rtype: LayerBase
+      """
+      if name.startswith("base:"):
+        return base_get_layer(name[len("base:"):])
+
+      if self.template:
+        self._construct_template_subnet(get_parent_layer=base_get_layer)
+        # In any case, we cannot get the layer via base_get_layer.
+        return self.net.get_layer(name)
+
+      if use_direct_construct:
+        return self.net.construct_layer(net_dict=self._net_dict, name=name, get_layer=wrapped_get_layer)
+
+      # We expect that this prefix gets back to us indirectly when base_get_layer calls net.construct_layer.
+      # The name also needs to match the real name where this layer can be accessed later on.
+      # This is a bit tricky. See name_in_parent.
+      assert not self.parent_cannot_access
+      return base_get_layer(self.name_in_parent + "/" + name)
+
+    wrapped_get_layer = self.get_layer_func(wrapped_get_layer)
+    return wrapped_get_layer
+
+  def get_layer_func(self, get_layer):
+    """
+    :param (str)->LayerBase get_layer:
+    :rtype: (str)->LayerBase
+    """
+    def wrapped_get_layer(name):
+      """
+      :param str name:
+      :rtype: LayerBase
+      """
+      if name == "data":
+        return self._get_data(name="data", get_layer=get_layer)
+      if name.startswith("data:"):
+        return self._get_data(name=name[len("data:"):], get_layer=get_layer)
+      return get_layer(name)
+
+    return wrapped_get_layer
+
+  def construct_layer(self, name, parent_get_layer=None):
+    """
+    With default parent_get_layer,
+    this will not trigger recursive constructions in the parent net,
+    but any recursive construction in this subnet.
+
+    :param str name:
+    :param ((str)->LayerBase)|None parent_get_layer:
+    :rtype: LayerBase
+    """
+    return self.get_sub_layer_func(parent_get_layer)(name)
+
+  def construct_all(self, parent_get_layer=None):
+    """
+    Trigger the standard construction of all layers in the net dict.
+
+    :param ((str)->LayerBase)|None parent_get_layer:
+    """
+    self.net.construct_from_dict(
+      self._net_dict,
+      get_layer=self.get_sub_layer_func(parent_get_layer))
+
+  def complete_construction_parent_subnet_layer(self, parent_get_layer=None):
+    """
+    :param ((str)->LayerBase)|None parent_get_layer:
+    :rtype: returnn.tf.layers.basic.SubnetworkLayer
+    """
+    from returnn.tf.layers.basic import SubnetworkLayer
+
+    self.construct_all(parent_get_layer=parent_get_layer)
+
+    parent_net_dict = self.parent_net.layers_desc
+    name = self.name_in_parent
+    layer = self.parent_net.construct_layer(parent_net_dict, name, get_layer=parent_get_layer)
+    assert isinstance(layer, SubnetworkLayer)
+    assert layer.subnetwork_ is self and layer.subnetwork is self.net
+
+    layer.update_params_from_subnet()
+    layer.update_load_on_init()
+
+    return layer
+
+  def have_layer(self, name):
+    """
+    :param str name:
+    :rtype: bool
+    """
+    return name in self._net_dict
+
+  def get_layer_desc(self, name):
+    """
+    :param str name:
+    :rtype: dict[str]
+    """
+    return self._net_dict[name]
+
+  def get_layer_class(self, name):
+    """
+    :param str name:
+    :rtype: type[LayerBase]
+    """
+    layer_desc = self.get_layer_desc(name)
+    class_name = layer_desc["class"]
+    return get_layer_class(class_name)
+
+  def _construct_template_subnet(self, get_parent_layer=None):
+    """
+    Very similar to _SubnetworkRecCell._construct_template, but simpler.
+
+    :param ((str)->LayerBase)|None get_parent_layer:
+    :rtype: Subnetwork
+    """
+    from pprint import pformat
+    # noinspection PyProtectedMember
+    from returnn.tf.layers.rec import _TemplateLayer
+    subnet = self.net
+    net_dict = self._net_dict
+    assert "output" in net_dict, "%s: 'output' layer missing in %s" % (self, pformat(net_dict))
+    if "output" in subnet.layers:
+      return  # already constructed
+
+    # noinspection PyShadowingNames
+    def add_templated_layer(name, layer_class, **layer_desc):
+      """
+      :param str name:
+      :param type[LayerBase]|LayerBase layer_class:
+      :param layer_desc:
+      :rtype: LayerBase
+      """
+      layer_ = _TemplateLayer(name=name, network=subnet)
+      subnet.layers[name] = layer_
+      layer_desc = layer_desc.copy()
+      layer_desc["name"] = name
+      layer_desc["network"] = subnet
+      if "output" not in layer_desc:
+        layer_desc["output"] = layer_class.get_out_data_from_opts(**layer_desc)
+      layer_.init(layer_class=layer_class, **layer_desc)
+      if layer_class.recurrent:
+        subnet.recurrent = True
+      from tensorflow.python.util import nest
+      layers_flat = [v for v in nest.flatten(layer_desc) if isinstance(v, LayerBase)]
+      for dep_layer in layers_flat:
+        layer_.add_dependency(dep_layer, is_prev_time_frame=False)
+      return layer_
+
+    # noinspection PyShadowingNames
+    def get_templated_layer(name):
+      """
+      :param str name:
+      :rtype: _TemplateLayer|LayerBase
+      """
+      if name in subnet.layers:
+        layer_ = subnet.layers[name]
+        return layer_
+      if name.startswith("base:"):
+        # In any case, this should not get back to us.
+        if get_parent_layer:
+          return get_parent_layer(name[len("base:"):])
+        return subnet.get_layer(name)
+      return subnet.construct_layer(
+        net_dict=net_dict, name=name, get_layer=get_templated_layer, add_layer=add_templated_layer)
+
+    # We are doing template construction, so it is fine to wrap get_layer,
+    # because self.template implies that there is a boundary,
+    # i.e. the base/parent net can not directly access any sub layers here.
+    assert self.parent_cannot_access
+    get_templated_layer = self.get_layer_func(get_templated_layer)
+
+    try:
+      get_templated_layer("output")
+      assert "output" in subnet.layers
+
+      for layer_name, layer in net_dict.items():
+        if subnet.eval_flag and layer.get("loss"):  # only collect losses if we need them
+          get_templated_layer(layer_name)
+      for layer_name, layer in net_dict.items():
+        if layer.get("is_output_layer"):
+          get_templated_layer(layer_name)
+
+    except Exception as exc:
+      # Merge the exception message + further debug information all together into a single exception,
+      # which we will raise.
+      # This might get caught by some outer template construction and possibly be ignored.
+      import sys
+      etype, value, tb = sys.exc_info()
+      from returnn.util import better_exchook
+      from returnn.util.basic import StringIO
+      ss = StringIO()
+      print("%s: Exception constructing template network (for deps and data shapes): %s %s" % (
+        self, type(exc).__name__, exc), file=ss)
+      print("Template network so far:", file=ss)
+      from pprint import pprint
+      pprint(subnet.layers, stream=ss)
+      better_exchook.better_exchook(etype, value, tb, file=ss)
+      raise Exception(ss.getvalue())
+
+
 class TFNetworkParamsSerialized(object):
   """
   Holds all the params as numpy arrays, including auxiliary params.
@@ -2184,7 +2764,8 @@ class LossHolder:
       assert isinstance(layer, LayerBase)
     if reduce_func:
       loss.reduce_func = reduce_func
-    self.name = name
+    _, prefix = network.get_root_ctx_network()
+    self.name = prefix + name
     self.loss = loss
     self.layer_output = layer_output
     self.reduce_func = reduce_func
@@ -2472,7 +3053,7 @@ class NetworkConstructionDependencyLoopException(NetworkLayerException):
     :param list[str] constructing_layers:
     :param dict[str,dict[str]] net_dict:
     """
-    msg = "Error: There is a dependency loop on layer %r." % layer_name
+    msg = "%s: Error: There is a dependency loop on layer %r." % (network, layer_name)
     msg += "\nConstruction stack (most recent first):"
     for layer_name_ in reversed(constructing_layers):
       msg += "\n  %s" % layer_name_
