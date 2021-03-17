@@ -314,16 +314,19 @@ class RecLayer(_ConcatInputLayer):
           name=name, network=subnet,
           output=Data(name="dummy:RecLayer.transform_config_dict(%s)" % name, dim=1))
       from returnn.tf.network import TFNetwork, ExternData
-      subnet = TFNetwork(parent_net=network, extern_data=network.extern_data)  # dummy subnet
-      for sub in d["unit"].values():  # iterate over the layers of the subnet
+      subnet = TFNetwork(parent_net=network, extern_data=network.extern_data, name="%s(tmp)" % d["_name"])
+      for key, sub in d["unit"].items():  # iterate over the layers of the subnet
         assert isinstance(sub, dict)
         if "class" in sub:
           from .basic import get_layer_class
-          class_name = sub["class"]
+          sub = sub.copy()
+          class_name = sub.pop("class")
           cl = get_layer_class(class_name)
+          sub["_network"] = subnet
+          sub["_name"] = key
           # Operate on a copy because we will transform the dict later.
           # We only need this to resolve any other layer dependencies in the main network.
-          cl.transform_config_dict(sub.copy(), network=subnet, get_layer=sub_get_layer)
+          cl.transform_config_dict(sub, network=subnet, get_layer=sub_get_layer)
     if isinstance(d.get("max_seq_len"), str):
 
       def max_len_from(src):
@@ -969,7 +972,7 @@ class _SubnetworkRecCell(object):
     self.net_dict = safe_deep_copy(net_dict)
     from returnn.tf.network import TFNetwork, ExternData, LossHolder
     self.net = TFNetwork(
-      name="%s/%s:rec-subnet" % (parent_net.name, rec_layer_name),
+      name="%s/%s(rec-subnet)" % (parent_net.name, rec_layer_name),
       extern_data=ExternData(),
       train_flag=parent_net.train_flag,
       search_flag=parent_net.search_flag,
@@ -978,6 +981,7 @@ class _SubnetworkRecCell(object):
       is_inside_rec_layer=True,
       absolute_name_prefix="%s%s/" % (parent_net.get_absolute_name_prefix(), rec_layer_name),
       parent_net=parent_net)
+    self.net.is_root_in_ctx = True
     self.net.layers_desc.update(self.net_dict)
     if source_data:
       self.net.extern_data.data["source"] = (
@@ -1155,17 +1159,12 @@ class _SubnetworkRecCell(object):
         layer_desc["name"] = name
         layer_desc["network"] = self.net
         layer_.kwargs = layer_desc  # set it now already for better debugging
-        output = layer_class.get_out_data_from_opts(**layer_desc)
-        layer_.init(layer_class=layer_class, output=output, **layer_desc)
+        if "output" not in layer_desc:
+          layer_desc["output"] = layer_class.get_out_data_from_opts(**layer_desc)
+        layer_.init(layer_class=layer_class, **layer_desc)
         if layer_ in ConstructCtx.partially_finished:
           if lself.got_uninitialized_deps_count == 0:  # in this case, we safely know that it is finished
             ConstructCtx.partially_finished.remove(layer_)
-            # Sub-layers were also added to 'partially_finished' to re-init them as well if necessary.
-            # But 'add_templated_layer' is not called for sub-layers, so clean them up here as well.
-            for sub_layer in layer_.sub_layers.values():
-              if sub_layer in ConstructCtx.partially_finished:
-                ConstructCtx.partially_finished.remove(sub_layer)
-
         return layer_
 
       # noinspection PyMethodParameters
@@ -1216,26 +1215,6 @@ class _SubnetworkRecCell(object):
           if ConstructCtx.layers:
             ConstructCtx.layers[-1].add_dependency(layer_, is_prev_time_frame=False)
           return layer_
-        if '/' in name:
-          # this is probably a path to a sub-layer
-          root_name = name.split('/')[0]
-          # Get the root layer. Note, this will also add the root layer (and following layers) as a dependency
-          # to ConstructCtx.layers[-1] which is what we want (see below).
-          root_layer = lself.__call__(
-            ("prev:%s" % root_name) if is_prev_time_frame else root_name)
-          sub_layer = root_layer.get_sub_layer('/'.join(name.split('/')[1:]))  # get the sub-layer from the root-layer
-          if sub_layer:  # get_sub_layer returns None by default (if sub-layer not found)
-            # add to templates so we will collect output in self.get_output if this is an output layer
-            if isinstance(sub_layer, _TemplateLayer):
-              self.layer_data_templates[name] = sub_layer
-              if ConstructCtx.layers:
-                # Add the sub-layer to the dependencies just so we will visit it in self._move_outside_loop().
-                # Note, we don't add dependencies to the sub-layer, instead, the dependency graph continues via the root
-                # layer (see above).
-                ConstructCtx.layers[-1].add_dependency(sub_layer, is_prev_time_frame=is_prev_time_frame)
-                if sub_layer not in ConstructCtx.partially_finished:
-                  ConstructCtx.partially_finished.append(sub_layer)
-            return sub_layer
         # Need to create layer instance here now to not run into recursive loops.
         # We will extend it later in add_templated_layer().
         if name in self.layer_data_templates:  # might exist already
@@ -1245,6 +1224,7 @@ class _SubnetworkRecCell(object):
             name=name, network=self.net, cell=self,
             construct_stack=ConstructCtx.layers[-1] if ConstructCtx.layers else None)
           self.layer_data_templates[name] = layer_
+        res_layer = None
         if ConstructCtx.layers:
           ConstructCtx.layers[-1].add_dependency(layer_, is_prev_time_frame=is_prev_time_frame)
         if layer_ not in ConstructCtx.partially_finished:
@@ -1276,7 +1256,7 @@ class _SubnetworkRecCell(object):
           for get_layer in get_layer_candidates:
             # noinspection PyBroadException
             try:
-              self.net.construct_layer(
+              res_layer = self.net.construct_layer(
                 net_dict=self.net_dict, name=name,
                 get_layer=get_layer, add_layer=get_layer.add_templated_layer)
               if get_layer is default_get_layer:
@@ -1289,7 +1269,7 @@ class _SubnetworkRecCell(object):
             ConstructCtx.most_recent = list(ConstructCtx.layers)
             try:
               default_get_layer.reset()
-              self.net.construct_layer(
+              res_layer = self.net.construct_layer(
                 net_dict=self.net_dict, name=name,
                 get_layer=default_get_layer, add_layer=default_get_layer.add_templated_layer)
               default_success = True
@@ -1300,6 +1280,13 @@ class _SubnetworkRecCell(object):
                 raise
             except Exception:
               raise
+
+          if res_layer and res_layer is not layer_:
+            assert isinstance(res_layer, _TemplateLayer), "unexpected %s, via %s" % (res_layer, layer_)
+            assert res_layer.is_initialized, "unexpected %s, via %s" % (res_layer, layer_)
+            # Copy relevant information over to layer_ instance.
+            lself.add_templated_layer(
+              layer_class=res_layer.layer_class_type, **res_layer.kwargs)
 
         finally:
           assert ConstructCtx.layers[-1] is layer_, "invalid stack %r, expected top layer %r" % (
@@ -1452,12 +1439,6 @@ class _SubnetworkRecCell(object):
         prev_output=prev_outputs.get(name, None),
         rec_vars_prev_outputs=prev_extra.get(name, None))
 
-    from returnn.tf.util.basic import safe_deep_copy
-    net_dict = safe_deep_copy(self.net_dict)
-    for name in net_dict.keys():
-      if name in prev_layers:
-        net_dict[name]["rec_previous_layer"] = prev_layers[name]
-
     inputs_moved_out = {}  # type: typing.Dict[str,InternalLayer]
 
     # noinspection PyShadowingNames
@@ -1522,7 +1503,7 @@ class _SubnetworkRecCell(object):
         return None
       # noinspection PyBroadException
       try:
-        layer = self.net.construct_layer(net_dict, name=name, get_layer=get_layer)
+        layer = self.net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
         if self.net.search_flag:
           # Some layers are buggy to determine the right beam size at template construction time.
           # Usually this is because they ignore some of the dependencies in get_out_data_from_opts.
@@ -1767,7 +1748,9 @@ class _SubnetworkRecCell(object):
       :param tuple[int|None] element_shape:
       :param ()->(tf.Tensor|None) get:
       """
+      from returnn.tf.util.basic import get_valid_scope_name_from_str
       self.name = name
+      self.tf_scope_name = get_valid_scope_name_from_str(name.replace("/", "_"))
       self.dtype = dtype
       self.element_shape = element_shape
       self.get = get
@@ -1790,7 +1773,7 @@ class _SubnetworkRecCell(object):
         return ta
       else:
         self.get_returned_none = False
-        return ta.write(index=index, value=value, name="%s_acc_ta_write" % self.name)
+        return ta.write(index=index, value=value, name="%s_acc_ta_write" % self.tf_scope_name)
 
     def get_final_tensor_array(self, ta):
       """
@@ -1809,7 +1792,7 @@ class _SubnetworkRecCell(object):
     :return: output of shape (time, batch, dim), search choices
     :rtype: tf.Tensor
     """
-    from returnn.tf.util.basic import check_input_dim, tensor_array_stack, DimensionTag
+    from returnn.tf.util.basic import check_input_dim, tensor_array_stack, DimensionTag, get_valid_scope_name_from_str
 
     # The template network is already constructed at this point, but nothing else.
     self._check_output_template_shape()
@@ -2176,7 +2159,7 @@ class _SubnetworkRecCell(object):
       # Create a tensor array to store the intermediate values for each step i, e.g. of shape (batch, dim).
       init_acc_tas = [
         tf.TensorArray(
-          name="acc_ta_%s" % out.name,
+          name="acc_ta_%s" % out.tf_scope_name,
           dtype=out.dtype,
           element_shape=tf.TensorShape(out.element_shape),
           size=min_loop_len,
@@ -2462,10 +2445,12 @@ class _SubnetworkRecCell(object):
             assert loss.loss.layer, "sub loss init not called?"
             assert loss.name not in self.accumulated_losses, "loss name not unique"
             loss_value = tensor_array_stack(
-              self.final_acc_tas_dict["loss_%s" % loss.name], stop=max_seq_len, name="loss_%s_stack" % loss.name)
+              self.final_acc_tas_dict["loss_%s" % loss.name], stop=max_seq_len,
+              name="loss_%s_stack" % get_valid_scope_name_from_str(loss.name))
             if self.final_acc_tas_dict["error_%s" % loss.name] is not None:
               error_value = tensor_array_stack(
-                self.final_acc_tas_dict["error_%s" % loss.name], stop=max_seq_len, name="error_%s_stack" % loss.name)
+                self.final_acc_tas_dict["error_%s" % loss.name], stop=max_seq_len,
+                name="error_%s_stack" % get_valid_scope_name_from_str(loss.name))
             else:
               error_value = None
             loss_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
@@ -2820,29 +2805,35 @@ class _SubnetworkRecCell(object):
     self.input_layers_moved_out = []  # type: typing.List[str]
     self.output_layers_moved_out = []  # type: typing.List[str]
 
-    def output_can_move_out(layer):
+    def output_can_move_out(layer, _collocated=None):
       """
       :param _TemplateLayer layer:
+      :param set[_TemplateLayer]|None _collocated:
       :rtype: bool
       """
+      if _collocated is None:
+        _collocated = {layer}
+      else:
+        _collocated.add(layer)
       assert isinstance(layer, _TemplateLayer)
       # Special case: end-layer, which is added if the seq-len is unknown, cannot be moved out.
       if layer.name == "end":
         return False
       if self.parent_net.search_flag and layer.search_choices:
         return False  # need to perform the search inside the loop currently
-      if '/' in layer.name:  # True if this is a sub-layer
-        root_layer_name = layer.name.split('/')[0]
-        root_layer = self.layer_data_templates.get(root_layer_name)
-        assert root_layer, "Root layer '{}' not found for sub-layer '{}'.".format(root_layer_name, layer.name)
-        # sub-layers are in the same net as the root layer by definition
-        return output_can_move_out(root_layer)
+      if layer in layer.dependencies:  # recursive on itself
+        return False
       # layer.output is used by other layers?
       for other_layer in layers_in_loop:
+        if other_layer in _collocated:
+          continue
         if layer in other_layer.dependencies:
           return False
         if other_layer.name in layer.collocate_with:
-          return False
+          if output_can_move_out(other_layer, _collocated=_collocated):
+            pass  # this is ok, we can move all out
+          else:
+            return False
       return True
 
     def find_output_layer_to_move_out():
@@ -2873,12 +2864,6 @@ class _SubnetworkRecCell(object):
       if self.parent_net.search_flag and layer.search_choices:
         return False  # need to perform the search inside the loop currently
       layer_deps = layer.dependencies
-      if '/' in layer.name:  # True if this is a sub-layer
-        root_layer_name = layer.name.split('/')[0]
-        root_layer = self.layer_data_templates.get(root_layer_name)
-        assert root_layer, "Root layer '{}' not found for sub-layer '{}'.".format(root_layer_name, layer.name)
-        # sub-layers are in the same net as the root layer by definition
-        return input_can_move_out(root_layer)
       # We depend on other layers from this sub-network?
       for other_layer in layers_in_loop:
         if other_layer in layer_deps:
@@ -2916,6 +2901,7 @@ class _SubnetworkRecCell(object):
       output_layer = find_output_layer_to_move_out()
       if output_layer:
         output_move_out(output_layer)
+        continue  # greedy on output layers
       input_layer = find_input_layer_to_move_out()
       if input_layer:
         input_move_out(input_layer)
@@ -2963,13 +2949,14 @@ class _SubnetworkRecCell(object):
     from .base import InternalLayer
     from returnn.tf.util.basic import concat_with_opt_broadcast
     self.input_layers_net = TFNetwork(
-      name="%s/%s:rec-subnet-input" % (
+      name="%s/%s(rec-subnet-input)" % (
         self.parent_net.name, self.parent_rec_layer.name if self.parent_rec_layer else "?"),
       extern_data=ExternData(),
       train_flag=self.parent_net.train_flag,
       search_flag=self.parent_net.search_flag,
       parent_layer=self.parent_rec_layer,
       parent_net=self.parent_net)
+    self.input_layers_net.is_root_in_ctx = True
     self.input_layers_net.layers_desc.update(self.net_dict)
     if self.parent_rec_layer.input_data:
       self.input_layers_net.extern_data.data["source"] = \
@@ -3064,13 +3051,14 @@ class _SubnetworkRecCell(object):
     else:
       time_dim_tag = None
     self.output_layers_net = TFNetwork(
-      name="%s/%s:rec-subnet-output" % (
+      name="%s/%s(rec-subnet-output)" % (
         self.parent_net.name, self.parent_rec_layer.name if self.parent_rec_layer else "?"),
       extern_data=ExternData(),
       train_flag=self.parent_net.train_flag,
       search_flag=self.parent_net.search_flag,
       parent_layer=self.parent_rec_layer,
       parent_net=self.parent_net)
+    self.output_layers_net.is_root_in_ctx = True
     self.output_layers_net.layers_desc.update(self.net_dict)
     if self.parent_rec_layer.input_data:
       self.output_layers_net.extern_data.data["source"] = \
@@ -3259,7 +3247,6 @@ class _TemplateLayer(LayerBase):
     self.construct_stack = construct_stack
     self._template_base = None  # type: typing.Optional[_TemplateLayer]
     self._cell = cell
-    self.sub_layers = {}  # type: typing.Dict[str,_TemplateLayer]  # layer name -> layer
 
   def __repr__(self):
     if self.is_initialized:
@@ -3311,13 +3298,17 @@ class _TemplateLayer(LayerBase):
     assert res, "Could not get out data for sub-layer template {}.".format(full_layer_name)
     output, network, sub_layer_class = res
 
-    # The sub-layer might be referenced as a dependency in other layers, so we have to store and update the layer
-    # instead of creating a new instance if we get called several times.
-    sub_layer_template = self.sub_layers.get(layer_name, _TemplateLayer(self.network, full_layer_name))
+    # Rec sub layer GetLayer might not use this layer instance directly
+    # but just copy out the template information into an own template layer instance,
+    # but this should not matter here.
+    sub_layer_template = _TemplateLayer(network=self.network, name=full_layer_name)
     is_output_layer = self.is_output_layer()  # make sub-layers output layers too
-    sub_layer_template.init(output, sub_layer_class, is_output_layer=is_output_layer,
-                            name=full_layer_name, network=network)
-    self.sub_layers.setdefault(layer_name, sub_layer_template)
+    sub_layer_template.init(
+      output=output, layer_class=sub_layer_class, is_output_layer=is_output_layer,
+      name=full_layer_name, network=network,
+      # We never get here via SubnetworkLayer but only when we explicitly need get_sub_layer,
+      # so this must be collocated with the parent.
+      collocate_with=[self.name])
     return sub_layer_template
 
   def copy_as_prev_time_frame(self, prev_output=None, rec_vars_prev_outputs=None):
@@ -3373,7 +3364,7 @@ class _TemplateLayer(LayerBase):
       # This is from the template construction, a layer in _SubnetworkRecCell.layer_data_templates.
       # Maybe we already have the layer constructed.
       real_layer = self.network.layers.get(self.name)
-      if real_layer:
+      if real_layer and real_layer is not self:
         return real_layer.get_dep_layers()
       # All refs to this subnet are other _TemplateLayer, no matter if prev-frame or not.
       # Otherwise, refs to the base network are given as-is.
@@ -3455,7 +3446,7 @@ class _TemplateLayer(LayerBase):
     # This is from the template construction, a layer in _SubnetworkRecCell.layer_data_templates.
     # Maybe we already have the layer constructed.
     real_layer = self.network.layers.get(self.name)
-    if real_layer:
+    if real_layer and real_layer is not self:
       return real_layer.get_search_choices()
     return super(_TemplateLayer, self).get_search_choices()
 
@@ -4287,6 +4278,7 @@ class BaseChoiceLayer(LayerBase):
     :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
+    super(BaseChoiceLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     if "rec_previous_layer" in d:
       prev_layer = d["rec_previous_layer"]
       assert isinstance(prev_layer, _TemplateLayer)
@@ -4296,7 +4288,6 @@ class BaseChoiceLayer(LayerBase):
       # as it might not be in the search choices sequence.
       # But we actually do not care at all about it, and do not use it. So just reset.
       d["rec_previous_layer"] = None
-    super(BaseChoiceLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
 
 class ChoiceLayer(BaseChoiceLayer):
@@ -6622,11 +6613,16 @@ class MaskedComputationLayer(LayerBase):
   layer_class = "masked_computation"
   recurrent = True
 
-  def __init__(self, mask, unit, masked_from, _parent_layer_cache=None, **kwargs):
+  def __init__(self, mask, unit, masked_from,
+               _layer_class, _layer_desc,
+               _parent_layer_cache=None,
+               **kwargs):
     """
     :param LayerBase|None mask:
     :param dict[str] unit:
     :param LayerBase|None masked_from:
+    :param type[LayerBase] _layer_class:
+    :param dict[str] _layer_desc:
     :param dict[str,LayerBase]|None _parent_layer_cache:
     """
     from returnn.tf.network import get_layer_class
@@ -6717,16 +6713,21 @@ class MaskedComputationLayer(LayerBase):
       sub_layers[sub_layer_name] = source
       return source
 
+    extra_net = self.network.make_extra_net(
+      prefix_name="extra._internal.masked(%s)" % self.name, boundary=True)
     layer_desc = unit.copy()
     class_name = layer_desc.pop("class")
     layer_class = get_layer_class(class_name)
-    layer_class.transform_config_dict(layer_desc, network=self.network, get_layer=sub_get_layer)
-    # noinspection PyProtectedMember
-    layer_desc = self.network._create_layer_layer_desc(name=self.name, layer_desc=layer_desc)
-    layer_desc["output"] = self.output.copy_template(name="%s_output" % self.name)
+    layer_desc["_network"] = extra_net
+    layer_desc["_name"] = self.name
     layer_desc["rec_previous_layer"] = self._rec_previous_layer
+    layer_class.transform_config_dict(layer_desc, network=extra_net, get_layer=sub_get_layer)
+    # noinspection PyProtectedMember
+    layer_desc = extra_net._create_layer_layer_desc(name=self.name, layer_desc=layer_desc)
+    layer_desc["output"] = self.output.copy_template(name="%s_output" % self.name)
 
     self.sub_layer = layer_class(**layer_desc)
+    assert isinstance(self.sub_layer, LayerBase)
     self.sub_layer.post_init(layer_desc)
     self.output = self.sub_layer.output.copy(name="%s_output" % self.name)
     self.rec_vars_outputs = self.sub_layer.rec_vars_outputs.copy()
@@ -6738,6 +6739,7 @@ class MaskedComputationLayer(LayerBase):
       assert self.output.is_batch_major
       prev_out = self.output.copy_template()
       prev_out.placeholder = self._rec_previous_layer.rec_vars_outputs["_output"]
+      prev_out.sanity_check()
       mask_t = self.mask.output.placeholder
       self.output.placeholder = where_bc(
         condition=tf.reshape(mask_t, [-1] + [1] * (self.output.batch_ndim - 1)),  # add broadcast dims
@@ -6793,8 +6795,8 @@ class MaskedComputationLayer(LayerBase):
     super(MaskedComputationLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     # Just call it for dep resolution.
     parent_layer_cache = d.setdefault("_parent_layer_cache", {})
-    cls._create_template(
-      name=d.get("name", "unknown-masked-subnet"), network=network, sources=d["sources"], masked_from=masked_from,
+    d["_layer_class"], d["_layer_desc"] = cls._create_template(
+      name=d["_name"], network=network, sources=d["sources"], masked_from=masked_from,
       unit=d["unit"],
       get_layer=get_layer, _parent_layer_cache=parent_layer_cache)
     if masked_from and not parent_layer_cache:
@@ -6856,6 +6858,7 @@ class MaskedComputationLayer(LayerBase):
       if _parent_layer_cache and sub_layer_name in _parent_layer_cache:
         layer = _parent_layer_cache[sub_layer_name]
       else:
+        assert not sub_layer_name.startswith(extra_net.extra_name_prefix + ":")
         layer = get_layer(sub_layer_name)
         if not layer:
           return layer
@@ -6872,12 +6875,21 @@ class MaskedComputationLayer(LayerBase):
           output=source_data)
       return layer
 
+    extra_net = network.make_extra_net(
+      prefix_name="extra._internal_template.masked(%s)" % name,
+      # There should be no need by the base get_layer to get back to us.
+      # Nothing from the base/parent will access directly into this extra/sub network,
+      # so we can safely place a boundary here.
+      # Also, any subnet here must be only a template construction.
+      only_template=True, boundary=True)
     layer_desc = unit.copy()
     class_name = layer_desc.pop("class")
     layer_class = get_layer_class(class_name)
-    layer_class.transform_config_dict(layer_desc, network=network, get_layer=sub_get_layer)
+    layer_desc["_network"] = extra_net
+    layer_desc["_name"] = name
+    layer_class.transform_config_dict(layer_desc, network=extra_net, get_layer=sub_get_layer)
     # noinspection PyProtectedMember
-    layer_desc = network._create_layer_layer_desc(name=name, layer_desc=layer_desc)
+    layer_desc = extra_net._create_layer_layer_desc(name=name, layer_desc=layer_desc)
     return layer_class, layer_desc
 
   @classmethod
@@ -6886,7 +6898,7 @@ class MaskedComputationLayer(LayerBase):
     :param returnn.tf.network.TFNetwork network:
     :rtype: Data
     """
-    layer_class, layer_desc = cls._create_template(network=network, **kwargs)
+    layer_class, layer_desc = kwargs["_layer_class"], kwargs["_layer_desc"]
     output = layer_class.get_out_data_from_opts(**layer_desc)
     if network.is_inside_rec_layer():
       output = output.copy_as_batch_major()
@@ -6921,7 +6933,8 @@ class MaskedComputationLayer(LayerBase):
       sub_layer_class = sub_layer.__class__
     else:
       sub_layer = None
-      sub_layer_class, sub_layer_kwargs = cls._create_template(name=name, network=network, **kwargs)
+      sub_layer_class, sub_layer_kwargs = kwargs["_layer_class"], kwargs["_layer_desc"]
+      assert issubclass(sub_layer_class, LayerBase) and isinstance(sub_layer_kwargs, dict)
       sub_layer_kwargs["output"] = output
     for loss in sub_layer_class.get_losses(reduce_func=reduce_func, layer=sub_layer, **sub_layer_kwargs):
       assert isinstance(loss, LossHolder)
@@ -6945,7 +6958,8 @@ class MaskedComputationLayer(LayerBase):
     :param returnn.tf.layers.rec.RecLayer rec_layer:
     :rtype: dict[str,tf.Tensor]
     """
-    layer_class, layer_desc = cls._create_template(**kwargs)
+    layer_class, layer_desc = kwargs["_layer_class"], kwargs["_layer_desc"]
+    assert issubclass(layer_class, LayerBase) and isinstance(layer_desc, dict)
     name = kwargs["name"]
     output = kwargs["output"]
     assert isinstance(name, str)
@@ -6966,7 +6980,8 @@ class MaskedComputationLayer(LayerBase):
     :rtype: dict[str,tf.TensorShape]
     """
     # Very similar to get_rec_initial_extra_outputs.
-    layer_class, layer_desc = cls._create_template(**kwargs)
+    layer_class, layer_desc = kwargs["_layer_class"], kwargs["_layer_desc"]
+    assert issubclass(layer_class, LayerBase) and isinstance(layer_desc, dict)
     name = kwargs["name"]
     output = kwargs["output"]
     assert isinstance(name, str)

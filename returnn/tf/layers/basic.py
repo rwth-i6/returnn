@@ -360,6 +360,9 @@ class SelectSearchSourcesLayer(InternalLayer):
     assert isinstance(layer, LayerBase)
     if not search_choices:
       return layer
+    if layer.network.is_extra_internal_template_construction():
+      assert layer.output.placeholder is None  # we expect a template
+      return layer
     layer_search_choices = layer.get_search_choices()
     if layer_search_choices and layer_search_choices.keep_raw:
       return layer
@@ -6255,7 +6258,9 @@ class CondLayer(LayerBase):
   layer_class = "cond"
   recurrent = True  # unclear
 
-  def __init__(self, condition, true_layer, false_layer, **kwargs):
+  def __init__(self, condition, true_layer, false_layer,
+               _condition_network=None, _true_layer_network=None, _false_layer_network=None,
+               **kwargs):
     """
     :param LayerBase|dict[str] condition:
     :param LayerBase|dict[str] true_layer:
@@ -6265,7 +6270,7 @@ class CondLayer(LayerBase):
     import os
     self._parent_scope = os.path.dirname(tf_compat.v1.get_variable_scope().name)
     self.condition_desc = condition
-    self.condition_layer = self._make_layer(self.condition_desc)
+    self.condition_layer = self._make_layer("condition", self.condition_desc)
     self.true_layer_desc = true_layer
     self.true_layer = None  # type: typing.Optional[LayerBase]
     self.false_layer_desc = false_layer
@@ -6300,15 +6305,16 @@ class CondLayer(LayerBase):
     return out.placeholder, [out.size_placeholder[i] for i in sorted(out_template.size_placeholder.keys())]
 
   def _true_fn(self):
-    self.true_layer = self._make_layer(self.true_layer_desc)
+    self.true_layer = self._make_layer("true_layer", self.true_layer_desc)
     return self._cond_layer_return(self.true_layer)
 
   def _false_fn(self):
-    self.false_layer = self._make_layer(self.false_layer_desc)
+    self.false_layer = self._make_layer("false_layer", self.false_layer_desc)
     return self._cond_layer_return(self.false_layer)
 
-  def _make_layer(self, layer_desc):
+  def _make_layer(self, net_name, layer_desc):
     """
+    :param str net_name:
     :param LayerBase|dict[str] layer_desc:
     :rtype: LayerBase
     """
@@ -6317,10 +6323,14 @@ class CondLayer(LayerBase):
     layer_desc = layer_desc.copy()
     layer_class = layer_desc.pop("class")
     assert issubclass(layer_class, LayerBase)
+    extra_net = self.network.make_extra_net(
+      prefix_name="extra._internal.%s(%s)" % (self.name, net_name),
+      net_name="%s/%s(%s)" % (self.network.name, self.name, net_name),
+      boundary=True)
     from returnn.tf.util.basic import reuse_name_scope
     with reuse_name_scope(self._parent_scope, absolute=True):
       # noinspection PyProtectedMember
-      layer = self.network._create_layer(
+      layer = extra_net._create_layer(
         name=self.name,  # use our name, such that we get the same name space
         layer_class=layer_class,
         **layer_desc)
@@ -6341,10 +6351,17 @@ class CondLayer(LayerBase):
       d[key] = get_layer(layer_desc)
       return
     assert isinstance(layer_desc, dict)
+    name = d["_name"]
+    extra_net = network.make_extra_net(
+      prefix_name="extra._internal_template.%s(%s)" % (name, key), net_name="%s/%s(%s)" % (network.name, name, key),
+      boundary=True, only_template=True)
+    d["_%s_network" % key] = extra_net
     layer_desc = layer_desc.copy()
     class_name = layer_desc.pop("class")
     layer_class = get_layer_class(class_name)
-    layer_class.transform_config_dict(layer_desc, network=network, get_layer=get_layer)
+    layer_desc["_network"] = extra_net
+    layer_desc["_name"] = name
+    layer_class.transform_config_dict(layer_desc, network=extra_net, get_layer=get_layer)
     layer_desc["class"] = layer_class  # will later pop again
     d[key] = layer_desc
 
@@ -6418,9 +6435,12 @@ class SubnetworkLayer(LayerBase):
   recurrent = True  # we don't know. depends on the subnetwork.
 
   # noinspection PyShadowingNames
-  def __init__(self, subnetwork, concat_sources=True, load_on_init=None,
+  def __init__(self, subnetwork,
+               _subnet, _output,
+               concat_sources=True, load_on_init=None,
                dropout=0, dropout_noise_shape=None,
-               _parent_layer_cache=None, **kwargs):
+               _parent_layer_cache=None, _from=None,
+               **kwargs):
     """
     :param dict[str,dict] subnetwork: subnetwork as dict (JSON content). must have an "output" layer-
     :param bool concat_sources: if we concatenate all sources into one, like it is standard for most other layers
@@ -6429,69 +6449,75 @@ class SubnetworkLayer(LayerBase):
     :param float dropout: will be applied if train_flag is set
     :param tuple|list|dict|None dropout_noise_shape:
     :param dict[str,LayerBase]|None _parent_layer_cache:
+    :param returnn.tf.network.Subnetwork _subnet:
+    :param LayerBase _output:
     """
     super(SubnetworkLayer, self).__init__(**kwargs)
-    from returnn.tf.network import TFNetwork
-    sub_extern_data = self._get_subnet_extern_data(
-      base_network=self.network,
-      sources=self.sources, concat_sources=concat_sources,
-      dropout=dropout, dropout_noise_shape=dropout_noise_shape)
-    net = TFNetwork(
-      name="%s/%s:subnet" % (self.network.name, self.name),
-      extern_data=sub_extern_data,
-      train_flag=self.network.train_flag,
-      search_flag=self.network.search_flag,
-      parent_layer=self)
+    if _subnet.template:
+      subnetwork = subnetwork.copy()
+      _subnet = self.network.make_subnet(
+        name=self.name,
+        opts=dict(
+          subnetwork=subnetwork,
+          _from=_from, concat_sources=concat_sources,
+          dropout=dropout, dropout_noise_shape=dropout_noise_shape,
+          **kwargs))
+      assert not _subnet.template, "%s, net %s, subnet %r" % (self, self.network, _subnet)
+      self._update_for_rec_previous_layer(self._rec_previous_layer, subnetwork, _subnet.net)
+      _subnet.construct_layer("output")
+    net = _subnet.net
     if _parent_layer_cache:
       net.layers.update({"base:%s" % name: layer for (name, layer) in _parent_layer_cache.items()})
-    if self._rec_previous_layer:
-      # Make some rec_previous_layer for the subnet layers.
-      subnetwork = subnetwork.copy()
-      for layer_name in list(subnetwork.keys()):
-        # The actual layer is not so important.
-        # In some cases (e.g. RnnCellLayer), we just want rec_vars_outputs.
-        dummy_rec_previous_layer = InternalLayer(
-          name=layer_name, network=net,
-          output=Data(name="dummy_rec_previous_layer(%s)" % layer_name, dim=1))
-        dummy_rec_previous_layer.rec_vars_outputs.update({
-          key[len(layer_name + "/"):]: value
-          for (key, value) in self._rec_previous_layer.rec_vars_outputs.items()
-          if key.startswith(layer_name + "/")})
-        subnetwork[layer_name] = subnetwork[layer_name].copy()
-        subnetwork[layer_name]["rec_previous_layer"] = dummy_rec_previous_layer
-    if concat_sources:
-      net.get_layer("data").sources.extend(self.sources)  # add deps, now
-    net.construct_from_dict(subnetwork)
+    self.subnetwork_ = _subnet
     self.subnetwork = net
     if self.network.eval_flag:
       self.subnetwork.maybe_construct_objective()
     self.output = net.get_default_output_layer().output
-    # See _get_subnet_extern_data for which data keys we expect to be used.
-    if concat_sources:
-      assert sub_extern_data.default_input in self.subnetwork.used_data_keys, "%s: inputs are not used" % self
-    else:
-      # See _get_subnet_extern_data below.
-      for i, source in enumerate(self.sources):
-        potential_names = {str(i), source.name}
-        if i == 0:
-          potential_names.add(sub_extern_data.default_input)
-        if not potential_names.intersection(self.subnetwork.used_data_keys):
-          print("%s: Warning: input %i (%s) is not used" % (self, i, source), file=log.v3)
-    self._update_used_data_keys()
-    for layer in net.layers.values():
-      if layer.network is not net:  # e.g. copied "base" layers or so
-        continue
-      if layer.params:
-        assert layer.trainable == self.trainable, "partly trainable subnetworks not yet supported"
-      self.params.update({"%s/%s" % (layer.name, k): v for (k, v) in layer.params.items()})
+    self.update_params_from_subnet()
+    self.update_rec_vars_outputs()
+    self.load_on_init = load_on_init
+    self.update_load_on_init()
+
+  def update_params_from_subnet(self):
+    """
+    Update self.params.
+    """
+    # Very generic way to collect all created params.
+    import re
+    scope_name_prefix = self.get_absolute_name_scope_prefix()
+    params = tf_compat.v1.get_collection(
+      tf_compat.v1.GraphKeys.GLOBAL_VARIABLES, scope=re.escape(scope_name_prefix))
+    for p in params:
+      assert p.name.startswith(scope_name_prefix) and p.name.endswith(":0")
+      param_name = p.name[len(scope_name_prefix):-len(":0")]
+      self.params[param_name] = p
+
+      # Sublayers do not know whether the RecLayer is trainable.
+      # If it is not, we need to mark all defined parameters as untrainable.
+      if not self.trainable:
+        trainable_collection_ref = p.graph.get_collection_ref(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES)
+        if p in trainable_collection_ref:
+          trainable_collection_ref.remove(p)
+
+  def update_rec_vars_outputs(self):
+    """
+    Update self.rec_vars_outputs.
+    """
+    for layer in self.subnetwork.layers.values():
       self.rec_vars_outputs.update({"%s/%s" % (layer.name, k): v for (k, v) in layer.rec_vars_outputs.items()})
+
+  def update_load_on_init(self):
+    """
+    Handle load_on_init.
+    """
+    from returnn.tf.network import CustomCheckpointLoader
+    load_on_init = self.load_on_init
     if load_on_init:
       if callable(load_on_init):
         load_on_init = load_on_init()
       print("loading initial weights from", load_on_init, file=log.v2)
       self_prefix = self.get_absolute_name_scope_prefix()  # with "/" at end
-      from returnn.tf.network import CustomCheckpointLoader
-      opts = dict(saveable_params=list(self.params.values()), params_prefix=self_prefix, network=net)
+      opts = dict(saveable_params=list(self.params.values()), params_prefix=self_prefix, network=self.subnetwork)
       if isinstance(load_on_init, str):
         opts["filename"] = load_on_init
       elif isinstance(load_on_init, dict):
@@ -6501,59 +6527,41 @@ class SubnetworkLayer(LayerBase):
       loader = CustomCheckpointLoader(**opts)
       loader.set_as_custom_init()
 
-  # noinspection PyShadowingNames
   @classmethod
-  def _get_subnet_extern_data(cls, base_network, sources, concat_sources, dropout=0, dropout_noise_shape=None):
+  def _update_for_rec_previous_layer(cls, rec_previous_layer, subnet_dict, subnet):
     """
-    :param returnn.tf.network.TFNetwork base_network:
-    :param list[LayerBase] sources:
-    :param bool concat_sources:
-    :param float dropout: will be applied if train_flag is set
-    :param tuple|list|dict|None dropout_noise_shape:
-    :rtype: TFNetwork.ExternData
+    :param LayerBase|None rec_previous_layer:
+    :param dict[str] subnet_dict:
+    :param returnn.tf.network.TFNetwork subnet:
     """
-    from returnn.tf.network import ExternData
-    sub_extern_data = ExternData()
-    if concat_sources:
-      sub_extern_data.data[sub_extern_data.default_input] = (
-        concat_sources_with_opt_dropout(
-          sources, dropout=dropout, dropout_noise_shape=dropout_noise_shape))
-    else:
-      assert not dropout, "not implemented without concat_sources"
-      for i, source in enumerate(sources):
-        assert isinstance(source, LayerBase)
-        sub_extern_data.data[source.name] = source.output
-        sub_extern_data.data[str(i)] = source.output
-        if i == 0:
-          sub_extern_data.data[sub_extern_data.default_input] = source.output
-    # Copy data (e.g. target classes) over from base network.
-    for key, data in base_network.extern_data.data.items():
-      sub_extern_data.data.setdefault(key, data)
-    return sub_extern_data
-
-  def _update_used_data_keys(self):
-    # Maybe update self.network.used_data_keys.
-    for key in self.subnetwork.used_data_keys:
-      if self.subnetwork.extern_data.data[key] is self.network.extern_data.data.get(key, None):
-        self.network.used_data_keys.add(key)
+    if not rec_previous_layer:
+      return
+    # Make some rec_previous_layer for the subnet layers.
+    for layer_name in list(subnet_dict.keys()):
+      # The actual layer is not so important.
+      # In some cases (e.g. RnnCellLayer), we just want rec_vars_outputs.
+      dummy_rec_previous_layer = InternalLayer(
+        name=layer_name, network=subnet,
+        output=Data(name="dummy_rec_previous_layer(%s)" % layer_name, dim=1))
+      dummy_rec_previous_layer.rec_vars_outputs.update({
+        key[len(layer_name + "/"):]: value
+        for (key, value) in rec_previous_layer.rec_vars_outputs.items()
+        if key.startswith(layer_name + "/")})
+      if dummy_rec_previous_layer.rec_vars_outputs:
+        subnet_dict[layer_name] = subnet_dict[layer_name].copy()
+        subnet_dict[layer_name]["rec_previous_layer"] = dummy_rec_previous_layer
 
   # noinspection PyShadowingNames
   @classmethod
-  def get_out_data_from_opts(cls, subnetwork, concat_sources=True, n_out=NotSpecified, out_type=None, **kwargs):
+  def get_out_data_from_opts(cls, n_out=NotSpecified, out_type=None, **kwargs):
     """
-    :param dict[str,dict[str]] subnetwork:
-    :param bool concat_sources:
     :param int|None|NotSpecified n_out:
     :param dict[str]|None out_type:
     :rtype: Data
     """
-    if n_out is not NotSpecified or out_type:
-      return super(SubnetworkLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, **kwargs)
-    subnet = cls._construct_template_subnet(
-      name=kwargs["name"], network=kwargs["network"], parent_layer_cache=kwargs.get("_parent_layer_cache", None),
-      subnetwork=subnetwork,
-      concat_sources=concat_sources, sources=kwargs["sources"])
-    return subnet.layers["output"].output
+    output = kwargs["_output"]
+    assert isinstance(output, LayerBase)
+    return output.output.copy()
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -6562,160 +6570,31 @@ class SubnetworkLayer(LayerBase):
     :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
+    # Note that in the common cases, this transform_config_dict is actually *not* called,
+    # because net.construct_layer directly gets the Subnetwork via cls_get_sub_network.
+    # This is only called when we explicitly construct the layer itself.
+    name = d["_name"]
+    # Make sure the Subnetwork instance is created.
+    # This works both in case of template construction or for real construction.
+    # See Subnetwork for determining whether this is supposed to be a template or real.
+    subnet = cls.cls_get_sub_network(network=network, name=name, layer_desc=d)
+    cls._update_for_rec_previous_layer(d.get("rec_previous_layer"), d["subnetwork"], subnet.net)
+    d["_subnet"] = subnet
+    # In case of non-template construction, this will trigger the non-template construction of our "output" sublayer.
+    d["_output"] = subnet.construct_layer("output", parent_get_layer=get_layer)
+    d["_from"] = d.get("from", "data")  # cache this
+    d["from"] = []  # disable now. we should get them in the template construction when needed
     super(SubnetworkLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
-    # Construct it now, just to resolve dependencies.
-    cls._construct_template_subnet(
-      name=d.get("name", "unknown-subnet"),
-      network=network, get_parent_layer=get_layer, parent_layer_cache=d.setdefault("_parent_layer_cache", {}),
-      subnetwork=d["subnetwork"],
-      concat_sources=d.get("concat_sources", True), sources=d["sources"])
 
-  # noinspection PyShadowingNames
   @classmethod
-  def _construct_template_subnet(cls, name, network, subnetwork, sources, concat_sources=True,
-                                 get_parent_layer=None, parent_layer_cache=None):
+  def cls_get_sub_network(cls, name, network, layer_desc):
     """
-    Very similar to _SubnetworkRecCell._construct_template, but simpler.
-
     :param str name:
-    :param returnn.tf.network.TFNetwork network: parent net
-    :param dict[str,dict[str]] subnetwork:
-    :param list[LayerBase] sources:
-    :param bool concat_sources:
-    :param (str)->LayerBase get_parent_layer:
-    :param dict[str,LayerBase]|None parent_layer_cache:
-    :rtype: returnn.tf.network.TFNetwork
-    """
-    assert "output" in subnetwork
-    from returnn.tf.network import TFNetwork
-    from .rec import _TemplateLayer
-    if not get_parent_layer:
-      get_parent_layer = network.get_layer
-    # Placeholder, will not be used.
-    sub_extern_data = cls._get_subnet_extern_data(
-      base_network=network, sources=sources, concat_sources=concat_sources)
-    subnet = TFNetwork(
-      name="%s/%s:subnet" % (network.name, name),
-      extern_data=sub_extern_data,
-      train_flag=network.train_flag,
-      search_flag=network.search_flag,
-      parent_net=network,
-      rnd_seed=0)  # seed 0, will not be used, as we only construct the templates
-
-    # noinspection PyShadowingNames
-    def add_templated_layer(name, layer_class, **layer_desc):
-      """
-      :param str name:
-      :param type[LayerBase]|LayerBase layer_class:
-      :param dict[str] layer_desc:
-      :rtype: LayerBase
-      """
-      layer_ = _TemplateLayer(name=name, network=subnet)
-      subnet.layers[name] = layer_
-      layer_desc = layer_desc.copy()
-      layer_desc["name"] = name
-      layer_desc["network"] = subnet
-      output = layer_class.get_out_data_from_opts(**layer_desc)
-      layer_.init(layer_class=layer_class, output=output, **layer_desc)
-      if layer_class.recurrent:
-        subnet.recurrent = True
-      return layer_
-
-    # noinspection PyShadowingNames
-    def get_templated_layer(name):
-      """
-      :param str name:
-      :rtype: _TemplateLayer|LayerBase
-      """
-      if name in subnet.layers:
-        layer_ = subnet.layers[name]
-        return layer_
-      if name.startswith("base:"):
-        parent_name = name[len("base:"):]
-        if parent_layer_cache and parent_name in parent_layer_cache:
-          return parent_layer_cache[parent_name]
-        layer_ = get_parent_layer(parent_name)
-        if parent_layer_cache is not None:
-          parent_layer_cache[parent_name] = layer_
-        return layer_
-      return subnet.construct_layer(
-        net_dict=subnetwork, name=name, get_layer=get_templated_layer, add_layer=add_templated_layer)
-
-    try:
-      get_templated_layer("output")
-      assert "output" in subnet.layers
-
-      for layer_name, layer in subnetwork.items():
-        if network.eval_flag and layer.get("loss"):  # only collect losses if we need them
-          get_templated_layer(layer_name)
-      for layer_name, layer in subnetwork.items():
-        if layer.get("is_output_layer"):
-          get_templated_layer(layer_name)
-
-    except Exception as exc:
-      import sys
-      etype, value, tb = sys.exc_info()
-      from returnn.util import better_exchook
-      from returnn.util.basic import StringIO
-      ss = StringIO()
-      print("%s %r: Exception constructing template network (for deps and data shapes): %s %s" % (
-        cls.__name__, name, type(exc).__name__, exc), file=ss)
-      print("Template network so far:", file=ss)
-      from pprint import pprint
-      pprint(subnet.layers, stream=ss)
-      better_exchook.better_exchook(etype, value, tb, file=ss)
-      raise Exception(ss.getvalue())
-
-    return subnet
-
-  def get_constraints_value(self):
-    """
-    :rtype: tf.Tensor|None
-    """
-    v = self.subnetwork.get_total_constraints()
-    if v is 0:
-      return None
-    return v
-
-  @classmethod
-  def get_losses(cls, name, network, output, loss=None, reduce_func=None, layer=None, **kwargs):
-    """
-    :param str name: layer name
     :param returnn.tf.network.TFNetwork network:
-    :param Loss|None loss: argument just as for __init__
-    :param Data output: the output (template) for the layer
-    :param LayerBase|None layer:
-    :param ((tf.Tensor)->tf.Tensor)|None reduce_func:
-    :param kwargs: other layer kwargs
-    :rtype: list[returnn.tf.network.LossHolder]
+    :param dict[str] layer_desc:
+    :rtype: returnn.tf.network.Subnetwork|None
     """
-    from returnn.tf.network import LossHolder
-    from .rec import _TemplateLayer
-    losses = super(SubnetworkLayer, cls).get_losses(
-      name=name, network=network, output=output, loss=loss, layer=layer, reduce_func=reduce_func, **kwargs)
-    if layer:
-      assert isinstance(layer, SubnetworkLayer)
-      subnet = layer.subnetwork
-    else:
-      subnet = cls._construct_template_subnet(
-        name=name, network=network, subnetwork=kwargs["subnetwork"],
-        parent_layer_cache=kwargs.get("_parent_layer_cache", None),
-        sources=kwargs["sources"], concat_sources=kwargs.get("concat_sources", True))
-    for layer_name, sub_layer in sorted(subnet.layers.items()):
-      if layer:
-        assert isinstance(layer, SubnetworkLayer)
-        sub_layer_class = sub_layer.__class__
-        real_sub_layer = sub_layer
-      else:
-        real_sub_layer = None
-        assert isinstance(sub_layer, _TemplateLayer)
-        assert issubclass(sub_layer.layer_class_type, LayerBase)
-        sub_layer_class = sub_layer.layer_class_type
-      for loss in sub_layer_class.get_losses(reduce_func=reduce_func, layer=real_sub_layer, **sub_layer.kwargs):
-        assert isinstance(loss, LossHolder)
-        losses.append(loss.copy_new_base(
-          network=network, name="%s/%s" % (name, loss.name)))
-    return losses
+    return network.make_subnet(name, opts=layer_desc)
 
   def get_sub_layer(self, layer_name):
     """
@@ -6747,10 +6626,10 @@ class SubnetworkLayer(LayerBase):
     :rtype: dict[str,tf.Tensor]
     """
     from .rec import _TemplateLayer
-    subnet = cls._construct_template_subnet(
-      name=kwargs.get("name", "<unknown>"), network=kwargs["network"], subnetwork=kwargs["subnetwork"],
-      parent_layer_cache=kwargs.get("_parent_layer_cache", None),
-      sources=kwargs["sources"], concat_sources=kwargs.get("concat_sources", True))
+    from returnn.tf.network import Subnetwork
+    subnet_ = kwargs["_subnet"]
+    assert isinstance(subnet_, Subnetwork)
+    subnet = subnet_.net
     extra_outputs = {}
     for layer_name, sub_layer in subnet.layers.items():
       assert isinstance(sub_layer, _TemplateLayer)
@@ -6772,10 +6651,10 @@ class SubnetworkLayer(LayerBase):
     """
     # Very similar to get_rec_initial_extra_outputs.
     from .rec import _TemplateLayer
-    subnet = cls._construct_template_subnet(
-      name=kwargs.get("name", "<unknown>"), network=kwargs["network"], subnetwork=kwargs["subnetwork"],
-      parent_layer_cache=kwargs.get("_parent_layer_cache", None),
-      sources=kwargs["sources"], concat_sources=kwargs.get("concat_sources", True))
+    from returnn.tf.network import Subnetwork
+    subnet_ = kwargs["_subnet"]
+    assert isinstance(subnet_, Subnetwork)
+    subnet = subnet_.net
     shape_invariants = {}
     for layer_name, sub_layer in subnet.layers.items():
       assert isinstance(sub_layer, _TemplateLayer)

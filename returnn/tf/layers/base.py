@@ -72,6 +72,7 @@ class LayerBase(object):
                custom_param_importer=None,
                register_as_extern_data=None,
                control_dependencies_on_output=None,
+               _network=None, _name=None,
                _src_common_search_choices=None):
     """
     Usually the arguments, when specified in the network dict,
@@ -114,6 +115,8 @@ class LayerBase(object):
     :param str|callable|None custom_param_importer: used by :func:`set_param_values_by_dict`
     :param str|None register_as_extern_data: registers output in network.extern_data
     :param None|((LayerBase)->list[tf.Operation]) control_dependencies_on_output:
+    :param str _name: just for internal construction, should be the same as ``name``
+    :param returnn.tf.network.TFNetwork: just for internal construction, should be the same as ``network``
     :param None|SearchChoices _src_common_search_choices: set via :func:`SearchChoices.translate_to_common_search_beam`
     """
     self.name = name
@@ -367,6 +370,13 @@ class LayerBase(object):
     if any([(src and not src.output.available_for_inference) for src in sources if src]):
       output.available_for_inference = False
 
+  def get_full_ctx_name(self):
+    """
+    :return: name w.r.t. root ctx network
+    """
+    _, prefix = self.network.get_root_ctx_network()
+    return prefix + self.name
+
   @classmethod
   def cls_get_tf_scope_name(cls, name):
     """
@@ -522,6 +532,10 @@ class LayerBase(object):
         d.pop("loss_opts")
       assert "loss_scale" not in d, "loss not defined, do not set loss_scale"
       assert "loss_opts" not in d, "loss not defined, do not set loss_opts"
+    root_ctx_net, prefix = d["_network"].get_root_ctx_network()
+    rec_previous_layer = root_ctx_net.layers.get("prev:%s%s" % (prefix, d["_name"]))
+    if rec_previous_layer:
+      d["rec_previous_layer"] = rec_previous_layer
 
   @classmethod
   def _guess_n_out_from_target_and_opt_loss(cls, network, target, target_layers, loss_class_name, get_layer):
@@ -632,9 +646,32 @@ class LayerBase(object):
       layers += [layer for _, layer in sorted(self._target_layers.items())]
     return layers
 
+  # noinspection PyUnusedLocal
+  @classmethod
+  def cls_get_sub_network(cls, name, network, layer_desc):
+    """
+    A layer class can override this to return a custom :class:`Subnetwork`,
+    which just sets another namespace (and possibly variable sharing)
+    for contained layers but otherwise shares the same construction logic
+    via root network :func:`TFNetwork.construct_layer`.
+
+    When not overriding this, a layer still can have sub layers
+    via :func:`LayerBase.get_sub_layer`, but they belong to the root layer
+    (collocated) and can not be decoupled.
+
+    :param str name:
+    :param returnn.tf.network.TFNetwork network:
+    :param dict[str] layer_desc:
+    :rtype: returnn.tf.network.Subnetwork|None
+    """
+    return None
+
   def get_sub_layer(self, layer_name):
     """
     The default behavior for any layer is to return None.
+    Returned layers belong to the root layer (self).
+
+    Also see :func:`LayerBase.cls_get_sub_network`.
 
     :param str layer_name: name of the sub_layer (right part of '/' separated path)
     :return: the sub_layer addressed in layer_name or None if no sub_layer exists
@@ -1639,6 +1676,8 @@ class ReuseParams:
           layer_desc_ = net.layers_desc[layer_name].copy()
           class_name_ = layer_desc_.pop("class")
           layer_class_ = get_layer_class(class_name_)
+          layer_desc_["_network"] = net
+          layer_desc_["_name"] = layer_name
           layer_class_.transform_config_dict(layer_desc_, network=net, get_layer=opt_get_layer)
           # noinspection PyProtectedMember
           layer_desc_ = net._create_layer_layer_desc(name=layer_name, layer_desc=layer_desc_)
@@ -1658,6 +1697,8 @@ class ReuseParams:
       layer_desc = network.layers_desc[layer_name].copy()
       class_name = layer_desc.pop("class")
       layer_class = get_layer_class(class_name)
+      layer_desc["_network"] = network
+      layer_desc["_name"] = layer_name
       layer_class.transform_config_dict(layer_desc, network=network, get_layer=get_dummy_input_layer)
       with reuse_name_scope(network.get_absolute_name_scope_prefix()[:-1], absolute=True):
         # noinspection PyProtectedMember
@@ -1995,6 +2036,8 @@ class SearchChoices(object):
     search_choicess = []
     for layer in layers_flat:
       if not layer.output.beam:
+        continue
+      if layer.network.is_extra_internal_template_construction():
         continue
       search_choices = layer.get_search_choices()
       from pprint import pformat
