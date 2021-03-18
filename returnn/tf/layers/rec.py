@@ -1769,6 +1769,9 @@ class _SubnetworkRecCell(object):
       self.get = get
       self.get_returned_none = None  # type: typing.Optional[bool]
 
+    def __repr__(self):
+      return "%s{%r}" % (self.__class__.__name__, self.name)
+
     def write_to_tensor_array(self, ta, index):
       """
       :param tf.TensorArray ta:
