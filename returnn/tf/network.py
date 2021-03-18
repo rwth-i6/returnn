@@ -612,6 +612,10 @@ class TFNetwork(object):
 
   def construct_layer(self, net_dict, name, get_layer=None, add_layer=None, check_existing=True):
     """
+    This triggers the construction of the layer `name` if it is not constructed yet.
+    Every construction trigger corresponds to ``add_layer`` call (which by default does the actual construction).
+    This can recursively also get/construct other layers (via ``get_layer``).
+
     :param dict[str,dict[str]] net_dict:
     :param str name: layer name
     :param ((str) -> LayerBase)|None get_layer: optional, for source layers, for transform_config_dict.
