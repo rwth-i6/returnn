@@ -972,6 +972,7 @@ class _SubnetworkRecCell(object):
       extern_data=ExternData(),
       train_flag=parent_net.train_flag,
       search_flag=parent_net.search_flag,
+      eval_flag=False,
       parent_layer=parent_rec_layer,
       is_inside_rec_layer=True,
       absolute_name_prefix="%s%s/" % (parent_net.get_absolute_name_prefix(), rec_layer_name),
