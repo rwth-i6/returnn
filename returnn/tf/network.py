@@ -510,7 +510,7 @@ class TFNetwork(object):
     """
     :param bool|None search_flag:
     :param str|None net_name:
-    :param str|None prefix_name:
+    :param str|None prefix_name: e.g. "extra.search" or "extra.WhateverYouWant" or just "extra"
     :param bool auto_create:
     :return: (net, prefix_name)
     :rtype: (TFNetwork|None,str)
