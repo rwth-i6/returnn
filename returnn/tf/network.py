@@ -1158,7 +1158,8 @@ class TFNetwork(object):
     """
     name = self.get_default_output_layer_name()
     if not name:
-      assert not must_exist, "default output layer does not exist"
+      from pprint import pformat
+      assert not must_exist, "%s: default output layer does not exist. Layers:\n%s" % (self, pformat(self.layers))
       return None
     return self.layers[name]
 
