@@ -1008,7 +1008,7 @@ class _SubnetworkRecCell(object):
     self.accumulated_losses = {}  # type: typing.Dict[str,LossHolder]
 
   def __repr__(self):
-    return "<%s of %r>" % (self.__class__.__name__, self.parent_rec_layer)
+    return "<%s %r>" % (self.__class__.__name__, self.net.name)
 
   def _construct_template(self):
     """
