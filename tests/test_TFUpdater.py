@@ -29,6 +29,8 @@ def make_scope():
 
 
 class DummyLoss(Loss):
+  need_target = False
+
   def get_value(self):
     assert self.layer and isinstance(self.layer, DummyLayer)
     return self.layer._get_loss_value()

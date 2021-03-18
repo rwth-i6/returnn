@@ -2016,6 +2016,7 @@ class Loss(object):
   """
   class_name = None  # type: str  # used by get_loss_class()
   recurrent = False  # if this is a frame-wise criteria, this will be False
+  need_target = True
 
   def __init__(self, base_network, use_flatten_frames=True,
                use_normalized_loss=False, custom_norm_factor=None,
@@ -2246,7 +2247,12 @@ class Loss(object):
     You can overwrite this if those checks don't make sense for your derived loss class.
     """
     if not self.target:
+      assert not self.need_target, "%s: did not get target" % self
       return
+    assert self.target.placeholder is not None
+    if self.output_before_softmax_flat is not None or self.output_flat is not None:
+      assert self.target_flat is not None, (
+        "%s: have flat output (%r) but not flat targets (%r)" % (self, self.output, self.target))
     assert self.target.ndim_dense == self.output.ndim_dense, (
       "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output))
     expected_output_dim = self.get_auto_output_layer_dim(self.target.dim)
@@ -2309,4 +2315,6 @@ class Loss(object):
     :return: default target name, or None if this loss does not have a target
     :rtype: str|None
     """
+    if not cls.need_target:
+      return None
     return extern_data.default_target

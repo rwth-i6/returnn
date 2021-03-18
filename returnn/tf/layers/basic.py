@@ -7882,6 +7882,7 @@ class CrossEntropyLoss(Loss):
   Cross-Entropy loss. Basically sum(target * log(output)).
   """
   class_name = "ce"
+  need_target = True
 
   def __init__(self,
                focal_loss_factor=0.0,
@@ -8745,6 +8746,7 @@ class ExternSprintLoss(Loss):
   """
   class_name = "sprint"
   recurrent = True
+  need_target = False
 
   def __init__(self, sprint_opts, **kwargs):
     """
@@ -8848,6 +8850,7 @@ class ViaLayerLoss(Loss):
   """
   class_name = "via_layer"
   recurrent = True
+  need_target = False
 
   def __init__(self, error_signal_layer=None, align_layer=None, loss_wrt_to_act_in=False, **kwargs):
     """
@@ -8937,21 +8940,13 @@ class ViaLayerLoss(Loss):
     # Use default frame-wise error to reference target.
     return super(ViaLayerLoss, self).get_error()
 
-  @classmethod
-  def get_default_target(cls, extern_data):
-    """
-    :param TFNetwork.ExternData extern_data:
-    :rtype: None
-    """
-    # We do not need any target.
-    return None
-
 
 class AsIsLoss(Loss):
   """
   Use the output as-is as the loss.
   """
   class_name = "as_is"
+  need_target = False
 
   def __init__(self, **kwargs):
     super(AsIsLoss, self).__init__(**kwargs)
@@ -8969,21 +8964,13 @@ class AsIsLoss(Loss):
     """
     return None  # not defined
 
-  @classmethod
-  def get_default_target(cls, extern_data):
-    """
-    :param TFNetwork.ExternData extern_data:
-    :rtype: None
-    """
-    # We do not need any target.
-    return None
-
 
 class SearchScoreLoss(Loss):
   """
   Use the scores from :class:`SearchChoices`.
   """
   class_name = "search_score"
+  need_target = False
 
   def reduce_to_batch(self, loss, normalize):
     """
@@ -9009,15 +8996,6 @@ class SearchScoreLoss(Loss):
     :rtype: None
     """
     return None  # not defined
-
-  @classmethod
-  def get_default_target(cls, extern_data):
-    """
-    :param TFNetwork.ExternData extern_data:
-    :rtype: None
-    """
-    # We do not need any target.
-    return None
 
 
 class SamplingBasedLoss(Loss):
