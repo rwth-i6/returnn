@@ -328,7 +328,7 @@ class TFNetwork(object):
   """
 
   def __init__(self, config=None, extern_data=None, rnd_seed=None,
-               train_flag=False, eval_flag=False, search_flag=False,
+               train_flag=None, eval_flag=None, search_flag=None,
                parent_layer=None, parent_net=None, extra_parent_net=None,
                is_inside_rec_layer=None,
                absolute_name_prefix=None, name=None):
@@ -354,34 +354,45 @@ class TFNetwork(object):
     if absolute_name_prefix:
       assert absolute_name_prefix.endswith("/")
     self._absolute_name_prefix = absolute_name_prefix
+    if not parent_layer and extra_parent_net:
+      parent_layer = extra_parent_net.parent_layer
+    if not parent_net and extra_parent_net:
+      parent_net = extra_parent_net.parent_net
     if not parent_net and parent_layer:
       parent_net = parent_layer.network
-    if not config and parent_net:
-      config = parent_net._config
+    base_net = parent_net or extra_parent_net
+    if not config and base_net:
+      config = base_net._config
     if extern_data is None:
-      if not config:
-        from returnn.config import get_global_config
-        config = get_global_config()
-      extern_data = ExternData()
-      extern_data.init_from_config(config)
+      if extra_parent_net:
+        extern_data = extra_parent_net.extern_data
+      elif parent_net:
+        extern_data = ExternData()  # empty, no other good default
+      else:
+        extern_data = ExternData()
+        if not config:
+          from returnn.config import get_global_config
+          config = get_global_config()
+        extern_data.init_from_config(config)
     self.extern_data = extern_data
     self._config = config
     self.used_data_keys = set()  # type: typing.Set[str]  # keys from extern_data
     if rnd_seed is None:
-      if parent_net:
-        rnd_seed = parent_net.random.randint(2 ** 31)
-      elif extra_parent_net:
-        rnd_seed = extra_parent_net.random.randint(2 ** 31)
-      else:
-        rnd_seed = 42
+      rnd_seed = base_net.random.randint(2 ** 31) if base_net else 42
     self.rnd_seed = rnd_seed
     self.random = numpy.random.RandomState(rnd_seed)
+    if train_flag is None:
+      train_flag = base_net.train_flag if base_net else False
     assert isinstance(train_flag, (bool, tf.Tensor))
     self.train_flag = train_flag
+    if eval_flag is None:
+      eval_flag = base_net.eval_flag if base_net else False
     assert isinstance(eval_flag, bool)
     if train_flag is not False:  # True or dynamic
       eval_flag = True
     self.eval_flag = eval_flag
+    if search_flag is None:
+      search_flag = base_net.search_flag if base_net else False
     self.search_flag = search_flag
     self.parent_layer = parent_layer
     self.parent_net = parent_net
