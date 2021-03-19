@@ -1147,6 +1147,8 @@ class _SubnetworkRecCell(object):
         :rtype: LayerBase
         """
         # _TemplateLayer already created in get_templated_layer.
+        assert name in self.layer_data_templates, (
+          "%s: Unexpected layer name %r. Templates:\n%s" % (self, name, pformat(self.layer_data_templates)))
         layer_ = self.layer_data_templates[name]
         layer_desc = layer_desc.copy()
         layer_desc["name"] = name
