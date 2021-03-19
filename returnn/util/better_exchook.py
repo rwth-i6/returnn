@@ -88,6 +88,9 @@ except NameError:  # Python3
     raw_input = input
 
 
+PY3 = sys.version_info[0] >= 3
+
+
 def parse_py_statement(line):
     """
     Parse Python statement into tokens.
@@ -1138,7 +1141,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                 lineno = f.f_lineno
             co = f.f_code
             filename = co.co_filename
-            name = co.co_name
+            name = get_func_str_from_code_object(co)
             file_descr = "".join([
                 '  ',
                 color("File ", color.fg_colors[0], bold=True), format_filename(filename), ", ",
@@ -1396,6 +1399,40 @@ def get_current_frame():
         raise ZeroDivisionError
     except ZeroDivisionError:
         return sys.exc_info()[2].tb_frame.f_back
+
+
+def get_func_str_from_code_object(co):
+    """
+    :param types.CodeType co:
+    :return: co.co_name as fallback, but maybe sth better like the full func name if possible
+    :rtype: str
+    """
+    f = get_func_from_code_object(co)
+    if f:
+        if hasattr(f, "__qualname__"):
+            return f.__qualname__
+        return str(f)
+    return co.co_name
+
+
+def get_func_from_code_object(co):
+    """
+    :param types.CodeType co:
+    :return: function, such that ``func.__code__ is co``, or None
+    :rtype: types.FunctionType
+
+    This is CPython specific (to some degree; it uses the `gc` module to find references).
+    Inspired from: https://stackoverflow.com/questions/12787108/getting-the-python-function-for-a-code-object
+    """
+    import types
+    if not isinstance(co, types.CodeType):
+        return None
+    import gc
+    candidates = gc.get_referrers(co)
+    candidates = [f for f in candidates if getattr(f, "__code__" if PY3 else "func_code", None) is co]
+    if candidates:
+        return candidates[0]
+    return None
 
 
 def iter_traceback(tb=None, enforce_most_recent_call_first=False):
