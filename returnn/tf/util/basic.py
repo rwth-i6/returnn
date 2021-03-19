@@ -3380,7 +3380,7 @@ def identity_op_nested(x, name="identity"):
   :rtype tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor]
   """
   if isinstance(x, dict):
-    return {k: identity_op_nested(x[k], name="%s_%s" % (name, k)) for k in x}
+    return {k: identity_op_nested(x[k], name="%s_%s" % (name, get_valid_scope_name_from_str(k))) for k in x}
   if isinstance(x, (list, tuple)):
     from returnn.util.basic import is_namedtuple
     if is_namedtuple(type(x)):
