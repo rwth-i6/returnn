@@ -2021,7 +2021,8 @@ class RangeInAxisLayer(LayerBase):
     source = self.sources[0].output
     axis = source.get_axis_from_description(axis)
     axis_wo_b = source.get_batch_axis_excluding_batch(axis)
-    source_shape = tf.shape(source.placeholder)
+    from returnn.tf.util.basic import get_shape
+    source_shape = get_shape(source.placeholder)
     dim = source_shape[axis]
     out = tf.range(0, dim, dtype=dtype)
     if keepdims:
@@ -2059,6 +2060,8 @@ class RangeInAxisLayer(LayerBase):
         out.feature_dim_axis = None
       out.size_placeholder = {0: size for (i, size) in source.size_placeholder.items() if i == axis_wo_b}
     out.sparse = sparse
+    if out.feature_dim_axis is None and not out.sparse:
+      out.dim = None
     return out
 
 
