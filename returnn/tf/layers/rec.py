@@ -1103,7 +1103,7 @@ class _SubnetworkRecCell(object):
           "allow_uninitialized_template %r, "
           "parents %r)") % (
                  lself.allow_uninitialized_template,
-                 "/".join(parent_names) or None)
+                 " <- ".join(parent_names) or None)
 
       def _add_uninitialized_count(self):
         getter = self
