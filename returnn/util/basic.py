@@ -3045,7 +3045,8 @@ def try_get_caller_name(depth=1, fallback=None):
   """
   frame = try_get_stack_frame(depth + 1)  # one more to count ourselves
   if frame:
-    return frame.f_code.co_name
+    from .better_exchook import get_func_str_from_code_object
+    return get_func_str_from_code_object(frame.f_code)
   return fallback
 
 
