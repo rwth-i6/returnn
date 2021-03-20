@@ -667,6 +667,7 @@ class RecLayer(_ConcatInputLayer):
         x = cell.get_input_transformed(x)
     if isinstance(cell, rnn_cell.RNNCell):  # e.g. BasicLSTMCell
       if not self.input_data.have_time_axis():
+        assert self._rec_previous_layer, "%s: assume in loop with input %s, but no rec info" % (self, self.input_data)
         y, final_state = cell(self.input_data.placeholder, self._initial_state)
       elif self._unroll:
         assert self._max_seq_len is not None, "specify max_seq_len for unroll"
