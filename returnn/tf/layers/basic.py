@@ -4477,7 +4477,8 @@ class ReduceLayer(_ConcatInputLayer):
     mode = mode.lower()
     if mode == "avg":  # alias
       mode = "mean"
-    reduce_abs_funcs = {name: getattr(tf, "reduce_%s" % name) for name in ["max", "min", "sum", "logsumexp"]}
+    reduce_abs_funcs = {
+      name: getattr(tf, "reduce_%s" % name) for name in ["max", "min", "sum", "logsumexp", "any", "all"]}
     reduce_rel_func = {"mean": tf.reduce_mean}
     arg_funcs = {name: getattr(tf, name) for name in ["argmax", "argmin"]}
     funcs = dict(list(reduce_abs_funcs.items()) + list(reduce_rel_func.items()) + list(arg_funcs.items()))
@@ -4498,14 +4499,22 @@ class ReduceLayer(_ConcatInputLayer):
           mask = x.get_sequence_mask_broadcast(axis=axis)
 
           zeros = tf.zeros((), dtype=x.placeholder.dtype)
-          replacement_value = {
-            tf.reduce_mean: zeros,
-            tf.reduce_sum: zeros,
-            tf.reduce_logsumexp: zeros + x.placeholder.dtype.min,
-            tf.reduce_min: zeros + x.placeholder.dtype.max,
-            tf.reduce_max: zeros + x.placeholder.dtype.min}
+          # Cannot call x.placeholder.dtype.{min,max} in case input is e.g. a bool
+          if x.placeholder.dtype.is_floating:
+            replacement_value = {
+              tf.reduce_mean: zeros,
+              tf.reduce_sum: zeros,
+              tf.reduce_logsumexp: zeros + x.placeholder.dtype.min,
+              tf.reduce_min: zeros + x.placeholder.dtype.max,
+              tf.reduce_max: zeros + x.placeholder.dtype.min}[f]
+          elif x.placeholder.dtype.is_bool:
+            replacement_value = {
+              tf.reduce_any: zeros,
+              tf.reduce_all: tf.ones((), dtype=x.placeholder.dtype)}[f]
+          else:
+            assert False
 
-          x_ = tf_util.where_bc(mask, x_, replacement_value[f], "x_masked_axis_%i" % axis)
+          x_ = tf_util.where_bc(mask, x_, replacement_value, "x_masked_axis_%i" % axis)
           if f == tf.reduce_mean:
             seq_len_bc = tf.reshape(
               x.get_sequence_lengths(),
