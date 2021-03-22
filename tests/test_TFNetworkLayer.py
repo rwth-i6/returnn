@@ -903,6 +903,59 @@ def test_subnetwork_layer_net_construct():
     assert_equal(network.layers["sub"].output.dim, 2)
 
 
+def test_subnet_loss():
+  with make_scope() as session:
+    config = Config({
+      "extern_data": {"data": {"dim": 1}},
+      "debug_print_layer_output_template": True
+    })
+    net_dict = {
+      "sub": {"class": "subnetwork", "from": [], "subnetwork": {
+        "var": {"class": "variable", "shape": [1]},
+        "loss": {"class": "copy", "from": "var", "loss": "as_is"},
+        "output": {"class": "copy", "from": "var"}  # no dep on "loss"
+      }},
+      # Output dep on "sub" to trigger subnet creation.
+      # In theory, it would be nice if the loss is also constructed without that,
+      # but this doesn't work currently as "sub" is never constructed by the current heuristics.
+      "output": {"class": "copy", "from": "sub"}
+    }
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+    losses_dict, total_loss, total_constraints = network.get_losses_initialized(with_total=True)
+    print("losses:")
+    pprint(losses_dict)
+    assert len(losses_dict) == 1 and set(losses_dict.keys()) == {"sub/loss"}
+
+
+def test_subnet2_loss():
+  with make_scope() as session:
+    config = Config({
+      "extern_data": {"data": {"dim": 1}},
+      "debug_print_layer_output_template": True
+    })
+    net_dict = {
+      "sub": {"class": "subnetwork", "from": [], "subnetwork": {
+        "var": {"class": "variable", "shape": [1]},
+        "loss": {"class": "copy", "from": "var", "loss": "as_is"},
+        "output": {"class": "copy", "from": "var"}  # no dep on "loss"
+      }},
+      # Output dep on "sub" to trigger subnet creation.
+      # In theory, it would be nice if the loss is also constructed without that,
+      # but this doesn't work currently as "sub" is never constructed by the current heuristics.
+      # Specifically depend on "sub/output", because in that case,
+      # the SubnetworkLayer itself might not be created with the new subnet logic,
+      # which is sth we want to test.
+      "output": {"class": "copy", "from": "sub/output"}
+    }
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+    losses_dict, total_loss, total_constraints = network.get_losses_initialized(with_total=True)
+    print("losses:")
+    pprint(losses_dict)
+    assert len(losses_dict) == 1 and set(losses_dict.keys()) == {"sub/loss"}
+
+
 def test_constant_layer():
   with make_scope() as session:
     config = Config()
