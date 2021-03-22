@@ -1627,6 +1627,13 @@ def test_CondLayer_subnetwork_train():
         },
       "output": {"class": "softmax", "from": "cond", "loss": "ce", "target": "classes"}})
     net.print_network_info()
+    cond_layer = net.get_layer("cond")
+    assert isinstance(cond_layer, CondLayer)
+    assert not tf_util.has_control_flow_context(cond_layer.output.placeholder)
+    cond_true_layer = cond_layer.true_layer
+    assert isinstance(cond_true_layer, SubnetworkLayer)
+    # Check whether the execution of the true branch is actually conditionally.
+    assert tf_util.has_control_flow_context(cond_true_layer.output.placeholder)
     trainable_vars = net.get_trainable_params()
     print("Trainable vars:")
     pprint(trainable_vars)
