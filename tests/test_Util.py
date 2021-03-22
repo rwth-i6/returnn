@@ -362,6 +362,7 @@ def test_literal_py_to_pickle():
     "[]", "[1]", "[1,2,3]",
     "{}", "{'a': 'b', 1: 2}",
     "{1}", "{1,2,3}",
+    "None", "{'a': None, 'b':1, 'c':None, 'd':'d'}",
   ]
   for s in checks:
     check(s)

@@ -479,6 +479,14 @@ public:
 		return c;
 	}
 
+	void parse_none(char first) {
+		if (!('o' == read_next_char() && 'n' == read_next_char() && 'e' == read_next_char())) {
+			parse_error("expected 'one' after N", first);
+			return;
+		}
+		write_char(NONE);
+	}
+
 	ParseRes parse() {
 		int c;
 		bool had_one_item = false;
@@ -511,6 +519,10 @@ public:
 				had_one_item = true;
 				if(c < 0 || !isspace(c))
 					break;
+			}
+			else if(c == 'N') {
+				parse_none(c);
+				had_one_item = true;
 			}
 			else
 				// some unexpected char
