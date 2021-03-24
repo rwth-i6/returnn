@@ -5038,6 +5038,97 @@ def test_MaskedComputationLayer_search_choices_resolution():
     print("out:", session.run(out, feed_dict=feed_dict))
 
 
+def test_MaskedComputationLayer_subnet_search_choices_resolution():
+  beam_size = 3
+  EncKeyTotalDim = 10
+  AttNumHeads = 1
+  target = "classes"
+  num_classes = 13
+  blank_idx = num_classes - 2
+  from test_TFNetworkLayer import make_feed_dict
+  net_dict = {
+    "encoder": {"class": "linear", "from": "data", "activation": "relu", "n_out": EncKeyTotalDim},
+    "enc_ctx": {"class": "copy", "from": "encoder"},
+    "enc_value": {"class": "copy", "from": "encoder"},
+    "inv_fertility": {"class": "linear", "activation": "sigmoid", "from": "encoder", "n_out": AttNumHeads},
+    "output": {"class": "rec", "from": [], "unit": {
+      'output': {'class': 'choice', 'target': target, 'beam_size': beam_size, 'from': ["output_prob"],
+                 "initial_output": 0},
+      "end": {"class": "compare", "from": ["output"], "value": 0},
+      'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 12,
+                       "initial_output": 0},
+      "weight_feedback": {"class": "linear", "activation": None, "with_bias": False,
+                          "from": ["prev:accum_att_weights"], "n_out": EncKeyTotalDim},
+      "s_transformed": {"class": "linear", "activation": None,
+                           "with_bias": False, "from": ["masked_s"],
+                           "n_out": EncKeyTotalDim},
+      "energy_in": {"class": "combine", "kind": "add",
+                    "from": ["base:enc_ctx", "weight_feedback",
+                             "s_transformed"], "n_out": EncKeyTotalDim},
+      "energy_tanh": {"class": "activation", "activation": "tanh",
+                      "from": ["energy_in"]},
+      "energy": {"class": "linear", "activation": None, "with_bias": False,
+                 "from": ["energy_tanh"], "n_out": AttNumHeads},  # (B, enc-T, H)
+      "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, H)
+      "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:inv_fertility"],
+                            "eval": "source(0) + source(1) * source(2) * 0.5",
+                            "out_type": {"dim": AttNumHeads, "shape": (None, AttNumHeads)}},
+      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
+      "att": {"class": "merge_dims", "axes": "static", "from": "att0"},  # (B, H*V)
+
+      'not_blank_mask': {'class': 'compare', 'from': ['output'], 'value': blank_idx, 'kind': 'not_equal',
+                         'initial_output': True},
+      'masked_s': {
+        'class': 'masked_computation', 'mask': 'prev:not_blank_mask',
+        'unit': {
+          "class": "subnetwork", "from": "data",
+          "subnetwork": {
+            "lstm0": {
+              "class": "rnn_cell", "unit": "basiclstm",
+              # Note: We just ignore the input data but access other layers from parent.
+              "from": ["base:prev:target_embed", "base:prev:att"],
+              "n_out": 11},
+            "output": {"class": "copy", "from": "lstm0"}
+          }},
+        'from': 'prev:output'
+      },
+
+      "readout_in": {"class": "linear", "from": ["masked_s", "prev:target_embed", "att"], "activation": None,
+                     "n_out": 10},
+      "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+      "output_prob": {"class": "softmax", "from": ["readout"], "target": target, "loss": "ce"}
+    }, "target": target, "max_seq_len": "max_len_from('base:encoder')"},
+
+  }
+  with make_scope() as session:
+    config = Config({"debug_print_layer_output_template": True})
+    extern_data = ExternData({
+      "data": {"dim": 20, "sparse": True},
+      target: {"dim": num_classes, "sparse": True}})
+    feed_dict = make_feed_dict(extern_data)
+
+    print("***** Construct train net.")
+    train_net = TFNetwork(extern_data=extern_data, config=config, train_flag=True)
+    train_net.construct_from_dict(net_dict)
+    loss = train_net.get_total_loss()
+    optimizer = tf_compat.v1.train.AdamOptimizer(learning_rate=0.1)
+    with tf.control_dependencies([optimizer.minimize(loss)]):
+      loss = tf.identity(loss)
+    session.run(tf_compat.v1.global_variables_initializer())
+    loss_values = []
+    for step in range(10):
+      loss_values.append(session.run(loss, feed_dict=feed_dict))
+      print("loss:", loss_values[-1])
+    assert all([loss_values[i + 1] < loss_values[i] for i in range(len(loss_values) - 1)])
+    print()
+
+    print("***** Construct search net.")
+    search_net = TFNetwork(extern_data=extern_data, config=config, search_flag=True)
+    search_net.construct_from_dict(net_dict)
+    out = search_net.get_default_output_layer().output.placeholder
+    print("out:", session.run(out, feed_dict=feed_dict))
+
+
 def test_MaskedComputationLayer_UnmaskLayer_masked_outside():
   from returnn.tf.layers.rec import _SubnetworkRecCell
   with make_scope() as session:
