@@ -1649,7 +1649,8 @@ class Engine(EngineBase):
     return any([k.startswith("%s_score" % name) for k in error_dict.keys()])
 
   def eval_model(self, output_file=None, output_per_seq_file=None, loss_name=None,
-                 output_per_seq_format=None, output_per_seq_file_format="txt", skip_already_evaluated=False):
+                 output_per_seq_format=None, output_per_seq_file_format="txt", skip_already_evaluated=False,
+                 lr_control_update_scores=True):
     """
     Eval the current model on the eval datasets (dev + eval, whatever is set).
     See also :func:`self.search` for performing beam search.
@@ -1662,6 +1663,7 @@ class Engine(EngineBase):
       allowed_outputs = {"seq_tag", "seq_len", "score", "error", "pos_score", "pos_error"}.
     :param bool skip_already_evaluated:
     :param str output_per_seq_file_format: "txt" or "py"
+    :param bool lr_control_update_scores: update and save scores in learning rate control
     :return: nothing
     """
     extra_fetches = None
@@ -1780,10 +1782,11 @@ class Engine(EngineBase):
       eval_dump_str += ["%s: score %s error %s" % (
                         dataset_name, self.format_score(tester.score), self.format_score(tester.error))]
       results[dataset_name] = {"score": tester.score, "error": tester.error}
-      self.learning_rate_control.set_epoch_error(
-        self.epoch, {"%s_score" % dataset_name: tester.score, "%s_error" % dataset_name: tester.error})
-      if self._do_save():
-        self.learning_rate_control.save()
+      if lr_control_update_scores:
+        self.learning_rate_control.set_epoch_error(
+          self.epoch, {"%s_score" % dataset_name: tester.score, "%s_error" % dataset_name: tester.error})
+        if self._do_save():
+          self.learning_rate_control.save()
     print(" ".join(eval_dump_str), file=log.v1)
     if output_file:
       print('Write eval results to %r' % output_file, file=log.v3)

@@ -451,23 +451,31 @@ def execute_main_task():
     engine.init_train_from_config(config, train_data, dev_data, eval_data)
     engine.train()
   elif task == "eval":
-    epoch = config.int("epoch", -1)
-    load_epoch = config.int("load_epoch", -1)
-    if epoch >= 0:
-      assert (load_epoch < 0) or (load_epoch == epoch), "epoch and load_epoch have to match"
-      engine.epoch = epoch
-      config.set('load_epoch', engine.epoch)
+    if config.value("load", None):
+      # this would directly load whatever model is specified
+      print("Evaluate model", config.value("load", None), file=log.v2)
+      lr_control_update_scores = False
     else:
-      assert load_epoch >= 0, "specify epoch or load_epoch"
-      engine.epoch = load_epoch
+      # Assume the configured model with some given epoch.
+      epoch = config.int("epoch", -1)
+      load_epoch = config.int("load_epoch", -1)
+      if epoch >= 0:
+        assert (load_epoch < 0) or (load_epoch == epoch), "epoch and load_epoch have to match"
+        engine.epoch = epoch
+        config.set('load_epoch', engine.epoch)
+      else:
+        assert load_epoch >= 0, "specify epoch or load_epoch"
+        engine.epoch = load_epoch
+      print("Evaluate epoch", engine.epoch, file=log.v2)
+      lr_control_update_scores = True
     engine.init_train_from_config(config, train_data, dev_data, eval_data)
-    print("Evaluate epoch", engine.epoch, file=log.v4)
     engine.eval_model(
       output_file=config.value("eval_output_file", None),
       output_per_seq_file=config.value("eval_output_file_per_seq", None),
       loss_name=config.value("loss_name", None),
       output_per_seq_format=config.list("output_per_seq_format", ["score"]),
-      output_per_seq_file_format=config.value("output_per_seq_file_format", "txt"))
+      output_per_seq_file_format=config.value("output_per_seq_file_format", "txt"),
+      lr_control_update_scores=lr_control_update_scores)
   elif task in ['forward', 'hpx']:
     assert eval_data is not None, 'no eval data provided'
     combine_labels = config.value('combine_labels', '')
