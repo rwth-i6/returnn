@@ -135,8 +135,8 @@ def main(argv):
   arg_parser.add_argument("--load", help="model to load")
   arg_parser.add_argument('--stats', action="store_true", help="calculate mean/stddev stats over stats_layer")
   arg_parser.add_argument('--dump_stats', help="file-prefix to dump stats to")
-  args = arg_parser.parse_args(argv[1:])
-  init(config_filename=args.returnn_config, command_line_options=[], args=args)
+  args, remaining_args = arg_parser.parse_known_args(argv[1:])
+  init(config_filename=args.returnn_config, command_line_options=remaining_args, args=args)
   dump(args)
   rnn.finalize()
 
