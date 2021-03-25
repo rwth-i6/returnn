@@ -6,7 +6,7 @@ or any changes which could potentially break or change the behavior of existing 
 This is intentionally kept short. For a full change log, just see the Git log.
 
 
-## 2021 Subnetwork sub layer can be independent ([#473](https://github.com/rwth-i6/returnn/pull/473))
+## 2021-03-18: Subnetwork sub layer can be independent ([#473](https://github.com/rwth-i6/returnn/pull/473))
 
 This has an effect on recurrent subnetworks.
 In the optimization phase, individual sub layers can be optimized out of the loop now.
@@ -16,7 +16,15 @@ such as in the [returnn-experiments `common`](https://github.com/rwth-i6/returnn
 This was a larger internal change in RETURNN,
 which possibly can simplify other code in RETURNN like losses in subnetworks.
 
-## 2021 Fast literal Python parsing via native `literal_py_to_pickle`
+## 2021-03-08: Packed arrays ([#466](https://github.com/rwth-i6/returnn/issues/466), [#467](https://github.com/rwth-i6/returnn/pull/467), [#469](https://github.com/rwth-i6/returnn/pull/469)) and extended batch information (`BatchInfo`)
+
+The extended batch information (`BatchInfo` attached to `Data`)
+contains information about merged or packed dimensions in the batch dimension,
+such as a beam (from beam search), fixed dimensions or variable-length dimensions.
+This has an effect on keeping the information of beam search,
+on `FlattenBatchLayer`, `SplitBatchTimeLayer`, `MergeDimsLayer` (on batch dim) and related.
+
+## 2021-03-05: Fast literal Python parsing via native `literal_py_to_pickle`
 
 We use literal Python format as serialization format in many places,
 e.g. `OggZipDataset`.
@@ -33,17 +41,9 @@ Note that for the future,
 it is probably a better idea to use JSON for serialization,
 or some binary format.
 
-## 2021-03-08 Packed arrays ([#466](https://github.com/rwth-i6/returnn/issues/466), [#467](https://github.com/rwth-i6/returnn/pull/467), [#469](https://github.com/rwth-i6/returnn/pull/469)) and extended batch information (`BatchInfo`)
+## 2021-03-03: Simplified [`logging`](https://docs.python.org/3/library/logging.html) usage
 
-The extended batch information (`BatchInfo` attached to `Data`)
-contains information about merged or packed dimensions in the batch dimension,
-such as a beam (from beam search), fixed dimensions or variable-length dimensions.
-This has an effect on keeping the information of beam search,
-on `FlattenBatchLayer`, `SplitBatchTimeLayer`, `MergeDimsLayer` (on batch dim) and related.
-
-## 2021-03-03 Simplified [`logging`](https://docs.python.org/3/library/logging.html) usage
-
-## 2021-03-01 External module import with `import_` ([#436](https://github.com/rwth-i6/returnn/discussions/436))
+## 2021-03-01: External module import with `import_` ([#436](https://github.com/rwth-i6/returnn/discussions/436))
 
 Together with this mechanism, some common recipes are being developed
 in [rwth-i6/returnn-experiments `common`](https://github.com/rwth-i6/returnn-experiments/tree/master/common).
