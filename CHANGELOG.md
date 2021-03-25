@@ -38,6 +38,8 @@ or some binary format.
 The extended batch information (`BatchInfo` attached to `Data`)
 contains information about merged or packed dimensions in the batch dimension,
 such as a beam (from beam search), fixed dimensions or variable-length dimensions.
+This has an effect on keeping the information of beam search,
+on `FlattenBatchLayer`, `SplitBatchTimeLayer`, `MergeDimsLayer` (on batch dim) and related.
 
 ## 2021-03-03 Simplified [`logging`](https://docs.python.org/3/library/logging.html) usage
 
