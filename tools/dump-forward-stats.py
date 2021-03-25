@@ -104,6 +104,7 @@ def init(config_filename, command_line_options, args):
   if args.reset_seq_ordering:
     assert dataset.seq_ordering == args.reset_seq_ordering
 
+  config.set("task", "eval")
   if args.load:
     config.set("load", args.load)
 
