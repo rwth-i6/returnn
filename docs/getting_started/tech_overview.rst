@@ -83,8 +83,14 @@ All the rest is shared for all backends, which mostly is:
   :mod:`returnn.native_op`, where TensorFlow-specific code is in :mod:`returnn.tf.native_op`.
 
 
+.. _execution_guide_reference:
+
 Execution guide
 ---------------
+
+Using RETURNN as a tool, execution consists of calling ``returnn/rnn.py path/to/my_file.config``.
+
+The program follows then the following track:
 
 - :py:func:`returnn.__main__.main` will parse command line arguments and read in a config
   (:class:`returnn.config.Config`).
@@ -100,6 +106,21 @@ Execution guide
 - Then, depending on the ``task`` option, it might start ``engine.train``, ``engine.forward`` etc.
   (:py:func:`returnn.tf.engine.Engine.train`), :ref:`tech_engine_train`.
 
+Execution tasks
+---------------
+
+The goal of every execution in RETURNN tries to achieve one of the tasks:
+
+- **train**: Trains the network with the given dataset. It requires at least a valid ``train`` dataset. If ``eval``, ``dev`` or ``eval_datasets`` are specified they are evaluated at the end of each epoch. Further informations can be found in :py:func:`returnn.tf.engine.Engine.train`.
+- **eval**:  Evaluates on ``eval``, ``dev`` or ``eval_datasets`` if specified. It requires ``load_epoch`` or ``epoch`` for loading the weights of the network.
+- **search**: Performs beam search on the dataset as specified by ``search_data``. The networks weights are loaded according to ``load_epoch`` or ``epoch``. The beam size can be specified with ``beam_size``. For futher information look in :py:func:`returnn.tf.engine.Engine.search`.
+- **nop**: This task is used to proof check everything not related to the network and the dataset. So datasets and the nework are not initialized at all. 
+- **nop_init_net_train**: Initializes the network and training dataset ``train`` but doesn't start training.
+- **initialize_model**: Similiar to **nop_init_net_train** but it saves a checkpoint at the end.
+- **cleanup_old_models**: Cleans up models if we have done some lr control. With ``cleanup_old_models`` more options can be specified.
+- **compute_priors**: Computes the priors of network outputs for the training dataset.
+- **analyze**: Analyses training dataset for the given network. Calculates stuff such as loss, perplexity, ce, frame error, seq length, and prob histograms per batch and for one whole epoch(accumulated).
+- ...
 
 .. _tech_net_construct:
 
