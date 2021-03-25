@@ -14,21 +14,20 @@ We use literal Python format as serialization format in many places,
 e.g. `OggZipDataset`.
 The idea was that Python should be very fast in parsing Python code
 (e.g. via `eval` or `ast.literal_eval`).
-
 Unfortunately, it turned out that Python is not very fast at this
 (specifically to parse *literal Python*, a subset of Python),
 and e.g. JSON parsing is much faster.
-
 We now have native code to parse literal Python,
 which is much faster than before,
 and this is already used in `OggZipDataset`.
 Everything should work as before but just be faster.
-
 Note that for the future,
 it is probably a better idea to use JSON for serialization,
 or some binary format.
 
 ## 2021 `import_` ([#436](https://github.com/rwth-i6/returnn/discussions/436))
+
+## 2021-02-27: `SentencePieces` vocabulary class for [SentencePiece](https://github.com/google/sentencepiece/)
 
 ## 2020-12-09: New `batch_norm` settings
 
