@@ -33,7 +33,11 @@ Note that for the future,
 it is probably a better idea to use JSON for serialization,
 or some binary format.
 
-## 2021-03-08 Packed arrays ([#466](https://github.com/rwth-i6/returnn/issues/466), [#467](https://github.com/rwth-i6/returnn/pull/467), [#469](https://github.com/rwth-i6/returnn/pull/469))
+## 2021-03-08 Packed arrays ([#466](https://github.com/rwth-i6/returnn/issues/466), [#467](https://github.com/rwth-i6/returnn/pull/467), [#469](https://github.com/rwth-i6/returnn/pull/469)) and extended batch information (`BatchInfo`)
+
+The extended batch information (`BatchInfo` attached to `Data`)
+contains information about merged or packed dimensions in the batch dimension,
+such as a beam (from beam search), fixed dimensions or variable-length dimensions.
 
 ## 2021-03-03 Simplified [`logging`](https://docs.python.org/3/library/logging.html) usage
 
