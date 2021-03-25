@@ -15,6 +15,7 @@ import _setup_returnn_env  # noqa
 import returnn.__main__ as rnn
 from returnn.log import log
 from returnn.config import Config
+from returnn.datasets import init_dataset, Dataset
 from returnn.util.basic import Stats
 from returnn.pretrain import pretrain_from_config
 from returnn.tf.engine import Engine, Runner
@@ -23,11 +24,11 @@ from returnn.tf.network import TFNetwork
 
 engine = None  # type: typing.Optional[Engine]
 config = None  # type: typing.Optional[Config]
+dataset = None  # type: typing.Optional[Dataset]
 
 
-def dump(dataset, options):
+def dump(options):
   """
-  :param returnn.datasets.Dataset dataset:
   :param options: argparse.Namespace
   """
   print("Epoch: %i" % options.epoch, file=log.v3)
@@ -73,7 +74,7 @@ def init(config_filename, command_line_options, args):
   :param list[str] command_line_options:
   :param args: argparse.Namespace
   """
-  global config, engine
+  global config, engine, dataset
   rnn.init(
     config_filename=config_filename, command_line_options=command_line_options,
     config_updates={"log": None, "need_data": False},
@@ -81,18 +82,27 @@ def init(config_filename, command_line_options, args):
   config = rnn.config
   engine = rnn.engine
 
-  if args.dataset:
-    print("Use dataset %r from config." % args.dataset)
-    config.set("train", "config:%s" % args.dataset)
-  else:
-    print("Use train dataset from config.")
-    assert config.value("train", None), "pass --dataset"
-  if config.has("dev"):
-    config.set("dev", None)
-  if config.has("eval"):
-    config.set("eval", None)
-  rnn.init_data()
-  rnn.print_task_properties()
+  dataset_str = args.dataset
+  if dataset_str in {"train", "dev", "eval", "search_data"}:
+    dataset_str = "config:%s" % dataset_str
+  extra_dataset_kwargs = {}
+  if args.reset_partition_epoch:
+    print("NOTE: We are resetting partition epoch to %i." % (args.reset_partition_epoch,))
+    extra_dataset_kwargs["partition_epoch"] = args.reset_partition_epoch
+  if args.reset_seq_ordering:
+    print("NOTE: We will use %r seq ordering." % (args.reset_seq_ordering,))
+    extra_dataset_kwargs["seq_ordering"] = args.reset_seq_ordering
+  if args.reset_epoch_wise_filter:
+    extra_dataset_kwargs["epoch_wise_filter"] = eval(args.reset_epoch_wise_filter)
+  dataset = init_dataset(dataset_str, extra_kwargs=extra_dataset_kwargs)
+  if hasattr(dataset, "epoch_wise_filter") and args.reset_epoch_wise_filter is None:
+    if dataset.epoch_wise_filter:
+      print("NOTE: Resetting epoch_wise_filter to None.")
+      dataset.epoch_wise_filter = None
+  if args.reset_partition_epoch:
+    assert dataset.partition_epoch == args.reset_partition_epoch
+  if args.reset_seq_ordering:
+    assert dataset.seq_ordering == args.reset_seq_ordering
 
   if args.load:
     config.set("load", args.load)
@@ -114,7 +124,11 @@ def main(argv):
   """
   arg_parser = argparse.ArgumentParser(description='Forward something and dump it.')
   arg_parser.add_argument('returnn_config')
-  arg_parser.add_argument("--dataset", help="if given the config, specifies the dataset. e.g. 'train'")
+  arg_parser.add_argument(
+    "--dataset", help="if given the config, specifies the dataset. e.g. 'train'", default="train")
+  arg_parser.add_argument("--reset_partition_epoch", type=int, default=1)
+  arg_parser.add_argument("--reset_seq_ordering", default="sorted_reverse")
+  arg_parser.add_argument("--reset_epoch_wise_filter", default=None)
   arg_parser.add_argument("--layer", required=True)
   arg_parser.add_argument('--epoch', type=int, default=1, help="for the dataset")
   arg_parser.add_argument("--load", help="model to load")
@@ -122,7 +136,7 @@ def main(argv):
   arg_parser.add_argument('--dump_stats', help="file-prefix to dump stats to")
   args = arg_parser.parse_args(argv[1:])
   init(config_filename=args.returnn_config, command_line_options=[], args=args)
-  dump(rnn.train_data, args)
+  dump(args)
   rnn.finalize()
 
 
