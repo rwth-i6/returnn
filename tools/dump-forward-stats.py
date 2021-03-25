@@ -61,7 +61,7 @@ def dump(options):
     train=False, eval=False,
     extra_fetches=extra_fetches,
     extra_fetches_callback=_extra_fetches_cb)
-  forwarder.run(report_prefix=engine.get_epoch_str() + " forward")
+  forwarder.run(report_prefix="forward")
   if not forwarder.finalized:
     print("Error happened. Exit now.")
     sys.exit(1)
