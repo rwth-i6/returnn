@@ -842,7 +842,10 @@ class Engine(EngineBase):
       self.tf_session.close()
     self.tf_session = None
 
-  def _make_tf_session(self):
+  def make_tf_session(self):
+    """
+    Initializes self.tf_session.
+    """
     self._close_tf_session()
     opts = self.config.typed_value("tf_session_opts", {})
     assert isinstance(opts, dict)
@@ -1012,7 +1015,7 @@ class Engine(EngineBase):
     self.min_seq_length = config.typed_value('min_seq_length', None) or config.float('min_seq_length', 0)
     self.inc_seq_length = config.float('inc_seq_length', 0)
     if not self.max_seq_length:
-      self.max_seq_length = sys.maxsize  # type: typing.Union[int,float,typing.Dict[str,int]|NumbersDict]
+      self.max_seq_length = sys.maxsize  # type: typing.Union[int,float,typing.Dict[str,int],NumbersDict]
     if isinstance(self.max_seq_length, dict):
       self.max_seq_length = NumbersDict(self.max_seq_length)
     assert isinstance(self.max_seq_length, (int, float, NumbersDict))
@@ -1025,7 +1028,7 @@ class Engine(EngineBase):
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
 
-  def _get_net_dict_for_epoch(self, epoch, config=None):
+  def get_net_dict_for_epoch(self, epoch, config=None):
     """
     :param int epoch:
     :param Config.Config|None config:
@@ -1083,7 +1086,7 @@ class Engine(EngineBase):
       self.epoch = self.start_epoch
     assert self.epoch, "task %r" % config.value("task", "train")
 
-    net_dict = self._get_net_dict_for_epoch(epoch=self.epoch, config=config)
+    net_dict = self.get_net_dict_for_epoch(epoch=self.epoch, config=config)
     if net_dict_post_proc:
       net_dict = net_dict_post_proc(net_dict)
 
@@ -1244,7 +1247,7 @@ class Engine(EngineBase):
     self._close_tf_session()
     self._reset_graph()
     # The new session will by default use the newly created default graph.
-    self._make_tf_session()
+    self.make_tf_session()
     tf_random_seed = 42
     net_random_seed = epoch
     if self.config.opt_typed_value("random_seed", None):
@@ -1435,7 +1438,7 @@ class Engine(EngineBase):
     Init for the current train epoch.
     """
     if self.is_pretrain_epoch() or self.custom_get_net_dict:
-      new_network_desc = self._get_net_dict_for_epoch(epoch=self.epoch)
+      new_network_desc = self.get_net_dict_for_epoch(epoch=self.epoch)
       # Always update config, if needed, even if nothing changed.
       # This might trigger enforcing some learning rate, or so.
       self._maybe_update_config(net_desc=new_network_desc, epoch=self.epoch)
@@ -1547,7 +1550,7 @@ class Engine(EngineBase):
         # See also init_train_epoch().
         self.need_init_new_network(
           net_desc=(
-            self._get_net_dict_for_epoch(epoch=self.epoch + 1)
+            self.get_net_dict_for_epoch(epoch=self.epoch + 1)
             if (self.is_pretrain_epoch(epoch=self.epoch + 1) or self.custom_get_net_dict)
             else None))):
       # Do not call it right now, but after eval model. See below.
