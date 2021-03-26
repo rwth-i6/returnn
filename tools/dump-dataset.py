@@ -236,7 +236,10 @@ def init(config_str, config_dataset, verbosity):
   rnn.returnn_greeting()
   rnn.init_faulthandler()
   rnn.init_config_json_network()
-  rnn.print_task_properties()
+  print("Dataset:", file=log.v2)
+  print("  input:", dataset.num_inputs, "x", dataset.window, file=log.v2)
+  print("  output:", dataset.num_outputs, file=log.v2)
+  print(" ", dataset.len_info() or "no info", file=log.v2)
 
 
 def main():
