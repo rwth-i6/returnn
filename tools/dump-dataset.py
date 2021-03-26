@@ -222,7 +222,7 @@ def init(config_str, config_dataset, verbosity):
     config.set("train", dataset_dict)
   elif config_dataset and config_dataset != "train":
     print("Use dataset %r from config." % config_dataset)
-    config.set("train", config.typed_value(config_dataset, None))
+    config.set("train", "config:%s" % config_dataset)
   else:
     print("Use train dataset from config.")
     assert config.value("train", None)
@@ -232,9 +232,9 @@ def init(config_str, config_dataset, verbosity):
   rnn.init_faulthandler()
   rnn.init_config_json_network()
   # We use 'train' from the config.
-  if config.has("dev"):
+  if config_dataset != "dev" and config.has("dev"):
     config.set("dev", None)
-  if config.has("eval"):
+  if config_dataset != "eval" and config.has("eval"):
     config.set("eval", None)
   rnn.init_data()
   rnn.print_task_properties()
