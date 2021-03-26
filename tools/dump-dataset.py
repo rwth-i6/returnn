@@ -17,9 +17,12 @@ from returnn import __main__ as rnn
 from returnn.log import log
 import argparse
 import numpy
+from returnn.datasets import init_dataset, Dataset
 from returnn.util.basic import Stats, hms, hms_fraction, pretty_print
 from returnn.util import basic as util
 
+
+dataset = None  # type: typing.Optional[Dataset]
 
 def plot(m):
   """
@@ -32,9 +35,8 @@ def plot(m):
   show()
 
 
-def dump_dataset(dataset, options):
+def dump_dataset(options):
   """
-  :type dataset: Dataset.Dataset
   :param options: argparse.Namespace
   """
   print("Epoch: %i" % options.epoch, file=log.v3)
@@ -197,6 +199,7 @@ def init(config_str, config_dataset, verbosity):
   :param str|None config_dataset:
   :param int verbosity:
   """
+  global dataset
   rnn.init_better_exchook()
   rnn.init_thread_join_hack()
   dataset_dict = None
@@ -219,10 +222,10 @@ def init(config_str, config_dataset, verbosity):
   config.set("log_verbosity", verbosity)
   if dataset_dict:
     assert not config_dataset
-    config.set("train", dataset_dict)
+    dataset = init_dataset(dataset_dict)
   elif config_dataset and config_dataset != "train":
     print("Use dataset %r from config." % config_dataset)
-    config.set("train", "config:%s" % config_dataset)
+    dataset = init_dataset("config:%s" % config_dataset)
   else:
     print("Use train dataset from config.")
     assert config.value("train", None)
@@ -231,12 +234,6 @@ def init(config_str, config_dataset, verbosity):
   rnn.returnn_greeting()
   rnn.init_faulthandler()
   rnn.init_config_json_network()
-  # We use 'train' from the config.
-  if config_dataset != "dev" and config.has("dev"):
-    config.set("dev", None)
-  if config_dataset != "eval" and config.has("eval"):
-    config.set("eval", None)
-  rnn.init_data()
   rnn.print_task_properties()
 
 
@@ -263,7 +260,7 @@ def main():
   args = argparser.parse_args()
   init(config_str=args.returnn_config, config_dataset=args.dataset, verbosity=args.verbosity)
   try:
-    dump_dataset(rnn.train_data, args)
+    dump_dataset(args)
   except KeyboardInterrupt:
     print("KeyboardInterrupt")
     sys.exit(1)
