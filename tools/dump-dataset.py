@@ -24,6 +24,7 @@ from returnn.util import basic as util
 
 dataset = None  # type: typing.Optional[Dataset]
 
+
 def plot(m):
   """
   :param numpy.ndarray m:
@@ -229,6 +230,7 @@ def init(config_str, config_dataset, verbosity):
   else:
     print("Use train dataset from config.")
     assert config.value("train", None)
+    dataset = init_dataset("config:train")
   rnn.init_log()
   print("Returnn dump-dataset starting up.", file=log.v2)
   rnn.returnn_greeting()
