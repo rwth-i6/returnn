@@ -232,9 +232,9 @@ def init(config_str, config_dataset, verbosity):
   rnn.init_faulthandler()
   rnn.init_config_json_network()
   # We use 'train' from the config.
-  if config.has("dev"):
+  if config_dataset != "dev" and config.has("dev"):
     config.set("dev", None)
-  if config.has("eval"):
+  if config_dataset != "eval" and config.has("eval"):
     config.set("eval", None)
   rnn.init_data()
   rnn.print_task_properties()
