@@ -222,7 +222,7 @@ def init(config_str, config_dataset, verbosity):
     config.set("train", dataset_dict)
   elif config_dataset and config_dataset != "train":
     print("Use dataset %r from config." % config_dataset)
-    config.set("train", "config:%s" % config_dataset)
+    config.set("train", config.typed_value(config_dataset, None))
   else:
     print("Use train dataset from config.")
     assert config.value("train", None)
