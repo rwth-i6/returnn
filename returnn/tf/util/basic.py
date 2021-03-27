@@ -5419,13 +5419,21 @@ def select_src_beams(x, src_beams, name="select_src_beams"):
     assert x_ndim is not None
     x_shape = get_shape(x)
     x_shape_rem = [x_shape[i] for i in range(1, x_ndim)]
-    src_beam_dim = x_shape[0] // batch_dim
-    with reuse_name_scope_of_tensor(x, add_tensor_name=True, postfix="_reshape_split_beam"):
-      x = tf.reshape(x, [batch_dim, src_beam_dim] + x_shape_rem)  # (batch, src-beam, ...)
-    with reuse_name_scope_of_tensor(src_beams, add_tensor_name=True, postfix="_nd_indices"):
-      indices = nd_indices(src_beams)  # (batch, beam, 2)
-    x = tf.gather_nd(x, indices=indices)  # K=2, (batch, beam, ...)
-    x = tf.reshape(x, [batch_dim * beam_dim] + x_shape_rem)
+
+    def _select_src_beams_non_empty(x_=x):
+      src_beam_dim = x_shape[0] // batch_dim
+      with reuse_name_scope_of_tensor(x_, add_tensor_name=True, postfix="_reshape_split_beam"):
+        x_ = tf.reshape(x_, [batch_dim, src_beam_dim] + x_shape_rem)  # (batch, src-beam, ...)
+      with reuse_name_scope_of_tensor(src_beams, add_tensor_name=True, postfix="_nd_indices"):
+        indices = nd_indices(src_beams)  # (batch, beam, 2)
+      x_ = tf.gather_nd(x_, indices=indices)  # K=2, (batch, beam, ...)
+      x_ = tf.reshape(x_, [batch_dim * beam_dim] + x_shape_rem)
+      return x_
+
+    def _empty():
+      return tf.zeros([batch_dim * beam_dim] + x_shape_rem, dtype=x.dtype, name="empty_beams")
+
+    x = tf.cond(tf.greater(tf.size(x), 0), _select_src_beams_non_empty, _empty)
     x.set_shape(tf.TensorShape([None] + x_tshape.as_list()[1:]))
     return x
 
