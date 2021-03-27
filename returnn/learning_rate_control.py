@@ -65,9 +65,9 @@ class LearningRateControl(object):
       "min_num_epochs_per_new_learning_rate": config.int("learning_rate_control_min_num_epochs_per_new_lr", 0),
       "relative_error_div_by_old": config.bool('newbob_relative_error_div_by_old', False),
       "learning_rate_decay": config.typed_value(
-        'learning_rate_decay', config.float('newbob_learning_rate_decay', 0.5)),
+        'learning_rate_decay', config.opt_typed_value('newbob_learning_rate_decay', 0.5)),
       "learning_rate_growth": config.typed_value(
-        'learning_rate_growth', config.float('newbob_learning_rate_growth', 1.0)),
+        'learning_rate_growth', config.opt_typed_value('newbob_learning_rate_growth', 1.0)),
       "filename": config.value('learning_rate_file', None),
     }
 
