@@ -5205,6 +5205,61 @@ def test_MaskedComputationLayer_subnet_rec_search():
     print("out:", session.run(out, feed_dict=feed_dict))
 
 
+def test_MaskedComputationLayer_subnet_trafo_search():
+  beam_size = 3
+  target = "classes"
+  num_classes = 13
+  blank_idx = num_classes - 2
+  from test_TFNetworkLayer import make_feed_dict
+  net_dict = {
+    "encoder": {"class": "linear", "from": "data", "activation": "relu", "n_out": 10},
+    "output": {"class": "rec", "from": "encoder", "unit": {
+      'output': {'class': 'choice', 'target': target, 'beam_size': beam_size, 'from': "output_prob",
+                 "initial_output": 0},
+      'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': 'output', "n_out": 12,
+                       "initial_output": 0},
+      'not_blank_mask': {'class': 'compare', 'from': 'output', 'value': blank_idx, 'kind': 'not_equal',
+                         'initial_output': True},
+      'masked_s': {
+        'class': 'masked_computation', 'mask': 'prev:not_blank_mask', 'from': 'prev:output',
+        'unit': {
+          "class": "subnetwork", "from": "data",
+          "subnetwork": {
+            "lstm": {
+              "class": "rec", "unit": "nativelstm2",
+              "from": "data",
+              "n_out": 11},
+            "selfatt": {
+              "class": "self_attention", "num_heads": 2, "total_key_dim": 6,
+              "from": "lstm", "attention_left_only": True,
+              "n_out": 14},
+            "output": {"class": "copy", "from": "selfatt"}
+          }},
+      },
+      "masked_s_unmask": {"class": "unmask", "from": "masked_s", "mask": 'prev:not_blank_mask'},
+
+      "readout_in": {
+        "class": "linear", "from": ["masked_s_unmask", "prev:target_embed", "data:source"],
+        "activation": None, "n_out": 10},
+      "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": "readout_in"},
+      "output_prob": {"class": "softmax", "from": "readout", "target": target, "loss": "ce"}
+    }, "target": target},
+  }
+  with make_scope() as session:
+    config = Config({"debug_print_layer_output_template": True})
+    extern_data = ExternData({
+      "data": {"dim": 20, "sparse": True},
+      target: {"dim": num_classes, "sparse": True}})
+    feed_dict = make_feed_dict(extern_data)
+
+    print("***** Construct search net.")
+    search_net = TFNetwork(extern_data=extern_data, config=config, search_flag=True)
+    search_net.construct_from_dict(net_dict)
+    session.run(tf_compat.v1.global_variables_initializer())
+    out = search_net.get_default_output_layer().output.placeholder
+    print("out:", session.run(out, feed_dict=feed_dict))
+
+
 def test_MaskedComputationLayer_UnmaskLayer_masked_outside():
   from returnn.tf.layers.rec import _SubnetworkRecCell
   with make_scope() as session:
