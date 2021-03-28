@@ -6754,12 +6754,18 @@ class MaskedComputationLayer(LayerBase):
         prev_value_flat = nest.flatten(prev_value)
         assert len(value_flat) == len(prev_value_flat)
         res = []
+        mask_shape = tf.shape(mask_t)
         for value_, prev_value_ in zip(value_flat, prev_value_flat):
           assert isinstance(value_, tf.Tensor) and isinstance(prev_value_, tf.Tensor)
-          res.append(where_bc(
-            condition=tf.reshape(mask_t, [-1] + [1] * (value_.shape.ndims - 1)),  # add broadcast dims
-            x=value_,
-            y=prev_value_))
+          check = tf.Assert(
+            tf.reduce_all(tf.equal(tf.shape(value_), tf.shape(prev_value_))),
+            ["MaskedComputation non equal state shape", mask_shape, tf.shape(value_), tf.shape(prev_value_)],
+            summarize=10)
+          with tf.control_dependencies([check]):
+            res.append(where_bc(
+              condition=tf.reshape(mask_t, [-1] + [1] * (value_.shape.ndims - 1)),  # add broadcast dims
+              x=value_,
+              y=prev_value_))
         self.rec_vars_outputs[key] = nest.pack_sequence_as(value, res)
 
   def get_dep_layers(self):
