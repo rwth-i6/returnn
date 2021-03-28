@@ -6009,6 +6009,90 @@ def test_trafo_search_lm():
       assert all(out_seqs[i, :input_seq_lens[i]] == input_seqs[i, :input_seq_lens[i]])
 
 
+def test_self_att_rec_state():
+  rnd = numpy.random.RandomState(42)
+  beam_size = 5
+  n_batch, n_in, n_time = 3, 19, 9
+  n_out = n_in
+
+  config = Config()
+  config.update({
+    "extern_data": {
+      "data": {"dim": n_in, "sparse": True},
+      "classes": {"dim": n_out, "sparse": True}
+    },
+    "debug_print_layer_output_template": True})
+
+  net_dict = {
+    "encoder": {"class": "linear", "from": "data", "activation": None, "with_bias": False, "n_out": 7, "L2": 0.0001},
+    "encoder_red": {"class": "reduce", "axis": "t", "from": "encoder", "mode": "max"},
+    'output': {
+      'class': 'rec',
+      "from": [],
+      'target': 'classes',
+      "max_seq_len": 13,
+      'unit': {
+        "end": {"class": "compare", "from": "output", "value": 0},
+        'output': {
+          'class': 'choice', 'target': 'classes', 'beam_size': beam_size,
+          'from': "output_prob", "initial_output": 0},
+        "output_prob": {
+          'class': 'softmax', 'from': ['self_att', 'base:encoder_red'], 'loss': 'ce', 'target': 'classes'},
+        "prev_embed": {
+          "class": "linear", "activation": None, "with_bias": False, "from": "prev:output", "n_out": 7},
+        "self_att": {
+          "class": "self_attention", "from": "prev_embed", "attention_left_only": True,
+          "n_out": 12, "num_heads": 2, "total_key_dim": 10,
+        },
+      }}
+  }
+
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=False, search_flag=True)
+    pprint(network.extern_data.data)
+    network.construct_from_dict(net_dict)
+
+    rec_layer = network.get_layer("output")
+    assert isinstance(rec_layer, RecLayer)
+    cell = rec_layer.cell
+    from returnn.tf.layers.rec import _SubnetworkRecCell
+    assert isinstance(cell, _SubnetworkRecCell)
+    self_att_layer = cell.net.layers["self_att"]
+    assert isinstance(self_att_layer, SelfAttentionLayer)
+    print("Self attention layer hidden state:")
+    print(self_att_layer.rec_vars_outputs)
+    assert set(self_att_layer.rec_vars_outputs.keys()) == {"k_left", "v_left"}
+
+    data_input = network.extern_data.data["data"]
+    assert data_input.batch_shape == (None, None)
+    output_out = rec_layer.output.copy_as_batch_major()
+
+    input_seq_lens = numpy.array([n_time, n_time - 5, n_time - 4], dtype="int32")
+    assert input_seq_lens.shape == (n_batch,) and all(input_seq_lens > 0)
+    input_seqs = rnd.randint(1, n_out, size=(n_batch, n_time,), dtype="int32")
+    print("input:")
+    print(input_seqs)
+    print("lens:", input_seq_lens)
+
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+    fetches = (output_out.placeholder, output_out.get_sequence_lengths())
+    feed_dict = {
+      data_input.placeholder: input_seqs,
+      data_input.size_placeholder[0]: input_seq_lens}
+    try:
+      out_seqs, out_seq_lens = session.run(fetches, feed_dict=feed_dict)
+    except Exception as exc:
+      print("EXCEPTION:", type(exc), exc)
+      help_on_tf_exception(session=session, exception=exc, fetches=fetches, feed_dict=feed_dict)
+      raise
+    print("output:")
+    print(out_seqs)  # random...
+    print("lens:", out_seq_lens)
+    assert isinstance(out_seqs, numpy.ndarray) and isinstance(out_seq_lens, numpy.ndarray)
+    assert len(out_seqs.shape) == 2 and out_seqs.shape[0] == n_batch * beam_size
+    assert out_seq_lens.shape == (n_batch * beam_size,)
+
+
 def test_cumulated_attention_weights_search():
   rnd = numpy.random.RandomState(42)
   beam_size = 5
