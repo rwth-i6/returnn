@@ -890,17 +890,32 @@ def test_subnetwork_layer_net_construct():
   with make_scope() as session:
     net_dict = {
       "ff0": {"class": "forward", "activation": "tanh", "n_out": 3},
-      "sub": {"class": "subnetwork", "from": ["ff0"], "subnetwork": {
+      "sub": {"class": "subnetwork", "from": "ff0", "subnetwork": {
         "ff1": {"class": "forward", "activation": "relu", "n_out": 2},
         "output": {"class": "forward", "activation": "relu", "n_out": 2}
       }},
-      "output": {"class": "softmax", "loss": "ce", "from": ["sub"]}
+      "output": {"class": "softmax", "loss": "ce", "from": "sub"}
     }
     config = Config()
     config.update(dict(num_inputs=4, num_outputs=3))
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(net_dict)
     assert_equal(network.layers["sub"].output.dim, 2)
+    sub_layer = network.layers["sub"]
+    assert isinstance(sub_layer, SubnetworkLayer)
+    sub_layer_deps = sub_layer.get_dep_layers()
+    assert sub_layer_deps, "%r no deps" % sub_layer
+    all_deps = set()
+    queue = [sub_layer]
+    while queue:
+      layer = queue.pop(0)
+      if layer in all_deps:
+        continue
+      all_deps.add(layer)
+      for dep in layer.get_dep_layers():
+        if dep not in all_deps:
+          queue.append(dep)
+    assert network.layers["ff0"] in all_deps
 
 
 def test_subnet_loss():
