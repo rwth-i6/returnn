@@ -6608,6 +6608,14 @@ class SubnetworkLayer(LayerBase):
     except LayerNotFound:
       return None
 
+  def get_dep_layers(self):
+    """
+    :return: list of layers this layer depends on.
+      normally this is just self.sources but e.g. the attention layer in addition has a base, etc.
+    :rtype: list[LayerBase]
+    """
+    return super(SubnetworkLayer, self).get_dep_layers() + [self.subnetwork.layers["output"]]
+
   def get_last_hidden_state(self, key):
     """
     :param int|str|None key: also the special key "*"
