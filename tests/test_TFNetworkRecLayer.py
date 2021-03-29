@@ -5379,6 +5379,115 @@ def test_MaskedComputationLayer_outside():
     assert out_v.shape == (num_batch, max(out_lens))
 
 
+def test_subnet_deps_search():
+  beam_size = 3
+  EncKeyTotalDim = 10
+  AttNumHeads = 1
+  target = "classes"
+  num_classes = 13
+  from test_TFNetworkLayer import make_feed_dict
+  net_dict = {
+    "encoder": {"class": "linear", "from": "data", "activation": "relu", "n_out": EncKeyTotalDim},
+    "enc_ctx": {"class": "copy", "from": "encoder"},
+    "enc_value": {"class": "copy", "from": "encoder"},
+    "inv_fertility": {"class": "linear", "activation": "sigmoid", "from": "encoder", "n_out": AttNumHeads},
+
+    'output': {
+      'class': 'rec',
+      'from': [],
+      'max_seq_len': "max_len_from('base:encoder')",
+      'target': target,
+      'unit': {
+        'FF_0': {'L2': 0.0005,
+                 'activation': 'tanh',
+                 'class': 'linear',
+                 'from': ['prev:target_embed', 'prev:prev_1_target_embed', 'prev:prev_2_target_embed',
+                          'prev:att'],
+                 'n_out': 10,
+                 'with_bias': True},
+        'accum_att_weights': {'class': 'eval',
+                              'eval': 'source(0) + source(1) * source(2) * 0.5',
+                              'from': ['prev:accum_att_weights', 'att_weights', 'base:inv_fertility'],
+                              'out_type': {'dim': AttNumHeads, 'shape': (None, AttNumHeads)}},
+        'att': {'axes': 'except_batch', 'class': 'merge_dims', 'from': 'att0'},
+        'att0': {'base': 'base:enc_value', 'class': 'generic_attention', 'weights': 'att_weights'},
+        'att_weights': {'class': 'softmax_over_spatial', 'from': 'energy'},
+        'combo_output_prob': {'class': 'eval',
+                              'eval': 'safe_log(source(0)) - 0.22 * safe_log(source(1))',
+                              'from': ['output_prob', 'prior_output_prob']},
+        'end': {'class': 'compare', 'from': 'output', 'kind': 'equal', 'value': 0},
+        'energy': {'activation': None, 'class': 'linear', 'from': 'energy_tanh', 'n_out': AttNumHeads,
+                   'with_bias': False},
+        'energy_in': {'class': 'combine', 'from': ['base:enc_ctx', 'weight_feedback', 'FF_0'],
+                      'kind': 'add', 'n_out': EncKeyTotalDim},
+        'energy_tanh': {'activation': 'tanh', 'class': 'activation', 'from': 'energy_in'},
+        'output': {'beam_size': beam_size,
+                   'class': 'choice',
+                   'from': 'combo_output_prob',
+                   'initial_output': 0,
+                   'input_type': 'log_prob',
+                   'target': target},
+        'output_prob': {'L2': 0.0005,
+                        'class': 'softmax',
+                        'dropout': 0.3,
+                        'from': 'readout',
+                        'loss': 'ce',
+                        'loss_opts': {'label_smoothing': 0.1},
+                        'target': target},
+        'prev_1_target_embed': {'class': 'copy', 'from': 'prev:target_embed'},
+        'prev_2_target_embed': {'class': 'copy', 'from': 'prev:prev_1_target_embed'},
+        'prior_lm_output': {'class': 'subnetwork',
+                            'from': 'prev:output',
+                            'subnetwork': {
+                              'input': {'activation': 'identity', 'class': 'linear', 'n_out': 13},
+                              'lstm0': {'L2': 0.0,
+                                        'class': 'rec',
+                                        'direction': 1,
+                                        'dropout': 0.2,
+                                        'from': ['input'],
+                                        'n_out': 10,
+                                        'unit': 'lstm'},
+                              'output': {'activation': 'identity',
+                                         'class': 'linear',
+                                         'dropout': 0.2,
+                                         'from': ['lstm0'],
+                                         'n_out': num_classes}}},
+        'prior_output_prob': {'activation': 'softmax', 'class': 'activation', 'from': 'prior_lm_output',
+                              'target': target},
+        'readout': {'class': 'reduce_out', 'from': 'readout_in', 'mode': 'max', 'num_pieces': 2},
+        'readout_in': {'activation': None,
+                       'class': 'linear',
+                       'from': ['FF_0', 'prev:target_embed', 'att'],
+                       'n_out': 10,
+                       'with_bias': True},
+        'target_embed': {'activation': None,
+                         'class': 'linear',
+                         'from': 'output',
+                         'initial_output': 0,
+                         'n_out': 13,
+                         'with_bias': False},
+        'weight_feedback': {'activation': None,
+                            'class': 'linear',
+                            'from': 'prev:accum_att_weights',
+                            'n_out': 10,
+                            'with_bias': False}}
+    },
+  }
+  with make_scope() as session:
+    config = Config({"debug_print_layer_output_template": True})
+    extern_data = ExternData({
+      "data": {"dim": 20, "sparse": True},
+      target: {"dim": num_classes, "sparse": True}})
+    feed_dict = make_feed_dict(extern_data)
+
+    print("***** Construct search net.")
+    search_net = TFNetwork(extern_data=extern_data, config=config, search_flag=True)
+    search_net.construct_from_dict(net_dict)
+    session.run(tf_compat.v1.global_variables_initializer())
+    out = search_net.get_default_output_layer().output.placeholder
+    print("out:", session.run(out, feed_dict=feed_dict))
+
+
 def test_untrainable_sublayers():
   with make_scope() as session:
     config = Config()
