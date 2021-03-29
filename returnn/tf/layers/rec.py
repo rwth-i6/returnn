@@ -5821,7 +5821,8 @@ class SelfAttentionLayer(_ConcatInputLayer):
     total_value_dim = self.output.dim
     assert total_key_dim % num_heads == 0, "must be divisible"
     assert total_value_dim % num_heads == 0, "must be divisible. total_value_dim = n_out"
-    from returnn.tf.util.basic import get_initializer, dot, get_shape, to_int32_64
+    from returnn.tf.util.basic import get_initializer, dot, get_shape, to_int32_64, where_bc
+    batch_dim = self.input_data.get_batch_dim()
     with self.var_creation_scope():
       fwd_weights_initializer = get_initializer(
         forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
@@ -5830,6 +5831,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
       mat = self.add_param(tf_compat.v1.get_variable(
         name="QKV", shape=(n_in, mat_n_out), dtype=tf.float32, initializer=fwd_weights_initializer),
         axes_split_info=[[n_in], [total_key_dim, total_key_dim, total_value_dim]])
+      prev_mask = None
       if self._rec_previous_layer:
         assert self.input_data.time_dim_axis is None
         assert attention_left_only
@@ -5837,9 +5839,9 @@ class SelfAttentionLayer(_ConcatInputLayer):
         prev_k_left = self._rec_previous_layer.rec_vars_outputs["k_left"]
         # (batch,heads,time,v-dim//heads)
         prev_v_left = self._rec_previous_layer.rec_vars_outputs["v_left"]
+        prev_mask = self._rec_previous_layer.rec_vars_outputs.get("mask_left")
       else:
         assert self.input_data.time_dim_axis is not None
-        batch_dim = self.input_data.get_batch_dim()
         if initial_state is not None:
           prev_k_left = RnnCellLayer.get_rec_initial_state_inner(
             initial_state=initial_state, name=self.name, rec_layer=self,
@@ -5866,7 +5868,6 @@ class SelfAttentionLayer(_ConcatInputLayer):
     else:
       assert self.input_data.time_dim_axis in (0, 1)
     assert self.input_data.batch_dim_axis in (0, 1)
-    batch_dim = tf.shape(x)[self.input_data.batch_dim_axis]
     x_shape[self.input_data.batch_dim_axis] = batch_dim
     x = tf.reshape(x, x_shape)  # (batch,time|1)|(time|1,batch) + (heads,qkv-dim//heads)
     x.set_shape(tf.TensorShape([None, None, num_heads, mat_n_out // num_heads]))
@@ -5954,10 +5955,17 @@ class SelfAttentionLayer(_ConcatInputLayer):
         # shape: (batch,1,1,time)
         inverted_prefix_mask = tf.reshape(inverted_prefix_mask, [tf.shape(energy)[0], 1, 1, tf.shape(energy)[-1]])
         energy_mask = tf.math.logical_xor(energy_mask, inverted_prefix_mask)
-      # Currently tf.where does not support broadcasting...
-      energy_mask = tf.logical_and(energy_mask, tf.ones_like(energy, dtype=tf.bool))
-      energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy), name="energy_masked")
-    weights = tf.nn.softmax(energy, name="weights")  # (batch,heads,time,time)
+      energy = where_bc(energy_mask, energy, float("-inf") * tf.ones_like(energy), name="energy_masked")
+    elif prev_mask is not None:
+      assert self._rec_previous_layer and have_prev_kv_left
+      mask = tf.concat([prev_mask, tf.ones([batch_dim, 1], dtype=tf.bool)], axis=1)  # B,T
+      mask.set_shape((None, None))
+      self.rec_vars_outputs["mask_left"] = mask
+      energy = where_bc(
+        mask[:, None, None, :],  # (B,1(H),1(num_queries),num_keys|T)
+        energy, float("-inf") * tf.ones_like(energy), name="energy_masked_history")
+      self._assign_masked_comp_state_transform_func_callback(k, v, mask)
+    weights = tf.nn.softmax(energy, name="weights")  # (batch,heads,num_queries|time,num_keys|time)
     if attention_dropout:
       import returnn.tf.util.basic as tf_util
       weights = self.network.cond_on_train(
@@ -6015,11 +6023,12 @@ class SelfAttentionLayer(_ConcatInputLayer):
 
   # noinspection PyMethodOverriding
   @classmethod
-  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, num_heads, total_key_dim, n_out, name,
+  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, network, num_heads, total_key_dim, n_out, name,
                                     initial_state=None, sources=(), **kwargs):
     """
     :param tf.Tensor batch_dim:
     :param RecLayer|LayerBase rec_layer:
+    :param returnn.tf.network.TFNetwork network:
     :param int num_heads:
     :param int total_key_dim:
     :param int n_out:
@@ -6049,16 +6058,22 @@ class SelfAttentionLayer(_ConcatInputLayer):
         state_key="v_left",
         initial_shape=(batch_dim, num_heads, 0, total_value_dim // num_heads),
         shape_invariant=(None, num_heads, None, total_value_dim // num_heads))
-      return {"k_left": k_left, "v_left": v_left}
+      res = {"k_left": k_left, "v_left": v_left}
+      if network.is_extra_internal_template_construction():
+        # This could be inside MaskedComputationLayer or some other conditional execution layer.
+        # Need mask for history.
+        res["mask_left"] = tf.ones((batch_dim, 0), dtype=tf.bool)  # B,T
+      return res
     return {}
 
   @classmethod
-  def get_rec_initial_extra_outputs_shape_invariants(cls, num_heads, total_key_dim, n_out, sources, **kwargs):
+  def get_rec_initial_extra_outputs_shape_invariants(cls, num_heads, total_key_dim, n_out, sources, network, **kwargs):
     """
     :param int num_heads:
     :param int total_key_dim:
     :param int n_out:
     :param list[LayerBase] sources:
+    :param returnn.tf.network.TFNetwork network:
     :rtype: dict[str, tf.TensorShape]
     """
     data = get_concat_sources_data_template(sources)
@@ -6066,9 +6081,12 @@ class SelfAttentionLayer(_ConcatInputLayer):
     if data.time_dim_axis is None:
       # Assume inside RecLayer. See get_rec_initial_extra_outputs.
       total_value_dim = n_out
-      return {
+      res = {
         "k_left": tf.TensorShape((None, num_heads, None, total_key_dim // num_heads)),
         "v_left": tf.TensorShape((None, num_heads, None, total_value_dim // num_heads))}
+      if network.is_extra_internal_template_construction():
+        res["mask_left"] = tf.TensorShape((None, None))
+      return res
     return {}
 
   def post_process_final_rec_vars_outputs(self, rec_vars_outputs, seq_len):
@@ -6083,6 +6101,39 @@ class SelfAttentionLayer(_ConcatInputLayer):
       rec_vars_outputs["k_left"] = rec_vars_outputs["k_left"][:, :, -tf.reduce_max(seq_len):]
       rec_vars_outputs["v_left"] = rec_vars_outputs["v_left"][:, :, -tf.reduce_max(seq_len):]
     return rec_vars_outputs
+
+  @classmethod
+  def _assign_masked_comp_state_transform_func_callback(cls, k, v, mask):
+    """
+    :param tf.Tensor k: [B,H,T,K]
+    :param tf.Tensor v: [B,H,T,V]
+    :param tf.Tensor mask: shape [B,T]
+    """
+    # noinspection PyUnusedLocal,PyShadowingNames
+    def _masked_transform_mask(value, prev_value, mask):
+      """
+      :param tf.Tensor value: mask [B,T]
+      :param tf.Tensor prev_value: mask [B,T']
+      :param tf.Tensor mask: [B]
+      :return: masked value
+      :rtype: tf.Tensor
+      """
+      return tf.concat([prev_value, mask[:, None]], axis=1)
+
+    # noinspection PyUnusedLocal,PyShadowingNames
+    def _masked_transform_kv(value, prev_value, mask):
+      """
+      :param tf.Tensor value: mask [B,H,T,K|V]
+      :param tf.Tensor prev_value: mask [B,H,T',K|V]
+      :param tf.Tensor mask: [B]
+      :return: masked value
+      :rtype: tf.Tensor
+      """
+      return value
+
+    mask.RETURNN_masked_comp_state_transform = _masked_transform_mask
+    k.RETURNN_masked_comp_state_transform = _masked_transform_kv
+    v.RETURNN_masked_comp_state_transform = _masked_transform_kv
 
 
 class PositionalEncodingLayer(_ConcatInputLayer):
@@ -6757,6 +6808,9 @@ class MaskedComputationLayer(LayerBase):
         mask_shape = tf.shape(mask_t)
         for value_, prev_value_ in zip(value_flat, prev_value_flat):
           assert isinstance(value_, tf.Tensor) and isinstance(prev_value_, tf.Tensor)
+          if hasattr(value_, "RETURNN_masked_comp_state_transform"):
+            res.append(value_.RETURNN_masked_comp_state_transform(value=value_, prev_value=prev_value_, mask=mask_t))
+            continue
           check = tf.Assert(
             tf.reduce_all(tf.equal(tf.shape(value_), tf.shape(prev_value_))),
             ["MaskedComputation non equal state shape", mask_shape, tf.shape(value_), tf.shape(prev_value_)],
