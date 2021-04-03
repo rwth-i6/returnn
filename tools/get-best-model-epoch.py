@@ -86,7 +86,7 @@ def main():
     errors = lr.epoch_data[ep].error
     print(", ".join(
       ["Epoch %i" % ep, "%r %r" % (key, value)] +
-      ["%r %r" for k, v in errors.items() if k != key]))
+      ["%r %r" % (k, v) for k, v in errors.items() if k != key]))
 
 
 if __name__ == "__main__":
