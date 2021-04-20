@@ -99,6 +99,11 @@ jobs:
 
     - uses: actions/setup-python@v2
       with:
+        python-version: 2.7
+      if: matrix.python-version != 2.7
+
+    - uses: actions/setup-python@v2
+      with:
         python-version: ${{ matrix.python-version }}
 
     - name: Cache dependencies
