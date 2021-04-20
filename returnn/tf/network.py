@@ -1450,9 +1450,13 @@ class TFNetwork(object):
 
   def get_all_layers_deep(self):
     """
-    :return: all layers, including extra net, including sub layers. duplicates are made unique
+    :return: all layers, including extra net, including sub layers. duplicates are made unique.
+      It might exclude internal layers.
+      We ensure that layers are unique by their absolute name.
     :rtype: list[LayerBase]
     """
+    from returnn.tf.layers.basic import InternalLayer
+    layers_by_abs_name = {}  # type: typing.Dict[str,LayerBase]
     layer_set = set()
     layers = []
     net_queue = [self]  # type: typing.List[TFNetwork]
@@ -1462,8 +1466,17 @@ class TFNetwork(object):
         layer = layer_queue.pop(0)
         if layer in layer_set:
           continue
+        layer_abs_name = layer.get_absolute_name()
+        if layer_abs_name in layers_by_abs_name:
+          if isinstance(layer, InternalLayer):
+            # No error for this. Just skip it.
+            layer_set.add(layer)  # Do not visit again.
+            continue
+        assert layer_abs_name not in layers_by_abs_name, (
+          "duplicate layer: %r vs %r" % (layers_by_abs_name[layer_abs_name], layer))
         layers.append(layer)
         layer_set.add(layer)
+        layers_by_abs_name[layer_abs_name] = layer
         sub_nets = layer.get_sub_networks()
         if sub_nets:
           net_queue += sub_nets
@@ -1629,7 +1642,9 @@ class TFNetwork(object):
     """
     layers = {}  # type: typing.Dict[str,typing.Dict[str,numpy.ndarray]]
     for layer in self.get_all_layers_deep():
-      layers[layer.name] = layer.get_param_values_dict(session)
+      name = layer.get_absolute_name()
+      assert name not in layers
+      layers[name] = layer.get_param_values_dict(session)
     return layers
 
   def set_param_values_by_dict(self, values_dict, ignore_non_existing=False, **kwargs):
@@ -1640,7 +1655,8 @@ class TFNetwork(object):
 
     Note that this excludes auxiliary params.
     """
-    layers = {layer.name: layer for layer in self.get_all_layers_deep()}  # type: typing.Dict[str,LayerBase]
+    layers = {
+      layer.get_absolute_name(): layer for layer in self.get_all_layers_deep()}  # type: typing.Dict[str,LayerBase]
     for layer_name, layer_values_dict in values_dict.items():
       if layer_values_dict:
         if ignore_non_existing and layer_name not in layers:
