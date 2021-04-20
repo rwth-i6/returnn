@@ -6410,6 +6410,16 @@ class CondLayer(LayerBase):
     true_out = cls._get_out_data_from_layer(true_layer, name="%s/true" % name, network=network)
     return true_out
 
+  def get_sub_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    layers = []
+    for layer in [self.condition_layer, self.true_layer, self.false_layer]:
+      if layer:
+        layers.append(layer)
+    return layers
+
 
 class SubnetworkLayer(LayerBase):
   """
@@ -6607,6 +6617,18 @@ class SubnetworkLayer(LayerBase):
       return self.subnetwork.get_layer(layer_name)
     except LayerNotFound:
       return None
+
+  def get_sub_networks(self):
+    """
+    :rtype: list[returnn.tf.network.TFNetwork]
+    """
+    return [self.subnetwork]
+
+  def get_sub_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    return self.subnetwork.get_all_layers_shallow()
 
   def get_dep_layers(self):
     """

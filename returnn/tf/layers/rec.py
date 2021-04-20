@@ -937,6 +937,22 @@ class RecLayer(_ConcatInputLayer):
       return self.cell.get_layer_from_outside(layer_name)
     return None
 
+  def get_sub_networks(self):
+    """
+    :rtype: list[returnn.tf.network.TFNetwork]
+    """
+    if isinstance(self.cell, _SubnetworkRecCell):
+      return self.cell.get_sub_networks()
+    return []
+
+  def get_sub_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    if isinstance(self.cell, _SubnetworkRecCell):
+      return self.cell.get_all_layers_shallow()
+    return []
+
 
 class _SubnetworkRecCell(object):
   """
@@ -1561,6 +1577,29 @@ class _SubnetworkRecCell(object):
         "%r: Cannot get layer %r from outside, because it is only available inside the recurrent loop. \
          Add 'is_output_layer':True to the layer options." % (self.parent_rec_layer, layer_name))
     return None
+
+  def get_sub_networks(self):
+    """
+    :rtype: list[returnn.tf.network.TFNetwork]
+    """
+    return [net for net in [self.input_layers_net, self.net, self.output_layers_net] if net]
+
+  def get_all_layers_shallow(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    layer_set = set()
+    layers = []
+    for net in self.get_sub_networks():
+      if not layers:
+        layers += net.get_all_layers_shallow()
+        layer_set.update(layers)
+      else:
+        for layer in net.get_all_layers_shallow():
+          if layer not in layer_set:
+            layers.append(layer)
+            layer_set.add(layer)
+    return layers
 
   def _get_init_output(self, name, batch_dim=None):
     """

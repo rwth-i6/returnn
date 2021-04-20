@@ -693,6 +693,23 @@ class LayerBase(object):
     """
     return None
 
+  def get_sub_networks(self):
+    """
+    :return: All subnetworks, including those which might be in a different ctx.
+      If this returns a non-empty list, we expect that all layers via get_sub_layers
+      can be reached via the subnetworks.
+    :rtype: list[returnn.tf.network.TFNetwork]
+    """
+    return []
+
+  def get_sub_layers(self):
+    """
+    :return: All (direct) (non-temporary) sub layers, including those which might be in a different ctx.
+      This is mostly intended to collect params.
+    :rtype: list[LayerBase]
+    """
+    return []
+
   def get_search_choices(self):
     """
     :rtype: SearchChoices|None

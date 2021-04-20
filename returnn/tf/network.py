@@ -1428,21 +1428,57 @@ class TFNetwork(object):
       raise LayerNotFound("layer %r not found in %r" % (layer_name, self), layer_name=layer_name, network=self)
     return self.layers[layer_name]
 
-  def _get_all_layers(self):
+  def get_all_layers_shallow(self):
     """
-    :return: all layers, including extra net. duplicates are made unique
+    :return: layers, including extra net, not including sub layers
     :rtype: list[LayerBase]
     """
+    layer_set = set()
     layers = []
     for (_, layer) in sorted(self.layers.items()):
-      if layer not in layers:
+      if layer not in layer_set:
         layers.append(layer)
+        layer_set.add(layer)
     if self.extra_nets:
       for _, extra_net in sorted(self.extra_nets.items()):
         assert isinstance(extra_net, TFNetwork)
-        for layer in extra_net._get_all_layers():
-          if layer not in layers:
+        for (_, layer) in sorted(extra_net.layers.items()):
+          if layer not in layer_set:
             layers.append(layer)
+            layer_set.add(layer)
+    return layers
+
+  def get_all_layers_deep(self):
+    """
+    :return: all layers, including extra net, including sub layers. duplicates are made unique
+    :rtype: list[LayerBase]
+    """
+    layer_set = set()
+    layers = []
+    net_queue = [self]  # type: typing.List[TFNetwork]
+    layer_queue = []  # type: typing.List[LayerBase]
+    while net_queue or layer_queue:
+      if layer_queue:
+        layer = layer_queue.pop(0)
+        if layer in layer_set:
+          continue
+        layers.append(layer)
+        layer_set.add(layer)
+        sub_nets = layer.get_sub_networks()
+        if sub_nets:
+          net_queue += sub_nets
+        else:
+          sub_layers = layer.get_sub_layers()
+          layer_queue += sub_layers
+        continue
+      if net_queue:
+        net = net_queue.pop(0)
+        if net.extra_nets:
+          net_queue[:0] = [extra_net for _, extra_net in sorted(self.extra_nets.items())]
+        for (_, layer) in sorted(net.layers.items()):
+          if layer not in layer_set:
+            layer_queue.append(layer)
+        continue
     return layers
 
   def get_params_list(self):
@@ -1451,7 +1487,7 @@ class TFNetwork(object):
     :rtype: list[tf.Variable]
     """
     ls = []  # type: typing.List[tf.Variable]
-    for layer in self._get_all_layers():
+    for layer in self.get_all_layers_deep():
       assert isinstance(layer, LayerBase)
       for param_name, param in sorted(layer.params.items()):
         assert isinstance(param, tf.Variable)
@@ -1466,7 +1502,7 @@ class TFNetwork(object):
     :rtype: dict[tf.Variable,tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject]
     """
     d = {}
-    for layer in self._get_all_layers():
+    for layer in self.get_all_layers_deep():
       assert isinstance(layer, LayerBase)
       d.update(layer.saveable_param_replace)
     return d
@@ -1477,7 +1513,7 @@ class TFNetwork(object):
     :rtype: list[tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject]
     """
     ls = []  # type: typing.List[tf.Variable]
-    for layer in self._get_all_layers():
+    for layer in self.get_all_layers_deep():
       assert isinstance(layer, LayerBase)
       for param_name, param in sorted(layer.get_saveable_params_dict().items()):
         if param in ls:  # could happen with reuse_params
@@ -1592,7 +1628,7 @@ class TFNetwork(object):
     Note that this excludes auxiliary params.
     """
     layers = {}  # type: typing.Dict[str,typing.Dict[str,numpy.ndarray]]
-    for layer in self._get_all_layers():
+    for layer in self.get_all_layers_deep():
       layers[layer.name] = layer.get_param_values_dict(session)
     return layers
 
@@ -1604,7 +1640,7 @@ class TFNetwork(object):
 
     Note that this excludes auxiliary params.
     """
-    layers = {layer.name: layer for layer in self._get_all_layers()}  # type: typing.Dict[str,LayerBase]
+    layers = {layer.name: layer for layer in self.get_all_layers_deep()}  # type: typing.Dict[str,LayerBase]
     for layer_name, layer_values_dict in values_dict.items():
       if layer_values_dict:
         if ignore_non_existing and layer_name not in layers:
@@ -1722,7 +1758,7 @@ class TFNetwork(object):
       # We must keep the behavior consistent.
       # CustomCheckpointLoader will not load any params with a custom init.
       must_use_custom_checkpoint_loader = True
-    if any([layer.custom_param_importer for layer in self._get_all_layers()]):
+    if any([layer.custom_param_importer for layer in self.get_all_layers_deep()]):
       # Need to use CustomCheckpointLoader because only that handles custom_param_importer correctly.
       must_use_custom_checkpoint_loader = True
     ignore_missing_vars = self.get_config().bool("load_ignore_missing_vars", False)
