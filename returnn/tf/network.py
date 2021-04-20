@@ -362,6 +362,10 @@ class TFNetwork(object):
     if not parent_net and parent_layer:
       parent_net = parent_layer.network
     base_net = parent_net or extra_parent_net
+    if not base_net:
+      # It's a new root network.
+      # Clear any old list in case there was a previous network in the same graph.
+      LayerBase.get_global_layer_list()[:] = []
     if not config and base_net:
       config = base_net._config
     if extern_data is None:
