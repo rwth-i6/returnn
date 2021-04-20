@@ -1582,6 +1582,8 @@ class _SubnetworkRecCell(object):
     """
     :rtype: list[returnn.tf.network.TFNetwork]
     """
+    # Note that the order matters, to resolve duplicate names (by absolute name)
+    # in get_all_layers_deep.
     return [net for net in [self.input_layers_net, self.net, self.output_layers_net] if net]
 
   def get_all_layers_shallow(self):

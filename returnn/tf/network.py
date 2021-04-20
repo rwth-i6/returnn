@@ -1455,10 +1455,11 @@ class TFNetwork(object):
       We ensure that layers are unique by their absolute name.
     :rtype: list[LayerBase]
     """
-    from returnn.tf.layers.basic import InternalLayer
+    all_params = set()  # type: typing.Set[tf.Variable]  # just used to check that we don't miss anything
     layers_by_abs_name = {}  # type: typing.Dict[str,LayerBase]
-    layer_set = set()
-    layers = []
+    layer_set = set()  # type: typing.Set[LayerBase]
+    layers = []  # type: typing.List[LayerBase]
+    skipped_layers = []  # type: typing.List[LayerBase]
     net_queue = [self]  # type: typing.List[TFNetwork]
     layer_queue = []  # type: typing.List[LayerBase]
     while net_queue or layer_queue:
@@ -1466,17 +1467,16 @@ class TFNetwork(object):
         layer = layer_queue.pop(0)
         if layer in layer_set:
           continue
-        layer_abs_name = layer.get_absolute_name()
-        if layer_abs_name in layers_by_abs_name:
-          if isinstance(layer, InternalLayer):
-            # No error for this. Just skip it.
-            layer_set.add(layer)  # Do not visit again.
-            continue
-        assert layer_abs_name not in layers_by_abs_name, (
-          "duplicate layer: %r vs %r" % (layers_by_abs_name[layer_abs_name], layer))
-        layers.append(layer)
         layer_set.add(layer)
-        layers_by_abs_name[layer_abs_name] = layer
+        layer_abs_name = layer.get_absolute_name()
+        if layer_abs_name not in layers_by_abs_name:
+          layers.append(layer)
+          layers_by_abs_name[layer_abs_name] = layer
+          all_params.update(layer.params.values())
+        else:
+          # The order of layer and subnet queues should get this right.
+          # We anyway check below that we do not miss any parameters.
+          skipped_layers.append(layer)
         sub_nets = layer.get_sub_networks()
         if sub_nets:
           net_queue += sub_nets
@@ -1492,6 +1492,9 @@ class TFNetwork(object):
           if layer not in layer_set:
             layer_queue.append(layer)
         continue
+    for layer in skipped_layers:
+      for param in layer.params.values():
+        assert param in all_params
     return layers
 
   def get_params_list(self):
