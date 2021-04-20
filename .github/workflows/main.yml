@@ -121,11 +121,11 @@ jobs:
         echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
         echo "Python ${{matrix.python-version}}"
         echo "pip: $(type pip)"
-        echo "python2: $(type python2)"
+        echo "pip2: $(type pip2)"
 
-        python2 -m pip install -qq --upgrade pip setuptools wheel six | cat  # Python2<->Python3
-        python2 -m pip --user -r requirements.txt | cat  # need for Python2<->Python3 communication tests
-        python2 -m pip --user typing | cat
+        pip2 install -qq --upgrade pip setuptools wheel six | cat  # Python2<->Python3
+        pip2 install --user -r requirements.txt | cat  # need for Python2<->Python3 communication tests
+        pip2 install --user typing | cat
 
         pip install --user --upgrade pip setuptools wheel
         pip install --user typing | cat  # needed for Python 2 in some cases
