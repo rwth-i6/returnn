@@ -2571,6 +2571,13 @@ class Data(object):
         return self.get_axes_from_description(list(axes))
       elif axes.startswith("stag:"):  # spatial tag
         axes = self.get_axis_by_tag_name(axes[len("stag:"):], spatial_only=True)
+      elif axes.startswith("stag-single:"):  # spatial tag which possibly matches multiple spatial axes
+        # in this case, a name of form "stag-single:<idx>:<name> is expected.
+        # idx is relative to the matching stags, i.e., it is the index among the list of spatial dims matching the name
+        name_split = axes.split(":")
+        idx = int(name_split[1])
+        name = ":".join(name_split[2:])
+        axes = self.get_axes_by_tag_name(name, spatial_only=True)[idx]
       else:
         raise Exception("invalid axis mode %r" % axes)
     if isinstance(axes, int):
@@ -2601,18 +2608,28 @@ class Data(object):
     assert len(axes) == 1, "%r: %r is not a unique axis but %r" % (self, axis, axes)
     return axes[0]
 
+  def get_axes_by_tag_name(self, name, spatial_only=False):
+    """
+    :param str name: the tag name, or part of it (must be unique, and must exist)
+    :param bool spatial_only:
+    :rtype: list[int]
+    """
+    dim_tags = self.get_batch_shape_dim_tags()
+    matching_dim_tags = [(axis, tag) for axis, tag in enumerate(dim_tags) if name.lower() in tag.description.lower()]
+    if spatial_only:
+      matching_dim_tags = [(axis, tag) for axis, tag in matching_dim_tags if tag.kind == DimensionTag.Types.Spatial]
+    return [ax for ax, _ in matching_dim_tags]
+
   def get_axis_by_tag_name(self, name, spatial_only=False):
     """
     :param str name: the tag name, or part of it (must be unique, and must exist)
     :param bool spatial_only:
     :rtype: int
     """
-    dim_tags = self.get_batch_shape_dim_tags()
-    matching_dim_tags = [(axis, tag) for axis, tag in enumerate(dim_tags) if name.lower() in tag.description.lower()]
-    if spatial_only:
-      matching_dim_tags = [(axis, tag) for axis, tag in matching_dim_tags if tag.kind == DimensionTag.Types.Spatial]
-    assert len(matching_dim_tags) == 1, "%r: tag name %r is not unique in dim tags %r" % (self, name, dim_tags)
-    return matching_dim_tags[0][0]
+    matching_dim_tags = self.get_axes_by_tag_name(name, spatial_only)
+    assert len(matching_dim_tags) == 1, "%r: tag name %r is not unique in dim tags %r" % (
+      self, name, self.get_batch_shape_dim_tags())
+    return matching_dim_tags[0]
 
   def get_batch_axis_excluding_batch(self, axis):
     """
@@ -2973,9 +2990,10 @@ class Data(object):
       return "%s/%s" % (scope_name, self.name)
     return self.name
 
-  def get_dim_tag(self, axis):
+  def get_dim_tag(self, axis, unique_spatial_dims=False):
     """
     :param int axis: counted with batch-dim
+    :param bool unique_spatial_dims: return dim tags that are unique for spatial dims which would otherwise be identical
     :rtype: DimensionTag
     """
     name = self.get_full_name()
@@ -2990,14 +3008,16 @@ class Data(object):
       return DimensionTag(
         kind=DimensionTag.Types.Feature, dimension=self.dim, description="feature:%s" % name,
         src_data=self, src_axis=axis)
-    if dyn_size is not None:
+    if dyn_size is not None and not unique_spatial_dims:
       tag = DimensionTag.get_tag_from_size_tensor(dyn_size)
       if tag:
         return tag
     spatial_axes = self.get_spatial_batch_axes()
     assert axis in spatial_axes
     description = "time" if axis == self.time_dim_axis else "spatial%i" % spatial_axes.index(axis)
-    if dyn_size is not None:
+    if unique_spatial_dims:
+      description = "stag-single:%i:%s" % (spatial_axes.index(axis), description)
+    if dyn_size is not None and not unique_spatial_dims:
       # Note: This case is uncommon/unexpected (we should have a dim-tag on the dyn_size above), so be verbose,
       # and fix such cases if possible (i.e. for all newly created dynamic size tensors, set the dim-tag).
       description += ":var:%r" % dyn_size.name
