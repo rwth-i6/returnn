@@ -2989,10 +2989,9 @@ class Data(object):
       return "%s/%s" % (scope_name, self.name)
     return self.name
 
-  def get_dim_tag(self, axis, unique_spatial_dims=False):
+  def get_dim_tag(self, axis):
     """
     :param int axis: counted with batch-dim
-    :param bool unique_spatial_dims: return dim tags that are unique for spatial dims which would otherwise be identical
     :rtype: DimensionTag
     """
     name = self.get_full_name()
@@ -3007,16 +3006,14 @@ class Data(object):
       return DimensionTag(
         kind=DimensionTag.Types.Feature, dimension=self.dim, description="feature:%s" % name,
         src_data=self, src_axis=axis)
-    if dyn_size is not None and not unique_spatial_dims:
+    if dyn_size is not None:
       tag = DimensionTag.get_tag_from_size_tensor(dyn_size)
       if tag:
         return tag
     spatial_axes = self.get_spatial_batch_axes()
     assert axis in spatial_axes
     description = "time" if axis == self.time_dim_axis else "spatial%i" % spatial_axes.index(axis)
-    if unique_spatial_dims:
-      description = "stag-single:%i:%s" % (spatial_axes.index(axis), description)
-    if dyn_size is not None and not unique_spatial_dims:
+    if dyn_size is not None:
       # Note: This case is uncommon/unexpected (we should have a dim-tag on the dyn_size above), so be verbose,
       # and fix such cases if possible (i.e. for all newly created dynamic size tensors, set the dim-tag).
       description += ":var:%r" % dyn_size.name
