@@ -2574,9 +2574,8 @@ class Data(object):
       elif axes.startswith("stag-single:"):  # spatial tag which possibly matches multiple spatial axes
         # in this case, a name of form "stag-single:<idx>:<name> is expected.
         # idx is relative to the matching stags, i.e., it is the index among the list of spatial dims matching the name
-        name_split = axes.split(":")
-        idx = int(name_split[1])
-        name = ":".join(name_split[2:])
+        idx_s, name = axes.split(":", 1)
+        idx = int(idx_s)
         axes = self.get_axes_by_tag_name(name, spatial_only=True)[idx]
       else:
         raise Exception("invalid axis mode %r" % axes)
