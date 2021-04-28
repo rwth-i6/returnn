@@ -3686,7 +3686,8 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         setattr(out, s, i)
         if s == "feature_dim_axis":
           out.dim = out.batch_shape[out.feature_dim_axis]
-    if size_base:
+    if out.size_placeholder is not None and size_base:  # size_placeholder might be None, e.g. via DataNotAvailableLayer
+      assert size_base.output.size_placeholder is not None
       assert len(out.size_placeholder) == len(size_base.output.size_placeholder)
       # Keep same indices. Assumes same order of spatial dims.
       out.size_placeholder = {
