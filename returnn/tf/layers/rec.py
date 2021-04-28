@@ -4363,6 +4363,7 @@ class ChoiceLayer(BaseChoiceLayer):
                input_type="prob",
                prob_scale=1.0, base_beam_score_scale=1.0, random_sample_scale=0.0,
                length_normalization=True,
+               length_normalization_exponent=1.0,
                custom_score_combine=None,
                source_beam_sizes=None, scheduled_sampling=False, cheating=False,
                explicit_search_sources=None,
@@ -4484,7 +4485,8 @@ class ChoiceLayer(BaseChoiceLayer):
             # Because we count with EOS symbol, shifted by one.
             scores_base *= tf.where(
               end_flags,
-              tf.ones(tf.shape(end_flags)) * (tf.cast(t + 1, tf.float32) / tf.cast(t, tf.float32)),
+              tf.ones(tf.shape(end_flags)) * (
+                tf.pow((tf.cast(t + 1, tf.float32) / tf.cast(t, tf.float32)), length_normalization_exponent)),
               tf.ones(tf.shape(end_flags)))
         scores_base = tf.expand_dims(scores_base, axis=-1)  # (batch, beam_in, dim)
         from returnn.tf.util.basic import filter_ended_scores
