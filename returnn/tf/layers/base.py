@@ -191,20 +191,21 @@ class LayerBase(object):
     :param dict[str] layer_desc: kwargs as they are passed to self.__init__
     """
     self.kwargs = layer_desc
-    if self.use_batch_norm:
-      opts = {}
-      if isinstance(self.use_batch_norm, dict):
-        opts = self.use_batch_norm
-      self.output.placeholder = self.batch_norm(self.output, **opts)
-    if self.control_dependencies_on_output:
-      control_deps = self.control_dependencies_on_output(self)
-      if not isinstance(control_deps, (list, tuple)):
-        assert isinstance(control_deps, (tf.Operation, tf.Tensor))
-        control_deps = [control_deps]
-      assert all([isinstance(dep, (tf.Operation, tf.Tensor)) for dep in control_deps])
-      if control_deps:
-        with tf.control_dependencies(control_deps):
-          self.output.placeholder = tf.identity(self.output.placeholder)
+    if self.output.placeholder is not None:  # unset e.g. in DataNotAvailableLayer
+      if self.use_batch_norm:
+        opts = {}
+        if isinstance(self.use_batch_norm, dict):
+          opts = self.use_batch_norm
+        self.output.placeholder = self.batch_norm(self.output, **opts)
+      if self.control_dependencies_on_output:
+        control_deps = self.control_dependencies_on_output(self)
+        if not isinstance(control_deps, (list, tuple)):
+          assert isinstance(control_deps, (tf.Operation, tf.Tensor))
+          control_deps = [control_deps]
+        assert all([isinstance(dep, (tf.Operation, tf.Tensor)) for dep in control_deps])
+        if control_deps:
+          with tf.control_dependencies(control_deps):
+            self.output.placeholder = tf.identity(self.output.placeholder)
     if self.register_as_extern_data:
       self.network.extern_data.extra_added_keys.add(self.register_as_extern_data)
       self.network.extern_data.data[self.register_as_extern_data] = self.output

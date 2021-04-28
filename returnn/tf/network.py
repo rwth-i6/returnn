@@ -951,10 +951,12 @@ class TFNetwork(object):
         output_template_special_axes = output_template.get_special_axes_dict()
         if not output_template.available_for_inference and not self.eval_flag:
           from returnn.tf.layers.base import DataNotAvailableLayer
-          return DataNotAvailableLayer(
+          layer = DataNotAvailableLayer(
             name=layer_desc['name'], network=layer_desc['network'], output=output_template,
-            layer_class=layer_class, layer_desc=layer_desc)
-        layer = layer_class(**layer_desc)
+            layer_class=layer_class, layer_desc=layer_desc,
+            register_as_extern_data=layer_desc.get('register_as_extern_data'))
+        else:
+          layer = layer_class(**layer_desc)
         layer.post_init(layer_desc)
         layer.output.sanity_check()
         # The axes should not have moved now.
@@ -972,12 +974,12 @@ class TFNetwork(object):
         print("Exception creating layer %s/%r of class %s with opts:" % (self.name, name, layer_class.__name__))
         pprint(layer_desc)
         raise
-      if debug_print_layer_output_shape:
+      if layer.output.placeholder is not None and debug_print_layer_output_shape:
         layer.output.placeholder = py_print(
           layer.output.placeholder,
           [layer_class.cls_get_tf_scope_name(name), "shape:", str(layer.output), tf.shape(layer.output.placeholder)],
           summarize=10, name="debug_print_layer_output_shape")
-      if (debug_add_check_numerics_on_output
+      if (layer.output.placeholder is not None and debug_add_check_numerics_on_output
               and layer.output.dtype.startswith("float") and not layer.allow_inf_in_output):
         print("debug_add_check_numerics_on_output: add for layer %r: %r" % (name, layer.output.placeholder))
         from returnn.tf.util.basic import identity_with_check_numerics
@@ -985,9 +987,9 @@ class TFNetwork(object):
           layer.output.placeholder,
           name="%s_identity_with_check_numerics_output" % layer_class.cls_get_tf_scope_name(name))
     assert layer.output
-    assert layer.output.placeholder is not None
-    layer.output.placeholder.set_shape(layer.output.batch_shape)
-    assert layer.output.size_placeholder is not None
+    if layer.output.placeholder is not None:
+      layer.output.placeholder.set_shape(layer.output.batch_shape)
+      assert layer.output.size_placeholder is not None
     return layer
 
   @contextlib.contextmanager
