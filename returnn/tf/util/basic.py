@@ -466,10 +466,16 @@ def reuse_name_scope_of_tensor(x, prefix="", postfix="", add_tensor_name=False):
   :param bool add_tensor_name:
   :return: reuse the name scope of x, e.g. "layer0/rec", yields scope
   """
+  name_scope = get_name_scope_of_tensor(x)
   if add_tensor_name:
     from returnn.util.basic import unicode_to_str
-    postfix = "/%s%s" % (unicode_to_str(os.path.basename(x.name).split(":")[0]), postfix)
-  with reuse_name_scope(prefix + get_name_scope_of_tensor(x) + postfix, absolute=True) as scope:
+    tensor_name = unicode_to_str(os.path.basename(x.name).split(":")[0])
+    if name_scope:
+      name_scope += '/' + tensor_name
+    else:
+      name_scope = tensor_name
+
+  with reuse_name_scope(prefix + name_scope + postfix, absolute=True) as scope:
     yield scope
 
 
