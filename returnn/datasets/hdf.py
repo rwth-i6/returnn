@@ -28,7 +28,7 @@ class HDFDataset(CachedDataset):
   This was the main original dataset format of RETURNN.
   """
 
-  def __init__(self, files=None, use_cache_manager=False, **kwargs):
+  def __init__(self, files=None, use_cache_manager=False, cache_whole_file=False, **kwargs):
     """
     :param None|list[str] files:
     :param bool use_cache_manager: uses :func:`Util.cf` for files
@@ -43,6 +43,8 @@ class HDFDataset(CachedDataset):
     self.file_seq_start = []  # type: typing.List[numpy.ndarray]
     self.data_dtype = {}  # type: typing.Dict[str,str]
     self.data_sparse = {}  # type: typing.Dict[str,bool]
+    self._cache_whole_file = cache_whole_file
+    self._cached_files = []
     if files:
       for fn in files:
         self.add_file(fn)
@@ -95,6 +97,7 @@ class HDFDataset(CachedDataset):
         "expected " + str(len(self.labels['classes'])) + " got " + str(len(labels)))
     self.files.append(filename)
     self.h5_files.append(fin)
+    self._cached_files.append({})
     print("parsing file", filename, file=log.v5)
     if 'times' in fin:
       if self.timestamps is None:
@@ -276,13 +279,22 @@ class HDFDataset(CachedDataset):
 
     if key == "data":
       assert 'inputs' in fin, "'data' key is reserved for 'inputs' in the HDF file, but 'inputs' not found in HDF file."
-      inputs = fin['inputs']
+      if self._cache_whole_file:
+        if "inputs" not in self._cached_files[file_idx]:
+          self._cached_files[file_idx]["inputs"] = fin['inputs'][:]
+        inputs = self._cached_files[file_idx]["inputs"]
+      else:
+        inputs = fin['inputs']
       data = inputs[start_pos[0]:end_pos[0]]
       if self.window > 1:
         data = self._sliding_window(data)
     else:
-      assert 'targets' in fin
-      targets = fin['targets/data/' + key]
+      if self._cache_whole_file:
+        if key not in self._cached_files[file_idx]:
+          self._cached_files[file_idx][key] = fin['targets/data/' + key][:]
+        targets = self._cached_files[file_idx][key]
+      else:
+        targets = fin['targets/data/' + key]
       first_target_idx = 1 if self.num_inputs > 0 else 0  # self.num_inputs == 0 if no 'inputs' in HDF file
       ldx = first_target_idx + self.target_keys.index(key)
       data = targets[start_pos[ldx]:end_pos[ldx]]
@@ -334,7 +346,12 @@ class HDFDataset(CachedDataset):
     file_idx = self._get_file_index(real_seq_idx)
     real_file_seq_idx = real_seq_idx - self.file_start[file_idx]
 
-    s = self.h5_files[file_idx]["seqTags"][real_file_seq_idx]
+    if self._cache_whole_file:
+      if "#tags" not in self._cached_files[file_idx]:
+        self._cached_files[file_idx]["#tags"] = list(self.h5_files[file_idx]["seqTags"][:])
+      s = self._cached_files[file_idx]["#tags"][real_file_seq_idx]
+    else:
+      s = self.h5_files[file_idx]["seqTags"][real_file_seq_idx]
     s = self._decode(s)
     return s
 
