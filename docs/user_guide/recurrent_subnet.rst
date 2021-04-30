@@ -106,5 +106,11 @@ that need to be accessed.
 The output will be of shape ``[B,window_size,D]``.
 For steps outside the recurrency the layer will return zeros.
 
+**Accessing Current Time step Index**
+
+When wanting to access the index of the current time step within a recurrent unit it is possible to call the layer
+``:i`` in order to receive the current time step index as a scalar. This layer can then for example be used as a
+position in a gather layer.
+Note that this layer behaves differently, when calling the layer outside of the recurrent unit.
 
 
