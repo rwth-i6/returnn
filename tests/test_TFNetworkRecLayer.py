@@ -3499,7 +3499,8 @@ def test_reclayer_optimize_out_dot_kv_in_rec():
       "att": {"class": "merge_dims", "axes": "static", "from": ["att0"]},  # (B, H*V); Use "static" here.
       },
     shared_base_net={
-      "encoder": {"class": "copy", "from": ["data"]}
+      # need to mark 'encoder' as output layer, otherwise it will not be constructed.
+      "encoder": {"class": "copy", "from": ["data"], "is_output_layer": True}
     },
     rtol=1e-3)
 
