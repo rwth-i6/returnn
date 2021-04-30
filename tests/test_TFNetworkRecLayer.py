@@ -3598,6 +3598,48 @@ def test_reclayer_optimize_out_access_split():
     other_subnet_layers={"split": {"class": "split", "from": ["data:source"], "size_splits": [5, 8]}})
 
 
+def test_reclayer_att_with_kv_in_rec():
+  net_dict = {
+    'decision': {'class': 'decide', 'from': ['output'], 'loss': 'edit_distance', 'loss_opts': {}, 'target': 'classes'},
+    'encoder': {'activation': None, 'class': 'linear', 'is_output_layer': True, 'n_out': 5},
+    'output': {
+      'class': 'rec', 'max_seq_len': 'max_len_from("base:encoder") * 3', 'target': 'classes', 'from': [],
+      'unit': {
+        'embed': {'activation': None, 'class': 'linear', 'from': ['prev:output'], 'n_out': 7},
+        'att_query0': {'activation': None, 'class': 'linear', 'from': ['embed'], 'n_out': 6, 'with_bias': False},
+        'att_query': {'axis': 'F', 'class': 'split_dims', 'dims': (2, 3), 'from': ['att_query0']},
+        # does not depend on rec-time, but still here declared within rec-layer:
+        'att_key0': {'activation': None, 'class': 'linear', 'from': ['base:encoder'], 'n_out': 6, 'with_bias': False},
+        'att_key': {'axis': 'F', 'class': 'split_dims', 'dims': (2, 3), 'from': ['att_key0']},
+        'att_value0': {'activation': None, 'class': 'linear', 'from': ['base:encoder'], 'n_out': 6, 'with_bias': False},
+        'att_value': {'axis': 'F', 'class': 'split_dims', 'dims': (2, 3), 'from': ['att_value0']},
+        'att_energy': {
+          'class': 'dot', 'from': ['att_query', 'att_key'], 'red1': 'static:-1', 'red2': 'static:-1',
+          'var1': 'T?', 'var2': 'T'},
+        'att_weights': {
+          'axis': 'T', 'class': 'softmax_over_spatial', 'from': ['att_energy']},
+        'att_output': {'class': 'generic_attention', 'weights': 'att_weights', 'base': 'att_value'},
+        'att_att': {'axes': 'static', 'class': 'merge_dims', 'from': ['att_output']},
+        'end': {'class': 'compare', 'from': ['output'], 'value': 0},
+        'output': {
+          'beam_size': 4, 'class': 'choice', 'from': ['output_prob'], 'initial_output': 'zeros',
+          'is_output_layer': True, 'loss': 'ce', 'target': 'classes'},
+        'output_prob': {'class': 'softmax', 'from': 'att_att', 'target': 'classes'}
+      }
+    }
+  }
+
+  with make_scope():
+    config = Config({
+      'debug_print_layer_output_template': True,
+      'extern_data': {
+        'data': {'dim': 7, 'sparse': True},
+        'classes': {'dim': 6, 'sparse': True, 'available_for_inference': False}}})
+    net = TFNetwork(
+      config=config, search_flag=True, train_flag=False, eval_flag=False)
+    net.construct_from_dict(net_dict)
+
+
 def test_reclayer_enc_time_dim_eval():
   """
     line: assert self.placeholder.shape[i].value == self.batch_shape[i]
