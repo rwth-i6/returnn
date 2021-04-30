@@ -3469,6 +3469,41 @@ def test_reclayer_optimize_out_dot():
     rtol=1e-3)
 
 
+def test_reclayer_optimize_out_dot_kv_in_rec():
+  # Same as test_reclayer_optimize_out_dot, but with the att key/value layers declared INSIDE the rec layer.
+  AttNumHeads = 4
+  EncKeyPerHeadDim = 5
+  EncValuePerHeadDim = 7
+  EncKeyTotalDim = AttNumHeads * EncKeyPerHeadDim
+  EncValueTotalDim = AttNumHeads * EncValuePerHeadDim
+  check_reclayer_optimize_out(
+    {"class": "linear", "activation": None, "from": ["att"]},
+    other_subnet_layers={
+      "s": {"class": "linear", "activation": None, "with_bias": False, "from": ["data:source"],
+            "n_out": EncKeyTotalDim},  # (B, D)  -- Q (query). D should be same as enc_ctx
+      "att_query": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
+                    "from": ["s"]},  # (B, H, D/H)
+      # this does not depend on the classes, but you should still be able to define it here.
+      "enc_ctx0": {"class": "linear", "activation": None, "with_bias": False, "from": ["base:encoder"],
+                   "n_out": EncKeyTotalDim},  # (B, enc-T, D)
+      "enc_ctx": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
+                  "from": ["enc_ctx0"], "is_output_layer": True},  # (B, enc-T, H, D/H)
+      "enc_value0": {"class": "linear", "activation": None, "with_bias": False, "from": ["base:encoder"],
+                     "n_out": EncValueTotalDim},  # (B, enc-T, D)
+      "enc_value": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim),
+                    "from": ["enc_value0"], "is_output_layer": True},  # (B, enc-T, H, D/H)
+      "energy": {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": "T?",  # Note the "T?".
+                 "from": ["enc_ctx", "att_query"]},
+      "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, H, 1)
+      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "enc_value"},  # (B, H, V)
+      "att": {"class": "merge_dims", "axes": "static", "from": ["att0"]},  # (B, H*V); Use "static" here.
+      },
+    shared_base_net={
+      "encoder": {"class": "copy", "from": ["data"]}
+    },
+    rtol=1e-3)
+
+
 def test_reclayer_optimize_out_softmax_over_spatial():
   # Used for multi-head dot-attention.
   AttNumHeads = 4
