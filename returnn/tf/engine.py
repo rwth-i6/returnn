@@ -1173,7 +1173,7 @@ class Engine(EngineBase):
         # but in that case, the newly initialized dataset
         # would use the right chunking option from the config overwrite.
         # noinspection PyProtectedMember
-        self.train_data.chunk_size, self.train_data.chunk_step = Dataset._parse_chunking(value)
+        self.train_data.chunk_size, self.train_data.chunk_step, self.dynamic_chunk_gen = Dataset._parse_chunking(value)
       if key in ["train", "dev", "eval"]:
         # `train` actually gets some special treatment, but unify nevertheless now.
         key, value = "eval_datasets", {key: value}

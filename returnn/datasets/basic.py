@@ -95,7 +95,7 @@ class Dataset(object):
     :param int window: features will be of dimension window * feature_dim, as we add a context-window around.
       not all datasets support this option.
     :param None|int|dict|NumbersDict|(dict,dict) context_window: will add this context for each chunk
-    :param None|str|int|(int,int)|dict|(dict,dict) chunking: "chunk_size:chunk_step"
+    :param None|str|int|(int,int)|dict|(dict,dict,dict) chunking: "chunk_size:chunk_step"
     :param str seq_ordering: "batching"-option in config. e.g. "default", "sorted" or "random".
       See self.get_seq_order_for_epoch() for more details.
     :param int|None random_seed_offset:
@@ -139,7 +139,7 @@ class Dataset(object):
     self._estimated_num_seqs = estimated_num_seqs
     self.min_chunk_size = min_chunk_size
     self.chunking_variance = chunking_variance
-    self.chunk_size, self.chunk_step = self._parse_chunking(chunking)
+    self.chunk_size, self.chunk_step, self.dynamic_chunk_gen = self._parse_chunking(chunking)
     if isinstance(context_window, (tuple, list)):
       assert len(context_window) == 2
       for elem in context_window:
@@ -193,11 +193,12 @@ class Dataset(object):
   @staticmethod
   def _parse_chunking(chunking):
     """
-    :param None|str|int|(int,int)|dict|(dict,dict)|(NumbersDict,NumbersDict) chunking:
+    :param None|str|int|(int,int)|dict|(dict,dict,dict)|(NumbersDict,NumbersDict) chunking:
       as it comes from the config / from the user
     :return: chunk_size, chunk_step
-    :rtype: (NumbersDict,NumbersDict)
+    :rtype: (NumbersDict,NumbersDict,dict)
     """
+    dynamic_chunk_gen = {}
     if isinstance(chunking, str):
       if ":" in chunking:
         chunking = tuple(map(int, chunking.split(":")))
@@ -205,7 +206,9 @@ class Dataset(object):
         chunking = int(chunking)
     if not isinstance(chunking, (tuple, list)):
       chunking = (chunking, None)
-    chunk_size, chunk_step = chunking
+    chunk_size, chunk_step = chunking[:2]
+    if len(chunking) == 3:
+      dynamic_chunk_gen = chunking[2]
     if chunk_size is None:
       chunk_size = 0
     assert isinstance(chunk_size, (int, dict, NumbersDict))
@@ -218,7 +221,7 @@ class Dataset(object):
     if chunk_size != 0:
       assert sorted(chunk_step.keys()) == sorted(chunk_size.keys())
       assert chunk_step.max_value() > 0, "chunking step must be positive (for some key)"
-    return chunk_size, chunk_step
+    return chunk_size, chunk_step, dynamic_chunk_gen
 
   @staticmethod
   def _load_seq_list_file(filename, use_cache_manager=False, expect_list=True):
@@ -941,12 +944,13 @@ class Dataset(object):
       i += 1
     return numpy.array(priori / self.get_num_timesteps(), dtype=numpy.float32)
 
-  def iterate_seqs(self, chunk_size=None, chunk_step=None, used_data_keys=None):
+  def iterate_seqs(self, chunk_size=None, chunk_step=None, used_data_keys=None, chunking_logic=None):
     """
     Takes chunking into consideration.
     :param int|NumbersDict chunk_size:
     :param int|NumbersDict chunk_step:
     :param set(str)|None used_data_keys:
+    :param dict[str, (numpy.ndarray, int, int)->(int, dict[str,()->(int, int))])]|None chunking_logic:
     :return: generator which yields tuples (seq index, seq start, seq end)
     :rtype: list[(int,NumbersDict,NumbersDict)]
     """
@@ -959,9 +963,11 @@ class Dataset(object):
     chunk_size_orig = chunk_size.copy()
     chunk_step_orig = chunk_step.copy()
 
+    if chunking_logic is None:
+      chunking_logic = {}
     s = 0
     while self.is_less_than_num_seqs(s):
-      length = self.get_seq_length(s)
+      length = self.get_seq_length(s)  # length of seq for each data_key
       if chunk_size == 0:
         yield s, NumbersDict.constant_like(0, numbers_dict=length), length
       else:
@@ -995,16 +1001,36 @@ class Dataset(object):
         # We expect them all of the same length so that we can do chunking.
         # In case that some length is 0 or 1,
         # we treat it special and always return the full seq repeated for every chunk.
+
         keys_with_full_seqs = []
+        custom_chunk_gens = {}
         for key in length.keys():
-          if chunk_step[key] == chunk_step[default_key]:
-            if length[key] == length[default_key]:
-              continue  # ok
           if length[key] <= 1:  # special case as explained above
             keys_with_full_seqs.append(key)
             continue
-          if chunk_step[key] == chunk_step[default_key]:
-            raise Exception("Chunking with multiple data-keys of different length: %r" % length)
+
+          if key in chunking_logic:
+            # custom_chunk_generators return the dynamic chunk_step and chunk_size
+            # this logic shouldn't interfere or break anything.
+            # chunking_logic is to be given as part of the chunking dict in the config file.
+            # gets as input: sequence, chunks_step, chunk_size
+            # returns (chunks_length, generator(): -> (chunk_step, chunk_size) )
+            len_key, custom_chunk_gens[key] = chunking_logic[key](self.get_data(s, key), chunk_step[key],
+                                                                  chunk_size[key])
+            limit = limit_default = 1
+            if self.min_chunk_size == chunk_size[default_key]:
+              limit = chunk_size[key]
+              limit_default = chunk_size[default_key]
+            nr_of_chunks = (len_key - limit) // chunk_step[key] + 1
+            nr_of_chunks_default = (length[default_key] - limit_default) // chunk_step[default_key] + 1
+            assert nr_of_chunks == nr_of_chunks_default, (
+              "%s: iterate seqs with chunking: length %r, chunk size/step %r/%r (min %r), key %r (default %r)" % (
+                self, length, chunk_size, chunk_step, self.min_chunk_size, key, default_key))
+          elif chunk_step[key] == chunk_step[default_key]:
+            if length[key] == length[default_key]:
+              continue  # ok
+            else:
+              raise Exception("Chunking with multiple data-keys of different length: %r" % length)
           else:
             limit = limit_default = 1
             if self.min_chunk_size == chunk_size[default_key]:
@@ -1016,6 +1042,9 @@ class Dataset(object):
               "%s: iterate seqs with chunking: length %r, chunk size/step %r/%r (min %r), key %r (default %r)" % (
                 self, length, chunk_size, chunk_step, self.min_chunk_size, key, default_key))
         while length[default_key] > t[default_key]:
+          for key in length.keys():
+            if key in chunking_logic:
+              chunk_step[key], chunk_size[key] = custom_chunk_gens[key]()
           chunk_start = NumbersDict(t)
           chunk_end = NumbersDict.min([t + chunk_size, length])
           for key in keys_with_full_seqs:
@@ -1106,8 +1135,10 @@ class Dataset(object):
     for idx in self.weights:
       self.weights[idx][1] = random() * avg_weight * pruning
       self.weights[idx][0] *= (1. + pruning)
-    for seq_idx, t_start, t_end in self.iterate_seqs(
-          chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
+    for seq_idx, t_start, t_end in self.iterate_seqs(chunk_size=chunk_size,
+                                                     chunk_step=chunk_step,
+                                                     used_data_keys=used_data_keys,
+                                                     chunking_logic=self.dynamic_chunk_gen):
       if not self.sample(seq_idx):
         continue
       if total_num_seqs > max_total_num_seqs:
