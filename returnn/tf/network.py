@@ -3571,6 +3571,8 @@ class CustomCheckpointLoader:
       "lstm_cell/weights": "lstm_cell/kernel",
       "lstm_cell/bias": "rnn/lstm_cell/bias",
       "lstm_cell/kernel": "rnn/lstm_cell/weights",
+      "rnn/lstm_cell/bias": "lstm_cell/bias",
+      "rnn/lstm_cell/kernel": "lstm_cell/kernel",
       "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/cudnn_compatible_lstm_cell/bias": "lstm_fused_cell/bias",
       "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/cudnn_compatible_lstm_cell/kernel": "lstm_fused_cell/kernel",
     }
