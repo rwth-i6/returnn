@@ -3702,12 +3702,15 @@ class ReinterpretDataLayer(_ConcatInputLayer):
           out.dim = None
         else:
           out.dim = out.batch_shape[out.feature_dim_axis]
+    old_dim = out.dim
     if set_sparse_dim is not NotSpecified:
       assert set_sparse_dim is None or isinstance(set_sparse_dim, int)
       out.dim = set_sparse_dim
     if increase_sparse_dim:
       assert out.sparse
       out.dim += increase_sparse_dim
+    if old_dim != out.dim:
+      out.vocab = None
     return out
 
 
