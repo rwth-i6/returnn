@@ -2639,6 +2639,8 @@ class MergeDimsLayer(_ConcatInputLayer):
         # Time got merged with feature or batch.
         data.time_dim_axis = None
     data.feature_dim_axis = new_feature_dim_axis
+    if not data.sparse and data.feature_dim_axis is not None:
+      data.dim = data.batch_shape[data.feature_dim_axis]
     # Set size_placeholder, here for now without merging any axes. Merged axes are then updated in __init__.
     data.size_placeholder = {}
     for old_axis, dyn_size in sorted(input_data.size_placeholder.items()):
