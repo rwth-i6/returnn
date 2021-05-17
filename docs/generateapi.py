@@ -32,6 +32,7 @@ def generate():
     if os.path.exists(fn):
       return
     f = open(fn, "w")
+    f.write(":github_url: https://github.com/rwth-i6/returnn/blob/master/%s.py\n\n" % modname.replace(".", "/"))
     title = ":mod:`%s`" % modname
     f.write("\n%s\n%s\n\n" % (title, "-" * len(title)))
     f.write(".. automodule:: %s\n\t:members:\n\t:undoc-members:\n\n" % modname)
