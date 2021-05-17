@@ -32,7 +32,12 @@ def generate():
     if os.path.exists(fn):
       return
     f = open(fn, "w")
-    f.write(":github_url: https://github.com/rwth-i6/returnn/blob/master/%s.py\n\n" % modname.replace(".", "/"))
+    target_python_file_path = modname.replace(".", "/")
+    if os.path.isfile(target_python_file_path):
+      f.write(":github_url: https://github.com/rwth-i6/returnn/blob/master/%s.py\n\n" % modname.replace(".", "/"))
+    else:
+      f.write(":github_url: https://github.com/rwth-i6/returnn/blob/master/%s.py\n\n" %
+              os.path.join(os.path.dirname(modname.replace(".", "/")), "__init__"))
     title = ":mod:`%s`" % modname
     f.write("\n%s\n%s\n\n" % (title, "-" * len(title)))
     f.write(".. automodule:: %s\n\t:members:\n\t:undoc-members:\n\n" % modname)
