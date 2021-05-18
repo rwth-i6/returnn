@@ -2536,7 +2536,11 @@ class Subnetwork:
         return get_layer(layer_name)
 
       else:  # name != "data"
-        return base_get_layer("data:%s" % name)
+        try:
+          return base_get_layer("data:%s" % name)
+        except KeyError as e:
+          print("warning: possibly missing concat_sources=False in %s" % self, file=log.v3)
+          raise e
 
     # Not concat_sources
     for i, arg in enumerate(self._from_arg):
