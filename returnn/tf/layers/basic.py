@@ -3246,40 +3246,71 @@ class RepeatLayer(_ConcatInputLayer):
   def __init__(self, repetitions, axis="T", **kwargs):
     """
     :param LayerBase|int repetitions:
-      number of repetitions for each sequence and position in target axis, [B,T] or [T,B]
+      number of repetitions for each sequence and position in target axis.
+      Can be [B,T] or [T,B] or some subset of that shape
     :param str axis: (dynamic) axis for repetition (currently only time axis is supported)
     """
     from returnn.tf.util.data import DimensionTag
     super(RepeatLayer, self).__init__(**kwargs)
     self.repetitions = repetitions
     if isinstance(self.repetitions, int):
-      repetitions_data = Data.from_tensor(tf.constant(self.repetitions)).copy_add_batch_dim(0)
+      repetitions_data = Data.from_tensor(tf.constant(self.repetitions))
     else:
       assert isinstance(self.repetitions, LayerBase)
       repetitions_data = self.repetitions.output
-    input_data = self.input_data
-    assert self.input_data and self.input_data.have_batch_axis()
-    input_data = input_data.copy_as_batch_major()
-    original_axis = input_data.get_axis_from_description(axis, allow_int=False)
-    input_data = input_data.copy_move_axis(original_axis, 1)
-    repetitions_data = repetitions_data.copy_as_batch_major()
+    input_axis = self.input_data.get_axis_from_description(axis, allow_int=False)
     assert repetitions_data.dtype in ["int32", "int64"]
-    assert repetitions_data.have_batch_axis() and repetitions_data.batch_ndim == 2, (
-      "RepeatLayer only accepts repetitions of the shape (B, None|S) or (None|S, B)")
-    assert input_data.shape[0] == repetitions_data.shape[0], (
-      "Axis mismatch between input (%i) and repetitions (%i)" %
-      (input_data.shape[0], repetitions_data.shape[0]))
+    if repetitions_data.ndim == 0:  # no T dim: add a (un)broadcasted one.
+      axis_dim_tag = self.input_data.get_dim_tag(input_axis)
+      repetitions_data = repetitions_data.copy_add_dim_by_tag(axis_dim_tag, unbroadcast=True)
+    repetitions_axis = repetitions_data.get_axis_from_description(axis, allow_int=False)
+    assert repetitions_data.ndim == 1, "Repetitions %r must only have at most one non-batch axis" % repetitions
+    assert repetitions_data.batch_shape[repetitions_axis] == self.input_data.batch_shape[input_axis], (
+      "Axis mismatch between input (%i) and repetitions (%i)" % (
+        self.input_data.batch_shape[input_axis], repetitions_data.batch_shape[repetitions_axis]))
+
+    assert self.output.have_batch_axis() == (self.input_data.have_batch_axis() or repetitions_data.have_batch_axis())
+
+    def copy_placeholder_with_batch_axis(data, other_batch):
+      """
+      Adds a batch dim by unbroadcasting if our output also has a batch dim,
+      otherwise just expands the dims.
+
+      :param Data data:
+      :param BatchInfo|None other_batch: use this batch info if we should add some
+      :rtype: tf.Tensor
+      :return: the placeholder, with shape [B, T, ...], maybe with added batch dim.
+      """
+      if self.output.have_batch_axis():
+        if data.have_batch_axis():
+          data = data.copy_as_batch_major()
+        else:
+          data = data.copy_add_batch_dim(batch_dim_axis=0, batch=other_batch)  # will unbroadcast
+        original_axis = data.get_axis_from_description(axis, allow_int=False)
+        data = data.copy_move_axis(original_axis, 1)
+        return data.placeholder  # [B, T, ...]
+      else:
+        assert not self.output.have_batch_axis()
+        original_axis = data.get_axis_from_description(axis, allow_int=False)
+        data = data.copy_move_axis(original_axis, 0)
+        return tf.expand_dims(data.placeholder, 0)  # [B=1, T, ...]
+
+    input_placeholder = copy_placeholder_with_batch_axis(
+      self.input_data, other_batch=repetitions_data.batch)  # [B, T, ... ]
+    repetitions_placeholder = copy_placeholder_with_batch_axis(
+      repetitions_data, other_batch=self.input_data.batch)  # [B, T]
+
     # pad the target axis
-    paddings = [(0, 1) if i == 1 else (0, 0) for i in range(input_data.batch_ndim)]
-    padded_data = tf.pad(input_data.placeholder, paddings)  # [B, T+1, ...]
+    paddings = [(0, 1) if i == 1 else (0, 0) for i in range(self.input_data.ndim + 1)]
+    padded_data = tf.pad(input_placeholder, paddings)  # [B, T+1, ...]
     # those are the sequence lengths after expansion
-    target_seq_len = tf.reduce_sum(repetitions_data.placeholder, axis=1)  # [B], the new size_placeholder for 'T'
+    target_seq_len = tf.reduce_sum(repetitions_placeholder, axis=1)  # [B], the new size_placeholder for 'T'
     # maximum sequence length after expansion
     max_duration = tf.reduce_max(target_seq_len)  # [] == T'
     # the new padding is the difference of the maximum to the new target
     target_padding_steps = tf.expand_dims(max_duration - target_seq_len, 1)  # [B, 1]
     # add the repetitions for the artificial padding position
-    target_repetitions = tf.concat([repetitions_data.placeholder, target_padding_steps], axis=1)  # [B, T+1]
+    target_repetitions = tf.concat([repetitions_placeholder, target_padding_steps], axis=1)  # [B, T+1]
     # flatten batch and time
     shape = tf_util.get_shape(padded_data)
     flat_shape = [shape[0] * shape[1]] + shape[2:]
@@ -3288,12 +3319,11 @@ class RepeatLayer(_ConcatInputLayer):
     # run the repetition
     repeated_data = tf.repeat(reshaped_data, reshaped_repetitions, axis=0)  # [B * T', ...]
     # unflatten the output
-    target_shape = [shape[0], max_duration] + shape[2:]
-    self.output.placeholder = tf.reshape(repeated_data, target_shape)  # [B, T', ...]
-    # copy (optional) additional size placeholders
-    self.output.size_placeholder = {k: v for k, v in input_data.size_placeholder.items() if k != 0}
-    # set the size_placeholder of the target axis
-    self.output.size_placeholder[0] = target_seq_len
+    target_shape = ([shape[0]] if self.output.have_batch_axis() else []) + [max_duration] + shape[2:]
+    self.output.placeholder = tf.reshape(repeated_data, target_shape)  # [B, T', ...] or [T', ...]
+    # set size placeholders
+    output_axis = self.output.get_axis_from_description(axis)
+    self.output.size_placeholder[self.output.get_batch_axis_excluding_batch(output_axis)] = target_seq_len
     tag = DimensionTag(
       description="repeated:%s" % self.get_absolute_name(),
       kind=DimensionTag.Types.Spatial)
@@ -3329,9 +3359,15 @@ class RepeatLayer(_ConcatInputLayer):
     :rtype: Data
     """
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
-    data = data.copy_as_batch_major()
-    axis = data.get_axis_from_description(axis, allow_int=False)
-    data = data.copy_move_axis(axis, data.get_batch_axis(0))
+    if data.have_batch_axis():
+      data = data.copy_as_batch_major()
+    elif isinstance(repetitions, LayerBase) and repetitions.output.have_batch_axis():
+      data = data.copy_add_batch_dim(batch_dim_axis=0, batch=repetitions.output.batch)
+    original_axis = data.get_axis_from_description(axis, allow_int=False)
+    data = data.copy_move_axis(original_axis, data.get_batch_axis(0))
+    data.shape = (None,) + data.shape[1:]
+    if data.feature_dim_axis == data.get_batch_axis(0):
+      data.dim = None
     return data
 
 
