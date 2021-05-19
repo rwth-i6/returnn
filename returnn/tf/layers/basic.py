@@ -3245,13 +3245,18 @@ class RepeatLayer(_ConcatInputLayer):
 
   def __init__(self, repetitions, axis="T", **kwargs):
     """
-    :param LayerBase repetitions: number of repetitions for each sequence and position in target axis, [B,T] or [T,B]
+    :param LayerBase|int repetitions:
+      number of repetitions for each sequence and position in target axis, [B,T] or [T,B]
     :param str axis: (dynamic) axis for repetition (currently only time axis is supported)
     """
     from returnn.tf.util.data import DimensionTag
     super(RepeatLayer, self).__init__(**kwargs)
     self.repetitions = repetitions
-    repetitions_data = self.repetitions.output
+    if isinstance(self.repetitions, int):
+      repetitions_data = Data.from_tensor(tf.constant(self.repetitions)).copy_add_batch_dim(0)
+    else:
+      assert isinstance(self.repetitions, LayerBase)
+      repetitions_data = self.repetitions.output
     input_data = self.input_data
     assert self.input_data and self.input_data.have_batch_axis()
     input_data = input_data.copy_as_batch_major()
@@ -3299,7 +3304,8 @@ class RepeatLayer(_ConcatInputLayer):
     :rtype: list[LayerBase]
     """
     deps = super(RepeatLayer, self).get_dep_layers()
-    deps.append(self.repetitions)
+    if isinstance(self.repetitions, LayerBase):
+      deps.append(self.repetitions)
     return deps
 
   @classmethod
@@ -3310,14 +3316,15 @@ class RepeatLayer(_ConcatInputLayer):
     :param get_layer:
     """
     super(RepeatLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
-    d["repetitions"] = get_layer(d["repetitions"])
+    if isinstance(d["repetitions"], str):
+      d["repetitions"] = get_layer(d["repetitions"])
 
   @classmethod
   def get_out_data_from_opts(cls, name, axis, repetitions, sources=(), **kwargs):
     """
     :param str name:
     :param str axis:
-    :param LayerBase repetitions:
+    :param LayerBase|int repetitions:
     :param list[LayerBase] sources:
     :rtype: Data
     """
