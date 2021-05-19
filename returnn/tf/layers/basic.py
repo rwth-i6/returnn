@@ -6600,6 +6600,42 @@ class SubnetworkLayer(LayerBase):
     d["_output"] = subnet.construct_layer("output", parent_get_layer=get_layer)
     d["_from"] = d.get("from", "data")  # cache this
     d["from"] = []  # disable now. we should get them in the template construction when needed
+
+    def sub_get_layer(name):
+      """
+      :param str name:
+      :rtype: LayerBase
+      """
+      # Only used to resolve deps to base network.
+      if name.startswith("data:"):
+        # check for "data:<n>" notation
+        try:
+          index = int(name.split(":")[-1])
+          return get_layer(d["_from"][index])
+        except ValueError as e:
+          # only resolve dependency if we access data defined by the subnetwork
+          if name[len("data:")] in d["_from"]:
+            return get_layer("base:" + name[len("data:"):])
+      elif name.startswith("base:"):
+        return get_layer(name[len("base:"):])  # calls get_layer of parent network
+      return InternalLayer(
+        name=name, network=subnet,
+        output=Data(name="dummy:SubnetworkLayer.transform_config_dict(%s)" % name, dim=1))
+
+    from returnn.tf.network import TFNetwork
+    subnet = TFNetwork(parent_net=network, extern_data=network.extern_data, name="%s(tmp)" % d["_name"])
+    for key, sub in d["subnetwork"].items():  # iterate over the layers of the subnet
+      assert isinstance(sub, dict)
+      if "class" in sub:
+        sub = sub.copy()
+        class_name = sub.pop("class")
+        cl = get_layer_class(class_name)
+        sub["_network"] = subnet
+        sub["_name"] = key
+        # Operate on a copy because we will transform the dict later.
+        # We only need this to resolve any other layer dependencies in the main network.
+        cl.transform_config_dict(sub, network=subnet, get_layer=sub_get_layer)
+
     super(SubnetworkLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
