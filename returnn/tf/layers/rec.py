@@ -1043,10 +1043,13 @@ class _SubnetworkRecCell(object):
     from pprint import pformat
     from collections import OrderedDict
     from returnn.util.basic import StringIO
-    from returnn.tf.network import NetworkConstructionDependencyLoopException
+    from returnn.tf.network import NetworkConstructionDependencyLoopException, DataNotFound
     # The stack trace is not so interesting for these exceptions.
     skip_stack_trace_exception_types = (
-      NetworkConstructionDependencyLoopException, LayerNotFound)
+      NetworkConstructionDependencyLoopException)
+
+    # These Exceptions always indicate incorrect construction, so fail directly instead of collecting them
+    fail_directly_exception_types = (DataNotFound, LayerNotFound)
 
     class ConstructCtx:
       """
@@ -1082,6 +1085,11 @@ class _SubnetworkRecCell(object):
           else:
             out = StringIO()
             better_exchook.better_exchook(exc_type, value, tb, file=out)
+            if isinstance(value, fail_directly_exception_types):
+              raise Exception(
+                  "Template construction failed with Exception:\n: %s\n"
+                  "Template construction failed with non-allowed Exception "
+                  "while constructing layer: %s" % (out.getvalue(), layer_name))
             cls.collected_exceptions[exc_key] = out.getvalue()
 
     class GetLayer:
