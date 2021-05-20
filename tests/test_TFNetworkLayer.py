@@ -1812,7 +1812,9 @@ def _run_repeat_layer(session, net, input_data_layer):
   repeat_layer = RepeatLayer(output=out_data, **opts)
   print(repeat_layer.output)
 
-  output, size_placeholder = session.run([repeat_layer.output.placeholder, repeat_layer.output.size_placeholder])
+  output, size_placeholder = session.run(
+    [repeat_layer.output.placeholder, repeat_layer.output.size_placeholder],
+    feed_dict=make_feed_dict(net.extern_data, n_batch=2))
   assert numpy.all(numpy.equal(size_placeholder[0], numpy.asarray([19, 11])))
   assert numpy.all(numpy.equal(output.shape, numpy.asarray([2, 19, 5])))
   # the 6 last positions of the second sequence need to be padded with zeros
@@ -1852,6 +1854,19 @@ def test_RepeatLayerBFT():
       out_type={'shape': (5, None), 'dim': 5, 'time_dim_axis': 2, 'feature_dim_axis': 1})
     input_data_layer.output.size_placeholder = {1: tf.constant([10, 7])}  # [B]
     input_data_layer.output.placeholder = tf_compat.v1.random_uniform((2, 5, 10))  # [B, F, T]
+
+    _run_repeat_layer(session, net, input_data_layer)
+
+
+def test_RepeatLayerTF():
+  with make_scope() as session:
+    # need to provide extern_data here to provide batch info
+    net = TFNetwork(extern_data=ExternData(data={"data": {"dim": 2, "sparse": True}}), train_flag=True)
+    input_data_layer = InternalLayer(
+      name="src", network=net,
+      out_type={'shape': (None, 5), 'dim': 5, 'batch_dim_axis': None, 'time_dim_axis': 0})
+    input_data_layer.output.size_placeholder = {0: tf.constant([10])}  # []
+    input_data_layer.output.placeholder = tf_compat.v1.random_uniform((10, 5))  # [T, F]
 
     _run_repeat_layer(session, net, input_data_layer)
 
