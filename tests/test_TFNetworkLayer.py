@@ -1856,6 +1856,31 @@ def test_RepeatLayerBFT():
     _run_repeat_layer(session, net, input_data_layer)
 
 
+def test_RepeatLayer_int_repetitions():
+  with make_scope() as session:
+    n_out = 5
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out},
+      }})
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "output": {"class": "repeat", "repetitions": 3, "axis": "F", "from": ["data"]}
+    })
+    session.run(tf_compat.v1.global_variables_initializer())
+    out = net.layers["output"].output
+    n_batch = 3
+    max_seq_len = 10
+    feed = make_feed_dict(net.extern_data.data.values(), n_batch=n_batch, n_time=max_seq_len, same_time=True)
+    v = session.run(out.placeholder, feed_dict=feed)
+    input_data = feed[net.extern_data.data["data"].placeholder]
+
+    assert out.batch_dim_axis == 0
+    ref = numpy.swapaxes(numpy.repeat(input_data, 3, axis=-1), -1, out.feature_dim_axis)
+    numpy.testing.assert_allclose(ref, v, rtol=1e-5)
+
+
 def test_TileLayer():
   with make_scope() as session:
     n_out = 5
