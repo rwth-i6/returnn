@@ -1116,8 +1116,9 @@ def test_attention_subnetwork_base_dependency():
           "from": ["s", "prev:orth_embed"],
           "concat_sources": True,
           "subnetwork": {
+            "c_in": {"class": "linear", "activation": None, "from": "data", "n_out": 14},
             "output": {
-              "class": "dot_attention", "from": "data",
+              "class": "dot_attention", "from": "c_in",
               "base": "base:base:encoder", "base_ctx": "base:base:encoder"},
           }
         },
@@ -1146,7 +1147,7 @@ def test_attention_subnetwork_from_dependency():
           "from": ["s", "prev:orth_embed", "base:encoder"],
           "concat_sources": False,
           "subnetwork": {
-            "c_in": {"class": "linear", "activation": "tanh", "from": ["data:0", "data:1"], "n_out": 5},
+            "c_in": {"class": "linear", "activation": None, "from": ["data:0", "data:1"], "n_out": 14},
             "output": {"class": "dot_attention", "from": ["c_in"], "base": "data:2", "base_ctx": "data:2"},
           }
         },
