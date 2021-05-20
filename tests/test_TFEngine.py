@@ -1101,59 +1101,45 @@ def test_attention_train_then_search():
 
 def test_attention_subnetwork_base_dependency():
   net_dict = {
-    "encoder": {
-      "class": "subnetwork",
-      "from": ["data:data"],
-      "subnetwork": {
-        "concat": {"class": "linear", "activation": "tanh", "n_out": 5},
-        "output": {'class': "copy", 'from': ['concat']}
-      }
-    },
+    "encoder": {"class": "linear", "activation": "tanh", "n_out": 14},
     "decoder": {
       "class": "rec",
       "from": [],
       "target": "classes", "max_seq_len": 10,
       "unit": {
-        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 4, 'from': ["output_prob"]},
-        "end": {"class": "compare", "from": ["output"], "value": 0},
-        'orth_embed': {'class': 'linear', 'activation': None, 'from': ['output'], "n_out": 7},
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 4, 'from': "output_prob"},
+        "end": {"class": "compare", "from": "output", "value": 0},
+        'orth_embed': {'class': 'linear', 'activation': None, 'from': 'output', "n_out": 7},
         "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:att", "prev:orth_embed"], "n_out": 7},
         "att": {
           "class": "subnetwork",
           "from": ["s", "prev:orth_embed"],
-          "concat_sources": False,
+          "concat_sources": True,
           "subnetwork": {
-            "c_in": {"class": "linear", "activation": "tanh", "from": ["data:0", "data:1"], "n_out": 5},
-            "output": {"class": "dot_attention", "from": ["c_in"], "base": "base:base:encoder", "base_ctx": "base:base:encoder"},
+            "output": {
+              "class": "dot_attention", "from": "data",
+              "base": "base:base:encoder", "base_ctx": "base:base:encoder"},
           }
         },
         "output_prob": {"class": "softmax", "from": ["prev:s", "att"], "target": "classes", "loss": "ce"}
       },
     },
-    "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"},
-    "output": {'class': "copy", 'from': ['decoder']}
+    "output": {'class': "copy", 'from': 'decoder'}
   }
   run_dummy_training(net_dict)
 
 
 def test_attention_subnetwork_from_dependency():
   net_dict = {
-    "encoder": {
-      "class": "subnetwork",
-      "from": ["data:data"],
-      "subnetwork": {
-        "concat": {"class": "linear", "activation": "tanh", "n_out": 5},
-        "output": {'class': "copy", 'from': ['concat']}
-      }
-    },
+    "encoder": {"class": "linear", "activation": "tanh", "n_out": 14},
     "decoder": {
       "class": "rec",
       "from": [],
       "target": "classes", "max_seq_len": 10,
       "unit": {
-        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 4, 'from': ["output_prob"]},
-        "end": {"class": "compare", "from": ["output"], "value": 0},
-        'orth_embed': {'class': 'linear', 'activation': None, 'from': ['output'], "n_out": 7},
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 4, 'from': "output_prob"},
+        "end": {"class": "compare", "from": "output", "value": 0},
+        'orth_embed': {'class': 'linear', 'activation': None, 'from': 'output', "n_out": 7},
         "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:att", "prev:orth_embed"], "n_out": 7},
         "att": {
           "class": "subnetwork",
@@ -1167,8 +1153,7 @@ def test_attention_subnetwork_from_dependency():
         "output_prob": {"class": "softmax", "from": ["prev:s", "att"], "target": "classes", "loss": "ce"}
       },
     },
-    "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"},
-    "output": {'class': "copy", 'from': ['decoder']}
+    "output": {'class': "copy", 'from': 'decoder'}
   }
   run_dummy_training(net_dict)
 
