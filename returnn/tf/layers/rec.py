@@ -1046,7 +1046,7 @@ class _SubnetworkRecCell(object):
     from returnn.tf.network import NetworkConstructionDependencyLoopException, DataNotFound
     # The stack trace is not so interesting for these exceptions.
     skip_stack_trace_exception_types = (
-      NetworkConstructionDependencyLoopException)
+      NetworkConstructionDependencyLoopException,)
 
     # These Exceptions always indicate incorrect construction, so fail directly instead of collecting them
     fail_directly_exception_types = (DataNotFound, LayerNotFound)
@@ -1083,13 +1083,10 @@ class _SubnetworkRecCell(object):
               color(exc_type.__name__, color.fg_colors[1]),
               str(value))
           else:
+            if isinstance(value, fail_directly_exception_types):
+              raise
             out = StringIO()
             better_exchook.better_exchook(exc_type, value, tb, file=out)
-            if isinstance(value, fail_directly_exception_types):
-              raise Exception(
-                  "Template construction failed with Exception:\n: %s\n"
-                  "Template construction failed with non-allowed Exception "
-                  "while constructing layer: %s" % (out.getvalue(), layer_name))
             cls.collected_exceptions[exc_key] = out.getvalue()
 
     class GetLayer:
