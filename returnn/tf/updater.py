@@ -62,7 +62,7 @@ def _init_optimizer_classes_dict():
 
 def _check_valid_optimizer(optimizer_class):
   """
-  :param type
+  :param type optimizer_class:
   """
   if tf_compat.v2:
     assert (issubclass(optimizer_class, tf_compat.v2.keras.optimizers.Optimizer) or
