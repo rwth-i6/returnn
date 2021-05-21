@@ -14,7 +14,7 @@ except ImportError:
   from tensorflow.python.ops import rnn_cell
 from returnn.tf.network import LayerNotFound
 from .basic import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template, Loss
-from returnn.tf.util.basic import Data, SearchBeam, reuse_name_scope, get_random_seed, select_src_beams
+from returnn.tf.util.basic import Data, DimensionTag, SearchBeam, reuse_name_scope, get_random_seed, select_src_beams
 from returnn.util.basic import NotSpecified
 from returnn.log import log
 
@@ -96,6 +96,7 @@ class RecLayer(_ConcatInputLayer):
                use_global_rec_step_offset=False,
                include_eos=False,
                debug=None,
+               _time_dim_tag=None,
                **kwargs):
     """
     :param str|_SubnetworkRecCell unit: the RNNCell/etc name, e.g. "nativelstm". see comment below.
@@ -117,6 +118,7 @@ class RecLayer(_ConcatInputLayer):
     :param bool use_global_rec_step_offset:
     :param bool include_eos: for search, whether we should include the frame where "end" is True
     :param bool|None debug:
+    :param DimensionTag|None _time_dim_tag:
     """
     super(RecLayer, self).__init__(**kwargs)
     import re
@@ -143,6 +145,7 @@ class RecLayer(_ConcatInputLayer):
     self._initial_state_deps = [layer for layer in nest.flatten(initial_state) if isinstance(layer, LayerBase)]
     self._input_projection = input_projection
     self._max_seq_len = max_seq_len
+    self._output_time_dim_tag = _time_dim_tag
     self.include_eos = include_eos
     if optimize_move_layers_out is None:
       optimize_move_layers_out = self.network.get_config().bool("optimize_move_layers_out", True)
@@ -302,12 +305,43 @@ class RecLayer(_ConcatInputLayer):
       d["initial_state"] = RnnCellLayer.transform_initial_state(
         d["initial_state"], network=network, get_layer=get_layer)
 
+    # We need to figure out the output time dim tag at this early point,
+    # because _SubnetworkRecCell might need it during template construction.
+    source_data = get_concat_sources_data_template(d["sources"]) if d["sources"] else None
+    if source_data and not source_data.have_time_axis():  # expect to be inside other RecLayer
+      time_dim_tag = None
+    else:
+      # We will output a time-dim.
+      if source_data:
+        assert source_data.have_time_axis()
+        time_dim_tag = source_data.get_time_dim_tag()
+      elif d.get("size_target"):  # if this is set, always use it
+        target_data = cls._static_get_target_value(
+          target=d["size_target"], mark_data_key_as_used=True, network=network)
+        assert target_data.have_time_axis()
+        time_dim_tag = target_data.get_time_dim_tag()
+      elif d.get("target") and network.eval_flag:
+        target_data = cls._static_get_target_value(
+          target=d["target"][0] if isinstance(d["target"], (list, tuple)) else d["target"],
+          mark_data_key_as_used=True, network=network)
+        assert target_data.have_time_axis()
+        time_dim_tag = target_data.get_time_dim_tag()
+      else:
+        # We create a new time-dim.
+        # Expect that we have a subnet and "end" (EOS) is defined.
+        assert isinstance(d.get("unit"), dict) and "end" in d.get("unit")
+        time_dim_tag = DimensionTag(
+          description="dyn-time:%s%s" % (network.get_absolute_name_prefix(), d["_name"]),
+          kind=DimensionTag.Types.Time)
+    d["_time_dim_tag"] = time_dim_tag
+
     if isinstance(d.get("unit"), dict):
       sub_net_dict = d.pop("unit")
-      source_data = get_concat_sources_data_template(d["sources"]) if d["sources"] else None
+      assert time_dim_tag  # expect to always have this (also not being inside other rec layer)
       subnet = _SubnetworkRecCell(
         parent_net=network, parent_get_layer=get_layer,
-        net_dict=sub_net_dict, source_data=source_data, rec_layer_name=d["_name"])
+        source_data=source_data, time_dim_tag=time_dim_tag,
+        net_dict=sub_net_dict, rec_layer_name=d["_name"])
       d["unit"] = subnet
 
     if isinstance(d.get("max_seq_len"), str):
@@ -879,7 +913,7 @@ class RecLayer(_ConcatInputLayer):
     :return: output of shape (time, batch, dim)
     :rtype: tf.Tensor
     """
-    output = cell.get_output(rec_layer=self)
+    output = cell.get_output()
     self._last_hidden_state = cell
     return output
 
@@ -938,10 +972,11 @@ class _SubnetworkRecCell(object):
 
   _debug_out = None  # set to list to enable
 
-  def __init__(self, net_dict, source_data, rec_layer_name, parent_net, parent_get_layer):
+  def __init__(self, net_dict, source_data, time_dim_tag, rec_layer_name, parent_net, parent_get_layer):
     """
     :param dict[str,dict[str]] net_dict: dict for the subnetwork, layer name -> layer dict
     :param Data|None source_data: usually concatenated input from the rec-layer
+    :param DimensionTag time_dim_tag:
     :param str rec_layer_name:
     :param returnn.tf.network.TFNetwork parent_net:
     :param ((str) -> LayerBase) parent_get_layer:
@@ -962,9 +997,11 @@ class _SubnetworkRecCell(object):
       parent_net=parent_net)
     self.net.is_root_in_ctx = True
     self.net.layers_desc.update(self.net_dict)
+    self.source_data = source_data
     if source_data:
       self.net.extern_data.data["source"] = (
         source_data.copy_template_excluding_time_dim())
+    self.time_dim_tag = time_dim_tag
     for key, data in parent_net.extern_data.data.items():
       if key in self.net.extern_data.data or data.time_dim_axis is None:
         continue  # Don't overwrite existing, e.g. "source".
@@ -1816,13 +1853,14 @@ class _SubnetworkRecCell(object):
         return None
       return ta
 
-  def get_output(self, rec_layer):
+  def get_output(self):
     """
-    :param RecLayer rec_layer:
     :return: output of shape (time, batch, dim), search choices
     :rtype: tf.Tensor
     """
     from returnn.tf.util.basic import check_input_dim, tensor_array_stack, DimensionTag, get_valid_scope_name_from_str
+    assert self.parent_rec_layer
+    rec_layer = self.parent_rec_layer
 
     # The template network is already constructed at this point, but nothing else.
     self._check_output_template_shape()
@@ -2527,6 +2565,12 @@ class _SubnetworkRecCell(object):
         assert not self.net.layers["output"].get_search_choices()
         output = tensor_array_stack(
           self.final_acc_tas_dict["output_output"], stop=max_seq_len, name="output_stack")  # e.g. (time, batch, dim)
+
+    existing_time_dim_tag = DimensionTag.get_tag_from_size_tensor(rec_layer.output.size_placeholder[0])
+    if existing_time_dim_tag:
+      self.time_dim_tag.declare_same_as(existing_time_dim_tag)
+    else:
+      self.time_dim_tag.set_tag_on_size_tensor(rec_layer.output.size_placeholder[0])
 
     for key in (
           self.net.used_data_keys |
