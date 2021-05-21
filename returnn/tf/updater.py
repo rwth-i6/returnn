@@ -17,9 +17,11 @@ import returnn.tf.util.basic as tf_util
 from returnn.tf.util.basic import tf_version_tuple, assert_min_tf_version, CustomUpdate, add_check_numerics_ops
 
 Optimizer = tf_compat.v1.train.Optimizer
+if tf_compat.v2:
+  KerasOptimizer = tf_compat.v2.optimizers.Optimizer
 
 _OptimizerClassesDictInitialized = False
-_OptimizerClassesDict = {}  # type: typing.Dict[str,typing.Callable[[],Optimizer]]
+_OptimizerClassesDict = {}  # type: typing.Dict[str, typing.Union[Optimizer, KerasOptimizer]]
 
 
 def _init_optimizer_classes_dict():
@@ -56,14 +58,15 @@ def _init_optimizer_classes_dict():
 
 def register_optimizer_class(cls, name=None):
   """
-  :param type[Optimizer] cls:
+  :param type[Optimizer|KerasOptimizer] cls:
   :param str|None name:
   """
   _init_optimizer_classes_dict()
   if not name:
     name = cls.__name__
-  if tf_compat.v2 and issubclass(cls, tf_compat.v2.keras.optimizers.Optimizer):
-    cls = KerasOptimizer.get_factory(cls)
+  if tf_compat.v2:
+    assert (issubclass(cls, tf_compat.v2.keras.optimizers.Optimizer) or
+            issubclass(cls, Optimizer))
   else:
     assert issubclass(cls, Optimizer)
   assert name.lower() not in _OptimizerClassesDict
@@ -76,9 +79,9 @@ def register_optimizer_class(cls, name=None):
 
 def get_optimizer_class(class_name):
   """
-  :param str|function|type[Optimizer] class_name: e.g. "adam"
+  :param str|function|type[Optimizer|KerasOptimizer] class_name: e.g. "adam"
   :return: the class
-  :rtype: type[Optimizer]|()->Optimizer
+  :rtype: type[Optimizer|KerasOptimizer]
   """
   _init_optimizer_classes_dict()
   if callable(class_name):
@@ -517,6 +520,8 @@ class WrapOptimizer:
       lr = lr * optimizer_opts.pop("learning_rate_multiplier")
     optimizer_opts["learning_rate"] = lr
     print("Create optimizer %s with options %r." % (optim_class, optimizer_opts), file=log.v2)
+    if tf_compat.v2 and issubclass(optim_class, tf_compat.v2.keras.optimizers.Optimizer):
+      optim_class = KerasOptimizerWrapper.get_factory(optim_class)
     optimizer = optim_class(**optimizer_opts)
     assert isinstance(optimizer, Optimizer)
     return optimizer
@@ -553,7 +558,7 @@ class WrapOptimizer:
         optimizer = NadamOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
       except ImportError:  # TF 2
         optimizer = tf.keras.optimizers.Nadam(learning_rate=lr, epsilon=epsilon)
-        optimizer = KerasOptimizer(optimizer)
+        optimizer = KerasOptimizerWrapper(optimizer)
     elif self.config.bool("adadelta", False):
       assert not momentum
       print("Create Adadelta optimizer.", file=log.v2)
@@ -926,9 +931,11 @@ class WrapOptimizer:
     return tf.group(*all_apply_grads)
 
 
-class KerasOptimizer(Optimizer):
+class KerasOptimizerWrapper(Optimizer):
   """
   Wraps a TF optimizer into a standard TF optimizer.
+
+  For internal use only.
   """
 
   @classmethod
@@ -956,7 +963,7 @@ class KerasOptimizer(Optimizer):
     if not name:
       # noinspection PyProtectedMember
       name = optimizer._name
-    super(KerasOptimizer, self).__init__(name=name, use_locking=True)  # always uses locking
+    super(KerasOptimizerWrapper, self).__init__(name=name, use_locking=True)  # always uses locking
     self.keras_optimizer = optimizer
     self._var_list = None
 
