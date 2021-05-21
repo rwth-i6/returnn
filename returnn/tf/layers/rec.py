@@ -98,9 +98,10 @@ class RecLayer(_ConcatInputLayer):
                debug=None,
                **kwargs):
     """
-    :param str|dict[str,dict[str]] unit: the RNNCell/etc name, e.g. "nativelstm". see comment below.
+    :param str|_SubnetworkRecCell unit: the RNNCell/etc name, e.g. "nativelstm". see comment below.
       alternatively a whole subnetwork, which will be executed step by step,
       and which can include "prev" in addition to "from" to refer to previous steps.
+      The subnetwork is specified as a net dict in the config.
     :param None|dict[str] unit_opts: passed to RNNCell creation
     :param int|None direction: None|1 -> forward, -1 -> backward
     :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
@@ -300,33 +301,15 @@ class RecLayer(_ConcatInputLayer):
     if "initial_state" in d:
       d["initial_state"] = RnnCellLayer.transform_initial_state(
         d["initial_state"], network=network, get_layer=get_layer)
+
     if isinstance(d.get("unit"), dict):
-      def sub_get_layer(name):
-        """
-        :param str name:
-        :rtype: LayerBase
-        """
-        # Only used to resolve deps to base network.
-        if name.startswith("base:"):
-          return get_layer(name[len("base:"):])  # calls get_layer of parent network
-        from returnn.tf.layers.basic import InternalLayer
-        return InternalLayer(
-          name=name, network=subnet,
-          output=Data(name="dummy:RecLayer.transform_config_dict(%s)" % name, dim=1))
-      from returnn.tf.network import TFNetwork, ExternData
-      subnet = TFNetwork(parent_net=network, extern_data=network.extern_data, name="%s(tmp)" % d["_name"])
-      for key, sub in d["unit"].items():  # iterate over the layers of the subnet
-        assert isinstance(sub, dict)
-        if "class" in sub:
-          from .basic import get_layer_class
-          sub = sub.copy()
-          class_name = sub.pop("class")
-          cl = get_layer_class(class_name)
-          sub["_network"] = subnet
-          sub["_name"] = key
-          # Operate on a copy because we will transform the dict later.
-          # We only need this to resolve any other layer dependencies in the main network.
-          cl.transform_config_dict(sub, network=subnet, get_layer=sub_get_layer)
+      sub_net_dict = d.pop("unit")
+      source_data = get_concat_sources_data_template(d["sources"]) if d["sources"] else None
+      subnet = _SubnetworkRecCell(
+        parent_net=network, parent_get_layer=get_layer,
+        net_dict=sub_net_dict, source_data=source_data, rec_layer_name=d["_name"])
+      d["unit"] = subnet
+
     if isinstance(d.get("max_seq_len"), str):
 
       def max_len_from(src):
@@ -381,9 +364,8 @@ class RecLayer(_ConcatInputLayer):
         out = out.copy_as_time_batch_major()  # Otherwise the output is always [T,B,F]
     else:
       out = None
-    if isinstance(unit, dict):  # subnetwork
-      subnet = _SubnetworkRecCell(
-        parent_net=network, net_dict=unit, source_data=source_data, rec_layer_name=kwargs["name"])
+    if isinstance(unit, _SubnetworkRecCell):  # subnetwork
+      subnet = unit
       sub_out = subnet.layer_data_templates["output"].output.copy_template_adding_time_dim(
         name="%s_output" % kwargs["name"], time_dim_axis=0)
       if out:
@@ -557,15 +539,8 @@ class RecLayer(_ConcatInputLayer):
     losses = super(RecLayer, cls).get_losses(
       name=name, network=network, output=output, loss=loss, layer=layer, reduce_func=reduce_func, **kwargs)
     unit = kwargs["unit"]
-    if isinstance(unit, dict):  # subnet
-      if layer:
-        assert isinstance(layer, RecLayer)
-        assert isinstance(layer.cell, _SubnetworkRecCell)
-        subnet = layer.cell
-      else:
-        sources = kwargs["sources"]
-        source_data = get_concat_sources_data_template(sources) if sources else None
-        subnet = _SubnetworkRecCell(parent_net=network, net_dict=unit, source_data=source_data, rec_layer_name=name)
+    if isinstance(unit, _SubnetworkRecCell):  # subnet
+      subnet = unit
       for layer_name, template_layer in sorted(subnet.layer_data_templates.items()):
         assert isinstance(template_layer, _TemplateLayer)
         assert issubclass(template_layer.layer_class_type, LayerBase)
@@ -598,7 +573,7 @@ class RecLayer(_ConcatInputLayer):
 
   def _get_cell(self, unit, unit_opts=None):
     """
-    :param str|dict[str] unit:
+    :param str|_SubnetworkRecCell unit:
     :param None|dict[str] unit_opts:
     :rtype: _SubnetworkRecCell|tensorflow.contrib.rnn.RNNCell|tensorflow.contrib.rnn.FusedRNNCell|TFNativeOp.RecSeqCellOp  # nopep8
     """
@@ -610,9 +585,10 @@ class RecLayer(_ConcatInputLayer):
     except ImportError:
       pass
     import returnn.tf.native_op as tf_native_op
-    if isinstance(unit, dict):
+    if isinstance(unit, _SubnetworkRecCell):
       assert unit_opts is None
-      return _SubnetworkRecCell(parent_rec_layer=self, net_dict=unit)
+      unit.set_parent_layer(self)
+      return unit
     assert isinstance(unit, str)
     rnn_cell_class = self.get_rnn_cell_class(unit)
     n_hidden = self.output.dim
@@ -962,28 +938,16 @@ class _SubnetworkRecCell(object):
 
   _debug_out = None  # set to list to enable
 
-  def __init__(self, net_dict, parent_rec_layer=None, parent_net=None, source_data=None, rec_layer_name=None):
+  def __init__(self, net_dict, source_data, rec_layer_name, parent_net, parent_get_layer):
     """
     :param dict[str,dict[str]] net_dict: dict for the subnetwork, layer name -> layer dict
-    :param RecLayer parent_rec_layer:
-    :param returnn.tf.network.TFNetwork parent_net:
     :param Data|None source_data: usually concatenated input from the rec-layer
-    :param str|None rec_layer_name:
+    :param str rec_layer_name:
+    :param returnn.tf.network.TFNetwork parent_net:
+    :param ((str) -> LayerBase) parent_get_layer:
     """
     from returnn.tf.util.basic import safe_deep_copy
-    if parent_net is None and parent_rec_layer:
-      parent_net = parent_rec_layer.network
-    if source_data is None and parent_rec_layer:
-      source_data = parent_rec_layer.input_data
-    if rec_layer_name is None:
-      assert parent_rec_layer
-      rec_layer_name = parent_rec_layer.name
-    if parent_rec_layer:
-      # This is very ugly. However, during the template construction (_construct_template) below,
-      # recursively via self.net.get_rec_parent_layer, we might check for self.net.parent_layer.cell,
-      # before the __init__ here has finished.
-      parent_rec_layer.cell = self
-    self.parent_rec_layer = parent_rec_layer
+    self.parent_rec_layer = None  # type: typing.Optional[RecLayer]
     self.parent_net = parent_net
     self.net_dict = safe_deep_copy(net_dict)
     from returnn.tf.network import TFNetwork, ExternData, LossHolder
@@ -993,7 +957,6 @@ class _SubnetworkRecCell(object):
       train_flag=parent_net.train_flag,
       search_flag=parent_net.search_flag,
       eval_flag=False,
-      parent_layer=parent_rec_layer,
       is_inside_rec_layer=True,
       absolute_name_prefix="%s%s/" % (parent_net.get_absolute_name_prefix(), rec_layer_name),
       parent_net=parent_net)
@@ -1013,7 +976,7 @@ class _SubnetworkRecCell(object):
     self.prev_layers_needed = set()  # type: typing.Set[str]
     self.prev_layer_templates = {}  # type: typing.Dict[str,_TemplateLayer]
     self._template_construction_exceptions = None  # type: typing.Optional[typing.List[str]]
-    self._construct_template()
+    self._construct_template(parent_get_layer=parent_get_layer)
     self._initial_outputs = None  # type: typing.Optional[typing.Dict[str,tf.Tensor]]
     self._initial_extra_outputs = None  # type: typing.Optional[typing.Dict[str,typing.Dict[str,typing.Union[tf.Tensor,typing.Tuple[tf.Tensor,...]]]]]  # nopep8
 
@@ -1032,11 +995,22 @@ class _SubnetworkRecCell(object):
   def __repr__(self):
     return "<%s %r>" % (self.__class__.__name__, self.net.name)
 
-  def _construct_template(self):
+  def set_parent_layer(self, parent_rec_layer):
+    """
+    :param RecLayer parent_rec_layer:
+    """
+    assert parent_rec_layer.network is self.parent_net
+    parent_rec_layer.cell = self
+    self.parent_rec_layer = parent_rec_layer
+    self.net.parent_layer = parent_rec_layer
+
+  def _construct_template(self, parent_get_layer):
     """
     Without creating any computation graph, create TemplateLayer instances.
     Need it for shape/meta information as well as dependency graph in advance.
     It will init self.layer_data_templates and self.prev_layers_needed.
+
+    :param ((str) -> LayerBase) parent_get_layer:
     """
     import sys
     from returnn.util import better_exchook
@@ -1227,7 +1201,7 @@ class _SubnetworkRecCell(object):
             earlier_layer_output = layer_.output
         if name.startswith("base:"):
           assert not is_prev_time_frame
-          layer_ = self._get_parent_layer(name[len("base:"):])
+          layer_ = parent_get_layer(name[len("base:"):])
           if ConstructCtx.layers:
             ConstructCtx.layers[-1].add_dependency(layer_, is_prev_time_frame=False)
           return layer_
