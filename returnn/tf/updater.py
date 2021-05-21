@@ -49,6 +49,8 @@ def _init_optimizer_classes_dict():
       continue
     if v is Optimizer:
       continue
+    if tf_compat.v2 and v is KerasOptimizer:
+      continue
     if not isinstance(v, type):
       continue
     if not issubclass(v, allowed_types):
@@ -56,6 +58,17 @@ def _init_optimizer_classes_dict():
     if v is KerasOptimizerWrapper:
       continue
     register_optimizer_class(v, name=name)
+
+
+def _check_valid_optimizer(optimizer_class):
+  """
+  :param type
+  """
+  if tf_compat.v2:
+    assert (issubclass(optimizer_class, tf_compat.v2.keras.optimizers.Optimizer) or
+            issubclass(optimizer_class, Optimizer))
+  else:
+    assert issubclass(optimizer_class, Optimizer)
 
 
 def register_optimizer_class(cls, name=None):
@@ -66,11 +79,7 @@ def register_optimizer_class(cls, name=None):
   _init_optimizer_classes_dict()
   if not name:
     name = cls.__name__
-  if tf_compat.v2:
-    assert (issubclass(cls, tf_compat.v2.keras.optimizers.Optimizer) or
-            issubclass(cls, Optimizer))
-  else:
-    assert issubclass(cls, Optimizer)
+  _check_valid_optimizer(cls)
   assert name.lower() not in _OptimizerClassesDict
   _OptimizerClassesDict[name.lower()] = cls
   if name.endswith("Optimizer"):
@@ -86,11 +95,11 @@ def get_optimizer_class(class_name):
   :rtype: type[Optimizer|KerasOptimizer]
   """
   _init_optimizer_classes_dict()
+  if isinstance(class_name, type):
+    _check_valid_optimizer(class_name)
+    return class_name
   if callable(class_name):
     class_name = class_name()
-  if isinstance(class_name, type):
-    assert issubclass(class_name, Optimizer)
-    return class_name
   assert isinstance(class_name, str)
   return _OptimizerClassesDict[class_name.lower()]
 

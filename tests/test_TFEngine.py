@@ -236,6 +236,14 @@ def test_engine_train_newbob():
   test_engine_train(additional_config)
 
 
+def test_engine_train_optimizer_class():
+  from returnn.tf.updater import NormalizedSGD
+  additional_config = {
+    "optimizer": {"class": NormalizedSGD},
+  }
+  test_engine_train(additional_config)
+
+
 def test_engine_train_keras_optimizer():
   additional_config = {
     "optimizer": {"class": "nadam"},
