@@ -53,6 +53,8 @@ def _init_optimizer_classes_dict():
       continue
     if not issubclass(v, allowed_types):
       continue
+    if v is KerasOptimizerWrapper:
+      continue
     register_optimizer_class(v, name=name)
 
 
