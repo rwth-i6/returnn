@@ -1017,10 +1017,13 @@ class _SubnetworkRecCell(object):
     from pprint import pformat
     from collections import OrderedDict
     from returnn.util.basic import StringIO
-    from returnn.tf.network import NetworkConstructionDependencyLoopException
+    from returnn.tf.network import NetworkConstructionDependencyLoopException, DataNotFound
     # The stack trace is not so interesting for these exceptions.
     skip_stack_trace_exception_types = (
-      NetworkConstructionDependencyLoopException, LayerNotFound)
+      NetworkConstructionDependencyLoopException,)
+
+    # These Exceptions always indicate incorrect construction, so fail directly instead of collecting them
+    fail_directly_exception_types = (DataNotFound, LayerNotFound)
 
     class ConstructCtx:
       """
@@ -1054,6 +1057,8 @@ class _SubnetworkRecCell(object):
               color(exc_type.__name__, color.fg_colors[1]),
               str(value))
           else:
+            if isinstance(value, fail_directly_exception_types):
+              raise
             out = StringIO()
             better_exchook.better_exchook(exc_type, value, tb, file=out)
             cls.collected_exceptions[exc_key] = out.getvalue()
