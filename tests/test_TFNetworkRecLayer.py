@@ -3469,6 +3469,42 @@ def test_reclayer_optimize_out_dot():
     rtol=1e-3)
 
 
+def test_reclayer_optimize_out_dot_kv_in_rec():
+  # Same as test_reclayer_optimize_out_dot, but with the att key/value layers declared INSIDE the rec layer.
+  AttNumHeads = 4
+  EncKeyPerHeadDim = 5
+  EncValuePerHeadDim = 7
+  EncKeyTotalDim = AttNumHeads * EncKeyPerHeadDim
+  EncValueTotalDim = AttNumHeads * EncValuePerHeadDim
+  check_reclayer_optimize_out(
+    {"class": "linear", "activation": None, "from": ["att"]},
+    other_subnet_layers={
+      "s": {"class": "linear", "activation": None, "with_bias": False, "from": ["data:source"],
+            "n_out": EncKeyTotalDim},  # (B, D)  -- Q (query). D should be same as enc_ctx
+      "att_query": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
+                    "from": ["s"]},  # (B, H, D/H)
+      # this does not depend on the classes, but you should still be able to define it here.
+      "enc_ctx0": {"class": "linear", "activation": None, "with_bias": False, "from": ["base:encoder"],
+                   "n_out": EncKeyTotalDim},  # (B, enc-T, D)
+      "enc_ctx": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
+                  "from": ["enc_ctx0"], "is_output_layer": True},  # (B, enc-T, H, D/H)
+      "enc_value0": {"class": "linear", "activation": None, "with_bias": False, "from": ["base:encoder"],
+                     "n_out": EncValueTotalDim},  # (B, enc-T, D)
+      "enc_value": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim),
+                    "from": ["enc_value0"], "is_output_layer": True},  # (B, enc-T, H, D/H)
+      "energy": {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": "T?",  # Note the "T?".
+                 "from": ["enc_ctx", "att_query"]},
+      "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, H, 1)
+      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "enc_value"},  # (B, H, V)
+      "att": {"class": "merge_dims", "axes": "static", "from": ["att0"]},  # (B, H*V); Use "static" here.
+      },
+    shared_base_net={
+      # need to mark 'encoder' as output layer, otherwise it will not be constructed.
+      "encoder": {"class": "copy", "from": ["data"], "is_output_layer": True}
+    },
+    rtol=1e-3)
+
+
 def test_reclayer_optimize_out_softmax_over_spatial():
   # Used for multi-head dot-attention.
   AttNumHeads = 4
@@ -3560,6 +3596,48 @@ def test_reclayer_optimize_out_access_split():
   check_reclayer_optimize_out(
     subnet_layer_dict={"class": "copy", "from": "split/0", "n_out": 5},
     other_subnet_layers={"split": {"class": "split", "from": ["data:source"], "size_splits": [5, 8]}})
+
+
+def test_reclayer_att_with_kv_in_rec():
+  net_dict = {
+    'decision': {'class': 'decide', 'from': ['output'], 'loss': 'edit_distance', 'loss_opts': {}, 'target': 'classes'},
+    'encoder': {'activation': None, 'class': 'linear', 'is_output_layer': True, 'n_out': 5},
+    'output': {
+      'class': 'rec', 'max_seq_len': 'max_len_from("base:encoder") * 3', 'target': 'classes', 'from': [],
+      'unit': {
+        'embed': {'activation': None, 'class': 'linear', 'from': ['prev:output'], 'n_out': 7},
+        'att_query0': {'activation': None, 'class': 'linear', 'from': ['embed'], 'n_out': 6, 'with_bias': False},
+        'att_query': {'axis': 'F', 'class': 'split_dims', 'dims': (2, 3), 'from': ['att_query0']},
+        # does not depend on rec-time, but still here declared within rec-layer:
+        'att_key0': {'activation': None, 'class': 'linear', 'from': ['base:encoder'], 'n_out': 6, 'with_bias': False},
+        'att_key': {'axis': 'F', 'class': 'split_dims', 'dims': (2, 3), 'from': ['att_key0']},
+        'att_value0': {'activation': None, 'class': 'linear', 'from': ['base:encoder'], 'n_out': 6, 'with_bias': False},
+        'att_value': {'axis': 'F', 'class': 'split_dims', 'dims': (2, 3), 'from': ['att_value0']},
+        'att_energy': {
+          'class': 'dot', 'from': ['att_query', 'att_key'], 'red1': 'static:-1', 'red2': 'static:-1',
+          'var1': 'T?', 'var2': 'T'},
+        'att_weights': {
+          'axis': 'T', 'class': 'softmax_over_spatial', 'from': ['att_energy']},
+        'att_output': {'class': 'generic_attention', 'weights': 'att_weights', 'base': 'att_value'},
+        'att_att': {'axes': 'static', 'class': 'merge_dims', 'from': ['att_output']},
+        'end': {'class': 'compare', 'from': ['output'], 'value': 0},
+        'output': {
+          'beam_size': 4, 'class': 'choice', 'from': ['output_prob'], 'initial_output': 'zeros',
+          'is_output_layer': True, 'loss': 'ce', 'target': 'classes'},
+        'output_prob': {'class': 'softmax', 'from': 'att_att', 'target': 'classes'}
+      }
+    }
+  }
+
+  with make_scope():
+    config = Config({
+      'debug_print_layer_output_template': True,
+      'extern_data': {
+        'data': {'dim': 7, 'sparse': True},
+        'classes': {'dim': 6, 'sparse': True, 'available_for_inference': False}}})
+    net = TFNetwork(
+      config=config, search_flag=True, train_flag=False, eval_flag=False)
+    net.construct_from_dict(net_dict)
 
 
 def test_reclayer_enc_time_dim_eval():
