@@ -6485,6 +6485,102 @@ class CondLayer(LayerBase):
     return layers
 
 
+class SearchSortedLayer(LayerBase):
+  """
+  Basically wraps :func:`tf.searchsorted`.
+
+  Takes a tensor `sorted_sequence` that is sorted along one axis, and a tensor `values`.
+  Will compute an output tensor with the same axes as `values`,
+  where each entry is the index of the value within the sorted sequence.
+  All (batch) axes of `sorted_sequence` except for the axis it is sorted along must be present in `values`.
+  """
+  layer_class = "search_sorted"
+  recurrent = True  # do not shuffle the sorted_sequence
+
+  def __init__(self, sorted_sequence, values, axis="T", side="left", **kwargs):
+    """
+    :param LayerBase sorted_sequence:
+    :param LayerBase values: search values
+    :param str axis: the axis along which `sorted_sequence` is sorted
+    :param str side: "left" or "right".
+      When one of the `values` exactly matches an element of the `sorted_sequence`,
+      whether to choose the lower or higher index.
+    """
+    super(SearchSortedLayer, self).__init__(**kwargs)
+    self.sorted_sequence = sorted_sequence  # e.g. [B,T]
+    self.values = values  # e.g. [B,F]
+    sorted_axis = sorted_sequence.output.get_axis_from_description(axis)  # = T
+    side = side.lower()
+    assert side in {"left", "right"}
+
+    sorted_data = sorted_sequence.output  # e.g. [B,T]
+    values_data = values.output  # e.g. [B,F]
+    sorted_batch_axes = [ax for ax in range(sorted_data.batch_ndim) if ax != sorted_axis]  # = sorted B
+    sorted_to_values_batch_axes = values_data.find_matching_dim_map(
+      other=sorted_data, other_axes=sorted_batch_axes)  # sorted B -> values B
+    values_batch_axes = [
+      sorted_to_values_batch_axes[sorted_batch_ax] for sorted_batch_ax in sorted_batch_axes]  # = values B
+    values_non_batch_axes = [ax for ax in range(values_data.batch_ndim) if ax not in values_batch_axes]  # = F
+    assert len(values_non_batch_axes) == 1, 'not implemented'
+    # move batch axes to front and align them between sorted_data and values
+    transposed_sorted_data = sorted_data.copy_transpose(perm=sorted_batch_axes + [sorted_axis])  # [B,T]
+    transposed_values_data = values_data.copy_transpose(perm=values_batch_axes + values_non_batch_axes)  # [B,F]
+    x = transposed_sorted_data.placeholder  # [B,T]
+    if transposed_sorted_data.is_axis_dynamic(axis=-1):
+      from returnn.tf.util.basic import where_bc, sequence_mask
+      seq_mask = transposed_sorted_data.get_sequence_mask_broadcast(axis=-1)
+      x = where_bc(seq_mask, x, x.dtype.max)  # note: this is not correct if values contains x.dtype.max
+    self.output.placeholder = tf.searchsorted(
+      sorted_sequence=x, values=transposed_values_data.placeholder, side=side,
+      out_type=self.output.dtype)
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    return super(SearchSortedLayer, self).get_dep_layers() + [self.sorted_sequence, self.values]
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param returnn.tf.network.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    d.setdefault("from", [])
+    super(SearchSortedLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["sorted_sequence"] = get_layer(d["sorted_sequence"])
+    d["values"] = get_layer(d["values"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, sorted_sequence, values, axis, name, network, **kwargs):
+    """
+    :param LayerBase sorted_sequence:
+    :param LayerBase values: search values
+    :param str axis: the axis along which `sorted_sequence` is sorted
+    :param str name:
+    :param returnn.tf.network.TFNetwork network:
+    :rtype: Data
+    """
+    sorted_data = sorted_sequence.output  # e.g. [B,T]
+    values_data = values.output  # e.g. [B,F]
+    sorted_axis = sorted_data.get_axis_from_description(axis)  # = T
+    sorted_batch_axes = [ax for ax in range(sorted_data.batch_ndim) if ax != sorted_axis]  # = sorted B
+    sorted_to_values_batch_axes = values_data.find_matching_dim_map(
+      other=sorted_data, other_axes=sorted_batch_axes)  # sorted B -> values B
+    values_batch_axes = [
+      sorted_to_values_batch_axes[sorted_batch_ax] for sorted_batch_ax in sorted_batch_axes]  # = values B
+    values_non_batch_axes = [ax for ax in range(values_data.batch_ndim) if ax not in values_batch_axes]  # = F
+    if len(values_non_batch_axes) != 1:
+      raise NotImplementedError(
+        "%r %s: need exactly one axis in values %r that does not match any in sorted_sequence %r, but found: %r" % (
+          cls, name, values_data, sorted_data, values_non_batch_axes))
+    # move all batch axes to front, non batch axes to back
+    output_data = values_data.copy("%s_output" % name).copy_transpose(perm=values_batch_axes + values_non_batch_axes)
+    output_data.dtype = "int32"
+    return output_data
+
+
 class SubnetworkLayer(LayerBase):
   """
   You can define a whole subnetwork as a single layer by this class.
