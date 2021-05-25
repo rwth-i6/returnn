@@ -1665,6 +1665,49 @@ def test_SwitchLayer_template_const_from():
   assert switch.dim == 2
 
 
+def test_SearchSortedLayer():
+  n_batch, n_time, n_in, n_out = 2, 10, 3, 5
+  random = numpy.random.RandomState(seed=1)
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData())
+    sorted_layer = InternalLayer(
+      name="sorted_sequence", network=net,
+      out_type={"shape": (None, n_in)})  # [B,T,F]
+    sorted = numpy.sort(random.uniform(0.0, 10.0, size=(n_batch, n_time, n_in)), axis=1)
+    sorted_lens = [10, 7]
+    sorted_layer.output.placeholder = tf.constant(sorted, dtype="float32")
+    sorted_layer.output.size_placeholder = {0: tf.constant(sorted_lens, dtype="int32")}  # [B]
+    values_layer = InternalLayer(
+      name="values", network=net,
+      out_type={"shape": (n_in, n_out), "time_dim_axis": None, "feature_dim_axis": 1})  # [B,F,F']
+    values = random.uniform(0.0, 10.0, size=(n_batch, n_in, n_out))
+    values_layer.output.placeholder = tf.constant(values, dtype="float32")
+
+    for side in ["left", "right"]:
+      print("Testing side=%r" % side)
+      opts = {
+        "network": net, "name": 'search_sorted_test', "sources": [], "sorted_sequence": sorted_layer,
+        "values": values_layer, "axis": "T", "side": side}
+      out_data = SearchSortedLayer.get_out_data_from_opts(**opts)
+      out_data.sanity_check(ignore_placeholder=True)
+      search_layer = SearchSortedLayer(output=out_data, **opts)  # should be [B,F]
+      out_data = search_layer.output
+      out_data.sanity_check()
+      print(search_layer.output)
+
+      output = session.run(search_layer.output.placeholder, feed_dict=make_feed_dict(net.extern_data))
+      assert output.dtype == "int32"
+      assert out_data.batch_shape == (None, n_in, n_out)
+      assert out_data.batch_dim_axis == 0
+      assert out_data.time_dim_axis is None
+      assert out_data.feature_dim_axis == 1
+      for b, t_max in enumerate(sorted_lens):
+        for f in range(n_in):
+          expected = numpy.searchsorted(a=sorted[b, :t_max, f], v=values[b, f, :], side=side)
+          actual = output[b, f, :]
+          numpy.testing.assert_equal(expected, actual)
+
+
 def test_CondLayer_subnetwork_train():
   n_batch, n_time, n_in, n_out = 3, 7, 11, 13
   config = Config({
