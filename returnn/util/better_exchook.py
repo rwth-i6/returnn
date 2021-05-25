@@ -1600,4 +1600,3 @@ def replace_traceback_format_tb():
     if hasattr(traceback, "StackSummary"):
         traceback.StackSummary.format = format_tb
         traceback.StackSummary.extract = _StackSummary_extract
-
