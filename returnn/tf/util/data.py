@@ -2815,6 +2815,10 @@ class Data(object):
     if axis is None:
       assert self.time_dim_axis is not None
       axis = self.time_dim_axis
+    if axis < 0:
+      assert axis + self.batch_ndim > 0
+      axis += self.batch_ndim
+    assert 0 <= axis < self.batch_ndim
     assert axis != self.batch_dim_axis
     size = self.get_dynamic_size(axis)
     if axis >= self.batch_dim_axis:
