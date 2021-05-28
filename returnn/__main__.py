@@ -32,7 +32,7 @@ from returnn.datasets.hdf import HDFDataset
 from returnn.util.debug import init_ipython_kernel, init_better_exchook, init_faulthandler, \
   init_cuda_not_in_main_proc_check
 from returnn.util.basic import init_thread_join_hack, describe_returnn_version, describe_theano_version, \
-  describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple
+  describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple, BehaviorVersion
 
 if typing.TYPE_CHECKING:
   import returnn.tf.engine
@@ -120,6 +120,12 @@ def init_config(config_filename=None, command_line_options=(), default_config=No
   if config.value('task', 'train') == 'server':
     config.set('num_inputs', 2)
     config.set('num_outputs', 1)
+  # Set behavior version
+  behavior_version = config.int('behavior_version', 0)
+  if BehaviorVersion.is_set():
+    assert behavior_version == BehaviorVersion.get()
+  else:
+    BehaviorVersion.set(behavior_version)
 
 
 def init_log():
