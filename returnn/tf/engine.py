@@ -2391,15 +2391,13 @@ class Engine(EngineBase):
       runner.num_steps, self.format_score(runner.score), self.format_score(runner.error)), file=log.v1)
     if output_file:
       assert out_cache
-      assert 0 in out_cache
-      assert len(out_cache) - 1 in out_cache
       if output_file_format == "txt":
-        for i in range(len(out_cache)):
+        for i in sorted(out_cache.keys()):
           output_file.write("%s\n" % out_cache[i])
       elif output_file_format == "py":
         from returnn.util.basic import better_repr
         output_file.write("{\n")
-        for i in range(len(out_cache)):
+        for i in sorted(out_cache.keys()):
           output_file.write("%r: %s,\n" % (seq_idx_to_tag[i], better_repr(out_cache[i])))
         output_file.write("}\n")
       else:
