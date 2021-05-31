@@ -76,7 +76,7 @@ class Log:
     self.v3 = None  # type: typing.Optional[Stream]
     self.v4 = None  # type: typing.Optional[Stream]
     self.v5 = None  # type: typing.Optional[Stream]
-    self.deprecation_warning_history = []  # type: list[str]  # stores already printed deprecation warnings
+    self.deprecation_warning_history = []  # type: typing.List[str]  # stores already printed deprecation warnings
 
   def initialize(self, logs=None, verbosity=None, formatter=None):
     """
