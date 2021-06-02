@@ -297,6 +297,13 @@ def test_import_():
   assert_equal(mod.hello(), "hello world")
 
 
+def test_import_root_repo():
+  from returnn.import_ import import_
+  mod = import_("github.com/rwth-i6/returnn_common", "test.py", "20210602-1bc6822")
+  print("Loaded mod %s, name %s, file %s" % (mod, mod.__name__, mod.__file__))
+  assert_equal(mod.hello(), "hello world")
+
+
 def test_import_pkg_py_import():
   from returnn.import_ import import_
   mod = import_("github.com/rwth-i6/returnn-experiments", "common", "20210302-01094bef2761")
