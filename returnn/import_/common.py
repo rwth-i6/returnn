@@ -189,7 +189,7 @@ def module_name(repo, repo_path, path, version, make_ready=True):
       rel_pkg_path0 = rel_pkg_path[:p]
     else:
       rel_pkg_path0 = rel_pkg_path
-    rel_pkg_dir = py_pkg_dirname[len(repo_path):]  # starting with "/"
+    rel_pkg_dir = py_pkg_dirname[len(repo_path):]  # starting with "/" or empty
 
   repo_dir_name = os.path.dirname(repo)
   repo_path_basename = os.path.basename(repo_path)
@@ -201,7 +201,7 @@ def module_name(repo, repo_path, path, version, make_ready=True):
 
   if make_ready:
     py_pkg_dir = "%s/%s%s" % (_package_import_pkg_path(), _normalize_pkg_name(repo_v), _normalize_pkg_name(rel_pkg_dir))
-    _mk_py_pkg_dirs(_package_import_pkg_path(), py_pkg_dir if rel_pkg_dir else os.path.dirname(py_pkg_dir))
+    _mk_py_pkg_dirs(_package_import_pkg_path(), py_pkg_dir if rel_pkg_path0 else os.path.dirname(py_pkg_dir))
     symlink_file = "%s/%s" % (py_pkg_dir, rel_pkg_path0)
     symlink_target = "%s%s/%s" % (repo_path, rel_pkg_dir, rel_pkg_path0)
     symlink_file = symlink_file.rstrip("/")
