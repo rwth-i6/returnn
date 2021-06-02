@@ -12,7 +12,7 @@ This has an effect on recurrent subnetworks.
 In the optimization phase, individual sub layers can be optimized out of the loop now.
 This is crucial to allow for an easy use of nested subnetworks.
 Nested subnetworks are important to allow for generic building blocks
-such as in the [returnn-experiments `common`](https://github.com/rwth-i6/returnn-experiments/tree/master/common) recipes.
+such as in the [returnn_common](https://github.com/rwth-i6/returnn_common) recipes.
 This was a larger internal change in RETURNN,
 which possibly can simplify other code in RETURNN like losses in subnetworks.
 
@@ -46,7 +46,7 @@ or some binary format.
 ## 2021-03-01: External module import with `import_` ([#436](https://github.com/rwth-i6/returnn/discussions/436))
 
 Together with this mechanism, some common recipes are being developed
-in [rwth-i6/returnn-experiments `common`](https://github.com/rwth-i6/returnn-experiments/tree/master/common).
+in [rwth-i6/returnn_common](https://github.com/rwth-i6/returnn_common).
 
 ## 2021-02-27: `SentencePieces` vocabulary class for [SentencePiece](https://github.com/google/sentencepiece/)
 
