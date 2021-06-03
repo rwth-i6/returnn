@@ -175,6 +175,13 @@ def module_name(repo, repo_path, path, version, make_ready=True):
   It might also make debugging easier.
   So, in this function, we make sure that all symlinks are correctly setup.
   """
+  while path.startswith("."):
+    if path == ".":
+      path = ""
+    elif path.startswith("./"):
+      path = path[2:]
+    else:
+      raise ValueError("invalid path %r" % path)
   full_path = "%s/%s" % (repo_path, path)
   if os.path.exists("%s/__init__.py" % repo_path):  # is the repo itself a package?
     # This needs somewhat special handling.
@@ -217,6 +224,7 @@ def module_name(repo, repo_path, path, version, make_ready=True):
       info=dict(repo=repo, pkg_dir=rel_pkg_dir[1:], version=version))
 
   repo_and_path = "%s/%s" % (repo_v, path[:-3] if path.endswith(".py") else path)
+  repo_and_path = repo_and_path.rstrip("/")
   name = _normalize_pkg_name(repo_and_path).replace("/", ".")
   return ModuleNamePrefix + name
 
