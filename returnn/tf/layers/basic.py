@@ -4252,7 +4252,7 @@ class TransposedConvLayer(_ConcatInputLayer):
     padding = padding.lower()
     if strides is None:
       strides = filter_size
-    if not isinstance(remove_padding, (tuple, int)):
+    if not isinstance(remove_padding, (list, tuple)):
       remove_padding = [remove_padding] * len(spatial_axes)
     if not isinstance(output_padding, (list, tuple)):
       output_padding = [output_padding] * len(spatial_axes)
