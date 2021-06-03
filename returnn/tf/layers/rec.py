@@ -8557,8 +8557,12 @@ class CumConcatLayer(_ConcatInputLayer):
     if network.is_inside_rec_layer():
       data = get_concat_sources_data_template(sources).copy_as_batch_major()
       data = data.copy_add_spatial_dim(dim=0, spatial_dim_axis=1)
-
-      return {"state": tf.zeros(data.get_batch_shape(batch_dim=batch_dim), dtype=data.dtype)}
+      
+      shape = list(data.get_batch_shape(batch_dim=batch_dim))
+      for dim in data.size_placeholder:
+        shape[data.get_batch_axis(dim)] = tf.math.reduce_max(data.size_placeholder[dim])
+      
+      return {"state": tf.zeros(shape, dtype=data.dtype)}
     else:
       return {}
 
