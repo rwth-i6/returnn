@@ -550,6 +550,9 @@ class ActivationLayer(CopyLayer):
     if self.output_before_activation:
       self.output.placeholder = self.output_before_activation.y
 
+    if activation == "abs" and self.output.dtype == "complex64":
+      self.output.dtype = "float32"
+
   @classmethod
   def get_out_data_from_opts(cls, activation, **kwargs):
     """

@@ -388,6 +388,40 @@ def test_activation_layer_net_construct():
     assert_equal(v.shape, (n_batch, seq_len, num_inputs))
     assert_equal(v.tolist(), [[[0, 0], [0, 0], [2, 2]]])
 
+def test_activation_layer_abs_for_stft():
+  with make_scope() as session:
+    num_inputs = 1
+    config = Config()
+    frame_shift = 1
+    frame_size = 3
+    fft_size = 3
+    config.update({
+      "num_outputs": 3,
+      "num_inputs": num_inputs,
+      "network": {
+        "stft": { "class": "multichannel_stft_layer", "from": "data",
+                  "frame_shift": frame_shift, "frame_size": frame_size,
+                  "window": "hanning", "fft_size": fft_size,
+                  "use_rfft": True, "pad_last_frame": False,
+                  "nr_of_channels": 1 },
+        "output": { "class": "activation", "activation": "abs", "from": ["stft"] }
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+    out = network.get_default_output_layer().output.placeholder
+    n_batch = 1
+    seq_len = 6
+    feed = {network.extern_data.get_default_input_data().placeholder:
+              numpy.array([[[0],[0],[2],[1],[4],[3]]], dtype=numpy.float32)}
+    assert_equal(feed[network.extern_data.get_default_input_data().placeholder].shape, (n_batch, seq_len, num_inputs))
+    v = session.run(out, feed_dict=feed)
+    assert_equal(v.shape, (n_batch, seq_len-(frame_size-1), fft_size//2+1))
+
+    input_stft = tf.signal.stft(numpy.array([[0,0,2,1,4,3]], dtype=numpy.float32), frame_length=frame_size, frame_step=frame_shift, fft_length=fft_size,
+                                window_fn=tf.signal.hann_window)
+    exp_output = tf.math.abs(input_stft)
+    assert_equal(v.tolist(), exp_output.eval().tolist())
+
 
 def test_activation_layer_net_construct_two_out():
   with make_scope() as session:
