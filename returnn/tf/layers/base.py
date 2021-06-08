@@ -454,9 +454,9 @@ class LayerBase(object):
     from .basic import get_loss_class
     if "from" not in d:
       if BehaviorVersion.get() >= 1:
-        assert False, "Missing \"from\" in layer definition: %s/%s" % (network.name, d.get("_name", "<UNKNOWN>"))
+        raise Exception('Missing "from" in layer definition: %s/%s' % (network.name, d.get("_name", "<UNKNOWN>")))
       else:
-        log.print_deprecation_warning("Not specifying \"from\" in layer definitions is deprecated.", behavior_version=1)
+        log.print_deprecation_warning('Not specifying "from" in layer definitions is deprecated.', behavior_version=1)
     src_names = d.pop("from", ["data"])
     if not isinstance(src_names, (list, tuple)):
       src_names = [src_names]

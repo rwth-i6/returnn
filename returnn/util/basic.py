@@ -187,8 +187,8 @@ class BehaviorVersion:
   The version will be set after the config is defined at __main__.init_config() or Engine.__init__()
   """
 
-  _behavior_version = 0  # type: typing.Optional[int]  # the selected global behavior_version, default 0 for tests
-  _is_set = False  # type:bool  # store if the behavior version was already set (e.g. re-check in engine init)
+  _behavior_version = 0  # type: typing.Optional[int]
+  _is_set = False  # type: bool
 
   @classmethod
   def set(cls, version):
