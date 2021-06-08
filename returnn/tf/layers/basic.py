@@ -572,17 +572,44 @@ class BatchNormLayer(CopyLayer):
   """
   layer_class = "batch_norm"
 
-  def __init__(self, **kwargs):
+  def __init__(self, use_shift=True, use_std=True, use_sample=0.0, force_sample=False,
+               momentum=0.99, epsilon=1e-3,
+               sample_mean=None, sample_variance=None,
+               update_sample_only_in_training=False,
+               delay_sample_update=False,
+               param_version=0,
+               gamma=None, beta=None,
+               gamma_init=1.0, beta_init=0.0,
+               masked_time=True, **kwargs):
     """
-    All kwargs which are present in our base class are passed to our base class.
-    All remaining kwargs are used for self.batch_norm().
+    :param bool use_shift:
+    :param bool use_std:
+    :param float use_sample: defaults to 0.0 which is used in training
+    :param bool force_sample: even in eval, use the use_sample factor
+    :param float momentum: for the running average of sample_mean and sample_std
+    :param bool update_sample_only_in_training:
+    :param bool delay_sample_update:
+    :param int param_version: 0 or 1
+    :param float epsilon:
+    :param tf.Tensor sample_mean:
+    :param tf.Tensor sample_variance:
+    :param tf.Tensor gamma:
+    :param tf.Tensor beta:
+    :param str|float gamma_init: see :func:`TFUtil.get_initializer`, for the scale
+    :param str|float beta_init: see :func:`TFUtil.get_initializer`, for the mean
+    :param bool masked_time: flatten and mask input tensor
+    :rtype: tf.Tensor
+
+    With our default settings:
+
+    - In training: use_sample=0, i.e. not using running average, using current batch mean/var.
+    - Not in training (e.g. eval): use_sample=1, i.e. using running average, not using current batch mean/var.
+    - The running average includes the statistics of the current batch.
+    - The running average is also updated when not training.
     """
-    kwargs = kwargs.copy()
-    from returnn.util.basic import getargspec
-    batch_norm_kwargs = getargspec(self.batch_norm).args[1:]  # first is self, ignore
-    batch_norm_opts = {key: kwargs.pop(key)
-                       for key in batch_norm_kwargs
-                       if key in kwargs}
+    batch_norm_opts = locals()
+    del batch_norm_opts['self']
+    del batch_norm_opts['kwargs']
     super(BatchNormLayer, self).__init__(batch_norm=batch_norm_opts or True, **kwargs)
 
 
