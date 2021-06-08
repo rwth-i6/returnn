@@ -607,11 +607,10 @@ class BatchNormLayer(CopyLayer):
     - The running average includes the statistics of the current batch.
     - The running average is also updated when not training.
     """
+    local = locals()
     from returnn.util.basic import getargspec
     batch_norm_kwargs = getargspec(self.batch_norm).args[1:]  # first is self, ignore
-    batch_norm_opts = {key: locals()[key]
-                     for key in batch_norm_kwargs
-                     if key in locals()}
+    batch_norm_opts = {key: local[key] for key in batch_norm_kwargs if key in local}
     super(BatchNormLayer, self).__init__(batch_norm=batch_norm_opts, **kwargs)
 
 
