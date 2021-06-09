@@ -572,15 +572,15 @@ class BatchNormLayer(CopyLayer):
   """
   layer_class = "batch_norm"
 
-  def __init__(self, use_shift=True, use_std=True, use_sample=0.0, force_sample=False,
-               momentum=0.99, epsilon=1e-3,
-               sample_mean=None, sample_variance=None,
-               update_sample_only_in_training=False,
-               delay_sample_update=False,
-               param_version=0,
-               gamma=None, beta=None,
-               gamma_init=1.0, beta_init=0.0,
-               masked_time=True, **kwargs):
+  def __init__(self, use_shift=NotSpecified, use_std=NotSpecified, use_sample=NotSpecified, force_sample=NotSpecified,
+               momentum=NotSpecified, epsilon=NotSpecified,
+               sample_mean=NotSpecified, sample_variance=NotSpecified,
+               update_sample_only_in_training=NotSpecified,
+               delay_sample_update=NotSpecified,
+               param_version=NotSpecified,
+               gamma=NotSpecified, beta=NotSpecified,
+               gamma_init=NotSpecified, beta_init=NotSpecified,
+               masked_time=NotSpecified, **kwargs):
     """
     :param bool use_shift:
     :param bool use_std:
@@ -600,6 +600,8 @@ class BatchNormLayer(CopyLayer):
     :param bool masked_time: flatten and mask input tensor
     :rtype: tf.Tensor
 
+    The default settings for these variables are set in the function "batch_norm" of the LayerBase. If you do not want
+    to change them you can leave them undefined here. 
     With our default settings:
 
     - In training: use_sample=0, i.e. not using running average, using current batch mean/var.
@@ -610,8 +612,8 @@ class BatchNormLayer(CopyLayer):
     local = locals()
     from returnn.util.basic import getargspec
     batch_norm_kwargs = getargspec(self.batch_norm).args[1:]  # first is self, ignore
-    batch_norm_opts = {key: local[key] for key in batch_norm_kwargs if key in local}
-    super(BatchNormLayer, self).__init__(batch_norm=batch_norm_opts, **kwargs)
+    batch_norm_opts = {key: local[key] for key in batch_norm_kwargs if key in local and local[key] != NotSpecified}
+    super(BatchNormLayer, self).__init__(batch_norm=batch_norm_opts or True, **kwargs)
 
 
 class LayerNormLayer(_ConcatInputLayer):
