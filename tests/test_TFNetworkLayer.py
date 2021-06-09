@@ -399,12 +399,12 @@ def test_activation_layer_abs_for_stft():
       "num_outputs": 3,
       "num_inputs": num_inputs,
       "network": {
-        "stft": { "class": "multichannel_stft_layer", "from": "data",
-                  "frame_shift": frame_shift, "frame_size": frame_size,
-                  "window": "hanning", "fft_size": fft_size,
-                  "use_rfft": True, "pad_last_frame": False,
-                  "nr_of_channels": 1 },
-        "output": { "class": "activation", "activation": "abs", "from": ["stft"] }
+        "stft": {"class": "multichannel_stft_layer", "from": "data",
+                 "frame_shift": frame_shift, "frame_size": frame_size,
+                 "window": "hanning", "fft_size": fft_size,
+                 "use_rfft": True, "pad_last_frame": False,
+                 "nr_of_channels": 1},
+        "output": {"class": "activation", "activation": "abs", "from": ["stft"]}
       }})
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_value("network"))
