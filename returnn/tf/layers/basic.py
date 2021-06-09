@@ -601,7 +601,7 @@ class BatchNormLayer(CopyLayer):
     :rtype: tf.Tensor
 
     The default settings for these variables are set in the function "batch_norm" of the LayerBase. If you do not want
-    to change them you can leave them undefined here. 
+    to change them you can leave them undefined here.
     With our default settings:
 
     - In training: use_sample=0, i.e. not using running average, using current batch mean/var.
