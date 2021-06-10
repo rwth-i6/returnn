@@ -1190,11 +1190,9 @@ class LayerBase(object):
   def batch_norm(self, data,
                  use_shift=True, use_std=True, use_sample=0.0, force_sample=False,
                  momentum=0.99, epsilon=1e-3,
-                 sample_mean=None, sample_variance=None,
                  update_sample_only_in_training=False,
                  delay_sample_update=False,
                  param_version=0,
-                 gamma=None, beta=None,
                  gamma_init=1.0, beta_init=0.0,
                  masked_time=True):
     """
@@ -1208,10 +1206,6 @@ class LayerBase(object):
     :param bool delay_sample_update:
     :param int param_version: 0 or 1
     :param float epsilon:
-    :param tf.Tensor sample_mean:
-    :param tf.Tensor sample_variance:
-    :param tf.Tensor gamma:
-    :param tf.Tensor beta:
     :param str|float gamma_init: see :func:`TFUtil.get_initializer`, for the scale
     :param str|float beta_init: see :func:`TFUtil.get_initializer`, for the mean
     :param bool masked_time: flatten and mask input tensor
@@ -1249,31 +1243,29 @@ class LayerBase(object):
         param_name_prefix = ""
       else:
         raise NotImplementedError("%s: batch_norm param_version %r" % (self, param_version))
-      if sample_mean is None:
-        with self.var_creation_scope():
-          sample_mean = self.add_param(tf_compat.v1.get_variable(
-            shape=data.get_bc_spatial_batch_shape(), initializer=tf_compat.v1.zeros_initializer(),
-            name="%smean" % param_name_prefix,
-            trainable=False))
-        # Use exponential moving average of batch mean.
-        # Note: We could also use cumulative moving average. Our Theano implementation does that for inference.
-        updated_sample_mean = tf_compat.v1.assign_add(sample_mean, (mean - sample_mean) * momentum)
-        if delay_sample_update:
-          delayed_ops.append(updated_sample_mean.op)
-        else:
-          sample_mean = updated_sample_mean
-      if sample_variance is None:
-        # Note: Our Theano implementation does not use a moving average for this.
-        with self.var_creation_scope():
-          sample_variance = self.add_param(tf_compat.v1.get_variable(
-            shape=data.get_bc_spatial_batch_shape(), initializer=tf_compat.v1.ones_initializer(),
-            name="%svariance" % param_name_prefix,
-            trainable=False))
-        updated_sample_variance = tf_compat.v1.assign_add(sample_variance, (variance - sample_variance) * momentum)
-        if delay_sample_update:
-          delayed_ops.append(updated_sample_variance.op)
-        else:
-          sample_variance = updated_sample_variance
+      with self.var_creation_scope():
+        sample_mean = self.add_param(tf_compat.v1.get_variable(
+          shape=data.get_bc_spatial_batch_shape(), initializer=tf_compat.v1.zeros_initializer(),
+          name="%smean" % param_name_prefix,
+          trainable=False))
+      # Use exponential moving average of batch mean.
+      # Note: We could also use cumulative moving average. Our Theano implementation does that for inference.
+      updated_sample_mean = tf_compat.v1.assign_add(sample_mean, (mean - sample_mean) * momentum)
+      if delay_sample_update:
+        delayed_ops.append(updated_sample_mean.op)
+      else:
+        sample_mean = updated_sample_mean
+      # Note: Our Theano implementation does not use a moving average for this.
+      with self.var_creation_scope():
+        sample_variance = self.add_param(tf_compat.v1.get_variable(
+          shape=data.get_bc_spatial_batch_shape(), initializer=tf_compat.v1.ones_initializer(),
+          name="%svariance" % param_name_prefix,
+          trainable=False))
+      updated_sample_variance = tf_compat.v1.assign_add(sample_variance, (variance - sample_variance) * momentum)
+      if delay_sample_update:
+        delayed_ops.append(updated_sample_variance.op)
+      else:
+        sample_variance = updated_sample_variance
       # If train or if force_sample, use default use_sample=0.0, otherwise use_sample=1.0.
       if self.network.train_flag is not False or force_sample:
         if force_sample:
@@ -1291,26 +1283,24 @@ class LayerBase(object):
           tf_util.add_control_input(op, control_input=bn.op)
         self.network.register_post_control_dependencies(delayed_ops)
       if use_std:
-        if gamma is None:
-          with self.var_creation_scope():
-            from returnn.tf.util.basic import get_initializer
-            gamma_initializer = get_initializer(
-              gamma_init, seed=self.network.random.randint(2 ** 31) if gamma_init else 0, eval_local_ns={"layer": self})
-            gamma = self.add_param(tf_compat.v1.get_variable(
-              shape=data.get_bc_spatial_batch_shape(), initializer=gamma_initializer,
-              name="%sgamma" % param_name_prefix,
-              trainable=True))
+        with self.var_creation_scope():
+          from returnn.tf.util.basic import get_initializer
+          gamma_initializer = get_initializer(
+            gamma_init, seed=self.network.random.randint(2 ** 31) if gamma_init else 0, eval_local_ns={"layer": self})
+          gamma = self.add_param(tf_compat.v1.get_variable(
+            shape=data.get_bc_spatial_batch_shape(), initializer=gamma_initializer,
+            name="%sgamma" % param_name_prefix,
+            trainable=True))
         bn *= gamma
       if use_shift:
-        if beta is None:
-          with self.var_creation_scope():
-            from returnn.tf.util.basic import get_initializer
-            beta_initializer = get_initializer(
-              beta_init, seed=self.network.random.randint(2 ** 31) if beta_init else 0, eval_local_ns={"layer": self})
-            beta = self.add_param(tf_compat.v1.get_variable(
-              shape=data.get_bc_spatial_batch_shape(), initializer=beta_initializer,
-              name="%sbeta" % param_name_prefix,
-              trainable=True))
+        with self.var_creation_scope():
+          from returnn.tf.util.basic import get_initializer
+          beta_initializer = get_initializer(
+            beta_init, seed=self.network.random.randint(2 ** 31) if beta_init else 0, eval_local_ns={"layer": self})
+          beta = self.add_param(tf_compat.v1.get_variable(
+            shape=data.get_bc_spatial_batch_shape(), initializer=beta_initializer,
+            name="%sbeta" % param_name_prefix,
+            trainable=True))
         bn += beta
       return bn
 
