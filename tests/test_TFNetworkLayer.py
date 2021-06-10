@@ -4604,6 +4604,14 @@ def test_automatic_seq_lengths2():
     assert out_lens is in_data.size_placeholder[0]
 
 
+def test_batch_norm_args():
+  from returnn.tf.layers.basic import BatchNormLayer
+  from returnn.util.basic import getargspec
+  batch_norm_args = getargspec(BatchNormLayer.batch_norm).args[2:] #drop self and data
+  layer_args = getargspec(BatchNormLayer.__init__).args[1:] #drop self
+  assert batch_norm_args == layer_args #different arguments in BatchNormLayer and LayerBase.batch_norm()
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
