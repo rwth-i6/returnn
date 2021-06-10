@@ -116,7 +116,7 @@ class LayerBase(object):
     :param str|None register_as_extern_data: registers output in network.extern_data
     :param None|((LayerBase)->list[tf.Operation]) control_dependencies_on_output:
     :param str _name: just for internal construction, should be the same as ``name``
-    :param returnn.tf.network.TFNetwork: just for internal construction, should be the same as ``network``
+    :param returnn.tf.network.TFNetwork _network: just for internal construction, should be the same as ``network``
     :param None|SearchChoices _src_common_search_choices: set via :func:`SearchChoices.translate_to_common_search_beam`
     """
     self.name = name

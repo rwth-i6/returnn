@@ -631,6 +631,9 @@ class LayerNormLayer(_ConcatInputLayer):
   layer_class = "layer_norm"
 
   def __init__(self, epsilon=1e-6, **kwargs):
+    """
+    :param float epsilon:
+    """
     super(LayerNormLayer, self).__init__(**kwargs)
     assert not self.input_data.sparse
     x = self.input_data.placeholder
@@ -744,7 +747,6 @@ class MathNormLayer(_ConcatInputLayer):
   def __init__(self, p, axes, keep_dims=False, **kwargs):
     """
     :param int|float p:
-    :param float eps:
     :param str|list[str] axes:
     :param bool keep_dims:
     """
