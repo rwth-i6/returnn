@@ -598,7 +598,6 @@ class BatchNormLayer(CopyLayer):
     :param str|float gamma_init: see :func:`TFUtil.get_initializer`, for the scale
     :param str|float beta_init: see :func:`TFUtil.get_initializer`, for the mean
     :param bool masked_time: flatten and mask input tensor
-    :rtype: tf.Tensor
 
     The default settings for these variables are set in the function "batch_norm" of the LayerBase. If you do not want
     to change them you can leave them undefined here.
