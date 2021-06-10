@@ -572,17 +572,47 @@ class BatchNormLayer(CopyLayer):
   """
   layer_class = "batch_norm"
 
-  def __init__(self, **kwargs):
+  def __init__(self, use_shift=NotSpecified, use_std=NotSpecified, use_sample=NotSpecified, force_sample=NotSpecified,
+               momentum=NotSpecified, epsilon=NotSpecified,
+               sample_mean=NotSpecified, sample_variance=NotSpecified,
+               update_sample_only_in_training=NotSpecified,
+               delay_sample_update=NotSpecified,
+               param_version=NotSpecified,
+               gamma=NotSpecified, beta=NotSpecified,
+               gamma_init=NotSpecified, beta_init=NotSpecified,
+               masked_time=NotSpecified, **kwargs):
     """
-    All kwargs which are present in our base class are passed to our base class.
-    All remaining kwargs are used for self.batch_norm().
+    :param bool use_shift:
+    :param bool use_std:
+    :param float use_sample: defaults to 0.0 which is used in training
+    :param bool force_sample: even in eval, use the use_sample factor
+    :param float momentum: for the running average of sample_mean and sample_std
+    :param bool update_sample_only_in_training:
+    :param bool delay_sample_update:
+    :param int param_version: 0 or 1
+    :param float epsilon:
+    :param tf.Tensor sample_mean:
+    :param tf.Tensor sample_variance:
+    :param tf.Tensor gamma:
+    :param tf.Tensor beta:
+    :param str|float gamma_init: see :func:`TFUtil.get_initializer`, for the scale
+    :param str|float beta_init: see :func:`TFUtil.get_initializer`, for the mean
+    :param bool masked_time: flatten and mask input tensor
+    :rtype: tf.Tensor
+
+    The default settings for these variables are set in the function "batch_norm" of the LayerBase. If you do not want
+    to change them you can leave them undefined here.
+    With our default settings:
+
+    - In training: use_sample=0, i.e. not using running average, using current batch mean/var.
+    - Not in training (e.g. eval): use_sample=1, i.e. using running average, not using current batch mean/var.
+    - The running average includes the statistics of the current batch.
+    - The running average is also updated when not training.
     """
-    kwargs = kwargs.copy()
+    local = locals()
     from returnn.util.basic import getargspec
     batch_norm_kwargs = getargspec(self.batch_norm).args[1:]  # first is self, ignore
-    batch_norm_opts = {key: kwargs.pop(key)
-                       for key in batch_norm_kwargs
-                       if key in kwargs}
+    batch_norm_opts = {key: local[key] for key in batch_norm_kwargs if key in local and local[key] != NotSpecified}
     super(BatchNormLayer, self).__init__(batch_norm=batch_norm_opts or True, **kwargs)
 
 
