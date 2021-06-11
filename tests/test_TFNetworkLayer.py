@@ -388,6 +388,7 @@ def test_activation_layer_net_construct():
     assert_equal(v.shape, (n_batch, seq_len, num_inputs))
     assert_equal(v.tolist(), [[[0, 0], [0, 0], [2, 2]]])
 
+
 def test_activation_layer_abs_for_stft():
   with make_scope() as session:
     num_inputs = 1

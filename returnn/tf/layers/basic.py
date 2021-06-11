@@ -550,7 +550,6 @@ class ActivationLayer(_ConcatInputLayer):
     if self.output_before_activation:
       self.output.placeholder = self.output_before_activation.y
 
-
   @classmethod
   def get_out_data_from_opts(cls, sources, name, activation, **kwargs):
     """
