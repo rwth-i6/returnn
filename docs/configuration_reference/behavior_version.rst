@@ -15,21 +15,19 @@ Each version change will be explicitly document here, and the documentation is i
 recommended usage with the latest ``behavior_version``, and not listing legacy/deprecated parameters.
 
 
-Current Version
+Version History
 ---------------
 
 Behavior Version 1:
-28.05.2021 - 0eb02dec9727f287b1305377c8e793353b0f0845
+28.05.2021
 
 Disallow not specifying "from" in layer definition dictionaries,
 thus making use of the hidden default "data" as layer input.
 
 "from" needs to be set explicitely now.
 
-See Issue `#519 <https://github.com/rwth-i6/returnn/issues/519`_
+See issue `#519 <https://github.com/rwth-i6/returnn/issues/519`_.
 
 
-History
--------
 
 

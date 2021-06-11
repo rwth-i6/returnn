@@ -31,6 +31,7 @@ try:
 except ImportError:
   from io import StringIO
 import typing
+from returnn.log import log
 
 PY3 = sys.version_info[0] >= 3
 
@@ -213,6 +214,19 @@ class BehaviorVersion:
     :rtype: bool
     """
     return cls._is_set
+
+  @classmethod
+  def require(cls, condition, message, version):
+    """
+    :param bool condition:
+    :param str message:
+    :param int version:
+    """
+    if not condition:
+      if BehaviorVersion.get() >= version:
+        raise Exception(message)
+      else:
+        log.print_deprecation_warning(message, behavior_version=version)
 
 
 def get_model_filename_postfix():
