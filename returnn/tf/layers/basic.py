@@ -565,6 +565,7 @@ class ActivationLayer(_ConcatInputLayer):
       out.dtype = "float32"
     return out
 
+
 class BatchNormLayer(CopyLayer):
   """
   Implements batch-normalization (http://arxiv.org/abs/1502.03167) as a separate layer.
