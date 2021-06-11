@@ -520,7 +520,7 @@ class SelectSearchSourcesLayer(InternalLayer):
     return data
 
 
-class ActivationLayer(CopyLayer):
+class ActivationLayer(_ConcatInputLayer):
   """
   This layer just applies an activation function.
   See :func:`TFUtil.get_activation_function` about supported functions.
@@ -550,22 +550,18 @@ class ActivationLayer(CopyLayer):
     if self.output_before_activation:
       self.output.placeholder = self.output_before_activation.y
 
-    if activation == "abs" and self.output.dtype == "complex64":
-      self.output.dtype = "float32"
-
   @classmethod
-  def get_out_data_from_opts(cls, activation, **kwargs):
+  def get_out_data_from_opts(cls, sources, name, activation, **kwargs):
     """
     :param str activation:
     :rtype: Data
     """
-    # Get dtype based on inputs
-    out = super(ActivationLayer, cls).get_out_data_from_opts(**kwargs)
-    # Modify if needed based on activation function
+    # get dtype based on the inputs
+    out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    # modify if needed based on activation function
     if activation == "abs" and out.dtype == "complex64":
       out.dtype = "float32"
     return out
-
 
 class BatchNormLayer(CopyLayer):
   """
