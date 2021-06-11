@@ -39,7 +39,7 @@ from returnn.tf.layers.base import LayerBase
 from returnn.tf.updater import Updater
 from returnn.tf.data_pipeline import FeedDictDataProvider, DatasetDataProvider
 import returnn.tf.horovod as tf_horovod
-from returnn.util.basic import hms, NumbersDict, BackendEngine
+from returnn.util.basic import hms, NumbersDict, BackendEngine, BehaviorVersion
 from pprint import pprint
 
 
@@ -777,6 +777,8 @@ class Engine(EngineBase):
       config = get_global_config(auto_create=True)
     if not log.initialized:
       log.init_by_config(config)
+    if not BehaviorVersion.is_set():
+      BehaviorVersion.set(config.int('behavior_version', 0))
     if BackendEngine.selectedEngine is None:
       BackendEngine.select_engine(engine=BackendEngine.TensorFlow)
     assert BackendEngine.is_tensorflow_selected()

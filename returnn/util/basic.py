@@ -31,6 +31,7 @@ try:
 except ImportError:
   from io import StringIO
 import typing
+from returnn.log import log
 
 PY3 = sys.version_info[0] >= 3
 
@@ -178,6 +179,54 @@ class BackendEngine:
     :rtype: bool
     """
     return cls.get_selected_engine() == cls.TensorFlow
+
+
+class BehaviorVersion:
+  """
+  Stores the global behavior_version
+
+  The version will be set after the config is defined at __main__.init_config() or Engine.__init__()
+  """
+
+  _behavior_version = 0  # type: typing.Optional[int]
+  _is_set = False  # type: bool
+
+  @classmethod
+  def set(cls, version):
+    """
+    :param int version:
+    """
+    assert not cls._is_set, "behavior version already set"
+    assert version >= 0
+    cls._behavior_version = version
+    cls._is_set = True
+
+  @classmethod
+  def get(cls):
+    """
+    :rtype: int
+    """
+    return cls._behavior_version
+
+  @classmethod
+  def is_set(cls):
+    """
+    :rtype: bool
+    """
+    return cls._is_set
+
+  @classmethod
+  def require(cls, condition, message, version):
+    """
+    :param bool condition:
+    :param str message:
+    :param int version:
+    """
+    if not condition:
+      if BehaviorVersion.get() >= version:
+        raise Exception(message)
+      else:
+        log.print_deprecation_warning(message, behavior_version=version)
 
 
 def get_model_filename_postfix():

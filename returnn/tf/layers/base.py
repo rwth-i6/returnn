@@ -8,7 +8,7 @@ from __future__ import print_function
 import typing
 import contextlib
 import tensorflow as tf
-from returnn.util.basic import NotSpecified, CollectionReadCheckCovered
+from returnn.util.basic import NotSpecified, CollectionReadCheckCovered, BehaviorVersion
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
 from returnn.tf.util.data import Data, SearchBeam
@@ -452,6 +452,10 @@ class LayerBase(object):
     which should be resolved.
     """
     from .basic import get_loss_class
+    BehaviorVersion.require(
+      condition="from" in d,
+      message='Missing "from" in layer definition: %s/%s' % (network.name, d.get("_name", "<UNKNOWN>")),
+      version=1)
     src_names = d.pop("from", ["data"])
     if not isinstance(src_names, (list, tuple)):
       src_names = [src_names]

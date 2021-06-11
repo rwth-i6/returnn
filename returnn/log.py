@@ -76,6 +76,7 @@ class Log:
     self.v3 = None  # type: typing.Optional[Stream]
     self.v4 = None  # type: typing.Optional[Stream]
     self.v5 = None  # type: typing.Optional[Stream]
+    self.deprecation_warning_history = []  # type: typing.List[str]  # stores already printed deprecation warnings
 
   def initialize(self, logs=None, verbosity=None, formatter=None):
     """
@@ -191,6 +192,24 @@ class Log:
         new_logs.append(fn_prefix + fn_ext)
       logs = new_logs
     self.initialize(logs=logs, verbosity=log_verbosity, formatter=log_format)
+
+  def print_deprecation_warning(self, warning, behavior_version=None):
+    """
+    Write a deprecation warning to log.v2. Does not write repeated warnings.
+
+    :param str warning: the warning text
+    :param int|None behavior_version: if this deprecation is already covered by a behavior_version
+      check
+    """
+    if warning in self.deprecation_warning_history:
+      return
+
+    if behavior_version:
+      behavior_text = "This will be disallowed with behavior_version %d" % behavior_version
+    else:
+      behavior_text = "This might be disallowed with future behavior_versions"
+    print("DEPRECATION WARNING: %s\n%s" % (warning, behavior_text), file=self.v2)
+    self.deprecation_warning_history.append(warning)
 
 
 log = Log()
