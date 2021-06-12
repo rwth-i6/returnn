@@ -575,11 +575,9 @@ class BatchNormLayer(CopyLayer):
 
   def __init__(self, use_shift=NotSpecified, use_std=NotSpecified, use_sample=NotSpecified, force_sample=NotSpecified,
                momentum=NotSpecified, epsilon=NotSpecified,
-               sample_mean=NotSpecified, sample_variance=NotSpecified,
                update_sample_only_in_training=NotSpecified,
                delay_sample_update=NotSpecified,
                param_version=NotSpecified,
-               gamma=NotSpecified, beta=NotSpecified,
                gamma_init=NotSpecified, beta_init=NotSpecified,
                masked_time=NotSpecified, **kwargs):
     """
@@ -592,10 +590,6 @@ class BatchNormLayer(CopyLayer):
     :param bool delay_sample_update:
     :param int param_version: 0 or 1
     :param float epsilon:
-    :param tf.Tensor sample_mean:
-    :param tf.Tensor sample_variance:
-    :param tf.Tensor gamma:
-    :param tf.Tensor beta:
     :param str|float gamma_init: see :func:`TFUtil.get_initializer`, for the scale
     :param str|float beta_init: see :func:`TFUtil.get_initializer`, for the mean
     :param bool masked_time: flatten and mask input tensor
