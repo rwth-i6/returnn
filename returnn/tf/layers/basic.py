@@ -551,16 +551,15 @@ class ActivationLayer(_ConcatInputLayer):
       self.output.placeholder = self.output_before_activation.y
 
   @classmethod
-  def get_out_data_from_opts(cls, sources, name, activation, **kwargs):
+  def get_out_data_from_opts(cls, activation, **kwargs):
     """
-    :param list[LayerBase] sources:
-    :param str name:
     :param str activation:
     :rtype: Data
     """
-    # get dtype based on the inputs
-    out = get_concat_sources_data_template(sources, name="%s_output" % name)
-    # modify if needed based on activation function
+    # Just the same as the input.
+    # Use CopyLayer.get_out_data_from_opts for potential extra logic for out_type.
+    out = CopyLayer.get_out_data_from_opts(**kwargs)
+    # Modify dtype if needed based on activation function
     if activation == "abs" and out.dtype == "complex64":
       out.dtype = "float32"
     return out
