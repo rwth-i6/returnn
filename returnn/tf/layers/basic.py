@@ -2414,7 +2414,7 @@ class PadLayer(_ConcatInputLayer):
       if a not in self.output.size_placeholder:
         continue
       if p == 0:
-         continue
+        continue
       size = self.output.size_placeholder[a]
       size = tf_util.simplify_add(size, p)
       self.output.size_placeholder[a] = size
