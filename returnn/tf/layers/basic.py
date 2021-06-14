@@ -12,7 +12,7 @@ import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
 from returnn.util.basic import unicode, NotSpecified
 from returnn.tf.util.data import Data, SearchBeam
-from returnn.tf.util.basic import OutputWithActivation, dimshuffle, swapaxes
+from returnn.tf.util.basic import OutputWithActivation, dimshuffle, swapaxes, pad_replicate
 from returnn.log import log
 from .base import LayerBase, Loss, InternalLayer, SearchChoices
 
@@ -2393,6 +2393,7 @@ class PadLayer(_ConcatInputLayer):
     :param int|float value: what constant value to pad, with mode=="constant"
     :param str mode: "constant", "reflect", "symmetric" and "replication"
     """
+    from returnn.tf.util.data import DimensionTag
     super(PadLayer, self).__init__(**kwargs)
     axes = self.input_data.get_axes_from_description(axes)
     padding = self._transform_padding(padding=padding, axes=axes)
@@ -2401,20 +2402,7 @@ class PadLayer(_ConcatInputLayer):
       paddings[a] = padding[i]
     mode = mode.upper()
     if mode == "REPLICATION":
-      assert len(padding) == 1, "Not implemented otherwise yet"
-      assert len(axes) == 1, "Not implemented otherwise yet"
-      pad_left_shape = [1] * self.input_data.batch_ndim
-      pad_left_shape[axes[0]] = padding[0][0]
-      pad_left = tf.gather(self.input_data.placeholder, 0, axis=axes[0])
-      pad_left = tf.expand_dims(pad_left, axis=axes[0])
-      pad_left = tf.tile(pad_left, pad_left_shape)
-      pad_right_shape = [1] * self.input_data.batch_ndim
-      pad_right_shape[axes[0]] = padding[0][1]
-      pad_right = tf.gather(
-        self.input_data.placeholder, tf.shape(self.input_data.placeholder)[axes[0]] - 1, axis=axes[0])
-      pad_right = tf.expand_dims(pad_right, axis=axes[0])
-      pad_right = tf.tile(pad_right, pad_right_shape)
-      self.output.placeholder = tf.concat([pad_left, self.input_data.placeholder, pad_right], axis=axes[0])
+      self.output.placeholder = pad_replicate(self.input_data.placeholder, axes, padding)
     else:
       self.output.placeholder = tf.pad(self.input_data.placeholder, paddings=paddings, mode=mode, constant_values=value)
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
@@ -2425,7 +2413,16 @@ class PadLayer(_ConcatInputLayer):
         continue
       if a not in self.output.size_placeholder:
         continue
-      self.output.size_placeholder[a] += p
+      if p == 0:
+         continue
+      size = self.output.size_placeholder[a]
+      size = tf_util.simplify_add(size, p)
+      self.output.size_placeholder[a] = size
+      if not DimensionTag.get_tag_from_size_tensor(size):
+        tag = DimensionTag(
+          description="spatial:%i:%s" % (a, self.get_absolute_name()),
+          kind=DimensionTag.Types.Spatial)
+        tag.set_tag_on_size_tensor(size)
 
   @classmethod
   def _transform_padding(cls, padding, axes):
