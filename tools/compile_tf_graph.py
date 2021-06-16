@@ -701,7 +701,7 @@ def main(argv):
         continue
       if layer.output.batch_dim_axis is None:
         continue
-      with layer.cls_layer_scope(layer.name):
+      with layer.cls_layer_scope(layer.get_absolute_name()):
         tf.identity(layer.output.get_placeholder_as_batch_major(), name="output_batch_major")
 
     tf.group(*network.get_post_control_dependencies(), name="post_control_dependencies")
