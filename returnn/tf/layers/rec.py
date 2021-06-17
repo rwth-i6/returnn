@@ -5819,7 +5819,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
   def __init__(self, num_heads, total_key_dim,
                key_shift=None,
                forward_weights_init="glorot_uniform", attention_dropout=0.0,
-               attention_left_only=True, attention_mask=None, initial_state=None,
+               attention_left_only=False, attention_mask="length", initial_state=None,
                restrict_state_to_last_seq=False, state_var_lengths=None, **kwargs):
     """
     :param int num_heads:
@@ -5831,7 +5831,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
     :param float attention_dropout:
     :param bool attention_left_only: will mask out the future. see Attention is all you need.
     :param str|Callable attention_mask: mask to apply to input sequence. Allowed strings:
-      "length" masks the positions outside the original length, "only_left" masks the future.
+      "length" masks the positions outside the original length, "left_only" masks the future.
       If a callable, it must be a function that receives only the input sequence and returns the mask.
     :param str|float|int|None initial_state: see RnnCellLayer.get_rec_initial_state_inner().
     :param bool restrict_state_to_last_seq: see code comment below
@@ -5861,7 +5861,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
       prev_mask = None
       if self._rec_previous_layer:
         assert self.input_data.time_dim_axis is None
-        assert attention_mask == "only_left"
+        assert attention_mask == "left_only"
         # (batch,heads,time,k-dim//heads)
         prev_k_left = self._rec_previous_layer.rec_vars_outputs["k_left"]
         # (batch,heads,time,v-dim//heads)
