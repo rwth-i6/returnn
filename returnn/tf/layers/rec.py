@@ -5819,7 +5819,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
   def __init__(self, num_heads, total_key_dim,
                key_shift=None,
                forward_weights_init="glorot_uniform", attention_dropout=0.0,
-               attention_left_only=False, attention_mask="length", initial_state=None,
+               attention_left_only=False, attention_mask=None, initial_state=None,
                restrict_state_to_last_seq=False, state_var_lengths=None, **kwargs):
     """
     :param int num_heads:
@@ -5830,9 +5830,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
     :param str forward_weights_init: see :func:`TFUtil.get_initializer`
     :param float attention_dropout:
     :param bool attention_left_only: will mask out the future. see Attention is all you need.
-    :param str|Callable attention_mask: mask to apply to input sequence. Allowed strings:
-      "length" masks the positions outside the original length, "left_only" masks the future.
-      If a callable, it must be a function that receives only the input sequence and returns the mask.
+    :param Callable attention_mask: a function that receives the input sequence in input and returns an attention mask.
     :param str|float|int|None initial_state: see RnnCellLayer.get_rec_initial_state_inner().
     :param bool restrict_state_to_last_seq: see code comment below
     :param None|tf.Tensor|()->tf.Tensor state_var_lengths:
@@ -5843,8 +5841,6 @@ class SelfAttentionLayer(_ConcatInputLayer):
     self._restrict_state_to_last_seq = restrict_state_to_last_seq
     assert self._rec_previous_layer or self.input_data.time_dim_axis is not None, (
       "%s: This layer is expected to be used inside a RecLayer, or to have input with time." % self)
-    if attention_mask is None:
-      attention_mask = "left_only" if attention_left_only else "length"
     total_value_dim = self.output.dim
     assert total_key_dim % num_heads == 0, "must be divisible"
     assert total_value_dim % num_heads == 0, "must be divisible. total_value_dim = n_out"
@@ -5861,7 +5857,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
       prev_mask = None
       if self._rec_previous_layer:
         assert self.input_data.time_dim_axis is None
-        assert attention_mask == "left_only"
+        assert attention_left_only
         # (batch,heads,time,k-dim//heads)
         prev_k_left = self._rec_previous_layer.rec_vars_outputs["k_left"]
         # (batch,heads,time,v-dim//heads)
@@ -5956,10 +5952,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
       energy_ = tf.transpose(energy_, [1, 2, 0, 3])  # [batch,heads,num_queries|1,num_keys]
       energy += energy_
     if self.input_data.time_dim_axis is not None:
-      assert isinstance(attention_mask, str) or callable(attention_mask)
-      if isinstance(attention_mask, str):
-        assert attention_mask in ["left_only", "length"]
-      if attention_mask == "left_only":
+      if attention_left_only:
         # We also ignore the input data sequence length, because we expect that frames outside the seq length
         # are anyway ignored.
         from returnn.tf.util.basic import matrix_triangular
@@ -5970,12 +5963,13 @@ class SelfAttentionLayer(_ConcatInputLayer):
         if have_prev_kv_left:
           energy_mask_left = tf.ones((1, 1, num_queries, tf.shape(prev_k_left)[2]), dtype=tf.bool)
           energy_mask = tf.concat([energy_mask_left, energy_mask], axis=-1)
-      elif attention_mask == "length":
+      else:
         energy_mask = tf.sequence_mask(
           self.input_data.get_sequence_lengths(), maxlen=tf.shape(energy)[-1])  # (batch,time)
         energy_mask = tf.reshape(energy_mask, [tf.shape(energy)[0], 1, 1, tf.shape(energy)[-1]])  # (batch,1,1,time)
-      else:
-        energy_mask = attention_mask(energy)
+      if attention_mask:
+        new_mask = attention_mask(energy)
+        energy_mask = tf.math.logical_and(energy_mask, new_mask)
       if state_var_lengths is not None and have_prev_kv_left:
         if callable(state_var_lengths):
           state_var_lengths = state_var_lengths()
