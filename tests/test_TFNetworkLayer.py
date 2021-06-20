@@ -79,6 +79,68 @@ def make_feed_dict(data_list, same_time=False, n_batch=3, n_time=7):
   return d
 
 
+def test_PadLayer_time():
+  n_batch, n_time, n_in = 7, 3, 20
+  config = Config({
+    "extern_data": {"data": {"dim": n_in}},
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope() as session:
+    padding = (2, 3)
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {"class": "pad", "axes": "T", "padding": padding, "mode": "replication"}
+    })
+    out_t = net.get_default_output_layer().output.placeholder
+    assert out_t.shape.as_list() == [None, None, n_in]
+    in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_time, n_in))
+    out_v = session.run(out_t, feed_dict={net.extern_data.data["data"].placeholder: in_v})
+    assert isinstance(out_v, numpy.ndarray)
+    assert out_v.shape == (n_batch, n_time + sum(padding), n_in)
+    assert (out_v[:, 0, :] == out_v[:, padding[0], :]).all()
+    assert (out_v[:, -1, :] == out_v[:, -1 - padding[1], :]).all()
+    numpy.testing.assert_array_equal(in_v, out_v[:, padding[0]:(-padding[1] or None), :])
+    # check padding on left
+    if padding[0] > 0:
+      padded_left_ref = numpy.resize(in_v[:, 0, :], (padding[0], n_batch, n_in)).transpose(1, 0, 2)
+      numpy.testing.assert_array_equal(padded_left_ref, out_v[:, :padding[0], :])
+    # check padding on right
+    if padding[1] > 0:
+      padded_right_ref = numpy.resize(in_v[:, -1, :], (padding[1], n_batch, n_in)).transpose(1, 0, 2)
+      numpy.testing.assert_array_equal(padded_right_ref, out_v[:, -padding[1]:, :])
+
+
+def test_PadLayer_feature():
+  n_batch, n_time, n_in = 7, 3, 20
+  config = Config({
+    "extern_data": {"data": {"dim": None}},
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope() as session:
+    padding = (2, 3)
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {"class": "pad", "axes": "F", "padding": padding, "mode": "replication"}
+    })
+    out_t = net.get_default_output_layer().output.placeholder
+    assert out_t.shape.as_list() == [None, None, None]
+    in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_time, n_in))
+    out_v = session.run(out_t, feed_dict={net.extern_data.data["data"].placeholder: in_v})
+    assert isinstance(out_v, numpy.ndarray)
+    assert out_v.shape == (n_batch, n_time, n_in + sum(padding)) 
+    assert (out_v[:, :, 0] == out_v[:, :, padding[0]]).all()
+    assert (out_v[:, :, -1] == out_v[:, :, -1 - padding[1]]).all()
+    numpy.testing.assert_array_equal(in_v, out_v[:, :,  padding[0]:(-padding[1] or None)])
+    # check padding on left
+    if padding[0] > 0:
+      padded_left_ref = numpy.resize(in_v[:, :, 0], (n_batch, n_time, 1))
+      numpy.testing.assert_array_equal(padded_left_ref - out_v[:, :, :padding[0]], 0)
+    # check padding on right
+    if padding[1] > 0:
+      padded_left_ref = numpy.resize(in_v[:, :, -1], (n_batch, n_time, 1))
+      numpy.testing.assert_array_equal(padded_left_ref - out_v[:, :, -padding[1]:], 0)
+
+
 def test_concat_sources():
   with make_scope() as session:
     network = TFNetwork(train_flag=True, extern_data=ExternData())

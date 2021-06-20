@@ -2391,7 +2391,7 @@ class PadLayer(_ConcatInputLayer):
     :param str|list[str] axes: e.g. "F" etc. see :func:`Dataset.get_axes_from_description`.
     :param list[(int,int)]|(int,int)|int padding: how much to pad left/right in each axis
     :param int|float value: what constant value to pad, with mode=="constant"
-    :param str mode: "constant", "reflect" or "symmetric"
+    :param str mode: "constant", "reflect", "symmetric" and "replication"
     """
     from returnn.tf.util.data import DimensionTag
     super(PadLayer, self).__init__(**kwargs)
@@ -2401,7 +2401,10 @@ class PadLayer(_ConcatInputLayer):
     for i, a in enumerate(axes):
       paddings[a] = padding[i]
     mode = mode.upper()
-    self.output.placeholder = tf.pad(self.input_data.placeholder, paddings=paddings, mode=mode, constant_values=value)
+    if mode == "REPLICATION":
+      self.output.placeholder = tf_util.pad_replicate(self.input_data.placeholder, axes, padding)
+    else:
+      self.output.placeholder = tf.pad(self.input_data.placeholder, paddings=paddings, mode=mode, constant_values=value)
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
     for a in axes:
       p = sum(paddings[a])

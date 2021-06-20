@@ -3237,6 +3237,26 @@ def single_strided_slice(x, axis, begin=None, end=None, step=None):
     return tf.strided_slice(x, begin=begins, end=ends, strides=strides)
 
 
+def pad_replicate(x, axes, padding):
+  """
+  :param tf.Tensor x:
+  :param list[int] axes:
+  :param list[(int,int)] padding:
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("pad_replicate"):
+    assert len(padding) == 1, "Not implemented otherwise yet"
+    assert len(axes) == 1, "Not implemented otherwise yet"
+    pad_left = tf.gather(x, 0, axis=axes[0])
+    pad_left = tf.expand_dims(pad_left, axis=axes[0])
+    pad_left = tf.repeat(pad_left, padding[0][0], axis=axes[0])
+    pad_right = tf.gather(x, tf.shape(x)[axes[0]] - 1, axis=axes[0])
+    pad_right = tf.expand_dims(pad_right, axis=axes[0])
+    pad_right = tf.repeat(pad_right, padding[0][1], axis=axes[0])
+    output = tf.concat([pad_left, x, pad_right], axis=axes[0])
+    return output
+
+
 def circular_pad(x, paddings, axes=None):
   """
   :param tf.Tensor x: shape (..., height, width)
