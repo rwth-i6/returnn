@@ -60,14 +60,6 @@ Prefix (in Time) Layer
     :members:
     :undoc-members:
 
-Resize Layer
-------------
-
-.. autoclass:: returnn.tf.layers.basic.ResizeLayer
-    :members:
-    :undoc-members:
-
-
 Reinterpret Data Layer
 ----------------------
 
@@ -75,6 +67,19 @@ Reinterpret Data Layer
     :members:
     :undoc-members:
 
+Repeat Layer
+------------
+
+.. autoclass:: returnn.tf.layers.basic.RepeatLayer
+    :members:
+    :undoc-members:
+
+Resize Layer
+------------
+
+.. autoclass:: returnn.tf.layers.basic.ResizeLayer
+    :members:
+    :undoc-members:
 
 Scatter n-dim Layer
 -------------------
