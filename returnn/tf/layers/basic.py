@@ -12,7 +12,7 @@ import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
 from returnn.util.basic import unicode, NotSpecified
 from returnn.tf.util.data import Data, SearchBeam
-from returnn.tf.util.basic import OutputWithActivation, dimshuffle, swapaxes, pad_replicate
+from returnn.tf.util.basic import OutputWithActivation, dimshuffle, swapaxes
 from returnn.log import log
 from .base import LayerBase, Loss, InternalLayer, SearchChoices
 
@@ -2402,7 +2402,7 @@ class PadLayer(_ConcatInputLayer):
       paddings[a] = padding[i]
     mode = mode.upper()
     if mode == "REPLICATION":
-      self.output.placeholder = pad_replicate(self.input_data.placeholder, axes, padding)
+      self.output.placeholder = tf_util.pad_replicate(self.input_data.placeholder, axes, padding)
     else:
       self.output.placeholder = tf.pad(self.input_data.placeholder, paddings=paddings, mode=mode, constant_values=value)
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
