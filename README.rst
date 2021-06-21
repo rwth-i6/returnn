@@ -49,7 +49,8 @@ and `technological overview <https://returnn.readthedocs.io/en/latest/tech_overv
 `Here is the video recording of a RETURNN overview talk <https://www-i6.informatik.rwth-aachen.de/web/Software/returnn/downloads/workshop-2019-01-29/01.recording.cut.mp4>`_
 (`slides <https://www-i6.informatik.rwth-aachen.de/web/Software/returnn/downloads/workshop-2019-01-29/01.returnn-overview.session1.handout.v1.pdf>`__,
 `exercise sheet <https://www-i6.informatik.rwth-aachen.de/web/Software/returnn/downloads/workshop-2019-01-29/01.exercise_sheet.pdf>`__;
-hosted by eBay).
+hosted by eBay),
+and [Interspeech 2020 tutorial: Efficient and Flexible Implementation of Machine Learning for ASR and MT](https://www.youtube.com/watch?v=wPKdYqSOlAY).
 
 There are `many example demos <https://github.com/rwth-i6/returnn/blob/master/demos/>`_
 which work on artificially generated data,
