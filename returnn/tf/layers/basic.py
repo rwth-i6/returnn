@@ -1420,7 +1420,7 @@ class LinearLayer(_ConcatInputLayer):
   """
   layer_class = "linear"
 
-  def __init__(self, activation, with_bias=True, grad_filter=None, forward_weights_init="glorot_uniform",
+  def __init__(self, activation=None, with_bias=True, grad_filter=None, forward_weights_init="glorot_uniform",
                bias_init=0.0, use_transposed_weights=False, **kwargs):
     """
     :param str|None activation: e.g. "relu", or None
