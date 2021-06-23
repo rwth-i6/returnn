@@ -68,7 +68,7 @@ class LayerBase(object):
                initial_output=None,
                rec_previous_layer=None,
                collocate_with=None,
-               trainable=True,
+               trainable=None,
                custom_param_importer=None,
                register_as_extern_data=None,
                control_dependencies_on_output=None,
@@ -111,7 +111,8 @@ class LayerBase(object):
     :param LayerBase|None rec_previous_layer: via the recurrent layer, layer (template) which represents the past of us.
       You would not explicitly set this in a config. This is automatically, internally, via :class:`RecLayer`.
     :param list[str]|None collocate_with: in the rec layer, collocate with the specified other layers
-    :param bool trainable: whether the parameters of this layer will be trained
+    :param bool|None trainable: whether the parameters of this layer will be trained.
+      default (None) inherits from the parent layer if there is one, or otherwise True.
     :param str|callable|None custom_param_importer: used by :func:`set_param_values_by_dict`
     :param str|None register_as_extern_data: registers output in network.extern_data
     :param None|((LayerBase)->list[tf.Operation]) control_dependencies_on_output:
@@ -177,6 +178,8 @@ class LayerBase(object):
     self.only_on_eval = only_on_eval
     self.only_on_search = only_on_search
     self.use_batch_norm = batch_norm
+    if trainable is None:
+      trainable = self.network.parent_layer.trainable if self.network.parent_layer else True
     self.trainable = trainable
     self.custom_param_importer = custom_param_importer
     self.control_dependencies_on_output = control_dependencies_on_output
