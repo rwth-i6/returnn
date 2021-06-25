@@ -1431,7 +1431,7 @@ def get_initializer(s, seed=None, eval_local_ns=None, dtype=tf.float32):
   :param str|dict[str]|float|numpy.ndarray s: e.g. "glorot_uniform" or "truncated_normal" or "orthogonal",
     or config dict with "class",
     or string to be `eval`ed if it contains "(". constant if a float is given.
-  :param int|tf.Tensor seed:
+  :param int|tf.Tensor seed: used in case the initializer has no explicit seed specified.
   :param dict[str]|None eval_local_ns:
   :param tf.DType|str dtype:
   :return: (function (shape) -> tf.Tensor) | tf.Initializer
@@ -1505,7 +1505,10 @@ def get_initializer(s, seed=None, eval_local_ns=None, dtype=tf.float32):
       raise Exception("invalid initializer: %r" % s)
     if seed is not None:
       assert isinstance(f, init_ops.Initializer)
-      if hasattr(f, "seed"):
+      if hasattr(f, "seed") and f.seed is None:
+        # If f.seed is not None, do not override the seed.
+        # This e.g. happens when the user explicitly specifies a seed in the initializer constructor:
+        # Use the user's seed instead.
         f.seed = seed
   except Exception:
     error()
