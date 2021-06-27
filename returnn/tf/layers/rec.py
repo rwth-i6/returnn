@@ -3030,6 +3030,10 @@ class _SubnetworkRecCell(object):
         return get_prev_layer(name[len("prev:"):])
       if name.startswith("base:"):
         return self._get_parent_layer(name[len("base:"):])
+      if name not in self.layer_data_templates:
+        raise LayerNotFound(
+          "layer not found: %s/%s" % (self.input_layers_net, name),
+          layer_name=name, network=self.input_layers_net)
       # noinspection PyBroadException
       try:
         return self.input_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
@@ -3196,7 +3200,11 @@ class _SubnetworkRecCell(object):
         return self._get_parent_layer(name[len("base:"):])
       if name in self.input_layers_moved_out:
         return self.input_layers_net.get_layer(name)
-      if name in self.output_layers_moved_out or name.startswith("data:"):
+      if name not in self.layer_data_templates:
+        raise LayerNotFound(
+          "layer not found: %s/%s" % (self.output_layers_net, name),
+          layer_name=name, network=self.output_layers_net)
+      if name in self.output_layers_moved_out or name.startswith("data:") or name == "data":
         # noinspection PyBroadException
         try:
           return self.output_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
