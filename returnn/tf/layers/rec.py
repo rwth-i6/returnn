@@ -1283,6 +1283,16 @@ class _SubnetworkRecCell(object):
             lself.add_templated_layer(
               layer_class=res_layer.layer_class_type, **res_layer.kwargs)
 
+        except LayerNotFound as exc:
+          if exc.network is self.net and exc.layer_name == name:
+            assert not layer_.is_initialized
+            # Clean up any references.
+            del self.layer_data_templates[name]
+            ConstructCtx.partially_finished.remove(layer_)
+            if len(ConstructCtx.layers) >= 2:
+              ConstructCtx.layers[-2].remove_dependency(layer_, is_prev_time_frame=is_prev_time_frame)
+          raise
+
         finally:
           assert ConstructCtx.layers[-1] is layer_, "invalid stack %r, expected top layer %r" % (
             ConstructCtx.layers, layer_)
@@ -3426,6 +3436,18 @@ class _TemplateLayer(LayerBase):
     else:
       if layer not in self.cur_frame_dependencies:
         self.cur_frame_dependencies.append(layer)
+
+  def remove_dependency(self, layer, is_prev_time_frame):
+    """
+    :param LayerBase layer:
+    :param bool is_prev_time_frame:
+    """
+    self.dependencies.remove(layer)
+    if is_prev_time_frame:
+      assert isinstance(layer, _TemplateLayer)
+      self.prev_frame_dependencies.remove(layer)
+    else:
+      self.cur_frame_dependencies.remove(layer)
 
   def get_normalized_layer(self):
     """
