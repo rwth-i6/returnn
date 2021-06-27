@@ -34,10 +34,7 @@ class SourceLayer(LayerBase):
     assert not sources, "source layer does not expect sources"
     data = network.get_extern_data(data_key, mark_data_key_as_used=True).copy()
     super(SourceLayer, self).__init__(network=network, **kwargs)
-    if data.placeholder is None:
-      raise Exception("%r: data %r:%r only exists as template. You can only use %r." % (
-        self, data_key, data,
-        {k: v for (k, v) in network.extern_data.data.items() if v.placeholder is not None}))
+    # Note: No check on data.placeholder. We allow to behave similar as DataNotAvailableLayer.
     self.output = data
     if self.output.beam:
       # This can happen if register_as_extern_data was used on a layer with a beam.
