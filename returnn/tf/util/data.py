@@ -213,8 +213,28 @@ class DimensionTag(object):
     :param DimensionTag other:
     """
     from .basic import same_control_flow_ctx, tile_transposed
-    assert not self.same_as or self.same_as is other.get_same_base()
-    self.same_as = other.get_same_base()
+    other_same_base = other.get_same_base()
+    if self is other_same_base or self.same_as is other_same_base:
+      return
+    if self.same_as:
+      self_same_as = self.get_same_base()
+      assert not self_same_as.same_as
+      self_same_as.same_as = other_same_base
+      if self_same_as.dyn_size is None:
+        self_same_as.dyn_size = other_same_base.dyn_size
+      elif other_same_base.dyn_size is None:
+        other_same_base.dyn_size = self_same_as.dyn_size
+      if self.dyn_size is None:
+        self.dyn_size = self_same_as.dyn_size
+    self.same_as = other_same_base
+    if self.dyn_size is not None and other_same_base.dyn_size is not None:
+      if self.dyn_size is not other_same_base.dyn_size:
+        if self.src_data and other_same_base.src_data and self.src_data.beam == other_same_base.src_data.beam:
+          # Note: Instead of making this a warning, we could also enforce this at some point.
+          #   The user should be able to fix `extern_data` in the config such that this is correct in the first place.
+          #   Also, in addition to this warning, we might want to add some runtime check on the eq of the dyn sizes.
+          print(
+            "Warning: assuming dim tags are same with different size placeholders: %r vs %r" % (self, other_same_base))
     # If we have a defined source, and this is a dynamic spatial axis, and it was undefined before,
     # maybe we can overtake the size_placeholder now.
     if self.same_as.dyn_size is not None and self.src_data:
