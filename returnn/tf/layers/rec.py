@@ -4525,6 +4525,62 @@ class GetRecAccumulatedOutputLayer(LayerBase):
     return subnet.layers[sub_layer].output
 
 
+class RecUnstackLayer(LayerBase):
+  """
+  This is supposed to be used inside a :class:`RecLayer`.
+  The input is supposed to be outside the rec layer (i.e. via ``base:``).
+  Uses tf.TensorArray and then unstack on the inputs to make it available per-frame.
+  This is an alternative to making some input to the rec layer,
+  such that the rec layer can have multiple inputs (as long as they have the same time dim).
+
+  Note that due to automatic optimization, this layer will be optimized out of the rec loop anyway,
+  and then the tf.TensorArray logic happens internally in RecLayer,
+  thus we do not need to care about this here.
+  (See get_input_moved_out for some internal handling.)
+
+  Effectively, this layer is very similar to :class:`CopyLayer`,
+  with the only special behavior that it assigns the loop dimension of RecLayer.
+  """
+  layer_class = "rec_unstack"
+
+  def __init__(self, axis, **kwargs):
+    """
+    :param str|DimensionTag axis:
+    """
+    axis  # noqa  # unused here, used in get_out_data_from_opts
+    super(RecUnstackLayer, self).__init__(**kwargs)
+    assert len(self.sources) == 1
+    src = self.sources[0].output
+    rec_time_dim = self.network.get_inside_rec_time_dim()
+    if rec_time_dim:
+      raise NotImplementedError("%s: We expect that this layer is always optimized out." % self)
+    self.output.placeholder = src.placeholder
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, axis, sources, network, **kwargs):
+    """
+    :param str name:
+    :param str|DimensionTag axis:
+    :param list[LayerBase] sources:
+    :param returnn.tf.network.TFNetwork network:
+    :rtype: Data
+    """
+    assert sources
+    out = sources[0].output.copy_template(name="%s_output" % name)
+    out_dim = out.get_dim_tag_from_description(axis)
+    rec_time_dim = network.get_inside_rec_time_dim()
+    if rec_time_dim:
+      if rec_time_dim.is_dim_known():  # defined
+        assert out_dim == rec_time_dim
+      else:
+        rec_time_dim.declare_same_as(out_dim)
+      out.mark_same_time(out_dim, must_match=True)
+      return out.copy_template_excluding_time_dim()
+    else:
+      out.mark_same_time(out_dim, must_match=True)
+      return out
+
+
 class BaseChoiceLayer(LayerBase):
   """
   This is a base-class for any layer which defines a new search choice,
