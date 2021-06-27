@@ -811,7 +811,8 @@ class TFNetwork(object):
       else:
         layer_desc = net_dict[name]
     if not layer_desc:
-      raise LayerNotFound("layer %r not found in %r" % (name, self), layer_name=name, network=self, net_dict=net_dict)
+      raise LayerNotFound(
+        "layer %r not found in %r" % (name, self), layer_name=full_name, network=self, net_dict=net_dict)
     if not add_layer:
       add_layer = self.add_layer
 
@@ -837,7 +838,7 @@ class TFNetwork(object):
         if not subnet.have_layer(base_name):
           raise LayerNotFound(
             "sub-layer %r not found in %r" % (base_name, net),
-            layer_name=base_name, network=net)
+            layer_name=full_name, network=self)
         layer_desc = subnet.get_layer_desc(base_name)
         layer_class = subnet.get_layer_class(base_name)
         continue
@@ -851,7 +852,7 @@ class TFNetwork(object):
       if not sub_layer:
         raise LayerNotFound(
           "sub-layer %r not found in %r" % (sub_layer_name, root_layer),
-          layer_name=name + "/" + sub_layer_name, network=net)
+          layer_name=full_name, network=self)
       return sub_layer
 
     if self._flat_construction_enabled():
@@ -1405,6 +1406,7 @@ class TFNetwork(object):
     """
     if layer_name in self.layers:
       return self.layers[layer_name]
+    orig_layer_name = layer_name
     if '/' in layer_name:  # path to a sub-layer
       root_layer_name, sub_layer_name = layer_name.split("/", 1)
       root_layer = self.get_layer(root_layer_name)  # get the root-layer (first part of the path)
@@ -1412,7 +1414,7 @@ class TFNetwork(object):
       if not sub_layer:
         raise LayerNotFound(
           "sub-layer %r not found in layer %r in net %r" % (root_layer, sub_layer, self),
-          layer_name=layer_name, network=self)
+          layer_name=orig_layer_name, network=self)
       return sub_layer
     if self._extra_layer_name_prefix_pattern.match(layer_name):
       if self.extra_parent_net:
@@ -1422,15 +1424,15 @@ class TFNetwork(object):
       if not extra_net:
         raise LayerNotFound(
           "cannot get layer %r, no extra net for %r" % (layer_name, self),
-          layer_name=layer_name, network=self)
+          layer_name=orig_layer_name, network=self)
       if layer_name not in extra_net.layers:
         raise LayerNotFound(
-          "layer %r not found in extra net %r" % (layer_name, extra_net), layer_name=layer_name, network=self)
+          "layer %r not found in extra net %r" % (layer_name, extra_net), layer_name=orig_layer_name, network=self)
       return extra_net.layers[layer_name]
     if layer_name.startswith("base:"):
       if not self.parent_net:
         raise LayerNotFound(
-          "cannot get layer %r, no parent net for %r" % (layer_name, self), layer_name=layer_name, network=self)
+          "cannot get layer %r, no parent net for %r" % (layer_name, self), layer_name=orig_layer_name, network=self)
       return self.parent_net.get_layer(layer_name[len("base:"):])
     if layer_name == "data" or layer_name.startswith("data:"):
       # Not created yet. Try to create it now.
@@ -1438,7 +1440,7 @@ class TFNetwork(object):
     if self.extra_parent_net:
       return self.extra_parent_net.get_layer(layer_name)
     if layer_name not in self.layers:
-      raise LayerNotFound("layer %r not found in %r" % (layer_name, self), layer_name=layer_name, network=self)
+      raise LayerNotFound("layer %r not found in %r" % (layer_name, self), layer_name=orig_layer_name, network=self)
     return self.layers[layer_name]
 
   def get_all_layers_shallow(self):
