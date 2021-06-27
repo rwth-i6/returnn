@@ -455,7 +455,7 @@ class LayerBase(object):
     which should be resolved.
     """
     from .basic import get_loss_class
-    from ..network import DataNotFound
+    from ..network import LayerNotFound
     BehaviorVersion.require(
       condition="from" in d,
       message='Missing "from" in layer definition: %s/%s' % (network.name, d.get("_name", "<UNKNOWN>")),
@@ -496,6 +496,9 @@ class LayerBase(object):
             target_layers[target] = get_layer(target[len("layer:"):])
           else:
             try:
+              # Check whether the target itself is a layer
+              target_layers[target] = get_layer(target)
+            except LayerNotFound:
               # Note: This is a workaround for cases where we need to know about used data keys before the layer
               # itself is constructed (e.g. in _SubnetworkRecCell.get_output).
               # A nicer solution would be to not modify this here,
@@ -504,13 +507,6 @@ class LayerBase(object):
               # Also, if we are inside a rec layer, and doing search, we also cannot do that.
               if network.is_inside_rec_layer() and not network.search_flag:
                 network.get_extern_data(target, mark_data_key_as_used=True)
-              else:
-                # Anyway, to check for the name.
-                network.get_extern_data(target, mark_data_key_as_used=False)
-            except DataNotFound:
-              # Expect that this is a layer.
-              target_layers[target] = get_layer(target)
-            else:
               if not network.search_flag:
                 # Also, there are cases when we want to have the target as an explicit layer dep,
                 # e.g. when the target has a beam, to derive the search choices.
