@@ -760,14 +760,6 @@ class TFNetwork(object):
         return self.get_layer(name)
       except LayerNotFound:
         pass  # ok, we will try to construct it then
-    if self._flat_construction_enabled():
-      delayed_exc = _DelayedConstructionException(
-        network=self, layer_name=name,
-        other_kwargs=dict(net_dict=net_dict, get_layer=get_layer, add_layer=add_layer, check_existing=check_existing))
-      if not self._construction_stack.in_flat_construct_count:
-        return self._construction_stack.flat_construct(delayed_exc)
-      if self._construction_stack.layers:
-        raise delayed_exc
     if not get_layer:
       # set get_layer to wrap construct_layer
       def get_layer(src_name):
@@ -861,6 +853,15 @@ class TFNetwork(object):
           "sub-layer %r not found in %r" % (sub_layer_name, root_layer),
           layer_name=name + "/" + sub_layer_name, network=net)
       return sub_layer
+
+    if self._flat_construction_enabled():
+      delayed_exc = _DelayedConstructionException(
+        network=self, layer_name=name,
+        other_kwargs=dict(net_dict=net_dict, get_layer=get_layer, add_layer=add_layer, check_existing=check_existing))
+      if not self._construction_stack.in_flat_construct_count:
+        return self._construction_stack.flat_construct(delayed_exc)
+      if self._construction_stack.layers:
+        raise delayed_exc
 
     layer_desc = layer_desc.copy()
     layer_desc.pop("class")
