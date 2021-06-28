@@ -3328,7 +3328,7 @@ def test_rec_subnet_simple_rnn():
     print("rnn_cell also fine.")
 
 
-def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, shared_base_net=None, rtol=1e-4):
+def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, shared_base_net=None, from_=None, rtol=1e-4):
   """
   :param dict[str] subnet_layer_dict: opts for the output layer inside the rec-layer subnet
   :param dict[str,dict[str]] other_subnet_layers: other layers for the rec-layer subnet
@@ -3344,7 +3344,7 @@ def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, sha
   subnet_layer_dict.setdefault("from", ["data:source"])
   rec_layer_dict = {
     "class": "rec",
-    "from": ["data"],
+    "from": ["data"] if from_ is None else [from_],
     "unit": {"output": subnet_layer_dict},
     "n_out": n_out,
     "is_output_layer": True
@@ -3386,7 +3386,7 @@ def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, sha
     assert_equal(set(net2_subnet.input_layers_moved_out), set())
     assert_equal(set(net1_subnet.output_layers_moved_out), set())
     # output_layers_moved_out will contain sublayers if present
-    output_root_layers_moved_out = [name for name in net2_subnet.output_layers_moved_out if '/' not in name]
+    output_root_layers_moved_out = [name for name in net2_subnet.output_layers_moved_out if all(x not in name for x in ['/', ":i"])]
     assert_equal(set(output_root_layers_moved_out), {"output"}.union(set(other_subnet_layers or [])))
     assert_equal([
       v.name.split("/")[1:] for v in net1.get_params_list()], [v.name.split("/")[1:] for v in net2.get_params_list()])
@@ -3596,6 +3596,31 @@ def test_reclayer_optimize_out_access_split():
   check_reclayer_optimize_out(
     subnet_layer_dict={"class": "copy", "from": "split/0", "n_out": 5},
     other_subnet_layers={"split": {"class": "split", "from": ["data:source"], "size_splits": [5, 8]}})
+
+
+def test_reclayer_optimize_out_slice_nd():
+  def random_start_positions(source, **kwargs):
+    import tensorflow as tf
+    enc = source(0, as_data=True, enforce_batch_major=True, auto_convert=False)
+    enc_shape = tf.shape(enc.placeholder)  # (B,T,D)
+    enc_time_dim = enc_shape[enc.time_dim_axis]
+    return tf.random.uniform(enc_shape[:-1], 0, enc_time_dim-2, dtype=tf.dtypes.int32)  #[B,T]
+
+  check_reclayer_optimize_out(
+    {"class": "linear", "activation": None, "from": "my_layer"},
+    from_="position",
+    other_subnet_layers={
+      "my_layer": {"class": "gather_nd", "from": "base:data", "position": ":i"},
+      "window": {"class": "slice_nd",    # no_opt: [B,4,D], opt: [B,T,4,D]
+                 "from": "base:data", "start": "data:source", "size": 4, "is_output_layer": True},
+      },
+    shared_base_net={
+      "position": {
+        "class": "eval", "from": "data", "is_output_layer": True,
+        "eval": random_start_positions,
+        "out_type": {"batch_dim_axis": 0, "time_dim_axis": 1, "shape": (None,), "sparse": True, "dtype": "int32", "dim": None}}
+      }
+    )
 
 
 def test_reclayer_att_with_kv_in_rec():
