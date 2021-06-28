@@ -3633,44 +3633,29 @@ def windowed_nd(source, window_size, window_left=None, window_right=None,
 
 def slice_nd(x, start, size):
   """
-  :param tf.Tensor x: shape (B, T, ...)
-  :param tf.Tensor start: shape (B,), int32
-  :param int|tf.Tensor size: scalar
-  :return: [x[start_1:size], x[start_2:size], ..., x[start_B:size]], shape (B, size, ...)
-    Like :func:`slice_pad_zeros`, the size in the first axis will always be ``size``,
-    and we will pad with zeros.
+  This is a more generic slice function, where arbitrary many common axis between x and start are allowed.
+  Here we assume that x and start have their axis layed in the same order.
+
+  :param tf.Tensor x: shape (B,T1,...,Tn,D,..)
+  :param tf.Tensor start: shape (B,T1,..,Tn-1), int32 which automatically indicates n as the slice-axis
+  :param int|tf.Tensor size: scalar in the range [0..Tn) -1]
+  :return: ret[b, t1, .., tn-1, 0..size, :] = x[b, t1, .., tn-1, start[B, t1, .., tn-1]+0..size, :]
+    In case the slices go out of bounds of the slice dimension and we will pad with zeros.
   :rtype: tf.Tensor
   """
   with tf.name_scope("slice_nd"):
-    shape = get_shape(x)
-    n_batch = shape[0]
-
-    batch_idxs = expand_dims_unbroadcast(tf.range(n_batch), 1, size)  # (n_batch, size)
-    batch_idxs = tf.reshape(batch_idxs, (-1,))  # (n_batch*size,)
-
-    window_pos = tf.expand_dims(start, 1) + tf.range(size)[None, :]  # (n_batch, size)
-    window_pos = tf.reshape(window_pos, (-1,))  # (n_batch*size,)
-
-    # build mask for zero-padding
-    mask = tf.logical_or(
-      tf.greater(window_pos, shape[1] - 1), tf.less(window_pos, 0))  # (n_batch*size,) tf.bool
-
-    # clip indices so that gather_nd doesn't fail, will zero-pad later
-    clip_time_idx = tf.clip_by_value(window_pos, 0, shape[1] - 1)
-    indices = tf.stack([batch_idxs, clip_time_idx])  # (n_batch*size, 2)
-    indices = tf.transpose(indices)  # (2, n_batch*size)
-
-    slices = tf.gather_nd(x, indices)  # (n_batch*size, ...)
-
-    # (B, size, ...), we assume time-axis is/was 1
-    new_shape = [shape[0], size] + shape[2:]
-
-    # zero-pad
-    mask_bc = expand_multiple_dims(mask, [-1] * (slices.get_shape().ndims - 1))
-    slices = where_bc(mask_bc, tf.zeros_like(slices), slices)
-
-    slices = tf.reshape(slices, new_shape)  # (B, size, ...)
-    return slices
+    shape = tf.shape(x)
+    len_common_dims = len(start.shape)  # nr of common dims
+    slice_dim = shape[len_common_dims]  # dim of axis to be sliced
+    # assert size < slice_dim, "Slice size cannot be bigger than the dimension to be sliced."
+    # Create indexes for the slices where slice_idx[B,T1 .., Tn-1] = start[B,T1 .., Tn-1] + range(size)
+    # (B,T1 .., Tn-1, size)
+    slice_idx = tf.tile(tf.expand_dims(start, -1), [1] * len_common_dims + [size]) + tf.range(size)
+    mask = tf.logical_or(tf.greater(slice_idx, slice_dim - 1), tf.less(slice_idx, 0))  # (B,T1 .., Tn-1, size)
+    slice_idx = tf.clip_by_value(slice_idx, 0, slice_dim - 1)  # cliped slice idx
+    res = tf.gather(x, slice_idx, axis=len_common_dims, batch_dims=len_common_dims)
+    res = where_bc(mask, tf.zeros_like(res), res)  # zero-padding
+    return res
 
 
 def global_tensor(f, name):
