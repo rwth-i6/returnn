@@ -854,7 +854,9 @@ class SliceNdLayer(_ConcatInputLayer):
   e.g. ``x[start:start + size]``.
   This layers allows a different start slice point for each batch,
   in contrast to :class:`SliceLayer`, and the start is variable.
-  See also :class:`GatherNdLayer`.
+  In case start has more than 1 axis we loop over them.
+  E.g. if start: [B,T] we loop over T and slice for each batch normally.
+  See also :class:`GatherLayer`.
   :class:`PrefixInTimeLayer` can recover the original shape (by zero-padding).
   """
   layer_class = "slice_nd"
@@ -862,43 +864,68 @@ class SliceNdLayer(_ConcatInputLayer):
 
   def __init__(self, start, size, min_size=None, **kwargs):
     """
-    :param LayerBase start:
+    We expect the input to have at least one more axis than start and the rest of the axis in front are the same.
+    In case the input has no extra time axis compared to start, we assume slice_nd is pulled out of a rec layer
+    but the input has stood the same.
+
+    :other LayerBase input_data:  shape [B,T0,..,Tn,D] or [B,T0,..,Tn-1,D]
+    :param LayerBase start:  shape [B,T0,..,Tn-1]
+    :other LayerBase output: shape [B,T0,..,Tn',D]
     :param int|None size: if None, it uses the max possible size, and it becomes a dynamic axis
     :param int|None min_size: if size is None, but we want to have a min-size, set this
     """
     super(SliceNdLayer, self).__init__(**kwargs)
-    from returnn.tf.util.basic import slice_nd, where_bc, expand_multiple_dims, DimensionTag
-    x = self.input_data.copy_as_batch_major()
-    assert x.time_dim_axis == 1, "currently only time-axis==1 supported"
-    seq_lens = x.get_sequence_lengths() if x.is_time_axis_dynamic() else None
+    from returnn.tf.util.basic import slice_nd, DimensionTag
+    assert start.output.have_batch_axis() and self.input_data.have_batch_axis()
     self.start = start
-    assert start.output.have_batch_axis() and start.output.batch_shape == (None,)
-    start = start.output.get_placeholder_as_batch_major()
+
+    x = self.input_data.copy_as_batch_major()
+    start = start.output.copy_as_batch_major()
+
+    # make sure axis of start are in input
+    is_equal_opts = dict(ignore_feature_dim=True, allow_same_spatial_dim=True, broadcast_matches=True)
+    for start_axis in range(start.batch_ndim):
+      assert x.get_dim_tag(start_axis).is_equal(start.get_dim_tag(start_axis), **is_equal_opts)
+
+    # Handle the case when layer is pulled out of rec loop but the input hasn't change
+    if self.optimized_out_of_loop_and_unchanged_input(x, start):
+      # add an axis after the last start axis and tile the input Tn-1 times: [B,T0,..,Tn-1,D] -> [B,T0,..,Tn-1,Tn-1,D]
+      tag = start.get_dim_tag(-1)
+      x = x.copy_add_dim_by_tag(tag, True, start.batch_ndim)  # tiles the input
+
+    start = start.get_placeholder_as_batch_major()
+    seq_lens = x.get_sequence_lengths() if x.is_time_axis_dynamic() else None
+    slice_axis = len(list(start.shape)) - 1  # slice_axis w/o batch
     if size is None:
       if seq_lens is None:
-        size = tf.maximum(tf.reduce_max(x.batch_shape[1] - start), 0)
+        size = tf.maximum(tf.reduce_max(x.batch_shape[slice_axis] - start), 0)
       else:
         size = tf.maximum(tf.reduce_max(seq_lens - start), 0)
       if min_size is not None:
         size = tf.maximum(size, min_size)
     self.size = size
-    start = tf.expand_dims(start, axis=1)  # (B, T)
     slices = slice_nd(x.placeholder, start=tf.cast(start, tf.int32), size=size)  # (B,size, ...)
-    if seq_lens is not None:
-      mask = tf.greater_equal(tf.range(size)[None, :] + start, seq_lens[:, None])  # (B,T)
-      mask = expand_multiple_dims(mask, list(range(2, x.batch_ndim)))
-      slices = where_bc(mask, tf.zeros_like(slices), slices)
+
     self.output.size_placeholder = x.size_placeholder.copy()
     if isinstance(size, tf.Tensor):
-      self.output.size_placeholder[0] = tf.maximum(seq_lens - tf.reshape(start, tf.shape(seq_lens)), 0)
+      self.output.size_placeholder[slice_axis] = size
       tag = DimensionTag(
         description="sliced-time:%s" % self.get_absolute_name(),
         kind=DimensionTag.Types.Spatial)
-      tag.set_tag_on_size_tensor(self.output.size_placeholder[0])
+      tag.set_tag_on_size_tensor(self.output.size_placeholder[slice_axis])
     else:
       assert isinstance(size, int)
-      self.output.size_placeholder.pop(0, None)  # static time axis
+      self.output.size_placeholder.pop(slice_axis, None)  # static time axis
+
     self.output.placeholder = slices
+
+  @classmethod
+  def optimized_out_of_loop_and_unchanged_input(cls, input_data, start):
+    """
+    :rtype: bool
+    The idea is to check that the axis after the last common axis is a feature axis instead of spatial.
+    """
+    return input_data.get_dim_tag(start.batch_ndim) == input_data.get_dim_tag(input_data.get_feature_batch_axes()[0])
 
   def get_dep_layers(self):
     """
@@ -916,10 +943,17 @@ class SliceNdLayer(_ConcatInputLayer):
     :rtype: Data
     """
     input_data = get_concat_sources_data_template(sources).copy_as_batch_major()
-    if start:
-      input_data.beam = SearchBeam.get_combined_beam(input_data.beam, start.output.beam)
+    start = start.output.copy_as_batch_major()
+    input_data.beam = SearchBeam.get_combined_beam(input_data.beam, start.beam)
+
     in_shape = list(input_data.shape)
-    shape = [size] + in_shape[1:]  # (B, size, ...) (w/o batch)
+    start_shape = list(start.shape)
+    slice_axis = len(start_shape) + 1  # w/o B
+
+    if cls.optimized_out_of_loop_and_unchanged_input(input_data, start):
+      slice_axis -= 1
+    shape = start_shape[:] + [size] + in_shape[slice_axis:]  # (B, T1, .., Tn-1, size, ...) (w/o batch)
+
     out_type = input_data.get_kwargs()
     out_type["name"] = "%s_output" % name
     out_type["shape"] = shape
