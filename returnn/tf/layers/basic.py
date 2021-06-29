@@ -875,7 +875,7 @@ class SliceNdLayer(_ConcatInputLayer):
     :param int|None min_size: if size is None, but we want to have a min-size, set this
     """
     super(SliceNdLayer, self).__init__(**kwargs)
-    from returnn.tf.util.basic import slice_nd, DimensionTag
+    from returnn.tf.util.basic import slice_nd, where_bc, expand_multiple_dims, DimensionTag
     assert start.output.have_batch_axis() and self.input_data.have_batch_axis()
     self.start = start
 
@@ -905,6 +905,12 @@ class SliceNdLayer(_ConcatInputLayer):
         size = tf.maximum(size, min_size)
     self.size = size
     slices = slice_nd(x.placeholder, start=tf.cast(start, tf.int32), size=size)  # (B,size, ...)
+
+    if seq_lens is not None:
+      mask = tf.greater_equal(
+        tf.range(size)[None, :] + tf.expand_dims(start, axis=-1), seq_lens[:, None])  # (B,T1,..,Tn)
+      mask = expand_multiple_dims(mask, list(range(slice_axis + 2, x.batch_ndim)))  # (B,T1,..,Tn,1,..)
+      slices = where_bc(mask, tf.zeros_like(slices), slices)
 
     self.output.size_placeholder = x.size_placeholder.copy()
     if isinstance(size, tf.Tensor):
