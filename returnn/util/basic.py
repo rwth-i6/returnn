@@ -16,6 +16,7 @@ import inspect
 import os
 import sys
 import shlex
+import math
 import numpy as np
 import re
 import time
@@ -901,6 +902,8 @@ def better_repr(o):
       return "{%s}" % ", ".join(ls)
   if isinstance(o, set):
     return "set([\n%s])" % "".join(map(lambda v: better_repr(v) + ",\n", o))
+  if isinstance(o, float) and (math.isnan(o) or math.isinf(o)):
+    return "float('%s')" % repr(o)
   # fallback
   return repr(o)
 
