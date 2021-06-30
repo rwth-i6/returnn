@@ -5001,13 +5001,20 @@ class ChoiceLayer(BaseChoiceLayer):
       # Note that we don't look at d.get("search") here, because in case of search,
       # if there are other choice layers, we still need to add the scores to the beam.
       d["from"] = []
+
+    # Convert explicit_search_sources to layers
     if d.get("explicit_search_source"):
       assert "explicit_search_sources" not in d
       d["explicit_search_sources"] = [get_layer(d.pop("explicit_search_source"))] if network.search_flag else []
     elif d.get("explicit_search_sources"):
-      assert isinstance(d["explicit_search_sources"], (list, tuple))
-      d["explicit_search_sources"] = (
-        [get_layer(name) for name in d["explicit_search_sources"]] if network.search_flag else [])
+      assert isinstance(d["explicit_search_sources"], (list, tuple, dict))
+      if network.search_flag:
+        if isinstance(d["explicit_search_sources"], (list, tuple)):
+          d["explicit_search_sources"] = [get_layer(name) for name in d["explicit_search_sources"]]
+        elif isinstance(d["explicit_search_sources"], dict):
+          d["explicit_search_sources"] = {key: get_layer(name) for key, name in d["explicit_search_sources"].items()}
+      else:
+        d["explicit_search_sources"] = []
     super(ChoiceLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
@@ -5121,7 +5128,11 @@ class ChoiceLayer(BaseChoiceLayer):
     # See also self.transform_config_dict where we might strip away the sources.
     ls = super(ChoiceLayer, self).get_dep_layers()
     if self.explicit_search_sources:
-      ls.extend(self.explicit_search_sources)
+      if isinstance(self.explicit_search_sources, dict):
+        additional_sources = self.explicit_search_sources.values()
+      else:
+        additional_sources = self.explicit_search_sources
+      ls.extend(additional_sources)
     return ls
 
   def post_process_final_rec_vars_outputs(self, rec_vars_outputs, seq_len):
