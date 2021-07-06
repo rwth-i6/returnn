@@ -39,6 +39,10 @@ class HDFDataset(CachedDataset):
     self._use_cache_manager = use_cache_manager
     self.files = []  # type: typing.List[str]  # file names
     self.h5_files = []  # type: typing.List[h5py.File]
+    # We cache the h5py.Dataset objects that are created each time when accessing a h5py.File, e.g. via fin['inputs'],
+    # as this access seems to have a significant overhead. Speeds up going through a HDFDataset by up to factor 3
+    # (tested with h5py 3.1.0).
+    self.cached_h5_datasets = []  # type: typing.List[typing.Dict[str,h5py.Dataset]]
     self.file_start = [0]
     self.file_seq_start = []  # type: typing.List[numpy.ndarray]
     self.data_dtype = {}  # type: typing.Dict[str,str]
@@ -95,6 +99,7 @@ class HDFDataset(CachedDataset):
         "expected " + str(len(self.labels['classes'])) + " got " + str(len(labels)))
     self.files.append(filename)
     self.h5_files.append(fin)
+    self.cached_h5_datasets.append({})
     print("parsing file", filename, file=log.v5)
     if 'times' in fin:
       if self.timestamps is None:
@@ -275,17 +280,25 @@ class HDFDataset(CachedDataset):
     end_pos = self.file_seq_start[file_idx][real_file_seq_idx + 1]
 
     if key == "data":
-      assert 'inputs' in fin, "'data' key is reserved for 'inputs' in the HDF file, but 'inputs' not found in HDF file."
-      inputs = fin['inputs']
+      if "inputs" not in self.cached_h5_datasets[file_idx]:
+        assert "inputs" in fin, "'data' key is reserved for 'inputs' in the HDF file, but 'inputs' does not exist."
+        self.cached_h5_datasets[file_idx]["inputs"] = fin["inputs"]  # cached for efficiency, see comment in __init__()
+
+      inputs = self.cached_h5_datasets[file_idx]["inputs"]
       data = inputs[start_pos[0]:end_pos[0]]
       if self.window > 1:
         data = self._sliding_window(data)
+
     else:
-      assert 'targets' in fin
-      targets = fin['targets/data/' + key]
+      if key not in self.cached_h5_datasets[file_idx]:
+        assert "targets" in fin
+        self.cached_h5_datasets[file_idx][key] = fin["targets/data/" + key]  # see comment in __init__()
+
+      targets = self.cached_h5_datasets[file_idx][key]
       first_target_idx = 1 if self.num_inputs > 0 else 0  # self.num_inputs == 0 if no 'inputs' in HDF file
       ldx = first_target_idx + self.target_keys.index(key)
       data = targets[start_pos[ldx]:end_pos[ldx]]
+
     return data
 
   def get_input_data(self, sorted_seq_idx):
@@ -334,7 +347,10 @@ class HDFDataset(CachedDataset):
     file_idx = self._get_file_index(real_seq_idx)
     real_file_seq_idx = real_seq_idx - self.file_start[file_idx]
 
-    s = self.h5_files[file_idx]["seqTags"][real_file_seq_idx]
+    if "#seqTags" not in self.cached_h5_datasets[file_idx]:
+      self.cached_h5_datasets[file_idx]["#seqTags"] = self.h5_files[file_idx]["seqTags"]
+
+    s = self.cached_h5_datasets[file_idx]["#seqTags"][real_file_seq_idx]
     s = self._decode(s)
     return s
 
