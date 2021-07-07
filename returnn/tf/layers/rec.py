@@ -2901,13 +2901,13 @@ class _SubnetworkRecCell(object):
       for other_layer in layers_in_loop:
         if other_layer in _collocated:
           continue
-        if layer in other_layer.dependencies:
-          return False
-        if other_layer.name in layer.collocate_with:
+        if other_layer.name in layer.collocate_with or layer.name in other_layer.collocate_with:
           if output_can_move_out(other_layer, _collocated=_collocated):
-            pass  # this is ok, we can move all out
+            continue  # this is ok, we can move all out
           else:
             return False
+        if layer in other_layer.dependencies:
+          return False
       return True
 
     def find_output_layer_to_move_out():
