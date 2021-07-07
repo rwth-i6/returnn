@@ -3598,6 +3598,45 @@ def test_reclayer_optimize_out_access_split():
     other_subnet_layers={"split": {"class": "split", "from": ["data:source"], "size_splits": [5, 8]}})
 
 
+def test_SplitLayer_move_out_as_output_layer():
+  with make_scope() as session:
+    config = Config()
+    config.update({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": 11, "available_for_inference": True},
+        "classes": {"dim": 10, "available_for_inference": False},
+      },
+      "network": {
+        "output": {
+          "class": "rec", "from": [], "max_seq_len": 5, "target": "classes",
+          "unit": {
+            "input": {"class": "linear", "n_out": 10, "from": ["prev:input"], "with_bias": True},  # not optimized out
+            "split": {"class": "split", "from": "input", "size_splits": [1, 9]},  # goal: optimize this out
+            "output": {
+              "class": "linear", "from": ["split/0", "split/1"], "target": "classes"},  # optimized out
+            "end_compare": {"class": "compare", "kind": "greater", "from": ["split/0"], "value": 0},
+            "end": {"class": "squeeze", "from": ["end_compare"], "axis": "F"},
+          }}
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    rec_layer = network.get_layer("output")
+    assert isinstance(rec_layer, RecLayer)
+    rec_cell = rec_layer.cell
+    assert set(rec_cell.input_layers_moved_out) == set()
+    assert set(rec_cell.output_layers_moved_out) == {"output", "split", "split/0", "split/1"}
+    assert set(rec_cell.layers_in_loop) == {"input"}
+
+    # run but don't care about the result
+    session.run(tf_compat.v1.global_variables_initializer())
+    output_layer = network.get_default_output_layer(must_exist=True)
+    from test_TFNetworkLayer import make_feed_dict
+    feed_dict = make_feed_dict(list(network.extern_data.data.values()))
+    session.run(output_layer.output.placeholder, feed_dict=feed_dict)
+
+
 def test_reclayer_att_with_kv_in_rec():
   net_dict = {
     'decision': {'class': 'decide', 'from': ['output'], 'loss': 'edit_distance', 'loss_opts': {}, 'target': 'classes'},
