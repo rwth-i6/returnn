@@ -2,11 +2,17 @@
 # https://github.blog/2017-07-06-introducing-code-owners/
 # https://chromium.googlesource.com/chromium/src/+/master/docs/code_reviews.md#OWNERS-files
 
-/returnn	@rwth-i6/returnn @albertz
+# Use absolute names when necessary or more helpful to identify.
+# Otherwise the basename is fine. Or other patterns.
+
+* @rwth-i6/returnn @albertz
 /returnn/tf	@albertz
 /returnn/theano	@albertz @doetsch
 
 better_exchook.py @albertz
+
+cached.py @patrick-wilken @JackTemaki
+hdf.py  @patrick-wilken @JackTemaki
 
 # Could be extended a lot more, but not sure if needed.
 # The global owners are also almost always the owners of more specific things.
