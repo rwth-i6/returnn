@@ -1637,20 +1637,60 @@ def test_windowed_nd_big():
 
 
 def naive_slice_nd(x, start, size):
-  slices_shape = [x.shape[0], size] + list(x.shape)[2:]
-  ys = numpy.zeros(shape=slices_shape)
-  for i in range(len(start)):
-    time_len = len(x[i])
-    end = start[i] + size
-    if time_len < end:
-      end = time_len
-    y = x[i][start[i]:end]
+  # Assuming that x: [B, T1, T2, .., Tn, D] and start: [B, T1, .., Tn-1]
+  # i.e. the dimensions of x and start are ordered accordingly.
+  # (Otherwise we should require the slice axis too.)
 
-    # padding
-    if time_len < start[i] + size:
-       y = numpy.pad(y, [[0,start[i]+size-time_len], [0,0]], mode='constant')
-    ys[i] = y
-  return ys
+  len_common_dims = len(start.shape)
+  slice_shape = (size,) + x.shape[len_common_dims+1:]
+  result_shape = start.shape[0:len_common_dims] + slice_shape  # shape of output
+  result = numpy.zeros(result_shape)
+
+  slice_axis_dim = x.shape[len_common_dims]  # dim of axis being sliced
+  for index, start_position in numpy.ndenumerate(start):
+    end_position = min(start_position+size, slice_axis_dim)  # padding required
+
+    # no padding
+    padding = ((0,0),)
+    for i in range(1, len(slice_shape)):
+        padding += ((0, 0),)
+
+    # if required replace the first padding tuple, which corresponds to the slice axis
+    if end_position < start_position+size:
+      padding = ((0,size - end_position + start_position),) + padding[1:]
+    result[index] = numpy.pad(x[index][start_position:end_position], padding, mode='constant', constant_values=0)
+  return result
+
+
+def test_slice_nd_multi_dim():
+  n_batch = 2
+  n_time_1 = 2
+  n_time_2 = 3  # slice axis
+  n_dim = 2
+  size = 2
+  source = numpy.arange(24, dtype=numpy.float32).reshape(n_batch, n_time_1, n_time_2, n_dim).astype("float32")
+  start = numpy.array([[0,1],[1,2]]).astype("int32")
+  naive = naive_slice_nd(source, start, size)
+  source_tf = tf.constant(source)
+  real = slice_nd(source_tf, start=start, size=size).eval()
+  print("source:")
+  print(source)
+  print("naive:")
+  print(naive)
+  print("real:")
+  print(real)
+  expected_output = numpy.array(
+    [[[[0, 1],
+       [2, 3]],
+      [[8, 9],
+       [10, 11]]],
+
+     [[[14, 15],
+       [16, 17]],
+      [[22, 23],
+       [0, 0]]]])  # padding
+  numpy.testing.assert_almost_equal(naive, expected_output)
+  numpy.testing.assert_almost_equal(real, expected_output)
 
 
 def test_slice_nd_small():
