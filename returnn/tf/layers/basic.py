@@ -957,7 +957,7 @@ class SliceNdLayer(_ConcatInputLayer):
     start_shape = list(start.shape)
     slice_axis = len(start_shape) + 1  # w/o B
 
-    if cls.optimized_out_of_loop_and_unchanged_input(input_data, start):
+    if cls.input_comes_from_base_network(input_data, start):
       slice_axis -= 1
     shape = start_shape[:] + [size] + in_shape[slice_axis:]  # (B, T1, .., Tn-1, size, ...) (w/o batch)
 
