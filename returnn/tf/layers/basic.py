@@ -7677,7 +7677,11 @@ class HDFDumpLayer(LayerBase):
     self.filename = filename
     if extra is None:
       extra = {}
-    extra = {key: layer.output.copy_as_batch_spatial_major() for (key, layer) in extra.items()}
+    extra = {key: layer.output for (key, layer) in extra.items()}
+    extra = {
+      key: output.copy_add_batch_dim(0, batch=data.batch)
+      if not output.have_batch_axis() else output for (key, output) in extra.items()}
+    extra = {key: output.copy_as_batch_spatial_major() for (key, output) in extra.items()}
     self.extra = extra  # type: typing.Dict[str,Data]
     self.dump_whole_batches = dump_whole_batches
     self.num_seqs_written = 0
