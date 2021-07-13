@@ -11,6 +11,7 @@ import tensorflow as tf
 from tensorflow.python.ops import resource_variable_ops
 
 from returnn.log import log
+from returnn.util.basic import BehaviorVersion
 from returnn.tf.network import TFNetwork
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
@@ -550,6 +551,8 @@ class WrapOptimizer:
       assert isinstance(optim_config, (dict, str))
       assert "class" in optim_config
       optimizer = self._create_optimizer(optim_config)
+    elif BehaviorVersion.get() >= 2:
+      raise Exception("Please definine an optimizer specifically via the 'optimizer=...' parameter")
     elif self.config.bool("adam", False):
       assert not momentum
       print("Create Adam optimizer.", file=log.v2)
