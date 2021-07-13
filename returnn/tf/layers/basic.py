@@ -893,22 +893,22 @@ class SliceNdLayer(_ConcatInputLayer):
       tag = start.get_dim_tag(-1)
       x = x.copy_add_dim_by_tag(dim_tag=tag, unbroadcast=True, axis=start.batch_ndim)  # tiles the input
 
-    start = start.get_placeholder_as_batch_major()
+    start_tensor = start.placeholder
     seq_lens = x.get_sequence_lengths() if x.is_time_axis_dynamic() else None
-    slice_axis = len(list(start.shape)) - 1  # slice_axis w/o batch
+    slice_axis = len(list(start_tensor.shape)) - 1  # slice_axis w/o batch
     if size is None:
       if seq_lens is None:
-        size = tf.maximum(tf.reduce_max(x.batch_shape[slice_axis] - start), 0)
+        size = tf.maximum(tf.reduce_max(x.batch_shape[slice_axis] - start_tensor), 0)
       else:
-        size = tf.maximum(tf.reduce_max(seq_lens - start), 0)
+        size = tf.maximum(tf.reduce_max(seq_lens - start_tensor), 0)
       if min_size is not None:
         size = tf.maximum(size, min_size)
     self.size = size
-    slices = slice_nd(x.placeholder, start=tf.cast(start, tf.int32), size=size)  # (B,size, ...)
+    slices = slice_nd(x.placeholder, start=tf.cast(start_tensor, tf.int32), size=size)  # (B,size, ...)
 
     if seq_lens is not None:
       mask = tf.greater_equal(
-        tf.range(size)[None, :] + tf.expand_dims(start, axis=-1), seq_lens[:, None])  # (B,T1,..,Tn)
+        tf.range(size)[None, :] + tf.expand_dims(start_tensor, axis=-1), seq_lens[:, None])  # (B,T1,..,Tn)
       mask = expand_multiple_dims(mask, list(range(slice_axis + 2, x.batch_ndim)))  # (B,T1,..,Tn,1,..)
       slices = where_bc(mask, tf.zeros_like(slices), slices)
 
