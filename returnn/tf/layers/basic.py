@@ -891,7 +891,7 @@ class SliceNdLayer(_ConcatInputLayer):
     if self.optimized_out_of_loop_and_unchanged_input(x, start):
       # add an axis after the last start axis and tile the input Tn-1 times: [B,T0,..,Tn-1,D] -> [B,T0,..,Tn-1,Tn-1,D]
       tag = start.get_dim_tag(-1)
-      x = x.copy_add_dim_by_tag(tag, True, start.batch_ndim)  # tiles the input
+      x = x.copy_add_dim_by_tag(dim_tag=tag, unbroadcast=True, axis=start.batch_ndim)  # tiles the input
 
     start = start.get_placeholder_as_batch_major()
     seq_lens = x.get_sequence_lengths() if x.is_time_axis_dynamic() else None
