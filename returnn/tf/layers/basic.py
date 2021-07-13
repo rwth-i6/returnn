@@ -895,7 +895,7 @@ class SliceNdLayer(_ConcatInputLayer):
 
     start_tensor = start.placeholder
     seq_lens = x.get_sequence_lengths() if x.is_time_axis_dynamic() else None
-    slice_axis = len(list(start_tensor.shape)) - 1  # slice_axis w/o batch
+    slice_axis = start.batch_ndim - 1  # slice_axis w/o batch
     if size is None:
       if seq_lens is None:
         size = tf.maximum(tf.reduce_max(x.batch_shape[slice_axis] - start_tensor), 0)
