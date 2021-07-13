@@ -3644,7 +3644,7 @@ def slice_nd(x, start, size):
   :rtype: tf.Tensor
   """
   with tf.name_scope("slice_nd"):
-    shape = tf.shape(x)
+    shape = get_shape(x)
     len_common_dims = len(start.shape)  # nr of common dims
     slice_dim = shape[len_common_dims]  # dim of axis to be sliced
     # assert size < slice_dim, "Slice size cannot be bigger than the dimension to be sliced."
