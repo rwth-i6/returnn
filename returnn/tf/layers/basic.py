@@ -887,8 +887,8 @@ class SliceNdLayer(_ConcatInputLayer):
     for start_axis in range(start.batch_ndim):
       assert x.get_dim_tag(start_axis).is_equal(start.get_dim_tag(start_axis), **is_equal_opts)
 
-    # Handle the case when layer is pulled out of rec loop but the input hasn't change
-    if self.optimized_out_of_loop_and_unchanged_input(x, start):
+    # Handle the case when input_layer comes from base_network
+    if self.input_comes_from_base_network(x, start):
       # add an axis after the last start axis and tile the input Tn-1 times: [B,T0,..,Tn-1,D] -> [B,T0,..,Tn-1,Tn-1,D]
       tag = start.get_dim_tag(-1)
       x = x.copy_add_dim_by_tag(dim_tag=tag, unbroadcast=True, axis=start.batch_ndim)  # tiles the input
@@ -926,10 +926,11 @@ class SliceNdLayer(_ConcatInputLayer):
     self.output.placeholder = slices
 
   @classmethod
-  def optimized_out_of_loop_and_unchanged_input(cls, input_data, start):
+  def input_comes_from_base_network(cls, input_data, start):
     """
     :rtype: bool
-    The idea is to check that the axis after the last common axis is a feature axis instead of spatial.
+    The idea is to check if the axis after the last common axis is the feature axis instead of another spatial axis.
+    Because the input_data should normally have one extra spatial(time) axis than start.
     """
     return input_data.get_dim_tag(start.batch_ndim) == input_data.get_dim_tag(input_data.get_feature_batch_axes()[0])
 
