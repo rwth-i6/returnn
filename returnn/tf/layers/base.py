@@ -1279,17 +1279,22 @@ class LayerBase(object):
       else:
         sample_variance = updated_sample_variance
       # If train or if force_sample, use default use_sample=0.0, otherwise use_sample=1.0.
-      if self.network.train_flag is not False or force_sample:
-        if force_sample:
-          pass  # leave use_sample as-is
-        else:
-          use_sample = tf.where(self.network.train_flag, use_sample, 1.0)
+      skip_updates = self.network.train_flag is False and update_sample_only_in_training and not force_sample
+      if skip_updates:
+        mean = sample_mean
+        variance = sample_variance
       else:
-        use_sample = 1.0
-      mean = (1. - use_sample) * mean + use_sample * sample_mean
-      variance = (1. - use_sample) * variance + use_sample * sample_variance
-      bn = (data.placeholder - mean) * tf_compat.v1.rsqrt(variance + epsilon)
-      if delayed_ops:
+        if self.network.train_flag is not False or force_sample:
+          if force_sample:
+            pass  # leave use_sample as-is
+          else:
+            use_sample = tf.where(self.network.train_flag, use_sample, 1.0)
+        else:
+          use_sample = 1.0
+        mean = (1. - use_sample) * mean + use_sample * sample_mean
+        variance = (1. - use_sample) * variance + use_sample * sample_variance
+      bn = (data.placeholder - mean) * tf_compat.v1.rsqrt(tf_util.optional_add(variance, epsilon))
+      if not skip_updates and delayed_ops and (isinstance(use_sample, tf.Tensor) or use_sample != 0.0):
         for op in delayed_ops:
           # Make sure we update after we calculated the batch norm.
           tf_util.add_control_input(op, control_input=bn.op)
