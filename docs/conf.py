@@ -188,8 +188,9 @@ if os.environ.get('READTHEDOCS') != 'True':
     else:
         html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
     html_theme = 'sphinx_rtd_theme'
+
 def setup(app):
-    app.add_stylesheet("fix_rtd.css")
+    app.add_css_file("fix_rtd.css")
 
 ## Bootstrap style:
 #import sphinx_bootstrap_theme
