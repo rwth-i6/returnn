@@ -28,6 +28,7 @@ class CachedDataset(Dataset):
      self.cache_byte_size_total_limit = max(cache_byte_size - self.cache_byte_size_limit_at_start, 1)
     self.num_seqs_cached_at_start = 0
     self.cached_bytes_at_start = 0
+    self.nbytes = 0
     self.start_cache_initialized = False
     self.definite_cache_leftover = 0
     self.cache_num_frames_free = 0
@@ -51,6 +52,8 @@ class CachedDataset(Dataset):
     super(CachedDataset, self).initialize()
 
     if self.cache_byte_size_limit_at_start > 0:
+      self.nbytes = numpy.array([], dtype=numpy.float32).itemsize * (self.num_inputs * self.window + 1 + 1)
+
       # Calculate cache sizes.
       temp_cache_size_bytes = max(0, self.cache_byte_size_total_limit)
       self.definite_cache_leftover = temp_cache_size_bytes if self.num_seqs_cached_at_start == self.num_seqs else 0

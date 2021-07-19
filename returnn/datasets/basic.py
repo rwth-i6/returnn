@@ -131,7 +131,6 @@ class Dataset(object):
     self.timestamps = None
     self.labels = {}  # type: typing.Dict[str,typing.List[str]]
     self.weights = {}
-    self.nbytes = 0
     self._num_timesteps = 0
     self._num_codesteps = None  # type: typing.Optional[int]  # Num output frames, could be different from input, seq2seq, ctc.  # nopep8
     self._num_seqs = 0
@@ -573,7 +572,6 @@ class Dataset(object):
     raise OptionalNotImplementedError
 
   def _base_init(self):
-    self.nbytes = 0
     self.zpad = None
     # We expect that the following attributes are already set elsewhere, by a derived class.
     assert self.num_outputs
@@ -585,8 +583,6 @@ class Dataset(object):
 
     if int(self.window) % 2 == 0:
       self.window += 1
-
-    self.nbytes = numpy.array([], dtype=numpy.float32).itemsize * (self.num_inputs * self.window + 1 + 1)
 
     if self.window > 1:
       self.zpad = numpy.zeros((int(self.window) // 2, self.num_inputs), dtype=numpy.float32)
