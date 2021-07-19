@@ -131,7 +131,6 @@ class Dataset(object):
     self.labels = {}  # type: typing.Dict[str,typing.List[str]]
     self.weights = {}
     self._num_timesteps = 0
-    self._num_codesteps = None  # type: typing.Optional[int]  # Num output frames, could be different from input, seq2seq, ctc.  # nopep8
     self._num_seqs = 0
     self._estimated_num_seqs = estimated_num_seqs
     self.min_chunk_size = min_chunk_size
@@ -294,14 +293,6 @@ class Dataset(object):
     """
     assert self._num_timesteps > 0
     return self._num_timesteps
-
-  def get_num_codesteps(self):
-    """
-    :rtype: int|list[int]
-    """
-    if self._num_codesteps is None:
-      return [self.get_num_timesteps()]
-    return self._num_codesteps
 
   def load_seqs(self, start, end):
     """
