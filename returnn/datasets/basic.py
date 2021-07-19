@@ -132,7 +132,6 @@ class Dataset(object):
     self.labels = {}  # type: typing.Dict[str,typing.List[str]]
     self.weights = {}
     self.nbytes = 0
-    self.num_running_chars = 0  # CTC running chars.
     self._num_timesteps = 0
     self._num_codesteps = None  # type: typing.Optional[int]  # Num output frames, could be different from input, seq2seq, ctc.  # nopep8
     self._num_seqs = 0

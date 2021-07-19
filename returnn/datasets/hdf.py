@@ -193,7 +193,6 @@ class HDFDataset(CachedDataset):
         pad_width = self.max_ctc_length - self.ctc_targets.shape[1]
         self.ctc_targets = numpy.pad(self.ctc_targets, ((0, 0), (0, pad_width)), 'constant', constant_values=-1)
         self.ctc_targets = numpy.concatenate((self.ctc_targets, tmp))
-      self.num_running_chars = numpy.sum(self.ctc_targets != -1)
     if 'targets' in fin:
       for name in self.target_keys:
         self.data_dtype[str(name)] = str(fin['targets/data'][name].dtype)
