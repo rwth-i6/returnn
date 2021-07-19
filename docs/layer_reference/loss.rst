@@ -98,7 +98,7 @@ Generic Cross-Entropy Loss
 Mean-L1 Loss
 -----------------------
 
-.. autoclass:: returnn.tf.layers.basic.MeanSquaredError
+.. autoclass:: returnn.tf.layers.basic.MeanL1Loss
     :members:
     :undoc-members:
 
