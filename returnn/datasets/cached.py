@@ -44,6 +44,7 @@ class CachedDataset(Dataset):
     self._tag_idx = {}  # type: typing.Dict[str,int]  # map of tag -> real-seq-idx. call _update_tag_idx
     self.targets = {}
     self.target_keys = []
+    self.timestamps = None
 
   def initialize(self):
     """

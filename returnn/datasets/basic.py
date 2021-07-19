@@ -128,7 +128,6 @@ class Dataset(object):
     # There is probably no use case for combining the two, so avoid potential misconfiguration.
     assert self.partition_epoch == 1 or self.repeat_epoch == 1, (
       "Combining partition_epoch and repeat_epoch is prohibited.")
-    self.timestamps = None
     self.labels = {}  # type: typing.Dict[str,typing.List[str]]
     self.weights = {}
     self._num_timesteps = 0
