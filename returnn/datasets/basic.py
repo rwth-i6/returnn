@@ -731,13 +731,6 @@ class Dataset(object):
     """
     return False
 
-  # noinspection PyMethodMayBeStatic
-  def get_max_ctc_length(self):
-    """
-    :rtype: int
-    """
-    return 0
-
   @classmethod
   def generic_complete_frac(cls, seq_idx, num_seqs):
     """

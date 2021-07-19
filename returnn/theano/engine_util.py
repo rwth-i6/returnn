@@ -24,7 +24,7 @@ def assign_dev_data(device, dataset, batches, load_seqs=True):
   shapes = shapes_for_batches(batches, data_keys=device.used_data_keys, dataset=dataset)
   if shapes is None:
     return False, len(batches)
-  device.alloc_data(shapes=shapes, max_ctc_length=dataset.get_max_ctc_length())
+  device.alloc_data(shapes=shapes)
   offset_slice = 0
 
   for batch in batches:
