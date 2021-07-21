@@ -47,7 +47,7 @@ class HDFDataset(CachedDataset):
     self.file_seq_start = []  # type: typing.List[numpy.ndarray]
     self.data_dtype = {}  # type: typing.Dict[str,str]
     self.data_sparse = {}  # type: typing.Dict[str,bool]
-    self._num_codesteps = None  # type: typing.Optional[int]  # Num output frames, could be different from input, seq2seq, ctc.  # nopep8
+    self._num_codesteps = None  # type: typing.Optional[typing.List[int]]  # accumulated sequence length per target
 
     if files:
       for fn in files:
@@ -143,8 +143,8 @@ class HDFDataset(CachedDataset):
 
     self._num_timesteps += numpy.sum(seq_lengths[:, 0])
     if self._num_codesteps is None:
-      self._num_codesteps = [0 for _ in range(1, len(seq_lengths[0]))]
-    for i in range(1, len(seq_lengths[0])):
+      self._num_codesteps = [0 for _ in range(num_input_keys, len(seq_lengths[0]))]
+    for i in range(num_input_keys, len(seq_lengths[0])):
       self._num_codesteps[i - 1] += numpy.sum(seq_lengths[:, i])
 
     if not self._seq_start:
