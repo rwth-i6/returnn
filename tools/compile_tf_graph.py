@@ -321,15 +321,15 @@ class RecStepByStepLayer(RecLayer):
   def __init__(self, **kwargs):
     kwargs = kwargs.copy()
     kwargs["optimize_move_layers_out"] = False
-    sub_net_dict = kwargs["unit"]
-    assert isinstance(sub_net_dict, dict)
-    for key, layer_dict in list(sub_net_dict.items()):
+    sub_net_cell = kwargs["unit"]
+    assert isinstance(sub_net_cell, _SubnetworkRecCell)
+    for key, layer_dict in list(sub_net_cell.net_dict.items()):
       assert isinstance(layer_dict, dict)
       if layer_dict["class"] == "choice":
         layer_dict = layer_dict.copy()
         layer_dict["class"] = ChoiceStateVarLayer.layer_class
-        sub_net_dict[key] = layer_dict
-    kwargs["unit"] = sub_net_dict
+        sub_net_cell.net_dict[key] = layer_dict
+    kwargs["unit"] = sub_net_cell
     self.state_vars = {}  # type: typing.Dict[str,RecStepByStepLayer.StateVar]
     self.stochastic_var_order = []  # type: typing.List[str]
     super(RecStepByStepLayer, self).__init__(**kwargs)
@@ -461,13 +461,25 @@ class RecStepByStepLayer(RecLayer):
 
   def _get_cell(self, unit, unit_opts=None):
     """
-    :param str|dict[str] unit:
+    Replace the unit by an identical SubnetworkRecCellSingleStep instance
+    Only allows for SubnetworkRecCell, not strings as the super method does
+
+    :param _SubnetworkRecCell unit:
     :param None|dict[str] unit_opts:
     :rtype: _SubnetworkRecCell
     """
-    assert isinstance(unit, dict)
+    assert isinstance(unit, _SubnetworkRecCell)
     assert unit_opts is None
-    return SubnetworkRecCellSingleStep(parent_rec_layer=self, net_dict=unit)
+    single_step_unit = SubnetworkRecCellSingleStep(
+      net_dict=unit.net_dict,
+      source_data=unit.source_data,
+      time_dim_tag=unit.time_dim_tag,
+      rec_layer_name=unit.rec_layer_name,
+      parent_net=unit.parent_net,
+      parent_get_layer=unit.parent_get_layer
+    )
+    single_step_unit.set_parent_layer(self)
+    return single_step_unit
 
   @classmethod
   def get_out_data_from_opts(cls, **kwargs):
