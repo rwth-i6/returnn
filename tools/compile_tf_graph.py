@@ -234,7 +234,6 @@ class RecStepByStepLayer(RecLayer):
       self.var = tf_compat.v1.get_variable(
         name=name, initializer=zero_initializer, validate_shape=False)  # type: tf.Variable
       self.var.set_shape(self.var_data_shape.batch_shape)
-      assert self.var.shape.as_list() == list(self.var_data_shape.batch_shape)
       print("New state var %r: %s, shape %s" % (name, self.var, self.var_data_shape))
       self.final_value = None  # type: typing.Optional[tf.Tensor]
 
