@@ -19,18 +19,14 @@ def generate():
   updater._init_optimizer_classes_dict()
   optimizer_dict = updater._OptimizerClassesDict
 
-
   rst_file = open("optimizer.rst", "w")
   rst_file.write(header_text)
 
   for optimizer_name, optimizer_class in sorted(optimizer_dict.items()):
-
     if not optimizer_name.endswith("optimizer"):
       module = optimizer_class.__module__
       class_name = optimizer_class.__name__
-      if class_name == "creator":
-        continue
-      name = class_name[:-len("Optimizer")]
+      name = class_name[:-len("Optimizer")] if class_name.endswith("Optimizer") else class_name
 
       rst_file.write("\n")
       rst_file.write("%s\n" % name)

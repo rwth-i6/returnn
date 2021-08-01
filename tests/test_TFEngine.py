@@ -199,7 +199,7 @@ def test_DatasetDataProvider():
     data_provider.stop_threads()
 
 
-def test_engine_train():
+def test_engine_train(additional_config=None):
   from returnn.datasets.generating import DummyDataset
   seq_len = 5
   n_data_dim = 2
@@ -218,6 +218,8 @@ def test_engine_train():
     "start_epoch": 1,
     "num_epochs": 2
   })
+  if additional_config:
+    config.update(additional_config)
   _cleanup_old_models(config)
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
@@ -227,31 +229,26 @@ def test_engine_train():
 
 
 def test_engine_train_newbob():
-  from returnn.datasets.generating import DummyDataset
-  seq_len = 5
-  n_data_dim = 2
-  n_classes_dim = 3
-  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
-  train_data.init_seq_order(epoch=1)
-  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
-  cv_data.init_seq_order(epoch=1)
-
-  config = Config()
-  config.update({
-    "model": "%s/model" % _get_tmp_dir(),
-    "num_outputs": n_classes_dim,
-    "num_inputs": n_data_dim,
-    "network": {"output": {"class": "softmax", "loss": "ce"}},
-    "start_epoch": 1,
+  additional_config = {
     "num_epochs": 5,
     "learning_rate_control": "newbob",
-  })
-  _cleanup_old_models(config)
-  engine = Engine(config=config)
-  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
-  engine.train()
+  }
+  test_engine_train(additional_config)
 
-  engine.finalize()
+
+def test_engine_train_optimizer_class():
+  from returnn.tf.updater import NormalizedSGD
+  additional_config = {
+    "optimizer": {"class": NormalizedSGD},
+  }
+  test_engine_train(additional_config)
+
+
+def test_engine_train_keras_optimizer():
+  additional_config = {
+    "optimizer": {"class": "nadam"},
+  }
+  test_engine_train(additional_config)
 
 
 def test_engine_train_new_dataset_pipeline():
