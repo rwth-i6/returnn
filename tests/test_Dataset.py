@@ -6,10 +6,11 @@ from __future__ import print_function
 import sys
 import _setup_test_env  # noqa
 import unittest
+import numpy
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 from returnn.datasets.generating import GeneratingDataset, DummyDataset, DummyDatasetMultipleSequenceLength
 from returnn.engine.batch import Batch
-from returnn.datasets.basic import DatasetSeq
+from returnn.datasets.basic import Dataset
 from returnn.util.basic import NumbersDict
 
 from returnn.util import better_exchook
@@ -318,6 +319,40 @@ def test_task12ax_window():
   assert_equal(list(data2a[1, 1]), list(data1[1]))
   assert_equal(list(data2a[1, 2]), list(data1[2]))
   assert_equal(list(data2a[-1, 2]), [0] * input_dim)  # zero-padded right
+
+
+def test_get_seq_order():
+  dataset = Dataset()
+  num_seqs = 30
+
+  def get_seq_len(i):
+    return i ** 2 % 17  # some dummy lengths
+
+  for seq_ordering in [
+      "default", "default_every_n:5", "sorted", "sorted_reverse", "random:3", "laplace:3", "laplace:.10",
+      "sort_bin_shuffle:3", "sort_bin_shuffle_x2:.10"]:
+
+    dataset.seq_ordering = seq_ordering
+
+    # test full epoch
+    dataset.partition_epoch = 1
+    epoch = 3
+    seq_index = dataset.get_seq_order_for_epoch(epoch, num_seqs, get_seq_len)
+
+    assert isinstance(seq_index, (list, range, numpy.ndarray))
+    assert len(set(seq_index)) == num_seqs  # right number of sequences, no duplicates
+
+    # test partitioned epoch
+    partition_epoch = 4
+    dataset.partition_epoch = partition_epoch
+    all_partitions_seq_index = []
+    for epoch in range(1, partition_epoch + 1):
+      partition_seq_index = dataset.get_seq_order_for_epoch(epoch, num_seqs, get_seq_len)
+      all_partitions_seq_index += list(partition_seq_index)
+
+    # Make sure partitions combined result in full epoch. This tests the random seed of Dataset which should be
+    # fixed across partitions.
+    assert set(all_partitions_seq_index) == set(seq_index)
 
 
 if __name__ == "__main__":
