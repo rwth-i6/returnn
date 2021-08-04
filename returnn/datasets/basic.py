@@ -383,11 +383,10 @@ class Dataset(object):
     if partition_epoch > 1:
       full_epoch = (epoch - 1) // partition_epoch + 1
     assert num_seqs > 0
-    seq_index = list(range(num_seqs))  # type: typing.List[int]  # the real seq idx after sorting
     if self._seq_order_seq_lens_file:
       get_seq_len = self._get_seq_order_seq_lens_by_idx
     if self.seq_ordering == 'default':
-      pass  # Keep order as-is.
+      seq_index = range(num_seqs)
     elif self.seq_ordering.startswith("default_every_n:"):
       # This order is useful if you have "initial_state": "keep_over_epoch",
       # where num == max_seqs, batch_size = inf, max_seq_len = inf, chunking = None.
@@ -396,14 +395,15 @@ class Dataset(object):
       seq_index = numpy.arange(num_seqs // num, dtype="int64").repeat(num)
       for i in range(1, num):
         seq_index[i::num] += i * (num_seqs // num)
-      seq_index = list(seq_index)
     elif self.seq_ordering == 'reverse':
-      seq_index = list(reversed(seq_index))
+      seq_index = range(num_seqs - 1, -1, -1)
     elif self.seq_ordering == 'sorted':
       assert get_seq_len
+      seq_index = list(range(num_seqs))
       seq_index.sort(key=get_seq_len)  # sort by length, starting with shortest
     elif self.seq_ordering == "sorted_reverse":
       assert get_seq_len
+      seq_index = list(range(num_seqs))
       seq_index.sort(key=get_seq_len, reverse=True)  # sort by length, in reverse, starting with longest
     elif self.seq_ordering.startswith('sort_bin_shuffle'):
       # Shuffle seqs, sort by length, and shuffle bins (then shuffle seqs within each bin if sort_bin_shuffle_x2).
@@ -416,6 +416,7 @@ class Dataset(object):
         nth = int(tmp[1])
       rnd_seed = ((full_epoch - 1) // nth + 1) if full_epoch else 1
       rnd = Random(rnd_seed + self.random_seed_offset)
+      seq_index = list(range(num_seqs))
       rnd.shuffle(seq_index)  # Shuffle sequences.
       seq_index.sort(key=get_seq_len)  # Sort by length, starting with shortest.
       if len(tmp) == 0:
@@ -453,6 +454,7 @@ class Dataset(object):
         nth = int(tmp[1])
       rnd_seed = ((full_epoch - 1) // nth + 1) if full_epoch else 1
       rnd = Random(rnd_seed + self.random_seed_offset)
+      seq_index = list(range(num_seqs))
       rnd.shuffle(seq_index)
       out_index = []
       for i in range(bins):
@@ -468,6 +470,7 @@ class Dataset(object):
       nth = int(tmp[1]) if len(tmp) > 1 else 1
       # Keep this deterministic! Use fixed seed.
       rnd_seed = (full_epoch - 1) / nth + 1
+      seq_index = list(range(num_seqs))
       rnd = Random(rnd_seed + self.random_seed_offset)
       rnd.shuffle(seq_index)
     else:
@@ -482,7 +485,7 @@ class Dataset(object):
     if partition_epoch > 1:
       seq_index = self._apply_partition_epoch(seq_index, partition_epoch, epoch)
     if repeat_epoch > 1:
-      seq_index = seq_index * repeat_epoch
+      seq_index = list(seq_index) * repeat_epoch
     if self.seq_tags_filter is not None:
       # Note: This is as generic as possible, but requires that get_all_tags is implemented.
       assert seq_index
