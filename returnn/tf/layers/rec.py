@@ -83,6 +83,7 @@ class RecLayer(_ConcatInputLayer):
   layer_class = "rec"
   recurrent = True
   _default_lstm_unit = "nativelstm"  # TFNativeOp.NativeLstmCell
+  SubnetworkRecCell = None  # type: typing.Type[_SubnetworkRecCell]  # set below
 
   def __init__(self,
                unit="lstm", unit_opts=None,
@@ -338,7 +339,7 @@ class RecLayer(_ConcatInputLayer):
     if isinstance(d.get("unit"), dict):
       sub_net_dict = d.pop("unit")
       assert time_dim_tag  # expect to always have this (also not being inside other rec layer)
-      subnet = _SubnetworkRecCell(
+      subnet = cls.SubnetworkRecCell(
         parent_net=network, parent_get_layer=get_layer,
         source_data=source_data, time_dim_tag=time_dim_tag,
         net_dict=sub_net_dict, rec_layer_name=d["_name"])
@@ -3294,6 +3295,9 @@ class _SubnetworkRecCell(object):
     # we would expect that their time-dim-axis matches the same as from the rec loop.
     for layer in self.output_layers_net.layers.values():
       layer.output.mark_same_time(self.parent_rec_layer.output)
+
+
+RecLayer.SubnetworkRecCell = _SubnetworkRecCell
 
 
 class _TemplateLayer(LayerBase):
