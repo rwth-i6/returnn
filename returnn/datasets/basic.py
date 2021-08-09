@@ -397,14 +397,11 @@ class Dataset(object):
         seq_index[i::num] += i * (num_seqs // num)
     elif self.seq_ordering == 'reverse':
       seq_index = range(num_seqs - 1, -1, -1)
-    elif self.seq_ordering == 'sorted':
+    elif self.seq_ordering in ['sorted', 'sorted_reverse']:
       assert get_seq_len
-      seq_index = list(range(num_seqs))
-      seq_index.sort(key=get_seq_len)  # sort by length, starting with shortest
-    elif self.seq_ordering == "sorted_reverse":
-      assert get_seq_len
-      seq_index = list(range(num_seqs))
-      seq_index.sort(key=get_seq_len, reverse=True)  # sort by length, in reverse, starting with longest
+      reverse = -1 if self.seq_ordering == 'sorted_reverse' else 1
+      seq_lens = [reverse * get_seq_len(i) for i in range(num_seqs)]
+      seq_index = numpy.argsort(seq_lens, kind="stable")
     elif self.seq_ordering.startswith('sort_bin_shuffle'):
       # Shuffle seqs, sort by length, and shuffle bins (then shuffle seqs within each bin if sort_bin_shuffle_x2).
       assert get_seq_len
@@ -415,9 +412,8 @@ class Dataset(object):
       else:
         nth = int(tmp[1])
       rnd_seed = ((full_epoch - 1) // nth + 1) if full_epoch else 1
-      rnd = Random(rnd_seed + self.random_seed_offset)
-      seq_index = list(range(num_seqs))
-      rnd.shuffle(seq_index)  # Shuffle sequences.
+      numpy.random.seed(rnd_seed)
+      seq_index = numpy.random.permutation(num_seqs).tolist()  # type: typing.List[int]
       seq_index.sort(key=get_seq_len)  # Sort by length, starting with shortest.
       if len(tmp) == 0:
         bins = 2
@@ -426,8 +422,7 @@ class Dataset(object):
           bins = max(num_seqs // int(tmp[0][1:]), 2)
         else:  # the number of bins
           bins = int(tmp[0])
-      bin_ids = list(range(bins))
-      rnd.shuffle(bin_ids)  # Shuffle bins.
+      bin_ids = numpy.random.permutation(bins)  # Shuffle bins.
       out_index = []
       for i in bin_ids:
         if i == bins - 1:
@@ -435,9 +430,9 @@ class Dataset(object):
         else:
           part = seq_index[i * len(seq_index) // bins:(i + 1) * len(seq_index) // bins][:]
         if self.seq_ordering.startswith('sort_bin_shuffle_x2'):
-          rnd.shuffle(part)  # Shuffle within the bin.
-        out_index += part
-      seq_index = out_index
+          numpy.random.shuffle(part)  # Shuffle within the bin.
+        out_index.append(part)
+      seq_index = numpy.concatenate(out_index)
     elif self.seq_ordering.startswith('laplace'):
       assert get_seq_len
       tmp = self.seq_ordering.split(':')[1:]
@@ -453,15 +448,14 @@ class Dataset(object):
       else:
         nth = int(tmp[1])
       rnd_seed = ((full_epoch - 1) // nth + 1) if full_epoch else 1
-      rnd = Random(rnd_seed + self.random_seed_offset)
-      seq_index = list(range(num_seqs))
-      rnd.shuffle(seq_index)
+      numpy.random.seed(rnd_seed)
+      seq_index = numpy.random.permutation(num_seqs)  # type: numpy.ndarray
       out_index = []
       for i in range(bins):
         if i == bins - 1:
-          part = seq_index[i * len(seq_index) // bins:][:]
+          part = seq_index[i * len(seq_index) // bins:].tolist()
         else:
-          part = seq_index[i * len(seq_index) // bins:(i + 1) * len(seq_index) // bins][:]
+          part = seq_index[i * len(seq_index) // bins:(i + 1) * len(seq_index) // bins].tolist()
         part.sort(key=get_seq_len, reverse=(i % 2 == 1))
         out_index += part
       seq_index = out_index
@@ -469,10 +463,9 @@ class Dataset(object):
       tmp = self.seq_ordering.split(':')
       nth = int(tmp[1]) if len(tmp) > 1 else 1
       # Keep this deterministic! Use fixed seed.
-      rnd_seed = (full_epoch - 1) / nth + 1
-      seq_index = list(range(num_seqs))
-      rnd = Random(rnd_seed + self.random_seed_offset)
-      rnd.shuffle(seq_index)
+      rnd_seed = (full_epoch - 1) // nth + 1
+      numpy.random.seed(rnd_seed)
+      seq_index = numpy.random.permutation(num_seqs)
     else:
       assert False, "invalid batching specified: " + self.seq_ordering
     if self.unique_seq_tags:
