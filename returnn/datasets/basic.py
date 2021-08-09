@@ -377,14 +377,10 @@ class Dataset(object):
     """
     partition_epoch = self.partition_epoch or 1
     repeat_epoch = self.repeat_epoch or 1
-    if not epoch:
-      epoch = 1
-    full_epoch = epoch
-    if partition_epoch > 1:
-      full_epoch = (epoch - 1) // partition_epoch + 1
     assert num_seqs > 0
     if self._seq_order_seq_lens_file:
       get_seq_len = self._get_seq_order_seq_lens_by_idx
+
     if self.seq_ordering == 'default':
       seq_index = range(num_seqs)
     elif self.seq_ordering.startswith("default_every_n:"):
@@ -406,7 +402,7 @@ class Dataset(object):
       tmp = self.seq_ordering.split(':')
       nth = int(tmp[1]) if len(tmp) > 1 else 1
       # Keep this deterministic! Use fixed seed.
-      rnd_seed = (full_epoch - 1) // nth + 1
+      rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
       numpy.random.seed(rnd_seed)
       seq_index = numpy.random.permutation(num_seqs)
     elif self.seq_ordering.startswith('sort_bin_shuffle'):
@@ -418,7 +414,7 @@ class Dataset(object):
         nth = 1
       else:
         nth = int(tmp[1])
-      rnd_seed = ((full_epoch - 1) // nth + 1) if full_epoch else 1
+      rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
       numpy.random.seed(rnd_seed)
       seq_index = numpy.random.permutation(num_seqs).tolist()  # type: typing.List[int]
       seq_index.sort(key=get_seq_len)  # Sort by length, starting with shortest.
@@ -454,7 +450,7 @@ class Dataset(object):
         nth = 1
       else:
         nth = int(tmp[1])
-      rnd_seed = ((full_epoch - 1) // nth + 1) if full_epoch else 1
+      rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
       numpy.random.seed(rnd_seed)
       seq_index = numpy.random.permutation(num_seqs)  # type: numpy.ndarray
       out_index = []
@@ -468,6 +464,7 @@ class Dataset(object):
       seq_index = out_index
     else:
       assert False, "invalid batching specified: " + self.seq_ordering
+
     if self.unique_seq_tags:
       # Note: This is as generic as possible, but requires that get_all_tags is implemented.
       all_seq_tags = self.get_all_tags()
@@ -513,16 +510,19 @@ class Dataset(object):
 
     return seq_index
 
-  def _get_random_seed_for_epoch(self, epoch):
+  def _get_random_seed_for_epoch(self, epoch, num_epochs_fixed=1):
     """
     :param int|None epoch:
+    :param int num_epochs_fixed: keep random seed fixed for n subsequent epochs
     :rtype: int
     """
     partition_epoch = self.partition_epoch or 1
-    full_epoch = epoch or 1
+    seed = epoch or 1
     if partition_epoch > 1:
-      full_epoch = (full_epoch - 1) // partition_epoch + 1
-    return full_epoch + self.random_seed_offset
+      seed = (seed - 1) // partition_epoch + 1  # taking partitions requires constant seed during full epoch
+    if num_epochs_fixed > 1:
+      seed = (seed - 1) // num_epochs_fixed + 1
+    return seed + self.random_seed_offset
 
   def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
