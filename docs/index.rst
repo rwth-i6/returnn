@@ -123,6 +123,7 @@ Some recent development changelog can be seen `here <https://github.com/rwth-i6/
     advanced/debugging.rst
     advanced/profiling.rst
     advanced/deterministic_training.rst
+    advanced/test_suite.rst
 
 .. toctree::
     :hidden:
