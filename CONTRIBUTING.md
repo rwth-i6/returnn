@@ -18,7 +18,7 @@ General rules when contributing to the code of RETURNN:
   Our code style is extended by a lot of common Python conventions.
   (If you are not an expert in Python, you will likely not know about PEP8 or standard Python conventions.
    In that case, I very much recommend to use an IDE like PyCharm which will help you keeping these standards.)
-* Make sure all tests pass.
+* Make sure all [tests](https://returnn.readthedocs.io/en/latest/advanced/test_suite.html) pass.
 * At the time being, we want to support earlier versions of TF 1
   (consider at least TF 1.8, but maybe even TF 1.4)
   and also the most recent TF versions.
