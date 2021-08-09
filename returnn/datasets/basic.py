@@ -402,6 +402,13 @@ class Dataset(object):
       reverse = -1 if self.seq_ordering == 'sorted_reverse' else 1
       seq_lens = [reverse * get_seq_len(i) for i in range(num_seqs)]
       seq_index = numpy.argsort(seq_lens, kind="stable")
+    elif self.seq_ordering.startswith('random'):
+      tmp = self.seq_ordering.split(':')
+      nth = int(tmp[1]) if len(tmp) > 1 else 1
+      # Keep this deterministic! Use fixed seed.
+      rnd_seed = (full_epoch - 1) // nth + 1
+      numpy.random.seed(rnd_seed)
+      seq_index = numpy.random.permutation(num_seqs)
     elif self.seq_ordering.startswith('sort_bin_shuffle'):
       # Shuffle seqs, sort by length, and shuffle bins (then shuffle seqs within each bin if sort_bin_shuffle_x2).
       assert get_seq_len
@@ -459,13 +466,6 @@ class Dataset(object):
         part.sort(key=get_seq_len, reverse=(i % 2 == 1))
         out_index += part
       seq_index = out_index
-    elif self.seq_ordering.startswith('random'):
-      tmp = self.seq_ordering.split(':')
-      nth = int(tmp[1]) if len(tmp) > 1 else 1
-      # Keep this deterministic! Use fixed seed.
-      rnd_seed = (full_epoch - 1) // nth + 1
-      numpy.random.seed(rnd_seed)
-      seq_index = numpy.random.permutation(num_seqs)
     else:
       assert False, "invalid batching specified: " + self.seq_ordering
     if self.unique_seq_tags:
