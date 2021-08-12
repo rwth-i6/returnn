@@ -2560,8 +2560,6 @@ class _SubnetworkRecCell(object):
         rec_layer.output.size_placeholder = output_data.size_placeholder.copy()
         output = output_data.placeholder
       else:
-        if rec_layer.output.size_placeholder is None:
-          rec_layer.output.size_placeholder = {}
         assert seq_len is not None
         rec_layer.output.size_placeholder[0] = seq_len
         assert not self.net.layers["output"].get_search_choices()
@@ -7002,8 +7000,6 @@ class MaskedComputationLayer(LayerBase):
       if not network.is_inside_rec_layer() and source:
         source_data = source.output.copy_template().copy_as_time_major()
         # Create own dummy time, to make sure we have some own custom.
-        if source_data.size_placeholder is None:
-          source_data.size_placeholder = {}
         source_data.size_placeholder[0] = tf_compat.v1.placeholder(tf.int32, shape=[None], name="dummy_time")
         source = WrappedInternalLayer(
           base_layer=source, network=source.network, name=source.name,
@@ -7028,8 +7024,6 @@ class MaskedComputationLayer(LayerBase):
       if not network.is_inside_rec_layer():
         # noinspection PyShadowingNames
         source_data = layer.output.copy_template().copy_as_time_major()
-        if source_data.size_placeholder is None:
-          source_data.size_placeholder = {}
         source_data.size_placeholder[0] = source.output.get_sequence_lengths()
         layer = WrappedInternalLayer(
           base_layer=layer, network=layer.network, name=layer.name,
@@ -8412,14 +8406,13 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
     :rtype: Data
     """
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
-    data = data.copy_template().copy_as_batch_major()
-    data.batch_dim_axis = None
+    data = data.copy_template().copy_as_batch_major().copy_template_excluding_axis(0)  # without batch dim
     data.feature_dim_axis = NotSpecified
     data.dim = n_out
     if data.have_time_axis():
       data.time_dim_axis = 0
       data.shape = (None, None, n_out)
-      if data.size_placeholder and 0 in data.size_placeholder:
+      if data.size_placeholder:
         data.size_placeholder[1] = data.size_placeholder[0]
     else:
       # length will be ``network.get_rec_step_index() + 1``.

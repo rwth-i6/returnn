@@ -127,7 +127,7 @@ def test_PadLayer_feature():
     in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_time, n_in))
     out_v = session.run(out_t, feed_dict={net.extern_data.data["data"].placeholder: in_v})
     assert isinstance(out_v, numpy.ndarray)
-    assert out_v.shape == (n_batch, n_time, n_in + sum(padding)) 
+    assert out_v.shape == (n_batch, n_time, n_in + sum(padding))
     assert (out_v[:, :, 0] == out_v[:, :, padding[0]]).all()
     assert (out_v[:, :, -1] == out_v[:, :, -1 - padding[1]]).all()
     numpy.testing.assert_array_equal(in_v, out_v[:, :,  padding[0]:(-padding[1] or None)])
@@ -749,7 +749,7 @@ def test_CombineLayer_two_time_dims():
     in1_np = rnd.normal(size=(n_batch, n_time1, n_dim)).astype("float32")
     in2_np = rnd.normal(size=(n_time2, n_batch, n_dim)).astype("float32")
     out_np, out_sizes_np = session.run(
-      fetches=(output.placeholder, output.size_placeholder),
+      fetches=(output.placeholder, output.size_placeholder.as_dict()),
       feed_dict={
         in0.placeholder: in0_np, in0.size_placeholder[0]: time1_np, in0.size_placeholder[1]: time2_np,
         in1.placeholder: in1_np, in1.size_placeholder[0]: time1_np,
@@ -803,7 +803,7 @@ def test_CombineLayer_two_time_dims_first_not_most_generic():
     in1_np = rnd.normal(size=(n_batch, n_time1, n_dim)).astype("float32")
     in2_np = rnd.normal(size=(n_time2, n_batch, n_dim)).astype("float32")
     out_np, out_sizes_np = session.run(
-      fetches=(output.placeholder, output.size_placeholder),
+      fetches=(output.placeholder, output.size_placeholder.as_dict()),
       feed_dict={
         in0.placeholder: in0_np, in0.size_placeholder[0]: time1_np, in0.size_placeholder[1]: time2_np,
         in1.placeholder: in1_np, in1.size_placeholder[0]: time1_np,
@@ -857,7 +857,7 @@ def test_CombineLayer_two_time_dims_first_not_most_generic_with_n_out():
     in1_np = rnd.normal(size=(n_batch, n_time1, n_dim)).astype("float32")
     in2_np = rnd.normal(size=(n_time2, n_batch, n_dim)).astype("float32")
     out_np, out_sizes_np = session.run(
-      fetches=(output.placeholder, output.size_placeholder),
+      fetches=(output.placeholder, output.size_placeholder.as_dict()),
       feed_dict={
         in0.placeholder: in0_np, in0.size_placeholder[0]: time1_np, in0.size_placeholder[1]: time2_np,
         in1.placeholder: in1_np, in1.size_placeholder[0]: time1_np,
@@ -1431,7 +1431,7 @@ def _check_MergeDimsLayer(session, in_data_opts, in_static_shape, opts, out_data
   assert_equal(out_data.shape, out_data_shape)
   layer = MergeDimsLayer(output=out_data, **opts)
   assert_equal(layer.output.shape, out_data_shape)
-  out_np, size_placeholder = session.run([layer.output.placeholder, layer.output.size_placeholder])
+  out_np, size_placeholder = session.run([layer.output.placeholder, layer.output.size_placeholder.as_dict()])
   print("output:", out_data)
   assert_equal(out_np.shape, out_static_shape)
 
@@ -1954,7 +1954,7 @@ def _run_repeat_layer(session, net, input_data_layer):
   print(repeat_layer.output)
 
   output, size_placeholder = session.run(
-    [repeat_layer.output.placeholder, repeat_layer.output.size_placeholder],
+    [repeat_layer.output.placeholder, repeat_layer.output.size_placeholder.as_dict()],
     feed_dict=make_feed_dict(net.extern_data, n_batch=2))
   assert numpy.all(numpy.equal(size_placeholder[0], numpy.asarray([19, 11])))
   assert numpy.all(numpy.equal(output.shape, numpy.asarray([2, 19, 5])))
@@ -2451,7 +2451,7 @@ def test_GatherLayer():
       output=GatherLayer.get_out_data_from_opts(
         name="gather", sources=[values], position=position, axis="static:0"))
     layer.output.sanity_check()
-    out_seqs, size = session.run([layer.output.placeholder, layer.output.size_placeholder])
+    out_seqs, size = session.run([layer.output.placeholder, layer.output.size_placeholder.as_dict()])
     assert isinstance(out_seqs, numpy.ndarray)
 
     # test shapes
