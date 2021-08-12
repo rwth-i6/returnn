@@ -997,7 +997,6 @@ class TFNetwork(object):
     assert layer.output
     if layer.output.placeholder is not None:
       layer.output.placeholder.set_shape(layer.output.batch_shape)
-      assert layer.output.size_placeholder is not None
     return layer
 
   @contextlib.contextmanager
