@@ -1015,6 +1015,7 @@ class Data(object):
                available_for_inference=True,
                auto_create_placeholders=False,
                vocab=None,
+               dimension_tags=None,
                same_dim_tags_as=None,
                batch=None,
                beam=None):
@@ -1038,6 +1039,7 @@ class Data(object):
     :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
     :param bool auto_create_placeholders: This will create a tf.placeholder.
     :param str|dict[str]|GeneratingDataset.Vocabulary|None vocab:
+    :param dict[int,DimensionTag]|None dimension_tags: explicitly specified dimension tags per axis (with batch)
     :param dict[int|str,DimensionTag]|None same_dim_tags_as: will mark our dimension tags to be the same
     :param BatchInfo|None batch:
     :param SearchBeam|None beam: the batch-dim could be extended by a beam-size,
@@ -1151,6 +1153,9 @@ class Data(object):
       assert self.sparse, "%s should represent indices of %s" % (self, vocab)
       assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
     self.vocab = vocab  # type: typing.Optional[Vocabulary]
+    if not dimension_tags:
+      dimension_tags = {}
+    self._dimension_tags = dimension_tags
     if same_dim_tags_as:
       # Note that this currently does not work as intended at template construction time...
       for _axis, _dim_tag in sorted(same_dim_tags_as.items()):
@@ -1221,6 +1226,9 @@ class Data(object):
         assert dyn_size.dtype in (tf.int32, tf.int64)
         assert dyn_size.shape.ndims == 1, (
           "%s: all size_placeholder entries should have shape [B], but got: %r" % (self, self.size_placeholder))
+    for axis in self._dimension_tags.keys():
+      assert 0 <= axis < self.batch_ndim
+      self.get_dim_tag(axis)  # this implies sanity checks internally
     if not ignore_placeholder and self.placeholder is not None:
       # Note: We could just call self.placeholder.set_shape.
       # However, we are more explicit. We assume that the placeholder has already a known shape, and error otherwise.
@@ -3018,6 +3026,22 @@ class Data(object):
     :param int axis: counted with batch-dim
     :rtype: DimensionTag
     """
+    if axis in self._dimension_tags:
+      existing_dim_tag = self._dimension_tags[axis]
+      # Some sanity check
+      if existing_dim_tag.kind == DimensionTag.Types.Batch:
+        assert axis == self.batch_dim_axis, "%s: invalid %s" % (self, existing_dim_tag)
+        return existing_dim_tag  # return right away. further checks will assume not batch
+      assert axis != self.batch_dim_axis, existing_dim_tag
+      if existing_dim_tag.kind == DimensionTag.Types.Feature:
+        assert axis == self.feature_dim_axis, "%s: invalid %s" % (self, existing_dim_tag)
+      axis_wo_b = self.get_batch_axis_excluding_batch(axis)
+      dyn_size = self.size_placeholder.get(axis_wo_b) if self.size_placeholder else None
+      if dyn_size is not None:
+        tag = DimensionTag.get_tag_from_size_tensor(dyn_size)
+        if tag:
+          assert tag.same_base_id == existing_dim_tag.same_base_id, "%s: %s != %s" % (self, tag, existing_dim_tag)
+      return existing_dim_tag
     name = self.get_full_name()
     if axis == self.batch_dim_axis:
       return DimensionTag(
