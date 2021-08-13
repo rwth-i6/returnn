@@ -2556,6 +2556,7 @@ class _SubnetworkRecCell(object):
       if output_layer:
         assert isinstance(output_layer, LayerBase)
         output_data = output_layer.output.copy_as_time_major()
+        assert 0 in output_data.size_placeholder
         rec_layer.output.size_placeholder = output_data.size_placeholder.copy()
         output = output_data.placeholder
       else:
