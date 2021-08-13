@@ -1570,9 +1570,16 @@ class _SubnetworkRecCell(object):
     for layer_name in sorted(needed_outputs) + sorted(self.prev_layers_needed):
       if layer_name in self.input_layers_moved_out + self.output_layers_moved_out:
         continue
-      get_layer(layer_name)
+      layer = get_layer(layer_name)
       if '/' not in layer_name:  # sub-layers are not in self.net
         assert layer_name in self.net.layers
+      if layer_name in prev_layers:
+        prev_layer = prev_layers[layer_name]
+        assert layer.output.batch_shape == prev_layer.output.batch_shape
+        assert layer.output.batch_dim_axis == prev_layer.output.batch_dim_axis
+        assert sorted(layer.output.size_placeholder.keys()) == sorted(prev_layer.output.size_placeholder.keys())
+        for i in layer.output.size_placeholder:
+          assert layer.output.size_placeholder[i] is prev_layer.output.size_placeholder[i]
 
   def get_prev_template_layer(self, layer_name):
     """
@@ -3356,8 +3363,6 @@ class _TemplateLayer(LayerBase):
     assert self.is_prev_time_frame or self.is_data_template
     self.layer_class = ":%s:%s" % (template_type, layer_class.layer_class)
     self.output = output
-    if not self.output.size_placeholder:
-      self.output.size_placeholder = {}
     self.layer_class_type = layer_class
     self.kwargs = kwargs
     self.kwargs["output"] = output
@@ -3403,6 +3408,12 @@ class _TemplateLayer(LayerBase):
     :return: new _TemplateLayer
     :rtype: _TemplateLayer
     """
+    # Note: We assume that any dynamic sequence lengths are not changing per loop frame,
+    # ie. that we can safely copy size_placeholder from the last frame.
+    # However, this might not always be correct, e.g. for SliceNdLayer,
+    # where you might get different sequence lengths each frame.
+    # This is currently not supported.
+    # We check this consistency later in RecLayer _construct.
     layer = _TemplateLayer(network=self.network, cell=self._cell, name="prev:%s" % self.name)
     layer._template_base = self
     layer.dependencies = self.dependencies
@@ -3412,7 +3423,6 @@ class _TemplateLayer(LayerBase):
       layer.output.placeholder = prev_output
       layer.output.placeholder.set_shape(tf.TensorShape(layer.output.batch_shape))
       assert layer.output.placeholder.dtype is tf.as_dtype(layer.output.dtype)
-      layer.output.size_placeholder = {}  # must be set
     if rec_vars_prev_outputs is not None:
       layer.rec_vars_outputs = rec_vars_prev_outputs
     if layer.output.beam:
@@ -3426,6 +3436,14 @@ class _TemplateLayer(LayerBase):
       if rec_vars_prev_outputs:
         layer.search_choices.set_beam_from_own_rec()
       assert layer.output.beam and layer.output.beam.beam_size == self.search_choices.beam_size
+    # Note: When the sanity check fails because of missing dynamic sequence length information,
+    # then the layer might dynamically construct a new sequence length, such as ConvLayer etc
+    # (https://github.com/rwth-i6/returnn/wiki/Layers-which-introduce-new-dynamic-sequence-lengths).
+    # In case this seq len is different per frame as mentioned in the comment above,
+    # this is a problem and not supported currently.
+    # In case the seq len is the same always, it just means that we did not fix the specific layer implementation yet.
+    # This is work-in-progress.
+    layer.output.sanity_check()
     return layer
 
   def _get_cell(self):
