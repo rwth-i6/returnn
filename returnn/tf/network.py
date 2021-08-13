@@ -2217,7 +2217,7 @@ class TFNetwork(object):
     """
     :param bool consider_global_config: if no config is set, check for global config
     :param bool fallback_dummy_config: if no config, return a new empty Config, otherwise return None
-    :rtype: Config.Config|None
+    :rtype: returnn.config.Config|None
     """
     from returnn.config import Config, get_global_config
     if self._config:
