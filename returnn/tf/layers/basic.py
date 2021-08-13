@@ -3817,10 +3817,10 @@ class ConvLayer(_ConcatInputLayer):
     :param int input_expand_dims: number of dynamic dims to add to the input
     :param bool input_add_feature_dim: will add a dim at the end and use input-feature-dim == 1,
       and use the original input feature-dim as a spatial dim.
-    :param bool auto_use_channel_first: convert the input to NCHW or not
     :param None|int input_split_feature_dim: if set, like input_add_feature_dim it will add a new feature dim
       which is of value input_split_feature_dim, and the original input feature dim
       will be divided by input_split_feature_dim, thus it must be a multiple of that value.
+    :param bool auto_use_channel_first: convert the input to NCHW or not
     :param bool|NotSpecified with_bias: if True, will add a bias to the output features. False by default
     :param None|str activation: if set, will apply this function at the end
     :param LayerBase|None filter: if given, will not create an own parameter, but use this as the filter
@@ -3844,16 +3844,11 @@ class ConvLayer(_ConcatInputLayer):
       dilation_rate = list(dilation_rate)
     assert len(dilation_rate) == len(filter_size)
     assert not self.input_data.sparse
-    input_data = self.input_data.copy_as_batch_major()
-    if input_expand_dims:
-      for i in range(input_expand_dims):
-        input_data = input_data.copy_add_spatial_dim()
-    if input_split_feature_dim:
-      # Split the feature dimension.
-      input_data = input_data.copy_split_feature_dim(input_split_feature_dim)
-    if input_add_feature_dim:
-      # Add a feature dimension; any other static dims will be used as dynamic dims below.
-      input_data = input_data.copy_add_feature_dim()
+    input_data = self._transform_input(
+      self.input_data,
+      input_expand_dims=input_expand_dims,
+      input_split_feature_dim=input_split_feature_dim,
+      input_add_feature_dim=input_add_feature_dim)
     if self.output.is_batch_feature_major:
       input_data = input_data.copy_as_batch_feature_major()
     else:
@@ -3959,6 +3954,30 @@ class ConvLayer(_ConcatInputLayer):
         tag.set_tag_on_size_tensor(size)
 
   @classmethod
+  def _transform_input(cls, input_data, input_expand_dims, input_split_feature_dim, input_add_feature_dim):
+    """
+    :param Data input_data:
+    :param int input_expand_dims: number of dynamic dims to add to the input
+    :param bool input_add_feature_dim: will add a dim at the end and use input-feature-dim == 1,
+      and use the original input feature-dim as a spatial dim.
+    :param None|int input_split_feature_dim: if set, like input_add_feature_dim it will add a new feature dim
+      which is of value input_split_feature_dim, and the original input feature dim
+      will be divided by input_split_feature_dim, thus it must be a multiple of that value.
+    :rtype: Data
+    """
+    input_data = input_data.copy_as_batch_major()
+    if input_expand_dims:
+      for i in range(input_expand_dims):
+        input_data = input_data.copy_add_spatial_dim()
+    if input_split_feature_dim:
+      # Split the feature dimension.
+      input_data = input_data.copy_split_feature_dim(input_split_feature_dim)
+    if input_add_feature_dim:
+      # Add a feature dimension; any other static dims will be used as dynamic dims below.
+      input_data = input_data.copy_add_feature_dim()
+    return input_data
+
+  @classmethod
   def calc_out_dim(cls, in_dim, filter_size, stride, padding, dilation_rate=1):
     """
     :param int|tf.Tensor|T in_dim: dimension in some axis
@@ -3997,7 +4016,7 @@ class ConvLayer(_ConcatInputLayer):
                               input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None,
                               auto_use_channel_first=False,
                               **kwargs):
-    data = get_concat_sources_data_template(sources)
+    input_data = get_concat_sources_data_template(sources)
     shape = [None] * len(filter_size) + [n_out]
     if isinstance(strides, int):
       strides = [strides] * len(filter_size)
@@ -4012,19 +4031,23 @@ class ConvLayer(_ConcatInputLayer):
       dilation_rate = list(dilation_rate)
     assert len(dilation_rate) == len(filter_size)
     padding = padding.upper()
-    if input_expand_dims == 0 and not input_add_feature_dim and not input_split_feature_dim:
-      # Be relaxed about incorrect input data. Throw errors later. This can also work during template construction.
-      if len(data.get_spatial_axes()) >= len(filter_size):
-        # Maybe we have a chance to correctly define the output shapes.
-        index_shift = data.get_spatial_axes()[0]
-        for i in range(len(filter_size)):
-          if data.shape[i + index_shift] is not None:
-            shape[i] = cls.calc_out_dim(
-              in_dim=data.shape[i + index_shift],
-              filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
+    input_data = cls._transform_input(
+      input_data,
+      input_expand_dims=input_expand_dims,
+      input_split_feature_dim=input_split_feature_dim,
+      input_add_feature_dim=input_add_feature_dim)
+    # Be relaxed about incorrect input data. Throw errors later. This can also work during template construction.
+    if len(input_data.get_spatial_axes()) >= len(filter_size):
+      # Maybe we have a chance to correctly define the output shapes.
+      index_shift = input_data.get_spatial_axes()[0]
+      for i in range(len(filter_size)):
+        if input_data.shape[i + index_shift] is not None:
+          shape[i] = cls.calc_out_dim(
+            in_dim=input_data.shape[i + index_shift],
+            filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
     feature_dim_axis = NotSpecified
     # Swap the dims if the input dim order doesn't fit the flag auto_use_channel_first.
-    if tf_util.is_gpu_available_in_session() and (auto_use_channel_first or data.is_batch_feature_major):
+    if tf_util.is_gpu_available_in_session() and (auto_use_channel_first or input_data.is_batch_feature_major):
       feature_dim_axis = 1
       shape = shape[-1:] + shape[:-1]
     return {
