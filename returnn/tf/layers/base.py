@@ -1428,12 +1428,22 @@ class LayerBase(object):
           zeroed_src_shape = [
             zeroed_src_shape[i] for i in range(src_output.batch_ndim)]  # type: typing.List[typing.Union[tf.Tensor,int]]
         else:
-          zeroed_src_shape = [(d if (d is not None) else 1) for d in src_output.batch_shape]
+          zeroed_src_shape = []
+          for i, d in enumerate(src_output.batch_shape):
+            if d is None:
+              if src_output.has_dynamic_size(i):
+                d = tf.reduce_max(src_output.get_dynamic_size(i))
+            if d is None:
+              d = 1  # fallback dummy
+            zeroed_src_shape.append(d)
         if src_output.batch_dim_axis is not None:
           zeroed_src_shape[src_output.batch_dim_axis] = batch_dim
+        if not src_output.beam and output.beam:
+          src_output = src_output.copy_extend_with_beam(output.beam)  # potentially for seq lengths
         src_output.placeholder = tf.zeros(
           zeroed_src_shape, dtype=src_output.dtype,
           name="init_%s_zeros" % tf_util.get_valid_scope_name_from_str(src.name))
+        src_output.name += "_zeroed"
         src_output.sanity_check()
         if rec_layer.network.get_config().bool("debug_runtime_sanity_checks", False):
           with tf.name_scope(tf_util.get_valid_scope_name_from_str(src.name + "_zeroed")):
