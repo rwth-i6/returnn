@@ -1579,8 +1579,8 @@ class _SubnetworkRecCell(object):
         assert layer.output.batch_shape == prev_layer.output.batch_shape
         assert layer.output.batch_dim_axis == prev_layer.output.batch_dim_axis
         assert sorted(layer.output.size_placeholder.keys()) == sorted(prev_layer.output.size_placeholder.keys())
-        for i in layer.output.size_placeholder:
-          assert layer.output.size_placeholder[i] is prev_layer.output.size_placeholder[i]
+        for i in range(len(layer.output.size_placeholder)):
+          assert layer.output.get_size_dim_tag(i) == prev_layer.output.get_size_dim_tag(i)
 
   def get_prev_template_layer(self, layer_name):
     """
@@ -6649,9 +6649,10 @@ class EditDistanceTableLayer(LayerBase):
     if blank_idx is not None:
       dim = max(dim, blank_idx + 1)
     assert target_data.sparse and source_data.dim == dim
-    target_seq_len = target_data.get_sequence_lengths()
-    with tf_util.same_control_flow_ctx(target_seq_len):
-      seq_len = target_seq_len + 1
+    seq_len = tf_util.new_seq_len(
+      func=tf_util.simplify_add, key=tf_util.simplify_add,
+      dim_tag_desc="edit_dist_table:%s" % name,
+      a=target_data.get_sequence_lengths(), b=1)
     return Data(
       name="%s_output" % name, shape=(None, None) if source_data.have_time_axis() else (None,),
       size_placeholder={0: seq_len},

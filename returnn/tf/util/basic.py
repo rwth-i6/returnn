@@ -4455,6 +4455,69 @@ def copy_tensor(x):
     return tf.add(x, tf.constant(0, dtype=x.dtype, name="dummy_zero"), name="copy")
 
 
+def new_seq_len(func, key, dim_tag_desc, **kwargs):
+  """
+  This function is a helper to makes sure that we do not recompute a sequence length multiple times,
+  and also that it is computed in the right control flow context.
+  Note that func likely should use the simplify_... family of functions.
+
+  :param func: **kwargs -> tf.Tensor, which calculates the new sequence length
+  :param key: anything which will be used as part of the key for TensorCachedComputation. maybe a string
+  :param str dim_tag_desc: description for the new DimensionTag
+  :param kwargs: for func
+  :return: the new sequence length, calculated by func(**kwargs)
+  :rtype: tf.Tensor
+  """
+  from .data import DimensionTag
+
+  def _get_main_seq_len():
+    for _, v in sorted(kwargs.items()):
+      tag = DimensionTag.get_tag_from_size_tensor(v)
+      if tag and tag.dyn_size is not None:
+        return v
+    raise Exception("Not expected to not get any seq len. %s, %s, %s" % (func, key, kwargs))
+
+  def _maybe_to_base_seq_len(v):
+    if not isinstance(v, tf.Tensor):
+      return v
+    tag = DimensionTag.get_tag_from_size_tensor(v)
+    if tag and tag.dyn_size is not None:
+      return tag.dyn_size
+    return v
+
+  in_seq_len = _get_main_seq_len()
+  base_in_seq_len = _maybe_to_base_seq_len(in_seq_len)
+  base_kwargs = {k: _maybe_to_base_seq_len(v) for (k, v) in kwargs.items()}
+  base_cache_key = (key, tuple(sorted(base_kwargs.items())))
+  cache_key = (key, tuple(sorted(kwargs.items())))
+  kwargs_tensors = [v for (_, v) in sorted(kwargs.items()) if isinstance(v, tf.Tensor)]
+  base_kwargs_tensors = [v for (_, v) in sorted(base_kwargs.items()) if isinstance(v, tf.Tensor)]
+
+  cache = TensorCachedComputation(base_in_seq_len, key=base_cache_key)
+  if cache.has_cache():
+    base_out_seq_len = cache.get_cache()
+    base_tag = DimensionTag.get_tag_from_size_tensor(base_out_seq_len)
+    assert base_tag
+  else:
+    with same_control_flow_ctx(base_kwargs_tensors):
+      base_out_seq_len = func(**base_kwargs)
+    cache.set_cache(base_out_seq_len)
+    base_tag = DimensionTag(description=dim_tag_desc, kind=DimensionTag.Types.Spatial)
+    base_tag.set_tag_on_size_tensor(base_out_seq_len)
+
+  cache = TensorCachedComputation(in_seq_len, key=cache_key)
+  if cache.has_cache():
+    out_seq_len = cache.get_cache()
+    base_tag_ = DimensionTag.get_tag_from_size_tensor(out_seq_len)
+    assert base_tag_ is base_tag
+  else:
+    with same_control_flow_ctx(kwargs_tensors):
+      out_seq_len = func(**kwargs)
+    cache.set_cache(out_seq_len)
+    base_tag.set_tag_on_size_tensor(out_seq_len)
+  return out_seq_len
+
+
 def smoothing_cross_entropy(logits,
                             labels,
                             label_smoothing,
