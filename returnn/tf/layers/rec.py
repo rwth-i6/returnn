@@ -15,6 +15,7 @@ except ImportError:
 from returnn.tf.network import LayerNotFound
 from .basic import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template, Loss
 from returnn.tf.util.basic import Data, DimensionTag, SearchBeam, reuse_name_scope, get_random_seed, select_src_beams
+from returnn.tf.util import basic as tf_util
 from returnn.util.basic import NotSpecified
 from returnn.log import log
 
@@ -6084,7 +6085,6 @@ class SelfAttentionLayer(_ConcatInputLayer):
       self._assign_masked_comp_state_transform_func_callback(k, v, mask)
     weights = tf.nn.softmax(energy, name="weights")  # (batch,heads,num_queries|time,num_keys|time)
     if attention_dropout:
-      import returnn.tf.util.basic as tf_util
       weights = self.network.cond_on_train(
         fn_train=lambda: tf_util.dropout(
           weights,
@@ -6581,7 +6581,6 @@ class EditDistanceTableLayer(LayerBase):
     self.rec_vars_outputs["state"] = self._next_row
     self._reduce_out = None  # see get_sub_layer
     self.output.placeholder = self._next_row
-    self.output.size_placeholder = {0: target_data.get_sequence_lengths() + 1}
 
   # noinspection PyMethodOverriding
   @classmethod
@@ -6650,8 +6649,12 @@ class EditDistanceTableLayer(LayerBase):
     if blank_idx is not None:
       dim = max(dim, blank_idx + 1)
     assert target_data.sparse and source_data.dim == dim
+    target_seq_len = target_data.get_sequence_lengths()
+    with tf_util.same_control_flow_ctx(target_seq_len):
+      seq_len = target_seq_len + 1
     return Data(
       name="%s_output" % name, shape=(None, None) if source_data.have_time_axis() else (None,),
+      size_placeholder={0: seq_len},
       dtype="int32", beam=SearchBeam.get_combined_beam(source_data.beam, target_data.beam))
 
 
