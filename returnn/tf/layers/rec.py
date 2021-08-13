@@ -3445,6 +3445,9 @@ class _TemplateLayer(LayerBase):
     # In case the seq len is the same always, it just means that we did not fix the specific layer implementation yet.
     # This is work-in-progress.
     layer.output.sanity_check()
+    if layer.output.placeholder is not None and self.network.get_config().bool("debug_runtime_sanity_checks", False):
+      with tf.name_scope(layer.tf_scope_name):
+        layer.output.placeholder = layer.output.get_placeholder_with_runtime_sanity_checks()
     return layer
 
   def _get_cell(self):
