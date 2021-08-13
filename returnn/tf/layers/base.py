@@ -1435,6 +1435,9 @@ class LayerBase(object):
           zeroed_src_shape, dtype=src_output.dtype,
           name="init_%s_zeros" % tf_util.get_valid_scope_name_from_str(src.name))
         src_output.sanity_check()
+        if rec_layer.network.get_config().bool("debug_runtime_sanity_checks", False):
+          with tf.name_scope(tf_util.get_valid_scope_name_from_str(src.name + "_zeroed")):
+            src_output.placeholder = src_output.get_placeholder_with_runtime_sanity_checks()
         zeroed_src = InternalLayer(name="%s_zeroed" % src.name, output=src_output, network=src.network)
         zeroed_sources.append(zeroed_src)
       layer = cls(name=name, output=output.copy(), sources=list(zeroed_sources), **kwargs)

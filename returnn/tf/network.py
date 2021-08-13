@@ -933,6 +933,7 @@ class TFNetwork(object):
     debug_print_layer_output_shape = self.get_config().bool("debug_print_layer_output_shape", False)
     debug_add_check_numerics_on_output = self.get_config().bool(
       "debug_add_check_numerics_on_output", False)  # also see debug_add_check_numerics_ops
+    debug_runtime_sanity_checks = self.get_config().bool("debug_runtime_sanity_checks", False)
     with self.layer_creation_scope(name):
       try:
         if "output" not in layer_desc:
@@ -987,6 +988,8 @@ class TFNetwork(object):
           layer.output.placeholder,
           [layer_class.cls_get_tf_scope_name(name), "shape:", str(layer.output), tf.shape(layer.output.placeholder)],
           summarize=10, name="debug_print_layer_output_shape")
+      if layer.output.placeholder is not None and debug_runtime_sanity_checks:
+        layer.output.placeholder = layer.output.get_placeholder_with_runtime_sanity_checks()
       if (layer.output.placeholder is not None and debug_add_check_numerics_on_output
               and layer.output.dtype.startswith("float") and not layer.allow_inf_in_output):
         print("debug_add_check_numerics_on_output: add for layer %r: %r" % (name, layer.output.placeholder))

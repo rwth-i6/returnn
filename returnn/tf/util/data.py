@@ -1241,6 +1241,36 @@ class Data(object):
         if self.batch_shape[i] is None and i != self.batch_dim_axis:
           assert i in self._dynamic_sizes
 
+  def get_runtime_sanity_check_op(self):
+    """
+    :return: op which does a couple of runtime sanity checks on the placeholder
+    :rtype: tf.Operation
+    """
+    assert self.placeholder is not None
+    checks = []
+    with tf.name_scope("runtime_sanity_check"):
+      shape = tf.shape(self.placeholder)
+      rank = tf.rank(self.placeholder)
+      data = [str(self), "shape", shape]
+      for i, size in sorted(self._dynamic_sizes.items()):
+        data += ["dyn_size[%i]" % i, size, ".len", tf.size(size)]
+      checks += [tf.Assert(tf.equal(rank, self.batch_ndim), data + ["-> invalid rank"])]
+      for i in range(self.batch_ndim):
+        if self.batch_shape[i] is not None:
+          checks += [tf.Assert(tf.equal(shape[i], self.batch_shape[i]), data + ["-> invalid shape[%i]" % i])]
+        if i in self._dynamic_sizes:
+          checks += [tf.Assert(
+            # Note: in almost all cases, we have equality here.
+            # However, not strictly in all cases, e.g. DecideLayer, maybe some others...
+            tf.less_equal(tf.reduce_max(self._dynamic_sizes[i]), shape[i]),
+            data + ["-> invalid shape[%i] or max(dyn_size[%i])" % (i, i)])]
+      batch_dim = shape[self.batch_dim_axis] if self.have_batch_axis() else 1
+      for i, size in sorted(self._dynamic_sizes.items()):
+        checks += [tf.Assert(
+          tf.reduce_all(tf.equal(tf.shape(self._dynamic_sizes[i]), [batch_dim])),
+          data + ["-> invalid shape(dyn_size[%i]) or invalid batch dim" % i, batch_dim])]
+    return tf.group(*checks)
+
   def get_placeholder_kwargs(self, with_batch=True):
     """
     :param bool with_batch:
@@ -2456,6 +2486,14 @@ class Data(object):
     if self.batch_dim_axis == batch_dim_axis:
       return self.placeholder
     return swapaxes(self.placeholder, batch_dim_axis, self.batch_dim_axis)
+
+  def get_placeholder_with_runtime_sanity_checks(self):
+    """
+    :return: identity(self.placeholder) with added checks
+    :rtype: tf.Tensor
+    """
+    with tf.control_dependencies([self.get_runtime_sanity_check_op()]):
+      return tf.identity(self.placeholder, name="identity_with_runtime_sanity_checks")
 
   def get_placeholder_time_flattened(self):
     """
