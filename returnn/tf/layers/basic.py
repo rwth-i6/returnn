@@ -2413,7 +2413,8 @@ class PadLayer(_ConcatInputLayer):
       if p == 0:
         continue
       size = self.output.size_placeholder[a]
-      size = tf_util.simplify_add(size, p)
+      with tf_util.same_control_flow_ctx(size):
+        size = tf_util.simplify_add(size, p)
       self.output.size_placeholder[a] = size
       if not DimensionTag.get_tag_from_size_tensor(size):
         tag = DimensionTag(
@@ -3941,11 +3942,12 @@ class ConvLayer(_ConcatInputLayer):
       for i in input_data.get_spatial_axes()
       if i in input_data.size_placeholder}
     index_shift = self.output.get_spatial_axes()[0]
-    for i in list(self.output.size_placeholder.keys()):
-      size = self.calc_out_dim(
-        in_dim=self.output.size_placeholder[i],
-        filter_size=filter_size[i - index_shift], stride=strides[i - index_shift],
-        dilation_rate=dilation_rate[i - index_shift], padding=padding)
+    for i, size in list(self.output.size_placeholder.items()):
+      with tf_util.same_control_flow_ctx(size):
+        size = self.calc_out_dim(
+          in_dim=size,
+          filter_size=filter_size[i - index_shift], stride=strides[i - index_shift],
+          dilation_rate=dilation_rate[i - index_shift], padding=padding)
       self.output.size_placeholder[i] = size
       if not DimensionTag.get_tag_from_size_tensor(size):
         tag = DimensionTag(
@@ -4156,11 +4158,12 @@ class PoolLayer(_ConcatInputLayer):
       for i in range(len(pool_size))
       if i in input_data.size_placeholder}
     index_shift = self.output.get_spatial_axes()[0]
-    for i in list(self.output.size_placeholder.keys()):
-      self.output.size_placeholder[i] = ConvLayer.calc_out_dim(
-        in_dim=self.output.size_placeholder[i],
-        filter_size=pool_size[i - index_shift], stride=strides[i - index_shift],
-        dilation_rate=dilation_rate[i - index_shift], padding=padding)
+    for i, size in list(self.output.size_placeholder.items()):
+      with tf_util.same_control_flow_ctx(size):
+        self.output.size_placeholder[i] = ConvLayer.calc_out_dim(
+          in_dim=size,
+          filter_size=pool_size[i - index_shift], stride=strides[i - index_shift],
+          dilation_rate=dilation_rate[i - index_shift], padding=padding)
       if DimensionTag.get_tag_from_size_tensor(self.output.size_placeholder[i]) is None:
         tag = DimensionTag(
           description="spatial:%i:%s" % (i, self.get_absolute_name()),
@@ -4383,10 +4386,11 @@ class TransposedConvLayer(_ConcatInputLayer):
       for i in input_data.get_spatial_axes()
       if i in input_data.size_placeholder}
     for i, size in list(self.output.size_placeholder.items()):
-      size = self.deconv_output_length(
-        self.output.size_placeholder[i],
-        filter_size=filter_size[i], stride=strides[i],
-        padding=padding, output_padding=output_padding[i])
+      with tf_util.same_control_flow_ctx(size):
+        size = self.deconv_output_length(
+          size,
+          filter_size=filter_size[i], stride=strides[i],
+          padding=padding, output_padding=output_padding[i])
       r = remove_padding[i]
       if r:
         assert isinstance(r, int)
