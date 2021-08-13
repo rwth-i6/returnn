@@ -2743,7 +2743,7 @@ def test_conv_layer_NCHW():
         name="conv_nhwc_from_nhwc", network=net, n_out=filters, filter_size=filter_size,
         padding=padding, strides=strides, auto_use_channel_first=False, sources=[src_nhwc],
         output=ConvLayer.get_out_data_from_opts(name="conv_nhwc_from_nhwc", n_out=filters,
-                                                filter_size=filter_size, padding=padding,
+                                                filter_size=filter_size, padding=padding, strides=strides,
                                                 auto_use_channel_first=False,
                                                 network=net, sources=[src_nhwc]))
     with tf_compat.v1.variable_scope("conv_nchw_from_nhwc"):
@@ -2751,7 +2751,7 @@ def test_conv_layer_NCHW():
         name="conv_nchw_from_nhwc", network=net, n_out=filters, filter_size=filter_size,
         padding=padding, strides=strides, auto_use_channel_first=True, sources=[src_nhwc],
         output=ConvLayer.get_out_data_from_opts(name="conv_nchw_from_nhwc", n_out=filters,
-                                                filter_size=filter_size, padding=padding,
+                                                filter_size=filter_size, padding=padding, strides=strides,
                                                 auto_use_channel_first=True,
                                                 network=net, sources=[src_nhwc]))
     with tf_compat.v1.variable_scope("conv_nchw_from_nchw"):
@@ -2759,7 +2759,7 @@ def test_conv_layer_NCHW():
         name="conv_nchw_from_nchw", network=net, n_out=filters, filter_size=filter_size,
         padding=padding, strides=strides, auto_use_channel_first=True, sources=[src_nchw],
         output=ConvLayer.get_out_data_from_opts(name="conv_nchw_from_nchw", n_out=filters,
-                                                filter_size=filter_size, padding=padding,
+                                                filter_size=filter_size, padding=padding, strides=strides,
                                                 auto_use_channel_first=True,
                                                 network=net, sources=[src_nchw]))
     tf_compat.v1.global_variables_initializer().run()
@@ -2828,7 +2828,7 @@ def test_pool_layer_NCHW():
         name="pool_nhwc_from_nhwc", network=net, mode="max", pool_size=pool_size,
         padding=padding, strides=strides, use_channel_first=False, sources=[src_nhwc],
         output=PoolLayer.get_out_data_from_opts(name="pool_nhwc_from_nhwc",
-                                                pool_size=pool_size, padding=padding,
+                                                pool_size=pool_size, padding=padding, strides=strides,
                                                 use_channel_first=False,
                                                 network=net, sources=[src_nhwc]))
     with tf_compat.v1.variable_scope("pool_nchw_from_nhwc"):
@@ -2836,7 +2836,7 @@ def test_pool_layer_NCHW():
         name="pool_nchw_from_nhwc", network=net, mode="max", pool_size=pool_size,
         padding=padding, strides=strides, use_channel_first=True, sources=[src_nhwc],
         output=PoolLayer.get_out_data_from_opts(name="pool_nchw_from_nhwc",
-                                                pool_size=pool_size, padding=padding,
+                                                pool_size=pool_size, padding=padding, strides=strides,
                                                 use_channel_first=True,
                                                 network=net, sources=[src_nhwc]))
     with tf_compat.v1.variable_scope("pool_nchw_from_nchw"):
@@ -2844,7 +2844,7 @@ def test_pool_layer_NCHW():
         name="pool_nchw_from_nchw", network=net, mode="max", pool_size=pool_size,
         padding=padding, strides=strides, use_channel_first=True, sources=[src_nchw],
         output=PoolLayer.get_out_data_from_opts(name="pool_nchw_from_nchw",
-                                                pool_size=pool_size, padding=padding,
+                                                pool_size=pool_size, padding=padding, strides=strides,
                                                 use_channel_first=True,
                                                 network=net, sources=[src_nchw]))
     with tf_compat.v1.variable_scope("pool_nhwc_from_nchw"):
@@ -2852,7 +2852,7 @@ def test_pool_layer_NCHW():
         name="pool_nhwc_from_nchw", network=net, mode="max", pool_size=pool_size,
         padding=padding, strides=strides, use_channel_first=False, sources=[src_nchw],
         output=PoolLayer.get_out_data_from_opts(name="pool_nhwc_from_nchw",
-                                                pool_size=pool_size, padding=padding,
+                                                pool_size=pool_size, padding=padding, strides=strides,
                                                 use_channel_first=False,
                                                 network=net, sources=[src_nchw]))
     tf_compat.v1.global_variables_initializer().run()
