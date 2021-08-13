@@ -5823,7 +5823,8 @@ def test_OptimalCompletionsLayer():
           name="last_row", network=net,
           output=Data(
             name="last_row", shape=(None,), dtype="int32",
-            placeholder=expand_dims_unbroadcast(tf.range(n_max_seq_len + 1), 0, n_batch)))]
+            placeholder=expand_dims_unbroadcast(tf.range(n_max_seq_len + 1), 0, n_batch),
+            size_placeholder={0: target.get_sequence_lengths() + 1}))]
       )
     print("OptimalCompletionsLayer kwargs:")
     pprint(kwargs)
