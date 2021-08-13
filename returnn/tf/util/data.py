@@ -1237,6 +1237,9 @@ class Data(object):
         assert self.placeholder.shape[i].value == self.batch_shape[i]
       self.placeholder.set_shape(self.batch_shape)
       assert self.placeholder.dtype.base_dtype.name == self.dtype
+      for i in range(self.batch_ndim):
+        if self.batch_shape[i] is None and i != self.batch_dim_axis:
+          assert i in self._dynamic_sizes
 
   def get_placeholder_kwargs(self, with_batch=True):
     """
