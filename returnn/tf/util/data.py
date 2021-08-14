@@ -3146,6 +3146,7 @@ class Data(object):
         tag = DimensionTag.get_tag_from_size_tensor(dyn_size)
         if tag:
           assert tag.same_base_id == existing_dim_tag.same_base_id, "%s: %s != %s" % (self, tag, existing_dim_tag)
+      assert self.batch_shape[axis] == existing_dim_tag.dimension
       return existing_dim_tag
     name = self.get_full_name()
     if axis == self.batch_dim_axis:
