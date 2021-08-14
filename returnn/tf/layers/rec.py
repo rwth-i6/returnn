@@ -2475,6 +2475,8 @@ class _SubnetworkRecCell(object):
             time_dim_tag.set_tag_on_size_tensor(seq_len)
       else:
         _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
+        if rec_layer.output.beam:
+          seq_len._RETURNN_dyn_size_beam = rec_layer.output.beam
         time_dim_tag = DimensionTag(
           description="rec-time:%s" % rec_layer.get_absolute_name(), kind=DimensionTag.Types.Time)
         time_dim_tag.set_tag_on_size_tensor(seq_len)
@@ -3180,6 +3182,8 @@ class _SubnetworkRecCell(object):
           output.beam = search_choices.get_beam_info()
         else:
           output.beam = None
+        if output.beam:
+          resolved_seq_len._RETURNN_dyn_size_beam = output.beam
         max_len = tf.reduce_max(resolved_seq_len)
         # We should have accumulated it.
         output.placeholder = tensor_array_stack(acc_ta, stop=max_len)  # e.g. (time,batch,dim)
@@ -3189,8 +3193,10 @@ class _SubnetworkRecCell(object):
             # TODO this is not quite correct...
             # (It is correct only if you use keep_beam or so...)
             if output.beam.beam_size % self.parent_rec_layer.output.beam.beam_size == 0:
-              output.size_placeholder[0] = tile_transposed(
+              size = tile_transposed(
                 seq_len, axis=0, multiples=output.beam.beam_size // self.parent_rec_layer.output.beam.beam_size)
+              size._RETURNN_dyn_size_beam = output.beam
+              output.size_placeholder[0] = size
         if time_dim_tag:
           time_dim_tag.set_tag_on_size_tensor(output.size_placeholder[0])
         if inner_layer.output.size_placeholder:
@@ -3204,6 +3210,7 @@ class _SubnetworkRecCell(object):
                 size = tile_transposed(
                   size, axis=0,
                   multiples=tf.shape(output.size_placeholder[0])[0] // tf.shape(size)[0])
+                size._RETURNN_dyn_size_beam = output.beam
               output.size_placeholder[i + 1] = size
         assert isinstance(self.output_layers_net, TFNetwork)
         layer_ = self.output_layers_net.add_layer(
