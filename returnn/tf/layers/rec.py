@@ -1943,6 +1943,10 @@ class _SubnetworkRecCell(object):
         assert "end" in self.layer_data_templates, "length not defined, provide 'end' layer"
         max_seq_len = None
         have_known_seq_len = False
+      if time_dim_tag:
+        self.time_dim_tag.declare_same_as(time_dim_tag)
+      else:
+        time_dim_tag = self.time_dim_tag
 
       common_data_len = None  # used to check whether all extern data have same length
       used_keys = self.net.used_data_keys.copy()
@@ -2471,14 +2475,11 @@ class _SubnetworkRecCell(object):
               self.parent_rec_layer.sources, self.parent_rec_layer.target))
           from returnn.tf.util.basic import tile_transposed
           seq_len = tile_transposed(seq_len, axis=0, multiples=output_beam.beam_size)  # (batch * beam,)
-          if time_dim_tag:
-            time_dim_tag.set_tag_on_size_tensor(seq_len)
+          seq_len._RETURNN_dyn_size_beam = rec_layer.output.beam
+          time_dim_tag.set_tag_on_size_tensor(seq_len)
       else:
         _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
-        if rec_layer.output.beam:
-          seq_len._RETURNN_dyn_size_beam = rec_layer.output.beam
-        time_dim_tag = DimensionTag(
-          description="rec-time:%s" % rec_layer.get_absolute_name(), kind=DimensionTag.Types.Time)
+        seq_len._RETURNN_dyn_size_beam = rec_layer.output.beam
         time_dim_tag.set_tag_on_size_tensor(seq_len)
         max_seq_len = tf.reduce_max(seq_len, name="dyn_max_seq_len")
       self.get_final_rec_vars = lambda layer_name_: self.get_layer_rec_var_from_loop_vars(
