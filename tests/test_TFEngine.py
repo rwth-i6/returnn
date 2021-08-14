@@ -1214,6 +1214,7 @@ def test_attention_no_encoder_dependency():
       "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
     },
     "debug_print_layer_output_template": True,
+    "debug_runtime_sanity_checks": True,
   })
   _cleanup_old_models(config)
   engine = Engine(config=config)
