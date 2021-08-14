@@ -1998,9 +1998,11 @@ class Data(object):
       for i, v in sorted(data.size_placeholder.items()):
         tag = DimensionTag.get_tag_from_size_tensor(v)
         with same_control_flow_ctx(v):
-          data.size_placeholder[i] = tile_transposed(v, axis=0, multiples=beam.beam_size)
+          sizes = tile_transposed(v, axis=0, multiples=beam.beam_size)
+        sizes._RETURNN_dyn_size_beam = beam
+        data.size_placeholder[i] = sizes
         if tag is not None:
-          tag.set_tag_on_size_tensor(data.size_placeholder[i])
+          tag.set_tag_on_size_tensor(sizes)
       if data.batch:
         data.batch = data.batch.copy_set_beam(beam)
       data.beam = beam
@@ -2820,6 +2822,25 @@ class Data(object):
     :param int axis: counted with batch-dim
     :param tf.Tensor sizes: shape [B]
     """
+    # Note: The following code is somewhat ugly patchwork
+    # to fix some other currently incomplete or buggy behavior of some layers
+    # which introduce sizes without correctly setting the dim tag.
+    # The beam information is also missing currently.
+    # We make the ugly assumption that when it is unset,
+    # the first usage should hopefully define the correct beam.
+    if getattr(sizes, "_RETURNN_dyn_size_beam", NotSpecified) is NotSpecified:
+      sizes._RETURNN_dyn_size_beam = self.beam
+    if self.beam and getattr(sizes, "_RETURNN_dyn_size_beam", None) != self.beam:
+      from returnn.tf.util import basic as tf_util
+      tag = DimensionTag.get_tag_from_size_tensor(sizes)
+      if tag:
+        # Just to be sure, we tile it as it should be.
+        base_size = tag.get_same_base().dyn_size
+        if not getattr(base_size, "_RETURNN_dyn_size_beam", None):
+          with tf_util.same_control_flow_ctx(base_size):
+            sizes = tf_util.tile_transposed(base_size, axis=0, multiples=self.beam.beam_size)
+          tag.set_tag_on_size_tensor(sizes)
+          sizes._RETURNN_dyn_size_beam = self.beam
     self._dynamic_sizes[axis] = sizes
 
   def del_dynamic_size(self, axis):
