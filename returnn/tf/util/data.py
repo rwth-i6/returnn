@@ -1156,7 +1156,17 @@ class Data(object):
       # Note that this currently does not work as intended at template construction time...
       for _axis, _dim_tag in sorted(same_dim_tags_as.items()):
         _axis = self.get_axis_from_description(_axis)
-        self.get_dim_tag(_axis).declare_same_as(_dim_tag)
+        assert isinstance(_dim_tag, DimensionTag)
+        base_tag = self._dimension_tags.get(_axis)
+        if not base_tag and _axis in self._dynamic_sizes:
+          base_tag = DimensionTag.get_tag_from_size_tensor(self._dynamic_sizes[_axis])
+        if base_tag:
+          base_tag.declare_same_as(_dim_tag)
+        else:
+          # Overtake the given dim tag.
+          self._dimension_tags[_axis] = _dim_tag
+          if _dim_tag.dyn_size is not None:
+            self.set_dynamic_size(_axis, _dim_tag.dyn_size)
     self.sanity_check()
 
   @classmethod
