@@ -2337,7 +2337,8 @@ def test_rec_subnet_eval_init_out_apply0():
     "batch_size": 10,
     "adam": True,
     "learning_rate": 0.01,
-    "debug_print_layer_output_template": True
+    "debug_print_layer_output_template": True,
+    "debug_runtime_sanity_checks": True,
   })
   _cleanup_old_models(config)
 
