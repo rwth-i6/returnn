@@ -14,10 +14,11 @@ device
 
 extern_data (former num_outputs)
     Defines the source/target dimensions of the data as a dictionary of dictionaries describing data streams.
-    The standard source data is called "``data``" by default,
-    and the standard target data is called "``classes``" by default.
+    The standard source data is called ``data`` by default,
+    and the standard target data is called ``classes`` by default.
 
     A common example for an ASR system would be:
+
     .. code-block:: python
 
         extern_data = {
@@ -67,6 +68,10 @@ num_outputs
     Output feature dimension of the network, related to the 'classes' tag.
     Deprecated for the TensorFlow backend, see ``extern_data``
 
+target
+    This defines the default target for :class:`returnn.tf.network.ExternData`.
+    If not specified, the default target will be ``classes``.
+
 task
     The task to run. Common cases are ``train``, ``forward`` or ``search``.
 
@@ -75,6 +80,7 @@ tf_log_memory_usage
 
 tf_log_dir
     Defines the folder where the tensorflow/tensorboard logs are writting. Per default, the logs are written next to the models.
+
     .. note::
         has to be set specifically when loading a model from a folder without write permission
 
