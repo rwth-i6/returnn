@@ -79,6 +79,45 @@ def create_graph(train_flag, eval_flag, search_flag, net_dict):
   return network
 
 
+class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
+  """
+  Adapts :class:`_SubnetworkRecCell` such that we execute only a single step.
+  """
+
+  def __init__(self, **kwargs):
+    self._parent_layers = {}  # type: typing.Dict[str,WrappedInternalLayer]
+    super(SubnetworkRecCellSingleStep, self).__init__(**kwargs)
+
+  def _get_parent_layer(self, layer_name):
+    """
+    :param str layer_name: without "base:" prefix
+    :rtype: LayerBase
+    """
+    if layer_name in self._parent_layers:
+      return self._parent_layers[layer_name]
+    layer = self.parent_net.get_layer(layer_name)
+    rec_layer = self.parent_rec_layer
+    if rec_layer is None:  # at template construction
+      return layer
+    assert isinstance(rec_layer, RecStepByStepLayer)
+    output = layer.output.copy()
+    output.placeholder = rec_layer.create_state_var(
+      name="base_value_%s" % layer_name, initial_value=lambda: output.placeholder, data_shape=output)
+    from returnn.tf.util.basic import DimensionTag
+    for i, size in list(output.size_placeholder.items()):
+      dim_tag = DimensionTag.get_tag_from_size_tensor(size)
+      if not dim_tag:
+        print("Warning, no defined dim tag on %r, axis %i" % (layer, output.get_batch_axis(i)), file=log.v2)
+        dim_tag = output.get_dim_tag(output.get_batch_axis(i))
+        dim_tag.set_tag_on_size_tensor(size)
+      new_size = rec_layer.create_state_var(name="base_size%i_%s" % (i, layer_name), initial_value=size)
+      dim_tag.set_tag_on_size_tensor(new_size)
+      output.size_placeholder[i] = new_size
+    layer = WrappedInternalLayer(name=layer_name, network=self.parent_net, output=output, base_layer=layer)
+    self._parent_layers[layer_name] = layer
+    return layer
+
+
 class RecStepByStepLayer(RecLayer):
   """
   Represents a single step of :class:`RecLayer`.
@@ -117,6 +156,7 @@ class RecStepByStepLayer(RecLayer):
       This is "next_step_op" in the info json.
   """
   layer_class = "rec_step_by_step"
+  subnetwork_rec_cell = SubnetworkRecCellSingleStep
 
   @classmethod
   def prepare_compile(cls, rec_layer_name, net_dict):
@@ -557,45 +597,6 @@ class ChoiceStateVarLayer(LayerBase):
     super(ChoiceStateVarLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   get_out_data_from_opts = ChoiceLayer.get_out_data_from_opts
-
-
-class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
-  """
-  Adapts :class:`_SubnetworkRecCell` such that we execute only a single step.
-  """
-
-  def __init__(self, **kwargs):
-    self._parent_layers = {}  # type: typing.Dict[str,WrappedInternalLayer]
-    super(SubnetworkRecCellSingleStep, self).__init__(**kwargs)
-
-  def _get_parent_layer(self, layer_name):
-    """
-    :param str layer_name: without "base:" prefix
-    :rtype: LayerBase
-    """
-    if layer_name in self._parent_layers:
-      return self._parent_layers[layer_name]
-    layer = self.parent_net.get_layer(layer_name)
-    rec_layer = self.parent_rec_layer
-    if rec_layer is None:  # at template construction
-      return layer
-    assert isinstance(rec_layer, RecStepByStepLayer)
-    output = layer.output.copy()
-    output.placeholder = rec_layer.create_state_var(
-      name="base_value_%s" % layer_name, initial_value=output.placeholder, data_shape=output)
-    from returnn.tf.util.basic import DimensionTag
-    for i, size in list(output.size_placeholder.items()):
-      dim_tag = DimensionTag.get_tag_from_size_tensor(size)
-      if not dim_tag:
-        print("Warning, no defined dim tag on %r, axis %i" % (layer, output.get_batch_axis(i)), file=log.v2)
-        dim_tag = output.get_dim_tag(output.get_batch_axis(i))
-        dim_tag.set_tag_on_size_tensor(size)
-      new_size = rec_layer.create_state_var(name="base_size%i_%s" % (i, layer_name), initial_value=size)
-      dim_tag.set_tag_on_size_tensor(new_size)
-      output.size_placeholder[i] = new_size
-    layer = WrappedInternalLayer(name=layer_name, network=self.parent_net, output=output, base_layer=layer)
-    self._parent_layers[layer_name] = layer
-    return layer
 
   def _while_loop(self, cond, body, loop_vars, shape_invariants):
     """
