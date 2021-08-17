@@ -3661,7 +3661,9 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     """
     :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
     :param LayerBase|None size_base: copy the size_placeholder from the given layer
-    :param dict[str,int|str] set_axes: the key is "B","T","F", value is via :func:`Data.get_axis_from_description`
+    :param dict[str,int|str] set_axes:
+      This can be used to overwrite the special axes like time_dim_axis or feature_dim_axis.
+      For that, use keys "B","T" or "F", and a value via :func:`Data.get_axis_from_description`.
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
     :param bool|None set_sparse: if bool, set sparse value to this
