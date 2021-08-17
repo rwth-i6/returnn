@@ -22,17 +22,22 @@ extern_data (former num_outputs)
     .. code-block:: python
 
         extern_data = {
-          "data": {"dim": 100, "shape": (None, 100)}
-          "classes": {"dim": 5000, "shape": (None,), "sparse": True}
+          "data": {"dim": 100, "shape": (None, 100), 'available_for_inference': True}
+          "classes": {"dim": 5000, "shape": (None,), "sparse": True, 'available_for_inference': False}
         }
 
     In this case the ``data`` entry defines 80 dimensional features with a time axis of arbitrary length.
     ``classes`` defines sparse target labels, and the dimension then defines the number of labels.
     The shape entries ``None`` indicate a dynamic length of an axis.
+    ``available_for_inference`` defines if the data stream is also available during the "search" or "forward" task,
+    so basically marking if a data stream is an input or only a target.
 
     In general, all input parameters to :class:`returnn.tf.util.data.Data` can be provided
     The parameters ``dim`` and ``shape`` should always be used, the other parameters are optional.
-    Note that only for ``data`` the parameter ``available_for_inference`` is per default `True``.
+    Nevertheless ``available_for_inference`` should always be provided explicitely as
+    only for ``data`` the parameter ``available_for_inference`` is per default `True`.
+    This will avoid confusion or unexpected behavior, especially when including additional data
+    via a :class:`returnn.datasets.meta.MetaDataset`.
 
 log
     path to the log, or list of paths for multiple logs.
