@@ -3655,7 +3655,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
   layer_class = "reinterpret_data"
 
   # noinspection PyUnusedLocal
-  def __init__(self, switch_axes=None, size_base=None, set_axes=None,
+  def __init__(self, switch_axes=None, size_base=None, set_axes=None, set_dim_tags=None,
                enforce_batch_major=False, enforce_time_major=False,
                set_sparse=None, set_sparse_dim=NotSpecified, increase_sparse_dim=None,
                **kwargs):
@@ -3663,6 +3663,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
     :param LayerBase|None size_base: copy the size_placeholder from the given layer
     :param dict[str,int|str] set_axes: the key is "B","T","F", value is via :func:`Data.get_axis_from_description`
+    :param dict[str,DimensionTag] set_dim_tags: key is via :func:`Data.get_axis_from_description`
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
     :param bool|None set_sparse: if bool, set sparse value to this
@@ -3707,7 +3708,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources,
-                             switch_axes=None, size_base=None, set_axes=None,
+                             switch_axes=None, size_base=None, set_axes=None, set_dim_tags=None,
                              enforce_batch_major=False, enforce_time_major=False,
                              set_sparse=None, set_sparse_dim=NotSpecified, increase_sparse_dim=None,
                              **kwargs):
@@ -3717,6 +3718,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
     :param LayerBase|None size_base: similar as size_target
     :param dict[str,int|None] set_axes:
+    :param dict[str,DimensionTag] set_dim_tags:
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
     :param bool|None set_sparse: if bool, set sparse value to this
@@ -3763,6 +3765,16 @@ class ReinterpretDataLayer(_ConcatInputLayer):
             out.dim = None
           else:
             out.dim = out.batch_shape[out.feature_dim_axis]
+    if set_dim_tags:
+      from returnn.tf.util.data import DimensionTag
+      for axis, dim_tag in sorted(set_dim_tags.items()):
+        assert isinstance(dim_tag, DimensionTag)
+        axis = out.get_axis_from_description(axis)
+        assert out.is_axis_dynamic(axis)
+        # need to declare new size tensor to mark it with the new dim tag
+        dyn_size = tf.identity(out.get_dynamic_size(axis), name='%s_size' % dim_tag.description)
+        out.size_placeholder[out.get_batch_axis_excluding_batch(axis)] = dyn_size
+        dim_tag.set_tag_on_size_tensor(dyn_size)
     if out.size_placeholder is not None and size_base:  # size_placeholder might be None, e.g. via DataNotAvailableLayer
       assert size_base.output.size_placeholder is not None
       assert len(out.size_placeholder) == len(size_base.output.size_placeholder)
