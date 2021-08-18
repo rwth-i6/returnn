@@ -189,17 +189,19 @@ class BehaviorVersion:
   The version will be set after the config is defined at __main__.init_config() or Engine.__init__()
   """
 
-  _behavior_version = 0  # type: typing.Optional[int]
-  _is_set = False  # type: bool
+  _behavior_version = 0
+  _is_set = False
 
   @classmethod
   def set(cls, version):
     """
     :param int version:
     """
-    assert not cls._is_set, "behavior version already set"
-    assert version >= 0
-    cls._behavior_version = version
+    if version != cls._behavior_version:
+      assert not cls._is_set, (
+        "behavior_version already set to %i, cannot reset to %i" % (cls._behavior_version, version))
+      assert version >= 0
+      cls._behavior_version = version
     cls._is_set = True
 
   @classmethod
@@ -216,6 +218,11 @@ class BehaviorVersion:
     """
     return cls._is_set
 
+  class RequirementNotSatisfied(Exception):
+    """
+    Behavior version requirement is not satisfied
+    """
+
   @classmethod
   def require(cls, condition, message, version):
     """
@@ -225,7 +232,8 @@ class BehaviorVersion:
     """
     if not condition:
       if BehaviorVersion.get() >= version:
-        raise Exception(message)
+        raise BehaviorVersion.RequirementNotSatisfied(
+          "%s (required since behavior_version >= %i)" % (message, version))
       else:
         log.print_deprecation_warning(message, behavior_version=version)
 

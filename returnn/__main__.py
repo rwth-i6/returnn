@@ -120,12 +120,9 @@ def init_config(config_filename=None, command_line_options=(), default_config=No
   if config.value('task', 'train') == 'server':
     config.set('num_inputs', 2)
     config.set('num_outputs', 1)
-  # Set behavior version
-  behavior_version = config.int('behavior_version', 0)
-  if BehaviorVersion.is_set():
-    assert behavior_version == BehaviorVersion.get()
-  else:
-    BehaviorVersion.set(behavior_version)
+
+  if config.has('behavior_version'):
+    BehaviorVersion.set(config.int('behavior_version', 0))
 
 
 def init_log():

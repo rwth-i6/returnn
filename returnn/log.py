@@ -207,7 +207,7 @@ class Log:
     if behavior_version:
       behavior_text = "This will be disallowed with behavior_version %d" % behavior_version
     else:
-      behavior_text = "This might be disallowed with future behavior_versions"
+      behavior_text = "This might be disallowed with a future behavior_version"
     print("DEPRECATION WARNING: %s\n%s" % (warning, behavior_text), file=self.v2)
     self.deprecation_warning_history.append(warning)
 
