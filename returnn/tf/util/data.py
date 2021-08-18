@@ -1013,7 +1013,7 @@ class Data(object):
                available_for_inference=True,
                auto_create_placeholders=False,
                vocab=None,
-               dimension_tags=None,
+               dim_tags=None,
                same_dim_tags_as=None,
                batch=None,
                beam=None):
@@ -1037,7 +1037,7 @@ class Data(object):
     :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
     :param bool auto_create_placeholders: This will create a tf.placeholder.
     :param str|dict[str]|GeneratingDataset.Vocabulary|None vocab:
-    :param dict[int,DimensionTag]|None dimension_tags: explicitly specified dimension tags per axis (with batch)
+    :param dict[int,DimensionTag]|None dim_tags: explicitly specified dimension tags per axis (with batch)
     :param dict[int|str,DimensionTag]|None same_dim_tags_as: will mark our dimension tags to be the same
     :param BatchInfo|None batch:
     :param SearchBeam|None beam: the batch-dim could be extended by a beam-size,
@@ -1149,22 +1149,22 @@ class Data(object):
       assert self.sparse, "%s should represent indices of %s" % (self, vocab)
       assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
     self.vocab = vocab  # type: typing.Optional[Vocabulary]
-    if not dimension_tags:
-      dimension_tags = {}
-    self._dimension_tags = dimension_tags
+    if not dim_tags:
+      dim_tags = {}
+    self._dim_tags = dim_tags
     if same_dim_tags_as:
       # Note that this currently does not work as intended at template construction time...
       for _axis, _dim_tag in sorted(same_dim_tags_as.items()):
         _axis = self.get_axis_from_description(_axis)
         assert isinstance(_dim_tag, DimensionTag)
-        base_tag = self._dimension_tags.get(_axis)
+        base_tag = self._dim_tags.get(_axis)
         if not base_tag and _axis in self._dynamic_sizes:
           base_tag = DimensionTag.get_tag_from_size_tensor(self._dynamic_sizes[_axis])
         if base_tag:
           base_tag.declare_same_as(_dim_tag)
         else:
           # Overtake the given dim tag.
-          self._dimension_tags[_axis] = _dim_tag
+          self._dim_tags[_axis] = _dim_tag
           if _dim_tag.dyn_size is not None:
             self.set_dynamic_size(_axis, _dim_tag.dyn_size)
     self.sanity_check()
@@ -1230,7 +1230,7 @@ class Data(object):
       assert dyn_size.dtype in (tf.int32, tf.int64)
       assert dyn_size.shape.ndims == 1, (
         "%s: all size_placeholder entries should have shape [B], but got: %r" % (self, self.size_placeholder))
-    for axis in self._dimension_tags.keys():
+    for axis in self._dim_tags.keys():
       assert 0 <= axis < self.batch_ndim
       self.get_dim_tag(axis)  # this implies sanity checks internally
     if not ignore_placeholder and self.placeholder is not None:
@@ -3165,8 +3165,8 @@ class Data(object):
     :param int axis: counted with batch-dim
     :rtype: DimensionTag
     """
-    if axis in self._dimension_tags:
-      existing_dim_tag = self._dimension_tags[axis]
+    if axis in self._dim_tags:
+      existing_dim_tag = self._dim_tags[axis]
       # Some sanity check
       if existing_dim_tag.kind == DimensionTag.Types.Batch:
         assert axis == self.batch_dim_axis, "%s: invalid %s" % (self, existing_dim_tag)
@@ -3236,7 +3236,7 @@ class Data(object):
     :param int axis: counted with batch-dim
     :param DimensionTag tag:
     """
-    self._dimension_tags[axis] = tag
+    self._dim_tags[axis] = tag
 
   def get_batch_shape_dim_tags(self):
     """
