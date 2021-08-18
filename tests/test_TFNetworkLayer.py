@@ -89,7 +89,7 @@ def test_PadLayer_time():
     padding = (2, 3)
     net = TFNetwork(config=config)
     net.construct_from_dict({
-      "output": {"class": "pad", "axes": "T", "padding": padding, "mode": "replication"}
+      "output": {"class": "pad", "axes": "T", "padding": padding, "mode": "replication", "from": "data:data"}
     })
     out_t = net.get_default_output_layer().output.placeholder
     assert out_t.shape.as_list() == [None, None, n_in]
@@ -120,7 +120,7 @@ def test_PadLayer_feature():
     padding = (2, 3)
     net = TFNetwork(config=config)
     net.construct_from_dict({
-      "output": {"class": "pad", "axes": "F", "padding": padding, "mode": "replication"}
+      "output": {"class": "pad", "axes": "F", "padding": padding, "mode": "replication", "from": "data:data"}
     })
     out_t = net.get_default_output_layer().output.placeholder
     assert out_t.shape.as_list() == [None, None, None]
@@ -226,8 +226,8 @@ def test_concat_sources_missing_dim():
 def test_concat_sources_dim1():
   with make_scope() as session:
     net_dict = {
-      "lin1": {"class": "linear", "activation": "sigmoid", "n_out": 5},
-      "lin2": {"class": "linear", "activation": "sigmoid", "n_out": 1},
+      "lin1": {"class": "linear", "activation": "sigmoid", "n_out": 5, "from": "data:data"},
+      "lin2": {"class": "linear", "activation": "sigmoid", "n_out": 1, "from": "data:data"},
       "concat": {"class": "copy", "from": ["lin1", "lin2"]},
       "output": {"class": "softmax", "loss": "ce", "from": "concat"}
     }
@@ -283,7 +283,8 @@ def test_batch_norm_vars():
       "num_inputs": n_in,
       "network": {
         layer_name: {
-          "class": "linear", "activation": "relu", "batch_norm": True, "n_out": n_out, "is_output_layer": True}
+          "class": "linear", "activation": "relu", "batch_norm": True, "n_out": n_out, "is_output_layer": True,
+          "from": "data:data"}
       }})
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_value("network"))
@@ -606,9 +607,9 @@ def test_cnn_building_block():
 def test_combine_layer_net_construct():
   with make_scope() as session:
     net_dict = {
-      "lstm0_fw": {"class": "rec", "unit": "lstmp", "n_out": 5, "dropout": 0.0, "L2": 0.01, "direction": 1},
-      "lstm0_bw": {"class": "rec", "unit": "lstmp", "n_out": 5, "dropout": 0.0, "L2": 0.01, "direction": -1},
-      "lstm0_avg": {"class": "combine", "kind": "average", "from": ["lstm0_fw", "lstm0_bw"], "trainable": False},
+      "lstm0_fw": {"class": "rec", "unit": "lstm", "n_out": 5, "direction": 1, "from": "data:data"},
+      "lstm0_bw": {"class": "rec", "unit": "lstm", "n_out": 5, "direction": -1, "from": "data:data"},
+      "lstm0_avg": {"class": "combine", "kind": "average", "from": ["lstm0_fw", "lstm0_bw"]},
       "output": {"class": "softmax", "loss": "ce", "from": ["lstm0_avg"]}
     }
     config = Config()
@@ -620,8 +621,8 @@ def test_combine_layer_net_construct():
 def test_CombineLayer_simple_add():
   with make_scope() as session:
     net_dict = {
-      "lin1": {"class": "linear", "activation": "sigmoid", "n_out": 5},
-      "lin2": {"class": "linear", "activation": "sigmoid", "n_out": 5},
+      "lin1": {"class": "linear", "activation": "sigmoid", "n_out": 5, "from": "data:data"},
+      "lin2": {"class": "linear", "activation": "sigmoid", "n_out": 5, "from": "data:data"},
       "combine": {"class": "combine", "kind": "add", "from": ["lin1", "lin2"]},
       "output": {"class": "softmax", "loss": "ce", "from": "combine"}
     }
@@ -638,8 +639,8 @@ def test_CombineLayer_simple_add():
 def test_CombineLayer_broadcast():
   with make_scope() as session:
     net_dict = {
-      "lin1": {"class": "linear", "activation": "sigmoid", "n_out": 5},
-      "lin2": {"class": "linear", "activation": "sigmoid", "n_out": 1},
+      "lin1": {"class": "linear", "activation": "sigmoid", "n_out": 5, "from": "data:data"},
+      "lin2": {"class": "linear", "activation": "sigmoid", "n_out": 1, "from": "data:data"},
       "combine": {"class": "combine", "kind": "add", "from": ["lin1", "lin2"]},
       "output": {"class": "softmax", "loss": "ce", "from": "combine"}
     }
@@ -919,7 +920,7 @@ def test_dot_layer_shuffled_remaining_dims_static():
   with make_scope() as session:
     import numpy as np
     net_dict = {
-      "a": {"class": "split_dims", "axis": "static:0", "dims": (2, 3, 5)},
+      "a": {"class": "split_dims", "axis": "static:0", "dims": (2, 3, 5), "from": "data:data"},
       "b": {"class": "transpose", "from": ["a"], "perm": {"static:0": "static:1", "static:1": "static:0"}},
       "dot": {
         "class": "dot", "from": ["a", "b"],
@@ -936,7 +937,7 @@ def test_dot_layer_shuffled_remaining_dims_static():
     network.construct_from_dict(config.typed_dict["network"])
     out = network.get_default_output_layer(must_exist=True)
     input_data = np.ones(shape=(17, 30))
-    feed_dict = {network.layers['data'].output.placeholder: input_data}
+    feed_dict = {network.extern_data.data["data"].placeholder: input_data}
 
     # just check that it runs
     session.run(out.output.placeholder, feed_dict)
@@ -976,7 +977,7 @@ def test_dot_layer_shuffled_remaining_dims_dynamic():
 def test_dropout_layer_net_construct():
   with make_scope() as session:
     net_dict = {
-      "drop": {"class": "dropout", "dropout": 0.3, "dropout_noise_shape": {"*": None}},
+      "drop": {"class": "dropout", "dropout": 0.3, "dropout_noise_shape": {"*": None}, "from": "data:data"},
       "output": {"class": "softmax", "loss": "ce", "from": ["drop"]}
     }
     config = Config({"num_inputs": 4, "num_outputs": 9, "debug_print_layer_output_template": True})
@@ -987,10 +988,10 @@ def test_dropout_layer_net_construct():
 def test_subnetwork_layer_net_construct():
   with make_scope() as session:
     net_dict = {
-      "ff0": {"class": "forward", "activation": "tanh", "n_out": 3},
+      "ff0": {"class": "forward", "activation": "tanh", "n_out": 3, "from": "data:data"},
       "sub": {"class": "subnetwork", "from": "ff0", "subnetwork": {
-        "ff1": {"class": "forward", "activation": "relu", "n_out": 2},
-        "output": {"class": "forward", "activation": "relu", "n_out": 2}
+        "ff1": {"class": "forward", "activation": "relu", "n_out": 2, "from": "data"},  # unused
+        "output": {"class": "forward", "activation": "relu", "n_out": 2, "from": "data"}
       }},
       "output": {"class": "softmax", "loss": "ce", "from": "sub"}
     }
@@ -1282,7 +1283,7 @@ def test_SplitLayer_after_SplitDimsLayer():
   with make_scope():
     net = TFNetwork(config=config)
     net.construct_from_dict({
-      "split_heads": {"class": "split_dims", "dims": (2, -1), "axis": "F"},  # [B,T,2,F|20]
+      "split_heads": {"class": "split_dims", "dims": (2, -1), "axis": "F", "from": "data:data"},  # [B,T,2,F|20]
       "split_qkv": {"class": "split", "size_splits": (5, 5, 10), "axis": "F", "from": "split_heads"},
       "output": {"class": "copy", "from": "split_qkv/0"}})  # [B,T,2,F|5]
     out_t = net.get_default_output_layer().output.placeholder
@@ -1301,7 +1302,7 @@ def test_SplitLayer_search():
   with make_scope():
     net = TFNetwork(config=config, search_flag=True, train_flag=False, eval_flag=True)
     net.construct_from_dict({
-      "encoder_seq": {"class": "linear", "activation": "tanh", "n_out": 5},
+      "encoder_seq": {"class": "linear", "activation": "tanh", "n_out": 5, "from": "data:data"},
       "encoder": {"class": "reduce", "mode": "sum", "from": ["encoder_seq"], "axis": "T"},
       "output": {"class": "rec", "from": [], "target": "classes", "max_seq_len": 20, "unit": {
         "embed": {"class": "linear", "from": ["prev:output"], "activation": None, "n_out": 10},
@@ -1323,7 +1324,7 @@ def test_SplitDimsLayer_simple_feat():
   with make_scope() as session:
     net = TFNetwork(config=config)
     net.construct_from_dict({
-      "output": {"class": "split_dims", "axis": "f", "dims": (-1, 5)}})
+      "output": {"class": "split_dims", "axis": "f", "dims": (-1, 5), "from": "data:data"}})
     out_t = net.get_default_output_layer().output.placeholder
     assert out_t.shape.as_list() == [None, None, 4, 5]
     in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_time, n_in))
@@ -1342,7 +1343,7 @@ def test_SplitDimsLayer_simple_time():
   with make_scope() as session:
     net = TFNetwork(config=config)
     net.construct_from_dict({
-      "output": {"class": "split_dims", "axis": "t", "dims": (-1, 1)}})
+      "output": {"class": "split_dims", "axis": "t", "dims": (-1, 1), "from": "data:data"}})
     assert_equal(
       net.get_default_output_layer().output.get_dim_tag(1),
       net.extern_data.get_default_input_data().get_dim_tag(1))
@@ -1364,7 +1365,7 @@ def test_SplitDimsLayer_simple_time2():
   with make_scope() as session:
     net = TFNetwork(config=config)
     net.construct_from_dict({
-      "output": {"class": "split_dims", "axis": "t", "dims": (1, -1)}})
+      "output": {"class": "split_dims", "axis": "t", "dims": (1, -1), "from": "data:data"}})
     assert_equal(
       net.get_default_output_layer().output.get_dim_tag(2),
       net.extern_data.get_default_input_data().get_dim_tag(1))
@@ -1638,7 +1639,7 @@ def test_MergeDimsLayer_simple_feat():
   with make_scope() as session:
     net = TFNetwork(config=config)
     net.construct_from_dict({
-      "output": {"class": "merge_dims", "axes": "static"}})
+      "output": {"class": "merge_dims", "axes": "static", "from": "data:data"}})
     out_t = net.get_default_output_layer().output.placeholder
     assert out_t.shape.as_list() == [None, None, n_in1 * n_in2]
     in_v = numpy.arange(0, n_batch * n_time * n_in1 * n_in2).astype("float32").reshape((n_batch, n_time, n_in1, n_in2))
@@ -1658,7 +1659,7 @@ def test_FlattenBatchLayer():
   with make_scope() as session:
     net = TFNetwork(config=config)
     net.construct_from_dict({
-      "output": {"class": "flatten_batch", "batch_major": False}})
+      "output": {"class": "flatten_batch", "batch_major": False, "from": "data:data"}})
     in_data = net.extern_data.data["data"]
     out_data = net.get_default_output_layer().output
     assert out_data.batch_shape == (None, n_in) and not out_data.size_placeholder
@@ -1828,7 +1829,7 @@ def test_CondLayer_subnetwork_train():
           },
         "true_layer": {
           "class": "subnetwork", "from": "src", "subnetwork": {
-            "lin": {"class": "linear", "activation": "tanh", "n_out": 10},
+            "lin": {"class": "linear", "activation": "tanh", "n_out": 10, "from": "data"},
             "res": {"class": "combine", "kind": "add", "from": ["data", "lin"]},
             "output": {"class": "print", "from": "res", "extra_print_args": ["true_layer"], "summarize": 1}
           }},
@@ -2187,7 +2188,7 @@ def test_untrainable_params():
       "num_outputs": n_out,
       "num_inputs": n_in,
       "network": {
-        "l1": {"class": "linear", "activation": None, "n_out": n_out},
+        "l1": {"class": "linear", "activation": None, "n_out": n_out, "from": "data:data"},
         "output": {"class": "linear", "activation": None, "from": ["l1"], "n_out": n_out, "trainable": False}
       }
     })
@@ -2206,8 +2207,8 @@ def test_reuse_params():
       "num_outputs": n_out,
       "num_inputs": n_in,
       "network": {
-        "l1": {"class": "linear", "activation": None, "n_out": n_out},
-        "output": {"class": "linear", "activation": None, "n_out": n_out, "reuse_params": "l1"}
+        "l1": {"class": "linear", "activation": None, "n_out": n_out, "from": "data:data"},
+        "output": {"class": "linear", "activation": None, "n_out": n_out, "from": "data:data", "reuse_params": "l1"}
       }
     })
     network = TFNetwork(config=config, train_flag=True)
@@ -2229,7 +2230,7 @@ def test_reuse_params_map_custom():
       "num_outputs": n_out,
       "num_inputs": n_in,
       "network": {
-        "l1": {"class": "linear", "activation": "tanh", "with_bias": False, "n_out": 5},
+        "l1": {"class": "linear", "activation": "tanh", "with_bias": False, "n_out": 5, "from": "data:data"},
         "output": {
           "class": "linear", "activation": None, "n_out": n_in, "from": ["l1"], "target": "data",
           "reuse_params": {
@@ -2633,6 +2634,7 @@ def test_conv_window_merge_dims():
   net_dict = {
     'conv_1': {'activation': 'abs',
                'class': 'conv',
+               "from": "data:data",
                'filter_size': (4,),
                'n_out': 64,
                'padding': 'valid',
@@ -2688,6 +2690,7 @@ def test_ConvLayer_feature_dim_unspecified():
   net_dict = {
     'output': {'activation': 'abs',
                'class': 'conv',
+               "from": "data:data",
                'filter_size': (4,),
                'n_out': 64,
                'padding': 'valid',
@@ -3152,7 +3155,7 @@ def test_subnet_load_on_init():
       "num_outputs": n_out,
       "num_inputs": n_in,
       "network": {
-        "l1": {"class": "linear", "activation": None, "n_out": n_hidden},
+        "l1": {"class": "linear", "activation": None, "n_out": n_hidden, "from": "data:data"},
         "output": {"class": "linear", "activation": None, "n_out": n_out, "from": ["l1"]}
       }
     })
@@ -3174,9 +3177,9 @@ def test_subnet_load_on_init():
       "num_outputs": n_out,
       "num_inputs": n_in,
       "network": {
-        "l0": {"class": "linear", "activation": None, "n_out": n_in},
+        "l0": {"class": "linear", "activation": None, "n_out": n_in, "from": "data:data"},
         "subnet": {"class": "subnetwork", "from": ["l0"], "load_on_init": model_filename, "subnetwork": {
-          "l1": {"class": "linear", "activation": None, "n_out": n_hidden},
+          "l1": {"class": "linear", "activation": None, "n_out": n_hidden, "from": "data"},
           "output": {"class": "linear", "activation": None, "n_out": n_out, "from": ["l1"]}
         }},
         "output": {"class": "linear", "activation": None, "n_out": n_out, "from": ["subnet"]}
@@ -3489,7 +3492,7 @@ def test_LossLayer_sublayers():
     "debug_print_layer_output_template": True,
   })
   net_dict = {
-    'encoder-output': {"class": "linear", "activation": "relu", "n_out": 10},
+    'encoder-output': {"class": "linear", "activation": "relu", "n_out": 10, "from": "data:data"},
 
     'left-output': {'class': 'softmax', 'from': 'encoder-output', 'n_out': n_out},
     'left-output-ce': {'class': 'loss',
@@ -3590,8 +3593,9 @@ def test_param_variational_noise():
     network.construct_from_dict({
       "output": {
         "class": "subnetwork",
+        "from": "data:data",
         "subnetwork": {
-          "output": {"class": "linear", "n_out": 13, "activation": "tanh"}
+          "output": {"class": "linear", "n_out": 13, "activation": "tanh", "from": "data"}
         }
       }
     })
@@ -3864,8 +3868,8 @@ def test_split_info_input():
     "extern_data": {"data": {"dim": 7}}
   })
   net_dict = {
-    "a": {"class": "linear", "activation": "tanh", "n_out": 11},
-    "b": {"class": "linear", "activation": "tanh", "n_out": 13},
+    "a": {"class": "linear", "activation": "tanh", "n_out": 11, "from": "data:data"},
+    "b": {"class": "linear", "activation": "tanh", "n_out": 13, "from": "data:data"},
     "concat": {"class": "copy", "from": ["a", "b"]},
     "output": {"class": "linear", "activation": None, "with_bias": True, "from": ["concat"], "n_out": 17}
   }
@@ -3925,16 +3929,19 @@ def test_extra_subnet():
   net_dict = {
     "subnet": {
       "class": "subnetwork",
+      "from": "data:data",
       "subnetwork": {
-        "output": {"class": "linear", "activation": "relu", "n_out": n_out},
-        "output2": {"class": "linear", "activation": "relu", "n_out": n_out, "is_output_layer": True},
+        "output": {"class": "linear", "activation": "relu", "n_out": n_out, "from": "data"},
+        "output2": {"class": "linear", "activation": "relu", "n_out": n_out, "from": "data", "is_output_layer": True},
       },
     },
     "extra.2:subnet": {
       "class": "subnetwork",
+      "from": "data:data",
       "subnetwork": {
-        "output": {"class": "copy"},
-        "output2": {"class": "linear", "activation": None, "n_out": n_out, "is_output_layer": True},
+        "output": {"class": "copy", "from": "data"},
+        "output2": {
+          "class": "linear", "from": "data:data", "activation": None, "n_out": n_out, "is_output_layer": True},
       },
     },
     # extra.3:subnet automatically

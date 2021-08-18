@@ -207,7 +207,7 @@ def test_Updater_simple_batch():
     config = Config()
     network = TFNetwork(extern_data=extern_data, train_flag=True)
     network.construct_from_dict({
-      "layer1": {"class": "linear", "activation": "tanh", "n_out": 13},
+      "layer1": {"class": "linear", "activation": "tanh", "n_out": 13, "from": "data:data"},
       "layer2": {"class": "linear", "activation": "tanh", "n_out": 13, "from": ["layer1"]},
       "output": {"class": "softmax", "loss": "ce", "target": "classes", "from": ["layer2"]}
     })
@@ -246,7 +246,7 @@ def test_Updater_multiple_optimizers():
     config = Config()
     network = TFNetwork(extern_data=extern_data, train_flag=True)
     network.construct_from_dict({
-      "layer1": {"class": "linear", "activation": "tanh", "n_out": 13,
+      "layer1": {"class": "linear", "activation": "tanh", "n_out": 13, "from": "data:data",
                  "updater_opts": {"optimizer": {"class": "Adam"}}},
       "layer2": {"class": "linear", "activation": "tanh", "n_out": 13, "from": ["layer1"],
                  "updater_opts": {"optimizer": {"class": "Adagrad"}}},
@@ -291,7 +291,7 @@ def test_Updater_multiple_optimizers_and_opts():
     config = Config()
     network = TFNetwork(extern_data=extern_data, train_flag=True)
     network.construct_from_dict({
-      "layer1": {"class": "linear", "activation": "tanh", "n_out": 13,
+      "layer1": {"class": "linear", "activation": "tanh", "n_out": 13, "from": "data:data",
                  "updater_opts": {"optimizer": {"class": "Adam"}, "accum_grad_multiple_step": 2}},
       "layer2": {"class": "linear", "activation": "tanh", "n_out": 13, "from": ["layer1"],
                  "updater_opts": {

@@ -214,7 +214,7 @@ def test_engine_train(additional_config=None):
     "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
-    "network": {"output": {"class": "softmax", "loss": "ce"}},
+    "network": {"output": {"class": "softmax", "loss": "ce", "from": "data:data"}},
     "start_epoch": 1,
     "num_epochs": 2
   })
@@ -266,7 +266,7 @@ def test_engine_train_new_dataset_pipeline():
     "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
-    "network": {"output": {"class": "softmax", "loss": "ce"}},
+    "network": {"output": {"class": "softmax", "loss": "ce", "from": "data:data"}},
     "start_epoch": 1,
     "num_epochs": 2,
     "max_seqs": 2,
@@ -309,7 +309,7 @@ def test_engine_train_uneven_batches():
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
-      "rnn": {"class": "rec", "unit": "lstm", "n_out": 3},  # make it recurrent
+      "rnn": {"class": "rec", "unit": "lstm", "n_out": 3, "from": "data:data"},  # make it recurrent
       "output": {"class": "softmax", "loss": "ce", "from": "rnn"}},
     "start_epoch": 1,
     "num_epochs": 2,
@@ -357,7 +357,7 @@ def test_engine_train_dummy_distributed():
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
-      "rnn": {"class": "rec", "unit": "lstm", "n_out": 3},  # make it recurrent
+      "rnn": {"class": "rec", "unit": "lstm", "n_out": 3, "from": "data:data"},  # make it recurrent
       "output": {"class": "softmax", "loss": "ce", "from": "rnn"}},
     "start_epoch": 1,
     "num_epochs": 2,
@@ -400,8 +400,9 @@ def test_engine_train_subnet_loss():
     "network": {
       "output": {
         "class": "subnetwork",
+        "from": "data:data",
         "subnetwork": {
-          "output": {"class": "softmax", "loss": "ce"}
+          "output": {"class": "softmax", "loss": "ce", "from": "data"}
         }}},
     "start_epoch": 1,
     "num_epochs": 1,
@@ -433,6 +434,7 @@ def test_engine_train_rec_subnet_loss_optimized():
       "output": {
         "class": "rec",
         "target": "classes",
+        "from": "data:data",
         "unit": {
           "output": {"class": "softmax", "loss": "ce", "from": "data:source"}
         }}},
@@ -467,6 +469,7 @@ def test_engine_train_rec_subnet_loss_non_optimized():
         "class": "rec",
         "optimize_move_layers_out": False,
         "target": "classes",
+        "from": "data:data",
         "unit": {
           "output": {"class": "softmax", "loss": "ce", "from": "data:source"}
         }}},
@@ -496,7 +499,7 @@ def test_engine_train_accum_grad_multiple_step():
     "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
-    "network": {"output": {"class": "softmax", "loss": "ce"}},
+    "network": {"output": {"class": "softmax", "loss": "ce", "from": "data:data"}},
     "start_epoch": 1,
     "num_epochs": 2,
     "accum_grad_multiple_step": 3,
@@ -597,7 +600,7 @@ def test_engine_analyze():
     "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
-    "network": {"output": {"class": "softmax", "loss": "ce"}},
+    "network": {"output": {"class": "softmax", "loss": "ce", "from": "data:data"}},
     "sil_label_idx": 0,
   })
   _cleanup_old_models(config)
@@ -624,7 +627,7 @@ def test_engine_forward_single():
     "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
-    "network": {"output": {"class": "softmax", "loss": "ce"}}
+    "network": {"output": {"class": "softmax", "loss": "ce", "from": "data:data"}}
   })
   _cleanup_old_models(config)
   engine = Engine(config=config)
@@ -652,7 +655,7 @@ def test_engine_forward_to_hdf():
     "model": "%s/model" % _get_tmp_dir(),
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
-    "network": {"output": {"class": "softmax", "loss": "ce"}},
+    "network": {"output": {"class": "softmax", "loss": "ce", "from": "data:data"}},
     "output_file": output_file,
   })
   _cleanup_old_models(config)
@@ -820,7 +823,7 @@ def check_engine_search(extra_rec_kwargs=None):
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
-      "enc0": {"class": "linear", "activation": "sigmoid", "n_out": 3},
+      "enc0": {"class": "linear", "activation": "sigmoid", "n_out": 3, "from": "data:data"},
       "enc1": {"class": "reduce", "mode": "max", "axis": "t", "from": "enc0"},
       "output": dict_joined({
         "class": "rec", "from": [], "max_seq_len": 10, "target": "classes",
@@ -901,7 +904,7 @@ def check_engine_search_attention(extra_rec_kwargs=None):
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
-      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5},
+      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5, "from": "data:data"},
       "output": dict_joined({
         "class": "rec",
         "from": [],
@@ -1002,8 +1005,10 @@ def run_dummy_training(net_dict):
 
 def check_engine_train_simple_attention(lstm_unit):
   net_dict = {
-    "lstm0_fw": {"class": "rec", "unit": lstm_unit, "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": 1},
-    "lstm0_bw": {"class": "rec", "unit": lstm_unit, "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": -1},
+    "lstm0_fw": {"class": "rec", "unit": lstm_unit, "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": 1,
+                 "from": "data:data"},
+    "lstm0_bw": {"class": "rec", "unit": lstm_unit, "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": -1,
+                 "from": "data:data"},
 
     "lstm1_fw": {"class": "rec", "unit": lstm_unit, "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": 1,
                  "from": ["lstm0_fw", "lstm0_bw"]},
@@ -1058,7 +1063,7 @@ def test_attention_train_then_search():
     "num_inputs": n_data_dim,
     "num_epochs": 1,
     "network": {
-      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5},
+      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5, "from": "data:data"},
       "output": {
         "class": "rec",
         "from": [],
@@ -1098,7 +1103,7 @@ def test_attention_train_then_search():
 
 def test_attention_subnetwork_base_dependency():
   net_dict = {
-    "encoder": {"class": "linear", "activation": "tanh", "n_out": 14},
+    "encoder": {"class": "linear", "activation": "tanh", "n_out": 14, "from": "data:data"},
     "decoder": {
       "class": "rec",
       "from": [],
@@ -1129,7 +1134,7 @@ def test_attention_subnetwork_base_dependency():
 
 def test_attention_subnetwork_from_dependency():
   net_dict = {
-    "encoder": {"class": "linear", "activation": "tanh", "n_out": 14},
+    "encoder": {"class": "linear", "activation": "tanh", "n_out": 14, "from": "data:data"},
     "decoder": {
       "class": "rec",
       "from": [],
@@ -1178,7 +1183,7 @@ def test_attention_no_encoder_dependency():
                     'classes': {'dim': n_classes_dim, 'sparse': True}},
     "num_epochs": 1,
     "network": {
-      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5, 'out_type': {}},
+      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5, 'out_type': {}, "from": "data:data"},
       "enc_transformed": {'class': 'linear', 'from': ['encoder'], 'n_out': 1, 'activation': None},
       "zero_enc_transformed": {'class': 'eval', 'from': ['enc_transformed'], 'eval': 'tf.zeros_like(source(0))'},
       "output": {
@@ -1254,7 +1259,7 @@ def check_attention_variant(recurrent_unit_dict):
                     'classes': {'dim': n_classes_dim, 'sparse': True}},
     "num_epochs": 1,
     "network": {
-      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5},
+      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5, "from": "data:data"},
       "enc_transformed": {'class': 'linear', 'from': ['encoder'], 'n_out': 6, 'activation': None},
       "output": {
         "class": "rec",
@@ -1409,7 +1414,7 @@ def test_attention_search_in_train_then_search():
     :rtype: dict[str,dict[str]]
     """
     return {
-      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5},
+      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5, "from": "data:data"},
       "output": {
         "class": "rec",
         "from": [],
@@ -1538,7 +1543,7 @@ def test_attention_two_targets():
   Tests training and search when using a ChoiceLayer with two targets.
   """
   net_dict = {
-    "encoder": {"class": "linear", "activation": "tanh", "n_out": 5},
+    "encoder": {"class": "linear", "activation": "tanh", "n_out": 5, "from": "data:data"},
     "output": {
       "class": "rec",
       "from": [],
@@ -1585,7 +1590,7 @@ def test_attention_two_dependent_targets():
   beam_size_1 = 3
 
   net_dict = {
-    "encoder": {"class": "linear", "activation": "tanh", "n_out": 5},
+    "encoder": {"class": "linear", "activation": "tanh", "n_out": 5, "from": "data:data"},
     "output": {
       "class": "rec",
       "from": [],
@@ -1636,7 +1641,7 @@ def test_rec_optim_all_out():
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
-      "enc0": {"class": "linear", "activation": "sigmoid", "n_out": 3},
+      "enc0": {"class": "linear", "activation": "sigmoid", "n_out": 3, "from": "data:data"},
       "enc1": {"class": "reduce", "mode": "max", "axis": "t", "from": "enc0"},
       "output": {
         "class": "rec", "optimize_move_layers_out": True, "from": [], "max_seq_len": 10, "target": "classes",
@@ -1696,7 +1701,7 @@ def test_rec_optim_all_out():
 def test_rec_subnet_train_t3b():
   beam_size = 2
   network = {
-    "data_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+    "data_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6, "from": "data:data"},
     "lstm0_fw" : { "class": "rec", "unit": "nativelstm2", "n_out" : 6, "dropout": 0.1, "L2": 0.01, "direction": 1, "from": ["data_embed"] },
     "lstm0_bw" : { "class": "rec", "unit": "nativelstm2", "n_out" : 6, "dropout": 0.1, "L2": 0.01, "direction": -1, "from": ["data_embed"] },
     "lstm1_fw" : { "class": "rec", "unit": "nativelstm2", "n_out" : 6, "dropout": 0.1, "L2": 0.01, "direction": 1, "from": ["data_embed"] },
@@ -1760,7 +1765,7 @@ def test_rec_subnet_train_t3b():
 def test_rec_subnet_train_t3d():
   beam_size = 2
   network = {
-    "data_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+    "data_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6, "from": "data:data"},
     "lstm0_fw" : { "class": "rec", "unit": "nativelstm2", "n_out" : 5, "dropout": 0.1, "L2": 0.01, "direction": 1, "from": ["data_embed"] },
     "lstm0_bw" : { "class": "rec", "unit": "nativelstm2", "n_out" : 5, "dropout": 0.1, "L2": 0.01, "direction": -1, "from": ["data_embed"] },
     "encoder_state": {"class": "get_last_hidden_state", "from": ["lstm0_fw", "lstm0_bw"], 'key': 'c', "n_out": 2*5},
@@ -1814,7 +1819,7 @@ def test_rec_subnet_train_t3d():
 def test_rec_subnet_train_t3d_simple():
   beam_size = 2
   network = {
-    "encoder": {"class": "linear", "activation": "tanh", "n_out": 5},
+    "encoder": {"class": "linear", "activation": "tanh", "n_out": 5, "from": "data:data"},
     "output": {"class": "rec", "from": [], "unit": {
       'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"]},
       "end": {"class": "compare", "from": ["output"], "value": 0},
@@ -1924,11 +1929,11 @@ def deterministic_train_check(layer_opts):
 
 
 def test_deterministic_train_linear():
-  deterministic_train_check({"class": "linear", "activation": "tanh", "n_out": 5})
+  deterministic_train_check({"class": "linear", "activation": "tanh", "n_out": 5, "from": "data:data"})
 
 
 def test_deterministic_train_rec_nativelstm2():
-  deterministic_train_check({"class": "rec", "unit": "nativelstm2", "n_out": 5})
+  deterministic_train_check({"class": "rec", "unit": "nativelstm2", "n_out": 5, "from": "data:data"})
 
 
 def _create_deterministic_layer_checks():
@@ -1978,7 +1983,8 @@ def test_rec_subnet_auto_optimize():
     # Actually, in the whole network, there should not be any randomness because of that for this check.
     weights_init = 0.01
     network = {
-      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5, "forward_weights_init": weights_init},
+      "encoder": {
+        "class": "linear", "activation": "tanh", "n_out": 5, "forward_weights_init": weights_init, "from": "data:data"},
       "output": {
         "class": "rec", "from": [],
         "target": "classes", "max_seq_len": 75,
@@ -2083,7 +2089,7 @@ def test_rec_subnet_construct_1():
 
   beam_size = 2
   net_dict = {
-    "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+    "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6, "from": "data:data"},
 
     "lstm0_fw": {"class": "rec", "unit": "nativelstm2", "n_out": 10, "direction": 1, "from": ["source_embed"]},
     "lstm0_bw": {"class": "rec", "unit": "nativelstm2", "n_out": 10, "direction": -1, "from": ["source_embed"]},
@@ -2140,7 +2146,7 @@ def test_rec_subnet_construct_2():
 
   beam_size = 2
   net_dict = {
-    "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+    "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6, "from": "data:data"},
 
     "lstm0_fw": {"class": "rec", "unit": "nativelstm2", "n_out": 10, "direction": 1, "from": ["source_embed"]},
     "lstm0_bw": {"class": "rec", "unit": "nativelstm2", "n_out": 10, "direction": -1, "from": ["source_embed"]},
@@ -2203,7 +2209,7 @@ def test_rec_subnet_construct_3():
 
   beam_size = 2
   net_dict = {
-    "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+    "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6, "from": "data:data"},
 
     "lstm0_fw": {"class": "rec", "unit": "nativelstm2", "n_out": 10, "direction": 1, "from": ["source_embed"]},
     "lstm0_bw": {"class": "rec", "unit": "nativelstm2", "n_out": 10, "direction": -1, "from": ["source_embed"]},
@@ -2267,8 +2273,8 @@ def test_rec_subnet_eval_init_out_apply0():
   EncValueTotalDim = AttNumHeads * 2
   EncValuePerHeadDim = EncValueTotalDim // AttNumHeads
   network = {
-    "lstm0_fw": {"class": "rec", "unit": "nativelstm2", "n_out": 2, "direction": 1},
-    "lstm0_bw": {"class": "rec", "unit": "nativelstm2", "n_out": 2, "direction": -1},
+    "lstm0_fw": {"class": "rec", "unit": "nativelstm2", "n_out": 2, "direction": 1, "from": "data:data"},
+    "lstm0_bw": {"class": "rec", "unit": "nativelstm2", "n_out": 2, "direction": -1, "from": "data:data"},
     "lstm0_pool": {"class": "pool", "mode": "max", "padding": "same", "pool_size": (2,),
                    "from": ["lstm0_fw", "lstm0_bw"], "trainable": False},
     "encoder": {"class": "copy", "from": ["lstm0_pool"]},
@@ -2742,8 +2748,8 @@ def test_search_multi_choice_hdf_dump():
 def test_net_safe_log_to_log_softmax():
   n_out = 5
   net_dict = {
-    "ff_in_window": {"class": "window", "window_size": 3, "trainable": False},  # (B,T,3,3)
-    "ff_in": {"class": "merge_dims", "axes": "except_time", "from": ["ff_in_window"], "trainable": False},  # (B,T,9)
+    "ff_in_window": {"class": "window", "window_size": 3, "from": "data:data"},  # (B,T,3,3)
+    "ff_in": {"class": "merge_dims", "axes": "except_time", "from": ["ff_in_window"]},  # (B,T,9)
     "ff0": {"class": "hidden", "activation": "relu", "n_out": 8, "L2": 0.01, "from": ["ff_in"]},  # (B,T,8)
     "ff_out": {"class": "softmax", "n_out": n_out, "from": ["ff0"]},  # (B,T,5)
     "ff_out_prior": {
@@ -2796,8 +2802,12 @@ def test_preload_from_files():
       "num_outputs": n_out,
       "num_inputs": n_in,
       "network": {
-        "l1": {"class": "linear", "activation": None, "n_out": n_hidden, 'bias_init': 1.0, 'forward_weights_init': 'orthogonal'},
-        "output": {"class": "linear", "activation": None, "n_out": n_out, "from": ["l1"], 'bias_init': 2.0, 'forward_weights_init': 'orthogonal'}
+        "l1": {
+          "class": "linear", "activation": None, "n_out": n_hidden, "from": "data:data",
+          'bias_init': 1.0, 'forward_weights_init': 'orthogonal'},
+        "output": {
+          "class": "linear", "activation": None, "n_out": n_out, "from": ["l1"],
+          'bias_init': 2.0, 'forward_weights_init': 'orthogonal'}
       }
     })
     network = TFNetwork(config=config, train_flag=True)
@@ -2819,7 +2829,7 @@ def test_preload_from_files():
     "num_outputs": n_out,
     "num_inputs": n_in,
     "network": {
-      "l0": {"class": "linear", "activation": None, "n_out": n_in},
+      "l0": {"class": "linear", "activation": None, "n_out": n_in, "from": "data:data"},
       "main_l1": {"class": "linear", "activation": None, "n_out": n_hidden, "from": ["l0"]},
       "main_output": {"is_output_layer": True, "class": "linear", "activation": None, "n_out": n_out, "from": ["main_l1"]},
     },
@@ -2877,8 +2887,12 @@ def test_preload_from_files_with_reuse():
       "num_outputs": n_out,
       "num_inputs": n_in,
       "network": {
-        "l1": {"class": "linear", "activation": None, "n_out": n_hidden, 'bias_init': 1.0, 'forward_weights_init': 'orthogonal'},
-        "output": {"class": "linear", "activation": None, "n_out": n_out, "from": ["l1"], 'bias_init': 2.0, 'forward_weights_init': 'orthogonal'}
+        "l1": {
+          "class": "linear", "activation": None, "n_out": n_hidden, "from": "data:data",
+          'bias_init': 1.0, 'forward_weights_init': 'orthogonal'},
+        "output": {
+          "class": "linear", "activation": None, "n_out": n_out, "from": ["l1"],
+          'bias_init': 2.0, 'forward_weights_init': 'orthogonal'}
       }
     })
     network = TFNetwork(config=config, train_flag=True)
@@ -2900,7 +2914,7 @@ def test_preload_from_files_with_reuse():
     "num_outputs": n_out,
     "num_inputs": n_in,
     "network": {
-      "l0": {"class": "linear", "activation": None, "n_out": n_in},
+      "l0": {"class": "linear", "activation": None, "n_out": n_in, "from": "data:data"},
       "main_l1": {"class": "linear", "activation": None, "n_out": n_hidden, "from": ["l0"]},
       "main_output": {"is_output_layer": True, "class": "linear", "activation": None, "n_out": n_out, "from": ["main_l1"]},
       "clone_l0": {"class": "linear", "activation": None, "n_out": n_in, "from": "main_output"},
@@ -2969,7 +2983,7 @@ def test_preload_from_files_ignore_missing():
       "num_outputs": n_out,
       "num_inputs": n_in,
       "network": {
-        "l1": {"class": "linear", "activation": None, "n_out": n_hidden},
+        "l1": {"class": "linear", "activation": None, "n_out": n_hidden, "from": "data:data"},
         "output": {"class": "linear", "activation": None, "n_out": n_out, "from": ["l1"]}
       }
     })
@@ -2992,7 +3006,7 @@ def test_preload_from_files_ignore_missing():
     "num_outputs": n_out,
     "num_inputs": n_in,
     "network": {
-      "l0": {"class": "linear", "activation": None, "n_out": n_in},
+      "l0": {"class": "linear", "activation": None, "n_out": n_in, "from": "data:data"},
       "l1": {"class": "linear", "activation": None, "n_out": n_hidden, "from": ["l0"]},
       "output": {"is_output_layer": True, "class": "linear", "activation": None, "n_out": n_out, "from": ["l1"]},
     },
@@ -3054,7 +3068,7 @@ def test_init_network_from_config_preload_from_files_eval():
       "num_outputs": n_out,
       "num_inputs": n_in,
       "network": {
-        "l1": {"class": "linear", "activation": None, "n_out": n_hidden},
+        "l1": {"class": "linear", "activation": None, "n_out": n_hidden, "from": "data:data"},
         "output": {"class": "linear", "activation": None, "n_out": n_out, "from": ["l1"]}
       }
     })
@@ -3068,8 +3082,8 @@ def test_init_network_from_config_preload_from_files_eval():
     "num_outputs": n_out,
     "num_inputs": n_in,
     "network": {
-      "l1": {"class": "linear", "activation": None, "n_out": n_hidden},
-      "main_l1": {"class": "linear", "activation": None, "n_out": n_hidden},
+      "l1": {"class": "linear", "activation": None, "n_out": n_hidden, "from": "data:data"},
+      "main_l1": {"class": "linear", "activation": None, "n_out": n_hidden, "from": "data:data"},
       "add": {"class": "eval", "eval": "source(0) + source(1)", "n_out": n_hidden, "from": ["l1", "main_l1"]},
       "output": {"is_output_layer": True, "class": "linear", "activation": None, "n_out": n_out, "from": ["add"]},
     },
@@ -3308,7 +3322,7 @@ def test_attention_forward_hdf_then_unflatten_2d():
   # Simple version of e.g.:
   # https://github.com/rwth-i6/returnn-experiments/blob/master/2018-attention/wmt2017ende/blocks-flstm.enc6l.decb.pretrain2.adam.lr1e_3.mseqs100.bs4000.ls01.tembi0.invfert.oeps1e_8.gradnoise0.seqsort1000.config
   att_net_dict = {
-    "input_embed": {"class": "linear", "activation": None, "n_out": 10},
+    "input_embed": {"class": "linear", "activation": None, "n_out": 10, "from": "data:data"},
 
     "lstm0_fw": {"class": "rec", "unit": "LSTMBlock", "n_out": 10, "direction": 1, "from": ["input_embed"]},
     "lstm0_bw": {"class": "rec", "unit": "LSTMBlock", "n_out": 10, "direction": -1, "from": ["input_embed"]},

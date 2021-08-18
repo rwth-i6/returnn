@@ -32,8 +32,8 @@ config.update(dict(
   chunking="0",
 
   network={
-    "fw0": {"class": "rec", "unit": "NativeLstm2", "dropout": 0.1, "n_out": 10},
-    "output": {"class": "softmax", "loss": "ce", "from": ["fw0"]}
+    "fw0": {"class": "rec", "unit": "NativeLstm2", "dropout": 0.1, "n_out": 10, "from": "data:data"},
+    "output": {"class": "softmax", "loss": "ce", "from": "fw0"}
   },
 
   # training

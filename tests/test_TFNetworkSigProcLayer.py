@@ -40,7 +40,8 @@ def test_melFilterbankLayer():
       "num_inputs": n_in,
       "network": {
         layer_name: {
-          "class": "mel_filterbank", "fft_size": 512, "nr_of_filters": n_out, "n_out": n_out, "is_output_layer": True}
+          "class": "mel_filterbank", "fft_size": 512, "nr_of_filters": n_out, "n_out": n_out, "is_output_layer": True,
+          "from": "data:data"}
       }})
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_value("network"))
@@ -61,7 +62,8 @@ def test_complexLinearProjectionLayer():
       "num_inputs": n_in,
       "network": {
         layer_name: {
-          "class": "complex_linear_projection", "nr_of_filters": n_out, "n_out": n_out, "is_output_layer": True}
+          "class": "complex_linear_projection", "nr_of_filters": n_out, "n_out": n_out, "is_output_layer": True,
+          "from": "data:data"}
       }})
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_value("network"))
@@ -72,6 +74,7 @@ def test_complexLinearProjectionLayer():
     test_input = np.expand_dims(np.reshape(np.transpose(
       np.reshape(np.concatenate([i_r, i_i], axis=1), (1, 2, 257)), [0, 2, 1]), (1, 514)), 0)
     test_clp_kernel = np.ones((2, n_in // 2, 128))
+    network.initialize_params(session)
     test_clp_output = session.run(
       layer.output.placeholder,
       feed_dict={network.get_extern_data('data').placeholder: test_input, layer._clp_kernel: test_clp_kernel})
@@ -104,7 +107,10 @@ def test_MultichannelStftLayer():
         "num_inputs": test_input.shape[2],
         "network": {
           layer_name: {
-            "class": "multichannel_stft_layer", "frame_shift": frame_shift, "frame_size": frame_size, "window": window, "fft_size": fft_size, "use_rfft": True, "nr_of_channels": 2, "is_output_layer": True}
+            "class": "multichannel_stft_layer",
+            "frame_shift": frame_shift, "frame_size": frame_size, "window": window,
+            "fft_size": fft_size, "use_rfft": True, "nr_of_channels": 2, "is_output_layer": True,
+            "from": "data:data"}
         }})
       network = TFNetwork(config=config, train_flag=True)
       network.construct_from_dict(config.typed_value("network"))
@@ -148,7 +154,10 @@ def test_MultichannelMultiResStftLayer():
         "num_inputs": test_input.shape[2],
         "network": {
           layer_name: {
-            "class": "multichannel_multiresolution_stft_layer", "frame_shift": frame_shift, "frame_sizes": frame_sizes, "window": window, "fft_sizes": fft_sizes, "use_rfft": True, "nr_of_channels": 2, "is_output_layer": True}
+            "class": "multichannel_multiresolution_stft_layer",
+            "frame_shift": frame_shift, "frame_sizes": frame_sizes, "window": window,
+            "fft_sizes": fft_sizes, "use_rfft": True, "nr_of_channels": 2, "is_output_layer": True,
+            "from": "data:data"}
         }})
       network = TFNetwork(config=config, train_flag=True)
       network.construct_from_dict(config.typed_value("network"))
@@ -176,7 +185,10 @@ def test_MultichannelMultiResStftLayer():
         "num_inputs": test_input.shape[2],
         "network": {
           layer_name: {
-            "class": "multichannel_multiresolution_stft_layer", "frame_shift": frame_shift, "frame_sizes": frame_sizes, "window": window, "fft_sizes": fft_sizes, "use_rfft": True, "nr_of_channels": 2, "is_output_layer": True}
+            "class": "multichannel_multiresolution_stft_layer",
+            "frame_shift": frame_shift, "frame_sizes": frame_sizes, "window": window,
+            "fft_sizes": fft_sizes, "use_rfft": True, "nr_of_channels": 2, "is_output_layer": True,
+            "from": "data:data"}
         }})
       network = TFNetwork(config=config, train_flag=True)
       network.construct_from_dict(config.typed_value("network"))
@@ -208,7 +220,10 @@ def test_MultichannelMultiResStftLayer():
         "num_inputs": test_input.shape[2],
         "network": {
           layer_name: {
-            "class": "multichannel_multiresolution_stft_layer", "frame_shift": frame_shift, "frame_sizes": frame_sizes, "window": window, "fft_sizes": fft_sizes, "use_rfft": True, "nr_of_channels": 2, "is_output_layer": True}
+            "class": "multichannel_multiresolution_stft_layer",
+            "frame_shift": frame_shift, "frame_sizes": frame_sizes, "window": window,
+            "fft_sizes": fft_sizes, "use_rfft": True, "nr_of_channels": 2, "is_output_layer": True,
+            "from": "data:data"}
         }})
       network = TFNetwork(config=config, train_flag=True)
       network.construct_from_dict(config.typed_value("network"))

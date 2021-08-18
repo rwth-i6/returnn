@@ -169,25 +169,25 @@ def _check_train_simple_network(network, num_steps=10):
 
 
 def test_rec_nativelstm():
-  _check_train_simple_network({"output": {"class": "rec", "unit": "nativelstm", "loss": "mse"}})
+  _check_train_simple_network({"output": {"class": "rec", "unit": "nativelstm", "loss": "mse", "from": "data:data"}})
 
 
 def test_rec_nativelstm2():
-  _check_train_simple_network({"output": {"class": "rec", "unit": "nativelstm2", "loss": "mse"}})
+  _check_train_simple_network({"output": {"class": "rec", "unit": "nativelstm2", "loss": "mse", "from": "data:data"}})
 
 
 def test_rec_rhn():
   _check_train_simple_network({
     "output": {
       "class": "rec", "unit": "rhn", "unit_opts": {"dropout": 0.1},
-      "loss": "mse"}})
+      "loss": "mse", "from": "data:data"}})
 
 
 def test_rec_rhn_nan():
   _check_train_simple_network({
     "output": {
       "class": "rec", "unit": "rhn", "unit_opts": {"dropout": 0.9, "dropout_seed": 1},
-      "loss": "mse"}})
+      "loss": "mse", "from": "data:data"}})
 
 
 def test_rhn_nan():
@@ -320,7 +320,7 @@ def test_state_keep_over_epoch():
   limit = 1.0
   src_seq = random.uniform(-limit, limit, (batch_size, seq_len, num_inputs))
   net_dict = {"output": {
-    "class": "rec", "unit": "rhn", "initial_state": 'keep_over_epoch', 'n_out': num_outputs}}
+    "class": "rec", "unit": "rhn", "initial_state": 'keep_over_epoch', 'n_out': num_outputs, "from": "data:data"}}
 
   with make_scope() as session:
     print("create graph")
@@ -353,22 +353,23 @@ def test_state_keep_over_epoch():
 
 def test_lstm_initial_state_zero():
   _check_train_simple_network({
-    "output": {"class": "rec", "unit": "lstm", "loss": "mse", "initial_state": "zeros"}})
+    "output": {"class": "rec", "unit": "lstm", "loss": "mse", "initial_state": "zeros", "from": "data:data"}})
 
 
 def test_lstm_initial_state_var():
   _check_train_simple_network({
-    "output": {"class": "rec", "unit": "lstm", "loss": "mse", "initial_state": "var"}})
+    "output": {"class": "rec", "unit": "lstm", "loss": "mse", "initial_state": "var", "from": "data:data"}})
 
 
 def test_nativelstm2_initial_state_var():
   _check_train_simple_network({
-    "output": {"class": "rec", "unit": "nativelstm2", "loss": "mse", "initial_state": "var"}})
+    "output": {"class": "rec", "unit": "nativelstm2", "loss": "mse", "initial_state": "var", "from": "data:data"}})
 
 
 def test_nativelstm2_initial_state_keep_epoch():
   _check_train_simple_network({
-    "output": {"class": "rec", "unit": "nativelstm2", "loss": "mse", "initial_state": "keep_over_epoch"}})
+    "output": {
+      "class": "rec", "unit": "nativelstm2", "loss": "mse", "initial_state": "keep_over_epoch", "from": "data:data"}})
 
 
 def test_slow_TensorArray():
@@ -544,7 +545,7 @@ def test_rec_subnet_with_choice():
       "num_outputs": 3,
       "num_inputs": 4,
       "network": {
-        "output": {"class": "rec", "target": "classes", "unit": {
+        "output": {"class": "rec", "from": "data:data", "target": "classes", "unit": {
           "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
           "output": {"class": "choice", "beam_size": 4, "from": ["prob"], "target": "classes", "initial_output": 0}
         }},
@@ -614,7 +615,7 @@ def test_cudnn_save_restore():
         "num_outputs": num_outputs,
         "num_inputs": num_inputs,
         "network": {
-          "layer1": {"class": "rec", "n_out": 6, "unit": "CudnnLSTM"},
+          "layer1": {"class": "rec", "n_out": 6, "unit": "CudnnLSTM", "from": "data:data"},
           "layer2": {"class": "rec", "n_out": 6, "unit": "CudnnLSTM", "from": ["layer1"]},
           "output": {"class": "linear", "activation": None, "n_out": num_outputs, "from": ["layer2"]}
         }
@@ -693,7 +694,7 @@ def test_cudnn_save_restore():
         "num_outputs": num_outputs,
         "num_inputs": num_inputs,
         "network": {
-          "layer1": {"class": "rec", "n_out": 6, "unit": "LSTMBlockFused"},
+          "layer1": {"class": "rec", "n_out": 6, "unit": "LSTMBlockFused", "from": "data:data"},
           "layer2": {"class": "rec", "n_out": 6, "unit": "LSTMBlockFused", "from": ["layer1"]},
           "output": {"class": "linear", "activation": None, "n_out": num_outputs, "from": ["layer2"]}
         }
@@ -760,7 +761,7 @@ def test_RecLayer_NativeLstm_Nan():
     "num_inputs": num_inputs,
     "num_outputs": {"data": [num_inputs, 2], "classes": [num_outputs, 2]},  # dense output
     "network": {
-      "output": {"class": "rec", "unit": "NativeLSTM", "loss": "mse"}
+      "output": {"class": "rec", "unit": "NativeLSTM", "loss": "mse", "from": "data:data"}
     },
     "adam": True,
     "debug_grad_summaries": True,
@@ -2224,7 +2225,7 @@ def test_rec_layer_move_out_of_loop():
 
   def get_net_dict():
     return {
-      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6, "from": "data:data"},
 
       "lstm0_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
                    "initial_state": "var", "n_out": 10, "direction": 1, "from": ["source_embed"]},
@@ -2390,7 +2391,7 @@ def test_rec_layer_move_out_of_loop_keep_constraints():
 
   def get_net_dict(l2_target_embed=0.0, l2_readout_in=0.0):
     return {
-      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6, "from": "data:data"},
 
       "lstm0_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
                    "initial_state": "var", "n_out": 10, "direction": 1, "from": ["source_embed"]},
@@ -2672,7 +2673,7 @@ def test_same_spatial_dim_after_rec_layers():
       "classes": {"dim": 17, "sparse": True, "available_for_inference": False}})
     net = TFNetwork(extern_data=extern_data, train_flag=True, config=config)
     net.construct_from_dict({
-      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6, "from": "data:data"},
       "lstm0_fw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": 1, "from": ["source_embed"]},
       "lstm0_bw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": -1, "from": ["source_embed"]},
       "lstm1_fw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"]},
@@ -2859,7 +2860,7 @@ def test_rec_layer_local_att_train_and_search():
     #"lstm1_fw": {"class": "rec", "unit": "nativelstm2", "n_out": LstmDim, "direction": 1, "from": ["lstm0_pool"]},
     #"lstm1_bw": {"class": "rec", "unit": "nativelstm2", "n_out": LstmDim, "direction": -1, "from": ["lstm0_pool"]},
     #"encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},  # dim: EncValueTotalDim
-    "lstm0_pool": {"class": "pool", "mode": "max", "padding": "same", "pool_size": (3,)},
+    "lstm0_pool": {"class": "pool", "mode": "max", "padding": "same", "pool_size": (3,), "from": "data:data"},
     "encoder": {"class": "rec", "unit": "nativelstm2", "from": "lstm0_pool", "n_out": EncValueTotalDim},
     "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"],
                 "n_out": EncKeyTotalDim},
@@ -3019,7 +3020,7 @@ def test_same_spatial_dim_after_rec_layers_with_pool():
         "from": "data:att_weights", "sizes": "data:att_weights_sizes", "num_axes": 2,
         "declare_same_sizes_as": {0: "data:classes", 1: "encoder"},
         "is_output_layer": True},
-      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6, "from": "data:data"},
       "lstm0_fw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": 1, "from": ["source_embed"]},
       "lstm0_bw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": -1, "from": ["source_embed"]},
       "lstm0_pool": {"class": "pool", "mode": "max", "padding": "same", "pool_size": (2,), "from": ["lstm0_fw", "lstm0_bw"]},
@@ -3057,7 +3058,7 @@ def test_rec_layer_search_select_src():
 
   def get_net_dict():
     return {
-      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6, "from": "data:data"},
 
       "lstm0_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
                    "initial_state": "var", "n_out": 10, "direction": 1, "from": ["source_embed"]},
@@ -3220,6 +3221,7 @@ def test_rec_subnet_simple_rnn():
       "network": {
         "output": {
           "class": "rec",
+          "from": "data:data",
           "unit": {
             # Recurrent subnet here, operate on a single time-step:
             "output": {
@@ -3288,6 +3290,7 @@ def test_rec_subnet_simple_rnn():
       "network": {
         "output": {
           "class": "rec",
+          "from": "data:data",
           "optimize_move_layers_out": False,  # We esp. want to test it perform a single step, for debugging.
           "unit": {
             # Recurrent subnet here, operate on a single time-step:
@@ -3587,7 +3590,7 @@ def test_reclayer_optimize_out_masked_computation_unmask():
       "mask": {"class": "compare", "from": "sum", "value": 0.0, "kind": "greater"},  # [B]
       "masked": {
         "class": "masked_computation", "mask": "mask", "from": "data:source",
-        "unit": {"class": "rec", "unit": "NativeLstm2", "n_out": 17}},
+        "unit": {"class": "rec", "unit": "NativeLstm2", "n_out": 17, "from": "data"}},
       "unmask": {"class": "unmask", "from": "masked", "mask": "mask"}
     })
 
@@ -3640,7 +3643,7 @@ def test_SplitLayer_move_out_as_output_layer():
 def test_reclayer_att_with_kv_in_rec():
   net_dict = {
     'decision': {'class': 'decide', 'from': ['output'], 'loss': 'edit_distance', 'loss_opts': {}, 'target': 'classes'},
-    'encoder': {'activation': None, 'class': 'linear', 'is_output_layer': True, 'n_out': 5},
+    'encoder': {'activation': None, 'class': 'linear', 'is_output_layer': True, 'n_out': 5, "from": "data:data"},
     'output': {
       'class': 'rec', 'max_seq_len': 'max_len_from("base:encoder") * 3', 'target': 'classes', 'from': [],
       'unit': {
@@ -3958,7 +3961,7 @@ class TransformerNetwork:
   def build(self):
     network = {
       "source_embed_raw": {"class": "linear", "activation": None, "with_bias": False, "n_out": self.EncValueTotalDim,
-                           "forward_weights_init": self.ff_init},
+                           "forward_weights_init": self.ff_init, "from": "data:data"},
       "source_embed_weighted": {"class": "eval", "from": ["source_embed_raw"],
                                 "eval": "source(0) * %f" % self.embed_weight},
       "source_embed_with_pos": {"class": "positional_encoding", "add_to_input": True,
@@ -4112,7 +4115,7 @@ def test_reclayer_move_out_input_train_and_search():
   config.update({
     "debug_print_layer_output_template": True,
     "network": {
-      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5},
+      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5, "from": "data:data"},
 
       "output": {"class": "rec", "from": [], "unit": {
 
@@ -4178,7 +4181,8 @@ def test_subnet_load_on_init_rec():
       "num_inputs": n_in,
       "network": {
         "input": {"class": "linear", "n_out": n_hidden, "activation": "identity",
-                  "forward_weights_init": "random_normal_initializer(mean=0.0, stddev=1.0)"},
+                  "forward_weights_init": "random_normal_initializer(mean=0.0, stddev=1.0)",
+                  "from": "data:data"},
         "lstm0": {"class": "rec", "unit": "lstm",
                   "forward_weights_init": "random_normal_initializer(mean=0.0, stddev=1.0)",
                   "recurrent_weights_init": "random_normal_initializer(mean=0.0, stddev=1.0)",
@@ -4235,6 +4239,7 @@ def test_subnet_load_on_init_rec():
       "network": {
         "output": {
           "class": "rec",
+          "from": "data:data",
           "optimize_move_layers_out": False,  # We esp. want to test it perform a single step, for debugging.
           "unit": {
             # Recurrent subnet here, operate on a single time-step:
@@ -4244,7 +4249,7 @@ def test_subnet_load_on_init_rec():
               # Note: This has to convert the params into the right format.
               "load_on_init": model_filename,
               "subnetwork": {
-                "input": {"class": "linear", "n_out": n_hidden, "activation": "identity"},
+                "input": {"class": "linear", "n_out": n_hidden, "activation": "identity", "from": "data"},
                 "lstm0": {"class": "rnn_cell", "unit": "LSTMBlock", "unit_opts": {"forget_bias": 0.0},
                           "n_out": n_hidden, "from": ["input"]},
                 "lstm1": {"class": "rnn_cell", "unit": "LSTMBlock", "unit_opts": {"forget_bias": 0.0},
@@ -4306,7 +4311,7 @@ def test_convert_lstm_params_save_load():
       # Thus explicitly use this for the calculation.
       unit_opts["forget_bias"] = 0.0
     net_dict = {
-      "input": {"class": "linear", "n_out": n_hidden0, "activation": None, "with_bias": False},
+      "input": {"class": "linear", "n_out": n_hidden0, "activation": None, "with_bias": False, "from": "data:data"},
       "lstm1": {"class": "rec", "unit": lstm_unit, "unit_opts": unit_opts, "n_out": n_hidden1, "from": "input"},
       "lstm2": {"class": "rec", "unit": lstm_unit, "unit_opts": unit_opts, "n_out": n_hidden2, "from": "lstm1"},
       "output": {"class": "softmax", "n_out": n_out, "from": "lstm2"}}
@@ -4616,7 +4621,7 @@ def test_rec_layer_search_select_src_reuse_layer():
 
   def get_net_dict():
     return {
-      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6, "from": "data:data"},
 
       "lstm0_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
                    "initial_state": "var", "n_out": 10, "direction": 1, "from": ["source_embed"]},
@@ -5454,7 +5459,7 @@ def test_MaskedComputationLayer_outside():
     net_dict = {
       "output": {
         "class": "masked_computation", "from": "data", "mask": "data:mask",
-        "unit": {"class": "copy"}
+        "unit": {"class": "copy", "from": "data"}
       },
     }
     net.construct_from_dict(net_dict)
@@ -5556,7 +5561,7 @@ def test_subnet_deps_search():
         'prior_lm_output': {'class': 'subnetwork',
                             'from': 'prev:output',
                             'subnetwork': {
-                              'input': {'activation': 'identity', 'class': 'linear', 'n_out': 13},
+                              'input': {'activation': 'identity', 'class': 'linear', 'n_out': 13, "from": "data"},
                               'lstm0': {'L2': 0.0,
                                         'class': 'rec',
                                         'direction': 1,
@@ -5610,7 +5615,7 @@ def test_untrainable_sublayers():
     config = Config()
     n_in, n_out = 2, 3
     net_dict = {
-      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6, "from": "data:data"},
 
       "lstm0_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
                    "initial_state": "var", "n_out": 10, "direction": 1, "from": ["source_embed"]},
@@ -5675,7 +5680,7 @@ def test_untrainable_reclayer():
     config = Config()
     n_in, n_out = 2, 3
     net_dict = {
-      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6, "from": "data:data"},
 
       "lstm0_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
                    "initial_state": "var", "n_out": 10, "direction": 1, "from": ["source_embed"]},
@@ -5740,7 +5745,7 @@ def test_trainable_sublayers():
     config = Config()
     n_in, n_out = 2, 3
     net_dict = {
-      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6, "from": "data:data"},
 
       "lstm0_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
                    "initial_state": "var", "n_out": 10, "direction": 1, "from": ["source_embed"]},
@@ -6328,7 +6333,7 @@ def test_cumulated_attention_weights_search():
   # Config works during training, but building graph raises exception during search:
   # Trying to reshape input tensor with n values into tensor with n * beam_size values
   net_dict = {
-    'source_embed': { 'class': 'linear', 'activation': None, 'n_out': dim},
+    'source_embed': { 'class': 'linear', 'activation': None, 'n_out': dim, "from": "data:data"},
     'output': {
       'class': 'rec',
       'from': [],
@@ -6410,7 +6415,7 @@ def test_PositionalEncodingLayer_offset_no_rec():
   n_out = n_in
 
   net_dict = {
-    "input": {"class": "linear", "activation": None, "n_out": size,},
+    "input": {"class": "linear", "activation": None, "n_out": size, "from": "data:data"},
     "offset": {"class": "constant", "from": [], "value": 1},
     "raw_pos_enc": {"class": "positional_encoding", "add_to_input": False, "from": ["input"], "n_out": size},
     "const_pos_enc": {"class": "positional_encoding", "add_to_input": False, "constant": 42,
