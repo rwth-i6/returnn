@@ -121,8 +121,7 @@ def init_config(config_filename=None, command_line_options=(), default_config=No
     config.set('num_inputs', 2)
     config.set('num_outputs', 1)
 
-  if config.has('behavior_version'):
-    BehaviorVersion.set(config.int('behavior_version', 0))
+  BehaviorVersion.set(config.int('behavior_version', None))
 
 
 def init_log():

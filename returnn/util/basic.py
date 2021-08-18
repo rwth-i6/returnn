@@ -191,38 +191,49 @@ class BehaviorVersion:
   """
 
   _latest_behavior_version = 1
-  _behavior_version = 0
-  _is_set = False
+  _behavior_version = None  # type: typing.Optional[int]
 
   @classmethod
   def set(cls, version):
     """
-    :param int version:
+    :param int|None version:
     """
-    if version != cls._behavior_version:
-      assert not cls._is_set, (
-        "behavior_version already set to %i, cannot reset to %i" % (cls._behavior_version, version))
-      assert version >= 0
-      if version > cls._latest_behavior_version:
-        log.print_warning(
-          ("behavior_version %i > latest known behavior_version %i. "
-           "Your RETURNN version is too old (%s).") % (version, cls._latest_behavior_version, __long_version__))
-      cls._behavior_version = version
-    cls._is_set = True
+    if version == cls._behavior_version:
+      return
+    assert not cls.is_set(), (
+      "behavior_version already set to %i, cannot reset to %i" % (cls._behavior_version, version))
+    assert version >= 0
+    if version > cls._latest_behavior_version:
+      log.print_warning(
+        ("behavior_version %i > latest known behavior_version %i. "
+         "Your RETURNN version is too old (%s).") % (version, cls._latest_behavior_version, __long_version__))
+    cls._behavior_version = version
 
   @classmethod
   def get(cls):
     """
     :rtype: int
     """
-    return cls._behavior_version
+    if cls._behavior_version is not None:
+      return cls._behavior_version
+    return cls.get_default()
+
+  @classmethod
+  def get_default(cls):
+    """
+    :return: default behavior_version. usually 0 but might be different in test environment
+    :rtype: int
+    """
+    if os.environ.get("RETURNN_TEST") and to_bool(os.environ.get("RETURNN_TEST")):
+      return cls._latest_behavior_version
+    return 0
 
   @classmethod
   def is_set(cls):
     """
     :rtype: bool
     """
-    return cls._is_set
+    return cls._behavior_version is None
 
   class RequirementNotSatisfied(Exception):
     """
