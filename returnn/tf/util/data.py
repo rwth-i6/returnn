@@ -1007,7 +1007,7 @@ class Data(object):
                sparse=None,
                dim=NotSpecified,
                size_placeholder=None,
-               batch_dim_axis=0,
+               batch_dim_axis=NotSpecified,
                time_dim_axis=NotSpecified,
                feature_dim_axis=NotSpecified,
                available_for_inference=True,
@@ -1025,11 +1025,12 @@ class Data(object):
     :param tf.Tensor|None placeholder: with added batch-dim
     :param bool sparse: whether to treat the value as an index. do not confuse with tf.SparseTensor
     :param None|int dim: feature dimension, shape[-1] if not sparse, otherwise like num_classes
-    :param int|None batch_dim_axis: where we add the batch-dim.
+    :param int|None|NotSpecified batch_dim_axis: where we add the batch-dim.
       e.g. shape=(time,...), 0 -> (batch,time,...), 1 -> (time,batch,...).
+      Default is 0.
       This is normally always set, and a lot of code expects this. However, you can set it to None
       if this Data does not have a batch-dim.
-    :param int|None time_dim_axis: where we have the time dim axis, after we added the batch-dim.
+    :param int|None|NotSpecified time_dim_axis: where we have the time dim axis, after we added the batch-dim.
       this is often 1. however, can be None if there is no time-dim.
     :param int|None|NotSpecified feature_dim_axis: feature dim axis. by default it's the last one
     :param dict[int,tf.Tensor]|None size_placeholder: for every None in shape, this will describe the size.
@@ -1037,7 +1038,9 @@ class Data(object):
     :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
     :param bool auto_create_placeholders: This will create a tf.placeholder.
     :param str|dict[str]|GeneratingDataset.Vocabulary|None vocab:
-    :param dict[int,DimensionTag]|None dim_tags: explicitly specified dimension tags per axis (with batch)
+    :param tuple[DimensionTag]|dict[int,DimensionTag]|None dim_tags:
+      If tuple, this specifies the whole (batch) shape.
+      If dict, explicitly specified dimension tags per axis (axis counted with batch-dim)
     :param dict[int|str,DimensionTag]|None same_dim_tags_as: will mark our dimension tags to be the same
     :param BatchInfo|None batch:
     :param SearchBeam|None beam: the batch-dim could be extended by a beam-size,
@@ -1057,9 +1060,21 @@ class Data(object):
     self.dtype = dtype  # type: str
     self.batch = batch
     self.beam = beam
+    BehaviorVersion.require(
+      isinstance(dim_tags, (tuple, list)), "dim_tags must be provided instead of shape", version=2)  # TODO really?
+    if isinstance(dim_tags, (tuple, list)):
+      if shape is not None:
+        assert list(shape) == [tag.dimension for tag in dim_tags if tag.kind != DimensionTag.Types.Batch]
+      batch_dim_axis_ = _batch_dim_axis_from_dim_tags_tuple(dim_tags)
+      assert batch_dim_axis is NotSpecified or batch_dim_axis == batch_dim_axis_
+      batch_dim_axis = batch_dim_axis_
+      # TODO ...
+    if batch_dim_axis is NotSpecified:
+      batch_dim_axis = 0
     assert batch_dim_axis is None or isinstance(batch_dim_axis, int)
     self.batch_dim_axis = batch_dim_axis  # type: typing.Optional[int]  # None -> no batch dim axis
     if shape is None:
+      # TODO maybe disallow this? hm no, even for extern_data, this is always used...
       if time_dim_axis is NotSpecified:  # need to determine this now
         if self.batch_dim_axis is None:
           time_dim_axis = None
@@ -3483,3 +3498,41 @@ class _SizePlaceholderProxy:
     :rtype: dict[int,tf.Tensor]
     """
     return dict(self.items())
+
+
+def _batch_dim_axis_from_dim_tags_tuple(dim_tags):
+  """
+  :param tuple[DimensionTag] dim_tags:
+  :return: batch_dim_axis. int or None if not existing
+  :rtype: int|None
+  """
+  for axis, dim_tag in enumerate(dim_tags):
+    if dim_tag.kind == DimensionTag.Types.Batch:
+      return axis
+  return None
+
+
+def _infer_dim_tags_tuple_from_shape(
+  shape,
+  batch_dim_axis, time_dim_axis, feature_dim_axis,
+  size_placeholder,
+  dim_tags
+):
+  """
+  :param tuple[int|None]|list[int|None] shape: this is without batch-dim-axis
+  :param int|None batch_dim_axis:
+  :param int|None time_dim_axis:
+  :param int|None feature_dim_axis:
+  :param dict[int,tf.Tensor]|None size_placeholder:
+  :param dict[int,DimensionTag]|None dim_tags: some existing explicitly specified dim tags
+  :return: dim tags tuple
+  :rtype: tuple[DimensionTag]
+  """
+  assert isinstance(shape, (tuple, list))
+  shape = tuple(shape)
+  if batch_dim_axis is not None:
+    assert 0 <= batch_dim_axis <= len(shape)
+    batch_shape = shape[:batch_dim_axis] + (None,) + shape[batch_dim_axis:]
+  else:
+    batch_shape = shape
+  # TODO ...
