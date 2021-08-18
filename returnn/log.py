@@ -76,7 +76,7 @@ class Log:
     self.v3 = None  # type: typing.Optional[Stream]
     self.v4 = None  # type: typing.Optional[Stream]
     self.v5 = None  # type: typing.Optional[Stream]
-    self.deprecation_warning_history = []  # type: typing.List[str]  # stores already printed deprecation warnings
+    self._printed_warning_history = set()  # type: typing.Set[str]
 
   def initialize(self, logs=None, verbosity=None, formatter=None):
     """
@@ -193,23 +193,33 @@ class Log:
       logs = new_logs
     self.initialize(logs=logs, verbosity=log_verbosity, formatter=log_format)
 
-  def print_deprecation_warning(self, warning, behavior_version=None):
+  def print_warning(self, text, prefix_text="WARNING:", extra_text=None):
+    """
+    Write a warning to log.v2. Does not write repeated warnings.
+
+    :param str text:
+    :param str prefix_text:
+    :param str|None extra_text:
+    """
+    if text in self._printed_warning_history:
+      return
+    self._printed_warning_history.add(text)
+    print(prefix_text, text, file=log.v2)
+    if extra_text:
+      print(extra_text, file=log.v2)
+
+  def print_deprecation_warning(self, text, behavior_version=None):
     """
     Write a deprecation warning to log.v2. Does not write repeated warnings.
 
-    :param str warning: the warning text
-    :param int|None behavior_version: if this deprecation is already covered by a behavior_version
-      check
+    :param str text:
+    :param int|None behavior_version: if this deprecation is already covered by a behavior_version check
     """
-    if warning in self.deprecation_warning_history:
-      return
-
     if behavior_version:
-      behavior_text = "This will be disallowed with behavior_version %d" % behavior_version
+      behavior_text = "This will be disallowed with behavior_version %d." % behavior_version
     else:
-      behavior_text = "This might be disallowed with a future behavior_version"
-    print("DEPRECATION WARNING: %s\n%s" % (warning, behavior_text), file=self.v2)
-    self.deprecation_warning_history.append(warning)
+      behavior_text = "This might be disallowed with a future behavior_version."
+    self.print_warning(text, prefix_text="DEPRECATION WARNING:", extra_text=behavior_text)
 
 
 log = Log()
