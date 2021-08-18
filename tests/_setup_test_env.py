@@ -14,6 +14,7 @@ def setup():
   Calls necessary setups.
   """
   import logging
+  import os
 
   # Enable all logging, up to debug level.
   logging.basicConfig(
@@ -32,6 +33,8 @@ def setup():
   # The following might fix (workaround): Could not create cudnn handle: CUDNN_STATUS_INTERNAL_ERROR
   # (https://github.com/tensorflow/tensorflow/issues/24496).
   # os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+
+  os.environ.setdefault("RETURNN_TEST", "1")
 
   import _setup_returnn_env  # noqa
 
