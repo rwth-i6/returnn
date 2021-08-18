@@ -33,6 +33,7 @@ except ImportError:
   from io import StringIO
 import typing
 from returnn.log import log
+from .. import __long_version__
 
 PY3 = sys.version_info[0] >= 3
 
@@ -189,6 +190,7 @@ class BehaviorVersion:
   The version will be set after the config is defined at __main__.init_config() or Engine.__init__()
   """
 
+  _latest_behavior_version = 1
   _behavior_version = 0
   _is_set = False
 
@@ -201,6 +203,10 @@ class BehaviorVersion:
       assert not cls._is_set, (
         "behavior_version already set to %i, cannot reset to %i" % (cls._behavior_version, version))
       assert version >= 0
+      if version > cls._latest_behavior_version:
+        log.print_warning(
+          ("behavior_version %i > latest known behavior_version %i. "
+           "Your RETURNN version is too old (%s).") % (version, cls._latest_behavior_version, __long_version__))
       cls._behavior_version = version
     cls._is_set = True
 
