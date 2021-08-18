@@ -11,7 +11,7 @@ import os
 import typing
 import tensorflow as tf
 
-from returnn.util.basic import NotSpecified
+from returnn.util.basic import NotSpecified, BehaviorVersion
 import returnn.tf.compat as tf_compat
 
 
@@ -1086,7 +1086,7 @@ class Data(object):
           else:
             shape = shape + (None,) * (feature_dim_axis_wo_batch - len(shape)) + (dim,)
             assert len(shape) == feature_dim_axis_wo_batch + 1
-    self.shape = tuple(shape)  # type: typing.Tuple[typing.Optional[int], ...]  # excl. batch-dim. see self.batch_shape
+    self._shape = tuple(shape)  # type: typing.Tuple[typing.Optional[int], ...]  # excl. batch-dim. see self.batch_shape
     if feature_dim_axis is not NotSpecified:
       if isinstance(feature_dim_axis, int):
         assert not self.sparse, "cannot have feature_dim_axis when sparse"
@@ -2275,6 +2275,23 @@ class Data(object):
     if self.time_dim_axis_excluding_batch != other.time_dim_axis_excluding_batch:
       return False
     return self._get_var_len_axes() == other._get_var_len_axes()
+
+  @property
+  def shape(self):
+    """
+    :return: shape without batch-dim. e.g. (time,feat) = (None,128)
+    :rtype: tuple[int|None]
+    """
+    return self._shape
+
+  @shape.setter
+  def shape(self, shape):
+    """
+    :param tuple[int|None] shape:
+    """
+    BehaviorVersion.require(
+      False, "Data.shape assign not allowed. Use XXX instead...", version=2)
+    self._shape = shape
 
   @property
   def batch_shape(self):
