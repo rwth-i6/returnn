@@ -247,6 +247,7 @@ class BehaviorVersion:
     :param str message:
     :param int version:
     """
+    assert version <= cls._latest_behavior_version
     if not condition:
       if BehaviorVersion.get() >= version:
         raise BehaviorVersion.RequirementNotSatisfied(
