@@ -349,7 +349,9 @@ class Config:
       if value is not None:
         assert isinstance(value, int)
       return value
-    return int(self.value(key, default, index))
+    if key in self.dict:
+      return int(self.value(key, default, index))
+    return default
 
   def bool(self, key, default, index=0):
     """
