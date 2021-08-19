@@ -131,9 +131,12 @@ def get_concat_sources_data_template(src_layers, name=None):
   :return: data with no placeholders set. it is always a copy or new instance, so safe to manipulate
   :rtype: Data
   """
+  from ..util.data import DimensionTag
   assert src_layers, "need source layers"
   if len(src_layers) == 1:
     return src_layers[0].output.copy_template(name=name)
+  if not name:
+    name = "concat_" + "_".join([layer.name for layer in src_layers])
   dim = 0
   beam = None
   common_source = Data.get_common_data([s.output for s in src_layers])
@@ -145,13 +148,13 @@ def get_concat_sources_data_template(src_layers, name=None):
     if layer.output.dim is not None:  # just ignore at this point if None (e.g. during template construction)
       dim += layer.output.dim
     beam = SearchBeam.get_combined_beam(beam, layer.output.beam)
-  shape = list(common_source.shape)
-  shape[common_source.get_batch_axis_excluding_batch(common_source.feature_dim_axis)] = dim
+  dim_tags = list(common_source.dim_tags)
+  dim_tags[common_source.feature_dim_axis] = DimensionTag(
+    kind=DimensionTag.Types.Feature, description=name + "_feature", dimension=dim)
   kwargs = common_source.get_kwargs()
   kwargs.update(dict(
-    name=name or ("concat_" + "_".join([layer.name for layer in src_layers])),
-    shape=shape,
-    dim=dim,
+    name=name,
+    dim_tags=dim_tags,
     sparse=False,
     beam=beam))
   data = Data(**kwargs)

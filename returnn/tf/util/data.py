@@ -1748,6 +1748,9 @@ class Data(object):
     from .basic import get_valid_scope_name_from_str
     if axis is None:
       axis = self.get_default_new_axis_for_dim_tag(dim_tag=dim_tag)
+    if axis < 0:
+      axis += self.batch_ndim + 1
+    assert 0 <= axis <= self.batch_ndim
 
     if dim_tag.kind == DimensionTag.Types.Batch:
       if unbroadcast:
@@ -1767,12 +1770,12 @@ class Data(object):
         kind=dim_tag.kind, description="%s_dummy_dim1" % (dim_tag.description or "unnamed"), dimension=1)
     data_opts["dim_tags"] = self.dim_tags[:axis] + (dim_tag,) + self.dim_tags[axis:]
     other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
-    if dim_tag.kind == DimensionTag.Types.Feature and self.feature_dim_axis is None:
-      other_special_axes.pop("feature_dim_axis", None)
-    if dim_tag.kind == DimensionTag.Types.Spatial and self.time_dim_axis is None:
-      other_special_axes.pop("time_dim_axis", None)
     for k, a in other_special_axes.items():
       data_opts[k] = a if (a < axis) else (a + 1)
+    if dim_tag.kind == DimensionTag.Types.Feature and self.feature_dim_axis is None:
+      data_opts.pop("feature_dim_axis", None)  # fall back to default
+    if dim_tag.kind == DimensionTag.Types.Spatial and self.time_dim_axis is None:
+      data_opts.pop("time_dim_axis", None)  # fall back to default
     if self.placeholder is not None:
       with tf.name_scope("%s_copy_add_dim_by_tag" % get_valid_scope_name_from_str(self.name)):
         placeholder = tf.expand_dims(self.placeholder, axis)
