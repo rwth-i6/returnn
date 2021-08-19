@@ -1329,10 +1329,11 @@ class Data(object):
       keys += ["size_placeholder"]
     return {key: getattr(self, key) for key in keys}
 
-  def get_description(self, with_name=True, with_placeholder=False):
+  def get_description(self, with_name=True, with_placeholder=False, catch_exceptions=False):
     """
     :param bool with_name:
     :param bool with_placeholder:
+    :param bool catch_exceptions:
     :return: description of self. also used for __repr__
     :rtype: str
     """
@@ -1357,8 +1358,24 @@ class Data(object):
       # We anyway add it, in case sth is incorrect or incomplete.
       if not self.batch or self.batch.beam != self.beam:
         keys.append("beam")
-    args = ["%s=%r" % (key, getattr(self, key)) for key in keys]
-    args += ["batch_shape_meta=[%s]" % ",".join(self.get_batch_axes_short_description())]
+    args = []
+    for key in keys:
+      try:
+        value_repr = repr(getattr(self, key))
+      except Exception as exc:
+        if catch_exceptions:
+          value_repr = "<!%s: %s>" % (type(exc).__name__, exc)
+        else:
+          raise
+      args += ["%s=%s" % (key, value_repr)]
+    try:
+      batch_shape_meta = "[%s]" % ",".join(self.get_batch_axes_short_description())
+    except Exception as exc:
+      if catch_exceptions:
+        batch_shape_meta = "<!%s: %s>" % (type(exc).__name__, exc)
+      else:
+        raise
+    args += ["batch_shape_meta=" + batch_shape_meta]
     return "Data(%s)" % ", ".join(args)
 
   def get_batch_axes_short_description(self):
@@ -1408,7 +1425,7 @@ class Data(object):
       self.beam)
 
   def __repr__(self):
-    return self.get_description()
+    return self.get_description(catch_exceptions=True)
 
   def __hash__(self):
     return id(self)
