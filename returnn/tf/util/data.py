@@ -38,13 +38,15 @@ class DimensionTag(object):
     Time = "spatial"  # we don't treat this as different
     Feature = "feature"
 
-  def __init__(self, kind=Types.Unspecified, description=None, dimension=None, dyn_size=None,
+  def __init__(self, kind=Types.Unspecified, description=None,
+               dimension=None, dyn_size=None, dyn_size_ext=None,
                src_data=None, src_axis=None):
     """
     :param str|None kind:
     :param str|None description: the description should be unique
     :param int|None dimension:
     :param tf.Tensor|None dyn_size: e.g. seq_len, (batch,)
+    :param Data|None dyn_size_ext: seq_len or extended
     :param Data|None src_data:
     :param int|None src_axis:
     """
@@ -57,8 +59,9 @@ class DimensionTag(object):
       assert isinstance(src_data, Data) and isinstance(src_axis, int)
     self.src_data = src_data
     self.src_axis = src_axis
-    self.dyn_size_ext = None  # type: typing.Optional[Data]
+    self.dyn_size_ext = dyn_size_ext  # type: typing.Optional[Data]
     if dyn_size is not None:
+      assert not dyn_size_ext
       self.dyn_size = dyn_size
 
   def __repr__(self):
@@ -70,6 +73,19 @@ class DimensionTag(object):
     if self.same_as:
       attribs.append("same_base_id")
     return "DimensionTag(%s)" % ", ".join(["%s=%r" % (attr, getattr(self, attr)) for attr in attribs])
+
+  def copy(self, kind=None):
+    """
+    :param str|None kind: if set, overwrites self.kind
+    :return: copy, maybe as new kind. setting same_as to self
+    :rtype: DimensionTag
+    """
+    tag = DimensionTag(
+      kind=kind or self.kind, description=self.description,
+      dimension=self.dimension, dyn_size_ext=self.dyn_size_ext,
+      src_data=self.src_data, src_axis=self.src_axis)
+    tag.same_as = self  # not declare_same_as, none of the extra checks needed
+    return tag
 
   @property
   def dyn_size(self):
@@ -1619,10 +1635,11 @@ class Data(object):
     assert self.feature_dim_axis is not None
     return self.copy_with_feature_dim_axis(-1)
 
-  def copy_add_batch_dim(self, batch_dim_axis, batch=None):
+  def copy_add_batch_dim(self, batch_dim_axis, batch=None, dim_tag=None):
     """
     :param int batch_dim_axis:
     :param BatchInfo|None batch:
+    :param DimensionTag|None dim_tag:
     :return: copy of myself with added batch-dim
     :rtype: Data
     """
@@ -1642,9 +1659,13 @@ class Data(object):
         tiles = [1] * batch_dim_axis + [batch.dim] + [1] * (self.batch_ndim - batch_dim_axis)
         placeholder = tf.tile(data_opts["placeholder"], tiles)
     dim_tags = list(self.dim_tags)
-    dim_tag = DimensionTag(
-      kind=DimensionTag.Types.Batch, description="batch",
-      dimension=batch.dim if isinstance(batch.dim, int) else None)
+    if dim_tag:
+      assert dim_tag.kind == DimensionTag.Types.Batch
+      assert dim_tag.dimension == (batch.dim if isinstance(batch.dim, int) else None)
+    else:
+      dim_tag = DimensionTag(
+        kind=DimensionTag.Types.Batch, description="batch",
+        dimension=batch.dim if isinstance(batch.dim, int) else None)
     dim_tags.insert(batch_dim_axis, dim_tag)
     data_opts["dim_tags"] = dim_tags
     data_opts["batch"] = batch
@@ -1662,35 +1683,15 @@ class Data(object):
     :return: copy of myself with added spatial-dim
     :rtype: Data
     """
-    from .basic import get_valid_scope_name_from_str
+    if dim is None:
+      assert not self.placeholder
+    dim_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="added_spatial", dimension=dim)
     if spatial_dim_axis is None:
-      if self.get_spatial_batch_axes():
-        spatial_dim_axis = self.get_spatial_batch_axes()[-1] + 1  # after the existing spatial dim
-      elif self.feature_dim_axis is not None:
-        spatial_dim_axis = self.feature_dim_axis  # add it before the feature dim
-      else:
-        spatial_dim_axis = self.batch_ndim  # add it at the end
-    else:
-      if spatial_dim_axis < 0:
-        assert spatial_dim_axis + self.batch_ndim + 1 >= 0
-        spatial_dim_axis += self.batch_ndim + 1
-      assert 0 <= spatial_dim_axis <= self.batch_ndim
-    data_opts = self.get_kwargs()
-    placeholder = self.placeholder
-    if placeholder is not None:
-      assert dim == 1  # not implemented otherwise
-      placeholder = tf.expand_dims(
-        self.placeholder, spatial_dim_axis, name="%s_add_spatial_dim" % get_valid_scope_name_from_str(self.name))
-    data_opts["placeholder"] = placeholder
+      spatial_dim_axis = self.get_default_new_axis_for_dim_tag(dim_tag)
+    v = self.copy_add_dim_by_tag(dim_tag, unbroadcast=True, axis=spatial_dim_axis)
     if auto_time_dim_axis and self.time_dim_axis is None:
-      data_opts["time_dim_axis"] = spatial_dim_axis
-    dim_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description=None, dimension=dim)
-    dim_tags = self.dim_tags[:spatial_dim_axis] + (dim_tag,) + self.dim_tags[spatial_dim_axis:]
-    data_opts["dim_tags"] = dim_tags
-    other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
-    for k, a in other_special_axes.items():
-      data_opts[k] = a if (a < spatial_dim_axis) else (a + 1)
-    return Data(**data_opts)
+      v.time_dim_axis = spatial_dim_axis
+    return v
 
   def copy_add_feature_dim(self, axis=None):
     """
@@ -1703,34 +1704,15 @@ class Data(object):
     if self.sparse:
       # By definition, we don't have a feature dim. We allow this though. We just make it a spatial axis.
       return self.copy_add_spatial_dim(spatial_dim_axis=axis)
-    data_opts = self.get_kwargs()
-    if axis is None:
-      if self.feature_dim_axis is not None:
-        new_feature_dim_axis = self.feature_dim_axis + 1
-      else:
-        new_feature_dim_axis = self.batch_ndim
-    else:
-      if axis < 0:
-        assert axis + self.batch_ndim + 1 >= 0
-        axis += self.batch_ndim + 1
-      assert 0 <= axis <= self.batch_ndim
-      new_feature_dim_axis = axis
     dim_tag = DimensionTag(kind=DimensionTag.Types.Feature, description="feature1", dimension=1)
-    dim_tags = self.dim_tags[:new_feature_dim_axis] + (dim_tag,) + self.dim_tags[new_feature_dim_axis:]
-    data_opts["dim_tags"] = dim_tags
-    data_opts["dim"] = 1
-    other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
-    other_special_axes.pop("feature_dim_axis", None)
-    for k, a in other_special_axes.items():
-      data_opts[k] = a if (a < new_feature_dim_axis) else (a + 1)
-    if self.placeholder is not None:
-      data_opts["placeholder"] = tf.expand_dims(self.placeholder, new_feature_dim_axis, name="copy_add_feature_dim")
-    v = Data(**data_opts)
+    if axis is None:
+      axis = self.get_default_new_axis_for_dim_tag(dim_tag)
+    v = self.copy_add_dim_by_tag(dim_tag, axis=axis)
     if v.feature_dim_axis_or_unspecified is not NotSpecified:
       v.feature_dim_axis = NotSpecified
-    if v.feature_dim_axis != new_feature_dim_axis:
-      v.feature_dim_axis = new_feature_dim_axis
-    return Data(**data_opts)
+    if v.feature_dim_axis != axis:
+      v.feature_dim_axis = axis
+    return v
 
   def get_default_new_axis_for_dim_tag(self, dim_tag):
     """
@@ -1763,54 +1745,42 @@ class Data(object):
     :param int|None axis:
     :rtype: Data
     """
+    from .basic import get_valid_scope_name_from_str
     if axis is None:
       axis = self.get_default_new_axis_for_dim_tag(dim_tag=dim_tag)
-
-    def maybe_unbroadcast_placeholder():
-      """
-      If a placeholder is set, unbroadcasts the newly added axis
-      """
-      if res.placeholder is None:
-        return
-      assert dim_tag.kind != DimensionTag.Types.Batch
-      assert res.batch_shape[axis] == 1
-      with tf.name_scope("copy_add_dim_by_tag_unbroadcast"):
-        tiles = [1] * axis + [dim_tag.get_dim_value()] + [1] * (res.batch_ndim - axis - 1)
-        res.placeholder = tf.tile(res.placeholder, tiles)
 
     if dim_tag.kind == DimensionTag.Types.Batch:
       if unbroadcast:
         batch_info = dim_tag.src_data.batch if dim_tag.src_data else None
+        return self.copy_add_batch_dim(batch_dim_axis=axis, batch=batch_info, dim_tag=dim_tag)
       else:
         batch_info = BatchInfo.make_global_broadcast_batch_info()
-      res = self.copy_add_batch_dim(batch_dim_axis=axis, batch=batch_info)
-      return res
-    # Note: if dim_tag is feature, but we are sparse, we just treat is as spatial, handled below.
-    if dim_tag.kind == DimensionTag.Types.Feature and not self.sparse:
-      res = self.copy_add_feature_dim(axis=axis)
-      if unbroadcast:
-        maybe_unbroadcast_placeholder()
-        res.dim = dim_tag.dimension
-        shape = list(res.shape)
-        shape[res.get_batch_axis_excluding_batch(res.feature_dim_axis)] = dim_tag.dimension
-        res.shape = tuple(shape)
-        res.sanity_check()
-      return res
-    assert dim_tag.kind == DimensionTag.Types.Spatial or (dim_tag.kind == DimensionTag.Types.Feature and self.sparse)
-    res = self.copy_add_spatial_dim(spatial_dim_axis=axis, dim=1)
-    assert res.batch_shape[axis] == 1
-    if unbroadcast:
-      maybe_unbroadcast_placeholder()
-      shape = list(res.shape)
-      shape[res.get_batch_axis_excluding_batch(axis)] = dim_tag.dimension
-      res.shape = tuple(shape)
-      if res.feature_dim_axis is not None:
-        # feature dim axis might have changed if unspecified, so just update dim
-        res.dim = res.batch_shape[res.feature_dim_axis]
-      if dim_tag.dimension is None and dim_tag.dyn_size is not None:
-        res.size_placeholder[res.get_batch_axis_excluding_batch(axis)] = dim_tag.dyn_size
-      res.sanity_check()
-    return res
+        return self.copy_add_batch_dim(
+          batch_dim_axis=axis, batch=batch_info, dim_tag=dim_tag if dim_tag.dimension == 1 else None)
+
+    data_opts = self.get_kwargs()
+    # Note: if dim_tag is feature, but we are sparse, we just make it spatial
+    if self.sparse and dim_tag.kind == DimensionTag.Types.Feature:
+      dim_tag = dim_tag.copy(kind=DimensionTag.Types.Spatial)
+    if not unbroadcast and dim_tag.dimension != 1:
+      dim_tag = DimensionTag(
+        kind=dim_tag.kind, description="%s_dummy_dim1" % (dim_tag.description or "unnamed"), dimension=1)
+    data_opts["dim_tags"] = self.dim_tags[:axis] + (dim_tag,) + self.dim_tags[axis:]
+    other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
+    if dim_tag.kind == DimensionTag.Types.Feature and self.feature_dim_axis is None:
+      other_special_axes.pop("feature_dim_axis", None)
+    if dim_tag.kind == DimensionTag.Types.Spatial and self.time_dim_axis is None:
+      other_special_axes.pop("time_dim_axis", None)
+    for k, a in other_special_axes.items():
+      data_opts[k] = a if (a < axis) else (a + 1)
+    if self.placeholder is not None:
+      with tf.name_scope("%s_copy_add_dim_by_tag" % get_valid_scope_name_from_str(self.name)):
+        placeholder = tf.expand_dims(self.placeholder, axis)
+        if dim_tag.dimension is None or dim_tag.dimension > 1:
+          tiles = [1] * axis + [dim_tag.get_dim_value()] + [1] * (self.batch_ndim - axis - 1)
+          placeholder = tf.tile(placeholder, tiles)
+      data_opts["placeholder"] = placeholder
+    return Data(**data_opts)
 
   def copy_split_feature_dim(self, new_feature_dim):
     """
@@ -1963,19 +1933,18 @@ class Data(object):
     """
     assert self.batch_dim_axis is not None
     assert self.time_dim_axis is not None
-    data = self.copy()
-    if data.placeholder is not None:
-      data.placeholder = data.get_placeholder_time_flattened()
-    data.shape = tuple([
-      data.batch_shape[i] for i in range(data.batch_ndim)
-      if i not in (data.batch_dim_axis, data.time_dim_axis)])
-    if data.size_placeholder is not None:
-      if data.time_dim_axis_excluding_batch in data.size_placeholder:
-        del data.size_placeholder[data.time_dim_axis_excluding_batch]
-    data.time_dim_axis = None
-    data.batch_dim_axis = 0
-    data.sanity_check()
-    return data
+    data_opts = self.get_kwargs()
+    if self.placeholder is not None:
+      data_opts["placeholder"] = self.get_placeholder_time_flattened()
+    dim_tag = self.dim_tags[self.time_dim_axis]
+    dim_tag = DimensionTag(
+      kind=DimensionTag.Types.Spatial, description="%s_flattened" % (dim_tag.description or "unnamed"))
+    data_opts["dim_tags"] = (
+      (dim_tag,) +
+      tuple(tag for (i, tag) in enumerate(self.dim_tags) if i not in (self.batch_dim_axis, self.time_dim_axis)))
+    data_opts["time_dim_axis"] = None
+    data_opts.pop("feature_dim_axis", None)
+    return Data(**data_opts)
 
   def copy_extend_with_beam(self, beam):
     """
@@ -2015,38 +1984,29 @@ class Data(object):
     """
     from .basic import get_valid_scope_name_from_str
     assert isinstance(axes, (list, tuple))
-    assert all([self.batch_shape[axis] == 1 for axis in axes])
+    assert all(self.batch_shape[axis] == 1 for axis in axes)
+    assert all(0 <= axis < self.batch_ndim for axis in axes)
     if not axes:
       return self.copy()
-    data = self.copy()
-    if data.placeholder is not None:
-      data.placeholder = tf.squeeze(
-        data.placeholder, axes,
-        name="%s_squeeze_axes" % get_valid_scope_name_from_str(data.name))
-    assert data.batch_dim_axis not in axes
-    data.shape = tuple([data.shape[i] for i in range(data.ndim) if data.get_batch_axis(i) not in axes])
+    data_opts = self.get_kwargs()
+    if self.placeholder is not None:
+      data_opts["placeholder"] = tf.squeeze(
+        self.placeholder, axes,
+        name="%s_squeeze_axes" % get_valid_scope_name_from_str(self.name))
+    data_opts["dim_tags"] = [tag for (i, tag) in enumerate(self.dim_tags) if i not in axes]
     if self.time_dim_axis is not None:
       if self.time_dim_axis in axes:
-        data.time_dim_axis = None
+        data_opts.pop("time_dim_axis", None)
       else:
-        data.time_dim_axis = self.time_dim_axis - len([axis for axis in axes if axis < self.time_dim_axis])
+        data_opts["time_dim_axis"] = self.time_dim_axis - len([axis for axis in axes if axis < self.time_dim_axis])
     if not self.sparse:
       if self.feature_dim_axis is not None and self.feature_dim_axis_or_unspecified is not NotSpecified:
         if self.feature_dim_axis in axes:
-          data.feature_dim_axis = None
+          data_opts.pop("feature_dim_axis", None)
         else:
-          data.feature_dim_axis = self.feature_dim_axis - len([axis for axis in axes if axis < self.feature_dim_axis])
-      # Always reset dim. We might have a different feature axis now (if it was and is unspecified, i.e. automatic).
-      if data.feature_dim_axis is not None:
-        data.dim = data.batch_shape[data.feature_dim_axis]
-      else:
-        data.dim = None
-    if self.size_placeholder:
-      data.size_placeholder = {
-        i - len([axis for axis in axes if self.get_batch_axis_excluding_batch(axis) < i]): size
-        for (i, size) in self.size_placeholder.items()}
-    data.sanity_check()
-    return data
+          data_opts["feature_dim_axis"] = (
+            self.feature_dim_axis - len([axis for axis in axes if axis < self.feature_dim_axis]))
+    return Data(**data_opts)
 
   def copy_template(self, name=None, dtype=None):
     """
@@ -2145,28 +2105,20 @@ class Data(object):
     :param tf.Tensor|None new_size:
     :rtype: Data
     """
-    out = self.copy_template()
     if axis < 0:
-      assert axis + out.batch_ndim >= 0
-      axis += out.batch_ndim
-    assert 0 <= axis < out.batch_ndim
-    if axis == out.batch_dim_axis:
+      assert axis + self.batch_ndim >= 0
+      axis += self.batch_ndim
+    assert 0 <= axis < self.batch_ndim
+    if axis == self.batch_dim_axis:
       assert new_dim is None
-      return out  # nothing to do
-    axis_wo_b = out.get_batch_axis_excluding_batch(axis)
-    new_shape = list(out.shape)
-    new_shape[axis_wo_b] = new_dim
-    out.shape = tuple(new_shape)
-    if axis == out.feature_dim_axis:
-      out.dim = new_dim
-    if out.size_placeholder and axis_wo_b in out.size_placeholder:
-      del out.size_placeholder[axis_wo_b]
-    if new_size is not None:
-      if out.size_placeholder is None:
-        out.size_placeholder = {}
-      out.size_placeholder[axis_wo_b] = new_size
-    out.sanity_check()
-    return out
+      return self.copy_template()  # nothing to do
+    dim_tag = self.dim_tags[axis]
+    dim_tag = DimensionTag(
+      kind=dim_tag.kind, description="%s_replaced" % (dim_tag.description or "unnamed"),
+      dimension=new_dim, dyn_size=new_size)
+    data_opts = self.get_kwargs()
+    data_opts["dim_tags"] = self.dim_tags[:axis] + (dim_tag,) + self.dim_tags[axis + 1:]
+    return Data(**data_opts)
 
   def _get_variable_dim_pattern(self):
     """
@@ -2211,11 +2163,12 @@ class Data(object):
     """
     :param tuple[int|None] shape:
     """
-    BehaviorVersion.require(
-      False, "Data.shape assign not allowed. Use XXX instead...", version=2)
+    # BehaviorVersion.require(
+    #  False, "Data.shape assign not allowed. Use XXX instead...", version=2)
     # TODO not sure what to do
     #  use _infer_dim_tags ... ?
-    raise Exception("%s: set shape...")
+    # raise Exception("%s: set shape...")
+    _infer_dim_tags_tuple_from_shape()
 
   @property
   def batch_shape(self):
@@ -2223,7 +2176,7 @@ class Data(object):
     :return: shape with added batch-dim. e.g. (batch,time,feat) = (None,None,128)
     :rtype: tuple[int|None]
     """
-    return self.get_batch_shape(batch_dim=self.get_static_batch_dim())
+    return tuple(tag.dimension for tag in self.dim_tags)
 
   def get_batch_shape(self, batch_dim):
     """
@@ -3094,8 +3047,9 @@ class Data(object):
       assert axis == self.batch_dim_axis, "%s: invalid %s" % (self, existing_dim_tag)
       return existing_dim_tag  # return right away. further checks will assume not batch
     assert axis != self.batch_dim_axis, existing_dim_tag
-    if existing_dim_tag.kind == DimensionTag.Types.Feature:
-      assert axis == self.feature_dim_axis, "%s: invalid %s" % (self, existing_dim_tag)
+    # TODO not sure about this...
+    # if existing_dim_tag.kind == DimensionTag.Types.Feature:
+    #  assert axis == self.feature_dim_axis, "%s: invalid %s" % (self, existing_dim_tag)
     axis_wo_b = self.get_batch_axis_excluding_batch(axis)
     dyn_size = self.size_placeholder.get(axis_wo_b) if self.size_placeholder else None
     if dyn_size is not None:
