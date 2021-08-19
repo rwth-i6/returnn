@@ -2765,8 +2765,15 @@ class Data(object):
     assert tag.dimension is None  # dynamic axis
     if tag.dyn_size is sizes:
       return  # nothing to do
-    assert tag.dyn_size is None  # not set yet
-    tag.dyn_size = sizes
+    if tag.dyn_size is None:
+      tag.dyn_size = sizes
+    else:
+      # Reset to some new size.
+      # Use new dim tag, or previous existing attached to size.
+      tag = DimensionTag.get_tag_from_size_tensor(sizes)
+      assert tag  # TODO always fine?
+      # if not tag:  tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="var-unk")
+      self._dim_tags = self.dim_tags[:axis] + (tag,) + self.dim_tags[axis + 1:]
 
   def del_dynamic_size(self, axis):
     """
@@ -3347,11 +3354,12 @@ def _batch_dim_axis_from_dim_tags_tuple(dim_tags):
 
 def _batch_shape_from_shape(shape, batch_dim_axis):
   """
-  :param tuple[int|None] shape: without batch-dim
+  :param tuple[int|None]|list[int|None] shape: without batch-dim
   :param int|None batch_dim_axis:
   :return: shape with batch dim if existing
   :rtype: tuple[int|None]
   """
+  shape = tuple(shape)
   if batch_dim_axis is not None:
     assert 0 <= batch_dim_axis <= len(shape)
     return shape[:batch_dim_axis] + (None,) + shape[batch_dim_axis:]
@@ -3525,7 +3533,7 @@ def _infer_default_shape_and_time(batch_dim_axis, time_dim_axis, feature_dim_axi
 def _default_time_dim_axis(batch_dim_axis, shape):
   """
   :param int|None batch_dim_axis:
-  :param tuple[int|None] shape:
+  :param tuple[int|None]|list[int|None] shape: without batch-dim
   :return: time dim axis, counted with batch-dim
   :rtype: int|None
   """
