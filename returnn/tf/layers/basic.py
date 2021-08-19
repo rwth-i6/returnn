@@ -2418,12 +2418,12 @@ class PadLayer(_ConcatInputLayer):
       size = self.output.size_placeholder[a]
       with tf_util.same_control_flow_ctx(size):
         size = tf_util.simplify_add(size, p)
-      self.output.size_placeholder[a] = size
       if not DimensionTag.get_tag_from_size_tensor(size):
         tag = DimensionTag(
           description="spatial:%i:%s" % (a, self.get_absolute_name()),
           kind=DimensionTag.Types.Spatial)
         tag.set_tag_on_size_tensor(size)
+      self.output.size_placeholder[a] = size
 
   @classmethod
   def _transform_padding(cls, padding, axes):
@@ -5230,11 +5230,12 @@ class PostfixInTimeLayer(_ConcatInputLayer):
     mask = tf.less(time_idxs_bc, seq_len_bc)
     from returnn.tf.util.basic import where_bc
     self.output.placeholder = where_bc(mask, x, c)
-    self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] = seq_len + repeat
+    new_seq_len = seq_len + repeat
     tag = DimensionTag(
       description="time-with-postfix:%s" % self.get_absolute_name(),
       kind=DimensionTag.Types.Spatial)
-    tag.set_tag_on_size_tensor(self.output.size_placeholder[self.output.time_dim_axis_excluding_batch])
+    tag.set_tag_on_size_tensor(new_seq_len)
+    self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] = new_seq_len
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, postfix=0.0, **kwargs):
@@ -5645,8 +5646,11 @@ class ShiftAxisLayer(_ConcatInputLayer):
           size_delta = amount
         else:
           size_delta = 0
-      self.output.size_placeholder[axis_wob] = tf.clip_by_value(
+      new_size = tf.clip_by_value(
         self.output.size_placeholder[axis_wob] + size_delta, 0, tf.shape(shifted)[axis])
+      from ..util.data import DimensionTag
+      DimensionTag(kind=DimensionTag.Types.Spatial, description="shift_axis", dyn_size=new_size)
+      self.output.size_placeholder[axis_wob] = new_size
 
   @classmethod
   def get_out_data_from_opts(cls, name, amount, axis, pad, sources=(), **kwargs):
@@ -5699,12 +5703,12 @@ class ResizeLayer(_ConcatInputLayer):
     self.output.size_placeholder = input_data.size_placeholder.copy()
     if (axis - 1) in self.output.size_placeholder:
       size = self.output.size_placeholder[axis - 1] * factor
-      self.output.size_placeholder[axis - 1] = size
       from returnn.tf.util.basic import DimensionTag
       tag = DimensionTag(
         description="resize:%s" % self.get_absolute_name(),
         kind=DimensionTag.Types.Spatial)
       tag.set_tag_on_size_tensor(size)
+      self.output.size_placeholder[axis - 1] = size
 
     # images expected shape: [batch, height, width, channels]
     remaining_axes = [i for i in range(self.output.batch_ndim) if i not in (0, axis)]
