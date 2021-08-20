@@ -5652,6 +5652,7 @@ class ResizeLayer(_ConcatInputLayer):
     :param None|int|float fill_value: if kind=="fill"
     :param float fill_dropout: if set, will dropout in the same axis
     """
+    from returnn.tf.util.basic import DimensionTag
     super(ResizeLayer, self).__init__(**kwargs)
     # self.output.shape and self.output.batch_dim_axis are already set here via self.get_out_data_from_opts().
     axis = self.output.get_axis_from_description(axis)
@@ -5661,7 +5662,6 @@ class ResizeLayer(_ConcatInputLayer):
     self.output.size_placeholder = input_data.size_placeholder.copy()
     if (axis - 1) in self.output.size_placeholder:
       size = self.output.size_placeholder[axis - 1] * factor
-      from returnn.tf.util.basic import DimensionTag
       tag = DimensionTag(
         description="resize:%s" % self.get_absolute_name(),
         kind=DimensionTag.Types.Spatial)
@@ -5718,8 +5718,12 @@ class ResizeLayer(_ConcatInputLayer):
       if (axis - 1) in self.output.size_placeholder:
         orig_mask = tf.sequence_mask(
           self.output.size_placeholder[axis - 1], maxlen=new_size, dtype=tf.bool)  # (batch,new_size)
-        self.output.size_placeholder[axis - 1] = tf.reduce_sum(
-          tf.cast(tf.logical_and(mask, orig_mask), tf.int32), axis=1)
+        size = tf.reduce_sum(tf.cast(tf.logical_and(mask, orig_mask), tf.int32), axis=1)
+        tag = DimensionTag(
+          description="resize:fill_dropout:%s" % self.get_absolute_name(),
+          kind=DimensionTag.Types.Spatial)
+        tag.set_tag_on_size_tensor(size)
+        self.output.size_placeholder[axis - 1] = size
     if axis != 1:
       perm = [0] + remaining_axes
       perm.insert(axis, 1)
