@@ -2052,46 +2052,49 @@ class RangeInAxisLayer(LayerBase):
     axis_wo_b = source.get_batch_axis_excluding_batch(axis)
     from returnn.tf.util.basic import get_shape
     source_shape = get_shape(source.placeholder)
-    dim = source_shape[axis]
-    out = tf.range(0, dim, dtype=dtype)
+    out = tf.range(0, source_shape[axis], dtype=dtype)
+    if unbroadcast:
+      assert keepdims
     if keepdims:
-      out_shape = [dim if (i == axis) else 1 for i in range(self.output.batch_ndim)]
+      out_shape = [
+        source_shape[i]
+        if (i == axis or i == self.output.batch_dim_axis)
+        else 1
+        for i in range(self.output.batch_ndim)]
       out = tf.reshape(out, out_shape)  # add missing axes (keep_dims)
       if unbroadcast:
         out = out + tf.zeros(source_shape, dtype=out.dtype)
     self.output.placeholder = out
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, axis, dtype="int32", keepdims=True, sparse=False, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, axis, dtype="int32", unbroadcast=False, keepdims=True, sparse=False, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param str axis:
     :param str dtype:
+    :param bool unbroadcast:
     :param bool keepdims:
     :param bool sparse:
     """
+    from ..util.data import DimensionTag
     assert len(sources) == 1, "%s layer %r requires single source" % (cls, name)
     source = sources[0].output
     axis = source.get_axis_from_description(axis)
-    axis_wo_b = source.get_batch_axis_excluding_batch(axis)
     if keepdims:
-      out = source.copy_template(name="%s_output" % name)
-      out.shape = tuple([d if (i == axis_wo_b) else 1 for (i, d) in enumerate(out.shape)])
-      out.dtype = dtype
-      out.size_placeholder = {i: size for (i, size) in source.size_placeholder.items() if i == axis_wo_b}
+      data_opts = source.get_kwargs(include_special_axes=True)
+      dim_tags = [
+        tag if (i == axis or tag.is_batch_dim() or unbroadcast)
+        else DimensionTag(kind=tag.kind, description="%s_keep%i" % (name, i), dimension=1)
+        for i, tag in enumerate(source.dim_tags)]
     else:
-      dim = source.batch_shape[axis]
-      out = Data(name="%s_output" % name, shape=(dim,), dim=dim, dtype=dtype, batch_dim_axis=None)
-      if axis == source.time_dim_axis:
-        out.time_dim_axis = 0
-      if axis != source.feature_dim_axis:
-        out.feature_dim_axis = None
-      out.size_placeholder = {0: size for (i, size) in source.size_placeholder.items() if i == axis_wo_b}
-    out.sparse = sparse
-    if out.feature_dim_axis is None and not out.sparse:
-      out.dim = None
-    return out
+      data_opts = source.get_kwargs(include_special_axes=False)
+      dim_tags = [source.dim_tags[axis]]
+    data_opts["name"] = "%s_output" % name
+    data_opts["dim_tags"] = dim_tags
+    data_opts["dtype"] = dtype
+    data_opts["sparse"] = sparse
+    return Data(**data_opts)
 
 
 class BatchSoftmaxLayer(_ConcatInputLayer):

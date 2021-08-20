@@ -118,6 +118,20 @@ class DimensionTag(object):
     else:
       self.set_tag_on_size_tensor(dyn_size)
 
+  def is_batch_dim(self):
+    """
+    :return: whether this dim tag is of kind batch
+    :rtype: bool
+    """
+    return self.kind == DimensionTag.Types.Batch
+
+  def is_feature_dim(self):
+    """
+    :return: whether this dim tag is of kind feature
+    :rtype: bool
+    """
+    return self.kind == DimensionTag.Types.Feature
+
   def set_tag_on_size_tensor(self, x):
     """
     :param tf.Tensor x:
