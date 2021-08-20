@@ -5783,67 +5783,27 @@ class ResizeLayer(_ConcatInputLayer):
     return out
 
 
-class CombineDimsLayer(_ConcatInputLayer):
+class CombineDimsLayer(MergeDimsLayer):
   """
   Combines multiple dimensions.
   See also :class:`MergeDimsLayer`. This is deprecated in favor of :class:`MergeDimsLayer`.
   """
   layer_class = "combine_dims"
 
-  def __init__(self, axes, **kwargs):
+  def __init__(self, **kwargs):
     """
-    :param int|list[int]|str axis: one axis or multiple axis to reduce.
+    :param int|list[int]|str axes: one axis or multiple axis to reduce.
       this is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
       it also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature"
     """
-    super(CombineDimsLayer, self).__init__(**kwargs)
-    axes = self.input_data.get_axes_from_description(axes)
-    assert len(axes) >= 2
-    shape = list(self.input_data.batch_shape)
-    assert all([shape[i] for i in axes]), "all axes which are reduced must be defined"
-    import numpy
-    first_axis = min(axes)
-    new_size = numpy.prod([shape[i] for i in axes])
-    # self.output.shape should be already set via self.get_out_data_from_opts().
-    assert self.output.time_dim_axis_excluding_batch not in axes, "not supported yet"
-    # Transpose so that all axes to be combined start at axis `first_axis`.
-    perm = list(range(len(shape)))
-    for i, j in enumerate(axes):
-      perm.pop(j)
-      perm.insert(first_axis + i, j)
-    x = tf.transpose(self.input_data.placeholder, perm)
-    # Now combine the axes via reshaping.
-    x_shape = tf.shape(x)
-    x = tf.reshape(
-      x,
-      [x_shape[i] for i in range(first_axis)] +
-      [new_size] +
-      [x_shape[i] for i in range(first_axis + len(axes), len(shape))])
-    self.output.placeholder = x
-    self.output.size_placeholder = self.input_data.size_placeholder.copy()
-    for i in axes:
-      assert self.output.get_batch_axis_excluding_batch(i) not in self.output.size_placeholder
+    super(CombineDimsLayer, self).__init__(keep_order=True, **kwargs)
 
   @classmethod
-  def get_out_data_from_opts(cls, axes, sources, **kwargs):
+  def get_out_data_from_opts(cls, **kwargs):
     """
-    :param str|list[str] axes:
-    :param list[LayerBase] sources:
     :rtype: Data
     """
-    out = get_concat_sources_data_template(sources)
-    axes = out.get_axes_from_description(axes)
-    assert len(axes) >= 2
-    axes = sorted(axes)
-    shape = list(out.batch_shape)
-    assert all([shape[i] for i in axes]), "all axes which are reduced must be defined"
-    import numpy
-    shape[min(axes)] = numpy.prod([shape[i] for i in axes])
-    for i in reversed(sorted(axes)[1:]):
-      del shape[i]
-    out.shape = tuple(shape[:out.batch_dim_axis] + shape[out.batch_dim_axis + 1:])
-    out.dim = shape[-1]
-    return out
+    return super(CombineDimsLayer, cls).get_out_data_from_opts(keep_order=True, **kwargs)
 
 
 class RemoveLayer(LayerBase):
