@@ -2470,8 +2470,6 @@ class PadLayer(_ConcatInputLayer):
     padding = cls._transform_padding(padding=padding, axes=axes)
     dim_tags = data.dim_tags
     for i, a in enumerate(axes):
-      if data.shape[a] is None:
-        continue
       tag = dim_tags[a]
       dim = None if tag.dimension is None else (tag.dimension + sum(padding[i]))
       tag = DimensionTag(kind=tag.kind, description="%s_pad%i" % (name, i), dimension=dim)
