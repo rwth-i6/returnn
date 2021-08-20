@@ -6501,6 +6501,7 @@ class KenLmStateLayer(_ConcatInputLayer):
     :param bool dense_output:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     data = get_concat_sources_data_template(sources)
     dtype = tf.as_dtype(data.dtype)
     assert isinstance(dtype, tf.DType)
@@ -6511,10 +6512,10 @@ class KenLmStateLayer(_ConcatInputLayer):
     if dense_output:
       from returnn.datasets.generating import Vocabulary
       vocab = Vocabulary(vocab_file=vocab_file, unknown_label=vocab_unknown_label)
-      data.dim = vocab.num_labels
-      data.shape = data.shape + (vocab.num_labels,)
-    else:
-      data.dim = None
+      tag = DimensionTag(
+        kind=DimensionTag.Types.Feature, description="%s_ken_lm_vocab" % name,
+        dimension=vocab.num_labels)
+      data = data.copy_add_dim_by_tag(tag, axis=-1, unbroadcast=True)
     return data
 
   @classmethod
@@ -8456,15 +8457,18 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
     :rtype: Data
     """
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
-    data = data.copy_template().copy_as_batch_major().copy_template_excluding_axis(0)  # without batch dim
-    data.feature_dim_axis = NotSpecified
-    data.dim = n_out
+    # The result will be without batch dim.
+    feature_dim_tag = DimensionTag(
+      kind=DimensionTag.Types.Feature, description="%s_rel_pos_enc_feat" % name, dimension=n_out)
     if data.have_time_axis():
-      data.time_dim_axis = 0
-      data.shape = (None, None, n_out)
-      if data.size_placeholder:
-        data.size_placeholder[1] = data.size_placeholder[0]
+      time_dim_tag = data.get_time_dim_tag()
+      # TODO using same dim tag twice will not be supported at some future point...
+      data = data.copy_template_new_dim_tags((time_dim_tag, time_dim_tag, feature_dim_tag))
     else:
       # length will be ``network.get_rec_step_index() + 1``.
-      data.shape = (1, None, n_out)
+      dummy_dim_tag = DimensionTag(
+        kind=DimensionTag.Types.Spatial, description="%s_rel_pos_enc_dummy" % name, dimension=1)
+      time_dim_tag = DimensionTag(
+        kind=DimensionTag.Types.Spatial, description="%s_rel_pos_enc_time" % name, dimension=None)
+      data = data.copy_template_new_dim_tags((dummy_dim_tag, time_dim_tag, feature_dim_tag))
     return data

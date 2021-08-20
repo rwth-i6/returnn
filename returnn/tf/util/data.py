@@ -2152,6 +2152,15 @@ class Data(object):
       dimension=new_dim, dyn_size=new_size)
     return self.copy_template_replace_dim_tag(axis=axis, new_dim_tag=dim_tag)
 
+  def copy_template_new_dim_tags(self, new_dim_tags):
+    """
+    :param list[DimensionTag]|tuple[DimensionTag] new_dim_tags:
+    :rtype: Data
+    """
+    opts = self.get_kwargs(include_special_axes=False)
+    opts["dim_tags"] = new_dim_tags
+    return Data(**opts)
+
   def _get_variable_dim_pattern(self):
     """
     :return: tuple with bools specifying which dims of the shape (excluding batch-dim) are of variable length.
@@ -2198,9 +2207,8 @@ class Data(object):
     # BehaviorVersion.require(
     #  False, "Data.shape assign not allowed. Use XXX instead...", version=2)
     # TODO not sure what to do
-    #  use _infer_dim_tags ... ?
-    # raise Exception("%s: set shape...")
-    _infer_dim_tags_tuple_from_shape()
+    raise Exception("%s: set shape... %s" % (self, shape))
+    # _infer_dim_tags_tuple_from_shape()
 
   @property
   def batch_shape(self):
