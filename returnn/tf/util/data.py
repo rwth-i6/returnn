@@ -1674,7 +1674,7 @@ class Data(object):
       placeholder = tf.expand_dims(self.placeholder, batch_dim_axis, name="%s_add_batch_dim" % self.name)
       if not isinstance(batch.dim, int) or batch.dim != 1:
         tiles = [1] * batch_dim_axis + [batch.dim] + [1] * (self.batch_ndim - batch_dim_axis)
-        placeholder = tf.tile(data_opts["placeholder"], tiles)
+        placeholder = tf.tile(placeholder, tiles)
     dim_tags = list(self.dim_tags)
     if dim_tag:
       assert dim_tag.kind == DimensionTag.Types.Batch

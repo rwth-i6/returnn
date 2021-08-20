@@ -1139,7 +1139,7 @@ class GatherLayer(_ConcatInputLayer):
       pass  # keep the logic as before
 
     # If not sparse, the feature dim axis could now originate from position, let Data figure this out
-    if not out_type["sparse"]:
+    if not out_type.get("sparse", False):
       out_type["dim"] = NotSpecified
 
     output_data = Data(**out_type)
@@ -2276,9 +2276,17 @@ class WindowLayer(_ConcatInputLayer):
     if axis is not None:
       axis_wo_b = self.output.get_batch_axis_excluding_batch(axis)
       if axis_wo_b in self.output.size_placeholder:
-        self.output.size_placeholder[axis_wo_b] = ConvLayer.calc_out_dim(
-          in_dim=self.output.size_placeholder[axis_wo_b],
-          filter_size=window_size, stride=stride, dilation_rate=1, padding=padding)
+        size = self.output.size_placeholder[axis_wo_b]
+        from ..util.basic import same_control_flow_ctx
+        from ..util.data import DimensionTag
+        with same_control_flow_ctx(size):
+          size = ConvLayer.calc_out_dim(
+            in_dim=size,
+            filter_size=window_size, stride=stride, dilation_rate=1, padding=padding)
+        DimensionTag(
+          kind=DimensionTag.Types.Spatial, description="%s:window:%i" % (self.name, axis_wo_b),
+          dimension=None, dyn_size=size)
+        self.output.size_placeholder[axis_wo_b] = size
 
   @classmethod
   def get_out_data_from_opts(cls, name, window_size, axis="T", sources=(), **kwargs):
@@ -3911,12 +3919,12 @@ class ConvLayer(_ConcatInputLayer):
           in_dim=size,
           filter_size=filter_size[i - index_shift], stride=strides[i - index_shift],
           dilation_rate=dilation_rate[i - index_shift], padding=padding)
-      self.output.size_placeholder[i] = size
       if not DimensionTag.get_tag_from_size_tensor(size):
         tag = DimensionTag(
           description="spatial:%i:%s" % (i, self.get_absolute_name()),
           kind=DimensionTag.Types.Spatial)
         tag.set_tag_on_size_tensor(size)
+      self.output.size_placeholder[i] = size
 
   @classmethod
   def _transform_input(cls, input_data, input_expand_dims, input_split_feature_dim, input_add_feature_dim):
@@ -4123,15 +4131,16 @@ class PoolLayer(_ConcatInputLayer):
     index_shift = self.output.get_spatial_axes()[0]
     for i, size in list(self.output.size_placeholder.items()):
       with tf_util.same_control_flow_ctx(size):
-        self.output.size_placeholder[i] = ConvLayer.calc_out_dim(
+        size = ConvLayer.calc_out_dim(
           in_dim=size,
           filter_size=pool_size[i - index_shift], stride=strides[i - index_shift],
           dilation_rate=dilation_rate[i - index_shift], padding=padding)
-      if DimensionTag.get_tag_from_size_tensor(self.output.size_placeholder[i]) is None:
+      if DimensionTag.get_tag_from_size_tensor(size) is None:
         tag = DimensionTag(
           description="spatial:%i:%s" % (i, self.get_absolute_name()),
           kind=DimensionTag.Types.Spatial)
-        tag.set_tag_on_size_tensor(self.output.size_placeholder[i])
+        tag.set_tag_on_size_tensor(size)
+      self.output.size_placeholder[i] = size
 
   @classmethod
   def get_out_data_from_opts(cls, name, pool_size, strides=None, dilation_rate=1, sources=(), padding="VALID",
