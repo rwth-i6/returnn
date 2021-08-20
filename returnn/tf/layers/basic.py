@@ -2452,18 +2452,22 @@ class PadLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     data = get_concat_sources_data_template(sources)
     data.name = "%s_output" % name
     axes = data.get_axes_from_description(axes)
     padding = cls._transform_padding(padding=padding, axes=axes)
+    dim_tags = data.dim_tags
     for i, a in enumerate(axes):
-      a = data.get_batch_axis_excluding_batch(a)
-      if a is None:
-        continue
       if data.shape[a] is None:
         continue
-      data.shape = data.shape[:a] + (data.shape[a] + sum(padding[i]),) + data.shape[a + 1:]
-    return data
+      tag = dim_tags[a]
+      dim = None if tag.dimension is None else (tag.dimension + sum(padding[i]))
+      tag = DimensionTag(kind=tag.kind, description="%s_pad%i" % (name, i), dimension=dim)
+      dim_tags = dim_tags[:a] + (tag,) + dim_tags[a + 1:]
+    opts = data.get_kwargs()
+    opts["dim_tags"] = dim_tags
+    return Data(**opts)
 
 
 class MergeDimsLayer(_ConcatInputLayer):
@@ -3195,9 +3199,6 @@ class ExpandDimsLayer(_ConcatInputLayer):
     axis = self._get_axis(data=data, axis=axis)
     from returnn.tf.util.basic import expand_dims_unbroadcast
     self.output.placeholder = expand_dims_unbroadcast(data.placeholder, axis=axis, dim=dim)
-    self.output.size_placeholder = {
-      (i if (data.get_batch_axis(i) < axis) else i + 1): v
-      for (i, v) in data.size_placeholder.items()}
 
   @classmethod
   def _get_axis(cls, data, axis):
@@ -3235,17 +3236,18 @@ class ExpandDimsLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     init_axis = axis
     data = get_concat_sources_data_template(sources)
-    data.name = "%s_output" % name
     if isinstance(axis, int):
       data = data.copy_as_batch_major()
     axis = cls._get_axis(data=data, axis=axis)
-    if axis == data.batch_ndim and not data.sparse:
-      assert data.feature_dim_axis_or_unspecified is NotSpecified
-      data.dim = dim
-    axis_wo_batch = data.get_batch_axis_excluding_batch(axis)
-    data.shape = data.shape[:axis_wo_batch] + (dim,) + data.shape[axis_wo_batch:]
+
+    new_dim = DimensionTag(
+      kind=DimensionTag.Types.Spatial, description="%s_expand_dims" % name,
+      dimension=dim)
+    data = data.copy_template(name="%s_output" % name)
+    data = data.copy_add_dim_by_tag(new_dim, unbroadcast=True, axis=axis)
     if isinstance(init_axis, str):
       if init_axis.lower() in ["spatial", "time", "t"] and data.time_dim_axis is None:
         data.time_dim_axis = axis
@@ -7214,11 +7216,11 @@ class ForcedAlignmentLayer(_ConcatInputLayer):
     :rtype: Data
     """
     src = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_time_major()
-    src.dtype = "int32"
-    src.sparse = True
-    src.shape = (None,)
-    src.feature_dim_axis = NotSpecified
-    return src
+    opts = src.get_kwargs(include_special_axes=False)
+    opts["dim_tags"] = (src.get_time_dim_tag(), src.dim_tags[src.batch_dim_axis])
+    opts["dtype"] = "int32"
+    opts["sparse"] = True
+    return Data(**opts)
 
 
 class FastBaumWelchLayer(_ConcatInputLayer):
