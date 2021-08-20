@@ -3590,29 +3590,8 @@ class TransposeLayer(_ConcatInputLayer):
     :rtype: Data
     """
     perm_ = cls.get_perm_int(input_data=input_data, perm=perm)
-    shape = [input_data.batch_shape[perm_[i]] for i in range(input_data.batch_ndim)]
-    if input_data.have_batch_axis():
-      shape.pop(perm_[input_data.batch_dim_axis])
-    out = input_data.copy_template(name=name if name else "%s_transposed" % input_data.name)
-    out.shape = tuple(shape)
-    out.batch_dim_axis = perm_[input_data.batch_dim_axis] if input_data.have_batch_axis() else None
-    out.time_dim_axis = perm_[input_data.time_dim_axis] if input_data.have_time_axis() else None
-    if input_data.feature_dim_axis_or_unspecified is NotSpecified:
-      out.feature_dim_axis = NotSpecified
-      if out.feature_dim_axis is not None:
-        out.dim = out.batch_shape[out.feature_dim_axis]
-    elif input_data.feature_dim_axis_or_unspecified is None:
-      out.feature_dim_axis = None
-    else:
-      out.feature_dim_axis = perm_[input_data.feature_dim_axis_or_unspecified]
-    if input_data.placeholder is not None:
-      out.placeholder = tf.transpose(
-        input_data.placeholder, [perm_[i] for i in range(input_data.batch_ndim)])
-    if input_data.size_placeholder:
-      out.size_placeholder = {
-        out.get_batch_axis_excluding_batch(perm_[input_data.get_batch_axis(i)]): size
-        for (i, size) in input_data.size_placeholder.items()}
-    return out
+    perm__ = [perm_[i] for i in range(input_data.batch_ndim)]
+    return input_data.copy_transpose(perm__).copy(name=name)
 
   @classmethod
   def get_perm_int(cls, input_data, perm):
