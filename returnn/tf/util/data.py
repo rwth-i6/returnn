@@ -2152,13 +2152,19 @@ class Data(object):
       dimension=new_dim, dyn_size=new_size)
     return self.copy_template_replace_dim_tag(axis=axis, new_dim_tag=dim_tag)
 
-  def copy_template_new_dim_tags(self, new_dim_tags):
+  def copy_template_new_dim_tags(self, new_dim_tags, name=None, keep_special_axes=False):
     """
     :param list[DimensionTag]|tuple[DimensionTag] new_dim_tags:
+    :param str|None name:
+    :param bool keep_special_axes:
     :rtype: Data
     """
-    opts = self.get_kwargs(include_special_axes=False)
+    if keep_special_axes:
+      assert len(new_dim_tags) == self.batch_ndim
+    opts = self.get_kwargs(include_special_axes=keep_special_axes)
     opts["dim_tags"] = new_dim_tags
+    if name:
+      opts["name"] = name
     return Data(**opts)
 
   def _get_variable_dim_pattern(self):

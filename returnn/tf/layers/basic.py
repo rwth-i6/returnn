@@ -839,7 +839,7 @@ class SliceLayer(_ConcatInputLayer):
     axis_wo_batch = input_data.get_batch_axis_excluding_batch(axis)
     dim_slice = slice(slice_start, slice_end, slice_step)
     if axis_wo_batch is not None:
-      out_type["shape"] = list(out_type["shape"])
+      out_type["shape"] = list(out_type["shape"])  # TODO ...
       if out_type["shape"][axis_wo_batch] is not None:
         out_type["shape"][axis_wo_batch] = len(range(out_type["shape"][axis_wo_batch])[dim_slice])
     if not out_type["sparse"]:
@@ -922,7 +922,7 @@ class SliceNdLayer(_ConcatInputLayer):
     shape = [size] + in_shape[1:]  # (B, size, ...) (w/o batch)
     out_type = input_data.get_kwargs()
     out_type["name"] = "%s_output" % name
-    out_type["shape"] = shape
+    out_type["shape"] = shape  # TODO ...
     out_type["batch_dim_axis"] = 0
     return Data(**out_type)
 
@@ -1100,7 +1100,7 @@ class GatherLayer(_ConcatInputLayer):
       [input_data.batch_shape[ax] for ax in input_axes[gather_axis-batch_dims:] if ax != input_data.batch_dim_axis])
     out_type = input_data.get_kwargs()
     out_type["name"] = "%s_output" % name
-    out_type["shape"] = shape
+    out_type["shape"] = shape  # TODO...
     out_type["beam"] = SearchBeam.get_combined_beam(input_data.beam, position_data.beam)
     out_type["available_for_inference"] = input_data.available_for_inference and position_data.available_for_inference
 
@@ -2476,9 +2476,7 @@ class PadLayer(_ConcatInputLayer):
       dim = None if tag.dimension is None else (tag.dimension + sum(padding[i]))
       tag = DimensionTag(kind=tag.kind, description="%s_pad%i" % (name, i), dimension=dim)
       dim_tags = dim_tags[:a] + (tag,) + dim_tags[a + 1:]
-    opts = data.get_kwargs()
-    opts["dim_tags"] = dim_tags
-    return Data(**opts)
+    return data.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
 
 
 class MergeDimsLayer(_ConcatInputLayer):
@@ -2804,14 +2802,11 @@ class SplitLayer(_ConcatInputLayer):
     :rtype: Data
     """
     from ..util.data import DimensionTag
-    data_opts = input_data.get_kwargs()
-    data_opts["name"] = "%s/%i_output" % (name, idx)
     new_dim_tag = DimensionTag(
       kind=input_data.dim_tags[axis].kind, description="%s_split%i" % (name, idx),
       dimension=size_splits[idx])
-    dim_tags = input_data.dim_tags[:axis] + (new_dim_tag,) + input_data.dim_tags[axis + 1:]
-    data_opts["dim_tags"] = dim_tags
-    return Data(**data_opts)
+    out = input_data.copy_template("%s/%i_output" % (name, idx))
+    return out.copy_template_replace_dim_tag(axis=axis, new_dim_tag=new_dim_tag)
 
 
 class SplitDimsLayer(_ConcatInputLayer):
@@ -2977,10 +2972,7 @@ class SplitDimsLayer(_ConcatInputLayer):
       if i != rem_dim_idx else rem_dim
       for i in range(len(dims)))
     new_dim_tags = data.dim_tags[:axis] + resolved_dims + data.dim_tags[axis + 1:]
-
-    data_opts = data.get_kwargs(include_special_axes=False)
-    data_opts["dim_tags"] = new_dim_tags
-    return Data(**data_opts)
+    return data.copy_template_new_dim_tags(new_dim_tags)
 
 
 class SplitBatchTimeLayer(_ConcatInputLayer):
@@ -3434,9 +3426,7 @@ class TileLayer(_ConcatInputLayer):
       dim = None if tag.dimension is None else (tag.dimension * multiple)
       tag = DimensionTag(kind=tag.kind, description="%s_tile" % name, dimension=dim)
       dim_tags[axis] = tag
-    opts = data.get_kwargs()
-    opts["dim_tags"] = dim_tags
-    return Data(**opts)
+    return data.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
 
 
 class CastLayer(CopyLayer):
@@ -4771,10 +4761,7 @@ class ReduceOutLayer(_ConcatInputLayer):
     tag = DimensionTag(
       kind=DimensionTag.Types.Feature, description="%s_reduce_out" % name,
       dimension=dim)
-    dim_tags = out.dim_tags[:out.feature_dim_axis] + (tag,) + out.dim_tags[out.feature_dim_axis + 1:]
-    opts = out.get_kwargs()
-    opts["dim_tags"] = dim_tags
-    return Data(**opts)
+    return out.copy_template_replace_dim_tag(axis=out.feature_dim_axis, new_dim_tag=tag)
 
 
 class SqueezeLayer(_ConcatInputLayer):
@@ -6140,6 +6127,7 @@ class CompareLayer(LayerBase):
     """
     out_type_ = {}
     if sources:
+      # TODO ... get_kwargs? dim_tags?
       out_type_.update(Data.get_common_data([s.output for s in sources], warnings_out=log.v4).get_kwargs())
     if n_out is not NotSpecified:
       out_type_["dim"] = n_out
