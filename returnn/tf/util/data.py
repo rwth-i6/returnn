@@ -1315,14 +1315,17 @@ class Data(object):
     """
     return [i for (i, dim) in enumerate(self.shape) if dim is None]
 
-  def get_kwargs(self):
+  def get_kwargs(self, include_special_axes=True):
     """
+    :param bool include_special_axes: whether to include time and feature special axis marker
     :return: relevant attrib items for copying
     :rtype: dict[str]
     """
-    keys = ["name", "dim_tags", "dtype", "time_dim_axis"]
-    if self._feature_dim_axis is not NotSpecified:
-      keys += ["feature_dim_axis"]
+    keys = ["name", "dim_tags", "dtype"]
+    if include_special_axes:
+      keys += ["time_dim_axis"]
+      if self._feature_dim_axis is not NotSpecified:
+        keys += ["feature_dim_axis"]
     if self.sparse:
       # Sparse is False by default. And the dim is inferred from the feature dim, or otherwise does not make sense.
       keys += ["sparse", "dim"]
@@ -1780,7 +1783,7 @@ class Data(object):
       with tf.name_scope("%s_copy_add_dim_by_tag" % get_valid_scope_name_from_str(self.name)):
         placeholder = tf.expand_dims(self.placeholder, axis)
         if dim_tag.dimension is None or dim_tag.dimension > 1:
-          tiles = [1] * axis + [dim_tag.get_dim_value()] + [1] * (self.batch_ndim - axis - 1)
+          tiles = [1] * axis + [dim_tag.get_dim_value()] + [1] * (self.batch_ndim - axis)
           placeholder = tf.tile(placeholder, tiles)
       data_opts["placeholder"] = placeholder
     return Data(**data_opts)

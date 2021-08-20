@@ -2865,14 +2865,14 @@ class SplitDimsLayer(_ConcatInputLayer):
         # When there is support for this, this should already be created in get_out_data_from_opts
         # Note: currently get_out_data_from_opts already sets data.size_placeholder[axis_wo_batch] to the input size
         # (meaning we do not need to transform the axis here)
-        dyn_size = -(-data.size_placeholder[axis_wo_batch] // constant_size)  # == ceildiv(size, constant_size)
-        self.output.size_placeholder[axis_wo_batch] = dyn_size
         from returnn.tf.util.data import DimensionTag
+        dyn_size = -(-data.size_placeholder[axis_wo_batch] // constant_size)  # == ceildiv(size, constant_size)
         if not DimensionTag.get_tag_from_size_tensor(dyn_size):
           tag = DimensionTag(
             description="split-time:%i:%s" % (axis, self.get_absolute_name()),
             kind=DimensionTag.Types.Spatial)
           tag.set_tag_on_size_tensor(dyn_size)
+        self.output.size_placeholder[axis_wo_batch] = dyn_size
 
     self.output.placeholder = tf.reshape(data.placeholder, shape=new_shape)
 
@@ -2930,6 +2930,7 @@ class SplitDimsLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     input_data = get_concat_sources_data_template(sources)
     data = input_data.copy("%s_output" % name)
     if isinstance(axis, int):
@@ -2944,40 +2945,29 @@ class SplitDimsLayer(_ConcatInputLayer):
     else:
       resolved_shape_dims = tuple([(d if (d >= 0) else None) for d in dims])
 
-    if axis != data.batch_dim_axis:
-      axis_wb = data.get_batch_axis_excluding_batch(axis)
-      data.shape = data.shape[:axis_wb] + resolved_shape_dims + data.shape[axis_wb + 1:]
-      if data.batch_dim_axis is not None:
-        data.batch_dim_axis = cls._map_old_axis_to_new_axis(split_axis=axis, dims=dims, old_axis=data.batch_dim_axis)
-    else:  # axis == data.batch_dim_axis
-      new_batch_shape = data.batch_shape[:axis] + resolved_shape_dims + data.batch_shape[axis + 1:]
-      assert any([d == -1 for d in dims])
-      new_batch_axis = data.batch_dim_axis + [d == -1 for d in dims].index(True)
-      data.batch_dim_axis = new_batch_axis
-      data.shape = new_batch_shape[:new_batch_axis] + new_batch_shape[new_batch_axis + 1:]
+    rem_dim_indices = [i for i, d in enumerate(dims) if d < 0]
+    assert len(rem_dim_indices) <= 1, "only one entry in dims %r can be -1" % (dims,)
+    rem_dim_idx = rem_dim_indices[0] if rem_dim_indices else (len(dims) - 1)
+    axis_dim_tag = data.dim_tags[axis]
+    if all(d == 1 for (i, d) in enumerate(dims) if i != rem_dim_idx):
+      rem_dim = axis_dim_tag  # we can overtake the existing dim tag
+    else:
+      rem_dim = DimensionTag(
+        kind=axis_dim_tag.kind,
+        description="%s_split%i_rem" % (name, rem_dim_idx),
+        dimension=resolved_shape_dims[rem_dim_idx])
+    resolved_dims = tuple(
+      DimensionTag(
+        kind=DimensionTag.Types.Spatial,
+        description="%s_split%i" % (name, i),
+        dimension=resolved_shape_dims[i])
+      if i != rem_dim_idx else rem_dim
+      for i in range(len(dims)))
+    new_dim_tags = data.dim_tags[:axis] + resolved_dims + data.dim_tags[axis + 1:]
 
-    if data.time_dim_axis is not None:
-      data.time_dim_axis = cls._map_old_axis_to_new_axis(split_axis=axis, dims=dims, old_axis=data.time_dim_axis)
-
-    if data.feature_dim_axis is None and not data.sparse and any([d > 0 for d in dims]):
-      # We want to have the last index where dims[index] > 0.
-      i = len(dims) - list(reversed([d > 0 for d in dims])).index(True) - 1
-      new_feature_dim_axis = axis + i
-      if new_feature_dim_axis == data.batch_ndim - 1:
-        data.feature_dim_axis = NotSpecified
-      else:
-        data.feature_dim_axis = new_feature_dim_axis
-    if data.feature_dim_axis is not None:
-      data.dim = data.batch_shape[data.feature_dim_axis]
-
-    # Use input_data.get_batch_axis(..) as batch_dim_axis of data might have changed by now
-    data.size_placeholder = {
-      data.get_batch_axis_excluding_batch(
-        cls._map_old_axis_to_new_axis(
-          split_axis=axis, dims=dims, old_axis=input_data.get_batch_axis(i))): v
-      for (i, v) in input_data.size_placeholder.items()}
-
-    return data
+    data_opts = data.get_kwargs(include_special_axes=False)
+    data_opts["dim_tags"] = new_dim_tags
+    return Data(**data_opts)
 
 
 class SplitBatchTimeLayer(_ConcatInputLayer):
