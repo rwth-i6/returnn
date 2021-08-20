@@ -2625,6 +2625,7 @@ class MergeDimsLayer(_ConcatInputLayer):
     :param None|dict[str] out_type:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     assert not out_type, "currently ignored"
     input_data = get_concat_sources_data_template(sources)
     data = input_data.copy(name="%s_output" % name)
@@ -2636,14 +2637,7 @@ class MergeDimsLayer(_ConcatInputLayer):
     res_dim = None
     if all([data.batch_shape[i] is not None for i in axes]):
       res_dim = int(numpy.prod([data.batch_shape[i] for i in axes]))
-    if not data.sparse and data.feature_dim_axis in axes:  # will also merge the feature dim
-      if res_dim is not None and n_out is not NotSpecified:
-        assert res_dim == n_out
-      elif res_dim is not None and n_out is NotSpecified:
-        pass
-      elif res_dim is None and n_out is not NotSpecified:
-        res_dim = n_out
-      data.dim = res_dim
+    merge_dim_tags = [tag for (i, tag) in enumerate(data.dim_tags) if i in axes]
     merge_target_axis = cls._get_target_axis(input_data=data, merge_axes=axes)
     if data.feature_dim_axis_or_unspecified is NotSpecified:
       new_feature_dim_axis = NotSpecified
@@ -2655,29 +2649,23 @@ class MergeDimsLayer(_ConcatInputLayer):
     else:
       new_feature_dim_axis = cls._old_axis_to_new_axis(
         input_data=input_data, merge_axes=axes, old_axis=input_data.feature_dim_axis)
-    data.batch_dim_axis = cls._old_axis_to_new_axis(
-      input_data=input_data, merge_axes=axes, old_axis=input_data.batch_dim_axis)
-    new_shape = [d for (i, d) in enumerate(data.batch_shape) if i not in axes]
-    new_shape.insert(merge_target_axis, res_dim)
-    if data.batch_dim_axis is not None:
-      new_shape.pop(data.batch_dim_axis)
-    data.shape = tuple(new_shape)
-    data.time_dim_axis = cls._old_axis_to_new_axis(
-      input_data=input_data, merge_axes=axes, old_axis=input_data.time_dim_axis)
-    if data.time_dim_axis is not None and data.time_dim_axis in {data.batch_dim_axis, data.feature_dim_axis}:
-      if input_data.time_dim_axis not in {input_data.batch_dim_axis, input_data.feature_dim_axis}:
-        # Time got merged with feature or batch.
-        data.time_dim_axis = None
-    data.feature_dim_axis = new_feature_dim_axis
-    if not data.sparse and data.feature_dim_axis is not None:
-      data.dim = data.batch_shape[data.feature_dim_axis]
-    # Set size_placeholder, here for now without merging any axes. Merged axes are then updated in __init__.
-    data.size_placeholder = {}
-    for old_axis, dyn_size in sorted(input_data.size_placeholder.items()):
-      new_axis = cls._old_axis_to_new_axis(
-        input_data=input_data, merge_axes=axes, old_axis=input_data.get_batch_axis(old_axis))
-      if new_axis != data.batch_dim_axis:
-        data.size_placeholder[data.get_batch_axis_excluding_batch(new_axis)] = dyn_size
+    if any(tag.kind == DimensionTag.Types.Batch for tag in merge_dim_tags):
+      res_dim_tag_kind = DimensionTag.Types.Batch
+    elif any(tag.kind == DimensionTag.Types.Feature for tag in merge_dim_tags):
+      res_dim_tag_kind = DimensionTag.Types.Feature
+    else:
+      res_dim_tag_kind = DimensionTag.Types.Spatial
+    res_dim_tag = DimensionTag(
+      kind=res_dim_tag_kind, description="%s_merge_dims" % name,
+      dimension=res_dim)
+    new_dim_tags = [d for (i, d) in enumerate(data.dim_tags) if i not in axes]
+    new_dim_tags.insert(merge_target_axis, res_dim_tag)
+
+    data_opts = data.get_kwargs(include_special_axes=False)
+    data_opts["dim_tags"] = new_dim_tags
+    data_opts["feature_dim_axis"] = new_feature_dim_axis
+    data = Data(**data_opts)
+
     if input_data.batch_dim_axis in axes and data.batch:
       for axis in axes:
         if axis != input_data.batch_dim_axis:
