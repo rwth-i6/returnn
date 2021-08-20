@@ -2118,6 +2118,24 @@ class Data(object):
       kwargs["name"] = name
     return Data(**kwargs)
 
+  def copy_template_replace_dim_tag(self, axis, new_dim_tag, name=None):
+    """
+    :param int axis:
+    :param DimensionTag new_dim_tag:
+    :param str|None name: new name
+    :rtype: Data
+    """
+    if axis < 0:
+      assert axis + self.batch_ndim >= 0
+      axis += self.batch_ndim
+    assert 0 <= axis < self.batch_ndim
+    opts = self.get_kwargs()
+    dim_tags = self.dim_tags[:axis] + (new_dim_tag,) + self.dim_tags[axis + 1:]
+    opts["dim_tags"] = dim_tags
+    if name:
+      opts["name"] = name
+    return Data(**opts)
+
   def copy_template_replace_dim(self, axis, new_dim, new_size=None):
     """
     :param int axis:
@@ -2125,20 +2143,14 @@ class Data(object):
     :param tf.Tensor|None new_size:
     :rtype: Data
     """
-    if axis < 0:
-      assert axis + self.batch_ndim >= 0
-      axis += self.batch_ndim
-    assert 0 <= axis < self.batch_ndim
-    if axis == self.batch_dim_axis:
+    dim_tag = self.dim_tags[axis]
+    if dim_tag.is_batch_dim():
       assert new_dim is None
       return self.copy_template()  # nothing to do
-    dim_tag = self.dim_tags[axis]
     dim_tag = DimensionTag(
       kind=dim_tag.kind, description="%s_replaced" % (dim_tag.description or "unnamed"),
       dimension=new_dim, dyn_size=new_size)
-    data_opts = self.get_kwargs()
-    data_opts["dim_tags"] = self.dim_tags[:axis] + (dim_tag,) + self.dim_tags[axis + 1:]
-    return Data(**data_opts)
+    return self.copy_template_replace_dim_tag(axis=axis, new_dim_tag=dim_tag)
 
   def _get_variable_dim_pattern(self):
     """
