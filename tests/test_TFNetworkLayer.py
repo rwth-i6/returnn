@@ -1231,24 +1231,24 @@ def test_SoftmaxOverSpatialLayer_window():
     n_dim = 1
     window_size = 5
     window_start_idxs = numpy.array([3, 0, 1, 7]).astype("int32")  # (B,)
-    seqlens = numpy.array([5, 7, 3, 9])
+    seqlens = numpy.array([5, 7, 3, 9]).astype("int32")
     input_np = rnd.normal(size=(n_batch, n_time, n_dim)).astype("float32")  # (B, T, D)
-    src = InternalLayer(name="src", network=net, out_type={"shape": (n_time, n_dim), "time_dim_axis": 1})
+    src = InternalLayer(name="src", network=net, out_type={"shape": (None, n_dim), "time_dim_axis": 1})
     window_start = InternalLayer(name="window_start", network=net, out_type={"shape": (), "dtype": "int32"})
     window_start.output.placeholder = tf.constant(window_start_idxs)  # (B,)
     window_start.output.size_placeholder = {}
     print("input:", src.output)
     src.output.placeholder = tf.constant(input_np, dtype=tf.float32)
-    src.output.size_placeholder = {0: tf.constant(seqlens)}
+    src.output.size_placeholder = {0: tf.constant(seqlens, dtype=tf.int32)}
     opts = {"network": net, "name": "softmax_over_spatial_test", "sources": [src],
             "window_start": window_start, "window_size": window_size}
     out_data = SoftmaxOverSpatialLayer.get_out_data_from_opts(**opts)
     print("output:", out_data)
     out_data.sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
-    assert_equal(out_data.shape, (n_dim, n_time))  # layer moves time-dim to back
+    assert_equal(out_data.shape, (n_dim, None))  # layer moves time-dim to back
     layer = SoftmaxOverSpatialLayer(output=out_data, **opts)
     layer.output.sanity_check()
-    assert_equal(layer.output.shape, (n_dim, n_time))
+    assert_equal(layer.output.shape, (n_dim, None))
     out_np = session.run(layer.output.placeholder)
     assert_equal(out_np.shape, (n_batch, n_dim, n_time))
     # check if window masking worked:
