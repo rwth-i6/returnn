@@ -2745,13 +2745,8 @@ class SplitLayer(_ConcatInputLayer):
     :param int idx:
     :rtype: LayerBase
     """
-    out = self.output.copy(name="%s/%i_output" % (self.name, idx))
-    axis_wo_b = out.get_batch_axis_excluding_batch(self.axis)
-    shape = list(out.shape)
-    shape[axis_wo_b] = self.size_splits[idx]
-    out.shape = tuple(shape)
-    if self.axis == self.output.feature_dim_axis:
-      out.dim = self.size_splits[idx]
+    out = self._get_split_out_data(
+      name=self.name, idx=idx, size_splits=self.size_splits, input_data=self.input_data, axis=self.axis)
     out.placeholder = self.splits[idx]
     out.sanity_check()
     return InternalLayer(name="%s/%i" % (self.name, idx), network=self.network, output=out, sources=self.sources)
@@ -2784,21 +2779,36 @@ class SplitLayer(_ConcatInputLayer):
     except ValueError:
       return None
     name = parent_layer_kwargs.get("name", "<unknown>")
-    out = get_concat_sources_data_template(parent_layer_kwargs["sources"], name="%s_output" % name)
+    input_data = get_concat_sources_data_template(parent_layer_kwargs["sources"], name="%s_output" % name)
     axis, size_splits = cls._get_axis_size_splits_num_splits(
-      input_data=out,
+      input_data=input_data,
       axis=parent_layer_kwargs.get("axis", None),
       num_splits=parent_layer_kwargs.get("num_splits", None),
       size_splits=parent_layer_kwargs.get("size_splits", None),
       err_prefix="%s/%s" % (name, layer_name))
-    out = out.copy(name="%s/%i_output" % (name, idx))
-    axis_wo_b = out.get_batch_axis_excluding_batch(axis)
-    shape = list(out.shape)
-    shape[axis_wo_b] = size_splits[idx]
-    out.shape = tuple(shape)
-    if axis == out.feature_dim_axis:
-      out.dim = size_splits[idx]
+    out = cls._get_split_out_data(
+      name=name, idx=idx, input_data=input_data, size_splits=size_splits, axis=axis)
     return out, parent_layer_kwargs["network"], InternalLayer
+
+  @classmethod
+  def _get_split_out_data(cls, name, input_data, size_splits, idx, axis):
+    """
+    :param str name:
+    :param Data input_data:
+    :param list[int] size_splits:
+    :param int idx:
+    :param int axis:
+    :rtype: Data
+    """
+    from ..util.data import DimensionTag
+    data_opts = input_data.get_kwargs()
+    data_opts["name"] = "%s/%i_output" % (name, idx)
+    new_dim_tag = DimensionTag(
+      kind=input_data.dim_tags[axis].kind, description="%s_split%i" % (name, idx),
+      dimension=size_splits[idx])
+    dim_tags = input_data.dim_tags[:axis] + (new_dim_tag,) + input_data.dim_tags[axis + 1:]
+    data_opts["dim_tags"] = dim_tags
+    return Data(**data_opts)
 
 
 class SplitDimsLayer(_ConcatInputLayer):
@@ -2954,12 +2964,12 @@ class SplitDimsLayer(_ConcatInputLayer):
     else:
       rem_dim = DimensionTag(
         kind=axis_dim_tag.kind,
-        description="%s_split%i_rem" % (name, rem_dim_idx),
+        description="%s_split_dims%i_rem" % (name, rem_dim_idx),
         dimension=resolved_shape_dims[rem_dim_idx])
     resolved_dims = tuple(
       DimensionTag(
         kind=DimensionTag.Types.Spatial,
-        description="%s_split%i" % (name, i),
+        description="%s_split_dims%i" % (name, i),
         dimension=resolved_shape_dims[i])
       if i != rem_dim_idx else rem_dim
       for i in range(len(dims)))

@@ -3433,8 +3433,13 @@ def _infer_dim_tags_tuple_from_shape(
       with reuse_name_scope("extern_data/placeholders/%s" % name, absolute=True):
         dyn_size = tf_compat.v1.placeholder(
           name="%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, shape=(None,))
-        if tag:
-          tag.set_tag_on_size_tensor(dyn_size)
+        if not tag:
+          tag = DimensionTag(
+            description="%s:var:extern_data:%s" % (
+              "time" if axis == time_dim_axis else "spatial%i" % axis, name),
+            kind=DimensionTag.Types.Spatial)
+          dim_tags[axis] = tag
+        tag.set_tag_on_size_tensor(dyn_size)
     if tag:
       # Just some sanity checks.
       assert isinstance(tag, DimensionTag)
