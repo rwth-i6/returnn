@@ -1196,7 +1196,7 @@ def test_SoftmaxOverSpatialLayer_start():
     n_dim = 7
     start_idxs = numpy.array([[3], [0], [1]]).astype("int32")  # (B, 1)
     input_np = rnd.normal(size=(n_batch, n_time, n_dim)).astype("float32")  # (B, T, D)
-    src = InternalLayer(name="src", network=net, out_type={"shape": (n_time, n_dim), "time_dim_axis": 1})
+    src = InternalLayer(name="src", network=net, out_type={"shape": (None, n_dim), "time_dim_axis": 1})
     start = InternalLayer(name="start", network=net, out_type={"shape": (1,), "dtype": "int32"})
     start.output.placeholder = tf.constant(start_idxs)
     start.output.size_placeholder = {}
@@ -1208,9 +1208,9 @@ def test_SoftmaxOverSpatialLayer_start():
     out_data = SoftmaxOverSpatialLayer.get_out_data_from_opts(**opts)
     print("output:", out_data)
     out_data.sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
-    assert_equal(out_data.shape, (n_dim, n_time))  # layer moves time-dim to back
+    assert_equal(out_data.shape, (n_dim, None))  # layer moves time-dim to back
     layer = SoftmaxOverSpatialLayer(output=out_data, **opts)
-    assert_equal(layer.output.shape, (n_dim, n_time))
+    assert_equal(layer.output.shape, (n_dim, None))
     out_np = session.run(layer.output.placeholder)
     assert_equal(out_np.shape, (n_batch, n_dim, n_time))
     # check if masking worked
