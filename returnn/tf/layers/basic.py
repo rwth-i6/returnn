@@ -2059,7 +2059,9 @@ class RangeInAxisLayer(LayerBase):
     self.output.placeholder = out
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, axis, dtype="int32", unbroadcast=False, keepdims=True, sparse=False, **kwargs):
+  def get_out_data_from_opts(cls,
+                             name, sources, axis, dtype="int32", unbroadcast=False, keepdims=True, sparse=False,
+                             **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
