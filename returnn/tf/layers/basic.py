@@ -5892,6 +5892,8 @@ class CombineLayer(LayerBase):
     out_type_["name"] = "%s_output" % kwargs["name"]
     if out_type:
       if isinstance(out_type, dict):
+        if "shape" in out_type:
+          out_type_.pop("dim_tags", None)
         out_type_.update(out_type)
       elif callable(out_type):
         def call_out_type_with_eval_locals(**out_type_kwargs):
