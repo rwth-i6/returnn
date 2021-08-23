@@ -2827,31 +2827,28 @@ class Data(object):
             sizes = tf_util.tile_transposed(base_size, axis=0, multiples=self.beam.beam_size)
           tag.set_tag_on_size_tensor(sizes)
           sizes._RETURNN_dyn_size_beam = self.beam
-    # self._dynamic_sizes[axis] = sizes  # TODO wrong
-    # TODO not sure here...
+
+    sizes_tag = DimensionTag.get_tag_from_size_tensor(sizes)
+    if sizes_tag:
+      assert sizes_tag.dyn_size is sizes
     tag = self.dim_tags[axis]
     assert tag.dimension is None  # dynamic axis
     if tag.dyn_size is sizes:
       return  # nothing to do
-    sizes_tag = DimensionTag.get_tag_from_size_tensor(sizes)
     if tag.dyn_size is None:
       if sizes_tag:  # special rule for older code: overtake previous existing
         assert sizes_tag.dyn_size is sizes
         self._dim_tags = self.dim_tags[:axis] + (sizes_tag,) + self.dim_tags[axis + 1:]
+        # Also assume the existing dim tag should be expected as equal.
+        # Likely there is anyway no reference so this does not matter.
+        tag.declare_same_as(sizes_tag)
       else:
         # Assign now. This should also set the dim tag on sizes.
         tag.dyn_size = sizes
     else:
       # Reset to some new size.
       # Use new dim tag, or previous existing attached to size.
-      sizes_tag = DimensionTag.get_tag_from_size_tensor(sizes)
       assert sizes_tag, "%s: assign dyn sizes %s without defined dim tag" % (self, sizes)
-      # Some older code maybe invalidates this. It sets the original DimensionTag to the new dyn sizes.
-      # We currently allow this until all of this code is cleaned up.
-      # However, we will now create a new DimensionTag such that we keep the right dyn size reference.
-      # TODO ...
-      #   But actually our new DimensionTag.set_tag_on_size_tensor should handle this?
-      assert sizes_tag.dyn_size is sizes
       self._dim_tags = self.dim_tags[:axis] + (sizes_tag,) + self.dim_tags[axis + 1:]
 
   def del_dynamic_size(self, axis):
