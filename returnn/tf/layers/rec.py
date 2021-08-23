@@ -6152,6 +6152,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
     assert sources
     import numpy
     out = sources[0].output.copy_as_batch_major().copy(name="%s_output" % name)
+    batch_dim_tag = out.dim_tags[out.batch_dim_axis]
     feat_tag = DimensionTag(kind=DimensionTag.Types.Feature, description="%s_self_att_feat" % name, dimension=n_out)
     if len(out.shape_dense) >= 2:
       if all(out.shape_dense[:-1]):
@@ -6160,15 +6161,16 @@ class SelfAttentionLayer(_ConcatInputLayer):
         time_dim = None
       time_tag = DimensionTag(
         kind=DimensionTag.Types.Spatial, description="%s_self_att_time" % name, dimension=time_dim)
-      dim_tags = (time_tag, feat_tag)
+      dim_tags = (batch_dim_tag, time_tag, feat_tag)
     else:
-      dim_tags = (feat_tag,)
+      dim_tags = (batch_dim_tag, feat_tag)
     data_opts = out.get_kwargs(include_special_axes=False)
     data_opts["dim_tags"] = dim_tags
     data_opts["dtype"] = "float32"
     data_opts.pop("sparse", None)
     data_opts.pop("vocab", None)
-    return out
+    data_opts.pop("dim", None)
+    return Data(**data_opts)
 
   # noinspection PyMethodOverriding
   @classmethod
