@@ -6328,6 +6328,7 @@ class CondLayer(LayerBase):
       assert isinstance(size, tf.Tensor)
       assert size.shape.ndims == 1
       # Note: Not quite clear what dimension-tag to set...
+      # TODO ...
       self.output.size_placeholder[i] = size
 
   def _cond_layer_return(self, layer):
