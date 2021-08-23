@@ -2833,20 +2833,26 @@ class Data(object):
     assert tag.dimension is None  # dynamic axis
     if tag.dyn_size is sizes:
       return  # nothing to do
+    sizes_tag = DimensionTag.get_tag_from_size_tensor(sizes)
     if tag.dyn_size is None:
-      tag.dyn_size = sizes
+      if sizes_tag:  # special rule for older code: overtake previous existing
+        assert sizes_tag.dyn_size is sizes
+        self._dim_tags = self.dim_tags[:axis] + (sizes_tag,) + self.dim_tags[axis + 1:]
+      else:
+        # Assign now. This should also set the dim tag on sizes.
+        tag.dyn_size = sizes
     else:
       # Reset to some new size.
       # Use new dim tag, or previous existing attached to size.
-      tag = DimensionTag.get_tag_from_size_tensor(sizes)
-      assert tag, "%s: assign dyn sizes %s without defined dim tag" % (self, sizes)
+      sizes_tag = DimensionTag.get_tag_from_size_tensor(sizes)
+      assert sizes_tag, "%s: assign dyn sizes %s without defined dim tag" % (self, sizes)
       # Some older code maybe invalidates this. It sets the original DimensionTag to the new dyn sizes.
       # We currently allow this until all of this code is cleaned up.
       # However, we will now create a new DimensionTag such that we keep the right dyn size reference.
       # TODO ...
       #   But actually our new DimensionTag.set_tag_on_size_tensor should handle this?
-      assert tag.dyn_size is sizes
-      self._dim_tags = self.dim_tags[:axis] + (tag,) + self.dim_tags[axis + 1:]
+      assert sizes_tag.dyn_size is sizes
+      self._dim_tags = self.dim_tags[:axis] + (sizes_tag,) + self.dim_tags[axis + 1:]
 
   def del_dynamic_size(self, axis):
     """
