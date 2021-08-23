@@ -2086,6 +2086,8 @@ class RangeInAxisLayer(LayerBase):
     data_opts["dim_tags"] = dim_tags
     data_opts["dtype"] = dtype
     data_opts["sparse"] = sparse
+    if sparse:
+      data_opts["dim"] = None
     return Data(**data_opts)
 
 
