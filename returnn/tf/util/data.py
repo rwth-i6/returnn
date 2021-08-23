@@ -1998,9 +1998,9 @@ class Data(object):
         with same_control_flow_ctx(v):
           sizes = tile_transposed(v, axis=0, multiples=beam.beam_size)
         sizes._RETURNN_dyn_size_beam = beam
-        data.size_placeholder[i] = sizes
         if tag is not None:
           tag.set_tag_on_size_tensor(sizes)
+        data.size_placeholder[i] = sizes
       if data.batch:
         data.batch = data.batch.copy_set_beam(beam)
       data.beam = beam
