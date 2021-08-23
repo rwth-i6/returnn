@@ -1520,7 +1520,7 @@ def test_MergeDimsLayer_dim_tags():
     net = TFNetwork(extern_data=ExternData())
     rnd = numpy.random.RandomState(42)
 
-    src_data = Data("input", shape=(None, 1, 2, 1), feature_dim_axis=None)
+    src_data = Data("input", shape=(None, None, None, 1), feature_dim_axis=None)
     input_static_shape = (n_batch, 7, 1, 2, 1)
     src_data.placeholder = tf.constant(rnd.normal(size=input_static_shape).astype("float32"), dtype=tf.float32)
     src_data.size_placeholder = {}
@@ -1530,8 +1530,8 @@ def test_MergeDimsLayer_dim_tags():
     for axis_wo_batch, (description, dyn_size) in tag_names_with_dyn_size.items():
       tag = DimensionTag(description=description, kind=DimensionTag.Types.Spatial)
       dyn_size = tf.constant(dyn_size)
-      src_data.size_placeholder[axis_wo_batch] = dyn_size
       tag.set_tag_on_size_tensor(dyn_size)
+      src_data.size_placeholder[axis_wo_batch] = dyn_size
     print('in data:', src_data)  # should be [B,T|'key-chunk',1|'key-window',2|'att-heads',1]
     assert (
       src_data.get_axis_by_tag_name('key-chunk') == 1 and src_data.get_axis_by_tag_name('key-window') == 2 and
@@ -1600,15 +1600,19 @@ def test_MergeDimsLayer_SplitBatchTimeLayer_two_time_axes():
       "output": {"class": "copy", "from": "split_dims"}
     })
     input_data = net.extern_data.get_default_input_data()
+    print("input_data:", input_data)
     assert set(input_data.size_placeholder.keys()) == {0, 1}
     assert input_data.size_placeholder[0].name != input_data.size_placeholder[1].name
     assert input_data.get_size_dim_tag(0) != input_data.get_size_dim_tag(1)
     merged_data = net.layers["merge_dims"].output
+    print("merged_data:", merged_data)
     assert set(merged_data.size_placeholder.keys()) == {0}
     assert merged_data.get_size_dim_tag(0) != input_data.get_size_dim_tag(0)
     assert merged_data.get_size_dim_tag(0) == input_data.get_size_dim_tag(1)  # like beam-search, still same dim-tag
+    assert merged_data.size_placeholder[0] is not input_data.size_placeholder[1]  # but different sizes
     output_data = net.get_default_output_layer().output
     output_data = output_data.copy_as_batch_major()
+    print("output_data:", output_data)
     assert output_data.shape == (None, None, n_dim)
     assert output_data.get_size_dim_tag(0) == input_data.get_size_dim_tag(0)
     assert output_data.get_size_dim_tag(1) == input_data.get_size_dim_tag(1)
@@ -1617,8 +1621,10 @@ def test_MergeDimsLayer_SplitBatchTimeLayer_two_time_axes():
     output_value = session.run(output_data.placeholder, feed_dict=feed_dict)
     assert input_value.shape == output_value.shape
     assert input_value.shape[-1] == n_dim
+    print("input_value.shape:", input_value.shape)
     n_batch, n_time0, n_time1, _ = input_value.shape
     numpy.testing.assert_almost_equal(input_value, output_value)
+    print("merged_value.shape:", merged_value.shape)
     assert merged_value.shape == (n_batch * n_time0, n_time1, n_dim)
     numpy.testing.assert_almost_equal(input_value, merged_value.reshape(input_value.shape))
     merged_size = session.run(merged_data.size_placeholder[0], feed_dict=feed_dict)
