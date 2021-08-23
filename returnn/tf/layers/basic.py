@@ -3106,12 +3106,13 @@ class UnflattenNdLayer(_ConcatInputLayer):
     assert sizes_data.batch_ndim == 2
     assert sizes_data.batch_shape[1] in (None, num_axes)  # also allow None...
     self.output.placeholder = tf_util.unflatten_nd(input_data.placeholder, sizes_data.placeholder, num_axes=num_axes)
-    self.output.size_placeholder = {i: sizes_data.placeholder[:, i] for i in range(num_axes)}
+    size_placeholder = {i: sizes_data.placeholder[:, i] for i in range(num_axes)}
     if declare_same_sizes_as:
       for i, other in declare_same_sizes_as.items():
         assert 0 <= i < num_axes
         other_dim_tag = other.output.get_size_dim_tag(0)
-        other_dim_tag.set_tag_on_size_tensor(self.output.size_placeholder[i])
+        other_dim_tag.set_tag_on_size_tensor(size_placeholder[i])
+    self.output.size_placeholder = size_placeholder
 
   def get_dep_layers(self):
     """
