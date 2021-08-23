@@ -6261,14 +6261,14 @@ class SwitchLayer(LayerBase):
       :rtype: Data
       """
       if isinstance(source, LayerBase):
-        return source.output.copy(source_name)
+        return source.output.copy_template(source_name)
       return Data.template_from_constant(source, name=source_name)
 
     if isinstance(condition, bool):
       return get_source_template(true_from if condition else false_from, source_name="%s_output" % name)
     true_data = get_source_template(true_from, source_name="%s_true" % name)
     false_data = get_source_template(false_from, source_name="%s_false" % name)
-    out = Data.get_common_data([true_data, false_data, condition.output])
+    out = Data.get_common_data([true_data, false_data, condition.output.copy_template()])
     out.dtype = true_data.dtype
     out.sparse = true_data.sparse
     if out.feature_dim_axis is not None:
@@ -6276,6 +6276,7 @@ class SwitchLayer(LayerBase):
     else:
       out.dim = true_data.dim
     out.vocab = true_data.vocab
+    out.sanity_check()
     return out.copy(name="%s_output" % name)
 
   def get_dep_layers(self):
