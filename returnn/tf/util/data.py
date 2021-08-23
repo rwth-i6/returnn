@@ -1173,7 +1173,7 @@ class Data(object):
     if placeholder is None and auto_create_placeholders:
       with tf.name_scope("extern_data/placeholders/%s/" % name):
         placeholder = tf_compat.v1.placeholder(**self.get_placeholder_kwargs(with_batch=True))
-    self.placeholder = placeholder  # type: tf.Tensor  # this will hold the data value itself
+    self._placeholder = placeholder  # type: tf.Tensor  # this will hold the data value itself
     # The size_placeholder is for each variable length dimension in shape, i.e. excluding the batch-dim.
     if size_placeholder:
       self.size_placeholder = size_placeholder  # type: typing.Dict[int,tf.Tensor]  # axis w.o. batch -> size (batch,)
@@ -2415,6 +2415,21 @@ class Data(object):
     if self.time_dim_axis is None:
       return None
     return self.get_batch_axis_excluding_batch(self.time_dim_axis)
+
+  @property
+  def placeholder(self):
+    """
+    :rtype: tf.Tensor|None
+    """
+    return self._placeholder
+
+  @placeholder.setter
+  def placeholder(self, value):
+    """
+    :param tf.Tensor|None value:
+    """
+    self._placeholder = value
+    self.sanity_check()
 
   def time_dimension(self):
     """
