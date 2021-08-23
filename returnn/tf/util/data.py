@@ -106,7 +106,7 @@ class DimensionTag(object):
     assert isinstance(dyn_size, tf.Tensor) and dyn_size.shape.ndims == 1
     if self.dyn_size_ext:
       # Do not allow resetting it to sth different.
-      assert self.dyn_size_ext is dyn_size
+      assert self.dyn_size_ext.placeholder is dyn_size
       return
     beam = getattr(dyn_size, "_RETURNN_dyn_size_beam", None)
     self.dyn_size_ext = Data(
@@ -140,6 +140,12 @@ class DimensionTag(object):
     if hasattr(x, "_is_size_of_dim_tag"):
       # noinspection PyProtectedMember
       assert x._is_size_of_dim_tag in (None, self)
+    # If we already have another dyn size set, create a new DimensionTag instance.
+    if self.dyn_size is not None and self.dyn_size is not x:
+      new_dim_tag = self.copy()
+      new_dim_tag.dyn_size_ext = None
+      new_dim_tag.set_tag_on_size_tensor(x)
+      return
     if getattr(x, "_is_size_of_dim_tag", None) is None:
       setattr(x, "_is_size_of_dim_tag", self)
     if self.dyn_size is None:
@@ -270,12 +276,16 @@ class DimensionTag(object):
     :param DimensionTag other:
     """
     from .basic import same_control_flow_ctx, tile_transposed
+    if self is other:
+      return
     other_same_base = other.get_same_base()
     if self is other_same_base or self.same_as is other_same_base:
       return
     if self.same_as:
       self_same_as = self.get_same_base()
       assert not self_same_as.same_as
+      if self_same_as is other_same_base:
+        return
       self_same_as.same_as = other_same_base
       if self_same_as.dyn_size_ext is None:
         self_same_as.dyn_size_ext = other_same_base.dyn_size_ext
@@ -2829,8 +2839,13 @@ class Data(object):
       # Reset to some new size.
       # Use new dim tag, or previous existing attached to size.
       tag = DimensionTag.get_tag_from_size_tensor(sizes)
-      assert tag  # TODO always fine?
-      # if not tag:  tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="var-unk")
+      assert tag, "%s: assign dyn sizes %s without defined dim tag" % (self, sizes)
+      # Some older code maybe invalidates this. It sets the original DimensionTag to the new dyn sizes.
+      # We currently allow this until all of this code is cleaned up.
+      # However, we will now create a new DimensionTag such that we keep the right dyn size reference.
+      # TODO ...
+      #   But actually our new DimensionTag.set_tag_on_size_tensor should handle this?
+      assert tag.dyn_size is sizes
       self._dim_tags = self.dim_tags[:axis] + (tag,) + self.dim_tags[axis + 1:]
 
   def del_dynamic_size(self, axis):
