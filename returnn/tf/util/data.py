@@ -65,14 +65,7 @@ class DimensionTag(object):
       self.dyn_size = dyn_size
 
   def __repr__(self):
-    attribs = ["kind"]
-    for attr in ["description", "dimension"]:
-      if getattr(self, attr) is not None:
-        attribs.append(attr)
-    attribs.append("id")
-    if self.same_as:
-      attribs.append("same_base_id")
-    return "DimensionTag(%s)" % ", ".join(["%s=%r" % (attr, getattr(self, attr)) for attr in attribs])
+    return "DimensionTag{%s}" % self.short_repr()
 
   def short_repr(self):
     """
