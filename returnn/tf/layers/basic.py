@@ -1085,14 +1085,14 @@ class GatherLayer(_ConcatInputLayer):
     gather_axis = max(batch_dims, old_gather_axis)
 
     # (BatchAxes.., InputAxesBeforeGatherAxis, PositionAxes.., InputAxesAfterGatherAxis..)
-    shape = (
-      [input_data.batch_shape[ax] for ax in common_axes_input if ax != input_data.batch_dim_axis] +
-      [input_data.batch_shape[ax] for ax in input_axes[:gather_axis-batch_dims] if ax != input_data.batch_dim_axis] +
-      [position_data.batch_shape[ax] for ax in position_axes if ax != position_data.batch_dim_axis] +
-      [input_data.batch_shape[ax] for ax in input_axes[gather_axis-batch_dims:] if ax != input_data.batch_dim_axis])
+    dim_tags = (
+      [input_data.dim_tags[ax] for ax in common_axes_input] +
+      [input_data.dim_tags[ax] for ax in input_axes[:gather_axis-batch_dims]] +
+      [position_data.dim_tags[ax] for ax in position_axes] +
+      [input_data.dim_tags[ax] for ax in input_axes[gather_axis-batch_dims:]])
     out_type = input_data.get_kwargs()
     out_type["name"] = "%s_output" % name
-    out_type["shape"] = shape  # TODO...
+    out_type["dim_tags"] = dim_tags
     out_type["beam"] = SearchBeam.get_combined_beam(input_data.beam, position_data.beam)
     out_type["available_for_inference"] = input_data.available_for_inference and position_data.available_for_inference
 
