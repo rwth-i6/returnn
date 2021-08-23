@@ -6881,7 +6881,9 @@ class MaskedComputationLayer(LayerBase):
         tmp_shape = get_shape(source_data.placeholder)
         tmp_shape[0] = new_time + 1  # one more for the padded data
         res = tf.scatter_nd(nd_indices(idxs, batch_axis=1), source_data.placeholder, shape=tmp_shape)
-        res_data = source_data.copy_template()
+        res_data = source_data.copy_template().copy_template_replace_dim_tag(
+          axis=0,
+          new_dim_tag=DimensionTag(kind=DimensionTag.Types.Spatial, description="%s:masked:dummy-time" % self.name))
         res_data.size_placeholder[0] = new_size
         res_data.placeholder = res[:new_time]
         res_data.beam = SearchBeam.get_combined_beam(res_data.beam, mask.output.beam)
@@ -7059,7 +7061,9 @@ class MaskedComputationLayer(LayerBase):
       if not network.is_inside_rec_layer() and source:
         source_data = source.output.copy_template().copy_as_time_major()
         # Create own dummy time, to make sure we have some own custom.
-        source_data.size_placeholder[0] = tf_compat.v1.placeholder(tf.int32, shape=[None], name="dummy_time")
+        source_data = source_data.copy_template_replace_dim_tag(
+          axis=0,
+          new_dim_tag=DimensionTag(kind=DimensionTag.Types.Spatial, description="%s:masked:dummy-time" % name))
         source = WrappedInternalLayer(
           base_layer=source, network=source.network, name=source.name,
           output=source_data)
