@@ -1227,7 +1227,7 @@ class GatherNdLayer(_ConcatInputLayer):
     shape = list(position_data.shape) + list(input_data.shape[1:])  # (B, ...) (w/o batch)
     out_type = position_data.get_kwargs()
     out_type["name"] = "%s_output" % name
-    out_type["shape"] = shape
+    out_type["shape"] = shape  # TODO ...
     if position_data.time_dim_axis is None:
       if input_data.time_dim_axis is not None and input_data.time_dim_axis_excluding_batch >= 1:
         out_type["time_dim_axis"] = len(shape) + input_data.time_dim_axis_excluding_batch - 1
