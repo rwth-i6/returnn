@@ -1072,6 +1072,7 @@ class _SubnetworkRecCell(object):
       most_recent = None  # type: typing.Optional[typing.List[_TemplateLayer]]  # most recent stack
       partially_finished = []  # type: typing.List[_TemplateLayer]
       collected_exceptions = OrderedDict()  # type: OrderedDict[object,str]  # exc_key -> formatted exception/stack str
+      recent_exception = None  # type: Exception
 
       # noinspection PyShadowingNames
       @classmethod
@@ -1101,6 +1102,18 @@ class _SubnetworkRecCell(object):
             out = StringIO()
             better_exchook.better_exchook(exc_type, value, tb, file=out)
             cls.collected_exceptions[exc_key] = out.getvalue()
+        if not cls.recent_exception or not isinstance(value, skip_stack_trace_exception_types):
+          cls.recent_exception = value
+
+      @classmethod
+      def fail(cls):
+        """
+        Fail by reraising the most recent relevant exception,
+        or raising some new exception.
+        """
+        if cls.recent_exception:
+          raise cls.recent_exception
+        raise Exception("Failed to construct Rec subnet template")
 
     class GetLayer:
       """
@@ -1391,22 +1404,26 @@ class _SubnetworkRecCell(object):
           continue
         if len(ConstructCtx.partially_finished) >= old_len and not recent_changes:
           # No changes anymore. There is no real point in continuing. Just break.
-          assert all([layer.is_initialized for layer in ConstructCtx.partially_finished]), (
-            "Failed to initialize layers:\n" +
-            "".join(["  %s\n" % layer for layer in ConstructCtx.partially_finished if not layer.is_initialized]) +
-            "Check the further debug output for the partial construction and other exceptions.")
+          if not all([layer.is_initialized for layer in ConstructCtx.partially_finished]):
+            print(
+              "Failed to initialize layers:\n" +
+              "".join(["  %s\n" % layer for layer in ConstructCtx.partially_finished if not layer.is_initialized]) +
+              "Check the further debug output for the partial construction and other exceptions.")
+            ConstructCtx.fail()
           break
         loop_limit -= 1
-        assert loop_limit >= 0, (
-          ("We keep iterating over the network template construction.\n"
-           "We have these partially finished layers:\n%s\n"
-           "And these finished layers:\n%s\n"
-           "And these recent changes in the last loop iteration:\n%s") % (
-            pformat(ConstructCtx.partially_finished),
-            pformat([
-              layer for _, layer in sorted(self.layer_data_templates.items())
-              if layer not in ConstructCtx.partially_finished]),
-            pformat(recent_changes)))
+        if loop_limit < 0:
+          print(
+            ("We keep iterating over the network template construction.\n"
+             "We have these partially finished layers:\n%s\n"
+             "And these finished layers:\n%s\n"
+             "And these recent changes in the last loop iteration:\n%s") % (
+              pformat(ConstructCtx.partially_finished),
+              pformat([
+                layer for _, layer in sorted(self.layer_data_templates.items())
+                if layer not in ConstructCtx.partially_finished]),
+              pformat(recent_changes)))
+          ConstructCtx.fail()
 
       self._template_construction_exceptions = list(ConstructCtx.collected_exceptions.values())
 
