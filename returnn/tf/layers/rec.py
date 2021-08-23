@@ -3202,6 +3202,8 @@ class _SubnetworkRecCell(object):
           output.beam = None
         if output.beam:
           resolved_seq_len._RETURNN_dyn_size_beam = output.beam
+        if time_dim_tag:
+          time_dim_tag.set_tag_on_size_tensor(resolved_seq_len)
         max_len = tf.reduce_max(resolved_seq_len)
         # We should have accumulated it.
         output.placeholder = tensor_array_stack(acc_ta, stop=max_len)  # e.g. (time,batch,dim)
@@ -3214,9 +3216,9 @@ class _SubnetworkRecCell(object):
               size = tile_transposed(
                 seq_len, axis=0, multiples=output.beam.beam_size // self.parent_rec_layer.output.beam.beam_size)
               size._RETURNN_dyn_size_beam = output.beam
+              if time_dim_tag:
+                time_dim_tag.set_tag_on_size_tensor(size)
               output.size_placeholder[0] = size
-        if time_dim_tag:
-          time_dim_tag.set_tag_on_size_tensor(output.size_placeholder[0])
         if inner_layer.output.size_placeholder:
           for i, size in inner_layer.output.size_placeholder.items():
             tag = DimensionTag.get_tag_from_size_tensor(size)
