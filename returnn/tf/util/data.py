@@ -142,6 +142,13 @@ class DimensionTag(object):
     """
     return self.kind == DimensionTag.Types.Feature
 
+  def is_spatial_dim(self):
+    """
+    :return: whether this dim tag is of kind spatial
+    :rtype: bool
+    """
+    return self.kind == DimensionTag.Types.Spatial
+
   def set_tag_on_size_tensor(self, x):
     """
     :param tf.Tensor x:
@@ -1148,7 +1155,7 @@ class Data(object):
         assert batch_dim_axis == batch_dim_axis_
       del batch_dim_axis
       if time_dim_axis is NotSpecified:
-        time_dim_axis = _default_time_dim_axis(batch_dim_axis=batch_dim_axis_, shape=shape_)
+        time_dim_axis = _default_time_dim_axis_dim_tags(dim_tags)
       dim_tags = tuple(dim_tags)
       del shape_
       del batch_dim_axis_
@@ -3670,6 +3677,24 @@ def _default_time_dim_axis_no_shape(batch_dim_axis, feature_dim_axis):
       taken_axes.add(feature_dim_axis)
     time_dim_axis = [i for i in range(max(taken_axes) + 2) if i not in taken_axes][0]
   return time_dim_axis
+
+
+def _default_time_dim_axis_dim_tags(dim_tags):
+  """
+  :param list[DimensionTag]|tuple[DimensionTag] dim_tags:
+  :return: time dim axis, counted with batch-dim
+  :rtype: int|None
+  """
+  dim_tags_dyn_spatial = [i for i, tag in enumerate(dim_tags) if tag.is_spatial_dim() and tag.dyn_size_ext]
+  if dim_tags_dyn_spatial:
+    return dim_tags_dyn_spatial[0]
+  dim_tags_spatial = [i for i, tag in enumerate(dim_tags) if tag.is_spatial_dim()]
+  if dim_tags_spatial:
+    return dim_tags_spatial[0]
+  dim_tags_dyn = [i for i, tag in enumerate(dim_tags) if not tag.is_batch_dim() and tag.dyn_size_ext]
+  if dim_tags_dyn:
+    return dim_tags_dyn[0]
+  return None
 
 
 def _default_feature_dim_axis(batch_dim_axis, time_dim_axis, batch_shape, sparse):
