@@ -72,14 +72,16 @@ class DimensionTag(object):
     :return: some short repr
     :rtype: str
     """
+    if self.is_batch_dim():
+      return "B"
     desc = repr(self.description)
     if self.dimension is not None:
       desc += "(%i)" % self.dimension
     else:
       if self.dyn_size_ext:
-        desc += "_[%s]" % ",".join(self.dyn_size_ext.get_batch_axes_short_description())
+        desc += "[%s]" % ",".join(self.dyn_size_ext.get_batch_axes_short_description())
       else:
-        desc += "_[?]"
+        desc += "[?]"
     return desc
 
   def copy(self, kind=None):
