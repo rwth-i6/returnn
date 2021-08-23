@@ -2082,12 +2082,17 @@ class RangeInAxisLayer(LayerBase):
     else:
       data_opts = source.get_kwargs(include_special_axes=False)
       dim_tags = [source.dim_tags[axis]]
+      if not dim_tags[0].is_batch_dim():
+        data_opts.pop("batch", None)
+        data_opts.pop("beam", None)
     data_opts["name"] = "%s_output" % name
     data_opts["dim_tags"] = dim_tags
     data_opts["dtype"] = dtype
     data_opts["sparse"] = sparse
     if sparse:
       data_opts["dim"] = None
+    else:
+      data_opts.pop("dim", None)
     return Data(**data_opts)
 
 
