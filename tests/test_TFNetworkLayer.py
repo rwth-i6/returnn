@@ -2089,6 +2089,10 @@ def test_ScatterNdLayer_RangeLayer_RangeInAxisLayer():
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(net_dict)
 
+    t_layer = network.layers["t"]
+    assert isinstance(t_layer, RangeInAxisLayer)
+    assert t_layer.output.time_dim_axis == 0
+
     fetches = network.get_fetches_dict()
     data_input = network.extern_data.data["data"]
     out_layer = network.get_default_output_layer()
