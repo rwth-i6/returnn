@@ -888,16 +888,17 @@ class SliceNdLayer(_ConcatInputLayer):
       mask = tf.greater_equal(tf.range(size)[None, :] + start, seq_lens[:, None])  # (B,T)
       mask = expand_multiple_dims(mask, list(range(2, x.batch_ndim)))
       slices = where_bc(mask, tf.zeros_like(slices), slices)
-    self.output.size_placeholder = x.size_placeholder.copy()
+    size_placeholder = x.size_placeholder.copy()
     if isinstance(size, tf.Tensor):
-      self.output.size_placeholder[0] = tf.maximum(seq_lens - tf.reshape(start, tf.shape(seq_lens)), 0)
+      size_placeholder[0] = tf.maximum(seq_lens - tf.reshape(start, tf.shape(seq_lens)), 0)
       tag = DimensionTag(
         description="sliced-time:%s" % self.get_absolute_name(),
         kind=DimensionTag.Types.Spatial)
-      tag.set_tag_on_size_tensor(self.output.size_placeholder[0])
+      tag.set_tag_on_size_tensor(size_placeholder[0])
     else:
       assert isinstance(size, int)
-      self.output.size_placeholder.pop(0, None)  # static time axis
+      size_placeholder.pop(0, None)  # static time axis
+    self.output.size_placeholder = size_placeholder
     self.output.placeholder = slices
 
   def get_dep_layers(self):
@@ -915,16 +916,12 @@ class SliceNdLayer(_ConcatInputLayer):
     :param int|None size:
     :rtype: Data
     """
-    input_data = get_concat_sources_data_template(sources).copy_as_batch_major()
+    from ..util.data import DimensionTag
+    input_data = get_concat_sources_data_template(sources).copy_as_batch_spatial_major()
     if start:
       input_data.beam = SearchBeam.get_combined_beam(input_data.beam, start.output.beam)
-    in_shape = list(input_data.shape)
-    shape = [size] + in_shape[1:]  # (B, size, ...) (w/o batch)
-    out_type = input_data.get_kwargs()
-    out_type["name"] = "%s_output" % name
-    out_type["shape"] = shape  # TODO ...
-    out_type["batch_dim_axis"] = 0
-    return Data(**out_type)
+    new_dim_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="%s:slice_nd" % name, dimension=size)
+    return input_data.copy_template_replace_dim_tag(axis=1, new_dim_tag=new_dim_tag, name="%s_output" % name)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
