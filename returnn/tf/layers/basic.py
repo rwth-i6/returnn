@@ -3013,6 +3013,7 @@ class SplitBatchTimeLayer(_ConcatInputLayer):
     :rtype: Data
     """
     data = get_concat_sources_data_template(sources).copy_as_batch_major()
+    data.batch = base.output.batch
     data = data.copy_add_dim_by_tag(base.output.get_time_dim_tag(), axis=1, unbroadcast=True)
     return data.copy("%s_output" % name)
 
