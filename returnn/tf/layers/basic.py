@@ -795,28 +795,29 @@ class SliceLayer(_ConcatInputLayer):
     dim_slice = slice(slice_start, slice_end, slice_step)
     slices = [slice(None, None)] * axis + [dim_slice]
     axis_wo_batch = self.input_data.get_batch_axis_excluding_batch(axis)
-    self.output.size_placeholder = self.input_data.size_placeholder.copy()
-    if axis_wo_batch in self.output.size_placeholder:
+    size_placeholder = self.input_data.size_placeholder.copy()
+    if axis_wo_batch in size_placeholder:
       if slice_start:
         assert slice_start > 0
-        self.output.size_placeholder[axis_wo_batch] = (
-          tf.maximum(0, self.output.size_placeholder[axis_wo_batch] - slice_start))
+        size_placeholder[axis_wo_batch] = (
+          tf.maximum(0, size_placeholder[axis_wo_batch] - slice_start))
       if slice_end is not None:
         if slice_end >= 0:
-          self.output.size_placeholder[axis_wo_batch] = (
-            tf.minimum(slice_end, self.output.size_placeholder[axis_wo_batch]))
+          size_placeholder[axis_wo_batch] = (
+            tf.minimum(slice_end, size_placeholder[axis_wo_batch]))
         else:  # slice_end < 0
-          self.output.size_placeholder[axis_wo_batch] = (
-            tf.maximum(0, self.output.size_placeholder[axis_wo_batch] + slice_end))
+          size_placeholder[axis_wo_batch] = (
+            tf.maximum(0, size_placeholder[axis_wo_batch] + slice_end))
       if slice_step:
-        self.output.size_placeholder[axis_wo_batch] = (
-          tf.cast(tf_compat.v1.ceil(tf.divide(self.output.size_placeholder[axis_wo_batch], slice_step)), tf.int32))
+        size_placeholder[axis_wo_batch] = (
+          tf.cast(tf_compat.v1.ceil(tf.divide(size_placeholder[axis_wo_batch], slice_step)), tf.int32))
       from returnn.tf.util.basic import DimensionTag
-      if not DimensionTag.get_tag_from_size_tensor(self.output.size_placeholder[axis_wo_batch]):
+      if not DimensionTag.get_tag_from_size_tensor(size_placeholder[axis_wo_batch]):
         tag = DimensionTag(
           description="slice%i:%s" % (axis_wo_batch, self.get_absolute_name()),
           kind=DimensionTag.Types.Spatial)
-        tag.set_tag_on_size_tensor(self.output.size_placeholder[axis_wo_batch])
+        tag.set_tag_on_size_tensor(size_placeholder[axis_wo_batch])
+    self.output.size_placeholder = size_placeholder
     self.output.placeholder = self.input_data.placeholder[slices]
 
   @classmethod
@@ -832,20 +833,14 @@ class SliceLayer(_ConcatInputLayer):
     :param int|None slice_step:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     input_data = get_concat_sources_data_template(sources)
     axis = input_data.get_axis_from_description(axis)
-    out_type = input_data.get_kwargs()
-    out_type["name"] = "%s_output" % name
-    axis_wo_batch = input_data.get_batch_axis_excluding_batch(axis)
+    dim_tag = input_data.dim_tags[axis]
     dim_slice = slice(slice_start, slice_end, slice_step)
-    if axis_wo_batch is not None:
-      out_type["shape"] = list(out_type["shape"])  # TODO ...
-      if out_type["shape"][axis_wo_batch] is not None:
-        out_type["shape"][axis_wo_batch] = len(range(out_type["shape"][axis_wo_batch])[dim_slice])
-    if not out_type["sparse"]:
-      # Let Data() automatically infer "dim".
-      out_type["dim"] = NotSpecified
-    return Data(**out_type)
+    new_dim = len(range(dim_tag.dimension)[dim_slice]) if dim_tag.dimension is not None else None
+    new_dim_tag = DimensionTag(kind=dim_tag.kind, description="%s:slice" % name, dimension=new_dim)
+    return input_data.copy_template_replace_dim_tag(axis=axis, new_dim_tag=new_dim_tag, name="%s_output" % name)
 
 
 class SliceNdLayer(_ConcatInputLayer):
