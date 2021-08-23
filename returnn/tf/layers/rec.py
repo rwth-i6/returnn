@@ -376,10 +376,11 @@ class RecLayer(_ConcatInputLayer):
       d["max_seq_len"] = eval(d["max_seq_len"], {"max_len_from": max_len_from, "tf": tf})
 
   @classmethod
-  def get_out_data_from_opts(cls, network, unit, sources=(), initial_state=None, **kwargs):
+  def get_out_data_from_opts(cls, network, unit, _time_dim_tag=None, sources=(), initial_state=None, **kwargs):
     """
     :param returnn.tf.network.TFNetwork network:
     :param str|dict[str] unit:
+    :param DimensionTag|None _time_dim_tag:
     :param list[LayerBase] sources:
     :param str|LayerBase|list[str|LayerBase] initial_state:
     :rtype: Data
@@ -410,6 +411,8 @@ class RecLayer(_ConcatInputLayer):
       out = sub_out
       deps += subnet.get_parent_deps()
     assert out
+    if out.have_time_axis() and _time_dim_tag:
+      out = out.copy_template_replace_dim_tag(axis=out.time_dim_axis, new_dim_tag=_time_dim_tag)
     cls._post_init_output(output=out, sources=sources, network=network, **kwargs)
     for dep in deps:
       if dep:
@@ -6859,8 +6862,11 @@ class MaskedComputationLayer(LayerBase):
         idxs = tf.cumsum(tf.cast(mask_t, tf.int32), axis=0)  # [T,B] -> idx in T' + 1
         if masked_from:
           new_size = masked_from.output.get_sequence_lengths()
+          new_dim_tag = masked_from.output.get_time_dim_tag()
         else:
           new_size = idxs[-1]  # [B]
+          new_dim_tag = self.output.get_time_dim_tag()
+          new_dim_tag.dyn_size = new_size
         new_time = tf.reduce_max(new_size)  # T'
         idxs = where_bc(mask_t, idxs - 1, new_time)
 
@@ -6881,10 +6887,7 @@ class MaskedComputationLayer(LayerBase):
         tmp_shape = get_shape(source_data.placeholder)
         tmp_shape[0] = new_time + 1  # one more for the padded data
         res = tf.scatter_nd(nd_indices(idxs, batch_axis=1), source_data.placeholder, shape=tmp_shape)
-        res_data = source_data.copy_template().copy_template_replace_dim_tag(
-          axis=0,
-          new_dim_tag=DimensionTag(kind=DimensionTag.Types.Spatial, description="%s:masked:dummy-time" % self.name))
-        res_data.size_placeholder[0] = new_size
+        res_data = source_data.copy_template().copy_template_replace_dim_tag(axis=0, new_dim_tag=new_dim_tag)
         res_data.placeholder = res[:new_time]
         res_data.beam = SearchBeam.get_combined_beam(res_data.beam, mask.output.beam)
         layer_desc = dict(base_layer=source, network=source.network, name=source.name, output=res_data)
@@ -6940,6 +6943,7 @@ class MaskedComputationLayer(LayerBase):
     self.sub_layer = layer_class(**layer_desc)
     assert isinstance(self.sub_layer, LayerBase)
     self.sub_layer.post_init(layer_desc)
+    self.sub_layer.output.sanity_check()
     self.output = self.sub_layer.output.copy(name="%s_output" % self.name)
     self.rec_vars_outputs = self.sub_layer.rec_vars_outputs.copy()
     self.params = self.sub_layer.params
@@ -7060,10 +7064,10 @@ class MaskedComputationLayer(LayerBase):
       assert isinstance(source, LayerBase) or not source
       if not network.is_inside_rec_layer() and source:
         source_data = source.output.copy_template().copy_as_time_major()
-        # Create own dummy time, to make sure we have some own custom.
+        # Create own time dim tag, to make sure we have some own custom.
         source_data = source_data.copy_template_replace_dim_tag(
           axis=0,
-          new_dim_tag=DimensionTag(kind=DimensionTag.Types.Spatial, description="%s:masked:dummy-time" % name))
+          new_dim_tag=DimensionTag(kind=DimensionTag.Types.Spatial, description="%s:masked:time" % name))
         source = WrappedInternalLayer(
           base_layer=source, network=source.network, name=source.name,
           output=source_data)
@@ -7086,11 +7090,11 @@ class MaskedComputationLayer(LayerBase):
           _parent_layer_cache[sub_layer_name] = layer
       if not network.is_inside_rec_layer():
         # noinspection PyShadowingNames
-        source_data = layer.output.copy_template().copy_as_time_major()
-        source_data.size_placeholder[0] = source.output.get_sequence_lengths()
+        source_data_ = layer.output.copy_template().copy_as_time_major()
+        source_data_ = source_data_.copy_template_replace_dim_tag(axis=0, new_dim_tag=source.output.get_time_dim_tag())
         layer = WrappedInternalLayer(
           base_layer=layer, network=layer.network, name=layer.name,
-          output=source_data)
+          output=source_data_)
       return layer
 
     extra_net = network.make_extra_net(
@@ -7118,6 +7122,8 @@ class MaskedComputationLayer(LayerBase):
     """
     layer_class, layer_desc = kwargs["_layer_class"], kwargs["_layer_desc"]
     output = layer_class.get_out_data_from_opts(**layer_desc)
+    assert isinstance(output, Data)
+    output.sanity_check()
     if network.is_inside_rec_layer():
       output = output.copy_as_batch_major()
     return output

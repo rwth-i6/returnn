@@ -74,6 +74,21 @@ class DimensionTag(object):
       attribs.append("same_base_id")
     return "DimensionTag(%s)" % ", ".join(["%s=%r" % (attr, getattr(self, attr)) for attr in attribs])
 
+  def short_repr(self):
+    """
+    :return: some short repr
+    :rtype: str
+    """
+    desc = repr(self.description)
+    if self.dimension is not None:
+      desc += "(%i)" % self.dimension
+    else:
+      if self.dyn_size_ext:
+        desc += "_[%s]" % ",".join(self.dyn_size_ext.get_batch_axes_short_description())
+      else:
+        desc += "_[?]"
+    return desc
+
   def copy(self, kind=None):
     """
     :param str|None kind: if set, overwrites self.kind
@@ -1210,7 +1225,7 @@ class Data(object):
           # self._dim_tags[_axis] = _dim_tag  # TODO ?
           if _dim_tag.dyn_size is not None:
             self.set_dynamic_size(_axis, _dim_tag.dyn_size)
-    self.sanity_check()
+    self.sanity_check(assume_complete=False)
 
   @classmethod
   def from_tensor(cls, x):
@@ -1248,11 +1263,12 @@ class Data(object):
       shape=shape, batch_dim_axis=0 if with_batch_dim else None, time_dim_axis=None,
       dtype=dtype)
 
-  def sanity_check(self, ignore_placeholder=False):
+  def sanity_check(self, ignore_placeholder=False, assume_complete=True):
     """
     Performs some sanity checks on self, and raises exceptions if something is not sane.
 
     :param bool ignore_placeholder:
+    :param bool assume_complete:
     """
     for axis_name, axis in self.get_special_axes_dict().items():
       assert axis is None or 0 <= axis < self.batch_ndim, "%s: axis %s (%i) invalid" % (self, axis_name, axis)
@@ -1289,6 +1305,14 @@ class Data(object):
         assert self.placeholder.shape[i].value == self.batch_shape[i]
       self.placeholder.set_shape(self.batch_shape)
       assert self.placeholder.dtype.base_dtype.name == self.dtype
+      # Currently only if placeholder is set.
+      # We can later always do the check even without placeholder.
+      if assume_complete:
+        for tag in self.dim_tags:
+          if tag.dimension is None:
+            if tag.is_batch_dim():
+              continue
+            assert tag.dyn_size is not None
 
   def get_runtime_sanity_check_op(self):
     """
@@ -1431,14 +1455,12 @@ class Data(object):
       if self.batch_shape[axis] is None:
         if axis == self.batch_dim_axis:
           pass  # expected
-        elif self.size_placeholder and self.get_batch_axis_excluding_batch(axis) in self.size_placeholder:
-          descriptions.append(repr(dim_tag.description))
         else:
-          descriptions.append("?")
+          descriptions.append(dim_tag.short_repr())
       elif axis != self.batch_dim_axis or not self.batch:
         descriptions.append(str(self.batch_shape[axis]))
         if dim_tag.kind == DimensionTag.Types.Spatial and dim_tag.dyn_size is not None:
-          descriptions.append(repr(dim_tag.description))
+          descriptions.append(dim_tag.short_repr())
       res.append("|".join(descriptions))
     return res
 
@@ -2186,7 +2208,7 @@ class Data(object):
     return tuple([dim is None for dim in self.shape])
 
   def _get_var_len_axes(self):
-    return sorted([i for (i, d) in enumerate(self._get_variable_dim_pattern()) if d])
+    return [i for (i, d) in enumerate(self._get_variable_dim_pattern()) if d]
 
   def matches_var_dim_pattern(self, other):
     """
@@ -2439,7 +2461,7 @@ class Data(object):
     :param tf.Tensor|None value:
     """
     self._placeholder = value
-    self.sanity_check()
+    self.sanity_check(assume_complete=False)
 
   def time_dimension(self):
     """
