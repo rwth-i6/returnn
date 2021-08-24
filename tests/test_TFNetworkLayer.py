@@ -79,6 +79,30 @@ def make_feed_dict(data_list, same_time=False, n_batch=3, n_time=7):
   return d
 
 
+def test_ExternData_init_from_config():
+  config = Config({
+    "extern_data": {"data": {"dim": 42}},
+  })
+  extern_data = ExternData()
+  with make_scope() as session:
+    extern_data.init_from_config(config)
+    data = extern_data.data["data"]
+    assert data.batch_shape == (None, None, 42)
+    assert (data.batch_dim_axis, data.time_dim_axis, data.feature_dim_axis) == (0, 1, 2)
+
+
+def test_ExternData_init_from_config_dim_none():
+  config = Config({
+    "extern_data": {"data": {"dim": None}},
+  })
+  extern_data = ExternData()
+  with make_scope() as session:
+    extern_data.init_from_config(config)
+    data = extern_data.data["data"]
+    assert data.batch_shape == (None, None, None)
+    assert (data.batch_dim_axis, data.time_dim_axis, data.feature_dim_axis) == (0, 1, 2)
+
+
 def test_PadLayer_time():
   n_batch, n_time, n_in = 7, 3, 20
   config = Config({
