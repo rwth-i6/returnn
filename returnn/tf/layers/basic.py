@@ -2678,6 +2678,13 @@ class MergeDimsLayer(_ConcatInputLayer):
     data_opts["feature_dim_axis"] = new_feature_dim_axis
     data = Data(**data_opts)
 
+    data.time_dim_axis = cls._old_axis_to_new_axis(
+      input_data=input_data, merge_axes=axes, old_axis=input_data.time_dim_axis)
+    if data.time_dim_axis is not None and data.time_dim_axis in {data.batch_dim_axis, data.feature_dim_axis}:
+      if input_data.time_dim_axis not in {input_data.batch_dim_axis, input_data.feature_dim_axis}:
+        # Time got merged with feature or batch.
+        data.time_dim_axis = None
+
     if input_data.batch_dim_axis in axes and data.batch:
       for axis in axes:
         if axis != input_data.batch_dim_axis:
