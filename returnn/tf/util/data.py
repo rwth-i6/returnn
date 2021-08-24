@@ -3524,10 +3524,15 @@ def _infer_dim_tags_tuple_from_shape(
         dyn_size = tf_compat.v1.placeholder(
           name="%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, shape=(None,))
         if not tag:
+          if axis == time_dim_axis:
+            tag_name = "time"
+          elif axis == feature_dim_axis:
+            tag_name = "feature"
+          else:
+            tag_name = "spatial%i" % axis
           tag = DimensionTag(
-            description="%s:var:extern_data:%s" % (
-              "time" if axis == time_dim_axis else "spatial%i" % axis, name),
-            kind=DimensionTag.Types.Spatial)
+            description="%s:var:extern_data:%s" % (tag_name, name),
+            kind=DimensionTag.Types.Feature if axis == feature_dim_axis else DimensionTag.Types.Spatial)
           dim_tags[axis] = tag
         tag.set_tag_on_size_tensor(dyn_size)
     if tag:
