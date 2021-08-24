@@ -74,7 +74,7 @@ class DimensionTag(object):
     """
     if self.is_batch_dim():
       return "B"
-    desc = repr(self.description)
+    desc = "%s%r" % ("F" if self.is_feature_dim() else "", self.description)
     if self.dimension is not None:
       desc += "(%i)" % self.dimension
     else:
