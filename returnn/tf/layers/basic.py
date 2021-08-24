@@ -6329,8 +6329,9 @@ class CondLayer(LayerBase):
     :param LayerBase|dict[str] true_layer:
     :param LayerBase|dict[str] false_layer:
     """
-    super(CondLayer, self).__init__(**kwargs)
     import os
+    from ..util.data import DimensionTag
+    super(CondLayer, self).__init__(**kwargs)
     self._parent_scope = os.path.dirname(tf_compat.v1.get_variable_scope().name)
     self.condition_desc = condition
     self.condition_layer = self._make_layer("condition", self.condition_desc)
@@ -6349,8 +6350,10 @@ class CondLayer(LayerBase):
     for i, size in zip(sorted(self.output.size_placeholder.keys()), sizes):
       assert isinstance(size, tf.Tensor)
       assert size.shape.ndims == 1
-      # Note: Not quite clear what dimension-tag to set...
-      # TODO ...
+      old_size = self.output.size_placeholder[i]
+      old_tag = DimensionTag.get_tag_from_size_tensor(old_size)
+      assert old_tag
+      old_tag.set_tag_on_size_tensor(size)
       self.output.size_placeholder[i] = size
 
   def _cond_layer_return(self, layer):
