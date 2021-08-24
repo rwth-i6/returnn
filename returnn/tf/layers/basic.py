@@ -4274,7 +4274,7 @@ class TransposedConvLayer(_ConcatInputLayer):
     :param dict[str,str]|None filter_perm: transposes the filter (input filter as layer)
     :param LayerBase|None bias: if given, will not create an own parameter, but use this as the bias
     """
-    from returnn.tf.util.basic import DimensionTag, get_initializer, get_activation_function, get_shape
+    from returnn.tf.util.basic import get_initializer, get_activation_function, get_shape
     super(TransposedConvLayer, self).__init__(**kwargs)
     input_data = self.input_data.copy_as_batch_spatial_major()
     spatial_axes = input_data.get_spatial_axes()

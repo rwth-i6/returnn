@@ -11,7 +11,7 @@ import os
 import typing
 import tensorflow as tf
 
-from returnn.util.basic import NotSpecified, BehaviorVersion
+from returnn.util.basic import NotSpecified
 import returnn.tf.compat as tf_compat
 
 
