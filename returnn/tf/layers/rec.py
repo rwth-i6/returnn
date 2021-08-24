@@ -3234,6 +3234,8 @@ class _SubnetworkRecCell(object):
                   size, axis=0,
                   multiples=tf.shape(output.size_placeholder[0])[0] // tf.shape(size)[0])
                 size._RETURNN_dyn_size_beam = output.beam
+                if tag:
+                  tag.set_tag_on_size_tensor(size)
               output.size_placeholder[i + 1] = size
         assert isinstance(self.output_layers_net, TFNetwork)
         layer_ = self.output_layers_net.add_layer(
