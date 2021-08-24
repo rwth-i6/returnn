@@ -2420,20 +2420,21 @@ class PadLayer(_ConcatInputLayer):
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
     for a in axes:
       p = sum(paddings[a])
+      tag = self.input_data.dim_tags[a]
       a = self.input_data.get_batch_axis_excluding_batch(a)
       if a is None:
         continue
-      if a not in self.output.size_placeholder:
+      if tag.dyn_size is None:
         continue
       if p == 0:
         continue
-      size = self.output.size_placeholder[a]
+      size = tag.dyn_size
       with tf_util.same_control_flow_ctx(size):
         size = tf_util.simplify_add(size, p)
       if not DimensionTag.get_tag_from_size_tensor(size):
         tag = DimensionTag(
           description="spatial:%i:%s" % (a, self.get_absolute_name()),
-          kind=DimensionTag.Types.Spatial)
+          kind=tag.kind)
         tag.set_tag_on_size_tensor(size)
       self.output.size_placeholder[a] = size
 
