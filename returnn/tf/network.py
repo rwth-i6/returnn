@@ -954,8 +954,9 @@ class TFNetwork(object):
               output_template.batch = BatchInfo.make_global_batch_info(
                 batch_dim=get_shape_dim(output_template.placeholder, output_template.batch_dim_axis, name="batch_dim"))
           output_template.batch = output_template.batch.copy_set_beam(output_template.beam)
-        if debug_print_layer_output_template:
-          print("layer %s/%r output: %r" % (self.name, name, output_template))
+        print(
+          "layer %s/%r output: %r" % (self.name, name, output_template),
+          file=log.v1 if debug_print_layer_output_template else log.v3)
         output_template.sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
         output_template_special_axes = output_template.get_special_axes_dict()
         if not output_template.available_for_inference and not self.eval_flag:
