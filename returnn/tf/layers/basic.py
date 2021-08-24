@@ -3273,7 +3273,6 @@ class RepeatLayer(_ConcatInputLayer):
       Can be [B,T] or [T,B] or some subset of that shape
     :param str axis: (dynamic) axis for repetition (currently only time axis is supported)
     """
-    from returnn.tf.util.data import DimensionTag
     super(RepeatLayer, self).__init__(**kwargs)
     self.repetitions = repetitions
     if isinstance(self.repetitions, int):
@@ -3343,14 +3342,14 @@ class RepeatLayer(_ConcatInputLayer):
     repeated_data = tf.repeat(reshaped_data, reshaped_repetitions, axis=0)  # [B * T', ...]
     # unflatten the output
     target_shape = ([shape[0]] if self.output.have_batch_axis() else []) + [max_duration] + shape[2:]
-    self.output.placeholder = tf.reshape(repeated_data, target_shape)  # [B, T', ...] or [T', ...]
+    res = tf.reshape(repeated_data, target_shape)
+    res.set_shape(self.output.batch_shape)
+    self.output.placeholder = res  # [B, T', ...] or [T', ...]
     # set size placeholders
     output_axis = self.output.get_axis_from_description(axis)
-    tag = DimensionTag(
-      description="repeated:%s" % self.get_absolute_name(),
-      kind=DimensionTag.Types.Spatial)
-    tag.set_tag_on_size_tensor(target_seq_len)
-    self.output.size_placeholder[self.output.get_batch_axis_excluding_batch(output_axis)] = target_seq_len
+    tag = self.output.dim_tags[output_axis]
+    if tag.dimension is None:  # dynamic? dyn sizes needed?
+      tag.set_tag_on_size_tensor(target_seq_len)
 
   def get_dep_layers(self):
     """
@@ -3388,9 +3387,13 @@ class RepeatLayer(_ConcatInputLayer):
     elif isinstance(repetitions, LayerBase) and repetitions.output.have_batch_axis():
       data = data.copy_add_batch_dim(batch_dim_axis=0, batch=repetitions.output.batch)
     original_axis = data.get_axis_from_description(axis, allow_int=False)
+    tag = data.dim_tags[original_axis]
+    if tag.dimension is not None and isinstance(repetitions, int):
+      new_dim = tag.dimension * repetitions
+    else:
+      new_dim = None
     data = data.copy_move_axis(original_axis, data.get_batch_axis(0))
-    tag = DimensionTag(
-      description="repeated:%s" % name, kind=DimensionTag.Types.Spatial, dimension=None)
+    tag = DimensionTag(description="repeated:%s" % name, kind=tag.kind, dimension=new_dim)
     return data.copy_template_replace_dim_tag(axis=data.get_batch_axis(0), new_dim_tag=tag)
 
 
