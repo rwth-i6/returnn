@@ -3192,10 +3192,11 @@ class Data(object):
     return self.dim_tags
 
   @classmethod
-  def get_common_data(cls, sources, warnings_out=None):
+  def get_common_data(cls, sources, warnings_out=None, ignore_feature_dim=False):
     """
     :param list[Data] sources:
     :param io.TextIOBase|io.StringIO|typing.TextIO|None warnings_out:
+    :param bool ignore_feature_dim: when set, the feature dim does not have to match in the sources
     :return: some generic data where the sources should be compatible to (with copy_compatible_to),
       i.e. it contains the union of all axes from all sources (least common multiple).
     :rtype: Data|None
@@ -3214,17 +3215,17 @@ class Data(object):
     if any([s.beam for s in sources]):
       # Note: we don't use copy_extend_with_beam because we don't want to create any ops in the TF graph at this point.
       common.beam = SearchBeam.get_combined_beam(*[s.beam for s in sources])
-    is_equal_opts = dict(ignore_feature_dim=True, allow_same_spatial_dim=True, broadcast_matches=True)
+    is_equal_opts = dict(
+      ignore_feature_dim=ignore_feature_dim, treat_feature_as_spatial=True,
+      allow_same_spatial_dim=True, broadcast_matches=True)
     all_dim_tags, tags_dict = DimensionTag.get_all_dimension_tags(sources, is_equal_opts=is_equal_opts)
-    # Note: We cannot compare len(all_dims_tags) to len(shape) as e.g. shape (B,1,1,D) would have only 3 dim tags.
+    all_dim_tags_, _ = DimensionTag.get_all_dimension_tags(sources)
     largest_dim_tags, tags_dict_ = DimensionTag.get_all_dimension_tags([common], is_equal_opts=is_equal_opts)
     tags_dict.update(tags_dict_)
-    if len(largest_dim_tags) == len(all_dim_tags):
-      return common
     # Some dim-tags are maybe not comparable (e.g. undefined time-dim-tag).
     # We fix this in some cases, i.e. by selecting unique time-dim.
     defined_var_spatial_tags = [
-      tag for tag in all_dim_tags
+      tag for tag in all_dim_tags_
       if tag.kind == DimensionTag.Types.Spatial and tag.get_same_base().dyn_size is not None]
     if len(defined_var_spatial_tags) == 1:
       for data in sources + [common]:
@@ -3232,6 +3233,9 @@ class Data(object):
         non_comparable_dim_tags = DimensionTag.get_uniq_collection(non_comparable_dim_tags, is_equal_opts=is_equal_opts)
         if len(non_comparable_dim_tags) == 1 and non_comparable_dim_tags[0].kind == DimensionTag.Types.Spatial:
           non_comparable_dim_tags[0].declare_same_as(defined_var_spatial_tags[0])
+    # Note: We cannot compare len(all_dims_tags) to len(shape) as e.g. shape (B,1,1,D) would have only 3 dim tags.
+    if len(largest_dim_tags) == len(all_dim_tags):
+      return common
     non_comparable_dim_tags = [dim_tag for dim_tag in largest_dim_tags if not dim_tag.can_compare()]
     if non_comparable_dim_tags:
       if warnings_out:

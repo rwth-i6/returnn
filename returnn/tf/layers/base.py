@@ -355,7 +355,7 @@ class LayerBase(object):
     # However, in many cases, this will just be {0: time-lengths} and the same as from the input.
     # We check for this case and preset it by that if possible.
     # If you want to have it different in your layer, just overwrite it.
-    common_source = Data.get_common_data([s.output for s in sources if s])
+    common_source = Data.get_common_data([s.output for s in sources if s], ignore_feature_dim=True)
     if not output.size_placeholder:
       if network.eval_flag and size_target:
         output.size_placeholder = cls._static_get_target_value(

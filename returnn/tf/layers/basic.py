@@ -97,7 +97,7 @@ def concat_sources(src_layers):
     return network.concat_sources_dropout_cache[cache_key].copy()
   data = get_concat_sources_data_template(src_layers)
   # Currently we assume that get_concat_sources_data_template will match Data.get_common_data (besides the dim).
-  common_source = Data.get_common_data([s.output for s in src_layers], warnings_out=log.v4)
+  common_source = Data.get_common_data([s.output for s in src_layers], ignore_feature_dim=True, warnings_out=log.v4)
   data.size_placeholder = common_source.size_placeholder.copy()  # to get right dimension tags
   layers_data = []
   with _name_scope_for_concat_src_layers(src_layers, "concat_sources"):
@@ -139,7 +139,7 @@ def get_concat_sources_data_template(src_layers, name=None):
     name = "concat_" + "_".join([layer.name for layer in src_layers])
   dim = 0
   beam = None
-  common_source = Data.get_common_data([s.output for s in src_layers])
+  common_source = Data.get_common_data([s.output for s in src_layers], ignore_feature_dim=True)
   for layer in src_layers:
     # Note: We do not perform much compatibility checks at this point,
     # as this is for a template only anyway.
