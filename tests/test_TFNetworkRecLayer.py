@@ -4,7 +4,6 @@
 from __future__ import print_function
 
 import _setup_test_env  # noqa
-import logging
 import tensorflow as tf
 import sys
 import os
@@ -13,32 +12,12 @@ from numpy.testing.utils import assert_almost_equal, assert_allclose
 import unittest
 import numpy.testing
 from pprint import pprint
-import contextlib
 from returnn.util import better_exchook
 
-from returnn.log import log
 from returnn.config import Config
-import returnn.tf.compat as tf_compat
 from returnn.tf.network import *
 from returnn.tf.layers.rec import *
 from returnn.tf.util.basic import is_gpu_available
-import returnn.tf.util.basic as tf_util
-tf_util.debug_register_better_repr()
-
-import returnn.util.debug as debug
-debug.install_lib_sig_segfault()
-
-try:
-  import faulthandler
-  # Enable after libSigSegfault, so that we have both,
-  # because faulthandler will also call the original sig handler.
-  faulthandler.enable()
-except ImportError:
-  print("no faulthandler")
-
-log.initialize(verbosity=[5])
-
-print("TensorFlow:", tf.__version__)
 
 
 @unittest.skip("for testing only...")

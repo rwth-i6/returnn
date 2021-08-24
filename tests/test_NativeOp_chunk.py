@@ -13,11 +13,6 @@ import sys
 f32 = "float32"
 
 
-from returnn.util import better_exchook
-from returnn.log import log
-
-better_exchook.replace_traceback_format_tb()
-log.initialize()  # some code might need it
 theano_util.monkey_patches()
 
 

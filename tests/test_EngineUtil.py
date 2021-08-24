@@ -22,7 +22,6 @@ dummyconfig_dict = {
 }
 
 
-log.initialize()
 theano_util.monkey_patches()
 
 

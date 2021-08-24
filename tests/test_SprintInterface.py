@@ -10,16 +10,12 @@ import returnn.sprint.interface as SprintAPI
 from tempfile import mkdtemp
 from returnn.theano.engine import Engine
 from returnn.config import Config
-from returnn.log import log
 from returnn.theano.network import LayerNetwork
 import returnn.theano.util as theano_util
 import shutil
 import numpy
-from returnn.util import better_exchook
-better_exchook.replace_traceback_format_tb()
 
 
-log.initialize()
 theano_util.monkey_patches()
 
 

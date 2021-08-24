@@ -26,10 +26,7 @@ import returnn.theano.engine_util as engine_util
 import returnn.theano.util as theano_util
 import returnn.theano.network as network
 from returnn.util import better_exchook
-from returnn.log import log
 
-better_exchook.replace_traceback_format_tb()
-log.initialize()  # some code needs it
 theano_util.monkey_patches()
 
 # Some code uses get_global_config().

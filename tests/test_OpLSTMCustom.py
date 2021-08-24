@@ -12,12 +12,8 @@ import numpy
 from returnn.util.basic import have_gpu
 import RecurrentTransform
 import theano.sandbox.cuda as cuda
-from returnn.log import log
-from returnn.util import better_exchook
 import CustomLSTMFunctions
 
-log.initialize(verbosity=[5])
-better_exchook.replace_traceback_format_tb()
 CustomLSTMFunctions.debug_function_hook = True
 
 

@@ -16,10 +16,7 @@ from returnn.datasets.hdf import HDFDataset
 from returnn.util.basic import DictAsObj
 import unittest
 from returnn.util import better_exchook
-better_exchook.replace_traceback_format_tb()
 
-
-log.initialize()
 
 options = {
   "epoch": 1,

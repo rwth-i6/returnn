@@ -11,12 +11,8 @@ from returnn.datasets.generating import GeneratingDataset, DummyDataset, DummyDa
 from returnn.engine.batch import Batch
 from returnn.datasets.basic import DatasetSeq
 from returnn.util.basic import NumbersDict
-import numpy as np
 
 from returnn.util import better_exchook
-
-from returnn.log import log
-log.initialize()
 
 
 def test_generate_batches():
