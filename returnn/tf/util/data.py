@@ -1291,8 +1291,19 @@ class Data(object):
       assert dyn_size.dtype in (tf.int32, tf.int64)
       assert dyn_size.shape.ndims == 1, (
         "%s: all size_placeholder entries should have shape [B], but got: %r" % (self, self.size_placeholder))
-    for axis in range(self.batch_ndim):
-      self.get_dim_tag(axis)  # this implies sanity checks internally
+    for axis, tag in enumerate(self.dim_tags):
+      assert self.batch_shape[axis] == tag.dimension
+      if tag.is_batch_dim():
+        assert axis == self.batch_dim_axis, "%s: invalid %s" % (self, tag)
+        continue  # further checks will assume not batch
+      assert axis != self.batch_dim_axis, "%s: invalid %s" % (self, tag)
+      if tag.is_feature_dim():
+        assert axis == self.feature_dim_axis, "%s: invalid %s" % (self, tag)
+      else:
+        assert axis != self.feature_dim_axis, "%s: invalid %s" % (self, tag)
+      if tag.dyn_size is not None:
+        tag_ = DimensionTag.get_tag_from_size_tensor(tag.dyn_size)
+        assert tag_ and tag_.same_base_id == tag.same_base_id, "%s: %s != %s" % (self, tag_, tag)
     if not ignore_placeholder and self.placeholder is not None:
       # Note: We could just call self.placeholder.set_shape.
       # However, we are more explicit. We assume that the placeholder has already a known shape, and error otherwise.
@@ -2409,9 +2420,7 @@ class Data(object):
     :return: feature dim axis, counted with batch-dim
     :rtype: int|None
     """
-    return _default_feature_dim_axis(
-      batch_dim_axis=self.batch_dim_axis, time_dim_axis=self.time_dim_axis,
-      batch_shape=self.batch_shape, sparse=self.sparse)
+    return _default_feature_dim_axis_dim_tags(self.dim_tags)
 
   @property
   def feature_dim_axis(self):
@@ -3151,23 +3160,7 @@ class Data(object):
     :param int axis: counted with batch-dim
     :rtype: DimensionTag
     """
-    existing_dim_tag = self._dim_tags[axis]
-    # Some sanity check
-    if existing_dim_tag.kind == DimensionTag.Types.Batch:
-      assert axis == self.batch_dim_axis, "%s: invalid %s" % (self, existing_dim_tag)
-      return existing_dim_tag  # return right away. further checks will assume not batch
-    assert axis != self.batch_dim_axis, existing_dim_tag
-    # TODO not sure about this...
-    # if existing_dim_tag.kind == DimensionTag.Types.Feature:
-    #  assert axis == self.feature_dim_axis, "%s: invalid %s" % (self, existing_dim_tag)
-    axis_wo_b = self.get_batch_axis_excluding_batch(axis)
-    dyn_size = self.size_placeholder.get(axis_wo_b) if self.size_placeholder else None
-    if dyn_size is not None:
-      tag = DimensionTag.get_tag_from_size_tensor(dyn_size)
-      if tag:
-        assert tag.same_base_id == existing_dim_tag.same_base_id, "%s: %s != %s" % (self, tag, existing_dim_tag)
-    assert self.batch_shape[axis] == existing_dim_tag.dimension
-    return existing_dim_tag
+    return self._dim_tags[axis]
 
   def get_time_dim_tag(self):
     """
@@ -3722,3 +3715,20 @@ def _default_feature_dim_axis(batch_dim_axis, time_dim_axis, batch_shape, sparse
   if static_axes:
     return static_axes[-1]
   return axes[-1]
+
+
+def _default_feature_dim_axis_dim_tags(dim_tags):
+  """
+  :param list[DimensionTag]|tuple[DimensionTag] dim_tags:
+  :return: feature dim axis, counted with batch-dim
+  :rtype: int|None
+  """
+  feat_tags_static = [
+    i for (i, tag) in enumerate(dim_tags) if tag.is_feature_dim() and tag.dimension is not None]
+  # Prefer last static, if available.
+  if feat_tags_static:
+    return feat_tags_static[-1]
+  feat_tags = [i for (i, tag) in enumerate(dim_tags) if tag.is_feature_dim()]
+  if feat_tags:
+    return feat_tags[-1]
+  return None
