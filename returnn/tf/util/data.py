@@ -74,12 +74,13 @@ class DimensionTag(object):
     """
     if self.is_batch_dim():
       return "B"
-    desc = "%s%r" % ("F" if self.is_feature_dim() else "", self.description)
+    desc = "%s%r" % ("F" if self.is_feature_dim() else "", self.get_same_base().description)
     if self.dimension is not None:
       desc += "(%i)" % self.dimension
     else:
-      if self.dyn_size_ext:
-        desc += "[%s]" % ",".join(self.dyn_size_ext.get_batch_axes_short_description())
+      dyn_size_ext = self.dyn_size_ext or self.get_same_base().dyn_size_ext
+      if dyn_size_ext:
+        desc += "[%s]" % ",".join(dyn_size_ext.get_batch_axes_short_description())
       else:
         desc += "[?]"
     return desc
