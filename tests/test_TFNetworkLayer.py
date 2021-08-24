@@ -617,6 +617,8 @@ def test_cnn_building_block():
       }})
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_value("network"))
+    swap_layer = network.layers["swap_axes"]
+    assert swap_layer.output.dim == channel_num
     session.run(tf_compat.v1.global_variables_initializer())
     out = network.layers["output"].output.placeholder
     n_batch = 5
