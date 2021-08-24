@@ -1469,9 +1469,7 @@ class Data(object):
         else:
           descriptions.append(dim_tag.short_repr())
       elif axis != self.batch_dim_axis or not self.batch:
-        descriptions.append(str(self.batch_shape[axis]))
-        if dim_tag.kind == DimensionTag.Types.Spatial and dim_tag.dyn_size is not None:
-          descriptions.append(dim_tag.short_repr())
+        descriptions.append(dim_tag.short_repr())
       res.append("|".join(descriptions))
     return res
 
