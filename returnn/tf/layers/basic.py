@@ -2979,7 +2979,10 @@ class SplitDimsLayer(_ConcatInputLayer):
       if i != rem_dim_idx else rem_dim
       for i in range(len(dims)))
     new_dim_tags = data.dim_tags[:axis] + resolved_dims + data.dim_tags[axis + 1:]
-    return data.copy_template_new_dim_tags(new_dim_tags)
+    out = data.copy_template_new_dim_tags(new_dim_tags)
+    if data.time_dim_axis is None:
+      out.time_dim_axis = None
+    return out
 
 
 class SplitBatchTimeLayer(_ConcatInputLayer):
