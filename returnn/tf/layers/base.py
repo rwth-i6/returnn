@@ -281,7 +281,7 @@ class LayerBase(object):
     # You are supposed to set self.output.{batch_dim_axis,time_dim_axis} explicitly,
     # as well as check the inputs if they are as you would suggest.
     # However, a good default is often to use the same as the input.
-    if all([k not in out_type for k in Data.SpecialAxesNames]):
+    if all([k not in out_type for k in Data.SpecialAxesNames]) and "dim_tags" not in out_type:
       if sources_data:
         out_type.setdefault("batch_dim_axis", sources_data.batch_dim_axis)
         out_type.setdefault("time_dim_axis", sources_data.time_dim_axis)

@@ -78,9 +78,8 @@ class DimensionTag(object):
     if self.dimension is not None:
       desc += "(%i)" % self.dimension
     else:
-      dyn_size_ext = self.dyn_size_ext or self.get_same_base().dyn_size_ext
-      if dyn_size_ext:
-        desc += "[%s]" % ",".join(dyn_size_ext.get_batch_axes_short_description())
+      if self.dyn_size_ext:
+        desc += "[%s]" % ",".join(self.dyn_size_ext.get_batch_axes_short_description())
       else:
         desc += "[?]"
     return desc
@@ -340,6 +339,8 @@ class DimensionTag(object):
       # This is important such that self.can_compare() is sane.
       if self.same_as.dyn_size is None or self.same_as.dyn_size.graph is not self.dyn_size.graph:
         self.same_as.dyn_size_ext = self.dyn_size_ext
+    if not self.dyn_size_ext and other.dyn_size_ext:
+      self.dyn_size_ext = other.dyn_size_ext.copy()
 
   @classmethod
   def get_existing_tag_from_collection(cls, other, tags, is_equal_opts=None):

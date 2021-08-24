@@ -5907,7 +5907,10 @@ class CombineLayer(LayerBase):
     """
     out_type_ = {}
     if sources:
-      out_type_.update(Data.get_common_data([s.output for s in sources], warnings_out=log.v4).get_kwargs())
+      out_type_.update(
+        Data.get_common_data(
+          [s.output for s in sources], warnings_out=log.v4)
+        .get_kwargs(include_special_axes=False))
     if n_out is not NotSpecified:
       out_type_["dim"] = n_out
     out_type_["name"] = "%s_output" % kwargs["name"]
