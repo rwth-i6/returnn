@@ -78,13 +78,14 @@ class Log:
     self.v5 = None  # type: typing.Optional[Stream]
     self._printed_warning_history = set()  # type: typing.Set[str]
 
-  def initialize(self, logs=None, verbosity=None, formatter=None):
+  def initialize(self, logs=None, verbosity=None, formatter=None, propagate=False):
     """
     This resets and configures the "returnn" logger.
 
     :param list[str] logs: "stdout", "|<pipe-cmd>", "<filename>"|"<filename>$date<ext>". "stdout" is always added
     :param list[int] verbosity: levels 0-5 for the log handlers
     :param list[str] formatter: 'default', 'timed', 'raw' or 'verbose', for the log handlers
+    :param bool propagate:
     """
     if formatter is None:
       formatter = []
@@ -108,17 +109,15 @@ class Log:
     # But at this point here, we might not know about this
     # -- maybe the user would call logging.basicConfig(...) at some later point.
     # In any case, if there is a root logger and we would propagate,
-    # we maybe should not add "stdout" here,
+    # we should not add "stdout" here,
     # although that might depend on the root logger level and handlers.
-    # For now, we just disable propagation, to keep that separated
+    # For now, the default is to just disable propagation, to keep that separated
     # and avoid any such problems.
-    # We might want to make this configurable at some point,
-    # but then we should also change the (default) logic for "stdout".
-    logger.propagate = False
+    logger.propagate = propagate
     # Reset handler list, in case we have initialized some earlier (e.g. multiple log.initialize() calls).
     logger.handlers = []
     self.v = [logger] * 6  # no need for separate loggers, we do all via log levels
-    if 'stdout' not in logs:
+    if 'stdout' not in logs and not propagate:
       logs.append('stdout')
     if len(formatter) == 1:
       # if only one format provided, use it for all logs

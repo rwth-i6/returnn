@@ -49,7 +49,7 @@ def setup():
   better_exchook.replace_traceback_format_tb()
 
   from returnn.log import log
-  log.initialize(verbosity=[5])
+  log.initialize(verbosity=[5], propagate=True)
 
   # TF is optional.
   # Note that importing TF still has a small side effect:
