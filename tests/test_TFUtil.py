@@ -627,6 +627,7 @@ def test_Data_get_common_data_one_undefined_time():
   # Data(name='accum_output', shape=(None, 1), batch_shape_meta=[B,T|?,F|1])
   a = Data(name="a", shape=(None, 1))  # undefined time-dim-tag
   print("a:", a)
+  assert a.size_placeholder.get(0) is None
   # Data(name='enc0_output', shape=(None,), batch_shape_meta=[B,T|F|'time:var:extern_data:encoder'])
   b = Data(name="b", shape=(None,), auto_create_placeholders=True)
   print("b:", b)
@@ -634,6 +635,7 @@ def test_Data_get_common_data_one_undefined_time():
   c = Data(name="c", shape=(None, 1))
   c.size_placeholder = b.size_placeholder.copy()
   print("c:", c)
+  c.sanity_check()
   assert_equal(b.get_time_dim_tag(), c.get_time_dim_tag())
   from returnn.util.basic import StringIO
   warnings = StringIO()
