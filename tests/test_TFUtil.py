@@ -54,6 +54,34 @@ def test_Data_dim():
   assert_equal(data.sparse, False)
 
 
+def test_Data_dim_none():
+  data = Data(name="my_data", dim=None)
+  assert_equal(data.dim, None)
+  assert_equal(data.batch_dim_axis, 0)
+  assert_equal(data.time_dim_axis, 1)
+  assert_equal(data.feature_dim_axis, 2)
+  assert_equal(data.batch_ndim, 3)
+  assert_equal(data.batch_shape, (None, None, None))
+  assert_equal(data.dtype, "float32")
+  assert_equal(data.sparse, False)
+
+
+def test_Data_dim_none_auto_create_placeholders():
+  data = Data(name="my_data", dim=None, auto_create_placeholders=True)
+  assert_equal(data.dim, None)
+  assert_equal(data.batch_dim_axis, 0)
+  assert_equal(data.time_dim_axis, 1)
+  assert_equal(data.feature_dim_axis, 2)
+  data_ = Data(name="my_data", dim=None)
+  assert_equal(data.batch_ndim, 3)
+  assert_equal(data.batch_shape, (None, None, None))
+  assert_equal(data.dtype, "float32")
+  assert_equal(data.sparse, False)
+  assert (
+    (data.batch_dim_axis, data.time_dim_axis, data.feature_dim_axis)
+    == (data_.batch_dim_axis, data_.time_dim_axis, data_.feature_dim_axis))
+
+
 def test_Data_default_time_no_time():
   # This is new behavior.
   data = Data(name='merge_dims_test_output', shape=(3, 5))
