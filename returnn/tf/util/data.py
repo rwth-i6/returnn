@@ -1297,10 +1297,7 @@ class Data(object):
         assert axis == self.batch_dim_axis, "%s: invalid %s" % (self, tag)
         continue  # further checks will assume not batch
       assert axis != self.batch_dim_axis, "%s: invalid %s" % (self, tag)
-      if tag.is_feature_dim():
-        assert axis == self.feature_dim_axis, "%s: invalid %s" % (self, tag)
-      else:
-        assert axis != self.feature_dim_axis, "%s: invalid %s" % (self, tag)
+      # Note: tag.kind (feature or spatial) is independent from self.feature_dim_axis.
       if tag.dyn_size is not None:
         tag_ = DimensionTag.get_tag_from_size_tensor(tag.dyn_size)
         assert tag_ and tag_.same_base_id == tag.same_base_id, "%s: %s != %s" % (self, tag_, tag)
@@ -2420,7 +2417,9 @@ class Data(object):
     :return: feature dim axis, counted with batch-dim
     :rtype: int|None
     """
-    return _default_feature_dim_axis_dim_tags(self.dim_tags)
+    return _default_feature_dim_axis(
+      batch_dim_axis=self.batch_dim_axis, time_dim_axis=self.time_dim_axis,
+      batch_shape=self.batch_shape, sparse=self.sparse)
 
   @property
   def feature_dim_axis(self):
@@ -3526,13 +3525,13 @@ def _infer_dim_tags_tuple_from_shape(
         if not tag:
           if axis == time_dim_axis:
             tag_name = "time"
-          elif axis == feature_dim_axis:
-            tag_name = "feature"
           else:
             tag_name = "spatial%i" % axis
           tag = DimensionTag(
             description="%s:var:extern_data:%s" % (tag_name, name),
-            kind=DimensionTag.Types.Feature if axis == feature_dim_axis else DimensionTag.Types.Spatial)
+            # Spatial dim tag, even if axis == feature_dim_axis. This is to keep the old behavior.
+            # This is such that DimensionTag.is_equal behaves as before, e.g. in Data.get_common_data.
+            kind=DimensionTag.Types.Spatial)
           dim_tags[axis] = tag
         tag.set_tag_on_size_tensor(dyn_size)
     if tag:
@@ -3720,20 +3719,3 @@ def _default_feature_dim_axis(batch_dim_axis, time_dim_axis, batch_shape, sparse
   if static_axes:
     return static_axes[-1]
   return axes[-1]
-
-
-def _default_feature_dim_axis_dim_tags(dim_tags):
-  """
-  :param list[DimensionTag]|tuple[DimensionTag] dim_tags:
-  :return: feature dim axis, counted with batch-dim
-  :rtype: int|None
-  """
-  feat_tags_static = [
-    i for (i, tag) in enumerate(dim_tags) if tag.is_feature_dim() and tag.dimension is not None]
-  # Prefer last static, if available.
-  if feat_tags_static:
-    return feat_tags_static[-1]
-  feat_tags = [i for (i, tag) in enumerate(dim_tags) if tag.is_feature_dim()]
-  if feat_tags:
-    return feat_tags[-1]
-  return None
