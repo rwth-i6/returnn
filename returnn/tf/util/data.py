@@ -3690,10 +3690,10 @@ def _default_time_dim_axis_dim_tags(dim_tags):
   # Any spatial dynamic axis.
   # Or otherwise any dynamic axis (including maybe feature).
   # Not using any static axes.
-  dim_tags_dyn_spatial = [i for i, tag in enumerate(dim_tags) if tag.is_spatial_dim() and tag.dyn_size_ext]
+  dim_tags_dyn_spatial = [i for i, tag in enumerate(dim_tags) if tag.is_spatial_dim() and tag.dimension is None]
   if dim_tags_dyn_spatial:
     return dim_tags_dyn_spatial[0]
-  dim_tags_dyn = [i for i, tag in enumerate(dim_tags) if not tag.is_batch_dim() and tag.dyn_size_ext]
+  dim_tags_dyn = [i for i, tag in enumerate(dim_tags) if not tag.is_batch_dim() and tag.dimension is None]
   if dim_tags_dyn:
     return dim_tags_dyn[0]
   return None
