@@ -3686,12 +3686,13 @@ def _default_time_dim_axis_dim_tags(dim_tags):
   :return: time dim axis, counted with batch-dim
   :rtype: int|None
   """
+  # Consistent to _default_time_dim_axis.
+  # Any spatial dynamic axis.
+  # Or otherwise any dynamic axis (including maybe feature).
+  # Not using any static axes.
   dim_tags_dyn_spatial = [i for i, tag in enumerate(dim_tags) if tag.is_spatial_dim() and tag.dyn_size_ext]
   if dim_tags_dyn_spatial:
     return dim_tags_dyn_spatial[0]
-  dim_tags_spatial = [i for i, tag in enumerate(dim_tags) if tag.is_spatial_dim()]
-  if dim_tags_spatial:
-    return dim_tags_spatial[0]
   dim_tags_dyn = [i for i, tag in enumerate(dim_tags) if not tag.is_batch_dim() and tag.dyn_size_ext]
   if dim_tags_dyn:
     return dim_tags_dyn[0]
