@@ -830,6 +830,32 @@ def test_Data_get_common_data_tbf_and_bf():
   assert common.batch_ndim == 3
 
 
+def test_Data_get_common_data_btf_and_bf_get_kwargs_copy_compatible_to():
+  s0 = Data(name='location_feedback', shape=(None, 6), batch_dim_axis=0, time_dim_axis=1)
+  s1 = Data(name='s_transformed', shape=(6,), time_dim_axis=None, batch_dim_axis=0)
+  pprint([s0, s1])
+  common = Data.get_common_data(sources=[s0, s1], warnings_out=sys.stdout)
+  print("common:", common)
+  assert common.shape == (None, 6)
+  assert common.batch_dim_axis == 0
+  assert common.get_dim_tag(1) == s0.get_dim_tag(1)
+  assert common.time_dim_axis == 1
+  common_opts = common.get_kwargs()
+  common_opts.pop("batch_dim_axis", None)
+  common_opts.pop("feature_dim_axis", None)
+  common_opts.pop("time_dim_axis", None)
+  common_ = Data(**common_opts)
+  assert common_.shape == (None, 6)
+  assert common_.batch_dim_axis == 0
+  assert common_.get_dim_tag(1) == s0.get_dim_tag(1)
+  assert common_.time_dim_axis == 1
+  s0c, s1c = [s.copy_compatible_to(common_) for s in [s0, s1]]
+  assert isinstance(s0c, Data) and isinstance(s1c, Data)
+  assert (s0c.batch_dim_axis, s0c.time_dim_axis, s0c.feature_dim_axis) == (0, 1, 2)
+  assert (s1c.batch_dim_axis, s1c.time_dim_axis, s1c.feature_dim_axis) == (0, 1, 2)
+  assert s1c.batch_shape == (None, 1, 6)
+
+
 def test_Data_get_common_data_beam_size():
   condition = Data(name="cond", shape=(), dtype='bool', sparse=True, dim=2, time_dim_axis=None)
   true_from = Data(name="true", shape=(), dtype='int32', sparse=True, dim=19, time_dim_axis=None)
