@@ -3168,15 +3168,6 @@ class Data(object):
     axis_wo_batch = sorted(self.size_placeholder.keys())[number]
     return self.get_dim_tag(self.get_batch_axis(axis_wo_batch))
 
-  def set_dim_tag(self, axis, tag):
-    """
-    :param int axis: counted with batch-dim
-    :param DimensionTag tag:
-    """
-    # TODO ... disallow?
-    # self._dim_tags[axis] = tag
-    raise Exception("Not allowed...")  # TODO..
-
   def get_batch_shape_dim_tags(self):
     """
     :return: list of dimension tags, for each axis (counted with batch dim, i.e. len is batch_ndim)
