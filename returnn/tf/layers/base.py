@@ -293,8 +293,6 @@ class LayerBase(object):
               out_type.setdefault("feature_dim_axis", None)
       elif network.is_inside_rec_layer() and None not in out_type.get("shape", ()):
         out_type.setdefault("time_dim_axis", None)
-    # TODO how do we resolve this? in many user configs, the user would provide "old-style" shape,
-    #   but via Data.get_kwargs we get dim_tags ...
     if "shape" not in out_type and "dim_tags" not in out_type:
       if sources_data:
         if out_type.get("sparse", False):
