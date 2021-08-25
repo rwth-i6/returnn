@@ -201,7 +201,7 @@ class BehaviorVersion:
     if version == cls._behavior_version:
       return
     assert not cls.is_set(), (
-      "behavior_version already set to %i, cannot reset to %i" % (cls._behavior_version, version))
+      "behavior_version already set to %s, cannot reset to %i" % (cls._behavior_version, version))
     assert version >= 0
     if version > cls._latest_behavior_version:
       log.print_warning(
