@@ -8418,7 +8418,8 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
                                      "total_key_dim": self.EncKeyTotalDim,
                                      "n_out": self.EncValueTotalDim, "from": [output + '_self_att_laynorm'],
                                      "attention_left_only": False, "attention_dropout": self.attention_dropout,
-                                     "forward_weights_init": self.ff_init, "key_shift": output + '_rel_pos'}
+                                     "forward_weights_init": self.ff_init,
+                                     "key_shift": output + '_rel_pos'}
 
   """
   layer_class = "relative_positional_encoding"
@@ -8444,16 +8445,17 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
     if fixed:
       from returnn.tf.util.basic import get_positional_encoding
       encoding_matrix = get_positional_encoding(
-        length=tf.constant(2 * clipping + 1),
-        num_channels=n_out)
+        length=2 * clipping + 1,
+        num_channels=n_out)  # shape [2 * clipping + 1, n_out]
     else:
       fwd_weights_initializer = get_initializer(
         forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
       with self.var_creation_scope():
         encoding_matrix = self.add_param(tf_compat.v1.get_variable(
           name="encoding_matrix", shape=(2 * clipping + 1, n_out), initializer=fwd_weights_initializer))
+    # encoding_matrix has shape [2 * clipping + 1, n_out]
 
-    range_vec = tf.range(length) - offset
+    range_vec = tf.range(length) - offset  # [length]
 
     if self.input_data.have_time_axis():
       range_mat = tf.reshape(tf.tile(range_vec, [length]), [length, length])

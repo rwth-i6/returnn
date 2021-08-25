@@ -6368,30 +6368,36 @@ def get_positional_encoding(num_channels, length=None, position=None, min_timesc
 
   :param int num_channels: scalar, size of timing embeddings to create. The number of
     different timescales is equal to channels / 2.
-  :param tf.Tensor|None length: scalar, length of timing signal sequence.
-  :param tf.Tensor|None position: could be provided directly. int32. Can have any shape.
+  :param tf.Tensor|int|None length: scalar, length of timing signal sequence.
+  :param tf.Tensor|None position: could be provided directly. int32. Can have any shape, e.g. [length] or [B,len].
+    If not given, will be tf.range(length), i.e. of shape [length].
   :param float min_timescale: a float.
   :param float max_timescale: a float.
-  :return: a Tensor of timing signals of shape (length, channels) or (batch, length, channels).
+  :return: a Tensor of timing signals of shape position.shape + [num_channels], e.g. [length,num_channels]
   :rtype: tf.Tensor
   """
   import math
   if position is None:
     assert length is not None
-    position = tf.range(length)
+    position = tf.range(length)  # [length]
+    assert isinstance(position, tf.Tensor)
+    if isinstance(length, int):
+      position.set_shape([length])
   else:
     assert length is None
+    assert isinstance(position, tf.Tensor)
   position = tf.cast(position, tf.float32)
-  num_timescales = num_channels // 2
+  num_timescales = num_channels // 2  # D//2
   log_timescale_increment = (
     math.log(float(max_timescale) / float(min_timescale)) / (float(num_timescales - 1)))
   inv_timescales = min_timescale * tf.exp(
     tf.cast(tf.range(num_timescales), tf.float32) * -log_timescale_increment)
   scale = tf.reshape(inv_timescales, [1] * len(position.shape) + [num_timescales])  # Usually (1, D//2) or (1, 1, D//2).
-  scaled_time = tf.expand_dims(position, -1) * scale
-  signal = tf.concat([tf.sin(scaled_time), tf.cos(scaled_time)], axis=-1)
+  scaled_time = tf.expand_dims(position, -1) * scale  # pos.shape + [D//2]
+  signal = tf.concat([tf.sin(scaled_time), tf.cos(scaled_time)], axis=-1)  # pos.shape + [2*D//2]
   # (length, channels) or (batch, length, channels).
-  signal = tf.pad(signal, [[0, 0]] * len(position.shape) + [[0, num_channels % 2]])
+  if num_channels % 2 != 0:
+    signal = tf.pad(signal, [[0, 0]] * len(position.shape) + [[0, num_channels % 2]])  # pos.shape + [D]
   return signal
 
 
