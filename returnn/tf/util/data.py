@@ -40,6 +40,7 @@ class DimensionTag(object):
 
   def __init__(self, kind=Types.Unspecified, description=None,
                dimension=None, dyn_size=None, dyn_size_ext=None,
+               batch=None,
                src_data=None, src_axis=None):
     """
     :param str|None kind:
@@ -47,6 +48,7 @@ class DimensionTag(object):
     :param int|None dimension:
     :param tf.Tensor|None dyn_size: e.g. seq_len, (batch,)
     :param Data|None dyn_size_ext: seq_len or extended
+    :param BatchInfo|None batch: for batch-dim, or dynamic dims per batch
     :param Data|None src_data:
     :param int|None src_axis:
     """
@@ -56,8 +58,11 @@ class DimensionTag(object):
     self.same_as = None  # type: typing.Optional[DimensionTag]
     if src_data:
       assert isinstance(src_data, Data) and isinstance(src_axis, int)
+    self.batch = batch
     self.src_data = src_data
     self.src_axis = src_axis
+    if dyn_size_ext and not dyn_size_ext.batch and batch:
+      dyn_size_ext.batch = batch
     self.dyn_size_ext = dyn_size_ext  # type: typing.Optional[Data]
     if dyn_size is not None:
       assert not dyn_size_ext
@@ -120,7 +125,8 @@ class DimensionTag(object):
     beam = getattr(dyn_size, "_RETURNN_dyn_size_beam", None)
     self.dyn_size_ext = Data(
       name=("%s:dyn_size" % self.description) if self.description else dyn_size.op.name,
-      dtype=Data.size_dtype, placeholder=dyn_size, shape=(), batch_dim_axis=0, beam=beam)
+      dtype=Data.size_dtype, placeholder=dyn_size, shape=(), batch_dim_axis=0,
+      batch=self.batch, beam=beam)
     other = DimensionTag.get_tag_from_size_tensor(dyn_size)
     if other:
       self.declare_same_as(other)
