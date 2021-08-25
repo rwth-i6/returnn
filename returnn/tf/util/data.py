@@ -2259,11 +2259,9 @@ class Data(object):
     """
     :param tuple[int|None] shape:
     """
-    # BehaviorVersion.require(
-    #  False, "Data.shape assign not allowed. Use XXX instead...", version=2)
-    # TODO not sure what to do
-    raise Exception("%s: set shape... %s" % (self, shape))
-    # _infer_dim_tags_tuple_from_shape()
+    if tuple(shape) == self.shape:
+      return
+    raise Exception("%s: setting the shape is not allowed (new shape %s)" % (self, shape))
 
   @property
   def batch_shape(self):
@@ -2303,8 +2301,6 @@ class Data(object):
     """
     :param dict[int,tf.Tensor]|None sizes:
     """
-    #  self._dynamic_sizes.clear()  # TODO does not make sense anymore
-    # BehaviorVersion.require(False, "XXX", version=2)  # TODO should we have this?
     if sizes is None:
       return
     for axis_wo_b, size in sizes.items():
@@ -2416,7 +2412,6 @@ class Data(object):
     """
     if axis == self.batch_dim_axis:
       return
-    # TODO, not sure how to handle this... for new code, not needed. but compatibility for old code?
     raise Exception("%s: cannot set batch_dim_axis = %s" % (self, axis))
 
   def _default_feature_dim_axis(self):
@@ -2890,14 +2885,6 @@ class Data(object):
       assert sizes_tag, "%s: assign dyn sizes %s without defined dim tag" % (self, sizes)
       self._dim_tags = self.dim_tags[:axis] + (sizes_tag,) + self.dim_tags[axis + 1:]
 
-  def del_dynamic_size(self, axis):
-    """
-    :param int axis: counted with batch-dim axis. :func:`is_axis_dynamic` should be True
-    """
-    # TODO disallow now? doesnt make sense?
-    # del self._dynamic_sizes[axis]
-    pass
-
   def get_dynamic_axes(self):
     """
     :return: list of axes, counted with batch-dim axis (but we exclude the batch dim axis itself)
@@ -3367,7 +3354,7 @@ class _SizePlaceholderProxy:
 
   def __delitem__(self, key):
     self._assert_sane_axis_wo_batch(key)
-    self.data.del_dynamic_size(axis=self.data.get_batch_axis(key))
+    raise Exception("%s: cannot delete items from size_placeholder" % self.data)
 
   def __iter__(self):
     return iter(self.keys())
@@ -3408,8 +3395,7 @@ class _SizePlaceholderProxy:
     """
     Remove all.
     """
-    for key in self.keys():
-      del self[key]
+    raise Exception("%s: cannot clear size_placeholder" % self.data)
 
   def keys(self):
     """
