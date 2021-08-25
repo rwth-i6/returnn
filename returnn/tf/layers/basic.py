@@ -4987,6 +4987,7 @@ class WeightedSumLayer(_ConcatInputLayer):
     :param bool|None keep_dims:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
     assert not data.sparse
     axes, padding, size, keep_dims = cls._resolve_opts(
@@ -5003,16 +5004,15 @@ class WeightedSumLayer(_ConcatInputLayer):
     else:
       raise Exception("invalid padding %r" % padding)
     if keep_dims:
-      shape = list(data.shape)
-      assert data.batch_dim_axis not in axes
+      dim_tags = list(data.dim_tags)
       for i, a in enumerate(axes):
-        shape[data.get_batch_axis_excluding_batch(a)] = res_dims[i]
-      data.shape = tuple(shape)
+        dim_tags[a] = DimensionTag(
+          kind=dim_tags[a].kind, description="%s:weighted-sum:%i" % (name, i), dimension=res_dims[i])
+      data = data.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
     else:
       assert all([d == 1 for d in res_dims])
-      assert data.batch_dim_axis not in axes
-      data.shape = tuple([d for (i, d) in enumerate(data.shape) if data.get_batch_axis(i) not in axes])
-    data.dim = data.shape[data.get_batch_axis_excluding_batch(data.feature_dim_axis)]
+      dim_tags = [tag for a, tag in enumerate(data.dim_tags) if a not in axes]
+      data = data.copy_template_new_dim_tags(dim_tags)
     return data
 
 
