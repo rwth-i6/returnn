@@ -138,7 +138,6 @@ def get_concat_sources_data_template(src_layers, name=None):
   if not name:
     name = "concat_" + "_".join([layer.name for layer in src_layers])
   dim = 0
-  beam = None
   common_source = Data.get_common_data([s.output for s in src_layers], ignore_feature_dim=True)
   for layer in src_layers:
     # Note: We do not perform much compatibility checks at this point,
@@ -147,18 +146,11 @@ def get_concat_sources_data_template(src_layers, name=None):
     assert not layer.output.sparse
     if layer.output.dim is not None:  # just ignore at this point if None (e.g. during template construction)
       dim += layer.output.dim
-    beam = SearchBeam.get_combined_beam(beam, layer.output.beam)
-  dim_tags = list(common_source.dim_tags)
-  dim_tags[common_source.feature_dim_axis] = DimensionTag(
-    kind=DimensionTag.Types.Feature, description=name + "_feature", dimension=dim)
-  kwargs = common_source.get_kwargs()
-  kwargs.update(dict(
+  return common_source.copy_template_replace_dim_tag(
     name=name,
-    dim_tags=dim_tags,
-    sparse=False,
-    beam=beam))
-  data = Data(**kwargs)
-  return data
+    axis=common_source.feature_dim_axis,
+    new_dim_tag=DimensionTag(
+      kind=DimensionTag.Types.Feature, description=name + "_feature", dimension=dim))
 
 
 def concat_sources_with_opt_dropout(src_layers, dropout=0, dropout_noise_shape=None, dropout_on_forward=False):
@@ -1090,7 +1082,7 @@ class GatherLayer(_ConcatInputLayer):
       [input_data.dim_tags[ax] for ax in input_axes[:gather_axis-batch_dims]] +
       [position_data.dim_tags[ax] for ax in position_axes] +
       [input_data.dim_tags[ax] for ax in input_axes[gather_axis-batch_dims:]])
-    out_type = input_data.get_kwargs()
+    out_type = input_data.get_kwargs(include_special_axes=False)
     out_type["name"] = "%s_output" % name
     out_type["dim_tags"] = dim_tags
     out_type["beam"] = SearchBeam.get_combined_beam(input_data.beam, position_data.beam)
@@ -1225,7 +1217,7 @@ class GatherNdLayer(_ConcatInputLayer):
     else:
       position_data = position_data.copy_add_batch_dim(batch_dim_axis=0, batch=input_data.batch)
     dim_tags = list(position_data.dim_tags) + list(input_data.dim_tags[2:])  # (B, ...) (w/o batch)
-    out_type = position_data.get_kwargs()
+    out_type = position_data.get_kwargs(include_special_axes=False)
     out_type["name"] = "%s_output" % name
     out_type["dim_tags"] = dim_tags
     if position_data.time_dim_axis is None:
@@ -4470,9 +4462,7 @@ class TransposedConvLayer(_ConcatInputLayer):
       dim_tags[axis] = DimensionTag(
         kind=DimensionTag.Types.Spatial, description="%s_spatial%i_transposed_conv" % (name, idx),
         dimension=dim)
-    opts = out.get_kwargs()
-    opts["dim_tags"] = dim_tags
-    return Data(**opts)
+    return out.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
 
   def get_dep_layers(self):
     """
@@ -5910,10 +5900,7 @@ class CombineLayer(LayerBase):
     """
     out_type_ = {}
     if sources:
-      out_type_.update(
-        Data.get_common_data(
-          [s.output for s in sources], warnings_out=log.v4)
-        .get_kwargs(include_special_axes=False))
+      out_type_.update(Data.get_common_data([s.output for s in sources], warnings_out=log.v4).get_kwargs())
     if n_out is not NotSpecified:
       out_type_["dim"] = n_out
     out_type_["name"] = "%s_output" % kwargs["name"]
@@ -5921,6 +5908,9 @@ class CombineLayer(LayerBase):
       if isinstance(out_type, dict):
         if "shape" in out_type:
           out_type_.pop("dim_tags", None)
+          out_type_.pop("batch_dim_axis", None)
+          out_type_.pop("feature_dim_axis", None)
+          out_type_.pop("time_dim_axis", None)
         out_type_.update(out_type)
       elif callable(out_type):
         def call_out_type_with_eval_locals(**out_type_kwargs):
@@ -6151,7 +6141,6 @@ class CompareLayer(LayerBase):
     """
     out_type_ = {}
     if sources:
-      # TODO ... get_kwargs? dim_tags?
       out_type_.update(Data.get_common_data([s.output for s in sources], warnings_out=log.v4).get_kwargs())
     if n_out is not NotSpecified:
       out_type_["dim"] = n_out

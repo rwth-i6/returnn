@@ -1565,7 +1565,7 @@ class Data(object):
         return None
       return inv_perm[axis]
 
-    data_opts = self.get_kwargs()
+    data_opts = self.get_kwargs(include_special_axes=False)
     if self.placeholder is not None:
       from returnn.tf.util.basic import get_valid_scope_name_from_str
       data_opts["placeholder"] = tf.transpose(
@@ -1710,7 +1710,7 @@ class Data(object):
       assert batch_dim_axis + self.batch_ndim + 1 >= 0
       batch_dim_axis += self.batch_ndim + 1
     assert 0 <= batch_dim_axis <= self.batch_ndim
-    data_opts = self.get_kwargs()
+    data_opts = self.get_kwargs(include_special_axes=False)
     placeholder = self.placeholder
     if placeholder is not None:
       placeholder = tf.expand_dims(self.placeholder, batch_dim_axis, name="%s_add_batch_dim" % self.name)
@@ -1820,7 +1820,7 @@ class Data(object):
         return self.copy_add_batch_dim(
           batch_dim_axis=axis, batch=batch_info, dim_tag=dim_tag if dim_tag.dimension == 1 else None)
 
-    data_opts = self.get_kwargs()
+    data_opts = self.get_kwargs(include_special_axes=False)
     # Note: if dim_tag is feature, but we are sparse, we just make it spatial
     if self.sparse and dim_tag.kind == DimensionTag.Types.Feature:
       dim_tag = dim_tag.copy(kind=DimensionTag.Types.Spatial)
@@ -1831,9 +1831,9 @@ class Data(object):
     other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
     for k, a in other_special_axes.items():
       data_opts[k] = a if (a < axis) else (a + 1)
-    if dim_tag.kind == DimensionTag.Types.Feature and self.feature_dim_axis is None:
+    if dim_tag.is_feature_dim() and self.feature_dim_axis is None:
       data_opts.pop("feature_dim_axis", None)  # fall back to default
-    if dim_tag.kind == DimensionTag.Types.Spatial and self.time_dim_axis is None:
+    if dim_tag.is_spatial_dim() and self.time_dim_axis is None:
       data_opts.pop("time_dim_axis", None)  # fall back to default
     if self.placeholder is not None:
       with tf.name_scope("%s_copy_add_dim_by_tag" % get_valid_scope_name_from_str(self.name)):
@@ -1856,7 +1856,7 @@ class Data(object):
     assert self.dim % new_feature_dim == 0, "must be a multiple of the input feature dim"
     feature_dim_rem = self.dim // new_feature_dim
     new_feature_dim_axis = self.feature_dim_axis + 1
-    data_opts = self.get_kwargs()
+    data_opts = self.get_kwargs(include_special_axes=False)
     dim_tag_split_rem = DimensionTag(
       kind=DimensionTag.Types.Spatial, description="feature_split_rem_%i" % feature_dim_rem,
       dimension=feature_dim_rem)
@@ -1995,7 +1995,7 @@ class Data(object):
     """
     assert self.batch_dim_axis is not None
     assert self.time_dim_axis is not None
-    data_opts = self.get_kwargs()
+    data_opts = self.get_kwargs(include_special_axes=False)
     if self.placeholder is not None:
       data_opts["placeholder"] = self.get_placeholder_time_flattened()
     dim_tag = self.dim_tags[self.time_dim_axis]
@@ -2050,7 +2050,7 @@ class Data(object):
     assert all(0 <= axis < self.batch_ndim for axis in axes)
     if not axes:
       return self.copy()
-    data_opts = self.get_kwargs()
+    data_opts = self.get_kwargs(include_special_axes=False)
     if self.placeholder is not None:
       data_opts["placeholder"] = tf.squeeze(
         self.placeholder, axes,
@@ -2091,7 +2091,7 @@ class Data(object):
     :return: copy of myself excluding exclude_axis axis, without placeholder.
     :rtype: Data
     """
-    kwargs = self.get_kwargs()
+    kwargs = self.get_kwargs(include_special_axes=False)
     if exclude_axis < 0:
       exclude_axis += self.batch_ndim
       assert exclude_axis >= 0
@@ -2147,7 +2147,11 @@ class Data(object):
     :return: copy of myself adding the time-dimension without placeholder
     :rtype: Data
     """
-    kwargs = self.get_kwargs()
+    if time_dim_axis < 0:
+      time_dim_axis += self.batch_ndim + 1
+      assert time_dim_axis >= 0
+    assert 0 <= time_dim_axis <= self.batch_ndim
+    kwargs = self.get_kwargs(include_special_axes=False)
     dim_tag = DimensionTag(kind=DimensionTag.Types.Time, description="time", dimension=None)
     dim_tags = self.dim_tags[:time_dim_axis] + (dim_tag,) + self.dim_tags[time_dim_axis:]
     kwargs["dim_tags"] = dim_tags
@@ -2174,6 +2178,9 @@ class Data(object):
     opts = self.get_kwargs()
     dim_tags = self.dim_tags[:axis] + (new_dim_tag,) + self.dim_tags[axis + 1:]
     opts["dim_tags"] = dim_tags
+    if self.feature_dim_axis_or_unspecified is not NotSpecified:
+      if self.feature_dim_axis == axis and self.dim_tags[axis].is_feature_dim() and not new_dim_tag.is_feature_dim():
+        opts["feature_dim_axis"] = None
     if name:
       opts["name"] = name
     return Data(**opts)
