@@ -50,7 +50,6 @@ class DimensionTag(object):
     :param Data|None src_data:
     :param int|None src_axis:
     """
-    self.id = id(self)  # This is just used for __repr__ to distinguish different instances.
     self.kind = kind
     self.description = description
     self.dimension = dimension
@@ -270,8 +269,12 @@ class DimensionTag(object):
     return not (self == other)
 
   def __hash__(self):
+    # This must match the behavior in __eq__, which is is_equal with default options.
+    # I.e. different hash implies not equal (but same hash not necessarily equal).
+    if self.is_batch_dim():
+      return hash(())
     base = self.get_same_base()
-    return hash((base.kind, base.description))
+    return hash((base.kind, base.dimension, base.description))
 
   def get_same_base(self):
     """
@@ -280,13 +283,6 @@ class DimensionTag(object):
     if self.same_as:
       return self.same_as.get_same_base()
     return self
-
-  @property
-  def same_base_id(self):
-    """
-    :rtype: int
-    """
-    return self.get_same_base().id
 
   def declare_same_as(self, other):
     """
@@ -1299,7 +1295,7 @@ class Data(object):
       # Note: tag.kind (feature or spatial) is independent from self.feature_dim_axis.
       if tag.dyn_size is not None:
         tag_ = DimensionTag.get_tag_from_size_tensor(tag.dyn_size)
-        assert tag_ and tag_.same_base_id == tag.same_base_id, "%s: %s != %s" % (self, tag_, tag)
+        assert tag_ and tag_.get_same_base() is tag.get_same_base(), "%s: %s != %s" % (self, tag_, tag)
     if not ignore_placeholder and self.placeholder is not None:
       # Note: We could just call self.placeholder.set_shape.
       # However, we are more explicit. We assume that the placeholder has already a known shape, and error otherwise.
