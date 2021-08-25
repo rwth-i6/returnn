@@ -1820,7 +1820,7 @@ class Data(object):
         return self.copy_add_batch_dim(
           batch_dim_axis=axis, batch=batch_info, dim_tag=dim_tag if dim_tag.dimension == 1 else None)
 
-    data_opts = self.get_kwargs(include_special_axes=False)
+    data_opts = self.get_kwargs()
     # Note: if dim_tag is feature, but we are sparse, we just make it spatial
     if self.sparse and dim_tag.kind == DimensionTag.Types.Feature:
       dim_tag = dim_tag.copy(kind=DimensionTag.Types.Spatial)
