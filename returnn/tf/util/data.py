@@ -1218,15 +1218,12 @@ class Data(object):
       assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
     self.vocab = vocab  # type: typing.Optional[Vocabulary]
     if same_dim_tags_as:
-      # Note that this currently does not work as intended at template construction time...
       for _axis, _dim_tag in sorted(same_dim_tags_as.items()):
         _axis = self.get_axis_from_description(_axis)
         assert isinstance(_dim_tag, DimensionTag)
         base_tag = self._dim_tags[_axis]
         if base_tag != _dim_tag:
-          base_tag.declare_same_as(_dim_tag)  # TODO or other way around?
-          # Overtake the given dim tag.
-          # self._dim_tags[_axis] = _dim_tag  # TODO ?
+          base_tag.declare_same_as(_dim_tag)
           if _dim_tag.dyn_size is not None:
             self.set_dynamic_size(_axis, _dim_tag.dyn_size)
     self.sanity_check(assume_complete=False)
