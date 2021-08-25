@@ -26,7 +26,12 @@ except ImportError:
   theano = None
 
 
-def build_env():
+def build_env(env_update=None):
+  """
+  :param dict[str,str]|None env_update:
+  :return: env dict for Popen
+  :rtype: dict[str,str]
+  """
   theano_flags = {key: value for (key, value)
                   in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
   # First set some sane default for compile dir.
@@ -38,16 +43,18 @@ def build_env():
   theano_flags["compiledir_format"] += "--nosetests"
   # Nose-tests will set mode=FAST_COMPILE. We don't want this for our tests as it is way too slow.
   theano_flags["mode"] = "FAST_RUN"
-  env_update = os.environ.copy()
-  env_update["THEANO_FLAGS"] = ",".join(["%s=%s" % (key, value) for (key, value) in theano_flags.items()])
-  return env_update
+  env_update_ = os.environ.copy()
+  env_update_["THEANO_FLAGS"] = ",".join(["%s=%s" % (key, value) for (key, value) in theano_flags.items()])
+  if env_update:
+    env_update_.update(env_update)
+  return env_update_
 
 
-def run(*args):
+def run(*args, env_update=None):
   args = list(args)
   print("run:", args)
   # RETURNN by default outputs on stderr, so just merge both together
-  p = Popen(args, stdout=PIPE, stderr=STDOUT, env=build_env())
+  p = Popen(args, stdout=PIPE, stderr=STDOUT, env=build_env(env_update=env_update))
   out, _ = p.communicate()
   if p.returncode != 0:
     print("Return code is %i" % p.returncode)
@@ -56,8 +63,8 @@ def run(*args):
   return out.decode("utf8")
 
 
-def run_and_parse_last_fer(*args):
-  out = run(*args)
+def run_and_parse_last_fer(*args, **kwargs):
+  out = run(*args, **kwargs)
   parsed_fer = None
   for l in out.splitlines():
     # example: epoch 5 score: 0.0231807245472 elapsed: 0:00:04 dev: score 0.0137521058997 error 0.00268961807423
@@ -69,9 +76,10 @@ def run_and_parse_last_fer(*args):
   return parsed_fer
 
 
-def run_config_get_fer(config_filename):
+def run_config_get_fer(config_filename, env_update=None):
   cleanup_tmp_models(config_filename)
-  fer = run_and_parse_last_fer(py, "rnn.py", config_filename, "++log_verbosity", "5")
+  fer = run_and_parse_last_fer(
+    py, "rnn.py", config_filename, "++log_verbosity", "5", env_update=env_update)
   cleanup_tmp_models(config_filename)
   return fer
 
@@ -90,8 +98,18 @@ def cleanup_tmp_models(config_filename):
 
 
 @unittest.skipIf(not theano, "Theano not installed")
-def test_demo_task12ax():
+def test_demo_theano_task12ax():
   fer = run_config_get_fer("demos/demo-theano-task12ax.config")
+  assert_less(fer, 0.01)
+
+
+def test_demo_tf_task12ax():
+  fer = run_config_get_fer("demos/demo-tf-native-lstm.12ax.config")
+  assert_less(fer, 0.01)
+
+
+def test_demo_tf_task12ax_no_test_env():
+  fer = run_config_get_fer("demos/demo-tf-native-lstm.12ax.config", env_update={"RETURNN_TEST": ""})
   assert_less(fer, 0.01)
 
 
