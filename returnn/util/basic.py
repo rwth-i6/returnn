@@ -233,7 +233,7 @@ class BehaviorVersion:
     """
     :rtype: bool
     """
-    return cls._behavior_version is None
+    return cls._behavior_version is not None
 
   class RequirementNotSatisfied(Exception):
     """
