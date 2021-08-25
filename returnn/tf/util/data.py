@@ -184,7 +184,7 @@ class DimensionTag(object):
       return self.same_as.can_compare()
     if self.kind in [self.Types.Batch, self.Types.Feature]:
       return True
-    assert self.kind == self.Types.Spatial
+    assert self.is_spatial_dim()
     if self.dimension is not None:
       return True
     if self.dyn_size is None:
@@ -404,7 +404,7 @@ class DimensionTag(object):
     """
     if self.dimension is not None:
       return self.dimension
-    if self.kind == self.Types.Batch:
+    if self.is_batch_dim():
       if self.src_data:
         return self.src_data.get_batch_dim()
       from returnn.tf.layers.base import LayerBase
@@ -1120,8 +1120,8 @@ class Data(object):
     :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
     :param bool auto_create_placeholders: This will create a tf.placeholder.
     :param str|dict[str]|GeneratingDataset.Vocabulary|None vocab:
-    :param tuple[DimensionTag]|dict[int,DimensionTag]|None dim_tags:
-      If tuple, this specifies the whole (batch) shape.
+    :param tuple[DimensionTag]|list[DimensionTag]|dict[int,DimensionTag]|None dim_tags:
+      If tuple/list, this specifies the whole (batch) shape.
       If dict, explicitly specified dimension tags per axis (axis counted with batch-dim)
     :param dict[int|str,DimensionTag]|None same_dim_tags_as: will mark our dimension tags to be the same
     :param BatchInfo|None batch:
@@ -1144,7 +1144,7 @@ class Data(object):
     self.beam = beam
     if isinstance(dim_tags, (tuple, list)):
       # We do a couple of sanity checks, and maybe set special axes attribs.
-      shape_ = tuple(tag.dimension for tag in dim_tags if tag.kind != DimensionTag.Types.Batch)
+      shape_ = tuple(tag.dimension for tag in dim_tags if not tag.is_batch_dim())
       if shape is not None:
         assert tuple(shape) == shape_
       del shape
@@ -1712,7 +1712,7 @@ class Data(object):
         placeholder = tf.tile(placeholder, tiles)
     dim_tags = list(self.dim_tags)
     if dim_tag:
-      assert dim_tag.kind == DimensionTag.Types.Batch
+      assert dim_tag.is_batch_dim()
       assert dim_tag.dimension == (batch.dim if isinstance(batch.dim, int) else None)
     else:
       dim_tag = DimensionTag(
@@ -1771,15 +1771,15 @@ class Data(object):
     :param DimensionTag dim_tag:
     :rtype: int
     """
-    if dim_tag.kind == DimensionTag.Types.Batch:
+    if dim_tag.is_batch_dim():
       return 0
     # Note: if dim_tag is feature, but we are sparse, we just treat is as spatial, handled below.
-    if dim_tag.kind == DimensionTag.Types.Feature and not self.sparse:
+    if dim_tag.is_feature_dim() and not self.sparse:
       if self.feature_dim_axis is not None:
         return self.feature_dim_axis + 1  # after existing feature-dim
       else:
         return self.batch_ndim  # at the end
-    assert dim_tag.kind == DimensionTag.Types.Spatial or (dim_tag.kind == DimensionTag.Types.Feature and self.sparse)
+    assert dim_tag.is_spatial_dim() or (dim_tag.is_feature_dim() and self.sparse)
     if dim_tag.dimension is None and self.get_dynamic_axes():
       return self.get_dynamic_axes()[-1] + 1  # after existing dynamic axis
     if self.get_spatial_batch_axes():
@@ -1804,7 +1804,7 @@ class Data(object):
       axis += self.batch_ndim + 1
     assert 0 <= axis <= self.batch_ndim
 
-    if dim_tag.kind == DimensionTag.Types.Batch:
+    if dim_tag.is_batch_dim():
       if unbroadcast:
         batch_info = dim_tag.src_data.batch if dim_tag.src_data else None
         return self.copy_add_batch_dim(batch_dim_axis=axis, batch=batch_info, dim_tag=dim_tag)
@@ -1815,7 +1815,7 @@ class Data(object):
 
     data_opts = self.get_kwargs()
     # Note: if dim_tag is feature, but we are sparse, we just make it spatial
-    if self.sparse and dim_tag.kind == DimensionTag.Types.Feature:
+    if self.sparse and dim_tag.is_feature_dim():
       dim_tag = dim_tag.copy(kind=DimensionTag.Types.Spatial)
     if not unbroadcast and dim_tag.dimension != 1:
       dim_tag = DimensionTag(
@@ -2243,7 +2243,7 @@ class Data(object):
     :return: shape without batch-dim. e.g. (time,feat) = (None,128)
     :rtype: tuple[int|None]
     """
-    return tuple(tag.dimension for tag in self._dim_tags if tag.kind != DimensionTag.Types.Batch)
+    return tuple(tag.dimension for tag in self._dim_tags if not tag.is_batch_dim())
 
   @shape.setter
   def shape(self, shape):
@@ -3203,7 +3203,7 @@ class Data(object):
     # We fix this in some cases, i.e. by selecting unique time-dim.
     defined_var_spatial_tags = [
       tag for tag in all_dim_tags_
-      if tag.kind == DimensionTag.Types.Spatial and tag.get_same_base().dyn_size is not None]
+      if tag.is_spatial_dim() and tag.get_same_base().dyn_size is not None]
     if len(defined_var_spatial_tags) == 1:
       for data in sources + [common]:
         non_comparable_dim_tags = [dim_tag for dim_tag in tags_dict[data] if not dim_tag.can_compare()]
@@ -3418,7 +3418,7 @@ def _batch_dim_axis_from_dim_tags_tuple(dim_tags):
   :rtype: int|None
   """
   for axis, dim_tag in enumerate(dim_tags):
-    if dim_tag.kind == DimensionTag.Types.Batch:
+    if dim_tag.is_batch_dim():
       return axis
   return None
 

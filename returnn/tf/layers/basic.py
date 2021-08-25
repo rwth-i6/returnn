@@ -1896,7 +1896,7 @@ class RandIntLayer(LayerBase):
       if isinstance(s, int):
         shape_parsed.append(s)
       elif isinstance(s, DimensionTag):
-        if s.kind == DimensionTag.Types.Batch:
+        if s.is_batch_dim():
           shape_parsed.append(self.get_batch_dim())
         elif isinstance(s.dimension, int):
           shape_parsed.append(s.dimension)
@@ -1941,7 +1941,7 @@ class RandIntLayer(LayerBase):
         shape_parsed.append(s)
       else:
         assert isinstance(s, DimensionTag)
-        if s.kind == DimensionTag.Types.Batch:
+        if s.is_batch_dim():
           assert batch_dim_axis is None, "Cannot have multiple batch axes"
           batch_dim_axis = ax
         elif isinstance(s.dimension, int):
@@ -2654,9 +2654,9 @@ class MergeDimsLayer(_ConcatInputLayer):
     else:
       new_feature_dim_axis = cls._old_axis_to_new_axis(
         input_data=input_data, merge_axes=axes, old_axis=input_data.feature_dim_axis)
-    if any(tag.kind == DimensionTag.Types.Batch for tag in merge_dim_tags):
+    if any(tag.is_batch_dim() for tag in merge_dim_tags):
       res_dim_tag_kind = DimensionTag.Types.Batch
-    elif any(tag.kind == DimensionTag.Types.Feature for tag in merge_dim_tags):
+    elif any(tag.is_feature_dim() for tag in merge_dim_tags):
       res_dim_tag_kind = DimensionTag.Types.Feature
     else:
       res_dim_tag_kind = DimensionTag.Types.Spatial
