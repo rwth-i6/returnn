@@ -66,9 +66,9 @@ def run(*args, env_update=None):
 def run_and_parse_last_fer(*args, **kwargs):
   out = run(*args, **kwargs)
   parsed_fer = None
-  for l in out.splitlines():
+  for line in out.splitlines():
     # example: epoch 5 score: 0.0231807245472 elapsed: 0:00:04 dev: score 0.0137521058997 error 0.00268961807423
-    m = re.match("epoch [0-9]+ score: .* dev: .* error ([0-9.]+)\\s?", l)
+    m = re.match("epoch [0-9]+ score: .* dev: .* error ([0-9.]+)\\s?", line)
     if not m:
       continue
     parsed_fer = float(m.group(1))
@@ -109,7 +109,7 @@ def test_demo_tf_task12ax():
 
 
 def test_demo_tf_task12ax_no_test_env():
-  fer = run_config_get_fer("demos/demo-tf-native-lstm.12ax.config", env_update={"RETURNN_TEST": ""})
+  fer = run_config_get_fer("demos/demo-tf-native-lstm2.12ax.config", env_update={"RETURNN_TEST": ""})
   assert_less(fer, 0.01)
 
 
