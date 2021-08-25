@@ -149,6 +149,8 @@ class ExternData(object):
       if not data.batch:
         data.batch = batch_info
       for tag in data.dim_tags:
+        if tag.is_batch_dim() and not tag.batch:
+          tag.batch = batch_info
         if tag.dyn_size_ext and tag.dyn_size_ext.have_batch_axis():
           if not tag.dyn_size_ext.batch:
             tag.dyn_size_ext.batch = batch_info

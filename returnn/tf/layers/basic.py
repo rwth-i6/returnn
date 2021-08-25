@@ -2280,7 +2280,8 @@ class WindowLayer(_ConcatInputLayer):
             filter_size=window_size, stride=stride, dilation_rate=1, padding=padding)
         DimensionTag(
           kind=DimensionTag.Types.Spatial, description="%s:window:%i" % (self.name, axis_wo_b),
-          dimension=None, dyn_size=size)
+          dimension=None, dyn_size=size, batch=self.output.batch,
+          src_data=self.output, src_axis=axis)
         self.output.size_placeholder[axis_wo_b] = size
 
   @classmethod
@@ -5621,7 +5622,10 @@ class ShiftAxisLayer(_ConcatInputLayer):
       new_size = tf.clip_by_value(
         self.output.size_placeholder[axis_wob] + size_delta, 0, tf.shape(shifted)[axis])
       from ..util.data import DimensionTag
-      DimensionTag(kind=DimensionTag.Types.Spatial, description="shift_axis", dyn_size=new_size)
+      DimensionTag(
+        kind=DimensionTag.Types.Spatial, description="shift_axis",
+        dyn_size=new_size, batch=self.output.batch,
+        src_data=self.output, src_axis=axis)
       self.output.size_placeholder[axis_wob] = new_size
 
   @classmethod
