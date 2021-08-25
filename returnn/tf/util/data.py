@@ -58,11 +58,15 @@ class DimensionTag(object):
     self.same_as = None  # type: typing.Optional[DimensionTag]
     if src_data:
       assert isinstance(src_data, Data) and isinstance(src_axis, int)
+    if not batch and dyn_size_ext:
+      batch = dyn_size_ext.batch
     self.batch = batch
     self.src_data = src_data
     self.src_axis = src_axis
     if dyn_size_ext and not dyn_size_ext.batch and batch:
       dyn_size_ext.batch = batch
+    if dyn_size_ext and dyn_size_ext.batch and batch:
+      assert batch == dyn_size_ext.batch
     self.dyn_size_ext = dyn_size_ext  # type: typing.Optional[Data]
     if dyn_size is not None:
       assert not dyn_size_ext
@@ -97,6 +101,7 @@ class DimensionTag(object):
     tag = DimensionTag(
       kind=kind or self.kind, description=self.description,
       dimension=self.dimension, dyn_size_ext=self.dyn_size_ext,
+      batch=self.batch,
       src_data=self.src_data, src_axis=self.src_axis)
     tag.same_as = self  # not declare_same_as, none of the extra checks needed
     return tag
@@ -154,20 +159,31 @@ class DimensionTag(object):
     """
     return self.kind == DimensionTag.Types.Spatial
 
-  def set_tag_on_size_tensor(self, x):
+  def set_tag_on_size_tensor(self, x, batch=None):
     """
     :param tf.Tensor x:
+    :param BatchInfo|None batch:
     """
     # It's unusual if self.dimension is not None, but let's accept that.
     if hasattr(x, "_is_size_of_dim_tag"):
       # noinspection PyProtectedMember
       assert x._is_size_of_dim_tag in (None, self)
-    # If we already have another dyn size set, create a new DimensionTag instance.
-    if self.dyn_size is not None and self.dyn_size is not x:
+    # If we already have another dyn size set or different batch, create a new DimensionTag instance.
+    if (self.dyn_size is not None and self.dyn_size is not x) or (self.batch and batch and self.batch != batch):
+      if self.batch:
+        assert self.dyn_size is not None
       new_dim_tag = self.copy()
       new_dim_tag.dyn_size_ext = None
+      if batch:
+        new_dim_tag.batch = batch
       new_dim_tag.set_tag_on_size_tensor(x)
       return
+    if batch and getattr(x, "_RETURNN_dyn_size_beam", None):
+      assert batch.beam == getattr(x, "_RETURNN_dyn_size_beam")
+    if self.batch and batch:
+      assert self.batch == batch
+    elif batch and not self.batch:
+      self.batch = batch  # overtake
     if getattr(x, "_is_size_of_dim_tag", None) is None:
       setattr(x, "_is_size_of_dim_tag", self)
     if self.dyn_size is None:
@@ -333,8 +349,9 @@ class DimensionTag(object):
         if self.src_data.beam and (not self.same_as.src_data or not self.same_as.src_data.beam):
           for i, v in sorted(self.src_data.size_placeholder.items()):
             with same_control_flow_ctx(v):
-              self.src_data.size_placeholder[i] = tile_transposed(v, axis=0, multiples=self.src_data.beam.beam_size)
-            self.set_tag_on_size_tensor(self.src_data.size_placeholder[i])
+              size = tile_transposed(v, axis=0, multiples=self.src_data.beam.beam_size)
+            self.set_tag_on_size_tensor(size, batch=self.src_data.batch)
+            self.src_data.size_placeholder[i] = size
     # If others dyn_size is None but we have a dyn_size, maybe update others dyn_size.
     if self.dyn_size is not None and self.same_as.dyn_size is not self.dyn_size:
       # Could be unset if it comes from the config, or from prev graph creation.
@@ -2020,6 +2037,9 @@ class Data(object):
     assert data.beam is None, "incompatible beam (%r vs %r)" % (data.beam, beam)
     if beam is None:
       return data
+    if data.batch:
+      data.batch = data.batch.copy_set_beam(beam)
+    data.beam = beam
     with tf.name_scope("%s_data_extend_with_beam" % get_valid_scope_name_from_str(self.name)):
       if data.placeholder is not None:
         with same_control_flow_ctx(data.placeholder):
@@ -2030,12 +2050,9 @@ class Data(object):
           sizes = tile_transposed(v, axis=0, multiples=beam.beam_size)
         sizes._RETURNN_dyn_size_beam = beam
         if tag is not None:
-          tag.set_tag_on_size_tensor(sizes)
+          tag.set_tag_on_size_tensor(sizes, batch=data.batch)
         data.size_placeholder[i] = sizes
-      if data.batch:
-        data.batch = data.batch.copy_set_beam(beam)
-      data.beam = beam
-      return data
+    return data
 
   def copy_squeeze_axes(self, axes):
     """
@@ -2856,8 +2873,8 @@ class Data(object):
         if not getattr(base_size, "_RETURNN_dyn_size_beam", None):
           with tf_util.same_control_flow_ctx(base_size):
             sizes = tf_util.tile_transposed(base_size, axis=0, multiples=self.beam.beam_size)
-          tag.set_tag_on_size_tensor(sizes)
           sizes._RETURNN_dyn_size_beam = self.beam
+          tag.set_tag_on_size_tensor(sizes, batch=self.batch)
 
     sizes_tag = DimensionTag.get_tag_from_size_tensor(sizes)
     if sizes_tag:

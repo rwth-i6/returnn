@@ -421,6 +421,9 @@ class SelectSearchSourcesLayer(InternalLayer):
       search_choices_seq = search_choices_seq[:search_choices_seq.index(src_search_choices)]
       assert src_search_choices not in search_choices_seq
       assert search_choices_seq
+      self.output.beam = search_choices.get_beam_info()
+      if self.output.batch:
+        self.output.batch = self.output.batch.copy_set_beam(self.output.beam)
 
       def transform(v):
         """
@@ -449,7 +452,7 @@ class SelectSearchSourcesLayer(InternalLayer):
               i, get_valid_scope_name_from_str(base_src_choices.owner.name),
               len(search_choices_seq), get_valid_scope_name_from_str(search_choices.owner.name)))
           if tag:
-            tag.set_tag_on_size_tensor(v)
+            tag.set_tag_on_size_tensor(v, batch=self.output.batch)
           self.used_search_choices_beams = True
         return v
 
@@ -458,7 +461,6 @@ class SelectSearchSourcesLayer(InternalLayer):
       # It's possible that src.output.placeholder is not set, e.g. in a prev-layer where the
       # prev output is not needed, only the prev state. See _TemplateLayer.copy_as_prev_time_frame.
       src_output = src.output.copy_as_batch_major()
-      self.output.beam = search_choices.get_beam_info()
       if src_output.placeholder is not None:
         self.output.placeholder = transform(src_output.placeholder)
       if src_output.size_placeholder:
@@ -807,7 +809,7 @@ class SliceLayer(_ConcatInputLayer):
       if not DimensionTag.get_tag_from_size_tensor(size_placeholder[axis_wo_batch]):
         tag = DimensionTag(
           description="slice%i:%s" % (axis_wo_batch, self.get_absolute_name()),
-          kind=DimensionTag.Types.Spatial)
+          kind=DimensionTag.Types.Spatial, batch=self.output.batch)
         tag.set_tag_on_size_tensor(size_placeholder[axis_wo_batch])
     self.output.size_placeholder = size_placeholder
     self.output.placeholder = self.input_data.placeholder[slices]
@@ -880,7 +882,7 @@ class SliceNdLayer(_ConcatInputLayer):
       size_placeholder[0] = tf.maximum(seq_lens - tf.reshape(start, tf.shape(seq_lens)), 0)
       tag = DimensionTag(
         description="sliced-time:%s" % self.get_absolute_name(),
-        kind=DimensionTag.Types.Spatial)
+        kind=DimensionTag.Types.Spatial, batch=self.output.batch)
       tag.set_tag_on_size_tensor(size_placeholder[0])
     else:
       assert isinstance(size, int)
@@ -2426,7 +2428,7 @@ class PadLayer(_ConcatInputLayer):
       if not DimensionTag.get_tag_from_size_tensor(size):
         tag = DimensionTag(
           description="spatial:%i:%s" % (a, self.get_absolute_name()),
-          kind=tag.kind)
+          kind=tag.kind, batch=self.output.batch)
         tag.set_tag_on_size_tensor(size)
       self.output.size_placeholder[a] = size
 
@@ -2615,7 +2617,7 @@ class MergeDimsLayer(_ConcatInputLayer):
         # But keep the same dim-tag.
         dim_tag = DimensionTag.get_tag_from_size_tensor(v)
         if dim_tag is not None:
-          dim_tag.set_tag_on_size_tensor(d[j])
+          dim_tag.set_tag_on_size_tensor(d[j], batch=self.input_data.batch)
     return d
 
   @classmethod
@@ -2877,7 +2879,7 @@ class SplitDimsLayer(_ConcatInputLayer):
         if not DimensionTag.get_tag_from_size_tensor(dyn_size):
           tag = DimensionTag(
             description="split-time:%i:%s" % (axis, self.get_absolute_name()),
-            kind=DimensionTag.Types.Spatial)
+            kind=DimensionTag.Types.Spatial, batch=self.output.batch)
           tag.set_tag_on_size_tensor(dyn_size)
         self.output.size_placeholder[axis_wo_batch] = dyn_size
 
@@ -3124,7 +3126,7 @@ class UnflattenNdLayer(_ConcatInputLayer):
       for i, other in declare_same_sizes_as.items():
         assert 0 <= i < num_axes
         other_dim_tag = other.output.get_size_dim_tag(0)
-        other_dim_tag.set_tag_on_size_tensor(size_placeholder[i])
+        other_dim_tag.set_tag_on_size_tensor(size_placeholder[i], batch=self.output.batch)
     self.output.size_placeholder = size_placeholder
 
   def get_dep_layers(self):
@@ -3344,7 +3346,7 @@ class RepeatLayer(_ConcatInputLayer):
     output_axis = self.output.get_axis_from_description(axis)
     tag = self.output.dim_tags[output_axis]
     if tag.dimension is None:  # dynamic? dyn sizes needed?
-      tag.set_tag_on_size_tensor(target_seq_len)
+      tag.set_tag_on_size_tensor(target_seq_len, batch=self.output.batch)
 
   def get_dep_layers(self):
     """
@@ -3919,7 +3921,7 @@ class ConvLayer(_ConcatInputLayer):
       if not DimensionTag.get_tag_from_size_tensor(size):
         tag = DimensionTag(
           description="spatial:%i:%s" % (i, self.get_absolute_name()),
-          kind=DimensionTag.Types.Spatial)
+          kind=DimensionTag.Types.Spatial, batch=self.output.batch)
         tag.set_tag_on_size_tensor(size)
       self.output.size_placeholder[i] = size
 
@@ -4135,7 +4137,7 @@ class PoolLayer(_ConcatInputLayer):
       if DimensionTag.get_tag_from_size_tensor(size) is None:
         tag = DimensionTag(
           description="spatial:%i:%s" % (i, self.get_absolute_name()),
-          kind=DimensionTag.Types.Spatial)
+          kind=DimensionTag.Types.Spatial, batch=self.output.batch)
         tag.set_tag_on_size_tensor(size)
       self.output.size_placeholder[i] = size
 
@@ -4367,7 +4369,7 @@ class TransposedConvLayer(_ConcatInputLayer):
           if r:
             assert isinstance(r, int)
             size = tf_util.simplify_add(size, -r * 2)
-        output_tag.set_tag_on_size_tensor(size)
+        output_tag.set_tag_on_size_tensor(size, batch=self.output.batch)
 
   @staticmethod
   def deconv_output_length(input_length,
@@ -5096,12 +5098,12 @@ class PrefixInTimeLayer(_ConcatInputLayer):
       new_seq_len = size_base.output.get_sequence_lengths()
     else:
       new_seq_len = seq_len + repeat
-    self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] = new_seq_len
     if not DimensionTag.get_tag_from_size_tensor(new_seq_len):
       tag = DimensionTag(
         description="time-with-prefix:%s" % self.get_absolute_name(),
-        kind=DimensionTag.Types.Spatial)
+        kind=DimensionTag.Types.Spatial, batch=self.output.batch)
       tag.set_tag_on_size_tensor(new_seq_len)
+    self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] = new_seq_len
     max_repeat = repeat if isinstance(repeat, int) else tf.maximum(tf.reduce_max(repeat), 0)
     shape = [((self.output.batch_shape[i] or tf.shape(self.output.placeholder)[i])
               if (i != self.output.time_dim_axis)
@@ -5203,7 +5205,7 @@ class PostfixInTimeLayer(_ConcatInputLayer):
     new_seq_len = seq_len + repeat
     tag = DimensionTag(
       description="time-with-postfix:%s" % self.get_absolute_name(),
-      kind=DimensionTag.Types.Spatial)
+      kind=DimensionTag.Types.Spatial, batch=self.output.batch)
     tag.set_tag_on_size_tensor(new_seq_len)
     self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] = new_seq_len
 
@@ -5669,7 +5671,7 @@ class ResizeLayer(_ConcatInputLayer):
       size = self.output.size_placeholder[axis - 1] * factor
       tag = DimensionTag(
         description="resize:%s" % self.get_absolute_name(),
-        kind=DimensionTag.Types.Spatial)
+        kind=DimensionTag.Types.Spatial, batch=self.output.batch)
       tag.set_tag_on_size_tensor(size)
       self.output.size_placeholder[axis - 1] = size
 
@@ -5726,7 +5728,7 @@ class ResizeLayer(_ConcatInputLayer):
         size = tf.reduce_sum(tf.cast(tf.logical_and(mask, orig_mask), tf.int32), axis=1)
         tag = DimensionTag(
           description="resize:fill_dropout:%s" % self.get_absolute_name(),
-          kind=DimensionTag.Types.Spatial)
+          kind=DimensionTag.Types.Spatial, batch=self.output.batch)
         tag.set_tag_on_size_tensor(size)
         self.output.size_placeholder[axis - 1] = size
     if axis != 1:
@@ -6348,7 +6350,7 @@ class CondLayer(LayerBase):
       old_size = self.output.size_placeholder[i]
       old_tag = DimensionTag.get_tag_from_size_tensor(old_size)
       assert old_tag
-      old_tag.set_tag_on_size_tensor(size)
+      old_tag.set_tag_on_size_tensor(size, batch=self.output.batch)
       self.output.size_placeholder[i] = size
 
   def _cond_layer_return(self, layer):

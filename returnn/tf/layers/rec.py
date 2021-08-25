@@ -1956,7 +1956,7 @@ class _SubnetworkRecCell(object):
           fixed_seq_len = check_input_dim(
             fixed_seq_len, axis=0, dim=batch_dim * (input_beam.beam_size if input_beam else 1))
           if time_dim_tag:
-            time_dim_tag.set_tag_on_size_tensor(fixed_seq_len)
+            time_dim_tag.set_tag_on_size_tensor(fixed_seq_len, batch=output_template.output.batch)
         max_seq_len = tf.reduce_max(fixed_seq_len, name="max_seq_len")
         have_known_seq_len = True
       else:
@@ -2496,11 +2496,11 @@ class _SubnetworkRecCell(object):
           from returnn.tf.util.basic import tile_transposed
           seq_len = tile_transposed(seq_len, axis=0, multiples=output_beam.beam_size)  # (batch * beam,)
           seq_len._RETURNN_dyn_size_beam = rec_layer.output.beam
-          time_dim_tag.set_tag_on_size_tensor(seq_len)
+          time_dim_tag.set_tag_on_size_tensor(seq_len, batch=rec_layer.output.batch)
       else:
         _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
         seq_len._RETURNN_dyn_size_beam = rec_layer.output.beam
-        time_dim_tag.set_tag_on_size_tensor(seq_len)
+        time_dim_tag.set_tag_on_size_tensor(seq_len, batch=rec_layer.output.batch)
         max_seq_len = tf.reduce_max(seq_len, name="dyn_max_seq_len")
       self.get_final_rec_vars = lambda layer_name_: self.get_layer_rec_var_from_loop_vars(
         loop_vars=final_net_vars, layer_name=layer_name_, final_frame=True, seq_len=seq_len)
@@ -2601,7 +2601,7 @@ class _SubnetworkRecCell(object):
     if existing_time_dim_tag:
       self.time_dim_tag.declare_same_as(existing_time_dim_tag)
     else:
-      self.time_dim_tag.set_tag_on_size_tensor(rec_layer.output.size_placeholder[0])
+      self.time_dim_tag.set_tag_on_size_tensor(rec_layer.output.size_placeholder[0], batch=rec_layer.output.batch)
 
     for key in (
           self.net.used_data_keys |
@@ -3203,10 +3203,11 @@ class _SubnetworkRecCell(object):
           output.beam = search_choices.get_beam_info()
         else:
           output.beam = None
-        if output.beam:
-          resolved_seq_len._RETURNN_dyn_size_beam = output.beam
+        if output.batch:
+          output.batch = output.batch.copy_set_beam(output.beam)
+        resolved_seq_len._RETURNN_dyn_size_beam = output.beam
         if time_dim_tag:
-          time_dim_tag.set_tag_on_size_tensor(resolved_seq_len)
+          time_dim_tag.set_tag_on_size_tensor(resolved_seq_len, batch=output.batch)
         max_len = tf.reduce_max(resolved_seq_len)
         # We should have accumulated it.
         output.placeholder = tensor_array_stack(acc_ta, stop=max_len)  # e.g. (time,batch,dim)
@@ -3220,7 +3221,7 @@ class _SubnetworkRecCell(object):
                 seq_len, axis=0, multiples=output.beam.beam_size // self.parent_rec_layer.output.beam.beam_size)
               size._RETURNN_dyn_size_beam = output.beam
               if time_dim_tag:
-                time_dim_tag.set_tag_on_size_tensor(size)
+                time_dim_tag.set_tag_on_size_tensor(size, batch=output.batch)
               output.size_placeholder[0] = size
         if inner_layer.output.size_placeholder:
           for i, size in inner_layer.output.size_placeholder.items():
@@ -3235,7 +3236,7 @@ class _SubnetworkRecCell(object):
                   multiples=tf.shape(output.size_placeholder[0])[0] // tf.shape(size)[0])
                 size._RETURNN_dyn_size_beam = output.beam
                 if tag:
-                  tag.set_tag_on_size_tensor(size)
+                  tag.set_tag_on_size_tensor(size, batch=output.batch)
               output.size_placeholder[i + 1] = size
         assert isinstance(self.output_layers_net, TFNetwork)
         layer_ = self.output_layers_net.add_layer(
@@ -5222,7 +5223,7 @@ class DecideLayer(BaseChoiceLayer):
       size = tf.reshape(size, [batch_dim, beam_size])  # (batch, beam)
       size = tf.gather_nd(size, indices=beam_idxs_ext)  # (batch,)
       if tag:
-        tag.set_tag_on_size_tensor(size)
+        tag.set_tag_on_size_tensor(size, batch=output.batch)
       output.size_placeholder[i] = size
     final_search_choices = SearchChoices(owner=owner, is_decided=True, beam_size=1)
     if owner:
