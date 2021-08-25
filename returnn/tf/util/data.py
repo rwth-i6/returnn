@@ -2100,11 +2100,9 @@ class Data(object):
       kwargs.pop("dim", None)
     other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
     for axis_name, axis in other_special_axes.items():
-      assert axis_name in kwargs
       if axis == exclude_axis:
-        del kwargs[axis_name]
-      else:
-        kwargs[axis_name] = axis if (axis < exclude_axis) else (axis - 1)
+        continue
+      kwargs[axis_name] = axis if (axis < exclude_axis) else (axis - 1)
     new_dim_tags = list(self.dim_tags)
     del new_dim_tags[exclude_axis]
     kwargs["dim_tags"] = new_dim_tags
