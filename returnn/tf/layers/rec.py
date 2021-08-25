@@ -376,10 +376,11 @@ class RecLayer(_ConcatInputLayer):
       d["max_seq_len"] = eval(d["max_seq_len"], {"max_len_from": max_len_from, "tf": tf})
 
   @classmethod
-  def get_out_data_from_opts(cls, network, unit, sources=(), initial_state=None, **kwargs):
+  def get_out_data_from_opts(cls, network, unit, _time_dim_tag=None, sources=(), initial_state=None, **kwargs):
     """
     :param returnn.tf.network.TFNetwork network:
     :param str|dict[str] unit:
+    :param DimensionTag|None _time_dim_tag:
     :param list[LayerBase] sources:
     :param str|LayerBase|list[str|LayerBase] initial_state:
     :rtype: Data
@@ -410,6 +411,8 @@ class RecLayer(_ConcatInputLayer):
       out = sub_out
       deps += subnet.get_parent_deps()
     assert out
+    if out.have_time_axis() and _time_dim_tag:
+      out = out.copy_template_replace_dim_tag(axis=out.time_dim_axis, new_dim_tag=_time_dim_tag)
     cls._post_init_output(output=out, sources=sources, network=network, **kwargs)
     for dep in deps:
       if dep:
@@ -1953,7 +1956,7 @@ class _SubnetworkRecCell(object):
           fixed_seq_len = check_input_dim(
             fixed_seq_len, axis=0, dim=batch_dim * (input_beam.beam_size if input_beam else 1))
           if time_dim_tag:
-            time_dim_tag.set_tag_on_size_tensor(fixed_seq_len)
+            time_dim_tag.set_tag_on_size_tensor(fixed_seq_len, batch=output_template.output.batch)
         max_seq_len = tf.reduce_max(fixed_seq_len, name="max_seq_len")
         have_known_seq_len = True
       else:
@@ -2493,11 +2496,11 @@ class _SubnetworkRecCell(object):
           from returnn.tf.util.basic import tile_transposed
           seq_len = tile_transposed(seq_len, axis=0, multiples=output_beam.beam_size)  # (batch * beam,)
           seq_len._RETURNN_dyn_size_beam = rec_layer.output.beam
-          time_dim_tag.set_tag_on_size_tensor(seq_len)
+          time_dim_tag.set_tag_on_size_tensor(seq_len, batch=rec_layer.output.batch)
       else:
         _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
         seq_len._RETURNN_dyn_size_beam = rec_layer.output.beam
-        time_dim_tag.set_tag_on_size_tensor(seq_len)
+        time_dim_tag.set_tag_on_size_tensor(seq_len, batch=rec_layer.output.batch)
         max_seq_len = tf.reduce_max(seq_len, name="dyn_max_seq_len")
       self.get_final_rec_vars = lambda layer_name_: self.get_layer_rec_var_from_loop_vars(
         loop_vars=final_net_vars, layer_name=layer_name_, final_frame=True, seq_len=seq_len)
@@ -2598,7 +2601,7 @@ class _SubnetworkRecCell(object):
     if existing_time_dim_tag:
       self.time_dim_tag.declare_same_as(existing_time_dim_tag)
     else:
-      self.time_dim_tag.set_tag_on_size_tensor(rec_layer.output.size_placeholder[0])
+      self.time_dim_tag.set_tag_on_size_tensor(rec_layer.output.size_placeholder[0], batch=rec_layer.output.batch)
 
     for key in (
           self.net.used_data_keys |
@@ -3200,8 +3203,11 @@ class _SubnetworkRecCell(object):
           output.beam = search_choices.get_beam_info()
         else:
           output.beam = None
-        if output.beam:
-          resolved_seq_len._RETURNN_dyn_size_beam = output.beam
+        if output.batch:
+          output.batch = output.batch.copy_set_beam(output.beam)
+        resolved_seq_len._RETURNN_dyn_size_beam = output.beam
+        if time_dim_tag:
+          time_dim_tag.set_tag_on_size_tensor(resolved_seq_len, batch=output.batch)
         max_len = tf.reduce_max(resolved_seq_len)
         # We should have accumulated it.
         output.placeholder = tensor_array_stack(acc_ta, stop=max_len)  # e.g. (time,batch,dim)
@@ -3214,9 +3220,9 @@ class _SubnetworkRecCell(object):
               size = tile_transposed(
                 seq_len, axis=0, multiples=output.beam.beam_size // self.parent_rec_layer.output.beam.beam_size)
               size._RETURNN_dyn_size_beam = output.beam
+              if time_dim_tag:
+                time_dim_tag.set_tag_on_size_tensor(size, batch=output.batch)
               output.size_placeholder[0] = size
-        if time_dim_tag:
-          time_dim_tag.set_tag_on_size_tensor(output.size_placeholder[0])
         if inner_layer.output.size_placeholder:
           for i, size in inner_layer.output.size_placeholder.items():
             tag = DimensionTag.get_tag_from_size_tensor(size)
@@ -3229,6 +3235,8 @@ class _SubnetworkRecCell(object):
                   size, axis=0,
                   multiples=tf.shape(output.size_placeholder[0])[0] // tf.shape(size)[0])
                 size._RETURNN_dyn_size_beam = output.beam
+                if tag:
+                  tag.set_tag_on_size_tensor(size, batch=output.batch)
               output.size_placeholder[i + 1] = size
         assert isinstance(self.output_layers_net, TFNetwork)
         layer_ = self.output_layers_net.add_layer(
@@ -5215,7 +5223,7 @@ class DecideLayer(BaseChoiceLayer):
       size = tf.reshape(size, [batch_dim, beam_size])  # (batch, beam)
       size = tf.gather_nd(size, indices=beam_idxs_ext)  # (batch,)
       if tag:
-        tag.set_tag_on_size_tensor(size)
+        tag.set_tag_on_size_tensor(size, batch=output.batch)
       output.size_placeholder[i] = size
     final_search_choices = SearchChoices(owner=owner, is_decided=True, beam_size=1)
     if owner:
@@ -6152,19 +6160,25 @@ class SelfAttentionLayer(_ConcatInputLayer):
     assert sources
     import numpy
     out = sources[0].output.copy_as_batch_major().copy(name="%s_output" % name)
-    if out.sparse:
-      out.dtype = "float32"
-      out.sparse = False
-      out.shape = out.shape + (out.dim,)
-    out.dim = n_out
-    if len(out.shape) >= 2:
-      if all(out.shape[:-1]):
-        out.shape = (numpy.prod(out.shape[:-1]), n_out)
+    batch_dim_tag = out.dim_tags[out.batch_dim_axis]
+    feat_tag = DimensionTag(kind=DimensionTag.Types.Feature, description="%s_self_att_feat" % name, dimension=n_out)
+    if len(out.shape_dense) >= 2:
+      if all(out.shape_dense[:-1]):
+        time_dim = numpy.prod(out.shape[:-1])
       else:
-        out.shape = (None, n_out)
+        time_dim = None
+      time_tag = DimensionTag(
+        kind=DimensionTag.Types.Spatial, description="%s_self_att_time" % name, dimension=time_dim)
+      dim_tags = (batch_dim_tag, time_tag, feat_tag)
     else:
-      out.shape = (n_out,)
-    return out
+      dim_tags = (batch_dim_tag, feat_tag)
+    data_opts = out.get_kwargs(include_special_axes=False)
+    data_opts["dim_tags"] = dim_tags
+    data_opts["dtype"] = "float32"
+    data_opts.pop("sparse", None)
+    data_opts.pop("vocab", None)
+    data_opts.pop("dim", None)
+    return Data(**data_opts)
 
   # noinspection PyMethodOverriding
   @classmethod
@@ -6501,6 +6515,7 @@ class KenLmStateLayer(_ConcatInputLayer):
     :param bool dense_output:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     data = get_concat_sources_data_template(sources)
     dtype = tf.as_dtype(data.dtype)
     assert isinstance(dtype, tf.DType)
@@ -6511,10 +6526,10 @@ class KenLmStateLayer(_ConcatInputLayer):
     if dense_output:
       from returnn.datasets.generating import Vocabulary
       vocab = Vocabulary(vocab_file=vocab_file, unknown_label=vocab_unknown_label)
-      data.dim = vocab.num_labels
-      data.shape = data.shape + (vocab.num_labels,)
-    else:
-      data.dim = None
+      tag = DimensionTag(
+        kind=DimensionTag.Types.Feature, description="%s_ken_lm_vocab" % name,
+        dimension=vocab.num_labels)
+      data = data.copy_add_dim_by_tag(tag, axis=-1, unbroadcast=True)
     return data
 
   @classmethod
@@ -6850,8 +6865,11 @@ class MaskedComputationLayer(LayerBase):
         idxs = tf.cumsum(tf.cast(mask_t, tf.int32), axis=0)  # [T,B] -> idx in T' + 1
         if masked_from:
           new_size = masked_from.output.get_sequence_lengths()
+          new_dim_tag = masked_from.output.get_time_dim_tag()
         else:
           new_size = idxs[-1]  # [B]
+          new_dim_tag = self.output.get_time_dim_tag()
+          new_dim_tag.dyn_size = new_size
         new_time = tf.reduce_max(new_size)  # T'
         idxs = where_bc(mask_t, idxs - 1, new_time)
 
@@ -6872,8 +6890,7 @@ class MaskedComputationLayer(LayerBase):
         tmp_shape = get_shape(source_data.placeholder)
         tmp_shape[0] = new_time + 1  # one more for the padded data
         res = tf.scatter_nd(nd_indices(idxs, batch_axis=1), source_data.placeholder, shape=tmp_shape)
-        res_data = source_data.copy_template()
-        res_data.size_placeholder[0] = new_size
+        res_data = source_data.copy_template().copy_template_replace_dim_tag(axis=0, new_dim_tag=new_dim_tag)
         res_data.placeholder = res[:new_time]
         res_data.beam = SearchBeam.get_combined_beam(res_data.beam, mask.output.beam)
         layer_desc = dict(base_layer=source, network=source.network, name=source.name, output=res_data)
@@ -6929,6 +6946,7 @@ class MaskedComputationLayer(LayerBase):
     self.sub_layer = layer_class(**layer_desc)
     assert isinstance(self.sub_layer, LayerBase)
     self.sub_layer.post_init(layer_desc)
+    self.sub_layer.output.sanity_check()
     self.output = self.sub_layer.output.copy(name="%s_output" % self.name)
     self.rec_vars_outputs = self.sub_layer.rec_vars_outputs.copy()
     self.params = self.sub_layer.params
@@ -7049,8 +7067,10 @@ class MaskedComputationLayer(LayerBase):
       assert isinstance(source, LayerBase) or not source
       if not network.is_inside_rec_layer() and source:
         source_data = source.output.copy_template().copy_as_time_major()
-        # Create own dummy time, to make sure we have some own custom.
-        source_data.size_placeholder[0] = tf_compat.v1.placeholder(tf.int32, shape=[None], name="dummy_time")
+        # Create own time dim tag, to make sure we have some own custom.
+        source_data = source_data.copy_template_replace_dim_tag(
+          axis=0,
+          new_dim_tag=DimensionTag(kind=DimensionTag.Types.Spatial, description="%s:masked:time" % name))
         source = WrappedInternalLayer(
           base_layer=source, network=source.network, name=source.name,
           output=source_data)
@@ -7073,11 +7093,11 @@ class MaskedComputationLayer(LayerBase):
           _parent_layer_cache[sub_layer_name] = layer
       if not network.is_inside_rec_layer():
         # noinspection PyShadowingNames
-        source_data = layer.output.copy_template().copy_as_time_major()
-        source_data.size_placeholder[0] = source.output.get_sequence_lengths()
+        source_data_ = layer.output.copy_template().copy_as_time_major()
+        source_data_ = source_data_.copy_template_replace_dim_tag(axis=0, new_dim_tag=source.output.get_time_dim_tag())
         layer = WrappedInternalLayer(
           base_layer=layer, network=layer.network, name=layer.name,
-          output=source_data)
+          output=source_data_)
       return layer
 
     extra_net = network.make_extra_net(
@@ -7105,6 +7125,8 @@ class MaskedComputationLayer(LayerBase):
     """
     layer_class, layer_desc = kwargs["_layer_class"], kwargs["_layer_desc"]
     output = layer_class.get_out_data_from_opts(**layer_desc)
+    assert isinstance(output, Data)
+    output.sanity_check()
     if network.is_inside_rec_layer():
       output = output.copy_as_batch_major()
     return output
@@ -8456,15 +8478,18 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
     :rtype: Data
     """
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
-    data = data.copy_template().copy_as_batch_major().copy_template_excluding_axis(0)  # without batch dim
-    data.feature_dim_axis = NotSpecified
-    data.dim = n_out
+    # The result will be without batch dim.
+    feature_dim_tag = DimensionTag(
+      kind=DimensionTag.Types.Feature, description="%s_rel_pos_enc_feat" % name, dimension=n_out)
     if data.have_time_axis():
-      data.time_dim_axis = 0
-      data.shape = (None, None, n_out)
-      if data.size_placeholder:
-        data.size_placeholder[1] = data.size_placeholder[0]
+      time_dim_tag = data.get_time_dim_tag()
+      # TODO using same dim tag twice will not be supported at some future point...
+      data = data.copy_template_new_dim_tags((time_dim_tag, time_dim_tag, feature_dim_tag))
     else:
       # length will be ``network.get_rec_step_index() + 1``.
-      data.shape = (1, None, n_out)
+      dummy_dim_tag = DimensionTag(
+        kind=DimensionTag.Types.Spatial, description="%s_rel_pos_enc_dummy" % name, dimension=1)
+      time_dim_tag = DimensionTag(
+        kind=DimensionTag.Types.Spatial, description="%s_rel_pos_enc_time" % name, dimension=None)
+      data = data.copy_template_new_dim_tags((dummy_dim_tag, time_dim_tag, feature_dim_tag))
     return data

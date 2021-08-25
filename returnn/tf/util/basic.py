@@ -4471,9 +4471,13 @@ def new_seq_len(func, key, dim_tag_desc, **kwargs):
   from .data import DimensionTag
 
   def _get_main_seq_len():
+    """
+    :return: seq len tensor where some dim tag is set
+    :rtype: tf.Tensor
+    """
     for _, v in sorted(kwargs.items()):
       tag = DimensionTag.get_tag_from_size_tensor(v)
-      if tag and tag.dyn_size is not None:
+      if tag and (tag.dyn_size is not None or tag.get_same_base().dyn_size is not None):
         return v
     raise Exception("Not expected to not get any seq len. %s, %s, %s" % (func, key, kwargs))
 
@@ -4481,12 +4485,20 @@ def new_seq_len(func, key, dim_tag_desc, **kwargs):
     if not isinstance(v, tf.Tensor):
       return v
     tag = DimensionTag.get_tag_from_size_tensor(v)
-    if tag and tag.dyn_size is not None:
+    if not tag:
+      return v
+    if tag.get_same_base().dyn_size is not None:
+      return tag.get_same_base().dyn_size
+    if tag.dyn_size is not None:
       return tag.dyn_size
     return v
 
   in_seq_len = _get_main_seq_len()
+  in_tag = DimensionTag.get_tag_from_size_tensor(in_seq_len)
+  assert in_tag
   base_in_seq_len = _maybe_to_base_seq_len(in_seq_len)
+  base_in_tag = DimensionTag.get_tag_from_size_tensor(base_in_seq_len)
+  assert base_in_tag
   base_kwargs = {k: _maybe_to_base_seq_len(v) for (k, v) in kwargs.items()}
   base_cache_key = (key, tuple(sorted(base_kwargs.items())))
   cache_key = (key, tuple(sorted(kwargs.items())))
@@ -4502,19 +4514,19 @@ def new_seq_len(func, key, dim_tag_desc, **kwargs):
     with same_control_flow_ctx(base_kwargs_tensors):
       base_out_seq_len = func(**base_kwargs)
     cache.set_cache(base_out_seq_len)
-    base_tag = DimensionTag(description=dim_tag_desc, kind=DimensionTag.Types.Spatial)
+    base_tag = DimensionTag(description=dim_tag_desc, kind=DimensionTag.Types.Spatial, batch=base_in_tag.batch)
     base_tag.set_tag_on_size_tensor(base_out_seq_len)
 
   cache = TensorCachedComputation(in_seq_len, key=cache_key)
   if cache.has_cache():
     out_seq_len = cache.get_cache()
-    base_tag_ = DimensionTag.get_tag_from_size_tensor(out_seq_len)
-    assert base_tag_ is base_tag
+    tag_ = DimensionTag.get_tag_from_size_tensor(out_seq_len)
+    assert tag_ == base_tag
   else:
     with same_control_flow_ctx(kwargs_tensors):
       out_seq_len = func(**kwargs)
     cache.set_cache(out_seq_len)
-    base_tag.set_tag_on_size_tensor(out_seq_len)
+    base_tag.set_tag_on_size_tensor(out_seq_len, batch=in_tag.batch)
   return out_seq_len
 
 

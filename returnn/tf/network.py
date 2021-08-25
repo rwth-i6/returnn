@@ -148,6 +148,14 @@ class ExternData(object):
     for data in self.data.values():
       if not data.batch:
         data.batch = batch_info
+      for tag in data.dim_tags:
+        if tag.is_batch_dim() and not tag.batch:
+          tag.batch = batch_info
+        if tag.dyn_size_ext and tag.dyn_size_ext.have_batch_axis():
+          if not tag.dyn_size_ext.batch:
+            tag.dyn_size_ext.batch = batch_info
+          if not tag.batch:
+            tag.batch = batch_info
 
   def check_matched_dataset(self, dataset, used_data_keys=None):
     """

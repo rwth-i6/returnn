@@ -97,7 +97,7 @@ def concat_sources(src_layers):
     return network.concat_sources_dropout_cache[cache_key].copy()
   data = get_concat_sources_data_template(src_layers)
   # Currently we assume that get_concat_sources_data_template will match Data.get_common_data (besides the dim).
-  common_source = Data.get_common_data([s.output for s in src_layers], warnings_out=log.v4)
+  common_source = Data.get_common_data([s.output for s in src_layers], ignore_feature_dim=True, warnings_out=log.v4)
   data.size_placeholder = common_source.size_placeholder.copy()  # to get right dimension tags
   layers_data = []
   with _name_scope_for_concat_src_layers(src_layers, "concat_sources"):
@@ -131,12 +131,14 @@ def get_concat_sources_data_template(src_layers, name=None):
   :return: data with no placeholders set. it is always a copy or new instance, so safe to manipulate
   :rtype: Data
   """
+  from ..util.data import DimensionTag
   assert src_layers, "need source layers"
   if len(src_layers) == 1:
     return src_layers[0].output.copy_template(name=name)
+  if not name:
+    name = "concat_" + "_".join([layer.name for layer in src_layers])
   dim = 0
-  beam = None
-  common_source = Data.get_common_data([s.output for s in src_layers])
+  common_source = Data.get_common_data([s.output for s in src_layers], ignore_feature_dim=True)
   for layer in src_layers:
     # Note: We do not perform much compatibility checks at this point,
     # as this is for a template only anyway.
@@ -144,18 +146,11 @@ def get_concat_sources_data_template(src_layers, name=None):
     assert not layer.output.sparse
     if layer.output.dim is not None:  # just ignore at this point if None (e.g. during template construction)
       dim += layer.output.dim
-    beam = SearchBeam.get_combined_beam(beam, layer.output.beam)
-  shape = list(common_source.shape)
-  shape[common_source.get_batch_axis_excluding_batch(common_source.feature_dim_axis)] = dim
-  kwargs = common_source.get_kwargs(with_size_placeholder=True)
-  kwargs.update(dict(
-    name=name or ("concat_" + "_".join([layer.name for layer in src_layers])),
-    shape=shape,
-    dim=dim,
-    sparse=False,
-    beam=beam))
-  data = Data(**kwargs)
-  return data
+  return common_source.copy_template_replace_dim_tag(
+    name=name,
+    axis=common_source.feature_dim_axis,
+    new_dim_tag=DimensionTag(
+      kind=DimensionTag.Types.Feature, description=name + "_feature", dimension=dim))
 
 
 def concat_sources_with_opt_dropout(src_layers, dropout=0, dropout_noise_shape=None, dropout_on_forward=False):
@@ -426,6 +421,9 @@ class SelectSearchSourcesLayer(InternalLayer):
       search_choices_seq = search_choices_seq[:search_choices_seq.index(src_search_choices)]
       assert src_search_choices not in search_choices_seq
       assert search_choices_seq
+      self.output.beam = search_choices.get_beam_info()
+      if self.output.batch:
+        self.output.batch = self.output.batch.copy_set_beam(self.output.beam)
 
       def transform(v):
         """
@@ -454,7 +452,7 @@ class SelectSearchSourcesLayer(InternalLayer):
               i, get_valid_scope_name_from_str(base_src_choices.owner.name),
               len(search_choices_seq), get_valid_scope_name_from_str(search_choices.owner.name)))
           if tag:
-            tag.set_tag_on_size_tensor(v)
+            tag.set_tag_on_size_tensor(v, batch=self.output.batch)
           self.used_search_choices_beams = True
         return v
 
@@ -463,7 +461,6 @@ class SelectSearchSourcesLayer(InternalLayer):
       # It's possible that src.output.placeholder is not set, e.g. in a prev-layer where the
       # prev output is not needed, only the prev state. See _TemplateLayer.copy_as_prev_time_frame.
       src_output = src.output.copy_as_batch_major()
-      self.output.beam = search_choices.get_beam_info()
       if src_output.placeholder is not None:
         self.output.placeholder = transform(src_output.placeholder)
       if src_output.size_placeholder:
@@ -792,28 +789,29 @@ class SliceLayer(_ConcatInputLayer):
     dim_slice = slice(slice_start, slice_end, slice_step)
     slices = [slice(None, None)] * axis + [dim_slice]
     axis_wo_batch = self.input_data.get_batch_axis_excluding_batch(axis)
-    self.output.size_placeholder = self.input_data.size_placeholder.copy()
-    if axis_wo_batch in self.output.size_placeholder:
+    size_placeholder = self.input_data.size_placeholder.copy()
+    if axis_wo_batch in size_placeholder:
       if slice_start:
         assert slice_start > 0
-        self.output.size_placeholder[axis_wo_batch] = (
-          tf.maximum(0, self.output.size_placeholder[axis_wo_batch] - slice_start))
+        size_placeholder[axis_wo_batch] = (
+          tf.maximum(0, size_placeholder[axis_wo_batch] - slice_start))
       if slice_end is not None:
         if slice_end >= 0:
-          self.output.size_placeholder[axis_wo_batch] = (
-            tf.minimum(slice_end, self.output.size_placeholder[axis_wo_batch]))
+          size_placeholder[axis_wo_batch] = (
+            tf.minimum(slice_end, size_placeholder[axis_wo_batch]))
         else:  # slice_end < 0
-          self.output.size_placeholder[axis_wo_batch] = (
-            tf.maximum(0, self.output.size_placeholder[axis_wo_batch] + slice_end))
+          size_placeholder[axis_wo_batch] = (
+            tf.maximum(0, size_placeholder[axis_wo_batch] + slice_end))
       if slice_step:
-        self.output.size_placeholder[axis_wo_batch] = (
-          tf.cast(tf_compat.v1.ceil(tf.divide(self.output.size_placeholder[axis_wo_batch], slice_step)), tf.int32))
+        size_placeholder[axis_wo_batch] = (
+          tf.cast(tf_compat.v1.ceil(tf.divide(size_placeholder[axis_wo_batch], slice_step)), tf.int32))
       from returnn.tf.util.basic import DimensionTag
-      if not DimensionTag.get_tag_from_size_tensor(self.output.size_placeholder[axis_wo_batch]):
+      if not DimensionTag.get_tag_from_size_tensor(size_placeholder[axis_wo_batch]):
         tag = DimensionTag(
           description="slice%i:%s" % (axis_wo_batch, self.get_absolute_name()),
-          kind=DimensionTag.Types.Spatial)
-        tag.set_tag_on_size_tensor(self.output.size_placeholder[axis_wo_batch])
+          kind=DimensionTag.Types.Spatial, batch=self.output.batch)
+        tag.set_tag_on_size_tensor(size_placeholder[axis_wo_batch])
+    self.output.size_placeholder = size_placeholder
     self.output.placeholder = self.input_data.placeholder[slices]
 
   @classmethod
@@ -829,20 +827,14 @@ class SliceLayer(_ConcatInputLayer):
     :param int|None slice_step:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     input_data = get_concat_sources_data_template(sources)
     axis = input_data.get_axis_from_description(axis)
-    out_type = input_data.get_kwargs()
-    out_type["name"] = "%s_output" % name
-    axis_wo_batch = input_data.get_batch_axis_excluding_batch(axis)
+    dim_tag = input_data.dim_tags[axis]
     dim_slice = slice(slice_start, slice_end, slice_step)
-    if axis_wo_batch is not None:
-      out_type["shape"] = list(out_type["shape"])
-      if out_type["shape"][axis_wo_batch] is not None:
-        out_type["shape"][axis_wo_batch] = len(range(out_type["shape"][axis_wo_batch])[dim_slice])
-    if not out_type["sparse"]:
-      # Let Data() automatically infer "dim".
-      out_type["dim"] = NotSpecified
-    return Data(**out_type)
+    new_dim = len(range(dim_tag.dimension)[dim_slice]) if dim_tag.dimension is not None else None
+    new_dim_tag = DimensionTag(kind=dim_tag.kind, description="%s:slice" % name, dimension=new_dim)
+    return input_data.copy_template_replace_dim_tag(axis=axis, new_dim_tag=new_dim_tag, name="%s_output" % name)
 
 
 class SliceNdLayer(_ConcatInputLayer):
@@ -885,16 +877,17 @@ class SliceNdLayer(_ConcatInputLayer):
       mask = tf.greater_equal(tf.range(size)[None, :] + start, seq_lens[:, None])  # (B,T)
       mask = expand_multiple_dims(mask, list(range(2, x.batch_ndim)))
       slices = where_bc(mask, tf.zeros_like(slices), slices)
-    self.output.size_placeholder = x.size_placeholder.copy()
+    size_placeholder = x.size_placeholder.copy()
     if isinstance(size, tf.Tensor):
-      self.output.size_placeholder[0] = tf.maximum(seq_lens - tf.reshape(start, tf.shape(seq_lens)), 0)
+      size_placeholder[0] = tf.maximum(seq_lens - tf.reshape(start, tf.shape(seq_lens)), 0)
       tag = DimensionTag(
         description="sliced-time:%s" % self.get_absolute_name(),
-        kind=DimensionTag.Types.Spatial)
-      tag.set_tag_on_size_tensor(self.output.size_placeholder[0])
+        kind=DimensionTag.Types.Spatial, batch=self.output.batch)
+      tag.set_tag_on_size_tensor(size_placeholder[0])
     else:
       assert isinstance(size, int)
-      self.output.size_placeholder.pop(0, None)  # static time axis
+      size_placeholder.pop(0, None)  # static time axis
+    self.output.size_placeholder = size_placeholder
     self.output.placeholder = slices
 
   def get_dep_layers(self):
@@ -912,16 +905,12 @@ class SliceNdLayer(_ConcatInputLayer):
     :param int|None size:
     :rtype: Data
     """
-    input_data = get_concat_sources_data_template(sources).copy_as_batch_major()
+    from ..util.data import DimensionTag
+    input_data = get_concat_sources_data_template(sources).copy_as_batch_spatial_major()
     if start:
       input_data.beam = SearchBeam.get_combined_beam(input_data.beam, start.output.beam)
-    in_shape = list(input_data.shape)
-    shape = [size] + in_shape[1:]  # (B, size, ...) (w/o batch)
-    out_type = input_data.get_kwargs()
-    out_type["name"] = "%s_output" % name
-    out_type["shape"] = shape
-    out_type["batch_dim_axis"] = 0
-    return Data(**out_type)
+    new_dim_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="%s:slice_nd" % name, dimension=size)
+    return input_data.copy_template_replace_dim_tag(axis=1, new_dim_tag=new_dim_tag, name="%s_output" % name)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -1090,14 +1079,14 @@ class GatherLayer(_ConcatInputLayer):
     gather_axis = max(batch_dims, old_gather_axis)
 
     # (BatchAxes.., InputAxesBeforeGatherAxis, PositionAxes.., InputAxesAfterGatherAxis..)
-    shape = (
-      [input_data.batch_shape[ax] for ax in common_axes_input if ax != input_data.batch_dim_axis] +
-      [input_data.batch_shape[ax] for ax in input_axes[:gather_axis-batch_dims] if ax != input_data.batch_dim_axis] +
-      [position_data.batch_shape[ax] for ax in position_axes if ax != position_data.batch_dim_axis] +
-      [input_data.batch_shape[ax] for ax in input_axes[gather_axis-batch_dims:] if ax != input_data.batch_dim_axis])
-    out_type = input_data.get_kwargs()
+    dim_tags = (
+      [input_data.dim_tags[ax] for ax in common_axes_input] +
+      [input_data.dim_tags[ax] for ax in input_axes[:gather_axis-batch_dims]] +
+      [position_data.dim_tags[ax] for ax in position_axes] +
+      [input_data.dim_tags[ax] for ax in input_axes[gather_axis-batch_dims:]])
+    out_type = input_data.get_kwargs(include_special_axes=False)
     out_type["name"] = "%s_output" % name
-    out_type["shape"] = shape
+    out_type["dim_tags"] = dim_tags
     out_type["beam"] = SearchBeam.get_combined_beam(input_data.beam, position_data.beam)
     out_type["available_for_inference"] = input_data.available_for_inference and position_data.available_for_inference
 
@@ -1136,7 +1125,7 @@ class GatherLayer(_ConcatInputLayer):
       pass  # keep the logic as before
 
     # If not sparse, the feature dim axis could now originate from position, let Data figure this out
-    if not out_type["sparse"]:
+    if not out_type.get("sparse", False):
       out_type["dim"] = NotSpecified
 
     output_data = Data(**out_type)
@@ -1229,13 +1218,13 @@ class GatherNdLayer(_ConcatInputLayer):
       position_data = position_data.copy_as_batch_major()
     else:
       position_data = position_data.copy_add_batch_dim(batch_dim_axis=0, batch=input_data.batch)
-    shape = list(position_data.shape) + list(input_data.shape[1:])  # (B, ...) (w/o batch)
-    out_type = position_data.get_kwargs()
+    dim_tags = list(position_data.dim_tags) + list(input_data.dim_tags[2:])  # (B, ...) (w/o batch)
+    out_type = position_data.get_kwargs(include_special_axes=False)
     out_type["name"] = "%s_output" % name
-    out_type["shape"] = shape
+    out_type["dim_tags"] = dim_tags
     if position_data.time_dim_axis is None:
       if input_data.time_dim_axis is not None and input_data.time_dim_axis_excluding_batch >= 1:
-        out_type["time_dim_axis"] = len(shape) + input_data.time_dim_axis_excluding_batch - 1
+        out_type["time_dim_axis"] = len(dim_tags) + input_data.time_dim_axis_excluding_batch - 2
     out_type["dim"] = input_data.dim
     out_type["sparse"] = input_data.sparse
     out_type["dtype"] = input_data.dtype
@@ -1909,7 +1898,7 @@ class RandIntLayer(LayerBase):
       if isinstance(s, int):
         shape_parsed.append(s)
       elif isinstance(s, DimensionTag):
-        if s.kind == DimensionTag.Types.Batch:
+        if s.is_batch_dim():
           shape_parsed.append(self.get_batch_dim())
         elif isinstance(s.dimension, int):
           shape_parsed.append(s.dimension)
@@ -1954,7 +1943,7 @@ class RandIntLayer(LayerBase):
         shape_parsed.append(s)
       else:
         assert isinstance(s, DimensionTag)
-        if s.kind == DimensionTag.Types.Batch:
+        if s.is_batch_dim():
           assert batch_dim_axis is None, "Cannot have multiple batch axes"
           batch_dim_axis = ax
         elif isinstance(s.dimension, int):
@@ -2049,46 +2038,58 @@ class RangeInAxisLayer(LayerBase):
     axis_wo_b = source.get_batch_axis_excluding_batch(axis)
     from returnn.tf.util.basic import get_shape
     source_shape = get_shape(source.placeholder)
-    dim = source_shape[axis]
-    out = tf.range(0, dim, dtype=dtype)
+    out = tf.range(0, source_shape[axis], dtype=dtype)
+    if unbroadcast:
+      assert keepdims
     if keepdims:
-      out_shape = [dim if (i == axis) else 1 for i in range(self.output.batch_ndim)]
+      out_shape = [
+        source_shape[i]
+        if (i == axis or i == self.output.batch_dim_axis)
+        else 1
+        for i in range(self.output.batch_ndim)]
       out = tf.reshape(out, out_shape)  # add missing axes (keep_dims)
       if unbroadcast:
         out = out + tf.zeros(source_shape, dtype=out.dtype)
     self.output.placeholder = out
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, axis, dtype="int32", keepdims=True, sparse=False, **kwargs):
+  def get_out_data_from_opts(cls,
+                             name, sources, axis, dtype="int32", unbroadcast=False, keepdims=True, sparse=False,
+                             **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param str axis:
     :param str dtype:
+    :param bool unbroadcast:
     :param bool keepdims:
     :param bool sparse:
     """
+    from ..util.data import DimensionTag
     assert len(sources) == 1, "%s layer %r requires single source" % (cls, name)
     source = sources[0].output
     axis = source.get_axis_from_description(axis)
-    axis_wo_b = source.get_batch_axis_excluding_batch(axis)
     if keepdims:
-      out = source.copy_template(name="%s_output" % name)
-      out.shape = tuple([d if (i == axis_wo_b) else 1 for (i, d) in enumerate(out.shape)])
-      out.dtype = dtype
-      out.size_placeholder = {i: size for (i, size) in source.size_placeholder.items() if i == axis_wo_b}
+      data_opts = source.get_kwargs(include_special_axes=True)
+      dim_tags = [
+        tag if (i == axis or tag.is_batch_dim() or unbroadcast)
+        else DimensionTag(kind=tag.kind, description="%s_keep%i" % (name, i), dimension=1)
+        for i, tag in enumerate(source.dim_tags)]
     else:
-      dim = source.batch_shape[axis]
-      out = Data(name="%s_output" % name, shape=(dim,), dim=dim, dtype=dtype, batch_dim_axis=None)
-      if axis == source.time_dim_axis:
-        out.time_dim_axis = 0
-      if axis != source.feature_dim_axis:
-        out.feature_dim_axis = None
-      out.size_placeholder = {0: size for (i, size) in source.size_placeholder.items() if i == axis_wo_b}
-    out.sparse = sparse
-    if out.feature_dim_axis is None and not out.sparse:
-      out.dim = None
-    return out
+      data_opts = source.get_kwargs(include_special_axes=False)
+      dim_tags = [source.dim_tags[axis]]
+      if not dim_tags[0].is_batch_dim():
+        data_opts.pop("batch", None)
+        data_opts.pop("beam", None)
+    data_opts["name"] = "%s_output" % name
+    data_opts["dim_tags"] = dim_tags
+    data_opts["dtype"] = dtype
+    data_opts["sparse"] = sparse
+    if sparse:
+      data_opts["dim"] = None
+    else:
+      data_opts.pop("dim", None)
+    return Data(**data_opts)
 
 
 class BatchSoftmaxLayer(_ConcatInputLayer):
@@ -2270,9 +2271,18 @@ class WindowLayer(_ConcatInputLayer):
     if axis is not None:
       axis_wo_b = self.output.get_batch_axis_excluding_batch(axis)
       if axis_wo_b in self.output.size_placeholder:
-        self.output.size_placeholder[axis_wo_b] = ConvLayer.calc_out_dim(
-          in_dim=self.output.size_placeholder[axis_wo_b],
-          filter_size=window_size, stride=stride, dilation_rate=1, padding=padding)
+        size = self.output.size_placeholder[axis_wo_b]
+        from ..util.basic import same_control_flow_ctx
+        from ..util.data import DimensionTag
+        with same_control_flow_ctx(size):
+          size = ConvLayer.calc_out_dim(
+            in_dim=size,
+            filter_size=window_size, stride=stride, dilation_rate=1, padding=padding)
+        DimensionTag(
+          kind=DimensionTag.Types.Spatial, description="%s:window:%i" % (self.name, axis_wo_b),
+          dimension=None, dyn_size=size, batch=self.output.batch,
+          src_data=self.output, src_axis=axis)
+        self.output.size_placeholder[axis_wo_b] = size
 
   @classmethod
   def get_out_data_from_opts(cls, name, window_size, axis="T", sources=(), **kwargs):
@@ -2405,22 +2415,23 @@ class PadLayer(_ConcatInputLayer):
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
     for a in axes:
       p = sum(paddings[a])
+      tag = self.input_data.dim_tags[a]
       a = self.input_data.get_batch_axis_excluding_batch(a)
       if a is None:
         continue
-      if a not in self.output.size_placeholder:
+      if tag.dyn_size is None:
         continue
       if p == 0:
         continue
-      size = self.output.size_placeholder[a]
+      size = tag.dyn_size
       with tf_util.same_control_flow_ctx(size):
         size = tf_util.simplify_add(size, p)
-      self.output.size_placeholder[a] = size
       if not DimensionTag.get_tag_from_size_tensor(size):
         tag = DimensionTag(
           description="spatial:%i:%s" % (a, self.get_absolute_name()),
-          kind=DimensionTag.Types.Spatial)
+          kind=tag.kind, batch=self.output.batch)
         tag.set_tag_on_size_tensor(size)
+      self.output.size_placeholder[a] = size
 
   @classmethod
   def _transform_padding(cls, padding, axes):
@@ -2449,18 +2460,18 @@ class PadLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     data = get_concat_sources_data_template(sources)
     data.name = "%s_output" % name
     axes = data.get_axes_from_description(axes)
     padding = cls._transform_padding(padding=padding, axes=axes)
+    dim_tags = data.dim_tags
     for i, a in enumerate(axes):
-      a = data.get_batch_axis_excluding_batch(a)
-      if a is None:
-        continue
-      if data.shape[a] is None:
-        continue
-      data.shape = data.shape[:a] + (data.shape[a] + sum(padding[i]),) + data.shape[a + 1:]
-    return data
+      tag = dim_tags[a]
+      dim = None if tag.dimension is None else (tag.dimension + sum(padding[i]))
+      tag = DimensionTag(kind=tag.kind, description="%s_pad%i" % (name, i), dimension=dim)
+      dim_tags = dim_tags[:a] + (tag,) + dim_tags[a + 1:]
+    return data.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
 
 
 class MergeDimsLayer(_ConcatInputLayer):
@@ -2607,7 +2618,7 @@ class MergeDimsLayer(_ConcatInputLayer):
         # But keep the same dim-tag.
         dim_tag = DimensionTag.get_tag_from_size_tensor(v)
         if dim_tag is not None:
-          dim_tag.set_tag_on_size_tensor(d[j])
+          dim_tag.set_tag_on_size_tensor(d[j], batch=self.input_data.batch)
     return d
 
   @classmethod
@@ -2622,6 +2633,7 @@ class MergeDimsLayer(_ConcatInputLayer):
     :param None|dict[str] out_type:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     assert not out_type, "currently ignored"
     input_data = get_concat_sources_data_template(sources)
     data = input_data.copy(name="%s_output" % name)
@@ -2633,14 +2645,7 @@ class MergeDimsLayer(_ConcatInputLayer):
     res_dim = None
     if all([data.batch_shape[i] is not None for i in axes]):
       res_dim = int(numpy.prod([data.batch_shape[i] for i in axes]))
-    if not data.sparse and data.feature_dim_axis in axes:  # will also merge the feature dim
-      if res_dim is not None and n_out is not NotSpecified:
-        assert res_dim == n_out
-      elif res_dim is not None and n_out is NotSpecified:
-        pass
-      elif res_dim is None and n_out is not NotSpecified:
-        res_dim = n_out
-      data.dim = res_dim
+    merge_dim_tags = [tag for (i, tag) in enumerate(data.dim_tags) if i in axes]
     merge_target_axis = cls._get_target_axis(input_data=data, merge_axes=axes)
     if data.feature_dim_axis_or_unspecified is NotSpecified:
       new_feature_dim_axis = NotSpecified
@@ -2652,29 +2657,30 @@ class MergeDimsLayer(_ConcatInputLayer):
     else:
       new_feature_dim_axis = cls._old_axis_to_new_axis(
         input_data=input_data, merge_axes=axes, old_axis=input_data.feature_dim_axis)
-    data.batch_dim_axis = cls._old_axis_to_new_axis(
-      input_data=input_data, merge_axes=axes, old_axis=input_data.batch_dim_axis)
-    new_shape = [d for (i, d) in enumerate(data.batch_shape) if i not in axes]
-    new_shape.insert(merge_target_axis, res_dim)
-    if data.batch_dim_axis is not None:
-      new_shape.pop(data.batch_dim_axis)
-    data.shape = tuple(new_shape)
+    if any(tag.is_batch_dim() for tag in merge_dim_tags):
+      res_dim_tag_kind = DimensionTag.Types.Batch
+    elif any(tag.is_feature_dim() for tag in merge_dim_tags):
+      res_dim_tag_kind = DimensionTag.Types.Feature
+    else:
+      res_dim_tag_kind = DimensionTag.Types.Spatial
+    res_dim_tag = DimensionTag(
+      kind=res_dim_tag_kind, description="%s_merge_dims" % name,
+      dimension=res_dim)
+    new_dim_tags = [d for (i, d) in enumerate(data.dim_tags) if i not in axes]
+    new_dim_tags.insert(merge_target_axis, res_dim_tag)
+
+    data_opts = data.get_kwargs(include_special_axes=False)
+    data_opts["dim_tags"] = new_dim_tags
+    data_opts["feature_dim_axis"] = new_feature_dim_axis
+    data = Data(**data_opts)
+
     data.time_dim_axis = cls._old_axis_to_new_axis(
       input_data=input_data, merge_axes=axes, old_axis=input_data.time_dim_axis)
     if data.time_dim_axis is not None and data.time_dim_axis in {data.batch_dim_axis, data.feature_dim_axis}:
       if input_data.time_dim_axis not in {input_data.batch_dim_axis, input_data.feature_dim_axis}:
         # Time got merged with feature or batch.
         data.time_dim_axis = None
-    data.feature_dim_axis = new_feature_dim_axis
-    if not data.sparse and data.feature_dim_axis is not None:
-      data.dim = data.batch_shape[data.feature_dim_axis]
-    # Set size_placeholder, here for now without merging any axes. Merged axes are then updated in __init__.
-    data.size_placeholder = {}
-    for old_axis, dyn_size in sorted(input_data.size_placeholder.items()):
-      new_axis = cls._old_axis_to_new_axis(
-        input_data=input_data, merge_axes=axes, old_axis=input_data.get_batch_axis(old_axis))
-      if new_axis != data.batch_dim_axis:
-        data.size_placeholder[data.get_batch_axis_excluding_batch(new_axis)] = dyn_size
+
     if input_data.batch_dim_axis in axes and data.batch:
       for axis in axes:
         if axis != input_data.batch_dim_axis:
@@ -2742,13 +2748,8 @@ class SplitLayer(_ConcatInputLayer):
     :param int idx:
     :rtype: LayerBase
     """
-    out = self.output.copy(name="%s/%i_output" % (self.name, idx))
-    axis_wo_b = out.get_batch_axis_excluding_batch(self.axis)
-    shape = list(out.shape)
-    shape[axis_wo_b] = self.size_splits[idx]
-    out.shape = tuple(shape)
-    if self.axis == self.output.feature_dim_axis:
-      out.dim = self.size_splits[idx]
+    out = self._get_split_out_data(
+      name=self.name, idx=idx, size_splits=self.size_splits, input_data=self.input_data, axis=self.axis)
     out.placeholder = self.splits[idx]
     out.sanity_check()
     return InternalLayer(name="%s/%i" % (self.name, idx), network=self.network, output=out, sources=self.sources)
@@ -2781,21 +2782,33 @@ class SplitLayer(_ConcatInputLayer):
     except ValueError:
       return None
     name = parent_layer_kwargs.get("name", "<unknown>")
-    out = get_concat_sources_data_template(parent_layer_kwargs["sources"], name="%s_output" % name)
+    input_data = get_concat_sources_data_template(parent_layer_kwargs["sources"], name="%s_output" % name)
     axis, size_splits = cls._get_axis_size_splits_num_splits(
-      input_data=out,
+      input_data=input_data,
       axis=parent_layer_kwargs.get("axis", None),
       num_splits=parent_layer_kwargs.get("num_splits", None),
       size_splits=parent_layer_kwargs.get("size_splits", None),
       err_prefix="%s/%s" % (name, layer_name))
-    out = out.copy(name="%s/%i_output" % (name, idx))
-    axis_wo_b = out.get_batch_axis_excluding_batch(axis)
-    shape = list(out.shape)
-    shape[axis_wo_b] = size_splits[idx]
-    out.shape = tuple(shape)
-    if axis == out.feature_dim_axis:
-      out.dim = size_splits[idx]
+    out = cls._get_split_out_data(
+      name=name, idx=idx, input_data=input_data, size_splits=size_splits, axis=axis)
     return out, parent_layer_kwargs["network"], InternalLayer
+
+  @classmethod
+  def _get_split_out_data(cls, name, input_data, size_splits, idx, axis):
+    """
+    :param str name:
+    :param Data input_data:
+    :param list[int] size_splits:
+    :param int idx:
+    :param int axis:
+    :rtype: Data
+    """
+    from ..util.data import DimensionTag
+    new_dim_tag = DimensionTag(
+      kind=input_data.dim_tags[axis].kind, description="%s_split%i" % (name, idx),
+      dimension=size_splits[idx])
+    out = input_data.copy_template("%s/%i_output" % (name, idx))
+    return out.copy_template_replace_dim_tag(axis=axis, new_dim_tag=new_dim_tag)
 
 
 class SplitDimsLayer(_ConcatInputLayer):
@@ -2862,14 +2875,14 @@ class SplitDimsLayer(_ConcatInputLayer):
         # When there is support for this, this should already be created in get_out_data_from_opts
         # Note: currently get_out_data_from_opts already sets data.size_placeholder[axis_wo_batch] to the input size
         # (meaning we do not need to transform the axis here)
-        dyn_size = -(-data.size_placeholder[axis_wo_batch] // constant_size)  # == ceildiv(size, constant_size)
-        self.output.size_placeholder[axis_wo_batch] = dyn_size
         from returnn.tf.util.data import DimensionTag
+        dyn_size = -(-data.size_placeholder[axis_wo_batch] // constant_size)  # == ceildiv(size, constant_size)
         if not DimensionTag.get_tag_from_size_tensor(dyn_size):
           tag = DimensionTag(
             description="split-time:%i:%s" % (axis, self.get_absolute_name()),
-            kind=DimensionTag.Types.Spatial)
+            kind=DimensionTag.Types.Spatial, batch=self.output.batch)
           tag.set_tag_on_size_tensor(dyn_size)
+        self.output.size_placeholder[axis_wo_batch] = dyn_size
 
     self.output.placeholder = tf.reshape(data.placeholder, shape=new_shape)
 
@@ -2927,6 +2940,7 @@ class SplitDimsLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     input_data = get_concat_sources_data_template(sources)
     data = input_data.copy("%s_output" % name)
     if isinstance(axis, int):
@@ -2941,40 +2955,29 @@ class SplitDimsLayer(_ConcatInputLayer):
     else:
       resolved_shape_dims = tuple([(d if (d >= 0) else None) for d in dims])
 
-    if axis != data.batch_dim_axis:
-      axis_wb = data.get_batch_axis_excluding_batch(axis)
-      data.shape = data.shape[:axis_wb] + resolved_shape_dims + data.shape[axis_wb + 1:]
-      if data.batch_dim_axis is not None:
-        data.batch_dim_axis = cls._map_old_axis_to_new_axis(split_axis=axis, dims=dims, old_axis=data.batch_dim_axis)
-    else:  # axis == data.batch_dim_axis
-      new_batch_shape = data.batch_shape[:axis] + resolved_shape_dims + data.batch_shape[axis + 1:]
-      assert any([d == -1 for d in dims])
-      new_batch_axis = data.batch_dim_axis + [d == -1 for d in dims].index(True)
-      data.batch_dim_axis = new_batch_axis
-      data.shape = new_batch_shape[:new_batch_axis] + new_batch_shape[new_batch_axis + 1:]
-
-    if data.time_dim_axis is not None:
-      data.time_dim_axis = cls._map_old_axis_to_new_axis(split_axis=axis, dims=dims, old_axis=data.time_dim_axis)
-
-    if data.feature_dim_axis is None and not data.sparse and any([d > 0 for d in dims]):
-      # We want to have the last index where dims[index] > 0.
-      i = len(dims) - list(reversed([d > 0 for d in dims])).index(True) - 1
-      new_feature_dim_axis = axis + i
-      if new_feature_dim_axis == data.batch_ndim - 1:
-        data.feature_dim_axis = NotSpecified
-      else:
-        data.feature_dim_axis = new_feature_dim_axis
-    if data.feature_dim_axis is not None:
-      data.dim = data.batch_shape[data.feature_dim_axis]
-
-    # Use input_data.get_batch_axis(..) as batch_dim_axis of data might have changed by now
-    data.size_placeholder = {
-      data.get_batch_axis_excluding_batch(
-        cls._map_old_axis_to_new_axis(
-          split_axis=axis, dims=dims, old_axis=input_data.get_batch_axis(i))): v
-      for (i, v) in input_data.size_placeholder.items()}
-
-    return data
+    rem_dim_indices = [i for i, d in enumerate(dims) if d < 0]
+    assert len(rem_dim_indices) <= 1, "only one entry in dims %r can be -1" % (dims,)
+    rem_dim_idx = rem_dim_indices[0] if rem_dim_indices else (len(dims) - 1)
+    axis_dim_tag = data.dim_tags[axis]
+    if all(d == 1 for (i, d) in enumerate(dims) if i != rem_dim_idx):
+      rem_dim = axis_dim_tag  # we can overtake the existing dim tag
+    else:
+      rem_dim = DimensionTag(
+        kind=axis_dim_tag.kind,
+        description="%s_split_dims%i_rem" % (name, rem_dim_idx),
+        dimension=resolved_shape_dims[rem_dim_idx])
+    resolved_dims = tuple(
+      DimensionTag(
+        kind=DimensionTag.Types.Spatial,
+        description="%s_split_dims%i" % (name, i),
+        dimension=resolved_shape_dims[i])
+      if i != rem_dim_idx else rem_dim
+      for i in range(len(dims)))
+    new_dim_tags = data.dim_tags[:axis] + resolved_dims + data.dim_tags[axis + 1:]
+    out = data.copy_template_new_dim_tags(new_dim_tags)
+    if data.time_dim_axis is None:
+      out.time_dim_axis = None
+    return out
 
 
 class SplitBatchTimeLayer(_ConcatInputLayer):
@@ -3025,17 +3028,9 @@ class SplitBatchTimeLayer(_ConcatInputLayer):
     :rtype: Data
     """
     data = get_concat_sources_data_template(sources).copy_as_batch_major()
-    data.name = "%s_output" % name
-    assert data.batch_dim_axis == 0
     data.batch = base.output.batch
-    data.time_dim_axis = 1
-    data.size_placeholder = {i + 1: v for (i, v) in (data.size_placeholder or {}).items()}
-    data.size_placeholder[0] = base.output.get_sequence_lengths()
-    data.shape = (None,) + data.shape
-    if data.feature_dim_axis_or_unspecified is not NotSpecified:
-      data.feature_dim_axis += 1
-      data.dim = data.batch_shape[data.feature_dim_axis]
-    return data
+    data = data.copy_add_dim_by_tag(base.output.get_time_dim_tag(), axis=1, unbroadcast=True)
+    return data.copy("%s_output" % name)
 
 
 class FlattenBatchLayer(_ConcatInputLayer):
@@ -3127,12 +3122,13 @@ class UnflattenNdLayer(_ConcatInputLayer):
     assert sizes_data.batch_ndim == 2
     assert sizes_data.batch_shape[1] in (None, num_axes)  # also allow None...
     self.output.placeholder = tf_util.unflatten_nd(input_data.placeholder, sizes_data.placeholder, num_axes=num_axes)
-    self.output.size_placeholder = {i: sizes_data.placeholder[:, i] for i in range(num_axes)}
+    size_placeholder = {i: sizes_data.placeholder[:, i] for i in range(num_axes)}
     if declare_same_sizes_as:
       for i, other in declare_same_sizes_as.items():
         assert 0 <= i < num_axes
         other_dim_tag = other.output.get_size_dim_tag(0)
-        other_dim_tag.set_tag_on_size_tensor(self.output.size_placeholder[i])
+        other_dim_tag.set_tag_on_size_tensor(size_placeholder[i], batch=self.output.batch)
+    self.output.size_placeholder = size_placeholder
 
   def get_dep_layers(self):
     """
@@ -3204,9 +3200,6 @@ class ExpandDimsLayer(_ConcatInputLayer):
     axis = self._get_axis(data=data, axis=axis)
     from returnn.tf.util.basic import expand_dims_unbroadcast
     self.output.placeholder = expand_dims_unbroadcast(data.placeholder, axis=axis, dim=dim)
-    self.output.size_placeholder = {
-      (i if (data.get_batch_axis(i) < axis) else i + 1): v
-      for (i, v) in data.size_placeholder.items()}
 
   @classmethod
   def _get_axis(cls, data, axis):
@@ -3244,17 +3237,18 @@ class ExpandDimsLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     init_axis = axis
     data = get_concat_sources_data_template(sources)
-    data.name = "%s_output" % name
     if isinstance(axis, int):
       data = data.copy_as_batch_major()
     axis = cls._get_axis(data=data, axis=axis)
-    if axis == data.batch_ndim and not data.sparse:
-      assert data.feature_dim_axis_or_unspecified is NotSpecified
-      data.dim = dim
-    axis_wo_batch = data.get_batch_axis_excluding_batch(axis)
-    data.shape = data.shape[:axis_wo_batch] + (dim,) + data.shape[axis_wo_batch:]
+
+    new_dim = DimensionTag(
+      kind=DimensionTag.Types.Spatial, description="%s_expand_dims" % name,
+      dimension=dim)
+    data = data.copy_template(name="%s_output" % name)
+    data = data.copy_add_dim_by_tag(new_dim, unbroadcast=True, axis=axis)
     if isinstance(init_axis, str):
       if init_axis.lower() in ["spatial", "time", "t"] and data.time_dim_axis is None:
         data.time_dim_axis = axis
@@ -3277,7 +3271,6 @@ class RepeatLayer(_ConcatInputLayer):
       Can be [B,T] or [T,B] or some subset of that shape
     :param str axis: (dynamic) axis for repetition (currently only time axis is supported)
     """
-    from returnn.tf.util.data import DimensionTag
     super(RepeatLayer, self).__init__(**kwargs)
     self.repetitions = repetitions
     if isinstance(self.repetitions, int):
@@ -3347,14 +3340,14 @@ class RepeatLayer(_ConcatInputLayer):
     repeated_data = tf.repeat(reshaped_data, reshaped_repetitions, axis=0)  # [B * T', ...]
     # unflatten the output
     target_shape = ([shape[0]] if self.output.have_batch_axis() else []) + [max_duration] + shape[2:]
-    self.output.placeholder = tf.reshape(repeated_data, target_shape)  # [B, T', ...] or [T', ...]
+    res = tf.reshape(repeated_data, target_shape)
+    res.set_shape(self.output.batch_shape)
+    self.output.placeholder = res  # [B, T', ...] or [T', ...]
     # set size placeholders
     output_axis = self.output.get_axis_from_description(axis)
-    self.output.size_placeholder[self.output.get_batch_axis_excluding_batch(output_axis)] = target_seq_len
-    tag = DimensionTag(
-      description="repeated:%s" % self.get_absolute_name(),
-      kind=DimensionTag.Types.Spatial)
-    tag.set_tag_on_size_tensor(target_seq_len)
+    tag = self.output.dim_tags[output_axis]
+    if tag.dimension is None:  # dynamic? dyn sizes needed?
+      tag.set_tag_on_size_tensor(target_seq_len, batch=self.output.batch)
 
   def get_dep_layers(self):
     """
@@ -3385,17 +3378,21 @@ class RepeatLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
     if data.have_batch_axis():
       data = data.copy_as_batch_major()
     elif isinstance(repetitions, LayerBase) and repetitions.output.have_batch_axis():
       data = data.copy_add_batch_dim(batch_dim_axis=0, batch=repetitions.output.batch)
     original_axis = data.get_axis_from_description(axis, allow_int=False)
+    tag = data.dim_tags[original_axis]
+    if tag.dimension is not None and isinstance(repetitions, int):
+      new_dim = tag.dimension * repetitions
+    else:
+      new_dim = None
     data = data.copy_move_axis(original_axis, data.get_batch_axis(0))
-    data.shape = (None,) + data.shape[1:]
-    if data.feature_dim_axis == data.get_batch_axis(0):
-      data.dim = None
-    return data
+    tag = DimensionTag(description="repeated:%s" % name, kind=tag.kind, dimension=new_dim)
+    return data.copy_template_replace_dim_tag(axis=data.get_batch_axis(0), new_dim_tag=tag)
 
 
 class TileLayer(_ConcatInputLayer):
@@ -3430,15 +3427,16 @@ class TileLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
+    dim_tags = list(data.dim_tags)
     for axis, multiple in multiples.items():
-      a = data.get_batch_axis_excluding_batch(data.get_axis_from_description(axis, allow_int=False))
-      if a is None or data.shape[a] is None:
-        continue
-      data.shape = data.shape[:a] + (data.shape[a] * multiple,) + data.shape[a + 1:]
-    if not data.sparse:
-      data.dim = data.batch_shape[data.feature_dim_axis]
-    return data
+      axis = data.get_axis_from_description(axis, allow_int=False)
+      tag = dim_tags[axis]
+      dim = None if tag.dimension is None else (tag.dimension * multiple)
+      tag = DimensionTag(kind=tag.kind, description="%s_tile" % name, dimension=dim)
+      dim_tags[axis] = tag
+    return data.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
 
 
 class CastLayer(CopyLayer):
@@ -3503,10 +3501,6 @@ class SwapAxesLayer(_ConcatInputLayer):
     axis1 = self.input_data.get_axis_from_description(axis1)
     axis2 = self.input_data.get_axis_from_description(axis2)
     self.output.placeholder = swapaxes(self.input_data.placeholder, axis1=axis1, axis2=axis2)
-    axis1_wo_b = self.output.get_batch_axis_excluding_batch(axis1)
-    axis2_wo_b = self.output.get_batch_axis_excluding_batch(axis2)
-    self.output.size_placeholder = {
-      self._translate_axis(i, axis1_wo_b, axis2_wo_b): v for (i, v) in self.input_data.size_placeholder.items()}
 
   @classmethod
   def _translate_axis(cls, axis_to_translate, axis1, axis2):
@@ -3536,18 +3530,14 @@ class SwapAxesLayer(_ConcatInputLayer):
     axis1 = out.get_axis_from_description(axis1)
     axis2 = out.get_axis_from_description(axis2)
     assert axis1 != axis2, "would be no-op. currently this is an error."
-    assert axis1 != out.batch_dim_axis and axis2 != out.batch_dim_axis, "currently not supported..."
-    axis1_wo_b = out.get_batch_axis_excluding_batch(axis1)
-    axis2_wo_b = out.get_batch_axis_excluding_batch(axis2)
-    shape = list(out.shape)
-    shape[axis1_wo_b], shape[axis2_wo_b] = shape[axis2_wo_b], shape[axis1_wo_b]
-    out.shape = tuple(shape)
-    out.time_dim_axis = cls._translate_axis(out.time_dim_axis, axis1, axis2)
+    dim_tags = list(out.dim_tags)
+    dim_tags[axis1], dim_tags[axis2] = dim_tags[axis2], dim_tags[axis1]
+    opts = out.get_kwargs(include_special_axes=False)
+    opts["dim_tags"] = dim_tags
+    opts["time_dim_axis"] = cls._translate_axis(out.time_dim_axis, axis1, axis2)
     if out.feature_dim_axis_or_unspecified is not NotSpecified:
-      out.feature_dim_axis = cls._translate_axis(out.feature_dim_axis, axis1, axis2)
-    if out.feature_dim_axis is not None:
-      out.dim = out.batch_shape[out.feature_dim_axis]
-    return out
+      opts["feature_dim_axis"] = cls._translate_axis(out.feature_dim_axis, axis1, axis2)
+    return Data(**opts)
 
 
 class TransposeLayer(_ConcatInputLayer):
@@ -3587,29 +3577,8 @@ class TransposeLayer(_ConcatInputLayer):
     :rtype: Data
     """
     perm_ = cls.get_perm_int(input_data=input_data, perm=perm)
-    shape = [input_data.batch_shape[perm_[i]] for i in range(input_data.batch_ndim)]
-    if input_data.have_batch_axis():
-      shape.pop(perm_[input_data.batch_dim_axis])
-    out = input_data.copy_template(name=name if name else "%s_transposed" % input_data.name)
-    out.shape = tuple(shape)
-    out.batch_dim_axis = perm_[input_data.batch_dim_axis] if input_data.have_batch_axis() else None
-    out.time_dim_axis = perm_[input_data.time_dim_axis] if input_data.have_time_axis() else None
-    if input_data.feature_dim_axis_or_unspecified is NotSpecified:
-      out.feature_dim_axis = NotSpecified
-      if out.feature_dim_axis is not None:
-        out.dim = out.batch_shape[out.feature_dim_axis]
-    elif input_data.feature_dim_axis_or_unspecified is None:
-      out.feature_dim_axis = None
-    else:
-      out.feature_dim_axis = perm_[input_data.feature_dim_axis_or_unspecified]
-    if input_data.placeholder is not None:
-      out.placeholder = tf.transpose(
-        input_data.placeholder, [perm_[i] for i in range(input_data.batch_ndim)])
-    if input_data.size_placeholder:
-      out.size_placeholder = {
-        out.get_batch_axis_excluding_batch(perm_[input_data.get_batch_axis(i)]): size
-        for (i, size) in input_data.size_placeholder.items()}
-    return out
+    perm__ = [perm_[i] for i in range(input_data.batch_ndim)]
+    return input_data.copy_transpose(perm__).copy(name=name)
 
   @classmethod
   def get_perm_int(cls, input_data, perm):
@@ -3950,12 +3919,12 @@ class ConvLayer(_ConcatInputLayer):
           in_dim=size,
           filter_size=filter_size[i - index_shift], stride=strides[i - index_shift],
           dilation_rate=dilation_rate[i - index_shift], padding=padding)
-      self.output.size_placeholder[i] = size
       if not DimensionTag.get_tag_from_size_tensor(size):
         tag = DimensionTag(
           description="spatial:%i:%s" % (i, self.get_absolute_name()),
-          kind=DimensionTag.Types.Spatial)
+          kind=DimensionTag.Types.Spatial, batch=self.output.batch)
         tag.set_tag_on_size_tensor(size)
+      self.output.size_placeholder[i] = size
 
   @classmethod
   def _transform_input(cls, input_data, input_expand_dims, input_split_feature_dim, input_add_feature_dim):
@@ -4162,15 +4131,16 @@ class PoolLayer(_ConcatInputLayer):
     index_shift = self.output.get_spatial_axes()[0]
     for i, size in list(self.output.size_placeholder.items()):
       with tf_util.same_control_flow_ctx(size):
-        self.output.size_placeholder[i] = ConvLayer.calc_out_dim(
+        size = ConvLayer.calc_out_dim(
           in_dim=size,
           filter_size=pool_size[i - index_shift], stride=strides[i - index_shift],
           dilation_rate=dilation_rate[i - index_shift], padding=padding)
-      if DimensionTag.get_tag_from_size_tensor(self.output.size_placeholder[i]) is None:
+      if DimensionTag.get_tag_from_size_tensor(size) is None:
         tag = DimensionTag(
           description="spatial:%i:%s" % (i, self.get_absolute_name()),
-          kind=DimensionTag.Types.Spatial)
-        tag.set_tag_on_size_tensor(self.output.size_placeholder[i])
+          kind=DimensionTag.Types.Spatial, batch=self.output.batch)
+        tag.set_tag_on_size_tensor(size)
+      self.output.size_placeholder[i] = size
 
   @classmethod
   def get_out_data_from_opts(cls, name, pool_size, strides=None, dilation_rate=1, sources=(), padding="VALID",
@@ -4299,7 +4269,7 @@ class TransposedConvLayer(_ConcatInputLayer):
     :param dict[str,str]|None filter_perm: transposes the filter (input filter as layer)
     :param LayerBase|None bias: if given, will not create an own parameter, but use this as the bias
     """
-    from returnn.tf.util.basic import DimensionTag, get_initializer, get_activation_function, get_shape
+    from returnn.tf.util.basic import get_initializer, get_activation_function, get_shape
     super(TransposedConvLayer, self).__init__(**kwargs)
     input_data = self.input_data.copy_as_batch_spatial_major()
     spatial_axes = input_data.get_spatial_axes()
@@ -4383,26 +4353,24 @@ class TransposedConvLayer(_ConcatInputLayer):
       self.output_before_activation = OutputWithActivation(y)
     y = self.output_before_activation.y
     self.output.placeholder = y
-    self.output.size_placeholder = {
-      i: input_data.size_placeholder[i]
-      for i in input_data.get_spatial_axes()
-      if i in input_data.size_placeholder}
-    for i, size in list(self.output.size_placeholder.items()):
-      with tf_util.same_control_flow_ctx(size):
-        size = self.deconv_output_length(
-          size,
-          filter_size=filter_size[i], stride=strides[i],
-          padding=padding, output_padding=output_padding[i])
-      r = remove_padding[i]
-      if r:
-        assert isinstance(r, int)
-        size = tf_util.simplify_add(size, -r * 2)
-      self.output.size_placeholder[i] = size
-      if not DimensionTag.get_tag_from_size_tensor(size):
-        tag = DimensionTag(
-          description="spatial:%i:%s" % (i, self.get_absolute_name()),
-          kind=DimensionTag.Types.Spatial)
-        tag.set_tag_on_size_tensor(size)
+    for idx, axis_wo_b in enumerate(input_data.get_spatial_axes()):
+      axis = input_data.get_batch_axis(axis_wo_b)
+      input_tag = input_data.dim_tags[axis]
+      output_tag = self.output.dim_tags[axis]
+      if input_tag.dimension is None:
+        assert output_tag.dimension is None
+        assert input_tag.dyn_size is not None
+        size = input_tag.dyn_size
+        with tf_util.same_control_flow_ctx(size):
+          size = self.deconv_output_length(
+            size,
+            filter_size=filter_size[idx], stride=strides[idx],
+            padding=padding, output_padding=output_padding[idx])
+          r = remove_padding[idx]
+          if r:
+            assert isinstance(r, int)
+            size = tf_util.simplify_add(size, -r * 2)
+        output_tag.set_tag_on_size_tensor(size, batch=self.output.batch)
 
   @staticmethod
   def deconv_output_length(input_length,
@@ -4471,12 +4439,13 @@ class TransposedConvLayer(_ConcatInputLayer):
     :param list[int|None]|int|None output_padding:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     out = get_concat_sources_data_template(sources)
     out = out.copy_as_batch_spatial_major()
     out = out.copy_template(name="%s_output" % name)
     assert out.have_feature_axis()
-    out = out.copy_template_replace_dim(axis=-1, new_dim=n_out)
-    shape = list(out.shape)
+    out = out.copy_template_replace_dim(axis=out.feature_dim_axis, new_dim=n_out)
+    dim_tags = list(out.dim_tags)
     if strides is None:
       strides = filter_size
     if isinstance(remove_padding, int):
@@ -4485,14 +4454,18 @@ class TransposedConvLayer(_ConcatInputLayer):
       output_padding = [output_padding] * len(filter_size)
     assert len(strides) == len(out.get_spatial_axes()) == len(remove_padding) == len(output_padding), (
       "Expected strides for all spatial axes")
-    for idx, axis in enumerate(out.get_spatial_axes()):  # counted without batch-dim axis
-      if axis + 1 not in out.get_dynamic_axes():  # out.get_dynamic_axes() is counted with batch-dim axis
-        shape[axis] = cls.deconv_output_length(
-          shape[axis], filter_size=filter_size[idx], stride=strides[idx],
+    for idx, axis_wo_b in enumerate(out.get_spatial_axes()):
+      axis = out.get_batch_axis(axis_wo_b)
+      tag = dim_tags[axis]
+      dim = None
+      if tag.dimension is not None:
+        dim = cls.deconv_output_length(
+          tag.dimension, filter_size=filter_size[idx], stride=strides[idx],
           padding=padding, output_padding=output_padding[idx]) - remove_padding[idx] * 2
-    out.shape = tuple(shape)
-    out.size_placeholder.clear()  # will be reset in __init__
-    return out
+      dim_tags[axis] = DimensionTag(
+        kind=DimensionTag.Types.Spatial, description="%s_spatial%i_transposed_conv" % (name, idx),
+        dimension=dim)
+    return out.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
 
   def get_dep_layers(self):
     """
@@ -4778,7 +4751,6 @@ class ReduceOutLayer(_ConcatInputLayer):
     x = f(x, axis=self.input_data.batch_ndim, name="%s_out" % mode)
     x.set_shape(tf.TensorShape(self.output.batch_shape))
     self.output.placeholder = x
-    self.output.size_placeholder = self.input_data.size_placeholder.copy()
 
   @classmethod
   def get_out_data_from_opts(cls, num_pieces, sources, name, **kwargs):
@@ -4788,12 +4760,16 @@ class ReduceOutLayer(_ConcatInputLayer):
     :param str name:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    assert out.have_feature_axis()
     assert not out.sparse
     assert out.dim % num_pieces == 0
-    out.dim //= num_pieces
-    out.shape = out.shape[:-1] + (out.dim,)
-    return out
+    dim = out.dim // num_pieces
+    tag = DimensionTag(
+      kind=DimensionTag.Types.Feature, description="%s_reduce_out" % name,
+      dimension=dim)
+    return out.copy_template_replace_dim_tag(axis=out.feature_dim_axis, new_dim_tag=tag)
 
 
 class SqueezeLayer(_ConcatInputLayer):
@@ -5014,6 +4990,7 @@ class WeightedSumLayer(_ConcatInputLayer):
     :param bool|None keep_dims:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
     assert not data.sparse
     axes, padding, size, keep_dims = cls._resolve_opts(
@@ -5030,16 +5007,15 @@ class WeightedSumLayer(_ConcatInputLayer):
     else:
       raise Exception("invalid padding %r" % padding)
     if keep_dims:
-      shape = list(data.shape)
-      assert data.batch_dim_axis not in axes
+      dim_tags = list(data.dim_tags)
       for i, a in enumerate(axes):
-        shape[data.get_batch_axis_excluding_batch(a)] = res_dims[i]
-      data.shape = tuple(shape)
+        dim_tags[a] = DimensionTag(
+          kind=dim_tags[a].kind, description="%s:weighted-sum:%i" % (name, i), dimension=res_dims[i])
+      data = data.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
     else:
       assert all([d == 1 for d in res_dims])
-      assert data.batch_dim_axis not in axes
-      data.shape = tuple([d for (i, d) in enumerate(data.shape) if data.get_batch_axis(i) not in axes])
-    data.dim = data.shape[data.get_batch_axis_excluding_batch(data.feature_dim_axis)]
+      dim_tags = [tag for a, tag in enumerate(data.dim_tags) if a not in axes]
+      data = data.copy_template_new_dim_tags(dim_tags)
     return data
 
 
@@ -5123,12 +5099,12 @@ class PrefixInTimeLayer(_ConcatInputLayer):
       new_seq_len = size_base.output.get_sequence_lengths()
     else:
       new_seq_len = seq_len + repeat
-    self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] = new_seq_len
     if not DimensionTag.get_tag_from_size_tensor(new_seq_len):
       tag = DimensionTag(
         description="time-with-prefix:%s" % self.get_absolute_name(),
-        kind=DimensionTag.Types.Spatial)
+        kind=DimensionTag.Types.Spatial, batch=self.output.batch)
       tag.set_tag_on_size_tensor(new_seq_len)
+    self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] = new_seq_len
     max_repeat = repeat if isinstance(repeat, int) else tf.maximum(tf.reduce_max(repeat), 0)
     shape = [((self.output.batch_shape[i] or tf.shape(self.output.placeholder)[i])
               if (i != self.output.time_dim_axis)
@@ -5227,11 +5203,12 @@ class PostfixInTimeLayer(_ConcatInputLayer):
     mask = tf.less(time_idxs_bc, seq_len_bc)
     from returnn.tf.util.basic import where_bc
     self.output.placeholder = where_bc(mask, x, c)
-    self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] = seq_len + repeat
+    new_seq_len = seq_len + repeat
     tag = DimensionTag(
       description="time-with-postfix:%s" % self.get_absolute_name(),
-      kind=DimensionTag.Types.Spatial)
-    tag.set_tag_on_size_tensor(self.output.size_placeholder[self.output.time_dim_axis_excluding_batch])
+      kind=DimensionTag.Types.Spatial, batch=self.output.batch)
+    tag.set_tag_on_size_tensor(new_seq_len)
+    self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] = new_seq_len
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, postfix=0.0, **kwargs):
@@ -5642,8 +5619,14 @@ class ShiftAxisLayer(_ConcatInputLayer):
           size_delta = amount
         else:
           size_delta = 0
-      self.output.size_placeholder[axis_wob] = tf.clip_by_value(
+      new_size = tf.clip_by_value(
         self.output.size_placeholder[axis_wob] + size_delta, 0, tf.shape(shifted)[axis])
+      from ..util.data import DimensionTag
+      DimensionTag(
+        kind=DimensionTag.Types.Spatial, description="shift_axis",
+        dyn_size=new_size, batch=self.output.batch,
+        src_data=self.output, src_axis=axis)
+      self.output.size_placeholder[axis_wob] = new_size
 
   @classmethod
   def get_out_data_from_opts(cls, name, amount, axis, pad, sources=(), **kwargs):
@@ -5655,21 +5638,14 @@ class ShiftAxisLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
     assert isinstance(amount, int)
     axis = out.get_axis_from_description(axis)
-    axis_wob = out.get_batch_axis_excluding_batch(axis)
-    if axis_wob is None:  # batch-axis
-      return out  # not storing this information
-    if pad:
-      return out  # nothing in the shape will change
-    if out.shape[axis_wob] is not None:
-      shape = list(out.shape)
-      shape[axis_wob] -= abs(amount)
-      out.shape = tuple(shape)
-    if axis == out.feature_dim_axis:
-      out.dim = out.shape[axis_wob]
-    return out
+    tag = out.dim_tags[axis]
+    dim = None if tag.dimension is None else max(0, tag.dimension - abs(amount))
+    tag = DimensionTag(kind=tag.kind, description="%s_shift_axis" % name, dimension=dim)
+    return out.copy_template_replace_dim_tag(axis=axis, new_dim_tag=tag)
 
 
 class ResizeLayer(_ConcatInputLayer):
@@ -5687,6 +5663,7 @@ class ResizeLayer(_ConcatInputLayer):
     :param None|int|float fill_value: if kind=="fill"
     :param float fill_dropout: if set, will dropout in the same axis
     """
+    from returnn.tf.util.basic import DimensionTag
     super(ResizeLayer, self).__init__(**kwargs)
     # self.output.shape and self.output.batch_dim_axis are already set here via self.get_out_data_from_opts().
     axis = self.output.get_axis_from_description(axis)
@@ -5696,12 +5673,11 @@ class ResizeLayer(_ConcatInputLayer):
     self.output.size_placeholder = input_data.size_placeholder.copy()
     if (axis - 1) in self.output.size_placeholder:
       size = self.output.size_placeholder[axis - 1] * factor
-      self.output.size_placeholder[axis - 1] = size
-      from returnn.tf.util.basic import DimensionTag
       tag = DimensionTag(
         description="resize:%s" % self.get_absolute_name(),
-        kind=DimensionTag.Types.Spatial)
+        kind=DimensionTag.Types.Spatial, batch=self.output.batch)
       tag.set_tag_on_size_tensor(size)
+      self.output.size_placeholder[axis - 1] = size
 
     # images expected shape: [batch, height, width, channels]
     remaining_axes = [i for i in range(self.output.batch_ndim) if i not in (0, axis)]
@@ -5753,8 +5729,12 @@ class ResizeLayer(_ConcatInputLayer):
       if (axis - 1) in self.output.size_placeholder:
         orig_mask = tf.sequence_mask(
           self.output.size_placeholder[axis - 1], maxlen=new_size, dtype=tf.bool)  # (batch,new_size)
-        self.output.size_placeholder[axis - 1] = tf.reduce_sum(
-          tf.cast(tf.logical_and(mask, orig_mask), tf.int32), axis=1)
+        size = tf.reduce_sum(tf.cast(tf.logical_and(mask, orig_mask), tf.int32), axis=1)
+        tag = DimensionTag(
+          description="resize:fill_dropout:%s" % self.get_absolute_name(),
+          kind=DimensionTag.Types.Spatial, batch=self.output.batch)
+        tag.set_tag_on_size_tensor(size)
+        self.output.size_placeholder[axis - 1] = size
     if axis != 1:
       perm = [0] + remaining_axes
       perm.insert(axis, 1)
@@ -5770,17 +5750,15 @@ class ResizeLayer(_ConcatInputLayer):
     :param str name:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     out = get_concat_sources_data_template(sources).copy_as_batch_major()
     out = out.copy_template(name="%s_output" % name)
     axis = out.get_axis_from_description(axis)
-    assert axis > 0, "batch-dim resize not supported"
-    if out.shape[axis - 1] is not None:
-      out_shape = list(out.shape)
-      out_shape[axis - 1] *= factor
-      out.shape = tuple(out_shape)
-    if axis - 1 in out.size_placeholder:
-      del out.size_placeholder[axis - 1]  # we will reset it
-    return out
+    assert axis != out.batch_dim_axis, "batch-dim resize not supported"
+    tag = out.dim_tags[axis]
+    dim = None if tag.dimension is None else (tag.dimension * factor)
+    tag = DimensionTag(kind=tag.kind, description="%s_resize" % name, dimension=dim)
+    return out.copy_template_replace_dim_tag(axis=axis, new_dim_tag=tag)
 
 
 class CombineDimsLayer(MergeDimsLayer):
@@ -5857,11 +5835,12 @@ class RemoveLayer(LayerBase):
     :param list[LayerBase] sources:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     assert len(sources) == 1, "%s layer %r: must have exactly one source" % (cls, name)
     assert sources[0].output.sparse, "%s layer %r: assumes sparse data" % (cls, name)
     out = sources[0].output.copy(name="%s_output" % name).copy_as_batch_major()
-    out.shape = (None,) + out.shape[1:]  # must be dynamic
-    return out
+    dim_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="%s_removed_items", dimension=None)
+    return out.copy_template_replace_dim_tag(axis=out.time_dim_axis, new_dim_tag=dim_tag)
 
 
 class CombineLayer(LayerBase):
@@ -5933,6 +5912,11 @@ class CombineLayer(LayerBase):
     out_type_["name"] = "%s_output" % kwargs["name"]
     if out_type:
       if isinstance(out_type, dict):
+        if "shape" in out_type:
+          out_type_.pop("dim_tags", None)
+          out_type_.pop("batch_dim_axis", None)
+          out_type_.pop("feature_dim_axis", None)
+          out_type_.pop("time_dim_axis", None)
         out_type_.update(out_type)
       elif callable(out_type):
         def call_out_type_with_eval_locals(**out_type_kwargs):
@@ -6298,14 +6282,14 @@ class SwitchLayer(LayerBase):
       :rtype: Data
       """
       if isinstance(source, LayerBase):
-        return source.output.copy(source_name)
+        return source.output.copy_template(source_name)
       return Data.template_from_constant(source, name=source_name)
 
     if isinstance(condition, bool):
       return get_source_template(true_from if condition else false_from, source_name="%s_output" % name)
     true_data = get_source_template(true_from, source_name="%s_true" % name)
     false_data = get_source_template(false_from, source_name="%s_false" % name)
-    out = Data.get_common_data([true_data, false_data, condition.output])
+    out = Data.get_common_data([true_data, false_data, condition.output.copy_template()])
     out.dtype = true_data.dtype
     out.sparse = true_data.sparse
     if out.feature_dim_axis is not None:
@@ -6313,6 +6297,7 @@ class SwitchLayer(LayerBase):
     else:
       out.dim = true_data.dim
     out.vocab = true_data.vocab
+    out.sanity_check()
     return out.copy(name="%s_output" % name)
 
   def get_dep_layers(self):
@@ -6345,8 +6330,9 @@ class CondLayer(LayerBase):
     :param LayerBase|dict[str] true_layer:
     :param LayerBase|dict[str] false_layer:
     """
-    super(CondLayer, self).__init__(**kwargs)
     import os
+    from ..util.data import DimensionTag
+    super(CondLayer, self).__init__(**kwargs)
     self._parent_scope = os.path.dirname(tf_compat.v1.get_variable_scope().name)
     self.condition_desc = condition
     self.condition_layer = self._make_layer("condition", self.condition_desc)
@@ -6365,7 +6351,10 @@ class CondLayer(LayerBase):
     for i, size in zip(sorted(self.output.size_placeholder.keys()), sizes):
       assert isinstance(size, tf.Tensor)
       assert size.shape.ndims == 1
-      # Note: Not quite clear what dimension-tag to set...
+      old_size = self.output.size_placeholder[i]
+      old_tag = DimensionTag.get_tag_from_size_tensor(old_size)
+      assert old_tag
+      old_tag.set_tag_on_size_tensor(size, batch=self.output.batch)
       self.output.size_placeholder[i] = size
 
   def _cond_layer_return(self, layer):
@@ -7240,11 +7229,11 @@ class ForcedAlignmentLayer(_ConcatInputLayer):
     :rtype: Data
     """
     src = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_time_major()
-    src.dtype = "int32"
-    src.sparse = True
-    src.shape = (None,)
-    src.feature_dim_axis = NotSpecified
-    return src
+    opts = src.get_kwargs(include_special_axes=False)
+    opts["dim_tags"] = (src.get_time_dim_tag(), src.dim_tags[src.batch_dim_axis])
+    opts["dtype"] = "int32"
+    opts["sparse"] = True
+    return Data(**opts)
 
 
 class FastBaumWelchLayer(_ConcatInputLayer):

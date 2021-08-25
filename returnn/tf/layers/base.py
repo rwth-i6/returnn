@@ -281,7 +281,7 @@ class LayerBase(object):
     # You are supposed to set self.output.{batch_dim_axis,time_dim_axis} explicitly,
     # as well as check the inputs if they are as you would suggest.
     # However, a good default is often to use the same as the input.
-    if all([k not in out_type for k in Data.SpecialAxesNames]):
+    if all([k not in out_type for k in Data.SpecialAxesNames]) and "dim_tags" not in out_type:
       if sources_data:
         out_type.setdefault("batch_dim_axis", sources_data.batch_dim_axis)
         out_type.setdefault("time_dim_axis", sources_data.time_dim_axis)
@@ -293,7 +293,7 @@ class LayerBase(object):
               out_type.setdefault("feature_dim_axis", None)
       elif network.is_inside_rec_layer() and None not in out_type.get("shape", ()):
         out_type.setdefault("time_dim_axis", None)
-    if "shape" not in out_type:
+    if "shape" not in out_type and "dim_tags" not in out_type:
       if sources_data:
         if out_type.get("sparse", False):
           out_type.setdefault("shape", sources_data.shape_sparse)
@@ -353,7 +353,7 @@ class LayerBase(object):
     # However, in many cases, this will just be {0: time-lengths} and the same as from the input.
     # We check for this case and preset it by that if possible.
     # If you want to have it different in your layer, just overwrite it.
-    common_source = Data.get_common_data([s.output for s in sources if s])
+    common_source = Data.get_common_data([s.output for s in sources if s], ignore_feature_dim=True)
     if not output.size_placeholder:
       if network.eval_flag and size_target:
         output.size_placeholder = cls._static_get_target_value(
