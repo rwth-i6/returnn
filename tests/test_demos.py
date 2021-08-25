@@ -70,9 +70,13 @@ def run_and_parse_last_fer(*args, **kwargs):
     # example: epoch 5 score: 0.0231807245472 elapsed: 0:00:04 dev: score 0.0137521058997 error 0.00268961807423
     m = re.match("epoch [0-9]+ score: .* dev: .* error ([0-9.]+)\\s?", line)
     if not m:
+      # example: dev: score 0.03350000149202181 error 0.009919877954075871
+      m = re.match("dev: score .* error ([0-9.]+)\\s?", line)
+    if not m:
       continue
     parsed_fer = float(m.group(1))
-  assert parsed_fer is not None, "No epoch dev errors found in output: %s\n" % out
+  err_msg = "ERROR: No epoch dev errors found in output"
+  assert parsed_fer is not None, "%s.\nOutput:\n\n%s\n\n%s." % (err_msg, out, err_msg)
   return parsed_fer
 
 
@@ -80,6 +84,7 @@ def run_config_get_fer(config_filename, env_update=None):
   cleanup_tmp_models(config_filename)
   fer = run_and_parse_last_fer(
     py, "rnn.py", config_filename, "++log_verbosity", "5", env_update=env_update)
+  print("FER:", fer)
   cleanup_tmp_models(config_filename)
   return fer
 
