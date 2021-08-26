@@ -2743,6 +2743,15 @@ class Data(object):
     assert len(axes) == 1, "%r: %r is not a unique axis but %r" % (self, axis, axes)
     return axes[0]
 
+  def has_axis(self, axis):
+    """
+    :param str|DimensionTag axis:
+    :return: whether the axis exists
+    :rtype: bool
+    """
+    axes = self.get_axes_from_description(axis, allow_int=False)
+    return len(axes) > 0
+
   def get_axes_by_tag_name(self, name, spatial_only=False):
     """
     :param str name: the tag name, or part of it (must be unique, and must exist)
