@@ -147,7 +147,7 @@ class RecLayer(_ConcatInputLayer):
     self._initial_state_deps = [layer for layer in nest.flatten(initial_state) if isinstance(layer, LayerBase)]
     self._input_projection = input_projection
     self._max_seq_len = max_seq_len
-    self._output_time_dim_tag = _time_dim_tag
+    self.time_dim_tag = _time_dim_tag
     self.include_eos = include_eos
     if optimize_move_layers_out is None:
       optimize_move_layers_out = self.network.get_config().bool("optimize_move_layers_out", True)
