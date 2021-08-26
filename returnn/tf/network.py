@@ -2197,7 +2197,7 @@ class TFNetwork(object):
   def get_rec_step_info(self, must_exist=True):
     """
     :param bool must_exist: if True, will throw exception if not available
-    :rtype: TFNetworkRecLayer.RecStepInfoLayer|None
+    :rtype: returnn.tf.layers.rec.RecStepInfoLayer|None
     """
     # noinspection PyProtectedMember
     from returnn.tf.layers.rec import RecStepInfoLayer, _SubnetworkRecCell
