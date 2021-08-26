@@ -1312,11 +1312,6 @@ class Data(object):
     if self.feature_dim_axis is not None:
       assert self.dim == self.batch_shape[self.feature_dim_axis], (
         "%s: inconsistent dim. feature axis or unspecified: %r." % (self, self.feature_dim_axis_or_unspecified))
-    for i, dyn_size in self.size_placeholder.items():
-      assert 0 <= i < self.ndim
-      assert dyn_size.dtype in (tf.int32, tf.int64)
-      assert dyn_size.shape.ndims == 1, (
-        "%s: all size_placeholder entries should have shape [B], but got: %r" % (self, self.size_placeholder))
     for axis, tag in enumerate(self.dim_tags):
       assert self.batch_shape[axis] == tag.dimension
       if tag.is_batch_dim():
@@ -1324,9 +1319,9 @@ class Data(object):
         continue  # further checks will assume not batch
       assert axis != self.batch_dim_axis, "%s: invalid %s" % (self, tag)
       # Note: tag.kind (feature or spatial) is independent from self.feature_dim_axis.
-      if tag.dyn_size is not None:
-        tag_ = DimensionTag.get_tag_from_size_tensor(tag.dyn_size)
-        assert tag_ and tag_.get_same_base() is tag.get_same_base(), "%s: %s != %s" % (self, tag_, tag)
+      if tag.dyn_size_ext:
+        assert tag.dyn_size_ext.dtype in {"int32", "int64"}
+        tag.dyn_size_ext.sanity_check()
     if not ignore_placeholder and self.placeholder is not None:
       # Note: We could just call self.placeholder.set_shape.
       # However, we are more explicit. We assume that the placeholder has already a known shape, and error otherwise.
