@@ -2619,7 +2619,7 @@ class Data(object):
 
   def get_axes_from_description(self, axes, allow_int=True):
     """
-    :param int|list[int]|str|list[str]|None axes: one axis or multiple axis, or none.
+    :param int|list[int]|str|list[str|DimensionTag]|DimensionTag|None axes: one axis or multiple axis, or none.
       This is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
       It also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
       and more (see the code).
@@ -2630,11 +2630,13 @@ class Data(object):
     """
     if axes is None or axes == "":
       return []
+    if isinstance(axes, DimensionTag):
+      return [i for (i, tag) in enumerate(self.dim_tags) if tag == axes]
     if not allow_int:
       assert not isinstance(axes, int)
     assert isinstance(axes, (str, int, list, tuple))
     if isinstance(axes, (list, tuple)):
-      assert all([a is None or isinstance(a, (str, int)) for a in axes])
+      assert all([a is None or isinstance(a, (str, int, DimensionTag)) for a in axes])
       if not allow_int:
         assert all([not isinstance(a, int) for a in axes])
     if isinstance(axes, str):
@@ -2731,12 +2733,13 @@ class Data(object):
 
   def get_axis_from_description(self, axis, allow_int=True):
     """
-    :param int|str axis:
+    :param int|str|DimensionTag axis:
     :param bool allow_int:
     :return: axis, counted with batch-dim
     :rtype: int
     """
     axes = self.get_axes_from_description(axis, allow_int=allow_int)
+    assert axes, "%s: %r axis not found" % (self, axis)
     assert len(axes) == 1, "%r: %r is not a unique axis but %r" % (self, axis, axes)
     return axes[0]
 
