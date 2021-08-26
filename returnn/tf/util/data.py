@@ -3035,6 +3035,13 @@ class Data(object):
     batch = batch.copy_set_beam(self.beam)
     return batch.dim
 
+  def get_batch_dim_tag(self):
+    """
+    :rtype: DimensionTag
+    """
+    assert self.have_batch_axis()
+    return self.dim_tags[self.batch_dim_axis]
+
   def get_static_batch_dim(self):
     """
     :rtype: int|None
