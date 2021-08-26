@@ -344,7 +344,7 @@ class TFNetwork(object):
   def __init__(self, config=None, extern_data=None, rnd_seed=None,
                train_flag=None, eval_flag=None, search_flag=None,
                parent_layer=None, parent_net=None, extra_parent_net=None, extra_name_prefix=None,
-               is_inside_rec_layer=None,
+               inside_rec_time_dim=None,
                absolute_name_prefix=None, name=None):
     """
     :param Config.Config config: only needed to init extern_data if not specified explicitly
@@ -358,7 +358,7 @@ class TFNetwork(object):
     :param TFNetwork|None extra_parent_net: we are on the same level (not really a child),
       but an "extra" net of extra_parent_net
     :param str|None extra_name_prefix:
-    :param bool is_inside_rec_layer: at template construction, use this
+    :param DimensionTag|None inside_rec_time_dim:
     :param str|None absolute_name_prefix:
     :param str name: only for debugging
     """
@@ -415,7 +415,7 @@ class TFNetwork(object):
     self.search_flag = search_flag
     self.parent_layer = parent_layer
     self.parent_net = parent_net
-    self._is_inside_rec_layer = is_inside_rec_layer
+    self._inside_rec_time_dim = inside_rec_time_dim
     self.extra_parent_net = extra_parent_net
     self.extra_name_prefix = extra_name_prefix
     self.extra_deps_in_extra = False
@@ -2156,34 +2156,64 @@ class TFNetwork(object):
 
   def is_inside_rec_layer(self, inside_loop=True):
     """
-    :param bool inside_loop: only True if the network is constructed within the loop (not moved out)
-    :return: whether we are inside a :class:`RecLayer`. see :func:`get_rec_parent_layer`
+    :param bool inside_loop: only True if we are inside the loop of the most recent rec layer
+    :return: whether we are inside a :class:`RecLayer` (with inside_loop: and not optimized out-of-the-loop).
+      At template construction inside a rec layer, this is always true, but the rec layer itself does not exist yet.
+    :rtype: bool
+
+    Also see :func:`get_inside_rec_time_dim` and :func:`get_rec_parent_layer`.
+    """
+    return self.get_inside_rec_time_dim(inside_loop=inside_loop) is not None
+
+  def get_inside_rec_time_dim(self, inside_loop=True):
+    """
+    :param bool inside_loop: only True if we are inside the loop of the most recent rec layer
+    :return: when the net is inside a rec loop (:class:`RecLayer` and not optimized out of the loop),
+      this returns the dim tag the rec layer iterates over
+    :rtype: DimensionTag|None
+    """
+    if self._inside_rec_time_dim:
+      return self._inside_rec_time_dim
+    from returnn.tf.layers.rec import RecLayer
+    if isinstance(self.parent_layer, RecLayer):
+      # When we get here (and not in the if-branch above on _inside_rec_time_dim),
+      # this is not template construction anymore,
+      # but also we are moved out (because otherwise _inside_rec_time_dim is set).
+      assert not self._is_rec_layer_inside_net()
+      if inside_loop:
+        return None
+      return self.parent_layer.time_dim_tag
+    if self.parent_net:
+      return self.parent_net.get_inside_rec_time_dim(inside_loop=inside_loop)
+    return None
+
+  def _is_rec_layer_inside_net(self):
+    """
     :rtype: bool
     """
-    if self._is_inside_rec_layer is not None:
-      return self._is_inside_rec_layer
-    if self.get_rec_parent_layer(inside_loop=inside_loop) is not None:
-      return True
-    if self.parent_net:
-      # This might still return True, in case of template construction, where _is_inside_rec_layer is set.
-      return self.parent_net.is_inside_rec_layer(inside_loop=inside_loop)
-    return False
+    from returnn.tf.layers.rec import RecLayer
+    # noinspection PyProtectedMember
+    from returnn.tf.layers.rec import _SubnetworkRecCell
+    assert isinstance(self.parent_layer, RecLayer)
+    assert isinstance(self.parent_layer.cell, _SubnetworkRecCell)
+    return self is self.parent_layer.cell.net
 
   def get_rec_parent_layer(self, inside_loop=True):
     """
     :param bool inside_loop: only return if the network is constructed within the loop (not moved out)
-    :return: if we are a subnet of a :class:`RecLayer`, will return the RecLayer instance
+      of the most recent parent rec layer
+    :return: if we are a subnet of a :class:`RecLayer`, will return the RecLayer instance.
+      At template construction time, this is always None.
     :rtype: returnn.tf.layers.rec.RecLayer|None
     """
     from returnn.tf.layers.rec import RecLayer
     if isinstance(self.parent_layer, RecLayer):
       if inside_loop:
-        # noinspection PyProtectedMember
-        from returnn.tf.layers.rec import _SubnetworkRecCell
-        assert isinstance(self.parent_layer.cell, _SubnetworkRecCell)
-        if self is not self.parent_layer.cell.net:
-          return None
+        return self.parent_layer if self._is_rec_layer_inside_net() else None
       return self.parent_layer
+    if self._inside_rec_time_dim:
+      # It means we are at template construction time but the corresponding rec layer does not exist yet.
+      return None
     if self.parent_net:
       return self.parent_net.get_rec_parent_layer(inside_loop=inside_loop)
     return None
