@@ -997,7 +997,7 @@ class _SubnetworkRecCell(object):
       train_flag=parent_net.train_flag,
       search_flag=parent_net.search_flag,
       eval_flag=False,
-      is_inside_rec_layer=True,
+      inside_rec_time_dim=time_dim_tag,
       absolute_name_prefix="%s%s/" % (parent_net.get_absolute_name_prefix(), rec_layer_name),
       parent_net=parent_net)
     self.net.is_root_in_ctx = True
