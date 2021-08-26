@@ -1711,7 +1711,7 @@ class _SubnetworkRecCell(object):
     output_template = self.layer_data_templates["output"]
     assert output_template.output.dim == self.parent_rec_layer.output.dim
     assert self.parent_rec_layer.output.time_dim_axis == 0
-    assert output_template.output.time_dim_axis is None
+    assert not output_template.output.has_axis(self.time_dim_tag)
     assert output_template.output.batch_shape == self.parent_rec_layer.output.batch_shape[1:], (
       "see RecLayer.get_out_data_from_opts()")
 
