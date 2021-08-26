@@ -71,6 +71,14 @@ class DimensionTag(object):
     if dyn_size is not None:
       assert not dyn_size_ext
       self.dyn_size = dyn_size
+    # When we have some dynamic size, this dynamic size could be inside a loop (RecLayer),
+    # and different per each loop frame.
+    # In that case, we can not access it from outside (except when we accumulate it).
+    # We expect that the same_base is the dim tag inside the loop, which has this set.
+    self.per_spatial_frame = None  # type: typing.Optional[DimensionTag]
+    # When we accumulate the dynamic sizes, this results in this dim tag.
+    # It has same_as set to self.
+    self.per_spatial_frame_accumulated = None  # type: typing.Optional[DimensionTag]
 
   def __repr__(self):
     return "DimensionTag{%s}" % self.short_repr()
