@@ -5487,6 +5487,7 @@ class DotLayer(LayerBase):
     :param bool add_var2_if_empty:
     :rtype: Data
     """
+    from ..util.data import DimensionTag, BatchInfo
     assert len(sources) == 2, "dot-layer %r: needs exactly two sources" % (name,)
     # See __init__.
     a_out = sources[0].output.copy()
@@ -5508,11 +5509,9 @@ class DotLayer(LayerBase):
     assert all(b_axis in map_a_to_b_rem_axes.values() for b_axis in b_rem_axes)
     b_rem_axes = [map_a_to_b_rem_axes[a_axis] for a_axis in a_rem_axes]
 
-    a_shape = a_out.batch_shape
-    b_shape = b_out.batch_shape
-    a_rem_dims = [a_shape[i] for i in a_rem_axes]
-    a_var_dims = [a_shape[i] for i in a_var_axes]
-    b_var_dims = [b_shape[i] for i in b_var_axes]
+    a_rem_dims = [a_out.dim_tags[i] for i in a_rem_axes]
+    a_var_dims = [a_out.dim_tags[i] for i in a_var_axes]
+    b_var_dims = [b_out.dim_tags[i] for i in b_var_axes]
 
     def find_axis(a_axis, b_axis):
       """
@@ -5533,49 +5532,18 @@ class DotLayer(LayerBase):
       return axis
 
     time_dim_axis = find_axis(a_out.time_dim_axis, b_out.time_dim_axis)
-    batch_dim_axis = find_axis(a_out.batch_dim_axis, b_out.batch_dim_axis)
-    assert batch_dim_axis != NotSpecified or (a_out.batch_dim_axis is None and b_out.batch_dim_axis is None)
 
     if not b_var_dims and add_var2_if_empty:
-      b_var_dims.append(1)
+      b_var_dims.append(
+        DimensionTag(kind=DimensionTag.Types.Spatial, description="%s:dot:dummy-var2" % name, dimension=1))
 
-    def get_batch_axis_excluding_batch(axis):
-      """
-      :param int axis:
-      :rtype: int
-      """
-      if batch_dim_axis is None:
-        return axis
-      assert axis != batch_dim_axis
-      if axis < batch_dim_axis:
-        return axis
-      return axis - 1
-
-    # Collect dynamic size info.
-    size_placeholder = {}
-    for axis1_wo_b in sorted(a_out.size_placeholder.keys()):
-      axis_out_wb = cls._axis1_to_output(a_out.get_batch_axis(axis1_wo_b), a_rem_axes=a_rem_axes, a_var_axes=a_var_axes)
-      if axis_out_wb is None:
-        continue
-      size_placeholder[get_batch_axis_excluding_batch(axis_out_wb)] = a_out.size_placeholder[axis1_wo_b]
-    for axis2_wo_b in sorted(b_out.size_placeholder.keys()):
-      axis_out_wb = cls._axis2_to_output(
-        b_out.get_batch_axis(axis2_wo_b), b_rem_axes=b_rem_axes, a_var_axes=a_var_axes, b_var_axes=b_var_axes)
-      if axis_out_wb is None or axis_out_wb in size_placeholder:
-        continue
-      size_placeholder[get_batch_axis_excluding_batch(axis_out_wb)] = b_out.size_placeholder[axis2_wo_b]
-
-    shape = list(a_rem_dims + a_var_dims + b_var_dims)
-    if batch_dim_axis is not None and batch_dim_axis is not NotSpecified:
-      shape.pop(batch_dim_axis)
-
+    dim_tags = list(a_rem_dims + a_var_dims + b_var_dims)
     return Data(
       name="%s_output" % name,
-      shape=tuple(shape),
-      batch_dim_axis=batch_dim_axis,
+      dim_tags=dim_tags,
       time_dim_axis=time_dim_axis,
       dtype=a_out.dtype,
-      size_placeholder=size_placeholder,
+      batch=BatchInfo.get_common_batch_info([src.batch for src in (a_out, b_out)]),
       beam=SearchBeam.get_combined_beam(a_out.beam, b_out.beam))
 
 
