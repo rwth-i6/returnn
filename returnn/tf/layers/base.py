@@ -1461,7 +1461,7 @@ class LayerBase(object):
   def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, **kwargs):
     """
     :param tf.Tensor batch_dim: for this layer, might be with beam
-    :param TFNetworkRecLayer.RecLayer rec_layer:
+    :param returnn.tf.layers.rec.RecLayer rec_layer:
     :rtype: dict[str,tf.Tensor]
     """
     return {}
