@@ -18,6 +18,14 @@ recommended usage with the latest ``behavior_version``, and not listing legacy/d
 Version History
 ---------------
 
+Behavior Version 2:
+27.08.2021
+
+Disallow boolean optimizer specifications such as ``adam = True``
+in favor of using ``optimizer = {"class": "adam", ...}``
+
+See issue `#512 <https://github.com/rwth-i6/returnn/issues/514>`_.
+
 Behavior Version 1:
 28.05.2021
 
@@ -26,7 +34,7 @@ thus making use of the hidden default "data" as layer input.
 
 "from" needs to be set explicitely now.
 
-See issue `#519 <https://github.com/rwth-i6/returnn/issues/519`_.
+See issue `#519 <https://github.com/rwth-i6/returnn/issues/519>`_.
 
 
 
