@@ -3460,6 +3460,98 @@ def test_reclayer_optimize_out_dot():
     rtol=1e-3)
 
 
+def test_reclayer_optimize_out_dot_consistent_axes():
+  # https://github.com/rwth-i6/returnn/issues/569
+  # Used for multi-head dot-attention.
+  n_heads = 4
+  n_key = 5
+  n_value = 7
+  n_key_total = n_heads * n_key
+  n_value_total = n_heads * n_value
+  check_reclayer_optimize_out(
+    {"class": "linear", "activation": None, "from": "att"},
+    other_subnet_layers={
+      "s": {"class": "linear", "activation": None, "with_bias": False, "from": "data:source",
+            "n_out": n_key_total},  # (B, D)  -- Q (query). D should be same as enc_ctx
+      "att_query": {"class": "split_dims", "axis": "F", "dims": (n_heads, n_key), "from": "s"},  # (B, H, D/H)
+      # att_query is (T, B, H, D/H) outside the loop.
+      # Here is the main test, the dot-layer:
+      "energy": {
+        "class": "dot",
+        "red1": "static:-1", "red2": "static:-1",
+        "var1": "T", "var2": None, "add_var2_if_empty": False,
+        "from": ["base:enc_ctx", "att_query"]},
+      # energy inside the loop will be (B, H, T).
+      # energy outside the loop should be (B, H, T, T). I.e. T is still the first time axis.
+      # The logic should be that the dot layer would add any extra axes (due to this optimization, moving layer out)
+      # to either common shared axes (which is implicit) or if it is only added to one input,
+      # then to the respective var axes.
+      # Note that in this test, there is no different encoder or decoder time dim.
+      # It still works due to time-dim-axis being set to the first source.
+      "att_weights": {"class": "softmax_over_spatial", "from": "energy"},  # (B, T, H)
+      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
+      "att": {"class": "merge_dims", "axes": "static", "from": "att0"},  # (B, H*V); Use "static" here.
+      },
+    shared_base_net={
+      "encoder": {"class": "copy", "from": "data"},
+      "enc_ctx0": {"class": "linear", "activation": None, "with_bias": False, "from": "encoder",
+                   "n_out": n_key_total},  # (B, enc-T, D)
+      "enc_ctx": {"class": "split_dims", "axis": "F", "dims": (n_heads, n_key),
+                  "from": "enc_ctx0", "is_output_layer": True},  # (B, enc-T, H, D/H)
+      "enc_value0": {"class": "linear", "activation": None, "with_bias": False, "from": "encoder",
+                     "n_out": n_value_total},
+      "enc_value": {"class": "split_dims", "axis": "F", "dims": (n_heads, n_value),
+                    "from": "enc_value0", "is_output_layer": True},  # (B, enc-T, H, D/H)
+    },
+    rtol=1e-3)
+
+
+def test_reclayer_optimize_out_dot_consistent_axes_enc_dec():
+  # https://github.com/rwth-i6/returnn/issues/569
+  # Used for multi-head dot-attention.
+  n_heads = 4
+  n_key = 5
+  n_value = 7
+  n_key_total = n_heads * n_key
+  n_value_total = n_heads * n_value
+  check_reclayer_optimize_out(
+    {"class": "linear", "activation": None, "from": "att"},
+    other_subnet_layers={
+      "s": {"class": "linear", "activation": None, "with_bias": False, "from": "data:source",
+            "n_out": n_key_total},  # (B, D)  -- Q (query). D should be same as enc_ctx
+      "att_query": {"class": "split_dims", "axis": "F", "dims": (n_heads, n_key), "from": "s"},  # (B, H, D/H)
+      # att_query is (dec-T, B, H, D/H) outside the loop.
+      # Here is the main test, the dot-layer:
+      "energy": {
+        "class": "dot",
+        "red1": "static:-1", "red2": "static:-1",
+        "var1": "T", "var2": None, "add_var2_if_empty": False,
+        "from": ["base:enc_ctx", "att_query"]},
+      # energy inside the loop will be (B, H, enc-T).
+      # energy outside the loop should be (B, H, enc-T, dec-T). I.e. enc-T is still the first time axis.
+      # The logic should be that the dot layer would add any extra axes (due to this optimization, moving layer out)
+      # to either common shared axes (which is implicit) or if it is only added to one input,
+      # then to the respective var axes.
+      "att_weights": {"class": "softmax_over_spatial", "from": "energy"},  # (B, enc-T, H)
+      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
+      "att": {"class": "merge_dims", "axes": "static", "from": "att0"},  # (B, H*V); Use "static" here.
+    },
+    shared_base_net={
+      # Use conv with padding valid to make sure we get another time dim,
+      # such that the rec part above will not confuse this time dim with the rec time dim.
+      "encoder": {"class": "conv", "from": "data", "filter_size": [3], "padding": "valid", "n_out": 5},
+      "enc_ctx0": {"class": "linear", "activation": None, "with_bias": False, "from": "encoder",
+                   "n_out": n_key_total},  # (B, enc-T, D)
+      "enc_ctx": {"class": "split_dims", "axis": "F", "dims": (n_heads, n_key),
+                  "from": "enc_ctx0", "is_output_layer": True},  # (B, enc-T, H, D/H)
+      "enc_value0": {"class": "linear", "activation": None, "with_bias": False, "from": "encoder",
+                     "n_out": n_value_total},
+      "enc_value": {"class": "split_dims", "axis": "F", "dims": (n_heads, n_value),
+                    "from": "enc_value0", "is_output_layer": True},  # (B, enc-T, H, D/H)
+    },
+    rtol=1e-3)
+
+
 def test_reclayer_optimize_out_dot_kv_in_rec():
   # Same as test_reclayer_optimize_out_dot, but with the att key/value layers declared INSIDE the rec layer.
   AttNumHeads = 4
