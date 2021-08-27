@@ -6353,6 +6353,7 @@ def test_cumulated_attention_weights_search():
     "extern_data": {"data": {"dim": n_out, "sparse": True}, "classes": {"dim": n_out, "sparse": True}},
     "search_output_layer": "decision",
     "debug_print_layer_output_shape": True,
+    "debug_runtime_sanity_checks": True,
     "debug_print_layer_output_template": True})
 
   # Try different permutations of the cum_att_energy inputs, previously these behaved differently
