@@ -3249,7 +3249,7 @@ def test_ReuseParams_rec():
       "rec_fwd":      {"class": "rec", "direction": 1, "from": ["data"], "n_out": 300, "unit": "lstmp"},
       "rec_fwd_copy": {"class": "rec", "direction": 1, "from": ["data"], "n_out": 300, "unit": "lstmp", "reuse_params": "rec_fwd"}
     },
-    "adam": True,
+    "optimizer": {"class": "adam"},
     "target": "classes",
     "debug_grad_summaries": True,
     "debug_save_updater_vars": True,
@@ -3299,7 +3299,7 @@ def test_ReuseParams_dep_loop():
       "layer2": {"class": "linear", "from": "layer1", "activation": "relu", "n_out": 10},
       "out": {"class": "softmax", "from": "layer2", "loss": "ce", "n_out": num_outputs},
     },
-    "adam": True,
+    "optimizer": {"class": "adam"},
     "target": "classes",
     "debug_print_layer_output_template": True,
   })
@@ -3364,7 +3364,7 @@ def test_ReuseParams_dep_loop_2():
       "layer2": {"class": "linear", "from": "layer1/sub2", "activation": "relu", "n_out": 10},
       "out": {"class": "softmax", "from": "layer2", "loss": "ce", "n_out": num_outputs},
     },
-    "adam": True,
+    "optimizer": {"class": "adam"},
     "target": "classes",
     "debug_print_layer_output_template": True,
   })
@@ -3429,7 +3429,7 @@ def test_ReuseParams_dep_loop_3():
       "layer2": {"class": "linear", "from": "layer1/sub1", "activation": "relu", "n_out": 10},
       "out": {"class": "softmax", "from": "layer2", "loss": "ce", "n_out": num_outputs},
     },
-    "adam": True,
+    "optimizer": {"class": "adam"},
     "target": "classes",
     "debug_print_layer_output_template": True,
   })

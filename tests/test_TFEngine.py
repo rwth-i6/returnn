@@ -314,7 +314,7 @@ def test_engine_train_uneven_batches():
     "start_epoch": 1,
     "num_epochs": 2,
     "batch_size": 50,  # set it such that sometimes we have num-seqs 1, 2 or 3 in a single batch
-    "adam": True,
+    "optimizer": {"class": "adam"},
     "learning_rate": 0.001,
     "tf_log_memory_usage": True,
     "log_batch_size": True
@@ -362,7 +362,7 @@ def test_engine_train_dummy_distributed():
     "start_epoch": 1,
     "num_epochs": 2,
     "batch_size": 50,  # set it such that sometimes we have num-seqs 1, 2 or 3 in a single batch
-    "adam": True,
+    "optimizer": {"class": "adam"},
     "learning_rate": 0.001,
     "tf_log_memory_usage": True,
     "log_batch_size": True,
@@ -576,7 +576,7 @@ def test_engine_train_grad_noise_sparse():
     "start_epoch": 1,
     "num_epochs": 2,
     "learning_rate": 0.01,
-    "nadam": True,
+    "optimizer": {"class": "nadam"},
     "gradient_noise": 0.3,
     "batch_size": 100
   })
@@ -985,7 +985,7 @@ def run_dummy_training(net_dict):
     "start_epoch": 1,
     "num_epochs": 2,
     "learning_rate": 0.01,
-    "nadam": True,
+    "optimizer": {"class": "nadam"},
     "gradient_noise": 0.3,
     "debug_add_check_numerics_ops": True,
     "debug_print_layer_output_template": True,
@@ -1750,7 +1750,7 @@ def test_rec_subnet_train_t3b():
     "start_epoch": 1,
     "num_epochs": 2,
     "batch_size": 10,
-    "nadam": True,
+    "optimizer": {"class": "nadam"},
     "learning_rate": 0.01,
     "debug_add_check_numerics_ops": True
   })
@@ -1806,7 +1806,7 @@ def test_rec_subnet_train_t3d():
     "start_epoch": 1,
     "num_epochs": 2,
     "batch_size": 10,
-    "nadam": True,
+    "optimizer": {"class": "nadam"},
     "learning_rate": 0.01,
     "debug_add_check_numerics_ops": True
   })
@@ -1851,7 +1851,7 @@ def test_rec_subnet_train_t3d_simple():
     "start_epoch": 1,
     "num_epochs": 2,
     "batch_size": 10,
-    "nadam": True,
+    "optimizer": {"class": "nadam"},
     "learning_rate": 0.01,
     "debug_add_check_numerics_ops": True
   })
@@ -1880,7 +1880,7 @@ def deterministic_train_check(layer_opts):
     "start_epoch": 1,
     "num_epochs": 2,
     "batch_size": 10,
-    "adam": True,
+    "optimizer": {"class": "adam"},
     "learning_rate": 0.01,
     "debug_add_check_numerics_ops": True
   })
@@ -2011,7 +2011,7 @@ def test_rec_subnet_auto_optimize():
       "start_epoch": 1,
       "num_epochs": 2,
       "batch_size": 10,
-      "nadam": True,
+      "optimizer": {"class": "nadam"},
       "learning_rate": 0.01
     })
     return config
@@ -2342,7 +2342,7 @@ def test_rec_subnet_eval_init_out_apply0():
     "start_epoch": 1,
     "num_epochs": 2,
     "batch_size": 10,
-    "adam": True,
+    "optimizer": {"class": "adam"},
     "learning_rate": 0.01,
     "debug_print_layer_output_template": True,
     "debug_runtime_sanity_checks": True,
@@ -2715,7 +2715,7 @@ def test_search_multi_choice_hdf_dump():
       "pretrain": {"copy_param_mode": "subset", "construction_algo": custom_construction_algo},
       "batch_size": 1000,
       "max_seqs": 2,
-      "adam": True,
+      "optimizer": {"class": "adam"},
       "learning_rate": learning_rate,
       "use_learning_rate_control_always": True,
       "learning_rate_control": "newbob_multi_epoch",
@@ -3156,7 +3156,7 @@ def test_TikhonovRegularizationLayer():
     "start_epoch": 1,
     "num_epochs": 2,
     "learning_rate": 0.01,
-    "adam": True,
+    "optimizer": {"class": "adam"},
     "debug_print_layer_output_template": True,
   })
   _cleanup_old_models(config)
@@ -3188,7 +3188,7 @@ def test_grad_summaries():
     "num_inputs": n_data_dim,
     "num_epochs": 1,
     "learning_rate": 0.01,
-    "adam": True,
+    "optimizer": {"class": "adam"},
     "debug_print_layer_output_template": True,
     "debug_grad_summaries": True,
   }))
@@ -3677,7 +3677,7 @@ def test_regression_choice():
     "start_epoch": 1,
     "num_epochs": 2,
     "learning_rate": 0.01,
-    "adam": True,
+    "optimizer": {"class": "adam"},
     "debug_print_layer_output_template": True,
     "debug_print_layer_output_shape": True,
   })
