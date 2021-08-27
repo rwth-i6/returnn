@@ -4156,9 +4156,9 @@ class PoolLayer(_ConcatInputLayer):
     :param bool use_channel_first:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     # y shape is [batch] + spatial_dims + [n_out].
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
-    shape = [None] * len(pool_size) + [data.dim]
     if strides is None:
       strides = pool_size
     if isinstance(strides, int):
@@ -4171,24 +4171,30 @@ class PoolLayer(_ConcatInputLayer):
     else:
       dilation_rate = list(dilation_rate)
     assert len(dilation_rate) == len(pool_size)
-    if all([s == 1 for s in pool_size]) and all([s == 1 for s in strides]):
+    if all(p == s == d == 1 for (p, s, d) in zip(pool_size, strides, dilation_rate)):
       # Identity function. Just copy and don't do anything.
       return data
     padding = padding.upper()
-    index_shift = data.get_spatial_axes()[0]
+    data = data.copy_as_batch_spatial_major()  # just to have the dim tags in order [B,S...,D]
+    dim_tags = list(data.dim_tags)
     for i in range(len(pool_size)):
-      if data.shape[i + index_shift] is not None:
-        shape[i] = ConvLayer.calc_out_dim(
-          in_dim=data.shape[i + index_shift],
+      if pool_size[i] == strides[i] == dilation_rate[i] == 1:
+        continue  # identity in this axis
+      new_dim = None
+      if dim_tags[i + 1].dimension is not None:
+        new_dim = ConvLayer.calc_out_dim(
+          in_dim=dim_tags[i + 1].dimension,
           filter_size=pool_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
+      dim_tags[i + 1] = DimensionTag(
+        kind=DimensionTag.Types.Spatial, description="%s:pool:s%i" % (name, i), dimension=new_dim)
     feature_dim_axis = NotSpecified
     # Swap the dims if use_channel_first is set.
     if tf_util.is_gpu_available_in_session() and use_channel_first:
       feature_dim_axis = 1
-      shape = shape[-1:] + shape[:-1]
+      dim_tags = dim_tags[:1] + dim_tags[-1:] + dim_tags[1:-1]
     return Data(
       name="%s_output" % name,
-      shape=tuple(shape),
+      dim_tags=dim_tags,
       dim=data.dim,
       dtype=data.dtype,
       sparse=False,
