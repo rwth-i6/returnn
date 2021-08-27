@@ -767,18 +767,22 @@ class BatchInfo:
   @classmethod
   def get_common_batch_info(cls, batches):
     """
-    :param list[BatchInfo] batches:
+    :param list[BatchInfo|None] batches:
     :rtype: BatchInfo|None
     """
+    # Fast paths.
     if not batches:
       return None
     if len(batches) == 1:
       return batches[0]
+    # Make unique, and filter non-none.
     batches_ = []
     for batch in batches:
-      if batch not in batches_:
+      if batch and batch not in batches_:
         batches_.append(batch)
     batches = batches_
+    if not batches_:
+      return None
     if len(batches) == 1:
       return batches[0]
     base = batches[0].get_global_base()
