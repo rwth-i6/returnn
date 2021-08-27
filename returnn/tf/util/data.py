@@ -95,7 +95,7 @@ class DimensionTag(object):
       desc += "(%i)" % self.dimension
     else:
       if self.dyn_size_ext:
-        desc += "[%s]" % ",".join(self.dyn_size_ext.get_batch_axes_short_description())
+        desc += "[%s]" % ",".join(self.dyn_size_ext.get_batch_axes_short_description(special_axes=False))
       else:
         desc += "[?]"
     return desc
@@ -1467,8 +1467,9 @@ class Data(object):
     args += ["batch_shape_meta=" + batch_shape_meta]
     return "Data(%s)" % ", ".join(args)
 
-  def get_batch_axes_short_description(self):
+  def get_batch_axes_short_description(self, special_axes=True):
     """
+    :param bool special_axes: special markers for old-style time_dim_axis and feature_dim_axis
     :rtype: list[str]
     """
     res = []
@@ -1479,10 +1480,11 @@ class Data(object):
           descriptions.append(self.batch.short_repr())
         else:
           descriptions.append("B?")
-      if axis == self.time_dim_axis:
-        descriptions.append("T")
-      if axis == self.feature_dim_axis:
-        descriptions.append("F")
+      if special_axes:
+        if axis == self.time_dim_axis:
+          descriptions.append("T")
+        if axis == self.feature_dim_axis:
+          descriptions.append("F")
       if self.batch_shape[axis] is None:
         if axis == self.batch_dim_axis:
           pass  # expected
@@ -1490,7 +1492,7 @@ class Data(object):
           descriptions.append(dim_tag.short_repr())
       elif axis != self.batch_dim_axis or not self.batch:
         descriptions.append(dim_tag.short_repr())
-      res.append("|".join(descriptions))
+      res.append("|".join(descriptions) or "?")
     return res
 
   def get_compare_key(self):
