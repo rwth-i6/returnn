@@ -121,7 +121,7 @@ def make_config_dict(lstm_unit, use_gpu):
     "max_seqs": base_settings["max_seqs"],
     "chunking": base_settings["chunking"],
     # optimization
-    "adam": True,
+    "optimizer": {"class": "adam"},
     "learning_rate": 0.01}
 
 
