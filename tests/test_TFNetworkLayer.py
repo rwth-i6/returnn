@@ -4112,6 +4112,25 @@ def test_extra_subnet():
     numpy.testing.assert_almost_equal(in_, sub2_out1)
 
 
+def test_subnetwork_unused_output():
+  # https://github.com/rwth-i6/returnn/issues/580
+  with make_scope() as session:
+    net_dict = {
+      'sub': {
+        'class': 'subnetwork',
+        'from': [],
+        'subnetwork': {
+          'linear': {'class': 'linear', 'from': 'base:data:data', 'n_out': 1},
+          'linear_0': {'class': 'linear', 'from': 'linear', 'n_out': 1},
+          'output': {'class': 'copy', 'from': 'linear'}}},
+      'linear': {'class': 'linear', 'from': ['sub/linear', 'sub/linear_0'], 'n_out': 1},
+      'output': {'class': 'copy', 'from': 'linear'}}
+    config = Config()
+    config.update(dict(num_inputs=1, num_outputs=1))
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+
+
 def test_extra_search():
   class Callbacks:
     history = []
