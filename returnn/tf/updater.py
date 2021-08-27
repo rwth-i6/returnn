@@ -547,13 +547,12 @@ class WrapOptimizer:
     use_locking = self.use_locking
     momentum = self.config.float("momentum", 0.0)
     optim_config = self.config.typed_value("optimizer")
+    behavior_valid_optimizer = False  # only via "optimizer" or nothing at all (default SGD)
     if optim_config:
       assert isinstance(optim_config, (dict, str))
       assert "class" in optim_config
       optimizer = self._create_optimizer(optim_config)
-    elif BehaviorVersion.get() >= 2:
-      raise BehaviorVersion.RequirementNotSatisfied(
-        "Please define an optimizer specifically via the 'optimizer=...' parameter")
+      behavior_valid_optimizer = True
     elif self.config.bool("adam", False):
       assert not momentum
       print("Create Adam optimizer.", file=log.v2)
@@ -597,6 +596,11 @@ class WrapOptimizer:
     else:
       print("Create SGD optimizer.", file=log.v2)
       optimizer = tf_compat.v1.train.GradientDescentOptimizer(learning_rate=lr, use_locking=use_locking)
+      behavior_valid_optimizer = True
+    BehaviorVersion.require(
+      condition=behavior_valid_optimizer,
+      message="Please define an optimizer specifically via the 'optimizer=...' parameter",
+      version=2)
     return optimizer
 
   def _compute_gradients(self, loss, var_list):
