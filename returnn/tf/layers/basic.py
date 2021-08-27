@@ -2200,23 +2200,24 @@ class GatingLayer(_ConcatInputLayer):
     :param int|None|NotSpecified n_out:
     :rtype: Data
     """
+    from ..util.data import DimensionTag
     input_data = get_concat_sources_data_template(sources)
     assert not input_data.sparse
     assert input_data.dim % 2 == 0
     dim = input_data.dim // 2
+    new_dim_tag = DimensionTag(kind=DimensionTag.Types.Feature, description="%s:gating" % name, dimension=dim)
     if n_out is not NotSpecified:
       assert n_out == dim
     return Data(
       name="%s_output" % name,
       dtype=input_data.dtype,
-      shape=[dim if i == input_data.feature_dim_axis else d
-             for (i, d) in enumerate(input_data.batch_shape)
-             if i != input_data.batch_dim_axis],
+      dim_tags=[
+        new_dim_tag if i == input_data.feature_dim_axis else d
+        for (i, d) in enumerate(input_data.dim_tags)],
       sparse=False,
-      batch_dim_axis=input_data.batch_dim_axis,
       time_dim_axis=input_data.time_dim_axis,
       feature_dim_axis=input_data.feature_dim_axis_or_unspecified,
-      beam=input_data.beam)
+      batch=input_data.batch)
 
 
 class WindowLayer(_ConcatInputLayer):
