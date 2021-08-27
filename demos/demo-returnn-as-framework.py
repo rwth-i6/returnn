@@ -37,7 +37,7 @@ config.update(dict(
   },
 
   # training
-  adam=True,
+  optimizer={'class': 'adam'},
   learning_rate=0.01,
   num_epochs=5,
   debug_add_check_numerics_ops=True,

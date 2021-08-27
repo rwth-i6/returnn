@@ -105,7 +105,7 @@ def _check_train_simple_network(network, num_steps=10):
     "num_inputs": num_inputs,
     "num_outputs": {"data": [num_inputs, 2], "classes": [num_outputs, 2]},  # dense output
     "network": network,
-    "adam": True,
+    "optimizer": {"class": "adam"},
     "learning_rate": 0.1,
     "debug_add_check_numerics_ops": True,
   })
@@ -742,7 +742,7 @@ def test_RecLayer_NativeLstm_Nan():
     "network": {
       "output": {"class": "rec", "unit": "NativeLSTM", "loss": "mse", "from": "data:data"}
     },
-    "adam": True,
+    "optimizer": {"class": "adam"},
     "debug_grad_summaries": True,
     "debug_save_updater_vars": True,
     "debug_add_check_numerics_ops": True,
