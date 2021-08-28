@@ -334,13 +334,14 @@ def test_batch_norm():
     with tf_compat.v1.variable_scope("src_nchw"):
       src_nhwc = InternalLayer(
         name="src_nchw", network=net,
-        out_type={
+        output=Data(**{
+          "name": "src_nchw_output",
           "dim": 16,
           "shape": (None, 16, 16),
           "batch_dim_axis": 0,
           "time_dim_axis": 1,
           "feature_dim_axis": 3,
-          "sparse": False})
+          "sparse": False}))
       src_nhwc.output.placeholder = tf_compat.v1.placeholder(shape=(None, None, 16, 16), dtype=tf.float32)
       src_nhwc.output.size_placeholder = {0: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
 
@@ -356,7 +357,7 @@ def test_batch_norm():
           name="batch_norm_masked_nchw",
           sources=[src_nhwc],
           network=net))
-      batch_norm_1.post_init(layer_desc=None)
+      batch_norm_1.post_init(layer_desc={"output": batch_norm_1.output})
     with tf_compat.v1.variable_scope("batch_norm_nonmasked_nchw"):
       batch_norm_2 = BatchNormLayer(
         name="batch_norm_nonmasked_nchw", network=net, masked_time=False,
@@ -365,7 +366,7 @@ def test_batch_norm():
           name="batch_norm_nonmasked_nchw",
           sources=[src_nhwc],
           network=net))
-      batch_norm_2.post_init(layer_desc=None)
+      batch_norm_2.post_init(layer_desc={"output": batch_norm_2.output})
     tf_compat.v1.global_variables_initializer().run(session=session)
     out_1, seq_lens_1 = session.run(
       [batch_norm_1.output.placeholder, batch_norm_1.output.size_placeholder[0]],
@@ -387,13 +388,14 @@ def test_batch_norm_unequal_seq_len():
     with tf_compat.v1.variable_scope("src_nhwc"):
       src_nhwc = InternalLayer(
         name="src_nhwc", network=net,
-        out_type={
+        output=Data(**{
+          "name": "src_nhwc_output",
           "dim": 16,
           "shape": (None, 16, 16),
           "batch_dim_axis": 0,
           "time_dim_axis": 1,
           "feature_dim_axis": 3,
-          "sparse": False})
+          "sparse": False}))
       src_nhwc.output.placeholder = tf_compat.v1.placeholder(shape=(None, None, 16, 16), dtype=tf.float32)
       src_nhwc.output.size_placeholder = {0: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
 
@@ -414,7 +416,7 @@ def test_batch_norm_unequal_seq_len():
           name="batch_norm_masked_nchw",
           sources=[src_nhwc],
           network=net))
-      batch_norm_1.post_init(layer_desc=None)
+      batch_norm_1.post_init(layer_desc={"output": batch_norm_1.output})
     with tf_compat.v1.variable_scope("batch_norm_nonmasked_nchw"):
       batch_norm_2 = BatchNormLayer(
         name="batch_norm_nonmasked_nchw", network=net, masked_time=False,
@@ -424,7 +426,7 @@ def test_batch_norm_unequal_seq_len():
           name="batch_norm_nonmasked_nchw",
           sources=[src_nhwc],
           network=net))
-      batch_norm_2.post_init(layer_desc=None)
+      batch_norm_2.post_init(layer_desc={"output": batch_norm_2.output})
     tf_compat.v1.global_variables_initializer().run(session=session)
     out_1, seq_lens_1 = session.run(
       [batch_norm_1.output.placeholder, batch_norm_1.output.size_placeholder[0]],
@@ -1222,8 +1224,10 @@ def test_SoftmaxOverSpatialLayer_start():
     n_dim = 7
     start_idxs = numpy.array([[3], [0], [1]]).astype("int32")  # (B, 1)
     input_np = rnd.normal(size=(n_batch, n_time, n_dim)).astype("float32")  # (B, T, D)
-    src = InternalLayer(name="src", network=net, out_type={"shape": (None, n_dim), "time_dim_axis": 1})
-    start = InternalLayer(name="start", network=net, out_type={"shape": (1,), "dtype": "int32"})
+    src = InternalLayer(
+      name="src", network=net, output=Data(**{"name": "src", "shape": (None, n_dim), "time_dim_axis": 1}))
+    start = InternalLayer(
+      name="start", network=net, output=Data(**{"name": "start", "shape": (1,), "dtype": "int32"}))
     start.output.placeholder = tf.constant(start_idxs)
     start.output.size_placeholder = {}
     print("input:", src.output)
@@ -1259,8 +1263,10 @@ def test_SoftmaxOverSpatialLayer_window():
     window_start_idxs = numpy.array([3, 0, 1, 7]).astype("int32")  # (B,)
     seqlens = numpy.array([5, 7, 3, 9]).astype("int32")
     input_np = rnd.normal(size=(n_batch, n_time, n_dim)).astype("float32")  # (B, T, D)
-    src = InternalLayer(name="src", network=net, out_type={"shape": (None, n_dim), "time_dim_axis": 1})
-    window_start = InternalLayer(name="window_start", network=net, out_type={"shape": (), "dtype": "int32"})
+    src = InternalLayer(
+      name="src", network=net, output=Data(**{"name": "src", "shape": (None, n_dim), "time_dim_axis": 1}))
+    window_start = InternalLayer(
+      name="window_start", network=net, output=Data(**{"name": "window_start", "shape": (), "dtype": "int32"}))
     window_start.output.placeholder = tf.constant(window_start_idxs)  # (B,)
     window_start.output.size_placeholder = {}
     print("input:", src.output)
@@ -1436,7 +1442,7 @@ def _check_MergeDimsLayer(session, in_data_opts, in_static_shape, opts, out_data
   """
   net = TFNetwork(extern_data=ExternData())
   rnd = numpy.random.RandomState(42)
-  src = InternalLayer(name="src", network=net, out_type=in_data_opts)
+  src = InternalLayer(name="src", network=net, output=Data(name="src", **in_data_opts))
   print("input:", src.output)
   src.output.placeholder = tf.constant(rnd.normal(size=in_static_shape).astype("float32"), dtype=tf.float32)
   src.output.size_placeholder = {}
@@ -1803,14 +1809,15 @@ def test_SearchSortedLayer():
     net = TFNetwork(extern_data=ExternData())
     sorted_layer = InternalLayer(
       name="sorted_sequence", network=net,
-      out_type={"shape": (None, n_in)})  # [B,T,F]
+      output=Data(name="sorted_sequence", shape=(None, n_in)))  # [B,T,F]
     sorted = numpy.sort(random.uniform(0.0, 10.0, size=(n_batch, n_time, n_in)), axis=1)
     sorted_lens = [10, 7]
     sorted_layer.output.placeholder = tf.constant(sorted, dtype="float32")
     sorted_layer.output.size_placeholder = {0: tf.constant(sorted_lens, dtype="int32")}  # [B]
     values_layer = InternalLayer(
       name="values", network=net,
-      out_type={"shape": (n_in, n_out), "time_dim_axis": None, "feature_dim_axis": 1})  # [B,F,F']
+      output=Data(
+        **{"name": "values", "shape": (n_in, n_out), "time_dim_axis": None, "feature_dim_axis": 1}))  # [B,F,F']
     values = random.uniform(0.0, 10.0, size=(n_batch, n_in, n_out))
     values_layer.output.placeholder = tf.constant(values, dtype="float32")
 
@@ -1971,7 +1978,7 @@ def test_ScatterNdLayer_RangeLayer():
 def _run_repeat_layer(session, net, input_data_layer):
   repetitions_data_layer = InternalLayer(
     name="repetitions", network=net,
-    out_type={'shape': (None,), 'feature_dim_axis': None, 'dtype': 'int32'})
+    output=Data(**{'name': 'repetitions', 'shape': (None,), 'feature_dim_axis': None, 'dtype': 'int32'}))
   repetitions_data_layer.output.placeholder = tf.constant(
     [[1, 3, 2, 1, 3, 4, 1, 1, 2, 1],
      [3, 2, 1, 3, 0, 1, 1, 0, 0, 0]], dtype="int32")  # [B, T] (sparse)
@@ -2001,7 +2008,7 @@ def _run_repeat_layer(session, net, input_data_layer):
 def test_RepeatLayerBTF():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())
-    input_data_layer = InternalLayer(name="src", network=net, out_type={'shape': (None, 5), 'dim': 5})
+    input_data_layer = InternalLayer(name="src", network=net, output=Data(name="src", shape=(None, 5), dim=5))
     input_data_layer.output.size_placeholder = {0: tf.constant([10, 7])}  # [B]
     input_data_layer.output.placeholder = tf_compat.v1.random_uniform((2, 10, 5))  # [B, T, F]
 
@@ -2013,7 +2020,7 @@ def test_RepeatLayerTBF():
     net = TFNetwork(extern_data=ExternData())
     input_data_layer = InternalLayer(
       name="src", network=net,
-      out_type={'shape': (None, 5), 'dim': 5, 'batch_dim_axis': 1, 'time_dim_axis': 0})
+      output=Data(**{'name': "src", 'shape': (None, 5), 'dim': 5, 'batch_dim_axis': 1, 'time_dim_axis': 0}))
     input_data_layer.output.size_placeholder = {0: tf.constant([10, 7])}  # [B]
     input_data_layer.output.placeholder = tf_compat.v1.random_uniform((10, 2, 5))  # [T, B, F]
 
@@ -2025,7 +2032,7 @@ def test_RepeatLayerBFT():
     net = TFNetwork(extern_data=ExternData())
     input_data_layer = InternalLayer(
       name="src", network=net,
-      out_type={'shape': (5, None), 'dim': 5, 'time_dim_axis': 2, 'feature_dim_axis': 1})
+      output=Data(**{'name': 'src', 'shape': (5, None), 'dim': 5, 'time_dim_axis': 2, 'feature_dim_axis': 1}))
     input_data_layer.output.size_placeholder = {1: tf.constant([10, 7])}  # [B]
     input_data_layer.output.placeholder = tf_compat.v1.random_uniform((2, 5, 10))  # [B, F, T]
 
@@ -2038,7 +2045,7 @@ def test_RepeatLayerTF():
     net = TFNetwork(extern_data=ExternData(data={"data": {"dim": 2, "sparse": True}}), train_flag=True)
     input_data_layer = InternalLayer(
       name="src", network=net,
-      out_type={'shape': (None, 5), 'dim': 5, 'batch_dim_axis': None, 'time_dim_axis': 0})
+      output=Data(**{'name': 'src', 'shape': (None, 5), 'dim': 5, 'batch_dim_axis': None, 'time_dim_axis': 0}))
     input_data_layer.output.size_placeholder = {0: tf.constant([10])}  # []
     input_data_layer.output.placeholder = tf_compat.v1.random_uniform((10, 5))  # [T, F]
 
@@ -2387,7 +2394,7 @@ def test_reuse_params_map_custom_dep_loop():
 def test_SliceLayer_output_placeholder():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())
-    src = InternalLayer(name="src", network=net, out_type={"dim": 20, "sparse": True})
+    src = InternalLayer(name="src", network=net, output=Data(**{'name': 'src', "dim": 20, "sparse": True}))
     src.output.placeholder = tf.constant([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11, 12, 13, 14, 15]], dtype=tf.int32)
     src.output.size_placeholder = {0: tf.constant([5, 3, 2], dtype=tf.int32)}
     layer = SliceLayer(
@@ -2412,23 +2419,29 @@ def test_SliceLayer_NCHW():
     import numpy as np
     net = TFNetwork(extern_data=ExternData())
     with tf_compat.v1.variable_scope("src_nchw"):
-      src_nchw = InternalLayer(name="src_nchw", network=net, out_type={"dim": 16,
-                                                                       "shape": (16, None, 16),
-                                                                       "batch_dim_axis": 0,
-                                                                       "time_dim_axis": 2,
-                                                                       "feature_dim_axis": 1,
-                                                                       "sparse": False
-                                                                       })
+      src_nchw = InternalLayer(
+        name="src_nchw", network=net,
+        output=Data(**{
+          "name": "src_nchw_output",
+          "dim": 16,
+          "shape": (16, None, 16),
+          "batch_dim_axis": 0,
+          "time_dim_axis": 2,
+          "feature_dim_axis": 1,
+          "sparse": False}))
       src_nchw.output.placeholder = tf_compat.v1.placeholder(shape=(None, 16, None, 16), dtype=tf.float32)
       src_nchw.output.size_placeholder = {1: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
     with tf_compat.v1.variable_scope("src_nchw_feature_unspecified"):
-      src_nchw_no_f = InternalLayer(name="src_nchw_feature_unspecified", network=net, out_type={"dim": 16,
-                                                                                                "shape": (16, None, 16),
-                                                                                                "batch_dim_axis": 0,
-                                                                                                "time_dim_axis": 2,
-                                                                                                "feature_dim_axis": NotSpecified,
-                                                                                                "sparse": False
-                                                                                                })
+      src_nchw_no_f = InternalLayer(
+        name="src_nchw_feature_unspecified", network=net,
+        output=Data(**{
+          "name": "src_nchw_feature_unspecified_output",
+          "dim": 16,
+          "shape": (16, None, 16),
+          "batch_dim_axis": 0,
+          "time_dim_axis": 2,
+          "feature_dim_axis": NotSpecified,
+          "sparse": False}))
       src_nchw_no_f.output.placeholder = tf_compat.v1.placeholder(shape=(None, 16, None, 16), dtype=tf.float32)
       src_nchw_no_f.output.size_placeholder = {1: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
     with tf_compat.v1.variable_scope("slice1"):
@@ -2461,13 +2474,17 @@ def test_GatherLayer():
     # [B, D, T, F1]
     values = InternalLayer(
       name="values", network=net,
-      out_type={"batch_dim_axis": 0, "time_dim_axis": 2, "feature_dim_axis": 3,
-        "shape": [gather_dim, None, feature_dim1], "sparse": False})
+      output=Data(**{
+        "name": "values",
+        "batch_dim_axis": 0, "time_dim_axis": 2, "feature_dim_axis": 3,
+        "shape": [gather_dim, None, feature_dim1], "sparse": False}))
     # [B, T, F2]
     position = InternalLayer(
       name="position", network=net,
-      out_type={"batch_dim_axis": 0, "time_dim_axis": 1, "shape": [None, feature_dim2],
-        "sparse": True, "dim": gather_dim})
+      output=Data(**{
+        "name": "position",
+        "batch_dim_axis": 0, "time_dim_axis": 1, "shape": [None, feature_dim2],
+        "sparse": True, "dim": gather_dim}))
 
     random = np.random.RandomState(42)
     values_seqs = random.rand(batch_dim, gather_dim, time_dim, feature_dim1).astype('float32')
@@ -2519,8 +2536,10 @@ def test_GatherLayer_constant_position():
     # [B, F1, D, F2]
     values = InternalLayer(
       name="values", network=net,
-      out_type={"batch_dim_axis": 0, "feature_dim_axis": 3, "time_dim_axis": None,
-        "shape": [feature_dim1, gather_dim, feature_dim2]})
+      output=Data(**{
+        "name": "values",
+        "batch_dim_axis": 0, "feature_dim_axis": 3, "time_dim_axis": None,
+        "shape": [feature_dim1, gather_dim, feature_dim2]}))
     position = 3
 
     random = np.random.RandomState(42)
@@ -2567,11 +2586,12 @@ def test_SliceNdLayer():
   size = 5
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())
-    src = InternalLayer(name="src", network=net, out_type={"dim": n_dim})
+    src = InternalLayer(name="src", network=net, output=Data(name="src", dim=n_dim))
     src.output.placeholder = tf.constant(seqs)
     src.output.size_placeholder = {0: tf.constant(seq_lens)}
     src.output.sanity_check()
-    start = InternalLayer(name="start", network=net, out_type={"dim": None, "sparse": True, "time_dim_axis": None})
+    start = InternalLayer(
+      name="start", network=net, output=Data(**{"name": "start", "dim": None, "sparse": True, "time_dim_axis": None}))
     start.output.placeholder = tf.constant(starts)
     start.output.sanity_check()
     kwargs = dict(name="slice", network=net, sources=[src], start=start, size=size)
@@ -2610,11 +2630,12 @@ def test_SliceNdLayer_dyn_size():
   size = None
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())
-    src = InternalLayer(name="src", network=net, out_type={"dim": n_dim})
+    src = InternalLayer(name="src", network=net, output=Data(name="src", dim=n_dim))
     src.output.placeholder = tf.constant(seqs)
     src.output.size_placeholder = {0: tf.constant(seq_lens)}
     src.output.sanity_check()
-    start = InternalLayer(name="start", network=net, out_type={"dim": None, "sparse": True, "time_dim_axis": None})
+    start = InternalLayer(
+      name="start", network=net, output=Data(**{"name": "start", "dim": None, "sparse": True, "time_dim_axis": None}))
     start.output.placeholder = tf.constant(starts)
     start.output.sanity_check()
     kwargs = dict(name="slice", network=net, sources=[src], start=start, size=size)
@@ -2644,7 +2665,7 @@ def test_SliceNdLayer_dyn_size():
 def test_WindowLayer_output_placeholder():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())
-    src = InternalLayer(name="src", network=net, out_type={"dim": 20, "sparse": True})
+    src = InternalLayer(name="src", network=net, output=Data(name="src", dim=20, sparse=True))
     src.output.placeholder = tf.constant([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11, 12, 13, 14, 15]], dtype=tf.int32)
     src.output.size_placeholder = {0: tf.constant([5, 3, 1], dtype=tf.int32)}
     layer = WindowLayer(
@@ -2752,23 +2773,29 @@ def test_conv_layer_NCHW():
     import numpy as np
     net = TFNetwork(extern_data=ExternData())
     with tf_compat.v1.variable_scope("src_nhwc"):
-      src_nhwc = InternalLayer(name="src_nhwc", network=net, out_type={"dim": 16,
-                                                                       "shape": (None, 16, 16),
-                                                                       "batch_dim_axis": 0,
-                                                                       "time_dim_axis": 1,
-                                                                       "feature_dim_axis": 3,
-                                                                       "sparse": False
-                                                                       })
+      src_nhwc = InternalLayer(
+        name="src_nhwc", network=net,
+        output=Data(**{
+          "name": "src_nhwc_output",
+          "dim": 16,
+          "shape": (None, 16, 16),
+          "batch_dim_axis": 0,
+          "time_dim_axis": 1,
+          "feature_dim_axis": 3,
+          "sparse": False}))
       src_nhwc.output.placeholder = tf_compat.v1.placeholder(shape=(None, None, 16, 16), dtype=tf.float32)
       src_nhwc.output.size_placeholder = {0: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
     with tf_compat.v1.variable_scope("src_nchw"):
-      src_nchw = InternalLayer(name="src_nchw", network=net, out_type={"dim": 16,
-                                                                       "shape": (16, None, 16),
-                                                                       "batch_dim_axis": 0,
-                                                                       "time_dim_axis": 2,
-                                                                       "feature_dim_axis": 1,
-                                                                       "sparse": False
-                                                                       })
+      src_nchw = InternalLayer(
+        name="src_nchw", network=net,
+        output=Data(**{
+          "name": "src_nchw_output",
+          "dim": 16,
+          "shape": (16, None, 16),
+          "batch_dim_axis": 0,
+          "time_dim_axis": 2,
+          "feature_dim_axis": 1,
+          "sparse": False}))
       src_nchw.output.placeholder = tf_compat.v1.placeholder(shape=(None, 16, None, 16), dtype=tf.float32)
       src_nchw.output.size_placeholder = {1: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
 
@@ -2838,23 +2865,29 @@ def test_pool_layer_NCHW():
     import numpy as np
     net = TFNetwork(extern_data=ExternData())
     with tf_compat.v1.variable_scope("src_nhwc"):
-      src_nhwc = InternalLayer(name="src_nhwc", network=net, out_type={"dim": 16,
-                                                                       "shape": (None, 16, 16),
-                                                                       "batch_dim_axis": 0,
-                                                                       "time_dim_axis": 1,
-                                                                       "feature_dim_axis": 3,
-                                                                       "sparse": False
-                                                                       })
+      src_nhwc = InternalLayer(
+        name="src_nhwc", network=net,
+        output=Data(**{
+          "name": "src_nhwc_output",
+          "dim": 16,
+          "shape": (None, 16, 16),
+          "batch_dim_axis": 0,
+          "time_dim_axis": 1,
+          "feature_dim_axis": 3,
+          "sparse": False}))
       src_nhwc.output.placeholder = tf_compat.v1.placeholder(shape=(None, None, 16, 16), dtype=tf.float32)
       src_nhwc.output.size_placeholder = {0: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
     with tf_compat.v1.variable_scope("src_nchw"):
-      src_nchw = InternalLayer(name="src_nchw", network=net, out_type={"dim": 16,
-                                                                       "shape": (16, None, 16),
-                                                                       "batch_dim_axis": 0,
-                                                                       "time_dim_axis": 2,
-                                                                       "feature_dim_axis": 1,
-                                                                       "sparse": False
-                                                                       })
+      src_nchw = InternalLayer(
+        name="src_nchw", network=net,
+        output=Data(**{
+          "name": "src_nchw_output",
+          "dim": 16,
+          "shape": (16, None, 16),
+          "batch_dim_axis": 0,
+          "time_dim_axis": 2,
+          "feature_dim_axis": 1,
+          "sparse": False}))
       src_nchw.output.placeholder = tf_compat.v1.placeholder(shape=(None, 16, None, 16), dtype=tf.float32)
       src_nchw.output.size_placeholder = {1: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
 
@@ -2939,13 +2972,16 @@ def test_ReduceLayer_NCHW():
     import numpy as np
     net = TFNetwork(extern_data=ExternData())
     with tf_compat.v1.variable_scope("src_nchw"):
-      src_nchw = InternalLayer(name="src_nchw", network=net, out_type={"dim": 16,
-                                                                       "shape": (16, None, 16),
-                                                                       "batch_dim_axis": 0,
-                                                                       "time_dim_axis": 2,
-                                                                       "feature_dim_axis": 1,
-                                                                       "sparse": False
-                                                                       })
+      src_nchw = InternalLayer(
+        name="src_nchw", network=net,
+        output=Data(**{
+          "name": "src_nchw_output",
+          "dim": 16,
+          "shape": (16, None, 16),
+          "batch_dim_axis": 0,
+          "time_dim_axis": 2,
+          "feature_dim_axis": 1,
+          "sparse": False}))
       src_nchw.output.placeholder = tf_compat.v1.placeholder(shape=(None, 16, None, 16), dtype=tf.float32)
       src_nchw.output.size_placeholder = {1: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
     with tf_compat.v1.variable_scope("reduce1"):
@@ -2973,13 +3009,16 @@ def test_Loss_NCHW():
     import numpy as np
     net = TFNetwork(extern_data=ExternData())
     with tf_compat.v1.variable_scope("src_nchw"):
-      src_nchw = InternalLayer(name="src_nchw", network=net, out_type={"dim": 16,
-                                                                       "shape": (16, None),
-                                                                       "batch_dim_axis": 0,
-                                                                       "time_dim_axis": 2,
-                                                                       "feature_dim_axis": 1,
-                                                                       "sparse": False
-                                                                       })
+      src_nchw = InternalLayer(
+        name="src_nchw", network=net,
+        output=Data(**{
+          "name": "src_nchw_output",
+          "dim": 16,
+          "shape": (16, None),
+          "batch_dim_axis": 0,
+          "time_dim_axis": 2,
+          "feature_dim_axis": 1,
+          "sparse": False}))
       src_nchw.output.placeholder = tf_compat.v1.placeholder(shape=(None, 16, None), dtype=tf.float32)
       src_nchw.output.size_placeholder = {1: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
 
@@ -3015,7 +3054,7 @@ def test_Loss_NCHW():
 def test_ResizeLayer_fill_value():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())
-    src = InternalLayer(name="src", network=net, out_type={"dim": 20, "sparse": True})
+    src = InternalLayer(name="src", network=net, output=Data(name="src", dim=20, sparse=True))
     src.output.placeholder = tf.constant([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]], dtype=tf.int32)
     src.output.size_placeholder = {0: tf.constant([5, 3], dtype=tf.int32)}
     layer = ResizeLayer(
@@ -3037,7 +3076,7 @@ def test_ResizeLayer_fill_value():
 def test_ResizeLayer_fill_dropout():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())
-    src = InternalLayer(name="src", network=net, out_type={"dim": 20, "sparse": True})
+    src = InternalLayer(name="src", network=net, output=Data(name="src", dim=20, sparse=True))
     src_seqs = [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]]
     src_seq_lens = [5, 3]
     factor = 3
@@ -3064,7 +3103,7 @@ def test_PostfixInTimeLayer():
   with make_scope() as session:
     import numpy as np
     net = TFNetwork(extern_data=ExternData())
-    src = InternalLayer(name="src", network=net, out_type={"dim": 2, "dtype": "int32"})
+    src = InternalLayer(name="src", network=net, output=Data(name="src", dim=2, dtype="int32"))
     src_seqs = np.array([[[1, 1], [2, 2], [3, 3], [4, 4], [5, 5]], [[6, 6], [7, 7], [8, 8], [0, 0], [0, 0]]])
     src_seq_lens = [5, 3]
     src.output.placeholder = tf.constant(src_seqs, dtype=tf.int32)
@@ -3072,7 +3111,7 @@ def test_PostfixInTimeLayer():
 
     static_postfix = -7
     layer_postfix = InternalLayer(
-      name="postfix", network=net, out_type={"dim": 2, "time_dim_axis": None, "dtype": "int32"})
+      name="postfix", network=net, output=Data(name="postfix", dim=2, time_dim_axis=None, dtype="int32"))
     layer_postfix.output.placeholder = tf.constant([[-7, -8], [-9, -10]], dtype=tf.int32)
 
     for postfix in [static_postfix, layer_postfix]:
@@ -3101,7 +3140,7 @@ def test_DotLayer():
     H = 3
     D = H * 5
     net = TFNetwork(extern_data=ExternData())
-    a = InternalLayer(name="A", network=net, out_type={"shape": (None, H, D // H)})
+    a = InternalLayer(name="A", network=net, output=Data(name="A", shape=(None, H, D // H)))
     assert a.output.batch_dim_axis == 0
     assert a.output.time_dim_axis == 1
     assert a.output.shape == (None, H, D // H)
@@ -3111,7 +3150,7 @@ def test_DotLayer():
     a.output.placeholder = tf.reshape(
       tf.range(B * max(a_seq_lens) * D, dtype=tf.float32), (B, max(a_seq_lens), H, D // H))
     a.output.size_placeholder = {0: tf.constant(a_seq_lens, dtype=tf.int32)}
-    b = InternalLayer(name="B", network=net, out_type={"shape": (H, D // H)})
+    b = InternalLayer(name="B", network=net, output=Data(name="B", shape=(H, D // H)))
     assert b.output.batch_dim_axis == 0
     assert b.output.shape == (H, D // H)
     assert b.output.dim == D // H
@@ -3143,9 +3182,7 @@ def test_DotLayer2():
 
     a = InternalLayer(name='A',
                       network=net,
-                      out_type={'shape': (S1, S2, R),
-                                'batch_dim_axis': 0,
-                                'time_dim_axis': None})
+                      output=Data(name="A", shape=(S1, S2, R), batch_dim_axis=0, time_dim_axis=None))
     assert a.output.batch_dim_axis == 0
     assert a.output.time_dim_axis is None
     assert a.output.shape == (S1, S2, R)
@@ -3155,9 +3192,7 @@ def test_DotLayer2():
 
     b = InternalLayer(name='B',
                       network=net,
-                      out_type={'shape': (S1, S2, R, V),
-                                'batch_dim_axis': None,
-                                'time_dim_axis': None})
+                      output=Data(name="B", shape=(S1, S2, R, V), batch_dim_axis=None, time_dim_axis=None))
     assert b.output.batch_dim_axis == None
     assert b.output.time_dim_axis == None
     assert b.output.shape == (S1, S2, R, V)
