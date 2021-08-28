@@ -54,7 +54,7 @@ class LayerBase(object):
 
   # For compatibility, we have some parameter names (e.g. "L2") which do not conform to PEP8.
   # noinspection PyPep8Naming
-  def __init__(self, name, network, output=None, n_out=NotSpecified, out_type=None, sources=(),
+  def __init__(self, name, network, output, n_out=NotSpecified, out_type=None, sources=(),
                target=None, _target_layers=None, loss=None, size_target=None,
                reuse_params=None,
                param_device=None,
@@ -81,7 +81,7 @@ class LayerBase(object):
 
     :param str name:
     :param returnn.tf.network.TFNetwork network:
-    :param Data|None output: Set a specific output instead of using :func:`get_out_data_from_opts`
+    :param Data output: Set a specific output instead of using :func:`get_out_data_from_opts`
     :param NotSpecified|None|int n_out: output dim
     :param dict[str] out_type: kwargs for Data class. more explicit than n_out.
     :param list[LayerBase] sources: via self.transform_config_dict()
@@ -139,20 +139,14 @@ class LayerBase(object):
     self.loss = loss
     if self.loss and self.loss.recurrent:
       self.recurrent = True
-    if output:
-      self.output = output
-      if n_out is not NotSpecified:
-        assert self.output.dim == n_out
-      if isinstance(out_type, dict):
-        if "shape" in out_type:
-          assert self.output.shape == out_type["shape"]
-        if "dim" in out_type:
-          assert self.output.dim == out_type["dim"]
-    else:
-      self.output = self.get_out_data_from_opts(
-        out_type=out_type, n_out=n_out,
-        network=network, name=name, target=target, size_target=size_target,
-        sources=sources, loss=loss)
+    self.output = output
+    if n_out is not NotSpecified:
+      assert self.output.dim == n_out
+    if isinstance(out_type, dict):
+      if "shape" in out_type:
+        assert self.output.shape == out_type["shape"]
+      if "dim" in out_type:
+        assert self.output.dim == out_type["dim"]
     self.output_before_activation = None  # type: typing.Optional[OutputWithActivation]
     self.output_loss = None  # type: typing.Optional[tf.Tensor]
     if copy_output_loss_from_source_idx is not None:
@@ -193,6 +187,7 @@ class LayerBase(object):
 
     :param dict[str] layer_desc: kwargs as they are passed to self.__init__
     """
+    assert "output" in layer_desc
     self.kwargs = layer_desc
     if self.output.placeholder is not None:  # unset e.g. in DataNotAvailableLayer
       if self.use_batch_norm:
