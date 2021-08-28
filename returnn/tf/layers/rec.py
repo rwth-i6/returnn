@@ -1373,7 +1373,8 @@ class _SubnetworkRecCell(object):
     try:
       assert not self.layer_data_templates, "do not call this multiple times"
       get_templated_layer.construct("output")
-      assert "output" in self.layer_data_templates
+      if "output" not in self.layer_data_templates:
+        raise ConstructCtx.recent_exception
       assert not ConstructCtx.layers
 
       if "end" in self.net_dict:  # used to specify ending of a sequence
