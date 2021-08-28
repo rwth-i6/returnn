@@ -2456,16 +2456,6 @@ class Data(object):
     return self.shape
 
   @property
-  def shape_sparse(self):
-    """
-    :return: shape without feature dim axis
-    :rtype: tuple[int|None]
-    """
-    if self.sparse:
-      return self.shape
-    return self.shape[:self.feature_dim_axis] + self.shape[self.feature_dim_axis + 1:]
-
-  @property
   def batch_shape_dense(self):
     """
     :rtype: tuple[int|None]
@@ -2473,6 +2463,16 @@ class Data(object):
     if self.sparse:
       return self.batch_shape + (self.dim,)
     return self.batch_shape
+
+  @property
+  def dim_tags_sparse(self):
+    """
+    :return: dim tags without feature dim axis
+    :rtype: tuple[DimensionTag]
+    """
+    if self.sparse or not self.have_feature_axis():
+      return self.dim_tags
+    return self.dim_tags[:self.feature_dim_axis] + self.dim_tags[self.feature_dim_axis + 1:]
 
   @property
   def ndim(self):
