@@ -2762,9 +2762,14 @@ class Data(object):
     :rtype: list[int]
     """
     dim_tags = self.get_batch_shape_dim_tags()
-    matching_dim_tags = [(axis, tag) for axis, tag in enumerate(dim_tags) if name.lower() in tag.description.lower()]
+    matching_dim_tags = [
+      (axis, tag) for axis, tag in enumerate(dim_tags)
+      if name.lower() in tag.description.lower()
+      or name.lower() in tag.get_same_base().description.lower()]
     if spatial_only:
-      matching_dim_tags = [(axis, tag) for axis, tag in matching_dim_tags if tag.kind == DimensionTag.Types.Spatial]
+      spatial_axes = self.get_spatial_batch_axes()
+      matching_dim_tags = [
+        (axis, tag) for axis, tag in matching_dim_tags if axis in spatial_axes or tag.is_spatial_dim()]
     return [ax for ax, _ in matching_dim_tags]
 
   def get_axis_by_tag_name(self, name, spatial_only=False):
