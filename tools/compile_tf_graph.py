@@ -102,7 +102,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     assert isinstance(rec_layer, RecStepByStepLayer)
     output = layer.output.copy()
     output.placeholder = rec_layer.create_state_var(
-      name="base_value_%s" % layer_name, initial_value=lambda: output.placeholder, data_shape=output)
+      name="base_value_%s" % layer_name, initial_value=output.placeholder, data_shape=output)
     from returnn.tf.util.basic import DimensionTag
     for i, size in list(output.size_placeholder.items()):
       dim_tag = DimensionTag.get_tag_from_size_tensor(size)
@@ -116,6 +116,76 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     layer = WrappedInternalLayer(name=layer_name, network=self.parent_net, output=output, base_layer=layer)
     self._parent_layers[layer_name] = layer
     return layer
+
+  def _while_loop(self, cond, body, loop_vars, shape_invariants):
+    """
+    :param function cond:
+    :param function body:
+    :param T loop_vars:
+    :param S shape_invariants:
+    :rtype: T
+
+    def body(i, net_vars, acc_tas, seq_len_info=None)
+      tf.Tensor i: loop counter, scalar
+      net_vars: the accumulator values. see also self.get_init_loop_vars()
+      list[tf.TensorArray] acc_tas: the output accumulator TensorArray
+      (tf.Tensor,tf.Tensor)|None seq_len_info: tuple (end_flag, seq_len)
+      return: [i + 1, a_flat, tas]: the updated counter + new accumulator values + updated TensorArrays
+        rtype (tf.Tensor, object, list[tf.TensorArray])
+
+    def cond(i, net_vars, acc_tas, seq_len_info=None)
+      ...
+      return: tf.Tensor bool, True or False
+    """
+    rec_layer = self.parent_rec_layer
+    assert isinstance(rec_layer, RecStepByStepLayer)
+
+    if len(loop_vars) == 3:
+      i, net_vars, acc_tas = loop_vars
+      seq_len_info = None
+    else:
+      i, net_vars, acc_tas, seq_len_info = loop_vars
+      seq_len_info = rec_layer.create_state_vars_recursive(["end_flag", "dyn_seq_len"], seq_len_info)
+    i = rec_layer.create_state_var("i", i)
+    with tf.name_scope("state"):
+      # See _SubnetworkRecCell.GetOutput.body.
+      # net_vars is (prev_outputs_flat, prev_extra_flat), and prev_outputs_flat corresponds to self._initial_outputs,
+      # where the keys are the layer names.
+      # prev_extra is always expected to be batch-major.
+      prev_outputs_data = [self.layer_data_templates[k].output for k in sorted(self._initial_outputs.keys())]
+      net_vars = rec_layer.create_state_vars_recursive(
+        name_prefix="state", initial_values=net_vars, data_shape=(prev_outputs_data, None))
+    # We are ignoring acc_tas (the tensor arrays).
+
+    # Some layers make explicit use of the (global data) batch-dim,
+    # which they can get via TFNetwork.get_data_batch_dim().
+    # This will add a dependency on the external data, which we want to avoid.
+    # We can avoid that by taking the batch dim instead from one of the other states.
+    # Note that this would be wrong in beam search.
+    self.net.get_global_batch_info().dim = rec_layer.get_batch_dim_from_state()
+
+    with tf.name_scope("cond"):
+      # there is no max_seq_len limit for the step-by-step function, so the loop
+      # condition only depends on the end flags or is true if those do not exist
+      rec_layer.create_state_var("cond", tf.constant(True))
+      if seq_len_info:
+        end_flag, _ = seq_len_info
+        res = tf.reduce_any(tf.logical_not(end_flag), name="any_not_ended")
+        rec_layer.set_state_var_final_value("cond", res)
+
+    with tf.name_scope("body"):
+      res = body(i, net_vars, acc_tas, seq_len_info)
+      assert len(res) == len(loop_vars)
+      if len(res) == 3:
+        i, net_vars, acc_tas = res
+        seq_len_info = None
+      else:
+        i, net_vars, acc_tas, seq_len_info = res
+    if seq_len_info:
+      rec_layer.set_state_vars_final_values_recursive(["end_flag", "dyn_seq_len"], seq_len_info)
+    rec_layer.set_state_var_final_value("i", i)
+    rec_layer.set_state_vars_final_values_recursive("state", net_vars)
+    return res
 
 
 class RecStepByStepLayer(RecLayer):
@@ -156,7 +226,7 @@ class RecStepByStepLayer(RecLayer):
       This is "next_step_op" in the info json.
   """
   layer_class = "rec_step_by_step"
-  subnetwork_rec_cell = SubnetworkRecCellSingleStep
+  SubnetworkRecCell = SubnetworkRecCellSingleStep
 
   @classmethod
   def prepare_compile(cls, rec_layer_name, net_dict):
@@ -171,6 +241,10 @@ class RecStepByStepLayer(RecLayer):
     rec_layer_dict = net_dict[rec_layer_name]
     assert rec_layer_dict["class"] == "rec"
     assert isinstance(rec_layer_dict["unit"], dict)
+    for key, layer_dict in list(rec_layer_dict["unit"].items()):
+      assert isinstance(layer_dict, dict)
+      if layer_dict["class"] == "choice":
+        layer_dict["class"] = ChoiceStateVarLayer.layer_class
     rec_layer_dict["class"] = RecStepByStepLayer.layer_class
 
   @classmethod
@@ -360,15 +434,6 @@ class RecStepByStepLayer(RecLayer):
   def __init__(self, **kwargs):
     kwargs = kwargs.copy()
     kwargs["optimize_move_layers_out"] = False
-    sub_net_cell = kwargs["unit"]
-    assert isinstance(sub_net_cell, _SubnetworkRecCell)
-    for key, layer_dict in list(sub_net_cell.net_dict.items()):
-      assert isinstance(layer_dict, dict)
-      if layer_dict["class"] == "choice":
-        layer_dict = layer_dict.copy()
-        layer_dict["class"] = ChoiceStateVarLayer.layer_class
-        sub_net_cell.net_dict[key] = layer_dict
-    kwargs["unit"] = sub_net_cell
     self.state_vars = {}  # type: typing.Dict[str,RecStepByStepLayer.StateVar]
     self.stochastic_var_order = []  # type: typing.List[str]
     super(RecStepByStepLayer, self).__init__(**kwargs)
@@ -498,28 +563,6 @@ class RecStepByStepLayer(RecLayer):
     assert name not in self.stochastic_var_order
     self.stochastic_var_order.append(name)
 
-  def _get_cell(self, unit, unit_opts=None):
-    """
-    Replace the unit by an identical SubnetworkRecCellSingleStep instance
-    Only allows for SubnetworkRecCell, not strings as the super method does
-
-    :param _SubnetworkRecCell unit:
-    :param None|dict[str] unit_opts:
-    :rtype: _SubnetworkRecCell
-    """
-    assert isinstance(unit, _SubnetworkRecCell)
-    assert unit_opts is None
-    single_step_unit = SubnetworkRecCellSingleStep(
-      net_dict=unit.net_dict,
-      source_data=unit.source_data,
-      time_dim_tag=unit.time_dim_tag,
-      rec_layer_name=unit.rec_layer_name,
-      parent_net=unit.parent_net,
-      parent_get_layer=unit.parent_get_layer
-    )
-    single_step_unit.set_parent_layer(self)
-    return single_step_unit
-
   @classmethod
   def get_out_data_from_opts(cls, **kwargs):
     """
@@ -597,72 +640,6 @@ class ChoiceStateVarLayer(LayerBase):
     super(ChoiceStateVarLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   get_out_data_from_opts = ChoiceLayer.get_out_data_from_opts
-
-  def _while_loop(self, cond, body, loop_vars, shape_invariants):
-    """
-    :param function cond:
-    :param function body:
-    :param T loop_vars:
-    :param S shape_invariants:
-    :rtype: T
-
-    def body(i, net_vars, acc_tas, seq_len_info=None)
-      tf.Tensor i: loop counter, scalar
-      net_vars: the accumulator values. see also self.get_init_loop_vars()
-      list[tf.TensorArray] acc_tas: the output accumulator TensorArray
-      (tf.Tensor,tf.Tensor)|None seq_len_info: tuple (end_flag, seq_len)
-      return: [i + 1, a_flat, tas]: the updated counter + new accumulator values + updated TensorArrays
-        rtype (tf.Tensor, object, list[tf.TensorArray])
-
-    def cond(i, net_vars, acc_tas, seq_len_info=None)
-      ...
-      return: tf.Tensor bool, True or False
-    """
-    rec_layer = self.parent_rec_layer
-    assert isinstance(rec_layer, RecStepByStepLayer)
-
-    if len(loop_vars) == 3:
-      i, net_vars, acc_tas = loop_vars
-      seq_len_info = None
-    else:
-      i, net_vars, acc_tas, seq_len_info = loop_vars
-      seq_len_info = rec_layer.create_state_vars_recursive(["end_flag", "dyn_seq_len"], seq_len_info)
-    i = rec_layer.create_state_var("i", i)
-    with tf.name_scope("state"):
-      # See _SubnetworkRecCell.GetOutput.body.
-      # net_vars is (prev_outputs_flat, prev_extra_flat), and prev_outputs_flat corresponds to self._initial_outputs,
-      # where the keys are the layer names.
-      # prev_extra is always expected to be batch-major.
-      prev_outputs_data = [self.layer_data_templates[k].output for k in sorted(self._initial_outputs.keys())]
-      net_vars = rec_layer.create_state_vars_recursive(
-        name_prefix="state", initial_values=net_vars, data_shape=(prev_outputs_data, None))
-    # We are ignoring acc_tas (the tensor arrays).
-
-    # Some layers make explicit use of the (global data) batch-dim,
-    # which they can get via TFNetwork.get_data_batch_dim().
-    # This will add a dependency on the external data, which we want to avoid.
-    # We can avoid that by taking the batch dim instead from one of the other states.
-    # Note that this would be wrong in beam search.
-    self.net.get_global_batch_info().dim = rec_layer.get_batch_dim_from_state()
-
-    with tf.name_scope("cond"):
-      rec_layer.create_state_var("cond", tf.constant(True))
-      res = cond(i, net_vars, acc_tas, seq_len_info)
-      rec_layer.set_state_var_final_value("cond", res)
-
-    with tf.name_scope("body"):
-      res = body(i, net_vars, acc_tas, seq_len_info)
-      assert len(res) == len(loop_vars)
-      if len(res) == 3:
-        i, net_vars, acc_tas = res
-        seq_len_info = None
-      else:
-        i, net_vars, acc_tas, seq_len_info = res
-    if seq_len_info:
-      rec_layer.set_state_vars_final_values_recursive(["end_flag", "dyn_seq_len"], seq_len_info)
-    rec_layer.set_state_var_final_value("i", i)
-    rec_layer.set_state_vars_final_values_recursive("state", net_vars)
-    return res
 
 
 def main(argv):

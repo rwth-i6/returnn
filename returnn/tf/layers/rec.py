@@ -994,8 +994,6 @@ class _SubnetworkRecCell(object):
     self.parent_rec_layer = None  # type: typing.Optional[RecLayer]
     self.parent_net = parent_net
     self.net_dict = safe_deep_copy(net_dict)
-    self.rec_layer_name = rec_layer_name
-    self.parent_get_layer = parent_get_layer
     from returnn.tf.network import TFNetwork, ExternData, LossHolder
     from returnn.tf.util.data import ControlFlowContext
     control_flow_ctx = ControlFlowContext(

@@ -35,10 +35,10 @@ def run(*args):
 rec_decoder_config = """
 #!rnn.py
 network = {
-    "enc0": {"class": "linear", "activation": "sigmoid", "n_out": 3},
+    "enc0": {"class": "linear", "from": "data", "activation": "sigmoid", "n_out": 3},
     "enc1": {"class": "reduce", "mode": "max", "axis": "t", "from": "enc0"},
     "output": {
-      "class": "rec", "from": [], "max_seq_len": 10, "target": "classes",
+      "class": "rec", "from": [], "target": "classes",
       "unit": {
         "embed": {"class": "linear", "from": "prev:output", "activation": "sigmoid", "n_out": 3},
         "prob": {"class": "softmax", "from": ["embed", "base:enc1"], "loss": "ce", "target": "classes"},
