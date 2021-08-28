@@ -1208,10 +1208,15 @@ class _SubnetworkRecCell(object):
         layer_desc = layer_desc.copy()
         layer_desc["name"] = name
         layer_desc["network"] = self.net
-        layer_.kwargs = layer_desc  # set it now already for better debugging
+        old_layer_kwargs = layer_.kwargs
+        layer_.kwargs = layer_desc.copy()  # set it now already for better debugging
         if "output" not in layer_desc:
-          layer_desc["output"] = layer_class.get_out_data_from_opts(**layer_desc)
-        layer_.init(layer_class=layer_class, **layer_desc)
+          if old_layer_kwargs and "output" in old_layer_kwargs:
+            # First copy old output. Maybe the get_out_data_from_opts raises an exception,
+            # and we don't want this to be unset.
+            layer_.kwargs["output"] = old_layer_kwargs["output"]
+          layer_.kwargs["output"] = layer_class.get_out_data_from_opts(**layer_desc)
+        layer_.init(layer_class=layer_class, **layer_.kwargs)
         if layer_ in ConstructCtx.partially_finished:
           if lself.got_uninitialized_deps_count == 0:  # in this case, we safely know that it is finished
             ConstructCtx.partially_finished.remove(layer_)
