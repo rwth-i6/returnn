@@ -2619,7 +2619,7 @@ class MergeDimsLayer(_ConcatInputLayer):
         # But keep the same dim-tag.
         dim_tag = DimensionTag.get_tag_from_size_tensor(v)
         if dim_tag is not None:
-          dim_tag.set_tag_on_size_tensor(d[j], batch=self.input_data.batch)
+          dim_tag.set_tag_on_size_tensor(d[j], batch=self.output.batch)
     return d
 
   @classmethod
