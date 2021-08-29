@@ -2171,7 +2171,7 @@ class Data(object):
       assert time_dim_axis >= 0
     assert 0 <= time_dim_axis <= self.batch_ndim
     kwargs = self.get_kwargs(include_special_axes=False)
-    dim_tag = DimensionTag(kind=DimensionTag.Types.Time, description="time", dimension=None)
+    dim_tag = DimensionTag(kind=DimensionTag.Types.Time, description="unknown_time", dimension=None)
     dim_tags = self.dim_tags[:time_dim_axis] + (dim_tag,) + self.dim_tags[time_dim_axis:]
     kwargs["dim_tags"] = dim_tags
     other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
