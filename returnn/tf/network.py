@@ -145,17 +145,17 @@ class ExternData(object):
       if batch_dim is None:
         return  # no exception here, maybe not used. fail later in get_batch_info
       batch_info = BatchInfo.make_global_batch_info(batch_dim=batch_dim)
+    # Set batch info on extern data.
+    # Overwrite all in case some dim tags have been used before and are still set to old global batch info.
     for data in self.data.values():
-      if not data.batch:
-        data.batch = batch_info
       for tag in data.dim_tags:
-        if tag.is_batch_dim() and not tag.batch:
+        tag = tag.get_same_base()
+        if tag.is_batch_dim():
           tag.batch = batch_info
         if tag.dyn_size_ext and tag.dyn_size_ext.have_batch_axis():
-          if not tag.dyn_size_ext.batch:
-            tag.dyn_size_ext.batch = batch_info
-          if not tag.batch:
-            tag.batch = batch_info
+          tag.dyn_size_ext.batch = batch_info
+          tag.batch = batch_info
+      data.batch = batch_info
 
   def check_matched_dataset(self, dataset, used_data_keys=None):
     """
