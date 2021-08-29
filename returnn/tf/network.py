@@ -2814,7 +2814,9 @@ class Subnetwork:
       from pprint import pprint
       pprint(subnet.layers, stream=ss)
       better_exchook.better_exchook(etype, value, tb, file=ss)
-      raise Exception(ss.getvalue())
+      new_exc = Exception(ss.getvalue())
+      new_exc.__traceback__ = tb
+      raise new_exc
 
 
 class TFNetworkParamsSerialized(object):
