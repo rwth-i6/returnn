@@ -1809,11 +1809,11 @@ class Data(object):
     dim_tags = list(self.dim_tags)
     if dim_tag:
       assert dim_tag.is_batch_dim()
-      assert dim_tag.dimension == (batch.dim if isinstance(batch.dim, int) else None)
+      assert dim_tag.dimension == batch.static_dim
+      assert dim_tag.batch == batch
     else:
       dim_tag = DimensionTag(
-        kind=DimensionTag.Types.Batch, description="batch",
-        dimension=batch.dim if isinstance(batch.dim, int) else None)
+        kind=DimensionTag.Types.Batch, description="batch", dimension=batch.static_dim, batch=batch)
     dim_tags.insert(batch_dim_axis, dim_tag)
     data_opts["dim_tags"] = dim_tags
     data_opts["batch"] = batch
@@ -1907,7 +1907,8 @@ class Data(object):
       else:
         batch_info = BatchInfo.make_global_broadcast_batch_info()
         return self.copy_add_batch_dim(
-          batch_dim_axis=axis, batch=batch_info, dim_tag=dim_tag if dim_tag.dimension == 1 else None)
+          batch_dim_axis=axis, batch=batch_info,
+          dim_tag=dim_tag if (dim_tag.dimension == 1 and dim_tag.batch == batch_info) else None)
 
     data_opts = self.get_kwargs()
     # Note: if dim_tag is feature, but we are sparse, we just make it spatial
