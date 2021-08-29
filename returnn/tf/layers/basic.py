@@ -6723,7 +6723,10 @@ class SubnetworkLayer(LayerBase):
       # In some cases (e.g. RnnCellLayer), we just want rec_vars_outputs.
       dummy_rec_previous_layer = InternalLayer(
         name=layer_name, network=subnet,
-        output=Data(name="dummy_rec_previous_layer(%s)" % layer_name, dim=1))
+        sources=[rec_previous_layer],
+        output=Data(
+          name="dummy_rec_previous_layer(%s)" % layer_name, dim=1, shape=(1,),
+          batch=rec_previous_layer.output.batch, beam=rec_previous_layer.output.beam))
       dummy_rec_previous_layer.rec_vars_outputs.update({
         key[len(layer_name + "/"):]: value
         for (key, value) in rec_previous_layer.rec_vars_outputs.items()
