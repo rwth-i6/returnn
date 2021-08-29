@@ -3916,24 +3916,23 @@ class RnnCellLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :rtype: Data
     """
-    beam = None
-    for dep in sources:
-      if dep:
-        beam = SearchBeam.get_combined_beam(beam, dep.output.beam)
-    shape = (n_out,)  # type: typing.Tuple[typing.Union[int,None],...]
-    batch_dim_axis = 0
-    time_dim_axis = None
-    if sources and sources[0].output.time_dim_axis is not None:
-      shape = (None,) + shape
+    sources_data = Data.get_common_data([src.output for src in sources if src], ignore_feature_dim=True)
+    feat = DimensionTag(kind=DimensionTag.Types.Feature, description="%s:rnn_cell_feat" % name, dimension=n_out)
+    if sources_data and sources_data.have_time_axis():
+      dim_tags = (sources_data.get_time_dim_tag(), sources_data.get_batch_dim_tag(), feat)
       batch_dim_axis = 1
       time_dim_axis = 0
+    else:
+      dim_tags = (sources_data.get_batch_dim_tag(), feat)
+      batch_dim_axis = 0
+      time_dim_axis = None
     return Data(
       name="%s_output" % name,
-      shape=shape, dim=n_out,
+      dim_tags=dim_tags, dim=n_out,
       batch_dim_axis=batch_dim_axis,
       time_dim_axis=time_dim_axis,
-      size_placeholder={} if not sources else sources[0].output.size_placeholder.copy(),
-      beam=beam)
+      batch=sources_data.batch,
+      beam=sources_data.beam)
 
   def get_absolute_name_scope_prefix(self):
     """
