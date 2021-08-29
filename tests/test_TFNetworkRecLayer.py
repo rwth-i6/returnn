@@ -2104,7 +2104,8 @@ def test_target_with_beam():
       }
     }, "target": teacher_target, "max_seq_len": "max_len_from('base:teacher_encoder') * 3", "trainable": False},
 
-    # the teacher's decision layer is actually not used, since the hypotheses data is fetched from the teacher's choice layer (or teacher_output)...
+    # the teacher's decision layer is actually not used,
+    # since the hypotheses data is fetched from the teacher's choice layer (or teacher_output)...
     "teacher_decision": {
       "class": "decide", "from": ["teacher_output"], "loss": "edit_distance", "target": teacher_target,
       "loss_opts": {},
@@ -2173,6 +2174,7 @@ def test_target_with_beam():
   config = Config({
     "debug_print_layer_output_template": True,
     "debug_print_layer_output_shape": True,
+    "debug_runtime_sanity_checks": True,
   })
 
   with make_scope() as session:
