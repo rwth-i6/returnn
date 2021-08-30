@@ -322,7 +322,7 @@ class RecLayer(_ConcatInputLayer):
           target=d["size_target"], mark_data_key_as_used=True, network=network)
         assert target_data.have_time_axis()
         time_dim_tag = target_data.get_time_dim_tag()
-      elif d.get("target") and network.eval_flag:
+      elif d.get("target") and network.eval_flag and not network.search_flag:
         target_data = cls._static_get_target_value(
           target=d["target"][0] if isinstance(d["target"], (list, tuple)) else d["target"],
           mark_data_key_as_used=True, network=network)
