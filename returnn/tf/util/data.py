@@ -3055,7 +3055,9 @@ class Data(object):
         tag.declare_same_as(sizes_tag)
       else:
         # Assign now. This should also set the dim tag on sizes.
-        tag.dyn_size = sizes
+        new_tag = tag.set_tag_on_size_tensor(sizes, batch=self.batch)
+        if new_tag is not tag:
+          self._dim_tags = self.dim_tags[:axis] + (new_tag,) + self.dim_tags[axis + 1:]
     else:
       # Reset to some new size.
       # Use new dim tag, or previous existing attached to size.
