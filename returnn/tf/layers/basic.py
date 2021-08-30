@@ -3128,7 +3128,7 @@ class UnflattenNdLayer(_ConcatInputLayer):
       for i, other in declare_same_sizes_as.items():
         assert 0 <= i < num_axes
         other_dim_tag = other.output.get_size_dim_tag(0)
-        other_dim_tag.set_tag_on_size_tensor(size_placeholder[i], batch=self.output.batch)
+        other_dim_tag.set_tag_on_size_tensor(size_placeholder[i], batch=self.output.batch, same_as_before=True)
     self.output.size_placeholder = size_placeholder
 
   def get_dep_layers(self):
