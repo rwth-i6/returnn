@@ -283,6 +283,7 @@ class DimensionTag(object):
       if x in self._dyn_size_same:
         pass  # ok, pass on
       elif same_as_before:
+        # TODO add runtime test
         self._dyn_size_same.add(x)
         # And now pass on.
       else:
