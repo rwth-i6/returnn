@@ -6361,7 +6361,7 @@ class CondLayer(LayerBase):
       old_size = self.output.size_placeholder[i]
       old_tag = DimensionTag.get_tag_from_size_tensor(old_size)
       assert old_tag
-      old_tag.set_tag_on_size_tensor(size, batch=self.output.batch)
+      old_tag.set_tag_on_size_tensor(size, batch=self.output.batch, same_as_before=True)
       self.output.size_placeholder[i] = size
 
   def _cond_layer_return(self, layer):
