@@ -455,7 +455,7 @@ class SelectSearchSourcesLayer(InternalLayer):
               i, get_valid_scope_name_from_str(base_src_choices.owner.name),
               len(search_choices_seq), get_valid_scope_name_from_str(search_choices.owner.name)))
           if tag:
-            tag.set_tag_on_size_tensor(v, batch=self.output.batch)
+            tag.set_tag_on_size_tensor(v, batch=self.output.batch.copy_set_beam(base_src_choices.get_beam_info()))
           self.used_search_choices_beams = True
         return v
 
