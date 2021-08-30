@@ -10,6 +10,7 @@ from __future__ import print_function, division
 import os
 import typing
 import tensorflow as tf
+import traceback
 
 from returnn.util.basic import NotSpecified
 import returnn.tf.compat as tf_compat
@@ -56,6 +57,7 @@ class DimensionTag(object):
     self.description = description
     self.dimension = dimension
     self.same_as = None  # type: typing.Optional[DimensionTag]
+    self._same_as_tb = None  # type: typing.Optional[traceback.StackSummary]  # for debugging
     if src_data:
       assert isinstance(src_data, Data) and isinstance(src_axis, int)
     if not batch and dyn_size_ext:
@@ -65,12 +67,13 @@ class DimensionTag(object):
     self.src_axis = src_axis
     if dyn_size_ext and not dyn_size_ext.batch and batch:
       dyn_size_ext.batch = batch
-    if dyn_size_ext and dyn_size_ext.batch and batch:
+    if dyn_size_ext:
       assert batch == dyn_size_ext.batch
     self.dyn_size_ext = dyn_size_ext  # type: typing.Optional[Data]
     if dyn_size is not None:
       assert not dyn_size_ext
       self.dyn_size = dyn_size
+    self._dyn_size_same = set()  # type: typing.Set[tf.Tensor]
     # We can have different tag variants per batch info (e.g. with beam).
     # They each have same_as = self. The same_base should have the base (global) batch info.
     self._same_for_batch = {}  # type: typing.Dict[BatchInfo,DimensionTag]
@@ -115,6 +118,7 @@ class DimensionTag(object):
       batch=self.batch,
       src_data=self.src_data, src_axis=self.src_axis)
     tag.same_as = self  # not declare_same_as, none of the extra checks needed
+    tag._same_as_tb = traceback.extract_stack()
     return tag
 
   def get_for_batch(self, batch):
@@ -160,6 +164,7 @@ class DimensionTag(object):
       kind=self.kind, description=self.description, dimension=self.dimension,
       batch=batch, dyn_size_ext=dyn_size_ext)
     dim_tag.same_as = same_base
+    dim_tag._same_as_tb = traceback.extract_stack()
     if dyn_size_ext:
       dim_tag.set_tag_on_size_tensor(dyn_size_ext.placeholder, batch=batch)
     same_base._same_for_batch[batch] = dim_tag
@@ -218,24 +223,65 @@ class DimensionTag(object):
     """
     return self.kind == DimensionTag.Types.Spatial
 
-  def set_tag_on_size_tensor(self, x, batch=None):
+  def is_same_size_tensor(self, x):
     """
     :param tf.Tensor x:
+    :return: whether this dim tag for this specific batch (incl beam) is the same as the given size
+    :rtype: bool
+    """
+    if x is self.dyn_size:
+      return True
+    if x in self._dyn_size_same:
+      return True
+    return False
+
+  def set_tag_on_size_tensor(self, x, batch=None, same_as_before=False):
+    """
+    This function is used
+    to couple a tf.Tensor instance representing the dyn size
+    with the dim tag.
+
+    This is usually a newly created dim tag,
+    which is yet unset.
+
+    It is also used to couple an existing dim tag with other dyn sizes
+    which just differ by an expansion of the batch (e.g. search beam).
+
+    See also :func:`get_tag_from_size_tensor`.
+
+    :param tf.Tensor x:
     :param BatchInfo|None batch:
+    :param bool same_as_before: implies it was set before, and the new size is the same.
+      e.g. it could be some identity with added checks, or other change.
+    :return: self or new dim tag
+    :rtype: DimensionTag
     """
     # It's unusual if self.dimension is not None, but let's accept that.
     if hasattr(x, "_is_size_of_dim_tag"):
       # noinspection PyProtectedMember
       assert x._is_size_of_dim_tag in (None, self)
     # If we already have another dyn size set or different batch, create a new DimensionTag instance.
-    if (self.dyn_size is not None and self.dyn_size is not x) or (self.batch and batch and self.batch != batch):
-      if batch:
-        new_dim_tag = self.get_for_batch(batch)
+    if self.batch and batch and self.batch != batch:
+      assert not same_as_before  # it cannot be the same when it is another batch...
+      new_dim_tag = self.get_for_batch(batch)
+      new_dim_tag.set_tag_on_size_tensor(x, batch=batch)
+      return new_dim_tag
+    if self.dyn_size is not None and self.dyn_size is not x:
+      if x in self._dyn_size_same:
+        pass  # ok, pass on
+      elif same_as_before:
+        self._dyn_size_same.add(x)
+        # And now pass on.
       else:
-        new_dim_tag = self.copy()
-        new_dim_tag.dyn_size_ext = None
-      new_dim_tag.set_tag_on_size_tensor(x)
-      return
+        assert self.batch and batch
+        # It's not clear what to do. We could create a new dim tag, but the sizes might be different.
+        # Usually we should not get here.
+        # So for now, just error.
+        raise Exception("\n".join([
+          "%r (%r) already has size %r, and another incompatible size %r (batch %r) is being assigned." % (
+            self, self.description, self.dyn_size, x, batch),
+          "This is maybe the result of an incorrect declare_same_as. Traceback of declare_same_as:",
+          "".join(self._same_as_tb.format()) if self._same_as_tb else ("same_as = %s" % self.same_as)]))
     if batch and getattr(x, "_RETURNN_dyn_size_beam", None):
       assert batch.beam == getattr(x, "_RETURNN_dyn_size_beam")
     if self.batch and batch:
@@ -246,6 +292,7 @@ class DimensionTag(object):
       setattr(x, "_is_size_of_dim_tag", self)
     if self.dyn_size is None:
       self.dyn_size = x
+    return self
 
   @classmethod
   def get_tag_from_size_tensor(cls, x):
@@ -368,7 +415,6 @@ class DimensionTag(object):
     """
     :param DimensionTag other:
     """
-    from .basic import same_control_flow_ctx, tile_transposed
     if self is other:
       return
     other_same_base = other.get_same_base()
@@ -380,6 +426,7 @@ class DimensionTag(object):
       if self_same_as is other_same_base:
         return
       self_same_as.same_as = other_same_base
+      self_same_as._same_as_tb = traceback.extract_stack()
       if self_same_as.dyn_size_ext is None:
         self_same_as.dyn_size_ext = other_same_base.dyn_size_ext
       elif other_same_base.dyn_size_ext is None:
@@ -387,9 +434,10 @@ class DimensionTag(object):
       if self.dyn_size_ext is None:
         self.dyn_size_ext = self_same_as.dyn_size_ext
     self.same_as = other_same_base
+    self._same_as_tb = traceback.extract_stack()
     if self.dyn_size is not None and other_same_base.dyn_size is not None:
       if self.dyn_size is not other_same_base.dyn_size:
-        if self.src_data and other_same_base.src_data and self.src_data.beam == other_same_base.src_data.beam:
+        if self.batch == other_same_base.batch:
           # Note: Instead of making this a warning, we could also enforce this at some point.
           #   The user should be able to fix `extern_data` in the config such that this is correct in the first place.
           #   Also, in addition to this warning, we might want to add some runtime check on the eq of the dyn sizes.
@@ -403,13 +451,6 @@ class DimensionTag(object):
       if self.src_data.get_dim_tag(self.src_axis).description == self.description:
         self.src_data.size_placeholder[
           self.src_data.get_batch_axis_excluding_batch(self.src_axis)] = self.same_as.dyn_size
-        # if the tag is used in a recurrent layer during search, the placeholder has to be expanded by the beam size
-        if self.src_data.beam and (not self.same_as.src_data or not self.same_as.src_data.beam):
-          for i, v in sorted(self.src_data.size_placeholder.items()):
-            with same_control_flow_ctx(v):
-              size = tile_transposed(v, axis=0, multiples=self.src_data.beam.beam_size)
-            self.set_tag_on_size_tensor(size, batch=self.src_data.batch)
-            self.src_data.size_placeholder[i] = size
     # If others dyn_size is None but we have a dyn_size, maybe update others dyn_size.
     if self.dyn_size is not None and self.same_as.dyn_size is not self.dyn_size:
       # Could be unset if it comes from the config, or from prev graph creation.
@@ -3000,14 +3041,14 @@ class Data(object):
 
     sizes_tag = DimensionTag.get_tag_from_size_tensor(sizes)
     if sizes_tag:
-      assert sizes_tag.dyn_size is sizes
+      assert sizes_tag.is_same_size_tensor(sizes)
     tag = self.dim_tags[axis]
     assert tag.dimension is None  # dynamic axis
-    if tag.dyn_size is sizes:
+    if tag.is_same_size_tensor(sizes):
       return  # nothing to do
     if tag.dyn_size is None:
       if sizes_tag:  # special rule for older code: overtake previous existing
-        assert sizes_tag.dyn_size is sizes
+        assert sizes_tag.is_same_size_tensor(sizes)
         self._dim_tags = self.dim_tags[:axis] + (sizes_tag,) + self.dim_tags[axis + 1:]
         # Also assume the existing dim tag should be expected as equal.
         # Likely there is anyway no reference so this does not matter.
@@ -3672,7 +3713,7 @@ def _infer_dim_tags_tuple_from_shape(
       # Just some sanity checks.
       assert isinstance(tag, DimensionTag)
       assert tag.dimension == dim
-      assert tag.dyn_size is dyn_size
+      assert tag.is_same_size_tensor(dyn_size)
       continue
     if axis == feature_dim_axis and dyn_size is None and axis != time_dim_axis:
       tag = DimensionTag(kind=DimensionTag.Types.Feature, dimension=dim, description="feature:%s" % name)
