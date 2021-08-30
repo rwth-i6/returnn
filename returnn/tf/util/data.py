@@ -443,6 +443,7 @@ class DimensionTag(object):
         return
       self_same_as.same_as = other_same_base
       self_same_as._same_as_tb = traceback.extract_stack()
+      # TODO this is unsafe, slightly incorrect...
       if self_same_as.dyn_size_ext is None:
         self_same_as.dyn_size_ext = other_same_base.dyn_size_ext
       elif other_same_base.dyn_size_ext is None:
