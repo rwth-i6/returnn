@@ -2504,10 +2504,10 @@ class _SubnetworkRecCell(object):
             "%s: input beam %r, output beam %r, sources %r, target %r" % (
               self.parent_rec_layer, input_beam, output_beam,
               self.parent_rec_layer.sources, self.parent_rec_layer.target))
-          from returnn.tf.util.basic import tile_transposed
-          seq_len = tile_transposed(seq_len, axis=0, multiples=output_beam.beam_size)  # (batch * beam,)
-          seq_len._RETURNN_dyn_size_beam = rec_layer.output.beam
-          time_dim_tag.set_tag_on_size_tensor(seq_len, batch=rec_layer.output.batch)
+          assert output_template.output.batch.beam == output_beam
+          time_dim_tag = time_dim_tag.get_for_batch(output_template.output.batch)
+          assert time_dim_tag.dyn_size is not None
+          seq_len = time_dim_tag.dyn_size
       else:
         _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
         seq_len._RETURNN_dyn_size_beam = rec_layer.output.beam
