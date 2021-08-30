@@ -413,7 +413,6 @@ class RecLayer(_ConcatInputLayer):
     assert out
     if out.have_time_axis() and _time_dim_tag:
       out = out.copy_template_replace_dim_tag(axis=out.time_dim_axis, new_dim_tag=_time_dim_tag)
-    cls._post_init_output(output=out, sources=sources, network=network, **kwargs)
     for dep in deps:
       if dep:
         out.beam = SearchBeam.get_combined_beam(out.beam, dep.output.beam)
