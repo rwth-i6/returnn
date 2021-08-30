@@ -347,7 +347,7 @@ class TFNetwork(object):
                inside_rec_time_dim=None,
                absolute_name_prefix=None, name=None):
     """
-    :param Config.Config config: only needed to init extern_data if not specified explicitly
+    :param returnn.config.Config config: only needed to init extern_data if not specified explicitly
     :param ExternData|None extern_data:
     :param int|None rnd_seed:
     :param bool|tf.Tensor train_flag: True if we want to use this model in training, False if in eval, or dynamic
