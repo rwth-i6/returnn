@@ -508,6 +508,7 @@ def set_global_config(config):
 
   :param Config config:
   """
+  _get_or_set_config_via_tf_default_graph(config)
   global _global_config
   _global_config = config
 
@@ -518,6 +519,9 @@ def get_global_config(raise_exception=True, auto_create=False):
   :param bool auto_create: if no global config is found, it creates one and returns it
   :rtype: Config|None
   """
+  config = _get_or_set_config_via_tf_default_graph()
+  if config:
+    return config
   if _global_config:
     return _global_config
   import returnn.util.task_system
@@ -548,6 +552,27 @@ def get_global_config(raise_exception=True, auto_create=False):
   if raise_exception:
     raise Exception("No global config found.")
   return None
+
+
+def _get_or_set_config_via_tf_default_graph(config=None):
+  """
+  This is done in a safe way, and might just be a no-op.
+  When TF is not imported yet, it will just return.
+
+  :param Config|None config: if set, will set it
+  :rtype: Config|None
+  """
+  if "tensorflow" not in sys.modules:
+    return None
+  from returnn.tf.compat import v1 as tf_v1
+  graph = tf_v1.get_default_graph()
+  # We could use collection refs, but this could cause other problems,
+  # and is more complicated than what we need.
+  # We just use a custom own attrib.
+  attrib_name = "_RETURNN_config_in_graph"
+  if config:
+    setattr(graph, attrib_name, config)
+  return getattr(graph, attrib_name, None)
 
 
 def network_json_from_config(config, mask=None):

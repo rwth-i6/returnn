@@ -380,6 +380,9 @@ class TFNetwork(object):
       # It's a new root network.
       # Clear any old list in case there was a previous network in the same graph.
       LayerBase.get_global_layer_list()[:] = []
+      if config:
+        from returnn.config import set_global_config
+        set_global_config(config)
     if not config and base_net:
       config = base_net._config
     if extern_data is None:
