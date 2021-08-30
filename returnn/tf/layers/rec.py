@@ -1964,7 +1964,7 @@ class _SubnetworkRecCell(object):
           fixed_seq_len = check_input_dim(
             fixed_seq_len, axis=0, dim=batch_dim * (input_beam.beam_size if input_beam else 1))
           if time_dim_tag:
-            time_dim_tag.set_tag_on_size_tensor(fixed_seq_len, batch=output_template.output.batch)
+            time_dim_tag.set_tag_on_size_tensor(fixed_seq_len, batch=time_dim_tag.batch, same_as_before=True)
         max_seq_len = tf.reduce_max(fixed_seq_len, name="max_seq_len")
         have_known_seq_len = True
       else:
