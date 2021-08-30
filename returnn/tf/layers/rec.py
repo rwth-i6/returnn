@@ -2738,20 +2738,18 @@ class _SubnetworkRecCell(object):
         src_choice_beams = self.final_acc_tas_dict["choice_%s" % choice_.name].read(
           max_seq_len - 1, name="ta_read_choice")  # (batch, beam) -> beam_in idx
         seq_len = select_src_beams(seq_len, src_choice_beams)
-    else:
+
+    else:  # not end_layer
       # Here we don't need to resolve anything, as the sequence length is the same for all hyps in the beam.
       # However, beam size for the current output may be different from the "output" layer.
-      # Therefore take the first len in the beam and tile it to the desired beam size.
-
-      # Separate batch and beam dims
-      seq_len_beam_size = rec_layer.output.beam.beam_size
-      seq_len = tf.reshape(seq_len, [batch_dim, seq_len_beam_size], name="split_batch_beam")
-
-      seq_len = seq_len[:, 0:1]
-      seq_len = tf.tile(seq_len, [1, latest_beam_size], name="resize_seq_len_beam")
-
-      # Recombine batch and beam dims
-      seq_len = tf.reshape(seq_len, [batch_dim * latest_beam_size], name="merge_batch_beam")
+      tag = DimensionTag.get_tag_from_size_tensor(seq_len)
+      assert tag
+      latest_batch = (
+        latest_layer_choice.output.batch
+        or self.parent_rec_layer.output.batch.copy_set_beam(latest_layer_choice.output.beam))
+      tag = tag.get_for_batch(latest_batch)
+      assert tag.dyn_size is not None
+      seq_len = tag.dyn_size
 
     new_acc_output_ta = tf.TensorArray(
       name="search_resolved_%s" % os.path.basename(acc_ta.handle.op.name),
