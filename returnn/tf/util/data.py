@@ -817,6 +817,13 @@ class BatchInfo:
     assert len(global_beam_dims) == 1
     return global_beam_dims[0]
 
+  def is_global_batch(self):
+    """
+    :rtype: bool
+    """
+    global_beam_dims = [dim for dim in self.virtual_dims if isinstance(dim, BatchInfo.GlobalBatchDim)]
+    return len(global_beam_dims) == 1 and len(self.virtual_dims) == 1
+
   def _make_beam_dim(self, beam):
     """
     :param SearchBeam beam:
