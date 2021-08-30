@@ -464,6 +464,7 @@ class DimensionTag(object):
     # maybe we can overtake the size_placeholder now.
     if self.same_as.dyn_size is not None and self.src_data:
       assert isinstance(self.src_axis, int)
+      # TODO Is this still needed? also looks wrong
       # Maybe it changed in the meanwhile, so check.
       if self.src_data.get_dim_tag(self.src_axis).description == self.description:
         self.src_data.size_placeholder[
