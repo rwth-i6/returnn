@@ -6574,11 +6574,15 @@ class EditDistanceTableLayer(LayerBase):
     super(EditDistanceTableLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1, "%s: expects exactly a single source" % self
     source_data = self.sources[0].output
-    assert source_data.dtype == "int32" and source_data.batch_ndim <= 2
+    assert source_data.dtype == "int32" and source_data.batch_ndim <= 2 and source_data.sparse
     assert self.target, "%s: 'target' must be set" % self
     target_data = self._get_target_value()
     assert target_data, "%s: target %r not found?" % (self, self.target)
     assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
+    dim = target_data.dim
+    if blank_idx is not None:
+      dim = max(dim, blank_idx + 1)
+    assert target_data.sparse and source_data.dim == dim
     target_data = target_data.copy_as_batch_major()
     self._target_data = target_data
     if source_data.have_time_axis():
@@ -6683,15 +6687,9 @@ class EditDistanceTableLayer(LayerBase):
     """
     assert len(sources) == 1, "%s %r: expects exactly a single source" % (cls.__name__, name)
     source_data = sources[0].output
-    assert source_data.dtype == "int32" and source_data.batch_ndim <= 2 and source_data.sparse
     assert target, "%s %r: 'target' must be set" % (cls.__name__, name)
     target_data = cls._static_get_target_value(target=target, _target_layers=_target_layers, network=network)
     assert target_data, "target %r not found?" % target
-    assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
-    dim = target_data.dim
-    if blank_idx is not None:
-      dim = max(dim, blank_idx + 1)
-    assert target_data.sparse and source_data.dim == dim
     seq_len = tf_util.new_seq_len(
       func=tf_util.simplify_add, key=tf_util.simplify_add,
       dim_tag_desc="edit_dist_table:%s" % name,
