@@ -1702,11 +1702,12 @@ def move_axis(x, old_axis, new_axis, name="move_axis"):
 class TensorCachedComputation:
   """
   Helper to cache some computation inside a ``tf.Tensor`` object.
+  Or also inside any other object.
   """
 
   def __init__(self, x, key):
     """
-    :param tf.Tensor x:
+    :param tf.Tensor|object x:
     :param str|tuple[str|int|tf.Tensor] key:
     """
     self.x = x
