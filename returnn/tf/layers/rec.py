@@ -3162,8 +3162,8 @@ class _SubnetworkRecCell(object):
     """
     if not self.output_layers_moved_out and not extra_output_layers:
       return
-    from returnn.tf.util.basic import tensor_array_stack, has_control_flow_context, concat_with_opt_broadcast
-    from returnn.tf.util.basic import DimensionTag, tile_transposed
+    from returnn.tf.util.basic import tensor_array_stack, concat_with_opt_broadcast
+    from returnn.tf.util.basic import DimensionTag
     from returnn.tf.network import TFNetwork, ExternData
     from .base import InternalLayer
 
@@ -3203,7 +3203,6 @@ class _SubnetworkRecCell(object):
       if name in loop_acc_layers:
         return loop_acc_layers[name]
       with tf.name_scope(self.layer_data_templates[name].layer_class_type.cls_get_tf_scope_name(name)):
-        inner_layer = self.net.get_layer(name)
         acc_ta = loop_accumulated["output_%s" % name]
         acc_ta, latest_layer_choice_name, search_choices, resolved_seq_len = self._opt_search_resolve(
           layer_name=name, acc_ta=acc_ta, final_net_vars=final_net_vars, seq_len=seq_len,
@@ -3224,32 +3223,6 @@ class _SubnetworkRecCell(object):
         # We should have accumulated it.
         output.placeholder = tensor_array_stack(acc_ta, stop=max_len)  # e.g. (time,batch,dim)
         output.size_placeholder = {0: resolved_seq_len}
-        if latest_layer_choice_name and search_choices and search_choices.keep_raw:
-          if output.beam != self.parent_rec_layer.output.beam:
-            # TODO this is not quite correct...
-            # (It is correct only if you use keep_beam or so...)
-            if output.beam.beam_size % self.parent_rec_layer.output.beam.beam_size == 0:
-              size = tile_transposed(
-                seq_len, axis=0, multiples=output.beam.beam_size // self.parent_rec_layer.output.beam.beam_size)
-              size._RETURNN_dyn_size_beam = output.beam
-              if time_dim_tag:
-                time_dim_tag.set_tag_on_size_tensor(size, batch=output.batch)
-              output.size_placeholder[0] = size
-        if inner_layer.output.size_placeholder:
-          for i, size in inner_layer.output.size_placeholder.items():
-            tag = DimensionTag.get_tag_from_size_tensor(size)
-            if tag and tag.dyn_size is not None:
-              size = tag.dyn_size  # this is more likely out of the loop
-            if not has_control_flow_context(size):  # copy if this size comes from outside the loop
-              if inner_layer.output.beam:
-                # Might need tiling...
-                size = tile_transposed(
-                  size, axis=0,
-                  multiples=tf.shape(output.size_placeholder[0])[0] // tf.shape(size)[0])
-                size._RETURNN_dyn_size_beam = output.beam
-                if tag:
-                  tag.set_tag_on_size_tensor(size, batch=output.batch)
-              output.size_placeholder[i + 1] = size
         assert isinstance(self.output_layers_net, TFNetwork)
         layer_ = self.output_layers_net.add_layer(
           name=name, output=output, layer_class=InternalLayer, sources=[])
