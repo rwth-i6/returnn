@@ -310,11 +310,14 @@ class RecLayer(_ConcatInputLayer):
     # We need to figure out the output time dim tag at this early point,
     # because _SubnetworkRecCell might need it during template construction.
     source_data = get_concat_sources_data_template(d["sources"]) if d["sources"] else None
+    have_dyn_seq_len_end = False
+    if isinstance(d.get("unit"), dict):
+      have_dyn_seq_len_end = "end" in d["unit"]
     if source_data and not source_data.have_time_axis():  # expect to be inside other RecLayer
       time_dim_tag = None
     else:
       # We will output a time-dim.
-      if source_data:
+      if source_data and not have_dyn_seq_len_end:
         assert source_data.have_time_axis()
         time_dim_tag = source_data.get_time_dim_tag()
       elif d.get("size_target"):  # if this is set, always use it
