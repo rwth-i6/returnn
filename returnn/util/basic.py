@@ -1339,14 +1339,36 @@ def class_idx_seq_to_1_of_k(seq, num_classes):
 def uniq(seq):
   """
   Like Unix tool uniq. Removes repeated entries.
+  See :func:`uniq_generic` for a generic (non-Numpy) version.
 
-  :param seq: numpy.array
+  :param numpy.ndarray seq:
   :return: seq
+  :rtype: numpy.ndarray
   """
   diffs = np.ones_like(seq)
   diffs[1:] = seq[1:] - seq[:-1]
   idx = diffs.nonzero()
   return seq[idx]
+
+
+def uniq_generic(seq):
+  """
+  Like Unix tool uniq. Removes repeated entries.
+  See :func:`uniq` for an efficient Numpy implementation.
+  See :func:`returnn.tf.util.basic.uniq` for an efficient TF implementation.
+
+  :param list[T]|tuple[T] seq:
+  :return: seq
+  :rtype: list[T]
+  """
+  out = []
+  visited = set()
+  for x in seq:
+    if x in visited:
+      continue
+    out.append(x)
+    visited.add(x)
+  return out
 
 
 def slice_pad_zeros(x, begin, end, axis=0):
