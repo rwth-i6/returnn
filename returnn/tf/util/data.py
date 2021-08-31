@@ -3096,18 +3096,16 @@ class Data(object):
     return [axis for axis, dim in enumerate(self.batch_shape)
             if axis != self.batch_dim_axis and dim is not None]
 
-  def mark_same_time(self, other):
+  def mark_same_time(self, tags):
     """
-    If the dimension tag of others time axis matches any of our axes, we set our time axis to the selected one.
+    If the given dimension tag matches any of our axes, we set our time axis to the selected one.
 
-    :param Data other:
+    :param set[DimensionTag] tags:
     :return: whether we have found the same
     :rtype: bool
     """
-    assert other.have_time_axis()
-    tag_other = other.get_dim_tag(other.time_dim_axis)
-    for axis, dim_tag in enumerate(self.get_batch_shape_dim_tags()):
-      if dim_tag == tag_other:
+    for axis, dim_tag in enumerate(self.dim_tags):
+      if dim_tag in tags:
         self.time_dim_axis = axis
         return True
     return False

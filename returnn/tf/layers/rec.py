@@ -1009,6 +1009,11 @@ class _SubnetworkRecCell(object):
       self.net.extern_data.data["source"] = (
         source_data.copy_template_excluding_time_dim())
     self.time_dim_tag = time_dim_tag
+    self._time_dim_tags = {time_dim_tag}  # type: typing.Set[DimensionTag]
+    if source_data:
+      # Maybe the input has a different time dim tag, but we still have new dynamic length here
+      # because of custom endings ("end" layer).
+      self._time_dim_tags.add(source_data.get_time_dim_tag())
     for key, data in parent_net.extern_data.data.items():
       if key in self.net.extern_data.data or data.time_dim_axis is None:
         continue  # Don't overwrite existing, e.g. "source".
@@ -1535,7 +1540,7 @@ class _SubnetworkRecCell(object):
       assert isinstance(self.input_layers_net, TFNetwork)
       layer = self.input_layers_net.layers[layer_name]
       assert isinstance(layer, LayerBase)
-      if not self.parent_rec_layer.output.is_same_time_dim(layer.output):
+      if layer_name not in inputs_moved_out_tas:
         assert name != "output" and not prev, "Time dim does not match: RecLayer %s (%r) vs sub layer %s (%r)." % (
           self.parent_rec_layer, self.parent_rec_layer.output.get_time_dim_tag(),
           layer, layer.output.get_time_dim_tag())
@@ -1986,6 +1991,8 @@ class _SubnetworkRecCell(object):
       used_keys = self.net.used_data_keys.copy()
       for key in sorted(used_keys):
         data = rec_layer.network.get_extern_data(key, mark_data_key_as_used=True)
+        # This could be another dim tag from the rec time dim tag.
+        self._time_dim_tags.add(data.get_time_dim_tag())
         data_placeholder = data.get_placeholder_as_time_major()
         with tf.name_scope("check_data_len"):
           data_len = tf.shape(data_placeholder)[0]
@@ -2239,8 +2246,6 @@ class _SubnetworkRecCell(object):
       if self.input_layers_moved_out:
         with tf.name_scope("input_layers_moved_out"):
           self._construct_input_layers_moved_out()
-          if fixed_seq_len is None and rec_layer.output.size_placeholder:  # might have set it by now
-            fixed_seq_len = rec_layer.output.size_placeholder[0]
           for layer_name in self.input_layers_moved_out:
             # Create only Tensor arrays for those which we use inside the loop.
             if not self._input_layer_used_inside_loop(layer_name):
@@ -2251,21 +2256,21 @@ class _SubnetworkRecCell(object):
               assert layer.output.have_time_axis()
               assert rec_layer.output.is_same_time_dim(layer.output)
             # Only unroll if that is the same time dim.
-            if not layer.output.mark_same_time(rec_layer.output):
+            if not layer.output.mark_same_time(self._time_dim_tags):
               continue
-            assert fixed_seq_len is not None
+            assert max_seq_len is not None
             inp_ta = tf.TensorArray(
               name="%s_ta" % layer_name,
               dtype=self.layer_data_templates[layer_name].output.dtype,
               element_shape=self.layer_data_templates[layer_name].output.batch_shape,
-              size=tf.reduce_max(fixed_seq_len),
+              size=layer.output.time_dimension(),
               infer_shape=True)
             with tf.control_dependencies([
-                  tf.Assert(tf.equal(
-                    tf.shape(layer.output.placeholder)[layer.output.time_dim_axis], tf.reduce_max(fixed_seq_len)),
+                  tf.Assert(tf.greater_equal(
+                    layer.output.time_dimension(), max_seq_len),
                     ["input TA unstack", str(layer.output), "shape", tf.shape(layer.output.placeholder),
                      "seq len", layer.output.get_sequence_lengths(), "do not match",
-                     "fixed seq len", fixed_seq_len, "max", tf.reduce_max(fixed_seq_len)])]):
+                     "max seq len", max_seq_len])]):
               inp_ta = inp_ta.unstack(
                 layer.output.get_placeholder_as_time_major(),
                 name="%s_ta_unstack" % layer_name)
@@ -3306,7 +3311,7 @@ class _SubnetworkRecCell(object):
     # However, after construction, when accessing any of these layers,
     # we would expect that their time-dim-axis matches the same as from the rec loop.
     for layer in self.output_layers_net.layers.values():
-      layer.output.mark_same_time(self.parent_rec_layer.output)
+      layer.output.mark_same_time(self._time_dim_tags)
 
 
 RecLayer.SubnetworkRecCell = _SubnetworkRecCell
