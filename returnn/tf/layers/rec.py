@@ -3155,14 +3155,9 @@ class _SubnetworkRecCell(object):
     if not self.output_layers_moved_out and not extra_output_layers:
       return
     from returnn.tf.util.basic import tensor_array_stack, concat_with_opt_broadcast
-    from returnn.tf.util.basic import DimensionTag
     from returnn.tf.network import TFNetwork, ExternData
     from .base import InternalLayer
 
-    if seq_len is not None:
-      time_dim_tag = DimensionTag.get_tag_from_size_tensor(seq_len)
-    else:
-      time_dim_tag = None
     self.output_layers_net = TFNetwork(
       name="%s/%s(rec-subnet-output)" % (
         self.parent_net.name, self.parent_rec_layer.name if self.parent_rec_layer else "?"),
@@ -3209,12 +3204,10 @@ class _SubnetworkRecCell(object):
         if output.batch:
           output.batch = output.batch.copy_set_beam(output.beam)
         resolved_seq_len._RETURNN_dyn_size_beam = output.beam
-        if time_dim_tag:
-          time_dim_tag.set_tag_on_size_tensor(resolved_seq_len, batch=output.batch)
+        output.set_dynamic_size(axis=0, sizes=resolved_seq_len)
         max_len = tf.reduce_max(resolved_seq_len)
         # We should have accumulated it.
         output.placeholder = tensor_array_stack(acc_ta, stop=max_len)  # e.g. (time,batch,dim)
-        output.size_placeholder = {0: resolved_seq_len}
         assert isinstance(self.output_layers_net, TFNetwork)
         layer_ = self.output_layers_net.add_layer(
           name=name, output=output, layer_class=InternalLayer, sources=[])
