@@ -5886,6 +5886,18 @@ def print_graph_output(fetches, file=sys.stdout, max_depth=None):
     p(fetch, prefix="fetch: ")
 
 
+def format_graph_output(fetches, max_depth=None):
+  """
+  :param tf.Operation|tf.Tensor|list[tf.Tensor|tf.Operation] fetches:
+  :param int|None max_depth:
+  :rtype: str
+  """
+  from returnn.util.basic import StringIO
+  ss = StringIO()
+  print_graph_output(fetches, max_depth=max_depth, file=ss)
+  return ss.getvalue().rstrip()
+
+
 def var_handle_or_ref(var):
   """
   :param tf.Variable|tensorflow.python.ops.resource_variable_ops.ResourceVariable var:
