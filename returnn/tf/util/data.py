@@ -277,10 +277,13 @@ class DimensionTag(object):
         # It's not clear what to do. We could create a new dim tag, but the sizes might be different.
         # Usually we should not get here.
         # So for now, just error.
+        from .basic import format_graph_output
         raise Exception("\n".join([
           "%r (%r) already has size %r, and another incompatible size %r (batch %r) is being assigned." % (
             self, self.description, self.dyn_size, x, batch),
-          "This is maybe the result of an incorrect declare_same_as. Traceback of declare_same_as:",
+          "\nNew size computation graph:",
+          format_graph_output(x),
+          "\nThis is maybe the result of an incorrect declare_same_as. Traceback of declare_same_as:",
           "".join(self._same_as_tb.format()) if self._same_as_tb else ("same_as = %s" % self.same_as)]))
     if batch and getattr(x, "_RETURNN_dyn_size_beam", None):
       assert batch.beam == getattr(x, "_RETURNN_dyn_size_beam")
