@@ -5275,7 +5275,7 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
     # We also allow a source after a DecideLayer.
     beam_size = src.output.beam.beam_size if src.output.beam else 1
     super(DecideKeepBeamLayer, self).__init__(beam_size=beam_size, sources=sources, **kwargs)
-    # If not in search, this will already be set via self.get_out_data_from_opts().
+    self.output.placeholder = src.output.placeholder
     if self.network.search_flag:
       base_search_choices = src.get_search_choices()
       if base_search_choices:
@@ -5328,8 +5328,14 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
     :param returnn.tf.network.TFNetwork network:
     :rtype: Data
     """
+    from returnn.tf.util.basic import SearchBeam
     assert len(sources) == 1
-    return sources[0].output.copy(name="%s_output" % name)
+    out = sources[0].output.copy_template(name="%s_output" % name)
+    if network.search_flag and out.beam:
+      out.beam = SearchBeam(
+        beam_size=out.beam.beam_size, dependency=out.beam,
+        name="%s%s" % (network.get_absolute_name_prefix(), name))
+    return out
 
 
 class ChoiceGetBeamScoresLayer(LayerBase):
