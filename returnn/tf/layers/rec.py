@@ -3135,19 +3135,6 @@ class _SubnetworkRecCell(object):
       for layer_name in self.input_layers_moved_out:
         get_layer(layer_name)
 
-    # We might have figured out the real output seq length (and dim tag) by now.
-    if not self.parent_rec_layer.output.size_placeholder and "output" in self.input_layers_moved_out:
-      output_layer = self.input_layers_net.layers["output"]
-      assert output_layer.output.have_time_axis()
-      self.parent_rec_layer.output.size_placeholder = {0: output_layer.output.get_sequence_lengths()}
-    # This might be set e.g. by ChoiceLayer, or losses.
-    if not self.parent_rec_layer.output.size_placeholder and self.input_layers_net.used_data_keys:
-      for data_key in sorted(self.input_layers_net.used_data_keys):
-        data = self.input_layers_net.extern_data.data[data_key]
-        if data.have_time_axis():
-          self.parent_rec_layer.output.size_placeholder = {0: data.get_sequence_lengths()}
-          break
-
   def _construct_output_layers_moved_out(self, loop_accumulated, seq_len, extra_output_layers, final_net_vars):
     """
     See self._move_outside_loop().
