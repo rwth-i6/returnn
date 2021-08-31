@@ -6696,9 +6696,14 @@ class EditDistanceTableLayer(LayerBase):
       func=tf_util.simplify_add, key=tf_util.simplify_add,
       dim_tag_desc="edit_dist_table:%s" % name,
       a=target_data.get_sequence_lengths(), b=1)
+    tag = DimensionTag.get_tag_from_size_tensor(seq_len)
+    assert tag
     return Data(
-      name="%s_output" % name, shape=(None, None) if source_data.have_time_axis() else (None,),
-      size_placeholder={0: seq_len},
+      name="%s_output" % name,
+      dim_tags=(
+        [source_data.get_batch_dim_tag(), source_data.get_time_dim_tag(), tag]
+        if source_data.have_time_axis() else
+        [source_data.get_batch_dim_tag(), tag]),
       dtype="int32", beam=SearchBeam.get_combined_beam(source_data.beam, target_data.beam))
 
 
