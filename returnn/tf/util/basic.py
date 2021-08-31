@@ -4496,39 +4496,33 @@ def new_seq_len(func, key, dim_tag_desc, **kwargs):
 
   in_seq_len = _get_main_seq_len()
   in_tag = DimensionTag.get_tag_from_size_tensor(in_seq_len)
-  assert in_tag
+  assert in_tag and in_tag.batch
+  # The base_in* is via dim tag same_base.
+  # This might be the global batch without beam.
+  # But it might also be the same as in*.
   base_in_seq_len = _maybe_to_base_seq_len(in_seq_len)
   base_in_tag = DimensionTag.get_tag_from_size_tensor(base_in_seq_len)
   assert base_in_tag
   base_kwargs = {k: _maybe_to_base_seq_len(v) for (k, v) in kwargs.items()}
   base_cache_key = (key, tuple(sorted(base_kwargs.items())))
-  cache_key = (key, tuple(sorted(kwargs.items())))
-  kwargs_tensors = [v for (_, v) in sorted(kwargs.items()) if isinstance(v, tf.Tensor)]
   base_kwargs_tensors = [v for (_, v) in sorted(base_kwargs.items()) if isinstance(v, tf.Tensor)]
 
   cache = TensorCachedComputation(base_in_seq_len, key=base_cache_key)
   if cache.has_cache():
     base_out_seq_len = cache.get_cache()
-    base_tag = DimensionTag.get_tag_from_size_tensor(base_out_seq_len)
-    assert base_tag
+    base_out_tag = DimensionTag.get_tag_from_size_tensor(base_out_seq_len)
+    assert base_out_tag
   else:
     with same_control_flow_ctx(base_kwargs_tensors):
       base_out_seq_len = func(**base_kwargs)
     cache.set_cache(base_out_seq_len)
-    base_tag = DimensionTag(description=dim_tag_desc, kind=DimensionTag.Types.Spatial, batch=base_in_tag.batch)
-    base_tag.set_tag_on_size_tensor(base_out_seq_len)
+    base_out_tag = DimensionTag(description=dim_tag_desc, kind=DimensionTag.Types.Spatial, batch=base_in_tag.batch)
+    base_out_tag.set_tag_on_size_tensor(base_out_seq_len)
 
-  cache = TensorCachedComputation(in_seq_len, key=cache_key)
-  if cache.has_cache():
-    out_seq_len = cache.get_cache()
-    tag_ = DimensionTag.get_tag_from_size_tensor(out_seq_len)
-    assert tag_ == base_tag
-  else:
-    with same_control_flow_ctx(kwargs_tensors):
-      out_seq_len = func(**kwargs)
-    cache.set_cache(out_seq_len)
-    base_tag.set_tag_on_size_tensor(out_seq_len, batch=in_tag.batch)
-  return out_seq_len
+  assert base_out_tag.batch
+  out_tag = base_out_tag.get_for_batch(in_tag.batch)
+  assert out_tag.dyn_size is not None
+  return out_tag.dyn_size
 
 
 def smoothing_cross_entropy(logits,
