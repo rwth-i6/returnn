@@ -3031,16 +3031,11 @@ class Data(object):
     if getattr(sizes, "_RETURNN_dyn_size_beam", NotSpecified) is NotSpecified:
       sizes._RETURNN_dyn_size_beam = self.beam
     if self.beam and getattr(sizes, "_RETURNN_dyn_size_beam", None) != self.beam:
-      from returnn.tf.util import basic as tf_util
       tag = DimensionTag.get_tag_from_size_tensor(sizes)
-      if tag:
-        # Just to be sure, we tile it as it should be.
-        base_size = tag.get_same_base().dyn_size
-        if base_size is not None and not getattr(base_size, "_RETURNN_dyn_size_beam", None):
-          with tf_util.same_control_flow_ctx(base_size):
-            sizes = tf_util.tile_transposed(base_size, axis=0, multiples=self.beam.beam_size)
-          sizes._RETURNN_dyn_size_beam = self.beam
-          tag.set_tag_on_size_tensor(sizes, batch=self.batch)
+      assert tag and self.batch
+      tag = tag.get_for_batch(self.batch)
+      assert tag.dyn_size is not None
+      sizes = tag.dyn_size
 
     sizes_tag = DimensionTag.get_tag_from_size_tensor(sizes)
     if sizes_tag:
