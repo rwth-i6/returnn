@@ -2518,8 +2518,11 @@ class _SubnetworkRecCell(object):
           seq_len = time_dim_tag.dyn_size
       else:
         _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
-        seq_len._RETURNN_dyn_size_beam = rec_layer.output.beam
-        time_dim_tag.set_tag_on_size_tensor(seq_len, batch=rec_layer.output.batch)
+        # Note: In case of search, the seq len would have the beam from the end layer.
+        # This might not be the same as the final output beam.
+        # This should correctly be resolved in _construct_output_layers_moved_out and _opt_search_resolve.
+        # So we do not assign it to the dim tag at this point.
+        assert "output" in extra_output_layers
         max_seq_len = tf.reduce_max(seq_len, name="dyn_max_seq_len")
       self.get_final_rec_vars = lambda layer_name_: self.get_layer_rec_var_from_loop_vars(
         loop_vars=final_net_vars, layer_name=layer_name_, final_frame=True, seq_len=seq_len)
@@ -2654,6 +2657,7 @@ class _SubnetworkRecCell(object):
     import os
     from returnn.tf.util.basic import nd_indices, assert_min_tf_version, expand_dims_unbroadcast
     from returnn.tf.util.basic import get_shape_dim, get_valid_scope_name_from_str
+    from returnn.tf.util.basic import TensorCachedComputation
     rec_layer = self.parent_rec_layer
     try:
       layer = self.net.get_layer(layer_name)
@@ -2666,6 +2670,13 @@ class _SubnetworkRecCell(object):
       return acc_ta, None, search_choices, seq_len
     if search_choices.keep_raw:
       search_choices_cache[search_choices.owner.name] = search_choices
+      # Make a new seq_len tensor, to be able to attach a new dim tag to it.
+      # This is needed as long as we make use of get_tag_from_size_tensor.
+      # Cache it such that we have it unique.
+      cache = TensorCachedComputation(search_choices, key=("seq_len_raw", seq_len))
+      if not cache.has_cache():
+        cache.set_cache(tf.identity(seq_len))
+      seq_len = cache.get_cache()
       return acc_ta, search_choices.owner.name, search_choices, seq_len
     layer_choice = search_choices.owner
     is_prev_choice = False
