@@ -2675,7 +2675,10 @@ class _SubnetworkRecCell(object):
       # Cache it such that we have it unique.
       cache = TensorCachedComputation(search_choices, key=("seq_len_raw", seq_len))
       if not cache.has_cache():
-        cache.set_cache(tf.identity(seq_len))
+        assert search_choices.owner.output.batch and search_choices.owner.output.batch.beam
+        seq_len = tf.identity(seq_len)
+        seq_len._RETURNN_dyn_size_beam = search_choices.owner.output.batch.beam
+        cache.set_cache(seq_len)
       seq_len = cache.get_cache()
       return acc_ta, search_choices.owner.name, search_choices, seq_len
     layer_choice = search_choices.owner
@@ -2757,6 +2760,9 @@ class _SubnetworkRecCell(object):
         src_choice_beams = self.final_acc_tas_dict["choice_%s" % choice_.name].read(
           max_seq_len - 1, name="ta_read_choice")  # (batch, beam) -> beam_in idx
         seq_len = select_src_beams(seq_len, src_choice_beams)
+        assert choice_.output.batch and choice_.output.batch.beam
+        assert getattr(seq_len, "_RETURNN_dyn_size_beam", NotSpecified) in (NotSpecified, choice_.output.batch.beam)
+        seq_len._RETURNN_dyn_size_beam = choice_.output.batch.beam
 
     else:  # not end_layer
       # Here we don't need to resolve anything, as the sequence length is the same for all hyps in the beam.
@@ -2768,6 +2774,7 @@ class _SubnetworkRecCell(object):
         or self.parent_rec_layer.output.batch.copy_set_beam(latest_layer_choice.output.beam))
       tag = tag.get_for_batch(latest_batch)
       assert tag.dyn_size is not None
+      assert tag.batch == latest_batch and tag.batch.beam == latest_layer_choice.output.beam
       seq_len = tag.dyn_size
 
     new_acc_output_ta = tf.TensorArray(
@@ -3214,7 +3221,6 @@ class _SubnetworkRecCell(object):
           output.beam = None
         if output.batch:
           output.batch = output.batch.copy_set_beam(output.beam)
-        resolved_seq_len._RETURNN_dyn_size_beam = output.beam
         output.set_dynamic_size(axis=0, sizes=resolved_seq_len)
         max_len = tf.reduce_max(resolved_seq_len)
         # We should have accumulated it.
