@@ -154,8 +154,20 @@ class DimensionTag(object):
       return same_base._same_for_batch[batch]
     if batch.copy_remove_beam() == batch.get_global_base() and batch.beam and same_base.dyn_size_ext:
       dyn_size_ext = same_base.dyn_size_ext.copy_extend_with_beam(batch.beam)
-      dyn_size_ext.placeholder._RETURNN_dyn_size_beam = batch.beam
       assert dyn_size_ext.batch == batch
+      beam_expanded_base_data = getattr(dyn_size_ext.placeholder, "_RETURNN_beam_expanded_base_data", None)
+      assert beam_expanded_base_data
+      # Note: The beam expansion used tiling, which can be cached.
+      # This means that we could end up with the same size tensor (placeholder) for multiple different beams,
+      # when there are different beams with same beam size!
+      # This breaks the current logic in get_tag_from_size_tensor.
+      # As a workaround, we make an explicit new tensor here.
+      from .basic import get_valid_scope_name_from_str
+      dyn_size_ext.placeholder = tf.identity(
+        dyn_size_ext.placeholder,
+        name=get_valid_scope_name_from_str("%s_size_beam_%s" % (dyn_size_ext.name, batch.beam.name)))
+      dyn_size_ext.placeholder._RETURNN_dyn_size_beam = batch.beam
+      dyn_size_ext.placeholder._RETURNN_beam_expanded_base_data = beam_expanded_base_data
     else:
       # We have some more custom batch info (via merge dims or so).
       # Just leave uninitialized for now.
