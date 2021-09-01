@@ -4710,12 +4710,13 @@ class ChoiceLayer(BaseChoiceLayer):
           self.output_list.append(Data(
             name="%s_choice_output_%d" % (self.name, index),
             batch_dim_axis=0,
-            shape=self.output.shape,
+            dim_tags=self.output.dim_tags,
             sparse=True,
             dim=self.sources[index].output.dim,
             dtype=self.output.dtype,
             placeholder=labels_,
             available_for_inference=True,
+            batch=self.output.batch,
             beam=self.output.beam))
 
         # We use the labels of the first target as "normal" output.
@@ -4752,7 +4753,8 @@ class ChoiceLayer(BaseChoiceLayer):
       self.output = Data(
         name="%s_sampled_output" % self.name,
         batch_dim_axis=0,
-        shape=self.output.shape,
+        dim_tags=self.output.dim_tags,
+        batch=self.output.batch,
         sparse=input_type != "regression",
         dim=self.output.dim,
         dtype=self.output.dtype,
@@ -5055,10 +5057,11 @@ class ChoiceLayer(BaseChoiceLayer):
       assert search, "%s %r: no target given, must do search" % (cls.__name__, name)
       # Output will be the sparse version of the input.
       out_data = sources[0].output.copy_template().copy_as_batch_major()
-      shape = list(out_data.batch_shape)
-      del shape[out_data.feature_dim_axis]
-      del shape[out_data.batch_dim_axis]
-      out_data = Data(name="%s_output" % name, shape=shape, sparse=True, dim=out_data.dim)
+      dim_tags = list(out_data.dim_tags)
+      del dim_tags[out_data.feature_dim_axis]
+      out_data = Data(
+        name="%s_output" % name, dim_tags=dim_tags, sparse=True, dim=out_data.dim,
+        batch=out_data.batch.copy_set_beam(None) if out_data.batch else network.get_global_batch_info())
     if search:
       out_data.beam = cls._create_search_beam(name=name, beam_size=beam_size, sources=sources, network=network)
     elif sources and sources[0]:
