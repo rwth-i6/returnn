@@ -126,36 +126,45 @@ class ExternData(object):
     # Maybe we already set it, and then added new data items.
     for key, data in self.get_sorted_data_items():
       assert isinstance(data, Data)
-      if data.available_for_inference and data.batch:
+      if data.available_for_inference and data.batch and data.batch.is_global_batch():
         batch_info = data.batch
         break
     if not batch_info:
       batch_dim = None  # type: typing.Union[tf.Tensor,int,None]
       for key, data in self.get_sorted_data_items():
         assert isinstance(data, Data)
-        if data.available_for_inference and data.have_batch_axis() and data.placeholder is not None:
-          with reuse_name_scope_of_tensor(data.placeholder):
-            # We now get it from the shape of the data placeholder (or size placeholder).
-            # An alternative might be to also have it as a separate placeholder.
-            if data.size_placeholder and 0 in data.size_placeholder:
-              batch_dim = get_shape_dim(data.size_placeholder[0], 0, name="batch_dim")
-            else:
-              batch_dim = get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
-            break
+        if not data.available_for_inference:
+          continue
+        if not data.have_batch_axis():
+          continue
+        if data.placeholder is None:
+          continue
+        if data.beam:
+          continue
+        with reuse_name_scope_of_tensor(data.placeholder):
+          # We now get it from the shape of the data placeholder (or size placeholder).
+          # An alternative might be to also have it as a separate placeholder.
+          if data.size_placeholder and 0 in data.size_placeholder:
+            batch_dim = get_shape_dim(data.size_placeholder[0], 0, name="batch_dim")
+          else:
+            batch_dim = get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
+          break
       if batch_dim is None:
         return  # no exception here, maybe not used. fail later in get_batch_info
       batch_info = BatchInfo.make_global_batch_info(batch_dim=batch_dim)
+    # Set batch info on extern data.
+    # Overwrite all in case some dim tags have been used before and are still set to old global batch info.
     for data in self.data.values():
-      if not data.batch:
-        data.batch = batch_info
-      for tag in data.dim_tags:
-        if tag.is_batch_dim() and not tag.batch:
+      if data.beam or (data.batch and not data.batch.is_global_batch()):
+        # Maybe via register_as_extern_data and non-standard batch (e.g. beam).
+        continue
+      for tag in data.dim_tags + tuple(tag.get_same_base() for tag in data.dim_tags):
+        if tag.is_batch_dim():
           tag.batch = batch_info
         if tag.dyn_size_ext and tag.dyn_size_ext.have_batch_axis():
-          if not tag.dyn_size_ext.batch:
-            tag.dyn_size_ext.batch = batch_info
-          if not tag.batch:
-            tag.batch = batch_info
+          tag.dyn_size_ext.batch = batch_info
+          tag.batch = batch_info
+      data.batch = batch_info
 
   def check_matched_dataset(self, dataset, used_data_keys=None):
     """
