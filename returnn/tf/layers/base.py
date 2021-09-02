@@ -374,6 +374,40 @@ class LayerBase(object):
     if any([(src and not src.output.available_for_inference) for src in sources if src]):
       output.available_for_inference = False
 
+  @classmethod
+  def fixup_out_data(cls, output, network):
+    """
+    This is called after get_out_data_from_opts, to fixup incomplete information.
+    E.g. we can patch batch or beam information here
+    but maybe also other things.
+
+    Other layer classes might overwrite this but then should call this super method.
+    Usually this should not be needed though.
+
+    :param Data output:
+    :param returnn.tf.network.TFNetwork network:
+    :rtype: Data
+    """
+    from ..network import ExternData
+    if output.have_batch_axis():
+      if not output.batch:
+        # Some heuristic for now to fix missing batch info. We should try to fix get_out_data_from_opts though...
+        if LayerBase.get_global_layer_list():
+          output.batch = LayerBase.get_recent_layer().get_batch_info().copy_set_beam(output.beam)
+        elif network.extern_data.data:
+          output.batch = network.extern_data.get_batch_info().copy_set_beam(output.beam)
+        else:
+          # No layers at all yet. This implies that the output must already have a placeholder.
+          assert output.placeholder is not None and not output.beam
+          # Create dummy extern data with new global batch info.
+          extern_data = ExternData()
+          extern_data.data[output.name] = output
+          assert output.available_for_inference
+          extern_data.init_batch_info()  # this should create it and also set it
+          assert output.batch
+      output.batch = output.batch.copy_set_beam(output.beam)
+    return output
+
   def get_full_ctx_name(self):
     """
     :return: name w.r.t. root ctx network
