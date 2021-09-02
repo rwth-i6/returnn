@@ -71,6 +71,9 @@ class DimensionTag(object):
     if dyn_size is not None:
       assert not dyn_size_ext
       self.dyn_size = dyn_size
+    # We can have different tag variants per batch info (e.g. with beam).
+    # They each have same_as = self. The same_base should have the base (global) batch info.
+    self._same_for_batch = {}  # type: typing.Dict[BatchInfo,DimensionTag]
     # When we have some dynamic size, this dynamic size could be inside a loop (RecLayer),
     # and different per each loop frame.
     # In that case, we can not access it from outside (except when we accumulate it).
@@ -113,6 +116,54 @@ class DimensionTag(object):
       src_data=self.src_data, src_axis=self.src_axis)
     tag.same_as = self  # not declare_same_as, none of the extra checks needed
     return tag
+
+  def get_for_batch(self, batch):
+    """
+    :param BatchInfo batch:
+    :rtype: DimensionTag
+    """
+    if self.batch == batch:
+      return self
+    if self.is_batch_dim():
+      # For now, just create another copy in case of batch dim tag.
+      return DimensionTag(kind=DimensionTag.Types.Batch, description="batch:%s" % batch.short_repr(), batch=batch)
+    if self.dimension is not None:
+      # If static dim, no effect.
+      assert not self.batch
+      return self
+    same_base = self.get_same_base()
+    # Might be uninitialized in some cases. Assume batch is global.
+    if not same_base.batch:
+      batch_base = batch.get_global_base()
+      if same_base.dyn_size_ext:
+        assert batch == batch_base
+        same_base.batch = batch
+        assert not same_base.dyn_size_ext.batch
+        same_base.dyn_size_ext.batch = batch
+      else:
+        same_base.batch = batch_base
+    if same_base.dyn_size_ext:
+      assert same_base.batch == same_base.dyn_size_ext.batch
+    if same_base.batch == batch:
+      return same_base
+    if batch in same_base._same_for_batch:
+      return same_base._same_for_batch[batch]
+    if batch.copy_remove_beam() == batch.get_global_base() and batch.beam and same_base.dyn_size_ext:
+      dyn_size_ext = same_base.dyn_size_ext.copy_extend_with_beam(batch.beam)
+      dyn_size_ext.placeholder._RETURNN_dyn_size_beam = batch.beam
+      assert dyn_size_ext.batch == batch
+    else:
+      # We have some more custom batch info (via merge dims or so).
+      # Just leave uninitialized for now.
+      dyn_size_ext = None
+    dim_tag = DimensionTag(
+      kind=self.kind, description=self.description, dimension=self.dimension,
+      batch=batch, dyn_size_ext=dyn_size_ext)
+    dim_tag.same_as = same_base
+    if dyn_size_ext:
+      dim_tag.set_tag_on_size_tensor(dyn_size_ext.placeholder, batch=batch)
+    same_base._same_for_batch[batch] = dim_tag
+    return dim_tag
 
   @property
   def dyn_size(self):
@@ -178,12 +229,11 @@ class DimensionTag(object):
       assert x._is_size_of_dim_tag in (None, self)
     # If we already have another dyn size set or different batch, create a new DimensionTag instance.
     if (self.dyn_size is not None and self.dyn_size is not x) or (self.batch and batch and self.batch != batch):
-      if self.batch:
-        assert self.dyn_size is not None
-      new_dim_tag = self.copy()
-      new_dim_tag.dyn_size_ext = None
       if batch:
-        new_dim_tag.batch = batch
+        new_dim_tag = self.get_for_batch(batch)
+      else:
+        new_dim_tag = self.copy()
+        new_dim_tag.dyn_size_ext = None
       new_dim_tag.set_tag_on_size_tensor(x)
       return
     if batch and getattr(x, "_RETURNN_dyn_size_beam", None):
@@ -1178,8 +1228,10 @@ class Data(object):
       else:
         dtype = "float32"
     self.dtype = dtype  # type: str
-    self.batch = batch
-    self.beam = beam
+    if beam and batch:
+      assert batch.beam == beam
+    self._batch = batch
+    self._beam = beam
     if isinstance(dim_tags, (tuple, list)):
       # We do a couple of sanity checks, and maybe set special axes attribs.
       shape_ = tuple(tag.dimension for tag in dim_tags if not tag.is_batch_dim())
@@ -1260,6 +1312,7 @@ class Data(object):
           base_tag.declare_same_as(_dim_tag)
           if _dim_tag.dyn_size is not None:
             self.set_dynamic_size(_axis, _dim_tag.dyn_size)
+    self._adapt_batch_consistent_dim_tags()
     self.sanity_check(assume_complete=False)
 
   @classmethod
@@ -1326,8 +1379,11 @@ class Data(object):
         continue  # further checks will assume not batch
       assert axis != self.batch_dim_axis, "%s: invalid %s" % (self, tag)
       # Note: tag.kind (feature or spatial) is independent from self.feature_dim_axis.
+      if tag.batch and self.batch:
+        assert tag.batch == self.batch
       if tag.dyn_size_ext:
         assert tag.dyn_size_ext.dtype in {"int32", "int64"}
+        assert tag.batch == tag.dyn_size_ext.batch
         tag.dyn_size_ext.sanity_check()
     if not ignore_placeholder and self.placeholder is not None:
       # Note: We could just call self.placeholder.set_shape.
@@ -1523,6 +1579,11 @@ class Data(object):
 
   def __hash__(self):
     return id(self)
+
+  def _adapt_batch_consistent_dim_tags(self):
+    if not self.batch:
+      return
+    self._dim_tags = tuple(tag.get_for_batch(self.batch) for tag in self._dim_tags)
 
   def copy(self, name=None):
     """
@@ -2049,21 +2110,14 @@ class Data(object):
     assert data.beam is None, "incompatible beam (%r vs %r)" % (data.beam, beam)
     if beam is None:
       return data
-    if data.batch:
-      data.batch = data.batch.copy_set_beam(beam)
     data.beam = beam
+    assert data.batch
+    data.batch = data.batch.copy_set_beam(beam)
     with tf.name_scope("%s_data_extend_with_beam" % get_valid_scope_name_from_str(self.name)):
       if data.placeholder is not None:
         with same_control_flow_ctx(data.placeholder):
           data.placeholder = tile_transposed(data.placeholder, axis=data.batch_dim_axis, multiples=beam.beam_size)
-      for i, v in sorted(data.size_placeholder.items()):
-        tag = DimensionTag.get_tag_from_size_tensor(v)
-        with same_control_flow_ctx(v):
-          sizes = tile_transposed(v, axis=0, multiples=beam.beam_size)
-        sizes._RETURNN_dyn_size_beam = beam
-        if tag is not None:
-          tag.set_tag_on_size_tensor(sizes, batch=data.batch)
-        data.size_placeholder[i] = sizes
+    data._adapt_batch_consistent_dim_tags()
     return data
 
   def copy_squeeze_axes(self, axes):
@@ -2501,6 +2555,44 @@ class Data(object):
     self._placeholder = value
     self.sanity_check(assume_complete=False)
 
+  @property
+  def batch(self):
+    """
+    :rtype: BatchInfo|None
+    """
+    return self._batch
+
+  @batch.setter
+  def batch(self, batch):
+    """
+    :param BatchInfo|None batch:
+    """
+    if batch:
+      assert batch.beam == self.beam
+    self._batch = batch
+    self._adapt_batch_consistent_dim_tags()
+
+  @property
+  def beam(self):
+    """
+    :rtype: SearchBeam|None
+    """
+    if self._beam:
+      return self._beam
+    if self._batch:
+      return self._batch.beam
+    return None
+
+  @beam.setter
+  def beam(self, beam):
+    """
+    :param SearchBeam|None beam:
+    """
+    # No check for batch.beam, as the batch is usually set only later.
+    self._beam = beam
+    if self._batch:
+      self._batch = self._batch.copy_set_beam(beam=beam)
+
   def time_dimension(self):
     """
     :return: shape(placeholder)[time_dim_axis], int scalar
@@ -2899,7 +2991,7 @@ class Data(object):
       if tag:
         # Just to be sure, we tile it as it should be.
         base_size = tag.get_same_base().dyn_size
-        if not getattr(base_size, "_RETURNN_dyn_size_beam", None):
+        if base_size is not None and not getattr(base_size, "_RETURNN_dyn_size_beam", None):
           with tf_util.same_control_flow_ctx(base_size):
             sizes = tf_util.tile_transposed(base_size, axis=0, multiples=self.beam.beam_size)
           sizes._RETURNN_dyn_size_beam = self.beam
@@ -3235,19 +3327,22 @@ class Data(object):
     :param bool ignore_feature_dim: when set, the feature dim does not have to match in the sources
     :return: some generic data where the sources should be compatible to (with copy_compatible_to),
       i.e. it contains the union of all axes from all sources (least common multiple).
+      This is always a template, and a new copy.
     :rtype: Data|None
     """
     if not sources:
       return None
     assert sources
     if len(sources) == 1:
-      return sources[0]
+      return sources[0].copy_template()
     max_ndim = max([s.batch_ndim for s in sources])
     common_batch = BatchInfo.get_common_batch_info([src.batch for src in sources if src.batch])
     # Try with the (first) largest.
     common = [s for s in sources if s.batch_ndim == max_ndim][0]
-    common = common.copy()
-    common.batch = common_batch  # no copy_ext_batch because we don't want TF ops
+    common = common.copy_template()
+    common.beam = None  # this will be reset
+    if common_batch:
+      common.batch = common_batch.copy_set_beam(None)  # the beam will be reset
     if any([s.beam for s in sources]):
       # Note: we don't use copy_extend_with_beam because we don't want to create any ops in the TF graph at this point.
       common.beam = SearchBeam.get_combined_beam(*[s.beam for s in sources])
