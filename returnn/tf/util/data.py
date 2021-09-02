@@ -2175,6 +2175,7 @@ class Data(object):
       if data.placeholder is not None:
         with same_control_flow_ctx(data.placeholder):
           data.placeholder = tile_transposed(data.placeholder, axis=data.batch_dim_axis, multiples=beam.beam_size)
+          setattr(data.placeholder, "_RETURNN_beam_expanded_base_data", self)
     data._adapt_batch_consistent_dim_tags()
     return data
 
