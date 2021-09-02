@@ -436,6 +436,9 @@ class SelectSearchSourcesLayer(InternalLayer):
         assert isinstance(v, (tf.Tensor, tf.TensorArray))
         if isinstance(v, tf.Tensor) and v.get_shape().ndims == 0:
           return v  # leave scalars as-is
+        if isinstance(v, tf.Tensor) and getattr(v, "_RETURNN_beam_expanded_base_data", None):
+          # This tensor was just expanded by a beam. Selecting beams are not needed.
+          return v
         for i, base_src_choices in enumerate(reversed(search_choices_seq)):
           assert isinstance(base_src_choices, SearchChoices)
           assert base_src_choices.src_beams is not None, (
