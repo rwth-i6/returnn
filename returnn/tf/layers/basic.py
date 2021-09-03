@@ -5479,6 +5479,50 @@ class DotLayer(LayerBase):
     return out_axes.index(axis)
 
   @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param returnn.tf.network.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    super(DotLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    rec_time_dims = network.get_all_rec_time_dims()
+    if rec_time_dims:
+      assert len(d["sources"]) == 2, "dot-layer %r: needs exactly two sources" % (d["name"],)
+      src1, src2 = d["sources"]
+      assert isinstance(src1, LayerBase) and isinstance(src2, LayerBase)
+      # Maybe we want to add some of the outer rec layer dims to the var1/var2 list,
+      # or use those rec layer dims as further common dims (implicitly).
+      dims1 = set(tag for tag in rec_time_dims if tag in src1.output.dim_tags)
+      dims2 = set(tag for tag in rec_time_dims if tag in src2.output.dim_tags)
+      # If the rec layer dim is the same as some other dim,
+      # and was already explicitly specified in var1/var2 before,
+      # skip it.
+      var1 = d.get("var1", -2)  # the default should really not be used...
+      var2 = d.get("var2", -1)  # the default should really not be used...
+      var1_ = set([src1.output.dim_tags[i] for i in src1.output.get_axes_from_description(var1)])
+      var2_ = set([src2.output.dim_tags[i] for i in src2.output.get_axes_from_description(var2)])
+      dims1.difference_update(var1_)
+      dims2.difference_update(var2_)
+      # The common dims should be shared. The shared common dims are implicit, so nothing to do about them.
+      dims_common = dims1.intersection(dims2)
+      # Those are dims which should be added to var1/var2.
+      dims1.difference_update(dims_common)
+      dims2.difference_update(dims_common)
+
+      def _add(dims, val, d_key):
+        if not dims:
+          return
+        if val is None or val == "":
+          val = []
+        elif not isinstance(val, (tuple, list)):
+          val = [val]
+        d[d_key] = val + type(val)(dims)
+
+      _add(dims1, var1, "var1")
+      _add(dims2, var2, "var2")
+
+  @classmethod
   def get_out_data_from_opts(cls, name, sources, red1=-1, red2=-2, var1=-2, var2=-1, add_var2_if_empty=True, **kwargs):
     """
     :param str name:
