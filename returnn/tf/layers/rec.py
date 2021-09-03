@@ -5129,7 +5129,7 @@ class ChoiceLayer(BaseChoiceLayer):
     ls = super(ChoiceLayer, self).get_dep_layers()
     if self.explicit_search_sources:
       if isinstance(self.explicit_search_sources, dict):
-        additional_sources = self.explicit_search_sources.values()
+        additional_sources = [src for _, src in sorted(self.explicit_search_sources.items())]
       else:
         additional_sources = self.explicit_search_sources
       ls.extend(additional_sources)
