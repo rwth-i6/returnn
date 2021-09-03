@@ -2902,7 +2902,7 @@ class Data(object):
       if isinstance(i, int):
         flat_axes += [i]
       else:
-        assert isinstance(i, (str, tuple, list))
+        assert isinstance(i, (str, tuple, list, DimensionTag))
         flat_axes += self.get_axes_from_description(i)
     flat_axes = [i % self.batch_ndim for i in flat_axes]
     res = []
