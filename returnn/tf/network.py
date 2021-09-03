@@ -353,7 +353,7 @@ class TFNetwork(object):
   def __init__(self, config=None, extern_data=None, rnd_seed=None,
                train_flag=None, eval_flag=None, search_flag=None,
                parent_layer=None, parent_net=None, extra_parent_net=None, extra_name_prefix=None,
-               inside_rec_time_dim=None,
+               inside_rec_time_dim=None, over_rec_time_dim=None, over_rec_time_dim_subs=None,
                absolute_name_prefix=None, name=None):
     """
     :param returnn.config.Config config: only needed to init extern_data if not specified explicitly
@@ -367,7 +367,9 @@ class TFNetwork(object):
     :param TFNetwork|None extra_parent_net: we are on the same level (not really a child),
       but an "extra" net of extra_parent_net
     :param str|None extra_name_prefix:
-    :param DimensionTag|None inside_rec_time_dim:
+    :param DimensionTag|None inside_rec_time_dim: dim tag of outer rec layer, when run inside the loop (not optimized)
+    :param DimensionTag|None over_rec_time_dim: dim tag of outer rec layer, when optimized out of the loop
+    :param set[DimensionTag]|None over_rec_time_dim_subs: outer rec layer, out of loop, potential shorter
     :param str|None absolute_name_prefix:
     :param str name: only for debugging
     """
@@ -428,6 +430,8 @@ class TFNetwork(object):
     self.parent_layer = parent_layer
     self.parent_net = parent_net
     self._inside_rec_time_dim = inside_rec_time_dim
+    self._over_rec_time_dim = over_rec_time_dim
+    self._over_rec_time_dim_subs = over_rec_time_dim_subs
     self.extra_parent_net = extra_parent_net
     self.extra_name_prefix = extra_name_prefix
     self.extra_deps_in_extra = False
@@ -2173,6 +2177,10 @@ class TFNetwork(object):
     """
     if self._inside_rec_time_dim:
       return self._inside_rec_time_dim
+    if self._over_rec_time_dim:
+      if inside_loop:
+        return None
+      return self._over_rec_time_dim
     from returnn.tf.layers.rec import RecLayer
     if isinstance(self.parent_layer, RecLayer):
       # When we get here (and not in the if-branch above on _inside_rec_time_dim),
@@ -2185,6 +2193,23 @@ class TFNetwork(object):
     if self.parent_net:
       return self.parent_net.get_inside_rec_time_dim(inside_loop=inside_loop)
     return None
+
+  def get_all_rec_time_dims(self):
+    """
+    :return: all rec time dims, moved out or not, including all parents
+    :rtype: set[DimensionTag]
+    """
+    coll = set()
+    net = self
+    while net:
+      if net._inside_rec_time_dim:
+        coll.add(net._inside_rec_time_dim)
+      if net._over_rec_time_dim:
+        coll.add(net._over_rec_time_dim)
+      if net._over_rec_time_dim_subs:
+        coll.update(net._over_rec_time_dim_subs)
+      net = net.parent_net
+    return coll
 
   def _is_rec_layer_inside_net(self):
     """
