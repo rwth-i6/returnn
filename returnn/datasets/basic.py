@@ -1261,6 +1261,7 @@ def init_dataset(kwargs, extra_kwargs=None, default_kwargs=None):
   """
   assert kwargs
   if isinstance(kwargs, Dataset):
+    kwargs.initialize()
     return kwargs
   if callable(kwargs):
     return init_dataset(kwargs(), extra_kwargs=extra_kwargs, default_kwargs=default_kwargs)
