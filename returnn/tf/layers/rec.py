@@ -3094,6 +3094,8 @@ class _SubnetworkRecCell(object):
       extern_data=ExternData(),
       train_flag=self.parent_net.train_flag,
       search_flag=self.parent_net.search_flag,
+      over_rec_time_dim=self.time_dim_tag,
+      over_rec_time_dim_subs=self._time_dim_tags,
       parent_layer=self.parent_rec_layer,
       parent_net=self.parent_net)
     self.input_layers_net.is_root_in_ctx = True
@@ -3182,6 +3184,8 @@ class _SubnetworkRecCell(object):
       extern_data=ExternData(),
       train_flag=self.parent_net.train_flag,
       search_flag=self.parent_net.search_flag,
+      over_rec_time_dim=self.time_dim_tag,
+      over_rec_time_dim_subs=self._time_dim_tags,
       parent_layer=self.parent_rec_layer,
       parent_net=self.parent_net)
     self.output_layers_net.is_root_in_ctx = True
