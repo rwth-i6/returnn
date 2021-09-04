@@ -5370,7 +5370,7 @@ class DotLayer(LayerBase):
     :param bool add_var2_if_empty: if var2=None, add dim=1 at the end
     :param bool debug: will print debug shapes, etc.
     """
-    from returnn.tf.util.basic import prod
+    from returnn.tf.util.basic import prod, get_shape
     super(DotLayer, self).__init__(**kwargs)
     a_out = self.sources[0].output.copy()
     b_out = self.sources[1].output.copy()
@@ -5403,25 +5403,23 @@ class DotLayer(LayerBase):
     # So we reshape such that we collapse all reduce-axes and var-axes into each a single axis.
     a = a_out.placeholder
     b = b_out.placeholder
-    a_shape = tf.shape(a)
-    b_shape = tf.shape(b)
-    a_shape = [a_out.batch_shape[i] or a_shape[i] for i in range(a_out.batch_ndim)]
-    b_shape = [b_out.batch_shape[i] or b_shape[i] for i in range(b_out.batch_ndim)]
+    a_shape = get_shape(a)
+    b_shape = get_shape(b)
     a_rem_dims = [a_shape[i] for i in a_rem_axes]
     b_rem_dims = [b_shape[i] for i in b_rem_axes]
     assert len(a_rem_axes) == len(b_rem_axes), "%s: remaining shared (batch) axes do not match. sources %r" % (
       self, self.sources)
     assert all([
-      isinstance(d1, tf.Tensor) or isinstance(d2, tf.Tensor) or d1 == d2
-      for (d1, d2) in zip(a_rem_dims, b_rem_dims)])
+      a_out.dim_tags[i1] == b_out.dim_tags[i2] or d1 == d2
+      for (d1, d2, i1, i2) in zip(a_rem_dims, b_rem_dims, a_rem_axes, b_rem_axes)])
     a_var_dims = [a_shape[i] for i in a_var_axes]
     b_var_dims = [b_shape[i] for i in b_var_axes]
     a_reduce_dims = [a_shape[i] for i in a_reduce_axes]
     b_reduce_dims = [b_shape[i] for i in b_reduce_axes]
     assert len(a_reduce_axes) == len(b_reduce_axes)
     assert all([
-      isinstance(d1, tf.Tensor) or isinstance(d2, tf.Tensor) or d1 == d2
-      for (d1, d2) in zip(a_reduce_dims, b_reduce_dims)])
+      a_out.dim_tags[i1] == b_out.dim_tags[i2] or d1 == d2
+      for (d1, d2, i1, i2) in zip(a_reduce_dims, b_reduce_dims, a_reduce_axes, b_reduce_axes)])
     a_var_dim = prod(a_var_dims)
     b_var_dim = prod(b_var_dims)
     a_reduce_dim = prod(a_reduce_dims)
