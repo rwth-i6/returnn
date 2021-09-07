@@ -3172,6 +3172,7 @@ def test_DotLayer():
     assert_equal(seq_lens.tolist(), a_seq_lens)
     assert_equal(out.shape, (B, H, max(a_seq_lens), 1))
 
+
 def test_DotLayer2():
   """ Test if DotLayer can handle inputs which dont have a batch-dim
   """
@@ -3193,8 +3194,8 @@ def test_DotLayer2():
     b = InternalLayer(name='B',
                       network=net,
                       output=Data(name="B", shape=(S1, S2, R, V), batch_dim_axis=None, time_dim_axis=None))
-    assert b.output.batch_dim_axis == None
-    assert b.output.time_dim_axis == None
+    assert b.output.batch_dim_axis is None
+    assert b.output.time_dim_axis is None
     assert b.output.shape == (S1, S2, R, V)
     assert b.output.dim == V
     b.output.placeholder = tf.reshape(tf.range(S1 * S2 * R * V, dtype=tf.float32), (S1, S2, R, V))
