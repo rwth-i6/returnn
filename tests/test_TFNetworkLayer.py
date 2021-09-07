@@ -3247,6 +3247,38 @@ def test_DotLayer_mask_dyn_seq():
     session.run(layer.output.placeholder, feed_dict=feed_dict)
 
 
+def test_DotLayer_mask_dyn_seq_after_softmax():
+  batch = DimensionTag(kind=DimensionTag.Types.Batch, description="batch")
+  time = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
+  feat1 = DimensionTag(kind=DimensionTag.Types.Feature, description="feature 1", dimension=3)
+  feat2 = DimensionTag(kind=DimensionTag.Types.Feature, description="feature 2", dimension=5)
+  config = Config({
+    "extern_data": {
+      "src1": {"dim_tags": [batch, time, feat1]},
+      "src2": {"dim_tags": [batch, time, feat2]},
+    },
+    "network": {
+      "sm1": {"class": "softmax_over_spatial", "from": "data:src1"},
+      "dot": {
+        "class": "dot", "from": ["sm1", "data:src2"], "is_output_layer": True,
+        "red1": time, "red2": time, "var1": feat1, "var2": feat2
+      },
+    },
+    "debug_print_layer_output_template": True,
+  })
+
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(config.typed_dict["network"])
+    layer = net.layers["dot"]
+    assert isinstance(layer, DotLayer)
+    assert layer.output.dim_tags == (batch, feat1, feat2)
+    assert layer._info_reduce_mask == "source-0-already-masked"
+
+    feed_dict = make_feed_dict(net.extern_data)
+    session.run(layer.output.placeholder, feed_dict=feed_dict)
+
+
 def test_subnet_load_on_init():
   import tempfile
   model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
