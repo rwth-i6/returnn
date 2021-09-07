@@ -842,8 +842,9 @@ class SliceLayer(_ConcatInputLayer):
 
 class SliceNdLayer(_ConcatInputLayer):
   """
-  This takes out a slice-range from some axis,
-  e.g. ``x[start:start + size]``.
+  This takes out a slice-range from the time axis of the input,
+  e.g. if the input is of shape (B,T,F) and start is of shape (B,T),
+  then the output will be of shape (B,T,size,F).
   This layers allows a different start slice point for each batch,
   in contrast to :class:`SliceLayer`, and the start is variable.
   See also :class:`GatherNdLayer`.
@@ -852,46 +853,54 @@ class SliceNdLayer(_ConcatInputLayer):
   layer_class = "slice_nd"
   recurrent = True
 
-  def __init__(self, start, size, min_size=None, **kwargs):
+  def __init__(self, start, size, **kwargs):
     """
-    :param LayerBase start:
-    :param int|None size: if None, it uses the max possible size, and it becomes a dynamic axis
-    :param int|None min_size: if size is None, but we want to have a min-size, set this
+    :param LayerBase start: (B,...)
+    :param int size: scalar
     """
     super(SliceNdLayer, self).__init__(**kwargs)
-    from returnn.tf.util.basic import slice_nd, where_bc, expand_multiple_dims, DimensionTag
+    from returnn.tf.util.basic import where_bc, expand_multiple_dims
     x = self.input_data.copy_as_batch_major()
-    assert x.time_dim_axis == 1, "currently only time-axis==1 supported"
-    seq_lens = x.get_sequence_lengths() if x.is_time_axis_dynamic() else None
+    seq_lens = x.get_sequence_lengths() if x.is_time_axis_dynamic() else None # (B,) or None
     self.start = start
-    assert start.output.have_batch_axis() and start.output.batch_shape == (None,)
-    start = start.output.get_placeholder_as_batch_major()
-    if size is None:
-      if seq_lens is None:
-        size = tf.maximum(tf.reduce_max(x.batch_shape[1] - start), 0)
-      else:
-        size = tf.maximum(tf.reduce_max(seq_lens - start), 0)
-      if min_size is not None:
-        size = tf.maximum(size, min_size)
-    self.size = size
-    start = tf.expand_dims(start, axis=1)  # (B, T)
-    slices = slice_nd(x.placeholder, start=tf.cast(start, tf.int32), size=size)  # (B,size, ...)
+    start = start.output.copy_as_batch_major()  # e.g. (B,) or (B,T)
+    # build Data object for the position argument of GatherLayer
+    indices_data = start.copy_template(name="%s_gather_indices" % self.name)
+    indices_data = indices_data.copy_add_spatial_dim(spatial_dim_axis=start.batch_ndim, auto_time_dim_axis=False,
+                                                     dim=size)
+    start = start.placeholder # e.g. (B,) or (B,T)
+    # [start+0, start+1, ...]
+    indices = tf.expand_dims(start, -1) + tf.range(0, size) # e.g. (B, size) or (B, T, size)
     if seq_lens is not None:
-      mask = tf.greater_equal(tf.range(size)[None, :] + start, seq_lens[:, None])  # (B,T)
-      mask = expand_multiple_dims(mask, list(range(2, x.batch_ndim)))
-      slices = where_bc(mask, tf.zeros_like(slices), slices)
-    size_placeholder = x.size_placeholder.copy()
-    if isinstance(size, tf.Tensor):
-      size_placeholder[0] = tf.maximum(seq_lens - tf.reshape(start, tf.shape(seq_lens)), 0)
-      tag = DimensionTag(
-        description="sliced-time:%s" % self.get_absolute_name(),
-        kind=DimensionTag.Types.Spatial, batch=self.output.batch)
-      tag.set_tag_on_size_tensor(size_placeholder[0])
+      # broadcast from (B,) to the shape of the indices
+      seq_lens = expand_multiple_dims(seq_lens, [-1] * len(indices.shape[1:])) # e.g. (B,1) or (B,1,1)
+      # mask if an index is larger than the length of a sequence
+      pad_mask = tf.logical_or(tf.greater(indices, seq_lens-1), tf.less(indices, 0)) # shape like indices
+      # clip indices to the min and max indices of the sequences so that GatherLayer does not fail
+      indices = tf.clip_by_value(indices, 0, seq_lens-1)
     else:
-      assert isinstance(size, int)
-      size_placeholder.pop(0, None)  # static time axis
-    self.output.size_placeholder = size_placeholder
-    self.output.placeholder = slices
+      # mask if an index is larger than the length of a sequence
+      pad_mask = tf.logical_or(tf.greater(indices, x.batch_shape[1] - 1), tf.less(indices, 0))
+      # clip indices to the min and max indices of the sequences
+      indices = tf.clip_by_value(indices, 0, x.batch_shape[1] - 1)
+    indices_data.placeholder = indices
+    position = InternalLayer(
+      network=self.network,
+      name="%s_internal" % indices_data.name,
+      output=indices_data
+    )
+    gather_layer = GatherLayer(
+      name="%s_gather" % self.name,
+      network=self.network,
+      output=self.output,
+      sources=self.sources,
+      position=position,
+      axis="T"
+    )
+    placeholder = gather_layer.output.placeholder
+    self.output.size_placeholder = gather_layer.output.size_placeholder
+    # zero padding
+    self.output.placeholder = where_bc(pad_mask, tf.zeros_like(placeholder), placeholder)
 
   def get_dep_layers(self):
     """
@@ -908,12 +917,17 @@ class SliceNdLayer(_ConcatInputLayer):
     :param int|None size:
     :rtype: Data
     """
-    from ..util.data import DimensionTag
-    input_data = get_concat_sources_data_template(sources).copy_as_batch_spatial_major()
-    if start:
-      input_data.beam = SearchBeam.get_combined_beam(input_data.beam, start.output.beam)
-    new_dim_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="%s:slice_nd" % name, dimension=size)
-    return input_data.copy_template_replace_dim_tag(axis=1, new_dim_tag=new_dim_tag, name="%s_output" % name)
+    start = start.output.copy_as_batch_major()
+    indices_data = start.copy_template(name="%s_gather_indices" % name)
+    indices_data = indices_data.copy_add_spatial_dim(spatial_dim_axis=start.batch_ndim, dim=size,
+                                                     auto_time_dim_axis=False)
+    position = InternalLayer(network=sources[0].network, name="%s_internal" % indices_data.name, output=indices_data)
+    return GatherLayer.get_out_data_from_opts(
+      name="%s_gather" % name,
+      sources=sources,
+      position=position,
+      axis="T"
+    )
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
