@@ -5375,7 +5375,7 @@ class DotLayer(LayerBase):
     :param bool add_var2_if_empty: if var2=None, add dim=1 at the end
     :param bool debug: will print debug shapes, etc.
     """
-    from returnn.tf.util.basic import prod, get_shape
+    from returnn.tf.util.basic import prod, get_shape, get_padding_info_dict_ref, mask_dyn_seq_len_nd
     super(DotLayer, self).__init__(**kwargs)
     a_out = self.sources[0].output.copy()
     b_out = self.sources[1].output.copy()
@@ -5427,6 +5427,29 @@ class DotLayer(LayerBase):
       for (d1, d2, i1, i2) in zip(a_reduce_dims, b_reduce_dims, a_reduce_axes, b_reduce_axes)])
     a_var_dim = prod(a_var_dims)
     b_var_dim = prod(b_var_dims)
+    a_reduce_dyn_axes = [i for i in a_reduce_axes if a_out.batch_shape[i] is None]
+    b_reduce_dyn_axes = [i for i in b_reduce_axes if b_out.batch_shape[i] is None]
+    assert len(a_reduce_dyn_axes) == len(b_reduce_dyn_axes)
+    if a_reduce_dyn_axes:
+      a_pad, b_pad = get_padding_info_dict_ref(a), get_padding_info_dict_ref(b)
+      a_pad_values = [a_pad.get(a_out.dim_tags[i], None) for i in a_reduce_dyn_axes]
+      b_pad_values = [b_pad.get(b_out.dim_tags[i], None) for i in b_reduce_dyn_axes]
+      if set(a_pad_values) == {0}:
+        self._info_reduce_mask = "source-0-already-masked"  # it's already masked as needed
+      elif set(b_pad_values) == {0}:
+        self._info_reduce_mask = "source-1-already-masked"  # it's already masked as needed
+      else:
+        # We need to apply a mask.
+        # We don't need it on both a and b. We can either apply it on a or on b.
+        # Use some very simple heuristic where the mask is maybe cheaper.
+        if len(a_shape) < len(b_shape):
+          a = mask_dyn_seq_len_nd(a_out, pad_value=0, axes=a_reduce_dyn_axes)
+          self._info_reduce_mask = "mask-source-0"
+        else:
+          b = mask_dyn_seq_len_nd(b_out, pad_value=0, axes=b_reduce_dyn_axes)
+          self._info_reduce_mask = "mask-source-1"
+    else:
+      self._info_reduce_mask = "none-dynamic"
     a_reduce_dim = prod(a_reduce_dims)
     b_reduce_dim = prod(b_reduce_dims)
     if debug:
