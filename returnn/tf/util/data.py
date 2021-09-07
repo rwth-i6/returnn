@@ -1306,6 +1306,8 @@ class Data(object):
       if time_dim_axis is NotSpecified:
         time_dim_axis = _default_time_dim_axis_dim_tags(dim_tags)
       dim_tags = tuple(dim_tags)
+      if auto_create_placeholders:
+        _auto_create_size_placeholders_on_dim_tags(name=name, dim_tags=dim_tags)
       del shape_
       del batch_dim_axis_
     else:
@@ -3663,6 +3665,19 @@ def _batch_shape_from_shape(shape, batch_dim_axis):
     return shape
 
 
+def _create_size_placeholder(name, axis_wo_b, tag):
+  """
+  :param str name:
+  :param int axis_wo_b:
+  :param DimensionTag tag:
+  """
+  from .basic import reuse_name_scope
+  with reuse_name_scope("extern_data/placeholders/%s" % name, absolute=True):
+    dyn_size = tf_compat.v1.placeholder(
+      name="%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, shape=(None,))
+    tag.set_tag_on_size_tensor(dyn_size)
+
+
 def _infer_dim_tags_tuple_from_shape(
   shape,
   batch_dim_axis, time_dim_axis, feature_dim_axis,
@@ -3685,7 +3700,6 @@ def _infer_dim_tags_tuple_from_shape(
   :return: dim tags tuple
   :rtype: tuple[DimensionTag]
   """
-  from .basic import reuse_name_scope
   assert isinstance(shape, (tuple, list))
   shape = tuple(shape)
   batch_shape = _batch_shape_from_shape(shape, batch_dim_axis=batch_dim_axis)
@@ -3723,21 +3737,19 @@ def _infer_dim_tags_tuple_from_shape(
     dyn_size = size_placeholder.get(axis_wo_b) if (size_placeholder and axis_wo_b is not None) else None
     dim = batch_shape[axis]
     if auto_create_placeholders and dim is None and dyn_size is None and axis != batch_dim_axis:
-      with reuse_name_scope("extern_data/placeholders/%s" % name, absolute=True):
-        dyn_size = tf_compat.v1.placeholder(
-          name="%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, shape=(None,))
-        if not tag:
-          if axis == time_dim_axis:
-            tag_name = "time"
-          else:
-            tag_name = "spatial%i" % axis
-          tag = DimensionTag(
-            description="%s:var:extern_data:%s" % (tag_name, name),
-            # Spatial dim tag, even if axis == feature_dim_axis. This is to keep the old behavior.
-            # This is such that DimensionTag.is_equal behaves as before, e.g. in Data.get_common_data.
-            kind=DimensionTag.Types.Spatial)
-          dim_tags[axis] = tag
-        tag.set_tag_on_size_tensor(dyn_size)
+      if not tag:
+        if axis == time_dim_axis:
+          tag_name = "time"
+        else:
+          tag_name = "spatial%i" % axis
+        tag = DimensionTag(
+          description="%s:var:extern_data:%s" % (tag_name, name),
+          # Spatial dim tag, even if axis == feature_dim_axis. This is to keep the old behavior.
+          # This is such that DimensionTag.is_equal behaves as before, e.g. in Data.get_common_data.
+          kind=DimensionTag.Types.Spatial)
+        dim_tags[axis] = tag
+      _create_size_placeholder(name=name, axis_wo_b=axis_wo_b, tag=tag)
+      dyn_size = tag.dyn_size
     if tag:
       # Just some sanity checks.
       assert isinstance(tag, DimensionTag)
@@ -3763,6 +3775,23 @@ def _infer_dim_tags_tuple_from_shape(
     dim_tags[axis] = tag
   assert sorted(dim_tags.keys()) == list(range(len(batch_shape)))
   return tuple(dim_tags[axis] for axis in range(len(batch_shape)))
+
+
+def _auto_create_size_placeholders_on_dim_tags(name, dim_tags):
+  """
+  :param str name:
+  :param tuple[DimensionTag] dim_tags:
+  """
+  batch_dim_axis = _batch_dim_axis_from_dim_tags_tuple(dim_tags)
+  for axis, tag in enumerate(dim_tags):
+    if tag.is_batch_dim():
+      continue
+    if tag.dimension is not None:
+      continue
+    if tag.dyn_size is not None:
+      continue
+    axis_wo_b = _get_axis_wo_b(axis, batch_dim_axis=batch_dim_axis)
+    _create_size_placeholder(name=name, axis_wo_b=axis_wo_b, tag=tag)
 
 
 def _get_axis_wo_b(axis_wb, batch_dim_axis, batch_ndim=None):
