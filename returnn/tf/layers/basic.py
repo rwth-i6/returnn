@@ -1755,6 +1755,7 @@ class SeqLenMaskLayer(_ConcatInputLayer):
     :param LayerBase|None window_start: Tensor of shape (B,) indicating the window start
     :param LayerBase|int|None window_size:
     """
+    from ..util.basic import set_padding_info
     super(SeqLenMaskLayer, self).__init__(**kwargs)
     self.seq_len_source = seq_len_source
     self.start = start
@@ -1770,6 +1771,8 @@ class SeqLenMaskLayer(_ConcatInputLayer):
       window_size=window_size.output if isinstance(window_size, LayerBase) else window_size)
     from returnn.tf.util.basic import where_bc
     x_ = where_bc(mask, self.input_data.placeholder, mask_value)
+    axis_ = self.input_data.get_axis_from_description(axis)
+    set_padding_info(x_, dim=self.input_data.dim_tags[axis_], pad_value=mask_value)
     self.output.placeholder = x_
     if mask_value in [float("-inf"), float("inf")]:
       self.allow_inf_in_output = True
