@@ -211,6 +211,71 @@ def copy_with_new_split_axes(old_axis_splits, new_axis_splits, old_values, new_v
   return new_values
 
 
+def get_padding_info_dict_ref(x):
+  """
+  :param tf.Tensor x:
+  :rtype: dict[DimensionTag,float|int]
+  """
+  _attr = "RETURNN_attr_padding_value_info"
+  if hasattr(x, _attr):
+    d = getattr(x, _attr)
+    assert isinstance(d, dict)
+    return d
+  d = {}
+  setattr(x, _attr, d)
+  return d
+
+
+def set_padding_info(x, dim, pad_value):
+  """
+  Stores the information what kind of padding value to expect after masking in the given dynamic dim.
+
+  :param tf.Tensor x:
+  :param returnn.tf.util.data.DimensionTag dim: dynamic seq len axis
+  :param float|int pad_value:
+  """
+  d = get_padding_info_dict_ref(x)
+  # If there is some earlier padding info, only keep it when it is the same value.
+  # Otherwise it becomes invalid.
+  for k, v in list(d.items()):
+    if v != pad_value:
+      del d[k]
+  d[dim] = pad_value
+
+
+def mask_dyn_seq_len_nd(x, pad_value, axes):
+  """
+  :param Data x:
+  :param float|int pad_value:
+  :param list[int]|tuple[int] axes:
+  :return: masked x
+  :rtype: tf.Tensor
+  """
+  x_ = x.placeholder
+  dim_tags = [x.dim_tags[i] for i in axes]
+  d = get_padding_info_dict_ref(x_)
+  existing_pad_values = [d.get(tag) for tag in dim_tags]
+  if set(existing_pad_values) == {pad_value}:
+    return x.placeholder  # nothing to do
+
+  x_shape = get_shape(x_)
+  mask = tf.ones([1] * len(x_shape), dtype=tf.bool)
+  for axis in axes:
+    tag = x.dim_tags[axis]
+    idx_range = tf.range(x_shape[axis])
+    idx_range = tf.reshape(idx_range, [1] * (axis - 1) + x_shape[axis:axis + 1] + [1] * (len(x_shape) - axis - 1))
+    assert tag.dyn_size_ext
+    assert set(tag.dyn_size_ext.dim_tags).issubset(x.dim_tags)
+    size_ext = tag.dyn_size_ext.copy_compatible_to(x, check_dtype=False)
+    mask_ = tf.less(idx_range, size_ext.placeholder)
+    mask = tf.logical_and(mask, mask_)
+  x_ = where_bc(mask, x_, tf.cast(tf.constant(pad_value, name="pad_value"), dtype=x_.dtype))
+  d = get_padding_info_dict_ref(x_)
+  d.clear()
+  d.update({k: pad_value for k in dim_tags})
+  return x_
+
+
 class OutputWithActivation(object):
   """
   Stores some tensor before and after some activation function,
