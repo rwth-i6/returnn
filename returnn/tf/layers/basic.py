@@ -1635,7 +1635,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
       By default, if dyn seq len exists, it uses it.
     :param bool log_space: if True, returns in log space (i.e. uses log_softmax)
     """
-    from returnn.tf.util.basic import where_bc
+    from returnn.tf.util.basic import where_bc, set_padding_info
     super(SoftmaxOverSpatialLayer, self).__init__(**kwargs)
     self.start = start
     self.window_start = window_start
@@ -1665,6 +1665,8 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     self.output_before_activation = OutputWithActivation(
       energy, act_func=tf.nn.log_softmax if log_space else tf.nn.softmax)  # (...,T)
     self.output.placeholder = self.output_before_activation.y
+    if use_time_mask:
+      set_padding_info(self.output.placeholder, dim=self.output.dim_tags[axis], pad_value=0.)
     # Never allow inf in output, as softmax should remove all -inf values used for masking
     self.allow_inf_in_output = False
 
