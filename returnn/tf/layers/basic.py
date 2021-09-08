@@ -842,10 +842,13 @@ class SliceLayer(_ConcatInputLayer):
 
 class SliceNdLayer(_ConcatInputLayer):
   """
-  This takes out a slice-range from the time axis of the input,
-  e.g. if the input is of shape (B,T,F) and start is of shape (B,T),
+  This takes out a slice-range from the time axis,
+  e.g. ``x[start:start + size]``.
+  If the input is of shape (B,T,F) and start is of shape (B,),
+  then the output will be of shape (B,size,F).
+  If the input is of shape (B,T,F) and start is of shape (B,T),
   then the output will be of shape (B,T,size,F).
-  This layers allows a different start slice point for each batch,
+  This layer allows a different start slice point for each batch,
   in contrast to :class:`SliceLayer`, and the start is variable.
   See also :class:`GatherNdLayer`.
   :class:`PrefixInTimeLayer` can recover the original shape (by zero-padding).
@@ -853,53 +856,79 @@ class SliceNdLayer(_ConcatInputLayer):
   layer_class = "slice_nd"
   recurrent = True
 
-  def __init__(self, start, size, **kwargs):
+  def __init__(self, start, size, min_size=None, **kwargs):
     """
     :param LayerBase start: (B,...)
-    :param int size: scalar
+    :param int|None size: if None, it uses the max possible size, and it becomes a dynamic axis
+    :param int|None min_size: if size is None, but we want to have a min-size
     """
     super(SliceNdLayer, self).__init__(**kwargs)
     from returnn.tf.util.basic import where_bc, expand_multiple_dims
+    from returnn.tf.util.data import DimensionTag
     x = self.input_data.copy_as_batch_major()
-    seq_lens = x.get_sequence_lengths() if x.is_time_axis_dynamic() else None # (B,) or None
+    seq_lens = x.get_sequence_lengths() if x.is_time_axis_dynamic() else None  # (B,) or None
     self.start = start
-    start = start.output.copy_as_batch_major()  # e.g. (B,) or (B,T)
+    start_data = start.output.copy_as_batch_major()  # e.g. (B,) or (B,T)
+    start_t = start_data.placeholder
+    if size is None:
+      if seq_lens is None:
+        size = tf.maximum(tf.reduce_max(x.batch_shape[1] - start_t), 0)  # scalar
+      else:
+        # make seq_lens compatible with start_t
+        seq_lens = expand_multiple_dims(  # e.g. (B,) or (B,1)
+          x=seq_lens,
+          axes=[-1] * (len(start_t.shape) - len(seq_lens.shape)))
+        size = tf.maximum(tf.reduce_max(seq_lens - start_t), 0)  # scalar
+      if min_size is not None:
+        size = tf.maximum(size, min_size)
     # build Data object for the position argument of GatherLayer
-    indices_data = start.copy_template(name="%s_gather_indices" % self.name)
-    indices_data = indices_data.copy_add_spatial_dim(spatial_dim_axis=start.batch_ndim, auto_time_dim_axis=False,
-                                                     dim=size)
-    start = start.placeholder # e.g. (B,) or (B,T)
+    indices_data = start_data.copy_template(name="%s_gather_indices" % self.name)
+    if isinstance(size, int):
+      tag = DimensionTag(
+        kind=DimensionTag.Types.Spatial,
+        description="time_sliced",
+        batch=start_data.batch,
+        dimension=size)
+    else:
+      # in this case, size is not known before runtime and becomes dynamic
+      if len(seq_lens.shape) == 1:
+        dyn_size = tf.maximum(seq_lens - start_t, 0)  # (B,)
+      else:
+        # in this case, we would normally get a dynamic size of shape (B,T) for the slices
+        # in order to get shape (B,) instead, we reduce all other axes except the batch axis
+        reduce_axes = range(1, len(seq_lens.shape))
+        dyn_size = tf.maximum(tf.reduce_max(seq_lens - start_t, axis=reduce_axes), 0)  # (B,)
+      tag = DimensionTag(
+        kind=DimensionTag.Types.Spatial,
+        description="time_sliced",
+        batch=start_data.batch,
+        dyn_size=dyn_size)
+    indices_data = indices_data.copy_add_dim_by_tag(tag, unbroadcast=True, axis=start_data.batch_ndim)
     # [start+0, start+1, ...]
-    indices = tf.expand_dims(start, -1) + tf.range(0, size) # e.g. (B, size) or (B, T, size)
+    indices = tf.expand_dims(start_t, -1) + tf.range(0, size)  # e.g. (B, size) or (B, T, size)
     if seq_lens is not None:
       # broadcast from (B,) to the shape of the indices
-      seq_lens = expand_multiple_dims(seq_lens, [-1] * len(indices.shape[1:])) # e.g. (B,1) or (B,1,1)
-      # mask if an index is larger than the length of a sequence
-      pad_mask = tf.logical_or(tf.greater(indices, seq_lens-1), tf.less(indices, 0)) # shape like indices
-      # clip indices to the min and max indices of the sequences so that GatherLayer does not fail
-      indices = tf.clip_by_value(indices, 0, seq_lens-1)
+      seq_lens = expand_multiple_dims(  # e.g. (B,1) or (B,1,1)
+        x=seq_lens,
+        axes=[-1] * (len(indices.shape) - len(seq_lens.shape)))
+      pad_mask = tf.logical_or(tf.greater(indices, seq_lens - 1), tf.less(indices, 0))  # shape like indices
+      indices = tf.clip_by_value(indices, 0, seq_lens - 1)
     else:
-      # mask if an index is larger than the length of a sequence
-      pad_mask = tf.logical_or(tf.greater(indices, x.batch_shape[1] - 1), tf.less(indices, 0))
-      # clip indices to the min and max indices of the sequences
+      pad_mask = tf.logical_or(tf.greater(indices, x.batch_shape[1] - 1), tf.less(indices, 0))  # shape like indices
       indices = tf.clip_by_value(indices, 0, x.batch_shape[1] - 1)
     indices_data.placeholder = indices
-    position = InternalLayer(
-      network=self.network,
-      name="%s_internal" % indices_data.name,
-      output=indices_data
-    )
+    position = InternalLayer(network=self.network, name="%s_internal" % indices_data.name, output=indices_data)
     gather_layer = GatherLayer(
       name="%s_gather" % self.name,
       network=self.network,
       output=self.output,
       sources=self.sources,
       position=position,
-      axis="T"
-    )
+      axis=x.get_time_dim_tag())
     placeholder = gather_layer.output.placeholder
     self.output.size_placeholder = gather_layer.output.size_placeholder
     # zero padding
+    pad_mask = expand_multiple_dims(pad_mask, [-1] * (len(placeholder.shape) - len(pad_mask.shape)))
     self.output.placeholder = where_bc(pad_mask, tf.zeros_like(placeholder), placeholder)
 
   def get_dep_layers(self):
@@ -917,17 +946,33 @@ class SliceNdLayer(_ConcatInputLayer):
     :param int|None size:
     :rtype: Data
     """
-    start = start.output.copy_as_batch_major()
-    indices_data = start.copy_template(name="%s_gather_indices" % name)
-    indices_data = indices_data.copy_add_spatial_dim(spatial_dim_axis=start.batch_ndim, dim=size,
-                                                     auto_time_dim_axis=False)
+    from returnn.tf.util.data import DimensionTag
+    start_data = start.output.copy_as_batch_major()
+    input_data = sources[0].output.copy_as_batch_major()
+    input_t = input_data.placeholder
+    indices_data = start_data.copy_template(name="%s_gather_indices" % name)
+    if isinstance(size, int):
+      tag = DimensionTag(
+        kind=DimensionTag.Types.Spatial,
+        description="time_sliced",
+        batch=start_data.batch,
+        dimension=size)
+    else:
+      # get tensor of shape (B,) from input to use as dynamic size (start_data has no placeholder here)
+      dyn_size = tf.repeat(tf.reduce_max(input_t), tf.shape(input_t)[0])
+      dyn_size = tf.cast(dyn_size, tf.int32)
+      tag = DimensionTag(
+        kind=DimensionTag.Types.Spatial,
+        description="time_sliced",
+        batch=start_data.batch,
+        dyn_size=dyn_size)
+    indices_data = indices_data.copy_add_dim_by_tag(tag, unbroadcast=True, axis=start_data.batch_ndim)
     position = InternalLayer(network=sources[0].network, name="%s_internal" % indices_data.name, output=indices_data)
     return GatherLayer.get_out_data_from_opts(
       name="%s_gather" % name,
       sources=sources,
       position=position,
-      axis="T"
-    )
+      axis=input_data.get_time_dim_tag())
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
