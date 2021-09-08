@@ -258,16 +258,9 @@ def mask_dyn_seq_len_nd(x, pad_value, axes):
   if set(existing_pad_values) == {pad_value}:
     return x.placeholder  # nothing to do
 
-  x_shape = get_shape(x_)
-  mask = tf.ones([1] * len(x_shape), dtype=tf.bool)
+  mask = tf.ones([1] * x.batch_ndim, dtype=tf.bool)
   for axis in axes:
-    tag = x.dim_tags[axis]
-    idx_range = tf.range(x_shape[axis])
-    idx_range = tf.reshape(idx_range, [1] * (axis - 1) + x_shape[axis:axis + 1] + [1] * (len(x_shape) - axis - 1))
-    assert tag.dyn_size_ext
-    assert set(tag.dyn_size_ext.dim_tags).issubset(x.dim_tags)
-    size_ext = tag.dyn_size_ext.copy_compatible_to(x, check_dtype=False)
-    mask_ = tf.less(idx_range, size_ext.placeholder)
+    mask_ = x.get_sequence_mask_broadcast(axis=axis)
     mask = tf.logical_and(mask, mask_)
   x_ = where_bc(mask, x_, tf.cast(tf.constant(pad_value, name="pad_value"), dtype=x_.dtype))
   d = get_padding_info_dict_ref(x_)
