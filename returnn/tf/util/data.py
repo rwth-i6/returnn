@@ -1009,9 +1009,9 @@ class BatchInfo:
     """
     :rtype: BatchInfo
     """
-    assert self.virtual_dims
     if not self.beam:
       return self
+    assert self.virtual_dims
     root = self.get_global_base()
     dims_wo_beam = [dim for dim in self.virtual_dims if not isinstance(dim, BatchInfo.BeamDim)]
     return root._global_descendants_by_virtual_dims[tuple(dims_wo_beam)]  # must exist
