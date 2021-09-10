@@ -2032,12 +2032,12 @@ class RangeInAxisLayer(LayerBase):
   recurrent = True  # if axis=="T", the time-dim order matters
 
   # noinspection PyUnusedLocal
-  def __init__(self, axis, dtype="int32", unbroadcast=False, keepdims=True, sparse=False, **kwargs):
+  def __init__(self, axis, dtype="int32", unbroadcast=False, keepdims=False, sparse=False, **kwargs):
     """
     :param str axis:
     :param str dtype:
-    :param bool unbroadcast:
-    :param bool keepdims:
+    :param bool unbroadcast: DEPRECATED, unsupported, and not needed
+    :param bool keepdims: DEPRECATED, unsupported, and not needed
     :param bool sparse:
     """
     super(RangeInAxisLayer, self).__init__(**kwargs)
@@ -2048,47 +2048,28 @@ class RangeInAxisLayer(LayerBase):
     source_shape = get_shape(source.placeholder)
     out = tf.range(0, source_shape[axis], dtype=dtype)
     if unbroadcast:
-      assert keepdims
+      raise Exception("%s: do not use unbroadcast")
     if keepdims:
-      out_shape = [
-        source_shape[i]
-        if (i == axis or i == self.output.batch_dim_axis)
-        else 1
-        for i in range(self.output.batch_ndim)]
-      out = tf.reshape(out, out_shape)  # add missing axes (keep_dims)
-      if unbroadcast:
-        out = out + tf.zeros(source_shape, dtype=out.dtype)
+      raise Exception("%s: do not use keepdims")
     self.output.placeholder = out
 
   @classmethod
-  def get_out_data_from_opts(cls,
-                             name, sources, axis, dtype="int32", unbroadcast=False, keepdims=True, sparse=False,
-                             **kwargs):
+  def get_out_data_from_opts(cls, name, sources, axis, dtype="int32", sparse=False, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param str axis:
     :param str dtype:
-    :param bool unbroadcast:
-    :param bool keepdims:
     :param bool sparse:
     """
-    from ..util.data import DimensionTag
     assert len(sources) == 1, "%s layer %r requires single source" % (cls, name)
     source = sources[0].output
     axis = source.get_axis_from_description(axis)
-    if keepdims:
-      data_opts = source.get_kwargs(include_special_axes=True)
-      dim_tags = [
-        tag if (i == axis or tag.is_batch_dim() or unbroadcast)
-        else DimensionTag(kind=tag.kind, description="%s_keep%i" % (name, i), dimension=1)
-        for i, tag in enumerate(source.dim_tags)]
-    else:
-      data_opts = source.get_kwargs(include_special_axes=False)
-      dim_tags = [source.dim_tags[axis]]
-      if not dim_tags[0].is_batch_dim():
-        data_opts.pop("batch", None)
-        data_opts.pop("beam", None)
+    data_opts = source.get_kwargs(include_special_axes=False)
+    dim_tags = [source.dim_tags[axis]]
+    if not dim_tags[0].is_batch_dim():
+      data_opts.pop("batch", None)
+      data_opts.pop("beam", None)
     data_opts["name"] = "%s_output" % name
     data_opts["dim_tags"] = dim_tags
     data_opts["dtype"] = dtype
