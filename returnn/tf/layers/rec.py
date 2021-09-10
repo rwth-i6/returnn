@@ -2518,7 +2518,7 @@ class _SubnetworkRecCell(object):
               self.parent_rec_layer, input_beam, output_beam,
               self.parent_rec_layer.sources, self.parent_rec_layer.target))
           assert output_template.output.batch.beam == output_beam
-          time_dim_tag = time_dim_tag.get_for_batch(
+          time_dim_tag = time_dim_tag.get_for_batch_ctx(
             batch=output_template.output.batch, ctx=self.net.control_flow_ctx)
           assert time_dim_tag.dyn_size is not None
           seq_len = time_dim_tag.dyn_size
@@ -2778,7 +2778,7 @@ class _SubnetworkRecCell(object):
       latest_batch = (
         latest_layer_choice.output.batch
         or self.parent_rec_layer.output.batch.copy_set_beam(latest_layer_choice.output.beam))
-      tag = tag.get_for_batch(batch=latest_batch, ctx=self.net.control_flow_ctx)
+      tag = tag.get_for_batch_ctx(batch=latest_batch, ctx=self.net.control_flow_ctx)
       assert tag.dyn_size is not None
       assert tag.batch == latest_batch and tag.batch.beam == latest_layer_choice.output.beam
       seq_len = tag.dyn_size
