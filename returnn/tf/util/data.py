@@ -4000,6 +4000,24 @@ class ControlFlowContext:
     self._tf_control_flow_ctx = None  # type: typing.Optional[TFControlFlowCtx]
     self._loop_spatial_dim = None  # type: typing.Optional[DimensionTag]
 
+  def __repr__(self):
+    chain = []
+    ctx = self
+    while ctx:
+      chain.append(ctx)
+      ctx = ctx.outer_ctx
+    chain.reverse()
+    return "ControlFlowContext{%s}" % "/".join(ctx._repr_single() for ctx in chain)
+
+  def _repr_single(self):
+    """
+    :rtype: str
+    """
+    s = self.kind
+    if self.is_loop() and self.loop_spatial_dim:
+      s += "(%s)" % self.loop_spatial_dim.short_repr()
+    return s
+
   def is_loop(self):
     """
     :rtype: bool
