@@ -1109,6 +1109,46 @@ def test_rec_RecStepInfoLayer():
     assert_equal(out_v.tolist(), [0, 1, 2])
 
 
+def test_rec_RecStepInfoLayer_broadcast_moved_out():
+  # https://github.com/rwth-i6/returnn/issues/637
+  net_dict = {
+    "output": {
+      "class": "rec", "from": "data",
+      "unit": {
+        "segment_starts": {
+          "class": "switch", "condition": "prev:output_is_not_blank", "true_from": ":i",
+          "false_from": "prev:segment_starts", "initial_output": 0
+        },
+        "segment_lens0": {"class": "combine", "kind": "sub", "from": [":i", "segment_starts"], "is_output_layer": True},
+        "output_prob": {
+          "class": "softmax", "from": "data:source", "target": "classes", "loss": "ce"
+        },
+        'output': {
+          'class': 'choice', 'target': "classes", 'beam_size': 3, 'from': "output_prob", "input_type": "prob",
+          "initial_output": 0,
+        },
+        "output_is_not_blank": {
+          "class": "compare", "from": "output", "value": 0, "kind": "not_equal", "initial_output": True
+        },
+      },
+    }
+  }
+  config = Config({
+    "debug_print_layer_output_template": True,
+    "extern_data": {
+      "data": {"dim": 3},
+      "classes": {"sparse": True, "dim": 5},
+    }
+  })
+  from test_TFNetworkLayer import make_feed_dict
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    out = net.get_default_output_layer().output
+    out_v = session.run(out.placeholder, feed_dict=make_feed_dict(net.extern_data))
+    assert isinstance(out_v, numpy.ndarray)
+
+
 def test_rec_explicit_lstm():
   net_dict = {
     "lstm": {"class": "rec", "from": "data", "unit": {
