@@ -135,6 +135,8 @@ class DimensionTag(object):
       # If static dim, no effect.
       assert not self.batch
       return self
+    if batch.is_broadcast():
+      return self  # just leave as-is. should not matter.
     same_base = self.get_same_base()
     # Might be uninitialized in some cases. Assume batch is global.
     if not same_base.batch:
@@ -935,6 +937,12 @@ class BatchInfo:
     global_beam_dims = [dim for dim in self.virtual_dims if isinstance(dim, BatchInfo.GlobalBatchDim)]
     return len(global_beam_dims) == 1 and len(self.virtual_dims) == 1
 
+  def is_broadcast(self):
+    """
+    :rtype: bool
+    """
+    return len(self.virtual_dims) == 0
+
   def _make_beam_dim(self, beam):
     """
     :param SearchBeam beam:
@@ -1443,7 +1451,7 @@ class Data(object):
       assert axis != self.batch_dim_axis, "%s: invalid %s" % (self, tag)
       # Note: tag.kind (feature or spatial) is independent from self.feature_dim_axis.
       if tag.batch and self.batch:
-        assert tag.batch == self.batch
+        assert tag.batch == self.batch or self.batch.is_broadcast()
       if tag.dyn_size_ext:
         assert tag.dyn_size_ext.dtype in {"int32", "int64"}
         assert tag.batch == tag.dyn_size_ext.batch
