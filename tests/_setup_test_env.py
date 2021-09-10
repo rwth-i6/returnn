@@ -91,8 +91,14 @@ def _try_hook_into_tests():
 
   Also see: https://youtrack.jetbrains.com/issue/PY-9848
   """
-  # get TestProgram instance from stack...
+  # Check if this is run inside a debugger. Skip if this is not the case.
   import sys
+  get_trace = getattr(sys, "gettrace", None)
+  if not get_trace:
+    return
+  if get_trace() is None:
+    return
+  # get TestProgram instance from stack...
   from unittest import TestProgram
   from better_exchook import get_current_frame
   frame = get_current_frame()
