@@ -393,6 +393,8 @@ class LayerBase(object):
           extern_data.init_batch_info()  # this should create it and also set it
           assert output.batch
       output.batch = output.batch.copy_set_beam(output.beam)
+    if output.control_flow_ctx != network.get_control_flow_ctx():
+      output = output.copy_template_set_ctx(network.get_control_flow_ctx())
     return output
 
   def get_full_ctx_name(self):

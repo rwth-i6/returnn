@@ -2393,6 +2393,16 @@ class Data(object):
       opts["name"] = name
     return Data(**opts)
 
+  def copy_template_set_ctx(self, ctx):
+    """
+    :param ControlFlowContext ctx:
+    :return: new Data instance
+    :rtype: Data
+    """
+    kwargs = self.get_kwargs()
+    kwargs["control_flow_ctx"] = ctx
+    return Data(**kwargs)
+
   def _get_variable_dim_pattern(self):
     """
     :return: tuple with bools specifying which dims of the shape (excluding batch-dim) are of variable length.

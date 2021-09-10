@@ -1012,7 +1012,7 @@ class _SubnetworkRecCell(object):
     self.source_data = source_data
     if source_data:
       self.net.extern_data.data["source"] = (
-        source_data.copy_template_excluding_time_dim())
+        source_data.copy_template_excluding_time_dim().copy_template_set_ctx(control_flow_ctx))
     self.time_dim_tag = time_dim_tag
     self._time_dim_tags = {time_dim_tag}  # type: typing.Set[DimensionTag]
     if source_data:
@@ -1025,7 +1025,7 @@ class _SubnetworkRecCell(object):
       # These are just templates. You can use them as possible targets for dimension information,
       # but not as actual sources or targets.
       # Note: We maybe should check data.is_same_time_dim()...
-      self.net.extern_data.data[key] = data.copy_template_excluding_time_dim()
+      self.net.extern_data.data[key] = data.copy_template_excluding_time_dim().copy_template_set_ctx(control_flow_ctx)
     self.layer_data_templates = {}  # type: typing.Dict[str,_TemplateLayer]
     self.prev_layers_needed = set()  # type: typing.Set[str]
     self.prev_layer_templates = {}  # type: typing.Dict[str,_TemplateLayer]
@@ -1550,7 +1550,7 @@ class _SubnetworkRecCell(object):
           self.parent_rec_layer, self.parent_rec_layer.output.get_time_dim_tag(),
           layer, layer.output.get_time_dim_tag())
         return layer
-      output = layer.output.copy_template_excluding_time_dim()
+      output = layer.output.copy_template_excluding_time_dim().copy_template_set_ctx(self.net.control_flow_ctx)
       with tf.name_scope("%s_moved_input" % name.replace(":", "_")):
         if prev:
           output.placeholder = tf.cond(
@@ -3356,7 +3356,8 @@ class _TemplateLayer(LayerBase):
       output=Data(
         name="dummy_initial_template_data",
         batch_dim_axis=0, time_dim_axis=None,
-        shape=()),  # (B,). no time-dim
+        shape=(),
+        control_flow_ctx=network.get_control_flow_ctx()),  # (B,). no time-dim
       name=name, network=network)
     self.output.size_placeholder = {}  # must be initialized
     self.layer_class = ":uninitialized-template"
@@ -7077,8 +7078,11 @@ class MaskedComputationLayer(LayerBase):
     # We don't care about the right masked input here, but just about deriving the right output shape.
     if masked_from:
       if network.is_inside_rec_layer(inside_loop=True):
-        source_data = masked_from.output.copy_template_excluding_time_dim(
-          name="%s_%s_masked_input_frame" % (masked_from.output.name, name))
+        source_data = (
+          masked_from.output
+          .copy_template_excluding_time_dim(
+            name="%s_%s_masked_input_frame" % (masked_from.output.name, name))
+          .copy_template_set_ctx(network.get_control_flow_ctx()))
       else:
         source_data = masked_from.output.copy_template(
           name="%s_%s_masked_input" % (masked_from.output.name, name))
@@ -7353,7 +7357,7 @@ class UnmaskLayer(LayerBase):
         # thus when we unroll it to get into the loop, the RecLayer would have kept it as-is,
         # i.e. it should still have that time-dim-axis.
         # Maybe we should do some extra checks if that is like we assume, but for now, just assume that.
-        return out.copy_template_excluding_time_dim()
+        return out.copy_template_excluding_time_dim().copy_template_set_ctx(network.get_control_flow_ctx())
       return out
     assert out.have_time_axis()
     out = out.copy_as_time_major()
