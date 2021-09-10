@@ -3995,7 +3995,7 @@ class ControlFlowContext:
     :param ControlFlowContext outer_ctx:
     """
     self.kind = kind
-    self.outer_ctx = outer_ctx
+    self._outer_ctx = outer_ctx
     from tensorflow.python.ops.control_flow_ops import ControlFlowContext as TFControlFlowCtx
     self._tf_control_flow_ctx = None  # type: typing.Optional[TFControlFlowCtx]
     self._loop_spatial_dim = None  # type: typing.Optional[DimensionTag]
@@ -4029,6 +4029,13 @@ class ControlFlowContext:
     :rtype: bool
     """
     return self.kind == self.Types.Cond
+
+  @property
+  def outer_ctx(self):
+    """
+    :rtype: ControlFlowContext|None
+    """
+    return self._outer_ctx
 
   @property
   def tf_control_flow_ctx(self):
