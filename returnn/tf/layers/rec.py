@@ -993,6 +993,10 @@ class _SubnetworkRecCell(object):
     self.parent_net = parent_net
     self.net_dict = safe_deep_copy(net_dict)
     from returnn.tf.network import TFNetwork, ExternData, LossHolder
+    from returnn.tf.util.data import ControlFlowContext
+    control_flow_ctx = ControlFlowContext(
+      kind=ControlFlowContext.Types.Loop, outer_ctx=parent_net.get_control_flow_ctx())
+    control_flow_ctx.loop_spatial_dim = time_dim_tag
     self.net = TFNetwork(
       name="%s/%s(rec-subnet)" % (parent_net.name, rec_layer_name),
       extern_data=ExternData(),
@@ -1000,6 +1004,7 @@ class _SubnetworkRecCell(object):
       search_flag=parent_net.search_flag,
       eval_flag=False,
       inside_rec_time_dim=time_dim_tag,
+      control_flow_ctx=control_flow_ctx,
       absolute_name_prefix="%s%s/" % (parent_net.get_absolute_name_prefix(), rec_layer_name),
       parent_net=parent_net)
     self.net.is_root_in_ctx = True
@@ -2513,7 +2518,8 @@ class _SubnetworkRecCell(object):
               self.parent_rec_layer, input_beam, output_beam,
               self.parent_rec_layer.sources, self.parent_rec_layer.target))
           assert output_template.output.batch.beam == output_beam
-          time_dim_tag = time_dim_tag.get_for_batch(output_template.output.batch)
+          time_dim_tag = time_dim_tag.get_for_batch(
+            batch=output_template.output.batch, ctx=self.net.control_flow_ctx)
           assert time_dim_tag.dyn_size is not None
           seq_len = time_dim_tag.dyn_size
       else:
@@ -2772,7 +2778,7 @@ class _SubnetworkRecCell(object):
       latest_batch = (
         latest_layer_choice.output.batch
         or self.parent_rec_layer.output.batch.copy_set_beam(latest_layer_choice.output.beam))
-      tag = tag.get_for_batch(latest_batch)
+      tag = tag.get_for_batch(batch=latest_batch, ctx=self.net.control_flow_ctx)
       assert tag.dyn_size is not None
       assert tag.batch == latest_batch and tag.batch.beam == latest_layer_choice.output.beam
       seq_len = tag.dyn_size
@@ -5226,7 +5232,7 @@ class DecideLayer(BaseChoiceLayer):
     for i, size in src_data.size_placeholder.items():
       tag = DimensionTag.get_tag_from_size_tensor(size)
       assert tag
-      tag = tag.get_for_batch(output.batch)
+      tag = tag.get_for_batch_ctx(batch=output.batch, ctx=output.control_flow_ctx)
       if tag.dyn_size is None:
         size = tf.reshape(size, [batch_dim, beam_size])  # (batch, beam)
         size = tf.gather_nd(size, indices=beam_idxs_ext)  # (batch,)
