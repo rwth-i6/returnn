@@ -1592,8 +1592,6 @@ class Data(object):
     else:
       if self.dtype != "float32":
         keys.append("dtype")
-    if with_name:
-      keys.insert(0, "name")
     if with_placeholder:
       keys.append("placeholder")
     if not self.available_for_inference:
@@ -1604,6 +1602,17 @@ class Data(object):
       if not self.batch or self.batch.beam != self.beam:
         keys.append("beam")
     args = []
+    if with_name:
+      name = getattr(self, "name", None)
+      args += [repr(name) if name else "<undefined>"]
+    try:
+      batch_shape_meta = "[%s]" % ",".join(self.get_batch_axes_short_description())
+    except Exception as exc:
+      if catch_exceptions:
+        batch_shape_meta = "<!%s: %s>" % (type(exc).__name__, exc)
+      else:
+        raise
+    args += [batch_shape_meta]
     for key in keys:
       try:
         value_repr = repr(getattr(self, key))
@@ -1613,15 +1622,16 @@ class Data(object):
         else:
           raise
       args += ["%s=%s" % (key, value_repr)]
-    try:
-      batch_shape_meta = "[%s]" % ",".join(self.get_batch_axes_short_description())
-    except Exception as exc:
-      if catch_exceptions:
-        batch_shape_meta = "<!%s: %s>" % (type(exc).__name__, exc)
-      else:
-        raise
-    args += ["batch_shape_meta=" + batch_shape_meta]
-    return "Data(%s)" % ", ".join(args)
+    if self.control_flow_ctx:
+      try:
+        value_repr = self.control_flow_ctx.repr_inner()
+      except Exception as exc:
+        if catch_exceptions:
+          value_repr = "<!%s: %s>" % (type(exc).__name__, exc)
+        else:
+          raise
+      args += ["ctx=" + value_repr]
+    return "Data{%s}" % ", ".join(args)
 
   def get_batch_axes_short_description(self, special_axes=True):
     """
