@@ -406,8 +406,10 @@ class RecLayer(_ConcatInputLayer):
       out = None
     if isinstance(unit, _SubnetworkRecCell):  # subnetwork
       subnet = unit
-      sub_out = subnet.layer_data_templates["output"].output.copy_template_adding_time_dim(
-        name="%s_output" % kwargs["name"], time_dim_axis=0)
+      sub_out = (
+        subnet.layer_data_templates["output"].output
+        .copy_template_adding_time_dim(name="%s_output" % kwargs["name"], time_dim_axis=0)
+        .copy_template_set_ctx(network.get_control_flow_ctx()))
       if out:
         assert sub_out.dim == out.dim
         assert sub_out.shape == out.shape
@@ -3222,7 +3224,10 @@ class _SubnetworkRecCell(object):
         acc_ta, latest_layer_choice_name, search_choices, resolved_seq_len = self._opt_search_resolve(
           layer_name=name, acc_ta=acc_ta, final_net_vars=final_net_vars, seq_len=seq_len,
           search_choices_cache=search_choices_cache)
-        output = self.layer_data_templates[name].output.copy_template_adding_time_dim(time_dim_axis=0)
+        output = (
+          self.layer_data_templates[name].output
+          .copy_template_adding_time_dim(time_dim_axis=0)
+          .copy_template_set_ctx(self.parent_net.get_control_flow_ctx()))
         if latest_layer_choice_name:
           output.beam = self.net.layers[latest_layer_choice_name].search_choices.get_beam_info()
         elif search_choices:
@@ -3309,7 +3314,10 @@ class _SubnetworkRecCell(object):
     for name, search_choices in search_choices_cache.items():
       if name not in self.output_layers_net.layers:
         # Create dummy layer.
-        output = self.layer_data_templates[name].output.copy_template_adding_time_dim(time_dim_axis=0)
+        output = (
+          self.layer_data_templates[name].output
+          .copy_template_adding_time_dim(time_dim_axis=0)
+          .copy_template_set_ctx(self.output_layers_net.get_control_flow_ctx()))
         output.beam = search_choices.get_beam_info()
         layer = InternalLayer(name=name, network=self.output_layers_net, output=output)
         self.output_layers_net.layers[name] = layer

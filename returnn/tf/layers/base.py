@@ -1737,7 +1737,7 @@ class ReuseParams:
               # Don't return layer, could be inside loop and that wont work.
               output = net.layers[layer_name].output.copy_template()
               if not output.have_time_axis() and with_time_dim:
-                output = output.copy_template_adding_time_dim()
+                output = output.copy_template_adding_time_dim().copy_template_set_ctx(network.get_control_flow_ctx())
         if not output:
           layer_desc_ = net.layers_desc[layer_name].copy()
           class_name_ = layer_desc_.pop("class")
