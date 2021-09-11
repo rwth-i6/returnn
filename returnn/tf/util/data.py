@@ -79,15 +79,6 @@ class DimensionTag(object):
     # We can have different tag variants per batch info (e.g. with beam), or per control flow ctx.
     # They each have same_as = self. The same_base should have the base (global) batch info.
     self._same_for_batch_ctx = {}  # type: typing.Dict[typing.Tuple[BatchInfo,typing.Optional[ControlFlowContext]],DimensionTag]  # nopep8
-    # TODO refactor self.per_spatial_dim to self.control_flow_ctx.loop_spatial_dim
-    # When we have some dynamic size, this dynamic size could be inside a loop (RecLayer),
-    # and different per each loop frame.
-    # In that case, we can not access it from outside (except when we accumulate it).
-    # We expect that the same_base is the dim tag inside the loop, which has this set.
-    self.per_spatial_frame = None  # type: typing.Optional[DimensionTag]
-    # When we accumulate the dynamic sizes, this results in this dim tag.
-    # It has same_as set to self.
-    self.per_spatial_frame_accumulated = None  # type: typing.Optional[DimensionTag]
 
   def __repr__(self):
     return "DimensionTag{%s}" % self.short_repr()
