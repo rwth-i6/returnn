@@ -394,7 +394,12 @@ class LayerBase(object):
           assert output.batch
       output.batch = output.batch.copy_set_beam(output.beam)
     if output.control_flow_ctx != network.get_control_flow_ctx():
+      x = output.placeholder
       output = output.copy_template_set_ctx(network.get_control_flow_ctx())
+      if x is not None:
+        # Some layers might just copy the input. But the input might have buggy ctx.
+        # Just leave the placeholder as-is. Most layers should anyway reset this.
+        output.placeholder = x
     return output
 
   def get_full_ctx_name(self):
