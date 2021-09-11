@@ -4011,13 +4011,19 @@ class ControlFlowContext:
     self._loop_spatial_dim = None  # type: typing.Optional[DimensionTag]
 
   def __repr__(self):
+    return "ControlFlowContext{%s}" % self.repr_inner()
+
+  def repr_inner(self):
+    """
+    :rtype: str
+    """
     chain = []
     ctx = self
     while ctx:
       chain.append(ctx)
       ctx = ctx.outer_ctx
     chain.reverse()
-    return "ControlFlowContext{%s}" % "/".join(ctx._repr_single() for ctx in chain)
+    return "/".join(ctx._repr_single() for ctx in chain)
 
   def _repr_single(self):
     """
