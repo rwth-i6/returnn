@@ -3197,18 +3197,34 @@ class Data(object):
       axis += self.batch_ndim
     assert 0 <= axis < self.batch_ndim
     assert axis != self.batch_dim_axis
-    size = self.get_dynamic_size(axis)
-    if axis >= self.batch_dim_axis:
-      seq_mask = sequence_mask(size)  # (B,T)
-    else:  # axis < batch_dim_axis
-      seq_mask = sequence_mask_time_major(size)  # (T,B)
-    shape = [1] * self.batch_ndim  # type: typing.List[typing.Union[int,tf.Tensor]]
+    tag = self.dim_tags[axis]
+    assert tag.dyn_size_ext
     with tf.name_scope("get_sequence_mask_broadcast"):
-      placeholder_shape = tf.shape(self.placeholder)
-      shape[self.batch_dim_axis] = placeholder_shape[self.batch_dim_axis]
-      shape[axis] = placeholder_shape[axis]
-      seq_mask = tf.reshape(seq_mask, shape, name="seq_mask_reshape")
-      assert seq_mask.get_shape().ndims == self.batch_ndim
+      if tag.dyn_size_ext.have_batch_axis() and tag.dyn_size_ext.batch_ndim == 1:  # just [B]
+        # This is the common case where the size is of shape [B].
+        # We make use of sequence_mask or sequence_mask_time_major in that case,
+        # which is optimized by caching.
+        size = tag.dyn_size
+        if axis >= self.batch_dim_axis:
+          seq_mask = sequence_mask(size)  # (B,T)
+        else:  # axis < batch_dim_axis
+          seq_mask = sequence_mask_time_major(size)  # (T,B)
+        shape = [1] * self.batch_ndim  # type: typing.List[typing.Union[int,tf.Tensor]]
+        placeholder_shape = tf.shape(self.placeholder)
+        shape[self.batch_dim_axis] = placeholder_shape[self.batch_dim_axis]
+        shape[axis] = placeholder_shape[axis]
+        seq_mask = tf.reshape(seq_mask, shape, name="seq_mask_reshape")
+        assert seq_mask.get_shape().ndims == self.batch_ndim
+      else:  # size is something unusual
+        max_idx = tf.reduce_max(tag.dyn_size)
+        # We use the assumption that self.placeholder.shape[axis] == max_idx.
+        idx_range = tf.range(max_idx)
+        idx_range = tf.reshape(idx_range, [1] * (axis - 1) + [max_idx] + [1] * (self.batch_ndim - axis - 1))
+        assert tag.dyn_size_ext
+        assert set(tag.dyn_size_ext.dim_tags).issubset(self.dim_tags)
+        size_ext = tag.dyn_size_ext.copy_compatible_to(self, check_sparse=False, check_dtype=False)
+        seq_mask = tf.less(idx_range, size_ext.placeholder)
+        assert seq_mask.get_shape().ndims == self.batch_ndim
     return seq_mask
 
   def get_batch_dim(self):
