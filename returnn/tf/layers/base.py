@@ -393,6 +393,13 @@ class LayerBase(object):
           extern_data.init_batch_info()  # this should create it and also set it
           assert output.batch
       output.batch = output.batch.copy_set_beam(output.beam)
+    if output.control_flow_ctx != network.get_control_flow_ctx():
+      x = output.placeholder
+      output = output.copy_template_set_ctx(network.get_control_flow_ctx())
+      if x is not None:
+        # Some layers might just copy the input. But the input might have buggy ctx.
+        # Just leave the placeholder as-is. Most layers should anyway reset this.
+        output.placeholder = x
     return output
 
   def get_full_ctx_name(self):
@@ -1730,7 +1737,7 @@ class ReuseParams:
               # Don't return layer, could be inside loop and that wont work.
               output = net.layers[layer_name].output.copy_template()
               if not output.have_time_axis() and with_time_dim:
-                output = output.copy_template_adding_time_dim()
+                output = output.copy_template_adding_time_dim().copy_template_set_ctx(network.get_control_flow_ctx())
         if not output:
           layer_desc_ = net.layers_desc[layer_name].copy()
           class_name_ = layer_desc_.pop("class")

@@ -354,6 +354,7 @@ class TFNetwork(object):
                train_flag=None, eval_flag=None, search_flag=None,
                parent_layer=None, parent_net=None, extra_parent_net=None, extra_name_prefix=None,
                inside_rec_time_dim=None, over_rec_time_dim=None, over_rec_time_dim_subs=None,
+               control_flow_ctx=None,
                absolute_name_prefix=None, name=None):
     """
     :param returnn.config.Config config: only needed to init extern_data if not specified explicitly
@@ -370,6 +371,7 @@ class TFNetwork(object):
     :param DimensionTag|None inside_rec_time_dim: dim tag of outer rec layer, when run inside the loop (not optimized)
     :param DimensionTag|None over_rec_time_dim: dim tag of outer rec layer, when optimized out of the loop
     :param set[DimensionTag]|None over_rec_time_dim_subs: outer rec layer, out of loop, potential shorter
+    :param returnn.tf.util.data.ControlFlowContext control_flow_ctx:
     :param str|None absolute_name_prefix:
     :param str name: only for debugging
     """
@@ -432,6 +434,7 @@ class TFNetwork(object):
     self._inside_rec_time_dim = inside_rec_time_dim
     self._over_rec_time_dim = over_rec_time_dim
     self._over_rec_time_dim_subs = over_rec_time_dim_subs
+    self.control_flow_ctx = control_flow_ctx
     self.extra_parent_net = extra_parent_net
     self.extra_name_prefix = extra_name_prefix
     self.extra_deps_in_extra = False
@@ -518,6 +521,17 @@ class TFNetwork(object):
         continue
       break
     return net, "".join(reversed(path))
+
+  def get_control_flow_ctx(self):
+    """
+    :rtype: returnn.tf.util.data.ControlFlowContext|None
+    """
+    net = self
+    while net:
+      if net.control_flow_ctx:
+        return net.control_flow_ctx
+      net = net.parent_net
+    return None
 
   def is_extra_internal_template_construction(self):
     """

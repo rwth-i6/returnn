@@ -41,7 +41,7 @@ class DimensionTag(object):
 
   def __init__(self, kind=Types.Unspecified, description=None,
                dimension=None, dyn_size=None, dyn_size_ext=None,
-               batch=None,
+               batch=None, control_flow_ctx=None,
                src_data=None, src_axis=None):
     """
     :param str|None kind:
@@ -50,6 +50,7 @@ class DimensionTag(object):
     :param tf.Tensor|None dyn_size: e.g. seq_len, (batch,)
     :param Data|None dyn_size_ext: seq_len or extended
     :param BatchInfo|None batch: for batch-dim, or dynamic dims per batch
+    :param ControlFlowContext|None control_flow_ctx:
     :param Data|None src_data:
     :param int|None src_axis:
     """
@@ -63,6 +64,7 @@ class DimensionTag(object):
     if not batch and dyn_size_ext:
       batch = dyn_size_ext.batch
     self.batch = batch
+    self.control_flow_ctx = control_flow_ctx
     self.src_data = src_data
     self.src_axis = src_axis
     if dyn_size_ext and not dyn_size_ext.batch and batch:
@@ -74,17 +76,9 @@ class DimensionTag(object):
       assert not dyn_size_ext
       self.dyn_size = dyn_size
     self._dyn_size_same = set()  # type: typing.Set[tf.Tensor]
-    # We can have different tag variants per batch info (e.g. with beam).
+    # We can have different tag variants per batch info (e.g. with beam), or per control flow ctx.
     # They each have same_as = self. The same_base should have the base (global) batch info.
-    self._same_for_batch = {}  # type: typing.Dict[BatchInfo,DimensionTag]
-    # When we have some dynamic size, this dynamic size could be inside a loop (RecLayer),
-    # and different per each loop frame.
-    # In that case, we can not access it from outside (except when we accumulate it).
-    # We expect that the same_base is the dim tag inside the loop, which has this set.
-    self.per_spatial_frame = None  # type: typing.Optional[DimensionTag]
-    # When we accumulate the dynamic sizes, this results in this dim tag.
-    # It has same_as set to self.
-    self.per_spatial_frame_accumulated = None  # type: typing.Optional[DimensionTag]
+    self._same_for_batch_ctx = {}  # type: typing.Dict[typing.Tuple[BatchInfo,typing.Optional[ControlFlowContext]],DimensionTag]  # nopep8
 
   def __repr__(self):
     return "DimensionTag{%s}" % self.short_repr()
@@ -121,12 +115,13 @@ class DimensionTag(object):
     tag._same_as_tb = traceback.extract_stack()
     return tag
 
-  def get_for_batch(self, batch):
+  def get_for_batch_ctx(self, batch, ctx):
     """
     :param BatchInfo batch:
+    :param ControlFlowContext|None ctx:
     :rtype: DimensionTag
     """
-    if self.batch == batch:
+    if self.batch == batch and self.control_flow_ctx == ctx:
       return self
     if self.is_batch_dim():
       # For now, just create another copy in case of batch dim tag.
@@ -150,11 +145,19 @@ class DimensionTag(object):
         same_base.batch = batch_base
     if same_base.dyn_size_ext:
       assert same_base.batch == same_base.dyn_size_ext.batch
-    if same_base.batch == batch:
-      return same_base
-    if batch in same_base._same_for_batch:
-      return same_base._same_for_batch[batch]
+      assert same_base.control_flow_ctx == same_base.dyn_size_ext.control_flow_ctx
+    if same_base.batch == batch and ControlFlowContext.is_parent_or_same(same_base.control_flow_ctx, ctx):
+      if same_base.dyn_size_ext or same_base.control_flow_ctx == ctx:
+        return same_base
+    # If any parent ctx exists, and is defined, use it.
+    for ctx_ in ControlFlowContext.abs_ctx_stack_with_root(ctx):
+      tag = same_base._same_for_batch_ctx.get((batch, ctx_), None)
+      if tag and (tag.dyn_size_ext or tag.control_flow_ctx == ctx):
+        return tag
     if batch.copy_remove_beam() == batch.get_global_base() and batch.beam and same_base.dyn_size_ext:
+      # The same_base has some dyn size without any beam nor control flow context.
+      # We can expand it to the current beam.
+      assert not same_base.control_flow_ctx
       dyn_size_ext = same_base.dyn_size_ext.copy_extend_with_beam(batch.beam)
       assert dyn_size_ext.batch == batch
       beam_expanded_base_data = getattr(dyn_size_ext.placeholder, "_RETURNN_beam_expanded_base_data", None)
@@ -177,12 +180,13 @@ class DimensionTag(object):
       dyn_size_ext = None
     dim_tag = DimensionTag(
       kind=self.kind, description=self.description, dimension=self.dimension,
-      batch=batch, dyn_size_ext=dyn_size_ext)
+      batch=batch, control_flow_ctx=dyn_size_ext.control_flow_ctx if dyn_size_ext else ctx,
+      dyn_size_ext=dyn_size_ext)
     dim_tag.same_as = same_base
     dim_tag._same_as_tb = traceback.extract_stack()
     if dyn_size_ext:
       dim_tag.set_tag_on_size_tensor(dyn_size_ext.placeholder, batch=batch)
-    same_base._same_for_batch[batch] = dim_tag
+    same_base._same_for_batch_ctx[(dim_tag.batch, dim_tag.control_flow_ctx)] = dim_tag
     return dim_tag
 
   @property
@@ -210,7 +214,7 @@ class DimensionTag(object):
     self.dyn_size_ext = Data(
       name=("%s:dyn_size" % self.description) if self.description else dyn_size.op.name,
       dtype=Data.size_dtype, placeholder=dyn_size, shape=(), batch_dim_axis=0,
-      batch=self.batch, beam=beam)
+      batch=self.batch, beam=beam, control_flow_ctx=self.control_flow_ctx)
     other = DimensionTag.get_tag_from_size_tensor(dyn_size)
     if other:
       self.declare_same_as(other)
@@ -278,7 +282,7 @@ class DimensionTag(object):
     # If we already have another dyn size set or different batch, create a new DimensionTag instance.
     if self.batch and batch and self.batch != batch:
       assert not same_as_before  # it cannot be the same when it is another batch...
-      new_dim_tag = self.get_for_batch(batch)
+      new_dim_tag = self.get_for_batch_ctx(batch=batch, ctx=self.control_flow_ctx)
       new_dim_tag.set_tag_on_size_tensor(x, batch=batch)
       return new_dim_tag
     if self.dyn_size is not None and self.dyn_size is not x:
@@ -1255,7 +1259,8 @@ class Data(object):
                dim_tags=None,
                same_dim_tags_as=None,
                batch=None,
-               beam=None):
+               beam=None,
+               control_flow_ctx=None):
     """
     :param str name:
     :param tuple[int|None]|list[int|None] shape: including time-dim (can be None). excluding batch-dim.
@@ -1284,6 +1289,7 @@ class Data(object):
     :param BatchInfo|None batch:
     :param SearchBeam|None beam: the batch-dim could be extended by a beam-size,
       such that it represents the merged dims [batch, beam_size].
+    :param ControlFlowContext|None control_flow_ctx:
     """
     assert isinstance(name, str)
     assert dtype is None or isinstance(dtype, str)
@@ -1301,6 +1307,7 @@ class Data(object):
       assert batch.beam == beam
     self._batch = batch
     self._beam = beam
+    self.control_flow_ctx = control_flow_ctx
     if isinstance(dim_tags, (tuple, list)):
       # We do a couple of sanity checks, and maybe set special axes attribs.
       shape_ = tuple(tag.dimension for tag in dim_tags if not tag.is_batch_dim())
@@ -1561,6 +1568,8 @@ class Data(object):
       keys += ["batch"]
     if self.beam is not None:
       keys += ["beam"]
+    if self.control_flow_ctx:
+      keys += ["control_flow_ctx"]
     if not self.available_for_inference:
       keys += ["available_for_inference"]
     return {key: getattr(self, key) for key in keys}
@@ -1665,9 +1674,10 @@ class Data(object):
     return id(self)
 
   def _adapt_batch_consistent_dim_tags(self):
-    if not self.batch:
+    if not self.batch:  # uninitialized
       return
-    self._dim_tags = tuple(tag.get_for_batch(self.batch) for tag in self._dim_tags)
+    self._dim_tags = tuple(
+      tag.get_for_batch_ctx(batch=self.batch, ctx=self.control_flow_ctx) for tag in self._dim_tags)
 
   def copy(self, name=None):
     """
@@ -2384,6 +2394,16 @@ class Data(object):
       opts["name"] = name
     return Data(**opts)
 
+  def copy_template_set_ctx(self, ctx):
+    """
+    :param ControlFlowContext ctx:
+    :return: new Data instance
+    :rtype: Data
+    """
+    kwargs = self.get_kwargs()
+    kwargs["control_flow_ctx"] = ctx
+    return Data(**kwargs)
+
   def _get_variable_dim_pattern(self):
     """
     :return: tuple with bools specifying which dims of the shape (excluding batch-dim) are of variable length.
@@ -3076,7 +3096,7 @@ class Data(object):
     if self.beam and getattr(sizes, "_RETURNN_dyn_size_beam", None) != self.beam:
       tag = DimensionTag.get_tag_from_size_tensor(sizes)
       assert tag and self.batch
-      tag = tag.get_for_batch(self.batch)
+      tag = tag.get_for_batch_ctx(batch=self.batch, ctx=self.control_flow_ctx)
       assert tag.dyn_size is not None
       sizes = tag.dyn_size
 
@@ -3979,3 +3999,145 @@ def _default_feature_dim_axis(batch_dim_axis, time_dim_axis, batch_shape, sparse
   if static_axes:
     return static_axes[-1]
   return axes[-1]
+
+
+class ControlFlowContext:
+  """
+  This is a simple wrapper around the TF ControlFlowContext, i.e. tf.while_loop or tf.cond.
+
+  We have this wrapper to refer to a context which might not exist yet (e.g. at template construction time).
+  Also, we might want to store additional information, such the spatial dim tag of the loop.
+  """
+
+  class Types:
+    """
+    Possible types of context.
+    """
+    Loop = "loop"
+    Cond = "cond"
+
+  def __init__(self, kind, outer_ctx=None):
+    """
+    :param str kind: from ControlFlowContext.Types
+    :param ControlFlowContext outer_ctx:
+    """
+    self.kind = kind
+    self._outer_ctx = outer_ctx
+    from tensorflow.python.ops.control_flow_ops import ControlFlowContext as TFControlFlowCtx
+    self._tf_control_flow_ctx = None  # type: typing.Optional[TFControlFlowCtx]
+    self._loop_spatial_dim = None  # type: typing.Optional[DimensionTag]
+
+  def __repr__(self):
+    return "ControlFlowContext{%s}" % self.repr_inner()
+
+  def repr_inner(self):
+    """
+    :rtype: str
+    """
+    return "/".join(ctx._repr_single() for ctx in self.abs_ctx_stack())
+
+  def _repr_single(self):
+    """
+    :rtype: str
+    """
+    s = self.kind
+    if self.is_loop() and self.loop_spatial_dim:
+      s += "(%s)" % self.loop_spatial_dim.short_repr()
+    return s
+
+  def abs_ctx_stack(self):
+    """
+    :rtype: list[ControlFlowContext]
+    :return: chain of ctx, last is self
+    """
+    chain = []
+    ctx = self
+    while ctx:
+      chain.append(ctx)
+      ctx = ctx.outer_ctx
+    chain.reverse()
+    return chain
+
+  @classmethod
+  def abs_ctx_stack_with_root(cls, ctx):
+    """
+    :param ControlFlowContext|None ctx:
+    :rtype: list[ControlFlowContext|None]
+    :return: chain of ctx, last is self, first is None
+    """
+    ls = [None]  # type: typing.List[typing.Optional[ControlFlowContext]]
+    if ctx:
+      ls += ctx.abs_ctx_stack()
+    return ls
+
+  @classmethod
+  def is_parent_or_same(cls, parent, child):
+    """
+    :param ControlFlowContext|None parent:
+    :param ControlFlowContext|None child:
+    :rtype: bool
+    """
+    if parent == child:
+      return True
+    if not parent:
+      return True  # parent is root
+    if not child:
+      return False  # child is root but parent is not
+    while child:
+      if child == parent:
+        return True
+      child = child.outer_ctx
+    return False
+
+  def is_loop(self):
+    """
+    :rtype: bool
+    """
+    return self.kind == self.Types.Loop
+
+  def is_cond(self):
+    """
+    :rtype: bool
+    """
+    return self.kind == self.Types.Cond
+
+  @property
+  def outer_ctx(self):
+    """
+    :rtype: ControlFlowContext|None
+    """
+    return self._outer_ctx
+
+  @property
+  def tf_control_flow_ctx(self):
+    """
+    :rtype: tensorflow.python.ops.control_flow_ops.ControlFlowContext|None
+    """
+    return self._tf_control_flow_ctx
+
+  @tf_control_flow_ctx.setter
+  def tf_control_flow_ctx(self, ctx):
+    """
+    :param tensorflow.python.ops.control_flow_ops.ControlFlowContext ctx:
+    """
+    if self.is_loop():
+      assert ctx.IsWhileContext()
+    if self.is_cond():
+      assert ctx.IsCondContext()
+    self._tf_control_flow_ctx = ctx
+
+  @property
+  def loop_spatial_dim(self):
+    """
+    :rtype: DimensionTag|None
+    """
+    assert self.is_loop()
+    return self._loop_spatial_dim
+
+  @loop_spatial_dim.setter
+  def loop_spatial_dim(self, dim):
+    """
+    :param DimensionTag dim:
+    """
+    assert self.is_loop()
+    self._loop_spatial_dim = dim

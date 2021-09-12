@@ -4578,7 +4578,7 @@ def new_seq_len(func, key, dim_tag_desc, **kwargs):
     base_out_tag.set_tag_on_size_tensor(base_out_seq_len)
 
   assert base_out_tag.batch
-  out_tag = base_out_tag.get_for_batch(in_tag.batch)
+  out_tag = base_out_tag.get_for_batch_ctx(batch=in_tag.batch, ctx=in_tag.control_flow_ctx)
   assert out_tag.dyn_size is not None
   return out_tag.dyn_size
 
