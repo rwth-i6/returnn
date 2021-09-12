@@ -1886,7 +1886,9 @@ class Data(object):
     data_opts = self.get_kwargs(include_special_axes=False)
     placeholder = self.placeholder
     if placeholder is not None:
-      placeholder = tf.expand_dims(self.placeholder, batch_dim_axis, name="%s_add_batch_dim" % self.name)
+      from .basic import get_valid_scope_name_from_str
+      placeholder = tf.expand_dims(
+        self.placeholder, batch_dim_axis, name=get_valid_scope_name_from_str("%s_add_batch_dim" % self.name))
       if not isinstance(batch.dim, int) or batch.dim != 1:
         tiles = [1] * batch_dim_axis + [batch.dim] + [1] * (self.batch_ndim - batch_dim_axis)
         placeholder = tf.tile(placeholder, tiles)
