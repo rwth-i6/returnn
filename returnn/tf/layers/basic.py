@@ -886,8 +886,8 @@ class SliceNdLayer(_ConcatInputLayer):
     if isinstance(size, int):
       tag = DimensionTag(
         kind=DimensionTag.Types.Spatial,
-        description="time_sliced",
-        batch=start_data.batch,
+        description="sliced-time:%s" % self.get_absolute_name(),
+        batch=self.output.batch,
         dimension=size)
     else:
       # in this case, size is not known before runtime and becomes dynamic
@@ -900,8 +900,8 @@ class SliceNdLayer(_ConcatInputLayer):
         dyn_size = tf.maximum(tf.reduce_max(seq_lens - start_t, axis=reduce_axes), 0)  # (B,)
       tag = DimensionTag(
         kind=DimensionTag.Types.Spatial,
-        description="time_sliced",
-        batch=start_data.batch,
+        description="sliced-time:%s" % self.get_absolute_name(),
+        batch=self.output.batch,
         dyn_size=dyn_size)
     indices_data = indices_data.copy_add_dim_by_tag(tag, unbroadcast=True, axis=start_data.batch_ndim)
     # [start+0, start+1, ...]
@@ -946,7 +946,7 @@ class SliceNdLayer(_ConcatInputLayer):
     :param int|None size:
     :rtype: Data
     """
-    from returnn.tf.util.data import DimensionTag
+    from ..util.data import DimensionTag
     start_data = start.output.copy_as_batch_major()
     input_data = sources[0].output.copy_as_batch_major()
     input_t = input_data.placeholder
