@@ -59,6 +59,9 @@ class ExternData(object):
       # This is also what we use here, i.e.:
       # batch_dim_axis=0, time_dim_axis=1. See TFEngine.DataProvider._get_next_batch().
       self.data[key] = Data(name=key, auto_create_placeholders=auto_create_placeholders, **init_args)
+    # The default input has an effect on the order of data keys,
+    # and thus this will be preferred for some global information like batch info.
+    self.default_input = config.value('default_input', 'data')
     self.default_target = config.value('target', 'classes')
     any_available_for_inference = any(data.available_for_inference for data in self.data.values())
     if not any_available_for_inference:
