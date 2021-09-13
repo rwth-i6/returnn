@@ -3708,6 +3708,43 @@ def test_regression_choice():
   engine.finalize()
 
 
+def test_engine_create_network_varying_flags():
+  config = Config()
+  config.update({
+    "model": "%s/model" % _get_tmp_dir(),
+    "num_outputs": 3,
+    "num_inputs": 2,
+    "network":  {
+      "enc0": {"class": "linear", "from": "data", "activation": "sigmoid", "n_out": 3},
+      "enc": {"class": "reduce", "axis": "T", "mode": "mean", "from": "enc0"},
+      "output": {
+        "class": "rec", "from": [], "target": "classes", "max_seq_len": 10,
+        "unit": {
+          "embed": {"class": "linear", "from": "prev:output", "activation": "sigmoid", "n_out": 3},
+          "prob": {"class": "softmax", "from": ["embed", "base:enc"], "loss": "ce", "target": "classes"},
+          "output": {"class": "choice", "beam_size": 4, "from": "prob", "target": "classes", "initial_output": 0},
+          "end": {"class": "compare", "from": "output", "value": 0}
+        }
+      },
+    },
+  })
+  engine = Engine(config=config)
+  engine.create_network(
+    config=config, rnd_seed=0, train_flag=False, eval_flag=False, search_flag=False,
+    net_dict=config.typed_dict['network'])
+  engine.create_network(
+    config=config, rnd_seed=0, train_flag=True, eval_flag=False, search_flag=False,
+    net_dict=config.typed_dict['network'])
+  engine.create_network(
+    config=config, rnd_seed=0, train_flag=False, eval_flag=True, search_flag=False,
+    net_dict=config.typed_dict['network'])
+  engine.create_network(
+    config=config, rnd_seed=0, train_flag=False, eval_flag=False, search_flag=True,
+    net_dict=config.typed_dict['network'])
+
+  engine.finalize()
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
