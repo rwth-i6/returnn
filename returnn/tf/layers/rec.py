@@ -2261,7 +2261,7 @@ class _SubnetworkRecCell(object):
             assert isinstance(layer, LayerBase)
             if layer_name == "output":
               assert layer.output.have_time_axis()
-              assert rec_layer.output.is_same_time_dim(layer.output)
+              assert layer.output.get_time_dim_tag() in self._time_dim_tags
             # Only unroll if that is the same time dim.
             if not layer.output.mark_same_time(self._time_dim_tags):
               continue
