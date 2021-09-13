@@ -955,7 +955,6 @@ class SliceNdLayer(_ConcatInputLayer):
       tag = DimensionTag(
         kind=DimensionTag.Types.Spatial,
         description="time_sliced",
-        batch=start_data.batch,
         dimension=size)
     else:
       # get tensor of shape (B,) from input to use as dynamic size (start_data has no placeholder here)
