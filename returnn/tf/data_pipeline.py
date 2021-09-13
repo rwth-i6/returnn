@@ -422,6 +422,7 @@ class FeedDictDataProvider(DataProviderBase):
       assert self.batches.has_more()
       assert self.batch_slice is None
       output = self.get_next_batch(consider_batch_slice=False)
+      self.batches.advance(1)
     else:
       output = self.queue.get()
     assert isinstance(output, dict)
