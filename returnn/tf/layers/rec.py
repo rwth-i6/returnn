@@ -3287,10 +3287,6 @@ class _SubnetworkRecCell(object):
         return self._get_parent_layer(name[len("base:"):])
       if name in self.input_layers_moved_out:
         return self.input_layers_net.get_layer(name)
-      if name not in self.layer_data_templates:
-        raise LayerNotFound(
-          "layer not found: %s/%s" % (self.output_layers_net, name),
-          layer_name=name, network=self.output_layers_net)
       if name in self.output_layers_moved_out or name.startswith("data:") or name == "data":
         # noinspection PyBroadException
         try:
@@ -3299,6 +3295,10 @@ class _SubnetworkRecCell(object):
           print("Exception occurred during output-net construction of layer %r." % name)
           self._handle_construct_exception()
           raise
+      if name not in self.layer_data_templates:
+        raise LayerNotFound(
+          "layer not found: %s/%s" % (self.output_layers_net, name),
+          layer_name=name, network=self.output_layers_net)
       # It means that the layer is inside the loop.
       return get_loop_acc_layer(name)
 
