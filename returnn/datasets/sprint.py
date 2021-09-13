@@ -137,6 +137,7 @@ class SprintDatasetBase(Dataset):
     if self.orth_vocab:
       self.num_outputs["orth_classes"] = (self.orth_vocab.num_labels, 1)
     self.num_outputs["orth"] = (256, 1)
+    self.num_outputs["speaker_name"] = (256, 1)
     self._base_init()
     # At this point, we are ready for data. In case we don't use the Sprint PythonSegmentOrdering
     # (SprintInterface.getSegmentList()), we must call this at least once.
