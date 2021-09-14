@@ -83,6 +83,26 @@ class NotSpecified(object):
     return value
 
 
+class Entity:
+  """
+  This is a generic placeholder which can be used for enums or other identities.
+  By intention it uses object.__eq__ and co, i.e. ``a == b`` iff ``a is b``.
+  The name is just for debugging purpose.
+  This is more efficient than using just the string directly in an enum.
+  """
+  def __init__(self, name=None):
+    """
+    :param str|None name:
+    """
+    self.name = name
+
+  def __str__(self):
+    return self.name
+
+  def __repr__(self):
+    return "<%s>" % self.name
+
+
 class OptionalNotImplementedError(NotImplementedError):
   """
   This can optionally be implemented, but it is not required by the API.
