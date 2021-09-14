@@ -2557,9 +2557,7 @@ class Data(object):
     :rtype: int
     :return: ndim counted with batch-dim
     """
-    if self.batch_dim_axis is not None:
-      return self.ndim + 1
-    return self.ndim
+    return len(self._dim_tags)
 
   @property
   def batch_ndim_dense(self):
