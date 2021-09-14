@@ -799,7 +799,7 @@ class TFNetwork(object):
     if check_existing and name != "data" and not name.startswith("data:"):
       try:
         return self.get_layer(name)
-      except LayerNotFound:
+      except (LayerNotFound, DataNotFound):
         pass  # ok, we will try to construct it then
     if not get_layer:
       # set get_layer to wrap construct_layer
