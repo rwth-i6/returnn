@@ -3520,7 +3520,7 @@ class CustomCheckpointLoader:
     self.obsolete_var_names = [v for v in sorted(self.var_ckpt_names) if v not in self.var_net_names]
     self.custom_param_importers = [
       self.CustomParamImporter(layer=layer, checkpoint_loader=self)
-      for layer in network.layers.values() if layer.custom_param_importer] if network else []
+      for layer in network.get_all_layers_deep() if layer.custom_param_importer] if network else []
 
   def __repr__(self):
     keys = ["filename", "params_prefix", "load_if_prefix", "ignore_missing", "network"]
