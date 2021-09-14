@@ -864,7 +864,6 @@ class SliceNdLayer(_ConcatInputLayer):
     """
     super(SliceNdLayer, self).__init__(**kwargs)
     from returnn.tf.util.basic import where_bc, expand_multiple_dims
-    from returnn.tf.util.data import DimensionTag
     x = self.input_data.copy_as_batch_major()
     seq_lens = x.get_sequence_lengths() if x.is_time_axis_dynamic() else None  # (B,) or None
     self.start = start
@@ -883,14 +882,9 @@ class SliceNdLayer(_ConcatInputLayer):
         size = tf.maximum(size, min_size)
     # build Data object for the position argument of GatherLayer
     indices_data = start_data.copy_template(name="%s_gather_indices" % self.name)
-    if isinstance(size, int):
-      tag = DimensionTag(
-        kind=DimensionTag.Types.Spatial,
-        description="sliced-time:%s" % self.get_absolute_name(),
-        batch=self.output.batch,
-        dimension=size)
-    else:
-      # in this case, size is not known before runtime and becomes dynamic
+    slice_tag = self.output.dim_tags[start_data.batch_ndim]
+    if not isinstance(size, int):
+      # in this case, size is not known before runtime and becomes dynamic and we need to set dyn_size
       if len(seq_lens.shape) == 1:
         dyn_size = tf.maximum(seq_lens - start_t, 0)  # (B,)
       else:
@@ -898,12 +892,8 @@ class SliceNdLayer(_ConcatInputLayer):
         # in order to get shape (B,) instead, we reduce all other axes except the batch axis
         reduce_axes = range(1, len(seq_lens.shape))
         dyn_size = tf.maximum(tf.reduce_max(seq_lens - start_t, axis=reduce_axes), 0)  # (B,)
-      tag = DimensionTag(
-        kind=DimensionTag.Types.Spatial,
-        description="sliced-time:%s" % self.get_absolute_name(),
-        batch=self.output.batch,
-        dyn_size=dyn_size)
-    indices_data = indices_data.copy_add_dim_by_tag(tag, unbroadcast=True, axis=start_data.batch_ndim)
+      slice_tag.dyn_size = dyn_size
+    indices_data = indices_data.copy_add_dim_by_tag(slice_tag, unbroadcast=True, axis=start_data.batch_ndim)
     # [start+0, start+1, ...]
     indices = tf.expand_dims(start_t, -1) + tf.range(0, size)  # e.g. (B, size) or (B, T, size)
     if seq_lens is not None:
@@ -957,22 +947,12 @@ class SliceNdLayer(_ConcatInputLayer):
     from ..util.data import DimensionTag
     start_data = start.output.copy_as_batch_major()
     input_data = sources[0].output.copy_as_batch_major()
-    input_t = input_data.placeholder
     indices_data = start_data.copy_template(name="%s_gather_indices" % name)
-    if isinstance(size, int):
-      tag = DimensionTag(
-        kind=DimensionTag.Types.Spatial,
-        description="time_sliced",
-        dimension=size)
-    else:
-      # get tensor of shape (B,) from input to use as dynamic size (start_data has no placeholder here)
-      dyn_size = tf.repeat(tf.reduce_max(input_t), tf.shape(input_t)[0])
-      dyn_size = tf.cast(dyn_size, tf.int32)
-      tag = DimensionTag(
-        kind=DimensionTag.Types.Spatial,
-        description="time_sliced",
-        batch=start_data.batch,
-        dyn_size=dyn_size)
+    # size might be None here in which case we set the dyn_size in __init__
+    tag = DimensionTag(
+      kind=DimensionTag.Types.Spatial,
+      description="sliced-time:%s" % name,
+      dimension=size)
     indices_data = indices_data.copy_add_dim_by_tag(tag, unbroadcast=True, axis=start_data.batch_ndim)
     position = InternalLayer(network=sources[0].network, name="%s_internal" % indices_data.name, output=indices_data)
     return GatherLayer.get_out_data_from_opts(
