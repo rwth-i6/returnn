@@ -928,6 +928,14 @@ class SliceNdLayer(_ConcatInputLayer):
     placeholder = gather_layer.output.placeholder
     self.output.size_placeholder = gather_layer.output.size_placeholder
     # zero padding
+    # In principle, the padded frames are being ignored
+    # (unless get_padding_info_dict_ref et al are used).
+    # However, you can still end up with gradients for them
+    # in unexpected ways.
+    # Due to our gather implementation,
+    # the gradient flow would go into wrong frames
+    # and might lead to unexpected behavior.
+    # So to be on the safe side, we do the masking here.
     pad_mask = expand_multiple_dims(pad_mask, [-1] * (len(placeholder.shape) - len(pad_mask.shape)))
     self.output.placeholder = where_bc(pad_mask, tf.zeros_like(placeholder), placeholder)
 
