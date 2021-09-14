@@ -228,7 +228,6 @@ def load_data(config, cache_byte_size, files_config_key, **kwargs):
     Dataset.kwargs_update_from_config(config, kwargs)
     data = init_dataset(kwargs)
   elif config.is_typed(files_config_key) and callable(config.typed_value(files_config_key)):
-    # Config contains callable, returning dataset object, load it
     data = init_dataset(config.typed_value(files_config_key))
   else:
     config_str = config.value(files_config_key, "")
