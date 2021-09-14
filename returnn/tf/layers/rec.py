@@ -3221,13 +3221,16 @@ class _SubnetworkRecCell(object):
       assert loop_accumulated is not None, "no layers in loop"
       if name in loop_acc_layers:
         return loop_acc_layers[name]
-      with tf.name_scope(self.layer_data_templates[name].layer_class_type.cls_get_tf_scope_name(name)):
+      in_loop_layer = self.net.get_layer(name)
+      with tf.name_scope(in_loop_layer.cls_get_tf_scope_name(name)):
         acc_ta = loop_accumulated["output_%s" % name]
         acc_ta, latest_layer_choice_name, search_choices, resolved_seq_len = self._opt_search_resolve(
           layer_name=name, acc_ta=acc_ta, final_net_vars=final_net_vars, seq_len=seq_len,
           search_choices_cache=search_choices_cache)
+        # Use the output Data from the in-loop layer,
+        # as this might have set dyn sizes on dim tags.
         output = (
-          self.layer_data_templates[name].output
+          in_loop_layer.output
           .copy_template_adding_time_dim(time_dim_axis=0)
           .copy_template_set_ctx(self.parent_net.get_control_flow_ctx()))
         if latest_layer_choice_name:
