@@ -1441,6 +1441,10 @@ class TFNetwork(object):
     orig_layer_name = layer_name
     if '/' in layer_name:  # path to a sub-layer
       root_layer_name, sub_layer_name = layer_name.split("/", 1)
+      # Check subnet first, in case the subnet layer itself is not created yet (then get_layer would fail).
+      if root_layer_name in self.subnets:
+        subnet = self.subnets[root_layer_name]
+        return subnet.net.get_layer(sub_layer_name)
       root_layer = self.get_layer(root_layer_name)  # get the root-layer (first part of the path)
       sub_layer = root_layer.get_sub_layer(sub_layer_name)  # get the sub-layer from the root-layer
       if not sub_layer:
