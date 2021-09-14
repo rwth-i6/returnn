@@ -1473,9 +1473,18 @@ class _SubnetworkRecCell(object):
         print(s)
       raise
 
-  def _handle_construct_exception(self):
+  def _handle_construct_exception(self, description, exception):
+    """
+    :param str description:
+    :param Exception exception:
+    """
     if not self._template_construction_exceptions:
       return
+    from returnn.tf.network import LayerNotFound, DataNotFound
+    if isinstance(exception, (DataNotFound, LayerNotFound)):
+      return  # pass on. this is maybe caught elsewhere. also other template exceptions are probably not relevant.
+    print("Got exception during %s." % description)
+    print("%s: %s" % (type(exception).__name__, exception))
     from pprint import pprint
     print("We had previous exceptions at template construction, which got resolved, but maybe sth is wrong.")
     print("Template network (check out types / shapes):")
@@ -1605,9 +1614,8 @@ class _SubnetworkRecCell(object):
               "Layer %r has buggy search choices resolution." % layer,
               self.net.debug_search_choices(layer) or "see search choices debug output")
         return layer
-      except Exception:
-        print("Exception occurred during in-loop construction of layer %r." % name)
-        self._handle_construct_exception()
+      except Exception as exc:
+        self._handle_construct_exception(description="in-loop construction of layer %r" % name, exception=exc)
         raise
 
     # Go through needed_outputs, e.g. "output".
@@ -1704,9 +1712,9 @@ class _SubnetworkRecCell(object):
             return constant_with_shape(False, shape=[batch_dim], name="initial_end")
           return cl.get_rec_initial_output(
             batch_dim=batch_dim, rec_layer=self.parent_rec_layer, **self.layer_data_templates[name].kwargs)
-        except Exception:
-          print("Exception occurred during initial-output construction of layer %r." % name)
-          self._handle_construct_exception()
+        except Exception as exc:
+          self._handle_construct_exception(
+            description="initial-output construction of layer %r" % name, exception=exc)
           raise
 
   def _get_init_extra_outputs(self, name):
@@ -1725,9 +1733,9 @@ class _SubnetworkRecCell(object):
           batch_dim = template_layer.get_batch_dim()
           d = cl.get_rec_initial_extra_outputs(
             batch_dim=batch_dim, rec_layer=self.parent_rec_layer, **self.layer_data_templates[name].kwargs)
-        except Exception:
-          print("Exception occurred during initial-extra-output construction of layer %r." % name)
-          self._handle_construct_exception()
+        except Exception as exc:
+          self._handle_construct_exception(
+            description="initial-extra-output construction of layer %r" % name, exception=exc)
           raise
     return d
 
@@ -3159,9 +3167,8 @@ class _SubnetworkRecCell(object):
       # noinspection PyBroadException
       try:
         return self.input_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
-      except Exception:
-        print("Exception occurred during input-net construction of layer %r." % name)
-        self._handle_construct_exception()
+      except Exception as exc:
+        self._handle_construct_exception(description="input-net construction of layer %r" % name, exception=exc)
         raise
 
     # Same scope as the main subnet, so that it stays compatible.
@@ -3293,9 +3300,8 @@ class _SubnetworkRecCell(object):
         # noinspection PyBroadException
         try:
           return self.output_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
-        except Exception:
-          print("Exception occurred during output-net construction of layer %r." % name)
-          self._handle_construct_exception()
+        except Exception as exc:
+          self._handle_construct_exception(description="output-net construction of layer %r" % name, exception=exc)
           raise
       if name not in self.layer_data_templates:
         raise LayerNotFound(
