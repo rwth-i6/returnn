@@ -53,6 +53,7 @@ jobs:
           - TEST=TaskSystem
           - TEST=TaskSystem_SharedMem
           - TEST=TheanoUtil
+          - TEST=tools
           - TEST=Util
         include:
           - action: TEST=TFUtil
