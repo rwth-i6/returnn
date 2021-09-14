@@ -1142,10 +1142,10 @@ def test_rec_RecStepInfoLayer_broadcast_moved_out():
   })
   from test_TFNetworkLayer import make_feed_dict
   with make_scope() as session:
-    net = TFNetwork(config=config)
+    net = TFNetwork(config=config, train_flag=True)
     net.construct_from_dict(net_dict)
     out = net.get_default_output_layer().output
-    out_v = session.run(out.placeholder, feed_dict=make_feed_dict(net.extern_data))
+    out_v = session.run(out.placeholder, feed_dict=make_feed_dict(net.extern_data, same_time=True))
     assert isinstance(out_v, numpy.ndarray)
 
 
