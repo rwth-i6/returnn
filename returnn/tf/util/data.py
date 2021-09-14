@@ -12,7 +12,7 @@ import typing
 import tensorflow as tf
 import traceback
 
-from returnn.util.basic import NotSpecified
+from returnn.util.basic import NotSpecified, Entity
 import returnn.tf.compat as tf_compat
 
 
@@ -34,17 +34,17 @@ class DimensionTag(object):
     Defines possible values for ``kind``.
     """
     Unspecified = None
-    Batch = "batch"
-    Spatial = "spatial"  # also time
-    Time = "spatial"  # we don't treat this as different
-    Feature = "feature"
+    Batch = Entity("batch")
+    Spatial = Entity("spatial")  # also time
+    Time = Spatial  # we don't treat this as different
+    Feature = Entity("feature")
 
   def __init__(self, kind=Types.Unspecified, description=None,
                dimension=None, dyn_size=None, dyn_size_ext=None,
                batch=None, control_flow_ctx=None,
                src_data=None, src_axis=None):
     """
-    :param str|None kind:
+    :param Entity|None kind:
     :param str|None description: the description should be unique
     :param int|None dimension:
     :param tf.Tensor|None dyn_size: e.g. seq_len, (batch,)
@@ -54,6 +54,7 @@ class DimensionTag(object):
     :param Data|None src_data:
     :param int|None src_axis:
     """
+    assert not kind or isinstance(kind, Entity)
     self.kind = kind
     self.description = description
     self.dimension = dimension
