@@ -11,7 +11,7 @@ from returnn.tf.engine import *
 import returnn.tf.util.basic
 from returnn.tf.network import ExternData
 from returnn.config import Config
-from nose.tools import assert_equal, assert_is_instance
+from nose.tools import assert_equal, assert_is_instance, assert_raises
 import unittest
 import numpy
 import numpy.testing
@@ -82,10 +82,11 @@ session = tf_compat.v1.InteractiveSession()
 
 def test_FeedDictDataProvider():
   from returnn.datasets.generating import DummyDataset
+  num_seqs = 2
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
-  dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=num_seqs, seq_len=seq_len)
   dataset.init_seq_order(epoch=1)
 
   extern_data = ExternData()
@@ -94,11 +95,13 @@ def test_FeedDictDataProvider():
   # No Runner instance here but a very simplified version of Runner.run().
   # First we need a custom DataProvider with a custom BatchSetGenerator
   # which will yield only one single batch for the provided sequence idx.
-  seq_idx = 0
   n_batch = 1
-  batch = Batch()
-  batch.add_frames(seq_idx=seq_idx, seq_start_frame=0, length=dataset.get_seq_length(seq_idx))
-  batch_generator = iter([batch])
+  input_batches = []
+  for seq_idx in range(num_seqs):
+    batch = Batch()
+    batch.add_frames(seq_idx=seq_idx, seq_start_frame=0, length=dataset.get_seq_length(seq_idx))
+    input_batches.append(batch)
+  batch_generator = iter(input_batches)
   batches = BatchSetGenerator(dataset, generator=batch_generator)
   from returnn.tf.data_pipeline import FeedDictDataProvider
   data_provider = FeedDictDataProvider(
@@ -106,30 +109,39 @@ def test_FeedDictDataProvider():
     data_keys=["data", "classes"],
     dataset=dataset, batches=batches)
 
-  feed_dict, meta = data_provider.get_feed_dict(single_threaded=True)
-  print(feed_dict, meta)
-  assert_is_instance(feed_dict, dict)
-  assert extern_data.data["data"].placeholder in feed_dict
-  assert extern_data.data["data"].size_placeholder[0] in feed_dict
-  assert extern_data.data["classes"].placeholder in feed_dict
-  assert extern_data.data["classes"].size_placeholder[0] in feed_dict
-  data = feed_dict[extern_data.data["data"].placeholder]
-  data_size = feed_dict[extern_data.data["data"].size_placeholder[0]]
-  classes = feed_dict[extern_data.data["classes"].placeholder]
-  classes_size = feed_dict[extern_data.data["classes"].size_placeholder[0]]
-  assert_is_instance(data, numpy.ndarray)
-  assert_is_instance(data_size, numpy.ndarray)
-  assert_is_instance(classes, numpy.ndarray)
-  assert_is_instance(classes_size, numpy.ndarray)
-  assert_equal(data.shape, (n_batch, seq_len, n_data_dim))
-  assert_equal(data_size.shape, (n_batch,))
-  assert_equal(classes.shape, (n_batch, seq_len))
-  assert_equal(classes_size.shape, (n_batch,))
-  assert_equal(list(data_size), [seq_len])
-  assert_equal(list(classes_size), [seq_len])
-  numpy.testing.assert_almost_equal(list(data[0, 0]), [-0.5, -0.4])
-  numpy.testing.assert_almost_equal(list(data[0, -1]), [0.3, 0.4])
-  assert_equal(classes.tolist(), [[1, 2, 0, 1, 2]])
+  # The values that happen to be produced by DummyDataset for the two sequences.
+  expected_first_data = [[-0.5, -0.4], [-0.4, -0.3]]
+  expected_last_data = [[0.3, 0.4], [ 0.4, -0.5]]
+  expected_classes = [[1, 2, 0, 1, 2], [2, 0, 1, 2, 0]]
+
+  for seq_idx in range(num_seqs):
+    feed_dict, meta = data_provider.get_feed_dict(single_threaded=True)
+    print(feed_dict, meta)
+    assert_is_instance(feed_dict, dict)
+    assert extern_data.data["data"].placeholder in feed_dict
+    assert extern_data.data["data"].size_placeholder[0] in feed_dict
+    assert extern_data.data["classes"].placeholder in feed_dict
+    assert extern_data.data["classes"].size_placeholder[0] in feed_dict
+    data = feed_dict[extern_data.data["data"].placeholder]
+    data_size = feed_dict[extern_data.data["data"].size_placeholder[0]]
+    classes = feed_dict[extern_data.data["classes"].placeholder]
+    classes_size = feed_dict[extern_data.data["classes"].size_placeholder[0]]
+    assert_is_instance(data, numpy.ndarray)
+    assert_is_instance(data_size, numpy.ndarray)
+    assert_is_instance(classes, numpy.ndarray)
+    assert_is_instance(classes_size, numpy.ndarray)
+    assert_equal(data.shape, (n_batch, seq_len, n_data_dim))
+    assert_equal(data_size.shape, (n_batch,))
+    assert_equal(classes.shape, (n_batch, seq_len))
+    assert_equal(classes_size.shape, (n_batch,))
+    assert_equal(list(data_size), [seq_len])
+    assert_equal(list(classes_size), [seq_len])
+    numpy.testing.assert_almost_equal(list(data[0, 0]), expected_first_data[seq_idx])
+    numpy.testing.assert_almost_equal(list(data[0, -1]), expected_last_data[seq_idx])
+    assert_equal(classes.tolist(), [expected_classes[seq_idx]])
+
+  with assert_raises(AssertionError):  # assert that there are batches left should fail
+    feed_dict, meta = data_provider.get_feed_dict(single_threaded=True)
 
 
 def test_DatasetDataProvider():
