@@ -3506,6 +3506,42 @@ def test_reclayer_optimize_out_cum_concat_gen_self_att():
     })
 
 
+def test_reclayer_optimize_out_accum_loop_dyn_size():
+  # We want to test for the case where some layer inside the loop
+  # generates some dyn size of shape [B] which is different in each loop frame.
+  # So outside the loop, the accumulated dyn size should be of shape [T,B] or [B,T].
+  # To test this, we first generate some random seq lens based on the input data (shape [B,T,D]).
+  from returnn.tf.util.basic import py_print
+
+  def _eval_seq_lens(source, **_kwargs):
+    # Get some random varying seq lens.
+    res = tf.cast(4. * source(0) / source(1) + 0.3 * tf.cast(source(2), tf.float32), tf.int32) + 1
+    res = py_print(res, ["seq lens", res, "step :i", source(2)])
+    return res
+
+  check_reclayer_optimize_out(
+    subnet_layer_dict={"class": "linear", "from": "combine", "activation": None, "n_out": 3},
+    other_subnet_layers={
+      "exp_data": {"class": "activation", "from": "data:source", "activation": "exp"},  # >0
+      "sum_exp_data": {"class": "reduce", "mode": "sum", "from": "exp_data", "axis": "F"},  # [B]
+      "seq_lens": {
+        "class": "eval", "from": ["sum_exp_data", "base:max_sum_exp_data", ":i"],
+        "out_type": {"dtype": "int32"},
+        "eval": _eval_seq_lens},  # [B]
+      "range": {"class": "range_from_length", "from": "seq_lens"},  # [T_new]
+      "combine": {
+        "class": "eval", "from": ["data:source", "range"],
+        "eval": "source(0) + 0.1 * tf.cast(source(1), tf.float32)"},  # [B,T_new,D]
+    },
+    shared_base_net={
+      "exp_data": {"class": "activation", "from": "data", "activation": "exp"},  # >0
+      "sum_exp_data": {"class": "reduce", "mode": "sum", "from": "exp_data", "axis": "F"},  # [B,T]
+      "max_sum_exp_data": {
+        "class": "reduce", "mode": "max", "from": "sum_exp_data", "axis": "T",
+        "is_output_layer": True},  # [B]
+    })
+
+
 def test_reclayer_optimize_out_dot():
   # Used for multi-head dot-attention.
   AttNumHeads = 4
