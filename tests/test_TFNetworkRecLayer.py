@@ -6576,8 +6576,18 @@ def test_generalized_non_rec_self_attention():
     params_new = net.get_layer("qkv").params  # W
     assert params_old and params_new and len(params_old) == len(params_new) == 1
     session.run(params_new["W"].assign(params_old["QKV"]))
-    out_new = session.run(out_old_data.placeholder, feed_dict=feed_dict)
-    assert numpy.allclose(out_old, out_new)
+    out_new = session.run(out_new_data.placeholder, feed_dict=feed_dict)
+    assert isinstance(out_old, numpy.ndarray) and isinstance(out_new, numpy.ndarray)
+    assert out_new.shape == out_old.shape
+    n_batch, n_time, n_dim = out_new.shape
+    seq_lens = session.run(in_data.get_sequence_lengths(), feed_dict=feed_dict)
+    assert isinstance(seq_lens, numpy.ndarray)
+    assert (n_batch,) == seq_lens.shape
+    assert max(seq_lens) == n_time
+    for b in range(n_batch):
+      for t in range(seq_lens[b]):
+        v1, v2 = out_old[b, t], out_new[b, t]
+        numpy.testing.assert_allclose(v1, v2, rtol=1e-4)
 
 
 def test_cumulated_attention_weights_search():
