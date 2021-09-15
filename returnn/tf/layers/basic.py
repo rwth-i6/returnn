@@ -11,7 +11,7 @@ import typing
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
 from returnn.util.basic import unicode, NotSpecified
-from returnn.tf.util.data import Data, SearchBeam
+from returnn.tf.util.data import Data, SearchBeam, DimensionTag
 from returnn.tf.util.basic import OutputWithActivation, dimshuffle, swapaxes
 from returnn.log import log
 from .base import LayerBase, Loss, InternalLayer, SearchChoices
@@ -3614,6 +3614,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
 
   # noinspection PyUnusedLocal
   def __init__(self, switch_axes=None, size_base=None, set_axes=None,
+               set_dim_tags=None,
                enforce_batch_major=False, enforce_time_major=False,
                set_sparse=None, set_sparse_dim=NotSpecified, increase_sparse_dim=None,
                **kwargs):
@@ -3623,12 +3624,17 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param dict[str,int|str] set_axes:
       This can be used to overwrite the special axes like time_dim_axis or feature_dim_axis.
       For that, use keys "B","T" or "F", and a value via :func:`Data.get_axis_from_description`.
+    :param dict[str|DimensionTag,DimensionTag] set_dim_tags: axis -> new dim tag. assigns new dim tags.
+      If the dim tag is yet undefined, this will not use same_dim_tags_as (declare_same_as)
+      but create a new dim tag.
+      This option is useful for generalized self attention (https://github.com/rwth-i6/returnn/issues/391).
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
     :param bool|None set_sparse: if bool, set sparse value to this
     :param int|None|NotSpecified set_sparse_dim: set sparse dim to this. assumes that it is sparse
     :param int|None increase_sparse_dim: add this to the dim. assumes that it is sparse
     """
+    from returnn.tf.util.basic import get_valid_scope_name_from_str
     super(ReinterpretDataLayer, self).__init__(**kwargs)
     self.size_base = size_base
     input_data = self.input_data
@@ -3636,6 +3642,20 @@ class ReinterpretDataLayer(_ConcatInputLayer):
       input_data = input_data.copy_as_batch_major()
     if enforce_time_major:
       input_data = input_data.copy_as_time_major()
+    if set_dim_tags:
+      for axis, new_tag in set_dim_tags.items():
+        axis_int = input_data.get_axis_from_description(axis, allow_int=False)
+        old_tag = input_data.dim_tags[axis_int]
+        assert new_tag.dimension == old_tag.dimension
+        new_tag = new_tag.get_for_batch_ctx(input_data.batch, input_data.control_flow_ctx)
+        if new_tag.dimension is None and not new_tag.dyn_size_ext:  # still undefined
+          assert old_tag.dyn_size_ext
+          new_dyn_size_ext = old_tag.dyn_size_ext.copy(name="%s_size" % (new_tag.description or "<unnamed>"))
+          # Need to create new size tensor as long as we have get_tag_from_size_tensor.
+          new_dyn_size_ext.placeholder = tf.identity(
+            new_dyn_size_ext.placeholder, name=get_valid_scope_name_from_str(new_dyn_size_ext.name))
+          new_tag.set_tag_on_size_tensor(new_dyn_size_ext.placeholder)
+          new_tag.dyn_size_ext = new_dyn_size_ext
     self.output.placeholder = input_data.placeholder
     if len(self.sources) == 1:
       self.output_loss = self.sources[0].output_loss
@@ -3668,6 +3688,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
   @classmethod
   def get_out_data_from_opts(cls, name, sources,
                              switch_axes=None, size_base=None, set_axes=None,
+                             set_dim_tags=None,
                              enforce_batch_major=False, enforce_time_major=False,
                              set_sparse=None, set_sparse_dim=NotSpecified, increase_sparse_dim=None,
                              **kwargs):
@@ -3677,6 +3698,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
     :param LayerBase|None size_base: similar as size_target
     :param dict[str,int] set_axes:
+    :param dict[str|DimensionTag,DimensionTag] set_dim_tags:
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
     :param bool|None set_sparse: if bool, set sparse value to this
@@ -3726,6 +3748,10 @@ class ReinterpretDataLayer(_ConcatInputLayer):
       out.size_placeholder = {
         i: size_base.output.size_placeholder[j]
         for (i, j) in zip(sorted(out.size_placeholder), sorted(size_base.output.size_placeholder))}
+    if set_dim_tags:
+      for axis, tag in set_dim_tags.items():
+        axis_int = out.get_axis_from_description(axis)
+        out = out.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=tag)
     if set_sparse is not None:
       assert isinstance(set_sparse, bool)
       out.sparse = set_sparse
