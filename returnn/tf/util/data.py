@@ -103,7 +103,7 @@ class DimensionTag(object):
 
   def copy(self, kind=None):
     """
-    :param str|None kind: if set, overwrites self.kind
+    :param Entity|None kind: if set, overwrites self.kind
     :return: copy, maybe as new kind. setting same_as to self
     :rtype: DimensionTag
     """
