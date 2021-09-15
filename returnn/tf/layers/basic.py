@@ -2148,6 +2148,62 @@ class RangeInAxisLayer(LayerBase):
     return Data(**data_opts)
 
 
+class RangeFromLengthLayer(LayerBase):
+  """
+  Given some dynamic sequence lengths as input, this creates a tf.range over the implied dimension.
+  As a side effect, this can create a new dyn dim tag for the given sequence lengths.
+  This side effect can be the main functionality in certain use cases.
+  See also :class:`RangeInAxisLayer`.
+
+  Consider the example::
+
+    y: {class: range_in_axis, from: x, axis: T}
+
+  This is basically equivalent to::
+
+    x_len: {class: length, from: x}
+    y: {class: range_from_length, from: x_len}
+
+  """
+  layer_class = "range_from_length"
+  recurrent = True
+
+  # noinspection PyUnusedLocal
+  def __init__(self, dtype="int32", sparse=False, **kwargs):
+    """
+    :param str axis:
+    :param str dtype:
+    :param bool sparse:
+    """
+    super(RangeFromLengthLayer, self).__init__(**kwargs)
+    source = self.sources[0].output
+    assert source.placeholder is self.output.dim_tags[0].dyn_size_ext.placeholder
+    out = tf.range(0, tf.reduce_max(source.placeholder), dtype=dtype)
+    self.output.placeholder = out
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, dtype="int32", sparse=False, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param str dtype:
+    :param bool sparse:
+    """
+    assert len(sources) == 1, "%s layer %r requires single source" % (cls, name)
+    source = sources[0].output
+    dim_tag = None
+    if source.placeholder is not None:
+      dim_tag = DimensionTag.get_tag_from_size_tensor(source.placeholder)
+    if not dim_tag:
+      dim_tag = DimensionTag(
+        kind=DimensionTag.Types.Spatial, description="%s_input_len" % name,
+        batch=source.batch, control_flow_ctx=source.control_flow_ctx,
+        dyn_size_ext=source)
+      if source.placeholder is not None:
+        dim_tag.set_tag_on_size_tensor(source.placeholder)
+    return Data(name="%s_output" % name, dim_tags=[dim_tag], dtype=dtype, sparse=sparse, dim=None)
+
+
 class BatchSoftmaxLayer(_ConcatInputLayer):
   """
   Softmax over spacial and feature axis
