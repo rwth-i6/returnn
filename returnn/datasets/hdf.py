@@ -280,9 +280,9 @@ class HDFDataset(CachedDataset):
     start_pos = self.file_seq_start[file_idx][real_file_seq_idx]
     end_pos = self.file_seq_start[file_idx][real_file_seq_idx + 1]
 
-    if key == "data":
+    if key == "data" and self.num_inputs > 0:
       if "inputs" not in self.cached_h5_datasets[file_idx]:
-        assert "inputs" in fin, "'data' key is reserved for 'inputs' in the HDF file, but 'inputs' does not exist."
+        assert "inputs" in fin
         self.cached_h5_datasets[file_idx]["inputs"] = fin["inputs"]  # cached for efficiency, see comment in __init__()
 
       inputs = self.cached_h5_datasets[file_idx]["inputs"]
