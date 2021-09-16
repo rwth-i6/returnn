@@ -887,14 +887,16 @@ class SliceNdLayer(_ConcatInputLayer):
     assert slice_tag.description.startswith("sliced-time:")
     if not isinstance(size, int):
       # in this case, size is not known before runtime and becomes dynamic and we need to set dyn_size
-      if len(seq_lens.shape) == 1:
-        dyn_size = tf.maximum(seq_lens - start_t, 0)  # (B,)
-      else:
-        # in this case, we would normally get a dynamic size of shape (B,T) for the slices
-        # in order to get shape (B,) instead, we reduce all other axes except the batch axis
-        reduce_axes = range(1, len(seq_lens.shape))
-        dyn_size = tf.maximum(tf.reduce_max(seq_lens - start_t, axis=reduce_axes), 0)  # (B,)
-      slice_tag.dyn_size = dyn_size
+      dyn_size = tf.maximum(seq_lens - start_t, 0)  # (B,) or (B,T)
+      dyn_size_ext = Data(
+        name=("%s:dyn_size" % slice_tag.description),
+        dtype=Data.size_dtype,
+        placeholder=dyn_size,
+        dim_tags=start_data.dim_tags,
+        batch=slice_tag.batch,
+        beam=self.output.beam,
+        control_flow_ctx=slice_tag.control_flow_ctx)
+      slice_tag.dyn_size_ext = dyn_size_ext
     gather_positions_data = start_data.copy_template(name="%s_gather_positions" % self.name)
     gather_positions_data = gather_positions_data.copy_add_dim_by_tag(
       slice_tag,
