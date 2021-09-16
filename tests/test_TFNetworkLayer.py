@@ -2661,6 +2661,7 @@ def test_SliceNdLayer_dyn_size():
       for t in range(max_size):
         numpy.testing.assert_equal(orig_seq[t], out[b, t])
 
+
 def test_SliceNdLayer_multidimensional_start():
   with make_scope() as session:
     n_out = 5
@@ -2707,6 +2708,7 @@ def test_SliceNdLayer_multidimensional_start():
         orig_seq = numpy.where((numpy.arange(s, s + max_size) >= seq_lens[b])[:, None], 0.0, orig_seq)
         for t2 in range(max_size):
           numpy.testing.assert_equal(orig_seq[t2], segments[b, t, t2])
+
 
 def test_WindowLayer_output_placeholder():
   with make_scope() as session:
