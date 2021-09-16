@@ -3991,23 +3991,22 @@ class ConvLayer(_ConcatInputLayer):
       self.output_before_activation = OutputWithActivation(y)
     y = self.output_before_activation.y
     self.output.placeholder = y
-    self.output.size_placeholder = {
-      i: input_data.size_placeholder[i]
-      for i in input_data.get_spatial_axes()
-      if i in input_data.size_placeholder}
-    index_shift = self.output.get_spatial_axes()[0]
-    for i, size in list(self.output.size_placeholder.items()):
-      with tf_util.same_control_flow_ctx(size):
-        size = self.calc_out_dim(
-          in_dim=size,
-          filter_size=filter_size[i - index_shift], stride=strides[i - index_shift],
-          dilation_rate=dilation_rate[i - index_shift], padding=padding)
-      if not DimensionTag.get_tag_from_size_tensor(size):
-        tag = DimensionTag(
-          description="spatial:%i:%s" % (i, self.get_absolute_name()),
-          kind=DimensionTag.Types.Spatial, batch=self.output.batch)
-        tag.set_tag_on_size_tensor(size)
-      self.output.size_placeholder[i] = size
+    index_shift = self.output.get_spatial_batch_axes()[0]
+    for i, in_axis in enumerate(input_data.get_spatial_batch_axes()):
+      in_tag = input_data.dim_tags[in_axis]
+      if in_tag.dimension is None and in_tag.dyn_size is not None:
+        size = in_tag.dyn_size
+        with tf_util.same_control_flow_ctx(size):
+          size = self.calc_out_dim(
+            in_dim=size,
+            filter_size=filter_size[i], stride=strides[i],
+            dilation_rate=dilation_rate[i], padding=padding)
+        out_tag = self.output.dim_tags[i + index_shift]
+        size_tag = DimensionTag.get_tag_from_size_tensor(size)
+        if not size_tag:
+          out_tag.set_tag_on_size_tensor(size, batch=in_tag.batch)
+        else:
+          out_tag.declare_same_as(size_tag)
 
   @classmethod
   def _transform_input(cls, input_data, input_expand_dims, input_split_feature_dim, input_add_feature_dim):
@@ -4066,14 +4065,26 @@ class ConvLayer(_ConcatInputLayer):
     else:
       raise Exception("invalid padding %r" % padding)
 
-  # noinspection PyUnusedLocal
   @classmethod
-  def _get_out_type_from_opts(cls, n_out, filter_size, padding, strides=1, dilation_rate=1, sources=(),
-                              input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None,
-                              auto_use_channel_first=False,
-                              **kwargs):
+  def get_out_data_from_opts(
+        cls, name, n_out, filter_size, padding, strides=1, dilation_rate=1, sources=(),
+        input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None,
+        auto_use_channel_first=False,
+        **kwargs):
+    """
+    :param str name:
+    :param int n_out:
+    :param tuple[int] filter_size:
+    :param str padding:
+    :param int|tuple[int] strides:
+    :param int|tuple[int] dilation_rate:
+    :param list[LayerBase]|tuple[LayerBase] sources:
+    :param int input_expand_dims: number of dynamic dims to add to the input
+    :param bool input_add_feature_dim:
+    :param None|int input_split_feature_dim:
+    :param bool auto_use_channel_first:
+    """
     input_data = get_concat_sources_data_template(sources)
-    shape = [None] * len(filter_size) + [n_out]
     if isinstance(strides, int):
       strides = [strides] * len(filter_size)
     else:
@@ -4092,36 +4103,32 @@ class ConvLayer(_ConcatInputLayer):
       input_expand_dims=input_expand_dims,
       input_split_feature_dim=input_split_feature_dim,
       input_add_feature_dim=input_add_feature_dim)
+    data = input_data.copy_as_batch_spatial_major()  # just to have the dim tags in order [B,S...,D]
     # Be relaxed about incorrect input data. Throw errors later. This can also work during template construction.
-    if len(input_data.get_spatial_axes()) >= len(filter_size):
-      # Maybe we have a chance to correctly define the output shapes.
-      index_shift = input_data.get_spatial_axes()[0]
-      for i in range(len(filter_size)):
-        if input_data.shape[i + index_shift] is not None:
-          shape[i] = cls.calc_out_dim(
-            in_dim=input_data.shape[i + index_shift],
-            filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
+    old_spatial_dim_tags = data.dim_tags[1:-1]
+    dim_tags = [data.dim_tags[0]]  # [B]
+    for i in range(len(filter_size)):
+      old_tag = old_spatial_dim_tags[i] if i < len(old_spatial_dim_tags) else None
+      if old_tag and (filter_size[i] == strides[i] == 1 or (strides[i] == 1 and padding == "SAME")):
+        dim_tags.append(old_tag)  # identity in this axis
+        continue
+      new_dim = None
+      if old_tag and old_tag.dimension is not None:
+        new_dim = ConvLayer.calc_out_dim(
+          in_dim=old_tag.dimension,
+          filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
+      dim_tags.append(DimensionTag(
+        kind=DimensionTag.Types.Spatial, description="%s:conv:s%i" % (name, i), dimension=new_dim,
+        derived_from_tag=old_tag, undefined=not old_tag))
+    dim_tags.append(DimensionTag(kind=DimensionTag.Types.Feature, description="%s:channel" % name, dimension=n_out))
     feature_dim_axis = NotSpecified
     # Swap the dims if the input dim order doesn't fit the flag auto_use_channel_first.
     if tf_util.is_gpu_available_in_session() and (auto_use_channel_first or input_data.is_batch_feature_major):
       feature_dim_axis = 1
-      shape = shape[-1:] + shape[:-1]
-    return {
-      "dim": n_out,
-      "shape": shape,
-      "batch_dim_axis": 0,
-      "feature_dim_axis": feature_dim_axis,
-      "sparse": False}
-
-  @classmethod
-  def get_out_data_from_opts(cls, **kwargs):
-    """
-    Via :func:`_get_out_type_from_opts`.
-
-    :rtype: Data
-    """
-    out_type = cls._get_out_type_from_opts(**kwargs)
-    return super(ConvLayer, cls).get_out_data_from_opts(out_type=out_type, **kwargs)
+      dim_tags = dim_tags[:1] + dim_tags[-1:] + dim_tags[1:-1]
+    return Data(
+      name="%s_output" % name, dim_tags=dim_tags, dim=n_out, feature_dim_axis=feature_dim_axis,
+      batch=data.batch, beam=data.beam, control_flow_ctx=data.control_flow_ctx)
 
   def get_dep_layers(self):
     """
