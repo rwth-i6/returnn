@@ -1005,6 +1005,51 @@ def test_CombineLayer_time_broadcast_swapped():
     assert out_v.shape == (n_batch, n_features, n_time)
 
 
+def test_CombineLayer_RangeFromLengthLayer():
+  from returnn.tf.util.basic import py_print
+
+  def _eval_seq_lens(source, **_kwargs):
+    # Get some random varying seq lens.
+    res = tf.cast(6.3 * tf.maximum(source(0), 0.), tf.int32) + 1
+    res = py_print(res, ["seq lens", res])
+    return res
+
+  net_dict = {
+    "data_red1": {
+      "class": "reduce", "from": "data", "axis": "T", "mode": "mean"},  # [B,D]
+    "data_red2": {
+      "class": "reduce", "from": "data_red1", "axis": "F", "mode": "sum"},  # [B]
+    "seq_lens": {
+      "class": "eval", "from": "data_red2",
+      "out_type": {"dtype": "int32"},
+      "eval": _eval_seq_lens},  # [B]
+    "range": {"class": "range_from_length", "from": "seq_lens"},  # [T_new]
+    "combine": {
+      "class": "eval", "from": ["data_red1", "range"],
+      "eval": "source(0) + 0.1 * tf.cast(source(1), tf.float32)"},  # [B,T_new,D]
+    "output": {"class": "copy", "from": "combine"},
+  }
+
+  config = Config({
+    "debug_print_layer_output_template": True,
+    "extern_data": {"data": {"dim": 13}},
+  })
+
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    in_data = net.extern_data.get_default_input_data()
+    net.construct_from_dict(net_dict)
+    out_data = net.get_default_output_layer().output
+    seq_lens_data = net.get_layer("seq_lens").output
+    assert out_data.batch_ndim == in_data.batch_ndim == 3
+    assert out_data.dim_tags[0] == in_data.dim_tags[0] and out_data.dim_tags[0].is_batch_dim()
+    out_time = out_data.get_time_dim_tag()
+    assert out_time.dyn_size_ext.placeholder is seq_lens_data.placeholder
+    assert out_time not in in_data.dim_tags
+    feed_dict = make_feed_dict(net.extern_data)
+    session.run((out_data.placeholder, out_data.get_sequence_lengths()), feed_dict=feed_dict)
+
+
 def test_dot_layer_shuffled_remaining_dims_static():
   with make_scope() as session:
     import numpy as np
