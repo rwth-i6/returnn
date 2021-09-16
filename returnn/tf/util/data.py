@@ -335,23 +335,6 @@ class DimensionTag(object):
     """
     return getattr(x, "_is_size_of_dim_tag", None)
 
-  def can_compare(self):
-    """
-    :return: whether we can clearly identify this axis. for axes with dynamic size, we require the dyn_size.
-    :rtype: bool
-    """
-    if self.same_as:
-      return self.same_as.can_compare()
-    if self.kind in [self.Types.Batch, self.Types.Feature]:
-      return True
-    assert self.is_spatial_dim()
-    if self.dimension is not None:
-      return True
-    if self.dyn_size is None:
-      return False
-    assert self.get_tag_from_size_tensor(self.dyn_size).get_same_base() is self
-    return True
-
   def is_equal(self, other, ignore_feature_dim=False, allow_same_feature_dim=False, allow_same_spatial_dim=None,
                treat_feature_as_spatial=False, broadcast_matches=False, unknown_spatial_matches=False,
                undefined_matches=False, derived_matches=False):
@@ -3507,10 +3490,9 @@ class Data(object):
     return self.dim_tags
 
   @classmethod
-  def get_common_data(cls, sources, warnings_out=None, ignore_feature_dim=False):
+  def get_common_data(cls, sources, ignore_feature_dim=False):
     """
     :param list[Data] sources:
-    :param io.TextIOBase|io.StringIO|typing.TextIO|None warnings_out:
     :param bool ignore_feature_dim: when set, the feature dim does not have to match in the sources
     :return: some generic data where the sources should be compatible to (with copy_compatible_to),
       i.e. it contains the union of all axes from all sources (least common multiple).
@@ -3538,50 +3520,19 @@ class Data(object):
       allow_same_spatial_dim=True, broadcast_matches=True,
       undefined_matches=True, derived_matches=True)
     all_dim_tags, tags_dict = DimensionTag.get_all_dimension_tags(sources, is_equal_opts=is_equal_opts)
-    all_dim_tags_, _ = DimensionTag.get_all_dimension_tags(sources)
-    largest_dim_tags, tags_dict_ = DimensionTag.get_all_dimension_tags([common], is_equal_opts=is_equal_opts)
-    tags_dict.update(tags_dict_)
-    # Some dim-tags are maybe not comparable (e.g. undefined time-dim-tag).
-    # We fix this in some cases, i.e. by selecting unique time-dim.
-    defined_var_spatial_tags = [
-      tag for tag in all_dim_tags_
-      if tag.is_spatial_dim() and tag.get_same_base().dyn_size is not None]
-    if len(defined_var_spatial_tags) == 1:
-      for data in sources + [common]:
-        non_comparable_dim_tags = [dim_tag for dim_tag in tags_dict[data] if not dim_tag.can_compare()]
-        non_comparable_dim_tags = DimensionTag.get_uniq_collection(non_comparable_dim_tags, is_equal_opts=is_equal_opts)
-        if len(non_comparable_dim_tags) == 1 and non_comparable_dim_tags[0].kind == DimensionTag.Types.Spatial:
-          non_comparable_dim_tags[0].declare_same_as(defined_var_spatial_tags[0])
-    # Note: We cannot compare len(all_dims_tags) to len(shape) as e.g. shape (B,1,1,D) would have only 3 dim tags.
-    if len(largest_dim_tags) == len(all_dim_tags):
-      return common
-    non_comparable_dim_tags = [dim_tag for dim_tag in largest_dim_tags if not dim_tag.can_compare()]
-    if non_comparable_dim_tags:
-      if warnings_out:
-        from pprint import pformat
-        print(
-          "get_common_data(\n%s),\ndim tags\n%s,\nlargest source\n(%s)\nhas incomplete dim tag info:\n%s" % (
-            pformat(sources), pformat(all_dim_tags), pformat(common), pformat(non_comparable_dim_tags)),
-          file=warnings_out)
-      # The further code would be unreliable, so better have this simple fallback.
-      return common
-    # Ok, there is some other axis (or multiple), or we cannot identify/compare them because of incomplete information.
-    # Try something more complex: Make all axes unique.
+    # Check for potential undefined tags, and replace those with defined tags if possible.
+    for axis, dim_tag in enumerate(common.dim_tags):
+      if dim_tag.undefined:
+        other = DimensionTag.get_existing_tag_from_collection(dim_tag, all_dim_tags, is_equal_opts=is_equal_opts)
+        if other and not other.undefined:
+          # We found another dim tag which matches and which is defined.
+          # Replace it.
+          common = common.copy_template_replace_dim_tag(axis=axis, new_dim_tag=other)
+    # Check for missing tags, and add those.
     for dim_tag in all_dim_tags:
-      if not dim_tag.can_compare():
-        if warnings_out:
-          from pprint import pformat
-          print(
-            "get_common_data(\n%s),\ndim tags\n%s,\ncommon\n(%s),\ncannot compare\n%s" % (
-              pformat(sources), pformat(all_dim_tags), pformat(common), pformat(dim_tag)),
-            file=warnings_out)
-        continue
-      if not DimensionTag.get_existing_tag_from_collection(dim_tag, largest_dim_tags, is_equal_opts=is_equal_opts):
-        largest_dim_tags.append(dim_tag)
+      if not DimensionTag.get_existing_tag_from_collection(dim_tag, common.dim_tags, is_equal_opts=is_equal_opts):
         axis = common.get_default_new_axis_for_dim_tag(dim_tag)
-        common = common.copy_template().copy_add_dim_by_tag(dim_tag, unbroadcast=True, axis=axis)
-    # Simple fallback: Use first with biggest batch_ndim.
-    # Was even simpler before: Use first.
+        common = common.copy_add_dim_by_tag(dim_tag, unbroadcast=True, axis=axis)
     return common
 
   def find_matching_dims(self, dim_tag, is_equal_opts):
