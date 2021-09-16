@@ -827,6 +827,16 @@ def test_Data_get_common_data_tbf_and_bf():
   assert common.batch_ndim == 3
 
 
+def test_Data_get_common_data_tbf_and_bf2():
+  sources = [
+    Data(name='target', shape=(None, 13), batch_dim_axis=1, time_dim_axis=0),
+    Data(name='encoder', shape=(11,), time_dim_axis=None, batch_dim_axis=0)]
+  pprint(sources)
+  common = Data.get_common_data(sources=sources)
+  print("common:", common)
+  assert common.batch_ndim == 4
+
+
 def test_Data_get_common_data_btf_and_bf_get_kwargs_copy_compatible_to():
   s0 = Data(name='location_feedback', shape=(None, 6), batch_dim_axis=0, time_dim_axis=1)
   s1 = Data(name='s_transformed', shape=(6,), time_dim_axis=None, batch_dim_axis=0)
