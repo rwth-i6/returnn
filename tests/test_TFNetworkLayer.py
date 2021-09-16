@@ -705,6 +705,18 @@ def test_CombineLayer_broadcast_multiple():
     assert out_v.shape == out.output.batch_shape
 
 
+def test_CombineLayer_match_unknown():
+  with make_scope() as session:
+    dat1 = Data(name="undefined", shape=(None, 3))
+    # Create placeholders to have this dyn size clearly defined.
+    dat2 = Data(name="defined", shape=(None, 3), auto_create_placeholders=True)
+    net = TFNetwork(extern_data=ExternData())
+    layer1 = InternalLayer(name="layer1_undefined", network=net, output=dat1)
+    layer2 = InternalLayer(name="layer2_defined", network=net, output=dat2)
+    out = CombineLayer.get_out_data_from_opts(name="combine", network=net, sources=[layer1, layer2])
+    assert out.dim_tags[:2] == dat2.dim_tags[:2] and out.batch_shape == dat2.batch_shape
+
+
 def test_CombineLayer_different_batch_axis():
   # ["base:enc_ctx", "weight_feedback", "s_transformed"]
   # base:enc_ctx: Data(name='enc_ctx_output', shape=(None, 14), batch_dim_axis=1)
