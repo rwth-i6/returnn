@@ -820,7 +820,7 @@ def test_Data_copy_add_spatial_dim_added_time_at_end():
 def test_Data_get_common_data_tbf_and_bf():
   sources = [
     Data(name='target', shape=(None, 13), batch_dim_axis=1, time_dim_axis=0),
-    Data(name='encoder', shape=(11,), time_dim_axis=None, batch_dim_axis=0)]
+    Data(name='encoder', shape=(13,), time_dim_axis=None, batch_dim_axis=0)]
   pprint(sources)
   common = Data.get_common_data(sources=sources)
   print("common:", common)
