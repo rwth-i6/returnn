@@ -97,7 +97,7 @@ def concat_sources(src_layers):
     return network.concat_sources_dropout_cache[cache_key].copy()
   data = get_concat_sources_data_template(src_layers)
   # Currently we assume that get_concat_sources_data_template will match Data.get_common_data (besides the dim).
-  common_source = Data.get_common_data([s.output for s in src_layers], ignore_feature_dim=True, warnings_out=log.v4)
+  common_source = Data.get_common_data([s.output for s in src_layers], ignore_feature_dim=True)
   data.size_placeholder = common_source.size_placeholder.copy()  # to get right dimension tags
   layers_data = []
   with _name_scope_for_concat_src_layers(src_layers, "concat_sources"):
@@ -6028,7 +6028,7 @@ class CombineLayer(LayerBase):
     """
     out_type_ = {}
     if sources:
-      out_type_.update(Data.get_common_data([s.output for s in sources], warnings_out=log.v4).get_kwargs())
+      out_type_.update(Data.get_common_data([s.output for s in sources]).get_kwargs())
     if n_out is not NotSpecified:
       out_type_["dim"] = n_out
     out_type_["name"] = "%s_output" % kwargs["name"]
@@ -6269,7 +6269,7 @@ class CompareLayer(LayerBase):
     """
     out_type_ = {}
     if sources:
-      out_type_.update(Data.get_common_data([s.output for s in sources], warnings_out=log.v4).get_kwargs())
+      out_type_.update(Data.get_common_data([s.output for s in sources]).get_kwargs())
     if n_out is not NotSpecified:
       out_type_["dim"] = n_out
     elif out_type_.get("sparse", False):

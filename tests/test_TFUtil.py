@@ -604,14 +604,14 @@ def test_Data_get_common_data_extra_static_spatial():
   d1 = Data(name='t', shape=(None, 32, 128), dtype='float32', auto_create_placeholders=True)
   d2 = Data(name='r', shape=(None, 32, 128), dtype='float32', auto_create_placeholders=True)
   d2.get_size_dim_tag(0).declare_same_as(d1.get_size_dim_tag(0))
-  common = Data.get_common_data([d1, d2], warnings_out=sys.stdout)
+  common = Data.get_common_data([d1, d2])
   assert d1.shape == common.shape
 
 
 def test_Data_get_common_data_broadcast_multiple():
   d1 = Data(name='d_orig', shape=(5, 5, 3), dtype='float32', batch_dim_axis=None)
   d2 = Data(name='d_bc', shape=(5, 1, 1), dtype='float32', batch_dim_axis=None)
-  common = Data.get_common_data([d1, d2], warnings_out=sys.stdout)
+  common = Data.get_common_data([d1, d2])
   assert d1.shape == common.shape
 
 
@@ -619,7 +619,7 @@ def test_Data_get_common_data_extra2_static_spatial():
   d1 = Data(name='t', shape=(None, 32, 32, 128), dtype='float32', auto_create_placeholders=True)
   d2 = Data(name='r', shape=(None, 32, 32, 128), dtype='float32', auto_create_placeholders=True)
   d2.get_size_dim_tag(0).declare_same_as(d1.get_size_dim_tag(0))
-  common = Data.get_common_data([d1, d2], warnings_out=sys.stdout)
+  common = Data.get_common_data([d1, d2])
   assert d1.shape == common.shape
 
 
@@ -638,11 +638,8 @@ def test_Data_get_common_data_one_undefined_time():
   c.sanity_check()
   assert_equal(b.get_time_dim_tag(), c.get_time_dim_tag())
   from returnn.util.basic import StringIO
-  warnings = StringIO()
-  out = Data.get_common_data([a, b, c], warnings_out=warnings)
-  warnings = warnings.getvalue()
+  out = Data.get_common_data([a, b, c])
   print("out:", out)
-  assert not warnings, "got warnings:\n%s" % warnings
   assert out.shape == (None, 1) and out.batch_dim_axis == 0
   assert_equal(out.get_time_dim_tag(), b.get_time_dim_tag())
 
@@ -652,7 +649,7 @@ def test_Data_get_common_data_copy_compatible_to_different_time_dim():
   b = Data(name='b', shape=(None, 3, 5), auto_create_placeholders=True)
   print("a:", a)
   print("b:", b)
-  common_data = Data.get_common_data([a, b], warnings_out=sys.stdout)
+  common_data = Data.get_common_data([a, b])
   print("common:", common_data)
   assert common_data.shape == (None, None, 3, 5) and common_data.batch_dim_axis == 0
   assert_equal(common_data.get_size_dim_tag(0), a.get_time_dim_tag())
@@ -685,7 +682,7 @@ def test_Data_get_common_data_copy_compatible_to_different_time_dim_different_st
   print("a:", a)
   print("b:", b)
   assert_not_equal(a.get_time_dim_tag(), b.get_time_dim_tag())
-  common_data = Data.get_common_data([a, b], warnings_out=sys.stdout)
+  common_data = Data.get_common_data([a, b])
   print("common:", common_data)
   assert common_data.shape.count(None) == 2 and 3 in common_data.shape and 5 in common_data.shape
   assert common_data.batch_ndim == 5
@@ -721,7 +718,7 @@ def test_Data_copy_compatible_to_get_common_data_auto_feature_non_sparse():
   d1 = Data(name='t', shape=(None,), dtype='int32', batch_dim_axis=None, feature_dim_axis=None,
             auto_create_placeholders=True)  # placeholder for specific spatial dim-tag
   d2 = Data(name='r', shape=(6,), dtype='int32', batch_dim_axis=None, time_dim_axis=None)
-  common = Data.get_common_data([d1, d2], warnings_out=sys.stdout)
+  common = Data.get_common_data([d1, d2])
   print("common:", common)
   d1a = d1.copy_compatible_to(common)
   print("d1':", d1a)
@@ -735,7 +732,7 @@ def test_Data_copy_compatible_to_get_common_data_auto_feature_non_sparse():
 def test_Data_copy_compatible_to_get_common_data_no_feature_sparse():
   d1 = Data(name="t", shape=(), dtype='int32', sparse=True, dim=None, time_dim_axis=None)
   d2 = Data(name="r", shape=(6,), dtype='int32', sparse=True, dim=6, batch_dim_axis=None, time_dim_axis=None)
-  common = Data.get_common_data([d1, d2], warnings_out=sys.stdout)
+  common = Data.get_common_data([d1, d2])
   print("common:", common)
   d1a = d1.copy_compatible_to(common)
   print("d1':", d1a)
@@ -825,7 +822,7 @@ def test_Data_get_common_data_tbf_and_bf():
     Data(name='target', shape=(None, 13), batch_dim_axis=1, time_dim_axis=0),
     Data(name='encoder', shape=(11,), time_dim_axis=None, batch_dim_axis=0)]
   pprint(sources)
-  common = Data.get_common_data(sources=sources, warnings_out=sys.stdout)
+  common = Data.get_common_data(sources=sources)
   print("common:", common)
   assert common.batch_ndim == 3
 
@@ -834,7 +831,7 @@ def test_Data_get_common_data_btf_and_bf_get_kwargs_copy_compatible_to():
   s0 = Data(name='location_feedback', shape=(None, 6), batch_dim_axis=0, time_dim_axis=1)
   s1 = Data(name='s_transformed', shape=(6,), time_dim_axis=None, batch_dim_axis=0)
   pprint([s0, s1])
-  common = Data.get_common_data(sources=[s0, s1], warnings_out=sys.stdout)
+  common = Data.get_common_data(sources=[s0, s1])
   print("common:", common)
   assert common.shape == (None, 6)
   assert common.batch_dim_axis == 0
