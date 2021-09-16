@@ -2685,19 +2685,19 @@ def test_SliceNdLayer_multidimensional_start():
             "initial_output": 0,}}}})
     session.run(tf_compat.v1.global_variables_initializer())
     output_layer = net.layers["output"]
-    starts = output_layer.cell.output_layers_net.layers["start"].output.placeholder
-    segments = output_layer.cell.output_layers_net.layers["slices"].output.placeholder
+    starts = output_layer.cell.output_layers_net.layers["start"].output.get_placeholder_as_batch_major()
+    segments = output_layer.cell.output_layers_net.layers["slices"].output.get_placeholder_as_batch_major()
     feed = make_feed_dict(net.extern_data.data.values(), n_batch=n_batch, n_time=max_seq_len, same_time=True)
     starts = session.run(starts, feed_dict=feed)
     segments = session.run(segments, feed_dict=feed)
     seq_lens = feed[net.extern_data.data["data"].size_placeholder[0]]
     input_data = feed[net.extern_data.data["data"].placeholder]
-    max_size = numpy.amax(seq_lens[None, :] - starts)
+    max_size = numpy.amax(seq_lens[:, None] - starts)
     max_size = max(max_size, 0)
     assert segments.shape == (n_batch, max_seq_len, max_size, n_out)
     for b in range(n_batch):
       for t in range(max_seq_len):
-        s = starts[t, b]
+        s = starts[b, t]
         orig_seq = input_data[b, s:]
         if len(orig_seq) < max_size:
           orig_seq = numpy.pad(orig_seq, [(0, max_size - len(orig_seq)), (0, 0)], "constant")
