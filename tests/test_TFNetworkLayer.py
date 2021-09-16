@@ -1786,17 +1786,21 @@ def test_SwitchLayer_masking():
 
 def test_SwitchLayer_template_const_from():
   net = TFNetwork(extern_data=ExternData())
+  batch_dim = DimensionTag(kind=DimensionTag.Types.Batch, description="batch")
+  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
+  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feature", dimension=2)
   # [T]
   condition = InternalLayer(network=net, name="condition", output=Data(
-    "condition_output", batch_dim_axis=None, time_dim_axis=0, feature_dim_axis=None, shape=(None,)))
+    "condition_output", time_dim_axis=0, feature_dim_axis=None, dim_tags=[time_dim]))
   true_from = 42
   # [B,F|2,T]
   false_from = InternalLayer(network=net, name="false_from", output=Data(
-    "false_from_output", batch_dim_axis=0, time_dim_axis=2, feature_dim_axis=1, shape=(2, None), dim=2))
+    "false_from_output", batch_dim_axis=0, time_dim_axis=2, feature_dim_axis=1,
+    dim_tags=[batch_dim, feat_dim, time_dim]))
 
   # should be [B,F|2,T]
-  switch = SwitchLayer.get_out_data_from_opts('switch', condition=condition, true_from=true_from,
-    false_from=false_from)
+  switch = SwitchLayer.get_out_data_from_opts(
+    'switch', condition=condition, true_from=true_from, false_from=false_from)
   assert switch.batch_ndim == 3
   assert switch.batch_dim_axis == 0 and switch.time_dim_axis == 2 and switch.feature_dim_axis == 1
   assert switch.dim == 2
