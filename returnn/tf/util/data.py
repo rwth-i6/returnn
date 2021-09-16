@@ -41,6 +41,7 @@ class DimensionTag(object):
 
   def __init__(self, kind=Types.Unspecified, description=None,
                dimension=None, dyn_size=None, dyn_size_ext=None,
+               undefined=False,
                derived_from_tag=None,
                batch=None, control_flow_ctx=None,
                src_data=None, src_axis=None):
@@ -50,6 +51,7 @@ class DimensionTag(object):
     :param int|None dimension:
     :param tf.Tensor|None dyn_size: e.g. seq_len, (batch,)
     :param Data|None dyn_size_ext: seq_len or extended
+    :param bool undefined: When this is specified as `None` by the user via `shape`.
     :param DimensionTag|None derived_from_tag:
       Whether this new tag is reduced, down/up sampled, padded etc from this given other tag.
       In situations where dim tags are being matched (Data.get_common_data),
@@ -84,6 +86,7 @@ class DimensionTag(object):
       assert not dyn_size_ext
       self.dyn_size = dyn_size
     self._dyn_size_same = set()  # type: typing.Set[tf.Tensor]
+    self._undefined = undefined
     # We can have different tag variants per batch info (e.g. with beam), or per control flow ctx.
     # They each have same_as = self. The same_base should have the base (global) batch info.
     self._same_for_batch_ctx = {}  # type: typing.Dict[typing.Tuple[BatchInfo,typing.Optional[ControlFlowContext]],DimensionTag]  # nopep8
@@ -350,7 +353,8 @@ class DimensionTag(object):
     return True
 
   def is_equal(self, other, ignore_feature_dim=False, allow_same_feature_dim=False, allow_same_spatial_dim=None,
-               treat_feature_as_spatial=False, broadcast_matches=False, unknown_spatial_matches=False):
+               treat_feature_as_spatial=False, broadcast_matches=False, unknown_spatial_matches=False,
+               undefined_matches=False, derived_matches=False):
     """
     Compares self to other for equality.
     Note that the default behavior is very restrictive.
@@ -364,12 +368,16 @@ class DimensionTag(object):
     :param bool treat_feature_as_spatial:
     :param bool broadcast_matches:
     :param bool unknown_spatial_matches:
+    :param bool undefined_matches:
+    :param bool derived_matches:
     :rtype: bool
     """
+    if self is other:  # first some fast path check
+      return True
     if allow_same_spatial_dim is None:
       allow_same_spatial_dim = allow_same_feature_dim
-    self_base = self.get_same_base()
-    other_base = other.get_same_base()
+    self_base = self.get_same_derived_base() if derived_matches else self.get_same_base()
+    other_base = other.get_same_derived_base() if derived_matches else other.get_same_base()
     if self_base is other_base:
       return True
     self_kind = self.kind
@@ -405,6 +413,8 @@ class DimensionTag(object):
           return True
       if unknown_spatial_matches and ((self.dyn_size is None) or (other.dyn_size is None)):
         return True
+      if undefined_matches and (self.undefined or other.undefined):
+        return True
     if self.description == other.description:
       return True
     return False
@@ -437,9 +447,39 @@ class DimensionTag(object):
     """
     :rtype: DimensionTag
     """
-    if self.same_as:
-      return self.same_as.get_same_base()
-    return self
+    base = self
+    while base.same_as:
+      base = base.same_as
+    return base
+
+  def get_same_derived_base(self):
+    """
+    :rtype: DimensionTag
+    """
+    base = self
+    while base.same_as or base.derived_from_tag:
+      if base.same_as:
+        base = base.same_as
+        continue
+      base = base.derived_from_tag
+      assert base
+    return base
+
+  @property
+  def undefined(self):
+    """
+    :rtype: bool
+    """
+    base = self
+    while base.same_as or base.derived_from_tag:
+      if base._undefined:
+        return True
+      if base.same_as:
+        base = base.same_as
+        continue
+      base = base.derived_from_tag
+      assert base
+    return base._undefined
 
   def declare_same_as(self, other):
     """
@@ -3490,7 +3530,8 @@ class Data(object):
       common.beam = SearchBeam.get_combined_beam(*[s.beam for s in sources])
     is_equal_opts = dict(
       ignore_feature_dim=ignore_feature_dim, treat_feature_as_spatial=True,
-      allow_same_spatial_dim=True, broadcast_matches=True)
+      allow_same_spatial_dim=True, broadcast_matches=True,
+      undefined_matches=True, derived_matches=True)
     all_dim_tags, tags_dict = DimensionTag.get_all_dimension_tags(sources, is_equal_opts=is_equal_opts)
     all_dim_tags_, _ = DimensionTag.get_all_dimension_tags(sources)
     largest_dim_tags, tags_dict_ = DimensionTag.get_all_dimension_tags([common], is_equal_opts=is_equal_opts)
@@ -3826,7 +3867,9 @@ def _infer_dim_tags_tuple_from_shape(
       assert tag.is_same_size_tensor(dyn_size)
       continue
     if axis == feature_dim_axis and dyn_size is None and axis != time_dim_axis:
-      tag = DimensionTag(kind=DimensionTag.Types.Feature, dimension=dim, description="feature:%s" % name)
+      tag = DimensionTag(
+        kind=DimensionTag.Types.Feature, dimension=dim, description="feature:%s" % name,
+        undefined=dim is None)
     else:
       assert axis in spatial_axes
       description = "time" if axis == time_dim_axis else "spatial%i" % spatial_axes.index(axis)
@@ -3840,7 +3883,8 @@ def _infer_dim_tags_tuple_from_shape(
         description += ":static%i" % dim
       description += ":%s" % name
       tag = DimensionTag(
-        kind=DimensionTag.Types.Spatial, description=description, dimension=dim, dyn_size=dyn_size)
+        kind=DimensionTag.Types.Spatial, description=description, dimension=dim, dyn_size=dyn_size,
+        undefined=dim is None and dyn_size is None)
     dim_tags[axis] = tag
   assert sorted(dim_tags.keys()) == list(range(len(batch_shape)))
   return tuple(dim_tags[axis] for axis in range(len(batch_shape)))
