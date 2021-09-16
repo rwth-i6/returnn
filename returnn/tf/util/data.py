@@ -41,6 +41,7 @@ class DimensionTag(object):
 
   def __init__(self, kind=Types.Unspecified, description=None,
                dimension=None, dyn_size=None, dyn_size_ext=None,
+               derived_from_tag=None,
                batch=None, control_flow_ctx=None,
                src_data=None, src_axis=None):
     """
@@ -49,6 +50,11 @@ class DimensionTag(object):
     :param int|None dimension:
     :param tf.Tensor|None dyn_size: e.g. seq_len, (batch,)
     :param Data|None dyn_size_ext: seq_len or extended
+    :param DimensionTag|None derived_from_tag:
+      Whether this new tag is reduced, down/up sampled, padded etc from this given other tag.
+      In situations where dim tags are being matched (Data.get_common_data),
+      the behavior is to consider them as equal,
+      and assume that the chain of operations (e.g. padding + valid conv) results in the same dim.
     :param BatchInfo|None batch: for batch-dim, or dynamic dims per batch
     :param ControlFlowContext|None control_flow_ctx:
     :param Data|None src_data:
@@ -60,6 +66,7 @@ class DimensionTag(object):
     self.dimension = dimension
     self.same_as = None  # type: typing.Optional[DimensionTag]
     self._same_as_tb = None  # type: typing.Optional[traceback.StackSummary]  # for debugging
+    self.derived_from_tag = derived_from_tag
     if src_data:
       assert isinstance(src_data, Data) and isinstance(src_axis, int)
     if not batch and dyn_size_ext:
