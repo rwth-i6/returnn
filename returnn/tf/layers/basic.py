@@ -871,7 +871,8 @@ class SliceNdLayer(_ConcatInputLayer):
     start_t = start_data.placeholder
     if size is None:
       if seq_lens is None:
-        size = tf.maximum(tf.reduce_max(x.batch_shape[1] - start_t), 0)  # scalar
+        assert isinstance(x.batch_shape[x.time_dim_axis], int)
+        size = tf.maximum(tf.reduce_max(x.batch_shape[x.time_dim_axis] - start_t), 0)  # scalar
       else:
         # make seq_lens compatible with start_t
         seq_lens = expand_multiple_dims(  # e.g. (B,) or (B,1)
