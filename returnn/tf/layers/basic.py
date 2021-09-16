@@ -887,7 +887,10 @@ class SliceNdLayer(_ConcatInputLayer):
     assert slice_tag.description.startswith("sliced-time:")
     if not isinstance(size, int):
       # in this case, size is not known before runtime and becomes dynamic and we need to set dyn_size
-      dyn_size = tf.maximum(seq_lens - start_t, 0)  # (B,) or (B,T)
+      if seq_lens is None:
+        dyn_size = tf.maximum(x.batch_shape[x.time_dim_axis] - start_t, 0)  # (B,) or (B,T)
+      else:
+        dyn_size = tf.maximum(seq_lens - start_t, 0)  # (B,) or (B,T)
       dyn_size_ext = Data(
         name=("%s:dyn_size" % slice_tag.description),
         dtype=Data.size_dtype,
