@@ -870,17 +870,17 @@ class SliceNdLayer(_ConcatInputLayer):
     start_data = start.output.copy_as_batch_major()  # e.g. (B,) or (B,T)
     start_t = start_data.placeholder
     if size is None:
+      if min_size is None:
+        min_size = 0
       if seq_lens is None:
         assert isinstance(x.batch_shape[x.time_dim_axis], int)
-        size = tf.maximum(tf.reduce_max(x.batch_shape[x.time_dim_axis] - start_t), 0)  # scalar
+        size = tf.maximum(tf.reduce_max(x.batch_shape[x.time_dim_axis] - start_t), min_size)  # scalar
       else:
         # make seq_lens compatible with start_t
         seq_lens = expand_multiple_dims(  # e.g. (B,) or (B,1)
           x=seq_lens,
           axes=[-1] * (len(start_t.shape) - len(seq_lens.shape)))
-        size = tf.maximum(tf.reduce_max(seq_lens - start_t), 0)  # scalar
-      if min_size is not None:
-        size = tf.maximum(size, min_size)
+        size = tf.maximum(tf.reduce_max(seq_lens - start_t), min_size)  # scalar
     # for each start index in start_data, we want to gather a slice
     # therefore, the output's first axes are the same as the ones from start_data
     # and the next axis will therefore be the slice axis
@@ -889,16 +889,16 @@ class SliceNdLayer(_ConcatInputLayer):
     if not isinstance(size, int):
       # in this case, size is not known before runtime and becomes dynamic and we need to set dyn_size
       if seq_lens is None:
-        dyn_size = tf.maximum(x.batch_shape[x.time_dim_axis] - start_t, 0)  # (B,) or (B,T)
+        dyn_size = tf.maximum(x.batch_shape[x.time_dim_axis] - start_t, min_size)  # (B,) or (B,T)
       else:
-        dyn_size = tf.maximum(seq_lens - start_t, 0)  # (B,) or (B,T)
+        dyn_size = tf.maximum(seq_lens - start_t, min_size)  # (B,) or (B,T)
       dyn_size_ext = Data(
         name=("%s:dyn_size" % slice_tag.description),
         dtype=Data.size_dtype,
         placeholder=dyn_size,
         dim_tags=start_data.dim_tags,
         batch=slice_tag.batch,
-        beam=self.output.beam,
+        beam=slice_tag.batch.beam if slice_tag.batch else self.output.beam,
         control_flow_ctx=slice_tag.control_flow_ctx)
       slice_tag.dyn_size_ext = dyn_size_ext
     gather_positions_data = start_data.copy_template(name="%s_gather_positions" % self.name)
