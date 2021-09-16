@@ -4214,23 +4214,22 @@ class PoolLayer(_ConcatInputLayer):
       dilation_rate=dilation_rate, strides=strides, data_format=data_format)
     # y shape is [batch] + spatial_dims + [n_out].
     self.output.placeholder = y
-    self.output.size_placeholder = {
-      i: input_data.size_placeholder[i]
-      for i in range(len(pool_size))
-      if i in input_data.size_placeholder}
-    index_shift = self.output.get_spatial_axes()[0]
-    for i, size in list(self.output.size_placeholder.items()):
-      with tf_util.same_control_flow_ctx(size):
-        size = ConvLayer.calc_out_dim(
-          in_dim=size,
-          filter_size=pool_size[i - index_shift], stride=strides[i - index_shift],
-          dilation_rate=dilation_rate[i - index_shift], padding=padding)
-      if DimensionTag.get_tag_from_size_tensor(size) is None:
-        tag = DimensionTag(
-          description="spatial:%i:%s" % (i, self.get_absolute_name()),
-          kind=DimensionTag.Types.Spatial, batch=self.output.batch)
-        tag.set_tag_on_size_tensor(size)
-      self.output.size_placeholder[i] = size
+    index_shift = self.output.get_spatial_batch_axes()[0]
+    for i, in_axis in enumerate(input_data.get_spatial_batch_axes()):
+      in_tag = input_data.dim_tags[in_axis]
+      if in_tag.dimension is None and in_tag.dyn_size is not None:
+        size = in_tag.dyn_size
+        with tf_util.same_control_flow_ctx(size):
+          size = ConvLayer.calc_out_dim(
+            in_dim=size,
+            filter_size=pool_size[i], stride=strides[i],
+            dilation_rate=dilation_rate[i], padding=padding)
+        out_tag = self.output.dim_tags[i + index_shift]
+        size_tag = DimensionTag.get_tag_from_size_tensor(size)
+        if not size_tag:
+          out_tag.set_tag_on_size_tensor(size, batch=in_tag.batch)
+        else:
+          out_tag.declare_same_as(size_tag)
 
   @classmethod
   def get_out_data_from_opts(cls, name, pool_size, strides=None, dilation_rate=1, sources=(), padding="VALID",
@@ -4268,7 +4267,7 @@ class PoolLayer(_ConcatInputLayer):
     data = data.copy_as_batch_spatial_major()  # just to have the dim tags in order [B,S...,D]
     dim_tags = list(data.dim_tags)
     for i in range(len(pool_size)):
-      if pool_size[i] == strides[i] == dilation_rate[i] == 1:
+      if pool_size[i] == strides[i] == 1 or (strides[i] == 1 and padding == "SAME"):
         continue  # identity in this axis
       new_dim = None
       if dim_tags[i + 1].dimension is not None:
@@ -4287,10 +4286,8 @@ class PoolLayer(_ConcatInputLayer):
       dim_tags=dim_tags,
       dim=data.dim,
       dtype=data.dtype,
-      sparse=False,
-      batch_dim_axis=0,
       feature_dim_axis=feature_dim_axis,
-      beam=data.beam)
+      batch=data.batch, beam=data.beam, control_flow_ctx=data.control_flow_ctx)
 
 
 class DctLayer(_ConcatInputLayer):
