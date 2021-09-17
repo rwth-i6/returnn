@@ -2710,6 +2710,33 @@ def test_SliceNdLayer_multidimensional_start():
           numpy.testing.assert_equal(orig_seq[t2], segments[b, t, t2])
 
 
+def test_SliceNdLayer_set_tag_on_size_tensor():
+  with make_scope():
+    n_out = 5
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out},
+        "classes": {"dim": n_out, "sparse": True}
+      }})
+    net = TFNetwork(config=config, train_flag=True)
+    # the construction of the "compare" layer will fail if set_tag_on_size_tensor is not called on the slice axis
+    # inside of the SliceNdLayer
+    net.construct_from_dict({
+      "output": {
+        "class": "rec", "from": "data:data", "unit": {
+          "start": {"class": "copy", "from": "prev:choice"},
+          "slices": {"class": "slice_nd", "from": "base:data", "start": "start", "size": None},
+          "range0": {"class": "range_in_axis", "from": "slices", "axis": "dyn:-1"},
+          "range1": {"class": "range_in_axis", "from": "slices", "axis": "t"},
+          "compare": {"class": "compare", "from": ["range0", "range1"], "kind": "equal"},
+          "output": {"class": "reduce", "from": "compare", "mode": "all", "axes": "dyn:-1", "use_time_mask": False},
+          "prob": {"class": "softmax", "from": "data:source", "target": "classes", "loss": "ce"},
+          'choice': {
+            'class': 'choice', 'target': "classes", 'beam_size': 3, 'from': "prob", "input_type": "prob",
+            "initial_output": 0}}}})
+
+
 def test_WindowLayer_output_placeholder():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())
