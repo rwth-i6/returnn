@@ -454,8 +454,8 @@ class DimensionTag(object):
         self_same_as.dyn_size_ext = other_same_base.dyn_size_ext
       elif other_same_base.dyn_size_ext is None:
         other_same_base.dyn_size_ext = self_same_as.dyn_size_ext
-      if self.dyn_size_ext is None:
-        self.dyn_size_ext = self_same_as.dyn_size_ext
+      if self.dyn_size_ext is None and self_same_as.dyn_size_ext:
+        self.dyn_size_ext = self_same_as.dyn_size_ext.copy_extend_with_beam(self.batch.beam if self.batch else None)
     self.same_as = other_same_base
     self._same_as_tb = traceback.extract_stack()
     if self.dyn_size is not None and other_same_base.dyn_size is not None:
