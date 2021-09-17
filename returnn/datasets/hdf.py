@@ -113,7 +113,6 @@ class HDFDataset(CachedDataset):
       prev_target_keys = self.target_keys
     if 'targets' in fin:
       self.target_keys = sorted(
-        set(fin['targets/labels'].keys()) |
         set(fin['targets/data'].keys()) |
         set(fin['targets/size'].attrs.keys()))
     else:
