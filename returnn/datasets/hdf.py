@@ -161,6 +161,7 @@ class HDFDataset(CachedDataset):
     if 'maxCTCIndexTranscriptionLength' in fin.attrs:
       self.max_ctc_length = max(self.max_ctc_length, fin.attrs['maxCTCIndexTranscriptionLength'])
     if 'inputs' in fin:
+      assert "data" not in self.target_keys, "Cannot use 'data' key for both a target and 'inputs'."
       if len(fin['inputs'].shape) == 1:  # sparse
         num_inputs = [fin.attrs[attr_inputPattSize], 1]
       else:
