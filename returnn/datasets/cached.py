@@ -517,7 +517,7 @@ class CachedDataset(Dataset):
     return alloc_data[o:o + l]
 
   def get_data_dim(self, key):
-    if key == "data":
+    if key == "data" and self.num_inputs > 0:  # if num_inputs == 0, we allow "data" as a target key
       return self.num_inputs * self.window
     return self.num_outputs[key][0]
 

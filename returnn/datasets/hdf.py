@@ -161,6 +161,7 @@ class HDFDataset(CachedDataset):
     if 'maxCTCIndexTranscriptionLength' in fin.attrs:
       self.max_ctc_length = max(self.max_ctc_length, fin.attrs['maxCTCIndexTranscriptionLength'])
     if 'inputs' in fin:
+      assert "data" not in self.target_keys, "Cannot use 'data' key for both a target and 'inputs'."
       if len(fin['inputs'].shape) == 1:  # sparse
         num_inputs = [fin.attrs[attr_inputPattSize], 1]
       else:
@@ -280,9 +281,9 @@ class HDFDataset(CachedDataset):
     start_pos = self.file_seq_start[file_idx][real_file_seq_idx]
     end_pos = self.file_seq_start[file_idx][real_file_seq_idx + 1]
 
-    if key == "data":
+    if key == "data" and self.num_inputs > 0:
       if "inputs" not in self.cached_h5_datasets[file_idx]:
-        assert "inputs" in fin, "'data' key is reserved for 'inputs' in the HDF file, but 'inputs' does not exist."
+        assert "inputs" in fin
         self.cached_h5_datasets[file_idx]["inputs"] = fin["inputs"]  # cached for efficiency, see comment in __init__()
 
       inputs = self.cached_h5_datasets[file_idx]["inputs"]
