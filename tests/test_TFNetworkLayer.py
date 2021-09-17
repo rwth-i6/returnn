@@ -2723,18 +2723,10 @@ def test_SliceNdLayer_set_tag_on_size_tensor():
     # the construction of the "compare" layer will fail if set_tag_on_size_tensor is not called on the slice axis
     # inside of the SliceNdLayer
     net.construct_from_dict({
-      "output": {
-        "class": "rec", "from": "data:data", "unit": {
-          "start": {"class": "copy", "from": "prev:choice"},
-          "slices": {"class": "slice_nd", "from": "base:data", "start": "start", "size": None},
-          "range0": {"class": "range_in_axis", "from": "slices", "axis": "dyn:-1"},
-          "range1": {"class": "range_in_axis", "from": "slices", "axis": "t"},
-          "compare": {"class": "compare", "from": ["range0", "range1"], "kind": "equal"},
-          "output": {"class": "reduce", "from": "compare", "mode": "all", "axes": "dyn:-1", "use_time_mask": False},
-          "prob": {"class": "softmax", "from": "data:source", "target": "classes", "loss": "ce"},
-          'choice': {
-            'class': 'choice', 'target': "classes", 'beam_size': 3, 'from': "prob", "input_type": "prob",
-            "initial_output": 0}}}})
+      "start": {"class": "range_in_axis", "from": "data", "axis": "b"},
+      "slices": {"class": "slice_nd", "from": "data", "start": "start", "size": None},
+      "output": {"class": "compare", "from": ["slices", "slices"], "kind": "equal"}
+    })
 
 
 def test_WindowLayer_output_placeholder():
