@@ -859,7 +859,8 @@ class SliceNdLayer(_ConcatInputLayer):
   def __init__(self, start, size, min_size=None, **kwargs):
     """
     :param LayerBase start: (B,...)
-    :param int|None size: if None, it uses the max possible size, and it becomes a dynamic axis
+    :param int|LayerBase|None size: if None, it uses the max possible size,
+    and it becomes a dynamic axis. If LayerBase, it needs to have the same shape as start
     :param int|None min_size: if size is None, but we want to have a min-size
     """
     super(SliceNdLayer, self).__init__(**kwargs)
@@ -867,6 +868,7 @@ class SliceNdLayer(_ConcatInputLayer):
     x = self.input_data.copy_as_batch_major()
     seq_lens = x.get_sequence_lengths() if x.is_time_axis_dynamic() else None  # (B,) or None
     self.start = start
+    self.size = size
     start_data = start.output.copy_as_batch_major()  # e.g. (B,) or (B,T)
     start_t = start_data.placeholder
     if size is None:
@@ -874,13 +876,19 @@ class SliceNdLayer(_ConcatInputLayer):
         min_size = 0
       if seq_lens is None:
         assert isinstance(x.batch_shape[x.time_dim_axis], int)
-        size = tf.maximum(tf.reduce_max(x.batch_shape[x.time_dim_axis] - start_t), min_size)  # scalar
+        size_t = x.batch_shape[x.time_dim_axis] - start_t
       else:
         # make seq_lens compatible with start_t
         seq_lens = expand_multiple_dims(  # e.g. (B,) or (B,1)
           x=seq_lens,
           axes=[-1] * (len(start_t.shape) - len(seq_lens.shape)))
-        size = tf.maximum(tf.reduce_max(seq_lens - start_t), min_size)  # scalar
+        size_t = seq_lens - start_t
+      size = tf.maximum(tf.reduce_max(size_t), min_size)  # scalar
+    elif isinstance(size, LayerBase):
+      assert size.output.batch_ndim == start_data.batch_ndim
+      min_size = 0
+      size_t = size.output.get_placeholder_as_batch_major()
+      size = tf.maximum(tf.reduce_max(size_t), min_size)  # scalar
     # for each start index in start_data, we want to gather a slice
     # therefore, the output's first axes are the same as the ones from start_data
     # and the next axis will therefore be the slice axis
@@ -888,10 +896,7 @@ class SliceNdLayer(_ConcatInputLayer):
     assert slice_tag.description.startswith("sliced-time:")
     if not isinstance(size, int):
       # in this case, size is not known before runtime and becomes dynamic and we need to set dyn_size
-      if seq_lens is None:
-        dyn_size = tf.maximum(x.batch_shape[x.time_dim_axis] - start_t, min_size)  # (B,) or (B,T)
-      else:
-        dyn_size = tf.maximum(seq_lens - start_t, min_size)  # (B,) or (B,T)
+      dyn_size = tf.maximum(size_t, min_size)  # (B,) or (B,T)
       dyn_size_ext = Data(
         name=("%s:dyn_size" % slice_tag.description),
         dtype=Data.size_dtype,
@@ -923,6 +928,8 @@ class SliceNdLayer(_ConcatInputLayer):
         tf.greater(gather_positions, x.batch_shape[1] - 1),
         tf.less(gather_positions, 0))
       gather_positions = tf.clip_by_value(gather_positions, 0, x.batch_shape[1] - 1)
+    if isinstance(self.size, LayerBase):
+      pad_mask = tf.logical_or(tf.greater(gather_positions, tf.expand_dims(start_t + size_t - 1, -1)), pad_mask)
     gather_positions_data.placeholder = gather_positions
     position = InternalLayer(
       network=self.network,
@@ -951,7 +958,10 @@ class SliceNdLayer(_ConcatInputLayer):
     """
     :rtype: list[LayerBase]
     """
-    return super(SliceNdLayer, self).get_dep_layers() + [self.start]
+    dep_layers = super(SliceNdLayer, self).get_dep_layers() + [self.start]
+    if isinstance(self.size, LayerBase):
+      dep_layers += [self.size]
+    return dep_layers
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources=(), start=None, size=None, **kwargs):
@@ -966,6 +976,8 @@ class SliceNdLayer(_ConcatInputLayer):
     start_data = start.output.copy_as_batch_major()
     input_data = sources[0].output.copy_as_batch_major()
     gather_positions_data = start_data.copy_template(name="%s_gather_positions" % name)
+    if isinstance(size, LayerBase):
+      size = None
     # size might be None here in which case we set the dyn_size in __init__
     tag = DimensionTag(
       kind=DimensionTag.Types.Spatial,
@@ -991,6 +1003,8 @@ class SliceNdLayer(_ConcatInputLayer):
     """
     super(SliceNdLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     d["start"] = get_layer(d["start"])
+    if isinstance(d["size"], str):
+      d["size"] = get_layer(d["size"])
 
 
 class GatherLayer(_ConcatInputLayer):
