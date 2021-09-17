@@ -1734,8 +1734,8 @@ class Data(object):
       self.shape,
       self.batch_dim_axis, self.feature_dim_axis, self.time_dim_axis,
       sorted(self.size_placeholder.keys()),
-      [self.get_size_dim_tag(i) for i in range(len(self.size_placeholder))],
-      self.beam)
+      self.dim_tags,
+      self.batch, self.beam)
 
   def __repr__(self):
     return self.get_description(catch_exceptions=True)
