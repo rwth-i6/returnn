@@ -2851,6 +2851,35 @@ def test_ConvLayer_feature_dim_unspecified():
     assert out.output.feature_dim_axis_or_unspecified is NotSpecified
 
 
+def test_ConvLayer_time_dim_out():
+  config = Config({"extern_data": {"data": {"dim": 7}}})
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    in_layer = SourceLayer(name="input", network=net, data_key="data", output=net.extern_data.get_default_input_data())
+    layer_desc = {
+      'name': "conv",
+      "network": net,
+      "sources": [in_layer],
+      'filter_size': (4,),
+      'strides': 10,
+      'padding': 'valid',
+      'n_out': 64,
+      'activation': 'abs'}
+    conv_out = ConvLayer.get_out_data_from_opts(**layer_desc)
+    print("conv out:", conv_out)
+    out_time = conv_out.get_time_dim_tag()
+    assert in_layer.output.dim_tags[1].is_spatial_dim()
+    assert out_time != in_layer.output.dim_tags[1]
+    layer_desc["output"] = conv_out
+    with ConvLayer.cls_layer_scope("conv"):
+      conv_layer = ConvLayer(**layer_desc)
+    net.layers["conv"] = conv_layer
+    net.initialize_params(session)
+    session.run(
+      (conv_layer.output.placeholder, conv_layer.output.get_sequence_lengths()),
+      feed_dict=make_feed_dict(net.extern_data))
+
+
 def test_conv_layer_NCHW():
   with make_scope() as session:
     import numpy as np
