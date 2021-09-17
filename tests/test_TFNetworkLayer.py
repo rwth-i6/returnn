@@ -736,6 +736,36 @@ def test_CombineLayer_match_unknown_derived():
     assert out.dim_tags[:2] == dat2.dim_tags[:2] and out.batch_shape == dat2.batch_shape
 
 
+def test_CombineLayer_match_unknown_batch_feature_major():
+  with make_scope() as session:
+    dat1 = Data(name="undefined", shape=(None, 1))
+    assert dat1.dim_tags[1].undefined
+    # Create placeholders to have this dyn size clearly defined.
+    dat2 = Data(name="defined", shape=(None, 1), auto_create_placeholders=True)
+    dat2_bf_major = dat2.copy_as_batch_feature_major()
+    net = TFNetwork(extern_data=ExternData())
+    layer1 = InternalLayer(name="layer1_undefined", network=net, output=dat1)
+    layer2 = InternalLayer(name="layer2_defined", network=net, output=dat2_bf_major)
+    out = CombineLayer.get_out_data_from_opts(name="combine", network=net, sources=[layer1, layer2])
+    assert out.dim_tags[:2] == dat2.dim_tags[:2] and out.batch_shape == dat2.batch_shape
+
+
+def test_CombineLayer_match_unknown_batch_feature_major_with_out_type():
+  with make_scope() as session:
+    dat1 = Data(name="undefined", shape=(None, 1))
+    assert dat1.dim_tags[1].undefined
+    # Create placeholders to have this dyn size clearly defined.
+    dat2 = Data(name="defined", shape=(None, 1), auto_create_placeholders=True)
+    dat2_bf_major = dat2.copy_as_batch_feature_major()
+    net = TFNetwork(extern_data=ExternData())
+    layer1 = InternalLayer(name="layer1_undefined", network=net, output=dat1)
+    layer2 = InternalLayer(name="layer2_defined", network=net, output=dat2_bf_major)
+    out = CombineLayer.get_out_data_from_opts(
+      name="combine", network=net, sources=[layer1, layer2],
+      out_type={'dim': 1, 'shape': (None, 1)})
+    assert out.dim_tags[:2] == dat2.dim_tags[:2] and out.batch_shape == dat2.batch_shape
+
+
 def test_CombineLayer_different_batch_axis():
   # ["base:enc_ctx", "weight_feedback", "s_transformed"]
   # base:enc_ctx: Data(name='enc_ctx_output', shape=(None, 14), batch_dim_axis=1)
