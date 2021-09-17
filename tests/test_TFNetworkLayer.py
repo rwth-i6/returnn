@@ -708,6 +708,7 @@ def test_CombineLayer_broadcast_multiple():
 def test_CombineLayer_match_unknown():
   with make_scope() as session:
     dat1 = Data(name="undefined", shape=(None, 3))
+    assert dat1.dim_tags[1].undefined
     # Create placeholders to have this dyn size clearly defined.
     dat2 = Data(name="defined", shape=(None, 3), auto_create_placeholders=True)
     net = TFNetwork(extern_data=ExternData())
