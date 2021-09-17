@@ -1532,9 +1532,13 @@ class _SubnetworkRecCell(object):
     for name in set(list(prev_outputs.keys()) + list(prev_extra.keys())):
       if "prev:%s" % name in self.net.layers:
         continue
-      self.net.layers["prev:%s" % name] = prev_layers[name] = self.layer_data_templates[name].copy_as_prev_time_frame(
-        prev_output=prev_outputs.get(name, None),
-        rec_vars_prev_outputs=prev_extra.get(name, None))
+      try:
+        self.net.layers["prev:%s" % name] = prev_layers[name] = self.layer_data_templates[name].copy_as_prev_time_frame(
+          prev_output=prev_outputs.get(name, None),
+          rec_vars_prev_outputs=prev_extra.get(name, None))
+      except Exception as exc:  # Some sanity check might have failed or so.
+        self._handle_construct_exception(description="in-loop init of prev layer %r" % name, exception=exc)
+        raise
 
     inputs_moved_out = {}  # type: typing.Dict[str,InternalLayer]
 
