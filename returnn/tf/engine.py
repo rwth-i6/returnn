@@ -761,6 +761,19 @@ class Runner(object):
       try_and_ignore_exception(lambda: self.engine.network.set_run_finished(error_occurred=True))
       self.elapsed = time.time() - self.start_time
 
+  def exit_due_to_error(self):
+    """
+    Exit due to an previous error.
+    """
+    assert not self.finalized
+    if self.run_exception:
+      # If this is run inside a debugger, reraise the exception.
+      get_trace = getattr(sys, "gettrace", None)
+      if get_trace and get_trace() is not None:
+        raise self.run_exception
+      # We do not handle the exception otherwise anymore as this was already handled in Runner.run().
+    sys.exit(1)
+
 
 class Engine(EngineBase):
   """
@@ -1537,7 +1550,7 @@ class Engine(EngineBase):
         if self.model_filename:
           self.save_model(self.get_epoch_model_filename() + ".crash_%i" % trainer.device_crash_batch)
       print("Trainer not finalized, quitting. (pid %i)" % os.getpid(), file=log.v1)
-      sys.exit(1)
+      trainer.exit_due_to_error()
 
     if any(numpy.isinf(list(trainer.score.values()))) or any(numpy.isnan(list(trainer.score.values()))):
       print("Model seems broken, got inf or nan final score: %s" % trainer.score, file=log.v1)
@@ -1783,7 +1796,7 @@ class Engine(EngineBase):
       tester.run(report_prefix=self.get_epoch_str() + " %r eval" % dataset_name)
       if not tester.finalized:
         print("Tester not finalized, quitting.", file=log.v1)
-        sys.exit(1)
+        tester.exit_due_to_error()
       eval_dump_str += ["%s: score %s error %s" % (
                         dataset_name, self.format_score(tester.score), self.format_score(tester.error))]
       results[dataset_name] = {"score": tester.score, "error": tester.error}
@@ -2139,7 +2152,7 @@ class Engine(EngineBase):
     forwarder.run(report_prefix=self.get_epoch_str() + " forward")
     if not forwarder.finalized:
       print("Error happened. Exit now.")
-      sys.exit(1)
+      forwarder.exit_due_to_error()
 
     writer.close()
 
@@ -2192,7 +2205,7 @@ class Engine(EngineBase):
 
     if not analyzer.finalized:
       print("WARNING: Did not finished through the whole epoch.", file=log.v1)
-      sys.exit(1)
+      analyzer.exit_due_to_error()
     return analyzer
 
   def search(self, dataset, do_eval=True, output_layer_names="output", output_file=None, output_file_format="txt"):
@@ -2387,8 +2400,8 @@ class Engine(EngineBase):
       extra_fetches_callback=extra_fetches_callback)
     runner.run(report_prefix=self.get_epoch_str() + " search")
     if not runner.finalized:
-      print("Error happened (%s). Exit now." % runner.run_exception)
-      sys.exit(1)
+      print("Error happened. Exit now.")
+      runner.exit_due_to_error()
     print("Search done. Num steps %i, Final: score %s error %s" % (
       runner.num_steps, self.format_score(runner.score), self.format_score(runner.error)), file=log.v1)
     if output_file:
@@ -2558,7 +2571,7 @@ class Engine(EngineBase):
     forwarder.run(report_prefix=self.get_epoch_str() + " forward")
     if not forwarder.finalized:
       print("Error happened. Exit now.")
-      sys.exit(1)
+      forwarder.exit_due_to_error()
 
     average_posterior = accumulator.sum_posteriors / accumulator.seq_len
     avg_sum = numpy.sum(average_posterior)
