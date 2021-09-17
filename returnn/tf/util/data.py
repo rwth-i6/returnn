@@ -493,9 +493,16 @@ class DimensionTag(object):
     """
     if is_equal_opts is None:
       is_equal_opts = {}
-    for _tag in tags:
-      if _tag.is_equal(other, **is_equal_opts):
-        return _tag
+    # We do potential multiple rounds, such that we prefer "more equal" (using less is_equal_opts).
+    rounds = [{}]
+    if is_equal_opts:
+      if "broadcast_matches" in is_equal_opts:
+        rounds.append({k: v for (k, v) in is_equal_opts.items() if k != "broadcast_matches"})
+      rounds.append(is_equal_opts)
+    for _is_equal_opts in rounds:
+      for _tag in tags:
+        if _tag.is_equal(other, **_is_equal_opts):
+          return _tag
     return None
 
   @classmethod
