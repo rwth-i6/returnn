@@ -144,6 +144,10 @@ jobs:
           ls ~/.local/lib/python2.7/site-packages
           # https://github.com/tensorflow/tensorboard/issues/1862#issuecomment-521876133
           rm -rf ~/.local/lib/python2.7/site-packages/tensorboard* || true
+
+          # Newer protobuf (3.18.0) seems be broken for Python 2
+          # and TF just adds protobuf>=3.3 as dependency.
+          pip install --user protobuf==3.12
         fi
 
         pip install --user -r requirements.txt | cat
