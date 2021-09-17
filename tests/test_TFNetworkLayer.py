@@ -2710,6 +2710,25 @@ def test_SliceNdLayer_multidimensional_start():
           numpy.testing.assert_equal(orig_seq[t2], segments[b, t, t2])
 
 
+def test_SliceNdLayer_set_tag_on_size_tensor():
+  with make_scope():
+    n_out = 5
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out},
+        "classes": {"dim": n_out, "sparse": True}
+      }})
+    net = TFNetwork(config=config, train_flag=True)
+    # the construction of the "compare" layer will fail if set_tag_on_size_tensor is not called on the slice axis
+    # inside of the SliceNdLayer
+    net.construct_from_dict({
+      "start": {"class": "range_in_axis", "from": "data", "axis": "b"},
+      "slices": {"class": "slice_nd", "from": "data", "start": "start", "size": None},
+      "output": {"class": "compare", "from": ["slices", "slices"], "kind": "equal"}
+    })
+
+
 def test_WindowLayer_output_placeholder():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())

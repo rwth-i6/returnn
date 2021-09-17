@@ -901,6 +901,7 @@ class SliceNdLayer(_ConcatInputLayer):
         beam=slice_tag.batch.beam if slice_tag.batch else self.output.beam,
         control_flow_ctx=slice_tag.control_flow_ctx)
       slice_tag.dyn_size_ext = dyn_size_ext
+      slice_tag.set_tag_on_size_tensor(dyn_size)
     gather_positions_data = start_data.copy_template(name="%s_gather_positions" % self.name)
     gather_positions_data = gather_positions_data.copy_add_dim_by_tag(
       slice_tag,
