@@ -128,6 +128,27 @@ class DimensionTag(object):
     tag._same_as_tb = traceback.extract_stack()
     return tag
 
+  def _can_use_in_ctx(self, ctx):
+    """
+    :param ControlFlowContext|None ctx:
+    :rtype: bool
+    """
+    if self.control_flow_ctx == ctx:
+      return True
+    if not ControlFlowContext.is_parent_or_same(self.control_flow_ctx, ctx):
+      return False
+    assert ctx
+    # E.g. ctx == loop(time_dim), when self.control_flow_ctx == None,
+    # we can use self in ctx, iff time_dim not in self.dyn_size_ext.dim_tags.
+    # We can only do this check if we know about dyn_size_ext.
+    if not self.dyn_size_ext:
+      return False
+    parent_dims = ControlFlowContext.collect_parent_dims(ctx)
+    for dim in self.dyn_size_ext.dim_tags:
+      if dim in parent_dims:
+        return False
+    return True
+
   def get_for_batch_ctx(self, batch, ctx):
     """
     :param BatchInfo batch:
@@ -161,38 +182,48 @@ class DimensionTag(object):
     if same_base.dyn_size_ext:
       assert same_base.batch == same_base.dyn_size_ext.batch
       assert same_base.control_flow_ctx == same_base.dyn_size_ext.control_flow_ctx
-    if same_base.batch == batch and ControlFlowContext.is_parent_or_same(same_base.control_flow_ctx, ctx):
-      if same_base.dyn_size_ext or same_base.control_flow_ctx == ctx:
-        return same_base
-    # If any parent ctx exists, and is defined, use it.
+    tag = same_base._same_for_batch_ctx.get((batch, ctx), None)
+    if tag:
+      return tag
+    if same_base.batch == batch and same_base._can_use_in_ctx(ctx):
+      return same_base
     for ctx_ in ControlFlowContext.abs_ctx_stack_with_root(ctx):
       tag = same_base._same_for_batch_ctx.get((batch, ctx_), None)
-      if tag and (tag.dyn_size_ext or tag.control_flow_ctx == ctx):
+      if tag and tag._can_use_in_ctx(ctx):
         return tag
-    if batch.copy_remove_beam() == batch.get_global_base() and batch.beam and same_base.dyn_size_ext:
-      # The same_base has some dyn size without any beam nor control flow context.
-      # We can expand it to the current beam.
-      assert not same_base.control_flow_ctx
-      dyn_size_ext = same_base.dyn_size_ext.copy_extend_with_beam(batch.beam)
-      assert dyn_size_ext.batch == batch
-      beam_expanded_base_data = getattr(dyn_size_ext.placeholder, "_RETURNN_beam_expanded_base_data", None)
-      assert beam_expanded_base_data
-      # Note: The beam expansion used tiling, which can be cached.
-      # This means that we could end up with the same size tensor (placeholder) for multiple different beams,
-      # when there are different beams with same beam size!
-      # This breaks the current logic in get_tag_from_size_tensor.
-      # As a workaround, we make an explicit new tensor here.
-      from .basic import get_valid_scope_name_from_str, same_control_flow_ctx
-      with same_control_flow_ctx(dyn_size_ext.placeholder):
-        dyn_size_ext.placeholder = tf.identity(
-          dyn_size_ext.placeholder,
-          name=get_valid_scope_name_from_str("%s_identity_for_beam_%s" % (dyn_size_ext.name, batch.beam.name)))
-      dyn_size_ext.placeholder._RETURNN_dyn_size_beam = batch.beam
-      dyn_size_ext.placeholder._RETURNN_beam_expanded_base_data = beam_expanded_base_data
-    else:
-      # We have some more custom batch info (via merge dims or so).
-      # Just leave uninitialized for now.
-      dyn_size_ext = None
+    # Ok, nothing matching found.
+    dyn_size_ext = None
+    # Maybe we have sth with the base batch without beam which we can extend.
+    if batch.copy_remove_beam() == batch.get_global_base() and batch.beam:
+      batch_base = batch.get_global_base()
+      base_can_use_in_ctx = None
+      if same_base.batch == batch_base and same_base._can_use_in_ctx(ctx):
+        base_can_use_in_ctx = same_base
+      else:
+        for ctx_ in ControlFlowContext.abs_ctx_stack_with_root(ctx):
+          tag = same_base._same_for_batch_ctx.get((batch_base, ctx_), None)
+          if tag and tag._can_use_in_ctx(ctx):
+            base_can_use_in_ctx = tag
+            break
+      if base_can_use_in_ctx and base_can_use_in_ctx.dyn_size_ext:
+        # The same_base has some dyn size without any beam nor control flow context.
+        # We can expand it to the current beam.
+        dyn_size_ext = base_can_use_in_ctx.dyn_size_ext.copy_extend_with_beam(batch.beam)
+        assert dyn_size_ext.batch == batch
+        beam_expanded_base_data = getattr(dyn_size_ext.placeholder, "_RETURNN_beam_expanded_base_data", None)
+        assert beam_expanded_base_data
+        # Note: The beam expansion used tiling, which can be cached.
+        # This means that we could end up with the same size tensor (placeholder) for multiple different beams,
+        # when there are different beams with same beam size!
+        # This breaks the current logic in get_tag_from_size_tensor.
+        # As a workaround, we make an explicit new tensor here.
+        from .basic import get_valid_scope_name_from_str, same_control_flow_ctx
+        with same_control_flow_ctx(dyn_size_ext.placeholder):
+          dyn_size_ext.placeholder = tf.identity(
+            dyn_size_ext.placeholder,
+            name=get_valid_scope_name_from_str("%s_identity_for_beam_%s" % (dyn_size_ext.name, batch.beam.name)))
+        dyn_size_ext.placeholder._RETURNN_dyn_size_beam = batch.beam
+        dyn_size_ext.placeholder._RETURNN_beam_expanded_base_data = beam_expanded_base_data
     dim_tag = DimensionTag(
       kind=self.kind, description=self.description, dimension=self.dimension,
       batch=batch, control_flow_ctx=dyn_size_ext.control_flow_ctx if dyn_size_ext else ctx,
@@ -4077,7 +4108,7 @@ class ControlFlowContext:
     """
     :rtype: str
     """
-    return "/".join(ctx._repr_single() for ctx in self.abs_ctx_stack())
+    return "/".join(ctx._repr_single() for ctx in self._abs_ctx_stack())
 
   def _repr_single(self):
     """
@@ -4088,7 +4119,7 @@ class ControlFlowContext:
       s += "(%s)" % self.loop_spatial_dim.short_repr()
     return s
 
-  def abs_ctx_stack(self):
+  def _abs_ctx_stack(self):
     """
     :rtype: list[ControlFlowContext]
     :return: chain of ctx, last is self
@@ -4102,6 +4133,16 @@ class ControlFlowContext:
     return chain
 
   @classmethod
+  def abs_ctx_stack(cls, ctx):
+    """
+    :param ControlFlowContext|None ctx:
+    :rtype: list[ControlFlowContext]
+    """
+    if ctx:
+      return ctx._abs_ctx_stack()
+    return []
+
+  @classmethod
   def abs_ctx_stack_with_root(cls, ctx):
     """
     :param ControlFlowContext|None ctx:
@@ -4110,7 +4151,7 @@ class ControlFlowContext:
     """
     ls = [None]  # type: typing.List[typing.Optional[ControlFlowContext]]
     if ctx:
-      ls += ctx.abs_ctx_stack()
+      ls += ctx._abs_ctx_stack()
     return ls
 
   @classmethod
@@ -4131,6 +4172,18 @@ class ControlFlowContext:
         return True
       child = child.outer_ctx
     return False
+
+  @classmethod
+  def collect_parent_dims(cls, ctx):
+    """
+    :param ControlFlowContext|None ctx:
+    :rtype: list[DimensionTag]
+    """
+    dims = []
+    for ctx_ in ControlFlowContext.abs_ctx_stack(ctx):
+      if ctx_.is_loop() and ctx_.loop_spatial_dim:
+        dims.append(ctx_.loop_spatial_dim)
+    return dims
 
   def is_loop(self):
     """
