@@ -480,6 +480,7 @@ class DimensionTag(object):
         return
       self_same_as.same_as = other_same_base
       self_same_as._same_as_tb = traceback.extract_stack()
+      # TODO this is unsafe, slightly incorrect...
       if self_same_as.dyn_size_ext is None:
         self_same_as.dyn_size_ext = other_same_base.dyn_size_ext
       elif other_same_base.dyn_size_ext is None:
@@ -500,6 +501,7 @@ class DimensionTag(object):
     # maybe we can overtake the size_placeholder now.
     if self.same_as.dyn_size is not None and self.src_data:
       assert isinstance(self.src_axis, int)
+      # TODO Is this still needed? also looks wrong
       # Maybe it changed in the meanwhile, so check.
       if self.src_data.get_dim_tag(self.src_axis).description == self.description:
         self.src_data.size_placeholder[
