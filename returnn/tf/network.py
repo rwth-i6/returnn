@@ -3482,6 +3482,8 @@ class CustomCheckpointLoader:
       however, if there is no single var in the checkpoint, this is still an error.
     :param typing.Container[str] ignore_params: these param (by name) will not be loaded
     :param typing.Iterable[str] ignore_params_prefixes: these param (by prefix name) will not be loaded
+    :param dict[str,str] var_name_mapping: defines a custom mapping (new_name -> name_in_checkpoint) for 
+      renamed vars in the checkpoint 
     :param TFNetwork network:
     """
     self.filename = filename
