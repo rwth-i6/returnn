@@ -395,7 +395,19 @@ class RecLayer(_ConcatInputLayer):
     loss = kwargs.get("loss", None)
     deps = list(sources)  # type: typing.List[LayerBase]
     deps += [layer for layer in nest.flatten(initial_state) if isinstance(layer, LayerBase)]
-    if out_type or n_out is not NotSpecified or loss:
+    if isinstance(unit, _SubnetworkRecCell):  # subnetwork
+      subnet = unit
+      out = (
+        subnet.layer_data_templates["output"].output
+        .copy_template_adding_time_dim(name="%s_output" % kwargs["name"], time_dim_axis=0)
+        .copy_template_set_ctx(network.get_control_flow_ctx()))
+      if n_out is not NotSpecified:
+        assert n_out == out.dim
+      if out_type:
+        for k, v in out_type.items():
+          assert getattr(out, k) == v
+      deps += subnet.get_parent_deps()
+    elif out_type or n_out is not NotSpecified or loss:
       out = super(RecLayer, cls).get_out_data_from_opts(network=network, sources=sources, **kwargs)
       if source_data and not source_data.have_time_axis():
         # We expect to be inside another RecLayer, and should do a single step (like RnnCellLayer).
@@ -403,19 +415,7 @@ class RecLayer(_ConcatInputLayer):
       else:
         out = out.copy_as_time_batch_major()  # Otherwise the output is always [T,B,F]
     else:
-      out = None
-    if isinstance(unit, _SubnetworkRecCell):  # subnetwork
-      subnet = unit
-      sub_out = (
-        subnet.layer_data_templates["output"].output
-        .copy_template_adding_time_dim(name="%s_output" % kwargs["name"], time_dim_axis=0)
-        .copy_template_set_ctx(network.get_control_flow_ctx()))
-      if out:
-        assert sub_out.dim == out.dim
-        assert sub_out.shape == out.shape
-      out = sub_out
-      deps += subnet.get_parent_deps()
-    assert out
+      raise Exception("n_out or out_type must be specified")
     if out.have_time_axis() and _time_dim_tag:
       out = out.copy_template_replace_dim_tag(axis=out.time_dim_axis, new_dim_tag=_time_dim_tag)
     for dep in deps:
