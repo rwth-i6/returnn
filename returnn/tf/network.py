@@ -3580,7 +3580,7 @@ class CustomCheckpointLoader:
         return
       self.assigned = True
       values_dict = {
-        name: (self.reader.get_tensor(self.var_name_mapping[name]) if name in self.var_name_mapping else self.reader.get_tensor(self.prefix_param_name + name) )
+        name: self.reader.get_tensor(self.var_name_mapping.get(name, self.prefix_param_name + name))
         for name in self.checkpoint_param_names}
       self.reader = None  # Allow GC now, we do not need it anymore.
       print("Custom param import of layer %r with original params %r." % (
