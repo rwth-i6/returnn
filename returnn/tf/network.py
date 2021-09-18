@@ -3898,7 +3898,7 @@ class CustomCheckpointLoader:
       if v.endswith(MakeLoadCudnnRnn.cudnn_postfix):
         var_name_map.update(
           MakeLoadCudnnRnn(prefix=v[:-len(MakeLoadCudnnRnn.cudnn_postfix) + 1]).get_lazy_dict())
-    var_name_map.update({name : make_load_renamed(old_name) for name, old_name in self.var_name_mapping.items()})
+    var_name_map.update({name: make_load_renamed(old_name) for name, old_name in self.var_name_mapping.items()})
 
     could_not_find_map_list = [v for v in missing_var_names if v not in var_name_map]
     if self.ignore_missing or not could_not_find_map_list:
