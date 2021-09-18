@@ -3470,7 +3470,7 @@ class CustomCheckpointLoader:
   """
 
   def __init__(self, filename, saveable_params, params_prefix="", load_if_prefix="", ignore_missing=False,
-               ignore_params=(), ignore_params_prefixes=(),
+               ignore_params=(), ignore_params_prefixes=(), var_name_mapping=None,
                network=None):
     """
     :param str filename: filepattern for NewCheckpointReader
@@ -3489,6 +3489,7 @@ class CustomCheckpointLoader:
     self.ignore_missing = ignore_missing
     self.params_prefix = params_prefix
     self.load_if_prefix = load_if_prefix
+    self.var_name_mapping = var_name_mapping or {}
     self.saveable_params = []
     count = 0
     for param in saveable_params:
@@ -3541,6 +3542,7 @@ class CustomCheckpointLoader:
       self.layer = layer
       self.prefix_param_name = layer.get_absolute_name_scope_prefix()
       self.checkpoint_param_names = []
+      self.var_name_mapping = checkpoint_loader.var_name_mapping
       prefix = self.prefix_param_name
       # Collect checkpoint params, and remove them from the lists.
       for name in list(checkpoint_loader.var_ckpt_names):
@@ -3576,7 +3578,7 @@ class CustomCheckpointLoader:
         return
       self.assigned = True
       values_dict = {
-        name: self.reader.get_tensor(self.prefix_param_name + name)
+        name: (self.reader.get_tensor(self.var_name_mapping[name]) if name in self.var_name_mapping else self.reader.get_tensor(self.prefix_param_name + name) )
         for name in self.checkpoint_param_names}
       self.reader = None  # Allow GC now, we do not need it anymore.
       print("Custom param import of layer %r with original params %r." % (
@@ -3894,6 +3896,7 @@ class CustomCheckpointLoader:
       if v.endswith(MakeLoadCudnnRnn.cudnn_postfix):
         var_name_map.update(
           MakeLoadCudnnRnn(prefix=v[:-len(MakeLoadCudnnRnn.cudnn_postfix) + 1]).get_lazy_dict())
+    var_name_map.update({name : make_load_renamed(old_name) for name, old_name in self.var_name_mapping.items()})
 
     could_not_find_map_list = [v for v in missing_var_names if v not in var_name_map]
     if self.ignore_missing or not could_not_find_map_list:
