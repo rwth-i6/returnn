@@ -1473,6 +1473,36 @@ class _SubnetworkRecCell(object):
         print(s)
       raise
 
+  def _add_template_layer(self, layer_name, layer_dict):
+    """
+    Use this for simple helpers, after the main template net is already created.
+    This does not expect layer creation exceptions,
+    and expects that all dependencies are already created,
+    and all dependencies are other layers inside our subnet.
+
+    :param str layer_name:
+    :param dict[str] layer_dict: not yet transformed
+    :rtype: _TemplateLayer
+    """
+    from returnn.tf.network import get_layer_class
+    assert layer_name not in self.layer_data_templates
+    self.net_dict[layer_name] = layer_dict
+    # We replicate the _construct_template logic here, but simplified,
+    # i.e. not expecting exceptions, and expecting that all dep layers are created.
+    layer = _TemplateLayer(name=layer_name, network=self.net, cell=self)
+    layer_dict = layer_dict.copy()
+    layer_class_name = layer_dict.pop("class")
+    layer_class = get_layer_class(layer_class_name)
+    layer_dict["_network"] = self.net
+    layer_dict["_name"] = layer_name
+    layer_class.transform_config_dict(
+      layer_dict, network=self.net, get_layer=lambda _name: self.layer_data_templates[_name])
+    out = layer_class.get_out_data_from_opts(name=layer_name, network=self.net, **layer_dict)
+    out = layer_class.fixup_out_data(output=out, network=self.net)
+    layer.init(output=out, layer_class=layer_class, **layer_dict.copy())
+    self.layer_data_templates[layer_name] = layer
+    return layer
+
   def _handle_construct_exception(self, description, exception):
     """
     :param str description:
@@ -2261,6 +2291,24 @@ class _SubnetworkRecCell(object):
           # Dependency is inside the loop, and we are using it, so we need to accumulate its output.
           add_output_to_acc(dep.name)
           needed_outputs.add(dep.name)
+
+      in_loop_ctx_dim_tags = set()
+      for layer_name in self.layers_in_loop:
+        if layer_name in list(needed_outputs):
+          layer = self.layer_data_templates[layer_name]
+          for tag in layer.output.dim_tags:
+            if tag.control_flow_ctx == self.net.control_flow_ctx:
+              if tag not in in_loop_ctx_dim_tags:
+                in_loop_ctx_dim_tags.add(tag)
+                # The helper layer name does not matter except for debugging and it should not clash with other layers.
+                # The helper layer name matters only on the sense that it must come sorted before other extra layers,
+                # such that we construct it first in _construct_output_layers_moved_out.
+                helper_layer_name = ":dyn-tag-accum:%i:%s" % (len(in_loop_ctx_dim_tags), layer_name)
+                helper_layer_dict = {"class": "length", "from": layer_name, "axis": tag}
+                self._add_template_layer(helper_layer_name, helper_layer_dict)
+                add_output_to_acc(helper_layer_name)
+                needed_outputs.add(helper_layer_name)
+                extra_output_layers.add(helper_layer_name)
 
       # Tensor arrays for any layers which were moved out.
       input_layers_moved_out_tas = {}
