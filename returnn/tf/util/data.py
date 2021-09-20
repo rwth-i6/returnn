@@ -2664,6 +2664,18 @@ class Data(object):
     """
     return [self.get_dim(axis) for axis in range(self.batch_ndim)]
 
+  def have_varying_shape_in_ctx(self):
+    """
+    :return: whether the (dynamic) shape can change in this control flow context.
+      E.g. when self.control_flow_context is a loop, and we have one dynamic dim
+      where dyn_size_ext has the same control_flow_context
+      (such that dyn_size_ext has e.g. shape [B,T] outside the loop).
+      This can be relevant for accumulating values of self.placeholder
+      e.g. via tf.TensorArray.
+    :rtype: bool
+    """
+    return any(tag.control_flow_ctx for tag in self.dim_tags)
+
   @property
   def size_placeholder(self):
     """
