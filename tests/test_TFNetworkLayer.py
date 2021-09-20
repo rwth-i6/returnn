@@ -2820,6 +2820,60 @@ def test_SliceNdLayer_multidimensional_start():
           numpy.testing.assert_equal(orig_seq[t2], segments[b, t, t2])
 
 
+def test_SliceNdLayer_multidimensional_size():
+  with make_scope() as session:
+    n_out = 5
+    n_batch = 3
+    max_seq_len = 10
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out},
+        "classes": {"dim": n_out, "sparse": True}
+      }})
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "output": {
+        "class": "rec", "from": "data:data", "unit": {
+          "const1": {"class": "constant", "value": 1},
+          "start": {"class": "reinterpret_data", "from": "prev:choice", "set_sparse": False},
+          "size": {"class": "combine", "from": ["const1", "start"], "kind": "add"},
+          "slices": {"class": "slice_nd", "from": "base:data:data", "start": "start", "size": "size"},
+          "output": {"class": "reduce", "from": "slices", "mode": "max", "axes": "dyn:-1"},
+          "prob": {"class": "softmax", "from": "data:source", "target": "classes", "loss": "ce"},
+          'choice': {
+            'class': 'choice', 'target': "classes", 'beam_size': 3, 'from': "prob", "input_type": "prob",
+            "initial_output": 0,}}}})
+    session.run(tf_compat.v1.global_variables_initializer())
+    output_layer = net.layers["output"]
+    starts = output_layer.cell.output_layers_net.layers["start"].output.get_placeholder_as_batch_major()
+    sizes = output_layer.cell.output_layers_net.layers["size"].output.get_placeholder_as_batch_major()
+    segments = output_layer.cell.output_layers_net.layers["slices"].output.get_placeholder_as_batch_major()
+    feed = make_feed_dict(net.extern_data.data.values(), n_batch=n_batch, n_time=max_seq_len, same_time=True)
+    starts = session.run(starts, feed_dict=feed)
+    sizes = session.run(sizes, feed_dict=feed)
+    segments = session.run(segments, feed_dict=feed)
+    seq_lens = feed[net.extern_data.data["data"].size_placeholder[0]]
+    input_data = feed[net.extern_data.data["data"].placeholder]
+    max_size = numpy.amax(sizes)
+    max_size = max(max_size, 0)
+    assert segments.shape == (n_batch, max_seq_len, max_size, n_out)
+    for b in range(n_batch):
+      for t in range(max_seq_len):
+        s = starts[b, t]
+        size = sizes[b, t]
+        end = min(s + size, seq_lens[b])
+        orig_seq = input_data[b, s:end]
+        if len(orig_seq) < max_size:
+          orig_seq = numpy.pad(orig_seq, [(0, max_size - len(orig_seq)), (0, 0)], "constant")
+        elif len(orig_seq) > max_size:
+          orig_seq = orig_seq[:max_size]
+        assert orig_seq.shape == (max_size, n_out)
+        orig_seq = numpy.where((numpy.arange(s, s + max_size) >= seq_lens[b])[:, None], 0.0, orig_seq)
+        for t2 in range(max_size):
+          numpy.testing.assert_equal(orig_seq[t2], segments[b, t, t2])
+
+
 def test_SliceNdLayer_set_tag_on_size_tensor():
   with make_scope():
     n_out = 5
