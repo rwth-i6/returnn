@@ -3247,6 +3247,7 @@ class _SubnetworkRecCell(object):
     from returnn.tf.util.basic import tensor_array_stack, concat_with_opt_broadcast
     from returnn.tf.network import TFNetwork, ExternData
     from .base import InternalLayer
+    from .basic import LengthLayer
 
     self.output_layers_net = TFNetwork(
       name="%s/%s(rec-subnet-output)" % (
@@ -3317,6 +3318,10 @@ class _SubnetworkRecCell(object):
         if latest_layer_choice_name:
           loop_acc_layers_search_choices[name] = latest_layer_choice_name
         loop_acc_layers[name] = layer_
+        if isinstance(in_loop_layer, LengthLayer):
+          tag = in_loop_layer.dim_tag.get_for_batch_ctx(layer_.output.batch, layer_.output.control_flow_ctx)
+          if not tag.dyn_size_ext:
+            tag.dyn_size_ext = layer_.output
         return layer_
 
     # noinspection PyShadowingNames
