@@ -1903,18 +1903,33 @@ class _SubnetworkRecCell(object):
     """
 
     # noinspection PyShadowingNames
-    def __init__(self, name, dtype, element_shape, get):
+    def __init__(self, name, get, dtype=None, element_shape=None, same_shape_every_frame=None, data=None):
       """
       :param str name:
+      :param ()->(Data|tf.Tensor|None) get:
       :param tf.DType|str dtype:
       :param tuple[int|None] element_shape:
-      :param ()->(tf.Tensor|None) get:
+      :param bool same_shape_every_frame:
+      :param Data|None data:
       """
       from returnn.tf.util.basic import get_valid_scope_name_from_str
       self.name = name
       self.tf_scope_name = get_valid_scope_name_from_str(name.replace("/", "_"))
+      self.data = data
+      if dtype is None:
+        assert data
+        dtype = data.dtype
       self.dtype = dtype
+      if element_shape is None:
+        assert data
+        element_shape = data.batch_shape
       self.element_shape = element_shape
+      if same_shape_every_frame is None:
+        if data:
+          same_shape_every_frame = not data.have_varying_shape_in_ctx()
+        else:
+          same_shape_every_frame = True
+      self.same_shape_every_frame = same_shape_every_frame
       self.get = get
       self.get_returned_none = None  # type: typing.Optional[bool]
 
@@ -1934,6 +1949,16 @@ class _SubnetworkRecCell(object):
         self.get_returned_none = True
         return ta
       else:
+        if isinstance(value, tf.Tensor):
+          pass
+        elif isinstance(value, Data):
+          assert self.data
+          assert value.dtype == self.data.dtype
+          assert value.batch_shape == self.data.batch_shape
+          assert value.have_varying_shape_in_ctx() == self.data.have_varying_shape_in_ctx()
+          value = value.placeholder
+        else:
+          raise TypeError("OutputToAccumulate.get: expected tf.Tensor or Data but got %r" % type(value))
         self.get_returned_none = False
         return ta.write(index=index, value=value, name="%s_acc_ta_write" % self.tf_scope_name)
 
@@ -1946,7 +1971,72 @@ class _SubnetworkRecCell(object):
       assert self.get_returned_none is not None
       if self.get_returned_none:
         return None
+      if not self.same_shape_every_frame:
+        ta = self._make_padded_tensor_array(ta)
       return ta
+
+    def _make_padded_tensor_array(self, ta):
+      """
+      :param tf.TensorArray ta:
+      :rtype: tf.TensorArray
+      """
+      assert not self.same_shape_every_frame
+      # First get the max shape of each element. Then create a new TensorArray which can hold all elements.
+      # Because we use clear_after_read in ta, even to get the max shape, we have to create a new TensorArray.
+      assert self.data
+      size = ta.size()
+      buffer_ta = tf.TensorArray(
+        name="acc_ta_infer_max_shape_%s" % self.tf_scope_name,
+        dtype=self.dtype,
+        element_shape=tf.TensorShape(self.element_shape),
+        size=size,
+        clear_after_read=True,
+        infer_shape=False)
+
+      def _body_infer_max_shape(i, max_shape_, new_ta_):
+        """
+        :param tf.Tensor i: scalar
+        :param tf.Tensor max_shape_:
+        :param tf.TensorArray new_ta_:
+        """
+        elem = ta.read(i)
+        max_shape_ = tf.maximum(max_shape_, tf.shape(elem))
+        new_ta_ = new_ta_.write(i, elem)
+        return i + 1, max_shape_, new_ta_
+
+      max_shape = tf.convert_to_tensor([d if d else 0 for d in self.data.batch_shape], dtype=tf.int32)
+      _, max_shape, buffer_ta = tf.while_loop(
+        cond=lambda i, *_args: tf.less(i, size),
+        body=_body_infer_max_shape,
+        loop_vars=(0, max_shape, buffer_ta))
+
+      # Now again create a new TensorArray.
+      new_ta_padded = tf.TensorArray(
+        name="acc_ta_pad_max_shape_%s" % self.tf_scope_name,
+        dtype=self.dtype,
+        element_shape=tf.TensorShape(self.element_shape),
+        size=size,
+        clear_after_read=True,
+        infer_shape=True)
+
+      def _body_pad_max_shape(i, new_ta_):
+        """
+        :param tf.Tensor i: scalar
+        :param tf.TensorArray new_ta_:
+        """
+        from returnn.tf.util.basic import get_shape
+        elem = buffer_ta.read(i)
+        elem_shape = get_shape(elem)
+        pad_values = [(0, max_shape[a] - elem_shape[a]) for a in range(len(elem_shape))]
+        elem_padded = tf.pad(elem, pad_values)
+        new_ta_ = new_ta_.write(i, elem_padded)
+        return i + 1, new_ta_
+
+      _, new_ta_padded = tf.while_loop(
+        cond=lambda i, *_args: tf.less(i, size),
+        body=_body_pad_max_shape,
+        loop_vars=(0, new_ta_padded))
+      return new_ta_padded
 
   def get_output(self):
     """
@@ -2115,11 +2205,11 @@ class _SubnetworkRecCell(object):
         name_ = "output_%s" % layer_name
         if any([(out.name == name_) for out in outputs_to_accumulate]):
           return
+        template_layer = self.layer_data_templates[layer_name]
         outputs_to_accumulate.append(_SubnetworkRecCell.OutputToAccumulate(
           name=name_,
-          dtype=self.layer_data_templates[layer_name].output.dtype,
-          element_shape=self.layer_data_templates[layer_name].output.batch_shape,
-          get=lambda: self.net.get_layer(layer_name).output.placeholder))
+          data=template_layer.output,
+          get=lambda: self.net.get_layer(layer_name).output))
 
       for name, template in self.layer_data_templates.items():
         if template.is_output_layer():
@@ -2278,9 +2368,8 @@ class _SubnetworkRecCell(object):
         if layer_name in self.layers_in_loop:
           outputs_to_accumulate.append(_SubnetworkRecCell.OutputToAccumulate(
             name="debug_output_%s" % layer_name,
-            dtype=self.layer_data_templates[layer_name].output.dtype,
-            element_shape=self.layer_data_templates[layer_name].output.batch_shape,
-            get=lambda name_=layer_name: self.net.get_layer(name_).output.placeholder))
+            data=self.layer_data_templates[layer_name].output,
+            get=lambda name_=layer_name: self.net.get_layer(name_).output))
 
       # Maybe some of the moved-out output-layers depend on data inside the loop,
       # so we should accumulate it to have access to it.
@@ -2354,7 +2443,7 @@ class _SubnetworkRecCell(object):
           size=min_loop_len,
           dynamic_size=True,  # we will automatically grow it when needed
           clear_after_read=not out.name.startswith("choice_"),
-          infer_shape=True)
+          infer_shape=out.same_shape_every_frame)
         for out in outputs_to_accumulate]
 
     def body(i, net_vars, acc_tas, seq_len_info=None):
