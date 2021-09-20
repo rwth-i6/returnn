@@ -2631,8 +2631,15 @@ class _SubnetworkRecCell(object):
       if output_layer:
         assert isinstance(output_layer, LayerBase)
         output_data = output_layer.output.copy_as_time_major()
-        assert 0 in output_data.size_placeholder
-        rec_layer.output.size_placeholder = output_data.size_placeholder.copy()
+        self.time_dim_tag.declare_same_as(output_data.get_time_dim_tag())
+        assert len(rec_layer.output.dim_tags) == len(output_data.dim_tags)
+        for tag1, tag2 in zip(rec_layer.output.dim_tags, output_data.dim_tags):
+          assert tag1.is_equal(tag2, allow_same_feature_dim=True)
+          # Make sure they are the same.
+          # It can happen that they are not when the dim tag is created inside,
+          # and then created once for the template layer, and again for the real layer.
+          # Make sure they are really the same such that we get all information like dyn sizes.
+          tag1.declare_same_as(tag2)
         output = output_data.placeholder
       else:
         assert seq_len is not None
@@ -2640,12 +2647,6 @@ class _SubnetworkRecCell(object):
         assert not self.net.layers["output"].get_search_choices()
         output = tensor_array_stack(
           self.final_acc_tas_dict["output_output"], stop=max_seq_len, name="output_stack")  # e.g. (time, batch, dim)
-
-    existing_time_dim_tag = DimensionTag.get_tag_from_size_tensor(rec_layer.output.size_placeholder[0])
-    if existing_time_dim_tag:
-      self.time_dim_tag.declare_same_as(existing_time_dim_tag)
-    else:
-      self.time_dim_tag.set_tag_on_size_tensor(rec_layer.output.size_placeholder[0], batch=rec_layer.output.batch)
 
     for key in (
           self.net.used_data_keys |
