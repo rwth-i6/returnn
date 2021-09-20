@@ -1988,7 +1988,7 @@ class _SubnetworkRecCell(object):
         fixed_seq_len = input_seq_len
       if fixed_seq_len is not None:
         time_dim_tag = DimensionTag.get_tag_from_size_tensor(fixed_seq_len)
-        assert time_dim_tag is self.time_dim_tag
+        assert time_dim_tag == self.time_dim_tag
         with tf.name_scope("check_seq_len_batch_size"):
           fixed_seq_len = check_input_dim(
             fixed_seq_len, axis=0, dim=batch_dim * (input_beam.beam_size if input_beam else 1))
