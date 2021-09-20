@@ -567,7 +567,8 @@ class DimensionTag(object):
           #   The user should be able to fix `extern_data` in the config such that this is correct in the first place.
           #   Also, in addition to this warning, we might want to add some runtime check on the eq of the dyn sizes.
           print(
-            "Warning: assuming dim tags are same with different size placeholders: %r vs %r" % (self, other_same_base))
+            "Warning: assuming dim tags are same with different size placeholders: %r vs %r" % (
+              self.dyn_size, other_same_base.dyn_size))
     # If we have a defined source, and this is a dynamic spatial axis, and it was undefined before,
     # maybe we can overtake the size_placeholder now.
     if self.same_as.dyn_size is not None and self.src_data:
