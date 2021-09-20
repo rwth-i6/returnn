@@ -235,6 +235,21 @@ class DimensionTag(object):
     same_base._same_for_batch_ctx[(dim_tag.batch, dim_tag.control_flow_ctx)] = dim_tag
     return dim_tag
 
+  def get_dyn_size_ext_for_batch_ctx(self, batch, ctx):
+    """
+    :param BatchInfo|None batch:
+    :param ControlFlowContext|None ctx:
+    :rtype: Data|None
+    """
+    if not batch and self.batch:
+      # Assume global batch.
+      batch = self.batch.get_global_base()
+    if not batch:
+      # This is usually not valid. However, this case can happen early at initialization.
+      assert batch == self.batch and ctx == self.control_flow_ctx
+      return self.dyn_size_ext
+    return self.get_for_batch_ctx(batch, ctx).dyn_size_ext
+
   @property
   def dyn_size(self):
     """
@@ -520,16 +535,18 @@ class DimensionTag(object):
       self_same_as.same_as = other_same_base
       self_same_as._same_as_tb = traceback.extract_stack()
       if self_same_as.dyn_size_ext is None:
-        self_same_as.dyn_size_ext = other_same_base.dyn_size_ext
+        self_same_as.dyn_size_ext = other_same_base.get_dyn_size_ext_for_batch_ctx(
+          self_same_as.batch, self_same_as.control_flow_ctx)
       elif other_same_base.dyn_size_ext is None:
-        other_same_base.dyn_size_ext = self_same_as.dyn_size_ext
+        other_same_base.dyn_size_ext = self_same_as.get_dyn_size_ext_for_batch_ctx(
+          other_same_base.batch, other_same_base.control_flow_ctx)
       if self.dyn_size_ext is None and self_same_as.dyn_size_ext:
-        self.dyn_size_ext = self_same_as.dyn_size_ext.copy_extend_with_beam(self.batch.beam if self.batch else None)
+        self.dyn_size_ext = self_same_as.get_dyn_size_ext_for_batch_ctx(self.batch, self.control_flow_ctx)
     self.same_as = other_same_base
     self._same_as_tb = traceback.extract_stack()
     if self.dyn_size is not None and other_same_base.dyn_size is not None:
       if self.dyn_size is not other_same_base.dyn_size:
-        if self.batch == other_same_base.batch:
+        if self.batch == other_same_base.batch and self.control_flow_ctx == other_same_base.control_flow_ctx:
           # Note: Instead of making this a warning, we could also enforce this at some point.
           #   The user should be able to fix `extern_data` in the config such that this is correct in the first place.
           #   Also, in addition to this warning, we might want to add some runtime check on the eq of the dyn sizes.
@@ -540,17 +557,18 @@ class DimensionTag(object):
     if self.same_as.dyn_size is not None and self.src_data:
       assert isinstance(self.src_axis, int)
       # Maybe it changed in the meanwhile, so check.
-      if self.src_data.get_dim_tag(self.src_axis).description == self.description:
-        self.src_data.size_placeholder[
-          self.src_data.get_batch_axis_excluding_batch(self.src_axis)] = self.same_as.dyn_size
+      tag = self.src_data.get_dim_tag(self.src_axis)
+      if tag.description == self.description and not tag.dyn_size_ext:
+        tag.dyn_size_ext = self.get_dyn_size_ext_for_batch_ctx(tag.batch, tag.control_flow_ctx)
     # If others dyn_size is None but we have a dyn_size, maybe update others dyn_size.
     if self.dyn_size is not None and self.same_as.dyn_size is not self.dyn_size:
       # Could be unset if it comes from the config, or from prev graph creation.
       # This is important such that self.can_compare() is sane.
       if self.same_as.dyn_size is None or self.same_as.dyn_size.graph is not self.dyn_size.graph:
-        self.same_as.dyn_size_ext = self.dyn_size_ext
+        self.same_as.dyn_size_ext = self.get_dyn_size_ext_for_batch_ctx(
+          self.same_as.batch, self.same_as.control_flow_ctx)
     if not self.dyn_size_ext and other.dyn_size_ext:
-      self.dyn_size_ext = other.dyn_size_ext.copy()
+      self.dyn_size_ext = other.get_dyn_size_ext_for_batch_ctx(self.batch, self.control_flow_ctx)
 
   @classmethod
   def get_existing_tag_from_collection(cls, other, tags, is_equal_opts=None):
