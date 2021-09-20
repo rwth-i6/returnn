@@ -109,6 +109,8 @@ class DimensionTag(object):
         desc += "[%s]" % ",".join(self.dyn_size_ext.get_batch_axes_short_description(special_axes=False))
       else:
         desc += "[?]"
+      if self.control_flow_ctx:
+        desc += "{ctx=%s}" % self.control_flow_ctx.repr_inner()
     return desc
 
   def copy(self, kind=None):
