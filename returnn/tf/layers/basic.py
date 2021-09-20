@@ -864,13 +864,18 @@ class SliceNdLayer(_ConcatInputLayer):
     :param int|None min_size: if size is None, but we want to have a min-size
     """
     super(SliceNdLayer, self).__init__(**kwargs)
-    from returnn.tf.util.basic import where_bc, expand_multiple_dims
+    from returnn.tf.util.basic import where_bc
     from returnn.tf.util.data import Data
     x = self.input_data.copy()
     seq_lens_data = x.get_time_dim_tag().dyn_size_ext  # (B,) or None
     self.start = start
     self.size = size
     start_data = start.output.copy()  # e.g. (B,) or (B,T)
+    data_objs = [start_data]
+    data_objs += [size.output] if isinstance(size, LayerBase) else []
+    data_objs += [seq_lens_data] if isinstance(seq_lens_data, Data) else []
+    common_data = Data.get_common_data(data_objs)
+    start_data = start_data.copy_compatible_to(common_data, check_sparse=False)
     start_t = start_data.placeholder
     if size is None:
       if min_size is None:
@@ -879,16 +884,12 @@ class SliceNdLayer(_ConcatInputLayer):
         assert isinstance(x.batch_shape[x.time_dim_axis], int)
         size_t = x.batch_shape[x.time_dim_axis] - start_t
       else:
-        seq_lens_t = seq_lens_data.copy_compatible_to(start_data, check_sparse=False).placeholder
+        seq_lens_t = seq_lens_data.copy_compatible_to(common_data, check_sparse=False).placeholder
         size_t = seq_lens_t - start_t
       size = tf.maximum(tf.reduce_max(size_t), min_size)  # scalar
     elif isinstance(size, LayerBase):
-      size_data = size.output.copy()
-      common_data = Data.get_common_data([start_data, size_data])
-      size_data = size_data.copy_compatible_to(common_data)
+      size_data = size.output.copy_compatible_to(common_data, check_sparse=False)
       size_t = size_data.placeholder
-      start_data = start_data.copy_compatible_to(common_data)
-      start_t = start_data.placeholder
       min_size = 0
       size = tf.maximum(tf.reduce_max(size_t), min_size)  # scalar
     else:
@@ -898,8 +899,9 @@ class SliceNdLayer(_ConcatInputLayer):
     # and the next axis will therefore be the slice axis
     slice_tag = self.output.dim_tags[start_data.batch_ndim]
     assert slice_tag.description.startswith("sliced-time:")
-    if not isinstance(size, int):
+    if size_t is not None:
       # in this case, size is not known before runtime and becomes dynamic and we need to set dyn_size
+      assert not isinstance(size, int)
       dyn_size = tf.maximum(size_t, min_size)  # (B,) or (B,T)
       dyn_size_ext = Data(
         name=("%s:dyn_size" % slice_tag.description),
