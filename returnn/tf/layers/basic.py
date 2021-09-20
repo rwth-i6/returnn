@@ -1649,6 +1649,7 @@ class LengthLayer(LayerBase):
     source = self.sources[0].output
     axis = source.get_axis_from_description(axis, allow_int=False)
     dim = source.dim_tags[axis]
+    self.dim_tag = dim
     if add_time_axis:
       self.output.placeholder = tf.expand_dims(dim.dyn_size, axis=self.output.time_dim_axis)
     else:
