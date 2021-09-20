@@ -871,7 +871,7 @@ class SliceNdLayer(_ConcatInputLayer):
     self.start = start
     self.size = size
     start_data = start.output.copy()  # e.g. (B,) or (B,T)
-    start_t = start_data.get_placeholder_as_batch_major()
+    start_t = start_data.placeholder
     if size is None:
       if min_size is None:
         min_size = 0
@@ -879,20 +879,19 @@ class SliceNdLayer(_ConcatInputLayer):
         assert isinstance(x.batch_shape[x.time_dim_axis], int)
         size_t = x.batch_shape[x.time_dim_axis] - start_t
       else:
-        seq_lens_t = seq_lens_data.copy_compatible_to(start_data, check_sparse=False).get_placeholder_as_batch_major()
+        seq_lens_t = seq_lens_data.copy_compatible_to(start_data, check_sparse=False).placeholder
         size_t = seq_lens_t - start_t
       size = tf.maximum(tf.reduce_max(size_t), min_size)  # scalar
     elif isinstance(size, LayerBase):
       size_data = size.output.copy()
       common_data = Data.get_common_data([start_data, size_data])
       size_data = size_data.copy_compatible_to(common_data)
-      size_t = size_data.get_placeholder_as_batch_major()
+      size_t = size_data.placeholder
       start_data = start_data.copy_compatible_to(common_data)
-      start_t = start_data.get_placeholder_as_batch_major()
+      start_t = start_data.placeholder
       min_size = 0
       size = tf.maximum(tf.reduce_max(size_t), min_size)  # scalar
     else:
-      # in this case, size_t is never used but needs to be set to avoid a PyCharm warning
       size_t = None
     # for each start index in start_data, we want to gather a slice
     # therefore, the output's first axes are the same as the ones from start_data
@@ -906,14 +905,13 @@ class SliceNdLayer(_ConcatInputLayer):
         name=("%s:dyn_size" % slice_tag.description),
         dtype=Data.size_dtype,
         placeholder=dyn_size,
-        dim_tags=start_data.copy_as_batch_major().dim_tags,  # as batch major because the placeholder is too
+        dim_tags=start_data.dim_tags,
         batch=slice_tag.batch,
         beam=slice_tag.batch.beam if slice_tag.batch else self.output.beam,
         control_flow_ctx=slice_tag.control_flow_ctx)
       slice_tag.dyn_size_ext = dyn_size_ext
       slice_tag.set_tag_on_size_tensor(dyn_size)
-    # get as batch major, because the placeholder later will also be batch major
-    gather_positions_data = start_data.copy_template(name="%s_gather_positions" % self.name).copy_as_batch_major()
+    gather_positions_data = start_data.copy_template(name="%s_gather_positions" % self.name)
     gather_positions_data = gather_positions_data.copy_add_dim_by_tag(
       slice_tag,
       unbroadcast=True,
@@ -935,6 +933,10 @@ class SliceNdLayer(_ConcatInputLayer):
       gather_positions = tf.clip_by_value(gather_positions, 0, x.batch_shape[1] - 1)
     if isinstance(self.size, LayerBase):
       pad_mask = tf.logical_or(tf.greater(gather_positions, tf.expand_dims(start_t + size_t - 1, -1)), pad_mask)
+    pad_mask_data = gather_positions_data.copy_template(
+      name="%s_gather_positions" % self.name,
+      dtype="bool")
+    pad_mask_data.placeholder = pad_mask
     gather_positions_data.placeholder = gather_positions
     position = InternalLayer(
       network=self.network,
@@ -956,7 +958,8 @@ class SliceNdLayer(_ConcatInputLayer):
     # the gradient flow would go into wrong frames
     # and might lead to unexpected behavior.
     # So to be on the safe side, we do the masking here.
-    pad_mask = expand_multiple_dims(pad_mask, [-1] * (len(placeholder.shape) - len(pad_mask.shape)))
+    pad_mask_data = pad_mask_data.copy_compatible_to(gather_layer.output, check_sparse=False, check_dtype=False)
+    pad_mask = pad_mask_data.placeholder
     self.output.placeholder = where_bc(pad_mask, tf.zeros_like(placeholder), placeholder)
 
   def get_dep_layers(self):
