@@ -8,9 +8,9 @@ from __future__ import print_function
 import os
 import sys
 import typing
-from returnn.util.basic import BackendEngine, model_epoch_from_filename, get_model_filename_postfix
 from returnn.log import log
 from returnn.pretrain import Pretrain
+from returnn.util import basic as util
 
 
 class EngineBase(object):
@@ -52,7 +52,7 @@ class EngineBase(object):
         if os.path.exists(fn):
           file_list[epoch] = fn
           break
-        if BackendEngine.is_tensorflow_selected():
+        if util.BackendEngine.is_tensorflow_selected():
           if os.path.exists(fn + ".index"):
             file_list[epoch] = fn
             break
@@ -72,32 +72,24 @@ class EngineBase(object):
       start_epoch = int(start_epoch_mode)
       assert start_epoch >= 1
 
-    load_model_epoch_filename = config.value('load', '')
-    if load_model_epoch_filename.endswith(".meta"):
-      load_model_epoch_filename = load_model_epoch_filename[:-len(".meta")]
-    elif load_model_epoch_filename.endswith(".index"):
-      load_model_epoch_filename = load_model_epoch_filename[:-len(".index")]
+    load_model_epoch_filename = util.get_checkpoint_filepattern(config.value('load', ''))
     if load_model_epoch_filename:
-      assert os.path.exists(load_model_epoch_filename + get_model_filename_postfix())
+      assert os.path.exists(load_model_epoch_filename + util.get_model_filename_postfix())
 
-    import_model_train_epoch1 = config.value('import_model_train_epoch1', '')
-    if import_model_train_epoch1.endswith(".meta"):
-      import_model_train_epoch1 = import_model_train_epoch1[:-len(".meta")]
-    elif import_model_train_epoch1.endswith(".index"):
-      import_model_train_epoch1 = import_model_train_epoch1[:-len(".index")]
+    import_model_train_epoch1 = util.get_checkpoint_filepattern(config.value('import_model_train_epoch1', ''))
     if import_model_train_epoch1:
-      assert os.path.exists(import_model_train_epoch1 + get_model_filename_postfix())
+      assert os.path.exists(import_model_train_epoch1 + util.get_model_filename_postfix())
 
     existing_models = cls.get_existing_models(config)
     load_epoch = config.int("load_epoch", -1)
     if load_model_epoch_filename:
       if load_epoch <= 0:
-        load_epoch = model_epoch_from_filename(load_model_epoch_filename)
+        load_epoch = util.model_epoch_from_filename(load_model_epoch_filename)
     else:
       if load_epoch > 0:  # ignore if load_epoch == 0
         assert load_epoch in existing_models
         load_model_epoch_filename = existing_models[load_epoch]
-        assert model_epoch_from_filename(load_model_epoch_filename) == load_epoch
+        assert util.model_epoch_from_filename(load_model_epoch_filename) == load_epoch
 
     # Only use this when we don't train.
     # For training, we first consider existing models before we take the 'load' into account when in auto epoch mode.
