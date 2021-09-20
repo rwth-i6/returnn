@@ -149,6 +149,20 @@ class DimensionTag(object):
         return False
     return True
 
+  def _validate_in_current_graph(self):
+    """
+    :rtype: bool
+    """
+    if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:
+      g = tf_compat.v1.get_default_graph()
+      if self.dyn_size_ext.placeholder.graph is not g:  # maybe from an earlier run which reuses the dim tag
+        # Reset and cleanup.
+        self.dyn_size_ext = None
+        same_base = self.get_same_base()
+        same_base._same_for_batch_ctx.pop((self.batch, self.control_flow_ctx), None)
+        return False
+    return True
+
   def get_for_batch_ctx(self, batch, ctx):
     """
     :param BatchInfo batch:
@@ -156,6 +170,7 @@ class DimensionTag(object):
     :rtype: DimensionTag
     """
     if self.batch == batch and self.control_flow_ctx == ctx:
+      self._validate_in_current_graph()
       return self
     if self.is_batch_dim():
       # We ignore the ctx for the batch dim currently.
@@ -169,6 +184,7 @@ class DimensionTag(object):
     if batch.is_broadcast():
       return self  # just leave as-is. should not matter.
     same_base = self.get_same_base()
+    same_base._validate_in_current_graph()
     # Might be uninitialized in some cases. Assume batch is global.
     if not same_base.batch:
       batch_base = batch.get_global_base()
@@ -183,13 +199,13 @@ class DimensionTag(object):
       assert same_base.batch == same_base.dyn_size_ext.batch
       assert same_base.control_flow_ctx == same_base.dyn_size_ext.control_flow_ctx
     tag = same_base._same_for_batch_ctx.get((batch, ctx), None)
-    if tag:
+    if tag and tag._validate_in_current_graph():
       return tag
     if same_base.batch == batch and same_base._can_use_in_ctx(ctx):
       return same_base
     for ctx_ in ControlFlowContext.abs_ctx_stack_with_root(ctx):
       tag = same_base._same_for_batch_ctx.get((batch, ctx_), None)
-      if tag and tag._can_use_in_ctx(ctx):
+      if tag and tag._can_use_in_ctx(ctx) and tag._validate_in_current_graph():
         return tag
     # Ok, nothing matching found.
     dyn_size_ext = None
@@ -202,7 +218,7 @@ class DimensionTag(object):
       else:
         for ctx_ in ControlFlowContext.abs_ctx_stack_with_root(ctx):
           tag = same_base._same_for_batch_ctx.get((batch_base, ctx_), None)
-          if tag and tag._can_use_in_ctx(ctx):
+          if tag and tag._can_use_in_ctx(ctx) and tag._validate_in_current_graph():
             base_can_use_in_ctx = tag
             break
       if base_can_use_in_ctx and base_can_use_in_ctx.dyn_size_ext:
