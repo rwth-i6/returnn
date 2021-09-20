@@ -400,6 +400,10 @@ class DimensionTag(object):
         return True
       if undefined_matches and (self.undefined or other.undefined):
         return True
+    # In principle, we would want to check for identity (self is other).
+    # We currently use the description because the identity would not be the same
+    # in case of template construction where a dim tag is once created for a template layer,
+    # and then later again for the real layer.
     if self.description == other.description:
       return True
     return False
