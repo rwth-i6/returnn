@@ -3241,9 +3241,15 @@ class _SubnetworkRecCell(object):
           search_choices_cache=search_choices_cache)
         # Use the output Data from the in-loop layer,
         # as this might have set dyn sizes on dim tags.
+        time_dim_tag = DimensionTag.get_tag_from_size_tensor(resolved_seq_len)
+        if not time_dim_tag:
+          time_dim_tag = DimensionTag(
+            kind=DimensionTag.Types.Spatial,
+            description="dyn-time:%s/%s" % (self.parent_rec_layer.get_full_ctx_name(), name))
         output = (
           in_loop_layer.output
-          .copy_template_adding_time_dim(time_dim_axis=0)
+          .copy_template()
+          .copy_add_dim_by_tag(time_dim_tag, unbroadcast=True, axis=0)
           .copy_template_set_ctx(self.parent_net.get_control_flow_ctx()))
         if latest_layer_choice_name:
           output.beam = self.net.layers[latest_layer_choice_name].search_choices.get_beam_info()
