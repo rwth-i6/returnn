@@ -3375,10 +3375,10 @@ class _SubnetworkRecCell(object):
     # Same scope as the main subnet, so that it stays compatible.
     # noinspection PyProtectedMember
     with reuse_name_scope(self.parent_rec_layer._rec_scope):
+      for layer_name in sorted(extra_output_layers):
+        self.output_layers_net.layers[layer_name] = get_layer(layer_name)
       for layer_name in self.output_layers_moved_out:
         get_layer(layer_name)
-      for layer_name in extra_output_layers:
-        self.output_layers_net.layers[layer_name] = get_layer(layer_name)
 
     # We want to have one single layer with search choices.
     for name, search_choices in search_choices_cache.items():
