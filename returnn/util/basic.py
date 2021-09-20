@@ -288,6 +288,21 @@ def get_model_filename_postfix():
   return ""
 
 
+def get_checkpoint_filepattern(filepath):
+  """
+  Removes optional .index or .meta extension
+
+  :param str filepath:
+  :return: CheckpointLoader compatible filepattern
+  :rtype: str
+  """
+  if filepath.endswith(".meta"):
+    return filepath[:-len(".meta")]
+  elif filepath.endswith(".index"):
+    return filepath[:-len(".index")]
+  return filepath
+
+
 def sys_cmd_out_lines(s):
   """
   :param str s: shell command

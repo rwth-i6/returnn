@@ -16,6 +16,7 @@ from returnn.tf.layers.basic import LayerBase, get_layer_class
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
 from returnn.tf.util.basic import Data, DimensionTag, reuse_name_scope, VariableAssigner
+from returnn.util import basic as util
 
 
 class DataNotFound(Exception):
@@ -3473,7 +3474,7 @@ class CustomCheckpointLoader:
                ignore_params=(), ignore_params_prefixes=(), var_name_mapping=None,
                network=None):
     """
-    :param str filename: filepattern for NewCheckpointReader
+    :param str filename: filepattern for NewCheckpointReader or .index/.meta file path
     :param list[tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject] saveable_params:
     :param str params_prefix: expect that all vars in saveable_params have this prefix, and remove it
     :param str load_if_prefix: if given, only load variables with a name containing this string.
@@ -3486,7 +3487,7 @@ class CustomCheckpointLoader:
       renamed vars in the checkpoint
     :param TFNetwork network:
     """
-    self.filename = filename
+    self.filepattern = util.get_checkpoint_filepattern(filename)
     self.network = network
     self.ignore_missing = ignore_missing
     self.params_prefix = params_prefix
@@ -3510,7 +3511,7 @@ class CustomCheckpointLoader:
         continue
       self.saveable_params.append(param)
     assert count > 0, "%s: no saveable vars" % self
-    self.reader = tf_compat.v1.train.NewCheckpointReader(filename)
+    self.reader = tf_compat.v1.train.NewCheckpointReader(self.filepattern)
     self.net_vars = [v for v in self.saveable_params if isinstance(v, tf.Variable)]
     self.net_saveables = [v for v in self.saveable_params if not isinstance(v, tf.Variable)]
     # All variables in the checkpoint:
@@ -3918,7 +3919,7 @@ class CustomCheckpointLoader:
           if self.ignore_missing and v_name not in var_name_map:
             print(
               "Warning, did not find match for var %r (%r, params_prefix %r, load_if_prefix %r) in checkpoint %r." % (
-                v, v_name, self.params_prefix, self.load_if_prefix, self.filename), file=log.v3)
+                v, v_name, self.params_prefix, self.load_if_prefix, self.filepattern), file=log.v3)
             continue
           variable_values[v] = self.VariableValue(value=var_name_map[v_name]())
       assert variable_values, "no vars to load; saveable vars are %r. load_if_prefix %r." % (
