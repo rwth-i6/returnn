@@ -137,7 +137,9 @@ class DimensionTag(object):
     if self.batch == batch and self.control_flow_ctx == ctx:
       return self
     if self.is_batch_dim():
-      # For now, just create another copy in case of batch dim tag.
+      # We ignore the ctx for the batch dim currently.
+      if self.batch == batch:
+        return self
       return DimensionTag(kind=DimensionTag.Types.Batch, description="batch:%s" % batch.short_repr(), batch=batch)
     if self.dimension is not None:
       # If static dim, no effect.
