@@ -157,6 +157,8 @@ class LayerNetworkDescription:
       if config.has("num_inputs") or config.has("num_outputs"):
         print("Warning: Using extern_data and will ignore num_inputs/num_outputs in config.", file=log.v2)
     else:
+      log.print_deprecation_warning(
+        "Using num_inputs/num_ouputs instead of extern_data is deprecated and might be removed in future versions")
       num_inputs, num_outputs = cls.num_inputs_outputs_from_config(config)
       data_dims = num_outputs.copy()
       sparse_input = config.bool("sparse_input", False)
