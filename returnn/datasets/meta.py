@@ -208,8 +208,10 @@ class MetaDataset(CachedDataset2):
     self.data_map = data_map
     self.dataset_keys = set([m[0] for m in self.data_map.values()])  # type: typing.Set[str]
     self.data_keys = set(self.data_map.keys())  # type: typing.Set[str]
-    assert "data" in self.data_keys
-    self.target_list = sorted(self.data_keys - {"data"})
+    assert seq_order_control_dataset or "data" in self.data_keys, (
+      "If no seq_order_control_dataset is specified, a 'data' datastream is required.\n"
+      "Nevertheless defining seq_order_control_dataset is strongly recommended.")
+    self.target_list = sorted(self.data_keys - {"data"})  # only used for get_target_list()
     self.default_dataset_key = seq_order_control_dataset or self.data_map["data"][0]
     self.seq_order_control_dataset = seq_order_control_dataset
 
@@ -237,8 +239,7 @@ class MetaDataset(CachedDataset2):
     if data_dims:
       data_dims = convert_data_dims(data_dims)
       self.data_dims = data_dims
-      assert "data" in data_dims
-      for key in self.target_list:
+      for key in self.data_keys:
         assert key in data_dims
     else:
       self.data_dims = {}
@@ -251,7 +252,7 @@ class MetaDataset(CachedDataset2):
       if dataset_data_key in dataset.labels:
         self.labels[data_key] = dataset.labels[dataset_data_key]
 
-    self.num_inputs = self.data_dims["data"][0]
+    self.num_inputs = 0
     self.num_outputs = self.data_dims
 
     self.orig_seq_order_is_initialized = False
@@ -434,9 +435,8 @@ class MetaDataset(CachedDataset2):
     :rtype: DatasetSeq
     """
     seq_tag = self.seq_list_ordered[self.default_dataset_key][seq_idx]
-    features = self._get_data(seq_idx, "data")
-    targets = {target: self._get_data(seq_idx, target) for target in self.target_list}
-    return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features, targets=targets)
+    features = {data_key: self._get_data(seq_idx, data_key) for data_key in self.data_keys}
+    return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features)
 
   def get_seq_length(self, sorted_seq_idx):
     """
