@@ -340,7 +340,6 @@ class LstmGenericBase(NativeOpGenBase):
     Map.
     """
     import returnn.util.basic
-    assert returnn.util.basic.BackendEngine.is_theano_selected()
     import theano.tensor as T  # noqa
     assert Z.ndim == 3
     assert V_h.ndim == 2

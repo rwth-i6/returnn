@@ -630,17 +630,6 @@ def dump_flags():
   print("CUDA_VISIBLE_DEVICES:", os.environ.get("CUDA_VISIBLE_DEVICES"))
   print("CUDA_LAUNCH_BLOCKING:", os.environ.get("CUDA_LAUNCH_BLOCKING"))
 
-  if BackendEngine.is_theano_selected():
-    print("available GPUs:", get_gpu_names())
-
-    # noinspection PyUnresolvedReferences,PyPackageRequirements
-    from theano.sandbox import cuda as theano_cuda
-    print("CUDA via", theano_cuda.__file__)
-    print("CUDA available:", theano_cuda.cuda_available)
-
-    from returnn.util.basic import TheanoFlags
-    print("THEANO_FLAGS:", TheanoFlags)
-
 
 def set_target_mode(mode):
   """
@@ -723,8 +712,6 @@ def _init_base(configfile=None, target_mode=None, epoch=None, sprint_opts=None):
     if BackendEngine.is_tensorflow_selected():
       # Use TFEngine.Engine class instead of Engine.Engine.
       from returnn.tf.engine import Engine
-    elif BackendEngine.is_theano_selected():
-      from returnn.theano.engine import Engine
 
     import atexit
     atexit.register(_at_exit_handler)
@@ -815,10 +802,6 @@ def _prepare_forwarding():
 
   # Load network.
   engine.init_network_from_config(config)
-
-  # Copy over net params.
-  if BackendEngine.is_theano_selected():
-    engine.devices[0].prepare(engine.network)
 
 
 def _init_dataset():
@@ -936,23 +919,8 @@ def _forward(segment_name, features):
   assert features.shape == (InputDim, num_time)
   dataset, seq_idx = features_to_dataset(features=features, segment_name=segment_name)
 
-  if BackendEngine.is_theano_selected():
-    # Prepare data for device.
-    device = engine.devices[0]
-    from returnn.theano.engine_util import assign_dev_data_single_seq
-    success = assign_dev_data_single_seq(device, dataset=dataset, seq=seq_idx)
-    assert success, "failed to allocate & assign data for seq %i, %s" % (seq_idx, segment_name)
-
-    # Do the actual forwarding and collect result.
-    device.run("extract")
-    result, _ = device.result()
-    assert result is not None, "Device crashed."
-    assert len(result) == 1
-    posteriors = result[0]
-
-  elif BackendEngine.is_tensorflow_selected():
+  if BackendEngine.is_tensorflow_selected():
     posteriors = engine.forward_single(dataset=dataset, seq_idx=seq_idx)
-
   else:
     raise NotImplementedError("unknown backend engine")
   # If we have a sequence training criterion, posteriors might be in format (time,seq|batch,emission).

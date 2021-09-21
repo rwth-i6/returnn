@@ -8,17 +8,8 @@ import numpy
 import h5py
 from returnn.util import BackendEngine
 
-if BackendEngine.is_theano_selected():
-  # noinspection PyUnresolvedReferences,PyPackageRequirements
-  import theano
-  # noinspection PyUnresolvedReferences,PyPackageRequirements
-  import theano.tensor as tt
-  # noinspection PyUnresolvedReferences,PyPackageRequirements
-  import theano.sandbox.cuda as cuda
-  from returnn.theano.util import make_var_tuple
-  from returnn.theano.network import LayerNetwork
-else:
-  theano = None
+
+theano = None
 
 
 def find_obj_in_stack(cls, stack=None, all_threads=True):
@@ -78,84 +69,6 @@ def get_device():
   from returnn.theano.device import Device
   _device = find_obj_in_stack(Device)
   return _device
-
-
-if BackendEngine.is_theano_selected():
-  def compute(var, trainnet=True):
-    """
-    :param theano.Variable var: variable which we should compute the value of
-    :param bool trainnet: whether to make givens based on dev.trainnet or dev.testnet
-    :return: the computed value
-    :rtype: numpy.ndarray
-
-    This expects to calculate some value of the trainnet or testnet of the current Device.
-    """
-    dev = get_device()
-    assert dev, "no Device instance found"
-    if trainnet:
-      network = dev.trainnet
-    else:
-      network = dev.testnet
-    givens = dev.make_givens(network)
-    if isinstance(var, list):
-      outputs = var
-    else:
-      outputs = [var]
-    func = theano.function(inputs=[dev.block_start, dev.block_end],
-                           outputs=outputs,
-                           givens=givens,
-                           on_unused_input='warn',
-                           name="debug compute")
-    batch_dim = dev.y["data"].get_value(borrow=True, return_internal_type=True).shape[1]
-    batch_start = 0
-    batch_end = batch_dim
-    result = func(batch_start, batch_end)
-    if not isinstance(var, list):
-      result = result[0]
-    return result
-
-  class DebugNn:
-    """
-    Debug helper for NN.
-    """
-
-    def __init__(self, filename):
-      self.network = LayerNetwork.from_hdf(filename, mask="unity", train_flag=False, eval_flag=True)
-      self.f_forwarder = None
-
-    def compile_forwarder(self):
-      """
-      Compile function for forwarding.
-      """
-      network = self.network
-      data_keys = list(sorted(network.j.keys()))
-      # All input seqs expected to have same length.
-      givens = [(network.j[k], tt.ones(network.y["data"].shape[:2], dtype="int8")) for k in data_keys]
-      self.f_forwarder = theano.function(
-        inputs=[network.y["data"]],
-        outputs=(
-          [network.output["output"].output] +
-          [layer.output for name, layer in sorted(network.output.items()) if name != "output"]),
-        givens=givens,
-        on_unused_input='warn',
-        name="forwarder")
-
-    def forward(self, data, output_index=0):
-      """
-      :param numpy.ndarray data: shape (time,in-dim)
-      :param int output_index:
-      :return: shape (time,out-dim)
-      :rtype: numpy.ndarray
-      """
-      assert data.ndim == 2
-      data = data[:, None, :]  # add batch-dim
-      assert self.f_forwarder
-      res = self.f_forwarder(data)
-      res = make_var_tuple(res)[output_index]
-      assert res.ndim == 3
-      assert res.shape[1] == 1
-      res = res[:, 0]
-      return res
 
 
 class SimpleHdf:

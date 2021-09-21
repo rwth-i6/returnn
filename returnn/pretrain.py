@@ -529,11 +529,7 @@ def pretrain_from_config(config):
   from returnn.config import network_json_from_config
   pretrain_type = config.bool_or_other("pretrain", None)
   if pretrain_type == "default" or (isinstance(pretrain_type, dict) and pretrain_type) or pretrain_type is True:
-    if BackendEngine.is_theano_selected():
-      from returnn.theano.network import LayerNetwork
-      network_init_args = LayerNetwork.init_args_from_config(config)
-    else:
-      network_init_args = None
+    network_init_args = None
     original_network_json = network_json_from_config(config)
     opts = config.get_of_type("pretrain", dict, {})
     if config.has("pretrain_copy_output_layer"):
