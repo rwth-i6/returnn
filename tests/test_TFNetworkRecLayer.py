@@ -3434,15 +3434,19 @@ def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, sha
     print("y: (shape %r)" % (y1_np.shape,))
     print(y1_np)
     y2_np = session.run(net2_output, feed_dict=feed_dict)
-    assert_equal(y1_np.shape, (n_batch, n_time, n_out))
-    assert_equal(y2_np.shape, (n_batch, n_time, n_out))
+    assert y1_np.shape == y2_np.shape
+    assert y1_np.shape[:2] == y2_np.shape[:2] == (n_batch, n_time)
     assert y1_np.any() and y2_np.any()
     if not numpy.allclose(y1_np, y2_np, rtol=rtol):
       print("Not equal!")
+      print("Iterating over shape [B,T,...] = %s" % (y1_np.shape,))
       for b in range(n_batch):
         for t in range(n_time):
-          for d in range(n_out):
-            assert_allclose(y1_np[b, t, d], y2_np[b, t, d], rtol=rtol)
+          print("check batch %i, time %i" % (b, t))
+          y1_np_, y2_np_ = y1_np[b, t], y2_np[b, t]
+          for idx in numpy.ndindex(*y1_np_.shape):
+            print("  check", idx)
+            assert_allclose(y1_np_[idx], y2_np_[idx], rtol=rtol)
       assert_allclose(y1_np, y2_np, rtol=rtol)
 
 
