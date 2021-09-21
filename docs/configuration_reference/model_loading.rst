@@ -10,7 +10,15 @@ Model Loading
     For more details, please refer to
     `EngineBase <https://github.com/rwth-i6/returnn/blob/master/returnn/engine/base.py>`_
     and also check
-    :class:`CustomCheckpointLoader <returnn.tf.network.CustomCheckpointLoader>`.
+    :class:`CustomCheckpointLoader <returnn.tf.network.CustomCheckpointLoader>`
+    and the
+    `"Different ways to import parameters" <https://github.com/rwth-i6/returnn/wiki/Different-ways-to-import-parameters>`_
+    page.
+
+allow_random_model_init
+    Initialize a model randomly.
+    This can be useful if you want to use only ``preload_from_files`` to load
+    multiple different models into one config for decoding without using ``load``.
 
 import_model_train_epoch1
     If a path to a valid model is provided
@@ -42,6 +50,9 @@ preload_from_files
             "filename": ".../net-model/network.163",  # your checkpoint file, mandatory
             "init_for_train": True,  # only load the checkpoint at the start of training epoch 1, default is False
             "ignore_missing": True,  # if the checkpoint only partly covers your model, default is False
+            "ignore_params": ["some_parameter", ...],  # list of parameter names that should not be loaded
+            "ignore_params_prefixes": ["some_prefix_", ...],  # list of parameter prefixes that should not be loaded
+            "var_name_mapping": {"name_in_graph": "name_in_checkpoint", ...},  # map non-matching parameter names
             "prefix": "submodel1_",  # only load parameters for layers starting with the given prefix
           }
         }

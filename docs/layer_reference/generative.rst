@@ -24,3 +24,10 @@ Range in Axis Layer
 .. autoclass:: returnn.tf.layers.basic.RangeInAxisLayer
     :members:
     :undoc-members:
+
+Range from Length Layer
+-----------------------
+
+.. autoclass:: returnn.tf.layers.basic.RangeFromLengthLayer
+    :members:
+    :undoc-members:
