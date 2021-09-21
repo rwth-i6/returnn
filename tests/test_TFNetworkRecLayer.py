@@ -3445,9 +3445,14 @@ def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, sha
           print("check batch %i, time %i" % (b, t))
           y1_np_, y2_np_ = y1_np[b, t], y2_np[b, t]
           for idx in numpy.ndindex(*y1_np_.shape):
-            print("  check", idx)
-            assert_allclose(y1_np_[idx], y2_np_[idx], rtol=rtol)
-      assert_allclose(y1_np, y2_np, rtol=rtol)
+            y1_np__, y2_np__ = y1_np_[idx], y2_np_[idx]
+            allclose = numpy.allclose(y1_np__, y2_np__, rtol=rtol)
+            if allclose:
+              details = ["all close"]
+            else:
+              details = ["not all close", "max1:", numpy.max(y1_np__), "max2:", numpy.max(y2_np__)]
+            print("  check", idx, *details)
+      assert_allclose(y1_np, y2_np, rtol=rtol)  # fail now
 
 
 def test_reclayer_optimize_out_linear():
