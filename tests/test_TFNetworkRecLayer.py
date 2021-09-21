@@ -3425,8 +3425,8 @@ def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, sha
     net1_params = net1.layers["output_not_opt"].get_param_values_dict(session=session)
     net2.layers["output_opt"].set_param_values_by_dict(values_dict=net1_params, session=session)
     x_np = net1.random.normal(size=(n_batch, n_time, n_in))
-    net1_output = net1.layers["output_not_opt"].output.get_placeholder_as_batch_major()
-    net2_output = net2.layers["output_opt"].output.get_placeholder_as_batch_major()
+    net1_output = net1.layers["output_not_opt"].output.copy_masked(0.).get_placeholder_as_batch_major()
+    net2_output = net2.layers["output_opt"].output.copy_masked(0.).get_placeholder_as_batch_major()
     feed_dict = {
       net1.extern_data.data["data"].placeholder: x_np,
       net1.extern_data.data["data"].size_placeholder[0]: [n_time] * n_batch}
