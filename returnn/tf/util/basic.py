@@ -380,9 +380,8 @@ def get_valid_scope_name_from_str(s):
   # For the root name scope, it's even more restrictive, and we must also cover this case.
   # NOTE: Be careful changing this logic. Try to never change the behavior for existing cases,
   # because this name is used e.g. for layers, and you might introduce incompatibility by changes here.
-  s = s.replace(":", "__")
-  s = s.replace("(", "__")
-  s = s.replace(")", "__")
+  import re
+  s = re.sub("[:(){}&'\"]", "__", s)
   if s[:1] in "_-\\/":  # invalid first chars
     s = (".%i." % ord(s[0])) + s[1:]
   return s
