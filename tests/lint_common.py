@@ -109,7 +109,6 @@ ignore_count_for_files = {
   'returnn/datasets/normalization_data.py',
   'returnn/datasets/raw_wav.py',
   'returnn/datasets/stereo.py',
-  'returnn/tf/layers/neural_transducer.py',
   'returnn/tf/layers/segmental_model.py',
 
   # Copied to RETURNN, still work-in-progress to clean up.
