@@ -232,8 +232,8 @@ class DimensionTag(object):
       return same_base
     # Ok, nothing matching found.
     dyn_size_ext = None
-    # Maybe we have sth with the base batch without beam which we can extend.
-    if batch.copy_remove_beam() == batch.get_global_base() and batch.beam:
+    # Maybe we have sth with the base batch without beam or padded batch which we can extend.
+    if batch != batch.get_global_base():
       batch_base = batch.get_global_base()
       base_can_use_in_ctx = None
       if same_base.batch == batch_base and same_base._can_use_in_ctx(ctx) and same_base.dyn_size_ext:
@@ -246,11 +246,14 @@ class DimensionTag(object):
             break
       if base_can_use_in_ctx and base_can_use_in_ctx.dyn_size_ext:
         # The same_base has some dyn size without any beam nor control flow context.
-        # We can expand it to the current beam.
-        dyn_size_ext = base_can_use_in_ctx.dyn_size_ext.copy_extend_with_beam(batch.beam)
+        # We can expand it to the current beam, or extend by padded batch.
+        dyn_size_ext = base_can_use_in_ctx.dyn_size_ext.copy_extend_batch(batch)
+        if batch.beam:
+          dyn_size_ext = base_can_use_in_ctx.dyn_size_ext.copy_extend_with_beam(batch.beam)
         assert dyn_size_ext.batch == batch
         beam_expanded_base_data = getattr(dyn_size_ext.placeholder, "_RETURNN_beam_expanded_base_data", None)
-        assert beam_expanded_base_data
+        if batch.beam:
+          assert beam_expanded_base_data
         # Note: The beam expansion used tiling, which can be cached.
         # This means that we could end up with the same size tensor (placeholder) for multiple different beams,
         # when there are different beams with same beam size!
@@ -260,9 +263,10 @@ class DimensionTag(object):
         with same_control_flow_ctx(dyn_size_ext.placeholder):
           dyn_size_ext.placeholder = tf.identity(
             dyn_size_ext.placeholder,
-            name=get_valid_scope_name_from_str("%s_identity_for_beam_%s" % (dyn_size_ext.name, batch.beam.name)))
-        dyn_size_ext.placeholder._RETURNN_dyn_size_beam = batch.beam
-        dyn_size_ext.placeholder._RETURNN_beam_expanded_base_data = beam_expanded_base_data
+            name=get_valid_scope_name_from_str("%s_get_for_batch_ctx_%s" % (dyn_size_ext.name, batch.short_repr())))
+        if batch.beam:
+          dyn_size_ext.placeholder._RETURNN_dyn_size_beam = batch.beam
+          dyn_size_ext.placeholder._RETURNN_beam_expanded_base_data = beam_expanded_base_data
     if not dyn_size_ext and allow_none:
       return None
     dim_tag = DimensionTag(
