@@ -2283,7 +2283,36 @@ class Data(object):
     data.batch = batch
     self._adapt_batch_consistent_dim_tags()
     if self.placeholder is not None:
-      raise NotImplementedError("%s: copy_ext_batch(%s) with placeholder" % (self, batch))
+      # This can only work if the batch is expanded.
+      assert set(self.batch.virtual_dims).issubset(batch.virtual_dims)
+      from .basic import get_shape
+      from returnn.util.basic import ensure_list_of_type
+      with tf.name_scope("copy_extend_batch"):
+        axis = self.batch_dim_axis
+        x = self.placeholder
+        shape = get_shape(x)
+        # Only fixed dims supported/implemented (no packed dims).
+        old_dims = ensure_list_of_type(self.batch.virtual_dims, BatchInfo.FixedDim)
+        new_dims = ensure_list_of_type(batch.virtual_dims, BatchInfo.FixedDim)
+        batch_broadcast_shape = []  # type: typing.List[typing.Union[tf.Tensor,int]]  # fill below
+        ndim_batch_split = self.batch_ndim - 1 + len(new_dims)
+        tiles = [1] * ndim_batch_split  # type: typing.List[typing.Union[tf.Tensor,int]]  # overwrite below
+        old_idx = 0
+        for new_idx, new_dim in enumerate(new_dims):
+          old_dim = old_dims[old_idx] if old_idx < len(old_dims) else None
+          if old_dim == new_dim:
+            batch_broadcast_shape.append(old_dim.size)
+            old_idx += 1
+          else:
+            batch_broadcast_shape.append(1)
+            tiles[axis + new_idx] = new_dim.size
+        assert old_idx == len(old_dims)
+        shape_batch_split = shape[:axis] + batch_broadcast_shape + shape[axis + 1:]
+        x = tf.reshape(x, shape_batch_split)
+        x = tf.tile(x, tiles)
+        shape = shape[:axis] + [batch.dim] + shape[axis + 1:]
+        x = tf.reshape(x, shape)
+        data.placeholder = x
     return data
 
   def copy_compatible_to(self, data, unbroadcast=False, except_feature=False, check_sparse=True, check_dtype=True):
