@@ -4640,10 +4640,12 @@ class TransposedConvLayer(_ConcatInputLayer):
       remove_padding = [remove_padding] * len(filter_size)
     if not isinstance(output_padding, (list, tuple)):
       output_padding = [output_padding] * len(filter_size)
-    assert len(strides) == len(out.get_spatial_axes()) == len(remove_padding) == len(output_padding), (
+    assert len(strides) == len(out.get_spatial_batch_axes()) == len(remove_padding) == len(output_padding), (
       "Expected strides for all spatial axes")
-    for idx, axis_wo_b in enumerate(out.get_spatial_axes()):
-      axis = out.get_batch_axis(axis_wo_b)
+    for idx, axis in enumerate(out.get_spatial_batch_axes()):
+      if not output_padding[idx] and remove_padding[idx] == 0 and strides[idx] == 1:
+        if filter_size[idx] == 1 or padding.lower() == "same":
+          continue
       tag = dim_tags[axis]
       dim = None
       if tag.dimension is not None:
