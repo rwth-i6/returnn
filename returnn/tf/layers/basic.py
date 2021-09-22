@@ -3054,23 +3054,27 @@ class SplitDimsLayer(_ConcatInputLayer):
     return tuple(new_dims_resolved)
 
   @classmethod
-  def _map_old_axis_to_new_axis(cls, split_axis, dims, old_axis, require_exact=True):
+  def _map_old_axis_to_new_axis(cls, split_axis, dims, old_axis, split_offset=None):
     """
     :param int split_axis:
     :param tuple[int] dims: might include -1
     :param int old_axis:
-    :param bool require_exact: if True, must be unique, always returns int, or raise exception
+    :param int|None split_offset:
     :rtype: int
     """
     if old_axis < split_axis:
       return old_axis
     if old_axis > split_axis:
       return old_axis + len(dims) - 1
+    assert old_axis == split_axis
     if -1 in dims:
       assert dims.count(-1) == 1
-      return old_axis + dims.index(-1)
-    assert not require_exact
-    return old_axis
+      return split_axis + dims.index(-1)
+    assert split_offset is not None
+    if split_offset < 0:
+      split_offset += len(dims)
+    assert 0 <= split_offset < len(dims)
+    return split_axis + split_offset
 
   @classmethod
   def get_out_data_from_opts(cls, name, axis, dims, pad_to_multiples=None, sources=(), **kwargs):
@@ -3119,6 +3123,12 @@ class SplitDimsLayer(_ConcatInputLayer):
     out = data.copy_template_new_dim_tags(new_dim_tags)
     if data.time_dim_axis is None:
       out.time_dim_axis = None
+    if data.feature_dim_axis is not None:
+      expected_out_feature_dim_axis = cls._map_old_axis_to_new_axis(
+        split_axis=axis, dims=dims, old_axis=data.feature_dim_axis, split_offset=-1)
+      if out.feature_dim_axis != expected_out_feature_dim_axis:  # maybe due to non-specified default behavior
+        out.feature_dim_axis = expected_out_feature_dim_axis
+        out.dim = out.batch_shape[out.feature_dim_axis]
     return out
 
 
