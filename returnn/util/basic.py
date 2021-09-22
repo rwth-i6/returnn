@@ -3837,6 +3837,18 @@ def make_seq_of_type(cls, seq):
   return cls(seq)  # noqa
 
 
+def ensure_list_of_type(ls, type_):
+  """
+  :param list ls:
+  :param (()->T)|type[T] type_: type of instances of `ls`.
+    Note the strange type here in the docstring is due to some PyCharm type inference problems
+    (https://youtrack.jetbrains.com/issue/PY-50828).
+  :rtype: list[T]
+  """
+  assert all(isinstance(elem, type_) for elem in ls)
+  return ls
+
+
 @contextlib.contextmanager
 def dummy_noop_ctx():
   """
