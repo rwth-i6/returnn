@@ -6336,9 +6336,9 @@ def string_words_calc_wer(hyps, refs):
   return wer, get_sparse_tensor_length(refs_sparse)
 
 
-def py_print(pass_through_value, print_args, message=None, summarize=None, first_n=None, name="py_print"):
+def py_print(pass_through_value, print_args, message=None, summarize=None, first_n=None, name="py_print", file=None):
   """
-  Like :func:`tf.Print`, but prints to Python stdout.
+  Like :func:`tf.Print`, but prints to Python stdout or to `file`.
   Also see :func:`tf.print`, which however also does not print to Python stdout.
 
   :param tf.Tensor|int|float pass_through_value: will return tf.identity of this, but with side effect of printing
@@ -6348,6 +6348,7 @@ def py_print(pass_through_value, print_args, message=None, summarize=None, first
     maximum of 3 elements are printed per input tensor.
   :param int|None first_n: Only log `first_n` number of times. Negative numbers log always; this is the default.
   :param str name:
+  :param SupportsWrite[str]|None file: a file-like object (stream); defaults to the current sys.stdout.
   :return: tf.identity(pass_through_value) with side effect of printing
   :rtype: tf.Tensor
   """
@@ -6397,7 +6398,7 @@ def py_print(pass_through_value, print_args, message=None, summarize=None, first
           s += "\n"
         s += arg_s
     try:
-      print(s)
+      print(s, file=file)
       return True
     except BrokenPipeError:  # be silent about those. probably only at exit
       return False
