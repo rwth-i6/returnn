@@ -7,7 +7,7 @@ import logging
 import os
 import tensorflow as tf
 import sys
-from nose.tools import assert_equal, assert_is_instance
+from nose.tools import assert_equal, assert_not_equal, assert_is_instance
 import contextlib
 import unittest
 import numpy.testing
@@ -3317,6 +3317,35 @@ def test_TransposedConvLayer_2d_simple():
     out_v = session.run(out.placeholder, feed_dict={net.extern_data.data["data"].placeholder: in_v})
     assert isinstance(out_v, numpy.ndarray)
     assert out_v.shape == (n_batch, n_out, n_time, 2)
+
+
+def test_TransposedConvLayer_2d_2x2():
+  n_batch, n_time, n_in, n_out = 7, 3, 5, 13
+  config = Config({
+    "extern_data": {
+      "data": {"dim": n_in, "shape": (n_in, None)}  # [B,D,T], i.e. batch-feature-major
+    }
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    assert net.extern_data.get_default_input_data().is_batch_feature_major
+    net.construct_from_dict({
+      "Unflatten": {'class': 'split_dims', 'from': 'data', 'axis': 'T', 'dims': [-1, 1]},  # [B,D,T,1]
+      "output": {  # [B,D',T,2]
+        'class': 'transposed_conv', 'from': 'Unflatten',
+        'activation': None, 'with_bias': True,
+        'n_out': n_out, 'filter_size': (2, 2), 'strides': (2, 2),
+        'padding': 'valid', 'output_padding': (0, 0), 'remove_padding': (0, 0)},
+    })
+    out = net.get_default_output_layer().output.copy_as_batch_feature_major()
+    assert out.batch_shape == (None, 13, None, 2)
+    assert_not_equal(out.get_dim_tag(2), net.extern_data.get_default_input_data().get_time_dim_tag())
+    assert out.dim_tags[1].dimension == n_out and out.dim_tags[3].dimension == 2
+    in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_in, n_time))
+    session.run(tf_compat.v1.global_variables_initializer())
+    out_v = session.run(out.placeholder, feed_dict={net.extern_data.data["data"].placeholder: in_v})
+    assert isinstance(out_v, numpy.ndarray)
+    assert out_v.shape == (n_batch, n_out, n_time * 2, 2)
 
 
 def test_ReduceLayer_NCHW():
