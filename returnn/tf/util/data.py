@@ -2281,10 +2281,9 @@ class Data(object):
     if data.batch == batch:
       return data
     data.batch = batch
+    self._adapt_batch_consistent_dim_tags()
     if self.placeholder is not None:
       raise NotImplementedError("%s: copy_ext_batch(%s) with placeholder" % (self, batch))
-    if self.size_placeholder:
-      raise NotImplementedError("%s: copy_ext_batch(%s) with sizes" % (self, batch))
     return data
 
   def copy_compatible_to(self, data, unbroadcast=False, except_feature=False, check_sparse=True, check_dtype=True):
