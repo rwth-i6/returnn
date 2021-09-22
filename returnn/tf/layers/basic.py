@@ -9566,18 +9566,11 @@ _LossClassDict = {}  # type: typing.Dict[str,typing.Type[Loss]]
 
 
 def _init_loss_class_dict():
-  from .neural_transducer import NeuralTransducerLoss
-
   for v in globals().values():
     if isinstance(v, type) and issubclass(v, Loss) and v.class_name:
       assert v.class_name not in _LossClassDict
       _LossClassDict[v.class_name] = v
 
-  # Outside loss functions
-  for v in [NeuralTransducerLoss]:
-    if isinstance(v, type) and issubclass(v, Loss) and v.class_name:
-      assert v.class_name not in _LossClassDict
-      _LossClassDict[v.class_name] = v
   for alias, v in {"sse_sigmoid": BinaryCrossEntropyLoss}.items():
     _LossClassDict[alias] = v
 
@@ -9604,10 +9597,9 @@ def _init_layer_class_dict():
   from . import rec
   from . import signal_processing
   from . import segmental_model
-  from . import neural_transducer
 
   auto_register_layer_classes(list(globals().values()))
-  for mod in [rec, signal_processing, segmental_model, neural_transducer]:
+  for mod in [rec, signal_processing, segmental_model]:
     auto_register_layer_classes(list(vars(mod).values()))
 
   for alias, v in {"forward": LinearLayer, "hidden": LinearLayer}.items():

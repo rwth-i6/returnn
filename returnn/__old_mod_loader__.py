@@ -97,7 +97,6 @@ old_to_new_mod_mapping = {
   "TFNativeOp": "tf.native_op",
   "TFNetwork": "tf.network",
   "TFNetworkLayer": "tf.layers.basic",
-  "TFNetworkNeuralTransducer": "tf.layers.neural_transducer",
   "TFNetworkRecLayer": "tf.layers.rec",
   "TFNetworkSegModLayer": "tf.layers.segmental_model",
   "TFNetworkSigProcLayer": "tf.layers.signal_processing",
