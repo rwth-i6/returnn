@@ -2656,6 +2656,7 @@ class MergeDimsLayer(_ConcatInputLayer):
     else:
       axes = self.input_data.get_axes_from_description(axes)
       axes = sorted(axes)
+    self._set_output_sizes(merge_axes=axes)
     merge_target_axis = self._get_target_axis(input_data=self.input_data, merge_axes=axes)
     x = self.input_data.placeholder
     if len(axes) > 1:
@@ -2685,7 +2686,6 @@ class MergeDimsLayer(_ConcatInputLayer):
       from returnn.tf.util.basic import check_input_dim
       x = check_input_dim(x, axis=self.output.feature_dim_axis, dim=n_out)
     self.output.placeholder = x
-    self.output.size_placeholder = self._get_output_sizes(merge_axes=axes)
 
   @classmethod
   def _get_target_axis(cls, input_data, merge_axes):
@@ -2727,44 +2727,41 @@ class MergeDimsLayer(_ConcatInputLayer):
     assert new_axis != target_axis
     return new_axis
 
-  def _get_output_sizes(self, merge_axes):
+  def _set_output_sizes(self, merge_axes):
     """
     :param list[int] merge_axes:
-    :rtype: dict[int,tf.Tensor]
     """
-    d = {}
-    for i, v in sorted(self.input_data.size_placeholder.items()):
-      axis = self.input_data.get_batch_axis(i)
-      axis = self._old_axis_to_new_axis(input_data=self.input_data, merge_axes=merge_axes, old_axis=axis)
-      if axis == self.output.batch_dim_axis:
-        continue
-      j = self.output.get_batch_axis_excluding_batch(axis)
-      if j in d:
-        d[j] *= v
+    target_axis = self._get_target_axis(input_data=self.input_data, merge_axes=merge_axes)
+    target_tag = self.output.dim_tags[target_axis]
+    if target_tag.is_batch_dim():
+      return  # should be handled already
+    if target_tag.dimension is not None:  # static
+      return  # should be handled already
+    if target_tag.dyn_size_ext:
+      return  # handled already
+
+    out_size = None
+    for in_axis in merge_axes:
+      in_tag = self.input_data.dim_tags[in_axis]
+      assert not in_tag.is_batch_dim()
+      if in_tag.dimension is not None:
+        if in_tag.dimension == 1:
+          continue
+        in_size = Data.from_tensor(tf.constant(in_tag.dimension, dtype=tf.int32))
       else:
-        d[j] = v
-    for axis in merge_axes:
-      if self.output.get_batch_axis_excluding_batch(axis) in self.input_data.size_placeholder.keys():
-        continue  # is already covered in the first loop, so skip
-      new_axis = self._old_axis_to_new_axis(input_data=self.input_data, merge_axes=merge_axes, old_axis=axis)
-      if new_axis == self.output.batch_dim_axis:
-        continue
-      j = self.output.get_batch_axis_excluding_batch(new_axis)
-      if j in d:
-        d[j] *= self.input_data.get_dim(axis)
-    if self.input_data.batch_dim_axis in merge_axes:
-      # The batch axis got multiplied.
-      in_shape = tf.shape(self.input_data.placeholder)
-      batch_multiplier = tf.reduce_prod([
-        in_shape[axis] for axis in merge_axes if axis != self.input_data.batch_dim_axis])
-      from returnn.tf.util.basic import tile_transposed, DimensionTag
-      for j, v in sorted(d.items()):
-        d[j] = tile_transposed(v, axis=0, multiples=batch_multiplier)
-        # But keep the same dim-tag.
-        dim_tag = DimensionTag.get_tag_from_size_tensor(v)
-        if dim_tag is not None:
-          dim_tag.set_tag_on_size_tensor(d[j], batch=self.output.batch)
-    return d
+        assert in_tag.dyn_size_ext
+        in_size = in_tag.dyn_size_ext
+      if not out_size:
+        out_size = in_size
+      else:
+        new_data = Data.get_common_data([out_size, in_size])
+        new_data.placeholder = (
+          out_size.copy_compatible_to(new_data).placeholder
+          * in_size.copy_compatible_to(new_data).placeholder)
+        out_size = new_data
+    if not out_size:
+      out_size = Data.from_tensor(tf.constant(1, dtype=tf.int32))
+    target_tag.dyn_size_ext = out_size
 
   @classmethod
   def get_out_data_from_opts(cls, name, axes, keep_order=False,
