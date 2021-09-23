@@ -165,6 +165,28 @@ def test_PadLayer_feature():
       numpy.testing.assert_array_equal(padded_left_ref - out_v[:, :, -padding[1]:], 0)
 
 
+def test_PadLayer_no_op():
+  # https://github.com/rwth-i6/returnn/issues/687
+  n_batch, n_time, n_in = 7, 3, 5
+  config = Config({
+    "extern_data": {"data": {"shape": (n_in, None)}},  # [B,D,T]
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {'class': 'pad', 'mode': 'constant', 'axes': 'spatial', 'padding': [(0, 0)], 'from': 'data', 'value': 0}
+    })
+    out = net.get_default_output_layer().output
+    out_t = out.placeholder
+    assert out_t.shape.as_list() == [None, n_in, None]
+    in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_in, n_time))
+    out_v = session.run(out_t, feed_dict={net.extern_data.data["data"].placeholder: in_v})
+    assert isinstance(out_v, numpy.ndarray)
+    assert out_v.shape == (n_batch, n_in, n_time)
+    numpy.testing.assert_array_equal(in_v, out_v)
+
+
 def test_concat_sources():
   with make_scope() as session:
     network = TFNetwork(train_flag=True, extern_data=ExternData())
