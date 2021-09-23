@@ -1552,7 +1552,7 @@ class Data(object):
     self._placeholder = placeholder  # type: tf.Tensor  # this will hold the data value itself
     self.available_for_inference = available_for_inference
     if vocab is not None:
-      from returnn.datasets.generating import Vocabulary
+      from returnn.datasets.util.vocabulary import Vocabulary
       if isinstance(vocab, str):
         vocab = Vocabulary(vocab)
       elif isinstance(vocab, dict):

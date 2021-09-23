@@ -2594,7 +2594,9 @@ class Engine(EngineBase):
     assert sys.version_info[0] >= 3, "only Python 3 supported"
     # noinspection PyCompatibility
     from http.server import HTTPServer, BaseHTTPRequestHandler
-    from returnn.datasets.generating import StaticDataset, Vocabulary, BytePairEncoding, ExtractAudioFeatures
+    from returnn.datasets.generating import StaticDataset
+    from returnn.datasets.util.feature_extraction import ExtractAudioFeatures
+    from returnn.datasets.util.vocabulary import Vocabulary, BytePairEncoding
 
     if not self.use_search_flag or not self.network or self.use_dynamic_train_flag:
       self.use_search_flag = True
