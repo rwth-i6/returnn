@@ -2554,7 +2554,9 @@ class PadLayer(_ConcatInputLayer):
     for i, a in enumerate(axes):
       paddings[a] = padding[i]
     mode = mode.upper()
-    if mode == "REPLICATION":
+    if all(sum(p) == 0 for p in padding):
+      self.output.placeholder = self.input_data.placeholder
+    elif mode == "REPLICATION":
       self.output.placeholder = tf_util.pad_replicate(self.input_data.placeholder, axes, padding)
     else:
       self.output.placeholder = tf.pad(self.input_data.placeholder, paddings=paddings, mode=mode, constant_values=value)
