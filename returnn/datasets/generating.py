@@ -5,7 +5,7 @@ Some datasets for artificially generated data.
 
 from __future__ import print_function
 
-from returnn.datasets.util.feature_extraction import ExtractAudioFeatures, _get_random_permuted_audio
+from returnn.datasets.util.feature_extraction import ExtractAudioFeatures
 from .basic import Dataset, DatasetSeq, convert_data_dims
 from .cached2 import CachedDataset2
 from returnn.util.basic import class_idx_seq_to_1_of_k, CollectionReadCheckCovered, PY3
@@ -1336,16 +1336,6 @@ class TimitDataset(CachedDataset2):
       epoch=epoch, num_seqs=self._num_seqs, get_seq_len=lambda i: len(self._seq_tags[i][1]))
     self._random.seed(self._fixed_random_seed or epoch or 1)
     return True
-
-  def _get_random_permuted_audio(self, audio, sample_rate):
-    """
-    :param numpy.ndarray audio: raw time signal
-    :param int sample_rate:
-    :return: audio randomly permuted
-    :rtype: numpy.ndarray
-    """
-    return _get_random_permuted_audio(
-      audio=audio, sample_rate=sample_rate, opts=self._random_permute_audio, random_state=self._random)
 
   def _collect_single_seq(self, seq_idx):
     """
