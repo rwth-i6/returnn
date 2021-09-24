@@ -485,7 +485,7 @@ def _demo():
     help="1.0 will lead to breadth-first search, 0.0 to depth-first search. other values are stochastic.")
   args = arg_parser.parse_args()
 
-  from returnn.datasets.generating import Vocabulary
+  from returnn.datasets.util.vocabulary import Vocabulary
   vocab = Vocabulary(vocab_file=args.vocab, unknown_label=None)
   rnd = numpy.random.RandomState(args.seed)
 

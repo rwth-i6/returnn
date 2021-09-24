@@ -91,12 +91,12 @@ class SprintDatasetBase(Dataset):
         self.orth_post_process = get_post_processor_function(orth_post_process)
     self.bpe = None
     if bpe:
-      from returnn.datasets.generating import BytePairEncoding
+      from returnn.datasets.util.vocabulary import BytePairEncoding
       self.bpe = BytePairEncoding(**bpe)
       self.labels["bpe"] = self.bpe.labels
     self.orth_vocab = None
     if orth_vocab:
-      from returnn.datasets.generating import Vocabulary
+      from returnn.datasets.util.vocabulary import Vocabulary
       self.orth_vocab = Vocabulary.create_vocab(**orth_vocab)
       self.labels["orth_classes"] = self.orth_vocab.labels
     self.cond = Condition(lock=self.lock)

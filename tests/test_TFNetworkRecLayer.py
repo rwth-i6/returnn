@@ -4588,7 +4588,7 @@ def test_KenLmStateLayer():
   tf_ken_lm.get_tf_mod(verbose=True)
   test_lm_file = tf_ken_lm.kenlm_dir + "/lm/test.arpa"
   assert os.path.exists(test_lm_file)
-  from returnn.datasets.generating import Vocabulary
+  from returnn.datasets.util.vocabulary import Vocabulary
   from returnn.tf.layers.base import InternalLayer
   import tempfile
   with make_scope() as session:
@@ -4661,7 +4661,7 @@ def test_KenLmStateLayer_dense():
   tf_ken_lm.get_tf_mod(verbose=True)
   test_lm_file = tf_ken_lm.kenlm_dir + "/lm/test.arpa"
   assert os.path.exists(test_lm_file)
-  from returnn.datasets.generating import Vocabulary
+  from returnn.datasets.util.vocabulary import Vocabulary
   from returnn.tf.layers.base import InternalLayer
   import tempfile
   with make_scope() as session:

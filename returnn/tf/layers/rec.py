@@ -6640,7 +6640,7 @@ class KenLmStateLayer(_ConcatInputLayer):
     self.tf_vocab = None
     if vocab_file:
       with self.var_creation_scope():
-        from returnn.datasets.generating import Vocabulary
+        from returnn.datasets.util.vocabulary import Vocabulary
         from returnn.tf.network import set_custom_post_init
         self.vocab = Vocabulary(vocab_file=vocab_file, unknown_label=vocab_unknown_label)
         assert self.input_data.sparse and self.vocab.num_labels == self.input_data.dim
@@ -6718,7 +6718,7 @@ class KenLmStateLayer(_ConcatInputLayer):
     data.dtype = "float32"
     data.sparse = False
     if dense_output:
-      from returnn.datasets.generating import Vocabulary
+      from returnn.datasets.util.vocabulary import Vocabulary
       vocab = Vocabulary(vocab_file=vocab_file, unknown_label=vocab_unknown_label)
       tag = DimensionTag(
         kind=DimensionTag.Types.Feature, description="%s_ken_lm_vocab" % name,
