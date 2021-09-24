@@ -1,6 +1,7 @@
 """
 Vocabulary related classes for targets such as BPE, SentencePieces etc...
 """
+
 from __future__ import print_function
 
 __all__ = [

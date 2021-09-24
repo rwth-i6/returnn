@@ -1,6 +1,7 @@
 """
 ExtractAudioFeatures class and related helpers
 """
+
 import numpy
 
 from returnn.util.basic import CollectionReadCheckCovered

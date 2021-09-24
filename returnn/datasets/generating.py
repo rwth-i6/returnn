@@ -5,7 +5,8 @@ Some datasets for artificially generated data.
 
 from __future__ import print_function
 
-from returnn.datasets.util.feature_extraction import ExtractAudioFeatures
+from .util.feature_extraction import ExtractAudioFeatures
+from .util.vocabulary import *
 from .basic import Dataset, DatasetSeq, convert_data_dims
 from .cached2 import CachedDataset2
 from returnn.util.basic import class_idx_seq_to_1_of_k, CollectionReadCheckCovered, PY3
@@ -13,8 +14,6 @@ from returnn.log import log
 import numpy
 import sys
 import typing
-
-from returnn.datasets.util.vocabulary import *
 
 
 class GeneratingDataset(Dataset):
