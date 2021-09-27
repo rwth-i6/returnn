@@ -4030,6 +4030,43 @@ def test_reclayer_batch_feature_input():
     session.run(output_layer.output.placeholder, feed_dict=feed_dict)
 
 
+def test_reclayer_reuse_params_partly_moved_out():
+  # https://github.com/rwth-i6/returnn/issues/555
+  from test_TFNetworkLayer import make_feed_dict
+  from returnn.tf.layers.basic import LinearLayer
+  from returnn.tf.layers.rec import _SubnetworkRecCell
+  with make_scope() as session:
+    net_dict = {
+      "output": {"class": "rec", "from": "data", "unit": {
+        "input": {"class": "copy", "from": ["prev:output", "data:source"]},
+
+        'FF_0': {'activation': 'tanh', 'class': 'linear', 'from': ['input'], 'n_out': 5},
+        'FF_1': {'activation': 'tanh', 'class': 'linear', 'from': ['input'], 'n_out': 5,  # moved out
+                 'reuse_params': {'map': {'W': {'reuse_layer': 'FF_0'},
+                                          'b': {'reuse_layer': 'FF_0'}}}},
+
+        "output": {"class": "softmax", "loss": "ce", "from": ["FF_0"]},
+        "output1": {"class": "softmax", "loss": "ce", "from": ["FF_1"]}  # moved out
+      }},
+    }
+    config = Config({
+      "extern_data": {"data": {"dim": 3}, "classes": {"dim": 7}}
+    })
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict(net_dict)
+    rec_layer = net.get_default_output_layer(must_exist=True)
+    assert isinstance(rec_layer, RecLayer)
+    cell = rec_layer.cell
+    assert isinstance(cell, _SubnetworkRecCell)
+    ff0_inside = cell.net.layers["FF_0"]
+    ff0_outside = cell.output_layers_net.layers["FF_0"]
+    assert isinstance(ff0_inside, LinearLayer)
+    assert isinstance(ff0_outside, LayerBase)  # does not really matter which class
+    assert ff0_inside.params == ff0_outside.params
+    session.run(tf_compat.v1.global_variables_initializer())
+    session.run(rec_layer.output.placeholder, feed_dict=make_feed_dict(net.extern_data))
+
+
 class TransformerNetwork:
 
   def __init__(self):
