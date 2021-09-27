@@ -1554,11 +1554,14 @@ class WrappedInternalLayer(InternalLayer):
   This layer is supposed to logically wrap another layer.
   """
 
-  def __init__(self, base_layer, **kwargs):
+  def __init__(self, base_layer, sources=None, **kwargs):
     """
     :param LayerBase base_layer: the layer which we are wrapping
+    :param list[LayerBase]|None sources: by default [base_layer]. overwrite to explicitly specify the layer deps
     """
-    super(WrappedInternalLayer, self).__init__(**kwargs)
+    if sources is None:
+      sources = [base_layer]
+    super(WrappedInternalLayer, self).__init__(sources=sources, **kwargs)
     self.base_layer = base_layer
     self.params.update(base_layer.params)  # maybe ReuseParams wants to access it or so
 
@@ -1573,12 +1576,6 @@ class WrappedInternalLayer(InternalLayer):
     :rtype: str
     """
     return self.base_layer.get_absolute_name_scope_prefix()
-
-  def get_dep_layers(self):
-    """
-    :rtype: list[LayerBase]
-    """
-    return [self.base_layer]
 
 
 class ReuseParams:
