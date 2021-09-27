@@ -1549,7 +1549,7 @@ class _SubnetworkRecCell(object):
     :param set[str] needed_outputs: layers where we need outputs
     """
     from returnn.tf.network import TFNetwork
-    from .base import InternalLayer
+    from .base import WrappedInternalLayer
     for key in data:
       self.net.extern_data.data[key].placeholder = data[key]
     for data_key, data in self.net.extern_data.data.items():
@@ -1570,7 +1570,7 @@ class _SubnetworkRecCell(object):
         self._handle_construct_exception(description="in-loop init of prev layer %r" % name, exception=exc)
         raise
 
-    inputs_moved_out = {}  # type: typing.Dict[str,InternalLayer]
+    inputs_moved_out = {}  # type: typing.Dict[str,WrappedInternalLayer]
 
     # noinspection PyShadowingNames
     def get_input_moved_out(name):
@@ -1607,7 +1607,8 @@ class _SubnetworkRecCell(object):
         else:
           output.placeholder = inputs_moved_out_tas[layer_name].read(i)
         output.sanity_check()
-      layer = self.net.add_layer(name=name, output=output, layer_class=InternalLayer, sources=[layer])
+      layer = self.net.add_layer(
+        name=name, output=output, layer_class=WrappedInternalLayer, base_layer=layer)
       inputs_moved_out[name] = layer
       return layer
 
@@ -3335,7 +3336,7 @@ class _SubnetworkRecCell(object):
       return
     from returnn.tf.util.basic import tensor_array_stack, concat_with_opt_broadcast
     from returnn.tf.network import TFNetwork, ExternData
-    from .base import InternalLayer
+    from .base import InternalLayer, WrappedInternalLayer
     from .basic import LengthLayer
 
     self.output_layers_net = TFNetwork(
@@ -3357,8 +3358,8 @@ class _SubnetworkRecCell(object):
       self.output_layers_net.extern_data.data[key] = \
         self.parent_net.extern_data.data[key]
 
-    prev_layers = {}  # type: typing.Dict[str,InternalLayer]
-    loop_acc_layers = {}  # type: typing.Dict[str,InternalLayer]
+    prev_layers = {}  # type: typing.Dict[str,WrappedInternalLayer]
+    loop_acc_layers = {}  # type: typing.Dict[str,WrappedInternalLayer]
     search_choices_cache = {}  # type: typing.Dict[str,SearchChoices]  # inner layer -> acc search choices
     loop_acc_layers_search_choices = {}  # type: typing.Dict[str,str]  # loop acc layer -> inner layer
 
@@ -3403,7 +3404,7 @@ class _SubnetworkRecCell(object):
         output.placeholder = tensor_array_stack(acc_ta, stop=max_len)  # e.g. (time,batch,dim)
         assert isinstance(self.output_layers_net, TFNetwork)
         layer_ = self.output_layers_net.add_layer(
-          name=name, output=output, layer_class=InternalLayer, sources=[])
+          name=name, output=output, layer_class=WrappedInternalLayer, sources=[], base_layer=in_loop_layer)
         if latest_layer_choice_name:
           loop_acc_layers_search_choices[name] = latest_layer_choice_name
         loop_acc_layers[name] = layer_
@@ -3435,7 +3436,7 @@ class _SubnetworkRecCell(object):
         # output.size_placeholder[0] = seq_len. just don't modify. assert seq_len is not None
         assert isinstance(self.output_layers_net, TFNetwork)
         layer = self.output_layers_net.add_layer(
-          name="prev:%s" % name, output=output, layer_class=InternalLayer, sources=[cur_layer])
+          name="prev:%s" % name, output=output, layer_class=WrappedInternalLayer, base_layer=cur_layer)
         prev_layers[name] = layer
         return layer
 
