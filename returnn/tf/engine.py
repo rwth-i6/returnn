@@ -87,8 +87,11 @@ class Runner(object):
     self._train_flag = train_flag
     self._should_train = train
     self._should_eval = eval
+    self.store_tf_profile = engine.config.bool("store_tf_profile", False)
     self.store_metadata_mod_step = engine.config.int("store_metadata_mod_step", 0)
     self.reset_updater_vars_mod_step = engine.config.int("reset_updater_vars_mod_step", 0)
+    assert not (self.store_tf_profile and self.store_metadata_mod_step), (
+      "Cannot use store_tf_profile and store_metadata_mod_step at the same time")
     self.finalized = False
     self.cancel_flag = False
     self.run_exception = None
@@ -618,6 +621,8 @@ class Runner(object):
       # Also, add graph to summary here because the updater/optimizer might not have been created before.
       if writer:
         writer.add_graph(sess.graph)
+      if self.store_tf_profile:
+        tf.profiler.experimental.start(logdir)
       hvd_stop = hvd_error = False
       while self.data_provider.have_more_data(session=sess):
         self._step_start_time = time.time()
@@ -675,8 +680,13 @@ class Runner(object):
               f.write(tl.generate_chrome_trace_format(show_memory=True))
           else:
             session_run_start_time = time.time()
-            fetches_results = sess.run(
-              fetches_dict, feed_dict=feed_dict)  # type: typing.Dict[str,typing.Union[numpy.ndarray,str]]
+            if self.store_tf_profile:
+              with tf.profiler.experimental.Trace(name=report_prefix, step_num=step + step_offset):
+                fetches_results = sess.run(
+                  fetches_dict, feed_dict=feed_dict)  # type: typing.Dict[str,typing.Union[numpy.ndarray,str]]
+            else:
+              fetches_results = sess.run(
+                fetches_dict, feed_dict=feed_dict)  # type: typing.Dict[str,typing.Union[numpy.ndarray,str]]
             elapsed_time_tf += time.time() - session_run_start_time
             if writer and "summary" in fetches_results:
               writer.add_summary(fetches_results["summary"], step + step_offset)
@@ -757,6 +767,8 @@ class Runner(object):
       try_and_ignore_exception(coord.request_stop)
       try_and_ignore_exception(lambda: coord.join(threads))
       try_and_ignore_exception(self.data_provider.stop_threads)
+      if self.store_tf_profile:
+        try_and_ignore_exception(tf.profiler.experimental.stop)
       # ignored if called before
       try_and_ignore_exception(lambda: self.engine.network.set_run_finished(error_occurred=True))
       self.elapsed = time.time() - self.start_time
