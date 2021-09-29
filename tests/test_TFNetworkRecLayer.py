@@ -4004,6 +4004,35 @@ def test_reclayer_subnetwork_sublayer():
     assert _Closure.counter == 1
 
 
+def test_reclayer_prev_in_subnet():
+  # https://github.com/rwth-i6/returnn/issues/698
+  with make_scope() as session:
+    config = Config()
+    config.update({
+      "extern_data": {"data": {"dim": 5}},
+      "network": {
+        "output": {
+          "class": "rec",
+          "from": "data",
+          "unit": {
+            'accum_sub': {
+              'class': 'subnetwork', 'from': [],
+              'subnetwork': {
+                'accum': {'class': 'combine', 'kind': 'add', 'from': ['prev:accum', 'base:data:source']},
+                'output': {'class': 'copy', 'from': 'accum'}}},
+            'output': {'class': 'copy', 'from': 'accum_sub'},
+          }},
+      }
+    })
+    network = TFNetwork(config=config)
+    network.construct_from_dict(config.typed_dict["network"])
+
+    rec_layer = network.get_layer("output")
+    assert isinstance(rec_layer, RecLayer)
+    from test_TFNetworkLayer import make_feed_dict
+    session.run(rec_layer.output.placeholder, feed_dict=make_feed_dict(network.extern_data))
+
+
 def test_reclayer_batch_feature_input():
   """
   Test if the RecLayer is capable of handling [B,F,T] input
