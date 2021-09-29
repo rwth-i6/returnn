@@ -2672,6 +2672,9 @@ class Subnetwork:
       if name.startswith("base:"):
         return base_get_layer(name[len("base:"):])
 
+      if name.startswith("prev:"):
+        return base_get_layer("prev:" + self.name_in_parent + "/" + name[len("prev:"):])
+
       if self.template:
         self._construct_template_subnet(get_parent_layer=base_get_layer)
         # In any case, we cannot get the layer via base_get_layer.
