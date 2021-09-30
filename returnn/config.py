@@ -190,7 +190,11 @@ class Config:
       if value_type == str:
         pass  # keep as-is
       else:
-        value = eval(value)
+        try:
+          value = eval(value)
+        except:
+          from returnn.log import log
+          print("WARNING: can't evaluate config param '{}' to previous type: {}. Keeping as string.".format(value, value_type),file=log.v1)
       self.typed_dict[key] = value
       return
     if value.find(',') > 0:
