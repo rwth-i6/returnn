@@ -194,8 +194,9 @@ class Config:
           value = eval(value)
         except SyntaxError:
           from returnn.log import log
-          print("WARNING: can't evaluate config param '%s' to previous type: %s. Keeping as string."
-                % (value, value_type), file=log.v1)
+          print(
+            "WARNING: can't evaluate config param %r to previous type: %s. Keeping as string." % (value, value_type),
+            file=log.v1)
       self.typed_dict[key] = value
       return
     if value.find(',') > 0:
