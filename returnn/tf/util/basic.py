@@ -3868,9 +3868,15 @@ def get_shared_vocab(vocab_strings):
   :return: shape (len(vocab_strings),), tf.string
   :rtype: tf.Tensor
   """
-  return global_tensor(
-    lambda: tf.convert_to_tensor(vocab_strings),
-    name="shared_vocab_%s" % hex(hash(tuple(vocab_strings))).replace("-", "_"))
+  # Usually TF automatically places the const strings where appropriate.
+  # This can fail in some cases:
+  # https://github.com/rwth-i6/returnn/issues/694
+  # https://github.com/tensorflow/tensorflow/issues/52200
+  # So we enforce it to be on CPU, which always should work.
+  with tf.device("/cpu:0"):
+    return global_tensor(
+      lambda: tf.convert_to_tensor(vocab_strings),
+      name="shared_vocab_%s" % hex(hash(tuple(vocab_strings))).replace("-", "_"))
 
 
 def map_labels(x, label_map, name="map_labels"):
