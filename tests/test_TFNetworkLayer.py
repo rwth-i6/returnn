@@ -1580,6 +1580,28 @@ def test_SplitDimsLayer_batch_feature_major_keep_feature():
     numpy.testing.assert_almost_equal(out_v, in_v.reshape(out_v.shape))
 
 
+def test_SplitDimsLayer_split_feature():
+  n_batch, n_time, n_in = 7, 3, 5
+  config = Config({
+    "extern_data": {
+      "data": {"dim": n_in}  # [B,T,D]
+    }
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {'class': 'split_dims', 'from': 'data', 'axis': 'F', 'dims': [-1, 1]}
+    })
+    out = net.get_default_output_layer().output
+    assert out.batch_shape == (None, None, n_in, 1)
+    assert out.feature_dim_axis == 3  # https://github.com/rwth-i6/returnn/issues/704
+    in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_time, n_in))
+    out_v = session.run(out.placeholder, feed_dict={net.extern_data.data["data"].placeholder: in_v})
+    assert isinstance(out_v, numpy.ndarray)
+    assert out_v.shape == (n_batch, n_time, n_in, 1)
+    numpy.testing.assert_almost_equal(out_v, in_v.reshape(out_v.shape))
+
+
 def _check_MergeDimsLayer(session, in_data_opts, in_static_shape, opts, out_data_shape, out_static_shape,
                           in_sizes=None, out_sizes=None):
   """
