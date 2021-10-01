@@ -3058,11 +3058,12 @@ class SplitDimsLayer(_ConcatInputLayer):
     return tuple(new_dims_resolved)
 
   @classmethod
-  def _map_old_axis_to_new_axis(cls, split_axis, dims, old_axis, split_offset=None):
+  def _map_old_axis_to_new_axis(cls, split_axis, dims, old_axis, use_remaining=True, split_offset=None):
     """
     :param int split_axis:
     :param tuple[int] dims: might include -1
     :param int old_axis:
+    :param bool use_remaining: whether to make use of -1 in dims
     :param int|None split_offset:
     :rtype: int
     """
@@ -3071,7 +3072,7 @@ class SplitDimsLayer(_ConcatInputLayer):
     if old_axis > split_axis:
       return old_axis + len(dims) - 1
     assert old_axis == split_axis
-    if -1 in dims:
+    if use_remaining and -1 in dims:
       assert dims.count(-1) == 1
       return split_axis + dims.index(-1)
     assert split_offset is not None
@@ -3129,7 +3130,7 @@ class SplitDimsLayer(_ConcatInputLayer):
       out.time_dim_axis = None
     if data.feature_dim_axis is not None:
       expected_out_feature_dim_axis = cls._map_old_axis_to_new_axis(
-        split_axis=axis, dims=dims, old_axis=data.feature_dim_axis, split_offset=-1)
+        split_axis=axis, dims=dims, old_axis=data.feature_dim_axis, use_remaining=False, split_offset=-1)
       if out.feature_dim_axis != expected_out_feature_dim_axis:  # maybe due to non-specified default behavior
         out.feature_dim_axis = expected_out_feature_dim_axis
         out.dim = out.batch_shape[out.feature_dim_axis]
