@@ -1566,13 +1566,14 @@ def test_SplitDimsLayer_batch_feature_major_keep_feature():
     net = TFNetwork(config=config)
     assert net.extern_data.get_default_input_data().is_batch_feature_major
     net.construct_from_dict({
-      "output": {'class': 'split_dims', 'from': 'data', 'axis': 'T', 'dims': [-1, 1]}
+      "output": {'class': 'split_dims', 'from': 'data', 'axis': 'T', 'dims': [-1, 1]}  # [B,D,T,1]
     })
     out = net.get_default_output_layer().output
     assert_equal(out.get_dim_tag(2), net.extern_data.get_default_input_data().get_time_dim_tag())
     assert out.dim_tags[1].dimension == n_in and out.dim_tags[3].dimension == 1
     assert out.placeholder.shape.as_list() == [None, n_in, None, 1]
     assert out.feature_dim_axis == 1  # https://github.com/rwth-i6/returnn/issues/596
+    assert out.time_dim_axis == 2
     in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_in, n_time))
     out_v = session.run(out.placeholder, feed_dict={net.extern_data.data["data"].placeholder: in_v})
     assert isinstance(out_v, numpy.ndarray)
