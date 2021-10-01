@@ -3128,6 +3128,9 @@ class SplitDimsLayer(_ConcatInputLayer):
     out = data.copy_template_new_dim_tags(new_dim_tags)
     if data.time_dim_axis is None:
       out.time_dim_axis = None
+    else:
+      out.time_dim_axis = cls._map_old_axis_to_new_axis(
+        split_axis=axis, dims=dims, old_axis=data.time_dim_axis, use_remaining=True, split_offset=0)
     if data.feature_dim_axis is not None:
       expected_out_feature_dim_axis = cls._map_old_axis_to_new_axis(
         split_axis=axis, dims=dims, old_axis=data.feature_dim_axis, use_remaining=False, split_offset=-1)
