@@ -2792,6 +2792,29 @@ def test_GatherLayer_constant_position():
           np.testing.assert_almost_equal(out_seqs[b, f1, f2], values_seqs[b, f1, position, f2])
 
 
+def test_GatherLayer_search_beam():
+  from returnn.tf.network import TFNetwork
+  from returnn.config import Config
+  with make_scope() as session:
+    n_out = 5
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out},
+        "classes": {"dim": n_out, "sparse": True}
+      }})
+    net = TFNetwork(config=config, search_flag=True)
+    net.construct_from_dict({
+      "output": {
+        "class": "rec", "from": "data:data", "unit": {
+          "position": {"class": "reinterpret_data", "from": "prev:output", "set_sparse": False},
+          "gather": {"class": "gather", "from": "base:data:data", "position": "position", "axis": "t"},  # [B,T,slice,D]
+          "prob": {"class": "softmax", "from": "gather", "target": "classes", "loss": "ce"},
+          'output': {
+            'class': 'choice', 'target': "classes", 'beam_size': 3, 'from': "prob", "input_type": "prob",
+            "initial_output": 0}}}})
+
+
 def test_SliceNdLayer():
   n_batch = 5
   n_time = 7
