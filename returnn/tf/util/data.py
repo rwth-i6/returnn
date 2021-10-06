@@ -361,6 +361,24 @@ class DimensionTag(object):
     """
     return self.kind == DimensionTag.Types.Spatial
 
+  def is_dim_known(self):
+    """
+    :return: whether we know the dimension; basically whether this is defined
+      (although `not self.undefined` is defined slightly differently)
+    :rtype: bool
+    """
+    if self.is_batch_dim():
+      return True
+    if self.dimension is not None:
+      return True
+    if self.dyn_size_ext:
+      return True
+    base = self.get_same_base()
+    for _, other in base._same_for_batch_ctx.items():
+      if other.dyn_size_ext:
+        return True
+    return False
+
   def is_same_size_tensor(self, x):
     """
     :param tf.Tensor x:
