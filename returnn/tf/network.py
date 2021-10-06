@@ -1845,9 +1845,9 @@ class TFNetwork(object):
       self._create_saver()
     # Note:
     # If we want to check for existence of variables in the checkpoint:
-    # http://stackoverflow.com/questions/38218174/how-can-find-the-variable-names-that-saved-in-tensorflow-checkpoint
+    # https://stackoverflow.com/questions/38218174/how-can-find-the-variable-names-that-saved-in-tensorflow-checkpoint
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/framework/python/framework/checkpoint_utils.py
-    # http://stackoverflow.com/questions/38944238/tensorflow-list-variables-in-the-checkpoint
+    # https://stackoverflow.com/questions/38944238/tensorflow-list-variables-in-the-checkpoint
     try:
       self.saver.restore(sess=session, save_path=filename)
     except tf.errors.NotFoundError as exc:

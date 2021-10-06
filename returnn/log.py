@@ -57,7 +57,7 @@ class Stream:
       self.log.log(self.lvl, self.buf.getvalue())
       self.buf.truncate(0)
       # truncate does not change the current position.
-      # In Python 2.7, it incorrectly does. See: http://bugs.python.org/issue30250
+      # In Python 2.7, it incorrectly does. See: https://bugs.python.org/issue30250
       self.buf.seek(0)
 
 

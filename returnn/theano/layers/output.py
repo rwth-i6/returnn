@@ -217,7 +217,7 @@ class OutputLayer(Layer):
       # and then add -similarity or distance between those to the constraints,
       # so that the input and output correlate on a frame-by-frame basis.
       # Here some other similarities/distances we could try:
-      # http://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.distance.pdist.html
+      # https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.distance.pdist.html
       # https://brenocon.com/blog/2012/03/cosine-similarity-pearson-correlation-and-ols-coefficients/
       from returnn.theano.util import self_similarity_cosine
       self_similarity = self_similarity_cosine  # maybe other
@@ -770,7 +770,7 @@ class SequenceOutputLayer(OutputLayer):
           num_lables = self.network.n_out[self.attrs["target"]][0]
           assert self.attrs["n_out"] == num_lables + 1  # one added for blank
           from returnn.util.basic import uniq
-          from theano.compile.ops import as_op  # http://deeplearning.net/software/theano/extending/extending_theano.html#as-op
+          from theano.compile.ops import as_op  # https://deeplearning.net/software/theano/extending/extending_theano.html#as-op
           @as_op(itypes=[theano.tensor.fmatrix, theano.tensor.fmatrix],
                  otypes=[theano.tensor.fmatrix])  # TODO...
           def fsa_op(labels, index_mask):
@@ -797,7 +797,7 @@ class SequenceOutputLayer(OutputLayer):
           def get_seq_labels(seq_name):
             pass  # TODO... maybe from file? or corpus? or sprint?
           from theano.compile.ops import \
-            as_op  # http://deeplearning.net/software/theano/extending/extending_theano.html#as-op
+            as_op  # https://deeplearning.net/software/theano/extending/extending_theano.html#as-op
           @as_op(itypes=[theano.tensor.fmatrix, theano.tensor.fmatrix],
                  otypes=[theano.tensor.fmatrix])  # TODO...
           def fsa_op(tags):

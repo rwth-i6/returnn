@@ -232,7 +232,7 @@ struct TensorCuBlasGemm {
 
 #else  // TF_issue_6602_workaround
 
-// http://stackoverflow.com/questions/41428756/own-tensorflow-op-with-cublassgemm
+// https://stackoverflow.com/questions/41428756/own-tensorflow-op-with-cublassgemm
 #if GOOGLE_CUDA
 // or tensorflow/include/tensorflow/core/util/stream_executor_util.h ?
 template <typename T>
@@ -286,7 +286,7 @@ static void tf_cuda_sgemm(
 
     cudaStream_t cuda_stream = context->eigen_gpu_device().stream();
 
-    // cublasCreate, http://docs.nvidia.com/cuda/cublas/#cublascreate
+    // cublasCreate, https://docs.nvidia.com/cuda/cublas/#cublascreate
 
     auto dev_ctx = context->op_device_context();
     auto* dev_stream = dev_ctx->stream();
@@ -349,7 +349,7 @@ static void tf_cuda_sgemm_batched(
 
     cudaStream_t cuda_stream = context->eigen_gpu_device().stream();
 
-    // cublasCreate, http://docs.nvidia.com/cuda/cublas/#cublascreate
+    // cublasCreate, https://docs.nvidia.com/cuda/cublas/#cublascreate
 
     auto dev_ctx = context->op_device_context();
     perftools::gputools::Stream* dev_stream = dev_ctx->stream();
@@ -462,7 +462,7 @@ typedef Ndarray_DIM_Type const* Ndarray_DIMS_Type;
 #define Ndarray_Copy CudaNdarray_Copy
 
 /*
-    // via: http://docs.nvidia.com/cuda/cublas/
+    // via: https://docs.nvidia.com/cuda/cublas/
     // matrices are in column-major form
     cublasStatus_t cublasSgemm(cublasHandle_t handle,
         cublasOperation_t transa, cublasOperation_t transb,
@@ -492,7 +492,7 @@ typedef Ndarray_DIM_Type const* Ndarray_DIMS_Type;
 #define DIM_GRID 128
 #define DIM_BLOCK 512
 
-// <<<DimGrid,DimBlock,ShmemSize|0,Stream|0>>>. http://docs.nvidia.com/cuda/cuda-c-programming-guide/#execution-configuration
+// <<<DimGrid,DimBlock,ShmemSize|0,Stream|0>>>. https://docs.nvidia.com/cuda/cuda-c-programming-guide/#execution-configuration
 #define start_dev_kernel(kernel, args) \
 	(kernel<<<DIM_GRID,DIM_BLOCK,0,CUDA_CUR_STREAM>>>  args);
 #define start_dev_kernel2(kernel, dim_grid, dim_block, shared_size, args) \
@@ -551,8 +551,8 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 
 
 #if !TENSORFLOW
-// Numpy, see: http://docs.scipy.org/doc/numpy/reference/c-api.array.html
-// And: http://deeplearning.net/software/theano/extending/extending_theano_c.html
+// Numpy, see: https://docs.scipy.org/doc/numpy/reference/c-api.array.html
+// And: https://deeplearning.net/software/theano/extending/extending_theano_c.html
 #define Ndarray PyArrayObject
 #define Ndarray_DEV_DATA(x) ((float*) PyArray_DATA(x))
 #define Ndarray_DEV_DATA_int32(x) ((int32_t*) (Ndarray_DEV_DATA(x)))

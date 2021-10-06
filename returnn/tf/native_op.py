@@ -165,7 +165,7 @@ class OpMaker(object):
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/op_def_builder.h
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/pad_op.cc
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/debug_ops.h  CopyOp...
-    # http://stackoverflow.com/questions/37565367/designing-an-accumulating-tensorflow-gpu-operator
+    # https://stackoverflow.com/questions/37565367/designing-an-accumulating-tensorflow-gpu-operator
     # We also include NativeOp.cpp.
     # noinspection PyProtectedMember
     in_info, out_info, _ = native_op.NativeOpBaseMixin._resolve_want_inplace_dummy(
@@ -362,7 +362,7 @@ class OpMaker(object):
     #include "tensorflow/core/common_runtime/device.h"
     """
     if self.with_cuda:
-      # http://docs.nvidia.com/cuda/cublas
+      # https://docs.nvidia.com/cuda/cublas
       code_header += """
       #include <cuda.h>
       #include <cuda_runtime.h>

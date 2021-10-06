@@ -130,7 +130,7 @@ def uniq_with_lengths(seq, time_mask):
   max_seq_len = T.max(seq_lens)
 
   # I don't know any better way without scan.
-  # http://stackoverflow.com/questions/31379971/uniq-for-2d-theano-tensor
+  # https://stackoverflow.com/questions/31379971/uniq-for-2d-theano-tensor
   def step(batch_idx, out_seq_b1):
     #out_seq = seq[T.ge(idx[:, batch_idx], 0).nonzero(), batch_idx][0]
     out_seq = seq[:, batch_idx][T.ge(idx[:, batch_idx], 0).nonzero()]

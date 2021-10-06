@@ -255,10 +255,10 @@ class SharedNumpyArray:
 
   Note that there are a few similar Python modules:
     https://pypi.python.org/pypi/SharedArray
-    http://parad0x.org/git/python/shared-array/about
+    https://parad0x.org/git/python/shared-array/about
     https://bitbucket.org/cleemesser/numpy-sharedmem/src
-    http://stackoverflow.com/questions/5033799/how-do-i-pass-large-numpy-arrays
-    http://stackoverflow.com/questions/7894791/use-numpy-array-in-shared-memory
+    https://stackoverflow.com/questions/5033799/how-do-i-pass-large-numpy-arrays
+    https://stackoverflow.com/questions/7894791/use-numpy-array-in-shared-memory
   """
 
   # cls members
@@ -405,7 +405,7 @@ class SharedNumpyArray:
   @property
   def __array_interface__(self):
     assert self.shape
-    # http://docs.scipy.org/doc/numpy/reference/arrays.interface.html
+    # https://docs.scipy.org/doc/numpy/reference/arrays.interface.html
     return {
       "data": (self.get_numpy_array_data_ptr(), False),
       "shape": self.shape,
@@ -881,12 +881,12 @@ class ExecingProcess:
   uses fork+exec, not just fork.
   This ensures that you have a separate independent process.
   This can avoid many types of bugs, such as:
-    http://stackoverflow.com/questions/24509650
-    http://bugs.python.org/issue6721
-    http://stackoverflow.com/questions/8110920
-    http://stackoverflow.com/questions/23963997
+    https://stackoverflow.com/questions/24509650
+    https://bugs.python.org/issue6721
+    https://stackoverflow.com/questions/8110920
+    https://stackoverflow.com/questions/23963997
     https://github.com/numpy/numpy/issues/654
-    http://comments.gmane.org/gmane.comp.python.numeric.general/60204
+    https://comments.gmane.org/gmane.comp.python.numeric.general/60204
   """
 
   def __init__(self, target, args, name, env_update):
@@ -1084,7 +1084,7 @@ class ExecingProcess_ConnectionWrapper(object):
         return self.conn.poll(*args, **kwargs)
       except IOError as e:
         if e.errno == errno.EINTR:
-          # http://stackoverflow.com/questions/14136195
+          # https://stackoverflow.com/questions/14136195
           # We can just keep trying.
           continue
         raise ProcConnectionDied("poll IOError: %s" % e)
@@ -1110,7 +1110,7 @@ class ExecingProcess_ConnectionWrapper(object):
         return self.conn.recv_bytes()
       except IOError as e:
         if e.errno == errno.EINTR:
-          # http://stackoverflow.com/questions/14136195
+          # https://stackoverflow.com/questions/14136195
           # We can just keep trying.
           continue
         raise ProcConnectionDied("recv_bytes IOError: %s" % e)

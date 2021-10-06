@@ -134,7 +134,7 @@ Related work
 
 * `Pandas for Python (2008) <https://pandas.pydata.org/>`__,
   ``DataFrame``, labelled tabular data
-* `xarray for Python (2014) <http://xarray.pydata.org/en/stable/>`__,
+* `xarray for Python (2014) <https://xarray.pydata.org/en/stable/>`__,
   N-D labelled arrays
 * `AxisArrays.jl for Julia (2015) <https://github.com/JuliaArrays/AxisArrays.jl>`__,
   each dimension can have a named axis

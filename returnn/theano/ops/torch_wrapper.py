@@ -2,10 +2,10 @@
 # This is a Theano Op which can wrap Lua/Torch code.
 # Some related projects / code:
 # https://github.com/nouiz/theano_torch_bridge
-# http://stackoverflow.com/questions/24712972/interfacing-python-and-torch7lua-via-shared-library
+# https://stackoverflow.com/questions/24712972/interfacing-python-and-torch7lua-via-shared-library
 # https://pypi.python.org/pypi/lupa
 # https://github.com/sermanet/OverFeat/blob/master/API/python/overfeatmodule.cpp
-# https://github.com/albanD/lunatic-python  /  http://labix.org/lunatic-python
+# https://github.com/albanD/lunatic-python  /  https://labix.org/lunatic-python
 # https://github.com/hughperkins/pytorch
 # https://github.com/facebook/fblualib/blob/master/fblualib/python/README.md
 
@@ -143,7 +143,7 @@ class TorchWrapperOp(theano.Op):
 
     #define ARRAY_LEN(x) (sizeof(x) / sizeof(x[0]))
 
-    // Some Lua versions luaL_dostring ignore the result (http://stackoverflow.com/questions/12528820).
+    // Some Lua versions luaL_dostring ignore the result (https://stackoverflow.com/questions/12528820).
     #undef luaL_dostring
     #define luaL_dostring(L,s)  (luaL_loadstring(L, s) || lua_pcall(L, 0, LUA_MULTRET, 0))
 
@@ -158,7 +158,7 @@ class TorchWrapperOp(theano.Op):
 
     // For TH documentation, best see the C code here: https://github.com/torch/torch7/blob/master/lib/TH/generic/
     // THC: https://github.com/torch/cutorch/tree/master/lib/THC
-    // Also some documentation here: http://torch.ch/docs/developer-docs.html
+    // Also some documentation here: https://torch.ch/docs/developer-docs.html
     // LuaT: https://github.com/torch/torch7/blob/master/lib/luaT/luaT.c
 
     // Note: There is https://github.com/facebook/thpp for templated THTensor. But maybe overkill...
@@ -364,19 +364,19 @@ class TorchWrapperOp(theano.Op):
         void *hdl = dlopen("libluajit.so", RTLD_NOW | RTLD_GLOBAL);
         if(hdl == 0) printf("TorchWrapper: dlopen luajit error: %%s\\n", dlerror());  // ignore...?
 
-        // http://www.lua.org/manual/5.1/manual.html
+        // https://www.lua.org/manual/5.1/manual.html
         L = lua_open();
         if(!L) {
           PyErr_Format(PyExc_RuntimeError,
             "ERROR: TorchWrapper: Cannot create Lua state.\\n"
             "  If you are on MacOSX 64bit, Python must be linked with:\\n"
             "    -pagezero_size 10000 -image_base 100000000\\n"
-            "  See here: http://luajit.org/install.html\\n"
+            "  See here: https://luajit.org/install.html\\n"
             "  And here: https://groups.google.com/forum/#!topic/torch7/dW2rotAgijY\\n"
           );
           %(fail)s;
         }
-        // If only specific ones: http://stackoverflow.com/questions/966162
+        // If only specific ones: https://stackoverflow.com/questions/966162
         luaL_openlibs(L);  // all standard Lua libs
 
         // -e 'package.path="/u/zeyer/code/torch/install/share/lua/5.1/?.lua;/u/zeyer/code/torch/install/share/lua/5.1/?/init.lua;"..package.path'
@@ -611,11 +611,11 @@ class TorchWrapperOp(theano.Op):
 class GpuTorchWrapperOp(GpuOp, TorchWrapperOp):
   # TODO...
   # Maybe helpful:
-  # http://pydoc.net/Python/Theano/0.6.0/theano.sandbox.cuda.basic_ops/
-  # http://deeplearning.net/software/theano/tutorial/aliasing.html
-  # http://www.deeplearning.net/software/theano/extending/extending_theano_c.html#extending-theano-c
-  # http://www.deeplearning.net/software/theano/extending/cop.html#Op.c_code
-  # http://docs.scipy.org/doc/numpy/reference/c-api.array.html
+  # https://pydoc.net/Python/Theano/0.6.0/theano.sandbox.cuda.basic_ops/
+  # https://deeplearning.net/software/theano/tutorial/aliasing.html
+  # https://www.deeplearning.net/software/theano/extending/extending_theano_c.html#extending-theano-c
+  # https://www.deeplearning.net/software/theano/extending/cop.html#Op.c_code
+  # https://docs.scipy.org/doc/numpy/reference/c-api.array.html
   # https://docs.scipy.org/doc/numpy-1.9.2/reference/c-api.types-and-structures.html
 
   def c_support_code(self):

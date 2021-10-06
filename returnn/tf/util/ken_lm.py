@@ -1,5 +1,5 @@
 """
-Uses KenLM (http://kheafield.com/code/kenlm/) (extern/kenlm) to read n-gram LMs (ARPA format),
+Uses KenLM (https://kheafield.com/code/kenlm/) (extern/kenlm) to read n-gram LMs (ARPA format),
 and provides a TF op to use them.
 
 """

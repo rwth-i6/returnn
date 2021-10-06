@@ -44,7 +44,7 @@ More specific features include:
 - Work distribution across multiple devices
 - Flexible and fast architecture which allows all kinds of encoder-attention-decoder models
 
-See `documentation <http://returnn.readthedocs.io/>`__.
+See `documentation <https://returnn.readthedocs.io/>`__.
 See `basic usage <https://returnn.readthedocs.io/en/latest/basic_usage.html>`__
 and `technological overview <https://returnn.readthedocs.io/en/latest/tech_overview.html>`__.
 

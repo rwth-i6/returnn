@@ -74,7 +74,7 @@ extensions = [
 mathjax_path = ('https://cdn.mathjax.org/mathjax/latest/MathJax.js?'
                 'config=TeX-AMS-MML_HTMLorMML')
 
-# see http://stackoverflow.com/q/12206334/562769
+# see https://stackoverflow.com/q/12206334/562769
 numpydoc_show_class_members = False
 
 # Add any paths that contain templates here, relative to this directory.
@@ -131,10 +131,10 @@ exclude_patterns = ['_build', "returnn"]
 # output. They are ignored by default.
 # show_authors = False
 
-# http://stackoverflow.com/questions/5599254/how-to-use-sphinxs-autodoc-to-document-a-classs-init-self-method
+# https://stackoverflow.com/questions/5599254/how-to-use-sphinxs-autodoc-to-document-a-classs-init-self-method
 autoclass_content = 'both'
 
-# http://stackoverflow.com/questions/4692865/autodoc-params
+# https://stackoverflow.com/questions/4692865/autodoc-params
 autodoc_member_order = 'bysource'
 
 # The name of the Pygments (syntax highlighting) style to use.
@@ -196,7 +196,7 @@ def setup(app):
 #import sphinx_bootstrap_theme
 #html_theme = 'bootstrap'
 #html_theme_options = {
-#    'bootswatch_theme': 'cosmo',  # see http://bootswatch.com/ for more
+#    'bootswatch_theme': 'cosmo',  # see https://bootswatch.com/ for more
 #    'bootstrap_version': '3',
 #    'navbar_title': project,
 #    'source_link_position': 'footer',

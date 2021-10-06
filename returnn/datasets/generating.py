@@ -205,7 +205,7 @@ class Task12AXDataset(GeneratingDataset):
   """
   12AX memory task.
   This is a simple memory task where there is an outer loop and an inner loop.
-  Description here: http://psych.colorado.edu/~oreilly/pubs-abstr.html#OReillyFrank06
+  Description here: https://psych.colorado.edu/~oreilly/pubs-abstr.html#OReillyFrank06
   """
 
   _input_classes = "123ABCXYZ"  # noqa
@@ -298,7 +298,7 @@ class TaskEpisodicCopyDataset(GeneratingDataset):
   """
   Episodic Copy memory task.
   This is a simple memory task where we need to remember a sequence.
-  Described in: http://arxiv.org/abs/1511.06464
+  Described in: https://arxiv.org/abs/1511.06464
   Also tested for Associative LSTMs.
   This is a variant where the lengths are random, both for the chars and for blanks.
   """
@@ -1542,7 +1542,7 @@ class BlissDataset(CachedDataset2):
 
 class LibriSpeechCorpus(CachedDataset2):
   """
-  LibriSpeech. http://www.openslr.org/12/
+  LibriSpeech. https://www.openslr.org/12/
 
   "train-*" Seq-length 'data' Stats (default MFCC, every 10ms):
     281241 seqs
@@ -2063,7 +2063,7 @@ class Enwik8Corpus(CachedDataset2):
     f.close()
 
   def _download_zip(self):
-    url = 'http://mattmahoney.net/dc/enwik8.zip'
+    url = 'https://mattmahoney.net/dc/enwik8.zip'
     print("%s: download %s" % (self, url), file=log.v2)
     # noinspection PyPackageRequirements
     from six.moves.urllib.request import urlretrieve

@@ -401,7 +401,7 @@ def get_current_name_scope():
   :return: current absolute name scope, via tf.name_scope
   :rtype: str
 
-  http://stackoverflow.com/questions/40907769/how-to-get-current-tensorflow-name-scope
+  https://stackoverflow.com/questions/40907769/how-to-get-current-tensorflow-name-scope
 
   Note that this is a private member and might break at some point.
   Note also that this does not need to be the same as get_current_var_scope_name().

@@ -160,7 +160,7 @@ def test_StreamIO():
   buf.write("hello")
   print("buf: %r" % buf.getvalue())
   if PY3:
-    # This behavior is not correct in Python 2.7. http://bugs.python.org/issue30250
+    # This behavior is not correct in Python 2.7. https://bugs.python.org/issue30250
     assert_equal(buf.getvalue(), "\x00\x00\x00\x00\x00hello")  # zero-filled
   buf.truncate(0)
   buf.seek(0)

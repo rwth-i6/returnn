@@ -877,7 +877,7 @@ class GenericLstmLayer(_NoOpLayer):
 class AssociativeLstmLayer(HiddenLayer):
   """
   Associative Long Short-Term Memory
-  http://arxiv.org/abs/1602.03032
+  https://arxiv.org/abs/1602.03032
   """
   recurrent = True
   layer_class = "associative_lstm"

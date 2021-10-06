@@ -235,7 +235,7 @@ class Updater:
                    for p in network.train_params_vars}
 
     if self.adadelta or self.adamdelta:
-      # http://arxiv.org/pdf/1212.5701v1.pdf
+      # https://arxiv.org/pdf/1212.5701v1.pdf
       self.eg2 = {p: self.var(p, zero=True, name="adadelta_eg2_%s" % p.name)
                   for p in self.network.train_params_vars} #E[g^2]
       self.edx2 = {p: self.var(p, zero=True, name="adadelta_edx2_%s" % p.name)
@@ -441,13 +441,13 @@ class Updater:
         #                  deltas / (deltas.norm(2) + numpy.float32(1e-10)),
         #                  deltas)
 
-      if self.gradient_noise > 0.0: # http://arxiv.org/pdf/1511.06807v1.pdf
+      if self.gradient_noise > 0.0: # https://arxiv.org/pdf/1511.06807v1.pdf
         nu = self.gradient_noise # try 0.01 0.3 1.0
         gamma = self.gradient_noise_decay
         sigma = nu / (1 + i_t)**gamma
         deltas += srng.normal(size=deltas.shape, ndim=deltas.ndim, avg=0.0, std=sigma, dtype="float32")
       if self.grad_noise_rel_grad_norm > 0.0:
-        # Idea extended from here: RandomOut, http://arxiv.org/pdf/1602.05931v2.pdf
+        # Idea extended from here: RandomOut, https://arxiv.org/pdf/1602.05931v2.pdf
         # The total gradient norm is a measure how much error there is.
         # If the relative gradient norm is low, it means that this element
         # has low impact on the loss function. -> Change that, add noise.
@@ -790,7 +790,7 @@ class Updater:
         if self.use_corrected_grad:
           updates.append((old_grad, corrected_grad))
 
-      elif self.nadam: # http://cs229.stanford.edu/proj2015/054_report.pdf
+      elif self.nadam: # https://cs229.stanford.edu/proj2015/054_report.pdf
         from functools import reduce
 
         m_cache = self.var(reduce(lambda x, y: x * y,[beta1 * ( 1 - 0.5 * 0.96**( (i + 1) * float(self.nadam_decay) ) ) for i in range(int(self.network.update_step - 1))] + [1]), name="momemtum_cache")
@@ -799,7 +799,7 @@ class Updater:
         self.adam_offset = numpy.float32(1e-8)
         init_flag = T.le(i_t,numpy.float32(self.network.update_step + 1))
 
-        mt =  beta1 * ( 1 - 0.5 * 0.96**( i_t * float(self.nadam_decay) ) ) # momentum schedule, http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
+        mt =  beta1 * ( 1 - 0.5 * 0.96**( i_t * float(self.nadam_decay) ) ) # momentum schedule, https://www.cs.toronto.edu/~fritz/absps/momentum.pdf
         mtnext = beta1 * ( 1 - 0.5 * 0.96**( (i_t + 1) * float(self.nadam_decay) ) ) # for simplified NAG
 
         m_cache_new = m_cache * mt
@@ -947,7 +947,7 @@ class Updater:
         upd[param] += - (self.learning_rate_var * deltas) / (T.sqrt(accumulator_new) + epsilon)
 
       elif self.smorms3:
-        # http://sifter.org/~simon/journal/20150420.html
+        # https://sifter.org/~simon/journal/20150420.html
         # https://www.reddit.com/r/MachineLearning/comments/3edb42/rmsprop_loses_to_smorms3_beware_the_epsilon/?
         epsilon = numpy.float32(1e-16)
         g = self.var(param, zero=True, name="g")

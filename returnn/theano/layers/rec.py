@@ -219,7 +219,7 @@ class LSTMS(Unit):
 
 class LEAKYLSTM(Unit):
   """
-  A 1D cell proposed in http://jmlr.org/papers/volume17/14-203/14-203.pdf
+  A 1D cell proposed in https://jmlr.org/papers/volume17/14-203/14-203.pdf
   The simplified equations can be seen in Table 7, page 36.
   Type A with gamma_3==0.
   This cell has 3 units instead of 4 like LSTM
@@ -263,7 +263,7 @@ class LEAKYLSTM(Unit):
 
 class LEAKYLPLSTM(Unit):
   """
-  A 1D cell proposed in http://jmlr.org/papers/volume17/14-203/14-203.pdf
+  A 1D cell proposed in https://jmlr.org/papers/volume17/14-203/14-203.pdf
   The simplified equations can be seen in Table 7, page 36.
   Type A.
   This cell has 4 units like the LSTM
@@ -308,7 +308,7 @@ class LEAKYLPLSTM(Unit):
 
 class PIDLSTM(Unit):
   """
-  A 1D cell proposed in http://jmlr.org/papers/volume17/14-203/14-203.pdf
+  A 1D cell proposed in https://jmlr.org/papers/volume17/14-203/14-203.pdf
   The simplified equations can be seen in Table 7, page 36.
   Type E. This cell works as a dynamic PID filter of the input. The forget gate
   determines if it has PD od PI characteristic, the Proportional gate gates the P/I part,
@@ -447,7 +447,7 @@ class LSTMR(Unit):
 
 class GRU(Unit):
   """
-  Gated recurrent unit as described in http://arxiv.org/abs/1502.02367
+  Gated recurrent unit as described in https://arxiv.org/abs/1502.02367
   """
   def __init__(self, n_units, **kwargs):
     super(GRU, self).__init__(n_units, n_units * 3, n_units, n_units * 2, 2)
@@ -1052,7 +1052,7 @@ class RecurrentUpsampleLayer(RecurrentUnitLayer):
 
 class LinearRecurrentLayer(HiddenLayer):
   """
-  Inspired from: http://arxiv.org/abs/1510.02693
+  Inspired from: https://arxiv.org/abs/1510.02693
   Basically a very simple LSTM.
   """
   recurrent = True

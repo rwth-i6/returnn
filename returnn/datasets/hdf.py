@@ -986,7 +986,7 @@ class SimpleHDFWriter:
     :param int ndim: counted without batch
     :param list[str]|None labels:
     :param dict[str,(int,int,str)]|None extra_type: key -> (dim,ndim,dtype)
-    :param bool swmr: see http://docs.h5py.org/en/stable/swmr.html
+    :param bool swmr: see https://docs.h5py.org/en/stable/swmr.html
     :param bool extend_existing_file: True also means we expect that it exists
     """
     from returnn.util.basic import hdf5_strings, unicode
@@ -1038,7 +1038,7 @@ class SimpleHDFWriter:
       self._seq_lengths = self._file["seqLengths"]
     else:
       self._seq_lengths = self._file.create_dataset("seqLengths", (0, 2), dtype='i', maxshape=(None, None))
-    # Note about strings in HDF: http://docs.h5py.org/en/stable/strings.html
+    # Note about strings in HDF: https://docs.h5py.org/en/stable/strings.html
     # Earlier we used S%i, i.e. fixed-sized strings, with the calculated max string length.
     if extend_existing_file:
       self._seq_tags = self._file["seqTags"]

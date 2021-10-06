@@ -490,7 +490,7 @@ def complex_elemwise_mult(a, b, axis=-1):
   return T.concatenate([r_real, r_imag], axis=axis)
 
 def complex_bound(a, axis=-1):
-  # Via Associative LSTMs, http://arxiv.org/abs/1602.03032
+  # Via Associative LSTMs, https://arxiv.org/abs/1602.03032
   if axis < 0: axis %= a.ndim
   assert 0 <= axis < a.ndim
   a_real = a[slice_for_axis(axis=axis, s=slice(0, a.shape[axis] / 2))]
