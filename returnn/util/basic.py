@@ -113,7 +113,7 @@ def is_64bit_platform():
   """
   :return: True if we run on 64bit, False for 32bit
   :rtype: bool
-  http://stackoverflow.com/questions/1405913/how-do-i-determine-if-my-python-shell-is-executing-in-32bit-or-64bit-mode-on-os
+  https://stackoverflow.com/questions/1405913/how-do-i-determine-if-my-python-shell-is-executing-in-32bit-or-64bit-mode-on-os
   """
   return sys.maxsize > 2**32
 
@@ -1434,7 +1434,7 @@ def random_orthogonal(shape, gain=1., seed=None):
   """
   Returns a random orthogonal matrix of the given shape.
   Code borrowed and adapted from Keras: https://github.com/fchollet/keras/blob/master/keras/initializers.py
-  Reference: Saxe et al., http://arxiv.org/abs/1312.6120
+  Reference: Saxe et al., https://arxiv.org/abs/1312.6120
   Related: Unitary Evolution Recurrent Neural Networks, https://arxiv.org/abs/1511.06464
 
   :param tuple[int] shape:
@@ -2908,7 +2908,7 @@ def parse_ld_conf_file(fn):
 def get_ld_paths():
   """
   To be very correct, see man-page of ld.so.
-  And here: http://unix.stackexchange.com/questions/354295/what-is-the-default-value-of-ld-library-path/354296
+  And here: https://unix.stackexchange.com/questions/354295/what-is-the-default-value-of-ld-library-path/354296
   Short version, not specific to an executable, in this order:
   - LD_LIBRARY_PATH
   - /etc/ld.so.cache (instead we will parse /etc/ld.so.conf)

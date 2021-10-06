@@ -23,7 +23,7 @@ class LSTMRecOpGrad(theano.sandbox.cuda.GpuOp):
     self.fun_name = fun_name
     self.recurrent_transform = recurrent_transform
     if inplace:
-     # http://deeplearning.net/software/theano/extending/inplace.html
+     # https://deeplearning.net/software/theano/extending/inplace.html
      # https://github.com/Theano/Theano/issues/3506
      # It's strange that we must mark which output operates on which input -
      # I would expect that it must only know which inputs are destroyed.

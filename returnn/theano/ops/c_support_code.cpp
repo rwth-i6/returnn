@@ -501,7 +501,7 @@ float& dataf(PyArrayObject* arr)
   return data<float>(arr);
 }
 
-//http://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Levenshtein_distance#C.2B.2B
+//https://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Levenshtein_distance#C.2B.2B
 template<class T>
 int levenshteinDist(const T &s1, const T & s2)
 {

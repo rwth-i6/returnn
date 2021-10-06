@@ -1251,7 +1251,7 @@ class LayerBase(object):
     :param bool masked_time: flatten and mask input tensor
     :rtype: tf.Tensor
 
-    http://arxiv.org/abs/1502.03167
+    https://arxiv.org/abs/1502.03167
 
     With our default settings:
 

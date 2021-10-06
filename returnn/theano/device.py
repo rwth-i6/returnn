@@ -89,7 +89,7 @@ def str2int(txt):
     return txt
 
 def sort_strint(txt):
-  # http://nedbatchelder.com/blog/200712/human_sorting.html
+  # https://nedbatchelder.com/blog/200712/human_sorting.html
   return [ str2int(i) for i in re.split('(\d+)', txt) ]
 
 
@@ -840,7 +840,7 @@ class Device(object):
   def _checkGpuFuncs(self, device, device_id):
     if device[0:3] != 'gpu': return
     # Check if we use the GPU.
-    # http://deeplearning.net/software/theano/tutorial/modes.html
+    # https://deeplearning.net/software/theano/tutorial/modes.html
     theano_func = self.get_compute_func(self.network_task)
     if not any([x.op.__class__.__name__ in ['GpuGemm', 'GpuGemv', 'GpuDot22', 'GpuElemwise']
                 for x in theano_func.maker.fgraph.toposort()]):

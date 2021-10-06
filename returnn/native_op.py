@@ -107,7 +107,7 @@ class NativeOpBaseMixin(object):
       assert isinstance(want_inplace, (int, long))
       if want_inplace >= 0 and info.get("is_inplace", False):
         out_idx = want_inplace
-        # http://deeplearning.net/software/theano/extending/inplace.html
+        # https://deeplearning.net/software/theano/extending/inplace.html
         # https://github.com/Theano/Theano/issues/3506
         # It's strange that we must mark which output operates on which input -
         # I would expect that it must only know which inputs are destroyed.

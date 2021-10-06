@@ -648,7 +648,7 @@ class Layer(Container):
     c = self.constraints
     f32_index = T.cast(self.index, "float32")
     if self.attrs.get('output_L2_reg', 0.0):
-      # Note: For the output layer, it might even make sense to use a negative factor. http://www.danielpovey.com/files/2016_interspeech_mmi.pdf
+      # Note: For the output layer, it might even make sense to use a negative factor. https://www.danielpovey.com/files/2016_interspeech_mmi.pdf
       assert self.output.ndim == 3
       l2 = f32_index * T.sum(T.sqr(self.output), axis=2)
       c += numpy.float32(self.attrs.get('output_L2_reg', 0.0)) * T.sum(l2)
@@ -763,7 +763,7 @@ class Layer(Container):
       assert n_in == self.attrs['n_out']
       self.output += z
     if self.attrs['layer_drop'] > 0.0:
-      # Stochastic Depth, http://arxiv.org/abs/1603.09382
+      # Stochastic Depth, https://arxiv.org/abs/1603.09382
       from .hidden import concat_sources
       z, n_in = concat_sources(self.sources, unsparse=True, expect_source=False)
       n_out = self.attrs['n_out']

@@ -1341,7 +1341,7 @@ class TimeWarpLayer(_NoOpLayer):
   Like https://en.wikipedia.org/wiki/Image_warping, controlled by NN.
   A bit like simple local feed-forward attention,
   where the attention is controlled by the input (encoder) and not output (decoder).
-  Maybe similar: A Hybrid Dynamic Time Warping-Deep Neural Network Architecture for Unsupervised Acoustic Modeling, http://ewan.website/interspeech_2015_dnn_dtw.pdf
+  Maybe similar: A Hybrid Dynamic Time Warping-Deep Neural Network Architecture for Unsupervised Acoustic Modeling, https://ewan.website/interspeech_2015_dnn_dtw.pdf
   Implementation is very similar to TimeBlurLayer except
   that the weight distribution is different every time frame
   and controlled by a NN.
@@ -1788,7 +1788,7 @@ class BaseInterpolationLayer(ForwardLayer): # takes a base defined over T and in
       self.make_output(T.sum(self.base.dimshuffle(0,1,'x',2).repeat(z.shape[0], axis=2) * w, axis=0, keepdims=False).dimshuffle(1,0,2)) # T'BD
 
 
-class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described in http://arxiv.org/pdf/1508.01211v1.pdf
+class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described in https://arxiv.org/pdf/1508.01211v1.pdf
   layer_class = "chunking"
 
   def __init__(self, chunk_size=1, method = 'concat', **kwargs):

@@ -23,7 +23,7 @@ from returnn.log import log
 class RecLayer(_ConcatInputLayer):
   """
   Recurrent layer, has support for several implementations of LSTMs (via ``unit`` argument),
-  see :ref:`tf_lstm_benchmark` (http://returnn.readthedocs.io/en/latest/tf_lstm_benchmark.html),
+  see :ref:`tf_lstm_benchmark` (https://returnn.readthedocs.io/en/latest/tf_lstm_benchmark.html),
   and also GRU, or simple RNN.
   Via `unit` parameter, you specify the operation/model performed in the recurrence.
   It can be a string and specify a RNN cell, where all TF cells can be used,
@@ -6601,7 +6601,7 @@ class KenLmStateLayer(_ConcatInputLayer):
   accumulates string,
   keeps state of seen string so far,
   returns score (+log space, natural base e) of sequence,
-  using KenLM (http://kheafield.com/code/kenlm/) (see :mod:`TFKenLM`).
+  using KenLM (https://kheafield.com/code/kenlm/) (see :mod:`TFKenLM`).
   EOS (</s>) token must be used explicitly.
   """
   layer_class = "kenlm"

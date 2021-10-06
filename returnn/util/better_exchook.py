@@ -1377,7 +1377,7 @@ def dump_all_thread_tracebacks(exclude_thread_ids=None, file=None):
             if tid in exclude_thread_ids:
                 continue
             # This is a bug in earlier Python versions.
-            # http://bugs.python.org/issue17094
+            # https://bugs.python.org/issue17094
             # Note that this leaves out all threads not created via the threading module.
             if tid not in threads:
                 continue

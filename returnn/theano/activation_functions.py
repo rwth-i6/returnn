@@ -28,7 +28,7 @@ def clippedlu(z):
   # Not sure about the fastest implementation...
   return relu(z + numpy.float32(1)) - relu(z - numpy.float32(1)) - numpy.float32(1)
 
-def elu(z): # http://arxiv.org/pdf/1511.07289v1.pdf
+def elu(z): # https://arxiv.org/pdf/1511.07289v1.pdf
   return T.switch(T.ge(z,0), z, T.exp(z) - 1)
 
 def identity(z):

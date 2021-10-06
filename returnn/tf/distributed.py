@@ -53,7 +53,7 @@ class MPIClusterResolver(tf.distribute.cluster_resolver.ClusterResolver):
 
   If you use Sun Grid Engine (SGE) / Oracle Grid Engine,
   with the parallel environment (PE) feature
-  (`doc <http://gridscheduler.sourceforge.net/htmlman/htmlman5/sge_pe.html>`_)
+  (`doc <https://gridscheduler.sourceforge.net/htmlman/htmlman5/sge_pe.html>`_)
   (i.e. the SGE job was started e.g. via: `qsub -pe mpi 8`),
   then you might run your sub processes (slots) via `mpirun`, e.g. like::
 

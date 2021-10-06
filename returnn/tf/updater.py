@@ -1150,7 +1150,7 @@ class NormalizedSGD(CustomGradientDescentOptimizer):
 
 class NeuralOptimizer1(BaseCustomOptimizer):
   """
-  Via Neural Optimizer Search with Reinforcement Learning (http://proceedings.mlr.press/v70/bello17a/bello17a.pdf).
+  Via Neural Optimizer Search with Reinforcement Learning (https://proceedings.mlr.press/v70/bello17a/bello17a.pdf).
 
   Equivalent to the optimizer g * exp(sign(g) * sign(m)), we use:
 
@@ -1343,7 +1343,7 @@ class AMSGradOptimizer(Optimizer):
   https://colab.research.google.com/notebook#fileId=1xXFAuHM2Ae-OmF5M8Cn9ypGCa_HHBgfG&scrollTo=N1-2wPHN1Otn
   https://openreview.net/pdf?id=ryQu7f-RZ
   https://keras.io/optimizers/
-  http://ruder.io/deep-learning-optimization-2017/index.html#fixingtheexponentialmovingaverage
+  https://ruder.io/deep-learning-optimization-2017/index.html#fixingtheexponentialmovingaverage
   https://github.com/taki0112/AMSGrad-Tensorflow
   """
 

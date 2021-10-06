@@ -423,7 +423,7 @@ class MultiBatchBeamGradAddOp(theano.Op):
     inplace_increment(D_array, (idxs, numpy.arange(n_batches)), D_beam)
 
 
-# http://deeplearning.net/software/theano/extending/optimization.html
+# https://deeplearning.net/software/theano/extending/optimization.html
 # See also theano/compile/mode.py for reference about the position priority numbers.
 # After priority 50 we can do destructive inplace operations.
 
