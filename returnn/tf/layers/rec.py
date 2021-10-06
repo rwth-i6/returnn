@@ -333,8 +333,10 @@ class RecLayer(_ConcatInputLayer):
         time_dim_tag = target_data.get_time_dim_tag()
       else:
         # We create a new time-dim.
-        # Expect that we have a subnet and "end" (EOS) is defined.
-        assert isinstance(d.get("unit"), dict) and "end" in d.get("unit")
+        # Usually the loop would be dynamic via an "end" layer which defines the end-of-sequence (EOS).
+        # However, there are cases such as the RecUnstackLayer which can also define the time dim.
+        # Expect that we have a subnet.
+        assert isinstance(d.get("unit"), dict)
         time_dim_tag = DimensionTag(
           description="dyn-time:%s%s" % (network.get_absolute_name_prefix(), d["_name"]),
           kind=DimensionTag.Types.Time)
@@ -1593,6 +1595,8 @@ class _SubnetworkRecCell(object):
       layer = self.input_layers_net.layers[layer_name]
       assert isinstance(layer, LayerBase)
       if layer_name not in inputs_moved_out_tas:
+        assert not layer.output.mark_same_time(self._time_dim_tags), (
+          "%s does not expect to have matching time dim to %s" % (layer, self.parent_rec_layer))
         assert name != "output" and not prev, "Time dim does not match: RecLayer %s (%r) vs sub layer %s (%r)." % (
           self.parent_rec_layer, self.parent_rec_layer.output.get_time_dim_tag(),
           layer, layer.output.get_time_dim_tag())
@@ -3320,6 +3324,8 @@ class _SubnetworkRecCell(object):
       for layer_name in self.input_layers_moved_out:
         get_layer(layer_name)
 
+    self._update_time_dim_tags_potential_set_new_hashes()
+
   def _construct_output_layers_moved_out(self, loop_accumulated, seq_len, extra_output_layers, final_net_vars):
     """
     See self._move_outside_loop().
@@ -3505,6 +3511,29 @@ class _SubnetworkRecCell(object):
     # we would expect that their time-dim-axis matches the same as from the rec loop.
     for layer in self.output_layers_net.layers.values():
       layer.output.mark_same_time(self._time_dim_tags)
+
+    self._update_time_dim_tags_potential_set_new_hashes()
+
+  def _update_time_dim_tags_potential_set_new_hashes(self):
+    """
+    This is quite counter-intuitive and potential dangerous:
+    self._time_dim_tags is a set over dim tags.
+    A set uses the hash values of its objects.
+    Via DimensionTag.declare_same_as,
+    we can change the hash value of dim tags.
+    The set would not automatically be updated though,
+    and then you can end up with the strange case::
+
+      (list(self._time_dim_tags) == [self.time_dim_tag]
+       and self.time_dim_tag not in self._time_dim_tags)
+
+    Additionally, e.g. the input layer net might have references to the set,
+    so we cannot simply create a new set.
+    """
+    # Clear the set and re-add all tags. That will use any potential updated hash values.
+    tags = list(self._time_dim_tags)
+    self._time_dim_tags.clear()
+    self._time_dim_tags.update(tags)
 
 
 RecLayer.SubnetworkRecCell = _SubnetworkRecCell
