@@ -1183,6 +1183,33 @@ def test_rec_explicit_lstm():
     pprint(res)
 
 
+def test_RecUnstackLayer_rec_no_input():
+  net_dict = {
+    "output": {"class": "rec", "from": [], "unit": {
+      "input": {"class": "rec_unstack", "from": "base:data:data", "axis": "T"},
+      "output": {"class": "combine", "kind": "add", "from": ["prev:output", "input"]},
+    }},
+  }
+  config = Config({
+    "extern_data": {"data": {"dim": 5}},
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    rec_layer = net.get_layer("output")
+    assert isinstance(rec_layer, RecLayer)
+    cell = rec_layer.cell
+    from returnn.tf.layers.rec import _SubnetworkRecCell
+    assert isinstance(cell, _SubnetworkRecCell)
+    assert_equal(cell.input_layers_moved_out, ["input"])
+    assert_equal(cell.layers_in_loop, ["output"])
+    in_data = net.extern_data.get_default_input_data()
+    out_data = rec_layer.output
+    assert_equal(in_data.get_time_dim_tag(), out_data.get_time_dim_tag())
+    from test_TFNetworkLayer import make_feed_dict
+    session.run(out_data.placeholder, feed_dict=make_feed_dict([in_data]))
+
+
 def test_search_no_rec_explicit():
   from returnn.tf.layers.rec import _SubnetworkRecCell
   beam_size = 3
