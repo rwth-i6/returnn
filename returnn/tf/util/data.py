@@ -3192,6 +3192,15 @@ class Data(object):
         res.append(i)
     return res
 
+  def get_dim_tag_from_description(self, axis):
+    """
+    :param str|DimensionTag axis:
+    :return: our matching dim tag. this assumes it exists.
+    :rtype: DimensionTag
+    """
+    axis_int = self.get_axis_from_description(axis, allow_int=False)
+    return self.dim_tags[axis_int]
+
   def get_axis_from_description(self, axis, allow_int=True):
     """
     :param int|str|DimensionTag axis:
