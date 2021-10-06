@@ -5038,6 +5038,9 @@ class SqueezeLayer(_ConcatInputLayer):
 class StackLayer(LayerBase):
   """
   Stacks multiple inputs together using :func:`tf.stack`.
+  This creates a new dimension for the stack.
+
+  For concatenation (in feature dimension), see :class:`CopyLayer`.
   """
   layer_class = "stack"
 
