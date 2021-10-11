@@ -151,6 +151,13 @@ class MapDatasetWrapper(CachedDataset2):
     """
     return self._seq_order[sorted_seq_idx]
 
+  def have_corpus_seq_idx(self):
+    """
+    :rtype: bool
+    :return: whether you can call self.get_corpus_seq_idx()
+    """
+    return True
+
   def get_data_dim(self, key):
     """
     :param str key: e.g. "data" or "classes"
