@@ -483,6 +483,7 @@ class Dataset(object):
       seq_index = self._apply_partition_epoch(seq_index, partition_epoch, epoch)
     if repeat_epoch > 1:
       seq_index = seq_index * repeat_epoch
+    seq_index = self._apply_multi_gpu_partition(seq_index)
     if self.seq_tags_filter is not None:
       # Note: This is as generic as possible, but requires that get_all_tags is implemented.
       assert seq_index
@@ -515,6 +516,31 @@ class Dataset(object):
     seq_index = seq_index[partitions[current_partition]:partitions[current_partition + 1]]
     assert len(seq_index) == partition_sizes[current_partition]
 
+    return seq_index
+
+  @classmethod
+  def _apply_multi_gpu_partition(cls, seq_index):
+    """
+    Via horovod_dataset_distribution = "partition", does nothing if not set.
+
+    :param list[int] seq_index:
+    :return: partition of seq_index for the current processes, i.e. we split onto the different GPUs
+    :rtype: list[int]
+    """
+    from returnn.config import get_global_config
+    config = get_global_config(raise_exception=False)
+    if not config or not config.is_true("use_horovod"):
+      return seq_index
+
+    import returnn.tf.horovod
+    if not returnn.tf.horovod.get_ctx().get_dataset_distribution_type() == "partition":
+      return seq_index
+
+    rank = returnn.tf.horovod.get_ctx().rank() + 1  # one-based to make work as "epoch"
+    num_gpus = returnn.tf.horovod.get_ctx().size()
+
+    # Reuse the partition epoch logic to split current sub-epoch between different GPUs.
+    seq_index = cls._apply_partition_epoch(seq_index, partition_epoch=num_gpus, epoch=rank)
     return seq_index
 
   def _get_random_seed_for_epoch(self, epoch):
