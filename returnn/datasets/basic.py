@@ -121,6 +121,7 @@ class Dataset(object):
     self.random_seed_offset = random_seed_offset
     self.partition_epoch = partition_epoch or 1
     self.repeat_epoch = repeat_epoch or 1
+    self.disable_horovod_partition = False  # can be set by meta-dataset to handle multi-gpu partitioning on meta-level
     self.seq_tags_filter = set(self._load_seq_list_file(seq_list_filter_file)) if seq_list_filter_file else None
     self.unique_seq_tags = unique_seq_tags
     self._seq_order_seq_lens_file = seq_order_seq_lens_file
@@ -483,7 +484,8 @@ class Dataset(object):
       seq_index = self._apply_partition_epoch(seq_index, partition_epoch, epoch)
     if repeat_epoch > 1:
       seq_index = seq_index * repeat_epoch
-    seq_index = self._apply_multi_gpu_partition(seq_index)
+    if not self.disable_horovod_partition:
+      seq_index = self._apply_multi_gpu_partition(seq_index)
     if self.seq_tags_filter is not None:
       # Note: This is as generic as possible, but requires that get_all_tags is implemented.
       assert seq_index

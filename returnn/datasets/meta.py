@@ -913,6 +913,9 @@ class CombinedDataset(CachedDataset2):
     # partition epoch of the individual sub-datasets is still supported. Later we will call init_seq_order again with a
     # sequence list to e.g. apply joint sorting or partition epoch of all sequences.
     for dataset in self.datasets.values():
+      if self.sampling_sizes:
+        # Partitioning does not make sense if we sample a fixed number of sequences anyway.
+        dataset.disable_horovod_partition = True
       dataset.init_seq_order(epoch=epoch)
 
     # noinspection PyBroadException
@@ -1076,6 +1079,8 @@ class CombinedDataset(CachedDataset2):
     # We want to additionally sort the sequences in the current sample. For this, create a sequence order on a
     # range of length of the number of sequences in the sample. Note that we have to map the indices to make use
     # of self._get_seq_length here.
+    # This get_seq_order_for_epoch call now also handles horovod_dataset_distribution = 'partition', which we
+    # disabled on sub-dataset level via 'disable_horovod_partition' above.
     seq_order_remapping = self.get_seq_order_for_epoch(
       epoch=epoch, num_seqs=len(seq_order), get_seq_len=lambda i: self._get_seq_length(seq_order[i]))
 
