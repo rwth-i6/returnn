@@ -102,8 +102,11 @@ class MapDatasetWrapper(CachedDataset2):
     """
     super(MapDatasetWrapper, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
 
-    if seq_list or seq_order:
+    if seq_list:
       raise NotImplementedError
+    if seq_order:
+      self._seq_order = seq_order
+      return True
 
     try:
       self._seq_order = self._dataset.get_seq_order(epoch=epoch)
