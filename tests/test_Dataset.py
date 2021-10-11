@@ -6,8 +6,10 @@ from __future__ import print_function
 import sys
 import _setup_test_env  # noqa
 import unittest
+import numpy
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 from returnn.datasets.generating import GeneratingDataset, DummyDataset, DummyDatasetMultipleSequenceLength
+from returnn.datasets.map import FromListDataset, MapDatasetWrapper
 from returnn.engine.batch import Batch
 from returnn.datasets.basic import DatasetSeq
 from returnn.util.basic import NumbersDict
@@ -318,6 +320,41 @@ def test_task12ax_window():
   assert_equal(list(data2a[1, 1]), list(data1[1]))
   assert_equal(list(data2a[1, 2]), list(data1[2]))
   assert_equal(list(data2a[-1, 2]), [0] * input_dim)  # zero-padded right
+
+
+def test_horovod_partition():
+    num_seqs = 10
+    dummy_data = [{"data": numpy.array([i])} for i in range(num_seqs)]
+    # FromListDataset because DummyDataset does not support sequence ordering and thus no partitioning.
+    dataset = MapDatasetWrapper(
+      FromListDataset(data_list=dummy_data, data_types=None), seq_ordering="random")
+    from returnn.config import get_global_config
+    global_config = get_global_config(auto_create=True)
+    global_config.set("use_horovod", True)
+    global_config.set("horovod_dataset_distribution", "partition")
+    from returnn.tf import horovod
+
+    horovod_size = 3
+    data_out = []
+    for rank in range(horovod_size):
+      # Simulating a multi-gpu setup.
+      def get_dummy_ctx(config=None):
+        class DummyHorovodContext(horovod.HorovodContext):
+          def __init__(self, config):
+            self._rank = rank
+            self._size = horovod_size
+            self._config = config
+        return DummyHorovodContext(config or global_config)
+      horovod.get_ctx = get_dummy_ctx
+      dataset.init_seq_order(epoch=1)
+      seq_idx = 0
+      while dataset.is_less_than_num_seqs(seq_idx):
+        dataset.load_seqs(seq_idx, seq_idx + 1)
+        data = dataset.get_data(seq_idx, "data")
+        data_out.extend(data.tolist())
+        seq_idx += 1
+    assert len(data_out) == num_seqs
+    assert set(data_out) == set(range(num_seqs))
 
 
 if __name__ == "__main__":
