@@ -877,6 +877,16 @@ def test_Data_get_common_data_beam_size():
   assert common.beam == beam
 
 
+def test_Data_get_common_data_tb_bf():
+  a = Data(name="a", shape=(None,), time_dim_axis=0, batch_dim_axis=1)
+  b = Data(name="b", shape=(5,), batch_dim_axis=0)
+  print("a:", a)
+  print("b:", b)
+  common = Data.get_common_data([a, b])
+  print("common:", common)
+  assert common.shape == (None, 5) and common.batch_dim_axis == 1
+
+
 def test_Data_no_feature_dim():
   d = Data(name="x", shape=(6,), dtype='int32', sparse=True, dim=6, batch_dim_axis=None, time_dim_axis=None)
   assert d.feature_dim_axis is None
