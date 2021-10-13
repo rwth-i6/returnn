@@ -20,9 +20,7 @@ def setup():
   import os
 
   # Enable all logging, up to debug level.
-  logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s %(name)s %(levelname)s: %(message)s')
+  logging.basicConfig(level=logging.DEBUG, format='%(message)s')
 
   # Disable extensive TF debug verbosity. Must come before the first TF import.
   logging.getLogger('tensorflow').disabled = True
