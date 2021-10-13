@@ -1242,7 +1242,7 @@ def get_dataset_class(name):
   # because this function is only used for such cases.
   mod_names = [
     "hdf", "sprint", "generating", "numpy_dump",
-    "meta", "lm", "stereo", "raw_wav"]
+    "meta", "lm", "stereo", "raw_wav", "map"]
   for mod_name in mod_names:
     mod = import_module("returnn.datasets.%s" % mod_name)
     if name in vars(mod):
