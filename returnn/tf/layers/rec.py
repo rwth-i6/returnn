@@ -2776,7 +2776,12 @@ class _SubnetworkRecCell(object):
         self.time_dim_tag.declare_same_as(output_data.get_time_dim_tag())
         assert len(rec_layer.output.dim_tags) == len(output_data.dim_tags)
         for tag1, tag2 in zip(rec_layer.output.dim_tags, output_data.dim_tags):
-          assert tag1.is_equal(tag2, allow_same_feature_dim=True)
+          try:
+            assert tag1.is_equal(tag2, allow_same_feature_dim=True), (
+              "%s vs %s from %s" % (rec_layer.output, output_data, output_layer))
+          except Exception as exc:
+            self._handle_construct_exception(description="output format match", exception=exc)
+            raise
           # Make sure they are the same.
           # It can happen that they are not when the dim tag is created inside,
           # and then created once for the template layer, and again for the real layer.
