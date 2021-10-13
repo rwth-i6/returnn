@@ -1510,23 +1510,27 @@ class _SubnetworkRecCell(object):
     :param str description:
     :param Exception exception:
     """
-    if not self._template_construction_exceptions:
-      return
     from returnn.tf.network import LayerNotFound, DataNotFound
     if isinstance(exception, (DataNotFound, LayerNotFound)):
       return  # pass on. this is maybe caught elsewhere. also other template exceptions are probably not relevant.
-    print("Got exception during %s." % description)
-    print("%s: %s" % (type(exception).__name__, exception))
-    from pprint import pprint
-    print("We had previous exceptions at template construction, which got resolved, but maybe sth is wrong.")
+    out = log.v2
+    print(file=out)
+    print("ERROR: Got exception during %s:" % description, file=out)
+    print("%s: %s" % (type(exception).__name__, exception), file=out)
+    print(file=out)
     print("Template network (check out types / shapes):")
-    pprint(self.layer_data_templates)
-    print("Collected (unique) exceptions during template construction:")
-    print("(Note that many of these can be ignored, or are expected.)")
-    for s in self._template_construction_exceptions:
-      print(s)
-    # Don't print twice.
-    self._template_construction_exceptions = None
+    for key, value in self.layer_data_templates.items():
+      print("%s: %s" % (key, value), file=out)
+    if self._template_construction_exceptions:
+      print(file=out)
+      print("Collected (unique) exceptions during template construction:", file=out)
+      print("(Note that many of these can be ignored, or are expected.)", file=out)
+      for s in self._template_construction_exceptions:
+        print(file=out)
+        print(s, file=out, end="")
+      # Don't print twice.
+      self._template_construction_exceptions = None
+    print(file=out)
 
   def _get_parent_layer(self, layer_name):
     """
