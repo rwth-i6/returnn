@@ -4059,6 +4059,40 @@ def test_reclayer_batch_feature_input():
     session.run(output_layer.output.placeholder, feed_dict=feed_dict)
 
 
+def test_reclayer_opt_output_consistent_format():
+  config = Config({"extern_data": {"data": {"dim": 5}}})
+  net_dict = {
+    'loop': {
+      'class': 'rec',
+      'from': [],
+      'max_seq_len': 10,
+      'unit': {
+        'constant': {'class': 'constant', 'value': 1.0},  # scalar
+        'add': {'class': 'combine', 'from': ['prev:i', 'constant'], 'kind': 'add'},  # [B] via 'i'. [T,B] outside
+        'i': {'class': 'copy', 'from': 'add'},  # [B] with default behavior currently
+
+        'constant_0': {'class': 'constant', 'value': 4.9},
+        'greater_equal': {'class': 'compare', 'from': ['add', 'constant_0'], 'kind': 'greater_equal'},
+        'end': {'class': 'copy', 'from': 'greater_equal'},  # [B] via 'i'
+
+        'reduce': {'class': 'reduce', 'axis': 'T', 'from': 'base:data:data', 'mode': 'mean'},  # [B,F] both inside/out
+        'mul': {'class': 'combine', 'from': ['add', 'reduce'], 'kind': 'mul'},  # [B,F] inside. [T,B,F] outside
+        'output': {'class': 'copy', 'from': 'mul'},
+      },
+    },
+    'output': {'class': 'copy', 'from': 'loop/output'},
+  }
+  with make_scope() as session:
+    network = TFNetwork(config=config)
+    network.construct_from_dict(net_dict)
+    out = network.get_layer("output").output
+    from test_TFNetworkLayer import make_feed_dict
+    n_batch = 3
+    feed_dict = make_feed_dict(network.extern_data, n_batch=n_batch)
+    _, seq_len = session.run((out.placeholder, out.get_sequence_lengths()), feed_dict=feed_dict)
+    assert list(seq_len) == [4] * n_batch
+
+
 def test_reclayer_reuse_params_partly_moved_out():
   # https://github.com/rwth-i6/returnn/issues/555
   from test_TFNetworkLayer import make_feed_dict
