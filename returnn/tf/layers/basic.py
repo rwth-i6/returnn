@@ -2550,7 +2550,9 @@ class PadLayer(_ConcatInputLayer):
     """
     from returnn.tf.util.data import DimensionTag
     super(PadLayer, self).__init__(**kwargs)
-    axes = self.input_data.get_axes_from_description(axes)
+    axes_ = self.input_data.get_axes_from_description(axes)
+    assert axes_, "%s: invalid axes %r in input %s" % (self, axes, self.input_data)
+    axes = axes_
     padding = self._transform_padding(padding=padding, axes=axes)
     paddings = [(0, 0)] * len(range(self.input_data.batch_ndim))
     for i, a in enumerate(axes):
@@ -2795,16 +2797,6 @@ class MergeDimsLayer(_ConcatInputLayer):
       res_dim = int(numpy.prod([data.batch_shape[i] for i in axes]))
     merge_dim_tags = [tag for (i, tag) in enumerate(data.dim_tags) if i in axes]
     merge_target_axis = cls._get_target_axis(input_data=data, merge_axes=axes)
-    if data.feature_dim_axis_or_unspecified is NotSpecified:
-      new_feature_dim_axis = NotSpecified
-    elif data.feature_dim_axis in axes and merge_target_axis != data.feature_dim_axis:
-      if merge_target_axis == data.batch_dim_axis:
-        new_feature_dim_axis = None
-      else:
-        new_feature_dim_axis = merge_target_axis
-    else:
-      new_feature_dim_axis = cls._old_axis_to_new_axis(
-        input_data=input_data, merge_axes=axes, old_axis=input_data.feature_dim_axis)
     if any(tag.is_batch_dim() for tag in merge_dim_tags):
       res_dim_tag_kind = DimensionTag.Types.Batch
     elif any(tag.is_feature_dim() for tag in merge_dim_tags):
@@ -2819,15 +2811,20 @@ class MergeDimsLayer(_ConcatInputLayer):
 
     data_opts = data.get_kwargs(include_special_axes=False)
     data_opts["dim_tags"] = new_dim_tags
-    data_opts["feature_dim_axis"] = new_feature_dim_axis
     data = Data(**data_opts)
 
+    new_feature_dim_axis = cls._old_axis_to_new_axis(
+      input_data=input_data, merge_axes=axes, old_axis=input_data.feature_dim_axis)
+    if new_feature_dim_axis == data.batch_dim_axis:
+      new_feature_dim_axis = None
     data.time_dim_axis = cls._old_axis_to_new_axis(
       input_data=input_data, merge_axes=axes, old_axis=input_data.time_dim_axis)
-    if data.time_dim_axis is not None and data.time_dim_axis in {data.batch_dim_axis, data.feature_dim_axis}:
+    if data.time_dim_axis is not None and data.time_dim_axis in {data.batch_dim_axis, new_feature_dim_axis}:
       if input_data.time_dim_axis not in {input_data.batch_dim_axis, input_data.feature_dim_axis}:
         # Time got merged with feature or batch.
         data.time_dim_axis = None
+    if data.feature_dim_axis != new_feature_dim_axis or input_data.feature_dim_axis_or_unspecified is not NotSpecified:
+      data.feature_dim_axis = new_feature_dim_axis  # explicitly set
 
     if input_data.batch_dim_axis in axes and data.batch:
       for axis in axes:
