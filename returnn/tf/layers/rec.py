@@ -1083,6 +1083,18 @@ class _SubnetworkRecCell(object):
     # These Exceptions always indicate incorrect construction, so fail directly instead of collecting them
     fail_directly_exception_types = (DataNotFound, LayerNotFound, BehaviorVersion.RequirementNotSatisfied)
 
+    class CollectedException:
+      """
+      Collected exception information.
+      """
+      def __init__(self, text, exception):
+        """
+        :param str text: formatted exception with optional stack trace
+        :param Exception exception:
+        """
+        self.text = text
+        self.exception = exception
+
     class ConstructCtx:
       """
       Closure.
@@ -1090,7 +1102,7 @@ class _SubnetworkRecCell(object):
       layers = []  # type: typing.List[_TemplateLayer]  # stack of layers
       most_recent = None  # type: typing.Optional[typing.List[_TemplateLayer]]  # most recent stack
       partially_finished = []  # type: typing.List[_TemplateLayer]
-      collected_exceptions = OrderedDict()  # type: OrderedDict[object,str]  # exc_key -> formatted exception/stack str
+      collected_exceptions = OrderedDict()  # type: OrderedDict[object,CollectedException]  # key custom below
       recent_exception = None  # type: Exception
 
       # noinspection PyShadowingNames
@@ -1111,16 +1123,18 @@ class _SubnetworkRecCell(object):
         if exc_key not in cls.collected_exceptions:
           if isinstance(value, skip_stack_trace_exception_types):
             color = better_exchook.Color()
-            cls.collected_exceptions[exc_key] = "%s\n%s: %s\n" % (
-              color("EXCEPTION while constructing layer %r" % layer_name, color.fg_colors[1], bold=True),
-              color(exc_type.__name__, color.fg_colors[1]),
-              str(value))
+            cls.collected_exceptions[exc_key] = CollectedException(
+              text="%s\n%s: %s\n" % (
+                color("EXCEPTION while constructing layer %r" % layer_name, color.fg_colors[1], bold=True),
+                color(exc_type.__name__, color.fg_colors[1]),
+                str(value)),
+              exception=value)
           else:
             if isinstance(value, fail_directly_exception_types):
               raise
             out = StringIO()
             better_exchook.better_exchook(exc_type, value, tb, file=out)
-            cls.collected_exceptions[exc_key] = out.getvalue()
+            cls.collected_exceptions[exc_key] = CollectedException(text=out.getvalue(), exception=value)
         if not cls.recent_exception or not isinstance(value, skip_stack_trace_exception_types):
           cls.recent_exception = value
 
@@ -1452,6 +1466,11 @@ class _SubnetworkRecCell(object):
               pformat(recent_changes)))
           ConstructCtx.fail()
 
+      # If we got so far, cleanup collected exceptions a bit.
+      for key, exc_info in list(ConstructCtx.collected_exceptions.items()):
+        if isinstance(exc_info.exception, NetworkConstructionDependencyLoopException):
+          del ConstructCtx.collected_exceptions[key]
+      # And keep the remaining ones for potential later reports.
       self._template_construction_exceptions = list(ConstructCtx.collected_exceptions.values())
 
     except Exception:
@@ -1470,7 +1489,7 @@ class _SubnetworkRecCell(object):
       print("Collected (unique) exceptions during template construction:")
       print("(Note that many of these can be ignored, or are expected.)")
       for s in ConstructCtx.collected_exceptions.values():
-        print(s)
+        print(s.text)
       raise
 
   def _add_template_layer(self, layer_name, layer_dict):
