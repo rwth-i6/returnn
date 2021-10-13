@@ -7079,8 +7079,8 @@ def test_CumConcatLayer_self_attention_equal_to_SelfAttentionLayer():
       session.run(tf.compat.v1.assign(multi_weights, weights))
 
       # fetch/compare outputs
-      from tests.test_TFNetworkLayer import make_feed_dict
-      feed_dict = make_feed_dict(network.extern_data.data.values(), same_time=True, n_time=n_time)
+      from test_TFNetworkLayer import make_feed_dict
+      feed_dict = make_feed_dict(network.extern_data, same_time=True, n_time=n_time)
       single, multi = session.run(
           [single_layer.output.placeholder, multi_layer.output.placeholder], feed_dict=feed_dict)
       print('single layer output:')
