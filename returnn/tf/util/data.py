@@ -4239,9 +4239,7 @@ def _default_feature_dim_axis(batch_dim_axis, time_dim_axis, batch_shape, sparse
     return None
   axes = [i for i in range(batch_ndim) if i not in [batch_dim_axis, time_dim_axis]]
   if not axes:
-    # Allow same as time-dim-axis...
-    axes = [i for i in range(batch_ndim) if i != batch_dim_axis]
-  assert axes
+    return None
   static_axes = [i for i in axes if batch_shape[i] is not None]
   # Prefer last static, if available.
   if static_axes:
