@@ -824,7 +824,7 @@ class CombinedDataset(CachedDataset2):
     :param dict[str,dict[str]] datasets: dataset-key -> dataset-kwargs. including keyword 'class' and maybe 'files'
     :param dict[(str,str),str] data_map: (dataset-key, dataset-data-key) -> self-data-key.
       Should contain 'data' as key. Also defines the target-list, which is all except 'data'.
-    :param dict[str,int]|int sampling_size: dataset-key -> number-of-sequences. If set, the given fixed amount of
+    :param dict[str,int]|int sampling_sizes: dataset-key -> number-of-sequences. If set, the given fixed amount of
       sequences is taken from each dataset in every epoch (instead of using all). If an int is given, this number
       is used for all datasets. The sequences will be taken in the order provided by the sub-datasets and we will
       loop back to the beginning of the dataset each time we reach the end. Sequence ordering will be applied
