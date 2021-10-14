@@ -373,7 +373,7 @@ class Dataset(object):
     :param int num_seqs:
     :param ((int) -> int)|None get_seq_len: function (originalSeqIdx: int) -> int
     :return: the order for the given epoch. such that seq_idx -> underlying idx
-    :rtype: list[int]
+    :rtype: typing.Sequence[int]
     """
     partition_epoch = self.partition_epoch or 1
     repeat_epoch = self.repeat_epoch or 1
@@ -491,11 +491,11 @@ class Dataset(object):
   @classmethod
   def _apply_partition_epoch(cls, seq_index, partition_epoch, epoch):
     """
-    :param list[int] seq_index: full list of ordered sequence indices
+    :param typing.Sequence[int] seq_index: full list of ordered sequence indices
     :param int partition_epoch: number of partitions seq_index should be split into
     :param int|None epoch: current epoch
     :return: partition of seq_index for current epoch
-    :rtype: list[int]
+    :rtype: typing.Sequence[int]
     """
     num_seqs = len(seq_index)
     current_partition = ((epoch or 1) - 1) % partition_epoch
@@ -553,7 +553,7 @@ class Dataset(object):
     :return: many datasets use self.get_seq_order_for_epoch. this function would return the current seq order
       for the current epoch, after self.init_seq_order was called.
       Not all datasets implement this.
-    :rtype: list[int]
+    :rtype: typing.Sequence[int]
     """
     raise OptionalNotImplementedError
 

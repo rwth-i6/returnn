@@ -1130,7 +1130,7 @@ class TimitDataset(CachedDataset2):
     from returnn.util.basic import CollectionReadCheckCovered
     self._random_permute_audio = CollectionReadCheckCovered.from_bool_or_dict(random_permute_audio)
 
-    self._seq_order = None  # type: typing.Optional[typing.List[int]]
+    self._seq_order = None  # type: typing.Optional[typing.Sequence[int]]
     self._init_timit()
 
     self._audio_data = {}  # seq_tag -> (audio, sample_rate). loaded by self._reader_thread_main
@@ -1648,7 +1648,7 @@ class LibriSpeechCorpus(CachedDataset2):
       self._reference_seq_order = seqs
       self.transs = {s: self.transs[s] for s in seqs}
     self.epoch_wise_filter = epoch_wise_filter
-    self._seq_order = None  # type: typing.Optional[typing.List[int]]
+    self._seq_order = None  # type: typing.Optional[typing.Sequence[int]]
     self.init_seq_order()
 
   def _collect_trans(self):
@@ -1785,7 +1785,7 @@ class LibriSpeechCorpus(CachedDataset2):
 
   def get_current_seq_order(self):
     """
-    :rtype: list[int]
+    :rtype: typing.Sequence[int]
     """
     assert self._seq_order is not None
     return self._seq_order
@@ -1936,7 +1936,7 @@ class Enwik8Corpus(CachedDataset2):
     self._batch_num_seqs = batch_num_seqs
     self._random = numpy.random.RandomState(1)  # seed will be set in init_seq_order
     self._seq_starts = numpy.arange(0, len(self._data) - 1, seq_len)
-    self._seq_order = None  # type: typing.Optional[typing.List[int]]
+    self._seq_order = None  # type: typing.Optional[typing.Sequence[int]]
 
   def get_data_dtype(self, key):
     """
