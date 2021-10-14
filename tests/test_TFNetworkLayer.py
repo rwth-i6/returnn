@@ -1722,6 +1722,16 @@ def test_MergeDimsLayer_static_time():
     assert layer.output.time_dim_axis is None
 
 
+def test_MergeDimsLayer_feat_static_static():
+  with make_scope() as session:
+    n_batch = 11
+    layer = _check_MergeDimsLayer(
+      session,
+      {"shape": (None, 8, 2, 3), "feature_dim_axis": 2}, (n_batch, 7, 8, 2, 3),
+      {"axes": ["F", "static:1"]}, (None, 16, 3), (n_batch, 7, 16, 3))
+    assert (layer.output.batch_dim_axis, layer.output.time_dim_axis, layer.output.feature_dim_axis) == (0, 1, 2)
+
+
 def test_MergeDimsLayer_dim_tags():
   n_batch = 3
   with make_scope() as session:
