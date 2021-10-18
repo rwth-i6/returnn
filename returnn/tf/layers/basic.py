@@ -5626,12 +5626,18 @@ class DotLayer(LayerBase):
         self._info_reduce_mask = "source-1-already-masked"  # it's already masked as needed
       else:
         # We need to apply a mask.
-        # We don't need it on both a and b. We can either apply it on a or on b.
-        # Use some very simple heuristic where the mask is maybe cheaper.
-        if len(a_shape) < len(b_shape):
+        # We don't need it on both a and b. In case we can either apply it on a or on b,
+        # use some very simple heuristic where the mask is maybe cheaper.
+        can_mask_a = all(
+          set(a_out.dim_tags[i].dyn_size_ext.dim_tags).issubset(a_out.dim_tags) for i in a_reduce_dyn_axes)
+        can_mask_b = all(
+          set(b_out.dim_tags[i].dyn_size_ext.dim_tags).issubset(b_out.dim_tags) for i in b_reduce_dyn_axes)
+        if not can_mask_b or len(a_shape) < len(b_shape):
+          assert can_mask_a
           a = mask_dyn_seq_len_nd(a_out, pad_value=0, axes=a_reduce_dyn_axes)
           self._info_reduce_mask = "mask-source-0"
         else:
+          assert can_mask_b
           b = mask_dyn_seq_len_nd(b_out, pad_value=0, axes=b_reduce_dyn_axes)
           self._info_reduce_mask = "mask-source-1"
     else:
