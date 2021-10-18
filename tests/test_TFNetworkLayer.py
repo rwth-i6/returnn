@@ -3728,6 +3728,31 @@ def test_DotLayer_mask_dyn_seq_after_softmax():
     session.run(layer.output.placeholder, feed_dict=feed_dict)
 
 
+def test_DotLayer_self_att_dyn_size_ext():
+  batch_dim = DimensionTag(kind=DimensionTag.Types.Batch)
+  heads_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="heads", dimension=8)
+  classes_dim = DimensionTag(kind=DimensionTag.Types.Time, description="classes")
+  keys_dim = DimensionTag(
+    kind=DimensionTag.Types.Spatial, description="keys",
+    dyn_size_ext=Data(name="keys_dyn_size", dim_tags=[classes_dim], dtype="int32", auto_create_placeholders=True))
+  feature_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feature", dimension=64)
+
+  a = Data(name="att_weights", dim_tags=[batch_dim, heads_dim, classes_dim, keys_dim], auto_create_placeholders=True)
+  b = Data(name="att_value", dim_tags=[keys_dim, batch_dim, heads_dim, feature_dim], auto_create_placeholders=True)
+  print("a:", a)
+  print("b:", b)
+
+  config = Config({"debug_print_layer_output_template": True})
+  config.update(dict(num_inputs=64 * 8, num_outputs=64 * 8))
+  net = TFNetwork(config=config, train_flag=True, search_flag=False, eval_flag=False)
+
+  a_lay = InternalLayer(name="att_weights", network=net, output=a)
+  b_lay = InternalLayer(name="att_value", network=net, output=b)
+  dot_kwargs = {"red1": keys_dim, "red2": keys_dim, "var1": classes_dim, "var2": feature_dim}
+  dot = DotLayer.get_out_data_from_opts(name="dot", sources=[a_lay, b_lay], **dot_kwargs)
+  DotLayer(network=net, name="dot", sources=[a_lay, b_lay], output=dot, **dot_kwargs)  # just check that it builds.
+
+
 def test_subnet_load_on_init():
   import tempfile
   model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
