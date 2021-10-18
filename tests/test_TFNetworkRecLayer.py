@@ -7049,14 +7049,16 @@ def test_CumConcatLayer_self_attention_equal_to_SelfAttentionLayer():
           "output": {
             "class": "rec", "target": "classes", "from": [],
             "unit": {
+              "lin": {
+                "class": "linear", "from": "prev:lin", "with_bias": True, "bias_init": "glorot_normal", "n_out": 5},
               "single_layer_att": {
-                "class": "self_attention", "from": "prev:single_layer_att", "num_heads": num_heads,
+                "class": "self_attention", "from": "lin", "num_heads": num_heads,
                 "total_key_dim": num_heads * key_dim, "n_out": num_heads * value_dim,
                 "attention_left_only": inside_rec_layer, 'is_output_layer': True},  # [B,T,F]
               "multi_layer_att": None,  # [B,T,F], added below.
               "output": {"class": "compare", "from": ["single_layer_att", "multi_layer_att"]}}}}
         _build_self_attention_layer(
-          net_dict["output"]["unit"], 'prev:multi_layer_att', 'multi_layer', inside_rec_layer=True,
+          net_dict["output"]["unit"], "lin", "multi_layer", inside_rec_layer=True,
           query_axis='stag:extern_data:classes', num_heads=num_heads, key_dim=key_dim, value_dim=value_dim)
         net_dict["output"]["unit"]["multi_layer_att"]["is_output_layer"] = True
         net_dict["output"]["unit"]["multi_layer_qkv0"]["is_output_layer"] = True  # we need to set the matrix here
@@ -7081,15 +7083,13 @@ def test_CumConcatLayer_self_attention_equal_to_SelfAttentionLayer():
       from pprint import pprint
       pprint(net_dict)
       network.construct_from_dict(net_dict)
+      session.run(tf.compat.v1.global_variables_initializer())
 
       if inside_rec_layer:
         single_layer = network.get_layer("output/single_layer_att")
         multi_layer = network.get_layer("output/multi_layer_att")
-
-        # Note: single_layer.params etc. do not contain the params, need to access rec cell directly
-        rec_layer = network.get_layer("output")
-        single_weights = rec_layer.cell.net.get_layer("single_layer_att").params["QKV"]
-        multi_weights = rec_layer.cell.net.get_layer("multi_layer_qkv0").params["W"]
+        single_weights = single_layer.params["QKV"]
+        multi_weights = network.get_layer("output/multi_layer_qkv0").params["W"]
       else:
         single_layer = network.get_layer("single_layer_att")
         multi_layer = network.get_layer("multi_layer_att")
