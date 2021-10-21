@@ -99,7 +99,7 @@ class LayerBase(object):
       see https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/util/device_name_utils.h
     :param float|None L2: for constraints
     :param float|None darc1: for constraints. see Generalization in Deep Learning, https://arxiv.org/abs/1710.05468
-    :param float|None spatial_smoothing: see :func:`tf.util.basic.spatial_smoothing_energy`
+    :param float|None spatial_smoothing: see :func:`returnn.tf.util.basic.spatial_smoothing_energy`
     :param float|None param_variational_noise: adds variational noise to the params during training
     :param dict[str]|None updater_opts: accepts similar opts as TFUpdater, e.g. "optimizer", "learning_rate", ...
     :param bool|None is_output_layer:
@@ -1142,7 +1142,7 @@ class LayerBase(object):
     :param ((tf.Tensor)->tf.Tensor)|None reduce_func: if given, will overwrite the reduce func for the loss.
       By default, every loss_value and error_value is a scalar
       (sum or average over the batches, and over the frames for frame-wise losses).
-      However, if you provide reduce_func = tf.util.basic.identity, you can get the unreduced tensor.
+      However, if you provide reduce_func = returnn.tf.util.basic.identity, you can get the unreduced tensor.
     :param kwargs: all the remaining __init__ args
     :return: the losses defined by this layer
     :rtype: list[returnn.tf.network.LossHolder]
@@ -1173,7 +1173,7 @@ class LayerBase(object):
 
   def get_output_spatial_smoothing_energy(self):
     """
-    :return: scalar. see :func:`tf.util.basic.spatial_smoothing_energy`
+    :return: scalar. see :func:`returnn.tf.util.basic.spatial_smoothing_energy`
     :rtype: tf.Tensor
     """
     from returnn.tf.util.basic import spatial_smoothing_energy, flatten_with_seq_len_mask
@@ -1246,8 +1246,8 @@ class LayerBase(object):
     :param bool delay_sample_update:
     :param int param_version: 0 or 1
     :param float epsilon:
-    :param str|float gamma_init: see :func:`tf.util.basic.get_initializer`, for the scale
-    :param str|float beta_init: see :func:`tf.util.basic.get_initializer`, for the mean
+    :param str|float gamma_init: see :func:`returnn.tf.util.basic.get_initializer`, for the scale
+    :param str|float beta_init: see :func:`returnn.tf.util.basic.get_initializer`, for the mean
     :param bool masked_time: flatten and mask input tensor
     :rtype: tf.Tensor
 
@@ -2129,7 +2129,7 @@ class Loss(object):
                scale=1.0):
     """
     :param returnn.tf.network.TFNetwork base_network:
-    :param bool use_flatten_frames: will use :func:`tf.util.basic.flatten_with_seq_len_mask`
+    :param bool use_flatten_frames: will use :func:`returnn.tf.util.basic.flatten_with_seq_len_mask`
     :param bool use_normalized_loss: the loss used in optimization will be normalized
     :param float|function|None custom_norm_factor:
     :param float scale: additional scale factor for the loss
@@ -2188,7 +2188,7 @@ class Loss(object):
     """
     Reduces the frames. Currently the sum, and we do averaging later.
     We might change this logic at some point.
-    Also, some code overwrites this function externally, e.g. with tf.util.basic.identity, to not do reducing.
+    Also, some code overwrites this function externally, e.g. with returnn.tf.util.basic.identity, to not do reducing.
 
     :param tf.Tensor loss: e.g. (batch*time,), or (time_flat,), or (batch*time,dim), etc
     :return: by default just a scalar. but this can be overwritten, to not reduce
