@@ -110,9 +110,9 @@ class RecLayer(_ConcatInputLayer):
     :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
     :param LayerBase|str|float|int|tuple|None initial_state:
     :param int|tf.Tensor|None max_seq_len: if unit is a subnetwork. str will be evaluated. see code
-    :param str forward_weights_init: see :func:`TFUtil.get_initializer`
-    :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
-    :param str bias_init: see :func:`TFUtil.get_initializer`
+    :param str forward_weights_init: see :func:`returnn.tf.util.basic.get_initializer`
+    :param str recurrent_weights_init: see :func:`returnn.tf.util.basic.get_initializer`
+    :param str bias_init: see :func:`returnn.tf.util.basic.get_initializer`
     :param bool|None optimize_move_layers_out: will automatically move layers out of the loop when possible
     :param bool cheating: Unused, is now part of ChoiceLayer
     :param bool unroll: if possible, unroll the loop (implementation detail)
@@ -4780,7 +4780,7 @@ class ChoiceLayer(BaseChoiceLayer):
        before combination. If None, 'beam_size' is used for all sources. Has to have same length as number of sources.
     :param dict|None scheduled_sampling:
     :param bool|str cheating: if True, will always add the true target in the beam.
-      if "exclusive", enables cheating_exclusive. see :func:`TFUtil.beam_search`.
+      if "exclusive", enables cheating_exclusive. see :func:`returnn.tf.util.basic.beam_search`.
     :param list[LayerBase]|None explicit_search_sources: will mark it as an additional dependency.
       You might use these also in custom_score_combine.
     :param callable|None custom_score_combine:
@@ -4946,7 +4946,8 @@ class ChoiceLayer(BaseChoiceLayer):
             cheating_exclusive = True
           else:
             raise TypeError("%s: invalid cheating %r" % (self, cheating))
-        # `tf.nn.top_k` is the core function performing our search. That is wrapped in `TFUtil.beam_search`.
+        # `tf.nn.top_k` is the core function performing our search.
+        # That is wrapped in `returnn.tf.util.basic.beam_search`.
         # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
         from returnn.tf.util.basic import beam_search
         src_beams, labels, scores = beam_search(
@@ -5226,15 +5227,15 @@ class ChoiceLayer(BaseChoiceLayer):
     assert isinstance(base_search_choices, SearchChoices)
     other_choice_layer = base_search_choices.owner.get_normalized_layer()
     if other_choice_layer is self:  # self from prev frame
-      return cheating_gold_targets, None  # default case for TFUtil.beam_search
+      return cheating_gold_targets, None  # default case for returnn.tf.util.basic.beam_search
     # Different choice.
     if not isinstance(other_choice_layer, ChoiceLayer):
       # Warning: This is wrong in general. (It might be correct depending on your config.)
       # However, this is the old behavior.
-      return cheating_gold_targets, None  # default case for TFUtil.beam_search
+      return cheating_gold_targets, None  # default case for returnn.tf.util.basic.beam_search
     assert isinstance(other_choice_layer, ChoiceLayer)  # else not implemented
     if other_choice_layer.cheating:  # also cheating?
-      return cheating_gold_targets, None  # default case for TFUtil.beam_search
+      return cheating_gold_targets, None  # default case for returnn.tf.util.basic.beam_search
     # We must know valid cheating_src_beam_idx which are from cheating traces.
     other_choice_src_layer = other_choice_layer.search_choices.src_layer
     # Note: We cannot used get_normalized_layer because `self` is not registered yet.
@@ -5248,7 +5249,7 @@ class ChoiceLayer(BaseChoiceLayer):
     prev_beam_idx = tf.reduce_max(base_search_choices.src_beams)
     # Now find the best possible beam index.
     # Note that we could do this even in the general case.
-    # It also would make sense later to not add the cheating label twice (see TFUtil.beam_search logic);
+    # It also would make sense later to not add the cheating label twice (see returnn.tf.util.basic.beam_search logic);
     # in that case, we always must use this logic here.
     from returnn.tf.util.basic import get_shape, where_bc, beam_search
     n_batch, beam_in, dim = get_shape(scores)
@@ -6267,7 +6268,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
     :param LayerBase|None key_shift: additive term to the key. can be used for relative positional encoding.
       Should be of shape (num_queries,num_keys,key_dim), currently without batch-dimension.
       I.e. that should be shape (1,t,key_dim) inside rec-layer or (T,T,key_dim) outside.
-    :param str forward_weights_init: see :func:`TFUtil.get_initializer`
+    :param str forward_weights_init: see :func:`returnn.tf.util.basic.get_initializer`
     :param float attention_dropout:
     :param bool attention_left_only: will mask out the future. see Attention is all you need.
     :param str|float|int|None initial_state: see RnnCellLayer.get_rec_initial_state_inner().
@@ -6614,7 +6615,7 @@ class PositionalEncodingLayer(_ConcatInputLayer):
   With `add_to_input`, it will calculate `x + input`, and the output shape is the same as the input
 
   The positional encoding is the same as in Tensor2Tensor.
-  See :func:`TFUtil.get_positional_encoding`.
+  See :func:`returnn.tf.util.basic.get_positional_encoding`.
   """
   layer_class = "positional_encoding"
   recurrent = True
@@ -8352,9 +8353,9 @@ class TwoDLSTMLayer(LayerBase):
     """
     :param str pooling: defines how the 1D return value is computed based on the 2D lstm result. Either 'last' or 'max'
     :param None|dict[str] unit_opts: passed to RNNCell creation
-    :param str forward_weights_init: see :func:`TFUtil.get_initializer`
-    :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
-    :param str bias_init: see :func:`TFUtil.get_initializer`
+    :param str forward_weights_init: see :func:`returnn.tf.util.basic.get_initializer`
+    :param str recurrent_weights_init: see :func:`returnn.tf.util.basic.get_initializer`
+    :param str bias_init: see :func:`returnn.tf.util.basic.get_initializer`
     """
     super(TwoDLSTMLayer, self).__init__(**kwargs)
     import re
@@ -8744,7 +8745,7 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
     :param int n_out: Feature dimension of encoding.
     :param int clipping: After which distance to fallback to the last encoding
     :param bool fixed: Uses sinusoid positional encoding instead of learned parameters
-    :param str forward_weights_init: see :func:`TFUtil.get_initializer`
+    :param str forward_weights_init: see :func:`returnn.tf.util.basic.get_initializer`
     """
     super(RelativePositionalEncodingLayer, self).__init__(**kwargs)
     from returnn.tf.util.basic import get_initializer
