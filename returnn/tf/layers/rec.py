@@ -4946,7 +4946,8 @@ class ChoiceLayer(BaseChoiceLayer):
             cheating_exclusive = True
           else:
             raise TypeError("%s: invalid cheating %r" % (self, cheating))
-        # `tf.nn.top_k` is the core function performing our search. That is wrapped in `returnn.tf.util.basic.beam_search`.
+        # `tf.nn.top_k` is the core function performing our search. That is wrapped in
+        # `returnn.tf.util.basic.beam_search`.
         # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
         from returnn.tf.util.basic import beam_search
         src_beams, labels, scores = beam_search(
