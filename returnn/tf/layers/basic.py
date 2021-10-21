@@ -213,7 +213,7 @@ class _ConcatInputLayer(LayerBase):
   def __init__(self, dropout=0, dropout_noise_shape=None, dropout_on_forward=False, mask=None, **kwargs):
     """
     :param float dropout: 0.0 means to apply no dropout. dropout will only be applied during training
-    :param dict[str|tuple,int|None] dropout_noise_shape: see :func:`TFUtil.get_bc_shape`
+    :param dict[str|tuple,int|None] dropout_noise_shape: see :func:`returnn.tf.util.data.get_bc_shape`
     :param bool dropout_on_forward: apply dropout during inference
     :param str|None mask: "dropout" or "unity" or None. this is obsolete and only here for historical reasons
     """
@@ -319,7 +319,7 @@ class ScaledGradientLayer(CopyLayer):
   Just tf.identity in the forward pass.
   Scales the gradient by some factor in backprop.
   Can be used as gradient reversal layer (with negative factor).
-  Uses :func:`TFUtil.scaled_gradient`, or :func:`tf.stop_gradient`
+  Uses :func:`returnn.tf.util.basic.scaled_gradient`, or :func:`tf.stop_gradient`
   """
   layer_class = "scaled_grad"
 
@@ -520,7 +520,7 @@ class SelectSearchSourcesLayer(InternalLayer):
 class ActivationLayer(_ConcatInputLayer):
   """
   This layer just applies an activation function.
-  See :func:`TFUtil.get_activation_function` about supported functions.
+  See :func:`returnn.tf.util.basic.get_activation_function` about supported functions.
   Also see :class:`EvalLayer` and :class:`CombineLayer` for similar layers.
   """
 
@@ -587,8 +587,8 @@ class BatchNormLayer(CopyLayer):
     :param bool delay_sample_update:
     :param int param_version: 0 or 1
     :param float epsilon:
-    :param str|float gamma_init: see :func:`TFUtil.get_initializer`, for the scale
-    :param str|float beta_init: see :func:`TFUtil.get_initializer`, for the mean
+    :param str|float gamma_init: see :func:`returnn.tf.util.basic.get_initializer`, for the scale
+    :param str|float beta_init: see :func:`returnn.tf.util.basic.get_initializer`, for the mean
     :param bool masked_time: flatten and mask input tensor
 
     The default settings for these variables are set in the function "batch_norm" of the LayerBase. If you do not want
@@ -1398,7 +1398,7 @@ class ScatterNdLayer(_ConcatInputLayer):
         0.0, input_v)
       # It does not matter what dummy indices we use, as we have 0.0 updates, but it must be valid (0 is valid).
       pos_v = tf.where(mask, tf.zeros_like(pos_v), pos_v)
-    # Now we need to implement a similar logic as `TFUtil.nd_indices`, but more generic.
+    # Now we need to implement a similar logic as `returnn.tf.util.basic.nd_indices`, but more generic.
     idxs = [
       (tf.reshape(tf.range(pos_shape[i], dtype=pos_v.dtype), [1] * i + [pos_shape[i]] + [1] * (pos_ndim - i - 1))
        + tf.zeros_like(pos_v))
@@ -1888,7 +1888,7 @@ class SeqLenMaskLayer(_ConcatInputLayer):
     :param Data|None start:
     :param Data|None window_start:
     :param Data|int|None window_size:
-    :return: mask which is broadcastable to energy_data, thus you can e.g. use :func:`TFUtil.where_bc`
+    :return: mask which is broadcastable to energy_data, thus you can e.g. use :func:`returnn.tf.util.basic.where_bc`
     :rtype: tf.Tensor
     """
     from returnn.tf.util.basic import get_shape
@@ -3263,7 +3263,7 @@ class UnflattenNdLayer(_ConcatInputLayer):
     We additionally provide these image sizes (shape (B,2)), i.e. (width,height) tuples.
     We return the unflattened images of shape (B,W,H,<Ds>), where W/H are the max width/height.
 
-  This basically wraps :func:`TFUtil.unflatten_nd`.
+  This basically wraps :func:`returnn.tf.util.basic.unflatten_nd`.
   """
   layer_class = "unflatten_nd"
   recurrent = True
@@ -3634,7 +3634,7 @@ class CastLayer(CopyLayer):
 
 class SwapAxesLayer(_ConcatInputLayer):
   """
-  Swaps two axes. Basically a wrapper around :func:`TFUtil.swapaxes`.
+  Swaps two axes. Basically a wrapper around :func:`returnn.tf.util.basic.swapaxes`.
   Note that usually, this should not be needed, and it is recommended not to be used,
   as this will be unnecessarily inefficient.
   Normally, all RETURNN layers will automatically transpose the input data into whatever format they need.
@@ -6401,7 +6401,7 @@ class CompareLayer(LayerBase):
 
 class SwitchLayer(LayerBase):
   """
-  Wrapper around ``tf.where()`` (or more generically :func:`TFUtil.where_bc`),
+  Wrapper around ``tf.where()`` (or more generically :func:`returnn.tf.util.basic.where_bc`),
   or statically choose a single source if the condition is a callable (...)->bool.
   (``tf.cond`` is not useful here, as the sources would have been already constructed and computed.)
 
@@ -7115,7 +7115,7 @@ class VariableLayer(LayerBase):
     :param bool add_batch_axis:
     :param bool add_time_axis:
     :param bool trainable:
-    :param str|float|int init: see :func:`TFUtil.get_initializer`
+    :param str|float|int init: see :func:`returnn.tf.util.basic.get_initializer`
     """
     super(VariableLayer, self).__init__(trainable=trainable, **kwargs)
     assert not self.sources, "%s: does not expect any sources" % self
@@ -7630,7 +7630,7 @@ class SyntheticGradientLayer(_ConcatInputLayer):
 
 class TikhonovRegularizationLayer(CopyLayer):
   """
-  Adds the Tikhonov regularization as a meta-loss (see :class:`TFUtil.MetaLosses`).
+  Adds the Tikhonov regularization as a meta-loss (see :class:`returnn.tf.util.basic.MetaLosses`).
   """
   layer_class = "tikhonov_regularization"
 
@@ -7763,7 +7763,7 @@ class FramewiseStatisticsLayer(LayerBase):
 
 class PrintLayer(LayerBase):
   """
-  Prints the sources to console/log, via :func:`TFUtil.py_print`.
+  Prints the sources to console/log, via :func:`returnn.tf.util.basic.py_print`.
   """
   layer_class = "print"
 
@@ -8074,12 +8074,12 @@ class CrossEntropyLoss(Loss):
                **kwargs):
     """
     :param float focal_loss_factor: see https://arxiv.org/abs/1708.02002. 0 means disabled
-    :param float label_smoothing: 0.1 is a common default. see :func:`TFUtil.smoothing_cross_entropy`
-    :param bool label_smoothing_gaussian: see :func:`TFUtil.smoothing_cross_entropy`
+    :param float label_smoothing: 0.1 is a common default. see :func:`returnn.tf.util.basic.smoothing_cross_entropy`
+    :param bool label_smoothing_gaussian: see :func:`returnn.tf.util.basic.smoothing_cross_entropy`
     :param bool debug_dump:
     :param dict[str] safe_log_opts: passed to :func:`safe_log`
     :param bool use_fused: if possible, use fused opts
-    :param float|None fake_upper_bound: uses :func:`TFUtil.minimum_with_identity_grad`.
+    :param float|None fake_upper_bound: uses :func:`returnn.tf.util.basic.minimum_with_identity_grad`.
       I.e. you will see a finite loss, but we use the original gradient (which should be safe).
     """
     super(CrossEntropyLoss, self).__init__(**kwargs)
