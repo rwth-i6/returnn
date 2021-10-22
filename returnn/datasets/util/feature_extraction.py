@@ -354,7 +354,7 @@ def _get_audio_log_mel_filterbank(audio, sample_rate, window_len=0.025, step_len
 
 def _get_audio_db_mel_filterbank(audio, sample_rate,
                                  window_len=0.025, step_len=0.010, num_feature_filters=80,
-                                 fmin=0, fmax=None, min_amp=1e-10):
+                                 fmin=0, fmax=None, min_amp=1e-10, center=True):
   """
   Computes log Mel-filterbank features in dezibel values from an audio signal.
   Provides adjustable minimum frequency and minimual amplitude clipping
@@ -367,6 +367,7 @@ def _get_audio_db_mel_filterbank(audio, sample_rate,
   :param int fmin: minimum frequency covered by mel filters
   :param int|None fmax: maximum frequency covered by mel filters
   :param int min_amp: silence clipping for small amplitudes
+  :param bool center: pads the signal with reflection so that the window center starts at 0.
   :return: (audio_len // int(step_len * sample_rate), num_feature_filters), float32
   :rtype: numpy.ndarray
   """
@@ -380,7 +381,7 @@ def _get_audio_db_mel_filterbank(audio, sample_rate,
     n_mels=num_feature_filters,
     hop_length=int(step_len * sample_rate),
     n_fft=int(window_len * sample_rate),
-    fmin=fmin, fmax=fmax,
+    fmin=fmin, fmax=fmax, center=center
    )
 
   log_mel_filterbank = 20 * numpy.log10(numpy.maximum(min_amp, mel_filterbank))
