@@ -1627,6 +1627,12 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None, cond_on_train=
     ret = x * binary_tensor
     assert isinstance(ret, tf.Tensor)
     ret.set_shape(x.get_shape())
+
+    # zero padded dims stay zero padded
+    ret_padding_info = get_padding_info_dict_ref(ret)
+    ret_padding_info.clear()
+    ret_padding_info.update({dim: 0.0 for dim, pad_val in get_padding_info_dict_ref(x).items() if pad_val == 0.0})
+
     return ret
 
 
