@@ -904,10 +904,7 @@ class NativeLstm2(RecSeqCellOp):
     step = tf.constant(self.step or 1, name="step")
     out, _, _, final_cell_state = self.op(inputs, weights, y0, c0, index, start, step)  # noqa
     if out.get_shape().as_list()[0] is None or out.get_shape().as_list()[0] > 0:
-      if self.step < 0:
-        final_output = out[0]
-      else:
-        final_output = out[-1]
+      final_output = out[-1 if self.step is None or self.step > 0 else 0]
     else:
       final_output = y0
     return out, rnn_cell.LSTMStateTuple(h=final_output, c=final_cell_state)
