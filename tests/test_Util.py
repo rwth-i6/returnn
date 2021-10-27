@@ -283,6 +283,12 @@ def test_CollectionReadCheckCovered():
   assert x and x.truth_value
 
 
+def test_version():
+  import returnn
+  print("RETURNN version:", returnn.__version__, returnn.__long_version__)
+  assert "1.0.0" not in returnn.__version__ and "unknown" not in returnn.__long_version__
+
+
 def test_logging():
   # There is no real test. But you can interactively test this.
   import logging
