@@ -33,7 +33,6 @@ except ImportError:
   from io import StringIO
 import typing
 from returnn.log import log
-from .. import __long_version__
 
 PY3 = sys.version_info[0] >= 3
 
@@ -224,6 +223,7 @@ class BehaviorVersion:
       "behavior_version already set to %s, cannot reset to %i" % (cls._behavior_version, version))
     assert version >= 0
     if version > cls._latest_behavior_version:
+      from returnn import __long_version__
       log.print_warning(
         ("behavior_version %i > latest known behavior_version %i. "
          "Your RETURNN version is too old (%s).") % (version, cls._latest_behavior_version, __long_version__))
