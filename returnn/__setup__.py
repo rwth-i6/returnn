@@ -62,9 +62,10 @@ def git_head_version(git_dir=_root_dir, long=False):
   return version
 
 
-def get_version_str(verbose=False, fallback=None, long=False):
+def get_version_str(verbose=False, verbose_error=False, fallback=None, long=False):
   """
-  :param bool verbose:
+  :param bool verbose: print exactly how we end up with some version
+  :param bool verbose_error: print only any potential errors
   :param str|None fallback:
   :param bool long:
     False: Always distutils.version.StrictVersion compatible. just like "1.20190202.154527".
@@ -75,12 +76,12 @@ def get_version_str(verbose=False, fallback=None, long=False):
       We always make sure that there is a `"+"` in the string.
   :rtype: str
   """
-  # Earlier we checked PKG-INFO, via parse_pkg_info. Both in the root-dir as well as in my-dir.
+  # Earlier we checked PKG-INFO, via parse_pkg_info. Both in the root-dir and in my-dir.
   # Now we should always have _setup_info_generated.py, copied by our own setup.
   # Do not use PKG-INFO at all anymore (for now), as it would only have the short version.
   # Only check _setup_info_generated in the current dir, not in the root-dir,
   # because we want to only use it if this was installed via a package.
-  # Otherwise we want the current Git version.
+  # Otherwise, we want the current Git version.
   if os.path.exists("%s/_setup_info_generated.py" % _my_dir):
     # noinspection PyUnresolvedReferences
     from . import _setup_info_generated as info
@@ -116,7 +117,7 @@ def get_version_str(verbose=False, fallback=None, long=False):
         assert "+" in version
       return version
     except Exception as exc:
-      if verbose:
+      if verbose or verbose_error:
         print("Exception while getting Git version:", exc)
         sys.excepthook(*sys.exc_info())
       if not fallback:
