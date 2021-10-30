@@ -3159,7 +3159,7 @@ def test_ConvLayer_time_dim_out():
     assert in_layer.output.dim_tags[1].is_spatial_dim()
     assert out_time != in_layer.output.dim_tags[1]
     layer_desc["output"] = conv_out
-    with ConvLayer.cls_layer_scope("conv"):
+    with tf_compat.v1.variable_scope("conv"):
       conv_layer = ConvLayer(**layer_desc)
     net.layers["conv"] = conv_layer
     net.initialize_params(session)

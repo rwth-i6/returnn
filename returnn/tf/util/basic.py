@@ -419,7 +419,7 @@ def reuse_name_scope(name, absolute=None, **kwargs):
   :param str|tf.compat.v1.VariableScope name: relative or absolute name scope
     (absolute if absolute=True or if tf.compat.v1.VariableScope).
     Must not end with "/".
-  :param bool absolute: if True it will be absolute
+  :param bool|None absolute: if True it will be absolute
   :param kwargs: passed on to `tf.compat.v1.variable_scope`
   :return: yields the variable_scope
   """

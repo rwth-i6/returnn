@@ -376,7 +376,7 @@ class TFNetwork(object):
     :param DimensionTag|None over_rec_time_dim: dim tag of outer rec layer, when optimized out of the loop
     :param set[DimensionTag]|None over_rec_time_dim_subs: outer rec layer, out of loop, potential shorter
     :param returnn.tf.util.data.ControlFlowContext control_flow_ctx:
-    :param str|None absolute_name_prefix:
+    :param str|None absolute_name_prefix: this is for representation
     :param str name: only for debugging
     """
     if not name:
@@ -559,7 +559,8 @@ class TFNetwork(object):
 
   def get_absolute_name_prefix(self):
     """
-    :return: name, always with "/" at the end, or ""
+    :return: name, always with "/" at the end, or "". This is for representation.
+      See also :func:`get_absolute_name_scope_prefix`.
     :rtype: str
     """
     if self._absolute_name_prefix is not None:
@@ -975,7 +976,7 @@ class TFNetwork(object):
     debug_add_check_numerics_on_output = self.get_config().bool(
       "debug_add_check_numerics_on_output", False)  # also see debug_add_check_numerics_ops
     debug_runtime_sanity_checks = self.get_config().bool("debug_runtime_sanity_checks", False)
-    with self.layer_creation_scope(name):
+    with self.layer_creation_scope(layer_class=layer_class, **layer_desc):
       try:
         if "output" not in layer_desc:
           layer_desc["output"] = layer_class.get_out_data_from_opts(**layer_desc)
@@ -1017,7 +1018,7 @@ class TFNetwork(object):
       if layer.output.placeholder is not None and debug_print_layer_output_shape:
         layer.output.placeholder = py_print(
           layer.output.placeholder,
-          [layer_class.cls_get_tf_scope_name(name), "shape:", str(layer.output), tf.shape(layer.output.placeholder)],
+          [name, "shape:", str(layer.output), tf.shape(layer.output.placeholder)],
           summarize=10, name="debug_print_layer_output_shape")
       if layer.output.placeholder is not None and debug_runtime_sanity_checks:
         layer.output.placeholder = layer.output.get_placeholder_with_runtime_sanity_checks()
@@ -1027,28 +1028,29 @@ class TFNetwork(object):
         from returnn.tf.util.basic import identity_with_check_numerics
         layer.output.placeholder = identity_with_check_numerics(
           layer.output.placeholder,
-          name="%s_identity_with_check_numerics_output" % layer_class.cls_get_tf_scope_name(name))
+          name="%s_identity_with_check_numerics_output" % layer.tf_scope_name)
     assert layer.output
     if layer.output.placeholder is not None:
       layer.output.placeholder.set_shape(layer.output.batch_shape)
     return layer
 
   @contextlib.contextmanager
-  def layer_creation_scope(self, name):
+  def layer_creation_scope(self, layer_class=LayerBase, **kwargs):
     """
-    :param str name:
-    :return: ctx
+    :param (()->LayerBase)|LayerBase|type[LayerBase] layer_class:
+    :yield: ctx
     """
+    expected_name_scope = self.get_absolute_name_scope_prefix()[:-1]
+    if tf_util.get_current_name_scope() != expected_name_scope:
+      # Be relaxed about this. Allow calls from inconsistent name scopes.
+      with reuse_name_scope(expected_name_scope, absolute=True):
+        assert tf_util.get_current_name_scope() == expected_name_scope
+        with self.layer_creation_scope(layer_class=layer_class, **kwargs):
+          yield
+      return
     with self.register_network_scope():
-      expected_name_scope = self.get_absolute_name_scope_prefix()[:-1]
-      if tf_util.get_current_name_scope() == expected_name_scope:
-        with reuse_name_scope(LayerBase.cls_get_tf_scope_name(name)):
-          yield
-      else:
-        # Be relaxed about this. Allow calls from inconsistent name scopes.
-        prefix = self.get_absolute_name_scope_prefix()
-        with reuse_name_scope(prefix + LayerBase.cls_get_tf_scope_name(name), absolute=True):
-          yield
+      with layer_class.cls_setup_scope(**kwargs):
+        yield
 
   def add_layer(self, name, layer_class, **layer_desc):
     """
@@ -1072,7 +1074,7 @@ class TFNetwork(object):
       root_name, sub_name = name.split("/", 1) if "/" in name else (name, None)
       if sub_name and root_name in self.subnets:
         subnet = self.subnets[root_name]
-        with self.layer_creation_scope(root_name):
+        with subnet.net.layer_creation_scope(**subnet.layer.kwargs):
           layer = subnet.net.add_layer(name=sub_name, layer_class=layer_class, **layer_desc)
       else:
         layer = self._create_layer(name=name, layer_class=layer_class, **layer_desc)
@@ -1160,9 +1162,8 @@ class TFNetwork(object):
       extra_name_prefix = None
       if self._extra_layer_name_prefix_pattern.match(name):
         extra_name_prefix, name = name.split(":", 1)
-      tf_scope_name = layer.cls_get_tf_scope_name(name=name)
       with reuse_name_scope("loss"):
-        with reuse_name_scope(tf_scope_name):
+        with reuse_name_scope(layer.tf_scope_name):
           losses = layer.get_losses_initialized(reduce_func=reduce_func)
           for loss_obj in losses:
             losses_multi_dict.setdefault(loss_obj.name, []).append((extra_name_prefix, loss_obj))
@@ -1177,7 +1178,7 @@ class TFNetwork(object):
 
       if with_total:
         with reuse_name_scope("constraints"):
-          with reuse_name_scope(tf_scope_name):
+          with reuse_name_scope(layer.tf_scope_name):
             constraints = layer.get_constraints_value()
           if constraints is not None:
             if total_constraints is 0:
@@ -2569,10 +2570,10 @@ class Subnetwork:
     subnet_layer_dict.pop("load_on_init", None)  # handled by the SubnetworkLayer
 
     # We also allow that this gets called after transform_config_dict.
-    subnet_layer_dict.pop("name", None)
-    subnet_layer_dict.pop("network", None)
+    subnet_layer_dict["name"] = name
+    subnet_layer_dict["network"] = parent_net
+    subnet_layer_dict["output"] = Data(name="dummy_output", shape=())
     subnet_layer_dict.pop("sources", None)
-    subnet_layer_dict.pop("output", None)
     subnet_layer_dict.pop("n_out", None)
     subnet_layer_dict.pop("out_type", None)
 
@@ -2580,9 +2581,9 @@ class Subnetwork:
     # But it doesn't really matter which layer we have as the parent layer for our subnetwork,
     # as long as the namespace and other context is correctly set up.
     self.layer = InternalLayer(
-      name=name, network=parent_net, output=Data(name="dummy_output", shape=()),
       # Pass on remaining args, which might be relevant for custom scopes..
       **subnet_layer_dict)
+    self.layer.post_init(subnet_layer_dict)
     self.net = TFNetwork(
       name="%s/%s(subnet)" % (parent_net.name, name),
       extern_data=ExternData(),  # directly accessing base layers instead

@@ -22,6 +22,7 @@ from returnn.config import Config
 import returnn.util.basic as util
 from returnn.util.basic import NotSpecified
 import returnn.tf.compat as tf_compat
+import returnn.tf.util.basic as tf_util
 from returnn.tf.util.basic import Data, CollectionKeys
 from returnn.tf.network import TFNetwork
 from returnn.tf.layers.basic import LayerBase, register_layer_class
@@ -690,7 +691,7 @@ def main(argv):
         continue
       if layer.output.batch_dim_axis is None:
         continue
-      with layer.cls_layer_scope(layer.get_absolute_name()):
+      with tf_util.reuse_name_scope(layer.get_absolute_name_scope_prefix()[:-1], absolute=True):
         tf.identity(layer.output.get_placeholder_as_batch_major(), name="output_batch_major")
 
     tf.group(*network.get_post_control_dependencies(), name="post_control_dependencies")
