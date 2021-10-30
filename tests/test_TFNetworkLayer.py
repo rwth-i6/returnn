@@ -2618,6 +2618,88 @@ def test_reuse_params_map_custom_dep_loop():
     search_net.construct_from_dict(config.typed_dict["network"])
 
 
+def test_name_scope():
+  with make_scope() as session:
+    n_in, n_out = 2, 3
+    config = Config({"extern_data": {"data": {"dim": n_in}}})
+    network = TFNetwork(config=config)
+    net_dict = {
+      "output": {
+        "class": "linear", "n_out": n_out, "from": "data:data",
+        "name_scope": "custom_name"},
+    }
+    network.construct_from_dict(net_dict)
+    layer = network.layers["output"]
+    param = layer.params["W"]
+    assert param.name == "custom_name/W:0"
+
+
+def test_name_scope_abs():
+  with make_scope() as session:
+    n_in, n_out = 2, 3
+    config = Config({"extern_data": {"data": {"dim": n_in}}})
+    network = TFNetwork(config=config)
+    net_dict = {
+      "output": {
+        "class": "subnetwork",
+        "subnetwork": {
+          "layer1": {"class": "linear", "n_out": n_out, "from": "base:data:data"},
+          "layer2": {"class": "linear", "n_out": n_out, "from": "base:data:data", "name_scope": "/custom_name"},
+          "output": {"class": "combine", "kind": "add", "from": ["layer1", "layer2"]}
+        }
+      }
+    }
+    network.construct_from_dict(net_dict)
+    layer1 = network.get_layer("output/layer1")
+    layer2 = network.get_layer("output/layer2")
+    param1 = layer1.params["W"]
+    param2 = layer2.params["W"]
+    assert param1.name == "output/layer1/W:0" and param2.name == "custom_name/W:0"
+
+
+def test_name_scope_sub_empty():
+  with make_scope() as session:
+    n_in, n_out = 2, 3
+    config = Config({"extern_data": {"data": {"dim": n_in}}})
+    network = TFNetwork(config=config)
+    net_dict = {
+      "output": {
+        "class": "subnetwork",
+        "name_scope": "",
+        "subnetwork": {
+          "layer1": {"class": "linear", "n_out": n_out, "from": "base:data:data"},
+          "layer2": {"class": "linear", "n_out": n_out, "from": "base:data:data", "name_scope": "layer1"},
+          "output": {"class": "combine", "kind": "add", "from": ["layer1", "layer2"]}
+        }
+      }
+    }
+    network.construct_from_dict(net_dict)
+    layer1 = network.get_layer("output/layer1")
+    layer2 = network.get_layer("output/layer2")
+    param1 = layer1.params["W"]
+    param2 = layer2.params["W"]
+    assert param1.name == "layer1/W:0" and param2.name == "layer1/W:0"
+
+
+def test_name_scope_share_params():
+  with make_scope() as session:
+    n_in, n_out = 3, 3
+    config = Config({"extern_data": {"data": {"dim": n_in}}})
+    network = TFNetwork(config=config)
+    net_dict = {
+      "layer1": {"class": "linear", "n_out": n_out, "from": "data:data"},
+      "output": {"class": "linear", "n_out": n_out, "from": "layer1", "name_scope": "layer1"},
+    }
+    network.construct_from_dict(net_dict)
+    l1 = network.layers["layer1"]
+    l2 = network.layers["output"]
+    assert_equal(set(l1.params.keys()), {"W", "b"})
+    assert_equal(set(l2.params.keys()), {"W", "b"})
+    assert l1.params["W"] is l2.params["W"]
+    assert l1.params["b"] is l2.params["b"]
+    assert_equal(set(network.get_trainable_params()), {l1.params["W"], l1.params["b"]})
+
+
 def test_SliceLayer_output_placeholder():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())
