@@ -2681,6 +2681,32 @@ def test_name_scope_sub_empty():
     assert param1.name == "layer1/W:0" and param2.name == "layer1/W:0"
 
 
+def test_name_scope_rec_sub_empty():
+  with make_scope() as session:
+    n_in, n_out = 2, 3
+    config = Config({"extern_data": {"data": {"dim": n_in}}})
+    network = TFNetwork(config=config)
+    net_dict = {
+      "output": {
+        "class": "rec",
+        "name_scope": "",
+        "from": "data:data",
+        "unit": {
+          "layer1": {"class": "linear", "n_out": n_out, "from": "data:source", "is_output_layer": True},
+          "layer2": {"class": "linear", "n_out": n_out, "from": "data:source", "is_output_layer": True,
+                     "name_scope": "layer1"},
+          "output": {"class": "combine", "kind": "add", "from": ["layer1", "layer2"]}
+        }
+      }
+    }
+    network.construct_from_dict(net_dict)
+    layer1 = network.get_layer("output/layer1")
+    layer2 = network.get_layer("output/layer2")
+    param1 = layer1.params["W"]
+    param2 = layer2.params["W"]
+    assert param1.name == "layer1/W:0" and param2.name == "layer1/W:0"
+
+
 def test_name_scope_share_params():
   with make_scope() as session:
     n_in, n_out = 3, 3
