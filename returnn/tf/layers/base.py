@@ -57,6 +57,7 @@ class LayerBase(object):
   def __init__(self, name, network, output, n_out=NotSpecified, out_type=None, sources=(),
                target=None, _target_layers=None, loss=None, size_target=None,
                reuse_params=None,
+               name_scope=None,
                param_device=None,
                is_output_layer=None, only_on_eval=False, only_on_search=False,
                copy_output_loss_from_source_idx=None,
@@ -94,7 +95,15 @@ class LayerBase(object):
       In the net dict, it is specified as a string.
       In :class:`TFNetwork`, all losses from all layers will be collected.
       That is what :class:`TFUpdater.Updater` will use for training.
-    :param ReuseParams|None reuse_params: if given, will opt reuse the params. see :func:`self.var_creation_scope`
+    :param ReuseParams|None reuse_params: if given, will opt reuse the params. see :func:`self.var_creation_scope`.
+      See also the ``name_scope`` option as an alternative.
+    :param str|None name_scope: If set, uses this custom (relative) name scope.
+      If it starts with a "/", it will be the absolute name scope.
+      It should not end with a "/".
+      It can be empty, in which case it will not consume a new name scope.
+      This can also be used for parameter sharing.
+      The default is the layer name in most cases,
+      but this logic is in :func:`get_absolute_name_scope_prefix` and :func:`TFNetwork.layer_creation_scope`.
     :param str|None param_device: e.g. "CPU", etc. any valid name for tf.device.
       see https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/util/device_name_utils.h
     :param float|None L2: for constraints
@@ -162,6 +171,7 @@ class LayerBase(object):
     self.params = {}  # type: typing.Dict[str,tf.Variable]
     self.saveable_param_replace = {}  # type:  typing.Dict[tf.Variable,typing.Union['tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject',None]]  # see get_saveable_params_dict()  # nopep8
     self.reuse_params = reuse_params
+    self.name_scope = name_scope
     self.param_device = param_device
     self.L2 = L2
     self.darc1 = darc1
@@ -187,8 +197,9 @@ class LayerBase(object):
 
     :param dict[str] layer_desc: kwargs as they are passed to self.__init__
     """
-    assert "output" in layer_desc
-    self.kwargs = layer_desc
+    self.kwargs = layer_desc.copy()
+    assert "output" in self.kwargs
+    self.kwargs.setdefault("name", self.name)
     if self.output.placeholder is not None:  # unset e.g. in DataNotAvailableLayer
       if self.use_batch_norm:
         opts = {}
@@ -402,44 +413,6 @@ class LayerBase(object):
         output.placeholder = x
     return output
 
-  def get_full_ctx_name(self):
-    """
-    :return: name w.r.t. root ctx network
-    """
-    _, prefix = self.network.get_root_ctx_network()
-    return prefix + self.name
-
-  @classmethod
-  def cls_get_tf_scope_name(cls, name):
-    """
-    :param str name: layer name
-    :return: valid scope name, might be just name. see tf._VALID_SCOPE_NAME_REGEX and tf._VALID_OP_NAME_REGEX
-    :rtype: str
-    """
-    from returnn.tf.util.basic import get_valid_scope_name_from_str
-    return get_valid_scope_name_from_str(name)
-
-  @classmethod
-  def cls_layer_scope(cls, name):
-    """
-    Setup scope for layer. This can also be used when the layer does not yet exists.
-    This is supposed to cover variable creations as well.
-    Currently vars might be created when used within the rec-layer, but they are caught
-    in a more generic way there, so we have not implemented yet any special logic here.
-
-    :param str name: layer name
-    :return: context manager object
-    """
-    @contextlib.contextmanager
-    def layer_scope_ctx():
-      """
-      :return: context manager object
-      """
-      from returnn.tf.util.basic import reuse_name_scope
-      with reuse_name_scope(cls.cls_get_tf_scope_name(name)) as scope:
-        yield scope
-    return layer_scope_ctx()
-
   @classmethod
   def get_global_layer_list(cls):
     """
@@ -631,31 +604,85 @@ class LayerBase(object):
     assert isinstance(loss, Loss)
     return loss
 
+  def get_full_ctx_name(self):
+    """
+    :return: name w.r.t. root ctx network
+    """
+    _, prefix = self.network.get_root_ctx_network()
+    return prefix + self.name
+
+  @classmethod
+  def cls_get_tf_scope_name(cls, name):
+    """
+    :param str name: layer name
+    :return: valid scope name, might be just name. see tf._VALID_SCOPE_NAME_REGEX and tf._VALID_OP_NAME_REGEX
+    :rtype: str
+    """
+    from returnn.tf.util.basic import get_valid_scope_name_from_str
+    return get_valid_scope_name_from_str(name)
+
+  @classmethod
+  @contextlib.contextmanager
+  def cls_setup_scope(cls, name, name_scope=None, **_kwargs):
+    """
+    :param str name:
+    :param str|None name_scope:
+    :param _kwargs: other layer kwargs after being transformed
+    """
+    scope = cls.cls_get_tf_scope_name(name)
+    name_scope_abs = None
+    if name_scope is not None:
+      assert not name_scope.endswith("/")
+      if name_scope == "":
+        scope = tf_compat.v1.get_variable_scope()
+      elif name_scope.startswith("/"):
+        name_scope_abs = True
+        scope = name_scope[1:]
+      else:
+        scope = name_scope
+    with reuse_name_scope(scope, absolute=name_scope_abs):
+      yield
+
   @property
   def tf_scope_name(self):
     """
     :rtype: str
-    :return: normally just self.name, but make it a valid TF scope name
+    :return: normally just self.name, but make it a valid TF scope name.
+      this is meant mostly to extend TF names. see func:`get_base_absolute_name_scope_prefix otherwise`.
     """
+    if self.name_scope and not self.name_scope.startswith("/"):
+      assert not self.name_scope.endswith("/")
+      return self.name_scope
     return self.cls_get_tf_scope_name(name=self.name)
 
   def get_base_absolute_name_scope_prefix(self):
     """
-    :return: e.g. "output/", always with "/" at end
+    :return: e.g. "output/", always with "/" at end. this is for the TF name scope or variable scope
     :rtype: str
     """
+    if self.name_scope is not None:
+      assert not self.name_scope.endswith("/")
+      if self.name_scope == "":
+        return self.network.get_absolute_name_scope_prefix()
+      elif self.name_scope.startswith("/"):  # absolute
+        return self.name_scope[1:] + "/"
+      else:
+        return self.network.get_absolute_name_scope_prefix() + self.name_scope + "/"
     return self.network.get_absolute_name_scope_prefix() + self.tf_scope_name + "/"
 
   def get_absolute_name_scope_prefix(self):
     """
-    :return: e.g. "output/", always with "/" at end
+    :return: e.g. "output/", always with "/" at end. this is for the TF name scope or variable scope.
+      This is the same as :func:`get_base_absolute_name_scope_prefix` in most cases,
+      but some layers like :class:`RecLayer` extend this by an additional postfix.
     :rtype: str
     """
     return self.get_base_absolute_name_scope_prefix()
 
   def get_absolute_name(self):
     """
-    :return: e.g. "output" or "subnet/output"
+    :return: e.g. "output" or "subnet/output". This is mostly for representation.
+      See also :func:`get_absolute_name_scope_prefix`.
     :rtype: str
     """
     return self.network.get_absolute_name_prefix() + self.name

@@ -7073,7 +7073,7 @@ class SubnetworkLayer(LayerBase):
       cl = sub_layer.layer_class_type
       layer_desc = sub_layer.kwargs
       assert issubclass(cl, LayerBase)
-      with cl.cls_layer_scope(layer_name):
+      with cl.cls_setup_scope(**layer_desc):
         d = cl.get_rec_initial_extra_outputs(
           batch_dim=batch_dim, rec_layer=rec_layer, **layer_desc)
         for key, value in d.items():
@@ -7098,7 +7098,7 @@ class SubnetworkLayer(LayerBase):
       cl = sub_layer.layer_class_type
       layer_desc = sub_layer.kwargs
       assert issubclass(cl, LayerBase)
-      with cl.cls_layer_scope(layer_name):
+      with cl.cls_setup_scope(**layer_desc):
         d = cl.get_rec_initial_extra_outputs_shape_invariants(**layer_desc)
         for key, value in d.items():
           shape_invariants["%s/%s" % (layer_name, key)] = value

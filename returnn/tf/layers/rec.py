@@ -204,7 +204,8 @@ class RecLayer(_ConcatInputLayer):
       default_var_initializer = self._fwd_weights_initializer
     else:
       default_var_initializer = xavier_initializer(seed=self.network.random.randint(2**31))
-    with reuse_name_scope("rec", initializer=default_var_initializer) as scope:
+    scope = "rec" if self.name_scope is None else tf_compat.v1.get_variable_scope()
+    with reuse_name_scope(scope, initializer=default_var_initializer) as scope:
       assert isinstance(scope, tf_compat.v1.VariableScope)
       self._rec_scope = scope
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
@@ -432,6 +433,8 @@ class RecLayer(_ConcatInputLayer):
     """
     :rtype: str
     """
+    if self.name_scope is not None:
+      return self.get_base_absolute_name_scope_prefix()
     return self.get_base_absolute_name_scope_prefix() + "rec/"  # all under "rec" sub-name-scope
 
   @classmethod
@@ -1520,7 +1523,7 @@ class _SubnetworkRecCell(object):
       layer_dict, network=self.net, get_layer=lambda _name: self.layer_data_templates[_name])
     out = layer_class.get_out_data_from_opts(name=layer_name, network=self.net, **layer_dict)
     out = layer_class.fixup_out_data(output=out, network=self.net)
-    layer.init(output=out, layer_class=layer_class, **layer_dict.copy())
+    layer.init(output=out, layer_class=layer_class, **layer_dict)
     self.layer_data_templates[layer_name] = layer
     return layer
 
@@ -1763,7 +1766,7 @@ class _SubnetworkRecCell(object):
     assert issubclass(cl, LayerBase)
     # noinspection PyProtectedMember
     with reuse_name_scope(self.parent_rec_layer._rec_scope):
-      with cl.cls_layer_scope(name):
+      with cl.cls_setup_scope(**template_layer.kwargs):
         # noinspection PyBroadException
         try:
           if batch_dim is None:
@@ -1789,7 +1792,7 @@ class _SubnetworkRecCell(object):
     assert issubclass(cl, LayerBase)
     # noinspection PyProtectedMember
     with reuse_name_scope(self.parent_rec_layer._rec_scope):
-      with cl.cls_layer_scope(name):
+      with cl.cls_setup_scope(**template_layer.kwargs):
         # noinspection PyBroadException
         try:
           batch_dim = template_layer.get_batch_dim()
@@ -3407,7 +3410,7 @@ class _SubnetworkRecCell(object):
       if name in loop_acc_layers:
         return loop_acc_layers[name]
       in_loop_layer = self.net.get_layer(name)
-      with tf.name_scope(in_loop_layer.cls_get_tf_scope_name(name)):
+      with tf.name_scope(in_loop_layer.tf_scope_name):
         acc_ta = loop_accumulated["output_%s" % name]
         acc_ta, latest_layer_choice_name, search_choices, resolved_seq_len = self._opt_search_resolve(
           layer_name=name, acc_ta=acc_ta, final_net_vars=final_net_vars, seq_len=seq_len,
@@ -3627,7 +3630,8 @@ class _TemplateLayer(LayerBase):
     self.layer_class = ":%s:%s" % (template_type, layer_class.layer_class)
     self.output = output
     self.layer_class_type = layer_class
-    self.kwargs = kwargs
+    self.kwargs = kwargs.copy()
+    self.kwargs.setdefault("name", self.name)
     self.kwargs["output"] = output
     self._is_output_layer = kwargs.get("is_output_layer", None)
     if self._has_search_choices():
@@ -3708,7 +3712,7 @@ class _TemplateLayer(LayerBase):
     # This is work-in-progress.
     layer.output.sanity_check()
     if layer.output.placeholder is not None and self.network.get_config().bool("debug_runtime_sanity_checks", False):
-      with tf.name_scope(layer.tf_scope_name):
+      with layer.cls_setup_scope(**layer.kwargs):
         layer.output.placeholder = layer.output.get_placeholder_with_runtime_sanity_checks()
     return layer
 
@@ -4063,7 +4067,8 @@ class RnnCellLayer(_ConcatInputLayer):
     assert initial_output is None, "set initial_state instead"
     import re
     from returnn.tf.util.basic import get_initializer
-    with reuse_name_scope("rec"), self.var_creation_scope(
+    scope = "rec" if self.name_scope is None else tf_compat.v1.get_variable_scope()
+    with reuse_name_scope(scope), self.var_creation_scope(
       initializer=get_initializer(
         weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
     ) as scope:
@@ -4166,7 +4171,9 @@ class RnnCellLayer(_ConcatInputLayer):
     """
     :rtype: str
     """
-    return self.get_base_absolute_name_scope_prefix() + "rec/"
+    if self.name_scope is not None:
+      return self.get_base_absolute_name_scope_prefix()
+    return self.get_base_absolute_name_scope_prefix() + "rec/"  # all under "rec" sub-name-scope
 
   def get_dep_layers(self):
     """
@@ -7507,7 +7514,7 @@ class MaskedComputationLayer(LayerBase):
     assert isinstance(name, str)
     assert isinstance(output, Data)
     assert issubclass(layer_class, LayerBase)
-    with layer_class.cls_layer_scope(name):
+    with layer_class.cls_setup_scope(**kwargs):
       d = layer_class.get_rec_initial_extra_outputs(batch_dim=batch_dim, rec_layer=rec_layer, **layer_desc)
       initial_out = layer_class.get_rec_initial_output(
         batch_dim=batch_dim, rec_layer=rec_layer, output=output.copy_as_batch_major(), **layer_desc)
@@ -7529,7 +7536,7 @@ class MaskedComputationLayer(LayerBase):
     assert isinstance(name, str)
     assert isinstance(output, Data)
     assert issubclass(layer_class, LayerBase)
-    with layer_class.cls_layer_scope(name):
+    with layer_class.cls_setup_scope(**kwargs):
       d = layer_class.get_rec_initial_extra_outputs_shape_invariants(**layer_desc)
       d["_output"] = tf.TensorShape(output.copy_as_batch_major().batch_shape)
       return d
