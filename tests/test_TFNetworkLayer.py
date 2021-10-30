@@ -2691,6 +2691,7 @@ def test_name_scope_rec_sub_empty():
         "class": "rec",
         "name_scope": "",
         "from": "data:data",
+        "optimize_move_layers_out": False,
         "unit": {
           "layer1": {"class": "linear", "n_out": n_out, "from": "data:source", "is_output_layer": True},
           "layer2": {"class": "linear", "n_out": n_out, "from": "data:source", "is_output_layer": True,

@@ -2494,7 +2494,7 @@ class _SubnetworkRecCell(object):
       """
       # The inner scope name is a bit screwed up and this is nicer anyway.
       # noinspection PyProtectedMember
-      with reuse_name_scope(rec_layer._rec_scope.name + "/while_loop_body", absolute=True):
+      with reuse_name_scope(rec_layer._rec_scope), reuse_name_scope("while_loop_body"):
         step_info_i = i
         # noinspection PyProtectedMember
         if self.parent_rec_layer._use_global_rec_step_offset:
