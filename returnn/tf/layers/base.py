@@ -853,7 +853,7 @@ class LayerBase(object):
     from returnn.tf.util.basic import get_current_var_scope_name, reuse_name_scope
     from returnn.tf.util.basic import default_control_flow_ctx, reuse_name_scope_of_tensor
     self_base_scope = self.get_base_absolute_name_scope_prefix()
-    assert self_base_scope.endswith("/")
+    assert self_base_scope.endswith("/") or self_base_scope == ""
     cur_scope = get_current_var_scope_name()
     assert (cur_scope + "/").startswith(self_base_scope)
     # There are cases were a dummy layer was created already to create the variables,

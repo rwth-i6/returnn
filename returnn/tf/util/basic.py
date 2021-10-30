@@ -452,7 +452,7 @@ def reuse_name_scope(name, absolute=None, **kwargs):
       name = current_name_scope + "/" + name
   else:
     current_name_scope = None  # not needed
-  assert name[-1:] != "/"
+  assert name[:1] != "/" and name[-1:] != "/"
   abs_name = name + "/" if name else ""
   # tf.name_scope with a scope-name ending with "/" will interpret is as absolute name,
   # and use it as-is.
