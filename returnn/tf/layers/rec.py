@@ -4377,6 +4377,7 @@ class RnnCellLayer(_ConcatInputLayer):
       assert initial_state.output.batch_dim_axis == 0
       assert initial_state.output.time_dim_axis is None
       assert initial_state.output.shape == initial_shape[1:]
+      assert initial_state.output.placeholder is not None
       return initial_state.output.placeholder
     elif initial_state == "zeros" or not initial_state:
       return tf.zeros(initial_shape)
