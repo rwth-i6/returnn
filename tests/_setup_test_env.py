@@ -98,7 +98,7 @@ def _try_hook_into_tests():
     return
   # get TestProgram instance from stack...
   from unittest import TestProgram
-  from better_exchook import get_current_frame
+  from returnn.util.better_exchook import get_current_frame
   frame = get_current_frame()
   if not frame:
     # This will not always work. Just silently accept this. This should be rare.
