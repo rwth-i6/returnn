@@ -67,6 +67,7 @@ class LayerBase(object):
                param_variational_noise=None,
                updater_opts=None,
                initial_output=None,
+               state=None,
                rec_previous_layer=None,
                collocate_with=None,
                trainable=None,
@@ -117,6 +118,7 @@ class LayerBase(object):
     :param int|None copy_output_loss_from_source_idx: if set, will copy output_loss from this source
     :param bool|dict batch_norm: see self.batch_norm()
     :param str|float initial_output: used for recurrent layer, see self.get_rec_initial_output()
+    :param state: explicitly defines the rec state. initial_state would define the initial state (in the first frame)
     :param LayerBase|None rec_previous_layer: via the recurrent layer, layer (template) which represents the past of us.
       You would not explicitly set this in a config. This is automatically, internally, via :class:`RecLayer`.
     :param list[str]|None collocate_with: in the rec layer, collocate with the specified other layers
@@ -190,6 +192,30 @@ class LayerBase(object):
     self.register_as_extern_data = register_as_extern_data
     # Stats will be collected by the engine.
     self.stats = {}  # type: typing.Dict[str,tf.Tensor]
+    self._set_prev_state(state)
+
+  def _set_prev_state(self, state):
+    if state is None:
+      return
+    assert self._rec_previous_layer, "%s: cannot pass 'state' %r when not inside a rec loop" % (self, state)
+    from tensorflow.python.util import nest
+
+    def _map_to_state_tensor(orig_state, state_layer):
+      assert isinstance(orig_state, tf.Tensor)
+      if state_layer is None:  # this is allowed, can be partial
+        return orig_state
+      assert isinstance(state_layer, LayerBase)
+      assert orig_state.shape.as_list() == list(state_layer.output.batch_shape)
+      return state_layer.output.placeholder
+
+    if set(self._rec_previous_layer.rec_vars_outputs.keys()) == {"state"}:
+      rec_prev_layer_state = self._rec_previous_layer.rec_vars_outputs["state"]
+      nest.assert_same_structure(rec_prev_layer_state, state)
+      self._rec_previous_layer.rec_vars_outputs["state"] = nest.map_structure(
+        _map_to_state_tensor, rec_prev_layer_state, state)
+      return
+    raise NotImplementedError(
+      "%s: explicit 'state' %r, internal states %r" % (self, state, self._rec_previous_layer.rec_vars_outputs))
 
   def post_init(self, layer_desc):
     """
@@ -550,6 +576,9 @@ class LayerBase(object):
     rec_previous_layer = root_ctx_net.layers.get("prev:%s%s" % (prefix, d["_name"]))
     if rec_previous_layer:
       d["rec_previous_layer"] = rec_previous_layer
+    if d.get("state", None) is not None:
+      from tensorflow.python.util import nest
+      d["state"] = nest.map_structure(get_layer, d["state"])
 
   @classmethod
   def _guess_n_out_from_target_and_opt_loss(cls, network, target, target_layers, loss_class_name, get_layer):
