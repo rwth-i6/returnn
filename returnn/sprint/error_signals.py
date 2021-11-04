@@ -496,6 +496,8 @@ class SprintInstancePool:
         instance = self._get_instance(i)
         if isinstance(tags[0], str):
           segment_name = tags[b]
+        elif isinstance(tags[0], bytes):
+          segment_name = tags[b].decode()
         else:
           segment_name = tags[b].view('S%d' % tags.shape[1])[0]
         assert isinstance(segment_name, str)
