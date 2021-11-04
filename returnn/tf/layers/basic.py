@@ -8982,6 +8982,7 @@ class FastBaumWelchLoss(Loss):
   """
   class_name = "fast_bw"
   recurrent = True
+  need_target = False
 
   def __init__(self, sprint_opts, **kwargs):
     """
@@ -9013,7 +9014,7 @@ class FastBaumWelchLoss(Loss):
         tags=seq_tags)
       loss = self.reduce_func(obs_scores[0])
       bw = tf.exp(-fwdbwd)
-      grad_x = (output - bw) * tf.expand_dims(seq_mask, 2)
+      grad_x = (output - bw) * tf.cast(tf.expand_dims(seq_mask, 2), output.dtype)
       from returnn.tf.util.basic import custom_gradient
       loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=output_before_softmax, grad_x=grad_x)
       return loss
