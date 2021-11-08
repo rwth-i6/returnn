@@ -3584,7 +3584,7 @@ def test_reclayer_optimize_out_dot():
       "att_query": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
                     "from": ["s"]},  # (B, H, D/H)
       # Here is the main test, the dot-layer:
-      "energy": {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": "T?",  # Note the "T?".
+      "energy": {"class": "dot", "red1": "static:-1", "red2": "static:-1", "var1": "T", "var2": "T?",  # Note the "T?".
                  "from": ["base:enc_ctx", "att_query"]},
       # energy inside the loop will be (B, H, enc-T, 1).
       # energy outside the loop will be (B, H, enc-T, dec-T). I.e. enc-T is still the first time axis.
@@ -3721,7 +3721,7 @@ def test_reclayer_optimize_out_dot_kv_in_rec():
                      "n_out": EncValueTotalDim},  # (B, enc-T, D)
       "enc_value": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim),
                     "from": ["enc_value0"], "is_output_layer": True},  # (B, enc-T, H, D/H)
-      "energy": {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": "T?",  # Note the "T?".
+      "energy": {"class": "dot", "red1": "static:-1", "red2": "static:-1", "var1": "T", "var2": "T?",  # Note the "T?".
                  "from": ["enc_ctx", "att_query"]},
       "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, H, 1)
       "att0": {"class": "generic_attention", "weights": "att_weights", "base": "enc_value"},  # (B, H, V)
@@ -3748,7 +3748,7 @@ def test_reclayer_optimize_out_softmax_over_spatial():
             "n_out": EncKeyTotalDim},  # (B, D)  -- Q (query). D should be same as enc_ctx
       "att_query": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
                     "from": ["s"]},  # (B, H, D/H)
-      "energy": {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": "T?",  # Note the "T?".
+      "energy": {"class": "dot", "red1": "static:-1", "red2": "static:-1", "var1": "T", "var2": "T?",  # Note the "T?".
                  "from": ["base:enc_ctx", "att_query"]},
       # energy inside the loop will be (B, H, enc-T, 1).
       # energy outside the loop will be (B, H, enc-T, dec-T). I.e. enc-T is still the first time axis.
@@ -3785,7 +3785,7 @@ def test_reclayer_optimize_out_softmax_over_spatial_rev_dot():
             "n_out": EncKeyTotalDim},  # (B, D)  -- Q (query). D should be same as enc_ctx
       "att_query": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
                     "from": ["s"]},  # (B, H, D/H)
-      "energy": {"class": "dot", "red1": -1, "red2": -1, "var1": "T?", "var2": "T",  # Note the "T?".
+      "energy": {"class": "dot", "red1": "static:-1", "red2": "static:-1", "var1": "T?", "var2": "T",  # Note the "T?".
                  "from": ["att_query", "base:enc_ctx"]},
       # energy inside the loop will be (B, H, 1, enc-T).
       # energy outside the loop will be (B, H, dec-T, enc-T). I.e. dec-T is the first time axis.
@@ -4252,7 +4252,7 @@ class TransformerNetwork:
     db[output + '_att_value'] = {"class": "split_dims", "axis": "F",
                                  "dims": (self.AttNumHeads, self.EncValuePerHeadDim),
                                  "from": [output + '_att_value0']}  # (B, enc-T, H, D'/H)
-    d[output + '_att_energy'] = {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": "T?",
+    d[output + '_att_energy'] = {"class": "dot", "red1": "static:-1", "red2": "static:-1", "var1": "T", "var2": "T?",
                                  "from": ['base:' + output + '_att_key', output + '_att_query']}  # (B, H, enc-T, 1)
     d[output + '_att_weights'] = {"class": "softmax_over_spatial", "from": [output + '_att_energy'],
                                   "energy_factor": self.EncKeyPerHeadDim ** -0.5}  # (B, enc-T, H, 1)
