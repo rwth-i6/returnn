@@ -5589,6 +5589,7 @@ class DotLayer(LayerBase):
     else:
       # add_var2_if_empty not supported anymore.
       assert add_var2_if_empty is NotSpecified or not add_var2_if_empty
+      add_var2_if_empty = False
       axis_desc_allow_int = False
     a_out = self.sources[0].output.copy()
     b_out = self.sources[1].output.copy()
