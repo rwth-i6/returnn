@@ -5578,6 +5578,10 @@ class DotLayer(LayerBase):
       condition=all(a is not NotSpecified for a in (red1, red2, var1, var2)),
       message="DotLayer: Axes must be specified explicitly. There is no default.",
       version=3)
+    BehaviorVersion.require(
+      condition=add_var2_if_empty is NotSpecified or not add_var2_if_empty,
+      message="DotLayer: add_var2_if_empty not allowed",
+      version=3)
     if BehaviorVersion.get() < 3:
       # Earlier defaults: red1=-1, red2=-2, var1=-2, var2=-1, add_var2_if_empty=True.
       red1 = -1 if red1 is NotSpecified else red1
@@ -5588,7 +5592,6 @@ class DotLayer(LayerBase):
       axis_desc_allow_int = True
     else:
       # add_var2_if_empty not supported anymore.
-      assert add_var2_if_empty is NotSpecified or not add_var2_if_empty
       add_var2_if_empty = False
       axis_desc_allow_int = False
     a_out = self.sources[0].output.copy()
