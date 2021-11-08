@@ -22,14 +22,17 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
-Behavior version 3 (08.11.2021)
+Behavior version 3 (2021-11-08)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``DotLayer``: disallow ``int`` axes descriptions, remove and change defaults.
 
+Change ``-1`` to e.g. ``"static:-1"`` or ``"F"``.
+Change ``-2`` to e.g. ``"dynamic:0"`` or ``"T"`` or ``"stag:..."`` or ``dim_tag``.
+
 See issue `#627 <https://github.com/rwth-i6/returnn/issues/627>`__.
 
-Behavior version 2 (27.08.2021)
+Behavior version 2 (2021-08-27)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Disallow boolean optimizer specifications such as ``adam = True``
@@ -37,13 +40,14 @@ in favor of using ``optimizer = {"class": "adam", ...}``
 
 See issue `#512 <https://github.com/rwth-i6/returnn/issues/514>`__.
 
-Behavior version 1 (28.05.2021)
+Behavior version 1 (2021-05-28)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Disallow not specifying ``"from"`` in layer definition dictionaries,
-thus making use of the hidden default "data" as layer input.
+thus making use of the hidden default ``"data"`` as layer input.
 
 ``"from"`` needs to be set explicitly now.
+Set it to ``"data"`` or ``"data:data"`` or some other layer or ``()`` (empty).
 
 See issue `#519 <https://github.com/rwth-i6/returnn/issues/519>`__.
 
