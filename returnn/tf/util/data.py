@@ -3213,6 +3213,27 @@ class Data(object):
     assert len(axes) == 1, "%r: %r is not a unique axis but %r" % (self, axis, axes)
     return axes[0]
 
+  def get_description_from_axis(self, axis):
+    """
+    :param int axis:
+    :return: some canonical description, such that ``self.get_axis_from_description(res) == axis``.
+      This is quite heuristically for now. We use both strings as also DimensionTag when appropriate.
+      The behavior could potentially change in the future, also the condition will always hold.
+    :rtype: str|DimensionTag
+    """
+    assert 0 <= axis < self.batch_ndim
+    if axis == self.batch_dim_axis:
+      return "B"
+    dim_tag = self.dim_tags[axis]
+    if dim_tag.dyn_size_ext:
+      return dim_tag
+    if axis == self.time_dim_axis:
+      return "T"  # this might change
+    if axis == self.feature_dim_axis:
+      return "F"  # this might change
+    # Fallback
+    return dim_tag
+
   def has_axis(self, axis):
     """
     :param str|DimensionTag axis:
