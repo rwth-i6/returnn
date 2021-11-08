@@ -3725,20 +3725,20 @@ def test_DotLayer():
     b.output.placeholder = tf.reshape(tf.add(tf.range(B * D, dtype=tf.float32), 0.5), (B, H, D // H))
     kwargs = dict(
       name="dot", network=net, sources=[a, b], debug=True,
-      red1=-1, red2=-1, var1="T", var2=None)
+      red1="F", red2="F", var1="T", var2=None,
+      add_var2_if_empty=False)
     layer = DotLayer(output=DotLayer.get_out_data_from_opts(**kwargs), **kwargs)
     print(layer, layer.output)
     assert layer.output.batch_dim_axis == 0
     assert layer.output.time_dim_axis == 2
-    assert layer.output.shape == (H, None, 1)
-    assert layer.output.dim == 1
+    assert layer.output.shape == (H, None)
     out, seq_lens = session.run([layer.output.placeholder, layer.output.size_placeholder[1]])
     print(out)
     print(seq_lens)
     assert isinstance(out, numpy.ndarray)
     assert isinstance(seq_lens, numpy.ndarray)
     assert_equal(seq_lens.tolist(), a_seq_lens)
-    assert_equal(out.shape, (B, H, max(a_seq_lens), 1))
+    assert_equal(out.shape, (B, H, max(a_seq_lens)))
 
 
 def test_DotLayer2():

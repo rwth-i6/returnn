@@ -190,7 +190,7 @@ def add_trafo_dec_layer(db, d, inp, output):
                              "from": [output + '_att_key0']}  # (B, enc-T, H, D/H)
   db[output + '_att_value'] = {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim),
                                "from": [output + '_att_value0']}  # (B, enc-T, H, D'/H)
-  d[output + '_att_energy'] = {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": "T?",
+  d[output + '_att_energy'] = {"class": "dot", "red1": "static:-1", "red2": "static:-1", "var1": "T", "var2": "T?",
                            "from": ['base:' + output + '_att_key', output + '_att_query']}  # (B, H, enc-T, 1)
   d[output + '_att_weights'] = {"class": "softmax_over_spatial", "from": [output + '_att_energy'],
                                 "energy_factor": EncKeyPerHeadDim ** -0.5}  # (B, enc-T, H, 1)

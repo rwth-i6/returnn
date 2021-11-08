@@ -2316,7 +2316,7 @@ def test_rec_subnet_eval_init_out_apply0():
                      "n_out": EncKeyTotalDim},  # (B, enc-T, D)
       "att_query": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
                     "from": ["att_query2"]},  # (B, enc-T, H, D/H)
-      "energy": {"class": "dot", "red1": -1, "red2": -1, "var1": None, "var2": None,
+      "energy": {"class": "dot", "red1": "F", "red2": "F", "var1": None, "var2": None,
                  "from": ["base:enc_ctx", "att_query"], "debug": True},  # (B, enc-T, H, 1)
 
       "att_weights": {"class": "softmax_over_spatial", "from": ["energy"], "energy_factor": EncKeyPerHeadDim ** -0.5},
