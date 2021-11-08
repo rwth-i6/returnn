@@ -5899,7 +5899,7 @@ class GenericAttentionLayer(AttentionBaseLayer):
       output=self.output,
       sources=[weights, self.base],
       red1=weights.output.get_description_from_axis(weights_axis_to_reduce), red2="T",
-      var1=[self.base.output.get_description_from_axis(a) for a in weights_remaining_axes], var2="F")
+      var1=[weights.output.get_description_from_axis(a) for a in weights_remaining_axes], var2="F")
     self.output = self.dot_layer.output
 
   def get_dep_layers(self):
@@ -6039,7 +6039,7 @@ class GenericAttentionLayer(AttentionBaseLayer):
     return DotLayer.get_out_data_from_opts(
       sources=[weights, base],
       red1=weights.output.get_description_from_axis(weights_axis_to_reduce), red2="T",
-      var1=[base.output.get_description_from_axis(a) for a in weights_remaining_axes], var2="F",
+      var1=[weights.output.get_description_from_axis(a) for a in weights_remaining_axes], var2="F",
       **kwargs)
 
 
