@@ -6781,7 +6781,7 @@ def test_cumulated_attention_weights_search():
           'target_embed': { 'class': 'linear', 'activation': None, 'from': ['prev:output'], 'n_out': dim},
           'att_energy': {
             'class': 'dot', 'from': ['base:source_embed', 'target_embed'],
-            'red1': -1, 'red2': -1, 'var1': 'T', 'var2': 'T?', 'add_var2_if_empty': False},
+            'red1': "static:-1", 'red2': "static:-1", 'var1': 'T', 'var2': 'T?', 'add_var2_if_empty': False},
           'cum_att_energy': {'class': 'combine', 'kind': 'add', 'from': ['prev:att_energy', 'att_energy']},
           'att_weights': {
             'class': 'softmax_over_spatial', 'from': ['cum_att_energy'], 'axis': 'stag:extern_data:data'},
