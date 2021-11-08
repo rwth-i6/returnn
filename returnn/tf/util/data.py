@@ -3225,14 +3225,27 @@ class Data(object):
     if axis == self.batch_dim_axis:
       return "B"
     dim_tag = self.dim_tags[axis]
-    if dim_tag.dyn_size_ext:
+    # It's possible that dim tags are not unique (https://github.com/rwth-i6/returnn/issues/632).
+    matching_tags = [i for (i, tag) in enumerate(self.dim_tags) if tag == dim_tag]
+    if dim_tag.dyn_size_ext and len(matching_tags) == 1:
       return dim_tag
     if axis == self.time_dim_axis:
       return "T"  # this might change
     if axis == self.feature_dim_axis:
       return "F"  # this might change
-    # Fallback
-    return dim_tag
+    if len(matching_tags) == 1:
+      # Fallback with dim tag
+      return dim_tag
+    # Fallback without dim tag
+    if dim_tag.dimension is not None:  # static
+      kind = "static"
+      axes = self.get_static_axes()
+    else:  # dynamic
+      kind = "dynamic"
+      axes = self.get_dynamic_axes()
+    assert axis in axes, "%s: %s axes %s do not contain axis %i" % (self, kind, axes, axis)
+    i = axes.index(axis)
+    return "%s:%i" % (kind, i - len(axes))  # negative because this is likely more robust
 
   def has_axis(self, axis):
     """
