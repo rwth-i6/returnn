@@ -3159,6 +3159,27 @@ def test_SliceNdLayer_set_tag_on_size_tensor():
     })
 
 
+def test_SliceNdLayer_RangeInAxisLayer():
+  with make_scope() as session:
+    dim = 5
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {"data": {"dim": dim}, "classes": {"dim": dim, "sparse": True}}})
+    net = TFNetwork(config=config, search_flag=True, train_flag=False)
+    net.construct_from_dict({
+      "output": {"class": "rec", "from": "data", "unit": {
+        "start": {"class": "copy", "from": "prev:output"},
+        "slices": {"class": "slice_nd", "from": "base:data", "start": "start", "size": None},  # [B,T[B],slice[B,T],D]
+        "slices_red": {"class": "reduce", "from": "slices", "axis": "dyn:-1", "mode": "max"},  # [B,T[B],D]
+        "slice_range": {"class": "range_in_axis", "from": "slices", "axis": "dyn:-1", "is_output_layer": True},
+        "output_prob": {"class": "linear", "from": "slices_red", "activation": "softmax", "n_out": dim},
+        "output": {
+          "class": "choice", "from": "output_prob", "beam_size": 3, "input_type": "prob", "target": "classes",
+          "initial_output": 0}
+      }}
+    })
+
+
 def test_WindowLayer_output_placeholder():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())
