@@ -2337,12 +2337,14 @@ class Data(object):
         data.placeholder = x
     return data
 
-  def copy_compatible_to(self, data, unbroadcast=False, except_feature=False, check_sparse=True, check_dtype=True):
+  def copy_compatible_to(self, data, add_dims=True, unbroadcast=False, except_feature=False,
+                         check_sparse=True, check_dtype=True):
     """
     :param Data data: other data which the returned tensor should be compatible to
-      It would add any missing axes with a dim 1 axis for automatic broadcasting.
+      It would add any missing axes with a dim 1 axis for automatic broadcasting (with add_dims=True).
       It currently does not check whether existing dims match.
-    :param bool unbroadcast: if True, all broadcast axes (axes with dim 1) will be tiled such that they match
+    :param bool add_dims: whether to add (broadcast, or unbroadcasted) dims. throws error if missing dim
+    :param bool unbroadcast: if True, all added broadcast axes (axes with dim 1) will be tiled such that they match
     :param bool except_feature: if unbroadcast, do not unbroadcast the feature dim
     :param bool check_sparse:
     :param bool check_dtype:
@@ -2374,6 +2376,10 @@ class Data(object):
     for target_axis in range(data.batch_ndim):
       new_v_axis = min(target_axis, v.batch_ndim)
       if target_axis not in mapped_axes.values():
+        if not add_dims:
+          raise ValueError(
+            "%s.copy_compatible_to(%s) not allowed, axis %i (%s) not in source" % (
+              self, data, target_axis, data.dim_tags[target_axis]))
         # Dim in data, but not in v
         unbroadcast_axis = unbroadcast and not (except_feature and data.feature_dim_axis == target_axis)
         v = v.copy_add_dim_by_tag(data.get_dim_tag(target_axis), axis=new_v_axis, unbroadcast=unbroadcast_axis)

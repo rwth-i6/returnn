@@ -289,6 +289,23 @@ def test_concat_sources_dim1():
     session.run(out.output.placeholder, feed_dict=feed_dict)
 
 
+def test_ConcatLayer():
+  with make_scope() as session:
+    net_dict = {
+      "lin1": {"class": "linear", "activation": "sigmoid", "n_out": 5, "from": "data:data"},
+      "lin2": {"class": "linear", "activation": "sigmoid", "n_out": 3, "from": "data:data"},
+      "output": {"class": "concat", "from": [("lin1", "F"), ("lin2", "F"), ("data", "F")]},
+    }
+    config = Config({"extern_data": {"data": {"dim": 2}}})
+    network = TFNetwork(config=config)
+    network.construct_from_dict(net_dict)
+    out = network.get_default_output_layer()
+    assert_equal(out.output.shape, (None, 10))
+    feed_dict = make_feed_dict(network.extern_data, same_time=True)
+    session.run(tf_compat.v1.global_variables_initializer())
+    session.run(out.output.placeholder, feed_dict=feed_dict)
+
+
 def test_LinearLayer_batch_feature_major():
   with make_scope() as session:
     network = TFNetwork(config=Config(), extern_data=ExternData(), train_flag=True)

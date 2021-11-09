@@ -307,6 +307,85 @@ class CopyLayer(_ConcatInputLayer):
       d["extra_deps"] = [get_layer(src_name) for src_name in extra_deps]
 
 
+class ConcatLayer(LayerBase):
+  """
+  Concatenates the inputs in specified axes.
+  This generalizes :class:`CopyLayer` which concatenates in the feature dim.
+  """
+  layer_class = "concat"
+
+  def __init__(self, sources, allow_broadcast=False, **kwargs):
+    """
+    :param list[(LayerBase,str|DimensionTag)] sources:
+    :param bool allow_broadcast:
+    """
+    if allow_broadcast:
+      raise NotImplementedError
+    sources, axes = zip(*sources)  # unzip
+    super(ConcatLayer, self).__init__(sources=sources, **kwargs)
+    sources_data = [layer.output for layer in sources]  # type: typing.List[Data]
+    axes_int = [src.get_axis_from_description(axis) for (src, axis) in zip(sources_data, axes)]
+    # Currently, assume that the output format matches the first input. See get_out_data_from_opts.
+    assert self.output.batch_ndim == sources_data[0].batch_ndim
+    out_concat_axis = axes_int[0]
+
+    def _copy_compatible(x, axis):
+      """
+      :param Data x: input
+      :param int axis:
+      :rtype: Data
+      """
+      dummy_ref = self.output.copy_template()
+      dummy_ref = dummy_ref.copy_template_replace_dim_tag(
+        axis=out_concat_axis, new_dim_tag=x.dim_tags[axis])
+      return x.copy_compatible_to(dummy_ref, add_dims=allow_broadcast, unbroadcast=False)
+
+    sources_data = [_copy_compatible(src, axis) for (src, axis) in zip(sources_data, axes_int)]
+    self.output.placeholder = tf_util.concat_with_opt_broadcast(
+      [src.placeholder for src in sources_data], axis=out_concat_axis,
+      allow_broadcast=[allow_broadcast] * len(sources_data))
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, allow_broadcast=False, **kwargs):
+    """
+    :param str name:
+    :param list[(LayerBase,str|DimensionTag)] sources:
+    :param bool allow_broadcast:
+    :rtype: Data
+    """
+    assert sources
+    sources, axes = zip(*sources)  # unzip
+    axes_int = [layer.output.get_axis_from_description(axis) for (layer, axis) in zip(sources, axes)]
+    concat_dim_tags = [
+      layer.output.dim_tags[axis] for (layer, axis) in zip(sources, axes_int)]  # type: typing.List[DimensionTag]
+    if any(tag.dimension is None for tag in concat_dim_tags):
+      dimension = None
+    else:
+      dimension = 0
+      for tag in concat_dim_tags:
+        dimension += tag.dimension
+    # We ignore allow_broadcast here... Anyway not currently implemented.
+    # Just overtake the first input format.
+    concat_res_dim_tag = DimensionTag(
+      kind=concat_dim_tags[0].kind, description="%s_concat" % name, dimension=dimension,
+      derived_from_tag=concat_dim_tags[0])
+    res_dim_tags = list(sources[0].output.dim_tags)
+    res_dim_tags[axes_int[0]] = concat_res_dim_tag
+    return Data(name="%s_output" % name, dim_tags=res_dim_tags, dtype=sources[0].output.dtype)
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param returnn.tf.network.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    sources_and_axes = d.pop("from")
+    d["from"], axes = zip(*sources_and_axes)
+    super(ConcatLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["sources"] = list(zip(d["sources"], axes))
+
+
 class DropoutLayer(CopyLayer):
   """
   Just the same as :class:`CopyLayer`, because that one already supports dropout.
