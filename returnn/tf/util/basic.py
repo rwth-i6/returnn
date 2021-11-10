@@ -1946,6 +1946,25 @@ def flatten_with_seq_len_mask_time_major(x, seq_lens, batch_dim_axis, time_dim_a
     return res
 
 
+def unflatten_with_seq_len_mask(x, seq_lens, batch_major=True):
+  """
+  Basically inverse of :func:`flatten_with_seq_len_mask` and :func:`flatten_with_seq_len_mask_time_major`
+  :param tf.Tensor x: shape (time', ...s...s'...) where time' = sum(seq_len) <= batch*time
+  :param tf.Tensor seq_lens: shape (batch,) of int32
+  :param bool batch_major: if True, the output will be batch major
+  :return: tensor of shape (batch,...s..., time, ...s'...) or shape (time,...s...., batch, ...s'...)
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("unflatten_with_seq_len_mask_time_major"):
+    if batch_major:
+      mask = sequence_mask(seq_lens)  # shape (batch, time)
+    else:
+      mask = sequence_mask_time_major(seq_lens)  # shape (time, batch)
+    indices = tf.cast(tf.where(mask), tf.int32)
+    res = tf.scatter_nd(indices, x, shape=tf.concat([tf.shape(mask), tf.shape(x)[1:]], axis=0))
+    return res
+
+
 def expand_dims_unbroadcast(x, axis, dim, name="expand_dims_unbroadcast"):
   """
   :param tf.Tensor|float|int x:
