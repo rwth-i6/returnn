@@ -3331,6 +3331,38 @@ class FlattenBatchLayer(_ConcatInputLayer):
     return out
 
 
+class UnflattenBatchLayer(_ConcatInputLayer):
+  """
+  Inverse of :class:`FlattenBatchLayer`, so recovers an axis previously merged into the batch axis
+
+  This basically wraps :func:`unflatten_with_seq_len_mask`.
+  """
+  layer_class = "unflatten_batch"
+
+  def __init__(self, **kwargs):
+    super(UnflattenBatchLayer, self).__init__(**kwargs)
+    x = self.input_data.copy_as_batch_major()
+    from ..util.data import BatchInfo
+    batch_info = x.get_batch_dim_tag().batch
+    seq_lens = [v.sizes for v in batch_info.virtual_dims if isinstance(v, BatchInfo.PackedDim)]
+    assert len(seq_lens) == 1, "only implemented for single packed dim"
+    seq_lens = seq_lens[0]
+    self.output.placeholder = tf_util.unflatten_with_seq_len_mask(
+      x.placeholder, seq_lens=seq_lens, batch_major=self.output.is_batch_major)
+
+  @classmethod
+  def get_out_data_from_opts(cls, sources, name, **kwargs):
+    """
+    :param list[LayerBase] sources:
+    :param str name:
+    :rtype: Data
+    """
+    out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    out = out.copy_as_batch_major()
+    out = out.copy_template_unpack_batch()
+    return out
+
+
 class UnflattenNdLayer(_ConcatInputLayer):
   """
   This keeps the batch axis as-is, i.e. the flattening/unflattening did not happen on the batch axis.
