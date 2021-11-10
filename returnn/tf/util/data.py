@@ -1229,6 +1229,16 @@ class BatchInfo:
     dims_wo_beam = [dim for dim in self.virtual_dims if not isinstance(dim, BatchInfo.BeamDim)]
     return root._global_descendants_by_virtual_dims[tuple(dims_wo_beam)]  # must exist
 
+  def copy_remove_dim(self, remove_dim):
+    """
+    :param VirtualDimBase remove_dim:
+    :rtype: BatchInfo
+    """
+    assert self.virtual_dims
+    root = self.get_global_base()
+    dims_wo_dim = [dim for dim in self.virtual_dims if dim != remove_dim]
+    return root._global_descendants_by_virtual_dims[tuple(dims_wo_dim)]  # must exist
+
   def copy_set_beam(self, beam):
     """
     :param SearchBeam|None beam:
@@ -2647,6 +2657,38 @@ class Data(object):
     """
     kwargs = self.get_kwargs()
     kwargs["control_flow_ctx"] = ctx
+    return Data(**kwargs)
+
+  def copy_template_unpack_batch(self):
+    """
+    If the batch dim contains a :class:`BatchInfo.PackedDim`, unpack it and restore the data from before the packing.
+
+    :rtype: Data
+    """
+    assert self.have_batch_axis()
+    assert self.batch, "%s: batch unset" % self
+    data = self.copy()
+    kwargs = self.get_kwargs(include_special_axes=False)
+
+    dim_tags = []
+    for dim_tag in data.dim_tags:
+      if dim_tag.is_batch_dim() and dim_tag.batch and len(dim_tag.batch.virtual_dims) > 0:
+        batch = dim_tag.batch
+        new_batch_dim_tag = None
+        for virtual_dim in batch.virtual_dims:
+          if isinstance(virtual_dim, BatchInfo.PackedDim):
+            dim_tags.append(virtual_dim.dim_tag)
+            batch = batch.copy_remove_dim(virtual_dim)
+          elif not new_batch_dim_tag:
+            new_batch_dim_tag = DimensionTag(kind=DimensionTag.Types.Batch)
+            dim_tags.append(new_batch_dim_tag)
+        assert new_batch_dim_tag
+        new_batch_dim_tag.batch = batch
+        kwargs["batch"] = batch
+      else:
+        dim_tags.append(dim_tag)
+
+    kwargs["dim_tags"] = dim_tags
     return Data(**kwargs)
 
   def _get_variable_dim_pattern(self):
