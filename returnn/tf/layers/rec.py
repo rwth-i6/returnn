@@ -3995,8 +3995,9 @@ class RecStepInfoLayer(LayerBase):
         end_flag = tf.greater_equal(
           # Without include_eos, end_flag=True happens first in frame seq_lens.
           # With include_eos, end_flag=True happens first in frame seq_lens - 1.
+          # We are supposed to return the prev end flag here.
           self.step,
-          (self._seq_lens - 1) if rec_layer.include_eos else self._seq_lens)
+          self._seq_lens if rec_layer.include_eos else (self._seq_lens + 1))
     source_search_choices = None
     if self.end_flag_source:
       source_search_choices = self.end_flag_source.get_search_choices()
