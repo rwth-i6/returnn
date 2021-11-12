@@ -98,7 +98,7 @@ class RecLayer(_ConcatInputLayer):
                use_global_rec_step_offset=False,
                include_eos=False,
                debug=None,
-               _time_dim_tag=None,
+               axis=None,
                **kwargs):
     """
     :param str|_SubnetworkRecCell unit: the RNNCell/etc name, e.g. "nativelstm". see comment below.
@@ -120,7 +120,7 @@ class RecLayer(_ConcatInputLayer):
     :param bool use_global_rec_step_offset:
     :param bool include_eos: for search, whether we should include the frame where "end" is True
     :param bool|None debug:
-    :param DimensionTag|None _time_dim_tag:
+    :param DimensionTag|None axis:
     """
     super(RecLayer, self).__init__(**kwargs)
     import re
@@ -147,7 +147,7 @@ class RecLayer(_ConcatInputLayer):
     self._initial_state_deps = [layer for layer in nest.flatten(initial_state) if isinstance(layer, LayerBase)]
     self._input_projection = input_projection
     self._max_seq_len = max_seq_len
-    self.time_dim_tag = _time_dim_tag
+    self.time_dim_tag = axis
     self.include_eos = include_eos
     if optimize_move_layers_out is None:
       optimize_move_layers_out = self.network.get_config().bool("optimize_move_layers_out", True)
@@ -341,7 +341,11 @@ class RecLayer(_ConcatInputLayer):
         time_dim_tag = DimensionTag(
           description="dyn-time:%s%s" % (network.get_absolute_name_prefix(), d["_name"]),
           kind=DimensionTag.Types.Time)
-    d["_time_dim_tag"] = time_dim_tag
+    if d.get("axis") and time_dim_tag:
+      time_dim_tag_explicit = d["axis"]
+      assert isinstance(time_dim_tag_explicit, DimensionTag)
+      time_dim_tag.declare_same_as(time_dim_tag_explicit)
+    d["axis"] = time_dim_tag
 
     if isinstance(d.get("unit"), dict):
       sub_net_dict = d.pop("unit")
@@ -382,11 +386,11 @@ class RecLayer(_ConcatInputLayer):
       d["max_seq_len"] = eval(d["max_seq_len"], {"max_len_from": max_len_from, "tf": tf})
 
   @classmethod
-  def get_out_data_from_opts(cls, network, unit, _time_dim_tag=None, sources=(), initial_state=None, **kwargs):
+  def get_out_data_from_opts(cls, network, unit, axis=None, sources=(), initial_state=None, **kwargs):
     """
     :param returnn.tf.network.TFNetwork network:
     :param str|dict[str] unit:
-    :param DimensionTag|None _time_dim_tag:
+    :param DimensionTag|None axis:
     :param list[LayerBase] sources:
     :param str|LayerBase|list[str|LayerBase] initial_state:
     :rtype: Data
@@ -419,8 +423,8 @@ class RecLayer(_ConcatInputLayer):
         out = out.copy_as_time_batch_major()  # Otherwise the output is always [T,B,F]
     else:
       raise Exception("n_out or out_type must be specified")
-    if out.have_time_axis() and _time_dim_tag:
-      out = out.copy_template_replace_dim_tag(axis=out.time_dim_axis, new_dim_tag=_time_dim_tag)
+    if out.have_time_axis() and axis:
+      out = out.copy_template_replace_dim_tag(axis=out.time_dim_axis, new_dim_tag=axis)
     for dep in deps:
       if dep:
         out.beam = SearchBeam.get_combined_beam(out.beam, dep.output.beam)
