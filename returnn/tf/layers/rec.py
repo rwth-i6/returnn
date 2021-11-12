@@ -2502,14 +2502,14 @@ class _SubnetworkRecCell(object):
           step_info_i += global_tensor(
             lambda: tf_compat.v1.placeholder(tf.int32, (), name="global_rec_step_offset"),
             name="global_rec_step_offset")
-        rec_step_info = dict(i=step_info_i, end_flag=None, seq_lens=fixed_seq_len)
+        rec_step_info = dict(i=step_info_i, prev_end_flag=None, seq_lens=fixed_seq_len)
         prev_end_flag, prev_dyn_seq_len, prev_end_layer = None, None, None
         if seq_len_info:
           prev_end_flag, prev_dyn_seq_len = seq_len_info
-          rec_step_info["end_flag"] = prev_end_flag
+          rec_step_info["prev_end_flag"] = prev_end_flag
           prev_end_layer = self.layer_data_templates["end"].copy_as_prev_time_frame(prev_output=prev_end_flag)
           self.net.layers["prev:end"] = prev_end_layer
-          rec_step_info["end_flag_source"] = prev_end_layer
+          rec_step_info["prev_end_layer"] = prev_end_layer
         self.net.set_rec_step_info(**rec_step_info)
         # get next loop vars (net_vars)
         from returnn.tf.util.basic import identity_op_nested
@@ -3946,12 +3946,12 @@ class RecStepInfoLayer(LayerBase):
 
   layer_class = ":i"
 
-  def __init__(self, i=None, end_flag=None, end_flag_source=None, seq_lens=None, **kwargs):
+  def __init__(self, i=None, prev_end_flag=None, prev_end_layer=None, seq_lens=None, **kwargs):
     """
     :param tf.Tensor|None i: scalar, int32, current step (time)
-    :param tf.Tensor|None end_flag: (batch,), bool, says that the current sequence has ended.
+    :param tf.Tensor|None prev_end_flag: (batch,), bool, says that the current sequence has ended.
       Can be with beam. In that case, end_flag_source should be "prev:end", and define the search choices.
-    :param LayerBase|None end_flag_source: corresponds to the "prev:end" layer if available
+    :param LayerBase|None prev_end_layer: corresponds to the "prev:end" layer if available
     :param tf.Tensor|None seq_lens: (batch,) int32, seq lens
     """
     if "output" not in kwargs:
@@ -3960,13 +3960,13 @@ class RecStepInfoLayer(LayerBase):
     super(RecStepInfoLayer, self).__init__(**kwargs)
     self.step = None
     self._end_flag = None
-    self.end_flag_source = None
+    self.prev_end_layer = None
     if not self.output.have_time_axis():  # the normal case
       assert i is not None and i.get_shape().ndims == 0
       self.output.placeholder = i
       self.step = i
-      self._end_flag = end_flag
-      self.end_flag_source = end_flag_source
+      self._end_flag = prev_end_flag
+      self.prev_end_layer = prev_end_layer
     else:
       # This only is valid if we are moved out from a RecLayer.
       assert self.output.size_placeholder and 0 in self.output.size_placeholder
@@ -3974,7 +3974,7 @@ class RecStepInfoLayer(LayerBase):
       self.output.placeholder = tf.range(tf.reduce_max(seq_lens))
     self._seq_lens = seq_lens
     if seq_lens is None:
-      assert end_flag_source
+      assert prev_end_layer
 
   def get_prev_end_flag(self, target_search_choices):
     """
@@ -3999,19 +3999,19 @@ class RecStepInfoLayer(LayerBase):
           self.step,
           self._seq_lens if rec_layer.include_eos else (self._seq_lens + 1))
     source_search_choices = None
-    if self.end_flag_source:
-      source_search_choices = self.end_flag_source.get_search_choices()
+    if self.prev_end_layer:
+      source_search_choices = self.prev_end_layer.get_search_choices()
     if target_search_choices:
       if source_search_choices:
-        assert self.end_flag_source
-        end_flag_transformed_layer = target_search_choices.translate_to_this_search_beam(self.end_flag_source)
+        assert self.prev_end_layer
+        end_flag_transformed_layer = target_search_choices.translate_to_this_search_beam(self.prev_end_layer)
         assert isinstance(end_flag_transformed_layer, LayerBase)
         end_flag = end_flag_transformed_layer.output.placeholder
       else:
         from returnn.tf.util.basic import tile_transposed
         end_flag = tile_transposed(end_flag, axis=0, multiples=target_search_choices.beam_size)
     else:
-      assert not self.end_flag_source or not source_search_choices
+      assert not self.prev_end_layer or not source_search_choices
     return end_flag
 
   @classmethod

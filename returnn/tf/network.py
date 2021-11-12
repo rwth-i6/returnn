@@ -2168,19 +2168,19 @@ class TFNetwork(object):
         return layer.output.batch.get_global_base()
     raise Exception("%s: Cannot get global batch info" % root)
 
-  def set_rec_step_info(self, i, end_flag=None, end_flag_source=None, seq_lens=None):
+  def set_rec_step_info(self, i, prev_end_flag=None, prev_end_layer=None, seq_lens=None):
     """
     Used by _SubnetworkRecCell.
 
     :param tf.Tensor i: scalar, int32, current step (time)
-    :param tf.Tensor|None end_flag: (batch,), bool, says that the current sequence has ended.
+    :param tf.Tensor|None prev_end_flag: (batch,), bool, says that the current sequence has ended.
      This is about the last frame, not the current!
-    :param LayerBase|None end_flag_source:
+    :param LayerBase|None prev_end_layer:
     :param tf.Tensor|None seq_lens: (batch,) int32, seq lens
     """
     from returnn.tf.layers.rec import RecStepInfoLayer
     self.layers[":i"] = RecStepInfoLayer(
-      name=":i", network=self, i=i, end_flag=end_flag, end_flag_source=end_flag_source, seq_lens=seq_lens)
+      name=":i", network=self, i=i, prev_end_flag=prev_end_flag, prev_end_layer=prev_end_layer, seq_lens=seq_lens)
 
   def is_inside_rec_layer(self, inside_loop=True):
     """
