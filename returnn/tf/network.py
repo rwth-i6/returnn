@@ -2173,7 +2173,8 @@ class TFNetwork(object):
     Used by _SubnetworkRecCell.
 
     :param tf.Tensor i: scalar, int32, current step (time)
-    :param tf.Tensor|None end_flag: (batch,), bool, says that the current sequence has ended
+    :param tf.Tensor|None end_flag: (batch,), bool, says that the current sequence has ended.
+     This is about the last frame, not the current!
     :param LayerBase|None end_flag_source:
     :param tf.Tensor|None seq_lens: (batch,) int32, seq lens
     """
