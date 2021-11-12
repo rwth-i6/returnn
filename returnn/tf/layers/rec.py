@@ -1038,6 +1038,7 @@ class _SubnetworkRecCell(object):
     self.prev_layer_templates = {}  # type: typing.Dict[str,_TemplateLayer]
     self._template_construction_exceptions = None  # type: typing.Optional[typing.List[str]]
     self._construct_template(parent_get_layer=parent_get_layer)
+    self._last_frames = {}  # type: typing.Dict[str,Data]
     self._initial_outputs = None  # type: typing.Optional[typing.Dict[str,tf.Tensor]]
     self._initial_extra_outputs = None  # type: typing.Optional[typing.Dict[str,typing.Dict[str,typing.Union[tf.Tensor,typing.Tuple[tf.Tensor,...]]]]]  # nopep8
 
@@ -1254,6 +1255,8 @@ class _SubnetworkRecCell(object):
         layer_.kwargs["output"] = layer_class.fixup_out_data(layer_.kwargs["output"], network=self.net)
         layer_.kwargs["output"].sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
         layer_.init(layer_class=layer_class, **layer_.kwargs)
+        if layer_.need_last:
+          self.prev_layers_needed.add(name)
         if layer_ in ConstructCtx.partially_finished:
           if lself.got_uninitialized_deps_count == 0:  # in this case, we safely know that it is finished
             ConstructCtx.partially_finished.remove(layer_)
@@ -1739,6 +1742,14 @@ class _SubnetworkRecCell(object):
          Add 'is_output_layer':True to the layer options." % (self.parent_rec_layer, layer_name))
     return None
 
+  def get_layer_last_frame(self, layer_name):
+    """
+    :param str layer_name:
+    :return: the output from the last loop frame. compatible to layer templates. masking correctly taken into account
+    :rtype: Data
+    """
+    return self._last_frames[layer_name]
+
   def get_sub_networks(self):
     """
     :rtype: list[returnn.tf.network.TFNetwork]
@@ -1888,6 +1899,44 @@ class _SubnetworkRecCell(object):
         rec_vars_outputs = self.net.layers[layer_name].post_process_final_rec_vars_outputs(
           rec_vars_outputs, seq_len=seq_len)
     return rec_vars_outputs
+
+  def _assign_last_frames_from_loop_vars(self, loop_vars):
+    """
+    :param (list[tf.Tensor],list[tf.Tensor]) loop_vars: loop_vars like in self.get_next_loop_vars()
+    """
+    final_outputs_flat, final_extra_flat = loop_vars
+    assert len(final_outputs_flat) == len(self._initial_outputs)
+    assert len(final_extra_flat) == len(self._initial_extra_outputs)
+    for k, v in zip(sorted(self._initial_outputs), final_outputs_flat):
+      layer_template = self.layer_data_templates[k]
+      if not layer_template.need_last:
+        continue
+      out = layer_template.output.copy_template()
+      out.placeholder = v
+      assert k not in self._last_frames
+      self._last_frames[k] = out
+
+  def _assign_last_frames_from_optimized(self):
+    for k in self.prev_layers_needed:
+      if k in self.output_layers_moved_out:
+        layer = self.output_layers_net.layers[k]
+      elif k in self.input_layers_moved_out:
+        layer = self.input_layers_net.layers[k]
+      else:
+        continue
+      assert isinstance(layer, LayerBase)
+      if not layer.need_last:
+        continue
+      with tf.name_scope(layer.tf_scope_name):
+        indices = layer.output.get_sequence_lengths() - 1  # [B]
+        out = layer.output.copy_as_batch_major().copy_with_time_dim_axis(1)  # [B,T,...]
+        v = tf.gather(out.placeholder, indices=tf.maximum(indices, 0), batch_dims=1, axis=1)  # [B,...]
+        v = tf.where(tf.less(indices, 0), self._get_init_output(k), v)
+        layer_template = self.layer_data_templates[k]
+        out = layer_template.output.copy_template()
+        out.placeholder = v
+        assert k not in self._last_frames
+        self._last_frames[k] = out
 
   def get_parent_deps(self):
     """
@@ -2580,16 +2629,24 @@ class _SubnetworkRecCell(object):
           transformed_cache[layer] = transformed_layer
           return transformed_layer
 
-        outputs_flat = [
-          maybe_transform(self.net.layers[k]).output.copy_compatible_to(
-            self.layer_data_templates[k].output).placeholder
-          for k in sorted(self._initial_outputs)]
-        extra_flat = []
-        for k, v in sorted(self._initial_extra_outputs.items()):
-          layer = maybe_transform(self.net.layers[k])
-          assert set(layer.rec_vars_outputs.keys()) == set(v.keys())
-          extra_flat.append(sorted_values_from_dict(layer.rec_vars_outputs))
-        net_vars = (outputs_flat, extra_flat)
+        # Handle need_last.
+        for k in sorted(self._initial_outputs):
+          layer = self.net.layers[k]
+          if not layer.need_last:
+            continue
+          # We need to make sure that the output is correct also for the seqs which are already ended.
+          prev_layer = self.net.layers["prev:" + k]
+          # Last frame corresponds to the frame seq_len - 1.
+          # With include_eos=False, when "end" layer is True <=> we are behind the last frame.
+          # With include_eos=True, when "prev:end" layer is True <=> we are behind the last frame.
+          rel_end_layer = self.net.layers["prev:end"] if rec_layer.include_eos else self.net.layers["end"]
+          choices = layer.get_search_choices()
+          if choices:
+            prev_layer, rel_end_layer = choices.translate_to_this_search_beam([prev_layer, rel_end_layer])
+          from returnn.tf.util.basic import where_bc
+          layer.output.placeholder = where_bc(
+            condition=rel_end_layer.output.copy_compatible_to(layer.output).placeholder,
+            x=prev_layer.output.placeholder, y=layer.output.placeholder)
 
         if seq_len_info is not None:
           end_layer = maybe_transform(self.net.layers["end"])
@@ -2611,6 +2668,17 @@ class _SubnetworkRecCell(object):
               constant_with_shape(0, shape=tf.shape(end_flag)),
               constant_with_shape(1, shape=tf.shape(end_flag)))  # (batch * beam,)
             seq_len_info = (end_flag, dyn_seq_len)
+
+        outputs_flat = [
+          maybe_transform(self.net.layers[k]).output.copy_compatible_to(
+            self.layer_data_templates[k].output).placeholder
+          for k in sorted(self._initial_outputs)]
+        extra_flat = []
+        for k, v in sorted(self._initial_extra_outputs.items()):
+          layer = maybe_transform(self.net.layers[k])
+          assert set(layer.rec_vars_outputs.keys()) == set(v.keys())
+          extra_flat.append(sorted_values_from_dict(layer.rec_vars_outputs))
+        net_vars = (outputs_flat, extra_flat)
 
         assert len(acc_tas) == len(outputs_to_accumulate)
         acc_tas = [
@@ -2717,6 +2785,7 @@ class _SubnetworkRecCell(object):
       self.final_acc_tas_dict = {
         out.name: out.get_final_tensor_array(final_acc_ta)
         for (final_acc_ta, out) in zip(final_acc_tas, outputs_to_accumulate)}  # type: typing.Dict[str,typing.Optional[tf.TensorArray]]  # nopep8
+      self._assign_last_frames_from_loop_vars(final_net_vars)
     else:  # no layers inside loop, all optimized out
       seq_len = None
       final_net_vars = None
@@ -2726,6 +2795,7 @@ class _SubnetworkRecCell(object):
     self._construct_output_layers_moved_out(
       loop_accumulated=self.final_acc_tas_dict, seq_len=seq_len,
       extra_output_layers=extra_output_layers, final_net_vars=final_net_vars)
+    self._assign_last_frames_from_optimized()
 
     if layer_names_with_losses:
       from returnn.tf.network import LossHolder
@@ -3644,6 +3714,7 @@ class _TemplateLayer(LayerBase):
     self.kwargs.setdefault("name", self.name)
     self.kwargs["output"] = output
     self._is_output_layer = kwargs.get("is_output_layer", None)
+    self.need_last = kwargs.get("need_last", False)
     if self._has_search_choices():
       self.search_choices = SearchChoices(owner=self, beam_size=self._get_search_choices_beam_size())
     self.collocate_with = kwargs.get("collocate_with", None) or []
@@ -4052,6 +4123,50 @@ class RecStepInfoLayer(LayerBase):
     return Data(
       name="i_unrolled", shape=(None,), time_dim_axis=0, batch_dim_axis=None, dtype="int32", sparse=False,
       size_placeholder={0: seq_lens})
+
+
+class RecLastOutputLayer(LayerBase):
+  """
+  Gets the last output from some sub layer inside a :class:`RecLayer`.
+  You should explicitly set ``need_last`` on the specific layer such that this information is available.
+  """
+  layer_class = "rec_last_output"
+
+  def __init__(self, rec_layer, sub_layer_name, **kwargs):
+    """
+    :param RecLayer rec_layer:
+    :param str sub_layer_name:
+    """
+    super(RecLastOutputLayer, self).__init__(**kwargs)
+    assert isinstance(rec_layer, RecLayer)
+    cell = rec_layer.cell
+    assert isinstance(cell, _SubnetworkRecCell)
+    out = cell.get_layer_last_frame(sub_layer_name)
+    assert out.dim_tags == self.output.dim_tags
+    self.output.placeholder = out.placeholder
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param returnn.tf.network.TFNetwork network:
+    :param get_layer:
+    """
+    d.setdefault("from", ())
+    super(RecLastOutputLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["rec_layer"] = get_layer(d["rec_layer"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, rec_layer, sub_layer_name, **kwargs):
+    """
+    :param RecLayer rec_layer:
+    :param str sub_layer_name:
+    :rtype: Data
+    """
+    assert isinstance(rec_layer, RecLayer)
+    cell = rec_layer.cell
+    assert isinstance(cell, _SubnetworkRecCell)
+    return cell.layer_data_templates[sub_layer_name].output
 
 
 class RnnCellLayer(_ConcatInputLayer):

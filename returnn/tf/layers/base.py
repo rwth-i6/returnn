@@ -68,6 +68,7 @@ class LayerBase(object):
                updater_opts=None,
                initial_output=None,
                state=None,
+               need_last=False,
                rec_previous_layer=None,
                collocate_with=None,
                trainable=None,
@@ -112,13 +113,18 @@ class LayerBase(object):
     :param float|None spatial_smoothing: see :func:`returnn.tf.util.basic.spatial_smoothing_energy`
     :param float|None param_variational_noise: adds variational noise to the params during training
     :param dict[str]|None updater_opts: accepts similar opts as TFUpdater, e.g. "optimizer", "learning_rate", ...
-    :param bool|None is_output_layer:
+    :param bool|None is_output_layer: triggers the construction of this layer in the root net.
+      Inside a :class:`RecLayer`, it triggers the explicit accumulation of all frames.
+      Also see the ``need_last`` option.
     :param bool only_on_eval: if True, this layer will only be calculated in eval
     :param bool only_on_search: if True, this layer will only be calculated when search is done
     :param int|None copy_output_loss_from_source_idx: if set, will copy output_loss from this source
     :param bool|dict batch_norm: see self.batch_norm()
     :param str|float initial_output: used for recurrent layer, see self.get_rec_initial_output()
     :param state: explicitly defines the rec state. initial_state would define the initial state (in the first frame)
+    :param bool need_last: Inside :class:`RecLayer`, make sure that we can access the last frame.
+      Similar to ``is_output_layer, but this is specifically about the last frame,
+      i.e. it does not trigger accumulation.
     :param LayerBase|None rec_previous_layer: via the recurrent layer, layer (template) which represents the past of us.
       You would not explicitly set this in a config. This is automatically, internally, via :class:`RecLayer`.
     :param list[str]|None collocate_with: in the rec layer, collocate with the specified other layers
@@ -166,6 +172,7 @@ class LayerBase(object):
     self.search_choices = None  # type: typing.Optional[SearchChoices]
     self._src_common_search_choices = _src_common_search_choices
     self._initial_output = initial_output
+    self.need_last = need_last
     self._rec_previous_layer = rec_previous_layer
     self.collocate_with = collocate_with or []
     self.post_init_hooks = []  # list of functions
