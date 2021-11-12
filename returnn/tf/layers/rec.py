@@ -1682,6 +1682,15 @@ class _SubnetworkRecCell(object):
                     layer_choices.beam_size == layer.output.beam.beam_size == layer_template.output.beam.beam_size), (
               "Layer %r has buggy search choices resolution." % layer,
               self.net.debug_search_choices(layer) or "see search choices debug output")
+        if name == "end":
+          # Special logic for the end layer, to always logical_or to the prev:end layer.
+          assert layer.output.shape == (), "%s: 'end' layer %r unexpected shape" % (self.parent_rec_layer, layer)
+          prev_end_layer = self.net.layers["prev:end"]
+          choices = layer.get_search_choices()
+          if choices:
+            prev_end_layer = choices.translate_to_this_search_beam(prev_end_layer)
+          with tf.name_scope("end_flag"):
+            layer.output.placeholder = tf.logical_or(prev_end_layer.output.placeholder, layer.output.placeholder)
         return layer
       except Exception as exc:
         self._handle_construct_exception(description="in-loop construction of layer %r" % name, exception=exc)
@@ -2587,41 +2596,25 @@ class _SubnetworkRecCell(object):
         net_vars = (outputs_flat, extra_flat)
 
         if seq_len_info is not None:
-          assert self.net.layers["end"].output.shape == (), "end layer %r unexpected shape" % self.net.layers["end"]
           end_layer = maybe_transform(self.net.layers["end"])
+          assert end_layer.output.shape == (), "end layer %r unexpected shape" % end_layer
+          end_flag = end_layer.output.placeholder  # we handled the logical_or(prev_end...) in construct get_layer
+          end_flag.set_shape([None])
           choices = end_layer.get_search_choices()
           if choices:
             from .basic import SelectSearchSourcesLayer
-            prev_end_layer_cur_choice = choices.translate_to_this_search_beam(prev_end_layer)
-            assert isinstance(prev_end_layer_cur_choice, SelectSearchSourcesLayer), (
+            prev_end_layer = choices.translate_to_this_search_beam(prev_end_layer)
+            assert isinstance(prev_end_layer, SelectSearchSourcesLayer), (
               "unexpected search choices: cur end %r, prev end %r" % (choices, prev_end_layer.get_search_choices()))
-            assert prev_end_layer_cur_choice.search_choices_seq, (
-              "unexpected search choices: cur end %r (via %r), prev end %r (via %r)" % (
-                choices, end_layer, prev_end_layer.get_search_choices(), prev_end_layer))
-            assert prev_end_layer_cur_choice.output.shape == (), (
-              "end layer %r unexpected shape" % prev_end_layer_cur_choice)
-            with tf.name_scope("end_flag"):
-              prev_end_flag = prev_end_layer_cur_choice.output.placeholder
-              end_flag = tf.logical_or(prev_end_flag, self.net.layers["end"].output.placeholder)  # (batch * beam,)
-              end_flag.set_shape([None])
+            prev_end_flag = prev_end_layer.output.placeholder
             with tf.name_scope("dyn_seq_len"):
-              prev_dyn_seq_len = prev_end_layer_cur_choice.transform_func(prev_dyn_seq_len)
-              dyn_seq_len = prev_dyn_seq_len + tf.where(
-                prev_end_flag if rec_layer.include_eos else end_flag,
-                constant_with_shape(0, shape=tf.shape(end_flag)),
-                constant_with_shape(1, shape=tf.shape(end_flag)))  # (batch * beam,)
-              seq_len_info = (end_flag, dyn_seq_len)
-          else:
-            assert self.net.layers["end"].output.shape == (), "end layer %r unexpected shape" % self.net.layers["end"]
-            with tf.name_scope("end_flag"):
-              end_flag = tf.logical_or(prev_end_flag, self.net.layers["end"].output.placeholder)
-              end_flag.set_shape([None])
-            with tf.name_scope("dyn_seq_len"):
-              dyn_seq_len = prev_dyn_seq_len + tf.where(
-                prev_end_flag if rec_layer.include_eos else end_flag,
-                constant_with_shape(0, shape=tf.shape(end_flag)),
-                constant_with_shape(1, shape=tf.shape(end_flag)))  # (batch * beam,)
-              seq_len_info = (end_flag, dyn_seq_len)
+              prev_dyn_seq_len = prev_end_layer.transform_func(prev_dyn_seq_len)
+          with tf.name_scope("dyn_seq_len"):
+            dyn_seq_len = prev_dyn_seq_len + tf.where(
+              prev_end_flag if rec_layer.include_eos else end_flag,
+              constant_with_shape(0, shape=tf.shape(end_flag)),
+              constant_with_shape(1, shape=tf.shape(end_flag)))  # (batch * beam,)
+            seq_len_info = (end_flag, dyn_seq_len)
 
         assert len(acc_tas) == len(outputs_to_accumulate)
         acc_tas = [
