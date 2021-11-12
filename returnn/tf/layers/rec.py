@@ -3976,7 +3976,7 @@ class RecStepInfoLayer(LayerBase):
     if seq_lens is None:
       assert end_flag_source
 
-  def get_end_flag(self, target_search_choices):
+  def get_prev_end_flag(self, target_search_choices):
     """
     :param SearchChoices|None target_search_choices:
     :return: (batch,) of type bool. batch might include beam size.
@@ -4888,7 +4888,7 @@ class ChoiceLayer(BaseChoiceLayer):
         if self.length_normalization:
           assert self.network.have_rec_step_info()
           t = self.network.get_rec_step_index()  # scalar
-          end_flags_flat = self.network.get_rec_step_info().get_end_flag(
+          end_flags_flat = self.network.get_rec_step_info().get_prev_end_flag(
             target_search_choices=base_search_choices)  # (batch * beam_in,)
           with tf.name_scope("length_normalization"):
             end_flags = tf.reshape(end_flags_flat, [net_batch_dim, beam_in])  # (batch, beam_in)
@@ -4906,7 +4906,7 @@ class ChoiceLayer(BaseChoiceLayer):
         if self.network.have_rec_step_info():
           scores_in = filter_ended_scores(
             scores_in,
-            end_flags=self.network.get_rec_step_info().get_end_flag(target_search_choices=base_search_choices),
+            end_flags=self.network.get_rec_step_info().get_prev_end_flag(target_search_choices=base_search_choices),
             dim=scores_in_dim, batch_dim=net_batch_dim * scores_beam_in)  # (batch * beam_in, dim)
         scores_in = tf.reshape(scores_in, [net_batch_dim, scores_beam_in, scores_in_dim])  # (batch, beam_in, dim)
         with tf.control_dependencies([
@@ -4927,7 +4927,7 @@ class ChoiceLayer(BaseChoiceLayer):
           with tf.name_scope("custom_score_combine"):
             if self.network.have_rec_step_info():
               t = self.network.get_rec_step_index()  # scalar
-              end_flags_flat = self.network.get_rec_step_info().get_end_flag(
+              end_flags_flat = self.network.get_rec_step_info().get_prev_end_flag(
                 target_search_choices=base_search_choices)  # (batch * beam_in,)
               end_flags = tf.reshape(end_flags_flat, [net_batch_dim, beam_size])  # (batch, beam_in)
               end_flags = end_flags[:, :base_beam_in]  # see scores_in
@@ -5096,7 +5096,7 @@ class ChoiceLayer(BaseChoiceLayer):
           scores_in_dim = tf.shape(self.sources[0].output.placeholder)[self.sources[0].output.feature_dim_axis]
         scores_in = filter_ended_scores(
           scores_in,
-          end_flags=self.network.get_rec_step_info().get_end_flag(target_search_choices=base_search_choices),
+          end_flags=self.network.get_rec_step_info().get_prev_end_flag(target_search_choices=base_search_choices),
           dim=scores_in_dim, batch_dim=tf.shape(scores_in)[0])  # (batch * beam_in, dim)
         # We also assume that the ground truth output are 0 when the seq ended.
       scores_in_ = batch_gather(scores_in, self.output.placeholder)  # (batch*beam_in,)
@@ -6920,7 +6920,7 @@ class EditDistanceTableLayer(LayerBase):
     self._last_row = self._rec_previous_layer.rec_vars_outputs["state"]
     rec_step_info = self.network.get_rec_step_info()
     batch_dim = self.get_batch_dim()
-    mask_flag = rec_step_info.get_end_flag(target_search_choices=self.get_search_choices())
+    mask_flag = rec_step_info.get_prev_end_flag(target_search_choices=self.get_search_choices())
     source = source_data.placeholder
     if blank_idx is None:
       from returnn.tf.util.basic import expand_dims_unbroadcast
@@ -6946,7 +6946,7 @@ class EditDistanceTableLayer(LayerBase):
           "src_beams", choice.src_beams if choice.src_beams is not None else "None"]
       print_out += [
         "a_n", rec_step_info.step,
-        "a_ended", rec_step_info.get_end_flag(target_search_choices=self.get_search_choices()),
+        "a_ended", rec_step_info.get_prev_end_flag(target_search_choices=self.get_search_choices()),
         "a", vocab_idx_repr(source_data.placeholder, target_data),
         "b", vocab_idx_repr(target_data.placeholder, target_data),
         "b_len", target_data.get_sequence_lengths(),
@@ -7077,7 +7077,7 @@ class OptimalCompletionsLayer(LayerBase):
     reduce_out = next_edit_distance_reduce(
       last_row=last_row,
       a=successors, a_n=src_len,
-      a_ended=rec_step_info.get_end_flag(target_search_choices=self.get_search_choices()),
+      a_ended=rec_step_info.get_prev_end_flag(target_search_choices=self.get_search_choices()),
       b=target_data.placeholder, b_len=target_data.get_sequence_lengths(),
       optimal_completion=True, a_blank_idx=blank_idx)
     reduce_out.set_shape((None, self.output.dim))
@@ -7093,7 +7093,7 @@ class OptimalCompletionsLayer(LayerBase):
       top_values = -top_values
       print_out += [
         "a_n", rec_step_info.step,
-        "a_ended", rec_step_info.get_end_flag(target_search_choices=self.get_search_choices()),
+        "a_ended", rec_step_info.get_prev_end_flag(target_search_choices=self.get_search_choices()),
         "a best", vocab_idx_repr(top_indices, target_data), top_values,
         "b", vocab_idx_repr(target_data.placeholder, target_data),
         "b_len", target_data.get_sequence_lengths(),
