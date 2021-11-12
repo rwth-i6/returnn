@@ -4608,15 +4608,22 @@ class RecUnstackLayer(LayerBase):
   (See get_input_moved_out for some internal handling.)
 
   Effectively, this layer is very similar to :class:`CopyLayer`,
-  with the only special behavior that it assigns the loop dimension of RecLayer.
+  with the only special behavior that it checks (or even assigns) the loop dimension of RecLayer.
   """
   layer_class = "rec_unstack"
 
-  def __init__(self, axis, **kwargs):
+  def __init__(self, axis=None, declare_rec_time=False, **kwargs):
     """
-    :param str|DimensionTag axis:
+    Due to automatic optimization, not much happens here.
+    The real logic happens in :func:`get_out_data_from_opts`.
+
+    Note that it is allowed to leave both `axis` and `declare_rec_time` unset,
+    in case you assign `axis` to the rec layer, and the source here has the same axis (dim tag).
+
+    :param str|DimensionTag|None axis:
+    :param bool declare_rec_time:
     """
-    axis  # noqa  # unused here, used in get_out_data_from_opts
+    axis, declare_rec_time  # noqa  # unused here, used in get_out_data_from_opts
     super(RecUnstackLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1
     src = self.sources[0].output
@@ -4626,22 +4633,31 @@ class RecUnstackLayer(LayerBase):
     self.output.placeholder = src.placeholder
 
   @classmethod
-  def get_out_data_from_opts(cls, name, axis, sources, network, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, network, axis=None, declare_rec_time=False, **kwargs):
     """
     :param str name:
-    :param str|DimensionTag axis:
     :param list[LayerBase] sources:
     :param returnn.tf.network.TFNetwork network:
+    :param str|DimensionTag|None axis:
+    :param bool declare_rec_time:
     :rtype: Data
     """
     assert sources
     out = sources[0].output.copy_template(name="%s_output" % name)
+    if not axis:
+      axis = network.get_inside_rec_time_dim(inside_loop=False)
+      assert axis, "%s %r: expected to be inside rec layer" % (cls.__name__, name)
     out_dim = out.get_dim_tag_from_description(axis)
     rec_time_dim = network.get_inside_rec_time_dim()
     if rec_time_dim:
       if rec_time_dim.is_dim_known():  # defined
-        assert out_dim == rec_time_dim
+        assert out_dim == rec_time_dim, "%s %r: rec dim %s does not match input %s dim %s" % (
+          cls.__name__, name, rec_time_dim, sources[0], out_dim)
       else:
+        assert out_dim.is_dim_known()  # it comes from the input, so it should be known
+        assert out_dim != rec_time_dim  # rec_time_dim is unknown, so it cannot be the same
+        assert declare_rec_time, "%s %r: must either set known axis on rec %s or enable declare_rec_time" % (
+          cls.__name__, name, rec_time_dim)
         rec_time_dim.declare_same_as(out_dim)
       out.mark_same_time(out_dim, must_match=True)
       return out.copy_template_excluding_time_dim()
