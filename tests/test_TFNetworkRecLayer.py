@@ -6197,7 +6197,7 @@ def test_OptimalCompletionsLayer():
     # Fake that we are inside a rec layer.
     net.set_rec_step_info(
       i=tf.convert_to_tensor(0, name="i"),
-      end_flag=expand_dims_unbroadcast(tf.convert_to_tensor(False), 0, n_batch),
+      prev_end_flag=expand_dims_unbroadcast(tf.convert_to_tensor(False), 0, n_batch),
       seq_lens=target.get_sequence_lengths())
     kwargs = dict(
       name="opt_completions", network=net, debug=True, target="target",
