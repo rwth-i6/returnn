@@ -2825,6 +2825,52 @@ class _SubnetworkRecCell(object):
 
     return output
 
+  def _get_search_choice_seq(self, search_choices):
+    """
+    :param SearchChoices search_choices:
+    :rtype: list[LayerBase]
+    """
+    layer_choice = search_choices.owner
+    assert not layer_choice.name.startswith("prev:")
+    assert not isinstance(layer_choice, _TemplateLayer)
+
+    # There can be multiple choices in a single rec step. Collect them.
+    # Find next choice layer. Then iterate through its source choice layers through time
+    # and resolve the output over time to be in line with the final output search choices.
+
+    def get_choice_seq(choice_base):
+      """
+      :param LayerBase choice_base:
+      :return: choice_seq, prev_choice
+      :rtype: (list[LayerBase], _TemplateLayer)
+      """
+      choice_seq = [choice_base]
+      choice = choice_base
+      while True:
+        assert choice.network is self.net, "not yet implemented otherwise"
+        assert ("choice_%s" % choice.name) in self.final_acc_tas_dict
+        assert choice.search_choices
+        assert choice.search_choices.src_layer
+        choice = choice.search_choices.src_layer
+        if isinstance(choice, _TemplateLayer):
+          assert choice.is_prev_time_frame
+          return choice_seq, choice
+        choice_seq.append(choice)
+
+    # Get the very latest choice in the rec layer.
+    latest_layer_choice = layer_choice
+    _, latest_layer_choice = get_choice_seq(latest_layer_choice)
+    assert latest_layer_choice.name.startswith("prev:")
+    latest_layer_choice = self.net.layers[latest_layer_choice.name[len("prev:"):]]
+    assert latest_layer_choice.search_choices
+
+    # Get the whole choice sequence, starting from the latest to the first.
+    choice_seq_in_frame, prev_frame_choice = get_choice_seq(latest_layer_choice)
+    assert prev_frame_choice.name == "prev:%s" % latest_layer_choice.name
+    assert layer_choice in choice_seq_in_frame
+    assert choice_seq_in_frame[0] is latest_layer_choice
+    return choice_seq_in_frame
+
   def _opt_search_resolve(self, layer_name, acc_ta, final_net_vars, seq_len, search_choices_cache):
     """
     This assumes that we have frame-wise accumulated outputs of the specific layer (acc_ta).
@@ -2877,37 +2923,12 @@ class _SubnetworkRecCell(object):
       assert layer_choice.is_prev_time_frame
       assert layer_choice.name.startswith("prev:")
       layer_choice = self.net.layers[layer_choice.name[len("prev:"):]]
+      assert layer_choice.search_choices
+      search_choices = layer_choice.search_choices
       is_prev_choice = True
 
-    # There can be multiple choices in a single rec step. Collect them.
-    # Find next choice layer. Then iterate through its source choice layers through time
-    # and resolve the output over time to be in line with the final output search choices.
-
-    def get_choice_seq(choice_base):
-      """
-      :param LayerBase choice_base:
-      :return: choice_seq, prev_choice
-      :rtype: (list[LayerBase], _TemplateLayer)
-      """
-      choice_seq = [choice_base]
-      choice = choice_base
-      while True:
-        assert choice.network is self.net, "not yet implemented otherwise"
-        assert ("choice_%s" % choice.name) in self.final_acc_tas_dict
-        assert choice.search_choices
-        assert choice.search_choices.src_layer
-        choice = choice.search_choices.src_layer
-        if isinstance(choice, _TemplateLayer):
-          assert choice.is_prev_time_frame
-          return choice_seq, choice
-        choice_seq.append(choice)
-
-    # Get the very latest choice in the rec layer.
-    latest_layer_choice = layer_choice
-    _, latest_layer_choice = get_choice_seq(latest_layer_choice)
-    assert latest_layer_choice.name.startswith("prev:")
-    latest_layer_choice = self.net.layers[latest_layer_choice.name[len("prev:"):]]
-    assert latest_layer_choice.search_choices
+    choice_seq_in_frame = self._get_search_choice_seq(search_choices)
+    latest_layer_choice = choice_seq_in_frame[0]
 
     # The max_seq_len might actually be one more, as it includes the EOS, but that does not matter;
     # we just want to create a new acc_ta with the same length.
@@ -2920,11 +2941,6 @@ class _SubnetworkRecCell(object):
     initial_beam_choices = tf.range(0, latest_beam_size)  # (beam_out,)
     initial_beam_choices = expand_dims_unbroadcast(
       initial_beam_choices, axis=0, dim=batch_dim)  # (batch, beam_out)
-
-    # Get the whole choice sequence, starting from the latest to the first.
-    choice_seq_in_frame, prev_frame_choice = get_choice_seq(latest_layer_choice)
-    assert prev_frame_choice.name == "prev:%s" % latest_layer_choice.name
-    assert layer_choice in choice_seq_in_frame
 
     # Translate the beams of seq_lens to correspond to the latest choice
     try:
