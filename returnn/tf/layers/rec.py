@@ -3994,7 +3994,13 @@ class RecStepInfoLayer(LayerBase):
       assert self._seq_lens is not None
       from returnn.tf.util.basic import reuse_name_scope_of_tensor
       with reuse_name_scope_of_tensor(self.step, postfix="/end_flag"):
-        end_flag = tf.greater_equal(self.step, self._seq_lens)
+        rec_layer = self.network.get_rec_parent_layer()
+        assert rec_layer
+        end_flag = tf.greater_equal(
+          # Without include_eos, end_flag=True happens first in frame seq_lens.
+          # With include_eos, end_flag=True happens first in frame seq_lens - 1.
+          self.step,
+          (self._seq_lens - 1) if rec_layer.include_eos else self._seq_lens)
     source_search_choices = None
     if self.end_flag_source:
       source_search_choices = self.end_flag_source.get_search_choices()
