@@ -5403,6 +5403,30 @@ def test_MaskedComputationLayer_UnmaskLayer_in_loop():
         x = y
 
 
+def test_MaskedComputationLayer_beam():
+  with make_scope() as session:
+    dim = 5
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {"data": {"dim": dim}, "classes": {"dim": dim, "sparse": True}}})
+    net = TFNetwork(config=config, search_flag=True, train_flag=False)
+    net.construct_from_dict({
+      "output": {"class": "rec", "from": "data", "unit": {
+        "mask": {
+          "class": "masked_computation", "mask": "prev:output_is_not_0", "from": "base:data",
+          "unit": {"class": "copy", "from": "data"}},
+        "unmask": {"class": "unmask", "from": "mask", "mask": "prev:output_is_not_0"},
+        "output_prob": {"class": "linear", "from": "unmask", "activation": "softmax", "n_out": dim},
+        "output": {
+          "class": "choice", "from": "output_prob", "beam_size": 3, "input_type": "prob", "target": "classes",
+          "initial_output": 0},
+        "output_is_not_0": {
+          "class": "compare", "from": "output", "value": 0, "kind": "not_equal",
+          "initial_output": True},
+      }}
+    })
+
+
 def test_att_train_search_loss_prev_beam():
   beam_size = 1
   num_ner_labels = 13
