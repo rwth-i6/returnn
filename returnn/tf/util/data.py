@@ -3405,14 +3405,14 @@ class Data(object):
 
   def has_dynamic_size(self, axis):
     """
-    :param int axis: counted with batch-dim axis. :func:`is_axis_dynamic` should be True
+    :param int axis: counted with batch-dim axis. implies that you can call :func:`get_dynamic_size`.
     :rtype: bool
     """
-    return bool(self.dim_tags[axis].dyn_size_ext)
+    return self.dim_tags[axis].dyn_size is not None
 
   def get_dynamic_size(self, axis):
     """
-    :param int axis: counted with batch-dim axis. :func:`is_axis_dynamic` should be True
+    :param int axis: counted with batch-dim axis. :func:`get_dynamic_size` should be True.
     :return: shape (B,)
     :rtype: tf.Tensor
     """
