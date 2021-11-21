@@ -6674,12 +6674,7 @@ class SwitchLayer(LayerBase):
     false_data = get_source_template(false_from, source_name="%s_false" % name)
     out = Data.get_common_data([true_data, false_data, condition.output.copy_template()])
     out.dtype = true_data.dtype
-    out.sparse = true_data.sparse
-    if out.feature_dim_axis is not None:
-      out.dim = out.batch_shape[out.feature_dim_axis]
-    else:
-      out.dim = true_data.dim
-    out.vocab = true_data.vocab
+    out.sparse_dim = true_data.sparse_dim
     out.sanity_check()
     return out.copy(name="%s_output" % name)
 
