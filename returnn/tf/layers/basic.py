@@ -4028,22 +4028,30 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         out = out.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=tag)
     if set_sparse is not None:
       assert isinstance(set_sparse, bool)
-      out.sparse = set_sparse
-      if not set_sparse:
-        assert set_sparse_dim is NotSpecified
-        if out.feature_dim_axis is None:
-          out.dim = None
+      if set_sparse:
+        if out.sparse_dim:
+          pass
         else:
-          out.dim = out.batch_shape[out.feature_dim_axis]
-    old_dim = out.dim
+          out_args = out.get_kwargs()
+          out_args["sparse"] = True
+          out_args["dim"] = set_sparse_dim if set_sparse_dim is not NotSpecified else out.dim
+          out_args.pop("feature_dim_axis", None)
+          out = Data(**out_args)
+      else:
+        out.sparse_dim = None
     if set_sparse_dim is not NotSpecified:
+      assert out.sparse
       assert set_sparse_dim is None or isinstance(set_sparse_dim, int)
-      out.dim = set_sparse_dim
+      if out.dim == set_sparse_dim:
+        pass
+      else:
+        out.sparse_dim = DimensionTag(
+          kind=DimensionTag.Types.Feature, dimension=set_sparse_dim, description="%s:set-sparse-dim" % name)
     if increase_sparse_dim:
       assert out.sparse
-      out.dim += increase_sparse_dim
-    if old_dim != out.dim:
-      out.vocab = None
+      out.sparse_dim = DimensionTag(
+        kind=DimensionTag.Types.Feature, dimension=out.sparse_dim.dimension + 1,
+        description="%s:inc-sparse-dim" % name)
     return out
 
 
