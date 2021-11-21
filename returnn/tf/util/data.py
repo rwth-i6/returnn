@@ -40,7 +40,9 @@ class DimensionTag(object):
     Feature = Entity("feature")
 
   def __init__(self, kind=Types.Unspecified, description=None,
-               dimension=None, dyn_size=None, dyn_size_ext=None,
+               dimension=None,
+               vocab=None,
+               dyn_size=None, dyn_size_ext=None,
                undefined=False,
                derived_from_tag=None,
                batch=None, control_flow_ctx=None,
@@ -49,6 +51,7 @@ class DimensionTag(object):
     :param Entity|None kind:
     :param str|None description: the description should be unique
     :param int|None dimension:
+    :param returnn.datasets.util.vocabulary.Vocabulary|None vocab:
     :param tf.Tensor|None dyn_size: e.g. seq_len, (batch,)
     :param Data|None dyn_size_ext: seq_len or extended
     :param bool undefined: When this is specified as `None` by the user via `shape`.
@@ -66,6 +69,7 @@ class DimensionTag(object):
     self.kind = kind
     self.description = description
     self.dimension = dimension
+    self._vocab = vocab
     self.same_as = None  # type: typing.Optional[DimensionTag]
     self._same_as_tb = None  # type: typing.Optional[traceback.StackSummary]  # for debugging
     self.derived_from_tag = derived_from_tag
@@ -621,6 +625,8 @@ class DimensionTag(object):
           other_same_base.batch, other_same_base.control_flow_ctx)
       if (self.dyn_size_ext is None or not self._validate_in_current_graph()) and self_same_as.dyn_size_ext:
         self.dyn_size_ext = self_same_as.get_dyn_size_ext_for_batch_ctx(self.batch, self.control_flow_ctx)
+      if self_same_as._vocab and not other_same_base._vocab:
+        other_same_base._vocab = self_same_as._vocab
     other_same_base._merge_same_for_batch_ctx_dict(self)
     self.same_as = other_same_base
     self._same_as_tb = traceback.extract_stack()
@@ -760,6 +766,20 @@ class DimensionTag(object):
     if self.dyn_size is not None:
       return tf.math.reduce_max(self.dyn_size)
     raise Exception('%s: need placeholder, self.dimension or self.dyn_size for dim value' % self)
+
+  @property
+  def vocab(self):
+    """
+    :rtype: returnn.datasets.util.vocabulary.Vocabulary|None
+    """
+    return self.get_same_base()._vocab
+
+  @vocab.setter
+  def vocab(self, vocab):
+    """
+    :param returnn.datasets.util.vocabulary.Vocabulary|None vocab:
+    """
+    self.get_same_base()._vocab = vocab
 
 
 class BatchInfo:
@@ -1459,6 +1479,7 @@ class Data(object):
                shape=None, dtype=None,
                placeholder=None,
                sparse=None,
+               sparse_dim=NotSpecified,
                dim=NotSpecified,
                size_placeholder=None,
                batch_dim_axis=NotSpecified,
@@ -1478,8 +1499,9 @@ class Data(object):
       e.g. (time,feat)=(None,128)
     :param str dtype: e.g. "float32" or "int64"
     :param tf.Tensor|None placeholder: with added batch-dim
-    :param bool sparse: whether to treat the value as an index. do not confuse with tf.SparseTensor
-    :param None|int dim: feature dimension, shape[-1] if not sparse, otherwise like num_classes
+    :param bool|None sparse: whether to treat the value as an index. do not confuse with tf.SparseTensor
+    :param DimensionTag|int|None|NotSpecified sparse_dim:
+    :param int|None|NotSpecified dim: feature dimension, shape[-1] if not sparse, otherwise like num_classes
     :param int|None|NotSpecified batch_dim_axis: where we add the batch-dim.
       e.g. shape=(time,...), 0 -> (batch,time,...), 1 -> (time,batch,...).
       Default is 0.
@@ -1492,7 +1514,7 @@ class Data(object):
       The size is always a tensor of shape (batch,), i.e. the size can be different for each sequence in a batch.
     :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
     :param bool auto_create_placeholders: This will create a tf.placeholder.
-    :param str|dict[str]|GeneratingDataset.Vocabulary|None vocab:
+    :param str|dict[str]|returnn.datasets.util.vocabulary.Vocabulary|None vocab:
     :param tuple[DimensionTag]|list[DimensionTag]|dict[int,DimensionTag]|None dim_tags:
       If tuple/list, this specifies the whole (batch) shape.
       If dict, explicitly specified dimension tags per axis (axis counted with batch-dim)
@@ -1506,8 +1528,25 @@ class Data(object):
     assert dtype is None or isinstance(dtype, str)
     self.name = name
     if sparse is None:
-      sparse = False
-    self.sparse = sparse
+      sparse = sparse_dim not in (None, NotSpecified)
+    if sparse_dim is NotSpecified:
+      if sparse:
+        assert dim is not NotSpecified, "need dim (num classes) if sparse"
+        assert dim is None or isinstance(dim, int)
+        sparse_dim = DimensionTag(kind=DimensionTag.Types.Feature, dimension=dim, description="%s:sparse-dim" % name)
+      else:
+        sparse_dim = None
+    if isinstance(sparse_dim, int):
+      sparse_dim = DimensionTag(
+        kind=DimensionTag.Types.Feature, dimension=sparse_dim, description="%s:sparse-dim" % name)
+    if sparse_dim is not None:
+      assert isinstance(sparse_dim, DimensionTag)
+      assert sparse
+      if dim is not NotSpecified:
+        assert sparse_dim.dimension == dim
+    else:
+      assert not sparse
+    self.sparse_dim = sparse_dim
     if dtype is None:
       if sparse:
         dtype = "int32"
@@ -1567,13 +1606,14 @@ class Data(object):
     if time_dim_axis is not None:
       assert 0 <= time_dim_axis < self.batch_ndim
     self.time_dim_axis = time_dim_axis  # type: typing.Optional[int]  # counted with batch-dim
-    if dim is NotSpecified:
-      assert not sparse, "need dim (num classes) if sparse"
-      if self.feature_dim_axis is None:
-        dim = None
+    if dim is not NotSpecified:
+      if sparse:
+        assert self.sparse_dim.dimension == dim
       else:
-        dim = self.batch_shape[self.feature_dim_axis]
-    self.dim = dim  # type: typing.Optional[int]
+        if self.feature_dim_axis is None:
+          assert dim is None
+        else:
+          assert self.batch_shape[self.feature_dim_axis] == dim
     if placeholder is None and auto_create_placeholders:
       with tf.name_scope("extern_data/placeholders/%s/" % name):
         placeholder = tf_compat.v1.placeholder(**self.get_placeholder_kwargs(with_batch=True))
@@ -1588,7 +1628,7 @@ class Data(object):
       assert isinstance(vocab, Vocabulary)
       assert self.sparse, "%s should represent indices of %s" % (self, vocab)
       assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
-    self.vocab = vocab  # type: typing.Optional[Vocabulary]
+      self.sparse_dim.vocab = vocab
     # The size_placeholder is for each variable length dimension in shape, i.e. excluding the batch-dim.
     if size_placeholder:
       self.size_placeholder = size_placeholder  # type: typing.Dict[int,tf.Tensor]  # axis w.o. batch -> size (batch,)
@@ -1770,9 +1810,9 @@ class Data(object):
       keys += ["time_dim_axis"]
       if self._feature_dim_axis is not NotSpecified:
         keys += ["feature_dim_axis"]
-    if self.sparse:
+    if self.sparse_dim:
       # Sparse is False by default. And the dim is inferred from the feature dim, or otherwise does not make sense.
-      keys += ["sparse", "dim"]
+      keys += ["sparse_dim"]
     if self.vocab:
       keys += ["vocab"]
     if self.batch is not None:
@@ -1798,8 +1838,7 @@ class Data(object):
     keys = []
     if self.sparse:
       keys.append("dtype")
-      keys.append("sparse")
-      keys.append("dim")
+      keys.append("sparse_dim")
     else:
       if self.dtype != "float32":
         keys.append("dtype")
@@ -2366,13 +2405,7 @@ class Data(object):
     v = self.copy()
     if v.batch and data.batch and v.batch != data.batch:
       v = v.copy_extend_batch(data.batch)
-    v.sparse = data.sparse  # we will later reset it. this is to better count the axes (feature and spatial)
-    if not v.sparse:
-      # We might need to reset the dim, as it would be invalid otherwise. Reset later.
-      if v.feature_dim_axis is not None:
-        v.dim = v.batch_shape[v.feature_dim_axis]
-      else:
-        v.dim = None
+    v.sparse_dim = data.sparse_dim  # we will later reset it. this is to better count the axes (feature and spatial)
     if v.batch_dim_axis is not None and data.batch_dim_axis is None:
       raise ValueError("copy_compatible_to: self %r has batch-dim, but target data %r has not" % (self, data))
     if data.batch_ndim < v.batch_ndim:
@@ -2414,16 +2447,11 @@ class Data(object):
     assert v.batch_dim_axis == data.batch_dim_axis  # there is only at most one batch_dim_axis
     v.time_dim_axis = data.time_dim_axis
     v.feature_dim_axis = data.feature_dim_axis_or_unspecified
-    if v.feature_dim_axis is not None:
-      v.dim = v.batch_shape[v.feature_dim_axis]
-    else:
-      v.dim = None
 
     # Reset sparse
     if self.sparse:
       v.feature_dim_axis = NotSpecified
-      v.sparse = True  # reset
-      v.dim = self.dim  # reset
+      v.sparse_dim = self.sparse_dim  # reset
 
     v.sanity_check()
     return v
@@ -2997,6 +3025,69 @@ class Data(object):
     self._beam = beam
     if self._batch:
       self._batch = self._batch.copy_set_beam(beam=beam)
+
+  @property
+  def dim(self):
+    """
+    :rtype: int|None
+    """
+    if self.sparse_dim:
+      return self.sparse_dim.dimension
+    if self.have_feature_axis():
+      return self.dim_tags[self.feature_dim_axis].dimension
+    return None
+
+  @dim.setter
+  def dim(self, dim):
+    """
+    It is deprecated to explicitly set this.
+    We just have this here to support some legacy code.
+    It does nothing but checks the validity.
+
+    :param int|None dim:
+    """
+    assert dim == self.dim
+
+  @property
+  def sparse(self):
+    """
+    :rtype: bool
+    :return: whether the values represent class indices. see ``sparse_dim``
+    """
+    return bool(self.sparse_dim)
+
+  @sparse.setter
+  def sparse(self, sparse):
+    """
+    It is deprecated to explicitly set this.
+    We just have this here to support some legacy code.
+
+    :param bool sparse:
+    """
+    if self.sparse == sparse:
+      return
+    if not sparse:
+      self.sparse_dim = None
+      return
+    raise Exception("%s: setting sparse=True not supported anymore. set sparse_dim instead" % self)
+
+  @property
+  def vocab(self):
+    """
+    :rtype: returnn.datasets.util.vocabulary.Vocabulary|None
+    """
+    if self.sparse_dim:
+      return self.sparse_dim.vocab
+    if self.have_feature_axis():
+      return self.dim_tags[self.feature_dim_axis].vocab
+    return None
+
+  @vocab.setter
+  def vocab(self, vocab):
+    """
+    :param returnn.datasets.util.vocabulary.Vocabulary|None vocab:
+    """
+    raise Exception("%s: setting vocab not supported anymore. set sparse_dim instead" % self)
 
   def time_dimension(self):
     """
