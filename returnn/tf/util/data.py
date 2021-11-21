@@ -3408,7 +3408,7 @@ class Data(object):
     :param int axis: counted with batch-dim axis. :func:`is_axis_dynamic` should be True
     :rtype: bool
     """
-    return self.dim_tags[axis].dyn_size is not None
+    return bool(self.dim_tags[axis].dyn_size_ext)
 
   def get_dynamic_size(self, axis):
     """
