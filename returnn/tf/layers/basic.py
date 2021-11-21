@@ -1514,14 +1514,7 @@ class ScatterNdLayer(_ConcatInputLayer):
     # We want the same axis from `position`, and all further axes should be added behind that.
     common = position.copy_template()
     common.dtype = input_data.dtype
-    common.vocab = input_data.vocab
-    common.sparse = input_data.sparse
-    if common.sparse:
-      common.dim = input_data.dim
-    elif common.feature_dim_axis is not None:
-      common.dim = common.batch_shape[common.feature_dim_axis]
-    else:
-      common.dim = None
+    common.sparse_dim = input_data.sparse_dim
     common.sanity_check()
     dim_tags, tags_dict = DimensionTag.get_all_dimension_tags(
       [common, input_data], dict(allow_same_feature_dim=True, treat_feature_as_spatial=True))
