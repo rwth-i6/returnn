@@ -4861,10 +4861,7 @@ class ReduceLayer(_ConcatInputLayer):
       x = x.copy_with_batch_dim_axis(enforce_batch_dim_axis)
     axes = cls.get_axes(axes, input_data=x)
     if use_time_mask is None:
-      if x.time_dim_axis in axes:
-        use_time_mask = True
-      else:
-        use_time_mask = False
+      use_time_mask = any(x.has_dynamic_size(a) for a in axes)
     assert isinstance(use_time_mask, bool)
     mode = mode.lower()
     if mode == "avg":  # alias
@@ -4884,10 +4881,8 @@ class ReduceLayer(_ConcatInputLayer):
         for axis in axes:
           if axis == x.batch_dim_axis:
             continue
-          axis_wo_b = x.get_batch_axis_excluding_batch(axis)
-          if axis_wo_b not in x.size_placeholder:
+          if not x.has_dynamic_size(axis):
             continue
-          assert axis == x.time_dim_axis
           mask = x.get_sequence_mask_broadcast(axis=axis)
 
           zeros = tf.zeros((), dtype=x.placeholder.dtype)
