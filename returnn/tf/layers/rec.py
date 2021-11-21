@@ -6993,13 +6993,13 @@ class KenLmStateLayer(_ConcatInputLayer):
     assert (data.sparse and dtype.is_integer) or dtype == tf.string
     data = data.copy(name="%s_output" % name)
     data.dtype = "float32"
-    data.sparse = False
+    data.sparse_dim = None
     if dense_output:
       from returnn.datasets.util.vocabulary import Vocabulary
       vocab = Vocabulary(vocab_file=vocab_file, unknown_label=vocab_unknown_label)
       tag = DimensionTag(
         kind=DimensionTag.Types.Feature, description="%s_ken_lm_vocab" % name,
-        dimension=vocab.num_labels)
+        dimension=vocab.num_labels, vocab=vocab)
       data = data.copy_add_dim_by_tag(tag, axis=-1, unbroadcast=True)
     return data
 
