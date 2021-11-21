@@ -3393,15 +3393,7 @@ class Data(object):
     """
     if axis == self.batch_dim_axis:
       return False
-    if self.placeholder is None:
-      # Run at template construction time.
-      return self.batch_shape[axis] is None
-    axis_wo_batch = self.get_batch_axis_excluding_batch(axis)
-    if axis_wo_batch in self.size_placeholder:
-      return True  # not quite the same as get_dynamic_axes
-    assert isinstance(self.batch_shape[axis], int), (
-      "%s: the requested axis has neither a size_placeholder entry nor a fixed size" % self)
-    return False
+    return self.batch_shape[axis] is None
 
   def has_dynamic_size(self, axis):
     """
