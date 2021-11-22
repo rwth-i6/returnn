@@ -1250,13 +1250,13 @@ class _SubnetworkRecCell(object):
         layer_desc["network"] = self.net
         old_layer_kwargs = layer_.kwargs
         layer_.kwargs = layer_desc.copy()  # set it now already for better debugging
-        if "output" not in layer_desc:
+        if "output" not in layer_.kwargs:
           if old_layer_kwargs and "output" in old_layer_kwargs:
             # First copy old output. Maybe the get_out_data_from_opts raises an exception,
             # and we don't want this to be unset.
             layer_.kwargs["output"] = old_layer_kwargs["output"]
           layer_.kwargs["output"] = layer_class.get_out_data_from_opts(**layer_desc)
-        layer_.kwargs["output"] = layer_class.fixup_out_data(layer_.kwargs["output"], network=self.net)
+        layer_.kwargs["output"] = layer_class.fixup_out_data(**layer_.kwargs)
         layer_.kwargs["output"].sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
         layer_.init(layer_class=layer_class, **layer_.kwargs)
         if layer_.need_last:
@@ -1529,7 +1529,7 @@ class _SubnetworkRecCell(object):
     layer_class.transform_config_dict(
       layer_dict, network=self.net, get_layer=lambda _name: self.layer_data_templates[_name])
     out = layer_class.get_out_data_from_opts(name=layer_name, network=self.net, **layer_dict)
-    out = layer_class.fixup_out_data(output=out, network=self.net)
+    out = layer_class.fixup_out_data(output=out, network=self.net, **layer_dict)
     layer.init(output=out, layer_class=layer_class, **layer_dict)
     self.layer_data_templates[layer_name] = layer
     return layer

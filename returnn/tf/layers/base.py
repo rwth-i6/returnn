@@ -409,7 +409,7 @@ class LayerBase(object):
       output.available_for_inference = False
 
   @classmethod
-  def fixup_out_data(cls, output, network):
+  def fixup_out_data(cls, output, network, **_kwargs):
     """
     This is called after get_out_data_from_opts, to fixup incomplete information.
     E.g. we can patch batch or beam information here

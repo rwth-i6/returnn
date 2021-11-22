@@ -983,7 +983,7 @@ class TFNetwork(object):
         output_template = layer_desc["output"]
         assert isinstance(output_template, Data), "%s %r layer_desc %r ['output'] is not a Data instance" % (
           layer_class.__name__, name, layer_desc)
-        output_template = layer_class.fixup_out_data(output_template, network=self)
+        output_template = layer_class.fixup_out_data(**layer_desc)
         layer_desc["output"] = output_template
         print(
           "layer %s/%r output: %r" % (self.name, name, output_template),
