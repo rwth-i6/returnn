@@ -470,9 +470,14 @@ class DimensionTag(object):
                undefined_matches=False, derived_matches=False):
     """
     Compares self to other for equality.
+
     Note that the default behavior is very restrictive.
     Use functions such as :func:`get_all_dimension_tags` or :func:`get_existing_tag_from_collection`
     to explicitly specify the behavior for the comparison.
+
+    Also note that the definition is slightly ad-hoc for some cases,
+    and might potentially change in the future.
+      https://github.com/rwth-i6/returnn/issues/634
 
     :param DimensionTag other:
     :param bool ignore_feature_dim:
@@ -540,6 +545,7 @@ class DimensionTag(object):
     """
     :param DimensionTag other:
     :rtype: bool
+    :return: :func:`is_equal` with default options
     """
     if not isinstance(other, DimensionTag):
       return False
@@ -553,6 +559,10 @@ class DimensionTag(object):
     return not (self == other)
 
   def __hash__(self):
+    """
+    :rtype: int
+    :return: hash, matching to :func:`__eq__`
+    """
     # This must match the behavior in __eq__, which is is_equal with default options.
     # I.e. different hash implies not equal (but same hash not necessarily equal).
     if self.is_batch_dim():
