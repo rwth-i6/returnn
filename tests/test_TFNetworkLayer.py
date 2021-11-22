@@ -1620,6 +1620,45 @@ def test_SplitDimsLayer_split_feature():
     numpy.testing.assert_almost_equal(out_v, in_v.reshape(out_v.shape))
 
 
+def test_out_shape():
+  # https://github.com/rwth-i6/returnn/issues/706
+  # Note: Using SplitDimsLayer would also be nice to test out_shape. Or any layer which creates a new dim.
+  # However, for that, we need https://github.com/rwth-i6/returnn/issues/597 first.
+  from returnn.tf.util.data import BatchDim, VerifyOutShapeException
+  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
+  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feature", dimension=10)
+  config = Config({
+    "extern_data": {
+      "data": {"dim_tags": [BatchDim, time_dim, feat_dim]}  # [B,T,D]
+    }
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {
+        'class': 'softmax_over_spatial', 'from': 'data',
+        "out_shape": {BatchDim, time_dim, feat_dim}
+      }
+    })
+    out = net.get_default_output_layer().output
+    session.run(out.placeholder, feed_dict=make_feed_dict(net.extern_data))
+  with make_scope():
+    other_feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="other-feature", dimension=10)
+    net = TFNetwork(config=config)
+    # noinspection PyBroadException
+    try:
+      net.construct_from_dict({
+        "output": {
+          'class': 'softmax_over_spatial', 'from': 'data',
+          "out_shape": {BatchDim, time_dim, other_feat_dim}
+        }
+      })
+    except VerifyOutShapeException as exc:
+      print("Got expected exception: %r" % exc)
+    else:
+      raise Exception("Expected an exception but did not get any.")
+
+
 def _check_MergeDimsLayer(session, in_data_opts, in_static_shape, opts, out_data_shape, out_static_shape,
                           in_sizes=None, out_sizes=None):
   """
