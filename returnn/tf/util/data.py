@@ -4401,6 +4401,8 @@ def _auto_create_size_placeholders_on_dim_tags(name, dim_tags):
       continue
     if tag.dimension is not None:
       continue
+    # noinspection PyProtectedMember
+    tag._validate_in_current_graph()
     if tag.dyn_size is not None:
       continue
     axis_wo_b = _get_axis_wo_b(axis, batch_dim_axis=batch_dim_axis)
