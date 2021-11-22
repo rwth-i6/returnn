@@ -54,7 +54,10 @@ class LayerBase(object):
 
   # For compatibility, we have some parameter names (e.g. "L2") which do not conform to PEP8.
   # noinspection PyPep8Naming
-  def __init__(self, name, network, output, n_out=NotSpecified, out_type=None, sources=(),
+  def __init__(self, name, network, output,
+               n_out=NotSpecified, out_type=None,
+               out_shape=None,
+               sources=(),
                target=None, _target_layers=None, loss=None, size_target=None,
                reuse_params=None,
                name_scope=None,
@@ -87,6 +90,8 @@ class LayerBase(object):
     :param Data output: Set a specific output instead of using :func:`get_out_data_from_opts`
     :param NotSpecified|None|int n_out: output dim
     :param dict[str] out_type: kwargs for Data class. more explicit than n_out.
+    :param set[DimensionTag|_ImplicitDim]|tuple|list|None out_shape: verifies the output shape (dim tags).
+      See :func:`Data.verify_out_shape`.
     :param list[LayerBase] sources: via self.transform_config_dict()
     :param str|list[str]|None target: if some loss is set, this is the target data-key,
       i.e. network.extern_data.get_data(target). alternatively, this also can be a layer name.
@@ -164,6 +169,7 @@ class LayerBase(object):
         assert self.output.shape == out_type["shape"]
       if "dim" in out_type:
         assert self.output.dim == out_type["dim"]
+    out_shape  # noqa  # not used here but in fixup_out_data
     self.output_before_activation = None  # type: typing.Optional[OutputWithActivation]
     self.output_loss = None  # type: typing.Optional[tf.Tensor]
     if copy_output_loss_from_source_idx is not None:
@@ -409,7 +415,7 @@ class LayerBase(object):
       output.available_for_inference = False
 
   @classmethod
-  def fixup_out_data(cls, output, network, **_kwargs):
+  def fixup_out_data(cls, output, network, out_shape=None, **_kwargs):
     """
     This is called after get_out_data_from_opts, to fixup incomplete information.
     E.g. we can patch batch or beam information here
@@ -420,6 +426,8 @@ class LayerBase(object):
 
     :param Data output:
     :param returnn.tf.network.TFNetwork network:
+    :param set[DimensionTag|_ImplicitDim]|tuple|list|None out_shape: verifies the output shape (dim tags).
+      See :func:`Data.verify_out_shape`.
     :rtype: Data
     """
     from ..network import ExternData
@@ -447,6 +455,8 @@ class LayerBase(object):
         # Some layers might just copy the input. But the input might have buggy ctx.
         # Just leave the placeholder as-is. Most layers should anyway reset this.
         output.placeholder = x
+    if out_shape is not None:
+      output.verify_out_shape(out_shape)
     return output
 
   @classmethod
