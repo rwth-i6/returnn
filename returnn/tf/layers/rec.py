@@ -1483,7 +1483,7 @@ class _SubnetworkRecCell(object):
         if isinstance(exc_info.exception, NetworkConstructionDependencyLoopException):
           del ConstructCtx.collected_exceptions[key]
       # And keep the remaining ones for potential later reports.
-      self._template_construction_exceptions = list(ConstructCtx.collected_exceptions.values())
+      self._template_construction_exceptions = [s.text for s in ConstructCtx.collected_exceptions.values()]
 
     except Exception:
       print("%r: exception constructing template network (for deps and data shapes)" % self)
