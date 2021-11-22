@@ -324,7 +324,10 @@ class LayerBase(object):
       if sources_data:
         out_type.setdefault("batch_dim_axis", sources_data.batch_dim_axis)
         out_type.setdefault("time_dim_axis", sources_data.time_dim_axis)
-        if not out_type.get("sparse", False) and sources_data.feature_dim_axis_or_unspecified is not NotSpecified:
+        if (
+              not out_type.get("sparse", False) and
+              not out_type.get("sparse_dim", None) and
+              sources_data.feature_dim_axis_or_unspecified is not NotSpecified):
           if sources_data.feature_dim_axis_or_unspecified is not None:
             out_type.setdefault("feature_dim_axis", sources_data.feature_dim_axis_or_unspecified)
           else:  # None
@@ -334,7 +337,7 @@ class LayerBase(object):
         out_type.setdefault("time_dim_axis", None)
     if "shape" not in out_type and "dim_tags" not in out_type:
       if sources_data:
-        if out_type.get("sparse", False):
+        if out_type.get("sparse", False) or out_type.get("sparse_dim", None):
           out_type["dim_tags"] = sources_data.dim_tags_sparse
         else:  # not sparse
           feature_dim_axis = out_type.get("feature_dim_axis", NotSpecified)
