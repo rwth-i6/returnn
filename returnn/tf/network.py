@@ -169,6 +169,8 @@ class ExternData(object):
           tag.dyn_size_ext.batch = batch_info
           tag.batch = batch_info
       data.batch = batch_info
+      # The data might have been completed by the batch info, thus recheck.
+      data.sanity_check()
 
   def check_matched_dataset(self, dataset, used_data_keys=None):
     """
