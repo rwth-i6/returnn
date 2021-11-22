@@ -6295,6 +6295,11 @@ class CombineLayer(LayerBase):
           out_type_.pop("batch_dim_axis", None)
           out_type_.pop("feature_dim_axis", None)
           out_type_.pop("time_dim_axis", None)
+        if "dim" in out_type:
+          if out_type_.pop("sparse_dim", None):
+            out_type_["sparse"] = True
+        if "sparse" in out_type:
+          out_type_.pop("sparse_dim", None)
         out_type_.update(out_type)
       elif callable(out_type):
         def call_out_type_with_eval_locals(**out_type_kwargs):
