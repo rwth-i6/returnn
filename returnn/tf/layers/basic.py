@@ -1400,8 +1400,7 @@ class GatherNdLayer(_ConcatInputLayer):
     if position_data.time_dim_axis is None:
       if input_data.time_dim_axis is not None and input_data.time_dim_axis_excluding_batch >= 1:
         out_type["time_dim_axis"] = len(dim_tags) + input_data.time_dim_axis_excluding_batch - 2
-    out_type["dim"] = input_data.dim
-    out_type["sparse"] = input_data.sparse
+    out_type["sparse_dim"] = input_data.sparse_dim
     out_type["dtype"] = input_data.dtype
     out_type["beam"] = SearchBeam.get_combined_beam(position_data.beam, input_data.beam)
     return Data(**out_type)
