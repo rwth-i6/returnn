@@ -280,7 +280,7 @@ class LayerBase(object):
     return cls._base_get_out_data_from_opts(**kwargs)
 
   @classmethod
-  def _base_get_out_data_from_opts(cls, network, name, out_type=None, n_out=NotSpecified,
+  def _base_get_out_data_from_opts(cls, network, name, out_type=None, n_out=NotSpecified, out_shape=None,
                                    target=None, _target_layers=None, size_target=None,
                                    sources=(), loss=None,
                                    **kwargs):
@@ -291,6 +291,7 @@ class LayerBase(object):
     :param str name:
     :param dict[str]|None|(()->Data) out_type:
     :param int|None|NotSpecified n_out:
+    :param set[DimensionTag|_ImplicitDim]|tuple|list|None out_shape: verifies the output shape (dim tags).
     :param str|list[str]|None target:
     :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
     :param str|None size_target:
@@ -320,7 +321,12 @@ class LayerBase(object):
     if n_out is not NotSpecified:
       assert out_type["dim"] == n_out
     sources_data_list = [src.output for src in sources if src]
-    sources_data = Data.get_common_data(sources_data_list, ignore_feature_dim=True) if sources_data_list else None
+    allow_broadcast_all_sources = NotSpecified
+    if "shape" in out_type or "dim_tags" in out_type or out_shape is not None:
+      allow_broadcast_all_sources = True
+    sources_data = Data.get_common_data(
+      sources_data_list, ignore_feature_dim=True,
+      allow_broadcast_all_sources=allow_broadcast_all_sources) if sources_data_list else None
     if sources_data and not sources_data.sparse and not out_type.get("sparse", False):
       out_type.setdefault("dtype", sources_data.dtype)
     # You are supposed to set self.output.{batch_dim_axis,time_dim_axis} explicitly,
@@ -393,7 +399,8 @@ class LayerBase(object):
     # However, in many cases, this will just be {0: time-lengths} and the same as from the input.
     # We check for this case and preset it by that if possible.
     # If you want to have it different in your layer, just overwrite it.
-    common_source = Data.get_common_data([s.output for s in sources if s], ignore_feature_dim=True)
+    common_source = Data.get_common_data(
+      [s.output for s in sources if s], ignore_feature_dim=True, allow_broadcast_all_sources=True)
     if not output.size_placeholder:
       if network.eval_flag and size_target:
         output.size_placeholder = cls._static_get_target_value(
