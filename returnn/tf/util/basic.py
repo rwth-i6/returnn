@@ -2255,17 +2255,19 @@ def get_common_shape(values, ignore_axes=(), allow_broadcast_all_sources=NotSpec
   Related: :func:`tf.broadcast_dynamic_shape`.
   Also see :func:`unbroadcast_to_common_shape`.
 
-  :param list[tf.Tensor|float|int] values: all must have the same ndim
+  :param list[tf.Tensor|tf.Variable|float|int] values: all must have the same ndim
   :param list[int]|tuple[int] ignore_axes: these axes will be ignored (returned dim will be None)
   :param bool|NotSpecified allow_broadcast_all_sources:
   :return: common shape of all values. broadcasts dims with 1. will use static dims when possible.
     Dim of axes which are in `ignore_axes` will be None.
   :rtype: list[tf.Tensor|int|None]
   """
+  import numpy
   assert len(values) > 0
-  assert all([isinstance(value, (tf.Tensor, float, int)) for value in values])
+  assert all([isinstance(value, (tf.Tensor, tf.Variable, float, int, numpy.number)) for value in values]), (
+    "types %r" % ([type(v) for v in values]))
   # Filter out scalars.
-  values = [value for value in values if isinstance(value, tf.Tensor)]
+  values = [value for value in values if isinstance(value, (tf.Tensor, tf.Variable))]
   assert all([value.shape.ndims is not None for value in values]), "some unknown ndim"
   values = [value for value in values if value.shape.ndims > 0]
   if not values:  # all were scalars?
