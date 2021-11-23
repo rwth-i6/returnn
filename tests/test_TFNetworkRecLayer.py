@@ -3539,6 +3539,8 @@ def test_reclayer_optimize_out_selfatt_left():
 
 def test_reclayer_optimize_out_cum_concat_gen_self_att():
   new_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="cum_concat_new_dim")
+  key_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="key_dim", dimension=5)
+  value_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="value_dim", dimension=7)
   n_key = 5
   n_value = 7
   check_reclayer_optimize_out(
@@ -3549,7 +3551,7 @@ def test_reclayer_optimize_out_cum_concat_gen_self_att():
       # See https://github.com/rwth-i6/returnn/issues/391 for a long discussion.
       # Commented shapes are always for the layers inside the loop (not optimized).
       "qkv": {"class": "linear", "from": "data:source", "activation": None, "n_out": n_key * 2 + n_value},  # [B,2*K+V]
-      "qkv_split": {"class": "split", "from": "qkv", "size_splits": [n_key, n_key, n_value]},
+      "qkv_split": {"class": "split", "from": "qkv", "out_dims": [key_dim, key_dim, value_dim]},
       "q": {"class": "copy", "from": "qkv_split/0"},  # inside [B,K]. optimized out [T,B,K]
       "k": {"class": "copy", "from": "qkv_split/1"},  # inside [B,K]. optimized out [T,B,K]
       "v": {"class": "copy", "from": "qkv_split/2"},  # inside [B,V]. optimized out [T,B,V]
@@ -3560,14 +3562,14 @@ def test_reclayer_optimize_out_cum_concat_gen_self_att():
       "v_accum": {"class": "cum_concat", "out_spatial_dim": new_dim, "from": "v"},  # inside [t,B,V]. opt out [t*,B,K]
       "energy": {
         "class": "dot", "from": ["q", "k_accum"],
-        "red1": "static:-1", "red2": "static:-1",
+        "red1": key_dim, "red2": key_dim,
         "var1": None, "var2": new_dim},  # inside [B,t]. optimized out [T,B,t*]
       "att_weights": {
         "class": "softmax_over_spatial", "from": "energy", "axis": new_dim},  # inside [B,t]. opt out [T,B,t*]
       "att": {
         "class": "dot", "from": ["att_weights", "v_accum"],
         "red1": new_dim, "red2": new_dim,
-        "var1": None, "var2": "static:-1"},  # inside [B,V]. opt out [T,B,V]
+        "var1": None, "var2": value_dim},  # inside [B,V]. opt out [T,B,V]
     })
 
 
