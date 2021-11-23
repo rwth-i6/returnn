@@ -3414,15 +3414,25 @@ def test_rec_subnet_simple_rnn():
     print("rnn_cell also fine.")
 
 
-def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, shared_base_net=None, rtol=1e-4):
+def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, shared_base_net=None, rtol=1e-4,
+                                feat_dim=None, time_dim=None):
   """
   :param dict[str] subnet_layer_dict: opts for the output layer inside the rec-layer subnet
   :param dict[str,dict[str]] other_subnet_layers: other layers for the rec-layer subnet
   :param dict[str,dict[str]] shared_base_net:
   :param float rtol: for the final comparison check
+  :param DimensionTag|None feat_dim:
+  :param DimensionTag|None time_dim:
   """
+  from returnn.tf.util.data import BatchDim
   subnet_layer_dict = subnet_layer_dict.copy()
-  n_in = 13
+  if feat_dim:
+    n_in = feat_dim.dimension
+  else:
+    n_in = 13
+    feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, dimension=n_in, description="input-feature")
+  if not time_dim:
+    time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
   n_out = subnet_layer_dict.get("n_out", 17)
   n_batch = 5
   n_time = 7
@@ -3440,7 +3450,7 @@ def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, sha
     rec_layer_dict["unit"].update(other_subnet_layers)
   config = Config({
     "debug_print_layer_output_template": True,
-    "extern_data": {"data": {"dim": n_in}},
+    "extern_data": {"data": {"dim_tags": [BatchDim, time_dim, feat_dim]}},
   })
   from returnn.tf.layers.rec import _SubnetworkRecCell
   with make_scope() as session:
@@ -3567,6 +3577,7 @@ def test_reclayer_optimize_out_accum_loop_dyn_size():
   # So outside the loop, the accumulated dyn size should be of shape [T,B] or [B,T].
   # To test this, we first generate some random seq lens based on the input data (shape [B,T,D]).
   from returnn.tf.util.basic import py_print
+  from returnn.tf.util.data import BatchDim, DimensionTag
 
   def _eval_seq_lens(source, **_kwargs):
     # Get some random varying seq lens.
@@ -3574,19 +3585,23 @@ def test_reclayer_optimize_out_accum_loop_dyn_size():
     res = py_print(res, ["seq lens", res, "step :i", source(2)])
     return res
 
+  new_time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="T_new")
+  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="F", dimension=13)
   check_reclayer_optimize_out(
+    feat_dim=feat_dim,
     subnet_layer_dict={"class": "linear", "from": "combine", "activation": None, "n_out": 3},
     other_subnet_layers={
       "exp_data": {"class": "activation", "from": "data:source", "activation": "exp"},  # >0
       "sum_exp_data": {"class": "reduce", "mode": "sum", "from": "exp_data", "axis": "F"},  # [B]
       "seq_lens": {
         "class": "eval", "from": ["sum_exp_data", "base:max_sum_exp_data", ":i"],
-        "out_type": {"dtype": "int32"},
+        "out_type": {"dtype": "int32"}, "out_shape": {BatchDim},
         "eval": _eval_seq_lens},  # [B]
-      "range": {"class": "range_from_length", "from": "seq_lens"},  # [T_new]
+      "range": {"class": "range_from_length", "from": "seq_lens", "out_spatial_dim": new_time_dim},  # [T_new]
       "combine": {
         "class": "eval", "from": ["data:source", "range"],
-        "eval": "source(0) + 0.1 * tf.cast(source(1), tf.float32)"},  # [B,T_new,D]
+        "eval": "source(0) + 0.1 * tf.cast(source(1), tf.float32)",
+        "out_shape": {BatchDim, new_time_dim, feat_dim}},  # [B,T_new,D]
     },
     shared_base_net={
       "exp_data": {"class": "activation", "from": "data", "activation": "exp"},  # >0
