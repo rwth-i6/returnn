@@ -4130,7 +4130,10 @@ def test_reclayer_batch_feature_input():
 
 
 def test_reclayer_opt_output_consistent_format():
-  config = Config({"extern_data": {"data": {"dim": 5}}})
+  from returnn.tf.util.data import BatchDim, DimensionTag
+  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
+  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="input-feature", dimension=5)
+  config = Config({"extern_data": {"data": {"dim_tags": [BatchDim, time_dim, feat_dim]}}})
   net_dict = {
     'loop': {
       'class': 'rec',
@@ -4138,7 +4141,9 @@ def test_reclayer_opt_output_consistent_format():
       'max_seq_len': 10,
       'unit': {
         'constant': {'class': 'constant', 'value': 1.0},  # scalar
-        'add': {'class': 'combine', 'from': ['prev:i', 'constant'], 'kind': 'add'},  # [B] via 'i'. [T,B] outside
+        'add': {
+          'class': 'combine', 'from': ['prev:i', 'constant'], 'kind': 'add',
+          "out_shape": {BatchDim}},  # [B] via 'i'. [T,B] outside
         'i': {'class': 'copy', 'from': 'add'},  # [B] with default behavior currently
 
         'constant_0': {'class': 'constant', 'value': 4.9},
@@ -4146,7 +4151,9 @@ def test_reclayer_opt_output_consistent_format():
         'end': {'class': 'copy', 'from': 'greater_equal'},  # [B] via 'i'
 
         'reduce': {'class': 'reduce', 'axis': 'T', 'from': 'base:data:data', 'mode': 'mean'},  # [B,F] both inside/out
-        'mul': {'class': 'combine', 'from': ['add', 'reduce'], 'kind': 'mul'},  # [B,F] inside. [T,B,F] outside
+        'mul': {
+          'class': 'combine', 'from': ['add', 'reduce'], 'kind': 'mul',
+          "out_shape": {BatchDim, feat_dim}},  # [B,F] inside. [T,B,F] outside
         'output': {'class': 'copy', 'from': 'mul'},
       },
     },
