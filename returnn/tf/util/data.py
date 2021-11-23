@@ -182,15 +182,26 @@ class DimensionTag(object):
       return
     if isinstance(self.dimension, int):
       return
-    if self.dyn_size_ext:
-      return
     if not self.batch:
       return
-    # Check if we can find more in
-    same = self.get_for_batch_ctx(self.batch, self.control_flow_ctx, allow_none=True)
-    if self is same or not same or not same.dyn_size_ext:
-      return
-    self.dyn_size_ext = same.dyn_size_ext
+    same_base = self.get_same_base()
+    key = (self.batch, self.control_flow_ctx)
+    if self.dyn_size_ext and key not in same_base._same_for_batch_ctx:
+      same_base._same_for_batch_ctx[key] = self
+    # Check if we can find more
+    if key in same_base._same_for_batch_ctx:
+      same = same_base._same_for_batch_ctx[key]
+      if same is not self:
+        if same.dyn_size_ext and not self.dyn_size_ext:
+          self.dyn_size_ext = same.dyn_size_ext
+        if same.dyn_size_ext and same.dyn_size_ext.placeholder is not None:
+          if self.dyn_size_ext.placeholder is None:
+            self.dyn_size_ext = same.dyn_size_ext
+        if self.dyn_size_ext and not same.dyn_size_ext:
+          same.dyn_size_ext = self.dyn_size_ext
+        if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:
+          if not same.dyn_size_ext or same.dyn_size_ext.placeholder is None:
+            same.dyn_size_ext = self.dyn_size_ext
 
   def get_for_batch_ctx(self, batch, ctx, allow_none=False):
     """
@@ -638,6 +649,7 @@ class DimensionTag(object):
       if self_same_as._vocab and not other_same_base._vocab:
         other_same_base._vocab = self_same_as._vocab
     other_same_base._merge_same_for_batch_ctx_dict(self)
+    other._maybe_update()
     self.same_as = other_same_base
     self._same_as_tb = traceback.extract_stack()
     self._maybe_update()
