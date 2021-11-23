@@ -2154,14 +2154,16 @@ class RangeLayer(LayerBase):
   layer_class = "range"
 
   # noinspection PyUnusedLocal
-  def __init__(self, limit, start=0, delta=1, dtype=None, sparse=False, **kwargs):
+  def __init__(self, limit, start=0, delta=1, dtype=None, sparse=False, out_spatial_dim=None, **kwargs):
     """
     :param int|float limit:
     :param int|float start:
     :param int|float delta:
     :param str|None dtype:
     :param bool sparse:
+    :param DimensionTag|None out_spatial_dim:
     """
+    out_spatial_dim  # noqa  # used in get_out_data_from_opts
     super(RangeLayer, self).__init__(**kwargs)
     self.output.placeholder = tf.range(start=start, limit=limit, delta=delta, dtype=self.output.dtype)
 
@@ -2176,7 +2178,8 @@ class RangeLayer(LayerBase):
     super(RangeLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, limit, start=0, delta=1, dtype=None, sparse=False, **kwargs):
+  def get_out_data_from_opts(cls, name, limit, start=0, delta=1, dtype=None, sparse=False, out_spatial_dim=None,
+                             **kwargs):
     """
     :param str name:
     :param int|float limit:
@@ -2184,6 +2187,7 @@ class RangeLayer(LayerBase):
     :param int|float delta:
     :param str|None dtype:
     :param bool sparse:
+    :param DimensionTag|None out_spatial_dim:
     :rtype: Data
     """
     if dtype is None:
@@ -2192,7 +2196,13 @@ class RangeLayer(LayerBase):
       else:
         dtype = "int32"
     dim = len(range(start, limit, delta))
-    return Data(name="%s_output" % name, shape=(dim,), dim=dim, dtype=dtype, sparse=sparse, batch_dim_axis=None)
+    tag = DimensionTag(kind=DimensionTag.Types.Spatial, dimension=dim, description="%s:range" % name)
+    if out_spatial_dim:
+      tag.declare_same_as(out_spatial_dim)
+    sparse_dim = None
+    if sparse:
+      sparse_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="%s:range-indices" % name)
+    return Data(name="%s_output" % name, dim_tags=[tag], dtype=dtype, sparse_dim=sparse_dim)
 
 
 class RangeInAxisLayer(LayerBase):
