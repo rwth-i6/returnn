@@ -5012,8 +5012,11 @@ class ReduceLayer(_ConcatInputLayer):
         if out_feature_dim_axis and out_feature_dim_axis is not NotSpecified and i < out_feature_dim_axis:
           out_feature_dim_axis -= 1
     sparse_out = mode.lower().startswith("arg")
+    sparse_dim = None
     if sparse_out:
       out_feature_dim_axis = None
+      assert len(axes) == 1
+      sparse_dim = x.dim_tags[axes[0]]
     return Data(
       name="%s_output" % name,
       dim_tags=y_dim_tags,
@@ -5021,7 +5024,7 @@ class ReduceLayer(_ConcatInputLayer):
       time_dim_axis=out_time_dim_axis,
       feature_dim_axis=out_feature_dim_axis,
       dtype="int32" if sparse_out else x.dtype,
-      sparse=sparse_out,
+      sparse_dim=sparse_dim,
       beam=x.beam)
 
 
