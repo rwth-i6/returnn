@@ -212,7 +212,9 @@ class DimensionTag(object):
     """
     if self.batch == batch and self.control_flow_ctx == ctx and self.dyn_size_ext:
       self._validate_in_current_graph()
-      return self
+      self._maybe_update()
+      if self.batch == batch and self.control_flow_ctx == ctx and self.dyn_size_ext:  # check again
+        return self
     if self.is_batch_dim():
       # We ignore the ctx for the batch dim currently.
       if self.batch == batch:
