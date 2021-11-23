@@ -6247,6 +6247,7 @@ def test_OptimalCompletionsLayer():
 
 
 def test_extra_scatter_nd_search_train():
+  from returnn.tf.util.data import BatchDim
   from returnn.tf.layers.rec import _SubnetworkRecCell
   rnd = numpy.random.RandomState(42)
   n_batch, n_enc_time, n_in, n_dec_time, n_out = 2, 11, 5, 7, 6
@@ -6344,14 +6345,17 @@ def test_extra_scatter_nd_search_train():
         source(1)  # call, but ignore
         return source(0)  # only hard att
 
+    t_rel_idxs_dim = DimensionTag(kind=DimensionTag.Types.Spatial, dimension=6, description="t_rel_idxs_dim")
     return {
       "class": "rec", "from": [], "back_prop": backprop,
       "unit": {
         "s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["s"],
                           "n_out": EncKeyTotalDim},
         "t_rel_var": {"class": "variable", "shape": (6, EncKeyTotalDim)},
-        "t_rel_idxs_": {"class": "range", "limit": 6, "sparse": True},
-        "t_rel_idxs": {"class": "combine", "kind": "add", "from": ["prev:t", "t_rel_idxs_"]},
+        "t_rel_idxs_": {"class": "range", "limit": 6, "out_spatial_dim": t_rel_idxs_dim},
+        "prev_t_": {"class": "reinterpret_data", "set_sparse": False, "from": "prev:t"},
+        "t_rel_idxs": {"class": "combine", "kind": "add", "from": ["prev_t_", "t_rel_idxs_"],
+                       "out_shape": {BatchDim, t_rel_idxs_dim}},
         "energy_in": {"class": "combine", "kind": "add",
                       "from": ["base:enc_ctx", "s_transformed", "energy_in_t_rel_var"], "n_out": EncKeyTotalDim},
         "energy_in_t_rel_var": {
