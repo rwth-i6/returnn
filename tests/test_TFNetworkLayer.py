@@ -836,7 +836,9 @@ def test_CombineLayer_different_batch_axis():
       output=Data(name='enc_ctx_output', shape=(None, n_dim), auto_create_placeholders=True))
     l2 = net.add_layer(
       name="weight_feedback", layer_class=InternalLayer,
-      output=Data(name='weight_feedback_output', shape=(None, n_dim), batch_dim_axis=1, auto_create_placeholders=True))
+      output=Data(
+        name='weight_feedback_output', shape=(None, n_dim), batch_dim_axis=1, auto_create_placeholders=True,
+        same_dim_tags_as={"T": l1.output.get_time_dim_tag()}))
     l3 = net.add_layer(
       name="s_transformed", layer_class=InternalLayer,
       output=Data(name='s_transformed_output', shape=(n_dim,), time_dim_axis=None, auto_create_placeholders=True))
@@ -1062,6 +1064,7 @@ def test_CombineLayer_time_broadcast_swapped():
 
 def test_CombineLayer_RangeFromLengthLayer():
   from returnn.tf.util.basic import py_print
+  from returnn.tf.util.data import BatchDim, DimensionTag, ImplicitDynSizeDim
 
   def _eval_seq_lens(source, **_kwargs):
     # Get some random varying seq lens.
@@ -1069,25 +1072,30 @@ def test_CombineLayer_RangeFromLengthLayer():
     res = py_print(res, ["seq lens", res])
     return res
 
+  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="T")
+  new_time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="T_new")
+  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="F", dimension=13)
   net_dict = {
     "data_red1": {
-      "class": "reduce", "from": "data", "axis": "T", "mode": "mean"},  # [B,D]
+      "class": "reduce", "from": "data", "axis": "T", "mode": "mean", "out_shape": {BatchDim, feat_dim}},
     "data_red2": {
-      "class": "reduce", "from": "data_red1", "axis": "F", "mode": "sum"},  # [B]
+      "class": "reduce", "from": "data_red1", "axis": "F", "mode": "sum", "out_shape": {BatchDim}},
     "seq_lens": {
-      "class": "eval", "from": "data_red2",
-      "out_type": {"dtype": "int32"},
-      "eval": _eval_seq_lens},  # [B]
-    "range": {"class": "range_from_length", "from": "seq_lens"},  # [T_new]
+      "class": "eval", "from": "data_red2", "eval": _eval_seq_lens,
+      "out_type": {"dtype": "int32"}, "out_shape": {BatchDim}},
+    "range": {
+      "class": "range_from_length", "from": "seq_lens", "out_spatial_dim": new_time_dim,
+      "out_shape": {new_time_dim, ImplicitDynSizeDim(BatchDim)}},
     "combine": {
       "class": "eval", "from": ["data_red1", "range"],
-      "eval": "source(0) + 0.1 * tf.cast(source(1), tf.float32)"},  # [B,T_new,D]
+      "eval": "source(0) + 0.1 * tf.cast(source(1), tf.float32)",
+      "out_shape": {BatchDim, new_time_dim, feat_dim}},
     "output": {"class": "copy", "from": "combine"},
   }
 
   config = Config({
     "debug_print_layer_output_template": True,
-    "extern_data": {"data": {"dim": 13}},
+    "extern_data": {"data": {"dim_tags": [BatchDim, time_dim, feat_dim]}},
   })
 
   with make_scope() as session:
