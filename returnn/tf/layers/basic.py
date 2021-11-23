@@ -6267,17 +6267,26 @@ class CombineLayer(LayerBase):
     self.output.placeholder = x
 
   @classmethod
-  def get_out_data_from_opts(cls, eval_locals=None, n_out=NotSpecified, out_type=None, sources=(), **kwargs):
+  def get_out_data_from_opts(cls, eval_locals=None, n_out=NotSpecified, sources=(), out_type=None, out_shape=None,
+                             **kwargs):
     """
     :param dict[str]|None eval_locals: locals for eval, will also pass to out_type is out_type is a function
     :param int|None|NotSpecified n_out:
     :param dict[str]|None|(()->Data) out_type:
+    :param set[DimensionTag|_ImplicitDim]|tuple|list|None out_shape: verifies the output shape (dim tags)
     :param list[LayerBase] sources:
     :rtype: Data
     """
     out_type_ = {}
     if sources:
-      out_type_.update(Data.get_common_data([s.output for s in sources]).get_kwargs())
+      allow_broadcast_all_sources = NotSpecified
+      if out_shape is not None:
+        allow_broadcast_all_sources = True
+      elif out_type and isinstance(out_type, dict) and ("shape" in out_type or "dim_tags" in out_type):
+        allow_broadcast_all_sources = True
+      out_type_.update(
+        Data.get_common_data(
+          [s.output for s in sources], allow_broadcast_all_sources=allow_broadcast_all_sources).get_kwargs())
     if n_out is not NotSpecified:
       out_type_["dim"] = n_out
     out_type_["name"] = "%s_output" % kwargs["name"]
@@ -6309,20 +6318,17 @@ class CombineLayer(LayerBase):
     return super(CombineLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type_, sources=sources, **kwargs)
 
   @staticmethod
-  def _op_dense_fn(sources, fn):
+  def _op_dense_fn(sources, fn, output_template):
     """
     :param list[LayerBase] sources:
     :param ((x1,x2) -> y) fn: function to perform on x1 and x2
+    :param Data output_template:
     :rtype: tf.Tensor
     """
-    # Earlier we checked for the same dense dim.
-    # Now, we completely rely on Data.get_common_data and Data.copy_compatible_to.
-    # That should fail if they are not compatible. Otherwise it would add any needed broadcast dimensions.
     # All the dense element-wise functions should be able to deal with broadcasting.
-    common_data = Data.get_common_data([s.output for s in sources])
-    x = sources[0].output.copy_compatible_to(common_data).placeholder
+    x = sources[0].output.copy_compatible_to(output_template).placeholder
     for source in sources[1:]:
-      x2 = source.output.copy_compatible_to(common_data).placeholder
+      x2 = source.output.copy_compatible_to(output_template).placeholder
       x = fn(x, x2)
     return x
 
@@ -6331,28 +6337,28 @@ class CombineLayer(LayerBase):
     :param list[LayerBase] sources:
     :rtype: tf.Tensor
     """
-    return self._op_dense_fn(sources, tf.add)
+    return self._op_dense_fn(sources, tf.add, self.output)
 
   def _op_kind_sub(self, sources):
     """
     :param list[LayerBase] sources:
     :rtype: tf.Tensor
     """
-    return self._op_dense_fn(sources, tf.subtract)
+    return self._op_dense_fn(sources, tf.subtract, self.output)
 
   def _op_kind_mul(self, sources):
     """
     :param list[LayerBase] sources:
     :rtype: tf.Tensor
     """
-    return self._op_dense_fn(sources, tf.multiply)
+    return self._op_dense_fn(sources, tf.multiply, self.output)
 
   def _op_kind_truediv(self, sources):
     """
     :param list[LayerBase] sources:
     :rtype: tf.Tensor
     """
-    return self._op_dense_fn(sources, tf.truediv)
+    return self._op_dense_fn(sources, tf.truediv, self.output)
 
   def _op_kind_average(self, sources):
     """
@@ -6368,14 +6374,14 @@ class CombineLayer(LayerBase):
     :param list[LayerBase] sources:
     :rtype: tf.Tensor
     """
-    return self._op_dense_fn(sources, tf.logical_and)
+    return self._op_dense_fn(sources, tf.logical_and, self.output)
 
   def _op_kind_logical_or(self, sources):
     """
     :param list[LayerBase] sources:
     :rtype: tf.Tensor
     """
-    return self._op_dense_fn(sources, tf.logical_or)
+    return self._op_dense_fn(sources, tf.logical_or, self.output)
 
   def _op_kind_eval(self, sources, eval_str, eval_locals=None):
     """
