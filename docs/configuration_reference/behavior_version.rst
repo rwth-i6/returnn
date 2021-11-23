@@ -22,6 +22,19 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 4 (2021-11-23)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Broadcasting in all inputs simultaneously in layers and other ops
+is not allowed anymore by default.
+In all inputs simultaneously means that there is no input which has all common dimensions.
+
+Layers can explicitly allow this by specifying ``out_shape``.
+In case you stumble upon this, specify ``out_shape`` in the layer.
+
+See :func:`validate_broadcast_all_sources`
+and issue `#691 <https://github.com/rwth-i6/returnn/issues/691>`__.
+
 Behavior version 3 (2021-11-08)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

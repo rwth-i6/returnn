@@ -2223,13 +2223,41 @@ def ctc_greedy_decode(logits, seq_lens, time_major):
   return y
 
 
-def get_common_shape(values, ignore_axes=()):
+def validate_broadcast_all_sources(allow_broadcast_all_sources, inputs, common):
+  """
+  Call this when all inputs to some operation (layer) must be broadcasted.
+  It checks whether broadcasting to all sources should be allowed.
+  E.g. for input [B,T1,D1] + [B,T2,D2], when allowed, it would broadcast to [B,T1,T2,D1,D2].
+  When not allowed, there must be at least one source where no broadcasting will be done.
+  Whether it is allowed, this depends on the behavior version.
+    https://github.com/rwth-i6/returnn/issues/691
+
+  Common usages are for :func:`get_common_shape` or :func:`Data.get_common_data`.
+
+  :param bool|NotSpecified allow_broadcast_all_sources:
+  :param inputs: anything convertible to str, used for reporting
+  :param common: anything convertible to str, used for reporting
+  """
+  msg = (
+    "All inputs %s require broadcasting to %s. " % (inputs, common) +
+    "This must be explicitly allowed, e.g. by specifying out_shape.")
+  if allow_broadcast_all_sources is NotSpecified:
+    from returnn.util import BehaviorVersion
+    BehaviorVersion.require(version=4, condition=False, message=msg)
+    return
+  if allow_broadcast_all_sources:
+    return
+  raise Exception(msg)
+
+
+def get_common_shape(values, ignore_axes=(), allow_broadcast_all_sources=NotSpecified):
   """
   Related: :func:`tf.broadcast_dynamic_shape`.
   Also see :func:`unbroadcast_to_common_shape`.
 
-  :param list[tf.Tensor|float|int] values:
-  :param list[int]|tuple[int] ignore_axes: these axes will be ignored
+  :param list[tf.Tensor|float|int] values: all must have the same ndim
+  :param list[int]|tuple[int] ignore_axes: these axes will be ignored (returned dim will be None)
+  :param bool|NotSpecified allow_broadcast_all_sources:
   :return: common shape of all values. broadcasts dims with 1. will use static dims when possible.
     Dim of axes which are in `ignore_axes` will be None.
   :rtype: list[tf.Tensor|int|None]
@@ -2266,6 +2294,19 @@ def get_common_shape(values, ignore_axes=()):
             assert isinstance(common_shape[axis], int)
             assert common_shape[axis] == static_dim, "non matching dim %r vs %r in axis %i, value %r of values %r" % (
               common_shape[axis], static_dim, axis, value, values)
+    # Check validate_broadcast_all_sources
+    need_broadcast = {value: False for value in values}
+    for axis in range(ndim):
+      if axis in ignore_axes:
+        continue  # does not matter
+      for value in values:
+        static_value_dim = value.shape.dims[axis].value  # type: typing.Optional[int]
+        static_common_dim = common_shape[axis] if isinstance(common_shape[axis], int) else None
+        if static_value_dim == 1 and static_common_dim != 1:
+          need_broadcast[value] = True
+    if all(need_broadcast.values()):
+      validate_broadcast_all_sources(
+        allow_broadcast_all_sources=allow_broadcast_all_sources, inputs=values, common="shape %s" % (common_shape,))
     return common_shape
 
 
@@ -2325,7 +2366,7 @@ def concat_with_opt_broadcast(values, allow_broadcast, axis, name="concat_with_o
     axis += ndim
   assert 0 <= axis < ndim
   with tf.name_scope(name):
-    common_shape = get_common_shape(values, ignore_axes=[axis])
+    common_shape = get_common_shape(values, ignore_axes=[axis], allow_broadcast_all_sources=True)
     # Now check all, or maybe unbroadcast.
     for i in range(len(values)):
       values[i] = unbroadcast_to_common_shape(
@@ -3445,7 +3486,7 @@ def nan_to_num(x, nan_num=0, inf_num=1e30):
     return x
 
 
-def where_bc(condition, x, y, name="where_bc"):
+def where_bc(condition, x, y, allow_broadcast_all_sources=NotSpecified, name="where_bc"):
   """
   This is basically :func:`tf.where` but with additional broadcasting support.
   We explicitly require that the ndims match (or x, y can also be scalars).
@@ -3457,28 +3498,29 @@ def where_bc(condition, x, y, name="where_bc"):
   :param tf.Tensor condition:
   :param tf.Tensor|float|int x:
   :param tf.Tensor|float|int y:
+  :param bool|NotSpecified allow_broadcast_all_sources:
   :param str name:
   :return: basically tf.where(condition, x, y)
   :rtype: tf.Tensor
   """
-  if tf_compat.v2:
-    # where_v2 supports broadcasting. But we might still need to extend dims.
-    # Note that the extend dims is on the opposite side as it would be common (in all other broadcasting ops).
-    # However, this matches the old tf.compat.v1.where behavior.
-    # (Actually the doc of this where_bc says we do not allow this anyway...? We should check where this is used...)
-    condition = tf.convert_to_tensor(condition)
-    x = tf.convert_to_tensor(x)
-    y = tf.convert_to_tensor(y)
-    ndims = max(condition.get_shape().ndims, x.get_shape().ndims, y.get_shape().ndims)
-    if x.get_shape().ndims < ndims:
-      x = expand_multiple_dims(x, [-1] * (ndims - x.get_shape().ndims))
-    if y.get_shape().ndims < ndims:
-      y = expand_multiple_dims(y, [-1] * (ndims - y.get_shape().ndims))
-    if condition.get_shape().ndims < ndims:
-      condition = expand_multiple_dims(condition, [-1] * (ndims - condition.get_shape().ndims))
-    return tf_compat.v2.where(condition=condition, x=x, y=y, name=name)
   with tf.name_scope(name):
-    common_shape = get_common_shape([condition, x, y])
+    common_shape = get_common_shape([condition, x, y], allow_broadcast_all_sources=allow_broadcast_all_sources)
+    if tf_compat.v2:
+      # where_v2 supports broadcasting. But we might still need to extend dims.
+      # Note that the extend dims is on the opposite side as it would be common (in all other broadcasting ops).
+      # However, this matches the old tf.compat.v1.where behavior.
+      # (Actually the doc of this where_bc says we do not allow this anyway...? We should check where this is used...)
+      condition = tf.convert_to_tensor(condition)
+      x = tf.convert_to_tensor(x)
+      y = tf.convert_to_tensor(y)
+      ndims = max(condition.get_shape().ndims, x.get_shape().ndims, y.get_shape().ndims)
+      if x.get_shape().ndims < ndims:
+        x = expand_multiple_dims(x, [-1] * (ndims - x.get_shape().ndims))
+      if y.get_shape().ndims < ndims:
+        y = expand_multiple_dims(y, [-1] * (ndims - y.get_shape().ndims))
+      if condition.get_shape().ndims < ndims:
+        condition = expand_multiple_dims(condition, [-1] * (ndims - condition.get_shape().ndims))
+      return tf_compat.v2.where(condition=condition, x=x, y=y)
     condition = unbroadcast_to_common_shape(condition, common_shape=common_shape)
     x = unbroadcast_to_common_shape(x, common_shape=common_shape)
     y = unbroadcast_to_common_shape(y, common_shape=common_shape)
