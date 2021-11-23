@@ -2275,12 +2275,14 @@ class RangeFromLengthLayer(LayerBase):
   recurrent = True
 
   # noinspection PyUnusedLocal
-  def __init__(self, dtype="int32", sparse=False, **kwargs):
+  def __init__(self, dtype="int32", sparse=False, out_spatial_dim=None, **kwargs):
     """
     :param str axis:
     :param str dtype:
     :param bool sparse:
+    :param DimensionTag|None out_spatial_dim:
     """
+    out_spatial_dim  # noqa  # used in get_out_data_from_opts
     super(RangeFromLengthLayer, self).__init__(**kwargs)
     source = self.sources[0].output
     assert source.placeholder is self.output.dim_tags[0].dyn_size_ext.placeholder
@@ -2288,12 +2290,13 @@ class RangeFromLengthLayer(LayerBase):
     self.output.placeholder = out
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, dtype="int32", sparse=False, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, dtype="int32", sparse=False, out_spatial_dim=None, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param str dtype:
     :param bool sparse:
+    :param DimensionTag|None out_spatial_dim:
     """
     assert len(sources) == 1, "%s layer %r requires single source" % (cls, name)
     source = sources[0].output
@@ -2307,6 +2310,8 @@ class RangeFromLengthLayer(LayerBase):
         dyn_size_ext=source)
       if source.placeholder is not None:
         dim_tag.set_tag_on_size_tensor(source.placeholder)
+    if out_spatial_dim:
+      dim_tag.declare_same_as(out_spatial_dim)
     return Data(name="%s_output" % name, dim_tags=[dim_tag], dtype=dtype, sparse=sparse, dim=None)
 
 
