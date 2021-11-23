@@ -3556,8 +3556,8 @@ def test_reclayer_optimize_out_cum_concat_gen_self_att():
       # cum_concat here. Note that the optimized-out shape is not as you might expect [T,max(t),B,K],
       # but instead using the optimized format, with extended dyn size on the special dim tag,
       # i.e. [t*,B,K], representing [T,t*,B,K].
-      "k_accum": {"class": "cum_concat", "new_dim": new_dim, "from": "k"},  # inside [t,B,K]. opt out [t*,B,K]
-      "v_accum": {"class": "cum_concat", "new_dim": new_dim, "from": "v"},  # inside [t,B,V]. opt out [t*,B,K]
+      "k_accum": {"class": "cum_concat", "out_spatial_dim": new_dim, "from": "k"},  # inside [t,B,K]. opt out [t*,B,K]
+      "v_accum": {"class": "cum_concat", "out_spatial_dim": new_dim, "from": "v"},  # inside [t,B,V]. opt out [t*,B,K]
       "energy": {
         "class": "dot", "from": ["q", "k_accum"],
         "red1": "static:-1", "red2": "static:-1",
@@ -7093,9 +7093,9 @@ def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis, 
   key_axis = 'stag:' + key_dim_tag.description
   if inside_rec_layer:
     d[output + '_key_accum'] = {
-      'class': 'cum_concat', 'from': [output + '_key'], 'new_dim': key_dim_tag}  # [B,T|rec-history,n,F|d_k]
+      'class': 'cum_concat', 'from': [output + '_key'], 'out_spatial_dim': key_dim_tag}  # [B,T|rec-history,n,F|d_k]
     d[output + '_value_accum'] = {
-      'class': 'cum_concat', 'from': [output + '_value'], 'new_dim': key_dim_tag}  # [B,T|rec-history,n,F|d_v]
+      'class': 'cum_concat', 'from': [output + '_value'], 'out_spatial_dim': key_dim_tag}  # [B,T|rec-history,n,F|d_v]
   else:
     d[output + '_key_accum'] = {
       'class': 'reinterpret_data', 'set_dim_tags': {query_axis: key_dim_tag},

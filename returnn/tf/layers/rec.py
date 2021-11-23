@@ -8994,7 +8994,7 @@ class CumConcatLayer(_ConcatInputLayer):
   to the previous accumulated inputs.
   For an input of shape `input_shape`,
   it will output a tensor of shape `[new_dim] + input_shape`.
-  `new_dim` is a special dimension, usually of length `i`,
+  `new_dim` (``out_spatial_dim``) is a special dimension, usually of length `i`,
   where `i` is the current loop frame,
   i.e. the length increases in every loop frame.
   `new_dim` is specified by a separate own dim tag.
@@ -9027,14 +9027,14 @@ class CumConcatLayer(_ConcatInputLayer):
   layer_class = "cum_concat"
   recurrent = True  # order matters
 
-  def __init__(self, new_dim, **kwargs):
+  def __init__(self, out_spatial_dim, **kwargs):
     """
-    :param DimensionTag new_dim:
+    :param DimensionTag out_spatial_dim:
     """
     super(CumConcatLayer, self).__init__(**kwargs)
     rec_layer = self.network.get_rec_parent_layer(inside_loop=False)
     assert rec_layer, "%r must be used inside a RecLayer" % self
-    out_axis = self.output.get_axis_from_description(new_dim)
+    out_axis = self.output.get_axis_from_description(out_spatial_dim)
     new_dim_ = self.output.dim_tags[out_axis]
     assert new_dim_.control_flow_ctx == self.output.control_flow_ctx == self.network.get_control_flow_ctx()
 
@@ -9077,12 +9077,12 @@ class CumConcatLayer(_ConcatInputLayer):
           batch=self.output.batch, control_flow_ctx=self.network.get_control_flow_ctx())
 
   @classmethod
-  def get_out_data_from_opts(cls, name, network, sources, new_dim, **kwargs):
+  def get_out_data_from_opts(cls, name, network, sources, out_spatial_dim, **kwargs):
     """
     :param str name:
     :param returnn.tf.network.TFNetwork network:
     :param list[LayerBase] sources:
-    :param DimensionTag new_dim:
+    :param DimensionTag out_spatial_dim:
     :rtype: Data
     """
     input_data = get_concat_sources_data_template(sources, name="%s_output" % name)
@@ -9091,7 +9091,7 @@ class CumConcatLayer(_ConcatInputLayer):
     assert rec_time_dim
     ctx = network.get_control_flow_ctx()
     assert ctx == input_data.control_flow_ctx
-    new_dim_in_ctx = new_dim.get_for_batch_ctx(batch=input_data.batch, ctx=ctx)
+    new_dim_in_ctx = out_spatial_dim.get_for_batch_ctx(batch=input_data.batch, ctx=ctx)
 
     if not input_data.has_axis(rec_time_dim):  # inside loop
       assert ctx and ctx.is_loop() and ctx.loop_spatial_dim == rec_time_dim
@@ -9110,14 +9110,14 @@ class CumConcatLayer(_ConcatInputLayer):
 
   # noinspection PyMethodOverriding
   @classmethod
-  def get_rec_initial_extra_outputs(cls, network, batch_dim, rec_layer, sources, output, new_dim, **kwargs):
+  def get_rec_initial_extra_outputs(cls, network, batch_dim, rec_layer, sources, output, out_spatial_dim, **kwargs):
     """
     :param returnn.tf.network.TFNetwork network:
     :param tf.Tensor batch_dim:
     :param returnn.tf.layers.rec.RecLayer|LayerBase rec_layer:
     :param list[LayerBase] sources:
     :param Data output:
-    :param DimensionTag new_dim:
+    :param DimensionTag out_spatial_dim:
     :rtype: dict[str,tf.Tensor]
     """
     if network.is_inside_rec_layer():
@@ -9125,7 +9125,7 @@ class CumConcatLayer(_ConcatInputLayer):
       for tag in output.dim_tags:
         if tag.is_batch_dim():
           shape.append(batch_dim)
-        elif tag == new_dim:
+        elif tag == out_spatial_dim:
           shape.append(0)
         elif tag.dimension is not None:
           shape.append(tag.dimension)
