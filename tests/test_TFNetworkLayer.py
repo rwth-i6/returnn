@@ -1955,16 +1955,18 @@ def test_MergeDimsLayer_simple_feat():
 
 def test_MergeDimsLayer_2d_dynamic_merge_axis():
   # https://github.com/rwth-i6/returnn/issues/662
+  from returnn.tf.util.data import BatchDim, DimensionTag, ImplicitDynSizeDim
+  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="T")
+  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="F", dimension=5)
   with make_scope() as session:
-    dim = 5
     config = Config({
       "debug_print_layer_output_template": True,
-      "extern_data": {"data": {"dim": dim}}})
+      "extern_data": {"data": {"dim_tags": [BatchDim, time_dim, feat_dim]}}})
     net = TFNetwork(config=config, train_flag=True)
     net.construct_from_dict({
-      "start0": {"class": "range_in_axis", "from": "data", "axis": "b"},
-      "start1": {"class": "range_in_axis", "from": "data", "axis": "t"},
-      "start": {"class": "combine", "from": ["start0", "start1"], "kind": "add"},
+      "start0": {"class": "range_in_axis", "from": "data", "axis": "b", "out_shape": {BatchDim}},
+      "start1": {"class": "range_in_axis", "from": "data", "axis": "t", "out_shape": {time_dim, ImplicitDynSizeDim(BatchDim)}},
+      "start": {"class": "combine", "from": ["start0", "start1"], "kind": "add", "out_shape": {BatchDim, time_dim}},
       "slices": {"class": "slice_nd", "from": "data", "start": "start", "size": None},  # [B,T[B],slice[B,T],D]
       "output": {"class": "merge_dims", "from": "slices", "axes": ["f", "dyn:-1"]}  # [B,T[B],merge[B,T]]
     })
@@ -1987,7 +1989,7 @@ def test_MergeDimsLayer_2d_dynamic_merge_axis():
     assert isinstance(merged_time, numpy.ndarray) and isinstance(sliced_time, numpy.ndarray)
     assert out.shape == merged_time.shape + (numpy.max(merged_time),)
     assert sliced_time.shape == merged_time.shape
-    assert numpy.all(sliced_time * dim == merged_time)
+    assert numpy.all(sliced_time * feat_dim.dimension == merged_time)
 
 
 def test_FlattenBatchLayer():
