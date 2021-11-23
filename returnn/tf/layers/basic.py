@@ -2930,34 +2930,41 @@ class SplitLayer(_ConcatInputLayer):
   """
   layer_class = "split"
 
-  def __init__(self, axis=None, num_splits=None, size_splits=None, **kwargs):
+  def __init__(self, axis=None, num_splits=None, size_splits=None, out_dims=None, **kwargs):
     """
     :param str|None axis: feature axis by default
     :param int|None num_splits:
     :param list[int]|None size_splits:
+    :param list[DimensionTag]|None out_dims:
     """
-    assert num_splits or size_splits, "%s: provide either num_splits or size_splits" % self
+    assert num_splits or size_splits or out_dims, "%s: provide either num_splits or size_splits or out_dims" % self
     super(SplitLayer, self).__init__(**kwargs)
     self.output = self.input_data
-    self.axis, self.size_splits = self._get_axis_size_splits_num_splits(
-      input_data=self.input_data, axis=axis, num_splits=num_splits, size_splits=size_splits,
-      err_prefix=self)
-    self.splits = tf.split(self.output.placeholder, self.size_splits, axis=self.axis)
-    assert len(self.splits) == len(self.size_splits)
+    self.axis, self.out_dims = self._get_axis_size_splits_num_splits(
+      input_data=self.input_data, axis=axis,
+      num_splits=num_splits, size_splits=size_splits, out_dims=out_dims,
+      err_prefix=self, name=self.name)
+    self.splits = tf.split(self.output.placeholder, [d.dimension for d in self.out_dims], axis=self.axis)
+    assert len(self.splits) == len(self.out_dims)
     self._sub_layers = {"%i" % i: self._make_split_layer(i) for i in range(len(self.splits))}
 
   @classmethod
-  def _get_axis_size_splits_num_splits(cls, input_data, axis=None, num_splits=None, size_splits=None, err_prefix=None):
+  def _get_axis_size_splits_num_splits(cls, name, input_data, axis=None,
+                                       num_splits=None, size_splits=None, out_dims=None,
+                                       err_prefix=None):
     """
+    :param str name:
     :param Data input_data:
     :param str|None axis: feature axis by default
     :param int|None num_splits:
     :param list[int]|None size_splits:
+    :param list[DimensionTag]|None out_dims:
     :param object err_prefix:
-    :return: axis, size_splits
-    :rtype: (int, list[int])
+    :return: axis, out_dims
+    :rtype: (int, list[DimensionTag])
     """
-    assert num_splits or size_splits, "%s: provide either num_splits or size_splits" % err_prefix
+    assert num_splits or size_splits or out_dims, (
+      "%s: provide either num_splits or size_splits or out_dims" % err_prefix)
     if axis is None:
       axis = "feature"
     axis = input_data.get_axis_from_description(axis, allow_int=False)
@@ -2967,13 +2974,22 @@ class SplitLayer(_ConcatInputLayer):
       assert dim % num_splits == 0, "%s: expects multiple of %i in dim %i in %r" % (
         err_prefix, num_splits, dim, input_data)
       size_splits = [dim // num_splits for _ in range(num_splits)]
-    else:
+    elif size_splits:
       if not isinstance(size_splits, (list, tuple)):
-        raise TypeError("%s: invalid type num_or_size_splits %r" % (err_prefix, size_splits))
+        raise TypeError("%s: invalid type size_splits %r" % (err_prefix, size_splits))
       size_splits = list(size_splits)
-      assert sum(size_splits) == dim, "%s: invalid num_or_size_splits %r for dim %i in %r" % (
+      assert sum(size_splits) == dim, "%s: invalid size_splits %r for dim %i in %r" % (
         err_prefix, size_splits, dim, input_data)
-    return axis, size_splits
+    elif out_dims:
+      assert all(isinstance(d, DimensionTag) for d in out_dims)
+      assert sum(d.dimension for d in out_dims) == dim, "%s: invalid out_dims %r for dim %i in %r" % (
+        err_prefix, out_dims, dim, input_data)
+    if not out_dims:
+      assert size_splits
+      out_dims = [DimensionTag(
+        kind=input_data.dim_tags[axis].kind, description="%s_split%i" % (name, idx),
+        dimension=size_splits[idx]) for idx in range(len(size_splits))]
+    return axis, out_dims
 
   def _make_split_layer(self, idx):
     """
@@ -2981,7 +2997,7 @@ class SplitLayer(_ConcatInputLayer):
     :rtype: LayerBase
     """
     out = self._get_split_out_data(
-      name=self.name, idx=idx, size_splits=self.size_splits, input_data=self.input_data, axis=self.axis)
+      name=self.name, idx=idx, out_dims=self.out_dims, input_data=self.input_data, axis=self.axis)
     out.placeholder = self.splits[idx]
     out.sanity_check()
     return InternalLayer(name="%s/%i" % (self.name, idx), network=self.network, output=out, sources=self.sources)
@@ -3015,30 +3031,29 @@ class SplitLayer(_ConcatInputLayer):
       return None
     name = parent_layer_kwargs.get("name", "<unknown>")
     input_data = get_concat_sources_data_template(parent_layer_kwargs["sources"], name="%s_output" % name)
-    axis, size_splits = cls._get_axis_size_splits_num_splits(
+    axis, out_dims = cls._get_axis_size_splits_num_splits(
       input_data=input_data,
       axis=parent_layer_kwargs.get("axis", None),
       num_splits=parent_layer_kwargs.get("num_splits", None),
       size_splits=parent_layer_kwargs.get("size_splits", None),
-      err_prefix="%s/%s" % (name, layer_name))
+      out_dims=parent_layer_kwargs.get("out_dims", None),
+      err_prefix="%s/%s" % (name, layer_name),
+      name=name)
     out = cls._get_split_out_data(
-      name=name, idx=idx, input_data=input_data, size_splits=size_splits, axis=axis)
+      name=name, idx=idx, input_data=input_data, out_dims=out_dims, axis=axis)
     return out, parent_layer_kwargs["network"], InternalLayer
 
   @classmethod
-  def _get_split_out_data(cls, name, input_data, size_splits, idx, axis):
+  def _get_split_out_data(cls, name, input_data, out_dims, idx, axis):
     """
     :param str name:
     :param Data input_data:
-    :param list[int] size_splits:
+    :param list[DimensionTag] out_dims:
     :param int idx:
     :param int axis:
     :rtype: Data
     """
-    from ..util.data import DimensionTag
-    new_dim_tag = DimensionTag(
-      kind=input_data.dim_tags[axis].kind, description="%s_split%i" % (name, idx),
-      dimension=size_splits[idx])
+    new_dim_tag = out_dims[idx]
     out = input_data.copy_template("%s/%i_output" % (name, idx))
     return out.copy_template_replace_dim_tag(axis=axis, new_dim_tag=new_dim_tag)
 
