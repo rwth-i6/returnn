@@ -2471,16 +2471,24 @@ def test_TileLayer():
 
 
 def test_ScatterNdLayer_RangeLayer_RangeInAxisLayer():
+  from returnn.tf.util.data import BatchDim, DimensionTag, ImplicitDynSizeDim
   n_batch, n_time, n_ts, n_in, n_out = 2, 3, 6, 7, 11
+  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="T")
+  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="F", dimension=n_in)
+  ts_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="ts", dimension=n_ts)
   rnd = numpy.random.RandomState(42)
   config = Config({
     "debug_print_layer_output_template": True,
-    "extern_data": {"data": {"dim": n_in}}
+    "extern_data": {"data": {"dim_tags": [BatchDim, time_dim, feat_dim]}}
   })
   net_dict = {
-    "t": {"class": "range_in_axis", "axis": "t", "keepdims": False, "from": "data", "sparse": True},  # (T,)
-    "range": {"class": "range", "limit": n_ts, "sparse": True},  # (Ts,)
-    "add_t": {"class": "combine", "kind": "add", "from": ["t", "range"]},  # (T,Ts)
+    "t": {
+      "class": "range_in_axis", "axis": "t", "from": "data",
+      "out_shape": {time_dim, ImplicitDynSizeDim(BatchDim)}},  # (T,)
+    "range": {"class": "range", "limit": n_ts, "out_spatial_dim": ts_dim},  # (Ts,)
+    "add_t": {
+      "class": "combine", "kind": "add", "from": ["t", "range"],
+      "out_shape": {time_dim, ts_dim, ImplicitDynSizeDim(BatchDim)}},  # (T,Ts)
     "t_rel_var": {"class": "variable", "shape": (n_ts, n_out), "init": "glorot_uniform"},  # (B,Ts,D)
     "output": {"class": "scatter_nd", "from": "t_rel_var", "position": "add_t", "position_axis": -1,
                "output_dim_via_time_from": "data", "filter_invalid_indices": True}
