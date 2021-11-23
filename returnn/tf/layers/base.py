@@ -577,6 +577,16 @@ class LayerBase(object):
       d["n_out"] = cls._guess_n_out_from_target_and_opt_loss(
         network=network, target=target, target_layers=target_layers,
         loss_class_name=d.get("loss", None), get_layer=get_layer)
+    if "out_shape" in d:
+      inside_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=True)
+      over_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=False)
+      if over_rec_time_dim and not inside_rec_time_dim:  # moved out of loop
+        out_shape = d["out_shape"]
+        if not isinstance(out_shape, set):
+          assert not out_shape, "out_shape %r must be empty if not a set" % (out_shape,)
+          out_shape = set()
+        out_shape.add(over_rec_time_dim)
+        d["out_shape"] = out_shape
     if d.pop("loss_only_on_non_search", None) and network.search_flag:
       d.pop("loss", None)
       d.pop("loss_scale", None)
