@@ -4034,10 +4034,11 @@ class Data(object):
     return self.dim_tags
 
   @classmethod
-  def get_common_data(cls, sources, ignore_feature_dim=False):
+  def get_common_data(cls, sources, ignore_feature_dim=False, allow_broadcast_all_sources=NotSpecified):
     """
     :param list[Data] sources:
     :param bool ignore_feature_dim: when set, the feature dim does not have to match in the sources
+    :param bool|NotSpecified allow_broadcast_all_sources:
     :return: some generic data where the sources should be compatible to (with copy_compatible_to),
       i.e. it contains the union of all axes from all sources (least common multiple).
       This is always a template, and a new copy.
@@ -4077,6 +4078,10 @@ class Data(object):
       if not DimensionTag.get_existing_tag_from_collection(dim_tag, common.dim_tags, is_equal_opts=is_equal_opts):
         axis = common.get_default_new_axis_for_dim_tag(dim_tag)
         common = common.copy_add_dim_by_tag(dim_tag, unbroadcast=True, axis=axis)
+    if all(s.batch_ndim < common.batch_ndim for s in sources):
+      from .basic import validate_broadcast_all_sources
+      validate_broadcast_all_sources(
+        allow_broadcast_all_sources=allow_broadcast_all_sources, inputs=sources, common=common)
     return common
 
   def find_matching_dims(self, dim_tag, is_equal_opts):
