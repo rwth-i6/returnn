@@ -82,20 +82,24 @@ def _name_scope_for_concat_src_layers(src_layers, postfix):
     yield scope
 
 
-def concat_sources(src_layers):
+def concat_sources(src_layers, out_dim=None):
   """
   :param list[LayerBase] src_layers:
+  :param DimensionTag|None out_dim:
   :return: data with placeholders set
   :rtype: Data
   """
   assert src_layers, "need source layers"
   if len(src_layers) == 1:
-    return src_layers[0].output.copy()
+    data = src_layers[0].output.copy()
+    if out_dim:
+      assert out_dim == data.feature_dim_or_sparse_dim
+    return data
   network = src_layers[0].network
-  cache_key = (tuple(src_layers), 0.0, None)
+  cache_key = (tuple(src_layers), out_dim, 0.0, None)
   if cache_key in network.concat_sources_dropout_cache:
     return network.concat_sources_dropout_cache[cache_key].copy()
-  data = get_concat_sources_data_template(src_layers)
+  data = get_concat_sources_data_template(src_layers, out_dim=out_dim)
   # Currently we assume that get_concat_sources_data_template will match Data.get_common_data (besides the dim).
   common_source = Data.get_common_data([s.output for s in src_layers], ignore_feature_dim=True)
   data.size_placeholder = common_source.size_placeholder.copy()  # to get right dimension tags
@@ -119,7 +123,7 @@ def concat_sources(src_layers):
   return data
 
 
-def get_concat_sources_data_template(src_layers, name=None):
+def get_concat_sources_data_template(src_layers, out_dim=None, name=None):
   """
   This just creates a template :class:`Data` instance,
   without creating any real TF tensors.
@@ -127,6 +131,7 @@ def get_concat_sources_data_template(src_layers, name=None):
   which would create a :class:`Data` together with the tensor.
 
   :param list[LayerBase]|tuple[LayerBase] src_layers:
+  :param DimensionTag|None out_dim:
   :param str|None name: name of the Data
   :return: data with no placeholders set. it is always a copy or new instance, so safe to manipulate
   :rtype: Data
@@ -134,7 +139,10 @@ def get_concat_sources_data_template(src_layers, name=None):
   from ..util.data import DimensionTag
   assert src_layers, "need source layers"
   if len(src_layers) == 1:
-    return src_layers[0].output.copy_template(name=name)
+    data = src_layers[0].output.copy_template(name=name)
+    if out_dim:
+      assert out_dim == data.feature_dim_or_sparse_dim
+    return data
   if not name:
     name = "concat_" + "_".join([layer.name for layer in src_layers])
   dim = 0
@@ -146,26 +154,34 @@ def get_concat_sources_data_template(src_layers, name=None):
     assert not layer.output.sparse
     if layer.output.dim is not None:  # just ignore at this point if None (e.g. during template construction)
       dim += layer.output.dim
+  if out_dim:
+    assert out_dim.dimension == dim
+  else:
+    out_dim = DimensionTag(kind=DimensionTag.Types.Feature, description=name + "_feature", dimension=dim)
   return common_source.copy_template_replace_dim_tag(
     name=name,
     axis=common_source.feature_dim_axis,
-    new_dim_tag=DimensionTag(
-      kind=DimensionTag.Types.Feature, description=name + "_feature", dimension=dim))
+    new_dim_tag=out_dim)
 
 
-def concat_sources_with_opt_dropout(src_layers, dropout=0, dropout_noise_shape=None, dropout_on_forward=False):
+def concat_sources_with_opt_dropout(src_layers, out_dim=None,
+                                    dropout=0, dropout_noise_shape=None, dropout_on_forward=False):
   """
+  Concatenates in the feature dim (see :func:`concat_sources`),
+  and then optionally applies dropout.
+
   :param list[LayerBase] src_layers:
+  :param DimensionTag|None out_dim:
   :param float dropout: dropout rate that will be applied if train_flag is set or dropout_on_forward is enabled
   :param tuple|list|dict|None dropout_noise_shape: provide 1 for broadcasting or None otherwise for each axis.
-  The default "None" will broadcast across all dynamic axes including the batch axis.
-  Use {"*": None} to disable broadcasting for all axes.
+    The default "None" will broadcast across all dynamic axes including the batch axis.
+    Use {"*": None} to disable broadcasting for all axes.
   :param bool dropout_on_forward: apply dropout also during inference
   :return: data with placeholders set
   :rtype: Data
   """
   assert src_layers, "need source layers"
-  data = concat_sources(src_layers)
+  data = concat_sources(src_layers, out_dim=out_dim)
   network = src_layers[0].network
   if network.train_flag is False and not dropout_on_forward:
     # If we know that we are not training, we always disable dropout.
@@ -177,7 +193,7 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0, dropout_noise_shape=N
     # Default noise_shape behavior is like old for now:
     # All dynamic dimensions (batch,time) will use the same dropout-mask broadcasted.
     dropout_noise_shape = data.get_bc_shape(dropout_noise_shape)
-  cache_key = (tuple(src_layers), float(dropout), tuple(dropout_noise_shape))
+  cache_key = (tuple(src_layers), out_dim, float(dropout), tuple(dropout_noise_shape))
   if cache_key in network.concat_sources_dropout_cache:
     return network.concat_sources_dropout_cache[cache_key].copy()
   data = data.copy()
@@ -210,8 +226,9 @@ class _ConcatInputLayer(LayerBase):
   This layer also optionally can do dropout on the input.
   """
 
-  def __init__(self, dropout=0, dropout_noise_shape=None, dropout_on_forward=False, mask=None, **kwargs):
+  def __init__(self, in_dim=None, dropout=0, dropout_noise_shape=None, dropout_on_forward=False, mask=None, **kwargs):
     """
+    :param DimensionTag|None in_dim:
     :param float dropout: 0.0 means to apply no dropout. dropout will only be applied during training
     :param dict[str|tuple,int|None] dropout_noise_shape: see :func:`returnn.tf.util.data.get_bc_shape`
     :param bool dropout_on_forward: apply dropout during inference
@@ -227,7 +244,8 @@ class _ConcatInputLayer(LayerBase):
     self.input_data = None  # type: typing.Optional[Data]
     if self.sources:
       self.input_data = concat_sources_with_opt_dropout(
-        self.sources, dropout=dropout, dropout_noise_shape=dropout_noise_shape, dropout_on_forward=dropout_on_forward)
+        self.sources, out_dim=in_dim,
+        dropout=dropout, dropout_noise_shape=dropout_noise_shape, dropout_on_forward=dropout_on_forward)
 
 
 class CopyLayer(_ConcatInputLayer):
@@ -264,17 +282,19 @@ class CopyLayer(_ConcatInputLayer):
     return super(CopyLayer, self).get_dep_layers() + list(self.extra_deps)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources=(), extra_deps=(), out_type=None, n_out=NotSpecified, **kwargs):
+  def get_out_data_from_opts(cls, name, sources=(), extra_deps=(), out_type=None, out_dim=None, n_out=NotSpecified,
+                             **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param list[LayerBase] extra_deps:
     :param dict[str]|None out_type:
+    :param DimensionTag|None out_dim:
     :param int|None|NotSpecified n_out:
     :rtype: Data
     """
     # If all sources are defined, use them to get the exact out_type.
-    out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    out = get_concat_sources_data_template(sources, out_dim=out_dim, name="%s_output" % name)
     # Instead of checking or raising an exception, just overwrite, as this could be the template construction.
     if out_type or n_out is not NotSpecified:
       if not out_type:
@@ -1573,7 +1593,8 @@ class LinearLayer(_ConcatInputLayer):
   """
   layer_class = "linear"
 
-  def __init__(self, activation=None, with_bias=True, grad_filter=None, forward_weights_init="glorot_uniform",
+  def __init__(self,
+               activation=None, with_bias=True, grad_filter=None, forward_weights_init="glorot_uniform",
                bias_init=0.0, use_transposed_weights=False, **kwargs):
     """
     :param str|None activation: e.g. "relu", or None

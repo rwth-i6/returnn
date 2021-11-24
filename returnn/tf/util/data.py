@@ -3218,10 +3218,9 @@ class Data(object):
     """
     :rtype: int|None
     """
-    if self.sparse_dim:
-      return self.sparse_dim.dimension
-    if self.have_feature_axis():
-      return self.dim_tags[self.feature_dim_axis].dimension
+    tag = self.feature_dim_or_sparse_dim
+    if tag:
+      return tag.dimension
     return None
 
   @dim.setter
@@ -3234,6 +3233,18 @@ class Data(object):
     :param int|None dim:
     """
     assert dim == self.dim
+
+  @property
+  def feature_dim_or_sparse_dim(self):
+    """
+    :return: if we have a feature dim, return its dim tag. if we are sparse, return the sparse_dim. otherwise None
+    :rtype: DimensionTag|None
+    """
+    if self.have_feature_axis():
+      return self.dim_tags[self.feature_dim_axis]
+    if self.sparse_dim:
+      return self.sparse_dim
+    return None
 
   @property
   def sparse(self):

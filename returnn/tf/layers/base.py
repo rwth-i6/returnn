@@ -55,9 +55,10 @@ class LayerBase(object):
   # For compatibility, we have some parameter names (e.g. "L2") which do not conform to PEP8.
   # noinspection PyPep8Naming
   def __init__(self, name, network, output,
-               n_out=NotSpecified, out_type=None,
+               n_out=NotSpecified, out_dim=None, out_type=None,
                out_shape=None,
                sources=(),
+               in_dim=None,
                target=None, _target_layers=None, loss=None, size_target=None,
                reuse_params=None,
                name_scope=None,
@@ -89,10 +90,12 @@ class LayerBase(object):
     :param returnn.tf.network.TFNetwork network:
     :param Data output: Set a specific output instead of using :func:`get_out_data_from_opts`
     :param NotSpecified|None|int n_out: output dim
+    :param returnn.tf.util.data.DimensionTag|None out_dim: output feature dim tag
     :param dict[str] out_type: kwargs for Data class. more explicit than n_out.
-    :param set[DimensionTag|_ImplicitDim]|tuple|list|None out_shape: verifies the output shape (dim tags).
-      See :func:`Data.verify_out_shape`.
+    :param set[returnn.tf.util.data.DimensionTag|returnn.tf.util.data._ImplicitDim]|tuple|list|None out_shape:
+      verifies the output shape (dim tags). See :func:`Data.verify_out_shape`.
     :param list[LayerBase] sources: via self.transform_config_dict()
+    :param returnn.tf.util.data.DimensionTag|None in_dim: input feature dim tag
     :param str|list[str]|None target: if some loss is set, this is the target data-key,
       i.e. network.extern_data.get_data(target). alternatively, this also can be a layer name.
     :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
@@ -169,6 +172,11 @@ class LayerBase(object):
         assert self.output.shape == out_type["shape"]
       if "dim" in out_type:
         assert self.output.dim == out_type["dim"]
+    if out_dim:
+      # When this fails, the layer does not handle it correctly.
+      # Note that layers using _base_get_out_data_from_opts should handle it correctly.
+      assert out_dim in self.output.dim_tags_set_implicit, (
+        "%s: out_dim handling not implemented correctly for this layer" % self)
     out_shape  # noqa  # not used here but in fixup_out_data
     self.output_before_activation = None  # type: typing.Optional[OutputWithActivation]
     self.output_loss = None  # type: typing.Optional[tf.Tensor]
@@ -183,6 +191,12 @@ class LayerBase(object):
     self.collocate_with = collocate_with or []
     self.post_init_hooks = []  # list of functions
     self.sources = list(sources)
+    if in_dim and len(sources) == 1:
+      # Note that this check is somewhat incomplete
+      # (does not check multiple sources, see _ConcatInputLayer)
+      # and there is no guarantee that a specific layer really uses this correctly.
+      assert in_dim in sources[0].output.dim_tags_set_implicit, (
+        "%s: in_dim %s not found in input %s" % (self, in_dim, sources[0]))
     self.params = {}  # type: typing.Dict[str,tf.Variable]
     self.saveable_param_replace = {}  # type:  typing.Dict[tf.Variable,typing.Union['tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject',None]]  # see get_saveable_params_dict()  # nopep8
     self.reuse_params = reuse_params
@@ -280,7 +294,9 @@ class LayerBase(object):
     return cls._base_get_out_data_from_opts(**kwargs)
 
   @classmethod
-  def _base_get_out_data_from_opts(cls, network, name, out_type=None, n_out=NotSpecified, out_shape=None,
+  def _base_get_out_data_from_opts(cls, network, name,
+                                   out_type=None, out_dim=None, n_out=NotSpecified,
+                                   out_shape=None,
                                    target=None, _target_layers=None, size_target=None,
                                    sources=(), loss=None,
                                    **kwargs):
@@ -290,6 +306,7 @@ class LayerBase(object):
     :param returnn.tf.network.TFNetwork network:
     :param str name:
     :param dict[str]|None|(()->Data) out_type:
+    :param returnn.tf.util.data.DimensionTag|None out_dim:
     :param int|None|NotSpecified n_out:
     :param set[DimensionTag|_ImplicitDim]|tuple|list|None out_shape: verifies the output shape (dim tags).
     :param str|list[str]|None target:
@@ -374,7 +391,19 @@ class LayerBase(object):
       out_type.setdefault("batch", sources_data.batch)
     if sources_data and sources_data.beam:
       out_type.setdefault("beam", sources_data.beam)
+    if out_dim:
+      out_type.setdefault("dim", out_dim.dimension)  # e.g. needed when sparse
     output = Data(**out_type)
+    if not out_dim and sources_data and sources_data.feature_dim_or_sparse_dim and sources_data.dim == output.dim:
+      # Special case: Input feature or sparse dim looks the same, so overtake it.
+      out_dim = sources_data.feature_dim_or_sparse_dim
+    if out_dim:
+      assert out_dim.dimension == output.dim, (
+        "Layer %r out_dim %s does not match Data via out_type %s" % (name, out_dim, output))
+      if output.sparse:
+        output.sparse_dim = out_dim
+      else:
+        output = output.copy_template_replace_dim_tag(axis=output.feature_dim_axis, new_dim_tag=out_dim)
     cls._post_init_output(
       output=output, network=network, target=target, size_target=size_target, _target_layers=_target_layers,
       sources=sources, **kwargs)
