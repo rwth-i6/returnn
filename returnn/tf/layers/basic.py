@@ -7247,29 +7247,38 @@ class VariableLayer(LayerBase):
                init=0,
                **kwargs):
     """
-    :param tuple[int]|list[int] shape:
+    :param tuple[int|DimensionTag]|list[int|DimensionTag] shape:
     :param str dtype:
     :param bool add_batch_axis:
     :param bool add_time_axis:
     :param bool trainable:
     :param str|float|int init: see :func:`returnn.tf.util.basic.get_initializer`
     """
+    shape  # noqa  # used in get_out_data_from_opts
     super(VariableLayer, self).__init__(trainable=trainable, **kwargs)
     assert not self.sources, "%s: does not expect any sources" % self
     from returnn.tf.util.basic import get_initializer, expand_dims_unbroadcast
     initializer = get_initializer(init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
+    dim_tags = list(self.output.dim_tags)
+    if add_batch_axis:
+      assert dim_tags[0].is_batch_dim()
+      dim_tags = dim_tags[1:]
+    if add_time_axis:
+      assert dim_tags[0].dimension == 1
+      dim_tags = dim_tags[1:]
+    shape_ = [d.dimension for d in dim_tags]
+    assert all(shape_), self.output  # all static
     with self.var_creation_scope():
       var = self.add_param(tf_compat.v1.get_variable(
-        name=self.name, shape=shape, dtype=dtype,
-        initializer=initializer, trainable=trainable
-      ))
+        name=self.name, shape=shape_, dtype=dtype,
+        initializer=initializer, trainable=trainable))
       out = var
+      if add_time_axis:
+        out = tf.expand_dims(out, axis=0)
       if add_batch_axis:
         # Unbroadcast to not confuse some other layers
         batch_dim = self.output.get_batch_dim()
-        out = expand_dims_unbroadcast(out, axis=self.output.batch_dim_axis, dim=batch_dim)
-      if add_time_axis:
-        out = tf.expand_dims(out, axis=self.output.time_dim_axis)
+        out = expand_dims_unbroadcast(out, axis=0, dim=batch_dim)
     self.output.placeholder = out
 
   @classmethod
@@ -7290,7 +7299,7 @@ class VariableLayer(LayerBase):
     """
     :param str name:
     :param returnn.tf.network.TFNetwork network:
-    :param tuple[int]|list[int] shape:
+    :param tuple[int|DimensionTag]|list[int|DimensionTag] shape:
     :param str dtype:
     :param bool add_batch_axis:
     :param bool add_time_axis:
@@ -7298,22 +7307,28 @@ class VariableLayer(LayerBase):
     """
     assert isinstance(shape, (list, tuple))
     assert len(shape) == 0 or all(shape)
-    shape = list(shape)
-    batch_dim_axis = 0 if add_batch_axis else None
-    if add_time_axis:
-      shape.insert(0, 1)
-      if add_batch_axis:
-        time_dim_axis = 1
+    dim_tags = []
+    for i, d in enumerate(shape):
+      if isinstance(d, DimensionTag):
+        assert d.dimension is not None, "%r: need static dims but got %r" % (name, d)
+      elif isinstance(d, int):
+        d = DimensionTag(
+          kind=DimensionTag.Types.Spatial if i < len(shape) - 1 else DimensionTag.Types.Feature,
+          description="%s:static:%i" % (name, i),
+          dimension=d)
       else:
-        time_dim_axis = 0
-    else:
-      time_dim_axis = None
+        raise TypeError("Layer %r: invalid type %s in shape %r" % (name, type(d), shape))
+      dim_tags.append(d)
+    if add_time_axis:
+      dim_tags.insert(
+        0, DimensionTag(kind=DimensionTag.Types.Time, description="%s:dummy-time" % name, dimension=1))
+    if add_batch_axis:
+      dim_tags.insert(
+        0, DimensionTag(
+          kind=DimensionTag.Types.Batch, description="batch", batch=network.get_global_batch_info()))
     return Data(
-      name="%s_output" % name, shape=shape, dtype=dtype,
-      dim=shape[-1] if shape else None,
-      batch_dim_axis=batch_dim_axis,
-      batch=network.get_global_batch_info() if add_batch_axis else None,
-      time_dim_axis=time_dim_axis)
+      name="%s_output" % name, dim_tags=dim_tags, dtype=dtype,
+      batch=network.get_global_batch_info() if add_batch_axis else None)
 
 
 class AccumulateMeanLayer(ReduceLayer):
