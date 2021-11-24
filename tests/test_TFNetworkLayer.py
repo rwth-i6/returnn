@@ -2666,7 +2666,7 @@ def test_reuse_params_map_custom():
     l1 = network.layers["l1"]
     l2 = network.layers["output"]
     assert_equal(set(l1.params.keys()), {"W"})
-    assert_equal(set(l2.params.keys()), {"b"})
+    assert_equal(set(l2.params.keys()), {"W", "b"})
     assert_equal(set(network.get_trainable_params()), {l1.params["W"], l2.params["b"]})
 
 
@@ -2695,7 +2695,7 @@ def test_reuse_params_map_custom_rev():
     network.construct_from_dict(config.typed_dict["network"])
     l1 = network.layers["l1"]
     l2 = network.layers["output"]
-    assert_equal(set(l1.params.keys()), {"b"})
+    assert_equal(set(l1.params.keys()), {"W", "b"})
     assert_equal(set(l2.params.keys()), {"W"})
     assert_equal(set(network.get_trainable_params()), {l2.params["W"], l1.params["b"]})
 
@@ -2759,7 +2759,7 @@ def test_reuse_params_map_custom_dep_loop():
     assert_equal(set(train_rec_layer.cell.input_layers_moved_out), {"output", "target_embed"})
     assert_equal(set(train_rec_layer.cell.output_layers_moved_out), {"output_prob", "readout", "readout_in"})
     assert isinstance(train_rec_layer.cell.output_layers_net, TFNetwork)
-    assert_equal(set(train_rec_layer.cell.output_layers_net.layers["output_prob"].params.keys()), {"b"})
+    assert_equal(set(train_rec_layer.cell.output_layers_net.layers["output_prob"].params.keys()), {"W", "b"})
   with make_scope() as session:
     print("Construct for search")
     search_net = TFNetwork(config=config, train_flag=False, eval_flag=True, search_flag=True)
@@ -4308,6 +4308,33 @@ def test_ReuseParams_dep_loop_3():
     feed = make_feed_dict(10)
     # Not really needed (for testing reuse_params), but just test anyway.
     session.run(network.get_default_output_layer().output.placeholder, feed_dict=feed)
+
+
+def test_ReuseParams_different_names():
+  n_batch, n_time, n_total, n_heads = 7, 3, 40, 2
+  assert n_total % n_heads == 0
+  config = Config({
+    "extern_data": {"data": {"dim": n_total}},
+    "debug_print_layer_output_template": True,
+  })
+  with make_scope():
+    net = TFNetwork(config=config)
+
+    def custom(reuse_layer, *args, **kwargs):
+      return reuse_layer.params['QKV']
+
+    net.construct_from_dict({
+      "self_att": {"class": "self_attention", "num_heads": n_heads, "total_key_dim": n_total, "n_out": n_total},
+      "linear": {"class": "linear", "n_out": n_total * 3, "activation": None, "with_bias": False,
+        "reuse_params": {
+          "auto_create_missing": False,  # should not matter as we do not have any bias
+          "map": {"W": {"reuse_layer": "self_att", "custom": custom}}}},
+      "output": {"class": "copy", "from": "linear"}})
+
+    self_att = net.get_layer("self_att")
+    linear = net.get_layer("linear")
+    assert list(self_att.params.keys()) == ["QKV"] and list(linear.params.keys()) == ["W"]
+    assert self_att.params["QKV"] is linear.params["W"]
 
 
 def test_LossAsIs_custom_dim():
