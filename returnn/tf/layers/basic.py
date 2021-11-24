@@ -2330,10 +2330,11 @@ class ConstantLayer(LayerBase):
   layer_class = "constant"
 
   # noinspection PyUnusedLocal
-  def __init__(self, sources, value=0., dtype=None, with_batch_dim=False, **kwargs):
+  def __init__(self, sources, value=0., shape=None, dtype=None, with_batch_dim=False, **kwargs):
     """
     :param list[LayerBase] sources:
     :param int|float|bool value:
+    :param tuple[DimensionTag|int]|list[DimensionTag|int] shape: for verification, and defining dim tags
     :param str|None dtype:
     :param bool with_batch_dim:
     """
@@ -2357,15 +2358,17 @@ class ConstantLayer(LayerBase):
     super(ConstantLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, value=0., dtype=None, with_batch_dim=False, **kwargs):
+  def get_out_data_from_opts(cls, name, value=0., shape=None, dtype=None, with_batch_dim=False, **kwargs):
     """
     :param str name:
     :param int|float|bool value:
+    :param tuple[DimensionTag|int]|list[DimensionTag|int] shape: for verification, and defining dim tags
     :param str|None dtype:
     :param bool with_batch_dim:
     :rtype: Data
     """
-    return Data.template_from_constant(value, name="%s_const" % name, dtype=dtype, with_batch_dim=with_batch_dim)
+    return Data.template_from_constant(
+      value, name="%s_const" % name, shape=shape, dtype=dtype, with_batch_dim=with_batch_dim)
 
 
 class GatingLayer(_ConcatInputLayer):

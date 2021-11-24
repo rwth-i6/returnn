@@ -1731,11 +1731,12 @@ class Data(object):
     return Data(name=str(x.op.name), shape=(), batch_dim_axis=None, dtype=x.dtype.name, placeholder=x)
 
   @classmethod
-  def template_from_constant(cls, x, name, dtype=None, with_batch_dim=False):
+  def template_from_constant(cls, x, name, dtype=None, shape=None, with_batch_dim=False):
     """
     :param int|float|bool|numpy.ndarray x:
     :param str name:
     :param str|None dtype:
+    :param list[DimensionTag|int]|tuple[DimensionTag|int]|None shape: for verification, and defining dim tags
     :param bool with_batch_dim:
     :rtype: Data
     """
@@ -1750,12 +1751,29 @@ class Data(object):
       elif isinstance(x, numpy.ndarray):
         dtype = str(x.dtype)
       else:
-        raise TypeError("cannot handle value %r of type %r" % (x, type(x)))
-    shape = x.shape if isinstance(x, numpy.ndarray) else ()
-    return Data(
-      name=name,
-      shape=shape, batch_dim_axis=0 if with_batch_dim else None, time_dim_axis=None,
-      dtype=dtype)
+        raise TypeError("%r: cannot handle value %r of type %r" % (name, x, type(x)))
+    shape_ = x.shape if isinstance(x, numpy.ndarray) else ()
+    if shape is not None:
+      assert len(shape) == len(shape_), "%r: shape does not match in ndim, %r vs %r" % (name, shape, shape_)
+    else:
+      shape = shape_
+    dim_tags = []
+    for i, (d, d_) in enumerate(zip(shape, shape_)):
+      assert isinstance(d_, int)
+      if isinstance(d, DimensionTag):
+        assert d.dimension == d_
+      elif isinstance(d, int):
+        assert d == d_
+        d = DimensionTag(
+          kind=DimensionTag.Types.Spatial if i < len(shape) - 1 else DimensionTag.Types.Feature,
+          description="%s:static:%i" % (name, i),
+          dimension=d)
+      else:
+        raise TypeError("%r shape[%i] invalid type %r in shape %r" % (name, i, type(d), shape))
+      dim_tags.append(d)
+    if with_batch_dim:
+      dim_tags.insert(0, BatchDim)
+    return Data(name=name, dim_tags=dim_tags, dtype=dtype)
 
   def sanity_check(self, ignore_placeholder=False, assume_complete=True):
     """
