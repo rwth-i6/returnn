@@ -472,7 +472,7 @@ class TFNetwork(object):
     self.extra_vars_to_save = []  # type: typing.List[tf.Variable]
     self.recurrent = False
     self._assigner_cache = {}  # type: typing.Dict[tf.Variable,VariableAssigner]
-    self.concat_sources_dropout_cache = {}  # type: typing.Dict[typing.Tuple[typing.Tuple[LayerBase,...],float,typing.Optional[typing.Tuple[typing.Optional[int],...]]],Data]  # nopep8
+    self.concat_sources_dropout_cache = {}  # type: typing.Dict[typing.Tuple[typing.Tuple[LayerBase,...],DimensionTag,float,typing.Optional[typing.Tuple[typing.Optional[int],...]]],Data]  # nopep8
     self._merge_all_summaries = None  # type: typing.Optional[tf.Tensor]
     self._graph_reset_callbacks = []  # type: typing.List[typing.Callable]
     self._run_opts = {}  # type: typing.Dict[str]
