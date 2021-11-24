@@ -2061,38 +2061,19 @@ class RandIntLayer(LayerBase):
   layer_class = "rand_int"
 
   # noinspection PyUnusedLocal
-  def __init__(self, shape, maxval, minval=0, dtype="int32", seed=None, **kwargs):
+  def __init__(self, shape, maxval, minval=0, dtype="int32", sparse_dim=None, seed=None, **kwargs):
     """
     :param tuple[DimensionTag|int]|list[DimensionTag|int] shape: desired shape of output tensor
     :param int maxval: upper bound (exclusive) on range of random values
     :param int minval: lower bound (inclusive) on range of random values
     :param str dtype: type of the output. For random ints, int32 and int64 make sense, but could also be floats
+    :param DimensionTag|None sparse_dim:
     :param int|None seed: random seed
     """
-    from returnn.tf.util.data import DimensionTag
     super(RandIntLayer, self).__init__(**kwargs)
-
     seed = seed if seed is not None else self.network.random.randint(2 ** 31)
-
-    shape_parsed = []
-    for ax, s in enumerate(shape):
-      if isinstance(s, int):
-        shape_parsed.append(s)
-      elif isinstance(s, DimensionTag):
-        if s.is_batch_dim():
-          shape_parsed.append(self.get_batch_dim())
-        elif isinstance(s.dimension, int):
-          shape_parsed.append(s.dimension)
-        elif s.dimension is None:
-          assert s.dyn_size is not None
-          shape_parsed.append(tf.reduce_max(s.dyn_size))
-        else:
-          raise Exception("%s: invalid dim tag %s" % (self, s))
-      else:
-        raise TypeError("%s: invalid dim %s" % (self, type(s)))
-    shape_parsed = tuple(shape_parsed)
-
-    self.output.placeholder = tf.random.uniform(shape_parsed, minval=minval, maxval=maxval, dtype=dtype, seed=seed)
+    shape_ = [d.get_dim_value() for d in self.output.dim_tags]
+    self.output.placeholder = tf.random.uniform(shape_, minval=minval, maxval=maxval, dtype=dtype, seed=seed)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -2105,45 +2086,30 @@ class RandIntLayer(LayerBase):
     super(RandIntLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, shape, maxval, minval=0, dtype="int32", **kwargs):
+  def get_out_data_from_opts(cls, name, shape, maxval, minval=0, dtype="int32", sparse_dim=None, **kwargs):
     """
     :param str name:
     :param tuple[DimensionTag|int]|list[DimensionTag|int] shape: desired shape of output tensor
     :param int maxval: upper bound (exclusive) on range of random values
     :param int minval: lower bound (inclusive) on range of random values
     :param str dtype: type of the output. For random ints, int32 and int64 make sense, but could also be floats
+    :param DimensionTag|None sparse_dim:
     :rtype: Data
     """
     from returnn.tf.util.data import DimensionTag
-
-    shape_parsed = []
-    batch_dim_axis = None
-    dyn_axes_sizes = {}
-    for ax, s in enumerate(shape):
-      if isinstance(s, int):
-        shape_parsed.append(s)
+    dim_tags = []
+    for i, d in enumerate(shape):
+      if isinstance(d, DimensionTag):
+        pass  # good
+      elif isinstance(d, int):
+        d = DimensionTag(
+          kind=DimensionTag.Types.Spatial if i < len(shape) - 1 else DimensionTag.Types.Feature,
+          description="%s:static:%i" % (name, i),
+          dimension=d)
       else:
-        assert isinstance(s, DimensionTag)
-        if s.is_batch_dim():
-          assert batch_dim_axis is None, "Cannot have multiple batch axes"
-          batch_dim_axis = ax
-        elif isinstance(s.dimension, int):
-          shape_parsed.append(s.dimension)
-        else:
-          assert s.dimension is None
-          shape_parsed.append(None)
-          dyn_axes_sizes[ax] = s.dyn_size
-    shape_parsed = tuple(shape_parsed)
-
-    data = Data(name="%s_output" % name, shape=shape_parsed, dtype=dtype, batch_dim_axis=batch_dim_axis)
-
-    if batch_dim_axis is not None:
-      data.size_placeholder = {data.get_batch_axis_excluding_batch(i): size for i, size in dyn_axes_sizes.items()}
-    else:
-      assert not dyn_axes_sizes, "Cannot have dynamic axes without a batch axis"
-      data.size_placeholder = {}
-
-    return data
+        raise TypeError("Layer %r: invalid type %s in shape %r" % (name, type(d), shape))
+      dim_tags.append(d)
+    return Data(name="%s_output" % name, dim_tags=dim_tags, dtype=dtype, sparse_dim=sparse_dim)
 
 
 class RangeLayer(LayerBase):
