@@ -7246,7 +7246,7 @@ class VariableLayer(LayerBase):
   """
   layer_class = "variable"
 
-  def __init__(self, shape, dtype="float32", add_batch_axis=True, add_time_axis=False, trainable=True,
+  def __init__(self, shape, dtype="float32", add_batch_axis=False, add_time_axis=False, trainable=True,
                init=0,
                **kwargs):
     """
@@ -7298,7 +7298,7 @@ class VariableLayer(LayerBase):
 
   @classmethod
   def get_out_data_from_opts(cls, name, network,
-                             shape, dtype="float32", add_batch_axis=True, add_time_axis=False, **kwargs):
+                             shape, dtype="float32", add_batch_axis=False, add_time_axis=False, **kwargs):
     """
     :param str name:
     :param returnn.tf.network.TFNetwork network:
