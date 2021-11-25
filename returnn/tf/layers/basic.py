@@ -82,10 +82,11 @@ def _name_scope_for_concat_src_layers(src_layers, postfix):
     yield scope
 
 
-def concat_sources(src_layers, out_dim=None):
+def concat_sources(src_layers, out_dim=None, allow_broadcast_all_sources=NotSpecified):
   """
   :param list[LayerBase] src_layers:
   :param DimensionTag|None out_dim:
+  :param bool|NotSpecified allow_broadcast_all_sources:
   :return: data with placeholders set
   :rtype: Data
   """
@@ -99,9 +100,11 @@ def concat_sources(src_layers, out_dim=None):
   cache_key = (tuple(src_layers), out_dim, 0.0, None)
   if cache_key in network.concat_sources_dropout_cache:
     return network.concat_sources_dropout_cache[cache_key].copy()
-  data = get_concat_sources_data_template(src_layers, out_dim=out_dim)
+  data = get_concat_sources_data_template(
+    src_layers, out_dim=out_dim, allow_broadcast_all_sources=allow_broadcast_all_sources)
   # Currently we assume that get_concat_sources_data_template will match Data.get_common_data (besides the dim).
-  common_source = Data.get_common_data([s.output for s in src_layers], ignore_feature_dim=True)
+  common_source = Data.get_common_data(
+    [s.output for s in src_layers], ignore_feature_dim=True, allow_broadcast_all_sources=allow_broadcast_all_sources)
   data.size_placeholder = common_source.size_placeholder.copy()  # to get right dimension tags
   layers_data = []
   with _name_scope_for_concat_src_layers(src_layers, "concat_sources"):
@@ -123,7 +126,7 @@ def concat_sources(src_layers, out_dim=None):
   return data
 
 
-def get_concat_sources_data_template(src_layers, out_dim=None, name=None):
+def get_concat_sources_data_template(src_layers, out_dim=None, allow_broadcast_all_sources=NotSpecified, name=None):
   """
   This just creates a template :class:`Data` instance,
   without creating any real TF tensors.
@@ -132,6 +135,7 @@ def get_concat_sources_data_template(src_layers, out_dim=None, name=None):
 
   :param list[LayerBase]|tuple[LayerBase] src_layers:
   :param DimensionTag|None out_dim:
+  :param bool|NotSpecified allow_broadcast_all_sources:
   :param str|None name: name of the Data
   :return: data with no placeholders set. it is always a copy or new instance, so safe to manipulate
   :rtype: Data
@@ -146,7 +150,8 @@ def get_concat_sources_data_template(src_layers, out_dim=None, name=None):
   if not name:
     name = "concat_" + "_".join([layer.name for layer in src_layers])
   dim = 0
-  common_source = Data.get_common_data([s.output for s in src_layers], ignore_feature_dim=True)
+  common_source = Data.get_common_data(
+    [s.output for s in src_layers], ignore_feature_dim=True, allow_broadcast_all_sources=allow_broadcast_all_sources)
   for layer in src_layers:
     # Note: We do not perform much compatibility checks at this point,
     # as this is for a template only anyway.
@@ -165,7 +170,8 @@ def get_concat_sources_data_template(src_layers, out_dim=None, name=None):
 
 
 def concat_sources_with_opt_dropout(src_layers, out_dim=None,
-                                    dropout=0, dropout_noise_shape=None, dropout_on_forward=False):
+                                    dropout=0, dropout_noise_shape=None, dropout_on_forward=False,
+                                    allow_broadcast_all_sources=NotSpecified):
   """
   Concatenates in the feature dim (see :func:`concat_sources`),
   and then optionally applies dropout.
@@ -177,11 +183,12 @@ def concat_sources_with_opt_dropout(src_layers, out_dim=None,
     The default "None" will broadcast across all dynamic axes including the batch axis.
     Use {"*": None} to disable broadcasting for all axes.
   :param bool dropout_on_forward: apply dropout also during inference
+  :param bool|NotSpecified allow_broadcast_all_sources:
   :return: data with placeholders set
   :rtype: Data
   """
   assert src_layers, "need source layers"
-  data = concat_sources(src_layers, out_dim=out_dim)
+  data = concat_sources(src_layers, out_dim=out_dim, allow_broadcast_all_sources=allow_broadcast_all_sources)
   network = src_layers[0].network
   if network.train_flag is False and not dropout_on_forward:
     # If we know that we are not training, we always disable dropout.
@@ -226,15 +233,17 @@ class _ConcatInputLayer(LayerBase):
   This layer also optionally can do dropout on the input.
   """
 
-  def __init__(self, in_dim=None, dropout=0, dropout_noise_shape=None, dropout_on_forward=False, mask=None, **kwargs):
+  def __init__(self, in_dim=None, out_shape=None,
+               dropout=0, dropout_noise_shape=None, dropout_on_forward=False, mask=None, **kwargs):
     """
     :param DimensionTag|None in_dim:
+    :param set[DimensionTag|returnn.tf.util.data._ImplicitDim]|tuple|list|None out_shape:
     :param float dropout: 0.0 means to apply no dropout. dropout will only be applied during training
     :param dict[str|tuple,int|None] dropout_noise_shape: see :func:`returnn.tf.util.data.get_bc_shape`
     :param bool dropout_on_forward: apply dropout during inference
     :param str|None mask: "dropout" or "unity" or None. this is obsolete and only here for historical reasons
     """
-    super(_ConcatInputLayer, self).__init__(**kwargs)
+    super(_ConcatInputLayer, self).__init__(in_dim=in_dim, out_shape=out_shape, **kwargs)
     assert mask in ['dropout', 'unity', None], "invalid mask: %r" % mask
     if mask == "unity":
       assert not dropout
@@ -245,7 +254,8 @@ class _ConcatInputLayer(LayerBase):
     if self.sources:
       self.input_data = concat_sources_with_opt_dropout(
         self.sources, out_dim=in_dim,
-        dropout=dropout, dropout_noise_shape=dropout_noise_shape, dropout_on_forward=dropout_on_forward)
+        dropout=dropout, dropout_noise_shape=dropout_noise_shape, dropout_on_forward=dropout_on_forward,
+        allow_broadcast_all_sources=True if out_shape else NotSpecified)
 
 
 class CopyLayer(_ConcatInputLayer):
@@ -256,15 +266,21 @@ class CopyLayer(_ConcatInputLayer):
 
   layer_class = "copy"
 
-  def __init__(self, extra_deps=(), **kwargs):
+  def __init__(self, in_dim=None, out_dim=None, extra_deps=(), **kwargs):
     """
+    :param DimensionTag|None in_dim:
+    :param DimensionTag|None out_dim:
     :param list[LayerBase] extra_deps: Just add as an additional dependency, without really using it.
       This can have an effect though on the search beam, via :class:`SelectSearchSourcesLayer`.
       We only have this here for the :class:`CopyLayer` because the :func:`get_out_data_from_opts`
       must know about it and define the right beam.
       Also see the option ``collocate_with``, which is different in that it does *not* add a dependency.
     """
-    super(CopyLayer, self).__init__(**kwargs)
+    if in_dim and out_dim:
+      assert in_dim == out_dim
+    in_dim = in_dim or out_dim
+    out_dim = in_dim
+    super(CopyLayer, self).__init__(in_dim=in_dim, out_dim=out_dim, **kwargs)
     self.extra_deps = extra_deps
     self.output = self.input_data.copy(name="%s_output" % self.name)
     if len(self.sources) == 1:
@@ -282,7 +298,8 @@ class CopyLayer(_ConcatInputLayer):
     return super(CopyLayer, self).get_dep_layers() + list(self.extra_deps)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources=(), extra_deps=(), out_type=None, out_dim=None, n_out=NotSpecified,
+  def get_out_data_from_opts(cls, name, sources=(), extra_deps=(),
+                             out_type=None, out_dim=None, n_out=NotSpecified, out_shape=None,
                              **kwargs):
     """
     :param str name:
@@ -291,10 +308,13 @@ class CopyLayer(_ConcatInputLayer):
     :param dict[str]|None out_type:
     :param DimensionTag|None out_dim:
     :param int|None|NotSpecified n_out:
+    :param set[DimensionTag|returnn.tf.util.data._ImplicitDim]|tuple|list|None out_shape:
     :rtype: Data
     """
     # If all sources are defined, use them to get the exact out_type.
-    out = get_concat_sources_data_template(sources, out_dim=out_dim, name="%s_output" % name)
+    out = get_concat_sources_data_template(
+      sources, out_dim=out_dim, name="%s_output" % name,
+      allow_broadcast_all_sources=True if out_shape else NotSpecified)
     # Instead of checking or raising an exception, just overwrite, as this could be the template construction.
     if out_type or n_out is not NotSpecified:
       if not out_type:
@@ -308,7 +328,7 @@ class CopyLayer(_ConcatInputLayer):
       elif out.dim is not None:
         out_type.setdefault("dim", out.dim)
       out = super(CopyLayer, cls).get_out_data_from_opts(
-        name=name, out_type=out_type, n_out=n_out, sources=sources, **kwargs)
+        name=name, out_type=out_type, n_out=n_out, out_dim=out_dim, out_shape=out_shape, sources=sources, **kwargs)
     out.beam = SearchBeam.get_combined_beam(out.beam, *[dep.output.beam for dep in extra_deps if dep])
     return out
 
