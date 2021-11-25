@@ -978,8 +978,9 @@ class SliceNdLayer(_ConcatInputLayer):
   def __init__(self, start, size, min_size=None, **kwargs):
     """
     :param LayerBase start: (B,...)
-    :param int|LayerBase|None size: if None, it uses the max possible size,
-      and it becomes a dynamic axis.
+    :param int|LayerBase|DimensionTag|None size:
+      We assume that this is >=0. If this might not be the case, use ``min_size=0``.
+      If None, it uses the max possible size, and it becomes a dynamic axis.
     :param int|None min_size: if size is None, but we want to have a min-size
     """
     super(SliceNdLayer, self).__init__(**kwargs)
