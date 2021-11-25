@@ -331,7 +331,7 @@ class LayerBase(object):
     out_type.setdefault("name", "%s_output" % name)
     if "dim" not in out_type and n_out is not NotSpecified:
       out_type["dim"] = n_out
-    if "dim" not in out_type and target:
+    if "dim" not in out_type and target and not out_dim:
       out_type["dim"] = cls._static_get_target_value(
         target=target[0] if isinstance(target, list) else target, _target_layers=_target_layers,
         network=network, mark_data_key_as_used=False).dim
@@ -370,10 +370,13 @@ class LayerBase(object):
           out_type["dim_tags"] = sources_data.dim_tags_sparse
         else:  # not sparse
           feature_dim_axis = out_type.get("feature_dim_axis", NotSpecified)
-          dim = out_type.get("dim", None)
           dim_tags = list(sources_data.dim_tags_sparse)
-          feature_dim_tag = DimensionTag(
-            kind=DimensionTag.Types.Feature, description="%s:feature-dense" % name, dimension=dim)
+          if out_dim:
+            feature_dim_tag = out_dim
+          else:
+            dim = out_type.get("dim", None)
+            feature_dim_tag = DimensionTag(
+              kind=DimensionTag.Types.Feature, description="%s:feature-dense" % name, dimension=dim)
           if feature_dim_axis in (NotSpecified, None):
             if sources_data.feature_dim_axis is None:
               feature_dim_axis = len(dim_tags)
