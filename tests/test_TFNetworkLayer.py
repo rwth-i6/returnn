@@ -119,6 +119,23 @@ def test_ExternData_init_twice_existing_dim_tags():
       session.run(net.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(net.extern_data))
 
 
+def test_LinearLayer():
+  from returnn.tf.util.data import BatchDim
+  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
+  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feature", dimension=5)
+  config = Config({
+    "extern_data": {
+      "data": {"dim_tags": [BatchDim, time_dim, feat_dim]}  # [B,T,D]
+    }
+  })
+  for _ in range(2):
+    with make_scope() as session:
+      net = TFNetwork(config=config)
+      net.construct_from_dict({"output": {"class": "linear", "from": "data", "n_out": 3}})
+      session.run(tf_compat.v1.global_variables_initializer())
+      session.run(net.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(net.extern_data))
+
+
 def test_PadLayer_time():
   n_batch, n_time, n_in = 7, 3, 20
   config = Config({
