@@ -136,6 +136,40 @@ def test_LinearLayer():
       session.run(net.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(net.extern_data))
 
 
+def test_LinearLayer_two_time_dims_allow_broadcast_all_sources():
+  from returnn.tf.util.data import BatchDim
+  with make_scope() as session:
+    time1_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time1")
+    time2_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time2")
+    feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feature", dimension=5)
+    out_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feature", dimension=3)
+    config = Config({
+      "extern_data": {
+        "in1": {"dim_tags": [BatchDim, time1_dim, feat_dim]},
+        "in2": {"dim_tags": [BatchDim, time2_dim, feat_dim]},
+      },
+    })
+    network = TFNetwork(config=config)
+    try:
+      network.construct_from_dict({
+        "output": {"class": "linear", "from": ["data:in1", "data:in2"], "n_out": 3}})
+    except Exception as exc:
+      # https://github.com/rwth-i6/returnn/issues/691
+      print("Expected exception:", exc)
+      assert "require broadcasting" in str(exc)
+    else:
+      raise Exception(
+        "Expect allow_broadcast_all_sources exception, but layer constructed: %s" % network.get_default_output_layer())
+    network.construct_from_dict({
+      "output": {
+        "class": "linear", "from": ["data:in1", "data:in2"], "out_dim": out_dim,
+        "out_shape": {BatchDim, time1_dim, time2_dim, out_dim}}})
+    output = network.get_default_output_layer().output
+    assert output.shape == (None, None, 3)
+    session.run(tf_compat.v1.global_variables_initializer())
+    session.run(fetches=output.placeholder, feed_dict=make_feed_dict(network.extern_data))
+
+
 def test_PadLayer_time():
   n_batch, n_time, n_in = 7, 3, 20
   config = Config({
