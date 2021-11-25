@@ -978,8 +978,9 @@ class SliceNdLayer(_ConcatInputLayer):
   def __init__(self, start, size, min_size=None, **kwargs):
     """
     :param LayerBase start: (B,...)
-    :param int|LayerBase|None size: if None, it uses the max possible size,
-      and it becomes a dynamic axis.
+    :param int|LayerBase|DimensionTag|None size:
+      We assume that this is >=0. If this might not be the case, use ``min_size=0``.
+      If None, it uses the max possible size, and it becomes a dynamic axis.
     :param int|None min_size: if size is None, but we want to have a min-size
     """
     super(SliceNdLayer, self).__init__(**kwargs)
@@ -997,21 +998,29 @@ class SliceNdLayer(_ConcatInputLayer):
     start_data = start_data.copy_compatible_to(common_data, check_sparse=False)
     start_t = start_data.placeholder
     if size is None:
-      if min_size is None:
-        min_size = 0
       if seq_lens_data is None:
         assert isinstance(x.batch_shape[x.time_dim_axis], int)
         size_t = x.batch_shape[x.time_dim_axis] - start_t
       else:
         seq_lens_t = seq_lens_data.copy_compatible_to(common_data, check_sparse=False).placeholder
         size_t = seq_lens_t - start_t
-      size = tf.maximum(tf.reduce_max(size_t), min_size)  # scalar
+      size_t = tf.maximum(size_t, min_size or 0)  # must make sure >=0 in any case
+      size = tf.reduce_max(size_t)  # scalar
     elif isinstance(size, LayerBase):
       size_data = size.output.copy_compatible_to(common_data, check_sparse=False)
-      size_t = size_data.placeholder
-      min_size = 0
-      size = tf.maximum(tf.reduce_max(size_t), min_size)  # scalar
+      size_t = size_data.placeholder  # assume already >=0
+      if min_size:
+        size_t = tf.maximum(size_t, min_size)
+      size = tf.reduce_max(size_t)  # scalar
+    elif isinstance(size, DimensionTag):
+      assert size.dyn_size_ext
+      size_data = size.dyn_size_ext.copy_compatible_to(common_data, check_sparse=False)
+      size_t = size_data.placeholder  # assume already >=0
+      if min_size:
+        size_t = tf.maximum(size_t, min_size)
+      size = tf.reduce_max(size_t)  # scalar
     else:
+      assert isinstance(size, int), "%s: invalid type %s for size" % (self, type(size))
       size_t = None
     # for each start index in start_data, we want to gather a slice
     # therefore, the output's first axes are the same as the ones from start_data
@@ -1021,17 +1030,17 @@ class SliceNdLayer(_ConcatInputLayer):
     if size_t is not None:
       # in this case, size is not known before runtime and becomes dynamic and we need to set dyn_size
       assert not isinstance(size, int)
-      dyn_size = tf.maximum(size_t, min_size)  # (B,) or (B,T)
+      assert isinstance(size_t, tf.Tensor)
       dyn_size_ext = Data(
         name=("%s:dyn_size" % slice_tag.description),
         dtype=Data.size_dtype,
-        placeholder=dyn_size,
-        dim_tags=start_data.dim_tags,
+        placeholder=size_t,
+        dim_tags=start_data.dim_tags,  # (B,) or (B,T)
         batch=slice_tag.batch,
         beam=slice_tag.batch.beam if slice_tag.batch else self.output.beam,
         control_flow_ctx=slice_tag.control_flow_ctx)
       slice_tag.dyn_size_ext = dyn_size_ext
-      slice_tag.set_tag_on_size_tensor(dyn_size)
+      slice_tag.set_tag_on_size_tensor(size_t)
     gather_positions_data = start_data.copy_template(name="%s_gather_positions" % self.name)
     gather_positions_data = gather_positions_data.copy_add_dim_by_tag(
       slice_tag,
@@ -1098,7 +1107,7 @@ class SliceNdLayer(_ConcatInputLayer):
     :param str name:
     :param list[LayerBase] sources:
     :param LayerBase|None start:
-    :param int|LayerBase|None size:
+    :param int|LayerBase|DimensionTag|None size:
     :rtype: Data
     """
     from ..util.data import DimensionTag
@@ -1107,11 +1116,15 @@ class SliceNdLayer(_ConcatInputLayer):
     gather_positions_data = start_data.copy_template(name="%s_gather_positions" % name)
     if isinstance(size, LayerBase):
       size = None
-    # size might be None here in which case we set the dyn_size in __init__
-    tag = DimensionTag(
-      kind=DimensionTag.Types.Spatial,
-      description="sliced-time:%s" % name,
-      dimension=size)
+    if isinstance(size, DimensionTag):
+      tag = size
+    else:
+      # size might be None here in which case we set the dyn_size in __init__
+      assert size is None or isinstance(size, int)
+      tag = DimensionTag(
+        kind=DimensionTag.Types.Spatial,
+        description="sliced-time:%s" % name,
+        dimension=size)
     gather_positions_data = gather_positions_data.copy_add_dim_by_tag(tag, unbroadcast=True, axis=start_data.batch_ndim)
     position = InternalLayer(
       network=sources[0].network,
