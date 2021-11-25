@@ -1016,6 +1016,60 @@ def test_CombineLayer_two_time_dims_first_not_most_generic_with_n_out():
     assert out_np.shape == (n_time1, n_batch, n_time2, n_dim)
 
 
+def test_CombineLayer_two_time_dims_allow_broadcast_all_sources():
+  from returnn.tf.util.data import BatchDim
+  with make_scope() as session:
+    n_dim = 5
+    n_batch = 3
+    n_time1 = 7
+    n_time2 = 11
+    time1_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time1")
+    time2_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time2")
+    feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feature", dimension=n_dim)
+    rnd = numpy.random.RandomState(42)
+    config = Config({"debug_print_layer_output_template": True})
+    extern_data = ExternData()
+    in1 = Data(name="in1", dim_tags=[BatchDim, time1_dim, feat_dim], auto_create_placeholders=True)
+    in2 = Data(name="in2", dim_tags=[BatchDim, time2_dim, feat_dim], auto_create_placeholders=True)
+    extern_data.register_data(in1)
+    extern_data.register_data(in2)
+    print("ExternData all dimension tags (allow_same_feature_dim=True):")
+    pprint(extern_data.get_all_dimension_tags(allow_same_feature_dim=True))
+    network = TFNetwork(config=config, extern_data=extern_data, train_flag=True)
+    try:
+      network.construct_from_dict({
+        "output": {"class": "combine", "kind": "add", "from": ["data:in1", "data:in2"]}})
+    except Exception as exc:
+      # https://github.com/rwth-i6/returnn/issues/691
+      print("Expected exception:", exc)
+      assert "require broadcasting" in str(exc)
+    else:
+      raise Exception(
+        "Expect allow_broadcast_all_sources exception, but layer constructed: %s" % network.get_default_output_layer())
+    network.construct_from_dict({
+      "output": {
+        "class": "combine", "kind": "add", "from": ["data:in1", "data:in2"],
+        "out_shape": {BatchDim, time1_dim, time2_dim, feat_dim}}})
+    output = network.get_default_output_layer().output
+    assert output.shape == (None, None, n_dim) and set(output.size_placeholder.keys()) == {0, 1}
+    time1_np = numpy.array([n_time1, n_time1 - 3, n_time1 - 2])
+    assert min(time1_np) > 0 and max(time1_np) == n_time1 and len(time1_np) == n_batch
+    time2_np = numpy.array([n_time2, n_time2 - 2, n_time2 - 5])
+    assert min(time2_np) > 0 and max(time2_np) == n_time2 and len(time2_np) == n_batch
+    in1_np = rnd.normal(size=(n_batch, n_time1, n_dim)).astype("float32")
+    in2_np = rnd.normal(size=(n_batch, n_time2, n_dim)).astype("float32")
+    out_np, out_sizes_np = session.run(
+      fetches=(output.placeholder, output.size_placeholder.as_dict()),
+      feed_dict={
+        in1.placeholder: in1_np, in1.size_placeholder[0]: time1_np,
+        in2.placeholder: in2_np, in2.size_placeholder[0]: time2_np})
+    assert isinstance(out_np, numpy.ndarray)
+    assert isinstance(out_sizes_np, dict) and set(out_sizes_np.keys()) == {0, 1}
+    out_time0_np, out_time1_np = out_sizes_np[0], out_sizes_np[1]
+    assert isinstance(out_time0_np, numpy.ndarray) and isinstance(out_time1_np, numpy.ndarray)
+    assert out_np.shape == (n_batch, n_time1, n_time2, n_dim)
+
+
 def test_CombineLayer_time_broadcast():
   with make_scope() as session:
     n_batch, n_time, n_features = 3, 7, 5
