@@ -31,7 +31,12 @@ def _init_optimizer_classes_dict():
   if _OptimizerClassesDictInitialized:
     return
   _OptimizerClassesDictInitialized = True
-  potential_list = list(vars(tf_compat.v1.train).items())
+  # Build up all potential candidates of such classes.
+  # We will filter it below.
+  # The order of the list matters, and the first optimizer is used.
+  # E.g. our own NadamOptimizer here will be preferred over others.
+  potential_list = list(globals().items())
+  potential_list += list(vars(tf_compat.v1.train).items())
   if tf_version_tuple() >= (1, 2, 0):
     try:
       from tensorflow.contrib import opt  # noqa
@@ -42,7 +47,8 @@ def _init_optimizer_classes_dict():
   if KerasOptimizer:
     potential_list += list(vars(tf_compat.v2.keras.optimizers).items())
     allowed_types += (KerasOptimizer,)
-  potential_list += list(globals().items())
+    # Special name for Nadam in Keras, as we provide our own Nadam here.
+    potential_list += [("NadamKeras", tf_compat.v2.keras.optimizers.Nadam)]
   for name, v in potential_list:
     assert isinstance(name, str)
     # We might have duplicate names if TF v1 and v2 are mixed, etc.
@@ -1256,6 +1262,96 @@ class GradVarianceScaledOptimizer(BaseCustomOptimizer):
     update = lr * grad * tf.minimum(factor, 1.0)
     var_update = self._assign_sub(ref=var, updates=update, indices=indices)
     return tf.group(*[var_update, m_t])
+
+
+class NadamOptimizer(tf_compat.v1.train.AdamOptimizer):
+  """
+  Optimizer that implements the Nadam algorithm.
+  See [Dozat, T., 2015](http://cs229.stanford.edu/proj2015/054_report.pdf).
+
+  Copied from:
+  https://github.com/tensorflow/tensorflow/blob/v1.15.5/tensorflow/contrib/opt/python/training/nadam_optimizer.py
+
+  We have this here to have this Nadam variant available in TF 2
+  because the Keras Nadam behaves a bit different.
+  https://github.com/rwth-i6/returnn/issues/766
+  https://github.com/tensorflow/tensorflow/issues/53204
+
+  We can still use this old code because the underlying kernel still supports the ``use_nesterov`` option.
+  """
+
+  def _apply_dense(self, grad, var):
+    from tensorflow.python.training import training_ops
+    from tensorflow.python.ops import math_ops
+    m = self.get_slot(var, "m")
+    v = self.get_slot(var, "v")
+    beta1_power, beta2_power = self._get_beta_accumulators()
+    return training_ops.apply_adam(
+      var,
+      m,
+      v,
+      math_ops.cast(beta1_power, var.dtype.base_dtype),
+      math_ops.cast(beta2_power, var.dtype.base_dtype),
+      math_ops.cast(self._lr_t, var.dtype.base_dtype),
+      math_ops.cast(self._beta1_t, var.dtype.base_dtype),
+      math_ops.cast(self._beta2_t, var.dtype.base_dtype),
+      math_ops.cast(self._epsilon_t, var.dtype.base_dtype),
+      grad,
+      use_locking=self._use_locking,
+      use_nesterov=True).op
+
+  def _resource_apply_dense(self, grad, var):
+    from tensorflow.python.training import training_ops
+    from tensorflow.python.ops import math_ops
+    m = self.get_slot(var, "m")
+    v = self.get_slot(var, "v")
+    beta1_power, beta2_power = self._get_beta_accumulators()
+    return training_ops.resource_apply_adam(
+      var.handle,
+      m.handle,
+      v.handle,
+      math_ops.cast(beta1_power, grad.dtype.base_dtype),
+      math_ops.cast(beta2_power, grad.dtype.base_dtype),
+      math_ops.cast(self._lr_t, grad.dtype.base_dtype),
+      math_ops.cast(self._beta1_t, grad.dtype.base_dtype),
+      math_ops.cast(self._beta2_t, grad.dtype.base_dtype),
+      math_ops.cast(self._epsilon_t, grad.dtype.base_dtype),
+      grad,
+      use_locking=self._use_locking,
+      use_nesterov=True)
+
+  def _apply_sparse_shared(self, grad, var, indices, scatter_add):
+    from tensorflow.python.ops import math_ops
+    from tensorflow.python.ops import state_ops
+    from tensorflow.python.ops import array_ops
+    from tensorflow.python.framework import ops
+    from tensorflow.python.ops import control_flow_ops
+    beta1_power, beta2_power = self._get_beta_accumulators()
+    beta1_power = math_ops.cast(beta1_power, var.dtype.base_dtype)
+    beta2_power = math_ops.cast(beta2_power, var.dtype.base_dtype)
+    lr_t = math_ops.cast(self._lr_t, var.dtype.base_dtype)
+    beta1_t = math_ops.cast(self._beta1_t, var.dtype.base_dtype)
+    beta2_t = math_ops.cast(self._beta2_t, var.dtype.base_dtype)
+    epsilon_t = math_ops.cast(self._epsilon_t, var.dtype.base_dtype)
+    lr = (lr_t * math_ops.sqrt(1 - beta2_power) / (1 - beta1_power))
+    # m_t = beta1 * m + (1 - beta1) * g_t
+    m = self.get_slot(var, "m")
+    m_scaled_g_values = grad * (1 - beta1_t)
+    m_t = state_ops.assign(m, m * beta1_t, use_locking=self._use_locking)
+    with ops.control_dependencies([m_t]):
+      m_t = scatter_add(m, indices, m_scaled_g_values)
+      # m_bar = (1 - beta1) * g_t + beta1 * m_t
+      m_bar = m_scaled_g_values + beta1_t * array_ops.gather(m_t, indices)
+    # v_t = beta2 * v + (1 - beta2) * (g_t * g_t)
+    v = self.get_slot(var, "v")
+    v_scaled_g_values = (grad * grad) * (1 - beta2_t)
+    v_t = state_ops.assign(v, v * beta2_t, use_locking=self._use_locking)
+    with ops.control_dependencies([v_t]):
+      v_t = scatter_add(v, indices, v_scaled_g_values)
+    v_t_slice = array_ops.gather(v_t, indices)
+    v_sqrt = math_ops.sqrt(v_t_slice)
+    var_update = scatter_add(var, indices, -lr * m_bar / (v_sqrt + epsilon_t))
+    return control_flow_ops.group(*[var_update, m_bar, v_t])
 
 
 class CustomAdamOptimizer(BaseCustomOptimizer):

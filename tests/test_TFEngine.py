@@ -256,9 +256,17 @@ def test_engine_train_optimizer_class():
   test_engine_train(additional_config)
 
 
-def test_engine_train_keras_optimizer():
+def test_engine_train_nadam_optimizer():
   additional_config = {
     "optimizer": {"class": "nadam"},
+  }
+  test_engine_train(additional_config)
+
+
+@unittest.skipIf(tf.__version__.startswith("1."), "TF 1")
+def test_engine_train_keras_optimizer():
+  additional_config = {
+    "optimizer": {"class": "NadamKeras"},
   }
   test_engine_train(additional_config)
 
