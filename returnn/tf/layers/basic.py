@@ -1161,7 +1161,7 @@ class GatherLayer(_ConcatInputLayer):
     :param LayerBase|int position: Layer containing the indices used to select the slices of the input from.
       If another layer, must be of type ``int32`` or ``int64``.
       Can also specify a constant ``int``.
-    :param str axis: The axis into which we gather the indices into
+    :param DimensionTag|str axis: The axis into which we gather the indices into
     """
     super(GatherLayer, self).__init__(**kwargs)
     self.position = position
@@ -1271,7 +1271,7 @@ class GatherLayer(_ConcatInputLayer):
     :param str name:
     :param list[LayerBase] sources:
     :param LayerBase|int position:
-    :param str axis:
+    :param DimensionTag|str axis:
     :rtype: Data
     """
     from returnn.tf.util.data import BatchInfo
