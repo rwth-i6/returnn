@@ -1461,10 +1461,14 @@ class ScatterNdLayer(_ConcatInputLayer):
   The inverse of :class:`GatherNdLayer`.
   Mostly a wrapper for ``tf.scatter_nd``.
 
+  Note that "nd" is maybe a bit misleading.
+  While we operate on N-D tensors, the indices (``position``)
+  are into a single new dimension.
+
   The input to the layer are the ``updates``, the ``indices`` are via the ``position`` argument.
   The indices are into the newly constructed output dimension.
   The output shape is constructed via the common shape of the input, the position,
-  and the the unique common axis (if not unique, we would need to introduce an option to specify it)
+  and the unique common axis (if not unique, we would need to introduce an option to specify it)
   is replaced by the given output dimension (currently via ``output_dim_via_time_from``).
 
   Examples::
@@ -1489,18 +1493,26 @@ class ScatterNdLayer(_ConcatInputLayer):
   """
   layer_class = "scatter_nd"
 
-  def __init__(self, position, position_axis, output_dim_via_time_from, filter_invalid_indices=False, **kwargs):
+  def __init__(self, position, position_axis, output_dim_via_time_from=None, out_spatial_dim=None,
+               filter_invalid_indices=False, **kwargs):
     """
     :param LayerBase position: indices into first axis (excluding batch) of the output
     :param str|int position_axis: axis in `position` to replace by the output-dim
-    :param LayerBase output_dim_via_time_from: use the time-dim from this layer as the output-dim
+    :param LayerBase|None output_dim_via_time_from: use the time-dim from this layer as the output-dim
+    :param DimensionTag|None out_spatial_dim:
     :param bool filter_invalid_indices: allow for indices <0 or >= output_dim, which will be discarded in the output
     """
     super(ScatterNdLayer, self).__init__(**kwargs)
+    assert (out_spatial_dim or output_dim_via_time_from) and not (out_spatial_dim and output_dim_via_time_from), (
+      "%s: provide either out_spatial_dim or output_dim_via_time_from but not both" % self)
+    if not out_spatial_dim:
+      out_spatial_dim = output_dim_via_time_from.output.get_time_dim_tag()
+    assert out_spatial_dim.is_dim_known(), (
+      "%s: out_spatial_dim %s must have a known (dynamic or static) dim" % (self, out_spatial_dim))
     self.position = position
     common, output, replace_common_axis, input_extra_axes = self._get_axes(
       input_data=self.input_data, position=position.output, position_axis=position_axis,
-      output_dim_via_time_from=output_dim_via_time_from.output)
+      out_spatial_dim=out_spatial_dim)
     pos_v = position.output.placeholder
     pos_ndim = position.output.batch_ndim
     assert 0 <= replace_common_axis < pos_ndim
@@ -1539,12 +1551,12 @@ class ScatterNdLayer(_ConcatInputLayer):
     return super(ScatterNdLayer, self).get_dep_layers() + [self.position]
 
   @classmethod
-  def _get_axes(cls, input_data, position, position_axis, output_dim_via_time_from):
+  def _get_axes(cls, input_data, position, position_axis, out_spatial_dim):
     """
     :param Data input_data: updates
     :param Data position: indices
     :param str|int position_axis: axis in `position` to replace by the output-dim
-    :param Data output_dim_via_time_from:
+    :param DimensionTag out_spatial_dim:
     :rtype: (Data, Data, int, list[int])
     :return: common, output, axis, input_extra_axes
     """
@@ -1570,26 +1582,26 @@ class ScatterNdLayer(_ConcatInputLayer):
     assert position_axis != position.batch_dim_axis
     if common.time_dim_axis is None:
       common.time_dim_axis = position_axis
-    output_dim = output_dim_via_time_from.batch_shape[output_dim_via_time_from.time_dim_axis]
-    output_size = output_dim_via_time_from.size_placeholder.get(
-      output_dim_via_time_from.time_dim_axis_excluding_batch, None)
-    output = common.copy_template_replace_dim(axis=position_axis, new_dim=output_dim, new_size=output_size)
+    output = common.copy_template_replace_dim_tag(axis=position_axis, new_dim_tag=out_spatial_dim)
     return common, output, position_axis, input_extra_axes
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, position, position_axis, output_dim_via_time_from, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, position, position_axis,
+                             output_dim_via_time_from=None, out_spatial_dim=None,
+                             **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param LayerBase position:
     :param str|int position_axis: axis in `position` to replace by the output-dim
-    :param LayerBase output_dim_via_time_from:
+    :param LayerBase|None output_dim_via_time_from: use the time-dim from this layer as the output-dim
+    :param DimensionTag|None out_spatial_dim:
     :rtype: Data
     """
     input_data = get_concat_sources_data_template(sources)
     common, output, replace_common_axis, input_extra_axes = cls._get_axes(
       input_data=input_data, position=position.output, position_axis=position_axis,
-      output_dim_via_time_from=output_dim_via_time_from.output)
+      out_spatial_dim=out_spatial_dim if out_spatial_dim else output_dim_via_time_from.output.get_time_dim_tag())
     return output.copy_template(name="%s_output" % name)
 
   @classmethod
@@ -1601,7 +1613,8 @@ class ScatterNdLayer(_ConcatInputLayer):
     """
     super(ScatterNdLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     d["position"] = get_layer(d["position"])
-    d["output_dim_via_time_from"] = get_layer(d["output_dim_via_time_from"])
+    if d.get("output_dim_via_time_from", None):
+      d["output_dim_via_time_from"] = get_layer(d["output_dim_via_time_from"])
 
 
 class LinearLayer(_ConcatInputLayer):
