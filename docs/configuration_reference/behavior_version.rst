@@ -22,6 +22,15 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 5 (2021-11-26)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Any ``axis`` or ``axes`` argument in layers does not allow int values anymore.
+Instead, use either a str like ``"F"`` or ``"stag:..."``
+or use a :class:`DimensionTag` instance.
+
+See issue `#773 <https://github.com/rwth-i6/returnn/issues/773>`__.
+
 Behavior version 4 (2021-11-23)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
