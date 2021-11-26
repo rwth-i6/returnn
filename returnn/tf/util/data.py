@@ -3535,7 +3535,7 @@ class Data(object):
       elif all([a in "btf" for a in axes]):
         return self.get_axes_from_description(list(axes))
       elif axes.startswith("stag:"):  # spatial tag
-        return self.get_axis_by_tag_name(axes[len("stag:"):], spatial_only=True)
+        return [self.get_axis_by_tag_name(axes[len("stag:"):], spatial_only=True)]
       elif axes.startswith("stag-single:"):  # spatial tag which possibly matches multiple spatial axes
         # in this case, a name of form "stag-single:<idx>:<name> is expected.
         # idx is relative to the matching stags, i.e., it is the index among the list of spatial dims matching the name
