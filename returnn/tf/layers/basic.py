@@ -1862,7 +1862,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
                start=None, window_start=None, window_size=None, use_time_mask=None,
                log_space=False, **kwargs):
     """
-    :param str|None axis: which axis to do the softmax over
+    :param DimensionTag|str|None axis: which axis to do the softmax over. "T" by default
     :param float|None energy_factor: the energy will be scaled by this factor.
       This is like a temperature for the softmax.
       In Attention-is-all-you-need, this is set to 1/sqrt(base_ctx.dim).
@@ -1895,7 +1895,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     if use_time_mask:
       energy_mask = SeqLenMaskLayer.build_mask(
         energy_data,
-        axis=axis,
+        axis=axis, axis_allow_int=True,
         start=start.output if start else None,
         window_start=window_start.output if isinstance(window_start, LayerBase) else window_start,
         window_size=window_size.output if isinstance(window_size, LayerBase) else window_size)
@@ -1927,7 +1927,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
   def _get_axis_to_reduce(cls, input_data, axis, exception_prefix):
     """
     :param Data input_data:
-    :param str|None axis:
+    :param DimensionTag|str|None axis:
     :param str|object exception_prefix:
     :rtype: int
     """
@@ -1943,7 +1943,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     """
     :param str name:
     :param list[LayerBase] sources:
-    :param str|None axis:
+    :param DimensionTag|str|None axis:
     :param LayerBase|None start:
     :param LayerBase|None window_start:
     :param LayerBase|int|None window_size:
@@ -2018,10 +2018,14 @@ class SeqLenMaskLayer(_ConcatInputLayer):
       self.allow_inf_in_output = True
 
   @classmethod
-  def build_mask(cls, x, axis="T", seq_len_source=None, start=None, window_start=None, window_size=None):
+  def build_mask(cls, x, axis="T", axis_allow_int=NotSpecified,
+                 seq_len_source=None, start=None, window_start=None, window_size=None):
     """
     :param Data x:
-    :param str|int axis:
+    :param DimensionTag|str|int axis:
+    :param bool|NotSpecified axis_allow_int:
+      Some callers of this function would pass in an int for axis directly.
+      In that case, explicitly set this to True.
     :param Data|None seq_len_source:
     :param Data|None start:
     :param Data|None window_start:
@@ -2032,7 +2036,7 @@ class SeqLenMaskLayer(_ConcatInputLayer):
     from returnn.tf.util.basic import get_shape
     energy = x.placeholder
     energy_shape = get_shape(energy)
-    axis = x.get_axis_from_description(axis)
+    axis = x.get_axis_from_description(axis, allow_int=axis_allow_int)
     assert x.is_axis_dynamic(axis), "%s: use_time_mask True, dyn time axis expected" % x
     if seq_len_source:
       energy_mask = seq_len_source.copy_compatible_to(x).get_sequence_mask_broadcast(axis=axis)
