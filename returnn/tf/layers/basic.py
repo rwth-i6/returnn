@@ -2718,15 +2718,15 @@ class PadLayer(_ConcatInputLayer):
   """
   layer_class = "pad"
 
-  def __init__(self, axes, padding, out_spatial_dims=None, value=0, mode="constant", **kwargs):
+  def __init__(self, axes, padding, out_dims=None, value=0, mode="constant", **kwargs):
     """
     :param DimensionTag|str|list[DimensionTag|str] axes: e.g. "F" etc. see :func:`Data.get_axes_from_description`.
     :param list[(int,int)]|(int,int)|int padding: how much to pad left/right in each axis
-    :param DimensionTag|list[DimensionTag]|None out_spatial_dims:
+    :param DimensionTag|list[DimensionTag]|None out_dims:
     :param int|float value: what constant value to pad, with mode=="constant"
     :param str mode: "constant", "reflect", "symmetric" and "replication"
     """
-    out_spatial_dims  # noqa  # handled in get_out_data_from_opts
+    out_dims  # noqa  # handled in get_out_data_from_opts
     super(PadLayer, self).__init__(**kwargs)
     axes_ = self.input_data.get_axes_from_description(axes)
     assert axes_, "%s: invalid axes %r in input %s" % (self, axes, self.input_data)
@@ -2781,13 +2781,13 @@ class PadLayer(_ConcatInputLayer):
     return padding
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, axes, padding, out_spatial_dims=None, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, axes, padding, out_dims=None, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param DimensionTag|str|list[DimensionTag|str] axes:
     :param list[(int,int)]|(int,int)|int padding:
-    :param DimensionTag|list[DimensionTag]|None out_spatial_dims:
+    :param DimensionTag|list[DimensionTag]|None out_dims:
     :rtype: Data
     """
     from ..util.data import DimensionTag
@@ -2800,23 +2800,23 @@ class PadLayer(_ConcatInputLayer):
     else:
       axes = [data.get_axis_from_description(axes)]
     padding = cls._transform_padding(padding=padding, axes=axes)
-    if out_spatial_dims:
-      if isinstance(out_spatial_dims, (list, tuple)):
-        assert len(out_spatial_dims) == len(axes) == len(padding)
-        assert all(isinstance(d, DimensionTag) for d in out_spatial_dims)
+    if out_dims:
+      if isinstance(out_dims, (list, tuple)):
+        assert len(out_dims) == len(axes) == len(padding)
+        assert all(isinstance(d, DimensionTag) for d in out_dims)
       else:
-        assert isinstance(out_spatial_dims, DimensionTag)
+        assert isinstance(out_dims, DimensionTag)
         assert len(axes) == len(padding) == 1
-        out_spatial_dims = [out_spatial_dims]
+        out_dims = [out_dims]
     dim_tags = list(data.dim_tags)
     for i, a in enumerate(axes):
       tag = dim_tags[a]
       dim = None if tag.dimension is None else (tag.dimension + sum(padding[i]))
-      if out_spatial_dims:
+      if out_dims:
         if sum(padding[i]) == 0:
-          assert out_spatial_dims[i] == tag
+          assert out_dims[i] == tag
           continue
-        tag = out_spatial_dims[i]
+        tag = out_dims[i]
         assert dim == tag.dimension
       elif sum(padding[i]) == 0:
         continue
