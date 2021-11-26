@@ -3415,13 +3415,43 @@ class Data(object):
       axes.pop(axes.index(self.feature_dim_axis))
     return axes
 
-  def get_axes_from_description(self, axes, allow_int=True):
+  @classmethod
+  def _verify_axis_int_from_description(cls, allow_int=NotSpecified):
+    """
+    Call this when you have the case that ``axis`` or ``axes``
+    in :func:`get_axes_from_description` or :func:`get_axis_from_description`
+    was specified as int.
+
+    :param bool|NotSpecified allow_int:
+    """
+    msg = "Do not specify axis as int but as str or DimensionTag instead."
+    if allow_int is NotSpecified:
+      from returnn.util import BehaviorVersion
+      BehaviorVersion.require(condition=False, message=msg, version=5)
+    if allow_int:
+      return
+    raise Exception(msg)
+
+  def _make_valid_int_axis(self, axis):
+    """
+    :param int axis: counted with batch. anything in [-ndim,ndim-1]
+    :return: axis in [0,ndim-1]
+    :rtype: int
+    """
+    if axis < 0:
+      assert axis + self.batch_ndim >= 0
+      axis += self.batch_ndim
+    assert axis < self.batch_ndim
+    return axis
+
+  def get_axes_from_description(self, axes, allow_int=NotSpecified):
     """
     :param int|list[int]|str|list[str|DimensionTag]|DimensionTag|None axes: one axis or multiple axis, or none.
       This is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
       It also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
       and more (see the code).
-    :param bool allow_int: whether to allow an int directly. in almost all cases, it is better to use a symbolic name
+    :param bool|NotSpecified allow_int: whether to allow an int directly.
+      in almost all cases, it is better to use a symbolic name
       to specify an axis, as different layers could reorder them, and maybe also change their behavior in the future.
     :return: list of axes, counted with batch-dim
     :rtype: list[int]
@@ -3429,55 +3459,57 @@ class Data(object):
     if axes is None or axes == "":
       return []
     if isinstance(axes, DimensionTag):
+      # Once we have not guaranteed unique dim tags, multiple axes could match.
+      # https://github.com/rwth-i6/returnn/issues/632
       return [i for (i, tag) in enumerate(self.dim_tags) if tag == axes]
-    if not allow_int:
-      assert not isinstance(axes, int)
+    if isinstance(axes, int):
+      self._verify_axis_int_from_description(allow_int=allow_int)
+      return [self._make_valid_int_axis(axes)]
     assert isinstance(axes, (str, int, list, tuple))
-    if isinstance(axes, (list, tuple)):
-      assert all([a is None or isinstance(a, (str, int, DimensionTag)) for a in axes])
-      if not allow_int:
-        assert all([not isinstance(a, int) for a in axes])
     if isinstance(axes, str):
       import re
       axes = axes.lower()
       if axes in ["b", "batch"]:
         assert self.batch_dim_axis is not None
-        axes = self.batch_dim_axis
+        return [self.batch_dim_axis]
       elif axes == "spatial":
-        axes = self.get_spatial_batch_axes()
+        return self.get_spatial_batch_axes()
       elif re.match("(s|spatial):-?\\d+$", axes):
         s = int(axes.split(":")[1])
         spatial_axes = self.get_spatial_batch_axes()
         if s < 0:
           s += len(spatial_axes)
         assert s < len(spatial_axes), "%s get_axes_from_description: %r invalid" % (self, axes)
-        axes = spatial_axes[s]
+        return [spatial_axes[s]]
       elif axes in ["dyn", "dynamic"]:
-        axes = self.get_dynamic_axes()
+        return self.get_dynamic_axes()
       elif re.match("(d|dyn|dynamic):-?\\d+$", axes):
         s = int(axes.split(":")[1])
         dyn_axes = self.get_dynamic_axes()
         if s < 0:
           s += len(dyn_axes)
         assert 0 <= s < len(dyn_axes), "%s get_axes_from_description: %r invalid" % (self, axes)
-        axes = dyn_axes[s]
+        return [dyn_axes[s]]
       elif axes == "spatial_except_time":
         axes = self.get_spatial_batch_axes()
         assert self.time_dim_axis is not None
         axes.remove(self.time_dim_axis)
+        return axes
       elif axes in ["t", "time"]:
         assert self.time_dim_axis is not None
-        axes = self.time_dim_axis
+        return [self.time_dim_axis]
       elif axes == "t?":
-        axes = [self.time_dim_axis] if self.time_dim_axis is not None else []
+        return [self.time_dim_axis] if self.time_dim_axis is not None else []
       elif axes == "except_time":  # also except batch
         axes = list(range(self.batch_ndim))
         axes.remove(self.batch_dim_axis)
         if self.time_dim_axis is not None:
           axes.remove(self.time_dim_axis)
+        return axes
       elif axes == "except_batch":
         axes = list(range(self.batch_ndim))
         axes.remove(self.batch_dim_axis)
+        return axes
       elif re.match("(except_batch):-?\\d+$", axes):
         s = int(axes.split(":")[1])
         non_batch_axes = list(range(self.batch_ndim))
@@ -3486,43 +3518,40 @@ class Data(object):
         if s < 0:
           s += len(non_batch_axes)
         assert 0 <= s < len(non_batch_axes), "%s get_axes_from_description: %r invalid" % (self, axes)
-        axes = non_batch_axes[s]
+        return [non_batch_axes[s]]
       elif axes == "*":
-        axes = list(range(self.batch_ndim))
+        return list(range(self.batch_ndim))
       elif axes == "static":
-        axes = self.get_static_axes()
+        return self.get_static_axes()
       elif re.match("(static):-?\\d+$", axes):
         s = int(axes.split(":")[1])
         static_axes = self.get_static_axes()
         if s < 0:
           s += len(static_axes)
         assert 0 <= s < len(static_axes), "%s get_axes_from_description: %r invalid" % (self, axes)
-        axes = static_axes[s]
+        return [static_axes[s]]
       elif axes in ["f", "feature", "non_spatial"]:
-        axes = self.get_feature_batch_axes()
+        return self.get_feature_batch_axes()
       elif all([a in "btf" for a in axes]):
         return self.get_axes_from_description(list(axes))
       elif axes.startswith("stag:"):  # spatial tag
-        axes = self.get_axis_by_tag_name(axes[len("stag:"):], spatial_only=True)
+        return [self.get_axis_by_tag_name(axes[len("stag:"):], spatial_only=True)]
       elif axes.startswith("stag-single:"):  # spatial tag which possibly matches multiple spatial axes
         # in this case, a name of form "stag-single:<idx>:<name> is expected.
         # idx is relative to the matching stags, i.e., it is the index among the list of spatial dims matching the name
         _, idx_s, name = axes.split(":", 2)  # stag-single:<idx>:<name>
         idx = int(idx_s)
-        axes = self.get_axes_by_tag_name(name, spatial_only=True)[idx]
-      else:
-        raise Exception("invalid axis mode %r" % axes)
-    if isinstance(axes, int):
-      axes = [axes]
-    assert isinstance(axes, (tuple, list)), "invalid axis %r" % axes
+        return [self.get_axes_by_tag_name(name, spatial_only=True)[idx]]
+      raise Exception("invalid axis mode %r" % axes)
+    assert isinstance(axes, (tuple, list)), "invalid axes %r" % axes
     flat_axes = []
     for i in axes:
       if isinstance(i, int):
-        flat_axes += [i]
+        self._verify_axis_int_from_description(allow_int=allow_int)
+        flat_axes.append(self._make_valid_int_axis(i))
       else:
         assert isinstance(i, (str, tuple, list, DimensionTag))
-        flat_axes += self.get_axes_from_description(i)
-    flat_axes = [i % self.batch_ndim for i in flat_axes]
+        flat_axes += self.get_axes_from_description(i, allow_int=allow_int)
     res = []
     for i in flat_axes:
       if i not in res:
@@ -3538,10 +3567,10 @@ class Data(object):
     axis_int = self.get_axis_from_description(axis, allow_int=False)
     return self.dim_tags[axis_int]
 
-  def get_axis_from_description(self, axis, allow_int=True):
+  def get_axis_from_description(self, axis, allow_int=NotSpecified):
     """
     :param int|str|DimensionTag axis:
-    :param bool allow_int:
+    :param bool|NotSpecified allow_int:
     :return: axis, counted with batch-dim
     :rtype: int
     """
