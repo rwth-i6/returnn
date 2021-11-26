@@ -5109,11 +5109,12 @@ def test_onlineblstm():
       network[name] = {"class": "rec", "unit": "lstmp", "n_out": lstm_dim, "dropout": 0.1, "L2": 0.01, "direction": 1,
                        "from": src}
       return name
-    network["%s_win" % name] = {"class": "window", "window_size": lstm_window, "window_right": lstm_window - 1,
-                                "from": src}  # (B,T,W,D)
+    network["%s_win" % name] = {
+      "class": "window", "window_size": lstm_window, "window_right": lstm_window - 1, "from": src}  # (B,T,W,D)
     network["%s_mdims" % name] = {"class": "merge_dims", "axes": "BT", "from": ["%s_win" % name]}  # (B*T,W,D)
-    network["%s_rdims" % name] = {"class": "reinterpret_data", "enforce_batch_major": True, "set_axes": {"T": 1},
-                                  "from": ["%s_mdims" % name]}  # (B*T,W,D)
+    network["%s_rdims" % name] = {
+      "class": "reinterpret_data", "enforce_batch_major": True, "set_axes": {"T": "spatial"},
+      "from": ["%s_mdims" % name]}  # (B*T,W,D)
     network["%s_rec" % name] = {
       "class": "rec", "unit": "lstmp", "n_out": lstm_dim, "dropout": 0.1, "L2": 0.01, "direction": -1,
       "from": ["%s_rdims" % name]}  # (B*T,W,D')
