@@ -3703,6 +3703,14 @@ class RepeatLayer(_ConcatInputLayer):
     repetitions_placeholder = copy_placeholder_with_batch_axis(
       repetitions_data, other_batch=self.input_data.batch)  # [B, T]
 
+    dyn_axis = repetitions_data.get_axes(exclude_batch=True)[0]  # can only have one axis
+    if repetitions_data.has_dynamic_size(dyn_axis):
+      # apply correct zero masking for repetitions
+      mask = repetitions_data.get_sequence_mask_broadcast(axis=dyn_axis)
+      zeros = tf.zeros((), dtype=repetitions_data.placeholder.dtype)
+      repetitions_placeholder = tf_util.where_bc(
+        mask, repetitions_placeholder, zeros, name="repetitions_masked_axis_%i" % dyn_axis)
+
     # pad the target axis
     paddings = [(0, 1) if i == 1 else (0, 0) for i in range(self.input_data.ndim + 1)]
     padded_data = tf.pad(input_placeholder, paddings)  # [B, T+1, ...]

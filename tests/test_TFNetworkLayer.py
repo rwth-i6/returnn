@@ -2453,7 +2453,7 @@ def _run_repeat_layer(session, net, input_data_layer):
     output=Data(**{'name': 'repetitions', 'shape': (None,), 'feature_dim_axis': None, 'dtype': 'int32'}))
   repetitions_data_layer.output.placeholder = tf.constant(
     [[1, 3, 2, 1, 3, 4, 1, 1, 2, 1],
-     [3, 2, 1, 3, 0, 1, 1, 0, 0, 0]], dtype="int32")  # [B, T] (sparse)
+     [3, 2, 1, 3, 0, 1, 1, 0, 0, 1]], dtype="int32")  # [B, T] (sparse), additional 1 in second sequence to test masking
   repetitions_data_layer.output.size_placeholder = {0: tf.constant([10, 7], dtype="int32")}  # [B]
 
   opts = {
