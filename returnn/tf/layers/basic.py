@@ -2618,7 +2618,8 @@ class WindowLayer(_ConcatInputLayer):
               filter_size=window_size, stride=stride, dilation_rate=1, padding=padding)
           out_spatial_dim = DimensionTag(
             kind=DimensionTag.Types.Spatial, description="%s:spatial" % name,
-            dimension=dim, batch=data.batch, control_flow_ctx=data.control_flow_ctx)
+            dimension=dim, derived_from_tag=in_spatial_dim,
+            batch=data.batch, control_flow_ctx=data.control_flow_ctx)
       data = data.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_spatial_dim)
       new_dim_axis = axis + 1  # add new axis right after
     if window_dim:
