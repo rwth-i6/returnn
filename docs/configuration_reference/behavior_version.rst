@@ -22,6 +22,16 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 6 (2021-11-27)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:class:`MergeDimsLayer` uses ``keep_order=True`` and does not allow ``keep_order=False``.
+There never should be a reason to use ``keep_order=False`` anyway.
+If you have that, just remove it.
+If that causes any problems, there is probably some other issue in your config.
+
+See issue `#654 <https://github.com/rwth-i6/returnn/issues/654>`__.
+
 Behavior version 5 (2021-11-26)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

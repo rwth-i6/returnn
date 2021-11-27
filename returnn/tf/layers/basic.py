@@ -2838,10 +2838,10 @@ class MergeDimsLayer(_ConcatInputLayer):
   """
   layer_class = "merge_dims"
 
-  def __init__(self, axes, keep_order=False, n_out=None, **kwargs):
+  def __init__(self, axes, keep_order=NotSpecified, n_out=None, **kwargs):
     """
     :param str|list[str]|list[int] axes: see Data.get_axes_from_description(), e.g. "except_time"
-    :param bool keep_order: By default (for historical reasons), the axes are sorted, and then merged.
+    :param bool|NotSpecified keep_order: The old default was: the axes are sorted, and then merged.
       Thus, the order of incoming axes will influence the result.
       E.g. inputs [B,S,F] and [B,F,S], with ``axes=["S","F"]``, will get different results,
       although the output shape is [B,S*F] in both cases.
@@ -2849,9 +2849,15 @@ class MergeDimsLayer(_ConcatInputLayer):
       and all layers should behave in the same way, no matter the order.
       It is recommended to set ``keep_order=True``, such that the order defined in ``axes`` defines the behavior,
       and not the incoming axis order.
+      Since behavior version 6, this is already the case.
     :param int|None n_out:
     """
+    from returnn.util import BehaviorVersion
     super(MergeDimsLayer, self).__init__(**kwargs)
+    if keep_order is NotSpecified:
+      keep_order = True if BehaviorVersion.get() >= 6 else False
+    BehaviorVersion.require(
+      condition=keep_order, message="MergeDimsLayer, only keep_order=True is allowed", version=6)
     if keep_order:
       assert isinstance(axes, (tuple, list)), "%s: unique axes %r required" % (self, axes)
       axes_ = []
@@ -2971,18 +2977,20 @@ class MergeDimsLayer(_ConcatInputLayer):
     target_tag.dyn_size_ext = out_size
 
   @classmethod
-  def get_out_data_from_opts(cls, name, axes, keep_order=False,
+  def get_out_data_from_opts(cls, name, axes, keep_order=NotSpecified,
                              sources=(), n_out=NotSpecified, out_type=None, **kwargs):
     """
     :param str name:
     :param str|list[str] axes:
-    :param bool keep_order:
+    :param bool|NotSpecified keep_order:
     :param list[LayerBase] sources:
     :param int|None|NotSpecified n_out:
     :param None|dict[str] out_type:
     :rtype: Data
     """
-    from ..util.data import DimensionTag
+    from returnn.util import BehaviorVersion
+    if keep_order is NotSpecified:
+      keep_order = True if BehaviorVersion.get() >= 6 else False
     assert not out_type, "currently ignored"
     input_data = get_concat_sources_data_template(sources)
     data = input_data.copy(name="%s_output" % name)
