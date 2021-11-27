@@ -2864,7 +2864,8 @@ class MergeDimsLayer(_ConcatInputLayer):
       axes_ = []
       for axis in axes:
         axis_ = self.input_data.get_axes_from_description(axis, allow_int=False)
-        assert len(axis_) <= 1, "%s: unique axes %r required, but got %r -> %r" % (self, axes, axis, axis_)
+        assert len(axis_) <= 1, (
+          "%s: unique axes %r required in input %s, but got %r -> %r" % (self, axes, self.input_data, axis, axis_))
         axes_ += axis_
       axes = axes_
     else:
