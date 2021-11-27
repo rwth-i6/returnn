@@ -32,6 +32,8 @@ If that causes any problems, there is probably some other issue in your config.
 
 See issue `#654 <https://github.com/rwth-i6/returnn/issues/654>`__.
 
+Further, :class:`GenericAttentionLayer` uses ``auto_squeeze=False`` by default.
+
 Behavior version 5 (2021-11-26)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
