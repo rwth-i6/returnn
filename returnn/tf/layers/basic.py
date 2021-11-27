@@ -4245,9 +4245,10 @@ class ConvLayer(_ConcatInputLayer):
   recurrent = True  # we must not allow any shuffling in the time-dim or so
 
   # noinspection PyUnusedLocal,PyShadowingBuiltins
-  def __init__(self, n_out, filter_size, padding, strides=1, dilation_rate=1,
-               groups=1,
+  def __init__(self, filter_size, padding, strides=1, dilation_rate=1, groups=1,
                input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None,
+               in_dim=None, in_spatial_dims=None,
+               n_out=None, out_dim=None, out_spatial_dims=None,
                auto_use_channel_first=False,
                with_bias=NotSpecified,
                activation=None,
@@ -4255,7 +4256,6 @@ class ConvLayer(_ConcatInputLayer):
                filter=None, filter_perm=None, bias=None,
                **kwargs):
     """
-    :param int n_out: number of outgoing features
     :param tuple[int] filter_size: (width,), (height,width) or (depth,height,width) for 1D/2D/3D conv.
       the input data ndim must match, or you can add dimensions via input_expand_dims or input_add_feature_dim.
       it will automatically swap the batch-dim to the first axis of the input data.
@@ -4264,7 +4264,12 @@ class ConvLayer(_ConcatInputLayer):
       i.e. length of this tuple should be the same as filter_size, or a single int.
     :param int|tuple[int] dilation_rate: dilation for the spatial dims
     :param int groups: grouped convolution
-    :param int input_expand_dims: number of dynamic dims to add to the input
+    :param DimensionTag|None in_dim:
+    :param list[DimensionTag]|None in_spatial_dims:
+    :param int|None n_out: number of outgoing features
+    :param DimensionTag|None out_dim:
+    :param list[DimensionTag]|None out_spatial_dims:
+    :param int input_expand_dims: number of spatial dims to add to the input
     :param bool input_add_feature_dim: will add a dim at the end and use input-feature-dim == 1,
       and use the original input feature-dim as a spatial dim.
     :param None|int input_split_feature_dim: if set, like input_add_feature_dim it will add a new feature dim
@@ -4296,6 +4301,7 @@ class ConvLayer(_ConcatInputLayer):
     assert not self.input_data.sparse
     input_data = self._transform_input(
       self.input_data,
+      in_dim=in_dim, in_spatial_dims=in_spatial_dims,
       input_expand_dims=input_expand_dims,
       input_split_feature_dim=input_split_feature_dim,
       input_add_feature_dim=input_add_feature_dim)
@@ -4404,17 +4410,21 @@ class ConvLayer(_ConcatInputLayer):
           out_tag.declare_same_as(size_tag)
 
   @classmethod
-  def _transform_input(cls, input_data, input_expand_dims, input_split_feature_dim, input_add_feature_dim):
+  def _transform_input(cls, input_data, in_dim=None, in_spatial_dims=None,
+                       input_expand_dims=0, input_split_feature_dim=None, input_add_feature_dim=False):
     """
     :param Data input_data:
-    :param int input_expand_dims: number of dynamic dims to add to the input
-    :param bool input_add_feature_dim: will add a dim at the end and use input-feature-dim == 1,
-      and use the original input feature-dim as a spatial dim.
+    :param DimensionTag|None in_dim:
+    :param list[DimensionTag]|None in_spatial_dims:
+    :param int input_expand_dims: number of spatial dims to add to the input
     :param None|int input_split_feature_dim: if set, like input_add_feature_dim it will add a new feature dim
       which is of value input_split_feature_dim, and the original input feature dim
       will be divided by input_split_feature_dim, thus it must be a multiple of that value.
+    :param bool input_add_feature_dim: will add a dim at the end and use input-feature-dim == 1,
+      and use the original input feature-dim as a spatial dim.
     :rtype: Data
     """
+    assert not input_data.sparse
     input_data = input_data.copy_as_batch_major()
     if input_expand_dims:
       for i in range(input_expand_dims):
@@ -4425,6 +4435,29 @@ class ConvLayer(_ConcatInputLayer):
     if input_add_feature_dim:
       # Add a feature dimension; any other static dims will be used as dynamic dims below.
       input_data = input_data.copy_add_feature_dim()
+    if in_dim:
+      assert isinstance(in_dim, DimensionTag)
+      if input_data.feature_dim_or_sparse_dim != in_dim:
+        input_data.feature_dim_axis = input_data.get_axis_from_description(in_dim)
+    if in_spatial_dims:
+      from returnn.tf.util.data import BatchDim
+      assert all(isinstance(d, DimensionTag) for d in in_spatial_dims)
+      axes = [input_data.get_axis_from_description(d) for d in in_spatial_dims]  # also requires unique dim tags
+      assert sorted(set(axes)) == sorted(axes), (
+        "in_spatial_dims %s must be unique but map to %s" % (in_spatial_dims, axes))
+      if sorted(axes) != axes:
+        # Sort them such that the convolution is correct.
+        pass  # TODO...
+      assert input_data.feature_dim_axis not in axes
+      expected_dims = {BatchDim, input_data.feature_dim_or_sparse_dim} | set(in_spatial_dims)
+      assert len(expected_dims) == 2 + len(in_spatial_dims)
+      if set(input_data.dim_tags) != expected_dims:
+        # There are more dims in the input than we expect.
+        assert set(input_data.dim_tags).issuperset(expected_dims)
+        # Merge all remaining ones into the batch dim. We will later undo this at the end.
+        # This is needed to support a ConvLayer both inside a rec loop which then can be optimized out.
+        # But also this is a useful feature in general.
+        pass  # TODO do this...
     return input_data
 
   @classmethod
@@ -4462,13 +4495,15 @@ class ConvLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(
-        cls, name, n_out, filter_size, padding, strides=1, dilation_rate=1, sources=(),
+        cls, name, filter_size, padding, strides=1, dilation_rate=1,
+        sources=(),
         input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None,
+        in_dim=None, in_spatial_dims=None,
+        n_out=None, out_dim=None, out_spatial_dims=None,
         auto_use_channel_first=False,
         **kwargs):
     """
     :param str name:
-    :param int n_out:
     :param tuple[int] filter_size:
     :param str padding:
     :param int|tuple[int] strides:
@@ -4477,6 +4512,12 @@ class ConvLayer(_ConcatInputLayer):
     :param int input_expand_dims: number of dynamic dims to add to the input
     :param bool input_add_feature_dim:
     :param None|int input_split_feature_dim:
+    :param DimensionTag|None in_dim:
+    :param list[DimensionTag]|None in_spatial_dims:
+    :param int|None n_out: number of outgoing features
+    :param DimensionTag|None out_dim:
+    :param list[DimensionTag]|None out_spatial_dims:
+    :param int input_expand_dims: number of spatial dims to add to the input
     :param bool auto_use_channel_first:
     """
     input_data = get_concat_sources_data_template(sources)
@@ -4495,6 +4536,7 @@ class ConvLayer(_ConcatInputLayer):
     padding = padding.upper()
     input_data = cls._transform_input(
       input_data,
+      in_dim=in_dim, in_spatial_dims=in_spatial_dims,
       input_expand_dims=input_expand_dims,
       input_split_feature_dim=input_split_feature_dim,
       input_add_feature_dim=input_add_feature_dim)
