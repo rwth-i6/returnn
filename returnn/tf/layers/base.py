@@ -339,14 +339,15 @@ class LayerBase(object):
     if n_out is not NotSpecified:
       assert out_type["dim"] == n_out
     sources_data_list = [src.output for src in sources if src]
-    if in_dim and len(sources_data_list) == 1:
+    if in_dim:
+      assert len(sources_data_list) == 1
       if sources_data_list[0].feature_dim_or_sparse_dim != in_dim:
         # Allow to specify some in_dim which is not the feature dim.
         # However, the follow-up code will expect it to be the feature dim, thus reassign it if possible.
-        if in_dim in sources_data_list[0].dim_tags:
-          axis = sources_data_list[0].get_axis_from_description(in_dim)
-          sources_data_list = [sources_data_list[0].copy()]
-          sources_data_list[0].feature_dim_axis = axis
+        assert in_dim in sources_data_list[0].dim_tags
+        axis = sources_data_list[0].get_axis_from_description(in_dim)
+        sources_data_list = [sources_data_list[0].copy()]
+        sources_data_list[0].feature_dim_axis = axis
     allow_broadcast_all_sources = NotSpecified
     if "shape" in out_type or "dim_tags" in out_type or out_shape is not None:
       allow_broadcast_all_sources = True

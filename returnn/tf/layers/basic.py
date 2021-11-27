@@ -103,6 +103,8 @@ def concat_sources(src_layers, out_dim=None, allow_broadcast_all_sources=NotSpec
         assert not data.sparse
         axis = data.get_axis_from_description(out_dim)
         data.feature_dim_axis = axis
+      else:
+        raise Exception("%s not found in %s" % (out_dim, data))
     return data
   network = src_layers[0].network
   cache_key = (tuple(src_layers), out_dim, 0.0, None)
