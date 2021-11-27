@@ -2859,7 +2859,8 @@ class MergeDimsLayer(_ConcatInputLayer):
     BehaviorVersion.require(
       condition=keep_order, message="MergeDimsLayer, only keep_order=True is allowed", version=6)
     if keep_order:
-      assert isinstance(axes, (tuple, list)), "%s: unique axes %r required" % (self, axes)
+      assert isinstance(axes, (tuple, list)), (
+        "%s: axes %r must be a list or tuple, to have a well defined order in input %s" % (self, axes, self.input_data))
       axes_ = []
       for axis in axes:
         axis_ = self.input_data.get_axes_from_description(axis, allow_int=False)
