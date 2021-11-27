@@ -1226,9 +1226,9 @@ def test_dot_layer_shuffled_remaining_dims_static():
       "b": {"class": "transpose", "from": ["a"], "perm": {"static:0": "static:1", "static:1": "static:0"}},
       "dot": {
         "class": "dot", "from": ["a", "b"],
-        "red1": "static:-1", "red2": "static:-1", "var1": None, "var2": None,
+        "red1": "dim:5", "red2": "dim:5", "var1": None, "var2": None,
         "debug": True},
-      "output": {"class": "merge_dims", "axes": "static", "from": ["dot"]}
+      "output": {"class": "merge_dims", "axes": ["dim:2", "dim:3"], "from": "dot"}
     }
     config = Config()
     config.update({
@@ -1839,17 +1839,17 @@ def _check_MergeDimsLayer(session, in_data_opts, in_static_shape, opts, out_data
 
 def test_MergeDimsLayer_basic():
   with make_scope() as session:
-    _check_MergeDimsLayer(session, {"shape": (4, 7), "time_dim_axis": None}, (2, 4, 7), {"axes": "except_batch"}, (4 * 7,), (2, 4 * 7))
-    _check_MergeDimsLayer(session, {"shape": (4, None, 7), "time_dim_axis": None}, (2, 4, 3, 7), {"axes": "static"}, (None, 4 * 7), (2, 3, 4 * 7))
-    _check_MergeDimsLayer(session, {"shape": (4, None, 7), "time_dim_axis": 2}, (2, 4, 3, 7), {"axes": "static"}, (None, 4 * 7), (2, 3, 4 * 7))
-    _check_MergeDimsLayer(session, {"shape": (1, None), "time_dim_axis": 2, "feature_dim_axis": 1}, (2, 1, 4), {"axes": "except_batch"}, (None,), (2, 4))
+    _check_MergeDimsLayer(session, {"shape": (4, 7), "time_dim_axis": None}, (2, 4, 7), {"axes": ["dim:4", "dim:7"]}, (4 * 7,), (2, 4 * 7))
+    _check_MergeDimsLayer(session, {"shape": (4, None, 7), "time_dim_axis": None}, (2, 4, 3, 7), {"axes": ["dim:4", "dim:7"]}, (None, 4 * 7), (2, 3, 4 * 7))
+    _check_MergeDimsLayer(session, {"shape": (4, None, 7), "time_dim_axis": 2}, (2, 4, 3, 7), {"axes": ["dim:4", "dim:7"]}, (None, 4 * 7), (2, 3, 4 * 7))
+    _check_MergeDimsLayer(session, {"shape": (1, None), "time_dim_axis": 2, "feature_dim_axis": 1}, (2, 1, 4), {"axes": ["F", "T"]}, (None,), (2, 4))
 
 
 def test_MergeDimsLayer_size_placeholder():
   with make_scope() as session:
     _check_MergeDimsLayer(
       session,
-      {"shape": (None, 2), "time_dim_axis": 1, "feature_dim_axis": 2}, (3, 4, 2), {"axes": "except_batch"}, (None,), (3, 8),
+      {"shape": (None, 2), "time_dim_axis": 1, "feature_dim_axis": 2}, (3, 4, 2), {"axes": ["T", "F"]}, (None,), (3, 8),
       in_sizes={0: (4, 2, 1)}, out_sizes={0: (8, 4, 2)})
 
 
@@ -1858,7 +1858,7 @@ def test_MergeDimsLayer_batch_time_ext():
     n_batch = 11
     n_time = 13
     _check_MergeDimsLayer(
-      session, {"shape": (None, 5, 3)}, (n_batch, n_time, 5, 3), {"axes": "BT"}, (5, 3), (n_batch * n_time, 5, 3))
+      session, {"shape": (None, 5, 3)}, (n_batch, n_time, 5, 3), {"axes": ["B", "T"]}, (5, 3), (n_batch * n_time, 5, 3))
 
 
 def test_MergeDimsLayer_batch_time_time_major():
@@ -1868,7 +1868,7 @@ def test_MergeDimsLayer_batch_time_time_major():
     layer = _check_MergeDimsLayer(
       session,
       {"shape": (None, 5), "time_dim_axis": 0, "batch_dim_axis": 1}, (n_time, n_batch, 5),
-      {"axes": "BT"}, (5,), (n_time * n_batch, 5))
+      {"axes": ["B", "T"]}, (5,), (n_time * n_batch, 5))
     assert layer.output.batch_dim_axis == 0
     assert layer.output.time_dim_axis is None
 
@@ -1880,7 +1880,7 @@ def test_MergeDimsLayer_batch_time_time_major_ext():
     layer = _check_MergeDimsLayer(
       session,
       {"shape": (None, 5, 3), "time_dim_axis": 0, "batch_dim_axis": 1}, (n_time, n_batch, 5, 3),
-      {"axes": "BT"}, (5, 3), (n_time * n_batch, 5, 3))
+      {"axes": ["B", "T"]}, (5, 3), (n_time * n_batch, 5, 3))
     assert layer.output.batch_dim_axis == 0
     assert layer.output.time_dim_axis is None  # Note: This behavior was changed.
 
@@ -1892,7 +1892,7 @@ def test_MergeDimsLayer_except_time_ext():
     layer = _check_MergeDimsLayer(
       session,
       {"shape": (3, None, 5), "time_dim_axis": 2}, (n_batch, 3, n_time, 5),
-      {"axes": "except_time"}, (None, 15), (n_batch, n_time, 15))
+      {"axes": ["dim:3", "dim:5"]}, (None, 15), (n_batch, n_time, 15))
     assert layer.output.batch_dim_axis == 0 and layer.output.time_dim_axis == 1
 
 
@@ -1902,7 +1902,7 @@ def test_MergeDimsLayer_static_time():
     layer = _check_MergeDimsLayer(
       session,
       {"shape": (3, 5), "time_dim_axis": 1}, (n_batch, 3, 5),
-      {"axes": "static"}, (15,), (n_batch, 15))
+      {"axes": ["dim:3", "dim:5"]}, (15,), (n_batch, 15))
     assert layer.output.batch_dim_axis == 0 and layer.output.feature_dim_axis == 1
     assert layer.output.time_dim_axis is None
 
@@ -1913,7 +1913,7 @@ def test_MergeDimsLayer_feat_static_static():
     layer = _check_MergeDimsLayer(
       session,
       {"shape": (None, 8, 2, 3), "feature_dim_axis": 2}, (n_batch, 7, 8, 2, 3),
-      {"axes": ["F", "static:1"]}, (None, 16, 3), (n_batch, 7, 16, 3))
+      {"axes": ["F", "dim:2"]}, (None, 16, 3), (n_batch, 7, 16, 3))
     assert (layer.output.batch_dim_axis, layer.output.time_dim_axis, layer.output.feature_dim_axis) == (0, 1, 2)
 
 
@@ -1977,7 +1977,7 @@ def test_MergeDimsLayer_SplitBatchTimeLayer_time_major():
         size_placeholder={0: tf.constant(seq_lens)}))
     assert input_layer.output.is_time_major
     net.construct_from_dict({
-      "merge_dims": {"class": "merge_dims", "from": "input", "axes": "BT"},
+      "merge_dims": {"class": "merge_dims", "from": "input", "axes": ["B", "T"]},
       "split_dims": {"class": "split_batch_time", "from": "merge_dims", "base": "input"},
       "output": {"class": "copy", "from": "split_dims"}
     })
@@ -1998,7 +1998,7 @@ def test_MergeDimsLayer_SplitBatchTimeLayer_two_time_axes():
         "debug_print_layer_output_template": True}))
     feed_dict = make_feed_dict(net.extern_data)
     net.construct_from_dict({
-      "merge_dims": {"class": "merge_dims", "from": "data", "axes": "BT"},
+      "merge_dims": {"class": "merge_dims", "from": "data", "axes": ["B", "T"]},
       "split_dims": {"class": "split_batch_time", "from": "merge_dims", "base": "data"},
       "output": {"class": "copy", "from": "split_dims"}
     })
@@ -2048,7 +2048,7 @@ def test_MergeDimsLayer_simple_feat():
   with make_scope() as session:
     net = TFNetwork(config=config)
     net.construct_from_dict({
-      "output": {"class": "merge_dims", "axes": "static", "from": "data:data"}})
+      "output": {"class": "merge_dims", "axes": ["dim:%i" % n_in1, "dim:%i" % n_in2], "from": "data:data"}})
     out_t = net.get_default_output_layer().output.placeholder
     assert out_t.shape.as_list() == [None, None, n_in1 * n_in2]
     in_v = numpy.arange(0, n_batch * n_time * n_in1 * n_in2).astype("float32").reshape((n_batch, n_time, n_in1, n_in2))
@@ -3441,14 +3441,14 @@ def test_conv_window_merge_dims():
                'n_out': 12,
                'padding': 'valid',
                'strides': 16},
-    'flatten_conv': {'axes': 'except_time',
+    'flatten_conv': {'axes': ['dim:4', 'dim:12'],
                      'class': 'merge_dims',
                      'from': ['conv_2'],
                      'n_out': 48},
     'window_1': {'class': 'window',
                  'from': ['flatten_conv'],
                  'window_size': 17},
-    'flatten_window': {'axes': 'except_time',
+    'flatten_window': {'axes': ['dim:17', 'dim:48'],
                        'class': 'merge_dims',
                        'from': ['window_1']},
     'output': {'activation': None,
