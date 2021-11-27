@@ -2840,7 +2840,7 @@ class MergeDimsLayer(_ConcatInputLayer):
 
   def __init__(self, axes, keep_order=NotSpecified, n_out=None, **kwargs):
     """
-    :param str|list[str]|list[int] axes: see Data.get_axes_from_description(), e.g. "except_time"
+    :param str|list[DimensionTag|str] axes: see :func:`Data.get_axis_from_description`
     :param bool|NotSpecified keep_order: The old default was: the axes are sorted, and then merged.
       Thus, the order of incoming axes will influence the result.
       E.g. inputs [B,S,F] and [B,F,S], with ``axes=["S","F"]``, will get different results,
