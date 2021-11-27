@@ -2338,7 +2338,7 @@ def test_rec_layer_move_out_of_loop():
         "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
                               "eval": "source(0) + source(1) / (2.0 * source(2))",
                               "out_type": {"dim": 1, "shape": (None, 1)}},
-        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
         "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
               "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
         "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
@@ -2504,7 +2504,7 @@ def test_rec_layer_move_out_of_loop_keep_constraints():
         "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
                               "eval": "source(0) + source(1) / (2.0 * source(2))",
                               "out_type": {"dim": 1, "shape": (None, 1)}},
-        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
         "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
               "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
         "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
@@ -3171,7 +3171,7 @@ def test_rec_layer_search_select_src():
         "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
                               "eval": "source(0) + source(1) / (2.0 * source(2))",
                               "out_type": {"dim": 1, "shape": (None, 1)}},
-        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
         "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
               "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
         "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
@@ -5037,7 +5037,7 @@ def test_rec_layer_search_select_src_reuse_layer():
         "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
                               "eval": "source(0) + source(1) / (2.0 * source(2))",
                               "out_type": {"dim": 1, "shape": (None, 1)}},
-        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
         "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
               "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
         "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
@@ -5149,6 +5149,7 @@ def test_GenericAttentionLayer_basic0():
   time = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
   kwargs = dict(
     name="att", network=net,
+    auto_squeeze=True,
     weights=InternalLayer(
       name="att_weights", network=net,
       output=Data(
@@ -5174,6 +5175,7 @@ def test_GenericAttentionLayer_basic():
   time = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
   kwargs = dict(
     name="att", network=net,
+    auto_squeeze=True,
     weights=InternalLayer(
       name="att_weights", network=net,
       output=Data(
@@ -5220,6 +5222,7 @@ def test_GenericAttentionLayer_weights_auto_squeeze_time_end():
   time = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
   kwargs = dict(
     name="att", network=net,
+    auto_squeeze=True,
     weights=InternalLayer(
       name="att_weights", network=net,
       output=Data(
@@ -5245,6 +5248,7 @@ def test_GenericAttentionLayer_weights_static_time_axis():
   time = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
   kwargs = dict(
     name="att", network=net,
+    auto_squeeze=True,
     weights=InternalLayer(
       name="att_weights", network=net,
       output=Data(
@@ -5297,6 +5301,7 @@ def test_GenericAttentionLayer_weights_heads_auto_squeeze_time_end():
   num_heads = 8
   kwargs = dict(
     name="att", network=net,
+    auto_squeeze=True,
     weights=InternalLayer(
       name="att_weights", network=net,
       output=Data(
@@ -6055,7 +6060,7 @@ def test_untrainable_sublayers():
         "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
                               "eval": "source(0) + source(1) / (2.0 * source(2))",
                               "out_type": {"dim": 1, "shape": (None, 1)}},
-        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
         "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
               "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
         "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
@@ -6120,7 +6125,7 @@ def test_untrainable_reclayer():
         "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
                               "eval": "source(0) + source(1) / (2.0 * source(2))",
                               "out_type": {"dim": 1, "shape": (None, 1)}},
-        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
         "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
               "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
         "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
@@ -6185,7 +6190,7 @@ def test_trainable_sublayers():
         "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
                               "eval": "source(0) + source(1) / (2.0 * source(2))",
                               "out_type": {"dim": 1, "shape": (None, 1)}},
-        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
         "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
               "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
         "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,

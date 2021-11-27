@@ -1233,7 +1233,7 @@ def test_attention_no_encoder_dependency():
                             'n_out': 4, 'padding': 'same'},
           "location_feedback": {'class': 'linear', 'from': ['convolved_att'], 'n_out': 6, 'activation': None},
           "att_energy_in": {'class': 'combine', 'kind': 'add', 'from': ['location_feedback', 's_transformed']},
-          "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights"},
+          "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights", "auto_squeeze": True},
         },
       },
       "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
@@ -1345,7 +1345,7 @@ def test_attention_convolutional_feedback_variant1():
     "location_feedback": {'class': 'linear', 'from': ['convolved_att'], 'n_out': 6, 'activation': None},
     "att_energy_in": {'class': 'combine', 'kind': 'add', 'from': [
       'base:enc_transformed', 'location_feedback', 's_transformed']},
-    "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights"},
+    "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights", "auto_squeeze": True},
   }
 
   check_attention_variant(recurrent_unit_dict)
@@ -1373,7 +1373,7 @@ def test_attention_convolutional_feedback_variant2():
     "location_feedback": {'class': 'linear', 'from': ['convolved_att'], 'n_out': 6, 'activation': None},
     "att_energy_in": {'class': 'combine', 'kind': 'add', 'from': [
       'base:enc_transformed', 'location_feedback', 's_transformed']},
-    "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights"},
+    "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights", "auto_squeeze": True},
   }
 
   check_attention_variant(recurrent_unit_dict)
@@ -1412,7 +1412,7 @@ def test_attention_convolutional_feedback_variant3():
     "location_feedback": {'class': 'linear', 'from': ['convolved_att'], 'n_out': 6, 'activation': None},
     "att_energy_in": {'class': 'combine', 'kind': 'add', 'from': [
       'base:enc_transformed', 'location_feedback', 's_transformed']},
-    "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights"},
+    "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights", "auto_squeeze": True},
   }
 
   check_attention_variant(recurrent_unit_dict)
