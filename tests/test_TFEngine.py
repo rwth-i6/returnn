@@ -1233,7 +1233,7 @@ def test_attention_no_encoder_dependency():
                             'n_out': 4, 'padding': 'same'},
           "location_feedback": {'class': 'linear', 'from': ['convolved_att'], 'n_out': 6, 'activation': None},
           "att_energy_in": {'class': 'combine', 'kind': 'add', 'from': ['location_feedback', 's_transformed']},
-          "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights"},
+          "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights", "auto_squeeze": True},
         },
       },
       "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
@@ -1345,7 +1345,7 @@ def test_attention_convolutional_feedback_variant1():
     "location_feedback": {'class': 'linear', 'from': ['convolved_att'], 'n_out': 6, 'activation': None},
     "att_energy_in": {'class': 'combine', 'kind': 'add', 'from': [
       'base:enc_transformed', 'location_feedback', 's_transformed']},
-    "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights"},
+    "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights", "auto_squeeze": True},
   }
 
   check_attention_variant(recurrent_unit_dict)
@@ -1373,7 +1373,7 @@ def test_attention_convolutional_feedback_variant2():
     "location_feedback": {'class': 'linear', 'from': ['convolved_att'], 'n_out': 6, 'activation': None},
     "att_energy_in": {'class': 'combine', 'kind': 'add', 'from': [
       'base:enc_transformed', 'location_feedback', 's_transformed']},
-    "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights"},
+    "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights", "auto_squeeze": True},
   }
 
   check_attention_variant(recurrent_unit_dict)
@@ -1412,7 +1412,7 @@ def test_attention_convolutional_feedback_variant3():
     "location_feedback": {'class': 'linear', 'from': ['convolved_att'], 'n_out': 6, 'activation': None},
     "att_energy_in": {'class': 'combine', 'kind': 'add', 'from': [
       'base:enc_transformed', 'location_feedback', 's_transformed']},
-    "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights"},
+    "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights", "auto_squeeze": True},
   }
 
   check_attention_variant(recurrent_unit_dict)
@@ -2135,7 +2135,7 @@ def test_rec_subnet_construct_1():
       "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:inv_fertility"],
                             "eval": "source(0) + source(1) * source(2) * 0.5",
                             "out_type": {"dim": 1, "shape": (None, 1)}},
-      "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+      "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
       "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["target_embed", "att"], "n_out": 10},
       "s2": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["s"], "n_out": 10},
       "readout_in": {"class": "linear", "from": ["prev:s2", "prev:target_embed", "att"], "activation": None, "n_out": 10},
@@ -2192,7 +2192,7 @@ def test_rec_subnet_construct_2():
       "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:inv_fertility"],
                             "eval": "source(0) + source(1) * source(2) * 0.5",
                             "out_type": {"dim": 1, "shape": (None, 1)}},
-      "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+      "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
       "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["target_embed", "att"], "n_out": 10},
       "s2": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["s"], "n_out": 10},
       "readout_in": {"class": "linear", "from": ["prev:s2", "prev:target_embed", "att"], "activation": None, "n_out": 10},
@@ -2255,7 +2255,7 @@ def test_rec_subnet_construct_3():
       "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:inv_fertility"],
                             "eval": "source(0) + source(1) * source(2) * 0.5",
                             "out_type": {"dim": 1, "shape": (None, 1)}},
-      "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+      "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
       "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["target_embed", "att"], "n_out": 10},
       "s2": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:s", "prev:target_embed", "att"], "n_out": 10},
       "readout_in": {"class": "linear", "from": ["s2"], "activation": None, "n_out": 10},
@@ -2288,9 +2288,9 @@ def test_rec_subnet_eval_init_out_apply0():
   # (also defined by num_inputs & num_outputs)
   beam_size = 3
   AttNumHeads = 2
-  EncKeyTotalDim = AttNumHeads * 2
+  EncKeyTotalDim = AttNumHeads * 5
   EncKeyPerHeadDim = EncKeyTotalDim // AttNumHeads
-  EncValueTotalDim = AttNumHeads * 2
+  EncValueTotalDim = AttNumHeads * 5
   EncValuePerHeadDim = EncValueTotalDim // AttNumHeads
   network = {
     "lstm0_fw": {"class": "rec", "unit": "nativelstm2", "n_out": 2, "direction": 1, "from": "data:data"},
@@ -2334,7 +2334,7 @@ def test_rec_subnet_eval_init_out_apply0():
                             "eval": "source(0) + source(1) * source(2) * 0.5",
                             "out_type": {"dim": 1, "shape": (None, 1)}, "initial_output": "apply(0)"},  # (B, enc-T, 1)
       "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
-      "att": {"class": "merge_dims", "axes": "except_batch", "from": ["att0"]},  # (B, H*V)
+      "att": {"class": "merge_dims", "axes": ["dim:%i" % AttNumHeads, "dim:%i" % EncValuePerHeadDim], "from": "att0"},  # (B, H*V)
 
       "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["target_embed", "att"], "n_out": 2},  # transform
       "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
@@ -2768,13 +2768,13 @@ def test_search_multi_choice_hdf_dump():
 def test_net_safe_log_to_log_softmax():
   n_out = 5
   net_dict = {
-    "ff_in_window": {"class": "window", "window_size": 3, "from": "data:data"},  # (B,T,3,3)
-    "ff_in": {"class": "merge_dims", "axes": "except_time", "from": ["ff_in_window"]},  # (B,T,9)
-    "ff0": {"class": "hidden", "activation": "relu", "n_out": 8, "L2": 0.01, "from": ["ff_in"]},  # (B,T,8)
-    "ff_out": {"class": "softmax", "n_out": n_out, "from": ["ff0"]},  # (B,T,5)
+    "ff_in_window": {"class": "window", "window_size": 4, "from": "data:data"},  # (B,T,4,3)
+    "ff_in": {"class": "merge_dims", "axes": ["dim:3", "dim:4"], "from": "ff_in_window"},  # (B,T,9)
+    "ff0": {"class": "hidden", "activation": "relu", "n_out": 8, "L2": 0.01, "from": "ff_in"},  # (B,T,8)
+    "ff_out": {"class": "softmax", "n_out": n_out, "from": "ff0"},  # (B,T,5)
     "ff_out_prior": {
       "class": "accumulate_mean", "exp_average": 0.001,
-      "is_prob_distribution": True, "from": ["ff_out"]},  # (5,)
+      "is_prob_distribution": True, "from": "ff_out"},  # (5,)
     "output": {
       "class": "combine", "kind": "eval", "from": ["ff_out", "ff_out_prior"],
       "eval": "safe_log(source(0)) - safe_log(source(1))",
@@ -2826,7 +2826,7 @@ def test_preload_from_files():
           "class": "linear", "activation": None, "n_out": n_hidden, "from": "data:data",
           'bias_init': 1.0, 'forward_weights_init': 'orthogonal'},
         "output": {
-          "class": "linear", "activation": None, "n_out": n_out, "from": ["l1"],
+          "class": "linear", "activation": None, "n_out": n_out, "from": "l1",
           'bias_init': 2.0, 'forward_weights_init': 'orthogonal'}
       }
     })
@@ -3366,7 +3366,7 @@ def test_attention_forward_hdf_then_unflatten_2d():
       # (B, enc-T, 1)
       "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"], "n_out": 1},
       "att_weights": {"class": "softmax_over_spatial", "from": ["energy"], "is_output_layer": True},  # (B, enc-T, 1)
-      "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+      "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
       "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:target_embed", "prev:att"], "n_out": 10},
       "readout_in": {"class": "linear", "from": ["s", "prev:target_embed", "att"], "activation": None, "n_out": 10},
       "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},

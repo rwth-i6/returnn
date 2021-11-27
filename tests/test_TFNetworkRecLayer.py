@@ -2183,7 +2183,9 @@ def test_target_with_beam():
                                     "out_type": {"dim": AttNumHeads, "shape": (None, AttNumHeads)}, "trainable": False},
       "teacher_att0": {"class": "generic_attention", "weights": "teacher_att_weights", "base": "base:teacher_enc_value",
                        "trainable": False},  # (B, H, V)
-      "teacher_att": {"class": "merge_dims", "axes": "except_batch", "from": ["teacher_att0"], "trainable": False},
+      "teacher_att": {
+        "class": "merge_dims", "axes": ["dim:%i" % AttNumHeads, "dim:%i" % EncValuePerHeadDim],
+        "from": "teacher_att0", "trainable": False},
       # (B, H*V)
       "teacher_s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:teacher_target_embed", "prev:teacher_att"],
                     "n_out": 5, "dropout": 0.3, "trainable": False},  # transform
@@ -2248,7 +2250,7 @@ def test_target_with_beam():
                                     "out_type": {"dim": AttNumHeads, "shape": (None, AttNumHeads)}},
       "student_att0": {"class": "generic_attention", "weights": "student_att_weights",
                        "base": "base:student_enc_value"},  # (B, H, V)
-      "student_att": {"class": "merge_dims", "axes": "except_batch", "from": ["student_att0"]},  # (B, H*V)
+      "student_att": {"class": "merge_dims", "axes": ["dim:%i" % AttNumHeads, "dim:%i" % EncValuePerHeadDim], "from": "student_att0"},  # (B, H*V)
       "student_s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:student_target_embed", "prev:student_att"],
                     "n_out": 5, "dropout": 0.3},  # transform
       "student_readout_in": {"class": "linear", "from": ["student_s", "prev:student_target_embed", "student_att"],
@@ -2336,7 +2338,7 @@ def test_rec_layer_move_out_of_loop():
         "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
                               "eval": "source(0) + source(1) / (2.0 * source(2))",
                               "out_type": {"dim": 1, "shape": (None, 1)}},
-        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
         "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
               "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
         "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
@@ -2502,7 +2504,7 @@ def test_rec_layer_move_out_of_loop_keep_constraints():
         "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
                               "eval": "source(0) + source(1) / (2.0 * source(2))",
                               "out_type": {"dim": 1, "shape": (None, 1)}},
-        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
         "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
               "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
         "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
@@ -2611,7 +2613,7 @@ def test_rec_layer_move_out_of_loop_ref_att_generic_att():
                                      "eval": "source(0) * source(1) * 0.5"},
       "accum_att_weights": {"class": "cumsum", "from": "att_weights_with_fertility"},
       "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
-      "att": {"class": "merge_dims", "axes": "except_time", "from": ["att0"]},  # (B, H*V)
+      "att": {"class": "merge_dims", "axes": ["dim:%i" % AttNumHeads, "dim:%i" % EncValuePerHeadDim], "from": "att0"},  # (B, H*V)
       "s": {"class": "rnn_cell", "unit": "standardlstm",
             "from": ["target_embed", "att"], "n_out": 10},
       "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
@@ -2818,7 +2820,7 @@ def test_rec_layer_rnn_train_and_search():
                             "eval": "source(0) + source(1) * source(2) * 0.5",
                             "out_type": {"dim": AttNumHeads, "shape": (None, AttNumHeads)}},
       "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
-      "att": {"class": "merge_dims", "axes": "except_batch", "from": ["att0"]},  # (B, H*V)
+      "att": {"class": "merge_dims", "axes": ["dim:%i" % AttNumHeads, "dim:%i" % EncValuePerHeadDim], "from": "att0"},  # (B, H*V)
       "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:target_embed", "prev:att"], "n_out": 10},
       "readout_in": {"class": "linear", "from": ["s", "prev:target_embed", "att"], "activation": None, "n_out": 10},
       "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
@@ -2981,7 +2983,7 @@ def test_rec_layer_local_att_train_and_search():
                             "eval": "source(0) + source(1) * source(2) * 0.5",
                             "out_type": {"dim": AttNumHeads, "shape": (None, AttNumHeads)}},
       "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
-      "att": {"class": "merge_dims", "axes": "except_batch", "from": ["att0"]},  # (B, H*V)
+      "att": {"class": "merge_dims", "axes": ["dim:%i" % AttNumHeads, "dim:%i" % EncValuePerHeadDim], "from": "att0"},  # (B, H*V)
       "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:target_embed", "prev:att"], "n_out": 10},
       # transform
       "readout_in": {"class": "linear", "from": ["s", "prev:target_embed", "att"], "activation": None, "n_out": 20},
@@ -3169,7 +3171,7 @@ def test_rec_layer_search_select_src():
         "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
                               "eval": "source(0) + source(1) / (2.0 * source(2))",
                               "out_type": {"dim": 1, "shape": (None, 1)}},
-        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
         "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
               "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
         "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
@@ -3635,7 +3637,7 @@ def test_reclayer_optimize_out_dot():
       # energy outside the loop will be (B, H, enc-T, dec-T). I.e. enc-T is still the first time axis.
       "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, H, 1)
       "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
-      "att": {"class": "merge_dims", "axes": "static", "from": ["att0"]},  # (B, H*V); Use "static" here.
+      "att": {"class": "merge_dims", "axes": ["dim:%i" % AttNumHeads, "dim:%i" % EncValuePerHeadDim], "from": "att0"},  # (B, H*V); Use "static" here.
       },
     shared_base_net={
       "encoder": {"class": "copy", "from": ["data"]},
@@ -3681,7 +3683,7 @@ def test_reclayer_optimize_out_dot_consistent_axes():
       # It still works due to time-dim-axis being set to the first source.
       "att_weights": {"class": "softmax_over_spatial", "from": "energy"},  # (B, T, H)
       "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
-      "att": {"class": "merge_dims", "axes": "static", "from": "att0"},  # (B, H*V); Use "static" here.
+      "att": {"class": "merge_dims", "axes": ["dim:%i" % n_heads, "dim:%i" % n_value], "from": "att0"},  # (B, H*V); Use "static" here.
       },
     shared_base_net={
       "encoder": {"class": "copy", "from": "data"},
@@ -3725,7 +3727,7 @@ def test_reclayer_optimize_out_dot_consistent_axes_enc_dec():
       # then to the respective var axes.
       "att_weights": {"class": "softmax_over_spatial", "from": "energy"},  # (B, enc-T, H)
       "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
-      "att": {"class": "merge_dims", "axes": "static", "from": "att0"},  # (B, H*V); Use "static" here.
+      "att": {"class": "merge_dims", "axes": ["dim:%i" % n_heads, "dim:%i" % n_value], "from": "att0"},  # (B, H*V); Use "static" here.
     },
     shared_base_net={
       # Use conv with padding valid to make sure we get another time dim,
@@ -3770,7 +3772,7 @@ def test_reclayer_optimize_out_dot_kv_in_rec():
                  "from": ["enc_ctx", "att_query"]},
       "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, H, 1)
       "att0": {"class": "generic_attention", "weights": "att_weights", "base": "enc_value"},  # (B, H, V)
-      "att": {"class": "merge_dims", "axes": "static", "from": ["att0"]},  # (B, H*V); Use "static" here.
+      "att": {"class": "merge_dims", "axes": ["dim:%i" % AttNumHeads, "dim:%i" % EncValuePerHeadDim], "from": "att0"},  # (B, H*V); Use "static" here.
       },
     shared_base_net={
       # need to mark 'encoder' as output layer, otherwise it will not be constructed.
@@ -3932,7 +3934,7 @@ def test_reclayer_att_with_kv_in_rec():
         'att_weights': {
           'axis': 'T', 'class': 'softmax_over_spatial', 'from': ['att_energy']},
         'att_output': {'class': 'generic_attention', 'weights': 'att_weights', 'base': 'att_value'},
-        'att_att': {'axes': 'static', 'class': 'merge_dims', 'from': ['att_output']},
+        'att_att': {'axes': ["dim:2", "dim:3"], 'class': 'merge_dims', 'from': ['att_output']},
         'end': {'class': 'compare', 'from': ['output'], 'value': 0},
         'output': {
           'beam_size': 4, 'class': 'choice', 'from': ['output_prob'], 'initial_output': 'zeros',
@@ -4314,7 +4316,8 @@ class TransformerNetwork:
 
     d[output + '_att0'] = {"class": "generic_attention", "weights": output + '_att_weights_drop',
                            "base": 'base:' + output + '_att_value'}  # (B, H, V)
-    d[output + '_att_att'] = {"class": "merge_dims", "axes": "static",
+    d[output + '_att_att'] = {"class": "merge_dims",
+                              "axes": ["dim:%i" % self.AttNumHeads, "dim:%i" % self.EncValuePerHeadDim],
                               "from": [output + '_att0']}  # (B, H*V) except_batch
     d[output + '_att_lin'] = {"class": "linear", "activation": None, "with_bias": False,
                               "from": [output + '_att_att'],
@@ -5034,7 +5037,7 @@ def test_rec_layer_search_select_src_reuse_layer():
         "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
                               "eval": "source(0) + source(1) / (2.0 * source(2))",
                               "out_type": {"dim": 1, "shape": (None, 1)}},
-        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
         "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
               "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
         "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
@@ -5111,7 +5114,7 @@ def test_onlineblstm():
       return name
     network["%s_win" % name] = {
       "class": "window", "window_size": lstm_window, "window_right": lstm_window - 1, "from": src}  # (B,T,W,D)
-    network["%s_mdims" % name] = {"class": "merge_dims", "axes": "BT", "from": ["%s_win" % name]}  # (B*T,W,D)
+    network["%s_mdims" % name] = {"class": "merge_dims", "axes": ["B", "T"], "from": ["%s_win" % name]}  # (B*T,W,D)
     network["%s_rdims" % name] = {
       "class": "reinterpret_data", "enforce_batch_major": True, "set_axes": {"T": "spatial"},
       "from": ["%s_mdims" % name]}  # (B*T,W,D)
@@ -5146,6 +5149,7 @@ def test_GenericAttentionLayer_basic0():
   time = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
   kwargs = dict(
     name="att", network=net,
+    auto_squeeze=True,
     weights=InternalLayer(
       name="att_weights", network=net,
       output=Data(
@@ -5171,6 +5175,7 @@ def test_GenericAttentionLayer_basic():
   time = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
   kwargs = dict(
     name="att", network=net,
+    auto_squeeze=True,
     weights=InternalLayer(
       name="att_weights", network=net,
       output=Data(
@@ -5217,6 +5222,7 @@ def test_GenericAttentionLayer_weights_auto_squeeze_time_end():
   time = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
   kwargs = dict(
     name="att", network=net,
+    auto_squeeze=True,
     weights=InternalLayer(
       name="att_weights", network=net,
       output=Data(
@@ -5242,6 +5248,7 @@ def test_GenericAttentionLayer_weights_static_time_axis():
   time = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
   kwargs = dict(
     name="att", network=net,
+    auto_squeeze=True,
     weights=InternalLayer(
       name="att_weights", network=net,
       output=Data(
@@ -5294,6 +5301,7 @@ def test_GenericAttentionLayer_weights_heads_auto_squeeze_time_end():
   num_heads = 8
   kwargs = dict(
     name="att", network=net,
+    auto_squeeze=True,
     weights=InternalLayer(
       name="att_weights", network=net,
       output=Data(
@@ -5484,7 +5492,7 @@ def test_att_train_search_loss_prev_beam():
 def test_MaskedComputationLayer_search_choices_resolution():
   beam_size = 3
   EncKeyTotalDim = 10
-  AttNumHeads = 1
+  AttNumHeads = 2
   target = "classes"
   num_classes = 13
   blank_idx = num_classes - 2
@@ -5516,8 +5524,8 @@ def test_MaskedComputationLayer_search_choices_resolution():
       "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:inv_fertility"],
                             "eval": "source(0) + source(1) * source(2) * 0.5",
                             "out_type": {"dim": AttNumHeads, "shape": (None, AttNumHeads)}},
-      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
-      "att": {"class": "merge_dims", "axes": "static", "from": "att0"},  # (B, H*V)
+      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value", "auto_squeeze": False},  # (B, H, V)
+      "att": {"class": "merge_dims", "axes": ["dim:%i" % AttNumHeads, "dim:%i" % EncKeyTotalDim], "from": "att0"},  # (B, H*V)
 
       'not_blank_mask': {'class': 'compare', 'from': ['output'], 'value': blank_idx, 'kind': 'not_equal',
                          'initial_output': True},
@@ -5566,7 +5574,7 @@ def test_MaskedComputationLayer_search_choices_resolution():
 def test_MaskedComputationLayer_subnet_search_choices_resolution():
   beam_size = 3
   EncKeyTotalDim = 10
-  AttNumHeads = 1
+  AttNumHeads = 2
   target = "classes"
   num_classes = 13
   blank_idx = num_classes - 2
@@ -5598,8 +5606,8 @@ def test_MaskedComputationLayer_subnet_search_choices_resolution():
       "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:inv_fertility"],
                             "eval": "source(0) + source(1) * source(2) * 0.5",
                             "out_type": {"dim": AttNumHeads, "shape": (None, AttNumHeads)}},
-      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
-      "att": {"class": "merge_dims", "axes": "static", "from": "att0"},  # (B, H*V)
+      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value", "auto_squeeze": False},  # (B, H, V)
+      "att": {"class": "merge_dims", "axes": ["dim:%i" % AttNumHeads, "dim:%i" % EncKeyTotalDim], "from": "att0"},  # (B, H*V)
 
       'not_blank_mask': {'class': 'compare', 'from': ['output'], 'value': blank_idx, 'kind': 'not_equal',
                          'initial_output': True},
@@ -5657,7 +5665,7 @@ def test_MaskedComputationLayer_subnet_search_choices_resolution():
 def test_MaskedComputationLayer_subnet_rec_search():
   beam_size = 3
   EncKeyTotalDim = 10
-  AttNumHeads = 1
+  AttNumHeads = 2
   target = "classes"
   num_classes = 13
   blank_idx = num_classes - 2
@@ -5689,8 +5697,8 @@ def test_MaskedComputationLayer_subnet_rec_search():
       "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:inv_fertility"],
                             "eval": "source(0) + source(1) * source(2) * 0.5",
                             "out_type": {"dim": AttNumHeads, "shape": (None, AttNumHeads)}},
-      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
-      "att": {"class": "merge_dims", "axes": "static", "from": "att0"},  # (B, H*V)
+      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value", "auto_squeeze": False},  # (B, H, V)
+      "att": {"class": "merge_dims", "axes": ["dim:%i" % AttNumHeads, "dim:%i" % EncKeyTotalDim], "from": "att0"},  # (B, H*V)
 
       'not_blank_mask': {'class': 'compare', 'from': ['output'], 'value': blank_idx, 'kind': 'not_equal',
                          'initial_output': True},
@@ -5907,7 +5915,7 @@ def test_MaskedComputationLayer_outside():
 def test_subnet_deps_search():
   beam_size = 3
   EncKeyTotalDim = 10
-  AttNumHeads = 1
+  AttNumHeads = 2
   target = "classes"
   num_classes = 13
   from test_TFNetworkLayer import make_feed_dict
@@ -5934,8 +5942,8 @@ def test_subnet_deps_search():
                               'eval': 'source(0) + source(1) * source(2) * 0.5',
                               'from': ['prev:accum_att_weights', 'att_weights', 'base:inv_fertility'],
                               'out_type': {'dim': AttNumHeads, 'shape': (None, AttNumHeads)}},
-        'att': {'axes': 'except_batch', 'class': 'merge_dims', 'from': 'att0'},
-        'att0': {'base': 'base:enc_value', 'class': 'generic_attention', 'weights': 'att_weights'},
+        'att': {'axes': ["dim:%i" % AttNumHeads, "dim:%i" % EncKeyTotalDim], 'class': 'merge_dims', 'from': 'att0'},
+        'att0': {'base': 'base:enc_value', 'class': 'generic_attention', 'weights': 'att_weights', "auto_squeeze": False},
         'att_weights': {'class': 'softmax_over_spatial', 'from': 'energy'},
         'combo_output_prob': {'class': 'eval',
                               'eval': 'safe_log(source(0)) - 0.22 * safe_log(source(1))',
@@ -6052,7 +6060,7 @@ def test_untrainable_sublayers():
         "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
                               "eval": "source(0) + source(1) / (2.0 * source(2))",
                               "out_type": {"dim": 1, "shape": (None, 1)}},
-        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
         "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
               "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
         "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
@@ -6117,7 +6125,7 @@ def test_untrainable_reclayer():
         "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
                               "eval": "source(0) + source(1) / (2.0 * source(2))",
                               "out_type": {"dim": 1, "shape": (None, 1)}},
-        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
         "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
               "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
         "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
@@ -6182,7 +6190,7 @@ def test_trainable_sublayers():
         "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
                               "eval": "source(0) + source(1) / (2.0 * source(2))",
                               "out_type": {"dim": 1, "shape": (None, 1)}},
-        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
         "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
               "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
         "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
@@ -6779,7 +6787,7 @@ def test_generalized_non_rec_self_attention():
       "red1": new_dim, "red2": new_dim,
       "var1": time_dim, "var2": "static:-1"},  # [B,H,T,V]
     "att_new": {
-      "class": "merge_dims", "from": "att", "axes": "static",
+      "class": "merge_dims", "from": "att", "axes": ["dim:%i" % n_heads, "dim:%i" % n_value_dim_per_head],
       "is_output_layer": True},  # [B,T,V']
   }
   with make_scope() as session:
@@ -7124,7 +7132,9 @@ def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis, 
     'class': 'dot', 'from': [output + '_weights_drop', output + '_value_accum'],
     'red1': key_axis, 'red2': key_axis,
     "var1": None if inside_rec_layer else query_axis, "var2": "static:-1"}  # [B,n,T?,F|d_v]
-  d[output + '_att'] = {'class': 'merge_dims', 'axes': 'static', 'from': [output + '_output']}  # [B,T?,F|n*d_v]
+  d[output + '_att'] = {
+    'class': 'merge_dims', 'axes': ["dim:%i" % num_heads, "dim:%i" % value_dim],
+    'from': output + '_output'}  # [B,T?,F|n*d_v]
 
 
 def test_CumConcatLayer_self_attention_equal_to_SelfAttentionLayer():
