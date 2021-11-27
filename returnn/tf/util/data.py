@@ -3530,6 +3530,11 @@ class Data(object):
           s += len(static_axes)
         assert 0 <= s < len(static_axes), "%s get_axes_from_description: %r invalid" % (self, axes)
         return [static_axes[s]]
+      elif re.match("(dim):\\d+$", axes):
+        s = int(axes.split(":")[1])
+        dims = [a for a in range(self.batch_ndim) if self.batch_shape[a] == s]
+        assert dims, "%s get_axes_from_description: no dim %i found" % (self, s)
+        return dims
       elif axes in ["f", "feature", "non_spatial"]:
         return self.get_feature_batch_axes()
       elif all([a in "btf" for a in axes]):
