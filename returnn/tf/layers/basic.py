@@ -2990,7 +2990,7 @@ class MergeDimsLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, name, axes, keep_order=NotSpecified,
-                             sources=(), n_out=NotSpecified, out_type=None, **kwargs):
+                             sources=(), n_out=NotSpecified, out_type=None, out_dim=None, **kwargs):
     """
     :param str name:
     :param str|list[str] axes:
@@ -2998,6 +2998,7 @@ class MergeDimsLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :param int|None|NotSpecified n_out:
     :param None|dict[str] out_type:
+    :param DimensionTag|None out_dim:
     :rtype: Data
     """
     from returnn.util import BehaviorVersion
@@ -3022,11 +3023,14 @@ class MergeDimsLayer(_ConcatInputLayer):
       res_dim_tag_kind = DimensionTag.Types.Feature
     else:
       res_dim_tag_kind = DimensionTag.Types.Spatial
-    res_dim_tag = DimensionTag(
-      kind=res_dim_tag_kind, description="%s_merge_dims" % name,
-      dimension=res_dim)
+    if out_dim:
+      assert out_dim.dimension == res_dim
+    else:
+      out_dim = DimensionTag(
+        kind=res_dim_tag_kind, description="%s_merge_dims" % name,
+        dimension=res_dim)
     new_dim_tags = [d for (i, d) in enumerate(data.dim_tags) if i not in axes]
-    new_dim_tags.insert(merge_target_axis, res_dim_tag)
+    new_dim_tags.insert(merge_target_axis, out_dim)
 
     data_opts = data.get_kwargs(include_special_axes=False)
     data_opts["dim_tags"] = new_dim_tags
