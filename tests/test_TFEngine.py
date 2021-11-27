@@ -2288,9 +2288,9 @@ def test_rec_subnet_eval_init_out_apply0():
   # (also defined by num_inputs & num_outputs)
   beam_size = 3
   AttNumHeads = 2
-  EncKeyTotalDim = AttNumHeads * 2
+  EncKeyTotalDim = AttNumHeads * 5
   EncKeyPerHeadDim = EncKeyTotalDim // AttNumHeads
-  EncValueTotalDim = AttNumHeads * 2
+  EncValueTotalDim = AttNumHeads * 5
   EncValuePerHeadDim = EncValueTotalDim // AttNumHeads
   network = {
     "lstm0_fw": {"class": "rec", "unit": "nativelstm2", "n_out": 2, "direction": 1, "from": "data:data"},
