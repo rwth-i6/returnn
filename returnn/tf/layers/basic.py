@@ -3219,8 +3219,8 @@ class SplitDimsLayer(_ConcatInputLayer):
 
   def __init__(self, axis, dims, pad_to_multiples=None, pad_value=0, **kwargs):
     """
-    :param str axis: e.g. "F"
-    :param tuple[int]|list[int] dims: what the axis should be split into. e.g. (window, -1)
+    :param DimensionTag|str axis: e.g. "F"
+    :param tuple[DimensionTag|int]|list[DimensionTag|int] dims: what the axis should be split into. e.g. (window, -1)
     :param bool|None pad_to_multiples: If true, input will be padded to the next multiple of the product of the
       static dims, such that splitting is actually possible.
       By default this is done iff the axis has a dynamic size
@@ -3236,6 +3236,9 @@ class SplitDimsLayer(_ConcatInputLayer):
 
     from returnn.tf.util.basic import get_shape
     old_shape = get_shape(data.placeholder)
+    if dims and isinstance(dims[0], DimensionTag):
+      assert all(isinstance(d, DimensionTag) for d in dims)
+      dims = [d.dimension or -1 for d in dims]
     new_shape = old_shape[:axis] + list(dims) + old_shape[axis + 1:]
     assert len(new_shape) == len(self.output.batch_shape)
     for i in range(len(new_shape)):
@@ -3259,7 +3262,6 @@ class SplitDimsLayer(_ConcatInputLayer):
         # When there is support for this, this should already be created in get_out_data_from_opts
         # Note: currently get_out_data_from_opts already sets data.size_placeholder[axis_wo_batch] to the input size
         # (meaning we do not need to transform the axis here)
-        from returnn.tf.util.data import DimensionTag
         dyn_size = -(-data.size_placeholder[axis_wo_batch] // constant_size)  # == ceildiv(size, constant_size)
         if not DimensionTag.get_tag_from_size_tensor(dyn_size):
           tag = DimensionTag(
@@ -3323,8 +3325,8 @@ class SplitDimsLayer(_ConcatInputLayer):
   def get_out_data_from_opts(cls, name, axis, dims, pad_to_multiples=None, sources=(), **kwargs):
     """
     :param str name:
-    :param str|int axis:
-    :param tuple[int] dims:
+    :param DimensionTag|str axis:
+    :param list[DimensionTag|int]|tuple[DimensionTag|int] dims:
     :param bool|None pad_to_multiples:
     :param list[LayerBase] sources:
     :rtype: Data
@@ -3338,6 +3340,11 @@ class SplitDimsLayer(_ConcatInputLayer):
     if pad_to_multiples is None:
       pad_to_multiples = data.is_axis_dynamic(axis)
 
+    resolved_dims = None
+    if dims and isinstance(dims[0], DimensionTag):
+      assert all(isinstance(d, DimensionTag) for d in dims)
+      resolved_dims = dims
+      dims = [d.dimension or -1 for d in dims]
     if data.batch_shape[axis] is not None:
       resolved_shape_dims = cls._resolve_dims(
         old_dim=data.batch_shape[axis], new_dims=dims, pad_to_multiples=pad_to_multiples)
@@ -3350,18 +3357,21 @@ class SplitDimsLayer(_ConcatInputLayer):
     axis_dim_tag = data.dim_tags[axis]
     if all(d == 1 for (i, d) in enumerate(dims) if i != rem_dim_idx):
       rem_dim = axis_dim_tag  # we can overtake the existing dim tag
+      if resolved_dims:
+        assert resolved_dims[rem_dim_idx] == axis_dim_tag
     else:
       rem_dim = DimensionTag(
         kind=axis_dim_tag.kind,
         description="%s_split_dims%i_rem" % (name, rem_dim_idx),
         dimension=resolved_shape_dims[rem_dim_idx])
-    resolved_dims = tuple(
-      DimensionTag(
-        kind=DimensionTag.Types.Spatial,
-        description="%s_split_dims%i" % (name, i),
-        dimension=resolved_shape_dims[i])
-      if i != rem_dim_idx else rem_dim
-      for i in range(len(dims)))
+    if not resolved_dims:
+      resolved_dims = tuple(
+        DimensionTag(
+          kind=DimensionTag.Types.Spatial,
+          description="%s_split_dims%i" % (name, i),
+          dimension=resolved_shape_dims[i])
+        if i != rem_dim_idx else rem_dim
+        for i in range(len(dims)))
     new_dim_tags = data.dim_tags[:axis] + resolved_dims + data.dim_tags[axis + 1:]
     out = data.copy_template_new_dim_tags(new_dim_tags)
     if data.time_dim_axis is None:
