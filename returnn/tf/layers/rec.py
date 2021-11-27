@@ -6017,7 +6017,7 @@ class GenericAttentionLayer(AttentionBaseLayer):
     """
     :param LayerBase base: encoder output to attend on. (B, enc-time)|(enc-time, B) + (...) + (n_out,)
     :param LayerBase weights: attention weights. ((B, enc-time)|(enc-time, B)) + (1,)|()
-    :param bool auto_squeeze: auto-squeeze any weight-axes with dim=1 away.
+    :param bool auto_squeeze: auto-squeeze any weight-axes with dim=1 away
     """
     super(GenericAttentionLayer, self).__init__(**kwargs)
     self.weights = weights
