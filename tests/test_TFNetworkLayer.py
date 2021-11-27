@@ -136,6 +136,32 @@ def test_LinearLayer():
       session.run(net.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(net.extern_data))
 
 
+def test_LinearLayer_in_dim_spatial():
+  from returnn.tf.util.data import BatchDim
+  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
+  static_spatial_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="static-spatial", dimension=3)
+  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="in-feature", dimension=5)
+  out_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="out-feature", dimension=7)
+  config = Config({
+    "extern_data": {
+      "data": {"dim_tags": [BatchDim, time_dim, static_spatial_dim, feat_dim]}  # [B,T,D1,D2]
+    }
+  })
+  for _ in range(2):
+    with make_scope() as session:
+      net = TFNetwork(config=config)
+      net.construct_from_dict({
+        "output": {"class": "linear", "from": "data", "in_dim": static_spatial_dim, "out_dim": out_dim}})
+      layer = net.get_default_output_layer()
+      print("Output:", layer.output)
+      assert layer.output.dim_tags_set_implicit == {BatchDim, time_dim, out_dim, feat_dim}
+      param = layer.params["W"]
+      assert isinstance(param, tf.Variable)
+      assert param.shape.as_list() == [static_spatial_dim.dimension, out_dim.dimension]
+      session.run(tf_compat.v1.global_variables_initializer())
+      session.run(layer.output.placeholder, feed_dict=make_feed_dict(net.extern_data))
+
+
 def test_LinearLayer_two_time_dims_allow_broadcast_all_sources():
   from returnn.tf.util.data import BatchDim
   with make_scope() as session:

@@ -94,7 +94,15 @@ def concat_sources(src_layers, out_dim=None, allow_broadcast_all_sources=NotSpec
   if len(src_layers) == 1:
     data = src_layers[0].output.copy()
     if out_dim:
-      assert out_dim == data.feature_dim_or_sparse_dim
+      if out_dim == data.feature_dim_or_sparse_dim:
+        pass  # good
+      elif out_dim in data.dim_tags:
+        # We found out_dim in the input but it is not marked as the feature dim.
+        # This is explicitly allowed. Follow-up code will expect this to be the feature-dim though,
+        # So we mark it accordingly.
+        assert not data.sparse
+        axis = data.get_axis_from_description(out_dim)
+        data.feature_dim_axis = axis
     return data
   network = src_layers[0].network
   cache_key = (tuple(src_layers), out_dim, 0.0, None)
