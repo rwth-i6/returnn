@@ -5492,7 +5492,7 @@ def test_att_train_search_loss_prev_beam():
 def test_MaskedComputationLayer_search_choices_resolution():
   beam_size = 3
   EncKeyTotalDim = 10
-  AttNumHeads = 1
+  AttNumHeads = 2
   target = "classes"
   num_classes = 13
   blank_idx = num_classes - 2
@@ -5524,7 +5524,7 @@ def test_MaskedComputationLayer_search_choices_resolution():
       "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:inv_fertility"],
                             "eval": "source(0) + source(1) * source(2) * 0.5",
                             "out_type": {"dim": AttNumHeads, "shape": (None, AttNumHeads)}},
-      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
+      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value", "auto_squeeze": False},  # (B, H, V)
       "att": {"class": "merge_dims", "axes": ["dim:%i" % AttNumHeads, "dim:%i" % EncKeyTotalDim], "from": "att0"},  # (B, H*V)
 
       'not_blank_mask': {'class': 'compare', 'from': ['output'], 'value': blank_idx, 'kind': 'not_equal',
@@ -5574,7 +5574,7 @@ def test_MaskedComputationLayer_search_choices_resolution():
 def test_MaskedComputationLayer_subnet_search_choices_resolution():
   beam_size = 3
   EncKeyTotalDim = 10
-  AttNumHeads = 1
+  AttNumHeads = 2
   target = "classes"
   num_classes = 13
   blank_idx = num_classes - 2
@@ -5606,7 +5606,7 @@ def test_MaskedComputationLayer_subnet_search_choices_resolution():
       "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:inv_fertility"],
                             "eval": "source(0) + source(1) * source(2) * 0.5",
                             "out_type": {"dim": AttNumHeads, "shape": (None, AttNumHeads)}},
-      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
+      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value", "auto_squeeze": False},  # (B, H, V)
       "att": {"class": "merge_dims", "axes": ["dim:%i" % AttNumHeads, "dim:%i" % EncKeyTotalDim], "from": "att0"},  # (B, H*V)
 
       'not_blank_mask': {'class': 'compare', 'from': ['output'], 'value': blank_idx, 'kind': 'not_equal',
@@ -5665,7 +5665,7 @@ def test_MaskedComputationLayer_subnet_search_choices_resolution():
 def test_MaskedComputationLayer_subnet_rec_search():
   beam_size = 3
   EncKeyTotalDim = 10
-  AttNumHeads = 1
+  AttNumHeads = 2
   target = "classes"
   num_classes = 13
   blank_idx = num_classes - 2
@@ -5697,7 +5697,7 @@ def test_MaskedComputationLayer_subnet_rec_search():
       "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:inv_fertility"],
                             "eval": "source(0) + source(1) * source(2) * 0.5",
                             "out_type": {"dim": AttNumHeads, "shape": (None, AttNumHeads)}},
-      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
+      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value", "auto_squeeze": False},  # (B, H, V)
       "att": {"class": "merge_dims", "axes": ["dim:%i" % AttNumHeads, "dim:%i" % EncKeyTotalDim], "from": "att0"},  # (B, H*V)
 
       'not_blank_mask': {'class': 'compare', 'from': ['output'], 'value': blank_idx, 'kind': 'not_equal',
@@ -5915,7 +5915,7 @@ def test_MaskedComputationLayer_outside():
 def test_subnet_deps_search():
   beam_size = 3
   EncKeyTotalDim = 10
-  AttNumHeads = 1
+  AttNumHeads = 2
   target = "classes"
   num_classes = 13
   from test_TFNetworkLayer import make_feed_dict
@@ -5943,7 +5943,7 @@ def test_subnet_deps_search():
                               'from': ['prev:accum_att_weights', 'att_weights', 'base:inv_fertility'],
                               'out_type': {'dim': AttNumHeads, 'shape': (None, AttNumHeads)}},
         'att': {'axes': ["dim:%i" % AttNumHeads, "dim:%i" % EncKeyTotalDim], 'class': 'merge_dims', 'from': 'att0'},
-        'att0': {'base': 'base:enc_value', 'class': 'generic_attention', 'weights': 'att_weights'},
+        'att0': {'base': 'base:enc_value', 'class': 'generic_attention', 'weights': 'att_weights', "auto_squeeze": False},
         'att_weights': {'class': 'softmax_over_spatial', 'from': 'energy'},
         'combo_output_prob': {'class': 'eval',
                               'eval': 'safe_log(source(0)) - 0.22 * safe_log(source(1))',
