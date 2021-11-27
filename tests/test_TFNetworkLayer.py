@@ -2836,7 +2836,7 @@ def test_reuse_params_map_custom_dep_loop():
                               "from": ["prev:accum_att_weights", "att_weights", "base:inv_fertility"],
                               "eval": "source(0) + source(1) * source(2) * 0.5",
                               "out_type": {"dim": 1, "shape": (None, 1)}},
-        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
         "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["target_embed", "att"], "n_out": 10},
         "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
                        "n_out": 2 * 6},
