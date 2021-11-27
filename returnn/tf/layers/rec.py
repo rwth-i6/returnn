@@ -6013,12 +6013,16 @@ class GenericAttentionLayer(AttentionBaseLayer):
   """
   layer_class = "generic_attention"
 
-  def __init__(self, weights, auto_squeeze=True, **kwargs):
+  def __init__(self, weights, auto_squeeze=NotSpecified, **kwargs):
     """
     :param LayerBase base: encoder output to attend on. (B, enc-time)|(enc-time, B) + (...) + (n_out,)
     :param LayerBase weights: attention weights. ((B, enc-time)|(enc-time, B)) + (1,)|()
-    :param bool auto_squeeze: auto-squeeze any weight-axes with dim=1 away
+    :param bool|NotSpecified auto_squeeze: auto-squeeze any weight-axes with dim=1 away.
+      False by default since behavior version 6.
     """
+    from returnn.util import BehaviorVersion
+    if auto_squeeze is NotSpecified:
+      auto_squeeze = False if BehaviorVersion.get() >= 6 else True
     super(GenericAttentionLayer, self).__init__(**kwargs)
     self.weights = weights
     assert not self.sources, "only base and weights are needed"
@@ -6171,15 +6175,18 @@ class GenericAttentionLayer(AttentionBaseLayer):
     return weights_rem_axes, weights_squeeze_axes, common_axes
 
   @classmethod
-  def get_out_data_from_opts(cls, base, weights, auto_squeeze=True, sources=(), **kwargs):
+  def get_out_data_from_opts(cls, base, weights, auto_squeeze=NotSpecified, sources=(), **kwargs):
     """
     :param LayerBase base:
     :param LayerBase weights:
-    :param bool auto_squeeze:
+    :param bool|NotSpecified auto_squeeze:
     :param list[LayerBase] sources: ignored, should be empty (checked in __init__)
     :rtype: Data
     """
+    from returnn.util import BehaviorVersion
     from .basic import DotLayer, InternalLayer
+    if auto_squeeze is NotSpecified:
+      auto_squeeze = False if BehaviorVersion.get() >= 6 else True
     if not weights.output.is_batch_major:
       weights = InternalLayer(
         network=weights.network, name="%s_batch_major" % weights.name,
