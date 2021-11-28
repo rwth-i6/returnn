@@ -2355,6 +2355,10 @@ class Data(object):
     v = self.copy_add_dim_by_tag(dim_tag, axis=axis)
     if v.feature_dim_axis_or_unspecified is not NotSpecified:
       v.feature_dim_axis = NotSpecified
+    if axis < 0:
+      axis += v.batch_ndim
+      assert axis >= 0
+    assert 0 <= axis < v.batch_ndim
     if v.feature_dim_axis != axis:
       v.feature_dim_axis = axis
     return v
