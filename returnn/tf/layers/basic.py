@@ -4592,8 +4592,11 @@ class ConvLayer(_ConcatInputLayer):
       input_expand_dims=input_expand_dims,
       input_split_feature_dim=input_split_feature_dim,
       input_add_feature_dim=input_add_feature_dim)
-    data = input_data.copy_with_feature_dim_axis(-1)  # just to have the dim tags in order [B,S...,D]
     # Be relaxed about incorrect input data. Throw errors later. This can also work during template construction.
+    if input_data.have_feature_axis():
+      data = input_data.copy_with_feature_dim_axis(-1)  # just to have the dim tags in order [B,S...,D]
+    else:
+      data = input_data.copy_add_feature_dim(-1)
     old_spatial_dim_tags = data.dim_tags[num_batch_dims:-1]
     dim_tags = list(data.dim_tags[:num_batch_dims])  # [B]
     if out_spatial_dims:
