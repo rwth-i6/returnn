@@ -1727,8 +1727,9 @@ class Data(object):
     :param tf.Tensor x:
     :rtype: Data
     """
-    assert x.get_shape().ndims == 0, "currently only scalars supported"
-    return Data(name=str(x.op.name), shape=(), batch_dim_axis=None, dtype=x.dtype.name, placeholder=x)
+    assert x.get_shape().is_fully_defined()
+    x_shape = x.get_shape().as_list()
+    return Data(name=str(x.op.name), shape=x_shape, batch_dim_axis=None, dtype=x.dtype.name, placeholder=x)
 
   @classmethod
   def template_from_constant(cls, x, name, dtype=None, shape=None, with_batch_dim=False):
