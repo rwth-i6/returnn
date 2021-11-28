@@ -3527,6 +3527,8 @@ def test_reclayer_optimize_out_linear():
 
 
 def test_reclayer_optimize_out_conv1d():
+  # https://github.com/rwth-i6/returnn/issues/573
+  # https://github.com/rwth-i6/returnn/pull/789
   input_feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="in-feature", dimension=15)
   new_feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="split-feature", dimension=3)
   spatial_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="split-spatial", dimension=5)
