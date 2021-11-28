@@ -4315,9 +4315,9 @@ class ConvLayer(_ConcatInputLayer):
       out_batch_feature_major = False
       input_data = input_data.copy_with_feature_dim_axis(-1)
       in_spatial_dims_ = input_data.dim_tags[num_batch_dims:-1]
-    assert len(in_spatial_dims_) == len(filter_size)
     if in_spatial_dims:
-      assert in_spatial_dims_ == in_spatial_dims
+      assert list(in_spatial_dims_) == list(in_spatial_dims)
+    assert len(in_spatial_dims_) == len(filter_size)
     assert input_data.batch_ndim - num_batch_dims - 1 == len(filter_size), (
       "%s: filter-size-dimension does not match the input data. " % self +
       "this is %i-D conv but found %i spatial dims in the input %s. " % (
@@ -4355,8 +4355,11 @@ class ConvLayer(_ConcatInputLayer):
     if out_batch_feature_major:
       data_format = {1: "NCW", 2: "NCHW", 3: "NCDHW"}[len(filter_size)]
     x = input_data.placeholder
+    extended_batch_shape = None
     if num_batch_dims > 1:
-      x = tf.reshape(x, tf.concat([[-1], tf.shape(x)[num_batch_dims:]], axis=0))  # merge all batch dims
+      x_shape = tf.shape(x)
+      extended_batch_shape = x_shape[:num_batch_dims]
+      x = tf.reshape(x, tf.concat([[-1], x_shape[num_batch_dims:]], axis=0))  # merge all batch dims
     if groups > 1 and groups == n_in and len(filter_size) <= 2:  # depthwise conv
       if len(filter_size) == 1:
         filters = tf.reshape(filters, [filter_size[0], 1, n_in, n_out // n_in])  # [1,K,n_in,n_out//n_in]
@@ -4381,7 +4384,7 @@ class ConvLayer(_ConcatInputLayer):
         filter=filters,
         padding=padding, strides=strides, dilation_rate=dilation_rate)
     if num_batch_dims > 1:
-      y = tf.reshape(y, tf.concat([tf.shape(x)[:num_batch_dims], tf.shape(y)[1:]], axis=0))
+      y = tf.reshape(y, tf.concat([extended_batch_shape, tf.shape(y)[1:]], axis=0))
     # y shape is [batch] + dynamic_dims + [n_out].
     if with_bias is NotSpecified:
       with_bias = True if bias else False
@@ -4415,7 +4418,7 @@ class ConvLayer(_ConcatInputLayer):
     else:
       out_spatial_dims_ = self.output.dim_tags[num_batch_dims:-1]
     if out_spatial_dims:
-      assert out_spatial_dims_ == out_spatial_dims
+      assert list(out_spatial_dims_) == list(out_spatial_dims)
     assert len(out_spatial_dims_) == len(in_spatial_dims_) == len(filter_size)
     for i, in_tag in enumerate(in_spatial_dims_):
       out_tag = out_spatial_dims_[i]
@@ -4498,8 +4501,9 @@ class ConvLayer(_ConcatInputLayer):
         expected_non_batch_dims = expected_dims - {BatchDim}
         batch_axis_idx = 0
         for a, d in enumerate(input_data.dim_tags):
-          if d not in expected_non_batch_dims and a != batch_axis_idx:
-            input_data = input_data.copy_move_axis(old_axis=a, new_axis=batch_axis_idx)
+          if d not in expected_non_batch_dims:
+            if a != batch_axis_idx:
+              input_data = input_data.copy_move_axis(old_axis=a, new_axis=batch_axis_idx)
             batch_axis_idx += 1
         num_batch_dims = batch_axis_idx
     if num_batch_dims == 1:
