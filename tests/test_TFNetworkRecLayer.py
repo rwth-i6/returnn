@@ -3526,6 +3526,19 @@ def test_reclayer_optimize_out_linear():
   check_reclayer_optimize_out({"class": "linear", "activation": "relu"})
 
 
+def test_reclayer_optimize_out_conv1d():
+  input_feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="in-feature", dimension=15)
+  new_feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="split-feature", dimension=3)
+  spatial_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="split-spatial", dimension=5)
+  check_reclayer_optimize_out(
+    {"class": "conv", "from": "split", "in_spatial_dims": [spatial_dim], "filter_size": [3], "padding": "same"},
+    {
+      "split": {
+        "class": "split_dims", "from": "data:source", "axis": input_feat_dim, "dims": (spatial_dim, new_feat_dim)}
+    },
+    feat_dim=input_feat_dim)
+
+
 def test_reclayer_optimize_out_rnncell():
   check_reclayer_optimize_out({"class": "rnn_cell", "unit": "BasicLSTM"})
 
