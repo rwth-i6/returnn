@@ -4282,7 +4282,6 @@ class ConvLayer(_ConcatInputLayer):
     :param dict[str,str]|None filter_perm: transposes the filter (input filter as layer)
     :param LayerBase|None bias: if given, will not create an own parameter, but use this as the bias
     """
-    from returnn.tf.util.data import DimensionTag
     padding = padding.upper()
     assert padding in ["SAME", "VALID"], "no other padding supported at the moment"
     assert "out_type" not in kwargs, "don't set out_type explicitly for this layer"
@@ -4299,24 +4298,40 @@ class ConvLayer(_ConcatInputLayer):
       dilation_rate = list(dilation_rate)
     assert len(dilation_rate) == len(filter_size)
     assert not self.input_data.sparse
-    input_data = self._transform_input(
+    assert self.input_data.have_batch_axis()
+    assert self.input_data.have_feature_axis(), (
+      "this should be our single input feature dim now. otherwise use input_add_feature_dim")
+    input_data, num_batch_dims = self._transform_input(
       self.input_data,
       in_dim=in_dim, in_spatial_dims=in_spatial_dims,
       input_expand_dims=input_expand_dims,
       input_split_feature_dim=input_split_feature_dim,
       input_add_feature_dim=input_add_feature_dim)
-    if self.output.is_batch_feature_major:
-      input_data = input_data.copy_as_batch_feature_major()
+    if self.output.feature_dim_axis == num_batch_dims:
+      out_batch_feature_major = True
+      input_data = input_data.copy_with_feature_dim_axis(num_batch_dims)
+      in_spatial_dims_ = input_data.dim_tags[num_batch_dims + 1:]
     else:
+      out_batch_feature_major = False
       input_data = input_data.copy_with_feature_dim_axis(-1)
-    assert input_data.feature_dim_axis is not None, (
-      "this should be our single input feature dim now. otherwise use input_add_feature_dim")
-    assert len(input_data.get_spatial_axes()) == len(filter_size), (
-      "filter-size-dimension does not match the input data. " +
-      "this is %i-D conv but number of spatial dims is %i in the input %s. " % (
-        len(filter_size), len(input_data.get_spatial_axes()), self.input_data.get_description()) +
+      in_spatial_dims_ = input_data.dim_tags[num_batch_dims:-1]
+    assert len(in_spatial_dims_) == len(filter_size)
+    if in_spatial_dims:
+      assert in_spatial_dims_ == in_spatial_dims
+    assert input_data.batch_ndim - num_batch_dims - 1 == len(filter_size), (
+      "%s: filter-size-dimension does not match the input data. " % self +
+      "this is %i-D conv but found %i spatial dims in the input %s. " % (
+        len(filter_size), input_data.batch_ndim - num_batch_dims - 1, self.input_data) +
       "consider using input_expand_dims or input_add_feature_dim.")
     n_in = input_data.dim
+    if out_dim:
+      assert out_dim == self.output.feature_dim_or_sparse_dim
+    else:
+      out_dim = self.output.feature_dim_or_sparse_dim
+    if n_out:
+      assert n_out == out_dim.dimension
+    else:
+      n_out = out_dim.dimension
     if groups != 1:
       assert groups >= 1 and n_in % groups == 0 and n_out % groups == 0
     filter_shape = list(filter_size) + [n_in // groups, n_out]
@@ -4337,14 +4352,15 @@ class ConvLayer(_ConcatInputLayer):
         filters = self.add_param(tf_compat.v1.get_variable(
           name="W", shape=filter_shape, initializer=fwd_weights_initializer))
     data_format = None
-    if input_data.is_batch_feature_major:
-      assert self.output.is_batch_feature_major
+    if out_batch_feature_major:
       data_format = {1: "NCW", 2: "NCHW", 3: "NCDHW"}[len(filter_size)]
+    x = input_data.placeholder
+    if num_batch_dims > 1:
+      x = tf.reshape(x, tf.concat([[-1], tf.shape(x)[num_batch_dims:]], axis=0))  # merge all batch dims
     if groups > 1 and groups == n_in and len(filter_size) <= 2:  # depthwise conv
-      x = input_data.placeholder
       if len(filter_size) == 1:
         filters = tf.reshape(filters, [filter_size[0], 1, n_in, n_out // n_in])  # [1,K,n_in,n_out//n_in]
-        x = tf.expand_dims(x, axis=-1 if self.output.is_batch_feature_major else -2)  # [B,T,1,n_in]
+        x = tf.expand_dims(x, axis=-1 if out_batch_feature_major else -2)  # [B,T,1,n_in]
         strides = strides + [1]
         dilation_rate = dilation_rate + [1]
       else:
@@ -4353,17 +4369,19 @@ class ConvLayer(_ConcatInputLayer):
         x, data_format=data_format,
         filter=filters,
         padding=padding,
-        strides=([1] + strides + [1]) if self.output.is_batch_feature_major else ([1, 1] + strides),
+        strides=([1] + strides + [1]) if out_batch_feature_major else ([1, 1] + strides),
         dilations=dilation_rate)
       if len(filter_size) == 1:
-        y = tf.squeeze(y, axis=-1 if self.output.is_batch_feature_major else -2)
+        y = tf.squeeze(y, axis=-1 if out_batch_feature_major else -2)
         strides = strides[:-1]
         dilation_rate = dilation_rate[:-1]
     else:
       y = tf_compat.v1.nn.convolution(
-        input_data.placeholder, data_format=data_format,
+        x, data_format=data_format,
         filter=filters,
         padding=padding, strides=strides, dilation_rate=dilation_rate)
+    if num_batch_dims > 1:
+      y = tf.reshape(y, tf.concat([tf.shape(x)[:num_batch_dims], tf.shape(y)[1:]], axis=0))
     # y shape is [batch] + dynamic_dims + [n_out].
     if with_bias is NotSpecified:
       with_bias = True if bias else False
@@ -4380,8 +4398,8 @@ class ConvLayer(_ConcatInputLayer):
           bias_initializer = get_initializer(
             bias_init, seed=self.network.random.randint(2 ** 31) if bias_init else 0, eval_local_ns={"layer": self})
           b = self.add_param(tf_compat.v1.get_variable(name="bias", shape=(n_out,), initializer=bias_initializer))
-        if input_data.is_batch_feature_major:
-          y += tf.reshape(b, [1, n_out] + [1] * len(filter_size))
+        if out_batch_feature_major:
+          y += Data(name="bias", placeholder=b, dim_tags=[out_dim]).copy_compatible_to(self.output).placeholder
         else:
           y += b
     if activation:
@@ -4392,17 +4410,29 @@ class ConvLayer(_ConcatInputLayer):
       self.output_before_activation = OutputWithActivation(y)
     y = self.output_before_activation.y
     self.output.placeholder = y
-    index_shift = self.output.get_spatial_batch_axes()[0]
-    for i, in_axis in enumerate(input_data.get_spatial_batch_axes()):
-      in_tag = input_data.dim_tags[in_axis]
-      if in_tag.dimension is None and in_tag.dyn_size is not None:
+    if out_batch_feature_major:
+      out_spatial_dims_ = self.output.dim_tags[num_batch_dims + 1:]
+    else:
+      out_spatial_dims_ = self.output.dim_tags[num_batch_dims:-1]
+    if out_spatial_dims:
+      assert out_spatial_dims_ == out_spatial_dims
+    assert len(out_spatial_dims_) == len(in_spatial_dims_) == len(filter_size)
+    for i, in_tag in enumerate(in_spatial_dims_):
+      out_tag = out_spatial_dims_[i]
+      if in_tag.dimension is not None:
+        size = in_tag.dimension
+        size = self.calc_out_dim(
+          in_dim=size,
+          filter_size=filter_size[i], stride=strides[i],
+          dilation_rate=dilation_rate[i], padding=padding)
+        assert out_tag.dimension == size
+      elif in_tag.dimension is None and in_tag.dyn_size is not None:
         size = in_tag.dyn_size
         with tf_util.same_control_flow_ctx(size):
           size = self.calc_out_dim(
             in_dim=size,
             filter_size=filter_size[i], stride=strides[i],
             dilation_rate=dilation_rate[i], padding=padding)
-        out_tag = self.output.dim_tags[i + index_shift]
         size_tag = DimensionTag.get_tag_from_size_tensor(size)
         if not size_tag:
           out_tag.set_tag_on_size_tensor(size, batch=in_tag.batch)
@@ -4422,10 +4452,12 @@ class ConvLayer(_ConcatInputLayer):
       will be divided by input_split_feature_dim, thus it must be a multiple of that value.
     :param bool input_add_feature_dim: will add a dim at the end and use input-feature-dim == 1,
       and use the original input feature-dim as a spatial dim.
-    :rtype: Data
+    :return: (transformed input, num batch dims). all batch dims are at the front
+    :rtype: (Data, int)
     """
     assert not input_data.sparse
-    input_data = input_data.copy_as_batch_major()
+    assert input_data.have_batch_axis()
+    num_batch_dims = 1
     if input_expand_dims:
       for i in range(input_expand_dims):
         input_data = input_data.copy_add_spatial_dim()
@@ -4447,18 +4479,32 @@ class ConvLayer(_ConcatInputLayer):
         "in_spatial_dims %s must be unique but map to %s" % (in_spatial_dims, axes))
       if sorted(axes) != axes:
         # Sort them such that the convolution is correct.
-        pass  # TODO...
+        first = min(axes)
+        for i, d in enumerate(in_spatial_dims):
+          a = input_data.get_axis_from_description(d)
+          input_data = input_data.copy_move_axis(old_axis=a, new_axis=first + i)
+        axes = [input_data.get_axis_from_description(d) for d in in_spatial_dims]
+        assert sorted(axes) == axes
       assert input_data.feature_dim_axis not in axes
       expected_dims = {BatchDim, input_data.feature_dim_or_sparse_dim} | set(in_spatial_dims)
       assert len(expected_dims) == 2 + len(in_spatial_dims)
       if set(input_data.dim_tags) != expected_dims:
         # There are more dims in the input than we expect.
         assert set(input_data.dim_tags).issuperset(expected_dims)
-        # Merge all remaining ones into the batch dim. We will later undo this at the end.
+        # Prepare to merge all remaining ones into the batch dim. We will later undo this at the end.
         # This is needed to support a ConvLayer both inside a rec loop which then can be optimized out.
         # But also this is a useful feature in general.
-        pass  # TODO do this...
-    return input_data
+        # Move all dims right next to each other. But keep the order.
+        expected_non_batch_dims = expected_dims - {BatchDim}
+        batch_axis_idx = 0
+        for a, d in enumerate(input_data.dim_tags):
+          if d not in expected_non_batch_dims and a != batch_axis_idx:
+            input_data = input_data.copy_move_axis(old_axis=a, new_axis=batch_axis_idx)
+            batch_axis_idx += 1
+        num_batch_dims = batch_axis_idx
+    if num_batch_dims == 1:
+      input_data = input_data.copy_as_batch_major()
+    return input_data, num_batch_dims
 
   @classmethod
   def calc_out_dim(cls, in_dim, filter_size, stride, padding, dilation_rate=1):
@@ -4533,36 +4579,47 @@ class ConvLayer(_ConcatInputLayer):
       assert isinstance(dilation_rate, (tuple, list))
       dilation_rate = list(dilation_rate)
     assert len(dilation_rate) == len(filter_size)
+    if in_spatial_dims:
+      assert len(in_spatial_dims) == len(filter_size)
     padding = padding.upper()
-    input_data = cls._transform_input(
+    input_data, num_batch_dims = cls._transform_input(
       input_data,
       in_dim=in_dim, in_spatial_dims=in_spatial_dims,
       input_expand_dims=input_expand_dims,
       input_split_feature_dim=input_split_feature_dim,
       input_add_feature_dim=input_add_feature_dim)
-    data = input_data.copy_as_batch_spatial_major()  # just to have the dim tags in order [B,S...,D]
+    data = input_data.copy_with_feature_dim_axis(-1)  # just to have the dim tags in order [B,S...,D]
     # Be relaxed about incorrect input data. Throw errors later. This can also work during template construction.
-    old_spatial_dim_tags = data.dim_tags[1:-1]
-    dim_tags = [data.dim_tags[0]]  # [B]
-    for i in range(len(filter_size)):
-      old_tag = old_spatial_dim_tags[i] if i < len(old_spatial_dim_tags) else None
-      if old_tag and (filter_size[i] == strides[i] == 1 or (strides[i] == 1 and padding == "SAME")):
-        dim_tags.append(old_tag)  # identity in this axis
-        continue
-      new_dim = None
-      if old_tag and old_tag.dimension is not None:
-        new_dim = ConvLayer.calc_out_dim(
-          in_dim=old_tag.dimension,
-          filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
-      dim_tags.append(DimensionTag(
-        kind=DimensionTag.Types.Spatial, description="%s:conv:s%i" % (name, i), dimension=new_dim,
-        derived_from_tag=old_tag, undefined=not old_tag))
-    dim_tags.append(DimensionTag(kind=DimensionTag.Types.Feature, description="%s:channel" % name, dimension=n_out))
+    old_spatial_dim_tags = data.dim_tags[num_batch_dims:-1]
+    dim_tags = list(data.dim_tags[:num_batch_dims])  # [B]
+    if out_spatial_dims:
+      assert len(out_spatial_dims) == len(filter_size)
+      # Be relaxed about incorrect input data. Throw errors later. This can also work during template construction.
+      dim_tags += out_spatial_dims
+    else:
+      for i in range(len(filter_size)):
+        old_tag = old_spatial_dim_tags[i] if i < len(old_spatial_dim_tags) else None
+        if old_tag and (filter_size[i] == strides[i] == 1 or (strides[i] == 1 and padding == "SAME")):
+          dim_tags.append(old_tag)  # identity in this axis
+          continue
+        new_dim = None
+        if old_tag and old_tag.dimension is not None:
+          new_dim = ConvLayer.calc_out_dim(
+            in_dim=old_tag.dimension,
+            filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
+        dim_tags.append(DimensionTag(
+          kind=DimensionTag.Types.Spatial, description="%s:conv:s%i" % (name, i), dimension=new_dim,
+          derived_from_tag=old_tag, undefined=not old_tag))
+    if not out_dim:
+      assert n_out
+      out_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="%s:channel" % name, dimension=n_out)
+    dim_tags.append(out_dim)
     feature_dim_axis = NotSpecified
     # Swap the dims if the input dim order doesn't fit the flag auto_use_channel_first.
-    if tf_util.is_gpu_available_in_session() and (auto_use_channel_first or input_data.is_batch_feature_major):
-      feature_dim_axis = 1
-      dim_tags = dim_tags[:1] + dim_tags[-1:] + dim_tags[1:-1]
+    if auto_use_channel_first or input_data.feature_dim_axis == num_batch_dims:  # batch-feature-major
+      if tf_util.is_gpu_available_in_session():
+        feature_dim_axis = 1
+        dim_tags = dim_tags[:num_batch_dims] + dim_tags[-1:] + dim_tags[num_batch_dims:-1]
     return Data(
       name="%s_output" % name, dim_tags=dim_tags, dim=n_out, feature_dim_axis=feature_dim_axis,
       batch=data.batch, beam=data.beam, control_flow_ctx=data.control_flow_ctx)
