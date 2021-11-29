@@ -3632,16 +3632,15 @@ class Data(object):
     if len(matching_tags) == 1:
       # Fallback with dim tag
       return dim_tag
-    # Fallback without dim tag
-    if dim_tag.dimension is not None:  # static
-      kind = "static"
-      axes = self.get_static_axes()
-    else:  # dynamic
-      kind = "dynamic"
-      axes = self.get_dynamic_axes()
-    assert axis in axes, "%s: %s axes %s do not contain axis %i" % (self, kind, axes, axis)
-    i = axes.index(axis)
-    return "%s:%i" % (kind, i - len(axes))  # negative because this is likely more robust
+    # Do not use indexed static or dynamic because we want to avoid relying on the axis order as much as possible.
+    # However, as we do not have unique dim tags in this case, we have to rely at least on the order of this dim tag.
+    # Use stag-single.
+    name = dim_tag.description
+    matching_axes = self.get_axes_by_tag_name(name, spatial_only=True)
+    assert axis in matching_axes
+    return (
+      "stag-single:%i:%s" % (
+        matching_axes.index(axis) - len(matching_axes), name))  # negative because this is likely more robust
 
   def has_axis(self, axis):
     """
