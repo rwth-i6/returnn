@@ -163,7 +163,7 @@ def test_Data_get_bc_shape():
   assert_equal(d.get_bc_shape(), (1, 1, 1, 9000))
   d = Data(name="data", shape=(None, 13, 9000))
   assert_equal(d.get_bc_shape({"*": None}), (None, None, 13, 9000))
-  assert_equal(d.get_bc_shape({("B", "s:1"): None}), (None, 1, 13, 9000))
+  assert_equal(d.get_bc_shape({("B", "dim:13"): None}), (None, 1, 13, 9000))
 
 
 def test_Data_copy_template_adding_time_dim_no_feature():
