@@ -3595,6 +3595,38 @@ def test_reclayer_optimize_out_rec_nativelstm2():
   check_reclayer_optimize_out({"class": "rec", "unit": "NativeLstm2"})
 
 
+def test_test_reclayer_optimize_out_onlineblstm():
+  network = {}
+  lstm_dim = 13
+  lstm_window = 5
+  lstm_window_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="lstm-window", dimension=lstm_window)
+
+  def add_lstm(i, direction, src):
+    name = "lstm%i_%s" % (i, {1: "fw", -1: "bw"}[direction])
+    if direction > 0:
+      network[name] = {"class": "rec", "unit": "lstm", "n_out": lstm_dim, "from": src}
+      return name
+    network["%s_win" % name] = {
+      "class": "window", "window_dim": lstm_window_dim, "window_right": lstm_window - 1, "from": src}  # (B,T,W,D)
+    network["%s_rec" % name] = {
+      "class": "rec", "unit": "lstm", "axis": lstm_window_dim, "n_out": lstm_dim, "direction": -1,
+      "from": "%s_win" % name}  # (B,T,W,D')
+    network["%s_cur" % name] = {
+      "class": "slice", "axis": lstm_window_dim, "slice_end": 1, "from": "%s_rec" % name}  # (B,T,1,D')
+    network["%s_cursq" % name] = {"class": "squeeze", "axis": "dim:1", "from": "%s_cur" % name}  # (B,T,D')
+    return "%s_cursq" % name
+
+  num_layers = 6
+  src = "data:source"
+  for i in range(num_layers):
+    fwd = add_lstm(i, 1, src)
+    bwd = add_lstm(i, -1, src)
+    src = [fwd, bwd]
+  check_reclayer_optimize_out(
+    {"class": "linear", "from": src},
+    network)
+
+
 def test_reclayer_optimize_out_selfatt_left():
   check_reclayer_optimize_out({
     "class": "self_attention", "attention_left_only": True, "num_heads": 2, "total_key_dim": 6, "n_out": 18})
