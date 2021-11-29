@@ -3538,7 +3538,7 @@ class Data(object):
       elif re.match("(dim):\\d+$", axes):
         s = int(axes.split(":")[1])
         dims = [a for a in range(self.batch_ndim) if self.batch_shape[a] == s]
-        assert dims, "%s get_axes_from_description: no dim %i found" % (self, s)
+        assert len(dims) == 1, "%s get_axes_from_description: dim %i only allowed when unique" % (self, s)
         return dims
       elif axes in ["f", "feature", "non_spatial"]:
         return self.get_feature_batch_axes()
