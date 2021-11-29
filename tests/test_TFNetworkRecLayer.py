@@ -3436,6 +3436,8 @@ def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, sha
   if not time_dim:
     time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
   n_out = subnet_layer_dict.get("n_out", 17)
+  if subnet_layer_dict.get("out_dim", None):
+    n_out = subnet_layer_dict["out_dim"].dimension
   n_batch = 5
   n_time = 7
   subnet_layer_dict["n_out"] = n_out
@@ -4615,7 +4617,7 @@ def test_reclayer_optimize_out_cumsum_step_by_step():
   feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feat", dimension=11)
   check_reclayer_optimize_out(
     subnet_layer_dict={
-      "class": "cumsum", "axis": time_dim, "out_shape": {BatchDim, feat_dim}, "n_out": 11},
+      "class": "cumsum", "axis": time_dim, "out_shape": {BatchDim, feat_dim}, "out_dim": feat_dim},
     feat_dim=feat_dim, time_dim=time_dim)
 
 
@@ -4625,7 +4627,7 @@ def test_reclayer_optimize_out_cumsum_unrelated_axis():
   feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feat", dimension=11)
   check_reclayer_optimize_out(
     subnet_layer_dict={
-      "class": "cumsum", "axis": feat_dim, "out_shape": {BatchDim, feat_dim}, "n_out": 11},
+      "class": "cumsum", "axis": feat_dim, "out_shape": {BatchDim, feat_dim}, "out_dim": feat_dim},
     feat_dim=feat_dim, time_dim=time_dim)
 
 
