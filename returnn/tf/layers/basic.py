@@ -2641,15 +2641,20 @@ class WindowLayer(_ConcatInputLayer):
 
   # noinspection PyMethodOverriding
   @classmethod
-  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, window_size, axis="T", sources=(), **kwargs):
+  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, window_size=None, window_dim=None,
+                                    axis="T", sources=(), **kwargs):
     """
     :param tf.Tensor batch_dim:
     :param returnn.tf.layers.rec.RecLayer|LayerBase rec_layer:
-    :param int window_size:
-    :param str axis:
+    :param int|None window_size:
+    :param DimensionTag|None window_dim:
+    :param DimensionTag|str axis:
     :param list[LayerBase] sources:
     :rtype: dict[str,tf.Tensor]
     """
+    if not window_size:
+      assert window_dim and window_dim.dimension
+      window_size = window_dim.dimension
     data = get_concat_sources_data_template(sources)
     data = data.copy_as_batch_major()
     if axis == "T" and data.time_dim_axis is None:
