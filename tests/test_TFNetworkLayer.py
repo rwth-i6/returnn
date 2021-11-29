@@ -733,7 +733,8 @@ def test_cnn_building_block():
       "num_outputs": filters,
       "network": {
         "split": {"class": "split_dims", "axis": "f", "dims": (channel_num, feature_dim), "from": ["data"]},
-        "swap_axes": {"class": "swap_axes", "axis1": "s:1", "axis2": "f", "from": ["split"]},
+        "swap_axes": {
+          "class": "swap_axes", "axis1": "dim:%i" % channel_num, "axis2": "dim:%i" % feature_dim, "from": "split"},
         "c1": {"class": "conv", "n_out": filters, "filter_size": filter_size, "auto_use_channel_first": False,
                "strides": (1, 1), "dilation_rate": (1, 1), "padding": "SAME", "activation": None, "with_bias": False,
                "from": "swap_axes"},
@@ -746,7 +747,8 @@ def test_cnn_building_block():
         "bn2": {"class": "batch_norm", "from": "p"},
         "y2": {"class": "activation", "activation": "relu", "batch_norm": False, "from": "bn2"},
 
-        "out_pool": {"class": "reduce", "mode": "avg", "axes": "s:1", "keep_dims": False, "from": "y2"},
+        "out_pool": {
+          "class": "reduce", "mode": "avg", "axes": "dim:%i" % feature_dim, "keep_dims": False, "from": "y2"},
         "output": {"class": "copy", "from": ["out_pool"], "is_output_layer": True}
       }})
     network = TFNetwork(config=config, train_flag=True)
@@ -1248,8 +1250,8 @@ def test_dot_layer_shuffled_remaining_dims_static():
   with make_scope() as session:
     import numpy as np
     net_dict = {
-      "a": {"class": "split_dims", "axis": "static:0", "dims": (2, 3, 5), "from": "data:data"},
-      "b": {"class": "transpose", "from": ["a"], "perm": {"static:0": "static:1", "static:1": "static:0"}},
+      "a": {"class": "split_dims", "axis": "F", "dims": (2, 3, 5), "from": "data:data"},
+      "b": {"class": "transpose", "from": ["a"], "perm": {"dim:2": "dim:3", "dim:3": "dim:2"}},
       "dot": {
         "class": "dot", "from": ["a", "b"],
         "red1": "dim:5", "red2": "dim:5", "var1": None, "var2": None,
@@ -1504,7 +1506,7 @@ def test_ReduceLayer_reduce4d():
     name="src", network=network, output=Data(name="src", shape=(None, 4, 512), auto_create_placeholders=True))
   print("src:", src_layer)
   opts = {
-    'axes': "s:1",
+    'axes': "dim:4",
     'keep_dims': True,
     'mode': 'mean',
     'name': 'c_out_reduce',
@@ -1966,7 +1968,7 @@ def test_MergeDimsLayer_dim_tags():
       src_data.get_axis_by_tag_name('key-chunk') == 1 and src_data.get_axis_by_tag_name('key-window') == 2 and
       src_data.get_axis_by_tag_name('att-heads') == 3)
 
-    merge_axes = ['stag:key-window', 'spatial:-1']
+    merge_axes = ['stag:key-window', 'dim:1']
     print('merge axes:', merge_axes)
 
     src = InternalLayer(name="src", network=net, output=src_data)
@@ -2099,7 +2101,7 @@ def test_MergeDimsLayer_2d_dynamic_merge_axis():
       "start1": {"class": "range_in_axis", "from": "data", "axis": "t", "out_shape": {time_dim, ImplicitDynSizeDim(BatchDim)}},
       "start": {"class": "combine", "from": ["start0", "start1"], "kind": "add", "out_shape": {BatchDim, time_dim}},
       "slices": {"class": "slice_nd", "from": "data", "start": "start", "size": None},  # [B,T[B],slice[B,T],D]
-      "output": {"class": "merge_dims", "from": "slices", "axes": ["f", "dyn:-1"]}  # [B,T[B],merge[B,T]]
+      "output": {"class": "merge_dims", "from": "slices", "axes": ["f", "stag:slice"]}  # [B,T[B],merge[B,T]]
     })
     slices_layer = net.get_layer("slices")
     assert isinstance(slices_layer, SliceNdLayer)
@@ -2671,7 +2673,7 @@ def test_ScatterNdLayer_pos_batch_last_dim():
         auto_create_placeholders=True))
     scatter_opts = dict(
       name="scatter", network=network,
-      sources=[val], position=pos, position_axis="except_batch:-1",
+      sources=[val], position=pos, position_axis="dim:6",
       output_dim_via_time_from=data, filter_invalid_indices=True)
     scatter_out_template = ScatterNdLayer.get_out_data_from_opts(**scatter_opts)
     print("scatter out:", scatter_out_template)
@@ -3116,9 +3118,9 @@ def test_GatherLayer():
     # should become [B, T, F2, F1]
     layer = GatherLayer(
       name="gather", network=net,
-      sources=[values], position=position, axis="static:0",
+      sources=[values], position=position, axis="dim:%i" % gather_dim,
       output=GatherLayer.get_out_data_from_opts(
-        name="gather", sources=[values], position=position, axis="static:0"))
+        name="gather", sources=[values], position=position, axis="dim:%i" % gather_dim))
     layer.output.sanity_check()
     out_seqs, size = session.run([layer.output.placeholder, layer.output.size_placeholder.as_dict()])
     assert isinstance(out_seqs, numpy.ndarray)
@@ -3165,9 +3167,9 @@ def test_GatherLayer_constant_position():
     # should become [B, F1, F2]
     layer = GatherLayer(
       name="gather", network=net,
-      sources=[values], position=position, axis="static:-2",
+      sources=[values], position=position, axis="dim:%i" % gather_dim,
       output=GatherLayer.get_out_data_from_opts(
-        name="gather", sources=[values], position=position, axis="static:-2"))
+        name="gather", sources=[values], position=position, axis="dim:%i" % gather_dim))
     layer.output.sanity_check()
     out_seqs = session.run(layer.output.placeholder)
     assert isinstance(out_seqs, numpy.ndarray)
@@ -3317,7 +3319,7 @@ def test_SliceNdLayer_multidimensional_start():
         "class": "rec", "from": "data:data", "unit": {
           "start": {"class": "copy", "from": "prev:choice"},
           "slices": {"class": "slice_nd", "from": "base:data:data", "start": "start", "size": None},
-          "output": {"class": "reduce", "from": "slices", "mode": "max", "axes": "dyn:-1"},
+          "output": {"class": "reduce", "from": "slices", "mode": "max", "axes": "stag:slice"},
           "prob": {"class": "softmax", "from": "data:source", "target": "classes", "loss": "ce"},
           'choice': {
             'class': 'choice', 'target': "classes", 'beam_size': 3, 'from': "prob", "input_type": "prob",
@@ -3367,7 +3369,7 @@ def test_SliceNdLayer_multidimensional_size():
           "start": {"class": "reinterpret_data", "from": "prev:choice", "set_sparse": False},
           "size": {"class": "combine", "from": ["const1", "start"], "kind": "add"},
           "slices": {"class": "slice_nd", "from": "base:data:data", "start": "start", "size": "size"},
-          "output": {"class": "reduce", "from": "slices", "mode": "max", "axes": "dyn:-1"},
+          "output": {"class": "reduce", "from": "slices", "mode": "max", "axes": "stag:slice"},
           "prob": {"class": "softmax", "from": "data:source", "target": "classes", "loss": "ce"},
           'choice': {
             'class': 'choice', 'target': "classes", 'beam_size': 3, 'from': "prob", "input_type": "prob",
@@ -3707,52 +3709,35 @@ def test_pool_layer_NCHW():
                                                 pool_size=pool_size, padding=padding, strides=strides,
                                                 use_channel_first=True,
                                                 network=net, sources=[src_nchw]))
-    with tf_compat.v1.variable_scope("pool_nhwc_from_nchw"):
-      pool_nhwc_from_nchw = PoolLayer(
-        name="pool_nhwc_from_nchw", network=net, mode="max", pool_size=pool_size,
-        padding=padding, strides=strides, use_channel_first=False, sources=[src_nchw],
-        output=PoolLayer.get_out_data_from_opts(name="pool_nhwc_from_nchw",
-                                                pool_size=pool_size, padding=padding, strides=strides,
-                                                use_channel_first=False,
-                                                network=net, sources=[src_nchw]))
     tf_compat.v1.global_variables_initializer().run()
     out, seq_lens = session.run([pool_nhwc_from_nhwc.output.placeholder,
-                                 pool_nhwc_from_nhwc.output.size_placeholder[0]],
+                                 pool_nhwc_from_nhwc.output.get_sequence_lengths()],
                                 feed_dict={src_nhwc.output.placeholder: np.random.rand(10, 11, 16, 16),
-                                           src_nhwc.output.size_placeholder[0]: np.full(shape=(10,), fill_value=11)}
+                                           src_nhwc.output.get_sequence_lengths(): np.full(shape=(10,), fill_value=11)}
                                 )
     print(out.shape)
     assert_equal(out.shape, (10, 7, 6, 16))
     print(seq_lens)
-    time_dim_axis = 1 if tf_util.is_gpu_available() else 0
     out, seq_lens = session.run([pool_nchw_from_nhwc.output.placeholder,
-                                 pool_nchw_from_nhwc.output.size_placeholder[time_dim_axis]],
+                                 pool_nchw_from_nhwc.output.get_sequence_lengths()],
                                 feed_dict={src_nhwc.output.placeholder: np.random.rand(10, 11, 16, 16),
-                                           src_nhwc.output.size_placeholder[0]: np.full(shape=(10,), fill_value=11)
+                                           src_nhwc.output.get_sequence_lengths(): np.full(shape=(10,), fill_value=11)
                                 })
-    print(out.shape)
-    if time_dim_axis == 1:
+    print(pool_nchw_from_nhwc.output, out.shape)
+    if pool_nchw_from_nhwc.output.feature_dim_axis == 1:
       assert_equal(out.shape, (10, 16, 7, 6))
     else:
       assert_equal(out.shape, (10, 7, 6, 16))
     print(seq_lens)
     if tf_util.is_gpu_available():
       out, seq_lens = session.run([pool_nchw_from_nchw.output.placeholder,
-                                   pool_nchw_from_nchw.output.size_placeholder[1]],
+                                   pool_nchw_from_nchw.output.get_sequence_lengths()],
                                   feed_dict={src_nchw.output.placeholder: np.random.rand(10, 16, 11, 16),
-                                             src_nchw.output.size_placeholder[1]: np.full(shape=(10,), fill_value=11)
+                                             src_nchw.output.get_sequence_lengths(): np.full(shape=(10,), fill_value=11)
                                   })
       print(out.shape)
       assert_equal(out.shape, (10, 16, 7, 6))
       print(seq_lens)
-    out, seq_lens = session.run([pool_nhwc_from_nchw.output.placeholder,
-                                 pool_nhwc_from_nchw.output.size_placeholder[0]],
-                                feed_dict={src_nchw.output.placeholder: np.random.rand(10, 16, 11, 16),
-                                           src_nchw.output.size_placeholder[1]: np.full(shape=(10,), fill_value=11)}
-                                )
-    print(out.shape)
-    assert_equal(out.shape, (10, 7, 6, 16))
-    print(seq_lens)
 
 
 def test_TransposedConvLayer_2d_simple():
@@ -4050,7 +4035,7 @@ def test_DotLayer2():
 
     kwargs = dict(
       name="dot", network=net, sources=[a, b], debug=True,
-      red1='F', red2='spatial:-1', var1='B', var2='F')
+      red1='F', red2='dim:%i' % R, var1='B', var2='F')
     layer = DotLayer(output=DotLayer.get_out_data_from_opts(**kwargs), **kwargs)
     print(layer, layer.output)
     assert layer.output.batch_dim_axis == 2

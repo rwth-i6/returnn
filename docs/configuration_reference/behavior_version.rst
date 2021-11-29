@@ -22,6 +22,17 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 7 (2021-11-29)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Do not allow to specify ``axes`` or ``axis`` arguments in a way that depends on the order of the axes.
+E.g. things like ``axis="spatial:1"`` would not be allowed.
+
+To fix this, use dimension tags, i.e. :class:`DimensionTag` instances.
+To fix older configs without too much effort,
+you might also want to use ``"stag:<name>"`` or ``"stag-single:<idx>:<name>"``
+or ``"dim:<static-dim>"``.
+
 Behavior version 6 (2021-11-27)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

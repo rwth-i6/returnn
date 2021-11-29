@@ -3437,6 +3437,19 @@ class Data(object):
       return
     raise Exception(msg)
 
+  @classmethod
+  def _verify_axis_order_dependent(cls):
+    """
+    Call this when you have the case that ``axis`` or ``axes``
+    in :func:`get_axes_from_description` or :func:`get_axis_from_description`
+    depends on the order of the axes.
+    """
+    from returnn.util import BehaviorVersion
+    BehaviorVersion.require(
+      condition=False,
+      message="Do not specify axis or axes in a way that depends on the order of the axes.",
+      version=7)
+
   def _make_valid_int_axis(self, axis):
     """
     :param int axis: counted with batch. anything in [-ndim,ndim-1]
@@ -3480,6 +3493,7 @@ class Data(object):
       elif axes == "spatial":
         return self.get_spatial_batch_axes()
       elif re.match("(s|spatial):-?\\d+$", axes):
+        self._verify_axis_order_dependent()
         s = int(axes.split(":")[1])
         spatial_axes = self.get_spatial_batch_axes()
         if s < 0:
@@ -3489,6 +3503,7 @@ class Data(object):
       elif axes in ["dyn", "dynamic"]:
         return self.get_dynamic_axes()
       elif re.match("(d|dyn|dynamic):-?\\d+$", axes):
+        self._verify_axis_order_dependent()
         s = int(axes.split(":")[1])
         dyn_axes = self.get_dynamic_axes()
         if s < 0:
@@ -3516,6 +3531,7 @@ class Data(object):
         axes.remove(self.batch_dim_axis)
         return axes
       elif re.match("(except_batch):-?\\d+$", axes):
+        self._verify_axis_order_dependent()
         s = int(axes.split(":")[1])
         non_batch_axes = list(range(self.batch_ndim))
         if self.batch_dim_axis is not None:
@@ -3529,6 +3545,7 @@ class Data(object):
       elif axes == "static":
         return self.get_static_axes()
       elif re.match("(static):-?\\d+$", axes):
+        self._verify_axis_order_dependent()
         s = int(axes.split(":")[1])
         static_axes = self.get_static_axes()
         if s < 0:
@@ -3549,6 +3566,9 @@ class Data(object):
       elif axes.startswith("stag-single:"):  # spatial tag which possibly matches multiple spatial axes
         # in this case, a name of form "stag-single:<idx>:<name> is expected.
         # idx is relative to the matching stags, i.e., it is the index among the list of spatial dims matching the name
+        # Note: no _verify_axis_order_dependent here because as long as we do not enforce unique dim tags
+        # (https://github.com/rwth-i6/returnn/issues/632), we can have multiple axes with the same tag,
+        # and then we need to be able to differentiate between them by order.
         _, idx_s, name = axes.split(":", 2)  # stag-single:<idx>:<name>
         idx = int(idx_s)
         return [self.get_axes_by_tag_name(name, spatial_only=True)[idx]]
@@ -3612,16 +3632,15 @@ class Data(object):
     if len(matching_tags) == 1:
       # Fallback with dim tag
       return dim_tag
-    # Fallback without dim tag
-    if dim_tag.dimension is not None:  # static
-      kind = "static"
-      axes = self.get_static_axes()
-    else:  # dynamic
-      kind = "dynamic"
-      axes = self.get_dynamic_axes()
-    assert axis in axes, "%s: %s axes %s do not contain axis %i" % (self, kind, axes, axis)
-    i = axes.index(axis)
-    return "%s:%i" % (kind, i - len(axes))  # negative because this is likely more robust
+    # Do not use indexed static or dynamic because we want to avoid relying on the axis order as much as possible.
+    # However, as we do not have unique dim tags in this case, we have to rely at least on the order of this dim tag.
+    # Use stag-single.
+    name = dim_tag.description
+    matching_axes = self.get_axes_by_tag_name(name, spatial_only=True)
+    assert axis in matching_axes
+    return (
+      "stag-single:%i:%s" % (
+        matching_axes.index(axis) - len(matching_axes), name))  # negative because this is likely more robust
 
   def has_axis(self, axis):
     """
