@@ -4302,7 +4302,7 @@ class ConvLayer(_ConcatInputLayer):
     assert self.input_data.have_feature_axis(), (
       "this should be our single input feature dim now. otherwise use input_add_feature_dim")
     input_data, num_batch_dims = self.transform_input(
-      self.input_data,
+      self.input_data, network=self.network,
       in_dim=in_dim, in_spatial_dims=in_spatial_dims,
       input_expand_dims=input_expand_dims,
       input_split_feature_dim=input_split_feature_dim,
@@ -4317,7 +4317,8 @@ class ConvLayer(_ConcatInputLayer):
       in_spatial_dims_ = input_data.dim_tags[num_batch_dims:-1]
     if in_spatial_dims:
       assert list(in_spatial_dims_) == list(in_spatial_dims)
-    assert len(in_spatial_dims_) == len(filter_size)
+    assert len(in_spatial_dims_) == len(filter_size), (
+      "%s: in_spatial_dims %s not matching to filter_size %s" % (self, in_spatial_dims_, filter_size))
     assert input_data.batch_ndim - num_batch_dims - 1 == len(filter_size), (
       "%s: filter-size-dimension does not match the input data. " % self +
       "this is %i-D conv but found %i spatial dims in the input %s. " % (
@@ -4461,10 +4462,11 @@ class ConvLayer(_ConcatInputLayer):
           out_tag.declare_same_as(size_tag)
 
   @classmethod
-  def transform_input(cls, input_data, in_dim=None, in_spatial_dims=None,
+  def transform_input(cls, input_data, network, in_dim=None, in_spatial_dims=None,
                       input_expand_dims=0, input_split_feature_dim=None, input_add_feature_dim=False):
     """
     :param Data input_data:
+    :param returnn.tf.network.TFNetwork network:
     :param DimensionTag|None in_dim:
     :param list[DimensionTag]|None in_spatial_dims:
     :param int input_expand_dims: number of spatial dims to add to the input
@@ -4478,7 +4480,6 @@ class ConvLayer(_ConcatInputLayer):
     """
     assert not input_data.sparse
     assert input_data.have_batch_axis()
-    num_batch_dims = 1
     if input_expand_dims:
       for i in range(input_expand_dims):
         input_data = input_data.copy_add_spatial_dim()
@@ -4509,23 +4510,33 @@ class ConvLayer(_ConcatInputLayer):
       assert input_data.feature_dim_axis not in axes
       expected_dims = {BatchDim, input_data.feature_dim_or_sparse_dim} | set(in_spatial_dims)
       assert len(expected_dims) == 2 + len(in_spatial_dims)
-      if set(input_data.dim_tags) != expected_dims:
-        # There are more dims in the input than we expect.
-        assert set(input_data.dim_tags).issuperset(expected_dims)
-        # Prepare to merge all remaining ones into the batch dim. We will later undo this at the end.
-        # This is needed to support a ConvLayer both inside a rec loop which then can be optimized out.
-        # But also this is a useful feature in general.
-        # Move all dims right next to each other. But keep the order.
-        expected_non_batch_dims = expected_dims - {BatchDim}
-        batch_axis_idx = 0
-        for a, d in enumerate(input_data.dim_tags):
-          if d not in expected_non_batch_dims:
-            if a != batch_axis_idx:
-              input_data = input_data.copy_move_axis(old_axis=a, new_axis=batch_axis_idx)
-            batch_axis_idx += 1
-        num_batch_dims = batch_axis_idx
-    if num_batch_dims == 1:
-      input_data = input_data.copy_as_batch_major()
+      # There might be more dims in the input than we expect.
+      assert set(input_data.dim_tags).issuperset(expected_dims)
+      # Prepare to merge all remaining ones into the batch dim. We will later undo this at the end.
+      # This is needed to support a ConvLayer both inside a rec loop which then can be optimized out.
+      # But also this is a useful feature in general.
+      # Move all batch dims right next to each other in front. But keep the order.
+      expected_non_batch_dims = expected_dims - {BatchDim}
+      batch_axis_idx = 0
+      for a, d in enumerate(input_data.dim_tags):
+        if d not in expected_non_batch_dims:
+          if a != batch_axis_idx:
+            input_data = input_data.copy_move_axis(old_axis=a, new_axis=batch_axis_idx)
+          batch_axis_idx += 1
+      num_batch_dims = batch_axis_idx
+    else:  # no specified in_spatial_dims
+      batch_axes = {input_data.batch_dim_axis}
+      inside_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=True)
+      over_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=False)
+      if over_rec_time_dim and not inside_rec_time_dim and over_rec_time_dim in input_data.dim_tags:
+        # It is moved out of a rec loop. This axis can not be used.
+        batch_axes.add(input_data.get_axis_from_description(over_rec_time_dim))
+      batch_axis_idx = 0
+      for a in sorted(batch_axes):
+        if a != batch_axis_idx:
+          input_data = input_data.copy_move_axis(old_axis=a, new_axis=batch_axis_idx)
+        batch_axis_idx += 1
+      num_batch_dims = batch_axis_idx
     return input_data, num_batch_dims
 
   @classmethod
@@ -4563,8 +4574,8 @@ class ConvLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(
-        cls, name, filter_size, padding, strides=1, dilation_rate=1,
-        sources=(),
+        cls, name, sources, network,
+        filter_size, padding, strides=1, dilation_rate=1,
         input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None,
         in_dim=None, in_spatial_dims=None,
         n_out=None, out_dim=None, out_spatial_dims=None,
@@ -4572,11 +4583,12 @@ class ConvLayer(_ConcatInputLayer):
         **kwargs):
     """
     :param str name:
+    :param list[LayerBase]|tuple[LayerBase] sources:
+    :param returnn.tf.network.TFNetwork network:
     :param tuple[int] filter_size:
     :param str padding:
     :param int|tuple[int]|list[int] strides:
     :param int|tuple[int]|list[int] dilation_rate:
-    :param list[LayerBase]|tuple[LayerBase] sources:
     :param int input_expand_dims: number of dynamic dims to add to the input
     :param bool input_add_feature_dim:
     :param None|int input_split_feature_dim:
@@ -4605,7 +4617,7 @@ class ConvLayer(_ConcatInputLayer):
       assert len(in_spatial_dims) == len(filter_size)
     padding = padding.upper()
     input_data, num_batch_dims = cls.transform_input(
-      input_data,
+      input_data, network=network,
       in_dim=in_dim, in_spatial_dims=in_spatial_dims,
       input_expand_dims=input_expand_dims,
       input_split_feature_dim=input_split_feature_dim,
@@ -4730,7 +4742,7 @@ class PoolLayer(_ConcatInputLayer):
       assert self.input_data.have_feature_axis()
       out_dim = in_dim = self.input_data.feature_dim_or_sparse_dim
     input_data, num_batch_dims = ConvLayer.transform_input(
-      self.input_data, in_dim=in_dim, in_spatial_dims=in_spatial_dims)
+      self.input_data, network=self.network, in_dim=in_dim, in_spatial_dims=in_spatial_dims)
     # We want to prepare the input data such that the batch-dim(s) is the very first,
     # the feature-dim is the very last ("NHWC" format) or right after batch-dim ("NCHW"),
     # and all other dims are where we convolve over.
