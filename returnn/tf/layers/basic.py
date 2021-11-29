@@ -4548,6 +4548,14 @@ class ConvLayer(_ConcatInputLayer):
           input_data = input_data.copy_move_axis(old_axis=a, new_axis=batch_axis_idx)
         batch_axis_idx += 1
       num_batch_dims = batch_axis_idx
+      spatial_dims = [
+        d for (i, d) in enumerate(input_data.dim_tags)
+        if i >= num_batch_dims and i != input_data.feature_dim_axis]
+      from returnn.util import BehaviorVersion
+      BehaviorVersion.require(
+        condition=len(spatial_dims) == 1,
+        message="Explicitly specify in_spatial_dims when there is more than one spatial dim in the input.",
+        version=7)
     return input_data, num_batch_dims
 
   @classmethod
