@@ -3573,6 +3573,17 @@ def test_reclayer_optimize_out_pool1d():
     feat_dim=input_feat_dim)
 
 
+def test_reclayer_optimize_out_transposed_conv1d_no_dim_tags():
+  # https://github.com/rwth-i6/returnn/issues/573
+  input_feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="in-feature", dimension=15)
+  check_reclayer_optimize_out(
+    {"class": "transposed_conv", "from": "split", "filter_size": [3], "padding": "same"},
+    {
+      "split": {
+        "class": "split_dims", "from": "data:source", "axis": "F", "dims": (5, 3)}
+    },
+    feat_dim=input_feat_dim)
+
 
 def test_reclayer_optimize_out_rnncell():
   check_reclayer_optimize_out({"class": "rnn_cell", "unit": "BasicLSTM"})
