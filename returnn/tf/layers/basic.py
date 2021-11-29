@@ -4887,11 +4887,14 @@ class TransposedConvLayer(_ConcatInputLayer):
   recurrent = True
 
   # noinspection PyShadowingBuiltins
-  def __init__(self, filter_size, activation, strides=None,
+  def __init__(self, filter_size, strides=None,
                padding="same",
                remove_padding=0,
                output_padding=None,
+               in_dim=None, in_spatial_dims=None,
+               out_dim=None, out_spatial_dims=None,
                with_bias=True,
+               activation=None,
                forward_weights_init="glorot_uniform", bias_init=0.0,
                filter=None, filter_perm=None, bias=None,
                **kwargs):
@@ -4912,8 +4915,17 @@ class TransposedConvLayer(_ConcatInputLayer):
     """
     from returnn.tf.util.basic import get_initializer, get_activation_function, get_shape
     super(TransposedConvLayer, self).__init__(**kwargs)
-    input_data = self.input_data.copy_as_batch_spatial_major()
-    spatial_axes = input_data.get_spatial_axes()
+    out_dim  # noqa  # via get_out_data_from_opts
+    out_spatial_dims  # noqa  # via get_out_data_from_opts
+    assert not self.input_data.sparse
+    assert self.input_data.have_batch_axis()
+    assert self.input_data.have_feature_axis(), (
+      "this should be our single input feature dim now. otherwise use input_add_feature_dim")
+    input_data, num_batch_dims = ConvLayer.transform_input(
+      self.input_data, network=self.network,
+      in_dim=in_dim, in_spatial_dims=in_spatial_dims)
+    input_data = self.input_data.copy_with_feature_last()
+    spatial_axes = list(range(num_batch_dims, input_data.batch_ndim - 1))
     padding = padding.lower()
     if strides is None:
       strides = filter_size
@@ -4926,6 +4938,11 @@ class TransposedConvLayer(_ConcatInputLayer):
         self, len(spatial_axes), input_data, filter_size, strides))
     assert len(spatial_axes) in [1, 2], "%s: %i-D not yet implemented..." % (self, len(spatial_axes))
     x = input_data.placeholder
+    extended_batch_shape = None
+    if num_batch_dims > 1:
+      x_shape = tf.shape(x)
+      extended_batch_shape = x_shape[:num_batch_dims]
+      x = tf.reshape(x, tf.concat([[-1], x_shape[num_batch_dims:]], axis=0))  # merge all batch dims
     shape = get_shape(x)
     if len(spatial_axes) == 1:
       # TF supports only 2D transposed-conv, so wrap it.
@@ -4972,6 +4989,8 @@ class TransposedConvLayer(_ConcatInputLayer):
           assert isinstance(p, int)
           assert p > 0
           y = single_strided_slice(y, axis=i + 1, begin=p, end=-p)
+    if num_batch_dims > 1:
+      y = tf.reshape(y, tf.concat([extended_batch_shape, tf.shape(y)[1:]], axis=0))
     if bias:
       assert with_bias
     self.bias_layer = None
@@ -4994,8 +5013,7 @@ class TransposedConvLayer(_ConcatInputLayer):
       self.output_before_activation = OutputWithActivation(y)
     y = self.output_before_activation.y
     self.output.placeholder = y
-    for idx, axis_wo_b in enumerate(input_data.get_spatial_axes()):
-      axis = input_data.get_batch_axis(axis_wo_b)
+    for idx, axis in enumerate(spatial_axes):
       input_tag = input_data.dim_tags[axis]
       output_tag = self.output.dim_tags[axis]
       if input_tag.dimension is None:
@@ -5065,50 +5083,69 @@ class TransposedConvLayer(_ConcatInputLayer):
     return length
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, n_out,
-                             filter_size, strides=None,
-                             padding="same",
-                             remove_padding=0, output_padding=None, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, network,
+                             filter_size, strides=None, padding="same", remove_padding=0, output_padding=None,
+                             n_out=None, out_dim=None, out_spatial_dims=None,
+                             in_dim=None, in_spatial_dims=None,
+                             **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
-    :param int n_out:
+    :param returnn.tf.network.TFNetwork network:
     :param list[int] filter_size:
     :param list[int]|None strides:
     :param str padding:
     :param list[int]|int remove_padding:
     :param list[int|None]|int|None output_padding:
+    :param int|None n_out: number of outgoing features
+    :param DimensionTag|None out_dim:
+    :param list[DimensionTag]|None out_spatial_dims:
+    :param DimensionTag|None in_dim:
+    :param list[DimensionTag]|None in_spatial_dims:
     :rtype: Data
     """
-    from ..util.data import DimensionTag
-    out = get_concat_sources_data_template(sources)
-    out = out.copy_as_batch_spatial_major()
-    out = out.copy_template(name="%s_output" % name)
-    assert out.have_feature_axis()
-    out = out.copy_template_replace_dim(axis=out.feature_dim_axis, new_dim=n_out)
-    dim_tags = list(out.dim_tags)
+    input_data = get_concat_sources_data_template(sources)
+    input_data, num_batch_dims = ConvLayer.transform_input(
+      input_data, network=network, in_dim=in_dim, in_spatial_dims=in_spatial_dims)
     if strides is None:
       strides = filter_size
     if isinstance(remove_padding, int):
       remove_padding = [remove_padding] * len(filter_size)
     if not isinstance(output_padding, (list, tuple)):
       output_padding = [output_padding] * len(filter_size)
-    assert len(strides) == len(out.get_spatial_batch_axes()) == len(remove_padding) == len(output_padding), (
-      "Expected strides for all spatial axes")
-    for idx, axis in enumerate(out.get_spatial_batch_axes()):
-      if not output_padding[idx] and remove_padding[idx] == 0 and strides[idx] == 1:
-        if filter_size[idx] == 1 or padding.lower() == "same":
+    assert len(strides) == len(remove_padding) == len(output_padding), "Expected strides for all spatial axes"
+    # Be relaxed about incorrect input data. Throw errors later. This can also work during template construction.
+    if input_data.have_feature_axis():
+      data = input_data.copy_with_feature_dim_axis(-1)  # just to have the dim tags in order [B,S...,D]
+    else:
+      data = input_data.copy_add_feature_dim(-1)
+    old_spatial_dim_tags = data.dim_tags[num_batch_dims:-1]
+    dim_tags = list(data.dim_tags[:num_batch_dims])  # [B]
+    if out_spatial_dims:
+      assert len(out_spatial_dims) == len(filter_size)
+      # Be relaxed about incorrect input data. Throw errors later. This can also work during template construction.
+      dim_tags += out_spatial_dims
+    else:
+      for i in range(len(filter_size)):
+        old_tag = old_spatial_dim_tags[i] if i < len(old_spatial_dim_tags) else None
+        if old_tag and (filter_size[i] == strides[i] == 1 or (strides[i] == 1 and padding == "SAME")):
+          dim_tags.append(old_tag)  # identity in this axis
           continue
-      tag = dim_tags[axis]
-      dim = None
-      if tag.dimension is not None:
-        dim = cls.deconv_output_length(
-          tag.dimension, filter_size=filter_size[idx], stride=strides[idx],
-          padding=padding, output_padding=output_padding[idx]) - remove_padding[idx] * 2
-      dim_tags[axis] = DimensionTag(
-        kind=DimensionTag.Types.Spatial, description="%s_spatial%i_transposed_conv" % (name, idx),
-        dimension=dim)
-    return out.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
+        new_dim = None
+        if old_tag and old_tag.dimension is not None:
+          new_dim = cls.deconv_output_length(
+            old_tag.dimension, filter_size=filter_size[i], stride=strides[i],
+            padding=padding, output_padding=output_padding[i]) - remove_padding[i] * 2
+        dim_tags.append(DimensionTag(
+          kind=DimensionTag.Types.Spatial, description="%s:conv:s%i" % (name, i), dimension=new_dim,
+          derived_from_tag=old_tag, undefined=not old_tag))
+    if not out_dim:
+      assert n_out
+      out_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="%s:channel" % name, dimension=n_out)
+    dim_tags.append(out_dim)
+    return Data(
+      name="%s_output" % name, dim_tags=dim_tags,
+      batch=data.batch, beam=data.beam, control_flow_ctx=data.control_flow_ctx)
 
   def get_dep_layers(self):
     """
