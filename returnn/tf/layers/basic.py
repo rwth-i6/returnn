@@ -4795,7 +4795,7 @@ class PoolLayer(_ConcatInputLayer):
     :param bool use_channel_first:
     :rtype: Data
     """
-    data = get_concat_sources_data_template(sources, name="%s_output" % name)
+    data = get_concat_sources_data_template(sources)
     if in_dim and out_dim:
       assert in_dim == out_dim
     elif in_dim:
