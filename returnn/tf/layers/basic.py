@@ -4787,7 +4787,7 @@ class PoolLayer(_ConcatInputLayer):
       filter_size=pool_size, strides=strides, dilation_rate=dilation_rate, padding=padding)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources,
+  def get_out_data_from_opts(cls, name, sources, network,
                              pool_size, strides=None, dilation_rate=1, padding="VALID",
                              in_dim=None, in_spatial_dims=None,
                              out_dim=None, out_spatial_dims=None,
@@ -4796,6 +4796,7 @@ class PoolLayer(_ConcatInputLayer):
     """
     :param str name:
     :param list[LayerBase] sources:
+    :param returnn.tf.network.TFNetwork network:
     :param tuple[int]|list[int] pool_size:
     :param tuple[int]|list[int]|int strides:
     :param int|tuple[int]|list[int] dilation_rate:
@@ -4831,7 +4832,7 @@ class PoolLayer(_ConcatInputLayer):
     assert len(dilation_rate) == len(pool_size)
     # y shape is [batch] + spatial_dims + [n_out].
     return ConvLayer.get_out_data_from_opts(
-      name=name, sources=sources,
+      name=name, sources=sources, network=network,
       filter_size=pool_size, padding=padding, strides=strides, dilation_rate=dilation_rate,
       in_dim=in_dim, out_dim=out_dim, in_spatial_dims=in_spatial_dims, out_spatial_dims=out_spatial_dims,
       auto_use_channel_first=use_channel_first)
