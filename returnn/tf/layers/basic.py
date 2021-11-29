@@ -5065,19 +5065,25 @@ class TransposedConvLayer(_ConcatInputLayer):
     return length
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, n_out,
-                             filter_size, strides=None,
-                             padding="same",
-                             remove_padding=0, output_padding=None, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, network,
+                             filter_size, strides=None, padding="same", remove_padding=0, output_padding=None,
+                             n_out=None, out_dim=None, out_spatial_dims=None,
+                             in_dim=None, in_spatial_dims=None,
+                             **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
-    :param int n_out:
+    :param returnn.tf.network.TFNetwork network:
     :param list[int] filter_size:
     :param list[int]|None strides:
     :param str padding:
     :param list[int]|int remove_padding:
     :param list[int|None]|int|None output_padding:
+    :param int|None n_out: number of outgoing features
+    :param DimensionTag|None out_dim:
+    :param list[DimensionTag]|None out_spatial_dims:
+    :param DimensionTag|None in_dim:
+    :param list[DimensionTag]|None in_spatial_dims:
     :rtype: Data
     """
     from ..util.data import DimensionTag
