@@ -1727,8 +1727,9 @@ class Data(object):
     :param tf.Tensor x:
     :rtype: Data
     """
-    assert x.get_shape().ndims == 0, "currently only scalars supported"
-    return Data(name=str(x.op.name), shape=(), batch_dim_axis=None, dtype=x.dtype.name, placeholder=x)
+    assert x.get_shape().is_fully_defined()
+    x_shape = x.get_shape().as_list()
+    return Data(name=str(x.op.name), shape=x_shape, batch_dim_axis=None, dtype=x.dtype.name, placeholder=x)
 
   @classmethod
   def template_from_constant(cls, x, name, dtype=None, shape=None, with_batch_dim=False):
@@ -2354,6 +2355,10 @@ class Data(object):
     v = self.copy_add_dim_by_tag(dim_tag, axis=axis)
     if v.feature_dim_axis_or_unspecified is not NotSpecified:
       v.feature_dim_axis = NotSpecified
+    if axis < 0:
+      axis += v.batch_ndim
+      assert axis >= 0
+    assert 0 <= axis < v.batch_ndim
     if v.feature_dim_axis != axis:
       v.feature_dim_axis = axis
     return v
