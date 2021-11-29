@@ -3690,7 +3690,9 @@ def test_reclayer_optimize_out_dot():
       "att_query": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
                     "from": ["s"]},  # (B, H, D/H)
       # Here is the main test, the dot-layer:
-      "energy": {"class": "dot", "red1": "static:-1", "red2": "static:-1", "var1": "T", "var2": "T?",  # Note the "T?".
+      "energy": {"class": "dot",
+                 "red1": "dim:%i" % EncKeyPerHeadDim, "red2": "dim:%i" % EncKeyPerHeadDim,
+                 "var1": "T", "var2": "T?",  # Note the "T?".
                  "from": ["base:enc_ctx", "att_query"]},
       # energy inside the loop will be (B, H, enc-T, 1).
       # energy outside the loop will be (B, H, enc-T, dec-T). I.e. enc-T is still the first time axis.
@@ -3730,7 +3732,7 @@ def test_reclayer_optimize_out_dot_consistent_axes():
       # Here is the main test, the dot-layer:
       "energy": {
         "class": "dot",
-        "red1": "static:-1", "red2": "static:-1",
+        "red1": "dim:%i" % n_key, "red2": "dim:%i" % n_key,
         "var1": "T", "var2": None, "add_var2_if_empty": False,
         "from": ["base:enc_ctx", "att_query"]},
       # energy inside the loop will be (B, H, T).
@@ -3776,7 +3778,7 @@ def test_reclayer_optimize_out_dot_consistent_axes_enc_dec():
       # Here is the main test, the dot-layer:
       "energy": {
         "class": "dot",
-        "red1": "static:-1", "red2": "static:-1",
+        "red1": "dim:%i" % n_key, "red2": "dim:%i" % n_key,
         "var1": "T", "var2": None, "add_var2_if_empty": False,
         "from": ["base:enc_ctx", "att_query"]},
       # energy inside the loop will be (B, H, enc-T).
@@ -3827,7 +3829,9 @@ def test_reclayer_optimize_out_dot_kv_in_rec():
                      "n_out": EncValueTotalDim},  # (B, enc-T, D)
       "enc_value": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim),
                     "from": ["enc_value0"], "is_output_layer": True},  # (B, enc-T, H, D/H)
-      "energy": {"class": "dot", "red1": "static:-1", "red2": "static:-1", "var1": "T", "var2": "T?",  # Note the "T?".
+      "energy": {"class": "dot",
+                 "red1": "dim:%i" % EncKeyPerHeadDim, "red2": "dim:%i" % EncKeyPerHeadDim,
+                 "var1": "T", "var2": "T?",  # Note the "T?".
                  "from": ["enc_ctx", "att_query"]},
       "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, H, 1)
       "att0": {"class": "generic_attention", "weights": "att_weights", "base": "enc_value"},  # (B, H, V)
@@ -3854,7 +3858,9 @@ def test_reclayer_optimize_out_softmax_over_spatial():
             "n_out": EncKeyTotalDim},  # (B, D)  -- Q (query). D should be same as enc_ctx
       "att_query": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
                     "from": ["s"]},  # (B, H, D/H)
-      "energy": {"class": "dot", "red1": "static:-1", "red2": "static:-1", "var1": "T", "var2": "T?",  # Note the "T?".
+      "energy": {"class": "dot",
+                 "red1": "dim:%i" % EncKeyPerHeadDim, "red2": "dim:%i" % EncKeyPerHeadDim,
+                 "var1": "T", "var2": "T?",  # Note the "T?".
                  "from": ["base:enc_ctx", "att_query"]},
       # energy inside the loop will be (B, H, enc-T, 1).
       # energy outside the loop will be (B, H, enc-T, dec-T). I.e. enc-T is still the first time axis.
@@ -3891,13 +3897,17 @@ def test_reclayer_optimize_out_softmax_over_spatial_rev_dot():
             "n_out": EncKeyTotalDim},  # (B, D)  -- Q (query). D should be same as enc_ctx
       "att_query": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
                     "from": ["s"]},  # (B, H, D/H)
-      "energy": {"class": "dot", "red1": "static:-1", "red2": "static:-1", "var1": "T?", "var2": "T",  # Note the "T?".
+      "energy": {"class": "dot",
+                 "red1": "dim:%i" % EncKeyPerHeadDim, "red2": "dim:%i" % EncKeyPerHeadDim,
+                 "var1": "T?", "var2": "T",  # Note the "T?".
                  "from": ["att_query", "base:enc_ctx"]},
       # energy inside the loop will be (B, H, 1, enc-T).
       # energy outside the loop will be (B, H, dec-T, enc-T). I.e. dec-T is the first time axis.
-      "att_weights": {"class": "softmax_over_spatial", "axis": "d:-1", "from": ["energy"]},  # (B, enc-T, H, 1)
-      "slice": {"class": "slice", "from": "att_weights", "axis": "d:-1", "slice_end": 1},  # (B, 1, H, 1)
-      "squeeze0": {"class": "squeeze", "from": "slice", "axis": "d:-1"},  # (B, H, 1)
+      "att_weights": {
+        "class": "softmax_over_spatial", "axis": "stag-single:-1:time", "from": ["energy"]},  # (B, enc-T, H, 1)
+      "slice": {
+        "class": "slice", "from": "att_weights", "axis": "stag-single:-1:time", "slice_end": 1},  # (B, 1, H, 1)
+      "squeeze0": {"class": "squeeze", "from": "slice", "axis": "stag:slice"},  # (B, H, 1)
       "squeeze": {"class": "squeeze", "from": "squeeze0", "axis": "auto", "allow_no_op": True},  # (B, H)
       },
     shared_base_net={
@@ -3988,7 +3998,8 @@ def test_reclayer_att_with_kv_in_rec():
         'att_value0': {'activation': None, 'class': 'linear', 'from': ['base:encoder'], 'n_out': 6, 'with_bias': False},
         'att_value': {'axis': 'F', 'class': 'split_dims', 'dims': (2, 3), 'from': ['att_value0']},
         'att_energy': {
-          'class': 'dot', 'from': ['att_query', 'att_key'], 'red1': 'static:-1', 'red2': 'static:-1',
+          'class': 'dot', 'from': ['att_query', 'att_key'],
+          "red1": "dim:%i" % 3, "red2": "dim:%i" % 3,
           'var1': 'T?', 'var2': 'T'},
         'att_weights': {
           'axis': 'T', 'class': 'softmax_over_spatial', 'from': ['att_energy']},
@@ -4365,7 +4376,9 @@ class TransformerNetwork:
     db[output + '_att_value'] = {"class": "split_dims", "axis": "F",
                                  "dims": (self.AttNumHeads, self.EncValuePerHeadDim),
                                  "from": [output + '_att_value0']}  # (B, enc-T, H, D'/H)
-    d[output + '_att_energy'] = {"class": "dot", "red1": "static:-1", "red2": "static:-1", "var1": "T", "var2": "T?",
+    d[output + '_att_energy'] = {"class": "dot",
+                                 "red1": "dim:%i" % self.EncKeyPerHeadDim, "red2": "dim:%i" % self.EncKeyPerHeadDim,
+                                 "var1": "T", "var2": "T?",
                                  "from": ['base:' + output + '_att_key', output + '_att_query']}  # (B, H, enc-T, 1)
     d[output + '_att_weights'] = {"class": "softmax_over_spatial", "from": [output + '_att_energy'],
                                   "energy_factor": self.EncKeyPerHeadDim ** -0.5}  # (B, enc-T, H, 1)
@@ -5380,6 +5393,7 @@ def test_GenericAttentionLayer_weights_heads_auto_squeeze_time_end():
 
 
 def test_GenericAttentionLayer_extra_spatial():
+  from returnn.tf.util.data import BatchDim
   from returnn.tf.layers.base import InternalLayer
   net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
   # This is the situation when the GenericAttentionLayer is outside the recurrent loop,
@@ -5387,13 +5401,13 @@ def test_GenericAttentionLayer_extra_spatial():
   # and the attention weights, which has two spatial axis, one of the decoder, and one of the encoder.
   dec_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="dec time")
   enc_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="enc time")
+  feat1_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feature1", dimension=1)
   kwargs = dict(
     name="att", network=net,
     weights=InternalLayer(
       name="att_weights", network=net,
       output=Data(
-        name='att_weights_output', shape=(None, None, 1), auto_create_placeholders=True,
-        same_dim_tags_as={"dyn:0": dec_time, "dyn:1": enc_time})),
+        name='att_weights_output', dim_tags=[BatchDim, dec_time, enc_time, feat1_dim], auto_create_placeholders=True)),
     base=InternalLayer(
       name="enc_value", network=net,
       output=Data(
@@ -5410,18 +5424,19 @@ def test_GenericAttentionLayer_extra_spatial():
 
 
 def test_GenericAttentionLayer_extra_spatial_multi_head():
+  from returnn.tf.util.data import BatchDim
   from returnn.tf.layers.base import InternalLayer
   net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
   dec_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="dec time")
   enc_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="enc time")
   num_heads = 8
+  heads_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="heads", dimension=num_heads)
   kwargs = dict(
     name="att", network=net,
     weights=InternalLayer(
       name="att_weights", network=net,
       output=Data(
-        name='att_weights_output', shape=(None, None, num_heads), auto_create_placeholders=True,
-        same_dim_tags_as={"dyn:0": dec_time, "dyn:1": enc_time})),
+        name='att_weights_output', dim_tags=[BatchDim, dec_time, enc_time, heads_dim], auto_create_placeholders=True)),
     base=InternalLayer(
       name="enc_value", network=net,
       output=Data(
@@ -6429,7 +6444,7 @@ def test_extra_scatter_nd_search_train():
         "energy_in": {"class": "combine", "kind": "add",
                       "from": ["base:enc_ctx", "s_transformed", "energy_in_t_rel_var"], "n_out": EncKeyTotalDim},
         "energy_in_t_rel_var": {
-          "class": "scatter_nd", "from": "t_rel_var", "position": "t_rel_idxs", "position_axis": "except_batch:-1",
+          "class": "scatter_nd", "from": "t_rel_var", "position": "t_rel_idxs", "position_axis": "dim:6",
           "output_dim_via_time_from": "base:enc_ctx", "filter_invalid_indices": True},
         "energy_tanh": {"class": "activation", "activation": "tanh", "from": "energy_in"},
 
@@ -6837,14 +6852,14 @@ def test_generalized_non_rec_self_attention():
     "v_": {"class": "reinterpret_data", "from": "v", "set_dim_tags": {"T": new_dim}},  # [B,T_new,H,V]
     "energy": {
       "class": "dot", "from": ["q_", "k_"],
-      "red1": "static:-1", "red2": "static:-1",
+      "red1": "dim:%i" % n_key_dim_per_head, "red2": "dim:%i" % n_key_dim_per_head,
       "var1": time_dim, "var2": new_dim},  # [B,H,T_new,T]
     "att_weights": {
       "class": "softmax_over_spatial", "from": "energy", "axis": new_dim},  # [B,H,T,T_new]
     "att": {
       "class": "dot", "from": ["att_weights", "v_"],
       "red1": new_dim, "red2": new_dim,
-      "var1": time_dim, "var2": "static:-1"},  # [B,H,T,V]
+      "var1": time_dim, "var2": "dim:%i" % n_value_dim_per_head},  # [B,H,T,V]
     "att_new": {
       "class": "merge_dims", "from": "att", "axes": ["dim:%i" % n_heads, "dim:%i" % n_value_dim_per_head],
       "is_output_layer": True},  # [B,T,V']
@@ -6895,7 +6910,7 @@ def test_cumulated_attention_weights_search():
   # Config works during training, but building graph raises exception during search:
   # Trying to reshape input tensor with n values into tensor with n * beam_size values
   net_dict = {
-    'source_embed': { 'class': 'linear', 'activation': None, 'n_out': dim, "from": "data:data"},
+    'source_embed': {'class': 'linear', 'activation': None, 'n_out': dim, "from": "data:data"},
     'output': {
       'class': 'rec',
       'from': [],
@@ -6905,12 +6920,13 @@ def test_cumulated_attention_weights_search():
           'target_embed': { 'class': 'linear', 'activation': None, 'from': ['prev:output'], 'n_out': dim},
           'att_energy': {
             'class': 'dot', 'from': ['base:source_embed', 'target_embed'],
-            'red1': "static:-1", 'red2': "static:-1", 'var1': 'T', 'var2': 'T?', 'add_var2_if_empty': False},
+            'red1': "F", 'red2': "F", 'var1': 'T', 'var2': 'T?',
+            'add_var2_if_empty': False},
           'cum_att_energy': {'class': 'combine', 'kind': 'add', 'from': ['prev:att_energy', 'att_energy']},
           'att_weights': {
             'class': 'softmax_over_spatial', 'from': ['cum_att_energy'], 'axis': 'stag:extern_data:data'},
-          'att': { 'class': 'generic_attention', 'base': 'base:source_embed', 'weights': 'att_weights'},
-          'output_prob': { 'class': 'softmax', 'from': ['att'], 'loss': 'ce', 'target': 'classes'},
+          'att': {'class': 'generic_attention', 'base': 'base:source_embed', 'weights': 'att_weights'},
+          'output_prob': {'class': 'softmax', 'from': ['att'], 'loss': 'ce', 'target': 'classes'},
           'output': {
             'beam_size': beam_size, 'class': 'choice', 'from': ['output_prob'],
             'initial_output': 0, 'target': 'classes'},
@@ -7134,8 +7150,9 @@ def test_RelativePositionalEncodingLayer():
     print(out)  # random...
 
 
-def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis, num_heads=8, key_dim=64,
-                                value_dim=64, dropout=0.0):
+def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis,
+                                num_heads=3, key_dim=7, value_dim=11,
+                                dropout=0.0):
   """
   Essentially this does
     d[output + '_att'] = {"class": "self_attention", "num_heads": num_heads,
@@ -7177,7 +7194,7 @@ def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis, 
   # Calculate the energies
   d[output + '_energy'] = {
     'class': 'dot', 'from': [output + '_query', output + '_key_accum'],
-    'red1': 'static:-1', 'red2': 'static:-1',
+    'red1': 'dim:%i' % key_dim, 'red2': 'dim:%i' % key_dim,
     'var1': None if inside_rec_layer else query_axis, 'var2': key_dim_tag}  # [B,n,T?,T|rec-history]
 
   d[output + '_weights'] = {
@@ -7190,7 +7207,7 @@ def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis, 
   d[output + '_output'] = {
     'class': 'dot', 'from': [output + '_weights_drop', output + '_value_accum'],
     'red1': key_axis, 'red2': key_axis,
-    "var1": None if inside_rec_layer else query_axis, "var2": "static:-1"}  # [B,n,T?,F|d_v]
+    "var1": None if inside_rec_layer else query_axis, "var2": "dim:%i" % value_dim}  # [B,n,T?,F|d_v]
   d[output + '_att'] = {
     'class': 'merge_dims', 'axes': ["dim:%i" % num_heads, "dim:%i" % value_dim],
     'from': output + '_output'}  # [B,T?,F|n*d_v]
