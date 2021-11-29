@@ -2543,8 +2543,9 @@ class WindowLayer(_ConcatInputLayer):
       assert window_dim and window_dim.dimension
       window_size = window_dim.dimension
     data = self.input_data.copy_as_batch_major()
-    if axis == "T" and data.time_dim_axis is None:
-      # Assume inside RecLayer.
+    from returnn.tf.util.basic import is_axis_from_description_recurrent
+    if is_axis_from_description_recurrent(axis=axis, network=self.network, data=data):
+      # Inside RecLayer.
       assert self._rec_previous_layer, "%s: expected to be used inside a RecLayer" % self
       assert padding == "same"
       assert window_right is not None or window_left is not None, (
@@ -2590,11 +2591,12 @@ class WindowLayer(_ConcatInputLayer):
     self.output.placeholder.set_shape(tf.TensorShape(self.output.batch_shape))
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, window_size=None, window_dim=None,
+  def get_out_data_from_opts(cls, name, network, sources, window_size=None, window_dim=None,
                              axis="T", out_spatial_dim=None, padding="same", stride=1,
                              **kwargs):
     """
     :param str name:
+    :param returnn.tf.network.TFNetwork network:
     :param list[LayerBase] sources:
     :param int|None window_size:
     :param DimensionTag|None window_dim:
@@ -2610,8 +2612,9 @@ class WindowLayer(_ConcatInputLayer):
     data = get_concat_sources_data_template(sources)
     data = data.copy_template(name="%s_output" % name)
     data = data.copy_as_batch_major()
-    if axis == "T" and data.time_dim_axis is None:
-      # Assume inside RecLayer.
+    from returnn.tf.util.basic import is_axis_from_description_recurrent
+    if is_axis_from_description_recurrent(axis=axis, network=network, data=data):
+      # Inside RecLayer.
       assert not out_spatial_dim
       new_dim_axis = 1  # after batch
     else:
@@ -2641,9 +2644,10 @@ class WindowLayer(_ConcatInputLayer):
 
   # noinspection PyMethodOverriding
   @classmethod
-  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, window_size=None, window_dim=None,
+  def get_rec_initial_extra_outputs(cls, network, batch_dim, rec_layer, window_size=None, window_dim=None,
                                     axis="T", sources=(), **kwargs):
     """
+    :param returnn.tf.network.TFNetwork network:
     :param tf.Tensor batch_dim:
     :param returnn.tf.layers.rec.RecLayer|LayerBase rec_layer:
     :param int|None window_size:
@@ -2657,8 +2661,9 @@ class WindowLayer(_ConcatInputLayer):
       window_size = window_dim.dimension
     data = get_concat_sources_data_template(sources)
     data = data.copy_as_batch_major()
-    if axis == "T" and data.time_dim_axis is None:
-      # Assume inside RecLayer.
+    from returnn.tf.util.basic import is_axis_from_description_recurrent
+    if is_axis_from_description_recurrent(axis=axis, network=network, data=data):
+      # Inside RecLayer.
       shape = list(data.batch_shape)
       shape[0] = batch_dim
       shape.insert(1, window_size)
@@ -2684,9 +2689,8 @@ class CumsumLayer(_ConcatInputLayer):
     x = data.placeholder
     if additional_left_summand_per_element is not None:
       x = additional_left_summand_per_element + x
-    if axis == "T" and data.time_dim_axis is None:
-      # Assume inside RecLayer.
-      assert self._rec_previous_layer, "%s: expected to be used inside a RecLayer" % self
+    from returnn.tf.util.basic import is_axis_from_description_recurrent
+    if is_axis_from_description_recurrent(axis=axis, network=self.network, data=data):
       assert not reverse
       prev_state = self._rec_previous_layer.rec_vars_outputs["state"]
       next_state = prev_state + x
@@ -2710,9 +2714,11 @@ class CumsumLayer(_ConcatInputLayer):
     # Just same format.
     return get_concat_sources_data_template(sources, name="%s_output" % name)
 
+  # noinspection PyMethodOverriding
   @classmethod
-  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, axis="T", sources=(), **kwargs):
+  def get_rec_initial_extra_outputs(cls, network, batch_dim, rec_layer, axis="T", sources=(), **kwargs):
     """
+    :param returnn.tf.network.TFNetwork network:
     :param tf.Tensor batch_dim:
     :param returnn.tf.layers.rec.RecLayer|LayerBase rec_layer:
     :param str axis:
@@ -2720,8 +2726,8 @@ class CumsumLayer(_ConcatInputLayer):
     :rtype: dict[str,tf.Tensor]
     """
     data = get_concat_sources_data_template(sources)
-    if axis == "T" and data.time_dim_axis is None:
-      # Assume inside RecLayer.
+    from returnn.tf.util.basic import is_axis_from_description_recurrent
+    if is_axis_from_description_recurrent(axis=axis, network=network, data=data):
       assert all(data.shape)
       return {"state": tf.zeros(data.get_batch_shape(batch_dim=batch_dim), dtype=data.dtype)}
     return {}

@@ -6976,3 +6976,19 @@ class FetchHelper:
     self.most_recent_value = value
     self.callback_count += 1
     return 0
+
+
+def is_axis_from_description_recurrent(axis, network, data):
+  """
+  :param str|DimensionTag axis:
+  :param returnn.tf.network.TFNetwork network:
+  :param Data data:
+  :rtype: bool
+  """
+  if not network.is_inside_rec_layer(inside_loop=True):
+    return False
+  if isinstance(axis, str) and axis.lower() == "t" and data.time_dim_axis is None:  # legacy case
+    return True
+  if isinstance(axis, DimensionTag) and axis == network.get_inside_rec_time_dim(inside_loop=True):
+    return True
+  return False
