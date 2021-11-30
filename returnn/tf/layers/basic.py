@@ -6410,29 +6410,25 @@ class ResizeLayer(_ConcatInputLayer):
   """
   layer_class = "resize"
 
-  def __init__(self, factor, axis, kind="nn", fill_value=None, fill_dropout=None, **kwargs):
+  def __init__(self, factor, axis, out_dim=None, kind="nn", fill_value=None, fill_dropout=None, **kwargs):
     """
     :param int factor:
-    :param str|int axis: the axis to resize, counted with batch-dim. can also be "T" for time
+    :param DimensionTag|str axis: the axis to resize
+    :param DimensionTag|None out_dim:
     :param str kind: "linear", "nn"/"nearest_neighbor", "cubic", "fill"
     :param None|int|float fill_value: if kind=="fill"
     :param float fill_dropout: if set, will dropout in the same axis
     """
-    from returnn.tf.util.basic import DimensionTag
+    out_dim  # noqa  # via get_out_data_from_opts
     super(ResizeLayer, self).__init__(**kwargs)
     # self.output.shape and self.output.batch_dim_axis are already set here via self.get_out_data_from_opts().
     axis = self.output.get_axis_from_description(axis)
     assert axis > 0, "batch-dim resize not supported"
     input_data = self.input_data.copy_as_batch_major()
     self.output.placeholder = input_data.placeholder
-    self.output.size_placeholder = input_data.size_placeholder.copy()
-    if (axis - 1) in self.output.size_placeholder:
-      size = self.output.size_placeholder[axis - 1] * factor
-      tag = DimensionTag(
-        description="resize:%s" % self.get_absolute_name(),
-        kind=DimensionTag.Types.Spatial, batch=self.output.batch)
-      tag.set_tag_on_size_tensor(size)
-      self.output.size_placeholder[axis - 1] = size
+    out_dyn_size = input_data.dim_tags[axis].dyn_size
+    if out_dyn_size is not None:
+      out_dyn_size = out_dyn_size * factor
 
     # images expected shape: [batch, height, width, channels]
     remaining_axes = [i for i in range(self.output.batch_ndim) if i not in (0, axis)]
@@ -6481,39 +6477,39 @@ class ResizeLayer(_ConcatInputLayer):
       mask = expand_dims_unbroadcast(mask, axis=0, dim=shape[0])  # (batch,new_size)
       x = tf.boolean_mask(x, mask)  # [batch*new_size_dropped] + remaining_shape
       x = tf.reshape(x, [shape[0], new_size_dropped] + remaining_shape)  # [batch, new_size_dropped] + remaining_shape
-      if (axis - 1) in self.output.size_placeholder:
+      if out_dyn_size is not None:
         orig_mask = tf.sequence_mask(
-          self.output.size_placeholder[axis - 1], maxlen=new_size, dtype=tf.bool)  # (batch,new_size)
-        size = tf.reduce_sum(tf.cast(tf.logical_and(mask, orig_mask), tf.int32), axis=1)
-        tag = DimensionTag(
-          description="resize:fill_dropout:%s" % self.get_absolute_name(),
-          kind=DimensionTag.Types.Spatial, batch=self.output.batch)
-        tag.set_tag_on_size_tensor(size)
-        self.output.size_placeholder[axis - 1] = size
+          out_dyn_size, maxlen=new_size, dtype=tf.bool)  # (batch,new_size)
+        out_dyn_size = tf.reduce_sum(tf.cast(tf.logical_and(mask, orig_mask), tf.int32), axis=1)
     if axis != 1:
       perm = [0] + remaining_axes
       perm.insert(axis, 1)
       x = tf.transpose(x, perm)
+    if out_dyn_size is not None:
+      self.output.dim_tags[axis].dyn_size = out_dyn_size
     self.output.placeholder = x
 
   @classmethod
-  def get_out_data_from_opts(cls, factor, axis, sources, name, **kwargs):
+  def get_out_data_from_opts(cls, factor, axis, sources, name, out_dim=None, **kwargs):
     """
     :param int factor:
-    :param str axis:
+    :param DimensionTag|str axis:
     :param list[LayerBase] sources:
     :param str name:
+    :param DimensionTag|None out_dim:
     :rtype: Data
     """
-    from ..util.data import DimensionTag
     out = get_concat_sources_data_template(sources).copy_as_batch_major()
     out = out.copy_template(name="%s_output" % name)
     axis = out.get_axis_from_description(axis)
     assert axis != out.batch_dim_axis, "batch-dim resize not supported"
     tag = out.dim_tags[axis]
     dim = None if tag.dimension is None else (tag.dimension * factor)
-    tag = DimensionTag(kind=tag.kind, description="%s_resize" % name, dimension=dim)
-    return out.copy_template_replace_dim_tag(axis=axis, new_dim_tag=tag)
+    if out_dim:
+      assert out_dim.dimension == dim
+    else:
+      out_dim = DimensionTag(kind=tag.kind, description="%s_resize" % name, dimension=dim)
+    return out.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_dim)
 
 
 class CombineDimsLayer(MergeDimsLayer):
