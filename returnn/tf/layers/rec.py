@@ -120,7 +120,7 @@ class RecLayer(_ConcatInputLayer):
     :param bool use_global_rec_step_offset:
     :param bool include_eos: for search, whether we should include the frame where "end" is True
     :param bool|None debug:
-    :param DimensionTag|None axis:
+    :param DimensionTag|str|None axis:
     """
     super(RecLayer, self).__init__(**kwargs)
     import re
@@ -147,6 +147,17 @@ class RecLayer(_ConcatInputLayer):
     self._initial_state_deps = [layer for layer in nest.flatten(initial_state) if isinstance(layer, LayerBase)]
     self._input_projection = input_projection
     self._max_seq_len = max_seq_len
+    if isinstance(axis, str):
+      assert self.input_data
+      axis_int = self.input_data.get_axis_from_description(axis)
+      axis = self.input_data.dim_tags[axis_int]
+    if axis:
+      assert isinstance(axis, DimensionTag)
+    if axis and self.input_data and axis in self.input_data.dim_tags:
+      axis_int = self.input_data.get_axis_from_description(axis)
+      self.input_data.time_dim_axis = axis_int  # makes some of the following code easier
+      if self.input_data.time_dim_axis == self.input_data.feature_dim_axis:
+        self.input_data.feature_dim_axis = NotSpecified
     self.time_dim_tag = axis
     self.include_eos = include_eos
     if optimize_move_layers_out is None:
@@ -311,6 +322,16 @@ class RecLayer(_ConcatInputLayer):
     # We need to figure out the output time dim tag at this early point,
     # because _SubnetworkRecCell might need it during template construction.
     source_data = get_concat_sources_data_template(d["sources"]) if d["sources"] else None
+    time_dim_tag_explicit = d.get("axis")
+    if source_data and isinstance(time_dim_tag_explicit, str):
+      time_dim_tag_explicit = source_data.get_dim_tag_from_description(time_dim_tag_explicit)
+    if time_dim_tag_explicit:
+      assert isinstance(time_dim_tag_explicit, DimensionTag)
+    if source_data and time_dim_tag_explicit and time_dim_tag_explicit in source_data.dim_tags:
+      # Make sure it is marked as time dim. This will make it easier in the following.
+      source_data.time_dim_axis = source_data.get_axis_from_description(time_dim_tag_explicit)
+      if source_data.time_dim_axis == source_data.feature_dim_axis:
+        source_data.feature_dim_axis = NotSpecified
     have_dyn_seq_len_end = False
     if isinstance(d.get("unit"), dict):
       have_dyn_seq_len_end = "end" in d["unit"]
@@ -341,11 +362,10 @@ class RecLayer(_ConcatInputLayer):
         time_dim_tag = DimensionTag(
           description="dyn-time:%s%s" % (network.get_absolute_name_prefix(), d["_name"]),
           kind=DimensionTag.Types.Time)
-    if d.get("axis") and time_dim_tag:
-      time_dim_tag_explicit = d["axis"]
-      assert isinstance(time_dim_tag_explicit, DimensionTag)
+    if time_dim_tag_explicit and time_dim_tag:
       time_dim_tag.declare_same_as(time_dim_tag_explicit)
-    d["axis"] = time_dim_tag
+    if not time_dim_tag_explicit:
+      d["axis"] = time_dim_tag
 
     if isinstance(d.get("unit"), dict):
       sub_net_dict = d.pop("unit")
@@ -386,17 +406,31 @@ class RecLayer(_ConcatInputLayer):
       d["max_seq_len"] = eval(d["max_seq_len"], {"max_len_from": max_len_from, "tf": tf})
 
   @classmethod
-  def get_out_data_from_opts(cls, network, unit, axis=None, sources=(), initial_state=None, **kwargs):
+  def get_out_data_from_opts(cls, name, network, sources, unit, axis=None, out_dim=None, initial_state=None,
+                             **kwargs):
     """
+    :param str name:
     :param returnn.tf.network.TFNetwork network:
+    :param list[LayerBase] sources:
     :param str|dict[str] unit:
     :param DimensionTag|None axis:
-    :param list[LayerBase] sources:
+    :param DimensionTag|None out_dim:
     :param str|LayerBase|list[str|LayerBase] initial_state:
     :rtype: Data
     """
     from tensorflow.python.util import nest
     source_data = get_concat_sources_data_template(sources) if sources else None
+    if isinstance(axis, str):
+      assert source_data
+      axis_int = source_data.get_axis_from_description(axis)
+      axis = source_data.dim_tags[axis_int]
+    if axis:
+      assert isinstance(axis, DimensionTag)
+    if source_data and axis in source_data.dim_tags:
+      # This will make it easier in the following.
+      source_data.time_dim_axis = source_data.get_axis_from_description(axis)
+      if source_data.time_dim_axis == source_data.feature_dim_axis:
+        source_data.feature_dim_axis = NotSpecified
     n_out = kwargs.get("n_out", NotSpecified)
     out_type = kwargs.get("out_type", None)
     loss = kwargs.get("loss", None)
@@ -404,33 +438,42 @@ class RecLayer(_ConcatInputLayer):
     deps += [layer for layer in nest.flatten(initial_state) if isinstance(layer, LayerBase)]
     if isinstance(unit, _SubnetworkRecCell):  # subnetwork
       subnet = unit
+      if not axis:
+        axis = DimensionTag(kind=DimensionTag.Types.Time, description="%s:unknown-time" % name)
       out = (
-        subnet.layer_data_templates["output"].output
-        .copy_template_adding_time_dim(name="%s_output" % kwargs["name"], time_dim_axis=0)
+        subnet.layer_data_templates["output"].output.copy_template(name="%s_output" % name)
+        .copy_add_dim_by_tag(dim_tag=axis, axis=0, unbroadcast=True)
         .copy_template_set_ctx(network.get_control_flow_ctx()))
-      if n_out is not NotSpecified:
-        assert n_out == out.dim
-      if out_type:
-        for k, v in out_type.items():
-          assert getattr(out, k) == v
       deps += subnet.get_parent_deps()
-    elif out_type or n_out is not NotSpecified or loss:
-      out = super(RecLayer, cls).get_out_data_from_opts(network=network, sources=sources, **kwargs)
-      if source_data and not source_data.have_time_axis():
+    elif out_type or n_out is not NotSpecified or out_dim or loss:
+      assert source_data
+      if not axis and source_data.have_time_axis():
+        axis = source_data.get_time_dim_tag()
+      assert source_data.have_feature_axis()
+      out = source_data
+      if not out_dim:
+        if n_out is NotSpecified or not n_out:
+          assert out_type and "dim" in out_type
+          n_out = out_type["dim"]
+        out_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="%s:feature" % name, dimension=n_out)
+      out = out.copy_template_replace_dim_tag(axis=out.feature_dim_axis, new_dim_tag=out_dim)
+      if out.have_time_axis() and axis == out.get_time_dim_tag():
+        out = out.copy_as_time_batch_major()
+      else:
         # We expect to be inside another RecLayer, and should do a single step (like RnnCellLayer).
         out = out.copy_as_batch_major()  # The output is then [B,F]
-      else:
-        out = out.copy_as_time_batch_major()  # Otherwise the output is always [T,B,F]
     else:
-      raise Exception("n_out or out_type must be specified")
-    if out.have_time_axis() and axis:
-      out = out.copy_template_replace_dim_tag(axis=out.time_dim_axis, new_dim_tag=axis)
+      raise Exception("n_out or out_type or out_dim must be specified")
+    if n_out is not NotSpecified:
+      assert n_out == out.dim
+    if out_dim:
+      assert out_dim == out.feature_dim_or_sparse_dim
+    if out_type:
+      for k, v in out_type.items():
+        assert getattr(out, k) == v
     for dep in deps:
       if dep:
         out.beam = SearchBeam.get_combined_beam(out.beam, dep.output.beam)
-    if out_type:
-      assert out_type.get("time_dim_axis", out.time_dim_axis) == out.time_dim_axis
-      assert out_type.get("batch_dim_axis", out.batch_dim_axis) == out.batch_dim_axis
     return out
 
   def get_absolute_name_scope_prefix(self):
@@ -448,10 +491,17 @@ class RecLayer(_ConcatInputLayer):
     """
     sources = kwargs.get("sources")
     source_data = get_concat_sources_data_template(sources) if sources else None
-    if source_data and not source_data.have_time_axis():
-      # We expect to be inside another RecLayer, and should do a single step (like RnnCellLayer).
-      return {"state": RnnCellLayer.get_rec_initial_state(**kwargs)}
-    return {}
+    axis = kwargs["axis"]
+    if isinstance(axis, str):
+      assert source_data
+      axis_int = source_data.get_axis_from_description(axis)
+      axis = source_data.dim_tags[axis_int]
+    if axis:
+      assert isinstance(axis, DimensionTag)
+      if source_data and axis in source_data.dim_tags:
+        return {}
+    # We expect to be inside another RecLayer, and should do a single step (like RnnCellLayer).
+    return {"state": RnnCellLayer.get_rec_initial_state(**kwargs)}
 
   @classmethod
   def get_rec_initial_output(cls, **kwargs):
