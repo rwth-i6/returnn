@@ -4505,6 +4505,9 @@ class ConvLayer(_ConcatInputLayer):
     if input_expand_dims or input_split_feature_dim or input_add_feature_dim:
       if not in_spatial_dims:
         # Set it here to allow to handle the extension logic below.
+        if input_data.placeholder is None and not input_data.have_feature_axis():
+          # This is still a template. Ignore errors and make it valid.
+          input_data = input_data.copy_add_feature_dim()
         in_spatial_dims = [input_data.dim_tags[a] for a in input_data.get_spatial_batch_axes()]
         cls._check_defined_in_spatial_dims(len(in_spatial_dims) == 1)
     if input_expand_dims:
@@ -4539,7 +4542,7 @@ class ConvLayer(_ConcatInputLayer):
           input_data = input_data.copy_move_axis(old_axis=a, new_axis=first + i)
         axes = [input_data.get_axis_from_description(d) for d in in_spatial_dims]
         assert sorted(axes) == axes
-      assert input_data.feature_dim_axis not in axes
+      assert input_data.feature_dim_axis not in axes, "invalid in_spatial_dims %s" % (in_spatial_dims,)
       expected_dims = {BatchDim, input_data.feature_dim_or_sparse_dim} | set(in_spatial_dims)
       assert len(expected_dims) == 2 + len(in_spatial_dims)
       # There might be more dims in the input than we expect.
@@ -4572,7 +4575,7 @@ class ConvLayer(_ConcatInputLayer):
       in_spatial_dims = [
         d for (i, d) in enumerate(input_data.dim_tags)
         if i >= num_batch_dims and i != input_data.feature_dim_axis]
-      cls._check_defined_in_spatial_dims(len(in_spatial_dims) == 1)
+      cls._check_defined_in_spatial_dims(len(in_spatial_dims) <= 1)
     return input_data, num_batch_dims
 
   @classmethod
