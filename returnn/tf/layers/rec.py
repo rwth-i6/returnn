@@ -7170,7 +7170,8 @@ class EditDistanceTableLayer(LayerBase):
     if not out_dim:
       out_dim = DimensionTag(
         kind=in_dim.kind, description="%s:edit_dist_table" % name,
-        dimension=in_dim.dimension + 1 if in_dim.dimension else None)
+        dimension=in_dim.dimension + 1 if in_dim.dimension else None,
+        batch=in_dim.batch, control_flow_ctx=in_dim.control_flow_ctx)
     seq_len = tf_util.new_seq_len(
       func=tf_util.simplify_add, key=tf_util.simplify_add,
       dim_tag_desc="%s:edit_dist_table" % name,
