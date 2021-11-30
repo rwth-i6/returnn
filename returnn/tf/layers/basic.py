@@ -3560,27 +3560,30 @@ class UnflattenNdLayer(_ConcatInputLayer):
   layer_class = "unflatten_nd"
   recurrent = True
 
-  def __init__(self, sizes, num_axes, declare_same_sizes_as=None, **kwargs):
+  def __init__(self, sizes, num_axes, in_dim="T", out_dims=None, declare_same_sizes_as=None, **kwargs):
     """
     :param LayerBase sizes:
     :param int num_axes:
+    :param DimensionTag|str|None in_dim:
+    :param list[DimensionTag]|None out_dims:
     :param dict[int,LayerBase]|None declare_same_sizes_as:
     """
+    out_dims, declare_same_sizes_as  # noqa  # handled in get_out_data_from_opts
     super(UnflattenNdLayer, self).__init__(**kwargs)
     self.sizes = sizes
     self.declare_same_sizes_as = declare_same_sizes_as
     input_data = self.input_data.copy_as_batch_major()
+    axis = input_data.get_axis_from_description(in_dim, allow_int=False)
+    input_data = input_data.copy_move_axis(old_axis=axis, new_axis=1)
+    axis = 1
+    out_dims = self.output.dim_tags[axis:axis + num_axes]
     sizes_data = sizes.output.copy_as_batch_major()
     assert sizes_data.batch_ndim == 2
     assert sizes_data.batch_shape[1] in (None, num_axes)  # also allow None...
+    for i, out_dim in enumerate(out_dims):
+      if out_dim.dimension is None and out_dim.dyn_size is None:
+        out_dim.dyn_size = sizes_data.placeholder[:, i]
     self.output.placeholder = tf_util.unflatten_nd(input_data.placeholder, sizes_data.placeholder, num_axes=num_axes)
-    size_placeholder = {i: sizes_data.placeholder[:, i] for i in range(num_axes)}
-    if declare_same_sizes_as:
-      for i, other in declare_same_sizes_as.items():
-        assert 0 <= i < num_axes
-        other_dim_tag = other.output.get_size_dim_tag(0)
-        other_dim_tag.set_tag_on_size_tensor(size_placeholder[i], batch=self.output.batch, same_as_before=True)
-    self.output.size_placeholder = size_placeholder
 
   def get_dep_layers(self):
     """
@@ -3609,27 +3612,37 @@ class UnflattenNdLayer(_ConcatInputLayer):
       d["declare_same_sizes_as"] = {i: get_layer(name) for (i, name) in d["declare_same_sizes_as"].items()}
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, num_axes, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, num_axes, in_dim="T", out_dims=None, declare_same_sizes_as=None,
+                             **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param int num_axes:
+    :param DimensionTag|str|None in_dim:
+    :param list[DimensionTag]|None out_dims:
+    :param dict[int,LayerBase]|None declare_same_sizes_as:
     :rtype: Data
     """
-    input_data = get_concat_sources_data_template(sources).copy_as_batch_major()
-    assert input_data.batch_ndim >= 2 and input_data.is_time_axis_dynamic()
-    feature_dim_axis_or_unspecified = input_data.feature_dim_axis_or_unspecified
-    if feature_dim_axis_or_unspecified is not NotSpecified:
-      feature_dim_axis_or_unspecified -= input_data.batch_ndim
-      assert feature_dim_axis_or_unspecified < 0
-    res = Data(
-      name="%s_output" % name,
-      shape=((None,) * num_axes) + input_data.shape[1:],
-      batch_dim_axis=0,
-      time_dim_axis=1,
-      feature_dim_axis=feature_dim_axis_or_unspecified,
-      dtype=input_data.dtype)
-    return res
+    out = get_concat_sources_data_template(sources).copy(name="%s_output" % name).copy_as_batch_major()
+    axis = out.get_axis_from_description(in_dim, allow_int=False)
+    out = out.copy_move_axis(old_axis=axis, new_axis=1)
+    axis = 1
+    out = out.copy_template_excluding_axis(axis)
+    if out_dims:
+      assert len(out_dims) == num_axes
+      assert all(isinstance(d, DimensionTag) for d in out_dims)
+      assert not declare_same_sizes_as
+    else:
+      out_dims = [
+        DimensionTag(kind=DimensionTag.Types.Spatial, description="%s:unflatten-nd:%i" % (name, i))
+        for i in range(num_axes)]
+      if declare_same_sizes_as:
+        for i, other in declare_same_sizes_as.items():
+          assert 0 <= i < num_axes
+          out_dims[i] = other.output.get_time_dim_tag()
+    for i, out_dim in enumerate(out_dims):
+      out = out.copy_add_dim_by_tag(axis=axis + i, unbroadcast=True, dim_tag=out_dim)
+    return out
 
 
 class ExpandDimsLayer(_ConcatInputLayer):
