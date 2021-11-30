@@ -2736,6 +2736,7 @@ class CumsumLayer(_ConcatInputLayer):
 class PadLayer(_ConcatInputLayer):
   """
   Adds (e.g. zero) padding in some axis or axes.
+  Also see :class:`PrefixInTimeLayer` for dynamic dims.
   """
   layer_class = "pad"
 
@@ -5748,55 +5749,53 @@ class PrefixInTimeLayer(_ConcatInputLayer):
   """
   Adds some prefix in time dimension.
   This is kind of the reverse of :class:`SliceNdLayer` does.
+  Also see :class:`PadLayer` for static dimensions.
+  Also see :class:`PostfixInTimeLayer`.
   """
   layer_class = "prefix_in_time"
   recurrent = True
 
-  def __init__(self, prefix=0.0, repeat=1, size_base=None, **kwargs):
+  def __init__(self, axis="T", out_dim=None, prefix=0.0, repeat=1, size_base=None, **kwargs):
     """
+    :param DimensionTag|str axis:
+    :param DimensionTag|None out_dim:
     :param float|str prefix: either some constant or another layer
-    :param int|LayerBase repeat: how often to repeat the postfix
+    :param int|LayerBase repeat: how often to repeat the prefix
     :param LayerBase|None size_base: copy seq-lens from here
     """
-    from returnn.tf.util.basic import DimensionTag
+    out_dim  # noqa  # handled in get_out_data_from_opts
     super(PrefixInTimeLayer, self).__init__(**kwargs)
-    self.output = self.input_data.copy(name="%s_output" % self.name)
-    assert self.output.time_dim_axis is not None
     assert isinstance(prefix, (float, int)), "other layer src not yet supported"
+    input_data = self.input_data.copy()
+    axis_int = input_data.get_axis_from_description(axis, allow_int=False)
+    in_dim = input_data.dim_tags[axis_int]
     self.repeat_layer = None
     if isinstance(repeat, LayerBase):
       self.repeat_layer = repeat
-      assert repeat.output.ndim == 0 and repeat.output.have_batch_axis() == self.input_data.have_batch_axis()
-      repeat = repeat.output.placeholder
-      self.output = self.output.copy_as_batch_spatial_major()
+      repeat = repeat.output.copy_compatible_to(in_dim.dyn_size_ext).placeholder
+      input_data = input_data.copy_as_batch_major()
+      input_data = input_data.copy_move_axis(old_axis=axis_int, new_axis=1)
+      axis_int = 1
     else:
       assert isinstance(repeat, int)
       assert repeat >= 0
     self.repeat = repeat
-    c = tf.constant(prefix, dtype=self.output.dtype)
-    seq_len = self.output.get_sequence_lengths()
-    if size_base:
-      new_seq_len = size_base.output.get_sequence_lengths()
-    else:
-      new_seq_len = seq_len + repeat
-    if not DimensionTag.get_tag_from_size_tensor(new_seq_len):
-      tag = DimensionTag(
-        description="time-with-prefix:%s" % self.get_absolute_name(),
-        kind=DimensionTag.Types.Spatial, batch=self.output.batch)
-      tag.set_tag_on_size_tensor(new_seq_len)
-    self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] = new_seq_len
+    out_dim = self.output.dim_tags[axis_int]
+    if in_dim.dyn_size is not None and out_dim.dyn_size is None:
+      if not out_dim.dyn_size_ext:
+        out_dim.dyn_size_ext = in_dim.dyn_size_ext.copy()
+      out_dim.dyn_size_ext.placeholder = in_dim.dyn_size_ext.placeholder + repeat
     max_repeat = repeat if isinstance(repeat, int) else tf.maximum(tf.reduce_max(repeat), 0)
-    shape = [((self.output.batch_shape[i] or tf.shape(self.output.placeholder)[i])
-              if (i != self.output.time_dim_axis)
+    shape = [((self.output.batch_shape[i] or tf.shape(input_data.placeholder)[i])
+              if (i != axis_int)
               else max_repeat)
              for i in range(self.output.batch_ndim)]
-    prefix_t = tf.ones(shape, dtype=self.output.dtype) * c
-    x = tf.concat([prefix_t, self.output.placeholder], axis=self.output.time_dim_axis)
+    prefix_t = tf.ones(shape, dtype=self.output.dtype) * tf.constant(prefix, dtype=self.output.dtype)
+    x = tf.concat([prefix_t, input_data.placeholder], axis=axis_int)
     if not isinstance(repeat, int):
-      assert isinstance(repeat, tf.Tensor) and repeat.shape.ndims == 1  # (B,)
-      max_new_seq_len = tf.reduce_max(new_seq_len)
+      max_new_seq_len = tf.reduce_max(out_dim.dyn_size)
       from returnn.tf.util.basic import slice_nd
-      assert (self.output.batch_dim_axis, self.output.time_dim_axis) == (0, 1)
+      assert (self.output.batch_dim_axis, axis_int) == (0, 1)
       x = slice_nd(x, start=max_repeat - repeat, size=max_new_seq_len)
     self.output.placeholder = x
 
@@ -5823,18 +5822,31 @@ class PrefixInTimeLayer(_ConcatInputLayer):
       d["size_base"] = get_layer(d["size_base"])
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, size_base=None, repeat=None, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, axis="T", out_dim=None, size_base=None, repeat=1, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
+    :param DimensionTag|str axis:
+    :param DimensionTag|None out_dim:
     :param LayerBase|None size_base:
-    :param LayerBase|int|None repeat:
+    :param LayerBase|int repeat:
     :rtype: Data
     """
-    # Note: Time seq len is not correct...
     x = get_concat_sources_data_template(sources, name="%s_output" % name)
+    axis_int = x.get_axis_from_description(axis, allow_int=False)
+    in_dim = x.dim_tags[axis_int]
+    out_dim_int = None
+    if in_dim.dimension and isinstance(repeat, int):
+      out_dim_int = in_dim.dimension + repeat
     if size_base:
-      x.size_placeholder[x.time_dim_axis_excluding_batch] = size_base.output.get_sequence_lengths()
+      assert not out_dim
+      out_dim = size_base.output.get_time_dim_tag()
+    if not out_dim:
+      out_dim = DimensionTag(
+        kind=in_dim.kind, description="%s:prefix-in-time" % name, dimension=out_dim_int,
+        derived_from_tag=in_dim, batch=in_dim.batch, control_flow_ctx=in_dim.control_flow_ctx)
+    assert out_dim.dimension == out_dim_int
+    x = x.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=out_dim)
     if isinstance(repeat, LayerBase):
       x = x.copy_as_batch_spatial_major()
     return x
@@ -5843,66 +5855,69 @@ class PrefixInTimeLayer(_ConcatInputLayer):
 class PostfixInTimeLayer(_ConcatInputLayer):
   """
   Adds some postfix in time dimension.
+  Also see :class:`PrefixInTimeLayer`.
   """
   layer_class = "postfix_in_time"
   recurrent = True
 
-  def __init__(self, postfix=0.0, repeat=1, **kwargs):
+  def __init__(self, axis="T", out_dim=None, postfix=0.0, repeat=1, **kwargs):
     """
+    :param DimensionTag|str axis:
+    :param DimensionTag|None out_dim:
     :param float|int|LayerBase postfix: constant or other layer without time axis to use as postfix
     :param int repeat: how often to repeat the postfix
     """
-    from returnn.tf.util.basic import DimensionTag
+    out_dim  # noqa  # handled in get_out_data_from_opts
     super(PostfixInTimeLayer, self).__init__(**kwargs)
-    self.output = self.input_data.copy(name="%s_output" % self.name)
-    assert self.output.time_dim_axis is not None
+    input_data = self.input_data.copy()
+    axis_int = input_data.get_axis_from_description(axis, allow_int=False)
+    in_dim = input_data.dim_tags[axis_int]
     assert isinstance(postfix, (float, int, LayerBase))
+    in_shape = tf_util.get_shape(input_data.placeholder)
+    in_shape_added = list(in_shape)
+    in_shape_added[axis_int] = repeat
     if isinstance(postfix, LayerBase):
       self.postfix_layer = postfix
-      assert not postfix.output.have_time_axis(), 'Postfix layer with time axis not implemented yet'
+      assert in_dim not in postfix.output.dim_tags, 'Postfix layer with time axis not implemented yet'
       postfix = postfix.output.copy_compatible_to(self.output)
-      assert self.output.time_dim_axis_excluding_batch not in postfix.size_placeholder
       c = postfix.placeholder
+      c_ = tf.repeat(c, [1 if i != axis_int else repeat for i in range(self.output.batch_ndim)])
     else:
       self.postfix_layer = None
       c = tf.constant(postfix, dtype=self.output.dtype)
-    added_shape = [
-      ((self.output.batch_shape[i] or tf.shape(self.output.placeholder)[i])
-       if (i != self.output.time_dim_axis)
-       else repeat)
-      for i in range(self.output.batch_ndim)]
-    x = tf.concat(
-      [self.output.placeholder, tf.zeros(added_shape, dtype=self.output.dtype)],
-      axis=self.output.time_dim_axis)  # make enough space
-    seq_len = self.output.size_placeholder[self.output.time_dim_axis_excluding_batch]  # (B,)
-    seq_len_bc = tf.reshape(
-      seq_len, [1 if (i != self.output.batch_dim_axis) else -1 for i in range(self.output.batch_ndim)])  # (1,..B..,1)
-    time_idxs = tf.range(tf.shape(x)[self.output.time_dim_axis])
-    time_idxs_bc = tf.reshape(
-      time_idxs, [1 if (i != self.output.time_dim_axis) else -1 for i in range(self.output.batch_ndim)])  # (1,..T..,1)
-    mask = tf.less(time_idxs_bc, seq_len_bc)
-    from returnn.tf.util.basic import where_bc
-    self.output.placeholder = where_bc(mask, x, c)
-    new_seq_len = seq_len + repeat
-    tag = DimensionTag(
-      description="time-with-postfix:%s" % self.get_absolute_name(),
-      kind=DimensionTag.Types.Spatial, batch=self.output.batch)
-    tag.set_tag_on_size_tensor(new_seq_len)
-    self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] = new_seq_len
+      c_ = tf.fill(in_shape_added, c)
+    x = tf.concat([input_data.placeholder, c_], axis=axis_int)  # make enough space
+    self.output.placeholder = x
+    if in_dim.dyn_size is not None:  # dynamic
+      mask = input_data.get_sequence_mask_broadcast(axis_int)
+      self.output.placeholder = tf_util.where_bc(mask, x, c)
+      out_dim = self.output.dim_tags[axis_int]
+      out_dim.dyn_size = in_dim.dyn_size + repeat
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, postfix=0.0, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, axis="T", out_dim=None, postfix=0.0, repeat=1, **kwargs):
     """
+    :param DimensionTag|str axis:
+    :param DimensionTag|None out_dim:
     :param str name:
     :param list[LayerBase] sources:
     :param float|int|LayerBase postfix: constant or other layer without time axis to use as postfix
+    :param int repeat:
     :rtype: Data
     """
-    # Note: Time seq len is not correct...
-    out = get_concat_sources_data_template(sources, name="%s_output" % name)
-    if isinstance(postfix, LayerBase):
-      out.beam = SearchBeam.get_combined_beam(out.beam, postfix.output.beam)
-    return out
+    x = get_concat_sources_data_template(sources, name="%s_output" % name)
+    axis_int = x.get_axis_from_description(axis, allow_int=False)
+    in_dim = x.dim_tags[axis_int]
+    out_dim_int = None
+    if in_dim.dimension:
+      out_dim_int = in_dim.dimension + repeat
+    if not out_dim:
+      out_dim = DimensionTag(
+        kind=in_dim.kind, description="%s:postfix-in-time" % name, dimension=out_dim_int,
+        derived_from_tag=in_dim, batch=in_dim.batch, control_flow_ctx=in_dim.control_flow_ctx)
+    assert out_dim.dimension == out_dim_int
+    x = x.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=out_dim)
+    return x
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
