@@ -3607,7 +3607,7 @@ def test_test_reclayer_optimize_out_onlineblstm():
       network[name] = {"class": "rec", "unit": "lstm", "n_out": lstm_dim, "from": src}
       return name
     network["%s_win" % name] = {
-      "class": "window", "window_dim": lstm_window_dim, "window_right": lstm_window - 1, "from": src}  # (B,T,W,D)
+      "class": "window", "window_dim": lstm_window_dim, "window_right": 0, "from": src}  # (B,T,W,D)
     network["%s_rec" % name] = {
       "class": "rec", "unit": "lstm", "axis": lstm_window_dim, "n_out": lstm_dim, "direction": -1,
       "from": "%s_win" % name}  # (B,T,W,D')
