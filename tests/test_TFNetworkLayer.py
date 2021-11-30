@@ -1246,6 +1246,26 @@ def test_CombineLayer_RangeFromLengthLayer():
     session.run((out_data.placeholder, out_data.get_sequence_lengths()), feed_dict=feed_dict)
 
 
+def test_CompareLayer_allow_broadcast_all_sources():
+  from returnn.tf.util.data import BatchDim, DimensionTag
+  time_tag = DimensionTag(DimensionTag.Types.Spatial, description="time")
+  with make_scope():
+    n_out = 5
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out, "same_dim_tags_as": {"t": time_tag}}
+      }})
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "range0": {"class": "range_in_axis", "from": "data", "axis": "b"},
+      "range1": {"class": "range_in_axis", "from": "data", "axis": "t"},
+      "compare": {
+        "class": "compare", "from": ["range0", "range1"], "kind": "equal", "is_output_layer": True,
+        "out_shape": {BatchDim, time_tag}}
+    })
+
+
 def test_dot_layer_shuffled_remaining_dims_static():
   with make_scope() as session:
     import numpy as np
