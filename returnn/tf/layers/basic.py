@@ -6926,11 +6926,11 @@ class CompareLayer(LayerBase):
       assert len(self.sources) >= 2, "{} requires at least two elements to compare".format(self)
     op = getattr(tf, kind)  # e.g. tf.equal
     from returnn.tf.util.basic import opt_logical_and
-    common_data = Data.get_common_data([s.output for s in self.sources])
-    x = self.sources[0].output.copy_compatible_to(common_data).placeholder
+    common_data = self.output
+    x = self.sources[0].output.copy_compatible_to(common_data, check_dtype=False).placeholder
     r_last = True
     for source in self.sources[1:]:
-      x2 = source.output.copy_compatible_to(common_data).placeholder
+      x2 = source.output.copy_compatible_to(common_data, check_dtype=False).placeholder
       r_last = opt_logical_and(r_last, op(x, x2))
       x = x2
     if value is not None:
@@ -6938,16 +6938,24 @@ class CompareLayer(LayerBase):
     self.output.placeholder = r_last
 
   @classmethod
-  def get_out_data_from_opts(cls, n_out=NotSpecified, out_type=None, sources=(), **kwargs):
+  def get_out_data_from_opts(cls, n_out=NotSpecified, out_type=None, out_shape=None, sources=(), **kwargs):
     """
     :param int|None|NotSpecified n_out:
     :param dict[str]|None out_type:
+    :param dict[str]|None out_shape:
     :param list[LayerBase] sources:
     :rtype: Data
     """
     out_type_ = {}
     if sources:
-      out_type_.update(Data.get_common_data([s.output for s in sources]).get_kwargs())
+      allow_broadcast_all_sources = NotSpecified
+      if out_shape is not None:
+        allow_broadcast_all_sources = True
+      elif out_type and isinstance(out_type, dict) and ("shape" in out_type or "dim_tags" in out_type):
+        allow_broadcast_all_sources = True
+      out_type_.update(
+        Data.get_common_data(
+          [s.output for s in sources], allow_broadcast_all_sources=allow_broadcast_all_sources).get_kwargs())
     if n_out is not NotSpecified:
       out_type_["dim"] = n_out
     elif out_type_.get("sparse", False):
