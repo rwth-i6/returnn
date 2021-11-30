@@ -2692,6 +2692,25 @@ class Data(object):
       kwargs["dtype"] = dtype
     return Data(**kwargs)
 
+  def copy_template_dense(self, name=None, dtype=None):
+    """
+    :param str|None name:
+    :param str|None dtype:
+    :return: copy of myself, using self.get_kwargs(), without placeholder
+    :rtype: Data
+    """
+    out = self.copy_template(name=name)
+    if out.sparse:
+      feat_dim = out.sparse_dim
+      out.sparse = False
+      out.dtype = "float32"
+      out = out.copy_add_dim_by_tag(dim_tag=feat_dim, unbroadcast=True, axis=-1)
+      out.feature_dim_axis = NotSpecified
+      assert out.feature_dim_axis == out.batch_ndim - 1
+    if dtype:
+      out.dtype = dtype
+    return out
+
   def copy_template_excluding_axis(self, exclude_axis, name=None):
     """
     :param int exclude_axis: axis to be removed.

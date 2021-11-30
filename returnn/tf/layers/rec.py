@@ -458,7 +458,11 @@ class RecLayer(_ConcatInputLayer):
           assert out_type and "dim" in out_type
           n_out = out_type["dim"]
         out_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="%s:feature" % name, dimension=n_out)
-      out = out.copy_template_replace_dim_tag(axis=out.feature_dim_axis, new_dim_tag=out_dim)
+      if out.have_feature_axis():
+        out = out.copy_template_replace_dim_tag(axis=out.feature_dim_axis, new_dim_tag=out_dim)
+      else:
+        out = out.copy_add_dim_by_tag(dim_tag=out_dim, unbroadcast=True, axis=-1)
+        out.feature_dim_axis = NotSpecified
       if out.have_time_axis() and axis == out.get_time_dim_tag():
         out = out.copy_as_time_batch_major()
       else:
@@ -610,22 +614,56 @@ class RecLayer(_ConcatInputLayer):
       raise Exception("unknown cell %r. known cells: %r" % (name, sorted(cls._rnn_cells_dict.keys())))
     return cls._rnn_cells_dict[name.lower()]
 
-  def _get_input(self):
+  def _get_input(self, strict=True):
     """
-    :return: (x, seq_len), where x is (time,batch,...,dim) and seq_len is (batch,)
-    :rtype: (tf.Tensor, tf.Tensor)
+    :param bool strict:
+    :return: (in_data, x, seq_len), where x is (time,batch,...,dim) and seq_len is (batch,)
+    :rtype: (Data, tf.Tensor, tf.Tensor)
     """
     assert self.input_data
-    if self.input_data.have_time_axis():
-      x = self.input_data.copy_as_time_batch_major().placeholder
-      seq_len = self.input_data.get_sequence_lengths()
-      return x, seq_len
-    else:  # no time-dim-axis, expect to be inside another RecLayer
-      # Just add a dummy time dim, and seq_len == 1 everywhere.
-      x = self.input_data.placeholder
-      x = tf.expand_dims(x, 0)
-      seq_len = tf.ones([self.input_data.get_batch_dim()], dtype=self.input_data.size_dtype)
-      return x, seq_len
+    in_data = self.input_data
+    if not in_data.have_time_axis() or not self.time_dim_tag:
+      in_data = in_data.copy_add_spatial_dim(spatial_dim_axis=0)
+      in_data.time_dim_axis = 0
+    if strict:
+      # Merge all other axes except time and feature such that we get (time,batch',dim).
+      in_data = in_data.copy_as_time_major()
+      if not in_data.sparse:
+        in_data = in_data.copy_with_feature_last()
+    else:
+      in_data = in_data.copy_as_time_batch_major()
+    x = in_data.placeholder
+    seq_len = in_data.get_sequence_lengths()
+    if strict and in_data.batch_ndim_dense != 3:
+      assert in_data.batch_ndim_dense > 3
+      if in_data.sparse:
+        x = tf.reshape(x, [tf_util.get_shape_dim(x, 0), -1])
+      else:
+        x = tf.reshape(x, [tf_util.get_shape_dim(x, 0), -1, tf_util.get_shape_dim(x, -1)])
+      # TODO seq_len expand to new batch
+    return in_data, x, seq_len
+
+  def _post_proc_output_cell_strict(self, y, in_data):
+    """
+    :param tf.Tensor y: (time,batch,dim)
+    :param Data in_data:
+    :rtype: tf.Tensor
+    :return: (time,batch,dim) or (time,batch,...,dim)
+    """
+    if in_data.batch_ndim_dense > 3:
+      y_shape = tf_util.get_shape(in_data.placeholder)
+      if not in_data.sparse:
+        y_shape = y_shape[:-1]
+      y_shape += [tf_util.get_shape_dim(y, -1)]
+      y = tf.reshape(y, y_shape)
+    out_data = in_data.copy_template_dense()
+    out_data = out_data.copy_template_replace_dim_tag(
+      axis=out_data.feature_dim_axis, new_dim_tag=self.output.feature_dim_or_sparse_dim)
+    out_data.placeholder = y
+    if not self.input_data.have_time_axis() or not self.time_dim_tag:
+      out_data = out_data.copy_squeeze_axes(axes=[0])
+    y = out_data.copy_compatible_to(self.output).placeholder
+    return y
 
   @classmethod
   def get_losses(cls, name, network, output, loss=None, reduce_func=None, layer=None, **kwargs):
@@ -742,14 +780,14 @@ class RecLayer(_ConcatInputLayer):
       pass
     assert self.input_data
     assert not self.input_data.sparse
-    x, seq_len = self._get_input()
+    in_data, x, seq_len = self._get_input()
     if self._direction == -1:
       x = tf_compat.v1.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
     if isinstance(cell, BaseRNNCell):
       with tf_compat.v1.variable_scope(tf_compat.v1.get_variable_scope(), initializer=self._fwd_weights_initializer):
         x = cell.get_input_transformed(x)
     if isinstance(cell, rnn_cell.RNNCell):  # e.g. BasicLSTMCell
-      if not self.input_data.have_time_axis():
+      if not self.input_data.have_time_axis() or not self.time_dim_tag:
         assert self._rec_previous_layer, "%s: assume in loop with input %s, but no rec info" % (self, self.input_data)
         y, final_state = cell(self.input_data.placeholder, self._initial_state)
       elif self._unroll:
@@ -793,6 +831,7 @@ class RecLayer(_ConcatInputLayer):
       raise Exception("invalid type: %s" % type(cell))
     if self._direction == -1:
       y = tf_compat.v1.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
+    y = self._post_proc_output_cell_strict(y, in_data=in_data)
     return y
 
   @staticmethod
@@ -878,7 +917,7 @@ class RecLayer(_ConcatInputLayer):
     assert self._max_seq_len is None
     assert self.input_data
     assert not self.input_data.sparse
-    x, seq_len = self._get_input()
+    in_data, x, seq_len = self._get_input()
     n_batch = tf.shape(seq_len)[0]
     if self._direction == -1:
       x = tf_compat.v1.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
@@ -924,6 +963,7 @@ class RecLayer(_ConcatInputLayer):
       y, _ = cell(x, initial_state=(input_h, input_c))
     if self._direction == -1:
       y = tf_compat.v1.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
+    y = self._post_proc_output_cell_strict(y, in_data=in_data)
     return y  # noqa
 
   def _get_output_native_rec_op(self, cell):
@@ -936,7 +976,7 @@ class RecLayer(_ConcatInputLayer):
 
     assert self._max_seq_len is None
     assert self.input_data
-    x, seq_len = self._get_input()
+    in_data, x, seq_len = self._get_input()
     if self._input_projection:
       if cell.does_input_projection:
         # The cell get's x as-is. It will internally does the matrix mult and add the bias.
@@ -959,7 +999,7 @@ class RecLayer(_ConcatInputLayer):
       assert not cell.does_input_projection
       assert not self.input_data.sparse
       assert self.input_data.dim == cell.n_input_dim
-    if self.input_data.have_time_axis():
+    if self.input_data.have_time_axis() and self.time_dim_tag:
       index = sequence_mask_time_major(seq_len, maxlen=self.input_data.time_dimension())
     else:
       index = tf.ones([1, self.input_data.get_batch_dim()], dtype=tf.bool)  # see _get_input
@@ -973,8 +1013,7 @@ class RecLayer(_ConcatInputLayer):
     self._last_hidden_state = final_state
     if not cell.does_direction_handling:
       y = directed(y, self._direction)
-    if not self.input_data.have_time_axis():  # see _get_input
-      y = y[0]
+    y = self._post_proc_output_cell_strict(y, in_data=in_data)
     return y
 
   def _get_output_subnet_unit(self, cell):
@@ -2214,12 +2253,12 @@ class _SubnetworkRecCell(object):
       if rec_layer.input_data:
         with tf.name_scope("source_tensor_array"):
           # noinspection PyProtectedMember
-          source, input_seq_len = rec_layer._get_input()  # source will be (time,batch,..,dim)
+          source_data, source, input_seq_len = rec_layer._get_input(strict=False)  # (time,batch,..,dim)
           source_shape = tf.shape(source, name="source_shape")
           source_ta = tf.TensorArray(
             name="source_ta",
             dtype=rec_layer.input_data.dtype,
-            element_shape=tf.TensorShape(rec_layer.input_data.copy_template_excluding_time_dim().batch_shape),
+            element_shape=tf.TensorShape(source_data.copy_template_excluding_time_dim().batch_shape),
             size=source_shape[0],
             infer_shape=True)
           source_ta = source_ta.unstack(source, name="source_ta_unstack")
