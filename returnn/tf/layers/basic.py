@@ -6426,8 +6426,7 @@ class ResizeLayer(_ConcatInputLayer):
     assert axis > 0, "batch-dim resize not supported"
     input_data = self.input_data.copy_as_batch_major()
     self.output.placeholder = input_data.placeholder
-    self.output.size_placeholder = input_data.size_placeholder.copy()
-    out_dyn_size = self.input_data.dim_tags[axis].dyn_size
+    out_dyn_size = input_data.dim_tags[axis].dyn_size
     if out_dyn_size is not None:
       out_dyn_size = out_dyn_size * factor
 
