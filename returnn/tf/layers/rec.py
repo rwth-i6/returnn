@@ -7103,16 +7103,6 @@ class EditDistanceTableLayer(LayerBase):
     self.rec_vars_outputs["state"] = self._next_row
     self._reduce_out = None  # see get_sub_layer
     self.output.placeholder = self._next_row
-    seq_len = tf_util.new_seq_len(
-      func=tf_util.simplify_add, key=tf_util.simplify_add,
-      dim_tag_desc="%s:edit_dist_table" % self.name,
-      a=target_data.get_sequence_lengths(), b=1)
-    tag = DimensionTag.get_tag_from_size_tensor(seq_len)
-    out_dim = self.output.dim_tags[-1]
-    if tag:
-      tag.declare_same_as(out_dim)
-    else:
-      out_dim.dyn_size = seq_len
 
   # noinspection PyMethodOverriding
   @classmethod
@@ -7181,6 +7171,15 @@ class EditDistanceTableLayer(LayerBase):
       out_dim = DimensionTag(
         kind=in_dim.kind, description="%s:edit_dist_table" % name,
         dimension=in_dim.dimension + 1 if in_dim.dimension else None)
+    seq_len = tf_util.new_seq_len(
+      func=tf_util.simplify_add, key=tf_util.simplify_add,
+      dim_tag_desc="%s:edit_dist_table" % name,
+      a=target_data.get_sequence_lengths(), b=1)
+    tag = DimensionTag.get_tag_from_size_tensor(seq_len)
+    if tag:
+      tag.declare_same_as(out_dim)
+    else:
+      out_dim.dyn_size = seq_len
     return Data(
       name="%s_output" % name,
       dim_tags=(
