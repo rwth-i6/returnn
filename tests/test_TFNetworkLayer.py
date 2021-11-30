@@ -3770,7 +3770,7 @@ def test_TransposedConvLayer_2d_simple():
       "output": {  # [B,D',T,2]
         'class': 'transposed_conv', 'from': 'Unflatten',
         'activation': None, 'with_bias': True,
-        "in_spatial_dims": ("dim:%i" % n_in, "T"),
+        "in_spatial_dims": ("T", "dim:1"),
         'n_out': n_out, 'filter_size': (1, 2), 'strides': (1, 1),
         'padding': 'valid', 'output_padding': (0, 0), 'remove_padding': (0, 0)},
     })
@@ -3800,6 +3800,7 @@ def test_TransposedConvLayer_2d_2x2():
       "output": {  # [B,D',T,2]
         'class': 'transposed_conv', 'from': 'Unflatten',
         'activation': None, 'with_bias': True,
+        "in_spatial_dims": ("T", "dim:1"),
         'n_out': n_out, 'filter_size': (2, 2), 'strides': (2, 2),
         'padding': 'valid', 'output_padding': (0, 0), 'remove_padding': (0, 0)},
     })
