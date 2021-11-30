@@ -7045,13 +7045,13 @@ class EditDistanceTableLayer(LayerBase):
   layer_class = "edit_distance_table"
   recurrent = True
 
-  def __init__(self, debug=False, blank_idx=None, **kwargs):
+  def __init__(self, debug=False, blank_idx=None, out_dim=None, **kwargs):
     """
     :param bool debug:
     :param int|None blank_idx: if given, will keep the same row for this source label
+    :param DimensionTag|None out_dim:
     """
-    from returnn.tf.util.basic import where_bc
-    super(EditDistanceTableLayer, self).__init__(**kwargs)
+    super(EditDistanceTableLayer, self).__init__(out_dim=out_dim, **kwargs)
     assert len(self.sources) == 1, "%s: expects exactly a single source" % self
     source_data = self.sources[0].output
     assert source_data.dtype == "int32" and source_data.batch_ndim <= 2 and source_data.sparse
@@ -7076,8 +7076,7 @@ class EditDistanceTableLayer(LayerBase):
     mask_flag = rec_step_info.get_prev_end_flag(target_search_choices=self.get_search_choices())
     source = source_data.placeholder
     if blank_idx is None:
-      from returnn.tf.util.basic import expand_dims_unbroadcast
-      source_len = expand_dims_unbroadcast(rec_step_info.step, axis=0, dim=batch_dim)
+      source_len = tf_util.expand_dims_unbroadcast(rec_step_info.step, axis=0, dim=batch_dim)
     else:
       source_len = self._rec_previous_layer.rec_vars_outputs["source_len"]
       mask_flag = tf.logical_or(mask_flag, tf.equal(source, blank_idx))
@@ -7088,9 +7087,8 @@ class EditDistanceTableLayer(LayerBase):
       a_ended=mask_flag,
       b=target_data.placeholder, b_len=target_data.get_sequence_lengths())
     if blank_idx is not None:
-      self.rec_vars_outputs["source_len"] = source_len + where_bc(mask_flag, 0, 1)
+      self.rec_vars_outputs["source_len"] = source_len + tf_util.where_bc(mask_flag, 0, 1)
     if debug:
-      from returnn.tf.util.basic import py_print, vocab_idx_repr
       print_out = [str(self)]
       choice = self.get_search_choices()
       if choice:
@@ -7100,11 +7098,11 @@ class EditDistanceTableLayer(LayerBase):
       print_out += [
         "a_n", rec_step_info.step,
         "a_ended", rec_step_info.get_prev_end_flag(target_search_choices=self.get_search_choices()),
-        "a", vocab_idx_repr(source_data.placeholder, target_data),
-        "b", vocab_idx_repr(target_data.placeholder, target_data),
+        "a", tf_util.vocab_idx_repr(source_data.placeholder, target_data),
+        "b", tf_util.vocab_idx_repr(target_data.placeholder, target_data),
         "b_len", target_data.get_sequence_lengths(),
         "last_row", self._last_row, "next_row", self._next_row]
-      self._next_row = py_print(self._next_row, print_out)
+      self._next_row = tf_util.py_print(self._next_row, print_out)
     self.rec_vars_outputs["state"] = self._next_row
     self._reduce_out = None  # see get_sub_layer
     self.output.placeholder = self._next_row
@@ -7126,12 +7124,11 @@ class EditDistanceTableLayer(LayerBase):
     if source_data.time_dim_axis is not None:
       return {}
     # expects inside rec layer
-    from returnn.tf.util.basic import expand_dims_unbroadcast
     assert target, "%s %r: 'target' must be set" % (cls.__name__, name)
     target_data = cls._static_get_target_value(target=target, network=network)
     assert target_data, "target %r not found?" % target
     n_time = tf.shape(target_data.placeholder)[target_data.time_dim_axis]
-    d = {"state": expand_dims_unbroadcast(tf.range(n_time + 1), axis=0, dim=batch_dim)}
+    d = {"state": tf_util.expand_dims_unbroadcast(tf.range(n_time + 1), axis=0, dim=batch_dim)}
     if kwargs.get("blank_idx", None) is not None:
       d["source_len"] = tf.zeros((batch_dim,), dtype=tf.int32)
     return d
@@ -7155,14 +7152,16 @@ class EditDistanceTableLayer(LayerBase):
     super(EditDistanceTableLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, target, network, _target_layers=None, blank_idx=None, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, target, network, _target_layers=None, blank_idx=None,
+                             out_dim=None, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
+    :param returnn.tf.network.TFNetwork network:
     :param str target:
     :param dict[str,LayerBase] _target_layers:
     :param int|None blank_idx:
-    :param returnn.tf.network.TFNetwork network:
+    :param DimensionTag|None out_dim:
     :rtype: Data
     """
     assert len(sources) == 1, "%s %r: expects exactly a single source" % (cls.__name__, name)
@@ -7170,18 +7169,27 @@ class EditDistanceTableLayer(LayerBase):
     assert target, "%s %r: 'target' must be set" % (cls.__name__, name)
     target_data = cls._static_get_target_value(target=target, _target_layers=_target_layers, network=network)
     assert target_data, "target %r not found?" % target
+    in_dim = target_data.get_time_dim_tag()
+    if not out_dim:
+      out_dim = DimensionTag(
+        kind=in_dim.kind, description="%s:edit_dist_table" % name,
+        dimension=in_dim.dimension + 1 if in_dim.dimension else None,
+        batch=in_dim.batch, control_flow_ctx=in_dim.control_flow_ctx)
     seq_len = tf_util.new_seq_len(
       func=tf_util.simplify_add, key=tf_util.simplify_add,
-      dim_tag_desc="edit_dist_table:%s" % name,
+      dim_tag_desc="%s:edit_dist_table" % name,
       a=target_data.get_sequence_lengths(), b=1)
     tag = DimensionTag.get_tag_from_size_tensor(seq_len)
-    assert tag
+    if tag:
+      tag.declare_same_as(out_dim)
+    else:
+      out_dim.dyn_size = seq_len
     return Data(
       name="%s_output" % name,
       dim_tags=(
-        [source_data.get_batch_dim_tag(), source_data.get_time_dim_tag(), tag]
+        [source_data.get_batch_dim_tag(), source_data.get_time_dim_tag(), out_dim]
         if source_data.have_time_axis() else
-        [source_data.get_batch_dim_tag(), tag]),
+        [source_data.get_batch_dim_tag(), out_dim]),
       dtype="int32", beam=SearchBeam.get_combined_beam(source_data.beam, target_data.beam))
 
 
