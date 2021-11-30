@@ -5421,12 +5421,13 @@ class ReduceOutLayer(_ConcatInputLayer):
   """
   layer_class = "reduce_out"
 
-  def __init__(self, mode, num_pieces, **kwargs):
+  def __init__(self, mode, num_pieces, out_dim=None, **kwargs):
     """
     :param str mode: "sum" or "max" or "mean"
     :param int num_pieces: how many elements to reduce. The output dimension will be input.dim // num_pieces.
+    :param DimensionTag|None out_dim:
     """
-    super(ReduceOutLayer, self).__init__(**kwargs)
+    super(ReduceOutLayer, self).__init__(out_dim=out_dim, **kwargs)
     if mode == "max":
       f = tf.reduce_max
     elif mode == "sum":
@@ -5444,23 +5445,23 @@ class ReduceOutLayer(_ConcatInputLayer):
     self.output.placeholder = x
 
   @classmethod
-  def get_out_data_from_opts(cls, num_pieces, sources, name, **kwargs):
+  def get_out_data_from_opts(cls, num_pieces, sources, name, out_dim=None, **kwargs):
     """
     :param int num_pieces:
     :param list[LayerBase] sources:
     :param str name:
+    :param DimensionTag|None out_dim:
     :rtype: Data
     """
-    from ..util.data import DimensionTag
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
     assert out.have_feature_axis()
     assert not out.sparse
     assert out.dim % num_pieces == 0
     dim = out.dim // num_pieces
-    tag = DimensionTag(
-      kind=DimensionTag.Types.Feature, description="%s_reduce_out" % name,
-      dimension=dim)
-    return out.copy_template_replace_dim_tag(axis=out.feature_dim_axis, new_dim_tag=tag)
+    if not out_dim:
+      out_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="%s_reduce_out" % name, dimension=dim)
+    assert out_dim.dimension == dim
+    return out.copy_template_replace_dim_tag(axis=out.feature_dim_axis, new_dim_tag=out_dim)
 
 
 class SqueezeLayer(_ConcatInputLayer):
