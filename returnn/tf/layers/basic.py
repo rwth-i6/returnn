@@ -4089,10 +4089,12 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param dict[str,int|str] set_axes:
       This can be used to overwrite the special axes like time_dim_axis or feature_dim_axis.
       For that, use keys "B","T" or "F", and a value via :func:`Data.get_axis_from_description`.
-    :param dict[str|DimensionTag,DimensionTag] set_dim_tags: axis -> new dim tag. assigns new dim tags.
-      If the dim tag is yet undefined, this will not use same_dim_tags_as (declare_same_as)
+    :param dict[str|DimensionTag,DimensionTag]|None set_dim_tags: axis -> new dim tag. assigns new dim tags.
+      If the passed dim tag is yet undefined, this will not use same_dim_tags_as (declare_same_as)
       but create a new dim tag.
       This option is useful for generalized self attention (https://github.com/rwth-i6/returnn/issues/391).
+    :param dict[str|DimensionTag,DimensionTag]|None same_dim_tags: axis -> dim tag.
+      Declares the passed dim tags as the same as the existing dim tag on this axis.
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
     :param bool|None set_sparse: if bool, set sparse value to this
@@ -4153,7 +4155,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
   @classmethod
   def get_out_data_from_opts(cls, name, sources,
                              switch_axes=None, size_base=None, set_axes=None,
-                             set_dim_tags=None,
+                             set_dim_tags=None, same_dim_tags=None,
                              enforce_batch_major=False, enforce_time_major=False,
                              set_sparse=None, set_sparse_dim=NotSpecified, increase_sparse_dim=None,
                              **kwargs):
@@ -4163,7 +4165,8 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
     :param LayerBase|None size_base: similar as size_target
     :param dict[str,int] set_axes:
-    :param dict[str|DimensionTag,DimensionTag] set_dim_tags:
+    :param dict[str|DimensionTag,DimensionTag]|None set_dim_tags:
+    :param dict[str|DimensionTag,DimensionTag]|None same_dim_tags:
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
     :param bool|None set_sparse: if bool, set sparse value to this
@@ -4217,6 +4220,10 @@ class ReinterpretDataLayer(_ConcatInputLayer):
       for axis, tag in set_dim_tags.items():
         axis_int = out.get_axis_from_description(axis)
         out = out.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=tag)
+    if same_dim_tags:
+      for axis, tag in same_dim_tags.items():
+        existing_dim_tag = out.get_dim_tag_from_description(axis)
+        tag.declare_same_as(existing_dim_tag)
     if set_sparse is not None:
       assert isinstance(set_sparse, bool)
       if set_sparse:
@@ -4473,6 +4480,17 @@ class ConvLayer(_ConcatInputLayer):
           out_tag.declare_same_as(size_tag)
 
   @classmethod
+  def _check_defined_in_spatial_dims(cls, cond):
+    """
+    :param bool cond:
+    """
+    from returnn.util import BehaviorVersion
+    BehaviorVersion.require(
+      condition=cond,
+      message="Explicitly specify in_spatial_dims when there is more than one spatial dim in the input.",
+      version=8)
+
+  @classmethod
   def transform_input(cls, input_data, network, in_dim=None, in_spatial_dims=None,
                       input_expand_dims=0, input_split_feature_dim=None, input_add_feature_dim=False):
     """
@@ -4491,14 +4509,23 @@ class ConvLayer(_ConcatInputLayer):
     """
     assert not input_data.sparse
     assert input_data.have_batch_axis()
+    if input_expand_dims or input_split_feature_dim or input_add_feature_dim:
+      if not in_spatial_dims:
+        # Set it here to allow to handle the extension logic below.
+        in_spatial_dims = [input_data.dim_tags[a] for a in input_data.get_spatial_batch_axes()]
+        cls._check_defined_in_spatial_dims(len(in_spatial_dims) == 1)
     if input_expand_dims:
       for i in range(input_expand_dims):
-        input_data = input_data.copy_add_spatial_dim()
+        dim_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="input_expand_dims:%i" % i, dimension=1)
+        input_data = input_data.copy_add_dim_by_tag(dim_tag, unbroadcast=True)
+        in_spatial_dims.append(dim_tag)
     if input_split_feature_dim:
       # Split the feature dimension.
       input_data = input_data.copy_split_feature_dim(input_split_feature_dim)
+      in_spatial_dims.append(input_data.dim_tags[input_data.feature_dim_axis - 1])
     if input_add_feature_dim:
-      # Add a feature dimension; any other static dims will be used as dynamic dims below.
+      # Add a new feature dimension; the old feature dim becomes a spatial dim.
+      in_spatial_dims.append(input_data.dim_tags[input_data.feature_dim_axis])
       input_data = input_data.copy_add_feature_dim()
     if in_dim:
       assert isinstance(in_dim, DimensionTag)
@@ -4549,14 +4576,10 @@ class ConvLayer(_ConcatInputLayer):
           input_data = input_data.copy_move_axis(old_axis=a, new_axis=batch_axis_idx)
         batch_axis_idx += 1
       num_batch_dims = batch_axis_idx
-      spatial_dims = [
+      in_spatial_dims = [
         d for (i, d) in enumerate(input_data.dim_tags)
         if i >= num_batch_dims and i != input_data.feature_dim_axis]
-      from returnn.util import BehaviorVersion
-      BehaviorVersion.require(
-        condition=len(spatial_dims) == 1,
-        message="Explicitly specify in_spatial_dims when there is more than one spatial dim in the input.",
-        version=8)
+      cls._check_defined_in_spatial_dims(len(in_spatial_dims) == 1)
     return input_data, num_batch_dims
 
   @classmethod
@@ -4822,7 +4845,7 @@ class PoolLayer(_ConcatInputLayer):
     :param int|tuple[int]|list[int] dilation_rate:
     :param str padding:
     :param DimensionTag|None in_dim:
-    :param list[DimensionTag]|None in_spatial_dims:
+    :param list[DimensionTag|str]|None in_spatial_dims:
     :param DimensionTag|None out_dim:
     :param list[DimensionTag]|None out_spatial_dims:
     :param bool use_channel_first:
