@@ -3729,14 +3729,15 @@ class RepeatLayer(_ConcatInputLayer):
   """
   layer_class = "repeat"
 
-  def __init__(self, repetitions, axis="T", **kwargs):
+  def __init__(self, repetitions, axis="T", out_dim=None, **kwargs):
     """
     :param LayerBase|int repetitions:
       number of repetitions for each sequence and position in target axis.
       Can be [B,T] or [T,B] or some subset of that shape
-    :param str axis: (dynamic) axis for repetition (currently only time axis is supported)
+    :param DimensionTag|str axis: (dynamic) axis for repetition (currently only time axis is supported)
+    :param DimensionTag|None out_dim:
     """
-    super(RepeatLayer, self).__init__(**kwargs)
+    super(RepeatLayer, self).__init__(out_dim=out_dim, **kwargs)
     self.repetitions = repetitions
     if isinstance(self.repetitions, int):
       repetitions_data = Data.from_tensor(tf.constant(self.repetitions))
@@ -3819,7 +3820,7 @@ class RepeatLayer(_ConcatInputLayer):
     # set size placeholders
     output_axis = self.output.get_axis_from_description(axis)
     tag = self.output.dim_tags[output_axis]
-    if tag.dimension is None:  # dynamic? dyn sizes needed?
+    if tag.dimension is None and tag.dyn_size is None:  # dynamic? dyn sizes needed?
       tag.set_tag_on_size_tensor(target_seq_len, batch=self.output.batch)
 
   def get_dep_layers(self):
@@ -3843,12 +3844,13 @@ class RepeatLayer(_ConcatInputLayer):
       d["repetitions"] = get_layer(d["repetitions"])
 
   @classmethod
-  def get_out_data_from_opts(cls, name, axis, repetitions, sources=(), **kwargs):
+  def get_out_data_from_opts(cls, name, sources, axis, repetitions, out_dim=None, **kwargs):
     """
     :param str name:
-    :param str axis:
-    :param LayerBase|int repetitions:
     :param list[LayerBase] sources:
+    :param DimensionTag|str axis:
+    :param LayerBase|int repetitions:
+    :param DimensionTag|None out_dim:
     :rtype: Data
     """
     from ..util.data import DimensionTag
@@ -3864,8 +3866,11 @@ class RepeatLayer(_ConcatInputLayer):
     else:
       new_dim = None
     data = data.copy_move_axis(original_axis, data.get_batch_axis(0))
-    tag = DimensionTag(description="repeated:%s" % name, kind=tag.kind, dimension=new_dim)
-    return data.copy_template_replace_dim_tag(axis=data.get_batch_axis(0), new_dim_tag=tag)
+    if not out_dim:
+      out_dim = DimensionTag(description="repeated:%s" % name, kind=tag.kind, dimension=new_dim, derived_from_tag=tag)
+    else:
+      assert out_dim.dimension == new_dim
+    return data.copy_template_replace_dim_tag(axis=data.get_batch_axis(0), new_dim_tag=out_dim)
 
 
 class TileLayer(_ConcatInputLayer):
