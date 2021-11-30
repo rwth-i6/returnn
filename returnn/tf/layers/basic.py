@@ -4093,8 +4093,6 @@ class ReinterpretDataLayer(_ConcatInputLayer):
       If the passed dim tag is yet undefined, this will not use same_dim_tags_as (declare_same_as)
       but create a new dim tag.
       This option is useful for generalized self attention (https://github.com/rwth-i6/returnn/issues/391).
-    :param dict[str|DimensionTag,DimensionTag]|None same_dim_tags: axis -> dim tag.
-      Declares the passed dim tags as the same as the existing dim tag on this axis.
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
     :param bool|None set_sparse: if bool, set sparse value to this
@@ -4155,7 +4153,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
   @classmethod
   def get_out_data_from_opts(cls, name, sources,
                              switch_axes=None, size_base=None, set_axes=None,
-                             set_dim_tags=None, same_dim_tags=None,
+                             set_dim_tags=None,
                              enforce_batch_major=False, enforce_time_major=False,
                              set_sparse=None, set_sparse_dim=NotSpecified, increase_sparse_dim=None,
                              **kwargs):
@@ -4166,7 +4164,6 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param LayerBase|None size_base: similar as size_target
     :param dict[str,int] set_axes:
     :param dict[str|DimensionTag,DimensionTag]|None set_dim_tags:
-    :param dict[str|DimensionTag,DimensionTag]|None same_dim_tags:
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
     :param bool|None set_sparse: if bool, set sparse value to this
@@ -4220,10 +4217,6 @@ class ReinterpretDataLayer(_ConcatInputLayer):
       for axis, tag in set_dim_tags.items():
         axis_int = out.get_axis_from_description(axis)
         out = out.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=tag)
-    if same_dim_tags:
-      for axis, tag in same_dim_tags.items():
-        existing_dim_tag = out.get_dim_tag_from_description(axis)
-        tag.declare_same_as(existing_dim_tag)
     if set_sparse is not None:
       assert isinstance(set_sparse, bool)
       if set_sparse:
