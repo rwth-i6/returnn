@@ -5763,7 +5763,7 @@ class PrefixInTimeLayer(_ConcatInputLayer):
     :param int|LayerBase repeat: how often to repeat the prefix
     :param LayerBase|None size_base: copy seq-lens from here
     """
-    out_dim  # noqa  # handled in get_out_data_from_opts
+    out_dim, size_base  # noqa  # handled in get_out_data_from_opts
     super(PrefixInTimeLayer, self).__init__(**kwargs)
     assert isinstance(prefix, (float, int)), "other layer src not yet supported"
     input_data = self.input_data.copy()
@@ -5895,8 +5895,8 @@ class PostfixInTimeLayer(_ConcatInputLayer):
       idx_range = tf.reshape(
         idx_range, [1] * (axis_int - 1) + [max_idx] + [1] * (self.output.batch_ndim - axis_int - 1))
       assert (
-        set(in_dim.dyn_size_ext.dim_tags).
-          issubset(self.output.dim_tags))  # https://github.com/rwth-i6/returnn/issues/721
+        set(in_dim.dyn_size_ext.dim_tags)
+        .issubset(self.output.dim_tags))  # https://github.com/rwth-i6/returnn/issues/721
       size_ext = in_dim.dyn_size_ext.copy_compatible_to(self.output, check_sparse=False, check_dtype=False)
       seq_mask = tf.less(idx_range, size_ext.placeholder)
       assert seq_mask.get_shape().ndims == self.output.batch_ndim
