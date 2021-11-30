@@ -9174,12 +9174,13 @@ class FastBaumWelchLoss(Loss):
   recurrent = True
   need_target = False
 
-  def __init__(self, sprint_opts, **kwargs):
+  def __init__(self, sprint_opts, tdp_scale=1.0, **kwargs):
     """
     :param dict[str] sprint_opts:
     """
     super(FastBaumWelchLoss, self).__init__(**kwargs)
     self.sprint_opts = sprint_opts
+    self.tdp_scale = tdp_scale
     from returnn.tf.util.basic import custom_gradient
     custom_gradient.register_generic_loss_and_error_signal()
 
@@ -9200,6 +9201,7 @@ class FastBaumWelchLoss(Loss):
       fwdbwd, obs_scores = fast_baum_welch_by_sprint_automata(
         sprint_opts=self.sprint_opts,
         am_scores=-tf_compat.v1.log(output),
+        tdp_scale=self.tdp_scale,
         float_idx=seq_mask,
         tags=seq_tags)
       loss = self.reduce_func(obs_scores[0])
