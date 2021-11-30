@@ -1141,7 +1141,7 @@ class TwoDNativeLstmCell(RecSeqCellOp):
 def chunk(x, index, chunk_size, chunk_step):
   """
   :param tf.Tensor x: (time,batch,dim)
-  :param tf.Tensor index:
+  :param tf.Tensor index: (time,batch)
   :param int|tf.Tensor chunk_size:
   :param int|tf.Tensor chunk_step:
   :return: out, oindex.
