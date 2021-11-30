@@ -3575,9 +3575,13 @@ class UnflattenNdLayer(_ConcatInputLayer):
     axis = input_data.get_axis_from_description(in_dim, allow_int=False)
     input_data = input_data.copy_move_axis(old_axis=axis, new_axis=1)
     axis = 1
+    out_dims = self.output.dim_tags[axis:axis + num_axes]
     sizes_data = sizes.output.copy_as_batch_major()
     assert sizes_data.batch_ndim == 2
     assert sizes_data.batch_shape[1] in (None, num_axes)  # also allow None...
+    for i, out_dim in enumerate(out_dims):
+      if out_dim.dimension is None and out_dim.dyn_size is None:
+        out_dim.dyn_size = sizes_data.placeholder[:, i]
     self.output.placeholder = tf_util.unflatten_nd(input_data.placeholder, sizes_data.placeholder, num_axes=num_axes)
 
   def get_dep_layers(self):
@@ -3618,11 +3622,10 @@ class UnflattenNdLayer(_ConcatInputLayer):
     :param dict[int,LayerBase]|None declare_same_sizes_as:
     :rtype: Data
     """
-    out = get_concat_sources_data_template(sources).copy(name="%s_output").copy_as_batch_major()
+    out = get_concat_sources_data_template(sources).copy(name="%s_output" % name).copy_as_batch_major()
     axis = out.get_axis_from_description(in_dim, allow_int=False)
     out = out.copy_move_axis(old_axis=axis, new_axis=1)
     axis = 1
-    in_dim = out.dim_tags[axis]
     out = out.copy_template_excluding_axis(axis)
     if out_dims:
       assert len(out_dims) == num_axes
