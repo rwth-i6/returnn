@@ -3874,10 +3874,12 @@ class TileLayer(_ConcatInputLayer):
   """
   layer_class = "tile"
 
-  def __init__(self, multiples, **kwargs):
+  def __init__(self, multiples, out_dims=None, **kwargs):
     """
-    :param dict[str, int] multiples: number of multiples per axis (axis provided as str)
+    :param dict[DimensionTag|str, int] multiples: number of multiples per axis (axis provided as dim tag or str desc)
+    :param dict[DimensionTag|str, DimensionTag]|None out_dims:
     """
+    out_dims  # noqa  # handled in get_out_data_from_opts
     super(TileLayer, self).__init__(**kwargs)
     self.multiples = multiples
     input_data = self.input_data
@@ -3893,22 +3895,27 @@ class TileLayer(_ConcatInputLayer):
     self.output.placeholder = tf.tile(input_data.placeholder, multiples_full)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, multiples, sources=(), **kwargs):
+  def get_out_data_from_opts(cls, name, sources, multiples, out_dims=None, **kwargs):
     """
     :param str name:
-    :param dict[str, int] multiples:
     :param list[LayerBase] sources:
+    :param dict[DimensionTag|str, int] multiples:
+    :param dict[DimensionTag|str, DimensionTag]|None out_dims:
     :rtype: Data
     """
     from ..util.data import DimensionTag
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
     dim_tags = list(data.dim_tags)
     for axis, multiple in multiples.items():
-      axis = data.get_axis_from_description(axis, allow_int=False)
-      tag = dim_tags[axis]
+      axis_int = data.get_axis_from_description(axis, allow_int=False)
+      tag = dim_tags[axis_int]
       dim = None if tag.dimension is None else (tag.dimension * multiple)
-      tag = DimensionTag(kind=tag.kind, description="%s_tile" % name, dimension=dim)
-      dim_tags[axis] = tag
+      if out_dims and axis in out_dims:
+        tag = out_dims[axis]
+        assert tag.dimension == dim
+      else:
+        tag = DimensionTag(kind=tag.kind, description="%s_tile" % name, dimension=dim)
+      dim_tags[axis_int] = tag
     return data.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
 
 
