@@ -5881,7 +5881,7 @@ class PostfixInTimeLayer(_ConcatInputLayer):
       assert in_dim not in postfix.output.dim_tags, 'Postfix layer with time axis not implemented yet'
       postfix = postfix.output.copy_compatible_to(self.output)
       c = postfix.placeholder
-      c_ = tf.repeat(c, [1 if i != axis_int else repeat for i in range(self.output.batch_ndim)])
+      c_ = tf.tile(c, [1 if i != axis_int else repeat for i in range(self.output.batch_ndim)])
     else:
       self.postfix_layer = None
       c = tf.constant(postfix, dtype=self.output.dtype)
@@ -5889,8 +5889,18 @@ class PostfixInTimeLayer(_ConcatInputLayer):
     x = tf.concat([input_data.placeholder, c_], axis=axis_int)  # make enough space
     self.output.placeholder = x
     if in_dim.dyn_size is not None:  # dynamic
-      mask = input_data.get_sequence_mask_broadcast(axis_int)
-      self.output.placeholder = tf_util.where_bc(mask, x, c)
+      max_idx = tf.reduce_max(in_dim.dyn_size) + repeat
+      # We use the assumption that self.placeholder.shape[axis] == max_idx.
+      idx_range = tf.range(max_idx)
+      idx_range = tf.reshape(
+        idx_range, [1] * (axis_int - 1) + [max_idx] + [1] * (self.output.batch_ndim - axis_int - 1))
+      assert (
+        set(in_dim.dyn_size_ext.dim_tags).
+          issubset(self.output.dim_tags))  # https://github.com/rwth-i6/returnn/issues/721
+      size_ext = in_dim.dyn_size_ext.copy_compatible_to(self.output, check_sparse=False, check_dtype=False)
+      seq_mask = tf.less(idx_range, size_ext.placeholder)
+      assert seq_mask.get_shape().ndims == self.output.batch_ndim
+      self.output.placeholder = tf_util.where_bc(seq_mask, x, c)
       out_dim = self.output.dim_tags[axis_int]
       out_dim.dyn_size = in_dim.dyn_size + repeat
 
