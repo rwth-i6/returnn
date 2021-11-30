@@ -7320,8 +7320,8 @@ class MaskedComputationLayer(LayerBase):
   recurrent = True
 
   def __init__(self, mask, unit, masked_from,
-               out_spatial_dim=None,
                _layer_class, _layer_desc,
+               out_spatial_dim=None,
                _parent_layer_cache=None,
                **kwargs):
     """
