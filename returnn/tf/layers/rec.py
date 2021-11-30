@@ -431,6 +431,8 @@ class RecLayer(_ConcatInputLayer):
       source_data.time_dim_axis = source_data.get_axis_from_description(axis)
       if source_data.time_dim_axis == source_data.feature_dim_axis:
         source_data.feature_dim_axis = NotSpecified
+    if source_data and source_data.have_time_axis() and not axis:
+      axis = source_data.get_time_dim_tag()
     n_out = kwargs.get("n_out", NotSpecified)
     out_type = kwargs.get("out_type", None)
     loss = kwargs.get("loss", None)
@@ -438,19 +440,19 @@ class RecLayer(_ConcatInputLayer):
     deps += [layer for layer in nest.flatten(initial_state) if isinstance(layer, LayerBase)]
     if isinstance(unit, _SubnetworkRecCell):  # subnetwork
       subnet = unit
-      if not axis:
-        axis = DimensionTag(kind=DimensionTag.Types.Time, description="%s:unknown-time" % name)
-      out = (
-        subnet.layer_data_templates["output"].output.copy_template(name="%s_output" % name)
-        .copy_add_dim_by_tag(dim_tag=axis, axis=0, unbroadcast=True)
-        .copy_template_set_ctx(network.get_control_flow_ctx()))
+      out = subnet.layer_data_templates["output"].output.copy_template(name="%s_output" % name)
+      if axis:
+        out = out.copy_add_dim_by_tag(dim_tag=axis, axis=0, unbroadcast=True)
+        out.time_dim_axis = 0
+      out = out.copy_template_set_ctx(network.get_control_flow_ctx())
       deps += subnet.get_parent_deps()
     elif out_type or n_out is not NotSpecified or out_dim or loss:
       assert source_data
-      if not axis and source_data.have_time_axis():
-        axis = source_data.get_time_dim_tag()
-      assert source_data.have_feature_axis()
-      out = source_data
+      out = source_data.copy_template(name="%s_output" % name)
+      if out.sparse:
+        out.dtype = "float32"
+        out.sparse = False
+        out = out.copy_add_feature_dim()  # dummy
       if not out_dim:
         if n_out is NotSpecified or not n_out:
           assert out_type and "dim" in out_type
