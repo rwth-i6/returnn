@@ -1542,12 +1542,14 @@ class _SubnetworkRecCell(object):
     from returnn.tf.network import LayerNotFound, DataNotFound
     if isinstance(exception, (DataNotFound, LayerNotFound)):
       return  # pass on. this is maybe caught elsewhere. also other template exceptions are probably not relevant.
+    if getattr(exception, "_RETURNN_handled_construct_exception", None):
+      return  # already handled before
     out = log.v2
     print(file=out)
     print("ERROR: Got exception during %s:" % description, file=out)
     print("%s: %s" % (type(exception).__name__, exception), file=out)
     print(file=out)
-    print("Template network (check out types / shapes):")
+    print("Template network (check out types / shapes):", file=out)
     for key, value in self.layer_data_templates.items():
       print("%s: %s" % (key, value), file=out)
     if self._template_construction_exceptions:
@@ -1560,6 +1562,7 @@ class _SubnetworkRecCell(object):
       # Don't print twice.
       self._template_construction_exceptions = None
     print(file=out)
+    exception._RETURNN_handled_construct_exception = True
 
   def _get_parent_layer(self, layer_name):
     """
