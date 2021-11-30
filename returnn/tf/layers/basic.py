@@ -6026,7 +6026,7 @@ class TimeUnChunkingLayer(_ConcatInputLayer):
       x_t = tf.reshape(x_t, x_shape[:2] + [-1])
     from returnn.tf.native_op import unchunk
     out, oindex, factors = unchunk(
-      x.placeholder, index=index, chunk_step=chunk_step, chunk_size=chunk_size, n_time=n_time, n_batch=n_batch)
+      x_t, index=index, chunk_step=chunk_step, chunk_size=chunk_size, n_time=n_time, n_batch=n_batch)
     if ext_rem_shape:
       out = tf.reshape(out, tf.concat([tf.shape(oindex), ext_rem_shape], axis=0))
     self.output.placeholder = out
@@ -6060,7 +6060,6 @@ class TimeUnChunkingLayer(_ConcatInputLayer):
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
     in_dim = chunking_layer.output.get_time_dim_tag()
     axis = data.get_axis_from_description(in_dim)
-    in_dim = data.dim_tags[axis]
     data = data.copy_move_axis(old_axis=axis, new_axis=0)
     data = data.copy_with_batch_dim_axis(1)
     orig_axis = chunking_layer.kwargs.get("axis", "T")
