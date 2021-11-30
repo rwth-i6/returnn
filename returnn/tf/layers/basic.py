@@ -5929,36 +5929,64 @@ class PostfixInTimeLayer(_ConcatInputLayer):
 
 class TimeChunkingLayer(_ConcatInputLayer):
   """
-  Performs chunking in time. See :func:`TFNativeOp.chunk`.
+  Performs chunking in time. See :func:`returnn.tf.native_op.chunk`.
   """
   layer_class = "time_chunking"
   recurrent = True
 
-  def __init__(self, chunk_size, chunk_step, **kwargs):
+  def __init__(self, chunk_size, chunk_step, axis="T", out_dim=None, **kwargs):
     """
     :param int chunk_size:
     :param int chunk_step:
+    :param DimensionTag|str axis:
+    :param DimensionTag|None out_dim:
     """
-    super(TimeChunkingLayer, self).__init__(**kwargs)
+    super(TimeChunkingLayer, self).__init__(out_dim=out_dim, **kwargs)
     self.chunk_size = chunk_size
     self.chunk_step = chunk_step
+    axis = self.input_data.get_axis_from_description(axis, allow_int=False)
+    x = self.input_data.copy_move_axis(old_axis=axis, new_axis=0)
+    x = x.copy_with_batch_dim_axis(1)
+    self.input_data = x
+    in_dim = x.dim_tags[0]
+    x_t = x.placeholder
+    if in_dim.dyn_size is not None:
+      index = tf.cast(tf_util.sequence_mask_time_major(in_dim.dyn_size), tf.float32)
+    else:
+      index = tf.fill(tf.shape(x_t)[:2], 1.)
+    ext_rem_shape = None
+    if x.batch_ndim != 3:
+      x_shape = tf_util.get_shape(x_t)
+      ext_rem_shape = x_shape[2:]
+      x_t = tf.reshape(x_t, x_shape[:2] + [-1])
     from returnn.tf.native_op import chunk
-    x = self.input_data.copy_as_time_major()
-    index = tf.cast(x.get_sequence_mask(), tf.float32)
-    out, oindex = chunk(x.placeholder, index=index, chunk_step=chunk_step, chunk_size=chunk_size)
-    out.set_shape((None, None, self.output.dim))
+    out, oindex = chunk(x_t, index=index, chunk_step=chunk_step, chunk_size=chunk_size)
+    if ext_rem_shape:
+      out = tf.reshape(out, tf.concat([tf.shape(oindex), ext_rem_shape], axis=0))
     self.output.placeholder = out
-    self.output.size_placeholder = {0: tf.reduce_sum(tf.cast(oindex, tf.int32), axis=0)}
+    out.set_shape(self.output.batch_shape)
+    out_dim = self.output.dim_tags[0]
+    if out_dim.dimension is None and out_dim.dyn_size is None:
+      out_dim.dyn_size = tf.reduce_sum(tf.cast(oindex, tf.int32), axis=0)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, axis="T", out_dim=None, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
+    :param DimensionTag|str axis:
+    :param DimensionTag|None out_dim:
     :rtype: Data
     """
-    data = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_time_major()
-    assert data.batch_shape == (None, None, data.dim)
+    data = get_concat_sources_data_template(sources, name="%s_output" % name)
+    axis = data.get_axis_from_description(axis, allow_int=False)
+    in_dim = data.dim_tags[axis]
+    data = data.copy_move_axis(old_axis=axis, new_axis=0)
+    data = data.copy_with_batch_dim_axis(1)
+    if not out_dim:
+      out_dim = DimensionTag(kind=in_dim.kind, description="%s:chunking" % name)
+    data = data.copy_template_replace_dim_tag(axis=0, new_dim_tag=out_dim)
+    data.time_dim_axis = 0
     return data
 
 
@@ -5978,17 +6006,31 @@ class TimeUnChunkingLayer(_ConcatInputLayer):
     self.chunking_layer = chunking_layer
     chunk_size = chunking_layer.chunk_size
     chunk_step = chunking_layer.chunk_step
-    orig_shape = tf.shape(chunking_layer.input_data.placeholder)
-    n_time = orig_shape[chunking_layer.input_data.time_dim_axis]
-    n_batch = orig_shape[chunking_layer.input_data.batch_dim_axis]
+    orig_shape = tf_util.get_shape(chunking_layer.input_data.placeholder)
+    n_time, n_batch = orig_shape[:2]
+    in_dim = chunking_layer.output.get_time_dim_tag()
+    x = self.input_data.copy()
+    axis = x.get_axis_from_description(in_dim)
+    in_dim = x.dim_tags[axis]
+    x = x.copy_move_axis(old_axis=axis, new_axis=0)
+    x = x.copy_with_batch_dim_axis(1)
+    x_t = x.placeholder
+    if in_dim.dyn_size is not None:
+      index = tf.cast(tf_util.sequence_mask_time_major(in_dim.dyn_size), tf.float32)
+    else:
+      index = tf.fill(tf.shape(x_t)[:2], 1.)
+    ext_rem_shape = None
+    if x.batch_ndim != 3:
+      x_shape = tf_util.get_shape(x_t)
+      ext_rem_shape = x_shape[2:]
+      x_t = tf.reshape(x_t, x_shape[:2] + [-1])
     from returnn.tf.native_op import unchunk
-    x = self.input_data.copy_as_time_major()
-    index = tf.cast(x.get_sequence_mask(), tf.float32)
     out, oindex, factors = unchunk(
       x.placeholder, index=index, chunk_step=chunk_step, chunk_size=chunk_size, n_time=n_time, n_batch=n_batch)
-    out.set_shape((None, None, self.output.dim))
+    if ext_rem_shape:
+      out = tf.reshape(out, tf.concat([tf.shape(oindex), ext_rem_shape], axis=0))
     self.output.placeholder = out
-    self.output.size_placeholder = {0: chunking_layer.input_data.get_sequence_lengths()}
+    out.set_shape(self.output.batch_shape)
 
   def get_dep_layers(self):
     """
@@ -6008,14 +6050,24 @@ class TimeUnChunkingLayer(_ConcatInputLayer):
       d["chunking_layer"] = get_layer(d["chunking_layer"])
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, chunking_layer, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
+    :param LayerBase chunking_layer:
     :rtype: Data
     """
-    data = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_time_major()
-    assert data.batch_shape == (None, None, data.dim)
+    data = get_concat_sources_data_template(sources, name="%s_output" % name)
+    in_dim = chunking_layer.output.get_time_dim_tag()
+    axis = data.get_axis_from_description(in_dim)
+    in_dim = data.dim_tags[axis]
+    data = data.copy_move_axis(old_axis=axis, new_axis=0)
+    data = data.copy_with_batch_dim_axis(1)
+    orig_axis = chunking_layer.kwargs.get("axis", "T")
+    orig_source = chunking_layer.sources[0].output
+    orig_axis = orig_source.get_axis_from_description(orig_axis, allow_int=False)
+    orig_dim = orig_source.dim_tags[orig_axis]
+    data = data.copy_template_replace_dim_tag(axis=0, new_dim_tag=orig_dim)
     return data
 
 
