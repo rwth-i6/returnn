@@ -6633,11 +6633,13 @@ class RemoveLayer(LayerBase):
   """
   layer_class = "remove"
 
-  def __init__(self, symbol, **kwargs):
+  def __init__(self, symbol, axis="T", out_dim=None, **kwargs):
     """
     :param int symbol:
+    :param DimensionTag|str axis:
+    :param DimensionTag|None out_dim:
     """
-    super(RemoveLayer, self).__init__(**kwargs)
+    super(RemoveLayer, self).__init__(out_dim=out_dim, **kwargs)
     if symbol < 0:
       symbol += self.output.dim
       assert symbol > 0
@@ -6645,10 +6647,14 @@ class RemoveLayer(LayerBase):
     # I currently do not have a good idea how to make this efficient.
     in_data = self.sources[0].output.copy_as_batch_major()
     assert in_data.sparse
+    axis = in_data.get_axis_from_description(axis, allow_int=False)
     assert in_data.batch_ndim == 2
-    in_seqs = in_data.placeholder  # (batch,time)
-    in_mask = tf.logical_and(tf.not_equal(in_seqs, symbol), in_data.get_sequence_mask_broadcast())  # (batch,time)
-    out_seq_lens = tf_compat.v1.count_nonzero(in_mask, axis=1, dtype=tf.int32)  # (batch,)
+    in_seqs = in_data.placeholder
+    in_mask = tf.logical_and(tf.not_equal(in_seqs, symbol), in_data.get_sequence_mask_broadcast(axis=axis))
+    out_seq_lens = tf_compat.v1.count_nonzero(in_mask, axis=axis, dtype=tf.int32)  # (batch,)
+    out_dim = self.output.dim_tags[axis]
+    if out_dim.dimension is None and out_dim.dyn_size is None:
+      out_dim.dyn_size = out_seq_lens
     max_out_seq_len = tf.reduce_max(out_seq_lens)  # scalar
     from returnn.tf.util.basic import constant_with_shape
     zero_seq = constant_with_shape(0, shape=[max_out_seq_len], dtype=in_seqs.dtype)
@@ -6666,21 +6672,24 @@ class RemoveLayer(LayerBase):
 
     out_seqs = tf.map_fn(body, [in_seqs, in_mask], dtype=in_seqs.dtype)
     self.output.placeholder = out_seqs
-    self.output.size_placeholder[0] = out_seq_lens
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources=(), **kwargs):
+  def get_out_data_from_opts(cls, name, sources, axis="T", out_dim=None, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
+    :param DimensionTag|str axis:
+    :param DimensionTag|None out_dim:
     :rtype: Data
     """
-    from ..util.data import DimensionTag
     assert len(sources) == 1, "%s layer %r: must have exactly one source" % (cls, name)
     assert sources[0].output.sparse, "%s layer %r: assumes sparse data" % (cls, name)
     out = sources[0].output.copy(name="%s_output" % name).copy_as_batch_major()
-    dim_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="%s_removed_items", dimension=None)
-    return out.copy_template_replace_dim_tag(axis=out.time_dim_axis, new_dim_tag=dim_tag)
+    axis = out.get_axis_from_description(axis, allow_int=False)
+    in_dim = out.dim_tags[axis]
+    if not out_dim:
+      out_dim = DimensionTag(kind=in_dim.kind, description="%s_removed_items", dimension=None)
+    return out.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_dim)
 
 
 class CombineLayer(LayerBase):
