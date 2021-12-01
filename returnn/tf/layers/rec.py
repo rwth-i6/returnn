@@ -963,7 +963,7 @@ class RecLayer(_ConcatInputLayer):
       y, _ = cell(x, initial_state=(input_h, input_c))
     if self._direction == -1:
       y = tf_compat.v1.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
-    y = self._post_proc_output_cell_strict(y, in_data=in_data)
+    y = self._post_proc_output_cell_strict(y, in_data=in_data)  # noqa
     return y  # noqa
 
   def _get_output_native_rec_op(self, cell):
