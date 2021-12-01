@@ -7215,7 +7215,6 @@ class SwitchLayer(LayerBase):
     out = Data.get_common_data([true_data, false_data, condition.output.copy_template()])
     out.dtype = true_data.dtype
     out.sparse_dim = true_data.sparse_dim
-    out.sanity_check()
     return out.copy(name="%s_output" % name)
 
   def get_dep_layers(self):
