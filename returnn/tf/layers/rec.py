@@ -662,8 +662,11 @@ class RecLayer(_ConcatInputLayer):
     out_data.placeholder = y
     if not self.input_data.have_time_axis() or not self.time_dim_tag:
       out_data = out_data.copy_squeeze_axes(axes=[0])
-    y = out_data.copy_compatible_to(self.output).placeholder
-    return y
+    # The output format should match now.
+    # If this is not the case, we should fix get_out_data_from_opts accordingly
+    # and avoid unnecessary further transformations here, esp any transposes.
+    assert out_data.dim_tags == self.output.dim_tags
+    return out_data.placeholder
 
   @classmethod
   def get_losses(cls, name, network, output, loss=None, reduce_func=None, layer=None, **kwargs):
