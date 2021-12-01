@@ -3599,6 +3599,15 @@ def test_reclayer_optimize_out_rec_nativelstm2():
   check_reclayer_optimize_out({"class": "rec", "unit": "NativeLstm2"})
 
 
+def test_test_reclayer_optimize_out_inner_rec_layer():
+  lstm_window_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="lstm-window", dimension=5)
+  check_reclayer_optimize_out(
+    {"class": "rec", "unit": "nativelstm2", "from": "win", "axis": lstm_window_dim},
+    {
+      "win": {"class": "window", "window_dim": lstm_window_dim, "window_right": 0, "from": "data:source"},  # (B,W,D)
+    })
+
+
 def test_test_reclayer_optimize_out_onlineblstm():
   network = {}
   lstm_dim = 13
