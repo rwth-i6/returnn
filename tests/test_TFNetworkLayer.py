@@ -1266,6 +1266,38 @@ def test_CompareLayer_allow_broadcast_all_sources():
     })
 
 
+def test_SwitchLayer_sanity_check():
+  """
+  This test will fail if SwitchLayer does a sanity check on its output.
+  """
+  from returnn.tf.util.data import DimensionTag
+  with make_scope():
+    n_out = 5
+    time_tag = DimensionTag(DimensionTag.Types.Spatial, "time")
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out, "same_dim_tags_as": {"t": time_tag}},
+        "classes": {"dim": n_out, "sparse": True, "same_dim_tags_as": {"t": time_tag}}
+      }})
+    net = TFNetwork(config=config, search_flag=True)
+    net.construct_from_dict({
+      "data_int": {"class": "cast", "from": "data", "dtype": "int32"},
+      "output": {"class": "rec", "from": "data", "unit": {
+        "prev_out": {
+          "class": "reinterpret_data", "from": "prev:output", "set_sparse": False},
+        "cond": {
+          "class": "compare", "from": ["prev_out", "base:data_int"], "kind": "less_equal"},
+        "switch": {"class": "switch", "condition": "cond", "true_from": 0.0, "false_from": 0.0},
+        "switch_red": {"class": "reduce", "from": "switch", "axis": "t", "mode": "max"},
+        "output_prob": {"class": "softmax", "from": "switch_red", "target": "classes", "loss": "ce"},
+        "output": {
+          "class": "choice", "from": "output_prob", "beam_size": 3, "target": "classes",
+          "input_type": "prob", "initial_output": 0}
+      }}
+    })
+
+
 def test_dot_layer_shuffled_remaining_dims_static():
   with make_scope() as session:
     import numpy as np
