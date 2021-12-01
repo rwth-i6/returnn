@@ -4038,7 +4038,7 @@ def test_reclayer_inner_nativelstm1():
     net_dict = {
       "output": {
         "class": "rec", "from": "data",
-        "optimize_move_layers_out": True,  # make sure it stays inside the loop, for the actual test
+        "optimize_move_layers_out": False,  # make sure it stays inside the loop, for the actual test
         "unit": {
           "output": {"class": "rec", "unit": unit, "from": "data:source", "n_out": 7}
         }
@@ -4060,6 +4060,7 @@ def test_reclayer_inner_nativelstm1():
       _test_inner_rec_unit(unit)
     except Exception as exc:
       print("Expected exception:", exc)
+      assert "https://github.com/rwth-i6/returnn/issues/813" in str(exc)
     else:
       raise Exception("Expect to get exception for unit %r. https://github.com/rwth-i6/returnn/issues/813" % unit)
 
