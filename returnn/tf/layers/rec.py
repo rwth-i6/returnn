@@ -632,16 +632,13 @@ class RecLayer(_ConcatInputLayer):
         in_data = in_data.copy_with_feature_last()
     else:
       in_data = in_data.copy_as_time_batch_major()
-    x = in_data.placeholder
-    seq_len = in_data.get_sequence_lengths()
-    if strict and in_data.batch_ndim_dense != 3:
-      assert in_data.batch_ndim_dense > 3
-      if in_data.sparse:
-        x = tf.reshape(x, [tf_util.get_shape_dim(x, 0), -1])
-      else:
-        x = tf.reshape(x, [tf_util.get_shape_dim(x, 0), -1, tf_util.get_shape_dim(x, -1)])
-      # TODO seq_len expand to new batch
-    return in_data, x, seq_len
+    in_data_ = in_data
+    if strict and in_data_.batch_ndim_dense != 3:
+      assert in_data_.batch_ndim_dense > 3
+      batch_axes = list(range(1, in_data_.batch_ndim_dense - 1))
+      assert len(batch_axes) >= 2
+      in_data_ = in_data_.copy_merge_into_batch(batch_axes)
+    return in_data, in_data_.placeholder, in_data_.get_sequence_lengths()
 
   def _post_proc_output_cell_strict(self, y, in_data):
     """
