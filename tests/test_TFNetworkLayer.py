@@ -1268,7 +1268,7 @@ def test_CompareLayer_allow_broadcast_all_sources():
 
 def test_SwitchLayer_sanity_check():
   """
-  This test will fail if SwitchLayer does a sanity check on its output.
+  https://github.com/rwth-i6/returnn/issues/800
   """
   from returnn.tf.util.data import DimensionTag
   with make_scope():
