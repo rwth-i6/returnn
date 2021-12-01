@@ -4286,7 +4286,7 @@ class ConvLayer(_ConcatInputLayer):
                input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None,
                in_dim=None, in_spatial_dims=None,
                n_out=None, out_dim=None, out_spatial_dims=None,
-               auto_use_channel_first=False,
+               auto_use_channel_first=True,
                with_bias=NotSpecified,
                activation=None,
                forward_weights_init="glorot_uniform", bias_init=0.0,
@@ -4616,7 +4616,7 @@ class ConvLayer(_ConcatInputLayer):
         input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None,
         in_dim=None, in_spatial_dims=None,
         n_out=None, out_dim=None, out_spatial_dims=None,
-        auto_use_channel_first=False,
+        auto_use_channel_first=True,
         **kwargs):
     """
     :param str name:
@@ -4736,7 +4736,7 @@ class PoolLayer(_ConcatInputLayer):
   def __init__(self, mode, pool_size, padding="VALID", dilation_rate=1, strides=None,
                in_dim=None, in_spatial_dims=None,
                out_dim=None, out_spatial_dims=None,
-               use_channel_first=False,
+               use_channel_first=True,
                **kwargs):
     """
     :param str mode: "max" or "avg"
@@ -4828,7 +4828,7 @@ class PoolLayer(_ConcatInputLayer):
                              pool_size, strides=None, dilation_rate=1, padding="VALID",
                              in_dim=None, in_spatial_dims=None,
                              out_dim=None, out_spatial_dims=None,
-                             use_channel_first=False,
+                             use_channel_first=True,
                              **kwargs):
     """
     :param str name:
