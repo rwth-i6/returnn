@@ -4029,6 +4029,41 @@ def test_SplitLayer_move_out_as_output_layer():
     session.run(output_layer.output.placeholder, feed_dict=feed_dict)
 
 
+def test_reclayer_inner_nativelstm1():
+  # https://github.com/rwth-i6/returnn/issues/813
+  # NativeLstm1 is broken inside RecLayer.
+  # This should cause an exception. We test this here.
+  def _test_inner_rec_unit(unit):
+    print("*** test rec unit", unit)
+    net_dict = {
+      "output": {
+        "class": "rec", "from": "data",
+        "optimize_move_layers_out": True,  # make sure it stays inside the loop, for the actual test
+        "unit": {
+          "output": {"class": "rec", "unit": unit, "from": "data:source", "n_out": 7}
+        }
+      }
+    }
+    with make_scope() as session:
+      config = Config({"extern_data": {"data": {"dim": 3}}})
+      net = TFNetwork(config=config)
+      net.construct_from_dict(net_dict)
+      net.initialize_params(session)
+      out = net.get_default_output_layer()
+      from test_TFNetworkLayer import make_feed_dict
+      session.run(out.output.placeholder, feed_dict=make_feed_dict(net.extern_data))
+
+  for unit in ["NativeLstm2", "lstm"]:
+    _test_inner_rec_unit(unit)  # should be no error
+  for unit in ["NativeLstm"]:
+    try:
+      _test_inner_rec_unit(unit)
+    except Exception as exc:
+      print("Expected exception:", exc)
+    else:
+      raise Exception("Expect to get exception for unit %r. https://github.com/rwth-i6/returnn/issues/813" % unit)
+
+
 def test_reclayer_att_with_kv_in_rec():
   net_dict = {
     'decision': {'class': 'decide', 'from': ['output'], 'loss': 'edit_distance', 'loss_opts': {}, 'target': 'classes'},
