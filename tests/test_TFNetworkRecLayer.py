@@ -3492,17 +3492,21 @@ def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, sha
       v.name.split("/")[1:] for v in net1.get_params_list()], [v.name.split("/")[1:] for v in net2.get_params_list()])
     net1.initialize_params(session=session)
     net1_params = net1.layers["output_not_opt"].get_param_values_dict(session=session)
+    print("params:", list(net1_params.keys()))
     net2.layers["output_opt"].set_param_values_by_dict(values_dict=net1_params, session=session)
     x_np = net1.random.normal(size=(n_batch, n_time, n_in))
-    net1_output = net1.layers["output_not_opt"].output.copy_masked(0.).get_placeholder_as_batch_major()
-    net2_output = net2.layers["output_opt"].output.copy_masked(0.).get_placeholder_as_batch_major()
+    net1_output = net1.layers["output_not_opt"].output.copy_masked(0.).copy_as_batch_major()
+    net2_output = net2.layers["output_opt"].output.copy_masked(0.).copy_as_batch_major()
+    print("output_not_opt:", net1_output)
+    print("output_opt:", net2_output)
+    assert net1_output.batch_shape == net2_output.batch_shape
     feed_dict = {
       net1.extern_data.data["data"].placeholder: x_np,
       net1.extern_data.data["data"].size_placeholder[0]: [n_time] * n_batch}
-    y1_np = session.run(net1_output, feed_dict=feed_dict)
+    y1_np = session.run(net1_output.placeholder, feed_dict=feed_dict)
     print("y: (shape %r)" % (y1_np.shape,))
     print(y1_np)
-    y2_np = session.run(net2_output, feed_dict=feed_dict)
+    y2_np = session.run(net2_output.placeholder, feed_dict=feed_dict)
     assert y1_np.shape == y2_np.shape
     assert y1_np.shape[:2] == y2_np.shape[:2] == (n_batch, n_time)
     assert y1_np.any() and y2_np.any()
