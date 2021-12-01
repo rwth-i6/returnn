@@ -911,11 +911,13 @@ class BatchInfo:
     """
     Represents a dim with fixed size.
     """
-    def __init__(self, size):
+    def __init__(self, size, dim_tag=None):
       """
       :param tf.Tensor|int size:
+      :param DimensionTag|None dim_tag:
       """
       self.size = size
+      self.dim_tag = dim_tag
 
     def short_repr(self):
       """
@@ -1356,27 +1358,37 @@ class BatchInfo:
     new_dim_idx = -1 if batch_major else self._next_spatial_major_index()
     return self._copy_extend_dim(new_dim=new_dim, new_dim_idx=new_dim_idx)
 
-  def copy_extend_with_padded_dim_tag(self, dim_tag, batch_major):
+  def copy_extend_with_padded_dim_tag(self, dim_tag, batch_major=None, new_dim_idx=None):
     """
     :param DimensionTag dim_tag:
-    :param bool batch_major: if True, add new dim in front. otherwise, add new dim at the end
+    :param bool|None batch_major: if True, add new dim in front. otherwise, add new dim at the end
+    :param int|None new_dim_idx:
     :rtype: BatchInfo
     """
     new_dim = self._make_padded_dim(dim_tag)
-    new_dim_idx = -1 if batch_major else self._next_spatial_major_index()
+    if new_dim_idx is None:
+      assert batch_major is not None
+      new_dim_idx = -1 if batch_major else self._next_spatial_major_index()
+    else:
+      assert batch_major is None
     return self._copy_extend_dim(new_dim=new_dim, new_dim_idx=new_dim_idx)
 
-  def copy_extend_with_padded_or_fixed_dim_tag(self, dim_tag, batch_major):
+  def copy_extend_with_padded_or_fixed_dim_tag(self, dim_tag, batch_major=None, new_dim_idx=None):
     """
     :param DimensionTag dim_tag:
-    :param bool batch_major: if True, add new dim in front. otherwise, add new dim at the end
+    :param bool|None batch_major: if True, add new dim in front. otherwise, add new dim at the end
+    :param int|None new_dim_idx:
     :rtype: BatchInfo
     """
     if dim_tag.dyn_size is not None:
       new_dim = self._make_padded_dim(dim_tag)
     else:
-      new_dim = BatchInfo.FixedDim(size=dim_tag.get_dim_value())
-    new_dim_idx = -1 if batch_major else self._next_spatial_major_index()
+      new_dim = BatchInfo.FixedDim(size=dim_tag.get_dim_value(), dim_tag=dim_tag)
+    if new_dim_idx is None:
+      assert batch_major is not None
+      new_dim_idx = -1 if batch_major else self._next_spatial_major_index()
+    else:
+      assert batch_major is None
     return self._copy_extend_dim(new_dim=new_dim, new_dim_idx=new_dim_idx)
 
   def _copy_extend_dim(self, new_dim, new_dim_idx):
@@ -2649,6 +2661,47 @@ class Data(object):
     data._adapt_batch_consistent_dim_tags()
     return data
 
+  def copy_merge_into_batch(self, axes):
+    """
+    :param list[int] axes: All axes to be merged into the batch axis.
+      Must include the batch_dim_axis. The order is kept.
+    :return: copy of myself where the the given axes are merged into the batch dim
+    :rtype: Data
+    """
+    assert self.batch
+    assert self.batch_dim_axis in axes
+    assert sorted(set(axes)) == sorted(axes)
+    min_axis = min(axes)
+    axes = list(axes)
+    data = self.copy()
+    if axes != list(range(min_axis, min_axis + len(axes))):
+      rem_axes_start = list(range(min_axis))
+      rem_axes_end = [a for a in range(min_axis, self.batch_ndim) if a not in axes]
+      data = data.copy_transpose(rem_axes_start + axes + rem_axes_end)
+      axes = list(range(min_axis, min_axis + len(axes)))
+      assert data.batch_dim_axis in axes
+    tensor = data.placeholder
+    batch = data.batch
+    data = data.copy_template()
+    batch_idx = 0
+    for axis in axes:
+      if axis == data.batch_dim_axis:
+        batch_idx = len(batch.virtual_dims)  # add all remaining axes behind
+        continue
+      batch = batch.copy_extend_with_padded_or_fixed_dim_tag(
+        dim_tag=data.dim_tags[axis], new_dim_idx=batch_idx)
+      batch_idx += 1
+    for axis in reversed(sorted(axes)):
+      if axis != data.batch_dim_axis:
+        data = data.copy_template_excluding_axis(axis)
+    data.batch = batch
+    if tensor is not None:
+      from .basic import get_shape
+      shape = get_shape(tensor)
+      tensor = tf.reshape(tensor, shape[:min_axis] + [-1] + shape[min_axis + len(axes):])
+      data.placeholder = tensor
+    return data
+
   def copy_squeeze_axes(self, axes):
     """
     :param list[int] axes: counted with batch dim
@@ -2694,6 +2747,25 @@ class Data(object):
     if dtype:
       kwargs["dtype"] = dtype
     return Data(**kwargs)
+
+  def copy_template_dense(self, name=None, dtype=None):
+    """
+    :param str|None name:
+    :param str|None dtype:
+    :return: copy of myself, using self.get_kwargs(), without placeholder
+    :rtype: Data
+    """
+    out = self.copy_template(name=name)
+    if out.sparse:
+      feat_dim = out.sparse_dim
+      out.sparse = False
+      out.dtype = "float32"
+      out = out.copy_add_dim_by_tag(dim_tag=feat_dim, unbroadcast=True, axis=-1)
+      out.feature_dim_axis = NotSpecified
+      assert out.feature_dim_axis == out.batch_ndim - 1
+    if dtype:
+      out.dtype = dtype
+    return out
 
   def copy_template_excluding_axis(self, exclude_axis, name=None):
     """
