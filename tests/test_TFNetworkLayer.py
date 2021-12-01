@@ -736,11 +736,13 @@ def test_cnn_building_block():
         "swap_axes": {
           "class": "swap_axes", "axis1": "dim:%i" % channel_num, "axis2": "dim:%i" % feature_dim, "from": "split"},
         "c1": {"class": "conv", "n_out": filters, "filter_size": filter_size, "auto_use_channel_first": False,
+               "in_spatial_dims": ("T", "dim:6"),
                "strides": (1, 1), "dilation_rate": (1, 1), "padding": "SAME", "activation": None, "with_bias": False,
                "from": "swap_axes"},
         "bn1": {"class": "batch_norm", "from": "c1"},
         "y1": {"class": "activation", "activation": "relu", "batch_norm": False, "from": "bn1"},
         "c2": {"class": "conv", "n_out": filters, "filter_size": filter_size, "auto_use_channel_first": False,
+               "in_spatial_dims": ("T", "dim:6"),
                "strides": (1, 1), "dilation_rate": (1, 1), "padding": "SAME", "activation": None, "with_bias": False,
                "from": "y1"},
         "p": {"class": "combine", "kind": "add", "from": ["c2", "swap_axes"]},
@@ -3587,26 +3589,26 @@ def test_conv_layer_NCHW():
         name="src_nhwc", network=net,
         output=Data(**{
           "name": "src_nhwc_output",
-          "dim": 16,
-          "shape": (None, 16, 16),
+          "dim": 17,
+          "shape": (None, 16, 17),
           "batch_dim_axis": 0,
           "time_dim_axis": 1,
           "feature_dim_axis": 3,
           "sparse": False}))
-      src_nhwc.output.placeholder = tf_compat.v1.placeholder(shape=(None, None, 16, 16), dtype=tf.float32)
+      src_nhwc.output.placeholder = tf_compat.v1.placeholder(shape=(None, None, 16, 17), dtype=tf.float32)
       src_nhwc.output.size_placeholder = {0: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
     with tf_compat.v1.variable_scope("src_nchw"):
       src_nchw = InternalLayer(
         name="src_nchw", network=net,
         output=Data(**{
           "name": "src_nchw_output",
-          "dim": 16,
-          "shape": (16, None, 16),
+          "dim": 17,
+          "shape": (17, None, 16),
           "batch_dim_axis": 0,
           "time_dim_axis": 2,
           "feature_dim_axis": 1,
           "sparse": False}))
-      src_nchw.output.placeholder = tf_compat.v1.placeholder(shape=(None, 16, None, 16), dtype=tf.float32)
+      src_nchw.output.placeholder = tf_compat.v1.placeholder(shape=(None, 17, None, 16), dtype=tf.float32)
       src_nchw.output.size_placeholder = {1: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
 
     filters = 64
@@ -3617,31 +3619,37 @@ def test_conv_layer_NCHW():
     with tf_compat.v1.variable_scope("conv_nhwc_from_nhwc"):
       conv_nhwc_from_nhwc = ConvLayer(
         name="conv_nhwc_from_nhwc", network=net, n_out=filters, filter_size=filter_size,
+        in_spatial_dims=["T", "dim:16"],
         padding=padding, strides=strides, auto_use_channel_first=False, sources=[src_nhwc],
         output=ConvLayer.get_out_data_from_opts(name="conv_nhwc_from_nhwc", n_out=filters,
+                                                in_spatial_dims=["T", "dim:16"],
                                                 filter_size=filter_size, padding=padding, strides=strides,
                                                 auto_use_channel_first=False,
                                                 network=net, sources=[src_nhwc]))
     with tf_compat.v1.variable_scope("conv_nchw_from_nhwc"):
       conv_nchw_from_nhwc = ConvLayer(
         name="conv_nchw_from_nhwc", network=net, n_out=filters, filter_size=filter_size,
+        in_spatial_dims=["T", "dim:16"],
         padding=padding, strides=strides, auto_use_channel_first=True, sources=[src_nhwc],
         output=ConvLayer.get_out_data_from_opts(name="conv_nchw_from_nhwc", n_out=filters,
+                                                in_spatial_dims=["T", "dim:16"],
                                                 filter_size=filter_size, padding=padding, strides=strides,
                                                 auto_use_channel_first=True,
                                                 network=net, sources=[src_nhwc]))
     with tf_compat.v1.variable_scope("conv_nchw_from_nchw"):
       conv_nchw_from_nchw = ConvLayer(
         name="conv_nchw_from_nchw", network=net, n_out=filters, filter_size=filter_size,
+        in_spatial_dims=["T", "dim:16"],
         padding=padding, strides=strides, auto_use_channel_first=True, sources=[src_nchw],
         output=ConvLayer.get_out_data_from_opts(name="conv_nchw_from_nchw", n_out=filters,
+                                                in_spatial_dims=["T", "dim:16"],
                                                 filter_size=filter_size, padding=padding, strides=strides,
                                                 auto_use_channel_first=True,
                                                 network=net, sources=[src_nchw]))
     tf_compat.v1.global_variables_initializer().run()
     out, seq_lens = session.run([conv_nhwc_from_nhwc.output.placeholder,
                                  conv_nhwc_from_nhwc.output.size_placeholder[0]],
-                                feed_dict={src_nhwc.output.placeholder: np.random.rand(10, 10, 16, 16),
+                                feed_dict={src_nhwc.output.placeholder: np.random.rand(10, 10, 16, 17),
                                            src_nhwc.output.size_placeholder[0]: np.full(shape=(10,), fill_value=10)}
                                 )
     print(out.shape)
@@ -3650,7 +3658,7 @@ def test_conv_layer_NCHW():
     time_dim_axis = 1 if tf_util.is_gpu_available() else 0
     out, seq_lens = session.run([conv_nchw_from_nhwc.output.placeholder,
                                  conv_nchw_from_nhwc.output.size_placeholder[time_dim_axis]],
-                                feed_dict={src_nhwc.output.placeholder: np.random.rand(10, 10, 16, 16),
+                                feed_dict={src_nhwc.output.placeholder: np.random.rand(10, 10, 16, 17),
                                            src_nhwc.output.size_placeholder[0]: np.full(shape=(10,), fill_value=10)
                                 })
     print(out.shape)
@@ -3662,7 +3670,7 @@ def test_conv_layer_NCHW():
     if tf_util.is_gpu_available():
       out, seq_lens = session.run([conv_nchw_from_nchw.output.placeholder,
                                    conv_nchw_from_nchw.output.size_placeholder[1]],
-                                  feed_dict={src_nchw.output.placeholder: np.random.rand(10, 16, 10, 16),
+                                  feed_dict={src_nchw.output.placeholder: np.random.rand(10, 17, 10, 16),
                                              src_nchw.output.size_placeholder[1]: np.full(shape=(10,), fill_value=10)
                                   })
       print(out.shape)
@@ -3679,26 +3687,26 @@ def test_pool_layer_NCHW():
         name="src_nhwc", network=net,
         output=Data(**{
           "name": "src_nhwc_output",
-          "dim": 16,
-          "shape": (None, 16, 16),
+          "dim": 17,
+          "shape": (None, 16, 17),
           "batch_dim_axis": 0,
           "time_dim_axis": 1,
           "feature_dim_axis": 3,
           "sparse": False}))
-      src_nhwc.output.placeholder = tf_compat.v1.placeholder(shape=(None, None, 16, 16), dtype=tf.float32)
+      src_nhwc.output.placeholder = tf_compat.v1.placeholder(shape=(None, None, 16, 17), dtype=tf.float32)
       src_nhwc.output.size_placeholder = {0: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
     with tf_compat.v1.variable_scope("src_nchw"):
       src_nchw = InternalLayer(
         name="src_nchw", network=net,
         output=Data(**{
           "name": "src_nchw_output",
-          "dim": 16,
-          "shape": (16, None, 16),
+          "dim": 17,
+          "shape": (17, None, 16),
           "batch_dim_axis": 0,
           "time_dim_axis": 2,
           "feature_dim_axis": 1,
           "sparse": False}))
-      src_nchw.output.placeholder = tf_compat.v1.placeholder(shape=(None, 16, None, 16), dtype=tf.float32)
+      src_nchw.output.placeholder = tf_compat.v1.placeholder(shape=(None, 17, None, 16), dtype=tf.float32)
       src_nchw.output.size_placeholder = {1: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
 
     pool_size = (5, 5)
@@ -3708,55 +3716,61 @@ def test_pool_layer_NCHW():
     with tf_compat.v1.variable_scope("pool_nhwc_from_nhwc"):
       pool_nhwc_from_nhwc = PoolLayer(
         name="pool_nhwc_from_nhwc", network=net, mode="max", pool_size=pool_size,
+        in_spatial_dims=["T", "dim:16"],
         padding=padding, strides=strides, use_channel_first=False, sources=[src_nhwc],
         output=PoolLayer.get_out_data_from_opts(name="pool_nhwc_from_nhwc",
                                                 pool_size=pool_size, padding=padding, strides=strides,
+                                                in_spatial_dims=["T", "dim:16"],
                                                 use_channel_first=False,
                                                 network=net, sources=[src_nhwc]))
     with tf_compat.v1.variable_scope("pool_nchw_from_nhwc"):
       pool_nchw_from_nhwc = PoolLayer(
         name="pool_nchw_from_nhwc", network=net, mode="max", pool_size=pool_size,
+        in_spatial_dims=["T", "dim:16"],
         padding=padding, strides=strides, use_channel_first=True, sources=[src_nhwc],
         output=PoolLayer.get_out_data_from_opts(name="pool_nchw_from_nhwc",
                                                 pool_size=pool_size, padding=padding, strides=strides,
+                                                in_spatial_dims=["T", "dim:16"],
                                                 use_channel_first=True,
                                                 network=net, sources=[src_nhwc]))
     with tf_compat.v1.variable_scope("pool_nchw_from_nchw"):
       pool_nchw_from_nchw = PoolLayer(
         name="pool_nchw_from_nchw", network=net, mode="max", pool_size=pool_size,
+        in_spatial_dims=["T", "dim:16"],
         padding=padding, strides=strides, use_channel_first=True, sources=[src_nchw],
         output=PoolLayer.get_out_data_from_opts(name="pool_nchw_from_nchw",
                                                 pool_size=pool_size, padding=padding, strides=strides,
+                                                in_spatial_dims=["T", "dim:16"],
                                                 use_channel_first=True,
                                                 network=net, sources=[src_nchw]))
     tf_compat.v1.global_variables_initializer().run()
     out, seq_lens = session.run([pool_nhwc_from_nhwc.output.placeholder,
                                  pool_nhwc_from_nhwc.output.get_sequence_lengths()],
-                                feed_dict={src_nhwc.output.placeholder: np.random.rand(10, 11, 16, 16),
+                                feed_dict={src_nhwc.output.placeholder: np.random.rand(10, 11, 16, 17),
                                            src_nhwc.output.get_sequence_lengths(): np.full(shape=(10,), fill_value=11)}
                                 )
     print(out.shape)
-    assert_equal(out.shape, (10, 7, 6, 16))
+    assert_equal(out.shape, (10, 7, 6, 17))
     print(seq_lens)
     out, seq_lens = session.run([pool_nchw_from_nhwc.output.placeholder,
                                  pool_nchw_from_nhwc.output.get_sequence_lengths()],
-                                feed_dict={src_nhwc.output.placeholder: np.random.rand(10, 11, 16, 16),
+                                feed_dict={src_nhwc.output.placeholder: np.random.rand(10, 11, 16, 17),
                                            src_nhwc.output.get_sequence_lengths(): np.full(shape=(10,), fill_value=11)
                                 })
     print(pool_nchw_from_nhwc.output, out.shape)
     if pool_nchw_from_nhwc.output.feature_dim_axis == 1:
-      assert_equal(out.shape, (10, 16, 7, 6))
+      assert_equal(out.shape, (10, 17, 7, 6))
     else:
-      assert_equal(out.shape, (10, 7, 6, 16))
+      assert_equal(out.shape, (10, 7, 6, 17))
     print(seq_lens)
     if tf_util.is_gpu_available():
       out, seq_lens = session.run([pool_nchw_from_nchw.output.placeholder,
                                    pool_nchw_from_nchw.output.get_sequence_lengths()],
-                                  feed_dict={src_nchw.output.placeholder: np.random.rand(10, 16, 11, 16),
+                                  feed_dict={src_nchw.output.placeholder: np.random.rand(10, 17, 11, 16),
                                              src_nchw.output.get_sequence_lengths(): np.full(shape=(10,), fill_value=11)
                                   })
       print(out.shape)
-      assert_equal(out.shape, (10, 16, 7, 6))
+      assert_equal(out.shape, (10, 17, 7, 6))
       print(seq_lens)
 
 
@@ -3776,6 +3790,7 @@ def test_TransposedConvLayer_2d_simple():
       "output": {  # [B,D',T,2]
         'class': 'transposed_conv', 'from': 'Unflatten',
         'activation': None, 'with_bias': True,
+        "in_spatial_dims": ("T", "dim:1"),
         'n_out': n_out, 'filter_size': (1, 2), 'strides': (1, 1),
         'padding': 'valid', 'output_padding': (0, 0), 'remove_padding': (0, 0)},
     })
@@ -3805,6 +3820,7 @@ def test_TransposedConvLayer_2d_2x2():
       "output": {  # [B,D',T,2]
         'class': 'transposed_conv', 'from': 'Unflatten',
         'activation': None, 'with_bias': True,
+        "in_spatial_dims": ("T", "dim:1"),
         'n_out': n_out, 'filter_size': (2, 2), 'strides': (2, 2),
         'padding': 'valid', 'output_padding': (0, 0), 'remove_padding': (0, 0)},
     })

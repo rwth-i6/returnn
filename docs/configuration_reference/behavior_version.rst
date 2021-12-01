@@ -22,6 +22,30 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 8 (2021-11-30)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:class:`ConvLayer`, :class:`PoolLayer` and :class:`TransposedConvLayer`
+require ``in_spatial_dims`` to be specified
+when the input has more than one spatial dimension
+(which implies that you perform 2D or 3D convolution or pooling).
+
+This is required to make the order of the spatial axes well defined
+because the input axes could have been reordered in any way before.
+See issue `#594 <https://github.com/rwth-i6/returnn/issues/594>`__.
+
+Usually, you would use :class:`DimensionTag` to specify ``in_spatial_dims``.
+However, to make the transition easier for this specific new behavior,
+you can also use a string description for a dimension.
+So example usages look like::
+
+    enc_dim = DimensionTag(...)
+    dec_dim = DimensionTag(...)
+
+    in_spatial_dims = (enc_dim, dec_tim)
+    in_spatial_dims = ("T", "dim:16")
+    in_spatial_dims = ("stag:encoder", "stag:decoder")
+
 Behavior version 7 (2021-11-29)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

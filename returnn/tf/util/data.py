@@ -2437,6 +2437,9 @@ class Data(object):
 
   def copy_split_feature_dim(self, new_feature_dim):
     """
+    Split it into (new_spatial_dim, new_feat_dim), in that order.
+    This will increase the feature_dim_axis by one.
+
     :param int new_feature_dim: will be the new dim
     :rtype: Data
     """

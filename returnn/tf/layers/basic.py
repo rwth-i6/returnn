@@ -4115,8 +4115,8 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param dict[str,int|str] set_axes:
       This can be used to overwrite the special axes like time_dim_axis or feature_dim_axis.
       For that, use keys "B","T" or "F", and a value via :func:`Data.get_axis_from_description`.
-    :param dict[str|DimensionTag,DimensionTag] set_dim_tags: axis -> new dim tag. assigns new dim tags.
-      If the dim tag is yet undefined, this will not use same_dim_tags_as (declare_same_as)
+    :param dict[str|DimensionTag,DimensionTag]|None set_dim_tags: axis -> new dim tag. assigns new dim tags.
+      If the passed dim tag is yet undefined, this will not use same_dim_tags_as (declare_same_as)
       but create a new dim tag.
       This option is useful for generalized self attention (https://github.com/rwth-i6/returnn/issues/391).
     :param bool enforce_batch_major:
@@ -4189,7 +4189,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
     :param LayerBase|None size_base: similar as size_target
     :param dict[str,int] set_axes:
-    :param dict[str|DimensionTag,DimensionTag] set_dim_tags:
+    :param dict[str|DimensionTag,DimensionTag]|None set_dim_tags:
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
     :param bool|None set_sparse: if bool, set sparse value to this
@@ -4302,7 +4302,7 @@ class ConvLayer(_ConcatInputLayer):
     :param int|tuple[int] dilation_rate: dilation for the spatial dims
     :param int groups: grouped convolution
     :param DimensionTag|None in_dim:
-    :param list[DimensionTag]|None in_spatial_dims:
+    :param list[DimensionTag|str]|None in_spatial_dims:
     :param int|None n_out: number of outgoing features
     :param DimensionTag|None out_dim:
     :param list[DimensionTag]|None out_spatial_dims:
@@ -4353,7 +4353,7 @@ class ConvLayer(_ConcatInputLayer):
       input_data = input_data.copy_with_feature_dim_axis(-1)
       in_spatial_dims_ = input_data.dim_tags[num_batch_dims:-1]
     if in_spatial_dims:
-      assert list(in_spatial_dims_) == list(in_spatial_dims)
+      assert list(in_spatial_dims_) == [input_data.get_dim_tag_from_description(d) for d in in_spatial_dims]
     assert len(in_spatial_dims_) == len(filter_size), (
       "%s: in_spatial_dims %s not matching to filter_size %s" % (self, in_spatial_dims_, filter_size))
     assert input_data.batch_ndim - num_batch_dims - 1 == len(filter_size), (
@@ -4499,13 +4499,24 @@ class ConvLayer(_ConcatInputLayer):
           out_tag.declare_same_as(size_tag)
 
   @classmethod
+  def _check_defined_in_spatial_dims(cls, cond):
+    """
+    :param bool cond:
+    """
+    from returnn.util import BehaviorVersion
+    BehaviorVersion.require(
+      condition=cond,
+      message="Explicitly specify in_spatial_dims when there is more than one spatial dim in the input.",
+      version=8)
+
+  @classmethod
   def transform_input(cls, input_data, network, in_dim=None, in_spatial_dims=None,
                       input_expand_dims=0, input_split_feature_dim=None, input_add_feature_dim=False):
     """
     :param Data input_data:
     :param returnn.tf.network.TFNetwork network:
     :param DimensionTag|None in_dim:
-    :param list[DimensionTag]|None in_spatial_dims:
+    :param list[DimensionTag|str]|None in_spatial_dims:
     :param int input_expand_dims: number of spatial dims to add to the input
     :param None|int input_split_feature_dim: if set, like input_add_feature_dim it will add a new feature dim
       which is of value input_split_feature_dim, and the original input feature dim
@@ -4517,14 +4528,26 @@ class ConvLayer(_ConcatInputLayer):
     """
     assert not input_data.sparse
     assert input_data.have_batch_axis()
+    if input_expand_dims or input_split_feature_dim or input_add_feature_dim:
+      if not in_spatial_dims:
+        # Set it here to allow to handle the extension logic below.
+        if input_data.placeholder is None and not input_data.have_feature_axis():
+          # This is still a template. Ignore errors and make it valid.
+          input_data = input_data.copy_add_feature_dim()
+        in_spatial_dims = [input_data.dim_tags[a] for a in input_data.get_spatial_batch_axes()]
+        cls._check_defined_in_spatial_dims(len(in_spatial_dims) == 1)
     if input_expand_dims:
       for i in range(input_expand_dims):
-        input_data = input_data.copy_add_spatial_dim()
+        dim_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="input_expand_dims:%i" % i, dimension=1)
+        input_data = input_data.copy_add_dim_by_tag(dim_tag, unbroadcast=True)
+        in_spatial_dims.append(dim_tag)
     if input_split_feature_dim:
       # Split the feature dimension.
       input_data = input_data.copy_split_feature_dim(input_split_feature_dim)
+      in_spatial_dims.append(input_data.dim_tags[input_data.feature_dim_axis - 1])
     if input_add_feature_dim:
-      # Add a feature dimension; any other static dims will be used as dynamic dims below.
+      # Add a new feature dimension; the old feature dim becomes a spatial dim.
+      in_spatial_dims.append(input_data.dim_tags[input_data.feature_dim_axis])
       input_data = input_data.copy_add_feature_dim()
     if in_dim:
       assert isinstance(in_dim, DimensionTag)
@@ -4532,8 +4555,9 @@ class ConvLayer(_ConcatInputLayer):
         input_data.feature_dim_axis = input_data.get_axis_from_description(in_dim)
     if in_spatial_dims:
       from returnn.tf.util.data import BatchDim
-      assert all(isinstance(d, DimensionTag) for d in in_spatial_dims)
+      assert all(isinstance(d, (DimensionTag, str)) for d in in_spatial_dims)
       axes = [input_data.get_axis_from_description(d) for d in in_spatial_dims]  # also requires unique dim tags
+      in_spatial_dims = [input_data.dim_tags[a] for a in axes]
       assert sorted(set(axes)) == sorted(axes), (
         "in_spatial_dims %s must be unique but map to %s" % (in_spatial_dims, axes))
       if sorted(axes) != axes:
@@ -4544,7 +4568,7 @@ class ConvLayer(_ConcatInputLayer):
           input_data = input_data.copy_move_axis(old_axis=a, new_axis=first + i)
         axes = [input_data.get_axis_from_description(d) for d in in_spatial_dims]
         assert sorted(axes) == axes
-      assert input_data.feature_dim_axis not in axes
+      assert input_data.feature_dim_axis not in axes, "invalid in_spatial_dims %s" % (in_spatial_dims,)
       expected_dims = {BatchDim, input_data.feature_dim_or_sparse_dim} | set(in_spatial_dims)
       assert len(expected_dims) == 2 + len(in_spatial_dims)
       # There might be more dims in the input than we expect.
@@ -4574,6 +4598,10 @@ class ConvLayer(_ConcatInputLayer):
           input_data = input_data.copy_move_axis(old_axis=a, new_axis=batch_axis_idx)
         batch_axis_idx += 1
       num_batch_dims = batch_axis_idx
+      in_spatial_dims = [
+        d for (i, d) in enumerate(input_data.dim_tags)
+        if i >= num_batch_dims and i != input_data.feature_dim_axis]
+      cls._check_defined_in_spatial_dims(len(in_spatial_dims) <= 1)
     return input_data, num_batch_dims
 
   @classmethod
@@ -4630,7 +4658,7 @@ class ConvLayer(_ConcatInputLayer):
     :param bool input_add_feature_dim:
     :param None|int input_split_feature_dim:
     :param DimensionTag|None in_dim:
-    :param list[DimensionTag]|None in_spatial_dims:
+    :param list[DimensionTag|str]|None in_spatial_dims:
     :param int|None n_out: number of outgoing features
     :param DimensionTag|None out_dim:
     :param list[DimensionTag]|None out_spatial_dims:
@@ -4745,7 +4773,7 @@ class PoolLayer(_ConcatInputLayer):
     :param tuple[int]|int dilation_rate:
     :param tuple[int]|int|None strides: in contrast to tf.nn.pool, the default (if it is None) will be set to pool_size
     :param DimensionTag|None in_dim:
-    :param list[DimensionTag]|None in_spatial_dims:
+    :param list[DimensionTag|str]|None in_spatial_dims:
     :param DimensionTag|None out_dim:
     :param list[DimensionTag]|None out_spatial_dims:
     :param bool use_channel_first: if set, will transform input to NCHW format
@@ -4792,7 +4820,7 @@ class PoolLayer(_ConcatInputLayer):
       input_data = input_data.copy_with_feature_dim_axis(-1)
       in_spatial_dims_ = input_data.dim_tags[num_batch_dims:-1]
     if in_spatial_dims:
-      assert list(in_spatial_dims_) == list(in_spatial_dims)
+      assert list(in_spatial_dims_) == [input_data.get_dim_tag_from_description(d) for d in in_spatial_dims]
     assert len(in_spatial_dims_) == len(pool_size)
     assert input_data.batch_ndim - num_batch_dims - 1 == len(pool_size), (
       "%s: pool-size-dimension does not match the input data. " % self +
@@ -4839,7 +4867,7 @@ class PoolLayer(_ConcatInputLayer):
     :param int|tuple[int]|list[int] dilation_rate:
     :param str padding:
     :param DimensionTag|None in_dim:
-    :param list[DimensionTag]|None in_spatial_dims:
+    :param list[DimensionTag|str]|None in_spatial_dims:
     :param DimensionTag|None out_dim:
     :param list[DimensionTag]|None out_spatial_dims:
     :param bool use_channel_first:
@@ -4941,6 +4969,10 @@ class TransposedConvLayer(_ConcatInputLayer):
     :param str padding: "same" or "valid"
     :param list[int]|int remove_padding:
     :param list[int|None]|int|None output_padding:
+    :param DimensionTag|None in_dim:
+    :param list[DimensionTag|str]|None in_spatial_dims:
+    :param DimensionTag|None out_dim:
+    :param list[DimensionTag]|None out_spatial_dims:
     :param bool with_bias: whether to add a bias. enabled by default.
       Note that the default is different from ConvLayer!
     :param str|None activation:
@@ -4963,6 +4995,10 @@ class TransposedConvLayer(_ConcatInputLayer):
       in_dim=in_dim, in_spatial_dims=in_spatial_dims)
     input_data = self.input_data.copy_with_feature_last()
     spatial_axes = list(range(num_batch_dims, input_data.batch_ndim - 1))
+    if in_spatial_dims:
+      assert (
+        [input_data.dim_tags[a] for a in spatial_axes]
+        == [input_data.get_dim_tag_from_description(d) for d in in_spatial_dims])
     padding = padding.lower()
     if strides is None:
       strides = filter_size
@@ -5138,7 +5174,7 @@ class TransposedConvLayer(_ConcatInputLayer):
     :param DimensionTag|None out_dim:
     :param list[DimensionTag]|None out_spatial_dims:
     :param DimensionTag|None in_dim:
-    :param list[DimensionTag]|None in_spatial_dims:
+    :param list[DimensionTag|str]|None in_spatial_dims:
     :rtype: Data
     """
     input_data = get_concat_sources_data_template(sources)
