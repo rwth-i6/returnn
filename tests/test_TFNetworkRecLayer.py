@@ -3617,19 +3617,19 @@ def test_test_reclayer_optimize_out_onlineblstm():
   def add_lstm(i, direction, src):
     name = "lstm%i_%s" % (i, {1: "fw", -1: "bw"}[direction])
     if direction > 0:
-      network[name] = {"class": "rec", "unit": "lstm", "n_out": lstm_dim, "from": src}
+      network[name] = {"class": "rec", "unit": "nativelstm2", "n_out": lstm_dim, "from": src}
       return name
     network["%s_win" % name] = {
       "class": "window", "window_dim": lstm_window_dim, "window_right": 0, "from": src}  # (B,T,W,D)
     network["%s_rec" % name] = {
-      "class": "rec", "unit": "lstm", "axis": lstm_window_dim, "n_out": lstm_dim, "direction": -1,
+      "class": "rec", "unit": "nativelstm2", "axis": lstm_window_dim, "n_out": lstm_dim, "direction": -1,
       "from": "%s_win" % name}  # (B,T,W,D')
     network["%s_cur" % name] = {
       "class": "slice", "axis": lstm_window_dim, "slice_end": 1, "from": "%s_rec" % name}  # (B,T,1,D')
     network["%s_cursq" % name] = {"class": "squeeze", "axis": "dim:1", "from": "%s_cur" % name}  # (B,T,D')
     return "%s_cursq" % name
 
-  num_layers = 6
+  num_layers = 3
   src = "data:source"
   for i in range(num_layers):
     fwd = add_lstm(i, 1, src)
