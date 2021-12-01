@@ -971,11 +971,20 @@ class RecLayer(_ConcatInputLayer):
 
   def _get_output_native_rec_op(self, cell):
     """
-    :param TFNativeOp.RecSeqCellOp cell:
+    :param returnn.tf.native_op.RecSeqCellOp cell:
     :return: output of shape (time, batch, dim)
     :rtype: tf.Tensor
     """
     from returnn.tf.util.basic import dot, sequence_mask_time_major, directed, to_int32_64, set_param_axes_split_info
+
+    # Some error checking.
+    from returnn.tf import native_op
+    if isinstance(cell, native_op.NativeLstmCell):
+      if self._initial_state is not None:
+        raise Exception(
+          "%s: NativeLstm (v1) has broken (only partial) support for initial_state. "
+          "See here for details: https://github.com/rwth-i6/returnn/issues/813. "
+          "Use 'NativeLstm2' instead." % self)
 
     assert self._max_seq_len is None
     assert self.input_data
