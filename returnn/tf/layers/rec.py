@@ -788,8 +788,10 @@ class RecLayer(_ConcatInputLayer):
         x = cell.get_input_transformed(x)
     if isinstance(cell, rnn_cell.RNNCell):  # e.g. BasicLSTMCell
       if not self.input_data.have_time_axis() or not self.time_dim_tag:
+        assert self._direction in [1, None]
         assert self._rec_previous_layer, "%s: assume in loop with input %s, but no rec info" % (self, self.input_data)
         y, final_state = cell(self.input_data.placeholder, self._initial_state)
+        in_data = None  # mark that we have not used this
       elif self._unroll:
         assert self._max_seq_len is not None, "specify max_seq_len for unroll"
         # We must get x.shape[0] == self._max_seq_len, so pad it.
@@ -831,7 +833,8 @@ class RecLayer(_ConcatInputLayer):
       raise Exception("invalid type: %s" % type(cell))
     if self._direction == -1:
       y = tf_compat.v1.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
-    y = self._post_proc_output_cell_strict(y, in_data=in_data)
+    if in_data:
+      y = self._post_proc_output_cell_strict(y, in_data=in_data)
     return y
 
   @staticmethod
