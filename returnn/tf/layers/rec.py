@@ -83,7 +83,7 @@ class RecLayer(_ConcatInputLayer):
 
   layer_class = "rec"
   recurrent = True
-  _default_lstm_unit = "nativelstm"  # TFNativeOp.NativeLstmCell
+  _default_lstm_unit = "NativeLSTM2"  # TFNativeOp.NativeLstmCell
   SubnetworkRecCell = None  # type: typing.Type[_SubnetworkRecCell]  # set below
 
   def __init__(self,
