@@ -823,7 +823,7 @@ def FeatureDim(description, dimension, **kwargs):
   :param int|None dimension:
   :rtype: Dim
   """
-  return FeatureDim(description, dimension=dimension, **kwargs)
+  return Dim(kind=Dim.Types.Feature, description=description, dimension=dimension, **kwargs)
 
 
 # noinspection PyPep8Naming
@@ -832,7 +832,7 @@ def SpatialDim(description, **kwargs):
   :param str description:
   :rtype: Dim
   """
-  return SpatialDim(description, **kwargs)
+  return Dim(kind=Dim.Types.Spatial, description=description, **kwargs)
 
 
 class _ImplicitDim:
