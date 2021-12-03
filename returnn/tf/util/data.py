@@ -3292,6 +3292,7 @@ class Data(object):
     self._beam = beam
     if self._batch:
       self._batch = self._batch.copy_set_beam(beam=beam)
+      self._adapt_batch_consistent_dim_tags()
 
   @property
   def dim(self):
