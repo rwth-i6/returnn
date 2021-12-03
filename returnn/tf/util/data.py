@@ -827,12 +827,13 @@ def FeatureDim(description, dimension, **kwargs):
 
 
 # noinspection PyPep8Naming
-def SpatialDim(description, **kwargs):
+def SpatialDim(description, dimension=None, **kwargs):
   """
   :param str description:
+  :param int|None dimension:
   :rtype: Dim
   """
-  return Dim(kind=Dim.Types.Spatial, description=description, **kwargs)
+  return Dim(kind=Dim.Types.Spatial, description=description, dimension=dimension, **kwargs)
 
 
 class _ImplicitDim:
