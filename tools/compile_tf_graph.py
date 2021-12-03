@@ -104,9 +104,9 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     output = layer.output.copy()
     output.placeholder = rec_layer.create_state_var(
       name="base_value_%s" % layer_name, initial_value=output.placeholder, data_shape=output)
-    from returnn.tf.util.basic import DimensionTag
+    from returnn.tf.util.basic import Dim
     for i, size in list(output.size_placeholder.items()):
-      dim_tag = DimensionTag.get_tag_from_size_tensor(size)
+      dim_tag = Dim.get_tag_from_size_tensor(size)
       if not dim_tag:
         print("Warning, no defined dim tag on %r, axis %i" % (layer, output.get_batch_axis(i)), file=log.v2)
         dim_tag = output.get_dim_tag(output.get_batch_axis(i))

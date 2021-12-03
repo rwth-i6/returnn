@@ -3,12 +3,8 @@
 from __future__ import division
 
 import _setup_test_env  # noqa
-import logging
-import os
 import tensorflow as tf
-import sys
 from nose.tools import assert_equal, assert_not_equal, assert_is_instance
-import contextlib
 import unittest
 import numpy.testing
 from pprint import pprint
@@ -16,9 +12,9 @@ from returnn.util import better_exchook
 from returnn.config import Config
 from returnn.tf.network import *
 from returnn.tf.layers.basic import *
-from returnn.log import log
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
+from returnn.tf.util.data import Dim, SpatialDim, FeatureDim
 
 print("TF version:", tf.__version__)
 print("Numpy version:", numpy.__version__)
@@ -104,12 +100,12 @@ def test_ExternData_init_from_config_dim_none():
 
 
 def test_ExternData_init_twice_existing_dim_tags():
-  from returnn.tf.util.data import BatchDim
-  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
-  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feature", dimension=10)
+  from returnn.tf.util.data import batch_dim
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("feature", dimension=10)
   config = Config({
     "extern_data": {
-      "data": {"dim_tags": [BatchDim, time_dim, feat_dim]}  # [B,T,D]
+      "data": {"dim_tags": [batch_dim, time_dim, feat_dim]}  # [B,T,D]
     }
   })
   for _ in range(2):
@@ -120,12 +116,12 @@ def test_ExternData_init_twice_existing_dim_tags():
 
 
 def test_LinearLayer():
-  from returnn.tf.util.data import BatchDim
-  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
-  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feature", dimension=5)
+  from returnn.tf.util.data import batch_dim
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("feature", dimension=5)
   config = Config({
     "extern_data": {
-      "data": {"dim_tags": [BatchDim, time_dim, feat_dim]}  # [B,T,D]
+      "data": {"dim_tags": [batch_dim, time_dim, feat_dim]}  # [B,T,D]
     }
   })
   for _ in range(2):
@@ -137,14 +133,14 @@ def test_LinearLayer():
 
 
 def test_LinearLayer_in_dim_spatial():
-  from returnn.tf.util.data import BatchDim
-  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
-  static_spatial_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="static-spatial", dimension=3)
-  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="in-feature", dimension=5)
-  out_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="out-feature", dimension=7)
+  from returnn.tf.util.data import batch_dim
+  time_dim = SpatialDim("time")
+  static_spatial_dim = FeatureDim("static-spatial", dimension=3)
+  feat_dim = FeatureDim("in-feature", dimension=5)
+  out_dim = FeatureDim("out-feature", dimension=7)
   config = Config({
     "extern_data": {
-      "data": {"dim_tags": [BatchDim, time_dim, static_spatial_dim, feat_dim]}  # [B,T,D1,D2]
+      "data": {"dim_tags": [batch_dim, time_dim, static_spatial_dim, feat_dim]}  # [B,T,D1,D2]
     }
   })
   for _ in range(2):
@@ -154,7 +150,7 @@ def test_LinearLayer_in_dim_spatial():
         "output": {"class": "linear", "from": "data", "in_dim": static_spatial_dim, "out_dim": out_dim}})
       layer = net.get_default_output_layer()
       print("Output:", layer.output)
-      assert layer.output.dim_tags_set_implicit == {BatchDim, time_dim, out_dim, feat_dim}
+      assert layer.output.dim_tags_set_implicit == {batch_dim, time_dim, out_dim, feat_dim}
       param = layer.params["W"]
       assert isinstance(param, tf.Variable)
       assert param.shape.as_list() == [static_spatial_dim.dimension, out_dim.dimension]
@@ -163,16 +159,16 @@ def test_LinearLayer_in_dim_spatial():
 
 
 def test_LinearLayer_two_time_dims_allow_broadcast_all_sources():
-  from returnn.tf.util.data import BatchDim
+  from returnn.tf.util.data import batch_dim
   with make_scope() as session:
-    time1_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time1")
-    time2_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time2")
-    feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feature", dimension=5)
-    out_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feature", dimension=3)
+    time1_dim = SpatialDim("time1")
+    time2_dim = SpatialDim("time2")
+    feat_dim = FeatureDim("feature", dimension=5)
+    out_dim = FeatureDim("feature", dimension=3)
     config = Config({
       "extern_data": {
-        "in1": {"dim_tags": [BatchDim, time1_dim, feat_dim]},
-        "in2": {"dim_tags": [BatchDim, time2_dim, feat_dim]},
+        "in1": {"dim_tags": [batch_dim, time1_dim, feat_dim]},
+        "in2": {"dim_tags": [batch_dim, time2_dim, feat_dim]},
       },
     })
     network = TFNetwork(config=config)
@@ -189,7 +185,7 @@ def test_LinearLayer_two_time_dims_allow_broadcast_all_sources():
     network.construct_from_dict({
       "output": {
         "class": "linear", "from": ["data:in1", "data:in2"], "out_dim": out_dim,
-        "out_shape": {BatchDim, time1_dim, time2_dim, out_dim}}})
+        "out_shape": {batch_dim, time1_dim, time2_dim, out_dim}}})
     output = network.get_default_output_layer().output
     assert output.shape == (None, None, 3)
     session.run(tf_compat.v1.global_variables_initializer())
@@ -383,11 +379,11 @@ def test_concat_sources_dim1():
 
 
 def test_concat_new_dim_tag():
-  from returnn.tf.util.data import DimensionTag
+  from returnn.tf.util.data import Dim
   with make_scope():
     n_out = 5
-    time_tag = DimensionTag(DimensionTag.Types.Spatial, "time")
-    new_time_tag = DimensionTag(DimensionTag.Types.Spatial, "new-time")
+    time_tag = Dim(Dim.Types.Spatial, "time")
+    new_time_tag = Dim(Dim.Types.Spatial, "new-time")
     config = Config({
       "debug_print_layer_output_template": True,
       "extern_data": {
@@ -893,8 +889,8 @@ def test_CombineLayer_match_unknown_derived():
     dat1 = Data(name="undefined", shape=(None, 3))
     assert dat1.dim_tags[1].undefined
     dat1_derived_dim_tags = list(dat1.dim_tags)
-    dat1_derived_dim_tags[1] = DimensionTag(
-      kind=DimensionTag.Types.Spatial, description="undefined_derived_dim", derived_from_tag=dat1.dim_tags[1])
+    dat1_derived_dim_tags[1] = Dim(
+      kind=Dim.Types.Spatial, description="undefined_derived_dim", derived_from_tag=dat1.dim_tags[1])
     dat1_derived = Data(name="undefined_derived", dim_tags=dat1_derived_dim_tags)
     assert dat1_derived.dim_tags[1].undefined
     # Create placeholders to have this dyn size clearly defined.
@@ -1132,20 +1128,20 @@ def test_CombineLayer_two_time_dims_first_not_most_generic_with_n_out():
 
 
 def test_CombineLayer_two_time_dims_allow_broadcast_all_sources():
-  from returnn.tf.util.data import BatchDim
+  from returnn.tf.util.data import batch_dim
   with make_scope() as session:
     n_dim = 5
     n_batch = 3
     n_time1 = 7
     n_time2 = 11
-    time1_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time1")
-    time2_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time2")
-    feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feature", dimension=n_dim)
+    time1_dim = SpatialDim("time1")
+    time2_dim = SpatialDim("time2")
+    feat_dim = FeatureDim("feature", dimension=n_dim)
     rnd = numpy.random.RandomState(42)
     config = Config({"debug_print_layer_output_template": True})
     extern_data = ExternData()
-    in1 = Data(name="in1", dim_tags=[BatchDim, time1_dim, feat_dim], auto_create_placeholders=True)
-    in2 = Data(name="in2", dim_tags=[BatchDim, time2_dim, feat_dim], auto_create_placeholders=True)
+    in1 = Data(name="in1", dim_tags=[batch_dim, time1_dim, feat_dim], auto_create_placeholders=True)
+    in2 = Data(name="in2", dim_tags=[batch_dim, time2_dim, feat_dim], auto_create_placeholders=True)
     extern_data.register_data(in1)
     extern_data.register_data(in2)
     print("ExternData all dimension tags (allow_same_feature_dim=True):")
@@ -1164,7 +1160,7 @@ def test_CombineLayer_two_time_dims_allow_broadcast_all_sources():
     network.construct_from_dict({
       "output": {
         "class": "combine", "kind": "add", "from": ["data:in1", "data:in2"],
-        "out_shape": {BatchDim, time1_dim, time2_dim, feat_dim}}})
+        "out_shape": {batch_dim, time1_dim, time2_dim, feat_dim}}})
     output = network.get_default_output_layer().output
     assert output.shape == (None, None, n_dim) and set(output.size_placeholder.keys()) == {0, 1}
     time1_np = numpy.array([n_time1, n_time1 - 3, n_time1 - 2])
@@ -1233,7 +1229,7 @@ def test_CombineLayer_time_broadcast_swapped():
 
 def test_CombineLayer_RangeFromLengthLayer():
   from returnn.tf.util.basic import py_print
-  from returnn.tf.util.data import BatchDim, DimensionTag, ImplicitDynSizeDim
+  from returnn.tf.util.data import batch_dim, Dim, ImplicitDynSizeDim
 
   def _eval_seq_lens(source, **_kwargs):
     # Get some random varying seq lens.
@@ -1241,30 +1237,30 @@ def test_CombineLayer_RangeFromLengthLayer():
     res = py_print(res, ["seq lens", res])
     return res
 
-  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="T")
-  new_time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="T_new")
-  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="F", dimension=13)
+  time_dim = SpatialDim("T")
+  new_time_dim = SpatialDim("T_new")
+  feat_dim = FeatureDim("F", dimension=13)
   net_dict = {
     "data_red1": {
-      "class": "reduce", "from": "data", "axis": "T", "mode": "mean", "out_shape": {BatchDim, feat_dim}},
+      "class": "reduce", "from": "data", "axis": "T", "mode": "mean", "out_shape": {batch_dim, feat_dim}},
     "data_red2": {
-      "class": "reduce", "from": "data_red1", "axis": "F", "mode": "sum", "out_shape": {BatchDim}},
+      "class": "reduce", "from": "data_red1", "axis": "F", "mode": "sum", "out_shape": {batch_dim}},
     "seq_lens": {
       "class": "eval", "from": "data_red2", "eval": _eval_seq_lens,
-      "out_type": {"dtype": "int32"}, "out_shape": {BatchDim}},
+      "out_type": {"dtype": "int32"}, "out_shape": {batch_dim}},
     "range": {
       "class": "range_from_length", "from": "seq_lens", "out_spatial_dim": new_time_dim,
-      "out_shape": {new_time_dim, ImplicitDynSizeDim(BatchDim)}},
+      "out_shape": {new_time_dim, ImplicitDynSizeDim(batch_dim)}},
     "combine": {
       "class": "eval", "from": ["data_red1", "range"],
       "eval": "source(0) + 0.1 * tf.cast(source(1), tf.float32)",
-      "out_shape": {BatchDim, new_time_dim, feat_dim}},
+      "out_shape": {batch_dim, new_time_dim, feat_dim}},
     "output": {"class": "copy", "from": "combine"},
   }
 
   config = Config({
     "debug_print_layer_output_template": True,
-    "extern_data": {"data": {"dim_tags": [BatchDim, time_dim, feat_dim]}},
+    "extern_data": {"data": {"dim_tags": [batch_dim, time_dim, feat_dim]}},
   })
 
   with make_scope() as session:
@@ -1283,8 +1279,8 @@ def test_CombineLayer_RangeFromLengthLayer():
 
 
 def test_CompareLayer_allow_broadcast_all_sources():
-  from returnn.tf.util.data import BatchDim, DimensionTag
-  time_tag = DimensionTag(DimensionTag.Types.Spatial, description="time")
+  from returnn.tf.util.data import batch_dim, Dim
+  time_tag = Dim(Dim.Types.Spatial, description="time")
   with make_scope():
     n_out = 5
     config = Config({
@@ -1298,7 +1294,7 @@ def test_CompareLayer_allow_broadcast_all_sources():
       "range1": {"class": "range_in_axis", "from": "data", "axis": "t"},
       "compare": {
         "class": "compare", "from": ["range0", "range1"], "kind": "equal", "is_output_layer": True,
-        "out_shape": {BatchDim, time_tag}}
+        "out_shape": {batch_dim, time_tag}}
     })
 
 
@@ -1306,10 +1302,10 @@ def test_SwitchLayer_sanity_check():
   """
   https://github.com/rwth-i6/returnn/issues/800
   """
-  from returnn.tf.util.data import DimensionTag
+  from returnn.tf.util.data import Dim
   with make_scope():
     n_out = 5
-    time_tag = DimensionTag(DimensionTag.Types.Spatial, "time")
+    time_tag = Dim(Dim.Types.Spatial, "time")
     config = Config({
       "debug_print_layer_output_template": True,
       "extern_data": {
@@ -1869,12 +1865,12 @@ def test_out_shape():
   # https://github.com/rwth-i6/returnn/issues/706
   # Note: Using SplitDimsLayer would also be nice to test out_shape. Or any layer which creates a new dim.
   # However, for that, we need https://github.com/rwth-i6/returnn/issues/597 first.
-  from returnn.tf.util.data import BatchDim, VerifyOutShapeException
-  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
-  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feature", dimension=10)
+  from returnn.tf.util.data import batch_dim, VerifyOutShapeException
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("feature", dimension=10)
   config = Config({
     "extern_data": {
-      "data": {"dim_tags": [BatchDim, time_dim, feat_dim]}  # [B,T,D]
+      "data": {"dim_tags": [batch_dim, time_dim, feat_dim]}  # [B,T,D]
     }
   })
   with make_scope() as session:
@@ -1882,20 +1878,20 @@ def test_out_shape():
     net.construct_from_dict({
       "output": {
         'class': 'softmax_over_spatial', 'from': 'data',
-        "out_shape": {BatchDim, time_dim, feat_dim}
+        "out_shape": {batch_dim, time_dim, feat_dim}
       }
     })
     out = net.get_default_output_layer().output
     session.run(out.placeholder, feed_dict=make_feed_dict(net.extern_data))
   with make_scope():
-    other_feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="other-feature", dimension=10)
+    other_feat_dim = FeatureDim("other-feature", dimension=10)
     net = TFNetwork(config=config)
     # noinspection PyBroadException
     try:
       net.construct_from_dict({
         "output": {
           'class': 'softmax_over_spatial', 'from': 'data',
-          "out_shape": {BatchDim, time_dim, other_feat_dim}
+          "out_shape": {batch_dim, time_dim, other_feat_dim}
         }
       })
     except VerifyOutShapeException as exc:
@@ -2043,11 +2039,11 @@ def test_MergeDimsLayer_dim_tags():
     input_static_shape = (n_batch, 7, 1, 2, 1)
     src_data.placeholder = tf.constant(rnd.normal(size=input_static_shape).astype("float32"), dtype=tf.float32)
     src_data.size_placeholder = {}
-    from returnn.tf.util.basic import DimensionTag
+    from returnn.tf.util.basic import Dim
     # map axis_wo_batch -> (tag description, dyn_size)
     tag_names_with_dyn_size = {0: ("key-chunk", [4, 2, 3]), 1: ("key-window", [1, 1, 1]), 2: ("att-heads", [2, 2, 2])}
     for axis_wo_batch, (description, dyn_size) in tag_names_with_dyn_size.items():
-      tag = DimensionTag(description=description, kind=DimensionTag.Types.Spatial)
+      tag = Dim(description=description, kind=Dim.Types.Spatial)
       dyn_size = tf.constant(dyn_size)
       tag.set_tag_on_size_tensor(dyn_size)
       src_data.size_placeholder[axis_wo_batch] = dyn_size
@@ -2176,18 +2172,18 @@ def test_MergeDimsLayer_simple_feat():
 
 def test_MergeDimsLayer_2d_dynamic_merge_axis():
   # https://github.com/rwth-i6/returnn/issues/662
-  from returnn.tf.util.data import BatchDim, DimensionTag, ImplicitDynSizeDim
-  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="T")
-  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="F", dimension=5)
+  from returnn.tf.util.data import batch_dim, Dim, ImplicitDynSizeDim
+  time_dim = SpatialDim("T")
+  feat_dim = FeatureDim("F", dimension=5)
   with make_scope() as session:
     config = Config({
       "debug_print_layer_output_template": True,
-      "extern_data": {"data": {"dim_tags": [BatchDim, time_dim, feat_dim]}}})
+      "extern_data": {"data": {"dim_tags": [batch_dim, time_dim, feat_dim]}}})
     net = TFNetwork(config=config, train_flag=True)
     net.construct_from_dict({
-      "start0": {"class": "range_in_axis", "from": "data", "axis": "b", "out_shape": {BatchDim}},
-      "start1": {"class": "range_in_axis", "from": "data", "axis": "t", "out_shape": {time_dim, ImplicitDynSizeDim(BatchDim)}},
-      "start": {"class": "combine", "from": ["start0", "start1"], "kind": "add", "out_shape": {BatchDim, time_dim}},
+      "start0": {"class": "range_in_axis", "from": "data", "axis": "b", "out_shape": {batch_dim}},
+      "start1": {"class": "range_in_axis", "from": "data", "axis": "t", "out_shape": {time_dim, ImplicitDynSizeDim(batch_dim)}},
+      "start": {"class": "combine", "from": ["start0", "start1"], "kind": "add", "out_shape": {batch_dim, time_dim}},
       "slices": {"class": "slice_nd", "from": "data", "start": "start", "size": None},  # [B,T[B],slice[B,T],D]
       "output": {"class": "merge_dims", "from": "slices", "axes": ["f", "stag:slice"]}  # [B,T[B],merge[B,T]]
     })
@@ -2366,9 +2362,9 @@ def test_SwitchLayer_masking():
 
 def test_SwitchLayer_template_const_from():
   net = TFNetwork(extern_data=ExternData())
-  batch_dim = DimensionTag(kind=DimensionTag.Types.Batch, description="batch")
-  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
-  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feature", dimension=2)
+  batch_dim = Dim(kind=Dim.Types.Batch, description="batch")
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("feature", dimension=2)
   # [T]
   condition = InternalLayer(network=net, name="condition", output=Data(
     "condition_output", time_dim_axis=0, feature_dim_axis=None, dim_tags=[time_dim]))
@@ -2521,21 +2517,21 @@ def test_CondLayer_subnetwork_train():
 
 
 def test_ScatterNdLayer_RangeLayer():
-  from returnn.tf.util.data import BatchDim, DimensionTag
+  from returnn.tf.util.data import batch_dim, Dim
   n_batch, n_time, n_ts, n_out = 2, 3, 6, 11
-  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="T")
-  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="F", dimension=7)
-  ts_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="ts", dimension=n_ts)
+  time_dim = SpatialDim("T")
+  feat_dim = FeatureDim("F", dimension=7)
+  ts_dim = SpatialDim("ts", dimension=n_ts)
   rnd = numpy.random.RandomState(42)
   config = Config({
     "debug_print_layer_output_template": True,
-    "extern_data": {"data": {"dim_tags": [BatchDim, time_dim, feat_dim]}}
+    "extern_data": {"data": {"dim_tags": [batch_dim, time_dim, feat_dim]}}
   })
   net_dict = {
     "t": {"class": "eval", "from": [], "eval": "tf.convert_to_tensor([1, 2])",
           "out_type": {"shape": (), "dtype": "int32"}},  # (B,)
     "range": {"class": "range", "limit": n_ts, "out_spatial_dim": ts_dim},  # (Ts,)
-    "add_t": {"class": "combine", "kind": "add", "from": ["t", "range"], "out_shape": {BatchDim, ts_dim}},  # (B,Ts)
+    "add_t": {"class": "combine", "kind": "add", "from": ["t", "range"], "out_shape": {batch_dim, ts_dim}},  # (B,Ts)
     "t_rel_var": {"class": "variable", "shape": (n_ts, n_out), "init": "glorot_uniform"},  # (B,Ts,D)
     "output": {"class": "scatter_nd", "from": "t_rel_var", "position": "add_t", "position_axis": ts_dim,
                "output_dim_via_time_from": "data", "filter_invalid_indices": True}
@@ -2692,24 +2688,24 @@ def test_TileLayer():
 
 
 def test_ScatterNdLayer_RangeLayer_RangeInAxisLayer():
-  from returnn.tf.util.data import BatchDim, DimensionTag, ImplicitDynSizeDim
+  from returnn.tf.util.data import batch_dim, Dim, ImplicitDynSizeDim
   n_batch, n_time, n_ts, n_in, n_out = 2, 3, 6, 7, 11
-  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
-  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="in-feature", dimension=n_in)
-  ts_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="ts", dimension=n_ts)
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("in-feature", dimension=n_in)
+  ts_dim = SpatialDim("ts", dimension=n_ts)
   rnd = numpy.random.RandomState(42)
   config = Config({
     "debug_print_layer_output_template": True,
-    "extern_data": {"data": {"dim_tags": [BatchDim, time_dim, feat_dim]}}
+    "extern_data": {"data": {"dim_tags": [batch_dim, time_dim, feat_dim]}}
   })
   net_dict = {
     "t": {
       "class": "range_in_axis", "axis": "t", "from": "data",
-      "out_shape": {time_dim, ImplicitDynSizeDim(BatchDim)}},  # (T,)
+      "out_shape": {time_dim, ImplicitDynSizeDim(batch_dim)}},  # (T,)
     "range": {"class": "range", "limit": n_ts, "out_spatial_dim": ts_dim},  # (Ts,)
     "add_t": {
       "class": "combine", "kind": "add", "from": ["t", "range"],
-      "out_shape": {time_dim, ts_dim, ImplicitDynSizeDim(BatchDim)}},  # (T,Ts)
+      "out_shape": {time_dim, ts_dim, ImplicitDynSizeDim(batch_dim)}},  # (T,Ts)
     "t_rel_var": {"class": "variable", "shape": (ts_dim, n_out), "init": "glorot_uniform"},  # (Ts,D)
     "output": {"class": "scatter_nd", "from": "t_rel_var", "position": "add_t", "position_axis": ts_dim,
                "output_dim_via_time_from": "data", "filter_invalid_indices": True}  # (T,T,D)
@@ -2790,7 +2786,7 @@ def test_ConvLayer_get_valid_out_dim():
 
 def test_RandIntLayer():
   with make_scope() as session:
-    from returnn.tf.util.data import DimensionTag
+    from returnn.tf.util.data import Dim
     n_out = 5
     config = Config({
       "debug_print_layer_output_template": True,
@@ -2804,8 +2800,8 @@ def test_RandIntLayer():
     size_placeholder = net.extern_data.data["data"].size_placeholder[0]
     input_len = feed[size_placeholder]
     sz = (
-      DimensionTag(description="feature", kind=DimensionTag.Types.Feature, dimension=5),
-      DimensionTag(kind=DimensionTag.Types.Batch),
+      Dim(description="feature", kind=Dim.Types.Feature, dimension=5),
+      Dim(kind=Dim.Types.Batch),
       net.extern_data.data["data"].get_size_dim_tag(0),
       3,
     )
@@ -4151,10 +4147,10 @@ def test_DotLayer2():
 
 
 def test_DotLayer_mask_dyn_seq():
-  batch = DimensionTag(kind=DimensionTag.Types.Batch, description="batch")
-  time = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
-  feat1 = DimensionTag(kind=DimensionTag.Types.Feature, description="feature 1", dimension=3)
-  feat2 = DimensionTag(kind=DimensionTag.Types.Feature, description="feature 2", dimension=5)
+  batch = Dim(kind=Dim.Types.Batch, description="batch")
+  time = SpatialDim("time")
+  feat1 = FeatureDim("feature 1", dimension=3)
+  feat2 = FeatureDim("feature 2", dimension=5)
   config = Config({
     "extern_data": {
       "src1": {"dim_tags": [batch, time, feat1]},
@@ -4182,10 +4178,10 @@ def test_DotLayer_mask_dyn_seq():
 
 
 def test_DotLayer_mask_dyn_seq_after_softmax():
-  batch = DimensionTag(kind=DimensionTag.Types.Batch, description="batch")
-  time = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
-  feat1 = DimensionTag(kind=DimensionTag.Types.Feature, description="feature 1", dimension=3)
-  feat2 = DimensionTag(kind=DimensionTag.Types.Feature, description="feature 2", dimension=5)
+  batch = Dim(kind=Dim.Types.Batch, description="batch")
+  time = SpatialDim("time")
+  feat1 = FeatureDim("feature 1", dimension=3)
+  feat2 = FeatureDim("feature 2", dimension=5)
   config = Config({
     "extern_data": {
       "src1": {"dim_tags": [batch, time, feat1]},
@@ -4214,13 +4210,13 @@ def test_DotLayer_mask_dyn_seq_after_softmax():
 
 
 def test_DotLayer_self_att_dyn_size_ext():
-  batch_dim = DimensionTag(kind=DimensionTag.Types.Batch)
-  heads_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="heads", dimension=8)
-  classes_dim = DimensionTag(kind=DimensionTag.Types.Time, description="classes")
-  keys_dim = DimensionTag(
-    kind=DimensionTag.Types.Spatial, description="keys",
+  batch_dim = Dim(kind=Dim.Types.Batch)
+  heads_dim = SpatialDim("heads", dimension=8)
+  classes_dim = Dim(kind=Dim.Types.Time, description="classes")
+  keys_dim = Dim(
+    kind=Dim.Types.Spatial, description="keys",
     dyn_size_ext=Data(name="keys_dyn_size", dim_tags=[classes_dim], dtype="int32", auto_create_placeholders=True))
-  feature_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feature", dimension=64)
+  feature_dim = FeatureDim("feature", dimension=64)
 
   a = Data(name="att_weights", dim_tags=[batch_dim, heads_dim, classes_dim, keys_dim], auto_create_placeholders=True)
   b = Data(name="att_value", dim_tags=[keys_dim, batch_dim, heads_dim, feature_dim], auto_create_placeholders=True)
@@ -4574,9 +4570,9 @@ def test_LossAsIs_custom_dim():
 
 
 def test_LossLayer_sublayers():
-  from returnn.tf.util.basic import DimensionTag
+  from returnn.tf.util.basic import Dim
   n_in, n_out = 7, 11
-  time_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
+  time_tag = SpatialDim("time")
 
   config = Config({
     "extern_data": {

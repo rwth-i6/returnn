@@ -455,9 +455,9 @@ class MultiChannelMultiResolutionStftLayer(_ConcatInputLayer):
          (nr_of_full_frames - 1) * self._frame_shift > 0)):
         nf_of_paded_frames = 1
       new_size = nr_of_full_frames + nf_of_paded_frames
-      from ..util.data import DimensionTag
-      DimensionTag(
-        kind=DimensionTag.Types.Spatial, description="MultiChannelMultiResolutionStft",
+      from ..util.data import Dim
+      Dim(
+        kind=Dim.Types.Spatial, description="MultiChannelMultiResolutionStft",
         dyn_size=new_size, batch=self.output.batch,
         src_data=self.output, src_axis=self.output.get_batch_axis(0))
       size_placeholder_dict[0] = new_size

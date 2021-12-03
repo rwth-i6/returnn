@@ -14,7 +14,8 @@ except ImportError:
   from tensorflow.python.ops import rnn_cell
 from returnn.tf.network import LayerNotFound
 from .basic import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template, Loss
-from returnn.tf.util.basic import Data, DimensionTag, SearchBeam, reuse_name_scope, get_random_seed, select_src_beams
+from returnn.tf.util.data import Data, Dim, SpatialDim, FeatureDim, SearchBeam
+from returnn.tf.util.basic import reuse_name_scope
 from returnn.tf.util import basic as tf_util
 from returnn.util.basic import NotSpecified
 from returnn.log import log
@@ -120,7 +121,7 @@ class RecLayer(_ConcatInputLayer):
     :param bool use_global_rec_step_offset:
     :param bool include_eos: for search, whether we should include the frame where "end" is True
     :param bool|None debug:
-    :param DimensionTag|str|None axis:
+    :param Dim|str|None axis:
     """
     super(RecLayer, self).__init__(**kwargs)
     import re
@@ -152,7 +153,7 @@ class RecLayer(_ConcatInputLayer):
       axis_int = self.input_data.get_axis_from_description(axis)
       axis = self.input_data.dim_tags[axis_int]
     if axis:
-      assert isinstance(axis, DimensionTag)
+      assert isinstance(axis, Dim)
     if axis and self.input_data and axis in self.input_data.dim_tags:
       axis_int = self.input_data.get_axis_from_description(axis)
       self.input_data.time_dim_axis = axis_int  # makes some of the following code easier
@@ -326,7 +327,7 @@ class RecLayer(_ConcatInputLayer):
     if source_data and isinstance(time_dim_tag_explicit, str):
       time_dim_tag_explicit = source_data.get_dim_tag_from_description(time_dim_tag_explicit)
     if time_dim_tag_explicit:
-      assert isinstance(time_dim_tag_explicit, DimensionTag)
+      assert isinstance(time_dim_tag_explicit, Dim)
     if source_data and time_dim_tag_explicit and time_dim_tag_explicit in source_data.dim_tags:
       # Make sure it is marked as time dim. This will make it easier in the following.
       source_data.time_dim_axis = source_data.get_axis_from_description(time_dim_tag_explicit)
@@ -359,9 +360,7 @@ class RecLayer(_ConcatInputLayer):
         # However, there are cases such as the RecUnstackLayer which can also define the time dim.
         # Expect that we have a subnet.
         assert isinstance(d.get("unit"), dict)
-        time_dim_tag = DimensionTag(
-          description="dyn-time:%s%s" % (network.get_absolute_name_prefix(), d["_name"]),
-          kind=DimensionTag.Types.Time)
+        time_dim_tag = SpatialDim("dyn-time:%s%s" % (network.get_absolute_name_prefix(), d["_name"]))
     if time_dim_tag_explicit and time_dim_tag:
       time_dim_tag.declare_same_as(time_dim_tag_explicit)
     if not time_dim_tag_explicit:
@@ -413,7 +412,7 @@ class RecLayer(_ConcatInputLayer):
     :param returnn.tf.network.TFNetwork network:
     :param list[LayerBase] sources:
     :param str|dict[str] unit:
-    :param DimensionTag|None axis:
+    :param Dim|None axis:
     :param DimensionTag|None out_dim:
     :param str|LayerBase|list[str|LayerBase] initial_state:
     :rtype: Data
@@ -425,7 +424,7 @@ class RecLayer(_ConcatInputLayer):
       axis_int = source_data.get_axis_from_description(axis)
       axis = source_data.dim_tags[axis_int]
     if axis:
-      assert isinstance(axis, DimensionTag)
+      assert isinstance(axis, Dim)
     if source_data and axis in source_data.dim_tags:
       # This will make it easier in the following.
       source_data.time_dim_axis = source_data.get_axis_from_description(axis)
@@ -457,7 +456,7 @@ class RecLayer(_ConcatInputLayer):
         if n_out is NotSpecified or not n_out:
           assert out_type and "dim" in out_type
           n_out = out_type["dim"]
-        out_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="%s:feature" % name, dimension=n_out)
+        out_dim = FeatureDim("%s:feature" % name, dimension=n_out)
       if out.have_feature_axis():
         out = out.copy_template_replace_dim_tag(axis=out.feature_dim_axis, new_dim_tag=out_dim)
       else:
@@ -503,7 +502,7 @@ class RecLayer(_ConcatInputLayer):
       axis_int = source_data.get_axis_from_description(axis)
       axis = source_data.dim_tags[axis_int]
     if axis:
-      assert isinstance(axis, DimensionTag)
+      assert isinstance(axis, Dim)
       if source_data and axis in source_data.dim_tags:
         return {}
     # We expect to be inside another RecLayer, and should do a single step (like RnnCellLayer).
@@ -1097,7 +1096,7 @@ class _SubnetworkRecCell(object):
     """
     :param dict[str,dict[str]] net_dict: dict for the subnetwork, layer name -> layer dict
     :param Data|None source_data: usually concatenated input from the rec-layer
-    :param DimensionTag time_dim_tag:
+    :param Dim time_dim_tag:
     :param str rec_layer_name:
     :param returnn.tf.network.TFNetwork parent_net:
     :param ((str) -> LayerBase) parent_get_layer:
@@ -1128,7 +1127,7 @@ class _SubnetworkRecCell(object):
       self.net.extern_data.data["source"] = (
         source_data.copy_template_excluding_time_dim().copy_template_set_ctx(control_flow_ctx))
     self.time_dim_tag = time_dim_tag
-    self._time_dim_tags = {time_dim_tag}  # type: typing.Set[DimensionTag]
+    self._time_dim_tags = {time_dim_tag}  # type: typing.Set[Dim]
     if source_data:
       # Maybe the input has a different time dim tag, but we still have new dynamic length here
       # because of custom endings ("end" layer).
@@ -2242,7 +2241,7 @@ class _SubnetworkRecCell(object):
     :return: output of shape (time, batch, dim), search choices
     :rtype: tf.Tensor
     """
-    from returnn.tf.util.basic import check_input_dim, tensor_array_stack, DimensionTag, get_valid_scope_name_from_str
+    from returnn.tf.util.basic import check_input_dim, tensor_array_stack, Dim, get_valid_scope_name_from_str
     assert self.parent_rec_layer
     rec_layer = self.parent_rec_layer
 
@@ -2306,7 +2305,7 @@ class _SubnetworkRecCell(object):
         assert input_seq_len is not None, "length is not defined. provide an 'end' layer"
         fixed_seq_len = input_seq_len
       if fixed_seq_len is not None:
-        time_dim_tag = DimensionTag.get_tag_from_size_tensor(fixed_seq_len)
+        time_dim_tag = Dim.get_tag_from_size_tensor(fixed_seq_len)
         assert time_dim_tag == self.time_dim_tag
         with tf.name_scope("check_seq_len_batch_size"):
           fixed_seq_len = check_input_dim(
@@ -3145,7 +3144,7 @@ class _SubnetworkRecCell(object):
       for choice_ in reversed(choices_seq_until_end_layer):
         src_choice_beams = self.final_acc_tas_dict["choice_%s" % choice_.name].read(
           max_seq_len - 1, name="ta_read_choice")  # (batch, beam) -> beam_in idx
-        seq_len = select_src_beams(seq_len, src_choice_beams)
+        seq_len = tf_util.select_src_beams(seq_len, src_choice_beams)
         assert choice_.output.batch and choice_.output.batch.beam
         assert getattr(seq_len, "_RETURNN_dyn_size_beam", NotSpecified) in (NotSpecified, choice_.output.batch.beam)
         seq_len._RETURNN_dyn_size_beam = choice_.output.batch.beam
@@ -3153,7 +3152,7 @@ class _SubnetworkRecCell(object):
     else:  # not end_layer
       # Here we don't need to resolve anything, as the sequence length is the same for all hyps in the beam.
       # However, beam size for the current output may be different from the "output" layer.
-      tag = DimensionTag.get_tag_from_size_tensor(seq_len)
+      tag = Dim.get_tag_from_size_tensor(seq_len)
       assert tag
       latest_batch = (
         latest_layer_choice.output.batch
@@ -3608,13 +3607,13 @@ class _SubnetworkRecCell(object):
         # Use the output Data from the in-loop layer,
         # as this might have set dyn sizes on dim tags.
         is_out_time_dim = search_choices == self.layer_data_templates["output"].get_search_choices()
-        time_dim_tag = DimensionTag.get_tag_from_size_tensor(resolved_seq_len)
+        time_dim_tag = Dim.get_tag_from_size_tensor(resolved_seq_len)
         if not time_dim_tag:
           if is_out_time_dim:
             time_dim_tag = self.time_dim_tag
           else:
-            time_dim_tag = DimensionTag(
-              kind=DimensionTag.Types.Spatial,
+            time_dim_tag = Dim(
+              kind=Dim.Types.Spatial,
               description="dyn-time:%s/%s" % (self.parent_rec_layer.get_full_ctx_name(), search_choices))
         elif is_out_time_dim:
           self.time_dim_tag.declare_same_as(time_dim_tag)
@@ -4400,7 +4399,7 @@ class RnnCellLayer(_ConcatInputLayer):
     :rtype: Data
     """
     sources_data = Data.get_common_data([src.output for src in sources if src], ignore_feature_dim=True)
-    feat = DimensionTag(kind=DimensionTag.Types.Feature, description="%s:rnn_cell_feat" % name, dimension=n_out)
+    feat = FeatureDim("%s:rnn_cell_feat" % name, dimension=n_out)
     if sources_data and sources_data.have_time_axis():
       dim_tags = (sources_data.get_time_dim_tag(), sources_data.get_batch_dim_tag(), feat)
       batch_dim_axis = 1
@@ -4866,7 +4865,7 @@ class RecUnstackLayer(LayerBase):
     Note that it is allowed to leave both `axis` and `declare_rec_time` unset,
     in case you assign `axis` to the rec layer, and the source here has the same axis (dim tag).
 
-    :param str|DimensionTag|None axis:
+    :param str|Dim|None axis:
     :param bool declare_rec_time:
     """
     axis, declare_rec_time  # noqa  # unused here, used in get_out_data_from_opts
@@ -4884,7 +4883,7 @@ class RecUnstackLayer(LayerBase):
     :param str name:
     :param list[LayerBase] sources:
     :param returnn.tf.network.TFNetwork network:
-    :param str|DimensionTag|None axis:
+    :param str|Dim|None axis:
     :param bool declare_rec_time:
     :rtype: Data
     """
@@ -5293,7 +5292,7 @@ class ChoiceLayer(BaseChoiceLayer):
         # sample from scores
         scores_in = self._get_scores(self.sources[0])  # +log scores, (batch, dim)
         feedback_output = tf_compat.v1.multinomial(
-          scores_in, num_samples=1, seed=get_random_seed())  # (batch, num_samples), int64
+          scores_in, num_samples=1, seed=tf_util.get_random_seed())  # (batch, num_samples), int64
         feedback_output = tf.cast(tf.reshape(feedback_output, [-1]), tf.int32)  # (batch,), int32
 
       gold_mixing_prob = self.scheduled_sampling.get("gold_mixin_prob", False)
@@ -5465,7 +5464,7 @@ class ChoiceLayer(BaseChoiceLayer):
       # the outgoing label was generated from. So choose 'pruned_labels' according to 'src_beams'.
       pruned_labels_src_beam_selected = []
       for index, pruned_labels_ in enumerate(pruned_labels):
-        pruned_labels_src_beam_selected.append(select_src_beams(pruned_labels_, src_beams))
+        pruned_labels_src_beam_selected.append(tf_util.select_src_beams(pruned_labels_, src_beams))
 
       # We can recover the ids for the unflattened shape by using integer division and modulo operations.
       # (similar to numpy.unravel_index())
@@ -5783,7 +5782,7 @@ class DecideLayer(BaseChoiceLayer):
     if length_normalization:
       beam_scores /= tf.cast(tf.reshape(src.output.get_sequence_lengths(), [batch_dim, beam_size]), tf.float32)
     beam_idxs = tf.argmax(beam_scores, axis=1)  # (batch,)
-    from returnn.tf.util.basic import assert_min_tf_version, nd_indices, DimensionTag
+    from returnn.tf.util.basic import assert_min_tf_version, nd_indices, Dim
     assert_min_tf_version((1, 1), "gather_nd")
     beam_idxs_ext = nd_indices(beam_idxs)
     output.placeholder = tf.cond(
@@ -5792,7 +5791,7 @@ class DecideLayer(BaseChoiceLayer):
       lambda: src_output[:, 0], name="cond_not_empty")  # (batch, [time], [dim])
     output.size_placeholder = {}
     for i, size in src_data.size_placeholder.items():
-      tag = DimensionTag.get_tag_from_size_tensor(size)
+      tag = Dim.get_tag_from_size_tensor(size)
       assert tag
       tag = tag.get_for_batch_ctx(batch=output.batch, ctx=output.control_flow_ctx)
       if tag.dyn_size is None:
@@ -6744,14 +6743,14 @@ class SelfAttentionLayer(_ConcatInputLayer):
     import numpy
     out = sources[0].output.copy_as_batch_major().copy(name="%s_output" % name)
     batch_dim_tag = out.dim_tags[out.batch_dim_axis]
-    feat_tag = DimensionTag(kind=DimensionTag.Types.Feature, description="%s_self_att_feat" % name, dimension=n_out)
+    feat_tag = FeatureDim("%s_self_att_feat" % name, dimension=n_out)
     if len(out.shape_dense) >= 2:
       if all(out.shape_dense[:-1]):
         time_dim = numpy.prod(out.shape[:-1])
       else:
         time_dim = None
-      time_tag = DimensionTag(
-        kind=DimensionTag.Types.Spatial, description="%s_self_att_time" % name, dimension=time_dim)
+      time_tag = Dim(
+        kind=Dim.Types.Spatial, description="%s_self_att_time" % name, dimension=time_dim)
       dim_tags = (batch_dim_tag, time_tag, feat_tag)
     else:
       dim_tags = (batch_dim_tag, feat_tag)
@@ -7098,7 +7097,7 @@ class KenLmStateLayer(_ConcatInputLayer):
     :param bool dense_output:
     :rtype: Data
     """
-    from ..util.data import DimensionTag
+    from ..util.data import Dim
     data = get_concat_sources_data_template(sources)
     dtype = tf.as_dtype(data.dtype)
     assert isinstance(dtype, tf.DType)
@@ -7109,8 +7108,8 @@ class KenLmStateLayer(_ConcatInputLayer):
     if dense_output:
       from returnn.datasets.util.vocabulary import Vocabulary
       vocab = Vocabulary(vocab_file=vocab_file, unknown_label=vocab_unknown_label)
-      tag = DimensionTag(
-        kind=DimensionTag.Types.Feature, description="%s_ken_lm_vocab" % name,
+      tag = Dim(
+        kind=Dim.Types.Feature, description="%s_ken_lm_vocab" % name,
         dimension=vocab.num_labels, vocab=vocab)
       data = data.copy_add_dim_by_tag(tag, axis=-1, unbroadcast=True)
     return data
@@ -7152,7 +7151,7 @@ class EditDistanceTableLayer(LayerBase):
     """
     :param bool debug:
     :param int|None blank_idx: if given, will keep the same row for this source label
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     """
     super(EditDistanceTableLayer, self).__init__(out_dim=out_dim, **kwargs)
     assert len(self.sources) == 1, "%s: expects exactly a single source" % self
@@ -7264,7 +7263,7 @@ class EditDistanceTableLayer(LayerBase):
     :param str target:
     :param dict[str,LayerBase] _target_layers:
     :param int|None blank_idx:
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     :rtype: Data
     """
     assert len(sources) == 1, "%s %r: expects exactly a single source" % (cls.__name__, name)
@@ -7274,7 +7273,7 @@ class EditDistanceTableLayer(LayerBase):
     assert target_data, "target %r not found?" % target
     in_dim = target_data.get_time_dim_tag()
     if not out_dim:
-      out_dim = DimensionTag(
+      out_dim = Dim(
         kind=in_dim.kind, description="%s:edit_dist_table" % name,
         dimension=in_dim.dimension + 1 if in_dim.dimension else None,
         batch=in_dim.batch, control_flow_ctx=in_dim.control_flow_ctx)
@@ -7282,7 +7281,7 @@ class EditDistanceTableLayer(LayerBase):
       func=tf_util.simplify_add, key=tf_util.simplify_add,
       dim_tag_desc="%s:edit_dist_table" % name,
       a=target_data.get_sequence_lengths(), b=1)
-    tag = DimensionTag.get_tag_from_size_tensor(seq_len)
+    tag = Dim.get_tag_from_size_tensor(seq_len)
     if tag:
       tag.declare_same_as(out_dim)
     else:
@@ -7431,7 +7430,7 @@ class MaskedComputationLayer(LayerBase):
     :param LayerBase|None mask:
     :param dict[str] unit:
     :param LayerBase|None masked_from:
-    :param DimensionTag|None out_spatial_dim:
+    :param Dim|None out_spatial_dim:
     :param type[LayerBase] _layer_class:
     :param dict[str] _layer_desc:
     :param dict[str,LayerBase]|None _parent_layer_cache:
@@ -7642,7 +7641,7 @@ class MaskedComputationLayer(LayerBase):
     :param list[LayerBase] sources:
     :param LayerBase masked_from:
     :param dict[str] unit:
-    :param DimensionTag|None out_spatial_dim:
+    :param Dim|None out_spatial_dim:
     :param (str)->LayerBase get_layer:
     :param dict[str,LayerBase]|None parent_layer_cache:
     :return: layer_class, layer_desc
@@ -7675,8 +7674,8 @@ class MaskedComputationLayer(LayerBase):
         source_data = source.output.copy_template().copy_as_time_major()
         # Create own time dim tag, to make sure we have some own custom.
         if not out_spatial_dim:
-          out_spatial_dim = DimensionTag(
-            kind=DimensionTag.Types.Spatial, description="%s:masked:time" % name,
+          out_spatial_dim = Dim(
+            kind=Dim.Types.Spatial, description="%s:masked:time" % name,
             derived_from_tag=source_data.get_time_dim_tag())
         source_data = source_data.copy_template_replace_dim_tag(
           axis=0,
@@ -7731,7 +7730,7 @@ class MaskedComputationLayer(LayerBase):
   def get_out_data_from_opts(cls, network, out_spatial_dim=None, **kwargs):
     """
     :param returnn.tf.network.TFNetwork network:
-    :param DimensionTag|None out_spatial_dim:
+    :param Dim|None out_spatial_dim:
     :rtype: Data
     """
     out_spatial_dim  # noqa  # handled in transform_config_dict
@@ -9093,18 +9092,18 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
     """
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
     # The result will be without batch dim.
-    feature_dim_tag = DimensionTag(
-      kind=DimensionTag.Types.Feature, description="%s_rel_pos_enc_feat" % name, dimension=n_out)
+    feature_dim_tag = Dim(
+      kind=Dim.Types.Feature, description="%s_rel_pos_enc_feat" % name, dimension=n_out)
     if data.have_time_axis():
       time_dim_tag = data.get_time_dim_tag()
       # TODO using same dim tag twice will not be supported at some future point...
       data = data.copy_template_new_dim_tags((time_dim_tag, time_dim_tag, feature_dim_tag))
     else:
       # length will be ``network.get_rec_step_index() + 1``.
-      dummy_dim_tag = DimensionTag(
-        kind=DimensionTag.Types.Spatial, description="%s_rel_pos_enc_dummy" % name, dimension=1)
-      time_dim_tag = DimensionTag(
-        kind=DimensionTag.Types.Spatial, description="%s_rel_pos_enc_time" % name, dimension=None)
+      dummy_dim_tag = Dim(
+        kind=Dim.Types.Spatial, description="%s_rel_pos_enc_dummy" % name, dimension=1)
+      time_dim_tag = Dim(
+        kind=Dim.Types.Spatial, description="%s_rel_pos_enc_time" % name, dimension=None)
       data = data.copy_template_new_dim_tags((dummy_dim_tag, time_dim_tag, feature_dim_tag))
     return data
 
@@ -9158,7 +9157,7 @@ class CumConcatLayer(_ConcatInputLayer):
 
   def __init__(self, out_spatial_dim, **kwargs):
     """
-    :param DimensionTag out_spatial_dim:
+    :param Dim out_spatial_dim:
     """
     super(CumConcatLayer, self).__init__(**kwargs)
     rec_layer = self.network.get_rec_parent_layer(inside_loop=False)
@@ -9211,7 +9210,7 @@ class CumConcatLayer(_ConcatInputLayer):
     :param str name:
     :param returnn.tf.network.TFNetwork network:
     :param list[LayerBase] sources:
-    :param DimensionTag out_spatial_dim:
+    :param Dim out_spatial_dim:
     :rtype: Data
     """
     input_data = get_concat_sources_data_template(sources, name="%s_output" % name)
@@ -9246,7 +9245,7 @@ class CumConcatLayer(_ConcatInputLayer):
     :param returnn.tf.layers.rec.RecLayer|LayerBase rec_layer:
     :param list[LayerBase] sources:
     :param Data output:
-    :param DimensionTag out_spatial_dim:
+    :param Dim out_spatial_dim:
     :rtype: dict[str,tf.Tensor]
     """
     if network.is_inside_rec_layer():

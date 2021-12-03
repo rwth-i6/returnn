@@ -4,11 +4,9 @@
 from __future__ import print_function
 
 import _setup_test_env  # noqa
-import os
-import logging
 import tensorflow as tf
-import sys
 from returnn.tf.util.basic import *
+from returnn.tf.util.data import SpatialDim, FeatureDim
 import returnn.tf.compat as tf_compat
 from nose.tools import assert_equal, assert_not_equal, assert_is_instance, assert_is, assert_in, assert_true
 from numpy.testing.utils import assert_almost_equal, assert_allclose
@@ -688,7 +686,7 @@ def test_Data_get_common_data_copy_compatible_to_different_time_dim_different_st
   assert common_data.batch_ndim == 5
   assert_equal(common_data.get_size_dim_tag(0), a.get_time_dim_tag())
   assert_equal(common_data.get_size_dim_tag(1), b.get_time_dim_tag())
-  common_tags, _ = DimensionTag.get_all_dimension_tags([common_data])
+  common_tags, _ = Dim.get_all_dimension_tags([common_data])
   print("common dim tags:")
   pprint(common_tags)
   assert len(common_tags) == common_data.batch_ndim  # all unique
@@ -1102,7 +1100,7 @@ def test_Data_copy_add_spatial_dim_before_time():
 
 def test_Data_copy_add_dim_by_tag_unbroadcast_feature_non_specific_feature_dim():
   d = Data(name='t', shape=(None,), dtype='int32', batch_dim_axis=None, time_dim_axis=None, feature_dim_axis=None)
-  tag = DimensionTag(kind=DimensionTag.Types.Feature, description='feature:r', dimension=6)
+  tag = FeatureDim('feature:r', dimension=6)
   d2 = d.copy_add_dim_by_tag(tag, unbroadcast=True)
   print("d2:", d2)
   assert d2.batch_shape == (None, 6)
@@ -1111,7 +1109,7 @@ def test_Data_copy_add_dim_by_tag_unbroadcast_feature_non_specific_feature_dim()
 
 def test_Data_copy_add_dim_by_tag_unbroadcast_spatial_sparse():
   d = Data(name='t', shape=(None,), dtype='int32', sparse=True, dim=None, batch_dim_axis=None, feature_dim_axis=None)
-  tag = DimensionTag(kind=DimensionTag.Types.Spatial, description='spatial:0:range', dimension=6)
+  tag = SpatialDim('spatial:0:range', dimension=6)
   d2 = d.copy_add_dim_by_tag(tag, unbroadcast=True)
   print("d2:", d2)
   assert d2.batch_shape == (None, 6)
@@ -1121,14 +1119,14 @@ def test_Data_copy_add_dim_by_tag_unbroadcast_spatial_sparse():
 
 def test_Data_copy_add_dim_by_tag_unbroadcast_spatial():
   d = Data(name='ts', shape=(None,), time_dim_axis=None)
-  tag = DimensionTag(kind=DimensionTag.Types.Spatial, description='spatial:0:ts', dimension=6)
+  tag = SpatialDim('spatial:0:ts', dimension=6)
   d2 = d.copy_add_dim_by_tag(tag, unbroadcast=True, axis=-1)
   assert d2.shape == (None, 6)
 
 
 def test_Data_copy_add_dim_by_tag_sparse_unbroadcast_feature():
   d = Data(name='t', shape=(), dtype='int32', sparse=True, dim=None, time_dim_axis=None)
-  tag = DimensionTag(kind=DimensionTag.Types.Feature, description='feature:t', dimension=6)
+  tag = FeatureDim('feature:t', dimension=6)
   d2 = d.copy_add_dim_by_tag(tag, unbroadcast=True)
   # The feature axis should become a spatial axis in this case.
   assert d2.shape == (6,) and d2.sparse and d2.dim is None and d2.feature_dim_axis is None
