@@ -14,8 +14,9 @@ import typing
 from returnn.log import log
 from returnn.tf.layers.basic import LayerBase, get_layer_class
 import returnn.tf.compat as tf_compat
+from returnn.tf.util.basic import reuse_name_scope
 import returnn.tf.util.basic as tf_util
-from returnn.tf.util.basic import Data, DimensionTag, reuse_name_scope, VariableAssigner
+from returnn.tf.util.data import Data, Dim
 from returnn.util import basic as util
 
 
@@ -290,9 +291,9 @@ class ExternData(object):
   def get_all_dimension_tags(self, allow_same_feature_dim=False):
     """
     :param bool allow_same_feature_dim:
-    :rtype: list[DimensionTag]
+    :rtype: list[Dim]
     """
-    tags, _ = DimensionTag.get_all_dimension_tags(
+    tags, _ = Dim.get_all_dimension_tags(
       [data for _, data in self.get_sorted_data_items()],
       dict(allow_same_feature_dim=allow_same_feature_dim))
     return tags
@@ -374,7 +375,7 @@ class TFNetwork(object):
     :param TFNetwork|None extra_parent_net: we are on the same level (not really a child),
       but an "extra" net of extra_parent_net
     :param str|None extra_name_prefix:
-    :param DimensionTag|None inside_rec_time_dim: dim tag of outer rec layer, when run inside the loop (not optimized)
+    :param Dim|None inside_rec_time_dim: dim tag of outer rec layer, when run inside the loop (not optimized)
     :param DimensionTag|None over_rec_time_dim: dim tag of outer rec layer, when optimized out of the loop
     :param set[DimensionTag]|None over_rec_time_dim_subs: outer rec layer, out of loop, potential shorter
     :param returnn.tf.util.data.ControlFlowContext control_flow_ctx:
@@ -472,7 +473,7 @@ class TFNetwork(object):
     self.extra_vars_to_save = []  # type: typing.List[tf.Variable]
     self.recurrent = False
     self._assigner_cache = {}  # type: typing.Dict[tf.Variable,VariableAssigner]
-    self.concat_sources_dropout_cache = {}  # type: typing.Dict[typing.Tuple[typing.Tuple[LayerBase,...],DimensionTag,float,typing.Optional[typing.Tuple[typing.Optional[int],...]]],Data]  # nopep8
+    self.concat_sources_dropout_cache = {}  # type: typing.Dict[typing.Tuple[typing.Tuple[LayerBase,...],Dim,float,typing.Optional[typing.Tuple[typing.Optional[int],...]]],Data]  # nopep8
     self._merge_all_summaries = None  # type: typing.Optional[tf.Tensor]
     self._graph_reset_callbacks = []  # type: typing.List[typing.Callable]
     self._run_opts = {}  # type: typing.Dict[str]
@@ -1687,7 +1688,7 @@ class TFNetwork(object):
     if var in self._assigner_cache:
       return self._assigner_cache[var]
     with reuse_name_scope("var_assigner"):
-      assigner = VariableAssigner(var)
+      assigner = tf_util.VariableAssigner(var)
     self._assigner_cache[var] = assigner
     return assigner
 
@@ -2200,7 +2201,7 @@ class TFNetwork(object):
     :param bool inside_loop: only True if we are inside the loop of the most recent rec layer
     :return: when the net is inside a rec loop (:class:`RecLayer` and not optimized out of the loop),
       this returns the dim tag the rec layer iterates over
-    :rtype: DimensionTag|None
+    :rtype: Dim|None
     """
     if self._inside_rec_time_dim:
       return self._inside_rec_time_dim
@@ -2224,7 +2225,7 @@ class TFNetwork(object):
   def get_all_rec_time_dims(self):
     """
     :return: all rec time dims, moved out or not, including all parents
-    :rtype: set[DimensionTag]
+    :rtype: set[Dim]
     """
     coll = set()
     net = self
@@ -3647,7 +3648,7 @@ class CustomCheckpointLoader:
       :param tf.compat.v1.Session session:
       """
       if self.value is not None:
-        VariableAssigner(var=var).assign(value=self.value, session=session)
+        tf_util.VariableAssigner(var=var).assign(value=self.value, session=session)
       else:
         self.custom_param_importer.assign_var(var=var, session=session)
 

@@ -16,7 +16,7 @@ import typing
 from returnn.util.basic import NotSpecified, NativeCodeCompiler
 import returnn.tf.compat as tf_compat
 # noinspection PyUnresolvedReferences
-from .data import Data, SearchBeam, DimensionTag
+from .data import Data, SearchBeam, Dim
 
 
 class CollectionKeys:
@@ -214,7 +214,7 @@ def copy_with_new_split_axes(old_axis_splits, new_axis_splits, old_values, new_v
 def get_padding_info_dict_ref(x):
   """
   :param tf.Tensor x:
-  :rtype: dict[DimensionTag,float|int]
+  :rtype: dict[Dim,float|int]
   """
   _attr = "RETURNN_attr_padding_value_info"
   if hasattr(x, _attr):
@@ -231,7 +231,7 @@ def set_padding_info(x, dim, pad_value):
   Stores the information what kind of padding value to expect after masking in the given dynamic dim.
 
   :param tf.Tensor x:
-  :param returnn.tf.util.data.DimensionTag dim: dynamic seq len axis
+  :param returnn.tf.util.data.Dim dim: dynamic seq len axis
   :param float|int pad_value:
   """
   d = get_padding_info_dict_ref(x)
@@ -4564,7 +4564,7 @@ def simplify_nonzero_seq_length(x):
   :return: max(x, 0), or simplified if possible
   :rtype: tf.Tensor|int|float|numpy.ndarray
   """
-  dim_tag = DimensionTag.get_tag_from_size_tensor(x)
+  dim_tag = Dim.get_tag_from_size_tensor(x)
   if dim_tag:
     return x  # we already now that it is positive
   import numpy
@@ -4601,7 +4601,7 @@ def new_seq_len(func, key, dim_tag_desc, **kwargs):
   :return: the new sequence length, calculated by func(**kwargs)
   :rtype: tf.Tensor
   """
-  from .data import DimensionTag
+  from .data import Dim
 
   def _get_main_seq_len():
     """
@@ -4609,7 +4609,7 @@ def new_seq_len(func, key, dim_tag_desc, **kwargs):
     :rtype: tf.Tensor
     """
     for _, v in sorted(kwargs.items()):
-      tag = DimensionTag.get_tag_from_size_tensor(v)
+      tag = Dim.get_tag_from_size_tensor(v)
       if tag and (tag.dyn_size is not None or tag.get_same_base().dyn_size is not None):
         return v
     raise Exception("Not expected to not get any seq len. %s, %s, %s" % (func, key, kwargs))
@@ -4617,7 +4617,7 @@ def new_seq_len(func, key, dim_tag_desc, **kwargs):
   def _maybe_to_base_seq_len(v):
     if not isinstance(v, tf.Tensor):
       return v
-    tag = DimensionTag.get_tag_from_size_tensor(v)
+    tag = Dim.get_tag_from_size_tensor(v)
     if not tag:
       return v
     if tag.get_same_base().dyn_size is not None:
@@ -4627,13 +4627,13 @@ def new_seq_len(func, key, dim_tag_desc, **kwargs):
     return v
 
   in_seq_len = _get_main_seq_len()
-  in_tag = DimensionTag.get_tag_from_size_tensor(in_seq_len)
+  in_tag = Dim.get_tag_from_size_tensor(in_seq_len)
   assert in_tag and in_tag.batch
   # The base_in* is via dim tag same_base.
   # This might be the global batch without beam.
   # But it might also be the same as in*.
   base_in_seq_len = _maybe_to_base_seq_len(in_seq_len)
-  base_in_tag = DimensionTag.get_tag_from_size_tensor(base_in_seq_len)
+  base_in_tag = Dim.get_tag_from_size_tensor(base_in_seq_len)
   assert base_in_tag
   base_kwargs = {k: _maybe_to_base_seq_len(v) for (k, v) in kwargs.items()}
   base_cache_key = (key, tuple(sorted(base_kwargs.items())))
@@ -4642,13 +4642,13 @@ def new_seq_len(func, key, dim_tag_desc, **kwargs):
   cache = TensorCachedComputation(base_in_seq_len, key=base_cache_key)
   if cache.has_cache():
     base_out_seq_len = cache.get_cache()
-    base_out_tag = DimensionTag.get_tag_from_size_tensor(base_out_seq_len)
+    base_out_tag = Dim.get_tag_from_size_tensor(base_out_seq_len)
     assert base_out_tag
   else:
     with same_control_flow_ctx(base_kwargs_tensors):
       base_out_seq_len = func(**base_kwargs)
     cache.set_cache(base_out_seq_len)
-    base_out_tag = DimensionTag(description=dim_tag_desc, kind=DimensionTag.Types.Spatial, batch=base_in_tag.batch)
+    base_out_tag = Dim(description=dim_tag_desc, kind=Dim.Types.Spatial, batch=base_in_tag.batch)
     base_out_tag.set_tag_on_size_tensor(base_out_seq_len)
 
   assert base_out_tag.batch
@@ -6825,7 +6825,7 @@ def safe_deep_copy(obj):
     # Common TF types.
     tf.Tensor, tf.Operation, tf.Variable, tf.Graph, tf_compat.v1.Session,
     # Our own types, which should not be copied.
-    DimensionTag]
+    Dim]
   return deepcopy(obj, stop_types=stop_types)
 
 
@@ -6980,7 +6980,7 @@ class FetchHelper:
 
 def is_axis_from_description_recurrent(axis, network, data):
   """
-  :param str|DimensionTag axis:
+  :param str|Dim axis:
   :param returnn.tf.network.TFNetwork network:
   :param Data data:
   :rtype: bool
@@ -6989,6 +6989,6 @@ def is_axis_from_description_recurrent(axis, network, data):
     return False
   if isinstance(axis, str) and axis.lower() == "t" and data.time_dim_axis is None:  # legacy case
     return True
-  if isinstance(axis, DimensionTag) and axis == network.get_inside_rec_time_dim(inside_loop=True):
+  if isinstance(axis, Dim) and axis == network.get_inside_rec_time_dim(inside_loop=True):
     return True
   return False

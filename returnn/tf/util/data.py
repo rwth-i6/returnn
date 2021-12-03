@@ -16,7 +16,7 @@ from returnn.util.basic import NotSpecified, Entity
 import returnn.tf.compat as tf_compat
 
 
-class DimensionTag(object):
+class Dim(object):
   """
   This identifies one axis/dimension, like a time-dimension, etc.
   This can be used by :class:`Data`. See :func:`Data.get_dim_tag`.
@@ -55,7 +55,7 @@ class DimensionTag(object):
     :param tf.Tensor|None dyn_size: e.g. seq_len, (batch,)
     :param Data|None dyn_size_ext: seq_len or extended
     :param bool undefined: When this is specified as `None` by the user via `shape`.
-    :param DimensionTag|None derived_from_tag:
+    :param Dim|None derived_from_tag:
       Whether this new tag is reduced, down/up sampled, padded etc from this given other tag.
       In situations where dim tags are being matched (Data.get_common_data),
       the behavior is to consider them as equal,
@@ -70,7 +70,7 @@ class DimensionTag(object):
     self.description = description
     self.dimension = dimension
     self._vocab = vocab
-    self.same_as = None  # type: typing.Optional[DimensionTag]
+    self.same_as = None  # type: typing.Optional[Dim]
     self._same_as_tb = None  # type: typing.Optional[traceback.StackSummary]  # for debugging
     self.derived_from_tag = derived_from_tag
     if src_data:
@@ -90,7 +90,7 @@ class DimensionTag(object):
     self._undefined = undefined
     # We can have different tag variants per batch info (e.g. with beam), or per control flow ctx.
     # They each have same_as = self. The same_base should have the base (global) batch info.
-    self._same_for_batch_ctx = {}  # type: typing.Dict[typing.Tuple[BatchInfo,typing.Optional[ControlFlowContext]],DimensionTag]  # nopep8
+    self._same_for_batch_ctx = {}  # type: typing.Dict[typing.Tuple[BatchInfo,typing.Optional[ControlFlowContext]],Dim]  # nopep8
     if dyn_size is not None:
       assert not dyn_size_ext
       self.dyn_size = dyn_size
@@ -121,9 +121,9 @@ class DimensionTag(object):
     """
     :param Entity|None kind: if set, overwrites self.kind
     :return: copy, maybe as new kind. setting same_as to self
-    :rtype: DimensionTag
+    :rtype: Dim
     """
-    tag = DimensionTag(
+    tag = Dim(
       kind=kind or self.kind, description=self.description,
       dimension=self.dimension, dyn_size_ext=self.dyn_size_ext,
       batch=self.batch,
@@ -208,7 +208,7 @@ class DimensionTag(object):
     :param BatchInfo batch:
     :param ControlFlowContext|None ctx:
     :param bool allow_none:
-    :rtype: DimensionTag|None
+    :rtype: Dim|None
     """
     if self.batch == batch and self.control_flow_ctx == ctx and self.dyn_size_ext:
       self._validate_in_current_graph()
@@ -219,7 +219,7 @@ class DimensionTag(object):
       # We ignore the ctx for the batch dim currently.
       if self.batch == batch:
         return self
-      return DimensionTag(kind=DimensionTag.Types.Batch, description="batch:%s" % batch.short_repr(), batch=batch)
+      return Dim(kind=Dim.Types.Batch, description="batch:%s" % batch.short_repr(), batch=batch)
     if self.dimension is not None:
       # If static dim, no effect.
       assert not self.batch
@@ -286,7 +286,7 @@ class DimensionTag(object):
           dyn_size_ext.placeholder._RETURNN_beam_expanded_base_data = beam_expanded_base_data
     if not dyn_size_ext and allow_none:
       return None
-    dim_tag = DimensionTag(
+    dim_tag = Dim(
       kind=self.kind, description=self.description, dimension=self.dimension,
       batch=batch, control_flow_ctx=dyn_size_ext.control_flow_ctx if dyn_size_ext else ctx,
       dyn_size_ext=dyn_size_ext)
@@ -351,7 +351,7 @@ class DimensionTag(object):
       name=("%s:dyn_size" % self.description) if self.description else dyn_size.op.name,
       dtype=Data.size_dtype, placeholder=dyn_size, shape=(), batch_dim_axis=0,
       batch=self.batch, beam=beam, control_flow_ctx=self.control_flow_ctx)
-    other = DimensionTag.get_tag_from_size_tensor(dyn_size)
+    other = Dim.get_tag_from_size_tensor(dyn_size)
     if other:
       self.declare_same_as(other)
     else:
@@ -362,21 +362,21 @@ class DimensionTag(object):
     :return: whether this dim tag is of kind batch
     :rtype: bool
     """
-    return self.kind == DimensionTag.Types.Batch
+    return self.kind == Dim.Types.Batch
 
   def is_feature_dim(self):
     """
     :return: whether this dim tag is of kind feature
     :rtype: bool
     """
-    return self.kind == DimensionTag.Types.Feature
+    return self.kind == Dim.Types.Feature
 
   def is_spatial_dim(self):
     """
     :return: whether this dim tag is of kind spatial
     :rtype: bool
     """
-    return self.kind == DimensionTag.Types.Spatial
+    return self.kind == Dim.Types.Spatial
 
   def is_dim_known(self):
     """
@@ -427,7 +427,7 @@ class DimensionTag(object):
     :param bool same_as_before: implies it was set before, and the new size is the same.
       e.g. it could be some identity with added checks, or other change.
     :return: self or new dim tag
-    :rtype: DimensionTag
+    :rtype: Dim
     """
     # It's unusual if self.dimension is not None, but let's accept that.
     if hasattr(x, "_is_size_of_dim_tag"):
@@ -474,7 +474,7 @@ class DimensionTag(object):
   def get_tag_from_size_tensor(cls, x):
     """
     :param tf.Tensor x: size tensor. has been set before via :func:`set_tag_on_size_tensor`
-    :rtype: DimensionTag|None
+    :rtype: Dim|None
     """
     return getattr(x, "_is_size_of_dim_tag", None)
 
@@ -492,7 +492,7 @@ class DimensionTag(object):
     and might potentially change in the future.
       https://github.com/rwth-i6/returnn/issues/634
 
-    :param DimensionTag other:
+    :param Dim other:
     :param bool ignore_feature_dim:
     :param bool allow_same_feature_dim:
     :param bool|None allow_same_spatial_dim:
@@ -556,17 +556,17 @@ class DimensionTag(object):
 
   def __eq__(self, other):
     """
-    :param DimensionTag other:
+    :param Dim other:
     :rtype: bool
     :return: :func:`is_equal` with default options
     """
-    if not isinstance(other, DimensionTag):
+    if not isinstance(other, Dim):
       return False
     return self.is_equal(other)
 
   def __ne__(self, other):
     """
-    :param DimensionTag other:
+    :param Dim other:
     :rtype: bool
     """
     return not (self == other)
@@ -585,7 +585,7 @@ class DimensionTag(object):
 
   def get_same_base(self):
     """
-    :rtype: DimensionTag
+    :rtype: Dim
     """
     base = self
     while base.same_as:
@@ -594,7 +594,7 @@ class DimensionTag(object):
 
   def get_same_derived_base(self):
     """
-    :rtype: DimensionTag
+    :rtype: Dim
     """
     base = self
     while base.same_as or base.derived_from_tag:
@@ -623,7 +623,7 @@ class DimensionTag(object):
 
   def declare_same_as(self, other):
     """
-    :param DimensionTag other:
+    :param Dim other:
     """
     self._maybe_update()
     self._validate_in_current_graph()
@@ -684,11 +684,11 @@ class DimensionTag(object):
 
   def _merge_same_for_batch_ctx_dict(self, other):
     """
-    :param DimensionTag other:
+    :param Dim other:
     """
     self._validate_in_current_graph()
     for _, dim in list(self._same_for_batch_ctx.items()):
-      assert isinstance(dim, DimensionTag)
+      assert isinstance(dim, Dim)
       dim._validate_in_current_graph()
     for key, dim in other._same_for_batch_ctx.items():
       if not dim._validate_in_current_graph():
@@ -704,10 +704,10 @@ class DimensionTag(object):
   @classmethod
   def get_existing_tag_from_collection(cls, other, tags, is_equal_opts=None):
     """
-    :param DimensionTag other:
-    :param list[DimensionTag]|tuple[DimensionTag]|set[DimensionTag] tags:
+    :param Dim other:
+    :param list[Dim]|tuple[Dim]|set[Dim] tags:
     :param dict[str]|None is_equal_opts: passed to DimensionTag.is_equal
-    :rtype: DimensionTag|None
+    :rtype: Dim|None
     """
     if is_equal_opts is None:
       is_equal_opts = {}
@@ -730,7 +730,7 @@ class DimensionTag(object):
     :param dict[str]|None is_equal_opts: passed to DimensionTag.is_equal
     :param bool unique_separate_axes: e.g. data_list=[Data with shape (B,5,5,10)] results in 4 dim tags, not 3.
     :return: list of dimension tags, dict for data -> list of dimension tags (for each axis)
-    :rtype: (list[DimensionTag], dict[Data, list[DimensionTag]])
+    :rtype: (list[Dim], dict[Data, list[Dim]])
     """
     tags = []
     data_axes_dict = {}
@@ -759,9 +759,9 @@ class DimensionTag(object):
   @classmethod
   def get_uniq_collection(cls, tags, is_equal_opts=None):
     """
-    :param list[DimensionTag]|tuple[DimensionTag]|set[DimensionTag] tags:
+    :param list[Dim]|tuple[Dim]|set[Dim] tags:
     :param dict[str]|None is_equal_opts: passed to DimensionTag.is_equal
-    :rtype: list[DimensionTag]
+    :rtype: list[Dim]
     """
     res = []
     for tag in tags:
@@ -806,8 +806,33 @@ class DimensionTag(object):
     self.get_same_base()._vocab = vocab
 
 
+# Earlier the class was called DimensionTag. Provide this alias for older code.
+DimensionTag = Dim
+
 # Global dim tag placeholders.
-BatchDim = DimensionTag(kind=DimensionTag.Types.Batch, description="global batch")
+batch_dim = Dim(kind=Dim.Types.Batch, description="global batch")
+
+
+# Provide some simple wrappers. https://github.com/rwth-i6/returnn/issues/782
+# Use CamelCase function names (invalidates PEP8) to make it look like a class instance.
+
+# noinspection PyPep8Naming
+def FeatureDim(description, dimension, **kwargs):
+  """
+  :param str description:
+  :param int|None dimension:
+  :rtype: Dim
+  """
+  return FeatureDim(description, dimension=dimension, **kwargs)
+
+
+# noinspection PyPep8Naming
+def SpatialDim(description, **kwargs):
+  """
+  :param str description:
+  :rtype: Dim
+  """
+  return SpatialDim(description, **kwargs)
 
 
 class _ImplicitDim:
@@ -817,7 +842,7 @@ class _ImplicitDim:
   """
   def __init__(self, tag):
     """
-    :param DimensionTag tag:
+    :param Dim tag:
     """
     self.tag = tag
 
@@ -914,7 +939,7 @@ class BatchInfo:
     def __init__(self, size, dim_tag=None):
       """
       :param tf.Tensor|int size:
-      :param DimensionTag|None dim_tag:
+      :param Dim|None dim_tag:
       """
       self.size = size
       self.dim_tag = dim_tag
@@ -962,7 +987,7 @@ class BatchInfo:
     """
     def __init__(self, dim_tag):
       """
-      :param DimensionTag dim_tag:
+      :param Dim dim_tag:
       """
       super(BatchInfo.PaddedDim, self).__init__(size=dim_tag.get_dim_value())
       self.dim_tag = dim_tag
@@ -980,7 +1005,7 @@ class BatchInfo:
     """
     def __init__(self, dim_tag, key_axes):
       """
-      :param DimensionTag dim_tag:
+      :param Dim dim_tag:
       :param list[BatchInfo.VirtualDimBase] key_axes:
         most common case would be [GlobalBatchDim(...)],
         but [GlobalBatchDim(...),BeamDim(...)] is also common.
@@ -1032,8 +1057,8 @@ class BatchInfo:
     # They store global information.
     # We don't use class attributes because this should not be global per process but only per network.
     self._global_beam_dims_by_beam_name = {}  # type: typing.Dict[str,BatchInfo.BeamDim]
-    self._global_padded_dims_by_dim_tag = {}  # type: typing.Dict[DimensionTag,BatchInfo.PaddedDim]
-    self._packed_dims_by_dim_tag = {}  # type: typing.Dict[DimensionTag,BatchInfo.PackedDim]
+    self._global_padded_dims_by_dim_tag = {}  # type: typing.Dict[Dim,BatchInfo.PaddedDim]
+    self._packed_dims_by_dim_tag = {}  # type: typing.Dict[Dim,BatchInfo.PackedDim]
     self.descendants = []  # type: typing.List[BatchInfo]
     self._descendants_by_beam_name = {}  # type: typing.Dict[str,BatchInfo]
     self._global_descendants_by_virtual_dims = {}  # type: typing.Dict[typing.Tuple[BatchInfo.VirtualDimBase,...],BatchInfo]  # noqa
@@ -1047,6 +1072,7 @@ class BatchInfo:
     assert tuple(self.virtual_dims) not in global_base._global_descendants_by_virtual_dims
     global_base._global_descendants_by_virtual_dims[tuple(self.virtual_dims)] = self
 
+  # noinspection PyShadowingNames
   @classmethod
   def make_global_batch_info(cls, batch_dim):
     """
@@ -1262,7 +1288,7 @@ class BatchInfo:
 
   def _make_packed_dim(self, dim_tag):
     """
-    :param DimensionTag dim_tag:
+    :param Dim dim_tag:
     :rtype: BatchInfo.PackedDim
     """
     assert self.virtual_dims
@@ -1276,7 +1302,7 @@ class BatchInfo:
 
   def _make_padded_dim(self, dim_tag):
     """
-    :param DimensionTag dim_tag:
+    :param Dim dim_tag:
     :rtype: BatchInfo.PaddedDim
     """
     assert self.virtual_dims
@@ -1350,7 +1376,7 @@ class BatchInfo:
 
   def copy_extend_with_packed_dim_tag(self, dim_tag, batch_major):
     """
-    :param DimensionTag dim_tag:
+    :param Dim dim_tag:
     :param bool batch_major: if True, add new dim in front. otherwise, add new dim at the end
     :rtype: BatchInfo
     """
@@ -1360,7 +1386,7 @@ class BatchInfo:
 
   def copy_extend_with_padded_dim_tag(self, dim_tag, batch_major=None, new_dim_idx=None):
     """
-    :param DimensionTag dim_tag:
+    :param Dim dim_tag:
     :param bool|None batch_major: if True, add new dim in front. otherwise, add new dim at the end
     :param int|None new_dim_idx:
     :rtype: BatchInfo
@@ -1375,7 +1401,7 @@ class BatchInfo:
 
   def copy_extend_with_padded_or_fixed_dim_tag(self, dim_tag, batch_major=None, new_dim_idx=None):
     """
-    :param DimensionTag dim_tag:
+    :param Dim dim_tag:
     :param bool|None batch_major: if True, add new dim in front. otherwise, add new dim at the end
     :param int|None new_dim_idx:
     :rtype: BatchInfo
@@ -1589,7 +1615,7 @@ class Data(object):
     :param str dtype: e.g. "float32" or "int64"
     :param tf.Tensor|None placeholder: with added batch-dim
     :param bool|None sparse: whether to treat the value as an index. do not confuse with tf.SparseTensor
-    :param DimensionTag|int|None|NotSpecified sparse_dim:
+    :param Dim|int|None|NotSpecified sparse_dim:
     :param int|None|NotSpecified dim: feature dimension, shape[-1] if not sparse, otherwise like num_classes
     :param int|None|NotSpecified batch_dim_axis: where we add the batch-dim.
       e.g. shape=(time,...), 0 -> (batch,time,...), 1 -> (time,batch,...).
@@ -1604,10 +1630,10 @@ class Data(object):
     :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
     :param bool auto_create_placeholders: This will create a tf.placeholder.
     :param str|dict[str]|returnn.datasets.util.vocabulary.Vocabulary|None vocab:
-    :param tuple[DimensionTag]|list[DimensionTag]|dict[int,DimensionTag]|None dim_tags:
+    :param tuple[Dim]|list[Dim]|dict[int,Dim]|None dim_tags:
       If tuple/list, this specifies the whole (batch) shape.
       If dict, explicitly specified dimension tags per axis (axis counted with batch-dim)
-    :param dict[int|str,DimensionTag]|None same_dim_tags_as: will mark our dimension tags to be the same
+    :param dict[int|str,Dim]|None same_dim_tags_as: will mark our dimension tags to be the same
     :param BatchInfo|None batch:
     :param SearchBeam|None beam: the batch-dim could be extended by a beam-size,
       such that it represents the merged dims [batch, beam_size].
@@ -1622,14 +1648,14 @@ class Data(object):
       if sparse:
         assert dim is not NotSpecified, "need dim (num classes) if sparse"
         assert dim is None or isinstance(dim, int)
-        sparse_dim = DimensionTag(kind=DimensionTag.Types.Feature, dimension=dim, description="%s:sparse-dim" % name)
+        sparse_dim = Dim(kind=Dim.Types.Feature, dimension=dim, description="%s:sparse-dim" % name)
       else:
         sparse_dim = None
     if isinstance(sparse_dim, int):
-      sparse_dim = DimensionTag(
-        kind=DimensionTag.Types.Feature, dimension=sparse_dim, description="%s:sparse-dim" % name)
+      sparse_dim = Dim(
+        kind=Dim.Types.Feature, dimension=sparse_dim, description="%s:sparse-dim" % name)
     if sparse_dim is not None:
-      assert isinstance(sparse_dim, DimensionTag)
+      assert isinstance(sparse_dim, Dim)
       assert sparse
       if dim is not NotSpecified:
         assert sparse_dim.dimension == dim
@@ -1684,7 +1710,7 @@ class Data(object):
         dim_tags=dim_tags, sparse=sparse)
       del batch_dim_axis
       del shape
-    self._dim_tags = dim_tags  # type: typing.Tuple[DimensionTag]
+    self._dim_tags = dim_tags  # type: typing.Tuple[Dim]
     if feature_dim_axis is not NotSpecified:
       if isinstance(feature_dim_axis, int):
         assert not self.sparse, "cannot have feature_dim_axis when sparse"
@@ -1724,7 +1750,7 @@ class Data(object):
     if same_dim_tags_as:
       for _axis, _dim_tag in sorted(same_dim_tags_as.items()):
         _axis = self.get_axis_from_description(_axis)
-        assert isinstance(_dim_tag, DimensionTag)
+        assert isinstance(_dim_tag, Dim)
         base_tag = self._dim_tags[_axis]
         if base_tag != _dim_tag:
           base_tag.declare_same_as(_dim_tag)
@@ -1749,7 +1775,7 @@ class Data(object):
     :param int|float|bool|numpy.ndarray x:
     :param str name:
     :param str|None dtype:
-    :param list[DimensionTag|int]|tuple[DimensionTag|int]|None shape: for verification, and defining dim tags
+    :param list[Dim|int]|tuple[Dim|int]|None shape: for verification, and defining dim tags
     :param bool with_batch_dim:
     :rtype: Data
     """
@@ -1773,19 +1799,19 @@ class Data(object):
     dim_tags = []
     for i, (d, d_) in enumerate(zip(shape, shape_)):
       assert isinstance(d_, int)
-      if isinstance(d, DimensionTag):
+      if isinstance(d, Dim):
         assert d.dimension == d_
       elif isinstance(d, int):
         assert d == d_
-        d = DimensionTag(
-          kind=DimensionTag.Types.Spatial if i < len(shape) - 1 else DimensionTag.Types.Feature,
+        d = Dim(
+          kind=Dim.Types.Spatial if i < len(shape) - 1 else Dim.Types.Feature,
           description="%s:static:%i" % (name, i),
           dimension=d)
       else:
         raise TypeError("%r shape[%i] invalid type %r in shape %r" % (name, i, type(d), shape))
       dim_tags.append(d)
     if with_batch_dim:
-      dim_tags.insert(0, BatchDim)
+      dim_tags.insert(0, batch_dim)
     return Data(name=name, dim_tags=dim_tags, dtype=dtype)
 
   def sanity_check(self, ignore_placeholder=False, assume_complete=True):
@@ -1854,6 +1880,7 @@ class Data(object):
     checks = []
     with tf.name_scope("runtime_sanity_check"):
       shape = tf.shape(self.placeholder)
+      # noinspection PyShadowingNames
       batch_dim = shape[self.batch_dim_axis] if self.have_batch_axis() else 1
       rank = tf.rank(self.placeholder)
       data = ["Data.get_runtime_sanity_check_op:", str(self), "shape", shape]
@@ -1897,7 +1924,7 @@ class Data(object):
       https://github.com/rwth-i6/returnn/issues/706
     Throws an exception if this is not the case.
 
-    :param set[DimensionTag|_ImplicitDim]|tuple|list out_shape:
+    :param set[Dim|_ImplicitDim]|tuple|list out_shape:
       It must be a set, with the only exception when it is empty (then it doesn't matter).
       See :func:`dim_tags_set`.
     """
@@ -1912,7 +1939,7 @@ class Data(object):
       raise TypeError("%s verify_out_shape: expects a set but got %s" % (self, type(out_shape)))
     remaining = set(self_dim_tags)
     for dim in out_shape:
-      if isinstance(dim, DimensionTag):
+      if isinstance(dim, Dim):
         dim_tag = dim
       elif isinstance(dim, _ImplicitDim):
         dim_tag = dim.tag
@@ -2294,7 +2321,7 @@ class Data(object):
     """
     :param int batch_dim_axis:
     :param BatchInfo|None batch:
-    :param DimensionTag|None dim_tag:
+    :param Dim|None dim_tag:
     :return: copy of myself with added batch-dim
     :rtype: Data
     """
@@ -2321,8 +2348,8 @@ class Data(object):
       assert dim_tag.dimension == batch.static_dim
       assert dim_tag.batch == batch
     else:
-      dim_tag = DimensionTag(
-        kind=DimensionTag.Types.Batch, description="batch", dimension=batch.static_dim, batch=batch)
+      dim_tag = Dim(
+        kind=Dim.Types.Batch, description="batch", dimension=batch.static_dim, batch=batch)
     dim_tags.insert(batch_dim_axis, dim_tag)
     data_opts["dim_tags"] = dim_tags
     data_opts["batch"] = batch
@@ -2342,7 +2369,7 @@ class Data(object):
     """
     if dim is None:
       assert not self.placeholder
-    dim_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="added_spatial", dimension=dim)
+    dim_tag = SpatialDim("added_spatial", dimension=dim)
     if spatial_dim_axis is None:
       spatial_dim_axis = self.get_default_new_axis_for_dim_tag(dim_tag)
     v = self.copy_add_dim_by_tag(dim_tag, unbroadcast=True, axis=spatial_dim_axis)
@@ -2361,7 +2388,7 @@ class Data(object):
     if self.sparse:
       # By definition, we don't have a feature dim. We allow this though. We just make it a spatial axis.
       return self.copy_add_spatial_dim(spatial_dim_axis=axis)
-    dim_tag = DimensionTag(kind=DimensionTag.Types.Feature, description="feature1", dimension=1)
+    dim_tag = FeatureDim("feature1", dimension=1)
     if axis is None:
       axis = self.get_default_new_axis_for_dim_tag(dim_tag)
     v = self.copy_add_dim_by_tag(dim_tag, axis=axis)
@@ -2377,7 +2404,7 @@ class Data(object):
 
   def get_default_new_axis_for_dim_tag(self, dim_tag):
     """
-    :param DimensionTag dim_tag:
+    :param Dim dim_tag:
     :rtype: int
     """
     if dim_tag.is_batch_dim():
@@ -2400,7 +2427,7 @@ class Data(object):
 
   def copy_add_dim_by_tag(self, dim_tag, unbroadcast=False, axis=None):
     """
-    :param DimensionTag dim_tag:
+    :param Dim dim_tag:
     :param bool unbroadcast: If True unbroadcast the newly added axis.
       Will infer the unbroadcast shape via :func:`DimensionTag.get_dim_value`
     :param int|None axis:
@@ -2426,9 +2453,9 @@ class Data(object):
     data_opts = self.get_kwargs()
     # Note: if dim_tag is feature, but we are sparse, we just make it spatial
     if self.sparse and dim_tag.is_feature_dim():
-      dim_tag = dim_tag.copy(kind=DimensionTag.Types.Spatial)
+      dim_tag = dim_tag.copy(kind=Dim.Types.Spatial)
     if not unbroadcast and dim_tag.dimension != 1:
-      dim_tag = DimensionTag(
+      dim_tag = Dim(
         kind=dim_tag.kind, description="%s_dummy_dim1" % (dim_tag.description or "unnamed"), dimension=1)
     data_opts["dim_tags"] = self.dim_tags[:axis] + (dim_tag,) + self.dim_tags[axis:]
     other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
@@ -2463,10 +2490,10 @@ class Data(object):
     feature_dim_rem = self.dim // new_feature_dim
     new_feature_dim_axis = self.feature_dim_axis + 1
     data_opts = self.get_kwargs(include_special_axes=False)
-    dim_tag_split_rem = DimensionTag(
-      kind=DimensionTag.Types.Spatial, description="feature_split_rem_%i" % feature_dim_rem,
+    dim_tag_split_rem = Dim(
+      kind=Dim.Types.Spatial, description="feature_split_rem_%i" % feature_dim_rem,
       dimension=feature_dim_rem)
-    dim_tag_new = DimensionTag(
+    dim_tag_new = Dim(
       kind=self.dim_tags[self.feature_dim_axis].kind,
       description="feature_split_new_%i" % new_feature_dim,
       dimension=new_feature_dim)
@@ -2628,8 +2655,8 @@ class Data(object):
     if self.placeholder is not None:
       data_opts["placeholder"] = self.get_placeholder_time_flattened()
     dim_tag = self.dim_tags[self.time_dim_axis]
-    dim_tag = DimensionTag(
-      kind=DimensionTag.Types.Spatial, description="%s_flattened" % (dim_tag.description or "unnamed"))
+    dim_tag = Dim(
+      kind=Dim.Types.Spatial, description="%s_flattened" % (dim_tag.description or "unnamed"))
     data_opts["dim_tags"] = (
       (dim_tag,) +
       tuple(tag for (i, tag) in enumerate(self.dim_tags) if i not in (self.batch_dim_axis, self.time_dim_axis)))
@@ -2833,7 +2860,7 @@ class Data(object):
       assert time_dim_axis >= 0
     assert 0 <= time_dim_axis <= self.batch_ndim
     kwargs = self.get_kwargs(include_special_axes=False)
-    dim_tag = DimensionTag(kind=DimensionTag.Types.Time, description="unknown_time", dimension=None)
+    dim_tag = Dim(kind=Dim.Types.Time, description="unknown_time", dimension=None)
     dim_tags = self.dim_tags[:time_dim_axis] + (dim_tag,) + self.dim_tags[time_dim_axis:]
     kwargs["dim_tags"] = dim_tags
     other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
@@ -2848,7 +2875,7 @@ class Data(object):
   def copy_template_replace_dim_tag(self, axis, new_dim_tag, name=None):
     """
     :param int axis:
-    :param DimensionTag new_dim_tag:
+    :param Dim new_dim_tag:
     :param str|None name: new name
     :rtype: Data
     """
@@ -2877,14 +2904,14 @@ class Data(object):
     if dim_tag.is_batch_dim():
       assert new_dim is None
       return self.copy_template()  # nothing to do
-    dim_tag = DimensionTag(
+    dim_tag = Dim(
       kind=dim_tag.kind, description="%s_replaced" % (dim_tag.description or "unnamed"),
       dimension=new_dim, dyn_size=new_size)
     return self.copy_template_replace_dim_tag(axis=axis, new_dim_tag=dim_tag)
 
   def copy_template_new_dim_tags(self, new_dim_tags, name=None, keep_special_axes=False):
     """
-    :param list[DimensionTag]|tuple[DimensionTag] new_dim_tags:
+    :param list[Dim]|tuple[Dim] new_dim_tags:
     :param str|None name:
     :param bool keep_special_axes:
     :rtype: Data
@@ -2928,7 +2955,7 @@ class Data(object):
             dim_tags.append(virtual_dim.dim_tag)
             batch = batch.copy_remove_dim(virtual_dim)
           elif not new_batch_dim_tag:
-            new_batch_dim_tag = DimensionTag(kind=DimensionTag.Types.Batch)
+            new_batch_dim_tag = Dim(kind=Dim.Types.Batch)
             dim_tags.append(new_batch_dim_tag)
         assert new_batch_dim_tag
         new_batch_dim_tag.batch = batch
@@ -2965,7 +2992,7 @@ class Data(object):
   @property
   def dim_tags(self):
     """
-    :rtype: tuple[DimensionTag]
+    :rtype: tuple[Dim]
     """
     return self._dim_tags
 
@@ -2994,6 +3021,7 @@ class Data(object):
     """
     return tuple(tag.dimension for tag in self.dim_tags)
 
+  # noinspection PyShadowingNames
   def get_batch_shape(self, batch_dim):
     """
     :param int|tf.Tensor|None batch_dim:
@@ -3064,7 +3092,7 @@ class Data(object):
   def dim_tags_sparse(self):
     """
     :return: dim tags without feature dim axis
-    :rtype: tuple[DimensionTag]
+    :rtype: tuple[Dim]
     """
     if self.sparse or not self.have_feature_axis():
       return self.dim_tags
@@ -3093,7 +3121,7 @@ class Data(object):
     """
     :return: Dim tags implicit by sparse dim, or dynamic sizes, and not present as explicit dims.
       Also see :func:`dim_tags_set`.
-    :rtype: set[DimensionTag]
+    :rtype: set[Dim]
     """
     return set(dim.tag for dim in self.dim_tags_set_implicit_only_wrapped)
 
@@ -3111,7 +3139,7 @@ class Data(object):
     (This is not enforced currently, but we should not treat this specially now.)
 
     :return: set of dim tags
-    :rtype: set[DimensionTag]
+    :rtype: set[Dim]
     """
     dims = set(self.dim_tags)
     dims.update(self.dim_tags_set_implicit_only)
@@ -3319,7 +3347,7 @@ class Data(object):
   def feature_dim_or_sparse_dim(self):
     """
     :return: if we have a feature dim, return its dim tag. if we are sparse, return the sparse_dim. otherwise None
-    :rtype: DimensionTag|None
+    :rtype: Dim|None
     """
     if self.have_feature_axis():
       return self.dim_tags[self.feature_dim_axis]
@@ -3540,7 +3568,7 @@ class Data(object):
 
   def get_axes_from_description(self, axes, allow_int=NotSpecified):
     """
-    :param int|list[int]|str|list[str|DimensionTag]|DimensionTag|None axes: one axis or multiple axis, or none.
+    :param int|list[int]|str|list[str|Dim]|Dim|None axes: one axis or multiple axis, or none.
       This is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
       It also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
       and more (see the code).
@@ -3552,7 +3580,7 @@ class Data(object):
     """
     if axes is None or axes == "":
       return []
-    if isinstance(axes, DimensionTag):
+    if isinstance(axes, Dim):
       # Once we have not guaranteed unique dim tags, multiple axes could match.
       # https://github.com/rwth-i6/returnn/issues/632
       return [i for (i, tag) in enumerate(self.dim_tags) if tag == axes]
@@ -3656,7 +3684,7 @@ class Data(object):
         self._verify_axis_int_from_description(allow_int=allow_int)
         flat_axes.append(self._make_valid_int_axis(i))
       else:
-        assert isinstance(i, (str, tuple, list, DimensionTag))
+        assert isinstance(i, (str, tuple, list, Dim))
         flat_axes += self.get_axes_from_description(i, allow_int=allow_int)
     res = []
     for i in flat_axes:
@@ -3666,16 +3694,16 @@ class Data(object):
 
   def get_dim_tag_from_description(self, axis):
     """
-    :param str|DimensionTag axis:
+    :param str|Dim axis:
     :return: our matching dim tag. this assumes it exists.
-    :rtype: DimensionTag
+    :rtype: Dim
     """
     axis_int = self.get_axis_from_description(axis, allow_int=False)
     return self.dim_tags[axis_int]
 
   def get_axis_from_description(self, axis, allow_int=NotSpecified):
     """
-    :param int|str|DimensionTag axis:
+    :param int|str|Dim axis:
     :param bool|NotSpecified allow_int:
     :return: axis, counted with batch-dim
     :rtype: int
@@ -3691,7 +3719,7 @@ class Data(object):
     :return: some canonical description, such that ``self.get_axis_from_description(res) == axis``.
       This is quite heuristically for now. We use both strings as also DimensionTag when appropriate.
       The behavior could potentially change in the future, also the condition will always hold.
-    :rtype: str|DimensionTag
+    :rtype: str|Dim
     """
     assert 0 <= axis < self.batch_ndim
     if axis == self.batch_dim_axis:
@@ -3720,7 +3748,7 @@ class Data(object):
 
   def has_axis(self, axis):
     """
-    :param str|DimensionTag axis:
+    :param str|Dim axis:
     :return: whether the axis exists
     :rtype: bool
     """
@@ -3849,13 +3877,13 @@ class Data(object):
     if getattr(sizes, "_RETURNN_dyn_size_beam", NotSpecified) is NotSpecified:
       sizes._RETURNN_dyn_size_beam = self.beam
     if self.beam and getattr(sizes, "_RETURNN_dyn_size_beam", None) != self.beam:
-      tag = DimensionTag.get_tag_from_size_tensor(sizes)
+      tag = Dim.get_tag_from_size_tensor(sizes)
       assert tag and self.batch
       tag = tag.get_for_batch_ctx(batch=self.batch, ctx=self.control_flow_ctx)
       assert tag.dyn_size is not None
       sizes = tag.dyn_size
 
-    sizes_tag = DimensionTag.get_tag_from_size_tensor(sizes)
+    sizes_tag = Dim.get_tag_from_size_tensor(sizes)
     if sizes_tag:
       assert sizes_tag.is_same_size_tensor(sizes)
     tag = self.dim_tags[axis]
@@ -3900,14 +3928,14 @@ class Data(object):
     """
     If the given dimension tag matches any of our axes, we set our time axis to the selected one.
 
-    :param set[DimensionTag]|DimensionTag tags:
+    :param set[Dim]|Dim tags:
     :param bool must_match: if True, throw an exception if not found
     :return: whether we have found the same
     :rtype: bool
     """
-    if isinstance(tags, DimensionTag):
+    if isinstance(tags, Dim):
       tags = {tags}
-    assert all(isinstance(tag, DimensionTag) for tag in tags)
+    assert all(isinstance(tag, Dim) for tag in tags)
     for axis, dim_tag in enumerate(self.dim_tags):
       if dim_tag in tags:
         self.time_dim_axis = axis
@@ -4037,7 +4065,7 @@ class Data(object):
 
   def get_batch_dim_tag(self):
     """
-    :rtype: DimensionTag
+    :rtype: Dim
     """
     assert self.have_batch_axis()
     return self.dim_tags[self.batch_dim_axis]
@@ -4184,13 +4212,13 @@ class Data(object):
   def get_dim_tag(self, axis):
     """
     :param int axis: counted with batch-dim
-    :rtype: DimensionTag
+    :rtype: Dim
     """
     return self._dim_tags[axis]
 
   def get_time_dim_tag(self):
     """
-    :rtype: DimensionTag
+    :rtype: Dim
     """
     assert self.time_dim_axis is not None
     return self.get_dim_tag(self.time_dim_axis)
@@ -4198,7 +4226,7 @@ class Data(object):
   def get_size_dim_tag(self, number):
     """
     :param int number: index in sorted(size_placeholder.keys())
-    :rtype: DimensionTag
+    :rtype: Dim
     """
     axis_wo_batch = sorted(self.size_placeholder.keys())[number]
     return self.get_dim_tag(self.get_batch_axis(axis_wo_batch))
@@ -4206,7 +4234,7 @@ class Data(object):
   def get_batch_shape_dim_tags(self):
     """
     :return: list of dimension tags, for each axis (counted with batch dim, i.e. len is batch_ndim)
-    :rtype: tuple[DimensionTag]
+    :rtype: tuple[Dim]
     """
     return self.dim_tags
 
@@ -4241,18 +4269,18 @@ class Data(object):
       ignore_feature_dim=ignore_feature_dim, treat_feature_as_spatial=True,
       allow_same_spatial_dim=True, broadcast_matches=True,
       undefined_matches=True, derived_matches=True)
-    all_dim_tags, tags_dict = DimensionTag.get_all_dimension_tags(sources, is_equal_opts=is_equal_opts)
+    all_dim_tags, tags_dict = Dim.get_all_dimension_tags(sources, is_equal_opts=is_equal_opts)
     # Check for potential undefined tags, and replace those with defined tags if possible.
     for axis, dim_tag in enumerate(common.dim_tags):
       if dim_tag.undefined:
-        other = DimensionTag.get_existing_tag_from_collection(dim_tag, all_dim_tags, is_equal_opts=is_equal_opts)
+        other = Dim.get_existing_tag_from_collection(dim_tag, all_dim_tags, is_equal_opts=is_equal_opts)
         if other and not other.undefined:
           # We found another dim tag which matches and which is defined.
           # Replace it.
           common = common.copy_template_replace_dim_tag(axis=axis, new_dim_tag=other)
     # Check for missing tags, and add those.
     for dim_tag in all_dim_tags:
-      if not DimensionTag.get_existing_tag_from_collection(dim_tag, common.dim_tags, is_equal_opts=is_equal_opts):
+      if not Dim.get_existing_tag_from_collection(dim_tag, common.dim_tags, is_equal_opts=is_equal_opts):
         axis = common.get_default_new_axis_for_dim_tag(dim_tag)
         common = common.copy_add_dim_by_tag(dim_tag, unbroadcast=True, axis=axis)
     if all(s.batch_ndim < common.batch_ndim for s in sources):
@@ -4265,7 +4293,7 @@ class Data(object):
     """
     Finds the dimensions of this Data that match another DimensionTag
 
-    :param DimensionTag dim_tag:
+    :param Dim dim_tag:
     :param dict[str,bool]|None is_equal_opts: passed to DimensionTag.is_equal
     :rtype: list[int] a list of matching axes, counted with batch dim. Sorted in ascending order
     """
@@ -4432,7 +4460,7 @@ class _SizePlaceholderProxy:
 
 def _batch_dim_axis_from_dim_tags_tuple(dim_tags):
   """
-  :param tuple[DimensionTag] dim_tags:
+  :param tuple[Dim] dim_tags:
   :return: batch_dim_axis. int or None if not existing
   :rtype: int|None
   """
@@ -4461,7 +4489,7 @@ def _create_size_placeholder(name, axis_wo_b, tag):
   """
   :param str name:
   :param int axis_wo_b:
-  :param DimensionTag tag:
+  :param Dim tag:
   """
   from .basic import reuse_name_scope
   with reuse_name_scope("extern_data/placeholders/%s" % name, absolute=True):
@@ -4486,11 +4514,11 @@ def _infer_dim_tags_tuple_from_shape(
   :param int|None|NotSpecified feature_dim_axis:
   :param bool sparse:
   :param dict[int,tf.Tensor]|None size_placeholder: key is axis without batch-dim
-  :param dict[int,DimensionTag]|None dim_tags: some existing explicitly specified dim tags. key is axis with batch-dim
+  :param dict[int,Dim]|None dim_tags: some existing explicitly specified dim tags. key is axis with batch-dim
   :param bool auto_create_placeholders:
   :param str name:
   :return: dim tags tuple
-  :rtype: tuple[DimensionTag]
+  :rtype: tuple[Dim]
   """
   assert isinstance(shape, (tuple, list))
   shape = tuple(shape)
@@ -4504,7 +4532,7 @@ def _infer_dim_tags_tuple_from_shape(
     assert 0 <= feature_dim_axis < len(batch_shape)
   dim_tags = dim_tags.copy() if dim_tags else {}
   if batch_dim_axis is not None and batch_dim_axis not in dim_tags:
-    dim_tags[batch_dim_axis] = DimensionTag(kind=DimensionTag.Types.Batch, description="batch:%s" % name)
+    dim_tags[batch_dim_axis] = Dim(kind=Dim.Types.Batch, description="batch:%s" % name)
   # Note: Consistent to Data.get_dim_tag,
   # prefer interpretation as spatial axis if there is a dynamic size or this is marked as time axis.
   if size_placeholder:
@@ -4512,7 +4540,7 @@ def _infer_dim_tags_tuple_from_shape(
       axis = _get_axis_wb(axis_wo_b, batch_dim_axis=batch_dim_axis)
       if axis in dim_tags:
         continue
-      tag = DimensionTag.get_tag_from_size_tensor(size)
+      tag = Dim.get_tag_from_size_tensor(size)
       if tag:
         dim_tags[axis] = tag
   # See Data.get_spatial_batch_axes
@@ -4534,23 +4562,23 @@ def _infer_dim_tags_tuple_from_shape(
           tag_name = "time"
         else:
           tag_name = "spatial%i" % axis
-        tag = DimensionTag(
+        tag = Dim(
           description="%s:var:extern_data:%s" % (tag_name, name),
           # Spatial dim tag, even if axis == feature_dim_axis. This is to keep the old behavior.
           # This is such that DimensionTag.is_equal behaves as before, e.g. in Data.get_common_data.
-          kind=DimensionTag.Types.Spatial)
+          kind=Dim.Types.Spatial)
         dim_tags[axis] = tag
       _create_size_placeholder(name=name, axis_wo_b=axis_wo_b, tag=tag)
       dyn_size = tag.dyn_size
     if tag:
       # Just some sanity checks.
-      assert isinstance(tag, DimensionTag)
+      assert isinstance(tag, Dim)
       assert tag.dimension == dim
       assert tag.is_same_size_tensor(dyn_size)
       continue
     if axis == feature_dim_axis and dyn_size is None and axis != time_dim_axis:
-      tag = DimensionTag(
-        kind=DimensionTag.Types.Feature, dimension=dim, description="feature:%s" % name,
+      tag = Dim(
+        kind=Dim.Types.Feature, dimension=dim, description="feature:%s" % name,
         undefined=dim is None)
     else:
       assert axis in spatial_axes
@@ -4564,8 +4592,8 @@ def _infer_dim_tags_tuple_from_shape(
       else:
         description += ":static%i" % dim
       description += ":%s" % name
-      tag = DimensionTag(
-        kind=DimensionTag.Types.Spatial, description=description, dimension=dim, dyn_size=dyn_size,
+      tag = Dim(
+        kind=Dim.Types.Spatial, description=description, dimension=dim, dyn_size=dyn_size,
         undefined=dim is None and dyn_size is None)
     dim_tags[axis] = tag
   assert sorted(dim_tags.keys()) == list(range(len(batch_shape)))
@@ -4575,7 +4603,7 @@ def _infer_dim_tags_tuple_from_shape(
 def _auto_create_size_placeholders_on_dim_tags(name, dim_tags):
   """
   :param str name:
-  :param tuple[DimensionTag] dim_tags:
+  :param tuple[Dim] dim_tags:
   """
   batch_dim_axis = _batch_dim_axis_from_dim_tags_tuple(dim_tags)
   for axis, tag in enumerate(dim_tags):
@@ -4708,7 +4736,7 @@ def _default_time_dim_axis_no_shape(batch_dim_axis, feature_dim_axis):
 
 def _default_time_dim_axis_dim_tags(dim_tags):
   """
-  :param list[DimensionTag]|tuple[DimensionTag] dim_tags:
+  :param list[Dim]|tuple[Dim] dim_tags:
   :return: time dim axis, counted with batch-dim
   :rtype: int|None
   """
@@ -4774,7 +4802,7 @@ class ControlFlowContext:
     self._outer_ctx = outer_ctx
     from tensorflow.python.ops.control_flow_ops import ControlFlowContext as TFControlFlowCtx
     self._tf_control_flow_ctx = None  # type: typing.Optional[TFControlFlowCtx]
-    self._loop_spatial_dim = None  # type: typing.Optional[DimensionTag]
+    self._loop_spatial_dim = None  # type: typing.Optional[Dim]
 
   def __repr__(self):
     return "ControlFlowContext{%s}" % self.repr_inner()
@@ -4852,7 +4880,7 @@ class ControlFlowContext:
   def collect_parent_dims(cls, ctx):
     """
     :param ControlFlowContext|None ctx:
-    :rtype: list[DimensionTag]
+    :rtype: list[Dim]
     """
     dims = []
     for ctx_ in ControlFlowContext.abs_ctx_stack(ctx):
@@ -4900,7 +4928,7 @@ class ControlFlowContext:
   @property
   def loop_spatial_dim(self):
     """
-    :rtype: DimensionTag|None
+    :rtype: Dim|None
     """
     assert self.is_loop()
     return self._loop_spatial_dim
@@ -4908,7 +4936,7 @@ class ControlFlowContext:
   @loop_spatial_dim.setter
   def loop_spatial_dim(self, dim):
     """
-    :param DimensionTag dim:
+    :param Dim dim:
     """
     assert self.is_loop()
     self._loop_spatial_dim = dim

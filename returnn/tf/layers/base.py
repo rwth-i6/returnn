@@ -11,7 +11,7 @@ import tensorflow as tf
 from returnn.util.basic import NotSpecified, CollectionReadCheckCovered, BehaviorVersion
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
-from returnn.tf.util.data import Data
+from returnn.tf.util.data import Data, FeatureDim
 from returnn.tf.util.basic import OutputWithActivation, CustomUpdate, reuse_name_scope
 from returnn.log import log
 
@@ -90,12 +90,12 @@ class LayerBase(object):
     :param returnn.tf.network.TFNetwork network:
     :param Data output: Set a specific output instead of using :func:`get_out_data_from_opts`
     :param NotSpecified|None|int n_out: output dim
-    :param returnn.tf.util.data.DimensionTag|None out_dim: output feature dim tag
+    :param returnn.tf.util.data.Dim|None out_dim: output feature dim tag
     :param dict[str] out_type: kwargs for Data class. more explicit than n_out.
-    :param set[returnn.tf.util.data.DimensionTag|returnn.tf.util.data._ImplicitDim]|tuple|list|None out_shape:
+    :param set[returnn.tf.util.data.Dim|returnn.tf.util.data._ImplicitDim]|tuple|list|None out_shape:
       verifies the output shape (dim tags). See :func:`Data.verify_out_shape`.
     :param list[LayerBase] sources: via self.transform_config_dict()
-    :param returnn.tf.util.data.DimensionTag|None in_dim: input feature dim tag
+    :param returnn.tf.util.data.Dim|None in_dim: input feature dim tag
     :param str|list[str]|None target: if some loss is set, this is the target data-key,
       i.e. network.extern_data.get_data(target). alternatively, this also can be a layer name.
     :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
@@ -306,7 +306,7 @@ class LayerBase(object):
     :param returnn.tf.network.TFNetwork network:
     :param str name:
     :param dict[str]|None|(()->Data) out_type:
-    :param returnn.tf.util.data.DimensionTag|None out_dim:
+    :param returnn.tf.util.data.Dim|None out_dim:
     :param int|None|NotSpecified n_out:
     :param set[DimensionTag|_ImplicitDim]|tuple|list|None out_shape: verifies the output shape (dim tags).
     :param str|list[str]|None target:
@@ -319,7 +319,6 @@ class LayerBase(object):
     :return: Data template (placeholder not set)
     :rtype: Data
     """
-    from ..util.data import DimensionTag
     if callable(out_type):
       return out_type(
         network=network, name=name, n_out=n_out, target=target, size_target=size_target, sources=sources, loss=loss,
@@ -385,8 +384,7 @@ class LayerBase(object):
             feature_dim_tag = out_dim
           else:
             dim = out_type.get("dim", None)
-            feature_dim_tag = DimensionTag(
-              kind=DimensionTag.Types.Feature, description="%s:feature-dense" % name, dimension=dim)
+            feature_dim_tag = FeatureDim("%s:feature-dense" % name, dim)
           if feature_dim_axis in (NotSpecified, None):
             if sources_data.feature_dim_axis is None:
               feature_dim_axis = len(dim_tags)

@@ -11,7 +11,7 @@ import typing
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
 from returnn.util.basic import unicode, NotSpecified
-from returnn.tf.util.data import Data, SearchBeam, DimensionTag
+from returnn.tf.util.data import Data, SearchBeam, Dim, FeatureDim, SpatialDim
 from returnn.tf.util.basic import OutputWithActivation, dimshuffle, swapaxes
 from returnn.log import log
 from .base import LayerBase, Loss, InternalLayer, SearchChoices
@@ -85,7 +85,7 @@ def _name_scope_for_concat_src_layers(src_layers, postfix):
 def concat_sources(src_layers, out_dim=None, allow_broadcast_all_sources=NotSpecified):
   """
   :param list[LayerBase] src_layers:
-  :param DimensionTag|None out_dim:
+  :param Dim|None out_dim:
   :param bool|NotSpecified allow_broadcast_all_sources:
   :return: data with placeholders set
   :rtype: Data
@@ -144,13 +144,13 @@ def get_concat_sources_data_template(src_layers, out_dim=None, allow_broadcast_a
   which would create a :class:`Data` together with the tensor.
 
   :param list[LayerBase]|tuple[LayerBase] src_layers:
-  :param DimensionTag|None out_dim:
+  :param Dim|None out_dim:
   :param bool|NotSpecified allow_broadcast_all_sources:
   :param str|None name: name of the Data
   :return: data with no placeholders set. it is always a copy or new instance, so safe to manipulate
   :rtype: Data
   """
-  from ..util.data import DimensionTag
+  from ..util.data import Dim
   assert src_layers, "need source layers"
   if len(src_layers) == 1:
     data = src_layers[0].output.copy_template(name=name)
@@ -172,7 +172,7 @@ def get_concat_sources_data_template(src_layers, out_dim=None, allow_broadcast_a
   if out_dim:
     assert out_dim.dimension == dim
   else:
-    out_dim = DimensionTag(kind=DimensionTag.Types.Feature, description=name + "_feature", dimension=dim)
+    out_dim = FeatureDim(name + "_feature", dimension=dim)
   return common_source.copy_template_replace_dim_tag(
     name=name,
     axis=common_source.feature_dim_axis,
@@ -187,7 +187,7 @@ def concat_sources_with_opt_dropout(src_layers, out_dim=None,
   and then optionally applies dropout.
 
   :param list[LayerBase] src_layers:
-  :param DimensionTag|None out_dim:
+  :param Dim|None out_dim:
   :param float dropout: dropout rate that will be applied if train_flag is set or dropout_on_forward is enabled
   :param tuple|list|dict|None dropout_noise_shape: provide 1 for broadcasting or None otherwise for each axis.
     The default "None" will broadcast across all dynamic axes including the batch axis.
@@ -246,7 +246,7 @@ class _ConcatInputLayer(LayerBase):
   def __init__(self, in_dim=None, out_shape=None,
                dropout=0, dropout_noise_shape=None, dropout_on_forward=False, mask=None, **kwargs):
     """
-    :param DimensionTag|None in_dim:
+    :param Dim|None in_dim:
     :param set[DimensionTag|returnn.tf.util.data._ImplicitDim]|tuple|list|None out_shape:
     :param float dropout: 0.0 means to apply no dropout. dropout will only be applied during training
     :param dict[str|tuple,int|None] dropout_noise_shape: see :func:`returnn.tf.util.data.get_bc_shape`
@@ -278,7 +278,7 @@ class CopyLayer(_ConcatInputLayer):
 
   def __init__(self, in_dim=None, out_dim=None, extra_deps=(), **kwargs):
     """
-    :param DimensionTag|None in_dim:
+    :param Dim|None in_dim:
     :param DimensionTag|None out_dim:
     :param list[LayerBase] extra_deps: Just add as an additional dependency, without really using it.
       This can have an effect though on the search beam, via :class:`SelectSearchSourcesLayer`.
@@ -316,7 +316,7 @@ class CopyLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :param list[LayerBase] extra_deps:
     :param dict[str]|None out_type:
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     :param int|None|NotSpecified n_out:
     :param set[DimensionTag|returnn.tf.util.data._ImplicitDim]|tuple|list|None out_shape:
     :rtype: Data
@@ -366,7 +366,7 @@ class ConcatLayer(LayerBase):
 
   def __init__(self, sources, allow_broadcast=False, **kwargs):
     """
-    :param list[(LayerBase,str|DimensionTag)] sources:
+    :param list[(LayerBase,str|Dim)] sources:
     :param bool allow_broadcast:
     """
     if allow_broadcast:
@@ -399,7 +399,7 @@ class ConcatLayer(LayerBase):
   def get_out_data_from_opts(cls, name, sources, allow_broadcast=False, **kwargs):
     """
     :param str name:
-    :param list[(LayerBase,str|DimensionTag)] sources:
+    :param list[(LayerBase,str|Dim)] sources:
     :param bool allow_broadcast:
     :rtype: Data
     """
@@ -407,7 +407,7 @@ class ConcatLayer(LayerBase):
     sources, axes = zip(*sources)  # unzip
     axes_int = [layer.output.get_axis_from_description(axis) for (layer, axis) in zip(sources, axes)]
     concat_dim_tags = [
-      layer.output.dim_tags[axis] for (layer, axis) in zip(sources, axes_int)]  # type: typing.List[DimensionTag]
+      layer.output.dim_tags[axis] for (layer, axis) in zip(sources, axes_int)]  # type: typing.List[Dim]
     if any(tag.dimension is None for tag in concat_dim_tags):
       dimension = None
     else:
@@ -416,7 +416,7 @@ class ConcatLayer(LayerBase):
         dimension += tag.dimension
     # We ignore allow_broadcast here... Anyway not currently implemented.
     # Just overtake the first input format.
-    concat_res_dim_tag = DimensionTag(
+    concat_res_dim_tag = Dim(
       kind=concat_dim_tags[0].kind, description="%s_concat" % name, dimension=dimension,
       derived_from_tag=concat_dim_tags[0])
     res_dim_tags = list(sources[0].output.dim_tags)
@@ -505,7 +505,7 @@ class SelectSearchSourcesLayer(InternalLayer):
     :param LayerBase search_choices_layer:
     :param list[LayerBase] sources:
     """
-    from returnn.tf.util.basic import select_src_beams, get_valid_scope_name_from_str, DimensionTag
+    from returnn.tf.util.basic import select_src_beams, get_valid_scope_name_from_str, Dim
     from pprint import pformat
     assert len(sources) == 1
     search_choices = search_choices_layer.get_search_choices()
@@ -576,7 +576,7 @@ class SelectSearchSourcesLayer(InternalLayer):
                "search choices %r,\n"
                "to search choices %r.\n"
                "Missing beam idxs.") % (src, src_search_choices, search_choices_seq)))
-          tag = DimensionTag.get_tag_from_size_tensor(v)
+          tag = Dim.get_tag_from_size_tensor(v)
           v = select_src_beams(
             v, src_beams=base_src_choices.src_beams,
             name="%s_select_src_beams_%i_%s_%i_%s" % (
@@ -910,7 +910,7 @@ class SliceLayer(_ConcatInputLayer):
 
   def __init__(self, axis, slice_start=None, slice_end=None, slice_step=None, **kwargs):
     """
-    :param DimensionTag|str axis:
+    :param Dim|str axis:
     :param str|None axis_kind: "T" for time, "B" for batch, "F" for feature
     :param int|None slice_start:
     :param int|None slice_end:
@@ -938,7 +938,7 @@ class SliceLayer(_ConcatInputLayer):
       if slice_step:
         dyn_size = tf.cast(tf_compat.v1.ceil(tf.divide(dyn_size, slice_step)), tf.int32)
       output_dim_tag.dyn_size_ext.placeholder = dyn_size
-      existing_tag = DimensionTag.get_tag_from_size_tensor(dyn_size)
+      existing_tag = Dim.get_tag_from_size_tensor(dyn_size)
       if existing_tag:
         output_dim_tag.declare_same_as(existing_tag)
       else:
@@ -952,7 +952,7 @@ class SliceLayer(_ConcatInputLayer):
         out_dim=None, **kwargs):
     """
     :param str name:
-    :param DimensionTag|str axis:
+    :param Dim|str axis:
     :param list[LayerBase] sources:
     :param int|None slice_start:
     :param int|None slice_end:
@@ -960,7 +960,7 @@ class SliceLayer(_ConcatInputLayer):
     :param DimensionTag|None out_dim:
     :rtype: Data
     """
-    from ..util.data import DimensionTag
+    from ..util.data import Dim
     input_data = get_concat_sources_data_template(sources)
     axis = input_data.get_axis_from_description(axis)
     dim_tag = input_data.dim_tags[axis]
@@ -969,7 +969,7 @@ class SliceLayer(_ConcatInputLayer):
     if out_dim:
       assert out_dim.dimension == new_dim
     else:
-      out_dim = DimensionTag(kind=dim_tag.kind, description="%s:slice" % name, dimension=new_dim)
+      out_dim = Dim(kind=dim_tag.kind, description="%s:slice" % name, dimension=new_dim)
     return input_data.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_dim, name="%s_output" % name)
 
 
@@ -992,7 +992,7 @@ class SliceNdLayer(_ConcatInputLayer):
   def __init__(self, start, size, min_size=None, **kwargs):
     """
     :param LayerBase start: (B,...)
-    :param int|LayerBase|DimensionTag|None size:
+    :param int|LayerBase|Dim|None size:
       We assume that this is >=0. If this might not be the case, use ``min_size=0``.
       If None, it uses the max possible size, and it becomes a dynamic axis.
     :param int|None min_size: if size is None, but we want to have a min-size
@@ -1026,7 +1026,7 @@ class SliceNdLayer(_ConcatInputLayer):
       if min_size:
         size_t = tf.maximum(size_t, min_size)
       size = tf.reduce_max(size_t)  # scalar
-    elif isinstance(size, DimensionTag):
+    elif isinstance(size, Dim):
       assert size.dyn_size_ext
       size_data = size.dyn_size_ext.copy_compatible_to(common_data, check_sparse=False)
       size_t = size_data.placeholder  # assume already >=0
@@ -1121,22 +1121,22 @@ class SliceNdLayer(_ConcatInputLayer):
     :param str name:
     :param list[LayerBase] sources:
     :param LayerBase|None start:
-    :param int|LayerBase|DimensionTag|None size:
+    :param int|LayerBase|Dim|None size:
     :rtype: Data
     """
-    from ..util.data import DimensionTag
+    from ..util.data import Dim
     start_data = start.output.copy()
     input_data = sources[0].output.copy()
     gather_positions_data = start_data.copy_template(name="%s_gather_positions" % name)
     if isinstance(size, LayerBase):
       size = None
-    if isinstance(size, DimensionTag):
+    if isinstance(size, Dim):
       tag = size
     else:
       # size might be None here in which case we set the dyn_size in __init__
       assert size is None or isinstance(size, int)
-      tag = DimensionTag(
-        kind=DimensionTag.Types.Spatial,
+      tag = Dim(
+        kind=Dim.Types.Spatial,
         description="sliced-time:%s" % name,
         dimension=size)
     gather_positions_data = gather_positions_data.copy_add_dim_by_tag(tag, unbroadcast=True, axis=start_data.batch_ndim)
@@ -1188,7 +1188,7 @@ class GatherLayer(_ConcatInputLayer):
     :param LayerBase|int position: Layer containing the indices used to select the slices of the input from.
       If another layer, must be of type ``int32`` or ``int64``.
       Can also specify a constant ``int``.
-    :param DimensionTag|str axis: The axis into which we gather the indices into
+    :param Dim|str axis: The axis into which we gather the indices into
     """
     super(GatherLayer, self).__init__(**kwargs)
     self.position = position
@@ -1298,7 +1298,7 @@ class GatherLayer(_ConcatInputLayer):
     :param str name:
     :param list[LayerBase] sources:
     :param LayerBase|int position:
-    :param DimensionTag|str axis:
+    :param Dim|str axis:
     :rtype: Data
     """
     from returnn.tf.util.data import BatchInfo
@@ -1526,7 +1526,7 @@ class ScatterNdLayer(_ConcatInputLayer):
     :param LayerBase position: indices into first axis (excluding batch) of the output
     :param str|int position_axis: axis in `position` to replace by the output-dim
     :param LayerBase|None output_dim_via_time_from: use the time-dim from this layer as the output-dim
-    :param DimensionTag|None out_spatial_dim:
+    :param Dim|None out_spatial_dim:
     :param bool filter_invalid_indices: allow for indices <0 or >= output_dim, which will be discarded in the output
     """
     super(ScatterNdLayer, self).__init__(**kwargs)
@@ -1583,18 +1583,18 @@ class ScatterNdLayer(_ConcatInputLayer):
     :param Data input_data: updates
     :param Data position: indices
     :param str|int position_axis: axis in `position` to replace by the output-dim
-    :param DimensionTag out_spatial_dim:
+    :param Dim out_spatial_dim:
     :rtype: (Data, Data, int, list[int])
     :return: common, output, axis, input_extra_axes
     """
-    from returnn.tf.util.basic import DimensionTag
+    from returnn.tf.util.basic import Dim
     # Construct `common` manually, not via Data.get_common_data, such that we can control the axis order.
     # We want the same axis from `position`, and all further axes should be added behind that.
     common = position.copy_template()
     common.dtype = input_data.dtype
     common.sparse_dim = input_data.sparse_dim
     common.sanity_check()
-    dim_tags, tags_dict = DimensionTag.get_all_dimension_tags(
+    dim_tags, tags_dict = Dim.get_all_dimension_tags(
       [common, input_data], dict(allow_same_feature_dim=True, treat_feature_as_spatial=True))
     common_dim_tags = tags_dict[common]
     input_extra_dim_tags = list(tags_dict[input_data])
@@ -1622,7 +1622,7 @@ class ScatterNdLayer(_ConcatInputLayer):
     :param LayerBase position:
     :param str|int position_axis: axis in `position` to replace by the output-dim
     :param LayerBase|None output_dim_via_time_from: use the time-dim from this layer as the output-dim
-    :param DimensionTag|None out_spatial_dim:
+    :param Dim|None out_spatial_dim:
     :rtype: Data
     """
     input_data = get_concat_sources_data_template(sources)
@@ -1817,7 +1817,7 @@ class LengthLayer(LayerBase):
   # noinspection PyUnusedLocal
   def __init__(self, axis="T", add_time_axis=False, dtype="int32", sparse=False, **kwargs):
     """
-    :param str|DimensionTag axis:
+    :param str|Dim axis:
     :param bool add_time_axis:
     :param str dtype:
     :param bool sparse:
@@ -1838,7 +1838,7 @@ class LengthLayer(LayerBase):
     """
     :param str name:
     :param list[LayerBase] sources:
-    :param str|DimensionTag axis:
+    :param str|Dim axis:
     :param bool add_time_axis:
     :param str dtype:
     :param bool sparse:
@@ -1876,7 +1876,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
                start=None, window_start=None, window_size=None, use_time_mask=None,
                log_space=False, **kwargs):
     """
-    :param DimensionTag|str|None axis: which axis to do the softmax over. "T" by default
+    :param Dim|str|None axis: which axis to do the softmax over. "T" by default
     :param float|None energy_factor: the energy will be scaled by this factor.
       This is like a temperature for the softmax.
       In Attention-is-all-you-need, this is set to 1/sqrt(base_ctx.dim).
@@ -1941,7 +1941,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
   def _get_axis_to_reduce(cls, input_data, axis, exception_prefix):
     """
     :param Data input_data:
-    :param DimensionTag|str|None axis:
+    :param Dim|str|None axis:
     :param str|object exception_prefix:
     :rtype: int
     """
@@ -1957,7 +1957,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     """
     :param str name:
     :param list[LayerBase] sources:
-    :param DimensionTag|str|None axis:
+    :param Dim|str|None axis:
     :param LayerBase|None start:
     :param LayerBase|None window_start:
     :param LayerBase|int|None window_size:
@@ -2036,7 +2036,7 @@ class SeqLenMaskLayer(_ConcatInputLayer):
                  seq_len_source=None, start=None, window_start=None, window_size=None):
     """
     :param Data x:
-    :param DimensionTag|str|int axis:
+    :param Dim|str|int axis:
     :param bool|NotSpecified axis_allow_int:
       Some callers of this function would pass in an int for axis directly.
       In that case, explicitly set this to True.
@@ -2148,7 +2148,7 @@ class RandIntLayer(LayerBase):
   # noinspection PyUnusedLocal
   def __init__(self, shape, maxval, minval=0, dtype="int32", sparse_dim=None, seed=None, **kwargs):
     """
-    :param tuple[DimensionTag|int]|list[DimensionTag|int] shape: desired shape of output tensor
+    :param tuple[Dim|int]|list[DimensionTag|int] shape: desired shape of output tensor
     :param int maxval: upper bound (exclusive) on range of random values
     :param int minval: lower bound (inclusive) on range of random values
     :param str dtype: type of the output. For random ints, int32 and int64 make sense, but could also be floats
@@ -2174,21 +2174,21 @@ class RandIntLayer(LayerBase):
   def get_out_data_from_opts(cls, name, shape, maxval, minval=0, dtype="int32", sparse_dim=None, **kwargs):
     """
     :param str name:
-    :param tuple[DimensionTag|int]|list[DimensionTag|int] shape: desired shape of output tensor
+    :param tuple[Dim|int]|list[DimensionTag|int] shape: desired shape of output tensor
     :param int maxval: upper bound (exclusive) on range of random values
     :param int minval: lower bound (inclusive) on range of random values
     :param str dtype: type of the output. For random ints, int32 and int64 make sense, but could also be floats
     :param DimensionTag|None sparse_dim:
     :rtype: Data
     """
-    from returnn.tf.util.data import DimensionTag
+    from returnn.tf.util.data import Dim
     dim_tags = []
     for i, d in enumerate(shape):
-      if isinstance(d, DimensionTag):
+      if isinstance(d, Dim):
         pass  # good
       elif isinstance(d, int):
-        d = DimensionTag(
-          kind=DimensionTag.Types.Spatial if i < len(shape) - 1 else DimensionTag.Types.Feature,
+        d = Dim(
+          kind=Dim.Types.Spatial if i < len(shape) - 1 else Dim.Types.Feature,
           description="%s:static:%i" % (name, i),
           dimension=d)
       else:
@@ -2212,7 +2212,7 @@ class RangeLayer(LayerBase):
     :param int|float delta:
     :param str|None dtype:
     :param bool sparse:
-    :param DimensionTag|None out_spatial_dim:
+    :param Dim|None out_spatial_dim:
     """
     out_spatial_dim  # noqa  # used in get_out_data_from_opts
     super(RangeLayer, self).__init__(**kwargs)
@@ -2238,7 +2238,7 @@ class RangeLayer(LayerBase):
     :param int|float delta:
     :param str|None dtype:
     :param bool sparse:
-    :param DimensionTag|None out_spatial_dim:
+    :param Dim|None out_spatial_dim:
     :rtype: Data
     """
     if dtype is None:
@@ -2247,12 +2247,12 @@ class RangeLayer(LayerBase):
       else:
         dtype = "int32"
     dim = len(range(start, limit, delta))
-    tag = DimensionTag(kind=DimensionTag.Types.Spatial, dimension=dim, description="%s:range" % name)
+    tag = Dim(kind=Dim.Types.Spatial, dimension=dim, description="%s:range" % name)
     if out_spatial_dim:
       tag.declare_same_as(out_spatial_dim)
     sparse_dim = None
     if sparse:
-      sparse_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="%s:range-indices" % name)
+      sparse_dim = SpatialDim("%s:range-indices" % name)
     return Data(name="%s_output" % name, dim_tags=[tag], dtype=dtype, sparse_dim=sparse_dim)
 
 
@@ -2341,7 +2341,7 @@ class RangeFromLengthLayer(LayerBase):
     :param str axis:
     :param str dtype:
     :param bool sparse:
-    :param DimensionTag|None out_spatial_dim:
+    :param Dim|None out_spatial_dim:
     """
     out_spatial_dim  # noqa  # used in get_out_data_from_opts
     super(RangeFromLengthLayer, self).__init__(**kwargs)
@@ -2357,16 +2357,16 @@ class RangeFromLengthLayer(LayerBase):
     :param list[LayerBase] sources:
     :param str dtype:
     :param bool sparse:
-    :param DimensionTag|None out_spatial_dim:
+    :param Dim|None out_spatial_dim:
     """
     assert len(sources) == 1, "%s layer %r requires single source" % (cls, name)
     source = sources[0].output
     dim_tag = None
     if source.placeholder is not None:
-      dim_tag = DimensionTag.get_tag_from_size_tensor(source.placeholder)
+      dim_tag = Dim.get_tag_from_size_tensor(source.placeholder)
     if not dim_tag:
-      dim_tag = DimensionTag(
-        kind=DimensionTag.Types.Spatial, description="%s_input_len" % name,
+      dim_tag = Dim(
+        kind=Dim.Types.Spatial, description="%s_input_len" % name,
         batch=source.batch, control_flow_ctx=source.control_flow_ctx,
         dyn_size_ext=source)
       if source.placeholder is not None:
@@ -2419,7 +2419,7 @@ class ConstantLayer(LayerBase):
     """
     :param list[LayerBase] sources:
     :param int|float|bool value:
-    :param tuple[DimensionTag|int]|list[DimensionTag|int] shape: for verification, and defining dim tags
+    :param tuple[Dim|int]|list[DimensionTag|int] shape: for verification, and defining dim tags
     :param str|None dtype:
     :param bool with_batch_dim:
     """
@@ -2447,7 +2447,7 @@ class ConstantLayer(LayerBase):
     """
     :param str name:
     :param int|float|bool value:
-    :param tuple[DimensionTag|int]|list[DimensionTag|int] shape: for verification, and defining dim tags
+    :param tuple[Dim|int]|list[DimensionTag|int] shape: for verification, and defining dim tags
     :param str|None dtype:
     :param bool with_batch_dim:
     :rtype: Data
@@ -2487,12 +2487,12 @@ class GatingLayer(_ConcatInputLayer):
     :param int|None|NotSpecified n_out:
     :rtype: Data
     """
-    from ..util.data import DimensionTag
+    from ..util.data import Dim
     input_data = get_concat_sources_data_template(sources)
     assert not input_data.sparse
     assert input_data.dim % 2 == 0
     dim = input_data.dim // 2
-    new_dim_tag = DimensionTag(kind=DimensionTag.Types.Feature, description="%s:gating" % name, dimension=dim)
+    new_dim_tag = FeatureDim("%s:gating" % name, dimension=dim)
     if n_out is not NotSpecified:
       assert n_out == dim
     return Data(
@@ -2529,7 +2529,7 @@ class WindowLayer(_ConcatInputLayer):
                axis="T", out_spatial_dim=None, padding="same", stride=1, **kwargs):
     """
     :param int|None window_size:
-    :param DimensionTag|None window_dim:
+    :param Dim|None window_dim:
     :param int|None window_left:
     :param int|None window_right:
     :param DimensionTag|str axis: see :func:`Data.get_axis_from_description`
@@ -2574,7 +2574,7 @@ class WindowLayer(_ConcatInputLayer):
           out_spatial_dim_.dyn_size_ext = in_spatial_dim.dyn_size_ext.copy_template(name="%s:spatial-size" % self.name)
         if out_spatial_dim_.dyn_size_ext.placeholder is None:
           from ..util.basic import same_control_flow_ctx
-          from ..util.data import DimensionTag
+          from ..util.data import Dim
           assert in_spatial_dim.dyn_size is not None
           size = in_spatial_dim.dyn_size
           with same_control_flow_ctx(size):
@@ -2599,7 +2599,7 @@ class WindowLayer(_ConcatInputLayer):
     :param returnn.tf.network.TFNetwork network:
     :param list[LayerBase] sources:
     :param int|None window_size:
-    :param DimensionTag|None window_dim:
+    :param Dim|None window_dim:
     :param DimensionTag|str axis:
     :param DimensionTag|None out_spatial_dim:
     :param str padding:
@@ -2629,8 +2629,8 @@ class WindowLayer(_ConcatInputLayer):
             dim = ConvLayer.calc_out_dim(
               in_dim=in_spatial_dim.dimension,
               filter_size=window_size, stride=stride, dilation_rate=1, padding=padding)
-          out_spatial_dim = DimensionTag(
-            kind=DimensionTag.Types.Spatial, description="%s:spatial" % name,
+          out_spatial_dim = Dim(
+            kind=Dim.Types.Spatial, description="%s:spatial" % name,
             dimension=dim, derived_from_tag=in_spatial_dim,
             batch=data.batch, control_flow_ctx=data.control_flow_ctx)
       data = data.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_spatial_dim)
@@ -2638,8 +2638,8 @@ class WindowLayer(_ConcatInputLayer):
     if window_dim:
       assert window_dim.dimension == window_size
     else:
-      window_dim = DimensionTag(
-        kind=DimensionTag.Types.Spatial, description="%s:window" % name, dimension=window_size)
+      window_dim = Dim(
+        kind=Dim.Types.Spatial, description="%s:window" % name, dimension=window_size)
     return data.copy_add_dim_by_tag(axis=new_dim_axis, dim_tag=window_dim, unbroadcast=True)
 
   # noinspection PyMethodOverriding
@@ -2651,7 +2651,7 @@ class WindowLayer(_ConcatInputLayer):
     :param tf.Tensor batch_dim:
     :param returnn.tf.layers.rec.RecLayer|LayerBase rec_layer:
     :param int|None window_size:
-    :param DimensionTag|None window_dim:
+    :param Dim|None window_dim:
     :param DimensionTag|str axis:
     :param list[LayerBase] sources:
     :rtype: dict[str,tf.Tensor]
@@ -2742,7 +2742,7 @@ class PadLayer(_ConcatInputLayer):
 
   def __init__(self, axes, padding, out_dims=None, value=0, mode="constant", **kwargs):
     """
-    :param DimensionTag|str|list[DimensionTag|str] axes: e.g. "F" etc. see :func:`Data.get_axes_from_description`.
+    :param Dim|str|list[DimensionTag|str] axes: e.g. "F" etc. see :func:`Data.get_axes_from_description`.
     :param list[(int,int)]|(int,int)|int padding: how much to pad left/right in each axis
     :param DimensionTag|list[DimensionTag]|None out_dims:
     :param int|float value: what constant value to pad, with mode=="constant"
@@ -2778,7 +2778,7 @@ class PadLayer(_ConcatInputLayer):
       size = in_tag.dyn_size
       with tf_util.same_control_flow_ctx(size):
         size = tf_util.simplify_add(size, p)
-      size_tag = DimensionTag.get_tag_from_size_tensor(size)
+      size_tag = Dim.get_tag_from_size_tensor(size)
       if not size_tag:
         out_tag.set_tag_on_size_tensor(size, batch=in_tag.batch)
       else:
@@ -2807,12 +2807,12 @@ class PadLayer(_ConcatInputLayer):
     """
     :param str name:
     :param list[LayerBase] sources:
-    :param DimensionTag|str|list[DimensionTag|str] axes:
+    :param Dim|str|list[DimensionTag|str] axes:
     :param list[(int,int)]|(int,int)|int padding:
     :param DimensionTag|list[DimensionTag]|None out_dims:
     :rtype: Data
     """
-    from ..util.data import DimensionTag
+    from ..util.data import Dim
     data = get_concat_sources_data_template(sources)
     data.name = "%s_output" % name
     # Make sure that we do not map one axis description to multiple axes,
@@ -2825,9 +2825,9 @@ class PadLayer(_ConcatInputLayer):
     if out_dims:
       if isinstance(out_dims, (list, tuple)):
         assert len(out_dims) == len(axes) == len(padding)
-        assert all(isinstance(d, DimensionTag) for d in out_dims)
+        assert all(isinstance(d, Dim) for d in out_dims)
       else:
-        assert isinstance(out_dims, DimensionTag)
+        assert isinstance(out_dims, Dim)
         assert len(axes) == len(padding) == 1
         out_dims = [out_dims]
     dim_tags = list(data.dim_tags)
@@ -2843,7 +2843,7 @@ class PadLayer(_ConcatInputLayer):
       elif sum(padding[i]) == 0:
         continue
       else:
-        tag = DimensionTag(kind=tag.kind, description="%s_pad%i" % (name, i), dimension=dim, derived_from_tag=tag)
+        tag = Dim(kind=tag.kind, description="%s_pad%i" % (name, i), dimension=dim, derived_from_tag=tag)
       dim_tags[a] = tag
     return data.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
 
@@ -2862,7 +2862,7 @@ class MergeDimsLayer(_ConcatInputLayer):
 
   def __init__(self, axes, keep_order=NotSpecified, n_out=None, **kwargs):
     """
-    :param str|list[DimensionTag|str] axes: see :func:`Data.get_axis_from_description`
+    :param str|list[Dim|str] axes: see :func:`Data.get_axis_from_description`
     :param bool|NotSpecified keep_order: The old default was: the axes are sorted, and then merged.
       Thus, the order of incoming axes will influence the result.
       E.g. inputs [B,S,F] and [B,F,S], with ``axes=["S","F"]``, will get different results,
@@ -3010,7 +3010,7 @@ class MergeDimsLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :param int|None|NotSpecified n_out:
     :param None|dict[str] out_type:
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     :rtype: Data
     """
     from returnn.util import BehaviorVersion
@@ -3030,15 +3030,15 @@ class MergeDimsLayer(_ConcatInputLayer):
     merge_dim_tags = [tag for (i, tag) in enumerate(data.dim_tags) if i in axes]
     merge_target_axis = cls._get_target_axis(input_data=data, merge_axes=axes)
     if any(tag.is_batch_dim() for tag in merge_dim_tags):
-      res_dim_tag_kind = DimensionTag.Types.Batch
+      res_dim_tag_kind = Dim.Types.Batch
     elif any(tag.is_feature_dim() for tag in merge_dim_tags):
-      res_dim_tag_kind = DimensionTag.Types.Feature
+      res_dim_tag_kind = Dim.Types.Feature
     else:
-      res_dim_tag_kind = DimensionTag.Types.Spatial
+      res_dim_tag_kind = Dim.Types.Spatial
     if out_dim:
       assert out_dim.dimension == res_dim
     else:
-      out_dim = DimensionTag(
+      out_dim = Dim(
         kind=res_dim_tag_kind, description="%s_merge_dims" % name,
         dimension=res_dim)
     new_dim_tags = [d for (i, d) in enumerate(data.dim_tags) if i not in axes]
@@ -3084,7 +3084,7 @@ class SplitLayer(_ConcatInputLayer):
     :param str|None axis: feature axis by default
     :param int|None num_splits:
     :param list[int]|None size_splits:
-    :param list[DimensionTag]|None out_dims:
+    :param list[Dim]|None out_dims:
     """
     assert num_splits or size_splits or out_dims, "%s: provide either num_splits or size_splits or out_dims" % self
     super(SplitLayer, self).__init__(**kwargs)
@@ -3107,7 +3107,7 @@ class SplitLayer(_ConcatInputLayer):
     :param str|None axis: feature axis by default
     :param int|None num_splits:
     :param list[int]|None size_splits:
-    :param list[DimensionTag]|None out_dims:
+    :param list[Dim]|None out_dims:
     :param object err_prefix:
     :return: axis, out_dims
     :rtype: (int, list[DimensionTag])
@@ -3130,12 +3130,12 @@ class SplitLayer(_ConcatInputLayer):
       assert sum(size_splits) == dim, "%s: invalid size_splits %r for dim %i in %r" % (
         err_prefix, size_splits, dim, input_data)
     elif out_dims:
-      assert all(isinstance(d, DimensionTag) for d in out_dims)
+      assert all(isinstance(d, Dim) for d in out_dims)
       assert sum(d.dimension for d in out_dims) == dim, "%s: invalid out_dims %r for dim %i in %r" % (
         err_prefix, out_dims, dim, input_data)
     if not out_dims:
       assert size_splits
-      out_dims = [DimensionTag(
+      out_dims = [Dim(
         kind=input_data.dim_tags[axis].kind, description="%s_split%i" % (name, idx),
         dimension=size_splits[idx]) for idx in range(len(size_splits))]
     return axis, out_dims
@@ -3197,7 +3197,7 @@ class SplitLayer(_ConcatInputLayer):
     """
     :param str name:
     :param Data input_data:
-    :param list[DimensionTag] out_dims:
+    :param list[Dim] out_dims:
     :param int idx:
     :param int axis:
     :rtype: Data
@@ -3231,7 +3231,7 @@ class SplitDimsLayer(_ConcatInputLayer):
 
   def __init__(self, axis, dims, pad_to_multiples=None, pad_value=0, **kwargs):
     """
-    :param DimensionTag|str axis: e.g. "F"
+    :param Dim|str axis: e.g. "F"
     :param tuple[DimensionTag|int]|list[DimensionTag|int] dims: what the axis should be split into. e.g. (window, -1)
     :param bool|None pad_to_multiples: If true, input will be padded to the next multiple of the product of the
       static dims, such that splitting is actually possible.
@@ -3248,8 +3248,8 @@ class SplitDimsLayer(_ConcatInputLayer):
 
     from returnn.tf.util.basic import get_shape
     old_shape = get_shape(data.placeholder)
-    if dims and isinstance(dims[0], DimensionTag):
-      assert all(isinstance(d, DimensionTag) for d in dims)
+    if dims and isinstance(dims[0], Dim):
+      assert all(isinstance(d, Dim) for d in dims)
       dims = [d.dimension or -1 for d in dims]
     new_shape = old_shape[:axis] + list(dims) + old_shape[axis + 1:]
     assert len(new_shape) == len(self.output.batch_shape)
@@ -3275,10 +3275,10 @@ class SplitDimsLayer(_ConcatInputLayer):
         # Note: currently get_out_data_from_opts already sets data.size_placeholder[axis_wo_batch] to the input size
         # (meaning we do not need to transform the axis here)
         dyn_size = -(-data.size_placeholder[axis_wo_batch] // constant_size)  # == ceildiv(size, constant_size)
-        if not DimensionTag.get_tag_from_size_tensor(dyn_size):
-          tag = DimensionTag(
+        if not Dim.get_tag_from_size_tensor(dyn_size):
+          tag = Dim(
             description="split-time:%i:%s" % (axis, self.get_absolute_name()),
-            kind=DimensionTag.Types.Spatial, batch=self.output.batch)
+            kind=Dim.Types.Spatial, batch=self.output.batch)
           tag.set_tag_on_size_tensor(dyn_size)
         self.output.size_placeholder[axis_wo_batch] = dyn_size
 
@@ -3337,13 +3337,13 @@ class SplitDimsLayer(_ConcatInputLayer):
   def get_out_data_from_opts(cls, name, axis, dims, pad_to_multiples=None, sources=(), **kwargs):
     """
     :param str name:
-    :param DimensionTag|str axis:
+    :param Dim|str axis:
     :param list[DimensionTag|int]|tuple[DimensionTag|int] dims:
     :param bool|None pad_to_multiples:
     :param list[LayerBase] sources:
     :rtype: Data
     """
-    from ..util.data import DimensionTag
+    from ..util.data import Dim
     input_data = get_concat_sources_data_template(sources)
     data = input_data.copy("%s_output" % name)
     if isinstance(axis, int):
@@ -3353,8 +3353,8 @@ class SplitDimsLayer(_ConcatInputLayer):
       pad_to_multiples = data.is_axis_dynamic(axis)
 
     resolved_dims = None
-    if dims and isinstance(dims[0], DimensionTag):
-      assert all(isinstance(d, DimensionTag) for d in dims)
+    if dims and isinstance(dims[0], Dim):
+      assert all(isinstance(d, Dim) for d in dims)
       resolved_dims = dims
       dims = [d.dimension or -1 for d in dims]
     if data.batch_shape[axis] is not None:
@@ -3372,14 +3372,14 @@ class SplitDimsLayer(_ConcatInputLayer):
       if resolved_dims:
         assert resolved_dims[rem_dim_idx] == axis_dim_tag
     else:
-      rem_dim = DimensionTag(
+      rem_dim = Dim(
         kind=axis_dim_tag.kind,
         description="%s_split_dims%i_rem" % (name, rem_dim_idx),
         dimension=resolved_shape_dims[rem_dim_idx])
     if not resolved_dims:
       resolved_dims = tuple(
-        DimensionTag(
-          kind=DimensionTag.Types.Spatial,
+        Dim(
+          kind=Dim.Types.Spatial,
           description="%s_split_dims%i" % (name, i),
           dimension=resolved_shape_dims[i])
         if i != rem_dim_idx else rem_dim
@@ -3564,7 +3564,7 @@ class UnflattenNdLayer(_ConcatInputLayer):
     """
     :param LayerBase sizes:
     :param int num_axes:
-    :param DimensionTag|str|None in_dim:
+    :param Dim|str|None in_dim:
     :param list[DimensionTag]|None out_dims:
     :param dict[int,LayerBase]|None declare_same_sizes_as:
     """
@@ -3618,7 +3618,7 @@ class UnflattenNdLayer(_ConcatInputLayer):
     :param str name:
     :param list[LayerBase] sources:
     :param int num_axes:
-    :param DimensionTag|str|None in_dim:
+    :param Dim|str|None in_dim:
     :param list[DimensionTag]|None out_dims:
     :param dict[int,LayerBase]|None declare_same_sizes_as:
     :rtype: Data
@@ -3630,11 +3630,11 @@ class UnflattenNdLayer(_ConcatInputLayer):
     out = out.copy_template_excluding_axis(axis)
     if out_dims:
       assert len(out_dims) == num_axes
-      assert all(isinstance(d, DimensionTag) for d in out_dims)
+      assert all(isinstance(d, Dim) for d in out_dims)
       assert not declare_same_sizes_as
     else:
       out_dims = [
-        DimensionTag(kind=DimensionTag.Types.Spatial, description="%s:unflatten-nd:%i" % (name, i))
+        SpatialDim("%s:unflatten-nd:%i" % (name, i))
         for i in range(num_axes)]
       if declare_same_sizes_as:
         for i, other in declare_same_sizes_as.items():
@@ -3702,16 +3702,13 @@ class ExpandDimsLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :rtype: Data
     """
-    from ..util.data import DimensionTag
     init_axis = axis
     data = get_concat_sources_data_template(sources)
     if isinstance(axis, int):
       data = data.copy_as_batch_major()
     axis = cls._get_axis(data=data, axis=axis)
 
-    new_dim = DimensionTag(
-      kind=DimensionTag.Types.Spatial, description="%s_expand_dims" % name,
-      dimension=dim)
+    new_dim = SpatialDim("%s_expand_dims" % name, dim)
     data = data.copy_template(name="%s_output" % name)
     data = data.copy_add_dim_by_tag(new_dim, unbroadcast=True, axis=axis)
     if isinstance(init_axis, str):
@@ -3734,7 +3731,7 @@ class RepeatLayer(_ConcatInputLayer):
     :param LayerBase|int repetitions:
       number of repetitions for each sequence and position in target axis.
       Can be [B,T] or [T,B] or some subset of that shape
-    :param DimensionTag|str axis: (dynamic) axis for repetition (currently only time axis is supported)
+    :param Dim|str axis: (dynamic) axis for repetition (currently only time axis is supported)
     :param DimensionTag|None out_dim:
     """
     super(RepeatLayer, self).__init__(out_dim=out_dim, **kwargs)
@@ -3848,12 +3845,12 @@ class RepeatLayer(_ConcatInputLayer):
     """
     :param str name:
     :param list[LayerBase] sources:
-    :param DimensionTag|str axis:
+    :param Dim|str axis:
     :param LayerBase|int repetitions:
     :param DimensionTag|None out_dim:
     :rtype: Data
     """
-    from ..util.data import DimensionTag
+    from ..util.data import Dim
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
     if data.have_batch_axis():
       data = data.copy_as_batch_major()
@@ -3867,7 +3864,7 @@ class RepeatLayer(_ConcatInputLayer):
       new_dim = None
     data = data.copy_move_axis(original_axis, data.get_batch_axis(0))
     if not out_dim:
-      out_dim = DimensionTag(description="repeated:%s" % name, kind=tag.kind, dimension=new_dim, derived_from_tag=tag)
+      out_dim = Dim(description="repeated:%s" % name, kind=tag.kind, dimension=new_dim, derived_from_tag=tag)
     else:
       assert out_dim.dimension == new_dim
     return data.copy_template_replace_dim_tag(axis=data.get_batch_axis(0), new_dim_tag=out_dim)
@@ -3881,7 +3878,7 @@ class TileLayer(_ConcatInputLayer):
 
   def __init__(self, multiples, out_dims=None, **kwargs):
     """
-    :param dict[DimensionTag|str, int] multiples: number of multiples per axis (axis provided as dim tag or str desc)
+    :param dict[Dim|str, int] multiples: number of multiples per axis (axis provided as dim tag or str desc)
     :param dict[DimensionTag|str, DimensionTag]|None out_dims:
     """
     out_dims  # noqa  # handled in get_out_data_from_opts
@@ -3904,11 +3901,11 @@ class TileLayer(_ConcatInputLayer):
     """
     :param str name:
     :param list[LayerBase] sources:
-    :param dict[DimensionTag|str, int] multiples:
+    :param dict[Dim|str, int] multiples:
     :param dict[DimensionTag|str, DimensionTag]|None out_dims:
     :rtype: Data
     """
-    from ..util.data import DimensionTag
+    from ..util.data import Dim
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
     dim_tags = list(data.dim_tags)
     for axis, multiple in multiples.items():
@@ -3919,7 +3916,7 @@ class TileLayer(_ConcatInputLayer):
         tag = out_dims[axis]
         assert tag.dimension == dim
       else:
-        tag = DimensionTag(kind=tag.kind, description="%s_tile" % name, dimension=dim)
+        tag = Dim(kind=tag.kind, description="%s_tile" % name, dimension=dim)
       dim_tags[axis_int] = tag
     return data.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
 
@@ -4115,7 +4112,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param dict[str,int|str] set_axes:
       This can be used to overwrite the special axes like time_dim_axis or feature_dim_axis.
       For that, use keys "B","T" or "F", and a value via :func:`Data.get_axis_from_description`.
-    :param dict[str|DimensionTag,DimensionTag]|None set_dim_tags: axis -> new dim tag. assigns new dim tags.
+    :param dict[str|Dim,DimensionTag]|None set_dim_tags: axis -> new dim tag. assigns new dim tags.
       If the passed dim tag is yet undefined, this will not use same_dim_tags_as (declare_same_as)
       but create a new dim tag.
       This option is useful for generalized self attention (https://github.com/rwth-i6/returnn/issues/391).
@@ -4189,7 +4186,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
     :param LayerBase|None size_base: similar as size_target
     :param dict[str,int] set_axes:
-    :param dict[str|DimensionTag,DimensionTag]|None set_dim_tags:
+    :param dict[str|Dim,DimensionTag]|None set_dim_tags:
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
     :param bool|None set_sparse: if bool, set sparse value to this
@@ -4262,12 +4259,12 @@ class ReinterpretDataLayer(_ConcatInputLayer):
       if out.dim == set_sparse_dim:
         pass
       else:
-        out.sparse_dim = DimensionTag(
-          kind=DimensionTag.Types.Feature, dimension=set_sparse_dim, description="%s:set-sparse-dim" % name)
+        out.sparse_dim = Dim(
+          kind=Dim.Types.Feature, dimension=set_sparse_dim, description="%s:set-sparse-dim" % name)
     if increase_sparse_dim:
       assert out.sparse
-      out.sparse_dim = DimensionTag(
-        kind=DimensionTag.Types.Feature, dimension=out.sparse_dim.dimension + 1,
+      out.sparse_dim = Dim(
+        kind=Dim.Types.Feature, dimension=out.sparse_dim.dimension + 1,
         description="%s:inc-sparse-dim" % name)
     return out
 
@@ -4301,7 +4298,7 @@ class ConvLayer(_ConcatInputLayer):
       i.e. length of this tuple should be the same as filter_size, or a single int.
     :param int|tuple[int] dilation_rate: dilation for the spatial dims
     :param int groups: grouped convolution
-    :param DimensionTag|None in_dim:
+    :param Dim|None in_dim:
     :param list[DimensionTag|str]|None in_spatial_dims:
     :param int|None n_out: number of outgoing features
     :param DimensionTag|None out_dim:
@@ -4461,7 +4458,7 @@ class ConvLayer(_ConcatInputLayer):
     """
     :param Data output:
     :param int num_batch_dims:
-    :param list[DimensionTag]|tuple[DimensionTag] in_spatial_dims:
+    :param list[Dim]|tuple[DimensionTag] in_spatial_dims:
     :param list[DimensionTag]|None out_spatial_dims:
     :param list[int]|tuple[int] filter_size:
     :param list[int]|tuple[int] strides:
@@ -4492,7 +4489,7 @@ class ConvLayer(_ConcatInputLayer):
             in_dim=size,
             filter_size=filter_size[i], stride=strides[i],
             dilation_rate=dilation_rate[i], padding=padding)
-        size_tag = DimensionTag.get_tag_from_size_tensor(size)
+        size_tag = Dim.get_tag_from_size_tensor(size)
         if not size_tag:
           out_tag.set_tag_on_size_tensor(size, batch=in_tag.batch)
         else:
@@ -4515,7 +4512,7 @@ class ConvLayer(_ConcatInputLayer):
     """
     :param Data input_data:
     :param returnn.tf.network.TFNetwork network:
-    :param DimensionTag|None in_dim:
+    :param Dim|None in_dim:
     :param list[DimensionTag|str]|None in_spatial_dims:
     :param int input_expand_dims: number of spatial dims to add to the input
     :param None|int input_split_feature_dim: if set, like input_add_feature_dim it will add a new feature dim
@@ -4538,7 +4535,7 @@ class ConvLayer(_ConcatInputLayer):
         cls._check_defined_in_spatial_dims(len(in_spatial_dims) == 1)
     if input_expand_dims:
       for i in range(input_expand_dims):
-        dim_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="input_expand_dims:%i" % i, dimension=1)
+        dim_tag = SpatialDim("input_expand_dims:%i" % i, dimension=1)
         input_data = input_data.copy_add_dim_by_tag(dim_tag, unbroadcast=True)
         in_spatial_dims.append(dim_tag)
     if input_split_feature_dim:
@@ -4550,12 +4547,12 @@ class ConvLayer(_ConcatInputLayer):
       in_spatial_dims.append(input_data.dim_tags[input_data.feature_dim_axis])
       input_data = input_data.copy_add_feature_dim()
     if in_dim:
-      assert isinstance(in_dim, DimensionTag)
+      assert isinstance(in_dim, Dim)
       if input_data.feature_dim_or_sparse_dim != in_dim:
         input_data.feature_dim_axis = input_data.get_axis_from_description(in_dim)
     if in_spatial_dims:
-      from returnn.tf.util.data import BatchDim
-      assert all(isinstance(d, (DimensionTag, str)) for d in in_spatial_dims)
+      from returnn.tf.util.data import batch_dim
+      assert all(isinstance(d, (Dim, str)) for d in in_spatial_dims)
       axes = [input_data.get_axis_from_description(d) for d in in_spatial_dims]  # also requires unique dim tags
       in_spatial_dims = [input_data.dim_tags[a] for a in axes]
       assert sorted(set(axes)) == sorted(axes), (
@@ -4569,7 +4566,7 @@ class ConvLayer(_ConcatInputLayer):
         axes = [input_data.get_axis_from_description(d) for d in in_spatial_dims]
         assert sorted(axes) == axes
       assert input_data.feature_dim_axis not in axes, "invalid in_spatial_dims %s" % (in_spatial_dims,)
-      expected_dims = {BatchDim, input_data.feature_dim_or_sparse_dim} | set(in_spatial_dims)
+      expected_dims = {batch_dim, input_data.feature_dim_or_sparse_dim} | set(in_spatial_dims)
       assert len(expected_dims) == 2 + len(in_spatial_dims)
       # There might be more dims in the input than we expect.
       assert set(input_data.dim_tags).issuperset(expected_dims)
@@ -4577,7 +4574,7 @@ class ConvLayer(_ConcatInputLayer):
       # This is needed to support a ConvLayer both inside a rec loop which then can be optimized out.
       # But also this is a useful feature in general.
       # Move all batch dims right next to each other in front. But keep the order.
-      expected_non_batch_dims = expected_dims - {BatchDim}
+      expected_non_batch_dims = expected_dims - {batch_dim}
       batch_axis_idx = 0
       for a, d in enumerate(input_data.dim_tags):
         if d not in expected_non_batch_dims:
@@ -4657,7 +4654,7 @@ class ConvLayer(_ConcatInputLayer):
     :param int input_expand_dims: number of dynamic dims to add to the input
     :param bool input_add_feature_dim:
     :param None|int input_split_feature_dim:
-    :param DimensionTag|None in_dim:
+    :param Dim|None in_dim:
     :param list[DimensionTag|str]|None in_spatial_dims:
     :param int|None n_out: number of outgoing features
     :param DimensionTag|None out_dim:
@@ -4709,12 +4706,12 @@ class ConvLayer(_ConcatInputLayer):
           new_dim = ConvLayer.calc_out_dim(
             in_dim=old_tag.dimension,
             filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
-        dim_tags.append(DimensionTag(
-          kind=DimensionTag.Types.Spatial, description="%s:conv:s%i" % (name, i), dimension=new_dim,
+        dim_tags.append(Dim(
+          kind=Dim.Types.Spatial, description="%s:conv:s%i" % (name, i), dimension=new_dim,
           derived_from_tag=old_tag, undefined=not old_tag))
     if not out_dim:
       assert n_out
-      out_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="%s:channel" % name, dimension=n_out)
+      out_dim = FeatureDim("%s:channel" % name, dimension=n_out)
     dim_tags.append(out_dim)
     feature_dim_axis = NotSpecified
     # Swap the dims if the input dim order doesn't fit the flag auto_use_channel_first.
@@ -4772,7 +4769,7 @@ class PoolLayer(_ConcatInputLayer):
     :param str padding: "valid" or "same"
     :param tuple[int]|int dilation_rate:
     :param tuple[int]|int|None strides: in contrast to tf.nn.pool, the default (if it is None) will be set to pool_size
-    :param DimensionTag|None in_dim:
+    :param Dim|None in_dim:
     :param list[DimensionTag|str]|None in_spatial_dims:
     :param DimensionTag|None out_dim:
     :param list[DimensionTag]|None out_spatial_dims:
@@ -4866,7 +4863,7 @@ class PoolLayer(_ConcatInputLayer):
     :param tuple[int]|list[int]|int strides:
     :param int|tuple[int]|list[int] dilation_rate:
     :param str padding:
-    :param DimensionTag|None in_dim:
+    :param Dim|None in_dim:
     :param list[DimensionTag|str]|None in_spatial_dims:
     :param DimensionTag|None out_dim:
     :param list[DimensionTag]|None out_spatial_dims:
@@ -4969,7 +4966,7 @@ class TransposedConvLayer(_ConcatInputLayer):
     :param str padding: "same" or "valid"
     :param list[int]|int remove_padding:
     :param list[int|None]|int|None output_padding:
-    :param DimensionTag|None in_dim:
+    :param Dim|None in_dim:
     :param list[DimensionTag|str]|None in_spatial_dims:
     :param DimensionTag|None out_dim:
     :param list[DimensionTag]|None out_spatial_dims:
@@ -5171,7 +5168,7 @@ class TransposedConvLayer(_ConcatInputLayer):
     :param list[int]|int remove_padding:
     :param list[int|None]|int|None output_padding:
     :param int|None n_out: number of outgoing features
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     :param list[DimensionTag]|None out_spatial_dims:
     :param DimensionTag|None in_dim:
     :param list[DimensionTag|str]|None in_spatial_dims:
@@ -5209,12 +5206,12 @@ class TransposedConvLayer(_ConcatInputLayer):
           new_dim = cls.deconv_output_length(
             old_tag.dimension, filter_size=filter_size[i], stride=strides[i],
             padding=padding, output_padding=output_padding[i]) - remove_padding[i] * 2
-        dim_tags.append(DimensionTag(
-          kind=DimensionTag.Types.Spatial, description="%s:conv:s%i" % (name, i), dimension=new_dim,
+        dim_tags.append(Dim(
+          kind=Dim.Types.Spatial, description="%s:conv:s%i" % (name, i), dimension=new_dim,
           derived_from_tag=old_tag, undefined=not old_tag))
     if not out_dim:
       assert n_out
-      out_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="%s:channel" % name, dimension=n_out)
+      out_dim = FeatureDim("%s:channel" % name, dimension=n_out)
     dim_tags.append(out_dim)
     return Data(
       name="%s_output" % name, dim_tags=dim_tags,
@@ -5427,7 +5424,7 @@ class ReduceLayer(_ConcatInputLayer):
     out_time_dim_axis = x.time_dim_axis
     if keep_dims:
       for i in axes:
-        y_dim_tags[i] = DimensionTag(kind=y_dim_tags[i].kind, dimension=1, description="%s:keep-dim-%i" % (name, i))
+        y_dim_tags[i] = Dim(kind=y_dim_tags[i].kind, dimension=1, description="%s:keep-dim-%i" % (name, i))
     else:
       if out_batch_dim_axis in axes:
         out_batch_dim_axis = None
@@ -5473,7 +5470,7 @@ class ReduceOutLayer(_ConcatInputLayer):
     """
     :param str mode: "sum" or "max" or "mean"
     :param int num_pieces: how many elements to reduce. The output dimension will be input.dim // num_pieces.
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     """
     super(ReduceOutLayer, self).__init__(out_dim=out_dim, **kwargs)
     if mode == "max":
@@ -5498,7 +5495,7 @@ class ReduceOutLayer(_ConcatInputLayer):
     :param int num_pieces:
     :param list[LayerBase] sources:
     :param str name:
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     :rtype: Data
     """
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
@@ -5507,7 +5504,7 @@ class ReduceOutLayer(_ConcatInputLayer):
     assert out.dim % num_pieces == 0
     dim = out.dim // num_pieces
     if not out_dim:
-      out_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="%s_reduce_out" % name, dimension=dim)
+      out_dim = FeatureDim("%s_reduce_out" % name, dimension=dim)
     assert out_dim.dimension == dim
     return out.copy_template_replace_dim_tag(axis=out.feature_dim_axis, new_dim_tag=out_dim)
 
@@ -5589,7 +5586,7 @@ class StackLayer(LayerBase):
     :param int|None axis: new axis.
       If not given, will use Data.get_default_new_axis_for_dim_tag(<spatial>),
       i.e. some reasonable default for a new spatial axis.
-    :param DimensionTag|None out_spatial_dim:
+    :param Dim|None out_spatial_dim:
     """
     out_spatial_dim  # noqa  # handled in get_out_data_from_opts
     super(StackLayer, self).__init__(**kwargs)
@@ -5609,7 +5606,7 @@ class StackLayer(LayerBase):
     :rtype: (int,Data)
     """
     common_source = Data.get_common_data([src.output for src in sources]).copy_template()
-    dummy_tag = DimensionTag(kind=DimensionTag.Types.Spatial, dimension=1)
+    dummy_tag = Dim(kind=Dim.Types.Spatial, dimension=1)
     return common_source.get_default_new_axis_for_dim_tag(dummy_tag), common_source
 
   @classmethod
@@ -5618,7 +5615,7 @@ class StackLayer(LayerBase):
     :param str name:
     :param list[LayerBase] sources:
     :param int|None axis:
-    :param DimensionTag|None out_spatial_dim:
+    :param Dim|None out_spatial_dim:
     :rtype: Data
     """
     axis_, common_source = cls._get_axis_and_common(sources)
@@ -5626,8 +5623,8 @@ class StackLayer(LayerBase):
       axis = axis_
     out = common_source.copy_template(name="%s_output" % name)
     if not out_spatial_dim:
-      out_spatial_dim = DimensionTag(
-        kind=DimensionTag.Types.Spatial, description="%s:stack" % name, dimension=len(sources))
+      out_spatial_dim = Dim(
+        kind=Dim.Types.Spatial, description="%s:stack" % name, dimension=len(sources))
     assert out_spatial_dim.dimension == len(sources)
     out = out.copy_add_dim_by_tag(axis=axis, dim_tag=out_spatial_dim, unbroadcast=True)
     return out
@@ -5739,7 +5736,7 @@ class WeightedSumLayer(_ConcatInputLayer):
     :param bool|None keep_dims:
     :rtype: Data
     """
-    from ..util.data import DimensionTag
+    from ..util.data import Dim
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
     assert not data.sparse
     axes, padding, size, keep_dims = cls._resolve_opts(
@@ -5758,7 +5755,7 @@ class WeightedSumLayer(_ConcatInputLayer):
     if keep_dims:
       dim_tags = list(data.dim_tags)
       for i, a in enumerate(axes):
-        dim_tags[a] = DimensionTag(
+        dim_tags[a] = Dim(
           kind=dim_tags[a].kind, description="%s:weighted-sum:%i" % (name, i), dimension=res_dims[i])
       data = data.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
     else:
@@ -5825,7 +5822,7 @@ class PrefixInTimeLayer(_ConcatInputLayer):
 
   def __init__(self, axis="T", out_dim=None, prefix=0.0, repeat=1, size_base=None, **kwargs):
     """
-    :param DimensionTag|str axis:
+    :param Dim|str axis:
     :param DimensionTag|None out_dim:
     :param float|str prefix: either some constant or another layer
     :param int|LayerBase repeat: how often to repeat the prefix
@@ -5894,7 +5891,7 @@ class PrefixInTimeLayer(_ConcatInputLayer):
     """
     :param str name:
     :param list[LayerBase] sources:
-    :param DimensionTag|str axis:
+    :param Dim|str axis:
     :param DimensionTag|None out_dim:
     :param LayerBase|None size_base:
     :param LayerBase|int repeat:
@@ -5910,7 +5907,7 @@ class PrefixInTimeLayer(_ConcatInputLayer):
       assert not out_dim
       out_dim = size_base.output.get_time_dim_tag()
     if not out_dim:
-      out_dim = DimensionTag(
+      out_dim = Dim(
         kind=in_dim.kind, description="%s:prefix-in-time" % name, dimension=out_dim_int,
         derived_from_tag=in_dim, batch=in_dim.batch, control_flow_ctx=in_dim.control_flow_ctx)
     assert out_dim.dimension == out_dim_int
@@ -5930,7 +5927,7 @@ class PostfixInTimeLayer(_ConcatInputLayer):
 
   def __init__(self, axis="T", out_dim=None, postfix=0.0, repeat=1, **kwargs):
     """
-    :param DimensionTag|str axis:
+    :param Dim|str axis:
     :param DimensionTag|None out_dim:
     :param float|int|LayerBase postfix: constant or other layer without time axis to use as postfix
     :param int repeat: how often to repeat the postfix
@@ -5975,7 +5972,7 @@ class PostfixInTimeLayer(_ConcatInputLayer):
   @classmethod
   def get_out_data_from_opts(cls, name, sources, axis="T", out_dim=None, postfix=0.0, repeat=1, **kwargs):
     """
-    :param DimensionTag|str axis:
+    :param Dim|str axis:
     :param DimensionTag|None out_dim:
     :param str name:
     :param list[LayerBase] sources:
@@ -5990,7 +5987,7 @@ class PostfixInTimeLayer(_ConcatInputLayer):
     if in_dim.dimension:
       out_dim_int = in_dim.dimension + repeat
     if not out_dim:
-      out_dim = DimensionTag(
+      out_dim = Dim(
         kind=in_dim.kind, description="%s:postfix-in-time" % name, dimension=out_dim_int,
         derived_from_tag=in_dim, batch=in_dim.batch, control_flow_ctx=in_dim.control_flow_ctx)
     assert out_dim.dimension == out_dim_int
@@ -6031,7 +6028,7 @@ class TimeChunkingLayer(_ConcatInputLayer):
     """
     :param int chunk_size:
     :param int chunk_step:
-    :param DimensionTag|str axis:
+    :param Dim|str axis:
     :param DimensionTag|None out_dim:
     """
     super(TimeChunkingLayer, self).__init__(out_dim=out_dim, **kwargs)
@@ -6067,7 +6064,7 @@ class TimeChunkingLayer(_ConcatInputLayer):
     """
     :param str name:
     :param list[LayerBase] sources:
-    :param DimensionTag|str axis:
+    :param Dim|str axis:
     :param DimensionTag|None out_dim:
     :rtype: Data
     """
@@ -6077,7 +6074,7 @@ class TimeChunkingLayer(_ConcatInputLayer):
     data = data.copy_move_axis(old_axis=axis, new_axis=0)
     data = data.copy_with_batch_dim_axis(1)
     if not out_dim:
-      out_dim = DimensionTag(kind=in_dim.kind, description="%s:chunking" % name)
+      out_dim = Dim(kind=in_dim.kind, description="%s:chunking" % name)
     data = data.copy_template_replace_dim_tag(axis=0, new_dim_tag=out_dim)
     data.time_dim_axis = 0
     return data
@@ -6178,7 +6175,7 @@ class DotLayer(LayerBase):
   def __init__(self, red1=NotSpecified, red2=NotSpecified, var1=NotSpecified, var2=NotSpecified,
                add_var2_if_empty=NotSpecified, debug=False, **kwargs):
     """
-    :param str|DimensionTag|tuple[str|DimensionTag]|list[str|DimensionTag] red1: reduce axes of first source
+    :param str|Dim|tuple[str|DimensionTag]|list[str|DimensionTag] red1: reduce axes of first source
     :param str|DimensionTag|tuple[str|DimensionTag]|list[str|DimensionTag] red2: reduce axes of second source
     :param str|DimensionTag|tuple[str|DimensionTag]|list[str|DimensionTag]|None var1: var axes of first source
     :param str|DimensionTag|tuple[str|DimensionTag]|list[str|DimensionTag]|None var2: var axes of second source
@@ -6408,7 +6405,7 @@ class DotLayer(LayerBase):
     :rtype: Data
     """
     from returnn.util import BehaviorVersion
-    from ..util.data import DimensionTag, BatchInfo
+    from ..util.data import Dim, BatchInfo
     assert len(sources) == 2, "dot-layer %r: needs exactly two sources" % (name,)
     # See __init__.
     # As usual, do as minimal error checking as possible here.
@@ -6459,7 +6456,7 @@ class DotLayer(LayerBase):
 
     if not b_var_dims and add_var2_if_empty:
       b_var_dims.append(
-        DimensionTag(kind=DimensionTag.Types.Spatial, description="%s:dot:dummy-var2" % name, dimension=1))
+        SpatialDim("%s:dot:dummy-var2" % name, dimension=1))
 
     dim_tags = list(a_rem_dims + a_var_dims + b_var_dims)
     return Data(
@@ -6520,9 +6517,9 @@ class ShiftAxisLayer(_ConcatInputLayer):
           size_delta = 0
       new_size = tf.clip_by_value(
         self.output.size_placeholder[axis_wob] + size_delta, 0, tf.shape(shifted)[axis])
-      from ..util.data import DimensionTag
-      DimensionTag(
-        kind=DimensionTag.Types.Spatial, description="shift_axis",
+      from ..util.data import Dim
+      Dim(
+        kind=Dim.Types.Spatial, description="shift_axis",
         dyn_size=new_size, batch=self.output.batch,
         src_data=self.output, src_axis=axis)
       self.output.size_placeholder[axis_wob] = new_size
@@ -6537,13 +6534,13 @@ class ShiftAxisLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :rtype: Data
     """
-    from ..util.data import DimensionTag
+    from ..util.data import Dim
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
     assert isinstance(amount, int)
     axis = out.get_axis_from_description(axis)
     tag = out.dim_tags[axis]
     dim = None if tag.dimension is None else max(0, tag.dimension - abs(amount))
-    tag = DimensionTag(kind=tag.kind, description="%s_shift_axis" % name, dimension=dim)
+    tag = Dim(kind=tag.kind, description="%s_shift_axis" % name, dimension=dim)
     return out.copy_template_replace_dim_tag(axis=axis, new_dim_tag=tag)
 
 
@@ -6557,7 +6554,7 @@ class ResizeLayer(_ConcatInputLayer):
   def __init__(self, factor, axis, out_dim=None, kind="nn", fill_value=None, fill_dropout=None, **kwargs):
     """
     :param int factor:
-    :param DimensionTag|str axis: the axis to resize
+    :param Dim|str axis: the axis to resize
     :param DimensionTag|None out_dim:
     :param str kind: "linear", "nn"/"nearest_neighbor", "cubic", "fill"
     :param None|int|float fill_value: if kind=="fill"
@@ -6637,7 +6634,7 @@ class ResizeLayer(_ConcatInputLayer):
   def get_out_data_from_opts(cls, factor, axis, sources, name, out_dim=None, **kwargs):
     """
     :param int factor:
-    :param DimensionTag|str axis:
+    :param Dim|str axis:
     :param list[LayerBase] sources:
     :param str name:
     :param DimensionTag|None out_dim:
@@ -6652,7 +6649,7 @@ class ResizeLayer(_ConcatInputLayer):
     if out_dim:
       assert out_dim.dimension == dim
     else:
-      out_dim = DimensionTag(kind=tag.kind, description="%s_resize" % name, dimension=dim)
+      out_dim = Dim(kind=tag.kind, description="%s_resize" % name, dimension=dim)
     return out.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_dim)
 
 
@@ -6691,7 +6688,7 @@ class RemoveLayer(LayerBase):
   def __init__(self, symbol, axis="T", out_dim=None, **kwargs):
     """
     :param int symbol:
-    :param DimensionTag|str axis:
+    :param Dim|str axis:
     :param DimensionTag|None out_dim:
     """
     super(RemoveLayer, self).__init__(out_dim=out_dim, **kwargs)
@@ -6733,7 +6730,7 @@ class RemoveLayer(LayerBase):
     """
     :param str name:
     :param list[LayerBase] sources:
-    :param DimensionTag|str axis:
+    :param Dim|str axis:
     :param DimensionTag|None out_dim:
     :rtype: Data
     """
@@ -6743,7 +6740,7 @@ class RemoveLayer(LayerBase):
     axis = out.get_axis_from_description(axis, allow_int=False)
     in_dim = out.dim_tags[axis]
     if not out_dim:
-      out_dim = DimensionTag(kind=in_dim.kind, description="%s_removed_items", dimension=None)
+      out_dim = Dim(kind=in_dim.kind, description="%s_removed_items", dimension=None)
     return out.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_dim)
 
 
@@ -6806,7 +6803,7 @@ class CombineLayer(LayerBase):
     :param dict[str]|None eval_locals: locals for eval, will also pass to out_type is out_type is a function
     :param int|None|NotSpecified n_out:
     :param dict[str]|None|(()->Data) out_type:
-    :param set[DimensionTag|_ImplicitDim]|tuple|list|None out_shape: verifies the output shape (dim tags)
+    :param set[Dim|_ImplicitDim]|tuple|list|None out_shape: verifies the output shape (dim tags)
     :param list[LayerBase] sources:
     :rtype: Data
     """
@@ -7248,7 +7245,7 @@ class CondLayer(LayerBase):
     :param LayerBase|dict[str] false_layer:
     """
     import os
-    from ..util.data import DimensionTag
+    from ..util.data import Dim
     super(CondLayer, self).__init__(**kwargs)
     self._parent_scope = os.path.dirname(tf_compat.v1.get_variable_scope().name)
     self.condition_desc = condition
@@ -7269,7 +7266,7 @@ class CondLayer(LayerBase):
       assert isinstance(size, tf.Tensor)
       assert size.shape.ndims == 1
       old_size = self.output.size_placeholder[i]
-      old_tag = DimensionTag.get_tag_from_size_tensor(old_size)
+      old_tag = Dim.get_tag_from_size_tensor(old_size)
       assert old_tag
       old_tag.set_tag_on_size_tensor(size, batch=self.output.batch, same_as_before=True)
       self.output.size_placeholder[i] = size
@@ -7793,7 +7790,7 @@ class VariableLayer(LayerBase):
                init=0,
                **kwargs):
     """
-    :param tuple[int|DimensionTag]|list[int|DimensionTag] shape:
+    :param tuple[int|Dim]|list[int|DimensionTag] shape:
     :param str dtype:
     :param bool add_batch_axis:
     :param bool add_time_axis:
@@ -7845,7 +7842,7 @@ class VariableLayer(LayerBase):
     """
     :param str name:
     :param returnn.tf.network.TFNetwork network:
-    :param tuple[int|DimensionTag]|list[int|DimensionTag] shape:
+    :param tuple[int|Dim]|list[int|DimensionTag] shape:
     :param str dtype:
     :param bool add_batch_axis:
     :param bool add_time_axis:
@@ -7855,11 +7852,11 @@ class VariableLayer(LayerBase):
     assert len(shape) == 0 or all(shape)
     dim_tags = []
     for i, d in enumerate(shape):
-      if isinstance(d, DimensionTag):
+      if isinstance(d, Dim):
         assert d.dimension is not None, "%r: need static dims but got %r" % (name, d)
       elif isinstance(d, int):
-        d = DimensionTag(
-          kind=DimensionTag.Types.Spatial if i < len(shape) - 1 else DimensionTag.Types.Feature,
+        d = Dim(
+          kind=Dim.Types.Spatial if i < len(shape) - 1 else Dim.Types.Feature,
           description="%s:static:%i" % (name, i),
           dimension=d)
       else:
@@ -7867,11 +7864,11 @@ class VariableLayer(LayerBase):
       dim_tags.append(d)
     if add_time_axis:
       dim_tags.insert(
-        0, DimensionTag(kind=DimensionTag.Types.Time, description="%s:dummy-time" % name, dimension=1))
+        0, Dim(kind=Dim.Types.Time, description="%s:dummy-time" % name, dimension=1))
     if add_batch_axis:
       dim_tags.insert(
-        0, DimensionTag(
-          kind=DimensionTag.Types.Batch, description="batch", batch=network.get_global_batch_info()))
+        0, Dim(
+          kind=Dim.Types.Batch, description="batch", batch=network.get_global_batch_info()))
     return Data(
       name="%s_output" % name, dim_tags=dim_tags, dtype=dtype,
       batch=network.get_global_batch_info() if add_batch_axis else None)

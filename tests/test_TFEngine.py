@@ -6,9 +6,8 @@ from __future__ import print_function
 
 import _setup_test_env  # noqa
 import tensorflow as tf
-import returnn.tf.compat as tf_compat
 from returnn.tf.engine import *
-import returnn.tf.util.basic
+from returnn.tf.util.data import Dim, SpatialDim, FeatureDim
 from returnn.tf.network import ExternData
 from returnn.config import Config
 from nose.tools import assert_equal, assert_is_instance, assert_raises
@@ -18,8 +17,6 @@ import numpy.testing
 from pprint import pprint
 import contextlib
 from returnn.util import better_exchook
-from returnn.log import log
-import returnn.util.debug
 
 
 print("TF version:", tf.__version__)
@@ -1191,8 +1188,8 @@ def test_attention_no_encoder_dependency():
   dev_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
   dev_data.init_seq_order(epoch=1)
 
-  from returnn.tf.util.basic import DimensionTag
-  enc_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="enc time")
+  from returnn.tf.util.basic import Dim
+  enc_time = SpatialDim("enc time")
 
   config = Config()
   config.update({
@@ -1501,7 +1498,7 @@ def check_train_and_search_two_targets(net_dict):
   and two corresponding output layers ("decision_0", "decision_1").
   """
   from returnn.datasets.meta import MetaDataset
-  from returnn.tf.util.basic import DimensionTag
+  from returnn.tf.util.basic import Dim
   from test_HDFDataset import generate_hdf_from_other
 
   n_data_dim = 2
@@ -1524,7 +1521,7 @@ def check_train_and_search_two_targets(net_dict):
   )
   data.init_seq_order()
 
-  dec_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="dec time")
+  dec_time = SpatialDim("dec time")
 
   config = Config()
   config.update({

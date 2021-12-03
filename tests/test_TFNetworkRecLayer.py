@@ -18,6 +18,7 @@ from returnn.config import Config
 from returnn.tf.network import *
 from returnn.tf.layers.rec import *
 from returnn.tf.util.basic import is_gpu_available
+from returnn.tf.util.data import Data, Dim, SpatialDim, FeatureDim
 
 
 @unittest.skip("for testing only...")
@@ -1184,7 +1185,7 @@ def test_rec_explicit_lstm():
 
 
 def test_RecUnstackLayer_rec_no_input_explicit_axis():
-  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
+  time_dim = SpatialDim("time")
   net_dict = {
     "output": {"class": "rec", "from": [], "axis": time_dim, "unit": {
       "input": {"class": "rec_unstack", "from": "base:data:data"},
@@ -3423,18 +3424,18 @@ def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, sha
   :param dict[str,dict[str]] other_subnet_layers: other layers for the rec-layer subnet
   :param dict[str,dict[str]] shared_base_net:
   :param float rtol: for the final comparison check
-  :param DimensionTag|None feat_dim:
+  :param Dim|None feat_dim:
   :param DimensionTag|None time_dim:
   """
-  from returnn.tf.util.data import BatchDim
+  from returnn.tf.util.data import batch_dim
   subnet_layer_dict = subnet_layer_dict.copy()
   if feat_dim:
     n_in = feat_dim.dimension
   else:
     n_in = 13
-    feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, dimension=n_in, description="input-feature")
+    feat_dim = Dim(kind=Dim.Types.Feature, dimension=n_in, description="input-feature")
   if not time_dim:
-    time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
+    time_dim = SpatialDim("time")
   n_out = subnet_layer_dict.get("n_out", 17)
   if subnet_layer_dict.get("out_dim", None):
     n_out = subnet_layer_dict["out_dim"].dimension
@@ -3454,7 +3455,7 @@ def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, sha
     rec_layer_dict["unit"].update(other_subnet_layers)
   config = Config({
     "debug_print_layer_output_template": True,
-    "extern_data": {"data": {"dim_tags": [BatchDim, time_dim, feat_dim]}},
+    "extern_data": {"data": {"dim_tags": [batch_dim, time_dim, feat_dim]}},
   })
   from returnn.tf.layers.rec import _SubnetworkRecCell
   with make_scope() as session:
@@ -3535,7 +3536,7 @@ def test_reclayer_optimize_out_linear():
 def test_reclayer_optimize_out_conv1d_no_dim_tags():
   # https://github.com/rwth-i6/returnn/issues/573
   # https://github.com/rwth-i6/returnn/pull/789
-  input_feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="in-feature", dimension=15)
+  input_feat_dim = FeatureDim("in-feature", dimension=15)
   check_reclayer_optimize_out(
     {"class": "conv", "from": "split", "filter_size": [3], "padding": "same"},
     {
@@ -3548,9 +3549,9 @@ def test_reclayer_optimize_out_conv1d_no_dim_tags():
 def test_reclayer_optimize_out_conv1d():
   # https://github.com/rwth-i6/returnn/issues/573
   # https://github.com/rwth-i6/returnn/pull/789
-  input_feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="in-feature", dimension=15)
-  new_feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="split-feature", dimension=3)
-  spatial_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="split-spatial", dimension=5)
+  input_feat_dim = FeatureDim("in-feature", dimension=15)
+  new_feat_dim = FeatureDim("split-feature", dimension=3)
+  spatial_dim = SpatialDim("split-spatial", dimension=5)
   check_reclayer_optimize_out(
     {"class": "conv", "from": "split", "in_spatial_dims": [spatial_dim], "filter_size": [3], "padding": "same"},
     {
@@ -3563,9 +3564,9 @@ def test_reclayer_optimize_out_conv1d():
 def test_reclayer_optimize_out_pool1d():
   # https://github.com/rwth-i6/returnn/issues/573
   # https://github.com/rwth-i6/returnn/pull/789
-  input_feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="in-feature", dimension=15)
-  new_feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="split-feature", dimension=3)
-  spatial_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="split-spatial", dimension=5)
+  input_feat_dim = FeatureDim("in-feature", dimension=15)
+  new_feat_dim = FeatureDim("split-feature", dimension=3)
+  spatial_dim = SpatialDim("split-spatial", dimension=5)
   check_reclayer_optimize_out(
     {"class": "linear", "from": "pool"},
     {
@@ -3581,7 +3582,7 @@ def test_reclayer_optimize_out_pool1d():
 
 def test_reclayer_optimize_out_transposed_conv1d_no_dim_tags():
   # https://github.com/rwth-i6/returnn/issues/573
-  input_feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="in-feature", dimension=15)
+  input_feat_dim = FeatureDim("in-feature", dimension=15)
   check_reclayer_optimize_out(
     {"class": "transposed_conv", "from": "split", "filter_size": [3], "padding": "same"},
     {
@@ -3600,7 +3601,7 @@ def test_reclayer_optimize_out_rec_nativelstm2():
 
 
 def test_test_reclayer_optimize_out_inner_rec_layer():
-  lstm_window_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="lstm-window", dimension=5)
+  lstm_window_dim = SpatialDim("lstm-window", dimension=5)
   check_reclayer_optimize_out(
     {"class": "rec", "unit": "nativelstm2", "from": "win", "axis": lstm_window_dim},
     {
@@ -3612,7 +3613,7 @@ def test_test_reclayer_optimize_out_onlineblstm():
   network = {}
   lstm_dim = 13
   lstm_window = 5
-  lstm_window_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="lstm-window", dimension=lstm_window)
+  lstm_window_dim = SpatialDim("lstm-window", dimension=lstm_window)
 
   def add_lstm(i, direction, src):
     name = "lstm%i_%s" % (i, {1: "fw", -1: "bw"}[direction])
@@ -3646,9 +3647,9 @@ def test_reclayer_optimize_out_selfatt_left():
 
 
 def test_reclayer_optimize_out_cum_concat_gen_self_att():
-  new_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="cum_concat_new_dim")
-  key_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="key_dim", dimension=5)
-  value_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="value_dim", dimension=7)
+  new_dim = SpatialDim("cum_concat_new_dim")
+  key_dim = FeatureDim("key_dim", dimension=5)
+  value_dim = FeatureDim("value_dim", dimension=7)
   n_key = 5
   n_value = 7
   check_reclayer_optimize_out(
@@ -3687,7 +3688,7 @@ def test_reclayer_optimize_out_accum_loop_dyn_size():
   # So outside the loop, the accumulated dyn size should be of shape [T,B] or [B,T].
   # To test this, we first generate some random seq lens based on the input data (shape [B,T,D]).
   from returnn.tf.util.basic import py_print
-  from returnn.tf.util.data import BatchDim, DimensionTag
+  from returnn.tf.util.data import batch_dim, Dim
 
   def _eval_seq_lens(source, **_kwargs):
     # Get some random varying seq lens.
@@ -3695,8 +3696,8 @@ def test_reclayer_optimize_out_accum_loop_dyn_size():
     res = py_print(res, ["seq lens", res, "step :i", source(2)])
     return res
 
-  new_time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="T_new")
-  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="F", dimension=13)
+  new_time_dim = SpatialDim("T_new")
+  feat_dim = FeatureDim("F", dimension=13)
   check_reclayer_optimize_out(
     feat_dim=feat_dim,
     subnet_layer_dict={"class": "linear", "from": "combine", "activation": None, "n_out": 3},
@@ -3705,13 +3706,13 @@ def test_reclayer_optimize_out_accum_loop_dyn_size():
       "sum_exp_data": {"class": "reduce", "mode": "sum", "from": "exp_data", "axis": "F"},  # [B]
       "seq_lens": {
         "class": "eval", "from": ["sum_exp_data", "base:max_sum_exp_data", ":i"],
-        "out_type": {"dtype": "int32"}, "out_shape": {BatchDim},
+        "out_type": {"dtype": "int32"}, "out_shape": {batch_dim},
         "eval": _eval_seq_lens},  # [B]
       "range": {"class": "range_from_length", "from": "seq_lens", "out_spatial_dim": new_time_dim},  # [T_new]
       "combine": {
         "class": "eval", "from": ["data:source", "range"],
         "eval": "source(0) + 0.1 * tf.cast(source(1), tf.float32)",
-        "out_shape": {BatchDim, new_time_dim, feat_dim}},  # [B,T_new,D]
+        "out_shape": {batch_dim, new_time_dim, feat_dim}},  # [B,T_new,D]
     },
     shared_base_net={
       "exp_data": {"class": "activation", "from": "data", "activation": "exp"},  # >0
@@ -4287,10 +4288,10 @@ def test_reclayer_batch_feature_input():
 
 
 def test_reclayer_opt_output_consistent_format():
-  from returnn.tf.util.data import BatchDim, DimensionTag
-  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
-  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="input-feature", dimension=5)
-  config = Config({"extern_data": {"data": {"dim_tags": [BatchDim, time_dim, feat_dim]}}})
+  from returnn.tf.util.data import batch_dim, Dim
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("input-feature", dimension=5)
+  config = Config({"extern_data": {"data": {"dim_tags": [batch_dim, time_dim, feat_dim]}}})
   net_dict = {
     'loop': {
       'class': 'rec',
@@ -4300,7 +4301,7 @@ def test_reclayer_opt_output_consistent_format():
         'constant': {'class': 'constant', 'value': 1.0},  # scalar
         'add': {
           'class': 'combine', 'from': ['prev:i', 'constant'], 'kind': 'add',
-          "out_shape": {BatchDim}},  # [B] via 'i'. [T,B] outside
+          "out_shape": {batch_dim}},  # [B] via 'i'. [T,B] outside
         'i': {'class': 'copy', 'from': 'add'},  # [B] with default behavior currently
 
         'constant_0': {'class': 'constant', 'value': 4.9},
@@ -4310,7 +4311,7 @@ def test_reclayer_opt_output_consistent_format():
         'reduce': {'class': 'reduce', 'axis': 'T', 'from': 'base:data:data', 'mode': 'mean'},  # [B,F] both inside/out
         'mul': {
           'class': 'combine', 'from': ['add', 'reduce'], 'kind': 'mul',
-          "out_shape": {BatchDim, feat_dim}},  # [B,F] inside. [T,B,F] outside
+          "out_shape": {batch_dim, feat_dim}},  # [B,F] inside. [T,B,F] outside
         'output': {'class': 'copy', 'from': 'mul'},
       },
     },
@@ -4706,22 +4707,22 @@ def test_reclayer_move_out_input_train_and_search():
 
 
 def test_reclayer_optimize_out_cumsum_step_by_step():
-  from returnn.tf.util.data import BatchDim, DimensionTag
-  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
-  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feat", dimension=11)
+  from returnn.tf.util.data import batch_dim, Dim
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("feat", dimension=11)
   check_reclayer_optimize_out(
     subnet_layer_dict={
-      "class": "cumsum", "axis": time_dim, "out_shape": {BatchDim, feat_dim}, "out_dim": feat_dim},
+      "class": "cumsum", "axis": time_dim, "out_shape": {batch_dim, feat_dim}, "out_dim": feat_dim},
     feat_dim=feat_dim, time_dim=time_dim)
 
 
 def test_reclayer_optimize_out_cumsum_unrelated_axis():
-  from returnn.tf.util.data import BatchDim, DimensionTag
-  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
-  feat_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feat", dimension=11)
+  from returnn.tf.util.data import batch_dim, Dim
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("feat", dimension=11)
   check_reclayer_optimize_out(
     subnet_layer_dict={
-      "class": "cumsum", "axis": feat_dim, "out_shape": {BatchDim, feat_dim}, "out_dim": feat_dim},
+      "class": "cumsum", "axis": feat_dim, "out_shape": {batch_dim, feat_dim}, "out_dim": feat_dim},
     feat_dim=feat_dim, time_dim=time_dim)
 
 
@@ -5321,7 +5322,7 @@ def test_onlineblstm():
 def test_GenericAttentionLayer_basic0():
   from returnn.tf.layers.base import InternalLayer
   net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
-  time = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
+  time = SpatialDim("time")
   kwargs = dict(
     name="att", network=net,
     auto_squeeze=True,
@@ -5347,7 +5348,7 @@ def test_GenericAttentionLayer_basic():
   # This is a common situation when the GenericAttentionLayer is inside a recurrent loop,
   # and it gets the encoder values from outside ("base:enc_value" or so),
   # and the attention weights from inside the loop, and they have the same time dim axis as the encoder values.
-  time = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
+  time = SpatialDim("time")
   kwargs = dict(
     name="att", network=net,
     auto_squeeze=True,
@@ -5370,7 +5371,7 @@ def test_GenericAttentionLayer_basic():
 def test_GenericAttentionLayer_basic_multi_head():
   from returnn.tf.layers.base import InternalLayer
   net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
-  time = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
+  time = SpatialDim("time")
   num_heads = 8
   kwargs = dict(
     name="att", network=net,
@@ -5394,7 +5395,7 @@ def test_GenericAttentionLayer_weights_auto_squeeze_time_end():
   # Example: weights (B,1,T), base (B,T,V)
   from returnn.tf.layers.base import InternalLayer
   net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
-  time = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
+  time = SpatialDim("time")
   kwargs = dict(
     name="att", network=net,
     auto_squeeze=True,
@@ -5420,7 +5421,7 @@ def test_GenericAttentionLayer_weights_static_time_axis():
   window_size = 10
   from returnn.tf.layers.base import InternalLayer
   net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
-  time = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
+  time = SpatialDim("time")
   kwargs = dict(
     name="att", network=net,
     auto_squeeze=True,
@@ -5446,7 +5447,7 @@ def test_GenericAttentionLayer_weights_heads_time_end():
   # Example: weights (B,H,T), base (B,T,H,V)
   from returnn.tf.layers.base import InternalLayer
   net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
-  time = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
+  time = SpatialDim("time")
   num_heads = 8
   kwargs = dict(
     name="att", network=net,
@@ -5472,7 +5473,7 @@ def test_GenericAttentionLayer_weights_heads_auto_squeeze_time_end():
   # Example: weights (B,H,1,T), base (B,T,H,V)
   from returnn.tf.layers.base import InternalLayer
   net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
-  time = DimensionTag(kind=DimensionTag.Types.Spatial, description="time")
+  time = SpatialDim("time")
   num_heads = 8
   kwargs = dict(
     name="att", network=net,
@@ -5496,21 +5497,21 @@ def test_GenericAttentionLayer_weights_heads_auto_squeeze_time_end():
 
 
 def test_GenericAttentionLayer_extra_spatial():
-  from returnn.tf.util.data import BatchDim
+  from returnn.tf.util.data import batch_dim
   from returnn.tf.layers.base import InternalLayer
   net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
   # This is the situation when the GenericAttentionLayer is outside the recurrent loop,
   # and it gets some encoder values (with different time axis),
   # and the attention weights, which has two spatial axis, one of the decoder, and one of the encoder.
-  dec_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="dec time")
-  enc_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="enc time")
-  feat1_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="feature1", dimension=1)
+  dec_time = SpatialDim("dec time")
+  enc_time = SpatialDim("enc time")
+  feat1_dim = FeatureDim("feature1", dimension=1)
   kwargs = dict(
     name="att", network=net,
     weights=InternalLayer(
       name="att_weights", network=net,
       output=Data(
-        name='att_weights_output', dim_tags=[BatchDim, dec_time, enc_time, feat1_dim], auto_create_placeholders=True)),
+        name='att_weights_output', dim_tags=[batch_dim, dec_time, enc_time, feat1_dim], auto_create_placeholders=True)),
     base=InternalLayer(
       name="enc_value", network=net,
       output=Data(
@@ -5527,19 +5528,19 @@ def test_GenericAttentionLayer_extra_spatial():
 
 
 def test_GenericAttentionLayer_extra_spatial_multi_head():
-  from returnn.tf.util.data import BatchDim
+  from returnn.tf.util.data import batch_dim
   from returnn.tf.layers.base import InternalLayer
   net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
-  dec_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="dec time")
-  enc_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="enc time")
+  dec_time = SpatialDim("dec time")
+  enc_time = SpatialDim("enc time")
   num_heads = 8
-  heads_dim = DimensionTag(kind=DimensionTag.Types.Feature, description="heads", dimension=num_heads)
+  heads_dim = FeatureDim("heads", dimension=num_heads)
   kwargs = dict(
     name="att", network=net,
     weights=InternalLayer(
       name="att_weights", network=net,
       output=Data(
-        name='att_weights_output', dim_tags=[BatchDim, dec_time, enc_time, heads_dim], auto_create_placeholders=True)),
+        name='att_weights_output', dim_tags=[batch_dim, dec_time, enc_time, heads_dim], auto_create_placeholders=True)),
     base=InternalLayer(
       name="enc_value", network=net,
       output=Data(
@@ -6038,7 +6039,7 @@ def test_MaskedComputationLayer_UnmaskLayer_masked_outside():
 def test_MaskedComputationLayer_outside():
   with make_scope() as session:
     config = Config({"debug_print_layer_output_template": True})
-    tag = DimensionTag(kind=DimensionTag.Types.Spatial, description='time')
+    tag = SpatialDim('time')
     net = TFNetwork(
       extern_data=ExternData({
         "data": {"dim": 20, "sparse": True, "same_dim_tags_as": {"t": tag}},
@@ -6435,7 +6436,7 @@ def test_OptimalCompletionsLayer():
 
 
 def test_extra_scatter_nd_search_train():
-  from returnn.tf.util.data import BatchDim
+  from returnn.tf.util.data import batch_dim
   from returnn.tf.layers.rec import _SubnetworkRecCell
   rnd = numpy.random.RandomState(42)
   n_batch, n_enc_time, n_in, n_dec_time, n_out = 2, 11, 5, 7, 6
@@ -6533,7 +6534,7 @@ def test_extra_scatter_nd_search_train():
         source(1)  # call, but ignore
         return source(0)  # only hard att
 
-    t_rel_idxs_dim = DimensionTag(kind=DimensionTag.Types.Spatial, dimension=6, description="t_rel_idxs_dim")
+    t_rel_idxs_dim = Dim(kind=Dim.Types.Spatial, dimension=6, description="t_rel_idxs_dim")
     return {
       "class": "rec", "from": [], "back_prop": backprop,
       "unit": {
@@ -6543,7 +6544,7 @@ def test_extra_scatter_nd_search_train():
         "t_rel_idxs_": {"class": "range", "limit": 6, "out_spatial_dim": t_rel_idxs_dim},
         "prev_t_": {"class": "reinterpret_data", "set_sparse": False, "from": "prev:t"},
         "t_rel_idxs": {"class": "combine", "kind": "add", "from": ["prev_t_", "t_rel_idxs_"],
-                       "out_shape": {BatchDim, t_rel_idxs_dim}},
+                       "out_shape": {batch_dim, t_rel_idxs_dim}},
         "energy_in": {"class": "combine", "kind": "add",
                       "from": ["base:enc_ctx", "s_transformed", "energy_in_t_rel_var"], "n_out": EncKeyTotalDim},
         "energy_in_t_rel_var": {
@@ -6925,7 +6926,7 @@ def test_generalized_non_rec_self_attention():
   n_value_dim_per_head = 7
   n_key_dim_total = n_heads * n_key_dim_per_head
   n_value_dim_total = n_heads * n_value_dim_per_head
-  time_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="time_dim")
+  time_dim = SpatialDim("time_dim")
   config = Config({
     "extern_data": {"data": {"dim": n_in, "same_dim_tags_as": {"T": time_dim}}}
   })
@@ -6936,7 +6937,7 @@ def test_generalized_non_rec_self_attention():
       "num_heads": n_heads, "total_key_dim": n_key_dim_total,
       "is_output_layer": True},  # [B,T,V']
   }
-  new_dim = DimensionTag(kind=DimensionTag.Types.Spatial, description="new_self_att_dim")
+  new_dim = SpatialDim("new_self_att_dim")
   net_dict_new = {
     "qkv": {
       "class": "linear", "from": "data", "with_bias": False,
@@ -7279,7 +7280,7 @@ def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis,
   d[output + '_value'] = {'class': 'copy', 'from': [output + '_qkv_split/2']}  # [B,T?,n,F|d_v]
 
   # Accumulate keys/values or rename the axis
-  key_dim_tag = DimensionTag(kind=DimensionTag.Types.Time, description='self-att-keys')
+  key_dim_tag = Dim(kind=Dim.Types.Time, description='self-att-keys')
   key_axis = 'stag:' + key_dim_tag.description
   if inside_rec_layer:
     d[output + '_key_accum'] = {
