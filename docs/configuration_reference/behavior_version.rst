@@ -22,6 +22,19 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 9 (2021-12-03)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:class:`ConvLayer`, :class:`PoolLayer` use ``auto_use_channel_first=True`` by default.
+
+In principle, nothing should ever change due to this
+when a config is correct in that nothing depends on the order of axes.
+However, this is now introduced as a new behavior version
+because older configs might depend on the order of axes.
+With the other behavior changes, this is mostly disallowed though,
+so when you make use of a higher behavior version anyway,
+this should be safe.
+
 Behavior version 8 (2021-11-30)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
