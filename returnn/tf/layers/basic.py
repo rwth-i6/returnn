@@ -150,7 +150,6 @@ def get_concat_sources_data_template(src_layers, out_dim=None, allow_broadcast_a
   :return: data with no placeholders set. it is always a copy or new instance, so safe to manipulate
   :rtype: Data
   """
-  from ..util.data import Dim
   assert src_layers, "need source layers"
   if len(src_layers) == 1:
     data = src_layers[0].output.copy_template(name=name)
@@ -2487,7 +2486,6 @@ class GatingLayer(_ConcatInputLayer):
     :param int|None|NotSpecified n_out:
     :rtype: Data
     """
-    from ..util.data import Dim
     input_data = get_concat_sources_data_template(sources)
     assert not input_data.sparse
     assert input_data.dim % 2 == 0
@@ -6405,7 +6403,7 @@ class DotLayer(LayerBase):
     :rtype: Data
     """
     from returnn.util import BehaviorVersion
-    from ..util.data import Dim, BatchInfo
+    from ..util.data import BatchInfo
     assert len(sources) == 2, "dot-layer %r: needs exactly two sources" % (name,)
     # See __init__.
     # As usual, do as minimal error checking as possible here.
