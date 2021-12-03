@@ -383,7 +383,7 @@ def test_concat_sources_dim1():
 
 
 def test_concat_new_dim_tag():
-  from returnn.tf.util.data import DimensionTag, BatchDim
+  from returnn.tf.util.data import DimensionTag
   with make_scope():
     n_out = 5
     time_tag = DimensionTag(DimensionTag.Types.Spatial, "time")
@@ -396,9 +396,9 @@ def test_concat_new_dim_tag():
       }})
     net = TFNetwork(config=config, search_flag=True)
     net.construct_from_dict({
-      "data_new": {"class": "reinterpret_data", "from": "data",
-                   "set_dim_tags": {"t": new_time_tag}
-      },
+      "data_new": {
+        "class": "reinterpret_data", "from": "data",
+        "set_dim_tags": {"t": new_time_tag}},
       "output": {"class": "rec", "from": "data", "unit": {
         "prev_out0": {
           "class": "reinterpret_data", "from": "prev:output", "set_sparse": False},
