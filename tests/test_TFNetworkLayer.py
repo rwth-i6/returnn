@@ -382,6 +382,40 @@ def test_concat_sources_dim1():
     session.run(out.output.placeholder, feed_dict=feed_dict)
 
 
+def test_concat_new_dim_tag():
+  from returnn.tf.util.data import DimensionTag, BatchDim
+  with make_scope():
+    n_out = 5
+    time_tag = DimensionTag(DimensionTag.Types.Spatial, "time")
+    new_time_tag = DimensionTag(DimensionTag.Types.Spatial, "new-time")
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out, "same_dim_tags_as": {"t": time_tag}},
+        "classes": {"dim": n_out, "sparse": True, "same_dim_tags_as": {"t": time_tag}}
+      }})
+    net = TFNetwork(config=config, search_flag=True)
+    net.construct_from_dict({
+      "data_new": {"class": "reinterpret_data", "from": "data",
+                   "set_dim_tags": {"t": new_time_tag}
+      },
+      "output": {"class": "rec", "from": "data", "unit": {
+        "prev_out0": {
+          "class": "reinterpret_data", "from": "prev:output", "set_sparse": False},
+        "prev_out1": {"class": "cast", "from": "prev_out0", "dtype": "float32"},
+        "prev_out": {"class": "expand_dims", "from": "prev_out1", "axis": "f"},
+        "data_concat": {
+          "class": "copy", "from": ["base:data_new", "prev_out"]
+        },
+        "data_red": {"class": "reduce", "from": "data_concat", "axis": "stag:new-time", "mode": "max"},
+        "output_prob": {"class": "softmax", "from": "data_red", "target": "classes", "loss": "ce"},
+        "output": {
+          "class": "choice", "from": "output_prob", "beam_size": 3, "target": "classes",
+          "input_type": "prob", "initial_output": 0}
+      }}
+    })
+
+
 def test_ConcatLayer():
   with make_scope() as session:
     net_dict = {
