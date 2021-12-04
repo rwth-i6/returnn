@@ -363,11 +363,13 @@ class ConcatLayer(LayerBase):
   """
   layer_class = "concat"
 
-  def __init__(self, sources, allow_broadcast=False, **kwargs):
+  def __init__(self, sources, allow_broadcast=False, out_dim=None, **kwargs):
     """
     :param list[(LayerBase,str|Dim)] sources:
     :param bool allow_broadcast:
+    :param Dim out_dim:
     """
+    out_dim  # noqa  # via get_out_data_from_opts
     if allow_broadcast:
       raise NotImplementedError
     sources, axes = zip(*sources)  # unzip
@@ -395,11 +397,12 @@ class ConcatLayer(LayerBase):
       allow_broadcast=[allow_broadcast] * len(sources_data))
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, allow_broadcast=False, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, allow_broadcast=False, out_dim=None, **kwargs):
     """
     :param str name:
     :param list[(LayerBase,str|Dim)] sources:
     :param bool allow_broadcast:
+    :param Dim|None out_dim:
     :rtype: Data
     """
     assert sources
@@ -413,13 +416,15 @@ class ConcatLayer(LayerBase):
       dimension = 0
       for tag in concat_dim_tags:
         dimension += tag.dimension
-    # We ignore allow_broadcast here... Anyway not currently implemented.
-    # Just overtake the first input format.
-    concat_res_dim_tag = Dim(
-      kind=concat_dim_tags[0].kind, description="%s_concat" % name, dimension=dimension,
-      derived_from_tag=concat_dim_tags[0])
+    if not out_dim:
+      # We ignore allow_broadcast here... Anyway not currently implemented.
+      # Just overtake the first input format.
+      out_dim = Dim(
+        kind=concat_dim_tags[0].kind, description="%s_concat" % name, dimension=dimension,
+        derived_from_tag=concat_dim_tags[0])
+    assert out_dim.dimension == dimension
     res_dim_tags = list(sources[0].output.dim_tags)
-    res_dim_tags[axes_int[0]] = concat_res_dim_tag
+    res_dim_tags[axes_int[0]] = out_dim
     return Data(name="%s_output" % name, dim_tags=res_dim_tags, dtype=sources[0].output.dtype)
 
   @classmethod
