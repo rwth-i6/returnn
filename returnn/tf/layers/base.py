@@ -1770,8 +1770,10 @@ class ReuseParams:
         else:
           assert isinstance(value, dict)
           value = value.copy()
-          if "reuse_layer" in value:
+          if value.get("reuse_layer", None):
             value["reuse_layer"] = optional_get_layer(value["reuse_layer"])
+          if value.get("layer_output", None):
+            value["layer_output"] = get_layer(value["layer_output"])  # not optional, we need it right away
         opts["map"][key] = ReuseParams(**value)
     return ReuseParams(**opts)
 
@@ -1902,18 +1904,22 @@ class ReuseParams:
           name=layer_name, layer_class=layer_class, **layer_desc)
 
   # noinspection PyShadowingBuiltins
-  def __init__(self, reuse_layer=None, map=None, custom=None, auto_create_missing=False):
+  def __init__(self, reuse_layer=None, map=None, custom=None, auto_create_missing=False, layer_output=None, shape=None):
     """
     :param LayerBase|ReuseParams.LazyLayerResolver|None reuse_layer:
     :param dict[str,ReuseParams]|None map:
     :param (**kwargs)->(tf.Tensor|tf.Variable) custom: see :func:`self.variable_custom_getter`
     :param bool auto_create_missing:
+    :param LayerBase|None layer_output:
+    :param tuple[DimensionTag]|None shape:
     """
     assert isinstance(reuse_layer, (LayerBase, ReuseParams.LazyLayerResolver)) or not reuse_layer
     self._reuse_layer = reuse_layer
     self.param_map = map
     self.custom_func = custom
     self.auto_create_missing = auto_create_missing
+    self.layer_output = layer_output
+    self.shape = shape
 
   def __repr__(self):
     return "<%s reuse_layer %r, map %r>" % (self.__class__.__name__, self._reuse_layer, self.param_map)
@@ -1979,7 +1985,7 @@ class ReuseParams:
           tf_compat.v1.get_variable_scope(), custom_getter=_variable_custom_getter, **kwargs) as scope:
       return scope
 
-  def variable_custom_getter(self, getter, name, base_layer, **kwargs):
+  def variable_custom_getter(self, base_layer, name, shape, dtype, getter, **kwargs):
     """
     By TF docs, from :func:`_VariableStore.get_variable`:
     Callable that takes as a first argument the true getter,
@@ -1996,31 +2002,42 @@ class ReuseParams:
     ```
     In addition, we get the argument `base_scope_name`, via :func:`self.get_variable_scope`.
 
-    :param (...)->tf.Variable getter:
-    :param str name: absolute param name
     :param LayerBase base_layer: we expect that this is the prefix of ``name``
+    :param str name: absolute param name
+    :param tuple[int] shape:
+    :param tensorflow.DType dtype:
+    :param (...)->tf.Variable getter:
     :rtype: tf.Variable|tf.Tensor
     """
+    if self.shape is not None:
+      assert shape == tuple(d.dimension for d in self.shape), "unexpected shape %r for param %r" % (shape, name)
     abs_scope_prefix = base_layer.get_absolute_name_scope_prefix()
     assert not abs_scope_prefix or abs_scope_prefix.endswith("/")
     assert name.startswith(abs_scope_prefix)
     param_name = name[len(abs_scope_prefix):]  # e.g. "W" (not "rec/W")
     if self.custom_func:
       return self.custom_func(
-        base_layer=base_layer, reuse_layer=self.reuse_layer, name=param_name, getter=getter, full_name=name, **kwargs)
+        base_layer=base_layer, reuse_layer=self.reuse_layer, full_name=name,
+        name=param_name, shape=shape, dtype=dtype, getter=getter, **kwargs)
     if self.param_map is not None:
       if not self.auto_create_missing:
         assert param_name in self.param_map
       if param_name in self.param_map:
         return self.param_map[param_name].variable_custom_getter(
-          getter=getter, name=name, base_layer=base_layer, **kwargs)
+          base_layer=base_layer, name=name, shape=shape, dtype=dtype, getter=getter, **kwargs)
     if self.reuse_layer:
       if not self.auto_create_missing:
         assert param_name in self.reuse_layer.params
       if param_name in self.reuse_layer.params:
         return self.reuse_layer.params[param_name]
+    if self.layer_output:
+      if self.shape is not None:
+        out = self.layer_output.output.copy_compatible_to(Data(name=name, dim_tags=self.shape, dtype=str(dtype)))
+        return out.placeholder
+      assert shape == self.layer_output.output.batch_shape
+      return self.layer_output.output.placeholder
     assert self.auto_create_missing
-    return getter(name=name, **kwargs)
+    return getter(name=name, shape=shape, dtype=dtype, **kwargs)
 
 
 class SearchChoices(object):
