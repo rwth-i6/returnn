@@ -113,7 +113,7 @@ Contains code from TensorFlow:
 
 Contains code from pumpikano-tf-dann:
  - Website: https://github.com/pumpikano/tf-dann
- - No project license
+ - MIT License
  - Copyright Clayton Mellina
  - Function FlipGradientBuilder in TFUtil.py.
 
