@@ -2973,16 +2973,12 @@ def test_preload_from_files_with_reuse():
     for param_name in ["W", "b"]:
       param_orig = layer_orig[param_name]
       param_clone_main = layer_clone_main[param_name]
-      param_clone_clone = layer_clone_clone[param_name]
-      numpy.testing.assert_array_equal(param_orig, param_clone_clone)
       numpy.testing.assert_array_equal(param_orig, param_clone_main)
 
     main = engine.network.layers["main_" + layer_name]
     clone = engine.network.layers["clone_" + layer_name]
     assert_equal(set(main.params.keys()), {"W", "b"})
-    assert_equal(set(clone.params.keys()), {"W", "b"})
-    assert main.params["W"] is clone.params["W"]
-    assert main.params["b"] is clone.params["b"]
+    assert_equal(set(clone.params.keys()), set())
 
   engine.finalize()
 

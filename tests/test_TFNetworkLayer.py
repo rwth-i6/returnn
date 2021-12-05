@@ -2891,9 +2891,7 @@ def test_reuse_params():
     l1 = network.layers["l1"]
     l2 = network.layers["output"]
     assert_equal(set(l1.params.keys()), {"W", "b"})
-    assert_equal(set(l2.params.keys()), {"W", "b"})
-    assert l1.params["W"] is l2.params["W"]
-    assert l1.params["b"] is l2.params["b"]
+    assert_equal(set(l2.params.keys()), set())
     assert_equal(set(network.get_trainable_params()), {l1.params["W"], l1.params["b"]})
 
 
@@ -4414,9 +4412,7 @@ def test_ReuseParams_dep_loop():
   l2 = network.get_layer("layer2")
   assert not tf_util.has_control_flow_context(l2.output.placeholder)  # outside the loop
   assert isinstance(l2, LinearLayer)
-  assert set(l1.params.keys()) == set(l2.params.keys()) == {"W", "b"}
-  assert l1.params["W"] is l2.params["W"]
-  assert l1.params["b"] is l2.params["b"]
+  assert set(l1.params.keys()) == set() and set(l2.params.keys()) == {"W", "b"}
 
   def make_feed_dict(seq_len=10):
     random = numpy.random.RandomState(seed=1)
@@ -4479,9 +4475,7 @@ def test_ReuseParams_dep_loop_2():
   l2 = network.get_layer("layer2")
   assert not tf_util.has_control_flow_context(l2.output.placeholder)  # outside the loop
   assert isinstance(l2, LinearLayer)
-  assert set(l1.params.keys()) == set(l2.params.keys()) == {"W", "b"}
-  assert l1.params["W"] is l2.params["W"]
-  assert l1.params["b"] is l2.params["b"]
+  assert set(l1.params.keys()) == set() and set(l2.params.keys()) == {"W", "b"}
 
   def make_feed_dict(seq_len=10):
     random = numpy.random.RandomState(seed=1)
@@ -4544,9 +4538,7 @@ def test_ReuseParams_dep_loop_3():
   l2 = network.get_layer("layer2")
   assert not tf_util.has_control_flow_context(l2.output.placeholder)  # outside the loop
   assert isinstance(l2, LinearLayer)
-  assert set(l1.params.keys()) == set(l2.params.keys()) == {"W", "b"}
-  assert l1.params["W"] is l2.params["W"]
-  assert l1.params["b"] is l2.params["b"]
+  assert set(l1.params.keys()) == set() and set(l2.params.keys()) == {"W", "b"}
 
   def make_feed_dict(seq_len=10):
     random = numpy.random.RandomState(seed=1)
