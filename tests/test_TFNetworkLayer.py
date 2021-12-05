@@ -192,6 +192,46 @@ def test_LinearLayer_two_time_dims_allow_broadcast_all_sources():
     session.run(fetches=output.placeholder, feed_dict=make_feed_dict(network.extern_data))
 
 
+def test_LinearLayer_reuse_params_layer_output():
+  from returnn.tf.util.data import batch_dim
+  with make_scope() as session:
+    time_dim = SpatialDim("time")
+    data_feat_dim = FeatureDim("feature", dimension=5)
+    out_feat_dim = FeatureDim("feature", dimension=7)
+    config = Config({
+      "extern_data": {
+        "data": {"dim_tags": [batch_dim, time_dim, data_feat_dim]},
+      },
+    })
+    network = TFNetwork(config=config)
+    network.construct_from_dict({
+      "weights": {"class": "variable", "shape": [data_feat_dim, out_feat_dim]},
+      "bias": {"class": "variable", "shape": [out_feat_dim]},
+      "out1": {
+        "class": "linear", "from": "data", "out_dim": out_feat_dim,
+        "is_output_layer": True,
+        "reuse_params": {
+          "map": {
+            "W": {"layer_output": "weights"},
+            "b": {"layer_output": "bias"}}}},
+      "out2_": {
+        "class": "dot", "from": ["data", "weights"],
+        "red1": data_feat_dim, "red2": data_feat_dim,
+        "var1": [batch_dim, time_dim], "var2": out_feat_dim},
+      "out2": {
+        "class": "combine", "kind": "add", "from": ["out2_", "bias"],
+        "is_output_layer": True}
+    })
+    out1 = network.get_layer("out1").output
+    out2 = network.get_layer("out2").output
+    params = network.get_params_list()
+    assert len(params) == 2  # weights and bias
+    session.run(tf_compat.v1.global_variables_initializer())
+    out1_np, out2_np = session.run(
+      fetches=(out1.placeholder, out2.placeholder), feed_dict=make_feed_dict(network.extern_data))
+    numpy.testing.assert_array_equal(out1_np, out2_np)
+
+
 def test_PadLayer_time():
   n_batch, n_time, n_in = 7, 3, 20
   config = Config({
