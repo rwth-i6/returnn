@@ -993,14 +993,16 @@ class SliceNdLayer(_ConcatInputLayer):
   layer_class = "slice_nd"
   recurrent = True
 
-  def __init__(self, start, size, min_size=None, **kwargs):
+  def __init__(self, start, size, min_size=None, out_spatial_dim=None, **kwargs):
     """
     :param LayerBase start: (B,...)
     :param int|LayerBase|Dim|None size:
       We assume that this is >=0. If this might not be the case, use ``min_size=0``.
       If None, it uses the max possible size, and it becomes a dynamic axis.
     :param int|None min_size: if size is None, but we want to have a min-size
+    :param Dim|None out_spatial_dim:
     """
+    out_spatial_dim  # noqa  # via get_out_data_from_opts
     super(SliceNdLayer, self).__init__(**kwargs)
     from returnn.tf.util.basic import where_bc
     from returnn.tf.util.data import Data
@@ -1120,12 +1122,13 @@ class SliceNdLayer(_ConcatInputLayer):
     return dep_layers
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources=(), start=None, size=None, **kwargs):
+  def get_out_data_from_opts(cls, name, sources=(), start=None, size=None, out_spatial_dim=None, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param LayerBase|None start:
     :param int|LayerBase|Dim|None size:
+    :param Dim|None out_spatial_dim:
     :rtype: Data
     """
     from ..util.data import Dim
@@ -1135,15 +1138,22 @@ class SliceNdLayer(_ConcatInputLayer):
     if isinstance(size, LayerBase):
       size = None
     if isinstance(size, Dim):
-      tag = size
+      if out_spatial_dim:
+        assert size == out_spatial_dim
+      else:
+        out_spatial_dim = size
     else:
       # size might be None here in which case we set the dyn_size in __init__
       assert size is None or isinstance(size, int)
-      tag = Dim(
-        kind=Dim.Types.Spatial,
-        description="sliced-time:%s" % name,
-        dimension=size)
-    gather_positions_data = gather_positions_data.copy_add_dim_by_tag(tag, unbroadcast=True, axis=start_data.batch_ndim)
+      if out_spatial_dim:
+        assert out_spatial_dim.dimension == size
+      else:
+        out_spatial_dim = Dim(
+          kind=Dim.Types.Spatial,
+          description="sliced-time:%s" % name,
+          dimension=size)
+    gather_positions_data = gather_positions_data.copy_add_dim_by_tag(
+      out_spatial_dim, unbroadcast=True, axis=start_data.batch_ndim)
     position = InternalLayer(
       network=sources[0].network,
       name="%s_internal" % gather_positions_data.name,
