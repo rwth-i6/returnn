@@ -3829,6 +3829,7 @@ def test_engine_search_output_file():
   # Validate generated output file
   with open(output_file) as fp:
     output_text = fp.read()
+    from numpy import array, float32
     output = eval(output_text)
     assert set(config.typed_value('search_output_layer')) == set(output['seq-0'].keys())
 
