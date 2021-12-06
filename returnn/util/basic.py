@@ -3563,7 +3563,7 @@ class NativeCodeCompiler(object):
       f.write(self.code)
     common_opts = ["-shared", "-O2"]
     if self.is_cpp:
-      common_opts += ["-std=c++11"]
+      common_opts += ["-std=c++14"]
     if sys.platform == "darwin":
       common_opts += ["-undefined", "dynamic_lookup"]
     for include_path in self._include_paths:
