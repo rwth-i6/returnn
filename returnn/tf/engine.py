@@ -2447,8 +2447,9 @@ class Engine(EngineBase):
       elif output_file_format == "py":
         from returnn.util.basic import better_repr
         output_file.write("{\n")
-        for i in range(len(out_cache)):
-          output_file.write("%r: %s,\n" % (seq_idx_to_tag[i], better_repr(out_cache[i])))
+        with numpy.printoptions(threshold=sys.maxsize):
+          for i in range(len(out_cache)):
+            output_file.write("%r: %s,\n" % (seq_idx_to_tag[i], better_repr(out_cache[i])))
         output_file.write("}\n")
       else:
         raise Exception("invalid output_file_format %r" % output_file_format)
