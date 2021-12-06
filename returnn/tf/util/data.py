@@ -2956,7 +2956,7 @@ class Data(object):
             dim_tags.append(virtual_dim.dim_tag)
             batch = batch.copy_remove_dim(virtual_dim)
           elif not new_batch_dim_tag:
-            new_batch_dim_tag = Dim(kind=Dim.Types.Batch)
+            new_batch_dim_tag = batch_dim
             dim_tags.append(new_batch_dim_tag)
         assert new_batch_dim_tag
         new_batch_dim_tag.batch = batch
