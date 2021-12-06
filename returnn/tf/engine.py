@@ -381,7 +381,7 @@ class Runner(object):
       assert isinstance(v, Data)
       if v.batch_dim_axis != 0:
         r = numpy.moveaxis(r, v.batch_dim_axis, 0)
-      if v.have_time_axis():
+      if v.have_time_axis() and v.is_time_axis_dynamic():
         assert v.time_dim_axis_excluding_batch == 0
         assert list(v.size_placeholder.keys()) == [0]
         seq_lens = fetches_results["extra:%s:size_0" % k]  # shape: (batch,)
