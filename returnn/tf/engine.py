@@ -2266,13 +2266,13 @@ class Engine(EngineBase):
     output_is_dict = isinstance(output_layer_names, list)
     if not output_is_dict:
       output_layer_names = [output_layer_names]
-    num_targets = len(output_layer_names)
+    num_output_layers = len(output_layer_names)
 
     # Create lists with information about the output layers. All of length num_targets.
     output_layers = []  # type: typing.List[LayerBase]
     out_beam_sizes = []  # type: typing.List[typing.Optional[int]]
     output_layer_beam_scores = []  # type: typing.List[typing.Optional[tf.Tensor]]
-    target_keys = []  # type: typing.List[str]
+    target_keys = []  # type: typing.List[typing.Optional[str]]
 
     for output_layer_name in output_layer_names:
       output_layer = self.network.layers[output_layer_name]
@@ -2320,11 +2320,11 @@ class Engine(EngineBase):
 
       outputs, beam_scores, targets = [], [], []
       # noinspection PyShadowingNames
-      for target_idx in range(num_targets):
-        outputs.append(kwargs["output_" + output_layer_names[target_idx]])
-        beam_scores.append(kwargs["beam_scores_" + output_layer_names[target_idx]])
-        if do_eval and target_keys[target_idx] is not None:
-          targets.append(kwargs["target_" + target_keys[target_idx]])
+      for output_layer_idx in range(num_output_layers):
+        outputs.append(kwargs["output_" + output_layer_names[output_layer_idx]])
+        beam_scores.append(kwargs["beam_scores_" + output_layer_names[output_layer_idx]])
+        if do_eval and target_keys[output_layer_idx] is not None:
+          targets.append(kwargs["target_" + target_keys[output_layer_idx]])
         else:
           targets.append(None)
 
@@ -2332,28 +2332,28 @@ class Engine(EngineBase):
       assert n_batch == len(seq_tag)
 
       # noinspection PyShadowingNames
-      for target_idx in range(num_targets):
-        if beam_scores[target_idx] is not None:
-          assert beam_scores[target_idx].shape == (n_batch, out_beam_sizes[target_idx])
+      for output_layer_idx in range(num_output_layers):
+        if beam_scores[output_layer_idx] is not None:
+          assert beam_scores[output_layer_idx].shape == (n_batch, out_beam_sizes[output_layer_idx])
 
-        assert n_batch * (out_beam_sizes[target_idx] or 1) == len(outputs[target_idx])
-        if do_eval and targets[target_idx] is not None:
-          assert n_batch == len(targets[target_idx])
+        assert n_batch * (out_beam_sizes[output_layer_idx] or 1) == len(outputs[output_layer_idx])
+        if do_eval and targets[output_layer_idx] is not None:
+          assert n_batch == len(targets[output_layer_idx])
 
-        if output_layers[target_idx].output.dim == 256 and output_layers[target_idx].output.sparse:
+        if output_layers[output_layer_idx].output.dim == 256 and output_layers[output_layer_idx].output.sparse:
           # Interpret output as bytes/utf8-string.
-          outputs[target_idx] = bytearray(outputs[target_idx]).decode("utf8")
+          outputs[output_layer_idx] = bytearray(outputs[output_layer_idx]).decode("utf8")
 
       serialized_output = []
       # noinspection PyShadowingNames
-      for target_idx in range(num_targets):
-        if output_layers[target_idx].output.sparse and (
-          target_keys[target_idx] and dataset.can_serialize_data(target_keys[target_idx])):
-          serialized_output.append(
-            [dataset.serialize_data(key=target_keys[target_idx], data=output) for output in outputs[target_idx]])
+      for output_layer_idx in range(num_output_layers):
+        if output_layers[output_layer_idx].output.sparse and (
+          target_keys[output_layer_idx] and dataset.can_serialize_data(target_keys[output_layer_idx])):
+          serialized_output.append([dataset.serialize_data(key=target_keys[output_layer_idx], data=output)
+                                    for output in outputs[output_layer_idx]])
         else:
           # Dense output
-          serialized_output.append(outputs[target_idx])
+          serialized_output.append(outputs[output_layer_idx])
 
       for batch_idx in range(len(seq_idx)):
         corpus_seq_idx = None
@@ -2365,50 +2365,50 @@ class Engine(EngineBase):
             out_cache[corpus_seq_idx] = {}
 
         # noinspection PyShadowingNames
-        for target_idx in range(num_targets):
-          if out_beam_sizes[target_idx] is None:
+        for output_layer_idx in range(num_output_layers):
+          if out_beam_sizes[output_layer_idx] is None:
             print("seq_idx: %i, seq_tag: %r, output %r: %r" % (
-              seq_idx[batch_idx], seq_tag[batch_idx], output_layer_names[target_idx], outputs[target_idx][batch_idx]),
-                  file=log.v4)
+              seq_idx[batch_idx], seq_tag[batch_idx],
+              output_layer_names[output_layer_idx], outputs[output_layer_idx][batch_idx]), file=log.v4)
             out_idx = batch_idx
           else:
             print("seq_idx: %i, seq_tag: %r, outputs %r: %r" % (
-              seq_idx[batch_idx], seq_tag[batch_idx], output_layer_names[target_idx],
-              outputs[target_idx][batch_idx * out_beam_sizes[target_idx]:(batch_idx + 1)*out_beam_sizes[target_idx]]),
+              seq_idx[batch_idx], seq_tag[batch_idx], output_layer_names[output_layer_idx],
+              outputs[output_layer_idx]
+              [batch_idx * out_beam_sizes[output_layer_idx]:(batch_idx + 1)*out_beam_sizes[output_layer_idx]]),
                   file=log.v4)
-            out_idx = batch_idx * out_beam_sizes[target_idx]
-          if target_keys[target_idx]:
+            out_idx = batch_idx * out_beam_sizes[output_layer_idx]
+          if target_keys[output_layer_idx]:
             if do_eval:
-              if dataset.can_serialize_data(target_keys[target_idx]):
-                print("  ref:",
-                      dataset.serialize_data(key=target_keys[target_idx], data=targets[target_idx][batch_idx]),
-                      file=log.v4)
+              if dataset.can_serialize_data(target_keys[output_layer_idx]):
+                print("  ref:", dataset.serialize_data(
+                  key=target_keys[output_layer_idx], data=targets[output_layer_idx][batch_idx]), file=log.v4)
               else:
-                print("  ref:", targets[target_idx][batch_idx], file=log.v4)
-            if out_beam_sizes[target_idx] is None:
-              print("  hyp:", serialized_output[target_idx][out_idx],
+                print("  ref:", targets[output_layer_idx][batch_idx], file=log.v4)
+            if out_beam_sizes[output_layer_idx] is None:
+              print("  hyp:", serialized_output[output_layer_idx][out_idx],
                     file=log.v4)
             else:
-              assert beam_scores[target_idx] is not None
-              for beam_idx in range(out_beam_sizes[target_idx]):
+              assert beam_scores[output_layer_idx] is not None
+              for beam_idx in range(out_beam_sizes[output_layer_idx]):
                 print(
-                  "  hyp %i, score %f:" % (beam_idx, beam_scores[target_idx][batch_idx][beam_idx]),
-                  serialized_output[target_idx][out_idx + beam_idx],
+                  "  hyp %i, score %f:" % (beam_idx, beam_scores[output_layer_idx][batch_idx][beam_idx]),
+                  serialized_output[output_layer_idx][out_idx + beam_idx],
                   file=log.v4)
 
           if out_cache is not None:
-            if out_beam_sizes[target_idx] is None:
-              out_data = serialized_output[target_idx][out_idx]
+            if out_beam_sizes[output_layer_idx] is None:
+              out_data = serialized_output[output_layer_idx][out_idx]
             else:
-              assert beam_scores[target_idx] is not None
+              assert beam_scores[output_layer_idx] is not None
               out_data = [
-                  (beam_scores[target_idx][batch_idx][beam_idx],
-                   serialized_output[target_idx][out_idx + beam_idx])
-                  for beam_idx in range(out_beam_sizes[target_idx])]
+                  (beam_scores[output_layer_idx][batch_idx][beam_idx],
+                   serialized_output[output_layer_idx][out_idx + beam_idx])
+                  for beam_idx in range(out_beam_sizes[output_layer_idx])]
 
             if output_is_dict:
-              assert output_layer_names[target_idx] not in out_cache[corpus_seq_idx]
-              out_cache[corpus_seq_idx][output_layer_names[target_idx]] = out_data
+              assert output_layer_names[output_layer_idx] not in out_cache[corpus_seq_idx]
+              out_cache[corpus_seq_idx][output_layer_names[output_layer_idx]] = out_data
             else:
               assert corpus_seq_idx not in out_cache
               out_cache[corpus_seq_idx] = out_data
@@ -2419,14 +2419,14 @@ class Engine(EngineBase):
       "seq_idx": self.network.get_extern_data("seq_idx", mark_data_key_as_used=True),
       "seq_tag": self.network.get_extern_data("seq_tag", mark_data_key_as_used=True)}
 
-    for target_idx in range(num_targets):
-      extra_fetches["output_" + output_layer_names[target_idx]] = output_layers[target_idx]
-      extra_fetches["beam_scores_" + output_layer_names[target_idx]] = output_layer_beam_scores[target_idx]
-      # We use target_keys[target_idx] and not output_layer_names[target_idx]
+    for output_layer_idx in range(num_output_layers):
+      extra_fetches["output_" + output_layer_names[output_layer_idx]] = output_layers[output_layer_idx]
+      extra_fetches["beam_scores_" + output_layer_names[output_layer_idx]] = output_layer_beam_scores[output_layer_idx]
+      # We use target_keys[output_layer_idx] and not output_layer_names[output_layer_idx]
       # for the key to avoid fetching the same target multiple times.
-      if do_eval and target_keys[target_idx] is not None:
-        extra_fetches["target_" + target_keys[target_idx]] = self.network.get_extern_data(
-          target_keys[target_idx], mark_data_key_as_used=True)
+      if do_eval and target_keys[output_layer_idx] is not None:
+        extra_fetches["target_" + target_keys[output_layer_idx]] = self.network.get_extern_data(
+          target_keys[output_layer_idx], mark_data_key_as_used=True)
 
     runner = Runner(
       engine=self, dataset=dataset, batches=batches, train=train, eval=do_eval,
