@@ -2297,7 +2297,6 @@ class Engine(EngineBase):
       assert output_file_format in {"txt", "py"}
       if output_is_dict:
         assert output_file_format == "py", "Text format not supported in the case of multiple output layers."
-      assert all(dataset.can_serialize_data(target_key) for target_key in target_keys if target_key)
       assert not os.path.exists(output_file)
       print("Will write outputs to: %s" % output_file, file=log.v2)
       output_file = open(output_file, "w")
