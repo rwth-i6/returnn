@@ -965,6 +965,8 @@ def better_repr(o):
     return "set([\n%s])" % "".join(map(lambda v: better_repr(v) + ",\n", o))
   if isinstance(o, float) and (math.isnan(o) or math.isinf(o)):
     return "float('%s')" % repr(o)
+  if isinstance(o, np.ndarray):
+    return better_repr(o.tolist())
   # fallback
   return repr(o)
 

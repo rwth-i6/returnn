@@ -2285,7 +2285,11 @@ class Engine(EngineBase):
         print("Given output %r has beam %s." % (output_layer, out_beam), file=log.v1)
         output_layer_beam_scores.append(output_layer.get_search_choices().beam_scores)
       out_beam_sizes.append(out_beam.beam_size if out_beam else None)
-      target_keys.append(output_layer.target or self.network.extern_data.default_target)
+      target_key = output_layer.target
+      if output_layer.output.sparse and not target_key:
+        # Use the default target key for sparse outputs
+        target_key = self.network.extern_data.default_target
+      target_keys.append(target_key)
 
     out_cache = None
     seq_idx_to_tag = {}
@@ -2293,7 +2297,7 @@ class Engine(EngineBase):
       assert output_file_format in {"txt", "py"}
       if output_is_dict:
         assert output_file_format == "py", "Text format not supported in the case of multiple output layers."
-      assert all(dataset.can_serialize_data(target_key) for target_key in target_keys)
+      assert all(dataset.can_serialize_data(target_key) for target_key in target_keys if target_key)
       assert not os.path.exists(output_file)
       print("Will write outputs to: %s" % output_file, file=log.v2)
       output_file = open(output_file, "w")
@@ -2319,8 +2323,10 @@ class Engine(EngineBase):
       for target_idx in range(num_targets):
         outputs.append(kwargs["output_" + output_layer_names[target_idx]])
         beam_scores.append(kwargs["beam_scores_" + output_layer_names[target_idx]])
-        if do_eval:
+        if do_eval and target_keys[target_idx] is not None:
           targets.append(kwargs["target_" + target_keys[target_idx]])
+        else:
+          targets.append(None)
 
       n_batch = len(seq_idx)  # without beam
       assert n_batch == len(seq_tag)
@@ -2338,6 +2344,17 @@ class Engine(EngineBase):
           # Interpret output as bytes/utf8-string.
           outputs[target_idx] = bytearray(outputs[target_idx]).decode("utf8")
 
+      serialized_output = []
+      # noinspection PyShadowingNames
+      for target_idx in range(num_targets):
+        if output_layers[target_idx].output.sparse and (
+          target_keys[target_idx] and dataset.can_serialize_data(target_keys[target_idx])):
+          serialized_output.append(
+            [dataset.serialize_data(key=target_keys[target_idx], data=output) for output in outputs[target_idx]])
+        else:
+          # Dense output
+          serialized_output.append(outputs[target_idx])
+
       for batch_idx in range(len(seq_idx)):
         corpus_seq_idx = None
         if out_cache is not None:
@@ -2351,7 +2368,7 @@ class Engine(EngineBase):
         for target_idx in range(num_targets):
           if out_beam_sizes[target_idx] is None:
             print("seq_idx: %i, seq_tag: %r, output %r: %r" % (
-              seq_idx[batch_idx], seq_tag[batch_idx], target_keys[target_idx], outputs[target_idx][batch_idx]),
+              seq_idx[batch_idx], seq_tag[batch_idx], output_layer_names[target_idx], outputs[target_idx][batch_idx]),
                   file=log.v4)
             out_idx = batch_idx
           else:
@@ -2360,37 +2377,41 @@ class Engine(EngineBase):
               outputs[target_idx][batch_idx * out_beam_sizes[target_idx]:(batch_idx + 1)*out_beam_sizes[target_idx]]),
                   file=log.v4)
             out_idx = batch_idx * out_beam_sizes[target_idx]
-          if target_keys[target_idx] and dataset.can_serialize_data(target_keys[target_idx]):
+          if target_keys[target_idx]:
             if do_eval:
-              print("  ref:", dataset.serialize_data(key=target_keys[target_idx], data=targets[target_idx][batch_idx]),
-                    file=log.v4)
+              if dataset.can_serialize_data(target_keys[target_idx]):
+                print("  ref:",
+                      dataset.serialize_data(key=target_keys[target_idx], data=targets[target_idx][batch_idx]),
+                      file=log.v4)
+              else:
+                print("  ref:", targets[target_idx][batch_idx], file=log.v4)
             if out_beam_sizes[target_idx] is None:
-              print("  hyp:", dataset.serialize_data(key=target_keys[target_idx], data=outputs[target_idx][out_idx]),
+              print("  hyp:", serialized_output[target_idx][out_idx],
                     file=log.v4)
             else:
               assert beam_scores[target_idx] is not None
               for beam_idx in range(out_beam_sizes[target_idx]):
                 print(
                   "  hyp %i, score %f:" % (beam_idx, beam_scores[target_idx][batch_idx][beam_idx]),
-                  dataset.serialize_data(key=target_keys[target_idx], data=outputs[target_idx][out_idx + beam_idx]),
+                  serialized_output[target_idx][out_idx + beam_idx],
                   file=log.v4)
 
-            if out_cache is not None:
-              if out_beam_sizes[target_idx] is None:
-                  out_data = dataset.serialize_data(key=target_keys[target_idx], data=outputs[target_idx][out_idx])
-              else:
-                assert beam_scores[target_idx] is not None
-                out_data = [
-                    (beam_scores[target_idx][batch_idx][beam_idx],
-                     dataset.serialize_data(key=target_keys[target_idx], data=outputs[target_idx][out_idx + beam_idx]))
-                    for beam_idx in range(out_beam_sizes[target_idx])]
+          if out_cache is not None:
+            if out_beam_sizes[target_idx] is None:
+              out_data = serialized_output[target_idx][out_idx]
+            else:
+              assert beam_scores[target_idx] is not None
+              out_data = [
+                  (beam_scores[target_idx][batch_idx][beam_idx],
+                   serialized_output[target_idx][out_idx + beam_idx])
+                  for beam_idx in range(out_beam_sizes[target_idx])]
 
-              if output_is_dict:
-                assert output_layer_names[target_idx] not in out_cache[corpus_seq_idx]
-                out_cache[corpus_seq_idx][output_layer_names[target_idx]] = out_data
-              else:
-                assert corpus_seq_idx not in out_cache
-                out_cache[corpus_seq_idx] = out_data
+            if output_is_dict:
+              assert output_layer_names[target_idx] not in out_cache[corpus_seq_idx]
+              out_cache[corpus_seq_idx][output_layer_names[target_idx]] = out_data
+            else:
+              assert corpus_seq_idx not in out_cache
+              out_cache[corpus_seq_idx] = out_data
 
     train = self._maybe_prepare_train_in_eval(targets_via_search=True)
 
@@ -2403,7 +2424,7 @@ class Engine(EngineBase):
       extra_fetches["beam_scores_" + output_layer_names[target_idx]] = output_layer_beam_scores[target_idx]
       # We use target_keys[target_idx] and not output_layer_names[target_idx]
       # for the key to avoid fetching the same target multiple times.
-      if do_eval:
+      if do_eval and target_keys[target_idx] is not None:
         extra_fetches["target_" + target_keys[target_idx]] = self.network.get_extern_data(
           target_keys[target_idx], mark_data_key_as_used=True)
 
