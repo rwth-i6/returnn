@@ -3757,6 +3757,84 @@ def test_engine_create_network_varying_flags():
   engine.finalize()
 
 
+def test_engine_search_output_file():
+  import tempfile
+  from returnn.datasets.generating import StaticDataset
+  seq_len = 5
+  n_data_dim = 10
+  n_classes_dim = 2
+  num_seqs = 4
+
+  dataset = StaticDataset([{
+    "data": numpy.random.randint(0, n_data_dim, size=(seq_len,), dtype=numpy.int32),
+    "classes": numpy.random.randint(0, n_classes_dim, size=(seq_len,), dtype=numpy.int32),
+    "value": numpy.random.random(size=(1,1)).astype(numpy.float32),
+  } for _ in range(num_seqs)], output_dim={
+    "data": (n_data_dim, 1),
+    "classes": (n_classes_dim, 1),
+    "value": (1, 2),
+  })
+  dataset.labels = {
+    "classes": [str(i) for i in range(n_classes_dim)]
+  }
+  dataset.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "%s/model" % _get_tmp_dir(),
+    "batch_size": 5000,
+    "extern_data": {
+      'data': {'dim': n_data_dim, 'sparse': True},
+      'classes': {'dim': n_classes_dim, 'sparse': True},
+    },
+    "network": {
+      "enc0": {"class": "linear", "activation": "sigmoid", "n_out": 3, "from": "data:data"},
+      "enc1": {"class": "reduce", "mode": "max", "axis": "t", "from": "enc0"},
+      "output": {
+        "class": "rec", "from": [], "max_seq_len": 10, 'target': 'classes',
+        "unit": {
+          "embed": {"class": "linear", "from": "prev:output", "activation": "sigmoid", "n_out": 3},
+          "prob": {"class": "softmax", "from": ["embed", "base:enc1"], "loss": "ce", "target": "classes", 'is_output_layer': True},
+          "output": {"class": "choice", "beam_size": 4, "from": "prob", "target": "classes", "initial_output": 0},
+          "end": {"class": "compare", "from": "output", "value": 0}
+        }
+      },
+      "decision": {"class": "decide", "from": "output", 'is_output_layer': True},
+      "best_score": {"class": "decide", "from": "all_scores", 'only_on_search': True, 'is_output_layer': True},
+      "all_scores": {"class": "choice_get_beam_scores", "from": "output", 'is_output_layer': True, 'only_on_search': True},
+      "probs": {"class": "copy", "from": "output/prob", 'is_output_layer': True, 'target': None},
+    },
+    'search_output_layer': ['decision', 'best_score', 'all_scores', 'probs'],
+  })
+  _cleanup_old_models(config)
+  engine = Engine(config=config)
+  # Normally init_network can be used. We only do init_train here to randomly initialize the network.
+  engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
+  print("network:")
+  pprint(engine.network.layers)
+
+  # Now reinit for search.
+  assert not engine.use_search_flag
+  engine.use_search_flag = True
+  engine.use_dynamic_train_flag = False
+  print("Reinit network with search flag.")
+  engine.init_network_from_config(config=config)
+
+  output_file = tempfile.mktemp(suffix=".py", prefix="search_output_file")
+  engine.search(dataset=dataset, output_layer_names=config.typed_value("search_output_layer", "output"), output_file=output_file, output_file_format='py')
+  print("error keys:")
+  pprint(engine.network.losses_dict)
+  assert engine.network.total_objective is not None
+
+  # Validate generated output file
+  with open(output_file) as fp:
+    output_text = fp.read()
+    output = eval(output_text)
+    assert set(config.typed_value('search_output_layer')) == set(output['seq-0'].keys())
+
+  engine.finalize()
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
