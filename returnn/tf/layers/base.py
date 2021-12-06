@@ -2434,7 +2434,7 @@ class Loss(object):
             output_with_activation.x, self.output_seq_lens, time_major=output.is_time_major)
         else:
           self.output_flat = flatten_or_merge(output.placeholder, self.output_seq_lens, time_major=output.is_time_major)
-          self.output_flat.set_shape(tf.TensorShape(output.shape))
+          self.output_flat.set_shape(tf.TensorShape((None,) + output.shape[1:]))
         if target:
           assert target.have_time_axis()
           self.target_seq_lens = target.get_sequence_lengths()
