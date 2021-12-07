@@ -817,10 +817,10 @@ class NormLayer(_ConcatInputLayer):
   """
   layer_class = "norm"
 
-  def __init__(self, axes, param_shape="F", scale=True, bias=True, epsilon=1e-6, **kwargs):
+  def __init__(self, axes, param_shape=NotSpecified, scale=True, bias=True, epsilon=1e-6, **kwargs):
     """
-    :param str|list[str] axes: axes over which the mean and variance are computed, e.g. "F" or "TF"
-    :param str|list[str]|tuple[str]|int|list[int]|tuple[int] param_shape: shape of the scale and bias parameters.
+    :param Dim|str|list[Dim|str] axes: axes over which the mean and variance are computed, e.g. "F" or "TF"
+    :param Dim|str|list[Dim|str]|tuple[Dim|str] param_shape: shape of the scale and bias parameters.
       You can also refer to (static) axes of the input, such as the feature-dim.
       This is also the default, i.e. a param-shape of [F], independent of the axes to normalize over.
     :param bool scale: add trainable scale parameters
@@ -830,11 +830,20 @@ class NormLayer(_ConcatInputLayer):
     super(NormLayer, self).__init__(**kwargs)
     assert not self.input_data.sparse
     x = self.input_data.placeholder
-    assert isinstance(param_shape, str)  # not implemented otherwise yet
-    param_axes = sorted(self.input_data.get_axes_from_description(param_shape))
-    param_shape = [self.input_data.batch_shape[axis] for axis in param_axes]
-    assert all(isinstance(dim, int) for dim in param_shape), "%s: only static param shape allowed" % self
-    param_bc_shape = [dim if axis in param_axes else 1 for (axis, dim) in enumerate(self.input_data.batch_shape)]
+    if scale or bias:
+      if param_shape is NotSpecified:
+        param_shape = "F"
+      if isinstance(param_shape, (list, tuple)):
+        param_axes = [self.input_data.get_axis_from_description(a, allow_int=False) for a in param_shape]
+      else:
+        param_axes = self.input_data.get_axis_from_description(param_shape, allow_int=False)
+      assert sorted(set(param_axes)) == sorted(param_axes), "%s: param_shape %r should be unique" % (self, param_shape)
+      param_shape = [self.input_data.batch_shape[axis] for axis in param_axes]
+      assert all(isinstance(dim, int) for dim in param_shape), "%s: only static param shape allowed" % self
+      param_dim_tags = [self.input_data.dim_tags[axis] for axis in param_axes]
+    else:
+      assert param_shape is NotSpecified or not param_shape
+      param_dim_tags = None
     axes = self.input_data.get_axes_from_description(axes)
 
     mean = tf.reduce_mean(x, axis=axes, keepdims=True, name="mean")
@@ -844,11 +853,15 @@ class NormLayer(_ConcatInputLayer):
     if scale:
       with self.var_creation_scope():
         scale_param = self.add_param(tf_compat.v1.get_variable("scale", param_shape, initializer=tf.ones_initializer()))
-      norm_x *= tf.reshape(scale_param, param_bc_shape)
+      norm_x *= (
+        Data(name="scale_param", dim_tags=param_dim_tags, placeholder=scale_param)
+        .copy_compatible_to(self.output).placeholder)
     if bias:
       with self.var_creation_scope():
         bias_param = self.add_param(tf_compat.v1.get_variable("bias", param_shape, initializer=tf.zeros_initializer()))
-      norm_x += tf.reshape(bias_param, param_bc_shape)
+      norm_x += (
+        Data(name="bias_param", dim_tags=param_dim_tags, placeholder=bias_param)
+        .copy_compatible_to(self.output).placeholder)
     self.output.placeholder = norm_x
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
 
