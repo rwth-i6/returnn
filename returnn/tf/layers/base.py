@@ -195,8 +195,8 @@ class LayerBase(object):
       # Note that this check is somewhat incomplete
       # (does not check multiple sources, see _ConcatInputLayer)
       # and there is no guarantee that a specific layer really uses this correctly.
-      assert in_dim in sources[0].output.dim_tags_set_implicit, (
-        "%s: in_dim %s not found in input %s" % (self, in_dim, sources[0]))
+      assert sources[0].output.have_unique_dim_tag(in_dim), (
+        "%s: in_dim %s not found or unique in input %s" % (self, in_dim, sources[0]))
     self.params = {}  # type: typing.Dict[str,tf.Variable]
     self.saveable_param_replace = {}  # type:  typing.Dict[tf.Variable,typing.Union['tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject',None]]  # see get_saveable_params_dict()  # nopep8
     self.reuse_params = reuse_params
@@ -339,7 +339,7 @@ class LayerBase(object):
       assert out_type["dim"] == n_out
     sources_data_list = [src.output for src in sources if src]
     if in_dim:
-      assert len(sources_data_list) == 1
+      assert len(sources_data_list) == 1, "%r: with specific in_dim %s, there must be a single source" % (name, in_dim)
       if sources_data_list[0].feature_dim_or_sparse_dim != in_dim:
         # Allow to specify some in_dim which is not the feature dim.
         # However, the follow-up code will expect it to be the feature dim, thus reassign it if possible.
