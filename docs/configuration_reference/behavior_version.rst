@@ -22,6 +22,13 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 10 (2021-12-07)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:class:`ConvLayer` use ``with_bias=True`` by default.
+
+See issue `#787 <https://github.com/rwth-i6/returnn/issues/787>`__.
+
 Behavior version 9 (2021-12-03)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
