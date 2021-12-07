@@ -4359,6 +4359,7 @@ class ConvLayer(_ConcatInputLayer):
     :param dict[str,str]|None filter_perm: transposes the filter (input filter as layer)
     :param LayerBase|None bias: if given, will not create an own parameter, but use this as the bias
     """
+    from returnn.util import BehaviorVersion
     padding = padding.upper()
     assert padding in ["SAME", "VALID"], "no other padding supported at the moment"
     assert "out_type" not in kwargs, "don't set out_type explicitly for this layer"
@@ -4465,7 +4466,10 @@ class ConvLayer(_ConcatInputLayer):
       y = tf.reshape(y, tf.concat([extended_batch_shape, tf.shape(y)[1:]], axis=0))
     # y shape is [batch] + dynamic_dims + [n_out].
     if with_bias is NotSpecified:
-      with_bias = True if bias else False
+      if bias or BehaviorVersion.get() >= 10:
+        with_bias = True
+      else:
+        with_bias = False
     if bias:
       assert with_bias
     self.bias_layer = None
