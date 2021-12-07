@@ -868,26 +868,34 @@ class MathNormLayer(_ConcatInputLayer):
   """
   layer_class = "math_norm"
 
-  def __init__(self, p, axes, keep_dims=False, **kwargs):
+  def __init__(self, p, axis=NotSpecified, axes=NotSpecified, keep_dims=False, **kwargs):
     """
     :param int|float p:
-    :param str|list[str] axes:
+    :param Dim|str|list[Dim|str] axis:
+    :param Dim|str|list[Dim|str] axes:
     :param bool keep_dims:
     """
+    if axis is not NotSpecified:
+      assert axes is NotSpecified
+      axes = axis
     super(MathNormLayer, self).__init__(**kwargs)
     x = self.input_data.copy()
     x.placeholder = tf.abs(x.placeholder) ** p
     self.output.placeholder = ReduceLayer.reduce(x, mode="sum", axes=axes, keep_dims=keep_dims) ** (1. / p)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, axes, keep_dims=False, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, axis=NotSpecified, axes=NotSpecified, keep_dims=False, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
-    :param str|list[str] axes:
+    :param Dim|str|list[Dim|str] axis:
+    :param Dim|str|list[Dim|str] axes:
     :param bool keep_dims:
     :rtype: Data
     """
+    if axis is not NotSpecified:
+      assert axes is NotSpecified
+      axes = axis
     return ReduceLayer.get_out_data_from_opts(name=name, sources=sources, axes=axes, keep_dims=keep_dims)
 
 
