@@ -234,7 +234,7 @@ class Dim(object):
       if same_base.dyn_size_ext:
         assert batch == batch_base
         same_base.batch = batch
-        assert not same_base.dyn_size_ext.batch
+        assert not same_base.dyn_size_ext.batch or same_base.dyn_size_ext.batch == batch
         same_base.dyn_size_ext.batch = batch
       else:
         same_base.batch = batch_base
