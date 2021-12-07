@@ -3414,7 +3414,7 @@ class SplitDimsLayer(_ConcatInputLayer):
     resolved_dims = None
     if dims and isinstance(dims[0], Dim):
       assert all(isinstance(d, Dim) for d in dims)
-      resolved_dims = dims
+      resolved_dims = tuple(dims)
       dims = [d.dimension or -1 for d in dims]
     if data.batch_shape[axis] is not None:
       resolved_shape_dims = cls._resolve_dims(
