@@ -1901,6 +1901,23 @@ def test_SplitDimsLayer_split_feature():
     numpy.testing.assert_almost_equal(out_v, in_v.reshape(out_v.shape))
 
 
+def test_SplitDimsLayer_dim_tags():
+  from returnn.tf.util.data import batch_dim
+  for window_static_dim in [2, 1]:
+    time_dim = SpatialDim("in-time")
+    rem_dim = SpatialDim("rem-time")
+    window_dim = FeatureDim("window", window_static_dim)
+    feat_dim = FeatureDim("feat", 3)
+    config = Config({
+      "extern_data": {"data": {"dim_tags": [batch_dim, time_dim, feat_dim]}}})
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {
+        'class': 'split_dims', 'from': 'data', 'axis': time_dim, 'dims': [rem_dim, window_dim],
+        'out_shape': {batch_dim, rem_dim, window_dim, feat_dim}}
+    })
+
+
 def test_out_shape():
   # https://github.com/rwth-i6/returnn/issues/706
   # Note: Using SplitDimsLayer would also be nice to test out_shape. Or any layer which creates a new dim.
