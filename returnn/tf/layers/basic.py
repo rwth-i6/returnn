@@ -817,9 +817,11 @@ class NormLayer(_ConcatInputLayer):
   """
   layer_class = "norm"
 
-  def __init__(self, axes, param_shape=NotSpecified, scale=True, bias=True, epsilon=1e-6, **kwargs):
+  def __init__(self, axis=NotSpecified, axes=NotSpecified,
+               param_shape=NotSpecified, scale=True, bias=True, epsilon=1e-6, **kwargs):
     """
-    :param Dim|str|list[Dim|str] axes: axes over which the mean and variance are computed, e.g. "F" or "TF"
+    :param Dim|str|list[Dim|str] axis: axis or axes over which the mean and variance are computed, e.g. "F" or "TF"
+    :param Dim|str|list[Dim|str] axes: axis or axes over which the mean and variance are computed, e.g. "F" or "TF"
     :param Dim|str|list[Dim|str]|tuple[Dim|str] param_shape: shape of the scale and bias parameters.
       You can also refer to (static) axes of the input, such as the feature-dim.
       This is also the default, i.e. a param-shape of [F], independent of the axes to normalize over.
@@ -827,6 +829,9 @@ class NormLayer(_ConcatInputLayer):
     :param bool bias: add trainable bias parameters
     :param float epsilon: epsilon for numerical stability
     """
+    if axis is not NotSpecified:
+      assert axes is NotSpecified
+      axes = axis
     super(NormLayer, self).__init__(**kwargs)
     assert not self.input_data.sparse
     x = self.input_data.placeholder
