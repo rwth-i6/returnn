@@ -56,7 +56,7 @@ class Dim(object):
     :param Data|None dyn_size_ext: seq_len or extended
     :param bool undefined: When this is specified as `None` by the user via `shape`.
     :param bool generic: This can not be a dim tag of :class:`Data` but it would match to other existing dim tags
-      :func:`Data.get_axis_from_description` and :func:`Dim.equal`.
+      :func:`Data.get_axis_from_description` and :func:`Dim.is_equal`.
     :param Dim|None derived_from_tag:
       Whether this new tag is reduced, down/up sampled, padded etc from this given other tag.
       In situations where dim tags are being matched (Data.get_common_data),
