@@ -3328,19 +3328,11 @@ class SplitDimsLayer(_ConcatInputLayer):
       paddings = [(0, 0)] * axis + [(0, pad_size)] + [(0, 0)] * (data.batch_ndim - axis - 1)
       data.placeholder = tf.pad(data.placeholder, paddings=paddings, constant_values=pad_value)
 
-      axis_wo_batch = data.get_batch_axis_excluding_batch(axis + dims.index(-1))
-      if axis_wo_batch in data.size_placeholder:
-        # When there is support for this, this should already be created in get_out_data_from_opts
-        # Note: currently get_out_data_from_opts already sets data.size_placeholder[axis_wo_batch] to the input size
-        # (meaning we do not need to transform the axis here)
-        dyn_size = -(-data.size_placeholder[axis_wo_batch] // constant_size)  # == ceildiv(size, constant_size)
-        if not Dim.get_tag_from_size_tensor(dyn_size):
-          tag = Dim(
-            description="split-time:%i:%s" % (axis, self.get_absolute_name()),
-            kind=Dim.Types.Spatial, batch=self.output.batch)
-          tag.set_tag_on_size_tensor(dyn_size)
-        self.output.size_placeholder[axis_wo_batch] = dyn_size
-
+      rem_dim = self.output.get_dim_tag(axis + dims.index(-1))
+      if rem_dim.dimension is None:
+        assert rem_dim.dyn_size_ext is not None  # template was prepared by get_out_data_from_opts
+        rem_dim.dyn_size_ext.placeholder = -(
+          -data.get_dynamic_size(axis) // constant_size)  # == ceildiv(size, constant_size)
     self.output.placeholder = tf.reshape(data.placeholder, shape=new_shape)
 
   @classmethod
@@ -3414,7 +3406,7 @@ class SplitDimsLayer(_ConcatInputLayer):
     resolved_dims = None
     if dims and isinstance(dims[0], Dim):
       assert all(isinstance(d, Dim) for d in dims)
-      resolved_dims = dims
+      resolved_dims = tuple(dims)
       dims = [d.dimension or -1 for d in dims]
     if data.batch_shape[axis] is not None:
       resolved_shape_dims = cls._resolve_dims(
@@ -3422,27 +3414,40 @@ class SplitDimsLayer(_ConcatInputLayer):
     else:
       resolved_shape_dims = tuple([(d if (d >= 0) else None) for d in dims])
 
+    axis_dim_tag = data.dim_tags[axis]
     rem_dim_indices = [i for i, d in enumerate(dims) if d < 0]
     assert len(rem_dim_indices) <= 1, "only one entry in dims %r can be -1" % (dims,)
-    rem_dim_idx = rem_dim_indices[0] if rem_dim_indices else (len(dims) - 1)
-    axis_dim_tag = data.dim_tags[axis]
-    if all(d == 1 for (i, d) in enumerate(dims) if i != rem_dim_idx):
-      rem_dim = axis_dim_tag  # we can overtake the existing dim tag
+    if len(rem_dim_indices) == 1:
+      import numpy
+      n = int(numpy.prod([dim for dim in dims if dim > 0]))
+      rem_dim_idx = rem_dim_indices[0]
+      if n == 1:
+        rem_dim = axis_dim_tag
+      else:  # need to create a new rem_dim
+        rem_dim = Dim(
+          kind=Dim.Types.Spatial,
+          description="%s_split_dims%i_rem" % (name, rem_dim_idx),
+          dimension=resolved_shape_dims[rem_dim_idx],
+          derived_from_tag=axis_dim_tag,
+          batch=axis_dim_tag.batch, control_flow_ctx=axis_dim_tag.control_flow_ctx)
+        if rem_dim.dimension is None:
+          rem_dim.dyn_size_ext = axis_dim_tag.dyn_size_ext.copy_template(name="%s_split_dims%i" % (name, rem_dim_idx))
       if resolved_dims:
-        assert resolved_dims[rem_dim_idx] == axis_dim_tag
+        if rem_dim.dimension is not None:
+          assert rem_dim.dimension * n == axis_dim_tag.dimension
+        rem_dim.declare_same_as(resolved_dims[rem_dim_idx])
     else:
-      rem_dim = Dim(
-        kind=axis_dim_tag.kind,
-        description="%s_split_dims%i_rem" % (name, rem_dim_idx),
-        dimension=resolved_shape_dims[rem_dim_idx])
+      assert len(rem_dim_indices) == 0
+      rem_dim, rem_dim_idx = None, None
     if not resolved_dims:
       resolved_dims = tuple(
         Dim(
-          kind=Dim.Types.Spatial,
+          kind=axis_dim_tag.kind,
           description="%s_split_dims%i" % (name, i),
-          dimension=resolved_shape_dims[i])
-        if i != rem_dim_idx else rem_dim
-        for i in range(len(dims)))
+          dimension=shape_dim)
+        if rem_dim is None or i != rem_dim_idx else rem_dim
+        for i, shape_dim in enumerate(resolved_shape_dims))
+
     new_dim_tags = data.dim_tags[:axis] + resolved_dims + data.dim_tags[axis + 1:]
     out = data.copy_template_new_dim_tags(new_dim_tags)
     if data.time_dim_axis is None:
@@ -5152,6 +5157,8 @@ class TransposedConvLayer(_ConcatInputLayer):
     for idx, axis in enumerate(spatial_axes):
       input_tag = input_data.dim_tags[axis]
       output_tag = self.output.dim_tags[axis]
+      if input_tag == output_tag:
+        continue
       if input_tag.dimension is None:
         assert output_tag.dimension is None
         assert input_tag.dyn_size is not None
