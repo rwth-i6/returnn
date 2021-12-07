@@ -754,15 +754,26 @@ class LayerNormLayer(_ConcatInputLayer):
   """
   layer_class = "layer_norm"
 
-  def __init__(self, epsilon=1e-6, **kwargs):
+  def __init__(self, in_dim=None, out_dim=None, epsilon=1e-6, **kwargs):
     """
+    :param Dim|None in_dim:
+    :param Dim|None out_dim:
     :param float epsilon:
     """
     super(LayerNormLayer, self).__init__(**kwargs)
     assert not self.input_data.sparse
     x = self.input_data.placeholder
-    dim = self.input_data.dim
-    axis = self.input_data.feature_dim_axis
+    if not in_dim and out_dim:
+      in_dim = out_dim
+    if in_dim:
+      if out_dim:
+        assert in_dim == out_dim
+      assert isinstance(in_dim, Dim)
+      axis = self.input_data.get_axis_from_description(in_dim)
+    else:
+      axis = self.input_data.feature_dim_axis
+    dim = self.input_data.batch_shape[axis]
+    assert dim is not None, "%s: in_dim %i must be static in input %s" % (self, in_dim or axis, self.input_data)
     with self.var_creation_scope():
       scale = self.add_param(tf_compat.v1.get_variable("scale", [dim], initializer=tf.ones_initializer()))
       bias = self.add_param(tf_compat.v1.get_variable("bias", [dim], initializer=tf.zeros_initializer()))
