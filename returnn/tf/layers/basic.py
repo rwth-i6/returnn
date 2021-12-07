@@ -5157,6 +5157,8 @@ class TransposedConvLayer(_ConcatInputLayer):
     for idx, axis in enumerate(spatial_axes):
       input_tag = input_data.dim_tags[axis]
       output_tag = self.output.dim_tags[axis]
+      if input_tag == output_tag:
+        continue
       if input_tag.dimension is None:
         assert output_tag.dimension is None
         assert input_tag.dyn_size is not None
