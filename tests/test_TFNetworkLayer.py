@@ -192,6 +192,51 @@ def test_LinearLayer_two_time_dims_allow_broadcast_all_sources():
     session.run(fetches=output.placeholder, feed_dict=make_feed_dict(network.extern_data))
 
 
+def test_LinearLayer_generic_dim_tags():
+  from returnn.tf.util.data import batch_dim, any_feature_dim, any_spatial_dim
+  with make_scope() as session:
+    time1_dim = SpatialDim("time1")
+    time2_dim = SpatialDim("time2", dimension=7)
+    feat_dim = FeatureDim("feature", dimension=5)
+    out_dim = FeatureDim("feature", dimension=3)
+    config = Config({
+      "extern_data": {
+        "in1": {"dim_tags": [batch_dim, time1_dim, time2_dim, feat_dim]},
+        "in2": {"dim_tags": [batch_dim, time2_dim, feat_dim]},
+      },
+    })
+    network = TFNetwork(config=config)
+    network.construct_from_dict({
+      "output1": {
+        "class": "linear", "from": "data:in1", "in_dim": any_feature_dim, "out_dim": out_dim,
+        "out_shape": {batch_dim, time1_dim, time2_dim, out_dim},
+        "is_output_layer": True}})
+    network.construct_from_dict({
+      "output2": {
+        "class": "linear", "from": "data:in1", "in_dim": time2_dim, "out_dim": out_dim,
+        "out_shape": {batch_dim, time1_dim, out_dim, feat_dim},
+        "is_output_layer": True}})
+    try:
+      network.construct_from_dict({
+        "output3": {
+          "class": "linear", "from": "output2", "in_dim": any_feature_dim, "out_dim": out_dim,
+          "is_output_layer": True}})
+    except Exception as exc:
+      print("Expected exception:", exc)
+      assert "not found or unique in input" in str(exc)
+    else:
+      raise Exception("No exception")
+    network.construct_from_dict({
+      "output4": {
+        "class": "linear", "from": "data:in2", "in_dim": any_spatial_dim, "out_dim": out_dim,
+        "out_shape": {batch_dim, out_dim, feat_dim},
+        "is_output_layer": True}})
+    session.run(tf_compat.v1.global_variables_initializer())
+    session.run(
+      fetches=[layer.output.placeholder for layer in network.get_output_layers()],
+      feed_dict=make_feed_dict(network.extern_data))
+
+
 def test_LinearLayer_reuse_params_layer_output():
   from returnn.tf.util.data import batch_dim
   with make_scope() as session:

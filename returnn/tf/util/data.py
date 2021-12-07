@@ -43,7 +43,7 @@ class Dim(object):
                dimension=None,
                vocab=None,
                dyn_size=None, dyn_size_ext=None,
-               undefined=False,
+               undefined=False, generic=False,
                derived_from_tag=None,
                batch=None, control_flow_ctx=None,
                src_data=None, src_axis=None):
@@ -55,6 +55,8 @@ class Dim(object):
     :param tf.Tensor|None dyn_size: e.g. seq_len, (batch,)
     :param Data|None dyn_size_ext: seq_len or extended
     :param bool undefined: When this is specified as `None` by the user via `shape`.
+    :param bool generic: This can not be a dim tag of :class:`Data` but it would match to other existing dim tags
+      :func:`Data.get_axis_from_description` and :func:`Dim.equal`.
     :param Dim|None derived_from_tag:
       Whether this new tag is reduced, down/up sampled, padded etc from this given other tag.
       In situations where dim tags are being matched (Data.get_common_data),
@@ -88,6 +90,7 @@ class Dim(object):
     self.dyn_size_ext = dyn_size_ext  # type: typing.Optional[Data]
     self._dyn_size_same = set()  # type: typing.Set[tf.Tensor]
     self._undefined = undefined
+    self.generic = generic
     # We can have different tag variants per batch info (e.g. with beam), or per control flow ctx.
     # They each have same_as = self. The same_base should have the base (global) batch info.
     self._same_for_batch_ctx = {}  # type: typing.Dict[typing.Tuple[BatchInfo,typing.Optional[ControlFlowContext]],Dim]  # nopep8
@@ -107,12 +110,14 @@ class Dim(object):
       return "B"
     desc = "%s%r" % ("F" if self.is_feature_dim() else "", self.get_same_base().description)
     if self.dimension is not None:
-      desc += "(%i)" % self.dimension
+      desc += "(%i%s)" % (self.dimension, "*" if self.generic else "")
     else:
       if self.dyn_size_ext:
-        desc += "[%s]" % ",".join(self.dyn_size_ext.get_batch_axes_short_description(special_axes=False))
+        desc += "[%s%s]" % (
+          ",".join(self.dyn_size_ext.get_batch_axes_short_description(special_axes=False)),
+          "*" if self.generic else "")
       else:
-        desc += "[?]"
+        desc += "[*]" if self.generic else "[?]"
       if self.control_flow_ctx:
         desc += "{ctx=%s}" % self.control_flow_ctx.repr_inner()
     return desc
@@ -210,6 +215,7 @@ class Dim(object):
     :param bool allow_none:
     :rtype: Dim|None
     """
+    assert not self.generic
     if self.batch == batch and self.control_flow_ctx == ctx and self.dyn_size_ext:
       self._validate_in_current_graph()
       self._maybe_update()
@@ -303,6 +309,7 @@ class Dim(object):
     :param ControlFlowContext|None ctx:
     :param Data dyn_size_ext:
     """
+    assert not self.generic
     same = self.get_for_batch_ctx(batch, ctx)
     same.dyn_size_ext = dyn_size_ext
     self._maybe_update()
@@ -313,6 +320,7 @@ class Dim(object):
     :param ControlFlowContext|None ctx:
     :rtype: Data|None
     """
+    assert not self.generic
     if not batch and self.batch:
       # Assume global batch.
       batch = self.batch.get_global_base()
@@ -341,6 +349,7 @@ class Dim(object):
     """
     :param tf.Tensor dyn_size:
     """
+    assert not self.generic
     assert isinstance(dyn_size, tf.Tensor) and dyn_size.shape.ndims == 1
     if self.dyn_size_ext:
       # Do not allow resetting it to sth different.
@@ -429,6 +438,7 @@ class Dim(object):
     :return: self or new dim tag
     :rtype: Dim
     """
+    assert not self.generic
     # It's unusual if self.dimension is not None, but let's accept that.
     if hasattr(x, "_is_size_of_dim_tag"):
       # noinspection PyProtectedMember
@@ -505,6 +515,16 @@ class Dim(object):
     """
     if self is other:  # first some fast path check
       return True
+    if self.generic or other.generic:
+      if self.generic and self.dimension:
+        if not other.generic or other.dimension:
+          if self.dimension != other.dimension:
+            return False
+      if other.generic and other.dimension:
+        if not self.generic or self.dimension:
+          if self.dimension != other.dimension:
+            return False
+      return self.kind == other.kind
     if allow_same_spatial_dim is None:
       allow_same_spatial_dim = allow_same_feature_dim
     self_base = self.get_same_derived_base() if derived_matches else self.get_same_base()
@@ -834,6 +854,10 @@ def SpatialDim(description, dimension=None, **kwargs):
   :rtype: Dim
   """
   return Dim(kind=Dim.Types.Spatial, description=description, dimension=dimension, **kwargs)
+
+
+any_feature_dim = FeatureDim("any-feature-dim", None, generic=True)
+any_spatial_dim = SpatialDim("any-spatial-dim", None, generic=True)
 
 
 class _ImplicitDim:
@@ -1657,6 +1681,7 @@ class Data(object):
         kind=Dim.Types.Feature, dimension=sparse_dim, description="%s:sparse-dim" % name)
     if sparse_dim is not None:
       assert isinstance(sparse_dim, Dim)
+      assert not sparse_dim.generic
       assert sparse
       if dim is not NotSpecified:
         assert sparse_dim.dimension == dim
@@ -1675,6 +1700,7 @@ class Data(object):
     self._beam = beam
     self.control_flow_ctx = control_flow_ctx
     if isinstance(dim_tags, (tuple, list)):
+      assert all(not tag.generic for tag in dim_tags)
       # We do a couple of sanity checks, and maybe set special axes attribs.
       shape_ = tuple(tag.dimension for tag in dim_tags if not tag.is_batch_dim())
       if shape is not None:
@@ -3791,6 +3817,16 @@ class Data(object):
     :rtype: int|None
     """
     return _get_axis_wo_b(axis, batch_dim_axis=self.batch_dim_axis, batch_ndim=self.batch_ndim)
+
+  def have_unique_dim_tag(self, tag, include_implicit=True):
+    """
+    :param Dim tag:
+    :param bool include_implicit:
+    :rtype: bool
+    """
+    dims = self.dim_tags_set_implicit if include_implicit else self.dim_tags
+    matching_dims = [dim for dim in dims if dim == tag]
+    return len(matching_dims) == 1
 
   def get_batch_axis(self, axis):
     """
