@@ -5332,7 +5332,7 @@ class ReduceLayer(_ConcatInputLayer):
       See :func:`Data.get_axes_from_description`.
     :param int|list[int]|str axis: for compatibility, can be used instead of ``axes``
     :param bool keep_dims: if dimensions should be kept (will be 1)
-    :param int enforce_batch_dim_axis: will swap the batch-dim-axis of the input with the given axis.
+    :param int|None enforce_batch_dim_axis: will swap the batch-dim-axis of the input with the given axis.
       e.g. 0: will convert the input into batch-major format if not already like that.
       Note that this is still not enough in some cases, e.g. when the other axes are also not as expected.
       The strong recommendation is to use a symbolic axis description.
@@ -5445,13 +5445,13 @@ class ReduceLayer(_ConcatInputLayer):
   @classmethod
   def need_enforce_batch_dim_axis(cls, axes):
     """
-    :param int|list[int]|str axes:
+    :param int|list[int]|str|Dim axes:
     :return: if any integer is in axes, thus we should have a fixed dimension layout
     :rtype: bool
     """
     if isinstance(axes, int):
       return True
-    if isinstance(axes, str):
+    if isinstance(axes, (str, Dim)):
       return False
     assert isinstance(axes, (list, tuple))
     return any([cls.need_enforce_batch_dim_axis(a) for a in axes])
