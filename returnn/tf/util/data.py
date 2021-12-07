@@ -3610,7 +3610,10 @@ class Data(object):
     if isinstance(axes, Dim):
       # Once we have not guaranteed unique dim tags, multiple axes could match.
       # https://github.com/rwth-i6/returnn/issues/632
-      return [i for (i, tag) in enumerate(self.dim_tags) if tag == axes]
+      dims = [i for (i, tag) in enumerate(self.dim_tags) if tag == axes]
+      if axes.generic:
+        assert len(dims) == 1, "%s: matching generic dim placeholder %s must be unique" % (self, axes)
+      return dims
     if isinstance(axes, int):
       self._verify_axis_int_from_description(allow_int=allow_int)
       return [self._make_valid_int_axis(axes)]
