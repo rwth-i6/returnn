@@ -658,6 +658,7 @@ class TFNetwork(object):
     else:
       assert not boundary
       extra_net = self.extra_nets[prefix_name]
+    assert extra_net.extra_parent_net is self
     if search_flag is not None:
       assert extra_net.search_flag == search_flag
     return extra_net, prefix_name
@@ -2209,6 +2210,8 @@ class TFNetwork(object):
       if inside_loop:
         return None
       return self._over_rec_time_dim
+    if self.extra_parent_net:
+      return self.extra_parent_net.get_inside_rec_time_dim(inside_loop=inside_loop)
     from returnn.tf.layers.rec import RecLayer
     if isinstance(self.parent_layer, RecLayer):
       # When we get here (and not in the if-branch above on _inside_rec_time_dim),
@@ -2243,6 +2246,8 @@ class TFNetwork(object):
     """
     :rtype: bool
     """
+    if self.extra_parent_net:
+      return self.extra_parent_net._is_rec_layer_inside_net()
     from returnn.tf.layers.rec import RecLayer
     # noinspection PyProtectedMember
     from returnn.tf.layers.rec import _SubnetworkRecCell
@@ -2258,6 +2263,8 @@ class TFNetwork(object):
       At template construction time, this is always None.
     :rtype: returnn.tf.layers.rec.RecLayer|None
     """
+    if self.extra_parent_net:
+      return self.extra_parent_net.get_rec_parent_layer(inside_loop=inside_loop)
     from returnn.tf.layers.rec import RecLayer
     if isinstance(self.parent_layer, RecLayer):
       if inside_loop:
