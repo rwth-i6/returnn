@@ -896,6 +896,10 @@ class NativeLstm2(RecSeqCellOp):
     elif isinstance(initial_state, rnn_cell.LSTMStateTuple):
       c0 = initial_state.c
       y0 = initial_state.h
+    elif isinstance(initial_state, dict):
+      assert set(initial_state.keys()) == {"c", "h"}
+      c0 = initial_state["c"]
+      y0 = initial_state["h"]
     else:
       assert isinstance(initial_state, tf.Tensor)
       c0 = initial_state
