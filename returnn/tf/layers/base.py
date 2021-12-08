@@ -224,8 +224,23 @@ class LayerBase(object):
   def _set_prev_state(self, state):
     if state is None:
       return
-    assert self._rec_previous_layer, "%s: cannot pass 'state' %r when not inside a rec loop" % (self, state)
     from tensorflow.python.util import nest
+
+    if not self._rec_previous_layer:
+      # This is allowed when outside a rec layer.
+      # We could use get_rec_initial_extra_outputs but self.kwargs are not available yet...
+      # Instead, we rely on this heuristic for now.
+      def _map_to_state_tensor_simple(state_layer):
+        assert isinstance(state_layer, LayerBase)
+        assert state_layer.output.have_batch_axis()
+        assert state_layer.output.batch_ndim <= 2, "%s with state %s expects to operate a single step" % (self, state)
+        return state_layer.output.copy_as_batch_major().placeholder
+
+      self._rec_previous_layer = InternalLayer(
+        name="prev-dummy:%s" % self.name, network=self.network, output=self.output)
+      self._rec_previous_layer.rec_vars_outputs["state"] = nest.map_structure(
+        _map_to_state_tensor_simple, state)
+      return
 
     def _map_to_state_tensor(orig_state, state_layer):
       assert isinstance(orig_state, tf.Tensor)
@@ -1625,7 +1640,7 @@ class LayerBase(object):
   def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, **kwargs):
     """
     :param tf.Tensor batch_dim: for this layer, might be with beam
-    :param returnn.tf.layers.rec.RecLayer rec_layer:
+    :param returnn.tf.layers.rec.RecLayer|LayerBase|None rec_layer: for the scope
     :rtype: dict[str,tf.Tensor]
     """
     return {}
