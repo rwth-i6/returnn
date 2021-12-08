@@ -195,7 +195,7 @@ class LayerBase(object):
       # Note that this check is somewhat incomplete
       # (does not check multiple sources, see _ConcatInputLayer)
       # and there is no guarantee that a specific layer really uses this correctly.
-      assert sources[0].output.have_unique_dim_tag(in_dim), (
+      assert sources[0].output.have_dim_tag(in_dim, unique=True), (
         "%s: in_dim %s not found or unique in input %s" % (self, in_dim, sources[0]))
     self.params = {}  # type: typing.Dict[str,tf.Variable]
     self.saveable_param_replace = {}  # type:  typing.Dict[tf.Variable,typing.Union['tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject',None]]  # see get_saveable_params_dict()  # nopep8

@@ -3849,15 +3849,18 @@ class Data(object):
     """
     return _get_axis_wo_b(axis, batch_dim_axis=self.batch_dim_axis, batch_ndim=self.batch_ndim)
 
-  def have_unique_dim_tag(self, tag, include_implicit=True):
+  def have_dim_tag(self, tag, include_implicit=True, unique=False):
     """
     :param Dim tag:
     :param bool include_implicit:
+    :param bool unique:
     :rtype: bool
     """
-    dims = self.dim_tags_set_implicit if include_implicit else self.dim_tags
+    dims = list(self.dim_tags)
+    if include_implicit:
+      dims.extend(self.dim_tags_set_implicit_only)
     matching_dims = [dim for dim in dims if dim == tag]
-    return len(matching_dims) == 1
+    return (len(matching_dims) == 1) if unique else (len(matching_dims) >= 1)
 
   def get_batch_axis(self, axis):
     """
