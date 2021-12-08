@@ -644,6 +644,8 @@ class RecLayer(_ConcatInputLayer):
     if not self.time_dim_tag:
       in_data = in_data.copy_add_spatial_dim(spatial_dim_axis=0)
       in_data.time_dim_axis = 0
+    assert in_data.have_time_axis(), (
+      "%s, input %s should have time dim now, time dim tag %s" % (self, in_data, self.time_dim_tag))
     if strict:
       # Merge all other axes except time and feature such that we get (time,batch',dim).
       in_data = in_data.copy_as_time_major()
