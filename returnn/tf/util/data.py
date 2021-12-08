@@ -43,7 +43,7 @@ class Dim(object):
                dimension=None,
                vocab=None,
                dyn_size=None, dyn_size_ext=None,
-               undefined=False, generic=False,
+               undefined=False, generic=False, special=False,
                derived_from_tag=None,
                batch=None, control_flow_ctx=None,
                src_data=None, src_axis=None):
@@ -57,6 +57,9 @@ class Dim(object):
     :param bool undefined: When this is specified as `None` by the user via `shape`.
     :param bool generic: This can not be a dim tag of :class:`Data` but it would match to other existing dim tags
       :func:`Data.get_axis_from_description` and :func:`Dim.is_equal`.
+    :param bool special: Like `generic`, this can not be a dim tag of :class:`Data`.
+      But this dim tag also does not match anything except itself.
+      So it can be used to represent special placeholders with special meanings like ``single_step``.
     :param Dim|None derived_from_tag:
       Whether this new tag is reduced, down/up sampled, padded etc from this given other tag.
       In situations where dim tags are being matched (Data.get_common_data),
@@ -91,6 +94,7 @@ class Dim(object):
     self._dyn_size_same = set()  # type: typing.Set[tf.Tensor]
     self._undefined = undefined
     self.generic = generic
+    self.special = special
     # We can have different tag variants per batch info (e.g. with beam), or per control flow ctx.
     # They each have same_as = self. The same_base should have the base (global) batch info.
     self._same_for_batch_ctx = {}  # type: typing.Dict[typing.Tuple[BatchInfo,typing.Optional[ControlFlowContext]],Dim]  # nopep8
@@ -107,9 +111,11 @@ class Dim(object):
     :rtype: str
     """
     if self.is_batch_dim():
-      return "B"
+      return "B"  # Data.__repr__ will additionally give info on the batch
     desc = "%s%r" % ("F" if self.is_feature_dim() else "", self.get_same_base().description)
-    if self.dimension is not None:
+    if self.special:
+      desc += "!"
+    elif self.dimension is not None:
       desc += "(%i%s)" % (self.dimension, "*" if self.generic else "")
     else:
       if self.dyn_size_ext:
@@ -215,7 +221,7 @@ class Dim(object):
     :param bool allow_none:
     :rtype: Dim|None
     """
-    assert not self.generic
+    assert self.can_be_used_as_dim()
     if self.batch == batch and self.control_flow_ctx == ctx and self.dyn_size_ext:
       self._validate_in_current_graph()
       self._maybe_update()
@@ -309,7 +315,7 @@ class Dim(object):
     :param ControlFlowContext|None ctx:
     :param Data dyn_size_ext:
     """
-    assert not self.generic
+    assert self.can_be_used_as_dim()
     same = self.get_for_batch_ctx(batch, ctx)
     same.dyn_size_ext = dyn_size_ext
     self._maybe_update()
@@ -320,7 +326,7 @@ class Dim(object):
     :param ControlFlowContext|None ctx:
     :rtype: Data|None
     """
-    assert not self.generic
+    assert self.can_be_used_as_dim()
     if not batch and self.batch:
       # Assume global batch.
       batch = self.batch.get_global_base()
@@ -349,7 +355,7 @@ class Dim(object):
     """
     :param tf.Tensor dyn_size:
     """
-    assert not self.generic
+    assert self.can_be_used_as_dim()
     assert isinstance(dyn_size, tf.Tensor) and dyn_size.shape.ndims == 1
     if self.dyn_size_ext:
       # Do not allow resetting it to sth different.
@@ -405,6 +411,13 @@ class Dim(object):
         return True
     return False
 
+  def can_be_used_as_dim(self):
+    """
+    :return: whether this can be used as a dim in :class:`Data`, i.e. it is not generic or special
+    :rtype: bool
+    """
+    return not self.generic and not self.special
+
   def is_same_size_tensor(self, x):
     """
     :param tf.Tensor x:
@@ -438,7 +451,7 @@ class Dim(object):
     :return: self or new dim tag
     :rtype: Dim
     """
-    assert not self.generic
+    assert self.can_be_used_as_dim()
     # It's unusual if self.dimension is not None, but let's accept that.
     if hasattr(x, "_is_size_of_dim_tag"):
       # noinspection PyProtectedMember
@@ -515,7 +528,10 @@ class Dim(object):
     """
     if self is other:  # first some fast path check
       return True
+    if self.special or other.special:
+      return False  # only true if same instance, check above
     if self.generic or other.generic:
+      # Note that this invalidates the transitive property of equivalence relations.
       if self.generic and self.dimension:
         if not other.generic or other.dimension:
           if self.dimension != other.dimension:
@@ -594,10 +610,17 @@ class Dim(object):
   def __hash__(self):
     """
     :rtype: int
-    :return: hash, matching to :func:`__eq__`
+    :return: hash, matching to :func:`__eq__` (ignoring generic flag)
     """
     # This must match the behavior in __eq__, which is is_equal with default options.
     # I.e. different hash implies not equal (but same hash not necessarily equal).
+    if self.generic:
+      raise ValueError(
+        "Hash for generic dim tag %s is not well defined. " % self +
+        "The generic flag invalidates the transitive property of equivalence relations. "
+        "Explicitly go through the set or dict of dim tags and check each for equality instead.")
+    if self.special:
+      return hash(id(self))
     if self.is_batch_dim():
       return hash(())
     base = self.get_same_base()
@@ -856,8 +879,13 @@ def SpatialDim(description, dimension=None, **kwargs):
   return Dim(kind=Dim.Types.Spatial, description=description, dimension=dimension, **kwargs)
 
 
+# They match any feature or spatial dim respectively, as long as it is unique in a :class:`Data`.
 any_feature_dim = FeatureDim("any-feature-dim", None, generic=True)
 any_spatial_dim = SpatialDim("any-spatial-dim", None, generic=True)
+
+
+# This indicates to perform a single step execution of some layer which can potentially have recurrent state.
+single_step_dim = Dim(description="single-step", kind=Dim.Types.Spatial, special=True, dimension=1)
 
 
 class _ImplicitDim:
@@ -1681,7 +1709,7 @@ class Data(object):
         kind=Dim.Types.Feature, dimension=sparse_dim, description="%s:sparse-dim" % name)
     if sparse_dim is not None:
       assert isinstance(sparse_dim, Dim)
-      assert not sparse_dim.generic
+      assert sparse_dim.can_be_used_as_dim()
       assert sparse
       if dim is not NotSpecified:
         assert sparse_dim.dimension == dim
@@ -1700,7 +1728,7 @@ class Data(object):
     self._beam = beam
     self.control_flow_ctx = control_flow_ctx
     if isinstance(dim_tags, (tuple, list)):
-      assert all(not tag.generic for tag in dim_tags)
+      assert all(tag.can_be_used_as_dim() for tag in dim_tags)
       # We do a couple of sanity checks, and maybe set special axes attribs.
       shape_ = tuple(tag.dimension for tag in dim_tags if not tag.is_batch_dim())
       if shape is not None:
