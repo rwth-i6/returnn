@@ -4066,6 +4066,67 @@ def test_reclayer_inner_nativelstm1():
       raise Exception("Expect to get exception for unit %r. https://github.com/rwth-i6/returnn/issues/813" % unit)
 
 
+def test_reclayer_single_step():
+  # https://github.com/rwth-i6/returnn/issues/847
+  # Specifically, outside a rec layer here.
+  n_lstm = 5
+  net_dict = {
+    "linear": {"class": "linear", "from": "data", "n_out": n_lstm},
+    "reduce": {"class": "reduce", "mode": "mean", "from": "linear", "axis": "T"},
+    "output": {
+      "class": "rec", "unit": "lstm", "n_out": n_lstm,
+      # No need to explicitly specify axis=single_step_dim here,
+      # it should be automatic from the input which does not have any spatial dim.
+      "from": "reduce",
+      "state": {"h": "reduce", "c": "reduce"}
+    }
+  }
+  with make_scope() as session:
+    config = Config({"extern_data": {"data": {"dim": 3}}})
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    net.initialize_params(session)
+    out = net.get_default_output_layer()
+    assert out.output.shape == (n_lstm,)
+    from test_TFNetworkLayer import make_feed_dict
+    session.run(out.output.placeholder, feed_dict=make_feed_dict(net.extern_data))
+
+
+def test_reclayer_single_step_unrelated_time():
+  # https://github.com/rwth-i6/returnn/issues/847
+  # Specifically, outside a rec layer here.
+  from returnn.tf.util.data import single_step_dim
+  n_lstm = 5
+  net_dict = {
+    "output": {
+      "class": "rec", "unit": "lstm", "from": "data", "n_out": n_lstm, "axis": single_step_dim
+    }
+  }
+  with make_scope() as session:
+    n_input = 3
+    config = Config({"extern_data": {"data": {"dim": n_input}}})
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    net.initialize_params(session)
+    in_ = net.extern_data.get_default_input_data()
+    out = net.get_default_output_layer()
+    assert out.output.shape == (None, n_lstm)
+    n_batch = 2
+    n_time = 7
+    seq_lens = [7, 5]
+    in_np = numpy.random.RandomState(42).uniform(-1., 1., size=(n_batch, n_time, n_input)).astype(numpy.float32)
+    out_np = session.run(
+      out.output.placeholder, feed_dict={in_.placeholder: in_np, in_.get_sequence_lengths(): seq_lens})
+    assert isinstance(out_np, numpy.ndarray) and out_np.shape == (n_batch, n_time, n_lstm)
+    in_flat_np = in_np.reshape((n_batch * n_time, 1, n_input))
+    seq_lens_flat = [1] * n_batch * n_time
+    out_flat_np = session.run(
+      out.output.placeholder, feed_dict={in_.placeholder: in_flat_np, in_.get_sequence_lengths(): seq_lens_flat})
+    assert isinstance(out_flat_np, numpy.ndarray) and out_flat_np.shape == (n_batch * n_time, 1, n_lstm)
+    out_np_ = out_flat_np.reshape((n_batch, n_time, n_lstm))
+    numpy.testing.assert_equal(out_np, out_np_)
+
+
 def test_reclayer_att_with_kv_in_rec():
   net_dict = {
     'decision': {'class': 'decide', 'from': ['output'], 'loss': 'edit_distance', 'loss_opts': {}, 'target': 'classes'},
