@@ -1010,10 +1010,7 @@ class RecLayer(_ConcatInputLayer):
       assert not cell.does_input_projection
       assert not self.input_data.sparse
       assert self.input_data.dim == cell.n_input_dim
-    if self.input_data.have_time_axis() and self.time_dim_tag:
-      index = sequence_mask_time_major(seq_len, maxlen=self.input_data.time_dimension())
-    else:
-      index = tf.ones([1, self.input_data.get_batch_dim()], dtype=tf.bool)  # see _get_input
+    index = sequence_mask_time_major(seq_len)
     if not cell.does_direction_handling:
       x = directed(x, self._direction)
       index = directed(index, self._direction)
