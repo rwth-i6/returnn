@@ -40,12 +40,14 @@
 
 #define assert_cmp(a, cmp, b) \
     if(!((a) cmp (b))) { \
-        printf("Assertion failed: "); \
+        printf("NativeOp assertion failed: "); \
+        printf("%s %s %s, ", #a, #cmp, #b); \
         printf(_ns::_format_for_type(a), a); \
         printf(" " #cmp " "); \
         printf(_ns::_format_for_type(b), b); \
         printf("\n"); \
         assert((a) cmp (b)); \
+        abort(); \
     }
 
 
