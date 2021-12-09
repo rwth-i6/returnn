@@ -883,6 +883,8 @@ class Dataset(object):
 
   def serialize_data(self, key, data):
     """
+    Warning: this is deprecated. Directly use the corresponding Vocabulary to serialize the data
+
     :param str key: e.g. "classes". self.labels[key] should be set
     :param numpy.ndarray data: 0D or 1D
     :rtype: str

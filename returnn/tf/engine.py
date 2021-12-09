@@ -2346,12 +2346,25 @@ class Engine(EngineBase):
       serialized_output = []
       # noinspection PyShadowingNames
       for output_layer_idx in range(num_output_layers):
-        if output_layers[output_layer_idx].output.sparse and (
-          target_keys[output_layer_idx] and dataset.can_serialize_data(target_keys[output_layer_idx])):
-          serialized_output.append([dataset.serialize_data(key=target_keys[output_layer_idx], data=output)
-                                    for output in outputs[output_layer_idx]])
+        if output_layers[output_layer_idx].output.sparse:
+          # Try to get the vocab corresponding to the sparse dim
+          vocab = None
+          if output_layers[output_layer_idx].output.sparse_dim.vocab is not None:
+            vocab = output_layers[output_layer_idx].output.sparse_dim.vocab
+          elif target_keys[output_layer_idx] and self.network.extern_data.get_data(target_keys[output_layer_idx]).vocab is not None:
+            vocab = self.network.get_extern_data(target_keys[output_layer_idx]).vocab
+
+          if vocab is not None:
+            layer_outputs = outputs[output_layer_idx]
+            serialized_output.append([vocab.get_seq_labels(output.reshape((-1, )).tolist()) for output in layer_outputs])
+          elif target_keys[output_layer_idx] and dataset.can_serialize_data(target_keys[output_layer_idx]):
+            # Fallback to the serialisation provided by the dataset
+            serialized_output.append([dataset.serialize_data(key=target_keys[output_layer_idx], data=output)
+                                      for output in outputs[output_layer_idx]])
+          else:
+            assert False, "Unable to serialize sparse output of layer '%s'." % (output_layer_names[output_layer_idx])
         else:
-          # Dense output
+          # Output dense layers as-is
           serialized_output.append(outputs[output_layer_idx])
 
       for batch_idx in range(len(seq_idx)):
@@ -2379,11 +2392,18 @@ class Engine(EngineBase):
             out_idx = batch_idx * out_beam_sizes[output_layer_idx]
           if target_keys[output_layer_idx]:
             if do_eval:
-              if dataset.can_serialize_data(target_keys[output_layer_idx]):
-                print("  ref:", dataset.serialize_data(
-                  key=target_keys[output_layer_idx], data=targets[output_layer_idx][batch_idx]), file=log.v4)
+              target_extern_data = self.network.get_extern_data(target_keys[output_layer_idx])
+              if not target_extern_data.sparse:
+                if target_extern_data.vocab is not None:
+                  serialized_target = target_extern_data.vocab.get_seq_labels(targets[output_layer_idx][batch_idx])
+                elif dataset.can_serialize_data(target_keys[output_layer_idx]):
+                  serialized_target = dataset.serialize_data(
+                    key=target_keys[output_layer_idx], data=targets[output_layer_idx][batch_idx])
+                else:
+                  assert False, "Unable to serialize sparse target '%s'." % (target_keys[output_layer_idx])
               else:
-                print("  ref:", targets[output_layer_idx][batch_idx], file=log.v4)
+                serialized_target = targets[output_layer_idx][batch_idx]
+              print("  ref:", serialized_target, file=log.v4)
             if out_beam_sizes[output_layer_idx] is None:
               print("  hyp:", serialized_output[output_layer_idx][out_idx],
                     file=log.v4)
