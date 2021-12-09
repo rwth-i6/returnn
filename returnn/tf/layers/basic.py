@@ -6576,7 +6576,7 @@ class DotLayer(LayerBase):
 
 class ShiftAxisLayer(_ConcatInputLayer):
   """
-  Shifts the dimensions in an axis around.
+  Shifts the dimensions in an axis around by slicing and optional padding.
   This layer may change the axis-dimension.
 
   This name might be confusing. No axis will be shifted here. See :class:`SwapAxesLayer` for that.
