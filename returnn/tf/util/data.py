@@ -4236,17 +4236,19 @@ class Data(object):
 
   def get_bc_shape(self, opts=None):
     """
-    :param dict[str|list|tuple,int|str|None]|None opts:
+    :param dict[Dim|str|list[Dim|str]|tuple[Dim|str],int|str|None]|None opts:
       ``key`` specifies the axes.
       ``value`` 1 ('x') is broadcasting, -1 (None) is not broadcasting
       Axes should not be defined multiple times.
       The default behavior if an axis is not specified is like :func:`get_bc_spatial_batch_shape`,
       i.e. it will broadcast in batch and spatial dims only.
+      Or if "*" is in the dict, this overwrites the default behavior for all axes.
     :return: shape where 1 means broadcasting, None or >1 means not broadcasting. can be used for :func:`TFUtil.dropout`
     :rtype: tuple[int|None]
     """
     if opts is None:
       opts = {}
+    default_axes_map = dict(enumerate(self.get_bc_spatial_batch_shape()))
     axes_map = {}  # int -> int|None
     for key, value in opts.items():
       assert value in (-1, 1, 'x', None), "%r get_bc_shape: invalid value in opts %r" % (self, opts)
@@ -4259,15 +4261,12 @@ class Data(object):
         assert key_axis not in axes_map, (
           "%r get_bc_shape: axis %i is defined multiple times in opts %r" % (self, key_axis, opts))
         assert 0 <= key_axis < self.batch_ndim, "%r get_bc_shape: invalid axis %i in opts %r" % (self, key_axis, opts)
-        axes_map[key_axis] = self.batch_shape[key_axis] if value is None else value
+        (axes_map if key != "*" else default_axes_map)[key_axis] = (
+          self.batch_shape[key_axis] if value is None else value)
     # Fill in remaining axes by defaults, just as in get_bc_spatial_batch_shape.
     remaining_axes = sorted(set(range(self.batch_ndim)).difference(axes_map.keys()))
-    if remaining_axes:
-      dyn_axes_list = self.get_spatial_batch_axes()
-      if self.batch_dim_axis is not None:
-        dyn_axes_list += [self.batch_dim_axis]
-      for axis in remaining_axes:
-        axes_map[axis] = 1 if axis in dyn_axes_list else self.batch_shape[axis]
+    for axis in remaining_axes:
+      axes_map[axis] = default_axes_map[axis]
     assert sorted(axes_map.keys()) == list(range(self.batch_ndim))
     return tuple([axes_map[i] for i in range(self.batch_ndim)])
 
