@@ -2919,7 +2919,7 @@ class MergeDimsLayer(_ConcatInputLayer):
   """
   layer_class = "merge_dims"
 
-  def __init__(self, axes, keep_order=NotSpecified, n_out=None, **kwargs):
+  def __init__(self, axes, keep_order=NotSpecified, n_out=None, out_dim=None, **kwargs):
     """
     :param str|list[Dim|str] axes: see :func:`Data.get_axis_from_description`
     :param bool|NotSpecified keep_order: The old default was: the axes are sorted, and then merged.
@@ -2932,7 +2932,9 @@ class MergeDimsLayer(_ConcatInputLayer):
       and not the incoming axis order.
       Since behavior version 6, this is already the case.
     :param int|None n_out:
+    :param Dim|None out_dim:
     """
+    out_dim  # noqa  # handled in get_out_data_from_opts
     from returnn.util import BehaviorVersion
     super(MergeDimsLayer, self).__init__(**kwargs)
     if keep_order is NotSpecified:
