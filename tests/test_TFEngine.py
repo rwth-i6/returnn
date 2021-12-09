@@ -3759,7 +3759,9 @@ def test_engine_create_network_varying_flags():
 
 def test_engine_search_output_file():
   import tempfile
+  import pickle
   from returnn.datasets.generating import StaticDataset
+  from returnn.datasets.util.vocabulary import CharacterTargets
   seq_len = 5
   n_data_dim = 10
   n_classes_dim = 2
@@ -3768,16 +3770,26 @@ def test_engine_search_output_file():
   dataset = StaticDataset([{
     "data": numpy.random.randint(0, n_data_dim, size=(seq_len,), dtype=numpy.int32),
     "classes": numpy.random.randint(0, n_classes_dim, size=(seq_len,), dtype=numpy.int32),
-    "value": numpy.random.random(size=(1,1)).astype(numpy.float32),
+    "classes2": numpy.random.randint(0, n_classes_dim, size=(seq_len,), dtype=numpy.int32),
+    "classes3": numpy.random.randint(0, n_classes_dim, size=(seq_len,), dtype=numpy.int32),
   } for _ in range(num_seqs)], output_dim={
     "data": (n_data_dim, 1),
     "classes": (n_classes_dim, 1),
-    "value": (1, 2),
+    "classes2": (n_classes_dim, 1),
+    "classes3": (n_classes_dim, 1),
   })
   dataset.labels = {
     "classes": [str(i) for i in range(n_classes_dim)]
   }
+  vocab_dict = {str(i): i for i in range(n_classes_dim)}
+  vocab_file = tempfile.mktemp(suffix=".pkl", prefix="vocab")
+  with open(vocab_file, 'wb') as fp:
+    pickle.dump(vocab_dict, fp)
+  vocab = CharacterTargets(vocab_file, unknown_label=None)
   dataset.init_seq_order(epoch=1)
+
+  from returnn.tf.util.data import FeatureDim
+  classes_dim = FeatureDim("classes", dimension=n_classes_dim, vocab=vocab)
 
   config = Config()
   config.update({
@@ -3786,6 +3798,7 @@ def test_engine_search_output_file():
     "extern_data": {
       'data': {'dim': n_data_dim, 'sparse': True},
       'classes': {'dim': n_classes_dim, 'sparse': True},
+      'classes2': {'dim': n_classes_dim, 'sparse': True, 'vocab': vocab},
     },
     "network": {
       "enc0": {"class": "linear", "activation": "sigmoid", "n_out": 3, "from": "data:data"},
@@ -3800,11 +3813,15 @@ def test_engine_search_output_file():
         }
       },
       "decision": {"class": "decide", "from": "output", 'is_output_layer': True},
+      "decision2": {"class": "decide", "from": "output", 'is_output_layer': True, "target": "classes2"},
+      "_decision3": {"class": "decide", "from": "output"},
+      "decision3": {"class": "reinterpret_data", "from": "_decision3", 'is_output_layer': True, "target": "classes",
+                    "set_sparse_dim": classes_dim},
       "best_score": {"class": "decide", "from": "all_scores", 'only_on_search': True, 'is_output_layer': True},
       "all_scores": {"class": "choice_get_beam_scores", "from": "output", 'is_output_layer': True, 'only_on_search': True},
       "probs": {"class": "copy", "from": "output/prob", 'is_output_layer': True, 'target': None},
     },
-    'search_output_layer': ['decision', 'best_score', 'all_scores', 'probs'],
+    'search_output_layer': ['decision', 'decision2', 'decision3', 'best_score', 'all_scores', 'probs'],
   })
   _cleanup_old_models(config)
   engine = Engine(config=config)
@@ -3832,6 +3849,8 @@ def test_engine_search_output_file():
     from numpy import array, float32
     output = eval(output_text)
     assert set(config.typed_value('search_output_layer')) == set(output['seq-0'].keys())
+    assert all([seq_output['decision'] == seq_output['decision2'] for seq_output in output.values()])
+    assert all([seq_output['decision'] == seq_output['decision3'] for seq_output in output.values()])
 
   engine.finalize()
 
