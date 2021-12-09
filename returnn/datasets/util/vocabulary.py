@@ -6,6 +6,7 @@ from __future__ import print_function
 
 __all__ = [
   "Vocabulary",
+  "get_seq_labels_from_labels",
   "BytePairEncoding",
   "SamplingBytePairEncoding",
   "SentencePieces",
@@ -162,10 +163,41 @@ class Vocabulary(object):
 
   def get_seq_labels(self, seq):
     """
-    :param list[int] seq:
+    :param list[int]|int|numpy.ndarray seq: 0D or 1D
     :rtype: str
     """
+    if isinstance(seq, int):
+      seq = [seq]
+    elif isinstance(seq, numpy.ndarray) and seq.ndim == 0:
+      seq = numpy.expand_dims(seq, axis=0)
     return " ".join(map(self.labels.__getitem__, seq))
+
+
+def get_seq_labels_from_labels(seq, labels):
+  """
+  Warning: Deprecated, use the corresponding vocabulary to serialize the data
+
+  :param list[int]|int|numpy.ndarray seq: 0D or 1D
+  :param list[str] labels:
+  :rtype: str
+  """
+  if isinstance(seq, int):
+    seq = [seq]
+  elif isinstance(seq, numpy.ndarray) and seq.ndim == 0:
+    seq = numpy.expand_dims(seq, axis=0)
+  if len(labels) < 1000 and all([len(label) == 1 for label in labels]):
+    # are these actually raw bytes? -> assume utf8
+    if all([ord(label) <= 255 for label in labels]):
+      try:
+        if PY3:
+          return bytes([ord(labels[c]) for c in seq]).decode("utf8")
+        else:
+          return b"".join([bytes(labels[c]) for c in seq]).decode("utf8")
+      except UnicodeDecodeError:
+        pass  # pass on to default case
+    return "".join(map(labels.__getitem__, seq))
+  else:
+    return " ".join(map(labels.__getitem__, seq))
 
 
 class BytePairEncoding(Vocabulary):
@@ -335,6 +367,14 @@ class CharacterTargets(Vocabulary):
     return seq + self.seq_postfix
 
   def get_seq_labels(self, seq):
+    """
+    :param list[int]|int|numpy.ndarray seq: 0D or 1D
+    :rtype: str
+    """
+    if isinstance(seq, int):
+      seq = [seq]
+    elif isinstance(seq, numpy.ndarray) and seq.ndim == 0:
+      seq = numpy.expand_dims(seq, axis=0)
     return "".join(map(self.labels.__getitem__, seq))
 
 
@@ -371,7 +411,11 @@ class Utf8ByteTargets(Vocabulary):
 
   def get_seq_labels(self, seq):
     """
-    :param list[int] seq:
+    :param list[int]|int|numpy.ndarray seq: 0D or 1D
     :rtype: str
     """
+    if isinstance(seq, int):
+      seq = [seq]
+    elif isinstance(seq, numpy.ndarray) and seq.ndim == 0:
+      seq = numpy.expand_dims(seq, axis=0)
     return bytearray(seq).decode(encoding="utf8")

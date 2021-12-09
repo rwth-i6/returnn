@@ -24,7 +24,8 @@ import typing
 
 from returnn.log import log
 from returnn.engine.batch import Batch, BatchSetGenerator
-from returnn.util.basic import PY3, try_run, NumbersDict, unicode, OptionalNotImplementedError
+from returnn.datasets.util.vocabulary import get_seq_labels_from_labels
+from returnn.util.basic import try_run, NumbersDict, unicode, OptionalNotImplementedError
 
 
 class Dataset(object):
@@ -876,6 +877,8 @@ class Dataset(object):
 
   def can_serialize_data(self, key):
     """
+    Warning: Deprecated, use the corresponding vocabulary to serialize the data
+
     :param str key: e.g. "classes"
     :rtype: bool
     """
@@ -883,29 +886,13 @@ class Dataset(object):
 
   def serialize_data(self, key, data):
     """
-    Warning: this is deprecated. Directly use the corresponding Vocabulary to serialize the data
+    Warning: Deprecated, use the corresponding vocabulary to serialize the data
 
     :param str key: e.g. "classes". self.labels[key] should be set
     :param numpy.ndarray data: 0D or 1D
     :rtype: str
     """
-    labels = self.labels[key]
-    if data.ndim == 0:
-      data = numpy.expand_dims(data, axis=0)
-    assert data.ndim == 1
-    if len(labels) < 1000 and all([len(label) == 1 for label in labels]):
-      # are these actually raw bytes? -> assume utf8
-      if all([ord(label) <= 255 for label in labels]):
-        try:
-          if PY3:
-            return bytes([ord(labels[c]) for c in data]).decode("utf8")
-          else:
-            return b"".join([bytes(labels[c]) for c in data]).decode("utf8")
-        except UnicodeDecodeError:
-          pass  # pass on to default case
-      return "".join(map(labels.__getitem__, data))
-    else:
-      return " ".join(map(labels.__getitem__, data))
+    return get_seq_labels_from_labels(data, labels=self.labels[key])
 
   def calculate_priori(self, target="classes"):
     """

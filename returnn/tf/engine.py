@@ -29,6 +29,7 @@ from tensorflow.python.client import timeline
 
 from returnn.engine.base import EngineBase
 from returnn.datasets.basic import Dataset, Batch, BatchSetGenerator, init_dataset
+from returnn.datasets.util.vocabulary import get_seq_labels_from_labels
 from returnn.learning_rate_control import load_learning_rate_control_from_config, LearningRateControl
 from returnn.log import log
 from returnn.pretrain import pretrain_from_config
@@ -2268,7 +2269,7 @@ class Engine(EngineBase):
       output_layer_names = [output_layer_names]
     num_output_layers = len(output_layer_names)
 
-    # Create lists with information about the output layers. All of length num_targets.
+    # Create lists with information about the output layers. All of length num_output_layers.
     output_layers = []  # type: typing.List[LayerBase]
     out_beam_sizes = []  # type: typing.List[typing.Optional[int]]
     output_layer_beam_scores = []  # type: typing.List[typing.Optional[tf.Tensor]]
@@ -2343,7 +2344,9 @@ class Engine(EngineBase):
           # Interpret output as bytes/utf8-string.
           outputs[output_layer_idx] = bytearray(outputs[output_layer_idx]).decode("utf8")
 
-      serialized_output = []
+      # Create lists with serialized data. All of length num_output_layers.
+      serialized_outputs = []  # type: typing.List[typing.Optional[typing.Union[str,numpy.ndarray]]]
+      serialized_targets = []  # type: typing.List[typing.Optional[typing.Union[str,numpy.ndarray]]]
       # noinspection PyShadowingNames
       for output_layer_idx in range(num_output_layers):
         if output_layers[output_layer_idx].output.sparse:
@@ -2351,21 +2354,45 @@ class Engine(EngineBase):
           vocab = None
           if output_layers[output_layer_idx].output.sparse_dim.vocab is not None:
             vocab = output_layers[output_layer_idx].output.sparse_dim.vocab
-          elif target_keys[output_layer_idx] and self.network.extern_data.get_data(target_keys[output_layer_idx]).vocab is not None:
+          elif target_keys[output_layer_idx] and (
+            self.network.extern_data.get_data(target_keys[output_layer_idx]).vocab is not None):
             vocab = self.network.get_extern_data(target_keys[output_layer_idx]).vocab
 
           if vocab is not None:
             layer_outputs = outputs[output_layer_idx]
-            serialized_output.append([vocab.get_seq_labels(output.reshape((-1, )).tolist()) for output in layer_outputs])
-          elif target_keys[output_layer_idx] and dataset.can_serialize_data(target_keys[output_layer_idx]):
-            # Fallback to the serialisation provided by the dataset
-            serialized_output.append([dataset.serialize_data(key=target_keys[output_layer_idx], data=output)
-                                      for output in outputs[output_layer_idx]])
+            serialized_output = [vocab.get_seq_labels(output.tolist()) for output in layer_outputs]
+          elif target_keys[output_layer_idx] and target_keys[output_layer_idx] in dataset.labels:
+            # Fallback to the default serialization
+            dataset_labels = dataset.labels[target_keys[output_layer_idx]]
+            serialized_output = [
+              get_seq_labels_from_labels(output, dataset_labels) for output in outputs[output_layer_idx]]
           else:
-            assert False, "Unable to serialize sparse output of layer '%s'." % (output_layer_names[output_layer_idx])
+            serialized_output = None
+            assert not output_file, "Unable to serialize sparse output of layer '%s'." % (
+              output_layer_names[output_layer_idx])
         else:
           # Output dense layers as-is
-          serialized_output.append(outputs[output_layer_idx])
+          serialized_output = outputs[output_layer_idx]
+        serialized_outputs.append(serialized_output)
+
+        if target_keys[output_layer_idx] and do_eval:
+          target_extern_data = self.network.get_extern_data(target_keys[output_layer_idx])
+          if not target_extern_data.sparse:
+            if target_extern_data.vocab is not None:
+              serialized_target = [
+                target_extern_data.vocab.get_seq_labels(target.tolist()) for target in targets[output_layer_idx]]
+            elif target_keys[output_layer_idx] in dataset.labels:
+              dataset_labels = dataset.labels[target_keys[output_layer_idx]]
+              serialized_target = [
+                get_seq_labels_from_labels(target, dataset_labels) for target in targets[output_layer_idx]]
+            else:
+              serialized_target = None
+              assert not output_file, "Unable to serialize sparse target '%s'." % (target_keys[output_layer_idx])
+          else:
+            serialized_target = targets[output_layer_idx]
+        else:
+          serialized_target = None
+        serialized_targets.append(serialized_target)
 
       for batch_idx in range(len(seq_idx)):
         corpus_seq_idx = None
@@ -2390,39 +2417,28 @@ class Engine(EngineBase):
               [batch_idx * out_beam_sizes[output_layer_idx]:(batch_idx + 1)*out_beam_sizes[output_layer_idx]]),
                   file=log.v4)
             out_idx = batch_idx * out_beam_sizes[output_layer_idx]
-          if target_keys[output_layer_idx]:
-            if do_eval:
-              target_extern_data = self.network.get_extern_data(target_keys[output_layer_idx])
-              if not target_extern_data.sparse:
-                if target_extern_data.vocab is not None:
-                  serialized_target = target_extern_data.vocab.get_seq_labels(targets[output_layer_idx][batch_idx])
-                elif dataset.can_serialize_data(target_keys[output_layer_idx]):
-                  serialized_target = dataset.serialize_data(
-                    key=target_keys[output_layer_idx], data=targets[output_layer_idx][batch_idx])
-                else:
-                  assert False, "Unable to serialize sparse target '%s'." % (target_keys[output_layer_idx])
-              else:
-                serialized_target = targets[output_layer_idx][batch_idx]
-              print("  ref:", serialized_target, file=log.v4)
+          if target_keys[output_layer_idx] and serialized_outputs[output_layer_idx]:
+            if do_eval and serialized_targets[output_layer_idx]:
+              print("  ref:", serialized_targets[output_layer_idx][batch_idx], file=log.v4)
             if out_beam_sizes[output_layer_idx] is None:
-              print("  hyp:", serialized_output[output_layer_idx][out_idx],
+              print("  hyp:", serialized_outputs[output_layer_idx][out_idx],
                     file=log.v4)
             else:
               assert beam_scores[output_layer_idx] is not None
               for beam_idx in range(out_beam_sizes[output_layer_idx]):
                 print(
                   "  hyp %i, score %f:" % (beam_idx, beam_scores[output_layer_idx][batch_idx][beam_idx]),
-                  serialized_output[output_layer_idx][out_idx + beam_idx],
+                  serialized_outputs[output_layer_idx][out_idx + beam_idx],
                   file=log.v4)
 
           if out_cache is not None:
             if out_beam_sizes[output_layer_idx] is None:
-              out_data = serialized_output[output_layer_idx][out_idx]
+              out_data = serialized_outputs[output_layer_idx][out_idx]
             else:
               assert beam_scores[output_layer_idx] is not None
               out_data = [
                   (beam_scores[output_layer_idx][batch_idx][beam_idx],
-                   serialized_output[output_layer_idx][out_idx + beam_idx])
+                   serialized_outputs[output_layer_idx][out_idx + beam_idx])
                   for beam_idx in range(out_beam_sizes[output_layer_idx])]
 
             if output_is_dict:
