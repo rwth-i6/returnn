@@ -4596,7 +4596,7 @@ def new_seq_len(func, key, dim_tag_desc, **kwargs):
 
   :param func: **kwargs -> tf.Tensor, which calculates the new sequence length
   :param key: anything which will be used as part of the key for TensorCachedComputation. maybe a string
-  :param str dim_tag_desc: description for the new DimensionTag
+  :param str dim_tag_desc: description for the new Dim
   :param kwargs: for func
   :return: the new sequence length, calculated by func(**kwargs)
   :rtype: tf.Tensor

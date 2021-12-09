@@ -3425,7 +3425,7 @@ def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, sha
   :param dict[str,dict[str]] shared_base_net:
   :param float rtol: for the final comparison check
   :param Dim|None feat_dim:
-  :param DimensionTag|None time_dim:
+  :param Dim|None time_dim:
   """
   from returnn.tf.util.data import batch_dim
   subnet_layer_dict = subnet_layer_dict.copy()

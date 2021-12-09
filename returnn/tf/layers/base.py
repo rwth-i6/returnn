@@ -323,12 +323,12 @@ class LayerBase(object):
     :param dict[str]|None|(()->Data) out_type:
     :param returnn.tf.util.data.Dim|None out_dim:
     :param int|None|NotSpecified n_out:
-    :param set[DimensionTag|_ImplicitDim]|tuple|list|None out_shape: verifies the output shape (dim tags).
+    :param set[Dim|_ImplicitDim]|tuple|list|None out_shape: verifies the output shape (dim tags).
     :param str|list[str]|None target:
     :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
     :param str|None size_target:
     :param list[LayerBase] sources:
-    :param DimensionTag|None in_dim:
+    :param Dim|None in_dim:
     :param Loss|None loss:
     :param kwargs: remaining kwargs of self.__init__(), ignored here
     :return: Data template (placeholder not set)
@@ -488,7 +488,7 @@ class LayerBase(object):
 
     :param Data output:
     :param returnn.tf.network.TFNetwork network:
-    :param set[DimensionTag|_ImplicitDim]|tuple|list|None out_shape: verifies the output shape (dim tags).
+    :param set[Dim|_ImplicitDim]|tuple|list|None out_shape: verifies the output shape (dim tags).
       See :func:`Data.verify_out_shape`.
     :rtype: Data
     """
@@ -1929,7 +1929,7 @@ class ReuseParams:
     :param (**kwargs)->(tf.Tensor|tf.Variable) custom: see :func:`self.variable_custom_getter`
     :param bool auto_create_missing:
     :param LayerBase|None layer_output:
-    :param tuple[DimensionTag]|None shape:
+    :param tuple[Dim]|None shape:
     """
     assert isinstance(reuse_layer, (LayerBase, ReuseParams.LazyLayerResolver)) or not reuse_layer
     self._reuse_layer = reuse_layer

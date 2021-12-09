@@ -1,6 +1,6 @@
 
 """
-Provides :class:`Data`, :class:`DimensionTag`, :class:`SearchBeam`.
+Provides :class:`Data`, :class:`Dim`, :class:`SearchBeam`.
 
 See :ref:`data` for some higher-level description.
 """
@@ -19,14 +19,27 @@ import returnn.tf.compat as tf_compat
 class Dim(object):
   """
   This identifies one axis/dimension, like a time-dimension, etc.
-  This can be used by :class:`Data`. See :func:`Data.get_dim_tag`.
+  This was called ``DimensionTag`` earlier, and referred to as dimension tag.
+
+  This is used by :class:`Data`. See :func:`Data.dim_tags`.
+  This would be passed as ``dim_tags`` when creating a :class:`Data` instance.
+
   It is not to specify the specific axis in a specific Data/tensor,
   but to specify the content and dimension.
-  I.e. if we have the same DimensionTag for two Data instances,
+  I.e. if we have the same Dim for two Data instances,
   the dimensions should match. I.e.:
 
       data1.get_dim_tag(i) == data2.get_dim_tag(j)
         =>  tf.shape(data1.placeholder)[i] == tf.shape(data2.placeholder)[j]
+
+  This also includes further information such as sequence lengths
+  or a vocabulary.
+
+  We differentiate between the batch dim, spatial dim or feature dim,
+  although that is just flag and in many contexts there is no real difference
+  between a spatial dim and a feature dim (the batch dim is often handled differently).
+
+  See :func:`SpatialDim` and :func:`FeatureDim` as easy wrappers to create dim tags for the user.
   """
 
   class Types:
@@ -103,7 +116,7 @@ class Dim(object):
       self.dyn_size = dyn_size
 
   def __repr__(self):
-    return "DimensionTag{%s}" % self.short_repr()
+    return "Dim{%s}" % self.short_repr()
 
   def short_repr(self):
     """
@@ -456,7 +469,7 @@ class Dim(object):
     if hasattr(x, "_is_size_of_dim_tag"):
       # noinspection PyProtectedMember
       assert x._is_size_of_dim_tag in (None, self)
-    # If we already have another dyn size set or different batch, create a new DimensionTag instance.
+    # If we already have another dyn size set or different batch, create a new Dim instance.
     if self.batch and batch and self.batch != batch:
       assert not same_as_before  # it cannot be the same when it is another batch...
       new_dim_tag = self.get_for_batch_ctx(batch=batch, ctx=self.control_flow_ctx)
@@ -749,7 +762,7 @@ class Dim(object):
     """
     :param Dim other:
     :param list[Dim]|tuple[Dim]|set[Dim] tags:
-    :param dict[str]|None is_equal_opts: passed to DimensionTag.is_equal
+    :param dict[str]|None is_equal_opts: passed to Dim.is_equal
     :rtype: Dim|None
     """
     if is_equal_opts is None:
@@ -770,7 +783,7 @@ class Dim(object):
   def get_all_dimension_tags(cls, data_list, is_equal_opts=None, unique_separate_axes=True):
     """
     :param list[Data] data_list:
-    :param dict[str]|None is_equal_opts: passed to DimensionTag.is_equal
+    :param dict[str]|None is_equal_opts: passed to Dim.is_equal
     :param bool unique_separate_axes: e.g. data_list=[Data with shape (B,5,5,10)] results in 4 dim tags, not 3.
     :return: list of dimension tags, dict for data -> list of dimension tags (for each axis)
     :rtype: (list[Dim], dict[Data, list[Dim]])
@@ -803,7 +816,7 @@ class Dim(object):
   def get_uniq_collection(cls, tags, is_equal_opts=None):
     """
     :param list[Dim]|tuple[Dim]|set[Dim] tags:
-    :param dict[str]|None is_equal_opts: passed to DimensionTag.is_equal
+    :param dict[str]|None is_equal_opts: passed to Dim.is_equal
     :rtype: list[Dim]
     """
     res = []
@@ -1635,8 +1648,10 @@ class Data(object):
   This class is to describe a tensor,
   i.e. its shape and properties like
   whether we should consider it sparse data (i.e. it represents indices).
-  This is used in TFNetwork to describe the dataset external data
-  as well as in every layer's output.
+  Each dimension is described by :class:`Dim`.
+
+  This is used in :class:`TFNetwork` to describe the dataset external data (:class:`ExternData`)
+  as well as in every layer's output and in many other parts of the code.
 
   See :ref:`data`.
   """
@@ -2484,7 +2499,7 @@ class Data(object):
     """
     :param Dim dim_tag:
     :param bool unbroadcast: If True unbroadcast the newly added axis.
-      Will infer the unbroadcast shape via :func:`DimensionTag.get_dim_value`
+      Will infer the unbroadcast shape via :func:`Dim.get_dim_value`
     :param int|None axis:
     :rtype: Data
     """
@@ -3588,7 +3603,7 @@ class Data(object):
 
     :param bool|NotSpecified allow_int:
     """
-    msg = "Do not specify axis as int but as str or DimensionTag instead."
+    msg = "Do not specify axis as int but as str or Dim instead."
     if allow_int is NotSpecified:
       from returnn.util import BehaviorVersion
       BehaviorVersion.require(condition=False, message=msg, version=5)
@@ -3775,7 +3790,7 @@ class Data(object):
     """
     :param int axis:
     :return: some canonical description, such that ``self.get_axis_from_description(res) == axis``.
-      This is quite heuristically for now. We use both strings as also DimensionTag when appropriate.
+      This is quite heuristically for now. We use both strings as also Dim when appropriate.
       The behavior could potentially change in the future, also the condition will always hold.
     :rtype: str|Dim
     """
@@ -4362,10 +4377,10 @@ class Data(object):
 
   def find_matching_dims(self, dim_tag, is_equal_opts):
     """
-    Finds the dimensions of this Data that match another DimensionTag
+    Finds the dimensions of this Data that match another Dim
 
     :param Dim dim_tag:
-    :param dict[str,bool]|None is_equal_opts: passed to DimensionTag.is_equal
+    :param dict[str,bool]|None is_equal_opts: passed to Dim.is_equal
     :rtype: list[int] a list of matching axes, counted with batch dim. Sorted in ascending order
     """
     return [axis for axis in range(self.batch_ndim) if self.get_dim_tag(axis).is_equal(dim_tag, **is_equal_opts)]
@@ -4377,7 +4392,7 @@ class Data(object):
     :param Data other:
     :param list[int] other_axes: a list of axes of ``other``, counted with batch dim
     :return: a dict mapping other axes to own axes, all counted with batch dim
-    :param dict[str,bool]|None is_equal_opts: passed to DimensionTag.is_equal
+    :param dict[str,bool]|None is_equal_opts: passed to Dim.is_equal
     :rtype: dict[int,int]
     """
     if is_equal_opts is None:
@@ -4636,7 +4651,7 @@ def _infer_dim_tags_tuple_from_shape(
         tag = Dim(
           description="%s:var:extern_data:%s" % (tag_name, name),
           # Spatial dim tag, even if axis == feature_dim_axis. This is to keep the old behavior.
-          # This is such that DimensionTag.is_equal behaves as before, e.g. in Data.get_common_data.
+          # This is such that Dim.is_equal behaves as before, e.g. in Data.get_common_data.
           kind=Dim.Types.Spatial)
         dim_tags[axis] = tag
       _create_size_placeholder(name=name, axis_wo_b=axis_wo_b, tag=tag)

@@ -28,8 +28,10 @@ class DataNotFound(Exception):
 
 class ExternData(object):
   """
-  This holds `Data` instances for every data-key of external data from the dataset,
+  This holds :class:`Data` instances for every data-key of external data from the dataset,
   i.e. the description such as shape and sparsity, etc.
+
+  It is usually defined by a user config. See :func:`init_from_config`.
   """
 
   def __init__(self, data=None, default_input="data", default_target="classes"):
@@ -49,7 +51,10 @@ class ExternData(object):
 
   def init_from_config(self, config, auto_create_placeholders=True):
     """
-    :param Config.Config config:
+    It reads ``extern_data`` from the config,
+    which defines the :class:`Data` instance options to be created.
+
+    :param returnn.config.Config config:
     :param bool auto_create_placeholders:
     """
     self._config = config
@@ -376,8 +381,8 @@ class TFNetwork(object):
       but an "extra" net of extra_parent_net
     :param str|None extra_name_prefix:
     :param Dim|None inside_rec_time_dim: dim tag of outer rec layer, when run inside the loop (not optimized)
-    :param DimensionTag|None over_rec_time_dim: dim tag of outer rec layer, when optimized out of the loop
-    :param set[DimensionTag]|None over_rec_time_dim_subs: outer rec layer, out of loop, potential shorter
+    :param Dim|None over_rec_time_dim: dim tag of outer rec layer, when optimized out of the loop
+    :param set[Dim]|None over_rec_time_dim_subs: outer rec layer, out of loop, potential shorter
     :param returnn.tf.util.data.ControlFlowContext control_flow_ctx:
     :param str|None absolute_name_prefix: this is for representation
     :param str name: only for debugging
