@@ -439,7 +439,7 @@ class RecLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :param str|dict[str] unit:
     :param Dim axis:
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     :param str|LayerBase|list[str|LayerBase] initial_state:
     :rtype: Data
     """
@@ -3764,7 +3764,7 @@ class _SubnetworkRecCell(object):
     This is quite counter-intuitive and potential dangerous:
     self._time_dim_tags is a set over dim tags.
     A set uses the hash values of its objects.
-    Via DimensionTag.declare_same_as,
+    Via Dim.declare_same_as,
     we can change the hash value of dim tags.
     The set would not automatically be updated though,
     and then you can end up with the strange case::

@@ -246,7 +246,7 @@ class _ConcatInputLayer(LayerBase):
                dropout=0, dropout_noise_shape=None, dropout_on_forward=False, mask=None, **kwargs):
     """
     :param Dim|None in_dim:
-    :param set[DimensionTag|returnn.tf.util.data._ImplicitDim]|tuple|list|None out_shape:
+    :param set[Dim|returnn.tf.util.data._ImplicitDim]|tuple|list|None out_shape:
     :param float dropout: 0.0 means to apply no dropout. dropout will only be applied during training
     :param dict[str|tuple,int|None] dropout_noise_shape: see :func:`returnn.tf.util.data.get_bc_shape`
     :param bool dropout_on_forward: apply dropout during inference
@@ -278,7 +278,7 @@ class CopyLayer(_ConcatInputLayer):
   def __init__(self, in_dim=None, out_dim=None, extra_deps=(), **kwargs):
     """
     :param Dim|None in_dim:
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     :param list[LayerBase] extra_deps: Just add as an additional dependency, without really using it.
       This can have an effect though on the search beam, via :class:`SelectSearchSourcesLayer`.
       We only have this here for the :class:`CopyLayer` because the :func:`get_out_data_from_opts`
@@ -317,7 +317,7 @@ class CopyLayer(_ConcatInputLayer):
     :param dict[str]|None out_type:
     :param Dim|None out_dim:
     :param int|None|NotSpecified n_out:
-    :param set[DimensionTag|returnn.tf.util.data._ImplicitDim]|tuple|list|None out_shape:
+    :param set[Dim|returnn.tf.util.data._ImplicitDim]|tuple|list|None out_shape:
     :rtype: Data
     """
     # If all sources are defined, use them to get the exact out_type.
@@ -998,7 +998,7 @@ class SliceLayer(_ConcatInputLayer):
     :param int|None slice_start:
     :param int|None slice_end:
     :param int|None slice_step:
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     :rtype: Data
     """
     from ..util.data import Dim
@@ -2199,11 +2199,11 @@ class RandIntLayer(LayerBase):
   # noinspection PyUnusedLocal
   def __init__(self, shape, maxval, minval=0, dtype="int32", sparse_dim=None, seed=None, **kwargs):
     """
-    :param tuple[Dim|int]|list[DimensionTag|int] shape: desired shape of output tensor
+    :param tuple[Dim|int]|list[Dim|int] shape: desired shape of output tensor
     :param int maxval: upper bound (exclusive) on range of random values
     :param int minval: lower bound (inclusive) on range of random values
     :param str dtype: type of the output. For random ints, int32 and int64 make sense, but could also be floats
-    :param DimensionTag|None sparse_dim:
+    :param Dim|None sparse_dim:
     :param int|None seed: random seed
     """
     super(RandIntLayer, self).__init__(**kwargs)
@@ -2225,11 +2225,11 @@ class RandIntLayer(LayerBase):
   def get_out_data_from_opts(cls, name, shape, maxval, minval=0, dtype="int32", sparse_dim=None, **kwargs):
     """
     :param str name:
-    :param tuple[Dim|int]|list[DimensionTag|int] shape: desired shape of output tensor
+    :param tuple[Dim|int]|list[Dim|int] shape: desired shape of output tensor
     :param int maxval: upper bound (exclusive) on range of random values
     :param int minval: lower bound (inclusive) on range of random values
     :param str dtype: type of the output. For random ints, int32 and int64 make sense, but could also be floats
-    :param DimensionTag|None sparse_dim:
+    :param Dim|None sparse_dim:
     :rtype: Data
     """
     from returnn.tf.util.data import Dim
@@ -2470,7 +2470,7 @@ class ConstantLayer(LayerBase):
     """
     :param list[LayerBase] sources:
     :param int|float|bool value:
-    :param tuple[Dim|int]|list[DimensionTag|int] shape: for verification, and defining dim tags
+    :param tuple[Dim|int]|list[Dim|int] shape: for verification, and defining dim tags
     :param str|None dtype:
     :param bool with_batch_dim:
     """
@@ -2498,7 +2498,7 @@ class ConstantLayer(LayerBase):
     """
     :param str name:
     :param int|float|bool value:
-    :param tuple[Dim|int]|list[DimensionTag|int] shape: for verification, and defining dim tags
+    :param tuple[Dim|int]|list[Dim|int] shape: for verification, and defining dim tags
     :param str|None dtype:
     :param bool with_batch_dim:
     :rtype: Data
@@ -2591,8 +2591,8 @@ class WindowLayer(_ConcatInputLayer):
     :param Dim|None window_dim:
     :param int|None window_left:
     :param int|None window_right:
-    :param DimensionTag|str axis: see :func:`Data.get_axis_from_description`
-    :param DimensionTag|None out_spatial_dim:
+    :param Dim|str axis: see :func:`Data.get_axis_from_description`
+    :param Dim|None out_spatial_dim:
     :param str padding: "same" or "valid"
     :param int stride: return only each Nth window
     :param kwargs:
@@ -2659,8 +2659,8 @@ class WindowLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :param int|None window_size:
     :param Dim|None window_dim:
-    :param DimensionTag|str axis:
-    :param DimensionTag|None out_spatial_dim:
+    :param Dim|str axis:
+    :param Dim|None out_spatial_dim:
     :param str padding:
     :param int stride:
     :rtype: Data
@@ -2711,7 +2711,7 @@ class WindowLayer(_ConcatInputLayer):
     :param returnn.tf.layers.rec.RecLayer|LayerBase rec_layer:
     :param int|None window_size:
     :param Dim|None window_dim:
-    :param DimensionTag|str axis:
+    :param Dim|str axis:
     :param list[LayerBase] sources:
     :rtype: dict[str,tf.Tensor]
     """
@@ -2801,9 +2801,9 @@ class PadLayer(_ConcatInputLayer):
 
   def __init__(self, axes, padding, out_dims=None, value=0, mode="constant", **kwargs):
     """
-    :param Dim|str|list[DimensionTag|str] axes: e.g. "F" etc. see :func:`Data.get_axes_from_description`.
+    :param Dim|str|list[Dim|str] axes: e.g. "F" etc. see :func:`Data.get_axes_from_description`.
     :param list[(int,int)]|(int,int)|int padding: how much to pad left/right in each axis
-    :param DimensionTag|list[DimensionTag]|None out_dims:
+    :param Dim|list[Dim]|None out_dims:
     :param int|float value: what constant value to pad, with mode=="constant"
     :param str mode: "constant", "reflect", "symmetric" and "replication"
     """
@@ -2866,9 +2866,9 @@ class PadLayer(_ConcatInputLayer):
     """
     :param str name:
     :param list[LayerBase] sources:
-    :param Dim|str|list[DimensionTag|str] axes:
+    :param Dim|str|list[Dim|str] axes:
     :param list[(int,int)]|(int,int)|int padding:
-    :param DimensionTag|list[DimensionTag]|None out_dims:
+    :param Dim|list[Dim]|None out_dims:
     :rtype: Data
     """
     from ..util.data import Dim
@@ -3169,7 +3169,7 @@ class SplitLayer(_ConcatInputLayer):
     :param list[Dim]|None out_dims:
     :param object err_prefix:
     :return: axis, out_dims
-    :rtype: (int, list[DimensionTag])
+    :rtype: (int, list[Dim])
     """
     assert num_splits or size_splits or out_dims, (
       "%s: provide either num_splits or size_splits or out_dims" % err_prefix)
@@ -3291,7 +3291,7 @@ class SplitDimsLayer(_ConcatInputLayer):
   def __init__(self, axis, dims, pad_to_multiples=None, pad_value=0, **kwargs):
     """
     :param Dim|str axis: e.g. "F"
-    :param tuple[DimensionTag|int]|list[DimensionTag|int] dims: what the axis should be split into. e.g. (window, -1)
+    :param tuple[Dim|int]|list[Dim|int] dims: what the axis should be split into. e.g. (window, -1)
     :param bool|None pad_to_multiples: If true, input will be padded to the next multiple of the product of the
       static dims, such that splitting is actually possible.
       By default this is done iff the axis has a dynamic size
@@ -3389,7 +3389,7 @@ class SplitDimsLayer(_ConcatInputLayer):
     """
     :param str name:
     :param Dim|str axis:
-    :param list[DimensionTag|int]|tuple[DimensionTag|int] dims:
+    :param list[Dim|int]|tuple[Dim|int] dims:
     :param bool|None pad_to_multiples:
     :param list[LayerBase] sources:
     :rtype: Data
@@ -3629,7 +3629,7 @@ class UnflattenNdLayer(_ConcatInputLayer):
     :param LayerBase sizes:
     :param int num_axes:
     :param Dim|str|None in_dim:
-    :param list[DimensionTag]|None out_dims:
+    :param list[Dim]|None out_dims:
     :param dict[int,LayerBase]|None declare_same_sizes_as:
     """
     out_dims, declare_same_sizes_as  # noqa  # handled in get_out_data_from_opts
@@ -3683,7 +3683,7 @@ class UnflattenNdLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :param int num_axes:
     :param Dim|str|None in_dim:
-    :param list[DimensionTag]|None out_dims:
+    :param list[Dim]|None out_dims:
     :param dict[int,LayerBase]|None declare_same_sizes_as:
     :rtype: Data
     """
@@ -3796,7 +3796,7 @@ class RepeatLayer(_ConcatInputLayer):
       number of repetitions for each sequence and position in target axis.
       Can be [B,T] or [T,B] or some subset of that shape
     :param Dim|str axis: (dynamic) axis for repetition (currently only time axis is supported)
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     """
     super(RepeatLayer, self).__init__(out_dim=out_dim, **kwargs)
     self.repetitions = repetitions
@@ -3911,7 +3911,7 @@ class RepeatLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :param Dim|str axis:
     :param LayerBase|int repetitions:
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     :rtype: Data
     """
     from ..util.data import Dim
@@ -3943,7 +3943,7 @@ class TileLayer(_ConcatInputLayer):
   def __init__(self, multiples, out_dims=None, **kwargs):
     """
     :param dict[Dim|str, int] multiples: number of multiples per axis (axis provided as dim tag or str desc)
-    :param dict[DimensionTag|str, DimensionTag]|None out_dims:
+    :param dict[Dim|str, Dim]|None out_dims:
     """
     out_dims  # noqa  # handled in get_out_data_from_opts
     super(TileLayer, self).__init__(**kwargs)
@@ -3966,7 +3966,7 @@ class TileLayer(_ConcatInputLayer):
     :param str name:
     :param list[LayerBase] sources:
     :param dict[Dim|str, int] multiples:
-    :param dict[DimensionTag|str, DimensionTag]|None out_dims:
+    :param dict[Dim|str, Dim]|None out_dims:
     :rtype: Data
     """
     from ..util.data import Dim
@@ -4176,7 +4176,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param dict[str,int|str] set_axes:
       This can be used to overwrite the special axes like time_dim_axis or feature_dim_axis.
       For that, use keys "B","T" or "F", and a value via :func:`Data.get_axis_from_description`.
-    :param dict[str|Dim,DimensionTag]|None set_dim_tags: axis -> new dim tag. assigns new dim tags.
+    :param dict[str|Dim,Dim]|None set_dim_tags: axis -> new dim tag. assigns new dim tags.
       If the passed dim tag is yet undefined, this will not use same_dim_tags_as (declare_same_as)
       but create a new dim tag.
       This option is useful for generalized self attention (https://github.com/rwth-i6/returnn/issues/391).
@@ -4250,7 +4250,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
     :param LayerBase|None size_base: similar as size_target
     :param dict[str,int] set_axes:
-    :param dict[str|Dim,DimensionTag]|None set_dim_tags:
+    :param dict[str|Dim,Dim]|None set_dim_tags:
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
     :param bool|None set_sparse: if bool, set sparse value to this
@@ -4363,10 +4363,10 @@ class ConvLayer(_ConcatInputLayer):
     :param int|tuple[int] dilation_rate: dilation for the spatial dims
     :param int groups: grouped convolution
     :param Dim|None in_dim:
-    :param list[DimensionTag|str]|None in_spatial_dims:
+    :param list[Dim|str]|None in_spatial_dims:
     :param int|None n_out: number of outgoing features
-    :param DimensionTag|None out_dim:
-    :param list[DimensionTag]|None out_spatial_dims:
+    :param Dim|None out_dim:
+    :param list[Dim]|None out_spatial_dims:
     :param int input_expand_dims: number of spatial dims to add to the input
     :param bool input_add_feature_dim: will add a dim at the end and use input-feature-dim == 1,
       and use the original input feature-dim as a spatial dim.
@@ -4526,8 +4526,8 @@ class ConvLayer(_ConcatInputLayer):
     """
     :param Data output:
     :param int num_batch_dims:
-    :param list[Dim]|tuple[DimensionTag] in_spatial_dims:
-    :param list[DimensionTag]|None out_spatial_dims:
+    :param list[Dim]|tuple[Dim] in_spatial_dims:
+    :param list[Dim]|None out_spatial_dims:
     :param list[int]|tuple[int] filter_size:
     :param list[int]|tuple[int] strides:
     :param list[int]|tuple[int] dilation_rate:
@@ -4581,7 +4581,7 @@ class ConvLayer(_ConcatInputLayer):
     :param Data input_data:
     :param returnn.tf.network.TFNetwork network:
     :param Dim|None in_dim:
-    :param list[DimensionTag|str]|None in_spatial_dims:
+    :param list[Dim|str]|None in_spatial_dims:
     :param int input_expand_dims: number of spatial dims to add to the input
     :param None|int input_split_feature_dim: if set, like input_add_feature_dim it will add a new feature dim
       which is of value input_split_feature_dim, and the original input feature dim
@@ -4723,10 +4723,10 @@ class ConvLayer(_ConcatInputLayer):
     :param bool input_add_feature_dim:
     :param None|int input_split_feature_dim:
     :param Dim|None in_dim:
-    :param list[DimensionTag|str]|None in_spatial_dims:
+    :param list[Dim|str]|None in_spatial_dims:
     :param int|None n_out: number of outgoing features
-    :param DimensionTag|None out_dim:
-    :param list[DimensionTag]|None out_spatial_dims:
+    :param Dim|None out_dim:
+    :param list[Dim]|None out_spatial_dims:
     :param int input_expand_dims: number of spatial dims to add to the input
     :param bool|NotSpecified auto_use_channel_first:
     """
@@ -4841,9 +4841,9 @@ class PoolLayer(_ConcatInputLayer):
     :param tuple[int]|int dilation_rate:
     :param tuple[int]|int|None strides: in contrast to tf.nn.pool, the default (if it is None) will be set to pool_size
     :param Dim|None in_dim:
-    :param list[DimensionTag|str]|None in_spatial_dims:
-    :param DimensionTag|None out_dim:
-    :param list[DimensionTag]|None out_spatial_dims:
+    :param list[Dim|str]|None in_spatial_dims:
+    :param Dim|None out_dim:
+    :param list[Dim]|None out_spatial_dims:
     :param bool|NotSpecified use_channel_first: if set, will transform input to NCHW format
     """
     assert "n_out" not in kwargs
@@ -4935,9 +4935,9 @@ class PoolLayer(_ConcatInputLayer):
     :param int|tuple[int]|list[int] dilation_rate:
     :param str padding:
     :param Dim|None in_dim:
-    :param list[DimensionTag|str]|None in_spatial_dims:
-    :param DimensionTag|None out_dim:
-    :param list[DimensionTag]|None out_spatial_dims:
+    :param list[Dim|str]|None in_spatial_dims:
+    :param Dim|None out_dim:
+    :param list[Dim]|None out_spatial_dims:
     :param bool|NotSpecified use_channel_first:
     :rtype: Data
     """
@@ -5038,9 +5038,9 @@ class TransposedConvLayer(_ConcatInputLayer):
     :param list[int]|int remove_padding:
     :param list[int|None]|int|None output_padding:
     :param Dim|None in_dim:
-    :param list[DimensionTag|str]|None in_spatial_dims:
-    :param DimensionTag|None out_dim:
-    :param list[DimensionTag]|None out_spatial_dims:
+    :param list[Dim|str]|None in_spatial_dims:
+    :param Dim|None out_dim:
+    :param list[Dim]|None out_spatial_dims:
     :param bool with_bias: whether to add a bias. enabled by default.
       Note that the default is different from ConvLayer!
     :param str|None activation:
@@ -5242,9 +5242,9 @@ class TransposedConvLayer(_ConcatInputLayer):
     :param list[int|None]|int|None output_padding:
     :param int|None n_out: number of outgoing features
     :param Dim|None out_dim:
-    :param list[DimensionTag]|None out_spatial_dims:
-    :param DimensionTag|None in_dim:
-    :param list[DimensionTag|str]|None in_spatial_dims:
+    :param list[Dim]|None out_spatial_dims:
+    :param Dim|None in_dim:
+    :param list[Dim|str]|None in_spatial_dims:
     :rtype: Data
     """
     input_data = get_concat_sources_data_template(sources)
@@ -5896,7 +5896,7 @@ class PrefixInTimeLayer(_ConcatInputLayer):
   def __init__(self, axis="T", out_dim=None, prefix=0.0, repeat=1, size_base=None, **kwargs):
     """
     :param Dim|str axis:
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     :param float|str prefix: either some constant or another layer
     :param int|LayerBase repeat: how often to repeat the prefix
     :param LayerBase|None size_base: copy seq-lens from here
@@ -5965,7 +5965,7 @@ class PrefixInTimeLayer(_ConcatInputLayer):
     :param str name:
     :param list[LayerBase] sources:
     :param Dim|str axis:
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     :param LayerBase|None size_base:
     :param LayerBase|int repeat:
     :rtype: Data
@@ -6001,7 +6001,7 @@ class PostfixInTimeLayer(_ConcatInputLayer):
   def __init__(self, axis="T", out_dim=None, postfix=0.0, repeat=1, **kwargs):
     """
     :param Dim|str axis:
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     :param float|int|LayerBase postfix: constant or other layer without time axis to use as postfix
     :param int repeat: how often to repeat the postfix
     """
@@ -6046,7 +6046,7 @@ class PostfixInTimeLayer(_ConcatInputLayer):
   def get_out_data_from_opts(cls, name, sources, axis="T", out_dim=None, postfix=0.0, repeat=1, **kwargs):
     """
     :param Dim|str axis:
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     :param str name:
     :param list[LayerBase] sources:
     :param float|int|LayerBase postfix: constant or other layer without time axis to use as postfix
@@ -6102,7 +6102,7 @@ class TimeChunkingLayer(_ConcatInputLayer):
     :param int chunk_size:
     :param int chunk_step:
     :param Dim|str axis:
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     """
     super(TimeChunkingLayer, self).__init__(out_dim=out_dim, **kwargs)
     self.chunk_size = chunk_size
@@ -6138,7 +6138,7 @@ class TimeChunkingLayer(_ConcatInputLayer):
     :param str name:
     :param list[LayerBase] sources:
     :param Dim|str axis:
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     :rtype: Data
     """
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
@@ -6661,7 +6661,7 @@ class ResizeLayer(_ConcatInputLayer):
     """
     :param int factor:
     :param Dim|str axis: the axis to resize
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     :param str kind: "linear", "nn"/"nearest_neighbor", "cubic", "fill"
     :param None|int|float fill_value: if kind=="fill"
     :param float fill_dropout: if set, will dropout in the same axis
@@ -6743,7 +6743,7 @@ class ResizeLayer(_ConcatInputLayer):
     :param Dim|str axis:
     :param list[LayerBase] sources:
     :param str name:
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     :rtype: Data
     """
     out = get_concat_sources_data_template(sources).copy_as_batch_major()
@@ -6837,7 +6837,7 @@ class RemoveLayer(LayerBase):
     :param str name:
     :param list[LayerBase] sources:
     :param Dim|str axis:
-    :param DimensionTag|None out_dim:
+    :param Dim|None out_dim:
     :rtype: Data
     """
     assert len(sources) == 1, "%s layer %r: must have exactly one source" % (cls, name)
@@ -7896,7 +7896,7 @@ class VariableLayer(LayerBase):
                init=0,
                **kwargs):
     """
-    :param tuple[int|Dim]|list[int|DimensionTag] shape:
+    :param tuple[int|Dim]|list[int|Dim] shape:
     :param str dtype:
     :param bool add_batch_axis:
     :param bool add_time_axis:
@@ -7948,7 +7948,7 @@ class VariableLayer(LayerBase):
     """
     :param str name:
     :param returnn.tf.network.TFNetwork network:
-    :param tuple[int|Dim]|list[int|DimensionTag] shape:
+    :param tuple[int|Dim]|list[int|Dim] shape:
     :param str dtype:
     :param bool add_batch_axis:
     :param bool add_time_axis:

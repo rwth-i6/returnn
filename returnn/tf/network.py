@@ -376,8 +376,8 @@ class TFNetwork(object):
       but an "extra" net of extra_parent_net
     :param str|None extra_name_prefix:
     :param Dim|None inside_rec_time_dim: dim tag of outer rec layer, when run inside the loop (not optimized)
-    :param DimensionTag|None over_rec_time_dim: dim tag of outer rec layer, when optimized out of the loop
-    :param set[DimensionTag]|None over_rec_time_dim_subs: outer rec layer, out of loop, potential shorter
+    :param Dim|None over_rec_time_dim: dim tag of outer rec layer, when optimized out of the loop
+    :param set[Dim]|None over_rec_time_dim_subs: outer rec layer, out of loop, potential shorter
     :param returnn.tf.util.data.ControlFlowContext control_flow_ctx:
     :param str|None absolute_name_prefix: this is for representation
     :param str name: only for debugging
