@@ -188,7 +188,8 @@ def concat_sources_with_opt_dropout(src_layers, out_dim=None,
   :param list[LayerBase] src_layers:
   :param Dim|None out_dim:
   :param float dropout: dropout rate that will be applied if train_flag is set or dropout_on_forward is enabled
-  :param tuple|list|dict|None dropout_noise_shape: provide 1 for broadcasting or None otherwise for each axis.
+  :param tuple|list|dict[Dim|str|list[Dim|str]|tuple[Dim|str],int|str|None]|None dropout_noise_shape:
+    provide 1 for broadcasting or None otherwise for each axis.
     The default "None" will broadcast across all dynamic axes including the batch axis.
     Use {"*": None} to disable broadcasting for all axes.
   :param bool dropout_on_forward: apply dropout also during inference
@@ -248,7 +249,8 @@ class _ConcatInputLayer(LayerBase):
     :param Dim|None in_dim:
     :param set[Dim|returnn.tf.util.data._ImplicitDim]|tuple|list|None out_shape:
     :param float dropout: 0.0 means to apply no dropout. dropout will only be applied during training
-    :param dict[str|tuple,int|None] dropout_noise_shape: see :func:`returnn.tf.util.data.get_bc_shape`
+    :param dict[Dim|str|list[Dim|str]|tuple[Dim|str],int|str|None]|None dropout_noise_shape:
+      see :func:`Data.get_bc_shape`
     :param bool dropout_on_forward: apply dropout during inference
     :param str|None mask: "dropout" or "unity" or None. this is obsolete and only here for historical reasons
     """
