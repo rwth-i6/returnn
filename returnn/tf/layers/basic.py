@@ -6794,8 +6794,8 @@ class RemoveLayer(LayerBase):
   def __init__(self, symbol, axis="T", out_dim=None, **kwargs):
     """
     :param int symbol:
-    :param Dim|str axis:
-    :param DimensionTag|None out_dim:
+    :param Dim|str axis: the axis to operate over, to potentially remove frames
+    :param Dim|None out_dim: derived from the dim of axis, the reduced new dim
     """
     super(RemoveLayer, self).__init__(out_dim=out_dim, **kwargs)
     if symbol < 0:
@@ -6846,7 +6846,7 @@ class RemoveLayer(LayerBase):
     axis = out.get_axis_from_description(axis, allow_int=False)
     in_dim = out.dim_tags[axis]
     if not out_dim:
-      out_dim = Dim(kind=in_dim.kind, description="%s_removed_items", dimension=None)
+      out_dim = Dim(kind=in_dim.kind, description="%s_removed_items", dimension=None, derived_from_tag=in_dim)
     return out.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_dim)
 
 
