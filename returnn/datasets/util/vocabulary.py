@@ -334,6 +334,9 @@ class CharacterTargets(Vocabulary):
       seq = [self.vocab[k] for k in sentence]
     return seq + self.seq_postfix
 
+  def get_seq_labels(self, seq):
+    return "".join(map(self.labels.__getitem__, seq))
+
 
 class Utf8ByteTargets(Vocabulary):
   """
@@ -365,3 +368,10 @@ class Utf8ByteTargets(Vocabulary):
     else:
       seq = list(bytearray(sentence.encode("utf8")))
     return seq + self.seq_postfix
+
+  def get_seq_labels(self, seq):
+    """
+    :param list[int] seq:
+    :rtype: str
+    """
+    return bytearray(seq).decode(encoding="utf8")
