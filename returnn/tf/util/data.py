@@ -19,7 +19,11 @@ import returnn.tf.compat as tf_compat
 class Dim(object):
   """
   This identifies one axis/dimension, like a time-dimension, etc.
-  This can be used by :class:`Data`. See :func:`Data.get_dim_tag`.
+  This was called ``DimensionTag`` earlier, and referred to as dimension tag.
+
+  This is used by :class:`Data`. See :func:`Data.dim_tags`.
+  This would be passed as ``dim_tags`` when creating a :class:`Data` instance.
+
   It is not to specify the specific axis in a specific Data/tensor,
   but to specify the content and dimension.
   I.e. if we have the same Dim for two Data instances,
@@ -27,6 +31,15 @@ class Dim(object):
 
       data1.get_dim_tag(i) == data2.get_dim_tag(j)
         =>  tf.shape(data1.placeholder)[i] == tf.shape(data2.placeholder)[j]
+
+  This also includes further information such as sequence lengths
+  or a vocabulary.
+
+  We differentiate between the batch dim, spatial dim or feature dim,
+  although that is just flag and in many contexts there is no real difference
+  between a spatial dim and a feature dim (the batch dim is often handled differently).
+
+  See :func:`SpatialDim` and :func:`FeatureDim` as easy wrappers to create dim tags for the user.
   """
 
   class Types:
@@ -1635,8 +1648,10 @@ class Data(object):
   This class is to describe a tensor,
   i.e. its shape and properties like
   whether we should consider it sparse data (i.e. it represents indices).
-  This is used in TFNetwork to describe the dataset external data
-  as well as in every layer's output.
+  Each dimension is described by :class:`Dim`.
+
+  This is used in :class:`TFNetwork` to describe the dataset external data (:class:`ExternData`)
+  as well as in every layer's output and in many other parts of the code.
 
   See :ref:`data`.
   """
