@@ -1138,6 +1138,20 @@ def test_Data_copy_move_axis_time_to_end():
   assert d2.shape == (None, 4, None) and d2.feature_dim_axis == 2 and d2.time_dim_axis == 3
 
 
+def test_dim_math_static():
+  num_heads = SpatialDim("num_heads", dimension=2)
+  key_dim_total = FeatureDim("key_dim_total", dimension=6)
+  key_dim_per_head = key_dim_total // num_heads
+  value_dim_total = FeatureDim("value_dim_total", dimension=10)
+  value_dim_per_head = value_dim_total // num_heads
+  qkv_dim_total = key_dim_total * 2 + value_dim_total
+  qkv_dim_per_head = key_dim_per_head * 2 + value_dim_per_head
+  assert qkv_dim_total.dimension == 6 * 2 + 10
+  assert qkv_dim_per_head.dimension == (6 * 2 + 10) // 2
+  assert key_dim_total + key_dim_total + value_dim_total == qkv_dim_total
+  assert key_dim_per_head * num_heads == key_dim_total
+
+
 def test_sequence_mask_len_via_loop():
   seq_len = tf.while_loop(
     cond=lambda x: tf.less(x[0], 2),
