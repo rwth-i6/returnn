@@ -24,7 +24,7 @@ import typing
 
 from returnn.log import log
 from returnn.engine.batch import Batch, BatchSetGenerator
-from returnn.datasets.util.vocabulary import get_seq_labels_from_labels
+from returnn.datasets.util.vocabulary import Vocabulary
 from returnn.util.basic import try_run, NumbersDict, unicode, OptionalNotImplementedError
 
 
@@ -877,8 +877,6 @@ class Dataset(object):
 
   def can_serialize_data(self, key):
     """
-    Warning: Deprecated, use the corresponding vocabulary to serialize the data
-
     :param str key: e.g. "classes"
     :rtype: bool
     """
@@ -886,13 +884,16 @@ class Dataset(object):
 
   def serialize_data(self, key, data):
     """
-    Warning: Deprecated, use the corresponding vocabulary to serialize the data
+    In case you have a :class:`Vocabulary`, just use :func:`Vocabulary.get_seq_labels`.
 
     :param str key: e.g. "classes". self.labels[key] should be set
     :param numpy.ndarray data: 0D or 1D
     :rtype: str
     """
-    return get_seq_labels_from_labels(data, labels=self.labels[key])
+    vocab = Vocabulary.create_vocab_from_labels(self.labels[key])
+    if data.ndim == 0:
+      return vocab.labels[data]
+    return vocab.get_seq_labels(data)
 
   def calculate_priori(self, target="classes"):
     """

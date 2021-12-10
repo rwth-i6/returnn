@@ -29,7 +29,7 @@ from tensorflow.python.client import timeline
 
 from returnn.engine.base import EngineBase
 from returnn.datasets.basic import Dataset, Batch, BatchSetGenerator, init_dataset
-from returnn.datasets.util.vocabulary import get_seq_labels_from_labels
+from returnn.datasets.util.vocabulary import Vocabulary
 from returnn.learning_rate_control import load_learning_rate_control_from_config, LearningRateControl
 from returnn.log import log
 from returnn.pretrain import pretrain_from_config
@@ -2351,21 +2351,16 @@ class Engine(EngineBase):
       for output_layer_idx in range(num_output_layers):
         if output_layers[output_layer_idx].output.sparse:
           # Try to get the vocab corresponding to the sparse dim
-          vocab = None
-          if output_layers[output_layer_idx].output.sparse_dim.vocab is not None:
-            vocab = output_layers[output_layer_idx].output.sparse_dim.vocab
-          elif target_keys[output_layer_idx] and (
-            self.network.extern_data.get_data(target_keys[output_layer_idx]).vocab is not None):
+          vocab = output_layers[output_layer_idx].output.sparse_dim.vocab
+          if not vocab and target_keys[output_layer_idx]:
             vocab = self.network.get_extern_data(target_keys[output_layer_idx]).vocab
+            if not vocab and target_keys[output_layer_idx] in dataset.labels:
+              vocab = Vocabulary.create_vocab_from_labels(dataset.labels[target_keys[output_layer_idx]])
 
           if vocab is not None:
             layer_outputs = outputs[output_layer_idx]
-            serialized_output = [vocab.get_seq_labels(output.tolist()) for output in layer_outputs]
-          elif target_keys[output_layer_idx] and target_keys[output_layer_idx] in dataset.labels:
-            # Fallback to the default serialization
-            dataset_labels = dataset.labels[target_keys[output_layer_idx]]
             serialized_output = [
-              get_seq_labels_from_labels(output, dataset_labels) for output in outputs[output_layer_idx]]
+              vocab.get_seq_labels(output) if output.ndim == 1 else vocab.labels[output] for output in layer_outputs]
           else:
             serialized_output = None
             assert not output_file, "Unable to serialize sparse output of layer '%s'." % (
@@ -2377,14 +2372,15 @@ class Engine(EngineBase):
 
         if target_keys[output_layer_idx] and do_eval:
           target_extern_data = self.network.get_extern_data(target_keys[output_layer_idx])
-          if not target_extern_data.sparse:
-            if target_extern_data.vocab is not None:
+          if target_extern_data.sparse:
+            vocab = target_extern_data.vocab
+            if not vocab and target_keys[output_layer_idx] in dataset.labels:
+              vocab = Vocabulary.create_vocab_from_labels(dataset.labels[target_keys[output_layer_idx]])
+
+            if vocab is not None:
               serialized_target = [
-                target_extern_data.vocab.get_seq_labels(target.tolist()) for target in targets[output_layer_idx]]
-            elif target_keys[output_layer_idx] in dataset.labels:
-              dataset_labels = dataset.labels[target_keys[output_layer_idx]]
-              serialized_target = [
-                get_seq_labels_from_labels(target, dataset_labels) for target in targets[output_layer_idx]]
+                vocab.get_seq_labels(target) if target.ndim == 1 else vocab.labels[target]
+                for target in targets[output_layer_idx]]
             else:
               serialized_target = None
               assert not output_file, "Unable to serialize sparse target '%s'." % (target_keys[output_layer_idx])
