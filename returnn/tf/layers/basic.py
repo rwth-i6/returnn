@@ -4210,8 +4210,8 @@ class ReinterpretDataLayer(_ConcatInputLayer):
           # Need to create new size tensor as long as we have get_tag_from_size_tensor.
           new_dyn_size_ext.placeholder = tf.identity(
             new_dyn_size_ext.placeholder, name=get_valid_scope_name_from_str(new_dyn_size_ext.name))
-          new_tag.set_tag_on_size_tensor(new_dyn_size_ext.placeholder)
           new_tag.dyn_size_ext = new_dyn_size_ext
+          new_tag.set_tag_on_size_tensor(new_dyn_size_ext.placeholder)
     self.output.placeholder = input_data.placeholder
     if len(self.sources) == 1:
       self.output_loss = self.sources[0].output_loss
