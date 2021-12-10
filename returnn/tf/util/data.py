@@ -57,7 +57,7 @@ class Dim(object):
                vocab=None,
                dyn_size=None, dyn_size_ext=None,
                undefined=False, generic=False, special=False,
-               derived_from_tag=None,
+               derived_from_tag=None, derived_from_op=None,
                batch=None, control_flow_ctx=None,
                src_data=None, src_axis=None):
     """
@@ -78,6 +78,7 @@ class Dim(object):
       In situations where dim tags are being matched (Data.get_common_data),
       the behavior is to consider them as equal,
       and assume that the chain of operations (e.g. padding + valid conv) results in the same dim.
+    :param Dim.Op|None derived_from_op:
     :param BatchInfo|None batch: for batch-dim, or dynamic dims per batch
     :param ControlFlowContext|None control_flow_ctx:
     :param Data|None src_data:
@@ -90,7 +91,8 @@ class Dim(object):
     self._vocab = vocab
     self.same_as = None  # type: typing.Optional[Dim]
     self._same_as_tb = None  # type: typing.Optional[traceback.StackSummary]  # for debugging
-    self.derived_from_tag = derived_from_tag
+    self.derived_from_tag = derived_from_tag  # TODO change or remove?
+    self.derived_from_op = derived_from_op
     if src_data:
       assert isinstance(src_data, Data) and isinstance(src_axis, int)
     if not batch and dyn_size_ext:
@@ -860,6 +862,202 @@ class Dim(object):
     :param returnn.datasets.util.vocabulary.Vocabulary|None vocab:
     """
     self.get_same_base()._vocab = vocab
+
+  # The kind of operations we have:
+  # a + b: padding, concat
+  # a - b: window with valid frames only
+  # a * b: merge dims, upsample, transposed conv with striding
+  # a / b (when a % b == 0): split dims, downsample, conv with striding
+  # ceildiv(a, b): conv with striding
+  # custom: repeat, remove, mask, loop with dyn end
+  # Note that we always have the assumption that a dimension is non-negative.
+  # This assumption is necessary for some simplifications.
+
+  def __add__(self, other):
+    """
+    :param Dim|int other:
+    :rtype: Dim
+    """
+    if isinstance(other, int):
+      other_description = str(other)
+      other = Dim(kind=self.kind, description="unnamed-%s-dim%i" % (self.kind, other), dimension=other)
+    elif isinstance(other, Dim):
+      other_description = other.description
+    else:
+      raise TypeError("%s + %s invalid for type %s" % (self, other, type(other)))
+    if self.dimension is not None and other.dimension is not None:
+      dim = self.dimension + other.dimension
+    else:
+      dim = None
+    if self.derived_from_op and self.derived_from_op.kind == "add":
+      some_base_term = ...  # TODO
+      add_inputs = self.derived_from_op.inputs + [other]
+    else:
+      some_base_term = self
+      add_inputs = [self, other]
+    cached = some_base_term.opt_cached_add_list(add_inputs)
+    if cached:
+      return cached
+    res = Dim(kind=self.kind, description="%s+%s" % (self.description, other_description), dimension=dim)
+    res.derived_from_op = Dim.Op(kind="add", inputs=add_inputs, output=res)
+    some_base_term.add_cached_add_list(res)
+    return res
+
+  def __sub__(self, other):
+    """
+    :param Dim|int other:
+    :rtype: Dim
+    """
+    pass  # TODO
+
+  def __mul__(self, other):
+    """
+    :param Dim|int other:
+    :rtype: Dim
+    """
+    if isinstance(other, int):
+      other_description = str(other)
+      other = Dim(kind=self.kind, description="unnamed-%s-dim%i" % (self.kind, other), dimension=other)
+    elif isinstance(other, Dim):
+      other_description = other.description
+    else:
+      raise TypeError("%s * %s invalid for type %s" % (self, other, type(other)))
+    if self.dimension is not None and other.dimension is not None:
+      dim = self.dimension * other.dimension
+    else:
+      dim = None
+
+    some_base_term = ...
+    # TODO
+
+  def __floordiv__(self, other):
+    """
+    :param Dim|int other:
+    :rtype: Dim
+    """
+    return self._simple_div(other, kind="//")
+
+  def __truediv__(self, other):
+    """
+    :param Dim|int other:
+    :rtype: Dim
+    """
+    return self._simple_div(other, kind="/")
+
+  def _simple_div(self, other, kind):
+    """
+    :param Dim|int other:
+    :param str kind:
+    :rtype: Dim
+    """
+    if self.dimension is None:
+      raise Exception("%s %s %s: use ceildiv instead" % (self, kind, other))
+    if isinstance(other, int):
+      if self.dimension % other != 0:
+        raise Exception("%s %s %s: use ceildiv instead when there is a remainder" % (self, kind, other))
+      return self.ceildiv(other)
+    if isinstance(other, Dim):
+      if other.dimension is None:
+        raise Exception("%s %s %s: use ceildiv instead" % (self, kind, other))
+      if self.dimension % other.dimension != 0:
+        raise Exception("%s %s %s: use ceildiv instead when there is a remainder" % (self, kind, other))
+      return self.ceildiv(other)
+    raise TypeError("%s %s %s: unsupported type %r" % (self, kind, other, type(other)))
+
+  def ceildiv(self, other):
+    """
+    :param Dim|int other:
+    :rtype: Dim
+    """
+    pass
+
+  class Op:
+    """
+    Op on :class:`Dim` which results in a derived :class:`Dim`.
+    """
+    def __init__(self, kind, inputs, output):
+      """
+      :param str kind: "add", "sub", "mul", "ceildiv"
+      :param list[Dim] inputs:
+      :param Dim output:
+      """
+      self.kind = kind
+      self.inputs = inputs
+      self.output = output
+
+  def derived_from(self):
+    """
+    :return: list of dim tags this is derived from
+    :rtype: list[Dim]
+    """
+    pass  # TODO
+
+  def consumers(self):
+    """
+    :return: list of other dim tags which are derived from this
+    :rtype: list[Dim]
+    """
+    # TODO
+
+  class _OpMultTerm:
+    """
+    represents sth like a * b * c
+    """
+    def __init__(self, parts):
+      """
+      :param set[Dim] parts:
+      """
+      self.parts = parts
+
+    def __hash__(self):
+      return hash(frozenset(self.parts))
+
+    def __eq__(self, other):
+      """
+      :param Dim|Dim._OpMultTerm other:
+      """
+      if isinstance(other, Dim):
+        return self.parts == {other}
+      if isinstance(other, Dim._OpMultTerm):
+        return self.parts == other.parts
+      return False
+
+    def __ne__(self, other):
+      return not self.__eq__(other)
+
+    @property
+    def dimension(self):
+      """
+      :rtype: int|None
+      """
+      dim = 1
+      for part in self.parts:
+        if part.dimension is None:
+          return None
+        dim *= part.dimension
+      return dim
+
+  class _OpLinearTerm:
+    """
+    represents sth like a * b + c
+    """
+    def __init__(self, result, parts):
+      """
+      :param Dim result:
+      :param set[Dim|Dim._OpMultTerm] parts:
+      """
+      self.result = result
+      self.parts = parts
+
+    def sub_int_maybe_simplified(self, other):
+      """
+      :param int other:
+      :rtype: set[Dim|Dim._OpMultTerm]
+      """
+      if other == 0:
+        return self.parts
+      assert other > 0
+      # TODO
 
 
 # Earlier the class was called DimensionTag. Provide this alias for older code.
