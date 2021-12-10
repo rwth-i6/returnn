@@ -4699,7 +4699,7 @@ class ConvLayer(_ConcatInputLayer):
     if padding == "SAME":
       return ceildiv(in_dim, stride)
     elif padding == "VALID":
-      return tf_util.simplify_nonzero_seq_length(
+      return tf_util.simplify_non_negative_seq_length(
         ceildiv(
           (tf_util.simplify_sub(in_dim, (filter_size - 1) * dilation_rate)),
           stride))

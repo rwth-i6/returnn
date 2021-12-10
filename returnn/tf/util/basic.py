@@ -4558,7 +4558,7 @@ def simplify_sub(a, b):
   return simplify_add(a, simplify_neg(b))
 
 
-def simplify_nonzero_seq_length(x):
+def simplify_non_negative_seq_length(x):
   """
   :param tf.Tensor|int|float|numpy.ndarray x:
   :return: max(x, 0), or simplified if possible
@@ -4570,6 +4570,7 @@ def simplify_nonzero_seq_length(x):
   import numpy
   if isinstance(x, (int, float, numpy.ndarray)):
     return max(x, 0)
+  assert isinstance(x, tf.Tensor)
   return tf.maximum(x, 0)
 
 
