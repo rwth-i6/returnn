@@ -3511,6 +3511,29 @@ def test_SliceNdLayer_set_tag_on_size_tensor():
     })
 
 
+def test_SliceNdLayer_ReinterpretDataLayer():
+  """
+  https://github.com/rwth-i6/returnn/issues/851
+  """
+  from returnn.tf.util.data import DimensionTag
+  new_slice_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="new-slice")
+  with make_scope():
+    n_out = 5
+    config = Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_out},
+        "classes": {"dim": n_out, "sparse": True}
+      }})
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "start": {"class": "reinterpret_data", "from": "data:classes", "set_sparse": False},
+      "slices": {"class": "slice_nd", "from": "data", "start": "start", "size": None},
+      "output": {
+        "class": "reinterpret_data", "from": "slices", "set_dim_tags": {"stag:sliced-time:slices": new_slice_tag}}
+    })
+
+
 def test_WindowLayer_output_placeholder():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())
