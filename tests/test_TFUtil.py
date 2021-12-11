@@ -1142,6 +1142,7 @@ def test_dim_math_static():
   num_heads = SpatialDim("num_heads", dimension=2)
   key_dim_total = FeatureDim("key_dim_total", dimension=6)
   key_dim_per_head = key_dim_total // num_heads
+  assert key_dim_per_head.dimension == 3
   value_dim_total = FeatureDim("value_dim_total", dimension=10)
   value_dim_per_head = value_dim_total // num_heads
   qkv_dim_total = key_dim_total * 2 + value_dim_total
