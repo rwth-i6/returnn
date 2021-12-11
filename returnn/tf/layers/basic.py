@@ -5975,9 +5975,7 @@ class PrefixInTimeLayer(_ConcatInputLayer):
       assert not out_dim
       out_dim = size_base.output.get_time_dim_tag()
     if not out_dim:
-      out_dim = Dim(
-        kind=in_dim.kind, description="%s:prefix-in-time" % name, dimension=out_dim_int,
-        derived_from_tag=in_dim, batch=in_dim.batch, control_flow_ctx=in_dim.control_flow_ctx)
+      out_dim = in_dim + repeat
     assert out_dim.dimension == out_dim_int
     x = x.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=out_dim)
     if isinstance(repeat, LayerBase):
@@ -6055,9 +6053,7 @@ class PostfixInTimeLayer(_ConcatInputLayer):
     if in_dim.dimension:
       out_dim_int = in_dim.dimension + repeat
     if not out_dim:
-      out_dim = Dim(
-        kind=in_dim.kind, description="%s:postfix-in-time" % name, dimension=out_dim_int,
-        derived_from_tag=in_dim, batch=in_dim.batch, control_flow_ctx=in_dim.control_flow_ctx)
+      out_dim = in_dim + repeat
     assert out_dim.dimension == out_dim_int
     x = x.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=out_dim)
     return x
