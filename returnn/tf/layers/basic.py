@@ -158,20 +158,24 @@ def get_concat_sources_data_template(src_layers, out_dim=None, allow_broadcast_a
     return data
   if not name:
     name = "concat_" + "_".join([layer.name for layer in src_layers])
-  dim = 0
+  dim = None
   common_source = Data.get_common_data(
     [s.output for s in src_layers], ignore_feature_dim=True, allow_broadcast_all_sources=allow_broadcast_all_sources)
   for layer in src_layers:
     # Note: We do not perform much compatibility checks at this point,
     # as this is for a template only anyway.
     # The real checks are in concat_sources.
-    assert not layer.output.sparse
-    if layer.output.dim is not None:  # just ignore at this point if None (e.g. during template construction)
-      dim += layer.output.dim
+    if layer.output.have_feature_axis():  # just ignore at this point if None (e.g. during template construction)
+      layer_dim = layer.output.feature_dim_or_sparse_dim
+      if layer_dim.dimension is not None:  # maybe during template construction
+        if dim is None:
+          dim = layer_dim
+        else:
+          dim = dim + layer_dim
   if out_dim:
-    assert out_dim.dimension == dim
+    assert out_dim.dimension == dim.dimension
   else:
-    out_dim = FeatureDim(name + "_feature", dimension=dim)
+    out_dim = dim
   return common_source.copy_template_replace_dim_tag(
     name=name,
     axis=common_source.feature_dim_axis,
