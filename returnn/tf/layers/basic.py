@@ -3917,15 +3917,12 @@ class RepeatLayer(_ConcatInputLayer):
       data = data.copy_add_batch_dim(batch_dim_axis=0, batch=repetitions.output.batch)
     original_axis = data.get_axis_from_description(axis, allow_int=False)
     tag = data.dim_tags[original_axis]
-    if tag.dimension is not None and isinstance(repetitions, int):
-      new_dim = tag.dimension * repetitions
-    else:
-      new_dim = None
     data = data.copy_move_axis(original_axis, data.get_batch_axis(0))
     if not out_dim:
-      out_dim = Dim(description="repeated:%s" % name, kind=tag.kind, dimension=new_dim, derived_from_tag=tag)
-    else:
-      assert out_dim.dimension == new_dim
+      if isinstance(repetitions, int):
+        out_dim = tag * repetitions
+      else:
+        out_dim = Dim(description="repeated:%s" % name, kind=tag.kind, derived_from_tag=tag)
     return data.copy_template_replace_dim_tag(axis=data.get_batch_axis(0), new_dim_tag=out_dim)
 
 
