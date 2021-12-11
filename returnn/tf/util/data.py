@@ -11,6 +11,7 @@ import os
 import typing
 import tensorflow as tf
 import traceback
+from collections import OrderedDict
 
 from returnn.util.basic import NotSpecified, Entity
 import returnn.tf.compat as tf_compat
@@ -93,6 +94,8 @@ class Dim(object):
     self._same_as_tb = None  # type: typing.Optional[traceback.StackSummary]  # for debugging
     self.derived_from_tag = derived_from_tag  # TODO change or remove?
     self.derived_from_op = derived_from_op
+    self._cache_derived_linear_terms = {}  # type: typing.Dict[Dim._OpLinearTerm, Dim]
+    self._cache_derived_mult_terms = {}  # type: typing.Dict[Dim._OpMultTerm, Dim]
     if src_data:
       assert isinstance(src_data, Data) and isinstance(src_axis, int)
     if not batch and dyn_size_ext:
@@ -878,57 +881,21 @@ class Dim(object):
     :param Dim|int other:
     :rtype: Dim
     """
-    if isinstance(other, int):
-      other_description = str(other)
-      other = Dim(kind=self.kind, description="unnamed-%s-dim%i" % (self.kind, other), dimension=other)
-    elif isinstance(other, Dim):
-      other_description = other.description
-    else:
-      raise TypeError("%s + %s invalid for type %s" % (self, other, type(other)))
-    if self.dimension is not None and other.dimension is not None:
-      dim = self.dimension + other.dimension
-    else:
-      dim = None
-    if self.derived_from_op and self.derived_from_op.kind == "add":
-      some_base_term = ...  # TODO
-      add_inputs = self.derived_from_op.inputs + [other]
-    else:
-      some_base_term = self
-      add_inputs = [self, other]
-    cached = some_base_term.opt_cached_add_list(add_inputs)
-    if cached:
-      return cached
-    res = Dim(kind=self.kind, description="%s+%s" % (self.description, other_description), dimension=dim)
-    res.derived_from_op = Dim.Op(kind="add", inputs=add_inputs, output=res)
-    some_base_term.add_cached_add_list(res)
-    return res
+    return Dim._OpLinearTerm.from_dim(self).add(other).as_dim()
 
   def __sub__(self, other):
     """
     :param Dim|int other:
     :rtype: Dim
     """
-    pass  # TODO
+    return Dim._OpLinearTerm.from_dim(self).sub(other).as_dim()
 
   def __mul__(self, other):
     """
     :param Dim|int other:
     :rtype: Dim
     """
-    if isinstance(other, int):
-      other_description = str(other)
-      other = Dim(kind=self.kind, description="unnamed-%s-dim%i" % (self.kind, other), dimension=other)
-    elif isinstance(other, Dim):
-      other_description = other.description
-    else:
-      raise TypeError("%s * %s invalid for type %s" % (self, other, type(other)))
-    if self.dimension is not None and other.dimension is not None:
-      dim = self.dimension * other.dimension
-    else:
-      dim = None
-
-    some_base_term = ...
-    # TODO
+    return Dim._OpLinearTerm.from_dim(self).mul(other).as_dim()
 
   def __floordiv__(self, other):
     """
@@ -969,7 +936,7 @@ class Dim(object):
     :param Dim|int other:
     :rtype: Dim
     """
-    pass
+    return Dim._OpLinearTerm.from_dim(self).div(other).as_dim()
 
   class Op:
     """
@@ -1003,27 +970,91 @@ class Dim(object):
     """
     represents sth like a * b * c
     """
+    @classmethod
+    def from_dim(cls, dim):
+      """
+      :param Dim dim:
+      :rtype: Dim._OpMultTerm
+      """
+      if dim.derived_from_op and dim.derived_from_op.kind == "mul":
+        res = cls.from_dim(dim.derived_from_op.inputs[0])
+        for dim in dim.derived_from_op.inputs[1:]:
+          res = res.mul(dim)
+        return res
+      if dim.derived_from_op and dim.derived_from_op.kind == "div":
+        res = cls.from_dim(dim.derived_from_op.inputs[0])
+        for dim in dim.derived_from_op.inputs[1:]:
+          res = res.div(dim)
+        return res
+      return cls(OrderedDict([(dim, 1)]))
+
+    @classmethod
+    def from_dims(cls, *dims):
+      """
+      :param Dim dims:
+      :rtype: Dim._OpMultTerm
+      """
+      if not dims:
+        return cls.one()
+      res = cls.from_dim(dims[0])
+      for dim in dims[1:]:
+        res = res.mul(dim)
+      return res
+
+    @classmethod
+    def one(cls):
+      """
+      :rtype: Dim._OpMultTerm
+      """
+      return cls(OrderedDict())
+
     def __init__(self, parts):
       """
-      :param set[Dim] parts:
+      :param OrderedDict[Dim,int] parts: e.g. {a: 2, b: 3} means a * a * b * b * b
       """
       self.parts = parts
 
     def __hash__(self):
-      return hash(frozenset(self.parts))
+      return hash(frozenset(self.parts.items()))
+
+    def _as_dict(self):
+      return dict(self.parts)
 
     def __eq__(self, other):
       """
       :param Dim|Dim._OpMultTerm other:
       """
       if isinstance(other, Dim):
-        return self.parts == {other}
+        return self._as_dict() == {other: 1}
       if isinstance(other, Dim._OpMultTerm):
-        return self.parts == other.parts
+        return self._as_dict() == other._as_dict()
       return False
 
     def __ne__(self, other):
       return not self.__eq__(other)
+
+    def __repr__(self):
+      return "Dim._OpMultTerm(%r)" % (self.parts,)
+
+    def items(self):
+      """
+      :rtype: typing.Iterable[(Dim,int)]
+      """
+      return self.parts.items()
+
+    def __contains__(self, item):
+      """
+      :param Dim item:
+      :rtype: bool
+      """
+      return item in self.parts
+
+    def __getitem__(self, item):
+      """
+      :param Dim item:
+      :rtype: int
+      """
+      return self.parts[item]
 
     @property
     def dimension(self):
@@ -1031,33 +1062,346 @@ class Dim(object):
       :rtype: int|None
       """
       dim = 1
-      for part in self.parts:
+      for part, p in self.parts.items():
         if part.dimension is None:
           return None
-        dim *= part.dimension
+        if p == 0:
+          continue
+        if p > 0:
+          dim *= part.dimension ** p
+        else:
+          for _ in range(p):
+            assert dim % part.dimension == 0
+            dim //= part.dimension
       return dim
+
+    def base_term(self):
+      """
+      :rtype: Dim
+      """
+      assert self.parts
+      return next(iter(self.parts))
+
+    def is_one(self):
+      """
+      :rtype: bool
+      """
+      return not self.parts
+
+    def negative(self):
+      """
+      :rtype: Dim._OpMultTerm
+      """
+      parts = OrderedDict(self.parts)
+      for part, p in parts.items():
+        if part.dimension == -1:
+          assert p == 1
+          del parts[part]
+          return Dim._OpMultTerm(parts)
+      parts[SpatialDim("unnamed-negative-dim1", -1)] = 1
+      return Dim._OpMultTerm(parts)
+
+    def mul(self, other):
+      """
+      :param Dim|Dim._OpMultTerm other:
+      :rtype: Dim._OpMultTerm
+      """
+      return self._extend(other, kind="mul")
+
+    def div(self, other):
+      """
+      :param Dim|Dim._OpMultTerm other:
+      :rtype: Dim._OpMultTerm
+      """
+      return self._extend(other, kind="div")
+
+    def _extend(self, other, kind):
+      """
+      :param Dim|Dim._OpMultTerm other:
+      :param str kind: "mul" or "div"
+      :rtype: Dim._OpMultTerm
+      """
+      if isinstance(other, Dim):
+        other = Dim._OpMultTerm.from_dim(other)
+      assert isinstance(other, Dim._OpMultTerm)
+      parts = OrderedDict(self.parts)
+      for other_part, p in other.parts.items():
+        if kind == "div":
+          p = -p
+        if other_part in parts:
+          parts[other_part] += p
+          if parts[other_part] == 0:
+            del parts[other_part]
+        else:
+          parts[other_part] = p
+      return Dim._OpMultTerm(parts)
+
+    def split_numerator_denominator(self):
+      """
+      :rtype: (Dim._OpMultTerm,Dim._OpMultTerm)
+      """
+      num = OrderedDict()
+      den = OrderedDict()
+      for part, p in self.parts.items():
+        if p > 0:
+          num[part] = p
+        else:
+          den[part] = -p
+      return Dim._OpMultTerm(num), Dim._OpMultTerm(den)
+
+    def as_dim(self, base_term=None):
+      """
+      :param Dim|None base_term:
+      :rtype: Dim
+      """
+      if base_term:
+        cache = base_term._cache_derived_mult_terms.get(self)
+        if cache:
+          return cache
+      if self.is_one():
+        res = SpatialDim("unnamed-%s-dim1" % (base_term.kind if base_term else "spatial"), 1)
+        if base_term:
+          base_term._cache_derived_mult_terms[self] = res
+        return res
+      if not base_term:
+        base_term = self.base_term()
+        cache = base_term._cache_derived_mult_terms.get(self)
+        if cache:
+          return cache
+      num, den = self.split_numerator_denominator()
+      num_dim = base_term._cache_derived_mult_terms.get(num)
+      if not num_dim:
+        num_dim_value = 1
+        num_parts = []
+        for part, p in num.parts.items():
+          assert isinstance(part, Dim)
+          assert isinstance(p, int)
+          assert p > 0
+          for _ in range(p):
+            num_parts.append(part)
+          if num_dim_value is not None and part.dimension is not None:
+            num_dim_value *= part.dimension ** p
+        if not num_parts:
+          assert not den.is_one()
+          num_dim = num.as_dim(base_term=base_term)
+        else:
+          num_dim = Dim(
+            kind=base_term.kind, description="*".join(map(self._get_description, num_parts)),
+            dimension=num_dim_value)
+          op = Dim.Op(kind="mul", inputs=num_parts, output=num_dim)
+          num_dim.derived_from_op = op
+          base_term._cache_derived_mult_terms[num] = num_dim
+      if den.is_one():
+        return num_dim
+      den_dim = den.as_dim(base_term=base_term)
+      res = Dim(
+        kind=base_term.kind, description="%s//(%s)" % (num_dim.description, den_dim.description),
+        dimension=(
+          num_dim.dimension // den_dim.dimension if num_dim.dimension is not None and den_dim.dimension else None))
+      op = Dim.Op(kind="div", inputs=[num_dim, den_dim], output=res)
+      res.derived_from_op = op
+      base_term._cache_derived_mult_terms[self] = res
+      return res
+
+    @classmethod
+    def _get_description(cls, dim):
+      """
+      :param Dim dim:
+      :rtype: str
+      """
+      if dim.description and dim.description.startswith("unnamed-") and dim.dimension is not None:
+        return str(dim.dimension)
+      if dim.description:
+        return dim.description
+      return "unnamed-%s-dim%s" % (dim.kind, dim.dimension if dim.dimension is not None else "?")
 
   class _OpLinearTerm:
     """
     represents sth like a * b + c
     """
-    def __init__(self, result, parts):
+    @classmethod
+    def from_dim(cls, dim):
       """
-      :param Dim result:
-      :param set[Dim|Dim._OpMultTerm] parts:
+      :param Dim dim:
+      :rtype: Dim._OpLinearTerm
       """
-      self.result = result
-      self.parts = parts
+      return cls.zero().add(dim)
 
-    def sub_int_maybe_simplified(self, other):
+    @classmethod
+    def zero(cls):
       """
-      :param int other:
-      :rtype: set[Dim|Dim._OpMultTerm]
+      :rtype: Dim._OpLinearTerm
       """
-      if other == 0:
-        return self.parts
-      assert other > 0
-      # TODO
+      return Dim._OpLinearTerm(OrderedDict())
+
+    def __init__(self, base_terms):
+      """
+      :param OrderedDict[Dim,Dim._OpMultTerm] base_terms:
+        e.g. {a: b, c: d} represents b + d, where a is in b and c is in d
+      """
+      self.base_terms = base_terms
+
+    def __hash__(self):
+      return hash(frozenset(value) for value in self.base_terms.values())
+
+    def __eq__(self, other):
+      if isinstance(other, Dim._OpLinearTerm):
+        return self._as_simple_dict() == other._as_simple_dict()
+      return False
+
+    def __ne__(self, other):
+      return not self.__eq__(other)
+
+    def _as_simple_dict(self):
+      """
+      :rtype: dict[Dim,Dim._OpMultTerm]
+      """
+      return dict(self.base_terms)
+
+    def as_dim(self):
+      """
+      :rtype: Dim
+      """
+      if self.is_zero():
+        return SpatialDim("unnamed-zero-dim", 0)
+      some_base_term = self._canonical_base()
+      cached = some_base_term._cache_derived_linear_terms.get(self)
+      if cached:
+        return cached
+      add_parts = []
+      desc_parts = []
+      dim = 0
+      for base_term, parts in self.base_terms.items():
+        assert isinstance(base_term, Dim)
+        assert isinstance(parts, Dim._OpMultTerm)
+        s = parts.as_dim()
+        add_parts.append(s)
+        desc_parts.append(s.description or "?")
+        if dim is not None and s.dimension is not None:
+          dim += s.dimension
+        else:
+          dim = None
+      res = Dim(kind=some_base_term.kind, description="+".join(desc_parts), dimension=dim)
+      res.derived_from_op = Dim.Op(kind="add", inputs=add_parts, output=res)
+      some_base_term._cache_derived_linear_terms[self] = res
+      return res
+
+    def __repr__(self):
+      return "Dim._OpLinearTerm(%r)" % (self.base_terms,)
+
+    def is_zero(self):
+      """
+      :rtype: bool
+      """
+      return not self.base_terms
+
+    def add(self, other):
+      """
+      :param Dim|int other:
+      :rtype: Dim._OpLinearTerm
+      """
+      return self._extend_add_sub(other, kind="add")
+
+    def sub(self, other):
+      """
+      :param Dim|int other:
+      :rtype: Dim._OpLinearTerm
+      """
+      return self._extend_add_sub(other, kind="sub")
+
+    def mul(self, other):
+      """
+      :param Dim|int other:
+      :rtype: Dim._OpLinearTerm
+      """
+      return self._extend_mul_div(other, kind="mul")
+
+    def div(self, other):
+      """
+      :param Dim|int other:
+      :rtype: Dim._OpLinearTerm
+      """
+      return self._extend_mul_div(other, kind="div")
+
+    def _extend_add_sub(self, other, kind):
+      """
+      :param Dim|int other:
+      :param str kind: "add" or "sub"
+      :rtype: Dim._OpLinearTerm
+      """
+      assert kind in {"add", "sub"}
+      other = self._make_dim(other, kind=kind)
+      if other.dimension == 0:
+        return self
+      if other.derived_from_op and other.derived_from_op.kind == "add":
+        res = self
+        for part in other.derived_from_op.inputs:
+          res = res._extend_add_sub(part, kind=kind)
+        return res
+      other_factors = Dim._OpMultTerm.from_dim(other)
+      other_base = other_factors.base_term()
+      base_terms = OrderedDict(self.base_terms)
+      if other_base in base_terms:
+        factor = base_terms[other].div(other_base).as_dim()
+        other_factor = other_factors.div(other_base).as_dim()
+        if kind == "add":
+          new_factor = factor + other_factor
+        elif kind == "sub":
+          new_factor = factor - other_factor
+        else:
+          raise Exception("invalid kind %r" % kind)
+        if new_factor.dimension == 0:
+          del base_terms[other_base]
+        elif new_factor.dimension == 1:
+          base_terms[other_base] = Dim._OpMultTerm.from_dim(other_base)
+        else:
+          base_terms[other_base] = Dim._OpMultTerm.from_dims(other_base, new_factor)
+      else:
+        if kind == "add":
+          base_terms[other_base] = other_factors
+        elif kind == "sub":
+          base_terms[other_base] = other_factors.negative()
+        else:
+          raise Exception("invalid kind %r" % kind)
+      return Dim._OpLinearTerm(base_terms)
+
+    def _extend_mul_div(self, other, kind):
+      """
+      :param Dim|int other:
+      :param str kind: "mul" or "div"
+      :rtype: Dim._OpLinearTerm
+      """
+      assert kind in {"mul", "div"}
+      other = self._make_dim(other, kind=kind)
+      other_factors = Dim._OpMultTerm.from_dim(other)
+      base_terms = OrderedDict()
+      for base_term, parts in self.base_terms.items():
+        assert isinstance(parts, Dim._OpMultTerm)
+        parts = parts.mul(other_factors)
+        if not parts.is_one():
+          base_terms[parts.base_term()] = parts
+      return Dim._OpLinearTerm(base_terms)
+
+    def _make_dim(self, other, kind):
+      """
+      :param Dim|int other:
+      :param str kind:
+      :rtype: Dim
+      """
+      if isinstance(other, int):
+        kind = self._canonical_base().kind if self.base_terms else Dim.Types.Spatial
+        return Dim(kind=kind, description="unnamed-%s-dim%i" % (kind, other), dimension=other)
+      elif isinstance(other, Dim):
+        return other
+      else:
+        raise TypeError("%s %s %s invalid for type %s" % (self, kind, other, type(other)))
+
+    def _canonical_base(self):
+      """
+      :rtype: Dim
+      """
+      assert self.base_terms
+      return next(iter(self.base_terms.keys()))
 
 
 # Earlier the class was called DimensionTag. Provide this alias for older code.
