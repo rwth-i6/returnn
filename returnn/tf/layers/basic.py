@@ -2896,19 +2896,7 @@ class PadLayer(_ConcatInputLayer):
         out_dims = [out_dims]
     dim_tags = list(data.dim_tags)
     for i, a in enumerate(axes):
-      tag = dim_tags[a]
-      dim = None if tag.dimension is None else (tag.dimension + sum(padding[i]))
-      if out_dims:
-        if sum(padding[i]) == 0:
-          assert out_dims[i] == tag
-          continue
-        tag = out_dims[i]
-        assert dim == tag.dimension
-      elif sum(padding[i]) == 0:
-        continue
-      else:
-        tag = Dim(kind=tag.kind, description="%s_pad%i" % (name, i), dimension=dim, derived_from_tag=tag)
-      dim_tags[a] = tag
+      dim_tags[a] += sum(padding[i])
     return data.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
 
 
