@@ -1351,12 +1351,19 @@ class Dim(object):
       if other_base in base_terms:
         factor = base_terms[other].div(other_base).as_dim()
         other_factor = other_factors.div(other_base).as_dim()
-        if kind == "add":
-          new_factor = factor + other_factor
-        elif kind == "sub":
-          new_factor = factor - other_factor
-        else:
-          raise Exception("invalid kind %r" % kind)
+        new_factor = None
+        if factor.dimension is not None and other_factor.dimension is not None:
+          if (factor.description or "").startswith("unnamed-"):
+            if (other_factor.description or "").startswith("unnamed-"):
+              new_factor_dim = factor.dimension + other_factor.dimension
+              new_factor = Dim(
+                kind=factor.kind, description="unnamed-%s-dim%i" % (factor.kind, new_factor_dim),
+                dimension=new_factor_dim)
+        if not new_factor:
+          if kind == "add":
+            new_factor = factor + other_factor
+          else:
+            new_factor = factor - other_factor
         if new_factor.dimension == 0:
           del base_terms[other_base]
         elif new_factor.dimension == 1:
