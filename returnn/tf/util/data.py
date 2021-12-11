@@ -1183,19 +1183,24 @@ class Dim(object):
             num_dim_value *= part.dimension ** p
         if not num_parts:
           assert not den.is_one()
-          num_dim = num.as_dim(base_term=base_term)
+          num_dim = num.as_dim(base_term=base_term)  # should give dim 1
+        elif len(num_parts) == 1:
+          num_dim = num_parts[0]
         else:
           num_dim = Dim(
             kind=base_term.kind, description="*".join(map(self._get_description, num_parts)),
             dimension=num_dim_value)
           op = Dim.Op(kind="mul", inputs=num_parts, output=num_dim)
           num_dim.derived_from_op = op
-          base_term._cache_derived_mult_terms[num] = num_dim
+        base_term._cache_derived_mult_terms[num] = num_dim
       if den.is_one():
         return num_dim
       den_dim = den.as_dim(base_term=base_term)
+      den_desc = den_dim.description
+      if "+" in den_desc or "-" in den_desc or "*" in den_desc or "/" in den_desc or " " in den_desc:
+        den_desc = "(" + den_desc + ")"
       res = Dim(
-        kind=base_term.kind, description="%s//(%s)" % (num_dim.description, den_dim.description),
+        kind=base_term.kind, description="%s//%s" % (num_dim.description, den_desc),
         dimension=(
           num_dim.dimension // den_dim.dimension if num_dim.dimension is not None and den_dim.dimension else None))
       op = Dim.Op(kind="div", inputs=[num_dim, den_dim], output=res)
@@ -1281,6 +1286,8 @@ class Dim(object):
           dim += s.dimension
         else:
           dim = None
+      if len(add_parts) == 1:
+        return add_parts[0]
       res = Dim(kind=some_base_term.kind, description="+".join(desc_parts), dimension=dim)
       res.derived_from_op = Dim.Op(kind="add", inputs=add_parts, output=res)
       some_base_term._cache_derived_linear_terms[self] = res
@@ -1377,7 +1384,7 @@ class Dim(object):
       base_terms = OrderedDict()
       for base_term, parts in self.base_terms.items():
         assert isinstance(parts, Dim._OpMultTerm)
-        parts = parts.mul(other_factors)
+        parts = parts.mul(other_factors) if kind == "mul" else parts.div(other_factors)
         if not parts.is_one():
           base_terms[parts.base_term()] = parts
       return Dim._OpLinearTerm(base_terms)
