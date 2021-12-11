@@ -1150,6 +1150,7 @@ def test_dim_math_static():
   assert qkv_dim_total.dimension == 6 * 2 + 10
   assert qkv_dim_per_head.dimension == (6 * 2 + 10) // 2
   assert key_dim_total + key_dim_total + value_dim_total == qkv_dim_total
+  assert key_dim_total * 2 + value_dim_total == qkv_dim_total
   assert key_dim_per_head * num_heads == key_dim_total
 
 
