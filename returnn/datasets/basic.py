@@ -403,8 +403,8 @@ class Dataset(object):
       nth = int(tmp[1]) if len(tmp) > 1 else 1
       # Keep this deterministic! Use fixed seed.
       rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
-      numpy.random.seed(rnd_seed)
-      seq_index = numpy.random.permutation(num_seqs)
+      random_generator = numpy.random.RandomState(rnd_seed)
+      seq_index = random_generator.permutation(num_seqs)
     elif self.seq_ordering.startswith('sort_bin_shuffle'):
       # Shuffle seqs, sort by length, and shuffle bins (then shuffle seqs within each bin if sort_bin_shuffle_x2).
       assert get_seq_len
@@ -415,8 +415,8 @@ class Dataset(object):
       else:
         nth = int(tmp[1])
       rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
-      numpy.random.seed(rnd_seed)
-      seq_index = numpy.random.permutation(num_seqs).tolist()  # type: typing.List[int]
+      random_generator = numpy.random.RandomState(rnd_seed)
+      seq_index = random_generator.permutation(num_seqs).tolist()  # type: typing.List[int]
       seq_index.sort(key=get_seq_len)  # Sort by length, starting with shortest.
       if len(tmp) == 0:
         bins = 2
@@ -425,7 +425,7 @@ class Dataset(object):
           bins = max(num_seqs // int(tmp[0][1:]), 2)
         else:  # the number of bins
           bins = int(tmp[0])
-      bin_ids = numpy.random.permutation(bins)  # Shuffle bins.
+      bin_ids = random_generator.permutation(bins)  # Shuffle bins.
       out_index = []
       for i in bin_ids:
         if i == bins - 1:
@@ -433,7 +433,7 @@ class Dataset(object):
         else:
           part = seq_index[i * len(seq_index) // bins:(i + 1) * len(seq_index) // bins][:]
         if self.seq_ordering.startswith('sort_bin_shuffle_x2'):
-          numpy.random.shuffle(part)  # Shuffle within the bin.
+          random_generator.shuffle(part)  # Shuffle within the bin.
         out_index.append(part)
       seq_index = numpy.concatenate(out_index)
     elif self.seq_ordering.startswith('laplace'):
@@ -451,8 +451,8 @@ class Dataset(object):
       else:
         nth = int(tmp[1])
       rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
-      numpy.random.seed(rnd_seed)
-      seq_index = numpy.random.permutation(num_seqs)  # type: numpy.ndarray
+      random_generator = numpy.random.RandomState(rnd_seed)
+      seq_index = random_generator.permutation(num_seqs)  # type: numpy.ndarray
       out_index = []
       for i in range(bins):
         if i == bins - 1:
