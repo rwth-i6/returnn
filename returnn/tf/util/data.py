@@ -94,8 +94,6 @@ class Dim(object):
     self._same_as_tb = None  # type: typing.Optional[traceback.StackSummary]  # for debugging
     self.derived_from_tag = derived_from_tag  # TODO change or remove?
     self.derived_from_op = derived_from_op
-    self._cache_derived_linear_terms = {}  # type: typing.Dict[Dim._OpLinearTerm, Dim]
-    self._cache_derived_mult_terms = {}  # type: typing.Dict[Dim._OpMultTerm, Dim]
     if src_data:
       assert isinstance(src_data, Data) and isinstance(src_axis, int)
     if not batch and dyn_size_ext:
@@ -1154,45 +1152,32 @@ class Dim(object):
       :param Dim|None base_term:
       :rtype: Dim
       """
-      if base_term:
-        cache = base_term._cache_derived_mult_terms.get(self)
-        if cache:
-          return cache
       if self.is_one():
-        res = SpatialDim("unnamed-%s-dim1" % (base_term.kind if base_term else "spatial"), 1)
-        if base_term:
-          base_term._cache_derived_mult_terms[self] = res
-        return res
+        return SpatialDim("unnamed-%s-dim1" % (base_term.kind if base_term else "spatial"), 1)
       if not base_term:
         base_term = self.base_term()
-        cache = base_term._cache_derived_mult_terms.get(self)
-        if cache:
-          return cache
       num, den = self.split_numerator_denominator()
-      num_dim = base_term._cache_derived_mult_terms.get(num)
-      if not num_dim:
-        num_dim_value = 1
-        num_parts = []
-        for part, p in num.parts.items():
-          assert isinstance(part, Dim)
-          assert isinstance(p, int)
-          assert p > 0
-          for _ in range(p):
-            num_parts.append(part)
-          if num_dim_value is not None and part.dimension is not None:
-            num_dim_value *= part.dimension ** p
-        if not num_parts:
-          assert not den.is_one()
-          num_dim = num.as_dim(base_term=base_term)  # should give dim 1
-        elif len(num_parts) == 1:
-          num_dim = num_parts[0]
-        else:
-          num_dim = Dim(
-            kind=base_term.kind, description="*".join(map(self._get_description, num_parts)),
-            dimension=num_dim_value)
-          op = Dim.Op(kind="mul", inputs=num_parts, output=num_dim)
-          num_dim.derived_from_op = op
-        base_term._cache_derived_mult_terms[num] = num_dim
+      num_dim_value = 1
+      num_parts = []
+      for part, p in num.parts.items():
+        assert isinstance(part, Dim)
+        assert isinstance(p, int)
+        assert p > 0
+        for _ in range(p):
+          num_parts.append(part)
+        if num_dim_value is not None and part.dimension is not None:
+          num_dim_value *= part.dimension ** p
+      if not num_parts:
+        assert not den.is_one()
+        num_dim = num.as_dim(base_term=base_term)  # should give dim 1
+      elif len(num_parts) == 1:
+        num_dim = num_parts[0]
+      else:
+        num_dim = Dim(
+          kind=base_term.kind, description="*".join(map(self._get_description, num_parts)),
+          dimension=num_dim_value)
+        op = Dim.Op(kind="mul", inputs=num_parts, output=num_dim)
+        num_dim.derived_from_op = op
       if den.is_one():
         return num_dim
       den_dim = den.as_dim(base_term=base_term)
@@ -1205,7 +1190,6 @@ class Dim(object):
           num_dim.dimension // den_dim.dimension if num_dim.dimension is not None and den_dim.dimension else None))
       op = Dim.Op(kind="div", inputs=[num_dim, den_dim], output=res)
       res.derived_from_op = op
-      base_term._cache_derived_mult_terms[self] = res
       return res
 
     @classmethod
@@ -1270,9 +1254,6 @@ class Dim(object):
       if self.is_zero():
         return SpatialDim("unnamed-zero-dim", 0)
       some_base_term = self._canonical_base()
-      cached = some_base_term._cache_derived_linear_terms.get(self)
-      if cached:
-        return cached
       add_parts = []
       desc_parts = []
       dim = 0
@@ -1290,7 +1271,6 @@ class Dim(object):
         return add_parts[0]
       res = Dim(kind=some_base_term.kind, description="+".join(desc_parts), dimension=dim)
       res.derived_from_op = Dim.Op(kind="add", inputs=add_parts, output=res)
-      some_base_term._cache_derived_linear_terms[self] = res
       return res
 
     def __repr__(self):
