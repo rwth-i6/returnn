@@ -1036,6 +1036,17 @@ class Dim(object):
       return cls([dim])
 
     @classmethod
+    def from_dim_factors(cls, dims):
+      """
+      :param list[Dim] dims:
+      :rtype: Dim._OpMultTerm
+      """
+      res = cls.one()
+      for d in dims:
+        res.extend_mul_div_(d, kind="mul", right=True)
+      return res
+
+    @classmethod
     def one(cls):
       """
       :rtype: Dim._OpMultTerm
@@ -1133,6 +1144,7 @@ class Dim(object):
           self.extend_mul_div_(term, kind=kind, right=right)
         return
       most_recent_term = self.terms[-1 if right else 0]
+      assert isinstance(most_recent_term, Dim)
       if kind.endswith("div") and other == most_recent_term:
         self.terms.pop(-1 if right else 0)
         return
@@ -1345,8 +1357,8 @@ class Dim(object):
           return
         if most_recent_term.terms and term.terms and most_recent_term.terms[-1] == term.terms[-1]:
           # Merge terms
-          a = Dim._OpMultTerm(most_recent_term.terms[:-1]).as_dim()
-          b = Dim._OpMultTerm(term.terms[:-1]).as_dim()
+          a = Dim._OpMultTerm.from_dim_factors(most_recent_term.terms[:-1]).as_dim()
+          b = Dim._OpMultTerm.from_dim_factors(term.terms[:-1]).as_dim()
           res = Dim._OpMultTerm.from_dim((a + b) if right else (b + a))
           res.extend_mul_div_(term.terms[-1], kind="mul", right=True)
           self.terms[-1 if right else 0] = res
