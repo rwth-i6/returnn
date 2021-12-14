@@ -11,7 +11,6 @@ import os
 import typing
 import tensorflow as tf
 import traceback
-from collections import OrderedDict
 
 from returnn.util.basic import NotSpecified, Entity
 import returnn.tf.compat as tf_compat
