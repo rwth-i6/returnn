@@ -1164,6 +1164,14 @@ def test_dim_math_mul_div():
   assert (b * a).div_left(b) == a
 
 
+def test_dim_math_div_mul():
+  a = FeatureDim("a", 10)
+  b = FeatureDim("b", 2)
+  assert a // b == a // b
+  assert (a // b) * b == a
+  assert b * a.div_left(b) == a
+
+
 def test_dim_math_static_self_att_example():
   num_heads = SpatialDim("num_heads", dimension=2)
   key_dim_total = FeatureDim("key_dim_total", dimension=6)
