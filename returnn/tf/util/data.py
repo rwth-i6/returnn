@@ -1185,10 +1185,15 @@ class Dim(object):
       if kind.endswith("div") and other == most_recent_term:
         self.terms.pop(-1 if right else 0)
         return
-      if kind.endswith("mul") and most_recent_term.derived_from_op:
+      if kind == "mul" and most_recent_term.derived_from_op:
         if most_recent_term.derived_from_op.kind == "truediv_" + ("right" if right else "left"):
           if most_recent_term.derived_from_op.inputs[-1] == other:
             self.terms[-1 if right else 0] = most_recent_term.derived_from_op.inputs[0]
+            return
+      if kind == "mul" and other.derived_from_op:
+        if other.derived_from_op.kind == "truediv_" + ("right" if not right else "left"):
+          if other.derived_from_op.inputs[-1] == most_recent_term:
+            self.terms[-1 if right else 0] = other.derived_from_op.inputs[0]
             return
       if most_recent_term._is_constant_static_dim() and other._is_constant_static_dim():
         if kind == "mul":
