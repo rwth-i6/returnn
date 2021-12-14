@@ -2896,7 +2896,13 @@ class PadLayer(_ConcatInputLayer):
         out_dims = [out_dims]
     dim_tags = list(data.dim_tags)
     for i, a in enumerate(axes):
-      dim_tags[a] += sum(padding[i])
+      pad_left, pad_right = padding[i]
+      out_dim = pad_left + dim_tags[a] + pad_right
+      if out_dims:
+        assert out_dims[i].dimension == out_dim.dimension
+        dim_tags[a] = out_dims[i]
+      else:
+        dim_tags[a] = out_dim
     return data.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
 
 
