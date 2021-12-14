@@ -1175,6 +1175,13 @@ def test_dim_math_feature_type():
   assert feat_sum.dimension == 2 and feat_sum.kind == Dim.Types.Feature
 
 
+def test_dim_math_feature_type2():
+  feat1 = FeatureDim("feature1", dimension=3)
+  feat2 = FeatureDim("feature2", dimension=5)
+  feat_sum = feat1 + feat1 + feat2
+  assert feat_sum.dimension == 11 and feat_sum.kind == Dim.Types.Feature
+
+
 def test_dim_math_pad_stag_description():
   time = SpatialDim("time:var:extern_data:data")
   pad_right = time + 2
