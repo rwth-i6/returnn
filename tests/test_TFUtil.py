@@ -1154,6 +1154,14 @@ def test_dim_math_static():
   assert key_dim_per_head * num_heads == key_dim_total
 
 
+def test_dim_math_static_div_mul():
+  num_heads = SpatialDim("num_heads", dimension=2)
+  key_dim_total = FeatureDim("key_dim_total", dimension=6)
+  key_dim_per_head = key_dim_total // num_heads
+  key_dim_total_ = key_dim_per_head * num_heads
+  assert key_dim_total_ == key_dim_total
+
+
 def test_sequence_mask_len_via_loop():
   seq_len = tf.while_loop(
     cond=lambda x: tf.less(x[0], 2),
