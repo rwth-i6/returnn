@@ -1175,6 +1175,14 @@ def test_dim_math_feature_type():
   assert feat_sum.dimension == 2 and feat_sum.kind == Dim.Types.Feature
 
 
+def test_dim_math_pad_stag_description():
+  time = SpatialDim("time:var:extern_data:data")
+  pad_right = time + 2
+  assert "extern_data:data" in pad_right.description
+  data = Data("padded", dim_tags=[pad_right])
+  assert data.get_axis_from_description("stag:extern_data:data") == 0
+
+
 def test_sequence_mask_len_via_loop():
   seq_len = tf.while_loop(
     cond=lambda x: tf.less(x[0], 2),
