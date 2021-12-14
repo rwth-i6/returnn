@@ -1421,6 +1421,10 @@ class Dim(object):
       """
       assert kind in {"mul", "floordiv", "truediv", "ceildiv"}
       other = self._make_dim(other, kind=kind)
+      if kind == "mul" and right:
+        # Do it the other way around
+        self.terms, other = Dim._OpLinearTerm.from_dim(other).terms, self.as_dim()
+        right = False
       if other._is_constant_static_dim() and other.dimension == 1:
         return
       for term in self.terms:
