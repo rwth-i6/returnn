@@ -1138,7 +1138,7 @@ class Dim(object):
       :param bool right:
       """
       assert kind in {"mul", "floordiv", "truediv", "ceildiv"}
-      if other.dimension == 1:
+      if other._is_constant_static_dim() and other.dimension == 1:
         return
       if not self.terms:
         self.terms.append(other)
@@ -1158,10 +1158,12 @@ class Dim(object):
             return
       if most_recent_term._is_constant_static_dim() and other._is_constant_static_dim():
         if kind == "mul":
-          self.terms[-1 if right else 0] = Dim._make_constant_static_dim(most_recent_term.dimension * other.dimension)
+          self.terms[-1 if right else 0] = Dim._make_constant_static_dim(
+            most_recent_term.dimension * other.dimension, kind=most_recent_term.kind)
           return
         if kind.endswith("div") and most_recent_term.dimension % other.dimension == 0:
-          self.terms[-1 if right else 0] = Dim._make_constant_static_dim(most_recent_term.dimension // other.dimension)
+          self.terms[-1 if right else 0] = Dim._make_constant_static_dim(
+            most_recent_term.dimension // other.dimension, kind=most_recent_term.kind)
           return
       if kind.endswith("div"):
         self.terms = [self._new_div_dim(other, kind=kind, right=right)]
@@ -1331,9 +1333,7 @@ class Dim(object):
       :param bool right: or left. right means self + other, left means other + self
       """
       assert kind in {"add", "sub"}
-      if isinstance(other, int):
-        return self.extend_add_sub_(Dim._make_constant_static_dim(other), kind=kind, right=right)
-      assert isinstance(other, Dim)
+      other = self._make_dim(other, kind=kind)
       if other._is_constant_static_dim() and other.dimension == 0:
         return
       if other.derived_from_op and other.derived_from_op.kind == "add":
@@ -1351,7 +1351,7 @@ class Dim(object):
           return
         if most_recent_term.is_constant_static_dim() and term.is_constant_static_dim():
           self.terms[-1 if right else 0] = Dim._OpMultTerm.from_dim(
-            Dim._make_constant_static_dim(most_recent_term.dimension + term.dimension))
+            Dim._make_constant_static_dim(most_recent_term.dimension + term.dimension, kind=other.kind))
           return
         if most_recent_term.terms and term.terms and most_recent_term.terms[-1] == term.terms[-1]:
           # Merge terms
@@ -1374,7 +1374,7 @@ class Dim(object):
       """
       assert kind in {"mul", "floordiv", "truediv", "ceildiv"}
       other = self._make_dim(other, kind=kind)
-      if other.dimension == 1:
+      if other._is_constant_static_dim() and other.dimension == 1:
         return
       for term in self.terms:
         term.extend_mul_div_(other, kind=kind, right=right)
@@ -1386,11 +1386,21 @@ class Dim(object):
       :rtype: Dim
       """
       if isinstance(other, int):
-        return Dim._make_constant_static_dim(other)
+        base_term = self.base_term()
+        return Dim._make_constant_static_dim(other, kind=base_term.kind if base_term else None)
       elif isinstance(other, Dim):
         return other
       else:
         raise TypeError("%s %s %s invalid for type %s" % (self, kind, other, type(other)))
+
+    def base_term(self):
+      """
+      :rtype: Dim|None
+      """
+      for term in self.terms:
+        if term.terms:
+          return term.base_term()
+      return None
 
 
 # Earlier the class was called DimensionTag. Provide this alias for older code.
