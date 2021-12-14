@@ -1267,7 +1267,7 @@ class Dim(object):
         elif kind == "truediv":
           if a % b != 0:
             raise ValueError(
-              "%s, truediv only allowed if the result is an integer, but got denominator %s" % (self, denominator))
+              "%s truediv %s only allowed if the result is an integer" % (numerator, denominator))
           dim_value = a // b
           if right:
             kind = "floordiv"  # for nicer description, and does not matter
