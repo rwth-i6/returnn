@@ -879,8 +879,10 @@ class Dim(object):
   # a / b (when a % b == 0): split dims, downsample, conv with striding
   # ceildiv(a, b): conv with striding
   # custom: repeat, remove, mask, loop with dyn end
+  # Note that we differentiate between the order, i.e. a + b != b + a.
   # Note that we always have the assumption that a dimension is non-negative.
   # This assumption is necessary for some simplifications.
+  # https://github.com/rwth-i6/returnn/pull/853
 
   def __add__(self, other):
     """
