@@ -1346,13 +1346,9 @@ class Dim(object):
         return Dim._make_constant_static_dim(1)
       if len(self.terms) == 1:
         return self.terms[0]
-      dim_value = 1
-      for term in self.terms:
-        if dim_value is not None and term.dimension is not None:
-          dim_value *= term.dimension
       return Dim(
         kind=self.base_term().kind, description="*".join(map(Dim._get_description, self.terms)),
-        dimension=dim_value,
+        dimension=self.dimension,
         derived_from_op=Dim.Op(kind="mul", inputs=list(self.terms)))
 
   @classmethod
