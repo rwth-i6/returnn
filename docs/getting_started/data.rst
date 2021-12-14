@@ -106,6 +106,30 @@ like ``2 * a == a + a`` (but ``2 * a != a * 2``),
 ``(a + b) * c == a * c + b * c``,
 ``a * b // b == a``.
 See `#853 <https://github.com/rwth-i6/returnn/pull/853>`__.
+See ``test_dim_math_...`` functions for examples.
+
+We provide a global batch dim object (``returnn.tf.util.data.batch_dim``)
+which can be used to avoid creating a new batch dim object every time,
+although it does not matter as we treat all batch dims as equal.
+Any logic regarding the batch dim (such as beam search) is handled separately.
+
+In a user config, the dim tags are usually introduced already for ``extern_data``.
+Example::
+
+    from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+    extern_data = {
+        "data": {
+            "dim_tags": [batch_dim, SpatialDim("input-seq-len"), FeatureDim("input-feature", 40)]},
+        "classes": {
+            "dim_tags": [batch_dim, SpatialDim("target-seq-len")],
+            "sparse_dim": FeatureDim("input-feature", 40)},
+    }
+
+All layers which accept some ``axis`` or ``in_dim`` argument also can be given some dim object
+instead of using some text description (like ``"T"`` or ``"F"``).
+A dimension tag object is usually more robust than relying on such textual description
+and is the recommended way.
 
 You can specify ``out_shape`` for any layer to verify the output shape
 via dimension tags.
