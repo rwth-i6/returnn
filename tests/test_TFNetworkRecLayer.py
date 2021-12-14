@@ -6616,11 +6616,11 @@ def test_extra_scatter_nd_search_train():
         "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"],
                    "n_out": AttNumHeads},  # (B, enc-T, H)
         "energy1": {"class": "squeeze", "axis": "f", "from": "energy"},  # (B, enc-T)
-        "energy2": {"class": "reinterpret_data", "from": "energy1", "set_axes": {"t": "stag:enc"}},
+        "energy2": {"class": "reinterpret_data", "from": "energy1", "set_axes": {"t": "stag:extern_data:data"}},
         "att_weights": {"class": "softmax_over_spatial", "from": "energy2", "start": "t_start"},  # (B, enc-T)
         # ChoiceLayer works on the feature axis.
         "att_weights1": {
-          "class": "reinterpret_data", "from": "att_weights", "set_axes": {"f": "stag:enc"},
+          "class": "reinterpret_data", "from": "att_weights", "set_axes": {"f": "stag:extern_data:data"},
           "target": t_target if train else None, "loss": "ce" if (train and t_target) else None},
 
         "t0": {

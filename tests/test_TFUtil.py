@@ -1138,6 +1138,134 @@ def test_Data_copy_move_axis_time_to_end():
   assert d2.shape == (None, 4, None) and d2.feature_dim_axis == 2 and d2.time_dim_axis == 3
 
 
+def test_dim_math_basics():
+  a = SpatialDim("a")
+  b = SpatialDim("b")
+  assert a == a
+  assert a + b == a + b
+  assert a + b != b + a  # not commutative
+  assert a * b == a * b
+  assert a * b != b * a  # not commutative
+  assert 2 * a == a + a
+  assert a * 2 != 2 * a
+  assert 2 * a + b == a + a + b
+  assert a + b - b == a
+  assert a + 2 * b - b + -b == a
+  assert a * b + b == (a + 1) * b
+  assert (a + b) * 2 == a * 2 + b * 2
+  assert 0 + a + 0 == a
+  assert sum([0, a, 0, a, 0]) == 2 * a
+
+
+def test_dim_math_double_neg():
+  a = SpatialDim("a")
+  assert --a == a
+
+
+def test_dim_math_mul_div():
+  a = SpatialDim("a")
+  b = SpatialDim("b")
+  assert (a * b) // b == a
+  assert (b * a) // b != a
+  assert (b * a).div_left(b) == a
+
+
+def test_dim_math_div():
+  a = SpatialDim("a")
+  b = SpatialDim("b")
+  c = SpatialDim("c", 14)
+  d = SpatialDim("d", 10)
+  assert a // 2 + b // 2 != (a + b) // 2  # only allowed when divisible but this is unknown here for dyn dims
+  assert c // 2 + d // 2 == (c + d) // 2
+
+
+def test_dim_math_div_mul():
+  a = FeatureDim("a", 10)
+  b = FeatureDim("b", 2)
+  c = SpatialDim("c")
+  assert a // b == a // b
+  assert (a // b) * b == a
+  assert b * a.div_left(b) == a
+  assert (c // b) * b != c
+
+
+def test_dim_math_static_self_att_example():
+  num_heads = SpatialDim("num_heads", dimension=2)
+  key_dim_total = FeatureDim("key_dim_total", dimension=6)
+  key_dim_per_head = key_dim_total // num_heads
+  assert key_dim_per_head.dimension == 3
+  value_dim_total = FeatureDim("value_dim_total", dimension=10)
+  value_dim_per_head = value_dim_total // num_heads
+  qkv_dim_total = 2 * key_dim_total + value_dim_total
+  qkv_dim_per_head = 2 * key_dim_per_head + value_dim_per_head
+  assert qkv_dim_total.dimension == 6 * 2 + 10
+  assert qkv_dim_per_head.dimension == (6 * 2 + 10) // 2
+  assert key_dim_total + key_dim_total + value_dim_total == qkv_dim_total
+  assert 2 * key_dim_total + value_dim_total == qkv_dim_total
+  assert key_dim_per_head * num_heads == key_dim_total
+  assert qkv_dim_per_head * num_heads == qkv_dim_total
+
+
+def test_dim_math_static_self_att_feat_last():
+  num_heads = SpatialDim("num_heads", dimension=2)
+  key_dim_total = FeatureDim("key_dim_total", dimension=6)
+  key_dim_per_head = key_dim_total.div_left(num_heads)
+  assert key_dim_per_head.dimension == 3
+  value_dim_total = FeatureDim("value_dim_total", dimension=10)
+  value_dim_per_head = value_dim_total.div_left(num_heads)
+  qkv_dim_total = 2 * key_dim_total + value_dim_total
+  qkv_dim_per_head = 2 * key_dim_per_head + value_dim_per_head
+  assert qkv_dim_total.dimension == 6 * 2 + 10
+  assert qkv_dim_per_head.dimension == (6 * 2 + 10) // 2
+  assert key_dim_total + key_dim_total + value_dim_total == qkv_dim_total
+  assert 2 * key_dim_total + value_dim_total == qkv_dim_total
+  assert num_heads * key_dim_per_head == key_dim_total
+  assert num_heads * qkv_dim_per_head == qkv_dim_total
+
+
+def test_dim_math_static_add_mul():
+  a = FeatureDim("a", dimension=3)
+  b = 2 * a
+  c = a + a
+  assert b == c
+
+
+def test_dim_math_static_div_mul():
+  num_heads = SpatialDim("num_heads", dimension=2)
+  key_dim_total = FeatureDim("key_dim_total", dimension=6)
+  key_dim_per_head = key_dim_total // num_heads
+  key_dim_total_ = key_dim_per_head * num_heads
+  assert key_dim_total_ == key_dim_total
+
+
+def test_dim_math_feature_type():
+  feat = FeatureDim("feature", dimension=1)
+  feat_sum = feat + feat
+  assert feat_sum.dimension == 2 and feat_sum.kind == Dim.Types.Feature
+
+
+def test_dim_math_feature_type2():
+  feat1 = FeatureDim("feature1", dimension=3)
+  feat2 = FeatureDim("feature2", dimension=5)
+  feat_sum = feat1 + feat1 + feat2
+  assert feat_sum.dimension == 11 and feat_sum.kind == Dim.Types.Feature
+
+
+def test_dim_math_pad_stag_description():
+  time = SpatialDim("time:var:extern_data:data")
+  pad_right = time + 2
+  assert "extern_data:data" in pad_right.description
+  data = Data("padded", dim_tags=[pad_right])
+  assert data.get_axis_from_description("stag:extern_data:data") == 0
+
+
+def test_dim_math_pad_conv_valid():
+  time = SpatialDim("time:var:extern_data:data")
+  padded = 2 + time + 2
+  conv_valid = padded.sub_right(2).sub_left(2)
+  assert conv_valid == time
+
+
 def test_sequence_mask_len_via_loop():
   seq_len = tf.while_loop(
     cond=lambda x: tf.less(x[0], 2),

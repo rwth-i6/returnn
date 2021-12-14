@@ -154,20 +154,24 @@ def get_concat_sources_data_template(src_layers, out_dim=None, allow_broadcast_a
     return data
   if not name:
     name = "concat_" + "_".join([layer.name for layer in src_layers])
-  dim = 0
+  dim = None
   common_source = Data.get_common_data(
     [s.output for s in src_layers], ignore_feature_dim=True, allow_broadcast_all_sources=allow_broadcast_all_sources)
   for layer in src_layers:
     # Note: We do not perform much compatibility checks at this point,
     # as this is for a template only anyway.
     # The real checks are in concat_sources.
-    assert not layer.output.sparse
-    if layer.output.dim is not None:  # just ignore at this point if None (e.g. during template construction)
-      dim += layer.output.dim
+    if layer.output.have_feature_axis():  # just ignore at this point if None (e.g. during template construction)
+      layer_dim = layer.output.feature_dim_or_sparse_dim
+      if layer_dim.dimension is not None:  # maybe during template construction
+        if dim is None:
+          dim = layer_dim
+        else:
+          dim = dim + layer_dim
   if out_dim:
-    assert out_dim.dimension == dim
+    assert out_dim.dimension == dim.dimension
   else:
-    out_dim = FeatureDim(name + "_feature", dimension=dim)
+    out_dim = dim
   return common_source.copy_template_replace_dim_tag(
     name=name,
     axis=common_source.feature_dim_axis,
@@ -416,10 +420,8 @@ class ConcatLayer(LayerBase):
         dimension += tag.dimension
     if not out_dim:
       # We ignore allow_broadcast here... Anyway not currently implemented.
-      # Just overtake the first input format.
-      out_dim = Dim(
-        kind=concat_dim_tags[0].kind, description="%s_concat" % name, dimension=dimension,
-        derived_from_tag=concat_dim_tags[0])
+      out_dim = sum(concat_dim_tags)
+      assert isinstance(out_dim, Dim)
     assert out_dim.dimension == dimension
     res_dim_tags = list(sources[0].output.dim_tags)
     res_dim_tags[axes_int[0]] = out_dim
@@ -2889,19 +2891,13 @@ class PadLayer(_ConcatInputLayer):
         out_dims = [out_dims]
     dim_tags = list(data.dim_tags)
     for i, a in enumerate(axes):
-      tag = dim_tags[a]
-      dim = None if tag.dimension is None else (tag.dimension + sum(padding[i]))
+      pad_left, pad_right = padding[i]
+      out_dim = pad_left + dim_tags[a] + pad_right
       if out_dims:
-        if sum(padding[i]) == 0:
-          assert out_dims[i] == tag
-          continue
-        tag = out_dims[i]
-        assert dim == tag.dimension
-      elif sum(padding[i]) == 0:
-        continue
+        assert out_dims[i].dimension == out_dim.dimension
+        dim_tags[a] = out_dims[i]
       else:
-        tag = Dim(kind=tag.kind, description="%s_pad%i" % (name, i), dimension=dim, derived_from_tag=tag)
-      dim_tags[a] = tag
+        dim_tags[a] = out_dim
     return data.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
 
 
@@ -3922,15 +3918,12 @@ class RepeatLayer(_ConcatInputLayer):
       data = data.copy_add_batch_dim(batch_dim_axis=0, batch=repetitions.output.batch)
     original_axis = data.get_axis_from_description(axis, allow_int=False)
     tag = data.dim_tags[original_axis]
-    if tag.dimension is not None and isinstance(repetitions, int):
-      new_dim = tag.dimension * repetitions
-    else:
-      new_dim = None
     data = data.copy_move_axis(original_axis, data.get_batch_axis(0))
     if not out_dim:
-      out_dim = Dim(description="repeated:%s" % name, kind=tag.kind, dimension=new_dim, derived_from_tag=tag)
-    else:
-      assert out_dim.dimension == new_dim
+      if isinstance(repetitions, int):
+        out_dim = tag * repetitions
+      else:
+        out_dim = Dim(description="repeated:%s" % name, kind=tag.kind, derived_from_tag=tag)
     return data.copy_template_replace_dim_tag(axis=data.get_batch_axis(0), new_dim_tag=out_dim)
 
 
@@ -4700,7 +4693,7 @@ class ConvLayer(_ConcatInputLayer):
     if padding == "SAME":
       return ceildiv(in_dim, stride)
     elif padding == "VALID":
-      return tf_util.simplify_nonzero_seq_length(
+      return tf_util.simplify_non_negative_seq_length(
         ceildiv(
           (tf_util.simplify_sub(in_dim, (filter_size - 1) * dilation_rate)),
           stride))
@@ -5985,9 +5978,7 @@ class PrefixInTimeLayer(_ConcatInputLayer):
       assert not out_dim
       out_dim = size_base.output.get_time_dim_tag()
     if not out_dim:
-      out_dim = Dim(
-        kind=in_dim.kind, description="%s:prefix-in-time" % name, dimension=out_dim_int,
-        derived_from_tag=in_dim, batch=in_dim.batch, control_flow_ctx=in_dim.control_flow_ctx)
+      out_dim = (repeat if isinstance(repeat, int) else SpatialDim("%s:repeat" % repeat.name)) + in_dim
     assert out_dim.dimension == out_dim_int
     x = x.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=out_dim)
     if isinstance(repeat, LayerBase):
@@ -6065,9 +6056,7 @@ class PostfixInTimeLayer(_ConcatInputLayer):
     if in_dim.dimension:
       out_dim_int = in_dim.dimension + repeat
     if not out_dim:
-      out_dim = Dim(
-        kind=in_dim.kind, description="%s:postfix-in-time" % name, dimension=out_dim_int,
-        derived_from_tag=in_dim, batch=in_dim.batch, control_flow_ctx=in_dim.control_flow_ctx)
+      out_dim = in_dim + repeat
     assert out_dim.dimension == out_dim_int
     x = x.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=out_dim)
     return x

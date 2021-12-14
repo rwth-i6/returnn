@@ -381,7 +381,7 @@ def get_valid_scope_name_from_str(s):
   # NOTE: Be careful changing this logic. Try to never change the behavior for existing cases,
   # because this name is used e.g. for layers, and you might introduce incompatibility by changes here.
   import re
-  s = re.sub("[:(){}&'\"]", "__", s)
+  s = re.sub("[:(){}&+'\"]", "__", s)
   if s[:1] in "_-\\/":  # invalid first chars
     s = (".%i." % ord(s[0])) + s[1:]
   return s
@@ -4558,7 +4558,7 @@ def simplify_sub(a, b):
   return simplify_add(a, simplify_neg(b))
 
 
-def simplify_nonzero_seq_length(x):
+def simplify_non_negative_seq_length(x):
   """
   :param tf.Tensor|int|float|numpy.ndarray x:
   :return: max(x, 0), or simplified if possible
@@ -4570,6 +4570,7 @@ def simplify_nonzero_seq_length(x):
   import numpy
   if isinstance(x, (int, float, numpy.ndarray)):
     return max(x, 0)
+  assert isinstance(x, tf.Tensor)
   return tf.maximum(x, 0)
 
 
