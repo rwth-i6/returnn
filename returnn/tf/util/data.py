@@ -92,7 +92,7 @@ class Dim(object):
     self._vocab = vocab
     self.same_as = None  # type: typing.Optional[Dim]
     self._same_as_tb = None  # type: typing.Optional[traceback.StackSummary]  # for debugging
-    self.derived_from_tag = derived_from_tag  # TODO change or remove?
+    self.derived_from_tag = derived_from_tag
     self.derived_from_op = derived_from_op
     if derived_from_op and not derived_from_op.output:
       derived_from_op.output = self
@@ -1020,20 +1020,6 @@ class Dim(object):
     def __ne__(self, other):
       return not self.__eq__(other)
 
-  def derived_from(self):
-    """
-    :return: list of dim tags this is derived from
-    :rtype: list[Dim]
-    """
-    pass  # TODO
-
-  def consumers(self):
-    """
-    :return: list of other dim tags which are derived from this
-    :rtype: list[Dim]
-    """
-    # TODO
-
   class _OpMultTerm:
     """
     represents sth like a * b * c
@@ -1216,7 +1202,8 @@ class Dim(object):
         description=description,
         kind=self_dim.kind,
         dimension=dim_value,
-        derived_from_op=Dim.Op(kind=op_kind, inputs=[self_dim, denom]))
+        derived_from_op=Dim.Op(kind=op_kind, inputs=[self_dim, denom]),
+        derived_from_tag=self_dim)
 
     def as_dim(self):
       """
@@ -1313,9 +1300,13 @@ class Dim(object):
           dim = None
       if len(add_parts) == 1:
         return add_parts[0]
+      base_tag = self.representative_tag()
       return Dim(
-        kind=add_parts[0].kind, description="+".join(desc_parts), dimension=dim,
-        derived_from_op=Dim.Op(kind="add", inputs=add_parts))
+        kind=base_tag.kind if base_tag else None,
+        description="+".join(desc_parts),
+        dimension=dim,
+        derived_from_op=Dim.Op(kind="add", inputs=add_parts),
+        derived_from_tag=base_tag)
 
     def __repr__(self):
       return "Dim._OpLinearTerm(%r)" % (self.terms,)
@@ -1386,20 +1377,26 @@ class Dim(object):
       :rtype: Dim
       """
       if isinstance(other, int):
-        base_term = self.base_term()
-        return Dim._make_constant_static_dim(other, kind=base_term.kind if base_term else None)
+        base_tag = self.representative_tag()
+        return Dim._make_constant_static_dim(other, kind=base_tag.kind if base_tag else None)
       elif isinstance(other, Dim):
         return other
       else:
         raise TypeError("%s %s %s invalid for type %s" % (self, kind, other, type(other)))
 
-    def base_term(self):
+    def representative_tag(self):
       """
       :rtype: Dim|None
       """
+      # First find any dynamic.
       for term in self.terms:
-        if term.terms:
-          return term.base_term()
+        for term_ in term.terms:
+          if term_.dimension is None:
+            return term_
+      # Now find any.
+      for term in self.terms:
+        for term_ in term.terms:
+          return term_
       return None
 
 
