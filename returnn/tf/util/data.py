@@ -1393,6 +1393,11 @@ class Dim(object):
         for term_ in term.terms:
           if term_.dimension is None:
             return term_
+      # Now find non-unspecified.
+      for term in self.terms:
+        for term_ in term.terms:
+          if term_.kind != Dim.Types.Unspecified:
+            return term_
       # Now find any.
       for term in self.terms:
         for term_ in term.terms:
