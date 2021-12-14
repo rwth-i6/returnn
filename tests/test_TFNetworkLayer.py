@@ -14,7 +14,7 @@ from returnn.tf.network import *
 from returnn.tf.layers.basic import *
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
-from returnn.tf.util.data import Dim, SpatialDim, FeatureDim
+from returnn.tf.util.data import Dim, SpatialDim, FeatureDim, BatchInfo
 
 print("TF version:", tf.__version__)
 print("Numpy version:", numpy.__version__)
@@ -4156,7 +4156,8 @@ def test_PostfixInTimeLayer():
   with make_scope() as session:
     import numpy as np
     net = TFNetwork(extern_data=ExternData())
-    src = InternalLayer(name="src", network=net, output=Data(name="src", dim=2, dtype="int32"))
+    batch = BatchInfo.make_global_batch_info(tf.constant(2))
+    src = InternalLayer(name="src", network=net, output=Data(name="src", dim=2, dtype="int32", batch=batch))
     src_seqs = np.array([[[1, 1], [2, 2], [3, 3], [4, 4], [5, 5]], [[6, 6], [7, 7], [8, 8], [0, 0], [0, 0]]])
     src_seq_lens = [5, 3]
     src.output.placeholder = tf.constant(src_seqs, dtype=tf.int32)
@@ -4166,8 +4167,12 @@ def test_PostfixInTimeLayer():
     layer_postfix = InternalLayer(
       name="postfix", network=net, output=Data(name="postfix", dim=2, time_dim_axis=None, dtype="int32"))
     layer_postfix.output.placeholder = tf.constant([[-7, -8], [-9, -10]], dtype=tf.int32)
+    layer_postfix_wo_batch = InternalLayer(
+      name="postfix_wo_batch", network=net, output=Data(
+        name="postfix_wo_batch", dim=2, time_dim_axis=None, batch_dim_axis=None, dtype="int32"))
+    layer_postfix_wo_batch.output.placeholder = tf.constant([-7, -8], dtype=tf.int32)
 
-    for postfix in [static_postfix, layer_postfix]:
+    for postfix in [static_postfix, layer_postfix, layer_postfix_wo_batch]:
       for repeat in (1, 3):
         layer = PostfixInTimeLayer(
           name="postfix_in_time", network=net,

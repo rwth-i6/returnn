@@ -3323,7 +3323,7 @@ class Data(object):
         data.placeholder = x
     return data
 
-  def copy_compatible_to(self, data, add_dims=True, unbroadcast=False, except_feature=False,
+  def copy_compatible_to(self, data, add_dims=True, unbroadcast=False, except_feature=False, except_axis=None,
                          check_sparse=True, check_dtype=True):
     """
     :param Data data: other data which the returned tensor should be compatible to
@@ -3332,6 +3332,7 @@ class Data(object):
     :param bool add_dims: whether to add (broadcast, or unbroadcasted) dims. throws error if missing dim
     :param bool unbroadcast: if True, all added broadcast axes (axes with dim 1) will be tiled such that they match
     :param bool except_feature: if unbroadcast, do not unbroadcast the feature dim
+    :param Dim|int|None except_axis: if unbroadcast, do not unbroadcast this axis
     :param bool check_sparse:
     :param bool check_dtype:
     :returns: Data, might add broadcast dimensions
@@ -3353,6 +3354,8 @@ class Data(object):
     mapped_axes = data.find_matching_dim_map(v, list(range(v.batch_ndim)), is_equal_opts)  # maps v -> data
     assert len(mapped_axes) == v.batch_ndim
 
+    except_axis_int = data.get_axis_from_description(except_axis, allow_int=True) if except_axis is not None else None
+
     for target_axis in range(data.batch_ndim):
       new_v_axis = min(target_axis, v.batch_ndim)
       if target_axis not in mapped_axes.values():
@@ -3361,7 +3364,9 @@ class Data(object):
             "%s.copy_compatible_to(%s) not allowed, axis %i (%s) not in source" % (
               self, data, target_axis, data.dim_tags[target_axis]))
         # Dim in data, but not in v
-        unbroadcast_axis = unbroadcast and not (except_feature and data.feature_dim_axis == target_axis)
+        unbroadcast_axis = unbroadcast and not (
+          except_feature and data.feature_dim_axis == target_axis) and not (
+          except_axis_int is not None and except_axis_int == target_axis)
         v = v.copy_add_dim_by_tag(data.get_dim_tag(target_axis), axis=new_v_axis, unbroadcast=unbroadcast_axis)
         # Keep mapped_axes consistent
         mapped_axes = {v_ax + (1 if v_ax >= new_v_axis else 0): trg_ax for v_ax, trg_ax in mapped_axes.items()}
