@@ -18,13 +18,13 @@ in other frameworks,
 but goes much beyond that by having lots of other meta information
 about a tensor and its axes.
 Also, an axis name is not simply a string like in other frameworks,
-but a :class:`returnn.tf.util.data.DimensionTag` object.
+but a :class:`returnn.tf.util.data.Dim` object.
 
 Specifically, the information :class:`returnn.tf.util.data.Data` covers:
 
 * **Shape**
 
-  * Dimension tags for each axis (:class:`returnn.tf.util.data.DimensionTag`)
+  * Dimension tags for each axis (:class:`returnn.tf.util.data.Dim`), see below
   * Specific handling of batch axis
   * Default spatial/time axis
   * Default feature axis
@@ -64,8 +64,57 @@ Layers are flexible w.r.t. the input format:
   * [Batch,Time,Feature] is the default
 
 
+=======
+``Dim``
+=======
+
+A :class:`returnn.tf.util.data.Dim` object,
+representing a dimension (axis) of a :class:`returnn.tf.util.data.Data` object.
+We also refer to this as dimension tag,
+as it covers more meta information than just the size.
+
+It stores:
+
+- Static size, or ``None`` representing dynamic sizes
+- (Sequence) lengths in case of dynamic sizes.
+  Usually, these are per batch entry, i.e. of shape [Batch].
+  However, this is not a requirement, and they can also have any shape.
+  In fact, the dynamic size is again another :class:`returnn.tf.util.data.Data` object.
+- Optional some vocabulary
+- Its kind: batch, spatial or feature
+  (although in most cases there is no real difference between spatial or feature)
+
+Many layers allow to specify a custom dimension tag as output,
+via ``out_dim`` or similar options.
+See `#597 <https://github.com/rwth-i6/returnn/issues/597>`__.
+
+To make it easier for the user to create custom new dimension tags
+(and then set them in the network via ``out_dim`` or related options),
+there are the helper functions:
+
+* ``SpatialDim(...)``
+* ``FeatureDim(...)``
+
+Further, it is possible to perform elementary algebra on dimension tags
+such as addition, subtraction, multiplication and division.
+These operations are not commutative,
+i.e. ``a + b != b + a`` and ``a * b != b * a``,
+because the order of concatenation and merging dimensions matters
+and vice versa for splitting features and splitting dimensions.
+We support equality for simple identities
+like ``2 * a == a + a`` (but ``2 * a != a * 2``),
+``(a + b) * c == a * c + b * c``,
+``a * b // b == a``.
+See `#853 <https://github.com/rwth-i6/returnn/pull/853>`__.
+
+You can specify ``out_shape`` for any layer to verify the output shape
+via dimension tags.
+See `#706 <https://github.com/rwth-i6/returnn/issues/706>`__.
+
+
+==============
 Example usages
---------------
+==============
 
 See :ref:`managing_axes`.
 
@@ -95,14 +144,15 @@ This would use the dimension tag called "encoder".
 :class:`returnn.tf.layers.basic.DotLayer`.
 
 
+====================
 Current shortcomings
---------------------
+====================
 
 * Currently the matching / identification of dimension tags is by partial string matching,
   which is hacky, and could potentially also lead to bugs.
   See :ref:`managing_axes`.
   In the future, we probably should make this more explicit
-  by using the :class:`returnn.tf.util.data.DimensionTag` object instance explicitly.
+  by using the :class:`returnn.tf.util.data.Dim` object instance explicitly.
 
 * The logic to define the default time/feature axes can be ambiguous in some (rare, exotic) cases.
   Thus, when you use ``"axis": "T"`` in your code, and the tensor has multiple time/spatial axes,
@@ -129,8 +179,9 @@ Current shortcomings
 * Static dimensions are not consistently handled via dim tags yet.
 
 
+============
 Related work
-------------
+============
 
 * `Pandas for Python (2008) <https://pandas.pydata.org/>`__,
   ``DataFrame``, labelled tabular data
