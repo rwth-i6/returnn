@@ -6414,7 +6414,8 @@ class DotLayer(LayerBase):
     :param Data source2:
     :param list[int] red1:
     :param list[int] red2:
-    :return:
+    :return: var1 tags, var2 tags
+    :rtype: (list[Dim], list[Dim])
     """
     is_equal_opts = dict(
       treat_feature_as_spatial=True, allow_same_spatial_dim=True,
