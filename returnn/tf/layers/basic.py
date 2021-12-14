@@ -6017,7 +6017,7 @@ class PostfixInTimeLayer(_ConcatInputLayer):
     if isinstance(postfix, LayerBase):
       self.postfix_layer = postfix
       assert in_dim not in postfix.output.dim_tags, 'Postfix layer with time axis not implemented yet'
-      postfix = postfix.output.copy_compatible_to(self.output)
+      postfix = postfix.output.copy_compatible_to(self.output, unbroadcast=True, except_axis=axis)
       c = postfix.placeholder
       c_ = tf.tile(c, [1 if i != axis_int else repeat for i in range(self.output.batch_ndim)])
     else:
