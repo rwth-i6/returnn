@@ -1154,6 +1154,13 @@ def test_dim_math_static():
   assert key_dim_per_head * num_heads == key_dim_total
 
 
+def test_dim_math_static_add_mul():
+  a = FeatureDim("a", dimension=3)
+  b = 2 * a
+  c = a + a
+  assert b == c
+
+
 def test_dim_math_static_div_mul():
   num_heads = SpatialDim("num_heads", dimension=2)
   key_dim_total = FeatureDim("key_dim_total", dimension=6)
