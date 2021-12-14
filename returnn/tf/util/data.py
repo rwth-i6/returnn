@@ -887,6 +887,7 @@ class Dim(object):
   def __add__(self, other):
     """
     :param Dim|int other:
+    :return: self + other. note that this is not commutative, i.e. different from other + self.
     :rtype: Dim
     """
     term = Dim._OpLinearTerm.from_dim(self)
@@ -896,6 +897,7 @@ class Dim(object):
   def __radd__(self, other):
     """
     :param Dim|int other:
+    :return: other + self
     :rtype: Dim
     """
     term = Dim._OpLinearTerm.from_dim(self)
@@ -912,6 +914,7 @@ class Dim(object):
   def sub_right(self, other):
     """
     :param Dim|int other:
+    :return: self - other
     :rtype: Dim
     """
     term = Dim._OpLinearTerm.from_dim(self)
@@ -921,6 +924,7 @@ class Dim(object):
   def sub_left(self, other):
     """
     :param Dim|int other:
+    :return: (-other) + self
     :rtype: Dim
     """
     term = Dim._OpLinearTerm.from_dim(self)
@@ -959,8 +963,33 @@ class Dim(object):
     :param Dim|int other:
     :rtype: Dim
     """
+    return self.div_right(other)
+
+  def div_left(self, other):
+    """
+    :param Dim|int other:
+    :rtype: Dim
+    """
+    term = Dim._OpLinearTerm.from_dim(self)
+    term.extend_mul_div_(other, kind="truediv", right=False)
+    return term.as_dim()
+
+  def div_right(self, other):
+    """
+    :param Dim|int other:
+    :rtype: Dim
+    """
     term = Dim._OpLinearTerm.from_dim(self)
     term.extend_mul_div_(other, kind="truediv", right=True)
+    return term.as_dim()
+
+  def ceildiv_left(self, other):
+    """
+    :param Dim|int other:
+    :rtype: Dim
+    """
+    term = Dim._OpLinearTerm.from_dim(self)
+    term.extend_mul_div_(other, kind="ceildiv", right=False)
     return term.as_dim()
 
   def ceildiv_right(self, other):
@@ -971,6 +1000,12 @@ class Dim(object):
     term = Dim._OpLinearTerm.from_dim(self)
     term.extend_mul_div_(other, kind="ceildiv", right=True)
     return term.as_dim()
+
+  def __neg__(self):
+    """
+    :rtype: Dim
+    """
+    return -1 * self
 
   @classmethod
   def _make_constant_static_dim(cls, value, kind=None):
