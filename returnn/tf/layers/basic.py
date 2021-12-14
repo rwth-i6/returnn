@@ -850,7 +850,7 @@ class NormLayer(_ConcatInputLayer):
       if isinstance(param_shape, (list, tuple)):
         param_axes = [self.input_data.get_axis_from_description(a, allow_int=False) for a in param_shape]
       else:
-        param_axes = self.input_data.get_axis_from_description(param_shape, allow_int=False)
+        param_axes = [self.input_data.get_axis_from_description(param_shape, allow_int=False)]
       assert sorted(set(param_axes)) == sorted(param_axes), "%s: param_shape %r should be unique" % (self, param_shape)
       param_shape = [self.input_data.batch_shape[axis] for axis in param_axes]
       assert all(isinstance(dim, int) for dim in param_shape), "%s: only static param shape allowed" % self
