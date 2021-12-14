@@ -1201,6 +1201,7 @@ def test_dim_math_static_self_att_example():
   assert key_dim_total + key_dim_total + value_dim_total == qkv_dim_total
   assert 2 * key_dim_total + value_dim_total == qkv_dim_total
   assert key_dim_per_head * num_heads == key_dim_total
+  assert qkv_dim_per_head * num_heads == qkv_dim_total
 
 
 def test_dim_math_static_self_att_feat_last():
@@ -1217,6 +1218,7 @@ def test_dim_math_static_self_att_feat_last():
   assert key_dim_total + key_dim_total + value_dim_total == qkv_dim_total
   assert 2 * key_dim_total + value_dim_total == qkv_dim_total
   assert num_heads * key_dim_per_head == key_dim_total
+  assert num_heads * qkv_dim_per_head == qkv_dim_total
 
 
 def test_dim_math_static_add_mul():
