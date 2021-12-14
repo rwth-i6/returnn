@@ -2407,11 +2407,11 @@ class Engine(EngineBase):
               output_layer_names[output_layer_idx], outputs[output_layer_idx][batch_idx]), file=log.v4)
             out_idx = batch_idx
           else:
+            beam_start_idx = batch_idx * out_beam_sizes[output_layer_idx]
+            beam_end_idx = (batch_idx + 1) * out_beam_sizes[output_layer_idx]
             print("seq_idx: %i, seq_tag: %r, outputs %r: %r" % (
               seq_idx[batch_idx], seq_tag[batch_idx], output_layer_names[output_layer_idx],
-              outputs[output_layer_idx]
-              [batch_idx * out_beam_sizes[output_layer_idx]:(batch_idx + 1)*out_beam_sizes[output_layer_idx]]),
-                  file=log.v4)
+              outputs[output_layer_idx][beam_start_idx:beam_end_idx]), file=log.v4)
             out_idx = batch_idx * out_beam_sizes[output_layer_idx]
           if target_keys[output_layer_idx] and serialized_outputs[output_layer_idx]:
             if do_eval and serialized_targets[output_layer_idx]:
