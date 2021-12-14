@@ -46,18 +46,20 @@ class Vocabulary(object):
       clz = BytePairEncoding
     return clz(**opts)
 
-  def __init__(self, vocab_file, seq_postfix=None, unknown_label="UNK", num_labels=None):
+  def __init__(self, vocab_file, seq_postfix=None, unknown_label="UNK", num_labels=None, labels=None):
     """
     :param str|None vocab_file:
     :param str|None unknown_label:
     :param int num_labels: just for verification
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
+    :param list[str]|None labels:
     """
     self.vocab_file = vocab_file
     self.unknown_label = unknown_label
     self.num_labels = None  # type: typing.Optional[int]  # will be set by _parse_vocab
     self.vocab = None  # type: typing.Optional[typing.Dict[str,int]]  # label->idx
-    self.labels = None  # type: typing.Optional[typing.List[str]]
+    self.labels = labels
+
     self._parse_vocab()
     if num_labels is not None:
       assert self.num_labels == num_labels
@@ -83,7 +85,12 @@ class Vocabulary(object):
     """
     filename = self.vocab_file
     import pickle
-    if filename in self._cache:
+
+    if self.labels is not None:
+      self.vocab = {label: i for i, label in enumerate(self.labels)}
+      assert self.unknown_label is None or self.unknown_label in self.vocab
+      self.num_labels = len(self.labels)
+    elif filename in self._cache:
       self.vocab, self.labels = self._cache[filename]
       assert self.unknown_label is None or self.unknown_label in self.vocab
       self.num_labels = len(self.labels)
@@ -122,6 +129,22 @@ class Vocabulary(object):
     d = {label: idx for (idx, label) in enumerate(labels)}
     assert len(d) == len(labels), "some labels are provided multiple times"
     return d
+
+  @classmethod
+  def create_vocab_from_labels(cls, labels):
+    """
+    Creates a `Vocabulary` from the given labels. Depending on whether the labels are identified as
+    bytes, characters or words a `Utf8ByteTargets`, `CharacterTargets` or `Vocabulary` vocab is created.
+
+    :param list[str] labels:
+    :rtype: Vocabulary
+    """
+    if len(labels) < 1000 and all([len(label) == 1 for label in labels]):
+      # are these actually ordered raw bytes? -> assume utf8
+      if all([ord(label) <= 255 and ord(label) == idx for idx, label in enumerate(labels)]):
+        return Utf8ByteTargets()
+      return CharacterTargets(vocab_file=None, labels=labels, unknown_label=None)
+    return Vocabulary(vocab_file=None, labels=labels, unknown_label=None)
 
   def tf_get_init_variable_func(self, var):
     """
@@ -162,7 +185,7 @@ class Vocabulary(object):
 
   def get_seq_labels(self, seq):
     """
-    :param list[int] seq:
+    :param list[int]|numpy.ndarray seq: 1D sequence
     :rtype: str
     """
     return " ".join(map(self.labels.__getitem__, seq))
@@ -315,13 +338,15 @@ class CharacterTargets(Vocabulary):
   Also see :class:`Utf8ByteTargets`.
   """
 
-  def __init__(self, vocab_file, seq_postfix=None, unknown_label="@"):
+  def __init__(self, vocab_file, seq_postfix=None, unknown_label="@", labels=None):
     """
-    :param str vocab_file:
+    :param str|None vocab_file:
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
     :param str|None unknown_label:
+    :param list[str]|None labels:
     """
-    super(CharacterTargets, self).__init__(vocab_file=vocab_file, seq_postfix=seq_postfix, unknown_label=unknown_label)
+    super(CharacterTargets, self).__init__(
+      vocab_file=vocab_file, seq_postfix=seq_postfix, unknown_label=unknown_label, labels=labels)
 
   def get_seq(self, sentence):
     """
@@ -333,6 +358,13 @@ class CharacterTargets(Vocabulary):
     else:
       seq = [self.vocab[k] for k in sentence]
     return seq + self.seq_postfix
+
+  def get_seq_labels(self, seq):
+    """
+    :param list[int]|numpy.ndarray seq: 1D sequence
+    :rtype: str
+    """
+    return "".join(map(self.labels.__getitem__, seq))
 
 
 class Utf8ByteTargets(Vocabulary):
@@ -365,3 +397,10 @@ class Utf8ByteTargets(Vocabulary):
     else:
       seq = list(bytearray(sentence.encode("utf8")))
     return seq + self.seq_postfix
+
+  def get_seq_labels(self, seq):
+    """
+    :param list[int]|numpy.ndarray seq: 1D sequence
+    :rtype: str
+    """
+    return bytearray(seq).decode(encoding="utf8")

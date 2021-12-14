@@ -4183,7 +4183,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
     :param bool|None set_sparse: if bool, set sparse value to this
-    :param int|None|NotSpecified set_sparse_dim: set sparse dim to this. assumes that it is sparse
+    :param Dim|int|None|NotSpecified set_sparse_dim: set sparse dim to this. assumes that it is sparse
     :param int|None increase_sparse_dim: add this to the dim. assumes that it is sparse
     """
     from returnn.tf.util.basic import get_valid_scope_name_from_str
@@ -4254,7 +4254,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
     :param bool|None set_sparse: if bool, set sparse value to this
-    :param int|None|NotSpecified set_sparse_dim: set sparse dim to this. assumes that it is sparse
+    :param Dim|int|None|NotSpecified set_sparse_dim: set sparse dim to this. assumes that it is sparse
     :param int|None increase_sparse_dim: add this to the dim. assumes that it is sparse
     """
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
@@ -4312,15 +4312,20 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         else:
           out_args = out.get_kwargs()
           out_args["sparse"] = True
-          out_args["dim"] = set_sparse_dim if set_sparse_dim is not NotSpecified else out.dim
+          if isinstance(set_sparse_dim, Dim):
+            out_args["sparse_dim"] = set_sparse_dim
+          else:
+            out_args["dim"] = set_sparse_dim if set_sparse_dim is not NotSpecified else out.dim
           out_args.pop("feature_dim_axis", None)
           out = Data(**out_args)
       else:
         out.sparse_dim = None
     if set_sparse_dim is not NotSpecified:
       assert out.sparse
-      assert set_sparse_dim is None or isinstance(set_sparse_dim, int)
-      if out.dim == set_sparse_dim:
+      assert set_sparse_dim is None or isinstance(set_sparse_dim, int) or isinstance(set_sparse_dim, Dim)
+      if isinstance(set_sparse_dim, Dim):
+        out.sparse_dim = set_sparse_dim
+      elif out.dim == set_sparse_dim:
         pass
       else:
         out.sparse_dim = Dim(

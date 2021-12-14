@@ -24,7 +24,8 @@ import typing
 
 from returnn.log import log
 from returnn.engine.batch import Batch, BatchSetGenerator
-from returnn.util.basic import PY3, try_run, NumbersDict, unicode, OptionalNotImplementedError
+from returnn.datasets.util.vocabulary import Vocabulary
+from returnn.util.basic import try_run, NumbersDict, unicode, OptionalNotImplementedError
 
 
 class Dataset(object):
@@ -883,27 +884,16 @@ class Dataset(object):
 
   def serialize_data(self, key, data):
     """
+    In case you have a :class:`Vocabulary`, just use :func:`Vocabulary.get_seq_labels`.
+
     :param str key: e.g. "classes". self.labels[key] should be set
     :param numpy.ndarray data: 0D or 1D
     :rtype: str
     """
-    labels = self.labels[key]
+    vocab = Vocabulary.create_vocab_from_labels(self.labels[key])
     if data.ndim == 0:
-      data = numpy.expand_dims(data, axis=0)
-    assert data.ndim == 1
-    if len(labels) < 1000 and all([len(label) == 1 for label in labels]):
-      # are these actually raw bytes? -> assume utf8
-      if all([ord(label) <= 255 for label in labels]):
-        try:
-          if PY3:
-            return bytes([ord(labels[c]) for c in data]).decode("utf8")
-          else:
-            return b"".join([bytes(labels[c]) for c in data]).decode("utf8")
-        except UnicodeDecodeError:
-          pass  # pass on to default case
-      return "".join(map(labels.__getitem__, data))
-    else:
-      return " ".join(map(labels.__getitem__, data))
+      return vocab.labels[data]
+    return vocab.get_seq_labels(data)
 
   def calculate_priori(self, target="classes"):
     """
