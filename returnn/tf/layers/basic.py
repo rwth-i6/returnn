@@ -115,7 +115,6 @@ def concat_sources(src_layers, out_dim=None, allow_broadcast_all_sources=NotSpec
   # Currently we assume that get_concat_sources_data_template will match Data.get_common_data (besides the dim).
   common_source = Data.get_common_data(
     [s.output for s in src_layers], ignore_feature_dim=True, allow_broadcast_all_sources=allow_broadcast_all_sources)
-  data.size_placeholder = common_source.size_placeholder.copy()  # to get right dimension tags
   layers_data = []
   with _name_scope_for_concat_src_layers(src_layers, "concat_sources"):
     for layer in src_layers:
