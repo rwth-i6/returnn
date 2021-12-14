@@ -1162,6 +1162,12 @@ def test_dim_math_static_div_mul():
   assert key_dim_total_ == key_dim_total
 
 
+def test_dim_math_feature_type():
+  feat = FeatureDim("feature", dimension=1)
+  feat_sum = feat + feat
+  assert feat_sum.dimension == 2 and feat_sum.kind == Dim.Types.Feature
+
+
 def test_sequence_mask_len_via_loop():
   seq_len = tf.while_loop(
     cond=lambda x: tf.less(x[0], 2),
