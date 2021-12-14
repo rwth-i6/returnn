@@ -112,9 +112,6 @@ def concat_sources(src_layers, out_dim=None, allow_broadcast_all_sources=NotSpec
     return network.concat_sources_dropout_cache[cache_key].copy()
   data = get_concat_sources_data_template(
     src_layers, out_dim=out_dim, allow_broadcast_all_sources=allow_broadcast_all_sources)
-  # Currently we assume that get_concat_sources_data_template will match Data.get_common_data (besides the dim).
-  common_source = Data.get_common_data(
-    [s.output for s in src_layers], ignore_feature_dim=True, allow_broadcast_all_sources=allow_broadcast_all_sources)
   layers_data = []
   with _name_scope_for_concat_src_layers(src_layers, "concat_sources"):
     for layer in src_layers:
