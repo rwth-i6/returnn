@@ -6268,7 +6268,7 @@ class DotLayer(LayerBase):
       message="DotLayer: Axes must be referenced by tag or special specified, not by int.",
       version=3)
     BehaviorVersion.require(
-      condition=all(a is not NotSpecified for a in (red1, red2, var1, var2)),
+      condition=all(a is not NotSpecified for a in (red1, red2)),
       message="DotLayer: Axes must be specified explicitly. There is no default.",
       version=3)
     BehaviorVersion.require(
@@ -6292,6 +6292,9 @@ class DotLayer(LayerBase):
     a_reduce_axes = a_out.get_axes_from_description(red1, allow_int=axis_desc_allow_int)
     b_reduce_axes = b_out.get_axes_from_description(red2, allow_int=axis_desc_allow_int)
     assert a_reduce_axes and b_reduce_axes, "%s: sources %r, red1 %r, red2 %r" % (self, self.sources, red1, red2)
+    if BehaviorVersion.get() >= 3 and (var1 is NotSpecified or var2 is NotSpecified):
+      assert var1 is NotSpecified and var2 is NotSpecified
+      var1, var2 = self._auto_var_axes(a_out, b_out, a_reduce_axes, b_reduce_axes)
     a_var_axes = a_out.get_axes_from_description(var1, allow_int=axis_desc_allow_int)
     b_var_axes = b_out.get_axes_from_description(var2, allow_int=axis_desc_allow_int)
     assert not set(a_reduce_axes).intersection(a_var_axes), "%s: sources %r, red1 %r, red2 %r, var1 %r, var2 %r" % (
@@ -6405,6 +6408,25 @@ class DotLayer(LayerBase):
     self.output.placeholder = res
 
   @staticmethod
+  def _auto_var_axes(source1, source2, red1, red2):
+    """
+    :param Data source1:
+    :param Data source2:
+    :param list[int] red1:
+    :param list[int] red2:
+    :return: var1 tags, var2 tags
+    :rtype: (list[Dim], list[Dim])
+    """
+    is_equal_opts = dict(
+      treat_feature_as_spatial=True, allow_same_spatial_dim=True,
+      broadcast_matches=True, undefined_matches=True, derived_matches=True)
+    all_dim_tags, tags_dict = Dim.get_all_dimension_tags([source1, source2], is_equal_opts=is_equal_opts)
+    tags1, tags2 = tags_dict[source1], tags_dict[source2]
+    var1 = [tag for i, tag in enumerate(tags1) if tag not in tags2 and i not in red1]
+    var2 = [tag for i, tag in enumerate(tags2) if tag not in tags1 and i not in red2]
+    return var1, var2
+
+  @staticmethod
   def _axis1_to_output(axis, a_rem_axes, a_var_axes):
     # Output will be of shape a_rem_dims + [a_var_dim, b_var_dim].
     out_axes = a_rem_axes + a_var_axes  # remaining axes do not matter
@@ -6440,29 +6462,30 @@ class DotLayer(LayerBase):
       # If the rec layer dim is the same as some other dim,
       # and was already explicitly specified in var1/var2 before,
       # skip it.
-      var1 = d.get("var1", -2)  # the default should really not be used...
-      var2 = d.get("var2", -1)  # the default should really not be used...
-      var1_ = set([src1.output.dim_tags[i] for i in src1.output.get_axes_from_description(var1)])
-      var2_ = set([src2.output.dim_tags[i] for i in src2.output.get_axes_from_description(var2)])
-      dims1.difference_update(var1_)
-      dims2.difference_update(var2_)
-      # The common dims should be shared. The shared common dims are implicit, so nothing to do about them.
-      dims_common = dims1.intersection(dims2)
-      # Those are dims which should be added to var1/var2.
-      dims1.difference_update(dims_common)
-      dims2.difference_update(dims_common)
+      var1 = d.get("var1", NotSpecified)
+      var2 = d.get("var2", NotSpecified)
+      if var1 is not NotSpecified and var2 is not NotSpecified:
+        var1_ = set([src1.output.dim_tags[i] for i in src1.output.get_axes_from_description(var1)])
+        var2_ = set([src2.output.dim_tags[i] for i in src2.output.get_axes_from_description(var2)])
+        dims1.difference_update(var1_)
+        dims2.difference_update(var2_)
+        # The common dims should be shared. The shared common dims are implicit, so nothing to do about them.
+        dims_common = dims1.intersection(dims2)
+        # Those are dims which should be added to var1/var2.
+        dims1.difference_update(dims_common)
+        dims2.difference_update(dims_common)
 
-      def _add(dims, val, d_key):
-        if not dims:
-          return
-        if val is None or val == "":
-          val = []
-        elif not isinstance(val, (tuple, list)):
-          val = [val]
-        d[d_key] = val + type(val)(dims)
+        def _add(dims, val, d_key):
+          if not dims:
+            return
+          if val is None or val == "":
+            val = []
+          elif not isinstance(val, (tuple, list)):
+            val = [val]
+          d[d_key] = val + type(val)(dims)
 
-      _add(dims1, var1, "var1")
-      _add(dims2, var2, "var2")
+        _add(dims1, var1, "var1")
+        _add(dims2, var2, "var2")
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources,
@@ -6492,7 +6515,7 @@ class DotLayer(LayerBase):
       message="DotLayer: Axes must be referenced by tag or special specified, not by int.",
       version=3)
     BehaviorVersion.require(
-      condition=all(a is not NotSpecified for a in (red1, red2, var1, var2)),
+      condition=all(a is not NotSpecified for a in (red1, red2)),
       message="DotLayer: Axes must be specified explicitly. There is no default.",
       version=3)
     BehaviorVersion.require(
@@ -6517,6 +6540,9 @@ class DotLayer(LayerBase):
     assert not a_out.beam or not b_out.beam or a_out.beam == b_out.beam
     b_reduce_axes = b_out.get_axes_from_description(red2, allow_int=axis_desc_allow_int)
     assert a_reduce_axes and b_reduce_axes, "%s: sources %r, red1 %r, red2 %r" % (name, sources, red1, red2)
+    if BehaviorVersion.get() >= 3 and (var1 is NotSpecified or var2 is NotSpecified):
+      assert var1 is NotSpecified and var2 is NotSpecified
+      var1, var2 = cls._auto_var_axes(a_out, b_out, a_reduce_axes, b_reduce_axes)
     a_var_axes = a_out.get_axes_from_description(var1, allow_int=axis_desc_allow_int)
     b_var_axes = b_out.get_axes_from_description(var2, allow_int=axis_desc_allow_int)
     assert not set(a_reduce_axes).intersection(a_var_axes)
