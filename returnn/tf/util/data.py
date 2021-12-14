@@ -560,8 +560,8 @@ class Dim(object):
             return False
       return self.kind == other.kind
     if self.derived_from_op and other.derived_from_op:
-      if self.derived_from_op != other.derived_from_op:
-        return False
+      if self.derived_from_op == other.derived_from_op:
+        return True
     if allow_same_spatial_dim is None:
       allow_same_spatial_dim = allow_same_feature_dim
     self_base = self.get_same_derived_base() if derived_matches else self.get_same_base()
