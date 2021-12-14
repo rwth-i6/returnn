@@ -981,7 +981,7 @@ class Dim(object):
     return Dim(
       dimension=value,
       kind=kind or Dim.Types.Unspecified,
-      description="unnamed-%sdim-%i" % (kind.name + "-" if kind else "", value),
+      description="unnamed_%sdim_%i" % (kind.name + "_" if kind else "", value),
       derived_from_op=Dim.Op(kind="constant", inputs=[], attribs={"value": value}))
 
   def _is_constant_static_dim(self):
@@ -1203,11 +1203,11 @@ class Dim(object):
         else:
           raise ValueError("invalid kind %r" % (kind,))
       if kind == "floordiv" and right:
-        description = "%s//%s" % (self._get_description(self_dim), self._get_description(denom))
+        description = "%s//%s" % (Dim._get_description(self_dim), Dim._get_description(denom))
       else:
         description = "%s_%s(%s, %s)" % (
           kind, "right" if right else "left",
-          self._get_description(self_dim, brackets=False), self._get_description(denom, brackets=False))
+          Dim._get_description(self_dim, brackets=False), Dim._get_description(denom, brackets=False))
       op_kind = kind
       if a is not None and b is not None and a % b == 0:
         op_kind = "truediv"  # makes some other checks simpler
@@ -1231,26 +1231,26 @@ class Dim(object):
         if dim_value is not None and term.dimension is not None:
           dim_value *= term.dimension
       return Dim(
-        kind=self.base_term().kind, description="*".join(map(self._get_description, self.terms)),
+        kind=self.base_term().kind, description="*".join(map(Dim._get_description, self.terms)),
         dimension=dim_value,
         derived_from_op=Dim.Op(kind="mul", inputs=list(self.terms)))
 
-    @classmethod
-    def _get_description(cls, dim, brackets=True):
-      """
-      :param Dim dim:
-      :param bool brackets: add brackets when necessary
-      :rtype: str
-      """
-      if dim.description and dim.description.startswith("unnamed-") and dim.dimension is not None:
-        return str(dim.dimension)
-      if dim.description:
-        if brackets:
-          import re
-          if re.search("[+\\-/ ]", dim.description):
-            return "(%s)" % dim.description
-        return dim.description
-      return "unnamed-%s-dim%s" % (dim.kind, dim.dimension if dim.dimension is not None else "?")
+  @classmethod
+  def _get_description(cls, dim, brackets=True):
+    """
+    :param Dim dim:
+    :param bool brackets: add brackets when necessary
+    :rtype: str
+    """
+    if dim.description and dim.description.startswith("unnamed_") and dim.dimension is not None:
+      return str(dim.dimension)
+    if dim.description:
+      if brackets:
+        import re
+        if re.search("[+\\-/ ]", dim.description):
+          return "(%s)" % dim.description
+      return dim.description
+    return "unnamed_%s_dim%s" % (dim.kind, dim.dimension if dim.dimension is not None else "?")
 
   class _OpLinearTerm:
     """
@@ -1306,7 +1306,7 @@ class Dim(object):
       for term in self.terms:
         s = term.as_dim()
         add_parts.append(s)
-        desc_parts.append(s.description or "?")
+        desc_parts.append(Dim._get_description(s))
         if dim is not None and s.dimension is not None:
           dim += s.dimension
         else:
