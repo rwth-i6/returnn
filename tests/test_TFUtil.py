@@ -1153,6 +1153,8 @@ def test_dim_math_basics():
   assert a + 2 * b - b + -b == a
   assert a * b + b == (a + 1) * b
   assert (a + b) * 2 == a * 2 + b * 2
+  assert 0 + a + 0 == a
+  assert sum([0, a, 0, a, 0]) == 2 * a
 
 
 def test_dim_math_double_neg():
