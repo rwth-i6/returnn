@@ -1103,8 +1103,6 @@ class Dim(object):
       """
       :param Dim|Dim._OpMultTerm other:
       """
-      if isinstance(other, Dim):
-        return self.terms == [other]
       if isinstance(other, Dim._OpMultTerm):
         return self.terms == other.terms
       return False
@@ -1404,8 +1402,6 @@ class Dim(object):
       return hash(tuple(self.terms))
 
     def __eq__(self, other):
-      if isinstance(other, Dim):
-        return self.terms == [other]
       if isinstance(other, Dim._OpLinearTerm):
         return self.terms == other.terms
       return False
