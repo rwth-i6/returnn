@@ -1138,9 +1138,9 @@ def test_Data_copy_move_axis_time_to_end():
   assert d2.shape == (None, 4, None) and d2.feature_dim_axis == 2 and d2.time_dim_axis == 3
 
 
-def test_dim_math_static_basics():
-  a = FeatureDim("a", dimension=3)
-  b = FeatureDim("b", dimension=5)
+def test_dim_math_basics():
+  a = SpatialDim("a")
+  b = SpatialDim("b")
   assert a == a
   assert a + b == a + b
   assert a + b != b + a  # not commutative
@@ -1152,7 +1152,7 @@ def test_dim_math_static_basics():
 
 
 def test_dim_math_double_neg():
-  a = FeatureDim("a", dimension=3)
+  a = SpatialDim("a")
   assert --a == a
 
 
