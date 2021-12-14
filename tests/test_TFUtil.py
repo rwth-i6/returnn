@@ -1151,6 +1151,11 @@ def test_dim_math_static_basics():
   assert 2 * a + b == a + a + b
 
 
+def test_dim_math_double_neg():
+  a = FeatureDim("a", dimension=3)
+  assert --a == a
+
+
 def test_dim_math_static_self_att_example():
   num_heads = SpatialDim("num_heads", dimension=2)
   key_dim_total = FeatureDim("key_dim_total", dimension=6)
