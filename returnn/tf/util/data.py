@@ -1192,6 +1192,9 @@ class Dim(object):
             return
       if most_recent_term._is_constant_static_dim() and other._is_constant_static_dim():
         if kind == "mul":
+          if most_recent_term.dimension * other.dimension == 1:
+            self.terms.pop(-1 if right else 0)
+            return
           self.terms[-1 if right else 0] = Dim._make_constant_static_dim(
             most_recent_term.dimension * other.dimension, kind=most_recent_term.kind)
           return
