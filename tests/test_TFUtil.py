@@ -1138,6 +1138,19 @@ def test_Data_copy_move_axis_time_to_end():
   assert d2.shape == (None, 4, None) and d2.feature_dim_axis == 2 and d2.time_dim_axis == 3
 
 
+def test_dim_math_static_basics():
+  a = FeatureDim("a", dimension=3)
+  b = FeatureDim("b", dimension=5)
+  assert a == a
+  assert a + b == a + b
+  assert a + b != b + a  # not commutative
+  assert a * b == a * b
+  assert a * b != b * a  # not commutative
+  assert 2 * a == a + a
+  assert a * 2 != 2 * a
+  assert 2 * a + b == a + a + b
+
+
 def test_dim_math_static_self_att_example():
   num_heads = SpatialDim("num_heads", dimension=2)
   key_dim_total = FeatureDim("key_dim_total", dimension=6)
