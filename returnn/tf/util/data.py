@@ -1164,6 +1164,30 @@ class Dim(object):
       res.extend_mul_div_(Dim._make_constant_static_dim(-1), kind="mul", right=False)
       return res
 
+    def divisible(self, other, right):
+      """
+      :param Dim other:
+      :param bool right:
+      :return: whether we can divide other, without remainder
+      :rtype: bool
+      """
+      if not self.terms:
+        return False
+      if other.derived_from_op and other.derived_from_op.kind == "mul":
+        tmp = self.copy()
+        for term in other.derived_from_op.inputs if right else reversed(other.derived_from_op.inputs):
+          if not tmp.divisible(term, right=right):
+            return False
+          tmp.extend_mul_div_(term, kind="truediv", right=right)
+        return True
+      most_recent_term = self.terms[-1 if right else 0]
+      if other == most_recent_term:
+        return True
+      if most_recent_term.dimension is not None and other.dimension is not None:
+        if most_recent_term.dimension % other.dimension == 0:
+          return True
+      return False
+
     def extend_mul_div_(self, other, kind, right):
       """
       :param Dim other:
@@ -1174,7 +1198,10 @@ class Dim(object):
       if other._is_constant_static_dim() and other.dimension == 1:
         return
       if not self.terms:
-        self.terms.append(other)
+        if kind == "mul":
+          self.terms.append(other)
+        elif kind.endswith("div"):
+          self.terms = [Dim._OpMultTerm.new_div_dim(self.as_dim(), other, kind=kind, right=right)]
         return
       if other.derived_from_op and other.derived_from_op.kind == "mul":
         for term in other.derived_from_op.inputs if right else reversed(other.derived_from_op.inputs):
@@ -1208,7 +1235,7 @@ class Dim(object):
             most_recent_term.dimension // other.dimension, kind=most_recent_term.kind)
           return
       if kind.endswith("div"):
-        self.terms = [self._new_div_dim(other, kind=kind, right=right)]
+        self.terms = [Dim._OpMultTerm.new_div_dim(self.as_dim(), other, kind=kind, right=right)]
         return
       if kind == "mul":
         if right:
@@ -1218,17 +1245,18 @@ class Dim(object):
         return
       assert False
 
-    def _new_div_dim(self, denom, kind, right):
+    @classmethod
+    def new_div_dim(cls, numerator, denominator, kind, right):
       """
-      :param Dim denom:
+      :param Dim numerator:
+      :param Dim denominator:
       :param str kind: "floordiv" or "ceildiv" or "truediv"
       :param bool right:
       :rtype: Dim
       """
       dim_value = None
-      self_dim = self.as_dim()
-      a = self_dim.dimension
-      b = denom.dimension
+      a = numerator.dimension
+      b = denominator.dimension
       if a is not None and b is not None:
         if kind == "floordiv":
           dim_value = a // b
@@ -1238,28 +1266,29 @@ class Dim(object):
             kind = "floordiv"  # for nicer description, and does not matter
         elif kind == "truediv":
           if a % b != 0:
-            raise ValueError("%s, truediv only allowed if the result is an integer, but got denom %s" % (self, denom))
+            raise ValueError(
+              "%s, truediv only allowed if the result is an integer, but got denominator %s" % (self, denominator))
           dim_value = a // b
           if right:
             kind = "floordiv"  # for nicer description, and does not matter
         else:
           raise ValueError("invalid kind %r" % (kind,))
       if kind == "floordiv" and right:
-        description = "%s//%s" % (Dim._get_description(self_dim), Dim._get_description(denom))
+        description = "%s//%s" % (Dim._get_description(numerator), Dim._get_description(denominator))
       else:
         description = "%s_%s(%s, %s)" % (
           kind, "right" if right else "left",
-          Dim._get_description(self_dim, brackets=False), Dim._get_description(denom, brackets=False))
+          Dim._get_description(numerator, brackets=False), Dim._get_description(denominator, brackets=False))
       op_kind = kind
       if a is not None and b is not None and a % b == 0:
         op_kind = "truediv"  # makes some other checks simpler
       op_kind += "_" + ("right" if right else "left")
       return Dim(
         description=description,
-        kind=self_dim.kind,
+        kind=numerator.kind,
         dimension=dim_value,
-        derived_from_op=Dim.Op(kind=op_kind, inputs=[self_dim, denom]),
-        derived_from_tag=self_dim)
+        derived_from_op=Dim.Op(kind=op_kind, inputs=[numerator, denominator]),
+        derived_from_tag=numerator)
 
     def as_dim(self):
       """
@@ -1427,6 +1456,11 @@ class Dim(object):
         right = False
       if other._is_constant_static_dim() and other.dimension == 1:
         return
+      if kind.endswith("div"):
+        if any(not term.divisible(other, right=right) for term in self.terms):
+          self.terms = [Dim._OpMultTerm.from_dim(
+            Dim._OpMultTerm.new_div_dim(self.as_dim(), other, kind=kind, right=right))]
+          return
       for term in self.terms:
         term.extend_mul_div_(other, kind=kind, right=right)
 
