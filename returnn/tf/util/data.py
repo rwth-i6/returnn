@@ -1188,6 +1188,53 @@ class Dim(object):
           return True
       return False
 
+    def can_simplify(self, other, kind, right):
+      """
+      :param Dim other:
+      :param str kind:
+      :param bool right:
+      :return: whether we can simplify when applying this operation
+      :rtype: bool
+      """
+      if other.derived_from_op and other.derived_from_op.kind == "mul":
+        tmp = self.copy()
+        for term in other.derived_from_op.inputs if right else reversed(other.derived_from_op.inputs):
+          if not tmp.can_simplify(term, kind=kind, right=right):
+            return False
+          tmp.extend_mul_div_(term, kind=kind, right=right)
+        return True
+      idx = self._simplify_term_idx(other, kind=kind, right=right)
+      return idx is not None
+
+    def _simplify_term_idx(self, other, kind, right):
+      """
+      :param Dim other:
+      :param str kind:
+      :param bool right:
+      :return: index of term to simplify
+      :rtype: int|None
+      """
+      if not self.terms:
+        return None
+      for i, term in reversed(list(enumerate(self.terms))) if right else enumerate(self.terms):
+        assert isinstance(term, Dim)
+        if kind.endswith("div") and other == term:
+          return i
+        if kind == "mul" and term.derived_from_op:
+          if term.derived_from_op.kind == "truediv_" + ("right" if right else "left"):
+            if term.derived_from_op.inputs[-1] == other:
+              return i
+        if kind == "mul" and other.derived_from_op:
+          if other.derived_from_op.kind == "truediv_" + ("right" if not right else "left"):
+            if other.derived_from_op.inputs[-1] == term:
+              return i
+        if term._is_constant_static_dim() and other._is_constant_static_dim():
+          if kind == "mul":
+            return i
+          if kind.endswith("div") and term.dimension % other.dimension == 0:
+            return i
+      return None
+
     def extend_mul_div_(self, other, kind, right):
       """
       :param Dim other:
@@ -1207,33 +1254,35 @@ class Dim(object):
         for term in other.derived_from_op.inputs if right else reversed(other.derived_from_op.inputs):
           self.extend_mul_div_(term, kind=kind, right=right)
         return
-      most_recent_term = self.terms[-1 if right else 0]
-      assert isinstance(most_recent_term, Dim)
-      if kind.endswith("div") and other == most_recent_term:
-        self.terms.pop(-1 if right else 0)
-        return
-      if kind == "mul" and most_recent_term.derived_from_op:
-        if most_recent_term.derived_from_op.kind == "truediv_" + ("right" if right else "left"):
-          if most_recent_term.derived_from_op.inputs[-1] == other:
-            self.terms[-1 if right else 0] = most_recent_term.derived_from_op.inputs[0]
-            return
-      if kind == "mul" and other.derived_from_op:
-        if other.derived_from_op.kind == "truediv_" + ("right" if not right else "left"):
-          if other.derived_from_op.inputs[-1] == most_recent_term:
-            self.terms[-1 if right else 0] = other.derived_from_op.inputs[0]
-            return
-      if most_recent_term._is_constant_static_dim() and other._is_constant_static_dim():
-        if kind == "mul":
-          if most_recent_term.dimension * other.dimension == 1:
-            self.terms.pop(-1 if right else 0)
-            return
-          self.terms[-1 if right else 0] = Dim._make_constant_static_dim(
-            most_recent_term.dimension * other.dimension, kind=most_recent_term.kind)
+      idx = self._simplify_term_idx(other, kind=kind, right=right)
+      if idx is not None:
+        term = self.terms[idx]
+        assert isinstance(term, Dim)
+        if kind.endswith("div") and other == term:
+          self.terms.pop(idx)
           return
-        if kind.endswith("div") and most_recent_term.dimension % other.dimension == 0:
-          self.terms[-1 if right else 0] = Dim._make_constant_static_dim(
-            most_recent_term.dimension // other.dimension, kind=most_recent_term.kind)
-          return
+        if kind == "mul" and term.derived_from_op:
+          if term.derived_from_op.kind == "truediv_" + ("right" if right else "left"):
+            if term.derived_from_op.inputs[-1] == other:
+              self.terms[idx] = term.derived_from_op.inputs[0]
+              return
+        if kind == "mul" and other.derived_from_op:
+          if other.derived_from_op.kind == "truediv_" + ("right" if not right else "left"):
+            if other.derived_from_op.inputs[-1] == term:
+              self.terms[idx] = other.derived_from_op.inputs[0]
+              return
+        if term._is_constant_static_dim() and other._is_constant_static_dim():
+          if kind == "mul":
+            if term.dimension * other.dimension == 1:
+              self.terms.pop(idx)
+              return
+            self.terms[idx] = Dim._make_constant_static_dim(
+              term.dimension * other.dimension, kind=term.kind)
+            return
+          if kind.endswith("div") and term.dimension % other.dimension == 0:
+            self.terms[idx] = Dim._make_constant_static_dim(
+              term.dimension // other.dimension, kind=term.kind)
+            return
       if kind.endswith("div"):
         self.terms = [Dim._OpMultTerm.new_div_dim(self.as_dim(), other, kind=kind, right=right)]
         return
@@ -1451,9 +1500,10 @@ class Dim(object):
       assert kind in {"mul", "floordiv", "truediv", "ceildiv"}
       other = self._make_dim(other, kind=kind)
       if kind == "mul" and right:
-        # Do it the other way around
-        self.terms, other = Dim._OpLinearTerm.from_dim(other).terms, self.as_dim()
-        right = False
+        if not all(term.can_simplify(other, kind=kind, right=right) for term in self.terms):
+          # Do it the other way around
+          self.terms, other = Dim._OpLinearTerm.from_dim(other).terms, self.as_dim()
+          right = False
       if other._is_constant_static_dim() and other.dimension == 1:
         return
       if kind.endswith("div"):
