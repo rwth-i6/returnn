@@ -5977,7 +5977,7 @@ class PrefixInTimeLayer(_ConcatInputLayer):
       assert not out_dim
       out_dim = size_base.output.get_time_dim_tag()
     if not out_dim:
-      out_dim = repeat + in_dim
+      out_dim = (repeat if isinstance(repeat, int) else SpatialDim("%s:repeat" % repeat.name)) + in_dim
     assert out_dim.dimension == out_dim_int
     x = x.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=out_dim)
     if isinstance(repeat, LayerBase):
