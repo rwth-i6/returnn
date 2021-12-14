@@ -117,13 +117,17 @@ In a user config, the dim tags are usually introduced already for ``extern_data`
 Example::
 
     from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+    input_seq_dim = SpatialDim("input-seq-len")
+    input_feat_dim = FeatureDim("input-feature", 40)
+    target_seq_dim = SpatialDim("target-seq-len")
+    target_classes_dim = FeatureDim("target-classes", 1000)
 
     extern_data = {
         "data": {
-            "dim_tags": [batch_dim, SpatialDim("input-seq-len"), FeatureDim("input-feature", 40)]},
+            "dim_tags": [batch_dim, input_seq_dim, input_feat_dim]},
         "classes": {
-            "dim_tags": [batch_dim, SpatialDim("target-seq-len")],
-            "sparse_dim": FeatureDim("input-feature", 40)},
+            "dim_tags": [batch_dim, target_seq_dim],
+            "sparse_dim": target_classes_dim},
     }
 
 All layers which accept some ``axis`` or ``in_dim`` argument also can be given some dim object
