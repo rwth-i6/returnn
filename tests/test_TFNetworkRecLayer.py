@@ -7359,8 +7359,7 @@ def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis,
   # Calculate the energies
   d[output + '_energy'] = {
     'class': 'dot', 'from': [output + '_query', output + '_key_accum'],
-    'red1': 'dim:%i' % key_dim, 'red2': 'dim:%i' % key_dim,
-    'var1': None if inside_rec_layer else query_axis, 'var2': key_dim_tag}  # [B,n,T?,T|rec-history]
+    'red1': 'dim:%i' % key_dim, 'red2': 'dim:%i' % key_dim}  # [B,n,T?,T|rec-history]
 
   d[output + '_weights'] = {
     'class': 'softmax_over_spatial', 'from': [output + '_energy'], 'axis': key_axis,
@@ -7371,8 +7370,7 @@ def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis,
 
   d[output + '_output'] = {
     'class': 'dot', 'from': [output + '_weights_drop', output + '_value_accum'],
-    'red1': key_axis, 'red2': key_axis,
-    "var1": None if inside_rec_layer else query_axis, "var2": "dim:%i" % value_dim}  # [B,n,T?,F|d_v]
+    'red1': key_axis, 'red2': key_axis}  # [B,n,T?,F|d_v]
   d[output + '_att'] = {
     'class': 'merge_dims', 'axes': ["dim:%i" % num_heads, "dim:%i" % value_dim],
     'from': output + '_output'}  # [B,T?,F|n*d_v]
