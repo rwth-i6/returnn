@@ -1281,6 +1281,7 @@ class Dim(object):
             self.terms[idx] = Dim._make_constant_static_dim(
               term.dimension // other.dimension, kind=term.kind)
             return
+          # Fallback with generic handling.
       if kind.endswith("div"):
         self.terms = [Dim._OpMultTerm.new_div_dim(self.as_dim(), other, kind=kind, right=right)]
         return
