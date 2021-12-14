@@ -2413,8 +2413,8 @@ class Engine(EngineBase):
               seq_idx[batch_idx], seq_tag[batch_idx], output_layer_names[output_layer_idx],
               outputs[output_layer_idx][beam_start_idx:beam_end_idx]), file=log.v4)
             out_idx = batch_idx * out_beam_sizes[output_layer_idx]
-          if target_keys[output_layer_idx] and serialized_outputs[output_layer_idx]:
-            if do_eval and serialized_targets[output_layer_idx]:
+          if serialized_outputs[output_layer_idx]:
+            if serialized_targets[output_layer_idx]:
               print("  ref:", serialized_targets[output_layer_idx][batch_idx], file=log.v4)
             if out_beam_sizes[output_layer_idx] is None:
               print("  hyp:", serialized_outputs[output_layer_idx][out_idx],
