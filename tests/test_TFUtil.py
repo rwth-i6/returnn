@@ -1145,12 +1145,12 @@ def test_dim_math_static():
   assert key_dim_per_head.dimension == 3
   value_dim_total = FeatureDim("value_dim_total", dimension=10)
   value_dim_per_head = value_dim_total // num_heads
-  qkv_dim_total = key_dim_total * 2 + value_dim_total
-  qkv_dim_per_head = key_dim_per_head * 2 + value_dim_per_head
+  qkv_dim_total = 2 * key_dim_total + value_dim_total
+  qkv_dim_per_head = 2 * key_dim_per_head + value_dim_per_head
   assert qkv_dim_total.dimension == 6 * 2 + 10
   assert qkv_dim_per_head.dimension == (6 * 2 + 10) // 2
   assert key_dim_total + key_dim_total + value_dim_total == qkv_dim_total
-  assert key_dim_total * 2 + value_dim_total == qkv_dim_total
+  assert 2 * key_dim_total + value_dim_total == qkv_dim_total
   assert key_dim_per_head * num_heads == key_dim_total
 
 
