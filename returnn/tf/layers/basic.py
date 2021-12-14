@@ -425,7 +425,7 @@ class ConcatLayer(LayerBase):
     if not out_dim:
       # We ignore allow_broadcast here... Anyway not currently implemented.
       # Just overtake the first input format.
-      out_dim = sum(concat_dim_tags[1:], concat_dim_tags[0])
+      out_dim = sum(concat_dim_tags)
       assert isinstance(out_dim, Dim)
     assert out_dim.dimension == dimension
     res_dim_tags = list(sources[0].output.dim_tags)
