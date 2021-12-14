@@ -1180,9 +1180,11 @@ def test_dim_math_div():
 def test_dim_math_div_mul():
   a = FeatureDim("a", 10)
   b = FeatureDim("b", 2)
+  c = SpatialDim("c")
   assert a // b == a // b
   assert (a // b) * b == a
   assert b * a.div_left(b) == a
+  assert (c // b) * b != c
 
 
 def test_dim_math_static_self_att_example():
