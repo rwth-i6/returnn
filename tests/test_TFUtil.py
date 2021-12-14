@@ -1168,6 +1168,15 @@ def test_dim_math_mul_div():
   assert (b * a).div_left(b) == a
 
 
+def test_dim_math_div():
+  a = SpatialDim("a")
+  b = SpatialDim("b")
+  c = SpatialDim("c", 14)
+  d = SpatialDim("d", 10)
+  assert a // 2 + b // 2 != (a + b) // 2  # only allowed when divisible but this is unknown here for dyn dims
+  assert c // 2 + d // 2 == (c + d) // 2
+
+
 def test_dim_math_div_mul():
   a = FeatureDim("a", 10)
   b = FeatureDim("b", 2)
