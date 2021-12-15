@@ -2915,7 +2915,7 @@ class MergeDimsLayer(_ConcatInputLayer):
 
   def __init__(self, axes, keep_order=NotSpecified, n_out=None, out_dim=None, **kwargs):
     """
-    :param str|list[Dim|str] axes: see :func:`Data.get_axis_from_description`
+    :param typing.Sequence[Dim|str] axes: see :func:`Data.get_axis_from_description`
     :param bool|NotSpecified keep_order: The old default was: the axes are sorted, and then merged.
       Thus, the order of incoming axes will influence the result.
       E.g. inputs [B,S,F] and [B,F,S], with ``axes=["S","F"]``, will get different results,
@@ -2936,7 +2936,7 @@ class MergeDimsLayer(_ConcatInputLayer):
     BehaviorVersion.require(
       condition=keep_order, message="MergeDimsLayer, only keep_order=True is allowed", version=6)
     if keep_order:
-      assert isinstance(axes, (tuple, list)), (
+      assert isinstance(axes, (tuple, list, typing.Sequence)), (
         "%s: axes %r must be a list or tuple, to have a well defined order in input %s" % (self, axes, self.input_data))
       axes_ = []
       for axis in axes:
@@ -3060,7 +3060,7 @@ class MergeDimsLayer(_ConcatInputLayer):
                              sources=(), n_out=NotSpecified, out_type=None, out_dim=None, **kwargs):
     """
     :param str name:
-    :param str|list[str] axes:
+    :param typing.Sequence[Dim|str] axes:
     :param bool|NotSpecified keep_order:
     :param list[LayerBase] sources:
     :param int|None|NotSpecified n_out:

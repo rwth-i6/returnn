@@ -4323,7 +4323,7 @@ class Data(object):
 
   def get_axes_from_description(self, axes, allow_int=NotSpecified):
     """
-    :param int|list[int]|str|list[str|Dim]|Dim|None axes: one axis or multiple axis, or none.
+    :param int|list[int]|str|typing.Sequence[str|Dim]|Dim|None axes: one axis or multiple axis, or none.
       This is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
       It also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
       and more (see the code).
@@ -4345,7 +4345,7 @@ class Data(object):
     if isinstance(axes, int):
       self._verify_axis_int_from_description(allow_int=allow_int)
       return [self._make_valid_int_axis(axes)]
-    assert isinstance(axes, (str, int, list, tuple))
+    assert isinstance(axes, (str, int, list, tuple, typing.Sequence))
     if isinstance(axes, str):
       import re
       axes = axes.lower()
@@ -4435,7 +4435,7 @@ class Data(object):
         idx = int(idx_s)
         return [self.get_axes_by_tag_name(name, spatial_only=True)[idx]]
       raise Exception("invalid axis mode %r" % axes)
-    assert isinstance(axes, (tuple, list)), "invalid axes %r" % axes
+    assert isinstance(axes, (tuple, list, typing.Sequence)), "invalid axes %r" % axes
     flat_axes = []
     for i in axes:
       if isinstance(i, int):
