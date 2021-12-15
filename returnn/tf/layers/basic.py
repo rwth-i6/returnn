@@ -5324,11 +5324,11 @@ class ReduceLayer(_ConcatInputLayer):
                **kwargs):
     """
     :param str mode: "sum" or "max", "argmin", "min", "argmax", "mean", "logsumexp"
-    :param int|list[int]|str axes: One axis or multiple axis to reduce.
+    :param typing.Sequence[Dim|str] axes: One axis or multiple axis to reduce.
       It accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
       and it is strongly recommended to use some of these symbolic names.
       See :func:`Data.get_axes_from_description`.
-    :param int|list[int]|str axis: for compatibility, can be used instead of ``axes``
+    :param Dim|str axis: for compatibility, can be used instead of ``axes``
     :param bool keep_dims: if dimensions should be kept (will be 1)
     :param int|None enforce_batch_dim_axis: will swap the batch-dim-axis of the input with the given axis.
       e.g. 0: will convert the input into batch-major format if not already like that.
@@ -5451,7 +5451,7 @@ class ReduceLayer(_ConcatInputLayer):
       return True
     if isinstance(axes, (str, Dim)):
       return False
-    assert isinstance(axes, (list, tuple))
+    assert isinstance(axes, (list, tuple, typing.Sequence))
     return any([cls.need_enforce_batch_dim_axis(a) for a in axes])
 
   @classmethod
