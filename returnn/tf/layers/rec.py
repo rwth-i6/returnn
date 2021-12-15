@@ -6005,6 +6005,58 @@ class ChoiceGetSrcBeamsLayer(LayerBase):
     return Data(name="%s_output" % name, dtype="int32", shape=(), dim=None, beam=sources[0].output.beam)
 
 
+class SplitBatchBeamLayer(BaseChoiceLayer):
+  """
+  Splits the batch dimension of the input, which includes a beam, into (batch,beam).
+
+  Like :class:`DecideLayer`, this removes the beam.
+  """
+  layer_class = "split_batch_beam"
+
+  def __init__(self, beam_dim=None, **kwargs):
+    """
+    :param Dim|None beam_dim:
+    """
+    beam_dim  # noqa  # via get_out_data_from_opts
+    super(SplitBatchBeamLayer, self).__init__(beam_size=1, **kwargs)
+    src = self.sources[0].output.copy_as_batch_major()
+    batch_dim = self.output.get_batch_dim()
+    beam_size = src.beam.beam_size
+    src_shape = tf_util.get_shape(src.placeholder)
+    self.output.placeholder = tf.reshape(src.placeholder, [batch_dim, beam_size] + src_shape[1:])
+    self.search_choices = SearchChoices(owner=self, beam_size=1, is_decided=True)
+
+  @classmethod
+  def cls_get_search_beam_size(cls, network=None, **kwargs):
+    """
+    :param returnn.tf.network.TFNetwork network:
+    :rtype: int|None
+    """
+    if network.search_flag:
+      return 1
+    return None
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, network, sources, beam_dim=None, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param returnn.tf.network.TFNetwork network:
+    :param Dim|None beam_dim:
+    :rtype: Data
+    """
+    assert len(sources) == 1
+    data = sources[0].output.copy_template(name="%s_output" % name).copy_as_batch_major()
+    beam = data.beam
+    assert beam, "no beam in %r" % data
+    data.beam = None
+    if beam_dim is None:
+      beam_dim = SpatialDim("beam:%s" % beam.name, beam.beam_size)
+    assert beam_dim.dimension == beam.beam_size
+    data = data.copy_add_dim_by_tag(beam_dim, unbroadcast=True, axis=1)
+    return data
+
+
 class AttentionBaseLayer(_ConcatInputLayer):
   """
   This is the base class for attention.
