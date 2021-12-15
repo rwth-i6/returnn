@@ -2134,6 +2134,75 @@ def test_rec_layer_multi_choice_search_resolve():
       raise
 
 
+def test_search_SplitBatchBeamLayer():
+  from returnn.tf.util.data import batch_dim
+  time_dim = SpatialDim("time")
+  beam_dim = SpatialDim("beam", 3)
+  classes_dim = FeatureDim("classes", 13)
+
+  def make_dummy_beam(src):
+    return {
+      "class": "rec", "from": src, "target": "classes",
+      "unit": {
+        "lin1": {"class": "linear", "from": "data:source", "out_dim": classes_dim},
+        "lin2": {"class": "linear", "from": "prev:output", "out_dim": classes_dim},
+        "combined": {"class": "combine", "kind": "add", "from": ["lin1", "lin2"]},
+        "prob": {"class": "activation", "from": "combined", "activation": "softmax"},
+        "output": {
+          "class": "choice", "from": "prob", "beam_size": beam_dim.dimension,
+          "target": "classes", "initial_output": 0}
+      }
+    }
+
+  net_dict = {
+    "nom": make_dummy_beam("data"),
+    "den": make_dummy_beam("data"),
+    # Get the best beam score of output
+    "nom_beam_scores": {"class": "choice_get_beam_scores", "from": "nom"},
+    "nom_beam_scores_best": {"class": "decide", "from": "nom_beam_scores"},
+    # Get the sum of all beam scores of extra.search:output
+    "den_beam_scores": {"class": "choice_get_beam_scores", "from": "den"},
+    "den_beam_scores_split": {"class": "split_batch_beam", "from": "den_beam_scores", "beam_dim": beam_dim},
+    "den_beam_scores_logsumexp": {
+      "class": "reduce",
+      "mode": "logsumexp",
+      "from": "den_beam_scores_split",
+      "axis": beam_dim},
+    "log_prob": {
+      "class": "combine",
+      "from": ["nom_beam_scores_best", "den_beam_scores_logsumexp"],
+      "kind": "sub",
+      'is_output_layer': True}
+  }
+
+  config = Config({
+    "extern_data": {
+      "data": {"dim_tags": [batch_dim, time_dim, FeatureDim("input-dim", 7)]},
+      "classes": {"dim_tags": [batch_dim, time_dim], "sparse_dim": classes_dim}
+    },
+  })
+
+  with make_scope() as session:
+    net = TFNetwork(search_flag=True, train_flag=False, config=config)
+    net.construct_from_dict(net_dict)
+    net.initialize_params(session)
+    den_beam_scores = net.get_layer("den_beam_scores").output
+    assert den_beam_scores.beam and den_beam_scores.beam.beam_size == beam_dim.dimension
+    assert den_beam_scores.dim_tags == (batch_dim,)
+    den_beam_scores_split = net.get_layer("den_beam_scores_split").output
+    assert not den_beam_scores_split.beam
+    assert den_beam_scores_split.dim_tags == (batch_dim, beam_dim)
+    log_prob = net.get_layer("log_prob").output
+    from test_TFNetworkLayer import make_feed_dict
+    n_batch = 5
+    den_beam_scores_split_np, log_prob_np = session.run(
+      (den_beam_scores_split.placeholder, log_prob.placeholder),
+      feed_dict=make_feed_dict(net.extern_data, n_batch=n_batch))
+    print("den_beam_scores_split_np:", den_beam_scores_split_np)
+    print("log_prob_np:", log_prob_np)
+    assert den_beam_scores_split_np.shape == (n_batch, beam_dim.dimension) and log_prob_np.shape == (n_batch,)
+
+
 def test_target_with_beam():
   beam_size = 4
   teacher_target = "classes"
