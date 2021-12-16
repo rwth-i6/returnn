@@ -22,6 +22,15 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 11 (2021-12-16)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Broadcasting dims no longer match in :class:`CombineLayer` and others.
+This was never needed, instead broadcasting happens in RETURNN automatically to non-existing dims.
+To fix this, do not add any broadcasting dims.
+
+See issue `#666 <https://github.com/rwth-i6/returnn/issues/666>`__.
+
 Behavior version 10 (2021-12-07)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
