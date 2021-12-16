@@ -145,19 +145,47 @@ class Dim(object):
         desc += "{ctx=%s}" % self.control_flow_ctx.repr_inner()
     return desc
 
-  def copy(self, kind=None):
+  def __copy__(self):
     """
+    Normally we would not want to get a new tag with ``tag != copy(tag)``.
+    https://github.com/rwth-i6/returnn/issues/860
+
+    See :func:`Dim.copy` if you explicitly want a copy.
+
+    :return: self
+    :rtype: Dim
+    """
+    return self
+
+  def __deepcopy__(self, memo=None):
+    """
+    Normally we would not want to get a new tag with ``tag != deepcopy(tag)``.
+    https://github.com/rwth-i6/returnn/issues/860
+
+    See :func:`Dim.copy` if you explicitly want a copy.
+
+    :param memo:
+    :return: self
+    :rtype: Dim
+    """
+    return self
+
+  def copy(self, same_as_self, description=None, kind=None):
+    """
+    :param bool same_as_self:
+    :param str|None description: new description
     :param Entity|None kind: if set, overwrites self.kind
     :return: copy, maybe as new kind. setting same_as to self
     :rtype: Dim
     """
     tag = Dim(
-      kind=kind or self.kind, description=self.description,
+      kind=kind or self.kind, description=description or self.description,
       dimension=self.dimension, dyn_size_ext=self.dyn_size_ext,
       batch=self.batch,
       src_data=self.src_data, src_axis=self.src_axis)
-    tag.same_as = self  # not declare_same_as, none of the extra checks needed
-    tag._same_as_tb = traceback.extract_stack()
+    if same_as_self:
+      tag.same_as = self  # not declare_same_as, none of the extra checks needed
+      tag._same_as_tb = traceback.extract_stack()
     return tag
 
   def _can_use_in_ctx(self, ctx):
@@ -3203,7 +3231,7 @@ class Data(object):
     data_opts = self.get_kwargs()
     # Note: if dim_tag is feature, but we are sparse, we just make it spatial
     if self.sparse and dim_tag.is_feature_dim():
-      dim_tag = dim_tag.copy(kind=Dim.Types.Spatial)
+      dim_tag = dim_tag.copy(same_as_self=True, kind=Dim.Types.Spatial)
     if not unbroadcast and dim_tag.dimension != 1:
       dim_tag = Dim(
         kind=dim_tag.kind, description="%s_dummy_dim1" % (dim_tag.description or "unnamed"), dimension=1)
