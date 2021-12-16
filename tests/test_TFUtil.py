@@ -1138,6 +1138,14 @@ def test_Data_copy_move_axis_time_to_end():
   assert d2.shape == (None, 4, None) and d2.feature_dim_axis == 2 and d2.time_dim_axis == 3
 
 
+def test_Dim_copy():
+  # https://github.com/rwth-i6/returnn/issues/860
+  import copy
+  a = SpatialDim("a")
+  assert a == copy.copy(a)
+  assert a == copy.deepcopy(a)
+
+
 def test_dim_math_basics():
   a = SpatialDim("a")
   b = SpatialDim("b")
