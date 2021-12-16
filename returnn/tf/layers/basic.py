@@ -3774,7 +3774,10 @@ class ExpandDimsLayer(_ConcatInputLayer):
       data = data.copy_as_batch_major()
     axis = cls._get_axis(data=data, axis=axis)
 
-    new_dim = SpatialDim("%s_expand_dims" % name, dim)
+    new_dim = Dim(
+      kind=Dim.Types.Feature if init_axis.lower() == "f" else Dim.Types.Spatial,
+      description="%s_expand_dims" % name,
+      dimension=dim)
     data = data.copy_template(name="%s_output" % name)
     data = data.copy_add_dim_by_tag(new_dim, unbroadcast=True, axis=axis)
     if isinstance(init_axis, str):
