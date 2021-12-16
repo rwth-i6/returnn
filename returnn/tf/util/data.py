@@ -5039,11 +5039,12 @@ class Data(object):
     return self.dim_tags
 
   @classmethod
-  def get_common_data(cls, sources, ignore_feature_dim=False, allow_broadcast_all_sources=NotSpecified):
+  def get_common_data(cls, sources, ignore_feature_dim=False, allow_broadcast_all_sources=NotSpecified, name=None):
     """
     :param list[Data] sources:
     :param bool ignore_feature_dim: when set, the feature dim does not have to match in the sources
     :param bool|NotSpecified allow_broadcast_all_sources:
+    :param str|None name:
     :return: some generic data where the sources should be compatible to (with copy_compatible_to),
       i.e. it contains the union of all axes from all sources (least common multiple).
       This is always a template, and a new copy.
@@ -5058,7 +5059,7 @@ class Data(object):
     common_batch = BatchInfo.get_common_batch_info([src.batch for src in sources if src.batch])
     # Try with the (first) largest.
     common = [s for s in sources if s.batch_ndim == max_ndim][0]
-    common = common.copy_template()
+    common = common.copy_template(name=name)
     common.beam = None  # this will be reset
     if common_batch:
       common.batch = common_batch.copy_set_beam(None)  # the beam will be reset

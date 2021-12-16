@@ -367,7 +367,7 @@ class LayerBase(object):
       allow_broadcast_all_sources = True
     sources_data = Data.get_common_data(
       sources_data_list, ignore_feature_dim=True,
-      allow_broadcast_all_sources=allow_broadcast_all_sources) if sources_data_list else None
+      allow_broadcast_all_sources=allow_broadcast_all_sources, name="%s_sources" % name) if sources_data_list else None
     if sources_data and not sources_data.sparse and not out_type.get("sparse", False):
       out_type.setdefault("dtype", sources_data.dtype)
     # You are supposed to set self.output.{batch_dim_axis,time_dim_axis} explicitly,

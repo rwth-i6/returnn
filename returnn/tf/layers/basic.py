@@ -1051,7 +1051,7 @@ class SliceNdLayer(_ConcatInputLayer):
     data_objs = [start_data]
     data_objs += [size.output] if isinstance(size, LayerBase) else []
     data_objs += [seq_lens_data] if isinstance(seq_lens_data, Data) else []
-    common_data = Data.get_common_data(data_objs)
+    common_data = Data.get_common_data(data_objs, name="%s_inputs")
     start_data = start_data.copy_compatible_to(common_data, check_sparse=False)
     start_t = start_data.placeholder
     if size is None:
@@ -3046,7 +3046,7 @@ class MergeDimsLayer(_ConcatInputLayer):
       if not out_size:
         out_size = in_size
       else:
-        new_data = Data.get_common_data([out_size, in_size])
+        new_data = Data.get_common_data([out_size, in_size], name="%s_output" % self.name)
         new_data.placeholder = (
           out_size.copy_compatible_to(new_data).placeholder
           * in_size.copy_compatible_to(new_data).placeholder)
@@ -5671,12 +5671,13 @@ class StackLayer(LayerBase):
     self.output.placeholder = tf.stack([src.placeholder for src in sources_], axis=axis)
 
   @classmethod
-  def _get_axis_and_common(cls, sources):
+  def _get_axis_and_common(cls, sources, name=None):
     """
     :param list[LayerBase] sources:
+    :param str|None name:
     :rtype: (int,Data)
     """
-    common_source = Data.get_common_data([src.output for src in sources]).copy_template()
+    common_source = Data.get_common_data([src.output for src in sources], name=name)
     dummy_tag = Dim(kind=Dim.Types.Spatial, dimension=1)
     return common_source.get_default_new_axis_for_dim_tag(dummy_tag), common_source
 
@@ -5689,7 +5690,7 @@ class StackLayer(LayerBase):
     :param Dim|None out_spatial_dim:
     :rtype: Data
     """
-    axis_, common_source = cls._get_axis_and_common(sources)
+    axis_, common_source = cls._get_axis_and_common(sources, name="%s_sources" % name)
     if axis is None:
       axis = axis_
     out = common_source.copy_template(name="%s_output" % name)
@@ -6942,10 +6943,10 @@ class CombineLayer(LayerBase):
         allow_broadcast_all_sources = True
       out_type_.update(
         Data.get_common_data(
-          [s.output for s in sources], allow_broadcast_all_sources=allow_broadcast_all_sources).get_kwargs())
+          [s.output for s in sources], allow_broadcast_all_sources=allow_broadcast_all_sources,
+          name="%s_output" % kwargs["name"]).get_kwargs())
     if n_out is not NotSpecified:
       out_type_["dim"] = n_out
-    out_type_["name"] = "%s_output" % kwargs["name"]
     if out_type:
       if isinstance(out_type, dict):
         if "shape" in out_type:
@@ -7193,14 +7194,14 @@ class CompareLayer(LayerBase):
         allow_broadcast_all_sources = True
       out_type_.update(
         Data.get_common_data(
-          [s.output for s in sources], allow_broadcast_all_sources=allow_broadcast_all_sources).get_kwargs())
+          [s.output for s in sources], allow_broadcast_all_sources=allow_broadcast_all_sources,
+          name="%s_output" % kwargs["name"]).get_kwargs())
     if n_out is not NotSpecified:
       out_type_["dim"] = n_out
     elif out_type_.get("sparse", False):
       out_type_["dim"] = 2
     out_type_["dtype"] = "bool"
     out_type_["vocab"] = None
-    out_type_["name"] = "%s_output" % kwargs["name"]
     if out_type:
       if isinstance(out_type, dict):
         out_type_.update(out_type)
