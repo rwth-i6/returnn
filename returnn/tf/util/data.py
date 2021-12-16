@@ -178,6 +178,8 @@ class Dim(object):
     :return: copy, maybe as new kind. setting same_as to self
     :rtype: Dim
     """
+    if not same_as_self:
+      assert description is not None, "%s copy with not same_as_self should have a new description" % self
     tag = Dim(
       kind=kind or self.kind, description=description or self.description,
       dimension=self.dimension, dyn_size_ext=self.dyn_size_ext,
