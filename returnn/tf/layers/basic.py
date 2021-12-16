@@ -1282,7 +1282,7 @@ class GatherLayer(_ConcatInputLayer):
     :return: (common_axes_input, common_axes_position, specific_input_axes, specific_position_axes), all counted with
     batch dim.
     """
-    is_equal_opts = dict(ignore_feature_dim=True, allow_same_spatial_dim=True, broadcast_matches=True)
+    is_equal_opts = dict(allow_same_spatial_dim=True, broadcast_matches=True)
     common_axes_pairs = [
       (input_axis, position_axis)
       for input_axis in range(input_data.batch_ndim) for position_axis in range(position_data.batch_ndim)
