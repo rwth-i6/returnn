@@ -1283,18 +1283,21 @@ class GatherLayer(_ConcatInputLayer):
     batch dim.
     """
     is_equal_opts = dict(allow_same_spatial_dim=True, broadcast_matches=True)
-    common_axes_pairs = [
-      (input_axis, position_axis)
-      for input_axis in range(input_data.batch_ndim) for position_axis in range(position_data.batch_ndim)
-      if not input_axis == old_gather_axis
-      if input_data.get_dim_tag(input_axis).is_equal(position_data.get_dim_tag(position_axis), **is_equal_opts)
-    ]
-    common_axes_input, common_axes_position = zip(*common_axes_pairs) if common_axes_pairs else ([], [])
-    common_axes_input, common_axes_position = list(common_axes_input), list(common_axes_position)
-    specific_input_axes = [
-      axis for axis in range(input_data.batch_ndim) if axis not in common_axes_input and not axis == old_gather_axis]
-    specific_position_axes = [axis for axis in range(position_data.batch_ndim) if axis not in common_axes_position]
-    return common_axes_input, common_axes_position, specific_input_axes, specific_position_axes
+    all_dim_tags, tags_dict = Dim.get_all_dimension_tags([input_data, position_data], is_equal_opts=is_equal_opts)
+    input_tags, pos_tags = tags_dict[input_data], tags_dict[position_data]
+    specific_input_axes = [i for i, tag in enumerate(input_tags) if tag not in pos_tags and i != old_gather_axis]
+    # note: we currently also allow the gather axis dim is present in the position data.
+    specific_pos_axes = [
+      i for i, tag in enumerate(pos_tags) if tag not in input_tags or tag == input_tags[old_gather_axis]]
+    common_axes_input = [
+      i for i, tag in enumerate(input_data.dim_tags) if tag in input_tags and tag in pos_tags and i != old_gather_axis]
+    # order of common_axes_pos must match order of common_axes_input
+    common_axes_map_input_to_pos = position_data.find_matching_dim_map(input_data, common_axes_input)
+    common_axes_pos = [common_axes_map_input_to_pos[input_axis] for input_axis in common_axes_input]
+
+    assert set(common_axes_input) | set(specific_input_axes) | {old_gather_axis} == set(range(input_data.batch_ndim))
+    assert set(common_axes_pos) | set(specific_pos_axes) == set(range(position_data.batch_ndim))
+    return common_axes_input, common_axes_pos, specific_input_axes, specific_pos_axes
 
   @classmethod
   def _translate_input_axis(
