@@ -920,7 +920,8 @@ def test_CombineLayer_broadcast():
     net_dict = {
       "lin1": {"class": "linear", "activation": "sigmoid", "n_out": 5, "from": "data:data"},
       "lin2": {"class": "linear", "activation": "sigmoid", "n_out": 1, "from": "data:data"},
-      "combine": {"class": "combine", "kind": "add", "from": ["lin1", "lin2"]},
+      "lin2_squeeze": {"class": "squeeze", "from": "lin2", "axis": "f"},
+      "combine": {"class": "combine", "kind": "add", "from": ["lin1", "lin2_squeeze"]},
       "output": {"class": "softmax", "loss": "ce", "from": "combine"}
     }
     config = Config({"debug_print_layer_output_template": True})
@@ -939,7 +940,7 @@ def test_CombineLayer_broadcast_multiple():
   with make_scope() as session:
     net_dict = {
       "p1": {"class": "variable", "shape": (5, 5, 3), "add_batch_axis": False},
-      "p2": {"class": "variable", "shape": (5, 1, 1), "add_batch_axis": False},
+      "p2": {"class": "variable", "shape": (5,), "add_batch_axis": False},
       "combine": {"class": "combine", "kind": "add", "from": ["p1", "p2"]},
       "output": {"class": "softmax", "loss": "ce", "from": "combine"}
     }
@@ -1275,7 +1276,7 @@ def test_CombineLayer_time_broadcast():
     config = Config({
       "debug_print_layer_output_template": True,
       "extern_data": {
-        "in1": {"shape": (n_features, 1), "batch_dim_axis": None, "time_dim_axis": None, "feature_dim_axis": 0},
+        "in1": {"shape": (n_features,), "batch_dim_axis": None, "time_dim_axis": None, "feature_dim_axis": 0},
         "in2": {"shape": (n_features, None), "batch_dim_axis": 0, "time_dim_axis": 2}
       }
     })
@@ -1299,7 +1300,7 @@ def test_CombineLayer_time_broadcast_swapped():
       "debug_print_layer_output_template": True,
       "extern_data": {
         "in1": {"shape": (n_features, None), "batch_dim_axis": 0, "time_dim_axis": 2},
-        "in2": {"shape": (n_features, 1), "batch_dim_axis": None, "time_dim_axis": None, "feature_dim_axis": 0},
+        "in2": {"shape": (n_features,), "batch_dim_axis": None, "time_dim_axis": None, "feature_dim_axis": 0},
       }
     })
     network = TFNetwork(config=config, train_flag=True)
