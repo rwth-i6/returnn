@@ -6964,24 +6964,34 @@ class PositionalEncodingLayer(_ConcatInputLayer):
   layer_class = "positional_encoding"
   recurrent = True
 
-  def __init__(self, add_to_input=False, constant=-1, offset=None, **kwargs):
+  def __init__(self, axis=NotSpecified, add_to_input=False, constant=-1, offset=None, **kwargs):
     """
+    :param Dim|str|NotSpecified axis: if not specified, check for time_dim_axis, otherwise assume rec step
     :param bool add_to_input: will add the signal to the input
     :param int constant: if positive, always output the corresponding positional encoding.
     :param None|LayerBase offset: Specify the offset to be added to positions. Expect shape (batch, time) or (batch,).
     """
+    from returnn.tf.util.data import single_step_dim
     super(PositionalEncodingLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1, "%s: expect a single source" % self
     source = self.input_data
     assert source.feature_dim_axis == source.batch_ndim - 1  # Must be last
     if add_to_input:
       assert source.dim == self.output.dim
+    assert self.output.feature_dim_axis == self.output.batch_ndim - 1  # Must be last
     output_templ_wo_feat = self.output.copy_template_excluding_axis(self.output.feature_dim_axis)
     offset_data = None
     if offset:
       offset_data = offset.output.copy_compatible_to(output_templ_wo_feat, check_dtype=False)
     from returnn.tf.util.basic import get_positional_encoding
-    if source.have_time_axis():
+    if axis is NotSpecified:
+      if source.have_time_axis():
+        axis = "T"
+      else:
+        axis = single_step_dim
+    if axis != single_step_dim:
+      src_axis_int = source.get_axis_from_description(axis, allow_int=False)
+      out_axis_int = self.output.get_axis_from_description(axis, allow_int=False)
       if constant > -1:
         position = constant * tf.ones([1] * output_templ_wo_feat.batch_ndim, tf.int32)
         if offset_data:
@@ -6990,20 +7000,20 @@ class PositionalEncodingLayer(_ConcatInputLayer):
         signal = get_positional_encoding(num_channels=self.output.dim, position=position)
         if not add_to_input and not offset_data:  # Need to tile the time dimension
           tiles = [1] * self.output.batch_ndim
-          tiles[self.output.time_dim_axis] = tf.shape(source.placeholder)[source.time_dim_axis]
+          tiles[out_axis_int] = tf_util.get_shape_dim(source.placeholder, src_axis_int)
           signal = tf.tile(signal, tiles)
       else:
-        length = tf.shape(source.placeholder)[source.time_dim_axis]
+        length = tf_util.get_shape_dim(source.placeholder, src_axis_int)
         position = tf.range(length)  # (len,)
         # Expand dims e.g. (1, len)
         position = tf.reshape(
           position,
-          [length if i == output_templ_wo_feat.time_dim_axis else 1 for i in range(output_templ_wo_feat.batch_ndim)])
+          [length if i == out_axis_int else 1 for i in range(output_templ_wo_feat.batch_ndim)])
         if offset_data:
           position += offset_data.placeholder
         # signal has shape (1,len,n_out) or (batch,len,n_out)
         signal = get_positional_encoding(num_channels=self.output.dim, position=position)
-    else:
+    else:  # single step
       if constant > -1:
         position = tf.convert_to_tensor([constant])
       else:
@@ -7017,7 +7027,7 @@ class PositionalEncodingLayer(_ConcatInputLayer):
     else:
       # tile to batch dimension explicitly, as batch_dim=1 will not be automatically unbroadcasted
       tiles = [1] * self.output.batch_ndim
-      tiles[self.output.batch_dim_axis] = tf.shape(source.placeholder)[source.batch_dim_axis]
+      tiles[self.output.batch_dim_axis] = self.get_batch_dim()
       signal = tf.tile(signal, tiles)
     self.output.placeholder = signal
 
