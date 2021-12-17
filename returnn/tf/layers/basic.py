@@ -1030,13 +1030,14 @@ class SliceNdLayer(_ConcatInputLayer):
   layer_class = "slice_nd"
   recurrent = True
 
-  def __init__(self, start, size, min_size=None, out_spatial_dim=None, **kwargs):
+  def __init__(self, start, size, min_size=None, axis="T", out_spatial_dim=None, **kwargs):
     """
     :param LayerBase start: (B,...)
     :param int|LayerBase|Dim|None size:
       We assume that this is >=0. If this might not be the case, use ``min_size=0``.
       If None, it uses the max possible size, and it becomes a dynamic axis.
     :param int|None min_size: if size is None, but we want to have a min-size
+    :param Dim|str axis:
     :param Dim|None out_spatial_dim:
     """
     out_spatial_dim  # noqa  # via get_out_data_from_opts
@@ -1044,7 +1045,9 @@ class SliceNdLayer(_ConcatInputLayer):
     from returnn.tf.util.basic import where_bc
     from returnn.tf.util.data import Data
     x = self.input_data.copy()
-    seq_lens_data = x.get_time_dim_tag().dyn_size_ext  # (B,) or None
+    in_axis = x.get_axis_from_description(axis, allow_int=False)
+    in_tag = x.dim_tags[in_axis]
+    seq_lens_data = in_tag.dyn_size_ext  # (B,) or None
     self.start = start
     self.size = size
     start_data = start.output.copy()  # e.g. (B,) or (B,T)
@@ -1056,8 +1059,8 @@ class SliceNdLayer(_ConcatInputLayer):
     start_t = start_data.placeholder
     if size is None:
       if seq_lens_data is None:
-        assert isinstance(x.batch_shape[x.time_dim_axis], int)
-        size_t = x.batch_shape[x.time_dim_axis] - start_t
+        assert isinstance(x.batch_shape[in_axis], int)
+        size_t = x.batch_shape[in_axis] - start_t
       else:
         seq_lens_t = seq_lens_data.copy_compatible_to(common_data, check_sparse=False).placeholder
         size_t = seq_lens_t - start_t
@@ -1135,7 +1138,7 @@ class SliceNdLayer(_ConcatInputLayer):
       output=self.output,
       sources=self.sources,
       position=position,
-      axis=x.get_time_dim_tag())
+      axis=in_tag)
     placeholder = gather_layer.output.placeholder
     # In principle, the padded frames are being ignored
     # (unless get_padding_info_dict_ref et al are used).
@@ -1159,18 +1162,17 @@ class SliceNdLayer(_ConcatInputLayer):
     return dep_layers
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources=(), start=None, size=None, out_spatial_dim=None, **kwargs):
+  def get_out_data_from_opts(cls, name, sources=(), start=None, size=None, axis="T", out_spatial_dim=None, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param LayerBase|None start:
     :param int|LayerBase|Dim|None size:
+    :param Dim|str axis:
     :param Dim|None out_spatial_dim:
     :rtype: Data
     """
-    from ..util.data import Dim
     start_data = start.output.copy()
-    input_data = sources[0].output.copy()
     gather_positions_data = start_data.copy_template(name="%s_gather_positions" % name)
     if isinstance(size, LayerBase):
       size = None
@@ -1199,7 +1201,7 @@ class SliceNdLayer(_ConcatInputLayer):
       name="%s_gather" % name,
       sources=sources,
       position=position,
-      axis=input_data.get_time_dim_tag())
+      axis=axis)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
