@@ -1,8 +1,11 @@
 .. _data:
 
-========
+====================
+``Data`` and ``Dim``
+====================
+
 ``Data``
-========
+--------
 
 This wraps a ``tf.Tensor``
 by adding a lot of meta information about it
@@ -64,9 +67,8 @@ Layers are flexible w.r.t. the input format:
   * [Batch,Time,Feature] is the default
 
 
-=======
 ``Dim``
-=======
+-------
 
 A :class:`returnn.tf.util.data.Dim` object,
 representing a dimension (axis) of a :class:`returnn.tf.util.data.Data` object.
@@ -140,9 +142,8 @@ via dimension tags.
 See `#706 <https://github.com/rwth-i6/returnn/issues/706>`__.
 
 
-==============
 Example usages
-==============
+--------------
 
 See :ref:`managing_axes`.
 
@@ -172,15 +173,8 @@ This would use the dimension tag called "encoder".
 :class:`returnn.tf.layers.basic.DotLayer`.
 
 
-====================
 Current shortcomings
-====================
-
-* Currently the matching / identification of dimension tags is by partial string matching,
-  which is hacky, and could potentially also lead to bugs.
-  See :ref:`managing_axes`.
-  In the future, we probably should make this more explicit
-  by using the :class:`returnn.tf.util.data.Dim` object instance explicitly.
+--------------------
 
 * The logic to define the default time/feature axes can be ambiguous in some (rare, exotic) cases.
   Thus, when you use ``"axis": "T"`` in your code, and the tensor has multiple time/spatial axes,
@@ -189,27 +183,9 @@ Current shortcomings
   such as :class:`returnn.tf.layers.basic.LinearLayer` and many others.
   (Although in most cases, there is no ambiguity about it...)
 
-* There are sometimes cases where layers are dependent on the order of the axis.
-  Examples:
 
-  * :class:`returnn.tf.layers.basic.ConvLayer`:
-    The order of the spatial axes matters.
-    You define a kernel shape, and the first entry corresponds to the first spatial axis, etc.
-
-  * :class:`returnn.tf.layers.basic.MergeDimsLayer`:
-    The order of the merged axes matters.
-    (Unless you specify the option ``keep_order``, in which cases the input order does not matter,
-    and just the order of what is specified in the config matters.)
-
-* New dim tags are currently created in the ``__init__`` of a layer,
-  but they should be created (uniquely) by ``get_out_data_from_opts``.
-
-* Static dimensions are not consistently handled via dim tags yet.
-
-
-============
 Related work
-============
+------------
 
 * `Pandas for Python (2008) <https://pandas.pydata.org/>`__,
   ``DataFrame``, labelled tabular data
