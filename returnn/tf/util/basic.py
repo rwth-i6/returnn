@@ -6981,15 +6981,28 @@ class FetchHelper:
 
 def is_axis_from_description_recurrent(axis, network, data):
   """
-  :param str|Dim axis:
+  :param str|Dim axis: expected not to be transformed via transform_config_dict or so.
+    So single_step_dim, when moved out of the recurrent loop, is still single_step_dim.
+    We detect this here.
   :param returnn.tf.network.TFNetwork network:
   :param Data data:
   :rtype: bool
   """
+  from .data import single_step_dim
   if not network.is_inside_rec_layer(inside_loop=True):
     return False
   if isinstance(axis, str) and axis.lower() == "t" and data.time_dim_axis is None:  # legacy case
     return True
-  if isinstance(axis, Dim) and axis == network.get_inside_rec_time_dim(inside_loop=True):
-    return True
+  if isinstance(axis, Dim):
+    inside_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=True)
+    if axis == inside_rec_time_dim:
+      return True
+    over_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=False)
+    if over_rec_time_dim and not inside_rec_time_dim:  # moved out of loop
+      if axis == single_step_dim:
+        return False
+    else:
+      assert inside_rec_time_dim and inside_rec_time_dim == over_rec_time_dim
+      if axis == single_step_dim:
+        return True
   return False
