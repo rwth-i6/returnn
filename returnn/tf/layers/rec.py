@@ -7076,6 +7076,7 @@ class KenLmStateLayer(_ConcatInputLayer):
   recurrent = True
 
   def __init__(self, lm_file, vocab_file=None, vocab_unknown_label="UNK", bpe_merge_symbol=None,
+               axis=NotSpecified,
                input_step_offset=0, dense_output=False,
                debug=False,
                **kwargs):
@@ -7084,6 +7085,7 @@ class KenLmStateLayer(_ConcatInputLayer):
     :param str|None vocab_file: if the inputs are symbols, this must be provided. see :class:`Vocabulary`
     :param str vocab_unknown_label: for the vocabulary
     :param str|None bpe_merge_symbol: e.g. "@@" if you want to apply BPE merging
+    :param Dim|str|NotSpecified axis:
     :param int input_step_offset: if provided, will consider the input only from this step onwards
     :param bool dense_output: whether we output the score for all possible succeeding tokens
     :param bool debug: prints debug info
@@ -7091,10 +7093,16 @@ class KenLmStateLayer(_ConcatInputLayer):
     if callable(lm_file):
       lm_file = lm_file()
     import returnn.tf.util.ken_lm as tf_ken_lm
+    from returnn.tf.util.data import single_step_dim
     from returnn.tf.util.basic import expand_multiple_dims
     super(KenLmStateLayer, self).__init__(**kwargs)
+    if axis is NotSpecified:
+      if self.input_data.have_time_axis():
+        axis = "T"
+      else:
+        axis = single_step_dim
     # Note: We later could extend it and have the state-behavior just as the :class:`CumsumLayer`.
-    assert self._rec_previous_layer and self.input_data.time_dim_axis is None, (
+    assert axis == single_step_dim and self._rec_previous_layer and self.input_data.time_dim_axis is None, (
       "%s: currently expected to run inside rec layer" % self)
     # Create KenLM handle. Use var scope to explicitly have it outside the loop.
     with self.var_creation_scope():
