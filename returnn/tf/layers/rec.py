@@ -7228,12 +7228,15 @@ class EditDistanceTableLayer(LayerBase):
   layer_class = "edit_distance_table"
   recurrent = True
 
-  def __init__(self, debug=False, blank_idx=None, out_dim=None, **kwargs):
+  def __init__(self, axis=NotSpecified, debug=False, blank_idx=None, out_dim=None, **kwargs):
     """
+    :param Dim|str|NotSpecified axis:
     :param bool debug:
     :param int|None blank_idx: if given, will keep the same row for this source label
     :param Dim|None out_dim:
     """
+    from returnn.tf.util.data import single_step_dim
+    from returnn.tf.util.basic import is_axis_from_description_recurrent
     super(EditDistanceTableLayer, self).__init__(out_dim=out_dim, **kwargs)
     assert len(self.sources) == 1, "%s: expects exactly a single source" % self
     source_data = self.sources[0].output
@@ -7248,8 +7251,15 @@ class EditDistanceTableLayer(LayerBase):
     assert target_data.sparse and source_data.dim == dim
     target_data = target_data.copy_as_batch_major()
     self._target_data = target_data
-    if source_data.have_time_axis():
-      raise NotImplementedError
+    if axis is NotSpecified:
+      if source_data.have_time_axis():
+        axis = "T"
+      else:
+        axis = single_step_dim
+    if not is_axis_from_description_recurrent(axis=axis, network=self.network, data=source_data):
+      raise NotImplementedError(
+        "%s: operating on a whole sequence (dim %s in input %s) not supported yet. " % (self, axis, source_data) +
+        "Make sure this layer stays inside the recurrent loop.")
     assert source_data.batch_ndim == 1
     # Assume we are inside a rec loop.
     assert self.network.have_rec_step_info()
