@@ -5049,6 +5049,7 @@ class Data(object):
       This is always a template, and a new copy.
     :rtype: Data|None
     """
+    from returnn.util import BehaviorVersion
     if not sources:
       return None
     assert sources
@@ -5067,8 +5068,10 @@ class Data(object):
       common.beam = SearchBeam.get_combined_beam(*[s.beam for s in sources])
     is_equal_opts = dict(
       ignore_feature_dim=ignore_feature_dim, treat_feature_as_spatial=True,
-      allow_same_spatial_dim=True, broadcast_matches=True,
+      allow_same_spatial_dim=True,
       undefined_matches=True, derived_matches=True)
+    if BehaviorVersion.get() < 11:
+      is_equal_opts["broadcast_matches"] = True
     all_dim_tags, tags_dict = Dim.get_all_dimension_tags(sources, is_equal_opts=is_equal_opts)
     # Check for potential undefined tags, and replace those with defined tags if possible.
     for axis, dim_tag in enumerate(common.dim_tags):

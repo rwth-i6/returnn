@@ -920,7 +920,8 @@ def test_CombineLayer_broadcast():
     net_dict = {
       "lin1": {"class": "linear", "activation": "sigmoid", "n_out": 5, "from": "data:data"},
       "lin2": {"class": "linear", "activation": "sigmoid", "n_out": 1, "from": "data:data"},
-      "combine": {"class": "combine", "kind": "add", "from": ["lin1", "lin2"]},
+      "lin2_squeeze": {"class": "squeeze", "from": "lin2", "axis": "f"},
+      "combine": {"class": "combine", "kind": "add", "from": ["lin1", "lin2_squeeze"]},
       "output": {"class": "softmax", "loss": "ce", "from": "combine"}
     }
     config = Config({"debug_print_layer_output_template": True})
@@ -939,7 +940,7 @@ def test_CombineLayer_broadcast_multiple():
   with make_scope() as session:
     net_dict = {
       "p1": {"class": "variable", "shape": (5, 5, 3), "add_batch_axis": False},
-      "p2": {"class": "variable", "shape": (5, 1, 1), "add_batch_axis": False},
+      "p2": {"class": "variable", "shape": (5,), "add_batch_axis": False},
       "combine": {"class": "combine", "kind": "add", "from": ["p1", "p2"]},
       "output": {"class": "softmax", "loss": "ce", "from": "combine"}
     }
@@ -1275,7 +1276,7 @@ def test_CombineLayer_time_broadcast():
     config = Config({
       "debug_print_layer_output_template": True,
       "extern_data": {
-        "in1": {"shape": (n_features, 1), "batch_dim_axis": None, "time_dim_axis": None, "feature_dim_axis": 0},
+        "in1": {"shape": (n_features,), "batch_dim_axis": None, "time_dim_axis": None, "feature_dim_axis": 0},
         "in2": {"shape": (n_features, None), "batch_dim_axis": 0, "time_dim_axis": 2}
       }
     })
@@ -1299,7 +1300,7 @@ def test_CombineLayer_time_broadcast_swapped():
       "debug_print_layer_output_template": True,
       "extern_data": {
         "in1": {"shape": (n_features, None), "batch_dim_axis": 0, "time_dim_axis": 2},
-        "in2": {"shape": (n_features, 1), "batch_dim_axis": None, "time_dim_axis": None, "feature_dim_axis": 0},
+        "in2": {"shape": (n_features,), "batch_dim_axis": None, "time_dim_axis": None, "feature_dim_axis": 0},
       }
     })
     network = TFNetwork(config=config, train_flag=True)
@@ -3397,6 +3398,24 @@ def test_GatherLayer_search_beam():
           'output': {
             'class': 'choice', 'target': "classes", 'beam_size': 3, 'from': "prob", "input_type": "prob",
             "initial_output": 0}}}})
+
+
+def test_GatherLayer_broadcast_dim():
+  from returnn.tf.util.data import batch_dim
+  head_dim = SpatialDim("head", 1)  # previously, this dim would match all others and therefore fail.
+  round_dim = SpatialDim("round", 2)
+  chunk_dim = SpatialDim("chunk")
+  time_dim = SpatialDim("time")
+  config = Config({"extern_data": {
+    "source": {"dim_tags": [batch_dim, head_dim, time_dim]},
+    "position": {"dim_tags": [batch_dim, head_dim, round_dim, chunk_dim], "dtype": "int32"}},
+    "debug_print_layer_output_template": True})
+  net = TFNetwork(config=config)
+  net.construct_from_dict({
+    "output": {
+      'class': 'gather', 'from': 'data:source', 'position': 'data:position', 'axis': time_dim,
+      'out_shape': {batch_dim, head_dim, round_dim, chunk_dim}}
+  })
 
 
 def test_SliceNdLayer():

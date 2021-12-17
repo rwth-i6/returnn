@@ -1282,7 +1282,10 @@ class GatherLayer(_ConcatInputLayer):
     :return: (common_axes_input, common_axes_position, specific_input_axes, specific_position_axes), all counted with
     batch dim.
     """
-    is_equal_opts = dict(allow_same_spatial_dim=True, broadcast_matches=True)
+    from returnn.util import BehaviorVersion
+    is_equal_opts = dict(allow_same_spatial_dim=True)
+    if BehaviorVersion.get() < 11:
+      is_equal_opts["broadcast_matches"] = True
     all_dim_tags, tags_dict = Dim.get_all_dimension_tags([input_data, position_data], is_equal_opts=is_equal_opts)
     input_tags, pos_tags = tags_dict[input_data], tags_dict[position_data]
     specific_input_axes = [i for i, tag in enumerate(input_tags) if tag not in pos_tags and i != old_gather_axis]
@@ -3771,7 +3774,10 @@ class ExpandDimsLayer(_ConcatInputLayer):
       data = data.copy_as_batch_major()
     axis = cls._get_axis(data=data, axis=axis)
 
-    new_dim = SpatialDim("%s_expand_dims" % name, dim)
+    new_dim = Dim(
+      kind=Dim.Types.Feature if init_axis.lower() == "f" else Dim.Types.Spatial,
+      description="%s_expand_dims" % name,
+      dimension=dim)
     data = data.copy_template(name="%s_output" % name)
     data = data.copy_add_dim_by_tag(new_dim, unbroadcast=True, axis=axis)
     if isinstance(init_axis, str):
@@ -6420,9 +6426,12 @@ class DotLayer(LayerBase):
     :return: var1 tags, var2 tags
     :rtype: (list[Dim], list[Dim])
     """
+    from returnn.util import BehaviorVersion
     is_equal_opts = dict(
       treat_feature_as_spatial=True, allow_same_spatial_dim=True,
-      broadcast_matches=True, undefined_matches=True, derived_matches=True)
+      undefined_matches=True, derived_matches=True)
+    if BehaviorVersion.get() < 11:
+      is_equal_opts["broadcast_matches"] = True
     all_dim_tags, tags_dict = Dim.get_all_dimension_tags([source1, source2], is_equal_opts=is_equal_opts)
     tags1, tags2 = tags_dict[source1], tags_dict[source2]
     var1 = [tag for i, tag in enumerate(tags1) if tag not in tags2 and i not in red1]
