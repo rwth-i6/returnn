@@ -372,6 +372,25 @@ def test_Data_find_matching_dim_map_broadcast_matches():
   print('copied compatible:', copied)
 
 
+def test_Data_get_all_dimension_tags_same_spatial_dim_twice():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  time_dim = SpatialDim("time")
+  in_dim = FeatureDim("input", 13)
+  out_dim = FeatureDim("output", 13)
+  source1 = Data("a", dim_tags=(batch_dim, time_dim, in_dim))
+  source2 = Data("b", dim_tags=(in_dim, out_dim))
+  all_dim_tags_std, _ = Dim.get_all_dimension_tags([source1, source2])
+  assert all_dim_tags_std == [batch_dim, time_dim, in_dim, out_dim]
+  # DotLayer._auto_var_axes but other code uses also similar is_equal_opts.
+  # Also, while these is_equal_opts could be problematic maybe in other cases,
+  # this is a case which should still be correct.
+  is_equal_opts = dict(
+    treat_feature_as_spatial=True, allow_same_spatial_dim=True,
+    undefined_matches=True, derived_matches=True)
+  all_dim_tags, _ = Dim.get_all_dimension_tags([source1, source2], is_equal_opts=is_equal_opts)
+  assert all_dim_tags == [batch_dim, time_dim, in_dim, out_dim]
+
+
 def test_Data_sparse_int32_with_dim_kwargs_init():
   data = Data(name="classes_with_dim", shape=(None,), dim=10, sparse=True, dtype="int32")
   assert data.sparse and data.have_time_axis() and data.shape == (None,) and data.dim == 10

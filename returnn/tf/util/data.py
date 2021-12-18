@@ -833,24 +833,21 @@ class Dim(object):
     data_axes_dict = {}
     for data in data_list:
       data_axes_dict[data] = []
-      tags_for_data = []
+      existing_tag_collection_for_data = list(tags) if unique_separate_axes else tags
       for axis in range(data.batch_ndim):
         tag = data.get_dim_tag(axis)
-        existing_tag = cls.get_existing_tag_from_collection(tag, tags=tags, is_equal_opts=is_equal_opts)
+        existing_tag = cls.get_existing_tag_from_collection(
+          tag, tags=existing_tag_collection_for_data, is_equal_opts=is_equal_opts)
         if existing_tag:
+          if unique_separate_axes:
+            existing_tag_collection_for_data.remove(existing_tag)  # don't take it again for this data
           if existing_tag.undefined and not tag.undefined and tag.dimension == existing_tag.dimension:
             # Replace the existing by the new tag.
             tags[tags.index(existing_tag)] = tag
             existing_tag = tag
         else:  # no existing tag
-          if unique_separate_axes:
-            # Don't append it to `tags` directly now, such that e.g. for data with shape (B,5,5,10),
-            # we end up with two separate dim tags for the two spatial dims.
-            tags_for_data.append(tag)
-          else:
-            tags.append(tag)
+          tags.append(tag)
         data_axes_dict[data].append(existing_tag or tag)
-      tags.extend(tags_for_data)
     return tags, data_axes_dict
 
   @classmethod
