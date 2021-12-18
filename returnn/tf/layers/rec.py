@@ -4810,8 +4810,10 @@ class GetLastHiddenStateLayer(LayerBase):
     return self.output.placeholder
 
   @classmethod
-  def get_out_data_from_opts(cls, out_dim=None, n_out=None, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, out_dim=None, n_out=None, **kwargs):
     """
+    :param str name:
+    :param list[LayerBase] sources:
     :param Dim|None out_dim:
     :param int|None n_out: dimension. output will be of shape (batch, n_out)
     :rtype: Data
@@ -4819,8 +4821,11 @@ class GetLastHiddenStateLayer(LayerBase):
     from returnn.tf.util.data import batch_dim
     if not out_dim:
       assert n_out
-      out_dim = FeatureDim("%s:hidden-out" % kwargs["name"], n_out)
-    return Data("%s_output" % kwargs["name"], dim_tags=[batch_dim, out_dim])
+      out_dim = FeatureDim("%s:hidden-out" % name, n_out)
+    out = Data("%s_output" % name, dim_tags=[batch_dim, out_dim])
+    out.beam = sources[0].output.beam
+    out.batch = sources[0].output.batch
+    return out
 
 
 class GetRecAccumulatedOutputLayer(LayerBase):
