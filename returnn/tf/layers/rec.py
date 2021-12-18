@@ -4771,12 +4771,18 @@ class GetLastHiddenStateLayer(LayerBase):
 
   layer_class = "get_last_hidden_state"
 
-  def __init__(self, n_out, combine="concat", key='*', **kwargs):
+  def __init__(self, out_dim=None, n_out=None, combine="concat", key='*', **kwargs):
     """
-    :param int n_out: dimension. output will be of shape (batch, n_out)
+    :param Dim|None out_dim:
+    :param int|None n_out: dimension. output will be of shape (batch, n_out)
     :param str combine: "concat" or "add"
     :param str|int|None key: for the state, which could be a namedtuple. see :func:`RnnCellLayer.get_state_by_key`
     """
+    if not n_out:
+      assert out_dim
+      n_out = out_dim.dimension
+    if n_out and out_dim:
+      assert n_out == out_dim.dimension
     super(GetLastHiddenStateLayer, self).__init__(**kwargs)
     assert len(self.sources) > 0
     last_states = [s.get_last_hidden_state(key=key) for s in self.sources]
@@ -4804,13 +4810,22 @@ class GetLastHiddenStateLayer(LayerBase):
     return self.output.placeholder
 
   @classmethod
-  def get_out_data_from_opts(cls, n_out, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, out_dim=None, n_out=None, **kwargs):
     """
-    :param int n_out:
+    :param str name:
+    :param list[LayerBase] sources:
+    :param Dim|None out_dim:
+    :param int|None n_out: dimension. output will be of shape (batch, n_out)
     :rtype: Data
     """
-    return super(GetLastHiddenStateLayer, cls).get_out_data_from_opts(
-      out_type={"shape": (n_out,), "dim": n_out, "batch_dim_axis": 0, "time_dim_axis": None}, **kwargs)
+    from returnn.tf.util.data import batch_dim
+    if not out_dim:
+      assert n_out
+      out_dim = FeatureDim("%s:hidden-out" % name, n_out)
+    out = Data("%s_output" % name, dim_tags=[batch_dim, out_dim])
+    out.beam = sources[0].output.beam
+    out.batch = sources[0].output.batch
+    return out
 
 
 class GetRecAccumulatedOutputLayer(LayerBase):
