@@ -99,7 +99,7 @@ class HorovodContext:
     :rtype: str
     """
     dataset_distribution = self._config.value("horovod_dataset_distribution", "shard")
-    assert dataset_distribution in {"shard", "random_seed_offset"}
+    assert dataset_distribution in {"shard", "random_seed_offset", "partition"}
     return dataset_distribution
 
   def is_dataset_distribution_shard(self):
