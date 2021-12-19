@@ -6308,9 +6308,10 @@ class DotLayer(LayerBase):
       "%s: sources %r, red1 %r, red2 %r, reduce axes must match in count" % (self, self.sources, red1, red2))
     if BehaviorVersion.get() >= 3 and (var1 is NotSpecified or var2 is NotSpecified):
       assert var1 is NotSpecified and var2 is NotSpecified
-      var1, var2 = self._auto_var_axes(a_out, b_out, a_reduce_axes, b_reduce_axes)
-    a_var_axes = a_out.get_axes_from_description(var1, allow_int=axis_desc_allow_int)
-    b_var_axes = b_out.get_axes_from_description(var2, allow_int=axis_desc_allow_int)
+      a_var_axes, b_var_axes = self._auto_var_axes(a_out, b_out, a_reduce_axes, b_reduce_axes)
+    else:
+      a_var_axes = a_out.get_axes_from_description(var1, allow_int=axis_desc_allow_int)
+      b_var_axes = b_out.get_axes_from_description(var2, allow_int=axis_desc_allow_int)
     assert not set(a_reduce_axes).intersection(a_var_axes), "%s: sources %r, red1 %r, red2 %r, var1 %r, var2 %r" % (
       self, self.sources, red1, red2, var1, var2)
     assert not set(b_reduce_axes).intersection(b_var_axes), "%s: sources %r, red1 %r, red2 %r, var1 %r, var2 %r" % (
@@ -6428,8 +6429,8 @@ class DotLayer(LayerBase):
     :param Data source2:
     :param list[int] red1:
     :param list[int] red2:
-    :return: var1 tags, var2 tags
-    :rtype: (list[Dim], list[Dim])
+    :return: var1 axes, var2 axes
+    :rtype: (list[int], list[int])
     """
     from returnn.util import BehaviorVersion
     is_equal_opts = dict(
@@ -6437,10 +6438,14 @@ class DotLayer(LayerBase):
       undefined_matches=True, derived_matches=True)
     if BehaviorVersion.get() < 11:
       is_equal_opts["broadcast_matches"] = True
-    all_dim_tags, tags_dict = Dim.get_all_dimension_tags([source1, source2], is_equal_opts=is_equal_opts)
-    tags1, tags2 = tags_dict[source1], tags_dict[source2]
-    var1 = [tag for i, tag in enumerate(tags1) if tag not in tags2 and i not in red1]
-    var2 = [tag for i, tag in enumerate(tags2) if tag not in tags1 and i not in red2]
+    tags1 = [None if i in red1 else tag for (i, tag) in enumerate(source1.dim_tags)]
+    tags2 = [None if i in red2 else tag for (i, tag) in enumerate(source2.dim_tags)]
+    var1 = [
+      i for i, tag in enumerate(tags1)
+      if tag and not any(other and tag.is_equal(other, **is_equal_opts) for other in tags2)]
+    var2 = [
+      i for i, tag in enumerate(tags2)
+      if tag and not any(other and tag.is_equal(other, **is_equal_opts) for other in tags1)]
     return var1, var2
 
   @staticmethod
@@ -6561,9 +6566,10 @@ class DotLayer(LayerBase):
       "%s: sources %r, red1 %r, red2 %r, reduce axes must match in count" % (name, sources, red1, red2))
     if BehaviorVersion.get() >= 3 and (var1 is NotSpecified or var2 is NotSpecified):
       assert var1 is NotSpecified and var2 is NotSpecified
-      var1, var2 = cls._auto_var_axes(a_out, b_out, a_reduce_axes, b_reduce_axes)
-    a_var_axes = a_out.get_axes_from_description(var1, allow_int=axis_desc_allow_int)
-    b_var_axes = b_out.get_axes_from_description(var2, allow_int=axis_desc_allow_int)
+      a_var_axes, b_var_axes = cls._auto_var_axes(a_out, b_out, a_reduce_axes, b_reduce_axes)
+    else:
+      a_var_axes = a_out.get_axes_from_description(var1, allow_int=axis_desc_allow_int)
+      b_var_axes = b_out.get_axes_from_description(var2, allow_int=axis_desc_allow_int)
     assert not set(a_reduce_axes).intersection(a_var_axes)
     assert not set(b_reduce_axes).intersection(b_var_axes)
     a_rem_axes = [i for i in range(a_out.batch_ndim) if i not in a_var_axes + a_reduce_axes]
