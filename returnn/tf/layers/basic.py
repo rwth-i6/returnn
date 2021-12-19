@@ -6304,6 +6304,8 @@ class DotLayer(LayerBase):
     a_reduce_axes = a_out.get_axes_from_description(red1, allow_int=axis_desc_allow_int)
     b_reduce_axes = b_out.get_axes_from_description(red2, allow_int=axis_desc_allow_int)
     assert a_reduce_axes and b_reduce_axes, "%s: sources %r, red1 %r, red2 %r" % (self, self.sources, red1, red2)
+    assert len(a_reduce_axes) == len(b_reduce_axes), (
+      "%s: sources %r, red1 %r, red2 %r, reduce axes must match in count" % (self, self.sources, red1, red2))
     if BehaviorVersion.get() >= 3 and (var1 is NotSpecified or var2 is NotSpecified):
       assert var1 is NotSpecified and var2 is NotSpecified
       var1, var2 = self._auto_var_axes(a_out, b_out, a_reduce_axes, b_reduce_axes)
@@ -6555,6 +6557,8 @@ class DotLayer(LayerBase):
     assert not a_out.beam or not b_out.beam or a_out.beam == b_out.beam
     b_reduce_axes = b_out.get_axes_from_description(red2, allow_int=axis_desc_allow_int)
     assert a_reduce_axes and b_reduce_axes, "%s: sources %r, red1 %r, red2 %r" % (name, sources, red1, red2)
+    assert len(a_reduce_axes) == len(b_reduce_axes), (
+      "%s: sources %r, red1 %r, red2 %r, reduce axes must match in count" % (name, sources, red1, red2))
     if BehaviorVersion.get() >= 3 and (var1 is NotSpecified or var2 is NotSpecified):
       assert var1 is NotSpecified and var2 is NotSpecified
       var1, var2 = cls._auto_var_axes(a_out, b_out, a_reduce_axes, b_reduce_axes)
@@ -6564,7 +6568,8 @@ class DotLayer(LayerBase):
     assert not set(b_reduce_axes).intersection(b_var_axes)
     a_rem_axes = [i for i in range(a_out.batch_ndim) if i not in a_var_axes + a_reduce_axes]
     b_rem_axes = [i for i in range(b_out.batch_ndim) if i not in b_var_axes + b_reduce_axes]
-    assert len(a_rem_axes) == len(b_rem_axes)
+    assert len(a_rem_axes) == len(b_rem_axes), "%s: sources %r, red1 %r, red2 %r, var1 %r, var2 %r" % (
+      name, sources, red1, red2, var1, var2)
 
     # ensure that a_rem_axes and b_rem_axes are in the same order
     map_a_to_b_rem_axes = b_out.find_matching_dim_map(a_out, a_rem_axes)
