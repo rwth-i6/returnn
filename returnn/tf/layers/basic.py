@@ -756,8 +756,8 @@ class LayerNormLayer(_ConcatInputLayer):
 
   def __init__(self, in_dim=None, out_dim=None, epsilon=1e-6, **kwargs):
     """
-    :param Dim|None in_dim:
-    :param Dim|None out_dim:
+    :param Dim|None in_dim: axis to normalize over. feature-dim by default
+    :param Dim|None out_dim: just the same as in_dim
     :param float epsilon:
     """
     super(LayerNormLayer, self).__init__(**kwargs)
