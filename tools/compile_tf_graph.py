@@ -195,6 +195,7 @@ class RecStepByStepLayer(RecLayer):
   The purpose is to execute a single step only.
   This also takes care of all needed state, and latent variables (via :class:`ChoiceLayer`).
   All the state is kept in variables, such that you can avoid feeding/fetching.
+  Instead, any decoder implementation using this must explicitly assign the state variables.
 
   E.g., if you want to implement beam search in an external application which uses the compiled graph,
   you would compile the graph with search_flag disabled (such that RETURNN does not do any related logic),
@@ -206,12 +207,14 @@ class RecStepByStepLayer(RecLayer):
     All further session runs should not need any feed values. All needed state should be in state vars.
     This will init all state vars, except stochastic_var_*.
   * Maybe you want to tile the batch dim now, according to your beam size.
-    This is "tile_batch" in the info json.
+    This is "tile_batch" in the info json,
+    or you can do it manually.
   * For each decoder step:
     * For each stochastic variable (both latent variables and observable variables),
       in the order as in "stochastic_var_order" in the info json:
       - This calculation depends on all state vars
         (except of stochastic_var_scores_* and only the dependent other stochastic_var_choice_*).
+        I.e. all those state vars must be assigned accordingly.
       - Calculate `"stochastic_var_scores_%s" % name` (which are the probabilities in +log space).
         This is "calc_scores_op" in the info json.
       - Do a choice, build up a beam of hypotheses.
@@ -225,7 +228,39 @@ class RecStepByStepLayer(RecLayer):
       The "base_*" state vars are always kept (although you might need to update the batch dim),
       and the "stochastic_var_*" state vars have the special logic for the stochastic variables.
       This is "next_step_op" in the info json.
+
+  Thus, the info json should contain the following:
+
+  * "state_vars": dict[str, dict[str, Any]]. name -> dict with:
+    * "var_op": str
+    * "shape": tuple[int|None,...]. including batch dim. always batch-major, or scalar.
+    * "dtype": str
+    The state vars usually are:
+    * "i"
+    * "end_flag" (if existing)
+    * "dyn_seq_len" (if existing)
+    * "state_*" (multiple vars)
+    * "base_*" (multiple vars). only once via init_op, maybe then batch-tiled, but otherwise not changed for once seq.
+    * "stochastic_var_*" (multiple vars)
+    However, no specific assumptions should be made on any of these.
+    It should not matter to the decoder what we have here.
+  * "stochastic_vars": dict[str,dict[str, str]]. name -> dict with:
+    * "calc_scores_op": str. op to calculate the scores state var
+    * "scores_state_var": str. == "stochastic_var_scores_%s" % name
+    * "choice_state_var": str. == "stochastic_var_choice_%s" % name
+  * "stochastic_var_order": list[str]. the order of the stochastic vars.
+
+  * "init_op": str. op. the initializer for all state vars, including encoder.
+  * "tile_batch": dict[str, str]. might not be used by the decoder. dict with:
+    * "op": str. the op for tiling the batch dim.
+    * "repetitions_placeholder": str. placeholder for the number of repetitions.
+  * "next_step_op: str. op. the update op for all state vars.
+  * "select_src_beams": dict[str, str]. might not be used by the decoder. dict with:
+    * "op": str. op name for selecting the beams.
+    * "src_beams_placeholder": str. placeholder for the number of source beams indices.
+
   """
+
   layer_class = "rec_step_by_step"
   SubnetworkRecCell = SubnetworkRecCellSingleStep
 
@@ -253,7 +288,7 @@ class RecStepByStepLayer(RecLayer):
     """
     :param str rec_layer_name:
     :param TFNetwork network:
-    :param str|None output_file_name:
+    :param str|None output_file_name: via command line --rec_step_by_step_output_file
     """
     assert rec_layer_name in network.layers
     rec_layer = network.layers[rec_layer_name]
@@ -296,10 +331,9 @@ class RecStepByStepLayer(RecLayer):
         "calc_scores_op": rec_layer.state_vars["stochastic_var_scores_%s" % name].final_op().name,
         "scores_state_var": "stochastic_var_scores_%s" % name,
         "choice_state_var": "stochastic_var_choice_%s" % name}
+
     import json
     info_str = json.dumps(info, sort_keys=True, indent=2)
-    print("JSON:")
-    print(info_str)
     if not output_file_name:
       print("No rec-step-by-step output file name specified, not storing this info.")
     else:
