@@ -16,7 +16,7 @@ import typing
 from returnn.util.basic import NotSpecified, NativeCodeCompiler
 import returnn.tf.compat as tf_compat
 # noinspection PyUnresolvedReferences
-from .data import Data, SearchBeam, Dim
+from .data import Data, SearchBeam, Dim, DimensionTag
 
 
 class CollectionKeys:
