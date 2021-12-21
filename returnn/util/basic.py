@@ -3563,7 +3563,13 @@ class NativeCodeCompiler(object):
       f.write(self.code)
     common_opts = ["-shared", "-O2"]
     if self.is_cpp:
-      common_opts += ["-std=c++14"]
+      cpp_version_opt = "-std=c++14"
+      if BackendEngine.is_tensorflow_selected():
+        from returnn.tf.util.basic import get_tf_gcc_version
+        tf_gcc_version = get_tf_gcc_version()
+        if tf_gcc_version and int(tf_gcc_version[0]) <= 4:
+          cpp_version_opt = "-std=c++11"  # gcc 4 does not support c++14, needed to support TF 1.14 and earlier
+      common_opts += [cpp_version_opt]
     if sys.platform == "darwin":
       common_opts += ["-undefined", "dynamic_lookup"]
     for include_path in self._include_paths:

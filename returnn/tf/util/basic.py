@@ -2413,16 +2413,27 @@ class VariableAssigner(object):
     session.run(self.assign_op, feed_dict={self.assign_op.inputs[1]: value})
 
 
+def get_tf_gcc_version():
+  """
+  :return: gcc version, e.g. "4.8.5"
+  :rtype: str|None
+  """
+  tf_gcc_version = getattr(tf, "__compiler_version__", None)  # e.g. "4.8.5" or "5.4.0 20160609"
+  if not tf_gcc_version:
+    return None
+  if " " in tf_gcc_version:
+    tf_gcc_version = tf_gcc_version[:tf_gcc_version.find(" ")]  # just "5.4.0"
+  return tf_gcc_version
+
+
 def _get_tf_gcc_path(bin_name):
   """
   :param str bin_name: e.g. "gcc" or "g++"
   :rtype: str
   """
   gcc_candidates = []
-  tf_gcc_version = getattr(tf, "__compiler_version__", None)
-  if tf_gcc_version:  # e.g. "4.8.5" or "5.4.0 20160609"
-    if " " in tf_gcc_version:
-      tf_gcc_version = tf_gcc_version[:tf_gcc_version.find(" ")]  # just "5.4.0"
+  tf_gcc_version = get_tf_gcc_version()
+  if tf_gcc_version:
     tf_gcc_version = tf_gcc_version.split(".")  # ["5", "4", "0"]
     for i in range(len(tf_gcc_version), 0, -1):
       gcc_candidates.append("%s-%s" % (bin_name, ".".join(tf_gcc_version[:i])))
