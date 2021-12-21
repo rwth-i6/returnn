@@ -336,6 +336,8 @@ class RecStepByStepLayer(RecLayer):
     info_str = json.dumps(info, sort_keys=True, indent=2)
     if not output_file_name:
       print("No rec-step-by-step output file name specified, not storing this info.")
+      print("JSON:")
+      print(info_str)
     else:
       with open(output_file_name, "w") as f:
         f.write(info_str)
