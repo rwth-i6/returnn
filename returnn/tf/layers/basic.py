@@ -1585,7 +1585,7 @@ class ScatterNdLayer(_ConcatInputLayer):
                filter_invalid_indices=False, **kwargs):
     """
     :param LayerBase position: indices into first axis (excluding batch) of the output
-    :param str|int position_axis: axis in `position` to replace by the output-dim
+    :param Dim|str position_axis: axis in `position` to replace by the output-dim
     :param LayerBase|None output_dim_via_time_from: use the time-dim from this layer as the output-dim
     :param Dim|None out_spatial_dim:
     :param bool filter_invalid_indices: allow for indices <0 or >= output_dim, which will be discarded in the output
@@ -1643,7 +1643,7 @@ class ScatterNdLayer(_ConcatInputLayer):
     """
     :param Data input_data: updates
     :param Data position: indices
-    :param str|int position_axis: axis in `position` to replace by the output-dim
+    :param Dim|str position_axis: axis in `position` to replace by the output-dim
     :param Dim out_spatial_dim:
     :rtype: (Data, Data, int, list[int])
     :return: common, output, axis, input_extra_axes
@@ -1681,7 +1681,7 @@ class ScatterNdLayer(_ConcatInputLayer):
     :param str name:
     :param list[LayerBase] sources:
     :param LayerBase position:
-    :param str|int position_axis: axis in `position` to replace by the output-dim
+    :param Dim|str position_axis: axis in `position` to replace by the output-dim
     :param LayerBase|None output_dim_via_time_from: use the time-dim from this layer as the output-dim
     :param Dim|None out_spatial_dim:
     :rtype: Data
