@@ -949,14 +949,16 @@ class SliceLayer(_ConcatInputLayer):
   """
   layer_class = "slice"
 
-  def __init__(self, axis, slice_start=None, slice_end=None, slice_step=None, **kwargs):
+  def __init__(self, axis, slice_start=None, slice_end=None, slice_step=None, out_dim=None, **kwargs):
     """
     :param Dim|str axis:
     :param str|None axis_kind: "T" for time, "B" for batch, "F" for feature
     :param int|None slice_start:
     :param int|None slice_end:
     :param int|None slice_step:
+    :param Dim|None out_dim:
     """
+    out_dim  # noqa  # via get_out_data_from_opts
     super(SliceLayer, self).__init__(**kwargs)
     axis = self.input_data.get_axis_from_description(axis)
     dim_slice = slice(slice_start, slice_end, slice_step)
