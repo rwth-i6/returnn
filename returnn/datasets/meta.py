@@ -50,7 +50,7 @@ class EpochWiseFilter:
   def filter_epoch(cls, opts, seq_order, get_seq_len, debug_msg_prefix):
     """
     :param dict[str]|returnn.util.basic.CollectionReadCheckCovered opts:
-    :param list[int] seq_order: list of seq idxs
+    :param typing.Sequence[int] seq_order: list of seq idxs
     :param ((int)->int) get_seq_len: seq idx -> len
     :param str debug_msg_prefix:
     :return: new seq_order
@@ -81,7 +81,7 @@ class EpochWiseFilter:
   def filter(self, epoch, seq_order, get_seq_len):
     """
     :param int|None epoch:
-    :param list[int] seq_order: list of seq idxs
+    :param typing.Sequence[int] seq_order: list of seq idxs
     :param ((int)->int) get_seq_len: seq idx -> len
     :return: new seq_order
     """

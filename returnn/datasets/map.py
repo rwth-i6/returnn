@@ -130,7 +130,7 @@ class MapDatasetWrapper(CachedDataset2):
 
   def get_current_seq_order(self):
     """
-    :rtype: list[int]
+    :rtype: typing.Sequence[int]
     """
     assert self._seq_order is not None
     return self._seq_order

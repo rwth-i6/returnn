@@ -374,21 +374,16 @@ class Dataset(object):
     :param int num_seqs:
     :param ((int) -> int)|None get_seq_len: function (originalSeqIdx: int) -> int
     :return: the order for the given epoch. such that seq_idx -> underlying idx
-    :rtype: list[int]
+    :rtype: typing.Sequence[int]
     """
     partition_epoch = self.partition_epoch or 1
     repeat_epoch = self.repeat_epoch or 1
-    if not epoch:
-      epoch = 1
-    full_epoch = epoch
-    if partition_epoch > 1:
-      full_epoch = (epoch - 1) // partition_epoch + 1
     assert num_seqs > 0
-    seq_index = list(range(num_seqs))  # type: typing.List[int]  # the real seq idx after sorting
     if self._seq_order_seq_lens_file:
       get_seq_len = self._get_seq_order_seq_lens_by_idx
+
     if self.seq_ordering == 'default':
-      pass  # Keep order as-is.
+      seq_index = range(num_seqs)
     elif self.seq_ordering.startswith("default_every_n:"):
       # This order is useful if you have "initial_state": "keep_over_epoch",
       # where num == max_seqs, batch_size = inf, max_seq_len = inf, chunking = None.
@@ -397,15 +392,20 @@ class Dataset(object):
       seq_index = numpy.arange(num_seqs // num, dtype="int64").repeat(num)
       for i in range(1, num):
         seq_index[i::num] += i * (num_seqs // num)
-      seq_index = list(seq_index)
     elif self.seq_ordering == 'reverse':
-      seq_index = list(reversed(seq_index))
-    elif self.seq_ordering == 'sorted':
+      seq_index = range(num_seqs - 1, -1, -1)
+    elif self.seq_ordering in ['sorted', 'sorted_reverse']:
       assert get_seq_len
-      seq_index.sort(key=get_seq_len)  # sort by length, starting with shortest
-    elif self.seq_ordering == "sorted_reverse":
-      assert get_seq_len
-      seq_index.sort(key=get_seq_len, reverse=True)  # sort by length, in reverse, starting with longest
+      reverse = -1 if self.seq_ordering == 'sorted_reverse' else 1
+      seq_lens = [reverse * get_seq_len(i) for i in range(num_seqs)]
+      seq_index = numpy.argsort(seq_lens, kind="stable")
+    elif self.seq_ordering.startswith('random'):
+      tmp = self.seq_ordering.split(':')
+      nth = int(tmp[1]) if len(tmp) > 1 else 1
+      # Keep this deterministic! Use fixed seed.
+      rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
+      random_generator = numpy.random.RandomState(rnd_seed)
+      seq_index = random_generator.permutation(num_seqs)
     elif self.seq_ordering.startswith('sort_bin_shuffle'):
       # Shuffle seqs, sort by length, and shuffle bins (then shuffle seqs within each bin if sort_bin_shuffle_x2).
       assert get_seq_len
@@ -415,9 +415,9 @@ class Dataset(object):
         nth = 1
       else:
         nth = int(tmp[1])
-      rnd_seed = ((full_epoch - 1) // nth + 1) if full_epoch else 1
-      rnd = Random(rnd_seed + self.random_seed_offset)
-      rnd.shuffle(seq_index)  # Shuffle sequences.
+      rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
+      random_generator = numpy.random.RandomState(rnd_seed)
+      seq_index = random_generator.permutation(num_seqs).tolist()  # type: typing.List[int]
       seq_index.sort(key=get_seq_len)  # Sort by length, starting with shortest.
       if len(tmp) == 0:
         bins = 2
@@ -426,8 +426,7 @@ class Dataset(object):
           bins = max(num_seqs // int(tmp[0][1:]), 2)
         else:  # the number of bins
           bins = int(tmp[0])
-      bin_ids = list(range(bins))
-      rnd.shuffle(bin_ids)  # Shuffle bins.
+      bin_ids = random_generator.permutation(bins)  # Shuffle bins.
       out_index = []
       for i in bin_ids:
         if i == bins - 1:
@@ -435,9 +434,9 @@ class Dataset(object):
         else:
           part = seq_index[i * len(seq_index) // bins:(i + 1) * len(seq_index) // bins][:]
         if self.seq_ordering.startswith('sort_bin_shuffle_x2'):
-          rnd.shuffle(part)  # Shuffle within the bin.
-        out_index += part
-      seq_index = out_index
+          random_generator.shuffle(part)  # Shuffle within the bin.
+        out_index.append(part)
+      seq_index = numpy.concatenate(out_index)
     elif self.seq_ordering.startswith('laplace'):
       assert get_seq_len
       tmp = self.seq_ordering.split(':')[1:]
@@ -452,27 +451,21 @@ class Dataset(object):
         nth = 1
       else:
         nth = int(tmp[1])
-      rnd_seed = ((full_epoch - 1) // nth + 1) if full_epoch else 1
-      rnd = Random(rnd_seed + self.random_seed_offset)
-      rnd.shuffle(seq_index)
+      rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
+      random_generator = numpy.random.RandomState(rnd_seed)
+      seq_index = random_generator.permutation(num_seqs)  # type: numpy.ndarray
       out_index = []
       for i in range(bins):
         if i == bins - 1:
-          part = seq_index[i * len(seq_index) // bins:][:]
+          part = seq_index[i * len(seq_index) // bins:].tolist()
         else:
-          part = seq_index[i * len(seq_index) // bins:(i + 1) * len(seq_index) // bins][:]
+          part = seq_index[i * len(seq_index) // bins:(i + 1) * len(seq_index) // bins].tolist()
         part.sort(key=get_seq_len, reverse=(i % 2 == 1))
         out_index += part
       seq_index = out_index
-    elif self.seq_ordering.startswith('random'):
-      tmp = self.seq_ordering.split(':')
-      nth = int(tmp[1]) if len(tmp) > 1 else 1
-      # Keep this deterministic! Use fixed seed.
-      rnd_seed = (full_epoch - 1) / nth + 1
-      rnd = Random(rnd_seed + self.random_seed_offset)
-      rnd.shuffle(seq_index)
     else:
       assert False, "invalid batching specified: " + self.seq_ordering
+
     if self.unique_seq_tags:
       # Note: This is as generic as possible, but requires that get_all_tags is implemented.
       all_seq_tags = self.get_all_tags()
@@ -483,7 +476,7 @@ class Dataset(object):
     if partition_epoch > 1:
       seq_index = self._apply_partition_epoch(seq_index, partition_epoch, epoch)
     if repeat_epoch > 1:
-      seq_index = seq_index * repeat_epoch
+      seq_index = list(seq_index) * repeat_epoch
     if self.seq_tags_filter is not None:
       # Note: This is as generic as possible, but requires that get_all_tags is implemented.
       assert seq_index
@@ -499,11 +492,11 @@ class Dataset(object):
   @classmethod
   def _apply_partition_epoch(cls, seq_index, partition_epoch, epoch):
     """
-    :param list[int] seq_index: full list of ordered sequence indices
+    :param typing.Sequence[int] seq_index: full list of ordered sequence indices
     :param int partition_epoch: number of partitions seq_index should be split into
     :param int|None epoch: current epoch
     :return: partition of seq_index for current epoch
-    :rtype: list[int]
+    :rtype: typing.Sequence[int]
     """
     num_seqs = len(seq_index)
     current_partition = ((epoch or 1) - 1) % partition_epoch
@@ -518,16 +511,19 @@ class Dataset(object):
 
     return seq_index
 
-  def _get_random_seed_for_epoch(self, epoch):
+  def _get_random_seed_for_epoch(self, epoch, num_epochs_fixed=1):
     """
     :param int|None epoch:
+    :param int num_epochs_fixed: keep random seed fixed for n subsequent epochs
     :rtype: int
     """
     partition_epoch = self.partition_epoch or 1
-    full_epoch = epoch or 1
+    seed = epoch or 1
     if partition_epoch > 1:
-      full_epoch = (full_epoch - 1) // partition_epoch + 1
-    return full_epoch + self.random_seed_offset
+      seed = (seed - 1) // partition_epoch + 1  # taking partitions requires constant seed during full epoch
+    if num_epochs_fixed > 1:
+      seed = (seed - 1) // num_epochs_fixed + 1
+    return seed + self.random_seed_offset
 
   def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
@@ -558,7 +554,7 @@ class Dataset(object):
     :return: many datasets use self.get_seq_order_for_epoch. this function would return the current seq order
       for the current epoch, after self.init_seq_order was called.
       Not all datasets implement this.
-    :rtype: list[int]
+    :rtype: typing.Sequence[int]
     """
     raise OptionalNotImplementedError
 

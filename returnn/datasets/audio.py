@@ -133,7 +133,7 @@ class OggZipDataset(CachedDataset2):
     if fixed_random_subset:
       self._filter_fixed_random_subset(fixed_random_subset)
     self.epoch_wise_filter = EpochWiseFilter(epoch_wise_filter) if epoch_wise_filter else None
-    self._seq_order = None  # type: typing.Optional[typing.List[int]]
+    self._seq_order = None  # type: typing.Optional[typing.Sequence[int]]
     self.init_seq_order()
 
   def _read(self, filename, zip_index):
