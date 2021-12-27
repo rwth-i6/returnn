@@ -859,7 +859,6 @@ class Engine(EngineBase):
   def _check_devices(self):
     from returnn.tf.util.basic import is_gpu_available
     if self.is_requesting_for_gpu():
-      assert tf.test.is_built_with_cuda(), "You use a CPU-only TF version. Use tensorflow-gpu."
       assert is_gpu_available(), "no GPU available"
     else:
       if is_gpu_available():
