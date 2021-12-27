@@ -2547,7 +2547,7 @@ class Data(object):
     return Data(name=str(x.op.name), shape=x_shape, batch_dim_axis=None, dtype=x.dtype.name, placeholder=x)
 
   @classmethod
-  def template_from_constant(cls, x, name, dtype=None, shape=None, with_batch_dim=False):
+  def template_from_constant(cls, x, name, dtype=None, shape=None, with_batch_dim=False, sparse_dim=None):
     """
     :param int|float|bool|numpy.ndarray x: not actually assigned to the returned Data, just for the shape and dtype
     :param str name:
@@ -2555,6 +2555,7 @@ class Data(object):
     :param list[Dim|int]|tuple[Dim|int]|None shape: for verification, and defining dim tags.
       might also already include the batch-dim. (Then with_batch_dim is ignored.)
     :param bool with_batch_dim:
+    :param Dim|None sparse_dim:
     :return: data template
     :rtype: Data
     """
@@ -2596,7 +2597,7 @@ class Data(object):
       dim_tags.append(d)
     if with_batch_dim and batch_dim not in dim_tags:
       dim_tags.insert(0, batch_dim)
-    return Data(name=name, dim_tags=dim_tags, dtype=dtype)
+    return Data(name=name, dim_tags=dim_tags, dtype=dtype, sparse_dim=sparse_dim)
 
   def sanity_check(self, ignore_placeholder=False, assume_complete=True):
     """
