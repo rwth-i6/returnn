@@ -1092,12 +1092,14 @@ def is_gpu_available():
   If you want to know whether the current TF session has a GPU available,
   use :func:`is_gpu_available_in_session`.
 
+  Note that this does not tell whether the GPU or TF supports CUDA.
+  See :func:`is_tf_cuda_build` for that.
+
   Note that a call to this will trigger the internal TF thread pool inits,
   so you should call :func:`setup_tf_thread_pools` first.
 
   :rtype: bool
   """
-  # Also, we could maybe use tf.test.is_gpu_available().
   return len(get_available_gpu_devices()) > 0
 
 
@@ -1160,7 +1162,7 @@ def get_available_gpu_cuda_min_compute_capability():
 
 def is_tf_cuda_build():
   """
-  :return: whether TF was build with CUDA support
+  :return: whether TF was build with CUDA support. also see :func:`is_gpu_available`
   :rtype: bool
   """
   from tensorflow.python.platform import build_info
