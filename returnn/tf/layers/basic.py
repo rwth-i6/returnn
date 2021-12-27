@@ -2494,10 +2494,14 @@ class ConstantLayer(LayerBase):
     :param str|None dtype:
     :param bool with_batch_dim:
     """
+    import numpy
     assert not sources, "constant layer cannot have sources"
     super(ConstantLayer, self).__init__(**kwargs)
+    shape_ = value.shape if isinstance(value, numpy.ndarray) else ()
     value = tf.constant(value, dtype=self.output.dtype)
-    if with_batch_dim:
+    if len(shape_) == 0 and self.output.batch_ndim > 0:
+      value = tf.fill([d.get_dim_value() for d in self.output.dim_tags], value)
+    elif with_batch_dim:
       # Add batch-dim to the constant.
       from returnn.tf.util.basic import expand_dims_unbroadcast
       value = expand_dims_unbroadcast(value, axis=0, dim=self.get_batch_dim())
