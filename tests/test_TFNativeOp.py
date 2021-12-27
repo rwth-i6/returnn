@@ -13,7 +13,7 @@ import tensorflow as tf
 from returnn.tf.native_op import *
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
-from returnn.tf.util.basic import is_gpu_available, get_available_gpu_min_compute_capability, CudaEnv
+from returnn.tf.util.basic import is_gpu_available, is_tf_cuda_build, CudaEnv
 import returnn.util.basic as util
 import returnn.native_op as native_op
 from returnn.util.basic import unicode
@@ -763,7 +763,7 @@ def native_lstm2_slice(name, **kwargs):
   return wrap_lstm_slice_start_step(op=native_lstm2, name="%s_slice" % name, **kwargs)
 
 
-def check_lstm_ops(op1, op2, name1, name2, rtol=1e-7, **kwargs):
+def check_lstm_ops(op1, op2, name1, name2, rtol=1e-6, **kwargs):
   mask_bc = tf.expand_dims(kwargs["mask"], axis=2)
   mask_bc.set_shape(tf.TensorShape((kwargs["n_time"], kwargs["n_batch"], 1)))
   for start, step in [(0, 1), (0, -1), (1, 1), (1, -1), (0, 2), (0, -2)]:
@@ -905,7 +905,7 @@ def wrap_lstm_grad(op, x, h_0, c_0, dy, dd, mask, W_f, W_r, b, n_time, n_batch, 
   return y, d, dx, dh0, dc0, dWf, dWr, db
 
 
-def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclude=(), **kwargs):
+def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=5e-5, exclude=(), **kwargs):
   dy = tf.convert_to_tensor(dy, name="dy")
   dd = tf.convert_to_tensor(dd, name="dd")
   mask_bc = tf.expand_dims(kwargs["mask"], axis=2)
@@ -3114,7 +3114,7 @@ def test_warprnnt_multiple_batches():
   _run_rnnt(acts, labels, input_lengths, label_lengths, expected_costs, expected_grads, 0)
 
 
-@unittest.skipIf(not is_gpu_available(), "no gpu on this system")
+@unittest.skipIf(not is_gpu_available() or not is_tf_cuda_build(), "no GPU or CUDA on this system")
 def test_warprna_forward():
   from returnn.extern.WarpRna import rna_loss, is_checked_out
   if not is_checked_out():

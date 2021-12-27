@@ -1092,12 +1092,14 @@ def is_gpu_available():
   If you want to know whether the current TF session has a GPU available,
   use :func:`is_gpu_available_in_session`.
 
+  Note that this does not tell whether the GPU or TF supports CUDA.
+  See :func:`is_tf_cuda_build` for that.
+
   Note that a call to this will trigger the internal TF thread pool inits,
   so you should call :func:`setup_tf_thread_pools` first.
 
   :rtype: bool
   """
-  # Also, we could maybe use tf.test.is_gpu_available().
   return len(get_available_gpu_devices()) > 0
 
 
@@ -1139,7 +1141,7 @@ def get_available_gpu_devices():
   return [x for x in get_tf_list_local_devices() if x.device_type == 'GPU']
 
 
-def get_available_gpu_min_compute_capability():
+def get_available_gpu_cuda_min_compute_capability():
   """
   Uses :func:`get_available_gpu_devices`.
 
@@ -1156,6 +1158,19 @@ def get_available_gpu_min_compute_capability():
     else:
       cap = min(cap, dev_cap)
   return cap
+
+
+def is_tf_cuda_build():
+  """
+  :return: whether TF was build with CUDA support. also see :func:`is_gpu_available`
+  :rtype: bool
+  """
+  from tensorflow.python.platform import build_info
+  if hasattr(build_info, "build_info"):  # >= TF 2
+    return build_info.build_info["is_cuda_build"]
+  if hasattr(build_info, "is_cuda_build"):  # TF 1
+    return getattr(build_info, "is_cuda_build")
+  raise Exception("Unexpected TF build_info %r from TF version %s." % (vars(build_info), tf.__version__))
 
 
 def dot(a, b, transpose_b=False):
@@ -2707,7 +2722,7 @@ class OpCodeCompiler(NativeCodeCompiler):
   def __init__(self, use_cuda_if_available=True, cuda_auto_min_compute_capability=True,
                include_paths=(), ld_flags=(), c_macro_defines=None, **kwargs):
     self._cuda_env = use_cuda_if_available and CudaEnv.get_instance()
-    if use_cuda_if_available and is_gpu_available():
+    if use_cuda_if_available and is_gpu_available() and is_tf_cuda_build():
       # Currently we assume that if we provide CUDA code (thus set use_cuda_if_available=True),
       # that if there is a GPU available (as TF reports it),
       # we also expect that we find CUDA.
@@ -2717,7 +2732,7 @@ class OpCodeCompiler(NativeCodeCompiler):
     self._nvcc_opts = []
     if self._with_cuda() and cuda_auto_min_compute_capability:
       # Get CUDA compute capability of the current GPU device.
-      min_compute_capability = get_available_gpu_min_compute_capability()
+      min_compute_capability = get_available_gpu_cuda_min_compute_capability()
       if min_compute_capability:
         min_compute_capability = min(min_compute_capability, self._cuda_env.get_max_compute_capability())
         self._nvcc_opts += ["-arch", "compute_%i" % int(min_compute_capability * 10)]
