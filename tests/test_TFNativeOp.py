@@ -13,7 +13,7 @@ import tensorflow as tf
 from returnn.tf.native_op import *
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
-from returnn.tf.util.basic import is_gpu_available, get_available_gpu_cuda_min_compute_capability, CudaEnv
+from returnn.tf.util.basic import is_gpu_available, is_tf_cuda_build, CudaEnv
 import returnn.util.basic as util
 import returnn.native_op as native_op
 from returnn.util.basic import unicode
@@ -3114,7 +3114,7 @@ def test_warprnnt_multiple_batches():
   _run_rnnt(acts, labels, input_lengths, label_lengths, expected_costs, expected_grads, 0)
 
 
-@unittest.skipIf(not is_gpu_available(), "no gpu on this system")
+@unittest.skipIf(not is_gpu_available() or not is_tf_cuda_build(), "no GPU or CUDA on this system")
 def test_warprna_forward():
   from returnn.extern.WarpRna import rna_loss, is_checked_out
   if not is_checked_out():
