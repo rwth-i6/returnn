@@ -9,7 +9,7 @@ import os
 import typing
 import tensorflow as tf
 from tensorflow.python.framework import ops
-from returnn.tf.util.basic import OpCodeCompiler
+from returnn.tf.util.basic import OpCodeCompiler, is_tf_cuda_build
 
 
 warprna_dir = os.path.dirname(os.path.abspath(__file__))
@@ -36,6 +36,7 @@ def init_warprna(verbose=False):
   if _tf_mod:
     return
   assert is_checked_out(), "submodule not checked out? Run `git submodule update --init --recursive`"
+  assert is_tf_cuda_build(), "TF with CUDA support required"
 
   src_files = [
     '%s/tensorflow_binding/src/warp_rna_op.cc' % submodule_dir,
