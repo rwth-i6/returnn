@@ -2547,13 +2547,16 @@ class Data(object):
     return Data(name=str(x.op.name), shape=x_shape, batch_dim_axis=None, dtype=x.dtype.name, placeholder=x)
 
   @classmethod
-  def template_from_constant(cls, x, name, dtype=None, shape=None, with_batch_dim=False):
+  def template_from_constant(cls, x, name, dtype=None, shape=None, with_batch_dim=False, sparse_dim=None):
     """
-    :param int|float|bool|numpy.ndarray x:
+    :param int|float|bool|numpy.ndarray x: not actually assigned to the returned Data, just for the shape and dtype
     :param str name:
     :param str|None dtype:
-    :param list[Dim|int]|tuple[Dim|int]|None shape: for verification, and defining dim tags
+    :param list[Dim|int]|tuple[Dim|int]|None shape: for verification, and defining dim tags.
+      might also already include the batch-dim. (Then with_batch_dim is ignored.)
     :param bool with_batch_dim:
+    :param Dim|None sparse_dim:
+    :return: data template
     :rtype: Data
     """
     import numpy
@@ -2570,16 +2573,21 @@ class Data(object):
         raise TypeError("%r: cannot handle value %r of type %r" % (name, x, type(x)))
     shape_ = x.shape if isinstance(x, numpy.ndarray) else ()
     if shape is not None:
-      assert len(shape) == len(shape_), "%r: shape does not match in ndim, %r vs %r" % (name, shape, shape_)
+      if len(shape) > len(shape_) == 0:
+        pass  # Scalar given, complex shape wanted. Allow this.
+      else:
+        assert len(shape) == len(shape_), "%r: shape does not match in ndim, %r vs %r" % (name, shape, shape_)
     else:
       shape = shape_
     dim_tags = []
-    for i, (d, d_) in enumerate(zip(shape, shape_)):
-      assert isinstance(d_, int)
+    for i, d in enumerate(shape):
+      d_ = shape_[i] if len(shape_) > 0 else None
       if isinstance(d, Dim):
-        assert d.dimension == d_
+        if len(shape_) > 0:
+          assert d.dimension == d_
       elif isinstance(d, int):
-        assert d == d_
+        if len(shape_) > 0:
+          assert d == d_
         d = Dim(
           kind=Dim.Types.Spatial if i < len(shape) - 1 else Dim.Types.Feature,
           description="%s:static:%i" % (name, i),
@@ -2587,9 +2595,9 @@ class Data(object):
       else:
         raise TypeError("%r shape[%i] invalid type %r in shape %r" % (name, i, type(d), shape))
       dim_tags.append(d)
-    if with_batch_dim:
+    if with_batch_dim and batch_dim not in dim_tags:
       dim_tags.insert(0, batch_dim)
-    return Data(name=name, dim_tags=dim_tags, dtype=dtype)
+    return Data(name=name, dim_tags=dim_tags, dtype=dtype, sparse_dim=sparse_dim)
 
   def sanity_check(self, ignore_placeholder=False, assume_complete=True):
     """
