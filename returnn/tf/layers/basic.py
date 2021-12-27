@@ -179,7 +179,7 @@ def get_concat_sources_data_template(src_layers, out_dim=None, allow_broadcast_a
 
 
 def concat_sources_with_opt_dropout(src_layers, out_dim=None,
-                                    dropout=0, dropout_noise_shape=None, dropout_on_forward=False,
+                                    dropout=0, dropout_axis=None, dropout_noise_shape=None, dropout_on_forward=False,
                                     allow_broadcast_all_sources=NotSpecified):
   """
   Concatenates in the feature dim (see :func:`concat_sources`),
@@ -188,6 +188,7 @@ def concat_sources_with_opt_dropout(src_layers, out_dim=None,
   :param list[LayerBase] src_layers:
   :param Dim|None out_dim:
   :param float dropout: dropout rate that will be applied if train_flag is set or dropout_on_forward is enabled
+  :param Dim|str|list[Dim|str]|None dropout_axis:
   :param tuple|list|dict[Dim|str|list[Dim|str]|tuple[Dim|str],int|str|None]|None dropout_noise_shape:
     provide 1 for broadcasting or None otherwise for each axis.
     The default "None" will broadcast across all dynamic axes including the batch axis.
@@ -206,6 +207,11 @@ def concat_sources_with_opt_dropout(src_layers, out_dim=None,
   if not dropout:
     return data.copy()
   assert not data.sparse, "need dense data when dropout is used; sources: %r" % (src_layers,)
+  if dropout_axis is not None:
+    dropout_axis = data.get_axes_from_description(dropout_axis, allow_int=False)
+    assert not dropout_noise_shape, (
+      "do not provide both dropout_axis %r and dropout_noise_shape %r" % (dropout_axis, dropout_noise_shape))
+    dropout_noise_shape = [dim if i in dropout_axis else 1 for i, dim in enumerate(data.batch_shape)]
   if isinstance(dropout_noise_shape, dict) or not dropout_noise_shape:
     # Default noise_shape behavior is like old for now:
     # All dynamic dimensions (batch,time) will use the same dropout-mask broadcasted.
@@ -244,11 +250,14 @@ class _ConcatInputLayer(LayerBase):
   """
 
   def __init__(self, in_dim=None, out_shape=None,
-               dropout=0, dropout_noise_shape=None, dropout_on_forward=False, mask=None, **kwargs):
+               dropout=0, dropout_axis=None, dropout_noise_shape=None, dropout_on_forward=False,
+               mask=None,
+               **kwargs):
     """
     :param Dim|None in_dim:
     :param set[Dim|returnn.tf.util.data._ImplicitDim]|tuple|list|None out_shape:
     :param float dropout: 0.0 means to apply no dropout. dropout will only be applied during training
+    :param Dim|str|list[Dim|str]|None dropout_axis:
     :param dict[Dim|str|list[Dim|str]|tuple[Dim|str],int|str|None]|None dropout_noise_shape:
       see :func:`Data.get_bc_shape`
     :param bool dropout_on_forward: apply dropout during inference
@@ -265,7 +274,8 @@ class _ConcatInputLayer(LayerBase):
     if self.sources:
       self.input_data = concat_sources_with_opt_dropout(
         self.sources, out_dim=in_dim,
-        dropout=dropout, dropout_noise_shape=dropout_noise_shape, dropout_on_forward=dropout_on_forward,
+        dropout=dropout, dropout_axis=dropout_axis, dropout_noise_shape=dropout_noise_shape,
+        dropout_on_forward=dropout_on_forward,
         allow_broadcast_all_sources=True if out_shape else NotSpecified)
 
 
