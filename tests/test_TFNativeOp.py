@@ -13,7 +13,7 @@ import tensorflow as tf
 from returnn.tf.native_op import *
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
-from returnn.tf.util.basic import is_gpu_available, get_available_gpu_min_compute_capability, CudaEnv
+from returnn.tf.util.basic import is_gpu_available, get_available_gpu_cuda_min_compute_capability, CudaEnv
 import returnn.util.basic as util
 import returnn.native_op as native_op
 from returnn.util.basic import unicode
