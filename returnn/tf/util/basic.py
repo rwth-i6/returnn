@@ -1163,8 +1163,12 @@ def is_tf_cuda_build():
   :return: whether TF was build with CUDA support
   :rtype: bool
   """
-  from tensorflow.python.platform.build_info import build_info
-  return build_info["is_cuda_build"]
+  from tensorflow.python.platform import build_info
+  if hasattr(build_info, "build_info"):  # >= TF 2
+    return build_info.build_info["is_cuda_build"]
+  if hasattr(build_info, "is_cuda_build"):  # TF 1
+    return getattr(build_info, "is_cuda_build")
+  raise Exception("Unexpected TF build_info %r from TF version %s." % (vars(build_info), tf.__version__))
 
 
 def dot(a, b, transpose_b=False):
