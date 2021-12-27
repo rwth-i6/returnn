@@ -1485,6 +1485,19 @@ def test_dropout_layer_net_construct():
     network.construct_from_dict(net_dict)
 
 
+def test_DropoutLayer_axis():
+  with make_scope() as session:
+    net_dict = {
+      "drop": {"class": "dropout", "dropout": 0.3, "dropout_axis": ["T", "F"], "from": "data:data"},
+      "output": {"class": "softmax", "loss": "ce", "from": "drop"}
+    }
+    config = Config({"num_inputs": 4, "num_outputs": 9})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+    network.initialize_params(session)
+    session.run(network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(network.extern_data))
+
+
 def test_subnetwork_layer_net_construct():
   with make_scope() as session:
     net_dict = {
