@@ -4428,7 +4428,7 @@ def test_reclayer_opt_output_consistent_format():
       'from': [],
       'max_seq_len': 10,
       'unit': {
-        'constant': {'class': 'constant', 'value': 1.0},  # scalar
+        'constant': {'class': 'constant', 'value': 1.0, "shape": [batch_dim]},  # scalar
         'add': {
           'class': 'combine', 'from': ['prev:i', 'constant'], 'kind': 'add',
           "out_shape": {batch_dim}},  # [B] via 'i'. [T,B] outside
@@ -4979,6 +4979,82 @@ def test_subnet_load_on_init_rec():
     print(output_np)
     assert_almost_equal(output_orig_np, output_np)
     print("They are equal!")
+
+
+def test_reclayer_prev_template_with_out_shape():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+  dim_tags = {
+    'extern_data.data.dim_tags.1.time': SpatialDim('time'),
+    'extern_data.data.dim_tags.2.input': FeatureDim('input', 13),
+  }
+
+  extern_data = {
+    'data': {
+      'dim_tags': (
+        batch_dim,
+        dim_tags['extern_data.data.dim_tags.1.time'],
+        dim_tags['extern_data.data.dim_tags.2.input']
+      ),
+      'dtype': 'float32',
+      'available_for_inference': True
+    }
+  }
+
+  net_dict = {
+    'reduce': {
+      'class': 'reduce',
+      'from': 'data:data',
+      'mode': 'mean',
+      'axis': dim_tags['extern_data.data.dim_tags.1.time'],
+      'out_shape': {batch_dim, dim_tags['extern_data.data.dim_tags.2.input']}
+    },
+    'output': {
+      'class': 'rec',
+      'from': [],
+      'unit': {
+        'constant_1': {'class': 'constant', 'value': 1.0},
+        'state.i': {
+          'class': 'combine',
+          'from': ['prev:state.i', 'constant_1'],
+          'kind': 'add',
+          'out_shape': {}
+        },
+        'constant_2_B': {'class': 'constant', 'value': 5.0, 'shape': [batch_dim]},
+        'greater_equal': {
+          'class': 'compare',
+          'from': ['state.i', 'constant_2_B'],
+          'kind': 'greater_equal',
+          'out_shape': {batch_dim}
+        },
+        'end': {
+          'class': 'copy',
+          'from': 'greater_equal',
+          'out_shape': {batch_dim}
+        },
+        'mul': {
+          'class': 'combine',
+          'from': ['state.i', 'base:reduce'],
+          'kind': 'mul',
+          'out_shape': {batch_dim, dim_tags['extern_data.data.dim_tags.2.input']}
+        },
+        'output': {
+          'class': 'copy',
+          'from': 'mul',
+          'out_shape': {batch_dim, dim_tags['extern_data.data.dim_tags.2.input']}
+        }
+      },
+      'max_seq_len': 10,
+      'include_eos': True,
+    },
+  }
+
+  with make_scope() as session:
+    config = Config({"extern_data": extern_data})
+    network = TFNetwork(config=config)
+    network.construct_from_dict(net_dict)
+    from test_TFNetworkLayer import make_feed_dict
+    session.run(network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(network.extern_data))
 
 
 def test_convert_lstm_params_save_load():
@@ -7411,7 +7487,6 @@ def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis,
 
   # Accumulate keys/values or rename the axis
   key_dim_tag = Dim(kind=Dim.Types.Time, description='self-att-keys')
-  key_axis = 'stag:' + key_dim_tag.description
   if inside_rec_layer:
     d[output + '_key_accum'] = {
       'class': 'cum_concat', 'from': [output + '_key'], 'out_spatial_dim': key_dim_tag}  # [B,T|rec-history,n,F|d_k]
@@ -7431,7 +7506,7 @@ def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis,
     'reduce': 'dim:%i' % key_dim}  # [B,n,T?,T|rec-history]
 
   d[output + '_weights'] = {
-    'class': 'softmax_over_spatial', 'from': [output + '_energy'], 'axis': key_axis,
+    'class': 'softmax_over_spatial', 'from': [output + '_energy'], 'axis': key_dim_tag,
     'energy_factor': key_dim ** -0.5}  # [B,n,T?,T|rec-history]
   d[output + '_weights_drop'] = {
     'class': 'dropout', 'dropout_noise_shape': {'*': None}, 'from': [output + '_weights'],
@@ -7439,13 +7514,14 @@ def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis,
 
   d[output + '_output'] = {
     'class': 'dot', 'from': [output + '_weights_drop', output + '_value_accum'],
-    'reduce': key_axis}  # [B,n,T?,F|d_v]
+    'reduce': key_dim_tag}  # [B,n,T?,F|d_v]
   d[output + '_att'] = {
     'class': 'merge_dims', 'axes': ["dim:%i" % num_heads, "dim:%i" % value_dim],
     'from': output + '_output'}  # [B,T?,F|n*d_v]
 
 
 def test_CumConcatLayer_self_attention_equal_to_SelfAttentionLayer():
+  from returnn.tf.util.data import batch_dim
   n_time = 13
   num_heads, key_dim, value_dim = 2, 3, 3
   for inside_rec_layer in [False, True]:
@@ -7458,8 +7534,9 @@ def test_CumConcatLayer_self_attention_equal_to_SelfAttentionLayer():
           "output": {
             "class": "rec", "target": "classes", "from": [],
             "unit": {
+              "const0": {"class": "constant", "value": 0.0, "shape": [batch_dim, 1]},
               "lin": {
-                "class": "linear", "from": "prev:lin", "with_bias": True, "bias_init": "glorot_normal", "n_out": 5},
+                "class": "linear", "from": ["prev:lin", "const0"], "bias_init": "glorot_normal", "n_out": 5},
               "single_layer_att": {
                 "class": "self_attention", "from": "lin", "num_heads": num_heads,
                 "total_key_dim": num_heads * key_dim, "n_out": num_heads * value_dim,

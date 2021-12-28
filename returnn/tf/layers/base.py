@@ -373,7 +373,7 @@ class LayerBase(object):
     # You are supposed to set self.output.{batch_dim_axis,time_dim_axis} explicitly,
     # as well as check the inputs if they are as you would suggest.
     # However, a good default is often to use the same as the input.
-    if all([k not in out_type for k in Data.SpecialAxesNames]) and "dim_tags" not in out_type:
+    if all([k not in out_type for k in Data.SpecialAxesNames + ("dim_tags", "shape")]):
       if sources_data:
         out_type.setdefault("batch_dim_axis", sources_data.batch_dim_axis)
         out_type.setdefault("time_dim_axis", sources_data.time_dim_axis)
@@ -1568,7 +1568,8 @@ class LayerBase(object):
     # Note that there still might be other axes which we do not unbroadcast here.
     # Thus, concat_in_time was fixed now, and maybe we actually do not need this anymore.
     shape = list(bc_shape)
-    shape[data.batch_dim_axis] = batch_dim
+    if data.have_batch_axis():
+      shape[data.batch_dim_axis] = batch_dim
     if isinstance(v, (float, int)):
       with tf.name_scope("init_%s_const" % name):
         from returnn.tf.util.basic import constant_with_shape

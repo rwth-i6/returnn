@@ -4775,6 +4775,9 @@ class ConvLayer(_ConcatInputLayer):
     if in_spatial_dims:
       assert len(in_spatial_dims) == len(filter_size)
     padding = padding.upper()
+    # Be relaxed about incorrect input data. Throw errors later. This can also work during template construction.
+    if not input_data.have_batch_axis():
+      input_data = input_data.copy_add_batch_dim(batch_dim_axis=0)
     input_data, num_batch_dims = cls.transform_input(
       input_data, network=network,
       in_dim=in_dim, in_spatial_dims=in_spatial_dims,

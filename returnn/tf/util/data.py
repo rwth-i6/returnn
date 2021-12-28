@@ -2449,6 +2449,7 @@ class Data(object):
     self._batch = batch
     self._beam = beam
     self.control_flow_ctx = control_flow_ctx
+    self.available_for_inference = available_for_inference
     if isinstance(dim_tags, (tuple, list)):
       assert all(tag.can_be_used_as_dim() for tag in dim_tags)
       # We do a couple of sanity checks, and maybe set special axes attribs.
@@ -2510,7 +2511,6 @@ class Data(object):
       with tf.name_scope("extern_data/placeholders/%s/" % name):
         placeholder = tf_compat.v1.placeholder(**self.get_placeholder_kwargs(with_batch=True))
     self._placeholder = placeholder  # type: tf.Tensor  # this will hold the data value itself
-    self.available_for_inference = available_for_inference
     if vocab is not None:
       from returnn.datasets.util.vocabulary import Vocabulary
       if isinstance(vocab, str):

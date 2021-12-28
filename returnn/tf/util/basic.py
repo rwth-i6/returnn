@@ -1194,18 +1194,18 @@ def dot(a, b, transpose_b=False):
     if a_ndim == b_ndim == 1:
       return tf.reduce_sum(a * b)
     d = get_shape_dim(b, -1 if transpose_b else 0)
-    assert a_ndim >= 2 and b_ndim >= 2
+    assert a_ndim >= 1 and b_ndim >= 1, "dot: input %s and %s unexpected" % (a, b)
     res_shape = None
-    if a_ndim > 2 or b_ndim > 2:
+    if a_ndim != 2 or b_ndim != 2:
       res_shape = (
         [get_shape_dim(a, i) for i in range(0, a_ndim - 1)] +
         [get_shape_dim(b, i + (0 if transpose_b else 1)) for i in range(0, b_ndim - 1)])
-    if a_ndim > 2:
+    if a_ndim != 2:
       a = tf.reshape(a, (-1, d))
-    if b_ndim > 2:
+    if b_ndim != 2:
       b = tf.reshape(b, (d, -1)) if transpose_b else tf.reshape(b, (d, -1))
     res = tf.matmul(a, b, transpose_b=transpose_b)
-    if a_ndim > 2 or b_ndim > 2:
+    if a_ndim != 2 or b_ndim != 2:
       res = tf.reshape(res, res_shape)
     return res
 

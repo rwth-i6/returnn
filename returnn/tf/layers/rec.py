@@ -3799,13 +3799,11 @@ class _TemplateLayer(LayerBase):
     :param _SubnetworkRecCell|None cell:
     """
     # Init with some dummy.
-    super(_TemplateLayer, self).__init__(
-      output=Data(
-        name="dummy_initial_template_data",
-        batch_dim_axis=0, time_dim_axis=None,
-        shape=(),
-        control_flow_ctx=network.get_control_flow_ctx()),  # (B,). no time-dim
-      name=name, network=network)
+    dummy_data = Data(
+      name="%s:dummy_initial_template_data" % name,
+      dim_tags=[],
+      control_flow_ctx=network.get_control_flow_ctx())
+    super(_TemplateLayer, self).__init__(output=dummy_data, name=name, network=network)
     self.output.size_placeholder = {}  # must be initialized
     self.layer_class = ":uninitialized-template"
     self.is_data_template = False

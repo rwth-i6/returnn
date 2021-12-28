@@ -735,9 +735,9 @@ def test_engine_rec_subnet_count():
   engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
 
   out = engine.forward_single(dataset=dataset, seq_idx=0)
-  assert_equal(out.shape, (seq_len, 1))
+  assert_equal(out.shape, (seq_len,))
   assert_equal(out.dtype, numpy.int32)
-  assert_equal(list(out[:,0]), list(range(1, seq_len + 1)))
+  assert_equal(list(out[:]), list(range(1, seq_len + 1)))
 
   engine.finalize()
 
