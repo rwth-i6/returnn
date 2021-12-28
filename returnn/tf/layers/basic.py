@@ -379,18 +379,16 @@ class ConcatLayer(LayerBase):
     """
     :param list[(LayerBase,str|Dim)] sources:
     :param bool allow_broadcast:
-    :param Dim out_dim:
+    :param Dim|None out_dim:
     """
-    out_dim  # noqa  # via get_out_data_from_opts
-    if allow_broadcast:
-      raise NotImplementedError
     sources, axes = zip(*sources)  # unzip
     super(ConcatLayer, self).__init__(sources=sources, **kwargs)
     sources_data = [layer.output for layer in sources]  # type: typing.List[Data]
     axes_int = [src.get_axis_from_description(axis) for (src, axis) in zip(sources_data, axes)]
-    # Currently, assume that the output format matches the first input. See get_out_data_from_opts.
-    assert self.output.batch_ndim == sources_data[0].batch_ndim
-    out_concat_axis = axes_int[0]
+    concat_dim_tags = [src.dim_tags[axis] for (src, axis) in zip(sources, axes_int)]  # type: typing.List[Dim]
+    if not out_dim:
+      out_dim = sum(concat_dim_tags)
+    out_concat_axis = self.output.get_axis_from_description(out_dim)
 
     def _copy_compatible(x, axis):
       """
@@ -429,13 +427,22 @@ class ConcatLayer(LayerBase):
       for tag in concat_dim_tags:
         dimension += tag.dimension
     if not out_dim:
-      # We ignore allow_broadcast here... Anyway not currently implemented.
       out_dim = sum(concat_dim_tags)
       assert isinstance(out_dim, Dim)
+    else:
+      sum(concat_dim_tags).declare_same_as(out_dim)
     assert out_dim.dimension == dimension
-    res_dim_tags = list(sources[0].output.dim_tags)
-    res_dim_tags[axes_int[0]] = out_dim
-    return Data(name="%s_output" % name, dim_tags=res_dim_tags, dtype=sources[0].output.dtype)
+
+    def _as_common(x, axis):
+      """
+      :param Data x: input
+      :param int axis:
+      :rtype: Data
+      """
+      return x.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_dim)
+
+    sources_data = [_as_common(layer.output, axis) for (layer, axis) in zip(sources, axes_int)]
+    return Data.get_common_data(sources_data, allow_broadcast_all_sources=allow_broadcast, name="%s_output" % name)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
