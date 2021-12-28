@@ -4428,7 +4428,7 @@ def test_reclayer_opt_output_consistent_format():
       'from': [],
       'max_seq_len': 10,
       'unit': {
-        'constant': {'class': 'constant', 'value': 1.0},  # scalar
+        'constant': {'class': 'constant', 'value': 1.0, "shape": [batch_dim]},  # scalar
         'add': {
           'class': 'combine', 'from': ['prev:i', 'constant'], 'kind': 'add',
           "out_shape": {batch_dim}},  # [B] via 'i'. [T,B] outside
