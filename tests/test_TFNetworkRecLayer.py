@@ -4981,6 +4981,82 @@ def test_subnet_load_on_init_rec():
     print("They are equal!")
 
 
+def test_reclayer_prev_template_with_out_shape():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+  dim_tags = {
+    'extern_data.data.dim_tags.1.time': SpatialDim('time'),
+    'extern_data.data.dim_tags.2.input': FeatureDim('input', 13),
+  }
+
+  extern_data = {
+    'data': {
+      'dim_tags': (
+        batch_dim,
+        dim_tags['extern_data.data.dim_tags.1.time'],
+        dim_tags['extern_data.data.dim_tags.2.input']
+      ),
+      'dtype': 'float32',
+      'available_for_inference': True
+    }
+  }
+
+  net_dict = {
+    'reduce': {
+      'class': 'reduce',
+      'from': 'data:data',
+      'mode': 'mean',
+      'axis': dim_tags['extern_data.data.dim_tags.1.time'],
+      'out_shape': {batch_dim, dim_tags['extern_data.data.dim_tags.2.input']}
+    },
+    'output': {
+      'class': 'rec',
+      'from': [],
+      'unit': {
+        'constant_1': {'class': 'constant', 'value': 1.0},
+        'state.i': {
+          'class': 'combine',
+          'from': ['prev:state.i', 'constant_1'],
+          'kind': 'add',
+          'out_shape': {}
+        },
+        'constant_2_B': {'class': 'constant', 'value': 5.0, 'shape': [batch_dim]},
+        'greater_equal': {
+          'class': 'compare',
+          'from': ['state.i', 'constant_2_B'],
+          'kind': 'greater_equal',
+          'out_shape': {batch_dim}
+        },
+        'end': {
+          'class': 'copy',
+          'from': 'greater_equal',
+          'out_shape': {batch_dim}
+        },
+        'mul': {
+          'class': 'combine',
+          'from': ['state.i', 'base:reduce'],
+          'kind': 'mul',
+          'out_shape': {batch_dim, dim_tags['extern_data.data.dim_tags.2.input']}
+        },
+        'output': {
+          'class': 'copy',
+          'from': 'mul',
+          'out_shape': {batch_dim, dim_tags['extern_data.data.dim_tags.2.input']}
+        }
+      },
+      'max_seq_len': 10,
+      'include_eos': True,
+    },
+  }
+
+  with make_scope() as session:
+    config = Config({"extern_data": extern_data})
+    network = TFNetwork(config=config)
+    network.construct_from_dict(net_dict)
+    from test_TFNetworkLayer import make_feed_dict
+    session.run(network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(network.extern_data))
+
+
 def test_convert_lstm_params_save_load():
   """
   Test conversions from different units to different units.
