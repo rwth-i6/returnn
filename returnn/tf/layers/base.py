@@ -1568,7 +1568,8 @@ class LayerBase(object):
     # Note that there still might be other axes which we do not unbroadcast here.
     # Thus, concat_in_time was fixed now, and maybe we actually do not need this anymore.
     shape = list(bc_shape)
-    shape[data.batch_dim_axis] = batch_dim
+    if data.have_batch_axis():
+      shape[data.batch_dim_axis] = batch_dim
     if isinstance(v, (float, int)):
       with tf.name_scope("init_%s_const" % name):
         from returnn.tf.util.basic import constant_with_shape
