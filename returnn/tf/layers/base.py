@@ -92,7 +92,7 @@ class LayerBase(object):
     :param NotSpecified|None|int n_out: output dim
     :param returnn.tf.util.data.Dim|None out_dim: output feature dim tag
     :param dict[str] out_type: kwargs for Data class. more explicit than n_out.
-    :param set[returnn.tf.util.data.Dim|returnn.tf.util.data._ImplicitDim]|tuple|list|None out_shape:
+    :param set[returnn.tf.util.data.Dim|returnn.tf.util.data._MarkedDim]|tuple|list|None out_shape:
       verifies the output shape (dim tags). See :func:`Data.verify_out_shape`.
     :param list[LayerBase] sources: via self.transform_config_dict()
     :param returnn.tf.util.data.Dim|None in_dim: input feature dim tag
@@ -323,7 +323,7 @@ class LayerBase(object):
     :param dict[str]|None|(()->Data) out_type:
     :param returnn.tf.util.data.Dim|None out_dim:
     :param int|None|NotSpecified n_out:
-    :param set[Dim|_ImplicitDim]|tuple|list|None out_shape: verifies the output shape (dim tags).
+    :param set[Dim|_MarkedDim]|tuple|list|None out_shape: verifies the output shape (dim tags).
     :param str|list[str]|None target:
     :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
     :param str|None size_target:
@@ -488,7 +488,7 @@ class LayerBase(object):
 
     :param Data output:
     :param returnn.tf.network.TFNetwork network:
-    :param set[Dim|_ImplicitDim]|tuple|list|None out_shape: verifies the output shape (dim tags).
+    :param set[Dim|_MarkedDim]|tuple|list|None out_shape: verifies the output shape (dim tags).
       See :func:`Data.verify_out_shape`.
     :rtype: Data
     """
@@ -636,11 +636,12 @@ class LayerBase(object):
       inside_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=True)
       over_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=False)
       if over_rec_time_dim and not inside_rec_time_dim:  # moved out of loop
+        from returnn.tf.util.data import OptionalDim
         out_shape = d["out_shape"]
         if not isinstance(out_shape, set):
           assert not out_shape, "out_shape %r must be empty if not a set" % (out_shape,)
           out_shape = set()
-        out_shape.add(over_rec_time_dim)
+        out_shape.add(OptionalDim(over_rec_time_dim))
         d["out_shape"] = out_shape
     if d.pop("loss_only_on_non_search", None) and network.search_flag:
       d.pop("loss", None)
