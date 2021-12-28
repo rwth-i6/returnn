@@ -407,11 +407,10 @@ class ConcatLayer(LayerBase):
       allow_broadcast=[allow_broadcast] * len(sources_data))
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, allow_broadcast=False, out_dim=None, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, out_dim=None, **kwargs):
     """
     :param str name:
     :param list[(LayerBase,str|Dim)] sources:
-    :param bool allow_broadcast:
     :param Dim|None out_dim:
     :rtype: Data
     """
@@ -442,7 +441,8 @@ class ConcatLayer(LayerBase):
       return x.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_dim)
 
     sources_data = [_as_common(layer.output, axis) for (layer, axis) in zip(sources, axes_int)]
-    return Data.get_common_data(sources_data, allow_broadcast_all_sources=allow_broadcast, name="%s_output" % name)
+    # Always allow broadcast here, for template construction. We will check it in __init__.
+    return Data.get_common_data(sources_data, allow_broadcast_all_sources=True, name="%s_output" % name)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
