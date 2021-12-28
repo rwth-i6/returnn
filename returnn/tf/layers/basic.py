@@ -385,7 +385,7 @@ class ConcatLayer(LayerBase):
     super(ConcatLayer, self).__init__(sources=sources, **kwargs)
     sources_data = [layer.output for layer in sources]  # type: typing.List[Data]
     axes_int = [src.get_axis_from_description(axis) for (src, axis) in zip(sources_data, axes)]
-    concat_dim_tags = [src.dim_tags[axis] for (src, axis) in zip(sources, axes_int)]  # type: typing.List[Dim]
+    concat_dim_tags = [src.dim_tags[axis] for (src, axis) in zip(sources_data, axes_int)]  # type: typing.List[Dim]
     if not out_dim:
       out_dim = sum(concat_dim_tags)
     out_concat_axis = self.output.get_axis_from_description(out_dim)
