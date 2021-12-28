@@ -7521,6 +7521,7 @@ def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis,
 
 
 def test_CumConcatLayer_self_attention_equal_to_SelfAttentionLayer():
+  from returnn.tf.util.data import batch_dim
   n_time = 13
   num_heads, key_dim, value_dim = 2, 3, 3
   for inside_rec_layer in [False, True]:
@@ -7533,8 +7534,9 @@ def test_CumConcatLayer_self_attention_equal_to_SelfAttentionLayer():
           "output": {
             "class": "rec", "target": "classes", "from": [],
             "unit": {
+              "const0": {"class": "constant", "value": 0.0, "shape": [batch_dim, 1]},
               "lin": {
-                "class": "linear", "from": "prev:lin", "with_bias": True, "bias_init": "glorot_normal", "n_out": 5},
+                "class": "linear", "from": ["prev:lin", "const0"], "bias_init": "glorot_normal", "n_out": 5},
               "single_layer_att": {
                 "class": "self_attention", "from": "lin", "num_heads": num_heads,
                 "total_key_dim": num_heads * key_dim, "n_out": num_heads * value_dim,
