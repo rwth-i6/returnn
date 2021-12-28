@@ -4933,11 +4933,12 @@ class RecUnstackLayer(LayerBase):
         assert out_dim == rec_time_dim, "%s %r: rec dim %s does not match input %s dim %s" % (
           cls.__name__, name, rec_time_dim, sources[0], out_dim)
       else:
-        assert out_dim.is_dim_known()  # it comes from the input, so it should be known
-        assert out_dim != rec_time_dim  # rec_time_dim is unknown, so it cannot be the same
-        assert declare_rec_time, "%s %r: must either set known axis on rec %s or enable declare_rec_time" % (
-          cls.__name__, name, rec_time_dim)
-        rec_time_dim.declare_same_as(out_dim)
+        if out_dim.is_dim_known():  # usually the case except at template construction
+          assert out_dim != rec_time_dim  # rec_time_dim is unknown, so it cannot be the same
+        if out_dim != rec_time_dim:
+          assert declare_rec_time, "%s %r: must either set known axis on rec %s or enable declare_rec_time" % (
+            cls.__name__, name, rec_time_dim)
+          rec_time_dim.declare_same_as(out_dim)
       out.mark_same_time(out_dim, must_match=True)
       return out.copy_template_excluding_time_dim()
     else:
