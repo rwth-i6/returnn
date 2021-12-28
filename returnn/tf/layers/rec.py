@@ -1440,8 +1440,11 @@ class _SubnetworkRecCell(object):
         if name in self.layer_data_templates:  # might exist already
           layer_ = self.layer_data_templates[name]
         else:
+          out_shape = None
+          if name in self.net_dict:
+            out_shape = self.net_dict[name].get("out_shape", None)
           layer_ = _TemplateLayer(
-            name=name, network=self.net, cell=self,
+            name=name, network=self.net, cell=self, out_shape=out_shape,
             construct_stack=ConstructCtx.layers[-1] if ConstructCtx.layers else None)
           self.layer_data_templates[name] = layer_
         res_layer = None
@@ -3791,21 +3794,26 @@ class _TemplateLayer(LayerBase):
   All "prev:" layers also stay instances of _TemplateLayer in the real computation graph.
   """
 
-  def __init__(self, network, name, construct_stack=None, cell=None):
+  def __init__(self, network, name, construct_stack=None, cell=None, out_shape=None):
     """
     :param returnn.tf.network.TFNetwork network:
     :param str name:
     :param LayerBase|None construct_stack: just for debugging repr
     :param _SubnetworkRecCell|None cell:
+    :param set[returnn.tf.util.data.Dim|returnn.tf.util.data._ImplicitDim]|tuple|list|None out_shape:
     """
     # Init with some dummy.
-    super(_TemplateLayer, self).__init__(
-      output=Data(
-        name="dummy_initial_template_data",
-        batch_dim_axis=0, time_dim_axis=None,
-        shape=(),
-        control_flow_ctx=network.get_control_flow_ctx()),  # (B,). no time-dim
-      name=name, network=network)
+    # from returnn.tf.util.data import batch_dim
+    # if out_shape is not None and batch_dim not in out_shape:  # TODO remove me if this works...
+    out_shape  # noqa
+    dummy_data_dims = []
+    # else:
+    #   dummy_data_dims = [batch_dim]
+    dummy_data = Data(
+      name="%s:dummy_initial_template_data" % name,
+      dim_tags=dummy_data_dims,
+      control_flow_ctx=network.get_control_flow_ctx())
+    super(_TemplateLayer, self).__init__(output=dummy_data, name=name, network=network)
     self.output.size_placeholder = {}  # must be initialized
     self.layer_class = ":uninitialized-template"
     self.is_data_template = False
