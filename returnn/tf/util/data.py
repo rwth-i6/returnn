@@ -1608,11 +1608,7 @@ any_spatial_dim = SpatialDim("any-spatial-dim", None, generic=True)
 single_step_dim = Dim(description="single-step", kind=Dim.Types.Spatial, special=True, dimension=1)
 
 
-class _ImplicitDim:
-  """
-  Represents an implicit dim (dim tag) in :class:`Data`.
-  https://github.com/rwth-i6/returnn/issues/706
-  """
+class _MarkedDim:
   def __init__(self, tag):
     """
     :param Dim tag:
@@ -1629,12 +1625,19 @@ class _ImplicitDim:
     return hash(self._eq_tuple())
 
   def __eq__(self, other):
-    if isinstance(other, _ImplicitDim):
+    if isinstance(other, _MarkedDim):
       return self._eq_tuple() == other._eq_tuple()
     return False
 
   def __ne__(self, other):
     return not (self == other)
+
+
+class _ImplicitDim(_MarkedDim):
+  """
+  Represents an implicit dim (dim tag) in :class:`Data`.
+  https://github.com/rwth-i6/returnn/issues/706
+  """
 
 
 class ImplicitSparseDim(_ImplicitDim):
@@ -1648,6 +1651,12 @@ class ImplicitDynSizeDim(_ImplicitDim):
   Represents an implicit dim via dynamic dim sizes.
   https://github.com/rwth-i6/returnn/issues/706
   (For example via :class:`CumConcatLayer`.)
+  """
+
+
+class OptionalDim(_MarkedDim):
+  """
+  Represents a dim which might exist or not.
   """
 
 
@@ -2709,7 +2718,7 @@ class Data(object):
       https://github.com/rwth-i6/returnn/issues/706
     Throws an exception if this is not the case.
 
-    :param set[Dim|_ImplicitDim]|tuple|list out_shape:
+    :param set[Dim|_MarkedDim]|tuple|list out_shape:
       It must be a set, with the only exception when it is empty (then it doesn't matter).
       See :func:`dim_tags_set`.
     """
@@ -2732,6 +2741,10 @@ class Data(object):
           raise VerifyOutShapeException(
             "%s verify_out_shape, with dims %s, with out_shape %s, %s is not an implicit dim in self" % (
               self, self_dim_tags, out_shape, dim))
+      elif isinstance(dim, OptionalDim):
+        dim_tag = dim.tag
+        if dim_tag not in remaining:
+          continue
       else:
         raise TypeError("%s verify_out_shape with out_shape %s: expect dim tags but got %s" % (
           self, out_shape, type(dim)))

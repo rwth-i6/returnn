@@ -255,7 +255,7 @@ class _ConcatInputLayer(LayerBase):
                **kwargs):
     """
     :param Dim|None in_dim:
-    :param set[Dim|returnn.tf.util.data._ImplicitDim]|tuple|list|None out_shape:
+    :param set[Dim|returnn.tf.util.data._MarkedDim]|tuple|list|None out_shape:
     :param float dropout: 0.0 means to apply no dropout. dropout will only be applied during training
     :param Dim|str|list[Dim|str]|None dropout_axis:
     :param dict[Dim|str|list[Dim|str]|tuple[Dim|str],int|str|None]|None dropout_noise_shape:
@@ -329,7 +329,7 @@ class CopyLayer(_ConcatInputLayer):
     :param dict[str]|None out_type:
     :param Dim|None out_dim:
     :param int|None|NotSpecified n_out:
-    :param set[Dim|returnn.tf.util.data._ImplicitDim]|tuple|list|None out_shape:
+    :param set[Dim|returnn.tf.util.data._MarkedDim]|tuple|list|None out_shape:
     :rtype: Data
     """
     # If all sources are defined, use them to get the exact out_type.
@@ -6977,7 +6977,7 @@ class CombineLayer(LayerBase):
     :param dict[str]|None eval_locals: locals for eval, will also pass to out_type is out_type is a function
     :param int|None|NotSpecified n_out:
     :param dict[str]|None|(()->Data) out_type:
-    :param set[Dim|_ImplicitDim]|tuple|list|None out_shape: verifies the output shape (dim tags)
+    :param set[Dim|_MarkedDim]|tuple|list|None out_shape: verifies the output shape (dim tags)
     :param list[LayerBase] sources:
     :rtype: Data
     """
