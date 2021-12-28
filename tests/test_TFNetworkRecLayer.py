@@ -7487,7 +7487,6 @@ def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis,
 
   # Accumulate keys/values or rename the axis
   key_dim_tag = Dim(kind=Dim.Types.Time, description='self-att-keys')
-  key_axis = 'stag:' + key_dim_tag.description
   if inside_rec_layer:
     d[output + '_key_accum'] = {
       'class': 'cum_concat', 'from': [output + '_key'], 'out_spatial_dim': key_dim_tag}  # [B,T|rec-history,n,F|d_k]
@@ -7507,7 +7506,7 @@ def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis,
     'reduce': 'dim:%i' % key_dim}  # [B,n,T?,T|rec-history]
 
   d[output + '_weights'] = {
-    'class': 'softmax_over_spatial', 'from': [output + '_energy'], 'axis': key_axis,
+    'class': 'softmax_over_spatial', 'from': [output + '_energy'], 'axis': key_dim_tag,
     'energy_factor': key_dim ** -0.5}  # [B,n,T?,T|rec-history]
   d[output + '_weights_drop'] = {
     'class': 'dropout', 'dropout_noise_shape': {'*': None}, 'from': [output + '_weights'],
@@ -7515,7 +7514,7 @@ def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis,
 
   d[output + '_output'] = {
     'class': 'dot', 'from': [output + '_weights_drop', output + '_value_accum'],
-    'reduce': key_axis}  # [B,n,T?,F|d_v]
+    'reduce': key_dim_tag}  # [B,n,T?,F|d_v]
   d[output + '_att'] = {
     'class': 'merge_dims', 'axes': ["dim:%i" % num_heads, "dim:%i" % value_dim],
     'from': output + '_output'}  # [B,T?,F|n*d_v]
