@@ -178,6 +178,7 @@ class Dim(object):
     :return: copy, maybe as new kind. setting same_as to self
     :rtype: Dim
     """
+    assert self.can_be_used_as_dim()
     if not same_as_self:
       assert description is not None, "%s copy with not same_as_self should have a new description" % self
     tag = Dim(
@@ -722,6 +723,7 @@ class Dim(object):
     """
     :param Dim other:
     """
+    assert self.can_be_used_as_dim() and other.can_be_used_as_dim()  # declare_same_as does not make sense otherwise
     self._maybe_update()
     self._validate_in_current_graph()
     if self is other:
@@ -3231,6 +3233,7 @@ class Data(object):
     :param int|None axis:
     :rtype: Data
     """
+    assert dim_tag.can_be_used_as_dim()
     from .basic import get_valid_scope_name_from_str
     if axis is None:
       axis = self.get_default_new_axis_for_dim_tag(dim_tag=dim_tag)
@@ -3682,6 +3685,7 @@ class Data(object):
     :param str|None name: new name
     :rtype: Data
     """
+    assert new_dim_tag.can_be_used_as_dim()
     if axis < 0:
       assert axis + self.batch_ndim >= 0
       axis += self.batch_ndim
