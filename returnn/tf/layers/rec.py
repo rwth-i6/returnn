@@ -1456,6 +1456,15 @@ class _SubnetworkRecCell(object):
         default_success = False  # whether construction was successful with default_get_layer
         ConstructCtx.layers.append(layer_)
         try:
+          # If not initialized yet and this is still the dummy data template,
+          # see if we can figure out a petter template.
+          if not layer_.is_initialized and layer_.output.batch_ndim == 0:
+            if name in self.net_dict:  # only true for the root net
+              layer_dict = self.net_dict[name]
+              initial_output = layer_dict.get("initial_output")
+              if isinstance(initial_output, str) and initial_output.startswith("base:"):
+                initial_output_layer = parent_get_layer(initial_output[len("base:"):])
+                layer_.output = initial_output_layer.output.copy_template(name="%s_output" % name)
           # See how far we can get without recursive layer construction.
           # We only want to get the data template for now.
           # If that fails in some way,
