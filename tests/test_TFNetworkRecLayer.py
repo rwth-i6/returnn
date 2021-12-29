@@ -5133,6 +5133,216 @@ def test_reclayer_loop_independent_out_shape():
     session.run(network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(network.extern_data))
 
 
+def test_reclayer_shape_via_initial_output():
+  # corresponds to test_rec_simple_iter in returnn_common
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+  extern_data_data_dim_tags_1_time_dim = SpatialDim('time')
+  extern_data_data_dim_tags_2_input_dim = FeatureDim('input', 13)
+  network_loop_axis_loop_dim_dim = SpatialDim('loop-dim')
+
+  config = Config({"extern_data": {
+    'data': {
+      'dim_tags': (
+        batch_dim,
+        extern_data_data_dim_tags_1_time_dim,
+        extern_data_data_dim_tags_2_input_dim
+      ),
+      'dtype': 'float32',
+      'available_for_inference': True
+    }
+  }})
+
+  net_dict = {
+    'loop': {
+      'class': 'rec',
+      'from': [],
+      'unit': {
+        'state.i': {
+          'class': 'combine',
+          'from': ['prev:state.i', 'constant'],
+          'kind': 'add',
+          'out_shape': {batch_dim},
+          'initial_output': 'base:zeros'
+        },
+        'constant': {'class': 'constant', 'value': 1.0},
+        'constant_0': {'class': 'constant', 'value': 5.0},
+        'greater_equal': {
+          'class': 'compare',
+          'from': ['state.i', 'constant_0'],
+          'kind': 'greater_equal',
+          'out_shape': {batch_dim}
+        },
+        'end': {
+          'class': 'copy',
+          'from': 'greater_equal',
+          'out_shape': {batch_dim}
+        },
+        'reduce': {
+          'class': 'reduce',
+          'from': 'base:data:data',
+          'mode': 'mean',
+          'axis': extern_data_data_dim_tags_1_time_dim,
+          'out_shape': {batch_dim, extern_data_data_dim_tags_2_input_dim}
+        },
+        'mul': {
+          'class': 'combine',
+          'from': ['state.i', 'reduce'],
+          'kind': 'mul',
+          'out_shape': {batch_dim, extern_data_data_dim_tags_2_input_dim}
+        },
+        'output': {
+          'class': 'copy',
+          'from': 'mul',
+          'out_shape': {batch_dim, extern_data_data_dim_tags_2_input_dim}
+        }
+      },
+      'max_seq_len': 10,
+      'axis': network_loop_axis_loop_dim_dim,
+      'include_eos': True,
+      'out_shape': {batch_dim, extern_data_data_dim_tags_2_input_dim, network_loop_axis_loop_dim_dim}
+    },
+    'zeros': {
+      'class': 'constant',
+      'value': 0.0,
+      'shape': [
+        batch_dim
+      ]
+    },
+    'output': {
+      'class': 'copy',
+      'from': 'loop/output',
+      'out_shape': {batch_dim, extern_data_data_dim_tags_2_input_dim, network_loop_axis_loop_dim_dim}
+    }
+  }
+
+  with make_scope() as session:
+    network = TFNetwork(config=config)
+    network.construct_from_dict(net_dict)
+    from test_TFNetworkLayer import make_feed_dict
+    session.run(network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(network.extern_data))
+
+
+def test_reclayer_explicit_rec_ff():
+  # corresponds to test_rec_ff in returnn_common
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+  extern_data_data_dim_tags_1_time_dim = SpatialDim('time')
+  extern_data_data_dim_tags_2_input_dim = FeatureDim('input', 13)
+  network_loop_unit_state_h_subnetwork_dot_reduce_add_1_linear_out_dim = FeatureDim('linear-out', 13)
+
+  config = Config({"extern_data": {
+    'data': {
+      'dim_tags': (
+        batch_dim,
+        extern_data_data_dim_tags_1_time_dim,
+        extern_data_data_dim_tags_2_input_dim
+      ),
+      'dtype': 'float32',
+      'available_for_inference': True
+    }
+  }})
+
+  net_dict = {
+    'loop': {
+      'class': 'rec',
+      'from': [],
+      'unit': {
+        'state.h': {
+          'class': 'subnetwork',
+          'from': [],
+          'subnetwork': {
+            'dot': {
+              'class': 'dot',
+              'from': ['base:concat', 'weight'],
+              'reduce': extern_data_data_dim_tags_2_input_dim + network_loop_unit_state_h_subnetwork_dot_reduce_add_1_linear_out_dim,
+              'out_shape': {batch_dim, network_loop_unit_state_h_subnetwork_dot_reduce_add_1_linear_out_dim}
+            },
+            'add': {
+              'class': 'combine',
+              'from': ['dot', 'bias'],
+              'kind': 'add',
+              'out_shape': {batch_dim, network_loop_unit_state_h_subnetwork_dot_reduce_add_1_linear_out_dim}
+            },
+            'output': {
+              'class': 'copy',
+              'from': 'add',
+              'out_shape': {batch_dim, network_loop_unit_state_h_subnetwork_dot_reduce_add_1_linear_out_dim}
+            },
+            'weight': {
+              'class': 'variable',
+              'shape': [
+                extern_data_data_dim_tags_2_input_dim + network_loop_unit_state_h_subnetwork_dot_reduce_add_1_linear_out_dim,
+                network_loop_unit_state_h_subnetwork_dot_reduce_add_1_linear_out_dim
+              ],
+              'dtype': 'float32'
+            },
+            'bias': {
+              'class': 'variable',
+              'shape': [
+                network_loop_unit_state_h_subnetwork_dot_reduce_add_1_linear_out_dim
+              ],
+              'dtype': 'float32'
+            }
+          },
+          'out_shape': {batch_dim, network_loop_unit_state_h_subnetwork_dot_reduce_add_1_linear_out_dim},
+          'initial_output': 'base:zeros'
+        },
+        'rec_unstack': {
+          'class': 'rec_unstack',
+          'from': 'base:data:data',
+          'axis': extern_data_data_dim_tags_1_time_dim,
+          'out_shape': {batch_dim, extern_data_data_dim_tags_2_input_dim}
+        },
+        'concat': {
+          'class': 'concat',
+          'from': (
+            (
+              'rec_unstack',
+              extern_data_data_dim_tags_2_input_dim
+            ),
+            (
+              'prev:state.h',
+              network_loop_unit_state_h_subnetwork_dot_reduce_add_1_linear_out_dim
+            )
+          ),
+          'out_shape': {batch_dim,
+                        extern_data_data_dim_tags_2_input_dim + network_loop_unit_state_h_subnetwork_dot_reduce_add_1_linear_out_dim}
+        },
+        'output': {
+          'class': 'copy',
+          'from': 'state.h',
+          'out_shape': {batch_dim, network_loop_unit_state_h_subnetwork_dot_reduce_add_1_linear_out_dim}
+        }
+      },
+      'axis': extern_data_data_dim_tags_1_time_dim,
+      'out_shape': {batch_dim, extern_data_data_dim_tags_1_time_dim,
+                    network_loop_unit_state_h_subnetwork_dot_reduce_add_1_linear_out_dim}
+    },
+    'zeros': {
+      'class': 'constant',
+      'value': 0.0,
+      'shape': [
+        batch_dim,
+        network_loop_unit_state_h_subnetwork_dot_reduce_add_1_linear_out_dim
+      ]
+    },
+    'output': {
+      'class': 'copy',
+      'from': 'loop/output',
+      'out_shape': {batch_dim, extern_data_data_dim_tags_1_time_dim,
+                    network_loop_unit_state_h_subnetwork_dot_reduce_add_1_linear_out_dim}
+    }
+  }
+
+  with make_scope() as session:
+    network = TFNetwork(config=config)
+    network.construct_from_dict(net_dict)
+    network.initialize_params(session)
+    from test_TFNetworkLayer import make_feed_dict
+    session.run(network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(network.extern_data))
+
+
 def test_convert_lstm_params_save_load():
   """
   Test conversions from different units to different units.
