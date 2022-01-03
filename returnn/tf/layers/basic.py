@@ -3460,7 +3460,7 @@ class SplitDimsLayer(_ConcatInputLayer):
           dimension=resolved_shape_dims[rem_dim_idx],
           derived_from_tag=axis_dim_tag,
           batch=axis_dim_tag.batch, control_flow_ctx=axis_dim_tag.control_flow_ctx)
-        if rem_dim.dimension is None:
+        if rem_dim.dimension is None and axis_dim_tag.dyn_size_ext is not None:
           rem_dim.dyn_size_ext = axis_dim_tag.dyn_size_ext.copy_template(name="%s_split_dims%i" % (name, rem_dim_idx))
       if resolved_dims:
         if rem_dim.dimension is not None:
