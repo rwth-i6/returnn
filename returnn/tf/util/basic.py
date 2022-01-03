@@ -2250,11 +2250,11 @@ def validate_broadcast_all_sources(allow_broadcast_all_sources, inputs, common):
   Common usages are for :func:`get_common_shape` or :func:`Data.get_common_data`.
 
   :param bool|NotSpecified allow_broadcast_all_sources:
-  :param inputs: anything convertible to str, used for reporting
+  :param inputs: anything convertible to iterable of str, used for reporting
   :param common: anything convertible to str, used for reporting
   """
   msg = (
-    "All inputs %s require broadcasting to %s. " % (inputs, common) +
+    "All inputs\n%s\nrequire broadcasting to \n  %s.\n" % ('\n'.join(' - %s' % inp for inp in inputs), common) +
     "This must be explicitly allowed, e.g. by specifying out_shape.")
   if allow_broadcast_all_sources is NotSpecified:
     from returnn.util import BehaviorVersion
