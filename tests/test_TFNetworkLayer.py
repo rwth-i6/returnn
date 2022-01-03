@@ -2016,6 +2016,23 @@ def test_out_shape():
       raise Exception("Expected an exception but did not get any.")
 
 
+def test_ReinterpretDataLayer_complete_incomplete_dim_tags():
+  from returnn.tf.util.data import batch_dim
+  with make_scope():
+    time_dim = SpatialDim("time")
+    other_time_dim = SpatialDim("other-time")
+    feat_dim = FeatureDim("feature", dimension=10)
+    config = Config({"extern_data": { "data": {"dim_tags": [batch_dim, time_dim, feat_dim]}}})
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {
+        'class': 'reinterpret_data', 'from': 'data',
+        'set_dim_tags': {time_dim: other_time_dim},
+        "out_shape": {batch_dim, other_time_dim, feat_dim}}})
+    assert time_dim.dyn_size_ext is not None  # via extern_data
+    assert other_time_dim.dyn_size_ext == time_dim.dyn_size_ext  # completed by ReinterpretDataLayer
+
+
 def _check_MergeDimsLayer(session, in_data_opts, in_static_shape, opts, out_data_shape, out_static_shape,
                           in_sizes=None, out_sizes=None):
   """
