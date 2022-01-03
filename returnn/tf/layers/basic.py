@@ -4333,6 +4333,9 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     if set_dim_tags:
       for axis, tag in set_dim_tags.items():
         axis_int = out.get_axis_from_description(axis)
+        if tag.dimension is None and tag.dyn_size_ext is None:
+          # new, user-specified tag is incomplete, maybe copy its dynamic sizes.
+          tag.dyn_size_ext = out.dim_tags[axis_int].dyn_size_ext
         out = out.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=tag)
     if set_sparse is not None:
       assert isinstance(set_sparse, bool)
