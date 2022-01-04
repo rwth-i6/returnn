@@ -4394,6 +4394,31 @@ def test_DotLayer_self_att_dyn_size_ext():
   DotLayer(network=net, name="dot", sources=[a_lay, b_lay], output=dot, **dot_kwargs)  # just check that it builds.
 
 
+def test_DotLayer_sparse_input():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  time_dim = SpatialDim("time")
+  classes_dim = FeatureDim("classes", dimension=5)
+  embed_dim = FeatureDim("embed", dimension=3)
+  config = Config({
+    "extern_data": {
+      "src": {"dim_tags": [batch_dim, time_dim], "sparse_dim": classes_dim},
+      "embed": {"dim_tags": [classes_dim, embed_dim]},
+    },
+    "network": {
+      "output": {"class": "dot", "from": ["data:src", "data:embed"], "reduce": classes_dim},
+    },
+  })
+
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(config.typed_dict["network"])
+    layer = net.get_default_output_layer()
+    assert layer.output.dim_tags == (batch_dim, time_dim, embed_dim)
+
+    feed_dict = make_feed_dict(net.extern_data)
+    session.run(layer.output.placeholder, feed_dict=feed_dict)
+
+
 def test_subnet_load_on_init():
   import tempfile
   model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
