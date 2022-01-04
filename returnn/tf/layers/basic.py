@@ -6277,6 +6277,16 @@ class DotLayer(LayerBase):
   I, J, K can also be multiple axes from the sources.
   The var-dims don't need to exist.
   All other axes (shared...) are expected to match.
+
+  You should try to avoid having the same dims in both sources when they are not reduced
+  such that you would end up having some dim twice in the output, e.g. (shared..., I, I).
+  You should avoid this because the dim order should never matter
+  (https://github.com/rwth-i6/returnn/wiki/RETURNN-principles).
+  If you need to perform such an operation, you can use :class:`ReinterpretDataLayer`
+  to introduce a new dim tag.
+
+  The reduce dim can also be the sparse dim of one of the sources.
+  In this case, it behaves like :class:`GatherLayer`.
   """
   layer_class = "dot"
 
@@ -6332,9 +6342,14 @@ class DotLayer(LayerBase):
     b_out = self.sources[1].output.copy()
     a_reduce_axes = a_out.get_axes_from_description(red1, allow_int=axis_desc_allow_int)
     b_reduce_axes = b_out.get_axes_from_description(red2, allow_int=axis_desc_allow_int)
-    assert a_reduce_axes and b_reduce_axes, "%s: sources %r, red1 %r, red2 %r" % (self, self.sources, red1, red2)
-    assert len(a_reduce_axes) == len(b_reduce_axes), (
-      "%s: sources %r, red1 %r, red2 %r, reduce axes must match in count" % (self, self.sources, red1, red2))
+    if red1 == a_out.sparse_dim:
+      assert len(b_reduce_axes) == 1 and len(a_reduce_axes) == 0
+    elif red2 == b_out.sparse_dim:
+      assert len(a_reduce_axes) == 1 and len(b_reduce_axes) == 0
+    else:
+      assert a_reduce_axes and b_reduce_axes, "%s: sources %r, red1 %r, red2 %r" % (self, self.sources, red1, red2)
+      assert len(a_reduce_axes) == len(b_reduce_axes), (
+        "%s: sources %r, red1 %r, red2 %r, reduce axes must match in count" % (self, self.sources, red1, red2))
     if BehaviorVersion.get() >= 3 and (var1 is NotSpecified or var2 is NotSpecified):
       assert var1 is NotSpecified and var2 is NotSpecified
       a_var_axes, b_var_axes = self._auto_var_axes(a_out, b_out, a_reduce_axes, b_reduce_axes)
@@ -6354,8 +6369,8 @@ class DotLayer(LayerBase):
     assert all(b_axis in map_a_to_b_rem_axes.values() for b_axis in b_rem_axes)
     b_rem_axes = [map_a_to_b_rem_axes[a_axis] for a_axis in a_rem_axes]
 
-    transpose_a = bool(a_var_axes and a_reduce_axes[0] < a_var_axes[0])
-    transpose_b = bool(b_var_axes and b_reduce_axes[0] > b_var_axes[0])
+    transpose_a = bool(a_var_axes and a_reduce_axes and a_reduce_axes[0] < a_var_axes[0])
+    transpose_b = bool(b_var_axes and b_reduce_axes and b_reduce_axes[0] > b_var_axes[0])
     # For A, if not transpose_a, we must reorder the axes as: a_rem_axes + a_var_axes + a_reduce_axes.
     # For A, if transpose_a, we must reorder the axes as: a_rem_axes + a_reduce_axes + a_var_axes.
     # For B, if not transpose_b, we must reorder the axes as: b_rem_axes + b_reduce_axes + b_var_axes.
@@ -6378,16 +6393,17 @@ class DotLayer(LayerBase):
     b_var_dims = [b_shape[i] for i in b_var_axes]
     a_reduce_dims = [a_shape[i] for i in a_reduce_axes]
     b_reduce_dims = [b_shape[i] for i in b_reduce_axes]
-    assert len(a_reduce_axes) == len(b_reduce_axes)
-    assert all([
-      a_out.dim_tags[i1] == b_out.dim_tags[i2] or d1 == d2
-      for (d1, d2, i1, i2) in zip(a_reduce_dims, b_reduce_dims, a_reduce_axes, b_reduce_axes)])
+    assert len(a_reduce_axes) == len(b_reduce_axes) or not a_reduce_axes or not b_reduce_axes
+    if len(a_reduce_axes) == len(b_reduce_axes):
+      assert all([
+        a_out.dim_tags[i1] == b_out.dim_tags[i2] or d1 == d2
+        for (d1, d2, i1, i2) in zip(a_reduce_dims, b_reduce_dims, a_reduce_axes, b_reduce_axes)])
     a_var_dim = prod(a_var_dims)
     b_var_dim = prod(b_var_dims)
     a_reduce_dyn_axes = [i for i in a_reduce_axes if a_out.batch_shape[i] is None]
     b_reduce_dyn_axes = [i for i in b_reduce_axes if b_out.batch_shape[i] is None]
-    assert len(a_reduce_dyn_axes) == len(b_reduce_dyn_axes)
-    if a_reduce_dyn_axes:
+    assert len(a_reduce_dyn_axes) == len(b_reduce_dyn_axes) or not a_reduce_axes or not b_reduce_axes
+    if a_reduce_dyn_axes and b_reduce_dyn_axes:
       a_pad, b_pad = get_padding_info_dict_ref(a), get_padding_info_dict_ref(b)
       a_pad_values = [a_pad.get(a_out.dim_tags[i], None) for i in a_reduce_dyn_axes]
       b_pad_values = [b_pad.get(b_out.dim_tags[i], None) for i in b_reduce_dyn_axes]
@@ -6413,8 +6429,8 @@ class DotLayer(LayerBase):
           self._info_reduce_mask = "mask-source-1"
     else:
       self._info_reduce_mask = "none-dynamic"
-    a_reduce_dim = prod(a_reduce_dims)
-    b_reduce_dim = prod(b_reduce_dims)
+    a_reduce_dim = prod(a_reduce_dims) if a_reduce_dims else None
+    b_reduce_dim = prod(b_reduce_dims) if b_reduce_dims else None
     if debug:
       print("%s, red1=%r, red2=%r, var1=%r, var2=%r:" % (self, red1, red2, var1, var2), file=log.v3)
       print(" ", "a:", a_out, a, file=log.v3)
@@ -6431,23 +6447,43 @@ class DotLayer(LayerBase):
             tf_compat.v1.assert_equal(
               a_reduce_dim, b_reduce_dim, data=[a_shape, b_shape, a_reduce_dims, b_reduce_dims], summarize=100)]):
         a = tf.identity(a)
-    if not transpose_a:
-      a = tf.transpose(a, a_rem_axes + a_var_axes + a_reduce_axes)
-      a = tf.reshape(a, a_rem_dims + [a_var_dim, a_reduce_dim])
+    if a_reduce_axes:
+      if not transpose_a:
+        a = tf.transpose(a, a_rem_axes + a_var_axes + a_reduce_axes)
+        a = tf.reshape(a, a_rem_dims + [a_var_dim, a_reduce_dim])
+      else:
+        a = tf.transpose(a, a_rem_axes + a_reduce_axes + a_var_axes)
+        a = tf.reshape(a, a_rem_dims + [a_reduce_dim, a_var_dim])
     else:
-      a = tf.transpose(a, a_rem_axes + a_reduce_axes + a_var_axes)
-      a = tf.reshape(a, a_rem_dims + [a_reduce_dim, a_var_dim])
-    if not transpose_b:
-      b = tf.transpose(b, b_rem_axes + b_reduce_axes + b_var_axes)
-      b = tf.reshape(b, b_rem_dims + [b_reduce_dim, b_var_dim])
+      a = tf.transpose(a, a_rem_axes + a_var_axes)  # no reduce axis
+      a = tf.reshape(a, a_rem_dims + [a_var_dim])
+    if b_reduce_axes:
+      if not transpose_b:
+        b = tf.transpose(b, b_rem_axes + b_reduce_axes + b_var_axes)
+        b = tf.reshape(b, b_rem_dims + [b_reduce_dim, b_var_dim])
+      else:
+        b = tf.transpose(b, b_rem_axes + b_var_axes + b_reduce_axes)
+        b = tf.reshape(b, b_rem_dims + [b_var_dim, b_reduce_dim])
     else:
-      b = tf.transpose(b, b_rem_axes + b_var_axes + b_reduce_axes)
-      b = tf.reshape(b, b_rem_dims + [b_var_dim, b_reduce_dim])
-    # `res` will be of shape: a_rem_dims + [a_var_dim, b_var_dim]
-    res = tf.matmul(a, b, transpose_a=transpose_a, transpose_b=transpose_b)
-    if not b_var_dims and add_var2_if_empty:
-      b_var_dims.append(1)
-      b_var_axes.append(None)
+      b = tf.transpose(b, b_rem_axes + b_var_axes)  # no reduce axis
+      b = tf.reshape(b, b_rem_dims + [b_var_dim])
+    if a_reduce_axes and b_reduce_axes:
+      # `res` will be of shape: a_rem_dims + [a_var_dim, b_var_dim]
+      res = tf.matmul(a, b, transpose_a=transpose_a, transpose_b=transpose_b)
+      if not b_var_dims and add_var2_if_empty:
+        b_var_dims.append(1)
+        b_var_axes.append(None)
+    else:
+      # one of the inputs is sparse
+      assert len(a_rem_dims) == len(b_rem_dims)  # batch dims
+      batch_dims = len(a_rem_dims)
+      if red1 == a_out.sparse_dim:
+        res = tf.gather(params=b, indices=a, batch_dims=batch_dims, axis=batch_dims + (1 if transpose_b else 0))
+      elif red2 == b_out.sparse_dim:
+        res = tf.gather(params=a, indices=b, batch_dims=batch_dims, axis=batch_dims + (0 if transpose_a else 1))
+      else:
+        raise ValueError("%s: unexpected reduce %s, %s for inputs %s" % (self, red1, red2, self.sources))
+      # result_shape(p_shape, i_shape, axis=0) = p_shape[:axis] + i_shape + p_shape[axis+1:]
     res = tf.reshape(res, a_rem_dims + a_var_dims + b_var_dims)
     self.output.placeholder = res
 
@@ -6590,9 +6626,14 @@ class DotLayer(LayerBase):
     b_out = sources[1].output.copy()
     assert not a_out.beam or not b_out.beam or a_out.beam == b_out.beam
     b_reduce_axes = b_out.get_axes_from_description(red2, allow_int=axis_desc_allow_int)
-    assert a_reduce_axes and b_reduce_axes, "%s: sources %r, red1 %r, red2 %r" % (name, sources, red1, red2)
-    assert len(a_reduce_axes) == len(b_reduce_axes), (
-      "%s: sources %r, red1 %r, red2 %r, reduce axes must match in count" % (name, sources, red1, red2))
+    if red1 == a_out.sparse_dim:
+      assert len(b_reduce_axes) == 1 and len(a_reduce_axes) == 0
+    elif red2 == b_out.sparse_dim:
+      assert len(a_reduce_axes) == 1 and len(b_reduce_axes) == 0
+    else:
+      assert a_reduce_axes and b_reduce_axes, "%s: sources %r, red1 %r, red2 %r" % (name, sources, red1, red2)
+      assert len(a_reduce_axes) == len(b_reduce_axes), (
+        "%s: sources %r, red1 %r, red2 %r, reduce axes must match in count" % (name, sources, red1, red2))
     if BehaviorVersion.get() >= 3 and (var1 is NotSpecified or var2 is NotSpecified):
       assert var1 is NotSpecified and var2 is NotSpecified
       a_var_axes, b_var_axes = cls._auto_var_axes(a_out, b_out, a_reduce_axes, b_reduce_axes)
@@ -6644,7 +6685,7 @@ class DotLayer(LayerBase):
       name="%s_output" % name,
       dim_tags=dim_tags,
       time_dim_axis=time_dim_axis,
-      dtype=a_out.dtype,
+      dtype=a_out.dtype if not a_out.sparse else b_out.dtype,
       batch=BatchInfo.get_common_batch_info([src.batch for src in (a_out, b_out)]),
       beam=SearchBeam.get_combined_beam(a_out.beam, b_out.beam))
 
