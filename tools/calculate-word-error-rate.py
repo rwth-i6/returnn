@@ -196,7 +196,13 @@ def load_hyps_refs(filename):
   assert len(content) > 0
   example_hyp = next(iter(content.items()))
   assert isinstance(example_hyp[0], str)  # seq tag
-  assert isinstance(example_hyp[1], str)  # hyp
+  if isinstance(example_hyp[1], list):
+    assert isinstance(example_hyp[1][0][1], str)
+    # n-best list output format needs to be converted first
+    # always pick the best (first) entry from the list (which is [(score, text), ...]
+    content = {seq_tag: nbest_list[0][1] for seq_tag, nbest_list in content.items()}
+  else:
+    assert isinstance(example_hyp[1], str)
   return content
 
 
