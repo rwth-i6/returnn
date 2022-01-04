@@ -595,31 +595,30 @@ class LayerBase(object):
       # we might have multiple targets, e.g. in choice layer, so convert to list
       if isinstance(targets, str):
         targets = [targets]
-      if network.eval_flag:
-        # _target_layers is a small workaround for further code which might not have access to the right get_layer.
-        d["_target_layers"] = target_layers
-        for target in targets:
-          assert isinstance(target, str)
-          # Not resolving this in the dict as target, but call get_layer to make it available.
-          if target.startswith("layer:"):
-            target_layers[target] = get_layer(target[len("layer:"):])
-          else:
-            try:
-              # Check whether the target itself is a layer
-              target_layers[target] = get_layer(target)
-            except LayerNotFound:
-              # Note: This is a workaround for cases where we need to know about used data keys before the layer
-              # itself is constructed (e.g. in _SubnetworkRecCell.get_output).
-              # A nicer solution would be to not modify this here,
-              # but instead lazily handle it in TFNetwork.get_extern_data,
-              # such that we do not need to know in advance which data keys we need.
-              # Also, if we are inside a rec layer, and doing search, we also cannot do that.
-              if network.is_inside_rec_layer() and not network.search_flag:
-                network.get_extern_data(target, mark_data_key_as_used=True)
-              if not network.search_flag:
-                # Also, there are cases when we want to have the target as an explicit layer dep,
-                # e.g. when the target has a beam, to derive the search choices.
-                target_layers[target] = get_layer("data:%s" % target)
+      # _target_layers is a small workaround for further code which might not have access to the right get_layer.
+      d["_target_layers"] = target_layers
+      for target in targets:
+        assert isinstance(target, str)
+        # Not resolving this in the dict as target, but call get_layer to make it available.
+        if target.startswith("layer:"):
+          target_layers[target] = get_layer(target[len("layer:"):])
+        else:
+          try:
+            # Check whether the target itself is a layer
+            target_layers[target] = get_layer(target)
+          except LayerNotFound:
+            # Note: This is a workaround for cases where we need to know about used data keys before the layer
+            # itself is constructed (e.g. in _SubnetworkRecCell.get_output).
+            # A nicer solution would be to not modify this here,
+            # but instead lazily handle it in TFNetwork.get_extern_data,
+            # such that we do not need to know in advance which data keys we need.
+            # Also, if we are inside a rec layer, and doing search, we also cannot do that.
+            if network.is_inside_rec_layer() and not network.search_flag:
+              network.get_extern_data(target, mark_data_key_as_used=True)
+            if not network.search_flag:
+              # Also, there are cases when we want to have the target as an explicit layer dep,
+              # e.g. when the target has a beam, to derive the search choices.
+              target_layers[target] = get_layer("data:%s" % target)
     if d.get("initial_output", None):  # see get_rec_initial_output
       initial_output = d["initial_output"]
       if isinstance(initial_output, str):
@@ -689,7 +688,7 @@ class LayerBase(object):
       target_data = target_layers[target].output
     else:
       target_data = cls._static_get_target_value(
-        target=target, network=network, mark_data_key_as_used=False, get_layer=get_layer)
+        target=target, network=network, mark_data_key_as_used=False, get_layer=get_layer, _target_layers=target_layers)
       if not target_data:
         return 1  # dummy value during template construction. this would be corrected later
     n_out = target_data.dim
