@@ -2081,7 +2081,7 @@ class SeqLenMaskLayer(_ConcatInputLayer):
                start=None, window_start=None, window_size=None, **kwargs):
     """
     :param LayerBase|None seq_len_source: if not given, uses source
-    :param str|int axis:
+    :param Dim|str axis:
     :param float mask_value:
     :param LayerBase|None start: Tensor of shape (B,) indicating the start frame
     :param LayerBase|None window_start: Tensor of shape (B,) indicating the window start
@@ -2093,7 +2093,7 @@ class SeqLenMaskLayer(_ConcatInputLayer):
     self.start = start
     self.window_start = window_start
     self.window_size = window_size
-    assert isinstance(axis, str), "%s: use symbolic axis (e.g. 'T')" % self
+    assert isinstance(axis, (Dim, str)), "%s: use symbolic axis (e.g. 'T') or Dim instance" % self
     mask = self.build_mask(
       self.input_data,
       axis=axis,
