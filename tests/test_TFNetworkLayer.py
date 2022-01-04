@@ -4407,6 +4407,7 @@ def test_DotLayer_sparse_input():
     "network": {
       "output": {"class": "dot", "from": ["data:src", "data:embed"], "reduce": classes_dim},
     },
+    "debug_runtime_sanity_checks": True,
   })
 
   with make_scope() as session:
