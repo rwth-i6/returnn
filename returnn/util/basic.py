@@ -3542,6 +3542,12 @@ class NativeCodeCompiler(object):
     """
     return opts
 
+  def _extra_common_opts(self):
+    """
+    :rtype: list[str]
+    """
+    return []
+
   @classmethod
   def _transform_ld_flag(cls, opt):
     """
@@ -3562,14 +3568,7 @@ class NativeCodeCompiler(object):
     with open(self._c_filename, "w") as f:
       f.write(self.code)
     common_opts = ["-shared", "-O2"]
-    if self.is_cpp:
-      cpp_version_opt = "-std=c++14"
-      if BackendEngine.is_tensorflow_selected():
-        from returnn.tf.util.basic import get_tf_gcc_version
-        tf_gcc_version = get_tf_gcc_version()
-        if tf_gcc_version and int(tf_gcc_version[0]) <= 4:
-          cpp_version_opt = "-std=c++11"  # gcc 4 does not support c++14, needed to support TF 1.14 and earlier
-      common_opts += [cpp_version_opt]
+    common_opts += self._extra_common_opts()
     if sys.platform == "darwin":
       common_opts += ["-undefined", "dynamic_lookup"]
     for include_path in self._include_paths:
