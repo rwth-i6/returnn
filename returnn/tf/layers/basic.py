@@ -2969,19 +2969,7 @@ class MergeDimsLayer(_ConcatInputLayer):
       keep_order = True if BehaviorVersion.get() >= 6 else False
     BehaviorVersion.require(
       condition=keep_order, message="MergeDimsLayer, only keep_order=True is allowed", version=6)
-    if keep_order:
-      assert isinstance(axes, (tuple, list, typing.Sequence)), (
-        "%s: axes %r must be a list or tuple, to have a well defined order in input %s" % (self, axes, self.input_data))
-      axes_ = []
-      for axis in axes:
-        axis_ = self.input_data.get_axes_from_description(axis, allow_int=False)
-        assert len(axis_) <= 1, (
-          "%s: unique axes %r required in input %s, but got %r -> %r" % (self, axes, self.input_data, axis, axis_))
-        axes_ += axis_
-      axes = axes_
-    else:
-      axes = self.input_data.get_axes_from_description(axes)
-      axes = sorted(axes)
+    axes = self._get_merge_axes(axes=axes, keep_order=keep_order, input_data=self.input_data, name=self)
     self._set_output_sizes(merge_axes=axes)
     merge_target_axis = self._get_target_axis(input_data=self.input_data, merge_axes=axes)
     x = self.input_data.placeholder
@@ -3012,6 +3000,29 @@ class MergeDimsLayer(_ConcatInputLayer):
       from returnn.tf.util.basic import check_input_dim
       x = check_input_dim(x, axis=self.output.feature_dim_axis, dim=n_out)
     self.output.placeholder = x
+
+  @classmethod
+  def _get_merge_axes(cls, axes, keep_order, input_data, name):
+    """
+    :param typing.Sequence[Dim|str] axes:
+    :param bool keep_order:
+    :param Data input_data:
+    :param name:
+    :rtype: list[int]
+    """
+    if keep_order:
+      assert isinstance(axes, (tuple, list, typing.Sequence)), (
+        "%s: axes %r must be a list or tuple, to have a well defined order in input %s" % (name, axes, input_data))
+      axes_ = []
+      for axis in axes:
+        axis_ = input_data.get_axes_from_description(axis, allow_int=False)
+        assert len(axis_) <= 1, (
+          "%s: unique axes %r required in input %s, but got %r -> %r" % (name, axes, input_data, axis, axis_))
+        axes_ += axis_
+      return axes_
+    else:
+      axes = input_data.get_axes_from_description(axes)
+      return sorted(axes)
 
   @classmethod
   def _get_target_axis(cls, input_data, merge_axes):
@@ -3107,29 +3118,24 @@ class MergeDimsLayer(_ConcatInputLayer):
       keep_order = True if BehaviorVersion.get() >= 6 else False
     assert not out_type, "currently ignored"
     input_data = get_concat_sources_data_template(sources)
+    axes = cls._get_merge_axes(
+      axes=axes, keep_order=keep_order, input_data=input_data, name="%s layer %r" % (cls, name))
     data = input_data.copy(name="%s_output" % name)
-    axes = input_data.get_axes_from_description(axes)
     if len(axes) <= 1:
       return data
-    axes = sorted(axes)
     import numpy
     res_dim = None
     if all([data.batch_shape[i] is not None for i in axes]):
       res_dim = int(numpy.prod([data.batch_shape[i] for i in axes]))
-    merge_dim_tags = [tag for (i, tag) in enumerate(data.dim_tags) if i in axes]
+    merge_dim_tags = [data.dim_tags[axis] for axis in axes]
     merge_target_axis = cls._get_target_axis(input_data=data, merge_axes=axes)
-    if any(tag.is_batch_dim() for tag in merge_dim_tags):
-      res_dim_tag_kind = Dim.Types.Batch
-    elif any(tag.is_feature_dim() for tag in merge_dim_tags):
-      res_dim_tag_kind = Dim.Types.Feature
-    else:
-      res_dim_tag_kind = Dim.Types.Spatial
     if out_dim:
       assert out_dim.dimension == res_dim
     else:
-      out_dim = Dim(
-        kind=res_dim_tag_kind, description="%s_merge_dims" % name,
-        dimension=res_dim)
+      from numpy import prod
+      out_dim = prod(merge_dim_tags)
+      assert isinstance(out_dim, Dim)
+      assert out_dim.dimension == res_dim
     new_dim_tags = [d for (i, d) in enumerate(data.dim_tags) if i not in axes]
     new_dim_tags.insert(merge_target_axis, out_dim)
 

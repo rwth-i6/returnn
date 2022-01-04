@@ -1375,8 +1375,9 @@ class Dim(object):
         return Dim._make_constant_static_dim(1)
       if len(self.terms) == 1:
         return self.terms[0]
+      dim_kind = _get_merged_dim_kind(self.terms)
       return Dim(
-        kind=self.base_term().kind, description="*".join(map(Dim._get_description, self.terms)),
+        kind=dim_kind, description="*".join(map(Dim._get_description, self.terms)),
         dimension=self.dimension,
         derived_from_op=Dim.Op(kind="mul", inputs=list(self.terms)))
 
@@ -1456,13 +1457,12 @@ class Dim(object):
           dim = None
       if len(add_parts) == 1:
         return add_parts[0]
-      base_tag = self.representative_tag()
       return Dim(
-        kind=base_tag.kind if base_tag else None,
+        kind=_get_merged_dim_kind(add_parts),
         description="+".join(desc_parts),
         dimension=dim,
         derived_from_op=Dim.Op(kind="add", inputs=add_parts),
-        derived_from_tag=base_tag)
+        derived_from_tag=self.representative_tag())
 
     def __repr__(self):
       return "Dim._OpLinearTerm(%r)" % (self.terms,)
@@ -5601,6 +5601,20 @@ def _default_feature_dim_axis(batch_dim_axis, time_dim_axis, batch_shape, sparse
   if static_axes:
     return static_axes[-1]
   return axes[-1]
+
+
+def _get_merged_dim_kind(dim_tags):
+  """
+  :param list[Dim]|tuple[Dim] dim_tags:
+  :return: dim kind
+  :rtype: Entity
+  """
+  if any(tag.is_batch_dim() for tag in dim_tags):
+    return Dim.Types.Batch
+  elif any(tag.is_feature_dim() for tag in dim_tags):
+    return Dim.Types.Feature
+  else:
+    return Dim.Types.Spatial
 
 
 class ControlFlowContext:
