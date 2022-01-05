@@ -2434,10 +2434,14 @@ def get_tf_gcc_version():
   :rtype: str|None
   """
   tf_gcc_version = getattr(tf, "__compiler_version__", None)  # e.g. "4.8.5" or "5.4.0 20160609"
+  # or also 'Apple LLVM 13.0.0 (clang-1300.0.27.3)'
   if not tf_gcc_version:
     return None
+  assert isinstance(tf_gcc_version, str)
   if " " in tf_gcc_version:
     tf_gcc_version = tf_gcc_version[:tf_gcc_version.find(" ")]  # just "5.4.0"
+  if not tf_gcc_version.replace(".", "").isdigit():  # e.g. 'Apple'
+    return None
   return tf_gcc_version
 
 
