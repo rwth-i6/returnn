@@ -1423,9 +1423,7 @@ class LayerBase(object):
         x = data.placeholder
         mean_cur_batch, variance_cur_batch = tf_compat.v1.nn.moments(
           x, axes=data.get_axes(exclude_feature=True), keep_dims=param_version <= 1)
-      update_sample = (
-        (not update_sample_only_in_training)
-        or tf_util.opt_logical_and(update_sample_only_in_training, self.network.train_flag))
+      update_sample = (not update_sample_only_in_training) or self.network.train_flag
       delayed_ops = []  # type: typing.List[tf.Operation]
       # Note about param_version:
       # We might later drop some earlier versions.
