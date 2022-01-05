@@ -575,7 +575,7 @@ def test_batch_norm_vars():
     assert_equal(layer.params[bn_prefix + "variance"].get_shape().as_list(), [1, 1, n_out])
 
 
-def test_batch_norm_param_v0_to_v1_import():
+def _test_batch_norm_param_old_to_new_import(old_version, new_version):
   import tempfile
   model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
   model_filename = model_tmp_dir + "/model"
@@ -592,7 +592,7 @@ def test_batch_norm_param_v0_to_v1_import():
   with make_scope() as session:
     config = Config({"extern_data": {"data": {"dim": n_in}}})
     network = TFNetwork(config=config, train_flag=True)
-    network.construct_from_dict(_make_net_dict(param_version=0))
+    network.construct_from_dict(_make_net_dict(param_version=old_version))
     network.initialize_params(session)
     network.save_params_to_file(filename=model_filename, session=session)
     out_ref = session.run(
@@ -603,13 +603,25 @@ def test_batch_norm_param_v0_to_v1_import():
   with make_scope() as session:
     config = Config({"extern_data": {"data": {"dim": n_in}}})
     network = TFNetwork(config=config, train_flag=True)
-    network.construct_from_dict(_make_net_dict(param_version=1))
+    network.construct_from_dict(_make_net_dict(param_version=new_version))
     network.load_params_from_file(filename=model_filename, session=session)
     out_new = session.run(
       network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(network.extern_data))
     assert isinstance(out_new, numpy.ndarray)
     assert not numpy.allclose(out_new, 0.0)
     numpy.testing.assert_allclose(out_ref, out_new)
+
+
+def test_batch_norm_param_v0_to_v1_import():
+  _test_batch_norm_param_old_to_new_import(old_version=0, new_version=1)
+
+
+def test_batch_norm_param_v0_to_v2_import():
+  _test_batch_norm_param_old_to_new_import(old_version=0, new_version=2)
+
+
+def test_batch_norm_param_v1_to_v2_import():
+  _test_batch_norm_param_old_to_new_import(old_version=1, new_version=2)
 
 
 def test_batch_norm():
