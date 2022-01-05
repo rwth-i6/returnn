@@ -1418,10 +1418,10 @@ class LayerBase(object):
     with reuse_name_scope(self.get_absolute_name_scope_prefix() + "batch_norm", absolute=True):
       if masked_time:
         x = data.get_placeholder_flattened(keepdims=param_version <= 1)
-        mean, variance = tf_compat.v1.nn.moments(x, axes=[0], keep_dims=param_version <= 1)
+        mean_cur_batch, variance_cur_batch = tf_compat.v1.nn.moments(x, axes=[0], keep_dims=param_version <= 1)
       else:
         x = data.placeholder
-        mean, variance = tf_compat.v1.nn.moments(
+        mean_cur_batch, variance_cur_batch = tf_compat.v1.nn.moments(
           x, axes=data.get_axes(exclude_feature=True), keep_dims=param_version <= 1)
       if update_sample_only_in_training:
         momentum = tf.where(self.network.train_flag, momentum, 0.0)
@@ -1445,7 +1445,7 @@ class LayerBase(object):
           trainable=False))
       # Use exponential moving average of batch mean.
       # Note: We could also use cumulative moving average. Our Theano implementation does that for inference.
-      updated_sample_mean = tf_compat.v1.assign_add(sample_mean, (mean - sample_mean) * momentum)
+      updated_sample_mean = tf_compat.v1.assign_add(sample_mean, (mean_cur_batch - sample_mean) * momentum)
       if delay_sample_update:
         delayed_ops.append(updated_sample_mean.op)
       else:
@@ -1457,7 +1457,8 @@ class LayerBase(object):
           initializer=tf_compat.v1.ones_initializer(),
           name="%svariance" % param_name_prefix,
           trainable=False))
-      updated_sample_variance = tf_compat.v1.assign_add(sample_variance, (variance - sample_variance) * momentum)
+      updated_sample_variance = tf_compat.v1.assign_add(
+        sample_variance, (variance_cur_batch - sample_variance) * momentum)
       if delay_sample_update:
         delayed_ops.append(updated_sample_variance.op)
       else:
@@ -1475,8 +1476,8 @@ class LayerBase(object):
             use_sample = tf.where(self.network.train_flag, use_sample, 1.0)
         else:
           use_sample = 1.0
-        mean = (1. - use_sample) * mean + use_sample * sample_mean
-        variance = (1. - use_sample) * variance + use_sample * sample_variance
+        mean = (1. - use_sample) * mean_cur_batch + use_sample * sample_mean
+        variance = (1. - use_sample) * variance_cur_batch + use_sample * sample_variance
       if param_version >= 1:
         mean = tf.reshape(mean, data.get_bc_spatial_batch_shape())
         variance = tf.reshape(variance, data.get_bc_spatial_batch_shape())
