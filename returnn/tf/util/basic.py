@@ -2428,16 +2428,27 @@ class VariableAssigner(object):
     session.run(self.assign_op, feed_dict={self.assign_op.inputs[1]: value})
 
 
+def get_tf_gcc_version():
+  """
+  :return: gcc version, e.g. "4.8.5"
+  :rtype: str|None
+  """
+  tf_gcc_version = getattr(tf, "__compiler_version__", None)  # e.g. "4.8.5" or "5.4.0 20160609"
+  if not tf_gcc_version:
+    return None
+  if " " in tf_gcc_version:
+    tf_gcc_version = tf_gcc_version[:tf_gcc_version.find(" ")]  # just "5.4.0"
+  return tf_gcc_version
+
+
 def _get_tf_gcc_path(bin_name):
   """
   :param str bin_name: e.g. "gcc" or "g++"
   :rtype: str
   """
   gcc_candidates = []
-  tf_gcc_version = getattr(tf, "__compiler_version__", None)
-  if tf_gcc_version:  # e.g. "4.8.5" or "5.4.0 20160609"
-    if " " in tf_gcc_version:
-      tf_gcc_version = tf_gcc_version[:tf_gcc_version.find(" ")]  # just "5.4.0"
+  tf_gcc_version = get_tf_gcc_version()
+  if tf_gcc_version:
     tf_gcc_version = tf_gcc_version.split(".")  # ["5", "4", "0"]
     for i in range(len(tf_gcc_version), 0, -1):
       gcc_candidates.append("%s-%s" % (bin_name, ".".join(tf_gcc_version[:i])))
@@ -2790,6 +2801,23 @@ class OpCodeCompiler(NativeCodeCompiler):
       return nvcc_opts
     return super(OpCodeCompiler, self)._transform_compiler_opts(opts)
 
+  @classmethod
+  def _cpp_common_opts(cls):
+    tf_gcc_version = get_tf_gcc_version()
+    if tf_gcc_version and int(tf_gcc_version[0]) <= 5:
+      # GCC4 does not support c++14, needed to support TF 1.14 and earlier
+      #   https://github.com/rwth-i6/returnn/pull/875
+      # GCC5 also has problems. https://github.com/rwth-i6/returnn/issues/890
+      cpp_version_opt = "-std=c++11"
+    else:
+      cpp_version_opt = "-std=c++14"
+    return [cpp_version_opt]
+
+  def _extra_common_opts(self):
+    if self.is_cpp:
+      return self._cpp_common_opts()
+    return []
+
   def load_tf_module(self):
     """
     :return: module
@@ -2829,6 +2857,12 @@ class TFNativeUtilCompiler(NativeCodeCompiler):
       **kwargs)
 
   _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version",)
+
+  def _extra_common_opts(self):
+    if self.is_cpp:
+      # noinspection PyProtectedMember
+      return OpCodeCompiler._cpp_common_opts()
+    return []
 
   def _make_info_dict(self):
     from returnn.util.basic import describe_tensorflow_version

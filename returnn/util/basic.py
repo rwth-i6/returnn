@@ -3542,6 +3542,12 @@ class NativeCodeCompiler(object):
     """
     return opts
 
+  def _extra_common_opts(self):
+    """
+    :rtype: list[str]
+    """
+    return []
+
   @classmethod
   def _transform_ld_flag(cls, opt):
     """
@@ -3562,8 +3568,7 @@ class NativeCodeCompiler(object):
     with open(self._c_filename, "w") as f:
       f.write(self.code)
     common_opts = ["-shared", "-O2"]
-    if self.is_cpp:
-      common_opts += ["-std=c++14"]
+    common_opts += self._extra_common_opts()
     if sys.platform == "darwin":
       common_opts += ["-undefined", "dynamic_lookup"]
     for include_path in self._include_paths:
