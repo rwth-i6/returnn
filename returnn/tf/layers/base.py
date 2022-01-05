@@ -1395,7 +1395,7 @@ class LayerBase(object):
     :param float momentum: for the running average of sample_mean and sample_std
     :param bool update_sample_only_in_training:
     :param bool delay_sample_update:
-    :param int param_version: 0 or 1
+    :param int param_version: 0 or 1 or 2
     :param float epsilon:
     :param str|float gamma_init: see :func:`returnn.tf.util.basic.get_initializer`, for the scale
     :param str|float beta_init: see :func:`returnn.tf.util.basic.get_initializer`, for the mean
@@ -1417,11 +1417,12 @@ class LayerBase(object):
     """
     with reuse_name_scope(self.get_absolute_name_scope_prefix() + "batch_norm", absolute=True):
       if masked_time:
-        x = data.get_placeholder_flattened(keepdims=True)
-        mean, variance = tf_compat.v1.nn.moments(x, axes=[0], keep_dims=True)
+        x = data.get_placeholder_flattened(keepdims=param_version <= 1)
+        mean, variance = tf_compat.v1.nn.moments(x, axes=[0], keep_dims=param_version <= 1)
       else:
         x = data.placeholder
-        mean, variance = tf_compat.v1.nn.moments(x, axes=data.get_axes(exclude_feature=True), keep_dims=True)
+        mean, variance = tf_compat.v1.nn.moments(
+          x, axes=data.get_axes(exclude_feature=True), keep_dims=param_version <= 1)
       if update_sample_only_in_training:
         momentum = tf.where(self.network.train_flag, momentum, 0.0)
       delayed_ops = []  # type: typing.List[tf.Operation]
@@ -1432,11 +1433,14 @@ class LayerBase(object):
         param_name_prefix = "%s_%s_" % (self.name, data.name)
       elif param_version == 1:
         param_name_prefix = ""
+      elif param_version == 2:
+        param_name_prefix = "v2_"
       else:
         raise NotImplementedError("%s: batch_norm param_version %r" % (self, param_version))
       with self.var_creation_scope():
         sample_mean = self.add_param(tf_compat.v1.get_variable(
-          shape=data.get_bc_spatial_batch_shape(), initializer=tf_compat.v1.zeros_initializer(),
+          shape=data.get_bc_spatial_batch_shape() if param_version <= 1 else [data.dim],
+          initializer=tf_compat.v1.zeros_initializer(),
           name="%smean" % param_name_prefix,
           trainable=False))
       # Use exponential moving average of batch mean.
@@ -1449,7 +1453,8 @@ class LayerBase(object):
       # Note: Our Theano implementation does not use a moving average for this.
       with self.var_creation_scope():
         sample_variance = self.add_param(tf_compat.v1.get_variable(
-          shape=data.get_bc_spatial_batch_shape(), initializer=tf_compat.v1.ones_initializer(),
+          shape=data.get_bc_spatial_batch_shape() if param_version <= 1 else [data.dim],
+          initializer=tf_compat.v1.ones_initializer(),
           name="%svariance" % param_name_prefix,
           trainable=False))
       updated_sample_variance = tf_compat.v1.assign_add(sample_variance, (variance - sample_variance) * momentum)
@@ -1472,6 +1477,9 @@ class LayerBase(object):
           use_sample = 1.0
         mean = (1. - use_sample) * mean + use_sample * sample_mean
         variance = (1. - use_sample) * variance + use_sample * sample_variance
+      if param_version >= 1:
+        mean = tf.reshape(mean, data.get_bc_spatial_batch_shape())
+        variance = tf.reshape(variance, data.get_bc_spatial_batch_shape())
       bn = (data.placeholder - mean) * tf_compat.v1.rsqrt(tf_util.optional_add(variance, epsilon))
       if not skip_updates and delayed_ops and (isinstance(use_sample, tf.Tensor) or use_sample != 0.0):
         for op in delayed_ops:
@@ -1484,9 +1492,12 @@ class LayerBase(object):
           gamma_initializer = get_initializer(
             gamma_init, seed=self.network.random.randint(2 ** 31) if gamma_init else 0, eval_local_ns={"layer": self})
           gamma = self.add_param(tf_compat.v1.get_variable(
-            shape=data.get_bc_spatial_batch_shape(), initializer=gamma_initializer,
+            shape=data.get_bc_spatial_batch_shape() if param_version <= 1 else [data.dim],
+            initializer=gamma_initializer,
             name="%sgamma" % param_name_prefix,
             trainable=True))
+          if param_version >= 1:
+            gamma = tf.reshape(gamma, data.get_bc_spatial_batch_shape())
         bn *= gamma
       if use_shift:
         with self.var_creation_scope():
@@ -1494,9 +1505,12 @@ class LayerBase(object):
           beta_initializer = get_initializer(
             beta_init, seed=self.network.random.randint(2 ** 31) if beta_init else 0, eval_local_ns={"layer": self})
           beta = self.add_param(tf_compat.v1.get_variable(
-            shape=data.get_bc_spatial_batch_shape(), initializer=beta_initializer,
+            shape=data.get_bc_spatial_batch_shape() if param_version <= 1 else [data.dim],
+            initializer=beta_initializer,
             name="%sbeta" % param_name_prefix,
             trainable=True))
+          if param_version >= 1:
+            beta = tf.reshape(beta, data.get_bc_spatial_batch_shape())
         bn += beta
       return bn
 
