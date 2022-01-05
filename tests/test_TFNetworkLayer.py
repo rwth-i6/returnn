@@ -575,6 +575,43 @@ def test_batch_norm_vars():
     assert_equal(layer.params[bn_prefix + "variance"].get_shape().as_list(), [1, 1, n_out])
 
 
+def test_batch_norm_param_v0_to_v1_import():
+  import tempfile
+  model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
+  model_filename = model_tmp_dir + "/model"
+  layer_name = "layer1"
+  n_in = 3
+
+  def _make_net_dict(param_version):
+    return {
+      layer_name: {
+        "class": "batch_norm", "from": "data:data", "is_output_layer": True,
+        "param_version": param_version}
+    }
+
+  with make_scope() as session:
+    config = Config({"extern_data": {"data": {"dim": n_in}}})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(_make_net_dict(param_version=0))
+    network.initialize_params(session)
+    network.save_params_to_file(filename=model_filename, session=session)
+    out_ref = session.run(
+      network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(network.extern_data))
+    assert isinstance(out_ref, numpy.ndarray)
+    assert not numpy.allclose(out_ref, 0.0)
+
+  with make_scope() as session:
+    config = Config({"extern_data": {"data": {"dim": n_in}}})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(_make_net_dict(param_version=1))
+    network.load_params_from_file(filename=model_filename, session=session)
+    out_new = session.run(
+      network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(network.extern_data))
+    assert isinstance(out_new, numpy.ndarray)
+    assert not numpy.allclose(out_new, 0.0)
+    numpy.testing.assert_allclose(out_ref, out_new)
+
+
 def test_batch_norm():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData(), train_flag=True)
