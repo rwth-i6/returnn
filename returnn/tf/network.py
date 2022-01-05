@@ -3719,6 +3719,20 @@ class CustomCheckpointLoader:
       return load_old
 
     # noinspection PyShadowingNames
+    def make_load_renamed_flatten(old_name):
+      """
+      :param str old_name:
+      :rtype: () -> numpy.ndarray
+      """
+      def load_old():
+        """
+        :rtype: numpy.ndarray
+        """
+        return reader.get_tensor(old_name).flatten()
+
+      return load_old
+
+    # noinspection PyShadowingNames
     def make_load_weights_nativelstm_to_basic(new_name, postfix):
       """
       :param str new_name:
@@ -3919,6 +3933,17 @@ class CustomCheckpointLoader:
           if re.match("^%s/batch_norm/.*_%s$" % (re.escape(prefix), name), old_name)]
         if len(matching_obsolete_var_names) == 1:
           var_name_map[v] = make_load_renamed(old_name=matching_obsolete_var_names[0])
+      # Check batch norm param v0 or v1 to v2.
+      m = re.match("^(.*)/batch_norm/v2_(beta|gamma|mean|variance)$", v)
+      if m:
+        prefix = m.group(1)  # e.g. "layer1"
+        name = m.group(2)  # "beta" or so
+        matching_obsolete_var_names = [
+          old_name for old_name in obsolete_var_names
+          if re.match("^%s/batch_norm/.*_%s$" % (re.escape(prefix), name), old_name)
+          or re.match("^%s/batch_norm/%s$" % (re.escape(prefix), name), old_name)]
+        if len(matching_obsolete_var_names) == 1:
+          var_name_map[v] = make_load_renamed_flatten(old_name=matching_obsolete_var_names[0])
     for v in obsolete_var_names:
       for k_old, k_new in map_list.items():
         if v.endswith("/%s" % k_old):
