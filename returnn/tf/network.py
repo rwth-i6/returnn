@@ -3909,6 +3909,16 @@ class CustomCheckpointLoader:
           var_name_map[v] = loader.get_w_re
           var_name_map[cur_name_w] = loader.get_w
           var_name_map[cur_name_b] = loader.get_b
+      # Check batch norm param v0 to v1.
+      m = re.match("^(.*)/batch_norm/(beta|gamma|mean|variance)$", v)
+      if m:
+        prefix = m.group(1)  # e.g. "layer1"
+        name = m.group(2)  # "beta" or so
+        matching_obsolete_var_names = [
+          old_name for old_name in obsolete_var_names
+          if re.match("^%s/batch_norm/.*_%s$" % (re.escape(prefix), name), old_name)]
+        if len(matching_obsolete_var_names) == 1:
+          var_name_map[v] = make_load_renamed(old_name=matching_obsolete_var_names[0])
     for v in obsolete_var_names:
       for k_old, k_new in map_list.items():
         if v.endswith("/%s" % k_old):
