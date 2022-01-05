@@ -1416,14 +1416,25 @@ class LayerBase(object):
       https://github.com/deepmind/sonnet/blob/master/sonnet/python/modules/batch_norm.py
     """
     with reuse_name_scope(self.get_absolute_name_scope_prefix() + "batch_norm", absolute=True):
-      if masked_time:
-        x = data.get_placeholder_flattened(keepdims=param_version <= 1)
-        mean_cur_batch, variance_cur_batch = tf_compat.v1.nn.moments(x, axes=[0], keep_dims=param_version <= 1)
-      else:
-        x = data.placeholder
-        mean_cur_batch, variance_cur_batch = tf_compat.v1.nn.moments(
-          x, axes=data.get_axes(exclude_feature=True), keep_dims=param_version <= 1)
+      stats_shape = data.get_bc_spatial_batch_shape() if param_version <= 1 else [data.dim]
       update_sample = (not update_sample_only_in_training) or self.network.train_flag
+
+      def _get_mean_var_cur_batch():
+        if masked_time:
+          x = data.get_placeholder_flattened(keepdims=param_version <= 1)
+          return tf_compat.v1.nn.moments(x, axes=[0], keep_dims=param_version <= 1)
+        else:
+          x = data.placeholder
+          return tf_compat.v1.nn.moments(x, axes=data.get_axes(exclude_feature=True), keep_dims=param_version <= 1)
+
+      need_mean_var_cur_batch = tf_util.opt_logical_or(
+        update_sample,
+        tf_util.opt_logical_and(use_sample < 1, force_sample or self.network.train_flag))
+      mean_cur_batch, variance_cur_batch = tf_util.cond(
+        need_mean_var_cur_batch,
+        _get_mean_var_cur_batch,
+        # dummy otherwise
+        lambda: (tf.zeros(stats_shape, dtype=data.dtype), tf.zeros(stats_shape, dtype=data.dtype)))
       delayed_ops = []  # type: typing.List[tf.Operation]
       # Note about param_version:
       # We might later drop some earlier versions.
@@ -1438,7 +1449,7 @@ class LayerBase(object):
         raise NotImplementedError("%s: batch_norm param_version %r" % (self, param_version))
       with self.var_creation_scope():
         sample_mean = self.add_param(tf_compat.v1.get_variable(
-          shape=data.get_bc_spatial_batch_shape() if param_version <= 1 else [data.dim],
+          shape=stats_shape,
           initializer=tf_compat.v1.zeros_initializer(),
           name="%smean" % param_name_prefix,
           trainable=False))
@@ -1456,7 +1467,7 @@ class LayerBase(object):
       # Note: Our Theano implementation does not use a moving average for this.
       with self.var_creation_scope():
         sample_variance = self.add_param(tf_compat.v1.get_variable(
-          shape=data.get_bc_spatial_batch_shape() if param_version <= 1 else [data.dim],
+          shape=stats_shape,
           initializer=tf_compat.v1.ones_initializer(),
           name="%svariance" % param_name_prefix,
           trainable=False))
@@ -1471,7 +1482,7 @@ class LayerBase(object):
         sample_variance = updated_sample_variance
       # If train or if force_sample, use default use_sample=0.0, otherwise use_sample=1.0.
       skip_updates = self.network.train_flag is False and update_sample_only_in_training and not force_sample
-      if skip_updates:
+      if skip_updates or use_sample == 1:
         mean = sample_mean
         variance = sample_variance
       else:
@@ -1499,7 +1510,7 @@ class LayerBase(object):
           gamma_initializer = get_initializer(
             gamma_init, seed=self.network.random.randint(2 ** 31) if gamma_init else 0, eval_local_ns={"layer": self})
           gamma = self.add_param(tf_compat.v1.get_variable(
-            shape=data.get_bc_spatial_batch_shape() if param_version <= 1 else [data.dim],
+            shape=stats_shape,
             initializer=gamma_initializer,
             name="%sgamma" % param_name_prefix,
             trainable=True))
@@ -1512,7 +1523,7 @@ class LayerBase(object):
           beta_initializer = get_initializer(
             beta_init, seed=self.network.random.randint(2 ** 31) if beta_init else 0, eval_local_ns={"layer": self})
           beta = self.add_param(tf_compat.v1.get_variable(
-            shape=data.get_bc_spatial_batch_shape() if param_version <= 1 else [data.dim],
+            shape=stats_shape,
             initializer=beta_initializer,
             name="%sbeta" % param_name_prefix,
             trainable=True))
