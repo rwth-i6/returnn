@@ -1423,8 +1423,9 @@ class LayerBase(object):
         x = data.placeholder
         mean_cur_batch, variance_cur_batch = tf_compat.v1.nn.moments(
           x, axes=data.get_axes(exclude_feature=True), keep_dims=param_version <= 1)
-      if update_sample_only_in_training:
-        momentum = tf.where(self.network.train_flag, momentum, 0.0)
+      update_sample = (
+        (not update_sample_only_in_training)
+        or tf_util.opt_logical_and(update_sample_only_in_training, self.network.train_flag))
       delayed_ops = []  # type: typing.List[tf.Operation]
       # Note about param_version:
       # We might later drop some earlier versions.
@@ -1445,9 +1446,13 @@ class LayerBase(object):
           trainable=False))
       # Use exponential moving average of batch mean.
       # Note: We could also use cumulative moving average. Our Theano implementation does that for inference.
-      updated_sample_mean = tf_compat.v1.assign_add(sample_mean, (mean_cur_batch - sample_mean) * momentum)
+      updated_sample_mean = tf_util.cond(
+        update_sample,
+        lambda: tf_compat.v1.assign_add(sample_mean, (mean_cur_batch - sample_mean) * momentum),
+        lambda: sample_mean)
       if delay_sample_update:
-        delayed_ops.append(updated_sample_mean.op)
+        if update_sample is not False:
+          delayed_ops.append(updated_sample_mean.op)
       else:
         sample_mean = updated_sample_mean
       # Note: Our Theano implementation does not use a moving average for this.
@@ -1457,10 +1462,13 @@ class LayerBase(object):
           initializer=tf_compat.v1.ones_initializer(),
           name="%svariance" % param_name_prefix,
           trainable=False))
-      updated_sample_variance = tf_compat.v1.assign_add(
-        sample_variance, (variance_cur_batch - sample_variance) * momentum)
+      updated_sample_variance = tf_util.cond(
+        update_sample,
+        lambda: tf_compat.v1.assign_add(sample_variance, (variance_cur_batch - sample_variance) * momentum),
+        lambda: sample_variance)
       if delay_sample_update:
-        delayed_ops.append(updated_sample_variance.op)
+        if update_sample is not False:
+          delayed_ops.append(updated_sample_variance.op)
       else:
         sample_variance = updated_sample_variance
       # If train or if force_sample, use default use_sample=0.0, otherwise use_sample=1.0.
