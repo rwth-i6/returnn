@@ -3757,6 +3757,25 @@ def opt_logical_and(*args):
   return res
 
 
+def opt_logical_or(*args):
+  """
+  :param tf.Tensor|bool args:
+  :return: basically logical_or(*args), but leaves out all constants
+  :rtype: tf.Tensor|bool
+  """
+  res = False
+  for v in args:
+    if v is True:
+      return True
+    if v is False:
+      continue
+    if res is False:
+      res = v
+    else:
+      res = tf.logical_or(res, v)
+  return res
+
+
 def windowed_nd(source, window_size, window_left=None, window_right=None,
                 padding="same", time_axis=1, new_window_axis=2, stride=1):
   """
