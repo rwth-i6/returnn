@@ -735,7 +735,7 @@ class BatchNormLayer(CopyLayer):
     :param float momentum: for the running average of sample_mean and sample_std
     :param bool update_sample_only_in_training:
     :param bool delay_sample_update:
-    :param int param_version: 0 or 1
+    :param int param_version: 0 or 1 or 2
     :param float epsilon:
     :param str|float gamma_init: see :func:`returnn.tf.util.basic.get_initializer`, for the scale
     :param str|float beta_init: see :func:`returnn.tf.util.basic.get_initializer`, for the mean
