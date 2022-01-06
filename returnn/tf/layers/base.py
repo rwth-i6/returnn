@@ -1467,6 +1467,44 @@ class LayerBase(object):
       else:
         beta = None
 
+      use_fused = (
+        param_version >= 2 and
+        not masked_time and
+        use_shift and use_std and
+        use_sample == 0 and not force_sample)
+
+      def _calc_batch_norm_fused(train_flag):
+        """
+        :param bool train_flag:
+        :return: like data, optional grouped update op or no_op
+        :rtype: (tf.Tensor, tf.Operation)
+        """
+        import numpy
+        x = data.placeholder
+        x_shape = tf_util.get_shape(x)
+        if data.feature_dim_axis == data.batch_ndim - 1:  # feature last
+          data_format = "NHWC"
+          x = tf.reshape(x, [-1, 1, 1, x_shape[-1]])
+        else:  # feature not last
+          data_format = "NCHW"
+          x = tf.reshape(
+            x,
+            [numpy.prod(x_shape[:data.feature_dim_axis]),
+             x_shape[data.feature_dim_axis],
+             numpy.prod(x_shape[data.feature_dim_axis + 1:]), 1])
+        bn_, sample_mean_, sample_variance_ = tf_compat.v1.nn.fused_batch_norm(
+          x, scale=gamma, offset=beta, mean=sample_mean, variance=sample_variance,
+          epsilon=epsilon, exponential_avg_factor=momentum,
+          data_format=data_format, is_training=train_flag)
+        bn_ = tf.reshape(bn_, x_shape)
+        update_ops = []
+        if train_flag:
+          updated_sample_mean = tf_compat.v1.assign(sample_mean, sample_mean_)
+          updated_sample_variance = tf_compat.v1.assign(sample_variance, sample_variance_)
+          update_ops += [updated_sample_mean.op, updated_sample_variance.op]
+        op_ = tf.group(*update_ops)
+        return bn_, op_
+
       def _calc_batch_norm(train_flag):
         """
         :param bool train_flag:
@@ -1520,18 +1558,22 @@ class LayerBase(object):
         op_ = tf.group(*update_ops)
         return bn_, op_
 
-      bn, op = self.network.cond_on_train(lambda: _calc_batch_norm(True), lambda: _calc_batch_norm(False))
+      if use_fused:
+        bn, op = self.network.cond_on_train(lambda: _calc_batch_norm_fused(True), lambda: _calc_batch_norm_fused(False))
+      else:
+        bn, op = self.network.cond_on_train(lambda: _calc_batch_norm(True), lambda: _calc_batch_norm(False))
       # Make sure we update after we calculated the batch norm.
       tf_util.add_control_input(op, control_input=bn.op)
       self.network.register_post_control_dependencies([op])
-      if use_std:
-        if param_version >= 2:
-          gamma = tf.reshape(gamma, data.get_bc_spatial_batch_shape())
-        bn *= gamma
-      if use_shift:
-        if param_version >= 2:
-          beta = tf.reshape(beta, data.get_bc_spatial_batch_shape())
-        bn += beta
+      if not use_fused:
+        if use_std:
+          if param_version >= 2:
+            gamma = tf.reshape(gamma, data.get_bc_spatial_batch_shape())
+          bn *= gamma
+        if use_shift:
+          if param_version >= 2:
+            beta = tf.reshape(beta, data.get_bc_spatial_batch_shape())
+          bn += beta
       return bn
 
   def get_hidden_state(self):
