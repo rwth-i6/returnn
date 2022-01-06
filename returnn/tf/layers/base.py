@@ -1416,26 +1416,6 @@ class LayerBase(object):
       https://github.com/deepmind/sonnet/blob/master/sonnet/python/modules/batch_norm.py
     """
     with reuse_name_scope(self.get_absolute_name_scope_prefix() + "batch_norm", absolute=True):
-      stats_shape = data.get_bc_spatial_batch_shape() if param_version <= 1 else [data.dim]
-      update_sample = (not update_sample_only_in_training) or self.network.train_flag
-
-      def _get_mean_var_cur_batch():
-        if masked_time:
-          x = data.get_placeholder_flattened(keepdims=param_version <= 1)
-          return tf_compat.v1.nn.moments(x, axes=[0], keep_dims=param_version <= 1)
-        else:
-          x = data.placeholder
-          return tf_compat.v1.nn.moments(x, axes=data.get_axes(exclude_feature=True), keep_dims=param_version <= 1)
-
-      need_mean_var_cur_batch = tf_util.opt_logical_or(
-        update_sample,
-        tf_util.opt_logical_and(use_sample < 1, force_sample or self.network.train_flag))
-      mean_cur_batch, variance_cur_batch = tf_util.cond(
-        need_mean_var_cur_batch,
-        _get_mean_var_cur_batch,
-        # dummy otherwise
-        lambda: (tf.zeros(stats_shape, dtype=data.dtype), tf.zeros(stats_shape, dtype=data.dtype)))
-      delayed_ops = []  # type: typing.List[tf.Operation]
       # Note about param_version:
       # We might later drop some earlier versions.
       # We just need to implement a conversion in CustomCheckpointLoader.
@@ -1447,23 +1427,14 @@ class LayerBase(object):
         param_name_prefix = "v2_"
       else:
         raise NotImplementedError("%s: batch_norm param_version %r" % (self, param_version))
+      stats_shape = data.get_bc_spatial_batch_shape() if param_version <= 1 else [data.dim]
+
       with self.var_creation_scope():
         sample_mean = self.add_param(tf_compat.v1.get_variable(
           shape=stats_shape,
           initializer=tf_compat.v1.zeros_initializer(),
           name="%smean" % param_name_prefix,
           trainable=False))
-      # Use exponential moving average of batch mean.
-      # Note: We could also use cumulative moving average. Our Theano implementation does that for inference.
-      updated_sample_mean = tf_util.cond(
-        update_sample,
-        lambda: tf_compat.v1.assign_add(sample_mean, (mean_cur_batch - sample_mean) * momentum),
-        lambda: sample_mean)
-      if delay_sample_update:
-        if update_sample is not False:
-          delayed_ops.append(updated_sample_mean.op)
-      else:
-        sample_mean = updated_sample_mean
       # Note: Our Theano implementation does not use a moving average for this.
       with self.var_creation_scope():
         sample_variance = self.add_param(tf_compat.v1.get_variable(
@@ -1471,39 +1442,64 @@ class LayerBase(object):
           initializer=tf_compat.v1.ones_initializer(),
           name="%svariance" % param_name_prefix,
           trainable=False))
-      updated_sample_variance = tf_util.cond(
-        update_sample,
-        lambda: tf_compat.v1.assign_add(sample_variance, (variance_cur_batch - sample_variance) * momentum),
-        lambda: sample_variance)
-      if delay_sample_update:
-        if update_sample is not False:
-          delayed_ops.append(updated_sample_variance.op)
-      else:
-        sample_variance = updated_sample_variance
-      # If train or if force_sample, use default use_sample=0.0, otherwise use_sample=1.0.
-      skip_updates = self.network.train_flag is False and update_sample_only_in_training and not force_sample
-      if skip_updates or use_sample == 1:
-        mean = sample_mean
-        variance = sample_variance
-      else:
-        if self.network.train_flag is not False or force_sample:
-          if force_sample:
-            pass  # leave use_sample as-is
+
+      def _calc_batch_norm(train_flag):
+        """
+        :param bool train_flag:
+        :return: like data, optional grouped update op or no_op
+        :rtype: (tf.Tensor, tf.Operation)
+        """
+        update_sample = (not update_sample_only_in_training) or train_flag
+        need_mean_var_cur_batch = update_sample or (use_sample != 1 and (force_sample or train_flag))
+
+        if need_mean_var_cur_batch:
+          if masked_time:
+            x = data.get_placeholder_flattened(keepdims=param_version <= 1)
+            mean_cur_batch, variance_cur_batch = tf_compat.v1.nn.moments(x, axes=[0], keep_dims=param_version <= 1)
           else:
-            use_sample = tf.where(self.network.train_flag, use_sample, 1.0)
+            x = data.placeholder
+            mean_cur_batch, variance_cur_batch = tf_compat.v1.nn.moments(
+              x, axes=data.get_axes(exclude_feature=True), keep_dims=param_version <= 1)
         else:
-          use_sample = 1.0
-        mean = (1. - use_sample) * mean_cur_batch + use_sample * sample_mean
-        variance = (1. - use_sample) * variance_cur_batch + use_sample * sample_variance
-      if param_version >= 1:
-        mean = tf.reshape(mean, data.get_bc_spatial_batch_shape())
-        variance = tf.reshape(variance, data.get_bc_spatial_batch_shape())
-      bn = (data.placeholder - mean) * tf_compat.v1.rsqrt(tf_util.optional_add(variance, epsilon))
-      if not skip_updates and delayed_ops and (isinstance(use_sample, tf.Tensor) or use_sample != 0.0):
-        for op in delayed_ops:
-          # Make sure we update after we calculated the batch norm.
-          tf_util.add_control_input(op, control_input=bn.op)
-        self.network.register_post_control_dependencies(delayed_ops)
+          mean_cur_batch, variance_cur_batch = None, None
+
+        # Use exponential moving average of batch mean.
+        # Note: We could also use cumulative moving average. Our Theano implementation does that for inference.
+        update_ops = []  # type: typing.List[tf.Operation]
+        sample_mean_, sample_variance_ = sample_mean, sample_variance
+        if update_sample:
+          updated_sample_mean = tf_compat.v1.assign_add(sample_mean, (mean_cur_batch - sample_mean) * momentum)
+          updated_sample_variance = tf_compat.v1.assign_add(
+            sample_variance, (variance_cur_batch - sample_variance) * momentum)
+          update_ops += [updated_sample_mean.op, updated_sample_variance.op]
+          if not delay_sample_update:
+            sample_mean_ = updated_sample_mean
+            sample_variance_ = updated_sample_variance
+        # If train or if force_sample, use default use_sample=0.0, otherwise use_sample=1.0.
+        if force_sample or train_flag:
+          if use_sample == 1:
+            mean, variance = sample_mean_, sample_variance_
+          elif use_sample == 0:
+            mean, variance = mean_cur_batch, variance_cur_batch
+          else:
+            mean = (1. - use_sample) * mean_cur_batch + use_sample * sample_mean_
+            variance = (1. - use_sample) * variance_cur_batch + use_sample * sample_variance_
+        else:
+          # use_sample = 1.
+          mean, variance = sample_mean_, sample_variance_
+
+        if param_version >= 1:
+          mean = tf.reshape(mean, data.get_bc_spatial_batch_shape())
+          variance = tf.reshape(variance, data.get_bc_spatial_batch_shape())
+        bn_ = (data.placeholder - mean) * tf_compat.v1.rsqrt(tf_util.optional_add(variance, epsilon))
+        op_ = tf.group(*update_ops)
+        return bn_, op_
+
+      bn, op = self.network.cond_on_train(lambda: _calc_batch_norm(True), lambda: _calc_batch_norm(False))
+      # Make sure we update after we calculated the batch norm.
+      tf_util.add_control_input(op, control_input=bn.op)
+      self.network.register_post_control_dependencies([op])
+
       if use_std:
         with self.var_creation_scope():
           from returnn.tf.util.basic import get_initializer
