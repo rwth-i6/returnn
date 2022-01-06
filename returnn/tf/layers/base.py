@@ -1453,13 +1453,14 @@ class LayerBase(object):
         need_mean_var_cur_batch = update_sample or (use_sample != 1 and (force_sample or train_flag))
 
         if need_mean_var_cur_batch:
+          data_ = data
           if masked_time:
-            x = data.get_placeholder_flattened(keepdims=param_version <= 1)
-            mean_cur_batch, variance_cur_batch = tf_compat.v1.nn.moments(x, axes=[0], keep_dims=param_version <= 1)
-          else:
-            x = data.placeholder
-            mean_cur_batch, variance_cur_batch = tf_compat.v1.nn.moments(
-              x, axes=data.get_axes(exclude_feature=True), keep_dims=param_version <= 1)
+            data_ = data.copy_time_flattened()
+          mean_cur_batch, variance_cur_batch = tf_compat.v1.nn.moments(
+            data_.placeholder, axes=data_.get_axes(exclude_feature=True))
+          if param_version >= 2:
+            mean_cur_batch = tf.reshape(mean_cur_batch, stats_shape)
+            variance_cur_batch = tf.reshape(variance_cur_batch, stats_shape)
         else:
           mean_cur_batch, variance_cur_batch = None, None
 
