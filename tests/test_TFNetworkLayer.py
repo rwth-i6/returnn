@@ -554,7 +554,8 @@ def test_batch_norm_vars():
       "num_inputs": n_in,
       "network": {
         layer_name: {
-          "class": "linear", "activation": "relu", "batch_norm": True, "n_out": n_out, "is_output_layer": True,
+          "class": "linear", "activation": "relu", "batch_norm": {"masked_time": True},
+          "n_out": n_out, "is_output_layer": True,
           "from": "data:data"}
       }})
     network = TFNetwork(config=config, train_flag=True)
@@ -564,15 +565,15 @@ def test_batch_norm_vars():
     print("layer vars:")
     pprint(layer.params)
     assert layer.use_batch_norm
-    bn_prefix = "batch_norm/%s_%s_output_" % (layer_name, layer_name)
+    bn_prefix = "batch_norm/v2_"
     assert_equal(set(layer.params.keys()), {
       "W", "b", bn_prefix + "beta", bn_prefix + "mean", bn_prefix + "gamma", bn_prefix + "variance"})
     assert_equal(layer.params["W"].get_shape().as_list(), [n_in, n_out])
     assert_equal(layer.params["b"].get_shape().as_list(), [n_out])
-    assert_equal(layer.params[bn_prefix + "beta"].get_shape().as_list(), [1, 1, n_out])
-    assert_equal(layer.params[bn_prefix + "gamma"].get_shape().as_list(), [1, 1, n_out])
-    assert_equal(layer.params[bn_prefix + "mean"].get_shape().as_list(), [1, 1, n_out])
-    assert_equal(layer.params[bn_prefix + "variance"].get_shape().as_list(), [1, 1, n_out])
+    assert_equal(layer.params[bn_prefix + "beta"].get_shape().as_list(), [n_out])
+    assert_equal(layer.params[bn_prefix + "gamma"].get_shape().as_list(), [n_out])
+    assert_equal(layer.params[bn_prefix + "mean"].get_shape().as_list(), [n_out])
+    assert_equal(layer.params[bn_prefix + "variance"].get_shape().as_list(), [n_out])
 
 
 def _test_batch_norm_param_old_to_new_import(old_version, new_version):
@@ -586,7 +587,7 @@ def _test_batch_norm_param_old_to_new_import(old_version, new_version):
     return {
       layer_name: {
         "class": "batch_norm", "from": "data:data", "is_output_layer": True,
-        "param_version": param_version}
+        "param_version": param_version, "masked_time": True}
     }
 
   with make_scope() as session:
@@ -713,7 +714,7 @@ def test_batch_norm():
       feed_dict={
         src_nhwc.output.placeholder: input_data,
         src_nhwc.output.size_placeholder[0]: seq_lens})
-    assert numpy.array_equal(out_1, out_2)
+    numpy.testing.assert_array_almost_equal(out_1, out_2)
     print(numpy.sum(out_1 - out_2))
 
 
@@ -942,14 +943,14 @@ def test_cnn_building_block():
                "in_spatial_dims": ("T", "dim:6"),
                "strides": (1, 1), "dilation_rate": (1, 1), "padding": "SAME", "activation": None, "with_bias": False,
                "from": "swap_axes"},
-        "bn1": {"class": "batch_norm", "from": "c1"},
+        "bn1": {"class": "batch_norm", "from": "c1", "masked_time": True},
         "y1": {"class": "activation", "activation": "relu", "batch_norm": False, "from": "bn1"},
         "c2": {"class": "conv", "n_out": filters, "filter_size": filter_size, "auto_use_channel_first": False,
                "in_spatial_dims": ("T", "dim:6"),
                "strides": (1, 1), "dilation_rate": (1, 1), "padding": "SAME", "activation": None, "with_bias": False,
                "from": "y1"},
         "p": {"class": "combine", "kind": "add", "from": ["c2", "swap_axes"]},
-        "bn2": {"class": "batch_norm", "from": "p"},
+        "bn2": {"class": "batch_norm", "from": "p", "masked_time": True},
         "y2": {"class": "activation", "activation": "relu", "batch_norm": False, "from": "bn2"},
 
         "out_pool": {
