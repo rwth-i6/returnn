@@ -1579,6 +1579,8 @@ class LayerBase(object):
         bn, op = self.network.cond_on_train(lambda: _calc_batch_norm_fused(True), lambda: _calc_batch_norm_fused(False))
       else:
         bn, op = self.network.cond_on_train(lambda: _calc_batch_norm(True), lambda: _calc_batch_norm(False))
+      if isinstance(op, tf.Tensor):
+        op = op.op
       # Make sure we update after we calculated the batch norm.
       tf_util.add_control_input(op, control_input=bn.op)
       self.network.register_post_control_dependencies([op])
