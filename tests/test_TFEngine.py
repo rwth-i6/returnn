@@ -3766,12 +3766,13 @@ def test_engine_search_output_file():
   n_data_dim = 10
   n_classes_dim = 2
   num_seqs = 4
+  rnd = numpy.random.RandomState(42)
 
   dataset = StaticDataset([{
-    "data": numpy.random.randint(0, n_data_dim, size=(seq_len,), dtype=numpy.int32),
-    "classes": numpy.random.randint(0, n_classes_dim, size=(seq_len,), dtype=numpy.int32),
-    "classes2": numpy.random.randint(0, n_classes_dim, size=(seq_len,), dtype=numpy.int32),
-    "classes3": numpy.random.randint(0, n_classes_dim, size=(seq_len,), dtype=numpy.int32),
+    "data": rnd.randint(0, n_data_dim, size=(seq_len,), dtype=numpy.int32),
+    "classes": rnd.randint(0, n_classes_dim, size=(seq_len,), dtype=numpy.int32),
+    "classes2": rnd.randint(0, n_classes_dim, size=(seq_len,), dtype=numpy.int32),
+    "classes3": rnd.randint(0, n_classes_dim, size=(seq_len,), dtype=numpy.int32),
   } for _ in range(num_seqs)], output_dim={
     "data": (n_data_dim, 1),
     "classes": (n_classes_dim, 1),
@@ -3846,8 +3847,9 @@ def test_engine_search_output_file():
   # Validate generated output file
   with open(output_file) as fp:
     output_text = fp.read()
+    print(output_text)
     from numpy import array, float32
-    output = eval(output_text)
+    output = eval(output_text, {'array': array, 'float32': float32})
     assert set(config.typed_value('search_output_layer')) == set(output['seq-0'].keys())
     assert all([seq_output['decision'] == seq_output['decision2'] for seq_output in output.values()])
     assert all([seq_output['decision'] == seq_output['decision3'] for seq_output in output.values()])
