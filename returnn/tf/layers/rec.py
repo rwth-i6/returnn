@@ -7401,19 +7401,9 @@ class EditDistanceTableLayer(LayerBase):
     assert target_data, "target %r not found?" % target
     in_dim = target_data.get_time_dim_tag()
     if not out_dim:
-      out_dim = Dim(
-        kind=in_dim.kind, description="%s:edit_dist_table" % name,
-        dimension=in_dim.dimension + 1 if in_dim.dimension else None,
-        batch=in_dim.batch, control_flow_ctx=in_dim.control_flow_ctx)
-    seq_len = tf_util.new_seq_len(
-      func=tf_util.simplify_add, key=tf_util.simplify_add,
-      dim_tag_desc="%s:edit_dist_table" % name,
-      a=target_data.get_sequence_lengths(), b=1)
-    tag = Dim.get_tag_from_size_tensor(seq_len)
-    if tag:
-      tag.declare_same_as(out_dim)
+      out_dim = in_dim + 1
     else:
-      out_dim.dyn_size = seq_len
+      (in_dim + 1).declare_same_as(out_dim)
     return Data(
       name="%s_output" % name,
       dim_tags=(
