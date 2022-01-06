@@ -463,8 +463,7 @@ class MultiChannelMultiResolutionStftLayer(_ConcatInputLayer):
       size_placeholder_dict[0] = new_size
       return size_placeholder_dict
 
-    import numpy as np
-    n_out = np.sum([self._get_n_out_by_fft_config(fft_size, use_rfft, nr_of_channels) for fft_size in fft_sizes])
+    n_out = sum([self._get_n_out_by_fft_config(fft_size, use_rfft, nr_of_channels) for fft_size in fft_sizes])
     if 'n_out' in kwargs and (kwargs['n_out'] != n_out):
       raise Exception('argument n_out of layer MultiChannelStftLayer does not match the fft configuration')
     kwargs['n_out'] = n_out
@@ -571,8 +570,7 @@ class MultiChannelMultiResolutionStftLayer(_ConcatInputLayer):
     :param int nr_of_channels:
     :rtype: Data
     """
-    import numpy as np
-    n_out = np.sum([cls._get_n_out_by_fft_config(fft_size, use_rfft, nr_of_channels) for fft_size in fft_sizes])
+    n_out = sum([cls._get_n_out_by_fft_config(fft_size, use_rfft, nr_of_channels) for fft_size in fft_sizes])
     if 'n_out' not in kwargs:
       kwargs['n_out'] = n_out
     return (super(MultiChannelMultiResolutionStftLayer, cls)
