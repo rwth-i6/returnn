@@ -309,6 +309,16 @@ def test_Data_copy_with_feature_dim_axis_case_6():
   assert list(d_copy.size_placeholder.keys()) == [0]
 
 
+def test_Data_copy_with_feature_dim_axis_case_7():
+  # Case 7:
+  d = Data(name='test_data', shape=(None, 17, 13))
+  assert d.feature_dim_axis == 3
+  d_copy = d.copy_with_feature_dim_axis(1)
+  assert d_copy.shape == (13, None, 17)
+  assert d_copy.feature_dim_axis == 1
+  assert d_copy.dim == 13
+
+
 def test_Data_copy_compatible_to_time_major():
   d1 = Data(name='ff_out_output', shape=(None, 9001), dtype='float32', batch_dim_axis=1)
   d2 = Data(name='ff_out_prior_output', shape=(9001,), dtype='float32', batch_dim_axis=None, time_dim_axis=None)

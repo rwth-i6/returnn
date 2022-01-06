@@ -2993,12 +2993,13 @@ class Data(object):
       from returnn.tf.util.basic import get_valid_scope_name_from_str
       data_opts["placeholder"] = tf.transpose(
         self.placeholder, perm, name="%s_transpose" % get_valid_scope_name_from_str(self.name))
-    if self.feature_dim_axis_or_unspecified is not NotSpecified:
-      data_opts["feature_dim_axis"] = translate_axis(self.feature_dim_axis)
-    data_opts["time_dim_axis"] = translate_axis(self.time_dim_axis)
     data_opts["dim_tags"] = tuple(self.dim_tags[perm[i]] for i in range(self.batch_ndim))
     data = Data(**data_opts)
     data.sanity_check()
+    if self.time_dim_axis is not None and translate_axis(self.time_dim_axis) != data.time_dim_axis:
+      data.time_dim_axis = translate_axis(self.time_dim_axis)
+    if self.feature_dim_axis is not None and translate_axis(self.feature_dim_axis) != data.feature_dim_axis:
+      data.feature_dim_axis = translate_axis(self.feature_dim_axis)
     return data
 
   def copy_move_axis(self, old_axis, new_axis):
