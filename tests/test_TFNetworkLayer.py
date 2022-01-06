@@ -624,6 +624,45 @@ def test_batch_norm_param_v1_to_v2_import():
   _test_batch_norm_param_old_to_new_import(old_version=1, new_version=2)
 
 
+def test_batch_norm_fused():
+  n_in = 3
+  net_dict = {
+    "output": {
+      "class": "batch_norm", "from": "data:data",
+      "masked_time": False,
+      "param_version": 2,
+    }
+  }
+
+  def _find_fused_bn_op(session_):
+    for op in session_.graph.get_operations():
+      assert isinstance(op, tf.Operation)
+      if "FusedBatchNorm" in op.type:
+        return op
+
+  with make_scope() as session:
+    config = Config({"extern_data": {"data": {"dim": n_in}}})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+    out = network.get_default_output_layer().output.placeholder
+    assert _find_fused_bn_op(session)
+    network.initialize_params(session)
+    out_np = session.run(out, feed_dict=make_feed_dict(network.extern_data))
+    assert isinstance(out_np, numpy.ndarray)
+    assert not numpy.allclose(out_np, 0.0)
+
+  with make_scope() as session:
+    config = Config({"extern_data": {"data": {"dim": n_in}}})
+    network = TFNetwork(config=config, train_flag=False)
+    network.construct_from_dict(net_dict)
+    out = network.get_default_output_layer().output.placeholder
+    assert _find_fused_bn_op(session)
+    network.initialize_params(session)
+    out_np = session.run(out, feed_dict=make_feed_dict(network.extern_data))
+    assert isinstance(out_np, numpy.ndarray)
+    assert not numpy.allclose(out_np, 0.0)
+
+
 def test_batch_norm():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData(), train_flag=True)
