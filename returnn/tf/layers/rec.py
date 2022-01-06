@@ -7407,9 +7407,9 @@ class EditDistanceTableLayer(LayerBase):
     return Data(
       name="%s_output" % name,
       dim_tags=(
-        [source_data.get_batch_dim_tag(), source_data.get_time_dim_tag(), out_dim]
-        if source_data.have_time_axis() else
-        [source_data.get_batch_dim_tag(), out_dim]),
+        ([source_data.get_batch_dim_tag()] if source_data.have_batch_axis() else []) +
+        ([source_data.get_time_dim_tag()] if source_data.have_time_axis() else []) +
+        [out_dim]),
       dtype="int32", beam=SearchBeam.get_combined_beam(source_data.beam, target_data.beam))
 
 
