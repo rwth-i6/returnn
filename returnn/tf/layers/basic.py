@@ -720,7 +720,10 @@ class BatchNormLayer(CopyLayer):
   """
   layer_class = "batch_norm"
 
-  def __init__(self, use_shift=NotSpecified, use_std=NotSpecified, use_sample=NotSpecified, force_sample=NotSpecified,
+  def __init__(self,
+               in_dim=None,
+               use_shift=NotSpecified, use_std=NotSpecified,
+               use_sample=NotSpecified, force_sample=NotSpecified,
                momentum=NotSpecified, epsilon=NotSpecified,
                update_sample_only_in_training=NotSpecified,
                delay_sample_update=NotSpecified,
@@ -728,6 +731,7 @@ class BatchNormLayer(CopyLayer):
                gamma_init=NotSpecified, beta_init=NotSpecified,
                masked_time=NotSpecified, **kwargs):
     """
+    :param returnn.tf.util.data.Dim|None in_dim:
     :param bool use_shift:
     :param bool use_std:
     :param float use_sample: defaults to 0.0 which is used in training
@@ -741,8 +745,8 @@ class BatchNormLayer(CopyLayer):
     :param str|float beta_init: see :func:`returnn.tf.util.basic.get_initializer`, for the mean
     :param bool masked_time: flatten and mask input tensor
 
-    The default settings for these variables are set in the function "batch_norm" of the LayerBase. If you do not want
-    to change them you can leave them undefined here.
+    The default settings for these variables are set in the function :func:`batch_norm` of :class:`LayerBase`.
+    If you do not want to change them you can leave them undefined here.
     With our default settings:
 
     - In training: use_sample=0, i.e. not using running average, using current batch mean/var.
@@ -754,7 +758,11 @@ class BatchNormLayer(CopyLayer):
     from returnn.util.basic import getargspec
     batch_norm_kwargs = getargspec(self.batch_norm).args[1:]  # first is self, ignore
     batch_norm_opts = {key: local[key] for key in batch_norm_kwargs if key in local and local[key] != NotSpecified}
-    super(BatchNormLayer, self).__init__(batch_norm=batch_norm_opts or True, **kwargs)
+    super(BatchNormLayer, self).__init__(batch_norm=batch_norm_opts or True, in_dim=in_dim, **kwargs)
+    if in_dim:
+      # should be the case via get_out_data_from_opts
+      assert self.output.dim_tags[self.output.feature_dim_axis] == in_dim
+    # batch norm is now applied via post_init
 
 
 class LayerNormLayer(_ConcatInputLayer):
