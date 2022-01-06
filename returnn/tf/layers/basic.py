@@ -4024,7 +4024,7 @@ class TileLayer(_ConcatInputLayer):
         tag = out_dims[axis]
         assert tag.dimension == dim
       else:
-        tag = Dim(kind=tag.kind, description="%s_tile" % name, dimension=dim)
+        tag = multiple * tag
       dim_tags[axis_int] = tag
     return data.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
 
