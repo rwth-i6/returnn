@@ -552,6 +552,68 @@ class Dim(object):
     """
     return getattr(x, "_is_size_of_dim_tag", None)
 
+  def complete_dyn_size(self):
+    """
+    In case we can calculate the dyn size, do that now.
+    """
+    if self.dimension is not None:
+      return
+    if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:
+      return
+    same_base = self.get_same_base()
+    op = self.derived_from_op or same_base.derived_from_op
+    if op:
+      from returnn.tf.util import basic as tf_util
+
+      def _bin_op(a, b):
+        with tf_util.same_control_flow_ctx([a, b]):
+          if op.kind == "add":
+            return tf_util.simplify_add(a, b)
+          elif op.kind == "sub":
+            return tf_util.simplify_sub(a, b)
+          elif op.kind == "mul":
+            return a * b
+          elif op.kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
+            return a // b
+          elif op.kind == "ceildiv":
+            return -(-a // b)
+          else:
+            raise ValueError("unknown op kind %r" % op.kind)
+
+      y_name = self.description + ":seq-length"
+      y = None
+      inputs = list(op.inputs)
+      assert inputs
+      while inputs:
+        x = inputs.pop(0)
+        if x.dimension is not None:
+          if y is None:
+            with tf.control_dependencies(None):  # this will reset the context
+              y = Data(
+                name=y_name, dim_tags=[], dtype="int32",
+                placeholder=tf.constant(x.dimension))
+            continue
+          y.placeholder = _bin_op(y.placeholder, x.dimension)
+          continue
+        x = x.get_for_batch_ctx(self.batch, self.control_flow_ctx)
+        x.complete_dyn_size()
+        if not x.dyn_size_ext or x.dyn_size_ext.placeholder is None:
+          return
+        x = x.dyn_size_ext
+        if y is None:
+          y = x.copy(name=y_name)
+          continue
+        if x.dim_tags != y.dim_tags:
+          common = Data.get_common_data([x, y], allow_broadcast_all_sources=True)
+          x_ = x.copy_compatible_to(common) if x.dim_tags else x
+          y_ = y.copy_compatible_to(common) if y.dim_tags else y
+          y = common
+        else:
+          x_, y_ = x, y
+        y.placeholder = _bin_op(y_.placeholder, x_.placeholder)
+      assert y
+      self.dyn_size_ext = y
+
   def is_equal(self, other, ignore_feature_dim=False, allow_same_feature_dim=False, allow_same_spatial_dim=None,
                treat_feature_as_spatial=False, broadcast_matches=False, unknown_spatial_matches=False,
                undefined_matches=False, derived_matches=False):
@@ -2668,6 +2730,8 @@ class Data(object):
           if tag.dimension is None:
             if tag.is_batch_dim():
               continue
+            if not tag.dyn_size_ext or tag.dyn_size_ext.placeholder is None:
+              tag.complete_dyn_size()
             assert tag.dyn_size is not None
 
   def get_runtime_sanity_check_op(self):
