@@ -4423,7 +4423,8 @@ class ConvLayer(_ConcatInputLayer):
       which is of value input_split_feature_dim, and the original input feature dim
       will be divided by input_split_feature_dim, thus it must be a multiple of that value.
     :param bool|NotSpecified auto_use_channel_first: convert the input to NCHW or not
-    :param bool|NotSpecified with_bias: if True, will add a bias to the output features. False by default
+    :param bool|NotSpecified with_bias: if True, will add a bias to the output features.
+      True by default since behavior version 10.
     :param None|str activation: if set, will apply this function at the end
     :param LayerBase|None filter: if given, will not create an own parameter, but use this as the filter
     :param dict[str,str]|None filter_perm: transposes the filter (input filter as layer)
