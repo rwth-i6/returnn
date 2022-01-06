@@ -3546,6 +3546,8 @@ class NativeCodeCompiler(object):
     """
     :rtype: list[str]
     """
+    if self.is_cpp:
+      return ['-std=c++11']
     return []
 
   @classmethod
