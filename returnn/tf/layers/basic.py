@@ -4840,7 +4840,8 @@ class ConvLayer(_ConcatInputLayer):
       auto_use_channel_first = True if BehaviorVersion.get() >= 9 else False
     if auto_use_channel_first or input_data.feature_dim_axis == num_batch_dims:  # batch-feature-major
       if tf_util.is_gpu_available_in_session():
-        feature_dim_axis = 1
+        if len([d for d in dim_tags if d.dimension]) > 1:
+          feature_dim_axis = 1
         dim_tags = dim_tags[:num_batch_dims] + dim_tags[-1:] + dim_tags[num_batch_dims:-1]
     return Data(
       name="%s_output" % name, dim_tags=dim_tags, feature_dim_axis=feature_dim_axis,
