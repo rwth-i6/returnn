@@ -1380,12 +1380,12 @@ class LayerBase(object):
 
   def batch_norm(self, data,
                  use_shift=True, use_std=True, use_sample=0.0, force_sample=False,
-                 momentum=0.99, epsilon=1e-3,
-                 update_sample_only_in_training=False,
-                 delay_sample_update=False,
-                 param_version=0,
+                 momentum=NotSpecified, epsilon=1e-3,
+                 update_sample_only_in_training=NotSpecified,
+                 delay_sample_update=NotSpecified,
+                 param_version=NotSpecified,
                  gamma_init=1.0, beta_init=0.0,
-                 masked_time=True):
+                 masked_time=NotSpecified):
     """
     :param Data data:
     :param bool use_shift:
@@ -1415,6 +1415,23 @@ class LayerBase(object):
       tf.nn.batch_normalization()
       https://github.com/deepmind/sonnet/blob/master/sonnet/python/modules/batch_norm.py
     """
+    from returnn.util import BehaviorVersion
+    # Note that the old defaults (behavior version <= 11) don't really make sense!
+    # https://github.com/rwth-i6/returnn/issues/522
+    if momentum is NotSpecified:
+      momentum = 0.1 if BehaviorVersion.get() >= 12 else 0.99
+    if update_sample_only_in_training is NotSpecified:
+      update_sample_only_in_training = True if BehaviorVersion.get() >= 12 else False
+    if delay_sample_update is NotSpecified:
+      delay_sample_update = True if BehaviorVersion.get() >= 12 else False
+    if param_version is NotSpecified:
+      param_version = 2 if BehaviorVersion.get() >= 12 else 0
+    BehaviorVersion.require(
+      masked_time is not NotSpecified, message="batch_norm masked_time should be specified explicitly", version=12)
+    if masked_time is NotSpecified:
+      assert BehaviorVersion.get() <= 11
+      masked_time = True
+
     with reuse_name_scope(self.get_absolute_name_scope_prefix() + "batch_norm", absolute=True):
       # Note about param_version:
       # We might later drop some earlier versions.

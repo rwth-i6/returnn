@@ -22,6 +22,23 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 12 (2022-01-06)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The batch norm default settings have been changed.
+The old settings did not make much sense
+and almost always lead to unwanted behavior.
+
+Specifically, the changes are:
+
+* ``momentum``: 0.99 → 0.1
+* ``update_sample_only_in_training``: False → True
+* ``delay_sample_update``: False → True
+* ``param_version``: 0 → 2 (see `#898 <https://github.com/rwth-i6/returnn/issues/898>`__)
+* ``masked_time``: True → must be specified explicitly
+
+See issue `#522 <https://github.com/rwth-i6/returnn/issues/522>`__.
+
 Behavior version 11 (2021-12-16)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
