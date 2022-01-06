@@ -7439,6 +7439,7 @@ class OptimalCompletionsLayer(LayerBase):
     src_layer, = self.sources
     assert isinstance(src_layer, LayerBase)
     source_data = src_layer.output
+    assert source_data.dtype == "int32" and source_data.batch_ndim == 2
     assert source_data.batch_shape == (None, None) and source_data.is_batch_major
     last_row = source_data.placeholder
     assert self.target, "%s: 'target' must be set" % self
@@ -7508,7 +7509,6 @@ class OptimalCompletionsLayer(LayerBase):
     """
     assert len(sources) == 1, "%s %r: expects exactly a single source" % (cls.__name__, name)
     source_data = sources[0].output
-    assert source_data.dtype == "int32" and source_data.batch_ndim == 2
     assert target, "%s %r: 'target' must be set" % (cls.__name__, name)
     target_data = cls._static_get_target_value(target=target, _target_layers=_target_layers, network=network)
     assert target_data, "target %r not found?" % target
