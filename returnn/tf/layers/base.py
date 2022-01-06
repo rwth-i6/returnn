@@ -2109,7 +2109,7 @@ class ReuseParams:
       if self.shape is not None:
         out = self.layer_output.output.copy_compatible_to(Data(name=name, dim_tags=self.shape, dtype=str(dtype)))
         return out.placeholder
-      assert shape == self.layer_output.output.batch_shape
+      assert tuple(shape) == self.layer_output.output.batch_shape
       return self.layer_output.output.placeholder
     assert self.auto_create_missing
     return getter(name=name, shape=shape, dtype=dtype, **kwargs)
