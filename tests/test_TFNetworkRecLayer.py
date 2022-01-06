@@ -156,6 +156,25 @@ def test_rec_nativelstm2():
   _check_train_simple_network({"output": {"class": "rec", "unit": "nativelstm2", "loss": "mse", "from": "data:data"}})
 
 
+def test_rec_zoneout_lstm():
+  from returnn.tf.util.data import batch_dim, FeatureDim
+  out_dim = FeatureDim("lstm-out", 7)
+  _check_train_simple_network({
+    "rec": {
+      "class": "rec", "from": "data",
+      "optimize_move_layers_out": False,
+      "unit": {
+        "lstm": {
+          "class": "rec", "unit": "ZoneoutLSTM",
+          "unit_opts": {"zoneout_factor_cell": 0.1, "zoneout_factor_output": 0.1},
+          "from": "data:source", "out_dim": out_dim,
+          "out_shape": {batch_dim, out_dim}},
+        "output": {"class": "copy", "from": "lstm"}
+      }
+    },
+    "output": {"class": "linear", "from": "rec", "loss": "mse"}})
+
+
 def test_rec_rhn():
   _check_train_simple_network({
     "output": {

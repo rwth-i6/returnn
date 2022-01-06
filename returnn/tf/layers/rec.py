@@ -4551,7 +4551,9 @@ class RnnCellLayer(_ConcatInputLayer):
     return self.get_state_by_key(self._hidden_state, key=key)
 
   @classmethod
-  def get_rec_initial_state(cls, batch_dim, name, n_out, unit, initial_state=None, unit_opts=None,
+  def get_rec_initial_state(cls, batch_dim, name, unit,
+                            n_out=None, out_dim=None,
+                            initial_state=None, unit_opts=None,
                             rec_layer=None, **kwargs):
     """
     Very similar to :func:`get_rec_initial_output`.
@@ -4566,13 +4568,17 @@ class RnnCellLayer(_ConcatInputLayer):
 
     :param tf.Tensor batch_dim: including beam size in beam search
     :param str name: layer name
-    :param int n_out: out dim
+    :param int|None n_out: out dim
+    :param Dim|None out_dim: out dim
     :param str unit: cell name
     :param dict[str]|None unit_opts:
     :param LayerBase|str|int|float|None|list|tuple|namedtuple initial_state: see code
     :param RecLayer|LayerBase|None rec_layer: for the scope
     :rtype: tf.Tensor|tuple[tf.Tensor]|namedtuple
     """
+    if n_out is None:
+      assert out_dim is not None and out_dim.dimension is not None
+      n_out = out_dim.dimension
     with tf.name_scope("rec_initial_state"):
       init_value = initial_state
       dim = cls.get_hidden_state_size(n_out=n_out, unit=unit, unit_opts=unit_opts, **kwargs)
