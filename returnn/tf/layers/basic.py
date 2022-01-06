@@ -5630,7 +5630,7 @@ class ReduceOutLayer(_ConcatInputLayer):
     assert out.dim % num_pieces == 0
     dim = out.dim // num_pieces
     if not out_dim:
-      out_dim = FeatureDim("%s_reduce_out" % name, dimension=dim)
+      out_dim = out.feature_dim_or_sparse_dim // num_pieces
     assert out_dim.dimension == dim
     return out.copy_template_replace_dim_tag(axis=out.feature_dim_axis, new_dim_tag=out_dim)
 
