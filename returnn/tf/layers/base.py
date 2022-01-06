@@ -1442,6 +1442,30 @@ class LayerBase(object):
           initializer=tf_compat.v1.ones_initializer(),
           name="%svariance" % param_name_prefix,
           trainable=False))
+      if use_std:
+        with self.var_creation_scope():
+          from returnn.tf.util.basic import get_initializer
+          gamma_initializer = get_initializer(
+            gamma_init, seed=self.network.random.randint(2 ** 31) if gamma_init else 0, eval_local_ns={"layer": self})
+          gamma = self.add_param(tf_compat.v1.get_variable(
+            shape=stats_shape,
+            initializer=gamma_initializer,
+            name="%sgamma" % param_name_prefix,
+            trainable=True))
+      else:
+        gamma = None
+      if use_shift:
+        with self.var_creation_scope():
+          from returnn.tf.util.basic import get_initializer
+          beta_initializer = get_initializer(
+            beta_init, seed=self.network.random.randint(2 ** 31) if beta_init else 0, eval_local_ns={"layer": self})
+          beta = self.add_param(tf_compat.v1.get_variable(
+            shape=stats_shape,
+            initializer=beta_initializer,
+            name="%sbeta" % param_name_prefix,
+            trainable=True))
+      else:
+        beta = None
 
       def _calc_batch_norm(train_flag):
         """
@@ -1489,7 +1513,7 @@ class LayerBase(object):
           # use_sample = 1.
           mean, variance = sample_mean_, sample_variance_
 
-        if param_version >= 1:
+        if param_version >= 2:
           mean = tf.reshape(mean, data.get_bc_spatial_batch_shape())
           variance = tf.reshape(variance, data.get_bc_spatial_batch_shape())
         bn_ = (data.placeholder - mean) * tf_compat.v1.rsqrt(tf_util.optional_add(variance, epsilon))
@@ -1500,32 +1524,13 @@ class LayerBase(object):
       # Make sure we update after we calculated the batch norm.
       tf_util.add_control_input(op, control_input=bn.op)
       self.network.register_post_control_dependencies([op])
-
       if use_std:
-        with self.var_creation_scope():
-          from returnn.tf.util.basic import get_initializer
-          gamma_initializer = get_initializer(
-            gamma_init, seed=self.network.random.randint(2 ** 31) if gamma_init else 0, eval_local_ns={"layer": self})
-          gamma = self.add_param(tf_compat.v1.get_variable(
-            shape=stats_shape,
-            initializer=gamma_initializer,
-            name="%sgamma" % param_name_prefix,
-            trainable=True))
-          if param_version >= 1:
-            gamma = tf.reshape(gamma, data.get_bc_spatial_batch_shape())
+        if param_version >= 2:
+          gamma = tf.reshape(gamma, data.get_bc_spatial_batch_shape())
         bn *= gamma
       if use_shift:
-        with self.var_creation_scope():
-          from returnn.tf.util.basic import get_initializer
-          beta_initializer = get_initializer(
-            beta_init, seed=self.network.random.randint(2 ** 31) if beta_init else 0, eval_local_ns={"layer": self})
-          beta = self.add_param(tf_compat.v1.get_variable(
-            shape=stats_shape,
-            initializer=beta_initializer,
-            name="%sbeta" % param_name_prefix,
-            trainable=True))
-          if param_version >= 1:
-            beta = tf.reshape(beta, data.get_bc_spatial_batch_shape())
+        if param_version >= 2:
+          beta = tf.reshape(beta, data.get_bc_spatial_batch_shape())
         bn += beta
       return bn
 
