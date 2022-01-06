@@ -51,6 +51,7 @@ class Dim(object):
     Spatial = Entity("spatial")  # also time
     Time = Spatial  # we don't treat this as different
     Feature = Entity("feature")
+    Types = (Batch, Spatial, Feature)
 
   def __init__(self, kind=Types.Unspecified, description=None,
                dimension=None,
@@ -84,7 +85,9 @@ class Dim(object):
     :param Data|None src_data:
     :param int|None src_axis:
     """
-    assert not kind or isinstance(kind, Entity)
+    assert kind is None or (isinstance(kind, Entity) and kind in self.Types.Types)
+    assert dimension is None or isinstance(dimension, int)
+    assert description is None or isinstance(description, str)
     self.kind = kind
     self.description = description
     self.dimension = dimension
