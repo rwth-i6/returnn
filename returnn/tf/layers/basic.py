@@ -4013,7 +4013,6 @@ class TileLayer(_ConcatInputLayer):
     :param dict[Dim|str, Dim]|None out_dims:
     :rtype: Data
     """
-    from ..util.data import Dim
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
     dim_tags = list(data.dim_tags)
     for axis, multiple in multiples.items():
