@@ -1905,13 +1905,12 @@ class TFNetwork(object):
     Uses fn_train() or fn_eval() base on self.train_flag.
     It will be a branched evaluation.
 
-    :param ()->tf.Tensor fn_train:
-    :param ()->tf.Tensor fn_eval:
+    :param ()->(tf.Tensor|T) fn_train:
+    :param ()->(tf.Tensor|T) fn_eval:
     :return: fn_train() if self.train_flag else fn_eval()
-    :rtype: tf.Tensor
+    :rtype: tf.Tensor|T
     """
-    from returnn.tf.util.basic import cond
-    return cond(self.train_flag, fn_train, fn_eval)
+    return tf_util.cond(self.train_flag, fn_train, fn_eval)
 
   def get_search_choices(self, sources=None, src=None, base_search_choice=None, _layer_to_search_choices=None,
                          debug_stream=None):
