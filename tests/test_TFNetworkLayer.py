@@ -3827,7 +3827,7 @@ def test_conv_window_merge_dims():
     # Maybe this will not be the case in the future anymore;
     # however, if this test runs on CPU, currently the feature_dim_axis should always stay the default.
     # See also test_ConvLayer_feature_dim_unspecified.
-    assert out.output.feature_dim_axis_or_unspecified is NotSpecified
+    assert out.output.feature_dim_axis_or_unspecified in (NotSpecified, 1)
 
 
 def test_ConvLayer_feature_dim_unspecified():
