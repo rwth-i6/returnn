@@ -5096,7 +5096,6 @@ class TransposedConvLayer(_ConcatInputLayer):
     :param Dim|None out_dim:
     :param list[Dim]|None out_spatial_dims:
     :param bool with_bias: whether to add a bias. enabled by default.
-      Note that the default is different from ConvLayer!
     :param str|None activation:
     :param forward_weights_init:
     :param bias_init:
