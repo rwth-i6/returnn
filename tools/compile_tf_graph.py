@@ -194,8 +194,13 @@ class RecStepByStepLayer(RecLayer):
   Represents a single step of :class:`RecLayer`.
   The purpose is to execute a single step only.
   This also takes care of all needed state, and latent variables (via :class:`ChoiceLayer`).
-  All the state is kept in variables, such that you can avoid feeding/fetching.
+  All the state is kept in *state variables*, such that you can avoid feeding/fetching.
   Instead, any decoder implementation using this must explicitly assign the state variables.
+
+  The necessary meta information about the list of state vars,
+  ops for specific calculation steps, etc.
+  is stored in TF graph collections and also in a JSON file.
+  RASR (Sprint) currently only uses the TF graph collections.
 
   E.g., if you want to implement beam search in an external application which uses the compiled graph,
   you would compile the graph with search_flag disabled (such that RETURNN does not do any related logic),
@@ -203,7 +208,7 @@ class RecStepByStepLayer(RecLayer):
 
   * Call the initializers of all the state variables, which also includes everything from the base (e.g. encoder),
     while feeding in the placeholders for the input features.
-    This is "init_op" in the info json.
+    This is "init_op" in the info json, "encode_ops" in the graph collections.
     All further session runs should not need any feed values. All needed state should be in state vars.
     This will init all state vars, except stochastic_var_*.
   * Maybe you want to tile the batch dim now, according to your beam size.
@@ -423,7 +428,7 @@ class RecStepByStepLayer(RecLayer):
 
     def final_op(self):
       """
-      :return: op which assigns self.final_value (maybe converted) to self.var
+      :return: op which does self.var.assign(self.final_value) (final value maybe converted)
       :rtype: tf.Operation
       """
       assert self.final_value is not None
