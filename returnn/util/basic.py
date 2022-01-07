@@ -2737,6 +2737,9 @@ def get_temp_dir():
     dirname = os.getenv(envname)
     if dirname:
       return "%s/%s" % (dirname, username)
+  # /var/tmp should be more persistent than /tmp usually.
+  if os.path.exists("/var/tmp"):
+    return "/var/tmp/%s" % username
   return "/tmp/%s" % username
 
 
