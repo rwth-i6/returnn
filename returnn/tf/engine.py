@@ -576,7 +576,7 @@ class Runner(object):
     elif log.filename:
       logdir = os.path.dirname(log.filename)
     else:
-      logdir = os.getcwd()
+      logdir = None
     if logdir:
       from returnn.util.basic import log_runtime_info_to_dir, get_utc_start_time_filename_part
       logdir += "/%s" % self.data_provider.get_dataset_name()
