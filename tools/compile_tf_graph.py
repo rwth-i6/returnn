@@ -208,12 +208,9 @@ class RecStepByStepLayer(RecLayer):
 
   * Call the initializers of all the state variables, which also includes everything from the base (e.g. encoder),
     while feeding in the placeholders for the input features.
-    This is "init_op" in the info json, "encode_ops" in the graph collections.
+    This is "init_op" in the info json, "encode_ops" in the TF graph collections.
     All further session runs should not need any feed values. All needed state should be in state vars.
     This will init all state vars, except stochastic_var_*.
-  * Maybe you want to tile the batch dim now, according to your beam size.
-    This is "tile_batch" in the info json,
-    or you can do it manually.
   * For each decoder step:
     * For each stochastic variable (both latent variables and observable variables),
       in the order as in "stochastic_var_order" in the info json:
@@ -221,7 +218,7 @@ class RecStepByStepLayer(RecLayer):
         (except of stochastic_var_scores_* and only the dependent other stochastic_var_choice_*).
         I.e. all those state vars must be assigned accordingly.
       - Calculate `"stochastic_var_scores_%s" % name` (which are the probabilities in +log space).
-        This is "calc_scores_op" in the info json.
+        This is "calc_scores_op" in the info json, "decode_ops" in the TF graph collections.
       - Do a choice, build up a beam of hypotheses.
       - Set the stochastic state var `"stochastic_var_choice_%s" % name` to the selected values (label indices).
       - If the beam has multiple items, i.e. the batch dimension changed, you must make sure
@@ -299,12 +296,7 @@ class RecStepByStepLayer(RecLayer):
     rec_layer = network.layers[rec_layer_name]
     assert isinstance(rec_layer, RecStepByStepLayer)
     info = {"state_vars": {}, "stochastic_var_order": [], "stochastic_vars": {}}
-    init_ops = []
-    tile_batch_repetitions = tf_compat.v1.placeholder(name="tile_batch_repetitions", shape=(), dtype=tf.int32)
-    tile_batch_ops = []
-    src_beams = tf_compat.v1.placeholder(name="src_beams", shape=(None, None), dtype=tf.int32)  # (batch,beam)
-    select_src_beams_ops = []
-    next_step_ops = []
+
     print("State vars:")
     for name, var in sorted(rec_layer.state_vars.items()):
       assert isinstance(name, str)
@@ -314,28 +306,63 @@ class RecStepByStepLayer(RecLayer):
         "var_op": var.var.op.name,
         "shape": [int(d) if d is not None else None for d in var.var_data_shape.batch_shape],
         "dtype": var.var.dtype.base_dtype.name}
+
+    # global_vars were used by the computation graph in some earlier version.
+    # We do not make use of global_vars anymore because this is redundant with the state vars.
+    # We anyway create the collection here such that older RASR binaries still work fine.
+    # See https://github.com/rwth-i6/returnn/pull/874.
+    tf_compat.v1.get_collection_ref("global_vars")
+
+    # Encoder and all decoder state initializers.
+    encode_ops_coll = tf_compat.v1.get_collection_ref("encode_ops")
+    init_ops = []
+    for name, var in sorted(rec_layer.state_vars.items()):
+      assert isinstance(name, str)
+      assert isinstance(var, RecStepByStepLayer.StateVar)
       if not name.startswith("stochastic_var_"):
         init_ops.append(var.init_op())
-        tile_batch_ops.append(var.tile_batch_op(tile_batch_repetitions))
-        select_src_beams_ops.append(var.select_src_beams_op(src_beams=src_beams))
-      if not name.startswith("stochastic_var_") and not name.startswith("base_"):
-        next_step_ops.append(var.final_op())
-    info["init_op"] = tf.group(*init_ops, name="rec_step_by_step_init_op").name
-    info["next_step_op"] = tf.group(*next_step_ops, name="rec_step_by_step_update_op").name
-    info["tile_batch"] = {
-      "op": tf.group(*tile_batch_ops, name="rec_step_by_step_tile_batch_op").name,
-      "repetitions_placeholder": tile_batch_repetitions.op.name}
-    info["select_src_beams"] = {
-      "op": tf.group(*select_src_beams_ops, name="rec_step_by_step_select_src_beams_op").name,
-      "src_beams_placeholder": src_beams.op.name}
+    init_op = tf.group(*init_ops, name="rec_step_by_step_init_op")
+    info["init_op"] = init_op.name
+    encode_ops_coll.append(init_op)
+
+    # Based on some decoder state and encoder, calculate the next scores for the next stochastic variable.
+    decode_ops_coll = tf_compat.v1.get_collection_ref("decode_ops")  # calculates the scores
+    decoder_output_vars_coll = tf_compat.v1.get_collection_ref("decoder_output_vars")  # scores
+    decoder_input_vars_coll = tf_compat.v1.get_collection_ref("decoder_input_vars")  # choices
     print("Stochastic vars, and their order:")
     for name in rec_layer.stochastic_var_order:
       print(" %s" % name)
       info["stochastic_var_order"].append(name)
+      calc_scores_op = rec_layer.state_vars["stochastic_var_scores_%s" % name].final_op()
       info["stochastic_vars"][name] = {
-        "calc_scores_op": rec_layer.state_vars["stochastic_var_scores_%s" % name].final_op().name,
+        "calc_scores_op": calc_scores_op.name,
         "scores_state_var": "stochastic_var_scores_%s" % name,
         "choice_state_var": "stochastic_var_choice_%s" % name}
+      decode_ops_coll.append(calc_scores_op)
+      decoder_output_vars_coll.append(rec_layer.state_vars["stochastic_var_scores_%s" % name].var)
+      decoder_input_vars_coll.append(rec_layer.state_vars["stochastic_var_choice_%s" % name].var)
+
+    # Based on the decoder state, encoder, and choices, calculate the next state.
+    update_ops_coll = tf_compat.v1.get_collection_ref("update_ops")
+    # We do not make use of post_update_ops anymore. This was used as a separate step
+    # such that only "choice-dependent" state vars were updated separately in the step before.
+    # However, this logic was incomplete and broken in general,
+    # and also the optimization only lead to negligible speedup, so we removed it.
+    # We anyway create the collection here such that older RASR binaries still work fine.
+    # See https://github.com/rwth-i6/returnn/pull/874 for some discussion.
+    tf_compat.v1.get_collection_ref("post_update_ops")
+    state_vars_coll = tf_compat.v1.get_collection_ref(CollectionKeys.STATE_VARS)
+    # TODO need tile_batch_multiple
+    next_step_ops = []
+    for name, var in sorted(rec_layer.state_vars.items()):
+      assert isinstance(name, str)
+      assert isinstance(var, RecStepByStepLayer.StateVar)
+      if not name.startswith("stochastic_var_") and not name.startswith("base_"):
+        next_step_ops.append(var.final_op())
+        state_vars_coll.append(var.var)
+    next_step_op = tf.group(*next_step_ops, name="rec_step_by_step_update_op")
+    info["next_step_op"] = next_step_op.name
+    update_ops_coll.append(next_step_op)
 
     import json
     info_str = json.dumps(info, sort_keys=True, indent=2)
@@ -446,32 +473,6 @@ class RecStepByStepLayer(RecLayer):
         x = x.copy_compatible_to(self.var_data_shape)
         value = x.placeholder
       return tf_compat.v1.assign(self.var, value, name="final_state_var_%s" % self.name).op
-
-    def tile_batch_op(self, repetitions):
-      """
-      :param tf.Tensor repetitions:
-      :return: op which assigns the tiled value of the previous var value
-      :rtype: tf.Operation
-      """
-      if self.var_data_shape.batch_dim_axis is None:
-        return tf.no_op(name="tile_batch_state_var_no_op_%s" % self.name)
-      # See also Data.copy_extend_with_beam.
-      from returnn.tf.util.basic import tile_transposed
-      tiled_value = tile_transposed(
-        self.var.read_value(), axis=self.var_data_shape.batch_dim_axis, multiples=repetitions)
-      return tf_compat.v1.assign(self.var, tiled_value, name="tile_batch_state_var_%s" % self.name).op
-
-    def select_src_beams_op(self, src_beams):
-      """
-      :param tf.Tensor src_beams: (batch, beam) -> src-beam-idx
-      :return: op which select the beams in the state var
-      :rtype: tf.Operation
-      """
-      if self.var_data_shape.batch_dim_axis is None:
-        return tf.no_op(name="select_src_beams_state_var_no_op_%s" % self.name)
-      from returnn.tf.util.basic import select_src_beams
-      v = select_src_beams(self.var.read_value(), src_beams=src_beams)
-      return tf_compat.v1.assign(self.var, v, name="select_src_beams_state_var_%s" % self.name).op
 
   def __init__(self, **kwargs):
     kwargs = kwargs.copy()
