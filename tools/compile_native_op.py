@@ -76,6 +76,9 @@ def main(argv):
                          help="search for blas inside numpys .libs folder")
   argparser.add_argument('--no_search_for_numpy_blas', dest='search_for_numpy_blas', action='store_false',
                          help="do not search for blas inside numpys .libs folder")
+  argparser.add_argument('--force_no_blas', action='store_true',
+                         help="do not link any blas lib into the native op binary "
+                              "(e.g. use the BLAS library from the host application)")
   argparser.add_argument("--verbosity", default=4, type=int, help="5 for all seqs (default: 4)")
   argparser.add_argument("--output_file", help='if given, will write the list of libs to this file')
   args = argparser.parse_args(argv[1:])
@@ -88,8 +91,10 @@ def main(argv):
     op_gen = getattr(native_op, args.native_op)
     assert issubclass(op_gen, native_op.NativeOpGenBase)
     make_op(op_gen, compiler_opts={"verbose": True},
-            search_for_numpy_blas=args.search_for_numpy_blas, blas_lib=args.blas_lib)
-
+            search_for_runtime_blas=not args.force_no_blas,
+            search_for_system_blas=not args.force_no_blas,
+            search_for_numpy_blas=args.search_for_numpy_blas and not args.force_no_blas,
+            blas_lib=args.blas_lib)
   libs = []
   if OpMaker.with_cuda and OpMaker.tf_blas_gemm_workaround:
     print('CUDA BLAS lib:', OpMaker.cuda_blas_gemm_so_filename())
