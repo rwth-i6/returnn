@@ -544,7 +544,7 @@ class RecStepByStepLayer(RecLayer):
         feed_tensors.append(data.placeholder)
         feed_tensors.extend(data.size_placeholder.values())
       path = find_ops_path_output_to_input(fetches=value, tensors=feed_tensors)
-      assert not path, "There should be no path from extern data to this final op value, but there is: %r" % (path,)
+      assert not path, "There should be no path from extern data to %s final op value, but there is: %r" % (self, path)
       if self.orig_data_shape.batch_dim_axis not in (0, None):
         x = self.orig_data_shape.copy()
         x.placeholder = value
