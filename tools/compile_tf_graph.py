@@ -424,7 +424,6 @@ class RecStepByStepLayer(RecLayer):
     # See https://github.com/rwth-i6/returnn/pull/874 for some discussion.
     tf_compat.v1.get_collection_ref("post_update_ops")
     state_vars_coll = tf_compat.v1.get_collection_ref(CollectionKeys.STATE_VARS)
-    # TODO need tile_batch_multiple
     next_step_ops = []
     for name, var in sorted(rec_layer.state_vars.items()):
       assert isinstance(name, str)
@@ -580,11 +579,11 @@ class RecStepByStepLayer(RecLayer):
         if base_batch_dim is None:
           if name.startswith("base_"):
             if var.var_data_shape.have_batch_axis():
-              base_batch_dim = tf_util.get_shape_dim(var.var.read_value(), var.var_data_shape.batch_dim_axis)
+              base_batch_dim = tf_util.get_shape_dim(var.var.value(), var.var_data_shape.batch_dim_axis)
         if loop_batch_dim is None:
           if not name.startswith("base_") and not name.startswith("stochastic_var_"):
             if var.var_data_shape.have_batch_axis():
-              loop_batch_dim = tf_util.get_shape_dim(var.var.read_value(), var.var_data_shape.batch_dim_axis)
+              loop_batch_dim = tf_util.get_shape_dim(var.var.value(), var.var_data_shape.batch_dim_axis)
       assert base_batch_dim is not None and loop_batch_dim is not None
       with tf.control_dependencies([
             tf.Assert(tf.equal(loop_batch_dim % base_batch_dim, 0),
@@ -703,12 +702,12 @@ class RecStepByStepLayer(RecLayer):
     :return: batch-dim, from some (any) state var, scalar, int32
     :rtype: tf.Tensor|int
     """
-    from returnn.tf.util.basic import get_shape_dim
     for name, v in sorted(self.state_vars.items()):
       assert isinstance(v, RecStepByStepLayer.StateVar)
-      if v.var_data_shape.batch_dim_axis is not None:
-        with tf.name_scope("batch_dim_from_state_%s" % v.name):
-          return get_shape_dim(v.var.value(), v.var_data_shape.batch_dim_axis)
+      if not name.startswith("base_") and not name.startswith("stochastic_var_"):
+        if v.var_data_shape.batch_dim_axis is not None:
+          with tf_util.reuse_name_scope("batch_dim_from_state_%s" % v.name, absolute=True):
+            return tf_util.get_shape_dim(v.var.value(), v.var_data_shape.batch_dim_axis)
     raise Exception("None of the state vars do have a batch-dim: %s" % self.state_vars)
 
   def add_stochastic_var(self, name):
