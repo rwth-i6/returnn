@@ -99,7 +99,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
   def __init__(self, **kwargs):
     self._parent_layers = {}  # type: typing.Dict[str,WrappedInternalLayer]
     self._parent_dim_tags = {}  # type: typing.Dict[Dim,Dim]
-    self._parent_replace_deps = []  # type: typing.List[typing.Tuple[Data,RecStepByStepLayer.StateVar]]
+    self._parent_replace_deps = []  # type: typing.List[typing.Tuple[RecStepByStepLayer.StateVar,Data]]
     super(SubnetworkRecCellSingleStep, self).__init__(**kwargs)
 
   def _maybe_delay_tiled(self, state_var, output):
@@ -109,12 +109,14 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     :param tf.Tensor x:
     :rtype: tf.Tensor
     """
+    assert isinstance(state_var, RecStepByStepLayer.StateVar)
+    assert isinstance(output, Data)
     rec_layer = self.parent_rec_layer
     assert isinstance(rec_layer, RecStepByStepLayer)
     if rec_layer.construction_state == rec_layer.ConstructionState.InLoop:
       x = self._tiled(output, state_var.read())
     else:
-      self._parent_replace_deps.append((output, state_var))
+      self._parent_replace_deps.append((state_var, output))
       with tf.control_dependencies([state_var.init_op()]):
         x = tf.identity(output.placeholder)
     output.placeholder = x
@@ -130,7 +132,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     assert isinstance(rec_layer, RecStepByStepLayer)
     return tf_util.tile_transposed(
       x, axis=output.batch_dim_axis,
-      multiples=rec_layer.parent_tile_multiples_var.read_value())
+      multiples=rec_layer.get_parent_tile_multiples())
 
   def _get_parent_dim_tag(self, dim_tag):
     """
@@ -181,8 +183,8 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     assert isinstance(rec_layer, RecStepByStepLayer)
     rec_layer.set_construction_state_in_loop()
 
-    for output, state_var in self._parent_replace_deps:
-      output.placeholder = self._tiled(output, state_var.read())
+    for args in self._parent_replace_deps:
+      self._maybe_delay_tiled(*args)
 
   def _while_loop(self, cond, body, loop_vars, shape_invariants):
     """
@@ -554,9 +556,7 @@ class RecStepByStepLayer(RecLayer):
     kwargs["optimize_move_layers_out"] = False
     self.state_vars = {}  # type: typing.Dict[str,RecStepByStepLayer.StateVar]
     self.stochastic_var_order = []  # type: typing.List[str]
-    with helper_variable_scope():
-      self.parent_tile_multiples_var = tf_compat.v1.get_variable(
-        name="parent_tile_multiples", shape=(), dtype=tf.int32, initializer=tf.ones_initializer())  # type: tf.Variable
+    self._parent_tile_multiples = None  # type: typing.Optional[tf.Tensor]
     self.construction_state = self.ConstructionState.Init
     super(RecStepByStepLayer, self).__init__(**kwargs)
 
@@ -565,6 +565,14 @@ class RecStepByStepLayer(RecLayer):
     Set that we entered the body.
     """
     self.construction_state = self.ConstructionState.InLoop
+
+  def get_parent_tile_multiples(self):
+    """
+    :rtype: tf.Tensor
+    """
+    if self._parent_tile_multiples is not None:
+      return self._parent_tile_multiples
+    # TODO ...
 
   def create_state_var(self, name, initial_value=None, data_shape=None):
     """
