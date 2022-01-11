@@ -767,7 +767,7 @@ class ChoiceStateVarLayer(LayerBase):
       name="stochastic_var_scores_%s" % self.name, data_shape=source.output)
     rec_layer.set_state_var_final_value(
       name="stochastic_var_scores_%s" % self.name, final_value=scores_in)
-    self.output.placeholder = rec_layer.create_state_var(
+    self.output.placeholder, _ = rec_layer.create_state_var(
       name="stochastic_var_choice_%s" % self.name, data_shape=self.output)
     rec_layer.add_stochastic_var(self.name)
 
