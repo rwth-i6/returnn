@@ -173,6 +173,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     for i, dim_tag in enumerate(output.dim_tags):
       new_dim_tags.append(self._get_parent_dim_tag(dim_tag))
     output = output.copy_template_new_dim_tags(new_dim_tags=new_dim_tags, keep_special_axes=True)
+    output.placeholder = layer.output.placeholder
     x, state_var = rec_layer.create_state_var(
       name="base_value_%s" % layer_name, initial_value=output.placeholder, data_shape=output)
     self._maybe_delay_tiled(state_var, output)
