@@ -34,7 +34,7 @@ def run(*args):
 # Tests for compile_tf_graph.py
 ###############################
 
-rec_decoder_config = """
+rec_encoder_decoder_config = """
 #!rnn.py
 network = {
     "enc0": {"class": "linear", "from": "data", "activation": "sigmoid", "n_out": 3},
@@ -56,10 +56,30 @@ use_tensorflow = True
 """
 
 
+rec_transducer_time_sync_config = """
+#!rnn.py
+network = {
+    "encoder": {"class": "linear", "from": "data", "activation": "sigmoid", "n_out": 3},
+    "output": {
+      "class": "rec", "from": "encoder", "target": "classes",
+      "unit": {
+        "embed": {"class": "linear", "from": "prev:output", "activation": "sigmoid", "n_out": 3},
+        "prob": {"class": "softmax", "from": ["embed", "data:source"], "loss": "ce", "target": "classes"},
+        "output": {"class": "choice", "beam_size": 4, "from": "prob", "target": "classes", "initial_output": 0},
+        "end": {"class": "compare", "from": "output", "value": 0}
+      }
+    },
+}
+num_inputs = 5
+num_outputs = 3
+use_tensorflow = True
+"""
+
+
 def test_compile_tf_graph_basic():
   tmp_dir = tempfile.mkdtemp()
   with open(os.path.join(tmp_dir, "returnn.config"), "wt") as config:
-    config.write(rec_decoder_config)
+    config.write(rec_encoder_decoder_config)
   args = [
     "tools/compile_tf_graph.py",
     "--output_file",
@@ -69,10 +89,26 @@ def test_compile_tf_graph_basic():
   run(*args)
 
 
-def test_compile_tf_graph_recurrent_step():
+def test_compile_tf_graph_enc_dec_recurrent_step():
   tmp_dir = tempfile.mkdtemp()
   with open(os.path.join(tmp_dir, "returnn.config"), "wt") as config:
-    config.write(rec_decoder_config)
+    config.write(rec_encoder_decoder_config)
+  args = [
+    "tools/compile_tf_graph.py",
+    "--output_file",
+    os.path.join(tmp_dir, "graph.metatxt"),
+    "--rec_step_by_step",
+    "output",
+    os.path.join(tmp_dir, "returnn.config")
+  ]
+  run(*args)
+
+
+
+def test_compile_tf_graph_transducer_time_sync_recurrent_step():
+  tmp_dir = tempfile.mkdtemp()
+  with open(os.path.join(tmp_dir, "returnn.config"), "wt") as config:
+    config.write(rec_transducer_time_sync_config)
   args = [
     "tools/compile_tf_graph.py",
     "--output_file",
