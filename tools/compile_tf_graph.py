@@ -294,6 +294,8 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     # So we add tiling here.
     assert data is not None
     for key, value in list(data.items()):
+      if key != "source":
+        continue  # ignore other sources currently...
       assert key in self.net.extern_data.data
       data_ = self.net.extern_data.data[key]
       data[key] = self._tiled(data_, value)
