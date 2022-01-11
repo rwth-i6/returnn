@@ -572,7 +572,25 @@ class RecStepByStepLayer(RecLayer):
     """
     if self._parent_tile_multiples is not None:
       return self._parent_tile_multiples
-    # TODO ...
+    with tf_util.reuse_name_scope("parent_tile_multiples", absolute=True):
+      base_batch_dim, loop_batch_dim = None, None
+      for name, var in sorted(self.state_vars.items()):
+        assert isinstance(name, str)
+        assert isinstance(var, RecStepByStepLayer.StateVar)
+        if base_batch_dim is None:
+          if name.startswith("base_"):
+            if var.var_data_shape.have_batch_axis():
+              base_batch_dim = tf_util.get_shape_dim(var.var.read_value(), var.var_data_shape.batch_dim_axis)
+        if loop_batch_dim is None:
+          if not name.startswith("base_") and not name.startswith("stochastic_var_"):
+            if var.var_data_shape.have_batch_axis():
+              loop_batch_dim = tf_util.get_shape_dim(var.var.read_value(), var.var_data_shape.batch_dim_axis)
+      assert base_batch_dim is not None and loop_batch_dim is not None
+      with tf.control_dependencies([
+            tf.Assert(tf.equal(loop_batch_dim % base_batch_dim, 0),
+                      ["loop_batch_dim", loop_batch_dim, "base_batch_dim", base_batch_dim])]):
+        self._parent_tile_multiples = loop_batch_dim // base_batch_dim
+    return self._parent_tile_multiples
 
   def create_state_var(self, name, initial_value=None, data_shape=None):
     """
