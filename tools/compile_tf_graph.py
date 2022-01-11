@@ -141,6 +141,8 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     """
     if dim_tag.dimension is not None:
       return dim_tag  # as-is, not dynamic
+    if dim_tag.is_batch_dim():
+      return dim_tag  # as-is
     if dim_tag in self._parent_dim_tags:
       return self._parent_dim_tags[dim_tag]
     rec_layer = self.parent_rec_layer
