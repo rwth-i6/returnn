@@ -11,6 +11,8 @@ import os
 import sys
 
 
+my_dir = os.path.dirname(os.path.abspath(__file__))
+base_dir = os.path.dirname(my_dir)
 py = sys.executable
 print("Python:", py)
 
@@ -19,7 +21,7 @@ def run(*args):
   args = list(args)
   print("run:", args)
   # RETURNN by default outputs on stderr, so just merge both together
-  p = Popen(args, stdout=PIPE, stderr=STDOUT)
+  p = Popen(args, stdout=PIPE, stderr=STDOUT, cwd=base_dir)
   out, _ = p.communicate()
   if p.returncode != 0:
     print("Return code is %i" % p.returncode)
