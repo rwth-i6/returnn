@@ -15,11 +15,23 @@ my_dir = os.path.dirname(os.path.abspath(__file__))
 base_dir = os.path.dirname(my_dir)
 py = sys.executable
 print("Python:", py)
+_run_count = 0
 
 
 def run(*args):
   args = list(args)
   print("run:", args)
+  global _run_count
+  if _run_count == 0:
+    # For the first run, as a special case, directly run the script in the current env.
+    # This is easier for debugging.
+    from returnn.util.basic import generic_import_module
+    mod = generic_import_module(os.path.join(base_dir, args[0]))
+    # noinspection PyUnresolvedReferences
+    mod.main(args)
+    _run_count += 1
+    return
+  _run_count += 1
   # RETURNN by default outputs on stderr, so just merge both together
   p = Popen(args, stdout=PIPE, stderr=STDOUT, cwd=base_dir)
   out, _ = p.communicate()
@@ -87,6 +99,13 @@ def test_compile_tf_graph_basic():
     os.path.join(tmp_dir, "returnn.config")
   ]
   run(*args)
+
+
+def test_compile_tf_graph_basic_second_run():
+  # Just to make sure that the second run works as well,
+  # which behaves different due to the debug case of the first run.
+  # See :func:`run` above.
+  test_compile_tf_graph_basic()
 
 
 def test_compile_tf_graph_enc_dec_recurrent_step():
