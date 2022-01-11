@@ -12,6 +12,7 @@ import typing
 import os
 import sys
 import argparse
+import contextlib
 import tensorflow as tf
 from tensorflow.python.framework import graph_io
 
@@ -20,10 +21,10 @@ import returnn.__main__ as rnn
 from returnn.log import log
 from returnn.config import Config
 import returnn.util.basic as util
-from returnn.util.basic import NotSpecified
+from returnn.util.basic import NotSpecified, Entity
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
-from returnn.tf.util.basic import Data, CollectionKeys
+from returnn.tf.util.basic import Data, Dim, CollectionKeys
 from returnn.tf.network import TFNetwork
 from returnn.tf.layers.basic import LayerBase, register_layer_class
 from returnn.tf.layers.base import WrappedInternalLayer
@@ -80,6 +81,16 @@ def create_graph(train_flag, eval_flag, search_flag, net_dict):
   return network
 
 
+@contextlib.contextmanager
+def helper_variable_scope():
+  """
+  :return: separate scope from the current name scope, such that variables are not treated as model params
+  :rtype: tf.VariableScope
+  """
+  with tf_util.reuse_name_scope("IO", absolute=True) as scope:
+    yield scope
+
+
 class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
   """
   Adapts :class:`_SubnetworkRecCell` such that we execute only a single step.
@@ -87,7 +98,32 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
 
   def __init__(self, **kwargs):
     self._parent_layers = {}  # type: typing.Dict[str,WrappedInternalLayer]
+    self._parent_dim_tags = {}  # type: typing.Dict[Dim,Dim]
     super(SubnetworkRecCellSingleStep, self).__init__(**kwargs)
+
+  def _get_parent_dim_tag(self, dim_tag):
+    """
+    :param Dim dim_tag:
+    :rtype: Dim
+    """
+    if dim_tag.dimension is not None:
+      return dim_tag  # as-is, not dynamic
+    if dim_tag in self._parent_dim_tags:
+      return self._parent_dim_tags[dim_tag]
+    rec_layer = self.parent_rec_layer
+    assert isinstance(rec_layer, RecStepByStepLayer)
+    new_size = rec_layer.create_state_var(
+      name="base_size_%s" % tf_util.get_valid_scope_name_from_str(dim_tag.description),
+      initial_value=dim_tag.dyn_size)
+    new_size = tf_util.tile_transposed(
+      new_size, axis=dim_tag.dyn_size_ext.batch_dim_axis,
+      multiples=rec_layer.parent_tile_multiples_var.read_value())
+    dim_tag_ = dim_tag.copy(same_as_self=False, description=dim_tag.description + "_rec_step_by_step")
+    dim_tag_.dyn_size_ext = dim_tag.dyn_size_ext.copy()
+    dim_tag_.dyn_size_ext.placeholder = new_size
+    dim_tag_.set_tag_on_size_tensor(new_size)
+    self._parent_dim_tags[dim_tag] = dim_tag_
+    return dim_tag_
 
   def _get_parent_layer(self, layer_name):
     """
@@ -102,18 +138,15 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       return layer
     assert isinstance(rec_layer, RecStepByStepLayer)
     output = layer.output.copy()
-    output.placeholder = rec_layer.create_state_var(
+    new_dim_tags = []
+    for i, dim_tag in enumerate(output.dim_tags):
+      new_dim_tags.append(self._get_parent_dim_tag(dim_tag))
+    output = output.copy_template_new_dim_tags(new_dim_tags=new_dim_tags, keep_special_axes=True)
+    x = rec_layer.create_state_var(
       name="base_value_%s" % layer_name, initial_value=output.placeholder, data_shape=output)
-    from returnn.tf.util.basic import Dim
-    for i, size in list(output.size_placeholder.items()):
-      dim_tag = Dim.get_tag_from_size_tensor(size)
-      if not dim_tag:
-        print("Warning, no defined dim tag on %r, axis %i" % (layer, output.get_batch_axis(i)), file=log.v2)
-        dim_tag = output.get_dim_tag(output.get_batch_axis(i))
-        dim_tag.set_tag_on_size_tensor(size)
-      new_size = rec_layer.create_state_var(name="base_size%i_%s" % (i, layer_name), initial_value=size)
-      dim_tag.set_tag_on_size_tensor(new_size)
-      output.size_placeholder[i] = new_size
+    x = tf_util.tile_transposed(
+      x, axis=output.batch_dim_axis, multiples=rec_layer.parent_tile_multiples_var.read_value())
+    output.placeholder = x
     layer = WrappedInternalLayer(name=layer_name, network=self.parent_net, output=output, base_layer=layer)
     self._parent_layers[layer_name] = layer
     return layer
@@ -157,6 +190,8 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       net_vars = rec_layer.create_state_vars_recursive(
         name_prefix="state", initial_values=net_vars, data_shape=(prev_outputs_data, None))
     # We are ignoring acc_tas (the tensor arrays).
+
+    rec_layer.set_construction_state_in_loop()
 
     # Some layers make explicit use of the (global data) batch-dim,
     # which they can get via TFNetwork.get_data_batch_dim().
@@ -266,6 +301,11 @@ class RecStepByStepLayer(RecLayer):
   layer_class = "rec_step_by_step"
   SubnetworkRecCell = SubnetworkRecCellSingleStep
 
+  class ConstructionState:
+    """construction states"""
+    Init = Entity("init")
+    InLoop = Entity("in_body")
+
   @classmethod
   def prepare_compile(cls, rec_layer_name, net_dict):
     """
@@ -315,11 +355,18 @@ class RecStepByStepLayer(RecLayer):
 
     # Encoder and all decoder state initializers.
     encode_ops_coll = tf_compat.v1.get_collection_ref("encode_ops")
+    base_init_ops = [rec_layer.parent_tile_multiples_var.initializer]
+    for name, var in sorted(rec_layer.state_vars.items()):
+      assert isinstance(name, str)
+      assert isinstance(var, RecStepByStepLayer.StateVar)
+      if name.startswith("base_"):
+        base_init_op = var.init_op()
+        base_init_ops.append(base_init_op)
     init_ops = []
     for name, var in sorted(rec_layer.state_vars.items()):
       assert isinstance(name, str)
       assert isinstance(var, RecStepByStepLayer.StateVar)
-      if not name.startswith("stochastic_var_"):
+      if not name.startswith("stochastic_var_") and not name.startswith("base_"):
         init_ops.append(var.init_op())
     init_op = tf.group(*init_ops, name="rec_step_by_step_init_op")
     info["init_op"] = init_op.name
@@ -479,7 +526,17 @@ class RecStepByStepLayer(RecLayer):
     kwargs["optimize_move_layers_out"] = False
     self.state_vars = {}  # type: typing.Dict[str,RecStepByStepLayer.StateVar]
     self.stochastic_var_order = []  # type: typing.List[str]
+    with helper_variable_scope():
+      self.parent_tile_multiples_var = tf_compat.v1.get_variable(
+        name="parent_tile_multiples", shape=(), dtype=tf.int32, initializer=tf.ones_initializer())  # type: tf.Variable
+    self.construction_state = self.ConstructionState.Init
     super(RecStepByStepLayer, self).__init__(**kwargs)
+
+  def set_construction_state_in_loop(self):
+    """
+    Set that we entered the body.
+    """
+    self.construction_state = self.ConstructionState.InLoop
 
   def create_state_var(self, name, initial_value=None, data_shape=None):
     """
