@@ -1114,11 +1114,11 @@ class _SubnetworkRecCell(object):
   def __init__(self, net_dict, source_data, time_dim_tag, rec_layer_name, parent_net, parent_get_layer):
     """
     :param dict[str,dict[str]] net_dict: dict for the subnetwork, layer name -> layer dict
-    :param Data|None source_data: usually concatenated input from the rec-layer
+    :param Data|None source_data: usually concatenated input from the rec-layer. template
     :param Dim time_dim_tag:
     :param str rec_layer_name:
     :param returnn.tf.network.TFNetwork parent_net:
-    :param ((str) -> LayerBase) parent_get_layer:
+    :param ((str) -> LayerBase) parent_get_layer: for template construction
     """
     from returnn.tf.util.basic import safe_deep_copy
     self.parent_rec_layer = None  # type: typing.Optional[RecLayer]
