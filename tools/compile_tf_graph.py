@@ -112,12 +112,21 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     assert isinstance(output, Data)
     rec_layer = self.parent_rec_layer
     assert isinstance(rec_layer, RecStepByStepLayer)
-    if rec_layer.construction_state == rec_layer.ConstructionState.InLoop:
-      x = self._tiled(output, state_var.read())
-    else:
+    if rec_layer.construction_state == rec_layer.ConstructionState.GetSources:
+      self._parent_replace_deps.append((state_var, output))  # only in case the layer is accessed elsewhere later
+      # No tiling yet because we cannot infer the in-loop batch dim. done in _construct.
+      # Also use the state var read because we will use this later inside the loop.
+      x = state_var.read()
+    elif rec_layer.construction_state == rec_layer.ConstructionState.Init:
       self._parent_replace_deps.append((state_var, output))
       with tf.control_dependencies([state_var.init_op()]):
-        x = tf.identity(output.placeholder)
+        x = tf.identity(
+          output.placeholder,
+          name="state_var_before_loop_depend_on_init__%s" % tf_util.get_valid_scope_name_from_str(state_var.name))
+    elif rec_layer.construction_state == rec_layer.ConstructionState.InLoop:
+      x = self._tiled(output, state_var.read())
+    else:
+      raise ValueError("unexpected construction state %r" % rec_layer.construction_state)
     output.placeholder = x
     return x
 
@@ -162,7 +171,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     """
     if layer_name in self._parent_layers:
       return self._parent_layers[layer_name]
-    layer = self.parent_net.get_layer(layer_name)
+    layer = super(SubnetworkRecCellSingleStep, self)._get_parent_layer(layer_name)
     rec_layer = self.parent_rec_layer
     if rec_layer is None:  # at template construction
       return layer
@@ -179,6 +188,13 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     layer = WrappedInternalLayer(name=layer_name, network=self.parent_net, output=output, base_layer=layer)
     self._parent_layers[layer_name] = layer
     return layer
+
+  def get_sources(self, sources):
+    """
+    :param list[str] sources:
+    :rtype: list[LayerBase]
+    """
+    return [self._get_parent_layer(layer_name) for layer_name in sources]
 
   def _set_construction_state_in_loop(self):
     rec_layer = self.parent_rec_layer
@@ -260,6 +276,32 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     rec_layer.set_state_vars_final_values_recursive("state", net_vars)
     return res
 
+  def _construct(self, prev_outputs, prev_extra, i, data=None,
+                 inputs_moved_out_tas=None, needed_outputs=("output",)):
+    """
+    This is called from within the `tf.while_loop` of the :class:`RecLayer`,
+    to construct the subnetwork, which is performed step by step.
+
+    :param dict[str,tf.Tensor] prev_outputs:
+    :param dict[str,dict[str,tf.Tensor]] prev_extra:
+    :param tf.Tensor i: loop counter. scalar, int32, current step (time)
+    :param dict[str,tf.Tensor] data: via tensor arrays
+    :param dict[str,tf.TensorArray]|None inputs_moved_out_tas:
+    :param set[str] needed_outputs:
+    """
+    # The TensorArrays depend on the base network (base state vars)
+    # which would not have tiling enabled at the time they were constructed.
+    # So we add tiling here.
+    assert data is not None
+    for key, value in list(data.items()):
+      assert key in self.net.extern_data.data
+      data_ = self.net.extern_data.data[key]
+      data[key] = self._tiled(data_, value)
+
+    super(SubnetworkRecCellSingleStep, self)._construct(
+      prev_outputs=prev_outputs, prev_extra=prev_extra, i=i, data=data,
+      inputs_moved_out_tas=inputs_moved_out_tas, needed_outputs=needed_outputs)
+
 
 class RecStepByStepLayer(RecLayer):
   """
@@ -333,6 +375,7 @@ class RecStepByStepLayer(RecLayer):
 
   class ConstructionState:
     """construction states"""
+    GetSources = Entity("get_sources")
     Init = Entity("init")
     InLoop = Entity("in_body")
 
@@ -544,7 +587,9 @@ class RecStepByStepLayer(RecLayer):
         feed_tensors.append(data.placeholder)
         feed_tensors.extend(data.size_placeholder.values())
       path = find_ops_path_output_to_input(fetches=value, tensors=feed_tensors)
-      assert not path, "There should be no path from extern data to %s final op value, but there is: %r" % (self, path)
+      assert not path, (
+        "There should be no path from extern data to %s final op value, but there is:\n%s" % (
+          self, "\n".join(map(repr, path))))
       if self.orig_data_shape.batch_dim_axis not in (0, None):
         x = self.orig_data_shape.copy()
         x.placeholder = value
@@ -552,14 +597,48 @@ class RecStepByStepLayer(RecLayer):
         value = x.placeholder
       return tf_compat.v1.assign(self.var, value, name="final_state_var_%s" % self.name).op
 
-  def __init__(self, **kwargs):
+  def __init__(self, _orig_sources, sources, network, name, output, unit, **kwargs):
+    """
+    :param str|list[str]|None _orig_sources:
+    :param list[LayerBase] sources:
+    :param returnn.tf.network.TFNetwork network:
+    :param str name:
+    :param Data output:
+    :param SubnetworkRecCellSingleStep unit:
+    """
+    assert isinstance(unit, SubnetworkRecCellSingleStep)
     kwargs = kwargs.copy()
     kwargs["optimize_move_layers_out"] = False
     self.state_vars = {}  # type: typing.Dict[str,RecStepByStepLayer.StateVar]
     self.stochastic_var_order = []  # type: typing.List[str]
     self._parent_tile_multiples = None  # type: typing.Optional[tf.Tensor]
+    self.construction_state = self.ConstructionState.GetSources
+
+    # Some early assigns needed for set_parent_layer, and that __repr__ works.
+    self.network = network
+    self.name = name
+    self.output = output
+    unit.set_parent_layer(self)  # early assign, so that unit.get_parent_layer() works
+    if _orig_sources:
+      # Make sure we resolve sources again through our get_parent_layer logic.
+      if isinstance(_orig_sources, (list, tuple)):
+        assert len(sources) == len(_orig_sources)
+      else:
+        assert isinstance(_orig_sources, str)
+        assert len(sources) == 1
+        _orig_sources = [_orig_sources]
+      assert unit.parent_rec_layer is self  # this is needed such that get_sources and get_parent_layer works
+      # get_sources will call get_parent_layer which will register it properly as a base state var.
+      # Note that we are not yet inside the loop, thus this will not enable tiling,
+      # and thus the resulting TensorArray will not have tiling.
+      # Thus, we will post-edit the subnet extern_data ("data:source") in our derived _construct to add tiling.
+      sources = unit.get_sources(_orig_sources)
+    else:
+      assert not sources
+
     self.construction_state = self.ConstructionState.Init
-    super(RecStepByStepLayer, self).__init__(**kwargs)
+    super(RecStepByStepLayer, self).__init__(
+      sources=sources, network=network, name=name, output=output, unit=unit, **kwargs)
 
   def set_construction_state_in_loop(self):
     """
@@ -586,7 +665,7 @@ class RecStepByStepLayer(RecLayer):
           if not name.startswith("base_") and not name.startswith("stochastic_var_"):
             if var.var_data_shape.have_batch_axis():
               loop_batch_dim = tf_util.get_shape_dim(var.var.value(), var.var_data_shape.batch_dim_axis)
-      assert base_batch_dim is not None and loop_batch_dim is not None
+      assert base_batch_dim is not None and loop_batch_dim is not None, self.state_vars
       with tf.control_dependencies([
             tf.Assert(tf.equal(loop_batch_dim % base_batch_dim, 0),
                       ["loop_batch_dim", loop_batch_dim, "base_batch_dim", base_batch_dim])]):
@@ -720,11 +799,14 @@ class RecStepByStepLayer(RecLayer):
     self.stochastic_var_order.append(name)
 
   @classmethod
-  def get_out_data_from_opts(cls, **kwargs):
+  def transform_config_dict(cls, d, network, get_layer):
     """
-    :rtype: Data
+    :param dict[str] d: will modify inplace
+    :param returnn.tf.network.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
-    return RecLayer.get_out_data_from_opts(**kwargs)
+    d["_orig_sources"] = d.get("from", "data")  # used for potential custom get_parent_layer of SubnetworkRecCell
+    super(RecStepByStepLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
 
 class ChoiceStateVarLayer(LayerBase):
