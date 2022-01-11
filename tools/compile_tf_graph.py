@@ -106,7 +106,6 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     """
     :param RecStepByStepLayer.StateVar state_var:
     :param Data output:
-    :param tf.Tensor x:
     :rtype: tf.Tensor
     """
     assert isinstance(state_var, RecStepByStepLayer.StateVar)
