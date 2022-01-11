@@ -291,7 +291,6 @@ class RecStepByStepLayer(RecLayer):
       - Set the stochastic state var `"stochastic_var_choice_%s" % name` to the selected values (label indices).
       - If the beam has multiple items, i.e. the batch dimension changed, you must make sure
         that all further used state variables will also have the same batch dim.
-      - You can use "select_src_beams" to select the new states given the choices.
     * Do a single session run for the next values of these state vars:
       "i", "end_flag" (if existing), "dyn_seq_len" (if existing), "state_*" (multiple vars).
       These are also the state vars which will get updated in every further recurrent step.
@@ -321,13 +320,7 @@ class RecStepByStepLayer(RecLayer):
   * "stochastic_var_order": list[str]. the order of the stochastic vars.
 
   * "init_op": str. op. the initializer for all state vars, including encoder.
-  * "tile_batch": dict[str, str]. might not be used by the decoder. dict with:
-    * "op": str. the op for tiling the batch dim.
-    * "repetitions_placeholder": str. placeholder for the number of repetitions.
   * "next_step_op: str. op. the update op for all state vars.
-  * "select_src_beams": dict[str, str]. might not be used by the decoder. dict with:
-    * "op": str. op name for selecting the beams.
-    * "src_beams_placeholder": str. placeholder for the number of source beams indices.
 
   """
 
