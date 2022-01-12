@@ -952,6 +952,24 @@ class Dim(object):
       return tf.math.reduce_max(self.dyn_size)
     raise Exception('%s: need placeholder, self.dimension or self.dyn_size for dim value' % self)
 
+  def axis_split_info(self):
+    """
+    :return: axis split info. see :func:`get_param_axes_split_info` and usage (e.g. pretraining)
+    :rtype: list[int|None]
+    """
+    same_base = self.get_same_base()
+    op = self.derived_from_op or same_base.derived_from_op
+    if not op:
+      return [self.dimension]
+    if op.kind == "add":
+      return sum([x.axis_split_info() for x in op.inputs], [])  # flatten
+    if op.kind == "mul":
+      res = [1]
+      for x in op.inputs:
+        res = sum([n * x.axis_split_info() if n is not None else None for n in res], [])  # flatten
+      return res
+    return [self.dimension]
+
   @property
   def vocab(self):
     """

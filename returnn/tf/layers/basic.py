@@ -8050,7 +8050,8 @@ class VariableLayer(LayerBase):
     with self.var_creation_scope():
       var = self.add_param(tf_compat.v1.get_variable(
         name=self.name, shape=shape_, dtype=dtype,
-        initializer=initializer, trainable=trainable))
+        initializer=initializer, trainable=trainable),
+        axes_split_info=[d.axis_split_info() for d in dim_tags])
       out = var
       if add_time_axis:
         out = tf.expand_dims(out, axis=0)
