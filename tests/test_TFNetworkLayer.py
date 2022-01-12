@@ -5246,6 +5246,22 @@ def test_split_info_input():
     # for param init handling, output dim split do matter.
 
 
+def test_VariableLayer_split_info():
+  feat1 = FeatureDim("feature1", 3)
+  feat2 = FeatureDim("feature2", 5)
+  net_dict = {
+    "output": {"class": "variable", "shape": [2 * feat1 + feat2, 3 * feat1]}
+  }
+  with make_scope() as session:
+    network = TFNetwork(extern_data=ExternData())
+    network.construct_from_dict(net_dict)
+    layer = network.layers["output"]
+    assert isinstance(layer, VariableLayer)
+    assert_equal(
+      tf_util.get_param_axes_split_info(layer.output.placeholder),
+      [2 * [feat1.dimension] + [feat2.dimension], 3 * [feat1.dimension]])
+
+
 def test_extra1():
   n_in, n_out = 2, 3
   config = Config({
