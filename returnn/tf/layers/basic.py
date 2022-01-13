@@ -8405,6 +8405,73 @@ class ForcedAlignmentLayer(_ConcatInputLayer):
     return Data(**opts)
 
 
+class SparseSoftmaxCrossEntropyWithLogitsLayer(LayerBase):
+  """
+  This is a simple wrapper for tf.nn.sparse_softmax_cross_entropy_with_logits.
+  """
+  layer_class = "sparse_softmax_cross_entropy_with_logits"
+
+  def __init__(self, logits, targets, axis=None, **kwargs):
+    """
+    :param LayerBase logits:
+    :param LayerBase targets:
+    :param Dim|str|None axis: feature dim by default
+    """
+    super(SparseSoftmaxCrossEntropyWithLogitsLayer, self).__init__(**kwargs)
+    self.logits = logits
+    self.targets = targets
+    logits_data = logits.output.copy()
+    if axis is None:
+      assert logits_data.have_feature_axis()
+      logits_data = logits_data.copy_move_axis(logits_data.feature_dim_axis, -1)
+    else:
+      axis_int = logits_data.get_axis_from_description(axis, allow_int=False)
+      logits_data = logits_data.copy_move_axis(axis_int, -1)
+    logits_data.feature_dim_axis = logits_data.batch_ndim - 1
+    assert "int" in targets.output.dtype
+    if isinstance(axis, Dim):
+      # When we specify the dim tag, be strict
+      assert targets.output.sparse and targets.output.sparse_dim == axis
+    else:
+      if targets.output.sparse:  # allow dense int values as well without further checking
+        assert targets.output.dim == logits_data.dim
+    targets_data = targets.output.copy_compatible_to(self.output, check_sparse=False, check_dtype=False, add_dims=False)
+    self.output.placeholder = tf.nn.sparse_softmax_cross_entropy_with_logits(
+      logits=logits_data.placeholder, labels=targets_data.placeholder)
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    return [self.logits, self.targets]
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param returnn.tf.network.TFNetwork network:
+    :param get_layer:
+    """
+    d.setdefault("from", [])
+    super(SparseSoftmaxCrossEntropyWithLogitsLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["logits"] = get_layer(d["logits"])
+    d["targets"] = get_layer(d["targets"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, logits, axis=None, **kwargs):
+    """
+    :param str name:
+    :param LayerBase logits:
+    :param Dim|str|None axis: feature dim by default
+    """
+    if axis is None:
+      assert logits.output.have_feature_axis()
+      axis_int = logits.output.feature_dim_axis
+    else:
+      axis_int = logits.output.get_axis_from_description(axis, allow_int=False)
+    return logits.output.copy_template_excluding_axis(exclude_axis=axis_int).copy(name="%s_output" % name)
+
+
 class FastBaumWelchLayer(_ConcatInputLayer):
   """
   Calls :func:`fast_baum_welch` or :func:`fast_baum_welch_by_sprint_automata`.
