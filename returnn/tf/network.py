@@ -1180,20 +1180,14 @@ class TFNetwork(object):
           # Accumulate losses (outside of layer scope name).
           for loss_obj in losses:
             if loss_obj.get_loss_value_for_objective() is not None:
-              if total_loss is 0:
-                total_loss = loss_obj.get_loss_value_for_objective()
-              else:
-                total_loss += loss_obj.get_loss_value_for_objective()
+              total_loss = tf_util.optional_add(total_loss, loss_obj.get_loss_value_for_objective())
 
       if with_total:
         with reuse_name_scope("constraints"):
           with reuse_name_scope(layer.tf_scope_name):
             constraints = layer.get_constraints_value()
           if constraints is not None:
-            if total_constraints is 0:
-              total_constraints = constraints
-            else:
-              total_constraints += constraints
+            total_constraints = tf_util.optional_add(total_constraints, constraints)
 
     losses_dict = {}  # type: typing.Dict[str,LossHolder]
     for loss_name, loss_holders in losses_multi_dict.items():
@@ -1219,7 +1213,7 @@ class TFNetwork(object):
       self.losses_dict.update(losses_dict)
       self.total_loss = total_loss
       self.total_constraints = total_constraints
-      self.total_objective = total_loss + total_constraints
+      self.total_objective = tf_util.optional_add(total_loss, total_constraints)
       if not tf_util.get_current_control_flow_context():  # summaries cannot be used when in loop or cond
         tf_compat.v1.summary.scalar("loss", self.total_loss)
         tf_compat.v1.summary.scalar("constraints", self.total_constraints)
