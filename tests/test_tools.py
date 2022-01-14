@@ -55,7 +55,8 @@ network = {
       "class": "rec", "from": [], "target": "classes",
       "unit": {
         "embed": {"class": "linear", "from": "prev:output", "activation": "sigmoid", "n_out": 3},
-        "prob": {"class": "softmax", "from": ["embed", "base:enc1"], "loss": "ce", "target": "classes"},
+        "s": {"class": "rec", "unit": "lstm", "from": ["embed", "base:enc1"], "n_out": 3},
+        "prob": {"class": "softmax", "from": "s", "loss": "ce", "target": "classes"},
         "output": {"class": "choice", "beam_size": 4, "from": "prob", "target": "classes", "initial_output": 0},
         "end": {"class": "compare", "from": "output", "value": 0}
       }
@@ -76,7 +77,8 @@ network = {
       "class": "rec", "from": "encoder", "target": "classes",
       "unit": {
         "embed": {"class": "linear", "from": "prev:output", "activation": "sigmoid", "n_out": 3},
-        "prob": {"class": "softmax", "from": ["embed", "data:source"], "loss": "ce", "target": "classes"},
+        "s": {"class": "rec", "unit": "lstm", "from": ["embed", "data:source"], "n_out": 3},
+        "prob": {"class": "softmax", "from": "s", "loss": "ce", "target": "classes"},
         "output": {"class": "choice", "beam_size": 4, "from": "prob", "target": "classes", "initial_output": 0},
       }
     },
