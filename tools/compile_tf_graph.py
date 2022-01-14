@@ -29,7 +29,7 @@ from returnn.tf.network import TFNetwork
 from returnn.tf.layers.basic import LayerBase, register_layer_class
 from returnn.tf.layers.base import WrappedInternalLayer
 # noinspection PyProtectedMember
-from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell, ChoiceLayer
+from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
 
 
 config = None  # type: typing.Optional[Config]
