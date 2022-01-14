@@ -709,6 +709,8 @@ class RecStepByStepLayer(RecLayer):
     assert data_shape or initial_value is not None
     if data_shape:
       assert isinstance(data_shape, Data)
+      if data_shape.have_batch_axis() and initial_value is not None:
+        assert initial_value.shape.dims[data_shape.batch_dim_axis].value is None
     elif initial_value.shape.ndims == 0:
       data_shape = Data(name=name, batch_dim_axis=None, shape=(), dtype=initial_value.dtype.name)
     else:
