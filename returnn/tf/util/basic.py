@@ -5976,12 +5976,14 @@ def get_device_attr(dev):
     return _DeviceAttrMod.get_device_attr()
 
 
-def print_graph_output(fetches, file=sys.stdout, max_depth=None):
+def print_graph_output(fetches, file=None, max_depth=None):
   """
   :param tf.Operation|tf.Tensor|list[tf.Tensor|tf.Operation] fetches:
-  :param typing.IO[str]|io.TextIOBase|io.StringIO file:
+  :param typing.IO[str]|io.TextIOBase|io.StringIO|None file: sys.stdout by default
   :param int|None max_depth:
   """
+  if file is None:
+    file = sys.stdout
   if not isinstance(fetches, (list, tuple)):
     fetches = [fetches]
   visited = set()
