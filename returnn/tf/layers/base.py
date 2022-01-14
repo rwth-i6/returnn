@@ -614,7 +614,7 @@ class LayerBase(object):
             # such that we do not need to know in advance which data keys we need.
             # Also, if we are inside a rec layer, and doing search, we also cannot do that.
             if network.is_inside_rec_layer() and not network.search_flag:
-              network.get_extern_data(target, mark_data_key_as_used=True)
+              network.get_extern_data(target, mark_data_key_as_used=network.eval_flag)
             if not network.search_flag:
               # Also, there are cases when we want to have the target as an explicit layer dep,
               # e.g. when the target has a beam, to derive the search choices.
