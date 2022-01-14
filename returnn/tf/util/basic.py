@@ -6139,10 +6139,12 @@ def find_ops_path_output_to_input(tensors, fetches):
       visited.add(op)
       for x in op.inputs:
         if x.name in tensor_names:  # found a path
-          result = [op]
-          while op not in fetches:
-            op = back_pointers[op]
+          result = [x.op]
+          while True:
             result.append(op)
+            if op in fetches:
+              break
+            op = back_pointers[op]
           return result
       for next_op in [x.op for x in op.inputs] + list(op.control_inputs):
         assert isinstance(next_op, tf.Operation)
