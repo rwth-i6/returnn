@@ -127,6 +127,9 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       x = self._tiled(output, state_var.read())
     else:
       raise ValueError("unexpected construction state %r" % rec_layer.construction_state)
+    dim_tag = Dim.get_tag_from_size_tensor(output.placeholder)
+    if dim_tag:
+      dim_tag.set_tag_on_size_tensor(x, same_as_before=True)
     output.placeholder = x
     return x
 
@@ -142,7 +145,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       x, axis=output.batch_dim_axis,
       multiples=rec_layer.get_parent_tile_multiples())
 
-  def _get_parent_dim_tag(self, dim_tag):
+  def get_parent_dim_tag(self, dim_tag):
     """
     :param Dim dim_tag:
     :rtype: Dim
@@ -158,8 +161,18 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     new_size, state_var = rec_layer.create_state_var(
       name="base_size_%s" % tf_util.get_valid_scope_name_from_str(dim_tag.description),
       initial_value=dim_tag.dyn_size)
-    dim_tag_ = dim_tag.copy(same_as_self=False, description=dim_tag.description + "_rec_step_by_step")
-    dim_tag_.dyn_size_ext = dim_tag.dyn_size_ext.copy()
+    dim_tag_dyn_size_ext = dim_tag.dyn_size_ext.copy()
+    with tf_util.same_control_flow_ctx(dim_tag_dyn_size_ext.placeholder), tf_util.reuse_name_scope("", absolute=True):
+      # Need to create new tensor currently for the set_tag_on_size_tensor logic.
+      # (set_tag_on_size_tensor is going to be removed at some point but currently we need it.)
+      dim_tag_dyn_size_ext.placeholder = tf.identity(
+        dim_tag_dyn_size_ext.placeholder, name=dim_tag_dyn_size_ext.placeholder.op.name + "_copy_new_dim_tag")
+    # Copy dim tag.
+    dim_tag_ = Dim(
+      kind=dim_tag.kind, description=dim_tag.description + "_rec_step_by_step",
+      dimension=None, dyn_size_ext=dim_tag_dyn_size_ext,
+      batch=dim_tag.batch)
+    dim_tag_.set_tag_on_size_tensor(dim_tag_dyn_size_ext.placeholder)
     self._maybe_delay_tiled(state_var, dim_tag_.dyn_size_ext)
     self._parent_dim_tags[dim_tag] = dim_tag_
     return dim_tag_
@@ -167,7 +180,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
   def _get_parent_layer(self, layer_name):
     """
     :param str layer_name: without "base:" prefix
-    :rtype: LayerBase
+    :rtype: WrappedInternalLayer
     """
     if layer_name in self._parent_layers:
       return self._parent_layers[layer_name]
@@ -179,7 +192,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     output = layer.output.copy()
     new_dim_tags = []
     for i, dim_tag in enumerate(output.dim_tags):
-      new_dim_tags.append(self._get_parent_dim_tag(dim_tag))
+      new_dim_tags.append(self.get_parent_dim_tag(dim_tag))
     output = output.copy_template_new_dim_tags(new_dim_tags=new_dim_tags, keep_special_axes=True)
     output.placeholder = layer.output.placeholder
     x, state_var = rec_layer.create_state_var(
@@ -192,7 +205,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
   def get_sources(self, sources):
     """
     :param list[str] sources:
-    :rtype: list[LayerBase]
+    :rtype: list[WrappedInternalLayer]
     """
     return [self._get_parent_layer(layer_name) for layer_name in sources]
 
@@ -245,13 +258,6 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     # We are ignoring acc_tas (the tensor arrays).
 
     self._set_construction_state_in_loop()
-
-    # Some layers make explicit use of the (global data) batch-dim,
-    # which they can get via TFNetwork.get_data_batch_dim().
-    # This will add a dependency on the external data, which we want to avoid.
-    # We can avoid that by taking the batch dim instead from one of the other states.
-    # Note that this would be wrong in beam search.
-    self.net.get_global_batch_info().dim = rec_layer.get_batch_dim_from_state()
 
     with tf.name_scope("cond"):
       rec_layer.create_state_var("cond", tf.constant(True))
@@ -594,7 +600,7 @@ class RecStepByStepLayer(RecLayer):
         value = x.placeholder
       return tf_compat.v1.assign(self.var, value, name="final_state_var_%s" % self.name).op
 
-  def __init__(self, _orig_sources, sources, network, name, output, unit, **kwargs):
+  def __init__(self, _orig_sources, sources, network, name, output, unit, axis, **kwargs):
     """
     :param str|list[str]|None _orig_sources:
     :param list[LayerBase] sources:
@@ -602,6 +608,7 @@ class RecStepByStepLayer(RecLayer):
     :param str name:
     :param Data output:
     :param SubnetworkRecCellSingleStep unit:
+    :param Dim axis:
     """
     assert isinstance(unit, SubnetworkRecCellSingleStep)
     kwargs = kwargs.copy()
@@ -633,15 +640,45 @@ class RecStepByStepLayer(RecLayer):
     else:
       assert not sources
 
+    # axis might be an existing axis from the encoder (e.g. transducer),
+    # so we also need to wrap it.
+    assert isinstance(axis, Dim)
+    if axis and sources and sources[0].base_layer.output.have_dim_tag(axis):
+      base_axis = axis
+      axis = unit.get_parent_dim_tag(base_axis)
+      unit.time_dim_tag = axis
+      # noinspection PyProtectedMember
+      unit._time_dim_tags.add(axis)
+      unit.net._inside_rec_time_dim = axis
+      if output.have_dim_tag(base_axis):
+        output = output.copy_template_replace_dim_tag(
+          axis=output.get_axis_from_description(base_axis),
+          new_dim_tag=axis)
+
     self.construction_state = self.ConstructionState.Init
+    if self.have_base_state_vars():
+      self._set_global_batch_dim(self.get_batch_dim_from_base_state_var())
     super(RecStepByStepLayer, self).__init__(
-      sources=sources, network=network, name=name, output=output, unit=unit, **kwargs)
+      sources=sources, network=network, name=name, output=output, unit=unit, axis=axis, **kwargs)
 
   def set_construction_state_in_loop(self):
     """
     Set that we entered the body.
     """
     self.construction_state = self.ConstructionState.InLoop
+
+    # Some layers make explicit use of the (global data) batch-dim,
+    # which they can get via TFNetwork.get_data_batch_dim().
+    # This will add a dependency on the external data, which we want to avoid.
+    # We can avoid that by taking the batch dim instead from one of the other states.
+    # Note that this would be wrong in beam search.
+    self._set_global_batch_dim(self.get_batch_dim_from_loop_state_var())
+
+  def _set_global_batch_dim(self, batch_dim):
+    """
+    :param tf.Tensor batch_dim
+    """
+    self.network.get_global_batch_info().dim = batch_dim
 
   def get_parent_tile_multiples(self):
     """
@@ -650,19 +687,8 @@ class RecStepByStepLayer(RecLayer):
     if self._parent_tile_multiples is not None:
       return self._parent_tile_multiples
     with tf_util.reuse_name_scope("parent_tile_multiples", absolute=True):
-      base_batch_dim, loop_batch_dim = None, None
-      for name, var in sorted(self.state_vars.items()):
-        assert isinstance(name, str)
-        assert isinstance(var, RecStepByStepLayer.StateVar)
-        if base_batch_dim is None:
-          if name.startswith("base_"):
-            if var.var_data_shape.have_batch_axis():
-              base_batch_dim = tf_util.get_shape_dim(var.var.value(), var.var_data_shape.batch_dim_axis)
-        if loop_batch_dim is None:
-          if not name.startswith("base_") and not name.startswith("stochastic_var_"):
-            if var.var_data_shape.have_batch_axis():
-              loop_batch_dim = tf_util.get_shape_dim(var.var.value(), var.var_data_shape.batch_dim_axis)
-      assert base_batch_dim is not None and loop_batch_dim is not None, self.state_vars
+      base_batch_dim = self.get_batch_dim_from_base_state_var()
+      loop_batch_dim = self.get_batch_dim_from_loop_state_var()
       with tf.control_dependencies([
             tf.Assert(tf.equal(loop_batch_dim % base_batch_dim, 0),
                       ["loop_batch_dim", loop_batch_dim, "base_batch_dim", base_batch_dim])]):
@@ -775,9 +801,33 @@ class RecStepByStepLayer(RecLayer):
         for k, v in final_values.items()}
     raise TypeError("unhandled type %r" % (final_values,))
 
-  def get_batch_dim_from_state(self):
+  def have_base_state_vars(self):
     """
-    :return: batch-dim, from some (any) state var, scalar, int32
+    :rtype: bool
+    """
+    for name, _ in sorted(self.state_vars.items()):
+      assert isinstance(name, str)
+      if name.startswith("base_"):
+        return True
+    return False
+
+  def get_batch_dim_from_base_state_var(self):
+    """
+    :return: batch-dim, from some (any) base state var, scalar, int32
+    :rtype: tf.Tensor|int
+    """
+    for name, v in sorted(self.state_vars.items()):
+      assert isinstance(name, str)
+      assert isinstance(v, RecStepByStepLayer.StateVar)
+      if name.startswith("base_"):
+        if v.var_data_shape.have_batch_axis():
+          with tf_util.reuse_name_scope("batch_dim_from_base_state_var_%s" % v.name, absolute=True):
+            return tf.shape(v.var.value())[v.var_data_shape.batch_dim_axis]
+    raise Exception("None of the base state vars do have a batch-dim: %s" % self.state_vars)
+
+  def get_batch_dim_from_loop_state_var(self):
+    """
+    :return: batch-dim, from some (any) loop state var, scalar, int32
     :rtype: tf.Tensor|int
     """
     for name, v in sorted(self.state_vars.items()):
@@ -785,8 +835,8 @@ class RecStepByStepLayer(RecLayer):
       if not name.startswith("base_") and not name.startswith("stochastic_var_"):
         if v.var_data_shape.batch_dim_axis is not None:
           with tf_util.reuse_name_scope("batch_dim_from_state_%s" % v.name, absolute=True):
-            return tf_util.get_shape_dim(v.var.value(), v.var_data_shape.batch_dim_axis)
-    raise Exception("None of the state vars do have a batch-dim: %s" % self.state_vars)
+            return tf.shape(v.var.value())[v.var_data_shape.batch_dim_axis]
+    raise Exception("None of the loop state vars do have a batch-dim: %s" % self.state_vars)
 
   def add_stochastic_var(self, name):
     """
