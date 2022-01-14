@@ -676,7 +676,7 @@ class RecStepByStepLayer(RecLayer):
 
   def _set_global_batch_dim(self, batch_dim):
     """
-    :param tf.Tensor batch_dim
+    :param tf.Tensor batch_dim:
     """
     self.network.get_global_batch_info().dim = batch_dim
 
