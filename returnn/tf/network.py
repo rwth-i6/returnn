@@ -2579,6 +2579,9 @@ class Subnetwork:
     subnet_layer_dict.pop("class", None)
     subnet_layer_dict.pop("_network", None)
     subnet_layer_dict.pop("_name", None)
+    subnet_layer_dict.pop("loss", None)
+    subnet_layer_dict.pop("loss_scale", None)
+    subnet_layer_dict.pop("loss_opts", None)
 
     # Other SubnetworkLayer specific arguments:
     subnet_layer_dict.pop("rec_previous_layer", None)  # this would be handled by the SubnetworkLayer
@@ -2596,7 +2599,7 @@ class Subnetwork:
     # But it doesn't really matter which layer we have as the parent layer for our subnetwork,
     # as long as the namespace and other context is correctly set up.
     self.layer = InternalLayer(
-      # Pass on remaining args, which might be relevant for custom scopes..
+      # Pass on remaining args, which might be relevant for custom scopes.
       **subnet_layer_dict)
     self.layer.post_init(subnet_layer_dict)
     self.net = TFNetwork(
