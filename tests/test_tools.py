@@ -78,7 +78,6 @@ network = {
         "embed": {"class": "linear", "from": "prev:output", "activation": "sigmoid", "n_out": 3},
         "prob": {"class": "softmax", "from": ["embed", "data:source"], "loss": "ce", "target": "classes"},
         "output": {"class": "choice", "beam_size": 4, "from": "prob", "target": "classes", "initial_output": 0},
-        "end": {"class": "compare", "from": "output", "value": 0}
       }
     },
 }
@@ -121,7 +120,6 @@ def test_compile_tf_graph_enc_dec_recurrent_step():
     os.path.join(tmp_dir, "returnn.config")
   ]
   run(*args)
-
 
 
 def test_compile_tf_graph_transducer_time_sync_recurrent_step():
