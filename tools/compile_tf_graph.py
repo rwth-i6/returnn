@@ -254,13 +254,8 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     self.net.get_global_batch_info().dim = rec_layer.get_batch_dim_from_state()
 
     with tf.name_scope("cond"):
-      # there is no max_seq_len limit for the step-by-step function, so the loop
-      # condition only depends on the end flags or is true if those do not exist
       rec_layer.create_state_var("cond", tf.constant(True))
-      if seq_len_info:
-        end_flag, _ = seq_len_info
-        res = tf.reduce_any(tf.logical_not(end_flag), name="any_not_ended")
-        rec_layer.set_state_var_final_value("cond", res)
+      rec_layer.set_state_var_final_value("cond", cond(i, net_vars, acc_tas, seq_len_info))
 
     with tf.name_scope("body"):
       res = body(i, net_vars, acc_tas, seq_len_info)
