@@ -4838,6 +4838,103 @@ def test_LossAsIs_custom_dim():
     assert loss
 
 
+def test_loss_cross_entropy():
+  from returnn.tf.util.data import Dim, batch_dim, single_step_dim, SpatialDim, FeatureDim
+
+  extern_data_data_dim_tags_1_time_dim = SpatialDim('time')
+  extern_data_data_dim_tags_2_input_dim = FeatureDim('input', 3)
+  extern_data_classes_sparse_dim_out_dim = FeatureDim('out', 5)
+
+  extern_data_opts = {
+    'data': {
+      'dim_tags': (
+        batch_dim,
+        extern_data_data_dim_tags_1_time_dim,
+        extern_data_data_dim_tags_2_input_dim
+      ),
+      'dtype': 'float32',
+      'available_for_inference': True
+    },
+    'classes': {
+      'dim_tags': (
+        batch_dim,
+        extern_data_data_dim_tags_1_time_dim
+      ),
+      'dtype': 'int32',
+      'sparse_dim': extern_data_classes_sparse_dim_out_dim,
+      'available_for_inference': True
+    }
+  }
+
+  net_dict = {
+    'dot': {
+      'class': 'dot',
+      'from': ['data:data', 'weight'],
+      'reduce': extern_data_data_dim_tags_2_input_dim,
+      'out_shape': {batch_dim, extern_data_data_dim_tags_1_time_dim, extern_data_classes_sparse_dim_out_dim}
+    },
+    'add': {
+      'class': 'combine',
+      'from': ['dot', 'bias'],
+      'kind': 'add',
+      'out_shape': {batch_dim, extern_data_data_dim_tags_1_time_dim, extern_data_classes_sparse_dim_out_dim}
+    },
+    'cross_entropy': {
+      'class': 'subnetwork',
+      'from': [],
+      'subnetwork': {
+        'sparse_softmax_cross_entropy_with_logits': {
+          'class': 'sparse_softmax_cross_entropy_with_logits',
+          'logits': 'base:add',
+          'targets': 'base:data:classes',
+          'axis': extern_data_classes_sparse_dim_out_dim,
+          'out_shape': {batch_dim, extern_data_data_dim_tags_1_time_dim}
+        },
+        'output': {
+          'class': 'copy',
+          'from': 'sparse_softmax_cross_entropy_with_logits',
+          'out_shape': {batch_dim, extern_data_data_dim_tags_1_time_dim}
+        }
+      },
+      'out_shape': {batch_dim, extern_data_data_dim_tags_1_time_dim},
+      'loss': 'as_is',
+      'loss_scale': 1.0
+    },
+    'weight': {
+      'class': 'variable',
+      'shape': [
+        extern_data_data_dim_tags_2_input_dim,
+        extern_data_classes_sparse_dim_out_dim
+      ]
+    },
+    'bias': {
+      'class': 'variable',
+      'shape': [
+        extern_data_classes_sparse_dim_out_dim
+      ]
+    }
+  }
+
+  # First with train flag False. Only construct.
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData(extern_data_opts), train_flag=False)
+    net.construct_from_dict(net_dict)
+
+  # Now with train flag True. Try to calc loss.
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData(extern_data_opts), train_flag=True)
+    net.construct_from_dict(net_dict)
+    loss = net.get_total_loss()
+    print("loss tensor:", loss)
+    assert isinstance(loss, tf.Tensor)
+    tf_util.print_graph_output(loss, max_depth=4)
+    from tensorflow.python.framework import tensor_util
+    loss_const = tensor_util.constant_value(loss)
+    assert loss_const is None
+    net.initialize_params(session)
+    session.run(loss, feed_dict=make_feed_dict(net.extern_data))
+
+
 def test_LossLayer_sublayers():
   from returnn.tf.util.basic import Dim
   n_in, n_out = 7, 11
