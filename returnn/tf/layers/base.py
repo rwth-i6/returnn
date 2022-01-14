@@ -2488,23 +2488,19 @@ class Loss(object):
       target=layer._get_target_value(),
       layer=layer)
 
-  def _flatten_or_merge(self, x, seq_lens, time_major):
+  def _flatten_or_merge(self, data):
     """
-    :param tf.Tensor x: (B,T,...) or (T,B,...)
-    :param tf.Tensor seq_lens: (B,)
-    :param bool time_major:
+    :param Data data: (B,T,...) or (T,B,...)
     :return: (B*T|T*B|B',...)
     :rtype: tf.Tensor
     """
+    x = data.placeholder
     if self.use_flatten_frames:
-      from returnn.tf.util.basic import flatten_with_seq_len_mask
-      return flatten_with_seq_len_mask(x, seq_lens, time_major=time_major)
-    x_shape = tf.shape(x)
-    x_shape = [x_shape[i] for i in range(x.get_shape().ndims)]
-    if time_major != self.output.is_time_major:
+      return tf_util.flatten_with_seq_len_mask(x, data.get_sequence_lengths(), time_major=data.is_time_major)
+    x_shape = tf_util.get_shape(x)
+    if data.is_time_major != self.output.is_time_major:
       # We expect at various places (eg. reduce_to_batch) that the loss is the same as self.output.
-      from returnn.tf.util.basic import swapaxes
-      x = swapaxes(x, 0, 1)  # (B,T,...) or (T,B,...)
+      x = tf_util.swapaxes(x, 0, 1)  # (B,T,...) or (T,B,...)
     return tf.reshape(x, [x_shape[0] * x_shape[1]] + x_shape[2:], name="merge_batch_time")
 
   def init(self, output, output_with_activation=None, target=None, layer=None):
@@ -2514,7 +2510,6 @@ class Loss(object):
     :param Data target: reference target from dataset
     :param LayerBase|None layer:
     """
-    flatten_or_merge = self._flatten_or_merge
     with tf.name_scope("loss_init"):
       self.layer = layer
       if target:
@@ -2546,15 +2541,16 @@ class Loss(object):
         assert time_and_batch_dims in [(0, 1), (1, 0)], (
           "output time-batch-dim unexpected: %r (target %r)" % (self.output, self.target))
         if output_with_activation and output_with_activation.act_func is tf.nn.softmax:
-          self.output_before_softmax_flat = flatten_or_merge(
-            output_with_activation.x, self.output_seq_lens, time_major=output.is_time_major)
+          out_before_act = output.copy(name="%s_before_softmax" % output.name)
+          out_before_act.placeholder = output_with_activation.x
+          self.output_before_softmax_flat = self._flatten_or_merge(out_before_act)
         else:
-          self.output_flat = flatten_or_merge(output.placeholder, self.output_seq_lens, time_major=output.is_time_major)
+          self.output_flat = self._flatten_or_merge(output)
           self.output_flat.set_shape(tf.TensorShape((None,) + output.shape[1:]))
         if target:
           assert target.have_time_axis()
           self.target_seq_lens = target.get_sequence_lengths()
-          self.target_flat = flatten_or_merge(target.placeholder, self.target_seq_lens, time_major=target.is_time_major)
+          self.target_flat = self._flatten_or_merge(target)
           self.loss_norm_factor = 1.0 / tf.cast(tf.reduce_sum(self.target_seq_lens), tf.float32)
         else:
           self.loss_norm_factor = 1.0 / tf.cast(tf.reduce_sum(self.output_seq_lens), tf.float32)
