@@ -261,7 +261,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
 
     with tf.name_scope("cond"):
       rec_layer.create_state_var("cond", tf.constant(True))
-      rec_layer.set_state_var_final_value("cond", cond(i, net_vars, acc_tas, seq_len_info))
+      rec_layer.set_state_var_final_value("cond", cond(i, net_vars, acc_tas, seq_len_info, allow_inf_max_len=True))
 
     with tf.name_scope("body"):
       res = body(i, net_vars, acc_tas, seq_len_info)
@@ -924,7 +924,30 @@ class ChoiceStateVarLayer(LayerBase):
       d["explicit_search_sources"] = [get_layer(name) for name in d["explicit_search_sources"]]
     super(ChoiceStateVarLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
-  get_out_data_from_opts = ChoiceLayer.get_out_data_from_opts
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, target, network, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param str target:
+    :param returnn.tf.network.TFNetwork network:
+    :rtype: Data
+    """
+    # This is simplified from ChoiceLayer.get_out_data_from_opts.
+    target = target[0] if isinstance(target, list) else target  # only the first matters here
+    if target:
+      out_data = cls._static_get_target_value(
+        target=target, network=network, mark_data_key_as_used=False).copy_template(name="%s_output" % name)
+      out_data.available_for_inference = True  # in inference, we would do search
+    else:  # no target. i.e. we must do search
+      # Output will be the sparse version of the input.
+      out_data = sources[0].output.copy_template().copy_as_batch_major()
+      dim_tags = list(out_data.dim_tags)
+      del dim_tags[out_data.feature_dim_axis]
+      out_data = Data(
+        name="%s_output" % name, dim_tags=dim_tags, sparse=True, dim=out_data.dim,
+        batch=out_data.batch.copy_set_beam(None) if out_data.batch else network.get_global_batch_info())
+    return out_data
 
 
 def main(argv):
