@@ -6217,6 +6217,7 @@ class GenericAttentionLayer(AttentionBaseLayer):
   Keep axes: base: feature axis; weights: all remaining, e.g. extra time.
   """
   layer_class = "generic_attention"
+  recurrent = True  # operates over spatial axis
 
   def __init__(self, weights, auto_squeeze=True, **kwargs):
     """
