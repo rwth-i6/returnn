@@ -1957,6 +1957,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
   See :class:`SeqLenMaskLayer` if you just want to apply a masking.
   """
   layer_class = "softmax_over_spatial"
+  recurrent = True  # can operate on the spatial dim
 
   def __init__(self, axis=None, energy_factor=None,
                start=None, window_start=None, window_size=None, use_time_mask=None,
