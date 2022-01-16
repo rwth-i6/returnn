@@ -6990,6 +6990,7 @@ class CombineLayer(LayerBase):
   Also see :class:`ActivationLayer`, or :class:`CompareLayer`.
   """
   layer_class = "combine"
+  recurrent = True  # in case of eval, we cannot really know
 
   # noinspection PyShadowingBuiltins
   def __init__(self, kind, sources, activation=None, with_bias=False,
