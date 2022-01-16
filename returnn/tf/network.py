@@ -3076,8 +3076,7 @@ class LossHolder:
 
     # We want output of the form (B,T)
     if self.loss.output.time_dim_axis == 0:
-      from returnn.tf.util.basic import swapaxes
-      value = swapaxes(value, 0, 1)  # resulting in (B,T,...)
+      value = tf_util.swapaxes(value, 0, 1)  # resulting in (B,T,...)
 
     return value
 

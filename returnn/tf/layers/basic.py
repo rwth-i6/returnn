@@ -4083,10 +4083,9 @@ class SwapAxesLayer(_ConcatInputLayer):
     :param int|str axis2:
     """
     super(SwapAxesLayer, self).__init__(**kwargs)
-    from returnn.tf.util.basic import swapaxes
     axis1 = self.input_data.get_axis_from_description(axis1)
     axis2 = self.input_data.get_axis_from_description(axis2)
-    self.output.placeholder = swapaxes(self.input_data.placeholder, axis1=axis1, axis2=axis2)
+    self.output.placeholder = tf_util.swapaxes(self.input_data.placeholder, axis1=axis1, axis2=axis2)
 
   @classmethod
   def _translate_axis(cls, axis_to_translate, axis1, axis2):
@@ -8509,11 +8508,9 @@ class FastBaumWelchLayer(_ConcatInputLayer):
       if len(self.sources) == 1 and self.sources[0].output_before_activation:
         am_scores = -self.sources[0].output_before_activation.get_log_output()
         if self.sources[0].output.is_batch_major:
-          from returnn.tf.util.basic import swapaxes
-          am_scores = swapaxes(am_scores, 0, 1)
+          am_scores = tf_util.swapaxes(am_scores, 0, 1)
       else:
-        from returnn.tf.util.basic import safe_log
-        am_scores = -safe_log(data.placeholder)
+        am_scores = -tf_util.safe_log(data.placeholder)
     else:
       raise Exception("%s: invalid input_type %r" % (self, input_type))
     if min_prob > 0:
