@@ -2066,6 +2066,19 @@ def test_SplitDimsLayer_dim_tags():
     })
 
 
+def test_SplitDimsLayer_dim_tags_split_batch():
+  from returnn.tf.util.data import batch_dim
+  time_dim = SpatialDim("in-time")
+  feat_dim = FeatureDim("feat", 3)
+  config = Config({
+    "extern_data": {"data": {"dim_tags": [batch_dim, time_dim, feat_dim]}}})
+  net = TFNetwork(config=config)
+  net.construct_from_dict({
+    "output": {
+      'class': 'split_dims', 'from': 'data', 'axis': batch_dim, 'dims': [1, -1]}
+  })
+
+
 def test_out_shape():
   # https://github.com/rwth-i6/returnn/issues/706
   # Note: Using SplitDimsLayer would also be nice to test out_shape. Or any layer which creates a new dim.
