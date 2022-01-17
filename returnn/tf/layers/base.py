@@ -1537,9 +1537,8 @@ class LayerBase(object):
             data_ = data.copy_time_flattened()
           mean_cur_batch, variance_cur_batch = tf_compat.v1.nn.moments(
             data_.placeholder, axes=data_.get_axes(exclude_feature=True))
-          if param_version >= 2:
-            mean_cur_batch = tf.reshape(mean_cur_batch, stats_shape)
-            variance_cur_batch = tf.reshape(variance_cur_batch, stats_shape)
+          mean_cur_batch = tf.reshape(mean_cur_batch, stats_shape)
+          variance_cur_batch = tf.reshape(variance_cur_batch, stats_shape)
         else:
           mean_cur_batch, variance_cur_batch = None, None
 
