@@ -2067,6 +2067,8 @@ def test_SplitDimsLayer_dim_tags():
 
 
 def test_SplitDimsLayer_dim_tags_split_batch():
+  # https://github.com/rwth-i6/returnn/issues/908
+  # https://github.com/rwth-i6/pytorch-to-returnn/pull/78
   from returnn.tf.util.data import batch_dim
   time_dim = SpatialDim("in-time")
   feat_dim = FeatureDim("feat", 3)
