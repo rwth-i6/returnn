@@ -3492,6 +3492,8 @@ class SplitDimsLayer(_ConcatInputLayer):
           dimension=shape_dim)
         if rem_dim is None or i != rem_dim_idx else rem_dim
         for i, shape_dim in enumerate(resolved_shape_dims))
+    if axis_dim_tag.is_batch_dim():
+      assert len([d for d in resolved_dims if d.is_batch_dim()]) == 1
 
     new_dim_tags = data.dim_tags[:axis] + resolved_dims + data.dim_tags[axis + 1:]
     out = data.copy_template_new_dim_tags(new_dim_tags)
