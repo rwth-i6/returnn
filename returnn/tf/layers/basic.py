@@ -3487,7 +3487,7 @@ class SplitDimsLayer(_ConcatInputLayer):
     if not resolved_dims:
       resolved_dims = tuple(
         Dim(
-          kind=axis_dim_tag.kind,
+          kind=axis_dim_tag.kind if not axis_dim_tag.is_batch_dim() else Dim.Types.Spatial,
           description="%s_split_dims%i" % (name, i),
           dimension=shape_dim)
         if rem_dim is None or i != rem_dim_idx else rem_dim
