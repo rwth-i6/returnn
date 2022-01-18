@@ -8063,8 +8063,10 @@ class VariableLayer(LayerBase):
   """
   layer_class = "variable"
 
-  def __init__(self, shape, dtype="float32", add_batch_axis=False, add_time_axis=False, trainable=True,
-               init=0,
+  def __init__(self, shape, dtype="float32",
+               add_batch_axis=False, add_time_axis=False,
+               trainable=True,
+               init=None, init_by_layer=None,
                **kwargs):
     """
     :param tuple[int|Dim]|list[int|Dim] shape:
@@ -8072,13 +8074,13 @@ class VariableLayer(LayerBase):
     :param bool add_batch_axis:
     :param bool add_time_axis:
     :param bool trainable:
-    :param str|float|int init: see :func:`returnn.tf.util.basic.get_initializer`
+    :param str|float|int|None init: see :func:`returnn.tf.util.basic.get_initializer`
+    :param LayerBase|None init_by_layer:
     """
     shape  # noqa  # used in get_out_data_from_opts
     super(VariableLayer, self).__init__(trainable=trainable, **kwargs)
     assert not self.sources, "%s: does not expect any sources" % self
-    from returnn.tf.util.basic import get_initializer, expand_dims_unbroadcast
-    initializer = get_initializer(init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
+    self.init_by_layer = init_by_layer
     dim_tags = list(self.output.dim_tags)
     if add_batch_axis:
       assert dim_tags[0].is_batch_dim()
@@ -8089,6 +8091,14 @@ class VariableLayer(LayerBase):
     shape_ = [d.dimension for d in dim_tags]
     assert all(shape_), self.output  # all static
     with self.var_creation_scope():
+      if init is not None:
+        assert init_by_layer is None
+        initializer = tf_util.get_initializer(
+          init, dtype=dtype, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
+      else:
+        assert init_by_layer is not None
+        out_data_base = Data(name=self.output.name, dim_tags=dim_tags, dtype=dtype)
+        initializer = init_by_layer.output.copy_compatible_to(out_data_base).placeholder
       var = self.add_param(tf_compat.v1.get_variable(
         name=self.name, shape=shape_, dtype=dtype,
         initializer=initializer, trainable=trainable),
@@ -8099,8 +8109,17 @@ class VariableLayer(LayerBase):
       if add_batch_axis:
         # Unbroadcast to not confuse some other layers
         batch_dim = self.output.get_batch_dim()
-        out = expand_dims_unbroadcast(out, axis=0, dim=batch_dim)
+        out = tf_util.expand_dims_unbroadcast(out, axis=0, dim=batch_dim)
     self.output.placeholder = out
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    deps = super(VariableLayer, self).get_dep_layers()
+    if self.init_by_layer:
+      deps.append(self.init_by_layer)
+    return deps
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -8113,6 +8132,8 @@ class VariableLayer(LayerBase):
     # Here: none by default.
     d.setdefault("from", [])
     super(VariableLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if d.get("init_by_layer", None):
+      d["init_by_layer"] = get_layer(d["init_by_layer"])
 
   @classmethod
   def get_out_data_from_opts(cls, name, network,
