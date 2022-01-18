@@ -2236,8 +2236,8 @@ class RandIntLayer(LayerBase):
   def __init__(self, shape, maxval, minval=0, dtype="int32", sparse_dim=None, seed=None, **kwargs):
     """
     :param tuple[Dim|int]|list[Dim|int] shape: desired shape of output tensor
-    :param int maxval: upper bound (exclusive) on range of random values
-    :param int minval: lower bound (inclusive) on range of random values
+    :param int|LayerBase maxval: upper bound (exclusive) on range of random values
+    :param int|LayerBase minval: lower bound (inclusive) on range of random values
     :param str dtype: type of the output. For random ints, int32 and int64 make sense, but could also be floats
     :param Dim|None sparse_dim:
     :param int|None seed: random seed
@@ -2245,7 +2245,28 @@ class RandIntLayer(LayerBase):
     super(RandIntLayer, self).__init__(**kwargs)
     seed = seed if seed is not None else self.network.random.randint(2 ** 31)
     shape_ = [d.get_dim_value() for d in self.output.dim_tags]
-    self.output.placeholder = tf.random.uniform(shape_, minval=minval, maxval=maxval, dtype=dtype, seed=seed)
+    self.minval = minval
+    self.maxval = maxval
+    if isinstance(minval, LayerBase):
+      assert minval.output.batch_shape == ()  # only scalars supported
+    if isinstance(maxval, LayerBase):
+      assert maxval.output.batch_shape == ()  # only scalars supported
+    self.output.placeholder = tf.random.uniform(
+      shape_,
+      minval=minval.output.placeholder if isinstance(minval, LayerBase) else minval,
+      maxval=maxval.output.placeholder if isinstance(maxval, LayerBase) else maxval,
+      dtype=dtype, seed=seed)
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    deps = super(RandIntLayer, self).get_dep_layers()
+    if isinstance(self.minval, LayerBase):
+      deps.append(self.minval)
+    if isinstance(self.maxval, LayerBase):
+      deps.append(self.maxval)
+    return deps
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -2256,14 +2277,18 @@ class RandIntLayer(LayerBase):
     """
     d.setdefault("from", [])
     super(RandIntLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if isinstance(d.get("maxval", None), str):
+      d["maxval"] = get_layer(d["maxval"])
+    if isinstance(d.get("minval", None), str):
+      d["minval"] = get_layer(d["minval"])
 
   @classmethod
   def get_out_data_from_opts(cls, name, shape, maxval, minval=0, dtype="int32", sparse_dim=None, **kwargs):
     """
     :param str name:
     :param tuple[Dim|int]|list[Dim|int] shape: desired shape of output tensor
-    :param int maxval: upper bound (exclusive) on range of random values
-    :param int minval: lower bound (inclusive) on range of random values
+    :param int|LayerBase maxval: upper bound (exclusive) on range of random values
+    :param int|LayerBase minval: lower bound (inclusive) on range of random values
     :param str dtype: type of the output. For random ints, int32 and int64 make sense, but could also be floats
     :param Dim|None sparse_dim:
     :rtype: Data
