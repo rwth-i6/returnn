@@ -1904,7 +1904,7 @@ class LengthLayer(LayerBase):
   def __init__(self, axis="T", add_time_axis=False, dtype="int32", sparse=False, **kwargs):
     """
     :param str|Dim axis:
-    :param bool add_time_axis:
+    :param bool add_time_axis: should not be used
     :param str dtype:
     :param bool sparse:
     """
@@ -1915,7 +1915,12 @@ class LengthLayer(LayerBase):
     dim = source.dim_tags[axis]
     self.dim_tag = dim
     if add_time_axis:
+      # You anyway should not use this, so it's ok to have only a single case supported here.
       self.output.placeholder = tf.expand_dims(dim.dyn_size, axis=self.output.time_dim_axis)
+    elif dim.is_batch_dim():
+      self.output.placeholder = dim.get_dim_value()
+    elif dim.dimension is not None:  # static
+      self.output.placeholder = tf.constant(dim.dimension, dtype=dtype, name="static_dim")
     else:
       self.output.placeholder = dim.dyn_size_ext.placeholder
 
@@ -1935,11 +1940,16 @@ class LengthLayer(LayerBase):
     axis = source.get_axis_from_description(axis, allow_int=False)
     dim = source.dim_tags[axis]
     if add_time_axis:
+      # You anyway should not use this, so it's ok to have only a single case supported here.
       assert dim.dyn_size_ext and dim.dyn_size_ext.have_batch_axis() and dim.dyn_size_ext.batch_ndim == 1  # [B]
       return Data(
         name="%s_length" % name,
         shape=[1], batch_dim_axis=0, time_dim_axis=1,
         dtype=dtype, sparse=sparse, dim=None if sparse else NotSpecified)
+    if dim.is_batch_dim():
+      return Data("%s_batch_dim" % name, dim_tags=(), dtype=dtype, sparse=sparse)
+    if dim.dimension is not None:  # static
+      return Data("%s_static_dim" % name, dim_tags=(), dtype=dtype, sparse=sparse)
     if not dim.dyn_size_ext:  # yet undefined
       return Data(
         name="%s_length" % name,
