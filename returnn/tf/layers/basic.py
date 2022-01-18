@@ -1416,7 +1416,10 @@ class GatherLayer(_ConcatInputLayer):
     out_type["dim_tags"] = dim_tags
     out_type["beam"] = SearchBeam.get_combined_beam(input_data.beam, position_data.beam)
     out_type["available_for_inference"] = input_data.available_for_inference and position_data.available_for_inference
-    out_type["batch"] = BatchInfo.get_common_batch_info([src.batch for src in (input_data, position_data)])
+    if old_gather_axis == input_data.batch_dim_axis:
+      out_type["batch"] = position_data.batch
+    else:
+      out_type["batch"] = BatchInfo.get_common_batch_info([src.batch for src in (input_data, position_data)])
 
     # Take axes from input_data if they exist there, otherwise from position_data
     for axis_kind in Data.SpecialAxesNames:
