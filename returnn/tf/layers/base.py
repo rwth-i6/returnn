@@ -477,7 +477,7 @@ class LayerBase(object):
       output.available_for_inference = False
 
   @classmethod
-  def fixup_out_data(cls, output, network, out_shape=None, **_kwargs):
+  def fixup_out_data(cls, output, network, out_shape=None, **kwargs):
     """
     This is called after get_out_data_from_opts, to fixup incomplete information.
     E.g. we can patch batch or beam information here
@@ -492,14 +492,20 @@ class LayerBase(object):
       See :func:`Data.verify_out_shape`.
     :rtype: Data
     """
+    from tensorflow.python.util import nest
+    from ..util.data import BatchInfo
     from ..network import ExternData
     if output.have_batch_axis():
       if not output.batch:
         # Some heuristic for now to fix missing batch info. We should try to fix get_out_data_from_opts though...
-        if LayerBase.get_global_layer_list():
-          output.batch = LayerBase.get_recent_layer().get_batch_info().copy_set_beam(output.beam)
+        dep_layers = [v for v in nest.flatten(kwargs) if isinstance(v, LayerBase)]
+        dep_batches = [dep.output.batch for dep in dep_layers if dep.output.batch]
+        if dep_batches:
+          output.batch = BatchInfo.get_common_batch_info(dep_batches).copy_set_beam(output.beam)
         elif network.extern_data.data:
           output.batch = network.extern_data.get_batch_info().copy_set_beam(output.beam)
+        elif network.parent_net and network.get_root_network().extern_data.data:
+          output.batch = network.get_root_network().extern_data.get_batch_info().copy_set_beam(output.beam)
         else:
           # No layers at all yet. This implies that the output must already have a placeholder.
           assert output.placeholder is not None and not output.beam
