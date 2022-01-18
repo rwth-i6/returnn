@@ -3035,6 +3035,31 @@ def test_RandIntLayer():
     assert_equal(v.shape, (5, n_batch, max(input_len), 3))
 
 
+def test_rand_indices():
+  with make_scope() as session:
+    from returnn.tf.util.data import FeatureDim, SpatialDim, batch_dim
+    feature_dim = FeatureDim("feature", 5)
+    time_dim = SpatialDim("time")
+    config = Config({
+      "extern_data": {"data": {"dim_tags": (batch_dim, time_dim, feature_dim)}}
+    })
+    net = TFNetwork(config=config, train_flag=True)
+    sz = (batch_dim, time_dim, SpatialDim("other-spatial", 7))
+    net.construct_from_dict({
+      "flat": {"class": "flatten_batch", "from": "data"},
+      "length_flat": {"class": "length", "from": "flat", "axis": batch_dim},
+      "indices_flat": {"class": "rand_int", "shape": sz, "minval": 0, "maxval": "length_flat", "seed": 42},
+      "output": {"class": "gather", "from": "flat", "axis": batch_dim, "position": "indices_flat"},
+    })
+
+    n_batch, n_time = 3, 11
+    indices_flat, output = session.run(
+      (net.layers["indices_flat"].output.placeholder, net.layers["output"].output.placeholder),
+      feed_dict=make_feed_dict(net.extern_data, n_batch=n_batch, n_time=n_time))
+    assert_equal(indices_flat.shape, (n_batch, n_time, sz[-1].dimension))
+    assert_equal(output.shape, (n_batch, n_time, sz[-1].dimension, feature_dim.dimension))
+
+
 def test_untrainable_params():
   with make_scope() as session:
     config = Config()
