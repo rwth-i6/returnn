@@ -5393,6 +5393,28 @@ def test_VariableLayer_split_info():
       [2 * [feat1.dimension] + [feat2.dimension], 3 * [feat1.dimension]])
 
 
+def test_VariableLayer_init_by_layer():
+  # https://pytorch.org/docs/1.9.1/_modules/torch/nn/modules/linear.html#Linear
+  # https://pytorch.org/docs/1.9.1/nn.init.html
+  # https://github.com/pytorch/pytorch/blob/d665097cad3207795a655bbdde7a4123c0adc1c3/torch/nn/modules/linear.py#L96
+  # https://github.com/pytorch/pytorch/issues/57109
+  # https://github.com/pytorch/pytorch/blob/77721ee318d6785010144aa4569efb98199e7162/torch/nn/init.py#L390-L395
+  # https://github.com/pytorch/pytorch/pull/41638
+  # https://github.com/pytorch/pytorch/issues/18182
+  """
+  New / proposed Linear weight:
+    kaiming_normal_(mode='fan_out')
+
+  Old / current Linear weight:
+    init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+
+  kaiming_uniform_: nonlinearity='leaky_relu' by default!
+  """
+  net_dict = {
+    "var": {},
+  }
+
+
 def test_extra1():
   n_in, n_out = 2, 3
   config = Config({
