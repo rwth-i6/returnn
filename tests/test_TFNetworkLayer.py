@@ -5394,6 +5394,7 @@ def test_VariableLayer_split_info():
 
 
 def test_VariableLayer_init_by_layer():
+  # https://github.com/rwth-i6/returnn/wiki/Parameter-initialization
   # https://pytorch.org/docs/1.9.1/_modules/torch/nn/modules/linear.html#Linear
   # https://pytorch.org/docs/1.9.1/nn.init.html
   # https://github.com/pytorch/pytorch/blob/d665097cad3207795a655bbdde7a4123c0adc1c3/torch/nn/modules/linear.py#L96
@@ -5402,13 +5403,16 @@ def test_VariableLayer_init_by_layer():
   # https://github.com/pytorch/pytorch/pull/41638
   # https://github.com/pytorch/pytorch/issues/18182
   """
-  New / proposed Linear weight:
-    kaiming_normal_(mode='fan_out')
+  PyTorch new / proposed Linear weight:
+    kaiming_normal_(mode='fan_out')  # default nonlinearity='leaky_relu', default neg slope 0.01
+    (ignoring neg slope) -> std = sqrt(2 / fan_out)
 
-  Old / current Linear weight:
-    init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+  PyTorch old / current Linear weight:
+    kaiming_uniform_(self.weight, a=math.sqrt(5))  # default nonlinearity='leaky_relu', mode='fan_in'
+    -> std = sqrt(1 / (3 * fan_in))  -> bound = sqrt(1/fan_in)
 
-  kaiming_uniform_: nonlinearity='leaky_relu' by default!
+  For uniform distribution, bound = sqrt(3) * std.
+  For truncated normal distribution: stddev /= .87962566103423978  # TF VarianceScaling, scipy a=-2, b=2 ...
   """
   net_dict = {
     "var": {},
