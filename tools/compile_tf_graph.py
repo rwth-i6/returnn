@@ -450,7 +450,12 @@ class RecStepByStepLayer(RecLayer):
     decoder_output_vars_coll = tf_compat.v1.get_collection_ref("decoder_output_vars")  # scores
     decoder_input_vars_coll = tf_compat.v1.get_collection_ref("decoder_input_vars")  # choices
     print("Stochastic vars, and their order:")
-    for name in rec_layer.stochastic_var_order:
+    # additional flexibility to match RASR's specific order of decoder inputs feeding
+    if rec_layer.reverse_stochastic_var_order:
+      stochastic_var_order = rec_layer.stochastic_var_order[::-1]
+    else:
+      stochastic_var_order = rec_layer.stochastic_var_order
+    for name in stochastic_var_order:
       print(" %s" % name)
       info["stochastic_var_order"].append(name)
       score_dependent = "stochastic_var_scores_%s" % name in rec_layer.state_vars
@@ -605,7 +610,8 @@ class RecStepByStepLayer(RecLayer):
         value = x.placeholder
       return tf_compat.v1.assign(self.var, value, name="final_state_var_%s" % self.name).op
 
-  def __init__(self, _orig_sources, sources, network, name, output, unit, axis, **kwargs):
+  def __init__(self, _orig_sources, sources, network, name, output, unit, axis, 
+               reverse_stochastic_var_order=False, **kwargs):
     """
     :param str|list[str]|None _orig_sources:
     :param list[LayerBase] sources:
@@ -614,6 +620,7 @@ class RecStepByStepLayer(RecLayer):
     :param Data output:
     :param SubnetworkRecCellSingleStep unit:
     :param Dim axis:
+    :param bool reverse_stochastic_var_order:
     """
     assert isinstance(unit, SubnetworkRecCellSingleStep)
     kwargs = kwargs.copy()
@@ -622,6 +629,7 @@ class RecStepByStepLayer(RecLayer):
     self.stochastic_var_order = []  # type: typing.List[str]
     self._parent_tile_multiples = None  # type: typing.Optional[tf.Tensor]
     self.construction_state = self.ConstructionState.GetSources
+    self.reverse_stochastic_var_order = reverse_stochastic_var_order
 
     # Some early assigns needed for set_parent_layer, and that __repr__ works.
     self.network = network
