@@ -462,15 +462,15 @@ class RecStepByStepLayer(RecLayer):
       decoder_output_vars_coll.append(rec_layer.state_vars["stochastic_var_scores_%s" % name].var)
       decoder_input_vars_coll.append(rec_layer.state_vars["stochastic_var_choice_%s" % name].var)
 
-    # Based on the decoder state, encoder, and choices, calculate the next state.
-    update_ops_coll = tf_compat.v1.get_collection_ref("update_ops")
-    # We do not make use of post_update_ops anymore. This was used as a separate step
+    # We do not make use of update_ops anymore. This was used as a separate step
     # such that only "choice-dependent" state vars were updated separately in the step before.
     # However, this logic was incomplete and broken in general,
     # and also the optimization only lead to negligible speedup, so we removed it.
     # We anyway create the collection here such that older RASR binaries still work fine.
     # See https://github.com/rwth-i6/returnn/pull/874 for some discussion.
-    tf_compat.v1.get_collection_ref("post_update_ops")
+    tf_compat.v1.get_collection_ref("update_ops")
+    # Based on the decoder state, encoder, and choices, calculate the next state.
+    post_update_ops_coll = tf_compat.v1.get_collection_ref("post_update_ops")
     state_vars_coll = tf_compat.v1.get_collection_ref(CollectionKeys.STATE_VARS)
     next_step_ops = []
     for name, var in sorted(rec_layer.state_vars.items()):
@@ -479,9 +479,9 @@ class RecStepByStepLayer(RecLayer):
       if not name.startswith("stochastic_var_") and not name.startswith("base_"):
         next_step_ops.append(var.final_op())
         state_vars_coll.append(var.var)
-    next_step_op = tf.group(*next_step_ops, name="rec_step_by_step_update_op")
+    next_step_op = tf.group(*next_step_ops, name="rec_step_by_step_post_update_op")
     info["next_step_op"] = next_step_op.name
-    update_ops_coll.append(next_step_op)
+    post_update_ops_coll.append(next_step_op)
 
     import json
     info_str = json.dumps(info, sort_keys=True, indent=2)
