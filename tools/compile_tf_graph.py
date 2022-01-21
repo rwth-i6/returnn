@@ -453,13 +453,17 @@ class RecStepByStepLayer(RecLayer):
     for name in rec_layer.stochastic_var_order:
       print(" %s" % name)
       info["stochastic_var_order"].append(name)
-      calc_scores_op = rec_layer.state_vars["stochastic_var_scores_%s" % name].final_op()
-      info["stochastic_vars"][name] = {
-        "calc_scores_op": calc_scores_op.name,
-        "scores_state_var": "stochastic_var_scores_%s" % name,
-        "choice_state_var": "stochastic_var_choice_%s" % name}
-      decode_ops_coll.append(calc_scores_op)
-      decoder_output_vars_coll.append(rec_layer.state_vars["stochastic_var_scores_%s" % name].var)
+      score_dependent = "stochastic_var_scores_%s" % name in rec_layer.state_vars
+      if score_dependent:
+        calc_scores_op = rec_layer.state_vars["stochastic_var_scores_%s" % name].final_op()
+        info["stochastic_vars"][name] = {
+          "calc_scores_op": calc_scores_op.name,
+          "scores_state_var": "stochastic_var_scores_%s" % name,
+          "choice_state_var": "stochastic_var_choice_%s" % name}
+        decode_ops_coll.append(calc_scores_op)
+        decoder_output_vars_coll.append(rec_layer.state_vars["stochastic_var_scores_%s" % name].var)
+      else:
+        info["stochastic_vars"][name] = {"choice_state_var": "stochastic_var_choice_%s" % name}
       decoder_input_vars_coll.append(rec_layer.state_vars["stochastic_var_choice_%s" % name].var)
 
     # We do not make use of update_ops anymore. This was used as a separate step
@@ -876,29 +880,32 @@ class ChoiceStateVarLayer(LayerBase):
                length_normalization=True,
                custom_score_combine=None,
                source_beam_sizes=None, scheduled_sampling=False, cheating=False,
-               explicit_search_sources=None,
+               explicit_search_sources=None, score_dependent=True,
                **kwargs):
     super(ChoiceStateVarLayer, self).__init__(**kwargs)
     rec_layer = self.network.parent_layer
     assert isinstance(rec_layer, RecStepByStepLayer)
-    assert len(self.sources) == 1
-    source = self.sources[0]
-    assert source.output.is_batch_major and len(source.output.shape) == 1
-    scores_in = source.output.placeholder
-    if input_type == "prob":
-      if source.output_before_activation:
-        scores_in = source.output_before_activation.get_log_output()
+    # for compatbility: one way to set the ngram label context via additional choices
+    # but older history is not score-dependent stochastic_var anymore
+    if score_dependent:
+      assert len(self.sources) == 1
+      source = self.sources[0]
+      assert source.output.is_batch_major and len(source.output.shape) == 1
+      scores_in = source.output.placeholder
+      if input_type == "prob":
+        if source.output_before_activation:
+          scores_in = source.output_before_activation.get_log_output()
+        else:
+          from returnn.tf.util.basic import safe_log
+          scores_in = safe_log(scores_in)
+      elif input_type == "log_prob":
+        pass
       else:
-        from returnn.tf.util.basic import safe_log
-        scores_in = safe_log(scores_in)
-    elif input_type == "log_prob":
-      pass
-    else:
-      raise ValueError("Not handled input_type %r" % (input_type,))
-    rec_layer.create_state_var(
-      name="stochastic_var_scores_%s" % self.name, data_shape=source.output)
-    rec_layer.set_state_var_final_value(
-      name="stochastic_var_scores_%s" % self.name, final_value=scores_in)
+        raise ValueError("Not handled input_type %r" % (input_type,))
+      rec_layer.create_state_var(
+        name="stochastic_var_scores_%s" % self.name, data_shape=source.output)
+      rec_layer.set_state_var_final_value(
+        name="stochastic_var_scores_%s" % self.name, final_value=scores_in)
     self.output.placeholder, _ = rec_layer.create_state_var(
       name="stochastic_var_choice_%s" % self.name, data_shape=self.output)
     rec_layer.add_stochastic_var(self.name)
