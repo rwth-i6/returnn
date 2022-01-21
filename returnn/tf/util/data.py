@@ -948,6 +948,7 @@ class Dim(object):
     if self.src_data is not None and self.src_axis is not None and self.src_data.placeholder is not None:
       from returnn.tf.util.basic import get_shape_dim
       return get_shape_dim(self.src_data.placeholder, self.src_axis)
+    self.complete_dyn_size()
     if self.dyn_size is not None:
       return tf.math.reduce_max(self.dyn_size)
     raise Exception('%s: need placeholder, self.dimension or self.dyn_size for dim value' % self)
