@@ -3392,7 +3392,21 @@ class SplitDimsLayer(_ConcatInputLayer):
     old_shape = get_shape(data.placeholder)
     if dims and any(isinstance(d, Dim) for d in dims):
       assert all(isinstance(d, Dim) for d in dims)
-      dims = [-1 if d.is_batch_dim() else d.get_dim_value() for d in dims]
+      dims_ = []
+      for d in dims:
+        if d.is_batch_dim():
+          dims_.append(-1)
+        elif d.dimension is not None:
+          dims_.append(d.dimension)
+        else:
+          d.complete_dyn_size()
+          if d.dyn_size is not None:
+            dims_.append(tf.reduce_max(d.dyn_size))
+          else:
+            dims_.append(-1)
+      assert len(dims_) == len(dims)
+      dims = dims_
+      assert len([d for d in dims if isinstance(d, int) and d == -1]) <= 1
     new_shape = old_shape[:axis] + list(dims) + old_shape[axis + 1:]
     assert len(new_shape) == len(self.output.batch_shape)
     for i in range(len(new_shape)):
@@ -3524,7 +3538,7 @@ class SplitDimsLayer(_ConcatInputLayer):
           rem_dim = axis_dim_tag
         else:  # need to create a new rem_dim
           rem_dim = Dim(
-            kind=Dim.Types.Spatial,
+            kind=axis_dim_tag.kind,
             description="%s_split_dims%i_rem" % (name, rem_dim_idx),
             dimension=resolved_shape_dims[rem_dim_idx],
             derived_from_tag=axis_dim_tag,
