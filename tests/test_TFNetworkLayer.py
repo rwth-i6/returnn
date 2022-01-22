@@ -2075,6 +2075,53 @@ def test_SplitDimsLayer_dim_tags_split_batch():
   })
 
 
+def test_SplitDimsLayer_dyn_dim_tags_with_batch():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("feat", 3)
+  config = Config({
+    "extern_data": {"data": {"dim_tags": [batch_dim, time_dim, feat_dim]}}})
+  time2_dim = time_dim * 2
+  print("time:", time_dim)
+  print("time * 2:", time2_dim)
+  net_dict = {
+    'Flatten': {'class': 'merge_dims', 'from': 'data', 'axes': ['B', 'T'], 'keep_order': True},
+    'Range_Length': {'class': 'length', 'axis': 'B', 'from': 'data'},
+    'Range_Length_1': {'class': 'length', 'axis': 'T', 'from': 'data'},
+    'Range_Reduce': {'class': 'reduce', 'mode': 'max', 'axes': ['B'], 'from': 'Range_Length_1'},
+    'Range_mul': {'class': 'combine', 'kind': 'mul', 'out_shape': set(), 'from': ['Range_Length', 'Range_Reduce']},
+    'Range': {'class': 'range_from_length', 'from': 'Range_mul'},  # [T]
+    'Cat': {'class': 'concat', 'from': [('Range', 'T'), ('Range', 'T')]},
+    'Unflatten__Unflatten_mul_unnamed_const': {'class': 'constant', 'value': 2},
+    'Unflatten__Unflatten_mul': {
+      'class': 'combine', 'kind': 'mul', 'out_shape': set(),
+      'from': ['Range_Reduce', 'Unflatten__Unflatten_mul_unnamed_const']},
+    'output': {
+      'class': 'split_dims', 'from': 'Cat', 'axis': 'T', 'dims': [batch_dim, time2_dim]}
+  }
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    in_ = net.extern_data.get_default_input_data()
+    out = net.get_default_output_layer().output
+    assert out.dim_tags == (batch_dim, time2_dim)
+    x, x_size, y, y_size = session.run(
+      (in_.placeholder, in_.size_placeholder.as_dict(), out.placeholder, out.size_placeholder.as_dict()),
+      feed_dict=make_feed_dict(net.extern_data))
+    assert isinstance(x, numpy.ndarray)
+    assert isinstance(x_size, dict) and set(x_size.keys()) == {0}
+    x_size = x_size[0]
+    assert isinstance(x_size, numpy.ndarray)
+    n_batch, n_time, n_feat = x.shape
+    assert x_size.shape == (n_batch,) and max(x_size) == n_time
+    assert isinstance(y, numpy.ndarray)
+    assert isinstance(y_size, dict) and set(y_size.keys()) == {0}
+    y_size = y_size[0]
+    assert isinstance(y_size, numpy.ndarray)
+    assert y.shape == (n_batch, n_time * 2)
+    assert y_size.shape == (n_batch,) and max(y_size) == n_time * 2
+
+
 def test_out_shape():
   # https://github.com/rwth-i6/returnn/issues/706
   # Note: Using SplitDimsLayer would also be nice to test out_shape. Or any layer which creates a new dim.

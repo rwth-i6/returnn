@@ -3390,9 +3390,23 @@ class SplitDimsLayer(_ConcatInputLayer):
 
     from returnn.tf.util.basic import get_shape
     old_shape = get_shape(data.placeholder)
-    if dims and isinstance(dims[0], Dim):
+    if dims and any(isinstance(d, Dim) for d in dims):
       assert all(isinstance(d, Dim) for d in dims)
-      dims = [d.dimension or -1 for d in dims]
+      dims_ = []
+      for d in dims:
+        if d.is_batch_dim():
+          dims_.append(-1)
+        elif d.dimension is not None:
+          dims_.append(d.dimension)
+        else:
+          d.complete_dyn_size()
+          if d.dyn_size is not None:
+            dims_.append(tf.reduce_max(d.dyn_size))
+          else:
+            dims_.append(-1)
+      assert len(dims_) == len(dims)
+      dims = dims_
+      assert len([d for d in dims if isinstance(d, int) and d == -1]) <= 1
     new_shape = old_shape[:axis] + list(dims) + old_shape[axis + 1:]
     assert len(new_shape) == len(self.output.batch_shape)
     for i in range(len(new_shape)):
@@ -3400,22 +3414,27 @@ class SplitDimsLayer(_ConcatInputLayer):
         new_shape[i] = self.output.batch_shape[i]
 
     import numpy
-    new_pos_dims = [d for d in dims if d > 0]
-    constant_size = int(numpy.prod(new_pos_dims))
-    assert not data.is_axis_dynamic(axis) or pad_to_multiples or constant_size == 1
-    if pad_to_multiples and constant_size != 1:
-      assert len([d for d in dims if d == -1]) == 1
+    new_pos_dims = [d for d in dims if isinstance(d, int) and d > 0]
+    rem_const_size = None
+    if len(new_pos_dims) == len(dims) - 1:
+      rem_const_size = int(numpy.prod(new_pos_dims))
+    assert not data.is_axis_dynamic(axis) or pad_to_multiples or rem_const_size == 1
+    if pad_to_multiples and (not isinstance(rem_const_size, int) or rem_const_size != 1):
+      indices = [i for i, d in enumerate(dims) if isinstance(d, int) and d == -1]
+      assert len(indices) == 1, "%s: exactly one -1 dim in %r expected" % (self, dims)
+      if rem_const_size is None:
+        rem_const_size = numpy.prod([d for d in dims if not isinstance(d, int) or d > 0])
       old_size = old_shape[axis]
-      pad_size = (-old_size) % constant_size
+      pad_size = (-old_size) % rem_const_size
 
       paddings = [(0, 0)] * axis + [(0, pad_size)] + [(0, 0)] * (data.batch_ndim - axis - 1)
       data.placeholder = tf.pad(data.placeholder, paddings=paddings, constant_values=pad_value)
 
       rem_dim = self.output.get_dim_tag(axis + dims.index(-1))
-      if rem_dim.dimension is None:
+      if rem_dim.dimension is None and not rem_dim.is_batch_dim():
         assert rem_dim.dyn_size_ext is not None  # template was prepared by get_out_data_from_opts
         rem_dim.dyn_size_ext.placeholder = -(
-          -data.get_dynamic_size(axis) // constant_size)  # == ceildiv(size, constant_size)
+          -data.get_dynamic_size(axis) // rem_const_size)  # == ceildiv(size, constant_size)
     self.output.placeholder = tf.reshape(data.placeholder, shape=new_shape)
 
   @classmethod
@@ -3444,11 +3463,12 @@ class SplitDimsLayer(_ConcatInputLayer):
     return tuple(new_dims_resolved)
 
   @classmethod
-  def _map_old_axis_to_new_axis(cls, split_axis, dims, old_axis, use_remaining=True, split_offset=None):
+  def _map_old_axis_to_new_axis(cls, split_axis, dims, old_axis, kind, use_remaining=True, split_offset=None):
     """
     :param int split_axis:
-    :param tuple[int] dims: might include -1
+    :param tuple[returnn.tf.util.data.Dim] dims: might include -1
     :param int old_axis:
+    :param returnn.tf.util.data.Dim.Types kind:
     :param bool use_remaining: whether to make use of -1 in dims
     :param int|None split_offset:
     :rtype: int
@@ -3458,14 +3478,17 @@ class SplitDimsLayer(_ConcatInputLayer):
     if old_axis > split_axis:
       return old_axis + len(dims) - 1
     assert old_axis == split_axis
-    if use_remaining and -1 in dims:
-      assert dims.count(-1) == 1
-      return split_axis + dims.index(-1)
+    if use_remaining and len([d for d in dims if d.kind == kind]) == 1:
+      return split_axis + [i for i, d in enumerate(dims) if d.kind == kind][0]
     assert split_offset is not None
+    if any(d.kind == kind for d in dims):
+      indices, dims = zip(*[(i, d) for i, d in enumerate(dims) if d.kind == kind])
+    else:
+      indices = list(range(len(dims)))
     if split_offset < 0:
-      split_offset += len(dims)
-    assert 0 <= split_offset < len(dims)
-    return split_axis + split_offset
+      split_offset += len(indices)
+    assert 0 <= split_offset < len(indices)
+    return split_axis + indices[split_offset]
 
   @classmethod
   def get_out_data_from_opts(cls, name, axis, dims, pad_to_multiples=None, sources=(), **kwargs):
@@ -3499,37 +3522,44 @@ class SplitDimsLayer(_ConcatInputLayer):
 
     axis_dim_tag = data.dim_tags[axis]
     rem_dim_indices = [i for i, d in enumerate(dims) if d < 0]
-    assert len(rem_dim_indices) <= 1, "only one entry in dims %r can be -1" % (dims,)
-    if len(rem_dim_indices) == 1:
-      import numpy
-      n = int(numpy.prod([dim for dim in dims if dim > 0]))
-      rem_dim_idx = rem_dim_indices[0]
-      if n == 1:
-        rem_dim = axis_dim_tag
-      else:  # need to create a new rem_dim
-        rem_dim = Dim(
-          kind=Dim.Types.Spatial,
-          description="%s_split_dims%i_rem" % (name, rem_dim_idx),
-          dimension=resolved_shape_dims[rem_dim_idx],
-          derived_from_tag=axis_dim_tag,
-          batch=axis_dim_tag.batch, control_flow_ctx=axis_dim_tag.control_flow_ctx)
-        if rem_dim.dimension is None and axis_dim_tag.dyn_size_ext is not None:
-          rem_dim.dyn_size_ext = axis_dim_tag.dyn_size_ext.copy_template(name="%s_split_dims%i" % (name, rem_dim_idx))
-      if resolved_dims:
-        if rem_dim.dimension is not None:
-          assert rem_dim.dimension * n == axis_dim_tag.dimension
-        rem_dim.declare_same_as(resolved_dims[rem_dim_idx])
-    else:
-      assert len(rem_dim_indices) == 0
-      rem_dim, rem_dim_idx = None, None
-    if not resolved_dims:
-      resolved_dims = tuple(
-        Dim(
-          kind=axis_dim_tag.kind if not axis_dim_tag.is_batch_dim() else Dim.Types.Spatial,
-          description="%s_split_dims%i" % (name, i),
-          dimension=shape_dim)
-        if rem_dim is None or i != rem_dim_idx else rem_dim
-        for i, shape_dim in enumerate(resolved_shape_dims))
+    if resolved_dims and any(d.is_batch_dim() for d in resolved_dims) and len(rem_dim_indices) >= 2:
+      assert len([d for d in resolved_dims if d.is_batch_dim()]) == 1
+      # In case one of the resolved dims is a batch dim, the dim is unclear,
+      # as the batch dim can be arbitrary -- it does not necessarily need to be the global batch dim.
+      # Any other dim tag should clearly define the dim, so we can infer the batch dim
+      # This logic is done in __init__.
+    if not resolved_dims or len(rem_dim_indices) <= 1:
+      assert len(rem_dim_indices) <= 1, "only one entry in dims %r can be -1" % (dims,)
+      if len(rem_dim_indices) == 1:
+        import numpy
+        n = int(numpy.prod([dim for dim in dims if dim > 0]))
+        rem_dim_idx = rem_dim_indices[0]
+        if n == 1:
+          rem_dim = axis_dim_tag
+        else:  # need to create a new rem_dim
+          rem_dim = Dim(
+            kind=axis_dim_tag.kind,
+            description="%s_split_dims%i_rem" % (name, rem_dim_idx),
+            dimension=resolved_shape_dims[rem_dim_idx],
+            derived_from_tag=axis_dim_tag,
+            batch=axis_dim_tag.batch, control_flow_ctx=axis_dim_tag.control_flow_ctx)
+          if rem_dim.dimension is None and axis_dim_tag.dyn_size_ext is not None:
+            rem_dim.dyn_size_ext = axis_dim_tag.dyn_size_ext.copy_template(name="%s_split_dims%i" % (name, rem_dim_idx))
+        if resolved_dims:
+          if rem_dim.dimension is not None:
+            assert rem_dim.dimension * n == axis_dim_tag.dimension
+          rem_dim.declare_same_as(resolved_dims[rem_dim_idx])
+      else:
+        assert len(rem_dim_indices) == 0
+        rem_dim, rem_dim_idx = None, None
+      if not resolved_dims:
+        resolved_dims = tuple(
+          Dim(
+            kind=axis_dim_tag.kind if not axis_dim_tag.is_batch_dim() else Dim.Types.Spatial,
+            description="%s_split_dims%i" % (name, i),
+            dimension=shape_dim)
+          if rem_dim is None or i != rem_dim_idx else rem_dim
+          for i, shape_dim in enumerate(resolved_shape_dims))
     if axis_dim_tag.is_batch_dim():
       assert len([d for d in resolved_dims if d.is_batch_dim()]) == 1
 
@@ -3539,10 +3569,12 @@ class SplitDimsLayer(_ConcatInputLayer):
       out.time_dim_axis = None
     else:
       out.time_dim_axis = cls._map_old_axis_to_new_axis(
-        split_axis=axis, dims=dims, old_axis=data.time_dim_axis, use_remaining=True, split_offset=0)
+        split_axis=axis, dims=resolved_dims, old_axis=data.time_dim_axis, kind=Dim.Types.Spatial,
+        use_remaining=True, split_offset=0)
     if data.feature_dim_axis is not None:
       expected_out_feature_dim_axis = cls._map_old_axis_to_new_axis(
-        split_axis=axis, dims=dims, old_axis=data.feature_dim_axis, use_remaining=False, split_offset=-1)
+        split_axis=axis, dims=resolved_dims, old_axis=data.feature_dim_axis, kind=Dim.Types.Feature,
+        use_remaining=False, split_offset=-1)
       if out.feature_dim_axis != expected_out_feature_dim_axis:  # maybe due to non-specified default behavior
         out.feature_dim_axis = expected_out_feature_dim_axis
         out.dim = out.batch_shape[out.feature_dim_axis]
