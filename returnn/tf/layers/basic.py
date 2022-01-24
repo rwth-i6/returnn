@@ -3405,8 +3405,8 @@ class SplitDimsLayer(_ConcatInputLayer):
           else:
             dims_.append(-1)
       assert len(dims_) == len(dims)
+      assert len([d for d in dims_ if isinstance(d, int) and d == -1]) <= 1, "%s: dims %r invalid" % (self, dims)
       dims = dims_
-      assert len([d for d in dims if isinstance(d, int) and d == -1]) <= 1
     new_shape = old_shape[:axis] + list(dims) + old_shape[axis + 1:]
     assert len(new_shape) == len(self.output.batch_shape)
     for i in range(len(new_shape)):
