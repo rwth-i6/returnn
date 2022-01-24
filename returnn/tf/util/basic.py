@@ -381,7 +381,7 @@ def get_valid_scope_name_from_str(s):
   # NOTE: Be careful changing this logic. Try to never change the behavior for existing cases,
   # because this name is used e.g. for layers, and you might introduce incompatibility by changes here.
   import re
-  s = re.sub("[:(){}&+'\"]", "__", s)
+  s = re.sub("[:(){}&+*'\"]", "__", s)
   if s[:1] in "_-\\/":  # invalid first chars
     s = (".%i." % ord(s[0])) + s[1:]
   return s
