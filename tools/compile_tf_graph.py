@@ -610,7 +610,7 @@ class RecStepByStepLayer(RecLayer):
         value = x.placeholder
       return tf_compat.v1.assign(self.var, value, name="final_state_var_%s" % self.name).op
 
-  def __init__(self, _orig_sources, sources, network, name, output, unit, axis, 
+  def __init__(self, _orig_sources, sources, network, name, output, unit, axis,
                reverse_stochastic_var_order=False, **kwargs):
     """
     :param str|list[str]|None _orig_sources:
