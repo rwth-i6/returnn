@@ -3560,8 +3560,20 @@ class SplitDimsLayer(_ConcatInputLayer):
             dimension=shape_dim)
           if rem_dim is None or i != rem_dim_idx else rem_dim
           for i, shape_dim in enumerate(resolved_shape_dims))
+    out_batch = data.batch
     if axis_dim_tag.is_batch_dim():
       assert len([d for d in resolved_dims if d.is_batch_dim()]) == 1
+      from returnn.tf.util.data import BatchInfo
+      out_batch = data.batch
+      remaining = set(resolved_dims)
+      for beam_virtual_dim in reversed(data.batch.virtual_dims):
+        if isinstance(beam_virtual_dim, BatchInfo.FixedDim):
+          if beam_virtual_dim.dim_tag in remaining:
+            out_batch = out_batch.copy_remove_dim(beam_virtual_dim)
+            remaining.remove(beam_virtual_dim.dim_tag)
+      if remaining:
+        # cannot really handle that well yet but this fallback might be ok
+        out_batch = out_batch.get_global_base()
 
     new_dim_tags = data.dim_tags[:axis] + resolved_dims + data.dim_tags[axis + 1:]
     out = data.copy_template_new_dim_tags(new_dim_tags)
@@ -3578,6 +3590,7 @@ class SplitDimsLayer(_ConcatInputLayer):
       if out.feature_dim_axis != expected_out_feature_dim_axis:  # maybe due to non-specified default behavior
         out.feature_dim_axis = expected_out_feature_dim_axis
         out.dim = out.batch_shape[out.feature_dim_axis]
+    out.batch = out_batch
     return out
 
 
