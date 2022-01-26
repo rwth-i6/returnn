@@ -1975,7 +1975,7 @@ def test_SplitDimsLayer_simple_time2():
     out_t = out.placeholder
     assert out_t.shape.as_list() == [None, 1, None, 20]
     in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_time, n_in))
-    out_v = session.run(out_t, feed_dict={net.extern_data.data["data"].placeholder: in_v})
+    out_v = session.run(out_t, feed_dict={in_.placeholder: in_v})
     assert isinstance(out_v, numpy.ndarray)
     assert out_v.shape == (n_batch, 1, n_time, n_in)
     numpy.testing.assert_almost_equal(out_v, in_v.reshape(out_v.shape))
