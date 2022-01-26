@@ -1966,10 +1966,13 @@ def test_SplitDimsLayer_simple_time2():
     net = TFNetwork(config=config)
     net.construct_from_dict({
       "output": {"class": "split_dims", "axis": "t", "dims": (1, -1), "from": "data:data"}})
-    assert_equal(
-      net.get_default_output_layer().output.get_dim_tag(2),
-      net.extern_data.get_default_input_data().get_dim_tag(1))
-    out_t = net.get_default_output_layer().output.placeholder
+    in_ = net.extern_data.get_default_input_data()
+    out = net.get_default_output_layer().output
+    print(in_)
+    print(out)
+    assert_equal(out.get_dim_tag(2), in_.get_dim_tag(1))
+    assert out.time_dim_axis == 2
+    out_t = out.placeholder
     assert out_t.shape.as_list() == [None, 1, None, 20]
     in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_time, n_in))
     out_v = session.run(out_t, feed_dict={net.extern_data.data["data"].placeholder: in_v})
