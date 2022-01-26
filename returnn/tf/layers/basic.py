@@ -3463,11 +3463,14 @@ class SplitDimsLayer(_ConcatInputLayer):
     return tuple(new_dims_resolved)
 
   @classmethod
-  def _map_old_axis_to_new_axis(cls, split_axis, dims, old_axis, kind, use_remaining=True, split_offset=None):
+  def _map_old_axis_to_new_axis(cls, split_axis, dims, rem_dim_idx,
+                                old_axis, old_dim, kind, use_remaining=True, split_offset=None):
     """
     :param int split_axis:
     :param tuple[returnn.tf.util.data.Dim] dims: might include -1
+    :param int|None rem_dim_idx:
     :param int old_axis:
+    :param returnn.tf.util.data.Dim old_dim:
     :param returnn.tf.util.data.Dim.Types kind:
     :param bool use_remaining: whether to make use of -1 in dims
     :param int|None split_offset:
@@ -3478,8 +3481,13 @@ class SplitDimsLayer(_ConcatInputLayer):
     if old_axis > split_axis:
       return old_axis + len(dims) - 1
     assert old_axis == split_axis
-    if use_remaining and len([d for d in dims if d.kind == kind]) == 1:
-      return split_axis + [i for i, d in enumerate(dims) if d.kind == kind][0]
+    if use_remaining:
+      if rem_dim_idx is not None:
+        return split_axis + rem_dim_idx
+      if len([d for d in dims if d == old_dim]) == 1:
+        return split_axis + [i for i, d in enumerate(dims) if old_dim][0]
+      if len([d for d in dims if d.kind == kind]) == 1:
+        return split_axis + [i for i, d in enumerate(dims) if d.kind == kind][0]
     assert split_offset is not None
     if any(d.kind == kind for d in dims):
       indices, dims = zip(*[(i, d) for i, d in enumerate(dims) if d.kind == kind])
@@ -3509,6 +3517,13 @@ class SplitDimsLayer(_ConcatInputLayer):
     if pad_to_multiples is None:
       pad_to_multiples = data.is_axis_dynamic(axis)
 
+    axis_dim_tag = data.dim_tags[axis]
+    rem_dim_indices = [
+      i for i, d in enumerate(dims)
+      if (isinstance(d, int) and d < 0)
+      or (isinstance(d, Dim) and d == axis_dim_tag)]
+    rem_dim_idx = rem_dim_indices[0] if len(rem_dim_indices) == 1 else None
+
     resolved_dims = None
     if dims and isinstance(dims[0], Dim):
       assert all(isinstance(d, Dim) for d in dims)
@@ -3520,8 +3535,6 @@ class SplitDimsLayer(_ConcatInputLayer):
     else:
       resolved_shape_dims = tuple([(d if (d >= 0) else None) for d in dims])
 
-    axis_dim_tag = data.dim_tags[axis]
-    rem_dim_indices = [i for i, d in enumerate(dims) if d < 0]
     if resolved_dims and any(d.is_batch_dim() for d in resolved_dims) and len(rem_dim_indices) >= 2:
       assert len([d for d in resolved_dims if d.is_batch_dim()]) == 1
       # In case one of the resolved dims is a batch dim, the dim is unclear,
@@ -3533,7 +3546,6 @@ class SplitDimsLayer(_ConcatInputLayer):
       if len(rem_dim_indices) == 1:
         import numpy
         n = int(numpy.prod([dim for dim in dims if dim > 0]))
-        rem_dim_idx = rem_dim_indices[0]
         if n == 1:
           rem_dim = axis_dim_tag
         else:  # need to create a new rem_dim
@@ -3551,7 +3563,7 @@ class SplitDimsLayer(_ConcatInputLayer):
           rem_dim.declare_same_as(resolved_dims[rem_dim_idx])
       else:
         assert len(rem_dim_indices) == 0
-        rem_dim, rem_dim_idx = None, None
+        rem_dim = None
       if not resolved_dims:
         resolved_dims = tuple(
           Dim(
@@ -3581,12 +3593,14 @@ class SplitDimsLayer(_ConcatInputLayer):
       out.time_dim_axis = None
     else:
       out.time_dim_axis = cls._map_old_axis_to_new_axis(
-        split_axis=axis, dims=resolved_dims, old_axis=data.time_dim_axis, kind=Dim.Types.Spatial,
-        use_remaining=True, split_offset=0)
+        split_axis=axis, dims=resolved_dims, rem_dim_idx=rem_dim_idx,
+        old_axis=data.time_dim_axis, old_dim=data.dim_tags[data.time_dim_axis],
+        kind=Dim.Types.Spatial, use_remaining=True, split_offset=0)
     if data.feature_dim_axis is not None:
       expected_out_feature_dim_axis = cls._map_old_axis_to_new_axis(
-        split_axis=axis, dims=resolved_dims, old_axis=data.feature_dim_axis, kind=Dim.Types.Feature,
-        use_remaining=False, split_offset=-1)
+        split_axis=axis, dims=resolved_dims, rem_dim_idx=rem_dim_idx,
+        old_axis=data.feature_dim_axis, old_dim=data.dim_tags[data.feature_dim_axis],
+        kind=Dim.Types.Feature, use_remaining=False, split_offset=-1)
       if out.feature_dim_axis != expected_out_feature_dim_axis:  # maybe due to non-specified default behavior
         out.feature_dim_axis = expected_out_feature_dim_axis
         out.dim = out.batch_shape[out.feature_dim_axis]
