@@ -3385,6 +3385,7 @@ class SplitDimsLayer(_ConcatInputLayer):
     if isinstance(axis, int):
       data = data.copy_as_batch_major()
     axis = data.get_axis_from_description(axis)
+    old_dim = data.dim_tags[axis]
     if pad_to_multiples is None:
       pad_to_multiples = data.is_axis_dynamic(axis)
 
@@ -3430,9 +3431,12 @@ class SplitDimsLayer(_ConcatInputLayer):
       paddings = [(0, 0)] * axis + [(0, pad_size)] + [(0, 0)] * (data.batch_ndim - axis - 1)
       data.placeholder = tf.pad(data.placeholder, paddings=paddings, constant_values=pad_value)
 
-      rem_dim = self.output.get_dim_tag(axis + dims.index(-1))
+      rem_dim_idx = dims.index(-1)
+      rem_dim = self.output.get_dim_tag(axis + rem_dim_idx)
       if rem_dim.dimension is None and not rem_dim.is_batch_dim():
-        assert rem_dim.dyn_size_ext is not None  # template was prepared by get_out_data_from_opts
+        assert old_dim.dimension is None
+        assert old_dim.dyn_size_ext is not None
+        rem_dim.dyn_size_ext = old_dim.dyn_size_ext.copy(name="%s_dyn_size_ext" % (rem_dim.description or self.name))
         rem_dim.dyn_size_ext.placeholder = -(
           -data.get_dynamic_size(axis) // rem_const_size)  # == ceildiv(size, constant_size)
     self.output.placeholder = tf.reshape(data.placeholder, shape=new_shape)
@@ -3522,20 +3526,22 @@ class SplitDimsLayer(_ConcatInputLayer):
       i for i, d in enumerate(dims)
       if (isinstance(d, int) and d < 0)
       or (isinstance(d, Dim) and d == axis_dim_tag)]
-    rem_dim_idx = rem_dim_indices[0] if len(rem_dim_indices) == 1 else None
 
     resolved_dims = None
     if dims and isinstance(dims[0], Dim):
       assert all(isinstance(d, Dim) for d in dims)
       resolved_dims = tuple(dims)
       dims = [d.dimension or -1 for d in dims]
+    if len(rem_dim_indices) == 0:
+      rem_dim_indices = [i for i, d in enumerate(dims) if d < 0]
+    rem_dim_idx = rem_dim_indices[0] if len(rem_dim_indices) == 1 else None
     if data.batch_shape[axis] is not None:
       resolved_shape_dims = cls._resolve_dims(
         old_dim=data.batch_shape[axis], new_dims=dims, pad_to_multiples=pad_to_multiples)
     else:
       resolved_shape_dims = tuple([(d if (d >= 0) else None) for d in dims])
 
-    if resolved_dims and any(d.is_batch_dim() for d in resolved_dims) and len(rem_dim_indices) >= 2:
+    if resolved_dims and any(d.is_batch_dim() for d in resolved_dims):
       assert len([d for d in resolved_dims if d.is_batch_dim()]) == 1
       # In case one of the resolved dims is a batch dim, the dim is unclear,
       # as the batch dim can be arbitrary -- it does not necessarily need to be the global batch dim.
