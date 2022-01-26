@@ -334,20 +334,29 @@ class RecStepByStepLayer(RecLayer):
     # initial state vars
     encode_ops(input_placeholders=...)  # -> assign (base and loop) state_vars
 
+    # Main decoder loop
     while seq_not_ended(...):
 
-      decoder_input_vars.assign(...)  # for current hyp, the previous choice
+      for hyp in current_hyps:  # (in practice, this is partially batched)
 
-      update_ops(decoder_input_vars)  # -> assign/update potentially some loop state vars
+        state_vars.assign(...)  # for current hyp
+        decoder_input_vars.assign(...)  # for current hyp, the previous choice
 
-      for (choices, scores, decode_op) in zip(decoder_input_vars, decoder_output_vars, decode_ops):
+        update_ops(decoder_input_vars)  # -> assign/update potentially some loop state vars
 
-        decoder_input_vars[:i].assign(...)  # ...
+        # Loop over stochastic vars, and call decode_ops for each.
+        for (choices, scores, decode_op) in zip(decoder_input_vars, decoder_output_vars, decode_ops):
 
-        # decoder_input_vars contains prev choices
-        decode_ops(state_vars, decoder_input_vars)  # -> assign scores
+          for all_possible_succeeding_input_vars:  # loop not needed for first stochastic var
 
-      post_update_ops(state_vars, decoder_input_vars)  # -> assign new state_vars
+            decoder_input_vars[:i].assign(...)  # ...
+
+            # decoder_input_vars contains prev choices
+            decode_ops(state_vars, decoder_input_vars)  # -> assign scores
+
+        decoder_input_vars.assign(...)  # for current hyp, (still!) the previous (!) choice
+
+        post_update_ops(state_vars, decoder_input_vars)  # -> assign new state_vars
 
       < select new hyps and prune some away, based on scores >
 
