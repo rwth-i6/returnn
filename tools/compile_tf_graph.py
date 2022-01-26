@@ -411,6 +411,10 @@ class RecStepByStepLayer(RecLayer):
     assert rec_layer_name in network.layers
     rec_layer = network.layers[rec_layer_name]
     assert isinstance(rec_layer, RecStepByStepLayer)
+    cell = rec_layer.cell
+    assert isinstance(cell, SubnetworkRecCellSingleStep)
+    rec_sub_net = cell.net
+    assert isinstance(rec_sub_net, TFNetwork)
     info = {"state_vars": {}, "stochastic_var_order": [], "stochastic_vars": {}}
 
     print("State vars:")
@@ -458,8 +462,12 @@ class RecStepByStepLayer(RecLayer):
     for name in stochastic_var_order:
       print(" %s" % name)
       info["stochastic_var_order"].append(name)
-      score_dependent = "stochastic_var_scores_%s" % name in rec_layer.state_vars
-      if score_dependent:
+      choice_layer = rec_sub_net.layers[name]
+      assert isinstance(choice_layer, ChoiceStateVarLayer)
+      # Usually all choices depend on the scores.
+      # However, some legacy configs used prev choices which are fed as-is because they are known.
+      # See comment in ChoiceStateVarLayer.
+      if choice_layer.score_dependent:
         calc_scores_op = rec_layer.state_vars["stochastic_var_scores_%s" % name].final_op()
         info["stochastic_vars"][name] = {
           "calc_scores_op": calc_scores_op.name,
@@ -893,8 +901,9 @@ class ChoiceStateVarLayer(LayerBase):
     super(ChoiceStateVarLayer, self).__init__(**kwargs)
     rec_layer = self.network.parent_layer
     assert isinstance(rec_layer, RecStepByStepLayer)
-    # for compatbility: one way to set the ngram label context via additional choices
+    # for compatibility: one way to set the ngram label context via additional choices
     # but older history is not score-dependent stochastic_var anymore
+    self.score_dependent = score_dependent
     if score_dependent:
       assert len(self.sources) == 1
       source = self.sources[0]
