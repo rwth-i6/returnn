@@ -310,14 +310,48 @@ class RecStepByStepLayer(RecLayer):
   """
   Represents a single step of :class:`RecLayer`.
   The purpose is to execute a single step only.
-  This also takes care of all needed state, and latent variables (via :class:`ChoiceLayer`).
+  This also takes care of all needed state, and stochastic (maybe latent) variables (via :class:`ChoiceLayer`).
   All the state is kept in *state variables*, such that you can avoid feeding/fetching.
   Instead, any decoder implementation using this must explicitly assign the state variables.
+  Stochastic variables (:class:`ChoiceLayer`) are breakpoints where an external application
+  can implement custom logic to select hypotheses.
+  So this can be used to implement beam search, or to implement a custom decoder in an external application.
+  RASR (Sprint) is one such example which makes use of this for decoding.
 
   The necessary meta information about the list of state vars,
   ops for specific calculation steps, etc.
   is stored in TF graph collections and also in a JSON file.
-  RASR (Sprint) currently only uses the TF graph collections.
+  RASR currently only uses the TF graph collections.
+
+  There are different kinds of state vars:
+  - Base state vars (encoder or so), depends only on the input data, not updated by the decoder loop.
+  - decoder_input_vars: Stochastic choice state vars, updated by the decoder loop.
+  - decoder_output_vars: Stochastic scores state vars, updated by the decoder loop.
+  - (Deterministic) loop state vars, updated by the decoder loop.
+
+  RASR does the following logic::
+
+    # initial state vars
+    encode_ops(input_placeholders=...)  # -> assign (base and loop) state_vars
+
+    while seq_not_ended(...):
+
+      decoder_input_vars.assign(...)  # for current hyp, the previous choice
+
+      update_ops(decoder_input_vars)  # -> assign/update potentially some loop state vars
+
+      for (choices, scores, decode_op) in zip(decoder_input_vars, decoder_output_vars, decode_ops):
+
+        decoder_input_vars[:i].assign(...)  # ...
+
+        # decoder_input_vars contains prev choices
+        decode_ops(state_vars, decoder_input_vars)  # -> assign scores
+
+      post_update_ops(state_vars, decoder_input_vars)  # -> assign new state_vars
+
+      < select new hyps and prune some away, based on scores >
+
+  Because RASR is the main application, we adopt the recurrence logic of the RecLayer to be compatible to RASR.
 
   E.g., if you want to implement beam search in an external application which uses the compiled graph,
   you would compile the graph with search_flag disabled (such that RETURNN does not do any related logic),
