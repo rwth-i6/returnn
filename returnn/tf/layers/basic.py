@@ -3606,7 +3606,7 @@ class SplitDimsLayer(_ConcatInputLayer):
       expected_out_feature_dim_axis = cls._map_old_axis_to_new_axis(
         split_axis=axis, dims=resolved_dims, rem_dim_idx=rem_dim_idx,
         old_axis=data.feature_dim_axis, old_dim=data.dim_tags[data.feature_dim_axis],
-        kind=Dim.Types.Feature, use_remaining=False, split_offset=-1)
+        kind=Dim.Types.Feature, use_remaining=True, split_offset=-1)
       if out.feature_dim_axis != expected_out_feature_dim_axis:  # maybe due to non-specified default behavior
         out.feature_dim_axis = expected_out_feature_dim_axis
         out.dim = out.batch_shape[out.feature_dim_axis]
