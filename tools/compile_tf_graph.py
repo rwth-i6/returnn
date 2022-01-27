@@ -407,11 +407,15 @@ class RecStepByStepLayer(RecLayer):
   The update calculation from "prev:layer" to "layer" would be jointly with decode_ops
   to avoid redundant computation.
   This should be the first decode_ops if there are multiple.
+  This makes the post_update_ops obsolete.
 
   For delayed state vars, before we do anything else,
   in the beginning of the iteration, we need to update "prev:prev:layer" to "prev:layer",
   or also set "prev:layer" based on the prev choices (e.g. "prev:output").
+  For this, we need to know which dependencies on the state are needed for "layer" ("prev:layer"),
+  and then all such dependencies are needed to be stored as delayed state vars as well.
   Then everything else in the iteration can be done as usual.
+  This first step will be the update_ops.
 
   ---
 
