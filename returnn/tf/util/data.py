@@ -2176,7 +2176,7 @@ class BatchInfo:
     assert self.virtual_dims
     root = self.get_global_base()
     assert dim_tag.dyn_size is not None
-    dim_tag_base = dim_tag.get_same_base()
+    dim_tag_base = dim_tag.get_for_batch_ctx(self, dim_tag.control_flow_ctx)
     if dim_tag_base in root._global_padded_dims_by_dim_tag:
       return root._global_padded_dims_by_dim_tag[dim_tag_base]
     new_dim = BatchInfo.PaddedDim(dim_tag=dim_tag_base)
