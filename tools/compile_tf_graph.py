@@ -361,13 +361,14 @@ class RecStepByStepLayer(RecLayer):
   RASR does the following logic (currently only a single stochastic var supported)::
 
     # initial state vars
-    encode_ops(input_placeholders=...)  # -> assign (base and loop) state_vars
+    encode_ops(input_placeholders=...)  # -> assign (base and loop) state vars
 
     # Main decoder loop
     while seq_not_ended(...):
 
       for hyp in current_hyps:  # (in practice, this is partially batched)
 
+        # state_vars are only the loop state vars here, not the base state vars
         state_vars.assign(...)  # for current hyp
         decoder_input_vars.assign(...)  # for current hyp, the previous choice
 
@@ -380,6 +381,8 @@ class RecStepByStepLayer(RecLayer):
         # note that decoder_input_vars for current hyp is still the previous (!) choice
 
         post_update_ops(state_vars, decoder_input_vars)  # -> assign new state_vars
+
+        state_vars.readout()  # readout and store them for this hyp
 
       < select new hyps and prune some away, based on scores >
 
@@ -453,6 +456,10 @@ class RecStepByStepLayer(RecLayer):
   Then we must construct the decode_ops (including merged post_update_ops) for another set of layers,
   and there can be overlap both in the inputs and outputs,
   so these must be two separate constructions.
+
+  Note that RASR only needs to know about the loop state vars, not the base state vars,
+  and the stochastic state vars are also handled separately.
+  RASR will re-assign and readout the loop state vars in every loop iteration.
 
   ---
 
