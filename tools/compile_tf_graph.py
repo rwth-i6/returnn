@@ -420,6 +420,12 @@ class RecStepByStepLayer(RecLayer):
   Then everything else in the iteration can be done as usual.
   This first step will be the update_ops.
 
+  So first we need to figure out which state vars are needed of what kind.
+  Then we must construct the update_ops for one part of layers.
+  Then we must construct the decode_ops (including merged post_update_ops) for another set of layers,
+  and there can be overlap both in the inputs and outputs,
+  so these must be two separate constructions.
+
   ---
 
   If you want to implement beam search in an external application which uses the compiled graph,
