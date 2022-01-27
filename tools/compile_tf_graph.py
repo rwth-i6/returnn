@@ -265,6 +265,8 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       rec_layer.set_state_var_final_value("cond", cond(i, net_vars, acc_tas, seq_len_info, allow_inf_max_len=True))
 
     with tf.name_scope("body"):
+      # The body function is locally defined in _SubnetworkRecCell.get_output().
+      # This function then calls _SubnetworkRecCell._construct() which will do the subnet construction.
       res = body(i, net_vars, acc_tas, seq_len_info)
       assert len(res) == len(loop_vars)
       if len(res) == 3:
