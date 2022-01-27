@@ -375,7 +375,7 @@ class RecStepByStepLayer(RecLayer):
 
       for hyp in current_hyps:  # (in practice, this is partially batched)
 
-        state_vars.assign(...)  # for current hyp
+        state_vars.assign(...)  # for current hyp (might be skipped in first decoder loop iteration)
         decoder_input_vars.assign(...)  # for current hyp, the previous choice
 
         update_ops(decoder_input_vars)  # -> assign/update potentially some loop state vars
