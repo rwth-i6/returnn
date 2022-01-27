@@ -102,6 +102,16 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     self._parent_dim_tags = {}  # type: typing.Dict[Dim,Dim]
     self._parent_replace_deps = []  # type: typing.List[typing.Tuple[RecStepByStepLayer.StateVar,Data]]
     super(SubnetworkRecCellSingleStep, self).__init__(**kwargs)
+    self.net_delayed_update = TFNetwork(
+      name="%s(delayed-update)" % self.net.name,
+      extern_data=self.net.extern_data,
+      train_flag=self.net.train_flag,
+      search_flag=self.net.search_flag,
+      eval_flag=False,
+      inside_rec_time_dim=self.time_dim_tag,
+      control_flow_ctx=self.net.control_flow_ctx,
+      absolute_name_prefix=self.net.get_absolute_name_prefix(),
+      parent_net=self.parent_net)
 
   def _maybe_delay_tiled(self, state_var, output):
     """
@@ -258,11 +268,18 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       # specifically sorted(self._initial_extra_outputs),
       # where the keys are the layer names.
       prev_outputs_data = [self.layer_data_templates[k].output for k in sorted(self._initial_outputs.keys())]
+      # TODO: this is incomplete/wrong. we need to differentiate the case where we need it to be delayed
+      #   and where it does not.
       net_vars = rec_layer.create_state_vars_recursive(
         name_prefix="state", initial_values=net_vars, data_shape=(prev_outputs_data, None))
     # We are ignoring acc_tas (the tensor arrays).
 
     self._set_construction_state_in_loop()
+
+    # TODO Additionally, we should now do the pre-step of updating the delayed state vars,
+    #   i.e. prepare the update_ops.
+    self._construct_delayed_update()
+    # TODO now we should update net_vars accordingly
 
     with tf.name_scope("cond"):
       rec_layer.create_state_var("cond", tf.constant(True))
@@ -283,6 +300,10 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     rec_layer.set_state_var_final_value("i", i)
     rec_layer.set_state_vars_final_values_recursive("state", net_vars)
     return res
+
+  def _construct_delayed_update(self):
+    # TODO ... self.net_delayed_update
+    pass
 
   def _construct(self, prev_outputs, prev_extra, i, data=None,
                  inputs_moved_out_tas=None, needed_outputs=("output",)):
