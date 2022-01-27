@@ -94,6 +94,7 @@ def helper_variable_scope():
 class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
   """
   Adapts :class:`_SubnetworkRecCell` such that we execute only a single step.
+  Used by :class:`RecStepByStepLayer`. See :class:`RecStepByStepLayer` for further documentation.
   """
 
   def __init__(self, **kwargs):
@@ -480,6 +481,16 @@ class RecStepByStepLayer(RecLayer):
   * "init_op": str. op. the initializer for all state vars, including encoder.
   * "next_step_op: str. op. the update op for all state vars.
 
+  ---
+
+  This layer class derives from :class:`RecLayer` and adopts the logic to be able
+  to construct the mentioned ops for step-by-step execution.
+
+  The final ops are constructed in :func:`post_compile`
+  and put into corresponding TF graph collections and the info json.
+
+  However, the main construction logic happens before, in :func:`__init__`,
+  and then further in :func:`SubnetworkRecCellSingleStep._while_loop`.
   """
 
   layer_class = "rec_step_by_step"
@@ -788,6 +799,7 @@ class RecStepByStepLayer(RecLayer):
     self.construction_state = self.ConstructionState.Init
     if self.have_base_state_vars():
       self._set_global_batch_dim(self.get_batch_dim_from_base_state_var())
+    # This will eventually get to SubnetworkRecCellSingleStep._while_loop.
     super(RecStepByStepLayer, self).__init__(
       sources=sources, network=network, name=name, output=output, unit=unit, axis=axis, **kwargs)
 
