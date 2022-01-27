@@ -2501,6 +2501,31 @@ def test_MergeDimsLayer_2d_dynamic_merge_axis():
     assert numpy.all(sliced_time * feat_dim.dimension == merged_time)
 
 
+def test_MergeDimsLayer_modified_time_dim():
+  n_batch, n_time, n_in = 3, 7, 2
+  config = Config({
+    "extern_data": {"data": {"dim": n_in}},
+    "debug_print_layer_output_template": True,
+    "behavior_version": 12,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "conv": {
+        "class": "conv", "n_out": n_in, "filter_size": (3,), "strides": (2,), "padding": "valid", "from": "data:data"},
+      "output": {"class": "merge_dims", "from": "conv", "axes": ["B", "T"], "keep_order": True},
+    })
+    in_data = net.extern_data.data["data"]
+    out_t = net.get_default_output_layer().output.placeholder
+    in_v = numpy.arange(0, n_batch * n_time * n_in).reshape((n_time, n_batch, n_in)).transpose(1, 0, 2)
+    in_seq_lens = [n_time] * n_batch
+    out_v = session.run(out_t, feed_dict={
+      in_data.placeholder: in_v,
+      in_data.size_placeholder[0]: in_seq_lens})
+    assert isinstance(out_v, numpy.ndarray)
+    numpy.testing.assert_equal(out_v, in_v)
+
+
 def test_FlattenBatchLayer():
   from returnn.tf.util.data import BatchInfo
   n_batch, n_time, n_in = 3, 4, 2
