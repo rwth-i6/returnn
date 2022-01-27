@@ -257,14 +257,18 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     else:
       i, net_vars, acc_tas, seq_len_info = loop_vars
       seq_len_info = rec_layer.create_state_vars_recursive(["end_flag", "dyn_seq_len"], seq_len_info)
-    i, _ = rec_layer.create_state_var("i", i)
+    initial_i = i
+    i, _ = rec_layer.create_state_var("i", initial_i)
 
-    # TODO go through layers with state, check their (direct + indirect) dependencies,
-    #  whether they depend on any choice vars.
+    # Go through layers with state, check their (direct + indirect) dependencies,
+    # whether they depend on any choice vars.
     # noinspection PyProtectedMember
     from returnn.tf.layers.rec import _TemplateLayer
-    layer_names_with_state = set(self._initial_outputs.keys()).union(self._initial_extra_outputs.keys())
-    for layer_name in layer_names_with_state:
+    layers_with_state = set(self._initial_outputs.keys()).union(self._initial_extra_outputs.keys())
+    layers_cur_iteration = set()
+    layers_delayed = set()
+    layers_delayed_deps = set()
+    for layer_name in layers_with_state:
       template_layer = self.layer_data_templates[layer_name]
       queue = [template_layer]
       visited = set()
@@ -284,18 +288,49 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
             continue  # ignore layers from parent network
           assert isinstance(dep, _TemplateLayer)
           queue.append(dep)
-        prev_frame_deps.update(cur.prev_frame_dependencies)
+        prev_frame_deps.update([dep.name for dep in cur.prev_frame_dependencies])
+      if not choice_deps:
+        layers_cur_iteration.add(layer_name)
+      else:
+        layers_delayed.add(layer_name)
+        layers_delayed_deps.update(prev_frame_deps)
       # TODO ...
 
+    # See _SubnetworkRecCell.get_output().body().
+    # net_vars is (prev_outputs_flat, prev_extra_flat).
+    # prev_outputs_flat corresponds to the dict self._initial_outputs, specifically sorted(self._initial_outputs)
+    # where the keys are the layer names.
+    # prev_extra is always expected to be batch-major.
+    # prev_extra_flat corresponds to the dict self._initial_extra_outputs,
+    # specifically sorted(self._initial_extra_outputs),
+    # where the keys are the layer names.
+    init_outputs_flat, init_extra_flat = net_vars
+    assert len(init_outputs_flat) == len(self._initial_outputs)
+    assert len(init_extra_flat) == len(self._initial_extra_outputs)
+    init_outputs = {k: v for k, v in zip(sorted(self._initial_outputs.keys()), init_outputs_flat)}
+    init_extra = {k: v for k, v in zip(sorted(self._initial_extra_outputs.keys()), init_extra_flat)}
+
+    layers_prev_prev_output = {}
+    layers_prev_prev_extra = {}
+    for layer_name in layers_delayed.union(layers_delayed_deps):
+      if layer_name in init_outputs:
+        layers_prev_prev_output[layer_name], _ = rec_layer.create_state_var(
+          name="state_delayed/%s/output" % layer_name,
+          initial_value=init_outputs[layer_name],
+          data_shape=self.layer_data_templates[layer_name].output)
+      if layer_name in init_extra:
+        layers_prev_prev_extra[layer_name], _ = rec_layer.create_state_vars_recursive(
+          name_prefix="state_delayed/%s/extra" % layer_name,
+          initial_values=init_extra[layer_name])  # should be batch-major
+
+    with tf.name_scope("delayed_state_update"):
+      def _delayed_state_update():
+        pass  # TODO ...
+
+      # TODO...
+      delayed_state_update_op = tf.cond(tf.greater(i, initial_i), _delayed_state_update, tf.no_op)
+
     with tf.name_scope("state"):
-      # See _SubnetworkRecCell.get_output().body().
-      # net_vars is (prev_outputs_flat, prev_extra_flat).
-      # prev_outputs_flat corresponds to the dict self._initial_outputs, specifically sorted(self._initial_outputs)
-      # where the keys are the layer names.
-      # prev_extra is always expected to be batch-major.
-      # prev_extra_flat corresponds to the dict self._initial_extra_outputs,
-      # specifically sorted(self._initial_extra_outputs),
-      # where the keys are the layer names.
       prev_outputs_data = [self.layer_data_templates[k].output for k in sorted(self._initial_outputs.keys())]
       # TODO: this is incomplete/wrong. we need to differentiate the case where we need it to be delayed
       #   and where it does not.
