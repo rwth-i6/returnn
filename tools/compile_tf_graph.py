@@ -269,11 +269,14 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       queue = [template_layer]
       visited = set()
       prev_frame_deps = set()
+      choice_deps = set()
       while queue:
         cur = queue.pop(0)
         if cur in visited:
           continue
         visited.add(cur)
+        if cur.layer_class_type is ChoiceStateVarLayer:
+          choice_deps.add(cur)
         for dep in cur.cur_frame_dependencies:
           if dep in visited:
             continue
