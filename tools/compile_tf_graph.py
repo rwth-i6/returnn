@@ -280,7 +280,8 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
   def _construct(self, prev_outputs, prev_extra, i, data=None,
                  inputs_moved_out_tas=None, needed_outputs=("output",)):
     """
-    This is called from within the `tf.while_loop` of the :class:`RecLayer`,
+    This is called from within the body of the while loop
+    (`tf.while_loop` in :class:`RecLayer` but here only a single step)
     to construct the subnetwork, which is performed step by step.
 
     :param dict[str,tf.Tensor] prev_outputs:
@@ -362,7 +363,65 @@ class RecStepByStepLayer(RecLayer):
 
   Because RASR is the main application, we adopt the recurrence logic of the RecLayer to be compatible to RASR.
 
-  E.g., if you want to implement beam search in an external application which uses the compiled graph,
+  Note that the update_ops, decode_ops and post_update_ops all depend on the previous state vars (obviously)
+  and on the previous (!) choice vars and not on the current choice vars.
+  This is in contrast to RETURNN, where the final loop state vars are potentially based on the current choice var.
+
+  One way to solve this is by delaying the state vars by one iteration.
+  So when "prev state vars" would normally refer to "prev:layer" (also including hidden state),
+  now it would refer to "prev:prev:layer".
+  Then for the decode_ops, we need to make sure first that we transfer "prev:prev:layer" to "prev:layer"
+  and then we can calculate it as normal.
+  Even when we merge the post_update_ops with the decode_ops, in many models,
+  this still requires to do a lot (most) computation redundantly twice
+  because for computing the decode_ops, we do most of the same computation which we would do for computing
+  "layer" based on "prev:layer", but "layer" is not used here because we delayed the state vars by one iteration.
+
+  We might keep all state vars twice, once for the current iteration (when possible),
+  and once for the delayed iteration (when needed).
+  But this is bad because this would cause a lot of overhead when the decoder needs to copy around the state vars.
+  This is the case for RASR which handles high number of hypotheses, where the state vars are stored in CPU memory.
+
+  As mentioned before, decode_ops shares a lot of the computation with updating "layer" based on "prev:layer".
+  Or said differently, the calculation of "layer" is often not dependent on the current choice var.
+  When we can figure out the dependencies exactly, we can know which state vars can stay in the current iteration,
+  and which need to be delayed.
+  There are potentially also some state vars which we need to keep both for the current and previous iteration
+  in order to be able to compute the delayed update when this depends on it.
+
+  So, for the loop state vars, we have two cases:
+
+  - It refers to the current iteration.
+  - It refers to the previous iteration.
+
+  For some layer (which is part of the state because it is accessed via "prev:layer" or has hidden state),
+  we can have three cases:
+
+  - Loop state vars referring to the current iteration.
+  - Loop state vars referring to the previous iteration.
+  - Loop state vars for both the current and previous iteration.
+
+  The update of delayed state vars must take extra care in the first frame.
+  It is initialized with the initial state (layers initial_output, and initial hidden state),
+  and in the first frame, it would just not update this.
+  Only from the second frame on, it is delayed.
+
+  How to we implement this logic here?
+
+  First we aggressively search for layers which can stay in the current iteration,
+  i.e. which do not depend on any of the :class:`ChoiceLayer`s.
+  The update calculation from "prev:layer" to "layer" would be jointly with decode_ops
+  to avoid redundant computation.
+  This should be the first decode_ops if there are multiple.
+
+  For delayed state vars, before we do anything else,
+  in the beginning of the iteration, we need to update "prev:prev:layer" to "prev:layer",
+  or also set "prev:layer" based on the prev choices (e.g. "prev:output").
+  Then everything else in the iteration can be done as usual.
+
+  ---
+
+  If you want to implement beam search in an external application which uses the compiled graph,
   you would compile the graph with search_flag disabled (such that RETURNN does not do any related logic),
   enable this recurrent step-by-step compilation, and then do the following TF session runs:
 
