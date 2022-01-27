@@ -258,6 +258,32 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       i, net_vars, acc_tas, seq_len_info = loop_vars
       seq_len_info = rec_layer.create_state_vars_recursive(["end_flag", "dyn_seq_len"], seq_len_info)
     i, _ = rec_layer.create_state_var("i", i)
+
+    # TODO go through layers with state, check their (direct + indirect) dependencies,
+    #  whether they depend on any choice vars.
+    # noinspection PyProtectedMember
+    from returnn.tf.layers.rec import _TemplateLayer
+    layer_names_with_state = set(self._initial_outputs.keys()).union(self._initial_extra_outputs.keys())
+    for layer_name in layer_names_with_state:
+      template_layer = self.layer_data_templates[layer_name]
+      queue = [template_layer]
+      visited = set()
+      prev_frame_deps = set()
+      while queue:
+        cur = queue.pop(0)
+        if cur in visited:
+          continue
+        visited.add(cur)
+        for dep in cur.cur_frame_dependencies:
+          if dep in visited:
+            continue
+          if self.net not in dep.network.get_network_hierarchy():
+            continue  # ignore layers from parent network
+          assert isinstance(dep, _TemplateLayer)
+          queue.append(dep)
+        prev_frame_deps.update(cur.prev_frame_dependencies)
+      # TODO ...
+
     with tf.name_scope("state"):
       # See _SubnetworkRecCell.get_output().body().
       # net_vars is (prev_outputs_flat, prev_extra_flat).
