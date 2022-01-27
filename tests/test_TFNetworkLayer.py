@@ -2515,15 +2515,9 @@ def test_MergeDimsLayer_modified_time_dim():
         "class": "conv", "n_out": n_in, "filter_size": (3,), "strides": (2,), "padding": "valid", "from": "data:data"},
       "output": {"class": "merge_dims", "from": "conv", "axes": ["B", "T"], "keep_order": True},
     })
-    in_data = net.extern_data.data["data"]
-    out_t = net.get_default_output_layer().output.placeholder
-    in_v = numpy.arange(0, n_batch * n_time * n_in).reshape((n_time, n_batch, n_in)).transpose(1, 0, 2)
-    in_seq_lens = [n_time] * n_batch
-    out_v = session.run(out_t, feed_dict={
-      in_data.placeholder: in_v,
-      in_data.size_placeholder[0]: in_seq_lens})
-    assert isinstance(out_v, numpy.ndarray)
-    numpy.testing.assert_equal(out_v, in_v)
+    out = net.get_default_output_layer().output
+    net.initialize_params(session)
+    session.run(out.placeholder, feed_dict=make_feed_dict(net.extern_data))
 
 
 def test_FlattenBatchLayer():
