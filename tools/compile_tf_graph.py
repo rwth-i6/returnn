@@ -363,12 +363,18 @@ class RecStepByStepLayer(RecLayer):
     # initial state vars
     encode_ops(input_placeholders=...)  # -> assign (base and loop) state vars
 
+    # state_vars are only the loop state vars here, not the base state vars.
+    # Store initial loop state values.
+    # Note that this is not really necessary always (including the logic described here)
+    # because we anyway then assign them again in the first iteration of the decoder loop
+    # and never need them otherwise again.
+    state_vars.readout()
+
     # Main decoder loop
     while seq_not_ended(...):
 
       for hyp in current_hyps:  # (in practice, this is partially batched)
 
-        # state_vars are only the loop state vars here, not the base state vars
         state_vars.assign(...)  # for current hyp
         decoder_input_vars.assign(...)  # for current hyp, the previous choice
 
