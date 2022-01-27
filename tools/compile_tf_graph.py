@@ -249,10 +249,14 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       seq_len_info = rec_layer.create_state_vars_recursive(["end_flag", "dyn_seq_len"], seq_len_info)
     i, _ = rec_layer.create_state_var("i", i)
     with tf.name_scope("state"):
-      # See _SubnetworkRecCell.GetOutput.body.
-      # net_vars is (prev_outputs_flat, prev_extra_flat), and prev_outputs_flat corresponds to self._initial_outputs,
+      # See _SubnetworkRecCell.get_output().body().
+      # net_vars is (prev_outputs_flat, prev_extra_flat).
+      # prev_outputs_flat corresponds to the dict self._initial_outputs, specifically sorted(self._initial_outputs)
       # where the keys are the layer names.
       # prev_extra is always expected to be batch-major.
+      # prev_extra_flat corresponds to the dict self._initial_extra_outputs,
+      # specifically sorted(self._initial_extra_outputs),
+      # where the keys are the layer names.
       prev_outputs_data = [self.layer_data_templates[k].output for k in sorted(self._initial_outputs.keys())]
       net_vars = rec_layer.create_state_vars_recursive(
         name_prefix="state", initial_values=net_vars, data_shape=(prev_outputs_data, None))
