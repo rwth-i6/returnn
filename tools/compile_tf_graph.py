@@ -330,7 +330,7 @@ class RecStepByStepLayer(RecLayer):
   - decoder_output_vars: Stochastic scores state vars, updated by the decoder loop.
   - (Deterministic) loop state vars, updated by the decoder loop.
 
-  RASR does the following logic::
+  RASR does the following logic (currently only a single stochastic var supported)::
 
     # initial state vars
     encode_ops(input_placeholders=...)  # -> assign (base and loop) state_vars
@@ -345,17 +345,11 @@ class RecStepByStepLayer(RecLayer):
 
         update_ops(decoder_input_vars)  # -> assign/update potentially some loop state vars
 
-        # Loop over stochastic vars, and call decode_ops for each.
-        for (choices, scores, decode_op) in zip(decoder_input_vars, decoder_output_vars, decode_ops):
+        # Assume only a single decode_ops here (single ChoiceLayer).
+        # decoder_input_vars contains prev choices
+        decode_ops(state_vars, decoder_input_vars)  # -> assign decoder_output_vars (scores)
 
-          for all_possible_succeeding_input_vars:  # loop not needed for first stochastic var
-
-            decoder_input_vars[:i].assign(...)  # ...
-
-            # decoder_input_vars contains prev choices
-            decode_ops(state_vars, decoder_input_vars)  # -> assign scores
-
-        decoder_input_vars.assign(...)  # for current hyp, (still!) the previous (!) choice
+        # note that decoder_input_vars for current hyp is still the previous (!) choice
 
         post_update_ops(state_vars, decoder_input_vars)  # -> assign new state_vars
 
