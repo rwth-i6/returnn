@@ -358,7 +358,10 @@ class RecStepByStepLayer(RecLayer):
   Because RASR is the main application, we adopt the recurrence logic of the RecLayer to be compatible to RASR.
 
   Note that the update_ops, decode_ops and post_update_ops all depend on the previous state vars (obviously)
-  and on the previous (!) choice vars and not on the current choice vars.
+  or maybe decode_ops would depend on some updated state vars, updated by update_ops,
+  or maybe post_update_ops would depend on some updated state vars, updated by decode_ops or update_ops.
+  The logic flow is as outlined above.
+  And all ops depends on the previous (!) choice vars and not on the current choice vars.
   This is in contrast to RETURNN, where the final loop state vars are potentially based on the current choice var.
 
   One way to solve this is by delaying the state vars by one iteration.
