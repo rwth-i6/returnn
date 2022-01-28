@@ -389,6 +389,8 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       for layer_name in layers_cur_iteration:
         layers_prev[layer_name] = _LayerStateHelper(layer_name, "state")
 
+    # TODO create choice state vars now, so that we can use them in the loop below...
+
     # We are ignoring acc_tas (the tensor arrays).
 
     self._set_construction_state_in_loop()
@@ -407,6 +409,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
           prev_state={
             layer_name: layers_prev_prev[layer_name].get_reads()
             for layer_name in layers_delayed_prev_deps},
+          # TODO add prev:output ... always because the delayed state by definition depends on it
           cur_state={
             layer_name: layers_prev[layer_name].get_reads()
             for layer_name in layers_cur_iteration},
