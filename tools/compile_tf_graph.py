@@ -315,6 +315,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     for choice_layer in choice_layers:
       assert choice_layer not in layers_cur_iteration
       layers_delayed.add(choice_layer)  # if not yet added, add now because we anyway need them
+      rec_layer.add_stochastic_var(choice_layer)
 
     # See _SubnetworkRecCell.get_output().body().
     # net_vars is (prev_outputs_flat, prev_extra_flat).
@@ -328,7 +329,9 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     assert len(init_outputs_flat) == len(self._initial_outputs)
     assert len(init_extra_flat) == len(self._initial_extra_outputs)
     init_outputs = {k: v for k, v in zip(sorted(self._initial_outputs.keys()), init_outputs_flat)}
-    init_extra = {k: v for k, v in zip(sorted(self._initial_extra_outputs.keys()), init_extra_flat)}
+    init_extra = {
+      k: util.dict_zip(sorted(self._initial_extra_outputs[k]), v)
+      for (k, v) in zip(sorted(self._initial_extra_outputs), init_extra_flat)}
 
     class _LayerStateHelper:
       def __init__(self, layer_name, prefix):
@@ -389,8 +392,6 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       for layer_name in layers_cur_iteration:
         layers_prev[layer_name] = _LayerStateHelper(layer_name, "state")
 
-    # TODO create choice state vars now, so that we can use them in the loop below...
-
     # We are ignoring acc_tas (the tensor arrays).
 
     self._set_construction_state_in_loop()
@@ -401,25 +402,22 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
 
     with tf.name_scope("delayed_state_update"):
       def _delayed_state_update():
-        # TODO Additionally, we should now do the pre-step of updating the delayed state vars,
-        #   i.e. prepare the update_ops.
-        # TODO also need to assign potential extern_data... prev_source_deps
         self._construct_custom(
           net=self.net_delayed_update,
           prev_state={
             layer_name: layers_prev_prev[layer_name].get_reads()
             for layer_name in layers_delayed_prev_deps},
-          # TODO add prev:output ... always because the delayed state by definition depends on it
           cur_state={
             layer_name: layers_prev[layer_name].get_reads()
             for layer_name in layers_cur_iteration},
           needed_outputs=layers_delayed)
-        # TODO now we should update net_vars accordingly
 
         # Make sure all state vars dependencies are read first before we reassign them.
         control_deps = []
         for layer_name in layers_delayed_prev_deps:
           control_deps += nest.flatten(layers_prev_prev[layer_name].get_reads())
+        for layer_name in choice_layers:
+          control_deps.append(self.net_delayed_update.layers[layer_name].output.placeholder)
 
         # Now reassign the delayed state vars.
         with tf.control_dependencies(control_deps):
@@ -442,6 +440,8 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       # TODO...
       delayed_state_update_op = tf.cond(tf.greater(i, initial_i), _delayed_state_update, tf.no_op)
 
+      # TODO now we should update net_vars accordingly
+
     with tf.name_scope("cond"):
       rec_layer.create_state_var("cond", tf.constant(True))
       rec_layer.set_state_var_final_value("cond", cond(i, net_vars, acc_tas, seq_len_info, allow_inf_max_len=True))
@@ -459,7 +459,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     if seq_len_info:
       rec_layer.set_state_vars_final_values_recursive(["end_flag", "dyn_seq_len"], seq_len_info)
     rec_layer.set_state_var_final_value("i", i)
-    rec_layer.set_state_vars_final_values_recursive("state", net_vars)
+    rec_layer.set_state_vars_final_values_recursive("state", net_vars)  # TODO wrong
     return res
 
   def _construct_custom(self, net, prev_state, cur_state, needed_outputs):
@@ -1015,6 +1015,7 @@ class RecStepByStepLayer(RecLayer):
     kwargs["optimize_move_layers_out"] = False
     self.state_vars = {}  # type: typing.Dict[str,RecStepByStepLayer.StateVar]
     self.stochastic_var_order = []  # type: typing.List[str]
+    self.stochastic_vars = {}  # type: typing.Dict[str,RecStepByStepLayer.StochasticVar]
     self._parent_tile_multiples = None  # type: typing.Optional[tf.Tensor]
     self.construction_state = self.ConstructionState.GetSources
     self.reverse_stochastic_var_order = reverse_stochastic_var_order
@@ -1163,30 +1164,20 @@ class RecStepByStepLayer(RecLayer):
     """
     :param str|list[str] name_prefix:
     :param T final_values:
-    :rtype: T
     """
-    from returnn.util.basic import make_seq_of_type
-    if isinstance(name_prefix, (tuple, list)):
-      assert isinstance(final_values, (tuple, list))
-      assert len(name_prefix) == len(final_values)
-      return make_seq_of_type(
-        type(final_values),
-        [self.set_state_vars_final_values_recursive(name_prefix=name_prefix[i], final_values=v)
-         for i, v in enumerate(final_values)])
-    if final_values is None:
-      return None
-    if isinstance(final_values, tf.Tensor):
-      return self.set_state_var_final_value(name=name_prefix, final_value=final_values)
-    if isinstance(final_values, (tuple, list)):
-      return make_seq_of_type(
-        type(final_values),
-        [self.set_state_vars_final_values_recursive(name_prefix="%s_%i" % (name_prefix, i), final_values=v)
-         for i, v in enumerate(final_values)])
-    if isinstance(final_values, dict):
-      return {
-        k: self.set_state_vars_final_values_recursive(name_prefix="%s_%s" % (name_prefix, k), final_values=v)
-        for k, v in final_values.items()}
-    raise TypeError("unhandled type %r" % (final_values,))
+    def _map_state_vars(path, name, final_value):
+      assert isinstance(final_value, tf.Tensor)
+      if not name:
+        name = "/".join(map(str, (name_prefix,) + path))
+      self.set_state_var_final_value(name=name, final_value=final_value)
+
+    if isinstance(name_prefix, str):
+      name_per_entry = nest.map_structure(lambda v: None, final_values)
+    else:
+      name_per_entry = name_prefix
+    nest.assert_same_structure(final_values, name_per_entry)
+    nest.map_structure_with_tuple_paths(
+      _map_state_vars, name_per_entry, final_values)
 
   def have_base_state_vars(self):
     """
@@ -1225,12 +1216,58 @@ class RecStepByStepLayer(RecLayer):
             return tf.shape(v.var.value())[v.var_data_shape.batch_dim_axis]
     raise Exception("None of the loop state vars do have a batch-dim: %s" % self.state_vars)
 
+  class StochasticVar:
+    def __init__(self, parent_rec_layer, layer_template):
+      """
+      :param RecStepByStepLayer parent_rec_layer:
+      :param _TemplateLayer layer_template:
+      """
+      self.parent_rec_layer = parent_rec_layer
+      self.name = layer_template.name
+      self.choice_layer_opts = layer_template.kwargs
+      # for compatibility: one way to set the ngram label context via additional choices
+      # but older history is not score-dependent stochastic_var anymore
+      self.score_dependent = self.choice_layer_opts.get("score_dependent", True)
+      self.score_state_var = None
+      if self.score_dependent:
+        sources = layer_template.kwargs["sources"]
+        assert len(sources) == 1
+        source_template, = sources
+        self.score_state_var = self.parent_rec_layer.create_state_var(
+          name="stochastic_var_scores_%s" % self.name, data_shape=source_template.output)
+      self.choice_state_var = self.parent_rec_layer.create_state_var(
+        name="stochastic_var_choice_%s" % self.name, data_shape=layer_template.output)
+
+    def assign_score(self, source):
+      assert self.score_dependent
+      assert source.output.is_batch_major and len(source.output.shape) == 1
+      scores_in = source.output.placeholder
+      input_type = self.choice_layer_opts.get("input_type", "prob")
+      if input_type == "prob":
+        if source.output_before_activation:
+          scores_in = source.output_before_activation.get_log_output()
+        else:
+          from returnn.tf.util.basic import safe_log
+          scores_in = safe_log(scores_in)
+      elif input_type == "log_prob":
+        pass
+      else:
+        raise ValueError("Not handled input_type %r" % (input_type,))
+      self.score_state_var.set_final_value(final_value=scores_in)
+
+    def get_choice(self):
+      return self.choice_state_var.read()
+
   def add_stochastic_var(self, name):
     """
     :param str name:
+    :rtype: RecStepByStepLayer.StochasticVar
     """
-    assert name not in self.stochastic_var_order
-    self.stochastic_var_order.append(name)
+    assert name not in self.stochastic_vars
+    cell = self.cell
+    assert isinstance(cell, SubnetworkRecCellSingleStep)
+    self.stochastic_vars[name] = self.StochasticVar(self, cell.layer_data_templates[name])
+    return self.stochastic_vars[name]
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -1265,31 +1302,20 @@ class ChoiceStateVarLayer(LayerBase):
     super(ChoiceStateVarLayer, self).__init__(**kwargs)
     rec_layer = self.network.parent_layer
     assert isinstance(rec_layer, RecStepByStepLayer)
+    self.stochastic_var = rec_layer.stochastic_vars[self.name]
+    cell = rec_layer.cell
+    assert isinstance(cell, SubnetworkRecCellSingleStep)
+    assert self.network in {cell.net, cell.net_delayed_update}
+    if self.network == cell.net:
+      rec_layer.stochastic_var_order.append(self.name)
     # for compatibility: one way to set the ngram label context via additional choices
     # but older history is not score-dependent stochastic_var anymore
     self.score_dependent = score_dependent
-    if score_dependent:
+    if self.score_dependent:
       assert len(self.sources) == 1
-      source = self.sources[0]
-      assert source.output.is_batch_major and len(source.output.shape) == 1
-      scores_in = source.output.placeholder
-      if input_type == "prob":
-        if source.output_before_activation:
-          scores_in = source.output_before_activation.get_log_output()
-        else:
-          from returnn.tf.util.basic import safe_log
-          scores_in = safe_log(scores_in)
-      elif input_type == "log_prob":
-        pass
-      else:
-        raise ValueError("Not handled input_type %r" % (input_type,))
-      rec_layer.create_state_var(
-        name="stochastic_var_scores_%s" % self.name, data_shape=source.output)
-      rec_layer.set_state_var_final_value(
-        name="stochastic_var_scores_%s" % self.name, final_value=scores_in)
-    self.output.placeholder, _ = rec_layer.create_state_var(
-      name="stochastic_var_choice_%s" % self.name, data_shape=self.output)
-    rec_layer.add_stochastic_var(self.name)
+      source, = self.sources
+      self.stochastic_var.assign_score(source)
+    self.output.placeholder = self.stochastic_var.get_choice()
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -1313,6 +1339,16 @@ class ChoiceStateVarLayer(LayerBase):
     elif d.get("explicit_search_sources"):
       assert isinstance(d["explicit_search_sources"], (list, tuple))
       d["explicit_search_sources"] = [get_layer(name) for name in d["explicit_search_sources"]]
+    parent_rec_layer = network.parent_layer
+    if parent_rec_layer:  # might be None at first template construction
+      assert isinstance(parent_rec_layer, RecStepByStepLayer)
+      cell = parent_rec_layer.cell
+      assert isinstance(cell, SubnetworkRecCellSingleStep)
+      assert network in {cell.net, cell.net_delayed_update}
+      if network == cell.net_delayed_update:
+        # Remove the dependency to the scores.
+        d["from"] = ()
+        d["score_dependent"] = False
     super(ChoiceStateVarLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
