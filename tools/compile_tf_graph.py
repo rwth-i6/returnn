@@ -103,9 +103,11 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     self._parent_dim_tags = {}  # type: typing.Dict[Dim,Dim]
     self._parent_replace_deps = []  # type: typing.List[typing.Tuple[RecStepByStepLayer.StateVar,Data]]
     super(SubnetworkRecCellSingleStep, self).__init__(**kwargs)
+    extern_data_copy = ExternData()
+    extern_data_copy.data.update({k: v.copy_template() for (k, v) in self.net.extern_data.data.items()})
     self.net_delayed_update = TFNetwork(
       name="%s(delayed-update)" % self.net.name,
-      extern_data=ExternData({k: v.copy() for (k, v) in self.net.extern_data.data.items()}),
+      extern_data=extern_data_copy,
       train_flag=self.net.train_flag,
       search_flag=self.net.search_flag,
       eval_flag=False,
@@ -252,6 +254,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     cell = self
     rec_layer = self.parent_rec_layer
     assert isinstance(rec_layer, RecStepByStepLayer)
+    self.net_delayed_update.parent_layer = rec_layer
 
     if len(loop_vars) == 3:
       i, net_vars, acc_tas = loop_vars
@@ -269,8 +272,8 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     layers_cur_iteration = set()
     layers_delayed = set()
     layer_deps_by_layer = {}  # type: typing.Dict[str, typing.Set[str]]
-    layers_delayed_deps = set()
-    prev_source_deps = set()  # for delayed
+    layers_delayed_prev_deps = set()
+    choice_layers = set()
     for layer_name in layers_with_state:
       template_layer = self.layer_data_templates[layer_name]
       queue = [template_layer]
@@ -302,11 +305,16 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
         layers_cur_iteration.add(layer_name)
       else:
         print(
-          "Delayed: Layer %r depends on choices %r, deps on prev frame %r, deps on sources %r" % (
-            layer_name, choice_deps, prev_frame_deps, source_deps), file=log.v4)
-        prev_source_deps.update(source_deps)
+          "Delayed: Layer %r depends on choices %r, deps on prev frame %r" % (
+            layer_name, choice_deps, prev_frame_deps), file=log.v4)
+        if source_deps:
+          raise NotImplementedError("Delayed layers with source dependencies (%s) not supported yet" % source_deps)
         layers_delayed.add(layer_name)
-        layers_delayed_deps.update(prev_frame_deps)
+        layers_delayed_prev_deps.update(prev_frame_deps)
+        choice_layers.update(choice_deps)
+    for choice_layer in choice_layers:
+      assert choice_layer not in layers_cur_iteration
+      layers_delayed.add(choice_layer)  # if not yet added, add now because we anyway need them
 
     # See _SubnetworkRecCell.get_output().body().
     # net_vars is (prev_outputs_flat, prev_extra_flat).
@@ -323,7 +331,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     init_extra = {k: v for k, v in zip(sorted(self._initial_extra_outputs.keys()), init_extra_flat)}
 
     class _LayerStateHelper:
-      def __init__(self, layer_name, prefix, dummy_init_state=False):
+      def __init__(self, layer_name, prefix):
         """
         :param str layer_name:
         :param str prefix:
@@ -334,12 +342,12 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
 
         initial_values = {}
         data_shapes = {}
-        if layer_name in init_outputs or dummy_init_state is not None:
-          initial_values["output"] = init_outputs[layer_name] if layer_name in init_outputs else dummy_init_state
+        if layer_name in init_outputs:
+          initial_values["output"] = init_outputs[layer_name]
           data_shapes["output"] = cell.layer_data_templates[layer_name].output
         if layer_name in init_extra:
           initial_values["extra"] = init_extra[layer_name]
-          data_shapes["extra"] = nest.map_structure(lambda: None, init_extra[layer_name])  # should be batch-major
+          data_shapes["extra"] = nest.map_structure(lambda s: None, init_extra[layer_name])  # should be batch-major
         assert isinstance(rec_layer, RecStepByStepLayer)
         self.state_vars = rec_layer.create_state_vars_recursive(
           name_prefix="%s/%s" % (prefix, layer_name),
@@ -373,11 +381,8 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
 
     with tf.name_scope("state_delayed"):
       layers_prev_prev = {}
-      for layer_name in layers_delayed.union(layers_delayed_deps):
+      for layer_name in layers_delayed.union(layers_delayed_prev_deps):
         layers_prev_prev[layer_name] = _LayerStateHelper(layer_name, "state_delayed")
-      sources_prev = {}
-      for layer_name in prev_source_deps:
-        sources_prev[layer_name] = _LayerStateHelper(layer_name, "state_delayed_source", tf.zeros(()))
 
     with tf.name_scope("state"):
       layers_prev = {}
@@ -388,35 +393,48 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
 
     self._set_construction_state_in_loop()
 
+    {
+      layer_name: layers_prev[layer_name].get_reads()
+      for layer_name in layers_cur_iteration}
+
     with tf.name_scope("delayed_state_update"):
       def _delayed_state_update():
         # TODO Additionally, we should now do the pre-step of updating the delayed state vars,
         #   i.e. prepare the update_ops.
         # TODO also need to assign potential extern_data... prev_source_deps
-        self._construct_custom(net=self.net_delayed_update)  # TODO ...
+        self._construct_custom(
+          net=self.net_delayed_update,
+          prev_state={
+            layer_name: layers_prev_prev[layer_name].get_reads()
+            for layer_name in layers_delayed_prev_deps},
+          cur_state={
+            layer_name: layers_prev[layer_name].get_reads()
+            for layer_name in layers_cur_iteration},
+          needed_outputs=layers_delayed)
         # TODO now we should update net_vars accordingly
 
         # Make sure all state vars dependencies are read first before we reassign them.
         control_deps = []
-        for layer_name in layers_delayed_deps:
+        for layer_name in layers_delayed_prev_deps:
           control_deps += nest.flatten(layers_prev_prev[layer_name].get_reads())
-        for layer_name in prev_source_deps:
-          control_deps += nest.flatten(sources_prev[layer_name].get_reads())
 
         # Now reassign the delayed state vars.
         with tf.control_dependencies(control_deps):
           ops = []
           # Update all delayed state vars, i.e. prev:prev:layer to prev:layer.
-          for layer_name in layers_delayed.union(layers_delayed_deps):
+          for layer_name in layers_delayed.union(layers_delayed_prev_deps):
             if layer_name in layers_cur_iteration:
               pass  # TODO Can simply copy it. "prev:layer" is already in it.
 
-            elif layer_name in layers_delayed:
+            else:
+              assert layer_name in layers_delayed
               if layer_name in init_outputs:
                 pass  # TODO ...
               if layer_name in init_extra:
                 pass
               pass  # TODO ...
+
+        return tf.group(*ops)
 
       # TODO...
       delayed_state_update_op = tf.cond(tf.greater(i, initial_i), _delayed_state_update, tf.no_op)
@@ -441,22 +459,30 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     rec_layer.set_state_vars_final_values_recursive("state", net_vars)
     return res
 
-  def _construct_custom(self, net, data, prev_outputs, prev_extra, needed_outputs):
+  def _construct_custom(self, net, prev_state, cur_state, needed_outputs):
     # This is a simplified version of _SubnetworkRecCell._construct without search logic.
-    for key in data:
-      net.extern_data.data[key].placeholder = data[key]
 
     prev_layers = {}  # type: typing.Dict[str,_TemplateLayer]
-    for name in set(list(prev_outputs.keys()) + list(prev_extra.keys())):
-      if "prev:%s" % name in self.net.layers:
-        continue
+
+    def _add_predefined_layer(layer_name, state_dict, prev):
+      assert isinstance(state_dict, dict)
+      assert set(state_dict.keys()).issubset({"output", "extra"})
       try:
-        net.layers["prev:%s" % name] = prev_layers[name] = self.layer_data_templates[name].copy_as_prev_time_frame(
-          prev_output=prev_outputs.get(name, None),
-          rec_vars_prev_outputs=prev_extra.get(name, None))
+        layer = self.layer_data_templates[name].copy_as_prev_time_frame(
+          prev_output=state_dict.get("output", None),
+          rec_vars_prev_outputs=state_dict.get("extra", None))
       except Exception as exc:  # Some sanity check might have failed or so.
         self._handle_construct_exception(description="in-loop init of prev layer %r" % name, exception=exc)
         raise
+      layer.network = net
+      if prev:
+        prev_layers[layer_name] = layer
+      net.layers[("prev:%s" % layer_name) if prev else layer_name] = layer
+
+    for name, state_dict in prev_state.items():
+      _add_predefined_layer(name, state_dict, prev=True)
+    for name, state_dict in cur_state.items():
+      _add_predefined_layer(name, state_dict, prev=False)
 
     # noinspection PyShadowingNames
     def get_layer(name):
@@ -1120,11 +1146,11 @@ class RecStepByStepLayer(RecLayer):
       return self.create_state_var(name=name, initial_value=initial_value, data_shape=data_shape)
 
     if isinstance(name_prefix, str):
-      name_per_entry = nest.map_structure(lambda: None, initial_values)
+      name_per_entry = nest.map_structure(lambda v: None, initial_values)
     else:
       name_per_entry = name_prefix
     if data_shapes is None:
-      data_shapes = nest.map_structure(lambda x: None, initial_values)
+      data_shapes = nest.map_structure(lambda v: None, initial_values)
     nest.assert_same_structure(initial_values, name_per_entry)
     nest.assert_same_structure(initial_values, data_shapes)
     return nest.map_structure_with_tuple_paths(
