@@ -15,6 +15,7 @@ import argparse
 import contextlib
 import tensorflow as tf
 from tensorflow.python.framework import graph_io
+from tensorflow.python.util import nest
 
 import _setup_returnn_env  # noqa
 import returnn.__main__ as rnn
@@ -25,11 +26,11 @@ from returnn.util.basic import NotSpecified, Entity
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
 from returnn.tf.util.basic import Data, Dim, CollectionKeys
-from returnn.tf.network import TFNetwork
-from returnn.tf.layers.basic import LayerBase, register_layer_class
+from returnn.tf.network import TFNetwork, ExternData
+from returnn.tf.layers.basic import LayerBase, register_layer_class, SourceLayer
 from returnn.tf.layers.base import WrappedInternalLayer
 # noinspection PyProtectedMember
-from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
+from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell, _TemplateLayer
 
 
 config = None  # type: typing.Optional[Config]
@@ -104,7 +105,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     super(SubnetworkRecCellSingleStep, self).__init__(**kwargs)
     self.net_delayed_update = TFNetwork(
       name="%s(delayed-update)" % self.net.name,
-      extern_data=self.net.extern_data,
+      extern_data=ExternData({k: v.copy() for (k, v) in self.net.extern_data.data.items()}),
       train_flag=self.net.train_flag,
       search_flag=self.net.search_flag,
       eval_flag=False,
@@ -169,7 +170,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       return self._parent_dim_tags[dim_tag]
     rec_layer = self.parent_rec_layer
     assert isinstance(rec_layer, RecStepByStepLayer)
-    new_size, state_var = rec_layer.create_state_var(
+    state_var = rec_layer.create_state_var(
       name="base_size_%s" % tf_util.get_valid_scope_name_from_str(dim_tag.description),
       initial_value=dim_tag.dyn_size)
     dim_tag_dyn_size_ext = dim_tag.dyn_size_ext.copy()
@@ -206,7 +207,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       new_dim_tags.append(self.get_parent_dim_tag(dim_tag))
     output = output.copy_template_new_dim_tags(new_dim_tags=new_dim_tags, keep_special_axes=True)
     output.placeholder = layer.output.placeholder
-    x, state_var = rec_layer.create_state_var(
+    state_var = rec_layer.create_state_var(
       name="base_value_%s" % layer_name, initial_value=output.placeholder, data_shape=output)
     self._maybe_delay_tiled(state_var, output)
     layer = WrappedInternalLayer(name=layer_name, network=self.parent_net, output=output, base_layer=layer)
@@ -248,6 +249,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       ...
       return: tf.Tensor bool, True or False
     """
+    cell = self
     rec_layer = self.parent_rec_layer
     assert isinstance(rec_layer, RecStepByStepLayer)
 
@@ -256,31 +258,37 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       seq_len_info = None
     else:
       i, net_vars, acc_tas, seq_len_info = loop_vars
-      seq_len_info = rec_layer.create_state_vars_recursive(["end_flag", "dyn_seq_len"], seq_len_info)
+      seq_len_info_ = rec_layer.create_state_vars_recursive(["end_flag", "dyn_seq_len"], seq_len_info)
+      seq_len_info = nest.map_structure(lambda state_var: state_var.read(), seq_len_info_)
     initial_i = i
-    i, _ = rec_layer.create_state_var("i", initial_i)
+    i = rec_layer.create_state_var("i", initial_i).read()
 
     # Go through layers with state, check their (direct + indirect) dependencies,
     # whether they depend on any choice vars.
-    # noinspection PyProtectedMember
-    from returnn.tf.layers.rec import _TemplateLayer
     layers_with_state = set(self._initial_outputs.keys()).union(self._initial_extra_outputs.keys())
     layers_cur_iteration = set()
     layers_delayed = set()
+    layer_deps_by_layer = {}  # type: typing.Dict[str, typing.Set[str]]
     layers_delayed_deps = set()
+    prev_source_deps = set()  # for delayed
     for layer_name in layers_with_state:
       template_layer = self.layer_data_templates[layer_name]
       queue = [template_layer]
       visited = set()
       prev_frame_deps = set()
       choice_deps = set()
+      source_deps = set()
       while queue:
         cur = queue.pop(0)
         if cur in visited:
           continue
         visited.add(cur)
         if cur.layer_class_type is ChoiceStateVarLayer:
-          choice_deps.add(cur)
+          choice_deps.add(cur.name)
+          continue
+        if cur.layer_class_type is SourceLayer:
+          source_deps.add(cur.name)
+          continue
         for dep in cur.cur_frame_dependencies:
           if dep in visited:
             continue
@@ -289,12 +297,16 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
           assert isinstance(dep, _TemplateLayer)
           queue.append(dep)
         prev_frame_deps.update([dep.name for dep in cur.prev_frame_dependencies])
+      layer_deps_by_layer[layer_name] = prev_frame_deps
       if not choice_deps:
         layers_cur_iteration.add(layer_name)
       else:
+        print(
+          "Delayed: Layer %r depends on choices %r, deps on prev frame %r, deps on sources %r" % (
+            layer_name, choice_deps, prev_frame_deps, source_deps), file=log.v4)
+        prev_source_deps.update(source_deps)
         layers_delayed.add(layer_name)
         layers_delayed_deps.update(prev_frame_deps)
-      # TODO ...
 
     # See _SubnetworkRecCell.get_output().body().
     # net_vars is (prev_outputs_flat, prev_extra_flat).
@@ -310,40 +322,104 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     init_outputs = {k: v for k, v in zip(sorted(self._initial_outputs.keys()), init_outputs_flat)}
     init_extra = {k: v for k, v in zip(sorted(self._initial_extra_outputs.keys()), init_extra_flat)}
 
-    layers_prev_prev_output = {}
-    layers_prev_prev_extra = {}
-    for layer_name in layers_delayed.union(layers_delayed_deps):
-      if layer_name in init_outputs:
-        layers_prev_prev_output[layer_name], _ = rec_layer.create_state_var(
-          name="state_delayed/%s/output" % layer_name,
-          initial_value=init_outputs[layer_name],
-          data_shape=self.layer_data_templates[layer_name].output)
-      if layer_name in init_extra:
-        layers_prev_prev_extra[layer_name], _ = rec_layer.create_state_vars_recursive(
-          name_prefix="state_delayed/%s/extra" % layer_name,
-          initial_values=init_extra[layer_name])  # should be batch-major
+    class _LayerStateHelper:
+      def __init__(self, layer_name, prefix, dummy_init_state=False):
+        """
+        :param str layer_name:
+        :param str prefix:
+        :param tf.Tensor|None dummy_init_state:
+        """
+        self.layer_name = layer_name
+        self.prefix = prefix
 
-    with tf.name_scope("delayed_state_update"):
-      def _delayed_state_update():
-        pass  # TODO ...
+        initial_values = {}
+        data_shapes = {}
+        if layer_name in init_outputs or dummy_init_state is not None:
+          initial_values["output"] = init_outputs[layer_name] if layer_name in init_outputs else dummy_init_state
+          data_shapes["output"] = cell.layer_data_templates[layer_name].output
+        if layer_name in init_extra:
+          initial_values["extra"] = init_extra[layer_name]
+          data_shapes["extra"] = nest.map_structure(lambda: None, init_extra[layer_name])  # should be batch-major
+        assert isinstance(rec_layer, RecStepByStepLayer)
+        self.state_vars = rec_layer.create_state_vars_recursive(
+          name_prefix="%s/%s" % (prefix, layer_name),
+          initial_values=initial_values, data_shapes=data_shapes)
+        self.reads = None
 
-      # TODO...
-      delayed_state_update_op = tf.cond(tf.greater(i, initial_i), _delayed_state_update, tf.no_op)
+      def get_reads(self):
+        """
+        :return: same structure as state vars with the actual reads, type tf.Tensor. makes sure they are created once
+        """
+        if self.reads is not None:
+          return self.reads
+        self.reads = nest.map_structure(lambda state_var: state_var.read(), self.state_vars)
+        return self.reads
+
+      @staticmethod
+      def get_from_net(net, layer_name, prev=False):
+        """
+        :param TFNetwork net:
+        :param str layer_name:
+        :param bool prev:
+        :return: same structure as state vars, type tf.Tensor
+        """
+        layer = net.layers[("prev:" + layer_name) if prev else layer_name]
+        out = {}
+        if layer_name in init_outputs:
+          out["output"] = layer.output.placeholder
+        if layer_name in init_extra:
+          out["extra"] = layer.rec_vars_outputs
+        return out
+
+    with tf.name_scope("state_delayed"):
+      layers_prev_prev = {}
+      for layer_name in layers_delayed.union(layers_delayed_deps):
+        layers_prev_prev[layer_name] = _LayerStateHelper(layer_name, "state_delayed")
+      sources_prev = {}
+      for layer_name in prev_source_deps:
+        sources_prev[layer_name] = _LayerStateHelper(layer_name, "state_delayed_source", tf.zeros(()))
 
     with tf.name_scope("state"):
-      prev_outputs_data = [self.layer_data_templates[k].output for k in sorted(self._initial_outputs.keys())]
-      # TODO: this is incomplete/wrong. we need to differentiate the case where we need it to be delayed
-      #   and where it does not.
-      net_vars = rec_layer.create_state_vars_recursive(
-        name_prefix="state", initial_values=net_vars, data_shape=(prev_outputs_data, None))
+      layers_prev = {}
+      for layer_name in layers_cur_iteration:
+        layers_prev[layer_name] = _LayerStateHelper(layer_name, "state")
+
     # We are ignoring acc_tas (the tensor arrays).
 
     self._set_construction_state_in_loop()
 
-    # TODO Additionally, we should now do the pre-step of updating the delayed state vars,
-    #   i.e. prepare the update_ops.
-    self._construct_delayed_update()
-    # TODO now we should update net_vars accordingly
+    with tf.name_scope("delayed_state_update"):
+      def _delayed_state_update():
+        # TODO Additionally, we should now do the pre-step of updating the delayed state vars,
+        #   i.e. prepare the update_ops.
+        # TODO also need to assign potential extern_data... prev_source_deps
+        self._construct_custom(net=self.net_delayed_update)  # TODO ...
+        # TODO now we should update net_vars accordingly
+
+        # Make sure all state vars dependencies are read first before we reassign them.
+        control_deps = []
+        for layer_name in layers_delayed_deps:
+          control_deps += nest.flatten(layers_prev_prev[layer_name].get_reads())
+        for layer_name in prev_source_deps:
+          control_deps += nest.flatten(sources_prev[layer_name].get_reads())
+
+        # Now reassign the delayed state vars.
+        with tf.control_dependencies(control_deps):
+          ops = []
+          # Update all delayed state vars, i.e. prev:prev:layer to prev:layer.
+          for layer_name in layers_delayed.union(layers_delayed_deps):
+            if layer_name in layers_cur_iteration:
+              pass  # TODO Can simply copy it. "prev:layer" is already in it.
+
+            elif layer_name in layers_delayed:
+              if layer_name in init_outputs:
+                pass  # TODO ...
+              if layer_name in init_extra:
+                pass
+              pass  # TODO ...
+
+      # TODO...
+      delayed_state_update_op = tf.cond(tf.greater(i, initial_i), _delayed_state_update, tf.no_op)
 
     with tf.name_scope("cond"):
       rec_layer.create_state_var("cond", tf.constant(True))
@@ -365,9 +441,54 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     rec_layer.set_state_vars_final_values_recursive("state", net_vars)
     return res
 
-  def _construct_delayed_update(self):
-    # TODO ... self.net_delayed_update
-    pass
+  def _construct_custom(self, net, data, prev_outputs, prev_extra, needed_outputs):
+    # This is a simplified version of _SubnetworkRecCell._construct without search logic.
+    for key in data:
+      net.extern_data.data[key].placeholder = data[key]
+
+    prev_layers = {}  # type: typing.Dict[str,_TemplateLayer]
+    for name in set(list(prev_outputs.keys()) + list(prev_extra.keys())):
+      if "prev:%s" % name in self.net.layers:
+        continue
+      try:
+        net.layers["prev:%s" % name] = prev_layers[name] = self.layer_data_templates[name].copy_as_prev_time_frame(
+          prev_output=prev_outputs.get(name, None),
+          rec_vars_prev_outputs=prev_extra.get(name, None))
+      except Exception as exc:  # Some sanity check might have failed or so.
+        self._handle_construct_exception(description="in-loop init of prev layer %r" % name, exception=exc)
+        raise
+
+    # noinspection PyShadowingNames
+    def get_layer(name):
+      """
+      :param str name: layer name
+      :rtype: LayerBase
+      """
+      if name.startswith("prev:"):
+        return prev_layers[name[len("prev:"):]]
+      if name.startswith("base:"):
+        return self._get_parent_layer(name[len("base:"):])
+      # noinspection PyBroadException
+      try:
+        layer = net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
+        if name == "end":
+          # Special logic for the end layer, to always logical_or to the prev:end layer.
+          assert layer.output.shape == (), "%s: 'end' layer %r unexpected shape" % (self.parent_rec_layer, layer)
+          prev_end_layer = net.layers["prev:end"]
+          choices = layer.get_search_choices()
+          if choices:
+            prev_end_layer = choices.translate_to_this_search_beam(prev_end_layer)
+          with tf.name_scope("end_flag"):
+            layer.output.placeholder = tf.logical_or(prev_end_layer.output.placeholder, layer.output.placeholder)
+        return layer
+      except Exception as exc:
+        self._handle_construct_exception(description="in-loop construction of layer %r" % name, exception=exc)
+        raise
+
+    # Go through needed_outputs, e.g. "output".
+    # And prev_layers_needed because they might not be resolved otherwise.
+    for layer_name in sorted(needed_outputs):
+      get_layer(layer_name)
 
   def _construct(self, prev_outputs, prev_extra, i, data=None,
                  inputs_moved_out_tas=None, needed_outputs=("output",)):
@@ -825,7 +946,13 @@ class RecStepByStepLayer(RecLayer):
       :rtype: tf.Operation
       """
       assert self.final_value is not None
-      value = self.final_value
+      return self.assign(self.final_value)
+
+    def assign(self, value):
+      """
+      :return: op which does self.var.assign(value) (value maybe converted)
+      :rtype: tf.Operation
+      """
       from returnn.tf.util.basic import find_ops_path_output_to_input
       feed_tensors = []
       for data in self.parent.network.extern_data.data.values():
@@ -949,7 +1076,7 @@ class RecStepByStepLayer(RecLayer):
     :param str name:
     :param tf.Tensor|None initial_value: assumes batch-major, if data_shape is not given
     :param Data|None data_shape:
-    :rtype: (tf.Tensor,RecStepByStepLayer.StateVar)
+    :rtype: RecStepByStepLayer.StateVar
     """
     assert name not in self.state_vars
     assert data_shape or initial_value is not None
@@ -969,7 +1096,7 @@ class RecStepByStepLayer(RecLayer):
       initial_value.set_shape(data_shape.batch_shape)
     var = self.StateVar(parent=self, name=name, initial_value=initial_value, data_shape=data_shape)
     self.state_vars[name] = var
-    return var.read(), var
+    return var
 
   def set_state_var_final_value(self, name, final_value):
     """
@@ -978,47 +1105,30 @@ class RecStepByStepLayer(RecLayer):
     """
     self.state_vars[name].set_final_value(final_value)
 
-  def create_state_vars_recursive(self, name_prefix, initial_values, data_shape=None):
+  def create_state_vars_recursive(self, name_prefix, initial_values, data_shapes=None):
     """
-    :param str|list[str] name_prefix:
+    :param str|list[str] name_prefix: single or same structure as initial_values
     :param T initial_values:
-    :param data_shape: same structure as initial_values, but values are of instance :class:`Data`
-    :return: same as initial_values, but the variables
-    :rtype: T
+    :param data_shapes: same structure as initial_values or None, but values are of instance :class:`Data`
+    :return: same as initial_values, but the state vars
     """
-    from returnn.util.basic import make_seq_of_type
-    if isinstance(name_prefix, (tuple, list)):
-      assert isinstance(initial_values, (tuple, list))
-      assert len(name_prefix) == len(initial_values)
-      if data_shape is not None:
-        assert isinstance(data_shape, (tuple, list)) and len(data_shape) == len(initial_values)
-      return make_seq_of_type(
-        type(initial_values),
-        [self.create_state_vars_recursive(
-          name_prefix=name_prefix[i], initial_values=v, data_shape=data_shape[i] if data_shape else None)
-         for i, v in enumerate(initial_values)])
-    if initial_values is None:
-      assert data_shape is None
-      return None
-    if isinstance(initial_values, tf.Tensor):
-      x, _ = self.create_state_var(name=name_prefix, initial_value=initial_values, data_shape=data_shape)
-      return x
-    if isinstance(initial_values, (tuple, list)):
-      if data_shape is not None:
-        assert isinstance(data_shape, (tuple, list)) and len(data_shape) == len(initial_values)
-      return make_seq_of_type(
-        type(initial_values),
-        [self.create_state_vars_recursive(
-          name_prefix="%s_%i" % (name_prefix, i), initial_values=v, data_shape=data_shape[i] if data_shape else None)
-         for i, v in enumerate(initial_values)])
-    if isinstance(initial_values, dict):
-      if data_shape is not None:
-        assert isinstance(data_shape, dict) and set(data_shape.keys()) == set(initial_values.keys())
-      return {
-        k: self.create_state_vars_recursive(
-          name_prefix="%s_%s" % (name_prefix, k), initial_values=v, data_shape=data_shape[k] if data_shape else None)
-        for k, v in initial_values.items()}
-    raise TypeError("unhandled type %r" % (initial_values,))
+    def _map_state_vars(path, name, initial_value, data_shape):
+      assert isinstance(initial_value, tf.Tensor)
+      assert data_shape is None or isinstance(data_shape, Data)
+      if not name:
+        name = "/".join(map(str, (name_prefix,) + path))
+      return self.create_state_var(name=name, initial_value=initial_value, data_shape=data_shape)
+
+    if isinstance(name_prefix, str):
+      name_per_entry = nest.map_structure(lambda: None, initial_values)
+    else:
+      name_per_entry = name_prefix
+    if data_shapes is None:
+      data_shapes = nest.map_structure(lambda x: None, initial_values)
+    nest.assert_same_structure(initial_values, name_per_entry)
+    nest.assert_same_structure(initial_values, data_shapes)
+    return nest.map_structure_with_tuple_paths(
+      _map_state_vars, name_per_entry, initial_values, data_shapes)
 
   def set_state_vars_final_values_recursive(self, name_prefix, final_values):
     """
