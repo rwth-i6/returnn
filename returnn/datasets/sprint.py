@@ -352,6 +352,8 @@ class SprintDatasetBase(Dataset):
       # 'classes' is always the alignment
       assert targets["classes"].shape == (num_frames,), (  # is in format (time,)
         "Number of targets %s does not equal to number of features %s" % (targets["classes"].shape, (num_frames,)))
+    if "speaker_name" in targets:
+      targets["speaker_name"] = targets["speaker_name"].decode("utf8").strip()
     if "orth" in targets:
       targets["orth"] = targets["orth"].decode("utf8").strip()
     if "orth" in targets and self.orth_post_process:
