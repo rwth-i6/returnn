@@ -89,7 +89,7 @@ use_tensorflow = True
 """
 
 
-rec_transducer_time_sync_delayed_data_config = """
+rec_transducer_time_sync_delayed_config = """
 #!rnn.py
 network = {
     "encoder": {"class": "linear", "from": "data", "activation": "sigmoid", "n_out": 3},
@@ -100,7 +100,7 @@ network = {
         "prob": {"class": "softmax", "from": "s", "loss": "ce", "target": "classes"},
         "output": {"class": "choice", "beam_size": 4, "from": "prob", "target": "classes", "initial_output": 0},
         "embed": {"class": "linear", "from": "output", "activation": "sigmoid", "n_out": 3},
-        "s2": {"class": "rec", "unit": "lstm", "from": ["embed", "prev:embed", "data:source"], "n_out": 3},
+        "s2": {"class": "rec", "unit": "lstm", "from": ["embed", "prev:s"], "n_out": 3},
       }
     },
 }
@@ -160,10 +160,10 @@ def test_compile_tf_graph_transducer_time_sync_recurrent_step():
   run(*args)
 
 
-def test_compile_tf_graph_transducer_time_sync_delayed_data_recurrent_step():
+def test_compile_tf_graph_transducer_time_sync_delayed_recurrent_step():
   tmp_dir = tempfile.mkdtemp()
   with open(os.path.join(tmp_dir, "returnn.config"), "wt") as config:
-    config.write(rec_transducer_time_sync_delayed_data_config)
+    config.write(rec_transducer_time_sync_delayed_config)
   args = [
     "tools/compile_tf_graph.py",
     "--output_file",
