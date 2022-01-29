@@ -2257,7 +2257,10 @@ class RandIntLayer(LayerBase):
     """
     super(RandIntLayer, self).__init__(**kwargs)
     seed = seed if seed is not None else self.network.random.randint(2 ** 31)
-    shape_ = [d.get_dim_value() for d in self.output.dim_tags]
+    batch = self.output.batch or self.get_batch_info()
+    shape_ = [
+      d.get_for_batch_ctx(batch, self.network.control_flow_ctx).get_dim_value()
+      for d in self.output.dim_tags]
     self.minval = minval
     self.maxval = maxval
     if isinstance(minval, LayerBase):
@@ -2296,9 +2299,11 @@ class RandIntLayer(LayerBase):
       d["minval"] = get_layer(d["minval"])
 
   @classmethod
-  def get_out_data_from_opts(cls, name, shape, maxval, minval=0, dtype="int32", sparse_dim=None, **kwargs):
+  def get_out_data_from_opts(cls, name, network, shape, maxval, minval=0, dtype="int32", sparse_dim=None,
+                             **kwargs):
     """
     :param str name:
+    :param returnn.tf.network.TFNetwork network:
     :param tuple[Dim|int]|list[Dim|int] shape: desired shape of output tensor
     :param int|LayerBase maxval: upper bound (exclusive) on range of random values
     :param int|LayerBase minval: lower bound (inclusive) on range of random values
@@ -2308,6 +2313,7 @@ class RandIntLayer(LayerBase):
     """
     from returnn.tf.util.data import Dim
     dim_tags = []
+    batch = None
     for i, d in enumerate(shape):
       if isinstance(d, Dim):
         pass  # good
@@ -2318,8 +2324,16 @@ class RandIntLayer(LayerBase):
           dimension=d)
       else:
         raise TypeError("Layer %r: invalid type %s in shape %r" % (name, type(d), shape))
+      if not batch and d.batch:
+        batch = d.batch
       dim_tags.append(d)
-    return Data(name="%s_output" % name, dim_tags=dim_tags, dtype=dtype, sparse_dim=sparse_dim)
+    if not batch:
+      batch = network.get_global_batch_info()
+    ctx = network.control_flow_ctx
+    dim_tags = [d.get_for_batch_ctx(batch, ctx) for d in dim_tags]
+    return Data(
+      name="%s_output" % name, dim_tags=dim_tags, dtype=dtype, sparse_dim=sparse_dim,
+      batch=batch, control_flow_ctx=ctx)
 
 
 class RangeLayer(LayerBase):
