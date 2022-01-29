@@ -6523,13 +6523,14 @@ def test_contrastive_loss():
         "cos_similarity": {
           "class": "subnetwork", "from": ["sampled_frames", "enc_masked_frames_flat"], "concat_sources": False,
           "subnetwork": {
-            "dot": {"class": "dot", "from": ["data:0", "data:1"], "reduce": enc_feat_dim},
             # [B_M, K+1, F] * [B_M, F] -> [B_M, K+1]
-            "norm_a": {"class": "math_norm", "from": "data:0", "axis": enc_feat_dim, "p": 2},
-            # [B_M, K+1, F] -> [B_M, K+1]
-            "norm_b": {"class": "math_norm", "from": "data:1", "axis": enc_feat_dim, "p": 2},  # [B_M, F] -> [B_M]
-            "output": {"class": "eval", "from": ["dot", "norm_a", "norm_b"],
-                       "eval": "source(0) / (source(1) * source(2))"},  # [B_M, K+1]
+            "dot": {"class": "dot", "from": ["data:0", "data:1"], "reduce": enc_feat_dim},
+            "norm_a_sq_": {"class": "eval", "from": "data:0", "eval": "source(0) ** 2"},
+            "norm_a_sq": {"class": "reduce", "mode": "sum", "from": "norm_a_sq_", "axes": enc_feat_dim},  # [B_M, K+1]
+            "norm_b_sq_": {"class": "eval", "from": "data:1", "eval": "source(0) ** 2"},
+            "norm_b_sq": {"class": "reduce", "mode": "sum", "from": "norm_b_sq_", "axes": enc_feat_dim},  # [B_M]
+            "output": {"class": "eval", "from": ["dot", "norm_a_sq", "norm_b_sq"],
+                       "eval": "source(0) * tf.minimum(tf.math.rsqrt(source(1) * source(2)), 1./1e-8)"},  # [B_M, K+1]
           },
         },
 
