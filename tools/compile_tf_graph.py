@@ -336,12 +336,12 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       k: util.dict_zip(sorted(self._initial_extra_outputs[k]), v)
       for (k, v) in zip(sorted(self._initial_extra_outputs), init_extra_flat)}
 
+    # noinspection PyShadowingNames
     class _LayerStateHelper:
       def __init__(self, layer_name, prefix):
         """
         :param str layer_name:
         :param str prefix:
-        :param tf.Tensor|None dummy_init_state:
         """
         self.layer_name = layer_name
         self.prefix = prefix
@@ -361,6 +361,9 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
         self._reads_once = None
 
       def reset_reads_once(self):
+        """
+        Next get_reads_once will create new op.
+        """
         self._reads_once = None
 
       def get_reads_once(self):
@@ -373,6 +376,9 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
         return self._reads_once
 
       def reads(self):
+        """
+        :return: same structure as state vars with the actual reads, type tf.Tensor.
+        """
         return nest.map_structure(lambda state_var: state_var.read(), self.state_vars)
 
       def assigns_flat(self, state):
@@ -420,14 +426,14 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
 
     self._set_construction_state_in_loop()
 
-    {
-      layer_name: layers_prev[layer_name].get_reads_once()
-      for layer_name in layers_cur_iteration}
-    {
-      layer_name: layers_prev_prev[layer_name].get_reads_once()
-      for layer_name in layers_delayed.union(layers_delayed_prev_deps)}
+    # Create read ops now to maybe use them in the conditional branch.
+    for layer_name in layers_cur_iteration:
+      layers_prev[layer_name].get_reads_once()
+    for layer_name in layers_delayed.union(layers_delayed_prev_deps):
+      layers_prev_prev[layer_name].get_reads_once()
 
     with tf.name_scope("delayed_state_update"):
+      # noinspection PyShadowingNames
       def _delayed_state_update():
         self._construct_custom(
           net=self.net_delayed_update,
@@ -523,6 +529,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
 
     prev_layers = {}  # type: typing.Dict[str,_TemplateLayer]
 
+    # noinspection PyShadowingNames
     def _add_predefined_layer(layer_name, state_dict, prev):
       assert isinstance(state_dict, dict)
       assert set(state_dict.keys()).issubset({"output", "extra"})
@@ -1273,6 +1280,9 @@ class RecStepByStepLayer(RecLayer):
     raise Exception("None of the loop state vars do have a batch-dim: %s" % self.state_vars)
 
   class StochasticVar:
+    """
+    Manages a stochastic variable, which corresponds to a :class:`ChoiceLayer`.
+    """
     def __init__(self, parent_rec_layer, layer_template):
       """
       :param RecStepByStepLayer parent_rec_layer:
@@ -1315,6 +1325,10 @@ class RecStepByStepLayer(RecLayer):
       self.score_state_var.set_final_value(final_value=scores_in)
 
     def get_choice(self):
+      """
+      :return: the choice value
+      :rtype: tf.Tensor
+      """
       return self.choice_state_var.read()
 
   def add_stochastic_var(self, name):
