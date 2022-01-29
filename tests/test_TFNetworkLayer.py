@@ -6555,7 +6555,7 @@ def test_contrastive_loss():
     net.initialize_params(session)
     loss_v = session.run(loss, feed_dict=make_feed_dict(net.extern_data, same_time=True))
     print("loss:", loss_v)
-    # assert numpy.isfinite(loss_v)  -- not sure?
+    assert numpy.isfinite(loss_v)
 
 
 if __name__ == "__main__":
