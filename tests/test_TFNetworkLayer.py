@@ -6417,6 +6417,7 @@ def test_contrastive_loss():
   enc_feat_dim = FeatureDim("encoder_dim", 20)
 
   dim_neg_samples = SpatialDim("neg_samples", 10)  # 100
+  dim_expand = SpatialDim("expand_dim", 1)
   contrastive_loss_temp = 0.1
   contrastive_loss_factor = 1.
 
@@ -6499,9 +6500,9 @@ def test_contrastive_loss():
                                  "shape": [dim_masked_flat, dim_neg_samples]},  # [B_M, K] -> 0..B_T-1
         "sampled_frames_": {"class": "gather", "from": "input_flat", "position": "samples_rand_indices", "axis": "B"},
         # [B_M, K, F]
-        "input_masked_frames_flat_expand": {"class": "expand_dims", "axis": "spatial",
+        "input_masked_frames_flat_expand": {"class": "expand_dims", "axis": "spatial", "dim": dim_expand,
                                             "from": "input_masked_frames_flat"},  # [B_M, 1, F]
-        "sampled_frames": {"class": "concat", "from": [("input_masked_frames_flat_expand", "dim:1"),
+        "sampled_frames": {"class": "concat", "from": [("input_masked_frames_flat_expand", dim_expand),
                                                        ("sampled_frames_", dim_neg_samples)]},  # [B_M, K+1, F]
 
         # Cosine similarity between sampled frames and masked encoder frames
@@ -6520,9 +6521,10 @@ def test_contrastive_loss():
 
         # The contrastive loss is the negative log-likelihood of the softmax of the cosine similarity
         "log_sm_cos_sim": {
-          "class": "softmax_over_spatial", "from": "cos_similarity", "axis": dim_neg_samples, "log_space": True,
-          "energy_factor": contrastive_loss_temp},  # [B_M, K+1]
-        "log_likelihood": {"class": "gather", "from": "log_sm_cos_sim", "axis": 1 + dim_neg_samples, "position": 0},
+          "class": "softmax_over_spatial", "from": "cos_similarity", "axis": dim_expand + dim_neg_samples,
+          "log_space": True, "energy_factor": contrastive_loss_temp},  # [B_M, K+1]
+        "log_likelihood": {
+          "class": "gather", "from": "log_sm_cos_sim", "axis": dim_expand + dim_neg_samples, "position": 0},
         # [B_M]
         "neg_los_likelihood": {"class": "eval", "from": "log_likelihood", "eval": "-source(0)"},  # [B_M]
         "output": {"class": "copy", "from": "neg_los_likelihood"},
@@ -6534,7 +6536,7 @@ def test_contrastive_loss():
   }
 
   with make_scope() as session:
-    config = Config({"extern_data": {"data": {"dim": 7}}})
+    config = Config({"extern_data": {"data": {"dim": 7}, "classes": {"dim": 2}}})
     net = TFNetwork(config=config, train_flag=True)
     net.construct_from_dict(net_dict)
     loss = net.get_total_loss()
