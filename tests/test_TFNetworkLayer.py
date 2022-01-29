@@ -6487,7 +6487,7 @@ def test_contrastive_loss():
                                    "set_dim_tags": {"B": dim_masked_flat}},  # [B_M, F]
         # We take the non-masked input of the masked frames -> q_t in the paper.
         "input_masked_frames": {"class": "masked_computation", "mask": "base:input_mask", "from": "base:input",
-                                "unit": {"class": "copy"}},  # [B, T_M, F]
+                                "unit": {"class": "copy", "from": "data"}},  # [B, T_M, F]
         "input_masked_frames_flat_": {"class": "flatten_batch", "from": "input_masked_frames"},  # [B_M, F]
         "input_masked_frames_flat": {"class": "reinterpret_data", "from": "input_masked_frames_flat_",
                                      "set_dim_tags": {"B": dim_masked_flat}},  # [B_M, F]
