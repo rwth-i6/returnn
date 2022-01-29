@@ -1734,6 +1734,16 @@ def test_shift_layer():
     assert_equal((v[1:,shift_amount:,:] == 1).all(), True)
 
 
+def test_ReinterpretDataLayer_change_batch_to_spatial():
+  new_spatial_dim = SpatialDim("new-spatial")
+  net_dict = {
+    "output": {"class": "reinterpret_data", "from": "data", "set_dim_tags": {"B": new_spatial_dim}}}
+  config = Config({"extern_data": {"data": {"dim": 7}}})
+  with make_scope():
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+
+
 def test_layer_base_get_out_data_from_opts():
   with make_scope() as session:
     config = Config()
