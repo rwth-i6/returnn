@@ -6469,6 +6469,7 @@ def test_contrastive_loss():
   net_dict = {
     "input": {"class": "linear", "from": "data", "activation": None, "out_dim": enc_feat_dim},
 
+    # True -> should be masked out by 0., False -> keep
     "input_mask": {
       "class": "eval", "from": "input",
       "eval": _get_mask_eval_layer,
