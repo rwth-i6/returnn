@@ -6481,7 +6481,7 @@ def test_contrastive_loss():
       "class": "subnetwork", "from": [],
       "subnetwork": {
         "enc_masked_frames": {"class": "masked_computation", "mask": "base:input_mask", "from": "base:encoder",
-                              "unit": {"class": "copy"}},  # [B, T_M, F]
+                              "unit": {"class": "copy", "from": "data"}},  # [B, T_M, F]
         "enc_masked_frames_flat_": {"class": "flatten_batch", "from": "enc_masked_frames"},  # [B_M, F]
         "enc_masked_frames_flat": {"class": "reinterpret_data", "from": "enc_masked_frames_flat_",
                                    "set_dim_tags": {"B": dim_masked_flat}},  # [B_M, F]
