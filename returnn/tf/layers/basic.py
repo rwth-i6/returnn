@@ -3872,7 +3872,7 @@ class ExpandDimsLayer(_ConcatInputLayer):
     :param str|int axis: axis to add, e.g. "F"|"feature" or "spatial"|"time"|"T".
       if this is an integer, the input data is first converted into batch-major mode,
       and then this is counted with batch-dim.
-    :param int dim: dimension of new axis (1 by default)
+    :param int|Dim dim: dimension of new axis (1 by default)
     """
     super(ExpandDimsLayer, self).__init__(**kwargs)
     data = self.input_data
@@ -3880,7 +3880,8 @@ class ExpandDimsLayer(_ConcatInputLayer):
       data = data.copy_as_batch_major()
     axis = self._get_axis(data=data, axis=axis)
     from returnn.tf.util.basic import expand_dims_unbroadcast
-    self.output.placeholder = expand_dims_unbroadcast(data.placeholder, axis=axis, dim=dim)
+    self.output.placeholder = expand_dims_unbroadcast(
+      data.placeholder, axis=axis, dim=dim.get_dim_value() if isinstance(dim, Dim) else dim)
 
   @classmethod
   def _get_axis(cls, data, axis):
@@ -3914,7 +3915,7 @@ class ExpandDimsLayer(_ConcatInputLayer):
     """
     :param str name:
     :param str axis:
-    :param int dim:
+    :param int|Dim dim:
     :param list[LayerBase] sources:
     :rtype: Data
     """
@@ -3924,10 +3925,13 @@ class ExpandDimsLayer(_ConcatInputLayer):
       data = data.copy_as_batch_major()
     axis = cls._get_axis(data=data, axis=axis)
 
-    new_dim = Dim(
-      kind=Dim.Types.Feature if init_axis.lower() == "f" else Dim.Types.Spatial,
-      description="%s_expand_dims" % name,
-      dimension=dim)
+    if isinstance(dim, Dim):
+      new_dim = dim
+    else:
+      new_dim = Dim(
+        kind=Dim.Types.Feature if init_axis.lower() == "f" else Dim.Types.Spatial,
+        description="%s_expand_dims" % name,
+        dimension=dim)
     data = data.copy_template(name="%s_output" % name)
     data = data.copy_add_dim_by_tag(new_dim, unbroadcast=True, axis=axis)
     if isinstance(init_axis, str):
