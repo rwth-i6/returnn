@@ -2057,6 +2057,16 @@ class BatchInfo:
         value = optional_mul(*sizes)  # type: typing.Union[tf.Tensor,int]
       self._dim = value
       return value
+    if all(isinstance(dim, (BatchInfo.PackedDim, BatchInfo.GlobalBatchDim)) for dim in self.virtual_dims):
+      dims = [dim for dim in self.virtual_dims if isinstance(dim, BatchInfo.PackedDim)]
+      if len(dims) > 1:
+        raise NotImplementedError("%s: currently only support one packed dim but have %r" % (self, dims))
+      dim, = dims
+      assert isinstance(dim, BatchInfo.PackedDim)
+      with same_control_flow_ctx(dim.dim_tag.dyn_size_ext.placeholder):
+        value = tf.reduce_sum(dim.dim_tag.dyn_size_ext.placeholder)
+      self._dim = value
+      return value
     raise NotImplementedError("%r.dim()" % self)
 
   @dim.setter
