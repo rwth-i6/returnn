@@ -264,7 +264,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       seq_len_info = None
     else:
       i, net_vars, acc_tas, seq_len_info = loop_vars
-      seq_len_info_ = rec_layer.create_state_vars_recursive(["end_flag", "dyn_seq_len"], seq_len_info)
+      seq_len_info_ = rec_layer.create_state_vars_recursive(("end_flag", "dyn_seq_len"), seq_len_info)
       seq_len_info = nest.map_structure(lambda state_var: state_var.read(), seq_len_info_)
     initial_i = i
     i = rec_layer.create_state_var("i", initial_i).read()
@@ -513,7 +513,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       else:
         i, net_vars, acc_tas, seq_len_info = res
     if seq_len_info:
-      state_update_ops += rec_layer.assign_state_vars_recursive_flatten(["end_flag", "dyn_seq_len"], seq_len_info)
+      state_update_ops += rec_layer.assign_state_vars_recursive_flatten(("end_flag", "dyn_seq_len"), seq_len_info)
     state_update_ops.append(rec_layer.state_vars["i"].assign(i))
 
     # Assign new state.
@@ -1199,7 +1199,7 @@ class RecStepByStepLayer(RecLayer):
 
   def create_state_vars_recursive(self, name_prefix, initial_values, data_shapes=None):
     """
-    :param str|list[str] name_prefix: single or same structure as initial_values
+    :param str|tuple[str] name_prefix: single or same structure as initial_values
     :param T initial_values:
     :param data_shapes: same structure as initial_values or None, but values are of instance :class:`Data`
     :return: same as initial_values, but the state vars
@@ -1224,7 +1224,7 @@ class RecStepByStepLayer(RecLayer):
 
   def assign_state_vars_recursive_flatten(self, name_prefix, values):
     """
-    :param str|list[str] name_prefix:
+    :param str|tuple[str] name_prefix:
     :param T values:
     :rtype: list[tf.Operation]
     """
