@@ -3105,6 +3105,27 @@ def test_ConvLayer_get_valid_out_dim():
   assert_equal(ConvLayer.calc_out_dim(in_dim=2, stride=1, filter_size=3, padding="valid"), 0)
 
 
+def test_LengthLayer_batch():
+  net_dict = {
+    "input_flat": {"class": "flatten_batch", "from": "data"},  # [B_T,F]
+    "output": {"class": "length", "from": "input_flat", "axis": "B"},  # scalar -> B_T
+  }
+  with make_scope() as session:
+    config = Config({"extern_data": {"data": {"dim": 10}}})
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    in_ = net.extern_data.get_default_input_data()
+    flat = net.layers["input_flat"].output
+    out = net.get_default_output_layer().output
+    in_shape_v, in_lens_v, flat_shape_v, out_v = session.run(
+      (tf.shape(in_.placeholder), in_.get_sequence_lengths(),
+       tf.shape(flat.placeholder), out.placeholder),
+      feed_dict=make_feed_dict(net.extern_data))
+    assert in_lens_v.shape == (in_shape_v[0],)
+    assert max(in_lens_v) == in_shape_v[1]
+    assert sum(in_lens_v) == flat_shape_v[0] == out_v
+
+
 def test_RandIntLayer():
   with make_scope() as session:
     from returnn.tf.util.data import Dim
