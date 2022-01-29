@@ -6421,6 +6421,7 @@ def test_contrastive_loss():
   dim_expand = SpatialDim("expand_dim", 1)
   contrastive_loss_temp = 0.1
   contrastive_loss_factor = 1.
+  seed = 1
 
   def _mask(x, axis, pos, max_amount):
     """
@@ -6433,7 +6434,7 @@ def test_contrastive_loss():
     from returnn.tf.compat import v1 as tf
     n_batch = tf.shape(x)[0]
     dim = tf.shape(x)[axis]
-    amount = tf.random_uniform(shape=(n_batch,), minval=1, maxval=max_amount + 1, dtype=tf.int32)
+    amount = tf.random_uniform(shape=(n_batch,), minval=1, maxval=max_amount + 1, seed=seed, dtype=tf.int32)
     pos2 = tf.minimum(pos + amount, dim)
     idxs = tf.expand_dims(tf.range(0, dim), 0)  # (1,dim)
     pos_bc = tf.expand_dims(pos, 1)  # (batch,1)
@@ -6452,10 +6453,10 @@ def test_contrastive_loss():
     """
     from returnn.tf.compat import v1 as tf
     n_batch = tf.shape(x)[0]
-    num = tf.random_uniform(shape=(n_batch,), minval=min_num, maxval=max_num + 1, dtype=tf.int32)
+    num = tf.random_uniform(shape=(n_batch,), minval=min_num, maxval=max_num + 1, seed=seed, dtype=tf.int32)
     # https://github.com/tensorflow/tensorflow/issues/9260
     # https://timvieira.github.io/blog/post/2014/08/01/gumbel-max-trick-and-weighted-reservoir-sampling/
-    z = -tf.log(-tf.log(tf.random_uniform((n_batch, tf.shape(x)[axis]), 0, 1)))
+    z = -tf.log(-tf.log(tf.random_uniform((n_batch, tf.shape(x)[axis]), 0, 1, seed=seed)))
     _, indices = tf.nn.top_k(z, tf.reduce_max(num))
     return _mask(x, axis=axis, pos=indices[:, 0], max_amount=max_dims)
 
@@ -6550,6 +6551,7 @@ def test_contrastive_loss():
     net.construct_from_dict(net_dict)
     loss = net.get_total_loss()
 
+    tf_compat.v1.set_random_seed(1)
     net.initialize_params(session)
     loss_v = session.run(loss, feed_dict=make_feed_dict(net.extern_data, same_time=True))
     print("loss:", loss_v)
