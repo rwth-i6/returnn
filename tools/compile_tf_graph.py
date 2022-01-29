@@ -115,6 +115,9 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       control_flow_ctx=self.net.control_flow_ctx,
       absolute_name_prefix=self.net.get_absolute_name_prefix(),
       parent_net=self.parent_net)
+    self.net_delayed_update.is_root_in_ctx = True
+    self.delayed_state_update_op = None  # type: typing.Optional[tf.Operation]
+    self.state_update_op = None  # type: typing.Optional[tf.Operation]
 
   def _maybe_delay_tiled(self, state_var, output):
     """
@@ -355,16 +358,37 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
         self.state_vars = rec_layer.create_state_vars_recursive(
           name_prefix="%s/%s" % (prefix, layer_name),
           initial_values=initial_values, data_shapes=data_shapes)
-        self.reads = None
+        self._reads_once = None
 
-      def get_reads(self):
+      def reset_reads_once(self):
+        self._reads_once = None
+
+      def get_reads_once(self):
         """
         :return: same structure as state vars with the actual reads, type tf.Tensor. makes sure they are created once
         """
-        if self.reads is not None:
-          return self.reads
-        self.reads = nest.map_structure(lambda state_var: state_var.read(), self.state_vars)
-        return self.reads
+        if self._reads_once is not None:
+          return self._reads_once
+        self._reads_once = self.reads()
+        return self._reads_once
+
+      def reads(self):
+        return nest.map_structure(lambda state_var: state_var.read(), self.state_vars)
+
+      def assigns_flat(self, state):
+        """
+        :param state: same structure as state vars
+        :return: list of tf.Assign ops
+        :rtype: list[tf.Operation]
+        """
+        def _map(state_var, state_value):
+          assert isinstance(state_var, RecStepByStepLayer.StateVar)
+          assert isinstance(state_value, tf.Tensor)
+          return state_var.assign(state_value)
+
+        assert isinstance(rec_layer, RecStepByStepLayer)
+        nest.assert_same_structure(state, self.state_vars)
+        return nest.flatten(nest.map_structure(_map, self.state_vars, state))
 
       @staticmethod
       def get_from_net(net, layer_name, prev=False):
@@ -397,25 +421,28 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     self._set_construction_state_in_loop()
 
     {
-      layer_name: layers_prev[layer_name].get_reads()
+      layer_name: layers_prev[layer_name].get_reads_once()
       for layer_name in layers_cur_iteration}
+    {
+      layer_name: layers_prev_prev[layer_name].get_reads_once()
+      for layer_name in layers_delayed.union(layers_delayed_prev_deps)}
 
     with tf.name_scope("delayed_state_update"):
       def _delayed_state_update():
         self._construct_custom(
           net=self.net_delayed_update,
           prev_state={
-            layer_name: layers_prev_prev[layer_name].get_reads()
-            for layer_name in layers_delayed_prev_deps},
+            layer_name: layers_prev_prev[layer_name].get_reads_once()
+            for layer_name in layers_delayed.union(layers_delayed_prev_deps)},
           cur_state={
-            layer_name: layers_prev[layer_name].get_reads()
+            layer_name: layers_prev[layer_name].get_reads_once()
             for layer_name in layers_cur_iteration},
           needed_outputs=layers_delayed)
 
         # Make sure all state vars dependencies are read first before we reassign them.
         control_deps = []
-        for layer_name in layers_delayed_prev_deps:
-          control_deps += nest.flatten(layers_prev_prev[layer_name].get_reads())
+        for layer_name in layers_delayed.union(layers_delayed_prev_deps):
+          control_deps += nest.flatten(layers_prev_prev[layer_name].get_reads_once())
         for layer_name in choice_layers:
           control_deps.append(self.net_delayed_update.layers[layer_name].output.placeholder)
 
@@ -425,26 +452,49 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
           # Update all delayed state vars, i.e. prev:prev:layer to prev:layer.
           for layer_name in layers_delayed.union(layers_delayed_prev_deps):
             if layer_name in layers_cur_iteration:
-              pass  # TODO Can simply copy it. "prev:layer" is already in it.
-
+              # Can simply copy it. "prev:layer" is already in it.
+              state = layers_prev[layer_name].get_reads_once()
             else:
               assert layer_name in layers_delayed
-              if layer_name in init_outputs:
-                pass  # TODO ...
-              if layer_name in init_extra:
-                pass
-              pass  # TODO ...
+              state = _LayerStateHelper.get_from_net(self.net_delayed_update, layer_name)
+            ops += layers_prev_prev[layer_name].assigns_flat(state)
 
         return tf.group(*ops)
 
-      # TODO...
-      delayed_state_update_op = tf.cond(tf.greater(i, initial_i), _delayed_state_update, tf.no_op)
+      self.delayed_state_update_op = tf.cond(tf.greater(i, initial_i), _delayed_state_update, tf.no_op)
 
-      # TODO now we should update net_vars accordingly
+      # We should not use control dependencies on delayed_state_update_op
+      # because delayed_state_update_op will be update_ops and therefore executed first.
 
+      # Now we should update net_vars accordingly
+
+      for v in layers_prev_prev.values():
+        v.reset_reads_once()
+        v.get_reads_once()
+
+      outputs_flat = []
+      for layer_name in sorted(self._initial_outputs):
+        if layer_name in layers_cur_iteration:
+          outputs_flat.append(layers_prev[layer_name].get_reads_once()["output"])
+        else:
+          assert layer_name in layers_delayed
+          outputs_flat.append(layers_prev_prev[layer_name].get_reads_once()["output"])  # This is updated now.
+      extra_flat = []
+      for layer_name, v in sorted(self._initial_extra_outputs.items()):
+        if layer_name in layers_cur_iteration:
+          state = layers_prev[layer_name].get_reads_once()["extra"]
+        else:
+          assert layer_name in layers_delayed
+          state = layers_prev_prev[layer_name].get_reads_once()["extra"]  # This is updated now.
+        assert isinstance(v, dict) and isinstance(state, dict)
+        assert set(state.keys()) == set(v.keys())
+        extra_flat.append(util.sorted_values_from_dict(state))
+      net_vars = (outputs_flat, extra_flat)
+
+    state_update_ops = []
     with tf.name_scope("cond"):
-      rec_layer.create_state_var("cond", tf.constant(True))
-      rec_layer.set_state_var_final_value("cond", cond(i, net_vars, acc_tas, seq_len_info, allow_inf_max_len=True))
+      s = rec_layer.create_state_var("cond", tf.constant(True))
+      state_update_ops.append(s.assign(cond(i, net_vars, acc_tas, seq_len_info, allow_inf_max_len=True)))
 
     with tf.name_scope("body"):
       # The body function is locally defined in _SubnetworkRecCell.get_output().
@@ -457,9 +507,15 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       else:
         i, net_vars, acc_tas, seq_len_info = res
     if seq_len_info:
-      rec_layer.set_state_vars_final_values_recursive(["end_flag", "dyn_seq_len"], seq_len_info)
-    rec_layer.set_state_var_final_value("i", i)
-    rec_layer.set_state_vars_final_values_recursive("state", net_vars)  # TODO wrong
+      state_update_ops += rec_layer.assign_state_vars_recursive_flatten(["end_flag", "dyn_seq_len"], seq_len_info)
+    state_update_ops.append(rec_layer.state_vars["i"].assign(i))
+
+    # Assign new state.
+    for layer_name in layers_cur_iteration:
+      state = _LayerStateHelper.get_from_net(self.net, layer_name)
+      state_update_ops += layers_prev[layer_name].assigns_flat(state)
+    self.state_update_op = tf.group(*state_update_ops)
+
     return res
 
   def _construct_custom(self, net, prev_state, cur_state, needed_outputs):
@@ -745,6 +801,10 @@ class RecStepByStepLayer(RecLayer):
 
   However, the main construction logic happens before, in :func:`__init__`,
   and then further in :func:`SubnetworkRecCellSingleStep._while_loop`.
+
+  ---
+
+  See https://github.com/rwth-i6/returnn/pull/874 for some discussion.
   """
 
   layer_class = "rec_step_by_step"
@@ -841,38 +901,33 @@ class RecStepByStepLayer(RecLayer):
       # Usually all choices depend on the scores.
       # However, some legacy configs used prev choices which are fed as-is because they are known.
       # See comment in ChoiceStateVarLayer.
+      if name == rec_layer.stochastic_var_order[-1]:
+        assert choice_layer.score_dependent
       if choice_layer.score_dependent:
         calc_scores_op = rec_layer.state_vars["stochastic_var_scores_%s" % name].final_op()
         info["stochastic_vars"][name] = {
           "calc_scores_op": calc_scores_op.name,
           "scores_state_var": "stochastic_var_scores_%s" % name,
           "choice_state_var": "stochastic_var_choice_%s" % name}
+        if name == rec_layer.stochastic_var_order[-1]:
+          # The last decode op can be merged with the state updates (post_update_ops).
+          calc_scores_op = tf.group(calc_scores_op, cell.state_update_op)
         decode_ops_coll.append(calc_scores_op)
         decoder_output_vars_coll.append(rec_layer.state_vars["stochastic_var_scores_%s" % name].var)
       else:
         info["stochastic_vars"][name] = {"choice_state_var": "stochastic_var_choice_%s" % name}
       decoder_input_vars_coll.append(rec_layer.state_vars["stochastic_var_choice_%s" % name].var)
 
-    # We do not make use of update_ops anymore. This was used as a separate step
-    # such that only "choice-dependent" state vars were updated separately in the step before.
-    # However, this logic was incomplete and broken in general,
-    # and also the optimization only lead to negligible speedup, so we removed it.
-    # We anyway create the collection here such that older RASR binaries still work fine.
-    # See https://github.com/rwth-i6/returnn/pull/874 for some discussion.
-    tf_compat.v1.get_collection_ref("update_ops")
+    update_ops_coll = tf_compat.v1.get_collection_ref("update_ops")
+    update_ops_coll.append(cell.delayed_state_update_op)
     # Based on the decoder state, encoder, and choices, calculate the next state.
-    post_update_ops_coll = tf_compat.v1.get_collection_ref("post_update_ops")
+    tf_compat.v1.get_collection_ref("post_update_ops")  # leave empty; merged with last decode op
     state_vars_coll = tf_compat.v1.get_collection_ref(CollectionKeys.STATE_VARS)
-    next_step_ops = []
     for name, var in sorted(rec_layer.state_vars.items()):
       assert isinstance(name, str)
       assert isinstance(var, RecStepByStepLayer.StateVar)
       if not name.startswith("stochastic_var_") and not name.startswith("base_"):
-        next_step_ops.append(var.final_op())
         state_vars_coll.append(var.var)
-    next_step_op = tf.group(*next_step_ops, name="rec_step_by_step_post_update_op")
-    info["next_step_op"] = next_step_op.name
-    post_update_ops_coll.append(next_step_op)
 
     import json
     info_str = json.dumps(info, sort_keys=True, indent=2)
@@ -1160,24 +1215,25 @@ class RecStepByStepLayer(RecLayer):
     return nest.map_structure_with_tuple_paths(
       _map_state_vars, name_per_entry, initial_values, data_shapes)
 
-  def set_state_vars_final_values_recursive(self, name_prefix, final_values):
+  def assign_state_vars_recursive_flatten(self, name_prefix, values):
     """
     :param str|list[str] name_prefix:
-    :param T final_values:
+    :param T values:
+    :rtype: list[tf.Operation]
     """
-    def _map_state_vars(path, name, final_value):
-      assert isinstance(final_value, tf.Tensor)
+    def _map_state_vars(path, name, value):
+      assert isinstance(value, tf.Tensor)
       if not name:
         name = "/".join(map(str, (name_prefix,) + path))
-      self.set_state_var_final_value(name=name, final_value=final_value)
+      return self.state_vars[name].assign(value)
 
     if isinstance(name_prefix, str):
-      name_per_entry = nest.map_structure(lambda v: None, final_values)
+      name_per_entry = nest.map_structure(lambda v: None, values)
     else:
       name_per_entry = name_prefix
-    nest.assert_same_structure(final_values, name_per_entry)
-    nest.map_structure_with_tuple_paths(
-      _map_state_vars, name_per_entry, final_values)
+    nest.assert_same_structure(values, name_per_entry)
+    return nest.flatten(nest.map_structure_with_tuple_paths(
+      _map_state_vars, name_per_entry, values))
 
   def have_base_state_vars(self):
     """
@@ -1239,6 +1295,9 @@ class RecStepByStepLayer(RecLayer):
         name="stochastic_var_choice_%s" % self.name, data_shape=layer_template.output)
 
     def assign_score(self, source):
+      """
+      :param LayerBase source:
+      """
       assert self.score_dependent
       assert source.output.is_batch_major and len(source.output.shape) == 1
       scores_in = source.output.placeholder
