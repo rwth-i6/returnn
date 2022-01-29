@@ -4349,7 +4349,11 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         axis_int = input_data.get_axis_from_description(axis, allow_int=False)
         old_tag = input_data.dim_tags[axis_int]
         assert new_tag.dimension == old_tag.dimension
-        new_tag = new_tag.get_for_batch_ctx(input_data.batch, input_data.control_flow_ctx)
+        if old_tag.is_batch_dim() and not new_tag.is_batch_dim():
+          self.output.batch = old_tag.batch.get_global_base()
+        new_tag = new_tag.get_for_batch_ctx(
+          input_data.batch if not old_tag.is_batch_dim() else old_tag.batch.get_global_base(),
+          input_data.control_flow_ctx)
         if not new_tag.is_batch_dim() and new_tag.dimension is None and not new_tag.dyn_size_ext:  # still undefined
           if old_tag.is_batch_dim():
             new_dyn_size_ext = Data.from_tensor(input_data.get_batch_dim())
