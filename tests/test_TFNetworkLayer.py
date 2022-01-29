@@ -6412,6 +6412,139 @@ def test_batch_norm_args():
   assert batch_norm_args == layer_args  # different arguments in BatchNormLayer and LayerBase.batch_norm()
 
 
+def test_contrastive_loss():
+  dim_masked_flat = SpatialDim("masked_flat")
+  enc_feat_dim = FeatureDim("encoder_dim", 20)
+
+  dim_neg_samples = SpatialDim("neg_samples", 10)  # 100
+  contrastive_loss_temp = 0.1
+  contrastive_loss_factor = 1.
+
+  def _mask(x, axis, pos, max_amount):
+    """
+    :param tf.Tensor x: (batch,time,feature)
+    :param int axis:
+    :param tf.Tensor pos: (batch,)
+    :param int max_amount: inclusive
+    :return: (batch,dim)
+    """
+    from returnn.tf.compat import v1 as tf
+    n_batch = tf.shape(x)[0]
+    dim = tf.shape(x)[axis]
+    amount = tf.random_uniform(shape=(n_batch,), minval=1, maxval=max_amount + 1, dtype=tf.int32)
+    pos2 = tf.minimum(pos + amount, dim)
+    idxs = tf.expand_dims(tf.range(0, dim), 0)  # (1,dim)
+    pos_bc = tf.expand_dims(pos, 1)  # (batch,1)
+    pos2_bc = tf.expand_dims(pos2, 1)  # (batch,1)
+    cond = tf.logical_and(tf.greater_equal(idxs, pos_bc), tf.less(idxs, pos2_bc))  # (batch,dim)
+    return cond
+
+  def _random_mask(x, axis, min_num, max_num, max_dims):
+    """
+    :param tf.Tensor x: (batch,time,feature)
+    :param int axis:
+    :param int|tf.Tensor min_num:
+    :param int|tf.Tensor max_num: inclusive
+    :param int max_dims: inclusive
+    :return: (batch,dim)
+    """
+    from returnn.tf.compat import v1 as tf
+    n_batch = tf.shape(x)[0]
+    num = tf.random_uniform(shape=(n_batch,), minval=min_num, maxval=max_num + 1, dtype=tf.int32)
+    # https://github.com/tensorflow/tensorflow/issues/9260
+    # https://timvieira.github.io/blog/post/2014/08/01/gumbel-max-trick-and-weighted-reservoir-sampling/
+    z = -tf.log(-tf.log(tf.random_uniform((n_batch, tf.shape(x)[axis]), 0, 1)))
+    _, indices = tf.nn.top_k(z, tf.reduce_max(num))
+    return _mask(x, axis=axis, pos=indices[:, 0], max_amount=max_dims)
+
+  def _get_mask_eval(source, **_kwargs):
+    data = source(0, as_data=True, auto_convert=False)
+    assert (data.batch_dim_axis, data.time_dim_axis) == (0, 1)
+    x = data.placeholder
+    mask = _random_mask(x, axis=data.time_dim_axis, min_num=1, max_num=1, max_dims=3)
+    return mask
+
+  net_dict = {
+    "input": {"class": "linear", "from": "data", "activation": None, "out_dim": enc_feat_dim},
+
+    "input_mask": {
+      "class": "eval", "from": "input",
+      "eval": _get_mask_eval,
+      "out_type": {"dtype": "bool", "shape": (None,)}
+    },  # [B,T]
+
+    "input_masked": {"class": "switch", "condition": "input_mask", "true_from": 0.0, "false_from": "input"},  # [B,T,F]
+
+    "encoder": {"class": "linear", "activation": None, "from": "input_masked", "out_dim": enc_feat_dim},  # [B,T,F]
+
+    "contrastive_loss": {
+      "class": "subnetwork", "from": [],
+      "subnetwork": {
+        "enc_masked_frames": {"class": "masked_computation", "mask": "base:input_mask", "from": "base:encoder",
+                              "unit": {"class": "copy"}},  # [B, T_M, F]
+        "enc_masked_frames_flat_": {"class": "flatten_batch", "from": "enc_masked_frames"},  # [B_M, F]
+        "enc_masked_frames_flat": {"class": "reinterpret_data", "from": "enc_masked_frames_flat_",
+                                   "set_dim_tags": {"B": dim_masked_flat}},  # [B_M, F]
+        # We take the non-masked input of the masked frames -> q_t in the paper.
+        "input_masked_frames": {"class": "masked_computation", "mask": "base:input_mask", "from": "base:input",
+                                "unit": {"class": "copy"}},  # [B, T_M, F]
+        "input_masked_frames_flat_": {"class": "flatten_batch", "from": "input_masked_frames"},  # [B_M, F]
+        "input_masked_frames_flat": {"class": "reinterpret_data", "from": "input_masked_frames_flat_",
+                                     "set_dim_tags": {"B": dim_masked_flat}},  # [B_M, F]
+
+        # Candidate samples
+        "input_flat": {"class": "flatten_batch", "from": "base:input"},  # [B_T,F]
+        "input_flat_len": {"class": "length", "from": "input_flat", "axis": "B"},  # scalar -> B_T
+        "samples_rand_indices": {"class": "rand_int", "maxval": "input_flat_len",
+                                 "shape": [dim_masked_flat, dim_neg_samples]},  # [B_M, K] -> 0..B_T-1
+        "sampled_frames_": {"class": "gather", "from": "input_flat", "position": "neg_rand_indices", "axis": "B"},
+        # [B_M, K, F]
+        "input_masked_frames_flat_expand": {"class": "expand_dims", "axis": "spatial",
+                                            "from": "input_masked_frames_flat"},  # [B_M, 1, F]
+        "sampled_frames": {"class": "concat", "from": [("input_masked_frames_flat_expand", "dim:1"),
+                                                       ("sampled_frames_", dim_neg_samples)]},  # [B_M, K+1, F]
+
+        # Cosine similarity between sampled frames and masked encoder frames
+        "cos_similarity": {
+          "class": "subnetwork", "from": ["sampled_frames", "enc_masked_frames_flat"], "concat_sources": False,
+          "subnetwork": {
+            "dot": {"class": "dot", "from": ["data:0", "data:1"], "reduce": enc_feat_dim},
+            # [B_M, K+1, F] * [B_M, F] -> [B_M, K+1]
+            "norm_a": {"class": "math_norm", "from": "data:0", "axis": enc_feat_dim, "p": 2},
+            # [B_M, K+1, F] -> [B_M, K+1]
+            "norm_b": {"class": "math_norm", "from": "data:1", "axis": enc_feat_dim, "p": 2},  # [B_M, F] -> [B_M]
+            "output": {"class": "eval", "from": ["dot", "norm_a", "norm_b"],
+                       "eval": "source(0) / (source(1) * source(2))"},  # [B_M, K+1]
+          },
+        },
+
+        # The contrastive loss is the negative log-likelihood of the softmax of the cosine similarity
+        "log_sm_cos_sim": {
+          "class": "softmax_over_spatial", "from": "cos_similarity", "axis": dim_neg_samples, "log_space": True,
+          "energy_factor": contrastive_loss_temp},  # [B_M, K+1]
+        "log_likelihood": {"class": "gather", "from": "log_sm_cos_sim", "axis": 1 + dim_neg_samples, "position": 0},
+        # [B_M]
+        "neg_los_likelihood": {"class": "eval", "from": "log_likelihood", "eval": "-source(0)"},  # [B_M]
+        "output": {"class": "copy", "from": "neg_los_likelihood"},
+      },
+      "loss": "as_is", "loss_scale": contrastive_loss_factor,
+    },
+
+    "output": {"class": "softmax", "from": "encoder", "loss": "ctc"}
+  }
+
+  with make_scope() as session:
+    config = Config({"extern_data": {"data": {"dim": 7}}})
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict(net_dict)
+    loss = net.get_total_loss()
+
+    net.initialize_params(session)
+    loss_v = session.run(loss, feed_dict=make_feed_dict(net.extern_data))
+    print("loss:", loss_v)
+    assert numpy.isfinite(loss_v)
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
