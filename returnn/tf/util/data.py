@@ -2736,7 +2736,8 @@ class Data(object):
         assert tag.batch == self.batch or self.batch.is_broadcast()
       if tag.dyn_size_ext:
         assert tag.dyn_size_ext.dtype in {"int32", "int64"}
-        assert tag.batch == tag.dyn_size_ext.batch
+        if tag.dyn_size_ext.have_batch_axis():
+          assert tag.batch == tag.dyn_size_ext.batch
         tag.dyn_size_ext.sanity_check()
     if not ignore_placeholder and self.placeholder is not None:
       # Note: We could just call self.placeholder.set_shape.
