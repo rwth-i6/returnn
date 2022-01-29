@@ -3791,6 +3791,11 @@ class Data(object):
     opts = self.get_kwargs()
     if self.dim_tags[axis].is_batch_dim():
       opts.pop("batch", None)
+    if new_dim_tag.is_batch_dim():
+      if self.time_dim_axis == axis:
+        opts.pop("time_dim_axis", None)
+      if self.feature_dim_axis == axis:
+        opts.pop("feature_dim_axis", None)
     dim_tags = self.dim_tags[:axis] + (new_dim_tag,) + self.dim_tags[axis + 1:]
     opts["dim_tags"] = dim_tags
     if self.feature_dim_axis_or_unspecified is not NotSpecified:
