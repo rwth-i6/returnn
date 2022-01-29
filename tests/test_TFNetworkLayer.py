@@ -6541,7 +6541,10 @@ def test_contrastive_loss():
   }
 
   with make_scope() as session:
-    config = Config({"extern_data": {"data": {"dim": 7}, "classes": {"dim": 3, "sparse": True}}})
+    config = Config({
+      "extern_data": {"data": {"dim": 7}, "classes": {"dim": 3, "sparse": True}},
+      "debug_print_layer_output": True,
+    })
     net = TFNetwork(config=config, train_flag=True)
     net.construct_from_dict(net_dict)
     loss = net.get_total_loss()
