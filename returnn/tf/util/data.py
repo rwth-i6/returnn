@@ -3789,6 +3789,8 @@ class Data(object):
       axis += self.batch_ndim
     assert 0 <= axis < self.batch_ndim
     opts = self.get_kwargs()
+    if self.dim_tags[axis].is_batch_dim():
+      opts.pop("batch", None)
     dim_tags = self.dim_tags[:axis] + (new_dim_tag,) + self.dim_tags[axis + 1:]
     opts["dim_tags"] = dim_tags
     if self.feature_dim_axis_or_unspecified is not NotSpecified:
