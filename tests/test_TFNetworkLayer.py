@@ -6497,7 +6497,7 @@ def test_contrastive_loss():
         "input_flat_len": {"class": "length", "from": "input_flat", "axis": "B"},  # scalar -> B_T
         "samples_rand_indices": {"class": "rand_int", "maxval": "input_flat_len",
                                  "shape": [dim_masked_flat, dim_neg_samples]},  # [B_M, K] -> 0..B_T-1
-        "sampled_frames_": {"class": "gather", "from": "input_flat", "position": "neg_rand_indices", "axis": "B"},
+        "sampled_frames_": {"class": "gather", "from": "input_flat", "position": "samples_rand_indices", "axis": "B"},
         # [B_M, K, F]
         "input_masked_frames_flat_expand": {"class": "expand_dims", "axis": "spatial",
                                             "from": "input_masked_frames_flat"},  # [B_M, 1, F]
