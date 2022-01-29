@@ -6459,7 +6459,7 @@ def test_contrastive_loss():
     _, indices = tf.nn.top_k(z, tf.reduce_max(num))
     return _mask(x, axis=axis, pos=indices[:, 0], max_amount=max_dims)
 
-  def _get_mask_eval(source, **_kwargs):
+  def _get_mask_eval_layer(source, **_kwargs):
     data = source(0, as_data=True, auto_convert=False)
     assert (data.batch_dim_axis, data.time_dim_axis) == (0, 1)
     x = data.placeholder
@@ -6471,7 +6471,7 @@ def test_contrastive_loss():
 
     "input_mask": {
       "class": "eval", "from": "input",
-      "eval": _get_mask_eval,
+      "eval": _get_mask_eval_layer,
       "out_type": {"dtype": "bool", "shape": (None,)}
     },  # [B,T]
 
