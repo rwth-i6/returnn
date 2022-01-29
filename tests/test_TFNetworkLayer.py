@@ -6479,7 +6479,14 @@ def test_contrastive_loss():
 
     "input_masked": {"class": "switch", "condition": "input_mask", "true_from": 0.0, "false_from": "input"},  # [B,T,F]
 
-    "encoder": {"class": "linear", "activation": None, "from": "input_masked", "out_dim": enc_feat_dim},  # [B,T,F]
+    # For this loss, the model must be able to look at context, otherwise it does not make sense.
+    # https://github.com/rwth-i6/returnn/pull/918
+    "conv": {
+      "class": "conv", "from": "input_masked",
+      "filter_size": [5], "padding": "same",
+      "n_out": 10, "activation": "tanh"},
+
+    "encoder": {"class": "linear", "activation": None, "from": "conv", "out_dim": enc_feat_dim},  # [B,T,F]
 
     "contrastive_loss": {
       "class": "subnetwork", "from": [],
