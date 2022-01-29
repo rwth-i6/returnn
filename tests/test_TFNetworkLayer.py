@@ -3126,6 +3126,31 @@ def test_RandIntLayer():
     assert_equal(v.shape, (5, n_batch, max(input_len), 3))
 
 
+def test_rand_dynamic_shape():
+  with make_scope() as session:
+    from returnn.tf.util.data import FeatureDim, SpatialDim, batch_dim
+    feature_dim = FeatureDim("feature", 5)
+    time_dim = SpatialDim("time")
+    config = Config({
+      "extern_data": {"data": {"dim_tags": (batch_dim, time_dim, feature_dim)}}
+    })
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "shape_batch": {"class": "length", "axis": "B", "from": "data"},
+      "shape_time": {"class": "length", "axis": "T", "from": "data"},
+      "shape_time_reduce": {"class": "reduce", "mode": "max", "axes": ["B"], "from": "shape_time"},
+      "output": {
+        "class": "rand_int", "shape": ("shape_batch", "shape_time_reduce"), "minval": 3, "maxval": 10, "seed": 42},
+    })
+
+    n_batch, n_time = 3, 11
+    feed = make_feed_dict(net.extern_data.data.values(), n_batch=n_batch, n_time=n_time, same_time=True)
+    session.run(tf_compat.v1.global_variables_initializer())
+    out = net.layers["output"].output.placeholder
+    v = session.run(out, feed_dict=feed)
+    assert v.shape == (n_batch, n_time)
+
+
 def test_rand_indices():
   with make_scope() as session:
     from returnn.tf.util.data import FeatureDim, SpatialDim, batch_dim

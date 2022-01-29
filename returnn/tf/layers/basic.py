@@ -2248,7 +2248,7 @@ class RandIntLayer(LayerBase):
   # noinspection PyUnusedLocal
   def __init__(self, shape, maxval, minval=0, dtype="int32", sparse_dim=None, seed=None, **kwargs):
     """
-    :param tuple[Dim|int]|list[Dim|int] shape: desired shape of output tensor
+    :param tuple[Dim|int|LayerBase]|list[Dim|int|LayerBase] shape: desired shape of output tensor
     :param int|LayerBase maxval: upper bound (exclusive) on range of random values
     :param int|LayerBase minval: lower bound (inclusive) on range of random values
     :param str dtype: type of the output. For random ints, int32 and int64 make sense, but could also be floats
@@ -2257,7 +2257,7 @@ class RandIntLayer(LayerBase):
     """
     super(RandIntLayer, self).__init__(**kwargs)
     seed = seed if seed is not None else self.network.random.randint(2 ** 31)
-    shape_ = [d.get_dim_value() for d in self.output.dim_tags]
+    self.shape = [d.get_dim_value() for d in self.output.dim_tags]
     self.minval = minval
     self.maxval = maxval
     if isinstance(minval, LayerBase):
@@ -2265,7 +2265,7 @@ class RandIntLayer(LayerBase):
     if isinstance(maxval, LayerBase):
       assert maxval.output.batch_shape == ()  # only scalars supported
     self.output.placeholder = tf.random.uniform(
-      shape_,
+      self.shape,
       minval=minval.output.placeholder if isinstance(minval, LayerBase) else minval,
       maxval=maxval.output.placeholder if isinstance(maxval, LayerBase) else maxval,
       dtype=dtype, seed=seed)
@@ -2279,6 +2279,9 @@ class RandIntLayer(LayerBase):
       deps.append(self.minval)
     if isinstance(self.maxval, LayerBase):
       deps.append(self.maxval)
+    for dim in self.shape:
+      if isinstance(dim, LayerBase):
+        deps.append(dim)
     return deps
 
   @classmethod
@@ -2290,16 +2293,17 @@ class RandIntLayer(LayerBase):
     """
     d.setdefault("from", [])
     super(RandIntLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
-    if isinstance(d.get("maxval", None), str):
-      d["maxval"] = get_layer(d["maxval"])
-    if isinstance(d.get("minval", None), str):
-      d["minval"] = get_layer(d["minval"])
+
+    d["maxval"] = get_layer(d["maxval"]) if isinstance(d["maxval"], str) else d["maxval"]
+    d["minval"] = get_layer(d["minval"]) if isinstance(d["minval"], str) else d["minval"]
+    d["shape"] = tuple(get_layer(dim) if isinstance(dim, str) else dim for dim in d["shape"])
+
 
   @classmethod
   def get_out_data_from_opts(cls, name, shape, maxval, minval=0, dtype="int32", sparse_dim=None, **kwargs):
     """
     :param str name:
-    :param tuple[Dim|int]|list[Dim|int] shape: desired shape of output tensor
+    :param tuple[Dim|int|LayerBase]|list[Dim|int|LayerBase] shape: desired shape of output tensor
     :param int|LayerBase maxval: upper bound (exclusive) on range of random values
     :param int|LayerBase minval: lower bound (inclusive) on range of random values
     :param str dtype: type of the output. For random ints, int32 and int64 make sense, but could also be floats
@@ -2316,6 +2320,11 @@ class RandIntLayer(LayerBase):
           kind=Dim.Types.Spatial if i < len(shape) - 1 else Dim.Types.Feature,
           description="%s:static:%i" % (name, i),
           dimension=d)
+      elif isinstance(d, LayerBase):
+        if isinstance(d, LengthLayer):
+          d = d.dim_tag
+        else:
+          raise ValueError("Cannot infer dim tag for shape from layer: %r" % d)
       else:
         raise TypeError("Layer %r: invalid type %s in shape %r" % (name, type(d), shape))
       dim_tags.append(d)
