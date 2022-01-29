@@ -4350,9 +4350,12 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         old_tag = input_data.dim_tags[axis_int]
         assert new_tag.dimension == old_tag.dimension
         new_tag = new_tag.get_for_batch_ctx(input_data.batch, input_data.control_flow_ctx)
-        if new_tag.dimension is None and not new_tag.dyn_size_ext:  # still undefined
-          assert old_tag.dyn_size_ext
-          new_dyn_size_ext = old_tag.dyn_size_ext.copy(name="%s_size" % (new_tag.description or "<unnamed>"))
+        if not new_tag.is_batch_dim() and new_tag.dimension is None and not new_tag.dyn_size_ext:  # still undefined
+          if old_tag.is_batch_dim():
+            new_dyn_size_ext = Data.from_tensor(input_data.get_batch_dim())
+          else:
+            assert old_tag.dyn_size_ext
+            new_dyn_size_ext = old_tag.dyn_size_ext.copy(name="%s_size" % (new_tag.description or "<unnamed>"))
           # Need to create new size tensor as long as we have get_tag_from_size_tensor.
           new_dyn_size_ext.placeholder = tf.identity(
             new_dyn_size_ext.placeholder, name=get_valid_scope_name_from_str(new_dyn_size_ext.name))
