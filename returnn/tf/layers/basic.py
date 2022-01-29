@@ -1921,7 +1921,7 @@ class LengthLayer(LayerBase):
       # You anyway should not use this, so it's ok to have only a single case supported here.
       self.output.placeholder = tf.expand_dims(dim.dyn_size, axis=self.output.time_dim_axis)
     elif dim.is_batch_dim():
-      self.output.placeholder = dim.get_dim_value()
+      self.output.placeholder = source.get_batch_dim()
     elif dim.dimension is not None:  # static
       self.output.placeholder = tf.constant(dim.dimension, dtype=dtype, name="static_dim")
     else:
