@@ -982,6 +982,9 @@ class TFNetwork(object):
     layer_desc = self._create_layer_layer_desc(name=name, layer_desc=layer_desc, template=False)
     debug_print_layer_output_template = self.get_config().bool("debug_print_layer_output_template", False)
     debug_print_layer_output_shape = self.get_config().bool("debug_print_layer_output_shape", False)
+    debug_print_layer_output = util.CollectionReadCheckCovered.from_bool_or_dict(
+      self.get_config().bool_or_other("debug_print_layer_output", False))
+    debug_print_layer_output.collection.setdefault("summarize", 10)
     debug_add_check_numerics_on_output = self.get_config().bool(
       "debug_add_check_numerics_on_output", False)  # also see debug_add_check_numerics_ops
     debug_runtime_sanity_checks = self.get_config().bool("debug_runtime_sanity_checks", False)
@@ -1029,6 +1032,10 @@ class TFNetwork(object):
           layer.output.placeholder,
           [name, "shape:", str(layer.output), tf.shape(layer.output.placeholder)],
           summarize=10, name="debug_print_layer_output_shape")
+      if layer.output.placeholder is not None and debug_print_layer_output.truth_value:
+        layer.output.placeholder = py_print(
+          layer.output.placeholder, [name, layer.output.placeholder], name="debug_print_layer_output",
+          **debug_print_layer_output.collection)
       if layer.output.placeholder is not None and debug_runtime_sanity_checks:
         layer.output.placeholder = layer.output.get_placeholder_with_runtime_sanity_checks()
       if (layer.output.placeholder is not None and debug_add_check_numerics_on_output
