@@ -4333,7 +4333,8 @@ class ReinterpretDataLayer(_ConcatInputLayer):
   layer_class = "reinterpret_data"
 
   # noinspection PyUnusedLocal
-  def __init__(self, switch_axes=None, size_base=None, set_axes=None,
+  def __init__(self, switch_axes=None, size_base=None, batch_dim_base=None,
+               set_axes=None,
                set_dim_tags=None,
                enforce_batch_major=False, enforce_time_major=False,
                set_sparse=None, set_sparse_dim=NotSpecified, increase_sparse_dim=None,
@@ -4341,6 +4342,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     """
     :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
     :param LayerBase|None size_base: copy the size_placeholder from the given layer
+    :param LayerBase|None batch_dim_base: copy the batch dim from this layer
     :param dict[str,Dim|str] set_axes:
       This can be used to overwrite the special axes like time_dim_axis or feature_dim_axis.
       For that, use keys "B","T" or "F", and a value via :func:`Data.get_axis_from_description`.
@@ -4411,10 +4413,13 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     super(ReinterpretDataLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     if d.get("size_base"):
       d["size_base"] = get_layer(d["size_base"])
+    if d.get("batch_dim_base"):
+      d["batch_dim_base"] = get_layer(d["batch_dim_base"])
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources,
-                             switch_axes=None, size_base=None, set_axes=None,
+                             switch_axes=None, size_base=None, batch_dim_base=None,
+                             set_axes=None,
                              set_dim_tags=None,
                              enforce_batch_major=False, enforce_time_major=False,
                              set_sparse=None, set_sparse_dim=NotSpecified, increase_sparse_dim=None,
@@ -4424,6 +4429,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     :param list[LayerBase] sources:
     :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
     :param LayerBase|None size_base: similar as size_target
+    :param LayerBase|None batch_dim_base:
     :param dict[str,Dim|str] set_axes:
     :param dict[str|Dim,Dim]|None set_dim_tags:
     :param bool enforce_batch_major:
@@ -4510,6 +4516,8 @@ class ReinterpretDataLayer(_ConcatInputLayer):
       out.sparse_dim = Dim(
         kind=Dim.Types.Feature, dimension=out.sparse_dim.dimension + 1,
         description="%s:inc-sparse-dim" % name)
+    if batch_dim_base:
+      out.batch = batch_dim_base.output.batch
     return out
 
 
