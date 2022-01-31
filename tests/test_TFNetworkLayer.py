@@ -5414,9 +5414,28 @@ def test_VariableLayer_init_by_layer():
   For uniform distribution, bound = sqrt(3) * std.
   For truncated normal distribution: stddev /= .87962566103423978  # TF VarianceScaling, scipy a=-2, b=2 ...
   """
+  shape = (3, 4)
   net_dict = {
-    "var": {},
+    "class": {"class": "random", "shape": shape},
+    "var": {"class": "variable", "shape": shape, "init_by_layer": "random"},
+    "output": {"class": "copy", "from": "var"}
   }
+  config = Config()
+  tf_rnd_seed = 42
+  with make_scope() as session:
+    tf_compat.v1.set_random_seed(tf_rnd_seed)
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    net.initialize_params(session)
+    var_v = session.run(net.layers["var"].output.placeholder)
+  # Run again to check that it is deterministic.
+  with make_scope() as session:
+    tf_compat.v1.set_random_seed(tf_rnd_seed)
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    net.initialize_params(session)
+    var_v_ = session.run(net.layers["var"].output.placeholder)
+  numpy.testing.assert_array_equal(var_v, var_v_)
 
 
 def test_extra1():
