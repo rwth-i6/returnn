@@ -2325,6 +2325,8 @@ class RandomLayer(LayerBase):
   - To initialize parameters via the config, using :class:`VariableLayer` with the ``init_by_layer`` option.
     This will only be called once when initializing the parameters.
     For this use case, we do not want to keep a random state var... (TODO or do we?)
+    TODO we might want to follow the logic of VarianceScaling from TF initializer_v2 ...
+
   """
   layer_class = "random"
 
