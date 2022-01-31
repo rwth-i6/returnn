@@ -2287,7 +2287,13 @@ class RandomStateInitLayer(LayerBase):
     if isinstance(algorithm, tf.random.Algorithm):
       return algorithm.value
     if isinstance(algorithm, str):
-      return stateless_random_ops.convert_alg_to_int(algorithm.lower())
+      try:
+        # noinspection PyUnresolvedReferences
+        convert_alg_to_int = stateless_random_ops.convert_alg_to_int
+      except AttributeError:
+        # noinspection PyProtectedMember
+        convert_alg_to_int = stateful_random_ops._convert_alg_to_int  # TF 2.6 or earlier
+      return convert_alg_to_int(algorithm.lower())
     raise TypeError("algorithm %r" % (algorithm,))
 
   @classmethod
