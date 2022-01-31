@@ -8312,6 +8312,7 @@ class VariableLayer(LayerBase):
         assert init_by_layer is not None
         out_data_base = Data(name=self.output.name, dim_tags=dim_tags, dtype=dtype)
         initializer = init_by_layer.output.copy_compatible_to(out_data_base).placeholder
+        shape_ = None  # get_variable requires shape to be not defined when the initializer is another tensor
       var = self.add_param(tf_compat.v1.get_variable(
         name=self.name, shape=shape_, dtype=dtype,
         initializer=initializer, trainable=trainable),
