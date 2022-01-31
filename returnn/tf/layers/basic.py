@@ -2313,8 +2313,18 @@ class RandomStateInitLayer(LayerBase):
 class RandomLayer(LayerBase):
   """
   Generates random numbers from uniform or normal or truncated normal distribution.
+
+  This uses the TensorFlow stateless random ops internally, i.e. all the state handling is explicit.
   The state var can be explicitly provided and initialized via :class:`RandomStateInitLayer`,
   or when not provided it will be automatically created.
+
+  There are two possible distinct use cases:
+
+  - For any randomness in the model, e.g. dropout. So each session.run step will produce a new random number
+    and advance the random state.
+  - To initialize parameters via the config, using :class:`VariableLayer` with the ``init_by_layer`` option.
+    This will only be called once when initializing the parameters.
+    For this use case, we do not want to keep a random state var... (TODO or do we?)
   """
   layer_class = "random"
 
@@ -2332,7 +2342,7 @@ class RandomLayer(LayerBase):
     :param int|float|LayerBase|None maxval: for uniform
     :param str dtype:
     :param int|list[int]|numpy.ndarray|None seed:
-    :param LayerBase|None state_var: if given, should be :class:`VariableLayer`,
+    :param LayerBase|None state_var: if given, should be :class:`VariableLayer` (TODO really?),
       with initial value via :class:`RandomStateInitLayer`
     :param str|tf.random.Algorithm|None algorithm: see :class:`RandomStateInitLayer`
     """
