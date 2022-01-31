@@ -5416,11 +5416,13 @@ def test_VariableLayer_init_by_layer():
   """
   shape = (3, 4)
   net_dict = {
-    "class": {"class": "random", "shape": shape},
+    "random": {"class": "random", "shape": shape, "distribution": "truncated_normal"},
     "var": {"class": "variable", "shape": shape, "init_by_layer": "random"},
     "output": {"class": "copy", "from": "var"}
   }
-  config = Config()
+  config = Config({
+    "extern_data": {"data": {"dim": 4}},  # not actually used...
+  })
   tf_rnd_seed = 42
   with make_scope() as session:
     tf_compat.v1.set_random_seed(tf_rnd_seed)
