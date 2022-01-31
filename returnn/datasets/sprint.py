@@ -55,7 +55,9 @@ class SprintDatasetBase(Dataset):
                suppress_load_seqs_print=False,
                **kwargs):
     """
-    :param dict[str,str|dict] target_maps: e.g. {"speaker": "speaker_map.txt"}
+    :param dict[str,str|dict] target_maps: e.g. {"speaker_name": "speaker_map.txt"}, with "speaker_map.txt" containing
+      a line for each expected speaker. The indices will be given by the line index. Note that scalar
+      content (e.g. single index) will automatically get a time axis added with the length of the audio frames.
     :param bool str_add_final_zero: adds e.g. "orth0" with '\0'-ending
     :param float input_stddev: if != 1, will divide the input "data" by that
     :param str|list[str]|((str)->str)|None orth_post_process: :func:`get_post_processor_function`, applied on orth
@@ -137,7 +139,10 @@ class SprintDatasetBase(Dataset):
     if self.orth_vocab:
       self.num_outputs["orth_classes"] = (self.orth_vocab.num_labels, 1)
     self.num_outputs["orth"] = (256, 1)
-    self.num_outputs["speaker_name"] = (256, 1)
+    if self.target_maps and "speaker_name" in self.target_maps:
+      self.num_outputs["speaker_name"] = (len(self.target_maps["speaker_name"]), 1)
+    else:
+      self.num_outputs["speaker_name"] = (256, 1)
     self._base_init()
     # At this point, we are ready for data. In case we don't use the Sprint PythonSegmentOrdering
     # (SprintInterface.getSegmentList()), we must call this at least once.
