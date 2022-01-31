@@ -2334,7 +2334,7 @@ class RandomLayer(LayerBase):
                **kwargs):
     """
     :param typing.Sequence[Dim|int] shape:
-    :param str distribution: "uniform", "normal" or "truncated_normal" (currently)
+    :param str distribution: "uniform", "normal" or "truncated_normal"
     :param int|float|LayerBase|None mean:
     :param int|float|LayerBase|None stddev:
     :param int|float|LayerBase|None bound: for uniform, defining the range [-bound, bound)
@@ -2402,7 +2402,8 @@ class RandomLayer(LayerBase):
       assert minval is None and maxval is None and bound is None
       if mean is None:
         mean = 0
-      assert stddev is not None
+      if stddev is None:
+        stddev = 1
       if distribution == "normal":
         out = gen.normal(shape=shape_, mean=mean, stddev=stddev, dtype=dtype)
       elif distribution == "truncated_normal":
@@ -2432,6 +2433,7 @@ class RandomLayer(LayerBase):
     :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
+    d.setdefault("from", ())
     super(RandomLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     for attrib in ("mean", "stddev", "bound", "minval", "maxval", "state_var"):
       if attrib in d and isinstance(d[attrib], str):
