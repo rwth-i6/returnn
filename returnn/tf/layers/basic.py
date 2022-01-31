@@ -8269,7 +8269,8 @@ class VariableLayer(LayerBase):
     :param bool add_batch_axis:
     :param bool add_time_axis:
     :param bool trainable:
-    :param str|float|int|None init: see :func:`returnn.tf.util.basic.get_initializer`
+    :param str|float|int|None init: see :func:`returnn.tf.util.basic.get_initializer`. 0 by default.
+      Alternatively, you can also use option `init_by_layer`.
     :param LayerBase|None init_by_layer:
     """
     shape  # noqa  # used in get_out_data_from_opts
@@ -8286,8 +8287,9 @@ class VariableLayer(LayerBase):
     shape_ = [d.dimension for d in dim_tags]
     assert all(shape_), self.output  # all static
     with self.var_creation_scope():
-      if init is not None:
-        assert init_by_layer is None
+      if init_by_layer is None:
+        if init is None:
+          init = 0
         initializer = tf_util.get_initializer(
           init, dtype=dtype, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
       else:
