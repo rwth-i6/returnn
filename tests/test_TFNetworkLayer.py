@@ -5416,8 +5416,7 @@ def test_VariableLayer_init_by_layer():
   """
   shape = (3, 4)
   net_dict = {
-    "random_state": {"class": "random_state_init"},
-    "random": {"class": "random", "shape": shape, "distribution": "truncated_normal", "state": "random_state"},
+    "random": {"class": "random", "shape": shape, "distribution": "truncated_normal", "static": True},
     "var": {"class": "variable", "shape": shape, "init_by_layer": "random"},
     "output": {"class": "copy", "from": "var"}
   }
@@ -5429,6 +5428,7 @@ def test_VariableLayer_init_by_layer():
     tf_compat.v1.set_random_seed(tf_rnd_seed)
     net = TFNetwork(config=config)
     net.construct_from_dict(net_dict)
+    assert_equal(net.get_params_list(), [next(iter(net.layers["var"].params.values()))])
     net.initialize_params(session)
     var_v = session.run(net.layers["var"].output.placeholder)
   # Run again to check that it is deterministic.
@@ -5436,6 +5436,7 @@ def test_VariableLayer_init_by_layer():
     tf_compat.v1.set_random_seed(tf_rnd_seed)
     net = TFNetwork(config=config)
     net.construct_from_dict(net_dict)
+    assert_equal(net.get_params_list(), [next(iter(net.layers["var"].params.values()))])
     net.initialize_params(session)
     var_v_ = session.run(net.layers["var"].output.placeholder)
   numpy.testing.assert_array_equal(var_v, var_v_)
