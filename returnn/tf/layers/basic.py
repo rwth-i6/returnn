@@ -2381,7 +2381,7 @@ class RandomLayer(LayerBase):
 
     shape  # noqa  # handled in get_out_data_from_opts
     super(RandomLayer, self).__init__(**kwargs)
-    algorithm = RandomStateInitLayer.select_algorithm(algorithm)
+    algorithm_int = RandomStateInitLayer.select_algorithm(algorithm)
     # Note: tf.random.Generator itself is just a wrapper around a state variable
     #   and corresponding stateless random ops.
     #   It's cheap to create multiple instances of this class e.g. for different random distributions
@@ -2411,9 +2411,10 @@ class RandomLayer(LayerBase):
         # so we cannot use it.
         # In that case, we can still do some fallback here for the case with a static seed.
         if tf_util.tf_version_tuple() < (2, 6, 0):
+          assert algorithm is None, "%s: custom algorithm not supported on older TF version" % self
           for func_name in ["normal", "truncated_normal", "uniform"]:
             func = getattr(tf.random, "stateless_" + func_name)
-            setattr(self, func_name, lambda *args, **kwargs_: func(*args, seed=seed, alg=alg, **kwargs_))
+            setattr(self, func_name, lambda *args, **kwargs_: func(*args, seed=[seed, 0], **kwargs_))
 
     self.state_var = state
     if state is None:
@@ -2423,7 +2424,7 @@ class RandomLayer(LayerBase):
         with self.var_creation_scope():
           if seed is None:
             seed = self.network.random.randint(2 ** 31, size=[32], dtype="uint32")
-          gen = tf.random.Generator.from_seed(seed=seed, alg=algorithm)
+          gen = tf.random.Generator.from_seed(seed=seed, alg=algorithm_int)
           self.add_param(gen.state)
       else:  # static is True
         assert static is True
@@ -2431,7 +2432,7 @@ class RandomLayer(LayerBase):
           "%s: in static mode, we can not auto-update" % self)
         if seed is None:
           seed = self.network.random.randint(2 ** 31, size=[32], dtype="uint32")
-        gen = _RndGeneratorStaticSeed(seed=seed, alg=algorithm)
+        gen = _RndGeneratorStaticSeed(seed=seed, alg=algorithm_int)
 
     else:  # state is not None
       assert static is None or static is False, "%s: state is given, thus it is not static" % self
@@ -2439,10 +2440,10 @@ class RandomLayer(LayerBase):
       state_ = state.output.placeholder
       if auto_update_state is True:
         assert isinstance(state_, tf.Variable)
-        gen = tf.random.Generator.from_state(state_, alg=algorithm)
+        gen = tf.random.Generator.from_state(state_, alg=algorithm_int)
       else:
         assert auto_update_state is None or auto_update_state is False
-        gen = _RndGeneratorCustomState.from_state(state_, alg=algorithm)
+        gen = _RndGeneratorCustomState.from_state(state_, alg=algorithm_int)
       assert gen.state is state_
     self.random_generator = gen
     self._distribution_attribs = (mean, stddev, bound, minval, maxval)
