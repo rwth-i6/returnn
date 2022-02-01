@@ -2410,11 +2410,7 @@ class RandomLayer(LayerBase):
         # Earlier TF versions uses gen_stateful_random_ops which requires a tf.Variable
         # so we cannot use it.
         # In that case, we can still do some fallback here for the case with a static seed.
-        try:
-          from tensorflow.python.ops import gen_stateless_random_ops_v2
-          del gen_stateless_random_ops_v2
-        except ImportError:
-          assert tf_util.tf_version_tuple() < (2, 5, 0)  # It should be available since TF 2.5.
+        if tf_util.tf_version_tuple() < (2, 6, 0):
           for func_name in ["normal", "truncated_normal", "uniform"]:
             func = getattr(tf.random, "stateless_" + func_name)
             setattr(self, func_name, lambda *args, **kwargs_: func(*args, seed=seed, alg=alg, **kwargs_))
