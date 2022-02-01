@@ -2269,7 +2269,7 @@ class RandomStateInitLayer(LayerBase):
     self.algorithm = algorithm
     self.seed = seed
     from tensorflow.python.ops import stateful_random_ops
-    self.output.placeholder = stateful_random_ops.create_rng_state(seed=seed, alg=algorithm)
+    self.output.placeholder = tf.constant(stateful_random_ops.create_rng_state(seed=seed, alg=algorithm))
 
   @classmethod
   def select_algorithm(cls, algorithm):
@@ -2413,7 +2413,7 @@ class RandomLayer(LayerBase):
         if seed is None:
           seed = self.network.random.randint(2 ** 31, size=[32], dtype="uint32")
         from tensorflow.python.ops import stateful_random_ops
-        state_ = stateful_random_ops.create_rng_state(seed=seed, alg=algorithm)
+        state_ = tf.constant(stateful_random_ops.create_rng_state(seed=seed, alg=algorithm))
         gen = _RndGeneratorCustomState.from_state(state_, alg=algorithm)
         assert gen.state is state_
 
