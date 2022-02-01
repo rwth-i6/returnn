@@ -2414,7 +2414,7 @@ class RandomLayer(LayerBase):
           assert algorithm is None, "%s: custom algorithm not supported on older TF version" % self
           for func_name in ["normal", "truncated_normal", "uniform"]:
             func = getattr(tf.random, "stateless_" + func_name)
-            setattr(self, func_name, lambda *args, _func=func, **kwargs_: _func(*args, seed=seed[:2], **kwargs_))
+            setattr(self, func_name, lambda _func=func, **kwargs_: _func(seed=seed[:2], **kwargs_))
 
     self.state_var = state
     if state is None:
