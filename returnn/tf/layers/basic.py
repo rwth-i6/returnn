@@ -2269,7 +2269,7 @@ class RandomStateInitLayer(LayerBase):
     self.algorithm = algorithm
     self.seed = seed
     from tensorflow.python.ops import stateful_random_ops
-    self.output.placeholder = tf.constant(stateful_random_ops.create_rng_state(seed=seed, alg=algorithm))
+    self.output.placeholder = tf.convert_to_tensor(stateful_random_ops.create_rng_state(seed=seed, alg=algorithm))
 
   @classmethod
   def select_algorithm(cls, algorithm):
@@ -2397,6 +2397,28 @@ class RandomLayer(LayerBase):
         """returns state without actually changing it"""
         return self.state
 
+    class _RndGeneratorStaticSeed(_RndGeneratorCustomState):
+      # noinspection PyShadowingNames
+      def __init__(self, seed, alg):
+        from tensorflow.python.ops import stateful_random_ops
+        state_ = tf.convert_to_tensor(stateful_random_ops.create_rng_state(seed=seed, alg=alg))
+        super(_RndGeneratorStaticSeed, self).__init__(state=state_, alg=alg)
+        assert self.state is state_
+
+        # The underlying implementation in more recent TF versions uses gen_stateless_random_ops_v2
+        # which is good.
+        # Earlier TF versions uses gen_stateful_random_ops which requires a tf.Variable
+        # so we cannot use it.
+        # In that case, we can still do some fallback here for the case with a static seed.
+        try:
+          from tensorflow.python.ops import gen_stateless_random_ops_v2
+          del gen_stateless_random_ops_v2
+        except ImportError:
+          assert tf_util.tf_version_tuple() < (2, 5, 0)  # It should be available since TF 2.5.
+          for func_name in ["normal", "truncated_normal", "uniform"]:
+            func = getattr(tf.random, "stateless_" + func_name)
+            setattr(self, func_name, lambda *args, **kwargs_: func(*args, seed=seed, alg=alg, **kwargs_))
+
     self.state_var = state
     if state is None:
       if static is None or static is False:
@@ -2407,15 +2429,13 @@ class RandomLayer(LayerBase):
             seed = self.network.random.randint(2 ** 31, size=[32], dtype="uint32")
           gen = tf.random.Generator.from_seed(seed=seed, alg=algorithm)
           self.add_param(gen.state)
-      else:
+      else:  # static is True
+        assert static is True
         assert auto_update_state is None or auto_update_state is False, (
           "%s: in static mode, we can not auto-update" % self)
         if seed is None:
           seed = self.network.random.randint(2 ** 31, size=[32], dtype="uint32")
-        from tensorflow.python.ops import stateful_random_ops
-        state_ = tf.constant(stateful_random_ops.create_rng_state(seed=seed, alg=algorithm))
-        gen = _RndGeneratorCustomState.from_state(state_, alg=algorithm)
-        assert gen.state is state_
+        gen = _RndGeneratorStaticSeed(seed=seed, alg=algorithm)
 
     else:  # state is not None
       assert static is None or static is False, "%s: state is given, thus it is not static" % self
