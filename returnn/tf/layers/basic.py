@@ -2342,7 +2342,7 @@ class RandomLayer(LayerBase):
   def __init__(self, shape, distribution,
                mean=None, stddev=None, bound=None, minval=None, maxval=None, dtype="float32",
                seed=None,
-               algorithm=None, state=None, auto_update_state=None,
+               algorithm=None, state=None, auto_update_state=None, static=None,
                **kwargs):
     """
     :param typing.Sequence[Dim|int] shape:
@@ -2365,7 +2365,8 @@ class RandomLayer(LayerBase):
       If auto_update_state is True, it must be a variable,
       and every time a new random number is created, this variable is updated.
       Otherwise (default) it will not be updated automatically.
-    :param bool|None auto_update_state: only used when you pass an explicit
+    :param bool|None auto_update_state: only used when you pass an explicit state
+    :param bool|None static: if no state at all should be used. it just relies on the seed then.
     """
     def _attrib_value(x):
       """
@@ -2384,38 +2385,46 @@ class RandomLayer(LayerBase):
     #   and corresponding stateless random ops.
     #   It's cheap to create multiple instances of this class e.g. for different random distributions
     #   when we reuse the same state var.
+
+    # Need to derive custom class from tf.random.Generator to not require a tf.Variable in certain cases below.
+    class _RndGeneratorCustomState(tf.random.Generator):
+      # noinspection PyShadowingNames
+      def _create_variable(self, state, dtype, **_kwargs):
+        return tf.cast(state, dtype) if state.dtype != dtype else state
+
+      def skip(self, delta):
+        """returns state without actually changing it"""
+        return self.state
+
     self.state_var = state
     if state is None:
-      assert auto_update_state is None or auto_update_state is True, (
-        "%s: without explicit state, we always auto-update" % self)
-      with self.var_creation_scope():
+      if static is None or static is False:
+        assert auto_update_state is None or auto_update_state is True, (
+          "%s: without explicit state, we always auto-update" % self)
+        with self.var_creation_scope():
+          if seed is None:
+            seed = self.network.random.randint(2 ** 31, size=[32], dtype="uint32")
+          gen = tf.random.Generator.from_seed(seed=seed, alg=algorithm)
+          self.add_param(gen.state)
+      else:
+        assert auto_update_state is None or auto_update_state is False, (
+          "%s: in static mode, we can not auto-update" % self)
         if seed is None:
           seed = self.network.random.randint(2 ** 31, size=[32], dtype="uint32")
-        gen = tf.random.Generator.from_seed(seed=seed, alg=algorithm)
-        self.add_param(gen.state)
-    elif auto_update_state is True:
+        from tensorflow.python.ops import stateful_random_ops
+        state_ = stateful_random_ops.create_rng_state(seed=seed, alg=algorithm)
+        gen = _RndGeneratorCustomState.from_state(state_, alg=algorithm)
+        assert gen.state is state_
+
+    else:  # state is not None
       assert seed is None, "%s: explicit state and seed are mutually exclusive" % self
       state_ = state.output.placeholder
-      assert isinstance(state_, tf.Variable)
-      gen = tf.random.Generator.from_state(state_, alg=algorithm)
-      assert gen.state is state_
-    else:
-      assert auto_update_state is None or auto_update_state is False
-      assert seed is None, "%s: explicit state and seed are mutually exclusive" % self
-      state_ = state.output.placeholder
-
-      # Need to derive custom class from tf.random.Generator to not require a
-      class _RndGeneratorCustomState(tf.random.Generator):
-        # noinspection PyShadowingNames
-        def _create_variable(self, state, dtype, **_kwargs):
-          assert state is state_
-          return tf.cast(state_, dtype) if state_.dtype != dtype else state_
-
-        def skip(self, delta):
-          """returns state without actually changing it"""
-          return self.state
-
-      gen = _RndGeneratorCustomState.from_state(state_, alg=algorithm)
+      if auto_update_state is True:
+        assert isinstance(state_, tf.Variable)
+        gen = tf.random.Generator.from_state(state_, alg=algorithm)
+      else:
+        assert auto_update_state is None or auto_update_state is False
+        gen = _RndGeneratorCustomState.from_state(state_, alg=algorithm)
       assert gen.state is state_
     self.random_generator = gen
     self._distribution_attribs = (mean, stddev, bound, minval, maxval)
