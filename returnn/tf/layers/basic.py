@@ -2388,6 +2388,7 @@ class RandomLayer(LayerBase):
     #   when we reuse the same state var.
 
     # Need to derive custom class from tf.random.Generator to not require a tf.Variable in certain cases below.
+    # noinspection PyAbstractClass
     class _RndGeneratorCustomState(tf.random.Generator):
       # noinspection PyShadowingNames
       def _create_variable(self, state, dtype, **_kwargs):
@@ -2397,6 +2398,7 @@ class RandomLayer(LayerBase):
         """returns state without actually changing it"""
         return self.state
 
+    # noinspection PyAbstractClass
     class _RndGeneratorStaticSeed(_RndGeneratorCustomState):
       # noinspection PyShadowingNames
       def __init__(self, seed, alg):
