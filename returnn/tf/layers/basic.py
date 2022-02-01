@@ -2239,9 +2239,294 @@ class SeqLenMaskLayer(_ConcatInputLayer):
     return out
 
 
+class RandomStateInitLayer(LayerBase):
+  """
+  This calculates the initial state value for the state var
+  of :class:`RandomLayer`.
+  This depends on the algorithm and seed.
+  """
+  layer_class = "random_state_init"
+
+  def __init__(self, algorithm=None, seed=None, **kwargs):
+    """
+    :param str|tf.random.Algorithm|None algorithm: "philox", "three-fry", "auto-select". by default "philox".
+      See :func:`tf.random.stateless_uniform` for some documentation.
+      "auto-select" will automatically select the optimal algorithm based on the device,
+      so it might select a different algorithm depending on the device.
+      Note that the state shape is dependent on the device, so if you want that checkpoints are compatible
+      across devices, do not use "auto-select".
+      We take the default from :class:`tf.random.Generator`.
+    :param int|typing.Sequence[int]|numpy.ndarray|None seed: if given, the state will deterministically depend on this
+      (and the algorithm) and nothing else. If you have multiple random generators (state vars),
+      make sure that you have different seeds for each!
+      If None (default), the seed will be deterministically taken from the network random generator
+      at construction time, which is usually a good idea. You still can change the global network seed.
+    """
+    super(RandomStateInitLayer, self).__init__(**kwargs)
+    if seed is None:
+      seed = self.network.random.randint(2 ** 31, size=self.output.shape)
+    algorithm = self.select_algorithm(algorithm)
+    self.algorithm = algorithm
+    self.seed = seed
+    from tensorflow.python.ops import stateful_random_ops
+    self.output.placeholder = tf.convert_to_tensor(stateful_random_ops.create_rng_state(seed=seed, alg=algorithm))
+
+  @classmethod
+  def select_algorithm(cls, algorithm):
+    """
+    :param str|int|tf.random.Algorithm|None algorithm:
+    :rtype: int
+    """
+    from tensorflow.python.ops import stateful_random_ops, stateless_random_ops
+    if algorithm is None:
+      # Note: No auto-select because we want that the checkpoints are compatible across devices,
+      #   and thus it is required that the state var stays compatible (esp the shape).
+      return stateful_random_ops.DEFAULT_ALGORITHM
+    if isinstance(algorithm, int):
+      return algorithm
+    if isinstance(algorithm, tf.random.Algorithm):
+      return algorithm.value
+    if isinstance(algorithm, str):
+      try:
+        # noinspection PyUnresolvedReferences
+        convert_alg_to_int = stateless_random_ops.convert_alg_to_int
+      except AttributeError:
+        # noinspection PyProtectedMember,PyUnresolvedReferences
+        convert_alg_to_int = stateful_random_ops._convert_alg_to_int  # TF 2.6 or earlier
+      return convert_alg_to_int(algorithm.lower())
+    raise TypeError("algorithm %r" % (algorithm,))
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, algorithm=None, **kwargs):
+    """
+    :param str name:
+    :param str|None algorithm:
+    :rtype: Data
+    """
+    from tensorflow.python.ops import stateful_random_ops
+    algorithm = cls.select_algorithm(algorithm)
+    # noinspection PyProtectedMember
+    state_size = stateful_random_ops._get_state_size(algorithm)
+    return Data(name="%s_output" % name, shape=[state_size], batch_dim_axis=None, dtype=stateful_random_ops.STATE_TYPE)
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param returnn.tf.network.TFNetwork network:
+    :param get_layer:
+    """
+    d.setdefault("from", ())
+    super(RandomStateInitLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
+
+class RandomLayer(LayerBase):
+  """
+  Generates random numbers from uniform or normal or truncated normal distribution.
+
+  This uses the TensorFlow stateless random ops internally, i.e. all the state handling is explicit.
+  The state var can be explicitly provided and initialized via :class:`RandomStateInitLayer`,
+  or when not provided it will be automatically created.
+
+  There are two possible distinct use cases:
+
+  - For any randomness in the model, e.g. dropout. So each ``session.run`` step will produce a new random number
+    and advance the random state.
+  - To initialize parameters via the config, using :class:`VariableLayer` with the ``init_by_layer`` option.
+    This will only be called once when initializing the parameters.
+    For this use case, we do not want to keep a random state var.
+    You can just pass ``static=False``.
+    Alternatively you could also pass the output of a :class:`RandomStateInitLayer` as ``state``.
+  """
+  layer_class = "random"
+
+  def __init__(self, shape, distribution,
+               mean=None, stddev=None, bound=None, minval=None, maxval=None, dtype="float32",
+               seed=None,
+               algorithm=None, state=None, auto_update_state=None, static=None,
+               **kwargs):
+    """
+    :param typing.Sequence[Dim|int] shape:
+    :param str distribution: "uniform", "normal" or "truncated_normal"
+    :param int|float|LayerBase|None mean:
+    :param int|float|LayerBase|None stddev:
+    :param int|float|LayerBase|None bound: for uniform, defining the range [-bound, bound)
+    :param int|float|LayerBase|None minval: for uniform
+    :param int|float|LayerBase|None maxval: for uniform
+    :param str dtype:
+    :param int|list[int]|numpy.ndarray|None seed: If not given, uses self.network.random.randint,
+      i.e. then it is controlled by the global seed setting, and every layer would get its own seed.
+      If you specify it explicitly, make sure every :class:`RandomLayer` uses a different seed,
+      otherwise you would get the same random numbers everywhere.
+    :param str|tf.random.Algorithm|None algorithm: see :class:`RandomStateInitLayer`
+    :param LayerBase|None state: You can pass the state explicitly here.
+      If not given, will be created automatically, and updated automatically.
+      You could pass a :class:`VariableLayer` with initial value via :class:`RandomStateInitLayer`,
+      or directly a :class:`RandomStateInitLayer`.
+      If auto_update_state is True, it must be a variable,
+      and every time a new random number is created, this variable is updated.
+      Otherwise (default) it will not be updated automatically.
+    :param bool|None auto_update_state: only used when you pass an explicit state
+    :param bool|None static: if no state at all should be used. it just relies on the seed then.
+    """
+    def _attrib_value(x):
+      """
+      :param LayerBase|T x:
+      :rtype: tf.Tensor|T
+      """
+      if isinstance(x, LayerBase):
+        assert x.output.batch_shape == ()  # expect scalars
+        return x.output.placeholder
+      return x
+
+    shape  # noqa  # handled in get_out_data_from_opts
+    super(RandomLayer, self).__init__(**kwargs)
+    algorithm_int = RandomStateInitLayer.select_algorithm(algorithm)
+    # Note: tf.random.Generator itself is just a wrapper around a state variable
+    #   and corresponding stateless random ops.
+    #   It's cheap to create multiple instances of this class e.g. for different random distributions
+    #   when we reuse the same state var.
+
+    # Need to derive custom class from tf.random.Generator to not require a tf.Variable in certain cases below.
+    # noinspection PyAbstractClass
+    class _RndGeneratorCustomState(tf.random.Generator):
+      # noinspection PyShadowingNames
+      def _create_variable(self, state, dtype, **_kwargs):
+        return tf.cast(state, dtype) if state.dtype != dtype else state
+
+      def skip(self, delta):
+        """returns state without actually changing it"""
+        return self.state
+
+    # noinspection PyAbstractClass
+    class _RndGeneratorStaticSeed(_RndGeneratorCustomState):
+      # noinspection PyShadowingNames
+      def __init__(self, seed, alg):
+        from tensorflow.python.ops import stateful_random_ops
+        state_ = tf.convert_to_tensor(stateful_random_ops.create_rng_state(seed=seed, alg=alg))
+        super(_RndGeneratorStaticSeed, self).__init__(state=state_, alg=alg)
+        assert self.state is state_
+
+        # The underlying implementation in more recent TF versions uses gen_stateless_random_ops_v2
+        # which is good.
+        # Earlier TF versions uses gen_stateful_random_ops which requires a tf.Variable
+        # so we cannot use it.
+        # In that case, we can still do some fallback here for the case with a static seed.
+        if tf_util.tf_version_tuple() < (2, 6, 0):
+          assert algorithm is None, "%s: custom algorithm not supported on older TF version" % self
+          for func_name in ["normal", "truncated_normal", "uniform"]:
+            func = getattr(tf.random, "stateless_" + func_name)
+            setattr(self, func_name, lambda _func=func, **kwargs_: _func(seed=seed[:2], **kwargs_))
+
+    self.state_var = state
+    if state is None:
+      if static is None or static is False:
+        assert auto_update_state is None or auto_update_state is True, (
+          "%s: without explicit state, we always auto-update" % self)
+        with self.var_creation_scope():
+          if seed is None:
+            seed = self.network.random.randint(2 ** 31, size=[32], dtype="uint32")
+          gen = tf.random.Generator.from_seed(seed=seed, alg=algorithm_int)
+          self.add_param(gen.state)
+      else:  # static is True
+        assert static is True
+        assert auto_update_state is None or auto_update_state is False, (
+          "%s: in static mode, we can not auto-update" % self)
+        if seed is None:
+          seed = self.network.random.randint(2 ** 31, size=[32], dtype="uint32")
+        gen = _RndGeneratorStaticSeed(seed=seed, alg=algorithm_int)
+
+    else:  # state is not None
+      assert static is None or static is False, "%s: state is given, thus it is not static" % self
+      assert seed is None, "%s: explicit state and seed are mutually exclusive" % self
+      state_ = state.output.placeholder
+      if auto_update_state is True:
+        assert isinstance(state_, tf.Variable)
+        gen = tf.random.Generator.from_state(state_, alg=algorithm_int)
+      else:
+        assert auto_update_state is None or auto_update_state is False
+        gen = _RndGeneratorCustomState.from_state(state_, alg=algorithm_int)
+      assert gen.state is state_
+    self.random_generator = gen
+    self._distribution_attribs = (mean, stddev, bound, minval, maxval)
+    mean, stddev, bound, minval, maxval = [_attrib_value(attrib) for attrib in self._distribution_attribs]
+    shape_ = [d.get_dim_value() for d in self.output.dim_tags]
+    if distribution == "uniform":
+      if minval is not None or maxval is not None:
+        assert maxval is not None
+        assert mean is None and stddev is None and bound is None
+        if minval is None:
+          minval = 0
+      elif bound is not None:
+        assert mean is None and stddev is None
+        minval, maxval = -bound, bound
+      elif mean is not None or stddev is not None:
+        if mean is None:
+          mean = 0
+        assert stddev is not None
+        import math
+        _b = math.sqrt(3.) * stddev
+        minval, maxval = -_b + mean, _b + mean
+      else:
+        raise ValueError("%s: uniform distribution needs either mean, stddev, bound or minval, maxval" % self)
+      out = gen.uniform(shape=shape_, minval=minval, maxval=maxval, dtype=dtype)
+    elif distribution in {"normal", "truncated_normal"}:
+      assert minval is None and maxval is None and bound is None
+      if mean is None:
+        mean = 0
+      if stddev is None:
+        stddev = 1
+      if distribution == "normal":
+        out = gen.normal(shape=shape_, mean=mean, stddev=stddev, dtype=dtype)
+      elif distribution == "truncated_normal":
+        out = gen.truncated_normal(shape=shape_, mean=mean, stddev=stddev, dtype=dtype)
+      else:
+        assert False, distribution  # should not get here
+    else:
+      raise ValueError("%s: unknown distribution %r (or not implemented yet)" % (self, distribution))
+    self.output.placeholder = out
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    deps = super(RandomLayer, self).get_dep_layers()
+    if self.state_var:
+      deps.append(self.state_var)
+    for attrib in self._distribution_attribs:
+      if isinstance(attrib, LayerBase):
+        deps.append(attrib)
+    return deps
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param returnn.tf.network.TFNetwork network:
+    :param get_layer:
+    """
+    d.setdefault("from", ())
+    super(RandomLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    for attrib in ("mean", "stddev", "bound", "minval", "maxval", "state_var"):
+      if attrib in d and isinstance(d[attrib], str):
+        d[attrib] = get_layer(d[attrib])
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, shape, dtype="float32", **kwargs):
+    """
+    :param str name:
+    :param typing.Sequence[Dim|int] shape:
+    :param str dtype:
+    :rtype: Data
+    """
+    dim_tags = [d if isinstance(d, Dim) else SpatialDim("%s:dim%i" % (name, i), d) for i, d in enumerate(shape)]
+    return Data(name="%s_output" % name, dim_tags=dim_tags, dtype=dtype)
+
+
 class RandIntLayer(LayerBase):
   """
-  Generates random numbers using ``tf.random.uniform``
+  Generates random integer numbers using ``tf.random.uniform``.
+  It is recommended to use :class:`RandomLayer` instead.
   """
   layer_class = "rand_int"
 
@@ -8163,8 +8448,10 @@ class VariableLayer(LayerBase):
   """
   layer_class = "variable"
 
-  def __init__(self, shape, dtype="float32", add_batch_axis=False, add_time_axis=False, trainable=True,
-               init=0,
+  def __init__(self, shape, dtype="float32",
+               add_batch_axis=False, add_time_axis=False,
+               trainable=True,
+               init=None, init_by_layer=None,
                **kwargs):
     """
     :param tuple[int|Dim]|list[int|Dim] shape:
@@ -8172,13 +8459,14 @@ class VariableLayer(LayerBase):
     :param bool add_batch_axis:
     :param bool add_time_axis:
     :param bool trainable:
-    :param str|float|int init: see :func:`returnn.tf.util.basic.get_initializer`
+    :param str|float|int|None init: see :func:`returnn.tf.util.basic.get_initializer`. 0 by default.
+      Alternatively, you can also use option `init_by_layer`.
+    :param LayerBase|None init_by_layer:
     """
     shape  # noqa  # used in get_out_data_from_opts
     super(VariableLayer, self).__init__(trainable=trainable, **kwargs)
     assert not self.sources, "%s: does not expect any sources" % self
-    from returnn.tf.util.basic import get_initializer, expand_dims_unbroadcast
-    initializer = get_initializer(init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
+    self.init_by_layer = init_by_layer
     dim_tags = list(self.output.dim_tags)
     if add_batch_axis:
       assert dim_tags[0].is_batch_dim()
@@ -8189,6 +8477,16 @@ class VariableLayer(LayerBase):
     shape_ = [d.dimension for d in dim_tags]
     assert all(shape_), self.output  # all static
     with self.var_creation_scope():
+      if init_by_layer is None:
+        if init is None:
+          init = 0
+        initializer = tf_util.get_initializer(
+          init, dtype=dtype, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
+      else:
+        assert init_by_layer is not None
+        out_data_base = Data(name=self.output.name, dim_tags=dim_tags, dtype=dtype)
+        initializer = init_by_layer.output.copy_compatible_to(out_data_base).placeholder
+        shape_ = None  # get_variable requires shape to be not defined when the initializer is another tensor
       var = self.add_param(tf_compat.v1.get_variable(
         name=self.name, shape=shape_, dtype=dtype,
         initializer=initializer, trainable=trainable),
@@ -8199,8 +8497,17 @@ class VariableLayer(LayerBase):
       if add_batch_axis:
         # Unbroadcast to not confuse some other layers
         batch_dim = self.output.get_batch_dim()
-        out = expand_dims_unbroadcast(out, axis=0, dim=batch_dim)
+        out = tf_util.expand_dims_unbroadcast(out, axis=0, dim=batch_dim)
     self.output.placeholder = out
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    deps = super(VariableLayer, self).get_dep_layers()
+    if self.init_by_layer:
+      deps.append(self.init_by_layer)
+    return deps
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -8213,6 +8520,8 @@ class VariableLayer(LayerBase):
     # Here: none by default.
     d.setdefault("from", [])
     super(VariableLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if d.get("init_by_layer", None):
+      d["init_by_layer"] = get_layer(d["init_by_layer"])
 
   @classmethod
   def get_out_data_from_opts(cls, name, network,

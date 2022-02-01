@@ -5521,6 +5521,55 @@ def test_VariableLayer_split_info():
       [2 * [feat1.dimension] + [feat2.dimension], 3 * [feat1.dimension]])
 
 
+def test_VariableLayer_init_by_layer():
+  # https://github.com/rwth-i6/returnn/wiki/Parameter-initialization
+  # https://pytorch.org/docs/1.9.1/_modules/torch/nn/modules/linear.html#Linear
+  # https://pytorch.org/docs/1.9.1/nn.init.html
+  # https://github.com/pytorch/pytorch/blob/d665097cad3207795a655bbdde7a4123c0adc1c3/torch/nn/modules/linear.py#L96
+  # https://github.com/pytorch/pytorch/issues/57109
+  # https://github.com/pytorch/pytorch/blob/77721ee318d6785010144aa4569efb98199e7162/torch/nn/init.py#L390-L395
+  # https://github.com/pytorch/pytorch/pull/41638
+  # https://github.com/pytorch/pytorch/issues/18182
+  """
+  PyTorch new / proposed Linear weight:
+    kaiming_normal_(mode='fan_out')  # default nonlinearity='leaky_relu', default neg slope 0.01
+    (ignoring neg slope) -> std = sqrt(2 / fan_out)
+
+  PyTorch old / current Linear weight:
+    kaiming_uniform_(self.weight, a=math.sqrt(5))  # default nonlinearity='leaky_relu', mode='fan_in'
+    -> std = sqrt(1 / (3 * fan_in))  -> bound = sqrt(1/fan_in)
+
+  For uniform distribution, bound = sqrt(3) * std.
+  For truncated normal distribution: stddev /= .87962566103423978  # TF VarianceScaling, scipy a=-2, b=2 ...
+  """
+  shape = (3, 4)
+  net_dict = {
+    "random": {"class": "random", "shape": shape, "distribution": "truncated_normal", "static": True},
+    "var": {"class": "variable", "shape": shape, "init_by_layer": "random"},
+    "output": {"class": "copy", "from": "var"}
+  }
+  config = Config({
+    "extern_data": {"data": {"dim": 4}},  # not actually used...
+  })
+  tf_rnd_seed = 42
+  with make_scope() as session:
+    tf_compat.v1.set_random_seed(tf_rnd_seed)
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    assert_equal(net.layers["random"].params, {})
+    assert_equal(net.get_params_list(), [next(iter(net.layers["var"].params.values()))])
+    net.initialize_params(session)
+    var_v = session.run(net.layers["var"].output.placeholder)
+  # Run again to check that it is deterministic.
+  with make_scope() as session:
+    tf_compat.v1.set_random_seed(tf_rnd_seed)
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    net.initialize_params(session)
+    var_v_ = session.run(net.layers["var"].output.placeholder)
+  numpy.testing.assert_array_equal(var_v, var_v_)
+
+
 def test_extra1():
   n_in, n_out = 2, 3
   config = Config({
