@@ -6464,7 +6464,9 @@ def test_batch_norm_args():
 def test_contrastive_loss():
   from returnn.tf.util.data import batch_dim
   dim_masked_flat = SpatialDim("masked_flat")
+  input_dim = FeatureDim("input", 10)
   enc_feat_dim = FeatureDim("encoder_dim", 20)
+  project_dim = FeatureDim("project_dim", 15)
 
   dim_neg_samples = SpatialDim("neg_samples", 10)  # 100
   dim_expand = SpatialDim("expand_dim", 1)
@@ -6517,25 +6519,28 @@ def test_contrastive_loss():
     return mask
 
   net_dict = {
-    "input": {"class": "linear", "from": "data", "activation": None, "out_dim": enc_feat_dim},
+    "input": {"class": "linear", "from": "data", "activation": "relu", "out_dim": input_dim},
 
-    # True -> should be masked out by 0., False -> keep
+    # True -> should be masked out by mask embed vector, False -> keep
     "input_mask": {
       "class": "eval", "from": "input",
       "eval": _get_mask_eval_layer,
       "out_type": {"dtype": "bool", "shape": (None,)}
     },  # [B,T]
 
-    "input_masked": {"class": "switch", "condition": "input_mask", "true_from": 0.0, "false_from": "input"},  # [B,T,F]
+    "mask_emb": {"class": "variable", "shape": [input_dim]},
+
+    "input_masked": {
+      "class": "switch", "condition": "input_mask", "true_from": "mask_emb", "false_from": "input"},  # [B,T,F]
 
     # For this loss, the model must be able to look at context, otherwise it does not make sense.
     # https://github.com/rwth-i6/returnn/pull/918
     "conv": {
       "class": "conv", "from": "input_masked",
       "filter_size": [5], "padding": "same",
-      "n_out": 10, "activation": "tanh"},
+      "n_out": 10, "activation": "relu"},
 
-    "encoder": {"class": "linear", "activation": None, "from": "conv", "out_dim": enc_feat_dim},  # [B,T,F]
+    "encoder": {"class": "linear", "from": "conv", "out_dim": enc_feat_dim},  # [B,T,F]
 
     "contrastive_loss": {
       "class": "subnetwork", "from": [],
@@ -6545,39 +6550,40 @@ def test_contrastive_loss():
         "enc_masked_frames": {
           "class": "reinterpret_data", "from": "enc_masked_frames_", "size_base": "input_masked_frames"},
         "enc_masked_frames_flat": {"class": "flatten_batch", "from": "enc_masked_frames"},  # [B_M, F]
-        "_def_dim_masked_flat": {"class": "reinterpret_data", "from": "enc_masked_frames_flat",
-                                 "set_dim_tags": {"B": dim_masked_flat}},  # just assign dim_masked_flat
+        "c": {"class": "linear", "from": "enc_masked_frames_flat", "out_dim": project_dim},
+
         # We take the non-masked input of the masked frames -> q_t in the paper.
         "input_masked_frames": {"class": "masked_computation", "mask": "base:input_mask", "from": "base:input",
                                 "unit": {"class": "copy", "from": "data"}},  # [B, T_M, F]
         "input_masked_frames_flat": {"class": "flatten_batch", "from": "input_masked_frames"},  # [B_M, F]
+        "q": {"class": "linear", "from": "input_masked_frames_flat", "out_dim": project_dim},
+        "q_len": {"class": "length", "from": "input_masked_frames_flat", "axis": "B"},  # scalar
+        "_def_dim_masked_flat": {"class": "reinterpret_data", "from": "input_masked_frames_flat",
+                                 "set_dim_tags": {"B": dim_masked_flat}},  # just assign dim_masked_flat
 
         # Candidate samples
-        "input_flat": {"class": "flatten_batch", "from": "base:input"},  # [B_T,F]
-        "input_flat_len": {"class": "length", "from": "input_flat", "axis": "B"},  # scalar -> B_T
-        "samples_rand_indices_": {"class": "rand_int", "maxval": "input_flat_len",
-                                  "from": "_def_dim_masked_flat",
-                                  "shape": [dim_masked_flat, dim_neg_samples]},  # [B_M, K] -> 0..B_T-1
-        "samples_rand_indices": {
-          "class": "reinterpret_data", "from": "samples_rand_indices_",
-          "set_dim_tags": {dim_masked_flat: batch_dim}, "batch_dim_base": "enc_masked_frames_flat"},
-        "sampled_frames_": {"class": "gather", "from": "input_flat", "position": "samples_rand_indices", "axis": "B"},
-        # [B_M, K, F]
-        "input_masked_frames_flat_expand": {"class": "expand_dims", "axis": "spatial", "dim": dim_expand,
-                                            "from": "input_masked_frames_flat"},  # [B_M, 1, F]
-        "sampled_frames": {"class": "concat", "from": [("input_masked_frames_flat_expand", dim_expand),
-                                                       ("sampled_frames_", dim_neg_samples)]},  # [B_M, K+1, F]
+        "q_samples_rand_indices_": {"class": "rand_int", "maxval": "q_len",
+                                    "from": "_def_dim_masked_flat",
+                                    "shape": [dim_masked_flat, dim_neg_samples]},  # [B_M, K] -> 0..B_T-1
+        "q_samples_rand_indices": {
+          "class": "reinterpret_data", "from": "q_samples_rand_indices_",
+          "set_dim_tags": {dim_masked_flat: batch_dim}, "batch_dim_base": "input_masked_frames_flat"},
+        "q_sampled_frames": {
+          "class": "gather", "from": "q", "position": "q_samples_rand_indices", "axis": "B"},  # [B_M, K, F]
+        "q_expand": {"class": "expand_dims", "axis": "spatial", "dim": dim_expand, "from": "q"},  # [B_M, 1, F]
+        "Q": {"class": "concat", "from": [
+          ("q_expand", dim_expand), ("q_sampled_frames", dim_neg_samples)]},  # [B_M, K+1, F]
 
         # Cosine similarity between sampled frames and masked encoder frames
         "cos_similarity": {
-          "class": "subnetwork", "from": ["sampled_frames", "enc_masked_frames_flat"], "concat_sources": False,
+          "class": "subnetwork", "from": ["Q", "c"], "concat_sources": False,
           "subnetwork": {
             # [B_M, K+1, F] * [B_M, F] -> [B_M, K+1]
-            "dot": {"class": "dot", "from": ["data:0", "data:1"], "reduce": enc_feat_dim},
+            "dot": {"class": "dot", "from": ["data:0", "data:1"], "reduce": project_dim},
             "norm_a_sq_": {"class": "eval", "from": "data:0", "eval": "source(0) ** 2"},
-            "norm_a_sq": {"class": "reduce", "mode": "sum", "from": "norm_a_sq_", "axes": enc_feat_dim},  # [B_M, K+1]
+            "norm_a_sq": {"class": "reduce", "mode": "sum", "from": "norm_a_sq_", "axes": project_dim},  # [B_M, K+1]
             "norm_b_sq_": {"class": "eval", "from": "data:1", "eval": "source(0) ** 2"},
-            "norm_b_sq": {"class": "reduce", "mode": "sum", "from": "norm_b_sq_", "axes": enc_feat_dim},  # [B_M]
+            "norm_b_sq": {"class": "reduce", "mode": "sum", "from": "norm_b_sq_", "axes": project_dim},  # [B_M]
             "output": {"class": "eval", "from": ["dot", "norm_a_sq", "norm_b_sq"],
                        "eval": "source(0) * tf.minimum(tf.math.rsqrt(source(1) * source(2)), 1./1e-8)"},  # [B_M, K+1]
           },
