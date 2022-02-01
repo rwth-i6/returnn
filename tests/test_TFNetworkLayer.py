@@ -5416,7 +5416,8 @@ def test_VariableLayer_init_by_layer():
   """
   shape = (3, 4)
   net_dict = {
-    "random": {"class": "random", "shape": shape, "distribution": "truncated_normal"},
+    "random_state": {"class": "random_state_init"},
+    "random": {"class": "random", "shape": shape, "distribution": "truncated_normal", "state": "random_state"},
     "var": {"class": "variable", "shape": shape, "init_by_layer": "random"},
     "output": {"class": "copy", "from": "var"}
   }
