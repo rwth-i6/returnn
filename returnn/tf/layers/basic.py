@@ -2291,7 +2291,7 @@ class RandomStateInitLayer(LayerBase):
         # noinspection PyUnresolvedReferences
         convert_alg_to_int = stateless_random_ops.convert_alg_to_int
       except AttributeError:
-        # noinspection PyProtectedMember
+        # noinspection PyProtectedMember,PyUnresolvedReferences
         convert_alg_to_int = stateful_random_ops._convert_alg_to_int  # TF 2.6 or earlier
       return convert_alg_to_int(algorithm.lower())
     raise TypeError("algorithm %r" % (algorithm,))
@@ -2309,6 +2309,16 @@ class RandomStateInitLayer(LayerBase):
     state_size = stateful_random_ops._get_state_size(algorithm)
     return Data(name="%s_output" % name, shape=[state_size], batch_dim_axis=None, dtype=stateful_random_ops.STATE_TYPE)
 
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param returnn.tf.network.TFNetwork network:
+    :param get_layer:
+    """
+    d.setdefault("from", ())
+    super(RandomStateInitLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
 
 class RandomLayer(LayerBase):
   """
@@ -2324,15 +2334,15 @@ class RandomLayer(LayerBase):
     and advance the random state.
   - To initialize parameters via the config, using :class:`VariableLayer` with the ``init_by_layer`` option.
     This will only be called once when initializing the parameters.
-    For this use case, we do not want to keep a random state var... (TODO or do we?)
-    TODO we might want to follow the logic of VarianceScaling from TF initializer_v2 ...
-
+    For this use case, we do not want to keep a random state var.
+    You can pass the output of a :class:`RandomStateInitLayer` directly here.
   """
   layer_class = "random"
 
   def __init__(self, shape, distribution,
-               mean=None, stddev=None, bound=None, minval=None, maxval=None, dtype="float32", seed=None,
-               state_var=None, algorithm=None,
+               mean=None, stddev=None, bound=None, minval=None, maxval=None, dtype="float32",
+               seed=None,
+               algorithm=None, state=None, auto_update_state=None,
                **kwargs):
     """
     :param typing.Sequence[Dim|int] shape:
@@ -2343,10 +2353,19 @@ class RandomLayer(LayerBase):
     :param int|float|LayerBase|None minval: for uniform
     :param int|float|LayerBase|None maxval: for uniform
     :param str dtype:
-    :param int|list[int]|numpy.ndarray|None seed:
-    :param LayerBase|None state_var: if given, should be :class:`VariableLayer` (TODO really?),
-      with initial value via :class:`RandomStateInitLayer`
+    :param int|list[int]|numpy.ndarray|None seed: If not given, uses self.network.random.randint,
+      i.e. then it is controlled by the global seed setting, and every layer would get its own seed.
+      If you specify it explicitly, make sure every :class:`RandomLayer` uses a different seed,
+      otherwise you would get the same random numbers everywhere.
     :param str|tf.random.Algorithm|None algorithm: see :class:`RandomStateInitLayer`
+    :param LayerBase|None state: You can pass the state explicitly here.
+      If not given, will be created automatically, and updated automatically.
+      You could pass a :class:`VariableLayer` with initial value via :class:`RandomStateInitLayer`,
+      or directly a :class:`RandomStateInitLayer`.
+      If auto_update_state is True, it must be a variable,
+      and every time a new random number is created, this variable is updated.
+      Otherwise (default) it will not be updated automatically.
+    :param bool|None auto_update_state: only used when you pass an explicit
     """
     def _attrib_value(x):
       """
@@ -2365,18 +2384,39 @@ class RandomLayer(LayerBase):
     #   and corresponding stateless random ops.
     #   It's cheap to create multiple instances of this class e.g. for different random distributions
     #   when we reuse the same state var.
-    self.state_var = state_var
-    if state_var is None:
+    self.state_var = state
+    if state is None:
+      assert auto_update_state is None or auto_update_state is True, (
+        "%s: without explicit state, we always auto-update" % self)
       with self.var_creation_scope():
         if seed is None:
           seed = self.network.random.randint(2 ** 31, size=[32], dtype="uint32")
         gen = tf.random.Generator.from_seed(seed=seed, alg=algorithm)
         self.add_param(gen.state)
+    elif auto_update_state is True:
+      assert seed is None, "%s: explicit state and seed are mutually exclusive" % self
+      state_ = state.output.placeholder
+      assert isinstance(state_, tf.Variable)
+      gen = tf.random.Generator.from_state(state_, alg=algorithm)
+      assert gen.state is state_
     else:
-      assert seed is None, "%s: state_var and seed are mutually exclusive" % self
-      state_var_ = state_var.output.placeholder
-      assert isinstance(state_var_, tf.Variable), "%s: state_var %s expected to be a VariableLayer" % (self, state_var)
-      gen = tf.random.Generator.from_state(state_var, alg=algorithm)
+      assert auto_update_state is None or auto_update_state is False
+      assert seed is None, "%s: explicit state and seed are mutually exclusive" % self
+      state_ = state.output.placeholder
+
+      # Need to derive custom class from tf.random.Generator to not require a
+      class _RndGeneratorCustomState(tf.random.Generator):
+        # noinspection PyShadowingNames
+        def _create_variable(self, state, dtype, **_kwargs):
+          assert state is state_
+          return tf.cast(state_, dtype) if state_.dtype != dtype else state_
+
+        def skip(self, delta):
+          """returns state without actually changing it"""
+          return self.state
+
+      gen = _RndGeneratorCustomState.from_state(state_, alg=algorithm)
+      assert gen.state is state_
     self.random_generator = gen
     self._distribution_attribs = (mean, stddev, bound, minval, maxval)
     mean, stddev, bound, minval, maxval = [_attrib_value(attrib) for attrib in self._distribution_attribs]
