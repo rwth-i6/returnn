@@ -2343,7 +2343,7 @@ class RandomLayer(LayerBase):
   def __init__(self, shape, distribution,
                mean=None, stddev=None, bound=None, minval=None, maxval=None, dtype="float32",
                seed=None,
-               algorithm=None, state=None, auto_update_state=None, static=None,
+               algorithm=None, explicit_state=None, auto_update_state=None, static=None,
                **kwargs):
     """
     :param typing.Sequence[Dim|int] shape:
@@ -2359,7 +2359,7 @@ class RandomLayer(LayerBase):
       If you specify it explicitly, make sure every :class:`RandomLayer` uses a different seed,
       otherwise you would get the same random numbers everywhere.
     :param str|tf.random.Algorithm|None algorithm: see :class:`RandomStateInitLayer`
-    :param LayerBase|None state: You can pass the state explicitly here.
+    :param LayerBase|None explicit_state: You can pass the state explicitly here.
       If not given, will be created automatically, and updated automatically.
       You could pass a :class:`VariableLayer` with initial value via :class:`RandomStateInitLayer`,
       or directly a :class:`RandomStateInitLayer`.
@@ -2418,8 +2418,8 @@ class RandomLayer(LayerBase):
             func = getattr(tf.random, "stateless_" + func_name)
             setattr(self, func_name, lambda _func=func, **kwargs_: _func(seed=seed[:2], **kwargs_))
 
-    self.state_var = state
-    if state is None:
+    self.explicit_state = explicit_state
+    if explicit_state is None:
       if static is None or static is False:
         assert auto_update_state is None or auto_update_state is True, (
           "%s: without explicit state, we always auto-update" % self)
@@ -2439,7 +2439,7 @@ class RandomLayer(LayerBase):
     else:  # state is not None
       assert static is None or static is False, "%s: state is given, thus it is not static" % self
       assert seed is None, "%s: explicit state and seed are mutually exclusive" % self
-      state_ = state.output.placeholder
+      state_ = explicit_state.output.placeholder
       if auto_update_state is True:
         assert isinstance(state_, tf.Variable)
         gen = tf.random.Generator.from_state(state_, alg=algorithm_int)
@@ -2491,8 +2491,8 @@ class RandomLayer(LayerBase):
     :rtype: list[LayerBase]
     """
     deps = super(RandomLayer, self).get_dep_layers()
-    if self.state_var:
-      deps.append(self.state_var)
+    if self.explicit_state:
+      deps.append(self.explicit_state)
     for attrib in self._distribution_attribs:
       if isinstance(attrib, LayerBase):
         deps.append(attrib)
@@ -2507,7 +2507,7 @@ class RandomLayer(LayerBase):
     """
     d.setdefault("from", ())
     super(RandomLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
-    for attrib in ("mean", "stddev", "bound", "minval", "maxval", "state_var"):
+    for attrib in ("mean", "stddev", "bound", "minval", "maxval", "explicit_state"):
       if attrib in d and isinstance(d[attrib], str):
         d[attrib] = get_layer(d[attrib])
 
