@@ -2330,12 +2330,13 @@ class RandomLayer(LayerBase):
 
   There are two possible distinct use cases:
 
-  - For any randomness in the model, e.g. dropout. So each session.run step will produce a new random number
+  - For any randomness in the model, e.g. dropout. So each ``session.run`` step will produce a new random number
     and advance the random state.
   - To initialize parameters via the config, using :class:`VariableLayer` with the ``init_by_layer`` option.
     This will only be called once when initializing the parameters.
     For this use case, we do not want to keep a random state var.
-    You can pass the output of a :class:`RandomStateInitLayer` directly here.
+    You can just pass ``static=False``.
+    Alternatively you could also pass the output of a :class:`RandomStateInitLayer` as ``state``.
   """
   layer_class = "random"
 
@@ -2417,6 +2418,7 @@ class RandomLayer(LayerBase):
         assert gen.state is state_
 
     else:  # state is not None
+      assert static is None or static is False, "%s: state is given, thus it is not static" % self
       assert seed is None, "%s: explicit state and seed are mutually exclusive" % self
       state_ = state.output.placeholder
       if auto_update_state is True:
