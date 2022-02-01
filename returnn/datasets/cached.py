@@ -86,8 +86,12 @@ class CachedDataset(Dataset):
     old_index_map = self._index_map[:]
     self._index_map = range(len(seq_index))  # sorted seq idx -> seq_index idx
 
-    if (isinstance(seq_index, numpy.ndarray) and numpy.array_equal(self._seq_index, seq_index)
-        or self._seq_index == seq_index) and self.start_cache_initialized:
+    if isinstance(seq_index, numpy.ndarray):
+      seq_index_unchanged = numpy.array_equal(self._seq_index, seq_index)
+    else:
+      seq_index_unchanged = (self._seq_index == seq_index)
+
+    if seq_index_unchanged and self.start_cache_initialized:
       return False
 
     if epoch is not None:
