@@ -700,7 +700,7 @@ def check_input_ndim(x, ndim):
   # Need to fall-back to runtime check.
   with tf.name_scope("check_input_ndim"):
     with tf.control_dependencies(
-      [tf_compat.v1.assert_equal(tf.rank(x), ndim, data=["ndim not %i" % ndim, tf.shape(x)])]):
+          [tf_compat.v1.assert_equal(tf.rank(x), ndim, data=["ndim not %i" % ndim, tf.shape(x)])]):
       return tf.identity(x, "identity_with_ndim_check")
 
 
@@ -6586,8 +6586,8 @@ def get_linear_alignment_out_to_in_indices(input_lens, output_lens, pad_value=0)
 
 
 def get_rnnt_linear_aligned_output(
-  input_lens, targets, target_lens, blank_label_idx, pad_value=0,
-  targets_consume_time=False):
+      input_lens, targets, target_lens, blank_label_idx, pad_value=0,
+      targets_consume_time=False):
   """
   RNN-T (https://arxiv.org/abs/1211.3711) has an output length of input_lens + target_lens.
   Here we create a linear alignment.
