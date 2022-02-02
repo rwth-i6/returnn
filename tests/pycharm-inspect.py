@@ -280,7 +280,7 @@ def setup_pycharm_python_interpreter(pycharm_dir):
     if not pip_check_is_installed("Theano"):
       pip_install("theano==0.9")
     # Note: Horovod will usually fail to install in this env.
-    for pkg in ["typing", "librosa", "PySoundFile", "nltk", "matplotlib", "mpi4py"]:
+    for pkg in ["typing", "librosa", "PySoundFile", "nltk", "matplotlib", "mpi4py", "pycodestyle"]:
       if not pip_check_is_installed(pkg):
         try:
           pip_install(pkg)
@@ -490,7 +490,7 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
   for py_src_file in find_all_py_source_files():
     ignore_codes = "E121,E123,E126,E226,E24,E704,W503,W504"  # PyCharm defaults
     cmd = [
-      sys.executable, "%s/plugins/python-ce/helpers/pycodestyle.py" % pycharm_dir,
+      "pycodestyle",
       py_src_file,
       "--ignore=%s" % ignore_codes,
       "--indent-size=2",
