@@ -981,9 +981,9 @@ class ExternSprintDataset(SprintDatasetBase):
       epoch = 1
     with self.lock:
       if (
-        epoch == self.returnn_epoch and
-        self.expected_load_seq_start == 0 and
-        seq_list == self.predefined_seq_list_order):
+            epoch == self.returnn_epoch and
+            self.expected_load_seq_start == 0 and
+            seq_list == self.predefined_seq_list_order):
         return
       # Reset epoch such that exiting the child will go smoothly.
       super(ExternSprintDataset, self).init_seq_order(epoch=None, seq_list=None, seq_order=None)
