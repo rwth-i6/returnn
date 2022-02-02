@@ -132,6 +132,7 @@ class ExternData(object):
     """
     from returnn.tf.util.basic import reuse_name_scope_of_tensor, get_shape_dim
     from returnn.tf.util.data import BatchInfo
+    from returnn.tf.util.data import batch_dim as global_batch_dim_tag
     batch_info = None  # type: typing.Optional[BatchInfo]
     # Maybe we already set it, and then added new data items.
     for key, data in self.get_sorted_data_items():
@@ -162,6 +163,8 @@ class ExternData(object):
       if batch_dim is None:
         return  # no exception here, maybe not used. fail later in get_batch_info
       batch_info = BatchInfo.make_global_batch_info(batch_dim=batch_dim)
+    # Set batch info on global batch dim tag. We should probably change this at some point to not modify the global tag.
+    global_batch_dim_tag.batch = batch_info
     # Set batch info on extern data.
     # Overwrite all in case some dim tags have been used before and are still set to old global batch info.
     for data in self.data.values():
