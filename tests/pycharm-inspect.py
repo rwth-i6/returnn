@@ -489,11 +489,14 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
   from lint_common import find_all_py_source_files
   for py_src_file in find_all_py_source_files():
     ignore_codes = "E121,E123,E126,E226,E24,E704,W503,W504"  # PyCharm defaults
+    indent_size = 2  # default for RETURNN
+    if py_src_file.endswith("/better_exchook.py"):
+      indent_size = 4
     cmd = [
       "pycodestyle",
       py_src_file,
       "--ignore=%s" % ignore_codes,
-      "--indent-size=2",
+      "--indent-size=%i" % indent_size,
       "--max-line-length=120"]
     print("$ %s" % " ".join(cmd))
     sys.stdout.flush()
