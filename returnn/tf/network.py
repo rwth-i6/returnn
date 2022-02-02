@@ -612,9 +612,10 @@ class TFNetwork(object):
         continue
       if layer_desc.get("only_on_eval") and not self.eval_flag:
         continue
-      if (name == "output" or name.endswith(":output")
-              or layer_desc.get("loss", None)
-              or layer_desc.get("is_output_layer", False)):
+      if (
+            name == "output" or name.endswith(":output")
+            or layer_desc.get("loss", None)
+            or layer_desc.get("is_output_layer", False)):
         self.construct_layer(net_dict, name, get_layer=get_layer)
 
     # Possibly create remaining sub layers in subnetworks.
@@ -1041,8 +1042,9 @@ class TFNetwork(object):
           **debug_print_layer_output.collection)
       if layer.output.placeholder is not None and debug_runtime_sanity_checks:
         layer.output.placeholder = layer.output.get_placeholder_with_runtime_sanity_checks()
-      if (layer.output.placeholder is not None and debug_add_check_numerics_on_output
-              and layer.output.dtype.startswith("float") and not layer.allow_inf_in_output):
+      if (
+            layer.output.placeholder is not None and debug_add_check_numerics_on_output
+            and layer.output.dtype.startswith("float") and not layer.allow_inf_in_output):
         print("debug_add_check_numerics_on_output: add for layer %r: %r" % (name, layer.output.placeholder))
         from returnn.tf.util.basic import identity_with_check_numerics
         layer.output.placeholder = identity_with_check_numerics(
@@ -3126,8 +3128,9 @@ class LossHolder:
           tf_compat.v1.summary.scalar("exp_loss_%s" % name, tf.exp(self._loss_value * self._norm_factor))
         if self._network.get_config().bool("debug_unnormalized_loss_summaries", False):
           tf_compat.v1.summary.scalar("unnormalized_loss_%s" % name, self._loss_value)
-        if (self._network.get_config().bool("debug_objective_loss_summaries", False) and
-                self._loss_value_for_objective is not None):
+        if (
+              self._network.get_config().bool("debug_objective_loss_summaries", False) and
+              self._loss_value_for_objective is not None):
           tf_compat.v1.summary.scalar("objective_loss_%s" % name, self._loss_value_for_objective)
     if self._error_value is not None:
       if self._error_value.get_shape().ndims == 0:
@@ -3311,9 +3314,9 @@ def _help_data_or_array(value):
 
 
 def help_on_tf_exception(
-  session, exception, fetches, feed_dict=None,
-  meta_step_info=None, extern_data=None,
-  file=sys.stdout):
+      session, exception, fetches, feed_dict=None,
+      meta_step_info=None, extern_data=None,
+      file=sys.stdout):
   """
   Generic debugging helper, on any TF exception (or even any other exception as well).
   Will try to provide as much helpful context information as possible.
@@ -3899,7 +3902,7 @@ class CustomCheckpointLoader:
     for v in missing_var_names:
       # Check NativeLSTM -> BasicLSTM.
       for postfix in [
-        "/rnn/lstm_cell/kernel", "/lstm_cell/kernel", "/rnn/basic_lstm_cell/kernel", "/basic_lstm_cell/kernel"]:
+            "/rnn/lstm_cell/kernel", "/lstm_cell/kernel", "/rnn/basic_lstm_cell/kernel", "/basic_lstm_cell/kernel"]:
         if v.endswith(postfix):
           old_name1 = v[:-len(postfix)] + "/W_re"
           old_name2 = v[:-len(postfix)] + "/W"
@@ -3907,7 +3910,7 @@ class CustomCheckpointLoader:
             var_name_map[v] = make_load_weights_nativelstm_to_basic(v, postfix=postfix)
             break
       for postfix in [
-        "/rnn/lstm_cell/bias", "/lstm_cell/bias", "/rnn/basic_lstm_cell/bias", "/basic_lstm_cell/bias"]:
+            "/rnn/lstm_cell/bias", "/lstm_cell/bias", "/rnn/basic_lstm_cell/bias", "/basic_lstm_cell/bias"]:
         if v.endswith(postfix):
           old_name = v[:-len(postfix)] + "/b"
           if old_name in obsolete_var_names:
