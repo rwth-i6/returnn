@@ -6463,7 +6463,7 @@ def test_batch_norm_args():
 
 def test_contrastive_loss():
   from returnn.tf.util.data import batch_dim
-  dim_masked_flat = SpatialDim("masked_flat")
+  masked_time_dim = SpatialDim("masked_time")
   input_dim = FeatureDim("input", 10)
   enc_feat_dim = FeatureDim("encoder_dim", 20)
   project_dim = FeatureDim("project_dim", 15)
@@ -6528,7 +6528,7 @@ def test_contrastive_loss():
       "out_type": {"dtype": "bool", "shape": (None,)}
     },  # [B,T]
 
-    "mask_emb": {"class": "variable", "shape": [input_dim]},
+    "mask_emb": {"class": "variable", "shape": [input_dim], "init": "RandomUniform(0., 1.)"},
 
     "input_masked": {
       "class": "switch", "condition": "input_mask", "true_from": "mask_emb", "false_from": "input"},  # [B,T,F]
@@ -6548,31 +6548,36 @@ def test_contrastive_loss():
         "enc_masked_frames_": {"class": "masked_computation", "mask": "base:input_mask", "from": "base:encoder",
                                "unit": {"class": "copy", "from": "data"}},  # [B, T_M, F]
         "enc_masked_frames": {
-          "class": "reinterpret_data", "from": "enc_masked_frames_", "size_base": "input_masked_frames"},
-        "enc_masked_frames_flat": {"class": "flatten_batch", "from": "enc_masked_frames"},  # [B_M, F]
-        "c": {"class": "linear", "from": "enc_masked_frames_flat", "out_dim": project_dim},
+          "class": "reinterpret_data", "from": "enc_masked_frames_", "set_dim_tags": {"T": masked_time_dim}},
+        "c": {"class": "linear", "from": "enc_masked_frames", "out_dim": project_dim},
 
         # We take the non-masked input of the masked frames -> q_t in the paper.
         "input_masked_frames": {"class": "masked_computation", "mask": "base:input_mask", "from": "base:input",
+                                "out_spatial_dim": masked_time_dim,
                                 "unit": {"class": "copy", "from": "data"}},  # [B, T_M, F]
-        "input_masked_frames_flat": {"class": "flatten_batch", "from": "input_masked_frames"},  # [B_M, F]
-        "q": {"class": "linear", "from": "input_masked_frames_flat", "out_dim": project_dim},
-        "q_len": {"class": "length", "from": "input_masked_frames_flat", "axis": "B"},  # scalar
-        "_def_dim_masked_flat": {"class": "reinterpret_data", "from": "input_masked_frames_flat",
-                                 "set_dim_tags": {"B": dim_masked_flat}},  # just assign dim_masked_flat
+        "q": {"class": "linear", "from": "input_masked_frames", "out_dim": project_dim},
+        "q_len": {"class": "length", "from": "input_masked_frames", "axis": "T"},  # [B]
 
         # Candidate samples
-        "q_samples_rand_indices_": {"class": "rand_int", "maxval": "q_len",
-                                    "from": "_def_dim_masked_flat",
-                                    "shape": [dim_masked_flat, dim_neg_samples]},  # [B_M, K] -> 0..B_T-1
+        "q_samples_rand_indices__": {
+          "class": "rand_int", "maxval": 2 ** 30,
+          "from": "input_masked_frames",  # only for masked_time_dim
+          "shape": [batch_dim, masked_time_dim, dim_neg_samples]},  # [B, T_M, K] -> 0..BIG
+        "q_samples_rand_indices_": {
+          "class": "eval", "from": ["q_samples_rand_indices__", "q_len"],
+          "eval": "source(0) % tf.maximum(source(1) - 1, 1)"},  # [B, T_M, K] -> 0..T_M-1
+        "_range": {"class": "range_in_axis", "from": "input_masked_frames", "axis": masked_time_dim},  # [T_M]
+        "_range_ge_indices": {
+          "class": "compare", "kind": "greater_equal", "from": ["q_samples_rand_indices_", "_range"]},  # [B, T_M, K]
+        "_indices_offsets": {"class": "switch", "condition": "_range_ge_indices", "true_from": 1, "false_from": 0},
         "q_samples_rand_indices": {
-          "class": "reinterpret_data", "from": "q_samples_rand_indices_",
-          "set_dim_tags": {dim_masked_flat: batch_dim}, "batch_dim_base": "input_masked_frames_flat"},
+          "class": "combine", "kind": "add", "from": ["q_samples_rand_indices_", "_indices_offsets"]},  # [B, T_M, K]
         "q_sampled_frames": {
-          "class": "gather", "from": "q", "position": "q_samples_rand_indices", "axis": "B"},  # [B_M, K, F]
-        "q_expand": {"class": "expand_dims", "axis": "spatial", "dim": dim_expand, "from": "q"},  # [B_M, 1, F]
+          "class": "gather", "from": "q",
+          "position": "q_samples_rand_indices", "axis": masked_time_dim},  # [B, T_M, K, F]
+        "q_expand": {"class": "expand_dims", "axis": "spatial", "dim": dim_expand, "from": "q"},  # [B, T_M ,1, F]
         "Q": {"class": "concat", "from": [
-          ("q_expand", dim_expand), ("q_sampled_frames", dim_neg_samples)]},  # [B_M, K+1, F]
+          ("q_expand", dim_expand), ("q_sampled_frames", dim_neg_samples)]},  # [B, T_M, K+1, F]
 
         # Cosine similarity between sampled frames and masked encoder frames
         "cos_similarity": {
@@ -6581,22 +6586,22 @@ def test_contrastive_loss():
             # [B_M, K+1, F] * [B_M, F] -> [B_M, K+1]
             "dot": {"class": "dot", "from": ["data:0", "data:1"], "reduce": project_dim},
             "norm_a_sq_": {"class": "eval", "from": "data:0", "eval": "source(0) ** 2"},
-            "norm_a_sq": {"class": "reduce", "mode": "sum", "from": "norm_a_sq_", "axes": project_dim},  # [B_M, K+1]
+            "norm_a_sq": {"class": "reduce", "mode": "sum", "from": "norm_a_sq_", "axes": project_dim},  # [B, T_M, K+1]
             "norm_b_sq_": {"class": "eval", "from": "data:1", "eval": "source(0) ** 2"},
-            "norm_b_sq": {"class": "reduce", "mode": "sum", "from": "norm_b_sq_", "axes": project_dim},  # [B_M]
-            "output": {"class": "eval", "from": ["dot", "norm_a_sq", "norm_b_sq"],
-                       "eval": "source(0) * tf.minimum(tf.math.rsqrt(source(1) * source(2)), 1./1e-8)"},  # [B_M, K+1]
+            "norm_b_sq": {"class": "reduce", "mode": "sum", "from": "norm_b_sq_", "axes": project_dim},  # [B, T_M]
+            "output": {
+              "class": "eval", "from": ["dot", "norm_a_sq", "norm_b_sq"],
+              "eval": "source(0) * tf.minimum(tf.math.rsqrt(source(1) * source(2)), 1./1e-8)"},  # [B, T_M, K+1]
           },
         },
 
         # The contrastive loss is the negative log-likelihood of the softmax of the cosine similarity
         "log_sm_cos_sim": {
           "class": "softmax_over_spatial", "from": "cos_similarity", "axis": dim_expand + dim_neg_samples,
-          "log_space": True, "energy_factor": contrastive_loss_temp},  # [B_M, K+1]
+          "log_space": True, "energy_factor": contrastive_loss_temp},  # [B, T_M, K+1]
         "log_likelihood": {
-          "class": "gather", "from": "log_sm_cos_sim", "axis": dim_expand + dim_neg_samples, "position": 0},
-        # [B_M]
-        "neg_los_likelihood": {"class": "eval", "from": "log_likelihood", "eval": "-source(0)"},  # [B_M]
+          "class": "gather", "from": "log_sm_cos_sim", "axis": dim_expand + dim_neg_samples, "position": 0},  # [B, T_M]
+        "neg_los_likelihood": {"class": "eval", "from": "log_likelihood", "eval": "-source(0)"},  # [B, T_M]
         "output": {"class": "copy", "from": "neg_los_likelihood"},
       },
       "loss": "as_is", "loss_scale": contrastive_loss_factor,
