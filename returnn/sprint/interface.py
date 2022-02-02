@@ -694,8 +694,8 @@ def _init_base(configfile=None, target_mode=None, epoch=None, sprint_opts=None):
   # Run through in any case. Maybe just to set targetMode.
 
   if not getattr(sys, "argv", None):
-     # Set some dummy. Some code might want this (e.g. TensorFlow).
-     sys.argv = [__file__]
+    # Set some dummy. Some code might want this (e.g. TensorFlow).
+    sys.argv = [__file__]
 
   global Engine
   global config
