@@ -2770,7 +2770,8 @@ class RangeFromLengthLayer(LayerBase):
     out_spatial_dim  # noqa  # used in get_out_data_from_opts
     super(RangeFromLengthLayer, self).__init__(**kwargs)
     source = self.sources[0].output
-    assert source.placeholder is self.output.dim_tags[0].dyn_size_ext.placeholder
+    if not self.output.dim_tags[0].is_batch_dim():
+      assert source.placeholder is self.output.dim_tags[0].dyn_size_ext.placeholder
     out = tf.range(0, tf.reduce_max(source.placeholder), dtype=dtype)
     self.output.placeholder = out
 

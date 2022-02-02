@@ -540,7 +540,7 @@ class Dim(object):
       self.batch = batch  # overtake
     if getattr(x, "_is_size_of_dim_tag", None) is None:
       setattr(x, "_is_size_of_dim_tag", self)
-    if self.dyn_size is None:
+    if not self.is_batch_dim() and self.dyn_size is None:
       self.dyn_size = x
     return self
 
@@ -4982,7 +4982,11 @@ class Data(object):
     if self.batch:
       if self.beam:
         assert self.batch.beam == self.beam
-      return self.batch.dim
+      dim = self.batch.dim
+      if isinstance(dim, tf.Tensor):
+        batch_dim_ = self.dim_tags[self.batch_dim_axis]
+        batch_dim_.set_tag_on_size_tensor(dim, batch=self.batch)
+      return dim
     # Note: We need this fallback code for now
     # until we consistently have set self.batch correctly in all cases.
     from returnn.tf.layers.base import LayerBase
