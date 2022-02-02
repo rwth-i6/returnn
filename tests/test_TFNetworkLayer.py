@@ -1473,12 +1473,17 @@ def test_RangeFromLength_over_batch():
     "batch_len": {'class': 'length', 'axis': 'B', 'from': 'data'},
     "output": {'class': 'range_from_length', 'from': 'batch_len'},
   }
-  with make_scope():
+  with make_scope() as session:
     config = Config({"extern_data": {"data": {"dim": 3}}})
     net = TFNetwork(config=config)
     net.construct_from_dict(net_dict)
+    in_ = net.extern_data.get_default_input_data()
     out = net.get_default_output_layer().output
     assert out.dim_tags[0].is_batch_dim()
+    in_v, out_v = session.run((in_.placeholder, out.placeholder), feed_dict=make_feed_dict(net.extern_data))
+    n_batch, _, _ = in_v.shape
+    assert out_v.shape == (n_batch,)
+    assert list(out_v) == list(range(n_batch))
 
 
 def test_SwitchLayer_sanity_check():
