@@ -2679,8 +2679,9 @@ class Engine(EngineBase):
     input_audio_feature_extractor = None
     output_data = self.network.extern_data.get_default_target_data()
     output_vocab = output_data.vocab
-    if (isinstance(self.config.typed_dict.get("dev", None), dict)
-            and self.config.typed_dict["dev"]["class"] == "LibriSpeechCorpus"):
+    if (
+          isinstance(self.config.typed_dict.get("dev", None), dict)
+          and self.config.typed_dict["dev"]["class"] == "LibriSpeechCorpus"):
       # A bit hacky. Assumes that this is a dataset description for e.g. LibriSpeechCorpus.
       # noinspection PyPackageRequirements,PyUnresolvedReferences
       import soundfile  # pip install pysoundfile

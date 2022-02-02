@@ -1333,7 +1333,7 @@ class GatherLayer(_ConcatInputLayer):
 
   @classmethod
   def _translate_input_axis(
-    cls, input_axis, old_gather_axis, common_axes_input, input_axes, position_axes):
+        cls, input_axis, old_gather_axis, common_axes_input, input_axes, position_axes):
     """
     :param int input_axis: batch axis of input_data
     :param int old_gather_axis: gather axis of ``input_data`` counted with batch dim
@@ -1354,7 +1354,7 @@ class GatherLayer(_ConcatInputLayer):
 
   @classmethod
   def _translate_position_axis(
-    cls, position_axis, old_gather_axis, common_axes_position, position_axes):
+        cls, position_axis, old_gather_axis, common_axes_position, position_axes):
     """
     :param int position_axis: batch axis of position_data
     :param int old_gather_axis: gather axis of ``input_data`` counted with batch dim
@@ -1433,8 +1433,9 @@ class GatherLayer(_ConcatInputLayer):
       else:
         out_type[axis_kind] = None
     # feature_dim_axis needs to be handled differently if it is NotSpecified
-    if (input_data.feature_dim_axis_or_unspecified is NotSpecified and
-            position_data.feature_dim_axis_or_unspecified is NotSpecified):
+    if (
+          input_data.feature_dim_axis_or_unspecified is NotSpecified and
+          position_data.feature_dim_axis_or_unspecified is NotSpecified):
       out_type["feature_dim_axis"] = NotSpecified
     elif input_data.feature_dim_axis_or_unspecified is NotSpecified:
       assert position_data.feature_dim_axis_or_unspecified is not NotSpecified

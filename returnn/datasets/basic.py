@@ -1107,8 +1107,9 @@ class Dataset(object):
             [length, batch_size.copy_like(length) - batch.get_all_slices_num_frames().copy_like(length)])
           assert num_frames.max_value() > 0
           batch.add_frames(seq_idx=seq_idx, seq_start_frame=t_start, length=num_frames)
-          if (batch.get_all_slices_num_frames().any_compare(batch_size, (lambda a, b: a >= b))
-                  or batch.get_num_seqs() > max_seqs):
+          if (
+                batch.get_all_slices_num_frames().any_compare(batch_size, (lambda a, b: a >= b))
+                or batch.get_num_seqs() > max_seqs):
             yield batch
             batch = Batch()
           t_start += num_frames

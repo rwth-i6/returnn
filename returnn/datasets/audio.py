@@ -65,10 +65,10 @@ class OggZipDataset(CachedDataset2):
     from .meta import EpochWiseFilter
     self._separate_txt_files = {}  # name -> filename
     if (
-      isinstance(path, str)
-      and os.path.splitext(path)[1] != ".zip"
-      and os.path.isdir(path)
-      and os.path.isfile(path + ".txt")):
+          isinstance(path, str)
+          and os.path.splitext(path)[1] != ".zip"
+          and os.path.isdir(path)
+          and os.path.isfile(path + ".txt")):
       # Special case (mostly for debugging) to directly access the filesystem, not via zip-file.
       self.paths = [os.path.dirname(path)]
       self._names = [os.path.basename(path)]

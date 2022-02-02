@@ -280,7 +280,7 @@ def setup_pycharm_python_interpreter(pycharm_dir):
     if not pip_check_is_installed("Theano"):
       pip_install("theano==0.9")
     # Note: Horovod will usually fail to install in this env.
-    for pkg in ["typing", "librosa", "PySoundFile", "nltk", "matplotlib", "mpi4py"]:
+    for pkg in ["typing", "librosa", "PySoundFile", "nltk", "matplotlib", "mpi4py", "pycodestyle"]:
       if not pip_check_is_installed(pkg):
         try:
           pip_install(pkg)
@@ -489,11 +489,14 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
   from lint_common import find_all_py_source_files
   for py_src_file in find_all_py_source_files():
     ignore_codes = "E121,E123,E126,E226,E24,E704,W503,W504"  # PyCharm defaults
-    ignore_codes += ",E111,E114"  # our defaults (4 space indents for code/comment)
+    indent_size = 2  # default for RETURNN
+    if py_src_file.endswith("/better_exchook.py"):
+      indent_size = 4
     cmd = [
-      sys.executable, "%s/plugins/python-ce/helpers/pycodestyle.py" % pycharm_dir,
+      "pycodestyle",
       py_src_file,
       "--ignore=%s" % ignore_codes,
+      "--indent-size=%i" % indent_size,
       "--max-line-length=120"]
     print("$ %s" % " ".join(cmd))
     sys.stdout.flush()

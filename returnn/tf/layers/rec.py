@@ -4977,7 +4977,7 @@ class BaseChoiceLayer(LayerBase):
   # noinspection PyUnusedLocal
   @classmethod
   def cls_get_search_beam_size(
-    cls, network, beam_size, search=NotSpecified, sources=(), _src_common_search_choices=None, **kwargs):
+        cls, network, beam_size, search=NotSpecified, sources=(), _src_common_search_choices=None, **kwargs):
     """
     :param returnn.tf.network.TFNetwork network:
     :param list[LayerBase] sources:
