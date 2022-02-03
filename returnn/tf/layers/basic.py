@@ -4945,7 +4945,7 @@ class ConvLayer(_ConcatInputLayer):
       else:
         filters = tf.reshape(filters, list(filter_size) + [n_in, n_out // n_in])  # K+[n_in,n_out//n_in]
       y = tf.nn.depthwise_conv2d(
-        x, data_format=data_format,
+        x, data_format="NCHW" if out_batch_feature_major else "NHWC",
         filter=filters,
         padding=padding,
         strides=([1] + strides + [1]) if out_batch_feature_major else ([1, 1] + strides),
