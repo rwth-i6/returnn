@@ -80,7 +80,9 @@ class Dim(object):
       the behavior is to consider them as equal,
       and assume that the chain of operations (e.g. padding + valid conv) results in the same dim.
     :param Dim.Op|None derived_from_op:
-    :param int match_priority: when there is ambiguity between multiple dim tags, this can be used to resolve it.
+    :param int match_priority: when there is ambiguity between multiple dim tags, this value defines the order
+      in which the dimension are assigned to their matching counterparts.
+      A dimension tag with a higher priority value is assigned first.
       E.g. for a square matrix used for a linear transformation, the reduce dim tag should have a higher priority.
     :param BatchInfo|None batch: for batch-dim, or dynamic dims per batch
     :param ControlFlowContext|None control_flow_ctx:
@@ -4375,7 +4377,9 @@ class Data(object):
       if len(dims) > 1:
         max_match_priority = max(self.dim_tags[i].match_priority for i in dims)
         dims = [i for i in dims if self.dim_tags[i].match_priority == max_match_priority]
-      assert len(dims) <= 1, "%s: matching dim %s must be unique" % (self, axes)
+      assert len(dims) <= 1, (
+        "%s: matching dim %s must be unique,"
+        " use `match_priority` to resolve the matching order of ambiguous dimensions" % (self, axes))
       return dims
     if isinstance(axes, int):
       self._verify_axis_int_from_description(allow_int=allow_int)
