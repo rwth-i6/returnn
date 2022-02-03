@@ -32,6 +32,7 @@ class LmDataset(CachedDataset2):
 
   def __init__(self,
                corpus_file,
+               skip_empty_lines=True,
                orth_symbols_file=None,
                orth_symbols_map_file=None,
                orth_replace_map_file=None,
@@ -66,6 +67,7 @@ class LmDataset(CachedDataset2):
     mapping from symbol to integer index (in case ``phone_info`` is not set).
 
     :param str|()->str|list[str]|()->list[str] corpus_file: Bliss XML or line-based txt. optionally can be gzip.
+    :param bool skip_empty_lines: for line-based txt
     :param str|()->str|None orth_symbols_file: a text file containing a list of orthography symbols
     :param str|()->str|None orth_symbols_map_file: either a list of orth symbols, each line: "<symbol> <index>",
                                                    or a pickled dictionary
@@ -204,9 +206,9 @@ class LmDataset(CachedDataset2):
     if isinstance(corpus_file, list):  # If a list of files is provided, concatenate all.
       self.orths = []
       for file_name in corpus_file:
-        self.orths += read_corpus(file_name)
+        self.orths += read_corpus(file_name, skip_empty_lines=skip_empty_lines)
     else:
-      self.orths = read_corpus(corpus_file)
+      self.orths = read_corpus(corpus_file, skip_empty_lines=skip_empty_lines)
     # It's only estimated because we might filter some out or so.
     self._estimated_num_seqs = len(self.orths) // self.partition_epoch
     print("  done, loaded %i sequences" % len(self.orths), file=log.v4)
@@ -443,10 +445,11 @@ def _iter_bliss(filename, callback):
     callback(orth)
 
 
-def _iter_txt(filename, callback):
+def _iter_txt(filename, callback, skip_empty_lines=True):
   """
   :param str filename:
   :param (str)->None callback:
+  :param bool skip_empty_lines:
   """
   f = open(filename, 'rb')
   if filename.endswith(".gz"):
@@ -458,31 +461,32 @@ def _iter_txt(filename, callback):
     except UnicodeDecodeError:
       line = line.decode("latin_1")  # or iso8859_15?
     line = line.strip()
-    if not line:
+    if skip_empty_lines and not line:
       continue
     callback(line)
 
 
-def iter_corpus(filename, callback):
+def iter_corpus(filename, callback, skip_empty_lines=True):
   """
   :param str filename:
   :param ((str)->None) callback:
+  :param bool skip_empty_lines:
   """
   if _is_bliss(filename):
-    iter_f = _iter_bliss
+    _iter_bliss(filename=filename, callback=callback)
   else:
-    iter_f = _iter_txt
-  iter_f(filename, callback)
+    _iter_txt(filename=filename, callback=callback, skip_empty_lines=skip_empty_lines)
 
 
-def read_corpus(filename):
+def read_corpus(filename, skip_empty_lines=True):
   """
-  :param str filename:
+  :param str filename: either Bliss XML or line-based text
+  :param bool skip_empty_lines: in case of line-based text, skip empty lines
   :return: list of orthographies
   :rtype: list[str]
   """
   out_list = []
-  iter_corpus(filename, out_list.append)
+  iter_corpus(filename=filename, callback=out_list.append, skip_empty_lines=skip_empty_lines)
   return out_list
 
 
