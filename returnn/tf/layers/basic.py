@@ -8563,6 +8563,35 @@ class VariableLayer(LayerBase):
       batch=network.get_global_batch_info() if add_batch_axis else None)
 
 
+class TrainFlagLayer(LayerBase):
+  """
+  Returns the train flag (bool scalar) of the current network.
+  """
+  layer_class = "train_flag"
+
+  def __init__(self, **kwargs):
+    super(TrainFlagLayer, self).__init__(**kwargs)
+    self.output.placeholder = tf.convert_to_tensor(self.network.train_flag)
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param returnn.tf.network.TFNetwork network:
+    :param get_layer:
+    """
+    d.setdefault("from", ())
+    super(TrainFlagLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, **kwargs):
+    """
+    :param str name:
+    :rtype: Data
+    """
+    return Data(name="%s_output" % name, dim_tags=(), dtype="bool")
+
+
 class AccumulateMeanLayer(ReduceLayer):
   """
   Accumulates the mean of the input (in training) (over batch-dim and time-dim by default).
