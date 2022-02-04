@@ -613,6 +613,7 @@ class Dim(object):
         y.placeholder = _bin_op(y_.placeholder, x_.placeholder)
       assert y
       self.dyn_size_ext = y
+      self.set_tag_on_size_tensor(y.placeholder)
 
   def is_equal(self, other, ignore_feature_dim=False, allow_same_feature_dim=False, allow_same_spatial_dim=None,
                treat_feature_as_spatial=False, broadcast_matches=False, unknown_spatial_matches=False,
