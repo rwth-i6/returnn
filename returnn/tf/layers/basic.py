@@ -1959,7 +1959,7 @@ class LengthLayer(LayerBase):
         name="%s_length" % name,
         shape=(), batch_dim_axis=0, time_dim_axis=None,
         dtype=dtype, sparse=sparse, dim=None if sparse else NotSpecified)
-    return dim.dyn_size_ext
+    return dim.dyn_size_ext.copy()
 
 
 class SoftmaxOverSpatialLayer(_ConcatInputLayer):
