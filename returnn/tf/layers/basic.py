@@ -8454,6 +8454,7 @@ class VariableLayer(LayerBase):
                add_batch_axis=False, add_time_axis=False,
                trainable=True,
                init=None, init_by_layer=None,
+               param_name=None,
                **kwargs):
     """
     :param tuple[int|Dim]|list[int|Dim] shape:
@@ -8464,6 +8465,7 @@ class VariableLayer(LayerBase):
     :param str|float|int|None init: see :func:`returnn.tf.util.basic.get_initializer`. 0 by default.
       Alternatively, you can also use option `init_by_layer`.
     :param LayerBase|None init_by_layer:
+    :param str|None param_name: self.name (layer name) by default
     """
     shape  # noqa  # used in get_out_data_from_opts
     super(VariableLayer, self).__init__(trainable=trainable, **kwargs)
@@ -8490,7 +8492,7 @@ class VariableLayer(LayerBase):
         initializer = init_by_layer.output.copy_compatible_to(out_data_base).placeholder
         shape_ = None  # get_variable requires shape to be not defined when the initializer is another tensor
       var = self.add_param(tf_compat.v1.get_variable(
-        name=self.name, shape=shape_, dtype=dtype,
+        name=param_name or self.name, shape=shape_, dtype=dtype,
         initializer=initializer, trainable=trainable),
         axes_split_info=[d.axis_split_info() for d in dim_tags])
       out = var
