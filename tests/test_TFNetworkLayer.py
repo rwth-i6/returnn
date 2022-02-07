@@ -6519,6 +6519,13 @@ def test_pickle_dim_tags():
     print("out layer:", out_layer)
     session.run((out_layer.output.placeholder, fetches), feed_dict=make_feed_dict(network.extern_data))
 
+  def _debug_dump(tuple_path, obj):
+    print("%s: %s" % (tuple_path, type(obj)))
+    assert isinstance(obj, (Dim, str, set, str, bool, int))
+
+  from tensorflow.python.util import nest
+  nest.map_structure_with_tuple_paths(_debug_dump, config.typed_dict)
+
   # Now pickle, unpickle and test again.
   import pickle
   s = pickle.dumps(config.typed_dict)
