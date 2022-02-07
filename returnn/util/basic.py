@@ -101,6 +101,9 @@ class Entity:
   def __repr__(self):
     return "<%s>" % self.name
 
+  def __getstate__(self):
+    raise Exception("Cannot pickle Entity object. (%r)" % self)
+
 
 class OptionalNotImplementedError(NotImplementedError):
   """
