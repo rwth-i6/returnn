@@ -6533,6 +6533,11 @@ def test_pickle_dim_tags():
   s = dumps(config.typed_dict)
   import pickle
   config_dict = pickle.loads(s)
+  new_dim_tags = config_dict["extern_data"]["data"]["dim_tags"]
+  new_batch, new_time, new_feat = new_dim_tags
+  assert isinstance(new_batch, Dim) and new_batch == batch_dim and new_batch.is_batch_dim()
+  assert isinstance(new_time, Dim) and new_time.is_spatial_dim() and new_time.dimension is None
+  assert isinstance(new_feat, Dim) and new_feat.is_feature_dim() and new_feat.dimension == n_in
   config = Config(config_dict)
   with make_scope() as session:
     network = TFNetwork(config=config, train_flag=True)
