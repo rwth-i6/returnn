@@ -564,18 +564,23 @@ class Dim(object):
     op = self.derived_from_op or same_base.derived_from_op
     if op:
       from returnn.tf.util import basic as tf_util
+      kind = op.kind
+      if kind.endswith("_right"):
+        kind = kind[:-len("_right")]  # order does not matter here
+      if kind.endswith("_left"):
+        kind = kind[:-len("_left")]
 
       def _bin_op(a, b):
         with tf_util.same_control_flow_ctx([a, b]):
-          if op.kind == "add":
+          if kind == "add":
             return tf_util.simplify_add(a, b)
-          elif op.kind == "sub":
+          elif kind == "sub":
             return tf_util.simplify_sub(a, b)
-          elif op.kind == "mul":
+          elif kind == "mul":
             return a * b
-          elif op.kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
+          elif kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
             return a // b
-          elif op.kind == "ceildiv":
+          elif kind == "ceildiv":
             return -(-a // b)
           else:
             raise ValueError("unknown op kind %r" % op.kind)
