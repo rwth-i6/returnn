@@ -2058,6 +2058,9 @@ class BatchInfo:
     # "x" is the Theano-style shortcut for a broadcast dim.
     return "&".join([dim.short_repr() for dim in self.virtual_dims] or ["Bx"])
 
+  def __getstate__(self):
+    raise Exception("Pickling of BatchInfo is not supported. (%s)" % self)
+
   @property
   def dim(self):
     """
