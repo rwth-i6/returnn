@@ -6480,6 +6480,75 @@ def test_batch_norm_args():
   assert batch_norm_args == layer_args  # different arguments in BatchNormLayer and LayerBase.batch_norm()
 
 
+def test_pickle_dim_tags():
+  # Test for pickling net dict and extern data.
+  # https://github.com/rwth-i6/returnn_common/issues/104
+  # What kind of network we pickle here is not really relevant.
+  # I took this from some other test.
+  # It should just involve some dim tags.
+  from returnn.tf.util.data import batch_dim, ImplicitDynSizeDim
+  n_batch, n_time, n_ts, n_in, n_out = 2, 3, 6, 7, 11
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("in-feature", dimension=n_in)
+  ts_dim = SpatialDim("ts", dimension=n_ts)
+  out_dim = FeatureDim("out-feature", dimension=n_out)
+  config = Config({
+    "extern_data": {"data": {"dim_tags": [batch_dim, time_dim, feat_dim]}},
+    "network": {
+      "t": {
+        "class": "range_in_axis", "axis": "t", "from": "data",
+        "out_shape": {time_dim, ImplicitDynSizeDim(batch_dim)}},  # (T,)
+      "range": {"class": "range", "limit": n_ts, "out_spatial_dim": ts_dim},  # (Ts,)
+      "add_t": {
+        "class": "combine", "kind": "add", "from": ["t", "range"],
+        "out_shape": {time_dim, ts_dim, ImplicitDynSizeDim(batch_dim)}},  # (T,Ts)
+      "t_rel_var": {"class": "variable", "shape": (ts_dim, out_dim), "init": "glorot_uniform"},  # (Ts,D)
+      "output": {
+        "class": "scatter_nd", "from": "t_rel_var", "position": "add_t", "position_axis": ts_dim,
+        "out_spatial_dim": time_dim, "filter_invalid_indices": True}  # (T,T,D)
+    }
+  })
+
+  # First test as-is.
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.initialize_params(session)
+    fetches = network.get_fetches_dict()
+    out_layer = network.get_default_output_layer()
+    print("out layer:", out_layer)
+    session.run((out_layer.output.placeholder, fetches), feed_dict=make_feed_dict(network.extern_data))
+
+  def _debug_dump(tuple_path, obj):
+    print("%s: %s" % (tuple_path, type(obj)))
+    assert isinstance(obj, (Dim, str, set, str, bool, int))
+
+  from tensorflow.python.util import nest
+  nest.map_structure_with_tuple_paths(_debug_dump, config.typed_dict)
+
+  # Now pickle, unpickle and test again.
+  # Use pickle._dumps for easier debugging.
+  # noinspection PyUnresolvedReferences
+  from pickle import _dumps as dumps
+  s = dumps(config.typed_dict)
+  import pickle
+  config_dict = pickle.loads(s)
+  new_dim_tags = config_dict["extern_data"]["data"]["dim_tags"]
+  new_batch, new_time, new_feat = new_dim_tags
+  assert isinstance(new_batch, Dim) and new_batch == batch_dim and new_batch.is_batch_dim()
+  assert isinstance(new_time, Dim) and new_time.is_spatial_dim() and new_time.dimension is None
+  assert isinstance(new_feat, Dim) and new_feat.is_feature_dim() and new_feat.dimension == n_in
+  config = Config(config_dict)
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.initialize_params(session)
+    fetches = network.get_fetches_dict()
+    out_layer = network.get_default_output_layer()
+    print("out layer:", out_layer)
+    session.run((out_layer.output.placeholder, fetches), feed_dict=make_feed_dict(network.extern_data))
+
+
 def test_contrastive_loss():
   from returnn.tf.util.data import batch_dim
   masked_time_dim = SpatialDim("masked_time")

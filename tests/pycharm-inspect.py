@@ -280,7 +280,7 @@ def setup_pycharm_python_interpreter(pycharm_dir):
     if not pip_check_is_installed("Theano"):
       pip_install("theano==0.9")
     # Note: Horovod will usually fail to install in this env.
-    for pkg in ["typing", "librosa", "PySoundFile", "nltk", "matplotlib", "mpi4py", "pycodestyle"]:
+    for pkg in ["typing", "librosa==0.8.1", "PySoundFile", "nltk", "matplotlib", "mpi4py", "pycodestyle"]:
       if not pip_check_is_installed(pkg):
         try:
           pip_install(pkg)
