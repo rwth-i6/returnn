@@ -2523,7 +2523,7 @@ _pip_installed_packages = set()
 
 def pip_check_is_installed(pkg_name):
   """
-  :param str pkg_name: without version, e.g. just "tensorflow" or "tensorflow-gpu"
+  :param str pkg_name: without version, e.g. just "tensorflow", or with version, e.g. "tensorflow==1.2.3"
   :rtype: bool
   """
   if not _pip_installed_packages:
@@ -2531,8 +2531,10 @@ def pip_check_is_installed(pkg_name):
     pip_path = which_pip()
     cmd = [py, pip_path, "freeze"]
     for line in sys_exec_out(*cmd).splitlines():
-      if line:
-        _pip_installed_packages.add(line[:line.index("==")])
+      if line and "==" in line:
+        if "==" not in pkg_name:
+          line = line[:line.index("==")]
+        _pip_installed_packages.add(line)
   return pkg_name in _pip_installed_packages
 
 
