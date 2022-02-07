@@ -6527,8 +6527,11 @@ def test_pickle_dim_tags():
   nest.map_structure_with_tuple_paths(_debug_dump, config.typed_dict)
 
   # Now pickle, unpickle and test again.
+  # Use pickle._dumps for easier debugging.
+  # noinspection PyUnresolvedReferences
+  from pickle import _dumps as dumps
+  s = dumps(config.typed_dict)
   import pickle
-  s = pickle.dumps(config.typed_dict)
   config_dict = pickle.loads(s)
   config = Config(config_dict)
   with make_scope() as session:
