@@ -148,6 +148,22 @@ class Dim(object):
         desc += "{ctx=%s}" % self.control_flow_ctx.repr_inner()
     return desc
 
+  def __getstate__(self):
+    d = vars(self).copy()
+    d["batch"] = None
+    d["_same_as_tb"] = None
+    d["_same_for_batch_ctx"] = {}
+    d["dyn_size_ext"] = None
+    d["kind"] = self.kind.name if self.kind else None
+    return d
+
+  def __setstate__(self, state):
+    self.__dict__.update(state)
+    if self.kind is not None:
+      self.kind = {v.name: v for v in Dim.Types.Types}[self.kind]
+    if self.is_batch_dim():
+      self.same_as = batch_dim
+
   def __copy__(self):
     """
     Normally we would not want to get a new tag with ``tag != copy(tag)``.
