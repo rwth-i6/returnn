@@ -3032,6 +3032,12 @@ class Data(object):
   def __hash__(self):
     return id(self)
 
+  def __getstate__(self):
+    d = vars(self)
+    d["_batch"] = None  # BatchInfo pickling not supported
+    d["_placeholder"] = None  # do not store the TF tensors
+    return d
+
   def _adapt_batch_consistent_dim_tags(self):
     if not self.batch:  # uninitialized
       return
