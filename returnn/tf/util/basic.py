@@ -3350,7 +3350,7 @@ def debug_register_better_repr():
     setattr(cl, "__repr__", f)
 
 
-def cond(pred, fn1, fn2, name=None):
+def cond(pred, true_fn, false_fn, name=None):
   """
   This is a wrapper around tf.control_flow_ops.cond().
   This will be a branched execution, i.e. either fn1() or fn2() will be executed,
@@ -3360,29 +3360,29 @@ def cond(pred, fn1, fn2, name=None):
   And similar to tf.contrib.framework.smart_cond.
 
   :param tf.Tensor|bool pred:
-  :param ()->(tf.Tensor|list[tf.Tensor]|T) fn1:
-  :param ()->(tf.Tensor|list[tf.Tensor]|T) fn2:
+  :param ()->(tf.Tensor|list[tf.Tensor]|T) true_fn:
+  :param ()->(tf.Tensor|list[tf.Tensor]|T) false_fn:
   :param str name:
   :return: fn1() if pred else fn2()
   :rtype: tf.Tensor|list[tf.Tensor]|T
   """
-  if not callable(fn1):
+  if not callable(true_fn):
     raise TypeError("fn1 must be callable.")
-  if not callable(fn2):
+  if not callable(false_fn):
     raise TypeError("fn2 must be callable.")
   if pred is True:
-    return fn1()
+    return true_fn()
   if pred is False:
-    return fn2()
+    return false_fn()
   from tensorflow.python.framework import tensor_util
   pred_const = tensor_util.constant_value(pred)
   if pred_const is not None:
     if pred_const:
-      return fn1()
+      return true_fn()
     else:
-      return fn2()
+      return false_fn()
   from tensorflow.python.ops import control_flow_ops
-  return control_flow_ops.cond(pred, fn1, fn2, name=name)
+  return control_flow_ops.cond(pred, true_fn, false_fn, name=name)
 
 
 def single_strided_slice(x, axis, begin=None, end=None, step=None):

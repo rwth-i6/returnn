@@ -7930,7 +7930,7 @@ class CondLayer(LayerBase):
     self.false_layer_desc = false_layer
     self.false_layer = None  # type: typing.Optional[LayerBase]
     assert self.condition_layer.output.batch_ndim == 0 and self.condition_layer.output.dtype == "bool"
-    x, sizes = tf.cond(
+    x, sizes = tf_util.cond(
       pred=self.condition_layer.output.placeholder,
       true_fn=self._true_fn,
       false_fn=self._false_fn)
