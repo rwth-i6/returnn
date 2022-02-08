@@ -2092,6 +2092,21 @@ def test_SplitDimsLayer_dim_tags():
     })
 
 
+def test_SplitDimsLayer_dim_tags_expand():
+  from returnn.tf.util.data import batch_dim
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("feat", 3)
+  expand_dim = SpatialDim("expand_dim", 1)
+  config = Config({
+    "extern_data": {"data": {"dim_tags": [batch_dim, time_dim, feat_dim]}}})
+  net = TFNetwork(config=config)
+  net.construct_from_dict({
+    "output": {
+      'class': 'split_dims', 'from': 'data', 'axis': feat_dim, 'dims': [feat_dim, expand_dim],
+      'out_shape': {batch_dim, time_dim, feat_dim, expand_dim}}
+  })
+
+
 def test_SplitDimsLayer_dim_tags_split_batch_simple():
   # https://github.com/rwth-i6/returnn/issues/908
   # https://github.com/rwth-i6/pytorch-to-returnn/pull/78
