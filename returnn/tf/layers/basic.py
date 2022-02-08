@@ -3855,7 +3855,7 @@ class SplitDimsLayer(_ConcatInputLayer):
       assert len(rem_dim_indices) <= 1, "only one entry in dims %r can be -1" % (dims,)
       if len(rem_dim_indices) == 1:
         import numpy
-        n = int(numpy.prod([dim for dim in dims if dim > 0]))
+        n = int(numpy.prod([dim for i, dim in enumerate(dims) if dim > 0 and i not in rem_dim_indices]))
         if n == 1:
           rem_dim = axis_dim_tag
         else:  # need to create a new rem_dim
