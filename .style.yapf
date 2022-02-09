@@ -1,0 +1,15 @@
+# This is the config file for YAPF (https://github.com/google/yapf).
+# Currently we don't use this. This is just for testing.
+
+[style]
+# 'yapf' style = derived from Google, derived from PEP8
+based_on_style = yapf
+indent_width = 2
+continuation_indent_width = 2
+column_limit = 120
+# Not sure...
+# dedent_closing_brackets = False
+# align_closing_bracket_with_visual_indent = False
+# coalesce_brackets = True
+# continuation_align_style = 'fixed'
+# indent_closing_brackets = False
