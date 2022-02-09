@@ -607,24 +607,32 @@ class TFNetwork(object):
     """
     self.layers_desc.update(net_dict)
 
+    def ignore_layer(name_, layer_desc_):
+      """
+      :param str name_:
+      :param dict layer_desc_:
+      :rtype: bool
+      """
+      assert isinstance(name_, str)
+      if name_.startswith("#"):
+        return True
+      assert isinstance(layer_desc_, dict)
+      if layer_desc_.get("only_on_search") and not self.search_flag:
+        return True
+      if layer_desc_.get("only_on_eval") and not self.eval_flag:
+        return True
+      return False
+
     # First check only register_as_extern_data.
     for name, layer_desc in sorted(net_dict.items()):
-      assert isinstance(name, str)
-      if name.startswith("#"):  # ignore this
+      if ignore_layer(name, layer_desc):
         continue
-      assert isinstance(layer_desc, dict)
       if layer_desc.get("register_as_extern_data"):
         self.construct_layer(net_dict, name, get_layer=get_layer)
 
     # Now the main construction.
     for name, layer_desc in sorted(net_dict.items()):
-      assert isinstance(name, str)
-      if name.startswith("#"):  # ignore this
-        continue
-      assert isinstance(layer_desc, dict)
-      if layer_desc.get("only_on_search") and not self.search_flag:
-        continue
-      if layer_desc.get("only_on_eval") and not self.eval_flag:
+      if ignore_layer(name, layer_desc):
         continue
       if (
             name == "output" or name.endswith(":output")
