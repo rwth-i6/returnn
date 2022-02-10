@@ -276,16 +276,21 @@ class OutputWithActivation(object):
   (Maybe obsolete when you directly access the TF computation graph; but simpler.)
   """
 
-  def __init__(self, x, act_func=None):
+  def __init__(self, x, act_func=None, act_func_opts=None):
     """
     :param tf.Tensor x:
     :param None|(tf.Tensor)->tf.Tensor act_func:
+    :param None|dict[str] act_func_opts:
     """
     self.x = x
     self.act_func = act_func
+    if act_func_opts is None:
+      act_func_opts = {}
+    self.act_func_opts = act_func_opts
     if act_func:
       with tf.name_scope("activation"):
-        self.y = act_func(x)
+        # noinspection PyArgumentList
+        self.y = act_func(x, **act_func_opts)
     else:
       self.y = x
 

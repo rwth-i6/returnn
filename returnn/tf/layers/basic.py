@@ -676,16 +676,19 @@ class ActivationLayer(_ConcatInputLayer):
 
   layer_class = "activation"
 
-  def __init__(self, activation, **kwargs):
+  def __init__(self, activation, opts=None, **kwargs):
     """
     :param str activation: e.g. "relu", "tanh", etc
+    :param dict[str]|None opts: for activation function, e.g. eps for safe_log
     """
     super(ActivationLayer, self).__init__(**kwargs)
     x = self.input_data.copy_compatible_to(self.output, check_dtype=False).placeholder
     if activation:
       from returnn.tf.util.basic import get_activation_function
       act_func = get_activation_function(activation)
-      self.output_before_activation = OutputWithActivation(x, act_func=act_func)
+      if act_func in {tf.nn.softmax, tf.nn.log_softmax}:
+        assert not opts  # do not set axis or anything. this handled automatically
+      self.output_before_activation = OutputWithActivation(x, act_func=act_func, act_func_opts=opts)
     else:
       self.output_before_activation = OutputWithActivation(x)
     if self.output_before_activation:
