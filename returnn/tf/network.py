@@ -1218,6 +1218,7 @@ class TFNetwork(object):
     return losses_dict, total_loss, total_constraints
 
   def _construct_objective(self):
+    self._flatten_layer_with_losses()
     with tf.name_scope("objective"):
       losses_dict, total_loss, total_constraints = self.get_losses_initialized(with_total=True)
       self.losses_dict.clear()
@@ -1271,6 +1272,281 @@ class TFNetwork(object):
     if self._merge_all_summaries is None:
       self._merge_all_summaries = tf_compat.v1.summary.merge_all()
     return self._merge_all_summaries
+
+  def _flatten_layer_with_losses(self):
+    # https://github.com/rwth-i6/returnn/pull/906
+    # see get_losses_initialized.
+    # We can flatten the layer output (also referred to as packed tensors)
+    # and do frame-wise loss computation only on the relevant frames, i.e. ignore the padded frames.
+    # This flattening can be pushed through layers which perform only frame-wise operations.
+    # This pushing logic is implemented here for any layers which are not used otherwise.
+    # We assume that only the losses are needed and no other unrelated output layers.
+    # We are very restrictive here to not break anything in case of unrelated bugs of other layers.
+
+    from .util.data import BatchInfo
+    from .layers.basic import SourceLayer, SubnetworkLayer, CopyLayer, FlattenBatchLayer
+    from tensorflow.python.util import nest
+
+    def _relevant_dims_for_layer(layer_):
+      """
+      :param LayerBase layer_:
+      :return: dims to flatten. this assumes _check_push_flattening_to_inputs_for_layer_simple
+      :rtype: set[Dim]
+      """
+      relevant_end_points = deps_used_by_end_points[layer_]
+      dims = set()
+      for end_point_ in relevant_end_points:
+        dims.update(
+          end_point_.output.dim_tags[a]
+          for a in [end_point_.output.batch_dim_axis, end_point_.output.time_dim_axis])
+      return dims
+
+    def _needs_flattening(layer_):
+      """
+      :param LayerBase layer_:
+      :rtype: bool
+      """
+      return set(layer_.output.dim_tags).issuperset(_relevant_dims_for_layer(layer_))
+
+    def _map_layer_dict_value(v):
+      if isinstance(v, LayerBase) and _needs_flattening(v):
+        v = _resolve_layer(v)
+        return mapped_layers[v]
+      return v
+
+    def _make_layer(layer_cls, layer_dict, map_opts=True):
+      """
+      :param type[LayerBase]|LayerBase layer_cls:
+      :param dict[str] layer_dict:
+      :param bool map_opts:
+      :rtype: LayerBase
+      """
+      opts = layer_dict.copy()
+      if map_opts:
+        opts = nest.map_structure(_map_layer_dict_value, opts)
+      opts.pop("output", None)
+      opts["output"] = layer_cls.get_out_data_from_opts(**opts)
+      print(
+        "Loss flattened layer %s/%r output: %r" % (opts["network"].name, opts["name"], opts["output"]), file=log.v3)
+      layer__ = layer_cls(**opts)
+      assert isinstance(layer__, LayerBase)
+      layer__.post_init(opts)
+      layer__.output.sanity_check()
+      return layer__
+
+    def _layer_deps(layer_):
+      """
+      :param LayerBase layer_:
+      :rtype: list[LayerBase]
+      """
+      return [_resolve_layer(dep_) for dep_ in nest.flatten(layer_.kwargs) if isinstance(dep_, LayerBase)]
+
+    def _should_flatten_layer_output(layer_):
+      """
+      :param LayerBase layer_:
+      :rtype: bool
+      """
+      if not layer_.output.have_batch_axis() or not layer_.output.have_time_axis():
+        return False
+      if not layer_.output.is_time_axis_dynamic():
+        return False
+      dims_ = [layer_.output.dim_tags[a] for a in [layer_.output.batch_dim_axis, layer_.output.time_dim_axis]]
+      if any(d.dimension is None for d in set(layer_.output.dim_tags).difference(dims_)):  # any other dynamic?
+        return False
+      if layer_.output.beam:
+        return False
+      return True
+
+    def _check_push_flattening_to_inputs_for_layer_simple(layer_):
+      """
+      :param LayerBase layer_:
+      :rtype: bool
+      """
+      if layer_ in blacklist:
+        return False
+      if layer_.recurrent:
+        return False
+      if layer_.params:  # in principle, this is ok, just not implemented yet to correctly share params
+        return False
+      if isinstance(layer_, SourceLayer):
+        return False
+      if not _should_flatten_layer_output(layer_):
+        return False
+      return True
+
+    def _check_push_flattening_to_inputs_for_layer(layer_):
+      """
+      :param LayerBase layer_:
+      :rtype: bool
+      """
+      if not _check_push_flattening_to_inputs_for_layer_simple(layer_):
+        return False
+      dims = _relevant_dims_for_layer(layer_)
+      if len(dims) > 2:
+        return False
+      assert set(layer_.output.dim_tags).issuperset(dims)
+      rem_dims = set(layer_.output.dim_tags).difference(dims)
+      if any(d.dimension is None for d in rem_dims):  # any other dynamic?
+        return False
+      deps = _layer_deps(layer_)
+      if not deps:
+        return False
+      valid_deps = all(
+        set(dep_.output.dim_tags).issuperset(dims)
+        or set(dep_.output.dim_tags).isdisjoint(dims)
+        for dep_ in deps)
+      if not valid_deps:
+        return False
+      for dep_ in deps:
+        if dep_.output.beam:
+          return False
+        if _needs_flattening(dep_):
+          if any(d.dimension is None for d in set(dep_.output.dim_tags).difference(dims)):  # any other dynamic?
+            return False
+          layer_queue.append(dep_)
+      return True
+
+    def _resolve_layer(layer_):
+      """
+      :param LayerBase layer_:
+      :rtype: LayerBase
+      """
+      while True:
+        if isinstance(layer_, SubnetworkLayer):
+          layer_ = layer_.subnetwork.layers["output"]
+          continue
+        if isinstance(layer_, CopyLayer) and len(layer_.sources) == 1:
+          layer_ = layer_.sources[0]
+          continue
+        return layer_
+
+    # Collect end points.
+    end_points = []
+    blacklist = set()
+    for layer in self.layers.values():
+      if not layer.loss:
+        continue
+      if layer.loss.recurrent:
+        continue
+      layer = _resolve_layer(layer)
+      if not _check_push_flattening_to_inputs_for_layer_simple(layer):
+        continue
+      cache = tf_util.get_flatten_with_seq_len_mask_cache_for_data(layer.output)
+      if cache.has_cache():
+        continue  # already cached before, no need to do it again
+      end_points.append(layer)
+    if not end_points:
+      return
+
+    # Collect layers which should not be flattened in the blacklist,
+    # starting from end points which should not be flattened.
+    # These are layers which are needed for other losses (or later maybe also other outputs)
+    # but which should not be flattened, and all their dependencies.
+    # The dependencies should be blacklisted as well because we don't want to compute a layer twice.
+    layer_queue = []
+    for layer in self.layers.values():
+      if not layer.loss:
+        continue
+      layer = _resolve_layer(layer)
+      if layer in end_points:
+        continue
+      layer_queue.append(layer)
+    while layer_queue:
+      layer = layer_queue.pop(0)
+      if layer in blacklist:
+        continue
+      blacklist.add(layer)
+      layer_queue.extend(_layer_deps(layer))
+
+    # Collect back refs, starting from end points.
+    deps_used_by_end_points = {layer: {layer} for layer in end_points}  # dep -> set(end points), direct and indirect
+    deps_used_by = {layer: set() for layer in end_points}  # dep -> set(used by), direct dependencies only
+    for end_point in end_points:
+      layer_queue = [end_point]
+      visited = set()
+      while layer_queue:
+        layer = layer_queue.pop(0)
+        if layer in visited:
+          continue
+        visited.add(layer)
+        for dep in _layer_deps(layer):
+          deps_used_by_end_points.setdefault(dep, set()).add(end_point)
+          deps_used_by.setdefault(dep, set()).add(layer)
+          if dep in visited:
+            continue
+          if not _check_push_flattening_to_inputs_for_layer_simple(dep):
+            continue
+          layer_queue.append(dep)
+
+    # Go backwards through the end points and collect sources up to starting points.
+    starting_points = []
+    mapped_layers = {}
+    visited = set()
+    end_points = [_resolve_layer(layer) for layer in end_points]
+    layer_queue = list(end_points)
+    while layer_queue:
+      layer = layer_queue.pop(0)
+      if layer in visited:
+        continue
+      visited.add(layer)
+      if not _check_push_flattening_to_inputs_for_layer(layer):
+        if len(visited) == 1 and not layer_queue:
+          return
+        starting_points.append(layer)
+        mapped_layers[layer] = _make_layer(
+          FlattenBatchLayer, dict(network=layer.network, sources=[layer], name="%s_flat" % layer.name), map_opts=False)
+    assert starting_points, "no starting points found, starting from end points %r" % (end_points,)
+
+    # Go forward through the starting points and copy layers.
+    visited = set()
+    layer_queue = list(starting_points)
+    while layer_queue:
+      layer = layer_queue.pop(0)
+      if layer in visited:
+        continue
+      visited.add(layer)
+      if not _needs_flattening(layer):
+        continue
+      if any(dep not in mapped_layers for dep in _layer_deps(layer) if _needs_flattening(dep)):
+        # Need to delay this layer. Put back into queue.
+        assert layer_queue  # there must be others which we need to flatten
+        visited.remove(layer)
+        layer_queue.append(layer)
+        continue
+      if layer not in mapped_layers:
+        mapped_layers[layer] = _make_layer(type(layer), layer.kwargs)
+      for next_layer in deps_used_by[layer]:
+        layer_queue.append(next_layer)
+
+    # All end points must be mapped now.
+    for layer in end_points:
+      assert layer in mapped_layers
+    # Assign flatten_with_seq_len_mask cache to mapped layers.
+    for layer, new_layer in mapped_layers.items():
+      if not _should_flatten_layer_output(layer):
+        continue
+      new_out = new_layer.output
+      if not new_out.have_batch_axis():
+        continue
+      new_batch = new_out.batch
+      if not new_batch:
+        continue
+      if len(new_batch.virtual_dims) != 2:
+        continue
+      new_virt_batch_dim1, new_virt_batch_dim2 = new_batch.virtual_dims
+      if not isinstance(new_virt_batch_dim1, BatchInfo.GlobalBatchDim):
+        continue
+      if not isinstance(new_virt_batch_dim2, BatchInfo.PackedDim):
+        continue
+      if new_virt_batch_dim2.dim_tag != layer.output.get_time_dim_tag():
+        continue
+      # would be the output of flatten_with_seq_len_mask
+      new_out_template = layer.output.copy_template_excluding_time_dim()
+      new_out_template = new_out_template.copy_template_excluding_axis(new_out_template.batch_dim_axis)
+      new_out_template = new_out_template.copy_add_dim_by_tag(new_out.get_batch_dim_tag(), unbroadcast=True, axis=0)
+      new_out = new_out.copy_compatible_to(new_out_template, add_dims=False)
+      cache = tf_util.get_flatten_with_seq_len_mask_cache_for_data(layer.output)
+      cache.set_cache(new_out.placeholder)
 
   def get_fetches_dict(self, config=None, should_train=None, should_eval=None,
                        with_summary=False, with_size=False,
