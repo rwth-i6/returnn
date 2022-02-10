@@ -7437,6 +7437,8 @@ class CombineLayer(LayerBase):
     super(CombineLayer, self).__init__(sources=sources, **kwargs)
     assert kind in ["average", "add", "sub", "mul", "truediv", "floordiv", "logical_and", "logical_or", "eval"], (
       "%s: Invalid `kind` %r for this layer." % (self, kind))
+    if kind != "eval":
+      self.recurrent = False
     op = self._get_op(kind=kind, eval_str=eval, eval_locals=eval_locals)
     x = op(sources)
     if eval_for_output_loss:
