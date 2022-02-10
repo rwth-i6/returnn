@@ -681,17 +681,11 @@ class ActivationLayer(_ConcatInputLayer):
     :param str activation: e.g. "relu", "tanh", etc
     """
     super(ActivationLayer, self).__init__(**kwargs)
-    x = self.input_data.placeholder
+    x = self.input_data.copy_compatible_to(self.output, check_dtype=False).placeholder
     if activation:
       from returnn.tf.util.basic import get_activation_function
       act_func = get_activation_function(activation)
-      if act_func in {tf.nn.softmax, tf.nn.log_softmax} and self.output.feature_dim_axis != self.output.batch_ndim - 1:
-        # Make sure we use the right axis. Don't use OutputWithActivation.
-        # noinspection PyArgumentList
-        self.output.placeholder = act_func(x, axis=self.output.feature_dim_axis)
-        self.output_before_activation = None
-      else:
-        self.output_before_activation = OutputWithActivation(x, act_func=act_func)
+      self.output_before_activation = OutputWithActivation(x, act_func=act_func)
     else:
       self.output_before_activation = OutputWithActivation(x)
     if self.output_before_activation:
@@ -709,6 +703,9 @@ class ActivationLayer(_ConcatInputLayer):
     # Modify dtype if needed based on activation function
     if activation == "abs" and out.dtype == "complex64":
       out.dtype = "float32"
+    if "softmax" in activation:
+      # Make sure we use the right axis.
+      out = out.copy_with_feature_last()
     return out
 
 
