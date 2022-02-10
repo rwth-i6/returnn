@@ -2001,6 +2001,8 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     energy_data = self.input_data
     assert energy_data.dtype.startswith("float")
     axis = self._get_axis_to_reduce(input_data=energy_data, axis=axis, exception_prefix=self)
+    if not energy_data.dim_tags[axis].is_dynamic():
+      self.recurrent = False
     # tf.nn.softmax operates on the last axis.
     energy_data = energy_data.copy_move_axis(axis, -1)
     energy = energy_data.placeholder

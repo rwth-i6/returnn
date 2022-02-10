@@ -478,6 +478,13 @@ class Dim(object):
         return True
     return False
 
+  def is_dynamic(self):
+    """
+    :return: whether the dim is not static. usually means that it has seq lengths
+    :rtype: bool
+    """
+    return self.dimension is not None
+
   def can_be_used_as_dim(self):
     """
     :return: whether this can be used as a dim in :class:`Data`, i.e. it is not generic or special
