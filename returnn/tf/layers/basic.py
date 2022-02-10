@@ -684,10 +684,12 @@ class ActivationLayer(_ConcatInputLayer):
     super(ActivationLayer, self).__init__(**kwargs)
     x = self.input_data.copy_compatible_to(self.output, check_dtype=False).placeholder
     if activation:
+      if "softmax" in activation:
+        assert not opts  # do not set axis or anything. this handled automatically. we moved feature to last axis.
+        if self.output.dim_tags[-1].is_dynamic():
+          self.recurrent = True
       from returnn.tf.util.basic import get_activation_function
       act_func = get_activation_function(activation)
-      if act_func in {tf.nn.softmax, tf.nn.log_softmax}:
-        assert not opts  # do not set axis or anything. this handled automatically
       self.output_before_activation = OutputWithActivation(x, act_func=act_func, act_func_opts=opts)
     else:
       self.output_before_activation = OutputWithActivation(x)
