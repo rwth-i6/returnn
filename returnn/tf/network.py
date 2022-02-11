@@ -682,10 +682,9 @@ class TFNetwork(object):
     """
     assert self._extra_layer_name_prefix_pattern.match(prefix_name + ":")
     base_net = self.extra_parent_net or self
-    net, prefix_ = base_net._get_extra_net(
+    net, _ = base_net._get_extra_net(
       search_flag=self.search_flag, prefix_name=prefix_name, net_name=net_name,
       boundary=boundary)
-    assert prefix_ == prefix_name
     if only_template:
       assert boundary
       net.extra_only_template = True
