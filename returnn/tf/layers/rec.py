@@ -4390,7 +4390,6 @@ class RnnCellLayer(_ConcatInputLayer):
       self.rec_vars_outputs["state"] = state
       params = tf_compat.v1.get_collection(
         tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES, scope=re.escape(scope_name_prefix))
-      assert params
       for p in params:
         self.add_param(p)
 
