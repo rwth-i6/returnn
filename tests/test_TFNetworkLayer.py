@@ -4591,6 +4591,41 @@ def test_DotLayer2():
     assert_equal(out.shape, (S1, S2, B, V))
 
 
+def test_DotLayer_linear_square_matrix():
+  from returnn.tf.util.data import batch_dim
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("feature", dimension=3)
+  config = Config({
+    "extern_data": {
+      "data": {"dim_tags": [batch_dim, time_dim, feat_dim]},
+      "matrix_ambiguous": {"dim_tags": [feat_dim, feat_dim], "available_for_inference": True},
+      "matrix_non_ambiguous": {
+        "dim_tags": [feat_dim.copy(match_priority=1), feat_dim], "available_for_inference": True},
+    },
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    try:
+      net.construct_from_dict({
+        "output": {
+          "class": "dot", "from": ["data:data", "data:matrix_ambiguous"], "reduce": feat_dim
+        },
+      })
+    except Exception as exc:
+      print("Expected exception: %r" % exc)
+      assert "must be unique" in str(exc)
+    else:
+      raise Exception("Expected exception but constructed layer: %s" % net.get_default_output_layer())
+    net.construct_from_dict({
+      "output": {
+        "class": "dot", "from": ["data:data", "data:matrix_non_ambiguous"], "reduce": feat_dim
+      },
+    })
+    out = net.get_default_output_layer().output
+    assert out.dim_tags == (batch_dim, time_dim, feat_dim)
+    session.run(out.placeholder, feed_dict=make_feed_dict(net.extern_data))
+
+
 def test_DotLayer_mask_dyn_seq():
   batch = Dim(kind=Dim.Types.Batch, description="batch")
   time = SpatialDim("time")
