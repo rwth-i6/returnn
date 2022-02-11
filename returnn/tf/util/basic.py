@@ -1906,6 +1906,26 @@ def reversed(x):
   return y
 
 
+def get_flatten_with_seq_len_mask_cache_for_data(x):
+  """
+  :param Data x:
+  :rtype: TensorCachedComputation
+  """
+  return get_flatten_with_seq_len_mask_cache(
+    x.placeholder, x.get_sequence_lengths(), x.batch_dim_axis, x.time_dim_axis)
+
+
+def get_flatten_with_seq_len_mask_cache(x, seq_lens, batch_dim_axis, time_dim_axis):
+  """
+  :param tf.Tensor x: shape (batch,...s..., time, ...s'...) or shape (time,...s...., batch, ...s'...)
+  :param tf.Tensor seq_lens: shape (batch,) of int32
+  :param int batch_dim_axis: index of batch_dim in x
+  :param int time_dim_axis: index of time_dim in x
+  :rtype: TensorCachedComputation
+  """
+  return TensorCachedComputation(x, key=(seq_lens, batch_dim_axis, time_dim_axis))
+
+
 def flatten_with_seq_len_mask(x, seq_lens, batch_dim_axis=None, time_dim_axis=None, time_major=None):
   """
   :param tf.Tensor x: shape (batch,...s..., time, ...s'...) or shape (time,...s...., batch, ...s'...)
@@ -1924,6 +1944,9 @@ def flatten_with_seq_len_mask(x, seq_lens, batch_dim_axis=None, time_dim_axis=No
       batch_dim_axis, time_dim_axis = 0, 1
   assert batch_dim_axis is not None and time_dim_axis is not None
   assert batch_dim_axis != time_dim_axis
+  cache = get_flatten_with_seq_len_mask_cache(x, seq_lens, batch_dim_axis, time_dim_axis)
+  if cache.has_cache():
+    return cache.get_cache()
   with tf.name_scope("flatten_with_seq_len_mask"):
     seq_lens = check_input_ndim(seq_lens, 1)
     # If not (batch,time,...s...), transform.
@@ -1942,6 +1965,7 @@ def flatten_with_seq_len_mask(x, seq_lens, batch_dim_axis=None, time_dim_axis=No
     mask = check_dim_equal(mask, 1, x, time_dim_axis)
     res = tf.boolean_mask(x, mask)
     res = check_input_ndim_equal_offset(res, x, -1)
+    cache.set_cache(res)
     return res
 
 
