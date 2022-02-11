@@ -4124,9 +4124,15 @@ class _SubnetworkRecWrappedLoss(Loss):
     self.base_loss = base_loss
     self.layer = base_loss.layer  # avoid that init() gets executed again
     # Get either (time_flat,) or (time*batch,) for loss_value and error_value.
-    self.loss_value = self._flatten_or_merge(loss_value, seq_lens=seq_lens, time_major=True)
+    loss_data = Data("loss", shape=(None,), time_dim_axis=0, batch_dim_axis=1, dtype="float32", placeholder=loss_value)
+    loss_data.size_placeholder[0] = seq_lens
+    self.loss_value = self._flatten_or_merge(loss_data)
     if error_value is not None:
-      self.error_value = self._flatten_or_merge(error_value, seq_lens=seq_lens, time_major=True)
+      error_data = Data(
+        "error", shape=(None,), time_dim_axis=0, batch_dim_axis=1, dtype=error_value.dtype.name,
+        placeholder=error_value)
+      error_data.size_placeholder[0] = seq_lens
+      self.error_value = self._flatten_or_merge(error_data)
     else:
       self.error_value = None  # type: typing.Optional[tf.Tensor]
     self.loss_norm_factor = norm_factor

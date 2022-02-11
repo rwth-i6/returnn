@@ -10834,10 +10834,7 @@ class SamplingBasedLoss(Loss):
         batch_num = tf.shape(labels)[0]  # B'.
         labels = tf.reshape(labels, [-1, 1])  # (B',1).
 
-        inputs = self._flatten_or_merge(
-          input_data.placeholder,
-          seq_lens=input_data.get_sequence_lengths(),
-          time_major=input_data.is_time_major)  # (B',D).
+        inputs = self._flatten_or_merge(input_data)  # (B',D).
 
         from tensorflow.python.framework import dtypes
         from tensorflow.python.ops import math_ops
