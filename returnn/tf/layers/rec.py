@@ -3410,7 +3410,7 @@ class _SubnetworkRecCell(object):
       assert isinstance(layer, _TemplateLayer)
       if layer.name in [":i", "end"]:  # currently not fully implemented
         return False
-      if self.parent_net.search_flag and layer.search_choices:
+      if layer.search_choices:
         return False  # need to perform the search inside the loop currently
       layer_deps = layer.dependencies
       # We depend on other layers from this sub-network?
