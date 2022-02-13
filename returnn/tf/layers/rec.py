@@ -5879,17 +5879,17 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
     beam_size = src.output.beam.beam_size if src.output.beam else 1
     super(DecideKeepBeamLayer, self).__init__(beam_size=beam_size, sources=sources, **kwargs)
     self.output.placeholder = src.output.placeholder
-    if self.network.search_flag:
-      base_search_choices = src.get_search_choices()
-      if base_search_choices:
-        self.search_choices = SearchChoices(owner=self, beam_size=beam_size, keep_raw=True)
-        assert base_search_choices.beam_size == beam_size == self.search_choices.beam_size
-        net_batch_dim = self.network.get_data_batch_dim()
-        from returnn.tf.util.basic import expand_dims_unbroadcast
-        self.search_choices.set_src_beams(expand_dims_unbroadcast(
-          tf.range(base_search_choices.beam_size), axis=0, dim=net_batch_dim))
-        self.search_choices.set_beam_scores(base_search_choices.beam_scores)
-      else:
+    base_search_choices = src.get_search_choices()
+    if base_search_choices:
+      self.search_choices = SearchChoices(owner=self, beam_size=beam_size, keep_raw=True)
+      assert base_search_choices.beam_size == beam_size == self.search_choices.beam_size
+      net_batch_dim = self.network.get_data_batch_dim()
+      from returnn.tf.util.basic import expand_dims_unbroadcast
+      self.search_choices.set_src_beams(expand_dims_unbroadcast(
+        tf.range(base_search_choices.beam_size), axis=0, dim=net_batch_dim))
+      self.search_choices.set_beam_scores(base_search_choices.beam_scores)
+    else:
+      if self.network.search_flag:
         print("%s: Warning: decide-keep-beam on %r, there are no search choices" % (self, src), file=log.v3)
 
   @classmethod
@@ -5934,7 +5934,7 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
     from returnn.tf.util.basic import SearchBeam
     assert len(sources) == 1
     out = sources[0].output.copy_template(name="%s_output" % name)
-    if network.search_flag and out.beam:
+    if out.beam:
       out.beam = SearchBeam(
         beam_size=out.beam.beam_size, dependency=out.beam,
         name="%s%s" % (network.get_absolute_name_prefix(), name))
