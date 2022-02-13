@@ -2745,8 +2745,6 @@ class _SubnetworkRecCell(object):
           :param LayerBase layer:
           :rtype: LayerBase
           """
-          if not self.parent_net.search_flag:
-            return layer
           if layer in transformed_cache:
             return transformed_cache[layer]
           assert not RecLayer.is_prev_step_layer(layer)  # this layer is from current frame
