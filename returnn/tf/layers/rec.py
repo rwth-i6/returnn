@@ -5372,43 +5372,6 @@ class ChoiceLayer(BaseChoiceLayer):
       # We use the labels of the first target as "normal" output.
       self.output = self.output_list[0]
 
-    if self.network.search_flag and not search and input_type != "regression":
-      # We perform search, but this layer does not do search.
-      # But we still add our scores to the beam scores.
-      net_batch_dim = self.network.get_data_batch_dim()
-      base_search_choices = self.network.get_search_choices(base_search_choice=self).search_choices
-      self.search_choices = SearchChoices(
-        owner=self,
-        beam_size=base_search_choices.beam_size)
-      assert self.search_choices.beam_size == self.output.beam.beam_size
-      scores_base = base_search_choices.beam_scores  # (batch, beam_in|1)
-      assert len(self.sources) == 1
-      scores_in = self._get_scores(self.sources[0])  # +log scores, (batch*beam_in, dim)
-      from returnn.tf.util.basic import filter_ended_scores
-      if self.network.have_rec_step_info():
-        scores_in_dim = self.sources[0].output.dim
-        if scores_in_dim is None:  # can happen if variable length
-          scores_in_dim = tf.shape(self.sources[0].output.placeholder)[self.sources[0].output.feature_dim_axis]
-        scores_in = filter_ended_scores(
-          scores_in,
-          end_flags=self.network.get_rec_step_info().get_prev_end_flag(target_search_choices=base_search_choices),
-          dim=scores_in_dim, batch_dim=tf.shape(scores_in)[0])  # (batch * beam_in, dim)
-        # We also assume that the ground truth output are 0 when the seq ended.
-      scores_in_ = batch_gather(scores_in, self.output.placeholder)  # (batch*beam_in,)
-      scores_in_ = tf.reshape(scores_in_, (net_batch_dim, base_search_choices.beam_size))  # (batch,beam_in)
-      self.search_choices.set_src_beams(expand_dims_unbroadcast(
-        tf.range(base_search_choices.beam_size), axis=0, dim=net_batch_dim))
-      assert not random_sample_scale
-      assert not length_normalization
-      assert not custom_score_combine
-      scores_comb = optional_add(
-        optional_mul(scores_in_, prob_scale),
-        optional_mul(scores_base, base_beam_score_scale))  # (batch, beam_in)
-      self.search_scores_in = scores_in_
-      self.search_scores_base = scores_base
-      self.search_scores_combined = scores_comb
-      self.search_choices.set_beam_scores(scores_comb)
-
   def _get_scores(self, source):
     """
     :param LayerBase source:
