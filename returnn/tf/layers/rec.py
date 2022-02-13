@@ -2470,37 +2470,36 @@ class _SubnetworkRecCell(object):
       # to be able to reconstruct the final hypotheses.
       output_beam = None  # type: typing.Optional[SearchBeam]
       collected_choices = []  # type: typing.List[str]  # layer names
-      if rec_layer.network.search_flag:
-        for layer in self.layer_data_templates.values():
-          assert isinstance(layer, _TemplateLayer)
-          if layer.search_choices:
-            collected_choices += [layer.name]
+      for layer in self.layer_data_templates.values():
+        assert isinstance(layer, _TemplateLayer)
+        if layer.search_choices:
+          collected_choices += [layer.name]
 
-            # noinspection PyShadowingNames
-            def get_choices_getter(name):
+          # noinspection PyShadowingNames
+          def get_choices_getter(name):
+            """
+            :param str name:
+            :rtype: ()->tf.Tensor|None
+            """
+            def get_choice_source_batches():
               """
-              :param str name:
-              :rtype: ()->tf.Tensor|None
+              :rtype: tf.Tensor|None
               """
-              def get_choice_source_batches():
-                """
-                :rtype: tf.Tensor|None
-                """
-                layer = self.net.layers[name]
-                return layer.search_choices.src_beams
-              return get_choice_source_batches
+              layer = self.net.layers[name]
+              return layer.search_choices.src_beams
+            return get_choice_source_batches
 
-            outputs_to_accumulate.append(
-              _SubnetworkRecCell.OutputToAccumulate(
-                name="choice_%s" % layer.name,
-                dtype=tf.int32,
-                element_shape=(None, layer.search_choices.beam_size),  # (batch, beam)
-                get=get_choices_getter(layer.name)))
+          outputs_to_accumulate.append(
+            _SubnetworkRecCell.OutputToAccumulate(
+              name="choice_%s" % layer.name,
+              dtype=tf.int32,
+              element_shape=(None, layer.search_choices.beam_size),  # (batch, beam)
+              get=get_choices_getter(layer.name)))
 
-        if collected_choices:
-          output_beam = self.layer_data_templates["output"].output.beam
-          # Note: output_beam_size can be None, if output itself does not depend on any choice,
-          # which might be uncommon, but is valid.
+      if collected_choices:
+        output_beam = self.layer_data_templates["output"].output.beam
+        # Note: output_beam_size can be None, if output itself does not depend on any choice,
+        # which might be uncommon, but is valid.
 
       if not have_known_seq_len:
         assert "end" in self.layer_data_templates, "You need to have an 'end' layer in your rec subnet."
