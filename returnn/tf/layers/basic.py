@@ -10684,7 +10684,7 @@ class SearchScoreLoss(Loss):
     """
     assert self.layer
     search_choices = self.layer.get_search_choices()
-    assert self.layer.network.search_flag and search_choices, "no search?"
+    assert search_choices, "no search?"
     # Negative score, because we minimize the loss, i.e. maximize the score.
     return self.reduce_func(-search_choices.beam_scores)
 
