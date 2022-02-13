@@ -4059,8 +4059,6 @@ class _TemplateLayer(LayerBase):
     :rtype: bool
     """
     # TODO: extend if this is a subnet or whatever
-    if not self.network.search_flag:
-      return False
     if issubclass(self.layer_class_type, BaseChoiceLayer):
       # Always has search_choices if we do search, even if search option is False explicitly.
       beam_size = self._get_search_choices_beam_size()
