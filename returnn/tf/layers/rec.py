@@ -5771,16 +5771,16 @@ class DecideLayer(BaseChoiceLayer):
     :param bool length_normalization: performed on the beam scores
     """
     super(DecideLayer, self).__init__(beam_size=1, **kwargs)
-    # If not in search, this will already be set via self.get_out_data_from_opts().
-    if self.network.search_flag:
-      assert len(self.sources) == 1
-      src = self.sources[0]
+    assert len(self.sources) == 1
+    src = self.sources[0]
+    if src.output.beam:
       self.output, self.search_choices = self.decide(
         src=src, owner=self, output=self.output, length_normalization=length_normalization)
-      if not self.search_choices:
+      assert self.search_choices
+    else:
+      if self.network.search_flag:
         print("%s: Warning: decide on %r, there are no search choices" % (self, src), file=log.v3)
-        # As batch major, because we defined our output that way.
-        self.output = self.output.copy_as_batch_major()
+      self.output.placeholder = src.output.copy_as_batch_major().placeholder
 
   @classmethod
   def cls_get_search_beam_size(cls, sources, **kwargs):
