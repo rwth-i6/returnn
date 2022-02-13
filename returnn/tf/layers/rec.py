@@ -5110,8 +5110,6 @@ class ChoiceLayer(BaseChoiceLayer):
     from returnn.tf.util.basic import optional_add, optional_mul, batch_gather, expand_dims_unbroadcast
     search = NotSpecified.resolve(search, default=self.network.search_flag)
     assert isinstance(search, bool)
-    if search:
-      assert self.network.search_flag, "%s: cannot use search if network.search_flag disabled" % self
     self.search_flag = search
     self.input_type = input_type
     self.length_normalization = length_normalization
@@ -5361,8 +5359,6 @@ class ChoiceLayer(BaseChoiceLayer):
         available_for_inference=True)
 
     else:  # no search, and no scheduled-sampling
-      if not self.network.search_flag:
-        assert len(self.sources) == 0  # will be filtered out in transform_config_dict
       # Note: If you want to do forwarding, without having the reference,
       # that wont work. You must do search in that case.
       # Put all targets in a list.
