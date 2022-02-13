@@ -12,7 +12,7 @@ try:
   from tensorflow.python.ops.nn import rnn_cell
 except ImportError:
   from tensorflow.python.ops import rnn_cell
-from returnn.tf.network import LayerNotFound
+from returnn.tf.network import LayerNotFound, TFNetwork
 from .basic import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template, Loss
 from returnn.tf.util.data import Data, Dim, SpatialDim, FeatureDim, SearchBeam
 from returnn.tf.util.basic import reuse_name_scope
@@ -5719,6 +5719,7 @@ class ChoiceLayer(BaseChoiceLayer):
     sources = parent_layer_kwargs["sources"]
     network = parent_layer_kwargs["network"]
     beam_size = parent_layer_kwargs["beam_size"]
+    assert isinstance(network, TFNetwork)
 
     # The sub-layer with index n will output the n-th target. The out_data is taken directly
     # from the target as it is done in self.get_out_data_from_opts().
