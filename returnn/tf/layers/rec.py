@@ -4983,16 +4983,11 @@ class BaseChoiceLayer(LayerBase):
     :param int|None beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
     :param NotSpecified|bool search:
     :param None|SearchChoices _src_common_search_choices: set via :func:`SearchChoices.translate_to_common_search_beam`
+    :return: when this layer provides an own choice (search_choices attrib is set), then the corresponding beam size
     :rtype: int|None
     """
     search = NotSpecified.resolve(search, network.search_flag)
     if not search:
-      if _src_common_search_choices:
-        return _src_common_search_choices.beam_size
-      # Note: _src_common_search_choices might not be set during template construction,
-      # but this fallback would still work then (at least for ChoiceLayer).
-      if sources:
-        return sources[0].output.beam.beam_size if sources[0].output.beam else None
       return None
     return beam_size
 
@@ -5788,12 +5783,12 @@ class DecideLayer(BaseChoiceLayer):
         self.output = self.output.copy_as_batch_major()
 
   @classmethod
-  def cls_get_search_beam_size(cls, network=None, **kwargs):
+  def cls_get_search_beam_size(cls, sources, **kwargs):
     """
-    :param returnn.tf.network.TFNetwork network:
+    :param list[LayerBase] sources:
     :rtype: int|None
     """
-    if network.search_flag:
+    if sources[0].output.beam:
       return 1
     return None
 
@@ -5905,7 +5900,7 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
     :rtype: int|None
     """
     assert len(sources) == 1
-    return sources[0].output.beam.beam_size if sources[0].output.beam else 1
+    return sources[0].output.beam.beam_size if sources[0].output.beam else None
 
   @classmethod
   def get_rec_initial_extra_outputs(cls, sources, **kwargs):
@@ -6042,6 +6037,7 @@ class SplitBatchBeamLayer(BaseChoiceLayer):
     beam_dim  # noqa  # via get_out_data_from_opts
     super(SplitBatchBeamLayer, self).__init__(beam_size=1, **kwargs)
     src = self.sources[0].output.copy_as_batch_major()
+    assert src.beam
     batch_dim = self.output.get_batch_dim()
     beam_size = src.beam.beam_size
     src_shape = tf_util.get_shape(src.placeholder)
@@ -6049,14 +6045,12 @@ class SplitBatchBeamLayer(BaseChoiceLayer):
     self.search_choices = SearchChoices(owner=self, beam_size=1, is_decided=True)
 
   @classmethod
-  def cls_get_search_beam_size(cls, network=None, **kwargs):
+  def cls_get_search_beam_size(cls, **kwargs):
     """
-    :param returnn.tf.network.TFNetwork network:
     :rtype: int|None
     """
-    if network.search_flag:
-      return 1
-    return None
+    # We (currently) assume in this layer that there is always a beam.
+    return 1
 
   @classmethod
   def get_out_data_from_opts(cls, name, network, sources, beam_dim=None, **kwargs):
