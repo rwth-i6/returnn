@@ -5860,12 +5860,9 @@ class DecideLayer(BaseChoiceLayer):
     :rtype: Data
     """
     assert len(sources) == 1
-    if network.search_flag:
-      data = sources[0].output.copy_template(name="%s_output" % name).copy_as_batch_major()
-      data.beam = None
-      return data
-    else:
-      return sources[0].output
+    data = sources[0].output.copy_template(name="%s_output" % name).copy_as_batch_major()
+    data.beam = None
+    return data
 
 
 class DecideKeepBeamLayer(BaseChoiceLayer):
