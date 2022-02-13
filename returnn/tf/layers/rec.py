@@ -5551,13 +5551,15 @@ class ChoiceLayer(BaseChoiceLayer):
     assert d.get("from", NotSpecified) is not NotSpecified, "specify 'from' explicitly for choice layer"
     if not isinstance(d["from"], (tuple, list)):
       d["from"] = [d["from"]]
+    search = d.get("search", NotSpecified)
+    search = NotSpecified.resolve(search, network.search_flag)
     if d.get("target", NotSpecified) is not None:
       assert "target" in d, "%s: specify 'target' explicitly" % (cls.__name__,)
       if isinstance(d["target"], str):
         d["target"] = [d["target"]]
       assert isinstance(d["target"], list)
       assert len(d["target"]) == len(d["from"])
-    if not network.search_flag and not d.get("scheduled_sampling"):
+    if not search and not d.get("scheduled_sampling"):
       # In the dependency graph, we don't want it.
       # This can enable some optimizations in the RecLayer.
       # We do it here because we should know about the deps early in the template creation in RecLayer.
@@ -5568,10 +5570,10 @@ class ChoiceLayer(BaseChoiceLayer):
     # Convert explicit_search_sources to layers
     if d.get("explicit_search_source"):
       assert "explicit_search_sources" not in d
-      d["explicit_search_sources"] = [get_layer(d.pop("explicit_search_source"))] if network.search_flag else []
+      d["explicit_search_sources"] = [get_layer(d.pop("explicit_search_source"))] if search else []
     elif d.get("explicit_search_sources"):
       assert isinstance(d["explicit_search_sources"], (list, tuple, dict))
-      if network.search_flag:
+      if search:
         if isinstance(d["explicit_search_sources"], (list, tuple)):
           d["explicit_search_sources"] = [get_layer(name) for name in d["explicit_search_sources"]]
         elif isinstance(d["explicit_search_sources"], dict):
@@ -5669,7 +5671,9 @@ class ChoiceLayer(BaseChoiceLayer):
     sources = parent_layer_kwargs["sources"]
     network = parent_layer_kwargs["network"]
     beam_size = parent_layer_kwargs["beam_size"]
+    search = parent_layer_kwargs.get("search", NotSpecified)
     assert isinstance(network, TFNetwork)
+    search = NotSpecified.resolve(search, network.search_flag)
 
     # The sub-layer with index n will output the n-th target. The out_data is taken directly
     # from the target as it is done in self.get_out_data_from_opts().
@@ -5677,7 +5681,7 @@ class ChoiceLayer(BaseChoiceLayer):
       name=parent_layer_name + "/" + layer_name,
       sources=sources, target=targets[index], network=network, beam_size=beam_size)
 
-    if network.search_flag:
+    if search:
       # Create same beam as in parent layer (they have to compare equal)
       sub_layer_out_data.beam = cls._create_search_beam(
         name=parent_layer_name, beam_size=beam_size,
