@@ -3368,7 +3368,7 @@ class _SubnetworkRecCell(object):
       # Special case: end-layer, which is added if the seq-len is unknown, cannot be moved out.
       if layer.name == "end":
         return False
-      if self.parent_net.search_flag and layer.search_choices:
+      if layer.search_choices:
         return False  # need to perform the search inside the loop currently
       if layer in layer.dependencies:  # recursive on itself
         return False
