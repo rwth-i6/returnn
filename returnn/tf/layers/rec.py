@@ -4986,7 +4986,7 @@ class BaseChoiceLayer(LayerBase):
     :rtype: int|None
     """
     search = NotSpecified.resolve(search, network.search_flag)
-    if not search or not network.search_flag:
+    if not search:
       if _src_common_search_choices:
         return _src_common_search_choices.beam_size
       # Note: _src_common_search_choices might not be set during template construction,
