@@ -1806,18 +1806,17 @@ class _SubnetworkRecCell(object):
       # noinspection PyBroadException
       try:
         layer = self.net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
-        if self.net.search_flag:
-          # Some layers are buggy to determine the right beam size at template construction time.
-          # Usually this is because they ignore some of the dependencies in get_out_data_from_opts.
-          # If that is the case, this will likely crash at some later point with mismatching shape.
-          # Do an explicit check here now, to easier localize such problems.
-          layer_template = self.layer_data_templates[name]
-          layer_choices = layer.get_search_choices()
-          if not layer.search_choices and layer_choices:
-            assert (layer.output.beam == layer_template.output.beam and
-                    layer_choices.beam_size == layer.output.beam.beam_size == layer_template.output.beam.beam_size), (
-              "Layer %r has buggy search choices resolution." % layer,
-              self.net.debug_search_choices(layer) or "see search choices debug output")
+        # Some layers are buggy to determine the right beam size at template construction time.
+        # Usually this is because they ignore some of the dependencies in get_out_data_from_opts.
+        # If that is the case, this will likely crash at some later point with mismatching shape.
+        # Do an explicit check here now, to easier localize such problems.
+        layer_template = self.layer_data_templates[name]
+        layer_choices = layer.get_search_choices()
+        if not layer.search_choices and layer_choices:
+          assert (layer.output.beam == layer_template.output.beam and
+                  layer_choices.beam_size == layer.output.beam.beam_size == layer_template.output.beam.beam_size), (
+            "Layer %r has buggy search choices resolution." % layer,
+            self.net.debug_search_choices(layer) or "see search choices debug output")
         if name == "end":
           # Special logic for the end layer, to always logical_or to the prev:end layer.
           assert layer.output.shape == (), "%s: 'end' layer %r unexpected shape" % (self.parent_rec_layer, layer)
