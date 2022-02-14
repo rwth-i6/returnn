@@ -12,7 +12,7 @@ try:
   from tensorflow.python.ops.nn import rnn_cell
 except ImportError:
   from tensorflow.python.ops import rnn_cell
-from returnn.tf.network import LayerNotFound
+from returnn.tf.network import LayerNotFound, TFNetwork
 from .basic import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template, Loss
 from returnn.tf.util.data import Data, Dim, SpatialDim, FeatureDim, SearchBeam
 from returnn.tf.util.basic import reuse_name_scope
@@ -1806,18 +1806,17 @@ class _SubnetworkRecCell(object):
       # noinspection PyBroadException
       try:
         layer = self.net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
-        if self.net.search_flag:
-          # Some layers are buggy to determine the right beam size at template construction time.
-          # Usually this is because they ignore some of the dependencies in get_out_data_from_opts.
-          # If that is the case, this will likely crash at some later point with mismatching shape.
-          # Do an explicit check here now, to easier localize such problems.
-          layer_template = self.layer_data_templates[name]
-          layer_choices = layer.get_search_choices()
-          if not layer.search_choices and layer_choices:
-            assert (layer.output.beam == layer_template.output.beam and
-                    layer_choices.beam_size == layer.output.beam.beam_size == layer_template.output.beam.beam_size), (
-              "Layer %r has buggy search choices resolution." % layer,
-              self.net.debug_search_choices(layer) or "see search choices debug output")
+        # Some layers are buggy to determine the right beam size at template construction time.
+        # Usually this is because they ignore some of the dependencies in get_out_data_from_opts.
+        # If that is the case, this will likely crash at some later point with mismatching shape.
+        # Do an explicit check here now, to easier localize such problems.
+        layer_template = self.layer_data_templates[name]
+        layer_choices = layer.get_search_choices()
+        if not layer.search_choices and layer_choices:
+          assert (layer.output.beam == layer_template.output.beam and
+                  layer_choices.beam_size == layer.output.beam.beam_size == layer_template.output.beam.beam_size), (
+            "Layer %r has buggy search choices resolution." % layer,
+            self.net.debug_search_choices(layer) or "see search choices debug output")
         if name == "end":
           # Special logic for the end layer, to always logical_or to the prev:end layer.
           assert layer.output.shape == (), "%s: 'end' layer %r unexpected shape" % (self.parent_rec_layer, layer)
@@ -2471,37 +2470,36 @@ class _SubnetworkRecCell(object):
       # to be able to reconstruct the final hypotheses.
       output_beam = None  # type: typing.Optional[SearchBeam]
       collected_choices = []  # type: typing.List[str]  # layer names
-      if rec_layer.network.search_flag:
-        for layer in self.layer_data_templates.values():
-          assert isinstance(layer, _TemplateLayer)
-          if layer.search_choices:
-            collected_choices += [layer.name]
+      for layer in self.layer_data_templates.values():
+        assert isinstance(layer, _TemplateLayer)
+        if layer.search_choices:
+          collected_choices += [layer.name]
 
-            # noinspection PyShadowingNames
-            def get_choices_getter(name):
+          # noinspection PyShadowingNames
+          def get_choices_getter(name):
+            """
+            :param str name:
+            :rtype: ()->tf.Tensor|None
+            """
+            def get_choice_source_batches():
               """
-              :param str name:
-              :rtype: ()->tf.Tensor|None
+              :rtype: tf.Tensor|None
               """
-              def get_choice_source_batches():
-                """
-                :rtype: tf.Tensor|None
-                """
-                layer = self.net.layers[name]
-                return layer.search_choices.src_beams
-              return get_choice_source_batches
+              layer = self.net.layers[name]
+              return layer.search_choices.src_beams
+            return get_choice_source_batches
 
-            outputs_to_accumulate.append(
-              _SubnetworkRecCell.OutputToAccumulate(
-                name="choice_%s" % layer.name,
-                dtype=tf.int32,
-                element_shape=(None, layer.search_choices.beam_size),  # (batch, beam)
-                get=get_choices_getter(layer.name)))
+          outputs_to_accumulate.append(
+            _SubnetworkRecCell.OutputToAccumulate(
+              name="choice_%s" % layer.name,
+              dtype=tf.int32,
+              element_shape=(None, layer.search_choices.beam_size),  # (batch, beam)
+              get=get_choices_getter(layer.name)))
 
-        if collected_choices:
-          output_beam = self.layer_data_templates["output"].output.beam
-          # Note: output_beam_size can be None, if output itself does not depend on any choice,
-          # which might be uncommon, but is valid.
+      if collected_choices:
+        output_beam = self.layer_data_templates["output"].output.beam
+        # Note: output_beam_size can be None, if output itself does not depend on any choice,
+        # which might be uncommon, but is valid.
 
       if not have_known_seq_len:
         assert "end" in self.layer_data_templates, "You need to have an 'end' layer in your rec subnet."
@@ -2747,8 +2745,6 @@ class _SubnetworkRecCell(object):
           :param LayerBase layer:
           :rtype: LayerBase
           """
-          if not self.parent_net.search_flag:
-            return layer
           if layer in transformed_cache:
             return transformed_cache[layer]
           assert not RecLayer.is_prev_step_layer(layer)  # this layer is from current frame
@@ -3372,7 +3368,7 @@ class _SubnetworkRecCell(object):
       # Special case: end-layer, which is added if the seq-len is unknown, cannot be moved out.
       if layer.name == "end":
         return False
-      if self.parent_net.search_flag and layer.search_choices:
+      if layer.search_choices:
         return False  # need to perform the search inside the loop currently
       if layer in layer.dependencies:  # recursive on itself
         return False
@@ -3414,7 +3410,7 @@ class _SubnetworkRecCell(object):
       assert isinstance(layer, _TemplateLayer)
       if layer.name in [":i", "end"]:  # currently not fully implemented
         return False
-      if self.parent_net.search_flag and layer.search_choices:
+      if layer.search_choices:
         return False  # need to perform the search inside the loop currently
       layer_deps = layer.dependencies
       # We depend on other layers from this sub-network?
@@ -4063,8 +4059,6 @@ class _TemplateLayer(LayerBase):
     :rtype: bool
     """
     # TODO: extend if this is a subnet or whatever
-    if not self.network.search_flag:
-      return False
     if issubclass(self.layer_class_type, BaseChoiceLayer):
       # Always has search_choices if we do search, even if search option is False explicitly.
       beam_size = self._get_search_choices_beam_size()
@@ -4971,46 +4965,54 @@ class BaseChoiceLayer(LayerBase):
   """
 
   # noinspection PyUnusedLocal
-  def __init__(self, beam_size, search=NotSpecified, **kwargs):
+  def __init__(self, beam_size, search=NotSpecified, add_to_beam_scores=NotSpecified, **kwargs):
     """
     :param int|None beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
     :param NotSpecified|bool search: whether to perform search, or use the ground truth (`target` option).
       If not specified, it will depend on `network.search_flag`.
+    :param NotSpecified|bool add_to_beam_scores: whether to add the scores to the beam scores.
+      This will be done with search obviously (not supported to not do it).
+      Without search, we can still add the scores of the ground-truth labels to the beam.
+      By default, this is derived from `search or network.search_flag`.
+      So with enabled net search flag, even when `search` is disabled here, it will add the scores.
     """
     super(BaseChoiceLayer, self).__init__(**kwargs)
 
   # noinspection PyUnusedLocal
   @classmethod
   def cls_get_search_beam_size(
-        cls, network, beam_size, search=NotSpecified, sources=(), _src_common_search_choices=None, **kwargs):
+        cls, network, beam_size, search=NotSpecified, add_to_beam_scores=NotSpecified,
+        sources=(), _src_common_search_choices=None, **kwargs):
     """
     :param returnn.tf.network.TFNetwork network:
     :param list[LayerBase] sources:
     :param int|None beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
     :param NotSpecified|bool search:
+    :param NotSpecified|bool add_to_beam_scores:
     :param None|SearchChoices _src_common_search_choices: set via :func:`SearchChoices.translate_to_common_search_beam`
+    :return: when this layer provides an own choice (search_choices attrib is set), then the corresponding beam size
     :rtype: int|None
     """
     search = NotSpecified.resolve(search, network.search_flag)
-    if not search or not network.search_flag:
-      if _src_common_search_choices:
-        return _src_common_search_choices.beam_size
-      # Note: _src_common_search_choices might not be set during template construction,
-      # but this fallback would still work then (at least for ChoiceLayer).
-      if sources:
-        return sources[0].output.beam.beam_size if sources[0].output.beam else None
+    add_to_beam_scores = NotSpecified.resolve(add_to_beam_scores, search or network.search_flag)
+    if not search and not add_to_beam_scores:
       return None
     return beam_size
 
   # noinspection PyMethodOverriding
   @classmethod
-  def get_rec_initial_extra_outputs(cls, network, beam_size, **kwargs):
+  def get_rec_initial_extra_outputs(cls, network, beam_size, search=NotSpecified, add_to_beam_scores=NotSpecified,
+                                    **kwargs):
     """
     :param returnn.tf.network.TFNetwork network:
     :param int beam_size:
+    :param NotSpecified|bool search:
+    :param NotSpecified|bool add_to_beam_scores:
     :rtype: dict[str,tf.Tensor]
     """
-    if not network.search_flag:  # independent from option search, because we still need the search_choices
+    search = NotSpecified.resolve(search, network.search_flag)
+    add_to_beam_scores = NotSpecified.resolve(add_to_beam_scores, search or network.search_flag)
+    if not search and not add_to_beam_scores:
       return {}
     batch_dim = network.get_data_batch_dim()
     # Note: Use beam_size 1 for the initial as there are no competing hypotheses yet.
@@ -5081,6 +5083,7 @@ class ChoiceLayer(BaseChoiceLayer):
 
   def __init__(self, beam_size, keep_beams=False,
                search=NotSpecified,
+               add_to_beam_scores=NotSpecified,
                input_type="prob",
                prob_scale=1.0, base_beam_score_scale=1.0, random_sample_scale=0.0,
                length_normalization=True,
@@ -5095,6 +5098,11 @@ class ChoiceLayer(BaseChoiceLayer):
       i.e. we just expand, i.e. we just search on the dim. beam_size must be a multiple of beam_in.
     :param NotSpecified|bool search: whether to perform search, or use the ground truth (`target` option).
       If not specified, it will depend on `network.search_flag`.
+    :param NotSpecified|bool add_to_beam_scores: whether to add the scores to the beam scores.
+      This will be done with search obviously (not supported to not do it).
+      Without search, we can still add the scores of the ground-truth labels to the beam.
+      By default, this is derived from `search or network.search_flag`.
+      So with enabled net search flag, even when `search` is disabled here, it will add the scores.
     :param str input_type: "prob" or "log_prob", whether the input is in probability space, log-space, etc.
       or "regression", if it is a prediction of the data as-is. If there are several inputs, same format
       for all is assumed.
@@ -5116,8 +5124,7 @@ class ChoiceLayer(BaseChoiceLayer):
     from returnn.tf.util.basic import optional_add, optional_mul, batch_gather, expand_dims_unbroadcast
     search = NotSpecified.resolve(search, default=self.network.search_flag)
     assert isinstance(search, bool)
-    if search:
-      assert self.network.search_flag, "%s: cannot use search if network.search_flag disabled" % self
+    add_to_beam_scores = NotSpecified.resolve(add_to_beam_scores, default=search or self.network.search_flag)
     self.search_flag = search
     self.input_type = input_type
     self.length_normalization = length_normalization
@@ -5367,8 +5374,6 @@ class ChoiceLayer(BaseChoiceLayer):
         available_for_inference=True)
 
     else:  # no search, and no scheduled-sampling
-      if not self.network.search_flag:
-        assert len(self.sources) == 0  # will be filtered out in transform_config_dict
       # Note: If you want to do forwarding, without having the reference,
       # that wont work. You must do search in that case.
       # Put all targets in a list.
@@ -5385,7 +5390,7 @@ class ChoiceLayer(BaseChoiceLayer):
       # We use the labels of the first target as "normal" output.
       self.output = self.output_list[0]
 
-    if self.network.search_flag and not search and input_type != "regression":
+    if add_to_beam_scores and self.sources[0].output.beam and not search and input_type != "regression":
       # We perform search, but this layer does not do search.
       # But we still add our scores to the beam scores.
       net_batch_dim = self.network.get_data_batch_dim()
@@ -5601,13 +5606,17 @@ class ChoiceLayer(BaseChoiceLayer):
     assert d.get("from", NotSpecified) is not NotSpecified, "specify 'from' explicitly for choice layer"
     if not isinstance(d["from"], (tuple, list)):
       d["from"] = [d["from"]]
+    search = d.get("search", NotSpecified)
+    search = NotSpecified.resolve(search, network.search_flag)
+    add_to_beam_scores = d.get("add_to_beam_scores", NotSpecified)
+    add_to_beam_scores = NotSpecified.resolve(add_to_beam_scores, search or network.search_flag)
     if d.get("target", NotSpecified) is not None:
       assert "target" in d, "%s: specify 'target' explicitly" % (cls.__name__,)
       if isinstance(d["target"], str):
         d["target"] = [d["target"]]
       assert isinstance(d["target"], list)
       assert len(d["target"]) == len(d["from"])
-    if not network.search_flag and not d.get("scheduled_sampling"):
+    if not search and not add_to_beam_scores and not d.get("scheduled_sampling"):
       # In the dependency graph, we don't want it.
       # This can enable some optimizations in the RecLayer.
       # We do it here because we should know about the deps early in the template creation in RecLayer.
@@ -5618,10 +5627,10 @@ class ChoiceLayer(BaseChoiceLayer):
     # Convert explicit_search_sources to layers
     if d.get("explicit_search_source"):
       assert "explicit_search_sources" not in d
-      d["explicit_search_sources"] = [get_layer(d.pop("explicit_search_source"))] if network.search_flag else []
+      d["explicit_search_sources"] = [get_layer(d.pop("explicit_search_source"))] if search else []
     elif d.get("explicit_search_sources"):
       assert isinstance(d["explicit_search_sources"], (list, tuple, dict))
-      if network.search_flag:
+      if search:
         if isinstance(d["explicit_search_sources"], (list, tuple)):
           d["explicit_search_sources"] = [get_layer(name) for name in d["explicit_search_sources"]]
         elif isinstance(d["explicit_search_sources"], dict):
@@ -5719,6 +5728,9 @@ class ChoiceLayer(BaseChoiceLayer):
     sources = parent_layer_kwargs["sources"]
     network = parent_layer_kwargs["network"]
     beam_size = parent_layer_kwargs["beam_size"]
+    search = parent_layer_kwargs.get("search", NotSpecified)
+    assert isinstance(network, TFNetwork)
+    search = NotSpecified.resolve(search, network.search_flag)
 
     # The sub-layer with index n will output the n-th target. The out_data is taken directly
     # from the target as it is done in self.get_out_data_from_opts().
@@ -5726,7 +5738,7 @@ class ChoiceLayer(BaseChoiceLayer):
       name=parent_layer_name + "/" + layer_name,
       sources=sources, target=targets[index], network=network, beam_size=beam_size)
 
-    if network.search_flag:
+    if search:
       # Create same beam as in parent layer (they have to compare equal)
       sub_layer_out_data.beam = cls._create_search_beam(
         name=parent_layer_name, beam_size=beam_size,
@@ -5785,24 +5797,24 @@ class DecideLayer(BaseChoiceLayer):
     :param bool length_normalization: performed on the beam scores
     """
     super(DecideLayer, self).__init__(beam_size=1, **kwargs)
-    # If not in search, this will already be set via self.get_out_data_from_opts().
-    if self.network.search_flag:
-      assert len(self.sources) == 1
-      src = self.sources[0]
+    assert len(self.sources) == 1
+    src = self.sources[0]
+    if src.output.beam:
       self.output, self.search_choices = self.decide(
         src=src, owner=self, output=self.output, length_normalization=length_normalization)
-      if not self.search_choices:
+      assert self.search_choices
+    else:
+      if self.network.search_flag:
         print("%s: Warning: decide on %r, there are no search choices" % (self, src), file=log.v3)
-        # As batch major, because we defined our output that way.
-        self.output = self.output.copy_as_batch_major()
+      self.output.placeholder = src.output.copy_as_batch_major().placeholder
 
   @classmethod
-  def cls_get_search_beam_size(cls, network=None, **kwargs):
+  def cls_get_search_beam_size(cls, sources, **kwargs):
     """
-    :param returnn.tf.network.TFNetwork network:
+    :param list[LayerBase] sources:
     :rtype: int|None
     """
-    if network.search_flag:
+    if sources[0].output.beam:
       return 1
     return None
 
@@ -5869,12 +5881,9 @@ class DecideLayer(BaseChoiceLayer):
     :rtype: Data
     """
     assert len(sources) == 1
-    if network.search_flag:
-      data = sources[0].output.copy_template(name="%s_output" % name).copy_as_batch_major()
-      data.beam = None
-      return data
-    else:
-      return sources[0].output
+    data = sources[0].output.copy_template(name="%s_output" % name).copy_as_batch_major()
+    data.beam = None
+    return data
 
 
 class DecideKeepBeamLayer(BaseChoiceLayer):
@@ -5896,17 +5905,17 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
     beam_size = src.output.beam.beam_size if src.output.beam else 1
     super(DecideKeepBeamLayer, self).__init__(beam_size=beam_size, sources=sources, **kwargs)
     self.output.placeholder = src.output.placeholder
-    if self.network.search_flag:
-      base_search_choices = src.get_search_choices()
-      if base_search_choices:
-        self.search_choices = SearchChoices(owner=self, beam_size=beam_size, keep_raw=True)
-        assert base_search_choices.beam_size == beam_size == self.search_choices.beam_size
-        net_batch_dim = self.network.get_data_batch_dim()
-        from returnn.tf.util.basic import expand_dims_unbroadcast
-        self.search_choices.set_src_beams(expand_dims_unbroadcast(
-          tf.range(base_search_choices.beam_size), axis=0, dim=net_batch_dim))
-        self.search_choices.set_beam_scores(base_search_choices.beam_scores)
-      else:
+    base_search_choices = src.get_search_choices()
+    if base_search_choices:
+      self.search_choices = SearchChoices(owner=self, beam_size=beam_size, keep_raw=True)
+      assert base_search_choices.beam_size == beam_size == self.search_choices.beam_size
+      net_batch_dim = self.network.get_data_batch_dim()
+      from returnn.tf.util.basic import expand_dims_unbroadcast
+      self.search_choices.set_src_beams(expand_dims_unbroadcast(
+        tf.range(base_search_choices.beam_size), axis=0, dim=net_batch_dim))
+      self.search_choices.set_beam_scores(base_search_choices.beam_scores)
+    else:
+      if self.network.search_flag:
         print("%s: Warning: decide-keep-beam on %r, there are no search choices" % (self, src), file=log.v3)
 
   @classmethod
@@ -5917,7 +5926,7 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
     :rtype: int|None
     """
     assert len(sources) == 1
-    return sources[0].output.beam.beam_size if sources[0].output.beam else 1
+    return sources[0].output.beam.beam_size if sources[0].output.beam else None
 
   @classmethod
   def get_rec_initial_extra_outputs(cls, sources, **kwargs):
@@ -5951,7 +5960,7 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
     from returnn.tf.util.basic import SearchBeam
     assert len(sources) == 1
     out = sources[0].output.copy_template(name="%s_output" % name)
-    if network.search_flag and out.beam:
+    if out.beam:
       out.beam = SearchBeam(
         beam_size=out.beam.beam_size, dependency=out.beam,
         name="%s%s" % (network.get_absolute_name_prefix(), name))
@@ -6054,6 +6063,7 @@ class SplitBatchBeamLayer(BaseChoiceLayer):
     beam_dim  # noqa  # via get_out_data_from_opts
     super(SplitBatchBeamLayer, self).__init__(beam_size=1, **kwargs)
     src = self.sources[0].output.copy_as_batch_major()
+    assert src.beam
     batch_dim = self.output.get_batch_dim()
     beam_size = src.beam.beam_size
     src_shape = tf_util.get_shape(src.placeholder)
@@ -6061,14 +6071,12 @@ class SplitBatchBeamLayer(BaseChoiceLayer):
     self.search_choices = SearchChoices(owner=self, beam_size=1, is_decided=True)
 
   @classmethod
-  def cls_get_search_beam_size(cls, network=None, **kwargs):
+  def cls_get_search_beam_size(cls, **kwargs):
     """
-    :param returnn.tf.network.TFNetwork network:
     :rtype: int|None
     """
-    if network.search_flag:
-      return 1
-    return None
+    # We (currently) assume in this layer that there is always a beam.
+    return 1
 
   @classmethod
   def get_out_data_from_opts(cls, name, network, sources, beam_dim=None, **kwargs):
