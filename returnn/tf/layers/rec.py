@@ -4965,43 +4965,54 @@ class BaseChoiceLayer(LayerBase):
   """
 
   # noinspection PyUnusedLocal
-  def __init__(self, beam_size, search=NotSpecified, **kwargs):
+  def __init__(self, beam_size, search=NotSpecified, add_to_beam_scores=NotSpecified, **kwargs):
     """
     :param int|None beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
     :param NotSpecified|bool search: whether to perform search, or use the ground truth (`target` option).
       If not specified, it will depend on `network.search_flag`.
+    :param NotSpecified|bool add_to_beam_scores: whether to add the scores to the beam scores.
+      This will be done with search obviously (not supported to not do it).
+      Without search, we can still add the scores of the ground-truth labels to the beam.
+      By default, this is derived from `search or network.search_flag`.
+      So with enabled net search flag, even when `search` is disabled here, it will add the scores.
     """
     super(BaseChoiceLayer, self).__init__(**kwargs)
 
   # noinspection PyUnusedLocal
   @classmethod
   def cls_get_search_beam_size(
-        cls, network, beam_size, search=NotSpecified, sources=(), _src_common_search_choices=None, **kwargs):
+        cls, network, beam_size, search=NotSpecified, add_to_beam_scores=NotSpecified,
+        sources=(), _src_common_search_choices=None, **kwargs):
     """
     :param returnn.tf.network.TFNetwork network:
     :param list[LayerBase] sources:
     :param int|None beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
     :param NotSpecified|bool search:
+    :param NotSpecified|bool add_to_beam_scores:
     :param None|SearchChoices _src_common_search_choices: set via :func:`SearchChoices.translate_to_common_search_beam`
     :return: when this layer provides an own choice (search_choices attrib is set), then the corresponding beam size
     :rtype: int|None
     """
     search = NotSpecified.resolve(search, network.search_flag)
-    if not search:
+    add_to_beam_scores = NotSpecified.resolve(add_to_beam_scores, search or network.search_flag)
+    if not search and not add_to_beam_scores:
       return None
     return beam_size
 
   # noinspection PyMethodOverriding
   @classmethod
-  def get_rec_initial_extra_outputs(cls, network, beam_size, search=NotSpecified, **kwargs):
+  def get_rec_initial_extra_outputs(cls, network, beam_size, search=NotSpecified, add_to_beam_scores=NotSpecified,
+                                    **kwargs):
     """
     :param returnn.tf.network.TFNetwork network:
     :param int beam_size:
     :param NotSpecified|bool search:
+    :param NotSpecified|bool add_to_beam_scores:
     :rtype: dict[str,tf.Tensor]
     """
     search = NotSpecified.resolve(search, network.search_flag)
-    if not search:
+    add_to_beam_scores = NotSpecified.resolve(add_to_beam_scores, search or network.search_flag)
+    if not search and not add_to_beam_scores:
       return {}
     batch_dim = network.get_data_batch_dim()
     # Note: Use beam_size 1 for the initial as there are no competing hypotheses yet.
@@ -5072,6 +5083,7 @@ class ChoiceLayer(BaseChoiceLayer):
 
   def __init__(self, beam_size, keep_beams=False,
                search=NotSpecified,
+               add_to_beam_scores=NotSpecified,
                input_type="prob",
                prob_scale=1.0, base_beam_score_scale=1.0, random_sample_scale=0.0,
                length_normalization=True,
@@ -5086,6 +5098,11 @@ class ChoiceLayer(BaseChoiceLayer):
       i.e. we just expand, i.e. we just search on the dim. beam_size must be a multiple of beam_in.
     :param NotSpecified|bool search: whether to perform search, or use the ground truth (`target` option).
       If not specified, it will depend on `network.search_flag`.
+    :param NotSpecified|bool add_to_beam_scores: whether to add the scores to the beam scores.
+      This will be done with search obviously (not supported to not do it).
+      Without search, we can still add the scores of the ground-truth labels to the beam.
+      By default, this is derived from `search or network.search_flag`.
+      So with enabled net search flag, even when `search` is disabled here, it will add the scores.
     :param str input_type: "prob" or "log_prob", whether the input is in probability space, log-space, etc.
       or "regression", if it is a prediction of the data as-is. If there are several inputs, same format
       for all is assumed.
@@ -5107,6 +5124,7 @@ class ChoiceLayer(BaseChoiceLayer):
     from returnn.tf.util.basic import optional_add, optional_mul, batch_gather, expand_dims_unbroadcast
     search = NotSpecified.resolve(search, default=self.network.search_flag)
     assert isinstance(search, bool)
+    add_to_beam_scores = NotSpecified.resolve(add_to_beam_scores, default=search or self.network.search_flag)
     self.search_flag = search
     self.input_type = input_type
     self.length_normalization = length_normalization
@@ -5372,7 +5390,7 @@ class ChoiceLayer(BaseChoiceLayer):
       # We use the labels of the first target as "normal" output.
       self.output = self.output_list[0]
 
-    if self.network.search_flag and not search and input_type != "regression":
+    if add_to_beam_scores and self.sources[0].output.beam and not search and input_type != "regression":
       # We perform search, but this layer does not do search.
       # But we still add our scores to the beam scores.
       net_batch_dim = self.network.get_data_batch_dim()
@@ -5590,13 +5608,15 @@ class ChoiceLayer(BaseChoiceLayer):
       d["from"] = [d["from"]]
     search = d.get("search", NotSpecified)
     search = NotSpecified.resolve(search, network.search_flag)
+    add_to_beam_scores = d.get("add_to_beam_scores", NotSpecified)
+    add_to_beam_scores = NotSpecified.resolve(add_to_beam_scores, search or network.search_flag)
     if d.get("target", NotSpecified) is not None:
       assert "target" in d, "%s: specify 'target' explicitly" % (cls.__name__,)
       if isinstance(d["target"], str):
         d["target"] = [d["target"]]
       assert isinstance(d["target"], list)
       assert len(d["target"]) == len(d["from"])
-    if not search and not d.get("scheduled_sampling"):
+    if not search and not add_to_beam_scores and not d.get("scheduled_sampling"):
       # In the dependency graph, we don't want it.
       # This can enable some optimizations in the RecLayer.
       # We do it here because we should know about the deps early in the template creation in RecLayer.
