@@ -9287,7 +9287,7 @@ class CumConcatLayer(_ConcatInputLayer):
   layer_class = "cum_concat"
   recurrent = True  # order matters
 
-  def __init__(self, out_spatial_dim, axis=NotSpecified, **kwargs):
+  def __init__(self, out_spatial_dim, axis=None, **kwargs):
     """
     :param Dim out_spatial_dim:
     :param Dim|None axis: to operate over. only single_step_dim supported currently, assumes to be inside rec layer
