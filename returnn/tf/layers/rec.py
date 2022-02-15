@@ -9287,11 +9287,15 @@ class CumConcatLayer(_ConcatInputLayer):
   layer_class = "cum_concat"
   recurrent = True  # order matters
 
-  def __init__(self, out_spatial_dim, **kwargs):
+  def __init__(self, out_spatial_dim, axis=NotSpecified, **kwargs):
     """
     :param Dim out_spatial_dim:
+    :param Dim|None axis: to operate over. only single_step_dim supported currently, assumes to be inside rec layer
     """
     super(CumConcatLayer, self).__init__(**kwargs)
+    if axis:
+      from returnn.tf.util.data import single_step_dim
+      assert axis == single_step_dim, "%r only axis %r == %r supported currently" % (self, axis, single_step_dim)
     rec_layer = self.network.get_rec_parent_layer(inside_loop=False)
     assert rec_layer, "%r must be used inside a RecLayer" % self
     out_axis = self.output.get_axis_from_description(out_spatial_dim)
