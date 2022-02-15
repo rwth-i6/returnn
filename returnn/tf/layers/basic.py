@@ -7134,7 +7134,7 @@ class DotLayer(LayerBase):
 
     if not b_var_dims and add_var2_if_empty:
       b_var_dims.append(
-        SpatialDim("%s:dot:dummy-var2" % name, dimension=1), auto_generated=True)
+        SpatialDim("%s:dot:dummy-var2" % name, dimension=1, auto_generated=True))
 
     dim_tags = list(a_rem_dims + a_var_dims + b_var_dims)
     return Data(
