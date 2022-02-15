@@ -697,15 +697,15 @@ class Dim(object):
           if self.dimension != other.dimension:
             return False
       return self.kind == other.kind
-    if self.derived_from_op and other.derived_from_op:
-      if self.derived_from_op == other.derived_from_op:
-        return True
     if allow_same_spatial_dim is None:
       allow_same_spatial_dim = allow_same_feature_dim
     self_base = self.get_same_derived_base() if derived_matches else self.get_same_base()
     other_base = other.get_same_derived_base() if derived_matches else other.get_same_base()
     if self_base is other_base:
       return True
+    if self_base.derived_from_op and other_base.derived_from_op:
+      if self_base.derived_from_op == other_base.derived_from_op:
+        return True
     self_kind = self.kind
     other_kind = other.kind
     if self_kind == other_kind == self.Types.Feature and ignore_feature_dim:
