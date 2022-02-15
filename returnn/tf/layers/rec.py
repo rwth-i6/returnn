@@ -347,7 +347,7 @@ class RecLayer(_ConcatInputLayer):
           # However, there are cases such as the RecUnstackLayer which can also define the time dim.
           # Expect that we have a subnet.
           assert have_dyn_seq_len_end or (opts and isinstance(opts.get("unit"), dict))
-          axis = SpatialDim("dyn-time:%s%s" % (network.get_absolute_name_prefix(), name))
+          axis = SpatialDim("dyn-time:%s%s" % (network.get_absolute_name_prefix(), name), auto_generated=True)
     assert isinstance(axis, Dim)
     inside_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=True)
     over_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=False)
@@ -477,7 +477,7 @@ class RecLayer(_ConcatInputLayer):
         if n_out is NotSpecified or not n_out:
           assert out_type and "dim" in out_type
           n_out = out_type["dim"]
-        out_dim = FeatureDim("%s:feature" % name, dimension=n_out)
+        out_dim = FeatureDim("%s:feature" % name, dimension=n_out, auto_generated=True)
       if out.have_feature_axis():
         out = out.copy_template_replace_dim_tag(axis=out.feature_dim_axis, new_dim_tag=out_dim)
       else:
@@ -3638,7 +3638,8 @@ class _SubnetworkRecCell(object):
           else:
             time_dim_tag = Dim(
               kind=Dim.Types.Spatial,
-              description="dyn-time:%s/%s" % (self.parent_rec_layer.get_full_ctx_name(), search_choices))
+              description="dyn-time:%s/%s" % (self.parent_rec_layer.get_full_ctx_name(), search_choices),
+              auto_generated=True)
         elif is_out_time_dim:
           self.time_dim_tag.declare_same_as(time_dim_tag)
         output = (
@@ -4424,7 +4425,7 @@ class RnnCellLayer(_ConcatInputLayer):
     :rtype: Data
     """
     sources_data = Data.get_common_data([src.output for src in sources if src], ignore_feature_dim=True)
-    feat = FeatureDim("%s:rnn_cell_feat" % name, dimension=n_out)
+    feat = FeatureDim("%s:rnn_cell_feat" % name, dimension=n_out, auto_generated=True)
     if sources_data and sources_data.have_time_axis():
       dim_tags = (sources_data.get_time_dim_tag(), sources_data.get_batch_dim_tag(), feat)
       batch_dim_axis = 1
@@ -4833,7 +4834,7 @@ class GetLastHiddenStateLayer(LayerBase):
     from returnn.tf.util.data import batch_dim
     if not out_dim:
       assert n_out
-      out_dim = FeatureDim("%s:hidden-out" % name, n_out)
+      out_dim = FeatureDim("%s:hidden-out" % name, n_out, auto_generated=True)
     out = Data("%s_output" % name, dim_tags=[batch_dim, out_dim])
     out.beam = sources[0].output.beam
     out.batch = sources[0].output.batch
@@ -6093,7 +6094,7 @@ class SplitBatchBeamLayer(BaseChoiceLayer):
     assert beam, "no beam in %r" % data
     data.beam = None
     if beam_dim is None:
-      beam_dim = SpatialDim("beam:%s" % beam.name, beam.beam_size)
+      beam_dim = SpatialDim("beam:%s" % beam.name, beam.beam_size, auto_generated=True)
     assert beam_dim.dimension == beam.beam_size
     data = data.copy_add_dim_by_tag(beam_dim, unbroadcast=True, axis=1)
     return data
@@ -6857,14 +6858,14 @@ class SelfAttentionLayer(_ConcatInputLayer):
     import numpy
     out = sources[0].output.copy_as_batch_major().copy(name="%s_output" % name)
     batch_dim_tag = out.dim_tags[out.batch_dim_axis]
-    feat_tag = FeatureDim("%s_self_att_feat" % name, dimension=n_out)
+    feat_tag = FeatureDim("%s_self_att_feat" % name, dimension=n_out, auto_generated=True)
     if len(out.shape_dense) >= 2:
       if all(out.shape_dense[:-1]):
         time_dim = numpy.prod(out.shape[:-1])
       else:
         time_dim = None
       time_tag = Dim(
-        kind=Dim.Types.Spatial, description="%s_self_att_time" % name, dimension=time_dim)
+        kind=Dim.Types.Spatial, description="%s_self_att_time" % name, dimension=time_dim, auto_generated=True)
       dim_tags = (batch_dim_tag, time_tag, feat_tag)
     else:
       dim_tags = (batch_dim_tag, feat_tag)
@@ -7242,7 +7243,7 @@ class KenLmStateLayer(_ConcatInputLayer):
       vocab = Vocabulary(vocab_file=vocab_file, unknown_label=vocab_unknown_label)
       tag = Dim(
         kind=Dim.Types.Feature, description="%s_ken_lm_vocab" % name,
-        dimension=vocab.num_labels, vocab=vocab)
+        dimension=vocab.num_labels, vocab=vocab, auto_generated=True)
       data = data.copy_add_dim_by_tag(tag, axis=-1, unbroadcast=True)
     return data
 
@@ -7808,7 +7809,7 @@ class MaskedComputationLayer(LayerBase):
         if not out_spatial_dim:
           out_spatial_dim = Dim(
             kind=Dim.Types.Spatial, description="%s:masked:time" % name,
-            derived_from_tag=source_data.get_time_dim_tag())
+            derived_from_tag=source_data.get_time_dim_tag(), auto_generated=True)
         source_data = source_data.copy_template_replace_dim_tag(
           axis=0,
           new_dim_tag=out_spatial_dim)
@@ -9225,7 +9226,7 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
     # The result will be without batch dim.
     feature_dim_tag = Dim(
-      kind=Dim.Types.Feature, description="%s_rel_pos_enc_feat" % name, dimension=n_out)
+      kind=Dim.Types.Feature, description="%s_rel_pos_enc_feat" % name, dimension=n_out, auto_generated=True)
     if data.have_time_axis():
       time_dim_tag = data.get_time_dim_tag()
       # TODO using same dim tag twice will not be supported at some future point...
@@ -9233,9 +9234,9 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
     else:
       # length will be ``network.get_rec_step_index() + 1``.
       dummy_dim_tag = Dim(
-        kind=Dim.Types.Spatial, description="%s_rel_pos_enc_dummy" % name, dimension=1)
+        kind=Dim.Types.Spatial, description="%s_rel_pos_enc_dummy" % name, dimension=1, auto_generated=True)
       time_dim_tag = Dim(
-        kind=Dim.Types.Spatial, description="%s_rel_pos_enc_time" % name, dimension=None)
+        kind=Dim.Types.Spatial, description="%s_rel_pos_enc_time" % name, dimension=None, auto_generated=True)
       data = data.copy_template_new_dim_tags((dummy_dim_tag, time_dim_tag, feature_dim_tag))
     return data
 
