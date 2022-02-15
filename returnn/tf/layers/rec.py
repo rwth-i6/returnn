@@ -5679,9 +5679,9 @@ class ChoiceLayer(BaseChoiceLayer):
       # Output will be the sparse version of the input.
       out_data = sources[0].output.copy_template().copy_as_batch_major()
       dim_tags = list(out_data.dim_tags)
-      del dim_tags[out_data.feature_dim_axis]
+      feature_dim = dim_tags.pop(out_data.feature_dim_axis)
       out_data = Data(
-        name="%s_output" % name, dim_tags=dim_tags, sparse=True, dim=out_data.dim,
+        name="%s_output" % name, dim_tags=dim_tags, sparse=True, dim=out_data.dim, sparse_dim=feature_dim,
         batch=out_data.batch.copy_set_beam(None) if out_data.batch else network.get_global_batch_info())
     if search:
       out_data.beam = cls._create_search_beam(name=name, beam_size=beam_size, sources=sources, network=network)
