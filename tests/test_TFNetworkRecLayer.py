@@ -7765,7 +7765,7 @@ def test_RelativePositionalEncodingLayer():
     print(out)  # random...
 
 
-def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis,
+def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis=None,
                                 num_heads=3, key_dim=7, value_dim=11,
                                 dropout=0.0):
   """
@@ -7798,6 +7798,7 @@ def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis,
     d[output + '_value_accum'] = {
       'class': 'cum_concat', 'from': [output + '_value'], 'out_spatial_dim': key_dim_tag}  # [B,T|rec-history,n,F|d_v]
   else:
+    assert query_axis
     d[output + '_key_accum'] = {
       'class': 'reinterpret_data', 'set_dim_tags': {query_axis: key_dim_tag},
       'from': [output + '_key']}  # [B,T|keys,n,F|d_k]
@@ -7907,6 +7908,81 @@ def test_CumConcatLayer_self_attention_equal_to_SelfAttentionLayer():
       pprint(multi)
       numpy.testing.assert_almost_equal(single, multi, decimal=5)
       print('They are equal!')
+
+
+def test_CumConcatLayer_search():
+  rnd = numpy.random.RandomState(42)
+  beam_size = 5
+  dim = 7
+
+  net_dict = {
+    'source_embed': {'class': 'linear', 'activation': None, 'n_out': dim, "from": "data:data"},
+    'source_pool': {"class": "reduce", "mode": "mean", "axis": "T", "from": "source_embed"},
+    'output': {
+      'class': 'rec',
+      'from': [],
+      'max_seq_len': "max_len_from('base:source_embed') * 3",
+      'target': 'classes',
+      'unit': {
+          'target_embed': {'class': 'linear', 'activation': None, 'from': 'prev:output', 'n_out': dim},
+          'output_prob': {
+            'class': 'softmax', 'from': ['self_att_att', 'base:source_pool'], 'loss': 'ce', 'target': 'classes'},
+          'output': {
+            'beam_size': beam_size, 'class': 'choice', 'from': 'output_prob',
+            'initial_output': 0, 'target': 'classes'},
+          'end': {'class': 'compare', 'from': 'output', 'value': 0},
+      }},
+    'decision': {'class': 'decide', 'from': 'output', 'loss': 'edit_distance', 'target': 'classes'},
+  }
+  _build_self_attention_layer(net_dict["output"]["unit"], "target_embed", "self_att", inside_rec_layer=True)
+
+  n_batch, n_in, n_time = 3, 19, 9
+  n_out = n_in
+
+  config = Config()
+  config.update({
+    "extern_data": {"data": {"dim": n_out, "sparse": True}, "classes": {"dim": n_out, "sparse": True}},
+    "search_output_layer": "decision",
+    "debug_print_layer_output_shape": True,
+    "debug_runtime_sanity_checks": True,
+    "debug_print_layer_output_template": True})
+
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=False, search_flag=True)
+    pprint(network.extern_data.data)
+    network.construct_from_dict(net_dict)
+
+    fetches = network.get_fetches_dict()
+    data_input = network.extern_data.data["data"]
+    assert data_input.batch_shape == (None, None)
+    output_out = network.get_layer("decision").output
+    assert output_out.is_batch_major and output_out.sparse and output_out.dim == n_out and output_out.shape == (None,)
+
+    input_seq_lens = numpy.array([n_time, n_time - 5, n_time - 4], dtype="int32")
+    assert input_seq_lens.shape == (n_batch,) and all(input_seq_lens > 0)
+    input_seqs = rnd.randint(1, n_out, size=(n_batch, n_time,), dtype="int32")
+    print("input:")
+    print(input_seqs)
+    print("lens:", input_seq_lens)
+
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+    fetches = (fetches, output_out.placeholder, output_out.get_sequence_lengths())
+    feed_dict = {
+      data_input.placeholder: input_seqs,
+      data_input.size_placeholder[0]: input_seq_lens}
+    try:
+      info, out_seqs, out_seq_lens = session.run(fetches, feed_dict=feed_dict)
+    except Exception as exc:
+      print("EXCEPTION:", type(exc), exc)
+      help_on_tf_exception(session=session, exception=exc, fetches=fetches, feed_dict=feed_dict)
+      raise
+    print(info)
+    print("output:")
+    print(out_seqs)  # random...
+    print("lens:", out_seq_lens)
+    assert isinstance(out_seqs, numpy.ndarray) and isinstance(out_seq_lens, numpy.ndarray)
+    assert len(out_seqs.shape) == 2 and out_seqs.shape[0] == n_batch
+    assert out_seq_lens.shape == (n_batch,)
 
 
 if __name__ == "__main__":
