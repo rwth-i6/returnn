@@ -439,6 +439,9 @@ class Dim(object):
     assert self.can_be_used_as_dim()
     assert isinstance(dyn_size, tf.Tensor) and dyn_size.shape.ndims == 1
     if self.dyn_size_ext:
+      if self.dyn_size_ext.placeholder is None:
+        self.dyn_size_ext.placeholder = dyn_size
+        return
       # Do not allow resetting it to sth different.
       assert self.dyn_size_ext.placeholder is dyn_size
       return
