@@ -399,7 +399,7 @@ class LayerBase(object):
             feature_dim_tag = out_dim
           else:
             dim = out_type.get("dim", None)
-            feature_dim_tag = FeatureDim("%s:feature-dense" % name, dim)
+            feature_dim_tag = FeatureDim("%s:feature-dense" % name, dim, auto_generated=True)
           if feature_dim_axis in (NotSpecified, None):
             if sources_data.feature_dim_axis is None:
               feature_dim_axis = len(dim_tags)
