@@ -5325,7 +5325,7 @@ class ChoiceLayer(BaseChoiceLayer):
             batch_dim_axis=0,
             dim_tags=self.output.dim_tags,
             sparse=True,
-            dim=self.sources[index].output.dim,
+            sparse_dim=self.sources[index].output.feature_dim_or_sparse_dim,
             dtype=self.output.dtype,
             placeholder=labels_,
             available_for_inference=True,
