@@ -933,7 +933,7 @@ class RecStepByStepLayer(RecLayer):
     for name, var in sorted(rec_layer.state_vars.items()):
       assert isinstance(name, str)
       assert isinstance(var, RecStepByStepLayer.StateVar)
-      if not name.startswith("stochastic_var_") and not name.startswith("base_"):
+      if not name.startswith("stochastic_var_") and not name.startswith("base_") and name != "cond":
         state_vars_coll.append(var.var)
 
     import json
