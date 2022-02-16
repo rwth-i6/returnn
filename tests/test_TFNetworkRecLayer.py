@@ -7915,8 +7915,6 @@ def test_CumConcatLayer_search():
   beam_size = 5
   dim = 7
 
-  # Config works during training, but building graph raises exception during search:
-  # Trying to reshape input tensor with n values into tensor with n * beam_size values
   net_dict = {
     'source_embed': {'class': 'linear', 'activation': None, 'n_out': dim, "from": "data:data"},
     'source_pool': {"class": "reduce", "mode": "mean", "axis": "T", "from": "source_embed"},
