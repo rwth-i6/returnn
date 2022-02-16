@@ -5667,7 +5667,7 @@ class TransposedConvLayer(_ConcatInputLayer):
       output_tag = self.output.dim_tags[axis]
       if input_tag == output_tag:
         continue
-      assert input_tag.kind == output_tag.kind, "%s: %r vs %r" % (self, input_data, self.output)
+      assert not input_tag.is_batch_dim() and not output_tag.is_batch_dim()
       if input_tag.dimension is None:
         assert output_tag.dimension is None
         assert input_tag.dyn_size is not None
