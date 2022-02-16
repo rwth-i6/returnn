@@ -7765,7 +7765,7 @@ def test_RelativePositionalEncodingLayer():
     print(out)  # random...
 
 
-def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis,
+def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis=None,
                                 num_heads=3, key_dim=7, value_dim=11,
                                 dropout=0.0):
   """
@@ -7798,6 +7798,7 @@ def _build_self_attention_layer(d, input, output, inside_rec_layer, query_axis,
     d[output + '_value_accum'] = {
       'class': 'cum_concat', 'from': [output + '_value'], 'out_spatial_dim': key_dim_tag}  # [B,T|rec-history,n,F|d_v]
   else:
+    assert query_axis
     d[output + '_key_accum'] = {
       'class': 'reinterpret_data', 'set_dim_tags': {query_axis: key_dim_tag},
       'from': [output + '_key']}  # [B,T|keys,n,F|d_k]
@@ -7913,7 +7914,6 @@ def test_CumConcatLayer_search():
   rnd = numpy.random.RandomState(42)
   beam_size = 5
   dim = 7
-  cum_concat_dim = SpatialDim("cum_concat")
 
   # Config works during training, but building graph raises exception during search:
   # Trying to reshape input tensor with n values into tensor with n * beam_size values
@@ -7927,9 +7927,8 @@ def test_CumConcatLayer_search():
       'target': 'classes',
       'unit': {
           'target_embed': {'class': 'linear', 'activation': None, 'from': 'prev:output', 'n_out': dim},
-          'self_att': {'class': 'cum_concat', 'from': 'target_embed', "out_spatial_dim": cum_concat_dim},
           'output_prob': {
-            'class': 'softmax', 'from': ['self_att', 'base:source_pool'], 'loss': 'ce', 'target': 'classes'},
+            'class': 'softmax', 'from': ['self_att_att', 'base:source_pool'], 'loss': 'ce', 'target': 'classes'},
           'output': {
             'beam_size': beam_size, 'class': 'choice', 'from': 'output_prob',
             'initial_output': 0, 'target': 'classes'},
@@ -7937,6 +7936,7 @@ def test_CumConcatLayer_search():
       }},
     'decision': {'class': 'decide', 'from': 'output', 'loss': 'edit_distance', 'target': 'classes'},
   }
+  _build_self_attention_layer(net_dict["output"]["unit"], "target_embed", "self_att", inside_rec_layer=True)
 
   n_batch, n_in, n_time = 3, 19, 9
   n_out = n_in
