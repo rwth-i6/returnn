@@ -992,7 +992,9 @@ class RecStepByStepLayer(RecLayer):
       zero_initializer.set_shape(self.var_data_shape.batch_shape)
       with helper_variable_scope():
         self.var = tf_compat.v1.get_variable(
-          name=name, initializer=zero_initializer, validate_shape=False)  # type: tf.Variable
+          name=tf_util.get_valid_scope_name_from_str(name),
+          initializer=zero_initializer,
+          validate_shape=False)  # type: tf.Variable
       self.var.set_shape(self.var_data_shape.batch_shape)
       self._init_op = None
       print("New state var %r: %s, shape %s" % (name, self.var, self.var_data_shape))
