@@ -4276,7 +4276,7 @@ def test_pool_layer_NCHW():
       print(seq_lens)
 
 
-def test_TransposedConv_1d_time_major():
+def test_TransposedConvLayer_1d_time_major():
   # https://github.com/rwth-i6/returnn/issues/949
   from returnn.tf.util.data import batch_dim
   time_dim = SpatialDim("time")
