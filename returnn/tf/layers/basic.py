@@ -598,6 +598,8 @@ class SelectSearchSourcesLayer(InternalLayer):
                "to search choices %r.\n"
                "Missing beam idxs.") % (src, src_search_choices, search_choices_seq)))
           tag = Dim.get_tag_from_size_tensor(v)
+          if tag:
+            assert tag.dyn_size_ext.is_batch_major
           v = select_src_beams(
             v, src_beams=base_src_choices.src_beams,
             name="%s_select_src_beams_%i_%s_%i_%s" % (
@@ -616,8 +618,23 @@ class SelectSearchSourcesLayer(InternalLayer):
       src_output = src.output.copy_as_batch_major()
       if src_output.placeholder is not None:
         self.output.placeholder = transform(src_output.placeholder)
-      if src_output.size_placeholder:
-        self.output.size_placeholder = {i: transform(size) for (i, size) in src_output.size_placeholder.items()}
+      for src_tag, out_tag in zip(src_output.dim_tags, self.output.dim_tags):
+        assert src_tag.dimension == out_tag.dimension
+        if src_tag.is_batch_dim():
+          assert out_tag.batch == self.output.batch
+          continue
+        if src_tag.dimension is not None:
+          continue
+        if out_tag.dyn_size_ext is None:
+          if src_tag.dyn_size_ext.have_batch_axis():
+            out_tag.dyn_size_ext = src_tag.dyn_size_ext.copy_template().copy_extend_with_beam(self.output.beam)
+          else:
+            out_tag.dyn_size_ext = src_tag.dyn_size_ext.copy()
+        if out_tag.dyn_size_ext.placeholder is None:
+          assert out_tag.dyn_size_ext.have_batch_axis() and out_tag.dyn_size_ext.is_batch_major
+          out_tag.dyn_size_ext.placeholder = transform(src_tag.dyn_size_ext.placeholder)
+        if out_tag.dyn_size_ext.have_batch_axis():
+          assert out_tag.dyn_size_ext.batch == out_tag.batch == self.output.batch
       self.rec_vars_outputs = {k: transform(v) for (k, v) in src.rec_vars_outputs.items()}  # assumes batch-major
 
     for src in self.sources:
@@ -657,13 +674,11 @@ class SelectSearchSourcesLayer(InternalLayer):
     :rtype: Data
     """
     assert len(sources) == 1
-    search_choices = search_choices.get_search_choices()
-    data = sources[0].output.copy_as_batch_major()
-    if data.beam:
-      assert search_choices
-      data = data.copy_extend_with_beam(search_choices.get_beam_info())
-    elif search_choices:
-      data = data.copy_extend_with_beam(search_choices.get_beam_info())
+    search_choices_ = search_choices.get_search_choices()
+    data = sources[0].output.copy_template().copy_as_batch_major()
+    if data.beam or search_choices_:
+      assert search_choices_
+      data = data.copy_extend_with_beam(search_choices_.get_beam_info())
     return data
 
 
