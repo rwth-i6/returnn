@@ -3234,7 +3234,7 @@ class _SubnetworkRecCell(object):
       :rtype: (tf.Tensor, tf.Tensor, tf.TensorArray|None)
       """
       # noinspection PyProtectedMember
-      with reuse_name_scope(rec_layer._rec_scope.name + "/while_loop_search_resolve_body", absolute=True):
+      with reuse_name_scope((rec_layer._rec_scope.name or "rec") + "/while_loop_search_resolve_body", absolute=True):
         # We start at the output layer choice base, and search for its source, i.e. for the previous time frame.
         # noinspection PyShadowingNames
         for choice_ in choice_seq_in_frame:
