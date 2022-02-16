@@ -872,7 +872,7 @@ class RecStepByStepLayer(RecLayer):
     # We do not make use of global_vars anymore because this is redundant with the state vars.
     # We anyway create the collection here such that older RASR binaries still work fine.
     # See https://github.com/rwth-i6/returnn/pull/874.
-    tf_compat.v1.get_collection_ref("global_vars")
+    global_vars_coll = tf_compat.v1.get_collection_ref("global_vars")
 
     # Encoder and all decoder state initializers.
     encode_ops_coll = tf_compat.v1.get_collection_ref("encode_ops")
@@ -934,7 +934,10 @@ class RecStepByStepLayer(RecLayer):
       assert isinstance(name, str)
       assert isinstance(var, RecStepByStepLayer.StateVar)
       if not name.startswith("stochastic_var_") and not name.startswith("base_") and name != "cond":
-        state_vars_coll.append(var.var)
+        if var.orig_data_shape.have_batch_axis():
+          state_vars_coll.append(var.var)
+        else:
+          global_vars_coll.append(var.var)
 
     import json
     info_str = json.dumps(info, sort_keys=True, indent=2)
