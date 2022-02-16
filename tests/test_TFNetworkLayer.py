@@ -4276,6 +4276,36 @@ def test_pool_layer_NCHW():
       print(seq_lens)
 
 
+def test_TransposedConv_1d_time_major():
+  # https://github.com/rwth-i6/returnn/issues/949
+  n_batch, n_time, n_in, n_out = 7, 3, 5, 13
+  from returnn.tf.util.data import batch_dim
+  time_dim = SpatialDim("time")
+  in_feat_dim = FeatureDim("in_feat", n_in)
+  config = Config({
+    "extern_data": {
+      "data": {"dim_tags": [time_dim, batch_dim, in_feat_dim]}
+    }
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {
+        "class": "transposed_conv",
+        "activation": None,
+        "filter_size": [3],
+        "from": "data",
+        "n_out": n_out,
+        "strides": [2],
+      }})
+    out = net.get_default_output_layer().output.copy_as_batch_feature_major()
+    assert out.batch_shape == (None, n_out, None)
+    session.run(tf_compat.v1.global_variables_initializer())
+    out_v = session.run(out.placeholder, feed_dict=make_feed_dict(net.extern_data, n_batch=n_batch, n_time=n_time))
+    assert isinstance(out_v, numpy.ndarray)
+    assert out_v.shape == (n_batch, n_out, n_time)
+
+
 def test_TransposedConvLayer_2d_simple():
   # https://github.com/rwth-i6/returnn/issues/595
   n_batch, n_time, n_in, n_out = 7, 3, 5, 13
