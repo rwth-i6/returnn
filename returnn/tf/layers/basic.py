@@ -5569,7 +5569,7 @@ class TransposedConvLayer(_ConcatInputLayer):
     input_data, num_batch_dims = ConvLayer.transform_input(
       self.input_data, network=self.network,
       in_dim=in_dim, in_spatial_dims=in_spatial_dims)
-    input_data = self.input_data.copy_with_feature_last()
+    input_data = input_data.copy_with_feature_last()
     spatial_axes = list(range(num_batch_dims, input_data.batch_ndim - 1))
     if in_spatial_dims:
       assert (
@@ -5667,6 +5667,7 @@ class TransposedConvLayer(_ConcatInputLayer):
       output_tag = self.output.dim_tags[axis]
       if input_tag == output_tag:
         continue
+      assert not input_tag.is_batch_dim() and not output_tag.is_batch_dim()
       if input_tag.dimension is None:
         assert output_tag.dimension is None
         assert input_tag.dyn_size is not None
