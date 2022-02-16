@@ -5104,7 +5104,7 @@ class ChoiceLayer(BaseChoiceLayer):
       Without search, we can still add the scores of the ground-truth labels to the beam.
       By default, this is derived from `search or network.search_flag`.
       So with enabled net search flag, even when `search` is disabled here, it will add the scores.
-    :param str input_type: "prob" or "log_prob", whether the input is in probability space, log-space, etc.
+    :param str input_type: "prob", "log_prob" or "logits", whether the input is in probability space, log-space, etc.
       or "regression", if it is a prediction of the data as-is. If there are several inputs, same format
       for all is assumed.
     :param float prob_scale: factor for prob (score in +log space from source)
@@ -5443,6 +5443,8 @@ class ChoiceLayer(BaseChoiceLayer):
       else:
         from returnn.tf.util.basic import safe_log
         return safe_log(scores_in)
+    elif self.input_type == "logits":
+      return tf.nn.log_softmax(scores_in)
     elif self.input_type == "log_prob":
       return scores_in
     else:
