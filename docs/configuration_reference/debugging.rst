@@ -23,4 +23,7 @@ debug_objective_loss_summaries
 debug_unnormalized_loss_summaries
     If set to ``True``, adds the unnormalized loss values to the TensorBoard
 
+debug_print_layer_output
+    If set to ``True``, print the layer output tensor while the graph is executed.
+
 Also see :ref:`debugging`.
