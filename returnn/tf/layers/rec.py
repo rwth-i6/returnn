@@ -91,7 +91,7 @@ class RecLayer(_ConcatInputLayer):
                unit="lstm", unit_opts=None,
                direction=None, input_projection=True,
                initial_state=None,
-               max_seq_len=None,
+               max_seq_len=None, max_seq_len_via=None,
                forward_weights_init=None, recurrent_weights_init=None, bias_init=None,
                optimize_move_layers_out=None,
                cheating=False,
@@ -111,6 +111,7 @@ class RecLayer(_ConcatInputLayer):
     :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
     :param LayerBase|str|float|int|tuple|None initial_state:
     :param int|tf.Tensor|None max_seq_len: if unit is a subnetwork. str will be evaluated. see code
+    :param LayerBase|None max_seq_len_via: like max_seq_len but via another layer
     :param str forward_weights_init: see :func:`returnn.tf.util.basic.get_initializer`
     :param str recurrent_weights_init: see :func:`returnn.tf.util.basic.get_initializer`
     :param str bias_init: see :func:`returnn.tf.util.basic.get_initializer`
@@ -148,6 +149,11 @@ class RecLayer(_ConcatInputLayer):
     self._direction = direction
     self._initial_state_deps = [layer for layer in nest.flatten(initial_state) if isinstance(layer, LayerBase)]
     self._input_projection = input_projection
+    self._max_seq_len_via = max_seq_len_via
+    if max_seq_len_via:
+      assert max_seq_len is None
+      assert max_seq_len_via.output.batch_shape == (), "%s: max_seq_len_via %s not scalar" % (self, max_seq_len_via)
+      max_seq_len = max_seq_len_via.output.placeholder
     self._max_seq_len = max_seq_len
     # Note: Most logic and preprocessing on axis happens already in transform_config_dict.
     # Specifically, it should always be set and is always a Dim instance here.
@@ -304,6 +310,8 @@ class RecLayer(_ConcatInputLayer):
         ls.append(self.cell.input_layers_net.layers["output"])
       elif self.cell.output_layers_net and "output" in self.cell.output_layers_net.layers:
         ls.append(self.cell.output_layers_net.layers["output"])
+    if self._max_seq_len_via:
+      ls.append(self._max_seq_len_via)
     return ls
 
   @classmethod
@@ -400,6 +408,9 @@ class RecLayer(_ConcatInputLayer):
         source_data=source_data, time_dim_tag=time_dim_tag,
         net_dict=sub_net_dict, rec_layer_name=d["_name"])
       d["unit"] = subnet
+
+    if d.get("max_seq_len_via"):
+      d["max_seq_len_via"] = get_layer(d["max_seq_len_via"])
 
     if isinstance(d.get("max_seq_len"), str):
 
