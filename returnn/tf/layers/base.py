@@ -1380,7 +1380,7 @@ class LayerBase(object):
       c += self.spatial_smoothing * self.get_output_spatial_smoothing_energy()
     if self.darc1:
       c += self.darc1 * self.get_darc1()
-    if c is 0:
+    if c == 0:
       return None
     return c
 
