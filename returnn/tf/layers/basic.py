@@ -5924,7 +5924,7 @@ class ReduceLayer(_ConcatInputLayer):
           else:
             assert False
 
-          x_ = tf_util.where_bc(mask, x_, replacement_value, "x_masked_axis_%i" % axis)
+          x_ = tf_util.where_bc(mask, x_, replacement_value, name="x_masked_axis_%i" % axis)
           if f == tf.reduce_mean:
             seq_len_bc = tf.reshape(
               x.get_sequence_lengths(),
