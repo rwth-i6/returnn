@@ -5320,10 +5320,17 @@ class Data(object):
       :rtype: int
       """
       other_axis_dim_tag = other.get_dim_tag(other_axis)
-      is_equal_opts_ = is_equal_opts.copy()
+      # First, try without any is_equal_opts. This is the most restrictive case.
+      is_equal_opts_ = {}
       matching = [
         self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts_)
         if self_axis not in taken_self_axes]
+      if not matching:
+        # Ok, try with the given is_equal_opts.
+        is_equal_opts_ = is_equal_opts.copy()
+        matching = [
+          self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts_)
+          if self_axis not in taken_self_axes]
       if not matching:
         # Try harder by allowing broadcasting to match
         is_equal_opts_["broadcast_matches"] = True
