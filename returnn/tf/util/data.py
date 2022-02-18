@@ -5320,20 +5320,21 @@ class Data(object):
       :rtype: int
       """
       other_axis_dim_tag = other.get_dim_tag(other_axis)
+      is_equal_opts_ = is_equal_opts.copy()
       matching = [
-        self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts)
+        self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts_)
         if self_axis not in taken_self_axes]
       if not matching:
         # Try harder by allowing broadcasting to match
-        is_equal_opts["broadcast_matches"] = True
+        is_equal_opts_["broadcast_matches"] = True
         matching = [
-          self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts)
+          self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts_)
           if self_axis not in taken_self_axes]
       if not matching:
         # If still not, then also allow one single dyn_size to be unknown
-        is_equal_opts["unknown_spatial_matches"] = True
+        is_equal_opts_["unknown_spatial_matches"] = True
         matching = [
-          self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts)
+          self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts_)
           if self_axis not in taken_self_axes]
         assert len(matching) == 1, 'cannot match the axes %s from %s to %s. Failing to match axis %s' % (
           other_axes, other, self, other_axis)
