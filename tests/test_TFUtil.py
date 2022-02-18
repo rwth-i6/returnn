@@ -627,6 +627,20 @@ def test_Data_copy_compatible_to_batch_feature_is_dynamic():
   assert_equal(t.get_size_dim_tag(0), dec.get_time_dim_tag())
 
 
+def test_Data_copy_compatible_to_bias_to_batch_time_spatial_feature():
+  from returnn.tf.util.data import batch_dim
+  time_dim = SpatialDim("time")
+  static_dim = FeatureDim("feature-spatial", 10)
+  feat_dim = FeatureDim("feature", 14)
+  x = Data(name="input", dim_tags=[batch_dim, time_dim, static_dim, feat_dim])
+  print("x:", x)
+  bias = Data(name="bias", dim_tags=[feat_dim])
+  print("bias:", bias)
+  b_ = bias.copy_compatible_to(x)
+  print("bias copy_compatible_to x:", b_)
+  assert b_.batch_shape == (1, 1, 1, 14)
+
+
 def test_Data_get_common_data_extra_static_spatial():
   d1 = Data(name='t', shape=(None, 32, 128), dtype='float32', auto_create_placeholders=True)
   d2 = Data(name='r', shape=(None, 32, 128), dtype='float32', auto_create_placeholders=True)
