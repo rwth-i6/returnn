@@ -1502,7 +1502,7 @@ class LayerBase(object):
         :return: like data, optional grouped update op or no_op
         :rtype: (tf.Tensor, tf.Operation)
         """
-        import numpy
+        from returnn.util import basic as util
         x = data.placeholder
         x_shape = tf_util.get_shape(x)
         if data.feature_dim_axis == data.batch_ndim - 1:  # feature last
@@ -1512,9 +1512,9 @@ class LayerBase(object):
           data_format = "NCHW"
           x = tf.reshape(
             x,
-            [numpy.prod(x_shape[:data.feature_dim_axis]),
+            [util.prod(x_shape[:data.feature_dim_axis]),
              x_shape[data.feature_dim_axis],
-             numpy.prod(x_shape[data.feature_dim_axis + 1:]), 1])
+             util.prod(x_shape[data.feature_dim_axis + 1:]), 1])
         bn_, sample_mean_, sample_variance_ = tf_compat.v1.nn.fused_batch_norm(
           x, scale=gamma, offset=beta, mean=sample_mean, variance=sample_variance,
           epsilon=epsilon, exponential_avg_factor=momentum,
