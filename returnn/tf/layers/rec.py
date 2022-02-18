@@ -9195,6 +9195,17 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
     if not self.input_data.have_time_axis():
       offset = self.network.get_rec_step_index()
       length = self.network.get_rec_step_index() + 1
+      time_dim_tag = self.output.dim_tags[1]
+      assert time_dim_tag.dimension is None, "%s: unexpected output time dim tag %r" % (self, time_dim_tag)
+      # See CumConcatLayer for similar logic
+      if time_dim_tag.dyn_size_ext is None:
+        time_dim_tag.dyn_size_ext = Data(
+          name="%s:size-inside" % self.name,
+          dim_tags=[],  # scalar
+          placeholder=length, dtype="int32",
+          batch=self.output.batch, control_flow_ctx=self.network.get_control_flow_ctx())
+      elif time_dim_tag.dyn_size_ext.placeholder is None:
+        time_dim_tag.dyn_size_ext.placeholder = length
     else:
       offset = 0
       length = tf.shape(self.input_data.placeholder)[self.input_data.time_dim_axis]
