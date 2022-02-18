@@ -388,9 +388,9 @@ class TFNetwork(object):
     :param set[Dim]|None over_rec_time_dim_subs: outer rec layer, out of loop, potential shorter
     :param returnn.tf.util.data.ControlFlowContext control_flow_ctx:
     :param str|None absolute_name_prefix: this is for representation
-    :param str name: only for debugging
+    :param str|None name: only for debugging
     """
-    if not name:
+    if name is None:
       from returnn.util.basic import try_get_caller_name
       name = "<network via %s>" % try_get_caller_name(fallback="<unknown>")
     self.name = name

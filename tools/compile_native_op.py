@@ -50,7 +50,7 @@ def init(config_filename, log_verbosity):
     print("Loading network")
     from returnn.tf.network import TFNetwork
     network = TFNetwork(
-      name="root",
+      name="",
       config=config,
       rnd_seed=1,
       train_flag=False,
