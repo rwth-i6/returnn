@@ -1000,8 +1000,12 @@ class TFNetwork(object):
           layer_class.__name__, name, layer_desc)
         output_template = layer_class.fixup_out_data(**layer_desc)
         layer_desc["output"] = output_template
+        out_print_parts = [
+          "[%s]" % ",".join(output_template.get_batch_axes_short_description()), output_template.dtype]
+        if output_template.sparse_dim:
+          out_print_parts.append("sparse_dim=%s" % output_template.sparse_dim)
         print(
-          "layer %s/%r output: %r" % (self.name, name, output_template),
+          "layer %s/%r: %s" % (self.name, name, " ".join(out_print_parts)),
           file=log.v1 if debug_print_layer_output_template else log.v3)
         output_template.sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
         output_template_special_axes = output_template.get_special_axes_dict()
