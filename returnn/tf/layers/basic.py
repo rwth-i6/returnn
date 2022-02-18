@@ -8944,7 +8944,7 @@ class ForcedAlignmentLayer(_ConcatInputLayer):
     opts = src.get_kwargs(include_special_axes=False)
     opts["dim_tags"] = (src.get_time_dim_tag(), src.dim_tags[src.batch_dim_axis])
     opts["dtype"] = "int32"
-    opts["sparse"] = True
+    opts["sparse_dim"] = src.dim_tags[src.feature_dim_axis]
     return Data(**opts)
 
 
