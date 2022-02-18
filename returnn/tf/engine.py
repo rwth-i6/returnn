@@ -1332,7 +1332,7 @@ class Engine(EngineBase):
     :rtype: (TFNetwork, Updater|None)
     """
     network = TFNetwork(
-      name="root",
+      name="",
       config=config,
       extern_data=extern_data,
       rnd_seed=rnd_seed,
