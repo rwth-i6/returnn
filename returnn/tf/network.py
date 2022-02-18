@@ -2888,7 +2888,7 @@ class Subnetwork:
       **subnet_layer_dict)
     self.layer.post_init(subnet_layer_dict)
     self.net = TFNetwork(
-      name="%s/%s(subnet)" % (parent_net.name, name),
+      name="%s/%s" % (parent_net.name, name),
       extern_data=ExternData(),  # directly accessing base layers instead
       train_flag=parent_net.train_flag,
       search_flag=parent_net.search_flag,
