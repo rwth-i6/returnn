@@ -17,6 +17,10 @@ from returnn.util.basic import NotSpecified, NativeCodeCompiler
 import returnn.tf.compat as tf_compat
 # noinspection PyUnresolvedReferences
 from .data import Data, SearchBeam, Dim, DimensionTag
+try:
+  from tensorflow.python.ops.control_flow_v2_func_graphs import ControlFlowFuncGraph
+except ImportError:
+  ControlFlowFuncGraph = None
 
 
 class CollectionKeys:
@@ -5362,8 +5366,7 @@ def has_current_control_flow_context():
   """
   :rtype: bool
   """
-  if tf_compat.v2:
-    from tensorflow.python.ops.control_flow_v2_func_graphs import ControlFlowFuncGraph
+  if ControlFlowFuncGraph:
     graph = tf_compat.v1.get_default_graph()
     if isinstance(graph, ControlFlowFuncGraph):
       return True
@@ -5410,10 +5413,9 @@ def _get_control_flow_graphs(v):
   :return: yields control flow contexts
   :rtype: typing.Iterator[tensorflow.python.ops.control_flow_v2_func_graphs.ControlFlowFuncGraph]
   """
-  if not tf_compat.v2:
+  if not ControlFlowFuncGraph:
     return
   import numpy
-  from tensorflow.python.ops.control_flow_v2_func_graphs import ControlFlowFuncGraph
   if isinstance(v, (list, tuple)):
     for elem in v:
       for t in _get_control_flow_graphs(elem):
@@ -5458,8 +5460,7 @@ def same_control_flow_ctx(x):
   """
   cur_graph = tf_compat.v1.get_default_graph()
   inside_control_flow_graph = False
-  if tf_compat.v2:
-    from tensorflow.python.ops.control_flow_v2_func_graphs import ControlFlowFuncGraph
+  if ControlFlowFuncGraph:
     if isinstance(cur_graph, ControlFlowFuncGraph):
       inside_control_flow_graph = True
   graphs = set(_get_control_flow_graphs(x))
