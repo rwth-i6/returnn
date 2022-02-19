@@ -568,17 +568,30 @@ def default_control_flow_ctx():
   ``tf.get_variable``, which does not have this problem.
   """
   if tf_compat.v2:
-    graph = tf_compat.v1.get_default_graph()
-    from tensorflow.python.framework.func_graph import FuncGraph
-    while graph.building_function:
-      assert isinstance(graph, FuncGraph)
-      graph = graph.outer_graph
-    with graph.as_default(), tf.control_dependencies(None) as dep:
+    root_graph = get_root_graph()
+    with root_graph.as_default(), tf.control_dependencies(None) as dep:
       yield dep
     return
   # Resetting all control dependencies has the effect of also resetting the current control flow context.
   with tf.control_dependencies(None) as dep:
     yield dep
+
+
+def get_root_graph(graph=None):
+  """
+  :param tf.Graph|None graph:
+  :return: root graph. with control flow v2, the current graph might not be the root graph
+  :rtype: tf.Graph
+  """
+  if graph is None:
+    graph = tf_compat.v1.get_default_graph()
+  if not tf_compat.v2:
+    return graph
+  from tensorflow.python.framework.func_graph import FuncGraph
+  while graph.building_function:
+    assert isinstance(graph, FuncGraph)
+    graph = graph.outer_graph
+  return graph
 
 
 class _ScaledGradientBuilder(object):
@@ -3945,7 +3958,7 @@ def global_tensor(f, name):
   :return: the tensor
   :rtype: tf.Tensor
   """
-  graph = tf_compat.v1.get_default_graph()
+  graph = get_root_graph()
   assert isinstance(graph, tf.Graph)
   abs_graph_name = "globals/%s:0" % name
   try:
@@ -5271,7 +5284,7 @@ def add_check_numerics_ops(
   :rtype: tf.Operation
   """
   if fetches is None:
-    ops = tf_compat.v1.get_default_graph().get_operations()
+    ops = get_root_graph().get_operations()
   else:
     fetch_ops = [v.op if isinstance(v, tf.Tensor) else v for v in fetches]
     assert all([isinstance(op, tf.Operation) for op in fetch_ops])
@@ -6757,7 +6770,7 @@ def get_non_deterministic_ops_from_graph():
   device_types = {device.device_type for device in get_tf_list_local_devices()}
   non_det_ops = []
   tf_version = tf_version_tuple()
-  for op in tf_compat.v1.get_default_graph().get_operations():
+  for op in get_root_graph().get_operations():
     if op.type == "Mean" and tf_version <= (1, 5, 0) and "GPU" in device_types:
       non_det_ops.append(op)
     elif op.type == "BiasAddGrad" and "GPU" in device_types:
