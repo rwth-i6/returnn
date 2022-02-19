@@ -1629,8 +1629,10 @@ def test_loop_var_creation():
     with default_control_flow_ctx():
       # Note: tf.Variable directly will have this problem, as tf.constant() is in the current ctx.
       w1 = tf.Variable(name="w1", initial_value=tf.constant(1))
-    # However, tf.get_variable should not have this problem.
-    w2 = tf_compat.v1.get_variable("w2", shape=(), dtype=tf.int32, initializer=tf.constant_initializer(2))
+    # tf.get_variable only works well in TF1 control flow.
+    # When we use TF2 control flow, we anyway should use default_control_flow_ctx().
+    with default_control_flow_ctx():
+      w2 = tf_compat.v1.get_variable("w2", shape=(), dtype=tf.int32, initializer=tf.constant_initializer(2))
     return [i + w1 + w2]
 
   loop = tf.while_loop(lambda i: tf.less(i, 5), body, [i])
