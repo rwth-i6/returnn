@@ -3651,7 +3651,7 @@ def help_on_tf_exception(
         debug_fetch = None
         for x in input_to_output_ops:
           # noinspection PyProtectedMember
-          if x._control_flow_context is None or x.type == "Exit":
+          if not tf_util.has_control_flow_context(x) or x.type == "Exit":
             debug_fetch = x
             break
         assert debug_fetch is not None, "ops: %r, fetches: %r" % (input_to_output_ops, fetches)
@@ -3659,7 +3659,7 @@ def help_on_tf_exception(
         for op_ in op.graph.get_operations():
           assert isinstance(op_, tf.Operation)
           # noinspection PyProtectedMember
-          if op_._control_flow_context:
+          if tf_util.has_control_flow_context(op_):
             continue
           for x in list(op_.inputs) + list(op_.outputs) + list(op.control_inputs):
             if isinstance(x, tf.Operation):

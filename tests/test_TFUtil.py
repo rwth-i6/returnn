@@ -3596,7 +3596,7 @@ def test_FetchHelper_loop_invalid_vars_switch():
   stop_at_ts = []
   for op_ in op.graph.get_operations():
     assert isinstance(op_, tf.Operation)
-    if op_._control_flow_context:
+    if has_control_flow_context(op_):
       continue
     for x in list(op_.inputs) + list(op_.outputs) + list(op.control_inputs):
       assert isinstance(x, tf.Tensor)
