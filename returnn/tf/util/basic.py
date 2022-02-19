@@ -536,6 +536,8 @@ def reuse_name_scope_of_tensor(x, prefix="", postfix="", add_tensor_name=False):
       name_scope += '/' + tensor_name
     else:
       name_scope = tensor_name
+  if not prefix and not name_scope and postfix.startswith("/"):
+    postfix = postfix[1:]
 
   with reuse_name_scope(prefix + name_scope + postfix, absolute=True) as scope:
     yield scope
