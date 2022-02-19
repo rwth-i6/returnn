@@ -567,6 +567,15 @@ def default_control_flow_ctx():
   However, with respect to variables, you should instead use
   ``tf.get_variable``, which does not have this problem.
   """
+  if tf_compat.v2:
+    graph = tf_compat.v1.get_default_graph()
+    from tensorflow.python.framework.func_graph import FuncGraph
+    while graph.building_function:
+      assert isinstance(graph, FuncGraph)
+      graph = graph.outer_graph
+    with graph.as_default(), tf.control_dependencies(None) as dep:
+      yield dep
+    return
   # Resetting all control dependencies has the effect of also resetting the current control flow context.
   with tf.control_dependencies(None) as dep:
     yield dep
