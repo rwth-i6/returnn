@@ -30,6 +30,8 @@ if v2 and tf.__version__.startswith("2."):
   # There is also disable_v2_behavior() which disables all the TF2 behavior,
   # including control flow, eager execution, etc.,
   # but we want to make use of TF2 features as much as possible.
+  # https://github.com/tensorflow/tensorflow/issues/54458
+  tf.compat.v1.experimental.output_all_intermediates(True)
 
 try:
   import tensorflow.contrib
