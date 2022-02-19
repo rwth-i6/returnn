@@ -5363,9 +5363,9 @@ def has_current_control_flow_context():
   :rtype: bool
   """
   if tf_compat.v2:
-    from tensorflow.python.framework.func_graph import FuncGraph
+    from tensorflow.python.ops.control_flow_v2_func_graphs import ControlFlowFuncGraph
     graph = tf_compat.v1.get_default_graph()
-    if isinstance(graph, FuncGraph) and graph.is_control_flow_graph:
+    if isinstance(graph, ControlFlowFuncGraph):
       return True
   return _get_current_control_flow_context() is not None
 
@@ -5413,7 +5413,7 @@ def _get_control_flow_graphs(v):
   if not tf_compat.v2:
     return
   import numpy
-  from tensorflow.python.framework.func_graph import FuncGraph
+  from tensorflow.python.ops.control_flow_v2_func_graphs import ControlFlowFuncGraph
   if isinstance(v, (list, tuple)):
     for elem in v:
       for t in _get_control_flow_graphs(elem):
@@ -5426,7 +5426,7 @@ def _get_control_flow_graphs(v):
   assert isinstance(v, tf.Operation), "unexpected type %r" % type(v)
   # Control flow is via the graph of the op. This is since control flow V2.
   graph = v.graph
-  if isinstance(graph, FuncGraph) and graph.is_control_flow_graph:
+  if isinstance(graph, ControlFlowFuncGraph):
     yield graph
 
 
@@ -5459,8 +5459,8 @@ def same_control_flow_ctx(x):
   cur_graph = tf_compat.v1.get_default_graph()
   inside_control_flow_graph = False
   if tf_compat.v2:
-    from tensorflow.python.framework.func_graph import FuncGraph
-    if isinstance(cur_graph, FuncGraph) and cur_graph.is_control_flow_graph:
+    from tensorflow.python.ops.control_flow_v2_func_graphs import ControlFlowFuncGraph
+    if isinstance(cur_graph, ControlFlowFuncGraph):
       inside_control_flow_graph = True
   graphs = set(_get_control_flow_graphs(x))
   ctxs = set(_get_control_flows(x, yield_none=True))
