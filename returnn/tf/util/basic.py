@@ -5573,7 +5573,7 @@ def tensor_array_is_clear_after_read(ta):
   :param tf.TensorArray ta:
   :rtype: bool
   """
-  if not ta.handle:
+  if ta.handle is None:
     return False  # TensorArrayV2
   return ta.handle.op.get_attr("clear_after_read")
 
