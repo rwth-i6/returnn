@@ -5488,6 +5488,8 @@ def tensor_array_is_dynamic_size(ta):
   :param tf.TensorArray ta:
   :rtype: bool
   """
+  if hasattr(ta, "dynamic_size"):  # TF2, TensorArrayV2
+    return ta.dynamic_size
   return ta.handle.op.get_attr("dynamic_size")
 
 
@@ -5496,6 +5498,8 @@ def tensor_array_is_clear_after_read(ta):
   :param tf.TensorArray ta:
   :rtype: bool
   """
+  if not ta.handle:
+    return False  # TensorArrayV2
   return ta.handle.op.get_attr("clear_after_read")
 
 
