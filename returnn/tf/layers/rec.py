@@ -3198,7 +3198,7 @@ class _SubnetworkRecCell(object):
       seq_len = tag.dyn_size
 
     new_acc_output_ta = tf.TensorArray(
-      name="search_resolved_%s" % os.path.basename(acc_ta.handle.op.name),
+      name="search_resolved_%s" % os.path.basename((acc_ta.handle or acc_ta.flow).op.name),
       dtype=layer.output.dtype,
       element_shape=tf.TensorShape(layer.output.batch_shape),
       size=max_seq_len,
