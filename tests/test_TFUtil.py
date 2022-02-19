@@ -3447,7 +3447,7 @@ def test_FetchHelper_simple():
 
 
 def test_FetchHelper_loop():
-  if tf_compat.v2 and tf_compat.v1.control_flow_v2_enabled():
+  if hasattr(tf_compat.v1, "control_flow_v2_enabled") and tf_compat.v1.control_flow_v2_enabled():
     raise unittest.SkipTest("TensorFlow control flow v2 not supported")
   N = 3
   class Loop:
@@ -3485,7 +3485,7 @@ def test_FetchHelper_loop():
 
 
 def test_FetchHelper_loop_invalid():
-  if tf_compat.v2 and tf_compat.v1.control_flow_v2_enabled():
+  if hasattr(tf_compat.v1, "control_flow_v2_enabled") and tf_compat.v1.control_flow_v2_enabled():
     raise unittest.SkipTest("TensorFlow control flow v2 not supported")
   from returnn.tf.network import help_on_tf_exception  # not needed for the test, but helpful for further debug output
   have_gpu = is_gpu_available()
@@ -3549,7 +3549,7 @@ def test_FetchHelper_loop_invalid():
 
 
 def test_FetchHelper_loop_invalid_vars_switch():
-  if tf_compat.v2 and tf_compat.v1.control_flow_v2_enabled():
+  if hasattr(tf_compat.v1, "control_flow_v2_enabled") and tf_compat.v1.control_flow_v2_enabled():
     raise unittest.SkipTest("TensorFlow control flow v2 not supported")
   step = tf_compat.v1.get_variable("step", shape=(), dtype=tf.int64, initializer=tf.zeros_initializer(), trainable=False)
   v = tf_compat.v1.get_variable(
