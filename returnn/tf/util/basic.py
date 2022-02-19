@@ -5358,7 +5358,8 @@ def _get_control_flows(v, yield_none):
         yield t
     return
   if isinstance(v, (int, float, numpy.integer, type(None))):
-    yield None
+    if yield_none:
+      yield None
     return
   if isinstance(v, tf.Tensor):
     v = v.op
@@ -5376,12 +5377,41 @@ def _get_control_flows(v, yield_none):
   yield ctx
 
 
+def _get_control_flow_graphs(v):
+  """
+  :param tf.Tensor|tf.Operation|int|float|None|list[tf.Tensor|tf.Operation|int|float] v:
+  :return: yields control flow contexts
+  :rtype: typing.Iterator[tensorflow.python.ops.control_flow_v2_func_graphs.ControlFlowFuncGraph]
+  """
+  if not tf_compat.v2:
+    return
+  import numpy
+  from tensorflow.python.framework.func_graph import FuncGraph
+  if isinstance(v, (list, tuple)):
+    for elem in v:
+      for t in _get_control_flow_graphs(elem):
+        yield t
+    return
+  if isinstance(v, (int, float, numpy.integer, type(None))):
+    return
+  if isinstance(v, tf.Tensor):
+    v = v.op
+  assert isinstance(v, tf.Operation), "unexpected type %r" % type(v)
+  # Control flow is via the graph of the op. This is since control flow V2.
+  graph = v.graph
+  if isinstance(graph, FuncGraph) and graph.is_control_flow_graph:
+    yield graph
+
+
 def has_control_flow_context(x):
   """
   :param tf.Tensor|tf.Operation|int|float|None|list[tf.Tensor|tf.Operation|int|float] x:
   :return: whether `x` has a control flow, i.e. is e.g. inside a while loop
   :rtype: bool
   """
+  graphs = list(_get_control_flow_graphs(x))
+  if graphs:
+    return True
   ops = list(_get_control_flows(x, yield_none=False))
   return len(ops) > 0
 
@@ -5399,11 +5429,29 @@ def same_control_flow_ctx(x):
   :param tf.Tensor|tf.Operation|int|float|None|list[tf.Tensor|tf.Operation|int|float] x:
   :return: yields context (via tf.control_dependencies)
   """
+  cur_graph = tf_compat.v1.get_default_graph()
+  inside_control_flow_graph = False
+  if tf_compat.v2:
+    from tensorflow.python.framework.func_graph import FuncGraph
+    if isinstance(cur_graph, FuncGraph) and cur_graph.is_control_flow_graph:
+      inside_control_flow_graph = True
+  graphs = set(_get_control_flow_graphs(x))
   ctxs = set(_get_control_flows(x, yield_none=True))
-  if not ctxs:
+  if not graphs and not ctxs and not inside_control_flow_graph:
     # There is no tensor given in `x` (just int or so).
     # Just stay in the current context.
     yield None
+    return
+  if graphs or inside_control_flow_graph:  # control flow v2
+    assert not ctxs or ctxs == {None}
+    if not graphs:
+      with default_control_flow_ctx():
+        yield
+      return
+    assert len(graphs) == 1, "found multiple control flow graphs: %r" % graphs
+    graph = next(iter(graphs))
+    with graph.as_default():
+      yield
     return
   if len(ctxs) > 1 and None in ctxs:
     ctxs.remove(None)
