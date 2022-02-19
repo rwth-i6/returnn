@@ -1230,7 +1230,7 @@ class TFNetwork(object):
       self.total_loss = total_loss
       self.total_constraints = total_constraints
       self.total_objective = tf_util.optional_add(total_loss, total_constraints)
-      if not tf_util.get_current_control_flow_context():  # summaries cannot be used when in loop or cond
+      if not tf_util.has_current_control_flow_context():  # summaries cannot be used when in loop or cond
         tf_compat.v1.summary.scalar("loss", self.total_loss)
         tf_compat.v1.summary.scalar("constraints", self.total_constraints)
         tf_compat.v1.summary.scalar("objective", self.total_objective)
@@ -3395,7 +3395,7 @@ class LossHolder:
     """
     if self._network.parent_net:
       return  # skip summaries. the root net should also do this
-    if tf_util.get_current_control_flow_context():  # summaries cannot be used when in loop or cond
+    if tf_util.has_current_control_flow_context():  # summaries cannot be used when in loop or cond
       return
     name = self.get_tf_name()
     if self._loss_value is not None:

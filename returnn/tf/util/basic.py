@@ -5301,7 +5301,7 @@ def add_check_numerics_ops(
       # Frames from within a while-loop are partly broken.
       # https://github.com/tensorflow/tensorflow/issues/2211
       # noinspection PyProtectedMember
-      if op._get_control_flow_context() != tf_compat.v1.get_default_graph()._get_control_flow_context():
+      if has_control_flow_context(op):
         continue
       for output in op.outputs:
         if output.dtype not in [tf.float16, tf.float32, tf.float64]:
@@ -5335,12 +5335,24 @@ def nested_get_shapes(x):
   raise TypeError("invalid type %r of %r" % (type(x), x))
 
 
-def get_current_control_flow_context():
+def _get_current_control_flow_context():
   """
   :rtype: tensorflow.python.ops.control_flow_ops.ControlFlowContext|None
   """
   # noinspection PyProtectedMember
   return tf_compat.v1.get_default_graph()._get_control_flow_context()
+
+
+def has_current_control_flow_context():
+  """
+  :rtype: bool
+  """
+  if tf_compat.v2:
+    from tensorflow.python.framework.func_graph import FuncGraph
+    graph = tf_compat.v1.get_default_graph()
+    if isinstance(graph, FuncGraph) and graph.is_control_flow_graph:
+      return True
+  return _get_current_control_flow_context() is not None
 
 
 def _get_control_flows(v, yield_none):
