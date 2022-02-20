@@ -1587,16 +1587,23 @@ def test_attention_ctc_train_and_search():
     """
     return {
       "encoder": {"class": "linear", "activation": "tanh", "n_out": 5, "from": "data:data"},
-      "ctc": {"class": "softmax", "from": "encoder", "loss": "ctc", "target": "classes"},
+      "ctc": {
+        "class": "softmax", "from": "encoder",
+        "loss": "ctc", "loss_opts": {"use_native": True, "beam_width": 1}, "target": "classes"},
       "output": {
         "class": "rec",
         "from": [],
         "target": "classes",
         "max_seq_len": "max_len_from('base:encoder')",
         "unit": {
-          "s": {"class": "rec", "unit": "lstm", "from": ["prev:c", "prev:orth_embed"], "n_out": 7},
-          "c_in": {"class": "linear", "activation": "tanh", "from": ["s", "prev:orth_embed"], "n_out": 5},
-          "c": {"class": "dot_attention", "from": "c_in", "base": "base:encoder", "base_ctx": "base:encoder"},
+          "s": {"class": "rec", "unit": "lstm", "from": "prev:orth_embed", "n_out": 7},
+          "s_transformed": {"class": "linear", "activation": "tanh", "from": "s", "n_out": 5},
+          "att_energy_in": {
+            'class': 'combine', 'kind': 'add', 'from': ['base:encoder', 's_transformed']},
+          "att_energy_tanh": {'class': 'activation', 'from': 'att_energy_in', 'activation': 'tanh'},
+          "att_energy": {'class': 'linear', 'from': 'att_energy_tanh', 'n_out': 1},
+          "att_weights": {'class': 'softmax_over_spatial', 'from': 'att_energy'},
+          "c": {"class": "generic_attention", "base": "base:encoder", "weights": "att_weights", "auto_squeeze": True},
           "output_prob": {
             "class": "softmax", "from": ["prev:s", "c"], "dropout": 0.3,
             "target": "classes", "loss": "ce"},
