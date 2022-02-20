@@ -7501,23 +7501,29 @@ class CombineLayer(LayerBase):
     self.output.placeholder = x
 
   @classmethod
-  def get_out_data_from_opts(cls, eval_locals=None, n_out=NotSpecified, sources=(), out_type=None, out_shape=None,
+  def get_out_data_from_opts(cls, network, sources=(), eval_locals=None,
+                             n_out=NotSpecified, out_type=None, out_shape=None,
                              **kwargs):
     """
+    :param returnn.tf.network.TFNetwork network:
+    :param list[LayerBase] sources:
     :param dict[str]|None eval_locals: locals for eval, will also pass to out_type is out_type is a function
     :param int|None|NotSpecified n_out:
     :param dict[str]|None|(()->Data) out_type:
     :param set[Dim|_MarkedDim]|tuple|list|None out_shape: verifies the output shape (dim tags)
-    :param list[LayerBase] sources:
     :rtype: Data
     """
     out_type_ = {}
     if sources:
+      inside_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=True)
+      over_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=False)
       allow_broadcast_all_sources = NotSpecified
       if out_shape is not None:
         allow_broadcast_all_sources = True
       elif out_type and isinstance(out_type, dict) and ("shape" in out_type or "dim_tags" in out_type):
         allow_broadcast_all_sources = True
+      elif over_rec_time_dim and not inside_rec_time_dim:  # moved out of loop
+        allow_broadcast_all_sources = True  # we already checked the validity at template construction
       out_type_.update(
         Data.get_common_data(
           [s.output for s in sources], allow_broadcast_all_sources=allow_broadcast_all_sources,
@@ -7549,7 +7555,8 @@ class CombineLayer(LayerBase):
         out_type_ = call_out_type_with_eval_locals
       else:
         raise TypeError("unexpected type of out_type %r" % (out_type,))
-    return super(CombineLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type_, sources=sources, **kwargs)
+    return super(CombineLayer, cls).get_out_data_from_opts(
+      network=network, sources=sources, n_out=n_out, out_type=out_type_, **kwargs)
 
   @staticmethod
   def _op_dense_fn(sources, fn, output_template):
