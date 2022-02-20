@@ -2366,7 +2366,7 @@ def test_attention_ctc_train_and_search():
             "transformer_decoder_01_att": {
                 "class": "merge_dims",
                 "from": "transformer_decoder_01_att0",
-                "axes": "static",
+                "axes": ["dim:8", "dim:64"],
             },
             "transformer_decoder_01_att_linear": {
                 "class": "linear",
@@ -2524,7 +2524,7 @@ def test_attention_ctc_train_and_search():
             "transformer_decoder_02_att": {
                 "class": "merge_dims",
                 "from": "transformer_decoder_02_att0",
-                "axes": "static",
+                "axes": ["dim:8", "dim:64"],
             },
             "transformer_decoder_02_att_linear": {
                 "class": "linear",
