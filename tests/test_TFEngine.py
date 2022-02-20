@@ -1572,13 +1572,11 @@ def test_attention_search_in_train_then_search():
 
 def test_attention_ctc_train_and_search():
   # https://github.com/rwth-i6/returnn/issues/962
-  from returnn.datasets.generating import DummyDataset
-  seq_len = 5
-  n_data_dim = 2
-  n_classes_dim = 7
-  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  from returnn.datasets.generating import TaskNumberBaseConvertDataset
+  input_dim, output_dim = 2, 8
+  train_data = TaskNumberBaseConvertDataset(input_base=input_dim, output_base=output_dim, num_seqs=2)
   train_data.init_seq_order(epoch=1)
-  dev_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  dev_data = TaskNumberBaseConvertDataset(input_base=input_dim, output_base=output_dim, num_seqs=2)
   dev_data.init_seq_order(epoch=1)
 
   def make_net_dict():
@@ -1620,9 +1618,7 @@ def test_attention_ctc_train_and_search():
     "model": "%s/model" % _get_tmp_dir(),
     "batch_size": 1000,
     "max_seqs": 2,
-    "num_outputs": n_classes_dim,
-    "num_inputs": n_data_dim,
-    "num_epochs": 1,
+    "extern_data": {"data": {"dim": input_dim, "sparse": True}, "classes": {"dim": output_dim, "sparse": True}},
     "network": make_net_dict(),
     "search_output_layer": "decision",
     "debug_print_layer_output_template": True
