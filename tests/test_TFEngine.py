@@ -1570,7 +1570,7 @@ def test_attention_search_in_train_then_search():
   engine.finalize()
 
 
-def test_attention_ctc_bn_train_eval():
+def test_ctc_bn_train_eval():
   # https://github.com/rwth-i6/returnn/issues/962
   from returnn.datasets.generating import TaskNumberBaseConvertDataset
   input_dim, output_dim = 2, 8
@@ -1579,16 +1579,13 @@ def test_attention_ctc_bn_train_eval():
   dev_data = TaskNumberBaseConvertDataset(input_base=input_dim, output_base=output_dim, num_seqs=2)
   dev_data.init_seq_order(epoch=1)
 
-  att_kv_feat_dim = FeatureDim("att_kv_feat_dim", 4)
-
   def make_net_dict():
     """
     :rtype: dict[str,dict[str]]
     """
     return {
       "source": {
-          "class": "linear", "n_out": 10,
-          "from": "data",
+        "class": "linear", "n_out": 10, "from": "data",
       },
       "bn": {
         "class": "batch_norm", "from": "source",
@@ -1602,7 +1599,6 @@ def test_attention_ctc_bn_train_eval():
           "target": "classes",
           "loss": "ctc",
           "loss_opts": {"beam_width": 1, "use_native": True},
-          "loss_scale": 0.42857142857142855,
       },
     }
 
