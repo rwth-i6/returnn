@@ -1491,6 +1491,7 @@ class LayerBase(object):
         beta = None
 
       use_fused = (
+        tf_util.tf_version_tuple() >= (2, 0, 0) and  # TF2 required for exponential_avg_factor
         param_version >= 2 and
         not masked_time and
         use_shift and use_std and
