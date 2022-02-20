@@ -1771,7 +1771,7 @@ def test_attention_ctc_train_and_search():
         "epsilon": 0.001,
         "update_sample_only_in_training": False,
         "delay_sample_update": False,
-      "masked_time": False,
+      "masked_time": True,
     },
     "conformer_block_01_conv_mod_swish": {
         "class": "activation",
@@ -1979,7 +1979,7 @@ def test_attention_ctc_train_and_search():
         "epsilon": 0.001,
         "update_sample_only_in_training": False,
         "delay_sample_update": False,
-      "masked_time": False,
+      "masked_time": True,
     },
     "conformer_block_02_conv_mod_swish": {
         "class": "activation",
