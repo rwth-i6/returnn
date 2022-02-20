@@ -1579,7 +1579,7 @@ def test_attention_ctc_train_and_search():
   dev_data = TaskNumberBaseConvertDataset(input_base=input_dim, output_base=output_dim, num_seqs=2)
   dev_data.init_seq_order(epoch=1)
 
-  att_kv_feat_dim = FeatureDim("att_kv_feat_dim", 64)
+  att_kv_feat_dim = FeatureDim("att_kv_feat_dim", 4)
 
   def make_net_dict():
     """
@@ -1609,8 +1609,14 @@ def test_attention_ctc_train_and_search():
           "activation": None,
           "with_bias": False,
           "from": "encoder",
-          "n_out": 512,
+          "n_out": 8,
           "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', distribution='uniform', scale=0.5)",
+      },
+      "transformer_decoder_01_att_key_": {
+          "class": "split_dims",
+          "axis": "F",
+          "dims": (2, 4),
+          "from": "transformer_decoder_01_att_key0",
       },
       "transformer_decoder_01_att_key": {
           "class": "reinterpret_data",
@@ -1622,13 +1628,13 @@ def test_attention_ctc_train_and_search():
           "activation": None,
           "with_bias": False,
           "from": "encoder",
-          "n_out": 512,
+          "n_out": 8,
           "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', distribution='uniform', scale=0.5)",
       },
       "transformer_decoder_01_att_value": {
           "class": "split_dims",
           "axis": "F",
-          "dims": (8, 64),
+          "dims": (2, 4),
           "from": "transformer_decoder_01_att_value0",
       },
       "decision": {
@@ -1647,12 +1653,11 @@ def test_attention_ctc_train_and_search():
                   "target": "classes",
                   "loss": "ce",
                   "loss_opts": {"label_smoothing": 0.1},
-                  "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', distribution='uniform', scale=1.0)",
               },
               "output": {
                   "class": "choice",
                   "target": "classes",
-                  "beam_size": 12,
+                  "beam_size": 3,
                   "from": "output_prob",
                   "initial_output": 0,
               },
@@ -1662,9 +1667,7 @@ def test_attention_ctc_train_and_search():
                   "activation": None,
                   "with_bias": False,
                   "from": "prev:output",
-                  "n_out": 512,
-                  "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', distribution='uniform', "
-                  "scale=1.0)",
+                  "n_out": 8,
               },
               "target_embed_weighted": {
                   "class": "eval",
@@ -1684,7 +1687,7 @@ def test_attention_ctc_train_and_search():
               "transformer_decoder_01_self_att_ln_rel_pos_enc": {
                   "class": "relative_positional_encoding",
                   "from": "transformer_decoder_01_self_att_ln",
-                  "n_out": 64,
+                  "n_out": 4,
                   "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', "
                   "distribution='uniform', scale=1.0)",
                   "clipping": 16,
@@ -1692,9 +1695,9 @@ def test_attention_ctc_train_and_search():
               "transformer_decoder_01_self_att_att": {
                   "class": "self_attention",
                   "from": "transformer_decoder_01_self_att_ln",
-                  "n_out": 512,
-                  "num_heads": 8,
-                  "total_key_dim": 512,
+                  "n_out": 8,
+                  "num_heads": 2,
+                  "total_key_dim": 8,
                   "attention_dropout": 0.1,
                   "key_shift": "transformer_decoder_01_self_att_ln_rel_pos_enc",
                   "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', "
@@ -1706,7 +1709,7 @@ def test_attention_ctc_train_and_search():
                   "activation": None,
                   "with_bias": False,
                   "from": "transformer_decoder_01_self_att_att",
-                  "n_out": 512,
+                  "n_out": 8,
                   "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', "
                   "distribution='uniform', scale=1.0)",
               },
@@ -1719,7 +1722,7 @@ def test_attention_ctc_train_and_search():
                   "class": "combine",
                   "kind": "add",
                   "from": ["transformer_decoder_01_self_att_drop", "target_embed"],
-                  "n_out": 512,
+                  "n_out": 8,
               },
               "transformer_decoder_01_att_ln": {
                   "class": "layer_norm",
@@ -1730,7 +1733,7 @@ def test_attention_ctc_train_and_search():
                   "activation": None,
                   "with_bias": False,
                   "from": "transformer_decoder_01_att_ln",
-                  "n_out": 512,
+                  "n_out": 8,
                   "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', "
                   "distribution='uniform', scale=0.5)",
               },
@@ -1766,14 +1769,14 @@ def test_attention_ctc_train_and_search():
               "transformer_decoder_01_att": {
                   "class": "merge_dims",
                   "from": "transformer_decoder_01_att0",
-                  "axes": ["dim:8", "dim:64"],
+                  "axes": ["dim:2", "dim:4"],
               },
               "transformer_decoder_01_att_linear": {
                   "class": "linear",
                   "activation": None,
                   "with_bias": False,
                   "from": "transformer_decoder_01_att",
-                  "n_out": 512,
+                  "n_out": 8,
                   "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', "
                   "distribution='uniform', scale=1.0)",
               },
@@ -1789,7 +1792,7 @@ def test_attention_ctc_train_and_search():
                       "transformer_decoder_01_att_drop",
                       "transformer_decoder_01_self_att_out",
                   ],
-                  "n_out": 512,
+                  "n_out": 8,
               },
               "transformer_decoder_01_ff_ln": {
                   "class": "layer_norm",
@@ -1800,7 +1803,7 @@ def test_attention_ctc_train_and_search():
                   "activation": "relu",
                   "with_bias": True,
                   "from": "transformer_decoder_01_ff_ln",
-                  "n_out": 2048,
+                  "n_out": 11,
                   "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', "
                   "distribution='uniform', scale=1.0)",
               },
@@ -1809,7 +1812,7 @@ def test_attention_ctc_train_and_search():
                   "activation": None,
                   "with_bias": True,
                   "from": "transformer_decoder_01_ff_conv1",
-                  "n_out": 512,
+                  "n_out": 8,
                   "dropout": 0.1,
                   "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', "
                   "distribution='uniform', scale=1.0)",
@@ -1826,7 +1829,7 @@ def test_attention_ctc_train_and_search():
                       "transformer_decoder_01_ff_drop",
                       "transformer_decoder_01_att_out",
                   ],
-                  "n_out": 512,
+                  "n_out": 8,
               },
               "transformer_decoder_01": {
                   "class": "copy",
@@ -1836,18 +1839,12 @@ def test_attention_ctc_train_and_search():
               "transformer_decoder_01_att_query_": {
                   "class": "split_dims",
                   "axis": "F",
-                  "dims": (8, 64),
+                  "dims": (2, 4),
                   "from": "transformer_decoder_01_att_query0",
               },
           },
           "target": "classes",
           "max_seq_len": "max_len_from('base:encoder')",
-      },
-      "transformer_decoder_01_att_key_": {
-          "class": "split_dims",
-          "axis": "F",
-          "dims": (8, 64),
-          "from": "transformer_decoder_01_att_key0",
       },
     }
 
