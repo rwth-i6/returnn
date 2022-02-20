@@ -3743,17 +3743,17 @@ class SplitDimsLayer(_ConcatInputLayer):
       if new_shape[i] == -1 and self.output.batch_shape[i] is not None:
         new_shape[i] = self.output.batch_shape[i]
 
-    import numpy
+    from returnn.util import basic as util
     new_pos_dims = [d for d in dims if isinstance(d, int) and d > 0]
     rem_const_size = None
     if len(new_pos_dims) == len(dims) - 1:
-      rem_const_size = int(numpy.prod(new_pos_dims))
+      rem_const_size = util.prod(new_pos_dims)
     assert not data.is_axis_dynamic(axis) or pad_to_multiples or rem_const_size == 1
     if pad_to_multiples and (not isinstance(rem_const_size, int) or rem_const_size != 1):
       indices = [i for i, d in enumerate(dims) if isinstance(d, int) and d == -1]
       assert len(indices) == 1, "%s: exactly one -1 dim in %r expected" % (self, dims)
       if rem_const_size is None:
-        rem_const_size = int(numpy.prod([d for d in dims if not isinstance(d, int) or d > 0]))
+        rem_const_size = util.prod([d for d in dims if not isinstance(d, int) or d > 0])
       old_size = old_shape[axis]
       pad_size = (-old_size) % rem_const_size
 
