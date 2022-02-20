@@ -1604,39 +1604,6 @@ def test_attention_ctc_bn_train_eval():
           "loss_opts": {"beam_width": 1, "use_native": True},
           "loss_scale": 0.42857142857142855,
       },
-      "transformer_decoder_01_att_key0": {
-          "class": "linear",
-          "activation": None,
-          "with_bias": False,
-          "from": "encoder",
-          "n_out": 8,
-          "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', distribution='uniform', scale=0.5)",
-      },
-      "transformer_decoder_01_att_key_": {
-          "class": "split_dims",
-          "axis": "F",
-          "dims": (2, 4),
-          "from": "transformer_decoder_01_att_key0",
-      },
-      "transformer_decoder_01_att_key": {
-          "class": "reinterpret_data",
-          "from": "transformer_decoder_01_att_key_",
-          "set_dim_tags": {"F": att_kv_feat_dim},
-      },
-      "transformer_decoder_01_att_value0": {
-          "class": "linear",
-          "activation": None,
-          "with_bias": False,
-          "from": "encoder",
-          "n_out": 8,
-          "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', distribution='uniform', scale=0.5)",
-      },
-      "transformer_decoder_01_att_value": {
-          "class": "split_dims",
-          "axis": "F",
-          "dims": (2, 4),
-          "from": "transformer_decoder_01_att_value0",
-      },
     }
 
   config = Config()
