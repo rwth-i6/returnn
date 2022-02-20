@@ -6680,24 +6680,25 @@ class SelfAttentionLayer(_ConcatInputLayer):
     """
     super(SelfAttentionLayer, self).__init__(**kwargs)
     self._restrict_state_to_last_seq = restrict_state_to_last_seq
-    assert self._rec_previous_layer or self.input_data.time_dim_axis is not None, (
+    input_data = self.input_data.copy_as_batch_major().copy_with_feature_last()
+    assert self._rec_previous_layer or input_data.time_dim_axis is not None, (
       "%s: This layer is expected to be used inside a RecLayer, or to have input with time." % self)
     total_value_dim = self.output.dim
     assert total_key_dim % num_heads == 0, "must be divisible"
     assert total_value_dim % num_heads == 0, "must be divisible. total_value_dim = n_out"
     from returnn.tf.util.basic import get_initializer, dot, get_shape, to_int32_64, where_bc
-    batch_dim = self.input_data.get_batch_dim()
+    batch_dim = input_data.get_batch_dim()
     with self.var_creation_scope():
       fwd_weights_initializer = get_initializer(
         forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
-      n_in = self.input_data.dim
+      n_in = input_data.dim
       mat_n_out = total_key_dim * 2 + total_value_dim  # Q, K, V
       mat = self.add_param(tf_compat.v1.get_variable(
         name="QKV", shape=(n_in, mat_n_out), dtype=tf.float32, initializer=fwd_weights_initializer),
         axes_split_info=[[n_in], [total_key_dim, total_key_dim, total_value_dim]])
       prev_mask = None
       if self._rec_previous_layer:
-        assert self.input_data.time_dim_axis is None
+        assert input_data.time_dim_axis is None
         assert attention_left_only
         # (batch,heads,time,k-dim//heads)
         prev_k_left = self._rec_previous_layer.rec_vars_outputs["k_left"]
@@ -6705,7 +6706,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
         prev_v_left = self._rec_previous_layer.rec_vars_outputs["v_left"]
         prev_mask = self._rec_previous_layer.rec_vars_outputs.get("mask_left")
       else:
-        assert self.input_data.time_dim_axis is not None
+        assert input_data.time_dim_axis is not None
         if initial_state is not None:
           prev_k_left = RnnCellLayer.get_rec_initial_state_inner(
             initial_state=initial_state, name=self.name, rec_layer=self,
@@ -6719,25 +6720,25 @@ class SelfAttentionLayer(_ConcatInputLayer):
             shape_invariant=(None, num_heads, None, total_value_dim // num_heads))
         else:
           prev_k_left, prev_v_left = None, None
-    x = self.input_data.placeholder
-    if self.input_data.sparse:
+    x = input_data.placeholder
+    if input_data.sparse:
       x = tf.nn.embedding_lookup(mat, to_int32_64(x))
     else:
       x = dot(x, mat)
-    x.set_shape(tf.TensorShape(self.input_data.batch_shape_dense[:-1] + (mat_n_out,)))
+    x.set_shape(tf.TensorShape(input_data.batch_shape_dense[:-1] + (mat_n_out,)))
     x_shape = [-1, -1, num_heads, mat_n_out // num_heads]  # without time
-    if self.input_data.time_dim_axis is None:
-      assert self.input_data.batch_dim_axis == 0
+    if input_data.time_dim_axis is None:
+      assert input_data.batch_dim_axis == 0
       x_shape[1] = 1
     else:
-      assert self.input_data.time_dim_axis in (0, 1)
-    assert self.input_data.batch_dim_axis in (0, 1)
-    x_shape[self.input_data.batch_dim_axis] = batch_dim
+      assert input_data.time_dim_axis in (0, 1)
+    assert input_data.batch_dim_axis in (0, 1)
+    x_shape[input_data.batch_dim_axis] = batch_dim
     x = tf.reshape(x, x_shape)  # (batch,time|1)|(time|1,batch) + (heads,qkv-dim//heads)
     x.set_shape(tf.TensorShape([None, None, num_heads, mat_n_out // num_heads]))
-    assert self.input_data.batch_dim_axis in (0, 1)
+    assert input_data.batch_dim_axis in (0, 1)
     # (batch,heads,time|1,qkv-dim//heads)
-    x = tf.transpose(x, [self.input_data.batch_dim_axis, 2, 1 - self.input_data.batch_dim_axis, 3])
+    x = tf.transpose(x, [input_data.batch_dim_axis, 2, 1 - input_data.batch_dim_axis, 3])
     x.set_shape((None, num_heads, None, mat_n_out // num_heads))
     q, k, v = tf.split(
       x, [total_key_dim // num_heads, total_key_dim // num_heads, total_value_dim // num_heads], axis=-1, name="qkv")
@@ -6792,7 +6793,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
         energy_, [tf.shape(q_t)[0], batch_dim, num_heads, tf.shape(energy)[-1]])  # [num_queries|1,batch,heads,num_keys]
       energy_ = tf.transpose(energy_, [1, 2, 0, 3])  # [batch,heads,num_queries|1,num_keys]
       energy += energy_
-    if self.input_data.time_dim_axis is not None:
+    if input_data.time_dim_axis is not None:
       if attention_left_only:
         # We also ignore the input data sequence length, because we expect that frames outside the seq length
         # are anyway ignored.
@@ -6806,7 +6807,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
           energy_mask = tf.concat([energy_mask_left, energy_mask], axis=-1)
       else:
         energy_mask = tf.sequence_mask(
-          self.input_data.get_sequence_lengths(), maxlen=tf.shape(energy)[-1])  # (batch,time)
+          input_data.get_sequence_lengths(), maxlen=tf.shape(energy)[-1])  # (batch,time)
         energy_mask = tf.reshape(energy_mask, [tf.shape(energy)[0], 1, 1, tf.shape(energy)[-1]])  # (batch,1,1,time)
       if state_var_lengths is not None and have_prev_kv_left:
         if callable(state_var_lengths):
@@ -6842,11 +6843,11 @@ class SelfAttentionLayer(_ConcatInputLayer):
     v = tf.transpose(v, [0, 2, 1, 3])  # (batch,time,heads,v-dim//heads)
     v = tf.reshape(v, get_shape(v)[:2] + [total_value_dim], name="merge_vdim")  # (batch,time,v-dim)
     v.set_shape(tf.TensorShape([None, None, total_value_dim]))
-    if self.input_data.time_dim_axis is None:
+    if input_data.time_dim_axis is None:
       # Squeeze away the time-dim, which should be 1.
       v = tf.squeeze(v, axis=1)
     self.output.placeholder = v
-    self.output.size_placeholder = self.input_data.size_placeholder.copy()
+    self.output.size_placeholder = input_data.size_placeholder.copy()
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -6869,7 +6870,8 @@ class SelfAttentionLayer(_ConcatInputLayer):
     """
     assert sources
     import numpy
-    out = sources[0].output.copy_as_batch_major().copy(name="%s_output" % name)
+    out = sources[0].output.copy_template(name="%s_output" % name)
+    out = out.copy_as_batch_major().copy_with_feature_last()
     batch_dim_tag = out.dim_tags[out.batch_dim_axis]
     feat_tag = FeatureDim("%s_self_att_feat" % name, dimension=n_out, auto_generated=True)
     if len(out.shape_dense) >= 2:
