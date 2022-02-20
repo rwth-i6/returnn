@@ -1947,7 +1947,7 @@ def flatten_with_seq_len_mask(x, seq_lens, batch_dim_axis=None, time_dim_axis=No
   cache = get_flatten_with_seq_len_mask_cache(x, seq_lens, batch_dim_axis, time_dim_axis)
   if cache.has_cache():
     return cache.get_cache()
-  with tf.name_scope("flatten_with_seq_len_mask"):
+  with same_control_flow_ctx([x, seq_lens]), tf.name_scope("flatten_with_seq_len_mask"):
     seq_lens = check_input_ndim(seq_lens, 1)
     # If not (batch,time,...s...), transform.
     if batch_dim_axis != 0 or time_dim_axis != 1:
