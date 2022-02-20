@@ -1947,7 +1947,7 @@ class TFNetwork(object):
     for param in params:
       shape = param.get_shape().as_list()
       if all(shape):
-        num_params += numpy.prod(shape)
+        num_params += int(numpy.prod(shape))
     return num_params
 
   def initialize_params(self, session):
