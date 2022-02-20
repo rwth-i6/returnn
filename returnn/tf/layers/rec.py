@@ -6874,7 +6874,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
     feat_tag = FeatureDim("%s_self_att_feat" % name, dimension=n_out, auto_generated=True)
     if len(out.shape_dense) >= 2:
       if all(out.shape_dense[:-1]):
-        time_dim = numpy.prod(out.shape[:-1])
+        time_dim = int(numpy.prod(out.shape[:-1]))
       else:
         time_dim = None
       time_tag = Dim(

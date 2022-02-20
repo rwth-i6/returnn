@@ -3753,7 +3753,7 @@ class SplitDimsLayer(_ConcatInputLayer):
       indices = [i for i, d in enumerate(dims) if isinstance(d, int) and d == -1]
       assert len(indices) == 1, "%s: exactly one -1 dim in %r expected" % (self, dims)
       if rem_const_size is None:
-        rem_const_size = numpy.prod([d for d in dims if not isinstance(d, int) or d > 0])
+        rem_const_size = int(numpy.prod([d for d in dims if not isinstance(d, int) or d > 0]))
       old_size = old_shape[axis]
       pad_size = (-old_size) % rem_const_size
 
