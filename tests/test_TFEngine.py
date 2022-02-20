@@ -1570,6 +1570,57 @@ def test_attention_search_in_train_then_search():
   engine.finalize()
 
 
+def test_ctc_bn_train_eval():
+  # https://github.com/rwth-i6/returnn/issues/962
+  from returnn.datasets.generating import TaskNumberBaseConvertDataset
+  input_dim, output_dim = 2, 8
+  train_data = TaskNumberBaseConvertDataset(input_base=input_dim, output_base=output_dim, num_seqs=2)
+  train_data.init_seq_order(epoch=1)
+  dev_data = TaskNumberBaseConvertDataset(input_base=input_dim, output_base=output_dim, num_seqs=2)
+  dev_data.init_seq_order(epoch=1)
+
+  def make_net_dict():
+    """
+    :rtype: dict[str,dict[str]]
+    """
+    return {
+      "source": {
+        "class": "linear", "n_out": 10, "from": "data",
+      },
+      "bn": {
+        "class": "batch_norm", "from": "source",
+        "momentum": 0.1, "epsilon": 1e-3, "update_sample_only_in_training": False, "delay_sample_update": False,
+        "masked_time": True,
+      },
+      "encoder": {"class": "copy", "from": "bn"},
+      "ctc": {
+          "class": "softmax",
+          "from": "encoder",
+          "target": "classes",
+          "loss": "ctc",
+          "loss_opts": {"beam_width": 1, "use_native": True},
+      },
+    }
+
+  config = Config()
+  config.update({
+    "model": "%s/model" % _get_tmp_dir(),
+    "batch_size": 1000,
+    "max_seqs": 2,
+    "extern_data": {"data": {"dim": input_dim, "sparse": True}, "classes": {"dim": output_dim, "sparse": True}},
+    "network": make_net_dict(),
+    "search_output_layer": "decision",
+    "debug_print_layer_output_template": True
+  })
+  _cleanup_old_models(config)
+  engine = Engine(config=config)
+  print("Train...")
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=dev_data)
+  engine.train()
+
+  engine.finalize()
+
+
 def check_train_and_search_two_targets(net_dict):
   """
   Tests training and search for network architectures having two targets ("classes_0", "classes_1")
