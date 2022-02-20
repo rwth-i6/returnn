@@ -1230,7 +1230,7 @@ class TFNetwork(object):
       self.total_loss = total_loss
       self.total_constraints = total_constraints
       self.total_objective = tf_util.optional_add(total_loss, total_constraints)
-      if not tf_util.get_current_control_flow_context():  # summaries cannot be used when in loop or cond
+      if not tf_util.has_current_control_flow_context():  # summaries cannot be used when in loop or cond
         tf_compat.v1.summary.scalar("loss", self.total_loss)
         tf_compat.v1.summary.scalar("constraints", self.total_constraints)
         tf_compat.v1.summary.scalar("objective", self.total_objective)
@@ -3395,7 +3395,7 @@ class LossHolder:
     """
     if self._network.parent_net:
       return  # skip summaries. the root net should also do this
-    if tf_util.get_current_control_flow_context():  # summaries cannot be used when in loop or cond
+    if tf_util.has_current_control_flow_context():  # summaries cannot be used when in loop or cond
       return
     name = self.get_tf_name()
     if self._loss_value is not None:
@@ -3651,7 +3651,7 @@ def help_on_tf_exception(
         debug_fetch = None
         for x in input_to_output_ops:
           # noinspection PyProtectedMember
-          if x._control_flow_context is None or x.type == "Exit":
+          if not tf_util.has_control_flow_context(x) or x.type == "Exit":
             debug_fetch = x
             break
         assert debug_fetch is not None, "ops: %r, fetches: %r" % (input_to_output_ops, fetches)
@@ -3659,7 +3659,7 @@ def help_on_tf_exception(
         for op_ in op.graph.get_operations():
           assert isinstance(op_, tf.Operation)
           # noinspection PyProtectedMember
-          if op_._control_flow_context:
+          if tf_util.has_control_flow_context(op_):
             continue
           for x in list(op_.inputs) + list(op_.outputs) + list(op.control_inputs):
             if isinstance(x, tf.Operation):

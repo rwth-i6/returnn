@@ -257,8 +257,9 @@ class Dim(object):
       if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:
         tensor = self.dyn_size_ext.placeholder
     if isinstance(tensor, tf.Tensor):
-      g = tf_compat.v1.get_default_graph()
-      if tensor.graph is not g:  # maybe from an earlier run which reuses the dim tag
+      from returnn.tf.util import basic as tf_util
+      g = tf_util.get_root_graph()
+      if tf_util.get_root_graph(tensor.graph) is not g:  # maybe from an earlier run which reuses the dim tag
         # Reset and cleanup.
         self.dyn_size_ext = None
         same_base = self.get_same_base()

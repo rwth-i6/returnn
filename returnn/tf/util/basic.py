@@ -17,6 +17,10 @@ from returnn.util.basic import NotSpecified, NativeCodeCompiler
 import returnn.tf.compat as tf_compat
 # noinspection PyUnresolvedReferences
 from .data import Data, SearchBeam, Dim, DimensionTag
+try:
+  from tensorflow.python.ops.control_flow_v2_func_graphs import ControlFlowFuncGraph
+except ImportError:
+  ControlFlowFuncGraph = None
 
 
 class CollectionKeys:
@@ -536,6 +540,8 @@ def reuse_name_scope_of_tensor(x, prefix="", postfix="", add_tensor_name=False):
       name_scope += '/' + tensor_name
     else:
       name_scope = tensor_name
+  if not prefix and not name_scope and postfix.startswith("/"):
+    postfix = postfix[1:]
 
   with reuse_name_scope(prefix + name_scope + postfix, absolute=True) as scope:
     yield scope
@@ -567,9 +573,31 @@ def default_control_flow_ctx():
   However, with respect to variables, you should instead use
   ``tf.get_variable``, which does not have this problem.
   """
+  if tf_compat.v2:
+    root_graph = get_root_graph()
+    with root_graph.as_default(), tf.control_dependencies(None) as dep:
+      yield dep
+    return
   # Resetting all control dependencies has the effect of also resetting the current control flow context.
   with tf.control_dependencies(None) as dep:
     yield dep
+
+
+def get_root_graph(graph=None):
+  """
+  :param tf.Graph|None graph:
+  :return: root graph. with control flow v2, the current graph might not be the root graph
+  :rtype: tf.Graph
+  """
+  if graph is None:
+    graph = tf_compat.v1.get_default_graph()
+  if not tf_compat.v2:
+    return graph
+  from tensorflow.python.framework.func_graph import FuncGraph
+  while graph.building_function:
+    assert isinstance(graph, FuncGraph)
+    graph = graph.outer_graph
+  return graph
 
 
 class _ScaledGradientBuilder(object):
@@ -3936,7 +3964,7 @@ def global_tensor(f, name):
   :return: the tensor
   :rtype: tf.Tensor
   """
-  graph = tf_compat.v1.get_default_graph()
+  graph = get_root_graph()
   assert isinstance(graph, tf.Graph)
   abs_graph_name = "globals/%s:0" % name
   try:
@@ -5262,7 +5290,7 @@ def add_check_numerics_ops(
   :rtype: tf.Operation
   """
   if fetches is None:
-    ops = tf_compat.v1.get_default_graph().get_operations()
+    ops = get_root_graph().get_operations()
   else:
     fetch_ops = [v.op if isinstance(v, tf.Tensor) else v for v in fetches]
     assert all([isinstance(op, tf.Operation) for op in fetch_ops])
@@ -5292,7 +5320,7 @@ def add_check_numerics_ops(
       # Frames from within a while-loop are partly broken.
       # https://github.com/tensorflow/tensorflow/issues/2211
       # noinspection PyProtectedMember
-      if op._get_control_flow_context() != tf_compat.v1.get_default_graph()._get_control_flow_context():
+      if has_control_flow_context(op):
         continue
       for output in op.outputs:
         if output.dtype not in [tf.float16, tf.float32, tf.float64]:
@@ -5326,12 +5354,23 @@ def nested_get_shapes(x):
   raise TypeError("invalid type %r of %r" % (type(x), x))
 
 
-def get_current_control_flow_context():
+def _get_current_control_flow_context():
   """
   :rtype: tensorflow.python.ops.control_flow_ops.ControlFlowContext|None
   """
   # noinspection PyProtectedMember
   return tf_compat.v1.get_default_graph()._get_control_flow_context()
+
+
+def has_current_control_flow_context():
+  """
+  :rtype: bool
+  """
+  if ControlFlowFuncGraph:
+    graph = tf_compat.v1.get_default_graph()
+    if isinstance(graph, ControlFlowFuncGraph):
+      return True
+  return _get_current_control_flow_context() is not None
 
 
 def _get_control_flows(v, yield_none):
@@ -5349,7 +5388,8 @@ def _get_control_flows(v, yield_none):
         yield t
     return
   if isinstance(v, (int, float, numpy.integer, type(None))):
-    yield None
+    if yield_none:
+      yield None
     return
   if isinstance(v, tf.Tensor):
     v = v.op
@@ -5367,12 +5407,40 @@ def _get_control_flows(v, yield_none):
   yield ctx
 
 
+def _get_control_flow_graphs(v):
+  """
+  :param tf.Tensor|tf.Operation|int|float|None|list[tf.Tensor|tf.Operation|int|float] v:
+  :return: yields control flow contexts
+  :rtype: typing.Iterator[tensorflow.python.ops.control_flow_v2_func_graphs.ControlFlowFuncGraph]
+  """
+  if not ControlFlowFuncGraph:
+    return
+  import numpy
+  if isinstance(v, (list, tuple)):
+    for elem in v:
+      for t in _get_control_flow_graphs(elem):
+        yield t
+    return
+  if isinstance(v, (int, float, numpy.integer, type(None))):
+    return
+  if isinstance(v, tf.Tensor):
+    v = v.op
+  assert isinstance(v, tf.Operation), "unexpected type %r" % type(v)
+  # Control flow is via the graph of the op. This is since control flow V2.
+  graph = v.graph
+  if isinstance(graph, ControlFlowFuncGraph):
+    yield graph
+
+
 def has_control_flow_context(x):
   """
   :param tf.Tensor|tf.Operation|int|float|None|list[tf.Tensor|tf.Operation|int|float] x:
   :return: whether `x` has a control flow, i.e. is e.g. inside a while loop
   :rtype: bool
   """
+  graphs = list(_get_control_flow_graphs(x))
+  if graphs:
+    return True
   ops = list(_get_control_flows(x, yield_none=False))
   return len(ops) > 0
 
@@ -5390,11 +5458,28 @@ def same_control_flow_ctx(x):
   :param tf.Tensor|tf.Operation|int|float|None|list[tf.Tensor|tf.Operation|int|float] x:
   :return: yields context (via tf.control_dependencies)
   """
+  cur_graph = tf_compat.v1.get_default_graph()
+  inside_control_flow_graph = False
+  if ControlFlowFuncGraph:
+    if isinstance(cur_graph, ControlFlowFuncGraph):
+      inside_control_flow_graph = True
+  graphs = set(_get_control_flow_graphs(x))
   ctxs = set(_get_control_flows(x, yield_none=True))
-  if not ctxs:
+  if not graphs and not ctxs and not inside_control_flow_graph:
     # There is no tensor given in `x` (just int or so).
     # Just stay in the current context.
     yield None
+    return
+  if graphs or inside_control_flow_graph:  # control flow v2
+    assert not ctxs or ctxs == {None}
+    if not graphs:
+      with default_control_flow_ctx():
+        yield
+      return
+    assert len(graphs) == 1, "found multiple control flow graphs: %r" % graphs
+    graph = next(iter(graphs))
+    with graph.as_default():
+      yield
     return
   if len(ctxs) > 1 and None in ctxs:
     ctxs.remove(None)
@@ -5479,6 +5564,8 @@ def tensor_array_is_dynamic_size(ta):
   :param tf.TensorArray ta:
   :rtype: bool
   """
+  if hasattr(ta, "dynamic_size"):  # TF2, TensorArrayV2
+    return ta.dynamic_size
   return ta.handle.op.get_attr("dynamic_size")
 
 
@@ -5487,6 +5574,8 @@ def tensor_array_is_clear_after_read(ta):
   :param tf.TensorArray ta:
   :rtype: bool
   """
+  if ta.handle is None:
+    return False  # TensorArrayV2
   return ta.handle.op.get_attr("clear_after_read")
 
 
@@ -6684,7 +6773,7 @@ def get_non_deterministic_ops_from_graph():
   device_types = {device.device_type for device in get_tf_list_local_devices()}
   non_det_ops = []
   tf_version = tf_version_tuple()
-  for op in tf_compat.v1.get_default_graph().get_operations():
+  for op in get_root_graph().get_operations():
     if op.type == "Mean" and tf_version <= (1, 5, 0) and "GPU" in device_types:
       non_det_ops.append(op)
     elif op.type == "BiasAddGrad" and "GPU" in device_types:

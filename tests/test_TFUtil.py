@@ -1629,8 +1629,10 @@ def test_loop_var_creation():
     with default_control_flow_ctx():
       # Note: tf.Variable directly will have this problem, as tf.constant() is in the current ctx.
       w1 = tf.Variable(name="w1", initial_value=tf.constant(1))
-    # However, tf.get_variable should not have this problem.
-    w2 = tf_compat.v1.get_variable("w2", shape=(), dtype=tf.int32, initializer=tf.constant_initializer(2))
+    # tf.get_variable only works well in TF1 control flow.
+    # When we use TF2 control flow, we anyway should use default_control_flow_ctx().
+    with default_control_flow_ctx():
+      w2 = tf_compat.v1.get_variable("w2", shape=(), dtype=tf.int32, initializer=tf.constant_initializer(2))
     return [i + w1 + w2]
 
   loop = tf.while_loop(lambda i: tf.less(i, 5), body, [i])
@@ -3445,6 +3447,8 @@ def test_FetchHelper_simple():
 
 
 def test_FetchHelper_loop():
+  if hasattr(tf_compat.v1, "control_flow_v2_enabled") and tf_compat.v1.control_flow_v2_enabled():
+    raise unittest.SkipTest("TensorFlow control flow v2 not supported")
   N = 3
   class Loop:
     def body(self, i, x):
@@ -3481,6 +3485,8 @@ def test_FetchHelper_loop():
 
 
 def test_FetchHelper_loop_invalid():
+  if hasattr(tf_compat.v1, "control_flow_v2_enabled") and tf_compat.v1.control_flow_v2_enabled():
+    raise unittest.SkipTest("TensorFlow control flow v2 not supported")
   from returnn.tf.network import help_on_tf_exception  # not needed for the test, but helpful for further debug output
   have_gpu = is_gpu_available()
   print("Have GPU:", have_gpu)
@@ -3543,6 +3549,8 @@ def test_FetchHelper_loop_invalid():
 
 
 def test_FetchHelper_loop_invalid_vars_switch():
+  if hasattr(tf_compat.v1, "control_flow_v2_enabled") and tf_compat.v1.control_flow_v2_enabled():
+    raise unittest.SkipTest("TensorFlow control flow v2 not supported")
   step = tf_compat.v1.get_variable("step", shape=(), dtype=tf.int64, initializer=tf.zeros_initializer(), trainable=False)
   v = tf_compat.v1.get_variable(
     name="var_accum_grad", shape=(), dtype=tf.float32,
@@ -3588,7 +3596,7 @@ def test_FetchHelper_loop_invalid_vars_switch():
   stop_at_ts = []
   for op_ in op.graph.get_operations():
     assert isinstance(op_, tf.Operation)
-    if op_._control_flow_context:
+    if has_control_flow_context(op_):
       continue
     for x in list(op_.inputs) + list(op_.outputs) + list(op.control_inputs):
       assert isinstance(x, tf.Tensor)

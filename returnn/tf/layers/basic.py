@@ -9326,7 +9326,7 @@ class PrintLayer(LayerBase):
       print_args = [self.__class__.__name__, self.name, source.output.placeholder]
       print_args.extend(extra_print_args)
       output = py_print(source.output.placeholder, print_args, summarize=summarize)
-      if not tf_util.get_current_control_flow_context():  # Only possible to globally register if not in cond/loop.
+      if not tf_util.has_current_control_flow_context():  # Only possible to globally register if not in cond/loop.
         self.network.register_post_control_dependencies([output])
       with tf.control_dependencies([output]):
         self.output.placeholder = tf.identity(source.output.placeholder)
