@@ -1570,6 +1570,76 @@ def test_attention_search_in_train_then_search():
   engine.finalize()
 
 
+def test_attention_ctc_train_and_search():
+  # https://github.com/rwth-i6/returnn/issues/962
+  from returnn.datasets.generating import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 7
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  dev_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  dev_data.init_seq_order(epoch=1)
+
+  def make_net_dict():
+    """
+    :rtype: dict[str,dict[str]]
+    """
+    return {
+      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5, "from": "data:data"},
+      "ctc": {"class": "softmax", "from": "encoder", "loss": "ctc", "target": "classes"},
+      "output": {
+        "class": "rec",
+        "from": [],
+        "target": "classes",
+        "max_seq_len": "max_len_from('base:encoder')",
+        "unit": {
+          "s": {"class": "rec", "unit": "lstm", "from": ["prev:c", "prev:orth_embed"], "n_out": 7},
+          "c_in": {"class": "linear", "activation": "tanh", "from": ["s", "prev:orth_embed"], "n_out": 5},
+          "c": {"class": "dot_attention", "from": "c_in", "base": "base:encoder", "base_ctx": "base:encoder"},
+          "output_prob": {
+            "class": "softmax", "from": ["prev:s", "c"], "dropout": 0.3,
+            "target": "classes", "loss": "ce"},
+          'output': {'class': 'choice', 'target': 'classes', 'beam_size': 4, 'from': "output_prob"},
+          "end": {"class": "compare", "from": "output", "value": 0},
+          'orth_embed': {'class': 'linear', 'activation': None, 'from': 'output', "n_out": 7},
+        }
+      },
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance", 'only_on_search': True}
+    }
+
+  config = Config()
+  config.update({
+    "model": "%s/model" % _get_tmp_dir(),
+    "batch_size": 1000,
+    "max_seqs": 2,
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "num_epochs": 1,
+    "network": make_net_dict(),
+    "search_output_layer": "decision",
+    "debug_print_layer_output_template": True
+  })
+  _cleanup_old_models(config)
+  engine = Engine(config=config)
+  print("Train...")
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=dev_data)
+  engine.train()
+
+  print("Search...")
+  config.set("network", make_net_dict())
+  engine.use_search_flag = True
+  engine.use_dynamic_train_flag = False
+  engine.init_network_from_config(config)
+  engine.search(dataset=dev_data)
+  print("error keys:")
+  pprint(engine.network.losses_dict)
+  assert engine.network.total_objective is not None
+  assert "decision" in engine.network.losses_dict
+
+  engine.finalize()
+
+
 def check_train_and_search_two_targets(net_dict):
   """
   Tests training and search for network architectures having two targets ("classes_0", "classes_1")
