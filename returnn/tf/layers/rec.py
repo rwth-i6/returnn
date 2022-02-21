@@ -606,10 +606,14 @@ class RecLayer(_ConcatInputLayer):
   @classmethod
   def get_rnn_cell_class(cls, name, cell_only=False):
     """
-    :param str name: cell name, minus the "Cell" at the end
+    :param str|type name: cell name, minus the "Cell" at the end
     :param bool cell_only: i.e. for single-step execution
     :rtype: type[rnn_cell.RNNCell]|type[returnn.tf.native_op.RecSeqCellOp]
     """
+    if isinstance(name, type):
+      from returnn.tf import native_op as tf_native_op
+      assert issubclass(name, (rnn_cell.RNNCell, tf_native_op.RecSeqCellOp))
+      return name
     if not cls._rnn_cells_dict:
       cls._create_rnn_cells_dict()
     # We have some automatic replacement logic here.
@@ -747,7 +751,7 @@ class RecLayer(_ConcatInputLayer):
 
   def _get_cell(self, unit, unit_opts=None):
     """
-    :param str|_SubnetworkRecCell unit:
+    :param str|_SubnetworkRecCell|type unit:
     :param None|dict[str] unit_opts:
     :rtype: _SubnetworkRecCell|tensorflow.contrib.rnn.RNNCell|tensorflow.contrib.rnn.FusedRNNCell|TFNativeOp.RecSeqCellOp  # nopep8
     """
@@ -763,7 +767,7 @@ class RecLayer(_ConcatInputLayer):
       assert unit_opts is None
       unit.set_parent_layer(self)
       return unit
-    assert isinstance(unit, str)
+    assert isinstance(unit, (str, type))
     rnn_cell_class = self.get_rnn_cell_class(unit)
     n_hidden = self.output.dim
     if unit_opts is None:
