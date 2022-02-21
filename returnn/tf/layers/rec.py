@@ -8132,6 +8132,83 @@ class BaseRNNCell(rnn_cell.RNNCell):
     return x
 
 
+class VanillaLSTMCell(BaseRNNCell):
+  """
+  Just a vanilla LSTM cell, which is compatible to our NativeLSTM (v1 and v2).
+  """
+
+  def __init__(self, num_units):
+    """
+    :param int num_units:
+    """
+    super(VanillaLSTMCell, self).__init__()
+    self.num_units = num_units
+
+  @property
+  def output_size(self):
+    """
+    :rtype: int
+    """
+    return self.num_units
+
+  @property
+  def state_size(self):
+    """
+    :rtype: rnn_cell.LSTMStateTuple
+    """
+    return rnn_cell.LSTMStateTuple(self.num_units, self.num_units)
+
+  def get_input_transformed(self, x, batch_dim=None):
+    """
+    :param tf.Tensor x: (time, batch, dim), or (batch, dim)
+    :param tf.Tensor|None batch_dim:
+    :return: like x, maybe other feature-dim
+    :rtype: tf.Tensor|tuple[tf.Tensor]
+    """
+    x = self._linear(x, self.num_units * 4)
+    return x
+
+  @staticmethod
+  def _linear(x, output_dim):
+    """
+    :param tf.Tensor x:
+    :param int output_dim:
+    :rtype: tf.Tensor
+    """
+    from returnn.tf.util.basic import dot
+    input_dim = x.get_shape().dims[-1].value
+    assert input_dim is not None, "%r shape unknown" % (x,)
+    weights = tf_compat.v1.get_variable("W", shape=(input_dim, output_dim))
+    x = dot(x, weights)
+    bias = tf_compat.v1.get_variable("b", shape=(output_dim,), initializer=tf.constant_initializer(0.0))
+    x += bias
+    return x
+
+  def __call__(self, inputs, state, scope=None):
+    """
+    Run this RNN cell on inputs given a state.
+
+    :param tf.Tensor inputs:
+    :param rnn_cell.LSTMStateTuple state:
+    :return: (LSTM output h, LSTM state (consisting of cell state c and output h)
+    :rtype: (tf.Tensor, rnn_cell.LSTMStateTuple)
+    """
+    from tensorflow.python.ops.math_ops import sigmoid, tanh
+    from returnn.tf.util.basic import dot, reuse_name_scope
+    var_scope_name = tf_compat.v1.get_variable_scope().name
+    if var_scope_name.endswith("/rnn"):
+      var_scope_name = var_scope_name[:-len("/rnn")]
+    with reuse_name_scope(var_scope_name, absolute=True):  # compatibility
+      prev_c, prev_h = state
+      weights = tf_compat.v1.get_variable("W_re", shape=(self.num_units, self.num_units * 4))
+      inputs = inputs + dot(prev_h, weights)
+      # NativeLstm2: cell-in + input, forget and output gates
+      c_in, i, f, o = tf.split(inputs, num_or_size_splits=4, axis=-1)
+      new_c = sigmoid(f) * prev_c + sigmoid(i) * tanh(c_in)
+      new_h = sigmoid(o) * tanh(new_c)
+      return new_h, rnn_cell.LSTMStateTuple(new_c, new_h)
+
+
 class RHNCell(BaseRNNCell):
   """
   Recurrent Highway Layer.
