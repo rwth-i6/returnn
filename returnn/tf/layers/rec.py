@@ -8165,24 +8165,12 @@ class VanillaLSTMCell(BaseRNNCell):
     :return: like x, maybe other feature-dim
     :rtype: tf.Tensor|tuple[tf.Tensor]
     """
-    x = self._linear(x, self.num_units * 4)
-    return x
-
-  @staticmethod
-  def _linear(x, output_dim):
-    """
-    :param tf.Tensor x:
-    :param int output_dim:
-    :rtype: tf.Tensor
-    """
     from returnn.tf.util.basic import dot
     input_dim = x.get_shape().dims[-1].value
     assert input_dim is not None, "%r shape unknown" % (x,)
-    weights = tf_compat.v1.get_variable("W", shape=(input_dim, output_dim))
-    x = dot(x, weights)
-    bias = tf_compat.v1.get_variable("b", shape=(output_dim,), initializer=tf.constant_initializer(0.0))
-    x += bias
-    return x
+    weights = tf_compat.v1.get_variable("W", shape=(input_dim, self.num_units * 4))
+    bias = tf_compat.v1.get_variable("b", shape=(self.num_units * 4,), initializer=tf.constant_initializer(0.0))
+    return dot(x, weights) + bias
 
   def __call__(self, inputs, state, scope=None):
     """
