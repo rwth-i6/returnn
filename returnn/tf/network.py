@@ -4201,12 +4201,23 @@ class CustomCheckpointLoader:
         cur_name_b = "%s/rec/b" % prefix
         old_name_kernel = "%s/rec/rnn/lstm_cell/kernel" % prefix
         old_name_bias = "%s/rec/rnn/lstm_cell/bias" % prefix
+        old_name2_kernel = "%s/rec/lstm_cell/kernel" % prefix
+        old_name2_bias = "%s/rec/lstm_cell/bias" % prefix
         if (
               old_name_kernel in obsolete_var_names and
               old_name_bias in obsolete_var_names and
               cur_name_w in missing_var_names and
               cur_name_b in missing_var_names):
           loader = MakeLoadBasicToNativeLstm(basic_kernel=old_name_kernel, basic_bias=old_name_bias)
+          var_name_map[v] = loader.get_w_re
+          var_name_map[cur_name_w] = loader.get_w
+          var_name_map[cur_name_b] = loader.get_b
+        elif (
+          old_name2_kernel in obsolete_var_names and
+          old_name2_bias in obsolete_var_names and
+          cur_name_w in missing_var_names and
+          cur_name_b in missing_var_names):
+          loader = MakeLoadBasicToNativeLstm(basic_kernel=old_name2_kernel, basic_bias=old_name2_bias)
           var_name_map[v] = loader.get_w_re
           var_name_map[cur_name_w] = loader.get_w
           var_name_map[cur_name_b] = loader.get_b
