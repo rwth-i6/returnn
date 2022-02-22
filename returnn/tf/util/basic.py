@@ -6948,6 +6948,7 @@ def safe_deep_copy(obj):
     # Python types.
     types.FunctionType, types.LambdaType, types.BuiltinFunctionType, types.BuiltinMethodType,
     types.ModuleType,
+    type,
     # Common TF types.
     tf.Tensor, tf.Operation, tf.Variable, tf.Graph, tf_compat.v1.Session,
     # Our own types, which should not be copied.
