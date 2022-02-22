@@ -1621,6 +1621,125 @@ def test_ctc_bn_train_eval():
   engine.finalize()
 
 
+def test_custom_rec_unit():
+  from returnn.tf.layers.rec import BaseRNNCell, rnn_cell
+
+  class CustomLSTMCell(BaseRNNCell):
+    """
+    Just a vanilla LSTM cell, which is compatible to our NativeLSTM (v1 and v2).
+    """
+
+    def __init__(self, num_units):
+      """
+      :param int num_units:
+      """
+      super(CustomLSTMCell, self).__init__()
+      self.num_units = num_units
+
+    @property
+    def output_size(self):
+      """
+      :rtype: int
+      """
+      return self.num_units
+
+    @property
+    def state_size(self):
+      """
+      :rtype: rnn_cell.LSTMStateTuple
+      """
+      return rnn_cell.LSTMStateTuple(self.num_units, self.num_units)
+
+    def get_input_transformed(self, x, batch_dim=None):
+      """
+      :param tf.Tensor x: (time, batch, dim), or (batch, dim)
+      :param tf.Tensor|None batch_dim:
+      :return: like x, maybe other feature-dim
+      :rtype: tf.Tensor|tuple[tf.Tensor]
+      """
+      from returnn.tf.util.basic import dot
+      input_dim = x.get_shape().dims[-1].value
+      assert input_dim is not None, "%r shape unknown" % (x,)
+      weights = tf_compat.v1.get_variable("W", shape=(input_dim, self.num_units * 4))
+      bias = tf_compat.v1.get_variable("b", shape=(self.num_units * 4,), initializer=tf.constant_initializer(0.0))
+      return dot(x, weights) + bias
+
+    def __call__(self, inputs, state, scope=None):
+      """
+      Run this RNN cell on inputs given a state.
+
+      :param tf.Tensor inputs:
+      :param rnn_cell.LSTMStateTuple state:
+      :return: (LSTM output h, LSTM state (consisting of cell state c and output h)
+      :rtype: (tf.Tensor, rnn_cell.LSTMStateTuple)
+      """
+      from tensorflow.python.ops.math_ops import sigmoid as _sigmoid, tanh as _tanh
+      from returnn.tf.util.basic import dot, reuse_name_scope
+      orig_dtype = inputs.dtype
+
+      def sigmoid(x):
+        return tf.cast(_sigmoid(tf.cast(x, tf.bfloat16)), orig_dtype)
+
+      def tanh(x):
+        return tf.cast(_tanh(tf.cast(x, tf.bfloat16)), orig_dtype)
+
+      var_scope_name = tf_compat.v1.get_variable_scope().name
+      if var_scope_name.endswith("/rnn"):
+        var_scope_name = var_scope_name[:-len("/rnn")]
+      with reuse_name_scope(var_scope_name, absolute=True):  # compatibility
+        prev_c, prev_h = state
+        weights = tf_compat.v1.get_variable("W_re", shape=(self.num_units, self.num_units * 4))
+        inputs = inputs + dot(prev_h, weights)
+        # NativeLstm2: cell-in + input, forget and output gates
+        c_in, i, f, o = tf.split(inputs, num_or_size_splits=4, axis=-1)
+        new_c = sigmoid(f) * prev_c + sigmoid(i) * tanh(c_in)
+        new_h = sigmoid(o) * tanh(new_c)
+        return new_h, rnn_cell.LSTMStateTuple(new_c, new_h)
+
+  from returnn.datasets.generating import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 7
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  dev_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  dev_data.init_seq_order(epoch=1)
+
+  def make_net_dict():
+    """
+    :rtype: dict[str,dict[str]]
+    """
+    return {
+      "source": {"class": "linear", "n_out": 7, "from": "data"},
+      "rec": {
+        "class": "rec",
+        "from": "source",
+        "unit": {
+          # Having this inside a RecLayer triggers a specific pickling bug.
+          "output": {"class": "rec", "unit": CustomLSTMCell, "n_out": 5, "from": "data:source"}
+        }
+      },
+      "output": {"class": "softmax", "loss": "ce", "from": "rec", "n_out": n_classes_dim}
+    }
+
+  config = Config()
+  config.update({
+    "model": "%s/model" % _get_tmp_dir(),
+    "batch_size": 1000,
+    "max_seqs": 2,
+    "extern_data": {"data": {"dim": n_data_dim}, "classes": {"dim": n_classes_dim, "sparse": True}},
+    "network": make_net_dict(),
+    "debug_print_layer_output_template": True
+  })
+  _cleanup_old_models(config)
+  engine = Engine(config=config)
+  print("Train...")
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=dev_data)
+  engine.train()
+
+  engine.finalize()
+
+
 def check_train_and_search_two_targets(net_dict):
   """
   Tests training and search for network architectures having two targets ("classes_0", "classes_1")
