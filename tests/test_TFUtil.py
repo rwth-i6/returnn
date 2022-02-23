@@ -1339,6 +1339,27 @@ def test_dim_math_pad_conv_valid_in_ctx():
   assert conv_valid == time
 
 
+def test_dim_math_pad_conv_valid_in_ctx_derived():
+  # Behavior when this is inside a loop.
+  # Similar as in test_attention_convolutional_feedback_variant1.
+  from returnn.tf.util.data import BatchInfo, ControlFlowContext
+  loop_dim = SpatialDim("time:var:extern_data:classes")
+  batch_info = BatchInfo.make_global_batch_info(-1)
+  ctx = ControlFlowContext(kind=ControlFlowContext.Types.Loop)
+  ctx.loop_spatial_dim = loop_dim
+  time_undefined = Dim(kind=Dim.Types.Spatial, description="time_undefined", dimension=None)
+  time_ = time_undefined.get_for_batch_ctx(batch=batch_info, ctx=ctx)
+  padded = 2 + time_ + 2
+  padded_ = padded.get_for_batch_ctx(batch=batch_info, ctx=ctx)
+  conv = Dim(kind=Dim.Types.Spatial, description="conv", dimension=None, derived_from_tag=padded_)
+  conv_valid = (-2) + padded_ + (-2)
+  assert conv_valid is time_undefined  # implementation detail, not the relevant test (but we should have equality)
+  conv_valid.declare_same_as(conv)
+  conv_derived_base = conv_valid.get_same_derived_base()
+  assert conv_derived_base is time_undefined
+  assert conv == time_undefined
+
+
 def test_sequence_mask_len_via_loop():
   seq_len = tf.while_loop(
     cond=lambda x: tf.less(x[0], 2),
