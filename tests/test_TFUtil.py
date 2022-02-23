@@ -1318,6 +1318,27 @@ def test_dim_math_pad_conv_valid():
   assert conv_valid == time
 
 
+def test_dim_math_pad_conv_valid_in_ctx():
+  from returnn.tf.util.data import BatchInfo, ControlFlowContext
+  time = SpatialDim("time:var:extern_data:data")
+  loop_dim = SpatialDim("time:var:extern_data:classes")
+  batch_info = BatchInfo.make_global_batch_info(-1)
+  ctx = ControlFlowContext(kind=ControlFlowContext.Types.Loop)
+  ctx.loop_spatial_dim = loop_dim
+  time_ = time.get_for_batch_ctx(batch=batch_info, ctx=ctx)
+  # Note: once time is actually defined (dyn_size_ext is set), the following assert would not be the case,
+  # as the base can be used for any control flow context, and the _can_use_in_ctx logic applies.
+  # However, in this test case here, it is yet undefined, which is also a valid case during template construction.
+  assert time_.control_flow_ctx == ctx
+  padded = 2 + time_ + 2
+  assert padded == 2 + time + 2
+  padded_ = padded.get_for_batch_ctx(batch=batch_info, ctx=ctx)
+  # Same here as above.
+  assert padded_.control_flow_ctx == ctx
+  conv_valid = (-2) + padded_ + (-2)
+  assert conv_valid == time
+
+
 def test_sequence_mask_len_via_loop():
   seq_len = tf.while_loop(
     cond=lambda x: tf.less(x[0], 2),
