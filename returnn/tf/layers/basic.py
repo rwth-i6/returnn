@@ -7454,7 +7454,8 @@ class CombineLayer(LayerBase):
   recurrent = True  # in case of eval, we cannot really know
 
   # noinspection PyShadowingBuiltins
-  def __init__(self, kind, sources, activation=None, with_bias=False,
+  def __init__(self, kind, sources, allow_broadcast_all_sources=NotSpecified,
+               activation=None, with_bias=False,
                eval=None, eval_locals=None, eval_for_output_loss=False,
                **kwargs):
     """
@@ -7463,12 +7464,15 @@ class CombineLayer(LayerBase):
       `logical_and`, `logical_or`,
       or `eval`
     :param list[LayerBase] sources:
+    :param bool|NotSpecified allow_broadcast_all_sources: allow broadcasting for all sources.
+      e.g. shape [A] + [B] -> shape [A,B]. by default disabled, and there must be some source with all dims.
     :param str|None activation: if provided, activation function to apply, e.g. "tanh" or "relu"
     :param bool with_bias: if given, will add a trainable bias tensor
     :param str|callable eval: for kind="eval", will eval this string. or function. see :func:`_op_kind_eval`
     :param dict[str]|None eval_locals: locals for eval
     :param bool eval_for_output_loss: will do the same eval on layer.output_loss
     """
+    allow_broadcast_all_sources  # noqa  # via get_out_data_from_opts
     super(CombineLayer, self).__init__(sources=sources, **kwargs)
     assert kind in [
       "average", "add", "sub", "mul", "truediv", "floordiv", "mod", "pow",
@@ -7501,29 +7505,31 @@ class CombineLayer(LayerBase):
     self.output.placeholder = x
 
   @classmethod
-  def get_out_data_from_opts(cls, network, sources=(), eval_locals=None,
-                             n_out=NotSpecified, out_type=None, out_shape=None,
+  def get_out_data_from_opts(cls, network, sources, eval_locals=None, n_out=NotSpecified, out_type=None,
+                             allow_broadcast_all_sources=NotSpecified, out_shape=None,
                              **kwargs):
     """
     :param returnn.tf.network.TFNetwork network:
     :param list[LayerBase] sources:
     :param dict[str]|None eval_locals: locals for eval, will also pass to out_type is out_type is a function
     :param int|None|NotSpecified n_out:
+    :param bool|NotSpecified allow_broadcast_all_sources:
     :param dict[str]|None|(()->Data) out_type:
     :param set[Dim|_MarkedDim]|tuple|list|None out_shape: verifies the output shape (dim tags)
     :rtype: Data
     """
     out_type_ = {}
     if sources:
-      inside_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=True)
-      over_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=False)
-      allow_broadcast_all_sources = NotSpecified
-      if out_shape is not None:
-        allow_broadcast_all_sources = True
-      elif out_type and isinstance(out_type, dict) and ("shape" in out_type or "dim_tags" in out_type):
-        allow_broadcast_all_sources = True
-      elif over_rec_time_dim and not inside_rec_time_dim:  # moved out of loop
-        allow_broadcast_all_sources = True  # we already checked the validity at template construction
+      if allow_broadcast_all_sources is NotSpecified:
+        inside_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=True)
+        over_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=False)
+        allow_broadcast_all_sources = NotSpecified
+        if out_shape is not None:
+          allow_broadcast_all_sources = True
+        elif out_type and isinstance(out_type, dict) and ("shape" in out_type or "dim_tags" in out_type):
+          allow_broadcast_all_sources = True
+        elif over_rec_time_dim and not inside_rec_time_dim:  # moved out of loop
+          allow_broadcast_all_sources = True  # we already checked the validity at template construction
       out_type_.update(
         Data.get_common_data(
           [s.output for s in sources], allow_broadcast_all_sources=allow_broadcast_all_sources,
