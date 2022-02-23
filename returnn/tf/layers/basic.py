@@ -5027,7 +5027,7 @@ class ConvLayer(_ConcatInputLayer):
 
   @classmethod
   def set_output_dim_tags(cls, output, num_batch_dims, in_spatial_dims, out_spatial_dims,
-                          filter_size, strides, dilation_rate, padding):
+                          filter_size, strides, dilation_rate, padding, calc_dyn_size=True):
     """
     :param Data output:
     :param int num_batch_dims:
@@ -5037,6 +5037,7 @@ class ConvLayer(_ConcatInputLayer):
     :param list[int]|tuple[int] strides:
     :param list[int]|tuple[int] dilation_rate:
     :param str padding:
+    :param bool calc_dyn_size:
     """
     if output.feature_dim_axis == num_batch_dims:
       out_spatial_dims_ = output.dim_tags[num_batch_dims + 1:]
@@ -5048,6 +5049,12 @@ class ConvLayer(_ConcatInputLayer):
     assert len(out_spatial_dims_) == len(in_spatial_dims) == len(filter_size) == len(strides) == len(dilation_rate)
     for i, in_tag in enumerate(in_spatial_dims):
       out_tag = out_spatial_dims_[i]
+      out_tag_calc = cls.calc_out_dim(
+        in_dim=in_tag,
+        filter_size=filter_size[i], stride=strides[i],
+        dilation_rate=dilation_rate[i], padding=padding)
+      assert isinstance(out_tag_calc, Dim)
+      out_tag_calc.declare_same_as(out_tag)
       if in_tag.dimension is not None:
         size = in_tag.dimension
         size = cls.calc_out_dim(
@@ -5055,7 +5062,7 @@ class ConvLayer(_ConcatInputLayer):
           filter_size=filter_size[i], stride=strides[i],
           dilation_rate=dilation_rate[i], padding=padding)
         assert out_tag.dimension == size
-      elif in_tag.dimension is None and in_tag.dyn_size is not None:
+      elif in_tag.dimension is None and in_tag.dyn_size is not None and calc_dyn_size:
         size = in_tag.dyn_size
         with tf_util.same_control_flow_ctx(size):
           size = cls.calc_out_dim(
@@ -5177,7 +5184,7 @@ class ConvLayer(_ConcatInputLayer):
   @classmethod
   def calc_out_dim(cls, in_dim, filter_size, stride, padding, dilation_rate=1):
     """
-    :param int|tf.Tensor|T in_dim: dimension in some axis
+    :param int|tf.Tensor|Dim|T in_dim: dimension in some axis
     :param int filter_size: e.g. 2, for the corresponding axis
     :param int stride: e.g. 1, for the corresponding axis
     :param int dilation_rate: e.g. 1
@@ -5198,8 +5205,15 @@ class ConvLayer(_ConcatInputLayer):
     padding = padding.upper()
     # See tf.compat.v1.nn.convolution() documentation for more.
     if padding == "SAME":
+      if isinstance(in_dim, Dim):
+        return in_dim.ceildiv_right(stride)
       return ceildiv(in_dim, stride)
     elif padding == "VALID":
+      if isinstance(in_dim, Dim):
+        filter_left_dilated = (filter_size - 1) * dilation_rate // 2
+        filter_right_dilated = (filter_size - 1) * dilation_rate - filter_left_dilated
+        valid_part = in_dim.sub_left(filter_left_dilated).sub_right(filter_right_dilated)
+        return valid_part.ceildiv_right(stride)
       return tf_util.simplify_non_negative_seq_length(
         ceildiv(
           (tf_util.simplify_sub(in_dim, (filter_size - 1) * dilation_rate)),
@@ -5286,6 +5300,7 @@ class ConvLayer(_ConcatInputLayer):
         dim_tags.append(Dim(
           kind=Dim.Types.Spatial, description="%s:conv:s%i" % (name, i), dimension=new_dim,
           derived_from_tag=old_tag, undefined=not old_tag, auto_generated=True))
+      out_spatial_dims = dim_tags[num_batch_dims:]
     if not out_dim:
       assert n_out
       out_dim = FeatureDim("%s:channel" % name, dimension=n_out, auto_generated=True)
@@ -5299,9 +5314,15 @@ class ConvLayer(_ConcatInputLayer):
         if len([d for d in dim_tags if d.dimension]) > 1:
           feature_dim_axis = num_batch_dims
         dim_tags = dim_tags[:num_batch_dims] + dim_tags[-1:] + dim_tags[num_batch_dims:-1]
-    return Data(
+    out = Data(
       name="%s_output" % name, dim_tags=dim_tags, feature_dim_axis=feature_dim_axis,
       batch=data.batch, beam=data.beam, control_flow_ctx=data.control_flow_ctx)
+    if len(old_spatial_dim_tags) == len(filter_size):
+      cls.set_output_dim_tags(
+        out, num_batch_dims=num_batch_dims, in_spatial_dims=old_spatial_dim_tags, out_spatial_dims=out_spatial_dims,
+        filter_size=filter_size, strides=strides, dilation_rate=dilation_rate, padding=padding,
+        calc_dyn_size=False)
+    return out
 
   def get_dep_layers(self):
     """
