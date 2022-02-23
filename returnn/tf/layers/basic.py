@@ -5212,7 +5212,7 @@ class ConvLayer(_ConcatInputLayer):
       if isinstance(in_dim, Dim):
         filter_left_dilated = (filter_size - 1) * dilation_rate // 2
         filter_right_dilated = (filter_size - 1) * dilation_rate - filter_left_dilated
-        valid_part = in_dim.sub_left(filter_left_dilated).sub_right(filter_right_dilated)
+        valid_part = (-filter_left_dilated) + in_dim + (-filter_right_dilated)
         return valid_part.ceildiv_right(stride)
       return tf_util.simplify_non_negative_seq_length(
         ceildiv(
