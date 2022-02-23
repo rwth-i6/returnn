@@ -4213,10 +4213,10 @@ class CustomCheckpointLoader:
           var_name_map[cur_name_w] = loader.get_w
           var_name_map[cur_name_b] = loader.get_b
         elif (
-          old_name2_kernel in obsolete_var_names and
-          old_name2_bias in obsolete_var_names and
-          cur_name_w in missing_var_names and
-          cur_name_b in missing_var_names):
+              old_name2_kernel in obsolete_var_names and
+              old_name2_bias in obsolete_var_names and
+              cur_name_w in missing_var_names and
+              cur_name_b in missing_var_names):
           loader = MakeLoadBasicToNativeLstm(basic_kernel=old_name2_kernel, basic_bias=old_name2_bias)
           var_name_map[v] = loader.get_w_re
           var_name_map[cur_name_w] = loader.get_w
