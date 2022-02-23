@@ -4082,6 +4082,39 @@ def test_ConvLayer_time_dim_out():
       feed_dict=make_feed_dict(net.extern_data))
 
 
+def test_ConvLayer_get_out_data_from_opts_out_spatial_dims():
+  from returnn.tf.util.data import batch_dim
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("input", 7)
+  conv_dim = SpatialDim("conv")
+  config = Config({"extern_data": {"data": {"dim_tags": [batch_dim, time_dim, feat_dim]}}})
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    layer_desc = {
+      'name': "conv", "_name": "conv",
+      "network": net, "_network": net,
+      "from": "data",
+      'filter_size': [4],
+      'strides': 3,
+      'padding': 'valid',
+      'n_out': 13,
+      "out_spatial_dims": [conv_dim],
+    }
+    ConvLayer.transform_config_dict(layer_desc, network=net, get_layer=net.get_layer)
+    conv_out = ConvLayer.get_out_data_from_opts(**layer_desc)
+    print("conv out:", conv_out)
+    print("conv dim:", conv_dim, "time dim:", time_dim)
+    assert conv_dim == ((-1) + time_dim + (-2)).ceildiv_right(3)
+    assert conv_dim.get_same_base().derived_from_op
+    with tf_compat.v1.variable_scope("conv"):
+      conv_layer = ConvLayer(output=conv_out, **layer_desc)
+    net.layers["conv"] = conv_layer
+    net.initialize_params(session)
+    session.run(
+      (conv_layer.output.placeholder, conv_layer.output.get_sequence_lengths()),
+      feed_dict=make_feed_dict(net.extern_data))
+
+
 def test_conv_layer_NCHW():
   with make_scope() as session:
     import numpy as np
