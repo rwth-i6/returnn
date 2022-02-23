@@ -1193,6 +1193,7 @@ def test_dim_math_basics():
   a = SpatialDim("a")
   b = SpatialDim("b")
   assert a == a
+  assert (a + 2 - 2) == a
   assert a + b == a + b
   assert a + b != b + a  # not commutative
   assert a * b == a * b
