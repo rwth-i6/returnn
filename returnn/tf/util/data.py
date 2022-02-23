@@ -894,6 +894,8 @@ class Dim(object):
       self._vocab = other_same_base._vocab
     if self.derived_from_op and not other_same_base.derived_from_op:
       other_same_base.derived_from_op = self.derived_from_op
+    elif other_same_base.derived_from_op and not self.derived_from_op:
+      self.derived_from_op = other_same_base.derived_from_op
 
   def _merge_same_for_batch_ctx_dict(self, other):
     """
