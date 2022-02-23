@@ -4495,6 +4495,27 @@ def test_ResizeLayer_fill_dropout():
       assert_equal([s for s in out[i] if s != fill_value], src_seqs[i])
 
 
+def test_ResizeLayer_BFT():
+  n_batch, n_time, n_in = 7, 3, 5
+  config = Config({
+    "extern_data": {
+      "data": {"dim": n_in, "shape": (n_in, None)}  # [B,F,T], i.e. batch-feature-major
+    }
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    assert net.extern_data.get_default_input_data().is_batch_feature_major
+    net.construct_from_dict({
+      "output": {"class": "resize", "axis": "T", "factor": 2, "kind": "nn", "from": "data"}
+    })
+    out = net.get_default_output_layer().output.copy_as_batch_feature_major()
+    in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_in, n_time))
+    session.run(tf_compat.v1.global_variables_initializer())
+    out_v = session.run(out.placeholder, feed_dict={net.extern_data.data["data"].placeholder: in_v})
+    assert isinstance(out_v, numpy.ndarray)
+    assert out_v.shape == (n_batch, n_in, n_time * 2)
+
+
 def test_PostfixInTimeLayer():
   with make_scope() as session:
     import numpy as np
