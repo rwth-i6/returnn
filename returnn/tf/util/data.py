@@ -809,7 +809,10 @@ class Dim(object):
     :rtype: Dim
     """
     base = self
+    visited = {}
     while base.same_as or base.derived_from_tag:
+      assert id(base) not in visited  # should not have cycles. normally this should never be triggered
+      visited[id(base)] = base
       if base.same_as:
         base = base.same_as
         continue
@@ -823,7 +826,10 @@ class Dim(object):
     :rtype: bool
     """
     base = self
+    visited = {}
     while base.same_as or base.derived_from_tag:
+      assert id(base) not in visited  # should not have cycles. normally this should never be triggered
+      visited[id(base)] = base
       if base._undefined:
         return True
       if base.same_as:
