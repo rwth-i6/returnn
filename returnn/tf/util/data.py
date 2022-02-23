@@ -850,19 +850,10 @@ class Dim(object):
       assert not self_same_as.same_as
       if self_same_as is other_same_base:
         return
-      other_same_base._merge_same_for_batch_ctx_dict(self_same_as)
-      self_same_as.same_as = other_same_base
-      self_same_as._same_as_tb = traceback.extract_stack()
-      if self_same_as.dyn_size_ext is None or not self_same_as._validate_in_current_graph():
-        self_same_as.dyn_size_ext = other_same_base.get_dyn_size_ext_for_batch_ctx(
-          self_same_as.batch, self_same_as.control_flow_ctx)
-      elif other_same_base.dyn_size_ext is None or not other_same_base._validate_in_current_graph():
-        other_same_base.dyn_size_ext = self_same_as.get_dyn_size_ext_for_batch_ctx(
-          other_same_base.batch, other_same_base.control_flow_ctx)
+      assert self_same_as is not self
+      self_same_as.declare_same_as(other_same_base)
       if (self.dyn_size_ext is None or not self._validate_in_current_graph()) and self_same_as.dyn_size_ext:
         self.dyn_size_ext = self_same_as.get_dyn_size_ext_for_batch_ctx(self.batch, self.control_flow_ctx)
-      if self_same_as._vocab and not other_same_base._vocab:
-        other_same_base._vocab = self_same_as._vocab
     other_same_base._merge_same_for_batch_ctx_dict(self)
     other._maybe_update()
     self.same_as = other_same_base
@@ -879,21 +870,30 @@ class Dim(object):
               self.dyn_size, other_same_base.dyn_size))
     # If we have a defined source, and this is a dynamic spatial axis, and it was undefined before,
     # maybe we can overtake the size_placeholder now.
-    if self.same_as.dyn_size is not None and self.src_data:
+    if other_same_base.dyn_size is not None and self.src_data:
       assert isinstance(self.src_axis, int)
       # Maybe it changed in the meanwhile, so check.
       tag = self.src_data.get_dim_tag(self.src_axis)
       if tag.description == self.description and (not tag.dyn_size_ext or not tag._validate_in_current_graph()):
         tag.dyn_size_ext = self.get_dyn_size_ext_for_batch_ctx(tag.batch, tag.control_flow_ctx)
     # If others dyn_size is None but we have a dyn_size, maybe update others dyn_size.
-    if self.dyn_size is not None and self.same_as.dyn_size is not self.dyn_size:
+    if self.dyn_size is not None and other_same_base.dyn_size is not self.dyn_size:
       # Could be unset if it comes from the config, or from prev graph creation.
       # This is important such that self.can_compare() is sane.
-      if self.same_as.dyn_size is None or not self.same_as._validate_in_current_graph():
-        self.same_as.dyn_size_ext = self.get_dyn_size_ext_for_batch_ctx(
-          self.same_as.batch, self.same_as.control_flow_ctx)
-    if (not self.dyn_size_ext or not self._validate_in_current_graph()) and other.dyn_size_ext:
-      self.dyn_size_ext = other.get_dyn_size_ext_for_batch_ctx(self.batch, self.control_flow_ctx)
+      if other_same_base.dyn_size is None or not other_same_base._validate_in_current_graph():
+        other_same_base.dyn_size_ext = self.get_dyn_size_ext_for_batch_ctx(
+          other_same_base.batch, other_same_base.control_flow_ctx)
+    if not self.dyn_size_ext or not self._validate_in_current_graph():
+      self.dyn_size_ext = other_same_base.get_dyn_size_ext_for_batch_ctx(self.batch, self.control_flow_ctx)
+    elif other_same_base.dyn_size_ext is None or not other_same_base._validate_in_current_graph():
+      other_same_base.dyn_size_ext = self.get_dyn_size_ext_for_batch_ctx(
+        other_same_base.batch, other_same_base.control_flow_ctx)
+    if self._vocab and not other_same_base._vocab:
+      other_same_base._vocab = self._vocab
+    elif other_same_base._vocab and not self._vocab:
+      self._vocab = other_same_base._vocab
+    if self.derived_from_op and not other_same_base.derived_from_op:
+      other_same_base.derived_from_op = self.derived_from_op
 
   def _merge_same_for_batch_ctx_dict(self, other):
     """
