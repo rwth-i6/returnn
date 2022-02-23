@@ -7259,10 +7259,11 @@ class ResizeLayer(_ConcatInputLayer):
     out_dim  # noqa  # via get_out_data_from_opts
     super(ResizeLayer, self).__init__(**kwargs)
     # self.output.shape and self.output.batch_dim_axis are already set here via self.get_out_data_from_opts().
-    axis = self.output.get_axis_from_description(axis)
-    assert axis > 0, "batch-dim resize not supported"
-    assert self.input_data.batch_ndim == 3, "not implemented otherwise"
-    input_data = self.input_data.copy_as_batch_major()
+    axis_ = self.input_data.get_axis_from_description(axis)
+    assert axis_ > 0, "batch-dim resize not supported"
+    input_data = self.input_data.copy_as_batch_major().copy_move_axis(old_axis=axis_, new_axis=1)
+    axis = input_data.get_axis_from_description(axis)
+    assert axis == 1
     self.output.placeholder = input_data.placeholder
     out_dyn_size = input_data.dim_tags[axis].dyn_size
     if out_dyn_size is not None:
@@ -7319,10 +7320,6 @@ class ResizeLayer(_ConcatInputLayer):
         orig_mask = tf.sequence_mask(
           out_dyn_size, maxlen=new_size, dtype=tf.bool)  # (batch,new_size)
         out_dyn_size = tf.reduce_sum(tf.cast(tf.logical_and(mask, orig_mask), tf.int32), axis=1)
-    if axis != 1:
-      perm = [0] + remaining_axes
-      perm.insert(1, axis)
-      x = tf.transpose(x, perm)
     if out_dyn_size is not None:
       self.output.dim_tags[axis].dyn_size = out_dyn_size
     self.output.placeholder = x
@@ -7338,8 +7335,11 @@ class ResizeLayer(_ConcatInputLayer):
     :rtype: Data
     """
     out = get_concat_sources_data_template(sources).copy_as_batch_major()
+    axis_ = out.get_axis_from_description(axis)
+    out = out.copy_move_axis(old_axis=axis_, new_axis=1)
     out = out.copy_template(name="%s_output" % name)
     axis = out.get_axis_from_description(axis)
+    assert axis == 1
     assert axis != out.batch_dim_axis, "batch-dim resize not supported"
     tag = out.dim_tags[axis]
     dim = None if tag.dimension is None else (tag.dimension * factor)
