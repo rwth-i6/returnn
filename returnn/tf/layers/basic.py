@@ -7261,6 +7261,7 @@ class ResizeLayer(_ConcatInputLayer):
     # self.output.shape and self.output.batch_dim_axis are already set here via self.get_out_data_from_opts().
     axis = self.output.get_axis_from_description(axis)
     assert axis > 0, "batch-dim resize not supported"
+    assert self.input_data.batch_ndim == 3, "not implemented otherwise"
     input_data = self.input_data.copy_as_batch_major()
     self.output.placeholder = input_data.placeholder
     out_dyn_size = input_data.dim_tags[axis].dyn_size
@@ -7320,7 +7321,7 @@ class ResizeLayer(_ConcatInputLayer):
         out_dyn_size = tf.reduce_sum(tf.cast(tf.logical_and(mask, orig_mask), tf.int32), axis=1)
     if axis != 1:
       perm = [0] + remaining_axes
-      perm.insert(axis, 1)
+      perm.insert(1, axis)
       x = tf.transpose(x, perm)
     if out_dyn_size is not None:
       self.output.dim_tags[axis].dyn_size = out_dyn_size
