@@ -7764,12 +7764,15 @@ class CompareLayer(LayerBase):
   """
   layer_class = "compare"
 
-  def __init__(self, kind="equal", value=None, **kwargs):
+  def __init__(self, kind="equal", value=None, allow_broadcast_all_sources=NotSpecified, **kwargs):
     """
     :param str kind: which comparison operation to use, e.g. "equal", "greater", "less"
       or other supported TF comparison ops
     :param float|int|None value: if specified, will also compare to this
+    :param bool|NotSpecified allow_broadcast_all_sources: allow broadcasting for all sources.
+      e.g. shape [A] + [B] -> shape [A,B]. by default disabled, and there must be some source with all dims.
     """
+    allow_broadcast_all_sources  # noqa  # via get_out_data_from_opts
     super(CompareLayer, self).__init__(**kwargs)
     assert len(self.sources) >= 1
     if value is None:
@@ -7788,21 +7791,23 @@ class CompareLayer(LayerBase):
     self.output.placeholder = r_last
 
   @classmethod
-  def get_out_data_from_opts(cls, n_out=NotSpecified, out_type=None, out_shape=None, sources=(), **kwargs):
+  def get_out_data_from_opts(cls, sources, allow_broadcast_all_sources=NotSpecified,
+                             n_out=NotSpecified, out_type=None, out_shape=None, **kwargs):
     """
+    :param list[LayerBase] sources:
+    :param bool|NotSpecified allow_broadcast_all_sources:
     :param int|None|NotSpecified n_out:
     :param dict[str]|None out_type:
     :param dict[str]|None out_shape:
-    :param list[LayerBase] sources:
     :rtype: Data
     """
     out_type_ = {}
     if sources:
-      allow_broadcast_all_sources = NotSpecified
-      if out_shape is not None:
-        allow_broadcast_all_sources = True
-      elif out_type and isinstance(out_type, dict) and ("shape" in out_type or "dim_tags" in out_type):
-        allow_broadcast_all_sources = True
+      if allow_broadcast_all_sources is NotSpecified:
+        if out_shape is not None:
+          allow_broadcast_all_sources = True
+        elif out_type and isinstance(out_type, dict) and ("shape" in out_type or "dim_tags" in out_type):
+          allow_broadcast_all_sources = True
       out_type_.update(
         Data.get_common_data(
           [s.output for s in sources], allow_broadcast_all_sources=allow_broadcast_all_sources,
