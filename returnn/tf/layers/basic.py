@@ -7259,11 +7259,11 @@ class ResizeLayer(_ConcatInputLayer):
     out_dim  # noqa  # via get_out_data_from_opts
     super(ResizeLayer, self).__init__(**kwargs)
     # self.output.shape and self.output.batch_dim_axis are already set here via self.get_out_data_from_opts().
-    axis_ = self.input_data.get_axis_from_description(axis)
-    assert axis_ > 0, "batch-dim resize not supported"
-    input_data = self.input_data.copy_as_batch_major().copy_move_axis(old_axis=axis_, new_axis=1)
-    axis = input_data.get_axis_from_description(axis)
-    assert axis == 1
+    input_data = self.input_data.copy_as_batch_major()
+    axis = self.input_data.get_axis_from_description(axis)
+    assert axis > 0, "batch-dim resize not supported"
+    input_data = input_data.copy_move_axis(old_axis=axis, new_axis=1)
+    axis = 1
     self.output.placeholder = input_data.placeholder
     out_dyn_size = input_data.dim_tags[axis].dyn_size
     if out_dyn_size is not None:
@@ -7335,11 +7335,10 @@ class ResizeLayer(_ConcatInputLayer):
     :rtype: Data
     """
     out = get_concat_sources_data_template(sources).copy_as_batch_major()
-    axis_ = out.get_axis_from_description(axis)
-    out = out.copy_move_axis(old_axis=axis_, new_axis=1)
-    out = out.copy_template(name="%s_output" % name)
     axis = out.get_axis_from_description(axis)
-    assert axis == 1
+    out = out.copy_move_axis(old_axis=axis, new_axis=1)
+    out = out.copy_template(name="%s_output" % name)
+    axis = 1
     assert axis != out.batch_dim_axis, "batch-dim resize not supported"
     tag = out.dim_tags[axis]
     dim = None if tag.dimension is None else (tag.dimension * factor)
