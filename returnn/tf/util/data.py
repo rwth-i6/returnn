@@ -1229,6 +1229,7 @@ class Dim(object):
       :param Dim dim:
       :rtype: Dim._OpMultTerm
       """
+      dim = dim.get_same_base()
       if dim.dimension == 1 and dim._is_constant_static_dim():
         return cls.one()
       if dim.derived_from_op and dim.derived_from_op.kind == "mul":
@@ -1680,7 +1681,7 @@ class Dim(object):
         base_tag = self.representative_tag()
         return Dim._make_constant_static_dim(other, kind=base_tag.kind if base_tag else None)
       elif isinstance(other, Dim):
-        return other
+        return other.get_same_base()
       else:
         raise TypeError("%s %s %s invalid for type %s" % (self, kind, other, type(other)))
 
