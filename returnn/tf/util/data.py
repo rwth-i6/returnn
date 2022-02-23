@@ -851,12 +851,17 @@ class Dim(object):
     other_same_base = other.get_same_base()
     if self is other_same_base or self.same_as is other_same_base:
       return
-    if self.same_as:
-      self_same_as = self.get_same_base()
+    self_same_as = self.get_same_base()
+    if self_same_as is other_same_base:
+      return
+    if other_same_base.get_same_derived_base() is self_same_as:
+      # We actually want it to be the other way around.
+      other_same_base.declare_same_as(self_same_as)
+      return
+    if self_same_as is not self:
       assert not self_same_as.same_as
       if self_same_as is other_same_base:
         return
-      assert self_same_as is not self
       self_same_as.declare_same_as(other_same_base)
       if (self.dyn_size_ext is None or not self._validate_in_current_graph()) and self_same_as.dyn_size_ext:
         self.dyn_size_ext = self_same_as.get_dyn_size_ext_for_batch_ctx(self.batch, self.control_flow_ctx)
