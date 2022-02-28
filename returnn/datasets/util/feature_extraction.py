@@ -283,7 +283,12 @@ def _get_audio_linear_spectrogram(audio, sample_rate, window_len=0.025, step_len
   assert num_feature_filters*2 >= min_n_fft
   assert num_feature_filters % 2 == 0
 
-  spectrogram = numpy.abs(librosa.core.stft(
+  librosa_version = librosa.__version__.split(".")
+  if int(librosa_version[0]) >= 1 or (int(librosa_version[0]) == 0 and int(librosa_version[1]) >= 9):
+    stft_func = librosa.stft
+  else:
+    stft_func = librosa.core.stft
+  spectrogram = numpy.abs(stft_func(
     audio, hop_length=int(step_len * sample_rate),
     win_length=int(window_len * sample_rate), n_fft=num_feature_filters*2))
 
@@ -307,7 +312,7 @@ def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.01
   """
   import librosa  # noqa
   features = librosa.feature.mfcc(
-    audio, sr=sample_rate,
+    y=audio, sr=sample_rate,
     n_mfcc=num_feature_filters,
     hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
   librosa_version = librosa.__version__.split(".")
@@ -316,7 +321,7 @@ def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.01
   else:
     rms_func = librosa.feature.rmse  # noqa
   energy = rms_func(
-    audio,
+    y=audio,
     hop_length=int(step_len * sample_rate), frame_length=int(window_len * sample_rate))
   features[0] = energy  # replace first MFCC with energy, per convention
   assert features.shape[0] == num_feature_filters  # (dim, time)
@@ -342,7 +347,7 @@ def _get_audio_log_mel_filterbank(audio, sample_rate, window_len=0.025, step_len
   """
   import librosa  # noqa
   mel_filterbank = librosa.feature.melspectrogram(
-    audio, sr=sample_rate,
+    y=audio, sr=sample_rate,
     n_mels=num_feature_filters,
     hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
   log_noise_floor = 1e-3  # prevent numeric overflow in log
@@ -377,7 +382,7 @@ def _get_audio_db_mel_filterbank(audio, sample_rate,
 
   import librosa  # noqa
   mel_filterbank = librosa.feature.melspectrogram(
-    audio, sr=sample_rate,
+    y=audio, sr=sample_rate,
     n_mels=num_feature_filters,
     hop_length=int(step_len * sample_rate),
     n_fft=int(window_len * sample_rate),
@@ -407,13 +412,18 @@ def _get_audio_log_log_mel_filterbank(audio, sample_rate, window_len=0.025, step
   :rtype: numpy.ndarray
   """
   import librosa  # noqa
+  librosa_version = librosa.__version__.split(".")
+  if int(librosa_version[0]) >= 1 or (int(librosa_version[0]) == 0 and int(librosa_version[1]) >= 9):
+    db_func = librosa.amplitude_to_db
+  else:
+    db_func = librosa.core.amplitude_to_db
   mel_filterbank = librosa.feature.melspectrogram(
-    audio, sr=sample_rate,
+    y=audio, sr=sample_rate,
     n_mels=num_feature_filters,
     hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
   log_noise_floor = 1e-3  # prevent numeric overflow in log
   log_mel_filterbank = numpy.log(numpy.maximum(log_noise_floor, mel_filterbank))
-  log_log_mel_filterbank = librosa.core.amplitude_to_db(log_mel_filterbank)
+  log_log_mel_filterbank = db_func(log_mel_filterbank)
   assert log_log_mel_filterbank.shape[0] == num_feature_filters
   log_log_mel_filterbank = log_log_mel_filterbank.transpose().astype("float32")  # (time, dim)
   return log_log_mel_filterbank
