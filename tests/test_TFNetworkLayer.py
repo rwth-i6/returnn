@@ -2564,6 +2564,22 @@ def test_MergeDimsLayer_modified_time_dim():
     session.run(out.placeholder, feed_dict=make_feed_dict(net.extern_data))
 
 
+def test_MergeDimsLayer_unspecified_out_dim():
+  # https://github.com/rwth-i6/returnn/issues/955
+  # https://github.com/rwth-i6/returnn_common/issues/117
+  config = Config({
+    "extern_data": {"data": {"shape": (None, 3, 5)}},
+  })
+  out_dim = SpatialDim("out")
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {
+        "class": "merge_dims", "from": "data", "axes": ["dim:3", "dim:5"], "keep_order": True,
+        "out_dim": out_dim},
+    })
+
+
 def test_FlattenBatchLayer():
   from returnn.tf.util.data import BatchInfo
   n_batch, n_time, n_in = 3, 4, 2
