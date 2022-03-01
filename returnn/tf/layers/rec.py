@@ -2847,12 +2847,13 @@ class _SubnetworkRecCell(object):
         return res
 
     # noinspection PyUnusedLocal
-    def cond(i, net_vars, acc_tas, seq_len_info=None):
+    def cond(i, net_vars, acc_tas, seq_len_info=None, allow_inf_max_len=False):
       """
       :param tf.Tensor i: loop counter, scalar
       :param net_vars: the accumulator values. see also self.get_init_loop_vars()
       :param list[tf.TensorArray] acc_tas: the output accumulator TensorArray
       :param (tf.Tensor,tf.Tensor)|None seq_len_info: tuple (end_flag, seq_len)
+      :param bool allow_inf_max_len:
       :return: True -> we should run the current loop-iteration, False -> stop loop
       :rtype: tf.Tensor
       """
@@ -2872,7 +2873,8 @@ class _SubnetworkRecCell(object):
           assert rec_layer._max_seq_len is None, "%r: unsupported max_seq_len %r" % (rec_layer, rec_layer._max_seq_len)
         # Check not considering seq_len_info because the dynamics of the network can also lead
         # to an infinite loop, so enforce that some maximum is specified.
-        assert res is not True, "%r: specify max_seq_len" % rec_layer
+        if not allow_inf_max_len:
+          assert res is not True, "%r: specify max_seq_len" % rec_layer
         if seq_len_info is not None:
           end_flag, _ = seq_len_info
           any_not_ended = tf.reduce_any(tf.logical_not(end_flag), name="any_not_ended")

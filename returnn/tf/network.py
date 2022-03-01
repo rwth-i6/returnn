@@ -504,6 +504,20 @@ class TFNetwork(object):
       s += " search"
     return "<%s>" % s
 
+  def get_network_hierarchy(self):
+    """
+    :return: list of all networks in the hierarchy, including self.
+    """
+    net = self
+    ret = []
+    while net:
+      ret.append(net)
+      while net.extra_parent_net:
+        net = net.extra_parent_net
+      net = net.parent_net
+    ret.reverse()
+    return ret
+
   def get_root_network(self):
     """
     :rtype: TFNetwork
