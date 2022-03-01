@@ -899,6 +899,12 @@ class Dim(object):
     elif other_same_base.dyn_size_ext is None or not other_same_base._validate_in_current_graph():
       other_same_base.dyn_size_ext = self.get_dyn_size_ext_for_batch_ctx(
         other_same_base.batch, other_same_base.control_flow_ctx)
+    if self.is_dim_known() and other.is_dim_known():
+      assert self.dimension == other.dimension
+    elif self.is_dim_known() and not other.is_dim_known():
+      other.dimension = self.dimension
+    elif not self.is_dim_known() and other.is_dim_known():
+      self.dimension = other.dimension
     if self._vocab and not other_same_base._vocab:
       other_same_base._vocab = self._vocab
     elif other_same_base._vocab and not self._vocab:
