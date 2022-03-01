@@ -5043,7 +5043,9 @@ class ConvLayer(_ConcatInputLayer):
       assert output.feature_dim_axis == output.batch_ndim - 1
       out_spatial_dims_ = output.dim_tags[num_batch_dims:-1]
     if out_spatial_dims:
-      assert list(out_spatial_dims_) == list(out_spatial_dims)
+      assert len(out_spatial_dims_) == len(out_spatial_dims)
+      for i, (out_spatial_dim_, out_spatial_dim) in enumerate(zip(out_spatial_dims_, out_spatial_dims)):
+        out_spatial_dim_.declare_same_as(out_spatial_dim)
     assert len(out_spatial_dims_) == len(in_spatial_dims) == len(filter_size) == len(strides) == len(dilation_rate)
     for i, in_tag in enumerate(in_spatial_dims):
       out_tag = out_spatial_dims_[i]
