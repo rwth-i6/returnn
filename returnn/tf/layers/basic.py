@@ -3488,6 +3488,7 @@ class MergeDimsLayer(_ConcatInputLayer):
     :rtype: Data
     """
     from returnn.util import BehaviorVersion
+    from returnn.util.basic import prod
     if keep_order is NotSpecified:
       keep_order = True if BehaviorVersion.get() >= 6 else False
     assert not out_type, "currently ignored"
@@ -3497,21 +3498,18 @@ class MergeDimsLayer(_ConcatInputLayer):
     data = input_data.copy(name="%s_output" % name)
     if len(axes) <= 1:
       return data
-    import numpy
     res_dim = None
     if all([data.batch_shape[i] is not None for i in axes]):
-      res_dim = int(numpy.prod([data.batch_shape[i] for i in axes]))
+      res_dim = int(prod([data.batch_shape[i] for i in axes]))
     merge_dim_tags = [data.dim_tags[axis] for axis in axes]
     merge_target_axis = cls._get_target_axis(input_data=data, merge_axes=axes)
+    out_dim_ = prod(merge_dim_tags)
+    assert isinstance(out_dim_, Dim)
+    assert out_dim_.dimension == res_dim
     if out_dim:
-      assert out_dim.dimension == res_dim
-    else:
-      from numpy import prod
-      out_dim = prod(merge_dim_tags)
-      assert isinstance(out_dim, Dim)
-      assert out_dim.dimension == res_dim
+      out_dim_.declare_same_as(out_dim)
     new_dim_tags = [d for (i, d) in enumerate(data.dim_tags) if i not in axes]
-    new_dim_tags.insert(merge_target_axis, out_dim)
+    new_dim_tags.insert(merge_target_axis, out_dim_)
 
     data_opts = data.get_kwargs(include_special_axes=False)
     data_opts["dim_tags"] = new_dim_tags
