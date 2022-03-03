@@ -1007,29 +1007,6 @@ class SliceLayer(_ConcatInputLayer):
     axis = self.input_data.get_axis_from_description(axis)
     dim_slice = slice(slice_start, slice_end, slice_step)
     slices = [slice(None, None)] * axis + [dim_slice]
-    input_dim_tag = self.input_data.dim_tags[axis]
-    output_dim_tag = self.output.dim_tags[axis]
-    if input_dim_tag.dyn_size_ext and output_dim_tag.dyn_size is None:
-      assert input_dim_tag.dyn_size_ext.placeholder is not None
-      if not output_dim_tag.dyn_size_ext:
-        output_dim_tag.dyn_size_ext = input_dim_tag.dyn_size_ext.copy_template(name="%s:slice-size" % self.name)
-      dyn_size = input_dim_tag.dyn_size_ext.placeholder
-      if slice_start:
-        assert slice_start > 0
-        dyn_size = tf.maximum(0, dyn_size - slice_start)
-      if slice_end is not None:
-        if slice_end >= 0:
-          dyn_size = tf.minimum(slice_end, dyn_size)
-        else:  # slice_end < 0
-          dyn_size = tf.maximum(0, dyn_size + slice_end)
-      if slice_step:
-        dyn_size = tf.cast(tf_compat.v1.ceil(tf.divide(dyn_size, slice_step)), tf.int32)
-      output_dim_tag.dyn_size_ext.placeholder = dyn_size
-      existing_tag = Dim.get_tag_from_size_tensor(dyn_size)
-      if existing_tag:
-        output_dim_tag.declare_same_as(existing_tag)
-      else:
-        output_dim_tag.set_tag_on_size_tensor(dyn_size)
     self.output.placeholder = self.input_data.placeholder[slices]
 
   @classmethod
@@ -1051,13 +1028,22 @@ class SliceLayer(_ConcatInputLayer):
     input_data = get_concat_sources_data_template(sources)
     axis = input_data.get_axis_from_description(axis)
     dim_tag = input_data.dim_tags[axis]
-    dim_slice = slice(slice_start, slice_end, slice_step)
-    new_dim = len(range(dim_tag.dimension)[dim_slice]) if dim_tag.dimension is not None else None
+    out_dim_ = dim_tag
+    if slice_start:
+      assert slice_start >= 0
+      out_dim_ = out_dim_.sub_left(slice_start)
+    if slice_end is not None:
+      if slice_end >= 0:
+        out_dim_ = Dim(
+          kind=dim_tag.kind, description="%s:slice-end" % name,
+          dimension=slice_end - (slice_start or 0), auto_generated=True)
+      else:  # slice_end < 0
+        out_dim_ = out_dim_ + slice_end
+    if slice_step and slice_step != 1:
+      out_dim_ = out_dim_.ceildiv_right(abs(slice_step))
     if out_dim:
-      assert out_dim.dimension == new_dim
-    else:
-      out_dim = Dim(kind=dim_tag.kind, description="%s:slice" % name, dimension=new_dim, auto_generated=True)
-    return input_data.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_dim, name="%s_output" % name)
+      out_dim_.declare_same_as(out_dim)
+    return input_data.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_dim_, name="%s_output" % name)
 
 
 class SliceNdLayer(_ConcatInputLayer):
