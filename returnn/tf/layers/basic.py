@@ -7192,16 +7192,16 @@ class ResizeLayer(_ConcatInputLayer):
     super(ResizeLayer, self).__init__(**kwargs)
     # self.output.shape and self.output.batch_dim_axis are already set here via self.get_out_data_from_opts().
     input_data = self.input_data.copy_as_batch_major()
-    axis = self.input_data.get_axis_from_description(axis)
+    axis = input_data.get_axis_from_description(axis)
     assert axis > 0, "batch-dim resize not supported"
     input_data = input_data.copy_move_axis(old_axis=axis, new_axis=1)
     axis = 1
 
     # images expected shape: [batch, height, width, channels]
     remaining_axes = [i for i in range(self.output.batch_ndim) if i not in (0, axis)]
-    x = dimshuffle(self.output.placeholder, [0, axis, 'x'] + remaining_axes)  # [batch,height,width] + remaining_axes
+    x = dimshuffle(input_data.placeholder, [0, axis, 'x'] + remaining_axes)  # [batch,height,width] + remaining_axes
     from returnn.tf.util.basic import get_shape, optional_mul
-    shape = get_shape(self.output.placeholder)
+    shape = get_shape(input_data.placeholder)
     remaining_shape = [shape[i] for i in remaining_axes]
     remaining_dim = optional_mul(*remaining_shape) if remaining_axes else 1
     x = tf.reshape(x, [shape[0], shape[axis], 1, remaining_dim])  # [batch,height,width,channels]
