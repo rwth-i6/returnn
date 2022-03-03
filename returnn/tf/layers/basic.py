@@ -5157,7 +5157,7 @@ class ConvLayer(_ConcatInputLayer):
   @classmethod
   def calc_out_dim(cls, in_dim, filter_size, stride, padding, dilation_rate=1):
     """
-    :param int|tf.Tensor|Dim|T in_dim: dimension in some axis
+    :param T|int|tf.Tensor|Dim in_dim: dimension in some axis
     :param int filter_size: e.g. 2, for the corresponding axis
     :param int stride: e.g. 1, for the corresponding axis
     :param int dilation_rate: e.g. 1
@@ -5656,26 +5656,6 @@ class TransposedConvLayer(_ConcatInputLayer):
       self.output_before_activation = OutputWithActivation(y)
     y = self.output_before_activation.y
     self.output.placeholder = y
-    for idx, axis in enumerate(spatial_axes):
-      input_tag = input_data.dim_tags[axis]
-      output_tag = self.output.dim_tags[axis]
-      if input_tag == output_tag:
-        continue
-      assert not input_tag.is_batch_dim() and not output_tag.is_batch_dim()
-      if input_tag.dimension is None:
-        assert output_tag.dimension is None
-        assert input_tag.dyn_size is not None
-        size = input_tag.dyn_size
-        with tf_util.same_control_flow_ctx(size):
-          size = self.deconv_output_length(
-            size,
-            filter_size=filter_size[idx], stride=strides[idx],
-            padding=padding, output_padding=output_padding[idx])
-          r = remove_padding[idx]
-          if r:
-            assert isinstance(r, int)
-            size = tf_util.simplify_add(size, -r * 2)
-        output_tag.set_tag_on_size_tensor(size, batch=self.output.batch)
 
   @staticmethod
   def deconv_output_length(input_length,
@@ -5688,7 +5668,9 @@ class TransposedConvLayer(_ConcatInputLayer):
     Determines output length of a transposed convolution given input length.
     Copied from conv_utils.deconv_output_length, adapted with simplification.
 
-    :param T|int|tf.Tensor input_length:
+    Also see :func:`ConvLayer.calc_out_dim`.
+
+    :param T|int|tf.Tensor|Dim input_length:
     :param int filter_size:
     :param str padding: one of `"same"`, `"valid"`, `"full"`.
     :param int|None output_padding: amount of padding along the output dimension.
@@ -5709,13 +5691,19 @@ class TransposedConvLayer(_ConcatInputLayer):
     # Infer length if output padding is None, else compute the exact length
     if output_padding is None:
       if padding == 'valid':
-        length = tf_util.simplify_add(input_length, max(filter_size - stride, 0))
+        if isinstance(input_length, Dim):
+          length = input_length + max(filter_size - stride, 0)
+        else:
+          length = tf_util.simplify_add(input_length, max(filter_size - stride, 0))
       elif padding == 'full':
-        length = tf_util.simplify_add(input_length, -(stride + filter_size - 2))
+        if isinstance(input_length, Dim):
+          length = input_length - (stride + filter_size - 2)
+        else:
+          length = tf_util.simplify_add(input_length, -(stride + filter_size - 2))
       elif padding == 'same':
         length = input_length
       else:
-        length = None
+        raise Exception("invalid padding %r" % (padding,))
     else:  # output_padding
       if padding == 'same':
         pad = filter_size // 2
@@ -5724,8 +5712,11 @@ class TransposedConvLayer(_ConcatInputLayer):
       elif padding == 'full':
         pad = filter_size - 1
       else:
-        pad = None
-      length = tf_util.simplify_add(input_length, -stride + filter_size - 2 * pad + output_padding)
+        raise Exception("invalid padding %r" % (padding,))
+      if isinstance(input_length, Dim):
+        length = input_length + (-stride + filter_size - 2 * pad + output_padding)
+      else:
+        length = tf_util.simplify_add(input_length, -stride + filter_size - 2 * pad + output_padding)
     return length
 
   @classmethod
@@ -5769,22 +5760,16 @@ class TransposedConvLayer(_ConcatInputLayer):
     dim_tags = list(data.dim_tags[:num_batch_dims])  # [B]
     if out_spatial_dims:
       assert len(out_spatial_dims) == len(filter_size)
-      # Be relaxed about incorrect input data. Throw errors later. This can also work during template construction.
-      dim_tags += out_spatial_dims
-    else:
-      for i in range(len(filter_size)):
-        old_tag = old_spatial_dim_tags[i] if i < len(old_spatial_dim_tags) else None
-        if old_tag and (filter_size[i] == strides[i] == 1 or (strides[i] == 1 and padding == "SAME")):
-          dim_tags.append(old_tag)  # identity in this axis
-          continue
-        new_dim = None
-        if old_tag and old_tag.dimension is not None:
-          new_dim = cls.deconv_output_length(
-            old_tag.dimension, filter_size=filter_size[i], stride=strides[i],
-            padding=padding, output_padding=output_padding[i]) - remove_padding[i] * 2
-        dim_tags.append(Dim(
-          kind=Dim.Types.Spatial, description="%s:conv:s%i" % (name, i), dimension=new_dim,
-          derived_from_tag=old_tag, undefined=not old_tag, auto_generated=True))
+    # Be relaxed about incorrect input data. Throw errors later. This can also work during template construction.
+    for i in range(len(filter_size)):
+      old_tag = old_spatial_dim_tags[i] if i < len(old_spatial_dim_tags) else None
+      new_tag = cls.deconv_output_length(
+        old_tag, filter_size=filter_size[i], stride=strides[i],
+        padding=padding, output_padding=output_padding[i])
+      new_tag = new_tag.sub_left(remove_padding[i]).sub_right(remove_padding[i])
+      if out_spatial_dims:
+        new_tag.declare_same_as(out_spatial_dims[i])
+      dim_tags.append(new_tag)
     if not out_dim:
       assert n_out
       out_dim = FeatureDim("%s:channel" % name, dimension=n_out, auto_generated=True)
