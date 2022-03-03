@@ -6008,10 +6008,10 @@ class ReduceOutLayer(_ConcatInputLayer):
     assert not out.sparse
     assert out.dim % num_pieces == 0
     dim = out.dim // num_pieces
-    if not out_dim:
-      out_dim = out.feature_dim_or_sparse_dim // num_pieces
-    assert out_dim.dimension == dim
-    return out.copy_template_replace_dim_tag(axis=out.feature_dim_axis, new_dim_tag=out_dim)
+    out_dim_ = out.feature_dim_or_sparse_dim // num_pieces
+    if out_dim:
+      out_dim_.declare_same_as(out_dim)
+    return out.copy_template_replace_dim_tag(axis=out.feature_dim_axis, new_dim_tag=out_dim_)
 
 
 class SqueezeLayer(_ConcatInputLayer):
