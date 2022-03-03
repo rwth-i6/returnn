@@ -1007,7 +1007,9 @@ class SliceLayer(_ConcatInputLayer):
     axis = self.input_data.get_axis_from_description(axis)
     dim_slice = slice(slice_start, slice_end, slice_step)
     slices = [slice(None, None)] * axis + [dim_slice]
-    self.output.placeholder = self.input_data.placeholder[slices]
+    y = self.input_data.placeholder[slices]
+    y.set_shape(self.output.batch_shape)  # can be necessary for slice_end>0
+    self.output.placeholder = y
 
   @classmethod
   def get_out_data_from_opts(
