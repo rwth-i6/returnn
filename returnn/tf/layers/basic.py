@@ -4400,13 +4400,9 @@ class TileLayer(_ConcatInputLayer):
     dim_tags = list(data.dim_tags)
     for axis, multiple in multiples.items():
       axis_int = data.get_axis_from_description(axis, allow_int=False)
-      tag = dim_tags[axis_int]
-      dim = None if tag.dimension is None else (tag.dimension * multiple)
+      tag = multiple * dim_tags[axis_int]
       if out_dims and axis in out_dims:
-        tag = out_dims[axis]
-        assert tag.dimension == dim
-      else:
-        tag = multiple * tag
+        tag.declare_same_as(out_dims[axis])
       dim_tags[axis_int] = tag
     return data.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
 
