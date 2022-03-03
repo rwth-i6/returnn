@@ -6363,10 +6363,6 @@ class PrefixInTimeLayer(_ConcatInputLayer):
       assert repeat >= 0
     self.repeat = repeat
     out_dim = self.output.dim_tags[axis_int]
-    if in_dim.dyn_size is not None and out_dim.dyn_size is None:
-      if not out_dim.dyn_size_ext:
-        out_dim.dyn_size_ext = in_dim.dyn_size_ext.copy()
-      out_dim.dyn_size_ext.placeholder = in_dim.dyn_size_ext.placeholder + repeat
     max_repeat = repeat if isinstance(repeat, int) else tf.maximum(tf.reduce_max(repeat), 0)
     shape = [((self.output.batch_shape[i] or tf.shape(input_data.placeholder)[i])
               if (i != axis_int)
@@ -6417,17 +6413,15 @@ class PrefixInTimeLayer(_ConcatInputLayer):
     x = get_concat_sources_data_template(sources, name="%s_output" % name)
     axis_int = x.get_axis_from_description(axis, allow_int=False)
     in_dim = x.dim_tags[axis_int]
-    out_dim_int = None
-    if in_dim.dimension and isinstance(repeat, int):
-      out_dim_int = in_dim.dimension + repeat
     if size_base:
       assert not out_dim
-      out_dim = size_base.output.get_time_dim_tag()
-    if not out_dim:
-      out_dim = (
+      out_dim_ = size_base.output.get_time_dim_tag()
+    else:
+      out_dim_ = (
         repeat if isinstance(repeat, int) else SpatialDim("%s:repeat" % repeat.name, auto_generated=True)) + in_dim
-    assert out_dim.dimension == out_dim_int
-    x = x.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=out_dim)
+    if out_dim:
+      out_dim_.declare_same_as(out_dim)
+    x = x.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=out_dim_)
     if isinstance(repeat, LayerBase):
       x = x.copy_as_batch_spatial_major()
     return x
