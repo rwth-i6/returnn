@@ -6476,8 +6476,6 @@ class PostfixInTimeLayer(_ConcatInputLayer):
       seq_mask = tf.less(idx_range, size_ext.placeholder)
       assert seq_mask.get_shape().ndims == self.output.batch_ndim
       self.output.placeholder = tf_util.where_bc(seq_mask, x, c)
-      out_dim = self.output.dim_tags[axis_int]
-      out_dim.dyn_size = in_dim.dyn_size + repeat
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, axis="T", out_dim=None, postfix=0.0, repeat=1, **kwargs):
@@ -6493,13 +6491,10 @@ class PostfixInTimeLayer(_ConcatInputLayer):
     x = get_concat_sources_data_template(sources, name="%s_output" % name)
     axis_int = x.get_axis_from_description(axis, allow_int=False)
     in_dim = x.dim_tags[axis_int]
-    out_dim_int = None
-    if in_dim.dimension:
-      out_dim_int = in_dim.dimension + repeat
-    if not out_dim:
-      out_dim = in_dim + repeat
-    assert out_dim.dimension == out_dim_int
-    x = x.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=out_dim)
+    out_dim_ = in_dim + repeat
+    if out_dim:
+      out_dim_.declare_same_as(out_dim)
+    x = x.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=out_dim_)
     return x
 
   @classmethod
