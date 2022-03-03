@@ -614,12 +614,25 @@ class Dim(object):
       if kind.endswith("_left"):
         kind = kind[:-len("_left")]
 
+      def _is_negative(x__):
+        if isinstance(x__, (int, float)):
+          return x__ < 0
+        assert isinstance(x__, tf.Tensor)
+        from tensorflow.python.framework import tensor_util
+        x__ = tensor_util.constant_value(x__)
+        if x__ is not None:
+          return x__ < 0
+        return False
+
       def _bin_op(a, b):
         with tf_util.same_control_flow_ctx([a, b]):
           if kind == "add":
+            use_relu = _is_negative(a) or _is_negative(b)  # for dynamic tensors, assume all positive
+            if use_relu:
+              return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(tf_util.simplify_add(a, b)))
             return tf.convert_to_tensor(tf_util.simplify_add(a, b))
           elif kind == "sub":
-            return tf.convert_to_tensor(tf_util.simplify_sub(a, b))
+            return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(tf_util.simplify_sub(a, b)))
           elif kind == "mul":
             return tf.convert_to_tensor(tf_util.optional_mul(a, b))
           elif kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
