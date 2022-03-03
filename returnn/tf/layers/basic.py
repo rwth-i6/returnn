@@ -3204,25 +3204,6 @@ class PadLayer(_ConcatInputLayer):
       self.output.placeholder = tf_util.pad_replicate(self.input_data.placeholder, axes, padding)
     else:
       self.output.placeholder = tf.pad(self.input_data.placeholder, paddings=paddings, mode=mode, constant_values=value)
-    for a in axes:
-      p = sum(paddings[a])
-      in_tag = self.input_data.dim_tags[a]
-      out_tag = self.output.dim_tags[a]
-      a = self.input_data.get_batch_axis_excluding_batch(a)
-      if a is None:
-        continue
-      if in_tag.dyn_size is None:
-        continue
-      if p == 0:
-        continue
-      size = in_tag.dyn_size
-      with tf_util.same_control_flow_ctx(size):
-        size = tf_util.simplify_add(size, p)
-      size_tag = Dim.get_tag_from_size_tensor(size)
-      if not size_tag:
-        out_tag.set_tag_on_size_tensor(size, batch=in_tag.batch)
-      else:
-        out_tag.declare_same_as(size_tag)
 
   @classmethod
   def _transform_padding(cls, padding, axes):
@@ -3275,10 +3256,8 @@ class PadLayer(_ConcatInputLayer):
       pad_left, pad_right = padding[i]
       out_dim = pad_left + dim_tags[a] + pad_right
       if out_dims:
-        assert out_dims[i].dimension == out_dim.dimension
-        dim_tags[a] = out_dims[i]
-      else:
-        dim_tags[a] = out_dim
+        out_dim.declare_same_as(out_dims[i])
+      dim_tags[a] = out_dim
     return data.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
 
 
