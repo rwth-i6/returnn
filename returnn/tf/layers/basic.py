@@ -6128,11 +6128,11 @@ class StackLayer(LayerBase):
     if axis is None:
       axis = axis_
     out = common_source.copy_template(name="%s_output" % name)
-    if not out_spatial_dim:
-      out_spatial_dim = Dim(
-        kind=Dim.Types.Spatial, description="%s:stack" % name, dimension=len(sources), auto_generated=True)
-    assert out_spatial_dim.dimension == len(sources)
-    out = out.copy_add_dim_by_tag(axis=axis, dim_tag=out_spatial_dim, unbroadcast=True)
+    out_spatial_dim_ = Dim(
+      kind=Dim.Types.Spatial, description="%s:stack" % name, dimension=len(sources), auto_generated=True)
+    if out_spatial_dim:
+      out_spatial_dim_.declare_same_as(out_spatial_dim)
+    out = out.copy_add_dim_by_tag(axis=axis, dim_tag=out_spatial_dim_, unbroadcast=True)
     return out
 
 
