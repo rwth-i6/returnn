@@ -6001,7 +6001,6 @@ class ReduceOutLayer(_ConcatInputLayer):
     assert out.have_feature_axis()
     assert not out.sparse
     assert out.dim % num_pieces == 0
-    dim = out.dim // num_pieces
     out_dim_ = out.feature_dim_or_sparse_dim // num_pieces
     if out_dim:
       out_dim_.declare_same_as(out_dim)
