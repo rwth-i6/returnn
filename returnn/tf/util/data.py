@@ -617,11 +617,11 @@ class Dim(object):
       def _bin_op(a, b):
         with tf_util.same_control_flow_ctx([a, b]):
           if kind == "add":
-            return tf_util.simplify_add(a, b)
+            return tf.convert_to_tensor(tf_util.simplify_add(a, b))
           elif kind == "sub":
-            return tf_util.simplify_sub(a, b)
+            return tf.convert_to_tensor(tf_util.simplify_sub(a, b))
           elif kind == "mul":
-            return a * b
+            return tf.convert_to_tensor(tf_util.optional_mul(a, b))
           elif kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
             return a // b
           elif kind == "ceildiv":
