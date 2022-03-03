@@ -7186,7 +7186,7 @@ class ResizeLayer(_ConcatInputLayer):
     :param Dim|None out_dim:
     :param str kind: "linear", "nn"/"nearest_neighbor", "cubic", "fill"
     :param None|int|float fill_value: if kind=="fill"
-    :param float fill_dropout: if set, will dropout in the same axis
+    :param float|None fill_dropout: if set, will dropout in the same axis
     """
     out_dim  # noqa  # via get_out_data_from_opts
     super(ResizeLayer, self).__init__(**kwargs)
@@ -7196,10 +7196,6 @@ class ResizeLayer(_ConcatInputLayer):
     assert axis > 0, "batch-dim resize not supported"
     input_data = input_data.copy_move_axis(old_axis=axis, new_axis=1)
     axis = 1
-    self.output.placeholder = input_data.placeholder
-    out_dyn_size = input_data.dim_tags[axis].dyn_size
-    if out_dyn_size is not None:
-      out_dyn_size = out_dyn_size * factor
 
     # images expected shape: [batch, height, width, channels]
     remaining_axes = [i for i in range(self.output.batch_ndim) if i not in (0, axis)]
@@ -7248,21 +7244,23 @@ class ResizeLayer(_ConcatInputLayer):
       mask = expand_dims_unbroadcast(mask, axis=0, dim=shape[0])  # (batch,new_size)
       x = tf.boolean_mask(x, mask)  # [batch*new_size_dropped] + remaining_shape
       x = tf.reshape(x, [shape[0], new_size_dropped] + remaining_shape)  # [batch, new_size_dropped] + remaining_shape
+      out_dyn_size = input_data.dim_tags[axis].dyn_size
       if out_dyn_size is not None:
+        out_dyn_size = out_dyn_size * factor
         orig_mask = tf.sequence_mask(
           out_dyn_size, maxlen=new_size, dtype=tf.bool)  # (batch,new_size)
         out_dyn_size = tf.reduce_sum(tf.cast(tf.logical_and(mask, orig_mask), tf.int32), axis=1)
-    if out_dyn_size is not None:
-      self.output.dim_tags[axis].dyn_size = out_dyn_size
+        self.output.dim_tags[axis].dyn_size = out_dyn_size
     self.output.placeholder = x
 
   @classmethod
-  def get_out_data_from_opts(cls, factor, axis, sources, name, out_dim=None, **kwargs):
+  def get_out_data_from_opts(cls, factor, axis, sources, name, fill_dropout=None, out_dim=None, **kwargs):
     """
     :param int factor:
     :param Dim|str axis:
     :param list[LayerBase] sources:
     :param str name:
+    :param float|None fill_dropout:
     :param Dim|None out_dim:
     :rtype: Data
     """
@@ -7273,12 +7271,13 @@ class ResizeLayer(_ConcatInputLayer):
     axis = 1
     assert axis != out.batch_dim_axis, "batch-dim resize not supported"
     tag = out.dim_tags[axis]
-    dim = None if tag.dimension is None else (tag.dimension * factor)
-    if out_dim:
-      assert out_dim.dimension == dim
+    if fill_dropout:
+      out_dim_ = Dim(kind=tag.kind, description="%s_resize" % name, auto_generated=True)  # unknown dim
     else:
-      out_dim = Dim(kind=tag.kind, description="%s_resize" % name, dimension=dim, auto_generated=True)
-    return out.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_dim)
+      out_dim_ = tag * factor
+    if out_dim:
+      out_dim_.declare_same_as(out_dim)
+    return out.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_dim_)
 
 
 class CombineDimsLayer(MergeDimsLayer):
