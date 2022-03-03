@@ -1218,13 +1218,14 @@ class SliceNdLayer(_ConcatInputLayer):
     else:
       # size might be None here in which case we set the dyn_size in __init__
       assert size is None or isinstance(size, int)
+      out_spatial_dim_ = Dim(
+        kind=Dim.Types.Spatial,
+        description="sliced-time:%s" % name,
+        dimension=size, auto_generated=True)
       if out_spatial_dim:
-        assert out_spatial_dim.dimension == size
+        out_spatial_dim_.declare_same_as(out_spatial_dim)
       else:
-        out_spatial_dim = Dim(
-          kind=Dim.Types.Spatial,
-          description="sliced-time:%s" % name,
-          dimension=size, auto_generated=True)
+        out_spatial_dim = out_spatial_dim_
     gather_positions_data = gather_positions_data.copy_add_dim_by_tag(
       out_spatial_dim, unbroadcast=True, axis=start_data.batch_ndim)
     position = InternalLayer(
