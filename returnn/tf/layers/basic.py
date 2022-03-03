@@ -3005,6 +3005,7 @@ class WindowLayer(_ConcatInputLayer):
     :param int stride: return only each Nth window
     :param kwargs:
     """
+    out_spatial_dim  # noqa  # via get_out_data_from_opts
     super(WindowLayer, self).__init__(**kwargs)
     if not window_size:
       assert window_dim and window_dim.dimension
