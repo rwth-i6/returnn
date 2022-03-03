@@ -657,7 +657,8 @@ class Dim(object):
             continue
           y.placeholder = _bin_op(y.placeholder, x.dimension)
           continue
-        x = x.get_for_batch_ctx(self.batch, self.control_flow_ctx)
+        if self.batch:
+          x = x.get_for_batch_ctx(self.batch, self.control_flow_ctx)
         x.complete_dyn_size()
         if not x.dyn_size_ext or x.dyn_size_ext.placeholder is None:
           return
