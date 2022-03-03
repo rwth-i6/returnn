@@ -3030,25 +3030,6 @@ class WindowLayer(_ConcatInputLayer):
     else:
       axis = data.get_axis_from_description(axis)
       new_dim_axis = axis + 1  # new axis will be added right after
-      in_spatial_dim = data.dim_tags[axis]
-      out_spatial_dim_ = self.output.dim_tags[axis]
-      if out_spatial_dim:
-        assert out_spatial_dim_ == out_spatial_dim
-        if (padding.lower() == "same" or window_size == 1) and stride == 1:  # no change in spatial dim
-          assert in_spatial_dim == out_spatial_dim
-      if in_spatial_dim != out_spatial_dim_ and out_spatial_dim_.dimension is None:
-        if not out_spatial_dim_.dyn_size_ext:
-          out_spatial_dim_.dyn_size_ext = in_spatial_dim.dyn_size_ext.copy_template(name="%s:spatial-size" % self.name)
-        if out_spatial_dim_.dyn_size_ext.placeholder is None:
-          from ..util.basic import same_control_flow_ctx
-          from ..util.data import Dim
-          assert in_spatial_dim.dyn_size is not None
-          size = in_spatial_dim.dyn_size
-          with same_control_flow_ctx(size):
-            size = ConvLayer.calc_out_dim(
-              in_dim=size,
-              filter_size=window_size, stride=stride, dilation_rate=1, padding=padding)
-          out_spatial_dim_.dyn_size_ext.placeholder = size
 
       from returnn.tf.util.basic import windowed_nd
       self.output.placeholder = windowed_nd(
