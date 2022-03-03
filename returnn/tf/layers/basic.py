@@ -3087,27 +3087,19 @@ class WindowLayer(_ConcatInputLayer):
     else:
       axis = data.get_axis_from_description(axis)
       in_spatial_dim = data.dim_tags[axis]
-      if (padding.lower() == "same" or window_size == 1) and stride == 1:  # no change in spatial dim
-        out_spatial_dim = in_spatial_dim  # error check in __init__
-      else:  # new spatial dim
-        if not out_spatial_dim:
-          dim = None
-          if in_spatial_dim.dimension is not None:
-            dim = ConvLayer.calc_out_dim(
-              in_dim=in_spatial_dim.dimension,
-              filter_size=window_size, stride=stride, dilation_rate=1, padding=padding)
-          out_spatial_dim = Dim(
-            kind=Dim.Types.Spatial, description="%s:spatial" % name,
-            dimension=dim, derived_from_tag=in_spatial_dim, auto_generated=True,
-            batch=data.batch, control_flow_ctx=data.control_flow_ctx)
-      data = data.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_spatial_dim)
+      out_spatial_dim_ = ConvLayer.calc_out_dim(
+        in_dim=in_spatial_dim,
+        filter_size=window_size, stride=stride, dilation_rate=1, padding=padding)
+      assert isinstance(out_spatial_dim_, Dim)
+      if out_spatial_dim:
+        out_spatial_dim_.declare_same_as(out_spatial_dim)
+      data = data.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_spatial_dim_)
       new_dim_axis = axis + 1  # add new axis right after
+    window_dim_ = Dim(
+      kind=Dim.Types.Spatial, description="%s:window" % name, dimension=window_size, auto_generated=True)
     if window_dim:
-      assert window_dim.dimension == window_size
-    else:
-      window_dim = Dim(
-        kind=Dim.Types.Spatial, description="%s:window" % name, dimension=window_size, auto_generated=True)
-    return data.copy_add_dim_by_tag(axis=new_dim_axis, dim_tag=window_dim, unbroadcast=True)
+      window_dim_.declare_same_as(window_dim)
+    return data.copy_add_dim_by_tag(axis=new_dim_axis, dim_tag=window_dim_, unbroadcast=True)
 
   # noinspection PyMethodOverriding
   @classmethod
