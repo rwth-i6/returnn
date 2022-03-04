@@ -5362,31 +5362,27 @@ class Data(object):
       :rtype: int
       """
       other_axis_dim_tag = other.get_dim_tag(other_axis)
+      is_equal_opts_ = None
+      matching = None
       # First, try without any is_equal_opts. This is the most restrictive case.
-      is_equal_opts_ = {}
-      matching = [
-        self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts_)
-        if self_axis not in taken_self_axes]
-      if not matching:
-        # Ok, try with the given is_equal_opts.
-        is_equal_opts_ = is_equal_opts.copy()
+      # Try with the given is_equal_opts.
+      # Try harder by allowing broadcasting to match.
+      # If still not, then also allow one single dyn_size to be unknown.
+      for opt in [{}, is_equal_opts, "broadcast_matches", "unknown_spatial_matches"]:
+        if isinstance(opt, dict):
+          is_equal_opts_ = opt.copy()
+        elif isinstance(opt, str):
+          if opt in is_equal_opts_:
+            continue
+          is_equal_opts_[opt] = True
         matching = [
           self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts_)
           if self_axis not in taken_self_axes]
-      if not matching:
-        # Try harder by allowing broadcasting to match
-        is_equal_opts_["broadcast_matches"] = True
-        matching = [
-          self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts_)
-          if self_axis not in taken_self_axes]
-      if not matching:
-        # If still not, then also allow one single dyn_size to be unknown
-        is_equal_opts_["unknown_spatial_matches"] = True
-        matching = [
-          self_axis for self_axis in self.find_matching_dims(other_axis_dim_tag, is_equal_opts_)
-          if self_axis not in taken_self_axes]
-        assert len(matching) == 1, 'cannot match the axes %s from %s to %s. Failing to match axis %s' % (
-          other_axes, other, self, other_axis)
+        if opt == "unknown_spatial_matches":
+          assert len(matching) <= 1, 'cannot match axes %s from %s to %s, failed at other %s, not unique after %s' % (
+            other_axes, other, self, other_axis, opt)
+        if matching:
+          break
       assert matching, 'cannot match the axes %s from %s to %s. Failing at axis %s' % (
         other_axes, other, self, other_axis)
       # If there are multiple matches (e.g. because two axes have the same feature dim), leave their order intact.
