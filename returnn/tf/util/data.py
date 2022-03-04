@@ -841,6 +841,24 @@ class Dim(object):
       assert base
     return base
 
+  def get_derived_bases_list(self):
+    """
+    :rtype: Dim
+    """
+    res = [self]
+    base = self
+    visited = {}
+    while base.same_as or base.derived_from_tag:
+      assert id(base) not in visited  # should not have cycles. normally this should never be triggered
+      visited[id(base)] = base
+      if base.same_as:
+        base = base.same_as
+        continue
+      base = base.derived_from_tag
+      assert base
+      res.append(base)
+    return res
+
   @property
   def undefined(self):
     """
@@ -997,8 +1015,10 @@ class Dim(object):
         if existing_tag:
           if unique_separate_axes:
             existing_tag_collection_for_data.remove(existing_tag)  # don't take it again for this data
-          if existing_tag.undefined and not tag.undefined and tag.dimension == existing_tag.dimension:
-            # Replace the existing by the new tag.
+          replace_existing = existing_tag.undefined and not tag.undefined and tag.dimension == existing_tag.dimension
+          if tag != existing_tag and tag in existing_tag.get_derived_bases_list():
+            replace_existing = True
+          if replace_existing:  # Replace the existing by the new tag.
             tags[tags.index(existing_tag)] = tag
             existing_tag = tag
         else:  # no existing tag
