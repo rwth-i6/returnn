@@ -401,6 +401,27 @@ def test_Data_get_all_dimension_tags_same_spatial_dim_twice():
   assert all_dim_tags == [batch_dim, time_dim, in_dim, out_dim]
 
 
+def test_Dim_get_all_dimension_tags_one_derived_time():
+  from returnn.tf.util.data import batch_dim
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("feature", 3)
+  a = Data(name="a", dim_tags=[batch_dim, time_dim, feat_dim])
+  print("a:", a)
+  derived_time_dim = SpatialDim("derived_time", derived_from_tag=time_dim)
+  b = Data(name="b", dim_tags=[batch_dim, derived_time_dim, feat_dim])
+  print("b:", b)
+  # Data.get_common_data defaults:
+  is_equal_opts = dict(
+    ignore_feature_dim=False, treat_feature_as_spatial=True,
+    allow_same_spatial_dim=True,
+    undefined_matches=True, derived_matches=True)
+  all_dim_tags, _ = DimensionTag.get_all_dimension_tags([b, a], is_equal_opts=is_equal_opts)
+  print("all_dim_tags:", all_dim_tags)
+  # The is_equal_opts with derived_matches should match time_dim with derived_time_dim.
+  # We explicitly want that the time_dim is returned here.
+  assert derived_time_dim not in all_dim_tags and all_dim_tags == [batch_dim, time_dim, feat_dim]
+
+
 def test_Data_sparse_int32_with_dim_kwargs_init():
   data = Data(name="classes_with_dim", shape=(None,), dim=10, sparse=True, dtype="int32")
   assert data.sparse and data.have_time_axis() and data.shape == (None,) and data.dim == 10
