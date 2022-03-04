@@ -5341,7 +5341,14 @@ class Data(object):
           common = common.copy_template_replace_dim_tag(axis=axis, new_dim_tag=other)
     # Check for missing tags, and add those.
     for dim_tag in all_dim_tags:
-      if not Dim.get_existing_tag_from_collection(dim_tag, common.dim_tags, is_equal_opts=is_equal_opts):
+      common_tag = Dim.get_existing_tag_from_collection(dim_tag, common.dim_tags, is_equal_opts=is_equal_opts)
+      if common_tag:
+        # Already have this tag. However, maybe we have a better one.
+        # Dim.get_all_dimension_tags() would have selected that.
+        if dim_tag != common_tag:
+          axis = common.dim_tags.index(common_tag)
+          common = common.copy_template_replace_dim_tag(axis=axis, new_dim_tag=dim_tag)
+      else:
         axis = common.get_default_new_axis_for_dim_tag(dim_tag)
         common = common.copy_add_dim_by_tag(dim_tag, unbroadcast=True, axis=axis)
     if all(s.batch_ndim < common.batch_ndim for s in sources):
