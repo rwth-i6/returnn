@@ -5336,7 +5336,8 @@ class Data(object):
 
     :param Dim dim_tag:
     :param dict[str,bool]|None is_equal_opts: passed to Dim.is_equal
-    :rtype: list[int] a list of matching axes, counted with batch dim. Sorted in ascending order
+    :rtype: list[int]
+    :return: a list of matching axes, counted with batch dim. Sorted in ascending order
     """
     return [axis for axis in range(self.batch_ndim) if self.get_dim_tag(axis).is_equal(dim_tag, **is_equal_opts)]
 
