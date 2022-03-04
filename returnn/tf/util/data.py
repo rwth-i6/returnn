@@ -5331,14 +5331,6 @@ class Data(object):
     if BehaviorVersion.get() < 11:
       is_equal_opts["broadcast_matches"] = True
     all_dim_tags, tags_dict = Dim.get_all_dimension_tags(sources, is_equal_opts=is_equal_opts)
-    # Check for potential undefined tags, and replace those with defined tags if possible.
-    for axis, dim_tag in enumerate(common.dim_tags):
-      if dim_tag.undefined:
-        other = Dim.get_existing_tag_from_collection(dim_tag, all_dim_tags, is_equal_opts=is_equal_opts)
-        if other and not other.undefined:
-          # We found another dim tag which matches and which is defined.
-          # Replace it.
-          common = common.copy_template_replace_dim_tag(axis=axis, new_dim_tag=other)
     # Check for missing tags, and add those.
     for dim_tag in all_dim_tags:
       common_tag = Dim.get_existing_tag_from_collection(dim_tag, common.dim_tags, is_equal_opts=is_equal_opts)
