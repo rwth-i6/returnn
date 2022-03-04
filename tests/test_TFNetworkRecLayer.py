@@ -6136,6 +6136,81 @@ def test_MaskedComputationLayer_UnmaskLayer_in_loop():
         x = y
 
 
+def test_MaskedComputationLayer_UnmaskLayer_in_loop_opt():
+  from test_TFNetworkLayer import make_feed_dict
+  from returnn.tf.layers.basic import SubnetworkLayer
+  from returnn.tf.layers.rec import _SubnetworkRecCell
+  with make_scope() as session:
+    config = Config({"debug_print_layer_output_template": True})
+    net = TFNetwork(
+      extern_data=ExternData({"data": {"dim": 20, "sparse": True}}),
+      config=config)
+    net_dict = {
+      "output": {
+        "class": "rec",
+        "from": "data",
+        "unit": {
+          "const1": {"class": "constant", "value": 1, "with_batch_dim": True},  # just to broadcast mask
+          "mask": {
+            "class": "eval", "from": [":i", "const1"], "out_type": {"dtype": "bool"},
+            "eval": "tf.equal(source(0) % 2, source(1))"},
+          "masked": {
+            "class": "masked_computation", "from": "data:source", "mask": "mask",
+            "unit": {
+              "class": "subnetwork", "from": "data",
+              "subnetwork": {
+                "input0": {"class": "cast", "from": "data", "dtype": "float32"},
+                "input1": {"class": "expand_dims", "axis": "f", "from": "input0"},
+                "output": {"class": "rec", "unit": "cumsum", "n_out": 1, "from": "input1"},
+              },
+            }},
+          "unmask": {"class": "unmask", "from": "masked", "mask": "mask"},
+          "output": {"class": "squeeze", "from": "unmask", "axis": "f"},
+        }
+      }
+    }
+    net.construct_from_dict(net_dict)
+    rec_layer = net.get_layer("output")
+    assert isinstance(rec_layer, RecLayer)
+    rec_cell = rec_layer.cell
+    assert isinstance(rec_cell, _SubnetworkRecCell)
+    assert not rec_cell.layers_in_loop  # all moved out
+    in_data = net.get_layer("data").output
+    out_data = net.get_layer("output").output.copy_as_batch_major()
+    assert in_data.get_time_dim_tag() == out_data.get_time_dim_tag()
+    masked_comp_layer = rec_cell.get_layer_from_outside("masked")
+    assert isinstance(masked_comp_layer, MaskedComputationLayer)
+    masked_comp_sub_layer = masked_comp_layer.sub_layer
+    assert isinstance(masked_comp_sub_layer, SubnetworkLayer)
+    masked_in0_layer = masked_comp_sub_layer.get_sub_layer("input0")
+    masked_in_layer = masked_in0_layer.sources[0]
+    extra = {
+      "mask": rec_cell.get_layer_from_outside("mask").output.placeholder,
+      "masked": masked_comp_layer.output.placeholder,
+      "masked/input0": masked_in0_layer.output.placeholder,
+      "masked/data": masked_in_layer.output.placeholder,
+    }
+    in_v, out_v, out_seq_lens_v, extra_v = session.run(
+      (in_data.placeholder, out_data.placeholder, out_data.get_sequence_lengths(), extra),
+      feed_dict=make_feed_dict(net.extern_data))
+    print(in_v)
+    print(out_v)
+    print("seq lens:", out_seq_lens_v)
+    pprint(extra_v)
+    assert_equal(in_v.shape, out_v.shape)
+    for b in range(in_v.shape[0]):
+      x = 0.0
+      for t in range(in_v.shape[1]):
+        if t >= out_seq_lens_v[b]:
+          continue
+        if t % 2 == 1:
+          y = x + in_v[b, t]
+        else:
+          y = x
+        numpy.testing.assert_almost_equal(y, out_v[b, t])
+        x = y
+
+
 def test_att_train_search_loss_prev_beam():
   beam_size = 1
   num_ner_labels = 13
