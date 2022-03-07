@@ -273,6 +273,28 @@ class HDFDataset(CachedDataset):
 
     # Otherwise, directly read it from file now.
     real_seq_idx = self._seq_index[seq_idx]
+    return self._get_data_by_real_seq_idx(real_seq_idx, key)
+
+  def get_data_by_seq_tag(self, seq_tag, key):
+    """
+    :param str seq_tag:
+    :param str key:
+    :rtype: numpy.ndarray
+    """
+    if self.cache_byte_size_total_limit > 0:  # Use the cache?
+      raise Exception("%s: get_data_by_seq_tag not supported with cache" % self)
+
+    # Otherwise, directly read it from file now.
+    self._update_tag_idx()
+    real_seq_idx = self._tag_idx[seq_tag]
+    return self._get_data_by_real_seq_idx(real_seq_idx, key)
+
+  def _get_data_by_real_seq_idx(self, real_seq_idx, key):
+    """
+    :param int real_seq_idx:
+    :param str key:
+    :rtype: numpy.ndarray
+    """
     file_idx = self._get_file_index(real_seq_idx)
     fin = self.h5_files[file_idx]
 
