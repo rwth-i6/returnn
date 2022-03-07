@@ -7865,9 +7865,9 @@ class MaskedComputationLayer(LayerBase):
         # noinspection PyShadowingNames
         mask_data = mask.output.copy_template()
         masked_dim = mask_data.get_time_dim_tag()
-        if masked_dim not in layer.output.copy_template().dim_tags:
+        if masked_dim not in layer.output.dim_tags:
           return layer
-        axis = layer.output.copy_template().get_axis_from_description(masked_dim)
+        axis = layer.output.get_axis_from_description(masked_dim)
         source_data_ = layer.output.copy_template().copy_move_axis(old_axis=axis, new_axis=0)
         source_data_ = source_data_.copy_template_replace_dim_tag(axis=0, new_dim_tag=source.output.get_time_dim_tag())
         layer = WrappedInternalLayer(
