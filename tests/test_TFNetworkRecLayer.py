@@ -6125,6 +6125,42 @@ def test_MaskedComputationLayer_UnmaskLayer_in_loop():
         x = y
 
 
+def test_MaskedComputationLayer_sublayer_with_different_time_dim():
+  with make_scope():
+    config = Config({"debug_print_layer_output_template": True})
+    net = TFNetwork(
+      extern_data=ExternData({"data": {"dim": 20, "sparse": False}}),
+      config=config)
+    net_dict = {
+      "data_with_diff_time": {
+        "class": "reinterpret_data", "from": "data",
+        "set_dim_tags": {"t": Dim(kind=Dim.Types.Time, description="new_t")}},
+      "output": {
+        "class": "rec",
+        "from": "data",
+        "unit": {
+          "const1": {"class": "constant", "value": 1, "with_batch_dim": True},
+          "mask": {
+            "class": "eval", "from": [":i", "const1"], "out_type": {"dtype": "bool"},
+            "eval": "tf.equal(source(0) % 2, source(1))"},
+          "masked": {
+            "class": "masked_computation", "from": "data:source", "mask": "mask",
+            "unit": {
+              "class": "subnetwork", "from": "data",
+              "subnetwork": {
+                "data_with_diff_time_red": {
+                  "class": "reduce", "from": "base:base:data_with_diff_time", "mode": "max", "axis": "t"},
+                "output": {"class": "combine", "from": ["data_with_diff_time_red", "data"], "kind": "add"},
+              },
+            }},
+          "unmask": {"class": "unmask", "from": "masked", "mask": "mask"},
+          "output": {"class": "copy", "from": "unmask"},
+        }
+      }
+    }
+    net.construct_from_dict(net_dict)
+
+
 def test_att_train_search_loss_prev_beam():
   beam_size = 1
   num_ner_labels = 13
