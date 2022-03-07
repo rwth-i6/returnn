@@ -300,13 +300,17 @@ def _get_audio_linear_spectrogram(audio, sample_rate, window_len=0.025, step_len
   return spectrogram
 
 
-def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=40):
+def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=40,
+                             n_mels=128, fmin=0, fmax=None):
   """
   :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
   :param int sample_rate: e.g. 22050
   :param float window_len: in seconds
   :param float step_len: in seconds
-  :param int num_feature_filters:
+  :param int num_feature_filters: number of dct outputs to use
+  :param int n_mels: number of mel filters
+  :param int fmin: minimum frequency for mel filters
+  :param int|None fmax: maximum frequency for mel filters (None -> use sample_rate/2)
   :return: (audio_len // int(step_len * sample_rate), num_feature_filters), float32
   :rtype: numpy.ndarray
   """
@@ -314,6 +318,7 @@ def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.01
   features = librosa.feature.mfcc(
     y=audio, sr=sample_rate,
     n_mfcc=num_feature_filters,
+    n_mels=n_mels, fmin=fmin, fmax=fmax,
     hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
   librosa_version = librosa.__version__.split(".")
   if int(librosa_version[0]) >= 1 or (int(librosa_version[0]) == 0 and int(librosa_version[1]) >= 7):
