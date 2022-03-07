@@ -7632,12 +7632,15 @@ class MaskedComputationLayer(LayerBase):
       """
       assert isinstance(source, LayerBase)
       assert mask
+      masked_dim = mask_data.get_time_dim_tag()
       if self.network.is_inside_rec_layer():
         # We can just leave it as-is. The state will handled below.
         return source
+      elif masked_dim not in source.output.dim_tags:
+        return source
       else:
-        source_data = source.output.copy_as_time_major()
-        assert source_data.is_same_time_dim(mask_data), "%s mask and source time dim do not match" % self
+        axis = source.output.get_axis_from_description(masked_dim)
+        source_data = source.output.copy_move_axis(old_axis=axis, new_axis=0)
         tmp_shape = get_shape(source_data.placeholder)
         tmp_shape[0] = new_time + 1  # one more for the padded data
         res = tf.scatter_nd(nd_indices(idxs, batch_axis=1), source_data.placeholder, shape=tmp_shape)
@@ -7771,11 +7774,13 @@ class MaskedComputationLayer(LayerBase):
     else:
       d["masked_from"] = None
     super(MaskedComputationLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    mask = get_layer(d["mask"])
     # Just call it for dep resolution.
     parent_layer_cache = d.setdefault("_parent_layer_cache", {})
     d["_layer_class"], d["_layer_desc"] = cls._create_template(
       name=d["_name"], network=network, sources=d["sources"],
       masked_from=masked_from,
+      mask=mask,
       unit=d["unit"],
       out_spatial_dim=d.get("out_spatial_dim", None),
       get_layer=get_layer, _parent_layer_cache=parent_layer_cache)
@@ -7787,7 +7792,7 @@ class MaskedComputationLayer(LayerBase):
 
   # noinspection PyUnusedLocal
   @classmethod
-  def _create_template(cls, name, network, sources, masked_from, unit,
+  def _create_template(cls, name, network, sources, masked_from, mask, unit,
                        out_spatial_dim=None,
                        get_layer=None, _parent_layer_cache=None, **kwargs):
     """
@@ -7795,6 +7800,7 @@ class MaskedComputationLayer(LayerBase):
     :param returnn.tf.network.TFNetwork network:
     :param list[LayerBase] sources:
     :param LayerBase masked_from:
+    :param LayerBase mask:
     :param dict[str] unit:
     :param Dim|None out_spatial_dim:
     :param (str)->LayerBase get_layer:
@@ -7857,7 +7863,12 @@ class MaskedComputationLayer(LayerBase):
           _parent_layer_cache[sub_layer_name] = layer
       if not network.is_inside_rec_layer():
         # noinspection PyShadowingNames
-        source_data_ = layer.output.copy_template().copy_as_time_major()
+        mask_data = mask.output.copy_template()
+        masked_dim = mask_data.get_time_dim_tag()
+        if masked_dim not in layer.output.copy_template().dim_tags:
+          return layer
+        axis = layer.output.copy_template().get_axis_from_description(masked_dim)
+        source_data_ = layer.output.copy_template().copy_move_axis(old_axis=axis, new_axis=0)
         source_data_ = source_data_.copy_template_replace_dim_tag(axis=0, new_dim_tag=source.output.get_time_dim_tag())
         layer = WrappedInternalLayer(
           base_layer=layer, network=layer.network, name=layer.name,
