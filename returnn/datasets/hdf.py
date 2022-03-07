@@ -48,7 +48,6 @@ class HDFDataset(CachedDataset):
     self.data_dtype = {}  # type: typing.Dict[str,str]
     self.data_sparse = {}  # type: typing.Dict[str,bool]
     self._num_codesteps = None  # type: typing.Optional[typing.List[int]]  # accumulated sequence length per target
-    self._tag_to_real_idx_map = None  # type: typing.Optional[typing.Dict[str,int]]
 
     if files:
       for fn in files:
@@ -283,10 +282,11 @@ class HDFDataset(CachedDataset):
     :rtype: numpy.ndarray
     """
     if self.cache_byte_size_total_limit > 0:  # Use the cache?
-      assert False  # what should we do here?
+      raise Exception("%s: get_data_by_seq_tag not supported with cache" % self)
 
     # Otherwise, directly read it from file now.
-    real_seq_idx = self._get_real_idx_by_tag(seq_tag)
+    self._update_tag_idx()
+    real_seq_idx = self._tag_idx[seq_tag]
     return self._get_data_by_real_seq_idx(real_seq_idx, key)
 
   def _get_data_by_real_seq_idx(self, real_seq_idx, key):
@@ -376,33 +376,6 @@ class HDFDataset(CachedDataset):
     s = self.cached_h5_datasets[file_idx]["#seqTags"][real_file_seq_idx]
     s = self._decode(s)
     return s
-
-  def _get_real_idx_by_tag(self, seq_tag):
-    """
-    :param str seq_tag:
-    :rtype: int
-    """
-    if self._tag_to_real_idx_map is None:
-      self._build_tag_to_real_idx_map()
-
-    return self._tag_to_real_idx_map[seq_tag]
-
-  def _build_tag_to_real_idx_map(self):
-    if self._tag_to_real_idx_map is None:
-      self._tag_to_real_idx_map = {}
-
-      for file_idx in range(len(self.cached_h5_datasets)):
-        if "#seqTags" not in self.cached_h5_datasets[file_idx]:
-          self.cached_h5_datasets[file_idx]["#seqTags"] = self.h5_files[file_idx]["seqTags"]
-
-      for real_seq_idx in range(self.num_seqs):
-        file_idx = self._get_file_index(real_seq_idx)
-        real_file_seq_idx = real_seq_idx - self.file_start[file_idx]
-
-        s = self.cached_h5_datasets[file_idx]["#seqTags"][real_file_seq_idx]
-        s = self._decode(s)
-
-        self._tag_to_real_idx_map[s] = real_seq_idx
 
   def get_tag(self, sorted_seq_idx):
     """
