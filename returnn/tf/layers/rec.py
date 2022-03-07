@@ -7774,21 +7774,20 @@ class MaskedComputationLayer(LayerBase):
     else:
       d["masked_from"] = None
     super(MaskedComputationLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
-    mask = get_layer(d["mask"])
     # Just call it for dep resolution.
     parent_layer_cache = d.setdefault("_parent_layer_cache", {})
-    d["_layer_class"], d["_layer_desc"] = cls._create_template(
-      name=d["_name"], network=network, sources=d["sources"],
-      masked_from=masked_from,
-      mask=mask,
-      unit=d["unit"],
-      out_spatial_dim=d.get("out_spatial_dim", None),
-      get_layer=get_layer, _parent_layer_cache=parent_layer_cache)
     if masked_from and not parent_layer_cache:
       # We explicitly do not want to have these as deps.
       d["mask"] = None
     else:
       d["mask"] = get_layer(d["mask"])
+    d["_layer_class"], d["_layer_desc"] = cls._create_template(
+      name=d["_name"], network=network, sources=d["sources"],
+      masked_from=masked_from,
+      mask=d["mask"],
+      unit=d["unit"],
+      out_spatial_dim=d.get("out_spatial_dim", None),
+      get_layer=get_layer, _parent_layer_cache=parent_layer_cache)
 
   # noinspection PyUnusedLocal
   @classmethod
