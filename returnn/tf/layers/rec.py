@@ -8066,6 +8066,7 @@ class UnmaskLayer(LayerBase):
     self.mask = mask
     src_layer = self.sources[0]
     batch_dim = self.get_batch_dim()
+    orig_time_dim = self.mask.output.get_time_dim_tag() if self.mask.output.have_time_axis() else None
     if not src_layer.output.have_time_axis():
       assert self.network.is_inside_rec_layer()
       assert self.output.placeholder is not None  # should be the copy of source already
@@ -8073,12 +8074,15 @@ class UnmaskLayer(LayerBase):
       if self.network.is_inside_rec_layer():
         # We have this state, although we don't need it, we still must set it.
         self.rec_vars_outputs["t"] = tf.zeros([batch_dim], dtype=tf.int32) - 1
-    else:
+
+    else:  # src has time dim
       rec_parent_layer = self.network.get_rec_parent_layer(inside_loop=False)
       assert rec_parent_layer and isinstance(rec_parent_layer.cell, _SubnetworkRecCell)
       # noinspection PyProtectedMember
       initial = rec_parent_layer.cell._get_init_output(src_layer.name, batch_dim=batch_dim)  # [B,D']
       if self.network.is_inside_rec_layer():
+        # This UnmaskLayer is inside the rec loop but the source is outside (or at least does not have a time dim).
+        # The RecLayer will not unroll the source when the dim tag do not match, i.e. when it is masked.
         with same_control_flow_ctx(src_layer.output.placeholder):
           src = src_layer.output.copy_as_bt_or_tb_major()
         mask_out = self.mask.output
@@ -8091,6 +8095,11 @@ class UnmaskLayer(LayerBase):
         y = tf.gather_nd(src.placeholder, idxs_nd)  # [B,D']
         y = where_bc(tf.equal(t, -1)[:, None], initial, y)
         self.output.placeholder = y
+
+      elif orig_time_dim in src_layer.output.dim_tags:  # outside rec loop, and src seems already unmasked
+        # Do nothing, as src already seems unmasked.
+        # Note that we might run into this case due to: https://github.com/rwth-i6/returnn/pull/976
+        self.output.placeholder = src_layer.output.get_placeholder_as_time_major()
 
       else:  # outside rec loop
         assert src_layer.output.get_time_dim_tag() != self.mask.output.get_time_dim_tag(), (
