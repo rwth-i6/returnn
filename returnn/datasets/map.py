@@ -75,9 +75,13 @@ class MapDatasetWrapper(CachedDataset2):
   """
   def __init__(self, map_dataset, **kwargs):
     """
-    :param MapDatasetBase map_dataset: the MapDataset to be wrapped
+    :param MapDatasetBase|function map_dataset: the MapDataset to be wrapped
     """
     super(MapDatasetWrapper, self).__init__(**kwargs)
+
+    if callable(map_dataset):
+      map_dataset = map_dataset(**kwargs)
+    assert isinstance(map_dataset, MapDatasetBase)
 
     self._dataset = map_dataset
     self._seq_order = None
