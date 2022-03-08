@@ -7959,9 +7959,11 @@ class MaskedComputationLayer(LayerBase):
     assert isinstance(output, Data)
     assert issubclass(layer_class, LayerBase)
     with layer_class.cls_setup_scope(**kwargs):
-      d = layer_class.get_rec_initial_extra_outputs(batch_dim=batch_dim, rec_layer=rec_layer, **layer_desc)
+      output = output.copy_as_batch_major()
+      d = layer_class.get_rec_initial_extra_outputs(
+        batch_dim=batch_dim, rec_layer=rec_layer, output=output, **layer_desc)
       initial_out = layer_class.get_rec_initial_output(
-        batch_dim=batch_dim, rec_layer=rec_layer, output=output.copy_as_batch_major(), **layer_desc)
+        batch_dim=batch_dim, rec_layer=rec_layer, output=output, **layer_desc)
       assert "_output" not in d
       d["_output"] = initial_out
       return d
