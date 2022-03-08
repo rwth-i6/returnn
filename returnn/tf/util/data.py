@@ -4800,6 +4800,8 @@ class Data(object):
     :rtype: int
     """
     matching_dim_tags = self.get_axes_by_tag_name(name, spatial_only)
+    assert len(matching_dim_tags) > 0, "%r: no %stag found with name %r" % (
+      self, "spatial " if spatial_only else "", name)
     assert len(matching_dim_tags) == 1, "%r: tag name %r is not unique in dim tags %r" % (
       self, name, self.get_batch_shape_dim_tags())
     return matching_dim_tags[0]
