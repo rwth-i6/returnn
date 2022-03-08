@@ -1221,9 +1221,13 @@ class DatasetSeq:
 
 def get_dataset_class(name):
   """
-  :param str name:
+  :param str|type name:
   :rtype: type[Dataset]
   """
+  if isinstance(name, type):
+    assert issubclass(name, Dataset)
+    return name
+
   from importlib import import_module
   # Only those modules which make sense to be loaded by the user,
   # because this function is only used for such cases.
