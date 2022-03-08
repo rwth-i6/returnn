@@ -3157,7 +3157,9 @@ class CumsumLayer(_ConcatInputLayer):
     from returnn.tf.util.basic import is_axis_from_description_recurrent
     if is_axis_from_description_recurrent(axis=axis, network=network, data=data):
       assert all(data.shape)
-      return {"state": tf.zeros(data.get_batch_shape(batch_dim=batch_dim), dtype=data.dtype)}
+      init_state = cls.get_rec_initial_output(
+        network=network, batch_dim=batch_dim, rec_layer=rec_layer, axis=axis, sources=sources, **kwargs)
+      return {"state": init_state}
     return {}
 
 
