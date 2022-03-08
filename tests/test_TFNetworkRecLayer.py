@@ -4865,6 +4865,17 @@ def test_reclayer_optimize_out_cumsum_step_by_step():
     feat_dim=feat_dim, time_dim=time_dim)
 
 
+def test_reclayer_optimize_out_cumsum_step_by_step_initial():
+  from returnn.tf.util.data import batch_dim, Dim
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("feat", dimension=11)
+  check_reclayer_optimize_out(
+    subnet_layer_dict={
+      "class": "cumsum", "initial_output": 1,
+      "axis": time_dim, "out_shape": {batch_dim, feat_dim}, "out_dim": feat_dim},
+    feat_dim=feat_dim, time_dim=time_dim)
+
+
 def test_reclayer_optimize_out_cumsum_unrelated_axis():
   from returnn.tf.util.data import batch_dim, Dim
   time_dim = SpatialDim("time")
