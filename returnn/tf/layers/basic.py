@@ -3126,7 +3126,16 @@ class CumsumLayer(_ConcatInputLayer):
       self.output.placeholder = next_state
     else:
       axis = data.get_axis_from_description(axis)
-      self.output.placeholder = tf.cumsum(x, axis=axis, reverse=reverse)
+      y = tf.cumsum(x, axis=axis, reverse=reverse)
+      if self._initial_output is not None:
+        init_state = self.get_rec_initial_output(
+          name=self.name, output=self.output,
+          network=self.network, batch_dim=self.get_batch_dim(),
+          rec_layer=self.network.get_rec_parent_layer(inside_loop=False),  # should actually not matter
+          axis=axis, sources=self.sources,
+          initial_output=self._initial_output)
+        y = init_state + y
+      self.output.placeholder = y
     self.output.placeholder.set_shape(data.placeholder.get_shape())
     self.output.placeholder.set_shape(tf.TensorShape(self.output.batch_shape))
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
