@@ -7947,6 +7947,7 @@ class MaskedComputationLayer(LayerBase):
       assert out_spatial_dim and out_spatial_dim in output.dim_tags
       axis = output.get_axis_from_description(out_spatial_dim)
       output = output.copy_template_replace_dim_tag(axis=axis, new_dim_tag=in_spatial_dim)
+      output = output.copy_move_axis(old_axis=axis, new_axis=0)  # time-major
     return output
 
   def get_constraints_value(self):
