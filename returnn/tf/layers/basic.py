@@ -8335,6 +8335,21 @@ class SubnetworkLayer(LayerBase):
     super(SubnetworkLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
+  def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
+    """
+    :param str layer_name: name of the sub_layer (right part of '/' separated path)
+    :param dict[str] parent_layer_kwargs: kwargs for the parent layer (as kwargs in cls.get_out_data_from_opts())
+    :return: Data template, network and the class type of the sub-layer
+    :rtype: (Data, TFNetwork, type)|None
+    """
+    from returnn.tf.network import Subnetwork
+    subnet = parent_layer_kwargs["_subnet"]
+    assert isinstance(subnet, Subnetwork)
+    # Should be constructed already. If not, make sure is_output_layer is set.
+    layer = subnet.net.get_layer(layer_name)
+    return layer.output, layer.network, layer.__class__
+
+  @classmethod
   def cls_get_sub_network(cls, name, network, layer_desc):
     """
     :param str name:
