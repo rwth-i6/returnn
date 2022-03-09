@@ -7722,6 +7722,7 @@ class MaskedComputationLayer(LayerBase):
     assert isinstance(self.sub_layer, LayerBase)
     self.sub_layer.post_init(layer_desc)
     self.sub_layer.output.sanity_check()
+    assert self.sub_layer.output.placeholder is not None
     inside_rec_time_dim = self.network.get_inside_rec_time_dim(inside_loop=True)
     over_rec_time_dim = self.network.get_inside_rec_time_dim(inside_loop=False)
     self._unmask_layer = None
