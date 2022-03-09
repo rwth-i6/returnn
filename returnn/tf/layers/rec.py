@@ -7926,6 +7926,7 @@ class MaskedComputationLayer(LayerBase):
       # Nothing from the base/parent will access directly into this extra/sub network,
       # so we can safely place a boundary here.
       # Also, any subnet here must be only a template construction.
+      # We will redo the full construction including transform_config_dict on the sub layer in __init__.
       only_template=True, boundary=True)
     layer_desc = unit.copy()
     class_name = layer_desc.pop("class")
