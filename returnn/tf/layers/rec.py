@@ -7594,6 +7594,7 @@ class MaskedComputationLayer(LayerBase):
                _layer_class, _layer_desc,
                in_spatial_dim=None,
                out_spatial_dim=None,
+               _queried_sub_layers=None,
                _parent_layer_cache=None,
                **kwargs):
     """
@@ -7604,6 +7605,7 @@ class MaskedComputationLayer(LayerBase):
     :param Dim|None out_spatial_dim: the masked dim
     :param type[LayerBase] _layer_class:
     :param dict[str] _layer_desc:
+    :param dict[str,(Data,type,dict[str])]|None _queried_sub_layers:
     :param dict[str,LayerBase]|None _parent_layer_cache:
     """
     from returnn.tf.network import get_layer_class
@@ -7613,6 +7615,8 @@ class MaskedComputationLayer(LayerBase):
     super(MaskedComputationLayer, self).__init__(**kwargs)
     self.mask = mask
     self.masked_from = masked_from
+    self.in_spatial_dim = in_spatial_dim
+    self.out_spatial_dim = out_spatial_dim
     if _parent_layer_cache is None:
       _parent_layer_cache = {}
     self.parent_layer_cache = _parent_layer_cache
@@ -7707,6 +7711,7 @@ class MaskedComputationLayer(LayerBase):
     layer_class = get_layer_class(class_name)
     layer_desc["_network"] = extra_net
     layer_desc["_name"] = self.name
+    layer_desc["encapsulate"] = True
     layer_desc["rec_previous_layer"] = self._rec_previous_layer
     layer_class.transform_config_dict(layer_desc, network=extra_net, get_layer=sub_get_layer)
     # noinspection PyProtectedMember
@@ -7723,35 +7728,18 @@ class MaskedComputationLayer(LayerBase):
     self.sub_layer.post_init(layer_desc)
     self.sub_layer.output.sanity_check()
     assert self.sub_layer.output.placeholder is not None
-    inside_rec_time_dim = self.network.get_inside_rec_time_dim(inside_loop=True)
-    over_rec_time_dim = self.network.get_inside_rec_time_dim(inside_loop=False)
-    self._unmask_layer = None
-    # In case we are in rec layer and optimize out of loop and mask over this axis, and don't have masked_from:
-    if not masked_from and over_rec_time_dim == in_spatial_dim and over_rec_time_dim and not inside_rec_time_dim:
-      # We will automatically unmask again (https://github.com/rwth-i6/returnn/pull/976).
-      assert self.mask
-      self._unmask_layer = UnmaskLayer(
-        name="%s(internal-unmask)" % self.name, mask=self.mask, sources=[self.sub_layer], network=self.network,
-        output=self.output.copy_template())
-      self.output = self._unmask_layer.output.copy(name="%s_output" % self.name)
-    else:
-      self.output = self.sub_layer.output.copy(name="%s_output" % self.name)
     self.rec_vars_outputs = self.sub_layer.rec_vars_outputs.copy()
     self.params = self.sub_layer.params
+
+    self._out_layers = {}  # type: typing.Dict[str,LayerBase]
+    out_layer = self.get_sub_layer("")
+    self.output = out_layer.output.copy(name="%s_output" % self.name)
 
     if self.mask and self.network.is_inside_rec_layer():
       assert self._rec_previous_layer
       assert self.mask.output.shape == () and self.mask.output.batch_shape == (None,)
-      assert self.output.is_batch_major
-      prev_out = self.output.copy_template()
-      prev_out.placeholder = self._rec_previous_layer.rec_vars_outputs["_output"]
-      prev_out.sanity_check()
       mask_t = self.mask.output.placeholder
-      self.output.placeholder = where_bc(
-        condition=tf.reshape(mask_t, [-1] + [1] * (self.output.batch_ndim - 1)),  # add broadcast dims
-        x=self.output.placeholder,
-        y=prev_out.placeholder)
-      self.rec_vars_outputs["_output"] = self.output.placeholder
+
       for key, value in sorted(self.rec_vars_outputs.items()):
         assert isinstance(key, str)
         prev_value = self._rec_previous_layer.rec_vars_outputs[key]
@@ -7933,6 +7921,7 @@ class MaskedComputationLayer(LayerBase):
     layer_class = get_layer_class(class_name)
     layer_desc["_network"] = extra_net
     layer_desc["_name"] = name
+    layer_desc["encapsulate"] = True
     layer_class.transform_config_dict(layer_desc, network=extra_net, get_layer=sub_get_layer)
     # noinspection PyProtectedMember
     layer_desc = extra_net._create_layer_layer_desc(name=name, layer_desc=layer_desc)
@@ -7966,6 +7955,90 @@ class MaskedComputationLayer(LayerBase):
       output = output.copy_template_replace_dim_tag(axis=axis, new_dim_tag=in_spatial_dim)
       output = output.copy_move_axis(old_axis=axis, new_axis=0)  # time-major
     return output
+
+  @classmethod
+  def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
+    """
+    :param str layer_name: name of the sub_layer (right part of '/' separated path)
+    :param dict[str] parent_layer_kwargs: kwargs for the parent layer (as kwargs in cls.get_out_data_from_opts())
+    :return: Data template, class type of sub-layer, layer opts (transformed)
+    :rtype: (Data, type, dict[str])|None
+    """
+    queried_sub_layers = parent_layer_kwargs.setdefault("_queried_sub_layers", {})
+    if layer_name not in queried_sub_layers:
+      sub_cls, sub_layer_kwargs = parent_layer_kwargs["_layer_class"], parent_layer_kwargs["_layer_desc"]
+      assert issubclass(sub_cls, LayerBase)
+      res = sub_cls.get_sub_layer_out_data_from_opts(layer_name=layer_name, parent_layer_kwargs=sub_layer_kwargs)
+      if res is None:
+        return None
+      sub_out, sub_cls, sub_opts = res
+      assert isinstance(sub_out, Data)
+      assert isinstance(sub_opts, dict)
+      sub_opts = sub_opts.copy()
+      # fallback to default parent net and name
+      sub_opts.pop("network", None)
+      sub_opts.pop("name", None)
+      res = (sub_out, sub_cls, sub_opts)
+      queried_sub_layers[layer_name] = res
+    sub_out, sub_cls, sub_opts = queried_sub_layers[layer_name]
+    # This is all encapsulated. The outside should not check get_rec_initial_extra_outputs or anything on the layer.
+    from returnn.tf.layers.base import WrappedInternalLayer
+    return sub_out, WrappedInternalLayer, {}
+
+  def get_sub_layer(self, layer_name):
+    """
+    :param str layer_name: name of the sub_layer (right part of '/' separated path)
+    :return: the sub_layer addressed in layer_name or None if no sub_layer exists
+    :rtype: LayerBase|None
+    """
+    if layer_name in self._out_layers:
+      return self._out_layers[layer_name]
+    if layer_name == "":
+      layer = self.sub_layer
+    else:
+      layer = self.sub_layer.get_sub_layer(layer_name)
+      if not layer:
+        return None
+
+    from returnn.tf.layers.base import WrappedInternalLayer
+    full_layer_name = (self.name + "/" + layer_name) if layer_name else self.name
+
+    # In case we are in rec layer and optimize out of loop and mask over this axis, and don't have masked_from:
+    inside_rec_time_dim = self.network.get_inside_rec_time_dim(inside_loop=True)
+    over_rec_time_dim = self.network.get_inside_rec_time_dim(inside_loop=False)
+    if (
+          not self.masked_from and
+          over_rec_time_dim == self.in_spatial_dim and
+          over_rec_time_dim and not inside_rec_time_dim):
+      # We will automatically unmask again (https://github.com/rwth-i6/returnn/pull/976).
+      assert self.mask
+      opts = dict(
+        name="%s(internal-unmask)" % layer.name, mask=self.mask, sources=[layer], network=layer.network)
+      opts["output"] = UnmaskLayer.get_out_data_from_opts(**opts)
+      out_layer = UnmaskLayer(**opts)
+      return WrappedInternalLayer(
+        base_layer=out_layer, name=full_layer_name, network=self.network, output=out_layer.output)
+    elif self.mask and self.network.is_inside_rec_layer():
+      assert self._rec_previous_layer
+      assert self.mask.output.shape == () and self.mask.output.batch_shape == (None,)
+      assert layer.output.is_batch_major
+      prev_out = layer.output.copy_template()
+      key = ("_output/" + layer_name) if layer_name else "_output"
+      prev_out.placeholder = self._rec_previous_layer.rec_vars_outputs[key]
+      prev_out.sanity_check()
+      mask_t = self.mask.output.placeholder
+      out = layer.output.copy_template()
+      out.placeholder = tf_util.where_bc(
+        condition=tf.reshape(mask_t, [-1] + [1] * (layer.output.batch_ndim - 1)),  # add broadcast dims
+        x=layer.output.placeholder,
+        y=prev_out.placeholder)
+      self.rec_vars_outputs[key] = out.placeholder
+      return WrappedInternalLayer(
+        base_layer=layer, output=out,
+        network=self.network, name=(self.name + "/" + layer_name) if layer_name else self.name)
+    else:
+      return WrappedInternalLayer(
+        base_layer=layer, name=full_layer_name, network=self.network, output=layer.output)
 
   def get_constraints_value(self):
     """
@@ -8036,6 +8109,19 @@ class MaskedComputationLayer(LayerBase):
         batch_dim=batch_dim, rec_layer=rec_layer, output=output, **layer_desc)
       assert "_output" not in d
       d["_output"] = initial_out
+      for layer_name, (sub_out, sub_cls, sub_opts) in kwargs.get("_queried_sub_layers", {}).items():
+        assert isinstance(layer_name, str)
+        assert isinstance(sub_out, Data)
+        assert issubclass(sub_cls, LayerBase)
+        assert isinstance(sub_opts, dict)
+        sub_opts = sub_opts.copy()
+        sub_opts["output"] = sub_out
+        sub_initial_out = sub_cls.get_rec_initial_output(
+          batch_dim=batch_dim, rec_layer=rec_layer,
+          name=name + "/" + layer_name, network=kwargs["network"],
+          **sub_opts)
+        assert "_output/" + layer_name not in d
+        d["_output/" + layer_name] = sub_initial_out
       return d
 
   @classmethod
@@ -8054,7 +8140,13 @@ class MaskedComputationLayer(LayerBase):
     assert issubclass(layer_class, LayerBase)
     with layer_class.cls_setup_scope(**kwargs):
       d = layer_class.get_rec_initial_extra_outputs_shape_invariants(**layer_desc)
+      assert "_output" not in d
       d["_output"] = tf.TensorShape(output.copy_as_batch_major().batch_shape)
+      for layer_name, (sub_out, _, _) in kwargs.get("_queried_sub_layers", {}).items():
+        assert isinstance(layer_name, str)
+        assert isinstance(sub_out, Data)
+        assert "_output/" + layer_name not in d
+        d["_output/" + layer_name] = tf.TensorShape(sub_out.copy_as_batch_major().batch_shape)
       return d
 
 
