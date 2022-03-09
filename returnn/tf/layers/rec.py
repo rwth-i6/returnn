@@ -7799,6 +7799,7 @@ class MaskedComputationLayer(LayerBase):
     :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
+    d.setdefault("from", ())
     masked_from = d.pop("masked_from", None)
     if masked_from:
       masked_from = get_layer(masked_from)
