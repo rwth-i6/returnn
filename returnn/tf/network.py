@@ -3046,6 +3046,9 @@ class Subnetwork:
 
     :param ((str)->LayerBase)|None parent_get_layer:
     """
+    if self.template:
+      self._construct_template_subnet(get_parent_layer=parent_get_layer)
+      return
     self.net.construct_from_dict(
       self._net_dict,
       get_layer=self.get_sub_layer_func(parent_get_layer))
