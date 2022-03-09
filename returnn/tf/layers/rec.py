@@ -7942,7 +7942,7 @@ class MaskedComputationLayer(LayerBase):
   def get_out_data_from_opts(cls, network, masked_from=None, in_spatial_dim=None, out_spatial_dim=None, **kwargs):
     """
     :param returnn.tf.network.TFNetwork network:
-    :param LayerBase|Noen masked_from:
+    :param LayerBase|None masked_from:
     :param Dim|None in_spatial_dim:
     :param Dim|None out_spatial_dim:
     :rtype: Data
