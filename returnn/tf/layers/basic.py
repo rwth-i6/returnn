@@ -8325,11 +8325,13 @@ class SubnetworkLayer(LayerBase):
     # Make sure the Subnetwork instance is created.
     # This works both in case of template construction or for real construction.
     # See Subnetwork for determining whether this is supposed to be a template or real.
-    subnet = cls.cls_get_sub_network(network=network, name=name, layer_desc=d)
+    subnet = network.make_subnet(name, opts=d)
     cls._update_for_rec_previous_layer(d.get("rec_previous_layer"), d["subnetwork"], subnet.net)
     d["_subnet"] = subnet
     # In case of non-template construction, this will trigger the non-template construction of our "output" sublayer.
     d["_output"] = subnet.construct_layer("output", parent_get_layer=get_layer)
+    if d.get("encapsulate", False):
+      subnet.construct_all(parent_get_layer=get_layer)
     d["_from"] = d.get("from", "data")  # cache this
     d["from"] = []  # disable now. we should get them in the template construction when needed
     super(SubnetworkLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -8362,6 +8364,8 @@ class SubnetworkLayer(LayerBase):
     :param dict[str] layer_desc:
     :rtype: returnn.tf.network.Subnetwork|None
     """
+    if layer_desc.get("encapsulate", False):
+      return None
     return network.make_subnet(name, opts=layer_desc)
 
   def get_sub_layer(self, layer_name):
@@ -8407,12 +8411,15 @@ class SubnetworkLayer(LayerBase):
     return super(SubnetworkLayer, self).get_last_hidden_state(key=key)
 
   @classmethod
-  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, **kwargs):
+  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, encapsulate=False, **kwargs):
     """
     :param tf.Tensor batch_dim: for this layer, might be with beam
     :param returnn.tf.layers.rec.RecLayer rec_layer:
+    :param bool encapsulate:
     :rtype: dict[str,tf.Tensor]
     """
+    if not encapsulate:
+      return {}
     from .rec import _TemplateLayer
     from returnn.tf.network import Subnetwork
     subnet_ = kwargs["_subnet"]
@@ -8432,11 +8439,14 @@ class SubnetworkLayer(LayerBase):
     return extra_outputs
 
   @classmethod
-  def get_rec_initial_extra_outputs_shape_invariants(cls, **kwargs):
+  def get_rec_initial_extra_outputs_shape_invariants(cls, encapsulate=False, **kwargs):
     """
+    :param bool encapsulate:
     :return: optional shapes for the tensors by get_rec_initial_extra_outputs
     :rtype: dict[str,tf.TensorShape]
     """
+    if not encapsulate:
+      return {}
     # Very similar to get_rec_initial_extra_outputs.
     from .rec import _TemplateLayer
     from returnn.tf.network import Subnetwork
