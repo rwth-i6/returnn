@@ -74,6 +74,7 @@ class LayerBase(object):
                state=None,
                need_last=False,
                rec_previous_layer=None,
+               encapsulate=False,
                collocate_with=None,
                trainable=None,
                custom_param_importer=None,
@@ -135,6 +136,11 @@ class LayerBase(object):
       i.e. it does not trigger accumulation.
     :param LayerBase|None rec_previous_layer: via the recurrent layer, layer (template) which represents the past of us.
       You would not explicitly set this in a config. This is automatically, internally, via :class:`RecLayer`.
+    :param bool encapsulate: mostly relevant for SubnetworkLayer and similar:
+      If True, all sub layers will be created,
+        and covered in functions like :func:`get_rec_initial_extra_outputs`,
+        and the logic in :func:`cls_get_sub_network` will not be used.
+      If False, the logic in :func:`cls_get_sub_network` will be used.
     :param list[str]|None collocate_with: in the rec layer, collocate with the specified other layers
     :param bool|None trainable: whether the parameters of this layer will be trained.
       default (None) inherits from the parent layer if there is one, or otherwise True.
@@ -188,6 +194,7 @@ class LayerBase(object):
     self._initial_output = initial_output
     self.need_last = need_last
     self._rec_previous_layer = rec_previous_layer
+    self._encapsulate = encapsulate
     self.collocate_with = collocate_with or []
     self.post_init_hooks = []  # list of functions
     self.sources = list(sources)
