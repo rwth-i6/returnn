@@ -3889,7 +3889,10 @@ class _TemplateLayer(LayerBase):
     # In general, we don't know which information is needed to create the sub-layer template, so provide full kwargs
     # from the parent layer.
     res = self.layer_class_type.get_sub_layer_out_data_from_opts(layer_name, self.kwargs)
-    assert res, "Could not get out data for sub-layer template {}.".format(full_layer_name)
+    if not res:
+      raise LayerNotFound(
+        "%s: Could not get out data template for sub-layer %r" % (self, layer_name),
+        layer_name=full_layer_name, network=self.network)
     output, network, sub_layer_class = res
 
     # Rec sub layer GetLayer might not use this layer instance directly
