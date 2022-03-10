@@ -3591,8 +3591,8 @@ class SplitLayer(_ConcatInputLayer):
     """
     :param str layer_name: name of the sub_layer (right part of '/' separated path)
     :param dict[str] parent_layer_kwargs: kwargs for the parent layer (as kwargs in cls.get_out_data_from_opts())
-    :return: Data template, network and the class type of the sub-layer
-    :rtype: (Data, TFNetwork, type)|None
+    :return: Data template, class type of sub-layer, layer opts (transformed)
+    :rtype: (Data, type, dict[str])|None
     """
     try:
       idx = int(layer_name)
@@ -3610,7 +3610,7 @@ class SplitLayer(_ConcatInputLayer):
       name=name)
     out = cls._get_split_out_data(
       name=name, idx=idx, input_data=input_data, out_dims=out_dims, axis=axis)
-    return out, parent_layer_kwargs["network"], InternalLayer
+    return out, InternalLayer, {}
 
   @classmethod
   def _get_split_out_data(cls, name, input_data, out_dims, idx, axis):
@@ -8339,15 +8339,20 @@ class SubnetworkLayer(LayerBase):
     """
     :param str layer_name: name of the sub_layer (right part of '/' separated path)
     :param dict[str] parent_layer_kwargs: kwargs for the parent layer (as kwargs in cls.get_out_data_from_opts())
-    :return: Data template, network and the class type of the sub-layer
-    :rtype: (Data, TFNetwork, type)|None
+    :return: Data template, class type of sub-layer, layer opts (transformed)
+    :rtype: (Data, type, dict[str])|None
     """
     from returnn.tf.network import Subnetwork
+    from returnn.tf.layers.rec import _TemplateLayer
     subnet = parent_layer_kwargs["_subnet"]
     assert isinstance(subnet, Subnetwork)
     # Should be constructed already. If not, make sure is_output_layer is set.
     layer = subnet.net.get_layer(layer_name)
-    return layer.output, layer.network, layer.__class__
+    if isinstance(layer, _TemplateLayer):
+      layer_class = layer.layer_class_type
+    else:
+      layer_class = layer.__class__
+    return layer.output, layer_class, layer.kwargs
 
   @classmethod
   def cls_get_sub_network(cls, name, network, layer_desc):
@@ -8745,11 +8750,12 @@ class LossLayer(LayerBase):
     """
     :param str layer_name: sub layer name
     :param dict[str] parent_layer_kwargs:
-    :rtype: (Data, TFNetwork, type)|None
+    :return: Data template, class type of sub-layer, layer opts (transformed)
+    :rtype: (Data, type, dict[str])|None
     """
     if layer_name not in ["loss", "error"]:
       return None
-    return cls.get_out_data_from_opts(**parent_layer_kwargs), parent_layer_kwargs["network"], InternalLayer  # same type
+    return cls.get_out_data_from_opts(**parent_layer_kwargs), InternalLayer, {}  # same type
 
   def get_dep_layers(self):
     """
@@ -8847,10 +8853,11 @@ class ForcedAlignmentLayer(_ConcatInputLayer):
     """
     :param str layer_name: sub layer name
     :param dict[str] parent_layer_kwargs:
-    :rtype: (Data, TFNetwork, type)|None
+    :return: Data template, class type of sub-layer, layer opts (transformed)
+    :rtype: (Data, type, dict[str])|None
     """
     if layer_name == "scores":
-      return Data(name="align_scores", shape=(), dtype="float32"), parent_layer_kwargs["network"], InternalLayer
+      return Data(name="align_scores", shape=(), dtype="float32"), InternalLayer, {}
     return None
 
   def get_sub_layer(self, layer_name):

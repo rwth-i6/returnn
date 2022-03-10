@@ -883,8 +883,8 @@ class LayerBase(object):
 
     :param str layer_name: name of the sub_layer (right part of '/' separated path)
     :param dict[str] parent_layer_kwargs: kwargs for the parent layer (as kwargs in cls.get_out_data_from_opts())
-    :return: Data template, network and the class type of the sub-layer
-    :rtype: (Data, TFNetwork, type)|None
+    :return: Data template, class type of sub-layer, layer opts (transformed)
+    :rtype: (Data, type, dict[str])|None
     """
     return None
 
@@ -1785,20 +1785,17 @@ class DataNotAvailableLayer(InternalLayer):
     :param str layer_name: name of the sub_layer (right part of '/' separated path)
     :rtype: LayerBase|None
     """
-    from returnn.tf.network import TFNetwork
     cls = self.layer_class_
     assert issubclass(cls, LayerBase)
     res = cls.get_sub_layer_out_data_from_opts(layer_name=layer_name, parent_layer_kwargs=self.layer_desc)
     if not res:
       return None
-    out, net, sub_layer_class = res
+    out, sub_layer_class, opts = res
     assert isinstance(out, Data)
-    assert isinstance(net, TFNetwork)
     assert issubclass(sub_layer_class, LayerBase)
-    sub_layer_desc = {}  # unfortunately no way to know, this would be dynamic in general...
     return DataNotAvailableLayer(
-      name="%s/%s" % (self.name, layer_name), network=net, output=out,
-      layer_class=sub_layer_class, layer_desc=sub_layer_desc)
+      name="%s/%s" % (self.name, layer_name), network=self.network, output=out,
+      layer_class=sub_layer_class, layer_desc=opts)
 
 
 class WrappedInternalLayer(InternalLayer):
