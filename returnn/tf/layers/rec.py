@@ -3893,19 +3893,30 @@ class _TemplateLayer(LayerBase):
       raise LayerNotFound(
         "%s: Could not get out data template for sub-layer %r" % (self, layer_name),
         layer_name=full_layer_name, network=self.network)
-    output, network, sub_layer_class = res
+    output, sub_layer_class, opts = res
+    assert isinstance(output, Data)
+    assert isinstance(sub_layer_class, type) and issubclass(sub_layer_class, LayerBase)
+    assert isinstance(opts, dict)
+
+    opts = opts.copy()
+    if "network" in opts:
+      assert opts.get("network") and opts.get("name"), "if network is specified, network, name must be set (%r)" % opts
+    else:
+      assert "name" not in opts, "name must not be set if network is not specified (%r)" % opts
+      opts["network"] = self.network
+      opts["name"] = full_layer_name
+
+    opts["output"] = output
+    opts["is_output_layer"] = self.is_output_layer()  # make sub-layers output layers too
+    # We never get here via SubnetworkLayer but only when we explicitly need get_sub_layer,
+    # so this must be collocated with the parent.
+    opts["collocate_with"] = [self.name]
 
     # Rec sub layer GetLayer might not use this layer instance directly
     # but just copy out the template information into an own template layer instance,
     # but this should not matter here.
-    sub_layer_template = _TemplateLayer(network=self.network, name=full_layer_name)
-    is_output_layer = self.is_output_layer()  # make sub-layers output layers too
-    sub_layer_template.init(
-      output=output, layer_class=sub_layer_class, is_output_layer=is_output_layer,
-      name=full_layer_name, network=self.network,
-      # We never get here via SubnetworkLayer but only when we explicitly need get_sub_layer,
-      # so this must be collocated with the parent.
-      collocate_with=[self.name])
+    sub_layer_template = _TemplateLayer(network=opts["network"], name=opts["name"])
+    sub_layer_template.init(layer_class=sub_layer_class, **opts)
     return sub_layer_template
 
   def copy_as_prev_time_frame(self, prev_output=None, rec_vars_prev_outputs=None):
@@ -5739,8 +5750,8 @@ class ChoiceLayer(BaseChoiceLayer):
     """
     :param str layer_name: name of the sub_layer (e.g. 'out_0'), see self.get_sub_layer()
     :param dict[str] parent_layer_kwargs: kwargs for the parent layer
-    :return: Data template, network and the class type of the sub-layer
-    :rtype: (Data, TFNetwork, type)|None
+    :return: Data template, class type of sub-layer, layer opts (transformed)
+    :rtype: (Data, type, dict[str])|None
     """
     assert layer_name.startswith("out_")
     index = int(layer_name[len("out_"):])
@@ -5769,7 +5780,7 @@ class ChoiceLayer(BaseChoiceLayer):
         sources=sources, network=network)
 
     from .base import InternalLayer
-    return sub_layer_out_data, network, InternalLayer
+    return sub_layer_out_data, InternalLayer, {}
 
   def get_dep_layers(self):
     """
