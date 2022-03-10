@@ -3902,7 +3902,7 @@ class _TemplateLayer(LayerBase):
     is_output_layer = self.is_output_layer()  # make sub-layers output layers too
     sub_layer_template.init(
       output=output, layer_class=sub_layer_class, is_output_layer=is_output_layer,
-      name=full_layer_name, network=network,
+      name=full_layer_name, network=self.network,
       # We never get here via SubnetworkLayer but only when we explicitly need get_sub_layer,
       # so this must be collocated with the parent.
       collocate_with=[self.name])
