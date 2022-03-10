@@ -8094,10 +8094,14 @@ class UnmaskLayer(LayerBase):
         self.rec_vars_outputs["t"] = tf.zeros([batch_dim], dtype=tf.int32) - 1
 
     else:  # src has time dim
+      # We need the initial output for proper unmasking.
+      # It's a bit tricky to get the initial output.
       rec_parent_layer = self.network.get_rec_parent_layer(inside_loop=False)
-      assert rec_parent_layer and isinstance(rec_parent_layer.cell, _SubnetworkRecCell)
-      # noinspection PyProtectedMember
-      initial = rec_parent_layer.cell._get_init_output(src_layer.name, batch_dim=batch_dim)  # [B,D']
+      src_layer_opts = src_layer.kwargs.copy()
+      src_layer_out_inner_template = src_layer.output.copy_template_excluding_time_dim()
+      src_layer_opts["output"] = src_layer_out_inner_template
+      initial = src_layer.get_rec_initial_output(
+        batch_dim=batch_dim, rec_layer=rec_parent_layer, **src_layer_opts)  # [B,D']
       if self.network.is_inside_rec_layer():
         # This UnmaskLayer is inside the rec loop but the source is outside (or at least does not have a time dim).
         # The RecLayer will not unroll the source when the dim tag do not match, i.e. when it is masked.
