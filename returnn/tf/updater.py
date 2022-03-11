@@ -833,7 +833,7 @@ class WrapOptimizer:
     assert isinstance(updater_opts, CollectionReadCheckCovered)
     return updater_opts
 
-  @profile
+  # @profile
   def _post_process_grad(self, grad, var, global_info):
     """
     :param tf.Tensor grad:

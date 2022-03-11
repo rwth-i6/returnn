@@ -367,7 +367,7 @@ class TFNetwork(object):
   The main neural network, i.e. collection of interconnected layers, i.e. computation graph with trainable params.
   """
 
-  @profile
+  # @profile
   def __init__(self, config=None, extern_data=None, rnd_seed=None,
                train_flag=None, eval_flag=None, search_flag=None,
                parent_layer=None, parent_net=None, extra_parent_net=None, extra_name_prefix=None,
@@ -801,7 +801,7 @@ class TFNetwork(object):
     """
     return self.get_config().bool("flat_net_construction", False)
 
-  @profile
+  # @profile
   def construct_layer(self, net_dict, name, get_layer=None, add_layer=None, check_existing=True):
     """
     This triggers the construction of the layer `name` if it is not constructed yet.
@@ -984,7 +984,7 @@ class TFNetwork(object):
     layer_desc["network"] = self
     return layer_desc
 
-  @profile
+  # @profile
   def _create_layer(self, name, layer_class, **layer_desc):
     """
     This will create the layer given the layer_desc arguments.
