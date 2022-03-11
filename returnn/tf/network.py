@@ -3978,6 +3978,7 @@ class CustomCheckpointLoader:
       else:
         self.custom_param_importer.assign_var(var=var, session=session)
 
+  @profile
   def get_variable_value_map(self):
     """
     :return: var -> numpy array
