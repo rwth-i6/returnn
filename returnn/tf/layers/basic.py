@@ -8994,7 +8994,7 @@ class FastBaumWelchLayer(_ConcatInputLayer):
                staircase_seq_len_source=None,
                **kwargs):
     """
-    :param str align_target: e.g. "sprint" or "staircase"
+    :param str align_target: e.g. "sprint", "ctc" or "staircase"
     :param str|None align_target_key: e.g. "classes", used for e.g. align_target "ctc"
     :param dict[str] ctc_opts: used for align_target "ctc"
     :param dict[str] sprint_opts: used for Sprint (RASR) for align_target "sprint"
