@@ -2136,6 +2136,7 @@ class TFNetwork(object):
           continue
         raise
 
+  @profile
   def load_params_from_file(self, filename, session):
     """
     Will load the model parameters from the filename.
