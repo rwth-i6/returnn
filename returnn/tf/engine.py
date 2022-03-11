@@ -128,6 +128,7 @@ class Runner(object):
     terminal_width, _ = terminal_size()
     self._show_interactive_process_bar = (log.verbose[3] and (not log.verbose[5]) and terminal_width >= 0)
 
+  @profile
   def _get_fetches_dict(self):
     """
     :return: values and actions which should be calculated and executed in self.run() by the TF session for each step
