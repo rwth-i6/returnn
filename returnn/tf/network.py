@@ -1971,6 +1971,7 @@ class TFNetwork(object):
         num_params += int(numpy.prod(shape))
     return num_params
 
+  @profile
   def initialize_params(self, session):
     """
     :param tf.compat.v1.Session session:
