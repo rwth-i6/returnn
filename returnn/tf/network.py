@@ -801,6 +801,7 @@ class TFNetwork(object):
     """
     return self.get_config().bool("flat_net_construction", False)
 
+  @profile
   def construct_layer(self, net_dict, name, get_layer=None, add_layer=None, check_existing=True):
     """
     This triggers the construction of the layer `name` if it is not constructed yet.
@@ -983,6 +984,7 @@ class TFNetwork(object):
     layer_desc["network"] = self
     return layer_desc
 
+  @profile
   def _create_layer(self, name, layer_class, **layer_desc):
     """
     This will create the layer given the layer_desc arguments.

@@ -1082,7 +1082,7 @@ class Engine(EngineBase):
       from returnn.config import network_json_from_config
       net_dict = network_json_from_config(config)
     return net_dict
-    
+
   @profile
   def init_network_from_config(self, config=None, net_dict_post_proc=None):
     """
@@ -1269,7 +1269,7 @@ class Engine(EngineBase):
 
     for dataset in updated_datasets.values():
       dataset.init_seq_order(epoch=epoch)
-    
+
   @profile
   def _init_network(self, net_desc, epoch=None):
     """
@@ -1372,6 +1372,7 @@ class Engine(EngineBase):
       return False
     return self.network.layers_desc != net_desc
 
+  @profile
   def init_new_network(self, net_desc=None):
     """
     Reinitializes the network, and copies over the parameter from the current network.
