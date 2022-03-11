@@ -402,6 +402,7 @@ class Updater(object):
         callback_on_new()
     return self.optim_op
 
+  @profile
   def init_optimizer_vars(self, session):
     """
     :param tf.compat.v1.Session session:
