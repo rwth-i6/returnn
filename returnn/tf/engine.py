@@ -12,6 +12,8 @@ See :ref:`tech_overview` for an overview how it fits all together.
 
 from __future__ import print_function
 
+from memory_profiler import profile
+
 import os
 import sys
 import time
@@ -563,6 +565,7 @@ class Runner(object):
     self._horovod_last_param_sync_time = time.time()
     return self._horovod_last_param_sync_time - start_time
 
+  @profile
   def run(self, report_prefix):
     """
     :param str report_prefix: prefix for logging, e.g. "train"
@@ -997,6 +1000,7 @@ class Engine(EngineBase):
     return count_bytes
 
   # noinspection PyAttributeOutsideInit
+  @profile
   def init_train_from_config(self, config=None, train_data=None, dev_data=None, eval_data=None):
     """
     :param Config.Config|None config:
@@ -1078,7 +1082,8 @@ class Engine(EngineBase):
       from returnn.config import network_json_from_config
       net_dict = network_json_from_config(config)
     return net_dict
-
+    
+  @profile
   def init_network_from_config(self, config=None, net_dict_post_proc=None):
     """
     :param Config.Config|None config:
@@ -1264,7 +1269,8 @@ class Engine(EngineBase):
 
     for dataset in updated_datasets.values():
       dataset.init_seq_order(epoch=epoch)
-
+    
+  @profile
   def _init_network(self, net_desc, epoch=None):
     """
     :param dict[str,dict[str]] net_desc: layer name -> layer description dict
@@ -1407,6 +1413,7 @@ class Engine(EngineBase):
         "#copy_param_mode", self.pretrain.copy_param_mode if self.is_pretrain_epoch() else None),
       ignore_non_existing=self.is_pretrain_epoch() or self.custom_get_net_dict)
 
+  @profile
   def train(self):
     """
     Does the whole training, i.e. the loop over all the epochs.
@@ -1461,6 +1468,7 @@ class Engine(EngineBase):
 
     print("Finished training in epoch %i." % self.epoch, file=log.v3)  # noqa
 
+  @profile
   def init_train_epoch(self):
     """
     Init for the current train epoch.
@@ -1524,6 +1532,7 @@ class Engine(EngineBase):
       self.load_model(epoch=last_best_epoch)
       self.updater.init_optimizer_vars(session=self.tf_session)  # reset the optimizer vars
 
+  @profile
   def train_epoch(self):
     """
     Train a single epoch (self.epoch).

@@ -5,6 +5,8 @@ Defines the :class:`TFNetwork` and :class:`ExternData`.
 
 from __future__ import print_function
 
+from memory_profiler import profile
+
 import tensorflow as tf
 import sys
 import re
@@ -365,6 +367,7 @@ class TFNetwork(object):
   The main neural network, i.e. collection of interconnected layers, i.e. computation graph with trainable params.
   """
 
+  @profile
   def __init__(self, config=None, extern_data=None, rnd_seed=None,
                train_flag=None, eval_flag=None, search_flag=None,
                parent_layer=None, parent_net=None, extra_parent_net=None, extra_name_prefix=None,
@@ -600,6 +603,7 @@ class TFNetwork(object):
       return self.extra_parent_net.get_absolute_name_prefix() + my_prefix
     return ""
 
+  @profile
   def construct_from_dict(self, net_dict, get_layer=None):
     """
     :param dict[str,dict[str]] net_dict:
@@ -1179,6 +1183,7 @@ class TFNetwork(object):
         self.subnets[name] = subnet
     return subnet
 
+  @profile
   def get_losses_initialized(self, reduce_func=None, with_total=False):
     """
     :param ((tf.Tensor)->tf.Tensor)|None reduce_func: as in get_losses. e.g. TFUtil.identity
@@ -1235,6 +1240,7 @@ class TFNetwork(object):
 
     return losses_dict, total_loss, total_constraints
 
+  @profile
   def _construct_objective(self):
     self._flatten_layer_with_losses()
     with tf.name_scope("objective"):
@@ -1566,6 +1572,7 @@ class TFNetwork(object):
       cache = tf_util.get_flatten_with_seq_len_mask_cache_for_data(layer.output)
       cache.set_cache(new_out.placeholder)
 
+  @profile
   def get_fetches_dict(self, config=None, should_train=None, should_eval=None,
                        with_summary=False, with_size=False,
                        horovod_collected_reduce_inputs=None):
@@ -2034,6 +2041,7 @@ class TFNetwork(object):
     """
     return [self.global_train_step]
 
+  @profile
   def get_params_serialized(self, session):
     """
     :param tf.compat.v1.Session session:
@@ -2043,6 +2051,7 @@ class TFNetwork(object):
       values_dict=self.get_param_values_dict(session=session),
       global_train_step=self.get_global_train_step(session=session))
 
+  @profile
   def set_params_by_serialized(self, serialized, session, **kwargs):
     """
     :param TFNetworkParamsSerialized serialized:

@@ -19,6 +19,8 @@ __maintainer__ = "Patrick Doetsch"
 __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 
 
+from memory_profiler import profile
+
 import os
 import sys
 import time
@@ -440,7 +442,7 @@ def need_data():
     return False
   return True
 
-
+@profile
 def execute_main_task():
   """
   Executes the main task (via config ``task`` option).

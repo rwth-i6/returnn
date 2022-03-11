@@ -6,6 +6,8 @@ and model param update logic in general.
 
 from __future__ import print_function
 
+from memory_profiler import profile
+
 import typing
 import tensorflow as tf
 from tensorflow.python.ops import resource_variable_ops
@@ -241,6 +243,7 @@ class Updater(object):
       lr *= hvd.size()
     return lr
 
+  @profile
   def create_optim_op(self):
     """
     Creates the optimize TF op.
@@ -829,6 +832,7 @@ class WrapOptimizer:
     assert isinstance(updater_opts, CollectionReadCheckCovered)
     return updater_opts
 
+  @profile
   def _post_process_grad(self, grad, var, global_info):
     """
     :param tf.Tensor grad:
@@ -911,6 +915,7 @@ class WrapOptimizer:
       "opt_key": opt_key, "accum_grad_multiple_num_steps": accum_grad_multiple_num_steps}
     return grad, apply_grad_opts
 
+  @profile
   def get_apply_grads_op(self, loss, var_list):
     """
     :param tf.Tensor loss:
