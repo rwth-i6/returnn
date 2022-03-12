@@ -4073,6 +4073,18 @@ def test_reclayer_optimize_out_masked_computation_unmask():
     })
 
 
+def test_reclayer_optimize_out_masked_computation():
+  check_reclayer_optimize_out(
+    {"class": "linear", "activation": None, "from": "masked"},
+    other_subnet_layers={
+      "sum": {"class": "reduce", "mode": "sum", "from": "data:source", "axis": "f"},  # [B]
+      "mask": {"class": "compare", "from": "sum", "value": 0.0, "kind": "greater"},  # [B]
+      "masked": {
+        "class": "masked_computation", "mask": "mask", "from": "data:source",
+        "unit": {"class": "rec", "unit": "NativeLstm2", "n_out": 17, "from": "data"}},
+    })
+
+
 def test_reclayer_optimize_out_access_split():
   check_reclayer_optimize_out(
     subnet_layer_dict={"class": "copy", "from": "split/0", "n_out": 5},
