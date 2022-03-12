@@ -4085,6 +4085,26 @@ def test_reclayer_optimize_out_masked_computation():
     })
 
 
+def test_reclayer_optimize_out_masked_computation_out_shape():
+  from returnn.tf.util.data import batch_dim
+  lstm_out_dim = FeatureDim("lstm-out", 17)
+  check_reclayer_optimize_out(
+    {"class": "linear", "activation": None, "from": "masked"},
+    other_subnet_layers={
+      "sum": {"class": "reduce", "mode": "sum", "from": "data:source", "axis": "f"},  # [B]
+      "mask": {"class": "compare", "from": "sum", "value": 0.0, "kind": "greater"},  # [B]
+      "masked": {
+        "class": "masked_computation", "mask": "mask", "from": "data:source",
+        "unit": {
+          "class": "subnetwork", "from": "data", "subnetwork": {
+            "output": {
+              "class": "rec", "unit": "NativeLstm2", "out_dim": lstm_out_dim, "from": "data",
+              "out_shape": {batch_dim, lstm_out_dim}}
+          }
+        }},
+    })
+
+
 def test_reclayer_optimize_out_access_split():
   check_reclayer_optimize_out(
     subnet_layer_dict={"class": "copy", "from": "split/0", "n_out": 5},
