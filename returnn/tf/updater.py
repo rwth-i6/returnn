@@ -820,7 +820,7 @@ class WrapOptimizer:
   def _get_updater_opts_from_var(cls, var):
     """
     :param tf.Variable var:
-    :rtype: Util.CollectionReadCheckCovered
+    :rtype: returnn.util.basic.CollectionReadCheckCovered
     """
     from returnn.util.basic import CollectionReadCheckCovered
     updater_opts = getattr(var, "RETURNN_updater_opts", None)
@@ -835,7 +835,7 @@ class WrapOptimizer:
     :param tf.Variable var:
     :param WrapOptimizer._GetGlobalInfo global_info:
     :return: new grad, apply grad opts
-    :rtype: tf.Tensor, dict[str]
+    :rtype: (tf.Tensor, dict[str])
     """
     updater_opts = self._get_updater_opts_from_var(var)
 
