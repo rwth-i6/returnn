@@ -7704,8 +7704,13 @@ class MaskedComputationLayer(LayerBase):
       sub_layers[sub_layer_name] = source
       return source
 
+    inside_rec_time_dim = self.network.get_inside_rec_time_dim(inside_loop=True)
+    over_rec_time_dim = self.network.get_inside_rec_time_dim(inside_loop=False)
     extra_net = self.network.make_extra_net(
       prefix_name="extra._internal.masked(%s)" % self.name, boundary=True)
+    if in_spatial_dim == over_rec_time_dim and over_rec_time_dim and not inside_rec_time_dim:
+      # Optimized out, so any sub layers will effectively operate on the out spatial dim.
+      extra_net._over_rec_time_dim = out_spatial_dim
     layer_desc = unit.copy()
     class_name = layer_desc.pop("class")
     layer_class = get_layer_class(class_name)
@@ -7834,6 +7839,7 @@ class MaskedComputationLayer(LayerBase):
     if not get_layer:
       get_layer = network.get_layer
 
+    inside_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=True)
     over_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=False)
     if over_rec_time_dim and not in_spatial_dim:
       in_spatial_dim = over_rec_time_dim
@@ -7916,6 +7922,9 @@ class MaskedComputationLayer(LayerBase):
       # Also, any subnet here must be only a template construction.
       # We will redo the full construction including transform_config_dict on the sub layer in __init__.
       only_template=True, boundary=True)
+    if _Locals.in_spatial_dim_ == over_rec_time_dim and over_rec_time_dim and not inside_rec_time_dim:
+      # Optimized out, so any sub layers will effectively operate on the out spatial dim.
+      extra_net._over_rec_time_dim = _Locals.out_spatial_dim_
     layer_desc = unit.copy()
     class_name = layer_desc.pop("class")
     layer_class = get_layer_class(class_name)
