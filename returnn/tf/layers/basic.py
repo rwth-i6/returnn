@@ -9937,7 +9937,8 @@ class CtcLoss(Loss):
   @classmethod
   def get_auto_output_layer_dim(cls, target_dim):
     """
-    :rtype: int
+    :param returnn.tf.util.data.Dim target_dim:
+    :rtype: returnn.tf.util.data.Dim
     """
     return target_dim + 1  # one added for blank
 

@@ -638,12 +638,19 @@ class LayerBase(object):
         if initial_output not in ["zeros", "ones", "var", "keep_over_epoch", "keep_over_epoch_no_init", "apply(0)"]:
           # if initial_output is not a reserved keyword, assume it is a layer
           d['initial_output'] = get_layer(initial_output)
-    if "n_out" not in d and targets:
+    if "n_out" not in d and "out_dim" not in d and targets:
       # Must be done here now because loss might be set to None later.
       target = targets[0]  # guess using first target
-      d["n_out"] = cls._guess_n_out_from_target_and_opt_loss(
+      guessed_out_dim = cls._guess_out_dim_from_target_and_opt_loss(
         network=network, target=target, target_layers=target_layers,
         loss_class_name=d.get("loss", None), get_layer=get_layer)
+      if guessed_out_dim:
+        if cls.layer_class in {"linear", "softmax"}:
+          d["out_dim"] = guessed_out_dim
+        else:
+          # Many layers don't introduce a new out_dim (e.g. activation, copy, etc),
+          # and setting out_dim would break many old configs.
+          d["n_out"] = guessed_out_dim.dimension
     if "out_shape" in d:
       inside_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=True)
       over_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=False)
@@ -686,15 +693,15 @@ class LayerBase(object):
       d["state"] = nest.map_structure(get_layer, d["state"])
 
   @classmethod
-  def _guess_n_out_from_target_and_opt_loss(cls, network, target, target_layers, loss_class_name, get_layer):
+  def _guess_out_dim_from_target_and_opt_loss(cls, network, target, target_layers, loss_class_name, get_layer):
     """
     :param returnn.tf.network.TFNetwork network:
     :param str target: e.g. "classes"
     :param dict[str,LayerBase] target_layers:
     :param str|None loss_class_name: e.g. "ce" or None
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
-    :return: n_out value
-    :rtype: int
+    :return: out_dim value
+    :rtype: returnn.tf.util.data.Dim|None
     """
     from .basic import get_loss_class
     if target in target_layers:
@@ -703,11 +710,14 @@ class LayerBase(object):
       target_data = cls._static_get_target_value(
         target=target, network=network, mark_data_key_as_used=False, get_layer=get_layer, _target_layers=target_layers)
       if not target_data:
-        return 1  # dummy value during template construction. this would be corrected later
-    n_out = target_data.dim
+        # dummy value during template construction. this would be corrected later
+        return FeatureDim("dummy-unk-target-out", 1)
+    out_dim = target_data.feature_dim_or_sparse_dim
+    if not out_dim:
+      return None
     if loss_class_name:
-      n_out = get_loss_class(loss_class_name).get_auto_output_layer_dim(n_out)
-    return n_out
+      out_dim = get_loss_class(loss_class_name).get_auto_output_layer_dim(out_dim)
+    return out_dim
 
   @classmethod
   def _make_loss(cls, class_name, opts, network, get_layer, always_make=False):
@@ -2594,9 +2604,10 @@ class Loss(object):
         "%s: have flat output (%r) but not flat targets (%r)" % (self, self.output, self.target))
     assert self.target.ndim_dense == self.output.ndim_dense, (
       "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output))
-    expected_output_dim = self.get_auto_output_layer_dim(self.target.dim)
-    assert expected_output_dim == self.output.dim, (
-      "Expected output dim is %r but the output has dim %r. " % (expected_output_dim, self.output.dim) +
+    expected_output_dim = self.get_auto_output_layer_dim(self.target.feature_dim_or_sparse_dim)
+    assert expected_output_dim.dimension == self.output.dim, (
+      "Expected output dim is %r but the output has dim %r. " % (
+        expected_output_dim, self.output.feature_dim_or_sparse_dim) +
       "Target: %s, output: %s" % (self.target, self.output))
     if self.base_network.get_config().bool("debug_runtime_sanity_checks", False):
       with tf.name_scope("Loss_debug_runtime_sanity_checks"):
@@ -2678,9 +2689,9 @@ class Loss(object):
   @classmethod
   def get_auto_output_layer_dim(cls, target_dim):
     """
-    :param int target_dim:
+    :param returnn.tf.util.data.Dim target_dim:
     :return: normally just the same as target_dim. e.g. for CTC, we would add 1 for the blank label
-    :rtype: int
+    :rtype: returnn.tf.util.data.Dim
     """
     return target_dim
 
