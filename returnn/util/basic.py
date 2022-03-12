@@ -2423,7 +2423,7 @@ class CollectionReadCheckCovered:
     """
     :param str item:
     :param T default:
-    :rtype: T|object|None
+    :rtype: T|typing.Any|None
     """
     try:
       return self[item]
