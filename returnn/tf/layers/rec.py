@@ -4801,10 +4801,12 @@ class RnnCellLayer(_ConcatInputLayer):
     :param LayerBase|str|int|float|None|list|tuple|namedtuple initial_state:
     :rtype: tf.Tensor
     """
-    assert initial_output is None, "layer %r: use initial_state instead" % kwargs["name"]
-    if initial_state in [None, 0, "zeros"]:
+    from tensorflow.python.util import nest
+    if all(v in [None, 0, "zeros"] for v in nest.flatten(initial_state)):
+      assert initial_output in (None, 0), "layer %r: use initial_state instead" % kwargs["name"]
       # We can just return 0.
       return super(RnnCellLayer, cls).get_rec_initial_output(initial_output=0, **kwargs)
+    assert initial_output is None, "layer %r: use initial_state instead" % kwargs["name"]
     state = cls.get_rec_initial_state(unit=unit, initial_state=initial_state, **kwargs)
     return cls.get_output_from_state(state=state, unit=unit)
 
