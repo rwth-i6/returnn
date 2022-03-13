@@ -7848,6 +7848,7 @@ class MaskedComputationLayer(LayerBase):
       in_spatial_dim_ = in_spatial_dim
       out_spatial_dim_ = out_spatial_dim
 
+    extra_net = None
     _layer_cache = {}
 
     def sub_get_layer(sub_layer_name):
@@ -7904,8 +7905,9 @@ class MaskedComputationLayer(LayerBase):
             kind=Dim.Types.Spatial, description="%s:masked:time" % name,
             derived_from_tag=_Locals.in_spatial_dim_, auto_generated=True)
           if _Locals.in_spatial_dim_ == over_rec_time_dim and over_rec_time_dim and not inside_rec_time_dim:
-            # Optimized out, so any sub layers will effectively operate on the out spatial dim.
-            extra_net._over_rec_time_dim = _Locals.out_spatial_dim_
+            if extra_net:
+              # Optimized out, so any sub layers will effectively operate on the out spatial dim.
+              extra_net._over_rec_time_dim = _Locals.out_spatial_dim_
         source_data = source_data.copy_template_replace_dim_tag(axis=0, new_dim_tag=_Locals.out_spatial_dim_)
         layer = WrappedInternalLayer(
           base_layer=layer, network=layer.network, name=layer.name,
