@@ -6954,10 +6954,12 @@ def test_MaskedComputationLayer_rec_subnet_name_scope():
     net_dict = {
       "output": {
         "class": "rec", "from": "data",
+        "name_scope": "",
         "unit": {
           "mask": {"class": "rec_unstack", "from": "base:data:mask"},
           "masked_comp": {
             "class": "masked_computation", "from": "prev:recurrent", "mask": "mask",
+            "name_scope": "",
             "unit": {
               "class": "subnetwork", "from": "data", "subnetwork": {
                 "linear": {"class": "linear", "from": "data", "out_dim": feat_dim},
@@ -6979,10 +6981,7 @@ def test_MaskedComputationLayer_rec_subnet_name_scope():
     params = net.get_params_list()
     print(params)
     assert len(params) == 2
-    assert_equal(
-      set(p.name for p in params),
-      {"output/rec/masked_comp/linear/W:0",
-       "output/rec/masked_comp/linear/b:0"})
+    assert_equal(set(p.name for p in params), {"linear/W:0", "linear/b:0"})
 
 
 def test_subnet_deps_search():
