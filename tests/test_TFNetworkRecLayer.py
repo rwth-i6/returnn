@@ -6936,6 +6936,55 @@ def test_MaskedComputationLayer_subnet_name_scope():
     assert_equal(set(p.name for p in params), {"output/linear/W:0", "output/linear/b:0"})
 
 
+def test_MaskedComputationLayer_rec_subnet_name_scope():
+  with make_scope() as session:
+    from returnn.tf.util.data import batch_dim
+    time_dim = SpatialDim('time')
+    feat_dim = FeatureDim("input", 5)
+    config = Config({
+      "extern_data": {
+        "data": {
+          "dim_tags": (batch_dim, time_dim, feat_dim)},
+        "mask": {
+          "dim": 2, "dtype": "bool", "sparse": True, "dim_tags": (batch_dim, time_dim),
+          "available_for_inference": True}
+      }
+    })
+    net = TFNetwork(config=config)
+    net_dict = {
+      "output": {
+        "class": "rec", "from": "data",
+        "unit": {
+          "mask": {"class": "rec_unstack", "from": "base:data:mask"},
+          "masked_comp": {
+            "class": "masked_computation", "from": "prev:recurrent", "mask": "mask",
+            "unit": {
+              "class": "subnetwork", "from": "data", "subnetwork": {
+                "linear": {"class": "linear", "from": "data", "out_dim": feat_dim},
+                "output": {"class": "copy", "from": "linear"}
+              }
+            }
+          },
+          "recurrent": {"class": "combine", "kind": "add", "from": ["masked_comp", "data:source"]},
+          "output": {"class": "copy", "from": "masked_comp"}
+        }
+      },
+    }
+    net.construct_from_dict(net_dict)
+    net.initialize_params(session)
+    out_data = net.get_layer("output").output.copy_as_batch_major()
+    from test_TFNetworkLayer import make_feed_dict
+    feed_dict = make_feed_dict(net.extern_data)
+    session.run(out_data.placeholder, feed_dict=feed_dict)
+    params = net.get_params_list()
+    print(params)
+    assert len(params) == 2
+    assert_equal(
+      set(p.name for p in params),
+      {"output/rec/masked_comp/linear/W:0",
+       "output/rec/masked_comp/linear/b:0"})
+
+
 def test_subnet_deps_search():
   beam_size = 3
   EncKeyTotalDim = 10
