@@ -6847,6 +6847,34 @@ def test_MaskedComputationLayer_outside():
     assert out_v.shape == (num_batch, max(out_lens))
 
 
+def test_MaskedComputationLayer_name_scope():
+  with make_scope() as session:
+    from returnn.tf.util.data import batch_dim
+    time_dim = SpatialDim('time')
+    config = Config({
+      "extern_data": {
+        "data": {"dim": 20, "sparse": True, "dim_tags": (batch_dim, time_dim)},
+        "mask": {"dim": 2, "dtype": "bool", "sparse": True, "dim_tags": (batch_dim, time_dim)}}
+    })
+    net = TFNetwork(config=config)
+    net_dict = {
+      "output": {
+        "class": "masked_computation", "from": "data", "mask": "data:mask",
+        "unit": {"class": "linear", "from": "data", "n_out": 7}
+      },
+    }
+    net.construct_from_dict(net_dict)
+    net.initialize_params(session)
+    out_data = net.get_layer("output").output.copy_as_batch_major()
+    from test_TFNetworkLayer import make_feed_dict
+    feed_dict = make_feed_dict(net.extern_data)
+    session.run(out_data.placeholder, feed_dict=feed_dict)
+    params = net.get_params_list()
+    print(params)
+    assert len(params) == 2
+    assert_equal(set(p.name for p in params), {"output/W:0", "output/b:0"})
+
+
 def test_subnet_deps_search():
   beam_size = 3
   EncKeyTotalDim = 10
