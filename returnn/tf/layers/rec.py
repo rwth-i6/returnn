@@ -7720,6 +7720,9 @@ class MaskedComputationLayer(LayerBase):
     layer_desc["_name"] = self.name
     layer_desc["encapsulate"] = True
     layer_desc["rec_previous_layer"] = self._rec_previous_layer
+    if self.name_scope is not None and "name_scope" in layer_desc:
+      raise Exception("%s: set name_scope only in the masked_computation layer itself" % self)
+    layer_desc.setdefault("name_scope", self.name_scope)
     layer_class.transform_config_dict(layer_desc, network=extra_net, get_layer=sub_get_layer)
     # noinspection PyProtectedMember
     layer_desc = extra_net._create_layer_layer_desc(name=self.name, layer_desc=layer_desc)
