@@ -903,7 +903,7 @@ def is_at_exit():
     return False
 
 
-class _Output:
+class _OutputLinesCollector:
     def __init__(self, color):
         """
         :param Color color:
@@ -959,6 +959,11 @@ class _Output:
         :param int depth_limit:
         :rtype: str
         """
+        # We want to exclude array types from Numpy, TensorFlow, PyTorch, etc.
+        # Getting __getitem__ or __len__ on them even could lead to unexpected results or deadlocks,
+        # depending on the context (e.g. inside a TF session run, extending the graph is unexpected).
+        if hasattr(obj, "shape"):
+            return ""
         s = []
         if hasattr(obj, "__len__"):
             # noinspection PyBroadException
@@ -1021,7 +1026,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
     :rtype: list[str]
     """
     color = Color(enable=with_color)
-    output = _Output(color=color)
+    output = _OutputLinesCollector(color=color)
 
     def format_filename(s):
         """
@@ -1243,7 +1248,7 @@ def better_exchook(etype, value, tb,
         file = sys.stderr
 
     color = Color(enable=with_color)
-    output = _Output(color=color)
+    output = _OutputLinesCollector(color=color)
 
     rec_args = dict(autodebugshell=False, file=file, with_color=with_color, with_preamble=with_preamble)
     if getattr(value, "__cause__", None):
