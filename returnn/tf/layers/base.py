@@ -668,12 +668,12 @@ class LayerBase(object):
       d.pop("loss_opts", None)
     if d.get("loss", None):
       loss_opts = d.pop("loss_opts", None)
-      if not loss_opts:
-        loss_opts = {}
+      loss_opts = loss_opts.copy() if loss_opts else {}
       # loss_scale: scale factor for loss (1.0 by default). DEPRECATED: use loss.scale instead, via loss_opts
       loss_scale = d.pop("loss_scale", 1.0)
       if loss_scale != 1.0:
-        assert loss_opts.get("scale", 1.0) == 1.0, "do not use loss_scale and loss with 'scale' option together"
+        if "scale" in loss_opts:
+          assert loss_opts["scale"] == loss_scale, "do not use loss_scale and loss with 'scale' option together"
         loss_opts["scale"] = loss_scale
       d["loss"] = cls._make_loss(
         class_name=d.pop("loss", None), opts=loss_opts, network=network, get_layer=get_layer)
