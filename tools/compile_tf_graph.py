@@ -985,11 +985,8 @@ class RecStepByStepLayer(RecLayer):
       # which replace references to variables in `initial_value` with references to the variable's initialized values.
       # This is not what we want. Also, it has a cycle check which is extremely inefficient and basically just hangs.
       # Instead, some dummy initializer. The shape should not matter.
-      dyn_one = tf_compat.v1.placeholder_with_default(tf.constant(1), ())
-      zero_initializer = tf.zeros(
-        [d if (d is not None) else dyn_one for d in self.var_data_shape.batch_shape],
-        dtype=self.var_data_shape.dtype)
-      zero_initializer.set_shape(self.var_data_shape.batch_shape)
+      zero_initializer = tf_util.zeros_dyn_shape(
+        shape=self.var_data_shape.batch_shape, dtype=self.var_data_shape.dtype)
       with helper_variable_scope():
         self.var = tf_compat.v1.get_variable(
           name=tf_util.get_valid_scope_name_from_str(name),

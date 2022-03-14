@@ -4293,29 +4293,22 @@ def enforce_copy(x):
     return tf.add(x, zero)
 
 
-def copy_unknown_shape(x):
+def zeros_dyn_shape(shape, dtype=tf.float32, name="zeros_dyn_shape"):
   """
-  :param tf.Tensor x:
-  :return: tensor, copy of x, which has an unknown shape by intention
+  :param list[int|None]|tuple[int|None] shape:
+  :param str|tf.DType dtype:
+  :param str name:
+  :return: zeros = tf.zeros() which has 1 at the None dims, however, this is a dynamic size,
+    so zeros.shape.as_list() returns exactly shape, including the None's.
   :rtype: tf.Tensor
   """
-  x = tf.convert_to_tensor(x)
-
-  # Currently we use py_func, which is somewhat inefficient, and also CPU-only.
-  # But this is fine for our use cases.
-
-  # noinspection PyShadowingNames
-  def py_copy(x_np):
-    """
-    :param numpy.ndarray x_np:
-    :rtype: numpy.ndarray
-    """
-    return x_np
-
-  y, = tf_compat.v1.py_func(py_copy, [x], [x.dtype], name="py_copy")
-  assert isinstance(y, tf.Tensor)
-  assert y.shape.ndims is None
-  return y
+  with tf.name_scope(name):
+    dyn_one = tf_compat.v1.placeholder_with_default(tf.constant(1), ())
+    zeros = tf.zeros(
+      [d if (d is not None) else dyn_one for d in shape],
+      dtype=dtype)
+    zeros.set_shape(shape)
+    return zeros
 
 
 def view_as(x, dtype):

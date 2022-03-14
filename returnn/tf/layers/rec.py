@@ -4707,13 +4707,12 @@ class RnnCellLayer(_ConcatInputLayer):
       return var
     elif initial_state == "keep_over_epoch" or initial_state == "keep_over_epoch_no_init":
       # "keep_over_epoch_no_init" should only be used to build a graph for use outside returnn.
-      from returnn.tf.util.basic import CollectionKeys, copy_unknown_shape
       assert rec_layer is not None
       with rec_layer.var_creation_scope():
         var = tf_compat.v1.get_variable(
           'keep_state_%s' % key_name,
-          validate_shape=False, initializer=copy_unknown_shape(tf.zeros(())),  # Dummy state, will not be used.
-          trainable=False, collections=[tf_compat.v1.GraphKeys.GLOBAL_VARIABLES, CollectionKeys.STATE_VARS])
+          validate_shape=False, initializer=tf_util.zeros_dyn_shape(shape_invariant),  # Dummy state, will not be used.
+          trainable=False, collections=[tf_compat.v1.GraphKeys.GLOBAL_VARIABLES, tf_util.CollectionKeys.STATE_VARS])
       assert isinstance(var, tf.Variable)
       var.set_shape(shape_invariant)
       rec_layer.saveable_param_replace[var] = None  # Do not save this variable.
