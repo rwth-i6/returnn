@@ -1229,6 +1229,17 @@ class _SubnetworkRecCell(object):
     # These Exceptions always indicate incorrect construction, so fail directly instead of collecting them
     fail_directly_exception_types = (DataNotFound, LayerNotFound, BehaviorVersion.RequirementNotSatisfied)
 
+    # noinspection PyShadowingNames
+    def _parent_get_layer(layer_name):
+      """
+      :param str layer_name:
+      :rtype: LayerBase
+      """
+      ConstructCtx.in_parent_get_layer = True
+      res = parent_get_layer(layer_name)
+      ConstructCtx.in_parent_get_layer = False
+      return res
+
     class CollectedException:
       """
       Collected exception information.
@@ -1250,6 +1261,7 @@ class _SubnetworkRecCell(object):
       partially_finished = []  # type: typing.List[_TemplateLayer]
       collected_exceptions = OrderedDict()  # type: OrderedDict[object,CollectedException]  # key custom below
       recent_exception = None  # type: Exception
+      in_parent_get_layer = False
 
       # noinspection PyShadowingNames
       @classmethod
@@ -1263,6 +1275,8 @@ class _SubnetworkRecCell(object):
 
         :param str layer_name:
         """
+        if cls.in_parent_get_layer:
+          raise
         exc_type, value, tb = sys.exc_info()
         exc_last_frame = list(better_exchook.iter_traceback(tb))[-1]
         exc_key = (exc_last_frame.f_code.co_filename, exc_last_frame.f_lineno, exc_last_frame.f_code.co_name)
@@ -1446,7 +1460,7 @@ class _SubnetworkRecCell(object):
             earlier_layer_output = layer_.output
         if name.startswith("base:"):
           assert not is_prev_time_frame
-          layer_ = parent_get_layer(name[len("base:"):])
+          layer_ = _parent_get_layer(name[len("base:"):])
           if ConstructCtx.layers:
             ConstructCtx.layers[-1].add_dependency(layer_, is_prev_time_frame=False)
           return layer_
@@ -1478,7 +1492,7 @@ class _SubnetworkRecCell(object):
               layer_dict = self.net_dict[name]
               initial_output = layer_dict.get("initial_output")
               if isinstance(initial_output, str) and initial_output.startswith("base:"):
-                initial_output_layer = parent_get_layer(initial_output[len("base:"):])
+                initial_output_layer = _parent_get_layer(initial_output[len("base:"):])
                 layer_.output = initial_output_layer.output.copy_template(name="%s_output" % name)
           # See how far we can get without recursive layer construction.
           # We only want to get the data template for now.
