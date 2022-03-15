@@ -626,18 +626,19 @@ class StftLayer(_ConcatInputLayer):
     assert self.input_data.have_time_axis()
     out_dim = fft_size // 2 + 1
     in_dim = self.input_data.feature_dim_or_sparse_dim
-    input_data = self.input_data.copy_as_batch_feature_major()
     input_data, num_batch_dims = ConvLayer.transform_input(
-      input_data, network=self.network, in_dim=in_dim)
+      self.input_data, network=self.network, in_dim=in_dim)
     # We want to prepare the input data such that the batch-dim(s) is the very first,
     # the feature-dim is right after batch-dim ("NCHW"), and the spatial dim is last.
-    assert input_data.feature_dim_axis == num_batch_dims
-    in_spatial_dims_ = input_data.dim_tags[num_batch_dims + 1:]
+    if self.output.feature_dim_axis == num_batch_dims:
+      input_data = input_data.copy_with_feature_dim_axis(num_batch_dims)
+    else:
+      input_data = input_data.copy_with_feature_dim_axis(-1)
     x = input_data.placeholder
-    extended_batch_shape = None
-    assert input_data.batch_shape[input_data.feature_dim_axis] == 1, "only implemented for single channel"
     # squeeze feature axis
+    assert input_data.batch_shape[input_data.feature_dim_axis] == 1, "only implemented for single channel"
     x = tf.squeeze(x, axis=input_data.feature_dim_axis)
+    extended_batch_shape = None
     if num_batch_dims > 1:
       x_shape = tf.shape(x)
       extended_batch_shape = x_shape[:num_batch_dims]

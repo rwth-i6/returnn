@@ -4092,12 +4092,9 @@ def test_StftLayer():
       stft_layer = StftLayer(**layer_desc)
     net.layers["stft"] = stft_layer
     net.initialize_params(session)
-    v_out = session.run(
+    session.run(
       (stft_layer.output.placeholder, stft_layer.output.get_sequence_lengths()),
       feed_dict=make_feed_dict(net.extern_data, n_time=1024))
-    import ipdb
-    ipdb.set_trace()
-    assert v_out == 0
 
 
 def test_ConvLayer_time_dim_out():
