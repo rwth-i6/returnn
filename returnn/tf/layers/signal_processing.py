@@ -7,7 +7,7 @@ from __future__ import division
 
 import tensorflow as tf
 import returnn.tf.compat as tf_compat
-from returnn.tf.layers.basic import LayerBase, _ConcatInputLayer, get_concat_sources_data_template
+from returnn.tf.layers.basic import LayerBase, _ConcatInputLayer, ConvLayer, get_concat_sources_data_template
 from returnn.tf.util.basic import Data
 
 
@@ -605,6 +605,67 @@ class MultiChannelStftLayer(MultiChannelMultiResolutionStftLayer):
     return (super(MultiChannelStftLayer, cls)
             .get_out_data_from_opts(fft_sizes=[fft_size], use_rfft=use_rfft, nr_of_channels=nr_of_channels, **kwargs)
             .copy_template(dtype="complex64"))
+
+
+class StftLayer(_ConcatInputLayer):
+  """
+  A generic STFT layer.
+  """
+
+  layer_class = "stft"
+  recurrent = True  # we should not shuffle in the time-dimension
+
+  # noinspection PyUnusedLocal
+  def __init__(self, frame_shift, frame_size, fft_size=None, **kwargs):
+    """
+    :param int frame_shift: frame shift for STFT
+    :param int frame_size: frame size for STFT
+    :param Optional[int] fft_size: size of the FFT to apply
+    """
+    fft_size = fft_size or frame_size
+    assert "n_out" not in kwargs
+    assert "out_type" not in kwargs
+    super(StftLayer, self).__init__(**kwargs)
+    assert not self.input_data.sparse
+    assert self.input_data.have_batch_axis()
+    assert self.input_data.have_time_axis()
+    out_dim = fft_size // 2 + 1
+    in_dim = self.input_data.feature_dim_or_sparse_dim
+    input_data, num_batch_dims = ConvLayer.transform_input(
+      self.input_data, network=self.network, in_dim=in_dim)
+    x = input_data.placeholder
+    # squeeze feature axis
+    assert input_data.batch_shape[input_data.feature_dim_axis] == 1, "only implemented for single channel"
+    x = tf.squeeze(x, axis=input_data.feature_dim_axis)
+    extended_batch_shape = None
+    if num_batch_dims > 1:
+      x_shape = tf.shape(x)
+      extended_batch_shape = x_shape[:num_batch_dims]
+      x = tf.reshape(x, tf.concat([[-1], x_shape[num_batch_dims:]], axis=0))  # merge all batch dims
+    y = tf.signal.stft(x, frame_length=frame_size, frame_step=frame_shift, fft_length=fft_size)
+    # y shape is [batch] + spatial_dims + [n_out].
+    if num_batch_dims > 1:
+      y = tf.reshape(y, tf.concat([extended_batch_shape, tf.shape(y)[1:]], axis=0))
+    self.output.placeholder = y
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, network, frame_shift, frame_size, fft_size=None, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param returnn.tf.network.TFNetwork network:
+    :param int frame_shift: frame shift for STFT
+    :param int frame_size: frame size for STFT
+    :param Optional[int] fft_size: size of the FFT to apply
+    :rtype: Data
+    """
+    fft_size = fft_size or frame_size
+    data = ConvLayer.get_out_data_from_opts(
+      name=name, sources=sources, network=network, filter_size=[frame_size], strides=[frame_shift],
+      padding="valid", n_out=fft_size // 2 + 1)
+    data = data.copy_with_feature_dim_axis(-1)
+    data.dtype = "complex64"
+    return data
 
 
 class NoiseEstimationByFirstTFramesLayer(_ConcatInputLayer):
