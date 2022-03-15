@@ -4097,6 +4097,27 @@ def test_StftLayer():
       feed_dict=make_feed_dict(net.extern_data, n_time=1024))
 
 
+def test_IstftLayer():
+  with make_scope() as session:
+    frame_size = 32
+    frame_shift = 8
+    config = Config()
+    config.update({
+      "extern_data": {"data": {"dim": 1}},
+      "network": {
+        "stft": {"class": "stft", "frame_size": frame_size, "frame_shift": frame_shift, "from": "data"},
+        "output": {"class": "istft", "frame_size": frame_size, "frame_shift": frame_shift, "from": "stft"},
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+    out = network.get_default_output_layer().output.placeholder
+    feed_dict = make_feed_dict(network.extern_data, n_time=1024)
+    v_in = feed_dict[network.extern_data.data["data"].placeholder]
+    v_out = session.run(out, feed_dict=feed_dict)
+    # ignore border effects, see https://github.com/tensorflow/tensorflow/issues/16465
+    numpy.testing.assert_allclose(v_in[:, frame_size:-frame_size, :], v_out[:, frame_size:-frame_size, :], rtol=1e-3)
+
+
 def test_ConvLayer_time_dim_out():
   config = Config({"extern_data": {"data": {"dim": 7}}})
   with make_scope() as session:

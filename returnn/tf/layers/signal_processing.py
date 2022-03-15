@@ -7,7 +7,8 @@ from __future__ import division
 
 import tensorflow as tf
 import returnn.tf.compat as tf_compat
-from returnn.tf.layers.basic import LayerBase, _ConcatInputLayer, ConvLayer, get_concat_sources_data_template
+from returnn.tf.layers.basic import LayerBase, _ConcatInputLayer, ConvLayer, TransposedConvLayer, \
+  get_concat_sources_data_template
 from returnn.tf.util.basic import Data
 
 
@@ -629,7 +630,6 @@ class StftLayer(_ConcatInputLayer):
     assert not self.input_data.sparse
     assert self.input_data.have_batch_axis()
     assert self.input_data.have_time_axis()
-    out_dim = fft_size // 2 + 1
     in_dim = self.input_data.feature_dim_or_sparse_dim
     input_data, num_batch_dims = ConvLayer.transform_input(
       self.input_data, network=self.network, in_dim=in_dim)
@@ -665,6 +665,68 @@ class StftLayer(_ConcatInputLayer):
       padding="valid", n_out=fft_size // 2 + 1)
     data = data.copy_with_feature_dim_axis(-1)
     data.dtype = "complex64"
+    return data
+
+
+class IstftLayer(_ConcatInputLayer):
+  """
+  A generic iSTFT layer.
+  """
+
+  layer_class = "istft"
+  recurrent = True  # we should not shuffle in the time-dimension
+
+  # noinspection PyUnusedLocal
+  def __init__(self, frame_shift, frame_size, fft_size=None, **kwargs):
+    """
+    :param int frame_shift: frame shift for STFT
+    :param int frame_size: frame size for STFT
+    :param Optional[int] fft_size: size of the FFT to apply
+    """
+    fft_size = fft_size or frame_size
+    assert "n_out" not in kwargs
+    assert "out_type" not in kwargs
+    super(IstftLayer, self).__init__(**kwargs)
+    assert not self.input_data.sparse
+    assert self.input_data.have_batch_axis()
+    assert self.input_data.have_time_axis()
+    assert self.input_data.have_feature_axis()
+    in_dim = self.input_data.feature_dim_or_sparse_dim
+    assert in_dim.dimension == fft_size // 2 + 1
+    input_data, num_batch_dims = ConvLayer.transform_input(
+      self.input_data, network=self.network, in_dim=in_dim)
+    # shape should be (B, ..., T, F)
+    input_data = input_data.copy_with_feature_dim_axis(-1)
+    input_data = input_data.copy_with_time_dim_axis(-2)
+    x = input_data.placeholder
+    extended_batch_shape = None
+    if num_batch_dims > 1:
+      x_shape = tf.shape(x)
+      extended_batch_shape = x_shape[:num_batch_dims]
+      x = tf.reshape(x, tf.concat([[-1], x_shape[num_batch_dims:]], axis=0))  # merge all batch dims
+    window_fn = tf.signal.inverse_stft_window_fn(frame_shift)
+    y = tf.signal.inverse_stft(
+      x, frame_length=frame_size, frame_step=frame_shift, fft_length=fft_size, window_fn=window_fn)
+    y = tf.expand_dims(y, -1)
+    # y shape is [batch] + spatial_dims + [n_out].
+    if num_batch_dims > 1:
+      y = tf.reshape(y, tf.concat([extended_batch_shape, tf.shape(y)[1:]], axis=0))
+    self.output.placeholder = y
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, network, frame_shift, frame_size, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param returnn.tf.network.TFNetwork network:
+    :param int frame_shift: frame shift for STFT
+    :param int frame_size: frame size for STFT
+    :rtype: Data
+    """
+    data = TransposedConvLayer.get_out_data_from_opts(
+      name=name, sources=sources, network=network, filter_size=[frame_size], strides=[frame_shift],
+      padding="valid", n_out=1)
+    data = data.copy_with_feature_dim_axis(-1)
     return data
 
 
