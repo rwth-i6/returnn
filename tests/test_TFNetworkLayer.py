@@ -4069,6 +4069,37 @@ def test_ConvLayer_feature_dim_unspecified():
     assert out.output.feature_dim_axis_or_unspecified is NotSpecified
 
 
+def test_StftLayer():
+  from returnn.tf.layers.signal_processing import StftLayer
+  config = Config({"extern_data": {"data": {"dim": 1}}})
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    in_layer = SourceLayer(name="input", network=net, data_key="data", output=net.extern_data.get_default_input_data())
+    layer_desc = {
+      "name": "stft",
+      "network": net,
+      "sources": [in_layer],
+      "frame_size": 32,
+      "frame_shift": 8,
+    }
+    stft_out = StftLayer.get_out_data_from_opts(**layer_desc)
+    print("stft out:", stft_out)
+    out_time = stft_out.get_time_dim_tag()
+    assert in_layer.output.dim_tags[1].is_spatial_dim()
+    assert out_time != in_layer.output.dim_tags[1]
+    layer_desc["output"] = stft_out
+    with tf_compat.v1.variable_scope("stft"):
+      stft_layer = StftLayer(**layer_desc)
+    net.layers["stft"] = stft_layer
+    net.initialize_params(session)
+    v_out = session.run(
+      (stft_layer.output.placeholder, stft_layer.output.get_sequence_lengths()),
+      feed_dict=make_feed_dict(net.extern_data, n_time=1024))
+    import ipdb
+    ipdb.set_trace()
+    assert v_out == 0
+
+
 def test_ConvLayer_time_dim_out():
   config = Config({"extern_data": {"data": {"dim": 7}}})
   with make_scope() as session:
