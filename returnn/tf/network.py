@@ -1889,11 +1889,14 @@ class TFNetwork(object):
     :return: list of model variables or SaveableObject, to save/restore
     :rtype: list[tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject]
     """
+    state_vars = tf_compat.v1.get_collection(tf_util.CollectionKeys.STATE_VARS)
     ls = []  # type: typing.List[tf.Variable]
     for layer in self.get_all_layers_deep():
       assert isinstance(layer, LayerBase)
       for param_name, param in sorted(layer.get_saveable_params_dict().items()):
         if param in ls:  # could happen with reuse_params
+          continue
+        if param in state_vars:
           continue
         ls.append(param)
     ls += self.get_auxiliary_params()
