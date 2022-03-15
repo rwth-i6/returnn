@@ -633,12 +633,6 @@ class StftLayer(_ConcatInputLayer):
     in_dim = self.input_data.feature_dim_or_sparse_dim
     input_data, num_batch_dims = ConvLayer.transform_input(
       self.input_data, network=self.network, in_dim=in_dim)
-    # We want to prepare the input data such that the batch-dim(s) is the very first,
-    # the feature-dim is right after batch-dim ("NCHW"), and the spatial dim is last.
-    if self.output.feature_dim_axis == num_batch_dims:
-      input_data = input_data.copy_with_feature_dim_axis(num_batch_dims)
-    else:
-      input_data = input_data.copy_with_feature_dim_axis(-1)
     x = input_data.placeholder
     # squeeze feature axis
     assert input_data.batch_shape[input_data.feature_dim_axis] == 1, "only implemented for single channel"
@@ -669,6 +663,7 @@ class StftLayer(_ConcatInputLayer):
     data = ConvLayer.get_out_data_from_opts(
       name=name, sources=sources, network=network, filter_size=[frame_size], strides=[frame_shift],
       padding="valid", n_out=fft_size // 2 + 1)
+    data = data.copy_with_feature_dim_axis(-1)
     data.dtype = "complex64"
     return data
 
