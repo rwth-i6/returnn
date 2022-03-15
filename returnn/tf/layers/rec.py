@@ -1235,10 +1235,11 @@ class _SubnetworkRecCell(object):
       :param str layer_name:
       :rtype: LayerBase
       """
-      ConstructCtx.in_parent_get_layer = True
-      res = parent_get_layer(layer_name)
-      ConstructCtx.in_parent_get_layer = False
-      return res
+      try:
+        return parent_get_layer(layer_name)
+      except Exception as exc:
+        exc._is_exc_from_parent_get_layer = True
+        raise
 
     class CollectedException:
       """
@@ -1261,7 +1262,6 @@ class _SubnetworkRecCell(object):
       partially_finished = []  # type: typing.List[_TemplateLayer]
       collected_exceptions = OrderedDict()  # type: OrderedDict[object,CollectedException]  # key custom below
       recent_exception = None  # type: Exception
-      in_parent_get_layer = False
 
       # noinspection PyShadowingNames
       @classmethod
@@ -1275,9 +1275,9 @@ class _SubnetworkRecCell(object):
 
         :param str layer_name:
         """
-        if cls.in_parent_get_layer:
-          raise
         exc_type, value, tb = sys.exc_info()
+        if getattr(value, "_is_exc_from_parent_get_layer", False):
+          raise
         exc_last_frame = list(better_exchook.iter_traceback(tb))[-1]
         exc_key = (exc_last_frame.f_code.co_filename, exc_last_frame.f_lineno, exc_last_frame.f_code.co_name)
         if exc_key not in cls.collected_exceptions:
