@@ -617,6 +617,11 @@ class StftLayer(_ConcatInputLayer):
 
   # noinspection PyUnusedLocal
   def __init__(self, frame_shift, frame_size, fft_size=None, **kwargs):
+    """
+    :param int frame_shift: frame shift for STFT
+    :param int frame_size: frame size for STFT
+    :param Optional[int] fft_size: size of the FFT to apply
+    """
     fft_size = fft_size or frame_size
     assert "n_out" not in kwargs
     assert "out_type" not in kwargs
@@ -651,6 +656,15 @@ class StftLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, network, frame_shift, frame_size, fft_size=None, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param returnn.tf.network.TFNetwork network:
+    :param int frame_shift: frame shift for STFT
+    :param int frame_size: frame size for STFT
+    :param Optional[int] fft_size: size of the FFT to apply
+    :rtype: Data
+    """
     fft_size = fft_size or frame_size
     data = ConvLayer.get_out_data_from_opts(
       name=name, sources=sources, network=network, filter_size=[frame_size], strides=[frame_shift],
