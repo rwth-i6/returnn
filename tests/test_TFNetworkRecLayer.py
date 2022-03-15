@@ -537,6 +537,56 @@ def test_deterministic_TensorArray():
         assert numpy.isclose(first_run_loss, loss_val)
 
 
+def test_rec_subnet_template_exception_handling_reraise():
+  # https://github.com/rwth-i6/returnn/issues/995
+  class _EncoderException(Exception):
+    pass
+
+  def _check(num_exceptions):
+    class _Counter:
+      c = 0
+
+    with make_scope() as session:
+      def _enc_func(source, **_):
+        _Counter.c += 1
+        if _Counter.c <= num_exceptions:
+          print("raise exception %i" % _Counter.c)
+          raise _EncoderException("exception %i" % _Counter.c)
+        return source(0)
+
+      config = Config({"extern_data": {"data": {"dim": 7}, "classes": {"dim": 3, "sparse": True}}})
+      net_dict = {
+        "encoder": {"class": "eval", "from": "data", "eval": _enc_func},
+        "enc_mean": {"class": "reduce", "mode": "mean", "axis": "T", "from": "encoder"},
+        "output": {"class": "rec", "from": [], "target": "classes", "unit": {
+          "prev_embed": {"class": "linear", "from": "prev:output", "n_out": 7},
+          "combine": {"class": "linear", "from": ["prev_embed", "base:enc_mean"], "activation": "relu", "n_out": 7},
+          "prob": {"class": "softmax", "from": "combine", "loss": "ce", "target": "classes"},
+          "output": {"class": "choice", "beam_size": 4, "from": "prob", "target": "classes", "initial_output": 0},
+          "end": {"class": "compare", "from": "output", "value": 0},
+        }},
+      }
+      network = TFNetwork(config=config, train_flag=True)
+      network.construct_from_dict(net_dict)
+
+  # No exception at all. Should just be fine. Just a sanity check.
+  _check(0)
+
+  # Raising an exception inside the base network.
+  # This will happen during the RecLayer template construction,
+  # and due to the template construction logic which tries to recover,
+  # it would still have worked in earlier versions.
+  # However, we don't want that.
+  # We want that any exceptions from base layers are directly re-raised.
+  try:
+    _check(1)
+  except _EncoderException as exc:
+    print("expected exception:", exc)
+    pass  # expected
+  else:
+    assert False, "expected exception"
+
+
 def test_rec_subnet_with_choice():
   with tf_compat.v1.Session():
     config = Config()
