@@ -7288,6 +7288,40 @@ def test_trainable_sublayers():
     assert(weight_internal in set(network.get_trainable_params()))
 
 
+def test_subnet_keep_over_epoch_state_vars_saveable_params():
+  with make_scope() as session:
+    n_in, n_out = 2, 3
+    config = Config({
+      "extern_data": {"data": {"dim": n_in}, "classes": {"dim": n_out, "sparse": True}},
+      })
+    net_dict = {
+      "base_blstm": {
+        "class": "subnetwork", "from": "data",
+        "subnetwork": {
+          "lstm0_fw": {
+            "class": "rec", "unit": "lstm",
+            "initial_state": "keep_over_epoch", "n_out": 10, "from": "data"},
+          "output": {"class": "copy", "from": "lstm0_fw"}
+        }
+      },
+      "output": {"class": "softmax", "loss": "ce", "target": "classes", "from": "base_blstm", "n_out": n_out}
+    }
+    network = TFNetwork(config=config)
+    network.construct_from_dict(net_dict)
+
+    print("All global variables:")
+    params = tf_compat.v1.global_variables()
+    pprint(params)
+    assert any("base_blstm/lstm0_fw/rec/W_re:0" == param.name for param in params)
+    assert any("keep_state" in param.name for param in params)
+
+    print("Network saveable params:")
+    params = network.get_saveable_params_list()
+    pprint(params)
+    assert any("base_blstm/lstm0_fw/rec/W_re:0" == param.name for param in params)
+    assert not any("keep_state" in param.name for param in params)
+
+
 def test_OptimalCompletionsLayer():
   with make_scope() as session:
     from returnn.tf.layers.base import InternalLayer
