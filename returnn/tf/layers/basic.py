@@ -7391,6 +7391,7 @@ class CombineLayer(LayerBase):
     assert kind in [
       "average", "add", "sub", "mul", "truediv", "floordiv", "mod", "pow",
       "logical_and", "logical_or",
+      "squared_difference",
       "eval"], ("%s: Invalid `kind` %r for this layer." % (self, kind))
     if kind != "eval":
       self.recurrent = False
@@ -7550,6 +7551,13 @@ class CombineLayer(LayerBase):
     x = self._op_kind_add(sources)
     x /= len(sources)
     return x
+
+  def _op_kind_squared_difference(self, sources):
+    """
+    :param list[LayerBase] sources:
+    :rtype: tf.Tensor
+    """
+    return self._op_dense_fn(sources, tf.math.squared_difference, self.output)
 
   def _op_kind_logical_and(self, sources):
     """
