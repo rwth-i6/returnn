@@ -705,7 +705,8 @@ class IstftLayer(_ConcatInputLayer):
       extended_batch_shape = x_shape[:num_batch_dims]
       x = tf.reshape(x, tf.concat([[-1], x_shape[num_batch_dims:]], axis=0))  # merge all batch dims
     window_fn = tf.signal.inverse_stft_window_fn(frame_shift)
-    y = tf.signal.inverse_stft(x, frame_length=frame_size, frame_step=frame_shift, fft_length=fft_size, window_fn=window_fn)
+    y = tf.signal.inverse_stft(
+      x, frame_length=frame_size, frame_step=frame_shift, fft_length=fft_size, window_fn=window_fn)
     y = tf.expand_dims(y, -1)
     # y shape is [batch] + spatial_dims + [n_out].
     if num_batch_dims > 1:
