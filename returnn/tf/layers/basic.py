@@ -5230,6 +5230,7 @@ class ConvLayer(_ConcatInputLayer):
       assert n_out
       out_dim = FeatureDim("%s:channel" % name, dimension=n_out, auto_generated=True)
     dim_tags.append(out_dim)
+    time_dim_axis = data.time_dim_axis
     feature_dim_axis = NotSpecified
     # Swap the dims if the input dim order doesn't fit the flag auto_use_channel_first.
     if auto_use_channel_first is NotSpecified:
@@ -5239,8 +5240,14 @@ class ConvLayer(_ConcatInputLayer):
         if len([d for d in dim_tags if d.dimension]) > 1:
           feature_dim_axis = num_batch_dims
         dim_tags = dim_tags[:num_batch_dims] + dim_tags[-1:] + dim_tags[num_batch_dims:-1]
+        if time_dim_axis is not None and time_dim_axis >= num_batch_dims:
+          if time_dim_axis == len(dim_tags) - 1:
+            time_dim_axis = num_batch_dims
+          else:
+            time_dim_axis += 1
     out = Data(
-      name="%s_output" % name, dim_tags=dim_tags, feature_dim_axis=feature_dim_axis,
+      name="%s_output" % name, dim_tags=dim_tags,
+      time_dim_axis=time_dim_axis, feature_dim_axis=feature_dim_axis,
       batch=data.batch, beam=data.beam, control_flow_ctx=data.control_flow_ctx)
     if len(old_spatial_dim_tags) == len(filter_size):
       cls.set_output_dim_tags(
