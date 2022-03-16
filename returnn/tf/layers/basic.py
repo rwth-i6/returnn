@@ -8336,10 +8336,10 @@ class SubnetworkLayer(LayerBase):
     subnet = network.make_subnet(name, opts=d)
     cls._update_for_rec_previous_layer(d.get("rec_previous_layer"), d["subnetwork"], subnet.net)
     d["_subnet"] = subnet
-    # In case of non-template construction, this will trigger the non-template construction of our "output" sublayer.
-    d["_output"] = subnet.construct_layer("output", parent_get_layer=get_layer)
     if d.get("encapsulate", False):
       subnet.construct_all(parent_get_layer=get_layer)
+    # In case of non-template construction, this will trigger the non-template construction of our "output" sublayer.
+    d["_output"] = subnet.construct_layer("output", parent_get_layer=get_layer)
     d["_from"] = d.get("from", "data")  # cache this
     d["from"] = []  # disable now. we should get them in the template construction when needed
     super(SubnetworkLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
