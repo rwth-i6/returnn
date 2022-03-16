@@ -561,7 +561,7 @@ class LayerBase(object):
     """
     :param dict[str] d: will modify inplace
     :param returnn.tf.network.TFNetwork network:
-    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    :param returnn.tf.network.GetLayer|((str)->LayerBase) get_layer: function to get or construct another layer
       The name `get_layer` might be misleading, as this should return an existing layer,
       or construct it if it does not exist yet.
       `network.get_layer` would just return an existing layer.
