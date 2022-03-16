@@ -603,7 +603,7 @@ class TFNetwork(object):
   def construct_from_dict(self, net_dict, get_layer=None):
     """
     :param dict[str,dict[str]] net_dict:
-    :param ((str)->LayerBase)|None get_layer:
+    :param GetLayer|((str)->LayerBase)|None get_layer:
     """
     self.layers_desc.update(net_dict)
 
@@ -805,7 +805,7 @@ class TFNetwork(object):
 
     :param dict[str,dict[str]] net_dict:
     :param str name: layer name
-    :param ((str) -> LayerBase)|None get_layer: optional, for source layers, for transform_config_dict.
+    :param GetLayer|((str)->LayerBase)|None get_layer: optional, for source layers, for transform_config_dict.
       By default, this wraps self.construct_layer().
       I.e. the name might be misleading, as this should return an existing layer,
       or construct it if it does not exist yet.
@@ -830,13 +830,7 @@ class TFNetwork(object):
       except (LayerNotFound, DataNotFound):
         pass  # ok, we will try to construct it then
     if not get_layer:
-      # set get_layer to wrap construct_layer
-      def get_layer(src_name):
-        """
-        :param str src_name:
-        :rtype: LayerBase
-        """
-        return self.construct_layer(net_dict=net_dict, name=src_name, get_layer=get_layer, add_layer=add_layer)
+      get_layer = GetLayer(network=self, add_layer_func=add_layer)
     full_name = name
     sub_layer_name = None
     if '/' in name:
@@ -2923,23 +2917,21 @@ class Subnetwork:
   def __repr__(self):
     return "%s{%s}" % (self.__class__.__name__, self.net.name)
 
-  def _get_data(self, name, get_layer):
+  def get_data(self, name, get_layer):
     """
     :param str name:
-    :param (str)->LayerBase get_layer:
-    :rtype: LayerBase
+    :param GetLayer get_layer:
+    :rtype: (GetLayer,str)
     """
     layer_name = "data:%s" % name
-    if layer_name in self.net.layers:
-      return self.net.layers[layer_name]
     assert self._from_arg, "%s: set_sources_args not called? or no source but asked for %r" % (self, name)
 
     def base_get_layer(name_):
       """
       :param str name_:
-      :rtype: LayerBase
+      :rtype: (GetLayer,str)
       """
-      return get_layer("base:" + name_)
+      return get_layer, "base:" + name_
 
     if self._concat_sources:
       if name == "data":
@@ -2951,7 +2943,7 @@ class Subnetwork:
             "class": "copy", "from": ["base:%s" % arg for arg in self._from_arg],
             "dropout": self._dropout, "dropout_noise_shape": self._dropout_noise_shape}})
         # This should trigger the creation.
-        return get_layer(layer_name)
+        return get_layer, layer_name
 
       else:  # name != "data"
         return base_get_layer("data:%s" % name)
@@ -2967,69 +2959,21 @@ class Subnetwork:
             "class": "copy", "from": "base:%s" % arg,
             "dropout": self._dropout, "dropout_noise_shape": self._dropout_noise_shape}})
         # This should trigger the creation.
-        return get_layer(layer_name)
+        return get_layer, layer_name
 
     # Fallback to extern data from base.
     return base_get_layer("data:%s" % name)
 
   def get_sub_layer_func(self, base_get_layer):
     """
-    :param ((str)->LayerBase)|None base_get_layer:
-    :rtype: (str)->LayerBase
+    :param GetLayer|((str)->LayerBase)|None base_get_layer:
+    :rtype: GetLayer
     """
     # Without custom getter, we can just use the standard construction.
     # This works also in cases when other layers from the parent net can not access sub layers directly,
     # so no extra net with extra_boundary is needed.
     # Otherwise this is via explicit parent_cannot_access.
-    use_direct_construct = self.parent_cannot_access or not base_get_layer
-    if not base_get_layer:
-      base_get_layer = self.parent_net.get_layer
-
-    def wrapped_get_layer(name):
-      """
-      :param str name:
-      :rtype: LayerBase
-      """
-      if name.startswith("base:"):
-        return base_get_layer(name[len("base:"):])
-
-      if name.startswith("prev:"):
-        return base_get_layer("prev:" + self.name_in_parent + "/" + name[len("prev:"):])
-
-      if self.template:
-        self._construct_template_subnet(get_parent_layer=base_get_layer)
-        # In any case, we cannot get the layer via base_get_layer.
-        return self.net.get_layer(name)
-
-      if use_direct_construct:
-        return self.net.construct_layer(net_dict=self._net_dict, name=name, get_layer=wrapped_get_layer)
-
-      # We expect that this prefix gets back to us indirectly when base_get_layer calls net.construct_layer.
-      # The name also needs to match the real name where this layer can be accessed later on.
-      # This is a bit tricky. See name_in_parent.
-      assert not self.parent_cannot_access
-      return base_get_layer(self.name_in_parent + "/" + name)
-
-    wrapped_get_layer = self.get_layer_func(wrapped_get_layer)
-    return wrapped_get_layer
-
-  def get_layer_func(self, get_layer):
-    """
-    :param (str)->LayerBase get_layer:
-    :rtype: (str)->LayerBase
-    """
-    def wrapped_get_layer(name):
-      """
-      :param str name:
-      :rtype: LayerBase
-      """
-      if name == "data":
-        return self._get_data(name="data", get_layer=get_layer)
-      if name.startswith("data:"):
-        return self._get_data(name=name[len("data:"):], get_layer=get_layer)
-      return get_layer(name)
-
-    return wrapped_get_layer
+    return GetLayer(self.net, net_dict=self._net_dict, subnetwork=self, parent_get_layer=base_get_layer)
 
   def construct_layer(self, name, parent_get_layer=None):
     """
@@ -3038,7 +2982,7 @@ class Subnetwork:
     but any recursive construction in this subnet.
 
     :param str name:
-    :param ((str)->LayerBase)|None parent_get_layer:
+    :param GetLayer|((str)->LayerBase)|None parent_get_layer:
     :rtype: LayerBase
     """
     return self.get_sub_layer_func(parent_get_layer)(name)
@@ -3047,7 +2991,7 @@ class Subnetwork:
     """
     Trigger the standard construction of all layers in the net dict.
 
-    :param ((str)->LayerBase)|None parent_get_layer:
+    :param GetLayer|((str)->LayerBase)|None parent_get_layer:
     """
     if self.template:
       self._construct_template_subnet(get_parent_layer=parent_get_layer)
@@ -3058,7 +3002,7 @@ class Subnetwork:
 
   def complete_construction_parent_subnet_layer(self, parent_get_layer=None):
     """
-    :param ((str)->LayerBase)|None parent_get_layer:
+    :param GetLayer|((str)->LayerBase)|None parent_get_layer:
     :rtype: returnn.tf.layers.basic.SubnetworkLayer
     """
     from returnn.tf.layers.basic import SubnetworkLayer
@@ -3103,7 +3047,7 @@ class Subnetwork:
     """
     Very similar to _SubnetworkRecCell._construct_template, but simpler.
 
-    :param ((str)->LayerBase)|None get_parent_layer:
+    :param GetLayer|((str)->LayerBase)|None get_parent_layer:
     :rtype: Subnetwork
     """
     from pprint import pformat
@@ -3139,28 +3083,13 @@ class Subnetwork:
         layer_.add_dependency(dep_layer, is_prev_time_frame=False)
       return layer_
 
-    # noinspection PyShadowingNames
-    def get_templated_layer(name):
-      """
-      :param str name:
-      :rtype: _TemplateLayer|LayerBase
-      """
-      if name in subnet.layers:
-        layer_ = subnet.layers[name]
-        return layer_
-      if name.startswith("base:"):
-        # In any case, this should not get back to us.
-        if get_parent_layer:
-          return get_parent_layer(name[len("base:"):])
-        return subnet.get_layer(name)
-      return subnet.construct_layer(
-        net_dict=net_dict, name=name, get_layer=get_templated_layer, add_layer=add_templated_layer)
-
     # We are doing template construction, so it is fine to wrap get_layer,
     # because self.template implies that there is a boundary,
     # i.e. the base/parent net can not directly access any sub layers here.
     assert self.parent_cannot_access
-    get_templated_layer = self.get_layer_func(get_templated_layer)
+    get_templated_layer = GetLayer(
+      subnet, subnetwork=self,
+      parent_get_layer=get_parent_layer, add_layer_func=add_templated_layer)
 
     try:
       get_templated_layer("output")
@@ -3204,6 +3133,138 @@ class TFNetworkParamsSerialized(object):
     """
     self.values_dict = values_dict
     self.global_train_step = global_train_step
+
+
+class GetLayer:
+  """
+  Helper object which represents the get_layer function which also triggers layer construction.
+  This is implemented to better handle subnetworks and to avoid a deep stack of get_layer functions.
+  Instead of defining another wrapped get_layer function,
+  any subnetwork can instead create a new instance of this object.
+  https://github.com/rwth-i6/returnn/issues/993
+  """
+  def __init__(self, network, net_dict=None, subnetwork=None,
+               add_layer_func=None, parent_get_layer=None):
+    """
+    :param TFNetwork network:
+    :param dict[str]|None net_dict:
+    :param Subnetwork|None subnetwork:
+    :param ((str,LayerBase,dict)->LayerBase)|None add_layer_func: by default TFNetwork.add_layer
+    :param GetLayer|((str)->LayerBase)|None parent_get_layer:
+    """
+    self.network = network
+    if net_dict is None:
+      net_dict = network.layers_desc
+    self._net_dict = net_dict
+    if subnetwork:
+      assert subnetwork.net is network
+    self.subnetwork = subnetwork
+    self._add_layer_func = add_layer_func
+    self._parent_get_layer = parent_get_layer
+
+  def __repr__(self):
+    args = [repr(self.network.name)]
+    if self._add_layer_func:
+      args.append("add_layer=%s" % self._add_layer_func)
+    if self._parent_get_layer:
+      args.append("parent_get_layer=%s" % self._parent_get_layer)
+    return "<GetLayer %s>" % " ".join(args)
+
+  def copy(self):
+    """
+    :rtype: GetLayer
+    """
+    return GetLayer(
+      network=self.network, net_dict=self._net_dict, subnetwork=self.subnetwork,
+      add_layer_func=self._add_layer_func, parent_get_layer=self._parent_get_layer)
+
+  def _get_parent_get_layer(self):
+    """
+    This assumes that it exists and is a GetLayer.
+
+    :rtype: GetLayer
+    """
+    assert self.network.parent_net
+    if self._parent_get_layer:
+      return self._parent_get_layer
+    else:
+      return GetLayer(self.network.parent_net)
+
+  def _transform_base_get_layer(self, name):
+    if not self.network.parent_net and not self._parent_get_layer:
+      raise LayerNotFound(
+        "Base layer %r not found in network %r." % (name, self.network),
+        layer_name=name, network=self.network, net_dict=self._net_dict)
+    if name.startswith("base:"):
+      name = name[len("base:"):]
+    else:
+      assert self.subnetwork and not self.subnetwork.parent_cannot_access
+      name = self.subnetwork.name_in_parent + "/" + name
+    get_layer = self._get_parent_get_layer()
+    return get_layer, name
+
+  def __call__(self, layer_name):
+    """
+    :param str layer_name:
+    :rtype: LayerBase
+    """
+    get_layer = self
+    name = layer_name
+    is_prev = False
+    # We don't want to get a deep stack by recursive calls just due to subnetworks
+    # (https://github.com/rwth-i6/returnn/issues/993).
+    # Thus, we have a loop here to iterate through any wrapped get_layer functions.
+    while True:
+      assert isinstance(get_layer, GetLayer)
+      assert isinstance(name, str)
+
+      name_ = ("prev:" + name) if is_prev else name
+
+      if name_ in get_layer.network.layers:
+        return get_layer.network.layers[name_]
+
+      if name.startswith("base:"):
+        get_layer, name = get_layer._transform_base_get_layer(name)
+        if not isinstance(get_layer, GetLayer):
+          name = ("prev:" + name) if is_prev else name
+          assert callable(get_layer)
+          return get_layer(name)
+        continue
+
+      if get_layer.subnetwork:
+        if (name == "data" or name.startswith("data:")) and name_ not in get_layer._net_dict:
+          if name == "data":
+            name = "data:data"
+            continue
+          get_layer, name = get_layer.subnetwork.get_data(
+            name=name[len("data:"):], get_layer=get_layer)
+          continue
+
+      if name.startswith("prev:"):
+        if is_prev:
+          raise Exception("Multiple 'prev:' prefixes are not allowed. %r %r" % (self, layer_name))
+        is_prev = True
+        name = name[len("prev:"):]
+
+      if get_layer.subnetwork and not get_layer.subnetwork.parent_cannot_access:
+        # We expect that this prefix gets back to us indirectly when base_get_layer calls net.construct_layer.
+        # The name also needs to match the real name where this layer can be accessed later on.
+        # This is a bit tricky. See Subnetwork.name_in_parent.
+        get_layer, name = get_layer._transform_base_get_layer(name)
+        if not isinstance(get_layer, GetLayer):
+          name = ("prev:" + name) if is_prev else name
+          assert callable(get_layer)
+          return get_layer(name)
+        continue
+
+      break
+
+    name = ("prev:" + name) if is_prev else name
+
+    # Standard in TFNetwork.construct_layer.
+    return get_layer.network.construct_layer(
+      net_dict=get_layer._net_dict, name=name,
+      get_layer=get_layer, add_layer=get_layer._add_layer_func)
 
 
 class LossHolder:
