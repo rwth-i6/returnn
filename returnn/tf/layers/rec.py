@@ -1308,7 +1308,7 @@ class _SubnetworkRecCell(object):
           raise cls.recent_exception
         raise Exception("Failed to construct Rec subnet template")
 
-    class GetLayer:
+    class RecSubnetGetTemplateLayer:
       """
       Helper class to provide the ``get_layer`` function with specific properties.
       """
@@ -1328,7 +1328,7 @@ class _SubnetworkRecCell(object):
         """
         lself.allow_uninitialized_template = allow_uninitialized_template
         if parent:
-          assert isinstance(parent, GetLayer)
+          assert isinstance(parent, RecSubnetGetTemplateLayer)
         lself.parent = parent
         lself.parent_name = parent_name
         lself.iterative_testing = iterative_testing
@@ -1352,7 +1352,7 @@ class _SubnetworkRecCell(object):
       def _add_uninitialized_count(self):
         getter = self
         while getter:
-          assert isinstance(getter, GetLayer)
+          assert isinstance(getter, RecSubnetGetTemplateLayer)
           getter.got_uninitialized_deps_count += 1
           getter = getter.parent
 
@@ -1481,7 +1481,7 @@ class _SubnetworkRecCell(object):
           # * layer_class.transform_config_dict (via construct_layer)
           # * layer_class.get_out_data_from_opts (via add_templated_layer)
           ConstructCtx.partially_finished.append(layer_)
-        default_get_layer = GetLayer(parent=lself, parent_name=_name)
+        default_get_layer = RecSubnetGetTemplateLayer(parent=lself, parent_name=_name)
         default_success = False  # whether construction was successful with default_get_layer
         ConstructCtx.layers.append(layer_)
         try:
@@ -1502,14 +1502,14 @@ class _SubnetworkRecCell(object):
           # Also, first try without allowing to access uninitialized templates,
           # as they might propagate wrong Data format info (they have a dummy Data format set).
           # Only as a last resort, allow this.
-          get_layer_candidates = []  # type: typing.List[GetLayer]
+          get_layer_candidates = []  # type: typing.List[RecSubnetGetTemplateLayer]
           # noinspection PyProtectedMember
           if lself.iterative_testing and name not in self.net._construction_stack.layers:
             # We can get away with only two variants, because the reconstruction code below
             # for partially finished layers will make sure that everything is correct.
             get_layer_candidates = [
               default_get_layer,
-              GetLayer(allow_uninitialized_template=True, parent=lself, parent_name=_name),
+              RecSubnetGetTemplateLayer(allow_uninitialized_template=True, parent=lself, parent_name=_name),
             ]
           for get_layer in get_layer_candidates:
             # noinspection PyBroadException
@@ -1576,7 +1576,7 @@ class _SubnetworkRecCell(object):
           lself._add_uninitialized_count()
         return layer_
 
-    get_templated_layer = GetLayer()
+    get_templated_layer = RecSubnetGetTemplateLayer()
 
     try:
       assert not self.layer_data_templates, "do not call this multiple times"
@@ -1602,7 +1602,7 @@ class _SubnetworkRecCell(object):
       # Note that it is still not guaranteed that this will finish. We stop if there was no change anymore.
       # We also put an additional limit, which might be hit due to other bugs.
       loop_limit = len(ConstructCtx.partially_finished)
-      direct_get_layer = GetLayer(iterative_testing=False, reconstruct=True)
+      direct_get_layer = RecSubnetGetTemplateLayer(iterative_testing=False, reconstruct=True)
       while ConstructCtx.partially_finished:
         old_len = len(ConstructCtx.partially_finished)
         recent_changes = []
