@@ -525,7 +525,15 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     return res
 
   def _construct_custom(self, net, prev_state, cur_state, needed_outputs):
-    # This is a simplified version of _SubnetworkRecCell._construct without search logic.
+    """
+    This is a simplified version of _SubnetworkRecCell._construct without search logic.
+
+    :param TFNetwork net:
+    :param prev_state:
+    :param cur_state:
+    :param needed_outputs:
+    """
+    assert isinstance(net, TFNetwork)
 
     prev_layers = {}  # type: typing.Dict[str,_TemplateLayer]
 
