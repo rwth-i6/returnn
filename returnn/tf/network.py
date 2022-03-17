@@ -357,9 +357,7 @@ class _NetworkConstructionStack:
     :rtype: bool
     """
     cls = self.__class__
-    if not cls._flat_construction_stack:
-      return False
-    return cls._flat_construction_stack[-1] is self
+    return self in cls._flat_construction_stack
 
   def should_continue_construction(self):
     """
