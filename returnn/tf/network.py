@@ -1296,7 +1296,7 @@ class TFNetwork(object):
     # We are very restrictive here to not break anything in case of unrelated bugs of other layers.
 
     from .util.data import BatchInfo
-    from .layers.basic import SourceLayer, SubnetworkLayer, CopyLayer, FlattenBatchLayer
+    from .layers.basic import SourceLayer, InternalLayer, SubnetworkLayer, CopyLayer, FlattenBatchLayer
     from tensorflow.python.util import nest
 
     def _relevant_dims_for_layer(layer_):
@@ -1321,9 +1321,10 @@ class TFNetwork(object):
       return set(layer_.output.dim_tags).issuperset(_relevant_dims_for_layer(layer_))
 
     def _map_layer_dict_value(v):
-      if isinstance(v, LayerBase) and _needs_flattening(v):
+      if isinstance(v, LayerBase):
         v = _resolve_layer(v)
-        return mapped_layers[v]
+        if _needs_flattening(v):
+          return mapped_layers[v]
       return v
 
     def _make_layer(layer_cls, layer_dict, map_opts=True):
@@ -1380,7 +1381,7 @@ class TFNetwork(object):
         return False
       if layer_.params:  # in principle, this is ok, just not implemented yet to correctly share params
         return False
-      if isinstance(layer_, SourceLayer):
+      if isinstance(layer_, (SourceLayer, InternalLayer)):
         return False
       if not _should_flatten_layer_output(layer_):
         return False
@@ -1519,12 +1520,13 @@ class TFNetwork(object):
       visited.add(layer)
       if not _needs_flattening(layer):
         continue
-      if any(dep not in mapped_layers for dep in _layer_deps(layer) if _needs_flattening(dep)):
-        # Need to delay this layer. Put back into queue.
-        assert layer_queue  # there must be others which we need to flatten
-        visited.remove(layer)
-        layer_queue.append(layer)
-        continue
+      if layer not in starting_points:
+        if any(dep not in mapped_layers for dep in _layer_deps(layer) if _needs_flattening(dep)):
+          # Need to delay this layer. Put back into queue.
+          assert layer_queue  # there must be others which we need to flatten
+          visited.remove(layer)
+          layer_queue.append(layer)
+          continue
       if layer not in mapped_layers:
         mapped_layers[layer] = _make_layer(type(layer), layer.kwargs)
       for next_layer in deps_used_by[layer]:
