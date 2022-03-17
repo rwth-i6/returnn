@@ -366,7 +366,7 @@ class _NetworkConstructionStack:
     :rtype: LayerBase|None
     """
     cls = self.__class__
-    if self not in cls._flat_construction_stack:
+    if not cls._flat_construction_stack or cls._flat_construction_stack[-1] is not self:
       return self._flat_construct(exc)
 
     assert exc.network is self.network
@@ -389,24 +389,25 @@ class _NetworkConstructionStack:
     """
     cls = self.__class__
     assert initial_exc.network is self.network
-    assert not self.flat_construct_stack
     stack = self.flat_construct_stack
     initial = (initial_exc.layer_name, initial_exc.other_kwargs)
     stack.append(initial)
+    stack_init_idx = len(stack) - 1
     cls._flat_construction_stack.append(self)
     try:
       while stack:
         try:
-          top = stack[-1]
+          stack_top_idx = len(stack) - 1
+          top = stack[stack_top_idx]
           layer_name, other_kwargs = top
           res = self.network.construct_layer(name=layer_name, **other_kwargs)
+          assert stack_top_idx == len(stack) - 1
           stack.pop(-1)
           if top is initial:
-            assert not stack
             return res
         except _DelayedConstructionException as delayed_exc:
-          if delayed_exc.network is not self.network:
-            raise  # some parent flat_construct() should handle this
+          # See on_construct_layer_call().
+          assert delayed_exc.network is self.network  # we should be in another flat_construct() otherwise
           stack.append((delayed_exc.layer_name, delayed_exc.other_kwargs))
     except Exception as exc:
       attr = "_RETURNN_layer_construction_stack"
@@ -417,7 +418,7 @@ class _NetworkConstructionStack:
     finally:
       top_stack = cls._flat_construction_stack.pop(-1)
       assert top_stack is self
-      stack.clear()
+      del stack[stack_init_idx:]
     assert False, "we should not get here"
 
 
