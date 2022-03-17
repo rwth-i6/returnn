@@ -336,7 +336,11 @@ class _NetworkConstructionStack:
     """
     self.network = network
     self.layers = []  # type: typing.List[str]
-    self.flat_construct_stack = []  # type: typing.List[typing.Tuple[TFNetwork, str, typing.Dict[str, typing.Any]]]
+    self.flat_construct_stack = []  # type: typing.List[typing.Tuple[str, typing.Dict[str, typing.Any]]]
+
+  def __repr__(self):
+    return "<%s %r (cur stack size: %i)>" % (
+      self.__class__.__name__, self.network.name, len(self.flat_construct_stack))
 
   def append(self, layer_name):
     """
@@ -375,17 +379,18 @@ class _NetworkConstructionStack:
     :rtype: LayerBase
     """
     cls = self.__class__
+    assert initial_exc.network is self.network
     assert not self.flat_construct_stack
     stack = self.flat_construct_stack
-    initial = (initial_exc.network, initial_exc.layer_name, initial_exc.other_kwargs)
+    initial = (initial_exc.layer_name, initial_exc.other_kwargs)
     stack.append(initial)
     cls._flat_construction_stack.append(self)
     try:
       while stack:
         try:
           top = stack[-1]
-          network, layer_name, other_kwargs = top
-          res = network.construct_layer(name=layer_name, **other_kwargs)
+          layer_name, other_kwargs = top
+          res = self.network.construct_layer(name=layer_name, **other_kwargs)
           stack.pop(-1)
           if top is initial:
             assert not stack
@@ -393,12 +398,12 @@ class _NetworkConstructionStack:
         except _DelayedConstructionException as delayed_exc:
           if delayed_exc.network is not self.network:
             raise  # some parent flat_construct() should handle this
-          stack.append((delayed_exc.network, delayed_exc.layer_name, delayed_exc.other_kwargs))
+          stack.append((delayed_exc.layer_name, delayed_exc.other_kwargs))
     except Exception as exc:
       attr = "_RETURNN_layer_construction_stack"
       if not hasattr(exc, attr):
         setattr(exc, attr, [])
-      getattr(exc, attr).extend(stack)
+      getattr(exc, attr).extend([(self.network, layer_name) for (layer_name, _) in stack])
       raise
     finally:
       top_stack = cls._flat_construction_stack.pop(-1)
