@@ -3612,7 +3612,7 @@ class _DelayedConstructionException(Exception):
     self.other_kwargs = other_kwargs
 
   def __repr__(self):
-    return "%s(layer_name=%r)" % (self.__class__.__name__, self.layer_name)
+    return "<%s %r/%r>" % (self.__class__.__name__, self.network.name, self.layer_name)
 
   def delayed_construction(self):
     """
