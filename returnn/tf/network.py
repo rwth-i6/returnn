@@ -786,17 +786,6 @@ class TFNetwork(object):
     self.used_data_keys.update(extra_net.used_data_keys)
     return created_layers
 
-  def _flat_construction_enabled(self):
-    """
-    :return: whether to use flat construction algorithm in :func:`construct_layer`.
-      Use this if you get stack overflow errors, such as:
-        ``Fatal Python error: Cannot recover from stack overflow``
-      or
-        ``RuntimeError: maximum recursion depth exceeded``.
-    :rtype: bool
-    """
-    return self.get_config().bool("flat_net_construction", False)
-
   def construct_layer(self, net_dict, name, get_layer=None, add_layer=None, check_existing=True):
     """
     This triggers the construction of the layer `name` if it is not constructed yet.
@@ -918,14 +907,13 @@ class TFNetwork(object):
           layer_name=full_name, network=self)
       return sub_layer
 
-    if self._flat_construction_enabled():
-      delayed_exc = _DelayedConstructionException(
-        network=self, layer_name=name,
-        other_kwargs=dict(net_dict=net_dict, get_layer=get_layer, add_layer=add_layer, check_existing=check_existing))
-      if not self._construction_stack.in_flat_construct_count:
-        return self._construction_stack.flat_construct(delayed_exc)
-      if self._construction_stack.layers:
-        raise delayed_exc
+    delayed_exc = _DelayedConstructionException(
+      network=self, layer_name=name,
+      other_kwargs=dict(net_dict=net_dict, get_layer=get_layer, add_layer=add_layer, check_existing=check_existing))
+    if not self._construction_stack.in_flat_construct_count:
+      return self._construction_stack.flat_construct(delayed_exc)
+    if self._construction_stack.layers:
+      raise delayed_exc
 
     layer_desc = layer_desc.copy()
     layer_desc.pop("class")
