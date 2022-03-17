@@ -5453,7 +5453,11 @@ class DctLayer(_ConcatInputLayer):
     y = tf_compat.v1.spectral.dct(x, type=type, n=n, norm=norm)
     self.output.placeholder = y
     if n is None:
-      self.output.size_placeholder = self.input_data.size_placeholder.copy()
+      assert set(self.input_data.size_placeholder.keys()) == {self.input_data.time_dim_axis_excluding_batch}
+      size_placeholder = {
+        self.output.time_dim_axis_excluding_batch: self.input_data.size_placeholder.copy()[
+          self.input_data.time_dim_axis_excluding_batch]}
+      self.output.size_placeholder = size_placeholder
     else:
       raise NotImplementedError
 
