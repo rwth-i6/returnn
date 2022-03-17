@@ -355,25 +355,34 @@ class _NetworkConstructionStack:
     """
     self.layers.remove(layer_name)
 
-  def is_active_flat_construction(self):
+  def on_construct_layer_call(self, exc):
     """
-    :return: whether this is called inside self.flat_construct(...)
-    :rtype: bool
+    This covers the whole flat construction logic.
+    If this returns None, it means that the normal construction should follow.
+    If a layer is returned, this can directly be returned.
+    Otherwise, this will not return but throw the exception which is handled outside.
+
+    :param _DelayedConstructionException exc:
+    :rtype: LayerBase|None
     """
     cls = self.__class__
-    return self in cls._flat_construction_stack
+    if self not in cls._flat_construction_stack:
+      return self._flat_construct(exc)
 
-  def should_continue_construction(self):
-    """
-    We assume that we are inside self.flat_construct(), and currently doing a construct_layer().
+    assert exc.network is self.network
+    if self.flat_construct_stack:
+      if exc.layer_name == self.flat_construct_stack[-1][0]:
+        return None  # continue with construction
 
-    :return: whether construct_layer() should continue. otherwise, it would throw _DelayedConstructionException.
-    :rtype: bool
-    """
-    assert self.is_active_flat_construction()
-    return not self.layers
+      existing_in_stack = [entry for entry in self.flat_construct_stack if exc.layer_name == entry[0]]
+      if existing_in_stack:
+        raise NetworkConstructionDependencyLoopException(
+          layer_name=exc.layer_name, constructing_layers=[entry[0] for entry in self.flat_construct_stack],
+          net_dict=existing_in_stack[0][1]["net_dict"], network=self.network)
 
-  def flat_construct(self, initial_exc):
+    raise exc
+
+  def _flat_construct(self, initial_exc):
     """
     :param _DelayedConstructionException initial_exc:
     :rtype: LayerBase
@@ -962,15 +971,6 @@ class TFNetwork(object):
           layer_name=full_name, network=self)
       return sub_layer
 
-    if not self._construction_stack.is_active_flat_construction():
-      return self._construction_stack.flat_construct(delayed_exc)
-    if not self._construction_stack.should_continue_construction():
-      # Note: We don't want to raise this earlier here in this function
-      # because certain exceptions such as LayerNotFound should directly be raised
-      # because some other code tests for this
-      # (e.g. checking the loss checking for layer "classes" and then layer "data:classes").
-      raise delayed_exc
-
     layer_desc = layer_desc.copy()
     layer_desc.pop("class")
     # Note about name:
@@ -980,10 +980,14 @@ class TFNetwork(object):
     layer_desc["_network"] = net
     layer_desc["_name"] = base_name
     name_with_prefix = ("%s:%s" % (extra_prefix, name)) if extra_prefix else name
-    if name_with_prefix in self._construction_stack.layers:
-      raise NetworkConstructionDependencyLoopException(
-        layer_name=name_with_prefix, constructing_layers=self._construction_stack.layers,
-        net_dict=net_dict, network=self)
+
+    # Note: We don't want to raise this earlier here in this function
+    # because certain exceptions such as LayerNotFound should directly be raised
+    # because some other code tests for this
+    # (e.g. checking the loss checking for layer "classes" and then layer "data:classes").
+    _constructed_layer = self._construction_stack.on_construct_layer_call(delayed_exc)
+    if _constructed_layer:
+      return _constructed_layer
     self._construction_stack.append(name_with_prefix)
     try:
       # This call would also resolve dependencies, and e.g. recursively then create them (via get_layer calls).
@@ -3145,6 +3149,9 @@ class Subnetwork:
       for layer_name, layer in net_dict.items():
         if layer.get("is_output_layer"):
           get_templated_layer(layer_name)
+
+    except _DelayedConstructionException:
+      raise
 
     except Exception as exc:
       # Merge the exception message + further debug information all together into a single exception,
