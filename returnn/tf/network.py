@@ -330,7 +330,11 @@ class _NetworkConstructionStack:
   # for things like CondLayer or RecLayer.
   _flat_construction_stack = []  # type: typing.List[_NetworkConstructionStack]
 
-  def __init__(self):
+  def __init__(self, network):
+    """
+    :param TFNetwork network:
+    """
+    self.network = network
     self.layers = []  # type: typing.List[str]
     self.flat_construct_stack = []  # type: typing.List[typing.Tuple[TFNetwork, str, typing.Dict[str, typing.Any]]]
 
@@ -389,6 +393,8 @@ class _NetworkConstructionStack:
             assert not stack
             return res
         except _DelayedConstructionException as delayed_exc:
+          if delayed_exc.network is not self.network:
+            raise  # some parent flat_construct() should handle this
           stack.append((delayed_exc.network, delayed_exc.layer_name, delayed_exc.other_kwargs))
     except Exception as exc:
       attr = "_RETURNN_layer_construction_stack"
@@ -501,7 +507,7 @@ class TFNetwork(object):
     self.extra_nets = {}  # type: typing.Dict[str,TFNetwork]
     self.subnets = {}  # type: typing.Dict[str,Subnetwork]
     self._selected_train_layers = None
-    self._construction_stack = _NetworkConstructionStack()
+    self._construction_stack = _NetworkConstructionStack(self)
     self.layers_desc = {}  # type: typing.Dict[str,typing.Dict[str]]
     self.layers = {}  # type: typing.Dict[str,LayerBase]
     self.losses_dict = {}  # type: typing.Dict[str,LossHolder]
