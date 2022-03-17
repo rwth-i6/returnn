@@ -617,11 +617,15 @@ class StftLayer(_ConcatInputLayer):
   recurrent = True  # we should not shuffle in the time-dimension
 
   # noinspection PyUnusedLocal
-  def __init__(self, frame_shift, frame_size, fft_size=None, **kwargs):
+  def __init__(self, frame_shift, frame_size, fft_size=None, in_spatial_dims=None, out_spatial_dims=None, out_dim=None,
+               **kwargs):
     """
     :param int frame_shift: frame shift for STFT
     :param int frame_size: frame size for STFT
     :param Optional[int] fft_size: size of the FFT to apply
+    :param list[Dim|str]|None in_spatial_dims:
+    :param list[Dim]|None out_spatial_dims:
+    :param Dim|None out_dim:
     """
     fft_size = fft_size or frame_size
     assert "n_out" not in kwargs
@@ -632,7 +636,7 @@ class StftLayer(_ConcatInputLayer):
     assert self.input_data.have_time_axis()
     in_dim = self.input_data.feature_dim_or_sparse_dim
     input_data, num_batch_dims = ConvLayer.transform_input(
-      self.input_data, network=self.network, in_dim=in_dim)
+      self.input_data, network=self.network, in_dim=in_dim, in_spatial_dims=in_spatial_dims)
     x = input_data.placeholder
     # squeeze feature axis
     assert input_data.batch_shape[input_data.feature_dim_axis] == 1, "only implemented for single channel"
@@ -649,7 +653,8 @@ class StftLayer(_ConcatInputLayer):
     self.output.placeholder = y
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, network, frame_shift, frame_size, fft_size=None, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, network, frame_shift, frame_size, fft_size=None,
+                             in_spatial_dims=None, out_spatial_dims=None, out_dim=None, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
@@ -657,13 +662,18 @@ class StftLayer(_ConcatInputLayer):
     :param int frame_shift: frame shift for STFT
     :param int frame_size: frame size for STFT
     :param Optional[int] fft_size: size of the FFT to apply
+    :param list[Dim|str]|None in_spatial_dims:
+    :param list[Dim]|None out_spatial_dims:
+    :param Dim|None out_dim:
     :rtype: Data
     """
     fft_size = fft_size or frame_size
     data = ConvLayer.get_out_data_from_opts(
       name=name, sources=sources, network=network, filter_size=[frame_size], strides=[frame_shift],
-      padding="valid", n_out=fft_size // 2 + 1)
+      padding="valid", n_out=fft_size // 2 + 1, in_spatial_dims=in_spatial_dims, out_spatial_dims=out_spatial_dims,
+      out_dim=out_dim)
     data = data.copy_with_feature_dim_axis(-1)
+
     data.dtype = "complex64"
     return data
 
@@ -677,11 +687,15 @@ class IstftLayer(_ConcatInputLayer):
   recurrent = True  # we should not shuffle in the time-dimension
 
   # noinspection PyUnusedLocal
-  def __init__(self, frame_shift, frame_size, fft_size=None, **kwargs):
+  def __init__(self, frame_shift, frame_size, fft_size=None, in_spatial_dims=None, out_spatial_dims=None, out_dim=None,
+               **kwargs):
     """
     :param int frame_shift: frame shift for STFT
     :param int frame_size: frame size for STFT
     :param Optional[int] fft_size: size of the FFT to apply
+    :param list[Dim|str]|None in_spatial_dims:
+    :param list[Dim]|None out_spatial_dims:
+    :param Dim|None out_dim:
     """
     fft_size = fft_size or frame_size
     assert "n_out" not in kwargs
@@ -694,7 +708,7 @@ class IstftLayer(_ConcatInputLayer):
     in_dim = self.input_data.feature_dim_or_sparse_dim
     assert in_dim.dimension == fft_size // 2 + 1
     input_data, num_batch_dims = ConvLayer.transform_input(
-      self.input_data, network=self.network, in_dim=in_dim)
+      self.input_data, network=self.network, in_dim=in_dim, in_spatial_dims=in_spatial_dims)
     # shape should be (B, ..., T, F)
     input_data = input_data.copy_with_feature_dim_axis(-1)
     input_data = input_data.copy_with_time_dim_axis(-2)
@@ -714,18 +728,22 @@ class IstftLayer(_ConcatInputLayer):
     self.output.placeholder = y
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, network, frame_shift, frame_size, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, network, frame_shift, frame_size, in_spatial_dims=None,
+                             out_spatial_dims=None, out_dim=None, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param returnn.tf.network.TFNetwork network:
     :param int frame_shift: frame shift for STFT
     :param int frame_size: frame size for STFT
+    :param list[Dim|str]|None in_spatial_dims:
+    :param list[Dim]|None out_spatial_dims:
+    :param Dim|None out_dim:
     :rtype: Data
     """
     data = TransposedConvLayer.get_out_data_from_opts(
       name=name, sources=sources, network=network, filter_size=[frame_size], strides=[frame_shift],
-      padding="valid", n_out=1)
+      padding="valid", n_out=1, in_spatial_dims=in_spatial_dims, out_spatial_dims=out_spatial_dims, out_dim=out_dim)
     data = data.copy_with_feature_dim_axis(-1)
     return data
 
