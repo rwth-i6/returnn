@@ -5640,7 +5640,6 @@ def test_flat_net_construction():
       "data": (n_in, 2),
       "classes": (n_out, 1),
     },
-    "flat_net_construction": True,
     "debug_print_layer_output_template": True,
   })
   print("Creating network...")
