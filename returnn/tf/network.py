@@ -818,6 +818,9 @@ class TFNetwork(object):
         return self.get_layer(name)
       except (LayerNotFound, DataNotFound):
         pass  # ok, we will try to construct it then
+    delayed_exc = _DelayedConstructionException(
+      network=self, layer_name=name,  # make sure that we have all the original args
+      other_kwargs=dict(net_dict=net_dict, get_layer=get_layer, add_layer=add_layer, check_existing=check_existing))
     if not get_layer:
       get_layer = GetLayer(network=self, add_layer_func=add_layer)
     full_name = name
@@ -907,12 +910,13 @@ class TFNetwork(object):
           layer_name=full_name, network=self)
       return sub_layer
 
-    delayed_exc = _DelayedConstructionException(
-      network=self, layer_name=name,
-      other_kwargs=dict(net_dict=net_dict, get_layer=get_layer, add_layer=add_layer, check_existing=check_existing))
     if not self._construction_stack.in_flat_construct_count:
       return self._construction_stack.flat_construct(delayed_exc)
     if self._construction_stack.layers:
+      # Note: We don't want to raise this earlier here in this function
+      # because certain exceptions such as LayerNotFound should directly be raised
+      # because some other code tests for this
+      # (e.g. checking the loss checking for layer "classes" and then layer "data:classes").
       raise delayed_exc
 
     layer_desc = layer_desc.copy()
