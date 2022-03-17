@@ -323,9 +323,16 @@ class _NetworkConstructionStack:
   Used to keep the recursive construction state of :function:`TFNetwork.construct_layer`.
   """
 
+  # This assumes that we do single-threaded net construction.
+  # For multi-threading (if this would ever be realistic for net construction),
+  # we would need this to be a thread local.
+  # We still have a stack here for flat_construction() because we need to be nested
+  # for things like CondLayer or RecLayer.
+  _flat_construction_stack = []  # type: typing.List[_NetworkConstructionStack]
+
   def __init__(self):
     self.layers = []  # type: typing.List[str]
-    self.in_flat_construct_count = 0
+    self.flat_construct_stack = []  # type: typing.List[typing.Tuple[TFNetwork, str, typing.Dict[str, typing.Any]]]
 
   def append(self, layer_name):
     """
@@ -340,23 +347,59 @@ class _NetworkConstructionStack:
     """
     self.layers.remove(layer_name)
 
-  def flat_construct(self, initial):
+  def is_active_flat_construction(self):
     """
-    :param _DelayedConstructionException initial:
+    :return: whether this is called inside self.flat_construct(...)
+    :rtype: bool
     """
-    self.in_flat_construct_count += 1
-    queue = [initial]  # type: typing.List[_DelayedConstructionException]
+    cls = self.__class__
+    if not cls._flat_construction_stack:
+      return False
+    return cls._flat_construction_stack[-1] is self
+
+  def should_continue_construction(self):
+    """
+    We assume that we are inside self.flat_construct(), and currently doing a construct_layer().
+
+    :return: whether construct_layer() should continue. otherwise, it would throw _DelayedConstructionException.
+    :rtype: bool
+    """
+    assert self.is_active_flat_construction()
+    return not self.layers
+
+  def flat_construct(self, initial_exc):
+    """
+    :param _DelayedConstructionException initial_exc:
+    :rtype: LayerBase
+    """
+    cls = self.__class__
+    assert not self.flat_construct_stack
+    stack = self.flat_construct_stack
+    initial = (initial_exc.network, initial_exc.layer_name, initial_exc.other_kwargs)
+    stack.append(initial)
+    cls._flat_construction_stack.append(self)
     try:
-      while queue:
+      while stack:
         try:
-          res = queue[-1].delayed_construction()
-          if queue[-1] is initial:
+          top = stack[-1]
+          network, layer_name, other_kwargs = top
+          res = network.construct_layer(name=layer_name, **other_kwargs)
+          stack.pop(-1)
+          if top is initial:
+            assert not stack
             return res
-          queue.pop(-1)
         except _DelayedConstructionException as delayed_exc:
-          queue.append(delayed_exc)
+          stack.append((delayed_exc.network, delayed_exc.layer_name, delayed_exc.other_kwargs))
+    except Exception as exc:
+      attr = "_RETURNN_layer_construction_stack"
+      if not hasattr(exc, attr):
+        setattr(exc, attr, [])
+      getattr(exc, attr).extend(stack)
+      raise
     finally:
-      self.in_flat_construct_count -= 1
+      top_stack = cls._flat_construction_stack.pop(-1)
+      assert top_stack is self
+      stack.clear()
     assert False, "we should not get here"
 
 
@@ -910,9 +953,9 @@ class TFNetwork(object):
           layer_name=full_name, network=self)
       return sub_layer
 
-    if not self._construction_stack.in_flat_construct_count:
+    if not self._construction_stack.is_active_flat_construction():
       return self._construction_stack.flat_construct(delayed_exc)
-    if self._construction_stack.layers:
+    if not self._construction_stack.should_continue_construction():
       # Note: We don't want to raise this earlier here in this function
       # because certain exceptions such as LayerNotFound should directly be raised
       # because some other code tests for this
@@ -3617,15 +3660,6 @@ class _DelayedConstructionException(Exception):
 
   def __repr__(self):
     return "<%s %r/%r>" % (self.__class__.__name__, self.network.name, self.layer_name)
-
-  def delayed_construction(self):
-    """
-    Call :func:`TFNetwork.construct_layer` again now.
-
-    :rtype: LayerBase
-    """
-    print("Delayed flat layer construction:", self.layer_name, file=log.v5)
-    return self.network.construct_layer(name=self.layer_name, **self.other_kwargs)
 
 
 class LayerNotFound(NetworkLayerException):
