@@ -837,7 +837,7 @@ class RecStepByStepLayer(RecLayer):
     """
     :param str rec_layer_name:
     :param dict[str,dict[str]] net_dict:
-    :param dict[str,bool] opts:
+    :param dict[str] opts:
     :return: nothing, will prepare globally, and modify net_dict in place
     """
     register_layer_class(RecStepByStepLayer)
@@ -1083,6 +1083,7 @@ class RecStepByStepLayer(RecLayer):
     :param Data output:
     :param SubnetworkRecCellSingleStep unit:
     :param Dim axis:
+    :param dict[str] rec_step_by_step_opts:
     :param bool reverse_stochastic_var_order:
     """
     assert isinstance(unit, SubnetworkRecCellSingleStep)
