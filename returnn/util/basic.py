@@ -1144,6 +1144,11 @@ def init_thread_join_hack():
   if _thread_join_hack_installed:  # don't install twice
     return
   _thread_join_hack_installed = True
+  if PY3:
+    # These monkey patches are not necessary anymore. Nothing blocks signals anymore in Python 3.
+    # https://github.com/albertz/playground/blob/master/thread-join-block.py
+    # https://github.com/albertz/playground/blob/master/cond-wait-block.py
+    return
   main_thread = threading.currentThread()
   # noinspection PyUnresolvedReferences,PyProtectedMember
   assert isinstance(main_thread, threading._MainThread)
