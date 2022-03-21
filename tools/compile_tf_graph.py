@@ -36,10 +36,11 @@ from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell, _TemplateLayer
 config = None  # type: typing.Optional[Config]
 
 
-def init(config_filename, log_verbosity):
+def init(config_filename, log_verbosity, device):
   """
   :param str config_filename: filename to config-file
   :param int log_verbosity:
+  :param str device:
   """
   rnn.init_better_exchook()
   rnn.init_thread_join_hack()
@@ -50,6 +51,7 @@ def init(config_filename, log_verbosity):
     "log": None,
     "log_verbosity": log_verbosity,
     "task": __file__,  # just extra info for the config
+    "device": device,
   })
   global config
   config = rnn.config
@@ -1469,6 +1471,8 @@ def main(argv):
   argparser.add_argument('--train', type=int, default=0, help='0 disable (default), 1 enable, -1 dynamic')
   argparser.add_argument('--eval', type=int, default=0, help='calculate losses. 0 disable (default), 1 enable')
   argparser.add_argument('--search', type=int, default=0, help='beam search. 0 disable (default), 1 enable')
+  argparser.add_argument(
+    '--device', default="cpu", help="'cpu' (default) or 'gpu'. optimizes the graph for this device")
   argparser.add_argument("--verbosity", default=4, type=int, help="5 for all seqs (default: 4)")
   argparser.add_argument("--summaries_tensor_name", help="create Tensor for tf.compat.v1.summary.merge_all()")
   argparser.add_argument("--rec_step_by_step", help="make step-by-step graph for this rec layer (eg. 'output')")
@@ -1478,7 +1482,7 @@ def main(argv):
   argparser.add_argument("--output_file_state_vars_list", help="line-based, name of state vars")
   args = argparser.parse_args(argv[1:])
   assert args.train in [0, 1, -1] and args.eval in [0, 1] and args.search in [0, 1]
-  init(config_filename=args.config, log_verbosity=args.verbosity)
+  init(config_filename=args.config, log_verbosity=args.verbosity, device=args.device)
   assert 'network' in config.typed_dict
   net_dict = config.typed_dict["network"]
   if args.rec_step_by_step:
