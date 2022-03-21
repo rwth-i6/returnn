@@ -7034,6 +7034,35 @@ def test_MaskedComputationLayer_rec_subnet_name_scope():
     assert_equal(set(p.name for p in params), {"linear/W:0", "linear/b:0"})
 
 
+def test_MaskedComputationLayer_dyn_size_none():
+  # https://github.com/rwth-i6/returnn/issues/1008
+  with make_scope() as session:
+    config = Config()
+    net = TFNetwork(
+      extern_data=ExternData(
+        {"data": {"dim": 20, "sparse": False}, "classes": {"dim": 20, "sparse": True}}),
+      config=config,
+      train_flag=False,
+      search_flag=True)
+    net_dict = {
+      "rec_loop": {
+        "class": "rec", "from": "data", "unit": {
+          "lin": {"class": "linear", "activation": "softmax", "from": "prev:output", "n_out": 20},
+          "output": {
+            "class": "choice", "from": "lin", "beam_size": 4, "target": "classes", "initial_output": 0
+          }
+        }},
+      "data_red": {"class": "reduce", "mode": "mean", "from": "data", "axis": "f"},
+      "mask": {"class": "compare", "from": "rec_loop", "value": 10, "kind": "greater"},
+      "masked_data": {
+        "class": "masked_computation", "from": "rec_loop", "mask": "mask",
+        "unit": {"class": "copy", "from": "data"}
+      },
+      "output": {"class": "decide", "from": "masked_data"}
+    }
+    net.construct_from_dict(net_dict)
+
+
 def test_subnet_deps_search():
   beam_size = 3
   EncKeyTotalDim = 10
