@@ -7653,7 +7653,7 @@ class MaskedComputationLayer(LayerBase):
           new_size = masked_from.output.get_sequence_lengths()
         else:
           new_size = idxs[-1]  # [B]
-          out_spatial_dim.dyn_size = new_size
+          out_spatial_dim.get_for_batch_ctx(self.output.batch, self.output.control_flow_ctx).dyn_size = new_size
         new_time = tf.reduce_max(new_size)  # T'
         idxs = where_bc(mask_t, idxs - 1, new_time)
 
@@ -7744,6 +7744,7 @@ class MaskedComputationLayer(LayerBase):
       assert out_spatial_dim
       axis = sub_out_template.get_axis_from_description(in_spatial_dim)
       sub_out_template = sub_out_template.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_spatial_dim)
+    sub_out_template = layer_class.fixup_out_data(output=sub_out_template, **layer_desc)
     layer_desc["output"] = sub_out_template
 
     self.sub_layer = layer_class(**layer_desc)
