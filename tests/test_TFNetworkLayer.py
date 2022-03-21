@@ -4180,6 +4180,46 @@ def test_ConvLayer_get_out_data_from_opts_out_spatial_dims():
       feed_dict=make_feed_dict(net.extern_data))
 
 
+def test_ConvLayer_2d_device_based_opt():
+  from returnn.tf.util.data import batch_dim
+  for dev in ["cpu", "gpu"]:
+    time_dim = SpatialDim("time")
+    feat_dim = FeatureDim("input", 50)
+    extra_dim = FeatureDim("extra", 1)
+    config = Config({
+      "extern_data": {"data": {"dim_tags": [batch_dim, time_dim, feat_dim, extra_dim]}},
+      "device": dev,
+    })
+    with tf.Graph().as_default() as graph:
+      # We don't use make_scope() or enter the session scope because this is consistent
+      # to how it usually would be the case for RETURNN.
+      net = TFNetwork(config=config)
+      gpu_available = tf_util.is_gpu_available_in_session()
+      print("GPU available:", gpu_available)
+      assert gpu_available == (dev == "gpu")
+      net_dict = {
+        "output": {
+          'class': 'conv',
+          'from': 'data',
+          'filter_size': (3, 3),
+          'in_spatial_dims': ['T', 'dim:50'],
+          'n_out': 32,
+          'padding': 'same',
+          'activation': None,
+          'with_bias': True},
+      }
+      net.construct_from_dict(net_dict)
+      conv_layer = net.get_default_output_layer()
+      print("conv layer:", conv_layer)
+      assert conv_layer.output.batch_dim_axis == 0
+      if gpu_available:
+        assert conv_layer.output.dim_tags[2:] == (time_dim, feat_dim)
+        assert conv_layer.output.feature_dim_axis == 1 and conv_layer.output.dim == 32
+      else:
+        assert conv_layer.output.dim_tags[1:3] == (time_dim, feat_dim)
+        assert conv_layer.output.feature_dim_axis == 3 and conv_layer.output.dim == 32
+
+
 def test_ConvLayer_unrelated_dim():
   from returnn.tf.util.data import batch_dim
   time_dim = SpatialDim("time")
