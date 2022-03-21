@@ -516,7 +516,8 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
         i, net_vars, acc_tas, seq_len_info = res
     if seq_len_info:
       state_update_ops += rec_layer.assign_state_vars_recursive_flatten(("end_flag", "dyn_seq_len"), seq_len_info)
-    state_update_ops.append(rec_layer.state_vars["i"].assign(i))
+    if rec_layer.rec_step_by_step_opts["update_i_in_graph"]:
+      state_update_ops.append(rec_layer.state_vars["i"].assign(i))
 
     # Assign new state.
     for layer_name in layers_cur_iteration:
@@ -834,10 +835,11 @@ class RecStepByStepLayer(RecLayer):
     InLoop = Entity("in_body")
 
   @classmethod
-  def prepare_compile(cls, rec_layer_name, net_dict):
+  def prepare_compile(cls, rec_layer_name, net_dict, opts):
     """
     :param str rec_layer_name:
     :param dict[str,dict[str]] net_dict:
+    :param dict[str] opts:
     :return: nothing, will prepare globally, and modify net_dict in place
     """
     register_layer_class(RecStepByStepLayer)
@@ -851,6 +853,7 @@ class RecStepByStepLayer(RecLayer):
       if layer_dict["class"] == "choice":
         layer_dict["class"] = ChoiceStateVarLayer.layer_class
     rec_layer_dict["class"] = RecStepByStepLayer.layer_class
+    rec_layer_dict["rec_step_by_step_opts"] = opts
 
   @classmethod
   def post_compile(cls, rec_layer_name, network, output_file_name=None):
@@ -1072,7 +1075,7 @@ class RecStepByStepLayer(RecLayer):
         value = x.placeholder
       return tf_compat.v1.assign(self.var, value, name="final_state_var_%s" % self.name).op
 
-  def __init__(self, _orig_sources, sources, network, name, output, unit, axis,
+  def __init__(self, _orig_sources, sources, network, name, output, unit, axis, rec_step_by_step_opts,
                reverse_stochastic_var_order=False, **kwargs):
     """
     :param str|list[str]|None _orig_sources:
@@ -1082,6 +1085,7 @@ class RecStepByStepLayer(RecLayer):
     :param Data output:
     :param SubnetworkRecCellSingleStep unit:
     :param Dim axis:
+    :param dict[str] rec_step_by_step_opts:
     :param bool reverse_stochastic_var_order:
     """
     assert isinstance(unit, SubnetworkRecCellSingleStep)
@@ -1093,6 +1097,7 @@ class RecStepByStepLayer(RecLayer):
     self._parent_tile_multiples = None  # type: typing.Optional[tf.Tensor]
     self.construction_state = self.ConstructionState.GetSources
     self.reverse_stochastic_var_order = reverse_stochastic_var_order
+    self.rec_step_by_step_opts = rec_step_by_step_opts
 
     # Some early assigns needed for set_parent_layer, and that __repr__ works.
     self.network = network
@@ -1480,13 +1485,15 @@ def main(argv):
   argparser.add_argument("--output_file", help='allowed extensions: pb, pbtxt, meta, metatxt, logdir')
   argparser.add_argument("--output_file_model_params_list", help="line-based, names of model params")
   argparser.add_argument("--output_file_state_vars_list", help="line-based, name of state vars")
+  argparser.add_argument("--update_i_in_graph", action="store_true", help="whether to update i in the graph")
   args = argparser.parse_args(argv[1:])
   assert args.train in [0, 1, -1] and args.eval in [0, 1] and args.search in [0, 1]
   init(config_filename=args.config, log_verbosity=args.verbosity, device=args.device)
   assert 'network' in config.typed_dict
   net_dict = config.typed_dict["network"]
   if args.rec_step_by_step:
-    RecStepByStepLayer.prepare_compile(rec_layer_name=args.rec_step_by_step, net_dict=net_dict)
+    RecStepByStepLayer.prepare_compile(
+      rec_layer_name=args.rec_step_by_step, net_dict=net_dict, opts={"update_i_in_graph": args.update_i_in_graph})
   with tf.Graph().as_default() as graph:
     assert isinstance(graph, tf.Graph)
     print("Create graph...")
