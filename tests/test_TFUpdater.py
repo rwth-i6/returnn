@@ -233,6 +233,47 @@ def test_Updater_simple_batch():
     session.run(updater.get_optim_op(), feed_dict=feed_dict)
 
 
+def test_Updater_decouple_constraints():
+  with make_scope() as session:
+    from returnn.tf.network import TFNetwork, ExternData
+    from returnn.config import Config
+    from returnn.datasets.generating import Task12AXDataset
+    dataset = Task12AXDataset()
+    dataset.init_seq_order(epoch=1)
+    extern_data = ExternData()
+    extern_data.init_from_dataset(dataset)
+
+    config = Config({"decouple_constraints": True})
+    network = TFNetwork(extern_data=extern_data, train_flag=True)
+    network.construct_from_dict({
+      "layer1": {"class": "linear", "activation": "tanh", "n_out": 13, "L2": 0.01, "from": "data:data"},
+      "layer2": {"class": "linear", "activation": "tanh", "n_out": 13, "L2": 0.01, "from": "layer1"},
+      "output": {"class": "softmax", "loss": "ce", "target": "classes", "from": "layer2"}
+    })
+    network.initialize_params(session=session)
+
+    updater = Updater(config=config, network=network)
+    updater.set_learning_rate(1.0, session=session)
+    updater.set_trainable_vars(network.get_trainable_params())
+    updater.init_optimizer_vars(session=session)
+    update_op = updater.get_optim_op()
+    assert updater.decoupled_constraints is not None
+
+    from returnn.tf.data_pipeline import FeedDictDataProvider
+    batches = dataset.generate_batches(
+      recurrent_net=network.recurrent,
+      batch_size=100,
+      max_seqs=10,
+      max_seq_length=sys.maxsize,
+      used_data_keys=network.used_data_keys)
+    data_provider = FeedDictDataProvider(
+      tf_session=session, extern_data=extern_data,
+      data_keys=network.used_data_keys,
+      dataset=dataset, batches=batches)
+    feed_dict, _ = data_provider.get_feed_dict(single_threaded=True)
+    session.run(update_op, feed_dict=feed_dict)
+
+
 def test_Updater_multiple_optimizers():
   with make_scope() as session:
     from returnn.tf.network import TFNetwork, ExternData
@@ -260,8 +301,7 @@ def test_Updater_multiple_optimizers():
     updater.init_optimizer_vars(session=session)
 
     optim_op = updater.get_optim_op()
-    assert isinstance(updater.optimizer, WrapOptimizer)
-    assert len(updater.optimizer.optimizers) == 3
+    assert len(updater.optimizers) == 3
 
     from returnn.tf.data_pipeline import FeedDictDataProvider
     batches = dataset.generate_batches(
@@ -306,8 +346,7 @@ def test_Updater_multiple_optimizers_and_opts():
     updater.init_optimizer_vars(session=session)
 
     optim_op = updater.get_optim_op()
-    assert isinstance(updater.optimizer, WrapOptimizer)
-    assert len(updater.optimizer.optimizers) == 3
+    assert len(updater.optimizers) == 3
 
     from returnn.tf.data_pipeline import FeedDictDataProvider
     batches = dataset.generate_batches(
