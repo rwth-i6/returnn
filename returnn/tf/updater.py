@@ -632,13 +632,13 @@ class Updater(object):
     return opt.get_slot(var, name)
 
   class _GetGlobalInfo:
-    def __init__(self, optimizer, all_vars, var_grads):
+    def __init__(self, updater, all_vars, var_grads):
       """
-      :param WrapOptimizer optimizer:
+      :param Updater updater:
       :param list[tf.Variable] all_vars:
       :param dict[tf.Variable,tf.Tensor] var_grads:
       """
-      self.optimizer = optimizer
+      self.updater = updater
       self.all_vars = all_vars
       self.var_grads = var_grads
       self.all_grads = list(var_grads.values())  # not necessarily the same length as all_vars
@@ -655,7 +655,7 @@ class Updater(object):
       """
       res = {}
       for var in self.all_vars:
-        opts = self.optimizer._get_updater_opts_from_var(var)
+        opts = self.updater._get_updater_opts_from_var(var)
         var_tags = opts.get("tags", [])
         for tag in var_tags:
           res.setdefault(tag, set()).add(var)
@@ -713,7 +713,7 @@ class Updater(object):
         from returnn.tf.util.basic import get_valid_scope_name_from_str
         with tf.name_scope("global_norm_for_tag_%s" % get_valid_scope_name_from_str(tag)):
           norm = self._global_norm({self.var_grads[var] for var in self.vars_by_tag[tag]})
-        if self.optimizer.config.bool_or_other("debug_grad_summaries", False):
+        if self.updater.config.bool_or_other("debug_grad_summaries", False):
           tf_compat.v1.summary.scalar("global_norm_for_tag_%s" % get_valid_scope_name_from_str(tag), norm)
         self._global_grad_norm_per_tag[tag] = norm
       return self._global_grad_norm_per_tag[tag]
@@ -726,7 +726,7 @@ class Updater(object):
       """
       if self._maximize_grad_norm_var_grads is None:
         loss_ext = self.get_global_grad_norm() * (-factor)
-        grads_and_vars_ext = self.optimizer._compute_gradients(loss_ext, var_list=self.all_vars)
+        grads_and_vars_ext = self.updater._compute_gradients(loss_ext, var_list=self.all_vars)
         self._maximize_grad_norm_var_grads = {var: grad for (grad, var) in grads_and_vars_ext if grad is not None}
       return self._maximize_grad_norm_var_grads
 
@@ -884,7 +884,7 @@ class Updater(object):
     var_grads = {var: grad for (grad, var) in grads_and_vars if grad is not None}
     if not var_grads:
       raise Exception("no single variable to train")
-    global_info = self._GetGlobalInfo(optimizer=self, all_vars=var_list, var_grads=var_grads)
+    global_info = self._GetGlobalInfo(updater=self, all_vars=var_list, var_grads=var_grads)
     if self.config.bool_or_other("debug_grad_summaries", False):
       tf_compat.v1.summary.scalar("global_grad_norm", global_info.get_global_grad_norm())
     grads_per_apply_grad_opts = {}  # dict apply_grad_opts -> list of (grad, var)
