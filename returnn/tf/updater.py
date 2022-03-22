@@ -7,6 +7,7 @@ and model param update logic in general.
 from __future__ import print_function
 
 import typing
+from collections import OrderedDict
 import tensorflow as tf
 from tensorflow.python.ops import resource_variable_ops
 
@@ -117,6 +118,8 @@ class Updater(object):
   and the update-op for all trainable vars.
   See the code of :func:`Updater.create_optimizer` for valid config options.
 
+  Wraps one or multiple tf.compat.v1.train.Optimizer, and extends it by some further functionality.
+
   Note: `Vincent Vanhoucke says <https://github.com/tensorflow/tensorflow/issues/323#issuecomment-159116515>`_,
   in case you get nans, consider increasing the epsilon (for Adam, Nadam and similar).
   This is the config option ``optimizer_epsilon``.
@@ -154,24 +157,26 @@ class Updater(object):
 
   def __init__(self, config, network, initial_learning_rate=1.):
     """
-    :param Config.Config config:
+    :param returnn.config.Config config:
     :param TFNetwork network:
     :param float initial_learning_rate:
     """
     self.config = config
     self.learning_rate_var = tf.Variable(name="learning_rate", initial_value=0.0, trainable=False, dtype="float32")
+    self.initial_learning_rate = initial_learning_rate
+    self.learning_rate = None  # type: typing.Optional[tf.Tensor]
     self.trainable_vars = []  # type: typing.List[tf.Variable]
     self.network = network
+    self.global_train_step = self.network.global_train_step
     self.use_locking = self.config.bool("optimizer_use_locking", False)
-    self.initial_learning_rate = initial_learning_rate
     if self.config.bool("decouple_constraints", False):
       # https://arxiv.org/abs/1711.05101, Fixing Weight Decay Regularization in Adam
       self.loss = network.get_total_loss()
-      self.constraints = network.get_total_constraints()
+      self.decoupled_constraints = network.get_total_constraints()
     else:
       self.loss = network.get_objective()
-      self.constraints = None
-    self.optimizer = None  # type: typing.Optional[WrapOptimizer]
+      self.decoupled_constraints = None
+    self.optimizers = OrderedDict()  # optimizer_opts|None -> tf.compat.v1.train.Optimizer
     self.optim_op = None  # type: typing.Optional[tf.Operation]
     self.optim_meta_losses_dict = None  # type: typing.Optional[typing.Dict[str,tf.Tensor]]
     self.optimizer_vars = []  # type: typing.List[tf.Variable]
@@ -263,23 +268,19 @@ class Updater(object):
         trainable_vars_custom_update.append(v)
         trainable_vars_for_gradients.remove(v)
 
-    if not self.optimizer:
-      self.optimizer = WrapOptimizer(
-        config=self.config,
-        learning_rate=self.get_current_step_learning_rate(),
-        global_train_step=self.network.global_train_step,
-        use_locking=self.use_locking)
-      self.optimizer.create_all_needed_optimizers(trainable_vars_for_gradients)
+    self.learning_rate = self.get_current_step_learning_rate()
+    self.optimizers.clear()
+    self.create_all_needed_optimizers(trainable_vars_for_gradients)
 
     with tf_compat.v1.variable_scope("optimize"):
       meta_losses_scope = MetaLosses.enter_gradient_scope()
-      apply_grads = self.optimizer.get_apply_grads_op(self.loss, trainable_vars_for_gradients)
+      apply_grads = self.get_apply_grads_op(self.loss, trainable_vars_for_gradients)
       meta_losses_scope.exit()
       self.optim_meta_losses_dict = meta_losses_scope.losses_as_fetch_dict()
       if meta_losses_scope.losses:
         with tf.name_scope("meta_loss"):
           meta_loss = meta_losses_scope.summed_loss_for_optimization()
-          meta_apply_grads = self.optimizer.get_apply_grads_op(meta_loss, trainable_vars_for_gradients)
+          meta_apply_grads = self.get_apply_grads_op(meta_loss, trainable_vars_for_gradients)
         apply_grads = tf.group(apply_grads, meta_apply_grads)
       self.optim_op = apply_grads
 
@@ -291,16 +292,6 @@ class Updater(object):
           assert isinstance(custom_update, CustomUpdate)
           updates.append(custom_update.update_var(param))
         self.optim_op = tf.group(*updates)
-
-    if self.constraints is not None:
-      with tf_compat.v1.variable_scope("optimize_constraints"):
-        with tf_compat.v1.variable_scope("factor"):
-          factor = (self.get_current_step_learning_rate() / float(self.initial_learning_rate))
-          factor *= self.config.float("decouple_constraints_factor", 0.025)
-        sgd_optimizer = tf_compat.v1.train.GradientDescentOptimizer(
-          learning_rate=factor, use_locking=self.use_locking)
-        with tf.control_dependencies([self.optim_op]):
-          self.optim_op = sgd_optimizer.minimize(self.constraints, var_list=self.trainable_vars)
 
     if self.config.opt_typed_value("extra_updates"):
       extra_updates = self.config.typed_dict["extra_updates"]
@@ -329,13 +320,13 @@ class Updater(object):
           extra_updates_op_list.append(op)
         self.optim_op = tf.group(self.optim_op, *extra_updates_op_list)
 
-    slot_names_per_optimizer = self.optimizer.get_slot_names_per_optimizer()
+    slot_names_per_optimizer = self.get_slot_names_per_optimizer()
     slot_vars = []
     for opt_key, slot_names in slot_names_per_optimizer.items():
       print("Initialize optimizer (%s) with slots %s." % (opt_key or "default", slot_names), file=log.v3)
       for slot_name in slot_names:
-        for v in self.optimizer.filter_var_list_per_optimizer_key(trainable_vars_for_gradients, opt_key=opt_key):
-          slot_var = self.optimizer.get_slot(var=v, name=slot_name)
+        for v in self.filter_var_list_per_optimizer_key(trainable_vars_for_gradients, opt_key=opt_key):
+          slot_var = self.get_slot(var=v, name=slot_name)
           if slot_var is None:
             print("Warning: No slot_var found for variable %r, slot_name %r. Maybe no gradient for this var?" % (
               v, slot_name), file=log.v3)
@@ -405,49 +396,6 @@ class Updater(object):
     """
     self.get_optim_op()  # make sure it is initialized
     session.run(self.optimizer_init_vars_op)
-
-
-def accum_grad_multiple_step(grad, var, train_step, num_accum_steps):
-  """
-  :param tf.Tensor|tf.IndexedSlices grad:
-  :param tf.Variable var:
-  :param tf.Tensor train_step: int, scalar
-  :param int num_accum_steps:
-  :return: modified grad
-  :rtype: tf.Tensor
-  """
-  from returnn.tf.util.basic import reuse_name_scope_of_tensor, get_base_name
-  with reuse_name_scope_of_tensor(grad, postfix="/%s_accum_grad" % get_base_name(grad)):
-    shape = var.get_shape().as_list()
-    v = tf_compat.v1.get_variable(
-      name="var_accum_grad", shape=shape, dtype=grad.dtype,
-      initializer=tf.zeros_initializer(), trainable=False)
-    return tf.cond(
-      tf.less_equal(tf_compat.v1.mod(train_step, num_accum_steps), 0),
-      lambda: tf_compat.v1.assign(v, grad),
-      lambda: tf_compat.v1.assign_add(v, grad))
-
-
-class WrapOptimizer:
-  """
-  Wraps a tf.compat.v1.train.Optimizer (or multiple).
-  This is wrapped for a simpler interface, and also to allow for multiple optimizers.
-  This class is not derived from tf.compat.v1.train.Optimizer itself, to keep it simple.
-  """
-
-  def __init__(self, config, learning_rate, global_train_step, use_locking):
-    """
-    :param Config.Config config:
-    :param tf.Tensor learning_rate:
-    :param tf.Tensor global_train_step:
-    :param bool use_locking:
-    """
-    self.config = config
-    self.learning_rate = learning_rate
-    self.global_train_step = global_train_step
-    self.use_locking = use_locking
-    from collections import OrderedDict
-    self.optimizers = OrderedDict()  # optimizer_opts|None -> tf.compat.v1.train.Optimizer
 
   def get_default_optimizer(self):
     """
@@ -947,6 +895,34 @@ class WrapOptimizer:
       new_grad, apply_grad_opts = self._post_process_grad(grad=grad, var=var, global_info=global_info)
       grads_per_apply_grad_opts.setdefault(make_hashable(apply_grad_opts), []).append((new_grad, var))
 
+    if self.decoupled_constraints is not None:
+      # Note: We want to perform the decoupled constraint updates after all the gradients (and post processing)
+      # is calculated (i.e. forward + backprop used the original variable, not any weight decayed version).
+      # We want to perform the decoupled constraint updates before we do the gradient update.
+      # This is consistent to other frameworks, e.g. PyTorch.
+      # https://github.com/rwth-i6/returnn/issues/1007
+      # The constraints are given as losses (e.g. L2 norm of the weights) thus we use SGD
+      # which is then equivalent to the standard weight decay.
+      # Also see the paper: https://arxiv.org/abs/1711.05101, Fixing Weight Decay Regularization in Adam
+      with tf_compat.v1.variable_scope("optimize_constraints"):
+        with tf_compat.v1.variable_scope("factor"):
+          factor = (self.learning_rate / float(self.initial_learning_rate))
+          factor *= self.config.float("decouple_constraints_factor", 0.025)
+        constraint_grad_descent_optimizer = tf_compat.v1.train.GradientDescentOptimizer(
+          learning_rate=factor, use_locking=self.use_locking)
+        for _, grads_and_vars_per_opts in grads_per_apply_grad_opts.items():
+          for i, (grad, var) in enumerate(grads_and_vars_per_opts):
+            (constraint_grad, var_), = constraint_grad_descent_optimizer.compute_gradients(
+              self.decoupled_constraints, var_list=[var])
+            assert var_ is var
+            if constraint_grad is None:  # no constraint on this var
+              continue
+            with tf.control_dependencies([grad]):
+              apply_constraint = constraint_grad_descent_optimizer.apply_gradients([(constraint_grad, var)])
+            with tf.control_dependencies([apply_constraint]):
+              grad = tf.identity(grad)
+            grads_and_vars_per_opts[i] = (grad, var)
+
     all_apply_grads = []
     assert grads_per_apply_grad_opts
     for apply_grad_opts, grads_and_vars_per_opts in grads_per_apply_grad_opts.items():
@@ -954,6 +930,27 @@ class WrapOptimizer:
     if len(all_apply_grads) == 1:
       return all_apply_grads[0]
     return tf.group(*all_apply_grads)
+
+
+def accum_grad_multiple_step(grad, var, train_step, num_accum_steps):
+  """
+  :param tf.Tensor|tf.IndexedSlices grad:
+  :param tf.Variable var:
+  :param tf.Tensor train_step: int, scalar
+  :param int num_accum_steps:
+  :return: modified grad
+  :rtype: tf.Tensor
+  """
+  from returnn.tf.util.basic import reuse_name_scope_of_tensor, get_base_name
+  with reuse_name_scope_of_tensor(grad, postfix="/%s_accum_grad" % get_base_name(grad)):
+    shape = var.get_shape().as_list()
+    v = tf_compat.v1.get_variable(
+      name="var_accum_grad", shape=shape, dtype=grad.dtype,
+      initializer=tf.zeros_initializer(), trainable=False)
+    return tf.cond(
+      tf.less_equal(tf_compat.v1.mod(train_step, num_accum_steps), 0),
+      lambda: tf_compat.v1.assign(v, grad),
+      lambda: tf_compat.v1.assign_add(v, grad))
 
 
 class _KerasOptimizerWrapper(Optimizer):
