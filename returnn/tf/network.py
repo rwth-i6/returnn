@@ -838,7 +838,7 @@ class TFNetwork(object):
       except (LayerNotFound, DataNotFound):
         pass  # ok, we will try to construct it then
     if not get_layer:
-      get_layer = GetLayer(network=self, add_layer_func=add_layer)
+      get_layer = GetLayer(network=self, add_layer_func=add_layer, net_dict=net_dict)
     full_name = name
     sub_layer_name = None
     if '/' in name:

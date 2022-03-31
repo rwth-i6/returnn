@@ -6150,6 +6150,16 @@ def test_subnetwork_deep_stack():
     network.construct_from_dict(net_dict)
 
 
+def test_subnet_construct_layer():
+  # https://github.com/rwth-i6/returnn/issues/1014
+  with make_scope() as session:
+    net = TFNetwork(config=Config({"extern_data": {"data": {"dim": 1}}}))
+    subnet_layer = net.construct_layer(name="subnet", net_dict={
+      "subnet": {"class": "subnetwork", "from": "data", "subnetwork": {"output": {"class": "copy", "from": "data"}}}})
+    assert isinstance(subnet_layer, SubnetworkLayer)
+    assert subnet_layer.output.placeholder is net.extern_data.get_default_input_data().placeholder
+
+
 def test_extra_search():
   class Callbacks:
     history = []
