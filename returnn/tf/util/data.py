@@ -638,7 +638,7 @@ class Dim(object):
           elif kind == "sub":
             return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(a - b))
           elif kind == "mul":
-            return tf.convert_to_tensor(a * b)
+            return a * b
           elif kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
             return a // b
           elif kind == "ceildiv":
