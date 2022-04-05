@@ -3582,6 +3582,25 @@ def test_SliceLayer_NCHW():
     assert slice2.output.dim == 8 and slice2.output.feature_dim_axis == 3
 
 
+def test_pad_conv_slice():
+  # https://github.com/rwth-i6/returnn/issues/1017
+  with make_scope() as session:
+    net = TFNetwork(config=Config({"extern_data": {"data": {"dim": 5}}}))
+    net.construct_from_dict({
+      "padding": {"class": "pad", "mode": "constant", "value": 0, "axes": ["T"], "padding": [(1, 1)], "from": "data"},
+      "conv": {
+        "class": "conv", "n_out": 5, "filter_size": (2,), "padding": "valid", "in_spatial_dims": ["T"],
+        "from": "padding"},
+      "output": {
+        "class": "slice", "axis": "T", "slice_start": None, "slice_end": -1, "slice_step": None, "from": "conv"},
+    })
+    out = net.get_default_output_layer().output
+    in_ = net.extern_data.get_default_input_data()
+    assert_not_equal(in_.get_time_dim_tag(), out.get_time_dim_tag())
+    net.initialize_params(session)
+    session.run((out.placeholder, out.get_sequence_lengths()), feed_dict=make_feed_dict(net.extern_data))
+
+
 def test_GatherLayer():
   with make_scope() as session:
     import numpy as np
