@@ -633,12 +633,12 @@ class Dim(object):
           if kind == "add":
             use_relu = _is_negative(a) or _is_negative(b)  # for dynamic tensors, assume all positive
             if use_relu:
-              return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(tf_util.simplify_add(a, b)))
-            return tf.convert_to_tensor(tf_util.simplify_add(a, b))
+              return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(a + b))
+            return a + b
           elif kind == "sub":
-            return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(tf_util.simplify_sub(a, b)))
+            return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(a - b))
           elif kind == "mul":
-            return tf.convert_to_tensor(tf_util.optional_mul(a, b))
+            return tf.convert_to_tensor(a * b)
           elif kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
             return a // b
           elif kind == "ceildiv":
