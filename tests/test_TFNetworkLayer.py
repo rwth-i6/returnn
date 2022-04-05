@@ -4374,6 +4374,29 @@ def test_conv_layer_NCHW():
       print(seq_lens)
 
 
+def test_ConvLayer_empty_out():
+  with make_scope() as session:
+    net = TFNetwork(config=Config({"extern_data": {"data": {"dim": 5}}}))
+    net.construct_from_dict({
+      # Use filter_size 2 and T=1 to get 0 size out.
+      # Using filter_size 3 would result in negative size according to the formula.
+      # Actually I would have expected that TF also deals with this but this is not the case.
+      "output": {"class": "conv", "n_out": 7, "filter_size": [2], "padding": "valid", "from": "data"},
+    })
+    out_ = net.layers["output"].output.copy_as_batch_spatial_major()
+    print(out_)
+    net.initialize_params(session)
+    out, seq_lens = session.run(
+      [out_.placeholder, out_.size_placeholder[0]],
+      feed_dict=make_feed_dict(net.extern_data, n_time=1, n_batch=1))
+    print(out)
+    print(seq_lens)
+    assert isinstance(out, numpy.ndarray)
+    assert isinstance(seq_lens, numpy.ndarray)
+    assert_equal(seq_lens.tolist(), [0])
+    assert out.shape == (1, 0, 7)
+
+
 def test_pool_layer_NCHW():
   with make_scope() as session:
     import numpy as np
