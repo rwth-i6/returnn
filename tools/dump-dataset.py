@@ -41,7 +41,10 @@ def dump_dataset(options):
   :param options: argparse.Namespace
   """
   print("Epoch: %i" % options.epoch, file=log.v3)
-  dataset.init_seq_order(epoch=options.epoch)
+  seq_list = None
+  if options.seqtags:
+    seq_list = options.seqtags.split(",")
+  dataset.init_seq_order(epoch=options.epoch, seq_list=seq_list)
   print("Dataset keys:", dataset.get_data_keys(), file=log.v3)
   print("Dataset target keys:", dataset.get_target_list(), file=log.v3)
   assert options.key in dataset.get_data_keys()
@@ -251,7 +254,8 @@ def main():
   argparser.add_argument("--dataset", help="if given the config, specifies the dataset. e.g. 'dev'")
   argparser.add_argument('--epoch', type=int, default=1)
   argparser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
-  argparser.add_argument('--endseq', type=int, default=10, help='end seq idx (inclusive) or -1 (default: 10)')
+  argparser.add_argument('--endseq', type=int, default=None, help='end seq idx (inclusive) or -1 (default: 10)')
+  argparser.add_argument("--seqtags", type=str, default=None, help="comma-separated list of seq-tags to dump")
   argparser.add_argument('--get_num_seqs', action="store_true")
   argparser.add_argument('--type', default='stdout', help="'numpy', 'stdout', 'plot', 'null' (default 'stdout')")
   argparser.add_argument("--stdout_limit", type=float, default=None, help="e.g. inf to disable")
@@ -263,6 +267,8 @@ def main():
   argparser.add_argument('--stats', action="store_true", help="calculate mean/stddev stats")
   argparser.add_argument('--dump_stats', help="file-prefix to dump stats to")
   args = argparser.parse_args()
+  if args.endseq is None:
+    args.endseq = 10 if not args.seqtags else -1
   init(config_str=args.returnn_config, config_dataset=args.dataset, verbosity=args.verbosity)
   try:
     dump_dataset(args)
