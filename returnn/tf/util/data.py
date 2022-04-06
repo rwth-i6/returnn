@@ -5084,7 +5084,7 @@ class Data(object):
         max_idx = tf.reduce_max(tag.dyn_size)
         # We use the assumption that self.placeholder.shape[axis] == max_idx.
         idx_range = tf.range(max_idx)
-        idx_range = tf.reshape(idx_range, [1] * (axis - 1) + [max_idx] + [1] * (self.batch_ndim - axis - 1))
+        idx_range = tf.reshape(idx_range, [1] * axis + [max_idx] + [1] * (self.batch_ndim - axis - 1))
         assert set(tag.dyn_size_ext.dim_tags).issubset(self.dim_tags)  # https://github.com/rwth-i6/returnn/issues/721
         size_ext = tag.dyn_size_ext.copy_compatible_to(self, check_sparse=False, check_dtype=False)
         seq_mask = tf.less(idx_range, size_ext.placeholder)
