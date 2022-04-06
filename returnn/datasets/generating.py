@@ -200,6 +200,18 @@ class GeneratingDataset(Dataset):
     self._check_loaded_seq_idx(seq_idx)
     return self._get_seq(seq_idx).seq_tag
 
+  def get_all_tags(self):
+    """
+    :rtype: list[str]
+    """
+    return ["seq-%i" % seq_idx for seq_idx in range(self.num_seqs)]
+
+  def get_current_seq_order(self):
+    """
+    :rtype: list[int]
+    """
+    return list(range(self.num_seqs))
+
 
 class Task12AXDataset(GeneratingDataset):
   """
