@@ -153,7 +153,7 @@ class LayerBase(object):
     :param returnn.tf.network.TFNetwork _network: just for internal construction, should be the same as ``network``
     :param None|SearchChoices _src_common_search_choices: set via :func:`SearchChoices.translate_to_common_search_beam`
     """
-    debug_print_layer_output  # noop  # not used here but in TFNetwork._create_layer
+    debug_print_layer_output  # noqa  # not used here but in TFNetwork._create_layer
     self.name = name
     self.network = network
     self._register_layer()
