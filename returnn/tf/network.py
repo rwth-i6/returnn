@@ -1055,11 +1055,12 @@ class TFNetwork(object):
       if layer.output.placeholder is not None and debug_print_layer_output_shape:
         layer.output.placeholder = py_print(
           layer.output.placeholder,
-          [name, "shape:", str(layer.output), tf.shape(layer.output.placeholder)],
+          [layer.get_absolute_name(), "shape:", str(layer.output), tf.shape(layer.output.placeholder)],
           summarize=10, name="debug_print_layer_output_shape")
       if layer.output.placeholder is not None and debug_print_layer_output.truth_value:
         layer.output.placeholder = py_print(
-          layer.output.placeholder, [name, layer.output.placeholder], name="debug_print_layer_output",
+          layer.output.placeholder, [layer.get_absolute_name(), layer.output.placeholder],
+          name="debug_print_layer_output",
           **debug_print_layer_output.collection)
       if layer.output.placeholder is not None and debug_runtime_sanity_checks:
         layer.output.placeholder = layer.output.get_placeholder_with_runtime_sanity_checks()
