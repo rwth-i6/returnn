@@ -43,7 +43,7 @@ class EngineBase(object):
     """
     model_filename = config.value('model', '')
     if not model_filename:
-      return []
+      return {}
     # Automatically search the filesystem for existing models.
     file_list = {}
     for epoch in range(1, cls.config_get_final_epoch(config) + 1):
