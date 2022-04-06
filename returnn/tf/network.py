@@ -1673,6 +1673,8 @@ class TFNetwork(object):
         if dev.device_type != "GPU":
           # mem_usage_for_dev currently only works for GPU
           continue
+        if not tf_util.is_gpu_available_in_session():
+          continue
         d["mem_usage:%s" % os.path.basename(dev.name.replace("/device:", "/"))] = tf_util.mem_usage_for_dev(dev.name)
 
     if self.get_post_control_dependencies():
