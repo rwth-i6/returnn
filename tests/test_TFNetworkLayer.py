@@ -3582,6 +3582,25 @@ def test_SliceLayer_NCHW():
     assert slice2.output.dim == 8 and slice2.output.feature_dim_axis == 3
 
 
+def test_pad_conv_slice():
+  # https://github.com/rwth-i6/returnn/issues/1017
+  with make_scope() as session:
+    net = TFNetwork(config=Config({"extern_data": {"data": {"dim": 5}}}))
+    net.construct_from_dict({
+      "padding": {"class": "pad", "mode": "constant", "value": 0, "axes": ["T"], "padding": [(1, 1)], "from": "data"},
+      "conv": {
+        "class": "conv", "n_out": 5, "filter_size": (2,), "padding": "valid", "in_spatial_dims": ["T"],
+        "from": "padding"},
+      "output": {
+        "class": "slice", "axis": "T", "slice_start": None, "slice_end": -1, "slice_step": None, "from": "conv"},
+    })
+    out = net.get_default_output_layer().output
+    in_ = net.extern_data.get_default_input_data()
+    assert_not_equal(in_.get_time_dim_tag(), out.get_time_dim_tag())
+    net.initialize_params(session)
+    session.run((out.placeholder, out.get_sequence_lengths()), feed_dict=make_feed_dict(net.extern_data))
+
+
 def test_GatherLayer():
   with make_scope() as session:
     import numpy as np
@@ -4353,6 +4372,29 @@ def test_conv_layer_NCHW():
       print(out.shape)
       assert_equal(out.shape, (10, 64, 6, 6))
       print(seq_lens)
+
+
+def test_ConvLayer_empty_out():
+  with make_scope() as session:
+    net = TFNetwork(config=Config({"extern_data": {"data": {"dim": 5}}}))
+    net.construct_from_dict({
+      # Use filter_size 2 and T=1 to get 0 size out.
+      # Using filter_size 3 would result in negative size according to the formula.
+      # Actually I would have expected that TF also deals with this but this is not the case.
+      "output": {"class": "conv", "n_out": 7, "filter_size": [2], "padding": "valid", "from": "data"},
+    })
+    out_ = net.layers["output"].output.copy_as_batch_spatial_major()
+    print(out_)
+    net.initialize_params(session)
+    out, seq_lens = session.run(
+      [out_.placeholder, out_.size_placeholder[0]],
+      feed_dict=make_feed_dict(net.extern_data, n_time=1, n_batch=1))
+    print(out)
+    print(seq_lens)
+    assert isinstance(out, numpy.ndarray)
+    assert isinstance(seq_lens, numpy.ndarray)
+    assert_equal(seq_lens.tolist(), [0])
+    assert out.shape == (1, 0, 7)
 
 
 def test_pool_layer_NCHW():
