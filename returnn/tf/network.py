@@ -1002,6 +1002,8 @@ class TFNetwork(object):
     debug_print_layer_output_template = self.get_config().bool("debug_print_layer_output_template", False)
     debug_print_layer_output_shape = self.get_config().bool("debug_print_layer_output_shape", False)
     debug_print_layer_output = util.CollectionReadCheckCovered.from_bool_or_dict(
+      layer_desc["debug_print_layer_output"]
+      if "debug_print_layer_output" in layer_desc else
       self.get_config().bool_or_other("debug_print_layer_output", False))
     debug_print_layer_output.collection.setdefault("summarize", 10)
     debug_add_check_numerics_on_output = self.get_config().bool(

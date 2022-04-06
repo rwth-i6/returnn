@@ -80,6 +80,7 @@ class LayerBase(object):
                custom_param_importer=None,
                register_as_extern_data=None,
                control_dependencies_on_output=None,
+               debug_print_layer_output=None,
                _network=None, _name=None,
                _src_common_search_choices=None):
     """
@@ -147,10 +148,12 @@ class LayerBase(object):
     :param str|callable|None custom_param_importer: used by :func:`set_param_values_by_dict`
     :param str|None register_as_extern_data: registers output in network.extern_data
     :param None|((LayerBase)->list[tf.Operation]) control_dependencies_on_output:
+    :param None|bool|dict[str] debug_print_layer_output: same as global config option but per layer
     :param str _name: just for internal construction, should be the same as ``name``
     :param returnn.tf.network.TFNetwork _network: just for internal construction, should be the same as ``network``
     :param None|SearchChoices _src_common_search_choices: set via :func:`SearchChoices.translate_to_common_search_beam`
     """
+    debug_print_layer_output  # noop  # not used here but in TFNetwork._create_layer
     self.name = name
     self.network = network
     self._register_layer()
