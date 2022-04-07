@@ -5086,20 +5086,20 @@ class Data(object):
         idx_range = tf.range(max_idx)
         idx_range = tf.reshape(idx_range, [1] * axis + [max_idx] + [1] * (self.batch_ndim - axis - 1))
         assert set(tag.dyn_size_ext.dim_tags).issubset(self.dim_tags)  # https://github.com/rwth-i6/returnn/issues/721
-        size_ext = tag.dyn_size_ext.copy_compatible_to(self, check_sparse=False, check_dtype=False)
         # size_ext might have invalid (zero) sizes when it itself has some padding, e.g. when its own shape is dynamic.
         # A zero size can lead to problems in some cases, e.g. in SoftmaxOverSpatialLayer,
         # when everything is masked to -inf, it results in nan, and this likely produces nan in backprop or elsewhere.
         # Thus, mask size_ext itself, and set the padded values to 1.
         # This assumes that max_idx >= 1.
-        size = mask_dyn_seq_len_nd(size_ext, 1, size_ext.get_dynamic_axes())
-        seq_mask = tf.less(idx_range, size)
+        size_ext = tag.dyn_size_ext.copy_masked(max_idx)
+        size_ext = size_ext.copy_compatible_to(self, check_sparse=False, check_dtype=False)
+        seq_mask = tf.less(idx_range, size_ext.placeholder)
         assert seq_mask.get_shape().ndims == self.batch_ndim
     return seq_mask
 
   def copy_masked(self, mask_value):
     """
-    :param float|int mask_value:
+    :param float|int|tf.Tensor mask_value:
     :rtype: Data
     """
     assert self.placeholder is not None
