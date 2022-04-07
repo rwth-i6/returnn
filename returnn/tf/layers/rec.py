@@ -5916,6 +5916,10 @@ class DecideLayer(BaseChoiceLayer):
       else:
         size = tag.dyn_size
       output.size_placeholder[i] = size
+      # The max(size) might have become smaller than before, so we should slice the output
+      # such that output.shape[i] == max(size).
+      slices = [slice(None, None)] * src_data.get_batch_axis(i) + [slice(None, tf.reduce_max(size))]
+      output.placeholder = output.placeholder[slices]
     final_search_choices = SearchChoices(owner=owner, is_decided=True, beam_size=1)
     if owner:
       final_search_choices.set_src_beams(tf.expand_dims(beam_idxs, axis=1))
