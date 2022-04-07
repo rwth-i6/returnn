@@ -5053,7 +5053,7 @@ class Data(object):
       We assert here that the axis is dynamic (:func:`is_axis_dynamic`), i.e. we have the size.
     :rtype: tf.Tensor
     """
-    from .basic import sequence_mask_time_major, sequence_mask, mask_dyn_seq_len_nd
+    from .basic import sequence_mask_time_major, sequence_mask
     if axis is None:
       assert self.time_dim_axis is not None
       axis = self.time_dim_axis
