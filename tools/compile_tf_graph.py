@@ -188,7 +188,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
         dim_tag_dyn_size_ext.placeholder, name=dim_tag_dyn_size_ext.placeholder.op.name + "_copy_new_dim_tag")
     # Copy dim tag.
     dim_tag_ = Dim(
-      kind=dim_tag.kind, description=dim_tag.description + "_rec_step_by_step",
+      kind=dim_tag.kind, description=dim_tag.description + "_base_state_var",
       dimension=None, dyn_size_ext=dim_tag_dyn_size_ext,
       batch=dim_tag.batch)
     dim_tag_.set_tag_on_size_tensor(dim_tag_dyn_size_ext.placeholder)
