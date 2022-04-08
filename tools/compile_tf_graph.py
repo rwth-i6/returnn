@@ -618,6 +618,25 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
       data_ = self.net.extern_data.data[key]
       data[key] = self._tiled(data_, value)
 
+    # Fixup all base state var dim tags in the template layers.
+    # These templates are used to define prev layers,
+    # e.g. like prev accum att weights, so we might need the parent dyn sizes now.
+    all_dyn_parent_dim_tags = set()
+    for layer in self.parent_net.get_root_network().get_all_layers_deep():
+      if self.net in layer.network.get_network_hierarchy():
+        continue
+      all_dyn_parent_dim_tags.update([
+        dim for dim in layer.output.dim_tags
+        if dim.dimension is None and not dim.is_batch_dim()])
+    for layer in self.layer_data_templates.values():
+      assert isinstance(layer, _TemplateLayer)
+      dim_tags = list(layer.output.dim_tags)
+      for _i, tag in enumerate(dim_tags):
+        if tag in all_dyn_parent_dim_tags:
+          dim_tags[_i] = self.get_parent_dim_tag(tag)
+      layer.output = layer.output.copy_template_new_dim_tags(dim_tags)
+      layer.kwargs["output"] = layer.output
+
     super(SubnetworkRecCellSingleStep, self)._construct(
       prev_outputs=prev_outputs, prev_extra=prev_extra, i=i, data=data,
       inputs_moved_out_tas=inputs_moved_out_tas, needed_outputs=needed_outputs)
