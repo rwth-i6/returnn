@@ -46,7 +46,7 @@ def run(*args):
 # Tests for compile_tf_graph.py
 ###############################
 
-rec_encoder_decoder_config = """
+rec_encoder_decoder_simple_config = """
 #!rnn.py
 network = {
     "enc0": {"class": "linear", "from": "data", "activation": "sigmoid", "n_out": 3},
@@ -58,6 +58,42 @@ network = {
         "s": {"class": "rec", "unit": "lstm", "from": ["embed", "base:enc1"], "n_out": 3},
         "prob": {"class": "softmax", "from": "s", "loss": "ce", "target": "classes"},
         "output": {"class": "choice", "beam_size": 4, "from": "prob", "target": "classes", "initial_output": 0},
+        "end": {"class": "compare", "from": "output", "value": 0}
+      }
+    },
+    "decision": {"class": "decide", "from": "output", "loss": "edit_distance"}
+}
+num_inputs = 5
+num_outputs = 3
+use_tensorflow = True
+"""
+
+
+rec_encoder_decoder_att_config = """
+#!rnn.py
+network = {
+    "encoder": {"class": "linear", "from": "data", "activation": "sigmoid", "n_out": 3},
+    "enc_ctx": {"class": "linear", "from": "encoder", "n_out": 10},
+    "inv_fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": "encoder", "n_out": 1},
+    "output": {
+      "class": "rec", "from": [], "target": "classes",
+      "unit": {
+        "weight_feedback": {"class": "linear", "activation": None, "with_bias": False, "from": "prev:accum_att_weights", "n_out": 10},
+        "prev_s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": "prev:s", "n_out": 10},
+        "energy_in": {"class": "combine", "kind": "add", "from": ["base:enc_ctx", "weight_feedback", "prev_s_transformed"], "n_out": 10},
+        "energy_tanh": {"class": "activation", "activation": "tanh", "from": "energy_in"},
+        "energy": {"class": "linear", "activation": None, "with_bias": False, "from": "energy_tanh", "n_out": 1},
+        "att_weights": {"class": "softmax_over_spatial", "from": "energy"},
+        "accum_att_weights": {
+          "class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:inv_fertility"],
+          "eval": "source(0) + source(1) * source(2) * 0.5",
+          "out_type": {"dim": 1, "shape": (None, 1)}},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder", "auto_squeeze": True},
+
+        "s": {"class": "rec", "unit": "lstm", "from": ["att", "prev:embed"], "n_out": 3},
+        "prob": {"class": "softmax", "from": "s", "loss": "ce", "target": "classes"},
+        "output": {"class": "choice", "beam_size": 4, "from": "prob", "target": "classes", "initial_output": 0},
+        "embed": {"class": "linear", "from": "prev:output", "activation": "sigmoid", "n_out": 3},
         "end": {"class": "compare", "from": "output", "value": 0}
       }
     },
@@ -113,7 +149,7 @@ use_tensorflow = True
 def test_compile_tf_graph_basic():
   tmp_dir = tempfile.mkdtemp()
   with open(os.path.join(tmp_dir, "returnn.config"), "wt") as config:
-    config.write(rec_encoder_decoder_config)
+    config.write(rec_encoder_decoder_simple_config)
   args = [
     "tools/compile_tf_graph.py",
     "--output_file",
@@ -130,10 +166,26 @@ def test_compile_tf_graph_basic_second_run():
   test_compile_tf_graph_basic()
 
 
-def test_compile_tf_graph_enc_dec_recurrent_step():
+def test_compile_tf_graph_enc_dec_simple_recurrent_step():
   tmp_dir = tempfile.mkdtemp()
   with open(os.path.join(tmp_dir, "returnn.config"), "wt") as config:
-    config.write(rec_encoder_decoder_config)
+    config.write(rec_encoder_decoder_simple_config)
+  args = [
+    "tools/compile_tf_graph.py",
+    "--output_file",
+    os.path.join(tmp_dir, "graph.metatxt"),
+    "--rec_step_by_step",
+    "output",
+    os.path.join(tmp_dir, "returnn.config")
+  ]
+  run(*args)
+
+
+def test_compile_tf_graph_enc_dec_att_recurrent_step():
+  # https://github.com/rwth-i6/returnn/issues/1016
+  tmp_dir = tempfile.mkdtemp()
+  with open(os.path.join(tmp_dir, "returnn.config"), "wt") as config:
+    config.write(rec_encoder_decoder_att_config)
   args = [
     "tools/compile_tf_graph.py",
     "--output_file",
