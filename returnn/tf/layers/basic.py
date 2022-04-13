@@ -9007,6 +9007,9 @@ class CtcLossLayer(LayerBase):
 
   Output is of shape [B].
   """
+  layer_class = "ctc_loss"
+  recurrent = True  # order matters
+
   def __init__(self, logits, targets, blank_index=-1, **kwargs):
     """
     :param LayerBase logits: (before softmax). shape [B,T,D]
