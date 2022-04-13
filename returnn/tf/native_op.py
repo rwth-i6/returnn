@@ -1357,7 +1357,8 @@ def fast_baum_welch_staircase(am_scores, seq_lens, **opts):
 
 
 def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_lens,
-             ctc_merge_repeated=True, logits_normalize=True, grad_wrt_softmax_in=True):
+             ctc_merge_repeated=True, logits_normalize=True, grad_wrt_softmax_in=True,
+             blank_index=-1):
   """
   Similar to :func:`tf.nn.ctc_loss`.
   We use our :func:`fast_baum_welch`.
@@ -1375,6 +1376,7 @@ def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_le
     This is ``p(s|x) - bw``, where ``bw`` is the Baum-Welch soft alignment.
     If logits are already normalized (e.g. we just use ``log p(s|x) = logits``),
     the error signal to logits should be ``-bw``.
+  :param int blank_index:
   :return: loss, shape (batch,)
   :rtype: tf.Tensor
   """
@@ -1389,8 +1391,11 @@ def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_le
   from returnn.tf.util.basic import sequence_mask_time_major, where_bc
   seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch)
 
+  if blank_index < 0:
+    blank_index += dim
+  assert 0 <= blank_index < dim
   edges, weights, start_end_states = get_ctc_fsa_fast_bw(
-    targets=targets, seq_lens=targets_seq_lens, blank_idx=dim - 1, label_loop=ctc_merge_repeated)
+    targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=ctc_merge_repeated)
   fwdbwd, obs_scores = fast_baum_welch(
     am_scores=-log_sm, float_idx=seq_mask,
     edges=edges, weights=weights, start_end_states=start_end_states)

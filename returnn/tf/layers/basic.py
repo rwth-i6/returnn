@@ -8998,6 +8998,60 @@ class SparseSoftmaxCrossEntropyWithLogitsLayer(LayerBase):
     return logits.output.copy_template_excluding_axis(exclude_axis=axis_int).copy(name="%s_output" % name)
 
 
+class CtcLossLayer(LayerBase):
+  """
+  Calculates the CTC loss.
+
+  Internally, this uses :func:`returnn.tf.native_op.ctc_loss`
+  which is equivalent to tf.nn.ctc_loss but more efficient.
+
+  Output is of shape [B].
+  """
+  def __init__(self, logits, targets, blank_index=-1, **kwargs):
+    """
+    :param LayerBase logits: (before softmax). shape [B,T,D]
+    :param LayerBase targets: sparse. shape [B,T]
+    :param int blank_index:
+    """
+    from returnn.tf.native_op import ctc_loss
+    super(CtcLossLayer, self).__init__(**kwargs)
+    self.logits = logits
+    self.targets = targets
+    self.blank_index = blank_index
+    self.output.placeholder = ctc_loss(
+      logits=logits.output.copy_as_time_batch_major().placeholder,
+      logits_time_major=True,
+      logits_seq_lens=logits.output.get_sequence_lengths(),
+      targets=targets.output.copy_as_batch_major().placeholder,
+      targets_seq_lens=targets.output.get_sequence_lengths(),
+      blank_index=blank_index)
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    return [self.logits, self.targets]
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param returnn.tf.network.TFNetwork network:
+    :param get_layer:
+    """
+    d.setdefault("from", [])
+    super(CtcLossLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["logits"] = get_layer(d["logits"])
+    d["targets"] = get_layer(d["targets"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, **kwargs):
+    """
+    :param str name:
+    """
+    return Data(name="%s_output" % name, shape=(), dtype="float32")
+
+
 class FastBaumWelchLayer(_ConcatInputLayer):
   """
   Calls :func:`fast_baum_welch` or :func:`fast_baum_welch_by_sprint_automata`.
