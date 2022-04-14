@@ -47,13 +47,12 @@
         printf(_ns::_format_for_type(b), b); \
         printf("\n"); \
         assert((a) cmp (b)); \
-        abort(); \
     }
 
 
 template<typename T> DEV_FUNC HOST_FUNC const char* _format_for_type(const T&) {
     printf("ERROR: _format_for_type(%s) not implemented, aborting\n", typeid(T).name());
-    abort();
+    assert(0);
 }
 template<> DEV_FUNC HOST_FUNC const char* _format_for_type(const char&) { return "%c"; }
 template<> DEV_FUNC HOST_FUNC const char* _format_for_type(const unsigned char&) { return "%u"; }
