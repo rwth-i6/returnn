@@ -3414,8 +3414,8 @@ class FastBaumWelchOp(NativeOpGenBase):
     unsigned sequence_stride = Ndarray_STRIDE(am_scores, 1);
     unsigned index_stride    = Ndarray_STRIDE(index, 0);
 
-    assert(n_frames > 0);
-
+    assert_cmp(n_frames, >, 0);
+    assert_cmp(n_states, >, 0);
     //std::cerr << "n_frames: "    << n_frames    << std::endl;
     //std::cerr << "n_seqs: "      << n_seqs      << std::endl;
     //std::cerr << "n_emissions: " << n_emissions << std::endl;
