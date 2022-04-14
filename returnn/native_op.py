@@ -484,6 +484,7 @@ class LstmGenericBase(NativeOpGenBase):
         Ndarray_DEV_DATA(i) + x * n_batch
       ));
     }
+    HANDLE_LAST_ERROR();
   """
 
   c_bw_code = """
@@ -533,7 +534,7 @@ class LstmGenericBase(NativeOpGenBase):
     Ndarray_memcpy(
       Ndarray_DEV_DATA(Dc), Ndarray_DEV_DATA(tmpDc),
       Dc_dim[0] * Dc_dim[1] * sizeof(float));
-
+    HANDLE_LAST_ERROR();
   """
 
   code_version = ()
@@ -825,6 +826,7 @@ class LstmLowMem(NativeOpGenBase):
         data_ptr(C, t)  // out
       ));
     }
+    HANDLE_LAST_ERROR();
 
     device_free(x_h);
     device_free(intern);
@@ -986,6 +988,7 @@ class LstmLowMem(NativeOpGenBase):
       start_dev_kernel(inv_copy_x_h_kernel,
         (n_batch, n_in, n_cells, Dx_h, data_ptr(DX, t), Ndarray_DEV_DATA(Dh)));
     }
+    HANDLE_LAST_ERROR();
 
     device_free(x_h);
     device_free(intern);
@@ -1237,6 +1240,7 @@ class NativeLstm2(NativeOpGenBase):
           y_prev  // out
         ));
       }
+      HANDLE_LAST_ERROR();
 
       Ndarray_memcpy(Ndarray_DEV_DATA(d), data_ptr(C, t - step), n_batch * n_cells * sizeof(float));
 
@@ -1410,6 +1414,7 @@ class NativeLstm2(NativeOpGenBase):
           }
         }
       }
+      HANDLE_LAST_ERROR();
 
       //DW += y0^T * DX[0]
       affine_raw(
@@ -2317,6 +2322,7 @@ class Chunking(NativeOpGenBase):
         Ndarray_STRIDE(oindex, 0),
         Ndarray_STRIDE(oindex, 1)
     ));
+    HANDLE_LAST_ERROR();
   """
 
   code_version = ()
@@ -2527,6 +2533,7 @@ class UnChunking(NativeOpGenBase):
         Ndarray_STRIDE(ofactors, 0),
         Ndarray_STRIDE(ofactors, 1)
     ));
+    HANDLE_LAST_ERROR();
   """
 
   code_version = ()
@@ -2660,6 +2667,7 @@ class SubtensorBatchedIndex(NativeOpGenBase):
         Ndarray_STRIDE(y, 0),
         Ndarray_STRIDE(y, 1)
     ));
+    HANDLE_LAST_ERROR();
   """
 
   c_bw_code = """
@@ -2698,6 +2706,7 @@ class SubtensorBatchedIndex(NativeOpGenBase):
         Ndarray_STRIDE(Dy, 0),
         Ndarray_STRIDE(Dy, 1)
     ));
+    HANDLE_LAST_ERROR();
   """
 
 
@@ -2779,6 +2788,7 @@ class SparseToDense(NativeOpGenBase):
       Ndarray_DEV_DATA(mask),
       n_sparse_idx, n_time, n_batch, n_dim
     ));
+    HANDLE_LAST_ERROR();
   """
 
 
@@ -2871,6 +2881,7 @@ class MaxAndArgmaxSparse(NativeOpGenBase):
       Ndarray_DEV_DATA(out_max),
       Ndarray_DEV_DATA(out_arg)
     ));
+    HANDLE_LAST_ERROR();
   """
 
   code_version = ()
@@ -3026,18 +3037,21 @@ class CrossEntropySoftmaxAndGradientZSparse(NativeOpGenBase):
       Ndarray_DEV_DATA(out_max_z), Ndarray_DEV_DATA(z), Ndarray_DEV_DATA(z_mask),
       n_dim, n_time * n_batch
     ));
+    HANDLE_LAST_ERROR();
     Ndarray_set_zero(out_ce);
     start_dev_kernel(softmax_kernel, (
       Ndarray_DEV_DATA(out_grad_z),
       Ndarray_DEV_DATA(z), Ndarray_DEV_DATA(out_max_z), Ndarray_DEV_DATA(z_mask),
       n_dim, n_time * n_batch
     ));
+    HANDLE_LAST_ERROR();
     start_dev_kernel(ce_sm_grad_kernel, (
       Ndarray_DEV_DATA(out_ce), Ndarray_DEV_DATA(out_grad_z),
       Ndarray_DEV_DATA(z), Ndarray_DEV_DATA(out_max_z), Ndarray_DEV_DATA(z_mask),
       Ndarray_DEV_DATA(s0), Ndarray_DEV_DATA(s1), Ndarray_DEV_DATA(w), Ndarray_DEV_DATA(s_mask),
       n_time, n_batch, n_dim, n_sparse_index
     ));
+    HANDLE_LAST_ERROR();
   """
 
 
@@ -4652,6 +4666,7 @@ class FastViterbiOp(NativeOpGenBase):
     int buffer_stride = n_states;
     start_dev_kernel(init_buffer, (n_time, n_states, d_buffer));
     start_dev_kernel(init_first_frame, (n_batch, n_states, d_buffer, d_start_states));
+    HANDLE_LAST_ERROR();
 
     for(int t = 0; t < n_time; ++t) {
       start_dev_kernel(next_frame, (
@@ -4672,6 +4687,7 @@ class FastViterbiOp(NativeOpGenBase):
         d_end_states
       ));
     }
+    HANDLE_LAST_ERROR();
 
     start_dev_kernel(select_scores, (
       n_batch,
@@ -4701,6 +4717,7 @@ class FastViterbiOp(NativeOpGenBase):
         d_output + t * output_stride // out
       ));
     }
+    HANDLE_LAST_ERROR();
 
     device_free(d_cur_state);
     device_free(d_buffer);
@@ -5202,6 +5219,7 @@ class EditDistanceOp(NativeOpGenBase):
       last2_dist = cur_dist;
       cur_dist = tmp;
     }
+    HANDLE_LAST_ERROR();
 
     device_free(buffer);
   """
@@ -5372,6 +5390,7 @@ class OptimalCompletionEditDistanceOp(NativeOpGenBase):
       last2_dist = cur_dist;
       cur_dist = tmp;
     }
+    HANDLE_LAST_ERROR();
 
     device_free(buffer);
   """
@@ -5595,6 +5614,7 @@ class OptimalCompletionEditDistancePerSuccessorOp(NativeOpGenBase):
       last2_dist = cur_dist;
       cur_dist = tmp;
     }
+    HANDLE_LAST_ERROR();
 
     start_dev_kernel(init_result_kernel, (
       n_batch, n_b_max_len, n_labels,
@@ -5602,6 +5622,7 @@ class OptimalCompletionEditDistancePerSuccessorOp(NativeOpGenBase):
       a_last_row,
       Ndarray_DEV_DATA_int32(out)
     ));
+    HANDLE_LAST_ERROR();
 
     start_dev_kernel(expand_kernel, (
       n_batch, n_b_max_len, n_labels,
@@ -5611,6 +5632,7 @@ class OptimalCompletionEditDistancePerSuccessorOp(NativeOpGenBase):
       Ndarray_DEV_DATA_int32(successors),
       Ndarray_DEV_DATA_int32(out)
     ));
+    HANDLE_LAST_ERROR();
 
     device_free(buffer);
     device_free(a_last_row);
@@ -5738,6 +5760,7 @@ class NextEditDistanceRowOp(NativeOpGenBase):
       Ndarray_DEV_DATA_int32(b), Ndarray_DEV_DATA_int32(b_len),
       Ndarray_DEV_DATA_int32(out)
     ));
+    HANDLE_LAST_ERROR();
   """
 
   c_bw_code = None
@@ -5881,6 +5904,7 @@ class NextEditDistanceReduceOp(NativeOpGenBase):
       optimal_completion,
       a_broadcast_batch, a_blank_idx
     ));
+    HANDLE_LAST_ERROR();
   """
 
   c_bw_code = None
