@@ -5031,6 +5031,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
         Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states)
       ));
     }
+    HANDLE_LAST_ERROR();
   """
 
 
