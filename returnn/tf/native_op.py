@@ -1333,11 +1333,19 @@ def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx, label_loop=True):
   targets = tf.cast(targets, tf.int32)
   n_batch = targets_shape[0]
   n_time = targets_shape[1]
-  n_edges = n_batch * (5 * (n_time - 1) + 10)  # see op documentation
-  weights = tf.zeros((n_edges,))
-  maker = OpMaker(OpDescription.from_gen_base(native_op.GetCtcFsaFastBwOp))
-  op = maker.make_op()
-  edges, start_end_states = op(targets, seq_lens, blank_idx, weights, label_loop)
+  with tf.control_dependencies([
+      # The check on the seq lens is important
+      # because invalid seq lens might not directly lead to an error here
+      # but it might just return an invalid FSA.
+      # An invalid FSA can however later cause a crash in the FastBaumWelchOp.
+      tf_compat.v1.assert_equal(
+        tf.reduce_max(seq_lens), n_time,
+        data=["get_ctc_fsa_fast_bw seq_lens invalid", seq_lens, n_time, targets_shape], summarize=100)]):
+    n_edges = n_batch * (5 * (n_time - 1) + 10)  # see op documentation
+    weights = tf.zeros((n_edges,))
+    maker = OpMaker(OpDescription.from_gen_base(native_op.GetCtcFsaFastBwOp))
+    op = maker.make_op()
+    edges, start_end_states = op(targets, seq_lens, blank_idx, weights, label_loop)
   return edges, weights, start_end_states
 
 
