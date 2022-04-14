@@ -1253,7 +1253,10 @@ def fast_baum_welch(am_scores, edges, weights, start_end_states, float_idx, stat
   float_idx = tf.cast(float_idx, tf.float32)
   if state_buffer is None:
     last_state_idx = tf.reduce_max(start_end_states[1])  # see get_automata_for_batch
-    state_buffer = tf.zeros((2, last_state_idx + 1))
+    with tf.control_dependencies([
+        tf_compat.v1.assert_greater_equal(
+          last_state_idx, 0, data=["last_state_idx must be >= 0 but is:", last_state_idx])]):
+      state_buffer = tf.zeros((2, last_state_idx + 1))
   fwdbwd, obs_scores = op(am_scores, edges, weights, start_end_states, float_idx, state_buffer)  # noqa
   return fwdbwd, obs_scores
 
