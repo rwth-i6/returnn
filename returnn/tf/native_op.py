@@ -1443,7 +1443,7 @@ def fast_viterbi(am_scores, am_seq_len, edges, weights, start_end_states):
   return alignment, scores
 
 
-def ctc_loss_viterbi(logits, logits_seq_lens, logits_time_major, targets, targets_seq_lens):
+def ctc_loss_viterbi(logits, logits_seq_lens, logits_time_major, targets, targets_seq_lens, blank_index=-1):
   """
   Similar to :func:`ctc_loss`.
   However, instead of using the full sum, we use the best path (i.e. Viterbi instead of Baum-Welch).
@@ -1454,6 +1454,7 @@ def ctc_loss_viterbi(logits, logits_seq_lens, logits_time_major, targets, target
   :param bool logits_time_major:
   :param tf.Tensor targets: batch-major, [batch,time]
   :param tf.Tensor targets_seq_lens: (batch,)
+  :param int blank_index:
   :return: loss, shape (batch,)
   :rtype: tf.Tensor
   """
@@ -1464,7 +1465,7 @@ def ctc_loss_viterbi(logits, logits_seq_lens, logits_time_major, targets, target
   log_sm = tf.nn.log_softmax(logits)  # (time,batch,dim)
 
   edges, weights, start_end_states = get_ctc_fsa_fast_bw(
-    targets=targets, seq_lens=targets_seq_lens, blank_idx=dim - 1)
+    targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index)
   alignment, scores = fast_viterbi(
     am_scores=log_sm, am_seq_len=logits_seq_lens,
     edges=edges, weights=weights, start_end_states=start_end_states)

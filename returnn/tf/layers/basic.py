@@ -9010,18 +9010,19 @@ class CtcLossLayer(LayerBase):
   layer_class = "ctc_loss"
   recurrent = True  # order matters
 
-  def __init__(self, logits, targets, blank_index=-1, **kwargs):
+  def __init__(self, logits, targets, blank_index=-1, max_approx=False, **kwargs):
     """
     :param LayerBase logits: (before softmax). shape [B,T,D]
     :param LayerBase targets: sparse. shape [B,T]
     :param int blank_index:
+    :param bool max_approx: if True, use max instead of sum over alignments (max approx, Viterbi)
     """
-    from returnn.tf.native_op import ctc_loss
+    from returnn.tf.native_op import ctc_loss, ctc_loss_viterbi
     super(CtcLossLayer, self).__init__(**kwargs)
     self.logits = logits
     self.targets = targets
     self.blank_index = blank_index
-    self.output.placeholder = ctc_loss(
+    self.output.placeholder = (ctc_loss_viterbi if max_approx else ctc_loss)(
       logits=logits.output.copy_as_time_batch_major().placeholder,
       logits_time_major=True,
       logits_seq_lens=logits.output.get_sequence_lengths(),
