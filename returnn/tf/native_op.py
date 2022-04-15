@@ -1464,6 +1464,9 @@ def ctc_loss_viterbi(logits, logits_seq_lens, logits_time_major, targets, target
     logits = tf.transpose(logits, [1, 0, 2])  # (time,batch,dim)
   log_sm = tf.nn.log_softmax(logits)  # (time,batch,dim)
 
+  if blank_index < 0:
+    blank_index += dim
+  assert 0 <= blank_index < dim
   edges, weights, start_end_states = get_ctc_fsa_fast_bw(
     targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index)
   alignment, scores = fast_viterbi(
