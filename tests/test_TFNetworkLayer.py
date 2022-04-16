@@ -5625,6 +5625,106 @@ def test_LossLayer_sublayers():
     pprint(results)
 
 
+def test_EditDistanceLayer_greedy_ctc_decode():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  input_spatial_dim = SpatialDim("input-spatial")
+  targets_spatial_dim = SpatialDim("targets-spatial")
+  classes_dim = FeatureDim("classes", 10)
+  blank_idx = classes_dim.dimension
+  config = Config({
+    "extern_data": {
+      "logits": {"dim_tags": [batch_dim, input_spatial_dim, classes_dim + 1]},
+      "targets": {"dim_tags": [batch_dim, targets_spatial_dim], "sparse_dim": classes_dim},
+    },
+  })
+  net_dict = {
+    "argmax": {"class": "reduce", "from": "data:logits", "axis": "F", "mode": "argmax"},
+    "ctc_decode": {"class": "subnetwork", "from": "argmax", "subnetwork": {
+      # tf_util.sparse_labels_with_seq_lens
+      "shift_right": {
+        "class": "shift_axis", "from": "data", "axis": "T", "amount": 1, "pad_value": -1, "adjust_size_info": False},
+      "unique_mask": {
+        "class": "compare", "from": ["data", "shift_right"], "kind": "not_equal"},
+      "non_blank_mask": {
+        "class": "compare", "from": "data", "kind": "not_equal", "value": blank_idx},
+      "mask": {"class": "combine", "kind": "logical_and", "from": ["unique_mask", "non_blank_mask"]},
+      "output": {
+        "class": "masked_computation", "from": "data", "mask": "mask",
+        "unit": {"class": "copy", "from": "data"}},
+    }},
+    "edit_dist": {"class": "edit_distance", "a": "ctc_decode", "b": "data:targets", "is_output_layer": True},
+  }
+
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+
+    logits = network.extern_data.data["logits"]
+    targets = network.extern_data.data["targets"]
+    decoded_sparse = tf_util.ctc_greedy_decode(
+      logits=logits.get_placeholder_as_time_major(), seq_lens=logits.get_sequence_lengths(), time_major=True)
+    decoded_dense = tf_compat.v1.sparse_to_dense(
+      sparse_indices=decoded_sparse.indices,
+      sparse_values=decoded_sparse.values,
+      output_shape=decoded_sparse.dense_shape)
+    targets_sparse = tf_util.sparse_labels(targets.placeholder, seq_lens=targets.get_sequence_lengths())
+    error = tf.edit_distance(
+      hypothesis=tf.cast(decoded_sparse, targets_sparse.dtype), truth=targets_sparse, normalize=False)
+
+    argmax = network.layers["argmax"].output
+    decoded_net = network.layers["ctc_decode"].output
+    print("decoded out:", decoded_net)
+    error_net = network.layers["edit_dist"].output
+    print("error out:", error_net)
+
+    n_batch = 5
+    n_logits_time = 20
+    n_targets_time = 7
+    rnd = numpy.random.RandomState(42)
+    targets_np = rnd.randint(low=0, high=classes_dim.dimension, size=(n_batch, n_targets_time))
+    targets_sizes = [7, 6, 5, 4, 3]
+    logits_np = rnd.uniform(size=(n_batch, n_logits_time, classes_dim.dimension + 1)).astype("float32")
+    for b in range(n_batch):
+      # Random correct.
+      for _ in range(rnd.randint(1, 7)):
+        size = rnd.randint(1, 6)
+        t = rnd.randint(0, n_logits_time - size + 1)
+        logits_np[b, t:t + size, targets_np[b, rnd.randint(0, targets_sizes[b])]] = rnd.uniform(1., 2.)
+      # Random repeats.
+      for _ in range(rnd.randint(1, 5)):
+        size = rnd.randint(1, 6)
+        t = rnd.randint(0, n_logits_time - size + 1)
+        logits_np[b, t:t + size] = logits_np[b, t:t+1]
+      # Random blanks.
+      for _ in range(rnd.randint(1, 5)):
+        size = rnd.randint(1, 6)
+        t = rnd.randint(0, n_logits_time - size + 1)
+        logits_np[b, t:t + size, blank_idx] = rnd.uniform(1., 2.)
+    logits_sizes = [20, 19, 18, 17, 16]
+    feed_dict = {
+      logits.placeholder: logits_np,
+      logits.get_sequence_lengths(): logits_sizes,
+      targets.placeholder: targets_np,
+      targets.get_sequence_lengths(): targets_sizes,
+    }
+    argmax_np, dec1_np, err1_np, dec2_np, dec2_sizes, err2_np = session.run(
+      (argmax.placeholder,
+       decoded_dense, error,
+       decoded_net.get_placeholder_as_batch_major(), decoded_net.get_sequence_lengths(),
+       error_net.placeholder),
+      feed_dict=feed_dict)
+    print("targets:", targets_np)
+    print("targets sizes:", targets_sizes)
+    print("argmax:", argmax_np)
+    print("decoded ref:", dec1_np)
+    print("error ref:", err1_np)
+    print("decoded:", dec2_np)
+    print("decoded sizes:", dec2_sizes)
+    print("error:", err2_np)
+    numpy.testing.assert_array_equal(dec1_np, dec2_np)
+    numpy.testing.assert_array_equal(err1_np, err2_np)
+
+
 def test_param_variational_noise():
   from returnn.tf.util.basic import print_graph_output, find_ops_with_tensor_input
   config = Config({
