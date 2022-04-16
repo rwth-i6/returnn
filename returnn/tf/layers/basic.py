@@ -7096,15 +7096,18 @@ class ShiftAxisLayer(_ConcatInputLayer):
   This layer may change the axis-dimension.
 
   This name might be confusing. No axis will be shifted here. See :class:`SwapAxesLayer` for that.
+
+  Also see :class:`SliceLayer`.
   """
   layer_class = "shift_axis"
 
-  def __init__(self, axis, amount, pad=True, adjust_size_info=True, **kwargs):
+  def __init__(self, axis, amount, pad=True, pad_value=0, adjust_size_info=True, **kwargs):
     """
-    :param str|int axis: single axis to shift
+    :param str|Dim|int axis: single axis to shift
     :param int amount: number of elements to shift
                    (<0 for left-shift, >0 for right-shift)
     :param bool pad: preserve shape by padding
+    :param int|float|bool pad_value: padding value
     :param bool adjust_size_info: whether to adjust the size_placeholder
     """
     from returnn.tf.util.basic import single_strided_slice
@@ -7124,7 +7127,7 @@ class ShiftAxisLayer(_ConcatInputLayer):
       assert False, "amount == 0 equals no operation"
     if pad:
       # insert missing values, so that the shape is preserved
-      shifted = tf.pad(shifted, paddings)
+      shifted = tf.pad(shifted, paddings, constant_values=pad_value)
     self.output.placeholder = shifted
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
     axis_wob = self.input_data.get_batch_axis_excluding_batch(axis)
@@ -7147,17 +7150,20 @@ class ShiftAxisLayer(_ConcatInputLayer):
       self.output.size_placeholder[axis_wob] = new_size
 
   @classmethod
-  def get_out_data_from_opts(cls, name, amount, axis, pad, sources=(), **kwargs):
+  def get_out_data_from_opts(cls, name, sources, amount, axis, pad=True, adjust_size_info=True, **kwargs):
     """
     :param str name:
+    :param list[LayerBase] sources:
     :param int amount:
     :param str axis:
     :param bool pad:
-    :param list[LayerBase] sources:
+    :param bool adjust_size_info:
     :rtype: Data
     """
     from ..util.data import Dim
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    if not adjust_size_info and pad:
+      return out
     assert isinstance(amount, int)
     axis = out.get_axis_from_description(axis)
     tag = out.dim_tags[axis]
