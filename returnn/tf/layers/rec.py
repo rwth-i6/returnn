@@ -7320,6 +7320,109 @@ class KenLmStateLayer(_ConcatInputLayer):
       "scores": tf.zeros(batch_shape, dtype=tf.float32)}
 
 
+class EditDistanceLayer(LayerBase):
+  """
+  Edit distance, also known as Levenshtein distance,
+  or in case of words, word error rate (WER),
+  or in case of characters, character error rate (CER).
+  """
+  layer_class = "edit_distance"
+  recurrent = True
+
+  def __init__(self, a, b, a_spatial_dim=None, b_spatial_dim=None, **kwargs):
+    """
+    :param LayerBase a:
+    :param LayerBase b:
+    :param str|Dim|None a_spatial_dim:
+    :param str|Dim|None b_spatial_dim:
+    """
+    super(EditDistanceLayer, self).__init__(**kwargs)
+    self.a = a
+    self.b = b
+    if a_spatial_dim is None:
+      assert a.output.have_time_axis()
+      a_axis = a.output.time_dim_axis
+    else:
+      a_axis = a.output.get_axes_from_description(a_spatial_dim)
+    if b_spatial_dim is None:
+      assert b.output.have_time_axis()
+      b_axis = b.output.time_dim_axis
+    else:
+      b_axis = b.output.get_axes_from_description(b_spatial_dim)
+    a_template = self.output.copy_template().copy_add_dim_by_tag(
+      a.output.dim_tags[a_axis], unbroadcast=True, axis=-1)
+    b_template = self.output.copy_template().copy_add_dim_by_tag(
+      b.output.dim_tags[b_axis], unbroadcast=True, axis=-1)
+    a_ext = a.output.copy_compatible_to(a_template, check_sparse=False)
+    b_ext = b.output.copy_compatible_to(b_template, check_sparse=False)
+    a_tensor = a_ext.placeholder
+    b_tensor = b_ext.placeholder
+    from returnn.tf.native_op import edit_distance
+    common_shape = None
+    if a_ext.batch_ndim != 2:
+      common_shape = tf_util.get_shape(a_ext.placeholder)
+      common_shape, a_rem_dim = common_shape[:-1], common_shape[-1]
+      b_rem_dim = tf_util.get_shape_dim(b_ext.placeholder, -1)
+      common_reduce = tf_util.optional_mul(*common_shape)
+      if common_reduce is None:
+        common_reduce = 1
+      a_tensor = tf.reshape(a_tensor, [common_reduce, a_rem_dim])
+      b_tensor = tf.reshape(b_tensor, [common_reduce, b_rem_dim])
+    y_tensor = edit_distance(
+      a=a_tensor,
+      a_len=a_ext.dim_tags[-1].dyn_size,
+      b=b_tensor,
+      b_len=b_ext.dim_tags[-1].dyn_size)
+    if a_ext.batch_ndim != 2:
+      y_tensor = tf.reshape(y_tensor, common_shape)
+    self.output.placeholder = y_tensor
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    return [self.a, self.b]
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param returnn.tf.network.TFNetwork network:
+    :param returnn.tf.network.GetLayer|((str)->LayerBase) get_layer: function to get or construct another layer
+    """
+    d.setdefault("from", [])
+    super(EditDistanceLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["a"] = get_layer(d["a"])
+    d["b"] = get_layer(d["b"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, a, b, a_spatial_dim=None, b_spatial_dim=None, **kwargs):
+    """
+    :param str name:
+    :param LayerBase a:
+    :param LayerBase b:
+    :param str|Dim|None a_spatial_dim:
+    :param str|Dim|None b_spatial_dim:
+    :rtype: Data
+    """
+    if a_spatial_dim is None:
+      assert a.output.have_time_axis()
+      a_axis = a.output.time_dim_axis
+    else:
+      a_axis = a.output.get_axes_from_description(a_spatial_dim)
+    if b_spatial_dim is None:
+      assert b.output.have_time_axis()
+      b_axis = b.output.time_dim_axis
+    else:
+      b_axis = b.output.get_axes_from_description(b_spatial_dim)
+    a_rem = a.output.copy_template_excluding_axis(a_axis)
+    b_rem = b.output.copy_template_excluding_axis(b_axis)
+    out = Data.get_common_data([a_rem, b_rem], allow_broadcast_all_sources=False)
+    out = out.copy_template("%s_output" % name)
+    out.sparse_dim = None
+    return out
+
+
 class EditDistanceTableLayer(LayerBase):
   """
   Given a source and a target, calculates the edit distance table between them.
