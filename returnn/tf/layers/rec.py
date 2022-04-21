@@ -7409,12 +7409,12 @@ class EditDistanceLayer(LayerBase):
       assert a.output.have_time_axis()
       a_axis = a.output.time_dim_axis
     else:
-      a_axis = a.output.get_axes_from_description(a_spatial_dim)
+      a_axis = a.output.get_axis_from_description(a_spatial_dim)
     if b_spatial_dim is None:
       assert b.output.have_time_axis()
       b_axis = b.output.time_dim_axis
     else:
-      b_axis = b.output.get_axes_from_description(b_spatial_dim)
+      b_axis = b.output.get_axis_from_description(b_spatial_dim)
     a_rem = a.output.copy_template_excluding_axis(a_axis)
     b_rem = b.output.copy_template_excluding_axis(b_axis)
     out = Data.get_common_data([a_rem, b_rem], allow_broadcast_all_sources=False)
