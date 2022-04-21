@@ -4775,9 +4775,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
           kind=Dim.Types.Feature, dimension=set_sparse_dim, description="%s:set-sparse-dim" % name, auto_generated=True)
     if increase_sparse_dim:
       assert out.sparse
-      out.sparse_dim = Dim(
-        kind=Dim.Types.Feature, dimension=out.sparse_dim.dimension + 1,
-        description="%s:inc-sparse-dim" % name, auto_generated=True)
+      out.sparse_dim = out.sparse_dim + increase_sparse_dim
     if batch_dim_base:
       out.batch = batch_dim_base.output.batch
     return out
