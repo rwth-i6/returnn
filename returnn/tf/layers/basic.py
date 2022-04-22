@@ -10725,7 +10725,10 @@ class AsIsLoss(Loss):
     :rtype: tf.Tensor
     """
     assert self.output_flat is not None
-    return self.reduce_func(self.output_flat)
+    loss = self.output_flat
+    if loss.dtype != tf.float32:
+      loss = tf.cast(loss, tf.float32)
+    return self.reduce_func(loss)
 
   def get_error(self):
     """
