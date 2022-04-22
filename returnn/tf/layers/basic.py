@@ -10616,6 +10616,10 @@ class ViaLayerLoss(Loss):
   The loss error signal and loss value is defined as the output of another layer.
   That way, you can define any custom loss.
   This could e.g. be used together with the fast_bw layer.
+
+  This is a more custom variant of :class:`AsIsLoss`,
+  which simply takes the output of a layer as loss
+  without redefining the error signal (gradient).
   """
   class_name = "via_layer"
   recurrent = True
@@ -10713,6 +10717,8 @@ class ViaLayerLoss(Loss):
 class AsIsLoss(Loss):
   """
   Use the output as-is as the loss.
+
+  Also see :class:`ViaLayerLoss` which also allows to define a custom error signal (gradient).
   """
   class_name = "as_is"
   need_target = False
