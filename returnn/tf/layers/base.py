@@ -2382,6 +2382,14 @@ class Loss(object):
     :param bool use_flatten_frames: will use :func:`returnn.tf.util.basic.flatten_with_seq_len_mask`
     :param bool use_normalized_loss: the loss used in optimization will be normalized
     :param float|function|None custom_norm_factor:
+      The standard norm factor is 1/sum(target_seq_len) if the target has a time-axis,
+      or 1/sum(output_seq_len) if there is no target and the output has a time-axis,
+      or 1 otherwise. (See :func:`Loss.init` for details.)
+      This is used for proper normalization of accumulated loss/error per epoch
+      and also proper normalization per batch for reporting,
+      no matter if use_normalized_loss is True or False.
+      If you want to change this norm factor, you can set this.
+      As a function, it takes (self=self, output=output, layer=layer) and returns a float scalar.
     :param float scale: additional scale factor for the loss
     """
     self.base_network = base_network
@@ -2398,7 +2406,7 @@ class Loss(object):
     self.target_flat = None  # type: typing.Optional[tf.Tensor]
     # Maybe make configurable. For now, same as in our Theano behavior.
     # The loss_norm_factor is used by Runner._normalize_loss both for normalization per epoch and per batch.
-    # It is e.g. set to 1/target_seq_len, and logic of accumulation is handled in the Runner.
+    # It is e.g. set to 1/sum(target_seq_len), and logic of accumulation is handled in the Runner.
     self.loss_norm_factor = None  # type: typing.Optional[tf.Tensor]
     self.use_normalized_loss = use_normalized_loss  # for the optimizer, per batch
     self.custom_norm_factor = custom_norm_factor
