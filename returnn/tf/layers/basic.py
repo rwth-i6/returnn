@@ -10717,10 +10717,15 @@ class AsIsLoss(Loss):
   class_name = "as_is"
   need_target = False
 
-  def __init__(self, **kwargs):
+  def __init__(self, as_error=False, **kwargs):
+    """
+    :param bool as_error: if True, use the output as error, otherwise (default) use the output as loss value.
+      Error is purely for reporting, loss value is used for the optimizer as well (when scale != 0).
+    """
     super(AsIsLoss, self).__init__(**kwargs)
+    self._as_error = as_error
 
-  def get_value(self):
+  def _get_value(self):
     """
     :rtype: tf.Tensor
     """
@@ -10730,11 +10735,21 @@ class AsIsLoss(Loss):
       loss = tf.cast(loss, tf.float32)
     return self.reduce_func(loss)
 
+  def get_value(self):
+    """
+    :rtype: tf.Tensor|None
+    """
+    if self._as_error:
+      return None
+    return self._get_value()
+
   def get_error(self):
     """
-    :rtype: None
+    :rtype: tf.Tensor|None
     """
-    return None  # not defined
+    if self._as_error:
+      return self._get_value()
+    return None
 
 
 class SearchScoreLoss(Loss):
