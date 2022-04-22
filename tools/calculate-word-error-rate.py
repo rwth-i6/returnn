@@ -27,6 +27,7 @@ import returnn.tf.util.basic as tf_util
 class WerComputeGraph:
   """
   Creates TF computation graph to calculate the WER.
+  We accumulate the absolute number of edits and normalize by the accumulated seq lens.
   """
 
   def __init__(self):

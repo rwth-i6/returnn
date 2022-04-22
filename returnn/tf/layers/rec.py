@@ -7325,6 +7325,11 @@ class EditDistanceLayer(LayerBase):
   Edit distance, also known as Levenshtein distance,
   or in case of words, word error rate (WER),
   or in case of characters, character error rate (CER).
+
+  This will not normalize the result, i.e. return the absolut minimal number of edits
+  (add, delete, replace) to transform the first string into the second string.
+  For WER/CER, it is common to normalize by the length of the target string,
+  but accumulated per epoch.
   """
   layer_class = "edit_distance"
   recurrent = True

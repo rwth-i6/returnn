@@ -6532,9 +6532,11 @@ def get_sparse_tensor_length(x):
 
 def string_words_calc_wer(hyps, refs):
   """
-  :param tf.Tensor hyps: (batch,)
-  :param tf.Tensor refs: (batch,)
-  :return: (WER (batch,), num ref words (batch,))
+  Uses :func:`words_split` on hyps and refs, and then tf.edit_distance with normalize=False.
+
+  :param tf.Tensor hyps: (batch,), dtype string
+  :param tf.Tensor refs: (batch,), dtype string
+  :return: (WER (batch,) unnormalized, num ref words (batch,))
   :rtype: (tf.Tensor, tf.Tensor)
   """
   refs.set_shape(hyps.get_shape())
