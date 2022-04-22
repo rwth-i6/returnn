@@ -604,6 +604,63 @@ def test_engine_train_grad_noise_sparse():
   engine.finalize()
 
 
+def test_engine_train_ctc_edit_dist_as_is_error_custom_inv_norm_factor():
+  from returnn.datasets.generating import DummyDataset
+  seq_len = 7
+  n_data_dim = 5
+  n_classes_dim = 5  # without blank
+  blank_idx = n_classes_dim
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "%s/model" % _get_tmp_dir(),
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "ff1": {"class": "linear", "activation": "relu", "n_out": 10, "from": "data:data"},
+      "ff2": {"class": "linear", "activation": "relu", "n_out": 10, "from": "ff1"},
+      "ff3": {"class": "linear", "activation": "relu", "n_out": 10, "from": "ff2"},
+      "logits": {"class": "linear", "from": "ff3", "n_out": n_classes_dim + 1},
+      "ctc_loss": {"class": "ctc_loss", "logits": "logits", "targets": "data:classes", "loss": "as_is"},
+      "argmax": {"class": "reduce", "from": "logits", "axis": "F", "mode": "argmax"},
+      "ctc_decode": {"class": "subnetwork", "from": "argmax", "subnetwork": {
+        # tf_util.sparse_labels_with_seq_lens
+        "shift_right": {
+          "class": "shift_axis", "from": "data", "axis": "T", "amount": 1, "pad_value": -1, "adjust_size_info": False},
+        "unique_mask": {
+          "class": "compare", "from": ["data", "shift_right"], "kind": "not_equal"},
+        "non_blank_mask": {
+          "class": "compare", "from": "data", "kind": "not_equal", "value": blank_idx},
+        "mask": {"class": "combine", "kind": "logical_and", "from": ["unique_mask", "non_blank_mask"]},
+        "output": {
+          "class": "masked_computation", "from": "data", "mask": "mask",
+          "unit": {"class": "copy", "from": "data"}},
+      }},
+      "target_seq_len": {"class": "length", "from": "data:classes"},
+      "edit_dist": {
+        "class": "edit_distance", "a": "ctc_decode", "b": "data:classes",
+        "loss": "as_is", "loss_opts": {"custom_inv_norm_factor": "target_seq_len", "as_error": True},
+      },
+    },
+    "start_epoch": 1,
+    "num_epochs": 1,
+    "batch_size": 20
+  })
+  _cleanup_old_models(config)
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+  errors = engine.learning_rate_control.get_epoch_error_dict(epoch=1)
+  print(errors)
+  assert "train_error" in errors and "dev_error" in errors
+  assert errors["train_error"] <= 1.0 and errors["dev_error"] <= 1.0  # test custom_inv_norm_factor
+  engine.finalize()
+
+
 def test_engine_analyze():
   from returnn.datasets.generating import DummyDataset
   seq_len = 5

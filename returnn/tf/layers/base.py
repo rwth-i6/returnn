@@ -2374,8 +2374,11 @@ class Loss(object):
   recurrent = False  # if this is a frame-wise criteria, this will be False
   need_target = True
 
-  def __init__(self, base_network, use_flatten_frames=True,
-               use_normalized_loss=False, custom_norm_factor=None,
+  def __init__(self, base_network,
+               use_flatten_frames=True,
+               use_normalized_loss=False,
+               custom_norm_factor=None,
+               custom_inv_norm_factor=None,
                scale=1.0):
     """
     :param returnn.tf.network.TFNetwork base_network:
@@ -2390,6 +2393,11 @@ class Loss(object):
       no matter if use_normalized_loss is True or False.
       If you want to change this norm factor, you can set this.
       As a function, it takes (self=self, output=output, layer=layer) and returns a float scalar.
+    :param LayerBase|None custom_inv_norm_factor: inverse of custom_norm_factor.
+      Here we allow to pass a layer.
+      Here we also allow to pass any shape and it will automatically be reduced via sum.
+      So you could simply pass target_seq_len directly here.
+      Basically, for all reporting, it uses sum(loss) * sum(custom_inv_norm_factor).
     :param float scale: additional scale factor for the loss
     """
     self.base_network = base_network
@@ -2410,6 +2418,9 @@ class Loss(object):
     self.loss_norm_factor = None  # type: typing.Optional[tf.Tensor]
     self.use_normalized_loss = use_normalized_loss  # for the optimizer, per batch
     self.custom_norm_factor = custom_norm_factor
+    self.custom_inv_norm_factor = custom_inv_norm_factor
+    if custom_inv_norm_factor:
+      assert custom_norm_factor is None, "%s: do not provide both custom_norm_factor and custom_inv_norm_factor" % self
     self.scale = scale
 
   def __repr__(self):
@@ -2494,6 +2505,8 @@ class Loss(object):
     Mostly leaves `d` as-is.
     This is used by `LayerBase.transform_config_dict`.
     """
+    if d.get("custom_inv_norm_factor", None) is not None:
+      d["custom_inv_norm_factor"] = get_layer(d["custom_inv_norm_factor"])
 
   def init_by_layer(self, layer, layer_output_template=None):
     """
@@ -2601,6 +2614,8 @@ class Loss(object):
         else:
           assert isinstance(self.custom_norm_factor, float)
           self.loss_norm_factor = self.custom_norm_factor
+      if self.custom_inv_norm_factor:
+        self.loss_norm_factor = 1.0 / tf.cast(tf.reduce_sum(self.custom_inv_norm_factor.output.placeholder), tf.float32)
       self._check_init()
 
   def _check_init(self):

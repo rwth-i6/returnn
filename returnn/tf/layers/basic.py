@@ -10269,6 +10269,7 @@ class ExpectedLoss(Loss):
     :param returnn.tf.network.TFNetwork network:
     :param get_layer:
     """
+    super(ExpectedLoss, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     assert "loss" in d, "specify 'loss' in 'loss_opts' for the expected loss"
     assert isinstance(d["loss"], dict)
     opts = d["loss"].copy()
@@ -10656,6 +10657,7 @@ class ViaLayerLoss(Loss):
     :param returnn.tf.network.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
+    super(ViaLayerLoss, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     for key in ["error_signal_layer", "align_layer"]:
       if key in d:
         d[key] = get_layer(d[key])
