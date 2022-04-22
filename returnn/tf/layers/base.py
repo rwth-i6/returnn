@@ -2397,8 +2397,10 @@ class Loss(object):
     self.output_before_softmax_flat = None  # type: typing.Optional[tf.Tensor]
     self.target_flat = None  # type: typing.Optional[tf.Tensor]
     # Maybe make configurable. For now, same as in our Theano behavior.
+    # The loss_norm_factor is used by Runner._normalize_loss both for normalization per epoch and per batch.
+    # It is e.g. set to 1/target_seq_len, and logic of accumulation is handled in the Runner.
     self.loss_norm_factor = None  # type: typing.Optional[tf.Tensor]
-    self.use_normalized_loss = use_normalized_loss
+    self.use_normalized_loss = use_normalized_loss  # for the optimizer, per batch
     self.custom_norm_factor = custom_norm_factor
     self.scale = scale
 
