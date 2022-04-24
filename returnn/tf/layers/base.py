@@ -1608,7 +1608,8 @@ class LayerBase(object):
       if isinstance(op, tf.Tensor):
         op = op.op
       # Make sure we update after we calculated the batch norm.
-      tf_util.add_control_input(op, control_input=bn.op)
+      if not tf_compat.executing_eagerly():
+        tf_util.add_control_input(op, control_input=bn.op)
       self.network.register_post_control_dependencies([op])
       if not use_fused:
         if use_std:
