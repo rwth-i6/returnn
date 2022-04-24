@@ -41,3 +41,13 @@ try:
   have_contrib = True
 except ImportError:
   have_contrib = False
+
+
+def executing_eagerly():
+  """
+  :return: True if we are currently executing eagerly.
+  :rtype: bool
+  """
+  if hasattr(tf, "executing_eagerly"):
+    return tf.executing_eagerly()
+  return False
