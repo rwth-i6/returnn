@@ -550,6 +550,9 @@ def reuse_name_scope_of_tensor(x, prefix="", postfix="", add_tensor_name=False):
   :param bool add_tensor_name:
   :return: reuse the name scope of x, e.g. "layer0/rec", yields scope
   """
+  if tf_compat.executing_eagerly():
+    yield tf_compat.v1.get_variable_scope()
+    return
   name_scope = get_name_scope_of_tensor(x)
   if add_tensor_name:
     from returnn.util.basic import unicode_to_str
