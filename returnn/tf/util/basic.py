@@ -5396,6 +5396,8 @@ def _get_control_flows(v, yield_none):
   """
   import numpy
   from tensorflow.python.ops.control_flow_ops import ControlFlowContext
+  if tf_compat.executing_eagerly():
+    return
   if isinstance(v, (list, tuple)):
     for elem in v:
       for t in _get_control_flows(elem, yield_none=yield_none):
@@ -5428,6 +5430,8 @@ def _get_control_flow_graphs(v):
   :rtype: typing.Iterator[tensorflow.python.ops.control_flow_v2_func_graphs.ControlFlowFuncGraph]
   """
   if not ControlFlowFuncGraph:
+    return
+  if tf_compat.executing_eagerly():
     return
   import numpy
   if isinstance(v, (list, tuple)):
@@ -5472,6 +5476,9 @@ def same_control_flow_ctx(x):
   :param tf.Tensor|tf.Operation|int|float|None|list[tf.Tensor|tf.Operation|int|float] x:
   :return: yields context (via tf.control_dependencies)
   """
+  if tf_compat.executing_eagerly():
+    yield None
+    return
   cur_graph = tf_compat.v1.get_default_graph()
   inside_control_flow_graph = False
   if ControlFlowFuncGraph:
