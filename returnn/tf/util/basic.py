@@ -2390,7 +2390,7 @@ def get_common_shape(values, ignore_axes=(), allow_broadcast_all_sources=NotSpec
             assert common_shape[axis] == static_dim, "non matching dim %r vs %r in axis %i, value %r of values %r" % (
               common_shape[axis], static_dim, axis, value, values)
     # Check validate_broadcast_all_sources
-    need_broadcast = {value: False for value in values}
+    need_broadcast = {id(value): False for value in values}
     for axis in range(ndim):
       if axis in ignore_axes:
         continue  # does not matter
@@ -2398,7 +2398,7 @@ def get_common_shape(values, ignore_axes=(), allow_broadcast_all_sources=NotSpec
         static_value_dim = value.shape.dims[axis].value  # type: typing.Optional[int]
         static_common_dim = common_shape[axis] if isinstance(common_shape[axis], int) else None
         if static_value_dim == 1 and static_common_dim != 1:
-          need_broadcast[value] = True
+          need_broadcast[id(value)] = True
     if all(need_broadcast.values()):
       validate_broadcast_all_sources(
         allow_broadcast_all_sources=allow_broadcast_all_sources, inputs=values, common="shape %s" % (common_shape,))
