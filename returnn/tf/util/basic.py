@@ -433,6 +433,8 @@ def get_current_name_scope():
   Note that this is a private member and might break at some point.
   Note also that this does not need to be the same as get_current_var_scope_name().
   """
+  if tf_compat.executing_eagerly():
+    return tf.get_current_name_scope()
   # noinspection PyProtectedMember
   return tf_compat.v1.get_default_graph()._name_stack or ""
 
