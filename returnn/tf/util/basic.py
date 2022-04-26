@@ -1848,7 +1848,8 @@ class TensorCachedComputation:
     :param str|tuple[str|int|tf.Tensor] key:
     """
     self.x = x
-    self.key = key
+    from returnn.util import basic as util
+    self.key = util.make_hashable(key)
 
   def _get_cache_dict(self):
     """
