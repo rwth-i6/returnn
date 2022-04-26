@@ -620,7 +620,7 @@ class Dim(object):
       def _is_negative(x__):
         if isinstance(x__, numpy.ndarray):
           return (x__ < 0).any()
-        if isinstance(x__, (int, float)):
+        if isinstance(x__, (int, float, numpy.number)):
           return x__ < 0
         assert isinstance(x__, tf.Tensor)
         x__ = tensor_util.constant_value(x__)
