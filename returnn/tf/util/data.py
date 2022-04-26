@@ -121,7 +121,7 @@ class Dim(object):
     if dyn_size_ext:
       assert batch == dyn_size_ext.batch
     self.dyn_size_ext = dyn_size_ext  # type: typing.Optional[Data]
-    self._dyn_size_same = set()  # type: typing.Set[tf.Tensor]
+    self._dyn_size_same = set()  # set of TensorRef
     self._undefined = undefined
     self.generic = generic
     self.special = special
@@ -521,7 +521,8 @@ class Dim(object):
     """
     if x is self.dyn_size:
       return True
-    if x in self._dyn_size_same:
+    from .basic import TensorRef
+    if TensorRef(x) in self._dyn_size_same:
       return True
     return False
 
@@ -546,6 +547,7 @@ class Dim(object):
     :return: self or new dim tag
     :rtype: Dim
     """
+    from .basic import TensorRef
     assert self.can_be_used_as_dim()
     # It's unusual if self.dimension is not None, but let's accept that.
     if hasattr(x, "_is_size_of_dim_tag"):
@@ -558,10 +560,10 @@ class Dim(object):
       new_dim_tag.set_tag_on_size_tensor(x, batch=batch)
       return new_dim_tag
     if self.dyn_size is not None and self.dyn_size is not x:
-      if x in self._dyn_size_same:
+      if TensorRef(x) in self._dyn_size_same:
         pass  # ok, pass on
       elif same_as_before:
-        self._dyn_size_same.add(x)
+        self._dyn_size_same.add(TensorRef(x))
         # And now pass on.
       else:
         assert self.batch and batch
