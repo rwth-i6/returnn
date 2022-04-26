@@ -2193,14 +2193,18 @@ def make_hashable(obj):
   """
   if isinstance(obj, dict):
     return FrozenDict([make_hashable(item) for item in obj.items()])
-  elif isinstance(obj, (list, tuple)):
+  if isinstance(obj, (list, tuple)):
     return tuple([make_hashable(item) for item in obj])
-  elif isinstance(obj, (str, unicode, float, int, long)):
+  if isinstance(obj, (str, unicode, float, int, long)):
     return obj
-  elif obj is None:
+  if obj is None:
     return obj
-  else:
-    assert False, "don't know how to make hashable: %r (%r)" % (obj, type(obj))
+  if "tensorflow" in sys.modules:
+    import tensorflow as tf
+    from returnn.tf.util import basic as tf_util
+    if isinstance(obj, tf.Tensor):
+      return tf_util.TensorRef(obj)
+  assert False, "don't know how to make hashable: %r (%r)" % (obj, type(obj))
 
 
 def make_dll_name(basename):
