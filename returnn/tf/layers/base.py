@@ -1123,11 +1123,11 @@ class LayerBase(object):
       param = possible_params[0]
     assert isinstance(param, tf.Variable)
     if not self.trainable:
-      trainable_collection_ref = param.graph.get_collection_ref(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES)
+      trainable_collection_ref = tf_compat.v1.get_collection_ref(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES)
       if param in trainable_collection_ref:
         trainable_collection_ref.remove(param)
     if trainable is None:
-      trainable = param in param.graph.get_collection_ref(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES)
+      trainable = param in tf_compat.v1.get_collection_ref(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES)
     if saveable is None:
       saveable = True
     if custom_update:
