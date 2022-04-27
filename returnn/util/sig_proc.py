@@ -59,7 +59,7 @@ class GammatoneFilterbank(object):
   def __init__(self, num_channels, length, sample_rate=16000, freq_max=7500., freq_min=100., normalization=True):
     """
     :param int num_channels: number of filters
-    :param int length: length of FIR filters in seconds
+    :param int|float length: length of FIR filters in seconds
     :param int sample_rate: sample rate of audio signal in Hz
     :param float freq_max: maximum frequency of filterbank
     :param float freq_min: minimum frequency of filterbank
@@ -129,7 +129,7 @@ class GammatoneFilterbank(object):
     Compute gammatone impulse response based on [1]
 
     :param float f_center: center frequency
-    :param int length: length of finite impulse response in seconds
+    :param int|float length: length of finite impulse response in seconds
     :param int sample_rate: sample rate of audio signal in Hz
     :param float output_gain: output gain, named k in [1]
     :param int filter_order: order of filter, named n in [1]
