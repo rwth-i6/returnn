@@ -8641,6 +8641,25 @@ class TrainFlagLayer(LayerBase):
     return Data(name="%s_output" % name, dim_tags=(), dtype="bool")
 
 
+class GlobalTrainStepLayer(LayerBase):
+  """
+  Returns the global train step (int64 scalar).
+  """
+  layer_class = "global_train_step"
+
+  def __init__(self, **kwargs):
+    super(GlobalTrainStepLayer, self).__init__(**kwargs)
+    self.output.placeholder = tf.convert_to_tensor(self.network.global_train_step)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, **kwargs):
+    """
+    :param str name:
+    :rtype: Data
+    """
+    return Data(name="%s_output" % name, dim_tags=(), dtype="int64")
+
+
 class AccumulateMeanLayer(ReduceLayer):
   """
   Accumulates the mean of the input (in training) (over batch-dim and time-dim by default).
