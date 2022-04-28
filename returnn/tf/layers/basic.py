@@ -2859,7 +2859,7 @@ class ConstantLayer(LayerBase):
   def __init__(self, sources, value=0., shape=None, dtype=None, with_batch_dim=False, sparse_dim=None, **kwargs):
     """
     :param list[LayerBase] sources:
-    :param int|float|bool value:
+    :param int|float|bool|numpy.ndarray value:
     :param tuple[Dim|int]|list[Dim|int] shape: for verification, and defining dim tags
     :param str|None dtype:
     :param bool with_batch_dim:
