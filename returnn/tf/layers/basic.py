@@ -8652,6 +8652,16 @@ class GlobalTrainStepLayer(LayerBase):
     self.output.placeholder = tf.convert_to_tensor(self.network.global_train_step)
 
   @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param returnn.tf.network.TFNetwork network:
+    :param get_layer:
+    """
+    d.setdefault("from", ())
+    super(GlobalTrainStepLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
+  @classmethod
   def get_out_data_from_opts(cls, name, **kwargs):
     """
     :param str name:
