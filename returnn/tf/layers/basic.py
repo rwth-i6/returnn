@@ -1040,7 +1040,7 @@ class SliceLayer(_ConcatInputLayer):
           kind=dim_tag.kind, description="%s:slice-end" % name,
           dimension=slice_end - (slice_start or 0), auto_generated=True)
       else:  # slice_end < 0
-        out_dim_ = out_dim_ + slice_end
+        out_dim_ = out_dim_ - (-slice_end)
     if slice_step and slice_step != 1:
       out_dim_ = out_dim_.ceildiv_right(abs(slice_step))
     if out_dim:
