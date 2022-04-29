@@ -1768,7 +1768,7 @@ class TFNetwork(object):
       sub_layer = root_layer.get_sub_layer(sub_layer_name)  # get the sub-layer from the root-layer
       if not sub_layer:
         raise LayerNotFound(
-          "sub-layer %r not found in layer %r in net %r" % (root_layer, sub_layer, self),
+          "sub-layer %r not found in layer %r in net %r" % (sub_layer_name, root_layer, self),
           layer_name=orig_layer_name, network=self)
       return sub_layer
     if self._extra_layer_name_prefix_pattern.match(layer_name):
