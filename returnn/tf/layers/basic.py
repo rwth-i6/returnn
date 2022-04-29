@@ -7392,8 +7392,11 @@ class CombineLayer(LayerBase):
     """
     :param str kind:
       currently accepted values are `average`, `add`, `sub`, `mul`, `truediv`, `floordiv`, `mod`, `pow`,
+      `maximum`, `minimum`,
       `logical_and`, `logical_or`,
-      or `eval`
+      `squared_difference`,
+      or `eval`,
+      or any function in the tf.math or tf namespace.
     :param list[LayerBase] sources:
     :param bool|NotSpecified allow_broadcast_all_sources: allow broadcasting for all sources.
       e.g. shape [A] + [B] -> shape [A,B]. by default disabled, and there must be some source with all dims.
@@ -7405,15 +7408,9 @@ class CombineLayer(LayerBase):
     """
     allow_broadcast_all_sources  # noqa  # via get_out_data_from_opts
     super(CombineLayer, self).__init__(sources=sources, **kwargs)
-    assert kind in [
-      "average", "add", "sub", "mul", "truediv", "floordiv", "mod", "pow",
-      "logical_and", "logical_or",
-      "squared_difference",
-      "eval"], ("%s: Invalid `kind` %r for this layer." % (self, kind))
     if kind != "eval":
       self.recurrent = False
-    op = self._get_op(kind=kind, eval_str=eval, eval_locals=eval_locals)
-    x = op(sources)
+    x = self._execute_op(kind=kind, sources=sources, eval_str=eval, eval_locals=eval_locals)
     if eval_for_output_loss:
       assert eval
       assert all([layer.output_loss is not None for layer in sources])
@@ -7513,84 +7510,14 @@ class CombineLayer(LayerBase):
       x = fn(x, x2)
     return x
 
-  def _op_kind_add(self, sources):
-    """
-    :param list[LayerBase] sources:
-    :rtype: tf.Tensor
-    """
-    return self._op_dense_fn(sources, tf.add, self.output)
-
-  def _op_kind_sub(self, sources):
-    """
-    :param list[LayerBase] sources:
-    :rtype: tf.Tensor
-    """
-    return self._op_dense_fn(sources, tf.subtract, self.output)
-
-  def _op_kind_mul(self, sources):
-    """
-    :param list[LayerBase] sources:
-    :rtype: tf.Tensor
-    """
-    return self._op_dense_fn(sources, tf.multiply, self.output)
-
-  def _op_kind_mod(self, sources):
-    """
-    :param list[LayerBase] sources:
-    :rtype: tf.Tensor
-    """
-    return self._op_dense_fn(sources, tf.math.mod, self.output)
-
-  def _op_kind_pow(self, sources):
-    """
-    :param list[LayerBase] sources:
-    :rtype: tf.Tensor
-    """
-    return self._op_dense_fn(sources, tf.math.pow, self.output)
-
-  def _op_kind_truediv(self, sources):
-    """
-    :param list[LayerBase] sources:
-    :rtype: tf.Tensor
-    """
-    return self._op_dense_fn(sources, tf.truediv, self.output)
-
-  def _op_kind_floordiv(self, sources):
-    """
-    :param list[LayerBase] sources:
-    :rtype: tf.Tensor
-    """
-    return self._op_dense_fn(sources, tf.math.floordiv, self.output)
-
   def _op_kind_average(self, sources):
     """
     :param list[LayerBase] sources:
     :rtype: tf.Tensor
     """
-    x = self._op_kind_add(sources)
+    x = self._op_dense_fn(sources, tf.add, self.output)
     x /= len(sources)
     return x
-
-  def _op_kind_squared_difference(self, sources):
-    """
-    :param list[LayerBase] sources:
-    :rtype: tf.Tensor
-    """
-    return self._op_dense_fn(sources, tf.math.squared_difference, self.output)
-
-  def _op_kind_logical_and(self, sources):
-    """
-    :param list[LayerBase] sources:
-    :rtype: tf.Tensor
-    """
-    return self._op_dense_fn(sources, tf.logical_and, self.output)
-
-  def _op_kind_logical_or(self, sources):
-    """
-    :param list[LayerBase] sources:
-    :rtype: tf.Tensor
-    """
-    return self._op_dense_fn(sources, tf.logical_or, self.output)
 
   def _op_kind_eval(self, sources, eval_str, eval_locals=None):
     """
@@ -7639,25 +7566,29 @@ class CombineLayer(LayerBase):
     assert isinstance(x, tf.Tensor), "%r: eval %r did not return a tensor" % (self, eval_str)
     return x
 
-  def _get_op(self, kind, eval_str=None, eval_locals=None):
+  def _execute_op(self, kind, sources, eval_str=None, eval_locals=None):
     """
     :param str kind:
+    :param list[LayerBase] sources:
     :param str|callable eval_str:
     :param dict[str]|None eval_locals:
-    :rtype: (list[LayerBase]) -> tf.Tensor
+    :rtype: tf.Tensor
     """
-    op = getattr(self, "_op_kind_%s" % kind)
-    if eval_str:
-      assert kind == "eval"
+    if kind == "eval" or eval_str:
+      assert kind == "eval" and eval_str
+      return self._op_kind_eval(sources, eval_str=eval_str, eval_locals=eval_locals)
 
-      def wrap_eval_op(sources):
-        """
-        :param list[LayerBase] sources:
-        :rtype: tf.Tensor
-        """
-        return self._op_kind_eval(sources, eval_str=eval_str, eval_locals=eval_locals)
-      op = wrap_eval_op
-    return op
+    kind = {"sub": "subtract", "mul": "multiply"}.get(kind, kind)
+    if hasattr(tf, "math") and hasattr(tf.math, kind):
+      tf_func = getattr(tf.math, kind)
+    elif hasattr(tf, kind):
+      tf_func = getattr(tf, kind)
+    else:
+      tf_func = None
+    if tf_func:
+      return self._op_dense_fn(sources, tf_func, self.output)
+
+    return getattr(self, "_op_kind_%s" % kind)(sources)
 
 
 class EvalLayer(CombineLayer):
