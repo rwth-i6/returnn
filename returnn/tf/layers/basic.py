@@ -8087,6 +8087,181 @@ class CondLayer(LayerBase):
     return layers
 
 
+class TopKLayer(LayerBase):
+  """
+  Basically wraps tf.nn.top_k.
+
+  Directly returns the top_k values.
+  The indices are accessible via the "indices" sub-layer.
+
+  For an input [B,D] with axis=D, the output and indices values are shape [B,K].
+
+  It's somewhat similar to :class:`ReduceLayer` with max and argmax.
+  The axis dim is reduced and then a new dim for K is added.
+
+  Axis can also cover multiple axes, such as [beam,classes].
+  In that cases, there is not a single "indices" sub-layer,
+  but sub-layers "inidices0" .. "indices{N-1}"
+  corresponding to each axis, in the same order.
+
+  All other axes are treated as batch dims.
+  """
+  layer_class = "top_k"
+
+  # noinspection PyShadowingBuiltins
+  def __init__(self, k, axis, sorted=True, **kwargs):
+    """
+    :param Dim|int k: the "K" in "TopK"
+    :param Dim|str|list[Dim|str] axis: the axis to do the top_k on, which is reduced
+    :param bool sorted:
+    """
+    super(TopKLayer, self).__init__(**kwargs)
+    assert isinstance(k, Dim)  # via transform_config_dict
+    in_data = self.sources[0].output
+
+    if isinstance(axis, (str, Dim)):
+      single_axis = True
+      axes = [in_data.get_dim_tag_from_description(axis)]
+    else:
+      assert len(axis) > 0
+      single_axis = False
+      axes = [in_data.get_dim_tag_from_description(a) for a in axis]
+
+    # Remaining axes are batch dims. Move them to front, and the axes to back.
+    remaining_axes = [a for a in in_data.dim_tags if a not in axes]
+    in_data = in_data.copy_transpose(
+      [in_data.get_axis_from_description(a) for a in remaining_axes + axes])
+    assert in_data.dim_tags == tuple(remaining_axes + axes)
+
+    # Merge the axes because top_k will do a joint search over them.
+    if len(axes) > 1:
+      merged_axis = axes[0]
+      for a in axes[1:]:
+        merged_axis = merged_axis * a
+      in_ = tf.reshape(
+        in_data.placeholder,
+        shape=tf_util.get_shape(in_data.placeholder)[:len(remaining_axes)] + [merged_axis.get_dim_value()])
+      in_data = in_data.copy_template_new_dim_tags(remaining_axes + [merged_axis])
+      in_data.placeholder = in_
+
+    values, indices = tf.nn.top_k(in_data.placeholder, k=k.dimension, sorted=sorted)
+    self.output.placeholder = values
+    sub_outputs = {}
+    if single_axis:
+      sub_outputs["indices"] = (indices, axes[0])
+    else:
+      for i, a in reversed(list(enumerate(axes))):
+        assert isinstance(a, Dim)
+        sub_outputs["indices%i" % i] = (indices % a.dimension, a)
+        indices = indices // a.dimension
+    self._sub_layers = {}
+    for k, (v, a) in sub_outputs.items():
+      sub_out_data = self.output.copy_template(name="%s/%s" % (self.name, k))
+      sub_out_data.dtype = "int32"
+      sub_out_data.sparse_dim = a
+      sub_out_data.placeholder = v
+      self._sub_layers[k] = InternalLayer(
+        name="%s/%s" % (self.name, k), network=self.network, output=sub_out_data)
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param returnn.tf.network.TFNetwork network:
+    :param get_layer:
+    """
+    super(TopKLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if "k" in d:  # should always be the case but throw errors later
+      k = d["k"]
+      if isinstance(k, int):
+        k = SpatialDim(d.get("_name", "<unk>") + ":topk", k)
+      d["k"] = k
+
+  @classmethod
+  def _get_out_data(cls, name, in_data, k, axis, for_indices=None):
+    """
+    :param str name:
+    :param Dim k: the "K" in "TopK"
+    :param Dim|str|list[Dim|str] axis: the axis to do the top_k on, which is reduced
+    :param int|None for_indices:
+    :rtype: Data
+    """
+    assert isinstance(k, Dim) and k.dimension is not None
+    if not isinstance(axis, (list, tuple)):
+      axis = [axis]
+    axis = [in_data.get_dim_tag_from_description(a) for a in axis]
+    out_dims = [dim for dim in in_data.dim_tags if dim not in axis] + [k]
+    out_data = in_data.copy_template(name=name).copy_template_new_dim_tags(out_dims)
+    if for_indices is not None:
+      assert 0 <= for_indices < len(axis)
+      out_data.dtype = "int32"
+      out_data.sparse_dim = axis[for_indices]
+    return out_data
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, network, sources, k, axis, **kwargs):
+    """
+    :param str name:
+    :param returnn.tf.network.TFNetwork network:
+    :param list[LayerBase] sources:
+    :param Dim|int k: the "K" in "TopK"
+    :param Dim|str|list[Dim|str] axis: the axis to do the top_k on, which is reduced
+    :rtype: Data
+    """
+    assert len(sources) == 1
+    in_data = sources[0].output
+    assert isinstance(k, Dim) and k.dimension is not None  # via transform_config_dict
+    return cls._get_out_data(name=name + "_output", in_data=in_data, k=k, axis=axis, for_indices=None)
+
+  def get_sub_layer(self, layer_name):
+    """
+    :param str layer_name: sub layer name
+    :rtype: LayerBase|None
+    """
+    return self._sub_layers.get(layer_name, None)
+    if not layer_name.startswith("indices"):
+      return None
+    sub_layer_name = "%s/%s" % (self.name, layer_name)
+    out = self.output.copy_template(name="%s_output" % sub_layer_name)
+    if layer_name == "loss":
+      assert self.loss_value is not None, "%s: loss not defined" % self
+      out.placeholder = self.loss_value
+      return InternalLayer(name=sub_layer_name, network=self.network, output=out)
+    elif layer_name == "error":
+      assert self.error_value is not None, "%s: error not defined" % self
+      out.placeholder = self.error_value
+      return InternalLayer(name=sub_layer_name, network=self.network, output=out)
+    else:
+      raise Exception("%s: invalid sub layer %r" % (self, layer_name))
+
+  @classmethod
+  def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
+    """
+    :param str layer_name: sub layer name
+    :param dict[str] parent_layer_kwargs:
+    :return: Data template, class type of sub-layer, layer opts (transformed)
+    :rtype: (Data, type, dict[str])|None
+    """
+    if not layer_name.startswith("indices"):
+      return None
+    name = parent_layer_kwargs["_name"]
+    sources = parent_layer_kwargs["sources"]
+    in_data = sources[0].output
+    axis = parent_layer_kwargs["axis"]
+    k = parent_layer_kwargs["k"]
+    assert isinstance(k, Dim)  # via transform_config_dict
+    if layer_name == "indices":
+      assert isinstance(axis, (str, Dim))
+      for_indices = 0
+    else:
+      assert layer_name.startswith("indices")
+      assert isinstance(axis, (tuple, list))
+      for_indices = int(layer_name[len("indices"):])
+    out_data = cls._get_out_data(
+      name="%s/%s" % (name, layer_name), in_data=in_data, k=k, axis=axis, for_indices=for_indices)
+    return out_data, InternalLayer, {}
+
+
 class SearchSortedLayer(LayerBase):
   """
   Basically wraps :func:`tf.searchsorted`.

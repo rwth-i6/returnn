@@ -2753,6 +2753,56 @@ def test_SwitchLayer_template_const_from():
   assert switch.dim == 2
 
 
+def test_TopKLayer_single_axis():
+  config = Config({
+    "extern_data": {"data": {"shape": (None, 5)}},
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "output": {
+        "class": "top_k", "from": "data", "axis": "F", "k": 2},  # (B,T)
+    })
+    in_data = net.extern_data.data["data"]
+    in_np = numpy.arange(2 * 3 * 5).reshape((2, 3, 5)).astype(in_data.dtype)
+    in_sizes = [3, 2]
+    values = net.get_layer("output").output
+    indices = net.get_layer("output/indices").output
+    values_np, indices_np = session.run(
+      (values.placeholder, indices.placeholder),
+      feed_dict={in_data.placeholder: in_np, in_data.get_sequence_lengths(): in_sizes})
+    print("inputs:\n", in_np)
+    print("values:\n", values_np)
+    print("indices:\n", indices_np)
+    assert (indices_np == numpy.array([4, 3])[None, None]).all()
+
+
+def test_TopKLayer_two_axes():
+  config = Config({
+    "extern_data": {"data": {"shape": (3, 5)}},
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "output": {
+        "class": "top_k", "from": "data", "axis": ("dim:3", "dim:5"), "k": 2},  # (B,T)
+    })
+    in_data = net.extern_data.data["data"]
+    in_np = numpy.arange(2 * 3 * 5).reshape((2, 3, 5)).astype(in_data.dtype)
+    values = net.get_layer("output").output
+    indices0 = net.get_layer("output/indices0").output
+    indices1 = net.get_layer("output/indices1").output
+    values_np, indices0_np, indices1_np = session.run(
+      (values.placeholder, indices0.placeholder, indices1.placeholder),
+      feed_dict={in_data.placeholder: in_np})
+    print("inputs:\n", in_np)
+    print("values:\n", values_np)
+    print("indices0:\n", indices0_np)
+    print("indices1:\n", indices1_np)
+    assert (indices0_np == 2).all()
+    assert (indices1_np == numpy.array([4, 3])[None]).all()
+
+
 def test_SearchSortedLayer():
   n_batch, n_time, n_in, n_out = 2, 10, 3, 5
   random = numpy.random.RandomState(seed=1)
