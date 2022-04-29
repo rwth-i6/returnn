@@ -8219,20 +8219,6 @@ class TopKLayer(LayerBase):
     :rtype: LayerBase|None
     """
     return self._sub_layers.get(layer_name, None)
-    if not layer_name.startswith("indices"):
-      return None
-    sub_layer_name = "%s/%s" % (self.name, layer_name)
-    out = self.output.copy_template(name="%s_output" % sub_layer_name)
-    if layer_name == "loss":
-      assert self.loss_value is not None, "%s: loss not defined" % self
-      out.placeholder = self.loss_value
-      return InternalLayer(name=sub_layer_name, network=self.network, output=out)
-    elif layer_name == "error":
-      assert self.error_value is not None, "%s: error not defined" % self
-      out.placeholder = self.error_value
-      return InternalLayer(name=sub_layer_name, network=self.network, output=out)
-    else:
-      raise Exception("%s: invalid sub layer %r" % (self, layer_name))
 
   @classmethod
   def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
