@@ -8032,7 +8032,7 @@ class TopKLayer(LayerBase):
 
   Axis can also cover multiple axes, such as [beam,classes].
   In that cases, there is not a single "indices" sub-layer,
-  but sub-layers "inidices0" .. "indices{N-1}"
+  but sub-layers "indices0" .. "indices{N-1}"
   corresponding to each axis, in the same order.
 
   All other axes are treated as batch dims.
