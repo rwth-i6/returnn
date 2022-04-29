@@ -2802,6 +2802,8 @@ class RangeFromLengthLayer(LayerBase):
     """
     assert len(sources) == 1, "%s layer %r requires single source" % (cls, name)
     source = sources[0].output
+    assert source.dtype in {"int32", "int64"}, (
+      "%s %r: expect int32/int64 input but got %s from %s" % (cls.__name__, name, source.dtype, source))
     dim_tag = None
     if source.placeholder is not None:
       dim_tag = Dim.get_tag_from_size_tensor(source.placeholder)
