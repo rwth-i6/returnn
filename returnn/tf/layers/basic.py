@@ -8040,14 +8040,14 @@ class TopKLayer(LayerBase):
   layer_class = "top_k"
 
   # noinspection PyShadowingBuiltins
-  def __init__(self, k, axis, sorted=True, **kwargs):
+  def __init__(self, axis, k, k_dim=None, sorted=True, **kwargs):
     """
-    :param Dim|int k: the "K" in "TopK"
     :param Dim|str|list[Dim|str] axis: the axis to do the top_k on, which is reduced
+    :param int|LayerBase k: the "K" in "TopK"
+    :param Dim|None k_dim: the output dim tag corresponding to k
     :param bool sorted:
     """
     super(TopKLayer, self).__init__(**kwargs)
-    assert isinstance(k, Dim)  # via transform_config_dict
     in_data = self.sources[0].output
 
     if isinstance(axis, (str, Dim)):
@@ -8075,7 +8075,20 @@ class TopKLayer(LayerBase):
       in_data = in_data.copy_template_new_dim_tags(remaining_axes + [merged_axis])
       in_data.placeholder = in_
 
-    values, indices = tf.nn.top_k(in_data.placeholder, k=k.dimension, sorted=sorted)
+    if isinstance(k, LayerBase):
+      if k_dim in k.output.dim_tags:
+        k_dim = k.output.get_dim_tag_from_description(k_dim)
+        k = k_dim.get_dim_value()
+      elif k.output.batch_shape == ():  # scalar, normal case
+        k = k.output.placeholder
+      else:
+        k = tf.reduce_max(k.output.placeholder)
+      if k_dim.dimension is not None:
+        from tensorflow.python.framework import tensor_util
+        k_ = tensor_util.constant_value(k)
+        assert k_ is not None and k_ == k_dim.dimension
+    assert isinstance(k, (int, tf.Tensor))
+    values, indices = tf.nn.top_k(in_data.placeholder, k=k, sorted=sorted)
     self.output.placeholder = values
     sub_outputs = {}
     if single_axis:
@@ -8086,13 +8099,13 @@ class TopKLayer(LayerBase):
         sub_outputs["indices%i" % i] = (indices % a.dimension, a)
         indices = indices // a.dimension
     self._sub_layers = {}
-    for k, (v, a) in sub_outputs.items():
-      sub_out_data = self.output.copy_template(name="%s/%s" % (self.name, k))
+    for key, (v, a) in sub_outputs.items():
+      sub_out_data = self.output.copy_template(name="%s/%s" % (self.name, key))
       sub_out_data.dtype = "int32"
       sub_out_data.sparse_dim = a
       sub_out_data.placeholder = v
-      self._sub_layers[k] = InternalLayer(
-        name="%s/%s" % (self.name, k), network=self.network, output=sub_out_data)
+      self._sub_layers[key] = InternalLayer(
+        name="%s/%s" % (self.name, key), network=self.network, output=sub_out_data)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -8102,26 +8115,28 @@ class TopKLayer(LayerBase):
     :param get_layer:
     """
     super(TopKLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
-    if "k" in d:  # should always be the case but throw errors later
-      k = d["k"]
-      if isinstance(k, int):
-        k = SpatialDim(d.get("_name", "<unk>") + ":topk", k)
-      d["k"] = k
+    if isinstance(d.get("k", None), str):
+      d["k"] = get_layer(d["k"])
+    if not d.get("k_dim", None):
+      k = d.get("k", None)  # should always be in there but throw errors later
+      if isinstance(k, (str, LayerBase)):
+        k = None
+      d["k_dim"] = SpatialDim(d.get("_name", "<unk>") + ":topk", k)
 
   @classmethod
-  def _get_out_data(cls, name, in_data, k, axis, for_indices=None):
+  def _get_out_data(cls, name, in_data, axis, k_dim, for_indices=None):
     """
     :param str name:
-    :param Dim k: the "K" in "TopK"
     :param Dim|str|list[Dim|str] axis: the axis to do the top_k on, which is reduced
+    :param Dim k_dim: the "K" in "TopK"
     :param int|None for_indices:
     :rtype: Data
     """
-    assert isinstance(k, Dim) and k.dimension is not None
+    assert isinstance(k_dim, Dim)
     if not isinstance(axis, (list, tuple)):
       axis = [axis]
     axis = [in_data.get_dim_tag_from_description(a) for a in axis]
-    out_dims = [dim for dim in in_data.dim_tags if dim not in axis] + [k]
+    out_dims = [dim for dim in in_data.dim_tags if dim not in axis] + [k_dim]
     out_data = in_data.copy_template(name=name).copy_template_new_dim_tags(out_dims)
     if for_indices is not None:
       assert 0 <= for_indices < len(axis)
@@ -8130,19 +8145,24 @@ class TopKLayer(LayerBase):
     return out_data
 
   @classmethod
-  def get_out_data_from_opts(cls, name, network, sources, k, axis, **kwargs):
+  def get_out_data_from_opts(cls, name, network, sources, axis, k, k_dim, **kwargs):
     """
     :param str name:
     :param returnn.tf.network.TFNetwork network:
     :param list[LayerBase] sources:
-    :param Dim|int k: the "K" in "TopK"
     :param Dim|str|list[Dim|str] axis: the axis to do the top_k on, which is reduced
+    :param int|LayerBase k: the "K" in "TopK"
+    :param Dim|None k_dim: the output dim tag corresponding to k
     :rtype: Data
     """
     assert len(sources) == 1
     in_data = sources[0].output
-    assert isinstance(k, Dim) and k.dimension is not None  # via transform_config_dict
-    return cls._get_out_data(name=name + "_output", in_data=in_data, k=k, axis=axis, for_indices=None)
+    assert isinstance(k_dim, Dim)  # via transform_config_dict
+    if isinstance(k, LayerBase):
+      if k_dim.dimension is None:
+        if not k_dim.dyn_size_ext or k_dim.dyn_size_ext.placeholder is None:
+          k_dim.dyn_size_ext = k.output
+    return cls._get_out_data(name=name + "_output", in_data=in_data, axis=axis, k_dim=k_dim, for_indices=None)
 
   def get_sub_layer(self, layer_name):
     """
@@ -8165,8 +8185,8 @@ class TopKLayer(LayerBase):
     sources = parent_layer_kwargs["sources"]
     in_data = sources[0].output
     axis = parent_layer_kwargs["axis"]
-    k = parent_layer_kwargs["k"]
-    assert isinstance(k, Dim)  # via transform_config_dict
+    k_dim = parent_layer_kwargs["k_dim"]
+    assert isinstance(k_dim, Dim)  # via transform_config_dict
     if layer_name == "indices":
       assert isinstance(axis, (str, Dim))
       for_indices = 0
@@ -8175,7 +8195,7 @@ class TopKLayer(LayerBase):
       assert isinstance(axis, (tuple, list))
       for_indices = int(layer_name[len("indices"):])
     out_data = cls._get_out_data(
-      name="%s/%s" % (name, layer_name), in_data=in_data, k=k, axis=axis, for_indices=for_indices)
+      name="%s/%s" % (name, layer_name), in_data=in_data, axis=axis, k_dim=k_dim, for_indices=for_indices)
     return out_data, InternalLayer, {}
 
 
