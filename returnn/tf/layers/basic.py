@@ -2261,7 +2261,7 @@ class RandomStateInitLayer(LayerBase):
   """
   layer_class = "random_state_init"
 
-  def __init__(self, algorithm=None, seed=None, **kwargs):
+  def __init__(self, algorithm=None, seed=None, out_dim=None, **kwargs):
     """
     :param str|tf.random.Algorithm|None algorithm: "philox", "three-fry", "auto-select". by default "philox".
       See :func:`tf.random.stateless_uniform` for some documentation.
@@ -2275,7 +2275,9 @@ class RandomStateInitLayer(LayerBase):
       make sure that you have different seeds for each!
       If None (default), the seed will be deterministically taken from the network random generator
       at construction time, which is usually a good idea. You still can change the global network seed.
+    :param Dim|None out_dim: new dim tag for random state dim
     """
+    out_dim  # noqa  # via get_out_data_from_opts
     super(RandomStateInitLayer, self).__init__(**kwargs)
     if seed is None:
       seed = self.network.random.randint(2 ** 31, size=self.output.shape)
@@ -2310,18 +2312,29 @@ class RandomStateInitLayer(LayerBase):
       return convert_alg_to_int(algorithm.lower())
     raise TypeError("algorithm %r" % (algorithm,))
 
+  _state_size_dim_tags_cache = {}  # type: typing.Dict[int, Dim]
+
   @classmethod
-  def get_out_data_from_opts(cls, name, algorithm=None, **kwargs):
+  def get_out_data_from_opts(cls, name, algorithm=None, out_dim=None, **kwargs):
     """
     :param str name:
     :param str|None algorithm:
+    :param Dim|None out_dim:
     :rtype: Data
     """
     from tensorflow.python.ops import stateful_random_ops
     algorithm = cls.select_algorithm(algorithm)
-    # noinspection PyProtectedMember
-    state_size = stateful_random_ops._get_state_size(algorithm)
-    return Data(name="%s_output" % name, shape=[state_size], batch_dim_axis=None, dtype=stateful_random_ops.STATE_TYPE)
+    algo_type = tf.random.Algorithm(algorithm)
+    if algorithm in cls._state_size_dim_tags_cache:
+      algo_state_dim = cls._state_size_dim_tags_cache[algorithm]
+    else:
+      # noinspection PyProtectedMember
+      state_size = stateful_random_ops._get_state_size(algorithm)
+      algo_state_dim = Dim(kind=Dim.Types.Feature, description="random_%s_state" % algo_type.name, dimension=state_size)
+      cls._state_size_dim_tags_cache[algorithm] = algo_state_dim
+    if out_dim:
+      algo_state_dim.declare_same_as(out_dim)
+    return Data(name="%s_output" % name, dim_tags=[algo_state_dim], dtype=stateful_random_ops.STATE_TYPE)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
