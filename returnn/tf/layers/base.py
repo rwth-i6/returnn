@@ -527,12 +527,15 @@ class LayerBase(object):
         dyn_dim_tags_with_batch = [
           dim_tag for dim_tag in output.dim_tags
           if dim_tag.dyn_size_ext and dim_tag.dyn_size_ext.have_batch_axis()]
+        dim_tags_with_batch_info = [dim_tag for dim_tag in output.dim_tags if dim_tag.batch]
         if dep_batches:
           output.batch = BatchInfo.get_common_batch_info(dep_batches).copy_set_beam(output.beam)
         elif network.extern_data.data:
           output.batch = network.extern_data.get_batch_info().copy_set_beam(output.beam)
         elif network.parent_net and network.get_root_network().extern_data.data:
           output.batch = network.get_root_network().extern_data.get_batch_info().copy_set_beam(output.beam)
+        elif dim_tags_with_batch_info:
+          output.batch = dim_tags_with_batch_info[0].batch.copy_set_beam(output.beam)
         elif dyn_dim_tags_with_batch:
           for tag in dyn_dim_tags_with_batch:
             if tag.dyn_size_ext.batch:
