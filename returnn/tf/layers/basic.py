@@ -2324,7 +2324,7 @@ class RandomStateInitLayer(LayerBase):
     """
     from tensorflow.python.ops import stateful_random_ops
     algorithm = cls.select_algorithm(algorithm)
-    algo_type = tf.random.Algorithm(value=algorithm)
+    algo_type = tf.random.Algorithm(algorithm)  # noqa
     if algorithm in cls._state_size_dim_tags_cache:
       algo_state_dim = cls._state_size_dim_tags_cache[algorithm]
     else:
