@@ -1683,13 +1683,12 @@ class _SubnetworkRecCell(object):
     layer_dict = layer_dict.copy()
     layer_class_name = layer_dict.pop("class")
     layer_class = get_layer_class(layer_class_name)
-    layer_dict["_network"] = self.net
-    layer_dict["_name"] = layer_name
+    layer_dict.update(dict(name=layer_name, _name=layer_name, network=self.net, _network=self.net))
     layer_class.transform_config_dict(
       layer_dict, network=self.net, get_layer=lambda _name: self.layer_data_templates[_name])
-    out = layer_class.get_out_data_from_opts(name=layer_name, network=self.net, **layer_dict)
-    out = layer_class.fixup_out_data(output=out, network=self.net, **layer_dict)
-    layer.init(output=out, layer_class=layer_class, **layer_dict)
+    layer_dict["output"] = layer_class.get_out_data_from_opts(**layer_dict)
+    layer_dict["output"] = layer_class.fixup_out_data(**layer_dict)
+    layer.init(layer_class=layer_class, **layer_dict)
     self.layer_data_templates[layer_name] = layer
     return layer
 
