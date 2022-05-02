@@ -1592,7 +1592,7 @@ class TFNetwork(object):
     if config is None:
       config = self.get_config()
     if should_train is None:
-      should_train = self.train_flag
+      should_train = self.train_flag is not False
     if should_eval is None:
       should_eval = self.eval_flag
     use_horovod_reduction = False
