@@ -3351,7 +3351,7 @@ class MergeDimsLayer(_ConcatInputLayer):
     :rtype: list[int]
     """
     if keep_order:
-      assert isinstance(axes, (tuple, list, typing.Sequence)), (
+      assert isinstance(axes, (tuple, list, typing.Sequence)) and not isinstance(axes, str), (
         "%s: axes %r must be a list or tuple, to have a well defined order in input %s" % (name, axes, input_data))
       axes_ = []
       for axis in axes:
