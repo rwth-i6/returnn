@@ -2782,12 +2782,12 @@ class Data(object):
     """
     import numpy
     if dtype is None:
-      if isinstance(x, int):
+      if isinstance(x, bool):
+        dtype = "bool"
+      elif isinstance(x, int):
         dtype = "int32"
       elif isinstance(x, float):
         dtype = "float32"
-      elif isinstance(x, bool):
-        dtype = "bool"
       elif isinstance(x, numpy.ndarray):
         dtype = str(x.dtype)
       else:

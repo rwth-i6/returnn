@@ -1202,6 +1202,14 @@ def test_Data_copy_move_axis_time_to_end():
   assert d2.shape == (None, 4, None) and d2.feature_dim_axis == 2 and d2.time_dim_axis == 3
 
 
+def test_Data_template_from_constant_bool():
+  value = False
+  out = Data.template_from_constant(
+    value, name="bool_const", shape=None, dtype=None, with_batch_dim=False, sparse_dim=None)
+  assert out.batch_shape == ()
+  assert out.dtype == "bool"
+
+
 def test_Dim_copy():
   # https://github.com/rwth-i6/returnn/issues/860
   import copy
