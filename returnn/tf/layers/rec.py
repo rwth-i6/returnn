@@ -2819,7 +2819,8 @@ class _SubnetworkRecCell(object):
             prev_layer, rel_end_layer = choices.translate_to_this_search_beam([prev_layer, rel_end_layer])
           from returnn.tf.util.basic import where_bc
           layer.output.placeholder = where_bc(
-            condition=rel_end_layer.output.copy_compatible_to(layer.output).placeholder,
+            condition=rel_end_layer.output.copy_compatible_to(
+              layer.output, check_sparse=False, check_dtype=False).placeholder,
             x=prev_layer.output.placeholder, y=layer.output.placeholder)
 
         if seq_len_info is not None:
