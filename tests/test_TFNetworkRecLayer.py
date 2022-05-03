@@ -1219,6 +1219,97 @@ def test_rec_RecStepInfoLayer_broadcast_moved_out():
     assert isinstance(out_v, numpy.ndarray)
 
 
+def test_rec_RecLastOutputLayer():
+  from returnn.tf.util.data import (
+    Dim, batch_dim, single_step_dim, SpatialDim, FeatureDim, ImplicitDynSizeDim, ImplicitSparseDim)
+
+  time_dim = SpatialDim('time')
+  input_dim = FeatureDim('input', 3)
+
+  config = Config(dict(
+    extern_data={
+      'data': {
+        'dim_tags': (
+          batch_dim,
+          time_dim,
+          input_dim
+        ),
+        'dtype': 'float32',
+        'available_for_inference': True
+      }
+    }))
+
+  net_dict = {
+    'output': {
+      'class': 'copy',
+      'from': 'add',
+      'out_shape': {batch_dim, input_dim}
+    },
+    'loop': {
+      'class': 'rec',
+      'from': [],
+      'unit': {
+        'rec_unstack': {
+          'class': 'rec_unstack',
+          'from': 'base:range_in_axis',
+          'axis': time_dim,
+          'out_shape': {}
+        },
+        'add': {
+          'class': 'combine',
+          'from': ['prev:add', 'rec_unstack'],
+          'kind': 'add',
+          'initial_output': 'base:zeros',
+          'need_last': True,
+          'out_shape': {batch_dim, input_dim}
+        },
+        'output': {
+          'class': 'copy',
+          'from': 'rec_unstack',
+          'out_shape': {}
+        }
+      },
+      'axis': time_dim,
+      'out_shape': {ImplicitDynSizeDim(batch_dim), time_dim},
+      'name_scope': ''
+    },
+    'range_in_axis': {
+      'class': 'range_in_axis',
+      'from': 'data:data',
+      'axis': time_dim,
+      'out_shape': {ImplicitDynSizeDim(batch_dim), time_dim}
+    },
+    'zeros': {
+      'class': 'constant',
+      'value': 0,
+      'shape': [
+        batch_dim,
+        input_dim
+      ],
+      'dtype': 'int32'
+    },
+    'add': {
+      'class': 'rec_last_output',
+      'rec_layer': 'loop',
+      'sub_layer_name': 'add',
+      'out_shape': {batch_dim, input_dim}
+    }
+  }
+
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    in_ = net.extern_data.get_default_input_data()
+    out = net.get_default_output_layer().output.copy_as_batch_major()
+    from test_TFNetworkLayer import make_feed_dict
+    out_v, seq_lens = session.run(
+      (out.placeholder, in_.get_sequence_lengths()), feed_dict=make_feed_dict(net.extern_data))
+    print(out_v, seq_lens)
+    sum_over_i = seq_lens * (seq_lens - 1) // 2
+    print(sum_over_i)
+    assert (sum_over_i[:, None] == out_v).all()
+
+
 def test_rec_explicit_lstm():
   net_dict = {
     "lstm": {"class": "rec", "from": "data", "unit": {
