@@ -2468,6 +2468,8 @@ class _SubnetworkRecCell(object):
         if template.is_output_layer():
           needed_outputs.add(name)
           extra_output_layers.add(name)
+        if template.need_last:
+          needed_outputs.add(name)
 
       layer_names_with_losses = []
       if rec_layer.network.eval_flag:  # only collect losses if we need them
