@@ -1592,7 +1592,7 @@ class _SubnetworkRecCell(object):
         if self.parent_net.eval_flag and layer.get("loss"):  # only collect losses if we need them
           get_templated_layer.construct(layer_name)
       for layer_name, layer in sorted(self.net_dict.items()):
-        if layer.get("is_output_layer"):
+        if layer.get("is_output_layer") or layer.get("need_last"):
           get_templated_layer.construct(layer_name)
 
       # Because of the logic to lazily init deps, or some of the kwargs sources partially None,
