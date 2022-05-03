@@ -683,12 +683,17 @@ class LayerBase(object):
       inside_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=True)
       over_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=False)
       if over_rec_time_dim and not inside_rec_time_dim:  # moved out of loop
-        from returnn.tf.util.data import OptionalDim
+        # noinspection PyProtectedMember
+        from returnn.tf.util.data import OptionalDim, _MarkedDim
         out_shape = d["out_shape"]
         if not isinstance(out_shape, set):
           assert not out_shape, "out_shape %r must be empty if not a set" % (out_shape,)
-          out_shape = set()
+        out_shape = set(out_shape)
         out_shape.add(OptionalDim(over_rec_time_dim))
+        if over_rec_time_dim.dyn_size_ext:
+          for tag in over_rec_time_dim.dyn_size_ext.dim_tags:
+            if tag not in [d.tag if isinstance(d, _MarkedDim) else d for d in out_shape]:
+              out_shape.add(OptionalDim(tag))
         d["out_shape"] = out_shape
     if d.pop("loss_only_on_non_search", None) and network.search_flag:
       d.pop("loss", None)
