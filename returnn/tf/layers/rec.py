@@ -2800,9 +2800,20 @@ class _SubnetworkRecCell(object):
           # We need to make sure that the output is correct also for the seqs which are already ended.
           prev_layer = self.net.layers["prev:" + k]
           # Last frame corresponds to the frame seq_len - 1.
-          # With include_eos=False, when "end" layer is True <=> we are behind the last frame.
-          # With include_eos=True, when "prev:end" layer is True <=> we are behind the last frame.
-          rel_end_layer = self.net.layers["prev:end"] if rec_layer.include_eos else self.net.layers["end"]
+          if seq_len_info:
+            # With include_eos=False, when "end" layer is True <=> we are behind the last frame.
+            # With include_eos=True, when "prev:end" layer is True <=> we are behind the last frame.
+            rel_end_layer = self.net.layers["prev:end"] if rec_layer.include_eos else self.net.layers["end"]
+          else:
+            assert fixed_seq_len is not None and time_dim_tag and time_dim_tag.dyn_size_ext
+            end_flag_data = time_dim_tag.dyn_size_ext.copy_template()
+            end_flag_data.dtype = "bool"
+            end_flag_data.placeholder = tf.greater_equal(
+              # Without include_eos, end_flag=True happens first in frame seq_lens.
+              # With include_eos, end_flag=True happens first in frame seq_lens - 1.
+              i, (fixed_seq_len - 1) if rec_layer.include_eos else fixed_seq_len)
+            from returnn.tf.layers.basic import InternalLayer
+            rel_end_layer = InternalLayer(name="rel_end_layer", network=self.net, output=end_flag_data)
           choices = layer.get_search_choices()
           if choices:
             prev_layer, rel_end_layer = choices.translate_to_this_search_beam([prev_layer, rel_end_layer])
