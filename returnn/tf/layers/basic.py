@@ -8173,6 +8173,7 @@ class TopKLayer(LayerBase):
     assert isinstance(k_dim, Dim)  # via transform_config_dict
     if isinstance(k, LayerBase):
       if k_dim.dimension is None:
+        k_dim.control_flow_ctx = k.output.control_flow_ctx
         if not k_dim.dyn_size_ext or k_dim.dyn_size_ext.placeholder is None:
           k_dim.dyn_size_ext = k.output
     return cls._get_out_data(name=name + "_output", in_data=in_data, axis=axis, k_dim=k_dim, for_indices=None)
