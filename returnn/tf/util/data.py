@@ -3868,7 +3868,6 @@ class Data(object):
     :return: copy of myself excluding the time-dimension without placeholder
     :rtype: Data
     """
-    assert self.batch_dim_axis is not None
     assert self.time_dim_axis is not None
     return self.copy_template_excluding_axis(exclude_axis=self.time_dim_axis, name=name)
 
