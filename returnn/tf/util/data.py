@@ -3365,7 +3365,7 @@ class Data(object):
     dim_tags = list(self.dim_tags)
     if dim_tag:
       assert dim_tag.is_batch_dim()
-      assert dim_tag.dimension == batch.static_dim
+      assert dim_tag.dimension == batch.static_dim or dim_tag.dimension is None
       assert dim_tag.batch == batch
     else:
       dim_tag = Dim(
