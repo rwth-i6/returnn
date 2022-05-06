@@ -631,6 +631,8 @@ class Dim(object):
         return False
 
       def _bin_op(a, b):
+        if a is None or b is None:
+          return None
         with tf_util.same_control_flow_ctx([a, b]):
           if kind == "add":
             use_relu = _is_negative(a) or _is_negative(b)  # for dynamic tensors, assume all positive
@@ -666,7 +668,7 @@ class Dim(object):
         if self.batch:
           x = x.get_for_batch_ctx(self.batch, self.control_flow_ctx)
         x.complete_dyn_size()
-        if not x.dyn_size_ext or x.dyn_size_ext.placeholder is None:
+        if not x.dyn_size_ext:
           return
         x = x.dyn_size_ext
         if y is None:
@@ -681,8 +683,11 @@ class Dim(object):
           x_, y_ = x, y
         y.placeholder = _bin_op(y_.placeholder, x_.placeholder)
       assert y
+      if self.dyn_size_ext:
+        assert self.dyn_size_ext.dim_tags == y.dim_tags
       self.dyn_size_ext = y
-      self.set_tag_on_size_tensor(y.placeholder)
+      if y.placeholder is not None:
+        self.set_tag_on_size_tensor(y.placeholder)
 
   def is_equal(self, other, ignore_feature_dim=False, allow_same_feature_dim=False, allow_same_spatial_dim=None,
                treat_feature_as_spatial=False, broadcast_matches=False, unknown_spatial_matches=False,
