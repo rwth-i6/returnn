@@ -355,28 +355,30 @@ class Dim(object):
             base_can_use_in_ctx = tag
             break
       if base_can_use_in_ctx and base_can_use_in_ctx.dyn_size_ext:
-        # The same_base has some dyn size without any beam nor control flow context.
-        # We can expand it to the current beam, or extend by padded batch.
-        dyn_size_ext = base_can_use_in_ctx.dyn_size_ext.copy_extend_batch(batch)
-        if batch.beam:
-          dyn_size_ext = base_can_use_in_ctx.dyn_size_ext.copy_extend_with_beam(batch.beam)
-        assert dyn_size_ext.batch == batch
-        beam_expanded_base_data = getattr(dyn_size_ext.placeholder, "_RETURNN_beam_expanded_base_data", None)
-        if batch.beam:
-          assert beam_expanded_base_data
-        # Note: The beam expansion used tiling, which can be cached.
-        # This means that we could end up with the same size tensor (placeholder) for multiple different beams,
-        # when there are different beams with same beam size!
-        # This breaks the current logic in get_tag_from_size_tensor.
-        # As a workaround, we make an explicit new tensor here.
-        from .basic import get_valid_scope_name_from_str, same_control_flow_ctx
-        with same_control_flow_ctx(dyn_size_ext.placeholder):
-          dyn_size_ext.placeholder = tf.identity(
-            dyn_size_ext.placeholder,
-            name=get_valid_scope_name_from_str("%s_get_for_batch_ctx_%s" % (dyn_size_ext.name, batch.short_repr())))
-        if batch.beam:
-          dyn_size_ext.placeholder._RETURNN_dyn_size_beam = batch.beam
-          dyn_size_ext.placeholder._RETURNN_beam_expanded_base_data = beam_expanded_base_data
+        if base_can_use_in_ctx.dyn_size_ext.have_batch_axis():
+          # The same_base has some dyn size without any beam nor control flow context.
+          # We can expand it to the current beam, or extend by padded batch.
+          dyn_size_ext = base_can_use_in_ctx.dyn_size_ext.copy_extend_batch(batch)
+          if batch.beam:
+            dyn_size_ext = base_can_use_in_ctx.dyn_size_ext.copy_extend_with_beam(batch.beam)
+          assert dyn_size_ext.batch == batch
+          if dyn_size_ext.placeholder is not None:
+            beam_expanded_base_data = getattr(dyn_size_ext.placeholder, "_RETURNN_beam_expanded_base_data", None)
+            if batch.beam:
+              assert beam_expanded_base_data
+            # Note: The beam expansion used tiling, which can be cached.
+            # This means that we could end up with the same size tensor (placeholder) for multiple different beams,
+            # when there are different beams with same beam size!
+            # This breaks the current logic in get_tag_from_size_tensor.
+            # As a workaround, we make an explicit new tensor here.
+            from .basic import get_valid_scope_name_from_str, same_control_flow_ctx
+            with same_control_flow_ctx(dyn_size_ext.placeholder):
+              dyn_size_ext.placeholder = tf.identity(
+                dyn_size_ext.placeholder,
+                name=get_valid_scope_name_from_str("%s_get_for_batch_ctx_%s" % (dyn_size_ext.name, batch.short_repr())))
+            if batch.beam:
+              dyn_size_ext.placeholder._RETURNN_dyn_size_beam = batch.beam
+              dyn_size_ext.placeholder._RETURNN_beam_expanded_base_data = beam_expanded_base_data
     if not dyn_size_ext and allow_none:
       return None
     dim_tag = Dim(
@@ -386,8 +388,9 @@ class Dim(object):
       dyn_size_ext=dyn_size_ext)
     dim_tag.same_as = same_base
     dim_tag._same_as_tb = traceback.extract_stack()
-    if dyn_size_ext:
-      dim_tag.set_tag_on_size_tensor(dyn_size_ext.placeholder, batch=batch)
+    if dyn_size_ext and dyn_size_ext.placeholder is not None:
+      if Dim.get_tag_from_size_tensor(dyn_size_ext.placeholder) is None:
+        dim_tag.set_tag_on_size_tensor(dyn_size_ext.placeholder, batch=batch)
     same_base._same_for_batch_ctx[(dim_tag.batch, dim_tag.control_flow_ctx)] = dim_tag
     return dim_tag
 
