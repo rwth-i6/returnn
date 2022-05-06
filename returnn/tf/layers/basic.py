@@ -4770,12 +4770,11 @@ class ReinterpretDataLayer(_ConcatInputLayer):
       for axis, new_tag in set_dim_tags.items():
         axis_int = out.get_axis_from_description(axis)
         old_tag = out.dim_tags[axis_int]
+        new_tag = new_tag.get_for_batch_ctx(out.batch, out.control_flow_ctx)
         if old_tag.dyn_size_ext and not new_tag.dyn_size_ext:
           # Copy the template so that we know about implicit dims.
           # The sizes itself will be setup in __init__.
           new_tag.dyn_size_ext = old_tag.dyn_size_ext.copy_template()
-          new_tag.batch = old_tag.batch
-          new_tag.control_flow_ctx = old_tag.control_flow_ctx
         out = out.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=new_tag)
     if set_sparse is not None:
       assert isinstance(set_sparse, bool)
@@ -8188,9 +8187,9 @@ class TopKLayer(LayerBase):
     assert isinstance(k_dim, Dim)  # via transform_config_dict
     if isinstance(k, LayerBase):
       if k_dim.dimension is None:
-        k_dim.control_flow_ctx = k.output.control_flow_ctx
+        k_dim = k_dim.get_for_batch_ctx(k.output.batch, k.output.control_flow_ctx)
         if not k_dim.dyn_size_ext or k_dim.dyn_size_ext.placeholder is None:
-          k_dim.dyn_size_ext = k.output
+          k_dim.dyn_size_ext = k.output.copy()
     return cls._get_out_data(name=name + "_output", in_data=in_data, axis=axis, k_dim=k_dim, for_indices=None)
 
   def get_sub_layer(self, layer_name):
