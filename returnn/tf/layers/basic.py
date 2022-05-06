@@ -4653,17 +4653,23 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         new_tag = new_tag.get_for_batch_ctx(
           input_data.batch if not old_tag.is_batch_dim() else old_tag.batch.get_global_base(),
           input_data.control_flow_ctx)
-        if not new_tag.is_batch_dim() and new_tag.dimension is None and not new_tag.dyn_size_ext:  # still undefined
-          if old_tag.is_batch_dim():
-            new_dyn_size_ext = Data.from_tensor(input_data.get_batch_dim())
-          else:
-            assert old_tag.dyn_size_ext
-            new_dyn_size_ext = old_tag.dyn_size_ext.copy(name="%s_size" % (new_tag.description or "<unnamed>"))
-          # Need to create new size tensor as long as we have get_tag_from_size_tensor.
-          new_dyn_size_ext.placeholder = tf.identity(
-            new_dyn_size_ext.placeholder, name=get_valid_scope_name_from_str(new_dyn_size_ext.name))
-          new_tag.dyn_size_ext = new_dyn_size_ext
-          new_tag.set_tag_on_size_tensor(new_dyn_size_ext.placeholder)
+        if new_tag.is_batch_dim() or new_tag.dimension is not None:
+          continue
+        if new_tag.dyn_size_ext and new_tag.dyn_size_ext.placeholder is not None:
+          continue
+        # still undefined
+        if old_tag.is_batch_dim():
+          new_dyn_size_ext = Data.from_tensor(input_data.get_batch_dim())
+        else:
+          assert old_tag.dyn_size_ext
+          new_dyn_size_ext = old_tag.dyn_size_ext.copy(name="%s_size" % (new_tag.description or "<unnamed>"))
+        # Need to create new size tensor as long as we have get_tag_from_size_tensor.
+        new_dyn_size_ext.placeholder = tf.identity(
+          new_dyn_size_ext.placeholder, name=get_valid_scope_name_from_str(new_dyn_size_ext.name))
+        if new_tag.dyn_size_ext:
+          assert new_dyn_size_ext.dim_tags == new_dyn_size_ext.dim_tags
+        new_tag.dyn_size_ext = new_dyn_size_ext
+        new_tag.set_tag_on_size_tensor(new_dyn_size_ext.placeholder)
     self.output.placeholder = input_data.placeholder
     if len(self.sources) == 1:
       self.output_loss = self.sources[0].output_loss
@@ -4761,9 +4767,14 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         i: size_base.output.size_placeholder[j]
         for (i, j) in zip(sorted(out.size_placeholder), sorted(size_base.output.size_placeholder))}
     if set_dim_tags:
-      for axis, tag in set_dim_tags.items():
+      for axis, new_tag in set_dim_tags.items():
         axis_int = out.get_axis_from_description(axis)
-        out = out.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=tag)
+        old_tag = out.dim_tags[axis_int]
+        if old_tag.dyn_size_ext and not new_tag.dyn_size_ext:
+          # Copy the template so that we know about implicit dims.
+          # The sizes itself will be setup in __init__.
+          new_tag.dyn_size_ext = old_tag.dyn_size_ext.copy_template()
+        out = out.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=new_tag)
     if set_sparse is not None:
       assert isinstance(set_sparse, bool)
       if set_sparse:
