@@ -9744,7 +9744,7 @@ class CumConcatLayer(_ConcatInputLayer):
       self.rec_vars_outputs["state"] = concat_frames
       self.output.placeholder = concat_frames
 
-      if not new_dim_.dyn_size_ext:
+      if not new_dim_.dyn_size_ext or new_dim_.dyn_size_ext.placeholder is None:
         # Unbroadcasting to [B] is not needed because any layers operating on this
         # should be able to handle extended dyn sizes.
         # Clipping it to the max length for sequences in the loop which are already ended
@@ -9793,6 +9793,13 @@ class CumConcatLayer(_ConcatInputLayer):
 
     if not input_data.has_axis(rec_time_dim):  # inside loop
       assert ctx and ctx.is_loop() and ctx.loop_spatial_dim == rec_time_dim
+
+      new_dim_in_ctx.dyn_size_ext = Data(
+        name="%s:cum-concat:size-inside" % name,
+        dim_tags=[],  # scalar
+        dtype="int32",
+        batch=input_data.batch, control_flow_ctx=ctx)
+
       # Currently SelectSearchSourcesLayer assumes that all rec_vars_outputs are batch-major.
       # Therefore we here copy the input as batch-major, and then add the time axis at axis 1.
       # In the future, when SelectSearchSourcesLayer has support for this, we can change this to operate on axis 0,
