@@ -7713,8 +7713,9 @@ class CompareLayer(LayerBase):
           name="%s_output" % kwargs["name"]).get_kwargs())
     if n_out is not NotSpecified:
       out_type_["dim"] = n_out
-    elif out_type_.get("sparse", False):
+    elif isinstance(out_type, dict) and out_type.get("sparse", False):
       out_type_["dim"] = 2
+    out_type_.pop("sparse_dim", None)
     out_type_["dtype"] = "bool"
     out_type_["vocab"] = None
     if out_type:
