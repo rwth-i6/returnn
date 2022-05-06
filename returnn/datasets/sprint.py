@@ -1136,9 +1136,9 @@ class SprintCacheDataset(CachedDataset2):
     assert not seq_list and not seq_order
     need_reinit = self.epoch is None or self.epoch != epoch
     super(SprintCacheDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+    self._num_seqs = len(self.seq_list_ordered)
     if not need_reinit:
       return False
-    self._num_seqs = len(self.seq_list_original)
     data0 = self.data["data"]
     assert isinstance(data0, self.SprintCacheReader)
 
@@ -1150,6 +1150,7 @@ class SprintCacheDataset(CachedDataset2):
       return data0.sprint_cache.ft[self.seq_list_original[s]].size
     seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, get_seq_len=get_seq_size)
     self.seq_list_ordered = [self.seq_list_original[s] for s in seq_index]
+    self._num_seqs = len(self.seq_list_ordered)
     return True
 
   def get_dataset_seq_for_name(self, name, seq_idx=-1):
@@ -1182,7 +1183,7 @@ class SprintCacheDataset(CachedDataset2):
     """
     :rtype: list[str]
     """
-    return [key for (key, d) in self.data if d.type == "align"]
+    return [key for (key, d) in self.data.items() if d.type == "align"]
 
   def get_tag(self, sorted_seq_idx):
     """
