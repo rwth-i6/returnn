@@ -4774,6 +4774,8 @@ class ReinterpretDataLayer(_ConcatInputLayer):
           # Copy the template so that we know about implicit dims.
           # The sizes itself will be setup in __init__.
           new_tag.dyn_size_ext = old_tag.dyn_size_ext.copy_template()
+          new_tag.batch = old_tag.batch
+          new_tag.control_flow_ctx = old_tag.control_flow_ctx
         out = out.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=new_tag)
     if set_sparse is not None:
       assert isinstance(set_sparse, bool)
