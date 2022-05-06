@@ -7679,10 +7679,10 @@ class CompareLayer(LayerBase):
     op = getattr(tf, kind)  # e.g. tf.equal
     from returnn.tf.util.basic import opt_logical_and
     common_data = self.output
-    x = self.sources[0].output.copy_compatible_to(common_data, check_dtype=False).placeholder
+    x = self.sources[0].output.copy_compatible_to(common_data, check_dtype=False, check_sparse=False).placeholder
     r_last = True
     for source in self.sources[1:]:
-      x2 = source.output.copy_compatible_to(common_data, check_dtype=False).placeholder
+      x2 = source.output.copy_compatible_to(common_data, check_dtype=False, check_sparse=False).placeholder
       r_last = opt_logical_and(r_last, op(x, x2))
       x = x2
     if value is not None:
