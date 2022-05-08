@@ -8188,7 +8188,7 @@ class TopKLayer(LayerBase):
     assert isinstance(k_dim, Dim)  # via transform_config_dict
     if isinstance(k, LayerBase):
       if k_dim.dimension is None:
-        k_dim = k_dim.get_for_batch_ctx(k.output.batch, k.output.control_flow_ctx)
+        k_dim = k_dim.get_for_batch_ctx(k.get_batch_info(), k.output.control_flow_ctx)
         if not k_dim.dyn_size_ext or k_dim.dyn_size_ext.placeholder is None:
           k_dim.dyn_size_ext = k.output.copy()
     return cls._get_out_data(name=name + "_output", in_data=in_data, axis=axis, k_dim=k_dim, for_indices=None)
