@@ -2342,6 +2342,7 @@ class _SubnetworkRecCell(object):
           target_data = rec_layer._get_target_value(
             target=rec_layer.target, mark_data_key_as_used=False)
           input_beam = target_data.beam
+      fixed_seq_len = None
       if rec_layer.output.size_placeholder and not output_template_search_choices:
         # See LayerBase._post_init_output(). could be set via target or size_target...
         # This should only be the case in training.
@@ -2350,8 +2351,11 @@ class _SubnetworkRecCell(object):
         # noinspection PyProtectedMember
         fixed_seq_len = rec_layer._get_target_value(
           target=rec_layer.size_target, mark_data_key_as_used=True).get_sequence_lengths()
-      else:
-        fixed_seq_len = None
+      elif rec_layer.time_dim_tag and not output_template_search_choices:
+        batch = rec_layer.get_batch_info()
+        tag = rec_layer.time_dim_tag.get_for_batch_ctx(batch, rec_layer.output.control_flow_ctx)
+        if tag.dyn_size_ext and tag.dyn_size_ext.placeholder is not None:
+          fixed_seq_len = tag.dyn_size
       if fixed_seq_len is None and "end" not in self.layer_data_templates:
         # If 'end' layer is not existing, the length must be defined.
         # In some cases (training with given target) we know the target sequence length.
@@ -2362,11 +2366,13 @@ class _SubnetworkRecCell(object):
       if fixed_seq_len is not None:
         time_dim_tag = Dim.get_tag_from_size_tensor(fixed_seq_len)
         assert time_dim_tag == self.time_dim_tag
-        with tf.name_scope("check_seq_len_batch_size"):
-          fixed_seq_len = check_input_dim(
-            fixed_seq_len, axis=0, dim=batch_dim * (input_beam.beam_size if input_beam else 1))
-          if time_dim_tag:
-            time_dim_tag.set_tag_on_size_tensor(fixed_seq_len, batch=time_dim_tag.batch, same_as_before=True)
+        if fixed_seq_len.get_shape().ndims > 0:
+          assert fixed_seq_len.get_shape().ndims == 1
+          with tf.name_scope("check_seq_len_batch_size"):
+            fixed_seq_len = check_input_dim(
+              fixed_seq_len, axis=0, dim=batch_dim * (input_beam.beam_size if input_beam else 1))
+            if time_dim_tag:
+              time_dim_tag.set_tag_on_size_tensor(fixed_seq_len, batch=time_dim_tag.batch, same_as_before=True)
         max_seq_len = tf.reduce_max(fixed_seq_len, name="max_seq_len")
         have_known_seq_len = True
       else:
