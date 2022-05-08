@@ -7529,10 +7529,10 @@ class CombineLayer(LayerBase):
     :rtype: tf.Tensor
     """
     # All the dense element-wise functions should be able to deal with broadcasting.
-    x = sources[0].output.copy_compatible_to(output_template).placeholder
+    x = sources[0].output.copy_compatible_to(output_template, check_sparse=False).placeholder
     assert x is not None, "sources[0].output missing placeholder? %r" % sources[0]
     for source in sources[1:]:
-      x2 = source.output.copy_compatible_to(output_template).placeholder
+      x2 = source.output.copy_compatible_to(output_template, check_sparse=False).placeholder
       assert x2 is not None, "source.output missing placeholder? %r" % source
       x = fn(x, x2)
     return x
