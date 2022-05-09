@@ -876,7 +876,7 @@ class LayerBase(object):
       return self._is_output_layer
     if self.loss:
       return True
-    if self.name == "output":
+    if self.get_full_ctx_name() == "output":
       return True
     return False
 
