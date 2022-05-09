@@ -667,7 +667,10 @@ class RecLayer(_ConcatInputLayer):
       if not in_data.sparse:
         in_data = in_data.copy_with_feature_last()
     else:
-      in_data = in_data.copy_as_time_batch_major()
+      if in_data.have_batch_axis():
+        in_data = in_data.copy_as_time_batch_major()
+      else:
+        in_data = in_data.copy_as_time_major()
     in_data_ = in_data
     if strict and in_data_.batch_ndim_dense != 3:
       assert in_data_.batch_ndim_dense > 3
