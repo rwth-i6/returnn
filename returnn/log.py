@@ -82,7 +82,8 @@ class Log:
     """
     This resets and configures the "returnn" logger.
 
-    :param list[str] logs: "stdout", "|<pipe-cmd>", "<filename>"|"<filename>$date<ext>". "stdout" is always added
+    :param list[str|logging.Handler] logs: "stdout", "|<pipe-cmd>", "<filename>"|"<filename>$date<ext>".
+      "stdout" is always added when propagate=False.
     :param list[int] verbosity: levels 0-5 for the log handlers
     :param list[str] formatter: 'default', 'timed', 'raw' or 'verbose', for the log handlers
     :param bool propagate:
@@ -147,8 +148,10 @@ class Log:
       for j in range(v + 1):
         self.verbose[j] = True
       f = fmt['default'] if i >= len(formatter) or formatter[i] not in fmt else fmt[formatter[i]]
-      if t == 'stdout':
-        handler = logging.StreamHandler(sys.stdout)
+      if isinstance(t, logging.Handler):
+        handler = t
+      elif t == 'stdout':
+        handler = StdoutHandler()
       elif t.startswith("|"):  # pipe-format
         proc_cmd = t[1:].strip()
         from subprocess import Popen, PIPE
@@ -222,6 +225,27 @@ class Log:
 
 
 log = Log()
+
+
+class StdoutHandler(logging.StreamHandler):
+  """
+  This class is like a StreamHandler using sys.stdout, but always uses
+  whatever sys.stdout is currently set to rather than the value of
+  sys.stdout at handler construction time.
+
+  Copied and adopted from logging._StderrHandler.
+  """
+
+  @property
+  def stream(self):
+    """
+    stream
+    """
+    return sys.stdout
+
+  @stream.setter
+  def stream(self, stream):
+    pass  # ignore
 
 
 class StreamThreadLocal(threading.local):
