@@ -5791,8 +5791,8 @@ class TransposedConvLayer(_ConcatInputLayer):
 
 class ReduceLayer(_ConcatInputLayer):
   """
-  This reduces some axis by using "sum" or "max".
-  It's basically a wrapper around tf.reduce_sum or tf.reduce_max.
+  This reduces some axis by using a method defined by the mode parameter, e.g. "sum" or "max".
+  It's basically a wrapper around the corresponding tensorflow functions like tf.reduce_sum or tf.reduce_max.
   """
   layer_class = "reduce"
 
