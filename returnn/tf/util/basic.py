@@ -6414,7 +6414,7 @@ def get_variable_from_tensor(var):
     if var.op.type == "ReadVariableOp":
       var = var.op.inputs[0]
       continue
-    if var.op.type == "VarHandleOp":
+    if var.op.type in {"VarHandleOp", "VariableV2"}:
       for v in var.graph.get_collection("variables"):
         assert isinstance(v, tf.Variable)
         if v.op is var.op:
