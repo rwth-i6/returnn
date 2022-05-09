@@ -138,7 +138,7 @@ jobs:
         pip install --user --upgrade pip setuptools wheel
         pip install --user typing | cat  # needed for Python 2 in some cases
 
-        if [ "${{matrix.python-version}}" == 2.* ]; then
+        if [[ "${{matrix.python-version}}" == 2.* ]]; then
           echo "Cleaning ub potential messed up tensorboard for Python 2.7."
           echo "Current site-packages:"
           ls ~/.local/lib/python2.7/site-packages
@@ -159,7 +159,7 @@ jobs:
           mv ~/nosetests ~/.local/bin/nosetests
         fi
 
-        if [ "${{matrix.python-version}}" == 3.* ]; then
+        if [[ "${{matrix.python-version}}" == 3.* ]]; then
           pip install --user pytest
         fi
 
@@ -180,7 +180,7 @@ jobs:
         python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
         python -c "import theano; print('Theano:', theano.__version__)"
 
-        if [ "${{matrix.python-version}}" == 2.* ]; then
+        if [[ "${{matrix.python-version}}" == 2.* ]]; then
           echo "Nosetests env: $(type nosetests)"
           nosetests -V
         else
@@ -200,7 +200,7 @@ jobs:
       run: |
         export ${{ matrix.action }}
         if [[ ! -z "$TEST" ]]; then
-          if [ "${{matrix.python-version}}" == 2.* ]; then
+          if [[ "${{matrix.python-version}}" == 2.* ]]; then
             nosetests tests/test_$TEST.py
           else
             pytest tests/test_$TEST.py
