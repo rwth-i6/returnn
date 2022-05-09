@@ -2468,7 +2468,10 @@ class RandomLayer(LayerBase):
       assert seed is None, "%s: explicit state and seed are mutually exclusive" % self
       state_ = explicit_state.output.placeholder
       if auto_update_state is True:
-        assert isinstance(state_, tf.Variable)
+        state_ = tf_util.get_variable_from_tensor(state_)
+        if not isinstance(state_, tf.Variable):
+          tf_util.print_graph_output(state_, max_depth=5)
+          raise Exception("%s: explicit_state %s is not a tf.Variable but %s" % (self, explicit_state, state_))
         gen = tf.random.Generator.from_state(state_, alg=algorithm_int)
       else:
         assert auto_update_state is None or auto_update_state is False

@@ -6398,6 +6398,31 @@ def get_variable_grad_from_update_ops(var, update_ops):
   return grad
 
 
+def get_variable_from_tensor(var):
+  """
+  :param tf.Variable|tf.Tensor var:
+  :return: resolve tf.identity or read ops
+  :rtype: tf.Variable|tf.Tensor
+  """
+  while True:
+    if isinstance(var, tf.Variable):
+      return var
+    assert isinstance(var, tf.Tensor)
+    if var.op.type == "Identity":
+      var = var.op.inputs[0]
+      continue
+    if var.op.type == "ReadVariableOp":
+      var = var.op.inputs[0]
+      continue
+    if var.op.type == "VarHandleOp":
+      for v in var.graph.get_collection("variables"):
+        assert isinstance(v, tf.Variable)
+        if v.op is var.op:
+          return v
+      raise Exception("Could not find variable for var_handle_op %r." % var.op)
+    return var
+
+
 def add_control_input(op, control_input):
   """
   :param tf.Operation op:

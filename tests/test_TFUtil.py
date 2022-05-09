@@ -2300,6 +2300,14 @@ def test_variable_summaries():
   assert_almost_equal(session.run(variable_scalar_summaries_dict(v)["test_variable_summaries_mean"]), -0.5)
 
 
+def test_get_variable_from_tensor():
+  var = tf.Variable(initial_value=[[1.0, 2.0], [-4.0, -1.0]], name="test_get_variable_from_tensor")
+  x = tf.identity(var)
+  print_graph_output(x)
+  var_ = get_variable_from_tensor(x)
+  assert var_ is var
+
+
 def test_VariableAssigner():
   v = tf.Variable(initial_value=1.)
   session.run(v.initializer)
