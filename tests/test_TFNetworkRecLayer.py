@@ -5857,7 +5857,7 @@ def test_reclayer_scalar_size():
     net_dict = {
       'len': {"class": "length", "from": "data"},
       'max_len': {"class": "reduce", "from": "len", "mode": "max", "axis": "B", "out_shape": ()},
-      'range': {"class": "range_from_length", "from": "len"},
+      'range': {"class": "range_from_length", "from": "max_len"},
       'rec': {
         'class': 'rec',
         'from': "range",
