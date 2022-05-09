@@ -5852,6 +5852,32 @@ def test_reclayer_subnetwork_base_subnet():
     session.run(network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(network.extern_data))
 
 
+def test_reclayer_scalar_size():
+  with make_scope() as session:
+    net_dict = {
+      'len': {"class": "length", "from": "data"},
+      'max_len': {"class": "reduce", "from": "len", "mode": "max", "axis": "B", "out_shape": ()},
+      'range': {"class": "range_from_length", "from": "len"},
+      'rec': {
+        'class': 'rec',
+        'from': "range",
+        'unit': {
+          'add': {
+            'class': 'combine', 'kind': 'add',
+            'from': ['data:source', 'prev:add'],
+          },
+          "output": {"class": "copy", "from": "add"},
+        }
+      },
+      "output": {"class": "copy", "from": "rec"},
+    }
+    config = Config({"extern_data": {"data": {"shape": (None, 3)}}})
+    network = TFNetwork(config=config)
+    network.construct_from_dict(net_dict)
+    from test_TFNetworkLayer import make_feed_dict
+    session.run(network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(network.extern_data))
+
+
 def test_convert_lstm_params_save_load():
   """
   Test conversions from different units to different units.
