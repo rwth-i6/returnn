@@ -5822,6 +5822,36 @@ def test_reclayer_att_weights_output_layer():
     session.run(fetches, feed_dict=make_feed_dict(network.extern_data))
 
 
+def test_reclayer_subnetwork_base_subnet():
+  with make_scope() as session:
+    net_dict = {
+      'sub': {'class': 'subnetwork', 'from': [], 'subnetwork': {
+        'linear': {'class': 'eval', 'from': 'base:data:data', 'eval': 'source(0) * 0.9'},
+        "reduce": {"class": "reduce", "mode": "mean", "axis": "T", "from": "linear"},
+        'output': {'class': 'copy', 'from': 'linear'}
+      }},
+      'sub2': {'class': 'subnetwork', 'from': [], 'subnetwork': {
+        'rec': {
+          'class': 'rec',
+          'from': "base:data:data",
+          'unit': {
+            'add': {
+              'class': 'combine', 'kind': 'add',
+              'from': ['data:source', 'prev:add', 'base:base:sub/reduce'],
+            },
+            "output": {"class": "copy", "from": "add"},
+          }
+        },
+        "output": {"class": "copy", "from": "rec"},
+      }},
+      'output': {'class': 'copy', 'from': 'sub2'}}
+    config = Config(dict(num_inputs=1, num_outputs=1))
+    network = TFNetwork(config=config)
+    network.construct_from_dict(net_dict)
+    from test_TFNetworkLayer import make_feed_dict
+    session.run(network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(network.extern_data))
+
+
 def test_convert_lstm_params_save_load():
   """
   Test conversions from different units to different units.
