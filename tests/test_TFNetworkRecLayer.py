@@ -5823,7 +5823,6 @@ def test_reclayer_att_weights_output_layer():
 
 
 def test_reclayer_subnetwork_base_subnet():
-  # https://github.com/rwth-i6/returnn/issues/580
   with make_scope() as session:
     net_dict = {
       'sub': {'class': 'subnetwork', 'from': [], 'subnetwork': {
@@ -5831,22 +5830,20 @@ def test_reclayer_subnetwork_base_subnet():
         "reduce": {"class": "reduce", "mode": "mean", "axis": "T", "from": "linear"},
         'output': {'class': 'copy', 'from': 'linear'}
       }},
-      'sub2': {
-        'class': 'rec',
-        'from': "data:data",
-        'optimize_move_layers_out': False,  # easier to reproduce the error, otherwise not relevant
-        'unit': {
-          'sub': {'class': 'subnetwork', 'from': "data:source", "subnetwork": {
+      'sub2': {'class': 'subnetwork', 'from': [], 'subnetwork': {
+        'rec': {
+          'class': 'rec',
+          'from': "base:data:data",
+          'unit': {
             'add': {
               'class': 'combine', 'kind': 'add',
-              'from': ['data:data', 'prev:add', 'base:base:sub/reduce'],
-              "initial_output": 'base:base:sub/reduce',
+              'from': ['data:source', 'prev:add', 'base:base:sub/reduce'],
             },
             "output": {"class": "copy", "from": "add"},
-          }},
-          'output': {'class': 'copy', 'from': 'sub'},
-        }
-      },
+          }
+        },
+        "output": {"class": "copy", "from": "rec"},
+      }},
       'output': {'class': 'copy', 'from': 'sub2'}}
     config = Config(dict(num_inputs=1, num_outputs=1))
     network = TFNetwork(config=config)
