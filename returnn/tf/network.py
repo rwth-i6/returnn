@@ -1752,6 +1752,12 @@ class TFNetwork(object):
     :param str layer_name:
     :rtype: LayerBase
     """
+    if layer_name.startswith("base:"):
+      if not self.parent_net:
+        raise LayerNotFound(
+          "layer %r not found, there is no parent net of %r" % (layer_name, self),
+          layer_name=layer_name, network=self)
+      return self.parent_net.get_layer(layer_name[len("base:"):])
     if layer_name in self.layers:
       return self.layers[layer_name]
     orig_layer_name = layer_name
