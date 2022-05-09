@@ -66,6 +66,7 @@ def setup():
   debug.install_lib_sig_segfault()
 
   try:
+    # noinspection PyUnresolvedReferences
     import faulthandler
     # Enable after libSigSegfault, so that we have both,
     # because faulthandler will also call the original sig handler.
@@ -89,31 +90,50 @@ def _try_hook_into_tests():
 
   Also see: https://youtrack.jetbrains.com/issue/PY-9848
   """
-  # Check if this is run inside a debugger. Skip if this is not the case.
   import sys
   get_trace = getattr(sys, "gettrace", None)
-  if not get_trace:
-    return
-  if get_trace() is None:
-    return
+  in_debugger = False
+  if get_trace and get_trace() is not None:
+    in_debugger = True
+
   # get TestProgram instance from stack...
   from unittest import TestProgram
   from returnn.util.better_exchook import get_current_frame
-  frame = get_current_frame()
-  if not frame:
+  top_frame = get_current_frame()
+  if not top_frame:
     # This will not always work. Just silently accept this. This should be rare.
     return
+
   test_program = None
+  frame = top_frame
   while frame:
     local_self = frame.f_locals.get("self")
     if isinstance(local_self, TestProgram):
       test_program = local_self
       break
     frame = frame.f_back
-  if not test_program:
-    # Ok, this is not run as test, so fine, nothing to do then.
-    return
-  test_names = getattr(test_program, "testNames")
+
+  test_names = None
+  if test_program:  # nosetest, unittest
+    test_names = getattr(test_program, "testNames")
+
+  test_session = None
+  try:
+    # noinspection PyPackageRequirements,PyUnresolvedReferences
+    import pytest
+  except ImportError:
+    pass
+  else:
+    frame = top_frame
+    while frame:
+      local_self = frame.f_locals.get("self")
+      if isinstance(local_self, pytest.Session):
+        test_session = local_self
+        break
+      frame = frame.f_back
+    if test_session and not test_names:
+      test_names = test_session.config.args
+
   if not test_names:
     # Unexpected, but just silently ignore.
     return
@@ -122,19 +142,26 @@ def _try_hook_into_tests():
     # We only want to install the hook if there is only a single test case.
     return
 
-  # Ok, try to install our plugin.
-  class _ReraiseExceptionTestHookPlugin:
-    @staticmethod
-    def _reraise_exception(test, err):
-      exc_class, exc, tb = err
-      print("Test %s, exception %s %s, reraise now." % (test, exc_class.__name__, exc))
-      raise exc
+  from returnn.log import log
+  # No propagate, use stdout directly.
+  log.initialize(verbosity=[5], propagate=False)
 
-    handleFailure = _reraise_exception
-    handleError = _reraise_exception
+  # Skip this if we are not in a debugger.
+  if test_program and in_debugger:  # nosetest, unittest
 
-  config = getattr(test_program, "config")
-  config.plugins.addPlugin(_ReraiseExceptionTestHookPlugin())
+    # Ok, try to install our plugin.
+    class _ReraiseExceptionTestHookPlugin:
+      @staticmethod
+      def _reraise_exception(test, err):
+        exc_class, exc, tb = err
+        print("Test %s, exception %s %s, reraise now." % (test, exc_class.__name__, exc))
+        raise exc
+
+      handleFailure = _reraise_exception
+      handleError = _reraise_exception
+
+    config = getattr(test_program, "config")
+    config.plugins.addPlugin(_ReraiseExceptionTestHookPlugin())
 
 
 setup()
