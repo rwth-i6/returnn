@@ -2733,10 +2733,8 @@ class RangeInAxisLayer(LayerBase):
     super(RangeInAxisLayer, self).__init__(**kwargs)
     source = self.sources[0].output
     axis = source.get_axis_from_description(axis)
-    axis_wo_b = source.get_batch_axis_excluding_batch(axis)
-    from returnn.tf.util.basic import get_shape
-    source_shape = get_shape(source.placeholder)
-    out = tf.range(0, source_shape[axis], dtype=dtype)
+    source_shape_dim = tf_util.get_shape_dim(source.placeholder, axis)
+    out = tf.range(0, source_shape_dim, dtype=dtype)
     if unbroadcast:
       raise Exception("%s: do not use unbroadcast")
     if keepdims:
