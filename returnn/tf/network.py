@@ -370,7 +370,7 @@ class TFNetwork(object):
                parent_layer=None, parent_net=None, extra_parent_net=None, extra_name_prefix=None,
                inside_rec_time_dim=None, over_rec_time_dim=None, over_rec_time_dim_subs=None,
                control_flow_ctx=None,
-               absolute_name_prefix=None, name=None):
+               absolute_name_prefix=None, name=""):
     """
     :param returnn.config.Config config: only needed to init extern_data if not specified explicitly
     :param ExternData|None extern_data:
@@ -388,11 +388,8 @@ class TFNetwork(object):
     :param set[Dim]|None over_rec_time_dim_subs: outer rec layer, out of loop, potential shorter
     :param returnn.tf.util.data.ControlFlowContext control_flow_ctx:
     :param str|None absolute_name_prefix: this is for representation
-    :param str|None name: only for debugging
+    :param str name: only for debugging
     """
-    if name is None:
-      from returnn.util.basic import try_get_caller_name
-      name = "<network via %s>" % try_get_caller_name(fallback="<unknown>")
     self.name = name
     if absolute_name_prefix:
       assert absolute_name_prefix.endswith("/")
