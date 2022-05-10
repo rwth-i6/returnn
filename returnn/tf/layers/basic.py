@@ -5876,7 +5876,7 @@ class ReduceLayer(_ConcatInputLayer):
 
           zeros = tf.zeros((), dtype=x.placeholder.dtype)
           # Cannot call x.placeholder.dtype.{min,max} in case input is e.g. a bool
-          if x.placeholder.dtype.is_floating:
+          if x.placeholder.dtype.is_floating or x.placeholder.dtype.is_integer:
             replacement_value = {
               tf.reduce_mean: zeros,
               tf.reduce_sum: zeros,
@@ -5888,7 +5888,7 @@ class ReduceLayer(_ConcatInputLayer):
               tf.reduce_any: zeros,
               tf.reduce_all: tf.ones((), dtype=x.placeholder.dtype)}[f]
           else:
-            assert False
+            raise TypeError("reduce: unexpected input type %r from input %s" % (x.placeholder.dtype, input_data))
 
           x_ = tf_util.where_bc(mask, x_, replacement_value, name="x_masked_axis_%i" % axis)
           if f == tf.reduce_mean:
