@@ -2450,7 +2450,7 @@ class RandomLayer(LayerBase):
       if static is None or static is False:
         assert auto_update_state is None or auto_update_state is True, (
           "%s: without explicit state, we always auto-update" % self)
-        with self.var_creation_scope():
+        with self.var_creation_scope(), tf_util.default_control_flow_ctx():
           if seed is None:
             seed = self.network.random.randint(2 ** 31, size=[32], dtype="uint32")
           gen = tf.random.Generator.from_seed(seed=seed, alg=algorithm_int)
