@@ -3121,10 +3121,9 @@ class Data(object):
     :rtype: object
     """
     return (
-      self.name, self.dtype,
+      self.dtype,
       self.shape,
       self.batch_dim_axis, self.feature_dim_axis, self.time_dim_axis,
-      sorted(self.size_placeholder.keys()),
       self.dim_tags,
       self.batch, self.beam)
 
