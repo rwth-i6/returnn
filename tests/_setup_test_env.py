@@ -47,7 +47,8 @@ def setup():
   better_exchook.replace_traceback_format_tb()
 
   from returnn.log import log
-  log.initialize(verbosity=[5], propagate=True)
+  # No propagate, use stdout directly.
+  log.initialize(verbosity=[5], propagate=False)
 
   # TF is optional.
   # Note that importing TF still has a small side effect:
@@ -141,10 +142,6 @@ def _try_hook_into_tests():
     # Multiple tests are being run. Do not hook into this.
     # We only want to install the hook if there is only a single test case.
     return
-
-  from returnn.log import log
-  # No propagate, use stdout directly.
-  log.initialize(verbosity=[5], propagate=False)
 
   # Skip this if we are not in a debugger.
   if test_program and in_debugger:  # nosetest, unittest
