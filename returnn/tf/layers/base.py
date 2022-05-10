@@ -1022,7 +1022,11 @@ class LayerBase(object):
 
      * the param sharing logic, to reuse existing variables from elsewhere
      * variational noise
-     * Note: :func:`default_control_flow_ctx` should not be needed, as tf.get_variable should always work
+     * Note: :func:`default_control_flow_ctx` is not needed for tf.get_variable.
+       But it might be needed for other code which uses custom inits and tf.Variable,
+       e.g. tf.random.Generator.
+       However, always using this could be a problem if we use other input tensors inside this scope,
+       so we do not enable this here.
 
     :param kwargs: passed to variable_scope
     :return: yields the variable_scope
