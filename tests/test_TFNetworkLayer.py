@@ -4395,6 +4395,101 @@ def test_CondLayer_subnetwork_train():
       raise
 
 
+def test_CondLayer_subnet_template_construct():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+  time_dim = SpatialDim('time')
+  feat_dim = FeatureDim('feat', 5)
+
+  config = Config(dict(
+    extern_data={
+      'data': {
+        'dim_tags': (batch_dim, time_dim, feat_dim),
+        'dtype': 'float32',
+        'available_for_inference': True
+      }
+    },
+    debug_runtime_sanity_checks=True,
+    debug_print_layer_output_shape=True,
+    debug_print_layer_output=True,
+  ))
+
+  class _EvalFuncLocals:
+    graph_call_count = 0
+    session_call_count = 0
+
+  def _py_func(x):
+    _EvalFuncLocals.session_call_count += 1
+    return x
+
+  def _eval_func(source, **_kwargs):
+    _EvalFuncLocals.graph_call_count += 1
+    x = source(0)
+    y, = tf_compat.v1.py_func(_py_func, [x], [x.dtype], stateful=True)
+    y.set_shape(x.get_shape())
+    return y
+
+  net_dict = {
+    'specaugment_v2': {
+      'class': 'subnetwork',
+      'from': [],
+      'subnetwork': {
+        'train_flag': {'class': 'train_flag'},
+        'cond': {
+          'class': 'cond',
+          'from': [],
+          'condition': 'train_flag',
+          'true_layer': {
+            'class': 'subnetwork',
+            'from': [],
+            'subnetwork': {
+              'scores': {
+                "class": "reduce", "from": "base:base:data", "mode": "sum",
+                "axis": [batch_dim, time_dim, feat_dim],
+                "out_shape": {}
+              },
+              'output': {
+                'class': 'eval', "from": "scores", "eval": _eval_func
+              },
+            }
+          },
+          'false_layer': {
+            'class': 'subnetwork',
+            'from': [],
+            'subnetwork': {
+              'output': {
+                'class': 'constant', "value": -1., 'out_shape': {}
+              }
+            }
+          },
+          'name_scope': ''
+        },
+        "output": {"class": "copy", "from": "cond"},
+      },
+    },
+    'output': {
+      'class': 'copy',
+      'from': 'specaugment_v2',
+    }
+  }
+
+  with make_scope() as session:
+    train_flag = tf_util.get_global_train_flag_placeholder()
+    net = TFNetwork(config=config, train_flag=train_flag)
+    net.construct_from_dict(net_dict)
+    assert _EvalFuncLocals.graph_call_count == 1  # if more often, set a breakpoint above
+    net.initialize_params(session)
+    feed_dict = make_feed_dict(net.extern_data)
+    feed_dict[train_flag] = False
+    res_eval = session.run(net.get_default_output_layer().output.placeholder, feed_dict=feed_dict)
+    print("eval:", res_eval)
+    assert _EvalFuncLocals.session_call_count == 0
+    feed_dict[train_flag] = True
+    res_train = session.run(net.get_default_output_layer().output.placeholder, feed_dict=feed_dict)
+    print("train:", res_train)
+    assert _EvalFuncLocals.session_call_count == 1
+
+
 def test_ScatterNdLayer_RangeLayer():
   from returnn.tf.util.data import batch_dim, Dim
   n_batch, n_time, n_ts, n_out = 2, 3, 6, 11
