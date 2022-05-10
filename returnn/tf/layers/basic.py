@@ -7947,6 +7947,7 @@ class CondLayer(LayerBase):
     if isinstance(layer_desc, LayerBase):
       return layer_desc
     layer_desc = layer_desc.copy()
+    layer_desc["encapsulate"] = True
     layer_class = layer_desc.pop("class")
     assert issubclass(layer_class, LayerBase)
     extra_net = self.network.make_extra_net(
@@ -7987,6 +7988,7 @@ class CondLayer(LayerBase):
     layer_class = get_layer_class(class_name)
     layer_desc["_network"] = extra_net
     layer_desc["_name"] = name
+    layer_desc["encapsulate"] = True
     layer_class.transform_config_dict(layer_desc, network=extra_net, get_layer=get_layer)
     layer_desc["class"] = layer_class  # will later pop again
     d[key] = layer_desc
