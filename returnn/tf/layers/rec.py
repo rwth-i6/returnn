@@ -1613,7 +1613,7 @@ class _SubnetworkRecCell(object):
           old_output = layer.output
           direct_get_layer.construct(layer.name)
           if layer.output.get_compare_key() != old_output.get_compare_key():
-            recent_changes.append((old_output, layer.output))
+            recent_changes.append(("layer %r:" % layer.name, old_output, "vs", layer.output))
         if len(ConstructCtx.partially_finished) < old_len:
           # Ok, this is some real progress.
           continue
