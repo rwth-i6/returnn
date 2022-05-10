@@ -4373,8 +4373,12 @@ class RecLastOutputLayer(LayerBase):
     :param str sub_layer_name:
     :rtype: Data
     """
-    assert isinstance(rec_layer, RecLayer)
-    cell = rec_layer.cell
+    if isinstance(rec_layer, _TemplateLayer):
+      assert issubclass(rec_layer.layer_class_type, RecLayer)
+      cell = rec_layer.kwargs["unit"]
+    else:
+      assert isinstance(rec_layer, RecLayer)
+      cell = rec_layer.cell
     assert isinstance(cell, _SubnetworkRecCell)
     return cell.layer_data_templates[sub_layer_name].output
 
