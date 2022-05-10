@@ -1146,6 +1146,10 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                 lineno = f.f_lineno
             co = f.f_code
             filename = co.co_filename
+            if not os.path.isfile(filename):
+                alt_fn = fallback_findfile(filename)
+                if alt_fn:
+                    filename = alt_fn
             name = get_func_str_from_code_object(co)
             file_descr = "".join([
                 '  ',
@@ -1153,13 +1157,6 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                 color("line ", color.fg_colors[0]), color("%d" % lineno, color.fg_colors[4]), ", ",
                 color("in ", color.fg_colors[0]), name])
             with output.fold_text_ctx(file_descr):
-                if not os.path.isfile(filename):
-                    alt_fn = fallback_findfile(filename)
-                    if alt_fn:
-                        output(
-                            color("    -- couldn't find file, trying this instead: ", color.fg_colors[0]) +
-                            format_filename(alt_fn))
-                        filename = alt_fn
                 source_code = get_source_code(filename, lineno, f.f_globals)
                 if source_code:
                     source_code = remove_indent_lines(replace_tab_indents(source_code)).rstrip()
