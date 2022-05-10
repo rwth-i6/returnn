@@ -2803,6 +2803,105 @@ def test_TopKLayer_two_axes():
     assert (indices1_np == numpy.array([4, 3])[None]).all()
 
 
+def test_TopKLayer_in_cond_kdim():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+  time_dim = SpatialDim('time')
+  feat_dim = FeatureDim('feat', 5)
+
+  config = Config(dict(
+    extern_data={
+      'data': {
+        'dim_tags': (batch_dim, time_dim, feat_dim),
+        'dtype': 'float32',
+        'available_for_inference': True
+      }
+    },
+    debug_runtime_sanity_checks=True,
+    debug_print_layer_output_shape=True,
+    debug_print_layer_output=True,
+  ))
+
+  k_dim = SpatialDim('feature_masking:num')
+
+  net_dict = {
+    'specaugment_v2': {
+      'class': 'subnetwork',
+      'from': [],
+      'subnetwork': {
+        'train_flag': {'class': 'train_flag'},
+        'cond': {
+          'class': 'cond',
+          'from': [],
+          'condition': 'train_flag',
+          'true_layer': {
+            'class': 'subnetwork',
+            'from': [],
+            'subnetwork': {
+              'k': {
+                'class': 'random', "shape": (), "distribution": "uniform", "dtype": "int32",
+                "minval": 2, "maxval": 4,
+              },
+              'scores': {
+                "class": "reduce", "from": "base:base:data", "mode": "max", "axis": time_dim,
+                "out_shape": {batch_dim, feat_dim}
+              },
+              'top_k': {
+                'class': 'top_k',
+                'from': 'scores',
+                'axis': feat_dim,
+                'k': 'k',
+                'k_dim': k_dim,
+                'sorted': True,
+                'out_shape': {batch_dim, k_dim}
+              },
+              'range_in_axis': {
+                'class': 'range_in_axis',
+                'from': 'top_k/indices',
+                'axis': k_dim,
+                'out_shape': {k_dim}
+              },
+              'output': {
+                'class': 'reduce', 'from': 'range_in_axis', "mode": "max",
+                "axis": k_dim
+              }
+            }
+          },
+          'false_layer': {
+            'class': 'subnetwork',
+            'from': [],
+            'subnetwork': {
+              'output': {
+                'class': 'constant', "value": -1, "dtype": "int32",
+                'out_shape': {}
+              }
+            }
+          },
+          'name_scope': ''
+        },
+        "output": {"class": "copy", "from": "cond"},
+      },
+    },
+    'output': {
+      'class': 'copy',
+      'from': 'specaugment_v2',
+    }
+  }
+
+  with make_scope() as session:
+    train_flag = tf_util.get_global_train_flag_placeholder()
+    net = TFNetwork(config=config, train_flag=train_flag)
+    net.construct_from_dict(net_dict)
+    net.initialize_params(session)
+    feed_dict = make_feed_dict(net.extern_data)
+    feed_dict[train_flag] = False
+    res_eval = session.run(net.get_default_output_layer().output.placeholder, feed_dict=feed_dict)
+    print("eval:", res_eval)
+    feed_dict[train_flag] = True
+    res_train = session.run(net.get_default_output_layer().output.placeholder, feed_dict=feed_dict)
+    print("train:", res_train)
+
+
 def test_specaugment_pure_returnn_reduced_with_cond():
   from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim, ImplicitSparseDim
 
