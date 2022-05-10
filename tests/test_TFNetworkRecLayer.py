@@ -5878,6 +5878,88 @@ def test_reclayer_scalar_size():
     session.run(network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(network.extern_data))
 
 
+def test_reclayer_shape_from_initial():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+  time_dim = SpatialDim('time')
+  input_dim = FeatureDim('input', 13)
+  loop_dim = SpatialDim('loop-dim')
+
+  config = Config({"extern_data": {'data': {'dim_tags': (batch_dim, time_dim, input_dim)}}})
+
+  net_dict = {
+    'output': {
+      'class': 'copy',
+      'from': 'loop/output',
+      'out_shape': {batch_dim, input_dim, loop_dim}
+    },
+    'constant': {'class': 'constant', 'value': 10},
+    'loop': {
+      'class': 'rec',
+      'from': [],
+      'unit': {
+        'add': {
+          'class': 'eval',
+          'from': 'prev:add',
+          'eval': 'source(0) + 1.0',
+          'initial_output': 'base:zeros',
+          'out_shape': {batch_dim}
+        },
+        'greater_equal': {
+          'class': 'compare',
+          'from': 'add',
+          'kind': 'greater_equal',
+          'value': 5.0,
+          'out_shape': {batch_dim}
+        },
+        'end': {
+          'class': 'copy',
+          'from': 'greater_equal',
+          'out_shape': {batch_dim}
+        },
+        'reduce': {
+          'class': 'reduce',
+          'from': 'base:data:data',
+          'mode': 'mean',
+          'axis': time_dim,
+          'out_shape': {batch_dim, input_dim}
+        },
+        'mul': {
+          'class': 'combine',
+          'from': ['add', 'reduce'],
+          'kind': 'mul',
+          'out_shape': {batch_dim, input_dim}
+        },
+        'output': {
+          'class': 'copy',
+          'from': 'mul',
+          'out_shape': {batch_dim, input_dim}
+        }
+      },
+      'max_seq_len_via': 'constant',
+      'axis': loop_dim,
+      'include_eos': True,
+      'out_shape': {batch_dim, input_dim, loop_dim},
+      'name_scope': ''
+    },
+    'zeros': {
+      'class': 'constant',
+      'value': 0,
+      'shape': [
+        batch_dim
+      ],
+      'dtype': 'float32'
+    }
+  }
+
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    out = net.get_default_output_layer().output
+    from test_TFNetworkLayer import make_feed_dict
+    session.run(out.placeholder, feed_dict=make_feed_dict(net.extern_data))
+
+
 def test_convert_lstm_params_save_load():
   """
   Test conversions from different units to different units.
