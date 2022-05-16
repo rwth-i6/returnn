@@ -5892,9 +5892,7 @@ class ReduceLayer(_ConcatInputLayer):
 
           x_ = tf_util.where_bc(mask, x_, replacement_value, name="x_masked_axis_%i" % axis)
           if f == tf.reduce_mean:
-            seq_len_bc = tf.reshape(
-              x.get_sequence_lengths(),
-              [1 if (i != x.batch_dim_axis) else -1 for i in range(x.batch_ndim)])  # (1,..B..,1)
+            seq_len_bc = x.get_sequence_lengths_broadcast(axis=axis)
             x_ = x_ / tf.cast(seq_len_bc, tf.float32)
             f = tf.reduce_sum
       elif f == tf.reduce_mean:

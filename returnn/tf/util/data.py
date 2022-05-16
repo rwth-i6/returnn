@@ -5105,6 +5105,26 @@ class Data(object):
         assert seq_mask.get_shape().ndims == self.batch_ndim
     return seq_mask
 
+  def get_sequence_lengths_broadcast(self, axis=None):
+    """
+    :param int|None axis:
+    :return: seq len of some shape which is broadcastable to self.placeholder.
+      Note that this is not always possible, e.g. when the seq len has shape [B]
+      but the tensor has just shape [T]. We currently throw an error then.
+    :rtype: tf.Tensor
+    """
+    if axis is None:
+      assert self.time_dim_axis is not None
+      axis = self.time_dim_axis
+    if axis < 0:
+      assert axis + self.batch_ndim > 0
+      axis += self.batch_ndim
+    assert 0 <= axis < self.batch_ndim
+    assert axis != self.batch_dim_axis
+    tag = self.dim_tags[axis]
+    assert tag.dyn_size_ext
+    return tag.dyn_size_ext.copy_compatible_to(self, check_dtype=False, check_sparse=False).placeholder
+
   def copy_masked(self, mask_value):
     """
     :param float|int|tf.Tensor mask_value:
