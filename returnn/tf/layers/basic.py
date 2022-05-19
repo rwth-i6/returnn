@@ -4379,6 +4379,7 @@ class RepeatLayer(_ConcatInputLayer):
     original_axis = data.get_axis_from_description(axis, allow_int=False)
     tag = data.dim_tags[original_axis]
     data = data.copy_move_axis(original_axis, data.get_batch_axis(0))
+    out_dim.dyn_size_ext = tag.dyn_size_ext.copy_template()
     if isinstance(repetitions, int):
       out_dim_ = tag * repetitions
     else:
