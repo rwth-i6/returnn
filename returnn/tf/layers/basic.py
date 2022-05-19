@@ -4304,7 +4304,7 @@ class RepeatLayer(_ConcatInputLayer):
       repetitions_data, other_batch=self.input_data.batch)  # [B, T]
 
     dyn_axis = repetitions_data.get_axes(exclude_batch=True)[0]  # can only have one axis
-    if repetitions_data.has_dynamic_size(dyn_axis):
+    if repetitions_data.has_dynamic_size(dyn_axis) and repetitions_data.batch_ndim >= 2:
       # apply correct zero masking for repetitions
       mask = repetitions_data.get_sequence_mask_broadcast(axis=dyn_axis)
       zeros = tf.zeros((), dtype=repetitions_data.placeholder.dtype)
@@ -4335,7 +4335,7 @@ class RepeatLayer(_ConcatInputLayer):
     res.set_shape(self.output.batch_shape)
     self.output.placeholder = res  # [B, T', ...] or [T', ...]
     # set size placeholders
-    output_axis = self.output.get_axis_from_description(axis)
+    output_axis = input_axis
     tag = self.output.dim_tags[output_axis]
     if tag.dimension is None and tag.dyn_size is None:  # dynamic? dyn sizes needed?
       tag.set_tag_on_size_tensor(target_seq_len, batch=self.output.batch)

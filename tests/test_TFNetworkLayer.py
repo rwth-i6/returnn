@@ -4635,6 +4635,33 @@ def test_RepeatLayer_int_repetitions():
     numpy.testing.assert_allclose(ref, v, rtol=1e-5)
 
 
+def test_RepeatLayer_int():
+  # https://github.com/rwth-i6/returnn_common/issues/162
+  from returnn.tf.util.data import batch_dim, SpatialDim
+  time_dim = SpatialDim('time')
+  config = Config({"extern_data": {"data": {"dim_tags": (batch_dim, time_dim), "dtype": "float32"}}})
+  _repeat_out_dim = time_dim * 5
+  net_dict = {
+    'output': {
+      'class': 'repeat',
+      'from': 'data:data',
+      'repetitions': 5,
+      'axis': time_dim,
+      'out_dim': _repeat_out_dim,
+      'out_shape': {batch_dim, _repeat_out_dim}
+    },
+  }
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    in_ = net.extern_data.data["data"]
+    out = net.get_default_output_layer().output
+    _, in_seq_len, _, out_seq_len = session.run(
+      (in_.placeholder, in_.get_sequence_lengths(), out.placeholder, out.get_sequence_lengths()),
+      feed_dict=make_feed_dict(net.extern_data))
+    assert (in_seq_len * 5 == out_seq_len).all()
+
+
 def test_TileLayer():
   with make_scope() as session:
     n_out = 5
