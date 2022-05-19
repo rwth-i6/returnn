@@ -5072,6 +5072,7 @@ class Data(object):
     assert axis != self.batch_dim_axis
     tag = self.dim_tags[axis]
     assert tag.dyn_size_ext
+    assert set(tag.dyn_size_ext.dim_tags).issubset(self.dim_tags)  # https://github.com/rwth-i6/returnn/issues/721
     with tf.name_scope("get_sequence_mask_broadcast"):
       if tag.dyn_size_ext.have_batch_axis() and tag.dyn_size_ext.batch_ndim == 1:  # just [B]
         # This is the common case where the size is of shape [B].
@@ -5093,7 +5094,6 @@ class Data(object):
         # We use the assumption that self.placeholder.shape[axis] == max_idx.
         idx_range = tf.range(max_idx)
         idx_range = tf.reshape(idx_range, [1] * axis + [max_idx] + [1] * (self.batch_ndim - axis - 1))
-        assert set(tag.dyn_size_ext.dim_tags).issubset(self.dim_tags)  # https://github.com/rwth-i6/returnn/issues/721
         # size_ext might have invalid (zero) sizes when it itself has some padding, e.g. when its own shape is dynamic.
         # A zero size can lead to problems in some cases, e.g. in SoftmaxOverSpatialLayer,
         # when everything is masked to -inf, it results in nan, and this likely produces nan in backprop or elsewhere.
