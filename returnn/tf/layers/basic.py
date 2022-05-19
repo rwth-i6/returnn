@@ -2540,6 +2540,21 @@ class RandomLayer(LayerBase):
     for attrib in ("mean", "stddev", "bound", "minval", "maxval", "explicit_state"):
       if attrib in d and isinstance(d[attrib], str):
         d[attrib] = get_layer(d[attrib])
+    # We need special care in case this is inside a RecLayer.
+    # https://github.com/rwth-i6/returnn/issues/1044
+    # When this layer stays inside the loop, all is fine.
+    # When it is moved out, we must add the loop dim
+    # such that we get different random values in each loop iteration.
+    # When the loop dim is not defined yet because of a dynamic loop ("end" layer),
+    # this is not possible, so we must make sure the layer stays inside the loop.
+    inside_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=True)
+    over_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=False)
+    if over_rec_time_dim:
+      collocate_with = list(d.get("collocate_with", None) or [])
+      collocate_with.append("end")  # in case the "end" layer is used, it will be collocated
+      d["collocate_with"] = collocate_with
+    if over_rec_time_dim and not inside_rec_time_dim:  # moved out of loop
+      d["shape"] = [over_rec_time_dim] + list(d["shape"])
 
   @classmethod
   def get_out_data_from_opts(cls, name, shape, dtype="float32", **kwargs):
