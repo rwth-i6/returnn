@@ -4862,6 +4862,81 @@ def test_rand_indices():
     assert_equal(output.shape, (n_batch, n_time, sz[-1].dimension, feature_dim.dimension))
 
 
+def test_RandomLayer_in_loop():
+  # https://github.com/rwth-i6/returnn/issues/1044
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  time_dim = SpatialDim('time')
+  input_dim = FeatureDim('input', 3)
+  config = Config({"extern_data": {"data": {"dim_tags": (batch_dim, time_dim, input_dim)}}})
+  random_state_dim = FeatureDim('random-state', 3)
+  net_dict = {
+    'output': {
+      'class': 'rec',
+      'from': "data",
+      'unit': {
+        'rnd': {
+          'class': 'subnetwork',
+          'from': [],
+          'subnetwork': {
+            'random': {
+              'class': 'random',
+              'shape': [
+                batch_dim,
+                input_dim
+              ],
+              'distribution': 'normal',
+              'mean': 0.0,
+              'stddev': 1.0,
+              'explicit_state': 'base:base:rnd_state_var0',
+              'auto_update_state': True
+            },
+            'output': {
+              'class': 'copy',
+              'from': 'random',
+              'out_shape': {batch_dim, input_dim}
+            }
+          },
+          'out_shape': {batch_dim, input_dim}
+        },
+        'output': {
+          'class': 'eval',
+          'from': ['data:source', 'rnd'],
+          'eval': 'source(0) * 0.0 + source(1)',
+          'out_shape': {batch_dim, input_dim}
+        },
+      },
+      'axis': time_dim,
+      'out_shape': {batch_dim, time_dim, input_dim},
+      'name_scope': ''
+    },
+    'random_state_init': {
+      'class': 'random_state_init',
+      'out_dim': random_state_dim,
+      'out_shape': {random_state_dim}
+    },
+    'rnd_state_var0': {
+      'class': 'variable',
+      'shape': [
+        random_state_dim
+      ],
+      'param_name': 'param',
+      'dtype': 'int64',
+      'init_by_layer': 'random_state_init',
+      'name_scope': 'rnd/state_var0'
+    }
+  }
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    net.initialize_params(session)
+    out = net.get_default_output_layer().output.copy_as_time_major()
+    out_np = session.run(out.placeholder, feed_dict=make_feed_dict(net.extern_data))
+    print(out_np)
+    out0_np = out_np[:1]  # [1,B,D]
+    print((out0_np == out_np))
+    assert not (out0_np == out_np).all()  # not all the same
+
+
 def test_untrainable_params():
   with make_scope() as session:
     config = Config()
