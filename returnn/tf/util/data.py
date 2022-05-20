@@ -5639,6 +5639,7 @@ def _infer_dim_tags_tuple_from_shape(
   dim_tags = dim_tags.copy() if dim_tags else {}
   if batch_dim_axis is not None and batch_dim_axis not in dim_tags:
     dim_tags[batch_dim_axis] = Dim(kind=Dim.Types.Batch, description="batch:%s" % name)
+  # noinspection PyShadowingNames
   batch_dim = dim_tags[batch_dim_axis] if batch_dim_axis is not None else None
   # Note: Consistent to Data.get_dim_tag,
   # prefer interpretation as spatial axis if there is a dynamic size or this is marked as time axis.
