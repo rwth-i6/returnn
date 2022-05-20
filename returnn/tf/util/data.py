@@ -5586,16 +5586,21 @@ def _batch_shape_from_shape(shape, batch_dim_axis):
     return shape
 
 
-def _create_size_placeholder(name, axis_wo_b, tag):
+# noinspection PyShadowingNames
+def _create_size_placeholder(name, axis_wo_b, tag, batch_dim):
   """
   :param str name:
   :param int axis_wo_b:
   :param Dim tag:
+  :param Dim|None batch_dim:
   """
   from .basic import reuse_name_scope
   with reuse_name_scope("extern_data/placeholders/%s" % name, absolute=True):
+    dyn_size_ext = Data(
+      "%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, dim_tags=[batch_dim] if batch_dim else None)
     dyn_size = tf_compat.v1.placeholder(
-      name="%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, shape=(None,))
+      name=dyn_size_ext.name, dtype=dyn_size_ext.dtype, shape=dyn_size_ext.batch_shape)
+    tag.dyn_size_ext = dyn_size_ext
     tag.set_tag_on_size_tensor(dyn_size)
 
 
@@ -5634,6 +5639,7 @@ def _infer_dim_tags_tuple_from_shape(
   dim_tags = dim_tags.copy() if dim_tags else {}
   if batch_dim_axis is not None and batch_dim_axis not in dim_tags:
     dim_tags[batch_dim_axis] = Dim(kind=Dim.Types.Batch, description="batch:%s" % name)
+  batch_dim = dim_tags[batch_dim_axis] if batch_dim_axis is not None else None
   # Note: Consistent to Data.get_dim_tag,
   # prefer interpretation as spatial axis if there is a dynamic size or this is marked as time axis.
   if size_placeholder:
@@ -5669,7 +5675,7 @@ def _infer_dim_tags_tuple_from_shape(
           # This is such that Dim.is_equal behaves as before, e.g. in Data.get_common_data.
           kind=Dim.Types.Spatial)
         dim_tags[axis] = tag
-      _create_size_placeholder(name=name, axis_wo_b=axis_wo_b, tag=tag)
+      _create_size_placeholder(name=name, axis_wo_b=axis_wo_b, tag=tag, batch_dim=batch_dim)
       dyn_size = tag.dyn_size
     if tag:
       # Just some sanity checks.
@@ -5707,6 +5713,7 @@ def _auto_create_size_placeholders_on_dim_tags(name, dim_tags):
   :param tuple[Dim] dim_tags:
   """
   batch_dim_axis = _batch_dim_axis_from_dim_tags_tuple(dim_tags)
+  batch_dim_ = dim_tags[batch_dim_axis] if batch_dim_axis is not None else None
   for axis, tag in enumerate(dim_tags):
     if tag.is_batch_dim():
       continue
@@ -5717,7 +5724,7 @@ def _auto_create_size_placeholders_on_dim_tags(name, dim_tags):
     if tag.dyn_size is not None:
       continue
     axis_wo_b = _get_axis_wo_b(axis, batch_dim_axis=batch_dim_axis)
-    _create_size_placeholder(name=name, axis_wo_b=axis_wo_b, tag=tag)
+    _create_size_placeholder(name=name, axis_wo_b=axis_wo_b, tag=tag, batch_dim=batch_dim_)
 
 
 def _get_axis_wo_b(axis_wb, batch_dim_axis, batch_ndim=None):
