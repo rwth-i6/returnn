@@ -238,12 +238,12 @@ class Updater(object):
         factor = tf.pow(
           tf.constant(opts["decay"], name="decay", dtype=tf.float32),
           tf.cast(step_in_interval, dtype=tf.float32, name="step_in_interval_float"), name="factor")
-        lr *= factor
+        lr = lr * factor
         opts.assert_all_read()
     if self.config.is_true("use_horovod") and self.config.is_true("horovod_scale_lr"):
       # noinspection PyPackageRequirements,PyUnresolvedReferences
       import horovod.tensorflow as hvd
-      lr *= hvd.size()
+      lr = lr * hvd.size()
     return lr
 
   def create_optim_op(self):
