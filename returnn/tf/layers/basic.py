@@ -6014,7 +6014,7 @@ class ReduceLayer(_ConcatInputLayer):
       out_feature_dim_axis = None
       assert len(axes) == 1
       sparse_dim = x.dim_tags[axes[0]]
-    data = Data(
+    return Data(
       name="%s_output" % name,
       dim_tags=y_dim_tags,
       batch_dim_axis=out_batch_dim_axis,
@@ -6022,10 +6022,8 @@ class ReduceLayer(_ConcatInputLayer):
       feature_dim_axis=out_feature_dim_axis,
       dtype="int32" if sparse_out else x.dtype,
       sparse_dim=sparse_dim,
-      beam=x.beam)
-    if x.batch:
-      data.batch = x.batch
-    return data
+      beam=x.beam,
+      batch=x.batch)
 
 
 class ReduceOutLayer(_ConcatInputLayer):
