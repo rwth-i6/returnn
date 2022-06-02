@@ -5260,7 +5260,9 @@ class ConvLayer(_ConcatInputLayer):
       dim_tags += out_spatial_dims
     else:
       for i in range(len(filter_size)):
-        old_tag = old_spatial_dim_tags[i] if i < len(old_spatial_dim_tags) else None
+        old_tag = old_spatial_dim_tags[i].copy(
+                    same_as_self=False, description=old_spatial_dim_tags[i].description
+                ) if i < len(old_spatial_dim_tags) else None
         if old_tag and (filter_size[i] == strides[i] == 1 or (strides[i] == 1 and padding == "SAME")):
           dim_tags.append(old_tag)  # identity in this axis
           continue
