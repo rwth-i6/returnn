@@ -7229,6 +7229,59 @@ def test_loss_cross_entropy_as_is_optimize_flatten():
     session.run(loss, feed_dict=make_feed_dict(net.extern_data))
 
 
+def test_reduce_with_flatten():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  time_dim = SpatialDim("time")
+  feature_dim = FeatureDim("feat", 1)
+  config = Config({"extern_data": {"data": {"dim_tags": (batch_dim, time_dim, feature_dim), "dtype": "float32"}},
+                   "behavior_version": 12},)
+  net_dict = {
+  'exp': {
+    'class': 'activation',
+    'from': 'data:data',
+    'activation': 'exp',
+    'out_shape': {batch_dim, time_dim, feature_dim}
+  },
+  'mean_absolute_difference': {
+    'class': 'subnetwork',
+    'from': [],
+    'subnetwork': {
+      'sub': {
+        'class': 'combine',
+        'from': ['base:exp', 'base:data:data'],
+        'kind': 'sub',
+        'out_shape': {batch_dim, time_dim, feature_dim}
+      },
+      'abs': {
+        'class': 'activation',
+        'from': 'sub',
+        'activation': 'abs',
+        'out_shape': {batch_dim, time_dim, feature_dim}
+      },
+      # this seems to be the problem
+      'reduce': {
+        'class': 'reduce',
+        'from': 'abs',
+        'mode': 'mean',
+        'axis': feature_dim,
+        'out_shape': {batch_dim, time_dim}
+      },
+      'output': {
+        'class': 'copy',
+        'from': 'reduce',
+        'out_shape': {batch_dim, time_dim}
+      }
+    },
+    'loss': 'as_is',
+    'out_shape': {batch_dim, time_dim},
+  },
+}
+  with make_scope():
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict(net_dict)
+    net.get_total_loss()
+
+
 def test_LossLayer_sublayers():
   from returnn.tf.util.basic import Dim
   n_in, n_out = 7, 11
