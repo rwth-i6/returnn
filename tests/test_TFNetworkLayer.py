@@ -7236,45 +7236,44 @@ def test_reduce_with_flatten():
   config = Config({"extern_data": {"data": {"dim_tags": (batch_dim, time_dim, feature_dim), "dtype": "float32"}},
                    "behavior_version": 12},)
   net_dict = {
-  'exp': {
-    'class': 'activation',
-    'from': 'data:data',
-    'activation': 'exp',
-    'out_shape': {batch_dim, time_dim, feature_dim}
-  },
-  'mean_absolute_difference': {
-    'class': 'subnetwork',
-    'from': [],
-    'subnetwork': {
-      'sub': {
-        'class': 'combine',
-        'from': ['base:exp', 'base:data:data'],
-        'kind': 'sub',
-        'out_shape': {batch_dim, time_dim, feature_dim}
-      },
-      'abs': {
-        'class': 'activation',
-        'from': 'sub',
-        'activation': 'abs',
-        'out_shape': {batch_dim, time_dim, feature_dim}
-      },
-      # this seems to be the problem
-      'reduce': {
-        'class': 'reduce',
-        'from': 'abs',
-        'mode': 'mean',
-        'axis': feature_dim,
-        'out_shape': {batch_dim, time_dim}
-      },
-      'output': {
-        'class': 'copy',
-        'from': 'reduce',
-        'out_shape': {batch_dim, time_dim}
-      }
+    'exp': {
+      'class': 'activation',
+      'from': 'data:data',
+      'activation': 'exp',
+      'out_shape': {batch_dim, time_dim, feature_dim}
     },
-    'loss': 'as_is',
-    'out_shape': {batch_dim, time_dim},
-  },
+    'mean_absolute_difference': {
+      'class': 'subnetwork',
+      'from': [],
+      'subnetwork': {
+        'sub': {
+          'class': 'combine',
+          'from': ['base:exp', 'base:data:data'],
+          'kind': 'sub',
+          'out_shape': {batch_dim, time_dim, feature_dim}
+        },
+        'abs': {
+          'class': 'activation',
+          'from': 'sub',
+          'activation': 'abs',
+          'out_shape': {batch_dim, time_dim, feature_dim}
+        },
+        'reduce': {
+          'class': 'reduce',
+          'from': 'abs',
+          'mode': 'mean',
+          'axis': feature_dim,
+          'out_shape': {batch_dim, time_dim}
+        },
+        'output': {
+          'class': 'copy',
+          'from': 'reduce',
+          'out_shape': {batch_dim, time_dim}
+        }
+      },
+      'loss': 'as_is',
+      'out_shape': {batch_dim, time_dim},
+    },
 }
   with make_scope():
     net = TFNetwork(config=config, train_flag=True)
