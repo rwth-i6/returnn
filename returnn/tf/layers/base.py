@@ -487,7 +487,7 @@ class LayerBase(object):
       output.available_for_inference = False
 
   @classmethod
-  def fixup_out_data(cls, output, network, out_shape=None, **kwargs):
+  def fixup_out_data(cls, output, network, out_shape=None, verify_shape=False, **kwargs):
     """
     This is called after get_out_data_from_opts, to fixup incomplete information.
     E.g. we can patch batch or beam information here
@@ -500,6 +500,7 @@ class LayerBase(object):
     :param returnn.tf.network.TFNetwork network:
     :param set[Dim|_MarkedDim]|tuple|list|None out_shape: verifies the output shape (dim tags).
       See :func:`Data.verify_out_shape`.
+    :param bool verify_shape: whether to verify the shape of the out_data
     :rtype: Data
     """
     from tensorflow.python.util import nest
@@ -558,7 +559,7 @@ class LayerBase(object):
         # Some layers might just copy the input. But the input might have buggy ctx.
         # Just leave the placeholder as-is. Most layers should anyway reset this.
         output.placeholder = x
-    if out_shape is not None:
+    if out_shape is not None and verify_shape:
       output.verify_out_shape(out_shape)
     return output
 
