@@ -559,10 +559,6 @@ class LayerBase(object):
         # Just leave the placeholder as-is. Most layers should anyway reset this.
         output.placeholder = x
     if out_shape is not None:
-      if output.batch:
-        for dim in output.batch.virtual_dims:
-          if isinstance(dim, BatchInfo.PackedDim):
-            out_shape.remove(dim.dim_tag)
       output.verify_out_shape(out_shape)
     return output
 

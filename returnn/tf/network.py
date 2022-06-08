@@ -1347,6 +1347,7 @@ class TFNetwork(object):
         opts = nest.map_structure(_map_layer_dict_value, opts)
       opts.pop("output", None)
       opts["output"] = layer_cls.get_out_data_from_opts(**opts)
+      opts.pop("out_shape", None)
       opts["output"] = layer_cls.fixup_out_data(**opts)
       print(
         "Loss flattened layer %s/%r output: %r" % (opts["network"].name, opts["name"], opts["output"]), file=log.v3)
