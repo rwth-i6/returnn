@@ -1304,7 +1304,7 @@ class TFNetwork(object):
     # We are very restrictive here to not break anything in case of unrelated bugs of other layers.
 
     from .util.data import BatchInfo
-    from .layers.basic import SourceLayer, InternalLayer, SubnetworkLayer, CopyLayer, FlattenBatchLayer
+    from .layers.basic import SourceLayer, InternalLayer, SubnetworkLayer, CopyLayer, CastLayer, FlattenBatchLayer
     from tensorflow.python.util import nest
 
     def _relevant_dims_for_layer(layer_):
@@ -1438,7 +1438,7 @@ class TFNetwork(object):
         if isinstance(layer_, SubnetworkLayer):
           layer_ = layer_.subnetwork.layers["output"]
           continue
-        if isinstance(layer_, CopyLayer) and len(layer_.sources) == 1:
+        if isinstance(layer_, CopyLayer) and len(layer_.sources) == 1 and not isinstance(layer_, CastLayer):
           layer_ = layer_.sources[0]
           continue
         return layer_
@@ -1480,7 +1480,6 @@ class TFNetwork(object):
         continue
       blacklist.add(layer)
       layer_queue.extend(_layer_deps(layer))
-
     # Collect back refs, starting from end points.
     deps_used_by_end_points = {layer: {layer} for layer in end_points}  # dep -> set(end points), direct and indirect
     deps_used_by = {layer: set() for layer in end_points}  # dep -> set(used by), direct dependencies only
