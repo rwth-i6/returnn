@@ -6021,7 +6021,8 @@ class ReduceLayer(_ConcatInputLayer):
       feature_dim_axis=out_feature_dim_axis,
       dtype="int32" if sparse_out else x.dtype,
       sparse_dim=sparse_dim,
-      beam=x.beam)
+      beam=x.beam,
+      batch=x.batch)
 
 
 class ReduceOutLayer(_ConcatInputLayer):
