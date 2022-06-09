@@ -7286,8 +7286,7 @@ def test_double_flatten_loss():
   time_dim = SpatialDim("time")
   _repeat_out_dim = time_dim * 5
   feature_dim = FeatureDim("feat", 1)
-  config = Config({"extern_data": {"data": {"dim_tags": (batch_dim, time_dim, feature_dim), "dtype": "int32"}},
-    "behavior_version": 12}, )
+  config = Config({"extern_data": {"data": {"dim_tags": (batch_dim, time_dim, feature_dim), "dtype": "int32"}})
   network = {
     'sub': {
       'class': 'combine',
