@@ -1304,7 +1304,7 @@ class TFNetwork(object):
     # We are very restrictive here to not break anything in case of unrelated bugs of other layers.
 
     from .util.data import BatchInfo
-    from .layers.basic import SourceLayer, InternalLayer, SubnetworkLayer, CopyLayer, CastLayer, FlattenBatchLayer
+    from .layers.basic import SourceLayer, InternalLayer, SubnetworkLayer, CopyLayer, FlattenBatchLayer
     from tensorflow.python.util import nest
 
     def _relevant_dims_for_layer(layer_):
@@ -1338,6 +1338,7 @@ class TFNetwork(object):
     def _make_layer(layer_cls, layer_dict, map_opts=True):
       """
       Creates the flattened layer
+
       :param type[LayerBase]|LayerBase layer_cls:
       :param dict[str] layer_dict:
       :param bool map_opts:
@@ -1368,6 +1369,7 @@ class TFNetwork(object):
     def _should_flatten_layer_output(layer_):
       """
       Decides whether layer output has right properties for flattening
+
       :param LayerBase layer_:
       :rtype: bool
       """
@@ -1385,6 +1387,7 @@ class TFNetwork(object):
     def _check_push_flattening_to_inputs_for_layer_simple(layer_):
       """
       Checks preconditions for input flattening
+
       :param LayerBase layer_:
       :rtype: bool
       """
@@ -1403,6 +1406,7 @@ class TFNetwork(object):
     def _check_push_flattening_to_inputs_for_layer(layer_):
       """
       Checks whether the inputs to the layer should be flattened aswell
+
       :param LayerBase layer_:
       :rtype: bool
       """
@@ -1436,6 +1440,7 @@ class TFNetwork(object):
     def _resolve_layer(layer_):
       """
       Flattens the layer structure, removes irrelevant layers and returns next successor layer
+
       :param LayerBase layer_:
       :return: next layer in succession
       :rtype: LayerBase
@@ -1480,6 +1485,7 @@ class TFNetwork(object):
       if layer in end_points:
         continue
       layer_queue.append(layer)
+
     while layer_queue:
       layer = layer_queue.pop(0)
       if layer in blacklist:
