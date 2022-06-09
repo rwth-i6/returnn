@@ -7233,8 +7233,7 @@ def test_reduce_with_flatten():
   from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
   time_dim = SpatialDim("time")
   feature_dim = FeatureDim("feat", 1)
-  config = Config({"extern_data": {"data": {"dim_tags": (batch_dim, time_dim, feature_dim), "dtype": "float32"}},
-                   "behavior_version": 12},)
+  config = Config({"extern_data": {"data": {"dim_tags": (batch_dim, time_dim, feature_dim), "dtype": "float32"}}})
   net_dict = {
     'exp': {
       'class': 'activation',
