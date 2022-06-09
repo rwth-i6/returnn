@@ -1337,6 +1337,8 @@ class TFNetwork(object):
 
     def _make_layer(layer_cls, layer_dict, map_opts=True):
       """
+      Creates the flattened layer
+
       :param type[LayerBase]|LayerBase layer_cls:
       :param dict[str] layer_dict:
       :param bool map_opts:
@@ -1366,6 +1368,8 @@ class TFNetwork(object):
 
     def _should_flatten_layer_output(layer_):
       """
+      Decides whether layer output has right properties for flattening
+
       :param LayerBase layer_:
       :rtype: bool
       """
@@ -1382,6 +1386,8 @@ class TFNetwork(object):
 
     def _check_push_flattening_to_inputs_for_layer_simple(layer_):
       """
+      Checks preconditions for input flattening
+
       :param LayerBase layer_:
       :rtype: bool
       """
@@ -1399,6 +1405,8 @@ class TFNetwork(object):
 
     def _check_push_flattening_to_inputs_for_layer(layer_):
       """
+      Checks whether the inputs to the layer should be flattened aswell
+
       :param LayerBase layer_:
       :rtype: bool
       """
@@ -1431,14 +1439,17 @@ class TFNetwork(object):
 
     def _resolve_layer(layer_):
       """
+      Flattens the layer structure, removes irrelevant layers and returns next successor layer
+
       :param LayerBase layer_:
+      :return: next layer in succession
       :rtype: LayerBase
       """
       while True:
         if isinstance(layer_, SubnetworkLayer):
           layer_ = layer_.subnetwork.layers["output"]
           continue
-        if isinstance(layer_, CopyLayer) and len(layer_.sources) == 1:
+        if type(layer_) is CopyLayer and len(layer_.sources) == 1:
           layer_ = layer_.sources[0]
           continue
         return layer_
