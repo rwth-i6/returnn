@@ -24,7 +24,7 @@ from returnn.datasets.basic import Dataset, DatasetSeq
 from .cached2 import CachedDataset2
 from returnn.log import log
 from returnn.util.task_system import Unpickler, numpy_copy_and_set_unused
-from returnn.util.basic import eval_shell_str, interrupt_main, unicode, PY3, BytesIO
+from returnn.util.basic import eval_shell_str, interrupt_main, unicode, PY3, BytesIO, close_all_fds_except
 
 
 class SprintDatasetBase(Dataset):
@@ -725,6 +725,7 @@ class ExternSprintDataset(SprintDatasetBase):
         sys.stdin.close()  # Force no tty stdin.
         self.pipe_c2p[0].close()
         self.pipe_p2c[1].close()
+        close_all_fds_except([0, 1, 2, self.pipe_c2p[1].fileno(), self.pipe_p2c[0].fileno()])
         os.execv(args[0], args)  # Does not return if successful.
         print("%s child exec failed." % self)
       except BaseException:

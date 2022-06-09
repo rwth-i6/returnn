@@ -19,7 +19,7 @@ import typing
 from threading import RLock, Thread
 import returnn.util.task_system as task_system
 from returnn.util.task_system import Pickler, Unpickler, numpy_set_unused
-from returnn.util.basic import eval_shell_str, make_hashable, BackendEngine
+from returnn.util.basic import eval_shell_str, make_hashable, BackendEngine, close_all_fds_except
 from returnn.log import log
 
 
@@ -137,6 +137,7 @@ class SprintSubprocessInstance:
         sys.stdin.close()  # Force no tty stdin.
         self.pipe_c2p[0].close()
         self.pipe_p2c[1].close()
+        close_all_fds_except([0, 1, 2, self.pipe_c2p[1].fileno(), self.pipe_p2c[0].fileno()])
         os.execv(args[0], args)  # Does not return if successful.
       except BaseException:
         print("SprintSubprocessInstance: Error when starting Sprint %r." % args, file=log.v1)

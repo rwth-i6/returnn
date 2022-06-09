@@ -3731,6 +3731,26 @@ def maybe_restart_returnn_with_atfork_patch():
   print("execvpe did not work?")
 
 
+def close_all_fds_except(except_fds):
+  """
+  Calls os.closerange except for the given fds.
+  Code adopted and extended from multiprocessing.util.close_all_fds_except.
+
+  :param typing.Collection[int] except_fds: usually at least {0,1,2}
+  """
+  try:
+    max_fd = os.sysconf("SC_OPEN_MAX")
+  except Exception:
+    max_fd = 256
+
+  except_fds = sorted(list(except_fds) + [-1, max_fd])
+  assert except_fds[0] == -1 and except_fds[-1] == max_fd, 'fd invalid'
+
+  for i in range(len(except_fds) - 1):
+    if except_fds[i] + 1 < except_fds[i + 1]:
+      os.closerange(except_fds[i] + 1, except_fds[i + 1])
+
+
 class Stats:
   """
   Collects mean and variance, running average.
