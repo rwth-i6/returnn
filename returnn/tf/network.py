@@ -1485,13 +1485,13 @@ class TFNetwork(object):
       if layer in end_points:
         continue
       layer_queue.append(layer)
-
     while layer_queue:
       layer = layer_queue.pop(0)
       if layer in blacklist:
         continue
       blacklist.add(layer)
       layer_queue.extend(_layer_deps(layer))
+
     # Collect back refs, starting from end points.
     deps_used_by_end_points = {layer: {layer} for layer in end_points}  # dep -> set(end points), direct and indirect
     deps_used_by = {layer: set() for layer in end_points}  # dep -> set(used by), direct dependencies only
