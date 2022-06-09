@@ -916,7 +916,6 @@ class Dim(object):
         self.dyn_size_ext = self_same_as.get_dyn_size_ext_for_batch_ctx(self.batch, self.control_flow_ctx)
     self_derived_bases = set(self.get_derived_bases_list())
     other_derived_bases = set(other.get_derived_bases_list())
-    assert self_derived_bases != other_derived_bases
     if self_derived_bases.issubset(other_derived_bases):
       # Avoid cycles on derived_from_tag. https://github.com/rwth-i6/returnn/issues/1054
       return other.declare_same_as(self)
