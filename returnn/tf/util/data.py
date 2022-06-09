@@ -3471,6 +3471,7 @@ class Data(object):
     if dim_tag.is_batch_dim():
       if unbroadcast:
         batch_info = dim_tag.src_data.batch if dim_tag.src_data else None
+        batch_info = batch_info or dim_tag.batch
         return self.copy_add_batch_dim(batch_dim_axis=axis, batch=batch_info, dim_tag=dim_tag)
       else:
         batch_info = BatchInfo.make_global_broadcast_batch_info()
