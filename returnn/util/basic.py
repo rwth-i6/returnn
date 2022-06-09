@@ -3738,6 +3738,7 @@ def close_all_fds_except(except_fds):
 
   :param typing.Collection[int] except_fds: usually at least {0,1,2}
   """
+  # noinspection PyBroadException
   try:
     max_fd = os.sysconf("SC_OPEN_MAX")
   except Exception:
