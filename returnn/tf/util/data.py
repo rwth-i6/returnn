@@ -853,7 +853,7 @@ class Dim(object):
 
   def get_derived_bases_list(self):
     """
-    :rtype: Dim
+    :rtype: list[Dim]
     """
     res = [self]
     base = self
