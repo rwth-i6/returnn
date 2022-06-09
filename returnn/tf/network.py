@@ -1437,7 +1437,7 @@ class TFNetwork(object):
       """
       Flattens the layer structure, removes irrelevant layers and returns next successor layer
       :param LayerBase layer_:
-      :return Next layer in succession
+      :return: next layer in succession
       :rtype: LayerBase
       """
       while True:
