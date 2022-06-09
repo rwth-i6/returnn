@@ -1444,7 +1444,7 @@ class TFNetwork(object):
         if isinstance(layer_, SubnetworkLayer):
           layer_ = layer_.subnetwork.layers["output"]
           continue
-        if isinstance(layer_, CopyLayer) and len(layer_.sources) == 1 and not isinstance(layer_, CastLayer):
+        if type(layer_) is CopyLayer and len(layer_.sources) == 1:
           layer_ = layer_.sources[0]
           continue
         return layer_
