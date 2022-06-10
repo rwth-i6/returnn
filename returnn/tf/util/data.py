@@ -895,7 +895,7 @@ class Dim(object):
     assert self.can_be_used_as_dim() and other.can_be_used_as_dim()  # declare_same_as does not make sense otherwise
     self._maybe_update()
     self._validate_in_current_graph()
-    if self is other:
+    if self == other:
       return
     other_same_base = other.get_same_base()
     if self is other_same_base or self.same_as is other_same_base:
@@ -907,6 +907,12 @@ class Dim(object):
       # We actually want it to be the other way around.
       other_same_base.declare_same_as(self_same_as)
       return
+    other_derived_bases = set(other.get_derived_bases_list())
+    self_derived_bases = set(self.get_derived_bases_list())
+    assert other_derived_bases != self_derived_bases
+    if self_derived_bases.issubset(other_derived_bases):
+      # Avoid cycles on derived_from_tag. https://github.com/rwth-i6/returnn/issues/1054
+      return other.declare_same_as(self)
     if self_same_as is not self:
       assert not self_same_as.same_as
       if self_same_as is other_same_base:
