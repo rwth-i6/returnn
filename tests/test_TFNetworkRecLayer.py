@@ -5888,8 +5888,7 @@ def test_reclayer_scalar_size_last():
     debug_runtime_sanity_checks=True,
   ))
 
-  random_state_dim = FeatureDim('random-state', 3)
-  test_specaugment_v2_name_scope_simplify_top_k_top_k_k_dim = SpatialDim('top-k-dim')
+  top_k_dim = SpatialDim('top-k-dim')
 
   net_dict = {
     'test_specaugment_v2_name_scope_simplify': {
@@ -5900,11 +5899,6 @@ def test_reclayer_scalar_size_last():
           'class': 'subnetwork',
           'from': [],
           'subnetwork': {
-            'random_state_init': {
-              'class': 'random_state_init',
-              'out_dim': random_state_dim,
-              'out_shape': {random_state_dim}
-            },
             'random': {
               'class': 'random',
               'shape': [
@@ -5914,23 +5908,12 @@ def test_reclayer_scalar_size_last():
               'minval': 1,
               'maxval': 3,
               'dtype': 'int32',
-              'explicit_state': 'state_var0',
-              'auto_update_state': True
             },
             'output': {
               'class': 'copy',
               'from': 'random',
               'out_shape': {batch_dim}
             },
-            'state_var0': {
-              'class': 'variable',
-              'shape': [
-                random_state_dim
-              ],
-              'param_name': 'param',
-              'dtype': 'int64',
-              'init_by_layer': 'random_state_init'
-            }
           },
           'out_shape': {batch_dim}
         },
@@ -5938,11 +5921,6 @@ def test_reclayer_scalar_size_last():
           'class': 'subnetwork',
           'from': [],
           'subnetwork': {
-            'random_state_init': {
-              'class': 'random_state_init',
-              'out_dim': random_state_dim,
-              'out_shape': {random_state_dim}
-            },
             'random': {
               'class': 'random',
               'shape': [
@@ -5952,23 +5930,12 @@ def test_reclayer_scalar_size_last():
               'distribution': 'uniform',
               'minval': 0.0,
               'maxval': 1.0,
-              'explicit_state': 'state_var0',
-              'auto_update_state': True
             },
             'output': {
               'class': 'copy',
               'from': 'random',
               'out_shape': {batch_dim, feat_dim}
             },
-            'state_var0': {
-              'class': 'variable',
-              'shape': [
-                random_state_dim
-              ],
-              'param_name': 'param',
-              'dtype': 'int64',
-              'init_by_layer': 'random_state_init'
-            }
           },
           'out_shape': {batch_dim, feat_dim}
         },
@@ -5984,9 +5951,9 @@ def test_reclayer_scalar_size_last():
           'from': 'random_0',
           'axis': feat_dim,
           'k': 'reduce',
-          'k_dim': test_specaugment_v2_name_scope_simplify_top_k_top_k_k_dim,
+          'k_dim': top_k_dim,
           'sorted': True,
-          'out_shape': {batch_dim, test_specaugment_v2_name_scope_simplify_top_k_top_k_k_dim}
+          'out_shape': {batch_dim, top_k_dim}
         },
         'loop': {
           'class': 'rec',
@@ -6001,7 +5968,7 @@ def test_reclayer_scalar_size_last():
             'Loop.unstack': {
               'class': 'rec_unstack',
               'from': 'base:range_in_axis',
-              'axis': test_specaugment_v2_name_scope_simplify_top_k_top_k_k_dim,
+              'axis': top_k_dim,
               'out_shape': {}
             },
             'test_specaugment_v2_name_scope_simplify._relu': {
@@ -6054,15 +6021,15 @@ def test_reclayer_scalar_size_last():
               'out_shape': {batch_dim, time_dim, feat_dim}
             }
           },
-          'axis': test_specaugment_v2_name_scope_simplify_top_k_top_k_k_dim,
-          'out_shape': {test_specaugment_v2_name_scope_simplify_top_k_top_k_k_dim},
+          'axis': top_k_dim,
+          'out_shape': {top_k_dim},
           'name_scope': ''
         },
         'range_in_axis': {
           'class': 'range_in_axis',
           'from': 'top_k/indices',
-          'axis': test_specaugment_v2_name_scope_simplify_top_k_top_k_k_dim,
-          'out_shape': {test_specaugment_v2_name_scope_simplify_top_k_top_k_k_dim}
+          'axis': top_k_dim,
+          'out_shape': {top_k_dim}
         },
         'test_specaugment_v2_name_scope_simplify._relu_0': {
           'class': 'rec_last_output',
