@@ -5878,6 +5878,148 @@ def test_reclayer_scalar_size():
     session.run(network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(network.extern_data))
 
 
+def test_reclayer_scalar_size_last():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+  time_dim = SpatialDim('time')
+  feat_dim = FeatureDim('feat', 5)
+  config = Config(dict(
+    extern_data={'data': {'dim_tags': (batch_dim, time_dim, feat_dim)}},
+    debug_runtime_sanity_checks=True,
+  ))
+
+  top_k_dim = SpatialDim('top-k-dim')
+
+  net_dict = {
+    'test_specaugment_v2_name_scope_simplify': {
+      'class': 'subnetwork',
+      'from': [],
+      'subnetwork': {
+        'random': {
+          'class': 'subnetwork',
+          'from': [],
+          'subnetwork': {
+            'random': {
+              'class': 'random',
+              'shape': [
+                batch_dim
+              ],
+              'distribution': 'uniform',
+              'minval': 1,
+              'maxval': 3,
+              'dtype': 'int32',
+            },
+            'output': {
+              'class': 'copy',
+              'from': 'random',
+              'out_shape': {batch_dim}
+            },
+          },
+          'out_shape': {batch_dim}
+        },
+        'random_0': {
+          'class': 'subnetwork',
+          'from': [],
+          'subnetwork': {
+            'random': {
+              'class': 'random',
+              'shape': [
+                batch_dim,
+                feat_dim
+              ],
+              'distribution': 'uniform',
+              'minval': 0.0,
+              'maxval': 1.0,
+            },
+            'output': {
+              'class': 'copy',
+              'from': 'random',
+              'out_shape': {batch_dim, feat_dim}
+            },
+          },
+          'out_shape': {batch_dim, feat_dim}
+        },
+        'reduce': {
+          'class': 'reduce',
+          'from': 'random',
+          'mode': 'max',
+          'axis': (batch_dim,),
+          'out_shape': {}
+        },
+        'top_k': {
+          'class': 'top_k',
+          'from': 'random_0',
+          'axis': feat_dim,
+          'k': 'reduce',
+          'k_dim': top_k_dim,
+          'sorted': True,
+          'out_shape': {batch_dim, top_k_dim}
+        },
+        'loop': {
+          'class': 'rec',
+          'from': [],
+          'unit': {
+            'state.x': {
+              'class': 'copy',
+              'from': 'test_specaugment_v2_name_scope_simplify._relu_0',
+              'initial_output': 'base:base:data:data',
+              'out_shape': {batch_dim, time_dim, feat_dim}
+            },
+            'Loop.unstack': {
+              'class': 'rec_unstack',
+              'from': 'base:range_in_axis',
+              'axis': top_k_dim,
+              'out_shape': {}
+            },
+            'output': {
+              'class': 'copy',
+              'from': 'Loop.unstack',
+              'out_shape': {}
+            },
+            'test_specaugment_v2_name_scope_simplify._relu_0': {
+              'class': 'activation',
+              'from': 'prev:state.x',
+              'activation': 'relu',
+              'need_last': True,
+              'out_shape': {batch_dim, time_dim, feat_dim}
+            }
+          },
+          'axis': top_k_dim,
+          'out_shape': {top_k_dim},
+          'name_scope': ''
+        },
+        'range_in_axis': {
+          'class': 'range_in_axis',
+          'from': 'top_k/indices',
+          'axis': top_k_dim,
+          'out_shape': {top_k_dim}
+        },
+        'test_specaugment_v2_name_scope_simplify._relu_0': {
+          'class': 'rec_last_output',
+          'rec_layer': 'loop',
+          'sub_layer_name': 'test_specaugment_v2_name_scope_simplify._relu_0',
+          'out_shape': {batch_dim, time_dim, feat_dim}
+        },
+        'output': {
+          'class': 'copy',
+          'from': 'test_specaugment_v2_name_scope_simplify._relu_0',
+          'out_shape': {batch_dim, time_dim, feat_dim}
+        }
+      },
+      'out_shape': {batch_dim, time_dim, feat_dim}
+    },
+    'output': {
+      'class': 'copy',
+      'from': 'test_specaugment_v2_name_scope_simplify',
+      'out_shape': {batch_dim, time_dim, feat_dim}
+    }
+  }
+
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+
+
 def test_reclayer_shape_from_initial():
   from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
 

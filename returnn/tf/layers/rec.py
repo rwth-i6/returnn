@@ -2095,10 +2095,12 @@ class _SubnetworkRecCell(object):
       if not layer.need_last:
         continue
       with tf.name_scope(layer.tf_scope_name):
-        indices = layer.output.get_sequence_lengths() - 1  # [B]
         out = layer.output.copy_as_batch_major().copy_with_time_dim_axis(1)  # [B,T,...]
-        v = tf.gather(out.placeholder, indices=tf.maximum(indices, 0), batch_dims=1, axis=1)  # [B,...]
-        v = tf.where(tf.less(indices, 0), self._get_init_output(k), v)
+        time_dim = out.dim_tags[1]
+        indices = time_dim.dyn_size_ext or Data.from_tensor(tf_util.get_shape_dim(out.placeholder, 1))
+        indices = indices.copy_compatible_to(Data("dummy", dim_tags=out.dim_tags[:1], dtype="int32"))
+        v = tf.gather(out.placeholder, indices=tf.maximum(indices.placeholder, 0), batch_dims=1, axis=1)  # [B,...]
+        v = tf.where(tf.less(indices.placeholder, 0), self._get_init_output(k), v)
         layer_template = self.layer_data_templates[k]
         out = layer_template.output.copy_template()
         out.placeholder = v
