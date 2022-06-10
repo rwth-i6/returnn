@@ -2098,7 +2098,7 @@ class _SubnetworkRecCell(object):
         out = layer.output.copy_as_batch_major().copy_with_time_dim_axis(1)  # [B,T,...]
         time_dim = out.dim_tags[1]
         indices = time_dim.dyn_size_ext or Data.from_tensor(tf_util.get_shape_dim(out.placeholder, 1))
-        indices = indices.copy_compatible_to(Data("dummy", dim_tags=out.dim_tags[:1], dtype="int32"))
+        indices = indices.copy_compatible_to(Data("dummy", dim_tags=out.dim_tags[:1], dtype="int32"), unbroadcast=True)
         v = tf.gather(out.placeholder, indices=tf.maximum(indices.placeholder, 0), batch_dims=1, axis=1)  # [B,...]
         v = tf.where(tf.less(indices.placeholder, 0), self._get_init_output(k), v)
         layer_template = self.layer_data_templates[k]

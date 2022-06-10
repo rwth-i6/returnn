@@ -6018,6 +6018,10 @@ def test_reclayer_scalar_size_last():
   with make_scope() as session:
     net = TFNetwork(config=config)
     net.construct_from_dict(net_dict)
+    out = net.get_default_output_layer().output
+    net.initialize_params(session)
+    from test_TFNetworkLayer import make_feed_dict
+    session.run((out.placeholder, out.get_sequence_lengths()), feed_dict=make_feed_dict(net.extern_data))
 
 
 def test_reclayer_shape_from_initial():
