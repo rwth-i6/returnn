@@ -5961,7 +5961,7 @@ def test_reclayer_scalar_size_last():
           'unit': {
             'state.x': {
               'class': 'copy',
-              'from': 'test_specaugment_v2_name_scope_simplify._relu',
+              'from': 'test_specaugment_v2_name_scope_simplify._relu_0',
               'initial_output': 'base:base:data:data',
               'out_shape': {batch_dim, time_dim, feat_dim}
             },
@@ -5971,52 +5971,15 @@ def test_reclayer_scalar_size_last():
               'axis': top_k_dim,
               'out_shape': {}
             },
-            'test_specaugment_v2_name_scope_simplify._relu': {
-              'class': 'subnetwork',
-              'from': [],
-              'subnetwork': {
-                'lt': {
-                  'class': 'subnetwork',
-                  'from': [],
-                  'subnetwork': {
-                    'compare': {
-                      'class': 'compare',
-                      'from': 'base:base:prev:state.x',
-                      'kind': 'less',
-                      'value': 0.0,
-                      'out_shape': {batch_dim, time_dim, feat_dim}
-                    },
-                    'output': {
-                      'class': 'copy',
-                      'from': 'compare',
-                      'out_shape': {batch_dim, time_dim, feat_dim}
-                    }
-                  },
-                  'out_shape': {batch_dim, time_dim, feat_dim}
-                },
-                'where': {
-                  'class': 'switch',
-                  'condition': 'lt',
-                  'true_from': 0.0,
-                  'false_from': 'base:prev:state.x',
-                  'out_shape': {batch_dim, time_dim, feat_dim}
-                },
-                'output': {
-                  'class': 'copy',
-                  'from': 'where',
-                  'out_shape': {batch_dim, time_dim, feat_dim}
-                }
-              },
-              'out_shape': {batch_dim, time_dim, feat_dim}
-            },
             'output': {
               'class': 'copy',
               'from': 'Loop.unstack',
               'out_shape': {}
             },
             'test_specaugment_v2_name_scope_simplify._relu_0': {
-              'class': 'copy',
-              'from': 'test_specaugment_v2_name_scope_simplify._relu',
+              'class': 'activation',
+              'from': 'prev:state.x',
+              'activation': 'relu',
               'need_last': True,
               'out_shape': {batch_dim, time_dim, feat_dim}
             }
