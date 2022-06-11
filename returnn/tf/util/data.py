@@ -261,7 +261,8 @@ class Dim(object):
       g = tf_util.get_root_graph()
       if tf_util.get_root_graph(tensor.graph) is not g:  # maybe from an earlier run which reuses the dim tag
         # Reset and cleanup.
-        self.dyn_size_ext = None
+        if self.dyn_size_ext:
+          self.dyn_size_ext = self.dyn_size_ext.copy_template()
         same_base = self.get_same_base()
         same_base._same_for_batch_ctx.pop((self.batch, self.control_flow_ctx), None)
         self.batch = None  # it is invalid in the new graph
@@ -5612,7 +5613,11 @@ def _create_size_placeholder(name, axis_wo_b, tag, batch_dim):
     dyn_size = tf_compat.v1.placeholder(
       name=dyn_size_ext.name, dtype=dyn_size_ext.dtype, shape=dyn_size_ext.batch_shape)
     dyn_size_ext.placeholder = dyn_size
-    tag.dyn_size_ext = dyn_size_ext
+    if dyn_size_ext.batch:
+      tag.set_dyn_size_ext_for_batch_ctx(
+        batch=dyn_size_ext.batch, ctx=dyn_size_ext.control_flow_ctx, dyn_size_ext=dyn_size_ext)
+    else:
+      tag.dyn_size_ext = dyn_size_ext
     if batch_dim and batch_dim.batch:
       tag.batch = batch_dim.batch
     tag.set_tag_on_size_tensor(dyn_size)
