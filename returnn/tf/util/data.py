@@ -5602,7 +5602,8 @@ def _create_size_placeholder(name, axis_wo_b, tag, batch_dim):
   from .basic import reuse_name_scope
   with reuse_name_scope("extern_data/placeholders/%s" % name, absolute=True):
     dyn_size_ext = Data(
-      "%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, dim_tags=[batch_dim] if batch_dim else [])
+      "%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype,
+      dim_tags=[batch_dim] if batch_dim else [], batch=batch_dim.batch if batch_dim else None)
     dyn_size = tf_compat.v1.placeholder(
       name=dyn_size_ext.name, dtype=dyn_size_ext.dtype, shape=dyn_size_ext.batch_shape)
     dyn_size_ext.placeholder = dyn_size
