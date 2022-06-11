@@ -2682,7 +2682,9 @@ class Data(object):
     if beam and batch:
       assert batch.beam == beam
     self._batch = batch
+    del batch
     self._beam = beam
+    del beam
     self.control_flow_ctx = control_flow_ctx
     self.available_for_inference = available_for_inference
     if isinstance(dim_tags, (tuple, list)):
@@ -2701,6 +2703,9 @@ class Data(object):
       dim_tags = tuple(dim_tags)
       if auto_create_placeholders:
         _auto_create_size_placeholders_on_dim_tags(name=name, dim_tags=dim_tags)
+      if batch_dim_axis_ is not None:
+        if dim_tags[batch_dim_axis_].batch and not self._batch:
+          self._batch = dim_tags[batch_dim_axis_].batch
       del shape_
       del batch_dim_axis_
     else:
@@ -5608,6 +5613,8 @@ def _create_size_placeholder(name, axis_wo_b, tag, batch_dim):
       name=dyn_size_ext.name, dtype=dyn_size_ext.dtype, shape=dyn_size_ext.batch_shape)
     dyn_size_ext.placeholder = dyn_size
     tag.dyn_size_ext = dyn_size_ext
+    if batch_dim and batch_dim.batch:
+      tag.batch = batch_dim.batch
     tag.set_tag_on_size_tensor(dyn_size)
 
 
@@ -5723,12 +5730,12 @@ def _auto_create_size_placeholders_on_dim_tags(name, dim_tags):
   batch_dim_axis = _batch_dim_axis_from_dim_tags_tuple(dim_tags)
   batch_dim_ = dim_tags[batch_dim_axis] if batch_dim_axis is not None else None
   for axis, tag in enumerate(dim_tags):
+    # noinspection PyProtectedMember
+    tag._validate_in_current_graph()
     if tag.is_batch_dim():
       continue
     if tag.dimension is not None:
       continue
-    # noinspection PyProtectedMember
-    tag._validate_in_current_graph()
     if tag.dyn_size is not None:
       continue
     axis_wo_b = _get_axis_wo_b(axis, batch_dim_axis=batch_dim_axis)
