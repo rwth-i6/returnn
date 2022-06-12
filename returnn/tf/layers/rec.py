@@ -2097,7 +2097,11 @@ class _SubnetworkRecCell(object):
       with tf.name_scope(layer.tf_scope_name):
         out = layer.output.copy_as_batch_major().copy_with_time_dim_axis(1)  # [B,T,...]
         time_dim = out.dim_tags[1]
-        indices = time_dim.dyn_size_ext or Data.from_tensor(tf_util.get_shape_dim(out.placeholder, 1))
+        if time_dim.dyn_size_ext:
+          indices = time_dim.dyn_size_ext.copy()
+          indices = indices.placeholder - 1
+        else:
+          indices = Data.from_tensor(tf_util.get_shape_dim(out.placeholder, 0))
         v = tf.gather(
           out.placeholder,
           indices=tf.maximum(
