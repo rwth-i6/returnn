@@ -2099,9 +2099,9 @@ class _SubnetworkRecCell(object):
         time_dim = out.dim_tags[1]
         if time_dim.dyn_size_ext:
           indices = time_dim.dyn_size_ext.copy()
-          indices = indices.placeholder - 1
         else:
           indices = Data.from_tensor(tf_util.get_shape_dim(out.placeholder, 0))
+        indices.placeholder = indices.placeholder - 1
         v = tf.gather(
           out.placeholder,
           indices=tf.maximum(
