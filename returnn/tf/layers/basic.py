@@ -4226,7 +4226,7 @@ class ExpandDimsLayer(_ConcatInputLayer):
   def get_out_data_from_opts(cls, name, axis, dim=1, sources=(), **kwargs):
     """
     :param str name:
-    :param str axis:
+    :param str|int axis:
     :param int|Dim dim:
     :param list[LayerBase] sources:
     :rtype: Data
@@ -4240,8 +4240,12 @@ class ExpandDimsLayer(_ConcatInputLayer):
     if isinstance(dim, Dim):
       new_dim = dim
     else:
+      if isinstance(init_axis, int):
+        kind = Dim.Types.Feature if data.feature_dim_axis == init_axis else Dim.Types.Spatial
+      else:
+        kind = Dim.Types.Feature if init_axis.lower() == "f" else Dim.Types.Spatial
       new_dim = Dim(
-        kind=Dim.Types.Feature if init_axis.lower() == "f" else Dim.Types.Spatial,
+        kind=kind,
         description="%s_expand_dims" % name, auto_generated=True,
         dimension=dim)
     data = data.copy_template(name="%s_output" % name)
