@@ -5625,8 +5625,8 @@ def _create_size_placeholder(name, axis_wo_b, tag, batch_dim):
         batch=dyn_size_ext.batch, ctx=dyn_size_ext.control_flow_ctx, dyn_size_ext=dyn_size_ext)
     else:
       tag.dyn_size_ext = dyn_size_ext
-    if batch_dim and batch_dim.batch:
-      tag.batch = batch_dim.batch
+    if batch_dim:
+      tag.batch = batch
     tag.set_tag_on_size_tensor(dyn_size)
 
 
