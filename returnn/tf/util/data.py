@@ -442,6 +442,8 @@ class Dim(object):
   @dyn_size.setter
   def dyn_size(self, dyn_size):
     """
+    Also see :func:`set_dyn_size_ext_for_batch_ctx`.
+
     :param tf.Tensor dyn_size:
     """
     assert self.can_be_used_as_dim()
@@ -543,6 +545,7 @@ class Dim(object):
     which just differ by an expansion of the batch (e.g. search beam).
 
     See also :func:`get_tag_from_size_tensor`.
+    Also see :func:`set_dyn_size_ext_for_batch_ctx`.
 
     :param tf.Tensor x:
     :param BatchInfo|None batch:
