@@ -4010,10 +4010,11 @@ class Data(object):
           if isinstance(virtual_dim, BatchInfo.PackedDim):
             dim_tags.append(virtual_dim.dim_tag)
             batch = batch.copy_remove_dim(virtual_dim)
-          elif not new_batch_dim_tag:
-            new_batch_dim_tag = batch_dim
+          elif isinstance(virtual_dim, BatchInfo.GlobalBatchDim):
+            assert not new_batch_dim_tag
+            new_batch_dim_tag = Dim(kind=Dim.Types.Batch, description=dim_tag.description)
             dim_tags.append(new_batch_dim_tag)
-        assert new_batch_dim_tag
+        assert new_batch_dim_tag, "%s: batch info %r invalid" % (self, batch)
         new_batch_dim_tag.batch = batch
         kwargs["batch"] = batch
       else:
