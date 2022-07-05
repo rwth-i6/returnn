@@ -263,6 +263,7 @@ class Dim(object):
         # Reset and cleanup.
         if self.dyn_size_ext:
           self.dyn_size_ext = self.dyn_size_ext.copy_template()
+          self.dyn_size_ext.batch = None
         same_base = self.get_same_base()
         same_base._same_for_batch_ctx.pop((self.batch, self.control_flow_ctx), None)
         self.batch = None  # it is invalid in the new graph
@@ -442,6 +443,8 @@ class Dim(object):
   @dyn_size.setter
   def dyn_size(self, dyn_size):
     """
+    Also see :func:`set_dyn_size_ext_for_batch_ctx`.
+
     :param tf.Tensor dyn_size:
     """
     assert self.can_be_used_as_dim()
@@ -543,6 +546,7 @@ class Dim(object):
     which just differ by an expansion of the batch (e.g. search beam).
 
     See also :func:`get_tag_from_size_tensor`.
+    Also see :func:`set_dyn_size_ext_for_batch_ctx`.
 
     :param tf.Tensor x:
     :param BatchInfo|None batch:
@@ -4007,10 +4011,11 @@ class Data(object):
           if isinstance(virtual_dim, BatchInfo.PackedDim):
             dim_tags.append(virtual_dim.dim_tag)
             batch = batch.copy_remove_dim(virtual_dim)
-          elif not new_batch_dim_tag:
-            new_batch_dim_tag = batch_dim
+          elif isinstance(virtual_dim, BatchInfo.GlobalBatchDim):
+            assert not new_batch_dim_tag
+            new_batch_dim_tag = Dim(kind=Dim.Types.Batch, description=dim_tag.description)
             dim_tags.append(new_batch_dim_tag)
-        assert new_batch_dim_tag
+        assert new_batch_dim_tag, "%s: batch info %r invalid" % (self, batch)
         new_batch_dim_tag.batch = batch
         kwargs["batch"] = batch
       else:
@@ -5605,28 +5610,31 @@ def _create_size_placeholder(name, axis_wo_b, tag, batch_dim):
   :param Dim tag:
   :param Dim|None batch_dim:
   """
+  # Note on batch info: Usually, this is called early when no global batch info is initialized yet.
+  # Then it is later initialized via ExternData.init_batch_info.
+  # Some other external code (e.g. returnn-common) might have set custom batch info
+  # on some Data instance, and via Data._adapt_batch_consistent_dim_tags / Dim.get_for_batch_ctx,
+  # that might have been set on uninitialized dim tags as well.
+  # Now when we get such dim tags here, they would have some Dim.batch info set
+  # but this does not correspond to the global batch info which we will get here.
+  # Only trust batch_dim here, or if that batch info is unset, then leave it uninitialized,
+  # or even explicitly set it to None, see below.
   from .basic import reuse_name_scope
   with reuse_name_scope("extern_data/placeholders/%s" % name, absolute=True):
-    if batch_dim is not None and batch_dim.batch is not None:
-      batch = batch_dim.batch
-    elif tag.batch is not None:
-      batch = tag.batch
-    else:
-      batch = None
     dyn_size_ext = Data(
       "%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype,
       dim_tags=[batch_dim] if batch_dim else [],
-      batch=batch if batch_dim else None)
+      batch=batch_dim.batch if batch_dim else None)
     dyn_size = tf_compat.v1.placeholder(
       name=dyn_size_ext.name, dtype=dyn_size_ext.dtype, shape=dyn_size_ext.batch_shape)
     dyn_size_ext.placeholder = dyn_size
     if dyn_size_ext.batch:
       tag.set_dyn_size_ext_for_batch_ctx(
         batch=dyn_size_ext.batch, ctx=dyn_size_ext.control_flow_ctx, dyn_size_ext=dyn_size_ext)
+      # Do not set tag.batch. set_dyn_size_ext_for_batch_ctx should cover this.
     else:
+      tag.batch = None  # reset, it is anyway invalid, see above
       tag.dyn_size_ext = dyn_size_ext
-    if batch_dim:
-      tag.batch = batch
     tag.set_tag_on_size_tensor(dyn_size)
 
 
@@ -5741,6 +5749,11 @@ def _auto_create_size_placeholders_on_dim_tags(name, dim_tags):
   """
   batch_dim_axis = _batch_dim_axis_from_dim_tags_tuple(dim_tags)
   batch_dim_ = dim_tags[batch_dim_axis] if batch_dim_axis is not None else None
+  if batch_dim_:
+    # Do this first, in case the batch dim is used elsewhere,
+    # to avoid that we use some invalid batch info.
+    # noinspection PyProtectedMember
+    batch_dim_._validate_in_current_graph()
   for axis, tag in enumerate(dim_tags):
     # noinspection PyProtectedMember
     tag._validate_in_current_graph()
