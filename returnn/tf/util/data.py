@@ -263,6 +263,7 @@ class Dim(object):
         # Reset and cleanup.
         if self.dyn_size_ext:
           self.dyn_size_ext = self.dyn_size_ext.copy_template()
+          self.dyn_size_ext.batch = None
         same_base = self.get_same_base()
         same_base._same_for_batch_ctx.pop((self.batch, self.control_flow_ctx), None)
         self.batch = None  # it is invalid in the new graph
