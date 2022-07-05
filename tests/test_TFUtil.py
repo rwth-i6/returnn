@@ -1218,6 +1218,32 @@ def test_Dim_copy():
   assert a == copy.deepcopy(a)
 
 
+def test_ExternData_ext_Data_batch_info():
+  # https://github.com/rwth-i6/returnn_common/issues/193
+  # https://github.com/rwth-i6/returnn/issues/975
+  from returnn.tf.util.data import Data, BatchInfo, SpatialDim, FeatureDim, batch_dim
+  from returnn.tf.network import ExternData
+  time_dim = SpatialDim("time")
+  in_dim = FeatureDim("in", 3)
+  x = Data("x", dim_tags=[batch_dim, time_dim, in_dim])
+  # This is how it is done in returnn-common construction, to set a custom dummy batch info.
+  # There is no reason why this should not be fine; we want that this is supported.
+  x.batch = BatchInfo.make_global_batch_info(-1)
+  x.sanity_check()  # still fine
+
+  with tf.Graph().as_default() as graph, tf_compat.v1.Session(graph=graph) as session:
+    data = Data("x", dim_tags=[batch_dim, time_dim, in_dim], auto_create_placeholders=True)
+    extern_data = ExternData()
+    extern_data.data["x"] = data
+    extern_data.init_batch_info()
+    data.sanity_check()
+    assert data.batch != x.batch
+
+    x.sanity_check()  # failed earlier due to dim tag batch info mismatch
+    assert not x.dim_tags[1].dyn_size_ext
+    assert data.dim_tags[1].dyn_size_ext
+
+
 def test_dim_math_basics():
   a = SpatialDim("a")
   b = SpatialDim("b")
