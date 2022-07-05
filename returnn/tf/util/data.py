@@ -5748,6 +5748,11 @@ def _auto_create_size_placeholders_on_dim_tags(name, dim_tags):
   """
   batch_dim_axis = _batch_dim_axis_from_dim_tags_tuple(dim_tags)
   batch_dim_ = dim_tags[batch_dim_axis] if batch_dim_axis is not None else None
+  if batch_dim_:
+    # Do this first, in case the batch dim is used elsewhere,
+    # to avoid that we use some invalid batch info.
+    # noinspection PyProtectedMember
+    batch_dim_._validate_in_current_graph()
   for axis, tag in enumerate(dim_tags):
     # noinspection PyProtectedMember
     tag._validate_in_current_graph()
