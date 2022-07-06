@@ -264,6 +264,14 @@ def test_simple_obj_repr():
   assert_equal(x_repr, "X(a=42, b=13)")
 
 
+def test_dict_diff_str():
+  assert_equal(dict_diff_str({"a": 1, "b": 2}, {"a": 1, "b": 3}), "item 'b' differ. self: 2, other: 3")
+
+
+def test_dict_diff_str_non_str_key():
+  assert_equal(dict_diff_str({1: 1, 2: 2}, {1: 1, 2: 3}), "item 2 differ. self: 2, other: 3")
+
+
 @unittest.skipIf(PY3, "only for Python 2")
 def test_py2_utf8_str_to_unicode():
   assert_equal(py2_utf8_str_to_unicode("a"), "a")
