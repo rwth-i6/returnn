@@ -313,11 +313,10 @@ class FileArchive:
 
     elif typ in ["align", "align_raw"]:
       type_len = self.read_U32()
-      typ = self.read_str(type_len)
-      assert typ == "flow-alignment"
+      assert self.read_str(type_len) == "flow-alignment"
       self.read_u32()  # flag ?
-      typ = self.read_str(8)
-      if typ in ["ALIGNRLE", "AALPHRLE"]:
+      alignment_header = self.read_str(8)
+      if alignment_header in ["ALIGNRLE", "AALPHRLE"]:
         # In case of AALPHRLE, after the alignment, we include the alphabet of the used labels.
         # We ignore this at the moment.
         size = self.read_U32()
@@ -356,7 +355,7 @@ class FileArchive:
           raise NotImplementedError("No support for weighted "
                                     "alignments yet.")
       else:
-        raise Exception("No valid alignment header found (found: %r). Wrong cache?" % typ)
+        raise Exception("No valid alignment header found (found: %r). Wrong cache?" % alignment_header)
 
   def has_entry(self, filename):
     """
