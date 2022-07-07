@@ -299,9 +299,9 @@ class FileArchive:
 
     elif typ == "feat":
       type_len = self.read_U32()
-      typ = self.read_str(type_len)
+      type_ = self.read_str(type_len)
       # print(typ)
-      assert typ == "vector-f32"
+      assert type_ == "vector-f32"
       count = self.read_U32()
       data = [None] * count  # type: typing.List[typing.Optional[numpy.ndarray]]
       time_ = [None] * count  # type: typing.List[typing.Optional[numpy.ndarray]]
@@ -313,7 +313,8 @@ class FileArchive:
 
     elif typ in ["align", "align_raw"]:
       type_len = self.read_U32()
-      assert self.read_str(type_len) == "flow-alignment"
+      type_ = self.read_str(type_len)
+      assert type_ == "flow-alignment"
       self.read_u32()  # flag ?
       alignment_header = self.read_str(8)
       if alignment_header in ["ALIGNRLE", "AALPHRLE"]:
