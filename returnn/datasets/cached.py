@@ -86,7 +86,7 @@ class CachedDataset(Dataset):
     old_index_map = self._index_map[:]
     self._index_map = range(len(seq_index))  # sorted seq idx -> seq_index idx
 
-    if isinstance(seq_index, numpy.ndarray):
+    if isinstance(seq_index, numpy.ndarray) or isinstance(self._seq_index, numpy.ndarray):
       seq_index_unchanged = numpy.array_equal(self._seq_index, seq_index)
     else:
       seq_index_unchanged = (self._seq_index == seq_index)
