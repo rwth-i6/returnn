@@ -854,7 +854,7 @@ class DummyDatasetMultipleDataKeys(DummyDataset):
     return DatasetSeq(seq_idx=seq_idx, features=features, targets=None)
 
 
-class StaticDataset(GeneratingDataset):
+class StaticDataset(CachedDataset2):
   """
   Provide all the data as a list of dict of numpy arrays.
   """
@@ -884,17 +884,23 @@ class StaticDataset(GeneratingDataset):
       data=data, target_list=dataset.get_target_list(),
       output_dim=dataset.num_outputs, input_dim=dataset.num_inputs)
 
-  def __init__(self, data, target_list=None, output_dim=None, input_dim=None, **kwargs):
+  def __init__(self, data, target_list=None, input_dim=None, output_dim=None, fixed_random_seed=None, **kwargs):
     """
     :param list[dict[str,numpy.ndarray]] data: list of seqs, each provide the data for each data-key
+    :param target_list:
     :param int|None input_dim:
     :param int|dict[str,(int,int)|list[int]] output_dim:
+    :param int|None fixed_random_seed:
     """
+    super(StaticDataset, self).__init__(**kwargs)
+
     assert len(data) > 0
     self.data = data
-    num_seqs = len(data)
     first_data = data[0]
     self.data_keys = sorted(first_data.keys())
+    if "data" in self.data_keys:
+      self.data_keys.remove("data")
+      self.data_keys.insert(0, "data")
     if target_list is not None:
       for key in target_list:
         assert key in self.data_keys
@@ -921,17 +927,53 @@ class StaticDataset(GeneratingDataset):
       assert output_dim[key][1] == len(first_data_output.shape)
       if len(first_data_output.shape) >= 2:
         assert output_dim[key][0] == first_data_output.shape[-1]
-    assert sorted(output_dim.keys()) == self.data_keys, "output_dim does not match the given data"
+    assert set(output_dim.keys()) == set(self.data_keys), "output_dim does not match the given data"
 
-    super(StaticDataset, self).__init__(input_dim=input_dim, output_dim=output_dim, num_seqs=num_seqs, **kwargs)
+    self.num_inputs = input_dim
+    output_dim = convert_data_dims(output_dim, leave_dict_as_is=False)
+    if "data" not in output_dim and input_dim is not None:
+      output_dim["data"] = (input_dim * self.window, 2)  # not sparse
+    self.num_outputs = output_dim
+    self.fixed_random_seed = fixed_random_seed  # useful when used as eval dataset
 
-  def generate_seq(self, seq_idx):
+    self._seq_order = None
+    self.init_seq_order(epoch=1)
+
+  def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
+    """
+    :param int|None epoch:
+    :param list[str]|None seq_list: List of sequence tags, to set a predefined order.
+    :param list[int]|None seq_order: List of corpus sequence indices, to set a predefined order. Only possible
+      if the dataset has such indices (see self.have_corpus_seq_idx()).
+    :rtype: bool
+    :returns whether the order changed (True is always safe to return)
+    """
+    super(StaticDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+    if seq_order is not None:
+      assert not seq_list
+      self._seq_order = seq_order
+    elif seq_list is not None:
+      import re
+      # If the re.match fails here, some seq tag is invalid.
+      self._seq_order = [int(re.match("^seq-(\\d+)$", seq).group(1)) for seq in seq_list]
+    else:
+      default_data_key = self.data_keys[0]
+      self._seq_order = self.get_seq_order_for_epoch(
+        epoch=epoch, num_seqs=len(self.data),
+        get_seq_len=lambda i: self.data[i][default_data_key].shape[0])
+    self._num_seqs = len(self._seq_order)
+    return True
+
+  def _collect_single_seq(self, seq_idx):
     """
     :param int seq_idx:
     :rtype: DatasetSeq
     """
-    data = self.data[seq_idx]
-    return DatasetSeq(seq_idx=seq_idx, features={key: data[key] for key in self.data_keys})
+    corpus_seq_idx = self._seq_order[seq_idx]
+    data = self.data[corpus_seq_idx]
+    return DatasetSeq(
+      seq_idx=seq_idx, seq_tag="seq-%i" % corpus_seq_idx,
+      features={key: data[key] for key in self.data_keys})
 
   def get_data_keys(self):
     """
@@ -951,6 +993,41 @@ class StaticDataset(GeneratingDataset):
     :rtype: str
     """
     return self.data[0][key].dtype
+
+  def get_total_num_seqs(self):
+    """
+    :rtype: int
+    """
+    return len(self.data)
+
+  def get_all_tags(self):
+    """
+    :return: list of all seq tags, of the whole dataset, without partition epoch.
+    :rtype: list[str]
+    """
+    return ["seq-%i" % i for i in range(self.get_total_num_seqs())]
+
+  def get_tag(self, sorted_seq_idx):
+    """
+    :param int sorted_seq_idx:
+    :rtype: str
+    """
+    return "seq-%i" % self.get_corpus_seq_idx(sorted_seq_idx)
+
+  def have_corpus_seq_idx(self):
+    """
+    :rtype: bool
+    :return: whether you can call self.get_corpus_seq_idx()
+    """
+    return True
+
+  def get_corpus_seq_idx(self, seq_idx):
+    """
+    :param int seq_idx: sorted sequence index from the current epoch, depending on seq_ordering
+    :return: the sequence index as-is in the original corpus (as if you would have sorting="default").
+    :rtype: int
+    """
+    return self._seq_order[seq_idx]
 
 
 class CopyTaskDataset(GeneratingDataset):
