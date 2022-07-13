@@ -36,8 +36,10 @@ def test_generate_batches_recurrent():
 
 def test_iterate_seqs_no_chunking_1():
   dataset = DummyDataset(input_dim=2, output_dim=3, num_seqs=2, seq_len=11)
+  dataset.chunk_step = 0
+  dataset.chunk_size = 0
   dataset.init_seq_order(1)
-  seqs = list(dataset.iterate_seqs(chunk_size=0, chunk_step=0, used_data_keys=None))
+  seqs = list(dataset.iterate_seqs())
   assert_equal(len(seqs), 2)
   assert_equal(seqs[0], (0, 0, 11))  # seq-idx, start-frame, end-frame
   assert_equal(seqs[1], (1, 0, 11))
@@ -45,8 +47,10 @@ def test_iterate_seqs_no_chunking_1():
 
 def test_iterate_seqs_chunking_1():
   dataset = DummyDataset(input_dim=2, output_dim=3, num_seqs=2, seq_len=11)
+  dataset.chunk_step = 5
+  dataset.chunk_size = 10
   dataset.init_seq_order(1)
-  seqs = list(dataset.iterate_seqs(chunk_size=10, chunk_step=5, used_data_keys=None))
+  seqs = list(dataset.iterate_seqs())
   for s in seqs:
     print(s)
   assert_equal(len(seqs), 6)
@@ -60,8 +64,10 @@ def test_iterate_seqs_chunking_1():
 
 def test_iterate_seqs_chunking_varying_sequence_length():
   dataset = DummyDatasetMultipleSequenceLength(input_dim=2, output_dim=3, num_seqs=2, seq_len={'data': 24, 'classes': 12})
+  dataset.chunk_size = {'data': 12, 'classes': 6}
+  dataset.chunk_step = {'data': 6, 'classes': 3}
   dataset.init_seq_order(1)
-  seqs = list(dataset.iterate_seqs(chunk_size={'data': 12, 'classes': 6}, chunk_step={'data': 6, 'classes': 3}, used_data_keys=None))
+  seqs = list(dataset.iterate_seqs())
   for s in seqs:
     print(s)
   assert_equal(len(seqs), 8)
@@ -73,6 +79,39 @@ def test_iterate_seqs_chunking_varying_sequence_length():
   assert_equal(seqs[5], (1, NumbersDict({'data':6, 'classes': 3}), NumbersDict({'data':18, 'classes': 9})))
   assert_equal(seqs[6], (1, NumbersDict({'data':12, 'classes': 6}), NumbersDict({'data':24, 'classes': 12})))
   assert_equal(seqs[7], (1, NumbersDict({'data':18, 'classes': 9}), NumbersDict({'data':24, 'classes': 12})))
+
+
+def test_iterate_seqs_custom_chunking():
+  default_key = "data"
+  chunk_step = 5
+  chunk_size = 10
+
+  def _custom_chunking_func(dataset, seq_idx_start, **_kwargs):
+    assert isinstance(dataset, Dataset)
+    seq_idx = seq_idx_start
+    while dataset.is_less_than_num_seqs(seq_idx):
+      length = dataset.get_seq_length(seq_idx)
+      t = NumbersDict.constant_like(0, numbers_dict=length)
+      while length[default_key] > t[default_key]:
+        chunk_start = NumbersDict(t)
+        chunk_end = NumbersDict.min([t + chunk_size, length])
+        yield seq_idx, chunk_start, chunk_end
+        t += chunk_step
+      seq_idx += 1
+
+  dataset = DummyDataset(input_dim=2, output_dim=3, num_seqs=2, seq_len=11)
+  dataset.custom_chunking_func = _custom_chunking_func
+  dataset.init_seq_order(1)
+  seqs = list(dataset.iterate_seqs())
+  for s in seqs:
+    print(s)
+  assert_equal(len(seqs), 6)
+  assert_equal(seqs[0], (0, 0, 10))  # seq-idx, start-frame, end-frame
+  assert_equal(seqs[1], (0, 5, 11))
+  assert_equal(seqs[2], (0, 10, 11))
+  assert_equal(seqs[3], (1, 0, 10))
+  assert_equal(seqs[4], (1, 5, 11))
+  assert_equal(seqs[5], (1, 10, 11))
 
 
 def test_batches_recurrent_1():
