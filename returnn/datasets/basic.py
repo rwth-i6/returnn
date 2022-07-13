@@ -96,7 +96,7 @@ class Dataset(object):
     :param int window: features will be of dimension window * feature_dim, as we add a context-window around.
       not all datasets support this option.
     :param None|int|dict|NumbersDict|(dict,dict) context_window: will add this context for each chunk
-    :param None|str|int|(int,int)|dict|(dict,dict) chunking: "chunk_size:chunk_step"
+    :param None|str|int|(int,int)|dict|(dict,dict)|function chunking: "chunk_size:chunk_step"
     :param str seq_ordering: "batching"-option in config. e.g. "default", "sorted" or "random".
       See self.get_seq_order_for_epoch() for more details.
     :param int|None random_seed_offset:
@@ -136,7 +136,7 @@ class Dataset(object):
     self._estimated_num_seqs = estimated_num_seqs
     self.min_chunk_size = min_chunk_size
     self.chunking_variance = chunking_variance
-    self.chunk_size, self.chunk_step = self._parse_chunking(chunking)
+    self.chunk_size, self.chunk_step, self.custom_chunking_func = self._parse_chunking(chunking)
     if isinstance(context_window, (tuple, list)):
       assert len(context_window) == 2
       for elem in context_window:
@@ -190,11 +190,13 @@ class Dataset(object):
   @staticmethod
   def _parse_chunking(chunking):
     """
-    :param None|str|int|(int,int)|dict|(dict,dict)|(NumbersDict,NumbersDict) chunking:
+    :param None|str|int|(int,int)|dict|(dict,dict)|(NumbersDict,NumbersDict)|function chunking:
       as it comes from the config / from the user
-    :return: chunk_size, chunk_step
-    :rtype: (NumbersDict,NumbersDict)
+    :return: chunk_size, chunk_step, custom_chunking_func
+    :rtype: (NumbersDict|None,NumbersDict|None,function|None)
     """
+    if callable(chunking):
+      return None, None, chunking
     if isinstance(chunking, str):
       if ":" in chunking:
         chunking = tuple(map(int, chunking.split(":")))
@@ -215,7 +217,7 @@ class Dataset(object):
     if chunk_size != 0:
       assert sorted(chunk_step.keys()) == sorted(chunk_size.keys())
       assert chunk_step.max_value() > 0, "chunking step must be positive (for some key)"
-    return chunk_size, chunk_step
+    return chunk_size, chunk_step, None
 
   @staticmethod
   def _load_seq_list_file(filename, use_cache_manager=False, expect_list=True):
@@ -914,10 +916,17 @@ class Dataset(object):
     :return: generator which yields tuples (seq index, seq start, seq end)
     :rtype: list[(int,NumbersDict,NumbersDict)]
     """
+    if self.custom_chunking_func:
+      sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+      for seq_idx, t_start, t_end in self.custom_chunking_func(
+            dataset=self, seq_idx_start=0, recurrent_net=recurrent_net, used_data_keys=used_data_keys, **sentinel_kw):
+        yield seq_idx, t_start, t_end
+      return
+
     chunk_size = self.chunk_size
     chunk_step = self.chunk_step
     if not recurrent_net:
-      if chunk_size != 0:
+      if chunk_size:
         print("Non-recurrent network, chunk size %s:%s ignored" % (chunk_size, chunk_step), file=log.v4)
         chunk_size = 0
     chunk_size = NumbersDict(chunk_size)
