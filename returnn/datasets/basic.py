@@ -905,19 +905,21 @@ class Dataset(object):
       i += 1
     return numpy.array(priori / self.get_num_timesteps(), dtype=numpy.float32)
 
-  def iterate_seqs(self, chunk_size=None, chunk_step=None, used_data_keys=None):
+  def iterate_seqs(self, recurrent_net=True, used_data_keys=None):
     """
     Takes chunking into consideration.
-    :param int|NumbersDict chunk_size:
-    :param int|NumbersDict chunk_step:
+
+    :param bool recurrent_net: whether the order of frames matter
     :param set(str)|None used_data_keys:
     :return: generator which yields tuples (seq index, seq start, seq end)
     :rtype: list[(int,NumbersDict,NumbersDict)]
     """
-    if chunk_size is None:
-      chunk_size = self.chunk_size
-    if chunk_step is None:
-      chunk_step = self.chunk_step
+    chunk_size = self.chunk_size
+    chunk_step = self.chunk_step
+    if not recurrent_net:
+      if chunk_size != 0:
+        print("Non-recurrent network, chunk size %s:%s ignored" % (chunk_size, chunk_step), file=log.v4)
+        chunk_size = 0
     chunk_size = NumbersDict(chunk_size)
     chunk_step = NumbersDict(chunk_step)
     chunk_size_orig = chunk_size.copy()
@@ -1057,12 +1059,6 @@ class Dataset(object):
     assert seq_drop <= 1.0
     if not max_total_num_seqs or max_total_num_seqs < 0:
       max_total_num_seqs = float("inf")
-    chunk_size = self.chunk_size
-    chunk_step = self.chunk_step
-    if not recurrent_net:
-      if chunk_size != 0:
-        print("Non-recurrent network, chunk size %s:%s ignored" % (chunk_size, chunk_step), file=log.v4)
-        chunk_size = 0
     batch = Batch()
     total_num_seqs = 0
     last_seq_idx = -1
@@ -1070,8 +1066,7 @@ class Dataset(object):
     for idx in self.weights:
       self.weights[idx][1] = random() * avg_weight * pruning
       self.weights[idx][0] *= (1. + pruning)
-    for seq_idx, t_start, t_end in self.iterate_seqs(
-          chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
+    for seq_idx, t_start, t_end in self.iterate_seqs(recurrent_net=recurrent_net, used_data_keys=used_data_keys):
       if not self.sample(seq_idx):
         continue
       if total_num_seqs > max_total_num_seqs:
