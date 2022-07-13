@@ -1253,20 +1253,29 @@ class ConcatSeqsDataset(CachedDataset2):
   """
   This takes another dataset, and concatenates one or multiple seqs.
   """
-  def __init__(self, dataset, seq_list_file, seq_len_file, seq_tag_delim=";", remove_in_between_postfix=None,
-               use_cache_manager=False, epoch_wise_filter=None, **kwargs):
+  def __init__(self, dataset, seq_list_file, seq_len_file, seq_tag_delim=";",
+               remove_in_between_postfix=None,
+               repeat_in_between_last_frame_up_to_multiple_of=None,
+               use_cache_manager=False,
+               epoch_wise_filter=None, **kwargs):
     """
     :param dict[str]|str|Dataset dataset: kwargs for init_dataset
     :param str seq_list_file: filename. line-separated. seq_tag_delim.join(seq_tags) for concatenated seqs
     :param str seq_len_file: file with Python dict, (single) seg_name -> len, which is used for sorting
     :param str seq_tag_delim:
+    :param dict[str,int]|None remove_in_between_postfix: data_key -> expected postfix label. e.g. {"targets": 0}
+    :param dict[str,int]|None repeat_in_between_last_frame_up_to_multiple_of: data_key -> multiple of.
+      Example: you have downsampling factor 6, i.e. ceildiv(data_len, 6) == align_len.
+      Now it could happen that ceildiv(data_len1 + data_len2, 6) < align_len1 + align_len2.
+      This option would repeat intermediate ending frames such that data_len1 % 6 == 0,
+      by setting it to {"data": 6}.
     :param bool use_cache_manager:
     :param dict[(int,int),dict] epoch_wise_filter: see :class:`EpochWiseFilter`
-    :param dict[str,int]|None remove_in_between_postfix: data_key -> expected postfix label. e.g. {"targets": 0}
     """
     super(ConcatSeqsDataset, self).__init__(**kwargs)
     self.seq_tag_delim = seq_tag_delim
     self.remove_in_between_postfix = remove_in_between_postfix or {}
+    self.repeat_in_between_last_frame_up_to_multiple_of = repeat_in_between_last_frame_up_to_multiple_of or {}
     self.epoch_wise_filter = EpochWiseFilter(epoch_wise_filter) if epoch_wise_filter else None
     if isinstance(dataset, dict):
       dataset = dataset.copy()
@@ -1370,6 +1379,10 @@ class ConcatSeqsDataset(CachedDataset2):
       for key in self.remove_in_between_postfix:
         assert key in sub_dataset_keys, "%s: remove_in_between_postfix key %r not in sub dataset data-keys %r" % (
           self, key, sub_dataset_keys)
+      for key in self.repeat_in_between_last_frame_up_to_multiple_of:
+        assert key in sub_dataset_keys, (
+          "%s: repeat_in_between_last_frame_up_to_multiple_of key %r not in sub dataset data-keys %r" % (
+            self, key, sub_dataset_keys))
     for sub_seq_idx, sub_seq_tag in zip(sub_seq_idxs, sub_seq_tags):
       self.sub_dataset.load_seqs(sub_seq_idx, sub_seq_idx + 1)
       sub_dataset_tag = self.sub_dataset.get_tag(sub_seq_idx)
@@ -1380,6 +1393,11 @@ class ConcatSeqsDataset(CachedDataset2):
         if key in self.remove_in_between_postfix and sub_seq_idx != sub_seq_idxs[-1]:
           assert data.ndim == 1 and data[-1] == self.remove_in_between_postfix[key]
           data = data[:-1]
+        if key in self.repeat_in_between_last_frame_up_to_multiple_of and sub_seq_idx != sub_seq_idxs[-1]:
+          multiple = self.repeat_in_between_last_frame_up_to_multiple_of[key]
+          if data.shape[0] % multiple != 0:
+            data = numpy.concatenate([data] + [data[-1:]] * (multiple - data.shape[0] % multiple), axis=0)
+            assert data.shape[0] % multiple == 0
         features[key].append(data)
     features = {key: numpy.concatenate(values, axis=0) for (key, values) in features.items()}
     return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features)
