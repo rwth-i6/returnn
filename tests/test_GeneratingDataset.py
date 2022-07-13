@@ -142,6 +142,36 @@ def test_ConcatSeqsDataset():
     assert_equal(dataset.get_data(2, "data").tolist(), [1, 2, 3, 1, 2, 3])
 
 
+# might be moved to a separate test_MetaDataset ...
+def test_ConcatSeqsDataset_repeat_in_between_last_frame_up_to_multiple_of():
+  num_seqs = 2
+  sub_dataset = StaticDataset(
+    [{"data": numpy.array([1, 2])}, {"data": numpy.array([1, 2, 3])}]
+  )
+  from returnn.datasets.meta import ConcatSeqsDataset
+  import tempfile
+  seq_list_f = tempfile.NamedTemporaryFile(mode="w", prefix="seq-list", suffix=".txt")
+  seq_len_f = tempfile.NamedTemporaryFile(mode="w", prefix="seq-len", suffix=".txt")
+  with seq_list_f, seq_len_f:
+    seq_len_f.write("%r\n" % ({"seq-0": 2, "seq-1": 3},))
+    seq_len_f.flush()
+    seq_list_f.write("seq-0\n")
+    seq_list_f.write("seq-1\n")
+    seq_list_f.write("seq-0;seq-1;seq-1\n")
+    seq_list_f.flush()
+    concat_num_seqs = 3
+    dataset = ConcatSeqsDataset(
+      dataset=sub_dataset,
+      repeat_in_between_last_frame_up_to_multiple_of={"data": 5},
+      seq_list_file=seq_list_f.name, seq_len_file=seq_len_f.name)
+    dataset.init_seq_order(epoch=1)
+    dataset.load_seqs(0, concat_num_seqs)
+    assert dataset.num_seqs == concat_num_seqs == 3
+    assert_equal(dataset.get_data(0, "data").tolist(), [1, 2])
+    assert_equal(dataset.get_data(1, "data").tolist(), [1, 2, 3])
+    assert_equal(dataset.get_data(2, "data").tolist(), [1, 2, 2, 2, 2, 1, 2, 3, 3, 3, 1, 2, 3])
+
+
 def test_BytePairEncoding_unicode():
   bpe = BytePairEncoding(
     bpe_file="%s/bpe-unicode-demo.codes" % my_dir,
