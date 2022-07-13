@@ -109,6 +109,39 @@ def test_StaticDataset_utf8():
   assert_equal(s, s_serialized)
 
 
+# might be moved to a separate test_MetaDataset ...
+def test_ConcatSeqsDataset():
+  num_seqs = 2
+  seq_len = 3
+  sub_dataset = StaticDataset(
+    [{"data": numpy.array(range(1, seq_len + 1))}] * num_seqs
+  )
+  from returnn.datasets.meta import ConcatSeqsDataset
+  import tempfile
+  seq_list_f = tempfile.NamedTemporaryFile(mode="w", prefix="seq-list", suffix=".txt")
+  seq_len_f = tempfile.NamedTemporaryFile(mode="w", prefix="seq-len", suffix=".txt")
+  with seq_list_f, seq_len_f:
+    seq_len_f.write("{\n")
+    for i in range(num_seqs):
+      seq_list_f.write("seq-%i\n" % i)
+      seq_len_f.write("'seq-%i': %i,\n" % (i, seq_len))
+    seq_len_f.write("}\n")
+    for i in range(0, num_seqs, 2):
+      seq_list_f.write("seq-%i;seq-%i\n" % (i, i + 1))
+    seq_list_f.flush()
+    seq_len_f.flush()
+    dataset = ConcatSeqsDataset(
+      dataset=sub_dataset,
+      seq_list_file=seq_list_f.name, seq_len_file=seq_len_f.name)
+    dataset.init_seq_order(epoch=1)
+    concat_num_seqs = num_seqs + num_seqs // 2
+    dataset.load_seqs(0, concat_num_seqs)
+    assert dataset.num_seqs == concat_num_seqs == 3
+    assert_equal(dataset.get_data(0, "data").tolist(), [1, 2, 3])
+    assert_equal(dataset.get_data(1, "data").tolist(), [1, 2, 3])
+    assert_equal(dataset.get_data(2, "data").tolist(), [1, 2, 3, 1, 2, 3])
+
+
 def test_BytePairEncoding_unicode():
   bpe = BytePairEncoding(
     bpe_file="%s/bpe-unicode-demo.codes" % my_dir,
