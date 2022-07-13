@@ -36,8 +36,10 @@ def test_generate_batches_recurrent():
 
 def test_iterate_seqs_no_chunking_1():
   dataset = DummyDataset(input_dim=2, output_dim=3, num_seqs=2, seq_len=11)
+  dataset.chunk_step = 0
+  dataset.chunk_size = 0
   dataset.init_seq_order(1)
-  seqs = list(dataset.iterate_seqs(chunk_size=0, chunk_step=0, used_data_keys=None))
+  seqs = list(dataset.iterate_seqs())
   assert_equal(len(seqs), 2)
   assert_equal(seqs[0], (0, 0, 11))  # seq-idx, start-frame, end-frame
   assert_equal(seqs[1], (1, 0, 11))
@@ -45,8 +47,10 @@ def test_iterate_seqs_no_chunking_1():
 
 def test_iterate_seqs_chunking_1():
   dataset = DummyDataset(input_dim=2, output_dim=3, num_seqs=2, seq_len=11)
+  dataset.chunk_step = 5
+  dataset.chunk_size = 10
   dataset.init_seq_order(1)
-  seqs = list(dataset.iterate_seqs(chunk_size=10, chunk_step=5, used_data_keys=None))
+  seqs = list(dataset.iterate_seqs())
   for s in seqs:
     print(s)
   assert_equal(len(seqs), 6)
@@ -60,8 +64,10 @@ def test_iterate_seqs_chunking_1():
 
 def test_iterate_seqs_chunking_varying_sequence_length():
   dataset = DummyDatasetMultipleSequenceLength(input_dim=2, output_dim=3, num_seqs=2, seq_len={'data': 24, 'classes': 12})
+  dataset.chunk_size = {'data': 12, 'classes': 6}
+  dataset.chunk_step = {'data': 6, 'classes': 3}
   dataset.init_seq_order(1)
-  seqs = list(dataset.iterate_seqs(chunk_size={'data': 12, 'classes': 6}, chunk_step={'data': 6, 'classes': 3}, used_data_keys=None))
+  seqs = list(dataset.iterate_seqs())
   for s in seqs:
     print(s)
   assert_equal(len(seqs), 8)
