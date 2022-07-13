@@ -30,7 +30,7 @@ class GeneratingDataset(Dataset):
     :param int|None input_dim:
     :param int|dict[str,int|(int,int)|dict] output_dim: if dict, can specify all data-keys
     :param int|float num_seqs:
-    :param int fixed_random_seed:
+    :param int|None fixed_random_seed:
     """
     super(GeneratingDataset, self).__init__(**kwargs)
     assert self.shuffle_frames_of_nseqs == 0
