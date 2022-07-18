@@ -1488,6 +1488,7 @@ class TFNetwork(object):
     layer_queue = []
     for layer in self.layers.values():
       if not layer.loss:
+        layer_queue.append(layer)
         continue
       layer = _resolve_layer(layer)
       if layer in end_points:
