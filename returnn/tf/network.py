@@ -1564,7 +1564,9 @@ class TFNetwork(object):
 
     # All end points must be mapped now.
     for layer in end_points:
-      assert layer in mapped_layers, "end point %r not mapped:\n%s" % (layer, pformat(mapped_layers))
+      assert layer in mapped_layers, (
+        "end point %r not mapped.\n end points:\n%s\n mapped:\n%s\n blacklist:\n%s\n starting points:\n%s" % (
+          layer, pformat(end_points), pformat(mapped_layers), pformat(blacklist), pformat(starting_points)))
     # Assign flatten_with_seq_len_mask cache to mapped layers.
     for layer, new_layer in mapped_layers.items():
       if not _should_flatten_layer_output(layer):
