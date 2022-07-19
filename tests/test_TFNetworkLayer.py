@@ -7329,6 +7329,13 @@ def test_double_flatten_loss_1079():
   feature_dim = FeatureDim("feat", 1)
   config = Config({"extern_data": {"data": {"dim_tags": (batch_dim, time_dim, feature_dim), "dtype": "int32"}}})
   network = {
+    'sub': {
+      'class': 'combine',
+      'from': ['data:data', 'data:data'],
+      'kind': 'sub',
+      'loss': 'as_is',
+      'out_shape': {batch_dim, time_dim, feature_dim}
+    },
     'repeat': {
       'class': 'repeat',
       'from': 'data:data',
