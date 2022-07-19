@@ -1314,6 +1314,7 @@ class TFNetwork(object):
     from .util.data import BatchInfo
     from .layers.basic import SourceLayer, InternalLayer, SubnetworkLayer, CopyLayer, FlattenBatchLayer
     from tensorflow.python.util import nest
+    from pprint import pformat
 
     def _relevant_dims_for_layer(layer_):
       """
@@ -1563,7 +1564,7 @@ class TFNetwork(object):
 
     # All end points must be mapped now.
     for layer in end_points:
-      assert layer in mapped_layers
+      assert layer in mapped_layers, "end point %r not mapped:\n%s" % (layer, pformat(mapped_layers))
     # Assign flatten_with_seq_len_mask cache to mapped layers.
     for layer, new_layer in mapped_layers.items():
       if not _should_flatten_layer_output(layer):
