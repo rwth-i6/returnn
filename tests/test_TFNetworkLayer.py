@@ -7321,6 +7321,48 @@ def test_double_flatten_loss():
     net.get_total_loss()
 
 
+def test_double_flatten_loss_1079():
+  # https://github.com/rwth-i6/returnn/issues/1079
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  time_dim = SpatialDim("time")
+  _repeat_out_dim = time_dim * 5
+  feature_dim = FeatureDim("feat", 1)
+  config = Config({"extern_data": {"data": {"dim_tags": (batch_dim, time_dim, feature_dim), "dtype": "int32"}}})
+  network = {
+    'sub': {
+      'class': 'combine',
+      'from': ['data:data', 'data:data'],
+      'kind': 'sub',
+      'loss': 'as_is',
+      'out_shape': {batch_dim, time_dim, feature_dim}
+    },
+    'repeat': {
+      'class': 'repeat',
+      'from': 'data:data',
+      'repetitions': 5,
+      'axis': time_dim,
+      'out_dim': _repeat_out_dim,
+      'out_shape': {batch_dim, feature_dim, _repeat_out_dim}
+    },
+    'sub_0': {
+      'class': 'combine',
+      'from': ['repeat', 'repeat'],
+      'kind': 'sub',
+      'loss': 'as_is',
+      'out_shape': {batch_dim, feature_dim, _repeat_out_dim}
+    },
+    'output': {
+      'class': 'copy',
+      'from': 'sub_0',
+      'out_shape': {batch_dim, feature_dim, _repeat_out_dim}
+    }
+  }
+  with make_scope():
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict(network)
+    net.get_total_loss()
+
+
 def test_LossLayer_sublayers():
   from returnn.tf.util.basic import Dim
   n_in, n_out = 7, 11
