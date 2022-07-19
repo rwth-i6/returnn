@@ -7296,7 +7296,7 @@ def test_double_flatten_loss():
     },
     'repeat': {
       'class': 'repeat',
-      'from': 'data:data',
+      'from': 'sub',
       'repetitions': 5,
       'axis': time_dim,
       'out_dim': _repeat_out_dim,
