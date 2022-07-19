@@ -1417,6 +1417,7 @@ class TFNetwork(object):
       Checks whether the inputs to the layer should be flattened aswell
 
       :param LayerBase layer_:
+      :return: False when we should stop here
       :rtype: bool
       """
       if not _check_push_flattening_to_inputs_for_layer_simple(layer_):
@@ -1437,6 +1438,7 @@ class TFNetwork(object):
         for dep_ in deps)
       if not valid_deps:
         return False
+      have_any_deps_which_needs_flattening = False
       for dep_ in deps:
         if dep_.output.beam:
           return False
@@ -1444,7 +1446,8 @@ class TFNetwork(object):
           if any(d.dimension is None for d in set(dep_.output.dim_tags).difference(dims)):  # any other dynamic?
             return False
           layer_queue.append(dep_)
-      return True
+          have_any_deps_which_needs_flattening = True
+      return have_any_deps_which_needs_flattening
 
     def _resolve_layer(layer_):
       """
