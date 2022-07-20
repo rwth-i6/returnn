@@ -6303,6 +6303,44 @@ def test_TransposedConvLayer_2d_2x2():
     assert out_v.shape == (n_batch, n_out, n_time * 2, 2)
 
 
+def test_TransposedConvLayer_out_size_pool_pad_same():
+  with make_scope() as session:
+    from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+    time_dim = SpatialDim("time")
+    feature_dim = FeatureDim("feature", 5)
+    config = Config({"extern_data": {"data": {"dim_tags": (batch_dim, time_dim, feature_dim)}}})
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "downsample": {
+        "class": "pool", "mode": "avg", "pool_size": [2], "from": "data", "padding": "same"},  # ceildiv with same
+      "upsample": {
+        "class": "transposed_conv", "filter_size": [2], "from": "downsample", "padding": "same",
+        "out_spatial_dims": [time_dim], "out_dim": feature_dim},
+      "output": {"class": "combine", "from": ["upsample", "data"], "kind": "sub"}
+    })
+    net.initialize_params(session)
+    session.run(net.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(net.extern_data))
+
+
+def test_TransposedConvLayer_out_size_pool_pad_valid():
+  with make_scope() as session:
+    from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+    time_dim = SpatialDim("time")
+    feature_dim = FeatureDim("feature", 5)
+    config = Config({"extern_data": {"data": {"dim_tags": (batch_dim, time_dim, feature_dim)}}})
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict({
+      "downsample": {
+        "class": "pool", "mode": "avg", "pool_size": [2], "from": "data", "padding": "valid"},  # floordiv with valid
+      "upsample": {
+        "class": "transposed_conv", "filter_size": [2], "from": "downsample", "padding": "valid",
+        "out_spatial_dims": [time_dim], "out_dim": feature_dim},
+      "output": {"class": "combine", "from": ["upsample", "data"], "kind": "sub"}
+    })
+    net.initialize_params(session)
+    session.run(net.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(net.extern_data))
+
+
 def test_ReduceLayer_NCHW():
   with make_scope() as session:
     import numpy as np

@@ -5601,7 +5601,6 @@ class TransposedConvLayer(_ConcatInputLayer):
     from returnn.tf.util.basic import get_initializer, get_activation_function, get_shape
     super(TransposedConvLayer, self).__init__(**kwargs)
     out_dim  # noqa  # via get_out_data_from_opts
-    out_spatial_dims  # noqa  # via get_out_data_from_opts
     assert not self.input_data.sparse
     assert self.input_data.have_batch_axis()
     assert self.input_data.have_feature_axis(), (
@@ -5664,7 +5663,11 @@ class TransposedConvLayer(_ConcatInputLayer):
       shape[:1] +
       [self.deconv_output_length(
         size, filter_size=filter_size[i], stride=strides[i],
-        padding=padding, output_padding=output_padding[i])
+        padding=padding, output_padding=output_padding[i],
+        out_dim=(
+          out_spatial_dims[i]
+          if out_spatial_dims and i < len(out_spatial_dims) and not any(remove_padding)
+          else None))
        for (i, size) in enumerate(shape[1:-1])]
       + [self.output.dim])
     y = tf.nn.conv2d_transpose(
@@ -5709,7 +5712,8 @@ class TransposedConvLayer(_ConcatInputLayer):
                            padding,
                            output_padding=None,
                            stride=0,
-                           dilation=1):
+                           dilation=1,
+                           out_dim=None):
     """
     Determines output length of a transposed convolution given input length.
     Copied from conv_utils.deconv_output_length, adapted with simplification.
@@ -5723,9 +5727,12 @@ class TransposedConvLayer(_ConcatInputLayer):
       Can be set to `None` in which case the output length is inferred.
     :param int stride:
     :param int dilation:
+    :param Dim|None out_dim:
     :returns: The output length (integer)
     :rtype: T
     """
+    if out_dim and out_dim.is_dim_known():
+      return out_dim.get_dim_value()
     assert padding in {'same', 'valid', 'full'}
 
     # Get the dilated kernel size
@@ -5809,12 +5816,15 @@ class TransposedConvLayer(_ConcatInputLayer):
     # Be relaxed about incorrect input data. Throw errors later. This can also work during template construction.
     for i in range(len(filter_size)):
       old_tag = old_spatial_dim_tags[i] if i < len(old_spatial_dim_tags) else None
-      new_tag = cls.deconv_output_length(
-        old_tag, filter_size=filter_size[i], stride=strides[i],
-        padding=padding, output_padding=output_padding[i])
-      new_tag = new_tag.sub_left(remove_padding[i]).sub_right(remove_padding[i])
-      if out_spatial_dims:
-        new_tag.declare_same_as(out_spatial_dims[i])
+      if out_spatial_dims and out_spatial_dims[i].is_dim_known():
+        new_tag = out_spatial_dims[i]  # reuse
+      else:
+        new_tag = cls.deconv_output_length(
+          old_tag, filter_size=filter_size[i], stride=strides[i],
+          padding=padding, output_padding=output_padding[i])
+        new_tag = new_tag.sub_left(remove_padding[i]).sub_right(remove_padding[i])
+        if out_spatial_dims:
+          new_tag.declare_same_as(out_spatial_dims[i])
       dim_tags.append(new_tag)
     if not out_dim:
       assert n_out
