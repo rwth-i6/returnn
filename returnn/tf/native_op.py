@@ -1323,7 +1323,7 @@ def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx, label_loop=True):
 
   :param tf.Tensor targets: shape (batch,time), int32
   :param tf.Tensor seq_lens: shape (batch), int32
-  :param int blank_idx:
+  :param int blank_idx: vocab index of the blank symbol
   :param bool label_loop: True -> normal CTC; False -> RNA-like
   :return: edges, weights, start_end_states;
     edges is (4,num_edges), int32, edges of the graph (from,to,emission_idx,sequence_idx).
@@ -1387,7 +1387,7 @@ def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_le
     This is ``p(s|x) - bw``, where ``bw`` is the Baum-Welch soft alignment.
     If logits are already normalized (e.g. we just use ``log p(s|x) = logits``),
     the error signal to logits should be ``-bw``.
-  :param int blank_index:
+  :param int blank_index: vocab index of the blank symbol
   :return: loss, shape (batch,)
   :rtype: tf.Tensor
   """
@@ -1454,7 +1454,7 @@ def ctc_loss_viterbi(logits, logits_seq_lens, logits_time_major, targets, target
   :param bool logits_time_major:
   :param tf.Tensor targets: batch-major, [batch,time]
   :param tf.Tensor targets_seq_lens: (batch,)
-  :param int blank_index:
+  :param int blank_index: vocab index of the blank symbol
   :return: loss, shape (batch,)
   :rtype: tf.Tensor
   """

@@ -9099,11 +9099,12 @@ class ForcedAlignmentLayer(_ConcatInputLayer):
   """
   layer_class = "forced_align"
 
-  def __init__(self, align_target, topology, input_type, **kwargs):
+  def __init__(self, align_target, topology, input_type, blank_index=-1, **kwargs):
     """
     :param LayerBase align_target:
     :param str topology: e.g. "ctc" or "rna" (RNA is CTC without label loop)
     :param str input_type: "log_prob" or "prob"
+    :param int blank_index: vocab index of the blank symbol
     """
     from returnn.tf.native_op import get_ctc_fsa_fast_bw, fast_viterbi
     super(ForcedAlignmentLayer, self).__init__(**kwargs)
@@ -9113,6 +9114,9 @@ class ForcedAlignmentLayer(_ConcatInputLayer):
     logits = logits_data.placeholder
     assert logits.get_shape().ndims == 3 and logits.get_shape().dims[-1].value == logits_data.dim
     assert align_target.output.shape == (None,) and align_target.output.dim == logits_data.dim - 1
+    if blank_index < 0:
+      blank_index += logits_data.dim
+    assert 0 <= blank_index < logits_data.dim
     if input_type == "log_prob":
       pass  # ok
     elif input_type == "prob":
@@ -9123,7 +9127,7 @@ class ForcedAlignmentLayer(_ConcatInputLayer):
     edges, weights, start_end_states = get_ctc_fsa_fast_bw(
       targets=align_target.output.get_placeholder_as_batch_major(),
       seq_lens=align_target.output.get_sequence_lengths(),
-      blank_idx=logits_data.dim - 1,
+      blank_idx=blank_index,
       label_loop=topology == "ctc")
     alignment, scores = fast_viterbi(
       am_scores=logits, am_seq_len=logits_data.get_sequence_lengths(),
@@ -9269,7 +9273,7 @@ class CtcLossLayer(LayerBase):
     """
     :param LayerBase logits: (before softmax). shape [B,T,D]
     :param LayerBase targets: sparse. shape [B,T]
-    :param int blank_index:
+    :param int blank_index: vocab index of the blank symbol
     :param bool max_approx: if True, use max instead of sum over alignments (max approx, Viterbi)
     """
     from returnn.tf.native_op import ctc_loss, ctc_loss_viterbi
