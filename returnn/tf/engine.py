@@ -124,7 +124,7 @@ class Runner(object):
 
     from returnn.util.basic import terminal_size
     terminal_width, _ = terminal_size()
-    self._show_interactive_process_bar = (log.verbose[3] and (not log.verbose[5]) and terminal_width >= 0)
+    self._show_interactive_process_bar = (log.verbose[3] and (not log.verbose[5]) and terminal_width > 0)
 
   def _get_fetches_dict(self):
     """

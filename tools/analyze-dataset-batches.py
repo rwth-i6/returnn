@@ -38,7 +38,7 @@ def analyze_dataset(options):
   assert options.key in dataset.get_data_keys()
 
   terminal_width, _ = util.terminal_size()
-  show_interactive_process_bar = (log.verbose[3] and (not log.verbose[5]) and terminal_width >= 0)
+  show_interactive_process_bar = (log.verbose[3] and (not log.verbose[5]) and terminal_width > 0)
 
   start_time = time.time()
   num_seqs_stats = Stats()
