@@ -863,7 +863,7 @@ def progress_bar(complete=1.0, prefix="", suffix="", file=None):
   if file is None:
     file = sys.stdout
   terminal_width, _ = terminal_size(file=file)
-  if terminal_width == -1:
+  if terminal_width <= 0:
     return
   if complete == 1.0:
     file.write("\r%s" % (terminal_width * ' '))

@@ -407,7 +407,7 @@ class TaskThread(threading.Thread):
         device.prepare(epoch=self.epoch, **self.get_device_prepare_args())
       self.initialize()
       terminal_width, _ = terminal_size()
-      self.interactive = (log.v[3] and terminal_width >= 0)
+      self.interactive = (log.v[3] and terminal_width > 0)
       print("starting task", self.task, file=log.v5)
 
       for device in self.devices:
