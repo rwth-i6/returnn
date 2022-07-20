@@ -1064,9 +1064,9 @@ class SliceNdLayer(_ConcatInputLayer):
   layer_class = "slice_nd"
   recurrent = True
 
-  def __init__(self, start, size, min_size=None, axis="T", out_spatial_dim=None, **kwargs):
+  def __init__(self, size, start=None, min_size=None, axis="T", out_spatial_dim=None, **kwargs):
     """
-    :param LayerBase start: (B,...)
+    :param int|LayerBase|None start: (B,...)
     :param int|LayerBase|Dim|None size:
       We assume that this is >=0. If this might not be the case, use ``min_size=0``.
       If None, it uses the max possible size, and it becomes a dynamic axis.
@@ -1082,23 +1082,35 @@ class SliceNdLayer(_ConcatInputLayer):
     in_axis = x.get_axis_from_description(axis, allow_int=False)
     in_tag = x.dim_tags[in_axis]
     seq_lens_data = in_tag.dyn_size_ext  # (B,) or None
+    if start is None:
+      start = 0
     self.start = start
     self.size = size
-    start_data = start.output.copy()  # e.g. (B,) or (B,T)
+    if isinstance(start, int):
+      start_data = Data.template_from_constant(start, name="%s_start" % self.name)
+    else:
+      start_data = start.output.copy()  # e.g. (B,) or (B,T)
     data_objs = [start_data]
     data_objs += [size.output] if isinstance(size, LayerBase) else []
     data_objs += [seq_lens_data] if isinstance(seq_lens_data, Data) else []
     common_data = Data.get_common_data(data_objs, name="%s_inputs")
     start_data = start_data.copy_compatible_to(common_data, check_sparse=False)
-    start_t = start_data.placeholder
+    if isinstance(start, int):
+      start_t = start  # scalar
+    else:
+      start_t = start_data.placeholder
+    slice_tag = None
     if size is None:
       if seq_lens_data is None:
         assert isinstance(x.batch_shape[in_axis], int)
         size_t = x.batch_shape[in_axis] - start_t
       else:
         seq_lens_t = seq_lens_data.copy_compatible_to(common_data, check_sparse=False).placeholder
-        size_t = seq_lens_t - start_t
-      size_t = tf.maximum(size_t, min_size or 0)  # must make sure >=0 in any case
+        if isinstance(start_t, int) and start_t == 0:
+          size_t = seq_lens_t
+        else:
+          size_t = seq_lens_t - start_t
+          size_t = tf.maximum(size_t, min_size or 0)  # must make sure >=0 in any case
       size = tf.reduce_max(size_t)  # scalar
     elif isinstance(size, LayerBase):
       size_data = size.output.copy_compatible_to(common_data, check_sparse=False)
@@ -1112,85 +1124,103 @@ class SliceNdLayer(_ConcatInputLayer):
       size_t = size_data.placeholder  # assume already >=0
       if min_size:
         size_t = tf.maximum(size_t, min_size)
+      else:
+        slice_tag = size
       size = tf.reduce_max(size_t)  # scalar
     else:
       assert isinstance(size, int), "%s: invalid type %s for size" % (self, type(size))
       size_t = None
-    # for each start index in start_data, we want to gather a slice
-    # therefore, the output's first axes are the same as the ones from start_data
-    # and the next axis will therefore be the slice axis
-    slice_tag = self.output.dim_tags[start_data.batch_ndim]
-    assert slice_tag.description.startswith("sliced-time:")
-    if size_t is not None:
-      # in this case, size is not known before runtime and becomes dynamic and we need to set dyn_size
-      assert not isinstance(size, int)
-      assert isinstance(size_t, tf.Tensor)
-      dyn_size_ext = Data(
-        name=("%s:dyn_size" % slice_tag.description),
-        dtype=Data.size_dtype,
-        placeholder=size_t,
-        dim_tags=start_data.dim_tags,  # (B,) or (B,T)
-        batch=slice_tag.batch,
-        beam=slice_tag.batch.beam if slice_tag.batch else self.output.beam,
-        control_flow_ctx=slice_tag.control_flow_ctx)
-      slice_tag.dyn_size_ext = dyn_size_ext
-      slice_tag.set_tag_on_size_tensor(size_t)
-    gather_positions_data = start_data.copy_template(name="%s_gather_positions" % self.name)
-    gather_positions_data = gather_positions_data.copy_add_dim_by_tag(
-      slice_tag,
-      unbroadcast=True,
-      axis=start_data.batch_ndim)
-    # [start+0, start+1, ...]
-    gather_positions = tf.expand_dims(start_t, -1) + tf.range(0, size)  # e.g. (B, size) or (B, T, size)
-    if seq_lens_data is not None:
-      seq_lens_t = seq_lens_data.copy_compatible_to(
-        gather_positions_data,
-        check_sparse=False).placeholder
-      pad_mask = tf.logical_or(  # shape like gather_positions
-        tf.greater(gather_positions, seq_lens_t - 1),
-        tf.less(gather_positions, 0))
-      gather_positions = tf.clip_by_value(gather_positions, 0, seq_lens_t - 1)
-    else:
-      pad_mask = tf.logical_or(  # shape like gather_positions
-        tf.greater(gather_positions, x.batch_shape[1] - 1),
-        tf.less(gather_positions, 0))
-      gather_positions = tf.clip_by_value(gather_positions, 0, x.batch_shape[1] - 1)
-    if isinstance(self.size, LayerBase):
-      pad_mask = tf.logical_or(tf.greater(gather_positions, tf.expand_dims(start_t + size_t - 1, -1)), pad_mask)
-    pad_mask_data = gather_positions_data.copy_template(
-      name="%s_gather_positions" % self.name,
-      dtype="bool")
-    pad_mask_data.placeholder = pad_mask
-    gather_positions_data.placeholder = gather_positions
-    position = InternalLayer(
-      network=self.network,
-      name="%s_internal" % gather_positions_data.name,
-      output=gather_positions_data)
-    gather_layer = GatherLayer(
-      name="%s_gather" % self.name,
-      network=self.network,
-      output=self.output,
-      sources=self.sources,
-      position=position,
-      axis=in_tag)
-    placeholder = gather_layer.output.placeholder
-    # In principle, the padded frames are being ignored
-    # (unless get_padding_info_dict_ref et al are used).
-    # However, you can still end up with gradients for them
-    # in unexpected ways.
-    # Due to our gather implementation,
-    # the gradient flow would go into wrong frames
-    # and might lead to unexpected behavior.
-    # So to be on the safe side, we do the masking here.
-    pad_mask_data = pad_mask_data.copy_compatible_to(gather_layer.output, check_sparse=False, check_dtype=False)
-    pad_mask = pad_mask_data.placeholder
-    self.output.placeholder = where_bc(pad_mask, tf.zeros_like(placeholder), placeholder)
+
+    if not slice_tag:
+      # for each start index in start_data, we want to gather a slice
+      # therefore, the output's first axes are the same as the ones from start_data
+      # and the next axis will therefore be the slice axis
+      slice_tag = self.output.dim_tags[start_data.batch_ndim]
+      assert slice_tag.description.startswith("sliced-time:")
+      if size_t is not None:
+        # in this case, size is not known before runtime and becomes dynamic and we need to set dyn_size
+        assert not isinstance(size, int)
+        assert isinstance(size_t, tf.Tensor)
+        dyn_size_ext = Data(
+          name=("%s:dyn_size" % slice_tag.description),
+          dtype=Data.size_dtype,
+          placeholder=size_t,
+          dim_tags=start_data.dim_tags,  # (B,) or (B,T)
+          batch=slice_tag.batch,
+          beam=slice_tag.batch.beam if slice_tag.batch else self.output.beam,
+          control_flow_ctx=slice_tag.control_flow_ctx)
+        slice_tag.dyn_size_ext = dyn_size_ext
+        slice_tag.set_tag_on_size_tensor(size_t)
+
+    if isinstance(start_t, int):
+      # Much simpler logic for int start_t.
+      assert start_t >= 0  # not implemented otherwise
+      # Like SliceLayer.
+      dim_slice = slice(start_t, start_t + size)
+      slices = [slice(None, None)] * in_axis + [dim_slice]
+      y = self.input_data.placeholder[slices]
+      y.set_shape(self.output.batch_shape)  # can be necessary for slice_end>0
+      self.output.placeholder = y
+
+    else:  # dynamic start_t
+      gather_positions_data = start_data.copy_template(name="%s_gather_positions" % self.name)
+      gather_positions_data = gather_positions_data.copy_add_dim_by_tag(
+        slice_tag,
+        unbroadcast=True,
+        axis=start_data.batch_ndim)
+      # [start+0, start+1, ...]
+      gather_positions = tf.expand_dims(start_t, -1) + tf.range(0, size)  # e.g. (B, size) or (B, T, size)
+      if seq_lens_data is not None:
+        seq_lens_t = seq_lens_data.copy_compatible_to(
+          gather_positions_data,
+          check_sparse=False).placeholder
+        pad_mask = tf.logical_or(  # shape like gather_positions
+          tf.greater(gather_positions, seq_lens_t - 1),
+          tf.less(gather_positions, 0))
+        gather_positions = tf.clip_by_value(gather_positions, 0, seq_lens_t - 1)
+      else:
+        pad_mask = tf.logical_or(  # shape like gather_positions
+          tf.greater(gather_positions, x.batch_shape[1] - 1),
+          tf.less(gather_positions, 0))
+        gather_positions = tf.clip_by_value(gather_positions, 0, x.batch_shape[1] - 1)
+      if isinstance(self.size, LayerBase):
+        pad_mask = tf.logical_or(tf.greater(gather_positions, tf.expand_dims(start_t + size_t - 1, -1)), pad_mask)
+      pad_mask_data = gather_positions_data.copy_template(
+        name="%s_gather_positions" % self.name,
+        dtype="bool")
+      pad_mask_data.placeholder = pad_mask
+      gather_positions_data.placeholder = gather_positions
+      position = InternalLayer(
+        network=self.network,
+        name="%s_internal" % gather_positions_data.name,
+        output=gather_positions_data)
+      gather_layer = GatherLayer(
+        name="%s_gather" % self.name,
+        network=self.network,
+        output=self.output,
+        sources=self.sources,
+        position=position,
+        axis=in_tag)
+      placeholder = gather_layer.output.placeholder
+      # In principle, the padded frames are being ignored
+      # (unless get_padding_info_dict_ref et al are used).
+      # However, you can still end up with gradients for them
+      # in unexpected ways.
+      # Due to our gather implementation,
+      # the gradient flow would go into wrong frames
+      # and might lead to unexpected behavior.
+      # So to be on the safe side, we do the masking here.
+      pad_mask_data = pad_mask_data.copy_compatible_to(gather_layer.output, check_sparse=False, check_dtype=False)
+      pad_mask = pad_mask_data.placeholder
+      self.output.placeholder = where_bc(pad_mask, tf.zeros_like(placeholder), placeholder)
 
   def get_dep_layers(self):
     """
     :rtype: list[LayerBase]
     """
-    dep_layers = super(SliceNdLayer, self).get_dep_layers() + [self.start]
+    dep_layers = super(SliceNdLayer, self).get_dep_layers()
+    if isinstance(self.start, LayerBase):
+      dep_layers += [self.start]
     if isinstance(self.size, LayerBase):
       dep_layers += [self.size]
     return dep_layers
@@ -1200,13 +1230,18 @@ class SliceNdLayer(_ConcatInputLayer):
     """
     :param str name:
     :param list[LayerBase] sources:
-    :param LayerBase|None start:
+    :param int|LayerBase|None start:
     :param int|LayerBase|Dim|None size:
     :param Dim|str axis:
     :param Dim|None out_spatial_dim:
     :rtype: Data
     """
-    start_data = start.output.copy()
+    if start is None:
+      start = 0
+    if isinstance(start, int):
+      start_data = Data.template_from_constant(start, name="%s_start" % name)
+    else:
+      start_data = start.output.copy()
     gather_positions_data = start_data.copy_template(name="%s_gather_positions" % name)
     if isinstance(size, LayerBase):
       size = None
@@ -1246,7 +1281,8 @@ class SliceNdLayer(_ConcatInputLayer):
     :param get_layer:
     """
     super(SliceNdLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
-    d["start"] = get_layer(d["start"])
+    if isinstance(d.get("start"), str):
+      d["start"] = get_layer(d["start"])
     if isinstance(d["size"], str):
       d["size"] = get_layer(d["size"])
 

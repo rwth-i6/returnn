@@ -5664,6 +5664,24 @@ def test_SliceNdLayer_set_tag_on_size_tensor():
     })
 
 
+def test_SliceNdLayer_start0():
+  with make_scope() as session:
+    from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+    time_dim = SpatialDim("time")
+    feature_dim = FeatureDim("feature", 5)
+    config = Config({"extern_data": {"data": {"dim_tags": (batch_dim, time_dim, feature_dim)}}})
+    net = TFNetwork(config=config, train_flag=True)
+    # the construction of the "compare" layer will fail if set_tag_on_size_tensor is not called on the slice axis
+    # inside of the SliceNdLayer
+    net.construct_from_dict({
+      "downsample": {"class": "pool", "mode": "avg", "pool_size": 2, "from": "data"},
+      "upsample": {"class": "resize", "axis": "T", "factor": 2, "from": "downsample"},
+      "cutoff": {"class": "slice_nd", "from": "data", "size": time_dim},
+      "output": {"class": "combine", "from": ["cutoff", "data"], "kind": "sub"}
+    })
+    session.run(net.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(net.extern_data))
+
+
 def test_SliceNdLayer_ReinterpretDataLayer():
   """
   https://github.com/rwth-i6/returnn/issues/851
