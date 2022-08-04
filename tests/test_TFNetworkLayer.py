@@ -5456,6 +5456,51 @@ def test_GatherLayer_broadcast_dim():
   })
 
 
+def test_GatherLayer_batch_dim():
+  with make_scope() as session:
+    import numpy as np
+    net = TFNetwork(extern_data=ExternData())
+    batch_dim, time_dim, feature_dim = 3, 4, 2
+    # [B, T, F]
+    random = np.random.RandomState(42)
+    values_seqs = random.rand(batch_dim, time_dim, feature_dim).astype('float32')
+    values_size = np.array([4, 2, 3])
+    values_placeholder = tf.constant(values_seqs, dtype=tf.float32)
+    values_size_placeholder = {0: tf.constant(values_size, dtype=tf.int32)}
+    values = InternalLayer(
+      name="values", network=net,
+      output=Data(
+        name="values",
+        batch_dim_axis=0, time_dim_axis=1, feature_dim_axis=2,
+        shape=[None, feature_dim],
+        placeholder=values_placeholder,
+        size_placeholder=values_size_placeholder,
+      ))
+    position_np = np.array([0, 2])
+    position = InternalLayer(
+      name="position", network=net,
+      output=Data(
+        name="position",
+        placeholder=tf.constant(position_np, dtype=tf.int64),
+        batch_dim_axis=0, shape=[], dtype="int64",
+      ))
+    values.output.sanity_check()
+    position.output.sanity_check()
+
+    # should become [B', T, F]
+    layer = GatherLayer(
+      name="gather", network=net,
+      sources=[values], position=position, axis="B",
+      output=GatherLayer.get_out_data_from_opts(
+        name="gather", sources=[values], position=position, axis="B"))
+    layer.output.sanity_check()
+    out_seqs, out_size = session.run([layer.output.placeholder, layer.output.size_placeholder.as_dict()])
+    assert isinstance(out_seqs, numpy.ndarray)
+
+    np.testing.assert_equal(values_seqs[position_np, :], out_seqs)
+    np.testing.assert_equal(values_size[position_np], out_size[0])
+
+
 def test_SliceNdLayer():
   n_batch = 5
   n_time = 7
