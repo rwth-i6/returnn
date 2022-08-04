@@ -9258,6 +9258,62 @@ def test_contrastive_loss():
     assert numpy.isfinite(loss_v)
 
 
+def test_supervised_multilingual_training():
+  n_batch = 3
+  out_dim = 5
+
+  net_dict = {
+    "encoder": {"class": "copy", "from": "data"},
+
+    "loss_language_0": {
+      "class": "subnetwork",
+      "from": "data:classes",
+      "is_output_layer": True,
+      "subnetwork": {
+        # create language id indices based on where we see non-silence in the alignment.
+        # this should be done in the dataset in a neat way.
+        "aux_0": {"class": "gather", "position": 0, "axis": "T", "from": "data"},
+        "aux_1": {"class": "compare", "kind": "greater", "value": 2, "from": "aux_0"},
+        "idx": {  # shape (B',) with B' < B (B' is the number of utterances in the batch for this language)
+          "class": "eval",
+          "eval": "tf.squeeze(tf.where(source(0)), axis=-1)",
+          "out_type": {"dtype": "int64"},
+          "from": "aux_1",
+        },
+
+        # gather targets and encoder outputs
+        "tgt": {"class": "gather", "from": "data", "axis": "B", "position": "idx"},  # B', T (sparse)
+        "enc_raw": {"class": "gather", "from": "base:encoder", "axis": "B", "position": "idx"},  # B', T, F
+        "enc": {"class": "reinterpret_data", "size_base": "tgt", "from": "enc_raw"},  # B', T, F
+        "logits": {"class": "linear", "n_out": out_dim, "from": "enc"},  # B', T, n_out
+        "output": {
+          "class": "sparse_softmax_cross_entropy_with_logits",
+          "logits": "logits",
+          "targets": "tgt",
+          "loss": "as_is",
+        },
+      },
+    },
+  }
+
+  with make_scope() as session:
+    config = Config({
+      "extern_data": {
+        "data": {"dim": 7, "batch_dim_axis": 0, "time_dim_axis": 1, "feature_dim_axis": 2},
+        "classes": {"dim": out_dim, "sparse": True}},
+      "debug_print_layer_output_shape": True,  # "debug_print_layer_output": True,
+    })
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict(net_dict)
+    loss = net.get_total_loss()
+
+    tf_compat.v1.set_random_seed(1)
+    net.initialize_params(session)
+    loss_v = session.run(loss, feed_dict=make_feed_dict(net.extern_data, same_time=True, n_batch=n_batch))
+    print("loss:", loss_v)
+    assert numpy.isfinite(loss_v)
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
