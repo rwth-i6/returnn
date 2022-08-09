@@ -9105,7 +9105,7 @@ class ForcedAlignmentLayer(_ConcatInputLayer):
     :param str topology: e.g. "ctc" or "rna" (RNA is CTC without label loop)
     :param str input_type: "log_prob" or "prob"
     :param int blank_idx: vocab index of the blank symbol
-    :param bool blank_included: whether blank token is included in the vocabulary
+    :param bool blank_included: whether blank token of the align target is included in the vocabulary
     """
     from returnn.tf.native_op import get_ctc_fsa_fast_bw, fast_viterbi
     super(ForcedAlignmentLayer, self).__init__(**kwargs)
