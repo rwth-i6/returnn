@@ -444,9 +444,7 @@ class CachedDataset(Dataset):
 
   @property
   def num_seqs(self):
-    if self._index_map:
-      return len(self._index_map)
-    return self._num_seqs
+    return len(self._index_map)
 
   def is_cached(self, start, end, blocking = False):
     """
