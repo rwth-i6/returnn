@@ -184,7 +184,7 @@ class SprintDatasetBase(Dataset):
     """
     Called by RETURNN train thread when we enter a new epoch.
     """
-    if seq_order:
+    if seq_order is not None:
       raise NotImplementedError("Predefined sequence order via indices in SprintDataset.")
     super(SprintDatasetBase, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
     if self.orth_vocab:
@@ -974,9 +974,9 @@ class ExternSprintDataset(SprintDatasetBase):
     :param list[int]|None seq_order:
     :rtype: bool
     """
-    if seq_order:
+    if seq_order is not None:
       raise NotImplementedError("Predefined sequence order via indices in ExternSprintDataset.")
-    if seq_list:
+    if seq_list is not None:
       assert self.partition_epoch == 1, "specifying partition_epoch and using seq_list not supported"
     if epoch is None:
       epoch = 1
@@ -1134,7 +1134,7 @@ class SprintCacheDataset(CachedDataset2):
     :param list[int]|None seq_order:
     :rtype: bool
     """
-    assert not seq_list and not seq_order
+    assert seq_list is None and seq_order is None
     need_reinit = self.epoch is None or self.epoch != epoch
     super(SprintCacheDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
     self._num_seqs = len(self.seq_list_ordered)

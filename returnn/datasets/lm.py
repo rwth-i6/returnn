@@ -1390,7 +1390,7 @@ class TranslationDataset(CachedDataset2):
 
     if seq_list is None and self.seq_list:
       seq_list = self.seq_list
-    if seq_order:
+    if seq_order is not None:
       self._seq_order = seq_order
     elif seq_list is not None:
       self._seq_order = [int(s[len(self._tag_prefix):]) for s in seq_list]

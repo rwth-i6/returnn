@@ -222,7 +222,7 @@ class RawWavDataset(CachedDataset2):
         self._seq_index_list = range(self.num_seqs)
         return True
 
-    if seq_list or seq_order:
+    if seq_list is not None or seq_order is not None:
       raise NotImplementedError('init_seq_order of RawWavDataset does not support a predefined seq_list yet.')
     else:
       seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, lambda s: self.get_seq_length(s).get('data', None))
