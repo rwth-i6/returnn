@@ -9099,12 +9099,13 @@ class ForcedAlignmentLayer(_ConcatInputLayer):
   """
   layer_class = "forced_align"
 
-  def __init__(self, align_target, topology, input_type, blank_idx=-1, **kwargs):
+  def __init__(self, align_target, topology, input_type, blank_idx=-1, blank_included=True, **kwargs):
     """
     :param LayerBase align_target:
     :param str topology: e.g. "ctc" or "rna" (RNA is CTC without label loop)
     :param str input_type: "log_prob" or "prob"
     :param int blank_idx: vocab index of the blank symbol
+    :param bool blank_included: whether blank token is included in the vocabulary
     """
     from returnn.tf.native_op import get_ctc_fsa_fast_bw, fast_viterbi
     super(ForcedAlignmentLayer, self).__init__(**kwargs)
@@ -9113,7 +9114,12 @@ class ForcedAlignmentLayer(_ConcatInputLayer):
     logits_data = self.input_data.copy_as_time_major()
     logits = logits_data.placeholder
     assert logits.get_shape().ndims == 3 and logits.get_shape().dims[-1].value == logits_data.dim
-    assert align_target.output.shape == (None,) and align_target.output.dim == logits_data.dim - 1
+    assert align_target.output.shape == (None,)
+    if blank_included:
+      assert align_target.output.dim == logits_data.dim
+    else:
+      assert align_target.output.dim == logits_data.dim - 1
+      assert blank_idx == -1  # token not included, has to be last position
     if blank_idx < 0:
       blank_idx += logits_data.dim
     assert 0 <= blank_idx < logits_data.dim
