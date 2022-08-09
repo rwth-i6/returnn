@@ -486,9 +486,11 @@ def _get_f0_values(audio, sample_rate, window_len=0.025, step_len=0.010, fmin=0,
   :return: Pitch features for audio signal
   """
   import librosa  # noqa
-
+  print(len(audio))
   f_0 = librosa.pyin(y=audio, sr=sample_rate, hop_length=int(step_len * sample_rate),
-                     frame_length=int(window_len * sample_rate), win_length=int(window_len * sample_rate),
+                     frame_length=int(window_len * sample_rate), win_length=int(window_len * sample_rate) // 2,
                      fmin=fmin, fmax=fmax, center=center)
-  f_0 = f_0[0].transpose().astype("float32")  # (time, dim)
+  f_0 = f_0[0].transpose().astype("float32")
+  f_0 = numpy.expand_dims(f_0, axis=1)   # (time, dim)
+  # TODO NAN to zero
   return f_0
