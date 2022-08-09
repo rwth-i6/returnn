@@ -9099,7 +9099,7 @@ class ForcedAlignmentLayer(_ConcatInputLayer):
   """
   layer_class = "forced_align"
 
-  def __init__(self, align_target, topology, input_type, blank_idx=-1, blank_included=True, **kwargs):
+  def __init__(self, align_target, topology, input_type, blank_idx=-1, blank_included=False, **kwargs):
     """
     :param LayerBase align_target:
     :param str topology: e.g. "ctc" or "rna" (RNA is CTC without label loop)
