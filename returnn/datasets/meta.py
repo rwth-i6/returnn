@@ -342,9 +342,9 @@ class MetaDataset(CachedDataset2):
       return False
 
     seq_order_dataset = None
-    if seq_order:
+    if seq_order is not None:
       seq_index = seq_order
-    elif seq_list:
+    elif seq_list is not None:
       seq_index = [self.tag_idx[tag] for tag in seq_list]
     elif self.seq_order_control_dataset:
       seq_order_dataset = self.datasets[self.seq_order_control_dataset]
@@ -669,9 +669,9 @@ class ConcatDataset(CachedDataset2):
     if not need_reinit:
       return False
 
-    if seq_order:
+    if seq_order is not None:
       raise NotImplementedError("Predefined order via sequence indices for ConcatDataset")
-    if seq_list:  # reference order
+    if seq_list is not None:  # reference order
       seq_lists = []
       for dataset in self.datasets:
         # This depends on the num_seqs of our childs.
@@ -1316,7 +1316,7 @@ class ConcatSeqsDataset(CachedDataset2):
     :rtype: bool
     """
     super(ConcatSeqsDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
-    assert not seq_list and not seq_order  # not implemented
+    assert seq_list is None and seq_order is None  # not implemented
     if not seq_list:
       def get_seq_len(i):
         """
@@ -1485,7 +1485,7 @@ class ChunkShuffleDataset(CachedDataset2):
     if not need_reinit:
       return False
 
-    if seq_list or seq_order:
+    if seq_list is not None or seq_order is not None:
       raise NotImplementedError("predefined order seq_list")
     if self.seq_ordering != "default":
       raise NotImplementedError("seq_ordering %s" % self.seq_ordering)

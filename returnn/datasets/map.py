@@ -106,7 +106,7 @@ class MapDatasetWrapper(CachedDataset2):
     """
     super(MapDatasetWrapper, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
 
-    if seq_list or seq_order:
+    if seq_list is not None or seq_order is not None:
       raise NotImplementedError
 
     try:

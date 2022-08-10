@@ -88,7 +88,7 @@ class StereoDataset(CachedDataset2):
     self._current_partition = (epoch - 1) % self._partition_epoch
     partition_size = self._get_partition_size(self._current_partition)
 
-    if seq_list or seq_order:
+    if seq_list is not None or seq_order is not None:
       raise NotImplementedError('init_seq_order of StereoDataset does not support a predefined seq_list yet.')
     else:
       seq_index = self.get_seq_order_for_epoch(epoch, partition_size, lambda s: self.get_seq_length(s).get('data', None))
