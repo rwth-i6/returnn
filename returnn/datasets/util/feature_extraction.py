@@ -477,6 +477,7 @@ def _get_f0_values(audio, sample_rate, step_len=0.010, fmin=0, fmax=None):
   """
   Calls pyworld dio and stonemask to retrieve f_0 values and replaces all NaN positions(silence) with 0
   Does not use librosa.pyin because it is a lot slower.
+
   :param numpy.ndarray audio: raw time signal
   :param int sample_rate: e.g. 22050
   :param float step_len: in seconds
