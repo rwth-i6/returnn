@@ -201,6 +201,7 @@ class ExtractAudioFeatures:
         feature_data = _get_audio_linear_spectrogram(**kwargs)
       elif self.features == "f_0":
         kwargs.pop("num_feature_filters")
+        kwargs.pop("window_len")
         feature_data = _get_f0_values(**kwargs)
       else:
         raise Exception("non-supported feature type %r" % (self.features,))
@@ -472,25 +473,20 @@ def _get_random_permuted_audio(audio, sample_rate, opts, random_state):
   return audio
 
 
-def _get_f0_values(audio, sample_rate, window_len=0.025, step_len=0.010, fmin=0, fmax=None, center=True):
+def _get_f0_values(audio, sample_rate, step_len=0.010, fmin=0, fmax=None):
   """
-
+  Calls pyworld dio and stonemask to retrieve f_0 values and replaces all NaN positions(silence) with 0
   :param numpy.ndarray audio: raw time signal
   :param int sample_rate: e.g. 22050
-  :param float window_len: in seconds
   :param float step_len: in seconds
   :param int fmin: minimum frequency covered by mel filters
   :param int|None fmax: maximum frequency covered by mel filters
-  :param bool center: pads the signal with reflection so that the window center starts at 0.
   :rtype: numpy.ndarray
   :return: Pitch features for audio signal
   """
-  import librosa  # noqa
-  print(len(audio))
-  f_0 = librosa.pyin(y=audio, sr=sample_rate, hop_length=int(step_len * sample_rate),
-                     frame_length=int(window_len * sample_rate), win_length=int(window_len * sample_rate) // 2,
-                     fmin=fmin, fmax=fmax, center=center)
-  f_0 = f_0[0].transpose().astype("float32")
+  import pyworld as pw  # noqa
+  f_0, t = pw.dio(x=audio, fs=sample_rate, f0_floor=fmin, f0_ceil=fmax, frame_period=step_len * 1000)  # convert to ms
+  f_0 = pw.stonemask(x=audio, f0=f_0, temporal_positions=t, fs=sample_rate)
+  f_0 = numpy.nan_to_num(f_0, nan=0.0)
   f_0 = numpy.expand_dims(f_0, axis=1)   # (time, dim)
-  # TODO NAN to zero
   return f_0
