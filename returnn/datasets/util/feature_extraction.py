@@ -199,7 +199,7 @@ class ExtractAudioFeatures:
         feature_data = _get_audio_db_mel_filterbank(**kwargs)
       elif self.features == "linear_spectrogram":
         feature_data = _get_audio_linear_spectrogram(**kwargs)
-      elif self.features == "f_0":
+      elif self.features == "f0":
         kwargs.pop("num_feature_filters")
         kwargs.pop("window_len")
         feature_data = _get_f0_values(**kwargs)
