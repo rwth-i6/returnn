@@ -10846,19 +10846,19 @@ class FastBaumWelchLoss(Loss):
       output_before_softmax = self.output_with_activation.get_logits()
       if not self.output.is_time_major:
         output_before_softmax = swapaxes(output_before_softmax, self.output.time_dim_axis, self.output.batch_dim_axis)
-      output = self.output.get_placeholder_as_time_major()
+      log_sm = tf.nn.log_softmax(output_before_softmax)
       from returnn.tf.util.basic import sequence_mask_time_major
       seq_mask = sequence_mask_time_major(self.output_seq_lens)
       from returnn.tf.native_op import fast_baum_welch_by_sprint_automata
       fwdbwd, obs_scores = fast_baum_welch_by_sprint_automata(
         sprint_opts=self.sprint_opts,
-        am_scores=-tf_compat.v1.log(output),
+        am_scores=-log_sm,
         tdp_scale=self.tdp_scale,
         float_idx=seq_mask,
         tags=seq_tags)
       loss = self.reduce_func(obs_scores[0])
       bw = tf.exp(-fwdbwd)
-      grad_x = (output - bw) * tf.cast(tf.expand_dims(seq_mask, 2), output.dtype)
+      grad_x = tf_util.where_bc(seq_mask[:, :, None], tf.exp(log_sm) - bw, 0.0)
       from returnn.tf.util.basic import custom_gradient
       loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=output_before_softmax, grad_x=grad_x)
       return loss
