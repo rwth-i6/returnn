@@ -797,6 +797,41 @@ def test_engine_forward_static_batch():
   engine.finalize()
 
 
+def test_engine_forward_static_batch_static_time():
+  from returnn.tf.util.data import Dim, SpatialDim, FeatureDim
+  from returnn.tf.util.data import batch_dim as global_batch_dim
+  static_batch_dim = Dim(kind=Dim.Types.Batch, description="static-batch", dimension=1)
+  time_dim = SpatialDim("time", 13)
+  input_dim = FeatureDim("input", 5)
+  hidden_dim = FeatureDim("hidden", 7)
+  output_dim = FeatureDim("output", 11)
+  config = Config({
+    "extern_data": {"data": {"dim_tags": (static_batch_dim, time_dim, input_dim)}},
+    "network": {
+      "lstm": {"class": "rec", "unit": "lstm", "from": "data:data", "out_dim": hidden_dim},
+      "output": {"class": "softmax", "from": "lstm", "out_dim": output_dim}
+    },
+    "allow_random_model_init": True,
+  })
+  engine = Engine(config=config)
+  engine.init_network_from_config()
+  in_ = engine.network.extern_data.get_default_input_data()
+  out = engine.network.get_default_output_layer().output
+  assert isinstance(static_batch_dim.dimension, int)
+  assert isinstance(time_dim.dimension, int)
+  assert isinstance(input_dim.dimension, int)
+  assert isinstance(output_dim.dimension, int)
+  assert in_.placeholder.get_shape().as_list() == [static_batch_dim.dimension, time_dim.dimension, input_dim.dimension]
+  assert out.placeholder.get_shape().as_list() == [time_dim.dimension, static_batch_dim.dimension, output_dim.dimension]
+  assert in_.get_time_dim_tag() == out.get_time_dim_tag()
+  assert global_batch_dim.dimension is None
+  from test_TFNetworkLayer import make_feed_dict
+  engine.tf_session.run(
+    out.placeholder, feed_dict=make_feed_dict(
+      engine.network.extern_data, n_batch=static_batch_dim.dimension, n_time=time_dim.dimension))
+  engine.finalize()
+
+
 def test_engine_rec_subnet_count():
   from returnn.datasets.generating import DummyDataset
   seq_len = 5
