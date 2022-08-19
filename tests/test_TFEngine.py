@@ -806,7 +806,7 @@ def test_engine_forward_static_batch_static_time():
   hidden_dim = FeatureDim("hidden", 7)
   output_dim = FeatureDim("output", 11)
   config = Config({
-    "extern_data": {"data": {"dim_tags": (static_batch_dim, time_dim, input_dim)}},
+    "extern_data": {"data": {"dim_tags": (static_batch_dim, time_dim, input_dim), "time_dim_axis": 1}},
     "network": {
       "lstm": {"class": "rec", "unit": "lstm", "from": "data:data", "out_dim": hidden_dim},
       "output": {"class": "softmax", "from": "lstm", "out_dim": output_dim}
@@ -881,7 +881,7 @@ def test_engine_forward_static_batch_static_time_trafo():
   output_dim = FeatureDim("output", 11)
   from test_TFNetworkRecLayer import TransformerNetwork
   config = Config({
-    "extern_data": {"data": {"dim_tags": (static_batch_dim, time_dim, input_dim)}},
+    "extern_data": {"data": {"dim_tags": (static_batch_dim, time_dim, input_dim), "time_dim_axis": 1}},
     "allow_random_model_init": True,
   })
   net_dict = TransformerNetwork().build()
