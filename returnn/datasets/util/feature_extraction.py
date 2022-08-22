@@ -269,7 +269,8 @@ class ExtractAudioFeatures:
     return (self.with_delta + 1) * self.num_feature_filters * (self.join_frames or 1)
 
 
-def _get_audio_linear_spectrogram(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=512):
+def _get_audio_linear_spectrogram(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=512,
+                                  center=True):
   """
   Computes linear spectrogram features from an audio signal.
   Drops the DC component.
@@ -294,7 +295,7 @@ def _get_audio_linear_spectrogram(audio, sample_rate, window_len=0.025, step_len
     stft_func = librosa.core.stft
   spectrogram = numpy.abs(stft_func(
     audio, hop_length=int(step_len * sample_rate),
-    win_length=int(window_len * sample_rate), n_fft=num_feature_filters*2))
+    win_length=int(window_len * sample_rate), n_fft=num_feature_filters*2, center=center))
 
   # remove the DC part
   spectrogram = spectrogram[1:]
@@ -305,7 +306,7 @@ def _get_audio_linear_spectrogram(audio, sample_rate, window_len=0.025, step_len
 
 
 def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=40,
-                             n_mels=128, fmin=0, fmax=None):
+                             n_mels=128, fmin=0, fmax=None, center=True):
   """
   :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
   :param int sample_rate: e.g. 22050
@@ -323,7 +324,9 @@ def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.01
     y=audio, sr=sample_rate,
     n_mfcc=num_feature_filters,
     n_mels=n_mels, fmin=fmin, fmax=fmax,
-    hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
+    hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate),
+    center=center
+  )
   librosa_version = librosa.__version__.split(".")
   if int(librosa_version[0]) >= 1 or (int(librosa_version[0]) == 0 and int(librosa_version[1]) >= 7):
     rms_func = librosa.feature.rms
