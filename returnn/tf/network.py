@@ -1408,6 +1408,8 @@ class TFNetwork(object):
         return False
       if isinstance(layer_, (SourceLayer, InternalLayer)):
         return False
+      if layer_.layer_class in {"random", "rand_int", "constant"}:  # fixed shape
+        return False
       if not _should_flatten_layer_output(layer_):
         return False
       return True
