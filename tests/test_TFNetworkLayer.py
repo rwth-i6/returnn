@@ -4862,6 +4862,67 @@ def test_rand_indices():
     assert_equal(output.shape, (n_batch, n_time, sz[-1].dimension, feature_dim.dimension))
 
 
+def test_RandomLayer():
+  # https://github.com/rwth-i6/returnn_common/issues/197
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  time_dim = SpatialDim('time')
+  input_dim = FeatureDim('input', 3)
+  config = Config({"extern_data": {"data": {"dim_tags": (batch_dim, time_dim, input_dim)}}})
+  net_dict = {
+    'random': {
+      'class': 'random',
+      'shape': [batch_dim, input_dim],
+      'distribution': 'normal',
+      'mean': 0.0,
+      'stddev': 1.0,
+    },
+    'output': {
+      'class': 'combine', "kind": "add",
+      'from': ["data:data", 'random'],
+      'out_shape': {batch_dim, time_dim, input_dim}
+    }
+  }
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    net.initialize_params(session)
+    out = net.get_default_output_layer().output.copy_as_time_major()
+    out_np = session.run(out.placeholder, feed_dict=make_feed_dict(net.extern_data))
+    print(out_np)
+
+
+def test_RandomLayer_shape_deps():
+  # https://github.com/rwth-i6/returnn_common/issues/197
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  time_dim = SpatialDim('time')
+  time_pool_dim = SpatialDim("time-pool")
+  input_dim = FeatureDim('input', 3)
+  config = Config({"extern_data": {"data": {"dim_tags": (batch_dim, time_dim, input_dim)}}})
+  net_dict = {
+    'pool': {"class": "pool", "pool_size": [2], "mode": "max", "from": "data", "out_spatial_dims": [time_pool_dim]},
+    'random': {
+      'class': 'random',
+      'shape': [batch_dim, time_pool_dim, input_dim],
+      "shape_deps": ["pool"],
+      'distribution': 'normal',
+      'mean': 0.0,
+      'stddev': 1.0,
+    },
+    'output': {
+      'class': 'combine', "kind": "add",
+      'from': ['random', 'pool'],  # the order is relevant to test shape_deps
+      'out_shape': {batch_dim, time_pool_dim, input_dim}
+    }
+  }
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    net.initialize_params(session)
+    out = net.get_default_output_layer().output.copy_as_time_major()
+    out_np = session.run(out.placeholder, feed_dict=make_feed_dict(net.extern_data))
+    print(out_np)
+
+
 def test_RandomLayer_in_loop():
   # https://github.com/rwth-i6/returnn/issues/1044
   from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim

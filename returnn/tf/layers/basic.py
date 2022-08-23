@@ -2407,6 +2407,7 @@ class RandomLayer(LayerBase):
                mean=None, stddev=None, bound=None, minval=None, maxval=None, dtype="float32",
                seed=None,
                algorithm=None, explicit_state=None, auto_update_state=None, static=None,
+               shape_deps=(),
                **kwargs):
     """
     :param typing.Sequence[Dim|int] shape:
@@ -2431,6 +2432,7 @@ class RandomLayer(LayerBase):
       Otherwise (default) it will not be updated automatically.
     :param bool|None auto_update_state: only used when you pass an explicit state
     :param bool|None static: if no state at all should be used. it just relies on the seed then.
+    :param list[LayerBase] shape_deps: for dyn dim tags in shape
     """
     def _attrib_value(x):
       """
@@ -2444,6 +2446,7 @@ class RandomLayer(LayerBase):
 
     shape  # noqa  # handled in get_out_data_from_opts
     super(RandomLayer, self).__init__(**kwargs)
+    self.shape_deps = shape_deps
     algorithm_int = RandomStateInitLayer.select_algorithm(algorithm)
     # Note: tf.random.Generator itself is just a wrapper around a state variable
     #   and corresponding stateless random ops.
@@ -2562,6 +2565,7 @@ class RandomLayer(LayerBase):
     for attrib in self._distribution_attribs:
       if isinstance(attrib, LayerBase):
         deps.append(attrib)
+    deps += self.shape_deps
     return deps
 
   @classmethod
@@ -2591,19 +2595,27 @@ class RandomLayer(LayerBase):
       d["collocate_with"] = collocate_with
     if over_rec_time_dim and not inside_rec_time_dim:  # moved out of loop
       d["shape"] = [over_rec_time_dim] + list(d["shape"])
+    if "shape_deps" in d:
+      extra_deps = d["shape_deps"]
+      if not isinstance(extra_deps, (list, tuple)):
+        extra_deps = [extra_deps]
+      d["shape_deps"] = [get_layer(src_name) for src_name in extra_deps]
 
   @classmethod
-  def get_out_data_from_opts(cls, name, shape, dtype="float32", **kwargs):
+  def get_out_data_from_opts(cls, name, shape, dtype="float32", shape_deps=(), **kwargs):
     """
     :param str name:
     :param typing.Sequence[Dim|int] shape:
     :param str dtype:
+    :param list[LayerBase] shape_deps: for dyn dim tags in shape
     :rtype: Data
     """
     dim_tags = [
       d if isinstance(d, Dim) else SpatialDim("%s:dim%i" % (name, i), d, auto_generated=True)
       for i, d in enumerate(shape)]
-    return Data(name="%s_output" % name, dim_tags=dim_tags, dtype=dtype)
+    out = Data(name="%s_output" % name, dim_tags=dim_tags, dtype=dtype)
+    out.beam = SearchBeam.get_combined_beam(out.beam, *[dep.output.beam for dep in shape_deps if dep])
+    return out
 
 
 class RandIntLayer(LayerBase):
@@ -2925,7 +2937,9 @@ class ConstantLayer(LayerBase):
   layer_class = "constant"
 
   # noinspection PyUnusedLocal
-  def __init__(self, sources, value=0., shape=None, dtype=None, with_batch_dim=False, sparse_dim=None, **kwargs):
+  def __init__(self, sources, value=0., shape=None, dtype=None, with_batch_dim=False, sparse_dim=None,
+               shape_deps=(),
+               **kwargs):
     """
     :param list[LayerBase] sources:
     :param int|float|bool|numpy.ndarray value:
@@ -2933,10 +2947,12 @@ class ConstantLayer(LayerBase):
     :param str|None dtype:
     :param bool with_batch_dim:
     :param Dim|None sparse_dim:
+    :param list[LayerBase] shape_deps: for dyn dim tags in shape
     """
     import numpy
     assert not sources, "constant layer cannot have sources"
     super(ConstantLayer, self).__init__(**kwargs)
+    self.shape_deps = shape_deps
     shape_ = value.shape if isinstance(value, numpy.ndarray) else ()
     value = tf.constant(value, dtype=self.output.dtype)
     if len(shape_) == 0 and self.output.batch_ndim > 0:
@@ -2947,6 +2963,12 @@ class ConstantLayer(LayerBase):
       value = expand_dims_unbroadcast(value, axis=0, dim=self.get_batch_dim())
     self.output.placeholder = value
 
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    return super(ConstantLayer, self).get_dep_layers() + list(self.shape_deps)
+
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
     """
@@ -2956,9 +2978,15 @@ class ConstantLayer(LayerBase):
     """
     d.setdefault("from", [])
     super(ConstantLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if "shape_deps" in d:
+      extra_deps = d["shape_deps"]
+      if not isinstance(extra_deps, (list, tuple)):
+        extra_deps = [extra_deps]
+      d["shape_deps"] = [get_layer(src_name) for src_name in extra_deps]
 
   @classmethod
   def get_out_data_from_opts(cls, name, value=0., shape=None, dtype=None, with_batch_dim=False, sparse_dim=None,
+                             shape_deps=(),
                              **kwargs):
     """
     :param str name:
@@ -2967,10 +2995,13 @@ class ConstantLayer(LayerBase):
     :param str|None dtype:
     :param bool with_batch_dim:
     :param Dim|None sparse_dim:
+    :param list[LayerBase] shape_deps: for dyn dim tags in shape
     :rtype: Data
     """
-    return Data.template_from_constant(
+    out = Data.template_from_constant(
       value, name="%s_const" % name, shape=shape, dtype=dtype, with_batch_dim=with_batch_dim, sparse_dim=sparse_dim)
+    out.beam = SearchBeam.get_combined_beam(out.beam, *[dep.output.beam for dep in shape_deps if dep])
+    return out
 
 
 class GatingLayer(_ConcatInputLayer):
