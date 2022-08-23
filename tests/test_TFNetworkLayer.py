@@ -4490,6 +4490,147 @@ def test_CondLayer_subnet_template_construct():
     assert _EvalFuncLocals.session_call_count == 1
 
 
+def test_CondLayer_data_access():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+  time_dim = SpatialDim('time')
+  input_dim = FeatureDim('input', 13)
+
+  config = Config(dict(extern_data={
+    'data': {
+      'dim_tags': (
+        batch_dim,
+        time_dim,
+        input_dim
+      ),
+      'dtype': 'float32',
+      'available_for_inference': True
+    }
+  }))
+
+  random_state_dim = FeatureDim('random-state', 3)
+
+  net_dict = {
+    'output': {
+      'class': 'copy',
+      'from': 'cond',
+      'out_shape': {batch_dim, time_dim, input_dim}
+    },
+    'length': {
+      'class': 'length',
+      'from': 'data:data',
+      'axis': batch_dim,
+      'out_shape': {}
+    },
+    'mod': {
+      'class': 'eval',
+      'from': 'length',
+      'eval': 'source(0) % 2',
+      'out_shape': {}
+    },
+    'eq': {
+      'class': 'subnetwork',
+      'from': [],
+      'subnetwork': {
+        'compare': {
+          'class': 'compare',
+          'from': 'base:mod',
+          'kind': 'equal',
+          'value': 0,
+          'out_shape': {}
+        },
+        'output': {
+          'class': 'copy',
+          'from': 'compare',
+          'out_shape': {}
+        }
+      },
+      'out_shape': {}
+    },
+    'cond': {
+      'class': 'cond',
+      'from': [],
+      'condition': 'eq',
+      'true_layer': {
+        'class': 'subnetwork',
+        'from': [],
+        'subnetwork': {
+          'rnd': {
+            'class': 'subnetwork',
+            'from': [],
+            'subnetwork': {
+              'random': {
+                'class': 'random',
+                'shape': (
+                  batch_dim,
+                  time_dim,
+                  input_dim
+                ),
+                'distribution': 'normal',
+                'mean': 0.0,
+                'stddev': 1.0,
+                'explicit_state': 'base:base:rnd_state_var0',
+                'auto_update_state': True,
+                'shape_deps': ['base:base:data:data']
+              },
+              'output': {
+                'class': 'copy',
+                'from': 'random',
+                'out_shape': {batch_dim, time_dim, input_dim}
+              }
+            },
+            'out_shape': {batch_dim, time_dim, input_dim}
+          },
+          'combine': {
+            'class': 'combine',
+            'from': ['base:data:data', 'rnd'],
+            'kind': 'add',
+            'out_shape': {batch_dim, time_dim, input_dim}
+          },
+          'output': {
+            'class': 'copy',
+            'from': 'combine',
+            'out_shape': {batch_dim, time_dim, input_dim}
+          }
+        }
+      },
+      'false_layer': {
+        'class': 'subnetwork',
+        'from': [],
+        'subnetwork': {
+          'output': {
+            'class': 'copy',
+            'from': 'base:data:data',
+            'out_shape': {batch_dim, time_dim, input_dim}
+          }
+        }
+      },
+      'out_shape': {batch_dim, time_dim, input_dim},
+      'name_scope': ''
+    },
+    'random_state_init': {
+      'class': 'random_state_init',
+      'out_dim': random_state_dim,
+      'out_shape': {random_state_dim}
+    },
+    'rnd_state_var0': {
+      'class': 'variable',
+      'shape': [
+        random_state_dim
+      ],
+      'param_name': 'param',
+      'dtype': 'int64',
+      'init_by_layer': 'random_state_init',
+      'name_scope': 'rnd/state_var0'
+    }
+  }
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+    network.initialize_params(session)
+    session.run(network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(network.extern_data))
+
+
 def test_ScatterNdLayer_RangeLayer():
   from returnn.tf.util.data import batch_dim, Dim
   n_batch, n_time, n_ts, n_out = 2, 3, 6, 11
