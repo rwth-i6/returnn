@@ -102,6 +102,7 @@ def _try_hook_into_tests():
   Also see: https://youtrack.jetbrains.com/issue/PY-9848
   """
   import sys
+  import types
   get_trace = getattr(sys, "gettrace", None)
   in_debugger = False
   if get_trace and get_trace() is not None:
@@ -110,6 +111,7 @@ def _try_hook_into_tests():
   # get TestProgram instance from stack...
   from unittest import TestProgram
   from returnn.util.better_exchook import get_current_frame
+  from returnn.util.better_exchook import get_func_str_from_code_object
   top_frame = get_current_frame()
   if not top_frame:
     # This will not always work. Just silently accept this. This should be rare.
@@ -169,6 +171,58 @@ def _try_hook_into_tests():
 
     config = getattr(test_program, "config")
     config.plugins.addPlugin(_ReraiseExceptionTestHookPlugin())
+
+  if test_session and in_debugger:
+    items = []
+
+    def _custom_pytest_runtestloop(session):
+      print("test env hook pytest_runtestloop")
+      assert len(session.items) == len(test_names) == 1
+      items.extend(session.items)
+
+    def _custom_pytest_sessionfinish(session, exitstatus):
+      session, exitstatus  # noqa  # not used
+      print("test env hook pytest_sessionfinish")
+
+    class _CustomPlugin:
+      # noinspection PyShadowingNames
+      def pytest_unconfigure(self, config):
+        """hook for pytest_unconfigure."""
+        print("test env hook pytest_unconfigure")
+        # This will get called (potentially) multiple times via config._ensure_unconfigure in the `finally` block
+        # in certain stages of the pytest call stack.
+        frame_ = get_current_frame()
+        while frame_:
+          assert isinstance(frame_, types.FrameType)
+          # If pytest_cmdline_main is in the call stack trace, we are not yet in the lowest stack.
+          if get_func_str_from_code_object(frame_.f_code) == "pytest_cmdline_main":
+            # We assume there is yet another lower `finally` block in the call stack
+            # which calls to config._ensure_unconfigure.
+            # However, it would not call pytest_unconfigure again when the configured flag is already set to False.
+            # So we again call config._do_configure to set the flag to True again.
+            # We don't want to run any of the other plugin hooks anymore, so unregister them all (except us).
+            for plugin in test_session.config.pluginmanager.get_plugins():
+              if plugin != self:
+                test_session.config.pluginmanager.unregister(plugin)
+            # noinspection PyProtectedMember
+            config._do_configure()  # causes this to run again
+            return
+          frame_ = frame_.f_back
+        print("test env hook pytest_unconfigure, final call")
+        config.add_cleanup(self._custom_final_cleanup)
+
+      @staticmethod
+      def _custom_final_cleanup():
+        print("test env hook pytest config cleanup")
+        print("Now calling the test:", items[0])
+        items[0].obj()
+
+    # Overwrite these hooks completely - we don't want to run the tests at this point,
+    # as all exceptions would be caught here.
+    test_session.config.hook.pytest_runtestloop = _custom_pytest_runtestloop
+    test_session.config.hook.pytest_sessionfinish = _custom_pytest_sessionfinish
+    # For other things, using a plugin to register the hooks is probably the more clean way.
+    test_session.config.pluginmanager.register(_CustomPlugin())
 
 
 setup()
