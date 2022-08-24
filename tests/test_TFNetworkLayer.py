@@ -4497,19 +4497,8 @@ def test_CondLayer_data_access():
   input_dim = FeatureDim('input', 13)
 
   config = Config(dict(extern_data={
-    'data': {
-      'dim_tags': (
-        batch_dim,
-        time_dim,
-        input_dim
-      ),
-      'dtype': 'float32',
-      'available_for_inference': True
-    }
+    'data': {'dim_tags': (batch_dim, time_dim, input_dim)}
   }))
-
-  random_state_dim = FeatureDim('random-state', 3)
-
   net_dict = {
     'output': {
       'class': 'copy',
@@ -4529,22 +4518,10 @@ def test_CondLayer_data_access():
       'out_shape': {}
     },
     'eq': {
-      'class': 'subnetwork',
-      'from': [],
-      'subnetwork': {
-        'compare': {
-          'class': 'compare',
-          'from': 'base:mod',
-          'kind': 'equal',
-          'value': 0,
-          'out_shape': {}
-        },
-        'output': {
-          'class': 'copy',
-          'from': 'compare',
-          'out_shape': {}
-        }
-      },
+      'class': 'compare',
+      'from': 'mod',
+      'kind': 'equal',
+      'value': 0,
       'out_shape': {}
     },
     'cond': {
@@ -4555,43 +4532,17 @@ def test_CondLayer_data_access():
         'class': 'subnetwork',
         'from': [],
         'subnetwork': {
-          'rnd': {
-            'class': 'subnetwork',
-            'from': [],
-            'subnetwork': {
-              'random': {
-                'class': 'random',
-                'shape': (
-                  batch_dim,
-                  time_dim,
-                  input_dim
-                ),
-                'distribution': 'normal',
-                'mean': 0.0,
-                'stddev': 1.0,
-                'explicit_state': 'base:base:rnd_state_var0',
-                'auto_update_state': True,
-                'shape_deps': ['base:base:data:data']
-              },
-              'output': {
-                'class': 'copy',
-                'from': 'random',
-                'out_shape': {batch_dim, time_dim, input_dim}
-              }
-            },
-            'out_shape': {batch_dim, time_dim, input_dim}
+          'const': {
+            "class": "constant", "value": 1.,
+            'shape': (batch_dim, time_dim, input_dim),
+            'shape_deps': ['base:data:data']
           },
-          'combine': {
+          'output': {
             'class': 'combine',
-            'from': ['base:data:data', 'rnd'],
+            'from': ['base:data:data', 'const'],
             'kind': 'add',
             'out_shape': {batch_dim, time_dim, input_dim}
           },
-          'output': {
-            'class': 'copy',
-            'from': 'combine',
-            'out_shape': {batch_dim, time_dim, input_dim}
-          }
         }
       },
       'false_layer': {
@@ -4608,21 +4559,6 @@ def test_CondLayer_data_access():
       'out_shape': {batch_dim, time_dim, input_dim},
       'name_scope': ''
     },
-    'random_state_init': {
-      'class': 'random_state_init',
-      'out_dim': random_state_dim,
-      'out_shape': {random_state_dim}
-    },
-    'rnd_state_var0': {
-      'class': 'variable',
-      'shape': [
-        random_state_dim
-      ],
-      'param_name': 'param',
-      'dtype': 'int64',
-      'init_by_layer': 'random_state_init',
-      'name_scope': 'rnd/state_var0'
-    }
   }
   with make_scope() as session:
     network = TFNetwork(config=config, train_flag=True)
