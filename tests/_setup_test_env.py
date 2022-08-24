@@ -18,6 +18,7 @@ def setup():
   """
   import logging
   import os
+  import sys
 
   # Enable all logging, up to debug level.
   logging.basicConfig(level=logging.DEBUG, format='%(message)s')
@@ -43,7 +44,16 @@ def setup():
   util.init_thread_join_hack()
 
   from returnn.util import better_exchook
-  better_exchook.install()
+  if sys.excepthook != sys.__excepthook__:
+    prev_sys_excepthook = sys.excepthook
+
+    def _chained_excepthook(exctype, value, traceback):
+      better_exchook.better_exchook(exctype, value, traceback)
+      prev_sys_excepthook(exctype, value, traceback)
+
+    sys.excepthook = _chained_excepthook
+  else:
+    sys.excepthook = better_exchook.better_exchook
   better_exchook.replace_traceback_format_tb()
 
   from returnn.log import log
