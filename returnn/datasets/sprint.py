@@ -64,7 +64,7 @@ class SprintDatasetBase(Dataset):
     :param None|dict[str] bpe: if given, will be opts for :class:`BytePairEncoding`
     :param None|dict[str] orth_vocab: if given, orth_vocab is applied to orth and orth_classes is an available target`
     :param bool suppress_load_seqs_print: less verbose
-    :param int|None reduce_target_factor: downsample factor to allow less targets than features
+    :param int reduce_target_factor: downsample factor to allow less targets than features
     """
     super(SprintDatasetBase, self).__init__(**kwargs)
     self.suppress_load_seqs_print = suppress_load_seqs_print
