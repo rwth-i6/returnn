@@ -4490,6 +4490,83 @@ def test_CondLayer_subnet_template_construct():
     assert _EvalFuncLocals.session_call_count == 1
 
 
+def test_CondLayer_data_access():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+  time_dim = SpatialDim('time')
+  input_dim = FeatureDim('input', 13)
+
+  config = Config(dict(extern_data={
+    'data': {'dim_tags': (batch_dim, time_dim, input_dim)}
+  }))
+  net_dict = {
+    'output': {
+      'class': 'copy',
+      'from': 'cond',
+      'out_shape': {batch_dim, time_dim, input_dim}
+    },
+    'length': {
+      'class': 'length',
+      'from': 'data:data',
+      'axis': batch_dim,
+      'out_shape': {}
+    },
+    'mod': {
+      'class': 'eval',
+      'from': 'length',
+      'eval': 'source(0) % 2',
+      'out_shape': {}
+    },
+    'eq': {
+      'class': 'compare',
+      'from': 'mod',
+      'kind': 'equal',
+      'value': 0,
+      'out_shape': {}
+    },
+    'cond': {
+      'class': 'cond',
+      'from': [],
+      'condition': 'eq',
+      'true_layer': {
+        'class': 'subnetwork',
+        'from': [],
+        'subnetwork': {
+          'const': {
+            "class": "constant", "value": 1.,
+            'shape': (batch_dim, time_dim, input_dim),
+            'shape_deps': ['base:data:data']
+          },
+          'output': {
+            'class': 'combine',
+            'from': ['base:data:data', 'const'],
+            'kind': 'add',
+            'out_shape': {batch_dim, time_dim, input_dim}
+          },
+        }
+      },
+      'false_layer': {
+        'class': 'subnetwork',
+        'from': [],
+        'subnetwork': {
+          'output': {
+            'class': 'copy',
+            'from': 'base:data:data',
+            'out_shape': {batch_dim, time_dim, input_dim}
+          }
+        }
+      },
+      'out_shape': {batch_dim, time_dim, input_dim},
+      'name_scope': ''
+    },
+  }
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+    network.initialize_params(session)
+    session.run(network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(network.extern_data))
+
+
 def test_ScatterNdLayer_RangeLayer():
   from returnn.tf.util.data import batch_dim, Dim
   n_batch, n_time, n_ts, n_out = 2, 3, 6, 11
