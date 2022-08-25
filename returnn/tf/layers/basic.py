@@ -2817,26 +2817,21 @@ class RangeInAxisLayer(LayerBase):
     :param bool sparse:
     """
     if isinstance(axis, Dim):
-      dim_tags = [axis]
+      dim = axis
+      dep_batches = [dep.output.batch for dep in sources if dep.output.batch]
+      control_flow_ctx = [dep.output.control_flow_ctx for dep in sources if dep.output.control_flow_ctx]
+      if dep_batches:
+        from returnn.tf.util.data import BatchInfo
+        batch = BatchInfo.get_common_batch_info(dep_batches)
+        dim = dim.get_for_batch_ctx(batch=batch, ctx=control_flow_ctx[0] if control_flow_ctx else None)
     else:
       assert len(sources) == 1, "%s layer %r requires single source with axis %r" % (cls, name, axis)
       source = sources[0].output
       axis = source.get_axis_from_description(axis)
-      dim_tags = [source.dim_tags[axis]]
-    data_opts = {}
-    if not dim_tags[0].is_batch_dim():
-      data_opts.pop("batch", None)
-      data_opts.pop("beam", None)
-    data_opts["name"] = "%s_output" % name
-    data_opts["dim_tags"] = dim_tags
-    data_opts["dtype"] = dtype
-    data_opts["sparse"] = sparse
-    data_opts.pop("sparse_dim", None)
+      dim = source.dim_tags[axis]
+    data_opts = {"name": "%s_output" % name, "dim_tags": [dim], "dtype": dtype, "sparse": sparse}
     if sparse:
-      data_opts["dim"] = None
-      data_opts["sparse_dim"] = dim_tags[0]
-    else:
-      data_opts.pop("dim", None)
+      data_opts["sparse_dim"] = dim
     out = Data(**data_opts)
     out.beam = SearchBeam.get_combined_beam(out.beam, *[dep.output.beam for dep in sources])
     return out
