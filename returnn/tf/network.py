@@ -1124,6 +1124,11 @@ class TFNetwork(object):
       the layer_class will usually then define the layer.output and its placeholder.
       there is one notable exception: the InternalLayer, where you predefine the output.
     """
+    if self._extra_layer_name_prefix_pattern.match(name) and self.extra_parent_net:
+      if name.startswith(self.extra_name_prefix):
+        # We are already in the right extra net. Stay here.
+        # In case this extra net is with boundary=True, this is important, as we can not access it from outside.
+        prefix, name = name.split(":", 1)
     if self._extra_layer_name_prefix_pattern.match(name):
       prefix, name_ = name.split(":", 1)
       extra_net, _ = (self.extra_parent_net or self)._get_extra_net(prefix_name=prefix)
