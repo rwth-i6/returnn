@@ -2787,17 +2787,20 @@ class RangeInAxisLayer(LayerBase):
   # noinspection PyUnusedLocal
   def __init__(self, axis, dtype="int32", unbroadcast=False, keepdims=False, sparse=False, **kwargs):
     """
-    :param str axis:
+    :param str|Dim axis:
     :param str dtype:
     :param bool unbroadcast: DEPRECATED, unsupported, and not needed
     :param bool keepdims: DEPRECATED, unsupported, and not needed
     :param bool sparse:
     """
     super(RangeInAxisLayer, self).__init__(**kwargs)
-    source = self.sources[0].output
-    axis = source.get_axis_from_description(axis)
-    source_shape_dim = tf_util.get_shape_dim(source.placeholder, axis)
-    out = tf.range(0, source_shape_dim, dtype=dtype)
+    if isinstance(axis, Dim):
+      dim_value = axis.get_dim_value()
+    else:
+      source = self.sources[0].output
+      axis = source.get_axis_from_description(axis)
+      dim_value = tf_util.get_shape_dim(source.placeholder, axis)
+    out = tf.range(0, dim_value, dtype=dtype)
     if unbroadcast:
       raise Exception("%s: do not use unbroadcast")
     if keepdims:
@@ -2809,15 +2812,18 @@ class RangeInAxisLayer(LayerBase):
     """
     :param str name:
     :param list[LayerBase] sources:
-    :param str axis:
+    :param str|Dim axis:
     :param str dtype:
     :param bool sparse:
     """
-    assert len(sources) == 1, "%s layer %r requires single source" % (cls, name)
-    source = sources[0].output
-    axis = source.get_axis_from_description(axis)
-    data_opts = source.get_kwargs(include_special_axes=False)
-    dim_tags = [source.dim_tags[axis]]
+    if isinstance(axis, Dim):
+      dim_tags = [axis]
+    else:
+      assert len(sources) == 1, "%s layer %r requires single source with axis %r" % (cls, name, axis)
+      source = sources[0].output
+      axis = source.get_axis_from_description(axis)
+      dim_tags = [source.dim_tags[axis]]
+    data_opts = {}
     if not dim_tags[0].is_batch_dim():
       data_opts.pop("batch", None)
       data_opts.pop("beam", None)
@@ -2831,7 +2837,9 @@ class RangeInAxisLayer(LayerBase):
       data_opts["sparse_dim"] = dim_tags[0]
     else:
       data_opts.pop("dim", None)
-    return Data(**data_opts)
+    out = Data(**data_opts)
+    out.beam = SearchBeam.get_combined_beam(out.beam, *[dep.output.beam for dep in sources])
+    return out
 
 
 class RangeFromLengthLayer(LayerBase):
