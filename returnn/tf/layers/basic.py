@@ -2795,7 +2795,8 @@ class RangeInAxisLayer(LayerBase):
     """
     super(RangeInAxisLayer, self).__init__(**kwargs)
     if isinstance(axis, Dim):
-      dim_value = axis.get_dim_value()
+      dim = self.output.dim_tags[0]  # use that because it should have the right batch/ctx
+      dim_value = dim.get_dim_value()
     else:
       source = self.sources[0].output
       axis = source.get_axis_from_description(axis)
