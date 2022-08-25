@@ -1997,6 +1997,7 @@ class LengthLayer(LayerBase):
       from returnn.tf.util.data import BatchInfo
       batch = BatchInfo.get_common_batch_info(dep_batches)
       dim = dim.get_for_batch_ctx(batch=batch, ctx=control_flow_ctx[0] if control_flow_ctx else None)
+      dim.complete_dyn_size()
     return dim
 
   @classmethod
