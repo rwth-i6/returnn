@@ -52,7 +52,7 @@ class SprintDatasetBase(Dataset):
 
   def __init__(self, target_maps=None, str_add_final_zero=False, input_stddev=1.,
                orth_post_process=None, bpe=None, orth_vocab=None,
-               suppress_load_seqs_print=False,
+               suppress_load_seqs_print=False, reduce_target_factor=1,
                **kwargs):
     """
     :param dict[str,str|dict] target_maps: e.g. {"speaker_name": "speaker_map.txt"}, with "speaker_map.txt" containing
@@ -64,9 +64,12 @@ class SprintDatasetBase(Dataset):
     :param None|dict[str] bpe: if given, will be opts for :class:`BytePairEncoding`
     :param None|dict[str] orth_vocab: if given, orth_vocab is applied to orth and orth_classes is an available target`
     :param bool suppress_load_seqs_print: less verbose
+    :param int reduce_target_factor: downsample factor to allow less targets than features
     """
     super(SprintDatasetBase, self).__init__(**kwargs)
     self.suppress_load_seqs_print = suppress_load_seqs_print
+    self.reduce_target_factor = reduce_target_factor
+    assert isinstance(self.reduce_target_factor, int) and self.reduce_target_factor >= 1
     if target_maps:
       assert isinstance(target_maps, dict)
       target_maps = target_maps.copy()
@@ -340,6 +343,8 @@ class SprintDatasetBase(Dataset):
     # is in format (feature,time)
     assert self.num_inputs == features.shape[0]
     num_frames = features.shape[1]
+    # features maybe downsampled via the network
+    reduce_num_frames = int((num_frames + self.reduce_target_factor - 1) / self.reduce_target_factor)
     # must be in format: (time,feature)
     features = features.transpose()
     assert features.shape == (num_frames, self.num_inputs)
@@ -355,8 +360,9 @@ class SprintDatasetBase(Dataset):
       targets = {"classes": targets}
     if "classes" in targets:
       # 'classes' is always the alignment
-      assert targets["classes"].shape == (num_frames,), (  # is in format (time,)
-        "Number of targets %s does not equal to number of features %s" % (targets["classes"].shape, (num_frames,)))
+      assert targets["classes"].shape == (reduce_num_frames,), (  # is in format (time,)
+        "Number of targets %s does not match number of features %s (reduce factor %d)"
+        % (targets["classes"].shape, (num_frames,), self.reduce_target_factor))
     if "speaker_name" in targets:
       targets["speaker_name"] = targets["speaker_name"].decode("utf8").strip()
     if "orth" in targets:
