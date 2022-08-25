@@ -126,6 +126,7 @@ Example::
         net_dict = ...
         if epoch < 5:
             net_dict["#config"]["gradient_clip"] = 10
+        return net_dict
 
 
 Batching and dataset shuffling
