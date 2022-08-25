@@ -1960,20 +1960,44 @@ class LengthLayer(LayerBase):
     :param bool sparse:
     """
     super(LengthLayer, self).__init__(**kwargs)
-    assert len(self.sources) == 1, "%s: expects one source" % self
-    source = self.sources[0].output
-    axis = source.get_axis_from_description(axis, allow_int=False)
-    dim = source.dim_tags[axis]
+    if isinstance(axis, Dim):
+      dim = self.fixup_dim(axis, self.sources)
+    else:
+      assert len(self.sources) == 1, "%s: expects one source" % self
+      source = self.sources[0].output
+      axis = source.get_axis_from_description(axis, allow_int=False)
+      dim = source.dim_tags[axis]
     self.dim_tag = dim
     if add_time_axis:
       # You anyway should not use this, so it's ok to have only a single case supported here.
       self.output.placeholder = tf.expand_dims(dim.dyn_size, axis=self.output.time_dim_axis)
     elif dim.is_batch_dim():
-      self.output.placeholder = source.get_batch_dim()
+      dep_batches = [dep.output.batch for dep in self.sources if dep.output.batch]
+      if dep_batches:
+        from returnn.tf.util.data import BatchInfo
+        batch = BatchInfo.get_common_batch_info(dep_batches)
+      else:
+        batch = self.get_batch_info()
+      self.output.placeholder = batch.dim
     elif dim.dimension is not None:  # static
       self.output.placeholder = tf.constant(dim.dimension, dtype=dtype, name="static_dim")
     else:
       self.output.placeholder = dim.dyn_size_ext.placeholder
+
+  @classmethod
+  def fixup_dim(cls, dim, sources):
+    """
+    :param Dim dim:
+    :param list[LayerBase] sources:
+    :rtype: Dim
+    """
+    dep_batches = [dep.output.batch for dep in sources if dep.output.batch]
+    control_flow_ctx = [dep.output.control_flow_ctx for dep in sources if dep.output.control_flow_ctx]
+    if dep_batches:
+      from returnn.tf.util.data import BatchInfo
+      batch = BatchInfo.get_common_batch_info(dep_batches)
+      dim = dim.get_for_batch_ctx(batch=batch, ctx=control_flow_ctx[0] if control_flow_ctx else None)
+    return dim
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, axis="T", add_time_axis=False, dtype="int32", sparse=False, **kwargs):
@@ -1986,10 +2010,13 @@ class LengthLayer(LayerBase):
     :param bool sparse:
     :rtype: Data
     """
-    assert len(sources) == 1
-    source = sources[0].output
-    axis = source.get_axis_from_description(axis, allow_int=False)
-    dim = source.dim_tags[axis]
+    if isinstance(axis, Dim):
+      dim = cls.fixup_dim(axis, sources)
+    else:
+      assert len(sources) == 1
+      source = sources[0].output
+      axis = source.get_axis_from_description(axis, allow_int=False)
+      dim = source.dim_tags[axis]
     if add_time_axis:
       # You anyway should not use this, so it's ok to have only a single case supported here.
       assert dim.dyn_size_ext and dim.dyn_size_ext.have_batch_axis() and dim.dyn_size_ext.batch_ndim == 1  # [B]
@@ -2795,7 +2822,7 @@ class RangeInAxisLayer(LayerBase):
     """
     super(RangeInAxisLayer, self).__init__(**kwargs)
     if isinstance(axis, Dim):
-      dim = self.output.dim_tags[0]  # use that because it should have the right batch/ctx
+      dim = LengthLayer.fixup_dim(axis, self.sources)
       dim_value = dim.get_dim_value()
     else:
       source = self.sources[0].output
@@ -2818,13 +2845,7 @@ class RangeInAxisLayer(LayerBase):
     :param bool sparse:
     """
     if isinstance(axis, Dim):
-      dim = axis
-      dep_batches = [dep.output.batch for dep in sources if dep.output.batch]
-      control_flow_ctx = [dep.output.control_flow_ctx for dep in sources if dep.output.control_flow_ctx]
-      if dep_batches:
-        from returnn.tf.util.data import BatchInfo
-        batch = BatchInfo.get_common_batch_info(dep_batches)
-        dim = dim.get_for_batch_ctx(batch=batch, ctx=control_flow_ctx[0] if control_flow_ctx else None)
+      dim = LengthLayer.fixup_dim(axis, sources)
     else:
       assert len(sources) == 1, "%s layer %r requires single source with axis %r" % (cls, name, axis)
       source = sources[0].output
