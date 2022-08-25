@@ -1486,6 +1486,44 @@ def test_RangeFromLength_over_batch():
     assert list(out_v) == list(range(n_batch))
 
 
+def test_RangeInAxisLayer():
+  net_dict = {
+    "output": {'class': 'range_in_axis', 'from': 'data', 'axis': 'T'},
+  }
+  with make_scope() as session:
+    config = Config({"extern_data": {"data": {"dim": 3}}})
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    in_ = net.extern_data.get_default_input_data()
+    out = net.get_default_output_layer().output
+    assert out.get_time_dim_tag() == in_.get_time_dim_tag()
+    in_v, out_v = session.run((in_.placeholder, out.placeholder), feed_dict=make_feed_dict(net.extern_data))
+    n_batch, n_time, n_feat = in_v.shape
+    assert out_v.shape == (n_time,)
+    assert list(out_v) == list(range(n_time))
+
+
+def test_RangeInAxisLayer_generic_dim():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  time_dim = SpatialDim("time")
+  out_time_dim = time_dim + 2
+  feat_dim = FeatureDim("feat", 3)
+  config = Config({"extern_data": {"data": {"dim_tags": [batch_dim, time_dim, feat_dim]}}})
+  net_dict = {
+    "output": {'class': 'range_in_axis', 'from': 'data', 'axis': out_time_dim},
+  }
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    in_ = net.extern_data.get_default_input_data()
+    out = net.get_default_output_layer().output
+    assert in_.get_time_dim_tag() == time_dim != out_time_dim == out.get_time_dim_tag()
+    in_v, out_v = session.run((in_.placeholder, out.placeholder), feed_dict=make_feed_dict(net.extern_data))
+    n_batch, n_time, n_feat = in_v.shape
+    assert out_v.shape == (n_time + 2,)
+    assert list(out_v) == list(range(n_time + 2))
+
+
 def test_SwitchLayer_sanity_check():
   """
   https://github.com/rwth-i6/returnn/issues/800
