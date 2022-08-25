@@ -4900,6 +4900,23 @@ def test_ConvLayer_get_valid_out_dim():
   assert_equal(ConvLayer.calc_out_dim(in_dim=2, stride=1, filter_size=3, padding="valid"), 0)
 
 
+def test_LengthLayer():
+  net_dict = {
+    "output": {"class": "length", "from": "data", "axis": "T"},
+  }
+  with make_scope() as session:
+    config = Config({"extern_data": {"data": {"dim": 10}}})
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    in_ = net.extern_data.get_default_input_data()
+    out = net.get_default_output_layer().output
+    in_v, in_size_v, out_v = session.run(
+      (in_.placeholder, in_.size_placeholder[0], out.placeholder), feed_dict=make_feed_dict(net.extern_data))
+    n_batch, n_time, n_feat = in_v.shape
+    assert out_v.shape == in_size_v.shape == (n_batch,)
+    assert list(out_v) == list(in_size_v)
+
+
 def test_LengthLayer_batch():
   net_dict = {
     "input_flat": {"class": "flatten_batch", "from": "data"},  # [B_T,F]
@@ -4919,6 +4936,27 @@ def test_LengthLayer_batch():
     assert in_lens_v.shape == (in_shape_v[0],)
     assert max(in_lens_v) == in_shape_v[1]
     assert sum(in_lens_v) == flat_shape_v[0] == out_v
+
+
+def test_LengthLayer_generic_dim():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  time_dim = SpatialDim("time")
+  out_time_dim = time_dim + 2
+  feat_dim = FeatureDim("feat", 3)
+  config = Config({"extern_data": {"data": {"dim_tags": [batch_dim, time_dim, feat_dim]}}})
+  net_dict = {
+    "output": {"class": "length", "from": "data", "axis": out_time_dim},
+  }
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    in_ = net.extern_data.get_default_input_data()
+    out = net.get_default_output_layer().output
+    in_v, in_size_v, out_v = session.run(
+      (in_.placeholder, in_.size_placeholder[0], out.placeholder), feed_dict=make_feed_dict(net.extern_data))
+    n_batch, n_time, n_feat = in_v.shape
+    assert out_v.shape == in_size_v.shape == (n_batch,)
+    assert list(out_v) == list(in_size_v + 2)
 
 
 def test_RandIntLayer():
