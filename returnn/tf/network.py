@@ -661,6 +661,8 @@ class TFNetwork(object):
 
   def _get_extra_net(self, search_flag=None, net_name=None, prefix_name=None, auto_create=True, boundary=False):
     """
+    See :func:`construct_extra_net` and :func:`make_extra_net`.
+
     :param bool|None search_flag:
     :param str|None net_name:
     :param str|None prefix_name: e.g. "extra.search" or "extra.WhateverYouWant" or just "extra"
@@ -701,6 +703,13 @@ class TFNetwork(object):
 
   def make_extra_net(self, prefix_name, net_name=None, only_template=False, boundary=False):
     """
+    See :func:`construct_extra_net`.
+
+    With boundary=False, it is accessible from outside via the "extra...:" layer name prefix,
+      and registered in main_net.extra_nets.
+    With boundary=True, it is not accessible from outside,
+      and not registered in main_net.extra_nets.
+
     :param str prefix_name: "extra.Whatever"
     :param str|None net_name:
     :param bool only_template:
@@ -728,6 +737,7 @@ class TFNetwork(object):
     That `extra_net` can have different losses, which will be added.
     Layers in ``layer_list`` will be explicitly re-created in the extra net.
     Other layers are taken from ``self``.
+    An extra net is like an overlay over the main net.
 
     The creation of the extra net and layers in the extra net can be triggered explicitly
     by referring to another layer as e.g. ``"extra.search:layer"``.
