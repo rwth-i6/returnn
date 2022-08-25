@@ -1978,6 +1978,9 @@ class LengthLayer(LayerBase):
         batch = BatchInfo.get_common_batch_info(dep_batches)
       else:
         batch = self.get_batch_info()
+      batch_dim = batch.dim
+      if isinstance(batch_dim, tf.Tensor):
+        dim.set_tag_on_size_tensor(batch_dim, batch)
       self.output.placeholder = batch.dim
     elif dim.dimension is not None:  # static
       self.output.placeholder = tf.constant(dim.dimension, dtype=dtype, name="static_dim")
