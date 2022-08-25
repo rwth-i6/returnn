@@ -112,6 +112,20 @@ Not only the learning rate can be scheduled, but many other aspects as well, suc
 
 * Regularization (e.g. disable dropout initially, or have lower values)
 * Curriculum learning (i.e. take only an "easy" subset of training data initially, e.g. only the short sequences)
+* Apply gradient clipping only at the beginning of the training (see example below)
+
+This can be done by overwriting config parameters using the :ref:`_pretraining` logic or
+``get_network()`` (see :ref:`_custom_train_pipeline`).
+In either case, parameters set under ``net_dict["#config"]`` will be used to overwrite existing config parameters.
+Example::
+
+    gradient_clip = 0
+
+
+    def get_network(epoch: int, **kwargs):
+        net_dict = ...
+        if epoch < 5:
+            net_dict["#config"]["gradient_clip"] = 10
 
 
 Batching and dataset shuffling
