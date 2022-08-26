@@ -5457,13 +5457,14 @@ def test_GatherLayer_broadcast_dim():
 
 
 def test_GatherLayer_batch_dim():
+  from returnn.tf.util.data import batch_dim
   with make_scope() as session:
     import numpy as np
     net = TFNetwork(extern_data=ExternData())
-    batch_dim, time_dim, feature_dim = 3, 4, 2
+    b_dim, time_dim, feature_dim = 3, 4, 2
     # [B, T, F]
     random = np.random.RandomState(42)
-    values_seqs = random.rand(batch_dim, time_dim, feature_dim).astype('float32')
+    values_seqs = random.rand(b_dim, time_dim, feature_dim).astype('float32')
     values_size = np.array([4, 2, 3])
     values_placeholder = tf.constant(values_seqs, dtype=tf.float32)
     values_size_placeholder = {0: tf.constant(values_size, dtype=tf.int32)}
@@ -5475,6 +5476,7 @@ def test_GatherLayer_batch_dim():
         shape=[None, feature_dim],
         placeholder=values_placeholder,
         size_placeholder=values_size_placeholder,
+        dim_tags=(batch_dim, SpatialDim("time"), FeatureDim("feature", feature_dim)),
       ))
     position_np = np.array([0, 2])
     position = InternalLayer(
