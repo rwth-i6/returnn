@@ -321,7 +321,7 @@ class ExternData(object):
     """
     for key, data in self.get_sorted_data_items():
       assert isinstance(data, Data)
-      if data.available_for_inference:
+      if data.available_for_inference and data.have_batch_axis():
         assert data.batch
         return data.batch.get_global_base()
     if allow_none:
