@@ -547,9 +547,9 @@ class LayerBase(object):
           if batch_dim_tag.batch:
             output.batch = batch_dim_tag.batch
             break
-        if not output.batch:
+        if not output.batch and dyn_dim_tags_with_batch[0].dyn_size_ext.have_batch_axis():
           output.batch = _set_global_batch_by_data(dyn_dim_tags_with_batch[0].dyn_size_ext)
-      elif output.placeholder is not None:
+      elif output.placeholder is not None and output.have_batch_axis():
         # No layers at all yet. This implies that the output must already have a placeholder.
         output.batch = _set_global_batch_by_data(output)
     if output.batch:
