@@ -505,52 +505,54 @@ class LayerBase(object):
     from tensorflow.python.util import nest
     from ..util.data import BatchInfo
     from ..network import ExternData
-    if output.have_batch_axis():
-      if not output.batch:
-        def _set_global_batch_by_data(data):
-          """
-          :param Data data:
-          :rtype: returnn.tf.util.data.BatchInfo
-          """
-          assert data.placeholder is not None and not data.beam
-          # Create dummy extern data with new global batch info.
-          extern_data = ExternData()
-          extern_data.data["_fixup_out_data_dummy_input_" + data.name] = data
-          assert data.available_for_inference
-          extern_data.init_batch_info()  # this should create it and also set it
-          assert data.batch
-          return data.batch
+    if not output.batch:
+      # In all cases set output.batch, even if the output has no batch dim,
+      # as this is important in Data._adapt_batch_consistent_dim_tags().
 
-        # Some heuristic for now to fix missing batch info. We should try to fix get_out_data_from_opts though...
-        dep_layers = [v for v in nest.flatten(kwargs) if isinstance(v, LayerBase)]
-        dep_batches = [dep.output.batch for dep in dep_layers if dep.output.batch]
-        dyn_dim_tags_with_batch = [
-          dim_tag for dim_tag in output.dim_tags
-          if dim_tag.dyn_size_ext and dim_tag.dyn_size_ext.have_batch_axis()]
-        dim_tags_with_batch_info = [dim_tag for dim_tag in output.dim_tags if dim_tag.batch]
-        if dep_batches:
-          output.batch = BatchInfo.get_common_batch_info(dep_batches).copy_set_beam(output.beam)
-        elif network.extern_data.data:
-          output.batch = network.extern_data.get_batch_info().copy_set_beam(output.beam)
-        elif network.parent_net and network.get_root_network().extern_data.data:
-          output.batch = network.get_root_network().extern_data.get_batch_info().copy_set_beam(output.beam)
-        elif dim_tags_with_batch_info:
-          output.batch = dim_tags_with_batch_info[0].batch.copy_set_beam(output.beam)
-        elif dyn_dim_tags_with_batch:
-          for tag in dyn_dim_tags_with_batch:
-            if tag.dyn_size_ext.batch:
-              output.batch = tag.dyn_size_ext.batch.copy_set_beam(output.beam)
-              break
-            batch_dim_tag = tag.dyn_size_ext.dim_tags[tag.dyn_size_ext.batch_dim_axis]
-            if batch_dim_tag.batch:
-              output.batch = batch_dim_tag.batch
-              break
-          if not output.batch:
-            output.batch = _set_global_batch_by_data(dyn_dim_tags_with_batch[0].dyn_size_ext)
-        else:
-          # No layers at all yet. This implies that the output must already have a placeholder.
-          output.batch = _set_global_batch_by_data(output)
-      output.batch = output.batch.copy_set_beam(output.beam)
+      def _set_global_batch_by_data(data):
+        """
+        :param Data data:
+        :rtype: returnn.tf.util.data.BatchInfo
+        """
+        assert data.placeholder is not None and not data.beam
+        # Create dummy extern data with new global batch info.
+        extern_data = ExternData()
+        extern_data.data["_fixup_out_data_dummy_input_" + data.name] = data
+        assert data.available_for_inference
+        extern_data.init_batch_info()  # this should create it and also set it
+        assert data.batch
+        return data.batch
+
+      # Some heuristic for now to fix missing batch info. We should try to fix get_out_data_from_opts though...
+      dep_layers = [v for v in nest.flatten(kwargs) if isinstance(v, LayerBase)]
+      dep_batches = [dep.output.batch for dep in dep_layers if dep.output.batch]
+      dyn_dim_tags_with_batch = [
+        dim_tag for dim_tag in output.dim_tags
+        if dim_tag.dyn_size_ext and dim_tag.dyn_size_ext.have_batch_axis()]
+      dim_tags_with_batch_info = [dim_tag for dim_tag in output.dim_tags if dim_tag.batch]
+      if dep_batches:
+        output.batch = BatchInfo.get_common_batch_info(dep_batches).copy_set_beam(output.beam)
+      elif network.extern_data.data:
+        output.batch = network.extern_data.get_batch_info().copy_set_beam(output.beam)
+      elif network.parent_net and network.get_root_network().extern_data.data:
+        output.batch = network.get_root_network().extern_data.get_batch_info().copy_set_beam(output.beam)
+      elif dim_tags_with_batch_info:
+        output.batch = dim_tags_with_batch_info[0].batch.copy_set_beam(output.beam)
+      elif dyn_dim_tags_with_batch:
+        for tag in dyn_dim_tags_with_batch:
+          if tag.dyn_size_ext.batch:
+            output.batch = tag.dyn_size_ext.batch.copy_set_beam(output.beam)
+            break
+          batch_dim_tag = tag.dyn_size_ext.dim_tags[tag.dyn_size_ext.batch_dim_axis]
+          if batch_dim_tag.batch:
+            output.batch = batch_dim_tag.batch
+            break
+        if not output.batch:
+          output.batch = _set_global_batch_by_data(dyn_dim_tags_with_batch[0].dyn_size_ext)
+      else:
+        # No layers at all yet. This implies that the output must already have a placeholder.
+        output.batch = _set_global_batch_by_data(output)
+    output.batch = output.batch.copy_set_beam(output.beam)
     if output.control_flow_ctx != network.get_control_flow_ctx():
       x = output.placeholder
       output = output.copy_template_set_ctx(network.get_control_flow_ctx())
