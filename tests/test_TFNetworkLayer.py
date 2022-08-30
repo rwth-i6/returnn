@@ -1850,6 +1850,81 @@ def test_ReduceLayer_reduce4d():
   print("layer:", layer)
 
 
+def test_reduce_repeat_1102():
+  # https://github.com/rwth-i6/returnn/issues/1102
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+  time_dim = SpatialDim('time')
+  F_dim = FeatureDim('F', 1)
+  speech_dim = SpatialDim('speech')
+  speech_feat_dim = FeatureDim('speech-feat', 3)
+
+  config = Config(dict(extern_data={
+    'emb': {
+      'dim_tags': (batch_dim, time_dim, F_dim),
+      'dtype': 'float32',
+      'available_for_inference': True
+    },
+    'durations': {
+      'dim_tags': (batch_dim, time_dim),
+      'dtype': 'int32',
+      'available_for_inference': True
+    },
+    'target_speech': {
+      'dim_tags': (batch_dim, speech_dim, speech_feat_dim),
+      'dtype': 'float32',
+      'available_for_inference': True
+    }
+  }))
+
+  net_dict = {
+    'nartts_model_reduce': {
+      'class': 'copy',
+      'from': 'reduce',
+      'loss': 'as_is',
+      'out_shape': {batch_dim, speech_feat_dim}
+    },
+    'output': {
+      'class': 'copy',
+      'from': 'repeat',
+      'out_shape': {batch_dim, F_dim, speech_dim}
+    },
+    'reduce': {
+      'class': 'reduce',
+      'from': 'data:target_speech',
+      'mode': 'mean',
+      'axis': speech_dim,
+      'out_shape': {batch_dim, speech_feat_dim}
+    },
+    'repeat': {
+      'class': 'repeat',
+      'from': 'data:emb',
+      'repetitions': 'data:durations',
+      'axis': time_dim,
+      'out_dim': speech_dim,
+      'out_shape': {batch_dim, F_dim, speech_dim}
+    }
+  }
+
+  with make_scope() as session:
+    net = TFNetwork(config=config, eval_flag=True)
+    net.construct_from_dict(net_dict)
+
+    d = net.extern_data.data
+    feed_dict = {
+      d["emb"].placeholder: [[[1.], [2.], [0.]]],
+      d["emb"].size_placeholder[0]: [3],
+      d["durations"].placeholder: [[1, 2, 1]],
+      d["target_speech"].placeholder: [[[1., 2., 3.], [4., 5., 6.], [1., 2., 3.], [1., 2., 3.]]],
+      d["target_speech"].size_placeholder[0]: [4],
+    }
+    # TODO ERROR this is not extern_data/placeholders/target_speech/target_speech_dim0_size
+    #   but Tensor("repeat/Sum:0", shape=(?,), dtype=int32)
+    print(d["target_speech"].size_placeholder[0])
+    fetches = net.get_fetches_dict()
+    session.run(fetches, feed_dict=feed_dict)
+
+
 def test_SoftmaxOverSpatialLayer_start():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())
