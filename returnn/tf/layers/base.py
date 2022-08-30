@@ -812,7 +812,6 @@ class LayerBase(object):
     scope = cls.cls_get_tf_scope_name(name)
     name_scope_abs = None
     if name_scope is not None:
-      assert not name_scope.endswith("/")
       if name_scope == "":
         scope = tf_compat.v1.get_variable_scope()
       elif name_scope.startswith("/"):
@@ -820,6 +819,8 @@ class LayerBase(object):
         scope = name_scope[1:]
       else:
         scope = name_scope
+      if isinstance(scope, str):
+        assert not scope.endswith("/"), "invalid name_scope %r" % name_scope
     with reuse_name_scope(scope, absolute=name_scope_abs):
       yield
 
@@ -828,7 +829,7 @@ class LayerBase(object):
     """
     :rtype: str
     :return: normally just self.name, but make it a valid TF scope name.
-      this is meant mostly to extend TF names. see func:`get_base_absolute_name_scope_prefix otherwise`.
+      this is meant mostly to extend TF names. see func:`get_base_absolute_name_scope_prefix` otherwise.
     """
     if self.name_scope and not self.name_scope.startswith("/"):
       assert not self.name_scope.endswith("/")
@@ -837,22 +838,25 @@ class LayerBase(object):
 
   def get_base_absolute_name_scope_prefix(self):
     """
-    :return: e.g. "output/", always with "/" at end. this is for the TF name scope or variable scope
+    :return: e.g. "output/", always with "/" at end, or "". this is for the TF name scope or variable scope
     :rtype: str
     """
     if self.name_scope is not None:
-      assert not self.name_scope.endswith("/")
       if self.name_scope == "":
         return self.network.get_absolute_name_scope_prefix()
+      elif self.name_scope == "/":  # absolute, root
+        return ""
       elif self.name_scope.startswith("/"):  # absolute
+        assert not self.name_scope[1:].endswith("/")
         return self.name_scope[1:] + "/"
       else:
+        assert not self.name_scope.endswith("/")
         return self.network.get_absolute_name_scope_prefix() + self.name_scope + "/"
     return self.network.get_absolute_name_scope_prefix() + self.tf_scope_name + "/"
 
   def get_absolute_name_scope_prefix(self):
     """
-    :return: e.g. "output/", always with "/" at end. this is for the TF name scope or variable scope.
+    :return: e.g. "output/", always with "/" at end, or "". this is for the TF name scope or variable scope.
       This is the same as :func:`get_base_absolute_name_scope_prefix` in most cases,
       but some layers like :class:`RecLayer` extend this by an additional postfix.
     :rtype: str
