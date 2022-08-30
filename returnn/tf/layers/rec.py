@@ -4360,7 +4360,7 @@ class RecLastOutputLayer(LayerBase):
     :param str sub_layer_name:
     """
     super(RecLastOutputLayer, self).__init__(**kwargs)
-    assert isinstance(rec_layer, RecLayer)
+    rec_layer = self._resolve_to_rec_layer(rec_layer, repr(self))
     cell = rec_layer.cell
     assert isinstance(cell, _SubnetworkRecCell)
     out = cell.get_layer_last_frame(sub_layer_name)
@@ -4379,20 +4379,38 @@ class RecLastOutputLayer(LayerBase):
     d["rec_layer"] = get_layer(d["rec_layer"])
 
   @classmethod
-  def get_out_data_from_opts(cls, rec_layer, sub_layer_name, **kwargs):
+  def get_out_data_from_opts(cls, rec_layer, sub_layer_name, name, **kwargs):
     """
     :param RecLayer rec_layer:
     :param str sub_layer_name:
+    :param str name:
     :rtype: Data
     """
     if isinstance(rec_layer, _TemplateLayer):
       assert issubclass(rec_layer.layer_class_type, RecLayer)
       cell = rec_layer.kwargs["unit"]
     else:
-      assert isinstance(rec_layer, RecLayer)
+      rec_layer = cls._resolve_to_rec_layer(rec_layer, "%s %r" % (cls.__name__, name))
       cell = rec_layer.cell
     assert isinstance(cell, _SubnetworkRecCell)
     return cell.layer_data_templates[sub_layer_name].output
+
+  @classmethod
+  def _resolve_to_rec_layer(cls, layer, exception_prefix):
+    """
+    :param RecLayer|LayerBase layer:
+    :param str exception_prefix:
+    :rtype: RecLayer
+    """
+    from returnn.tf.layers.basic import SubnetworkLayer, CopyLayer
+    while not isinstance(layer, RecLayer):
+      if isinstance(layer, SubnetworkLayer):
+        layer = layer.subnetwork.get_layer("output")
+      elif isinstance(layer, CopyLayer) and len(layer.sources) == 1:
+        layer = layer.sources[0]
+      else:
+        raise Exception("%s: layer %r is not a RecLayer" % (exception_prefix, layer))
+    return layer
 
 
 class RnnCellLayer(_ConcatInputLayer):
