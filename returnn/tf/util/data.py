@@ -3635,7 +3635,7 @@ class Data(object):
     assert not check_sparse or self.sparse == data.sparse
     assert not check_dtype or self.dtype == data.dtype
     v = self.copy()
-    if v.batch and data.batch and v.batch != data.batch:
+    if v.have_batch_axis() and data.have_batch_axis() and v.batch and data.batch and v.batch != data.batch:
       v = v.copy_extend_batch(data.batch)
     v.sparse_dim = data.sparse_dim  # we will later reset it. this is to better count the axes (feature and spatial)
     if v.batch_dim_axis is not None and data.batch_dim_axis is None:

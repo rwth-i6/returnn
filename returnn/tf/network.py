@@ -314,15 +314,18 @@ class ExternData(object):
       dict(allow_same_feature_dim=allow_same_feature_dim))
     return tags
 
-  def get_batch_info(self):
+  def get_batch_info(self, allow_none=False):
     """
-    :rtype: returnn.tf.util.data.BatchInfo
+    :param bool allow_none:
+    :rtype: returnn.tf.util.data.BatchInfo|None
     """
     for key, data in self.get_sorted_data_items():
       assert isinstance(data, Data)
       if data.available_for_inference:
         assert data.batch
         return data.batch.get_global_base()
+    if allow_none:
+      return None
     raise Exception("We cannot tell the batch dim.")
 
 
@@ -2524,7 +2527,7 @@ class TFNetwork(object):
     :rtype: returnn.tf.util.data.BatchInfo
     """
     root = self.get_root_network()
-    if root.extern_data.data:
+    if root.extern_data.get_batch_info(allow_none=True):
       return root.extern_data.get_batch_info()
     # This is an unusual case where we have no extern data at all.
     # Some test cases might have this though, and in principle we could allow it.
