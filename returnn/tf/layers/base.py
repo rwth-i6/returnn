@@ -549,10 +549,11 @@ class LayerBase(object):
             break
         if not output.batch:
           output.batch = _set_global_batch_by_data(dyn_dim_tags_with_batch[0].dyn_size_ext)
-      else:
+      elif output.placeholder is not None:
         # No layers at all yet. This implies that the output must already have a placeholder.
         output.batch = _set_global_batch_by_data(output)
-    output.batch = output.batch.copy_set_beam(output.beam)
+    if output.batch:
+      output.batch = output.batch.copy_set_beam(output.beam)
     if output.control_flow_ctx != network.get_control_flow_ctx():
       x = output.placeholder
       output = output.copy_template_set_ctx(network.get_control_flow_ctx())
