@@ -828,7 +828,7 @@ class LayerBase(object):
     """
     :rtype: str
     :return: normally just self.name, but make it a valid TF scope name.
-      this is meant mostly to extend TF names. see func:`get_base_absolute_name_scope_prefix otherwise`.
+      this is meant mostly to extend TF names. see func:`get_base_absolute_name_scope_prefix` otherwise.
     """
     if self.name_scope and not self.name_scope.startswith("/"):
       assert not self.name_scope.endswith("/")
