@@ -3307,7 +3307,7 @@ class FastBaumWelchOp(NativeOpGenBase):
           std::stringstream filename;
           filename << "alignment.dump." << batch_idx << '.' << seq;
           std::ofstream out(filename.str().c_str(), std::ios::out | std::ios::trunc);
-          for (unsigned t = 0u; t <= n_frames; t++) {
+          for (unsigned t = 0u; t < n_frames; t++) {
             if (t > 0u && index[seq * index_stride + t] <= 0.0) {
               break;
             }
@@ -3343,7 +3343,7 @@ class FastBaumWelchOp(NativeOpGenBase):
           std::stringstream filename;
           filename << "target.dump." << batch_idx << '.' << seq;
           std::ofstream out(filename.str().c_str(), std::ios::out | std::ios::trunc);
-          for (unsigned t = 0u; t <= n_frames; t++) {
+          for (unsigned t = 0u; t < n_frames; t++) {
             if (t > 0u && index[seq * index_stride + t] <= 0.0) {
               break;
             }
