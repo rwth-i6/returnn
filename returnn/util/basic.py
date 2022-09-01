@@ -645,7 +645,7 @@ def terminal_size(file=sys.stdout):
   try:
     if not os.isatty(file.fileno()):
       return -1, -1
-  except io.UnsupportedOperation:
+  except (io.UnsupportedOperation, ValueError):
     return -1, -1
   env = os.environ
 
