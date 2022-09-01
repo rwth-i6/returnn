@@ -178,9 +178,14 @@ class ExternData(object):
         # Also check whether the current size or batch is still valid in current graph, and maybe reset.
         # noinspection PyProtectedMember
         tag._validate_in_current_graph()
-        if tag.dyn_size_ext and tag.dyn_size_ext.have_batch_axis():
-          assert not tag.batch or tag.batch == batch_info
-          assert not tag.dyn_size_ext.batch or tag.dyn_size_ext.batch == batch_info
+        # noinspection PyProtectedMember
+        tag._maybe_update()
+        if (
+              # We want to set the batch info when this was newly created via _create_size_placeholder.
+              tag.dyn_size_ext and
+              tag.dyn_size_ext.placeholder is not None and
+              not tag.batch and
+              not tag.dyn_size_ext.batch):
           tag.dyn_size_ext.batch = batch_info
           tag.batch = batch_info
       # Set this last because this will trigger _adapt_batch_consistent_dim_tags
