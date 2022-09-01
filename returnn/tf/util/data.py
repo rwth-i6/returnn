@@ -277,7 +277,10 @@ class Dim(object):
     if isinstance(self.dimension, int):
       return
     if not self.batch:
-      return
+      if self.dyn_size_ext and self.dyn_size_ext.batch:
+        self.batch = self.dyn_size_ext.batch
+      else:
+        return
     same_base = self.get_same_base()
     key = (self.batch, self.control_flow_ctx)
     if self.dyn_size_ext and key not in same_base._same_for_batch_ctx:
@@ -693,6 +696,11 @@ class Dim(object):
       assert y
       if self.dyn_size_ext:
         assert self.dyn_size_ext.dim_tags == y.dim_tags
+      if y.batch:
+        if self.batch:
+          assert self.batch == y.batch
+        else:
+          self.batch = y.batch
       self.dyn_size_ext = y
       if y.placeholder is not None:
         self.set_tag_on_size_tensor(y.placeholder)
@@ -947,6 +955,7 @@ class Dim(object):
       tag = self.src_data.get_dim_tag(self.src_axis)
       if tag.description == self.description and (not tag.dyn_size_ext or not tag._validate_in_current_graph()):
         tag.dyn_size_ext = self.get_dyn_size_ext_for_batch_ctx(tag.batch, tag.control_flow_ctx)
+        tag._maybe_update()
     # If others dyn_size is None but we have a dyn_size, maybe update others dyn_size.
     if self.dyn_size is not None and other_same_base.dyn_size is not self.dyn_size:
       # Could be unset if it comes from the config, or from prev graph creation.
@@ -954,11 +963,14 @@ class Dim(object):
       if other_same_base.dyn_size is None or not other_same_base._validate_in_current_graph():
         other_same_base.dyn_size_ext = self.get_dyn_size_ext_for_batch_ctx(
           other_same_base.batch, other_same_base.control_flow_ctx)
+        other_same_base._maybe_update()
     if not self.dyn_size_ext or not self._validate_in_current_graph():
       self.dyn_size_ext = other_same_base.get_dyn_size_ext_for_batch_ctx(self.batch, self.control_flow_ctx)
+      self._maybe_update()
     elif other_same_base.dyn_size_ext is None or not other_same_base._validate_in_current_graph():
       other_same_base.dyn_size_ext = self.get_dyn_size_ext_for_batch_ctx(
         other_same_base.batch, other_same_base.control_flow_ctx)
+      other_same_base._maybe_update()
     if self.is_dim_known() and other.is_dim_known():
       assert self.dimension == other.dimension
     elif self.is_dim_known() and not other.is_dim_known():
