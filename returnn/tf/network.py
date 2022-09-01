@@ -1457,6 +1457,11 @@ class TFNetwork(object):
       deps = _layer_deps(layer_)
       if not deps:
         return False
+      layer_kwargs = layer_.kwargs.copy()
+      layer_kwargs.pop("out_shape", None)
+      layer_kwargs_flat_values = nest.flatten(layer_kwargs)
+      if any(dim in layer_kwargs_flat_values for dim in dims):  # e.g. to operate on the axis
+        return False
       valid_deps = all(
         set(dep_.output.dim_tags).issuperset(dims)
         or set(dep_.output.dim_tags).isdisjoint(dims)
