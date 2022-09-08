@@ -83,8 +83,6 @@ def rna_loss(log_probs, labels, input_lengths, label_lengths, blank_label=0):
   Returns:
       1-D float Tensor, the cost of each example in the minibatch
       (as negative log probabilities).
-  * This class performs the softmax operation internally.
-  * The label reserved for the blank symbol should be label 0.
   """
   init_warprna()
   loss, _ = _tf_mod.warp_rna(log_probs, labels, input_lengths,
