@@ -603,7 +603,7 @@ class Engine(EngineBase):
 
   def analyze(self, data, statistics):
     """
-    :param Dataset.Dataset data:
+    :param returnn.datasets.basic.Dataset data:
     :param list[str]|None statistics:
     :return: nothing, will print everything to log.v1
     """

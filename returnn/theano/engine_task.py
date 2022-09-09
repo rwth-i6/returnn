@@ -14,6 +14,7 @@ from returnn.theano.engine_util import assign_dev_data
 from returnn.log import log
 from returnn.util.task_system import ProcConnectionDied
 from returnn.util.basic import hms, progress_bar, terminal_size, hdf5_strings, interrupt_main, NumbersDict
+from returnn.datasets.basic import Dataset
 
 
 class TaskThread(threading.Thread):
@@ -730,6 +731,7 @@ class ForwardTaskThread(TaskThread):
 class HDFForwardTaskThread(TaskThread):
     def __init__(self, network, devices, data, batches, cache, compression="none"):
       super(HDFForwardTaskThread, self).__init__('extract', network, devices, data, batches, eval_batch_size=1)
+      assert isinstance(data, Dataset)
       self.tags = []
       self.cache = cache
       self.network = network

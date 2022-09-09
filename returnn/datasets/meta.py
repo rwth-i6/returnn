@@ -875,6 +875,7 @@ class CombinedDataset(CachedDataset2):
     for dataset_key_tuple, data_key in data_map.items():
       dataset_key, dataset_data_key = dataset_key_tuple
       dataset = self.datasets[dataset_key]
+      assert isinstance(dataset, Dataset)
       if not data_dims:
         self.data_dims[data_key] = dataset.num_outputs[dataset_data_key]
       if dataset_data_key in dataset.labels:
