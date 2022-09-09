@@ -297,7 +297,8 @@ class SentencePieces(Vocabulary):
     self._cache_key = opts.get("model_file", None)
     self.sp = spm.SentencePieceProcessor(**opts)  # noqa
     super(SentencePieces, self).__init__(
-      vocab_file=None, seq_postfix=None, unknown_label=self.sp.IdToPiece(self.sp.unk_id()))
+      vocab_file=None, seq_postfix=None,
+      unknown_label=self.sp.IdToPiece(self.sp.unk_id()) if self.sp.unk_id() >= 0 else None)
 
   def __repr__(self):
     return "SentencePieces(%r)" % (self._opts,)
