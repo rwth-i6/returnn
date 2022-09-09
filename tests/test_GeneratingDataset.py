@@ -178,11 +178,11 @@ def test_BytePairEncoding_unicode():
     vocab_file="%s/bpe-unicode-demo.vocab" % my_dir,
     unknown_label="<unk>")
   assert_equal(bpe.num_labels, 189)
-  assert_equal(bpe.labels[5], "z")
-  assert_equal(bpe.vocab["z"], 5)
+  assert_equal(bpe.id_to_label(5), "z")
+  assert_equal(bpe.label_to_id("z"), 5)
   assert_equal(bpe.bpe._bpe_codes[("n", "d</w>")], 1)
-  assert_equal(bpe.labels[6], u"å")
-  assert_equal(bpe.vocab[u"å"], 6)
+  assert_equal(bpe.id_to_label(6), u"å")
+  assert_equal(bpe.label_to_id(u"å"), 6)
   assert_equal(bpe.bpe._bpe_codes[(u"à", u"nd</w>")], 2)
 
   def get_bpe_seq(text):
@@ -191,7 +191,7 @@ def test_BytePairEncoding_unicode():
     :rtype: str
     """
     bpe_label_seq = bpe.get_seq(text)
-    res = " ".join(bpe.labels[i] for i in bpe_label_seq)
+    res = " ".join(bpe.id_to_label(i) for i in bpe_label_seq)
     print("%r -> %r" % (text, res))
     return res
 
