@@ -335,7 +335,7 @@ def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.01
     rms_func = librosa.feature.rmse  # noqa
   energy = rms_func(
     y=audio,
-    hop_length=int(step_len * sample_rate), frame_length=int(window_len * sample_rate))
+    hop_length=int(step_len * sample_rate), frame_length=int(window_len * sample_rate), center=center)
   features[0] = energy  # replace first MFCC with energy, per convention
   assert features.shape[0] == num_feature_filters  # (dim, time)
   features = features.transpose().astype("float32")  # (time, dim)
