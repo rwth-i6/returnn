@@ -2361,7 +2361,8 @@ class Engine(EngineBase):
           if vocab is not None:
             layer_outputs = outputs[output_layer_idx]
             serialized_output = [
-              vocab.get_seq_labels(output) if output.ndim == 1 else vocab.labels[output] for output in layer_outputs]
+              vocab.get_seq_labels(output) if output.ndim == 1 else vocab.id_to_label(output)
+              for output in layer_outputs]
           else:
             serialized_output = None
             assert not output_file, "Unable to serialize sparse output of layer '%s'." % (
@@ -2380,7 +2381,7 @@ class Engine(EngineBase):
 
             if vocab is not None:
               serialized_target = [
-                vocab.get_seq_labels(target) if target.ndim == 1 else vocab.labels[target]
+                vocab.get_seq_labels(target) if target.ndim == 1 else vocab.id_to_label(target)
                 for target in targets[output_layer_idx]]
             else:
               serialized_target = None

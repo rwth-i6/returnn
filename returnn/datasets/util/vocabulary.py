@@ -46,10 +46,20 @@ class Vocabulary(object):
       clz = BytePairEncoding
     return clz(**opts)
 
-  def __init__(self, vocab_file, seq_postfix=None, unknown_label="UNK", num_labels=None, labels=None):
+  def __init__(self, vocab_file, seq_postfix=None,
+               unknown_label="UNK", bos_label=None, eos_label=None, pad_label=None,
+               control_symbols=None, user_defined_symbols=None,
+               num_labels=None, labels=None):
     """
     :param str|None vocab_file:
-    :param str|None unknown_label:
+    :param str|int|None unknown_label: e.g. "UNK" or "<unk>"
+    :param str|int|None bos_label: e.g. "<s>"
+    :param str|int|None eos_label: e.g. "</s>"
+    :param str|int|None pad_label: e.g. "<pad>"
+    :param dict[str,str|int]|None control_symbols:
+      https://github.com/google/sentencepiece/blob/master/doc/special_symbols.md
+    :param dict[str,str|int]|None user_defined_symbols:
+      https://github.com/google/sentencepiece/blob/master/doc/special_symbols.md
     :param int num_labels: just for verification
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
     :param list[str]|None labels:
@@ -57,17 +67,33 @@ class Vocabulary(object):
     self.vocab_file = vocab_file
     self.unknown_label = unknown_label
     self.num_labels = None  # type: typing.Optional[int]  # will be set by _parse_vocab
-    self.vocab = None  # type: typing.Optional[typing.Dict[str,int]]  # label->idx
-    self.labels = labels
+    self._vocab = None  # type: typing.Optional[typing.Dict[str,int]]  # label->idx
+    self._labels = labels
 
     self._parse_vocab()
     if num_labels is not None:
       assert self.num_labels == num_labels
-    self.unknown_label_id = self.vocab[self.unknown_label] if self.unknown_label is not None else None
+    self.unknown_label_id = self.to_id(self.unknown_label, allow_none=True)
+    if self.unknown_label_id is not None:
+      self.unknown_label = self.id_to_label(self.unknown_label_id)
+    self.bos_label_id = self.to_id(bos_label, allow_none=True)
+    self.eos_label_id = self.to_id(eos_label, allow_none=True)
+    self.pad_label_id = self.to_id(pad_label, allow_none=True)
+    self.control_symbol_ids = {name: self.to_id(label) for name, label in (control_symbols or {}).items()}
+    self.user_defined_symbol_ids = {name: self.to_id(label) for name, label in (user_defined_symbols or {}).items()}
     self.seq_postfix = seq_postfix or []
 
   def __repr__(self):
-    return "Vocabulary(%r, num_labels=%s, unknown_label=%r)" % (self.vocab_file, self.num_labels, self.unknown_label)
+    parts = [repr(self.vocab_file), "num_labels=%s" % self.num_labels]
+    if self.unknown_label_id is not None:
+      parts.append("unknown_label=%r" % self.unknown_label)
+    if self.bos_label_id is not None:
+      parts.append("bos_label=%r" % self.id_to_label(self.bos_label_id))
+    if self.bos_label_id is not None:
+      parts.append("eos_label=%r" % self.id_to_label(self.eos_label_id))
+    if self.bos_label_id is not None:
+      parts.append("pad_label=%r" % self.id_to_label(self.pad_label_id))
+    return "%s(%s)" % (self.__class__.__name__, ", ".join(parts))
 
   def set_random_seed(self, seed):
     """
@@ -86,14 +112,12 @@ class Vocabulary(object):
     filename = self.vocab_file
     import pickle
 
-    if self.labels is not None:
-      self.vocab = {label: i for i, label in enumerate(self.labels)}
-      assert self.unknown_label is None or self.unknown_label in self.vocab
-      self.num_labels = len(self.labels)
+    if self._labels is not None:
+      self._vocab = {label: i for i, label in enumerate(self._labels)}
+      self.num_labels = len(self._labels)
     elif filename in self._cache:
-      self.vocab, self.labels = self._cache[filename]
-      assert self.unknown_label is None or self.unknown_label in self.vocab
-      self.num_labels = len(self.labels)
+      self._vocab, self._labels = self._cache[filename]
+      self.num_labels = len(self._labels)
     else:
       if filename[-4:] == ".pkl":
         d = pickle.load(open(filename, "rb"))
@@ -105,7 +129,6 @@ class Vocabulary(object):
           from returnn.util.basic import py2_utf8_str_to_unicode
           d = {py2_utf8_str_to_unicode(s): i for (s, i) in d.items()}
       assert isinstance(d, dict)
-      assert self.unknown_label is None or self.unknown_label in d
       labels = {idx: label for (label, idx) in sorted(d.items())}
       min_label, max_label, num_labels = min(labels), max(labels), len(labels)
       assert 0 == min_label
@@ -114,9 +137,9 @@ class Vocabulary(object):
         print("unused labels: %r" % ([i for i in range(max_label + 1) if i not in labels],), file=log.v2)
       assert num_labels - 1 == max_label
       self.num_labels = len(labels)
-      self.vocab = d
-      self.labels = [label for (idx, label) in sorted(labels.items())]
-      self._cache[filename] = (self.vocab, self.labels)
+      self._vocab = d
+      self._labels = [label for (idx, label) in sorted(labels.items())]
+      self._cache[filename] = (self._vocab, self._labels)
 
   @classmethod
   def create_vocab_dict_from_labels(cls, labels):
@@ -156,15 +179,70 @@ class Vocabulary(object):
     assert isinstance(var, tf.Variable)
     assert var.dtype.base_dtype == tf.string
     assert var.shape.as_list() == [self.num_labels]
-    assert len(self.labels) == self.num_labels
+    assert len(self._labels) == self.num_labels
 
     def init_vocab_var(session):
       """
       :param tensorflow.Session session:
       """
-      VariableAssigner(var).assign(session=session, value=self.labels)
+      VariableAssigner(var).assign(session=session, value=self._labels)
 
     return init_vocab_var
+
+  def to_id(self, label, default=KeyError, allow_none=False):
+    """
+    :param str|int|None label:
+    :param str|type[KeyError]|None default:
+    :param bool allow_none: whether label can be None. in this case, None is returned
+    :rtype: int|None
+    """
+    if isinstance(label, str):
+      return self.label_to_id(label, default=default)
+    if isinstance(label, int):
+      if self.is_id_valid(label):
+        return label
+      if default is KeyError:
+        raise KeyError("invalid label id %i" % label)
+      return None
+    if label is None and allow_none:
+      return None
+    raise TypeError("invalid label type %r" % type(label))
+
+  def label_to_id(self, label, default=KeyError):
+    """
+    :param str label:
+    :param int|type[KeyError]|None default:
+    :rtype: int|None
+    """
+    if default is KeyError:
+      return self._vocab[label]
+    return self._vocab.get(label, default)
+
+  def id_to_label(self, idx, default=KeyError):
+    """
+    :param int idx:
+    :param str|KeyError|None default:
+    :rtype: str|None
+    """
+    if self.is_id_valid(idx):
+      return self._labels[idx]
+    if default is KeyError:
+      raise KeyError("idx %i out of range" % idx)
+    return default
+
+  def is_id_valid(self, idx):
+    """
+    :param int idx:
+    :rtype: bool
+    """
+    return 0 <= idx < len(self._labels)
+
+  @property
+  def labels(self):
+    """
+    :rtype: list[str]
+    """
+    return self._labels
 
   def get_seq(self, sentence):
     """
@@ -180,15 +258,15 @@ class Vocabulary(object):
     :rtype: list[int]
     """
     if self.unknown_label is not None:
-      return [self.vocab.get(k, self.unknown_label_id) for k in seq]
-    return [self.vocab[k] for k in seq]
+      return [self._vocab.get(k, self.unknown_label_id) for k in seq]
+    return [self._vocab[k] for k in seq]
 
   def get_seq_labels(self, seq):
     """
     :param list[int]|numpy.ndarray seq: 1D sequence
     :rtype: str
     """
-    return " ".join(map(self.labels.__getitem__, seq))
+    return " ".join(map(self._labels.__getitem__, seq))
 
 
 class BytePairEncoding(Vocabulary):
@@ -201,16 +279,15 @@ class BytePairEncoding(Vocabulary):
   Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (ACL 2016). Berlin, Germany.
   """
 
-  def __init__(self, vocab_file, bpe_file, seq_postfix=None, unknown_label="UNK"):
+  def __init__(self, vocab_file, bpe_file, seq_postfix=None, **kwargs):
     """
     :param str vocab_file:
     :param str bpe_file:
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
-    :param str|None unknown_label:
     """
-    super(BytePairEncoding, self).__init__(vocab_file=vocab_file, seq_postfix=seq_postfix, unknown_label=unknown_label)
+    super(BytePairEncoding, self).__init__(vocab_file=vocab_file, seq_postfix=seq_postfix, **kwargs)
     from returnn.util.bpe import StandardBytePairEncoder
-    self.bpe = StandardBytePairEncoder(bpe_codes_file=bpe_file, labels=self.labels)
+    self.bpe = StandardBytePairEncoder(bpe_codes_file=bpe_file, labels=self._labels)
 
   def get_seq(self, sentence):
     """
@@ -229,19 +306,18 @@ class SamplingBytePairEncoding(Vocabulary):
   This will encode the text on-the-fly with BPE.
   """
 
-  def __init__(self, vocab_file, breadth_prob, seq_postfix=None, unknown_label="UNK"):
+  def __init__(self, vocab_file, breadth_prob, seq_postfix=None, **kwargs):
     """
     :param str vocab_file:
     :param float breadth_prob:
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
-    :param str|None unknown_label:
     """
-    super(SamplingBytePairEncoding, self).__init__(
-      vocab_file=vocab_file, seq_postfix=seq_postfix, unknown_label=unknown_label)
+    super(SamplingBytePairEncoding, self).__init__(vocab_file=vocab_file, seq_postfix=seq_postfix, **kwargs)
     from returnn.util.bpe import SamplingBytePairEncoder
     self.rnd = numpy.random.RandomState(0)
     self.bpe = SamplingBytePairEncoder(
-      labels=self.labels, breadth_prob=breadth_prob, rnd=self.rnd, unknown_label=unknown_label)
+      labels=self._labels, breadth_prob=breadth_prob, rnd=self.rnd,
+      unknown_label=self.id_to_label(self.unknown_label_id) if self.unknown_label_id is not None else None)
 
   def set_random_seed(self, seed):
     """
@@ -291,27 +367,76 @@ class SentencePieces(Vocabulary):
         forward-filtering-and-backward-sampling algorithm.
     :param float alpha: Soothing parameter for unigram sampling, and dropout probability of
       merge operations for BPE-dropout. (Default = 0.1)
+    :param dict[str,str|int]|None control_symbols:
+      https://github.com/google/sentencepiece/blob/master/doc/special_symbols.md
+    :param dict[str,str|int]|None user_defined_symbols:
+      https://github.com/google/sentencepiece/blob/master/doc/special_symbols.md
     """
     import sentencepiece as spm  # noqa
     self._opts = opts
     self._cache_key = opts.get("model_file", None)
+    control_symbols = opts.pop("control_symbols", None)
+    user_defined_symbols = opts.pop("user_defined_symbols", None)
     self.sp = spm.SentencePieceProcessor(**opts)  # noqa
     super(SentencePieces, self).__init__(
-      vocab_file=None, seq_postfix=None, unknown_label=self.sp.IdToPiece(self.sp.unk_id()))
+      vocab_file=None, seq_postfix=None,
+      unknown_label=self.sp.unk_id(), eos_label=self.sp.eos_id(), bos_label=self.sp.bos_id(),
+      pad_label=self.sp.pad_id(), control_symbols=control_symbols, user_defined_symbols=user_defined_symbols)
 
   def __repr__(self):
-    return "SentencePieces(%r)" % (self._opts,)
+    return "%s(%r)" % (self.__class__.__name__, self._opts)
 
   def _parse_vocab(self):
     self.num_labels = self.sp.vocab_size()
+    # Do not load labels/vocab here. This is not really needed.
+
+  @property
+  def labels(self):
+    """
+    :rtype: list[str]
+    """
     if self._cache_key and self._cache_key in self._cache:
-      self.vocab, self.labels = self._cache[self._cache_key]
-      assert self.unknown_label in self.vocab and self.num_labels == len(self.vocab) == len(self.labels)
-      return
-    self.labels = [self.sp.id_to_piece(i) for i in range(self.num_labels)]  # noqa
-    self.vocab = {label: i for (i, label) in enumerate(self.labels)}
-    if self._cache_key:
-      self._cache[self._cache_key] = (self.vocab, self.labels)
+      self._vocab, self._labels = self._cache[self._cache_key]
+      assert self.num_labels == len(self._vocab) == len(self._labels)
+    else:
+      self._labels = [self.sp.id_to_piece(i) for i in range(self.num_labels)]  # noqa
+      self._vocab = {label: i for (i, label) in enumerate(self._labels)}
+      if self._cache_key:
+        self._cache[self._cache_key] = (self._vocab, self._labels)
+    return self._labels
+
+  def is_id_valid(self, idx):
+    """
+    :param int idx:
+    :rtype: bool
+    """
+    return not self.sp.IsUnused(idx)
+
+  def id_to_label(self, idx, default=KeyError):
+    """
+    :param int idx:
+    :param str|KeyError|None default:
+    :rtype: str|None
+    """
+    if default is not KeyError and not self.is_id_valid(idx):
+      return default
+    return self.sp.IdToPiece(idx)
+
+  def label_to_id(self, label, default=KeyError):
+    """
+    :param str label:
+    :param int|type[KeyError]|None default:
+    :rtype: int|None
+    """
+    res = self.sp.PieceToId(label)
+    if res == self.unknown_label_id or res < 0 or res is None:
+      # It could be that the label really is the unknown-label, or it could be that the label is unknown.
+      if label == self.id_to_label(self.unknown_label_id):
+        return self.unknown_label_id
+      if default is KeyError:
+        raise KeyError("label %r not found" % label)
+      return default
+    return res
 
   def set_random_seed(self, seed):
     """
@@ -338,7 +463,7 @@ class CharacterTargets(Vocabulary):
   Also see :class:`Utf8ByteTargets`.
   """
 
-  def __init__(self, vocab_file, seq_postfix=None, unknown_label="@", labels=None):
+  def __init__(self, vocab_file, seq_postfix=None, unknown_label="@", labels=None, **kwargs):
     """
     :param str|None vocab_file:
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
@@ -346,7 +471,7 @@ class CharacterTargets(Vocabulary):
     :param list[str]|None labels:
     """
     super(CharacterTargets, self).__init__(
-      vocab_file=vocab_file, seq_postfix=seq_postfix, unknown_label=unknown_label, labels=labels)
+      vocab_file=vocab_file, seq_postfix=seq_postfix, unknown_label=unknown_label, labels=labels, **kwargs)
 
   def get_seq(self, sentence):
     """
@@ -354,9 +479,9 @@ class CharacterTargets(Vocabulary):
     :rtype: list[int]
     """
     if self.unknown_label is not None:
-      seq = [self.vocab.get(k, self.unknown_label_id) for k in sentence]
+      seq = [self._vocab.get(k, self.unknown_label_id) for k in sentence]
     else:
-      seq = [self.vocab[k] for k in sentence]
+      seq = [self._vocab[k] for k in sentence]
     return seq + self.seq_postfix
 
   def get_seq_labels(self, seq):
@@ -364,7 +489,7 @@ class CharacterTargets(Vocabulary):
     :param list[int]|numpy.ndarray seq: 1D sequence
     :rtype: str
     """
-    return "".join(map(self.labels.__getitem__, seq))
+    return "".join(map(self._labels.__getitem__, seq))
 
 
 class Utf8ByteTargets(Vocabulary):
@@ -383,8 +508,8 @@ class Utf8ByteTargets(Vocabulary):
     """
     Sets self.vocab, self.labels, self.num_labels.
     """
-    self.vocab = {chr(i): i for i in range(256)}
-    self.labels = [chr(i) for i in range(256)]
+    self._vocab = {chr(i): i for i in range(256)}
+    self._labels = [chr(i) for i in range(256)]
     self.num_labels = 256
 
   def get_seq(self, sentence):
