@@ -47,7 +47,8 @@ class Vocabulary(object):
     return clz(**opts)
 
   def __init__(self, vocab_file, seq_postfix=None,
-               unknown_label="UNK", bos_label=None, eos_label=None, pad_label=None, special_labels=None,
+               unknown_label="UNK", bos_label=None, eos_label=None, pad_label=None,
+               control_symbols=None, user_defined_symbols=None,
                num_labels=None, labels=None):
     """
     :param str|None vocab_file:
@@ -55,7 +56,10 @@ class Vocabulary(object):
     :param str|int|None bos_label: e.g. "<s>"
     :param str|int|None eos_label: e.g. "</s>"
     :param str|int|None pad_label: e.g. "<pad>"
-    :param dict[str,str|int]|None special_labels:
+    :param dict[str,str|int]|None control_symbols:
+      https://github.com/google/sentencepiece/blob/master/doc/special_symbols.md
+    :param dict[str,str|int]|None user_defined_symbols:
+      https://github.com/google/sentencepiece/blob/master/doc/special_symbols.md
     :param int num_labels: just for verification
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
     :param list[str]|None labels:
@@ -75,7 +79,8 @@ class Vocabulary(object):
     self.bos_label_id = self.to_id(bos_label, allow_none=True)
     self.eos_label_id = self.to_id(eos_label, allow_none=True)
     self.pad_label_id = self.to_id(pad_label, allow_none=True)
-    self.special_label_ids = {name: self.to_id(label) for name, label in (special_labels or {}).items()}
+    self.control_symbol_ids = {name: self.to_id(label) for name, label in (control_symbols or {}).items()}
+    self.user_defined_symbol_ids = {name: self.to_id(label) for name, label in (user_defined_symbols or {}).items()}
     self.seq_postfix = seq_postfix or []
 
   def __repr__(self):
@@ -362,15 +367,21 @@ class SentencePieces(Vocabulary):
         forward-filtering-and-backward-sampling algorithm.
     :param float alpha: Soothing parameter for unigram sampling, and dropout probability of
       merge operations for BPE-dropout. (Default = 0.1)
+    :param dict[str,str|int]|None control_symbols:
+      https://github.com/google/sentencepiece/blob/master/doc/special_symbols.md
+    :param dict[str,str|int]|None user_defined_symbols:
+      https://github.com/google/sentencepiece/blob/master/doc/special_symbols.md
     """
     import sentencepiece as spm  # noqa
     self._opts = opts
     self._cache_key = opts.get("model_file", None)
+    control_symbols = opts.pop("control_symbols", None)
+    user_defined_symbols = opts.pop("user_defined_symbols", None)
     self.sp = spm.SentencePieceProcessor(**opts)  # noqa
     super(SentencePieces, self).__init__(
       vocab_file=None, seq_postfix=None,
       unknown_label=self.sp.unk_id(), eos_label=self.sp.eos_id(), bos_label=self.sp.bos_id(),
-      pad_label=self.sp.pad_id())
+      pad_label=self.sp.pad_id(), control_symbols=control_symbols, user_defined_symbols=user_defined_symbols)
 
   def __repr__(self):
     return "%s(%r)" % (self.__class__.__name__, self._opts)
