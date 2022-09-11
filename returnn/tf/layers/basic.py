@@ -3131,7 +3131,7 @@ class WindowLayer(_ConcatInputLayer):
     if is_axis_from_description_recurrent(axis=axis, network=self.network, data=data):
       # Inside RecLayer.
       assert self._rec_previous_layer, "%s: expected to be used inside a RecLayer" % self
-      assert padding == "same"
+      assert padding == "same" and stride == 1, "%s: invalid padding or stride" % self
       assert window_right is not None or window_left is not None, (
         "%s: recurrent variant should explicitly specify window_right=0 or window_left=window_size-1" % self)
       if window_left is not None:
