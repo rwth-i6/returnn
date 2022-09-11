@@ -1210,6 +1210,19 @@ def test_Data_template_from_constant_bool():
   assert out.dtype == "bool"
 
 
+def test_Data_copy_feat_with_vocab():
+  from returnn.tf.util.data import batch_dim, FeatureDim, SpatialDim
+  from returnn.datasets.util.vocabulary import Vocabulary
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("feat", dimension=3)
+  vocab = Vocabulary(vocab_file=None, labels=["a", "b", "c"], unknown_label=None)
+  feat_dim.vocab = vocab
+  data = Data("data", dim_tags=[batch_dim, time_dim, feat_dim])
+  assert data.vocab is vocab
+  data2 = data.copy()
+  assert data2.vocab is vocab
+
+
 def test_Dim_copy():
   # https://github.com/rwth-i6/returnn/issues/860
   import copy

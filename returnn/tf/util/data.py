@@ -3053,8 +3053,6 @@ class Data(object):
     if self.sparse_dim:
       # Sparse is False by default. And the dim is inferred from the feature dim, or otherwise does not make sense.
       keys += ["sparse_dim"]
-    if self.vocab:
-      keys += ["vocab"]
     if self.batch is not None:
       keys += ["batch"]
     if self.beam is not None:
