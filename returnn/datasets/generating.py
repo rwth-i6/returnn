@@ -1139,7 +1139,7 @@ class TimitDataset(CachedDataset2):
     return {61: cls.PhoneMapTo61, 48: cls.PhoneMapTo48, 39: cls.PhoneMapTo39}[num_phones]
 
   @classmethod
-  def _get_labels(cls, phone_map):
+  def _get_labels_by_phone_map(cls, phone_map):
     """
     :param dict[str,str|None] phone_map:
     :rtype: list[str]
@@ -1155,6 +1155,14 @@ class TimitDataset(CachedDataset2):
     return labels
 
   @classmethod
+  def get_labels(cls, num_phones=61):
+    """
+    :param int num_phones:
+    :rtype: list[str]
+    """
+    return cls._get_labels_by_phone_map(cls._get_phone_map(num_phones))
+
+  @classmethod
   def get_label_map(cls, source_num_phones=61, target_num_phones=39):
     """
     :param int source_num_phones:
@@ -1162,9 +1170,9 @@ class TimitDataset(CachedDataset2):
     :rtype: dict[int,int|None]
     """
     src_phone_map = cls._get_phone_map(source_num_phones)  # 61-phone -> src-phone
-    src_labels = cls._get_labels(src_phone_map)  # src-idx -> src-phone
+    src_labels = cls._get_labels_by_phone_map(src_phone_map)  # src-idx -> src-phone
     tgt_phone_map = cls._get_phone_map(target_num_phones)  # 61-phone -> tgt-phone
-    tgt_labels = cls._get_labels(tgt_phone_map)  # tgt-idx -> tgt-phone
+    tgt_labels = cls._get_labels_by_phone_map(tgt_phone_map)  # tgt-idx -> tgt-phone
     d = {i: src_labels[i] for i in range(source_num_phones)}  # src-idx -> src-phone|61-phone
     if source_num_phones != 61:
       src_phone_map_rev = {v: k for (k, v) in sorted(src_phone_map.items())}  # src-phone -> 61-phone
@@ -1211,7 +1219,7 @@ class TimitDataset(CachedDataset2):
     self._norm_std_dev = self._load_feature_vec(norm_std_dev)
     assert num_phones in {61, 48, 39}
     self._phone_map = {61: self.PhoneMapTo61, 48: self.PhoneMapTo48, 39: self.PhoneMapTo39}[num_phones]
-    self.labels = self._get_labels(self._phone_map)
+    self.labels = self._get_labels_by_phone_map(self._phone_map)
     self.num_outputs = {"data": (self.num_inputs, 2), "classes": (len(self.labels), 1)}
     self._timit_dir = timit_dir
     self._is_train = train
