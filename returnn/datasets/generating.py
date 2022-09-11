@@ -1099,6 +1099,9 @@ class TimitDataset(CachedDataset2):
   The full train data has 3696 utterances and the core test data has 192 utterances
   (24-speaker core test set).
 
+  The input length is not the same as the output length.
+  The targets are not the framewise alignment.
+
   For some references:
   https://github.com/ppwwyyxx/tensorpack/blob/master/examples/CTC-TIMIT/train-timit.py
   https://www.cs.toronto.edu/~graves/preprint.pdf
@@ -1469,6 +1472,8 @@ class NltkTimitDataset(TimitDataset):
   and none of the test data.
   The full train data has 3696 utterances and the core test data has 192 utterances.
   Not sure how useful this is...
+
+  See :class:`TimitDataset` for more.
   """
 
   def __init__(self, nltk_download_dir=None, **kwargs):
