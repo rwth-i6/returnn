@@ -925,7 +925,7 @@ class Dim(object):
       # We actually want it to be the other way around.
       other_same_base.declare_same_as(self_same_as)
       return
-    if self.is_dim_known and not other.is_dim_known():
+    if self.is_dim_known() and not other.is_dim_known():
       if self_same_as._creation_idx < other_same_base._creation_idx:
         # We want to keep self instead.
         # https://github.com/rwth-i6/returnn_common/issues/200
