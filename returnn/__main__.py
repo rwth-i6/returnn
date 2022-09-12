@@ -183,7 +183,6 @@ def get_cache_byte_sizes():
   :rtype: (int,int,int)
   :returns cache size in bytes for (train,dev,eval)
   """
-  import returnn.util.basic as util
   cache_sizes_user = config.list('cache_size', ["%iG" % util.default_cache_size_in_gbytes()])
   num_datasets = 1 + config.has('dev') + config.has('eval')
   cache_factor = 1.0
