@@ -284,9 +284,9 @@ def print_task_properties(devices=None):
 
 def init_engine(devices):
   """
-  Initializes global engine.
+  Initializes global ``engine``, for example :class:`returnn.tf.engine.Engine`.
 
-  :type devices: list[Device.Device]|None
+  :param list[returnn.theano.device.Device]|None devices:
   """
   global engine
   if BackendEngine.is_theano_selected():
@@ -295,8 +295,11 @@ def init_engine(devices):
   elif BackendEngine.is_tensorflow_selected():
     from returnn.tf.engine import Engine
     engine = Engine(config=config)
+  elif BackendEngine.is_torch_selected():
+    from returnn.torch.engine import Engine
+    engine = Engine(config=config)
   else:
-    raise NotImplementedError
+    raise NotImplementedError("Backend engine not implemented")
 
 
 def returnn_greeting(config_filename=None, command_line_options=None):
@@ -323,7 +326,11 @@ def returnn_greeting(config_filename=None, command_line_options=None):
 
 def init_backend_engine():
   """
-  Initializes ``engine``, which is either :class:`TFEngine.Engine` or Theano :class:`Engine.Engine`.
+  Selects the backend engine (TensorFlow, PyTorch, Theano, or whatever)
+  and does corresponding initialization and preparation.
+
+  This does not initialize the global ``engine`` object yet.
+  See :func:`init_engine` for that.
   """
   BackendEngine.select_engine(config=config)
   if BackendEngine.is_theano_selected():
@@ -354,16 +361,16 @@ def init_backend_engine():
           print("Horovod: Not using GPU.", file=log.v3)
       if hvd.rank() == 0:  # Don't spam in all ranks.
         print("Horovod: Reduce type:", hvd.get_reduce_type(), file=log.v3)
-    from returnn.tf.util.basic import debug_register_better_repr, setup_tf_thread_pools, print_available_devices
+    from returnn.tf.util import basic as tf_util
     tf_session_opts = config.typed_value("tf_session_opts", {})
     assert isinstance(tf_session_opts, dict)
     # This must be done after the Horovod logic, such that we only touch the devices we are supposed to touch.
-    setup_tf_thread_pools(log_file=log.v3, tf_session_opts=tf_session_opts)
+    tf_util.setup_tf_thread_pools(log_file=log.v3, tf_session_opts=tf_session_opts)
     # Print available devices. Also make sure that get_tf_list_local_devices uses the correct TF session opts.
-    print_available_devices(tf_session_opts=tf_session_opts, file=log.v2)
+    tf_util.print_available_devices(tf_session_opts=tf_session_opts, file=log.v2)
     from returnn.tf.native_op import OpMaker
     OpMaker.log_stream = log.v3
-    debug_register_better_repr()
+    tf_util.debug_register_better_repr()
     if config.is_true("distributed_tf"):
       import returnn.tf.distributed
       returnn.tf.distributed.init_distributed_tf(config)
