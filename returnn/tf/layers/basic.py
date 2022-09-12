@@ -7735,7 +7735,15 @@ class CombineLayer(LayerBase):
       assert kind == "eval" and eval_str
       return self._op_kind_eval(sources, eval_str=eval_str, eval_locals=eval_locals)
 
-    kind = {"sub": "subtract", "mul": "multiply"}.get(kind, kind)
+    kind = {
+      "+": "add",
+      "-": "subtract",
+      "*": "multiply",
+      "/": "truediv",
+      "//": "floordiv",
+      "sub": "subtract",
+      "mul": "multiply",
+    }.get(kind, kind)
     if hasattr(tf, "math") and hasattr(tf.math, kind):
       tf_func = getattr(tf.math, kind)
     elif hasattr(tf, kind):
