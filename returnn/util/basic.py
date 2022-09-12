@@ -128,7 +128,8 @@ class BackendEngine:
 
   Theano = 0
   TensorFlow = 1
-  selectedEngine = None  # type: typing.Optional[int]  # One of the possible engines.
+  Torch = 2  # PyTorch
+  selected_engine = None  # type: typing.Optional[int]  # One of the possible engines.
 
   class CannotSelectEngine(Exception):
     """
@@ -141,17 +142,26 @@ class BackendEngine:
     :param int engine: see the global class attribs for possible values
     :param Config.Config config:
     """
-    assert cls.selectedEngine is None, "already set"
+    assert cls.selected_engine is None, "already set"
     if engine is None:
       if config is None:
         from returnn.config import get_global_config
         config = get_global_config()
-      engine = cls._get_default_engine()
+      engine = None
       if config.bool("use_theano", False):
         engine = cls.Theano
       if config.bool("use_tensorflow", False):
         engine = cls.TensorFlow
-    cls.selectedEngine = engine
+      if config.value("backend", None):
+        backend = config.value("backend", None)
+        engine = {
+          "theano": cls.Theano,
+          "tensorflow": cls.TensorFlow,
+          "torch": cls.Torch,
+        }[backend]
+      if engine is None:
+        engine = cls._get_default_engine()
+    cls.selected_engine = engine
 
   @classmethod
   def _get_default_engine(cls):
@@ -167,6 +177,8 @@ class BackendEngine:
       return cls.Theano
     if "tensorflow" in sys.modules:
       return cls.TensorFlow
+    if "torch" in sys.modules:
+      return cls.Torch
     try:
       # noinspection PyPackageRequirements
       import theano
@@ -178,16 +190,23 @@ class BackendEngine:
       return cls.TensorFlow
     except ImportError:
       pass
-    raise cls.CannotSelectEngine("Neither Theano nor TF available.")
+    try:
+      # noinspection PyPackageRequirements
+      import torch
+      return cls.Torch
+    except ImportError:
+      pass
+    raise cls.CannotSelectEngine("Neither TensorFlow, PyTorch nor Theano available.")
 
   @classmethod
   def get_selected_engine(cls):
     """
     :rtype: int
     """
-    if cls.selectedEngine is not None:
-      return cls.selectedEngine
+    if cls.selected_engine is not None:
+      return cls.selected_engine
     else:
+      print("WARNING: BackendEngine.get_selected_engine() called before select_engine().", file=log.v3)
       return cls._get_default_engine()
 
   @classmethod
@@ -284,7 +303,7 @@ def get_model_filename_postfix():
   :return: one possible postfix of a file which will be present when the model is saved
   :rtype: str
   """
-  assert BackendEngine.selectedEngine is not None
+  assert BackendEngine.selected_engine is not None
   if BackendEngine.is_tensorflow_selected():
     # There will be multiple files but a *.meta file will always be present.
     return ".meta"

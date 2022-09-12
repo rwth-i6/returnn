@@ -805,7 +805,7 @@ class Engine(EngineBase):
       log.init_by_config(config)
     if not BehaviorVersion.is_set():
       BehaviorVersion.set(config.int('behavior_version', None))
-    if BackendEngine.selectedEngine is None:
+    if BackendEngine.selected_engine is None:
       BackendEngine.select_engine(engine=BackendEngine.TensorFlow)
     assert BackendEngine.is_tensorflow_selected()
     self.config = config
