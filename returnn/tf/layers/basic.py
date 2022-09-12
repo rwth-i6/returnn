@@ -3469,6 +3469,7 @@ class MergeDimsLayer(_ConcatInputLayer):
         "%s: axes %r must be a list or tuple, to have a well defined order in input %s" % (name, axes, input_data))
       axes_ = []
       for axis in axes:
+        assert axis is not None, "%s: invalid axes %r" % (name, axes)
         axis_ = input_data.get_axes_from_description(axis, allow_int=False)
         assert len(axis_) <= 1, (
           "%s: unique axes %r required in input %s, but got %r -> %r" % (name, axes, input_data, axis, axis_))
