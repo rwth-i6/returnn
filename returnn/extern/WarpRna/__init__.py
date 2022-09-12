@@ -36,12 +36,11 @@ def init_warprna(verbose=False):
   if _tf_mod:
     return
   assert is_checked_out(), "submodule not checked out? Run `git submodule update --init --recursive`"
-  assert is_tf_cuda_build(), "TF with CUDA support required"
+  enable_gpu = is_tf_cuda_build()
 
-  src_files = [
-    '%s/tensorflow_binding/src/warp_rna_op.cc' % submodule_dir,
-    '%s/core.cu' % submodule_dir,
-  ]
+  src_files = ['%s/tensorflow_binding/src/warp_rna_op.cc' % submodule_dir]
+  if enable_gpu:
+    src_files.append('%s/core.cu' % submodule_dir)
   src_code = ""
   for fn in src_files:
     f_code = open(fn).read()
@@ -54,8 +53,8 @@ def init_warprna(verbose=False):
   compiler = OpCodeCompiler(
     base_name="warprna_kernels", code_version=1, code=src_code,
     include_paths=(submodule_dir, os.path.dirname(submodule_dir)),
-    c_macro_defines={"WARPRNA_ENABLE_GPU": 1},
-    is_cpp=True, use_cuda_if_available=True,
+    c_macro_defines={"WARPRNA_ENABLE_GPU": 1 if enable_gpu else None},
+    is_cpp=True, use_cuda_if_available=enable_gpu,
     verbose=verbose)
   tf_mod = compiler.load_tf_module()
   assert hasattr(tf_mod, "WarpRNA"), "content of mod: %r" % (dir(tf_mod),)
