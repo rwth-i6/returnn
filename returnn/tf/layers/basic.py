@@ -7814,6 +7814,15 @@ class CompareLayer(LayerBase):
     assert len(self.sources) >= 1
     if value is None:
       assert len(self.sources) >= 2, "{} requires at least two elements to compare".format(self)
+    kind = {
+      "==": "equal",
+      "<=": "less_equal",
+      "<": "less",
+      ">=": "greater_equal",
+      ">": "greater",
+      "!=": "not_equal",
+      "<>": "not_equal",
+    }.get(kind, kind)
     op = getattr(tf, kind)  # e.g. tf.equal
     from returnn.tf.util.basic import opt_logical_and
     common_data = self.output
