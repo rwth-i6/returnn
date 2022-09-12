@@ -88,6 +88,7 @@ def main():
     url='https://github.com/rwth-i6/returnn/',
     license='RETURNN license',
     long_description=open('README.rst').read(),
+    long_description_content_type="text/x-rst",
     # https://pypi.python.org/pypi?%3Aaction=list_classifiers
     classifiers=[
       'Development Status :: 5 - Production/Stable',
