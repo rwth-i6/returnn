@@ -584,7 +584,7 @@ def execute_main_task():
     engine.init_train_from_config(config, train_data, dev_data, eval_data)
     engine.save_model(config.value('model', 'dummy'))
   else:
-    assert False, "unknown task: %s" % task
+    raise Exception("unknown task: %r" % (task,))
 
   print(("elapsed: %s" % hms_fraction(time.time() - start_time)), file=log.v3)
 
