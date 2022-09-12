@@ -29,10 +29,9 @@ from returnn.log import log
 from returnn.config import Config
 from returnn.datasets import Dataset, init_dataset, init_dataset_via_str
 from returnn.datasets.hdf import HDFDataset
-from returnn.util.debug import init_ipython_kernel, init_better_exchook, init_faulthandler, \
-  init_cuda_not_in_main_proc_check
-from returnn.util.basic import init_thread_join_hack, describe_returnn_version, describe_theano_version, \
-  describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple, BehaviorVersion
+from returnn.util import debug as debug_util
+from returnn.util import basic as util
+from returnn.util.basic import BackendEngine, BehaviorVersion
 
 if typing.TYPE_CHECKING:
   import returnn.tf.engine
@@ -309,7 +308,8 @@ def returnn_greeting(config_filename=None, command_line_options=None):
   """
   print(
     "RETURNN starting up, version %s, date/time %s, pid %i, cwd %s, Python %s" % (
-      describe_returnn_version(), time.strftime("%Y-%m-%d-%H-%M-%S (UTC%z)"), os.getpid(), os.getcwd(), sys.executable),
+      util.describe_returnn_version(), time.strftime("%Y-%m-%d-%H-%M-%S (UTC%z)"),
+      os.getpid(), os.getcwd(), sys.executable),
     file=log.v3)
   if config_filename:
     print("RETURNN config: %s" % config_filename, file=log.v4)
@@ -327,12 +327,12 @@ def init_backend_engine():
   """
   BackendEngine.select_engine(config=config)
   if BackendEngine.is_theano_selected():
-    print("Theano:", describe_theano_version(), file=log.v3)
+    print("Theano:", util.describe_theano_version(), file=log.v3)
     import returnn.theano.util
     returnn.theano.util.monkey_patches()
   elif BackendEngine.is_tensorflow_selected():
-    print("TensorFlow:", describe_tensorflow_version(), file=log.v3)
-    if get_tensorflow_version_tuple()[0] == 0:
+    print("TensorFlow:", util.describe_tensorflow_version(), file=log.v3)
+    if util.get_tensorflow_version_tuple()[0] == 0:
       print("Warning: TF <1.0 is not supported and likely broken.", file=log.v2)
     if os.environ.get("TF_DEVICE"):
       print("Devices: Use %s via TF_DEVICE instead of %s." % (
@@ -367,6 +367,8 @@ def init_backend_engine():
     if config.is_true("distributed_tf"):
       import returnn.tf.distributed
       returnn.tf.distributed.init_distributed_tf(config)
+  elif BackendEngine.is_torch_selected():
+    print("PyTorch:", util.describe_torch_version(), file=log.v3)
   else:
     raise NotImplementedError
 
@@ -378,8 +380,8 @@ def init(config_filename=None, command_line_options=(), config_updates=None, ext
   :param dict[str]|None config_updates: see :func:`init_config`
   :param str|None extra_greeting:
   """
-  init_better_exchook()
-  init_thread_join_hack()
+  debug_util.init_better_exchook()
+  util.init_thread_join_hack()
   init_config(config_filename=config_filename, command_line_options=command_line_options, extra_updates=config_updates)
   if config.bool("patch_atfork", False):
     from returnn.util.basic import maybe_restart_returnn_with_atfork_patch
@@ -388,15 +390,15 @@ def init(config_filename=None, command_line_options=(), config_updates=None, ext
   if extra_greeting:
     print(extra_greeting, file=log.v1)
   returnn_greeting(config_filename=config_filename, command_line_options=command_line_options)
-  init_faulthandler()
+  debug_util.init_faulthandler()
   init_backend_engine()
   if BackendEngine.is_theano_selected():
     if config.value('task', 'train') == "theano_graph":
       config.set("multiprocessing", False)
     if config.bool('multiprocessing', True):
-      init_cuda_not_in_main_proc_check()
+      debug_util.init_cuda_not_in_main_proc_check()
   if config.bool('ipython', False):
-    init_ipython_kernel()
+    debug_util.init_ipython_kernel()
   init_config_json_network()
   devices = init_theano_devices()
   if need_data():

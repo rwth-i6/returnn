@@ -223,6 +223,13 @@ class BackendEngine:
     """
     return cls.get_selected_engine() == cls.TensorFlow
 
+  @classmethod
+  def is_torch_selected(cls):
+    """
+    :rtype: bool
+    """
+    return cls.get_selected_engine() == cls.Torch
+
 
 class BehaviorVersion:
   """
@@ -482,6 +489,35 @@ def describe_tensorflow_version():
     tdir = "<unknown(exception: %r)>" % e
   version = getattr(tf, "__version__", "<unknown version>")
   version += " (%s)" % getattr(tf, "__git_version__", "<unknown git version>")
+  try:
+    if tdir.startswith("<"):
+      git_info = "<unknown-dir>"
+    elif os.path.exists(tdir + "/../.git"):
+      git_info = "git:" + git_describe_head_version(git_dir=tdir)
+    elif "/site-packages/" in tdir:
+      git_info = "<site-package>"
+    else:
+      git_info = "<not-under-git>"
+  except Exception as e:
+    git_info = "<unknown(git exception: %r)>" % e
+  return "%s (%s in %s)" % (version, git_info, tdir)
+
+
+def describe_torch_version():
+  """
+  :rtype: str
+  """
+  try:
+    # noinspection PyPackageRequirements
+    import torch
+  except ImportError as exc:
+    return "<PyTorch ImportError: %s>" % exc
+  try:
+    tdir = os.path.dirname(torch.__file__)
+  except Exception as e:
+    tdir = "<unknown(exception: %r)>" % e
+  version = getattr(torch, "__version__", "<unknown version>")
+  version += " (%s)" % getattr(torch.version, "git_version", "<unknown git version>")
   try:
     if tdir.startswith("<"):
       git_info = "<unknown-dir>"
