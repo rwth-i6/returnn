@@ -20,7 +20,7 @@ jobs:
           - 2.4.2
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
 
     - uses: actions/setup-python@v2
       with:
@@ -101,7 +101,7 @@ jobs:
             python-version: 2.7
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
 
     - uses: actions/setup-python@v2
       with:
@@ -228,7 +228,7 @@ jobs:
             tf-version: 2.3.0
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
 
     - uses: actions/setup-python@v2
       with:
@@ -349,7 +349,7 @@ jobs:
             tf-version: 2.3.0
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
 
     - uses: actions/setup-python@v2
       with:
