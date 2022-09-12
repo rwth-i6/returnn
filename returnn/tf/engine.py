@@ -999,10 +999,10 @@ class Engine(EngineBase):
   # noinspection PyAttributeOutsideInit
   def init_train_from_config(self, config=None, train_data=None, dev_data=None, eval_data=None):
     """
-    :param Config.Config|None config:
-    :param Dataset|None train_data:
-    :param Dataset|None dev_data:
-    :param Dataset|None eval_data:
+    :param returnn.config.Config|None config:
+    :param returnn.datasets.basic.Dataset|None train_data:
+    :param returnn.datasets.basic.Dataset|None dev_data:
+    :param returnn.datasets.basic.Dataset|None eval_data:
     """
     if not config:
       config = self.config
