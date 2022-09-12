@@ -32,6 +32,11 @@ from returnn.datasets.hdf import HDFDataset
 from returnn.util import debug as debug_util
 from returnn.util import basic as util
 from returnn.util.basic import BackendEngine, BehaviorVersion
+# These imports are not directly used here, but make them available, as other code imports them from here.
+# noinspection PyUnresolvedReferences
+from returnn.util.debug import init_ipython_kernel, init_better_exchook, init_faulthandler
+# noinspection PyUnresolvedReferences
+from returnn.util.basic import init_thread_join_hack, describe_returnn_version
 
 if typing.TYPE_CHECKING:
   import returnn.tf.engine
