@@ -3351,7 +3351,7 @@ class NativeCodeCompiler(object):
     :param int|tuple[int] code_version: check for the cache whether to reuse
     :param str code: the source code itself
     :param bool is_cpp: if False, C is assumed
-    :param dict[str,str|int]|None c_macro_defines: e.g. {"TENSORFLOW": 1}
+    :param dict[str,str|int|None]|None c_macro_defines: e.g. {"TENSORFLOW": 1}
     :param list[str]|None ld_flags: e.g. ["-lblas"]
     :param list[str]|tuple[str] include_paths:
     :param list[str]|None include_deps: if provided and an existing lib file, we will check if any dependency is newer
@@ -3373,7 +3373,7 @@ class NativeCodeCompiler(object):
     self.code_version = code_version
     self.code = code
     self.is_cpp = is_cpp
-    self.c_macro_defines = c_macro_defines or {}
+    self.c_macro_defines = {k: v for k, v in (c_macro_defines or {}).items() if v is not None}
     self.ld_flags = ld_flags or []
     self.include_deps = include_deps
     self.static_version_name = static_version_name
