@@ -50,7 +50,7 @@ class LearningRateControl(object):
   @classmethod
   def load_initial_kwargs_from_config(cls, config):
     """
-    :type config: Config.Config
+    :type config: returnn.config.Config
     :rtype: dict[str]
     """
     return {
@@ -74,7 +74,7 @@ class LearningRateControl(object):
   @classmethod
   def load_initial_from_config(cls, config):
     """
-    :type config: Config.Config
+    :type config: returnn.config.Config
     :rtype: LearningRateControl
     """
     kwargs = cls.load_initial_kwargs_from_config(config)
@@ -504,7 +504,7 @@ class NewbobRelative(LearningRateControl):
   @classmethod
   def load_initial_kwargs_from_config(cls, config):
     """
-    :type config: Config.Config
+    :type config: returnn.config.Config
     :rtype: dict[str]
     """
     kwargs = super(NewbobRelative, cls).load_initial_kwargs_from_config(config)
@@ -552,7 +552,7 @@ class NewbobAbs(LearningRateControl):
   @classmethod
   def load_initial_kwargs_from_config(cls, config):
     """
-    :type config: Config.Config
+    :type config: returnn.config.Config
     :rtype: dict[str]
     """
     kwargs = super(NewbobAbs, cls).load_initial_kwargs_from_config(config)
@@ -605,7 +605,7 @@ class NewbobMultiEpoch(LearningRateControl):
   @classmethod
   def load_initial_kwargs_from_config(cls, config):
     """
-    :type config: Config.Config
+    :type config: returnn.config.Config
     :rtype: dict[str]
     """
     kwargs = super(NewbobMultiEpoch, cls).load_initial_kwargs_from_config(config)
@@ -694,7 +694,7 @@ def learning_rate_control_type(type_name):
 
 def load_learning_rate_control_from_config(config):
   """
-  :type config: Config.Config
+  :type config: returnn.config.Config
   :rtype: LearningRateControl
   """
   control_type = config.value("learning_rate_control", "constant")

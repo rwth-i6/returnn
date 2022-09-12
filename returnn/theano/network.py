@@ -107,7 +107,7 @@ class LayerNetwork(object):
   @classmethod
   def from_config_topology(cls, config, mask=None, **kwargs):
     """
-    :type config: Config.Config
+    :type config: returnn.config.Config
     :param str mask: e.g. "unity" or None ("dropout"). "unity" is for testing.
     :rtype: LayerNetwork
     """
@@ -122,7 +122,7 @@ class LayerNetwork(object):
   @classmethod
   def json_from_config(cls, config, mask=None):
     """
-    :type config: Config.Config
+    :type config: returnn.config.Config
     :param str mask: "unity", "none" or "dropout"
     :rtype: dict[str]
     """
@@ -168,7 +168,7 @@ class LayerNetwork(object):
   @classmethod
   def from_json_and_config(cls, json_content, config, **kwargs):
     """
-    :type config: Config.Config
+    :type config: returnn.config.Config
     :type json_content: str | dict
     :rtype: LayerNetwork
     """

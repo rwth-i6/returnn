@@ -25,7 +25,7 @@ class Updater:
     """
     Will construct a :class:`Updater` instance where all params are automatically determined by the given config.
 
-    :param Config.Config config:
+    :param returnn.config.Config config:
     :rtype: Updater
     """
     kwargs = {}

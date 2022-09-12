@@ -70,7 +70,7 @@ class LayerNetworkDescription:
   @classmethod
   def from_config(cls, config):
     """
-    :type config: Config.Config
+    :type config: returnn.config.Config
     :rtype: LayerNetworkDescription
     """
     num_inputs, num_outputs = cls.num_inputs_outputs_from_config(config)
@@ -138,7 +138,7 @@ class LayerNetworkDescription:
   @classmethod
   def loss_from_config(cls, config):
     """
-    :type config: Config.Config
+    :type config: returnn.config.Config
     :rtype: str
     """
     return config.value('loss', 'ce')
@@ -146,7 +146,7 @@ class LayerNetworkDescription:
   @classmethod
   def tf_extern_data_types_from_config(cls, config):
     """
-    :param Config.Config config:
+    :param returnn.config.Config config:
     :return: dict data_key -> kwargs of Data
     :rtype: dict[str,dict[str]]
     """
@@ -194,7 +194,7 @@ class LayerNetworkDescription:
   @classmethod
   def num_inputs_outputs_from_config(cls, config):
     """
-    :type config: Config.Config
+    :type config: returnn.config.Config
     :returns (num_inputs, num_outputs),
        where num_inputs is like num_outputs["data"][0],
        and num_outputs is a dict of data_key -> (dim, ndim),

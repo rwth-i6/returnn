@@ -59,7 +59,7 @@ class Engine(EngineBase):
 
   def init_train_from_config(self, config, train_data, dev_data=None, eval_data=None):
     """
-    :type config: Config.Config
+    :type config: returnn.config.Config
     :type train_data: Dataset.Dataset
     :type dev_data: Dataset.Dataset | None
     :type eval_data: Dataset.Dataset | None
@@ -719,7 +719,7 @@ class SeqTrainParallelControl:
   def __init__(self, engine, config, **kwargs):
     """
     :type engine: Engine
-    :type config: Config.Config
+    :type config: returnn.config.Config
     """
     self.engine = engine
     self.config = config

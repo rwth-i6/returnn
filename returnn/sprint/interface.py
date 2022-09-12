@@ -282,7 +282,7 @@ class PythonFeatureScorer(object):
   @property
   def config(self):
     """
-    :rtype: Config.Config
+    :rtype: returnn.config.Config
     """
     return rnn.config
 

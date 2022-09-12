@@ -97,7 +97,7 @@ class Device(object):
   def __init__(self, device, config, blocking=False, num_batches=1, update_specs=None):
     """
     :param str device: name, "gpu*" or "cpu*"
-    :param Config.Config config: config
+    :param returnn.config.Config config: config
     :param bool blocking: False -> multiprocessing, otherwise it's blocking
     :param int num_batches: num batches to train on this device
     :param dict update_specs
@@ -254,7 +254,7 @@ class Device(object):
 
   def initialize(self, config, update_specs=None, json_content=None, train_param_args=None):
     """
-    :type config: Config.Config
+    :type config: returnn.config.Config
     :type json_content: dict[str] | str | None
     :type train_param_args: dict | None
     """
@@ -896,7 +896,7 @@ class Device(object):
   def process_inner(self, device, config, update_specs, asyncTask):
     """
     :type device: str
-    :type config: Config.Config
+    :type config: returnn.config.Config
     :type asyncTask: AsyncTask
     """
     # The connection (duplex pipe) is managed by AsyncTask.

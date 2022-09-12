@@ -38,7 +38,7 @@ class ExternData(object):
     """
     :param None|dict[str,dict[str]] data: optional init kwargs for Data
     """
-    self._config = None  # type: typing.Optional["Config.Config"]
+    self._config = None  # type: typing.Optional["returnn.config.Config"]
     self.data = {}  # type: typing.Dict[str,Data]
     self.default_input = default_input
     self.default_target = default_target
@@ -1631,7 +1631,7 @@ class TFNetwork(object):
                        with_summary=False, with_size=False,
                        horovod_collected_reduce_inputs=None):
     """
-    :param Config.Config|None config:
+    :param returnn.config.Config|None config:
     :param bool|None should_train:
     :param bool|None should_eval:
     :param bool with_summary:

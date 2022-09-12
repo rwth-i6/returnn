@@ -179,7 +179,7 @@ class Log:
 
   def init_by_config(self, config):
     """
-    :param Config.Config config:
+    :param returnn.config.Config config:
     """
     logs = config.list('log', [])
     log_verbosity = config.int_list('log_verbosity', [])

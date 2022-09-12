@@ -26,7 +26,7 @@ class EngineBase(object):
   @classmethod
   def config_get_final_epoch(cls, config):
     """
-    :param Config.Config config:
+    :param returnn.config.Config config:
     :rtype: int
     """
     num_epochs = config.int('num_epochs', 5)
@@ -37,7 +37,7 @@ class EngineBase(object):
   @classmethod
   def get_existing_models(cls, config):
     """
-    :param Config.Config config:
+    :param returnn.config.Config config:
     :return: dict epoch -> model filename
     :rtype: dict[int,str]
     """
@@ -61,7 +61,7 @@ class EngineBase(object):
   @classmethod
   def get_epoch_model(cls, config):
     """
-    :type config: Config.Config
+    :type config: returnn.config.Config
     :returns (epoch, modelFilename)
     :rtype: (int|None, str|None)
     """
@@ -142,7 +142,7 @@ class EngineBase(object):
     This ensures that the files are present and enforces that there are
     no old outdated files which should be ignored.
     Note that epochs start at idx 1 and batches at idx 0.
-    :type config: Config.Config
+    :type config: returnn.config.Config
     :returns (epoch,batch)
     :rtype (int,int)
     """

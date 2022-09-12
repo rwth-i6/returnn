@@ -36,7 +36,7 @@ class Dataset(object):
   @staticmethod
   def kwargs_update_from_config(config, kwargs):
     """
-    :type config: Config.Config
+    :type config: returnn.config.Config
     :type kwargs: dict[str]
     """
     def set_or_remove(key, value):
@@ -60,7 +60,7 @@ class Dataset(object):
   @staticmethod
   def get_default_kwargs_eval(config):
     """
-    :param Config.Config config:
+    :param returnn.config.Config config:
     :rtype: dict[str]
     """
     # For dev/eval, by default, we should not do chunking (i.e. chunking = "0").
@@ -76,7 +76,7 @@ class Dataset(object):
   @classmethod
   def from_config(cls, config, **kwargs):
     """
-    :type config: Config.Config
+    :type config: returnn.config.Config
     :param dict[str] kwargs: passed on to __init__
     :rtype: Dataset
     """
@@ -1298,7 +1298,7 @@ def init_dataset(kwargs, extra_kwargs=None, default_kwargs=None):
 def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs):
   """
   :param str config_str: hdf-files, or "LmDataset:..." or so
-  :param Config.Config|None config: optional, only for "sprint:..."
+  :param returnn.config.Config|None config: optional, only for "sprint:..."
   :param int|None cache_byte_size: optional, only for HDFDataset
   :rtype: Dataset
   """
@@ -1418,7 +1418,7 @@ def shapes_for_batches(batches, data_keys, dataset=None, extern_data=None, enfor
 
 def set_config_num_inputs_outputs_from_dataset(config, dataset):
   """
-  :param Config.Config config:
+  :param returnn.config.Config config:
   :param Dataset dataset:
   """
   from returnn.util import BackendEngine

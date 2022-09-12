@@ -522,7 +522,7 @@ class Pretrain:
 
 def pretrain_from_config(config):
   """
-  :type config: Config.Config
+  :type config: returnn.config.Config
   :rtype: Pretrain | None
   """
   from returnn.util import BackendEngine

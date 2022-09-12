@@ -478,7 +478,7 @@ class InputContext(object):
     """
     :param DatasetDataProvider parent:
     :param ExternData extern_data:
-    :param Config.Config config:
+    :param returnn.config.Config config:
     :param str dataset_name: e.g. "train" or "dev"
     :param Dataset returnn_dataset:
     :param tensorflow.data.Iterator iterator:
@@ -650,7 +650,7 @@ class DatasetDataProvider(DataProviderBase):
     """
     :param ExternData extern_data:
     :param list[str]|dict[str,Dataset|None]|None datasets: e.g. ["train", "dev"]
-    :param Config.Config config:
+    :param returnn.config.Config config:
     """
     super(DatasetDataProvider, self).__init__(extern_data=extern_data)
     output_types = {}  # type: typing.Dict[str,tf.DType]

@@ -140,7 +140,7 @@ class BackendEngine:
   def select_engine(cls, engine=None, config=None):
     """
     :param int engine: see the global class attribs for possible values
-    :param Config.Config config:
+    :param returnn.config.Config config:
     """
     assert cls.selected_engine is None, "already set"
     if engine is None:
@@ -3323,7 +3323,7 @@ def log_runtime_info_to_dir(path, config):
   as well as copy the used config file.
 
   :param str path: directory path
-  :param Config.Config config:
+  :param returnn.config.Config config:
   """
   import os
   import sys
@@ -3375,7 +3375,7 @@ def log_runtime_info_to_dir(path, config):
 
 def should_write_to_disk(config):
   """
-  :param Config.Config config:
+  :param returnn.config.Config config:
   :rtype: bool
   """
   if config.is_true("use_horovod"):

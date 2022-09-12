@@ -113,7 +113,7 @@ def maybe_subtract_priors(network, train, config):
   """
   :type network: Network.LayerNetwork
   :type train: Dataset.Dataset
-  :type config: Config.Config
+  :type config: returnn.config.Config
   """
   if config.bool('subtract_priors', False):
     prior_scale = config.float('prior_scale', 0.0)

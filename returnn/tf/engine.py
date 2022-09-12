@@ -795,7 +795,7 @@ class Engine(EngineBase):
 
   def __init__(self, config=None):
     """
-    :param Config.Config|None config:
+    :param returnn.config.Config|None config:
     """
     super(Engine, self).__init__()
     if config is None:
@@ -1058,7 +1058,7 @@ class Engine(EngineBase):
   def get_net_dict_for_epoch(self, epoch, config=None):
     """
     :param int epoch:
-    :param Config.Config|None config:
+    :param returnn.config.Config|None config:
     :rtype: dict[str]
     """
     if not config:
@@ -1081,7 +1081,7 @@ class Engine(EngineBase):
 
   def init_network_from_config(self, config=None, net_dict_post_proc=None):
     """
-    :param Config.Config|None config:
+    :param returnn.config.Config|None config:
     :param ((dict)->dict)|None net_dict_post_proc:
     """
     if not config:
@@ -1322,7 +1322,7 @@ class Engine(EngineBase):
   def create_network(cls, config, rnd_seed, train_flag, eval_flag, search_flag, net_dict,
                      extern_data=None, initial_learning_rate=1.0):
     """
-    :param Config.Config config:
+    :param returnn.config.Config config:
     :param int rnd_seed:
     :param bool|tf.Tensor train_flag:
     :param float initial_learning_rate:
@@ -2575,7 +2575,7 @@ class Engine(EngineBase):
   def compute_priors(self, dataset, config=None):
     """
     :param Dataset dataset:
-    :param Config.Config config:
+    :param returnn.config.Config config:
     """
     assert isinstance(dataset, Dataset)
     if config:
