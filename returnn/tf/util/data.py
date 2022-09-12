@@ -1983,7 +1983,7 @@ class BatchInfo:
       """
       :rtype: str
       """
-      if isinstance(self.size, int):
+      if isinstance(self.size, int) and self.size >= 0:
         return "B(%i)" % self.size
       return "B"
 
