@@ -1231,6 +1231,16 @@ def test_Dim_copy():
   assert a == copy.deepcopy(a)
 
 
+def test_Dim_sorted():
+  from returnn.util.basic import dict_diff_str
+  a = SpatialDim("a")
+  b = SpatialDim("b", 2)
+  c = FeatureDim("c", 3)
+  print(sorted((c, a, c, b)))
+  assert sorted((c, a, c, b)) == [a, b, c, c]  # order defined by creation index (somewhat arbitrary...)
+  print(dict_diff_str({"key": [a, b]}, {"key": [b, c]}))
+
+
 def test_ExternData_ext_Data_batch_info():
   # https://github.com/rwth-i6/returnn_common/issues/193
   # https://github.com/rwth-i6/returnn/issues/975

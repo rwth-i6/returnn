@@ -843,6 +843,42 @@ class Dim(object):
       return hash((base.kind, base.dimension, base.description))
     return hash(id(base))
 
+  def __lt__(self, other):
+    """
+    Define some order. This is just such that `sorted` works, or some diff reporting, or so.
+    It is on symbolic level, i.e. it does not consider the actual dimension value.
+    The defined order somewhat arbitrary, so do not rely on the exact behavior,
+    as this might change at some later point.
+    Currently, it depends on the creation index.
+
+    :param Dim other:
+    :rtype: bool
+    """
+    if not isinstance(other, Dim):
+      raise TypeError("cannot compare %r with %r" % (self, other))
+    if self == other:
+      return False
+    return self.get_same_base()._creation_idx < other.get_same_base()._creation_idx
+
+  def __gt__(self, other):
+    """
+    See :func:`__lt__`.
+
+    :param Dim other:
+    :rtype: bool
+    """
+    if not isinstance(other, Dim):
+      raise TypeError("cannot compare %r with %r" % (self, other))
+    if self == other:
+      return False
+    return self.get_same_base()._creation_idx > other.get_same_base()._creation_idx
+
+  def __ge__(self, other):
+    return not self < other
+
+  def __le__(self, other):
+    return not self > other
+
   def get_same_base(self):
     """
     :rtype: Dim
