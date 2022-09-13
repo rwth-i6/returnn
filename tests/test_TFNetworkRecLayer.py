@@ -4952,6 +4952,7 @@ def test_reclayer_optimize_out_transformer():
     data_np = rnd.randint(0, n_src_dim, size=(n_batch, n_enc_time), dtype=extern_data.data["data"].dtype)
     classes_np = rnd.randint(0, n_tgt_dim, size=(n_batch, n_dec_time), dtype=extern_data.data["classes"].dtype)
     return {
+      extern_data.get_batch_info().dim: n_batch,
       extern_data.data["data"].placeholder: data_np,
       extern_data.data["data"].size_placeholder[0]: n_enc_times,
       extern_data.data["classes"].placeholder: classes_np,
