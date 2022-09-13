@@ -4726,6 +4726,7 @@ def test_ScatterNdLayer_RangeLayer():
     info, out = session.run(
       (fetches, out_layer.output.placeholder),
       feed_dict={
+        data_input.batch.dim: n_batch,
         data_input.placeholder: rnd.normal(size=(n_batch, n_time, feat_dim.dimension)).astype("float32"),
         data_input.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),
       })
@@ -7171,6 +7172,7 @@ def test_ReuseParams_rec():
   random = numpy.random.RandomState(seed=1)
   def make_feed_dict(seq_len=10):
     return {
+      network.extern_data.get_batch_info().dim: 1,
       network.extern_data.data["data"].placeholder: random.uniform(-1, 1, (1, seq_len, num_inputs)),
       network.extern_data.data["data"].size_placeholder[0]: numpy.array([seq_len]),
       network.extern_data.data["classes"].placeholder: random.randint(low=0, high=num_outputs, size=(1, seq_len)),
@@ -7235,6 +7237,7 @@ def test_ReuseParams_dep_loop():
   def make_feed_dict(seq_len=10):
     random = numpy.random.RandomState(seed=1)
     return {
+      network.extern_data.get_batch_info().dim: 1,
       network.extern_data.data["data"].placeholder: random.uniform(-1, 1, (1, seq_len, num_inputs)),
       network.extern_data.data["data"].size_placeholder[0]: numpy.array([seq_len]),
       network.extern_data.data["classes"].placeholder: random.randint(low=0, high=num_outputs, size=(1, seq_len)),
@@ -7298,6 +7301,7 @@ def test_ReuseParams_dep_loop_2():
   def make_feed_dict(seq_len=10):
     random = numpy.random.RandomState(seed=1)
     return {
+      network.extern_data.get_batch_info().dim: 1,
       network.extern_data.data["data"].placeholder: random.uniform(-1, 1, (1, seq_len, num_inputs)),
       network.extern_data.data["data"].size_placeholder[0]: numpy.array([seq_len]),
       network.extern_data.data["classes"].placeholder: random.randint(low=0, high=num_outputs, size=(1, seq_len)),
@@ -7361,6 +7365,7 @@ def test_ReuseParams_dep_loop_3():
   def make_feed_dict(seq_len=10):
     random = numpy.random.RandomState(seed=1)
     return {
+      network.extern_data.get_batch_info().dim: 1,
       network.extern_data.data["data"].placeholder: random.uniform(-1, 1, (1, seq_len, num_inputs)),
       network.extern_data.data["data"].size_placeholder[0]: numpy.array([seq_len]),
       network.extern_data.data["classes"].placeholder: random.randint(low=0, high=num_outputs, size=(1, seq_len)),

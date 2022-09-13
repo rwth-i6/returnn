@@ -116,6 +116,7 @@ def _check_train_simple_network(network, num_steps=10):
 
   def make_feed_dict(step, seq_len=10):
     d = {
+      network.extern_data.get_batch_info().dim: 1,
       network.extern_data.data["data"].placeholder: random.uniform(-limit, limit, (1, seq_len, num_inputs)),
       network.extern_data.data["data"].size_placeholder[0]: numpy.array([seq_len]),
       network.extern_data.data["classes"].placeholder: random.uniform(-limit, limit, (1, seq_len, num_outputs)),
@@ -831,6 +832,7 @@ def test_RecLayer_NativeLstm_Nan():
 
   def make_feed_dict(seq_len=10):
     return {
+      network.extern_data.get_batch_info().dim: 1,
       network.extern_data.data["data"].placeholder: random.uniform(-limit, limit, (1, seq_len, num_inputs)),
       network.extern_data.data["data"].size_placeholder[0]: numpy.array([seq_len]),
       network.extern_data.data["classes"].placeholder: random.uniform(-limit, limit, (1, seq_len, num_outputs)),
