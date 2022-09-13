@@ -450,7 +450,7 @@ class FeedDictDataProvider(DataProviderBase):
       assert batch_dim == output["batch_dim"], "configured static batch dim %s != actual batch dim %s" % (
         batch_info, output["batch_dim"])
     else:
-      assert isinstance(batch_dim, tf.Tensor) and batch_dim.op.type == "Placeholder"
+      assert isinstance(batch_dim, tf.Tensor)
       d[batch_dim] = output["batch_dim"]
     return d, {"seq_idx": output["seq_idx"], "seq_tag": output["seq_tag"]}
 

@@ -147,15 +147,36 @@ class ExternData(object):
           continue
         if not data.have_batch_axis():
           continue
+        if data.placeholder is None:
+          continue
         if data.beam:
           continue
         batch_dim = data.get_batch_dim_tag()
         if batch_dim.dimension is not None and batch_dim.dimension > 0:
           batch_dim_value = batch_dim.dimension  # static
           break
-      if batch_dim_value is None:
-        with reuse_name_scope("extern_data/placeholders", absolute=True):
+        # Note that the order is somewhat arbitrary and relies on heuristics,
+        # so it is really arbitrary what data we use here.
+        # Note that in case this data is not used later (which we do not know here),
+        # this can result in an error later, unless the batch_dim is anyway fed explicitly,
+        # which is the case for the TFEngine.
+        # https://github.com/rwth-i6/returnn/issues/1121
+        with tf_util.reuse_name_scope_of_tensor(data.placeholder):
+          if data.size_placeholder and 0 in data.size_placeholder:
+            batch_dim_value = tf_util.get_shape_dim(data.size_placeholder[0], 0, name="batch_dim")
+          else:
+            batch_dim_value = tf_util.get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
+          break
+      # In any case, RETURNN will explicitly feed the batch_dim tensor, unless it is static.
+      # However, to keep backward compatibility for external tools such as RASR,
+      # if it is not fed, it falls back to the shape dim of some extern_data, as before.
+      with reuse_name_scope("extern_data/placeholders", absolute=True):
+        if batch_dim_value is None:
           batch_dim_value = tf_compat.v1.placeholder(tf.int32, shape=(), name="batch_dim")
+        elif isinstance(batch_dim_value, int):
+          pass  # keep static
+        else:
+          batch_dim_value = tf.identity(batch_dim_value, name="batch_dim")
       batch_info = BatchInfo.make_global_batch_info(batch_dim=batch_dim_value)
     # Set batch info on global batch dim tag. We should probably change this at some point to not modify the global tag.
     global_batch_dim_tag.batch = batch_info
