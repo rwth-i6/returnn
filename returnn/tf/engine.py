@@ -2061,7 +2061,11 @@ class Engine(EngineBase):
     self.check_uninitialized_vars()  # Maybe some new uninitialized vars. Last check.
     none_output_values = {k: v for (k, v) in output_dict.items() if v is None}
     output_dict = {k: v for (k, v) in output_dict.items() if v is not None}
-    output_values = self.tf_session.run(output_dict, feed_dict=feed_dict)
+    try:
+      output_values = self.tf_session.run(output_dict, feed_dict=feed_dict)
+    except tf.errors.OpError as exc:
+      help_on_tf_exception(session=self.tf_session, exception=exc, fetches=output_dict, feed_dict=feed_dict)
+      raise
     output_values.update(none_output_values)
     return output_values
 
