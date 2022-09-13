@@ -4422,7 +4422,7 @@ def test_reclayer_single_step_unrelated_time():
     out_flat_np = session.run(
       out.output.placeholder,
       feed_dict={
-        net.extern_data.get_batch_info().dim: n_batch,
+        net.extern_data.get_batch_info().dim: n_batch * n_time,
         in_.placeholder: in_flat_np,
         in_.get_sequence_lengths(): seq_lens_flat
       })
