@@ -337,15 +337,26 @@ def test_state_keep_over_epoch():
     print('run on parts')
     part_seq_len = 2
     for step, t in enumerate(range(0, seq_len, part_seq_len)):
-      out_val_part, _ = session.run([out, net.get_post_control_dependencies()], feed_dict={
-        net.epoch_step: step, src_seq_len: [part_seq_len] * batch_size, src: src_seq[:, t:t + part_seq_len]})
+      out_val_part, _ = session.run(
+        [out, net.get_post_control_dependencies()],
+        feed_dict={
+          net.epoch_step: step,
+          net.extern_data.get_batch_info().dim: batch_size,
+          src_seq_len: [part_seq_len] * batch_size,
+          src: src_seq[:, t:t + part_seq_len]
+        })
       assert out_val_part.shape == (batch_size, part_seq_len, num_outputs)
       out_val = numpy.concatenate([out_val, out_val_part], axis=1)
     assert out_val.shape == (batch_size, seq_len, num_outputs)
     print('run full')
     out_val_full, _ = session.run(
       [out, net.get_post_control_dependencies()],
-      feed_dict={net.epoch_step: 0, src_seq_len: [seq_len] * batch_size, src: src_seq})
+      feed_dict={
+        net.epoch_step: 0,
+        net.extern_data.get_batch_info().dim: batch_size,
+        src_seq_len: [seq_len] * batch_size,
+        src: src_seq
+      })
     assert out_val_full.shape == out_val.shape
     assert_almost_equal(out_val, out_val_full)
   print('ok!')
@@ -696,6 +707,7 @@ def test_cudnn_save_restore():
       output_data1 = session.run(
         network1.get_default_output_layer().output.placeholder,
         feed_dict={
+          network1.extern_data.get_batch_info().dim: len(seq_lens),
           network1.extern_data.data["data"].placeholder: input_data,
           network1.extern_data.data["data"].size_placeholder[0]: seq_lens})
       assert_equal(output_data1.shape, (seq_lens[0], 1, num_outputs))  # (time, batch, dim)
@@ -729,6 +741,7 @@ def test_cudnn_save_restore():
       output_data1a = session.run(
         network1a.get_default_output_layer().output.placeholder,
         feed_dict={
+          network1a.extern_data.get_batch_info().dim: len(seq_lens),
           network1a.extern_data.data["data"].placeholder: input_data,
           network1a.extern_data.data["data"].size_placeholder[0]: seq_lens})
       numpy.testing.assert_almost_equal(output_data1, output_data1a)
@@ -757,6 +770,7 @@ def test_cudnn_save_restore():
       output_data2 = session.run(
         network2.get_default_output_layer().output.placeholder,
         feed_dict={
+          network2.extern_data.get_batch_info().dim: len(seq_lens),
           network2.extern_data.data["data"].placeholder: input_data,
           network2.extern_data.data["data"].size_placeholder[0]: seq_lens})
       # Not sure if sth is incorrect... Only decimal=2 works.
@@ -1173,6 +1187,7 @@ def test_rec_RecStepInfoLayer():
     out_v = session.run(
       out.placeholder,
       feed_dict={
+        net.extern_data.get_batch_info().dim: 1,
         inp.placeholder: [[0] * n_time],
         inp.size_placeholder[0]: [n_time]
       })
@@ -1337,7 +1352,7 @@ def test_rec_explicit_lstm():
     net.construct_from_dict(net_dict)
     loss = net.get_total_loss()
     from test_TFNetworkLayer import make_feed_dict
-    feed_dict = make_feed_dict(list(net.extern_data.data.values()), same_time=True)
+    feed_dict = make_feed_dict(net.extern_data, same_time=True)
     fetches = net.get_fetches_dict()
     optimizer = tf_compat.v1.train.GradientDescentOptimizer(learning_rate=0.01)
     fetches["optim_op"] = optimizer.minimize(loss=loss)
@@ -1463,6 +1478,7 @@ def test_search_no_rec_explicit():
   assert rec_layer.output.is_time_major
   assert_equal(rec_layer.get_search_beam_size(), beam_size)
   feed_dict = {
+    net.extern_data.get_batch_info().dim: 1,
     net.extern_data.data["data"].placeholder: logits,
     net.extern_data.data["data"].size_placeholder[0]: [n_time]}
   with tf_compat.v1.Session() as session:
@@ -1578,6 +1594,7 @@ def test_search_no_rec_explicit_dyn_len():
   assert rec_layer.output.is_time_major
   assert_equal(rec_layer.get_search_beam_size(), beam_size)
   feed_dict = {
+    net.extern_data.get_batch_info().dim: 1,
     net.extern_data.data["data"].placeholder: logits,
     net.extern_data.data["data"].size_placeholder[0]: [n_time]}
   with tf_compat.v1.Session() as session:
@@ -1711,7 +1728,10 @@ def test_search_multi_choice():
     input_data = net.extern_data.data["data"]
     input_values = [1, 2]
     assert len(input_values) == n_batch
-    feed_dict = {input_data.placeholder: numpy.array(input_values)}
+    feed_dict = {
+      net.extern_data.get_batch_info().dim: len(input_values),
+      input_data.placeholder: numpy.array(input_values),
+    }
     output_data = net.get_default_output_layer().output
     assert output_data.time_dim_axis == 0 and output_data.batch_dim_axis == 1 and output_data.shape == (None,)
     loop_vars = {
@@ -1980,7 +2000,10 @@ def test_search_multi_choice_simple_keep_beams():
     input_data = net.extern_data.data["data"]
     input_values = [1, 2]
     assert len(input_values) == n_batch
-    feed_dict = {input_data.placeholder: numpy.array(input_values)}
+    feed_dict = {
+      net.extern_data.get_batch_info().dim: len(input_values),
+      input_data.placeholder: numpy.array(input_values),
+    }
     output_data = net.get_default_output_layer().output
     assert output_data.time_dim_axis == 0 and output_data.batch_dim_axis == 1 and output_data.shape == (None,)
     loop_vars = {
@@ -3130,7 +3153,7 @@ def test_rec_layer_rnn_train_and_search():
         print("EXCEPTION " + "-" * 60)
         print("Exception happened:", str(exc).splitlines()[0])
         print()
-        out_layer.cell._handle_construct_exception()
+        out_layer.cell._handle_construct_exception("exc", exc)
         print()
         print("TF debug info:")
         help_on_tf_exception(
@@ -3302,7 +3325,7 @@ def test_rec_layer_local_att_train_and_search():
         print("EXCEPTION " + "-" * 60)
         print("Exception happened:", type(exc), str(exc).splitlines()[0])
         print()
-        out_layer.cell._handle_construct_exception()
+        out_layer.cell._handle_construct_exception("exc", exc)
         print()
         print("TF debug info:")
         help_on_tf_exception(
@@ -3579,7 +3602,11 @@ def test_rec_subnet_simple_rnn():
     input_seq_lens_placeholder = network.extern_data.data["data"].size_placeholder[0]
     output_np, output_seq_lens = session.run(
       (output_layer.output.get_placeholder_as_batch_major(), output_layer.output.get_sequence_lengths()),
-      feed_dict={input_placeholder: input_np, input_seq_lens_placeholder: input_seq_lens})
+      feed_dict={
+        network.extern_data.get_batch_info().dim: len(input_seq_lens),
+        input_placeholder: input_np,
+        input_seq_lens_placeholder: input_seq_lens
+      })
     assert_equal(list(output_seq_lens), input_seq_lens)
     assert_equal(output_np.shape, (n_batch, max(input_seq_lens), n_out))
     output_last_np = numpy.zeros((n_batch, n_out), dtype="float32")
@@ -3639,7 +3666,10 @@ def test_rec_subnet_simple_rnn():
     input_seq_lens_placeholder = network.extern_data.data["data"].size_placeholder[0]
     output_np, output_seq_lens = session.run(
       (output_layer.output.get_placeholder_as_batch_major(), output_layer.output.get_sequence_lengths()),
-      feed_dict={input_placeholder: input_np, input_seq_lens_placeholder: input_seq_lens})
+      feed_dict={
+        network.extern_data.get_batch_info().dim: len(input_seq_lens),
+        input_placeholder: input_np,
+        input_seq_lens_placeholder: input_seq_lens})
     assert_equal(list(output_seq_lens), input_seq_lens)
     assert_equal(output_np.shape, (n_batch, max(input_seq_lens), n_out))
     print("rnn_cell subnet output:")
@@ -3733,6 +3763,7 @@ def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, sha
     print("output_opt:", net2_output)
     assert net1_output.batch_shape == net2_output.batch_shape
     feed_dict = {
+      net1.extern_data.get_batch_info().dim: n_batch,
       net1.extern_data.data["data"].placeholder: x_np,
       net1.extern_data.data["data"].size_placeholder[0]: [n_time] * n_batch}
     y1_np = session.run(net1_output.placeholder, feed_dict=feed_dict)
@@ -4289,7 +4320,7 @@ def test_SplitLayer_move_out_as_output_layer():
     session.run(tf_compat.v1.global_variables_initializer())
     output_layer = network.get_default_output_layer(must_exist=True)
     from test_TFNetworkLayer import make_feed_dict
-    feed_dict = make_feed_dict(list(network.extern_data.data.values()))
+    feed_dict = make_feed_dict(network.extern_data)
     session.run(output_layer.output.placeholder, feed_dict=feed_dict)
 
 
@@ -4379,12 +4410,22 @@ def test_reclayer_single_step_unrelated_time():
     seq_lens = [7, 5]
     in_np = numpy.random.RandomState(42).uniform(-1., 1., size=(n_batch, n_time, n_input)).astype(numpy.float32)
     out_np = session.run(
-      out.output.placeholder, feed_dict={in_.placeholder: in_np, in_.get_sequence_lengths(): seq_lens})
+      out.output.placeholder,
+      feed_dict={
+        net.extern_data.get_batch_info().dim: n_batch,
+        in_.placeholder: in_np,
+        in_.get_sequence_lengths(): seq_lens
+      })
     assert isinstance(out_np, numpy.ndarray) and out_np.shape == (n_batch, n_time, n_lstm)
     in_flat_np = in_np.reshape((n_batch * n_time, 1, n_input))
     seq_lens_flat = [1] * n_batch * n_time
     out_flat_np = session.run(
-      out.output.placeholder, feed_dict={in_.placeholder: in_flat_np, in_.get_sequence_lengths(): seq_lens_flat})
+      out.output.placeholder,
+      feed_dict={
+        net.extern_data.get_batch_info().dim: n_batch,
+        in_.placeholder: in_flat_np,
+        in_.get_sequence_lengths(): seq_lens_flat
+      })
     assert isinstance(out_flat_np, numpy.ndarray) and out_flat_np.shape == (n_batch * n_time, 1, n_lstm)
     out_np_ = out_flat_np.reshape((n_batch, n_time, n_lstm))
     numpy.testing.assert_equal(out_np, out_np_)
@@ -4479,7 +4520,7 @@ def test_reclayer_enc_time_dim_eval():
     session.run(tf_compat.v1.global_variables_initializer())
     output_layer = network.get_default_output_layer(must_exist=True)
     from test_TFNetworkLayer import make_feed_dict
-    feed_dict = make_feed_dict(list(network.extern_data.data.values()))
+    feed_dict = make_feed_dict(network.extern_data)
     session.run(output_layer.output.placeholder, feed_dict=feed_dict)
 
 
@@ -4550,7 +4591,7 @@ def test_reclayer_subnetwork_sublayer():
 
     session.run(tf_compat.v1.global_variables_initializer())
     from test_TFNetworkLayer import make_feed_dict
-    feed_dict = make_feed_dict(list(network.extern_data.data.values()))
+    feed_dict = make_feed_dict(network.extern_data)
     session.run(rec_layer.output.placeholder, feed_dict=feed_dict)
     # We expect that the _subnet_base_eval_func is exactly called once.
     assert _Closure.counter == 1
@@ -4607,7 +4648,7 @@ def test_reclayer_batch_feature_input():
     session.run(tf_compat.v1.global_variables_initializer())
     output_layer = network.get_default_output_layer(must_exist=True)
     from test_TFNetworkLayer import make_feed_dict
-    feed_dict = make_feed_dict(list(network.extern_data.data.values()))
+    feed_dict = make_feed_dict(network.extern_data)
     session.run(output_layer.output.placeholder, feed_dict=feed_dict)
 
 
@@ -5113,7 +5154,11 @@ def test_subnet_load_on_init_rec():
     output_layer = network.get_default_output_layer(must_exist=True)
     output_orig_np, output_seq_lens = session.run(
       (output_layer.output.get_placeholder_as_batch_major(), output_layer.output.get_sequence_lengths()),
-      feed_dict={input_placeholder: input_np, input_seq_lens_placeholder: input_seq_lens})
+      feed_dict={
+        network.extern_data.get_batch_info().dim: len(input_seq_lens),
+        input_placeholder: input_np,
+        input_seq_lens_placeholder: input_seq_lens
+      })
     assert_equal(list(output_seq_lens), input_seq_lens)
     assert_equal(output_orig_np.shape, (n_batch, max(input_seq_lens), n_out))
     for t in range(max(output_seq_lens)):
@@ -5173,7 +5218,11 @@ def test_subnet_load_on_init_rec():
     output_layer = network.get_default_output_layer(must_exist=True)
     output_np, output_seq_lens = session.run(
       (output_layer.output.get_placeholder_as_batch_major(), output_layer.output.get_sequence_lengths()),
-      feed_dict={input_placeholder: input_np, input_seq_lens_placeholder: input_seq_lens})
+      feed_dict={
+        network.extern_data.get_batch_info().dim: len(input_seq_lens),
+        input_placeholder: input_np,
+        input_seq_lens_placeholder: input_seq_lens
+      })
     assert_equal(list(output_seq_lens), input_seq_lens)
     assert_equal(output_np.shape, (n_batch, max(input_seq_lens), n_out))
     for t in range(max(output_seq_lens)):
@@ -6167,7 +6216,11 @@ def test_convert_lstm_params_save_load():
       output_layer = network.get_default_output_layer(must_exist=True)
       output_np, output_seq_lens = session.run(
         (output_layer.output.get_placeholder_as_batch_major(), output_layer.output.get_sequence_lengths()),
-        feed_dict={input_placeholder: input_np, input_seq_lens_placeholder: input_seq_lens})
+        feed_dict={
+          network.extern_data.get_batch_info().dim: len(input_seq_lens),
+          input_placeholder: input_np,
+          input_seq_lens_placeholder: input_seq_lens
+        })
       assert_equal(list(output_seq_lens), input_seq_lens)
       assert_equal(output_np.shape, (n_batch, max(input_seq_lens), n_out))
       for t in range(max(output_seq_lens)):
@@ -6338,7 +6391,10 @@ def test_KenLmStateLayer_dense():
         next_word = labels[next_word_id]
         print("input %i, word-idx %i, word %r, next-word-idx %i, next-word %r" % (
           i, word_id, word, next_word_id, next_word))
-        feed_dict = {net.extern_data.data["data"].placeholder: [word_id]}
+        feed_dict = {
+          net.extern_data.get_batch_info().dim: 1,
+          net.extern_data.data["data"].placeholder: [word_id]
+        }
         feed_dict.update({prev_layer.rec_vars_outputs[p]: v for (p, v) in rec_state.items()})
         rel_score_res, rec_state = session.run(
           (layer.output.placeholder, layer.rec_vars_outputs), feed_dict=feed_dict)
@@ -6855,7 +6911,7 @@ def test_MaskedComputationLayer_UnmaskLayer_in_loop():
     assert "unmask" in rec_cell.layers_in_loop
     in_data = net.get_layer("data").output
     out_data = net.get_layer("output").output.copy_as_batch_major()
-    feed_dict = make_feed_dict(net.extern_data.data.values())
+    feed_dict = make_feed_dict(net.extern_data)
     in_v, out_v = session.run((in_data.placeholder, out_data.placeholder), feed_dict=feed_dict)
     print(in_v)
     print(out_v)
@@ -7476,6 +7532,7 @@ def test_MaskedComputationLayer_UnmaskLayer_masked_outside():
     in_data = net.get_layer("data").output
     out_data = net.get_layer("output").output.copy_as_batch_major()
     feed_dict = {
+      net.extern_data.get_batch_info().dim: 2,
       net.extern_data.data["data"].placeholder: [[3, 4, 5, 6], [5, 4, -3, -4]],
       net.extern_data.data["data"].size_placeholder[0]: [4, 2],
       net.extern_data.data["data_masked"].placeholder: [[4, 6], [4, -4]],
@@ -7516,6 +7573,7 @@ def test_MaskedComputationLayer_outside():
     in_mask_data = net.get_layer("data:mask").output
     out_data = net.get_layer("output").output.copy_as_batch_major()
     feed_dict = {
+      net.extern_data.get_batch_info().dim: 2,
       net.extern_data.data["data"].placeholder: [[3, 4, 5, 6], [5, 4, -3, -4]],
       net.extern_data.data["data"].size_placeholder[0]: [4, 2],
       net.extern_data.data["mask"].placeholder: [[0, 1, 1, 0], [1, 0, 1, 0]],
@@ -8087,6 +8145,7 @@ def test_OptimalCompletionsLayer():
     layer.output.sanity_check()
     out = session.run(
       layer.output.placeholder, feed_dict={
+        net.extern_data.get_batch_info().dim: 1,
         target.placeholder: numpy.array([[3, 7, 8, 9, 13, 13, 0]]),
         target.size_placeholder[0]: numpy.array([7])})
     print(out)
@@ -8323,6 +8382,7 @@ def test_extra_scatter_nd_search_train():
     info, out = session.run(
       (fetches, outputs),
       feed_dict={
+        network.extern_data.get_batch_info().dim: n_batch,
         data_input.placeholder: rnd.normal(size=(n_batch, n_enc_time, n_in)).astype("float32"),
         data_input.size_placeholder[0]: numpy.array([n_enc_time] * n_batch, dtype="int32"),
         data_target.placeholder: rnd.randint(0, n_out, size=(n_batch, n_dec_time,), dtype="int32"),
@@ -8473,6 +8533,7 @@ def test_trafo_search_lm():
     session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
     fetches = (fetches, output_out.placeholder, output_out.get_sequence_lengths())
     feed_dict = {
+      network.extern_data.get_batch_info().dim: len(input_seq_lens),
       data_input.placeholder: input_seqs,
       data_input.size_placeholder[0]: input_seq_lens}
     try:
@@ -8562,6 +8623,7 @@ def test_self_att_rec_state():
     session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
     fetches = (output_out.placeholder, output_out.get_sequence_lengths())
     feed_dict = {
+      network.extern_data.get_batch_info().dim: len(input_seq_lens),
       data_input.placeholder: input_seqs,
       data_input.size_placeholder[0]: input_seq_lens}
     try:
@@ -8734,6 +8796,7 @@ def test_cumulated_attention_weights_search():
       session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
       fetches = (fetches, output_out.placeholder, output_out.get_sequence_lengths())
       feed_dict = {
+        network.extern_data.get_batch_info().dim: len(input_seq_lens),
         data_input.placeholder: input_seqs,
         data_input.size_placeholder[0]: input_seq_lens}
       try:
@@ -8788,6 +8851,7 @@ def test_PositionalEncodingLayer_offset_no_rec():
     info, out = session.run(
       (fetches, outputs),
       feed_dict={
+        network.extern_data.get_batch_info().dim: n_batch,
         data_input.placeholder: rand_data,
         data_input.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),
       })
@@ -8859,6 +8923,7 @@ def test_PositionalEncodingLayer_offset_in_rec():
     info, out = session.run(
       (fetches, outputs),
       feed_dict={
+        network.extern_data.get_batch_info().dim: n_batch,
         data_input.placeholder: rand_data,
         data_input.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),
       })
@@ -8907,6 +8972,7 @@ def test_RelativePositionalEncodingLayer():
     info, out = session.run(
       (fetches, outputs),
       feed_dict={
+        network.extern_data.get_batch_info().dim: n_batch,
         data_input.placeholder: rand_data,
         data_input.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="float32"),
       })
@@ -9117,6 +9183,7 @@ def test_CumConcatLayer_search():
     session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
     fetches = (fetches, output_out.placeholder, output_out.get_sequence_lengths())
     feed_dict = {
+      network.extern_data.get_batch_info().dim: len(input_seq_lens),
       data_input.placeholder: input_seqs,
       data_input.size_placeholder[0]: input_seq_lens}
     try:
