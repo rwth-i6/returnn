@@ -147,15 +147,27 @@ class ExternData(object):
           continue
         if not data.have_batch_axis():
           continue
+        if data.placeholder is None:
+          continue
         if data.beam:
           continue
         batch_dim = data.get_batch_dim_tag()
         if batch_dim.dimension is not None and batch_dim.dimension > 0:
           batch_dim_value = batch_dim.dimension  # static
           break
-      if batch_dim_value is None:
-        with reuse_name_scope("extern_data/placeholders", absolute=True):
+        with tf_util.reuse_name_scope_of_tensor(data.placeholder):
+          # We now get it from the shape of the data placeholder (or size placeholder).
+          # An alternative might be to also have it as a separate placeholder.
+          if data.size_placeholder and 0 in data.size_placeholder:
+            batch_dim_value = tf_util.get_shape_dim(data.size_placeholder[0], 0, name="batch_dim")
+          else:
+            batch_dim_value = tf_util.get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
+          break
+      with reuse_name_scope("extern_data/placeholders", absolute=True):
+        if batch_dim_value is None:
           batch_dim_value = tf_compat.v1.placeholder(tf.int32, shape=(), name="batch_dim")
+        else:
+          batch_dim_value = tf.identity(batch_dim_value, name="batch_dim")
       batch_info = BatchInfo.make_global_batch_info(batch_dim=batch_dim_value)
     # Set batch info on global batch dim tag. We should probably change this at some point to not modify the global tag.
     global_batch_dim_tag.batch = batch_info
