@@ -166,6 +166,8 @@ class ExternData(object):
       with reuse_name_scope("extern_data/placeholders", absolute=True):
         if batch_dim_value is None:
           batch_dim_value = tf_compat.v1.placeholder(tf.int32, shape=(), name="batch_dim")
+        elif isinstance(batch_dim_value, int):
+          pass  # keep static
         else:
           batch_dim_value = tf.identity(batch_dim_value, name="batch_dim")
       batch_info = BatchInfo.make_global_batch_info(batch_dim=batch_dim_value)

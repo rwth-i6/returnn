@@ -791,6 +791,7 @@ def test_engine_forward_static_batch():
   assert in_.get_time_dim_tag() == out.get_time_dim_tag()
   assert in_.dim_tags[1].dyn_size_ext.placeholder.get_shape().as_list() == [static_batch_dim.dimension]
   assert global_batch_dim.dimension is None
+  assert isinstance(in_.batch.dim, int)
   from test_TFNetworkLayer import make_feed_dict
   engine.tf_session.run(
     out.placeholder, feed_dict=make_feed_dict(engine.network.extern_data, n_batch=static_batch_dim.dimension))
