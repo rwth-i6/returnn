@@ -80,7 +80,7 @@ def make_feed_dict(data_list, same_time=False, n_batch=3, n_time=7):
     if isinstance(batch_dim, int):
       assert batch_dim == n_batch, "invalid batch info %r" % batch_info
     else:
-      assert isinstance(batch_dim, tf.Tensor) and batch_dim.op.type == "Placeholder"
+      assert isinstance(batch_dim, tf.Tensor)
       d[batch_dim] = n_batch
   return d
 
