@@ -948,11 +948,9 @@ def test_engine_forward_shape_deps():
     },
     network={
       'output': {
-        'class': 'random',
+        'class': 'constant',
         'shape': (batch_dim, phonemes_time_dim, vae_embedding_dim),
         'shape_deps': ['data:phonemes'],
-        'distribution': 'normal',
-        'static': True,
       }
     },
     task="forward",
