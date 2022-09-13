@@ -911,6 +911,58 @@ def test_engine_forward_static_batch_static_time_trafo():
   engine.finalize()
 
 
+def test_engine_forward_shape_deps():
+  # https://github.com/rwth-i6/returnn/issues/1121
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  phonemes_time_dim = SpatialDim('phonemes_time')
+  phonemes_indices_dim = FeatureDim('phonemes_indices', 5)
+  audio_time_dim = SpatialDim('phonemes_time')
+  audio_feature_dim = FeatureDim('phonemes_indices', 4)
+  vae_embedding_dim = FeatureDim('vae_embedding', 2)
+  config = Config(dict(
+    extern_data={
+      'phonemes': {
+        'dim_tags': (batch_dim, phonemes_time_dim),
+        'dtype': 'int32',
+        'sparse_dim': phonemes_indices_dim,
+        'available_for_inference': True
+      },
+      'audio_features': {
+        'dim_tags': (batch_dim, audio_time_dim, audio_feature_dim),
+        'available_for_inference': True
+      }
+    },
+    eval={
+      "class": "MetaDataset",
+      "data_map": {
+        "audio_features": ("audio", "data"),
+        "phonemes": ("audio", "classes"),
+      },
+      "datasets": {
+        "audio": {
+          "class": "Task12AXDataset",
+          "num_seqs": 2,
+        },
+      },
+      "seq_order_control_dataset": "audio",
+    },
+    network={
+      'output': {
+        'class': 'constant',
+        'shape': (batch_dim, phonemes_time_dim, vae_embedding_dim),
+        'shape_deps': ['data:phonemes'],
+      }
+    },
+    task="forward",
+    allow_random_model_init=True,
+  ))
+
+  from returnn.datasets.basic import init_dataset
+  engine = Engine(config=config)
+  engine.init_network_from_config()
+  engine.forward_single(dataset=init_dataset(config.typed_dict["eval"]), seq_idx=0)
+
+
 def test_engine_rec_subnet_count():
   from returnn.datasets.generating import DummyDataset
   seq_len = 5

@@ -44,7 +44,10 @@ def make_feed_dict(data_list, same_time=False, n_batch=3, n_time=7):
   rnd = numpy.random.RandomState(42)
   existing_sizes = {}  # type: typing.Dict[tf.Tensor,int]
   d = {}
+  batch_info = None
   for data in data_list:
+    if data.batch and not batch_info:
+      batch_info = data.batch
     shape = list(data.batch_shape)
     if data.batch_dim_axis is not None:
       shape[data.batch_dim_axis] = n_batch
@@ -72,6 +75,13 @@ def make_feed_dict(data_list, same_time=False, n_batch=3, n_time=7):
       d[data.placeholder] = rnd.randint(0, data.dim or 13, size=shape, dtype=data.dtype)
     else:
       d[data.placeholder] = rnd.normal(size=shape).astype(data.dtype)
+  if batch_info:
+    batch_dim = batch_info.dim
+    if isinstance(batch_dim, int):
+      assert batch_dim == n_batch, "invalid batch info %r" % batch_info
+    else:
+      assert isinstance(batch_dim, tf.Tensor) and batch_dim.op.type == "Placeholder"
+      d[batch_dim] = n_batch
   return d
 
 
@@ -4716,6 +4726,7 @@ def test_ScatterNdLayer_RangeLayer():
     info, out = session.run(
       (fetches, out_layer.output.placeholder),
       feed_dict={
+        data_input.batch.dim: n_batch,
         data_input.placeholder: rnd.normal(size=(n_batch, n_time, feat_dim.dimension)).astype("float32"),
         data_input.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),
       })
@@ -7161,6 +7172,7 @@ def test_ReuseParams_rec():
   random = numpy.random.RandomState(seed=1)
   def make_feed_dict(seq_len=10):
     return {
+      network.extern_data.get_batch_info().dim: 1,
       network.extern_data.data["data"].placeholder: random.uniform(-1, 1, (1, seq_len, num_inputs)),
       network.extern_data.data["data"].size_placeholder[0]: numpy.array([seq_len]),
       network.extern_data.data["classes"].placeholder: random.randint(low=0, high=num_outputs, size=(1, seq_len)),
@@ -7225,6 +7237,7 @@ def test_ReuseParams_dep_loop():
   def make_feed_dict(seq_len=10):
     random = numpy.random.RandomState(seed=1)
     return {
+      network.extern_data.get_batch_info().dim: 1,
       network.extern_data.data["data"].placeholder: random.uniform(-1, 1, (1, seq_len, num_inputs)),
       network.extern_data.data["data"].size_placeholder[0]: numpy.array([seq_len]),
       network.extern_data.data["classes"].placeholder: random.randint(low=0, high=num_outputs, size=(1, seq_len)),
@@ -7288,6 +7301,7 @@ def test_ReuseParams_dep_loop_2():
   def make_feed_dict(seq_len=10):
     random = numpy.random.RandomState(seed=1)
     return {
+      network.extern_data.get_batch_info().dim: 1,
       network.extern_data.data["data"].placeholder: random.uniform(-1, 1, (1, seq_len, num_inputs)),
       network.extern_data.data["data"].size_placeholder[0]: numpy.array([seq_len]),
       network.extern_data.data["classes"].placeholder: random.randint(low=0, high=num_outputs, size=(1, seq_len)),
@@ -7351,6 +7365,7 @@ def test_ReuseParams_dep_loop_3():
   def make_feed_dict(seq_len=10):
     random = numpy.random.RandomState(seed=1)
     return {
+      network.extern_data.get_batch_info().dim: 1,
       network.extern_data.data["data"].placeholder: random.uniform(-1, 1, (1, seq_len, num_inputs)),
       network.extern_data.data["data"].size_placeholder[0]: numpy.array([seq_len]),
       network.extern_data.data["classes"].placeholder: random.randint(low=0, high=num_outputs, size=(1, seq_len)),

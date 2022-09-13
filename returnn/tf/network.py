@@ -130,7 +130,6 @@ class ExternData(object):
     i.e. sets ``Data.batch``.
     See :class:`BatchInfo`.
     """
-    from returnn.tf.util.basic import reuse_name_scope_of_tensor, get_shape_dim
     from returnn.tf.util.data import BatchInfo
     from returnn.tf.util.data import batch_dim as global_batch_dim_tag
     batch_info = None  # type: typing.Optional[BatchInfo]
@@ -141,28 +140,23 @@ class ExternData(object):
         batch_info = data.batch
         break
     if not batch_info:
-      batch_dim = None  # type: typing.Union[tf.Tensor,int,None]
+      batch_dim_value = None  # type: typing.Union[tf.Tensor,int,None]
       for key, data in self.get_sorted_data_items():
         assert isinstance(data, Data)
         if not data.available_for_inference:
           continue
         if not data.have_batch_axis():
           continue
-        if data.placeholder is None:
-          continue
         if data.beam:
           continue
-        with reuse_name_scope_of_tensor(data.placeholder):
-          # We now get it from the shape of the data placeholder (or size placeholder).
-          # An alternative might be to also have it as a separate placeholder.
-          if data.size_placeholder and 0 in data.size_placeholder:
-            batch_dim = get_shape_dim(data.size_placeholder[0], 0, name="batch_dim")
-          else:
-            batch_dim = get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
+        batch_dim = data.get_batch_dim_tag()
+        if batch_dim.dimension is not None and batch_dim.dimension > 0:
+          batch_dim_value = batch_dim.dimension  # static
           break
-      if batch_dim is None:
-        return  # no exception here, maybe not used. fail later in get_batch_info
-      batch_info = BatchInfo.make_global_batch_info(batch_dim=batch_dim)
+      if batch_dim_value is None:
+        with reuse_name_scope("extern_data/placeholders", absolute=True):
+          batch_dim_value = tf_compat.v1.placeholder(tf.int32, shape=(), name="batch_dim")
+      batch_info = BatchInfo.make_global_batch_info(batch_dim=batch_dim_value)
     # Set batch info on global batch dim tag. We should probably change this at some point to not modify the global tag.
     global_batch_dim_tag.batch = batch_info
     # Set batch info on extern data.

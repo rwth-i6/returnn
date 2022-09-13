@@ -343,6 +343,7 @@ class FeedDictDataProvider(DataProviderBase):
         data["seq_tag"][q] = self.dataset.get_tag(seq.seq_idx)
     for k in seq_lens.keys():
       data["%s_seq_lens" % k] = seq_lens[k]
+    data["batch_dim"] = batch.num_slices
     return data
 
   def _thread_main(self):
@@ -443,6 +444,14 @@ class FeedDictDataProvider(DataProviderBase):
           raise Exception(
             "dataset currently does not support variable shape in other dimensions than the first. "
             "dim=%i, placeholder=%r" % (dim, len_placeholder))
+    batch_info = self.extern_data.get_batch_info()
+    batch_dim = batch_info.dim
+    if isinstance(batch_dim, int):
+      assert batch_dim == output["batch_dim"], "configured static batch dim %s != actual batch dim %s" % (
+        batch_info, output["batch_dim"])
+    else:
+      assert isinstance(batch_dim, tf.Tensor) and batch_dim.op.type == "Placeholder"
+      d[batch_dim] = output["batch_dim"]
     return d, {"seq_idx": output["seq_idx"], "seq_tag": output["seq_tag"]}
 
   def get_dataset_name(self):
