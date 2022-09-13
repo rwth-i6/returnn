@@ -44,7 +44,10 @@ def make_feed_dict(data_list, same_time=False, n_batch=3, n_time=7):
   rnd = numpy.random.RandomState(42)
   existing_sizes = {}  # type: typing.Dict[tf.Tensor,int]
   d = {}
+  batch_info = None
   for data in data_list:
+    if data.batch and not batch_info:
+      batch_info = data.batch
     shape = list(data.batch_shape)
     if data.batch_dim_axis is not None:
       shape[data.batch_dim_axis] = n_batch
@@ -72,6 +75,13 @@ def make_feed_dict(data_list, same_time=False, n_batch=3, n_time=7):
       d[data.placeholder] = rnd.randint(0, data.dim or 13, size=shape, dtype=data.dtype)
     else:
       d[data.placeholder] = rnd.normal(size=shape).astype(data.dtype)
+  if batch_info:
+    batch_dim = batch_info.dim
+    if isinstance(batch_dim, int):
+      assert batch_dim == n_batch, "invalid batch info %r" % batch_info
+    else:
+      assert isinstance(batch_dim, tf.Tensor) and batch_dim.op.type == "Placeholder"
+      d[batch_dim] = n_batch
   return d
 
 
