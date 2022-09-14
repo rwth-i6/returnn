@@ -1438,6 +1438,27 @@ def test_dim_math_pad_conv_valid_in_ctx_derived():
   assert conv == time_undefined
 
 
+def test_dim_math_pad_dummy_equal():
+  from returnn.tf.util.data import batch_dim
+  time = SpatialDim("time")
+  pad_dim = SpatialDim("prefix", 1)
+  x = Data("x", dim_tags=[batch_dim, pad_dim + time])
+  time_ = pad_dim + time
+  time_ = x.get_dim_tag_from_description(time_)
+  time__ = 1 + time
+  assert time_ != time__
+  time_.declare_same_as(time__)
+  assert time_ == time__
+  assert time_ == 1 + time
+  assert time__ == 1 + time
+  # The following commented-out checks are tricky.
+  # But also, it's not so clear whether we really want them.
+  # assert time_ == pad_dim + time  # tricky
+  # assert time__ == pad_dim + time  # tricky
+  # assert 1 + time == pad_dim + time  # more tricky than the others...
+  x.verify_out_shape({batch_dim, time__})
+
+
 def test_sequence_mask_len_via_loop():
   seq_len = tf.while_loop(
     cond=lambda x: tf.less(x[0], 2),
