@@ -7605,7 +7605,7 @@ class CombineLayer(LayerBase):
     :rtype: Data
     """
     out_type_ = {}
-    if sources:
+    if sources and not callable(out_type):
       if allow_broadcast_all_sources is NotSpecified:
         inside_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=True)
         over_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=False)
