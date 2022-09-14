@@ -2266,8 +2266,16 @@ class BatchInfo:
   @dim.setter
   def dim(self, value):
     """
+    Can only set the global batch dim.
+
     :param tf.Tensor|int value:
     """
+    assert len(self.virtual_dims) == 1
+    dim = self.virtual_dims[0]
+    assert isinstance(dim, BatchInfo.GlobalBatchDim)
+    dim.size = value
+    if dim.dim_tag:
+      dim.dim_tag.dimension = value if (isinstance(value, int) and value > 0) else None
     self._dim = value
 
   @property

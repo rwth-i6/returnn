@@ -139,7 +139,7 @@ class ExternData(object):
       if data.available_for_inference and data.batch and data.batch.is_global_batch():
         batch_info = data.batch
         break
-    if not batch_info:
+    if not batch_info or batch_info.static_dim == -1:
       batch_dim_value = None  # type: typing.Union[tf.Tensor,int,None]
       for key, data in self.get_sorted_data_items():
         assert isinstance(data, Data)
@@ -177,7 +177,10 @@ class ExternData(object):
           pass  # keep static
         else:
           batch_dim_value = tf.identity(batch_dim_value, name="batch_dim")
-      batch_info = BatchInfo.make_global_batch_info(batch_dim=batch_dim_value)
+      if not batch_info:
+        batch_info = BatchInfo.make_global_batch_info(batch_dim=batch_dim_value)
+      else:
+        batch_info.dim = batch_dim_value
     # Set batch info on global batch dim tag. We should probably change this at some point to not modify the global tag.
     global_batch_dim_tag.batch = batch_info
     # Set batch info on extern data.
