@@ -67,7 +67,7 @@ def rna_loss(log_probs, labels, input_lengths, label_lengths, blank_label=0):
   ground truth labeling.
   Args:
       log_probs: A 4-D Tensor of floats.  The dimensions
-                   should be (B, T, U, V), where B is the minibatch index,
+                   should be (B, T, U+1, V), where B is the minibatch index,
                    T is the time index, U is the prediction network sequence
                    length, and V indexes over activations for each
                    symbol in the alphabet.
