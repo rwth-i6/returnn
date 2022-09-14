@@ -67,17 +67,17 @@ def rna_loss(log_probs, labels, input_lengths, label_lengths, blank_label=0):
   ground truth labeling.
   Args:
       log_probs: A 4-D Tensor of floats.  The dimensions
-                   should be (B, T, U+1, V), where B is the minibatch index,
+                   should be (B, T, U, V), where B is the minibatch index,
                    T is the time index, U is the prediction network sequence
                    length, and V indexes over activations for each
                    symbol in the alphabet.
-      labels: A 2-D Tensor of ints, a padded label sequences to make sure
+      labels: A 2-D Tensor of ints, shape (B,U-1) a padded label sequences to make sure
                    labels for the minibatch are same length.
-      input_lengths: A 1-D Tensor of ints, the number of time steps
+      input_lengths: A 1-D Tensor of ints, shape (B,), the number of time steps
                      for each sequence in the minibatch.
-      label_lengths: A 1-D Tensor of ints, the length of each label
+      label_lengths: A 1-D Tensor of ints, shape (B,), the length of each label
                      for each example in the minibatch.
-      blank_label: int, the label value/index that the RNA
+      blank_label: int, scalar, the label value/index that the RNA
                    calculation should use as the blank label
   Returns:
       1-D float Tensor, the cost of each example in the minibatch
