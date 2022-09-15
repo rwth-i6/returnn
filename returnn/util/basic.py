@@ -1100,14 +1100,27 @@ def obj_diff_str(self, other, **kwargs):
   :return: the difference described
   :rtype: str
   """
+  diff_list = obj_diff_list(self, other, **kwargs)
+  if not diff_list:
+    return "No diff."
+  return "\n".join(diff_list)
+
+
+def obj_diff_list(self, other, **kwargs):
+  """
+  :param object self:
+  :param object other:
+  :return: the difference described
+  :rtype: list[str]
+  """
   if self is None and other is None:
-    return "No diff."
+    return []
   if self is None and other is not None:
-    return "self is None and other is %r" % other
+    return ["self is None and other is %r" % other]
   if self is not None and other is None:
-    return "other is None and self is %r" % self
+    return ["other is None and self is %r" % self]
   if self == other:
-    return "No diff."
+    return []
   name = kwargs.pop("attr_type_name", "attrib")  # or "item"
   if kwargs:
     raise TypeError("obj_diff_str: invalid kwargs %r" % kwargs)
@@ -1131,7 +1144,7 @@ def obj_diff_str(self, other, **kwargs):
   self_attribs = _obj_attribs(self)
   other_attribs = _obj_attribs(other)
   if self_attribs is None or other_attribs is None:
-    return "self: %r, other: %r" % (self, other)
+    return ["self: %r, other: %r" % (self, other)]
   for attrib in sorted(set(self_attribs).union(other_attribs)):
     value_self = self.__dict__.get(attrib, not_specified)
     value_other = other.__dict__.get(attrib, not_specified)
@@ -1153,20 +1166,27 @@ def obj_diff_str(self, other, **kwargs):
     else:
       if value_self != value_other:
         s += ["%s %r differ. self: %r, other: %r" % (name, attrib, value_self, value_other)]
-  if s:
-    return "\n".join(s)
-  else:
-    return "No diff."
+  return s
 
 
-def dict_diff_str(self, other):
+def dict_diff_str(self, other, **kwargs):
   """
   :param dict self:
   :param dict other:
   :return: the difference described
   :rtype: str
   """
-  return obj_diff_str(DictAsObj(self), DictAsObj(other), attr_type_name="item")
+  return obj_diff_str(DictAsObj(self), DictAsObj(other), attr_type_name="item", **kwargs)
+
+
+def dict_diff_list(self, other, **kwargs):
+  """
+  :param dict self:
+  :param dict other:
+  :return: the difference described
+  :rtype: list[str]
+  """
+  return obj_diff_list(DictAsObj(self), DictAsObj(other), attr_type_name="item", **kwargs)
 
 
 def find_ranges(ls):
