@@ -3114,7 +3114,6 @@ def test_warprnnt_multiple_batches():
   _run_rnnt(acts, labels, input_lengths, label_lengths, expected_costs, expected_grads, 0)
 
 
-@unittest.skipIf(not is_gpu_available() or not is_tf_cuda_build(), "no GPU or CUDA on this system")
 def test_warprna_forward():
   from returnn.extern.WarpRna import rna_loss, is_checked_out
   if not is_checked_out():
