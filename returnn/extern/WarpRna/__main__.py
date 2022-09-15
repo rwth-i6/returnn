@@ -8,11 +8,13 @@ from .import rna_loss, is_checked_out
 
 
 def main():
+  """main warp-rna demo"""
   print("Hello, running WarpRna demo")
   test_warprna_forward()
 
 
 def test_warprna_forward():
+  """test warp-rna forward"""
   assert is_checked_out()
   import numpy as np
   # computed using slow TF implementation (cross-check against numpy reference impl)
