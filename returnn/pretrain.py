@@ -562,7 +562,7 @@ def demo():
   returnn.util.better_exchook.install()
   import returnn.__main__ as rnn
   import argparse
-  from returnn.util.basic import dict_diff_str
+  from returnn.util.basic import obj_diff_str
   arg_parser = argparse.ArgumentParser()
   arg_parser.add_argument("config")
   arg_parser.add_argument("--diff", action="store_true", help="show diff only")
@@ -588,7 +588,7 @@ def demo():
     net_json = pretrain.get_network_json_for_epoch(epoch)
     if args.diff:
       if last_net_json is not None:
-        print(dict_diff_str(last_net_json, net_json))
+        print(obj_diff_str(last_net_json, net_json))
       else:
         print("(initial)")
     else:

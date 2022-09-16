@@ -177,7 +177,7 @@ def init(config_str, config_dataset, use_pretrain, epoch, verbosity):
           assert isinstance(key, str)
           orig_value = config.typed_dict.get(key, None)
           if isinstance(orig_value, dict) and isinstance(value, dict):
-            diff_str = "\n" + util.dict_diff_str(orig_value, value)
+            diff_str = "\n" + util.obj_diff_str(orig_value, value)
           elif isinstance(value, dict):
             diff_str = "\n%r ->\n%s" % (orig_value, pformat(value))
           else:

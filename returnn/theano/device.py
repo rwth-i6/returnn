@@ -3,7 +3,7 @@ from __future__ import print_function
 
 from returnn.util.task_system import AsyncTask, ProcConnectionDied
 from returnn.theano.updater import Updater
-from returnn.util.basic import sys_cmd_out_lines, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main, CalledProcessError, NumbersDict, custom_exec, dict_joined, attr_chain
+from returnn.util.basic import sys_cmd_out_lines, progress_bar, obj_diff_str, hms, start_daemon_thread, interrupt_main, CalledProcessError, NumbersDict, custom_exec, dict_joined, attr_chain
 from returnn.log import log
 from returnn.theano.network import LayerNetwork
 from collections import OrderedDict
@@ -1243,7 +1243,7 @@ class Device(object):
     if self.trainnet.to_json_content() != json_content:
       print(
         "Device: reinit because network description differs. Diff:",
-        dict_diff_str(self.trainnet.to_json_content(), json_content), file=log.v3)
+        obj_diff_str(self.trainnet.to_json_content(), json_content), file=log.v3)
       return True
     if train_param_args is None:
       train_param_args = self.trainnet.get_train_param_args_default()

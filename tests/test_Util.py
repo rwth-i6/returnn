@@ -264,12 +264,43 @@ def test_simple_obj_repr():
   assert_equal(x_repr, "X(a=42, b=13)")
 
 
-def test_dict_diff_str():
-  assert_equal(dict_diff_str({"a": 1, "b": 2}, {"a": 1, "b": 3}), "item 'b' differ. self: 2, other: 3")
+def test_obj_diff_str():
+  assert_equal(obj_diff_str({"a": 1, "b": 2}, {"a": 1, "b": 3}), "dict differ:\n ['b'] self: 2 != other: 3")
 
 
-def test_dict_diff_str_non_str_key():
-  assert_equal(dict_diff_str({1: 1, 2: 2}, {1: 1, 2: 3}), "item 2 differ. self: 2, other: 3")
+def test_obj_diff_str_non_str_key():
+  assert_equal(obj_diff_str({1: 1, 2: 2}, {1: 1, 2: 3}), 'dict differ:\n [2] self: 2 != other: 3')
+
+
+def test_obj_diff_list_allowed_mapping():
+  a = {"a": 1, "b": {"A:a": 1, "A:b": 2}, "c": ["A:a"], "d": {"A:b"}}
+  b = {"a": 1, "b": {"B:a": 1, "B:b": 2}, "c": ["B:a"], "d": {"B:b"}}
+  c = {"a": 1, "b": {"B:a": 1, "B:b": 2}, "c": ["B:a"], "d": {"B:x"}}
+  ab_diff = obj_diff_list(a, b)
+  assert ab_diff
+  for line in ab_diff:
+    print(line)
+  print("---")
+
+  def _allowed_mapping(a_, b_):
+    if isinstance(a_, str) and isinstance(b_, str):
+      if a_.startswith("A:") and b_.startswith("B:"):
+        return True
+    return False
+
+  ab_diff = obj_diff_list(a, b, allowed_mapping=_allowed_mapping)
+  assert not ab_diff
+  ac_diff = obj_diff_list(a, c, allowed_mapping=_allowed_mapping)
+  assert ac_diff
+  for line in ac_diff:
+    print(line)
+  assert_equal(
+    ac_diff, [
+      "dict differ:",
+      " ['b'] dict differ:",
+      " ['b']  ['B:b'] self is _NotSpecified but other is int",
+      " ['b']  ['B:x'] self is int but other is _NotSpecified",
+    ])
 
 
 @unittest.skipIf(PY3, "only for Python 2")

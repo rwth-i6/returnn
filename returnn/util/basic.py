@@ -1108,85 +1108,100 @@ def obj_diff_str(self, other, **kwargs):
 
 def obj_diff_list(self, other, **kwargs):
   """
+  Note that we recurse to a certain degree to the items, but not fully.
+  Some differences might just be summarized.
+
   :param object self:
   :param object other:
   :return: the difference described
   :rtype: list[str]
   """
+  # Having them explicitly in kwargs because we cannot use `*` in Python 2,
+  # but we do not want to allow them as positional args.
+  prefix = kwargs.pop("_prefix", "")
+  # If allowed_mapping(self, other),
+  # they are assigned to the equal_mapping, if possible to do so unambiguously.
+  allowed_mapping = kwargs.pop("allowed_mapping", None)
+  equal_map = kwargs.pop("_equal_map", None)  # self -> other
+  if kwargs:
+    raise TypeError("obj_diff_str: invalid kwargs %r" % kwargs)
+
   if self is None and other is None:
     return []
   if self is None and other is not None:
-    return ["self is None and other is %r" % other]
+    return ["%sself is None and other is %r" % (prefix, other)]
   if self is not None and other is None:
-    return ["other is None and self is %r" % self]
-  if self == other:
+    return ["%sother is None and self is %r" % (prefix, self)]
+  if type(self) != type(other):
+    return ["%sself is %s but other is %s" % (prefix, type(self).__name__, type(other).__name__)]
+
+  if allowed_mapping and equal_map is None:
+    # Build up the unequal_map, by going through the objects.
+    equal_map = {}
+    obj_diff_list(self, other, allowed_mapping=allowed_mapping, _equal_map=equal_map)
+
+  sub_kwargs = dict(allowed_mapping=allowed_mapping, _equal_map=equal_map)
+
+  if isinstance(self, (list, tuple)):
+    assert isinstance(other, (list, tuple))
+    if len(self) != len(other):
+      return ["%slist differ. len self: %i, len other: %i" % (prefix, len(self), len(other))]
+    s = []
+    for i, (a, b) in enumerate(zip(self, other)):
+      s += obj_diff_list(a, b, _prefix="%s [%i] " % (prefix, i), **sub_kwargs)
+    if s:
+      return ["%slist differ:" % prefix] + s
     return []
-  name = kwargs.pop("attr_type_name", "attrib")  # or "item"
-  if kwargs:
-    raise TypeError("obj_diff_str: invalid kwargs %r" % kwargs)
-  s = []
 
-  def _obj_attribs(obj):
-    """
-    :param object obj:
-    :rtype: list[str]|None
-    """
-    d = getattr(obj, "__dict__", None)
-    if d is not None:
-      return d.keys()
-    return None
+  if isinstance(self, set):
+    assert isinstance(other, set)
+    if len(self) == len(other) == 1:
+      s = obj_diff_list(list(self)[0], list(other)[0], _prefix=prefix + "  ", **sub_kwargs)
+      if s:
+        return ["%sset with single item differ:" % prefix] + s
+      return []
+    s = []
+    if equal_map:
+      self = {equal_map.get(x, x) for x in self}
+    # assume the values can be sorted
+    for key in sorted(self.union(other)):
+      if key not in self:
+        s += ["%s  %r not in self" % (prefix, key)]
+      if key not in other:
+        s += ["%s  %r not in other" % (prefix, key)]
+    if s:
+      return ["%sset differ:" % prefix] + s
+    return s
 
+  # Important to have a new class here, such that this is never equal to anything else (also not NotSpecified).
   class _NotSpecified:
     def __repr__(self):
       return "<not-specified>"
   not_specified = _NotSpecified()
 
-  self_attribs = _obj_attribs(self)
-  other_attribs = _obj_attribs(other)
-  if self_attribs is None or other_attribs is None:
-    return ["self: %r, other: %r" % (self, other)]
-  for attrib in sorted(set(self_attribs).union(other_attribs)):
-    value_self = self.__dict__.get(attrib, not_specified)
-    value_other = other.__dict__.get(attrib, not_specified)
-    if isinstance(value_self, list):
-      if not isinstance(value_other, list):
-        s += ["%s %r self is list but other is %r" % (name, attrib, type(value_other))]
-      elif len(value_self) != len(value_other):
-        s += ["%s %r list differ. len self: %i, len other: %i" % (name, attrib, len(value_self), len(value_other))]
-      else:
-        for i, (a, b) in enumerate(zip(value_self, value_other)):
-          if a != b:
-            s += ["%s %r[%i] differ. self: %r, other: %r" % (name, attrib, i, a, b)]
-    elif isinstance(value_self, dict):
-      if not isinstance(value_other, dict):
-        s += ["%s %r self is dict but other is %r" % (name, attrib, type(value_other))]
-      elif value_self != value_other:
-        s += ["%s %r dict differs:" % (name, attrib)]
-        s += ["  " + line for line in dict_diff_str(value_self, value_other).splitlines()]
+  if isinstance(self, dict):
+    assert isinstance(other, dict)
+    if equal_map:
+      self = {equal_map.get(k, k): v for (k, v) in self.items()}
+    s = []
+    # assume the keys can be sorted
+    for key in sorted(set(self.keys()).union(other.keys())):
+      value_self = self.get(key, not_specified)
+      value_other = other.get(key, not_specified)
+      s += obj_diff_list(value_self, value_other, _prefix="%s [%r] " % (prefix, key), **sub_kwargs)
+    if s:
+      return ["%sdict differ:" % prefix] + s
+    return []
+
+  if allowed_mapping and self != other and allowed_mapping(self, other):
+    if self in equal_map:
+      self = equal_map[self]
     else:
-      if value_self != value_other:
-        s += ["%s %r differ. self: %r, other: %r" % (name, attrib, value_self, value_other)]
-  return s
+      equal_map[self] = other
 
-
-def dict_diff_str(self, other, **kwargs):
-  """
-  :param dict self:
-  :param dict other:
-  :return: the difference described
-  :rtype: str
-  """
-  return obj_diff_str(DictAsObj(self), DictAsObj(other), attr_type_name="item", **kwargs)
-
-
-def dict_diff_list(self, other, **kwargs):
-  """
-  :param dict self:
-  :param dict other:
-  :return: the difference described
-  :rtype: list[str]
-  """
-  return obj_diff_list(DictAsObj(self), DictAsObj(other), attr_type_name="item", **kwargs)
+  if self != other:
+    return ["%sself: %r != other: %r" % (prefix, self, other)]
+  return []
 
 
 def find_ranges(ls):
