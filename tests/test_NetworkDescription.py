@@ -6,7 +6,7 @@ import unittest
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_true, assert_false
 from returnn.network_description import LayerNetworkDescription
 from returnn.config import Config
-from returnn.util.basic import dict_diff_str
+from returnn.util.basic import obj_diff_str
 from pprint import pprint
 from returnn.util import better_exchook
 from returnn.util.basic import BackendEngine
@@ -152,7 +152,7 @@ def test_NetworkDescription_to_json_config1():
     {"classes": (config1_dict["num_outputs"], 1)})
   new_json_content = new_network.to_json_content()
   if orig_json_content != new_json_content:
-    print(dict_diff_str(orig_json_content, new_json_content))
+    print(obj_diff_str(orig_json_content, new_json_content))
     assert_equal(orig_json_content, new_network.to_json_content())
 
 
@@ -168,7 +168,7 @@ def test_config1_to_json_network_copy():
   assert_equal(orig_network.n_out, new_network.n_out)
   new_json_content = new_network.to_json_content()
   if orig_json_content != new_json_content:
-    print(dict_diff_str(orig_json_content, new_json_content))
+    print(obj_diff_str(orig_json_content, new_json_content))
     assert_equal(orig_json_content, new_network.to_json_content())
 
 
