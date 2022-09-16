@@ -7,7 +7,7 @@
 
 * @rwth-i6/returnn @albertz
 /returnn/tf	@albertz
-/returnn/theano	@albertz @doetsch
+/returnn/theano	@albertz
 
 better_exchook.py @albertz
 
