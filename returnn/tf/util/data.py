@@ -854,11 +854,11 @@ class Dim(object):
     :param Dim other:
     :rtype: bool
     """
-    if not isinstance(other, Dim):
+    if not isinstance(other, (Dim, _MarkedDim)):
       raise TypeError("cannot compare %r with %r" % (self, other))
     if self == other:
       return False
-    return self.get_same_base()._creation_idx < other.get_same_base()._creation_idx
+    return _dim_cmp_value(self) < _dim_cmp_value(other)
 
   def __gt__(self, other):
     """
@@ -867,11 +867,7 @@ class Dim(object):
     :param Dim other:
     :rtype: bool
     """
-    if not isinstance(other, Dim):
-      raise TypeError("cannot compare %r with %r" % (self, other))
-    if self == other:
-      return False
-    return self.get_same_base()._creation_idx > other.get_same_base()._creation_idx
+    return other < self
 
   def __ge__(self, other):
     return not self < other
@@ -1908,6 +1904,25 @@ class _MarkedDim:
 
   def __ne__(self, other):
     return not (self == other)
+
+  def __lt__(self, other):
+    """
+    See :func:`Dim.__lt__`.
+    """
+    if not isinstance(other, (Dim, _MarkedDim)):
+      raise TypeError("cannot compare %r with %r" % (self, other))
+    if self == other:
+      return False
+    return _dim_cmp_value(self) < _dim_cmp_value(other)
+
+  def __gt__(self, other):
+    return other < self
+
+  def __ge__(self, other):
+    return not self < other
+
+  def __le__(self, other):
+    return not self > other
 
 
 class _ImplicitDim(_MarkedDim):
@@ -6167,3 +6182,18 @@ class ControlFlowContext:
     """
     assert self.is_loop()
     self._loop_spatial_dim = dim
+
+
+def _dim_cmp_value(obj):
+  """
+  :param Dim|_MarkedDim obj:
+  :return: anything which can be compared
+  """
+  # Make Dim and _MarkedDim comparable to each other.
+  # Note that the order is really arbitrary and does not matter.
+  if isinstance(obj, Dim):
+    # noinspection PyProtectedMember
+    return "", obj.get_same_base()._creation_idx
+  if isinstance(obj, _MarkedDim):
+    return obj.__class__.__name__, obj.tag
+  return obj

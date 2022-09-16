@@ -1241,6 +1241,20 @@ def test_Dim_sorted():
   print(obj_diff_str({"key": [a, b]}, {"key": [b, c]}))
 
 
+def test_Dim_MarkedDim_sorted():
+  from returnn.tf.util.data import ImplicitSparseDim, ImplicitDynSizeDim
+  a = SpatialDim("a")
+  b = SpatialDim("b", 2)
+  a_implicit = ImplicitSparseDim(a)
+  a_implicit2 = ImplicitDynSizeDim(a)
+  b_implicit = ImplicitSparseDim(b)
+  ls = [a, b, a_implicit, a_implicit2, b_implicit]
+  print(ls)
+  print(sorted(ls))
+  # Test current order, but the order itself doesn't really matter for anything.
+  assert_equal(sorted(ls), [a, b, a_implicit2, a_implicit, b_implicit])
+
+
 def test_ExternData_ext_Data_batch_info():
   # https://github.com/rwth-i6/returnn_common/issues/193
   # https://github.com/rwth-i6/returnn/issues/975
