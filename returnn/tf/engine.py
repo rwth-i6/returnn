@@ -1357,6 +1357,24 @@ class Engine(EngineBase):
     network.print_network_info()
     return network, updater
 
+  @staticmethod
+  def _net_dict_diff(old_dict, new_dict):
+    """
+    :param dict[str,dict[str]] old_dict:
+    :param dict[str,dict[str]] new_dict:
+    :return: diff list
+    :rtype: list[str]
+    """
+    def _allowed_mapping(old, new):
+      from returnn.tf.util.data import Dim
+      if isinstance(old, Dim) and isinstance(new, Dim):
+        if old.kind == new.kind and old.dimension == new.dimension:
+          return True
+      return False
+
+    from returnn.util.basic import obj_diff_list
+    return obj_diff_list(old_dict, new_dict, allowed_mapping=_allowed_mapping)
+
   def need_init_new_network(self, net_desc=None):
     """
     :param dict[str,dict[str]]|None net_desc: layer name -> layer description dict
@@ -1366,7 +1384,7 @@ class Engine(EngineBase):
       return True
     if net_desc is None:
       return False
-    return self.network.layers_desc != net_desc
+    return bool(self._net_dict_diff(self.network.layers_desc, net_desc))
 
   def init_new_network(self, net_desc=None):
     """
@@ -1379,9 +1397,13 @@ class Engine(EngineBase):
       net_desc = self.network.layers_desc
       print("reinit network", file=log.v3)
     else:
-      from returnn.util.basic import dict_diff_str
-      print("reinit because network description differs. Diff:",
-            dict_diff_str(self.network.layers_desc, net_desc), file=log.v3)
+      print("reinit because network description differs. Diff:", log.v3)
+      diff = self._net_dict_diff(self.network.layers_desc, net_desc)
+      if not diff:
+        print("None?", file=log.v3)
+      else:
+        for line in diff:
+          print(line, file=log.v3)
     old_network_params = self.network.get_params_serialized(self.tf_session)
     self._init_network(net_desc)
     if self.is_pretrain_epoch() and not self.pretrain.copy_output_layer:

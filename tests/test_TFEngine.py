@@ -1,3 +1,6 @@
+"""
+tests for returnn.tf.engine
+"""
 
 # start test like this:  nosetests-2.7  tests/test_TFEngine.py
 # or directly:  python3 test_TFEngine.py test_engine_rec_subnet_count
@@ -7,10 +10,10 @@ from __future__ import print_function
 import _setup_test_env  # noqa
 import tensorflow as tf
 from returnn.tf.engine import *
-from returnn.tf.util.data import Dim, SpatialDim, FeatureDim
+from returnn.tf.util.data import SpatialDim
 from returnn.tf.network import ExternData
 from returnn.config import Config
-from nose.tools import assert_equal, assert_is_instance, assert_raises
+from nose.tools import assert_equal, assert_not_equal, assert_is_instance, assert_raises
 import unittest
 import numpy
 import numpy.testing
@@ -4362,6 +4365,21 @@ def test_engine_search_output_file():
     assert all([seq_output['decision'] == seq_output['decision3'] for seq_output in output.values()])
 
   engine.finalize()
+
+
+def test_net_dict_diff():
+  from returnn.tf.util.data import FeatureDim
+
+  def make_net_dict(dim):
+    """
+    :param int dim:
+    :rtype: dict[str,dict[str]]
+    """
+    dim = FeatureDim("out", dim)
+    return {"output": {"class": "linear", "activation": "sigmoid", "out_dim": dim}}
+
+  assert_equal(Engine._net_dict_diff(make_net_dict(13), make_net_dict(13)), [])
+  assert_not_equal(Engine._net_dict_diff(make_net_dict(13), make_net_dict(17)), [])
 
 
 if __name__ == "__main__":
