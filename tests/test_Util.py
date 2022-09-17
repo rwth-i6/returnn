@@ -298,8 +298,8 @@ def test_obj_diff_list_allowed_mapping():
     ac_diff, [
       "dict differ:",
       " ['b'] dict differ:",
-      " ['b']  ['B:b'] self is _NotSpecified but other is int",
-      " ['b']  ['B:x'] self is int but other is _NotSpecified",
+      " ['b']  ['B:b'] self is not specified but other is int",
+      " ['b']  ['B:x'] self is int but other is not specified",
     ])
 
 

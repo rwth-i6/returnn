@@ -1175,8 +1175,8 @@ def obj_diff_list(self, other, **kwargs):
 
   # Important to have a new class here, such that this is never equal to anything else (also not NotSpecified).
   class _NotSpecified:
-    def __repr__(self):
-      return "<not-specified>"
+    pass
+  _NotSpecified.__name__ = "not specified"  # for better repr of type
   not_specified = _NotSpecified()
 
   if isinstance(self, dict):
