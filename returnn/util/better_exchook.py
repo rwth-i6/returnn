@@ -1419,13 +1419,14 @@ def get_current_frame():
         return sys.exc_info()[2].tb_frame.f_back
 
 
-def get_func_str_from_code_object(co):
+def get_func_str_from_code_object(co, frame=None):
     """
     :param types.CodeType co:
+    :param types.FrameType|None frame: if given, might provide a faster way to get the function name
     :return: co.co_name as fallback, but maybe sth better like the full func name if possible
     :rtype: str
     """
-    f = get_func_from_code_object(co)
+    f = get_func_from_code_object(co, frame=frame)
     if f:
         if hasattr(f, "__qualname__"):
             return f.__qualname__
@@ -1433,21 +1434,32 @@ def get_func_str_from_code_object(co):
     return co.co_name
 
 
-def get_func_from_code_object(co):
+def get_func_from_code_object(co, frame=None):
     """
     :param types.CodeType co:
+    :param types.FrameType|None frame: if given, might provide a faster way to get the function name
     :return: function, such that ``func.__code__ is co``, or None
     :rtype: types.FunctionType
 
     This is CPython specific (to some degree; it uses the `gc` module to find references).
-    Inspired from: https://stackoverflow.com/questions/12787108/getting-the-python-function-for-a-code-object
+    Inspired from:
+    https://stackoverflow.com/questions/12787108/getting-the-python-function-for-a-code-object
+    https://stackoverflow.com/questions/54656758/get-function-object-from-stack-frame-object
     """
-    import types
-    if not isinstance(co, types.CodeType):
-        return None
     import gc
+    import types
+    assert isinstance(co, types.CodeType)
+    _attr_name = "__code__" if PY3 else "func_code"
+    if frame:
+        func_name = frame.f_code.co_name
+        if "self" in frame.f_locals:
+            candidate = getattr(frame.f_locals["self"].__class__, func_name, None)
+        else:
+            candidate = getattr(inspect.getmodule(frame), func_name, None)
+        if getattr(candidate, _attr_name, None) is co:
+            return candidate
     candidates = gc.get_referrers(co)
-    candidates = [f for f in candidates if getattr(f, "__code__" if PY3 else "func_code", None) is co]
+    candidates = [f for f in candidates if getattr(f, _attr_name, None) is co]
     if candidates:
         return candidates[0]
     return None
