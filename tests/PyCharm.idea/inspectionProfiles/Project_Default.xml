@@ -33,6 +33,7 @@
           <item index="12" class="java.lang.String" itemvalue="six" />
           <item index="13" class="java.lang.String" itemvalue="mpi4py" />
           <item index="14" class="java.lang.String" itemvalue="sentencepiece" />
+          <item index="14" class="java.lang.String" itemvalue="torch" />
         </list>
       </value>
     </option>
