@@ -496,17 +496,7 @@ class TFNetwork(object):
     self.total_loss = None  # type: typing.Optional[tf.Tensor]
     self.total_constraints = None  # type: typing.Optional[tf.Tensor]
     self.total_objective = None  # type: typing.Optional[tf.Tensor]
-    if parent_net:
-      self.global_train_step = parent_net.global_train_step
-    elif extra_parent_net:
-      self.global_train_step = extra_parent_net.global_train_step
-    else:
-      # Reuse mostly because some of the test cases currently work that way.
-      with tf_compat.v1.variable_scope(
-            tf_compat.v1.get_variable_scope(), reuse=getattr(tf_compat.v1, "AUTO_REUSE", None)):
-        self.global_train_step = tf_compat.v1.get_variable(
-          name="global_step", shape=(), dtype=tf.int64, initializer=tf_compat.v1.zeros_initializer(tf.int64),
-          collections=[tf_compat.v1.GraphKeys.GLOBAL_STEP], trainable=False)
+    self._global_train_step = None  # type: typing.Optional[typing.Union[tf.Variable,tf.Tensor]]
     self.epoch_step = None
     self.saver = None  # type: typing.Optional[tf.compat.v1.train.Saver]
     self.extra_vars_to_save = []  # type: typing.List[tf.Variable]
@@ -2141,6 +2131,29 @@ class TFNetwork(object):
     """
     self.set_param_values_by_dict(serialized.values_dict, session=session, **kwargs)
     self.set_global_train_step(serialized.global_train_step, session=session)
+
+  @property
+  def global_train_step(self):
+    """
+    :rtype: tf.Variable|tf.Tensor
+    """
+    net = self
+    while True:
+      if net._global_train_step is not None:
+        return net._global_train_step
+      if net.parent_net:
+        net = net.parent_net
+        continue
+      if net.extra_parent_net:
+        net = net.extra_parent_net
+        continue
+      # Reuse mostly because some of the test cases currently work that way.
+      with tf_compat.v1.variable_scope(
+            tf_compat.v1.get_variable_scope(), reuse=getattr(tf_compat.v1, "AUTO_REUSE", None)):
+        net._global_train_step = tf_compat.v1.get_variable(
+          name="global_step", shape=(), dtype=tf.int64, initializer=tf_compat.v1.zeros_initializer(tf.int64),
+          collections=[tf_compat.v1.GraphKeys.GLOBAL_STEP], trainable=False)
+      return net._global_train_step
 
   def set_global_train_step(self, step, session):
     """
