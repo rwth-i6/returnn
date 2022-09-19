@@ -1454,14 +1454,42 @@ def get_func_from_code_object(co, frame=None):
         func_name = frame.f_code.co_name
         if "self" in frame.f_locals:
             candidate = getattr(frame.f_locals["self"].__class__, func_name, None)
-        else:
-            candidate = getattr(inspect.getmodule(frame), func_name, None)
-        if getattr(candidate, _attr_name, None) is co:
-            return candidate
+            if candidate and getattr(candidate, _attr_name, None) is co:
+                return candidate
+    candidate = getattr(_get_loaded_module_from_filename(co.co_filename), co.co_name, None)
+    if candidate and getattr(candidate, _attr_name, None) is co:
+        return candidate
     candidates = gc.get_referrers(co)
     candidates = [f for f in candidates if getattr(f, _attr_name, None) is co]
     if candidates:
         return candidates[0]
+    return None
+
+
+_loaded_module_from_filename_cache = {}  # filename -> module name
+
+
+def _get_loaded_module_from_filename(filename):
+    """
+    Like inspect.getmodule but faster.
+
+    :param str filename:
+    :rtype: types.ModuleType|Any|None
+    """
+    if filename.endswith(".pyc") or filename.endswith(".pyo"):
+        filename = filename[:-1]
+    if filename in _loaded_module_from_filename_cache:
+        return sys.modules.get(_loaded_module_from_filename_cache[filename])
+    # Update the filename to module name cache and check yet again
+    # Copy sys.modules in order to cope with changes while iterating
+    for modname, module in sys.modules.copy().items():
+        f = getattr(module, '__file__', None)
+        if f:
+            if f.endswith('.pyc') or f.endswith('.pyo'):
+                f = f[:-1]
+            _loaded_module_from_filename_cache[f] = modname
+    if filename in _loaded_module_from_filename_cache:
+        return sys.modules.get(_loaded_module_from_filename_cache[filename])
     return None
 
 
