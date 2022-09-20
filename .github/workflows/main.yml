@@ -139,12 +139,6 @@ jobs:
         if [[ "${{matrix.python-version}}" == 2.* ]]; then
           # pytest does not support Python <3.7, so we use nose instead.
           pip install --user nose
-
-          # Enforce the right Python interpreter for nosetests.
-          echo "#!/usr/bin/env python" > ~/nosetests
-          cat ~/.local/bin/nosetests >> ~/nosetests
-          chmod +x ~/nosetests
-          mv ~/nosetests ~/.local/bin/nosetests
         fi
 
         if [[ "${{matrix.python-version}}" == 3.* ]]; then
@@ -162,20 +156,20 @@ jobs:
         python -c "import numpy; print('NumPy:', numpy.version.full_version)"
 
         if [[ "${{matrix.python-version}}" == 2.* ]]; then
-          echo "Nosetests env: $(type nosetests)"
-          nosetests -V
+          echo "Nosetests env:"
+          python -m nose -V
         else
-          echo "Pytest env: $(type pytest)"
-          pytest -V
+          echo "Pytest env:"
+          python -m pytest -V
         fi
 
     - name: Run test
       run: |
         export ${{ matrix.action }}
         if [[ "${{matrix.python-version}}" == 2.* ]]; then
-          nosetests tests/test_$TEST.py
+          python -m nose tests/test_$TEST.py
         else
-          pytest tests/test_$TEST.py
+          python -m pytest tests/test_$TEST.py
         fi
 
   tf-tests:
@@ -276,12 +270,6 @@ jobs:
 
           # pytest does not support Python <3.7, so we use nose instead.
           pip install --user nose
-
-          # Enforce the right Python interpreter for nosetests.
-          echo "#!/usr/bin/env python" > ~/nosetests
-          cat ~/.local/bin/nosetests >> ~/nosetests
-          chmod +x ~/nosetests
-          mv ~/nosetests ~/.local/bin/nosetests
         fi
 
         if [[ "${{matrix.python-version}}" == 3.* ]]; then
@@ -302,20 +290,20 @@ jobs:
         python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
 
         if [[ "${{matrix.python-version}}" == 2.* ]]; then
-          echo "Nosetests env: $(type nosetests)"
-          nosetests -V
+          echo "Nosetests env:"
+          python -m nose -V
         else
-          echo "Pytest env: $(type pytest)"
-          pytest -V
+          echo "Pytest env:"
+          python -m pytest -V
         fi
 
     - name: Run test
       run: |
         export ${{ matrix.action }}
         if [[ "${{matrix.python-version}}" == 2.* ]]; then
-          nosetests tests/test_$TEST.py
+          python -m nose tests/test_$TEST.py
         else
-          pytest tests/test_$TEST.py
+          python -m pytest tests/test_$TEST.py
         fi
 
   theano-tests:
@@ -387,12 +375,6 @@ jobs:
         if [[ "${{matrix.python-version}}" == 2.* ]]; then
           # pytest does not support Python <3.7, so we use nose instead.
           pip install --user nose
-
-          # Enforce the right Python interpreter for nosetests.
-          echo "#!/usr/bin/env python" > ~/nosetests
-          cat ~/.local/bin/nosetests >> ~/nosetests
-          chmod +x ~/nosetests
-          mv ~/nosetests ~/.local/bin/nosetests
         fi
 
         if [[ "${{matrix.python-version}}" == 3.* ]]; then
@@ -417,18 +399,18 @@ jobs:
         python -c "import theano; print('Theano:', theano.__version__)"
 
         if [[ "${{matrix.python-version}}" == 2.* ]]; then
-          echo "Nosetests env: $(type nosetests)"
-          nosetests -V
+          echo "Nosetests env:"
+          python -m nose -V
         else
-          echo "Pytest env: $(type pytest)"
-          pytest -V
+          echo "Pytest env:"
+          python -m pytest -V
         fi
 
     - name: Run test
       run: |
         export ${{ matrix.action }}
         if [[ "${{matrix.python-version}}" == 2.* ]]; then
-          nosetests tests/test_$TEST.py
+          python -m nose tests/test_$TEST.py
         else
-          pytest tests/test_$TEST.py
+          python -m pytest tests/test_$TEST.py
         fi
