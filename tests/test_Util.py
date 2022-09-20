@@ -265,11 +265,11 @@ def test_simple_obj_repr():
 
 
 def test_obj_diff_str():
-  assert_equal(obj_diff_str({"a": 1, "b": 2}, {"a": 1, "b": 3}), "dict differ:\n ['b'] self: 2 != other: 3")
+  assert_equal(obj_diff_str({"a": 1, "b": 2}, {"a": 1, "b": 3}), "dict diff:\n['b'] self: 2 != other: 3")
 
 
 def test_obj_diff_str_non_str_key():
-  assert_equal(obj_diff_str({1: 1, 2: 2}, {1: 1, 2: 3}), 'dict differ:\n [2] self: 2 != other: 3')
+  assert_equal(obj_diff_str({1: 1, 2: 2}, {1: 1, 2: 3}), 'dict diff:\n[2] self: 2 != other: 3')
 
 
 def test_obj_diff_list_allowed_mapping():
@@ -296,10 +296,10 @@ def test_obj_diff_list_allowed_mapping():
     print(line)
   assert_equal(
     ac_diff, [
-      "dict differ:",
-      " ['b'] dict differ:",
-      " ['b']  ['B:b'] self is not specified but other is int",
-      " ['b']  ['B:x'] self is int but other is not specified",
+      "dict diff:",
+      "['b'] dict diff:",
+      "['b']   key 'A:b' not in other",
+      "['b']   key 'B:b' not in self",
     ])
 
 

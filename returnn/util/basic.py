@@ -1122,9 +1122,11 @@ def obj_diff_list(self, other, **kwargs):
   # If allowed_mapping(self, other),
   # they are assigned to the equal_mapping, if possible to do so unambiguously.
   allowed_mapping = kwargs.pop("allowed_mapping", None)
-  equal_map = kwargs.pop("_equal_map", None)  # self -> other
+  equal_map_s2o = kwargs.pop("_equal_map_s2o", None)  # self -> other
+  equal_map_o2s = kwargs.pop("_equal_map_o2s", None)  # other -> self
+  equal_map_finished = kwargs.pop("_equal_map_finished", False)
   if kwargs:
-    raise TypeError("obj_diff_str: invalid kwargs %r" % kwargs)
+    raise TypeError("obj_diff_list: invalid kwargs %r" % kwargs)
 
   if self is None and other is None:
     return []
@@ -1133,71 +1135,96 @@ def obj_diff_list(self, other, **kwargs):
   if self is not None and other is None:
     return ["%sother is None and self is %r" % (prefix, self)]
   if type(self) != type(other):
-    return ["%sself is %s but other is %s" % (prefix, type(self).__name__, type(other).__name__)]
+    return ["%stype diff: self is %s but other is %s" % (prefix, type(self).__name__, type(other).__name__)]
 
-  if allowed_mapping and equal_map is None:
-    # Build up the unequal_map, by going through the objects.
-    equal_map = {}
-    obj_diff_list(self, other, allowed_mapping=allowed_mapping, _equal_map=equal_map)
+  if allowed_mapping:
+    if equal_map_s2o is None:
+      # Build up the unequal_map, by going through the objects.
+      equal_map_s2o, equal_map_o2s = {}, {}
+      obj_diff_list(
+        self, other, allowed_mapping=allowed_mapping, _equal_map_s2o=equal_map_s2o, _equal_map_o2s=equal_map_o2s)
+      equal_map_finished = True
+  else:
+    equal_map_finished = True
+  if equal_map_s2o is None or equal_map_o2s is None:
+    equal_map_s2o, equal_map_o2s = {}, {}  # simplifies the code below
 
-  sub_kwargs = dict(allowed_mapping=allowed_mapping, _equal_map=equal_map)
+  sub_kwargs = dict(
+    allowed_mapping=allowed_mapping,
+    _equal_map_s2o=equal_map_s2o, _equal_map_o2s=equal_map_o2s, _equal_map_finished=equal_map_finished)
 
   if isinstance(self, (list, tuple)):
     assert isinstance(other, (list, tuple))
     if len(self) != len(other):
-      return ["%slist differ. len self: %i, len other: %i" % (prefix, len(self), len(other))]
+      return ["%slist diff len: len self: %i, len other: %i" % (prefix, len(self), len(other))]
     s = []
     for i, (a, b) in enumerate(zip(self, other)):
-      s += obj_diff_list(a, b, _prefix="%s [%i] " % (prefix, i), **sub_kwargs)
+      s += obj_diff_list(a, b, _prefix="%s[%i] " % (prefix, i), **sub_kwargs)
     if s:
-      return ["%slist differ:" % prefix] + s
+      return ["%slist diff:" % prefix] + s
     return []
+
+  def _set_diff(a_, b_):
+    # assume the values can be sorted
+    a_ = sorted(a_)
+    b_ = sorted(b_)
+    self_diff_ = []
+    same_ = []
+    for v in a_:
+      v_ = equal_map_s2o.get(v, v)
+      if v_ in b_:
+        same_.append(v)
+        b_.remove(v_)
+      else:
+        self_diff_.append(v)
+    other_diff_ = b_
+    return self_diff_, same_, other_diff_
 
   if isinstance(self, set):
     assert isinstance(other, set)
-    if len(self) == len(other) == 1:
-      s = obj_diff_list(list(self)[0], list(other)[0], _prefix=prefix + "  ", **sub_kwargs)
-      if s:
-        return ["%sset with single item differ:" % prefix] + s
-      return []
+    self_diff, _, other_diff = _set_diff(self, other)
+    if len(self_diff) == len(other_diff) == 1:
+      # potentially update equal_map
+      s = obj_diff_list(list(self_diff)[0], list(other_diff)[0], **sub_kwargs)
+      # ignore the potential updated equal_map now for simplicity. we will anyway do a second pass later.
+      if len(s) == 1:
+        return ["%sset diff value: %s" % (prefix, s[0])]
     s = []
-    if equal_map:
-      self = {equal_map.get(x, x) for x in self}
-    # assume the values can be sorted
-    for key in sorted(self.union(other)):
-      if key not in self:
-        s += ["%s  %r not in self" % (prefix, key)]
-      if key not in other:
-        s += ["%s  %r not in other" % (prefix, key)]
+    for key in self_diff:
+      s += ["%s  %r not in other" % (prefix, key)]
+    for key in other_diff:
+      s += ["%s  %r not in self" % (prefix, key)]
     if s:
-      return ["%sset differ:" % prefix] + s
-    return s
-
-  # Important to have a new class here, such that this is never equal to anything else (also not NotSpecified).
-  class _NotSpecified:
-    pass
-  _NotSpecified.__name__ = "not specified"  # for better repr of type
-  not_specified = _NotSpecified()
+      return ["%sset diff:" % prefix] + s
+    return []
 
   if isinstance(self, dict):
     assert isinstance(other, dict)
-    if equal_map:
-      self = {equal_map.get(k, k): v for (k, v) in self.items()}
+    self_diff, same, other_diff = _set_diff(self.keys(), other.keys())
+    if not equal_map_finished and len(self_diff) == len(other_diff) == 1:
+      # potentially update equal_map
+      obj_diff_list(list(self_diff)[0], list(other_diff)[0], **sub_kwargs)
+      # ignore the potential updated equal_map now for simplicity. we will anyway do a second pass later.
     s = []
-    # assume the keys can be sorted
-    for key in sorted(set(self.keys()).union(other.keys())):
-      value_self = self.get(key, not_specified)
-      value_other = other.get(key, not_specified)
-      s += obj_diff_list(value_self, value_other, _prefix="%s [%r] " % (prefix, key), **sub_kwargs)
+    for key in self_diff:
+      s += ["%s  key %r not in other" % (prefix, key)]
+    for key in other_diff:
+      s += ["%s  key %r not in self" % (prefix, key)]
+    for key in same:
+      key_ = equal_map_s2o.get(key, key)
+      value_self = self[key]
+      value_other = other[key_]
+      s += obj_diff_list(value_self, value_other, _prefix="%s[%r] " % (prefix, key), **sub_kwargs)
     if s:
-      return ["%sdict differ:" % prefix] + s
+      return ["%sdict diff:" % prefix] + s
     return []
 
   if allowed_mapping and self != other and allowed_mapping(self, other):
-    if self in equal_map:
-      self = equal_map[self]
-    else:
-      equal_map[self] = other
+    if self in equal_map_s2o:
+      self = equal_map_s2o[self]
+    elif other not in equal_map_o2s:  # don't map multiple times to this
+      equal_map_s2o[self] = other
+      equal_map_o2s[other] = self
 
   if self != other:
     return ["%sself: %r != other: %r" % (prefix, self, other)]
