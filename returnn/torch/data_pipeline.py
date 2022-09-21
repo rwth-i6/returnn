@@ -2,6 +2,7 @@
 Code to create PyTorch datasets that can be used with the PyTorch DataLoader.
 """
 
+import torch
 from torch.utils.data import IterableDataset
 
 
@@ -37,3 +38,22 @@ class DatasetWrapper(IterableDataset):
       yield data
 
       seq_index += 1
+
+
+def collate_batch(batch):
+  """
+  :param list[dict[str, numpy.ndarray]] batch:
+  """
+  assert isinstance(batch, list)
+  assert batch, "batch is empty?"
+  assert isinstance(batch[0], dict)
+  data_keys = list(batch[0].keys())
+
+  res = {}
+  for key in data_keys:
+    ls = [torch.tensor(sample[key]) for sample in batch]
+    padded = torch.nn.utils.rnn.pad_sequence(ls, batch_first=True, padding_value=0)
+    res[key] = padded
+    res["%s:seq_len" % key] = torch.tensor([v.shape[0] for v in ls])
+
+  return res

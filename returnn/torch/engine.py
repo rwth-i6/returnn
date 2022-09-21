@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from returnn.log import log
 from returnn.engine.base import EngineBase
 from returnn.datasets.basic import init_dataset
-from .data_pipeline import DatasetWrapper
+from . import data_pipeline
 
 
 class Engine(EngineBase):
@@ -73,10 +73,14 @@ class Engine(EngineBase):
     """
     print("start", self.get_epoch_str(), "with learning rate", self.learning_rate, "...", file=log.v4)
 
-    train_data = DatasetWrapper(self.train_dataset, epoch=self.epoch)
+    train_data = data_pipeline.DatasetWrapper(self.train_dataset, epoch=self.epoch)
 
     batch_max_seqs = self.config.int('max_seqs', 1)  # TODO wrong default, actually -1, no limit (limit via batch_size)
-    data_loader = DataLoader(train_data, batch_size=batch_max_seqs)  # TODO: implement batching
+    data_loader = DataLoader(
+      train_data,
+      batch_size=batch_max_seqs,
+      collate_fn=data_pipeline.collate_batch,
+    )
 
     for data in data_loader:
       assert data  # TODO: only iterates through dataset so far
