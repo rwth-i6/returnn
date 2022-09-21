@@ -2,8 +2,12 @@
 Main engine for PyTorch
 """
 
+from torch.utils.data import DataLoader
+
+from returnn.log import log
 from returnn.engine.base import EngineBase
 from returnn.datasets.basic import init_dataset
+from returnn.torch.dataset_wrapper import DatasetWrapper
 
 
 class Engine(EngineBase):
@@ -42,4 +46,24 @@ class Engine(EngineBase):
     """
     Main training loop.
     """
-    pass
+    start_epoch, _ = self.get_train_start_epoch_batch(self.config)
+    final_epoch = self.config_get_final_epoch(self.config)
+
+    print("Starting training at epoch {}.".format(start_epoch), file=log.v3)
+
+    self.epoch = start_epoch
+    while self.epoch <= final_epoch:
+      print("Starting " + self.get_epoch_str() + "...", file=log.v4)
+
+      self.train_dataset.init_seq_order(epoch=self.epoch)
+
+      train_data = DatasetWrapper(self.train_dataset)
+
+      data_loader = DataLoader(train_data, batch_size=1)  # TODO: implement batching
+
+      for data in data_loader:
+        assert data  # TODO: only iterates through dataset so far
+
+      self.epoch += 1
+
+    print("Finished training at epoch {}.".format(self.epoch), file=log.v3)
