@@ -55,9 +55,7 @@ class Engine(EngineBase):
     while self.epoch <= final_epoch:
       print("Starting " + self.get_epoch_str() + "...", file=log.v4)
 
-      self.train_dataset.init_seq_order(epoch=self.epoch)
-
-      train_data = DatasetWrapper(self.train_dataset)
+      train_data = DatasetWrapper(self.train_dataset, epoch=self.epoch)
 
       data_loader = DataLoader(train_data, batch_size=1)  # TODO: implement batching
 

@@ -11,17 +11,21 @@ class DatasetWrapper(IterableDataset):
   Converts a RETURNN dataset into a PyTorch IterableDataset.
   """
 
-  def __init__(self, returnn_dataset):
+  def __init__(self, returnn_dataset, epoch):
     """
     :param returnn.datasets.basic.Dataset returnn_dataset: dataset to be wrapped
+    :param int epoch:
     """
     self._dataset = returnn_dataset
+    self._epoch = epoch
 
   def __iter__(self):
     """
     :return: generator providing data samples in the form of a dict data_key -> data
     :rtype: Iterable[dict[str, numpy.ndarray]]
     """
+    self._dataset.init_seq_order(epoch=self._epoch)
+
     data_keys = self._dataset.get_data_keys()
 
     seq_index = 0
