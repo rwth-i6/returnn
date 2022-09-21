@@ -23,6 +23,7 @@ class Engine(EngineBase):
     self.config = config
     self.train_dataset = None
     self.eval_datasets = {}
+    self.learning_rate = config.float("learning_rate", 1.)  # TODO LR control...
 
   def init_train_from_config(self, config=None, train_data=None, dev_data=None, eval_data=None):
     """
@@ -53,15 +54,29 @@ class Engine(EngineBase):
 
     self.epoch = start_epoch
     while self.epoch <= final_epoch:
-      print("Starting " + self.get_epoch_str() + "...", file=log.v4)
-
-      train_data = DatasetWrapper(self.train_dataset, epoch=self.epoch)
-
-      data_loader = DataLoader(train_data, batch_size=1)  # TODO: implement batching
-
-      for data in data_loader:
-        assert data  # TODO: only iterates through dataset so far
+      self.init_train_epoch()
+      self.train_epoch()
 
       self.epoch += 1
 
     print("Finished training at epoch {}.".format(self.epoch), file=log.v3)
+
+  def init_train_epoch(self):
+    """
+    init train (sub)epoch. LR etc
+    """
+    pass
+
+  def train_epoch(self):
+    """
+    train one (sub)epoch
+    """
+    print("start", self.get_epoch_str(), "with learning rate", self.learning_rate, "...", file=log.v4)
+
+    train_data = DatasetWrapper(self.train_dataset, epoch=self.epoch)
+
+    batch_max_seqs = self.config.int('max_seqs', 1)  # TODO wrong default, actually -1, no limit (limit via batch_size)
+    data_loader = DataLoader(train_data, batch_size=batch_max_seqs)  # TODO: implement batching
+
+    for data in data_loader:
+      assert data  # TODO: only iterates through dataset so far
