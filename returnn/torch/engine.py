@@ -2,7 +2,9 @@
 Main engine for PyTorch
 """
 
+import torch
 from torch.utils.data import DataLoader
+from random import random
 
 from returnn.log import log
 from returnn.engine.base import EngineBase
@@ -82,5 +84,56 @@ class Engine(EngineBase):
       collate_fn=data_pipeline.collate_batch,
     )
 
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    get_model_func = self.config.typed_value("get_model")
+    assert get_model_func, "get_model not defined"
+    sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+    model = get_model_func(epoch=self.epoch, **sentinel_kw)
+    assert isinstance(model, torch.nn.Module)
+    model.to(device)
+    model.train()
+    train_step_func = self.config.typed_value("train_step")
+    assert train_step_func, "train_step not defined"
+    optimizer = torch.optim.AdamW(model.parameters(), lr=self.learning_rate)
+
+    step_idx = 0
     for data in data_loader:
-      assert data  # TODO: only iterates through dataset so far
+      assert isinstance(data, dict) and data
+      data = {k: v.to(device) for (k, v) in data.items()}
+
+      train_ctx = TrainCtx()
+      train_step_func(model=model, data=data, train_ctx=train_ctx, **sentinel_kw)
+      loss = train_ctx.total_loss()
+
+      optimizer.zero_grad()
+      loss.backward()
+      optimizer.step()
+
+      print("step %i, loss: %f" % (step_idx, loss.detach().cpu().numpy()), file=log.v4)
+
+      step_idx += 1
+
+    print("Trained %i steps" % step_idx)
+
+
+class TrainCtx:
+  """
+  train ctx
+  """
+
+  def __init__(self):
+    self.loss = None
+
+  def mark_as_loss(self, loss):
+    """
+    :param torch.Tensor loss:
+    """
+    assert self.loss is None, "don't call multiple times"
+    self.loss = loss
+
+  def total_loss(self):
+    """
+    :rtype: torch.Tensor
+    """
+    assert self.loss is not None, "call train_ctx.mark_as_loss"
+    return self.loss
