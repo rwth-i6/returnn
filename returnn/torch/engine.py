@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from returnn.log import log
 from returnn.engine.base import EngineBase
 from returnn.datasets.basic import init_dataset
-from returnn.torch.dataset_wrapper import DatasetWrapper
+from .data_pipeline import DatasetWrapper
 
 
 class Engine(EngineBase):
