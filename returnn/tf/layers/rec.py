@@ -1512,6 +1512,7 @@ class _SubnetworkRecCell(object):
 
           ConstructCtx.most_recent = list(ConstructCtx.layers)
           default_get_layer = RecSubnetGetTemplateLayer(parent=lself, parent_name=_name)
+          last_get_layer = default_get_layer
           # noinspection PyBroadException
           try:
             res_layer = self.net.construct_layer(
@@ -1533,6 +1534,7 @@ class _SubnetworkRecCell(object):
           if not layer_.is_initialized and lself.iterative_testing:
             shallow_get_layer = RecSubnetGetTemplateLayer(
               allow_uninitialized_template=True, parent=lself, parent_name=_name)
+            last_get_layer = shallow_get_layer
             # noinspection PyBroadException
             try:
               self.net.construct_layer(
@@ -1543,13 +1545,12 @@ class _SubnetworkRecCell(object):
               if not initial_output_layer:
                 raise
 
-          if initial_output_layer:
+          if initial_output_layer and layer_ in ConstructCtx.partially_finished:
             # We can trust the initial output, and even ignore whatever else we got from the construct_layer above.
             # The construct_layer is just to setup the deps and kwargs.
             assert layer_.kwargs
-            default_get_layer.reset()
             layer_.kwargs["output"] = initial_output_layer.output.copy_template(name="%s_output" % name)
-            default_get_layer.add_templated_layer(
+            last_get_layer.add_templated_layer(
               layer_class=layer_.layer_class_type, **layer_.kwargs)
 
           if res_layer and res_layer is not layer_:
