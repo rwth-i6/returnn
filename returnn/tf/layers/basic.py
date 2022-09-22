@@ -157,6 +157,8 @@ def get_concat_sources_data_template(src_layers, out_dim=None, allow_broadcast_a
   dim = None
   common_source = Data.get_common_data(
     [s.output for s in src_layers], ignore_feature_dim=True, allow_broadcast_all_sources=allow_broadcast_all_sources)
+  if not common_source.have_feature_axis():  # e.g. during template construction
+    return common_source
   for layer in src_layers:
     # Note: We do not perform much compatibility checks at this point,
     # as this is for a template only anyway.
