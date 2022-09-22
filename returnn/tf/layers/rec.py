@@ -8137,7 +8137,7 @@ class MaskedComputationLayer(LayerBase):
       output = output.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_spatial_dim)
     inside_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=True)
     over_rec_time_dim = network.get_inside_rec_time_dim(inside_loop=False)
-    if network.is_inside_rec_layer():
+    if network.is_inside_rec_layer() and output.have_batch_axis():
       output = output.copy_as_batch_major()
     elif not masked_from and in_spatial_dim == over_rec_time_dim and over_rec_time_dim and not inside_rec_time_dim:
       # We will automatically unmask again (https://github.com/rwth-i6/returnn/pull/976).
