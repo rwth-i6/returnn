@@ -9369,6 +9369,11 @@ class CtcLossLayer(LayerBase):
     super(CtcLossLayer, self).__init__(**kwargs)
     self.logits = logits
     self.targets = targets
+    assert (
+      targets.output.sparse_dim.dimension in
+      # -1 or not, depending on whether the target vocab contains blank or not
+      {logits.output.feature_dim_or_sparse_dim.dimension - i for i in {0, 1}}), (
+      "%s: targets %s do not match to logits %s for CTC" % (self, targets, logits))
     self.blank_index = blank_index
     self.output.placeholder = (ctc_loss_viterbi if max_approx else ctc_loss)(
       logits=logits.output.copy_as_time_batch_major().placeholder,
