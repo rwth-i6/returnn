@@ -4517,15 +4517,16 @@ class RnnCellLayer(_ConcatInputLayer):
     :rtype: Data
     """
     sources_data = Data.get_common_data([src.output for src in sources if src], ignore_feature_dim=True)
-    feat = FeatureDim("%s:rnn_cell_feat" % name, dimension=n_out, auto_generated=True)
+    batch_dim = sources_data.get_batch_dim_tag() if sources_data and sources_data.have_batch_axis() else None
+    time_dim_axis, batch_dim_axis = None, None
+    dim_tags = []
     if sources_data and sources_data.have_time_axis():
-      dim_tags = (sources_data.get_time_dim_tag(), sources_data.get_batch_dim_tag(), feat)
-      batch_dim_axis = 1
-      time_dim_axis = 0
-    else:
-      dim_tags = (sources_data.get_batch_dim_tag(), feat)
-      batch_dim_axis = 0
-      time_dim_axis = None
+      time_dim_axis = len(dim_tags)
+      dim_tags.append(sources_data.get_time_dim_tag())
+    if batch_dim:
+      batch_dim_axis = len(dim_tags)
+      dim_tags.append(batch_dim)
+    dim_tags.append(FeatureDim("%s:rnn_cell_feat" % name, dimension=n_out, auto_generated=True))
     return Data(
       name="%s_output" % name,
       dim_tags=dim_tags, dim=n_out,
