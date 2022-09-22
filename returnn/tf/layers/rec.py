@@ -1564,10 +1564,11 @@ class _SubnetworkRecCell(object):
           if exc.network is self.net and exc.layer_name == name:
             assert not layer_.is_initialized
             # Clean up any references.
-            del self.layer_data_templates[name]
+            layer_ = self.layer_data_templates.pop(name)
             ConstructCtx.partially_finished.remove(layer_)
-            if len(ConstructCtx.layers) >= 2:
-              ConstructCtx.layers[-2].remove_dependency(layer_, is_prev_time_frame=is_prev_time_frame)
+            for other in list(layer_.used_by):
+              if isinstance(other, _TemplateLayer):
+                other.remove_dependency(layer_, is_prev_time_frame=is_prev_time_frame)
           raise
 
         finally:
@@ -3897,6 +3898,7 @@ class _TemplateLayer(LayerBase):
     self.dependencies = []  # type: typing.List[LayerBase]
     self.cur_frame_dependencies = []  # type: typing.List[LayerBase]
     self.prev_frame_dependencies = []  # type: typing.List[_TemplateLayer]
+    self.used_by = []  # type: typing.List[LayerBase]  # reverse deps
     self.construct_stack = construct_stack
     self._template_base = None  # type: typing.Optional[_TemplateLayer]
     self._cell = cell
@@ -4082,6 +4084,8 @@ class _TemplateLayer(LayerBase):
     """
     if layer not in self.dependencies:
       self.dependencies.append(layer)
+      if isinstance(layer, _TemplateLayer):
+        layer.used_by.append(self)
     if is_prev_time_frame:
       assert isinstance(layer, _TemplateLayer)
       if layer not in self.prev_frame_dependencies:
@@ -4096,6 +4100,8 @@ class _TemplateLayer(LayerBase):
     :param bool is_prev_time_frame:
     """
     self.dependencies.remove(layer)
+    if isinstance(layer, _TemplateLayer):
+      layer.used_by.remove(self)
     if is_prev_time_frame:
       assert isinstance(layer, _TemplateLayer)
       self.prev_frame_dependencies.remove(layer)
