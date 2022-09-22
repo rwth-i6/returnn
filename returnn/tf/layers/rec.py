@@ -1409,7 +1409,14 @@ class _SubnetworkRecCell(object):
             # and we don't want this to be unset.
             layer_.kwargs["output"] = old_layer_kwargs["output"]
           layer_.kwargs["output"] = layer_class.get_out_data_from_opts(**layer_desc)
-        layer_.kwargs["output"] = layer_class.fixup_out_data(**layer_.kwargs)
+        # noinspection PyBroadException
+        try:
+          layer_.kwargs["output"] = layer_class.fixup_out_data(**layer_.kwargs)
+        except Exception:  # most likely VerifyOutShapeException
+          if lself.got_uninitialized_deps_count > 0:
+            pass  # ignore in this case
+          else:
+            raise
         layer_.kwargs["output"].sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
         layer_.init(layer_class=layer_class, **layer_.kwargs)
         if layer_.need_last:
