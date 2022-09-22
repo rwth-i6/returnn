@@ -1485,9 +1485,6 @@ class _SubnetworkRecCell(object):
             name=name, network=self.net, cell=self,
             construct_stack=ConstructCtx.layers[-1] if ConstructCtx.layers else None)
           self.layer_data_templates[name] = layer_
-          if lself.allow_uninitialized_template:
-            lself._add_uninitialized_count()
-            return layer_
         res_layer = None
         if ConstructCtx.layers:
           ConstructCtx.layers[-1].add_dependency(layer_, is_prev_time_frame=is_prev_time_frame)
@@ -1496,6 +1493,9 @@ class _SubnetworkRecCell(object):
           # * layer_class.transform_config_dict (via construct_layer)
           # * layer_class.get_out_data_from_opts (via add_templated_layer)
           ConstructCtx.partially_finished.append(layer_)
+        if lself.allow_uninitialized_template:
+          lself._add_uninitialized_count()
+          return layer_
         default_success = False  # whether construction was successful with default_get_layer
         ConstructCtx.layers.append(layer_)
         try:
