@@ -1476,6 +1476,9 @@ class _SubnetworkRecCell(object):
             name=name, network=self.net, cell=self,
             construct_stack=ConstructCtx.layers[-1] if ConstructCtx.layers else None)
           self.layer_data_templates[name] = layer_
+          if lself.allow_uninitialized_template:
+            lself._add_uninitialized_count()
+            return layer_
         res_layer = None
         if ConstructCtx.layers:
           ConstructCtx.layers[-1].add_dependency(layer_, is_prev_time_frame=is_prev_time_frame)
@@ -1484,7 +1487,6 @@ class _SubnetworkRecCell(object):
           # * layer_class.transform_config_dict (via construct_layer)
           # * layer_class.get_out_data_from_opts (via add_templated_layer)
           ConstructCtx.partially_finished.append(layer_)
-        default_get_layer = RecSubnetGetTemplateLayer(parent=lself, parent_name=_name)
         default_success = False  # whether construction was successful with default_get_layer
         ConstructCtx.layers.append(layer_)
         try:
@@ -1497,49 +1499,37 @@ class _SubnetworkRecCell(object):
               if isinstance(initial_output, str) and initial_output.startswith("base:"):
                 initial_output_layer = _parent_get_layer(initial_output[len("base:"):])
                 layer_.output = initial_output_layer.output.copy_template(name="%s_output" % name)
-          # See how far we can get without recursive layer construction.
-          # We only want to get the data template for now.
-          # If that fails in some way,
-          # try another time but only allowing recursive layer construction for the first get_layer call.
-          # E.g. the CombineLayer and some other layers determine the output format via the first source.
-          # Also, first try without allowing to access uninitialized templates,
-          # as they might propagate wrong Data format info (they have a dummy Data format set).
-          # Only as a last resort, allow this.
-          get_layer_candidates = []  # type: typing.List[RecSubnetGetTemplateLayer]
-          # noinspection PyProtectedMember
-          if lself.iterative_testing and name not in self.net._construction_stack.layers:
-            # We can get away with only two variants, because the reconstruction code below
-            # for partially finished layers will make sure that everything is correct.
-            get_layer_candidates = [
-              default_get_layer,
-              RecSubnetGetTemplateLayer(allow_uninitialized_template=True, parent=lself, parent_name=_name),
-            ]
-          for get_layer in get_layer_candidates:
+
+          ConstructCtx.most_recent = list(ConstructCtx.layers)
+          default_get_layer = RecSubnetGetTemplateLayer(parent=lself, parent_name=_name)
+          # noinspection PyBroadException
+          try:
+            res_layer = self.net.construct_layer(
+              net_dict=self.net_dict, name=name,
+              get_layer=default_get_layer, add_layer=default_get_layer.add_templated_layer)
+            default_success = True
+          except Exception:
+            ConstructCtx.collect_exception(layer_name=name)
+            if layer_.is_initialized:
+              # Return anyway. This will be resolved later.
+              # Also, this is important to not keep trying again and again potentially for a very long time.
+              # https://github.com/rwth-i6/returnn/issues/1127
+              pass
+            elif lself.iterative_testing:
+              pass  # cover this below
+            else:
+              raise
+
+          if not layer_.is_initialized and lself.iterative_testing:
+            shallow_get_layer = RecSubnetGetTemplateLayer(
+              allow_uninitialized_template=True, parent=lself, parent_name=_name)
             # noinspection PyBroadException
             try:
-              res_layer = self.net.construct_layer(
+              self.net.construct_layer(
                 net_dict=self.net_dict, name=name,
-                get_layer=get_layer, add_layer=get_layer.add_templated_layer)
-              if get_layer is default_get_layer:
-                default_success = True
-              break  # we did it, so get out of the loop
+                get_layer=shallow_get_layer, add_layer=shallow_get_layer.add_templated_layer)
             except Exception:
               ConstructCtx.collect_exception(layer_name=name)
-          if not default_success:
-            # Now, do again, but with full recursive layer construction, to determine the dependencies.
-            ConstructCtx.most_recent = list(ConstructCtx.layers)
-            try:
-              default_get_layer.reset()
-              res_layer = self.net.construct_layer(
-                net_dict=self.net_dict, name=name,
-                get_layer=default_get_layer, add_layer=default_get_layer.add_templated_layer)
-              default_success = True
-            except NetworkConstructionDependencyLoopException:
-              if layer_.is_initialized and lself.iterative_testing and not lself.reconstruct:
-                pass  # Return anyway. This will be resolved later.
-              else:
-                raise
-            except Exception:
               raise
 
           if res_layer and res_layer is not layer_:
