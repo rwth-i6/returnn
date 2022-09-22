@@ -500,7 +500,7 @@ class RecLayer(_ConcatInputLayer):
         out.time_dim_axis = out.get_axis_from_description(axis)
       if out.have_time_axis() and axis == out.get_time_dim_tag():
         out = out.copy_as_time_batch_major()
-      else:
+      elif out.have_batch_axis():
         # We expect to be inside another RecLayer, and should do a single step (like RnnCellLayer).
         out = out.copy_as_batch_major()  # The output is then [B,F]
     else:
