@@ -1402,7 +1402,9 @@ class _SubnetworkRecCell(object):
         layer_desc["name"] = name
         layer_desc["network"] = self.net
         old_layer_kwargs = layer_.kwargs
-        layer_.kwargs = layer_desc.copy()  # set it now already for better debugging
+        # set it now already for better debugging
+        layer_.layer_class_type = layer_class
+        layer_.kwargs = layer_desc.copy()
         if "output" not in layer_.kwargs:
           if old_layer_kwargs and "output" in old_layer_kwargs:
             # First copy old output. Maybe the get_out_data_from_opts raises an exception,
@@ -1497,6 +1499,7 @@ class _SubnetworkRecCell(object):
         default_success = False  # whether construction was successful with default_get_layer
         ConstructCtx.layers.append(layer_)
         try:
+          initial_output_layer = None
           # If not initialized yet and this is still the dummy data template,
           # see if we can figure out a petter template.
           if not layer_.is_initialized and layer_.output.batch_ndim == 0:
@@ -1522,7 +1525,7 @@ class _SubnetworkRecCell(object):
               # Also, this is important to not keep trying again and again potentially for a very long time.
               # https://github.com/rwth-i6/returnn/issues/1127
               pass
-            elif lself.iterative_testing:
+            elif lself.iterative_testing or initial_output_layer:
               pass  # cover this below
             else:
               raise
@@ -1537,7 +1540,17 @@ class _SubnetworkRecCell(object):
                 get_layer=shallow_get_layer, add_layer=shallow_get_layer.add_templated_layer)
             except Exception:
               ConstructCtx.collect_exception(layer_name=name)
-              raise
+              if not initial_output_layer:
+                raise
+
+          if initial_output_layer:
+            # We can trust the initial output, and even ignore whatever else we got from the construct_layer above.
+            # The construct_layer is just to setup the deps and kwargs.
+            assert layer_.kwargs
+            default_get_layer.reset()
+            layer_.kwargs["output"] = initial_output_layer.output.copy_template(name="%s_output" % name)
+            default_get_layer.add_templated_layer(
+              layer_class=layer_.layer_class_type, **layer_.kwargs)
 
           if res_layer and res_layer is not layer_:
             assert isinstance(res_layer, _TemplateLayer), "unexpected %s, via %s" % (res_layer, layer_)
