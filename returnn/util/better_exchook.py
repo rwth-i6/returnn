@@ -1448,17 +1448,19 @@ def get_func_from_code_object(co, frame=None):
     """
     import gc
     import types
-    assert isinstance(co, types.CodeType)
+    assert isinstance(co, (types.CodeType, DummyFrame))
     _attr_name = "__code__" if PY3 else "func_code"
     if frame:
         func_name = frame.f_code.co_name
         if "self" in frame.f_locals:
             candidate = getattr(frame.f_locals["self"].__class__, func_name, None)
-            if candidate and getattr(candidate, _attr_name, None) is co:
+            if candidate and (getattr(candidate, _attr_name, None) is co or isinstance(co, DummyFrame)):
                 return candidate
     candidate = getattr(_get_loaded_module_from_filename(co.co_filename), co.co_name, None)
-    if candidate and getattr(candidate, _attr_name, None) is co:
+    if candidate and (getattr(candidate, _attr_name, None) is co or isinstance(co, DummyFrame)):
         return candidate
+    if isinstance(co, DummyFrame):
+        return None
     candidates = gc.get_referrers(co)
     candidates = [f for f in candidates if getattr(f, _attr_name, None) is co]
     if candidates:
