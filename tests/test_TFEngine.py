@@ -2885,6 +2885,18 @@ def test_rec_subnet_eval_init_out_apply0():
   engine.search(cv_data)
 
 
+def test_tf_nn_sparse_softmax_cross_entropy_with_logits_nan():
+  inf = float("inf")
+  logits = [[-inf, -inf, -inf, -0.05736833, -0.05736833, -0.05736833]]
+  targets = [3]
+  with make_scope() as session:
+    ce = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=targets)
+    ce_v, = session.run(ce)
+  # This fails in some strange cases? E.g. on my MacBook M1, TF 2.7.0.
+  # This causes some other tests to fail, e.g. test_search_multi_choice_hdf_dump below.
+  assert numpy.isfinite(ce_v)
+
+
 def test_search_multi_choice_hdf_dump():
   """
   Checking multiple things here:
