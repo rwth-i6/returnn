@@ -2376,8 +2376,11 @@ class _SubnetworkRecCell(object):
         fixed_seq_len = rec_layer.output.size_placeholder[0]
       elif rec_layer.size_target:  # if this is set, always use it
         # noinspection PyProtectedMember
-        fixed_seq_len = rec_layer._get_target_value(
-          target=rec_layer.size_target, mark_data_key_as_used=True).get_sequence_lengths()
+        tag = rec_layer._get_target_value(
+          target=rec_layer.size_target, mark_data_key_as_used=True).get_time_dim_tag()
+        tag = tag.get_for_batch_ctx(batch, rec_layer.output.control_flow_ctx)
+        if tag.dyn_size_ext and tag.dyn_size_ext.placeholder is not None:
+          fixed_seq_len = tag.dyn_size
       elif rec_layer.time_dim_tag:
         tag = rec_layer.time_dim_tag.get_for_batch_ctx(batch, rec_layer.output.control_flow_ctx)
         if tag.dyn_size_ext and tag.dyn_size_ext.placeholder is not None:
