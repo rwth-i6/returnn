@@ -2341,7 +2341,7 @@ class _SubnetworkRecCell(object):
 
     time_dim_tag = None
     with tf.name_scope("subnet_base"):
-      batch_dim = rec_layer.network.get_data_batch_dim()
+      batch = rec_layer.get_batch_info()
       input_beam = None  # type: typing.Optional[SearchBeam]
       if rec_layer.input_data:
         with tf.name_scope("source_tensor_array"):
@@ -2379,7 +2379,6 @@ class _SubnetworkRecCell(object):
         fixed_seq_len = rec_layer._get_target_value(
           target=rec_layer.size_target, mark_data_key_as_used=True).get_sequence_lengths()
       elif rec_layer.time_dim_tag:
-        batch = rec_layer.get_batch_info()
         tag = rec_layer.time_dim_tag.get_for_batch_ctx(batch, rec_layer.output.control_flow_ctx)
         if tag.dyn_size_ext and tag.dyn_size_ext.placeholder is not None:
           fixed_seq_len = tag.dyn_size
@@ -2396,8 +2395,8 @@ class _SubnetworkRecCell(object):
         if fixed_seq_len.get_shape().ndims > 0:
           assert fixed_seq_len.get_shape().ndims == 1
           with tf.name_scope("check_seq_len_batch_size"):
-            fixed_seq_len = check_input_dim(
-              fixed_seq_len, axis=0, dim=batch_dim * (input_beam.beam_size if input_beam else 1))
+            # It should already be adapted to our batch.
+            fixed_seq_len = check_input_dim(fixed_seq_len, axis=0, dim=batch.dim)
             if time_dim_tag:
               time_dim_tag.set_tag_on_size_tensor(fixed_seq_len, batch=time_dim_tag.batch, same_as_before=True)
         max_seq_len = tf.reduce_max(fixed_seq_len, name="max_seq_len")
@@ -4317,9 +4316,11 @@ class RecStepInfoLayer(LayerBase):
           # We are supposed to return the prev end flag here.
           self.step,
           self._seq_lens if rec_layer.include_eos else (self._seq_lens + 1))
-    source_search_choices = None
     if self.prev_end_layer:
       source_search_choices = self.prev_end_layer.get_search_choices()
+    else:
+      # assume same search choices, same beam
+      return end_flag
     if target_search_choices:
       if source_search_choices:
         assert self.prev_end_layer
