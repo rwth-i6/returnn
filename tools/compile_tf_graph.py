@@ -1492,6 +1492,8 @@ def main(argv):
   """
   argparser = argparse.ArgumentParser(description='Compile some op')
   argparser.add_argument('config', help="filename to config-file")
+  argparser.add_argument('--epoch', type=int, default=None,
+                         help="specific epoch to construct, use for dynamic network definitions")
   argparser.add_argument('--train', type=int, default=0, help='0 disable (default), 1 enable, -1 dynamic')
   argparser.add_argument('--eval', type=int, default=0, help='calculate losses. 0 disable (default), 1 enable')
   argparser.add_argument('--search', type=int, default=0, help='beam search. 0 disable (default), 1 enable')
@@ -1508,8 +1510,16 @@ def main(argv):
   args = argparser.parse_args(argv[1:])
   assert args.train in [0, 1, -1] and args.eval in [0, 1] and args.search in [0, 1]
   init(config_filename=args.config, log_verbosity=args.verbosity, device=args.device)
-  assert 'network' in config.typed_dict
-  net_dict = config.typed_dict["network"]
+
+  if args.epoch and "get_network" in config.typed_dict:
+      net_dict = config.typed_dict["get_network"](epoch=args.epoch)
+  elif args.epoch and "pretrain" in config.typed_dict:
+      raise NotImplementedError("Compiling a network at a specific epoch using pre-train logic is not implemented yet")
+  else:
+    assert 'network' in config.typed_dict
+    net_dict = config.typed_dict["network"]
+  assert isinstance(net_dict, dict), "network should return dict but is %s" % type(net_dict)
+
   if args.rec_step_by_step:
     RecStepByStepLayer.prepare_compile(
       rec_layer_name=args.rec_step_by_step, net_dict=net_dict, opts={"update_i_in_graph": args.update_i_in_graph})
