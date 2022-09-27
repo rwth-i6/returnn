@@ -1512,9 +1512,9 @@ def main(argv):
   init(config_filename=args.config, log_verbosity=args.verbosity, device=args.device)
 
   if args.epoch and "get_network" in config.typed_dict:
-      net_dict = config.typed_dict["get_network"](epoch=args.epoch)
+    net_dict = config.typed_dict["get_network"](epoch=args.epoch)
   elif args.epoch and "pretrain" in config.typed_dict:
-      raise NotImplementedError("Compiling a network at a specific epoch using pre-train logic is not implemented yet")
+    raise NotImplementedError("Compiling a network at a specific epoch using pre-train logic is not implemented yet")
   else:
     assert 'network' in config.typed_dict
     net_dict = config.typed_dict["network"]
