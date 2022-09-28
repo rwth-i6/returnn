@@ -8576,8 +8576,8 @@ class SubnetworkLayer(LayerBase):
     """
     Update self.rec_vars_outputs.
     """
-    for layer in self.subnetwork.layers.values():
-      self.rec_vars_outputs.update({"%s/%s" % (layer.name, k): v for (k, v) in layer.rec_vars_outputs.items()})
+    for name, layer in self.subnetwork.layers.items():
+      self.rec_vars_outputs.update({"%s/%s" % (name, k): v for (k, v) in layer.rec_vars_outputs.items()})
 
   def update_load_on_init(self):
     """
